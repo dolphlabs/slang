@@ -9,6 +9,7 @@ typedef enum {
     T_INT,
     T_FLOAT,
     T_STRING,
+    T_BYTES,
 
     /* keywords */
     T_KW_LET,
@@ -24,12 +25,23 @@ typedef enum {
     T_KW_GUARD,
     T_KW_FOR,
     T_KW_IN,
+    T_KW_AS,
 
     /* type names */
     T_TY_INT,
     T_TY_FLOAT,
     T_TY_STR,
     T_TY_BOOL,
+    T_TY_BYTES,
+    T_TY_I8,
+    T_TY_I16,
+    T_TY_I32,
+    T_TY_I64,
+    T_TY_U8,
+    T_TY_U16,
+    T_TY_U32,
+    T_TY_U64,
+    T_TY_F32,
 
     /* operators */
     T_PLUS,
@@ -56,6 +68,8 @@ typedef enum {
     T_COMMA,
     T_SEMI,
     T_COLON,
+    T_LBRACKET,
+    T_RBRACKET,
     T_DOT,
     T_DOTDOT,
     T_DOTDOTEQ,
@@ -67,6 +81,8 @@ typedef struct {
     char *text;        /* identifier name or decoded string contents */
     long long int_val; /* T_INT */
     double float_val;  /* T_FLOAT */
+    unsigned char *byte_val; /* T_BYTES: raw bytes (may contain NULs) */
+    long long byte_len;      /* T_BYTES: byte count */
     int line;
 } Token;
 

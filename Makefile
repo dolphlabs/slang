@@ -13,6 +13,7 @@ test: slangc
 	./slangc examples/hello/main.sl --run
 	./slangc examples/fib/main.sl --run
 	./slangc examples/pkgdemo/main.sl --run
+	sh tests/run_tests.sh
 
 clean:
-	rm -f slangc hello main fib
+	rm -f slangc hello main fib bytes ints lists fail_narrow fail_index

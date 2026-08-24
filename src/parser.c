@@ -98,6 +98,15 @@ static void call_push_arg(Expr *call, Expr *arg) {
 /* ---- expressions (precedence climbing) ---- */
 
 static Expr *parse_expression(Parser *p);
+static const char *parse_type_name(Parser *p);
+
+static void list_push_elem(Expr *list, Expr *elem) {
+    int n = list->as.list.nelems;
+    list->as.list.elems =
+        (Expr **)xrealloc(list->as.list.elems, (n + 1) * sizeof(Expr *));
+    list->as.list.elems[n] = elem;
+    list->as.list.nelems = n + 1;
+}
 static Expr *parse_expr_source(const char *src, int line);
 static Expr *parse_interp_string(Token *tk);
 
@@ -119,6 +128,26 @@ static Expr *parse_primary(Parser *p) {
     case T_STRING: {
         advance(p);
         return parse_interp_string(tk);
+    }
+    case T_BYTES: {
+        advance(p);
+        Expr *e = new_expr(EX_BYTES, tk->line);
+        e->as.bytes_lit.data = tk->byte_val;
+        e->as.bytes_lit.len = tk->byte_len;
+        return e;
+    }
+    case T_LBRACKET: {
+        advance(p);
+        Expr *e = new_expr(EX_LIST, tk->line);
+        if (!check(p, T_RBRACKET)) {
+            for (;;) {
+                list_push_elem(e, parse_expression(p));
+                if (!match(p, T_COMMA))
+                    break;
+            }
+        }
+        expect(p, T_RBRACKET, "']' to close list literal");
+        return e;
     }
     case T_KW_TRUE:
     case T_KW_FALSE: {
@@ -172,6 +201,46 @@ static Expr *parse_primary(Parser *p) {
     return NULL; /* unreachable */
 }
 
+/* Indexing and slicing: base[i], base[a..b], base[a..=b]; either slice
+ * end may be omitted (base[..n] / base[n..] / base[..]). */
+static Expr *parse_postfix(Parser *p) {
+    Expr *e = parse_primary(p);
+    for (;;) {
+        if (!check(p, T_LBRACKET))
+            break;
+        advance(p); /* '[' */
+        Expr *start = NULL;
+        if (!check(p, T_DOTDOT) && !check(p, T_DOTDOTEQ))
+            start = parse_expression(p);
+        if (check(p, T_DOTDOT) || check(p, T_DOTDOTEQ)) {
+            int inclusive;
+            if (match(p, T_DOTDOTEQ)) {
+                inclusive = 1;
+            } else {
+                advance(p); /* '..' */
+                inclusive = 0;
+            }
+            Expr *end = NULL;
+            if (!check(p, T_RBRACKET))
+                end = parse_expression(p);
+            expect(p, T_RBRACKET, "']' to close slice");
+            Expr *s = new_expr(EX_SLICE, e->line);
+            s->as.slice.base = e;
+            s->as.slice.start = start;
+            s->as.slice.end = end;
+            s->as.slice.inclusive = inclusive;
+            e = s;
+        } else {
+            expect(p, T_RBRACKET, "']' to close index");
+            Expr *ix = new_expr(EX_INDEX, e->line);
+            ix->as.index.base = e;
+            ix->as.index.index = start;
+            e = ix;
+        }
+    }
+    return e;
+}
+
 static Expr *parse_unary(Parser *p) {
     Token *tk = peek(p);
     if (tk->type == T_MINUS || tk->type == T_BANG) {
@@ -182,7 +251,16 @@ static Expr *parse_unary(Parser *p) {
         e->as.unary.operand = operand;
         return e;
     }
-    return parse_primary(p);
+    Expr *e = parse_postfix(p);
+    /* explicit casts: expr as T (the only way to narrow) */
+    while (match(p, T_KW_AS)) {
+        const char *ty = parse_type_name(p);
+        Expr *c = new_expr(EX_CAST, e->line);
+        c->as.cast.ty = xstrdup(ty);
+        c->as.cast.operand = e;
+        e = c;
+    }
+    return e;
 }
 
 /* Raw operator symbol for a token type (token_type_name adds quotes). */
@@ -361,8 +439,31 @@ static const char *parse_type_name(Parser *p) {
     case T_TY_FLOAT: advance(p); return "float";
     case T_TY_STR:   advance(p); return "str";
     case T_TY_BOOL:  advance(p); return "bool";
+    case T_TY_BYTES: advance(p); return "bytes";
+    case T_TY_I8:    advance(p); return "i8";
+    case T_TY_I16:   advance(p); return "i16";
+    case T_TY_I32:   advance(p); return "i32";
+    case T_TY_I64:   advance(p); return "i64";
+    case T_TY_U8:    advance(p); return "u8";
+    case T_TY_U16:   advance(p); return "u16";
+    case T_TY_U32:   advance(p); return "u32";
+    case T_TY_U64:   advance(p); return "u64";
+    case T_TY_F32:   advance(p); return "f32";
+    case T_LBRACKET: {
+        advance(p); /* '[' */
+        const char *inner = parse_type_name(p);
+        expect(p, T_RBRACKET, "']' to close array type");
+        StrBuf sb;
+        sb_init(&sb);
+        sb_putc(&sb, '[');
+        sb_append(&sb, inner);
+        sb_putc(&sb, ']');
+        return sb.data;
+    }
     default:
-        parse_error(tk, "expected a type name (int, float, str, bool)");
+        parse_error(tk,
+                    "expected a type name (int, float, str, bool, bytes, "
+                    "i8..u64, f32, [T])");
     }
     return NULL; /* unreachable */
 }
@@ -388,12 +489,18 @@ static Block *parse_block(Parser *p, int fn_body) {
 static Stmt *parse_let_stmt(Parser *p) {
     Token *kw = advance(p); /* 'let' */
     Token *name = expect(p, T_IDENT, "a variable name");
+
+    char *type_ann = NULL;
+    if (match(p, T_COLON))
+        type_ann = xstrdup(parse_type_name(p));
+
     expect(p, T_ASSIGN, "'='");
     Expr *init = parse_expression(p);
     expect(p, T_SEMI, "';'");
 
     Stmt *s = new_stmt(ST_LET, kw->line);
     s->as.let.name = name->text;
+    s->as.let.type_ann = type_ann;
     s->as.let.init = init;
     return s;
 }
@@ -448,30 +555,44 @@ static Stmt *parse_guard_stmt(Parser *p) {
     return s;
 }
 
-/* for <name> in <start>..[=]<end> { ... } */
+/* for <name> in <start>..[=]<end> { ... }     (range)
+ * for <name> in <iterable> { ... }            (array or bytes) */
 static Stmt *parse_for_stmt(Parser *p) {
     Token *kw = advance(p);
     Token *name = expect(p, T_IDENT, "a loop variable name");
     expect(p, T_KW_IN, "'in'");
     Expr *start = parse_expression(p);
 
-    int inclusive;
-    if (match(p, T_DOTDOTEQ)) {
-        inclusive = 1;
-    } else {
-        expect(p, T_DOTDOT, "'..' or '..='");
-        inclusive = 0;
+    if (check(p, T_DOTDOTEQ) || check(p, T_DOTDOT)) {
+        int inclusive;
+        if (match(p, T_DOTDOTEQ)) {
+            inclusive = 1;
+        } else {
+            advance(p);
+            inclusive = 0;
+        }
+
+        Expr *end = parse_expression(p);
+        Block *body = parse_block(p, 0);
+
+        Stmt *s = new_stmt(ST_FOR, kw->line);
+        s->as.for_stmt.name = name->text;
+        s->as.for_stmt.start = start;
+        s->as.for_stmt.end = end;
+        s->as.for_stmt.inclusive = inclusive;
+        s->as.for_stmt.body = body;
+        return s;
     }
 
-    Expr *end = parse_expression(p);
+    if (!check(p, T_LBRACE))
+        parse_error(peek(p),
+                    "expected '..' (range) or '{' (iterable) after 'in'");
     Block *body = parse_block(p, 0);
 
-    Stmt *s = new_stmt(ST_FOR, kw->line);
-    s->as.for_stmt.name = name->text;
-    s->as.for_stmt.start = start;
-    s->as.for_stmt.end = end;
-    s->as.for_stmt.inclusive = inclusive;
-    s->as.for_stmt.body = body;
+    Stmt *s = new_stmt(ST_FOR_IN, kw->line);
+    s->as.for_in.name = name->text;
+    s->as.for_in.iter = start;
+    s->as.for_in.body = body;
     return s;
 }
 
@@ -508,12 +629,12 @@ static Stmt *parse_statement(Parser *p) {
         /* expression or assignment statement */
         Expr *expr = parse_expression(p);
         if (match(p, T_ASSIGN)) {
-            if (expr->kind != EX_IDENT)
+            if (expr->kind != EX_IDENT && expr->kind != EX_INDEX)
                 parse_error(tk, "invalid assignment target");
             Expr *value = parse_expression(p);
             expect(p, T_SEMI, "';'");
             Stmt *s = new_stmt(ST_ASSIGN, tk->line);
-            s->as.assign.name = expr->as.ident.name;
+            s->as.assign.target = expr;
             s->as.assign.value = value;
             return s;
         }

@@ -26,6 +26,22 @@ static int is_ident_char(char c) {
     return isalnum((unsigned char)c) || c == '_';
 }
 
+static void buf_push(unsigned char **buf, size_t *cap, size_t *len,
+                     unsigned char b) {
+    if (*len == *cap) {
+        *cap *= 2;
+        *buf = (unsigned char *)xrealloc(*buf, *cap);
+    }
+    (*buf)[(*len)++] = b;
+}
+
+static int hexval(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
 static Token make_token(TokenType type, int line) {
     Token t;
     t.type = type;
@@ -154,6 +170,57 @@ Token lexer_next(Lexer *lx) {
         return t;
     }
 
+    /* byte-string literals: b"..." (binary-safe, no NUL terminator) */
+    if (c == 'b' && src[lx->pos + 1] == '"') {
+        lx->pos += 2;
+        size_t cap = 16, len = 0;
+        unsigned char *buf = (unsigned char *)xmalloc(cap);
+        for (;;) {
+            char ch = src[lx->pos];
+            if (ch == '\0' || ch == 10)
+                lex_error(line, "unterminated byte string literal");
+            if (ch == '"')
+                break;
+            if (ch == 92) { /* backslash escape */
+                lx->pos++;
+                char e = src[lx->pos];
+                switch (e) {
+                case 'n': buf_push(&buf, &cap, &len, 10); break;
+                case 't': buf_push(&buf, &cap, &len, 9); break;
+                case 'r': buf_push(&buf, &cap, &len, 13); break;
+                case '0': buf_push(&buf, &cap, &len, 0); break;
+                case '"': buf_push(&buf, &cap, &len, '"'); break;
+                case 92:  buf_push(&buf, &cap, &len, 92); break;
+                case 'x': {
+                    int hi = hexval(src[lx->pos + 1]);
+                    int lo = hexval(src[lx->pos + 2]);
+                    if (hi < 0 || lo < 0)
+                        lex_error(line,
+                                  "invalid \\xHH escape in byte string "
+                                  "literal");
+                    buf_push(&buf, &cap, &len,
+                             (unsigned char)(hi * 16 + lo));
+                    lx->pos += 2;
+                    break;
+                }
+                default:
+                    lex_error(line,
+                              "unknown escape sequence in byte string "
+                              "literal");
+                }
+                lx->pos++;
+            } else {
+                buf_push(&buf, &cap, &len, (unsigned char)ch);
+                lx->pos++;
+            }
+        }
+        lx->pos++; /* closing quote */
+        Token t = make_token(T_BYTES, line);
+        t.byte_val = buf;
+        t.byte_len = (long long)len;
+        return t;
+    }
+
     /* identifiers / keywords */
     if (is_ident_start(c)) {
         size_t start = lx->pos;
@@ -179,10 +246,21 @@ Token lexer_next(Lexer *lx) {
         KW("guard", T_KW_GUARD)
         KW("for", T_KW_FOR)
         KW("in", T_KW_IN)
+        KW("as", T_KW_AS)
         KW("int", T_TY_INT)
         KW("float", T_TY_FLOAT)
         KW("str", T_TY_STR)
         KW("bool", T_TY_BOOL)
+        KW("bytes", T_TY_BYTES)
+        KW("i8", T_TY_I8)
+        KW("i16", T_TY_I16)
+        KW("i32", T_TY_I32)
+        KW("i64", T_TY_I64)
+        KW("u8", T_TY_U8)
+        KW("u16", T_TY_U16)
+        KW("u32", T_TY_U32)
+        KW("u64", T_TY_U64)
+        KW("f32", T_TY_F32)
 #undef KW
 
         t = make_token(T_IDENT, line);
@@ -249,6 +327,8 @@ Token lexer_next(Lexer *lx) {
     case ',': return make_token(T_COMMA, line);
     case ';': return make_token(T_SEMI, line);
     case ':': return make_token(T_COLON, line);
+    case '[': return make_token(T_LBRACKET, line);
+    case ']': return make_token(T_RBRACKET, line);
     case '.': return make_token(T_DOT, line);
     default:
         lex_error(line, "unexpected character");
@@ -263,6 +343,7 @@ const char *token_type_name(TokenType t) {
     case T_INT:      return "integer";
     case T_FLOAT:    return "float";
     case T_STRING:   return "string";
+    case T_BYTES:    return "byte string";
     case T_KW_LET:   return "'let'";
     case T_KW_FN:    return "'fn'";
     case T_KW_IF:    return "'if'";
@@ -276,10 +357,21 @@ const char *token_type_name(TokenType t) {
     case T_KW_GUARD: return "'guard'";
     case T_KW_FOR:   return "'for'";
     case T_KW_IN:    return "'in'";
+    case T_KW_AS:    return "'as'";
     case T_TY_INT:   return "'int'";
     case T_TY_FLOAT: return "'float'";
     case T_TY_STR:   return "'str'";
     case T_TY_BOOL:  return "'bool'";
+    case T_TY_BYTES: return "'bytes'";
+    case T_TY_I8:    return "'i8'";
+    case T_TY_I16:   return "'i16'";
+    case T_TY_I32:   return "'i32'";
+    case T_TY_I64:   return "'i64'";
+    case T_TY_U8:    return "'u8'";
+    case T_TY_U16:   return "'u16'";
+    case T_TY_U32:   return "'u32'";
+    case T_TY_U64:   return "'u64'";
+    case T_TY_F32:   return "'f32'";
     case T_PLUS:     return "'+'";
     case T_MINUS:    return "'-'";
     case T_STAR:     return "'*'";
@@ -302,6 +394,8 @@ const char *token_type_name(TokenType t) {
     case T_COMMA:    return "','";
     case T_SEMI:     return "';'";
     case T_COLON:    return "':'";
+    case T_LBRACKET: return "'['";
+    case T_RBRACKET: return "']'";
     case T_DOT:      return "'.'";
     case T_DOTDOT:   return "'..'";
     case T_DOTDOTEQ: return "'..='";

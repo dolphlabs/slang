@@ -103,7 +103,16 @@ fn fib(n: int) -> int {
 - `print(expr)` — print a value without a newline
 - `println(expr)` — print a value followed by a newline
 
-Both accept any single value of type `int`, `float`, `str`, or `bool`.
+Both accept any single value of type `int`, any fixed-width integer,
+`float`, `f32`, `str`, `bool`, or `bytes` (bytes are written raw, with
+no escaping).
+
+- `len(x)` — length of a `str`, `bytes`, or `[T]`
+- `push(xs, v)` / `pop(xs)` — append to / remove the last element of a list
+- `to_str(x)` — convert any scalar or bytes value to `str`
+- `to_bytes(s)` — convert a `str` to its raw bytes
+- `to_le(n)` / `to_be(n)` — integer to 8-byte little/big-endian `bytes`
+- `from_le(b)` / `from_be(b)` — 8-byte little/big-endian `bytes` to integer
 
 ### Types
 
@@ -113,9 +122,58 @@ Both accept any single value of type `int`, `float`, `str`, or `bool`.
 | `float`    | `double`    | IEEE double                    |
 | `str`      | `const char *` | NUL-terminated UTF-8 bytes  |
 | `bool`     | `bool`      | `true` / `false`               |
+| `bytes`    | `sl_bytes *` | binary-safe byte sequence     |
+| `i8 i16 i32 i64` | `int8_t` .. `int64_t` | signed fixed-width ints |
+| `u8 u16 u32 u64` | `uint8_t` .. `uint64_t` | unsigned fixed-width ints |
+| `f32`      | `float`     | IEEE single precision          |
+| `[T]`      | `sl_arr *`  | growable array of T            |
 
-`int` widens to `float` implicitly where needed; all other conversions
-are explicit errors.
+#### Numeric conversion rules
+
+- **Implicit widening** within the integer family: a narrower int may be
+  used wherever a strictly wider one is expected (`i32` -> `i64`,
+  `u32` -> `u64`, and unsigned into a wider *signed* type). Widening
+  toward floats is also implicit (`i32` -> `float`, `f32` -> `float`).
+- **Narrowing and sign changes require an explicit cast** with `as`:
+  `x as i8`, `n as u32`, `3.9 as i32`. Integer literals that fit the
+  target width may initialize/pass without a cast.
+- **Wrap on cast/overflow**: casts and arithmetic wrap two's-complement
+  style. `(0 as u8) - (1 as u8)` is `255`; `300 as i8` is `44`. Float ->
+  int casts truncate toward zero.
+- Mixed-width arithmetic promotes to the wider operand; same-width
+  signed/unsigned mixes resolve to the unsigned type (C semantics).
+
+#### bytes
+
+```slang
+let b = b"raw\x00bytes";   // binary-safe literal; \0 \xHH escapes
+println(len(b));           // byte count, not strlen
+println(b[0]);             // indexing yields an int (0..255)
+b[0] = 65;                 // mutable in place
+let head = b[..2];         // slicing: b[a..b], b[..n], b[n..], b[..]
+let both = b"ab" + b"cd";  // concatenation
+if b == other { ... }      // content equality via ==
+for byte in b { ... }      // iterate byte values
+```
+
+`bytes` values carry an explicit length and may contain NULs — safe for
+network buffers and binary formats.
+
+#### Lists `[T]`
+
+```slang
+let xs = [10, 20, 30];         // inferred [int]
+let empty: [str] = [];         // empty lists need an annotation
+push(xs, 40);                  // grow (amortized O(1))
+println(pop(xs));              // shrink from the end
+xs[0] = 5;                     // bounds-checked index assignment
+for x in xs { println(x); }    // iteration
+let ys = xs[0..2] + xs[1..];   // slicing + concatenation
+let grid = [[1, 2], [3, 4]];   // nested lists
+```
+
+Indexing is bounds-checked at runtime; violations abort with a clear
+message.
 
 ## Packages (Go/Odin style)
 
@@ -214,7 +272,8 @@ Makefile       build/test/clean
 - Package globals require constant-literal initializers.
 - Implicit returns only apply to the last statement of a function
   body; `if` and `{}` blocks are statements, not expressions yet.
-- No arrays, structs, closures, or error handling yet.
+- No structs, closures, or error handling yet.
+- Package-level lists are not supported yet (scalars and bytes are).
 
 ## Memory management
 
@@ -236,7 +295,7 @@ What this means in practice:
 
 - Block scoping and shadowing
 - If/block expressions (`let max = if a > b { a } else { b }`)
-- Arrays/lists, range `.step(n)`
+- Range `.step(n)`
 - Structs with `impl` method blocks
 - Option/Result types with `??`
 - Import aliases (`import "x" as y`)
