@@ -156,6 +156,24 @@ static int is_num(const char *t) { return is_int(t) || is_flt(t); }
 static int is_str(const char *t) { return !strcmp(t, "str"); }
 static int is_bytes(const char *t) { return !strcmp(t, "bytes"); }
 static int is_arr(const char *t) { return t[0] == '['; }
+static int is_map(const char *t) { return !strncmp(t, "map[", 4); }
+
+/* "map[K]V" -> K and V (heap-allocated). Caller must pass a map type.
+ * Keys are scalars (no nested ']'), values may be any type. */
+static void map_kv(const char *t, char **k, char **v) {
+    const char *close = strchr(t + 4, ']');
+    size_t kl = (size_t)(close - (t + 4));
+    char *kt = (char *)xmalloc(kl + 1);
+    memcpy(kt, t + 4, kl);
+    kt[kl] = '\0';
+    *k = kt;
+    *v = xstrdup(close + 1);
+}
+
+/* Valid map key types: integers, str, bool. */
+static int is_map_key(const char *t) {
+    return is_int(t) || is_str(t) || !strcmp(t, "bool");
+}
 
 /* "[T]" -> "T" (heap-allocated). Caller must pass an array type. */
 static char *arr_elem(const char *t) {
@@ -242,13 +260,39 @@ static const char *promote(const char *lt, const char *rt) {
     return is_signed_int(lt) ? rt : lt;
 }
 
+/* Forward declarations used before their definitions below. */
+typedef struct CG CG;
+static const char *ctype_of(CG *cg, const char *t);
+
 /* Insert a C cast when the slang types differ (compatibility is
  * guaranteed by value_assignable/can_assign upstream). */
-static char *maybe_cast(const char *dst, const char *src, char *expr) {
+static char *maybe_cast(CG *cg, const char *dst, const char *src,
+                        char *expr) {
     if (!strcmp(dst, src))
         return expr;
-    return xasprintf("(%s)(%s)", map_type(dst), expr);
+    return xasprintf("(%s)(%s)", ctype_of(cg, dst), expr);
 }
+
+/* ------------------------------------------------------------------ */
+/* User-defined structs                                                */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    char *canonical;     /* "pkg.Name" — the slang-level type identity */
+    char *pkg;
+    char *name;          /* simple name within its package */
+    int is_pub;
+    char **fields;
+    const char **ftypes; /* canonical slang field types */
+    int nfields;
+    int line;
+} StructDef;
+
+typedef struct {
+    StructDef *items;
+    int count;
+    int cap;
+} StructTable;
 
 /* ------------------------------------------------------------------ */
 /* Symbol tables                                                       */
@@ -273,6 +317,8 @@ typedef struct {
     const char **param_slang;
     int nparams;
     int is_pub;
+    const char *method_of;   /* canonical struct name for methods, else NULL */
+    int line;
 } FuncSig;
 
 typedef struct {
@@ -308,18 +354,19 @@ typedef struct {
     int cap;
 } GlobTable;
 
-typedef struct {
+struct CG {
     StrBuf *out;
     int indent;
     VarTable vars;
     SigTable sigs;
     GlobTable globs;
     ImportTable imports;
+    StructTable structs;
     const char *cur_ret;  /* slang return type of enclosing function */
     const char *cur_pkg;
     int in_function;
     int tmp_id;
-} CG;
+};
 
 static void var_push(CG *cg, const char *name, const char *slang) {
     if (cg->vars.count == cg->vars.cap) {
@@ -329,7 +376,7 @@ static void var_push(CG *cg, const char *name, const char *slang) {
     }
     cg->vars.items[cg->vars.count].name = (char *)name;
     cg->vars.items[cg->vars.count].slang = slang;
-    cg->vars.items[cg->vars.count].ctype = map_type(slang);
+    cg->vars.items[cg->vars.count].ctype = ctype_of(cg, slang);
     cg->vars.count++;
 }
 
@@ -386,14 +433,20 @@ static void import_push(CG *cg, const char *owner, const char *alias,
     cg->imports.count++;
 }
 
-static const char *import_target(CG *cg, const char *alias, int line) {
+static const char *import_try(CG *cg, const char *alias) {
     for (int i = 0; i < cg->imports.count; i++) {
         ImportBind *b = &cg->imports.items[i];
         if (!strcmp(b->owner, cg->cur_pkg) && !strcmp(b->alias, alias))
             return b->target;
     }
-    cg_error(line, "'%s' is not an imported package", alias);
-    return NULL; /* unreachable */
+    return NULL;
+}
+
+static const char *import_target(CG *cg, const char *alias, int line) {
+    const char *t = import_try(cg, alias);
+    if (!t)
+        cg_error(line, "'%s' is not an imported package", alias);
+    return t;
 }
 
 static int split_dotted(const char *name, char **left, char **right) {
@@ -435,6 +488,90 @@ static char *path_base(const char *path) {
     return xstrdup(slash ? slash + 1 : path);
 }
 
+static StructDef *struct_find_canon(CG *cg, const char *canon) {
+    for (int i = 0; i < cg->structs.count; i++) {
+        if (!strcmp(cg->structs.items[i].canonical, canon))
+            return &cg->structs.items[i];
+    }
+    return NULL;
+}
+
+static StructDef *struct_find_in_pkg(CG *cg, const char *pkg,
+                                     const char *name) {
+    for (int i = 0; i < cg->structs.count; i++) {
+        if (!strcmp(cg->structs.items[i].pkg, pkg) &&
+            !strcmp(cg->structs.items[i].name, name))
+            return &cg->structs.items[i];
+    }
+    return NULL;
+}
+
+static char *mangle_struct(const char *canon) {
+    char *l, *r;
+    split_dotted(canon, &l, &r);
+    return xasprintf("sl_st_%s_%s", sanitize_pkg(l), sanitize_ident(r));
+}
+
+/* C type for a slang type, including maps and user-defined structs. */
+static const char *ctype_of(CG *cg, const char *t) {
+    const char *m = map_type(t);
+    if (m)
+        return m;
+    if (is_map(t))
+        return "sl_map *";
+    if (struct_find_canon(cg, t))
+        return xasprintf("%s *", mangle_struct(t));
+    return NULL;
+}
+
+/* Resolve a type name as written to its canonical form: builtin types
+ * pass through; struct names gain their package qualifier ("Point" ->
+ * "main.Point"); containers canonicalize recursively. */
+static const char *canon_type(CG *cg, const char *t, int line) {
+    /* containers first: their inner types must be canonicalized
+     * recursively (map_type() would otherwise match the whole
+     * container and skip that step) */
+    if (t[0] == '[') {
+        size_t n = strlen(t);
+        char *inner = (char *)xmalloc(n - 1);
+        memcpy(inner, t + 1, n - 2);
+        inner[n - 2] = '\0';
+        const char *ci = canon_type(cg, inner, line);
+        return xasprintf("[%s]", ci);
+    }
+    if (is_map(t)) {
+        char *k, *v;
+        map_kv(t, &k, &v);
+        if (!is_map_key(k))
+            cg_error(line,
+                     "map keys must be an integer type, str, or bool "
+                     "(got '%s')",
+                     k);
+        const char *cv = canon_type(cg, v, line);
+        return xasprintf("map[%s]%s", k, cv);
+    }
+    if (map_type(t))
+        return t;
+    if (!strchr(t, '.')) {
+        StructDef *sd = struct_find_in_pkg(cg, cg->cur_pkg, t);
+        if (!sd)
+            cg_error(line, "unknown type '%s'", t);
+        return sd->canonical;
+    }
+    char *l, *r;
+    split_dotted(t, &l, &r);
+    const char *pkg = import_target(cg, l, line);
+    StructDef *sd = struct_find_in_pkg(cg, pkg, r);
+    if (!sd)
+        cg_error(line, "package '%s' has no type '%s'", pkg, r);
+    if (!sd->is_pub)
+        cg_error(line,
+                 "type '%s' is not exported from package '%s' (add 'pub' "
+                 "to export it)",
+                 r, pkg);
+    return sd->canonical;
+}
+
 /* ------------------------------------------------------------------ */
 /* Output helpers                                                      */
 /* ------------------------------------------------------------------ */
@@ -463,7 +600,60 @@ static int is_builtin_name(const char *name) {
            !strcmp(name, "pop") || !strcmp(name, "to_str") ||
            !strcmp(name, "to_bytes") || !strcmp(name, "to_le") ||
            !strcmp(name, "to_be") || !strcmp(name, "from_le") ||
-           !strcmp(name, "from_be");
+           !strcmp(name, "from_be") || !strcmp(name, "has") ||
+           !strcmp(name, "del");
+}
+
+/* Find a method `name` declared (via impl) for struct `sd`. */
+static FuncSig *method_find(CG *cg, StructDef *sd, const char *name) {
+    for (int i = 0; i < cg->sigs.count; i++) {
+        FuncSig *s = &cg->sigs.items[i];
+        if (!strcmp(s->pkg, sd->pkg) && !strcmp(s->name, name) &&
+            s->method_of && !strcmp(s->method_of, sd->canonical))
+            return s;
+    }
+    return NULL;
+}
+
+/* Resolve a possibly-dotted identifier to its slang type: locals,
+ * package globals, imported package members, or struct field chains
+ * ("rect.center.x"). */
+static const char *infer_ident_name(CG *cg, const char *name, int line) {
+    VarSym *v = var_find(cg, name);
+    if (v)
+        return v->slang;
+    char *left, *right;
+    if (split_dotted(name, &left, &right)) {
+        const char *pkg = import_try(cg, left);
+        if (pkg) {
+            GlobSym *g = glob_find(cg, pkg, right);
+            if (!g)
+                cg_error(line, "package '%s' has no variable '%s'", pkg,
+                         right);
+            if (!g->is_pub)
+                cg_error(line,
+                         "variable '%s' is not exported from package '%s' "
+                         "(add 'pub' to export it)",
+                         right, pkg);
+            return g->slang;
+        }
+        const char *bt = infer_ident_name(cg, left, line);
+        StructDef *sd = struct_find_canon(cg, bt);
+        if (!sd)
+            cg_error(line, "'%s' has no member '%s' (type %s)", left,
+                     right, bt);
+        for (int i = 0; i < sd->nfields; i++) {
+            if (!strcmp(sd->fields[i], right))
+                return sd->ftypes[i];
+        }
+        cg_error(line, "struct '%s' has no field '%s'", sd->canonical,
+                 right);
+    }
+    GlobSym *g = glob_find(cg, cg->cur_pkg, name);
+    if (g)
+        return g->slang;
+    cg_error(line, "undefined variable '%s'", name);
+    return NULL; /* unreachable */
 }
 
 static const char *infer_call(CG *cg, Expr *e) {
@@ -484,9 +674,10 @@ static const char *infer_call(CG *cg, Expr *e) {
         if (n != 1)
             cg_error(e->line, "len() takes exactly one argument");
         const char *t = infer_type(cg, e->as.call.args[0]);
-        if (is_str(t) || is_bytes(t) || is_arr(t))
+        if (is_str(t) || is_bytes(t) || is_arr(t) || is_map(t))
             return "int";
-        cg_error(e->line, "len() expects a str, bytes, or [T] (got %s)", t);
+        cg_error(e->line,
+                 "len() expects a str, bytes, [T], or map (got %s)", t);
     }
     if (!strcmp(name, "push")) {
         if (n != 2)
@@ -542,35 +733,73 @@ static const char *infer_call(CG *cg, Expr *e) {
             cg_error(e->line, "%s() expects bytes (got %s)", name, t);
         return "int";
     }
+    if (!strcmp(name, "has") || !strcmp(name, "del")) {
+        if (n != 2)
+            cg_error(e->line, "%s() takes exactly two arguments", name);
+        const char *t = infer_type(cg, e->as.call.args[0]);
+        if (!is_map(t))
+            cg_error(e->line,
+                     "%s() expects a map as its first argument (got %s)",
+                     name, t);
+        char *k, *v;
+        map_kv(t, &k, &v);
+        const char *kt = infer_type(cg, e->as.call.args[1]);
+        if (!value_assignable(k, e->as.call.args[1], kt))
+            cg_error(e->line,
+                     "%s(): key type mismatch: cannot use %s where %s "
+                     "expected",
+                     name, kt, k);
+        return !strcmp(name, "has") ? "bool" : "void";
+    }
 
-    FuncSig *sig;
+    FuncSig *sig = NULL;
+    const char *recv_t = NULL;
     char *left, *right;
     if (split_dotted(name, &left, &right)) {
-        const char *pkg = import_target(cg, left, e->line);
-        sig = sig_find_in(cg, pkg, right);
-        if (!sig)
-            cg_error(e->line, "package '%s' has no function '%s'", pkg,
-                     right);
-        if (!sig->is_pub)
-            cg_error(e->line,
-                     "function '%s' is not exported from package '%s' "
-                     "(add 'pub' to export it)",
-                     right, pkg);
+        const char *pkg = import_try(cg, left);
+        if (pkg) {
+            sig = sig_find_in(cg, pkg, right);
+            if (!sig)
+                cg_error(e->line, "package '%s' has no function '%s'", pkg,
+                         right);
+            if (!sig->is_pub)
+                cg_error(e->line,
+                         "function '%s' is not exported from package '%s' "
+                         "(add 'pub' to export it)",
+                         right, pkg);
+        } else {
+            /* method call on a struct-typed receiver */
+            recv_t = infer_ident_name(cg, left, e->line);
+            StructDef *sd = struct_find_canon(cg, recv_t);
+            if (!sd)
+                cg_error(e->line, "call to undefined function '%s'", name);
+            sig = method_find(cg, sd, right);
+            if (!sig)
+                cg_error(e->line, "type '%s' has no method '%s'",
+                         sd->canonical, right);
+            if (!sig->is_pub && strcmp(sd->pkg, cg->cur_pkg))
+                cg_error(e->line,
+                         "method '%s' is not exported from package '%s' "
+                         "(add 'pub' to export it)",
+                         right, sd->pkg);
+        }
     } else {
         sig = sig_find_in(cg, cg->cur_pkg, name);
         if (!sig)
             cg_error(e->line, "call to undefined function '%s'", name);
     }
-    if (n != sig->nparams)
+    int self_off = recv_t ? 1 : 0;
+    if (n + self_off != sig->nparams)
         cg_error(e->line,
                  "function '%s' expects %d argument(s), got %d", name,
-                 sig->nparams, n);
-    for (int i = 0; i < sig->nparams; i++) {
+                 sig->nparams - self_off, n);
+    for (int i = 0; i < n; i++) {
         const char *at = infer_type(cg, e->as.call.args[i]);
-        if (!value_assignable(sig->param_slang[i], e->as.call.args[i], at))
+        if (!value_assignable(sig->param_slang[i + self_off],
+                              e->as.call.args[i], at))
             cg_error(e->line,
                      "argument %d of '%s': cannot pass %s where %s expected",
-                     i + 1, name, at, sig->param_slang[i]);
+                     i + 1, name, at, sig->param_slang[i + self_off]);
     }
     return sig->ret_slang ? sig->ret_slang : "void";
 }
@@ -645,29 +874,8 @@ static const char *infer_type(CG *cg, Expr *e) {
     case EX_STRING: return "str";
     case EX_BYTES:  return "bytes";
     case EX_BOOL:   return "bool";
-    case EX_IDENT: {
-        VarSym *v = var_find(cg, e->as.ident.name);
-        if (v)
-            return v->slang;
-        char *left, *right;
-        if (split_dotted(e->as.ident.name, &left, &right)) {
-            const char *pkg = import_target(cg, left, e->line);
-            GlobSym *g = glob_find(cg, pkg, right);
-            if (!g)
-                cg_error(e->line,
-                         "package '%s' has no variable '%s'", pkg, right);
-            if (!g->is_pub)
-                cg_error(e->line,
-                         "variable '%s' is not exported from package '%s' "
-                         "(add 'pub' to export it)",
-                         right, pkg);
-            return g->slang;
-        }
-        GlobSym *g = glob_find(cg, cg->cur_pkg, e->as.ident.name);
-        if (g)
-            return g->slang;
-        cg_error(e->line, "undefined variable '%s'", e->as.ident.name);
-    }
+    case EX_IDENT:
+        return infer_ident_name(cg, e->as.ident.name, e->line);
     case EX_UNARY: {
         const char *t = infer_type(cg, e->as.unary.operand);
         if (!strcmp(e->as.unary.op, "-")) {
@@ -698,6 +906,16 @@ static const char *infer_type(CG *cg, Expr *e) {
     case EX_INDEX: {
         const char *bt = infer_type(cg, e->as.index.base);
         const char *it = infer_type(cg, e->as.index.index);
+        if (is_map(bt)) {
+            char *k, *v;
+            map_kv(bt, &k, &v);
+            if (!value_assignable(k, e->as.index.index, it))
+                cg_error(e->line,
+                         "map key type mismatch: cannot use %s where %s "
+                         "expected",
+                         it, k);
+            return v;
+        }
         if (!is_int(it))
             cg_error(e->line, "index must be an integer (got %s)", it);
         if (is_bytes(bt))
@@ -743,6 +961,79 @@ static const char *infer_type(CG *cg, Expr *e) {
         }
         return xasprintf("[%s]", t0);
     }
+    case EX_MAPLIT: {
+        if (e->as.maplit.npairs == 0)
+            cg_error(e->line,
+                     "cannot infer the key/value types of an empty map; "
+                     "annotate the variable, e.g. let m: map[str]int = {}");
+        const char *kt = infer_type(cg, e->as.maplit.keys[0]);
+        if (!is_map_key(kt))
+            cg_error(e->line,
+                     "map keys must be an integer type, str, or bool "
+                     "(got %s)",
+                     kt);
+        const char *vt = infer_type(cg, e->as.maplit.vals[0]);
+        for (int i = 1; i < e->as.maplit.npairs; i++) {
+            const char *ki = infer_type(cg, e->as.maplit.keys[i]);
+            const char *vi = infer_type(cg, e->as.maplit.vals[i]);
+            if (!value_assignable(kt, e->as.maplit.keys[i], ki))
+                cg_error(e->line,
+                         "map keys must share a common type: cannot use %s "
+                         "where %s was established by the first key",
+                         ki, kt);
+            if (!value_assignable(vt, e->as.maplit.vals[i], vi))
+                cg_error(e->line,
+                         "map values must share a common type: cannot use "
+                         "%s where %s was established by the first value",
+                         vi, vt);
+        }
+        return xasprintf("map[%s]%s", kt, vt);
+    }
+    case EX_FIELD: {
+        const char *bt = infer_type(cg, e->as.field.base);
+        StructDef *sd = struct_find_canon(cg, bt);
+        if (!sd)
+            cg_error(e->line, "'.' used on a value of type %s", bt);
+        for (int i = 0; i < sd->nfields; i++) {
+            if (!strcmp(sd->fields[i], e->as.field.name))
+                return sd->ftypes[i];
+        }
+        cg_error(e->line, "struct '%s' has no field '%s'", sd->canonical,
+                 e->as.field.name);
+    }
+    case EX_STRUCTLIT: {
+        const char *canon =
+            canon_type(cg, e->as.structlit.tyname, e->line);
+        StructDef *sd = struct_find_canon(cg, canon);
+        for (int i = 0; i < sd->nfields; i++) {
+            int found = -1;
+            for (int j = 0; j < e->as.structlit.nfields; j++) {
+                if (!strcmp(sd->fields[i], e->as.structlit.fields[j]))
+                    found = j;
+            }
+            if (found < 0)
+                cg_error(e->line, "missing field '%s' in %s literal",
+                         sd->fields[i], sd->canonical);
+            Expr *v = e->as.structlit.vals[found];
+            const char *vt = infer_type(cg, v);
+            if (!value_assignable(sd->ftypes[i], v, vt))
+                cg_error(e->line,
+                         "field '%s': cannot use %s where %s expected",
+                         sd->fields[i], vt, sd->ftypes[i]);
+        }
+        for (int j = 0; j < e->as.structlit.nfields; j++) {
+            int known = 0;
+            for (int i = 0; i < sd->nfields; i++) {
+                if (!strcmp(sd->fields[i], e->as.structlit.fields[j]))
+                    known = 1;
+            }
+            if (!known)
+                cg_error(e->line,
+                         "struct '%s' has no field '%s'", sd->canonical,
+                         e->as.structlit.fields[j]);
+        }
+        return canon;
+    }
     }
     return NULL; /* unreachable */
 }
@@ -752,6 +1043,33 @@ static const char *infer_type(CG *cg, Expr *e) {
 /* ------------------------------------------------------------------ */
 
 static char *gen_expr(CG *cg, Expr *e);
+
+/* C expression for a possibly-dotted identifier: locals, package
+ * globals, imported members, or struct field chains. */
+static char *gen_ident_name(CG *cg, const char *name, int line) {
+    VarSym *v = var_find(cg, name);
+    if (v)
+        return sanitize_ident(name);
+    char *left, *right;
+    if (split_dotted(name, &left, &right)) {
+        const char *pkg = import_try(cg, left);
+        if (pkg) {
+            GlobSym *g = glob_find(cg, pkg, right);
+            if (!g || !g->is_pub)
+                cg_error(line,
+                         "variable '%s' is not accessible from package "
+                         "'%s'",
+                         right, pkg);
+            return mangle_glob(g->pkg, g->name);
+        }
+        char *base = gen_ident_name(cg, left, line);
+        return xasprintf("(%s)->%s", base, sanitize_ident(right));
+    }
+    GlobSym *g = glob_find(cg, cg->cur_pkg, name);
+    if (g)
+        return mangle_glob(g->pkg, g->name);
+    return sanitize_ident(name);
+}
 
 static char *gen_float_literal(double v) {
     char buf[64];
@@ -794,8 +1112,8 @@ static char *gen_numeric_binary(CG *cg, Expr *e, const char *result_t) {
     const char *rt = infer_type(cg, e->as.binary.rhs);
     char *a = gen_expr(cg, e->as.binary.lhs);
     char *b = gen_expr(cg, e->as.binary.rhs);
-    a = maybe_cast(result_t, lt, a);
-    b = maybe_cast(result_t, rt, b);
+    a = maybe_cast(cg, result_t, lt, a);
+    b = maybe_cast(cg, result_t, rt, b);
     /* Cast the result back to the slang result type: C's integer
      * promotions would otherwise widen narrow types to int and lose
      * the documented wrap-on-overflow semantics. */
@@ -815,8 +1133,8 @@ static char *gen_comparison(CG *cg, Expr *e, const char *lt, const char *rt) {
     }
     /* mixed-width numerics: widen both to the common type */
     const char *pt = promote(lt, rt);
-    a = maybe_cast(pt, lt, a);
-    b = maybe_cast(pt, rt, b);
+    a = maybe_cast(cg, pt, lt, a);
+    b = maybe_cast(cg, pt, rt, b);
     return xasprintf("(%s %s %s)", a, op, b);
 }
 
@@ -829,6 +1147,8 @@ static char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *a = gen_expr(cg, e->as.call.args[0]);
         if (is_str(t))
             return xasprintf("((long long)strlen(%s))", a);
+        if (is_map(t))
+            return xasprintf("((%s)->count)", a);
         return xasprintf("((%s)->len)", a);
     }
     if (!strcmp(name, "push")) {
@@ -837,8 +1157,8 @@ static char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         const char *vt = infer_type(cg, e->as.call.args[1]);
         char *xs = gen_expr(cg, e->as.call.args[0]);
         char *v = gen_expr(cg, e->as.call.args[1]);
-        v = maybe_cast(elem, vt, v);
-        const char *ec = map_type(elem);
+        v = maybe_cast(cg, elem, vt, v);
+        const char *ec = ctype_of(cg, elem);
         return xasprintf(
             "({ %s _sl_v = %s; sl_arr *_sl_a = %s; sl_arr_push(_sl_a, "
             "&_sl_v, sizeof(%s)); _sl_a; })",
@@ -848,7 +1168,7 @@ static char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         const char *at = infer_type(cg, e->as.call.args[0]);
         char *elem = arr_elem(at);
         char *xs = gen_expr(cg, e->as.call.args[0]);
-        const char *ec = map_type(elem);
+        const char *ec = ctype_of(cg, elem);
         return xasprintf(
             "({ sl_arr *_sl_a = %s; *(%s *)(void *)sl_arr_pop(_sl_a, "
             "sizeof(%s)); })",
@@ -876,6 +1196,20 @@ static char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *a = gen_expr(cg, e->as.call.args[0]);
         return xasprintf("((long long)sl_%s(%s))", name, a);
     }
+    if (!strcmp(name, "has") || !strcmp(name, "del")) {
+        const char *t = infer_type(cg, e->as.call.args[0]);
+        char *m = gen_expr(cg, e->as.call.args[0]);
+        char *k, *v;
+        map_kv(t, &k, &v);
+        const char *kc = ctype_of(cg, k);
+        const char *ikt = infer_type(cg, e->as.call.args[1]);
+        char *ix = maybe_cast(cg, k, ikt, gen_expr(cg, e->as.call.args[1]));
+        if (!strcmp(name, "has"))
+            return xasprintf(
+                "({ %s _sl_k = %s; sl_map_has(%s, &_sl_k); })", kc, ix, m);
+        return xasprintf(
+            "({ %s _sl_k = %s; sl_map_del(%s, &_sl_k); })", kc, ix, m);
+    }
     *handled = 0;
     return NULL;
 }
@@ -895,18 +1229,36 @@ static char *gen_call(CG *cg, Expr *e) {
             return r;
     }
 
-    FuncSig *sig;
+    FuncSig *sig = NULL;
+    char *selfexpr = NULL;
+    const char *recv_t = NULL;
     char *left, *right;
     if (split_dotted(name, &left, &right)) {
-        const char *pkg = import_target(cg, left, e->line);
-        sig = sig_find_in(cg, pkg, right);
-        if (!sig)
-            cg_error(e->line, "package '%s' has no function '%s'", pkg,
-                     right);
-        if (!sig->is_pub)
-            cg_error(e->line,
-                     "function '%s' is not exported from package '%s'",
-                     right, pkg);
+        const char *pkg = import_try(cg, left);
+        if (pkg) {
+            sig = sig_find_in(cg, pkg, right);
+            if (!sig)
+                cg_error(e->line, "package '%s' has no function '%s'", pkg,
+                         right);
+            if (!sig->is_pub)
+                cg_error(e->line,
+                         "function '%s' is not exported from package '%s'",
+                         right, pkg);
+        } else {
+            recv_t = infer_ident_name(cg, left, e->line);
+            StructDef *sd = struct_find_canon(cg, recv_t);
+            if (!sd)
+                cg_error(e->line, "call to undefined function '%s'", name);
+            sig = method_find(cg, sd, right);
+            if (!sig)
+                cg_error(e->line, "type '%s' has no method '%s'",
+                         sd->canonical, right);
+            if (!sig->is_pub && strcmp(sd->pkg, cg->cur_pkg))
+                cg_error(e->line,
+                         "method '%s' is not exported from package '%s'",
+                         right, sd->pkg);
+            selfexpr = gen_ident_name(cg, left, e->line);
+        }
     } else {
         sig = sig_find_in(cg, cg->cur_pkg, name);
         if (!sig)
@@ -918,15 +1270,85 @@ static char *gen_call(CG *cg, Expr *e) {
     char *mangled = mangle_func(sig->pkg, sig->name);
     sb_append(&sb, mangled);
     sb_putc(&sb, '(');
+    int argi = 0;
+    if (selfexpr) {
+        sb_append(&sb,
+                  maybe_cast(cg, sig->param_slang[0], recv_t, selfexpr));
+        argi = 1;
+    }
     for (int i = 0; i < e->as.call.nargs; i++) {
-        if (i)
+        if (i || argi)
             sb_append(&sb, ", ");
         const char *at = infer_type(cg, e->as.call.args[i]);
         char *a = gen_expr(cg, e->as.call.args[i]);
-        a = maybe_cast(sig->param_slang[i], at, a);
+        a = maybe_cast(cg, sig->param_slang[argi + i], at, a);
         sb_append(&sb, a);
     }
     sb_putc(&sb, ')');
+    return sb.data;
+}
+
+/* Generate a map literal. With expect_k/expect_v (annotated case),
+ * elements are checked/cast against those types instead of inferred. */
+static char *gen_maplit(CG *cg, Expr *e, const char *expect_k,
+                        const char *expect_v) {
+    char *kt, *vt;
+    if (expect_k) {
+        kt = xstrdup(expect_k);
+        vt = xstrdup(expect_v);
+    } else {
+        kt = xstrdup(infer_type(cg, e->as.maplit.keys[0]));
+        vt = xstrdup(infer_type(cg, e->as.maplit.vals[0]));
+    }
+    const char *kc = ctype_of(cg, kt);
+    const char *vc = ctype_of(cg, vt);
+    int kstr = is_str(kt);
+    StrBuf sb;
+    sb_init(&sb);
+    sb_append(&sb, "({ sl_map *_sl_m = sl_map_new(sizeof(");
+    sb_append(&sb, kc);
+    sb_append(&sb, "), sizeof(");
+    sb_append(&sb, vc);
+    sb_append(&sb, xasprintf("), %d); ", kstr));
+    for (int i = 0; i < e->as.maplit.npairs; i++) {
+        const char *kit = infer_type(cg, e->as.maplit.keys[i]);
+        char *k = gen_expr(cg, e->as.maplit.keys[i]);
+        k = maybe_cast(cg, kt, kit, k);
+        const char *vit = infer_type(cg, e->as.maplit.vals[i]);
+        char *v = gen_expr(cg, e->as.maplit.vals[i]);
+        v = maybe_cast(cg, vt, vit, v);
+        sb_append(&sb,
+                  xasprintf("{ %s _sl_k%d = %s; %s _sl_v%d = %s; "
+                            "sl_map_put(_sl_m, &_sl_k%d, &_sl_v%d); } ",
+                            kc, i, k, vc, i, v, i, i));
+    }
+    sb_append(&sb, "_sl_m; })");
+    return sb.data;
+}
+
+static char *gen_structlit(CG *cg, Expr *e) {
+    const char *canon = infer_type(cg, e); /* validates fields too */
+    StructDef *sd = struct_find_canon(cg, canon);
+    const char *sc = mangle_struct(canon);
+    StrBuf sb;
+    sb_init(&sb);
+    sb_append(&sb,
+              xasprintf("({ %s *_sl_s = (%s *)GC_malloc(sizeof(%s)); ", sc,
+                        sc, sc));
+    for (int j = 0; j < e->as.structlit.nfields; j++) {
+        int fi = -1;
+        for (int i = 0; i < sd->nfields; i++) {
+            if (!strcmp(sd->fields[i], e->as.structlit.fields[j]))
+                fi = i;
+        }
+        const char *vt = infer_type(cg, e->as.structlit.vals[j]);
+        char *v = gen_expr(cg, e->as.structlit.vals[j]);
+        v = maybe_cast(cg, sd->ftypes[fi], vt, v);
+        sb_append(&sb,
+                  xasprintf("_sl_s->%s = %s; ",
+                            sanitize_ident(sd->fields[fi]), v));
+    }
+    sb_append(&sb, "_sl_s; })");
     return sb.data;
 }
 
@@ -934,11 +1356,26 @@ static char *gen_index(CG *cg, Expr *e) {
     const char *bt = infer_type(cg, e->as.index.base);
     char *b = gen_expr(cg, e->as.index.base);
     char *i = gen_expr(cg, e->as.index.index);
+    if (is_map(bt)) {
+        char *k, *v;
+        map_kv(bt, &k, &v);
+        const char *kc = ctype_of(cg, k);
+        const char *vc = ctype_of(cg, v);
+        const char *ikt = infer_type(cg, e->as.index.index);
+        char *ix = maybe_cast(cg, k, ikt, i);
+        int id = cg->tmp_id++;
+        return xasprintf(
+            "({ %s _sl_k%d = %s; void *_sl_p%d = sl_map_get(%s, "
+            "&_sl_k%d); if (!_sl_p%d) sl_rt_error(\"map key not found\", "
+            "0, 0); *(%s *)(void *)_sl_p%d; })",
+            kc, id, ix, id, b, id, id, vc, id);
+    }
     if (is_bytes(bt))
         return xasprintf("((long long)sl_bytes_at(%s, %s))", b, i);
     char *elem = arr_elem(bt);
-    return xasprintf("(*(%s *)(void *)sl_arr_get(%s, %s, sizeof(%s)))",
-                     map_type(elem), b, i, map_type(elem));
+    const char *ec = ctype_of(cg, elem);
+    return xasprintf("(*(%s *)(void *)sl_arr_get(%s, %s, sizeof(%s)))", ec,
+                     b, i, ec);
 }
 
 static char *gen_slice(CG *cg, Expr *e) {
@@ -970,7 +1407,7 @@ static char *gen_slice(CG *cg, Expr *e) {
 static char *gen_list(CG *cg, Expr *e, const char *expect_elem) {
     const char *t0 =
         expect_elem ? expect_elem : infer_type(cg, e->as.list.elems[0]);
-    const char *ec = map_type(t0);
+    const char *ec = ctype_of(cg, t0);
     StrBuf sb;
     sb_init(&sb);
     sb_append(&sb, "({ ");
@@ -981,7 +1418,7 @@ static char *gen_list(CG *cg, Expr *e, const char *expect_elem) {
             sb_append(&sb, ", ");
         const char *ti = infer_type(cg, e->as.list.elems[i]);
         char *el = gen_expr(cg, e->as.list.elems[i]);
-        el = maybe_cast(t0, ti, el);
+        el = maybe_cast(cg, t0, ti, el);
         sb_append(&sb, el);
     }
     sb_append(&sb, "}; sl_arr_from(_sl_e, ");
@@ -1007,24 +1444,8 @@ static char *gen_expr(CG *cg, Expr *e) {
                          e->as.bytes_lit.len);
     case EX_BOOL:
         return xstrdup(e->as.bool_lit.value ? "true" : "false");
-    case EX_IDENT: {
-        const char *name = e->as.ident.name;
-        char *left, *right;
-        if (split_dotted(name, &left, &right)) {
-            const char *pkg = import_target(cg, left, e->line);
-            GlobSym *g = glob_find(cg, pkg, right);
-            if (!g || !g->is_pub)
-                cg_error(e->line,
-                         "variable '%s' is not accessible from package "
-                         "'%s'",
-                         right, pkg);
-            return mangle_glob(g->pkg, g->name);
-        }
-        GlobSym *g = glob_find(cg, cg->cur_pkg, name);
-        if (g)
-            return mangle_glob(g->pkg, g->name);
-        return sanitize_ident(name);
-    }
+    case EX_IDENT:
+        return gen_ident_name(cg, e->as.ident.name, e->line);
     case EX_UNARY: {
         char *o = gen_expr(cg, e->as.unary.operand);
         /* keep narrow-int wrap semantics across unary minus */
@@ -1043,6 +1464,14 @@ static char *gen_expr(CG *cg, Expr *e) {
         return gen_slice(cg, e);
     case EX_LIST:
         return gen_list(cg, e, NULL);
+    case EX_MAPLIT:
+        return gen_maplit(cg, e, NULL, NULL);
+    case EX_FIELD: {
+        char *b = gen_expr(cg, e->as.field.base);
+        return xasprintf("(%s)->%s", b, sanitize_ident(e->as.field.name));
+    }
+    case EX_STRUCTLIT:
+        return gen_structlit(cg, e);
     case EX_BINARY: {
         const char *op = e->as.binary.op;
         const char *lt = infer_type(cg, e->as.binary.lhs);
@@ -1109,6 +1538,9 @@ static void gen_print(CG *cg, Expr *call, int newline) {
                   v);
         if (newline)
             emit_line(cg, "putchar(10);");
+    } else if (!is_str(t)) {
+        cg_error(call->line,
+                 "cannot print a value of type %s directly", t);
     } else { /* str */
         if (newline)
             emit_line(cg, "puts(%s);", v);
@@ -1121,8 +1553,8 @@ static void gen_stmt(CG *cg, Stmt *s) {
     switch (s->kind) {
     case ST_LET: {
         const char *ann = s->as.let.type_ann;
-        if (ann && !map_type(ann))
-            cg_error(s->line, "unknown type '%s' in annotation", ann);
+        if (ann)
+            ann = canon_type(cg, ann, s->line);
 
         /* empty list literal: requires an annotation */
         if (s->as.let.init->kind == EX_LIST &&
@@ -1133,17 +1565,37 @@ static void gen_stmt(CG *cg, Stmt *s) {
                          "annotate it, e.g. let xs: [int] = []");
             char *elem = arr_elem(ann);
             var_push(cg, s->as.let.name, ann);
-            emit_line(cg, "%s %s = sl_arr_new(sizeof(%s));", map_type(ann),
-                      sanitize_ident(s->as.let.name), map_type(elem));
+            emit_line(cg, "%s %s = sl_arr_new(sizeof(%s));",
+                      ctype_of(cg, ann), sanitize_ident(s->as.let.name),
+                      ctype_of(cg, elem));
+            break;
+        }
+
+        /* empty map literal: requires an annotation */
+        if (s->as.let.init->kind == EX_MAPLIT &&
+            s->as.let.init->as.maplit.npairs == 0) {
+            if (!ann || !is_map(ann))
+                cg_error(s->line,
+                         "cannot infer the key/value types of an empty "
+                         "map; annotate it, e.g. let m: map[str]int = {}");
+            char *k, *v;
+            map_kv(ann, &k, &v);
+            var_push(cg, s->as.let.name, ann);
+            emit_line(cg, "%s %s = sl_map_new(sizeof(%s), sizeof(%s), %d);",
+                      ctype_of(cg, ann), sanitize_ident(s->as.let.name),
+                      ctype_of(cg, k), ctype_of(cg, v), is_str(k));
             break;
         }
 
         const char *it = infer_type(cg, s->as.let.init);
         const char *t = ann ? ann : it;
-        /* Annotated list literal: check elements against the declared
-         * element type instead of the inferred one. */
-        int ann_list = ann && is_arr(ann) &&
-                       s->as.let.init->kind == EX_LIST;
+        /* Annotated list/map literals: check elements against the
+         * declared types instead of the inferred ones. */
+        int ann_list =
+            ann && is_arr(ann) && s->as.let.init->kind == EX_LIST;
+        int ann_map =
+            ann && is_map(ann) && s->as.let.init->kind == EX_MAPLIT;
+        char *ak = NULL, *av = NULL;
         if (ann_list) {
             char *elem = arr_elem(ann);
             for (int i = 0; i < s->as.let.init->as.list.nelems; i++) {
@@ -1155,6 +1607,23 @@ static void gen_stmt(CG *cg, Stmt *s) {
                              "expected",
                              i + 1, ti, elem);
             }
+        } else if (ann_map) {
+            map_kv(ann, &ak, &av);
+            for (int i = 0; i < s->as.let.init->as.maplit.npairs; i++) {
+                Expr *ki = s->as.let.init->as.maplit.keys[i];
+                Expr *vi = s->as.let.init->as.maplit.vals[i];
+                const char *kty = infer_type(cg, ki);
+                const char *vty = infer_type(cg, vi);
+                if (!value_assignable(ak, ki, kty))
+                    cg_error(s->line,
+                             "map key %d: cannot use %s where %s expected",
+                             i + 1, kty, ak);
+                if (!value_assignable(av, vi, vty))
+                    cg_error(
+                        s->line,
+                        "map value %d: cannot use %s where %s expected",
+                        i + 1, vty, av);
+            }
         } else if (!value_assignable(t, s->as.let.init, it)) {
             cg_error(s->line,
                      "cannot initialize %s '%s' with a value of type %s%s",
@@ -1165,39 +1634,122 @@ static void gen_stmt(CG *cg, Stmt *s) {
         char *init;
         if (ann_list)
             init = gen_list(cg, s->as.let.init, arr_elem(ann));
+        else if (ann_map)
+            init = gen_maplit(cg, s->as.let.init, ak, av);
         else
             init = gen_expr(cg, s->as.let.init);
-        init = maybe_cast(t, it, init);
+        init = maybe_cast(cg, t, it, init);
         var_push(cg, s->as.let.name, t);
-        emit_line(cg, "%s %s = %s;", map_type(t),
+        emit_line(cg, "%s %s = %s;", ctype_of(cg, t),
                   sanitize_ident(s->as.let.name), init);
         break;
     }
     case ST_ASSIGN: {
         Expr *tgt = s->as.assign.target;
         if (tgt->kind == EX_IDENT) {
-            VarSym *v = var_find(cg, tgt->as.ident.name);
+            const char *name = tgt->as.ident.name;
+            VarSym *v = var_find(cg, name);
+            char *left, *right;
+            if (!v && split_dotted(name, &left, &right) &&
+                !import_try(cg, left)) {
+                /* dotted field assignment: p.x = v (the parser folds
+                 * 'p.x' into a single qualified identifier) */
+                const char *bt = infer_ident_name(cg, left, s->line);
+                StructDef *sd = struct_find_canon(cg, bt);
+                if (!sd)
+                    cg_error(s->line, "'%s' has no member '%s'", left,
+                             right);
+                int fi = -1;
+                for (int i = 0; i < sd->nfields; i++) {
+                    if (!strcmp(sd->fields[i], right))
+                        fi = i;
+                }
+                if (fi < 0)
+                    cg_error(s->line, "struct '%s' has no field '%s'",
+                             sd->canonical, right);
+                const char *vt = infer_type(cg, s->as.assign.value);
+                if (!value_assignable(sd->ftypes[fi], s->as.assign.value,
+                                      vt))
+                    cg_error(s->line,
+                             "field '%s': cannot assign a value of type %s "
+                             "where %s expected",
+                             sd->fields[fi], vt, sd->ftypes[fi]);
+                char *b = gen_ident_name(cg, left, s->line);
+                char *val = maybe_cast(cg, sd->ftypes[fi], vt,
+                                       gen_expr(cg, s->as.assign.value));
+                emit_line(cg, "%s->%s = %s;", b,
+                          sanitize_ident(sd->fields[fi]), val);
+                break;
+            }
             if (!v)
-                cg_error(s->line, "undefined variable '%s'",
-                         tgt->as.ident.name);
+                cg_error(s->line, "undefined variable '%s'", name);
             const char *vt = infer_type(cg, s->as.assign.value);
             if (!value_assignable(v->slang, s->as.assign.value, vt))
                 cg_error(s->line,
                          "cannot assign a value of type %s to variable "
                          "'%s' of type %s",
-                         vt, tgt->as.ident.name, v->slang);
+                         vt, name, v->slang);
             char *val =
-                maybe_cast(v->slang, vt, gen_expr(cg, s->as.assign.value));
-            emit_line(cg, "%s = %s;", sanitize_ident(tgt->as.ident.name),
-                      val);
+                maybe_cast(cg, v->slang, vt,
+                           gen_expr(cg, s->as.assign.value));
+            emit_line(cg, "%s = %s;", sanitize_ident(name), val);
             break;
         }
-        /* index target: xs[i] = v or b[i] = v */
+        if (tgt->kind == EX_FIELD) {
+            /* struct field target: p.x = v */
+            const char *bt = infer_type(cg, tgt->as.field.base);
+            StructDef *sd = struct_find_canon(cg, bt);
+            if (!sd)
+                cg_error(s->line, "'.' used on a value of type %s", bt);
+            int fi = -1;
+            for (int i = 0; i < sd->nfields; i++) {
+                if (!strcmp(sd->fields[i], tgt->as.field.name))
+                    fi = i;
+            }
+            if (fi < 0)
+                cg_error(s->line, "struct '%s' has no field '%s'",
+                         sd->canonical, tgt->as.field.name);
+            const char *vt = infer_type(cg, s->as.assign.value);
+            if (!value_assignable(sd->ftypes[fi], s->as.assign.value, vt))
+                cg_error(s->line,
+                         "field '%s': cannot assign a value of type %s "
+                         "where %s expected",
+                         sd->fields[fi], vt, sd->ftypes[fi]);
+            char *b = gen_expr(cg, tgt->as.field.base);
+            char *val = maybe_cast(cg, sd->ftypes[fi], vt,
+                                   gen_expr(cg, s->as.assign.value));
+            emit_line(cg, "%s->%s = %s;", b,
+                      sanitize_ident(sd->fields[fi]), val);
+            break;
+        }
+        /* index target: xs[i] = v, b[i] = v, or m[k] = v */
         const char *bt = infer_type(cg, tgt->as.index.base);
         const char *vt = infer_type(cg, s->as.assign.value);
         char *b = gen_expr(cg, tgt->as.index.base);
         char *i = gen_expr(cg, tgt->as.index.index);
         char *val = gen_expr(cg, s->as.assign.value);
+        if (is_map(bt)) {
+            char *k, *v;
+            map_kv(bt, &k, &v);
+            const char *ikt = infer_type(cg, tgt->as.index.index);
+            if (!value_assignable(k, tgt->as.index.index, ikt))
+                cg_error(s->line,
+                         "map key type mismatch: cannot use %s where %s "
+                         "expected",
+                         ikt, k);
+            if (!value_assignable(v, s->as.assign.value, vt))
+                cg_error(s->line,
+                         "map value type mismatch: cannot assign %s where "
+                         "%s expected",
+                         vt, v);
+            char *ix = maybe_cast(cg, k, ikt, i);
+            val = maybe_cast(cg, v, vt, val);
+            emit_line(cg,
+                      "({ %s _sl_k = %s; %s _sl_v = %s; sl_map_put(%s, "
+                      "&_sl_k, &_sl_v); });",
+                      ctype_of(cg, k), ix, ctype_of(cg, v), val, b);
+            break;
+        }
         if (is_bytes(bt)) {
             if (!is_int(vt))
                 cg_error(s->line,
@@ -1214,8 +1766,8 @@ static void gen_stmt(CG *cg, Stmt *s) {
                          "cannot assign a value of type %s to an element "
                          "of type %s",
                          vt, elem);
-            val = maybe_cast(elem, vt, val);
-            const char *ec = map_type(elem);
+            val = maybe_cast(cg, elem, vt, val);
+            const char *ec = ctype_of(cg, elem);
             emit_line(cg,
                       "(*(%s *)(void *)sl_arr_get(%s, %s, sizeof(%s))) = "
                       "(%s)(%s);",
@@ -1280,7 +1832,7 @@ static void gen_stmt(CG *cg, Stmt *s) {
         char *vname = sanitize_ident(s->as.for_in.name);
         if (is_arr(it)) {
             char *elem = arr_elem(it);
-            const char *ec = map_type(elem);
+            const char *ec = ctype_of(cg, elem);
             var_push(cg, s->as.for_in.name, elem);
             emit_line(cg, "{");
             cg->indent++;
@@ -1319,6 +1871,43 @@ static void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "}");
             break;
         }
+        if (is_map(it)) {
+            if (!s->as.for_in.name2)
+                cg_error(s->line,
+                         "iterating a map requires two variables: "
+                         "for k, v in m");
+            char *k, *v;
+            map_kv(it, &k, &v);
+            const char *kc = ctype_of(cg, k);
+            const char *vc = ctype_of(cg, v);
+            char *v2name = sanitize_ident(s->as.for_in.name2);
+            var_push(cg, s->as.for_in.name, k);
+            var_push(cg, s->as.for_in.name2, v);
+            emit_line(cg, "{");
+            cg->indent++;
+            emit_line(cg, "sl_map *_sl_m%d = %s;", id, iter);
+            emit_line(cg,
+                      "for (long long _sl_i%d = 0; _sl_i%d < _sl_m%d->count; "
+                      "_sl_i%d++) {",
+                      id, id, id, id);
+            cg->indent++;
+            emit_line(cg, "long long _sl_slot%d = _sl_m%d->order[_sl_i%d];",
+                      id, id, id);
+            emit_line(cg,
+                      "%s %s = *(%s *)(void *)(_sl_m%d->keys + _sl_slot%d * "
+                      "_sl_m%d->ksz);",
+                      kc, vname, kc, id, id, id);
+            emit_line(cg,
+                      "%s %s = *(%s *)(void *)(_sl_m%d->vals + _sl_slot%d * "
+                      "_sl_m%d->vsz);",
+                      vc, v2name, vc, id, id, id);
+            gen_block(cg, s->as.for_in.body);
+            cg->indent--;
+            emit_line(cg, "}");
+            cg->indent--;
+            emit_line(cg, "}");
+            break;
+        }
         cg_error(s->line, "cannot iterate over a value of type %s", it);
         break;
     }
@@ -1339,7 +1928,7 @@ static void gen_stmt(CG *cg, Stmt *s) {
                          "return type mismatch: cannot return %s where %s "
                          "expected",
                          vt, cg->cur_ret);
-            char *val = maybe_cast(cg->cur_ret, vt,
+            char *val = maybe_cast(cg, cg->cur_ret, vt,
                                    gen_expr(cg, s->as.ret.value));
             emit_line(cg, "return %s;", val);
         }
@@ -1357,6 +1946,11 @@ static void gen_stmt(CG *cg, Stmt *s) {
         emit_line(cg, "%s;", code);
         break;
     }
+    case ST_STRUCT:
+    case ST_IMPL:
+        /* declarations are processed during collect_decls; nothing to
+         * execute at runtime */
+        break;
     }
 }
 
@@ -1566,6 +2160,147 @@ static const char *RUNTIME[] = {
     "    return r;",
     "}",
     "",
+    "/* ---- maps: open-addressing hash tables over GC memory ---- */",
+    "",
+    "typedef struct {",
+    "    long long count, cap;",
+    "    size_t ksz, vsz;",
+    "    int kstr;            /* keys are NUL-terminated strings */",
+    "    unsigned char *keys; /* cap slots */",
+    "    unsigned char *vals; /* cap slots */",
+    "    unsigned char *state;/* 1 = occupied */",
+    "    long long *order;    /* occupied slot indices, insertion order */",
+    "} sl_map;",
+    "",
+    "static unsigned long long sl_hash_bytes(const unsigned char *p, size_t n) {",
+    "    unsigned long long h = 1469598103934665603ULL;",
+    "    for (size_t i = 0; i < n; i++) { h ^= p[i]; h *= 1099511628211ULL; }",
+    "    return h;",
+    "}",
+    "",
+    "static unsigned long long sl_hash_str(const char *s) {",
+    "    unsigned long long h = 1469598103934665603ULL;",
+    "    for (; *s; s++) { h ^= (unsigned char)*s; h *= 1099511628211ULL; }",
+    "    return h;",
+    "}",
+    "",
+    "static sl_map *sl_map_new(size_t ksz, size_t vsz, int kstr) {",
+    "    sl_map *m = (sl_map *)GC_malloc(sizeof(sl_map));",
+    "    m->count = 0;",
+    "    m->cap = 8;",
+    "    m->ksz = ksz;",
+    "    m->vsz = vsz;",
+    "    m->kstr = kstr;",
+    "    m->keys = (unsigned char *)GC_malloc(8 * ksz);",
+    "    m->vals = (unsigned char *)GC_malloc(8 * vsz);",
+    "    m->state = (unsigned char *)GC_malloc(8);",
+    "    memset(m->state, 0, 8);",
+    "    m->order = (long long *)GC_malloc(8 * sizeof(long long));",
+    "    return m;",
+    "}",
+    "",
+    "/* Probe for a key: returns its slot if present, or -(slot)-1 for",
+    " * the first empty slot where it could be inserted. */",
+    "static long long sl_map_probe(sl_map *m, const void *k,",
+    "                              unsigned long long h) {",
+    "    long long mask = m->cap - 1;",
+    "    long long i = (long long)(h & (unsigned long long)mask);",
+    "    for (;;) {",
+    "        if (!m->state[i])",
+    "            return -i - 1;",
+    "        void *kk = m->keys + (size_t)i * m->ksz;",
+    "        int eq = m->kstr",
+    "                    ? !strcmp(*(const char **)kk, *(const char *const *)k)",
+    "                    : memcmp(kk, k, m->ksz) == 0;",
+    "        if (eq)",
+    "            return i;",
+    "        i = (i + 1) & mask;",
+    "    }",
+    "}",
+    "",
+    "static void sl_map_grow(sl_map *m) {",
+    "    long long old_cap = m->cap;",
+    "    unsigned char *ok = m->keys, *ov = m->vals;",
+    "    unsigned char *ost = m->state;",
+    "    long long ocount = m->count;",
+    "    long long *oorder = m->order;",
+    "    m->cap = old_cap * 2;",
+    "    m->count = 0;",
+    "    m->keys = (unsigned char *)GC_malloc((size_t)m->cap * m->ksz);",
+    "    m->vals = (unsigned char *)GC_malloc((size_t)m->cap * m->vsz);",
+    "    m->state = (unsigned char *)GC_malloc((size_t)m->cap);",
+    "    memset(m->state, 0, (size_t)m->cap);",
+    "    m->order = (long long *)GC_malloc((size_t)m->cap * sizeof(long long));",
+    "    /* reinsert in insertion order so iteration stays deterministic */",
+    "    for (long long i = 0; i < ocount; i++) {",
+    "        long long slot = oorder[i];",
+    "        void *k = ok + (size_t)slot * m->ksz;",
+    "        void *v = ov + (size_t)slot * m->vsz;",
+    "        unsigned long long h = m->kstr",
+    "                                  ? sl_hash_str(*(const char **)k)",
+    "                                  : sl_hash_bytes((const unsigned char *)k,",
+    "                                                  m->ksz);",
+    "        long long s = -sl_map_probe(m, k, h) - 1;",
+    "        memcpy(m->keys + (size_t)s * m->ksz, k, m->ksz);",
+    "        memcpy(m->vals + (size_t)s * m->vsz, v, m->vsz);",
+    "        m->state[s] = 1;",
+    "        m->order[m->count++] = s;",
+    "    }",
+    "}",
+    "",
+    "static void sl_map_put(sl_map *m, const void *k, const void *v) {",
+    "    unsigned long long h = m->kstr",
+    "                              ? sl_hash_str(*(const char *const *)k)",
+    "                              : sl_hash_bytes((const unsigned char *)k,",
+    "                                              m->ksz);",
+    "    if ((m->count + 1) * 4 >= m->cap * 3)",
+    "        sl_map_grow(m);",
+    "    long long s = sl_map_probe(m, k, h);",
+    "    if (s >= 0) {",
+    "        memcpy(m->vals + (size_t)s * m->vsz, v, m->vsz);",
+    "        return;",
+    "    }",
+    "    s = -s - 1;",
+    "    memcpy(m->keys + (size_t)s * m->ksz, k, m->ksz);",
+    "    memcpy(m->vals + (size_t)s * m->vsz, v, m->vsz);",
+    "    m->state[s] = 1;",
+    "    m->order[m->count++] = s;",
+    "}",
+    "",
+    "static void *sl_map_get(sl_map *m, const void *k) {",
+    "    unsigned long long h = m->kstr",
+    "                              ? sl_hash_str(*(const char *const *)k)",
+    "                              : sl_hash_bytes((const unsigned char *)k,",
+    "                                              m->ksz);",
+    "    long long s = sl_map_probe(m, k, h);",
+    "    if (s < 0)",
+    "        return NULL;",
+    "    return m->vals + (size_t)s * m->vsz;",
+    "}",
+    "",
+    "static int sl_map_has(sl_map *m, const void *k) {",
+    "    return sl_map_get(m, k) != NULL;",
+    "}",
+    "",
+    "static void sl_map_del(sl_map *m, const void *k) {",
+    "    unsigned long long h = m->kstr",
+    "                              ? sl_hash_str(*(const char *const *)k)",
+    "                              : sl_hash_bytes((const unsigned char *)k,",
+    "                                              m->ksz);",
+    "    long long s = sl_map_probe(m, k, h);",
+    "    if (s < 0)",
+    "        return;",
+    "    m->state[s] = 0;",
+    "    for (long long i = 0; i < m->count; i++) {",
+    "        if (m->order[i] == s) {",
+    "            memmove(m->order + i, m->order + i + 1,",
+    "                    (size_t)(m->count - i - 1) * sizeof(long long));",
+    "            break;",
+    "        }",
+    "    }",
+    "    m->count--;",
+    "}",
+    "",
     "/* ---- strings ---- */",
     "",
     "static char *sl_strdup(const char *s) {",
@@ -1615,50 +2350,129 @@ static void emit_prelude(CG *cg) {
         emit_line(cg, "%s", RUNTIME[i]);
 }
 
-/* Collect function signatures and import bindings from every package. */
-static void collect_decls(CG *cg, Package *pkgs, int npkgs) {
-    for (int i = 0; i < npkgs; i++) {
-        Package *p = &pkgs[i];
+/* Register a raw (not yet canonicalized) function signature. */
+static void sig_register_raw(CG *cg, Package *p, FuncDecl *f,
+                             const char *method_of) {
+    if (is_builtin_name(f->name))
+        cg_error(f->line, "cannot redefine builtin '%s'", f->name);
+    if (sig_find_in(cg, p->name, f->name))
+        cg_error(f->line,
+                 "redefinition of function '%s' in package '%s'", f->name,
+                 p->name);
 
-        for (int k = 0; k < p->prog->nimports; k++) {
-            char *ipath = p->prog->import_paths[k];
+    FuncSig sig;
+    memset(&sig, 0, sizeof(sig));
+    sig.name = f->name;
+    sig.pkg = p->name;
+    sig.is_pub = f->is_pub;
+    sig.ret_slang = f->ret_type;
+    sig.nparams = f->nparams;
+    sig.method_of = method_of;
+    sig.line = f->line;
+    sig.param_slang =
+        (const char **)xmalloc(sizeof(char *) *
+                               (f->nparams ? f->nparams : 1));
+    for (int m = 0; m < f->nparams; m++)
+        sig.param_slang[m] = f->param_types[m];
+
+    if (cg->sigs.count == cg->sigs.cap) {
+        cg->sigs.cap = cg->sigs.cap ? cg->sigs.cap * 2 : 8;
+        cg->sigs.items = (FuncSig *)xrealloc(
+            cg->sigs.items, cg->sigs.cap * sizeof(FuncSig));
+    }
+    cg->sigs.items[cg->sigs.count++] = sig;
+}
+
+/* Collect imports, structs, free functions, and methods from every
+ * package, then canonicalize all stored type names. */
+static void collect_decls(CG *cg, Package *pkgs, int npkgs) {
+    int i, j;
+
+    /* imports */
+    for (i = 0; i < npkgs; i++) {
+        Package *p = &pkgs[i];
+        for (j = 0; j < p->prog->nimports; j++) {
+            char *ipath = p->prog->import_paths[j];
             import_push(cg, p->name, path_base(ipath), path_base(ipath));
         }
+    }
 
-        for (int j = 0; j < p->prog->nfuncs; j++) {
-            FuncDecl *f = p->prog->funcs[j];
-            if (is_builtin_name(f->name))
-                cg_error(f->line, "cannot redefine builtin '%s'", f->name);
-            if (sig_find_in(cg, p->name, f->name))
-                cg_error(f->line, "redefinition of function '%s' in "
-                                  "package '%s'",
-                         f->name, p->name);
-            if (f->ret_type && !map_type(f->ret_type))
-                cg_error(f->line, "unknown return type '%s'", f->ret_type);
-
-            FuncSig sig;
-            sig.name = f->name;
-            sig.pkg = p->name;
-            sig.is_pub = f->is_pub;
-            sig.ret_slang = f->ret_type;
-            sig.nparams = f->nparams;
-            sig.param_slang =
-                (const char **)xmalloc(sizeof(char *) *
-                                       (f->nparams ? f->nparams : 1));
-            for (int m = 0; m < f->nparams; m++) {
-                if (!map_type(f->param_types[m]))
-                    cg_error(f->line, "unknown parameter type '%s'",
-                             f->param_types[m]);
-                sig.param_slang[m] = f->param_types[m];
+    /* pass 1: free functions + struct shells */
+    for (i = 0; i < npkgs; i++) {
+        Package *p = &pkgs[i];
+        for (j = 0; j < p->prog->nfuncs; j++)
+            sig_register_raw(cg, p, p->prog->funcs[j], NULL);
+        Block *body = p->prog->main_body;
+        for (j = 0; j < body->count; j++) {
+            Stmt *s = body->stmts[j];
+            if (s->kind != ST_STRUCT)
+                continue;
+            if (struct_find_in_pkg(cg, p->name, s->as.struct_decl.name))
+                cg_error(s->line,
+                         "redefinition of struct '%s' in package '%s'",
+                         s->as.struct_decl.name, p->name);
+            if (cg->structs.count == cg->structs.cap) {
+                cg->structs.cap = cg->structs.cap ? cg->structs.cap * 2 : 8;
+                cg->structs.items = (StructDef *)xrealloc(
+                    cg->structs.items,
+                    cg->structs.cap * sizeof(StructDef));
             }
-
-            if (cg->sigs.count == cg->sigs.cap) {
-                cg->sigs.cap = cg->sigs.cap ? cg->sigs.cap * 2 : 8;
-                cg->sigs.items = (FuncSig *)xrealloc(
-                    cg->sigs.items, cg->sigs.cap * sizeof(FuncSig));
-            }
-            cg->sigs.items[cg->sigs.count++] = sig;
+            StructDef *sd = &cg->structs.items[cg->structs.count++];
+            sd->canonical =
+                xasprintf("%s.%s", p->name, s->as.struct_decl.name);
+            sd->pkg = p->name;
+            sd->name = s->as.struct_decl.name;
+            sd->is_pub = s->as.struct_decl.is_pub;
+            sd->fields = s->as.struct_decl.fields;
+            sd->ftypes = (const char **)s->as.struct_decl.ftypes;
+            sd->nfields = s->as.struct_decl.nfields;
+            sd->line = s->line;
         }
+    }
+
+    /* pass 2: canonicalize struct field types */
+    for (i = 0; i < cg->structs.count; i++) {
+        StructDef *sd = &cg->structs.items[i];
+        cg->cur_pkg = sd->pkg;
+        for (j = 0; j < sd->nfields; j++) {
+            for (int q = 0; q < j; q++) {
+                if (!strcmp(sd->fields[q], sd->fields[j]))
+                    cg_error(sd->line,
+                             "duplicate field '%s' in struct '%s'",
+                             sd->fields[j], sd->canonical);
+            }
+            sd->ftypes[j] = canon_type(cg, sd->ftypes[j], sd->line);
+        }
+    }
+
+    /* pass 3: methods from impl blocks */
+    for (i = 0; i < npkgs; i++) {
+        Package *p = &pkgs[i];
+        Block *body = p->prog->main_body;
+        for (j = 0; j < body->count; j++) {
+            Stmt *s = body->stmts[j];
+            if (s->kind != ST_IMPL)
+                continue;
+            StructDef *sd =
+                struct_find_in_pkg(cg, p->name, s->as.impl.struct_name);
+            if (!sd)
+                cg_error(s->line, "impl of unknown struct '%s'",
+                         s->as.impl.struct_name);
+            for (int q = 0; q < s->as.impl.nfuncs; q++)
+                sig_register_raw(cg, p, s->as.impl.funcs[q],
+                                 sd->canonical);
+        }
+    }
+
+    /* pass 4: canonicalize all signatures */
+    for (i = 0; i < cg->sigs.count; i++) {
+        FuncSig *sig = &cg->sigs.items[i];
+        cg->cur_pkg = sig->pkg;
+        for (j = 0; j < sig->nparams; j++)
+            ((char **)sig->param_slang)[j] =
+                (char *)canon_type(cg, sig->param_slang[j], sig->line);
+        if (sig->ret_slang)
+            sig->ret_slang = canon_type(cg, sig->ret_slang, sig->line);
     }
 }
 
@@ -1718,6 +2532,8 @@ static void emit_globals(CG *cg, Package *pkgs, int npkgs, int main_index) {
         Block *body = p->prog->main_body;
         for (int j = 0; j < body->count; j++) {
             Stmt *s = body->stmts[j];
+            if (s->kind == ST_STRUCT || s->kind == ST_IMPL)
+                continue; /* handled by collect_decls */
             if (s->kind != ST_LET)
                 cg_error(s->line,
                          "only 'let' declarations are allowed at top "
@@ -1750,10 +2566,35 @@ static void emit_globals(CG *cg, Package *pkgs, int npkgs, int main_index) {
         emit_line(cg, "");
 }
 
+/* Emit forward declarations and definitions for every struct. */
+static void emit_struct_types(CG *cg) {
+    if (!cg->structs.count)
+        return;
+    for (int i = 0; i < cg->structs.count; i++) {
+        char *m = mangle_struct(cg->structs.items[i].canonical);
+        emit_line(cg, "typedef struct %s %s;", m, m);
+    }
+    emit_line(cg, "");
+    for (int i = 0; i < cg->structs.count; i++) {
+        StructDef *sd = &cg->structs.items[i];
+        char *m = mangle_struct(sd->canonical);
+        emit_line(cg, "struct %s {", m);
+        cg->indent++;
+        for (int j = 0; j < sd->nfields; j++)
+            emit_line(cg, "%s %s;", ctype_of(cg, sd->ftypes[j]),
+                      sanitize_ident(sd->fields[j]));
+        cg->indent--;
+        emit_line(cg, "};");
+        emit_line(cg, "");
+    }
+}
+
 static void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
     int any = 0;
     for (int i = 0; i < npkgs; i++) {
         Program *prog = pkgs[i].prog;
+
+        /* free functions */
         for (int j = 0; j < prog->nfuncs; j++) {
             FuncDecl *f = prog->funcs[j];
             FuncSig *sig = sig_find_in(cg, pkgs[i].name, f->name);
@@ -1765,15 +2606,47 @@ static void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
                 for (int m = 0; m < f->nparams; m++) {
                     if (m)
                         sb_append(&params, ", ");
-                    sb_append(&params, map_type(sig->param_slang[m]));
+                    sb_append(&params, ctype_of(cg, sig->param_slang[m]));
                     sb_putc(&params, ' ');
                     sb_append(&params, sanitize_ident(f->params[m]));
                 }
             }
             emit_line(cg, "static %s %s(%s);",
-                      sig->ret_slang ? map_type(sig->ret_slang) : "void",
+                      sig->ret_slang ? ctype_of(cg, sig->ret_slang)
+                                     : "void",
                       mangle_func(pkgs[i].name, f->name), params.data);
             any = 1;
+        }
+
+        /* methods from impl blocks */
+        Block *body = prog->main_body;
+        for (int j = 0; j < body->count; j++) {
+            Stmt *s = body->stmts[j];
+            if (s->kind != ST_IMPL)
+                continue;
+            for (int q = 0; q < s->as.impl.nfuncs; q++) {
+                FuncDecl *f = s->as.impl.funcs[q];
+                FuncSig *sig = sig_find_in(cg, pkgs[i].name, f->name);
+                StrBuf params;
+                sb_init(&params);
+                if (f->nparams == 0) {
+                    sb_append(&params, "void");
+                } else {
+                    for (int m = 0; m < f->nparams; m++) {
+                        if (m)
+                            sb_append(&params, ", ");
+                        sb_append(&params,
+                                  ctype_of(cg, sig->param_slang[m]));
+                        sb_putc(&params, ' ');
+                        sb_append(&params, sanitize_ident(f->params[m]));
+                    }
+                }
+                emit_line(cg, "static %s %s(%s);",
+                          sig->ret_slang ? ctype_of(cg, sig->ret_slang)
+                                         : "void",
+                          mangle_func(pkgs[i].name, f->name), params.data);
+                any = 1;
+            }
         }
     }
     if (any)
@@ -1799,14 +2672,14 @@ static void gen_function(CG *cg, Package *p, FuncDecl *f) {
         for (int j = 0; j < f->nparams; j++) {
             if (j)
                 sb_append(&params, ", ");
-            sb_append(&params, map_type(sig->param_slang[j]));
+            sb_append(&params, ctype_of(cg, sig->param_slang[j]));
             sb_putc(&params, ' ');
             sb_append(&params, sanitize_ident(f->params[j]));
         }
     }
 
     emit_line(cg, "static %s %s(%s) {",
-              sig->ret_slang ? map_type(sig->ret_slang) : "void",
+              sig->ret_slang ? ctype_of(cg, sig->ret_slang) : "void",
               mangle_func(p->name, f->name), params.data);
     gen_block(cg, f->body);
     emit_line(cg, "}");
@@ -1827,13 +2700,26 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
 
     emit_prelude(&cg);
 
+    emit_struct_types(&cg);
+
     emit_globals(&cg, pkgs, npkgs, main_index);
 
     gen_prototypes(&cg, pkgs, npkgs);
 
-    for (int i = 0; i < npkgs; i++)
-        for (int j = 0; j < pkgs[i].prog->nfuncs; j++)
-            gen_function(&cg, &pkgs[i], pkgs[i].prog->funcs[j]);
+    for (int i = 0; i < npkgs; i++) {
+        Package *p = &pkgs[i];
+        for (int j = 0; j < p->prog->nfuncs; j++)
+            gen_function(&cg, p, p->prog->funcs[j]);
+        /* methods from impl blocks */
+        Block *body = p->prog->main_body;
+        for (int j = 0; j < body->count; j++) {
+            Stmt *s = body->stmts[j];
+            if (s->kind != ST_IMPL)
+                continue;
+            for (int q = 0; q < s->as.impl.nfuncs; q++)
+                gen_function(&cg, p, s->as.impl.funcs[q]);
+        }
+    }
 
     /* top-level statements of the main package become main() */
     cg.vars.count = 0;

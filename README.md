@@ -107,8 +107,10 @@ Both accept any single value of type `int`, any fixed-width integer,
 `float`, `f32`, `str`, `bool`, or `bytes` (bytes are written raw, with
 no escaping).
 
-- `len(x)` — length of a `str`, `bytes`, or `[T]`
+- `len(x)` — length of a `str`, `bytes`, `[T]`, or map
 - `push(xs, v)` / `pop(xs)` — append to / remove the last element of a list
+- `has(m, k)` — does map `m` contain key `k`?
+- `del(m, k)` — remove key `k` (and its value) from map `m`
 - `to_str(x)` — convert any scalar or bytes value to `str`
 - `to_bytes(s)` — convert a `str` to its raw bytes
 - `to_le(n)` / `to_be(n)` — integer to 8-byte little/big-endian `bytes`
@@ -127,6 +129,8 @@ no escaping).
 | `u8 u16 u32 u64` | `uint8_t` .. `uint64_t` | unsigned fixed-width ints |
 | `f32`      | `float`     | IEEE single precision          |
 | `[T]`      | `sl_arr *`  | growable array of T            |
+| `map[K]V`  | `sl_map *`  | insertion-ordered hash map     |
+| struct     | `sl_st_* *` | user-defined record (GC'd)     |
 
 #### Numeric conversion rules
 
@@ -174,6 +178,67 @@ let grid = [[1, 2], [3, 4]];   // nested lists
 
 Indexing is bounds-checked at runtime; violations abort with a clear
 message.
+
+#### Maps `map[K]V`
+
+```slang
+let scores: map[str]int = {"alice": 90, "bob": 85};
+scores["carol"] = 78;          // insert or overwrite
+println(scores["alice"]);      // lookup (missing key = runtime error)
+println(len(scores));          // entry count
+if has(scores, "dave") { ... } // membership test (no error)
+del(scores, "bob");            // removal
+
+let empty: map[int]str = {};   // empty maps need an annotation
+for k, v in scores {           // iteration in insertion order
+    println(k + ": " + to_str(v));
+}
+```
+
+Keys may be any integer type, `str`, or `bool`; values may be any type,
+including structs and lists. Backed by an open-addressing hash table
+(FNV-1a) that keeps entries in insertion order and grows automatically
+at 75% load.
+
+#### Structs
+
+```slang
+struct Point {
+    x: int,
+    y: int,
+}
+
+impl Point {
+    fn sum(self: Point) -> int {
+        return self.x + self.y;
+    }
+
+    fn moved(self: Point, dx: int, dy: int) -> Point {
+        return Point { x: self.x + dx, y: self.y + dy };
+    }
+}
+
+let p = Point { x: 3, y: 4 };
+println(p.sum());        // method call; self passed implicitly
+p.x = 10;                // field mutation
+let q = p.moved(1, 2);   // methods can build and return structs
+
+struct Rect {
+    tl: Point,
+    br: Point,
+}
+let r = Rect { tl: Point { x: 0, y: 0 }, br: Point { x: 4, y: 5 } };
+println(r.tl.y);         // nested field chains
+r.br.x = 6;
+
+let pts: [Point] = [p, q];  // structs compose with lists & maps
+push(pts, r.tl);
+```
+
+Struct literals must supply every field exactly once, with types
+checked. Methods live in top-level `impl Name { ... }` blocks; mark a
+method `pub fn` to export it to importing packages. Structs are
+heap-allocated and garbage-collected; assignment shares references.
 
 ## Packages (Go/Odin style)
 
@@ -272,8 +337,9 @@ Makefile       build/test/clean
 - Package globals require constant-literal initializers.
 - Implicit returns only apply to the last statement of a function
   body; `if` and `{}` blocks are statements, not expressions yet.
-- No structs, closures, or error handling yet.
+- No closures or error handling yet.
 - Package-level lists are not supported yet (scalars and bytes are).
+- Map keys are limited to integers, `str`, and `bool`.
 
 ## Memory management
 
@@ -296,7 +362,6 @@ What this means in practice:
 - Block scoping and shadowing
 - If/block expressions (`let max = if a > b { a } else { b }`)
 - Range `.step(n)`
-- Structs with `impl` method blocks
 - Option/Result types with `??`
 - Import aliases (`import "x" as y`)
 - A bytecode VM mode for fast iteration without invoking `cc`

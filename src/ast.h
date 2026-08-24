@@ -1,6 +1,8 @@
 #ifndef SLANG_AST_H
 #define SLANG_AST_H
 
+typedef struct FuncDecl FuncDecl;
+
 /* Expression nodes */
 typedef enum {
     EX_INT,
@@ -15,7 +17,10 @@ typedef enum {
     EX_CAST,   /* operand as T */
     EX_INDEX,  /* base[index] */
     EX_SLICE,  /* base[start..end] (either end optional) */
-    EX_LIST    /* [a, b, c] */
+    EX_LIST,   /* [a, b, c] */
+    EX_MAPLIT, /* {k: v, ...} map literal */
+    EX_FIELD,  /* base.field (postfix dot) */
+    EX_STRUCTLIT /* Name { field: value, ... } */
 } ExprKind;
 
 typedef struct Expr Expr;
@@ -42,6 +47,18 @@ struct Expr {
             int inclusive;
         } slice;
         struct { Expr **elems; int nelems; } list;
+        struct {
+            Expr **keys;
+            Expr **vals;
+            int npairs;
+        } maplit;
+        struct { Expr *base; char *name; } field;
+        struct {
+            char *tyname;      /* struct name as written: "Point" or "pkg.Point" */
+            char **fields;
+            Expr **vals;
+            int nfields;
+        } structlit;
     } as;
 };
 
@@ -54,7 +71,9 @@ typedef enum {
     ST_FOR,
     ST_FOR_IN,
     ST_RETURN,
-    ST_EXPR
+    ST_EXPR,
+    ST_STRUCT, /* struct Name { field: T, ... } (top level only) */
+    ST_IMPL    /* impl Name { fn ... } blocks (top level only) */
 } StmtKind;
 
 typedef struct Stmt Stmt;
@@ -90,16 +109,29 @@ struct Stmt {
         } for_stmt;
         struct {
             char *name;   /* loop variable */
-            Expr *iter;   /* iterable: [T] array or bytes */
+            char *name2;  /* second variable (map iteration), or NULL */
+            Expr *iter;   /* iterable: [T], bytes, or map[K]V */
             Block *body;
         } for_in;
         struct { Expr *value; } ret; /* value may be NULL */
         struct { Expr *expr; } expr_stmt;
+        struct {
+            char *name;
+            int is_pub;
+            char **fields;
+            char **ftypes;
+            int nfields;
+        } struct_decl;
+        struct {
+            char *struct_name;
+            FuncDecl **funcs;
+            int nfuncs;
+        } impl;
     } as;
 };
 
 /* Function declarations */
-typedef struct {
+struct FuncDecl {
     char *name;
     char **params;      /* parameter names */
     char **param_types; /* slang type names: "int", "bytes", "[int]", ... */
@@ -108,7 +140,7 @@ typedef struct {
     Block *body;
     int is_pub;         /* exported from its package */
     int line;
-} FuncDecl;
+};
 
 typedef struct {
     FuncDecl **funcs;

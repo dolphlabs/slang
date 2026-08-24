@@ -1,0 +1,1 @@
+let m: map[str]int = {1: 2};

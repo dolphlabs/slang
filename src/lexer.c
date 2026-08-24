@@ -247,6 +247,8 @@ Token lexer_next(Lexer *lx) {
         KW("for", T_KW_FOR)
         KW("in", T_KW_IN)
         KW("as", T_KW_AS)
+        KW("struct", T_KW_STRUCT)
+        KW("impl", T_KW_IMPL)
         KW("int", T_TY_INT)
         KW("float", T_TY_FLOAT)
         KW("str", T_TY_STR)
@@ -261,6 +263,7 @@ Token lexer_next(Lexer *lx) {
         KW("u32", T_TY_U32)
         KW("u64", T_TY_U64)
         KW("f32", T_TY_F32)
+        KW("map", T_TY_MAP)
 #undef KW
 
         t = make_token(T_IDENT, line);
@@ -358,6 +361,8 @@ const char *token_type_name(TokenType t) {
     case T_KW_FOR:   return "'for'";
     case T_KW_IN:    return "'in'";
     case T_KW_AS:    return "'as'";
+    case T_KW_STRUCT:return "'struct'";
+    case T_KW_IMPL:  return "'impl'";
     case T_TY_INT:   return "'int'";
     case T_TY_FLOAT: return "'float'";
     case T_TY_STR:   return "'str'";
@@ -372,6 +377,7 @@ const char *token_type_name(TokenType t) {
     case T_TY_U32:   return "'u32'";
     case T_TY_U64:   return "'u64'";
     case T_TY_F32:   return "'f32'";
+    case T_TY_MAP:   return "'map'";
     case T_PLUS:     return "'+'";
     case T_MINUS:    return "'-'";
     case T_STAR:     return "'*'";

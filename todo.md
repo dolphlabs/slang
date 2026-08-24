@@ -28,18 +28,25 @@ Track progress top to bottom; tick items off as they land.
 
 ## Tier 2 — server workhorses
 
-- [ ] Maps `map[K]V`
-  - [ ] Parser: `map[K]V` type syntax, `{k: v}` literals
-  - [ ] Runtime: open-addressing hash table over GC memory
-  - [ ] Operations: get/set/delete, `len()`, key membership
-  - [ ] Iteration: `for k, v in m { ... }`
+- [x] Maps `map[K]V`
+  - [x] Parser: `map[K]V` type syntax, `{k: v}` literals (annotated & inferred)
+  - [x] Runtime: open-addressing hash table over GC memory (FNV-1a hashing,
+        insertion-order iteration, automatic growth at 75% load)
+  - [x] Operations: get/set/delete (`m[k]`, `m[k] = v`), `len()`,
+        `has(m, k)`, `del(m, k)`; missing-key reads are runtime errors
+  - [x] Iteration: `for k, v in m { ... }` in insertion order
+  - [x] Key types restricted to integers, `str`, `bool`; values may be any
+        type incl. structs and lists
 
-- [ ] Structs
-  - [ ] Parser: `struct Name { field: T, ... }` declarations
-  - [ ] Construction: `Name { field: value, ... }` literals
-  - [ ] Field access `p.x`, mutation `p.x = v`
-  - [ ] Methods via `impl Name { fn ... }` blocks
-  - [ ] Integration with packages (`pub struct`, qualified access)
+- [x] Structs
+  - [x] Parser: `struct Name { field: T, ... }` declarations (top level only)
+  - [x] Construction: `Name { field: value, ... }` literals (all fields
+        required, no extras, types checked)
+  - [x] Field access `p.x`, nested chains `r.tl.y`, mutation `p.x = v`
+  - [x] Methods via `impl Name { fn ... }` blocks with `self` receiver;
+        methods may return structs (chained construction works)
+  - [x] Integration with packages (`pub struct`, qualified access,
+        exported-method visibility) and lists of structs (`[Point]`)
 
 ## Tier 3 — reliability & differentiators
 

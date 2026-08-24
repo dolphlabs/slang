@@ -99,6 +99,7 @@ static void call_push_arg(Expr *call, Expr *arg) {
 
 static Expr *parse_expression(Parser *p);
 static const char *parse_type_name(Parser *p);
+static FuncDecl *parse_fn_decl(Parser *p);
 
 static void list_push_elem(Expr *list, Expr *elem) {
     int n = list->as.list.nelems;
@@ -106,6 +107,25 @@ static void list_push_elem(Expr *list, Expr *elem) {
         (Expr **)xrealloc(list->as.list.elems, (n + 1) * sizeof(Expr *));
     list->as.list.elems[n] = elem;
     list->as.list.nelems = n + 1;
+}
+
+static void maplit_push_pair(Expr *m, Expr *k, Expr *v) {
+    int n = m->as.maplit.npairs;
+    m->as.maplit.keys =
+        (Expr **)xrealloc(m->as.maplit.keys, (n + 1) * sizeof(Expr *));
+    m->as.maplit.vals =
+        (Expr **)xrealloc(m->as.maplit.vals, (n + 1) * sizeof(Expr *));
+    m->as.maplit.keys[n] = k;
+    m->as.maplit.vals[n] = v;
+    m->as.maplit.npairs = n + 1;
+}
+
+/* Token two positions ahead of the cursor (peek2 = toks[pos+1]). */
+static Token *peek_at(Parser *p, int off) {
+    int i = p->pos + off;
+    if (i >= p->count)
+        i = p->count - 1;
+    return &p->toks[i];
 }
 static Expr *parse_expr_source(const char *src, int line);
 static Expr *parse_interp_string(Token *tk);
@@ -149,6 +169,24 @@ static Expr *parse_primary(Parser *p) {
         expect(p, T_RBRACKET, "']' to close list literal");
         return e;
     }
+    case T_LBRACE: {
+        /* map literal: {key: value, ...} */
+        advance(p);
+        Expr *e = new_expr(EX_MAPLIT, tk->line);
+        if (!check(p, T_RBRACE)) {
+            for (;;) {
+                Expr *k = parse_expression(p);
+                expect(p, T_COLON, "':' between key and value in map "
+                                   "literal");
+                Expr *v = parse_expression(p);
+                maplit_push_pair(e, k, v);
+                if (!match(p, T_COMMA))
+                    break;
+            }
+        }
+        expect(p, T_RBRACE, "'}' to close map literal");
+        return e;
+    }
     case T_KW_TRUE:
     case T_KW_FALSE: {
         advance(p);
@@ -169,6 +207,33 @@ static Expr *parse_primary(Parser *p) {
             sb_append(&sb, p_dot_str);
             sb_append(&sb, member->text);
             name = sb.data;
+        }
+        /* struct literal: Name { field: value, ... } — recognized by the
+         * 'ident {' + 'ident :' lookahead so it can't collide with
+         * blocks following conditions like 'while running {'. */
+        if (check(p, T_LBRACE) && peek_at(p, 1)->type == T_IDENT &&
+            peek_at(p, 2)->type == T_COLON) {
+            advance(p); /* '{' */
+            Expr *sl = new_expr(EX_STRUCTLIT, tk->line);
+            sl->as.structlit.tyname = name;
+            int nf = 0;
+            for (;;) {
+                Token *f = expect(p, T_IDENT, "a field name");
+                expect(p, T_COLON, "':' between field and value");
+                Expr *v = parse_expression(p);
+                sl->as.structlit.fields = (char **)xrealloc(
+                    sl->as.structlit.fields, (nf + 1) * sizeof(char *));
+                sl->as.structlit.vals = (Expr **)xrealloc(
+                    sl->as.structlit.vals, (nf + 1) * sizeof(Expr *));
+                sl->as.structlit.fields[nf] = f->text;
+                sl->as.structlit.vals[nf] = v;
+                nf++;
+                if (!match(p, T_COMMA))
+                    break;
+            }
+            sl->as.structlit.nfields = nf;
+            expect(p, T_RBRACE, "'}' to close struct literal");
+            return sl;
         }
         if (check(p, T_LPAREN)) {
             advance(p); /* '(' */
@@ -201,11 +266,20 @@ static Expr *parse_primary(Parser *p) {
     return NULL; /* unreachable */
 }
 
-/* Indexing and slicing: base[i], base[a..b], base[a..=b]; either slice
- * end may be omitted (base[..n] / base[n..] / base[..]). */
+/* Indexing, slicing, and field access:
+ * base[i], base[a..b], base[a..=b], base.field */
 static Expr *parse_postfix(Parser *p) {
     Expr *e = parse_primary(p);
     for (;;) {
+        if (check(p, T_DOT)) {
+            advance(p); /* '.' */
+            Token *f = expect(p, T_IDENT, "a field name after '.'");
+            Expr *fl = new_expr(EX_FIELD, f->line);
+            fl->as.field.base = e;
+            fl->as.field.name = f->text;
+            e = fl;
+            continue;
+        }
         if (!check(p, T_LBRACKET))
             break;
         advance(p); /* '[' */
@@ -449,6 +523,37 @@ static const char *parse_type_name(Parser *p) {
     case T_TY_U32:   advance(p); return "u32";
     case T_TY_U64:   advance(p); return "u64";
     case T_TY_F32:   advance(p); return "f32";
+    case T_TY_MAP: {
+        /* map[K]V */
+        advance(p);
+        expect(p, T_LBRACKET, "'[' after 'map'");
+        const char *k = parse_type_name(p);
+        expect(p, T_RBRACKET, "']' between key and value types");
+        const char *v = parse_type_name(p);
+        StrBuf sb;
+        sb_init(&sb);
+        sb_append(&sb, "map[");
+        sb_append(&sb, k);
+        sb_putc(&sb, ']');
+        sb_append(&sb, v);
+        return sb.data;
+    }
+    case T_IDENT: {
+        /* user-defined struct type: Name or pkg.Name */
+        advance(p);
+        char *name = tk->text;
+        if (check(p, T_DOT)) {
+            advance(p);
+            Token *member = expect(p, T_IDENT, "a type name after '.'");
+            StrBuf sb;
+            sb_init(&sb);
+            sb_append(&sb, name);
+            sb_append(&sb, p_dot_str);
+            sb_append(&sb, member->text);
+            return sb.data;
+        }
+        return name;
+    }
     case T_LBRACKET: {
         advance(p); /* '[' */
         const char *inner = parse_type_name(p);
@@ -463,13 +568,15 @@ static const char *parse_type_name(Parser *p) {
     default:
         parse_error(tk,
                     "expected a type name (int, float, str, bool, bytes, "
-                    "i8..u64, f32, [T])");
+                    "i8..u64, f32, [T], map[K]V, or a struct name)");
     }
     return NULL; /* unreachable */
 }
 
 static Stmt *parse_if_stmt(Parser *p);
 static Stmt *parse_statement(Parser *p);
+static Stmt *parse_struct_decl(Parser *p, int is_pub);
+static Stmt *parse_impl_decl(Parser *p);
 
 static Block *parse_block(Parser *p, int fn_body) {
     expect(p, T_LBRACE, "'{'");
@@ -556,10 +663,16 @@ static Stmt *parse_guard_stmt(Parser *p) {
 }
 
 /* for <name> in <start>..[=]<end> { ... }     (range)
- * for <name> in <iterable> { ... }            (array or bytes) */
+ * for <name> in <iterable> { ... }            (array, bytes)
+ * for <k>, <v> in <map> { ... }               (map) */
 static Stmt *parse_for_stmt(Parser *p) {
     Token *kw = advance(p);
     Token *name = expect(p, T_IDENT, "a loop variable name");
+    char *name2 = NULL;
+    if (match(p, T_COMMA)) {
+        Token *n2 = expect(p, T_IDENT, "a second variable name");
+        name2 = n2->text;
+    }
     expect(p, T_KW_IN, "'in'");
     Expr *start = parse_expression(p);
 
@@ -591,8 +704,71 @@ static Stmt *parse_for_stmt(Parser *p) {
 
     Stmt *s = new_stmt(ST_FOR_IN, kw->line);
     s->as.for_in.name = name->text;
+    s->as.for_in.name2 = name2;
     s->as.for_in.iter = start;
     s->as.for_in.body = body;
+    return s;
+}
+
+/* struct Name { field: T, ... } — top level only */
+static Stmt *parse_struct_decl(Parser *p, int is_pub) {
+    Token *kw = advance(p); /* 'struct' */
+    Token *name = expect(p, T_IDENT, "a struct name");
+    expect(p, T_LBRACE, "'{'");
+
+    char **fields = NULL;
+    char **ftypes = NULL;
+    int n = 0;
+    while (!check(p, T_RBRACE)) {
+        if (check(p, T_EOF))
+            parse_error(peek(p), "unexpected end of file inside struct");
+        Token *f = expect(p, T_IDENT, "a field name");
+        expect(p, T_COLON, "':' followed by a field type");
+        const char *ty = parse_type_name(p);
+        fields = (char **)xrealloc(fields, (n + 1) * sizeof(char *));
+        ftypes = (char **)xrealloc(ftypes, (n + 1) * sizeof(char *));
+        fields[n] = f->text;
+        ftypes[n] = xstrdup(ty);
+        n++;
+        if (!match(p, T_COMMA))
+            break;
+    }
+    expect(p, T_RBRACE, "'}'");
+
+    Stmt *s = new_stmt(ST_STRUCT, kw->line);
+    s->as.struct_decl.name = name->text;
+    s->as.struct_decl.is_pub = is_pub;
+    s->as.struct_decl.fields = fields;
+    s->as.struct_decl.ftypes = ftypes;
+    s->as.struct_decl.nfields = n;
+    return s;
+}
+
+/* impl Name { fn ... } — methods become package functions whose first
+ * parameter conventionally receives the struct ('self'). */
+static Stmt *parse_impl_decl(Parser *p) {
+    Token *kw = advance(p); /* 'impl' */
+    Token *name = expect(p, T_IDENT, "a struct name");
+    expect(p, T_LBRACE, "'{'");
+
+    FuncDecl **funcs = NULL;
+    int n = 0;
+    while (!check(p, T_RBRACE)) {
+        if (check(p, T_EOF))
+            parse_error(peek(p), "unexpected end of file inside impl block");
+        if (!check(p, T_KW_FN))
+            parse_error(peek(p),
+                        "only 'fn' declarations are allowed inside 'impl'");
+        FuncDecl *f = parse_fn_decl(p);
+        funcs = (FuncDecl **)xrealloc(funcs, (n + 1) * sizeof(FuncDecl *));
+        funcs[n++] = f;
+    }
+    expect(p, T_RBRACE, "'}'");
+
+    Stmt *s = new_stmt(ST_IMPL, kw->line);
+    s->as.impl.struct_name = name->text;
+    s->as.impl.funcs = funcs;
+    s->as.impl.nfuncs = n;
     return s;
 }
 
@@ -620,6 +796,13 @@ static Stmt *parse_statement(Parser *p) {
         return parse_guard_stmt(p);
     case T_KW_RETURN:
         return parse_return_stmt(p);
+    case T_KW_STRUCT:
+        parse_error(tk, "'struct' declarations are only allowed at top "
+                        "level");
+        return NULL; /* unreachable */
+    case T_KW_IMPL:
+        parse_error(tk, "'impl' blocks are only allowed at top level");
+        return NULL; /* unreachable */
     case T_KW_PUB:
         parse_error(tk,
                     "'pub' is only allowed on top-level functions and "
@@ -629,7 +812,8 @@ static Stmt *parse_statement(Parser *p) {
         /* expression or assignment statement */
         Expr *expr = parse_expression(p);
         if (match(p, T_ASSIGN)) {
-            if (expr->kind != EX_IDENT && expr->kind != EX_INDEX)
+            if (expr->kind != EX_IDENT && expr->kind != EX_INDEX &&
+                expr->kind != EX_FIELD)
                 parse_error(tk, "invalid assignment target");
             Expr *value = parse_expression(p);
             expect(p, T_SEMI, "';'");
@@ -745,12 +929,26 @@ Program *parse_program(Token *tokens, int ntokens) {
             continue;
         }
 
+        if (check(&p, T_KW_STRUCT)) {
+            block_push(prog->main_body, parse_struct_decl(&p, is_pub));
+            continue;
+        }
+
+        if (check(&p, T_KW_IMPL)) {
+            if (is_pub)
+                parse_error(peek(&p),
+                            "'pub' cannot precede 'impl'; mark the "
+                            "individual 'fn's inside as 'pub'");
+            block_push(prog->main_body, parse_impl_decl(&p));
+            continue;
+        }
+
         if (is_pub) {
             Stmt *s = parse_statement(&p);
             if (s->kind != ST_LET)
                 parse_error(peek(&p),
-                            "'pub' can only precede a function or a "
-                            "top-level 'let'");
+                            "'pub' can only precede a function, struct, "
+                            "or a top-level 'let'");
             s->as.let.is_pub = 1;
             block_push(prog->main_body, s);
             continue;

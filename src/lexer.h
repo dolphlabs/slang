@@ -26,6 +26,8 @@ typedef enum {
     T_KW_FOR,
     T_KW_IN,
     T_KW_AS,
+    T_KW_STRUCT,
+    T_KW_IMPL,
 
     /* type names */
     T_TY_INT,
@@ -42,6 +44,7 @@ typedef enum {
     T_TY_U32,
     T_TY_U64,
     T_TY_F32,
+    T_TY_MAP, /* 'map' (always followed by [K]V) */
 
     /* operators */
     T_PLUS,
