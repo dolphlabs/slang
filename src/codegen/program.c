@@ -1,0 +1,592 @@
+/* Split out of the original monolithic codegen.c -- see
+ * internal.h for the shared CG state and cross-file API. */
+
+#include "internal.h"
+
+#include <string.h>
+
+void emit_prelude(CG *cg) {
+    for (int i = 0; i < RUNTIME_LEN; i++)
+        emit_line(cg, "%s", RUNTIME[i]);
+}
+
+
+/* Register a raw (not yet canonicalized) function signature. */
+void sig_register_raw(CG *cg, Package *p, FuncDecl *f,
+                             const char *method_of) {
+    if (is_builtin_name(f->name))
+        cg_error(f->line, "cannot redefine builtin '%s'", f->name);
+    if (sig_find_in(cg, p->name, f->name))
+        cg_error(f->line,
+                 "redefinition of function '%s' in package '%s'", f->name,
+                 p->name);
+
+    FuncSig sig;
+    memset(&sig, 0, sizeof(sig));
+    sig.name = f->name;
+    sig.pkg = p->name;
+    sig.is_pub = f->is_pub;
+    sig.is_extern = f->is_extern;
+    sig.ret_slang = f->ret_type;
+    sig.nparams = f->nparams;
+    sig.method_of = method_of;
+    sig.line = f->line;
+    sig.param_slang =
+        (const char **)xmalloc(sizeof(char *) *
+                               (f->nparams ? f->nparams : 1));
+    for (int m = 0; m < f->nparams; m++)
+        sig.param_slang[m] = f->param_types[m];
+
+    if (cg->sigs.count == cg->sigs.cap) {
+        cg->sigs.cap = cg->sigs.cap ? cg->sigs.cap * 2 : 8;
+        cg->sigs.items = (FuncSig *)xrealloc(
+            cg->sigs.items, cg->sigs.cap * sizeof(FuncSig));
+    }
+    cg->sigs.items[cg->sigs.count++] = sig;
+}
+
+/* Collect imports, structs, free functions, and methods from every
+ * package, then canonicalize all stored type names. */
+void collect_decls(CG *cg, Package *pkgs, int npkgs) {
+    int i, j;
+
+    /* imports */
+    for (i = 0; i < npkgs; i++) {
+        Package *p = &pkgs[i];
+        for (j = 0; j < p->prog->nimports; j++) {
+            char *ipath = p->prog->import_paths[j];
+            import_push(cg, p->name, path_base(ipath), path_base(ipath));
+        }
+    }
+
+    /* pass 1: free functions + struct shells */
+    for (i = 0; i < npkgs; i++) {
+        Package *p = &pkgs[i];
+        for (j = 0; j < p->prog->nfuncs; j++)
+            sig_register_raw(cg, p, p->prog->funcs[j], NULL);
+        Block *body = p->prog->main_body;
+        for (j = 0; j < body->count; j++) {
+            Stmt *s = body->stmts[j];
+            if (s->kind != ST_STRUCT)
+                continue;
+            if (struct_find_in_pkg(cg, p->name, s->as.struct_decl.name))
+                cg_error(s->line,
+                         "redefinition of struct '%s' in package '%s'",
+                         s->as.struct_decl.name, p->name);
+            if (cg->structs.count == cg->structs.cap) {
+                cg->structs.cap = cg->structs.cap ? cg->structs.cap * 2 : 8;
+                cg->structs.items = (StructDef *)xrealloc(
+                    cg->structs.items,
+                    cg->structs.cap * sizeof(StructDef));
+            }
+            StructDef *sd = &cg->structs.items[cg->structs.count++];
+            sd->canonical =
+                xasprintf("%s.%s", p->name, s->as.struct_decl.name);
+            sd->pkg = p->name;
+            sd->name = s->as.struct_decl.name;
+            sd->is_pub = s->as.struct_decl.is_pub;
+            sd->fields = s->as.struct_decl.fields;
+            sd->ftypes = (const char **)s->as.struct_decl.ftypes;
+            sd->nfields = s->as.struct_decl.nfields;
+            sd->line = s->line;
+        }
+    }
+
+    /* pass 2: canonicalize struct field types */
+    for (i = 0; i < cg->structs.count; i++) {
+        StructDef *sd = &cg->structs.items[i];
+        cg->cur_pkg = sd->pkg;
+        for (j = 0; j < sd->nfields; j++) {
+            for (int q = 0; q < j; q++) {
+                if (!strcmp(sd->fields[q], sd->fields[j]))
+                    cg_error(sd->line,
+                             "duplicate field '%s' in struct '%s'",
+                             sd->fields[j], sd->canonical);
+            }
+            sd->ftypes[j] = canon_type(cg, sd->ftypes[j], sd->line);
+        }
+    }
+
+    /* pass 3: methods from impl blocks */
+    for (i = 0; i < npkgs; i++) {
+        Package *p = &pkgs[i];
+        Block *body = p->prog->main_body;
+        for (j = 0; j < body->count; j++) {
+            Stmt *s = body->stmts[j];
+            if (s->kind != ST_IMPL)
+                continue;
+            StructDef *sd =
+                struct_find_in_pkg(cg, p->name, s->as.impl.struct_name);
+            if (!sd)
+                cg_error(s->line, "impl of unknown struct '%s'",
+                         s->as.impl.struct_name);
+            for (int q = 0; q < s->as.impl.nfuncs; q++)
+                sig_register_raw(cg, p, s->as.impl.funcs[q],
+                                 sd->canonical);
+        }
+    }
+
+    /* pass 4: canonicalize all signatures */
+    for (i = 0; i < cg->sigs.count; i++) {
+        FuncSig *sig = &cg->sigs.items[i];
+        cg->cur_pkg = sig->pkg;
+        for (j = 0; j < sig->nparams; j++) {
+            ((char **)sig->param_slang)[j] =
+                (char *)canon_type(cg, sig->param_slang[j], sig->line);
+            if (sig->is_extern)
+                check_extern_type(sig->param_slang[j], sig->line,
+                                  "parameter");
+        }
+        if (sig->ret_slang)
+            sig->ret_slang = canon_type(cg, sig->ret_slang, sig->line);
+        if (sig->is_extern && sig->ret_slang)
+            check_extern_type(sig->ret_slang, sig->line, "return");
+    }
+}
+
+/* Type of a constant-literal initializer, or error. */
+const char *literal_type(CG *cg, Expr *e, int line) {
+    (void)cg;
+    switch (e->kind) {
+    case EX_INT:    return "int";
+    case EX_FLOAT:  return "float";
+    case EX_STRING: return "str";
+    case EX_BYTES:  return "bytes";
+    case EX_BOOL:   return "bool";
+    case EX_UNARY:
+        if (!strcmp(e->as.unary.op, "-")) {
+            Expr *o = e->as.unary.operand;
+            if (o->kind == EX_INT) return "int";
+            if (o->kind == EX_FLOAT) return "float";
+        }
+        break;
+    default:
+        break;
+    }
+    cg_error(line,
+             "package-level variables must be initialized with constant "
+             "literals");
+    return NULL; /* unreachable */
+}
+
+/* C source text for a constant-literal initializer. */
+char *gen_const_init(Expr *e) {
+    switch (e->kind) {
+    case EX_INT:
+        return xasprintf("%lld", e->as.int_lit.value);
+    case EX_FLOAT:
+        return gen_float_literal(e->as.float_lit.value);
+    case EX_STRING:
+        return c_string_literal(e->as.str_lit.value);
+    case EX_BOOL:
+        return xstrdup(e->as.bool_lit.value ? "true" : "false");
+    case EX_UNARY: {
+        char *o = gen_const_init(e->as.unary.operand);
+        return xasprintf("(-%s)", o);
+    }
+    default:
+        return NULL; /* unreachable: validated by literal_type */
+    }
+}
+
+/* Emit package-level variables of all imported packages as C globals
+ * and register them in the symbol table. */
+void emit_globals(CG *cg, Package *pkgs, int npkgs, int main_index) {
+    int any = 0;
+    for (int i = 0; i < npkgs; i++) {
+        if (i == main_index)
+            continue; /* main pkg top-level lets are locals of main() */
+        Package *p = &pkgs[i];
+        Block *body = p->prog->main_body;
+        for (int j = 0; j < body->count; j++) {
+            Stmt *s = body->stmts[j];
+            if (s->kind == ST_STRUCT || s->kind == ST_IMPL)
+                continue; /* handled by collect_decls */
+            if (s->kind != ST_LET)
+                cg_error(s->line,
+                         "only 'let' declarations are allowed at top "
+                         "level in an imported package");
+            const char *t = literal_type(cg, s->as.let.init, s->line);
+            if (is_arr(t))
+                cg_error(s->line,
+                         "package-level lists are not supported yet");
+            if (glob_find(cg, p->name, s->as.let.name))
+                cg_error(s->line, "duplicate variable '%s' in package '%s'",
+                         s->as.let.name, p->name);
+            glob_push(cg, s->as.let.name, p->name, t, s->as.let.is_pub);
+            if (is_bytes(t)) {
+                Expr *init = s->as.let.init;
+                char *m = mangle_glob(p->name, s->as.let.name);
+                emit_line(cg, "static const unsigned char %s_bdata[] = %s;",
+                          m, c_bytes_literal(init->as.bytes_lit.data,
+                                             init->as.bytes_lit.len));
+                emit_line(cg, "static sl_bytes %s = { %lld, (unsigned char *)%s_bdata };",
+                          m, init->as.bytes_lit.len, m);
+            } else {
+                emit_line(cg, "static %s %s = %s;", map_type(t),
+                          mangle_glob(p->name, s->as.let.name),
+                          gen_const_init(s->as.let.init));
+            }
+            any = 1;
+        }
+    }
+    if (any)
+        emit_line(cg, "");
+}
+
+/* Emit forward declarations and definitions for every struct. */
+void emit_struct_types(CG *cg) {
+    if (!cg->structs.count)
+        return;
+    for (int i = 0; i < cg->structs.count; i++) {
+        char *m = mangle_struct(cg->structs.items[i].canonical);
+        emit_line(cg, "typedef struct %s %s;", m, m);
+    }
+    emit_line(cg, "");
+    for (int i = 0; i < cg->structs.count; i++) {
+        StructDef *sd = &cg->structs.items[i];
+        char *m = mangle_struct(sd->canonical);
+        emit_line(cg, "struct %s {", m);
+        cg->indent++;
+        for (int j = 0; j < sd->nfields; j++)
+            emit_line(cg, "%s %s;", ctype_of(cg, sd->ftypes[j]),
+                      sanitize_ident(sd->fields[j]));
+        cg->indent--;
+        emit_line(cg, "};");
+        emit_line(cg, "");
+    }
+}
+
+/* Emit C definitions for every monomorphized opt/result instantiation
+ * discovered during generation. Emitted after struct types so inner
+ * struct types are complete. */
+
+void emit_opt_res_types(CG *cg) {
+    for (int i = 0; i < cg->opts.count; i++) {
+        OptInst *o = &cg->opts.items[i];
+        emit_line(cg, "typedef struct {");
+        cg->indent++;
+        emit_line(cg, "bool has;");
+        emit_line(cg, "%s v;", ctype_of(cg, o->inner));
+        cg->indent--;
+        emit_line(cg, "} %s;", o->cname);
+        emit_line(cg, "");
+    }
+    for (int i = 0; i < cg->res.count; i++) {
+        ResInst *r = &cg->res.items[i];
+        emit_line(cg, "typedef struct {");
+        cg->indent++;
+        emit_line(cg, "bool ok;");
+        emit_line(cg, "%s v;", ctype_of(cg, r->tv));
+        emit_line(cg, "%s e;", ctype_of(cg, r->te));
+        cg->indent--;
+        emit_line(cg, "} %s;", r->cname);
+        emit_line(cg, "");
+    }
+}
+
+/* The net runtime above unconditionally builds these three result
+ * instantiations (i32/str for handles+ports, bytes/str for recv,
+ * bool/str for nonblock) regardless of which net functions the
+ * slang program actually calls or how it uses their return values;
+ * register them whenever net is imported so their typedefs always
+ * exist alongside the runtime code that references them. */
+void force_native_result_types(CG *cg) {
+    int want_net = 0;
+    for (int i = 0; i < cg->imports.count; i++) {
+        const char *t = cg->imports.items[i].target;
+        if (!strcmp(t, "net") && is_native_pkg(cg, t))
+            want_net = 1;
+    }
+    if (!want_net)
+        return;
+    res_cname(cg, "i32", "str");
+    res_cname(cg, "bytes", "str");
+    res_cname(cg, "bool", "str");
+    /* cg->want_tls is only known for certain after the dry run has
+     * walked every statement (same "populate now, read back on the
+     * real run" pattern as opts/res/spawns above) */
+    if (cg->want_tls)
+        res_cname(cg, "rawptr", "str");
+}
+
+/* Emit the native-package runtime sections that this program needs,
+ * based on which native packages were imported. Must run after
+ * emit_opt_res_types so the fixed net result instantiations exist. */
+void emit_native_runtime(CG *cg) {
+    int want_time = 0, want_net = 0;
+    for (int i = 0; i < cg->imports.count; i++) {
+        const char *t = cg->imports.items[i].target;
+        if (!strcmp(t, "time") && is_native_pkg(cg, t))
+            want_time = 1;
+        if (!strcmp(t, "net") && is_native_pkg(cg, t))
+            want_net = 1;
+    }
+    if (!want_time && !want_net)
+        return;
+    if (want_time)
+        for (int i = 0; i < TIME_RUNTIME_LEN; i++)
+            emit_line(cg, "%s", TIME_RUNTIME[i]);
+    if (want_net)
+        for (int i = 0; i < NET_RUNTIME_LEN; i++)
+            emit_line(cg, "%s", NET_RUNTIME[i]);
+    if (cg->want_tls)
+        for (int i = 0; i < TLS_RUNTIME_LEN; i++)
+            emit_line(cg, "%s", TLS_RUNTIME[i]);
+}
+
+/* Emit the args-struct + pthread trampoline for every distinct
+ * 'spawn' target discovered while generating. Must run before any
+ * function body that spawns one references it by name. */
+void emit_spawn_trampolines(CG *cg) {
+    for (int i = 0; i < cg->spawns.count; i++) {
+        SpawnShape *s = &cg->spawns.items[i];
+        FuncSig *sig = sig_find_in(cg, s->pkg, s->name);
+        char *callee = sig->is_extern ? xstrdup(sig->name)
+                                      : mangle_func(sig->pkg, sig->name);
+
+        emit_line(cg, "typedef struct {");
+        cg->indent++;
+        if (sig->nparams == 0) {
+            emit_line(cg, "char _unused;");
+        } else {
+            for (int j = 0; j < sig->nparams; j++)
+                emit_line(cg, "%s a%d;", ctype_of(cg, sig->param_slang[j]),
+                          j);
+        }
+        cg->indent--;
+        emit_line(cg, "} %s;", s->sname);
+        emit_line(cg, "");
+
+        emit_line(cg, "static void *%s(void *_sl_raw) {", s->tname);
+        cg->indent++;
+        if (sig->nparams == 0) {
+            emit_line(cg, "(void)_sl_raw;");
+            emit_line(cg, "%s();", callee);
+        } else {
+            emit_line(cg, "%s *_sl_a = (%s *)_sl_raw;", s->sname, s->sname);
+            StrBuf args;
+            sb_init(&args);
+            for (int j = 0; j < sig->nparams; j++) {
+                if (j)
+                    sb_append(&args, ", ");
+                sb_append(&args, xasprintf("_sl_a->a%d", j));
+            }
+            emit_line(cg, "%s(%s);", callee, args.data);
+        }
+        emit_line(cg, "return NULL;");
+        cg->indent--;
+        emit_line(cg, "}");
+        emit_line(cg, "");
+    }
+}
+
+void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
+    int any = 0;
+    for (int i = 0; i < npkgs; i++) {
+        Program *prog = pkgs[i].prog;
+
+        /* free functions */
+        for (int j = 0; j < prog->nfuncs; j++) {
+            FuncDecl *f = prog->funcs[j];
+            FuncSig *sig = sig_find_in(cg, pkgs[i].name, f->name);
+            StrBuf params;
+            sb_init(&params);
+            if (f->is_extern) {
+                /* no body defined here, so the real symbol just needs
+                 * a matching prototype for the C compiler + linker;
+                 * parameter names are irrelevant in a prototype */
+                if (sig->nparams == 0) {
+                    sb_append(&params, "void");
+                } else {
+                    for (int m = 0; m < sig->nparams; m++) {
+                        if (m)
+                            sb_append(&params, ", ");
+                        sb_append(&params, ctype_of(cg, sig->param_slang[m]));
+                    }
+                }
+                emit_line(cg, "extern %s %s(%s);",
+                          sig->ret_slang ? ctype_of(cg, sig->ret_slang)
+                                         : "void",
+                          f->name, params.data);
+                any = 1;
+                continue;
+            }
+            if (f->nparams == 0) {
+                sb_append(&params, "void");
+            } else {
+                for (int m = 0; m < f->nparams; m++) {
+                    if (m)
+                        sb_append(&params, ", ");
+                    sb_append(&params, ctype_of(cg, sig->param_slang[m]));
+                    sb_putc(&params, ' ');
+                    sb_append(&params, sanitize_ident(f->params[m]));
+                }
+            }
+            emit_line(cg, "static %s %s(%s);",
+                      sig->ret_slang ? ctype_of(cg, sig->ret_slang)
+                                     : "void",
+                      mangle_func(pkgs[i].name, f->name), params.data);
+            any = 1;
+        }
+
+        /* methods from impl blocks */
+        Block *body = prog->main_body;
+        for (int j = 0; j < body->count; j++) {
+            Stmt *s = body->stmts[j];
+            if (s->kind != ST_IMPL)
+                continue;
+            for (int q = 0; q < s->as.impl.nfuncs; q++) {
+                FuncDecl *f = s->as.impl.funcs[q];
+                FuncSig *sig = sig_find_in(cg, pkgs[i].name, f->name);
+                StrBuf params;
+                sb_init(&params);
+                if (f->nparams == 0) {
+                    sb_append(&params, "void");
+                } else {
+                    for (int m = 0; m < f->nparams; m++) {
+                        if (m)
+                            sb_append(&params, ", ");
+                        sb_append(&params,
+                                  ctype_of(cg, sig->param_slang[m]));
+                        sb_putc(&params, ' ');
+                        sb_append(&params, sanitize_ident(f->params[m]));
+                    }
+                }
+                emit_line(cg, "static %s %s(%s);",
+                          sig->ret_slang ? ctype_of(cg, sig->ret_slang)
+                                         : "void",
+                          mangle_func(pkgs[i].name, f->name), params.data);
+                any = 1;
+            }
+        }
+    }
+    if (any)
+        emit_line(cg, "");
+}
+
+void gen_function(CG *cg, Package *p, FuncDecl *f) {
+    FuncSig *sig = sig_find_in(cg, p->name, f->name);
+
+    cg->vars.count = 0; /* fresh scope per function */
+    cg->in_function = 1;
+    cg->cur_ret = sig->ret_slang;
+    cg->cur_pkg = p->name;
+
+    for (int j = 0; j < f->nparams; j++)
+        var_push(cg, f->params[j], sig->param_slang[j]);
+
+    StrBuf params;
+    sb_init(&params);
+    if (f->nparams == 0) {
+        sb_append(&params, "void");
+    } else {
+        for (int j = 0; j < f->nparams; j++) {
+            if (j)
+                sb_append(&params, ", ");
+            sb_append(&params, ctype_of(cg, sig->param_slang[j]));
+            sb_putc(&params, ' ');
+            sb_append(&params, sanitize_ident(f->params[j]));
+        }
+    }
+
+    emit_line(cg, "static %s %s(%s) {",
+              sig->ret_slang ? ctype_of(cg, sig->ret_slang) : "void",
+              mangle_func(p->name, f->name), params.data);
+    gen_block(cg, f->body);
+    emit_line(cg, "}");
+    emit_line(cg, "");
+
+    cg->in_function = 0;
+    cg->cur_ret = NULL;
+}
+
+/* Generate the complete translation unit into cg->out. */
+void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
+                              int main_index) {
+    emit_prelude(cg);
+
+    emit_struct_types(cg);
+
+    force_native_result_types(cg);
+    emit_opt_res_types(cg);
+
+    emit_native_runtime(cg);
+
+    emit_globals(cg, pkgs, npkgs, main_index);
+
+    gen_prototypes(cg, pkgs, npkgs);
+
+    emit_spawn_trampolines(cg);
+
+    for (int i = 0; i < npkgs; i++) {
+        Package *p = &pkgs[i];
+        for (int j = 0; j < p->prog->nfuncs; j++) {
+            if (p->prog->funcs[j]->is_extern)
+                continue; /* declared only; no body to emit */
+            gen_function(cg, p, p->prog->funcs[j]);
+        }
+        /* methods from impl blocks */
+        Block *body = p->prog->main_body;
+        for (int j = 0; j < body->count; j++) {
+            Stmt *s = body->stmts[j];
+            if (s->kind != ST_IMPL)
+                continue;
+            for (int q = 0; q < s->as.impl.nfuncs; q++)
+                gen_function(cg, p, s->as.impl.funcs[q]);
+        }
+    }
+
+    /* top-level statements of the main package become main() */
+    cg->vars.count = 0;
+    cg->cur_pkg = pkgs[main_index].name;
+    emit_line(cg, "int main(void) {");
+    emit_line(cg, "    GC_INIT();");
+    emit_line(cg, "    sl_rt_is_main_thread = 1;");
+    gen_block(cg, pkgs[main_index].prog->main_body);
+    emit_line(cg, "    return 0;");
+    emit_line(cg, "}");
+}
+
+void codegen_program(Package *pkgs, int npkgs, int main_index,
+                     StrBuf *out, int *out_want_tls) {
+    CG cg;
+    memset(&cg, 0, sizeof(CG));
+    cg.out = out;
+    cg.cur_pkg = pkgs[main_index].name;
+
+    /* record which packages are compiler-provided natives */
+    for (int i = 0; i < npkgs; i++) {
+        if (!pkgs[i].native)
+            continue;
+        cg.nat_pkgs = (char **)xrealloc(
+            cg.nat_pkgs, (size_t)(cg.nnat + 1) * sizeof(char *));
+        cg.nat_pkgs[cg.nnat++] = pkgs[i].name;
+    }
+
+    collect_decls(&cg, pkgs, npkgs);
+
+    /* Dry run: generation populates the opt/result monomorphization
+     * tables as it goes, but typedefs must be emitted before any use.
+     * Generate once into a scratch buffer to discover every
+     * instantiation, then generate for real with complete tables. */
+    StrBuf scratch;
+    sb_init(&scratch);
+    cg.out = &scratch;
+    gen_whole_program(&cg, pkgs, npkgs, main_index);
+    free(scratch.data);
+
+    /* emit_globals (called from gen_whole_program) registers package
+     * globals as it emits them; undo that bookkeeping before the real
+     * run re-emits and re-registers the same globals, or it trips its
+     * own duplicate-declaration check. opts/res are deliberately left
+     * to accumulate across both passes (that's the point of the dry
+     * run); globs has no such purpose here. */
+    cg.globs.count = 0;
+
+    out->len = 0;
+    out->data[0] = '\0';
+    cg.out = out;
+    gen_whole_program(&cg, pkgs, npkgs, main_index);
+    *out_want_tls = cg.want_tls;
+}

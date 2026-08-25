@@ -91,7 +91,8 @@ int main(int argc, char **argv) {
 
     StrBuf out;
     sb_init(&out);
-    codegen_program(pkgs.items, pkgs.count, main_index, &out);
+    int want_tls = 0;
+    codegen_program(pkgs.items, pkgs.count, main_index, &out, &want_tls);
 
     /* ---- output ---- */
     char *stem = derive_stem(input);
@@ -127,6 +128,26 @@ int main(int argc, char **argv) {
         pclose(pc);
     }
 
+    /* net.tls_* needs OpenSSL; resolved the same way as libgc above,
+     * but only when the program actually uses it. */
+    char tlsflags[1024] = "-lssl -lcrypto";
+    if (want_tls) {
+        FILE *tpc =
+            popen("pkg-config --cflags --libs openssl 2>/dev/null", "r");
+        if (tpc) {
+            if (fgets(tlsflags, sizeof(tlsflags), tpc)) {
+                size_t n = strlen(tlsflags);
+                while (n && (tlsflags[n - 1] == 10 || tlsflags[n - 1] == 13))
+                    tlsflags[--n] = '\0';
+                if (n == 0)
+                    snprintf(tlsflags, sizeof(tlsflags), "-lssl -lcrypto");
+            } else {
+                snprintf(tlsflags, sizeof(tlsflags), "-lssl -lcrypto");
+            }
+            pclose(tpc);
+        }
+    }
+
     int nlinks = 0;
     char **link_libs = collect_link_libs(&pkgs, &nlinks);
 
@@ -139,6 +160,10 @@ int main(int argc, char **argv) {
     sb_append(&cmd, " ");
     sb_append(&cmd, gcflags);
     sb_append(&cmd, " -lpthread"); /* 'spawn' always links against pthreads */
+    if (want_tls) {
+        sb_append(&cmd, " ");
+        sb_append(&cmd, tlsflags);
+    }
     for (int i = 0; i < nlinks; i++) {
         sb_append(&cmd, " -l");
         sb_append(&cmd, link_libs[i]);

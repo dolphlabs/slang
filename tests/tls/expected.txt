@@ -1,0 +1,3 @@
+tls round-trip ok
+correctly rejected: untrusted CA
+correctly rejected: hostname mismatch

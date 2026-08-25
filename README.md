@@ -336,6 +336,47 @@ net.close(cfd);
 See `examples/httpd/` for a minimal HTTP server built entirely on
 these primitives.
 
+#### TLS
+
+`net.tls_*` adds a TLS listener/dialer on top of the plain `net`
+primitives above, built on OpenSSL (linked automatically, and only
+when a program actually calls one of these — a plain-TCP `net`
+program stays dependency-free). A `SSL_CTX`-equivalent config is
+created once (`tls_server_ctx` / `tls_client_ctx`) and reused across
+many connections; each connection is a separate `rawptr` handle.
+
+```slang
+import "net";
+
+// server: load a cert + key once, reuse the context for every connection
+let sctx_r: result[rawptr, str] = net.tls_server_ctx("cert.pem", "key.pem");
+guard let sctx = sctx_r else { exit(1); }
+
+let lr: result[i32, str] = net.listen(8443);
+guard let lfd = lr else { exit(1); }
+let ar: result[rawptr, str] = net.tls_accept(lfd, sctx);  // TCP accept + handshake
+guard let sconn = ar else { exit(1); }
+net.tls_send(sconn, b"hello");
+net.tls_close(sconn);
+
+// client: verify against a CA file, or "" for the system trust store
+let cctx_r: result[rawptr, str] = net.tls_client_ctx("");
+guard let cctx = cctx_r else { exit(1); }
+let dr: result[rawptr, str] = net.tls_dial("example.com", 443, cctx);
+guard let cconn = dr else { exit(1); }
+let rr: result[bytes, str] = net.tls_recv(cconn, 4096);
+net.tls_close(cconn);
+```
+
+Client verification is strict by default: `tls_client_ctx` enables
+peer verification, and `tls_dial` checks the certificate against
+*both* the CA and the hostname you asked for (`SSL_set1_host` — the
+check that's easy to forget and, if skipped, leaves you with "TLS"
+that validates a certificate chain without checking it belongs to
+the host you're actually talking to). Sending/receiving is blocking,
+same as plain `net` — call these from a `spawn`ed task if you need a
+connection handled without stalling anything else.
+
 ## Concurrency
 
 `spawn` runs a function on a real OS thread; `chan[T]` is a bounded,
@@ -517,11 +558,23 @@ main.sl ──loader──> packages ──lexer/parser──> ASTs ──codege
    keywords, literals, and operators.
 3. **Parser** (`src/parser.c`) — recursive-descent parser producing an
    AST (`src/ast.h`).
-4. **Code generator** (`src/codegen.c`) — walks the ASTs, performs type
+4. **Code generator** (`src/codegen/`) — walks the ASTs, performs type
    inference and semantic checks (including `pub` enforcement), and
    emits readable C. A tiny runtime (string helpers, printing) is
    embedded directly into every generated file so output is fully
-   self-contained.
+   self-contained. Split by concern rather than one monolithic file:
+   `core.c` (CG state, symbol tables, type helpers), `infer.c` (type
+   inference), `expr.c`/`stmt.c` (expression/statement codegen),
+   `program.c` (top-level orchestration and `codegen_program`'s entry
+   point), `native.c` (the `NATIVE_SIGS` table + dispatch that every
+   native package's functions go through), and one `runtime_*.c` per
+   native package (`runtime_core.c` for the always-on prelude,
+   `runtime_time.c`, `runtime_net.c`, `runtime_tls.c`) holding that
+   package's embedded C source as a plain string array. `internal.h`
+   holds the shared `CG` struct and cross-file declarations; adding a
+   package (e.g. a future `json` or `proc`) means a new
+   `runtime_json.c` plus a few `NATIVE_SIGS` entries in `native.c`,
+   not edits to the inference/codegen core.
 5. **Driver** (`src/main.c`) — glues it together and shells out to
    `cc`. Because GCC/Clang compile the generated C, you get their full
    optimizer for free.
@@ -567,6 +620,10 @@ Makefile       build/test/clean
   Mutating a shared struct/list/map from more than one task is on
   you, same as Go or Java. No `select` over channels, no way to
   join/await a spawned task's completion besides a channel.
+- TLS: no client certificates (mutual TLS), no SNI-based multi-cert
+  virtual hosting on one listener, no session resumption tuning.
+  Blocking only — call `net.tls_*` from a `spawn`ed task for a
+  server, same as plain `net`.
 
 ## Memory management
 
@@ -601,3 +658,4 @@ What this means in practice:
 - `select` over multiple channels
 - A join handle for `spawn`, so a task's completion (and any value)
   can be awaited without hand-rolling it over a channel
+- Mutual TLS (client certificates) and SNI-based virtual hosting

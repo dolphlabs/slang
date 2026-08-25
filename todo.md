@@ -218,13 +218,46 @@ wouldn't need to change the language surface below.
 
 ## Tier 6 — TLS
 
-- [ ] `net` gains a TLS listener/dialer, built on the Tier 4 C interop
-      against OpenSSL/BoringSSL (opaque `SSL*`/`SSL_CTX*` handles map
-      naturally onto `rawptr`)
-- [ ] Certificate/key loading (server + client)
-- [ ] Example: the Tier 5 httpd successor served over HTTPS
-- [ ] Tests: a real TLS handshake over loopback; negative tests for a
-      bad/expired certificate
+- [x] `net` gains a TLS listener/dialer, built on OpenSSL (linked via
+      `pkg-config openssl`, same pattern already used for libgc — and
+      only when a program actually calls a `net.tls_*` function, so a
+      plain-TCP `net` program stays dependency-free)
+  - [x] `net.tls_server_ctx(cert_path, key_path)` / `net.tls_client_ctx(ca_path)`
+        — reusable config, separate from the per-connection handle
+        (`ca_path == ""` means the system trust store), matching
+        OpenSSL's own `SSL_CTX` vs `SSL` split rather than hiding the
+        config behind the listener fd
+  - [x] `net.tls_accept(lfd, ctx)` / `net.tls_dial(host, port, ctx)` /
+        `net.tls_send` / `net.tls_recv` / `net.tls_close` — a
+        connection is an opaque `rawptr` (Tier 4's opaque-pointer type
+        turned out to be exactly the right fit for `SSL*`)
+  - [x] `native_check`/`native_gen` (the `time`/`net` dispatch table)
+        refactored to a per-argument-kind table instead of scattered
+        function-name/index special cases while adding these 7 new
+        signatures — the old code had a dead, computed-and-discarded
+        `want_fd` variable that this replaced
+- [x] Certificate/key loading (server + client), strict verification
+      by default: `SSL_VERIFY_PEER` plus `SSL_set1_host` for hostname
+      checking, not just chain validation — verified with a real
+      handshake where the chain is trusted but the hostname doesn't
+      match, and confirmed that fails (this is the check most
+      hand-rolled TLS clients silently skip)
+- [x] Example: `examples/httpsd/` — the Tier 5 httpd successor's exact
+      shape, served over HTTPS (self-signed cert committed as a test
+      fixture); verified with a real `curl -k` request
+- [x] Tests: `tests/tls/` — a real handshake over loopback (round-trip
+      ping/pong through the encrypted connection), plus the two
+      verification-failure cases that actually matter (untrusted CA;
+      trusted CA but wrong hostname, isolated from DNS-resolution
+      failure by connecting to `127.0.0.1` against a `CN=localhost`
+      cert). Determinism verified over 10 repeated runs. Plus a
+      negative test for a `net.tls_*` argument-type mismatch.
+- [x] Validated with a standalone C spike before touching the compiler
+      (same discipline as Tier 5's concurrency spike) — confirmed the
+      exact API pattern (cert/key loading, `SSL_VERIFY_PEER`,
+      `SSL_set1_host`) actually enforces correct semantics on this
+      OpenSSL build before generating any code against it. Clean under
+      ASan+UBSan on both the spike and the real generated programs.
 
 ## Tier 7 — JSON / structured serialization
 
