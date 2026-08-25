@@ -1,6 +1,8 @@
 // Minimal HTTP server in slang: the net package's TCP listener and
-// dialer are built on bytes + fixed-width ints, and every fallible
-// operation returns a Result unwrapped with guard let.
+// dialer are built on bytes + fixed-width ints, every fallible
+// operation returns a Result unwrapped with guard let, and each
+// connection is served on its own spawned thread so one slow client
+// can't stall the others.
 
 import "net";
 
@@ -27,7 +29,7 @@ fn serve(cfd: i32) {
 fn accept_and_serve(lfd: i32) {
     let ar: result[i32, str] = net.accept(lfd);
     guard let cfd = ar else { return; }
-    serve(cfd);
+    spawn serve(cfd);
 }
 
 let lr: result[i32, str] = net.listen(8080);

@@ -30,6 +30,7 @@ typedef enum {
     T_KW_IMPL,
     T_KW_EXTERN,
     T_KW_LINK,
+    T_KW_SPAWN,
 
     /* type names */
     T_TY_INT,
@@ -51,6 +52,7 @@ typedef enum {
     T_TY_RESULT,   /* 'result' (always followed by [T, E]) */
     T_TY_DURATION, /* 'duration': nanoseconds since an arbitrary epoch */
     T_TY_RAWPTR,   /* 'rawptr': opaque foreign pointer for C interop */
+    T_TY_CHAN,     /* 'chan' (always followed by [T]) */
 
     /* operators */
     T_PLUS,

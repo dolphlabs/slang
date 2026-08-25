@@ -186,6 +186,7 @@ static int is_map_key(const char *t) {
 
 static int is_opt(const char *t) { return !strncmp(t, "opt[", 4); }
 static int is_result(const char *t) { return !strncmp(t, "result[", 7); }
+static int is_chan(const char *t) { return !strncmp(t, "chan[", 5); }
 
 /* "opt[T]" -> T (heap-allocated). Caller must pass an opt type. */
 static char *opt_inner(const char *t) {
@@ -193,6 +194,15 @@ static char *opt_inner(const char *t) {
     char *inner = (char *)xmalloc(n - 4);
     memcpy(inner, t + 4, n - 5);
     inner[n - 5] = '\0';
+    return inner;
+}
+
+/* "chan[T]" -> T (heap-allocated). Caller must pass a chan type. */
+static char *chan_elem(const char *t) {
+    size_t n = strlen(t);
+    char *inner = (char *)xmalloc(n - 5);
+    memcpy(inner, t + 5, n - 6);
+    inner[n - 6] = '\0';
     return inner;
 }
 
@@ -416,6 +426,21 @@ typedef struct {
     int cap;
 } ResTable;
 
+/* One args-struct + pthread trampoline per distinct spawned target
+ * function (shared across every 'spawn' call site targeting it). */
+typedef struct {
+    char *pkg;    /* target function's owning package */
+    char *name;   /* target function's simple name */
+    char *sname;  /* C struct type name, e.g. sl_spawn_args_main_handle */
+    char *tname;  /* C trampoline function name */
+} SpawnShape;
+
+typedef struct {
+    SpawnShape *items;
+    int count;
+    int cap;
+} SpawnTable;
+
 struct CG {
     StrBuf *out;
     int indent;
@@ -426,6 +451,7 @@ struct CG {
     StructTable structs;
     OptTable opts;
     ResTable res;
+    SpawnTable spawns;
     const char *expect; /* expected type while inferring none/ok/err */
     const char *cur_ret;  /* slang return type of enclosing function */
     const char *cur_pkg;
@@ -470,6 +496,29 @@ static const char *res_cname(CG *cg, const char *tv, const char *te) {
     r->cname =
         xasprintf("sl_res_%s_%s", sanitize_pkg(tv), sanitize_pkg(te));
     return r->cname;
+}
+
+/* Args-struct + trampoline names for a spawned target, shared by
+ * every 'spawn' call site targeting the same function. */
+static SpawnShape *spawn_shape_for(CG *cg, FuncSig *sig) {
+    for (int i = 0; i < cg->spawns.count; i++) {
+        if (!strcmp(cg->spawns.items[i].pkg, sig->pkg) &&
+            !strcmp(cg->spawns.items[i].name, sig->name))
+            return &cg->spawns.items[i];
+    }
+    if (cg->spawns.count == cg->spawns.cap) {
+        cg->spawns.cap = cg->spawns.cap ? cg->spawns.cap * 2 : 8;
+        cg->spawns.items = (SpawnShape *)xrealloc(
+            cg->spawns.items, cg->spawns.cap * sizeof(SpawnShape));
+    }
+    SpawnShape *s = &cg->spawns.items[cg->spawns.count++];
+    s->pkg = sig->pkg;
+    s->name = sig->name;
+    char *base = xasprintf("%s_%s", sanitize_pkg(sig->pkg),
+                           sanitize_ident(sig->name));
+    s->sname = xasprintf("sl_spawn_args_%s", base);
+    s->tname = xasprintf("sl_spawn_tramp_%s", base);
+    return s;
 }
 
 static void var_push(CG *cg, const char *name, const char *slang) {
@@ -568,7 +617,7 @@ static int is_native_pkg(CG *cg, const char *name) {
  * restore it. */
 static const char *expect_push(CG *cg, const char *t) {
     const char *saved = cg->expect;
-    if (t && (is_opt(t) || is_result(t)))
+    if (t && (is_opt(t) || is_result(t) || is_chan(t)))
         cg->expect = t;
     return saved;
 }
@@ -644,6 +693,8 @@ static const char *ctype_of(CG *cg, const char *t) {
         return m;
     if (is_map(t))
         return "sl_map *";
+    if (is_chan(t))
+        return "sl_chan *";
     if (is_opt(t))
         return xasprintf("%s *", opt_cname(cg, opt_inner(t)));
     if (is_result(t)) {
@@ -695,6 +746,14 @@ static const char *canon_type(CG *cg, const char *t, int line) {
         const char *cb = canon_type(cg, b, line);
         res_cname(cg, ca, cb); /* register the instantiation */
         return xasprintf("result[%s,%s]", ca, cb);
+    }
+    if (is_chan(t)) {
+        /* the channel's own C representation (sl_chan *) does not
+         * depend on T, so unlike opt/result there is no per-element
+         * instantiation to register -- only the element type itself
+         * needs canonicalizing */
+        const char *ci = canon_type(cg, chan_elem(t), line);
+        return xasprintf("chan[%s]", ci);
     }
     if (map_type(t))
         return t;
@@ -750,7 +809,9 @@ static int is_builtin_name(const char *name) {
            !strcmp(name, "del") || !strcmp(name, "exit") ||
            !strcmp(name, "some") || !strcmp(name, "none") ||
            !strcmp(name, "ok") || !strcmp(name, "err") ||
-           !strcmp(name, "nullptr") || !strcmp(name, "bytes_ptr");
+           !strcmp(name, "nullptr") || !strcmp(name, "bytes_ptr") ||
+           !strcmp(name, "make_chan") || !strcmp(name, "chan_send") ||
+           !strcmp(name, "chan_recv") || !strcmp(name, "chan_close");
 }
 
 /* Find a method `name` declared (via impl) for struct `sd`. */
@@ -1037,6 +1098,57 @@ static const char *infer_call(CG *cg, Expr *e) {
         if (!is_bytes(t))
             cg_error(e->line, "bytes_ptr() expects bytes (got %s)", t);
         return "rawptr";
+    }
+    if (!strcmp(name, "make_chan")) {
+        if (n != 1)
+            cg_error(e->line, "make_chan() takes exactly one argument");
+        const char *capt = infer_type(cg, e->as.call.args[0]);
+        if (!is_int(capt))
+            cg_error(e->line,
+                     "make_chan() expects an integer capacity (got %s)",
+                     capt);
+        if (!cg->expect || !is_chan(cg->expect))
+            cg_error(e->line,
+                     "cannot infer the element type of make_chan(); "
+                     "annotate the binding, e.g. let c: chan[int] = "
+                     "make_chan(10)");
+        return cg->expect;
+    }
+    if (!strcmp(name, "chan_send")) {
+        if (n != 2)
+            cg_error(e->line, "chan_send() takes exactly two arguments");
+        const char *ct = infer_type(cg, e->as.call.args[0]);
+        if (!is_chan(ct))
+            cg_error(e->line,
+                     "chan_send() expects a chan as its first argument "
+                     "(got %s)",
+                     ct);
+        char *elem = chan_elem(ct);
+        const char *saved = expect_push(cg, elem);
+        const char *vt = infer_type(cg, e->as.call.args[1]);
+        cg->expect = saved;
+        if (!value_assignable(elem, e->as.call.args[1], vt))
+            cg_error(e->line, "chan_send(): cannot send %s on a chan[%s]",
+                     vt, elem);
+        return "void";
+    }
+    if (!strcmp(name, "chan_recv")) {
+        if (n != 1)
+            cg_error(e->line, "chan_recv() takes exactly one argument");
+        const char *ct = infer_type(cg, e->as.call.args[0]);
+        if (!is_chan(ct))
+            cg_error(e->line, "chan_recv() expects a chan (got %s)", ct);
+        char *elem = chan_elem(ct);
+        opt_cname(cg, elem); /* register the instantiation */
+        return xasprintf("opt[%s]", elem);
+    }
+    if (!strcmp(name, "chan_close")) {
+        if (n != 1)
+            cg_error(e->line, "chan_close() takes exactly one argument");
+        const char *ct = infer_type(cg, e->as.call.args[0]);
+        if (!is_chan(ct))
+            cg_error(e->line, "chan_close() expects a chan (got %s)", ct);
+        return "void";
     }
     if (!strcmp(name, "to_le") || !strcmp(name, "to_be")) {
         if (n != 1)
@@ -1491,6 +1603,19 @@ static char *gen_numeric_binary(CG *cg, Expr *e, const char *result_t) {
     char *b = gen_expr(cg, e->as.binary.rhs);
     a = maybe_cast(cg, result_t, lt, a);
     b = maybe_cast(cg, result_t, rt, b);
+    /* Integer '/' and '%' by zero trap the CPU (SIGFPE) rather than
+     * raising a catchable error; guard explicitly so it becomes an
+     * ordinary runtime error like an out-of-bounds index instead of
+     * an uncatchable signal (which would defeat per-task failure
+     * isolation once a task can crash the whole process anyway). */
+    if ((!strcmp(op, "/") || !strcmp(op, "%")) && is_int(result_t)) {
+        int id = cg->tmp_id++;
+        return xasprintf(
+            "({ %s _sl_dv%d = (%s); if (_sl_dv%d == 0) "
+            "sl_rt_error(\"division by zero\", 0, 0); "
+            "(%s)((%s) %s _sl_dv%d); })",
+            map_type(result_t), id, b, id, map_type(result_t), a, op, id);
+    }
     /* Cast the result back to the slang result type: C's integer
      * promotions would otherwise widen narrow types to int and lose
      * the documented wrap-on-overflow semantics. */
@@ -1563,6 +1688,46 @@ static char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
     if (!strcmp(name, "bytes_ptr")) {
         char *a = gen_expr(cg, e->as.call.args[0]);
         return xasprintf("((void *)(%s)->ptr)", a);
+    }
+    if (!strcmp(name, "make_chan")) {
+        /* cg->expect must still hold the annotated chan[T] target,
+         * exactly as ctor_infer relies on for some/none/ok/err */
+        char *elem = chan_elem(infer_type(cg, e));
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        return xasprintf("sl_chan_new(sizeof(%s), (int)(%s))",
+                         ctype_of(cg, elem), a);
+    }
+    if (!strcmp(name, "chan_send")) {
+        const char *ct = infer_type(cg, e->as.call.args[0]);
+        char *elem = chan_elem(ct);
+        char *ch = gen_expr(cg, e->as.call.args[0]);
+        const char *saved = expect_push(cg, elem);
+        const char *vt = infer_type(cg, e->as.call.args[1]);
+        char *v = gen_expr(cg, e->as.call.args[1]);
+        cg->expect = saved;
+        v = maybe_cast(cg, elem, vt, v);
+        int id = cg->tmp_id++;
+        return xasprintf(
+            "({ %s _sl_cv%d = %s; sl_chan_send(%s, &_sl_cv%d); })",
+            ctype_of(cg, elem), id, v, ch, id);
+    }
+    if (!strcmp(name, "chan_recv")) {
+        const char *ct = infer_type(cg, e->as.call.args[0]);
+        char *elem = chan_elem(ct);
+        char *ch = gen_expr(cg, e->as.call.args[0]);
+        int id = cg->tmp_id++;
+        const char *ec = ctype_of(cg, elem);
+        const char *oc = opt_cname(cg, elem);
+        return xasprintf(
+            "({ %s _sl_cv%d; %s *_sl_co%d = (%s *)GC_malloc(sizeof(*_sl_co%d)); "
+            "if (sl_chan_recv(%s, &_sl_cv%d)) { _sl_co%d->has = true; "
+            "_sl_co%d->v = _sl_cv%d; } else { _sl_co%d->has = false; } "
+            "_sl_co%d; })",
+            ec, id, oc, id, oc, id, ch, id, id, id, id, id, id);
+    }
+    if (!strcmp(name, "chan_close")) {
+        char *ch = gen_expr(cg, e->as.call.args[0]);
+        return xasprintf("sl_chan_close(%s)", ch);
     }
     if (!strcmp(name, "to_le") || !strcmp(name, "to_be")) {
         const char *t = infer_type(cg, e->as.call.args[0]);
@@ -2458,6 +2623,11 @@ static void gen_stmt(CG *cg, Stmt *s) {
             gen_print(cg, e, !strcmp(e->as.call.name, "println"));
             break;
         }
+        /* every other statement kind validates via infer_type before
+         * generating; a bare statement call must too, or mismatched
+         * arguments (e.g. a str where an int is expected) silently
+         * reinterpret the wrong C value instead of being rejected */
+        infer_type(cg, e);
         char *code = gen_expr(cg, e);
         emit_line(cg, "%s;", code);
         break;
@@ -2466,6 +2636,78 @@ static void gen_stmt(CG *cg, Stmt *s) {
         /* handled by gen_stmts, which needs to see the statements that
          * follow it in the same block */
         break;
+    case ST_SPAWN: {
+        Expr *call = s->as.spawn.call;
+        const char *name = call->as.call.name;
+        if (is_builtin_name(name))
+            cg_error(s->line, "'spawn' cannot target a builtin function");
+
+        FuncSig *sig;
+        char *left, *right;
+        if (split_dotted(name, &left, &right)) {
+            const char *pkg = import_try(cg, left);
+            if (!pkg)
+                cg_error(s->line,
+                         "'spawn' does not support methods yet (only "
+                         "plain functions and pkg.func calls)");
+            if (is_native_pkg(cg, pkg))
+                cg_error(s->line,
+                         "'spawn' cannot target a native package "
+                         "function directly; wrap it in a plain "
+                         "function and spawn that instead");
+            sig = sig_find_in(cg, pkg, right);
+            if (!sig)
+                cg_error(s->line, "package '%s' has no function '%s'",
+                         pkg, right);
+            if (!sig->is_pub)
+                cg_error(s->line,
+                         "function '%s' is not exported from package "
+                         "'%s' (add 'pub' to export it)",
+                         right, pkg);
+        } else {
+            sig = sig_find_in(cg, cg->cur_pkg, name);
+            if (!sig)
+                cg_error(s->line, "call to undefined function '%s'", name);
+        }
+
+        int nargs = call->as.call.nargs;
+        if (nargs != sig->nparams)
+            cg_error(s->line,
+                     "function '%s' expects %d argument(s), got %d", name,
+                     sig->nparams, nargs);
+
+        SpawnShape *shape = spawn_shape_for(cg, sig);
+        int id = cg->tmp_id++;
+        emit_line(cg, "{");
+        cg->indent++;
+        if (nargs == 0) {
+            emit_line(cg, "%s *_sl_sa%d = NULL;", shape->sname, id);
+        } else {
+            emit_line(cg, "%s *_sl_sa%d = (%s *)GC_malloc(sizeof(%s));",
+                      shape->sname, id, shape->sname, shape->sname);
+            for (int i = 0; i < nargs; i++) {
+                const char *saved = expect_push(cg, sig->param_slang[i]);
+                const char *at = infer_type(cg, call->as.call.args[i]);
+                cg->expect = saved;
+                if (!value_assignable(sig->param_slang[i],
+                                      call->as.call.args[i], at))
+                    cg_error(s->line,
+                             "argument %d of '%s': cannot pass %s where "
+                             "%s expected",
+                             i + 1, name, at, sig->param_slang[i]);
+                char *a = gen_expr(cg, call->as.call.args[i]);
+                a = maybe_cast(cg, sig->param_slang[i], at, a);
+                emit_line(cg, "_sl_sa%d->a%d = %s;", id, i, a);
+            }
+        }
+        emit_line(cg, "pthread_t _sl_tid%d;", id);
+        emit_line(cg, "pthread_create(&_sl_tid%d, NULL, %s, _sl_sa%d);", id,
+                  shape->tname, id);
+        emit_line(cg, "pthread_detach(_sl_tid%d);", id);
+        cg->indent--;
+        emit_line(cg, "}");
+        break;
+    }
     case ST_STRUCT:
     case ST_IMPL:
         /* declarations are processed during collect_decls; nothing to
@@ -2539,14 +2781,96 @@ static const char *RUNTIME[] = {
     "#include <string.h>",
     "#include <stdbool.h>",
     "#include <stdint.h>",
+    "#define GC_THREADS",
+    "#define GC_PTHREADS",
     "#include <gc.h>",
+    "#include <pthread.h>",
     "",
     "/* ---- slang runtime ---- */",
     "",
+    "/* set once, at the very top of main(); every spawned task's",
+    " * trampoline runs with the default (0) value, so runtime errors",
+    " * can tell 'the main task' apart from 'a spawned task' and",
+    " * isolate a spawned task's failure instead of killing everyone */",
+    "static _Thread_local int sl_rt_is_main_thread = 0;",
+    "",
     "static void sl_rt_error(const char *msg, long long a, long long b) {",
+    "    if (!sl_rt_is_main_thread) {",
+    "        fprintf(stderr,",
+    "                \"slang: task panicked: %s (index %lld, length %lld)\\n\",",
+    "                msg, a, b);",
+    "        pthread_exit(NULL);",
+    "    }",
     "    fprintf(stderr, \"slang runtime error: %s (index %lld, length %lld)\\n\",",
     "            msg, a, b);",
     "    exit(1);",
+    "}",
+    "",
+    "/* ---- chan[T]: bounded, thread-safe queue for 'spawn'ed tasks ---- */",
+    "",
+    "typedef struct {",
+    "    unsigned char *buf;",
+    "    size_t elemsz;",
+    "    int cap, head, count, closed;",
+    "    pthread_mutex_t mu;",
+    "    pthread_cond_t not_empty;",
+    "    pthread_cond_t not_full;",
+    "} sl_chan;",
+    "",
+    "static sl_chan *sl_chan_new(size_t elemsz, int cap) {",
+    "    if (cap < 1) cap = 1;",
+    "    sl_chan *c = (sl_chan *)GC_malloc(sizeof(sl_chan));",
+    "    c->buf = (unsigned char *)GC_malloc(elemsz * (size_t)cap);",
+    "    c->elemsz = elemsz;",
+    "    c->cap = cap;",
+    "    c->head = 0;",
+    "    c->count = 0;",
+    "    c->closed = 0;",
+    "    pthread_mutex_init(&c->mu, NULL);",
+    "    pthread_cond_init(&c->not_empty, NULL);",
+    "    pthread_cond_init(&c->not_full, NULL);",
+    "    return c;",
+    "}",
+    "",
+    "static void sl_chan_send(sl_chan *c, const void *val) {",
+    "    pthread_mutex_lock(&c->mu);",
+    "    while (c->count == c->cap && !c->closed)",
+    "        pthread_cond_wait(&c->not_full, &c->mu);",
+    "    if (c->closed) {",
+    "        pthread_mutex_unlock(&c->mu);",
+    "        sl_rt_error(\"send on closed channel\", 0, 0);",
+    "        return;",
+    "    }",
+    "    int tail = (c->head + c->count) % c->cap;",
+    "    memcpy(c->buf + (size_t)tail * c->elemsz, val, c->elemsz);",
+    "    c->count++;",
+    "    pthread_cond_signal(&c->not_empty);",
+    "    pthread_mutex_unlock(&c->mu);",
+    "}",
+    "",
+    "/* returns 1 with *out populated, or 0 if closed and drained empty */",
+    "static int sl_chan_recv(sl_chan *c, void *out) {",
+    "    pthread_mutex_lock(&c->mu);",
+    "    while (c->count == 0 && !c->closed)",
+    "        pthread_cond_wait(&c->not_empty, &c->mu);",
+    "    if (c->count == 0) {",
+    "        pthread_mutex_unlock(&c->mu);",
+    "        return 0;",
+    "    }",
+    "    memcpy(out, c->buf + (size_t)c->head * c->elemsz, c->elemsz);",
+    "    c->head = (c->head + 1) % c->cap;",
+    "    c->count--;",
+    "    pthread_cond_signal(&c->not_full);",
+    "    pthread_mutex_unlock(&c->mu);",
+    "    return 1;",
+    "}",
+    "",
+    "static void sl_chan_close(sl_chan *c) {",
+    "    pthread_mutex_lock(&c->mu);",
+    "    c->closed = 1;",
+    "    pthread_cond_broadcast(&c->not_empty);",
+    "    pthread_cond_broadcast(&c->not_full);",
+    "    pthread_mutex_unlock(&c->mu);",
     "}",
     "",
     "/* ---- bytes: length-prefixed, binary-safe sequences ---- */",
@@ -3420,6 +3744,52 @@ static void emit_native_runtime(CG *cg) {
             emit_line(cg, "%s", NET_RUNTIME[i]);
 }
 
+/* Emit the args-struct + pthread trampoline for every distinct
+ * 'spawn' target discovered while generating. Must run before any
+ * function body that spawns one references it by name. */
+static void emit_spawn_trampolines(CG *cg) {
+    for (int i = 0; i < cg->spawns.count; i++) {
+        SpawnShape *s = &cg->spawns.items[i];
+        FuncSig *sig = sig_find_in(cg, s->pkg, s->name);
+        char *callee = sig->is_extern ? xstrdup(sig->name)
+                                      : mangle_func(sig->pkg, sig->name);
+
+        emit_line(cg, "typedef struct {");
+        cg->indent++;
+        if (sig->nparams == 0) {
+            emit_line(cg, "char _unused;");
+        } else {
+            for (int j = 0; j < sig->nparams; j++)
+                emit_line(cg, "%s a%d;", ctype_of(cg, sig->param_slang[j]),
+                          j);
+        }
+        cg->indent--;
+        emit_line(cg, "} %s;", s->sname);
+        emit_line(cg, "");
+
+        emit_line(cg, "static void *%s(void *_sl_raw) {", s->tname);
+        cg->indent++;
+        if (sig->nparams == 0) {
+            emit_line(cg, "(void)_sl_raw;");
+            emit_line(cg, "%s();", callee);
+        } else {
+            emit_line(cg, "%s *_sl_a = (%s *)_sl_raw;", s->sname, s->sname);
+            StrBuf args;
+            sb_init(&args);
+            for (int j = 0; j < sig->nparams; j++) {
+                if (j)
+                    sb_append(&args, ", ");
+                sb_append(&args, xasprintf("_sl_a->a%d", j));
+            }
+            emit_line(cg, "%s(%s);", callee, args.data);
+        }
+        emit_line(cg, "return NULL;");
+        cg->indent--;
+        emit_line(cg, "}");
+        emit_line(cg, "");
+    }
+}
+
 static void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
     int any = 0;
     for (int i = 0; i < npkgs; i++) {
@@ -3556,6 +3926,8 @@ static void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
 
     gen_prototypes(cg, pkgs, npkgs);
 
+    emit_spawn_trampolines(cg);
+
     for (int i = 0; i < npkgs; i++) {
         Package *p = &pkgs[i];
         for (int j = 0; j < p->prog->nfuncs; j++) {
@@ -3579,6 +3951,7 @@ static void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     cg->cur_pkg = pkgs[main_index].name;
     emit_line(cg, "int main(void) {");
     emit_line(cg, "    GC_INIT();");
+    emit_line(cg, "    sl_rt_is_main_thread = 1;");
     gen_block(cg, pkgs[main_index].prog->main_body);
     emit_line(cg, "    return 0;");
     emit_line(cg, "}");

@@ -138,6 +138,7 @@ int main(int argc, char **argv) {
     sb_append(&cmd, outname);
     sb_append(&cmd, " ");
     sb_append(&cmd, gcflags);
+    sb_append(&cmd, " -lpthread"); /* 'spawn' always links against pthreads */
     for (int i = 0; i < nlinks; i++) {
         sb_append(&cmd, " -l");
         sb_append(&cmd, link_libs[i]);

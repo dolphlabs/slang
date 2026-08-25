@@ -563,6 +563,19 @@ static const char *parse_type_name(Parser *p) {
         sb_putc(&sb, ']');
         return sb.data;
     }
+    case T_TY_CHAN: {
+        /* chan[T] */
+        advance(p);
+        expect(p, T_LBRACKET, "'[' after 'chan'");
+        const char *t = parse_type_name(p);
+        expect(p, T_RBRACKET, "']' to close chan type");
+        StrBuf sb;
+        sb_init(&sb);
+        sb_append(&sb, "chan[");
+        sb_append(&sb, t);
+        sb_putc(&sb, ']');
+        return sb.data;
+    }
     case T_TY_RESULT: {
         /* result[T, E] */
         advance(p);
@@ -617,7 +630,7 @@ static const char *parse_type_name(Parser *p) {
         parse_error(tk,
                     "expected a type name (int, float, str, bool, bytes, "
                     "i8..u64, f32, [T], map[K]V, opt[T], result[T,E], "
-                    "duration, rawptr, or a struct name)");
+                    "chan[T], duration, rawptr, or a struct name)");
     }
     return NULL; /* unreachable */
 }
@@ -726,6 +739,22 @@ static Stmt *parse_guard_stmt(Parser *p) {
     s->as.if_stmt.cond = neg;
     s->as.if_stmt.then_blk = body;
     s->as.if_stmt.else_blk = NULL;
+    return s;
+}
+
+/* spawn f(args...) ; -- run a plain/extern function call on a new
+ * OS thread; arguments are evaluated in the spawning context before
+ * the thread starts (no closures to worry about). */
+static Stmt *parse_spawn_stmt(Parser *p) {
+    Token *kw = advance(p); /* 'spawn' */
+    Expr *call = parse_expression(p);
+    if (call->kind != EX_CALL)
+        parse_error(kw, "'spawn' requires a function call, e.g. "
+                        "'spawn handle(conn);'");
+    expect(p, T_SEMI, "';'");
+
+    Stmt *s = new_stmt(ST_SPAWN, kw->line);
+    s->as.spawn.call = call;
     return s;
 }
 
@@ -861,6 +890,8 @@ static Stmt *parse_statement(Parser *p) {
         return parse_for_stmt(p);
     case T_KW_GUARD:
         return parse_guard_stmt(p);
+    case T_KW_SPAWN:
+        return parse_spawn_stmt(p);
     case T_KW_RETURN:
         return parse_return_stmt(p);
     case T_KW_STRUCT:

@@ -120,6 +120,8 @@ no escaping).
   (see below)
 - `bytes_ptr(b)` — raw `rawptr` to a `bytes` buffer, for passing to
   `extern fn`s (see C interop below)
+- `make_chan(n)` / `chan_send(ch, v)` / `chan_recv(ch)` / `chan_close(ch)`
+  — construct and use a `chan[T]` (see Concurrency below)
 
 ### Types
 
@@ -140,6 +142,7 @@ no escaping).
 | `result[T,E]` | `sl_res_* *` | fallible value: `ok(v)` / `err(e)` |
 | `duration` | `int64_t`   | nanosecond count (see `time`)  |
 | `rawptr`   | `void *`    | opaque foreign pointer (C interop) |
+| `chan[T]`  | `sl_chan *` | bounded thread-safe queue (see Concurrency) |
 
 #### Numeric conversion rules
 
@@ -333,6 +336,71 @@ net.close(cfd);
 See `examples/httpd/` for a minimal HTTP server built entirely on
 these primitives.
 
+## Concurrency
+
+`spawn` runs a function on a real OS thread; `chan[T]` is a bounded,
+thread-safe queue for getting values back out. Blocking-looking code
+stays blocking-looking — `net.accept`, `net.recv`, `time.sleep`, and
+friends need no special "async" form to be usable from a spawned
+task, and a spawned task's own function calls need no annotation
+either. There is no colored-function split to design around.
+
+```slang
+fn worker(id: i32, results: chan[i32]) {
+    chan_send(results, (id * 10) as i32);
+}
+
+let results: chan[i32] = make_chan(3);
+spawn worker(1, results);
+spawn worker(2, results);
+spawn worker(3, results);
+
+let mut_sum = 0;
+for i in 0..3 {
+    let v = chan_recv(results);       // blocks until a value or close
+    guard let x = v else {
+        println("channel closed early");
+        exit(1);
+    }
+    mut_sum = mut_sum + x;
+}
+println(mut_sum); // 60
+
+chan_close(results);
+chan_recv(results) ?? -1;  // none after close+drain -> -1
+```
+
+- **`spawn f(args...);`** evaluates every argument in the spawning
+  context (no closures — nothing is captured implicitly) and starts
+  `f` running on a new thread. `f` must be a plain top-level function
+  or an `extern fn`, not a method and not a builtin. There is no
+  `spawn` on `net.*`/`time.*` calls directly; wrap the native call in
+  a plain function and spawn that instead.
+- **`chan[T]`**, built with `make_chan(capacity)` (element type
+  inferred from an annotated binding, same as `none`): `chan_send(ch,
+  v)` blocks while full, `chan_recv(ch) -> opt[T]` blocks while empty
+  and returns `none` once the channel is closed and drained (instead
+  of inventing a second return-value convention, it reuses `opt[T]`),
+  `chan_close(ch)` wakes every blocked sender/receiver. Sending on a
+  closed channel is a checked runtime error, not undefined behavior.
+- **Failure isolation**: a runtime error (an out-of-bounds index, a
+  missing map key, integer division by zero, ...) inside a spawned
+  task ends *that task* — printed to stderr as `task panicked: ...` —
+  not the whole process. The same error in the main task still ends
+  the process, same as today; there is no isolation boundary around
+  top-level code. `exit(code)` always ends the whole process
+  regardless of which task calls it — it means what it always means.
+
+**What this does not give you.** There is no ownership/borrow checker
+here — slang's answer to "many tasks, no data races" is thread
+isolation plus channels for the values that need to move between
+tasks, not a type system that forbids sharing mutable state. Passing
+a struct, list, or map into a spawned task and mutating it from more
+than one task concurrently is exactly as unsafe as it is in Go or
+Java: nothing currently stops you, so don't. There's also no `select`
+over multiple channels yet, and no way to join/await a spawned task's
+completion other than coordinating through a channel yourselves.
+
 ## C interop
 
 slang already transpiles to C and shells out to `cc`, so calling into
@@ -494,6 +562,11 @@ Makefile       build/test/clean
   into a helper function and `return` early instead.
 - Package-level lists are not supported yet (scalars and bytes are).
 - Map keys are limited to integers, `str`, and `bool`.
+- No data-race protection: `spawn` gives you real concurrency and
+  per-task failure isolation, not an ownership/borrow checker.
+  Mutating a shared struct/list/map from more than one task is on
+  you, same as Go or Java. No `select` over channels, no way to
+  join/await a spawned task's completion besides a channel.
 
 ## Memory management
 
@@ -510,6 +583,9 @@ What this means in practice:
   collected — unlike refcounting.
 - Cost: a small external dependency and occasional short GC pauses.
   For most scripts this is imperceptible.
+- Every `spawn`ed OS thread is registered with the collector
+  automatically (`GC_THREADS`/`GC_PTHREADS`); a collection pause
+  stops and scans every live task's stack, not just the main one.
 
 ## Roadmap ideas
 
@@ -522,3 +598,6 @@ What this means in practice:
 - `ptr[T]` typed pointers and `extern struct` layouts, for passing C
   structs by value instead of only through opaque `rawptr` handles
 - Callback function pointers (C calling back into slang)
+- `select` over multiple channels
+- A join handle for `spawn`, so a task's completion (and any value)
+  can be awaited without hand-rolling it over a channel

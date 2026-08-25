@@ -129,3 +129,114 @@ fn below. No name-mangling/ABI work for C++ is planned.
   - [x] Negative tests: undeclared extern symbol (link-time failure),
         `rawptr` arithmetic, `rawptr` field access, a non-FFI-safe
         extern param type, and a `link` name with shell metacharacters
+
+## Tier 5 — concurrency & failure isolation
+
+The core gap: `net.accept`/`net.recv`/`time.sleep` block the whole
+process, so nothing today can serve more than one connection at a
+time (`examples/httpd` handles connections one at a time in a `while
+true` loop). Without this, `net` is a demo, not a server primitive.
+Failure isolation is scoped in alongside it because it's the same
+design problem: whatever concurrency unit gets picked needs an answer
+for "one task hits a runtime error" that isn't "the whole process
+exits" (`sl_rt_error` currently calls `exit(1)` unconditionally).
+
+**Design note — the concurrency primitive changed mid-implementation.**
+The plan going in was Go-style stackful coroutines (M:N scheduler,
+epoll, per-task stacks). A spike proved that fundamentally
+incompatible with Boehm GC as actually built: `GC_add_roots`-registered
+coroutine stacks crashed inside `GC_mark_from` reproducibly, on two
+independent context-switch implementations (`ucontext.h` and a
+hand-written x86_64 switch), which ruled out a context-switching bug
+as the cause. Root cause: a separately-`mmap`'d stack can numerically
+land inside Boehm's own "plausible heap address" range, and a
+stack-internal pointer (a saved frame pointer, a local's address) then
+gets treated as pointing into a real heap page it never allocated —
+`GC_add_roots` is documented "Wizards only" for exactly this kind of
+misuse. Boehm's actually-supported mechanism for "another stack to
+scan" is real thread registration, so the shipped design is real OS
+threads (`GC_PTHREADS`/`GC_THREADS`, so `pthread_create` is
+transparently GC-aware) instead. `net`/`time` needed no changes at
+all — each spawned thread just blocks on the exact same syscalls
+they already made. Ceiling: this scales to thousands of concurrent
+connections, not Go's 100k+ goroutines; revisit only if real usage
+shows that ceiling actually matters, since a future scheduler
+wouldn't need to change the language surface below.
+
+- [x] Concurrency primitive: `spawn f(args...);` — a statement, not
+      an expression; args are evaluated eagerly in the spawning
+      context (no closures to design around) and copied into a
+      GC'd args struct read by a pthread trampoline
+  - [x] `spawn` targets a plain top-level function or `extern fn`;
+        rejected at compile time for builtins and methods (no self to
+        thread through yet)
+  - [x] `net`/`time` need zero changes: blocking syscalls on a real
+        OS thread just block that thread, not the process
+  - [x] `chan[T]` communication primitive: `make_chan(cap)`,
+        `chan_send`, `chan_recv() -> opt[T]` (closed+drained -> `none`,
+        reusing `opt[T]` instead of a second return-value convention),
+        `chan_close`; backed by a mutex + two condvars, no per-element-
+        type struct needed since only `chan_recv`'s `opt[T]` wrapping
+        is type-specific
+
+- [x] Failure isolation
+  - [x] A `_Thread_local` flag sets `sl_rt_error` behavior: the main
+        task's error still calls `exit(1)`; every other task's error
+        prints `task panicked: ...` to stderr and calls `pthread_exit`
+        (transparently GC-unregistering the thread) instead
+  - [x] `exit(code)` unconditionally ends the whole process regardless
+        of caller, matching its meaning everywhere else
+  - [x] Closed the one gap that would have defeated isolation anyway:
+        integer division/modulo by zero previously raised an
+        uncatchable `SIGFPE`; now a checked runtime error like any
+        other, so it isolates like one
+
+- [x] Example: `examples/httpd` now spawns a task per accepted
+      connection (`spawn serve(cfd);`); verified concurrent (a
+      connection held open by `nc` does not stall a second, fast
+      `curl` request — confirmed by wall-clock timing, not just that
+      both eventually complete)
+
+- [x] Tests: `tests/spawn` (deterministic spawn + channel rendezvous,
+      no timing dependence — `chan_recv` blocking IS the
+      synchronization point), `tests/spawn_isolation` (one spawned
+      task deliberately panics; the other spawned tasks' results
+      still arrive and the process exits 0), 5 negative tests (spawn
+      on a builtin/method, `chan_send` type mismatch, untyped
+      `make_chan`, send-on-closed-channel)
+
+- [x] Bonus finds along the way, fixed as part of this tier's
+      reliability work (both got their own regression tests):
+  - [x] A real, pre-existing type-safety hole: a bare statement-level
+        function call (`foo(bad_arg);`) never validated its
+        arguments, because `ST_EXPR` codegen called `gen_expr`
+        without ever calling `infer_type` first — every other
+        statement kind (`let`, `return`, ...) already paired the two.
+        A mismatched argument silently reinterpreted the wrong C
+        value instead of being rejected.
+  - [x] Integer division/modulo by zero (see failure isolation above)
+
+## Tier 6 — TLS
+
+- [ ] `net` gains a TLS listener/dialer, built on the Tier 4 C interop
+      against OpenSSL/BoringSSL (opaque `SSL*`/`SSL_CTX*` handles map
+      naturally onto `rawptr`)
+- [ ] Certificate/key loading (server + client)
+- [ ] Example: the Tier 5 httpd successor served over HTTPS
+- [ ] Tests: a real TLS handshake over loopback; negative tests for a
+      bad/expired certificate
+
+## Tier 7 — JSON / structured serialization
+
+- [ ] Decode: `str`/`bytes` -> a slang value (needs a representation
+      decision: a dynamic/`any`-like value type vs. decoding straight
+      into a known struct shape)
+- [ ] Encode: struct/map/list/scalar -> JSON `str`
+- [ ] Tests: round-trip encode/decode, malformed-input handling
+
+## Tier 8 — process lifecycle
+
+- [ ] Signal handling (`SIGTERM`/`SIGINT`) for graceful shutdown
+- [ ] Environment variable access
+- [ ] Tests: signal delivered during an active `net` listener results
+      in a clean shutdown (connections drained, not dropped)

@@ -74,6 +74,7 @@ typedef enum {
     ST_RETURN,
     ST_EXPR,
     ST_GUARD_LET, /* guard let x = opt_expr else { ... } */
+    ST_SPAWN,  /* spawn f(args...) -- run on a new OS thread */
     ST_STRUCT, /* struct Name { field: T, ... } (top level only) */
     ST_IMPL    /* impl Name { fn ... } blocks (top level only) */
 } StmtKind;
@@ -122,6 +123,7 @@ struct Stmt {
             Expr *expr;  /* expression of type opt[T] or result[T, E] */
             Block *body; /* else block: must exit (return/break/...) */
         } guard_let;
+        struct { Expr *call; } spawn; /* EX_CALL to a plain/extern fn */
         struct {
             char *name;
             int is_pub;
