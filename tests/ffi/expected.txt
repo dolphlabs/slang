@@ -1,0 +1,7 @@
+42
+Hello, slang!
+11
+12
+13
+10
+null ok

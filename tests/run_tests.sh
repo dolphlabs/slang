@@ -12,6 +12,19 @@ cd "$(dirname "$0")/.." || exit 1
 
 fail=0
 
+# tests/ffi links against a tiny hand-written C fixture library
+# (tests/ffi/lib.c); build it once as a static archive and point
+# LIBRARY_PATH at it so 'link "slffi";' resolves during the loop below.
+ffi_build="/tmp/sl_ffi_build"
+mkdir -p "$ffi_build"
+if ! cc -std=c11 -O2 -Wall -Wextra -c tests/ffi/lib.c -o "$ffi_build/lib.o"; then
+    echo "FAIL ffi (fixture library failed to build)"
+    exit 1
+fi
+ar rcs "$ffi_build/libslffi.a" "$ffi_build/lib.o"
+LIBRARY_PATH="$ffi_build${LIBRARY_PATH:+:$LIBRARY_PATH}"
+export LIBRARY_PATH
+
 for t in tests/*/main.sl; do
     name=$(basename "$(dirname "$t")")
     case "$name" in

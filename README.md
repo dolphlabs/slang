@@ -118,6 +118,8 @@ no escaping).
 - `exit(code)` — terminate the process immediately with the given status
 - `some(v)` / `none` / `ok(v)` / `err(e)` — construct `opt`/`result` values
   (see below)
+- `bytes_ptr(b)` — raw `rawptr` to a `bytes` buffer, for passing to
+  `extern fn`s (see C interop below)
 
 ### Types
 
@@ -137,6 +139,7 @@ no escaping).
 | `opt[T]`   | `sl_opt_* *` | optional value: `some(v)` / `none` |
 | `result[T,E]` | `sl_res_* *` | fallible value: `ok(v)` / `err(e)` |
 | `duration` | `int64_t`   | nanosecond count (see `time`)  |
+| `rawptr`   | `void *`    | opaque foreign pointer (C interop) |
 
 #### Numeric conversion rules
 
@@ -330,6 +333,65 @@ net.close(cfd);
 See `examples/httpd/` for a minimal HTTP server built entirely on
 these primitives.
 
+## C interop
+
+slang already transpiles to C and shells out to `cc`, so calling into
+existing C libraries is a thin layer on top of that, not a new
+ecosystem: declare the C function's signature, tell the linker which
+library to pull in, and call it like any other function.
+
+```slang
+link "sqlite3";   // -> '-lsqlite3' on the final cc invocation
+
+extern fn sqlite3_libversion() -> str;
+println(sqlite3_libversion());
+```
+
+- **`extern fn name(params) -> ret;`** declares a C function with no
+  body — it calls the real, unmangled C symbol directly. `int`,
+  `i8..u64`, `f32`, `float`, `bool`, and `str` already share their C
+  representation, so they marshal for free. `bytes` does not
+  auto-decay (it is a boxed struct internally); pass `bytes_ptr(b)`
+  and `len(b)` as two separate `rawptr`/`i32` arguments instead of
+  inventing implicit multi-argument expansion for one type.
+- **`rawptr`** is an opaque foreign pointer (`void *`) for handles a C
+  library owns, like `sqlite3*` or `FILE*`. It can be passed around
+  and compared against **`nullptr`**, nothing else — no arithmetic,
+  no field access, no dereference. A `rawptr` is never GC-owned: if a
+  C library allocated it, free it through another `extern fn`, not by
+  letting it go out of scope.
+- **`link "name";`** is a top-level directive (parsed like `import`)
+  that adds `-lname` to the `cc` invocation. Non-default search paths
+  go through `LIBRARY_PATH`/`CPATH`, which `cc` already honors — no
+  separate slangc flag for that.
+- Only types with an unambiguous C representation may cross an
+  `extern fn` boundary: numeric types, `bool`, `str`, `bytes`, and
+  `rawptr`. GC'd containers (`opt`, `result`, `map`, structs, arrays)
+  are rejected at compile time — their internal layout isn't
+  something arbitrary C code should ever see.
+
+**C++ is out of scope for the compiler itself.** There's no
+name-mangling/ABI support planned. Wrap the C++ library in your own
+`extern "C"` shim (catching every exception at that boundary — an
+uncaught C++ exception unwinding into C is undefined behavior) and
+consume the shim exactly like any other C library above.
+
+**Safety notes:**
+
+- Boehm GC is conservative and generally sees pointers handed to C
+  just fine, but a slang value whose *only* remaining reference lives
+  in memory the GC can't scan (rare, but possible with some C
+  libraries) could theoretically be collected while C still holds it.
+  Keep a live slang-side reference for the duration of any call that
+  retains a pointer beyond that call.
+- Callback function pointers — C calling back into slang — aren't
+  supported yet.
+
+See `tests/ffi/` for a complete example: a small hand-written C
+fixture library (`lib.c`) built as a static archive, linked and called
+from a slang program exercising `extern fn`, `link`, `rawptr`,
+`bytes_ptr`, and `nullptr`.
+
 ## Packages (Go/Odin style)
 
 A **package is a directory**: every `.sl` file inside it is compiled
@@ -457,3 +519,6 @@ What this means in practice:
 - `break` / `continue`
 - Import aliases (`import "x" as y`)
 - A bytecode VM mode for fast iteration without invoking `cc`
+- `ptr[T]` typed pointers and `extern struct` layouts, for passing C
+  structs by value instead of only through opaque `rawptr` handles
+- Callback function pointers (C calling back into slang)

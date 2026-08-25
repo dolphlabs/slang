@@ -25,4 +25,9 @@ typedef struct {
  * Exits with a diagnostic on missing packages or import cycles. */
 int load_packages(const char *main_file, PkgList *out);
 
+/* Collects every 'link "name"' directive across all loaded packages,
+ * deduplicated in first-occurrence order. *out_count is set to the
+ * number of names returned (0 if none). */
+char **collect_link_libs(PkgList *pkgs, int *out_count);
+
 #endif /* SLANG_LOADER_H */

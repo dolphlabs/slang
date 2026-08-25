@@ -144,8 +144,9 @@ struct FuncDecl {
     char **param_types; /* slang type names: "int", "bytes", "[int]", ... */
     int nparams;
     char *ret_type;     /* slang type name, or NULL for void */
-    Block *body;
+    Block *body;        /* NULL for 'extern fn' declarations */
     int is_pub;         /* exported from its package */
+    int is_extern;       /* 'extern fn': no body, calls the bare C symbol */
     int line;
 };
 
@@ -157,6 +158,9 @@ typedef struct {
     char **import_paths;/* 'import "path"' statements, in order */
     int nimports;
     int icap;
+    char **link_libs;   /* 'link "name"' statements, in order */
+    int nlinks;
+    int lcap;
 } Program;
 
 #endif /* SLANG_AST_H */

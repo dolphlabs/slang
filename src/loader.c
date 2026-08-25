@@ -147,6 +147,15 @@ static void merge_program(Package *pkg, Program *src, const char *fname) {
         dst->import_paths[dst->nimports++] = ipath;
     }
 
+    for (int i = 0; i < src->nlinks; i++) {
+        if (dst->nlinks == dst->lcap) {
+            dst->lcap = dst->lcap ? dst->lcap * 2 : 8;
+            dst->link_libs = (char **)xrealloc(
+                dst->link_libs, dst->lcap * sizeof(char *));
+        }
+        dst->link_libs[dst->nlinks++] = src->link_libs[i];
+    }
+
     /* top-level statements concatenate in deterministic file order */
     Block *d = dst->main_body;
     Block *s = src->main_body;
@@ -334,4 +343,31 @@ int load_packages(const char *main_file, PkgList *out) {
         load_error("cannot resolve directory of '%s'", main_file);
 
     return load_package_dir(&ld, dir_real);
+}
+
+char **collect_link_libs(PkgList *pkgs, int *out_count) {
+    char **out = NULL;
+    int n = 0, cap = 0;
+    for (int i = 0; i < pkgs->count; i++) {
+        Program *prog = pkgs->items[i].prog;
+        for (int j = 0; j < prog->nlinks; j++) {
+            const char *name = prog->link_libs[j];
+            int dup = 0;
+            for (int k = 0; k < n; k++) {
+                if (!strcmp(out[k], name)) {
+                    dup = 1;
+                    break;
+                }
+            }
+            if (dup)
+                continue;
+            if (n == cap) {
+                cap = cap ? cap * 2 : 8;
+                out = (char **)xrealloc(out, cap * sizeof(char *));
+            }
+            out[n++] = (char *)name;
+        }
+    }
+    *out_count = n;
+    return out;
 }

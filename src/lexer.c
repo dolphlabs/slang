@@ -249,6 +249,8 @@ Token lexer_next(Lexer *lx) {
         KW("as", T_KW_AS)
         KW("struct", T_KW_STRUCT)
         KW("impl", T_KW_IMPL)
+        KW("extern", T_KW_EXTERN)
+        KW("link", T_KW_LINK)
         KW("int", T_TY_INT)
         KW("float", T_TY_FLOAT)
         KW("str", T_TY_STR)
@@ -267,6 +269,7 @@ Token lexer_next(Lexer *lx) {
         KW("opt", T_TY_OPT)
         KW("result", T_TY_RESULT)
         KW("duration", T_TY_DURATION)
+        KW("rawptr", T_TY_RAWPTR)
 #undef KW
 
         t = make_token(T_IDENT, line);
@@ -367,6 +370,8 @@ const char *token_type_name(TokenType t) {
     case T_KW_AS:    return "'as'";
     case T_KW_STRUCT:return "'struct'";
     case T_KW_IMPL:  return "'impl'";
+    case T_KW_EXTERN:return "'extern'";
+    case T_KW_LINK:  return "'link'";
     case T_TY_INT:   return "'int'";
     case T_TY_FLOAT: return "'float'";
     case T_TY_STR:   return "'str'";
@@ -385,6 +390,7 @@ const char *token_type_name(TokenType t) {
     case T_TY_OPT:   return "'opt'";
     case T_TY_RESULT:return "'result'";
     case T_TY_DURATION: return "'duration'";
+    case T_TY_RAWPTR: return "'rawptr'";
     case T_PLUS:     return "'+'";
     case T_MINUS:    return "'-'";
     case T_STAR:     return "'*'";

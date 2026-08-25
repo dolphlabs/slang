@@ -65,3 +65,67 @@ Track progress top to bottom; tick items off as they land.
   - [x] TCP listener / dialer built on bytes + fixed ints
   - [x] Non-blocking I/O primitives
   - [x] Example: minimal HTTP server in slang
+
+## Tier 4 — C interop
+
+C only. C++ libraries are out of scope for the compiler itself — the
+documented path is to wrap them behind a hand-written `extern "C"`
+shim and consume that shim as a C library, same as any other extern
+fn below. No name-mangling/ABI work for C++ is planned.
+
+- [x] `extern fn` declarations
+  - [x] Parser: `extern fn name(params) -> ret;` (no body) at top level
+  - [x] Codegen: emit a matching C prototype, call the real symbol
+        directly — bypass slang's usual `sl_<pkg>_<name>` mangling
+  - [x] Existing scalar types marshal for free: `int`/`i8..u64`/`f32`/
+        `float`/`bool` already share their slang and C representations
+  - [x] `str` passes as `const char *` directly (zero-cost: that is
+        already `str`'s C representation). `bytes` does not
+        auto-decay — instead a `bytes_ptr(b: bytes) -> rawptr` builtin
+        exposes the raw buffer explicitly, paired with the existing
+        `len(b)`; kept 1:1 slang-param-to-C-param rather than
+        inventing implicit multi-arg expansion for one type
+  - [x] extern signatures are type-checked at the boundary: only
+        numeric types, `bool`, `str`, `bytes`, and `rawptr` may appear
+        as a param/return type (GC'd containers rejected with a clear
+        compile error, not a silent miscompile)
+
+- [x] `rawptr` opaque pointer type
+  - [x] Maps to `void *`; holds handles like `sqlite3*`/`FILE*`
+  - [x] Passable and comparable (`== nullptr` / `!= nullptr`) only —
+        no arithmetic, no field access, no dereference (rejected by
+        the existing generic type checks, no special-casing needed)
+  - [x] `nullptr` literal (reserved identifier, like `none`/`some`)
+  - [x] Not GC-owned: a `rawptr` returned from an extern call is
+        foreign memory; slang never frees it automatically
+  - [ ] Stretch, not required for v1: `ptr[T]` typed pointers and
+        `extern struct` layouts for passing C structs by value
+
+- [x] Linking
+  - [x] `link "name";` top-level directive (parsed like `import`),
+        appends `-lname` to the final `cc` invocation
+  - [x] Extra `-L`/`-I` search paths: rely on `LIBRARY_PATH`/`CPATH`
+        env vars that `cc` already honors; no new slangc flag needed
+        for v1
+  - [x] Library name restricted to a conservative charset at parse
+        time (letters, digits, `_-.+`) — it flows into a `system()`
+        call in main.c, so this closes a command-injection vector for
+        a hostile `link "...";` in third-party source
+
+- [x] Safety notes (document, don't silently paper over)
+  - [x] Boehm GC is conservative and generally sees pointers handed to
+        C, but a slang value whose only reference lives in memory the
+        GC can't scan could theoretically be collected while C still
+        holds it — keep a live slang-side reference for the duration
+        of any call that retains a pointer (documented in README)
+  - [x] Callback function pointers (C calling back into slang) are
+        out of scope for v1 (documented in README)
+
+- [x] Tests
+  - [x] A tiny hand-written C fixture library (`tests/ffi/lib.c`,
+        built by `tests/run_tests.sh` into a static archive) exercising
+        `extern fn` + `link` + `rawptr` + `bytes_ptr` + `nullptr` end
+        to end
+  - [x] Negative tests: undeclared extern symbol (link-time failure),
+        `rawptr` arithmetic, `rawptr` field access, a non-FFI-safe
+        extern param type, and a `link` name with shell metacharacters

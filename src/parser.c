@@ -2,6 +2,7 @@
 #include "ast.h"
 #include "parser.h"
 
+#include <ctype.h>
 #include <stdarg.h>
 
 typedef struct {
@@ -99,7 +100,7 @@ static void call_push_arg(Expr *call, Expr *arg) {
 
 static Expr *parse_expression(Parser *p);
 static const char *parse_type_name(Parser *p);
-static FuncDecl *parse_fn_decl(Parser *p);
+static FuncDecl *parse_fn_decl(Parser *p, int is_extern);
 
 static void list_push_elem(Expr *list, Expr *elem) {
     int n = list->as.list.nelems;
@@ -582,6 +583,9 @@ static const char *parse_type_name(Parser *p) {
     case T_TY_DURATION:
         advance(p);
         return "duration";
+    case T_TY_RAWPTR:
+        advance(p);
+        return "rawptr";
     case T_IDENT: {
         /* user-defined struct type: Name or pkg.Name */
         advance(p);
@@ -612,7 +616,8 @@ static const char *parse_type_name(Parser *p) {
     default:
         parse_error(tk,
                     "expected a type name (int, float, str, bool, bytes, "
-                    "i8..u64, f32, [T], map[K]V, or a struct name)");
+                    "i8..u64, f32, [T], map[K]V, opt[T], result[T,E], "
+                    "duration, rawptr, or a struct name)");
     }
     return NULL; /* unreachable */
 }
@@ -821,7 +826,7 @@ static Stmt *parse_impl_decl(Parser *p) {
         if (!check(p, T_KW_FN))
             parse_error(peek(p),
                         "only 'fn' declarations are allowed inside 'impl'");
-        FuncDecl *f = parse_fn_decl(p);
+        FuncDecl *f = parse_fn_decl(p, 0);
         funcs = (FuncDecl **)xrealloc(funcs, (n + 1) * sizeof(FuncDecl *));
         funcs[n++] = f;
     }
@@ -900,7 +905,7 @@ static Stmt *parse_statement(Parser *p) {
 
 /* ---- declarations ---- */
 
-static FuncDecl *parse_fn_decl(Parser *p) {
+static FuncDecl *parse_fn_decl(Parser *p, int is_extern) {
     Token *kw = advance(p); /* 'fn' */
     Token *name = expect(p, T_IDENT, "a function name");
     expect(p, T_LPAREN, "'('");
@@ -935,7 +940,12 @@ static FuncDecl *parse_fn_decl(Parser *p) {
     if (match(p, T_ARROW))
         f->ret_type = xstrdup(parse_type_name(p));
 
-    f->body = parse_block(p, 1);
+    if (is_extern) {
+        f->is_extern = 1;
+        expect(p, T_SEMI, "';'");
+    } else {
+        f->body = parse_block(p, 1);
+    }
     return f;
 }
 
@@ -954,6 +964,40 @@ static void parse_import(Parser *p, Program *prog) {
     Token *path = expect(p, T_STRING, "a package path string");
     expect(p, T_SEMI, "';'");
     program_push_import(prog, path->text);
+}
+
+static void program_push_link(Program *prog, char *name) {
+    if (prog->nlinks == prog->lcap) {
+        prog->lcap = prog->lcap ? prog->lcap * 2 : 8;
+        prog->link_libs = (char **)xrealloc(
+            prog->link_libs, prog->lcap * sizeof(char *));
+    }
+    prog->link_libs[prog->nlinks++] = name;
+}
+
+static int is_libname_char(char c) {
+    return isalnum((unsigned char)c) || c == '_' || c == '-' || c == '.' ||
+           c == '+';
+}
+
+/* link "name" ; -- appends '-lname' to the final linker invocation.
+ * The name is restricted to a conservative charset since it flows
+ * straight into a shell command line in main.c. */
+static void parse_link(Parser *p, Program *prog) {
+    Token *kw = advance(p); /* 'link' */
+    Token *name = expect(p, T_STRING, "a library name string");
+    if (!name->text[0])
+        parse_error(kw, "link: library name must not be empty");
+    for (const char *c = name->text; *c; c++) {
+        if (!is_libname_char(*c))
+            parse_error(kw,
+                        "link: invalid character '%c' in library name "
+                        "'%s' (only letters, digits, '_', '-', '.', '+' "
+                        "are allowed)",
+                        *c, name->text);
+    }
+    expect(p, T_SEMI, "';'");
+    program_push_link(prog, name->text);
 }
 
 Program *parse_program(Token *tokens, int ntokens) {
@@ -979,8 +1023,30 @@ Program *parse_program(Token *tokens, int ntokens) {
             continue;
         }
 
+        if (check(&p, T_KW_LINK)) {
+            if (is_pub)
+                parse_error(peek(&p), "'pub' cannot precede 'link'");
+            parse_link(&p, prog);
+            continue;
+        }
+
         if (check(&p, T_KW_FN)) {
-            FuncDecl *f = parse_fn_decl(&p);
+            FuncDecl *f = parse_fn_decl(&p, 0);
+            f->is_pub = is_pub;
+            if (prog->nfuncs == prog->fcap) {
+                prog->fcap = prog->fcap ? prog->fcap * 2 : 8;
+                prog->funcs = (FuncDecl **)xrealloc(
+                    prog->funcs, prog->fcap * sizeof(FuncDecl *));
+            }
+            prog->funcs[prog->nfuncs++] = f;
+            continue;
+        }
+
+        if (check(&p, T_KW_EXTERN)) {
+            advance(&p); /* 'extern' */
+            if (!check(&p, T_KW_FN))
+                parse_error(peek(&p), "expected 'fn' after 'extern'");
+            FuncDecl *f = parse_fn_decl(&p, 1);
             f->is_pub = is_pub;
             if (prog->nfuncs == prog->fcap) {
                 prog->fcap = prog->fcap ? prog->fcap * 2 : 8;

@@ -127,10 +127,22 @@ int main(int argc, char **argv) {
         pclose(pc);
     }
 
-    char cmd[2048];
-    snprintf(cmd, sizeof(cmd), "cc %s -o %s %s", gen_path, outname,
-             gcflags);
-    int status = system(cmd);
+    int nlinks = 0;
+    char **link_libs = collect_link_libs(&pkgs, &nlinks);
+
+    StrBuf cmd;
+    sb_init(&cmd);
+    sb_append(&cmd, "cc ");
+    sb_append(&cmd, gen_path);
+    sb_append(&cmd, " -o ");
+    sb_append(&cmd, outname);
+    sb_append(&cmd, " ");
+    sb_append(&cmd, gcflags);
+    for (int i = 0; i < nlinks; i++) {
+        sb_append(&cmd, " -l");
+        sb_append(&cmd, link_libs[i]);
+    }
+    int status = system(cmd.data);
     if (status != 0) {
         fputs("slang: C compilation failed; generated code kept at ", stderr);
         fputs(gen_path, stderr);

@@ -116,6 +116,7 @@ static const char *map_type(const char *t) {
     if (!strcmp(t, "u64"))    return "uint64_t";
     if (!strcmp(t, "f32"))    return "float";
     if (!strcmp(t, "duration")) return "int64_t";
+    if (!strcmp(t, "rawptr")) return "void *";
     if (t[0] == '[')          return "sl_arr *";
     return NULL;
 }
@@ -147,8 +148,24 @@ static int is_flt(const char *t) {
 static int is_num(const char *t) { return is_int(t) || is_flt(t); }
 static int is_str(const char *t) { return !strcmp(t, "str"); }
 static int is_bytes(const char *t) { return !strcmp(t, "bytes"); }
+static int is_rawptr(const char *t) { return !strcmp(t, "rawptr"); }
 static int is_arr(const char *t) { return t[0] == '['; }
 static int is_map(const char *t) { return !strncmp(t, "map[", 4); }
+
+/* extern fn boundary: only types with an unambiguous, stable C
+ * representation may cross into/out of foreign code. GC'd containers
+ * (opt/result/map/struct/array) are deliberately excluded -- handing
+ * their internal layout to arbitrary C would be unsafe and pointless. */
+static void check_extern_type(const char *t, int line, const char *what) {
+    if (is_num(t) || is_str(t) || is_bytes(t) || !strcmp(t, "bool") ||
+        is_rawptr(t))
+        return;
+    cg_error(line,
+             "extern fn %s type '%s' is not FFI-safe; only numeric "
+             "types, bool, str, bytes, and rawptr may cross an extern "
+             "boundary",
+             what, t);
+}
 
 /* "map[K]V" -> K and V (heap-allocated). Caller must pass a map type.
  * Keys are scalars (no nested ']'), values may be any type. */
@@ -336,6 +353,7 @@ typedef struct {
     const char **param_slang;
     int nparams;
     int is_pub;
+    int is_extern;            /* 'extern fn': calls the bare C symbol */
     const char *method_of;   /* canonical struct name for methods, else NULL */
     int line;
 } FuncSig;
@@ -731,7 +749,8 @@ static int is_builtin_name(const char *name) {
            !strcmp(name, "from_be") || !strcmp(name, "has") ||
            !strcmp(name, "del") || !strcmp(name, "exit") ||
            !strcmp(name, "some") || !strcmp(name, "none") ||
-           !strcmp(name, "ok") || !strcmp(name, "err");
+           !strcmp(name, "ok") || !strcmp(name, "err") ||
+           !strcmp(name, "nullptr") || !strcmp(name, "bytes_ptr");
 }
 
 /* Find a method `name` declared (via impl) for struct `sd`. */
@@ -756,6 +775,8 @@ static const char *infer_ident_name(CG *cg, const char *name, int line) {
                      "binding, e.g. let x: opt[int] = none");
         return cg->expect;
     }
+    if (!strcmp(name, "nullptr"))
+        return "rawptr";
     VarSym *v = var_find(cg, name);
     if (v)
         return v->slang;
@@ -1009,6 +1030,14 @@ static const char *infer_call(CG *cg, Expr *e) {
             cg_error(e->line, "to_bytes() expects a str (got %s)", t);
         return "bytes";
     }
+    if (!strcmp(name, "bytes_ptr")) {
+        if (n != 1)
+            cg_error(e->line, "bytes_ptr() takes exactly one argument");
+        const char *t = infer_type(cg, e->as.call.args[0]);
+        if (!is_bytes(t))
+            cg_error(e->line, "bytes_ptr() expects bytes (got %s)", t);
+        return "rawptr";
+    }
     if (!strcmp(name, "to_le") || !strcmp(name, "to_be")) {
         if (n != 1)
             cg_error(e->line, "%s() takes exactly one argument", name);
@@ -1168,6 +1197,9 @@ static const char *infer_binary(CG *cg, Expr *e) {
             return "bool";
         if ((!strcmp(op, "==") || !strcmp(op, "!=")) && is_bytes(lt) &&
             is_bytes(rt))
+            return "bool";
+        if ((!strcmp(op, "==") || !strcmp(op, "!=")) && is_rawptr(lt) &&
+            is_rawptr(rt))
             return "bool";
         cg_error(e->line, "cannot compare %s and %s", lt, rt);
     }
@@ -1528,6 +1560,10 @@ static char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *a = gen_expr(cg, e->as.call.args[0]);
         return xasprintf("sl_bytes_from_str(%s)", a);
     }
+    if (!strcmp(name, "bytes_ptr")) {
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        return xasprintf("((void *)(%s)->ptr)", a);
+    }
     if (!strcmp(name, "to_le") || !strcmp(name, "to_be")) {
         const char *t = infer_type(cg, e->as.call.args[0]);
         char *a = gen_expr(cg, e->as.call.args[0]);
@@ -1682,7 +1718,8 @@ static char *gen_call(CG *cg, Expr *e) {
 
     StrBuf sb;
     sb_init(&sb);
-    char *mangled = mangle_func(sig->pkg, sig->name);
+    char *mangled = sig->is_extern ? xstrdup(sig->name)
+                                   : mangle_func(sig->pkg, sig->name);
     sb_append(&sb, mangled);
     sb_putc(&sb, '(');
     int argi = 0;
@@ -1872,6 +1909,8 @@ static char *gen_expr(CG *cg, Expr *e) {
                 "_sl_n->has = false; _sl_n; })",
                 cn, cn);
         }
+        if (!strcmp(e->as.ident.name, "nullptr"))
+            return xstrdup("((void *)0)");
         return gen_ident_name(cg, e->as.ident.name, e->line);
     case EX_UNARY: {
         char *o = gen_expr(cg, e->as.unary.operand);
@@ -2892,6 +2931,7 @@ static void sig_register_raw(CG *cg, Package *p, FuncDecl *f,
     sig.name = f->name;
     sig.pkg = p->name;
     sig.is_pub = f->is_pub;
+    sig.is_extern = f->is_extern;
     sig.ret_slang = f->ret_type;
     sig.nparams = f->nparams;
     sig.method_of = method_of;
@@ -2995,11 +3035,17 @@ static void collect_decls(CG *cg, Package *pkgs, int npkgs) {
     for (i = 0; i < cg->sigs.count; i++) {
         FuncSig *sig = &cg->sigs.items[i];
         cg->cur_pkg = sig->pkg;
-        for (j = 0; j < sig->nparams; j++)
+        for (j = 0; j < sig->nparams; j++) {
             ((char **)sig->param_slang)[j] =
                 (char *)canon_type(cg, sig->param_slang[j], sig->line);
+            if (sig->is_extern)
+                check_extern_type(sig->param_slang[j], sig->line,
+                                  "parameter");
+        }
         if (sig->ret_slang)
             sig->ret_slang = canon_type(cg, sig->ret_slang, sig->line);
+        if (sig->is_extern && sig->ret_slang)
+            check_extern_type(sig->ret_slang, sig->line, "return");
     }
 }
 
@@ -3385,6 +3431,26 @@ static void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
             FuncSig *sig = sig_find_in(cg, pkgs[i].name, f->name);
             StrBuf params;
             sb_init(&params);
+            if (f->is_extern) {
+                /* no body defined here, so the real symbol just needs
+                 * a matching prototype for the C compiler + linker;
+                 * parameter names are irrelevant in a prototype */
+                if (sig->nparams == 0) {
+                    sb_append(&params, "void");
+                } else {
+                    for (int m = 0; m < sig->nparams; m++) {
+                        if (m)
+                            sb_append(&params, ", ");
+                        sb_append(&params, ctype_of(cg, sig->param_slang[m]));
+                    }
+                }
+                emit_line(cg, "extern %s %s(%s);",
+                          sig->ret_slang ? ctype_of(cg, sig->ret_slang)
+                                         : "void",
+                          f->name, params.data);
+                any = 1;
+                continue;
+            }
             if (f->nparams == 0) {
                 sb_append(&params, "void");
             } else {
@@ -3492,8 +3558,11 @@ static void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
 
     for (int i = 0; i < npkgs; i++) {
         Package *p = &pkgs[i];
-        for (int j = 0; j < p->prog->nfuncs; j++)
+        for (int j = 0; j < p->prog->nfuncs; j++) {
+            if (p->prog->funcs[j]->is_extern)
+                continue; /* declared only; no body to emit */
             gen_function(cg, p, p->prog->funcs[j]);
+        }
         /* methods from impl blocks */
         Block *body = p->prog->main_body;
         for (int j = 0; j < body->count; j++) {
