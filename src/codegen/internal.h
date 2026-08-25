@@ -142,6 +142,23 @@ typedef struct {
     int cap;
 } SpawnTable;
 
+/* One json.decode/json.encode codec per distinct composite slang type
+ * (struct/opt/list/map) reached from a json.decode or json.encode
+ * call site. Scalar leaf types go through fixed runtime helpers
+ * instead (see json_dec_fn/json_enc_fn in json.c) so they never need
+ * an entry here. */
+typedef struct {
+    char *slang_type; /* canonical slang type this codec is for */
+    char *dec_name;   /* C decode function name, or NULL if unneeded */
+    char *enc_name;   /* C encode function name, or NULL if unneeded */
+} JsonInst;
+
+typedef struct {
+    JsonInst *items;
+    int count;
+    int cap;
+} JsonTable;
+
 struct CG {
     StrBuf *out;
     int indent;
@@ -153,6 +170,7 @@ struct CG {
     OptTable opts;
     ResTable res;
     SpawnTable spawns;
+    JsonTable json;
     const char *expect; /* expected type while inferring none/ok/err */
     const char *cur_ret;  /* slang return type of enclosing function */
     const char *cur_pkg;
@@ -161,6 +179,7 @@ struct CG {
     char **nat_pkgs; /* names of natively-implemented imported packages */
     int nnat;
     int want_tls; /* set once a net.tls_* function is type-checked */
+    int want_json; /* set once a json.decode/json.encode is type-checked */
 };
 
 /* C typedef name for a distinct opt[T] instantiation. */
@@ -199,6 +218,8 @@ extern const char *NET_RUNTIME[];
 extern const int NET_RUNTIME_LEN;
 extern const char *TLS_RUNTIME[];
 extern const int TLS_RUNTIME_LEN;
+extern const char *JSON_RUNTIME[];
+extern const int JSON_RUNTIME_LEN;
 
 /* ------------------------------------------------------------------ */
 /* Functions (declarations generated from every former 'static' def)   */
@@ -313,5 +334,30 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs);
 void gen_function(CG *cg, Package *p, FuncDecl *f);
 void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
                               int main_index);
+
+/* ------------------------------------------------------------------ */
+/* json.decode / json.encode (src/codegen/json.c)                      */
+/* ------------------------------------------------------------------ */
+
+/* Returns the C function name that decodes a JSON value into slang
+ * type `t` (a canonical type, e.g. from cg->expect). For scalar
+ * types this is one of the fixed JSON_RUNTIME helpers; for composite
+ * types (struct/opt/list/map[str,_]) it registers (and recursively
+ * discovers) a monomorphized codec, to be emitted later by
+ * emit_json_codecs. Every function has signature
+ * 'bool NAME(sl_json_val *v, <ctype_of t> *out, char **err)'.
+ * cg_error()s if `t` cannot be represented in JSON (rawptr, chan[T],
+ * result[T,E], or a map with a non-str key). */
+const char *json_dec_fn(CG *cg, const char *t, int line);
+
+/* Same as json_dec_fn but for encoding: 'void NAME(<ctype_of t> v,
+ * sl_json_sb *out)'. */
+const char *json_enc_fn(CG *cg, const char *t, int line);
+
+/* Emits every composite codec registered in cg->json (prototypes
+ * first, then bodies, so mutually-recursive struct codecs don't need
+ * emission-order tracking). Must run after emit_struct_types and
+ * emit_opt_res_types, since codec signatures reference both. */
+void emit_json_codecs(CG *cg);
 
 #endif /* SLANG_CODEGEN_INTERNAL_H */
