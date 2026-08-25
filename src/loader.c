@@ -162,10 +162,57 @@ static void merge_program(Package *pkg, Program *src, const char *fname) {
 
 static int load_package_dir(Loader *ld, const char *real);
 
+/* Built-in packages implemented natively by the code generator. */
+static const char *NATIVE_PKGS[] = {"time", "net", NULL};
+
+/* If the import path refers to a built-in native package (and there is
+ * no local directory of the same name), synthesize it. */
+static int try_load_native(Loader *ld, const char *ipath,
+                           const char *from_pkg) {
+    char *base = path_base(ipath);
+    int is_native = 0;
+    for (int i = 0; NATIVE_PKGS[i]; i++) {
+        if (!strcmp(base, NATIVE_PKGS[i]))
+            is_native = 1;
+    }
+    if (!is_native)
+        return -1;
+
+    /* a user directory with this name takes precedence */
+    struct stat st;
+    if (stat(base, &st) == 0 && S_ISDIR(st.st_mode))
+        return -1;
+
+    for (int i = 0; i < ld->pkgs->count; i++) {
+        if (ld->pkgs->items[i].native &&
+            !strcmp(ld->pkgs->items[i].name, base))
+            return i; /* already synthesized */
+    }
+
+    Package p;
+    p.name = base;
+    p.path = xasprintf("<builtin:%s>", base);
+    p.prog = new_program();
+    p.native = 1;
+
+    if (ld->pkgs->count == ld->pkgs->cap) {
+        ld->pkgs->cap = ld->pkgs->cap ? ld->pkgs->cap * 2 : 8;
+        ld->pkgs->items =
+            (Package *)xrealloc(ld->pkgs->items,
+                                ld->pkgs->cap * sizeof(Package));
+    }
+    ld->pkgs->items[ld->pkgs->count++] = p;
+    return ld->pkgs->count - 1;
+}
+
 /* Resolve one import path relative to the importing package directory
  * and load that package. */
 static void load_import(Loader *ld, const char *from_dir,
                         const char *from_pkg, const char *ipath) {
+    int nat = try_load_native(ld, ipath, from_pkg);
+    if (nat >= 0)
+        return;
+
     char target[PATH_MAX];
     snprintf(target, sizeof(target), "%s/%s", from_dir, ipath);
 
@@ -225,6 +272,7 @@ static int load_package_dir(Loader *ld, const char *real) {
     p.name = path_base(real);
     p.path = xstrdup(real);
     p.prog = new_program();
+    p.native = 0;
 
     for (int i = 0; i < nnames; i++) {
         char fpath[PATH_MAX];

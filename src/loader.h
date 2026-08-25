@@ -9,6 +9,8 @@ typedef struct {
     char *name;    /* package name: base name of its directory */
     char *path;    /* canonical (realpath) directory of the package */
     Program *prog; /* merged AST of all files in the directory */
+    int native;    /* 1 = built-in package implemented by codegen
+                    * ("time", "net"); prog is empty */
 } Package;
 
 typedef struct {

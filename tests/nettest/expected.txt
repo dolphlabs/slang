@@ -1,0 +1,4 @@
+sent 4 bytes
+echo payload ok
+would-block detected
+net ok

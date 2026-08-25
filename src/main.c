@@ -143,7 +143,11 @@ int main(int argc, char **argv) {
 
     if (run) {
         char rcmd[1100];
-        snprintf(rcmd, sizeof(rcmd), "./%s", outname);
+        /* a bare name (no '/') needs './' to run without relying on
+         * PATH; a name that already contains a path (relative or
+         * absolute, e.g. from -o /tmp/foo) must be used as-is */
+        snprintf(rcmd, sizeof(rcmd), "%s%s", strchr(outname, '/') ? "" : "./",
+                 outname);
         status = system(rcmd);
         return status == 0 ? 0 : 1;
     }

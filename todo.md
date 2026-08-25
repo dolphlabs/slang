@@ -50,18 +50,18 @@ Track progress top to bottom; tick items off as they land.
 
 ## Tier 3 — reliability & differentiators
 
-- [ ] Option / Result types
-  - [ ] `Option[T]` with `some(v)` / `none`
-  - [ ] `Result[T, E]` with `ok(v)` / `err(e)`
-  - [ ] Null-coalescing operator `??`
-  - [ ] Pattern-friendly unwrapping (`guard let x = opt else { ... }`)
+- [x] Option / Result types
+  - [x] `Option[T]` with `some(v)` / `none`
+  - [x] `Result[T, E]` with `ok(v)` / `err(e)`
+  - [x] Null-coalescing operator `??`
+  - [x] Pattern-friendly unwrapping (`guard let x = opt else { ... }`)
 
-- [ ] Time types
-  - [ ] `time.Duration` as first-class value
-  - [ ] Monotonic clock + wall-clock timestamps
-  - [ ] Timeout arithmetic for future net package
+- [x] Time types
+  - [x] `time.Duration` as first-class value
+  - [x] Monotonic clock + wall-clock timestamps
+  - [x] Timeout arithmetic for future net package
 
-- [ ] `net` standard package
-  - [ ] TCP listener / dialer built on bytes + fixed ints
-  - [ ] Non-blocking I/O primitives
-  - [ ] Example: minimal HTTP server in slang
+- [x] `net` standard package
+  - [x] TCP listener / dialer built on bytes + fixed ints
+  - [x] Non-blocking I/O primitives
+  - [x] Example: minimal HTTP server in slang

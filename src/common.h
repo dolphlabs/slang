@@ -36,6 +36,20 @@ static inline char *xstrdup(const char *s) {
     return p;
 }
 
+/* Heap-allocated sprintf helper shared by the compiler stages. */
+static inline char *xasprintf(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    va_list ap2;
+    va_copy(ap2, ap);
+    int n = vsnprintf(NULL, 0, fmt, ap);
+    va_end(ap);
+    char *buf = (char *)xmalloc((size_t)n + 1);
+    vsnprintf(buf, (size_t)n + 1, fmt, ap2);
+    va_end(ap2);
+    return buf;
+}
+
 /* Growable string buffer used to build the generated C source. */
 typedef struct {
     char *data;

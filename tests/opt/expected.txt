@@ -1,0 +1,12 @@
+true
+4
+rejected
+7
+4
+-1
+7
+-1
+5
+-1
+fallback
+recovered

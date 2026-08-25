@@ -264,6 +264,9 @@ Token lexer_next(Lexer *lx) {
         KW("u64", T_TY_U64)
         KW("f32", T_TY_F32)
         KW("map", T_TY_MAP)
+        KW("opt", T_TY_OPT)
+        KW("result", T_TY_RESULT)
+        KW("duration", T_TY_DURATION)
 #undef KW
 
         t = make_token(T_IDENT, line);
@@ -309,6 +312,7 @@ Token lexer_next(Lexer *lx) {
     if (c == '>' && src[lx->pos + 1] == '=') { lx->pos += 2; return make_token(T_GTE, line); }
     if (c == '&' && src[lx->pos + 1] == '&') { lx->pos += 2; return make_token(T_ANDAND, line); }
     if (c == '|' && src[lx->pos + 1] == '|') { lx->pos += 2; return make_token(T_OROR, line); }
+    if (c == '?' && src[lx->pos + 1] == '?') { lx->pos += 2; return make_token(T_QQ, line); }
     if (c == '-' && src[lx->pos + 1] == '>') { lx->pos += 2; return make_token(T_ARROW, line); }
 
     /* single-char tokens */
@@ -378,6 +382,9 @@ const char *token_type_name(TokenType t) {
     case T_TY_U64:   return "'u64'";
     case T_TY_F32:   return "'f32'";
     case T_TY_MAP:   return "'map'";
+    case T_TY_OPT:   return "'opt'";
+    case T_TY_RESULT:return "'result'";
+    case T_TY_DURATION: return "'duration'";
     case T_PLUS:     return "'+'";
     case T_MINUS:    return "'-'";
     case T_STAR:     return "'*'";
@@ -391,6 +398,7 @@ const char *token_type_name(TokenType t) {
     case T_GTE:      return "'>='";
     case T_ANDAND:   return "'&&'";
     case T_OROR:     return "'||'";
+    case T_QQ:       return "'??'";
     case T_BANG:     return "'!'";
     case T_ASSIGN:   return "'='";
     case T_LPAREN:   return "'('";

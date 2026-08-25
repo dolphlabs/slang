@@ -28,6 +28,7 @@ typedef struct Expr Expr;
 struct Expr {
     ExprKind kind;
     int line;
+    const char *inf_ty; /* memoized slang type, filled by codegen inference */
     union {
         struct { long long value; } int_lit;
         struct { double value; } float_lit;
@@ -72,6 +73,7 @@ typedef enum {
     ST_FOR_IN,
     ST_RETURN,
     ST_EXPR,
+    ST_GUARD_LET, /* guard let x = opt_expr else { ... } */
     ST_STRUCT, /* struct Name { field: T, ... } (top level only) */
     ST_IMPL    /* impl Name { fn ... } blocks (top level only) */
 } StmtKind;
@@ -115,6 +117,11 @@ struct Stmt {
         } for_in;
         struct { Expr *value; } ret; /* value may be NULL */
         struct { Expr *expr; } expr_stmt;
+        struct {
+            char *name;  /* variable to bind the unwrapped value to */
+            Expr *expr;  /* expression of type opt[T] or result[T, E] */
+            Block *body; /* else block: must exit (return/break/...) */
+        } guard_let;
         struct {
             char *name;
             int is_pub;

@@ -44,7 +44,10 @@ typedef enum {
     T_TY_U32,
     T_TY_U64,
     T_TY_F32,
-    T_TY_MAP, /* 'map' (always followed by [K]V) */
+    T_TY_MAP,      /* 'map' (always followed by [K]V) */
+    T_TY_OPT,      /* 'opt' (always followed by [T]) */
+    T_TY_RESULT,   /* 'result' (always followed by [T, E]) */
+    T_TY_DURATION, /* 'duration': nanoseconds since an arbitrary epoch */
 
     /* operators */
     T_PLUS,
@@ -60,6 +63,7 @@ typedef enum {
     T_GTE,
     T_ANDAND,
     T_OROR,
+    T_QQ, /* '??' null-coalescing */
     T_BANG,
     T_ASSIGN,
 

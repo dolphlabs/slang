@@ -115,6 +115,9 @@ no escaping).
 - `to_bytes(s)` — convert a `str` to its raw bytes
 - `to_le(n)` / `to_be(n)` — integer to 8-byte little/big-endian `bytes`
 - `from_le(b)` / `from_be(b)` — 8-byte little/big-endian `bytes` to integer
+- `exit(code)` — terminate the process immediately with the given status
+- `some(v)` / `none` / `ok(v)` / `err(e)` — construct `opt`/`result` values
+  (see below)
 
 ### Types
 
@@ -131,6 +134,9 @@ no escaping).
 | `[T]`      | `sl_arr *`  | growable array of T            |
 | `map[K]V`  | `sl_map *`  | insertion-ordered hash map     |
 | struct     | `sl_st_* *` | user-defined record (GC'd)     |
+| `opt[T]`   | `sl_opt_* *` | optional value: `some(v)` / `none` |
+| `result[T,E]` | `sl_res_* *` | fallible value: `ok(v)` / `err(e)` |
+| `duration` | `int64_t`   | nanosecond count (see `time`)  |
 
 #### Numeric conversion rules
 
@@ -240,6 +246,90 @@ checked. Methods live in top-level `impl Name { ... }` blocks; mark a
 method `pub fn` to export it to importing packages. Structs are
 heap-allocated and garbage-collected; assignment shares references.
 
+#### Option / Result
+
+```slang
+fn div10(n: int) -> opt[int] {
+    if n % 10 == 0 { return some(n / 10); }
+    return none;
+}
+
+fn parse_small(s: str) -> result[i32, str] {
+    if s == "big" { return err("value too large"); }
+    return ok(7);
+}
+
+// guard let unwraps the happy path and binds it for the rest of the
+// block; the else branch must exit (return, or exit()) since the
+// bound name has no value to fall back to
+fn safe_div(n: int) -> int {
+    guard let v = div10(n) else {
+        return -1;
+    }
+    return v;
+}
+
+// ?? recovers from none / err with a fallback value
+println(div10(41) ?? -1);              // -1 (none)
+println(parse_small("big") ?? -1);     // -1 (err)
+
+// bare 'none' / 'err(...)' need an annotated binding to infer their
+// other type parameter
+let nothing: opt[str] = none;
+let bad: result[str, str] = err("boom");
+```
+
+`opt[T]` and `result[T, E]` are monomorphized per distinct type
+argument (one C struct per instantiation actually used). Constructing
+`none`/`err(...)` without enough context to infer the missing type
+parameter is a compile error.
+
+## Standard packages
+
+`time` and `net` are compiler-provided native packages — no source
+files, just `import "time";` / `import "net";` like any other package.
+
+#### `time`
+
+```slang
+import "time";
+
+let t0 = time.mono();     // monotonic clock; a `duration` (int64 ns)
+time.sleep(20000000);     // sleep for a duration (ns)
+let elapsed = time.mono() - t0;   // duration arithmetic
+let deadline = time.mono() + 5000000;  // timeout math for net calls
+
+let wall = time.wall();   // unix epoch time in nanoseconds
+```
+
+#### `net`
+
+TCP listener/dialer built on `bytes` and fixed-width ints; every
+fallible call returns a `result[_, str]` unwrapped with `guard let`.
+
+```slang
+import "net";
+
+let lr: result[i32, str] = net.listen(8080);   // 0 = ephemeral port
+guard let lfd = lr else { exit(1); }
+
+let pr: result[i32, str] = net.port(lfd);      // assigned port number
+
+let ar: result[i32, str] = net.accept(lfd);    // blocks until a peer connects
+guard let cfd = ar else { exit(1); }
+
+net.send(cfd, b"hello");
+let rr: result[bytes, str] = net.recv(cfd, 4096);
+let data: bytes = rr ?? b"";
+
+net.nonblock(cfd);                              // switch to non-blocking mode
+let wr: result[bytes, str] = net.recv(cfd, 16); // "would block" err if idle
+net.close(cfd);
+```
+
+See `examples/httpd/` for a minimal HTTP server built entirely on
+these primitives.
+
 ## Packages (Go/Odin style)
 
 A **package is a directory**: every `.sl` file inside it is compiled
@@ -324,6 +414,7 @@ src/
   codegen.h/.c type checking + C emission
   main.c       driver: flags, invokes cc
 examples/      one directory per example program
+tests/         one directory per test case; run via `tests/run_tests.sh`
 Makefile       build/test/clean
 ```
 
@@ -337,7 +428,8 @@ Makefile       build/test/clean
 - Package globals require constant-literal initializers.
 - Implicit returns only apply to the last statement of a function
   body; `if` and `{}` blocks are statements, not expressions yet.
-- No closures or error handling yet.
+- No closures, and no `break`/`continue` — restructure a loop body
+  into a helper function and `return` early instead.
 - Package-level lists are not supported yet (scalars and bytes are).
 - Map keys are limited to integers, `str`, and `bool`.
 
@@ -362,6 +454,6 @@ What this means in practice:
 - Block scoping and shadowing
 - If/block expressions (`let max = if a > b { a } else { b }`)
 - Range `.step(n)`
-- Option/Result types with `??`
+- `break` / `continue`
 - Import aliases (`import "x" as y`)
 - A bytecode VM mode for fast iteration without invoking `cc`

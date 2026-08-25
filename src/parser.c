@@ -422,7 +422,18 @@ static Expr *parse_or(Parser *p) {
     return lhs;
 }
 
-static Expr *parse_expression(Parser *p) { return parse_or(p); }
+/* null-coalescing: binds tighter than ||, right-associative */
+static Expr *parse_coalesce(Parser *p) {
+    Expr *lhs = parse_or(p);
+    if (check(p, T_QQ)) {
+        Token *op = advance(p);
+        Expr *rhs = parse_coalesce(p);
+        lhs = make_binary(xstrdup("??"), lhs, rhs, op->line);
+    }
+    return lhs;
+}
+
+static Expr *parse_expression(Parser *p) { return parse_coalesce(p); }
 
 /* Parse an expression embedded in a string interpolation. The source
  * substring is lexed and parsed independently. */
@@ -538,6 +549,39 @@ static const char *parse_type_name(Parser *p) {
         sb_append(&sb, v);
         return sb.data;
     }
+    case T_TY_OPT: {
+        /* opt[T] */
+        advance(p);
+        expect(p, T_LBRACKET, "'[' after 'opt'");
+        const char *t = parse_type_name(p);
+        expect(p, T_RBRACKET, "']' to close opt type");
+        StrBuf sb;
+        sb_init(&sb);
+        sb_append(&sb, "opt[");
+        sb_append(&sb, t);
+        sb_putc(&sb, ']');
+        return sb.data;
+    }
+    case T_TY_RESULT: {
+        /* result[T, E] */
+        advance(p);
+        expect(p, T_LBRACKET, "'[' after 'result'");
+        const char *t = parse_type_name(p);
+        expect(p, T_COMMA, "',' between value and error types");
+        const char *e = parse_type_name(p);
+        expect(p, T_RBRACKET, "']' to close result type");
+        StrBuf sb;
+        sb_init(&sb);
+        sb_append(&sb, "result[");
+        sb_append(&sb, t);
+        sb_append(&sb, ",");
+        sb_append(&sb, e);
+        sb_putc(&sb, ']');
+        return sb.data;
+    }
+    case T_TY_DURATION:
+        advance(p);
+        return "duration";
     case T_IDENT: {
         /* user-defined struct type: Name or pkg.Name */
         advance(p);
@@ -645,9 +689,27 @@ static Stmt *parse_while_stmt(Parser *p) {
     return s;
 }
 
-/* guard <cond> else { ... }  ==  if !<cond> { ... } */
+/* guard <cond> else { ... }  ==  if !<cond> { ... }
+ * guard let <name> = <expr> else { ... } — unwrap an opt/result,
+ * binding the value; the else block must exit (return/break/...) */
 static Stmt *parse_guard_stmt(Parser *p) {
     Token *kw = advance(p);
+
+    if (check(p, T_KW_LET)) {
+        advance(p); /* 'let' */
+        Token *name = expect(p, T_IDENT, "a variable name");
+        expect(p, T_ASSIGN, "'='");
+        Expr *expr = parse_expression(p);
+        expect(p, T_KW_ELSE, "'else'");
+        Block *body = parse_block(p, 0);
+
+        Stmt *s = new_stmt(ST_GUARD_LET, kw->line);
+        s->as.guard_let.name = name->text;
+        s->as.guard_let.expr = expr;
+        s->as.guard_let.body = body;
+        return s;
+    }
+
     Expr *cond = parse_expression(p);
     expect(p, T_KW_ELSE, "'else'");
     Block *body = parse_block(p, 0);

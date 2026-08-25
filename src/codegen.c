@@ -25,18 +25,7 @@ static void cg_error(int line, const char *fmt, ...) {
 /* Small utilities                                                     */
 /* ------------------------------------------------------------------ */
 
-static char *xasprintf(const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    va_list ap2;
-    va_copy(ap2, ap);
-    int n = vsnprintf(NULL, 0, fmt, ap);
-    va_end(ap);
-    char *buf = (char *)xmalloc((size_t)n + 1);
-    vsnprintf(buf, (size_t)n + 1, fmt, ap2);
-    va_end(ap2);
-    return buf;
-}
+static char *sanitize_pkg(const char *name);
 
 static void sb_putc(StrBuf *sb, char c) { sb_append_n(sb, &c, 1); }
 
@@ -126,6 +115,7 @@ static const char *map_type(const char *t) {
     if (!strcmp(t, "u32"))    return "uint32_t";
     if (!strcmp(t, "u64"))    return "uint64_t";
     if (!strcmp(t, "f32"))    return "float";
+    if (!strcmp(t, "duration")) return "int64_t";
     if (t[0] == '[')          return "sl_arr *";
     return NULL;
 }
@@ -133,12 +123,14 @@ static const char *map_type(const char *t) {
 static int is_int(const char *t) {
     return !strcmp(t, "int") || !strcmp(t, "i8") || !strcmp(t, "i16") ||
            !strcmp(t, "i32") || !strcmp(t, "i64") || !strcmp(t, "u8") ||
-           !strcmp(t, "u16") || !strcmp(t, "u32") || !strcmp(t, "u64");
+           !strcmp(t, "u16") || !strcmp(t, "u32") || !strcmp(t, "u64") ||
+           !strcmp(t, "duration");
 }
 
 static int is_signed_int(const char *t) {
     return !strcmp(t, "int") || !strcmp(t, "i8") || !strcmp(t, "i16") ||
-           !strcmp(t, "i32") || !strcmp(t, "i64");
+           !strcmp(t, "i32") || !strcmp(t, "i64") ||
+           !strcmp(t, "duration");
 }
 
 static int int_rank(const char *t) {
@@ -173,6 +165,33 @@ static void map_kv(const char *t, char **k, char **v) {
 /* Valid map key types: integers, str, bool. */
 static int is_map_key(const char *t) {
     return is_int(t) || is_str(t) || !strcmp(t, "bool");
+}
+
+static int is_opt(const char *t) { return !strncmp(t, "opt[", 4); }
+static int is_result(const char *t) { return !strncmp(t, "result[", 7); }
+
+/* "opt[T]" -> T (heap-allocated). Caller must pass an opt type. */
+static char *opt_inner(const char *t) {
+    size_t n = strlen(t);
+    char *inner = (char *)xmalloc(n - 4);
+    memcpy(inner, t + 4, n - 5);
+    inner[n - 5] = '\0';
+    return inner;
+}
+
+/* "result[T,E]" -> T and E (heap-allocated). */
+static void result_te(const char *t, char **tv, char **ev) {
+    const char *comma = strchr(t + 7, ',');
+    size_t tl = (size_t)(comma - (t + 7));
+    char *a = (char *)xmalloc(tl + 1);
+    memcpy(a, t + 7, tl);
+    a[tl] = '\0';
+    *tv = a;
+    size_t el = strlen(comma + 1) - 1; /* strip trailing ']' */
+    char *b = (char *)xmalloc(el + 1);
+    memcpy(b, comma + 1, el);
+    b[el] = '\0';
+    *ev = b;
 }
 
 /* "[T]" -> "T" (heap-allocated). Caller must pass an array type. */
@@ -354,6 +373,31 @@ typedef struct {
     int cap;
 } GlobTable;
 
+/* Monomorphized instantiations of the generic option/result types:
+ * one C struct per distinct set of type parameters used. */
+typedef struct {
+    char *inner; /* canonical slang type T of opt[T] */
+    char *cname; /* C typedef name, e.g. sl_opt_str */
+} OptInst;
+
+typedef struct {
+    OptInst *items;
+    int count;
+    int cap;
+} OptTable;
+
+typedef struct {
+    char *tv;    /* canonical slang value type T of result[T,E] */
+    char *te;    /* canonical slang error type E */
+    char *cname; /* C typedef name, e.g. sl_res_int_str */
+} ResInst;
+
+typedef struct {
+    ResInst *items;
+    int count;
+    int cap;
+} ResTable;
+
 struct CG {
     StrBuf *out;
     int indent;
@@ -362,11 +406,53 @@ struct CG {
     GlobTable globs;
     ImportTable imports;
     StructTable structs;
+    OptTable opts;
+    ResTable res;
+    const char *expect; /* expected type while inferring none/ok/err */
     const char *cur_ret;  /* slang return type of enclosing function */
     const char *cur_pkg;
     int in_function;
     int tmp_id;
+    char **nat_pkgs; /* names of natively-implemented imported packages */
+    int nnat;
 };
+
+/* C typedef name for a distinct opt[T] instantiation. */
+static const char *opt_cname(CG *cg, const char *inner) {
+    for (int i = 0; i < cg->opts.count; i++) {
+        if (!strcmp(cg->opts.items[i].inner, inner))
+            return cg->opts.items[i].cname;
+    }
+    if (cg->opts.count == cg->opts.cap) {
+        cg->opts.cap = cg->opts.cap ? cg->opts.cap * 2 : 8;
+        cg->opts.items = (OptInst *)xrealloc(
+            cg->opts.items, cg->opts.cap * sizeof(OptInst));
+    }
+    OptInst *o = &cg->opts.items[cg->opts.count++];
+    o->inner = xstrdup(inner);
+    o->cname = xasprintf("sl_opt_%s", sanitize_pkg(inner));
+    return o->cname;
+}
+
+/* C typedef name for a distinct result[T,E] instantiation. */
+static const char *res_cname(CG *cg, const char *tv, const char *te) {
+    for (int i = 0; i < cg->res.count; i++) {
+        if (!strcmp(cg->res.items[i].tv, tv) &&
+            !strcmp(cg->res.items[i].te, te))
+            return cg->res.items[i].cname;
+    }
+    if (cg->res.count == cg->res.cap) {
+        cg->res.cap = cg->res.cap ? cg->res.cap * 2 : 8;
+        cg->res.items = (ResInst *)xrealloc(
+            cg->res.items, cg->res.cap * sizeof(ResInst));
+    }
+    ResInst *r = &cg->res.items[cg->res.count++];
+    r->tv = xstrdup(tv);
+    r->te = xstrdup(te);
+    r->cname =
+        xasprintf("sl_res_%s_%s", sanitize_pkg(tv), sanitize_pkg(te));
+    return r->cname;
+}
 
 static void var_push(CG *cg, const char *name, const char *slang) {
     if (cg->vars.count == cg->vars.cap) {
@@ -449,6 +535,26 @@ static const char *import_target(CG *cg, const char *alias, int line) {
     return t;
 }
 
+/* Names of compiler-provided packages (see loader.c NATIVE_PKGS). */
+static int is_native_pkg(CG *cg, const char *name) {
+    for (int i = 0; i < cg->nnat; i++) {
+        if (!strcmp(cg->nat_pkgs[i], name))
+            return 1;
+    }
+    return 0;
+}
+
+/* Activate cg->expect while inferring/generating an expression whose
+ * type is known from context (annotated lets, returns, assignments,
+ * call arguments). Returns the previous expectation so the caller can
+ * restore it. */
+static const char *expect_push(CG *cg, const char *t) {
+    const char *saved = cg->expect;
+    if (t && (is_opt(t) || is_result(t)))
+        cg->expect = t;
+    return saved;
+}
+
 static int split_dotted(const char *name, char **left, char **right) {
     const char *dot = strchr(name, '.');
     if (!dot)
@@ -512,13 +618,21 @@ static char *mangle_struct(const char *canon) {
     return xasprintf("sl_st_%s_%s", sanitize_pkg(l), sanitize_ident(r));
 }
 
-/* C type for a slang type, including maps and user-defined structs. */
+/* C type for a slang type, including maps, user-defined structs, and
+ * monomorphized opt/result instantiations. */
 static const char *ctype_of(CG *cg, const char *t) {
     const char *m = map_type(t);
     if (m)
         return m;
     if (is_map(t))
         return "sl_map *";
+    if (is_opt(t))
+        return xasprintf("%s *", opt_cname(cg, opt_inner(t)));
+    if (is_result(t)) {
+        char *tv, *tev;
+        result_te(t, &tv, &tev);
+        return xasprintf("%s *", res_cname(cg, tv, tev));
+    }
     if (struct_find_canon(cg, t))
         return xasprintf("%s *", mangle_struct(t));
     return NULL;
@@ -549,6 +663,20 @@ static const char *canon_type(CG *cg, const char *t, int line) {
                      k);
         const char *cv = canon_type(cg, v, line);
         return xasprintf("map[%s]%s", k, cv);
+    }
+    if (is_opt(t)) {
+        char *inner = opt_inner(t);
+        const char *ci = canon_type(cg, inner, line);
+        opt_cname(cg, ci); /* register the instantiation */
+        return xasprintf("opt[%s]", ci);
+    }
+    if (is_result(t)) {
+        char *a, *b;
+        result_te(t, &a, &b);
+        const char *ca = canon_type(cg, a, line);
+        const char *cb = canon_type(cg, b, line);
+        res_cname(cg, ca, cb); /* register the instantiation */
+        return xasprintf("result[%s,%s]", ca, cb);
     }
     if (map_type(t))
         return t;
@@ -601,7 +729,9 @@ static int is_builtin_name(const char *name) {
            !strcmp(name, "to_bytes") || !strcmp(name, "to_le") ||
            !strcmp(name, "to_be") || !strcmp(name, "from_le") ||
            !strcmp(name, "from_be") || !strcmp(name, "has") ||
-           !strcmp(name, "del");
+           !strcmp(name, "del") || !strcmp(name, "exit") ||
+           !strcmp(name, "some") || !strcmp(name, "none") ||
+           !strcmp(name, "ok") || !strcmp(name, "err");
 }
 
 /* Find a method `name` declared (via impl) for struct `sd`. */
@@ -619,6 +749,13 @@ static FuncSig *method_find(CG *cg, StructDef *sd, const char *name) {
  * package globals, imported package members, or struct field chains
  * ("rect.center.x"). */
 static const char *infer_ident_name(CG *cg, const char *name, int line) {
+    if (!strcmp(name, "none")) {
+        if (!cg->expect || !is_opt(cg->expect))
+            cg_error(line,
+                     "cannot infer the type of 'none'; annotate the "
+                     "binding, e.g. let x: opt[int] = none");
+        return cg->expect;
+    }
     VarSym *v = var_find(cg, name);
     if (v)
         return v->slang;
@@ -654,6 +791,161 @@ static const char *infer_ident_name(CG *cg, const char *name, int line) {
         return g->slang;
     cg_error(line, "undefined variable '%s'", name);
     return NULL; /* unreachable */
+}
+
+/* Shared inference for the option/result constructor expressions
+ * some(v), none, ok(v), err(e). Returns the constructed slang type.
+ * The surrounding context (annotated let, return type, ...) is
+ * expected to have activated cg->expect where relevant. */
+static const char *ctor_infer(CG *cg, Expr *e) {
+    const char *name = e->as.call.name;
+    int n = e->as.call.nargs;
+
+    if (!strcmp(name, "none")) {
+        if (n != 0)
+            cg_error(e->line, "'none' takes no arguments");
+        if (!cg->expect || !is_opt(cg->expect))
+            cg_error(e->line,
+                     "cannot infer the type of 'none'; annotate the "
+                     "binding, e.g. let x: opt[int] = none");
+        return cg->expect;
+    }
+    if (!strcmp(name, "some")) {
+        if (n != 1)
+            cg_error(e->line, "some() takes exactly one argument");
+        if (cg->expect && is_opt(cg->expect)) {
+            char *inner = opt_inner(cg->expect);
+            const char *saved = expect_push(cg, inner);
+            const char *at = infer_type(cg, e->as.call.args[0]);
+            cg->expect = saved;
+            if (!value_assignable(inner, e->as.call.args[0], at))
+                cg_error(e->line,
+                         "cannot use %s where %s expected", at, inner);
+            return cg->expect;
+        }
+        const char *at = infer_type(cg, e->as.call.args[0]);
+        return xasprintf("opt[%s]", at);
+    }
+    if (!strcmp(name, "ok")) {
+        if (n != 1)
+            cg_error(e->line, "ok() takes exactly one argument");
+        if (cg->expect && is_result(cg->expect)) {
+            char *tv, *tev;
+            result_te(cg->expect, &tv, &tev);
+            const char *saved = expect_push(cg, tv);
+            const char *at = infer_type(cg, e->as.call.args[0]);
+            cg->expect = saved;
+            if (!value_assignable(tv, e->as.call.args[0], at))
+                cg_error(e->line,
+                         "cannot use %s where %s expected", at, tv);
+            return cg->expect;
+        }
+        /* without context the error type defaults to str */
+        const char *at = infer_type(cg, e->as.call.args[0]);
+        return xasprintf("result[%s,str]", at);
+    }
+    /* err(e) */
+    if (n != 1)
+        cg_error(e->line, "err() takes exactly one argument");
+    if (cg->expect && is_result(cg->expect)) {
+        char *tv, *tev;
+        result_te(cg->expect, &tv, &tev);
+        const char *saved = expect_push(cg, tev);
+        const char *at = infer_type(cg, e->as.call.args[0]);
+        cg->expect = saved;
+        if (!value_assignable(tev, e->as.call.args[0], at))
+            cg_error(e->line,
+                     "cannot use %s where %s expected", at, tev);
+        return cg->expect;
+    }
+    cg_error(e->line,
+             "cannot infer the type of 'err()'; annotate the binding, "
+             "e.g. let r: result[int, str] = err(\"oops\")");
+    return NULL; /* unreachable */
+}
+
+/* Signatures of the compiler-provided functions in the native 'time'
+ * and 'net' packages (see loader.c). ret == NULL means void. */
+typedef struct {
+    const char *pkg, *name;
+    int nargs;
+    const char *ret;
+} NatSig;
+
+static const NatSig NATIVE_SIGS[] = {
+    {"time", "mono", 0, "duration"},
+    {"time", "wall", 0, "int"},
+    {"time", "sleep", 1, NULL},
+    {"net", "listen", 1, "result[i32,str]"},
+    {"net", "port", 1, "result[i32,str]"},
+    {"net", "accept", 1, "result[i32,str]"},
+    {"net", "dial", 2, "result[i32,str]"},
+    {"net", "send", 2, "result[i32,str]"},
+    {"net", "recv", 2, "result[bytes,str]"},
+    {"net", "close", 1, NULL},
+    {"net", "nonblock", 1, "result[bool,str]"},
+};
+
+/* Validate a call into a native package and return its slang return
+ * type. Socket handles and ports are fixed-width ints; payloads are
+ * bytes. */
+static const char *native_check(CG *cg, const char *pkg, const char *fname,
+                                Expr *e) {
+    const NatSig *ns = NULL;
+    for (int i = 0;
+         i < (int)(sizeof(NATIVE_SIGS) / sizeof(NATIVE_SIGS[0])); i++) {
+        if (!strcmp(NATIVE_SIGS[i].pkg, pkg) &&
+            !strcmp(NATIVE_SIGS[i].name, fname)) {
+            ns = &NATIVE_SIGS[i];
+            break;
+        }
+    }
+    if (!ns)
+        cg_error(e->line, "package '%s' has no function '%s'", pkg, fname);
+    int n = e->as.call.nargs;
+    if (n != ns->nargs)
+        cg_error(e->line,
+                 "function '%s.%s' expects %d argument(s), got %d", pkg,
+                 fname, ns->nargs, n);
+
+    if (!strcmp(pkg, "time")) {
+        if (!strcmp(fname, "sleep")) {
+            const char *t = infer_type(cg, e->as.call.args[0]);
+            if (!is_int(t))
+                cg_error(e->line,
+                         "time.sleep expects a duration (got %s)", t);
+        }
+        return ns->ret;
+    }
+
+    /* net: fd/port/max arguments must be narrow integers; host is
+     * str; payload is bytes */
+    for (int i = 0; i < n; i++) {
+        const char *at = infer_type(cg, e->as.call.args[i]);
+        int want_fd = (!strcmp(fname, "dial") && i == 1) ||
+                      ((!strcmp(fname, "listen") || !strcmp(fname, "recv")) &&
+                       i == 1)
+                          ? 0
+                          : 1;
+        (void)want_fd;
+        if (!strcmp(fname, "dial") && i == 0) {
+            if (!is_str(at))
+                cg_error(e->line,
+                         "net.dial host must be str (got %s)", at);
+            continue;
+        }
+        if (!strcmp(fname, "send") && i == 1) {
+            if (!is_bytes(at))
+                cg_error(e->line,
+                         "net.send payload must be bytes (got %s)", at);
+            continue;
+        }
+        if (!is_int(at))
+            cg_error(e->line,
+                     "%s.%s argument %d must be an integer (got %s)", pkg,
+                     fname, i + 1, at);
+    }
+    return ns->ret;
 }
 
 static const char *infer_call(CG *cg, Expr *e) {
@@ -733,6 +1025,18 @@ static const char *infer_call(CG *cg, Expr *e) {
             cg_error(e->line, "%s() expects bytes (got %s)", name, t);
         return "int";
     }
+    if (!strcmp(name, "exit")) {
+        if (n != 1)
+            cg_error(e->line, "exit() takes exactly one argument");
+        const char *t = infer_type(cg, e->as.call.args[0]);
+        if (!is_int(t))
+            cg_error(e->line,
+                     "exit() expects an integer status (got %s)", t);
+        return "void";
+    }
+    if (!strcmp(name, "none") || !strcmp(name, "some") ||
+        !strcmp(name, "ok") || !strcmp(name, "err"))
+        return ctor_infer(cg, e);
     if (!strcmp(name, "has") || !strcmp(name, "del")) {
         if (n != 2)
             cg_error(e->line, "%s() takes exactly two arguments", name);
@@ -759,6 +1063,8 @@ static const char *infer_call(CG *cg, Expr *e) {
         const char *pkg = import_try(cg, left);
         if (pkg) {
             sig = sig_find_in(cg, pkg, right);
+            if (!sig && is_native_pkg(cg, pkg))
+                return native_check(cg, pkg, right, e);
             if (!sig)
                 cg_error(e->line, "package '%s' has no function '%s'", pkg,
                          right);
@@ -794,7 +1100,10 @@ static const char *infer_call(CG *cg, Expr *e) {
                  "function '%s' expects %d argument(s), got %d", name,
                  sig->nparams - self_off, n);
     for (int i = 0; i < n; i++) {
+        const char *saved =
+            expect_push(cg, sig->param_slang[i + self_off]);
         const char *at = infer_type(cg, e->as.call.args[i]);
+        cg->expect = saved;
         if (!value_assignable(sig->param_slang[i + self_off],
                               e->as.call.args[i], at))
             cg_error(e->line,
@@ -807,8 +1116,44 @@ static const char *infer_call(CG *cg, Expr *e) {
 static const char *infer_binary(CG *cg, Expr *e) {
     const char *op = e->as.binary.op;
     const char *lt = infer_type(cg, e->as.binary.lhs);
-    const char *rt = infer_type(cg, e->as.binary.rhs);
 
+    if (!strcmp(op, "??")) {
+        /* null-coalescing: unwrap an opt/result, falling back to the
+         * right-hand side when there is no value. The fallback's
+         * expected type must be active while inferring it so bare
+         * none/err on the right can resolve their type from context. */
+        if (is_opt(lt)) {
+            char *inner = opt_inner(lt);
+            const char *saved = expect_push(cg, inner);
+            const char *rt = infer_type(cg, e->as.binary.rhs);
+            cg->expect = saved;
+            if (!value_assignable(inner, e->as.binary.rhs, rt))
+                cg_error(e->line,
+                         "null-coalescing fallback type mismatch: cannot "
+                         "use %s where %s expected",
+                         rt, inner);
+            return inner;
+        }
+        if (is_result(lt)) {
+            char *tv, *tev;
+            result_te(lt, &tv, &tev);
+            const char *saved = expect_push(cg, tv);
+            const char *rt = infer_type(cg, e->as.binary.rhs);
+            cg->expect = saved;
+            if (!value_assignable(tv, e->as.binary.rhs, rt))
+                cg_error(e->line,
+                         "null-coalescing fallback type mismatch: cannot "
+                         "use %s where %s expected",
+                         rt, tv);
+            return tv;
+        }
+        cg_error(e->line,
+                 "null-coalescing requires an opt or result value on "
+                 "the left (got %s)",
+                 lt);
+    }
+
+    const char *rt = infer_type(cg, e->as.binary.rhs);
     if (!strcmp(op, "&&") || !strcmp(op, "||")) {
         if (strcmp(lt, "bool") || strcmp(rt, "bool"))
             cg_error(e->line, "'%s' requires bool operands (got %s and %s)",
@@ -1196,6 +1541,10 @@ static char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *a = gen_expr(cg, e->as.call.args[0]);
         return xasprintf("((long long)sl_%s(%s))", name, a);
     }
+    if (!strcmp(name, "exit")) {
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        return xasprintf("exit((int)(%s))", a);
+    }
     if (!strcmp(name, "has") || !strcmp(name, "del")) {
         const char *t = infer_type(cg, e->as.call.args[0]);
         char *m = gen_expr(cg, e->as.call.args[0]);
@@ -1214,6 +1563,66 @@ static char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
     return NULL;
 }
 
+/* Generate an option/result constructor expression (some/ok/err).
+ * 'none' is an identifier and is handled directly in gen_expr. */
+static char *gen_ctor(CG *cg, Expr *e) {
+    const char *name = e->as.call.name;
+    Expr *arg = e->as.call.args[0];
+    /* ctor_infer validates and returns opt[T] / result[T,E]; cg->expect
+     * must still be active while generating the argument so nested
+     * none/ok/err resolve correctly */
+    const char *ty = ctor_infer(cg, e);
+    char *target;
+    if (!strcmp(name, "some")) {
+        target = opt_inner(ty);
+    } else {
+        char *tv, *tev;
+        result_te(ty, &tv, &tev);
+        target = !strcmp(name, "ok") ? tv : tev;
+    }
+    const char *saved = expect_push(cg, target);
+    const char *at = infer_type(cg, arg);
+    char *v = gen_expr(cg, arg);
+    cg->expect = saved;
+    v = maybe_cast(cg, target, at, v);
+    const char *cn = ctype_of(cg, ty);
+    if (!strcmp(name, "some"))
+        return xasprintf(
+            "({ %s _sl_c = (%s)GC_malloc(sizeof(*_sl_c)); "
+            "_sl_c->has = true; _sl_c->v = %s; _sl_c; })",
+            cn, cn, v);
+    if (!strcmp(name, "ok"))
+        return xasprintf(
+            "({ %s _sl_c = (%s)GC_malloc(sizeof(*_sl_c)); "
+            "_sl_c->ok = true; _sl_c->v = %s; _sl_c; })",
+            cn, cn, v);
+    return xasprintf(
+        "({ %s _sl_c = (%s)GC_malloc(sizeof(*_sl_c)); "
+        "_sl_c->ok = false; _sl_c->e = %s; _sl_c; })",
+        cn, cn, v);
+}
+
+/* Generate a call into a native package (time/net). Numeric arguments
+ * are widened to the C parameter types of the runtime helpers. */
+static char *native_gen(CG *cg, const char *pkg, const char *fname,
+                        Expr *e) {
+    StrBuf sb;
+    sb_init(&sb);
+    sb_append(&sb, xasprintf("sl_%s_%s(", sanitize_pkg(pkg),
+                             sanitize_ident(fname)));
+    for (int i = 0; i < e->as.call.nargs; i++) {
+        if (i)
+            sb_append(&sb, ", ");
+        const char *at = infer_type(cg, e->as.call.args[i]);
+        char *a = gen_expr(cg, e->as.call.args[i]);
+        if (!is_str(at) && !is_bytes(at))
+            a = maybe_cast(cg, !strcmp(pkg, "time") ? "int" : "i32", at, a);
+        sb_append(&sb, a);
+    }
+    sb_append(&sb, ")");
+    return sb.data;
+}
+
 static char *gen_call(CG *cg, Expr *e) {
     const char *name = e->as.call.name;
     if (!strcmp(name, "print") || !strcmp(name, "println"))
@@ -1221,6 +1630,10 @@ static char *gen_call(CG *cg, Expr *e) {
                  "%s() is a statement and cannot be used inside an "
                  "expression",
                  name);
+
+    if (!strcmp(name, "some") || !strcmp(name, "ok") ||
+        !strcmp(name, "err"))
+        return gen_ctor(cg, e);
 
     int handled = 0;
     if (is_builtin_name(name)) {
@@ -1237,6 +1650,8 @@ static char *gen_call(CG *cg, Expr *e) {
         const char *pkg = import_try(cg, left);
         if (pkg) {
             sig = sig_find_in(cg, pkg, right);
+            if (!sig && is_native_pkg(cg, pkg))
+                return native_gen(cg, pkg, right, e);
             if (!sig)
                 cg_error(e->line, "package '%s' has no function '%s'", pkg,
                          right);
@@ -1279,8 +1694,11 @@ static char *gen_call(CG *cg, Expr *e) {
     for (int i = 0; i < e->as.call.nargs; i++) {
         if (i || argi)
             sb_append(&sb, ", ");
+        const char *saved =
+            expect_push(cg, sig->param_slang[argi + i]);
         const char *at = infer_type(cg, e->as.call.args[i]);
         char *a = gen_expr(cg, e->as.call.args[i]);
+        cg->expect = saved;
         a = maybe_cast(cg, sig->param_slang[argi + i], at, a);
         sb_append(&sb, a);
     }
@@ -1445,6 +1863,15 @@ static char *gen_expr(CG *cg, Expr *e) {
     case EX_BOOL:
         return xstrdup(e->as.bool_lit.value ? "true" : "false");
     case EX_IDENT:
+        if (!strcmp(e->as.ident.name, "none")) {
+            if (!cg->expect || !is_opt(cg->expect))
+                cg_error(e->line, "cannot infer the type of 'none'");
+            const char *cn = ctype_of(cg, cg->expect);
+            return xasprintf(
+                "({ %s _sl_n = (%s)GC_malloc(sizeof(*_sl_n)); "
+                "_sl_n->has = false; _sl_n; })",
+                cn, cn);
+        }
         return gen_ident_name(cg, e->as.ident.name, e->line);
     case EX_UNARY: {
         char *o = gen_expr(cg, e->as.unary.operand);
@@ -1475,8 +1902,40 @@ static char *gen_expr(CG *cg, Expr *e) {
     case EX_BINARY: {
         const char *op = e->as.binary.op;
         const char *lt = infer_type(cg, e->as.binary.lhs);
-        const char *rt = infer_type(cg, e->as.binary.rhs);
 
+        if (!strcmp(op, "??")) {
+            int id = cg->tmp_id++;
+            char *a = gen_expr(cg, e->as.binary.lhs);
+            if (is_opt(lt)) {
+                char *inner = opt_inner(lt);
+                const char *oc = ctype_of(cg, lt);
+                const char *ic = ctype_of(cg, inner);
+                const char *saved = expect_push(cg, inner);
+                const char *rt = infer_type(cg, e->as.binary.rhs);
+                char *b = gen_expr(cg, e->as.binary.rhs);
+                cg->expect = saved;
+                b = maybe_cast(cg, inner, rt, b);
+                return xasprintf(
+                    "({ %s _sl_q%d = %s; "
+                    "(_sl_q%d->has ? _sl_q%d->v : (%s)(%s)); })",
+                    oc, id, a, id, id, ic, b);
+            }
+            char *tv, *tev;
+            result_te(lt, &tv, &tev);
+            const char *oc = ctype_of(cg, lt);
+            const char *ic = ctype_of(cg, tv);
+            const char *saved = expect_push(cg, tv);
+            const char *rt = infer_type(cg, e->as.binary.rhs);
+            char *b = gen_expr(cg, e->as.binary.rhs);
+            cg->expect = saved;
+            b = maybe_cast(cg, tv, rt, b);
+            return xasprintf(
+                "({ %s _sl_q%d = %s; "
+                "(_sl_q%d->ok ? _sl_q%d->v : (%s)(%s)); })",
+                oc, id, a, id, id, ic, b);
+        }
+
+        const char *rt = infer_type(cg, e->as.binary.rhs);
         if (!strcmp(op, "&&") || !strcmp(op, "||")) {
             char *a = gen_expr(cg, e->as.binary.lhs);
             char *b = gen_expr(cg, e->as.binary.rhs);
@@ -1587,6 +2046,7 @@ static void gen_stmt(CG *cg, Stmt *s) {
             break;
         }
 
+        const char *saved_expect = expect_push(cg, ann);
         const char *it = infer_type(cg, s->as.let.init);
         const char *t = ann ? ann : it;
         /* Annotated list/map literals: check elements against the
@@ -1639,6 +2099,7 @@ static void gen_stmt(CG *cg, Stmt *s) {
         else
             init = gen_expr(cg, s->as.let.init);
         init = maybe_cast(cg, t, it, init);
+        cg->expect = saved_expect;
         var_push(cg, s->as.let.name, t);
         emit_line(cg, "%s %s = %s;", ctype_of(cg, t),
                   sanitize_ident(s->as.let.name), init);
@@ -1667,7 +2128,9 @@ static void gen_stmt(CG *cg, Stmt *s) {
                 if (fi < 0)
                     cg_error(s->line, "struct '%s' has no field '%s'",
                              sd->canonical, right);
+                const char *se1 = expect_push(cg, sd->ftypes[fi]);
                 const char *vt = infer_type(cg, s->as.assign.value);
+                cg->expect = se1;
                 if (!value_assignable(sd->ftypes[fi], s->as.assign.value,
                                       vt))
                     cg_error(s->line,
@@ -1675,23 +2138,29 @@ static void gen_stmt(CG *cg, Stmt *s) {
                              "where %s expected",
                              sd->fields[fi], vt, sd->ftypes[fi]);
                 char *b = gen_ident_name(cg, left, s->line);
+                const char *se2 = expect_push(cg, sd->ftypes[fi]);
                 char *val = maybe_cast(cg, sd->ftypes[fi], vt,
                                        gen_expr(cg, s->as.assign.value));
+                cg->expect = se2;
                 emit_line(cg, "%s->%s = %s;", b,
                           sanitize_ident(sd->fields[fi]), val);
                 break;
             }
             if (!v)
                 cg_error(s->line, "undefined variable '%s'", name);
+            const char *se3 = expect_push(cg, v->slang);
             const char *vt = infer_type(cg, s->as.assign.value);
+            cg->expect = se3;
             if (!value_assignable(v->slang, s->as.assign.value, vt))
                 cg_error(s->line,
                          "cannot assign a value of type %s to variable "
                          "'%s' of type %s",
                          vt, name, v->slang);
+            const char *se4 = expect_push(cg, v->slang);
             char *val =
                 maybe_cast(cg, v->slang, vt,
                            gen_expr(cg, s->as.assign.value));
+            cg->expect = se4;
             emit_line(cg, "%s = %s;", sanitize_ident(name), val);
             break;
         }
@@ -1709,15 +2178,19 @@ static void gen_stmt(CG *cg, Stmt *s) {
             if (fi < 0)
                 cg_error(s->line, "struct '%s' has no field '%s'",
                          sd->canonical, tgt->as.field.name);
+            const char *se5 = expect_push(cg, sd->ftypes[fi]);
             const char *vt = infer_type(cg, s->as.assign.value);
+            cg->expect = se5;
             if (!value_assignable(sd->ftypes[fi], s->as.assign.value, vt))
                 cg_error(s->line,
                          "field '%s': cannot assign a value of type %s "
                          "where %s expected",
                          sd->fields[fi], vt, sd->ftypes[fi]);
             char *b = gen_expr(cg, tgt->as.field.base);
+            const char *se6 = expect_push(cg, sd->ftypes[fi]);
             char *val = maybe_cast(cg, sd->ftypes[fi], vt,
                                    gen_expr(cg, s->as.assign.value));
+            cg->expect = se6;
             emit_line(cg, "%s->%s = %s;", b,
                       sanitize_ident(sd->fields[fi]), val);
             break;
@@ -1922,14 +2395,18 @@ static void gen_stmt(CG *cg, Stmt *s) {
             if (!cg->cur_ret)
                 cg_error(s->line,
                          "cannot return a value from a void function");
+            const char *se7 = expect_push(cg, cg->cur_ret);
             const char *vt = infer_type(cg, s->as.ret.value);
+            cg->expect = se7;
             if (!value_assignable(cg->cur_ret, s->as.ret.value, vt))
                 cg_error(s->line,
                          "return type mismatch: cannot return %s where %s "
                          "expected",
                          vt, cg->cur_ret);
+            const char *se8 = expect_push(cg, cg->cur_ret);
             char *val = maybe_cast(cg, cg->cur_ret, vt,
                                    gen_expr(cg, s->as.ret.value));
+            cg->expect = se8;
             emit_line(cg, "return %s;", val);
         }
         break;
@@ -1946,6 +2423,10 @@ static void gen_stmt(CG *cg, Stmt *s) {
         emit_line(cg, "%s;", code);
         break;
     }
+    case ST_GUARD_LET:
+        /* handled by gen_stmts, which needs to see the statements that
+         * follow it in the same block */
+        break;
     case ST_STRUCT:
     case ST_IMPL:
         /* declarations are processed during collect_decls; nothing to
@@ -1954,10 +2435,56 @@ static void gen_stmt(CG *cg, Stmt *s) {
     }
 }
 
+/* Generate a run of statements. A 'guard let x = <opt/result> else'
+ * binds x for the remainder of the enclosing block, so it is handled
+ * here rather than per-statement: everything after it is emitted
+ * inside a C block that first checks the option and runs the else
+ * body (which must exit via return/break/continue/exit). */
+static void gen_stmts(CG *cg, Stmt **stmts, int count) {
+    for (int i = 0; i < count; i++) {
+        Stmt *s = stmts[i];
+        if (s->kind != ST_GUARD_LET) {
+            gen_stmt(cg, s);
+            continue;
+        }
+        const char *et = infer_type(cg, s->as.guard_let.expr);
+        char *inner = NULL;
+        int is_res = 0;
+        if (is_opt(et)) {
+            inner = opt_inner(et);
+        } else if (is_result(et)) {
+            char *tv, *tev;
+            result_te(et, &tv, &tev);
+            inner = tv;
+            is_res = 1;
+        } else {
+            cg_error(s->line,
+                     "guard let requires an opt or result value (got %s)",
+                     et);
+        }
+        int id = cg->tmp_id++;
+        char *e = gen_expr(cg, s->as.guard_let.expr);
+        const char *oc = ctype_of(cg, et);
+        const char *ic = ctype_of(cg, inner);
+        emit_line(cg, "{");
+        cg->indent++;
+        emit_line(cg, "%s _sl_g%d = %s;", oc, id, e);
+        emit_line(cg, "if (!(_sl_g%d->%s)) {", id, is_res ? "ok" : "has");
+        gen_block(cg, s->as.guard_let.body);
+        emit_line(cg, "}");
+        var_push(cg, s->as.guard_let.name, inner);
+        emit_line(cg, "%s %s = _sl_g%d->v;", ic,
+                  sanitize_ident(s->as.guard_let.name), id);
+        gen_stmts(cg, stmts + i + 1, count - i - 1);
+        cg->indent--;
+        emit_line(cg, "}");
+        return;
+    }
+}
+
 static void gen_block(CG *cg, Block *b) {
     cg->indent++;
-    for (int i = 0; i < b->count; i++)
-        gen_stmt(cg, b->stmts[i]);
+    gen_stmts(cg, b->stmts, b->count);
     cg->indent--;
 }
 
@@ -2589,6 +3116,264 @@ static void emit_struct_types(CG *cg) {
     }
 }
 
+/* Emit C definitions for every monomorphized opt/result instantiation
+ * discovered during generation. Emitted after struct types so inner
+ * struct types are complete. */
+static void emit_opt_res_types(CG *cg) {
+    for (int i = 0; i < cg->opts.count; i++) {
+        OptInst *o = &cg->opts.items[i];
+        emit_line(cg, "typedef struct {");
+        cg->indent++;
+        emit_line(cg, "bool has;");
+        emit_line(cg, "%s v;", ctype_of(cg, o->inner));
+        cg->indent--;
+        emit_line(cg, "} %s;", o->cname);
+        emit_line(cg, "");
+    }
+    for (int i = 0; i < cg->res.count; i++) {
+        ResInst *r = &cg->res.items[i];
+        emit_line(cg, "typedef struct {");
+        cg->indent++;
+        emit_line(cg, "bool ok;");
+        emit_line(cg, "%s v;", ctype_of(cg, r->tv));
+        emit_line(cg, "%s e;", ctype_of(cg, r->te));
+        cg->indent--;
+        emit_line(cg, "} %s;", r->cname);
+        emit_line(cg, "");
+    }
+}
+
+/* ---- native 'time' package runtime (emitted on demand) ---- */
+
+static const char *TIME_RUNTIME[] = {
+    "#include <time.h>",
+    "#include <errno.h>",
+    "",
+    "/* ---- time: monotonic + wall clock; duration is nanoseconds ---- */",
+    "",
+    "static long long sl_time_mono(void) {",
+    "    struct timespec ts;",
+    "    clock_gettime(CLOCK_MONOTONIC, &ts);",
+    "    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;",
+    "}",
+    "",
+    "static long long sl_time_wall(void) {",
+    "    struct timespec ts;",
+    "    clock_gettime(CLOCK_REALTIME, &ts);",
+    "    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;",
+    "}",
+    "",
+    "static void sl_time_sleep(long long ns) {",
+    "    struct timespec ts;",
+    "    ts.tv_sec = (time_t)(ns / 1000000000LL);",
+    "    ts.tv_nsec = (long)(ns % 1000000000LL);",
+    "    while (nanosleep(&ts, &ts) == -1 && errno == EINTR) {}",
+    "}",
+    "",
+};
+
+/* ---- native 'net' package runtime (emitted on demand) ----
+ * TCP built on bytes + fixed-width ints. Every fallible operation
+ * returns result[T, str]; recv reports \"would block\" on a
+ * non-blocking socket with no data available. */
+
+static const char *NET_RUNTIME[] = {
+    "#include <errno.h>",
+    "#include <unistd.h>",
+    "#include <fcntl.h>",
+    "#include <sys/socket.h>",
+    "#include <netinet/in.h>",
+    "#include <arpa/inet.h>",
+    "#include <netdb.h>",
+    "",
+    "/* ---- net: blocking & non-blocking TCP over bytes + fixed ints ---- */",
+    "",
+    "static sl_res_i32_str *sl_net_ok_i32(int32_t v) {",
+    "    sl_res_i32_str *r =",
+    "        (sl_res_i32_str *)GC_malloc(sizeof(sl_res_i32_str));",
+    "    r->ok = true;",
+    "    r->v = v;",
+    "    return r;",
+    "}",
+    "",
+    "static sl_res_i32_str *sl_net_err_i32(const char *msg) {",
+    "    sl_res_i32_str *r =",
+    "        (sl_res_i32_str *)GC_malloc(sizeof(sl_res_i32_str));",
+    "    r->ok = false;",
+    "    r->e = sl_strdup(msg);",
+    "    return r;",
+    "}",
+    "",
+    "static sl_res_bytes_str *sl_net_ok_bytes(sl_bytes *b) {",
+    "    sl_res_bytes_str *r =",
+    "        (sl_res_bytes_str *)GC_malloc(sizeof(sl_res_bytes_str));",
+    "    r->ok = true;",
+    "    r->v = b;",
+    "    return r;",
+    "}",
+    "",
+    "static sl_res_bytes_str *sl_net_err_bytes(const char *msg) {",
+    "    sl_res_bytes_str *r =",
+    "        (sl_res_bytes_str *)GC_malloc(sizeof(sl_res_bytes_str));",
+    "    r->ok = false;",
+    "    r->e = sl_strdup(msg);",
+    "    return r;",
+    "}",
+    "",
+    "static sl_res_bool_str *sl_net_ok_bool(bool v) {",
+    "    sl_res_bool_str *r =",
+    "        (sl_res_bool_str *)GC_malloc(sizeof(sl_res_bool_str));",
+    "    r->ok = true;",
+    "    r->v = v;",
+    "    return r;",
+    "}",
+    "",
+    "static sl_res_bool_str *sl_net_err_bool(const char *msg) {",
+    "    sl_res_bool_str *r =",
+    "        (sl_res_bool_str *)GC_malloc(sizeof(sl_res_bool_str));",
+    "    r->ok = false;",
+    "    r->e = sl_strdup(msg);",
+    "    return r;",
+    "}",
+    "",
+    "static sl_res_i32_str *sl_net_listen(int port) {",
+    "    int fd = socket(AF_INET, SOCK_STREAM, 0);",
+    "    if (fd < 0) return sl_net_err_i32(strerror(errno));",
+    "    int one = 1;",
+    "    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));",
+    "    struct sockaddr_in addr;",
+    "    memset(&addr, 0, sizeof(addr));",
+    "    addr.sin_family = AF_INET;",
+    "    addr.sin_addr.s_addr = htonl(INADDR_ANY);",
+    "    addr.sin_port = htons((uint16_t)port);",
+    "    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {",
+    "        int e = errno; close(fd); return sl_net_err_i32(strerror(e));",
+    "    }",
+    "    if (listen(fd, 64) != 0) {",
+    "        int e = errno; close(fd); return sl_net_err_i32(strerror(e));",
+    "    }",
+    "    return sl_net_ok_i32((int32_t)fd);",
+    "}",
+    "",
+    "static sl_res_i32_str *sl_net_port(int lfd) {",
+    "    struct sockaddr_in addr;",
+    "    socklen_t n = sizeof(addr);",
+    "    if (getsockname(lfd, (struct sockaddr *)&addr, &n) != 0)",
+    "        return sl_net_err_i32(strerror(errno));",
+    "    return sl_net_ok_i32((int32_t)ntohs(addr.sin_port));",
+    "}",
+    "",
+    "static sl_res_i32_str *sl_net_accept(int lfd) {",
+    "    int cfd = accept(lfd, NULL, NULL);",
+    "    if (cfd < 0) return sl_net_err_i32(strerror(errno));",
+    "    return sl_net_ok_i32((int32_t)cfd);",
+    "}",
+    "",
+    "static sl_res_i32_str *sl_net_dial(const char *host, int port) {",
+    "    char portstr[16];",
+    "    snprintf(portstr, sizeof(portstr), \"%d\", port);",
+    "    struct addrinfo hints, *res = NULL;",
+    "    memset(&hints, 0, sizeof(hints));",
+    "    hints.ai_family = AF_INET;",
+    "    hints.ai_socktype = SOCK_STREAM;",
+    "    int rc = getaddrinfo(host, portstr, &hints, &res);",
+    "    if (rc != 0 || !res) return sl_net_err_i32(gai_strerror(rc));",
+    "    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);",
+    "    if (fd < 0) { freeaddrinfo(res); return sl_net_err_i32(strerror(errno)); }",
+    "    if (connect(fd, res->ai_addr, res->ai_addrlen) != 0) {",
+    "        int e = errno; freeaddrinfo(res); close(fd);",
+    "        return sl_net_err_i32(strerror(e));",
+    "    }",
+    "    freeaddrinfo(res);",
+    "    return sl_net_ok_i32((int32_t)fd);",
+    "}",
+    "",
+    "static sl_res_i32_str *sl_net_send(int fd, sl_bytes *data) {",
+    "    long long off = 0;",
+    "    while (off < data->len) {",
+    "        ssize_t n = send(fd, data->ptr + off,",
+    "                         (size_t)(data->len - off), 0);",
+    "        if (n < 0) {",
+    "            if (errno == EINTR) continue;",
+    "            return sl_net_err_i32(strerror(errno));",
+    "        }",
+    "        off += n;",
+    "    }",
+    "    return sl_net_ok_i32((int32_t)data->len);",
+    "}",
+    "",
+    "static sl_res_bytes_str *sl_net_recv(int fd, int max) {",
+    "    if (max <= 0) max = 4096;",
+    "    sl_bytes *b = (sl_bytes *)GC_malloc(sizeof(sl_bytes));",
+    "    b->len = 0;",
+    "    b->ptr = (unsigned char *)GC_malloc((size_t)max);",
+    "    ssize_t n = recv(fd, b->ptr, (size_t)max, 0);",
+    "    if (n < 0) {",
+    "        if (errno == EAGAIN || errno == EWOULDBLOCK)",
+    "            return sl_net_err_bytes(\"would block\");",
+    "        return sl_net_err_bytes(strerror(errno));",
+    "    }",
+    "    b->len = (long long)n;",
+    "    return sl_net_ok_bytes(b);",
+    "}",
+    "",
+    "static void sl_net_close(int fd) { close(fd); }",
+    "",
+    "static sl_res_bool_str *sl_net_nonblock(int fd) {",
+    "    int fl = fcntl(fd, F_GETFL, 0);",
+    "    if (fl < 0) return sl_net_err_bool(strerror(errno));",
+    "    if (fcntl(fd, F_SETFL, fl | O_NONBLOCK) != 0)",
+    "        return sl_net_err_bool(strerror(errno));",
+    "    return sl_net_ok_bool(true);",
+    "}",
+    "",
+};
+
+/* The net runtime above unconditionally builds these three result
+ * instantiations (i32/str for handles+ports, bytes/str for recv,
+ * bool/str for nonblock) regardless of which net functions the
+ * slang program actually calls or how it uses their return values;
+ * register them whenever net is imported so their typedefs always
+ * exist alongside the runtime code that references them. */
+static void force_native_result_types(CG *cg) {
+    int want_net = 0;
+    for (int i = 0; i < cg->imports.count; i++) {
+        const char *t = cg->imports.items[i].target;
+        if (!strcmp(t, "net") && is_native_pkg(cg, t))
+            want_net = 1;
+    }
+    if (!want_net)
+        return;
+    res_cname(cg, "i32", "str");
+    res_cname(cg, "bytes", "str");
+    res_cname(cg, "bool", "str");
+}
+
+/* Emit the native-package runtime sections that this program needs,
+ * based on which native packages were imported. Must run after
+ * emit_opt_res_types so the fixed net result instantiations exist. */
+static void emit_native_runtime(CG *cg) {
+    int want_time = 0, want_net = 0;
+    for (int i = 0; i < cg->imports.count; i++) {
+        const char *t = cg->imports.items[i].target;
+        if (!strcmp(t, "time") && is_native_pkg(cg, t))
+            want_time = 1;
+        if (!strcmp(t, "net") && is_native_pkg(cg, t))
+            want_net = 1;
+    }
+    if (!want_time && !want_net)
+        return;
+    if (want_time)
+        for (int i = 0;
+             i < (int)(sizeof(TIME_RUNTIME) / sizeof(TIME_RUNTIME[0]));
+             i++)
+            emit_line(cg, "%s", TIME_RUNTIME[i]);
+    if (want_net)
+        for (int i = 0;
+             i < (int)(sizeof(NET_RUNTIME) / sizeof(NET_RUNTIME[0])); i++)
+            emit_line(cg, "%s", NET_RUNTIME[i]);
+}
+
 static void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
     int any = 0;
     for (int i = 0; i < npkgs; i++) {
@@ -2689,27 +3474,26 @@ static void gen_function(CG *cg, Package *p, FuncDecl *f) {
     cg->cur_ret = NULL;
 }
 
-void codegen_program(Package *pkgs, int npkgs, int main_index,
-                     StrBuf *out) {
-    CG cg;
-    memset(&cg, 0, sizeof(CG));
-    cg.out = out;
-    cg.cur_pkg = pkgs[main_index].name;
+/* Generate the complete translation unit into cg->out. */
+static void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
+                              int main_index) {
+    emit_prelude(cg);
 
-    collect_decls(&cg, pkgs, npkgs);
+    emit_struct_types(cg);
 
-    emit_prelude(&cg);
+    force_native_result_types(cg);
+    emit_opt_res_types(cg);
 
-    emit_struct_types(&cg);
+    emit_native_runtime(cg);
 
-    emit_globals(&cg, pkgs, npkgs, main_index);
+    emit_globals(cg, pkgs, npkgs, main_index);
 
-    gen_prototypes(&cg, pkgs, npkgs);
+    gen_prototypes(cg, pkgs, npkgs);
 
     for (int i = 0; i < npkgs; i++) {
         Package *p = &pkgs[i];
         for (int j = 0; j < p->prog->nfuncs; j++)
-            gen_function(&cg, p, p->prog->funcs[j]);
+            gen_function(cg, p, p->prog->funcs[j]);
         /* methods from impl blocks */
         Block *body = p->prog->main_body;
         for (int j = 0; j < body->count; j++) {
@@ -2717,16 +3501,58 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
             if (s->kind != ST_IMPL)
                 continue;
             for (int q = 0; q < s->as.impl.nfuncs; q++)
-                gen_function(&cg, p, s->as.impl.funcs[q]);
+                gen_function(cg, p, s->as.impl.funcs[q]);
         }
     }
 
     /* top-level statements of the main package become main() */
-    cg.vars.count = 0;
+    cg->vars.count = 0;
+    cg->cur_pkg = pkgs[main_index].name;
+    emit_line(cg, "int main(void) {");
+    emit_line(cg, "    GC_INIT();");
+    gen_block(cg, pkgs[main_index].prog->main_body);
+    emit_line(cg, "    return 0;");
+    emit_line(cg, "}");
+}
+
+void codegen_program(Package *pkgs, int npkgs, int main_index,
+                     StrBuf *out) {
+    CG cg;
+    memset(&cg, 0, sizeof(CG));
+    cg.out = out;
     cg.cur_pkg = pkgs[main_index].name;
-    emit_line(&cg, "int main(void) {");
-    emit_line(&cg, "    GC_INIT();");
-    gen_block(&cg, pkgs[main_index].prog->main_body);
-    emit_line(&cg, "    return 0;");
-    emit_line(&cg, "}");
+
+    /* record which packages are compiler-provided natives */
+    for (int i = 0; i < npkgs; i++) {
+        if (!pkgs[i].native)
+            continue;
+        cg.nat_pkgs = (char **)xrealloc(
+            cg.nat_pkgs, (size_t)(cg.nnat + 1) * sizeof(char *));
+        cg.nat_pkgs[cg.nnat++] = pkgs[i].name;
+    }
+
+    collect_decls(&cg, pkgs, npkgs);
+
+    /* Dry run: generation populates the opt/result monomorphization
+     * tables as it goes, but typedefs must be emitted before any use.
+     * Generate once into a scratch buffer to discover every
+     * instantiation, then generate for real with complete tables. */
+    StrBuf scratch;
+    sb_init(&scratch);
+    cg.out = &scratch;
+    gen_whole_program(&cg, pkgs, npkgs, main_index);
+    free(scratch.data);
+
+    /* emit_globals (called from gen_whole_program) registers package
+     * globals as it emits them; undo that bookkeeping before the real
+     * run re-emits and re-registers the same globals, or it trips its
+     * own duplicate-declaration check. opts/res are deliberately left
+     * to accumulate across both passes (that's the point of the dry
+     * run); globs has no such purpose here. */
+    cg.globs.count = 0;
+
+    out->len = 0;
+    out->data[0] = '\0';
+    cg.out = out;
+    gen_whole_program(&cg, pkgs, npkgs, main_index);
 }
