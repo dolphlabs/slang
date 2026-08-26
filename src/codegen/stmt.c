@@ -225,8 +225,19 @@ void gen_stmt(CG *cg, Stmt *s) {
                 cg_error(s->line,
                          "byte assignment requires an integer (got %s)",
                          vt);
-            emit_line(cg, "sl_bytes_set(%s, %s, (unsigned char)(%s));", b, i,
-                      val);
+            /* base/index/value would otherwise be embedded directly as
+             * sibling call arguments, whose relative evaluation order
+             * C leaves unspecified -- sequence them first, same as
+             * every other multi-child site in expr.c (the map case
+             * above is already safe: separate statements). */
+            StrBuf prelude;
+            sb_init(&prelude);
+            char *texts[3] = {b, i, val};
+            const char *ctypes[3] = {ctype_of(cg, "bytes"), map_type("int"),
+                                     map_type("int")};
+            char **names = sequence_exprs(cg, texts, ctypes, 3, &prelude);
+            emit_line(cg, "%ssl_bytes_set(%s, %s, (unsigned char)(%s));",
+                      prelude.data, names[0], names[1], names[2]);
             break;
         }
         if (is_arr(bt)) {
@@ -238,10 +249,15 @@ void gen_stmt(CG *cg, Stmt *s) {
                          vt, elem);
             val = maybe_cast(cg, elem, vt, val);
             const char *ec = ctype_of(cg, elem);
+            StrBuf prelude;
+            sb_init(&prelude);
+            char *texts[3] = {b, i, val};
+            const char *ctypes[3] = {ctype_of(cg, bt), map_type("int"), ec};
+            char **names = sequence_exprs(cg, texts, ctypes, 3, &prelude);
             emit_line(cg,
-                      "(*(%s *)(void *)sl_arr_get(%s, %s, sizeof(%s))) = "
+                      "%s(*(%s *)(void *)sl_arr_get(%s, %s, sizeof(%s))) = "
                       "(%s)(%s);",
-                      ec, b, i, ec, ec, val);
+                      prelude.data, ec, names[0], names[1], ec, ec, names[2]);
             break;
         }
         cg_error(s->line, "invalid assignment target");

@@ -62,7 +62,18 @@ char *gen_string_concat(CG *cg, Expr *e, const char *lt,
     char *b = gen_expr(cg, e->as.binary.rhs);
     char *ca = conv_to_str(lt, a);
     char *cb = conv_to_str(rt, b);
-    return xasprintf("sl_str_concat(%s, %s)", ca, cb);
+    /* lhs/rhs would otherwise be embedded directly as sl_str_concat's
+     * two arguments, whose relative evaluation order C leaves
+     * unspecified -- sequence them into named temps first (Tier 10's
+     * liveness pass assumes left-to-right; this is what makes that
+     * true of the generated C). */
+    StrBuf prelude;
+    sb_init(&prelude);
+    char *texts[2] = {ca, cb};
+    const char *ctypes[2] = {ctype_of(cg, "str"), ctype_of(cg, "str")};
+    char **names = sequence_exprs(cg, texts, ctypes, 2, &prelude);
+    return xasprintf("({ %ssl_str_concat(%s, %s); })", prelude.data,
+                     names[0], names[1]);
 }
 
 char *gen_numeric_binary(CG *cg, Expr *e, const char *result_t) {
@@ -73,6 +84,16 @@ char *gen_numeric_binary(CG *cg, Expr *e, const char *result_t) {
     char *b = gen_expr(cg, e->as.binary.rhs);
     a = maybe_cast(cg, result_t, lt, a);
     b = maybe_cast(cg, result_t, rt, b);
+
+    StrBuf prelude;
+    sb_init(&prelude);
+    char *texts[2] = {a, b};
+    const char *rc = ctype_of(cg, result_t);
+    const char *ctypes[2] = {rc, rc};
+    char **names = sequence_exprs(cg, texts, ctypes, 2, &prelude);
+    a = names[0];
+    b = names[1];
+
     /* Integer '/' and '%' by zero trap the CPU (SIGFPE) rather than
      * raising a catchable error; guard explicitly so it becomes an
      * ordinary runtime error like an out-of-bounds index instead of
@@ -81,33 +102,50 @@ char *gen_numeric_binary(CG *cg, Expr *e, const char *result_t) {
     if ((!strcmp(op, "/") || !strcmp(op, "%")) && is_int(result_t)) {
         int id = cg->tmp_id++;
         return xasprintf(
-            "({ %s _sl_dv%d = (%s); if (_sl_dv%d == 0) "
+            "({ %s%s _sl_dv%d = (%s); if (_sl_dv%d == 0) "
             "sl_rt_error(\"division by zero\", 0, 0); "
             "(%s)((%s) %s _sl_dv%d); })",
-            map_type(result_t), id, b, id, map_type(result_t), a, op, id);
+            prelude.data, map_type(result_t), id, b, id, map_type(result_t),
+            a, op, id);
     }
     /* Cast the result back to the slang result type: C's integer
      * promotions would otherwise widen narrow types to int and lose
      * the documented wrap-on-overflow semantics. */
-    return xasprintf("((%s)((%s) %s (%s)))", map_type(result_t), a, op, b);
+    return xasprintf("({ %s((%s)((%s) %s (%s))); })", prelude.data,
+                     map_type(result_t), a, op, b);
 }
 
 char *gen_comparison(CG *cg, Expr *e, const char *lt, const char *rt) {
     const char *op = e->as.binary.op;
     char *a = gen_expr(cg, e->as.binary.lhs);
     char *b = gen_expr(cg, e->as.binary.rhs);
+    if (!(is_str(lt) && is_str(rt)) && !(is_bytes(lt) && is_bytes(rt))) {
+        /* mixed-width numerics: widen both to the common type */
+        const char *pt = promote(lt, rt);
+        a = maybe_cast(cg, pt, lt, a);
+        b = maybe_cast(cg, pt, rt, b);
+    }
+    StrBuf prelude;
+    sb_init(&prelude);
+    const char *ct = is_str(lt) && is_str(rt)     ? ctype_of(cg, "str")
+                     : is_bytes(lt) && is_bytes(rt) ? ctype_of(cg, "bytes")
+                                                    : ctype_of(cg, promote(lt, rt));
+    char *texts[2] = {a, b};
+    const char *ctypes[2] = {ct, ct};
+    char **names = sequence_exprs(cg, texts, ctypes, 2, &prelude);
+    a = names[0];
+    b = names[1];
     if (is_str(lt) && is_str(rt))
-        return xasprintf("(strcmp(%s, %s) %s 0)", a, b, op);
+        return xasprintf("({ %s(strcmp(%s, %s) %s 0); })", prelude.data, a,
+                         b, op);
     if (is_bytes(lt) && is_bytes(rt)) {
         if (!strcmp(op, "=="))
-            return xasprintf("(sl_bytes_eq(%s, %s))", a, b);
-        return xasprintf("(!sl_bytes_eq(%s, %s))", a, b);
+            return xasprintf("({ %s(sl_bytes_eq(%s, %s)); })", prelude.data,
+                             a, b);
+        return xasprintf("({ %s(!sl_bytes_eq(%s, %s)); })", prelude.data, a,
+                         b);
     }
-    /* mixed-width numerics: widen both to the common type */
-    const char *pt = promote(lt, rt);
-    a = maybe_cast(cg, pt, lt, a);
-    b = maybe_cast(cg, pt, rt, b);
-    return xasprintf("(%s %s %s)", a, op, b);
+    return xasprintf("({ %s(%s %s %s); })", prelude.data, a, op, b);
 }
 
 char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
@@ -335,31 +373,52 @@ char *gen_call(CG *cg, Expr *e) {
             cg_error(e->line, "call to undefined function '%s'", name);
     }
 
+    int argi = 0;
+    if (selfexpr) {
+        selfexpr = maybe_cast(cg, sig->param_slang[0], recv_t, selfexpr);
+        argi = 1;
+    }
+    /* Explicit arguments would otherwise be embedded directly as
+     * sibling call arguments, whose relative evaluation order C
+     * leaves unspecified -- sequence them first (the primary Risk 1
+     * case: foo(bar(), baz())). selfexpr is never sequenced alongside
+     * them: a method receiver is always a plain identifier in this
+     * language (never a call/allocation of its own), so it has no
+     * ordering hazard to guard against. */
+    int nargs = e->as.call.nargs;
+    char **texts = (char **)xmalloc(sizeof(char *) * (size_t)(nargs > 0 ? nargs : 1));
+    const char **ctypes =
+        (const char **)xmalloc(sizeof(char *) * (size_t)(nargs > 0 ? nargs : 1));
+    for (int i = 0; i < nargs; i++) {
+        const char *saved = expect_push(cg, sig->param_slang[argi + i]);
+        const char *at = infer_type(cg, e->as.call.args[i]);
+        char *a = gen_expr(cg, e->as.call.args[i]);
+        cg->expect = saved;
+        texts[i] = maybe_cast(cg, sig->param_slang[argi + i], at, a);
+        ctypes[i] = ctype_of(cg, sig->param_slang[argi + i]);
+    }
+    StrBuf prelude;
+    sb_init(&prelude);
+    char **names = sequence_exprs(cg, texts, ctypes, nargs, &prelude);
+
     StrBuf sb;
     sb_init(&sb);
     char *mangled = sig->is_extern ? xstrdup(sig->name)
                                    : mangle_func(sig->pkg, sig->name);
     sb_append(&sb, mangled);
     sb_putc(&sb, '(');
-    int argi = 0;
     if (selfexpr) {
-        sb_append(&sb,
-                  maybe_cast(cg, sig->param_slang[0], recv_t, selfexpr));
-        argi = 1;
+        sb_append(&sb, selfexpr);
     }
-    for (int i = 0; i < e->as.call.nargs; i++) {
+    for (int i = 0; i < nargs; i++) {
         if (i || argi)
             sb_append(&sb, ", ");
-        const char *saved =
-            expect_push(cg, sig->param_slang[argi + i]);
-        const char *at = infer_type(cg, e->as.call.args[i]);
-        char *a = gen_expr(cg, e->as.call.args[i]);
-        cg->expect = saved;
-        a = maybe_cast(cg, sig->param_slang[argi + i], at, a);
-        sb_append(&sb, a);
+        sb_append(&sb, names[i]);
     }
     sb_putc(&sb, ')');
-    return sb.data;
+    if (prelude.len == 0)
+        return sb.data;
+    return xasprintf("({ %s%s; })", prelude.data, sb.data);
 }
 
 /* Generate a map literal. With expect_k/expect_v (annotated case),
@@ -446,12 +505,30 @@ char *gen_index(CG *cg, Expr *e) {
             "0, 0); *(%s *)(void *)_sl_p%d; })",
             kc, id, ix, id, b, id, id, vc, id);
     }
-    if (is_bytes(bt))
-        return xasprintf("((long long)sl_bytes_at(%s, %s))", b, i);
+    /* bytes/array reads: base and index would otherwise be embedded
+     * directly as sibling call arguments, whose relative evaluation
+     * order C leaves unspecified -- sequence them first (see
+     * sequence_exprs; the map case above is already safe, it already
+     * sequences base/index via separate statements). */
+    if (is_bytes(bt)) {
+        StrBuf prelude;
+        sb_init(&prelude);
+        char *texts[2] = {b, i};
+        const char *ctypes[2] = {ctype_of(cg, "bytes"), map_type("int")};
+        char **names = sequence_exprs(cg, texts, ctypes, 2, &prelude);
+        return xasprintf("({ %s((long long)sl_bytes_at(%s, %s)); })",
+                         prelude.data, names[0], names[1]);
+    }
     char *elem = arr_elem(bt);
     const char *ec = ctype_of(cg, elem);
-    return xasprintf("(*(%s *)(void *)sl_arr_get(%s, %s, sizeof(%s)))", ec,
-                     b, i, ec);
+    StrBuf prelude;
+    sb_init(&prelude);
+    char *texts[2] = {b, i};
+    const char *ctypes[2] = {ctype_of(cg, bt), map_type("int")};
+    char **names = sequence_exprs(cg, texts, ctypes, 2, &prelude);
+    return xasprintf(
+        "({ %s(*(%s *)(void *)sl_arr_get(%s, %s, sizeof(%s))); })",
+        prelude.data, ec, names[0], names[1], ec);
 }
 
 char *gen_slice(CG *cg, Expr *e) {
@@ -460,42 +537,72 @@ char *gen_slice(CG *cg, Expr *e) {
     char *start = e->as.slice.start ? gen_expr(cg, e->as.slice.start)
                                     : xstrdup("0");
     int id = cg->tmp_id++;
+    /* base is already safely sequenced into its own statement below;
+     * start/end (when both given) would otherwise be embedded
+     * directly as sibling call arguments -- sequence them the same
+     * way as gen_index above. */
     if (is_bytes(bt)) {
         char *end = e->as.slice.end
                         ? gen_expr(cg, e->as.slice.end)
                         : xasprintf("_sl_b%d->len", id);
         if (e->as.slice.inclusive)
             end = xasprintf("(%s + 1)", end);
+        StrBuf prelude;
+        sb_init(&prelude);
+        char *texts[2] = {start, end};
+        const char *ctypes[2] = {map_type("int"), map_type("int")};
+        char **names = sequence_exprs(cg, texts, ctypes, 2, &prelude);
         return xasprintf(
-            "({ sl_bytes *_sl_b%d = %s; sl_bytes_slice(_sl_b%d, %s, %s); })",
-            id, b, id, start, end);
+            "({ sl_bytes *_sl_b%d = %s; %ssl_bytes_slice(_sl_b%d, %s, %s); })",
+            id, b, prelude.data, id, names[0], names[1]);
     }
     char *end =
         e->as.slice.end ? gen_expr(cg, e->as.slice.end)
                         : xasprintf("_sl_a%d->len", id);
     if (e->as.slice.inclusive)
         end = xasprintf("(%s + 1)", end);
+    StrBuf prelude;
+    sb_init(&prelude);
+    char *texts[2] = {start, end};
+    const char *ctypes[2] = {map_type("int"), map_type("int")};
+    char **names = sequence_exprs(cg, texts, ctypes, 2, &prelude);
     return xasprintf(
-        "({ sl_arr *_sl_a%d = %s; sl_arr_slice(_sl_a%d, %s, %s); })", id, b,
-        id, start, end);
+        "({ sl_arr *_sl_a%d = %s; %ssl_arr_slice(_sl_a%d, %s, %s); })", id,
+        b, prelude.data, id, names[0], names[1]);
 }
 
 char *gen_list(CG *cg, Expr *e, const char *expect_elem) {
     const char *t0 =
         expect_elem ? expect_elem : infer_type(cg, e->as.list.elems[0]);
     const char *ec = ctype_of(cg, t0);
+    int n = e->as.list.nelems;
+    /* elements would otherwise be embedded directly in one aggregate
+     * initializer ({el0, el1, ...}), whose relative evaluation order
+     * C leaves unspecified -- sequence them first, same as every
+     * other multi-child site in this file. */
+    char **texts = (char **)xmalloc(sizeof(char *) * (size_t)(n > 0 ? n : 1));
+    const char **ctypes =
+        (const char **)xmalloc(sizeof(char *) * (size_t)(n > 0 ? n : 1));
+    for (int i = 0; i < n; i++) {
+        const char *ti = infer_type(cg, e->as.list.elems[i]);
+        char *el = gen_expr(cg, e->as.list.elems[i]);
+        texts[i] = maybe_cast(cg, t0, ti, el);
+        ctypes[i] = ec;
+    }
+    StrBuf prelude;
+    sb_init(&prelude);
+    char **names = sequence_exprs(cg, texts, ctypes, n, &prelude);
+
     StrBuf sb;
     sb_init(&sb);
     sb_append(&sb, "({ ");
+    sb_append(&sb, prelude.data);
     sb_append(&sb, ec);
     sb_append(&sb, " _sl_e[] = {");
-    for (int i = 0; i < e->as.list.nelems; i++) {
+    for (int i = 0; i < n; i++) {
         if (i)
             sb_append(&sb, ", ");
-        const char *ti = infer_type(cg, e->as.list.elems[i]);
-        char *el = gen_expr(cg, e->as.list.elems[i]);
-        el = maybe_cast(cg, t0, ti, el);
-        sb_append(&sb, el);
+        sb_append(&sb, names[i]);
     }
     sb_append(&sb, "}; sl_arr_from(_sl_e, ");
     sb_append(&sb, xasprintf("%d", e->as.list.nelems));

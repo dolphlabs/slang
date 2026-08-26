@@ -331,6 +331,34 @@ char *maybe_cast(CG *cg, const char *dst, const char *src,
     return xasprintf("(%s)(%s)", ctype_of(cg, dst), expr);
 }
 
+/* Evaluates each of texts[0..n) (already-generated C expression text,
+ * of C type ctypes[i]) into its own named temporary via a real,
+ * ordered C statement, appended to *prelude -- guaranteeing
+ * left-to-right evaluation, unlike embedding raw expression text
+ * directly into one fused C expression, where C leaves the relative
+ * order between sub-expressions of a function call, an aggregate
+ * initializer, or a binary operator unspecified (Tier 10's liveness
+ * pass assumes left-to-right order; this is what makes that
+ * assumption actually true of the generated C, not just of the
+ * analysis). Returns the n temp variable names to use in place of
+ * `texts` in the final expression, which the caller wraps as
+ * "({ <prelude> <final expr using the names>; })". A no-op (returns
+ * `texts` itself unchanged, `prelude` untouched) when n <= 1 -- a
+ * single child has no sibling to be unsequenced relative to. */
+char **sequence_exprs(CG *cg, char **texts, const char **ctypes, int n,
+                      StrBuf *prelude) {
+    if (n <= 1)
+        return texts;
+    char **names = (char **)xmalloc(sizeof(char *) * (size_t)n);
+    int id = cg->tmp_id++;
+    for (int i = 0; i < n; i++) {
+        names[i] = xasprintf("_sl_seq%d_%d", id, i);
+        sb_append(prelude, xasprintf("%s %s = %s; ", ctypes[i], names[i],
+                                     texts[i]));
+    }
+    return names;
+}
+
 const char *opt_cname(CG *cg, const char *inner) {
     for (int i = 0; i < cg->opts.count; i++) {
         if (!strcmp(cg->opts.items[i].inner, inner))

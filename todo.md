@@ -695,6 +695,36 @@ points, both permanent decisions, not "for now":
         instead of a resolved answer. Not hit by anything in `tests/`;
         would need a forward declaration pre-pass to fix properly, left
         for whoever needs it.
+- [x] Sibling sub-expressions sequenced into named temporaries
+      (`sequence_exprs`, `core.c`), closing the liveness pass's own
+      Risk 1: codegen previously built several kinds of expressions by
+      concatenating each child's generated text directly into one
+      fused C expression (`name(a0, a1)`, `{el0, el1}`, `(a op b)`),
+      and C leaves the relative evaluation order between unsequenced
+      sub-expressions of a function call, an aggregate initializer, or
+      a binary operator unspecified — invisible under Boehm's
+      conservative scan, but exactly the assumption real stack-map
+      emission (next) needs to actually be true, not just assumed.
+      Fixed at 6 sites, cited directly against source: `gen_call`'s
+      argument list, `gen_index`'s bytes/array-read cases, `gen_slice`'s
+      start/end pair, `gen_list`'s element list, `gen_numeric_binary`/
+      `gen_comparison`/`gen_string_concat`'s operand pair, and
+      `ST_ASSIGN`'s bytes/array index-target cases. Confirmed already
+      safe and deliberately left untouched: `gen_maplit`, `gen_structlit`,
+      `ST_ASSIGN`'s map-target case, `gen_index`'s map-read case (all
+      already sequence via real C statements), `&&`/`||` (C itself
+      guarantees left-to-right short-circuit order), `??` (rhs only
+      evaluates inside the resulting ternary, no sibling to race
+      against), and `ST_SPAWN`'s arguments (already one statement per
+      argument). A pure, mechanical, behavior-preserving transform —
+      verified by generated-C inspection (`foo(bar(), baz())` now
+      visibly evaluates `bar()` then `baz()` into named temps before
+      the outer call, matching the liveness pass's assumed order
+      exactly), the full 45-test suite passing unchanged, `demo/main.sl`
+      rebuilt and smoke-tested end to end (struct field encoding, map
+      read/write, arithmetic, JSON — all correct), and 3 representative
+      programs (`spawn`, `json`, `structs`) byte-identical against
+      `expected.txt` under ASan+UBSan.
 - [ ] Compiler: codegen emits stack maps at call sites for every
       generated function (the structural piece every bullet below
       depends on)

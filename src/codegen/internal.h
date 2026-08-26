@@ -275,6 +275,8 @@ int value_assignable(const char *dst, Expr *src, const char *srct);
 const char *promote(const char *lt, const char *rt);
 char *maybe_cast(CG *cg, const char *dst, const char *src,
                         char *expr);
+char **sequence_exprs(CG *cg, char **texts, const char **ctypes, int n,
+                      StrBuf *prelude);
 const char *opt_cname(CG *cg, const char *inner);
 const char *res_cname(CG *cg, const char *tv, const char *te);
 SpawnShape *spawn_shape_for(CG *cg, FuncSig *sig);
