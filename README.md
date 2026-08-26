@@ -611,20 +611,28 @@ main.sl ──loader──> packages ──lexer/parser──> ASTs ──codege
    `core.c` (CG state, symbol tables, type helpers), `infer.c` (type
    inference), `expr.c`/`stmt.c` (expression/statement codegen),
    `program.c` (top-level orchestration and `codegen_program`'s entry
-   point), `native.c` (the `NATIVE_SIGS` table + dispatch for
-   fixed-signature native functions like `time.sleep`/`net.recv`),
-   `json.c` (`json.decode`/`json.encode`'s own dispatch, since
-   they're generic over a target type rather than fixed-signature —
-   NATIVE_SIGS doesn't fit them, so they get their own small module
-   instead), and one `runtime_*.c` per native package
-   (`runtime_core.c` for the always-on prelude, `runtime_time.c`,
-   `runtime_net.c`, `runtime_tls.c`, `runtime_json.c`) holding that
-   package's embedded C source as a plain string array. `internal.h`
-   holds the shared `CG` struct and cross-file declarations; adding a
-   package (e.g. a future `proc`) means a new `runtime_proc.c` plus
-   either a few `NATIVE_SIGS` entries (fixed-signature functions) or
-   a small dedicated module like `json.c` (generic-over-a-type
-   functions), not edits to the inference/codegen core.
+   point), `runtime_core.c` (the always-on embedded prelude: strings,
+   lists, maps, `opt`/`result`, channels), and `native.c` (the
+   fixed-signature dispatch — `native_check`/`native_gen` — that
+   every simple native function like `time.sleep`/`net.recv` goes
+   through). `internal.h` holds the shared `CG` struct and
+   cross-file declarations.
+
+   Every native package lives entirely under its own
+   `src/codegen/pkg_<name>/`: a `sigs.c` with that package's `NatSig`
+   table (what `native.c` searches), a `runtime*.c` with its embedded
+   C source as a plain string array, and a tiny `pkg_<name>.h` that
+   just `#define`s the package's import name (`loader.c` pulls these
+   together into its native-package list, so a package's name is
+   declared once, next to its implementation, rather than in a
+   separate file three steps removed from it). `pkg_net/` also holds
+   `runtime_tls.c` for `net.tls_*`. A package whose functions are
+   generic over a target type — `json.decode`/`json.encode`, which
+   can't be expressed as one of `native.c`'s fixed-arity `NatSig`
+   rows — gets its own `dispatch.c` instead of a `sigs.c`, e.g.
+   `pkg_json/dispatch.c`. Adding a package (a future `proc`, say)
+   means a new `pkg_proc/` directory and one line in `loader.c`, not
+   edits to the inference/codegen core.
 5. **Driver** (`src/main.c`) — glues it together and shells out to
    `cc`. Because GCC/Clang compile the generated C, you get their full
    optimizer for free.
@@ -639,13 +647,24 @@ Inspect what slang generates:
 
 ```
 src/
-  common.h     allocation helpers, growable string buffer, file I/O
-  loader.h/.c  package discovery, merging, cycle detection
-  lexer.h/.c   tokenizer
-  ast.h        AST node definitions
-  parser.h/.c  recursive-descent parser
-  codegen.h/.c type checking + C emission
-  main.c       driver: flags, invokes cc
+  common.h       allocation helpers, growable string buffer, file I/O
+  loader.h/.c    package discovery, merging, cycle detection
+  lexer.h/.c     tokenizer
+  ast.h          AST node definitions
+  parser.h/.c    recursive-descent parser
+  codegen.h      public codegen API (one function: codegen_program)
+  codegen/       type checking + C emission, split by concern:
+    internal.h     shared CG state + cross-file declarations
+    core.c         CG state, symbol tables, type helpers
+    infer.c        type inference
+    expr.c/stmt.c  expression/statement codegen
+    program.c      top-level orchestration, codegen_program's entry point
+    native.c       fixed-signature native-function dispatch
+    runtime_core.c always-on embedded prelude (strings, lists, maps, opt/result, chan)
+    pkg_time/      the 'time' package: sigs.c + runtime.c
+    pkg_net/       the 'net' package: sigs.c + runtime_net.c + runtime_tls.c
+    pkg_json/      the 'json' package: dispatch.c + runtime.c
+  main.c         driver: flags, invokes cc
 examples/      one directory per example program
 tests/         one directory per test case; run via `tests/run_tests.sh`
 Makefile       build/test/clean

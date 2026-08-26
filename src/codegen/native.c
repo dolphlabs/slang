@@ -5,41 +5,30 @@
 
 #include <string.h>
 
-const NatSig NATIVE_SIGS[] = {
-    {"time", "mono", 0, {0}, "duration", 0},
-    {"time", "wall", 0, {0}, "int", 0},
-    {"time", "sleep", 1, {NA_INT}, NULL, 0},
-    {"net", "listen", 1, {NA_INT}, "result[i32,str]", 0},
-    {"net", "port", 1, {NA_INT}, "result[i32,str]", 0},
-    {"net", "accept", 1, {NA_INT}, "result[i32,str]", 0},
-    {"net", "dial", 2, {NA_STR, NA_INT}, "result[i32,str]", 0},
-    {"net", "send", 2, {NA_INT, NA_BYTES}, "result[i32,str]", 0},
-    {"net", "recv", 2, {NA_INT, NA_INT}, "result[bytes,str]", 0},
-    {"net", "close", 1, {NA_INT}, NULL, 0},
-    {"net", "nonblock", 1, {NA_INT}, "result[bool,str]", 0},
-    {"net", "tls_server_ctx", 2, {NA_STR, NA_STR}, "result[rawptr,str]", 1},
-    {"net", "tls_client_ctx", 1, {NA_STR}, "result[rawptr,str]", 1},
-    {"net", "tls_accept", 2, {NA_INT, NA_RAWPTR}, "result[rawptr,str]", 1},
-    {"net", "tls_dial", 3, {NA_STR, NA_INT, NA_RAWPTR}, "result[rawptr,str]",
-     1},
-    {"net", "tls_send", 2, {NA_RAWPTR, NA_BYTES}, "result[i32,str]", 1},
-    {"net", "tls_recv", 2, {NA_RAWPTR, NA_INT}, "result[bytes,str]", 1},
-    {"net", "tls_close", 1, {NA_RAWPTR}, NULL, 1},
-};
+/* Each native package with fixed-signature functions (i.e. every one
+ * except json, which is generic over a target type -- see
+ * pkg_json/dispatch.c) keeps its own NatSig table in its own
+ * pkg_<name>/sigs.c. Adding a package means adding one line here. */
+static const NatSig *find_sig(const NatSig *sigs, int len, const char *pkg,
+                              const char *fname) {
+    for (int i = 0; i < len; i++)
+        if (!strcmp(sigs[i].pkg, pkg) && !strcmp(sigs[i].name, fname))
+            return &sigs[i];
+    return NULL;
+}
+
+static const NatSig *find_any_sig(const char *pkg, const char *fname) {
+    const NatSig *ns = find_sig(TIME_SIGS, TIME_SIGS_LEN, pkg, fname);
+    if (!ns)
+        ns = find_sig(NET_SIGS, NET_SIGS_LEN, pkg, fname);
+    return ns;
+}
 
 /* Validate a call into a native package and return its slang return
  * type. */
 const char *native_check(CG *cg, const char *pkg, const char *fname,
                                 Expr *e) {
-    const NatSig *ns = NULL;
-    for (int i = 0;
-         i < (int)(sizeof(NATIVE_SIGS) / sizeof(NATIVE_SIGS[0])); i++) {
-        if (!strcmp(NATIVE_SIGS[i].pkg, pkg) &&
-            !strcmp(NATIVE_SIGS[i].name, fname)) {
-            ns = &NATIVE_SIGS[i];
-            break;
-        }
-    }
+    const NatSig *ns = find_any_sig(pkg, fname);
     if (!ns)
         cg_error(e->line, "package '%s' has no function '%s'", pkg, fname);
     int n = e->as.call.nargs;

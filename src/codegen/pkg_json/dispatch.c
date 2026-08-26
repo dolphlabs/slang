@@ -5,14 +5,14 @@
  *   decode: bool NAME(sl_json_val *v, <ctype_of T> *out, char **err);
  *   encode: void NAME(<ctype_of T> v, sl_json_sb *out);
  * Scalars (bool/str/int-like/float-like) are fixed functions already
- * defined in JSON_RUNTIME (runtime_json.c). Composite types
+ * defined in JSON_RUNTIME (runtime.c). Composite types
  * (opt[T]/[T]/map[str,V]/struct) are monomorphized here, one C
  * function per distinct slang type reached from a json.decode or
  * json.encode call site -- registered (and, for structs/opt/list/map,
  * recursively discovered through their element/field types) by
  * json_dec_fn/json_enc_fn, then emitted by emit_json_codecs. */
 
-#include "internal.h"
+#include "../internal.h"
 
 #include <string.h>
 

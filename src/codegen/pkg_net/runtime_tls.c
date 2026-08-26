@@ -1,7 +1,7 @@
 /* Split out of the original monolithic codegen.c -- see
  * internal.h for the shared CG state and cross-file API. */
 
-#include "internal.h"
+#include "../internal.h"
 
 
 /* Blocking mode only, matching net's own blocking-by-default design:

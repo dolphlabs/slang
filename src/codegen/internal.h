@@ -145,8 +145,8 @@ typedef struct {
 /* One json.decode/json.encode codec per distinct composite slang type
  * (struct/opt/list/map) reached from a json.decode or json.encode
  * call site. Scalar leaf types go through fixed runtime helpers
- * instead (see json_dec_fn/json_enc_fn in json.c) so they never need
- * an entry here. */
+ * instead (see json_dec_fn/json_enc_fn in pkg_json/dispatch.c) so
+ * they never need an entry here. */
 typedef struct {
     char *slang_type; /* canonical slang type this codec is for */
     char *dec_name;   /* C decode function name, or NULL if unneeded */
@@ -188,12 +188,15 @@ struct CG {
 /* Native-package function signatures (formerly codegen.c:950-964)      */
 /* ------------------------------------------------------------------ */
 
-/* Signatures of the compiler-provided functions in the native 'time'
- * and 'net' packages (see loader.c). ret == NULL means void. Each
+/* Signatures of the compiler-provided functions in each native
+ * package with a fixed call signature (every native package except
+ * json -- see pkg_json/dispatch.c). ret == NULL means void. Each
  * argument's expected category drives both the type check below and
  * (indirectly, via is_rawptr/is_bytes/is_str exclusions) native_gen's
  * marshaling -- add a new NA_* kind here rather than special-casing
- * a function name/index pair the way this table used to. */
+ * a function name/index pair the way this table used to. Each
+ * package owns its own table in its own pkg_<name>/sigs.c; native.c
+ * searches across all of them. */
 typedef enum { NA_INT, NA_STR, NA_BYTES, NA_RAWPTR } NatArgKind;
 
 typedef struct {
@@ -204,21 +207,28 @@ typedef struct {
     int is_tls; /* needs OpenSSL: gates TLS_RUNTIME + -lssl -lcrypto */
 } NatSig;
 
-extern const NatSig NATIVE_SIGS[];
-
 /* ------------------------------------------------------------------ */
-/* Embedded native-package runtime C source (see src/codegen/runtime_*.c) */
+/* Per-package signatures and embedded runtime C source. Each native
+ * package lives entirely under src/codegen/pkg_<name>/: its NatSig
+ * table (if any) in sigs.c, its embedded runtime in runtime*.c. */
 /* ------------------------------------------------------------------ */
 
-extern const char *RUNTIME[];
+extern const char *RUNTIME[]; /* always-on prelude, src/codegen/runtime_core.c */
 extern const int RUNTIME_LEN;
+
+extern const NatSig TIME_SIGS[]; /* src/codegen/pkg_time/ */
+extern const int TIME_SIGS_LEN;
 extern const char *TIME_RUNTIME[];
 extern const int TIME_RUNTIME_LEN;
+
+extern const NatSig NET_SIGS[]; /* src/codegen/pkg_net/ */
+extern const int NET_SIGS_LEN;
 extern const char *NET_RUNTIME[];
 extern const int NET_RUNTIME_LEN;
 extern const char *TLS_RUNTIME[];
 extern const int TLS_RUNTIME_LEN;
-extern const char *JSON_RUNTIME[];
+
+extern const char *JSON_RUNTIME[]; /* src/codegen/pkg_json/ */
 extern const int JSON_RUNTIME_LEN;
 
 /* ------------------------------------------------------------------ */
@@ -337,7 +347,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
                               int main_index);
 
 /* ------------------------------------------------------------------ */
-/* json.decode / json.encode (src/codegen/json.c)                      */
+/* json.decode / json.encode (src/codegen/pkg_json/dispatch.c)         */
 /* ------------------------------------------------------------------ */
 
 /* Returns the C function name that decodes a JSON value into slang
@@ -375,7 +385,7 @@ void emit_json_codecs(CG *cg);
  * after the dot) and returns its slang return type, exactly like
  * native_check does for the fixed-signature native packages -- but
  * json's functions are generic over T, so they get their own entry
- * point instead of a NATIVE_SIGS row. */
+ * point instead of a NatSig row in some pkg_json/sigs.c. */
 const char *json_call_infer(CG *cg, const char *fname, Expr *e);
 
 /* Codegens a 'json.decode'/'json.encode' call site; mirrors

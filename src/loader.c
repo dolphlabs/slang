@@ -3,6 +3,10 @@
 #include "parser.h"
 #include "loader.h"
 
+#include "codegen/pkg_net/pkg_net.h"
+#include "codegen/pkg_time/pkg_time.h"
+#include "codegen/pkg_json/pkg_json.h"
+
 #include <ctype.h>
 #include <dirent.h>
 #include <limits.h>
@@ -172,7 +176,11 @@ static void merge_program(Package *pkg, Program *src, const char *fname) {
 static int load_package_dir(Loader *ld, const char *real);
 
 /* Built-in packages implemented natively by the code generator. */
-static const char *NATIVE_PKGS[] = {"time", "net", "json", NULL};
+/* Each native package declares its own import name in its own
+ * pkg_<name>/pkg_<name>.h; adding a package means adding one line
+ * here (plus its implementation under src/codegen/pkg_<name>/). */
+static const char *NATIVE_PKGS[] = {PKG_TIME_NAME, PKG_NET_NAME,
+                                    PKG_JSON_NAME, NULL};
 
 /* If the import path refers to a built-in native package (and there is
  * no local directory of the same name), synthesize it. */
