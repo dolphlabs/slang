@@ -2,8 +2,51 @@
  * internal.h for the shared CG state and cross-file API. */
 
 #include "internal.h"
+#include "liveness.h"
 
 #include <string.h>
+
+/* Tier 10: emits the root-array + sl_safepoint + enter statements for
+ * a loop's back-edge, from its already-computed backedge_live_set
+ * (named entries only -- liveness.c's solve_loop_fixpoint unions live
+ * sets via ls_union_named_into, which never touches the "pending"
+ * (anonymous, intra-expression) side of a LiveSet at all, so unlike
+ * gen_call's own bracket there's no temp to materialize here: every
+ * entry is already a real, stably-addressable, already-declared
+ * local). Called right after the loop's own C `{`, wrapping the
+ * per-iteration body (and, for ST_FOR_IN, the per-iteration bound-
+ * variable statements too) so it re-executes every iteration --
+ * protects a loop-carried GC pointer even when nothing inside the
+ * loop body happens to go through gen_call's own bracket (a tight
+ * loop with no calls at all, or a call to a builtin/native function,
+ * neither of which get one -- see todo.md's Tier 10 notes). Returns
+ * 1 (bracket opened; caller must emit "sl_rt_safepoint_exit();"
+ * after the body) or 0 (empty set, nothing emitted, nothing to
+ * close) -- matching every other bracket built so far, skipped
+ * entirely when there's nothing to protect (the common case for a
+ * purely numeric loop). */
+static int emit_backedge_enter(CG *cg, void *backedge_live_set) {
+    int n = live_set_nnamed(backedge_live_set);
+    if (n == 0)
+        return 0;
+    int id = cg->tmp_id++;
+    StrBuf roots;
+    sb_init(&roots);
+    sb_append(&roots, xasprintf("void *_sl_bp%d_roots[] = { ", id));
+    for (int i = 0; i < n; i++) {
+        if (i)
+            sb_append(&roots, ", ");
+        sb_append(&roots, xasprintf("(void *)%s", sanitize_ident(
+                                                       live_set_named(
+                                                           backedge_live_set, i))));
+    }
+    sb_append(&roots, "};");
+    emit_line(cg, "%s", roots.data);
+    emit_line(cg, "sl_safepoint _sl_bp%d;", id);
+    emit_line(cg, "sl_rt_safepoint_enter(&_sl_bp%d, _sl_bp%d_roots, %d);", id,
+              id, n);
+    return 1;
+}
 
 void gen_stmt(CG *cg, Stmt *s) {
     switch (s->kind) {
@@ -307,7 +350,13 @@ void gen_stmt(CG *cg, Stmt *s) {
             cg_error(s->line, "while condition must be bool (got %s)", ct);
         char *cond = gen_expr(cg, s->as.while_stmt.cond);
         emit_line(cg, "while (%s) {", cond);
-        gen_block(cg, s->as.while_stmt.body);
+        cg->indent++;
+        int has_bp = emit_backedge_enter(cg, s->backedge_live_set);
+        gen_stmts(cg, s->as.while_stmt.body->stmts,
+                  s->as.while_stmt.body->count);
+        if (has_bp)
+            emit_line(cg, "sl_rt_safepoint_exit();");
+        cg->indent--;
         emit_line(cg, "}");
         break;
     }
@@ -329,7 +378,12 @@ void gen_stmt(CG *cg, Stmt *s) {
         emit_line(cg, "long long %s = %s;", endvar, end);
         emit_line(cg, "for (long long %s = %s; %s %s %s; %s++) {", vname,
                   start, vname, op, endvar, vname);
-        gen_block(cg, s->as.for_stmt.body);
+        cg->indent++;
+        int has_bp = emit_backedge_enter(cg, s->backedge_live_set);
+        gen_stmts(cg, s->as.for_stmt.body->stmts, s->as.for_stmt.body->count);
+        if (has_bp)
+            emit_line(cg, "sl_rt_safepoint_exit();");
+        cg->indent--;
         emit_line(cg, "}");
         cg->indent--;
         emit_line(cg, "}");
@@ -352,10 +406,13 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
+            int has_bp = emit_backedge_enter(cg, s->backedge_live_set);
             emit_line(cg, "%s %s = (*(%s *)(void *)sl_arr_get(_sl_it%d, "
                           "_sl_i%d, sizeof(%s)));",
                       ec, vname, ec, id, id, ec);
             gen_block(cg, s->as.for_in.body);
+            if (has_bp)
+                emit_line(cg, "sl_rt_safepoint_exit();");
             cg->indent--;
             emit_line(cg, "}");
             cg->indent--;
@@ -372,9 +429,12 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
+            int has_bp = emit_backedge_enter(cg, s->backedge_live_set);
             emit_line(cg, "long long %s = (long long)_sl_bt%d->ptr[_sl_i%d];",
                       vname, id, id);
             gen_block(cg, s->as.for_in.body);
+            if (has_bp)
+                emit_line(cg, "sl_rt_safepoint_exit();");
             cg->indent--;
             emit_line(cg, "}");
             cg->indent--;
@@ -401,6 +461,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
+            int has_bp = emit_backedge_enter(cg, s->backedge_live_set);
             emit_line(cg, "long long _sl_slot%d = _sl_m%d->order[_sl_i%d];",
                       id, id, id);
             emit_line(cg,
@@ -412,6 +473,8 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "_sl_m%d->vsz);",
                       vc, v2name, vc, id, id, id);
             gen_block(cg, s->as.for_in.body);
+            if (has_bp)
+                emit_line(cg, "sl_rt_safepoint_exit();");
             cg->indent--;
             emit_line(cg, "}");
             cg->indent--;

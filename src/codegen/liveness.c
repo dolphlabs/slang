@@ -720,27 +720,48 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
     case ST_FOR_IN: {
         const char *it = infer_type(cg, s->as.for_in.iter);
         /* same "pushed, never popped" caveat as ST_FOR above */
+        LiveVar *bound1 = NULL, *bound2 = NULL;
         if (is_arr(it)) {
-            declare_var(cg, s->as.for_in.name, arr_elem(it));
+            bound1 = declare_var(cg, s->as.for_in.name, arr_elem(it));
         } else if (is_bytes(it)) {
             declare_var(cg, s->as.for_in.name, "int");
         } else if (is_map(it)) {
             char *k, *v;
             map_kv(it, &k, &v);
-            declare_var(cg, s->as.for_in.name, k);
-            declare_var(cg, s->as.for_in.name2, v);
+            bound1 = declare_var(cg, s->as.for_in.name, k);
+            bound2 = declare_var(cg, s->as.for_in.name2, v);
         }
         /* the bound variable(s) are redefined fresh every iteration
          * (var_push happens once per generated C loop, but the C
          * variable itself is reassigned each pass) -- never carried
-         * across the back-edge as a value needing preservation; the
-         * ITERABLE (uses(iter) below) is what's genuinely live across
-         * every iteration */
+         * across the back-edge as a value needing preservation, and
+         * never live BEFORE this loop starts either. Unlike
+         * ST_ASSIGN's real-def case, nothing else in this walk treats
+         * a for-in binding as a "definition" that kills prior
+         * liveness -- declare_var only makes the name resolvable, it
+         * doesn't touch any live set -- so bound1/bound2 have to be
+         * explicitly stripped from both the backedge set and this
+         * statement's own returned live_in below, or they leak
+         * backward into every earlier program point whenever the
+         * loop body references them (which is virtually always: why
+         * else bind them). Caught the hard way: an array-of-str or
+         * map for-in loop as the last statement in a function, whose
+         * bound variable(s) then outlive the walk of everything
+         * before it (function-flat, declared-and-never-popped
+         * scoping), made an EARLIER call site's own root list
+         * reference a C identifier that doesn't exist yet at that
+         * point in the generated C -- a hard compile error, not a
+         * silent one. The ITERABLE (uses(iter) below) is what's
+         * genuinely live across every iteration. */
         LiveSet *backedge = NULL;
         LiveSet *live_in_body = solve_loop_fixpoint(
             cg, s->as.for_in.body, live_out, &backedge);
+        ls_remove_named(backedge, bound1);
+        ls_remove_named(backedge, bound2);
         s->backedge_live_set = backedge;
         LiveSet *joined = ls_clone(live_in_body);
+        ls_remove_named(joined, bound1);
+        ls_remove_named(joined, bound2);
         ls_union_named_into(joined, live_out);
         return live_expr(cg, s->as.for_in.iter, joined);
     }

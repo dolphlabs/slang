@@ -868,8 +868,70 @@ points, both permanent decisions, not "for now":
         `spawn`, `structs`, `opt`, `ints`, `bytes`, `lists`, `proc`)
         plus 6 hand-built programs covering every bug above;
         determinism (byte-identical repeated `--emit-c` runs).
-- [ ] Compiler: codegen emits stack maps at loop back-edges too, ahead
-      of Tier 11's cooperative preemption needing them
+- [x] Compiler: codegen emits stack maps at loop back-edges too, ahead
+      of Tier 11's cooperative preemption needing them. Every loop kind
+      (`ST_WHILE`, `ST_FOR`, `ST_FOR_IN`'s array/bytes/map variants,
+      `stmt.c`) now wraps its own body with a call-site-shaped bracket
+      (`sl_rt_safepoint_enter`/`exit`, re-executed every iteration) built
+      from `Stmt.backedge_live_set` -- already computed by liveness.c's
+      `solve_loop_fixpoint` and printed by `--dump-liveness`'s
+      `*-BACKEDGE` lines, unconsumed by real codegen until now.
+      Meaningfully simpler than the call-site work: `backedge_live_set`
+      only ever holds *named* entries (`solve_loop_fixpoint` unions via
+      `ls_union_named_into`, which never touches a `LiveSet`'s pending
+      side -- pending is a purely intra-expression concept, meaningless
+      across a control-flow edge), so every root is an already-declared,
+      stably-addressable local -- no temp materialization, no
+      incremental-registration ordering, no `ambient_roots` interaction
+      needed, just `sanitize_ident` + `(void*)`, the same as `gen_call`'s
+      own named entries. One new shared helper (`emit_backedge_enter`,
+      local to `stmt.c`, not exposed elsewhere) covers all 5 call sites.
+      Closes a real gap the call-site work left open: a loop-carried GC
+      pointer the loop body's own calls never happen to touch directly
+      (e.g. `println(i)` inside a loop, which is a builtin bypassing
+      `gen_call`'s bracket entirely) had nothing protecting it during any
+      iteration; now the loop's own bracket does, composing correctly
+      with nested call-site brackets through the existing
+      `sl_rt_safepoint_top` chain (verified with nested loops: an outer
+      loop's own accumulator stays protected across an inner loop's
+      entire run, including calls inside it).
+  - [x] One real, pre-existing bug found and fixed along the way, in
+        code untouched by either this step or the call-site step
+        (confirmed via `git diff` against liveness.c: dates to the
+        original liveness-pass commit): `ST_FOR_IN`'s bound variable(s)
+        (`for x in xs` / `for k, v in m`) were never removed from any
+        live set before escaping the loop's own liveness computation.
+        `declare_var` only makes the name resolvable -- unlike
+        `ST_ASSIGN`'s real-def case, nothing ever treated a for-in
+        binding as a "definition" that kills prior liveness -- so
+        whenever the loop body referenced its own bound variable(s)
+        (virtually always) and the variable's type was GC-tracked
+        (iterating an array of GC-pointer elements, or a map by key
+        and/or value), the binding leaked backward into every earlier
+        program point once the loop was textually last in its function
+        (this language's declared-and-never-popped scoping keeps the
+        `LiveVar` alive for the rest of the backward walk). Silent
+        under `--dump-liveness` alone, but a hard compile error the
+        moment a real bracket at an earlier call site tried to
+        reference a C identifier (the bound variable) that doesn't
+        exist yet at that point in the generated C -- caught directly
+        (`for k, v in m` as a function's last statement, with an
+        earlier call needing its own bracket). Fixed by capturing
+        `declare_var`'s returned `LiveVar*` for each bound variable and
+        explicitly `ls_remove_named`-ing both before they're stored
+        into `backedge_live_set` or returned as the statement's own
+        live_in.
+  - Verified: full 45-test suite unchanged; `--dump-liveness`
+        cross-checked against generated C for all 4 loop kinds
+        (including the map for-in that exposed the bug above) plus
+        nested loops (outer/inner accumulators both correctly
+        protected, composing with calls inside the inner loop);
+        `demo/main.sl` rebuilt and smoke-tested end to end, including
+        `/api/stress/json`'s `for it in jr.items` (an array-of-struct
+        for-in, exactly the shape the bug needed); ASan+UBSan clean and
+        byte-identical against `expected.txt` on the same 9 tests as
+        the call-site step plus 2 new hand-built loop programs;
+        determinism.
 - [ ] Runtime: replace every `GC_malloc`/collection call site with the
       new allocator; drop the libgc dependency once nothing calls it
 - [ ] Gate before Tier 11 starts: the full existing test suite
