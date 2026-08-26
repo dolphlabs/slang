@@ -1,0 +1,28 @@
+{"name":"Ada","age":36,"email":"ada@example.com","tags":["math","computing"],"addr":{"city":"London","zip":"SW1"}}
+Ada
+36
+ada@example.com
+London
+2
+math
+{"name":"Anon","age":0,"email":null,"tags":["none"],"addr":{"city":"Nowhere","zip":""}}
+email correctly absent after round-trip
+{"value":1,"next":{"value":2,"next":null}}
+1
+2
+tail correctly none
+{"alice":90,"bob":75}
+true
+90
+75
+malformed json correctly rejected
+missing field correctly rejected
+wrong field type correctly rejected
+x
+5
+-3.5
+-7
+3
+2
+frombytes
+9

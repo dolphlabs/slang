@@ -326,6 +326,7 @@ const char *literal_type(CG *cg, Expr *e, int line);
 char *gen_const_init(Expr *e);
 void emit_globals(CG *cg, Package *pkgs, int npkgs, int main_index);
 void emit_struct_types(CG *cg);
+void emit_opt_res_forward_decls(CG *cg);
 void emit_opt_res_types(CG *cg);
 void force_native_result_types(CG *cg);
 void emit_native_runtime(CG *cg);
@@ -354,10 +355,32 @@ const char *json_dec_fn(CG *cg, const char *t, int line);
  * sl_json_sb *out)'. */
 const char *json_enc_fn(CG *cg, const char *t, int line);
 
+/* Wraps `val` (a C expression of slang type `t`) with whatever cast
+ * its encode function's fixed-width parameter needs (e.g. i32 -> a
+ * '(long long)' cast for sl_json_enc_i64); composite/bool/str values
+ * pass through unchanged. Used at json.encode's own call site. */
+char *json_enc_call_arg(const char *t, const char *val);
+
+/* Emits JSON_RUNTIME (the parser, generic tree, and fixed scalar
+ * dec/enc helpers) if cg->want_json. */
+void emit_json_runtime(CG *cg);
+
 /* Emits every composite codec registered in cg->json (prototypes
  * first, then bodies, so mutually-recursive struct codecs don't need
  * emission-order tracking). Must run after emit_struct_types and
  * emit_opt_res_types, since codec signatures reference both. */
 void emit_json_codecs(CG *cg);
+
+/* Type-checks a 'json.decode'/'json.encode' call (fname is the part
+ * after the dot) and returns its slang return type, exactly like
+ * native_check does for the fixed-signature native packages -- but
+ * json's functions are generic over T, so they get their own entry
+ * point instead of a NATIVE_SIGS row. */
+const char *json_call_infer(CG *cg, const char *fname, Expr *e);
+
+/* Codegens a 'json.decode'/'json.encode' call site; mirrors
+ * native_gen. Must run after json_call_infer has been called on the
+ * same Expr (via infer_type), same convention as native_gen. */
+char *json_call_gen(CG *cg, const char *fname, Expr *e);
 
 #endif /* SLANG_CODEGEN_INTERNAL_H */

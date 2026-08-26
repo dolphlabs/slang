@@ -296,6 +296,8 @@ const char *infer_call(CG *cg, Expr *e) {
     if (split_dotted(name, &left, &right)) {
         const char *pkg = import_try(cg, left);
         if (pkg) {
+            if (!strcmp(pkg, "json") && is_native_pkg(cg, pkg))
+                return json_call_infer(cg, right, e);
             sig = sig_find_in(cg, pkg, right);
             if (!sig && is_native_pkg(cg, pkg))
                 return native_check(cg, pkg, right, e);
@@ -597,7 +599,9 @@ const char *infer_type(CG *cg, Expr *e) {
                 cg_error(e->line, "missing field '%s' in %s literal",
                          sd->fields[i], sd->canonical);
             Expr *v = e->as.structlit.vals[found];
+            const char *saved = expect_push(cg, sd->ftypes[i]);
             const char *vt = infer_type(cg, v);
+            cg->expect = saved;
             if (!value_assignable(sd->ftypes[i], v, vt))
                 cg_error(e->line,
                          "field '%s': cannot use %s where %s expected",

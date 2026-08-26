@@ -261,11 +261,94 @@ wouldn't need to change the language surface below.
 
 ## Tier 7 — JSON / structured serialization
 
-- [ ] Decode: `str`/`bytes` -> a slang value (needs a representation
-      decision: a dynamic/`any`-like value type vs. decoding straight
-      into a known struct shape)
-- [ ] Encode: struct/map/list/scalar -> JSON `str`
-- [ ] Tests: round-trip encode/decode, malformed-input handling
+- [x] Representation decision, put to the user explicitly (this was
+      the one open question in this tier): typed struct decode/encode
+      (chosen) vs. a dynamic JSON-value type navigated at runtime. Went
+      with typed — `json.decode`'s target type is inferred from the
+      binding's annotation via the same `cg->expect` mechanism
+      `ok()`/`err()` already use for `result[T,E]`, and a
+      decoder/encoder function is generated per distinct
+      struct/opt/list/map[str,_] type reached, the same
+      monomorphization pattern `opt[T]`/`result[T,E]` already use for
+      their C typedefs. No new "any" type added to the language; a
+      type mismatch is a `result` error, not a silent `null`.
+  - [x] Codegen landed as its own `src/codegen/json.c` module rather
+        than `NATIVE_SIGS` entries in `native.c` — `json.decode`/
+        `json.encode` are generic over a target type, which the
+        fixed-signature `NATIVE_SIGS` table has no way to express;
+        this only became a clean addition because codegen.c had just
+        been split from one 4200-line file into `src/codegen/*.c` by
+        concern (the user's explicit ask, done right before this
+        tier) — adding a generic-dispatch package to the old
+        monolith would have meant editing the same giant file yet
+        again
+  - [x] Decode: parses into a generic internal tree first (`sl_json_val`
+        — never exposed to slang), then a generated function walks it
+        field-by-field against the target type. Nesting depth capped
+        at 512 (recursive-descent parser + untrusted network input is
+        exactly a stack-overflow DoS vector; empirically confirmed
+        unbounded nesting crashes at depth ~100k on an 8MB stack,
+        confirmed the cap rejects cleanly instead)
+  - [x] Encode: struct/opt[T]/[T]/map[str,V]/scalar -> JSON `str`,
+        recursively monomorphized the same way decode is
+  - [x] Missing key on an `opt[T]` field defaults to `none`; on any
+        other field type it's a decode error. Unknown keys ignored.
+        Errors compose a path through nesting for free, as a side
+        effect of each recursion level wrapping the error it received
+        (`field 'addr': field 'city': expected a string, got a
+        number`) — not designed in up front, found while writing the
+        README's description of the error format and verified against
+        the actual generated code
+  - [x] `rawptr`/`chan[T]`/`result[T,E]`/non-`str`-keyed maps rejected
+        at compile time with a clear error, not discovered at runtime
+- [x] Parser validated as a standalone spike before touching the
+      compiler (same discipline as Tiers 5 and 6): malformed input
+      (unterminated strings, bad escapes, leading zeros, trailing
+      garbage, control bytes), full `\uXXXX` including UTF-16
+      surrogate pairs, and the nesting-depth DoS all verified clean
+      under ASan+UBSan against the real embedded `sl_map`/`sl_arr`
+      before being converted into the compiler's embedded-string-array
+      format (round-trip verified byte-identical against the validated
+      source)
+- [x] Real bugs found and fixed along the way, each with a regression
+      test:
+  - [x] UBSan caught casting an out-of-range `double` (e.g. a JSON
+        number like `99999999999999999999`) to `long long` before
+        checking its magnitude — undefined behavior regardless of
+        whether the result is later discarded. Fixed by checking
+        magnitude first in all three integer-decode paths (`i8`..`i32`
+        via a shared macro, `i64`, `u64`)
+  - [x] Pre-existing, unrelated to JSON: a struct with an `opt[T]` (or
+        `result[T,E]`) field failed to compile — `emit_struct_types`
+        ran before `emit_opt_res_types`, so a struct body referencing
+        `sl_opt_str` as a field type hit "unknown type name" (that
+        typedef didn't exist yet). No existing test had a struct with
+        an opt/result-typed field, so this had never been hit. Fixed
+        by giving opt/result instantiations the same two-phase
+        forward-declare-then-define treatment structs already have
+        (`emit_opt_res_forward_decls`, emitted before struct bodies —
+        safe because an opt/result field is always a pointer, so an
+        incomplete type is all a struct body needs at that point)
+  - [x] Pre-existing, unrelated to JSON: struct literal field values
+        were inferred without pushing the field's type as `cg->expect`
+        first (unlike function-call arguments, which already do this),
+        so `none`/`some(..)`/`ok(..)`/`err(..)` as a struct field value
+        couldn't self-infer. Fixed in both `infer.c` and `expr.c`
+        (mirrors the existing function-argument `expect_push` pattern
+        exactly); this is also what makes a self-referential struct
+        via `opt[Self]` constructible as a literal, which the JSON
+        test suite exercises directly to prove the compiler's own
+        codec-registration doesn't infinite-loop on the cycle
+- [x] Tests: `tests/json/` (struct/nested-struct/opt-present/
+      opt-absent/list/map round-trips, self-referential struct via
+      `opt[Self]`, malformed JSON, missing required field, wrong field
+      type, extra fields tolerated, negative numbers, floats, list of
+      structs, `bytes` input), `tests/fail_json_rawptr`,
+      `tests/fail_json_map_key`, `tests/fail_json_untyped`, plus
+      `tests/struct_field_expect` for the struct-literal inference fix
+      on its own. All of the above also verified clean under ASan+UBSan
+      against the actual compiled `.gen.c` output, not just the
+      isolated runtime spike.
 
 ## Tier 8 — process lifecycle
 

@@ -292,8 +292,9 @@ parameter is a compile error.
 
 ## Standard packages
 
-`time` and `net` are compiler-provided native packages — no source
-files, just `import "time";` / `import "net";` like any other package.
+`time`, `net`, and `json` are compiler-provided native packages — no
+source files, just `import "time";` / `import "net";` / `import
+"json";` like any other package.
 
 #### `time`
 
@@ -376,6 +377,50 @@ that validates a certificate chain without checking it belongs to
 the host you're actually talking to). Sending/receiving is blocking,
 same as plain `net` — call these from a `spawn`ed task if you need a
 connection handled without stalling anything else.
+
+#### `json`
+
+`json.decode`/`json.encode` (de)serialize `str`/`bytes` against a
+concrete slang type — the target type for `decode` is inferred from
+the binding's annotation, the same mechanism `ok()`/`err()` already
+use to infer `result[T,E]`. There is no dynamic "JSON value" type:
+every decode is checked field-by-field against the struct shape you
+asked for, and a mismatch is a `result` error, not a silent `null` or
+a runtime panic.
+
+```slang
+import "json";
+
+struct Address { city: str, zip: str }
+struct Person {
+    name: str,
+    age: i32,
+    email: opt[str],      // JSON null / missing key <-> none
+    tags: [str],
+    addr: Address,         // structs nest
+}
+
+let p = Person{ name: "Ada", age: 36, email: some("ada@example.com"),
+                tags: ["math"], addr: Address{ city: "London", zip: "SW1" } };
+let s: str = json.encode(p);
+
+let r: result[Person, str] = json.decode(s);
+guard let p2 = r else { exit(1); }
+```
+
+Supported: `struct`, `opt[T]`, `[T]`, `map[str, V]` (JSON object keys
+are always strings — a map with any other key type is a compile
+error), and every scalar type except `bytes` (no implicit
+base64-or-similar encoding is applied). `rawptr`, `chan[T]`, and
+`result[T,E]` can't appear anywhere in a decode/encode target type. A
+missing JSON key defaults an `opt[T]` field to `none`; for any other
+field type it's a decode error. Unknown JSON keys are ignored. Every
+decode error names where it happened, composed through nesting —
+`json.decode` on `{"addr":{"city":5}}` against the `Person` shape
+above fails with `field 'addr': field 'city': expected a string, got
+a number`. Malformed input is a decode error, never a crash — the
+parser caps nesting depth at 512 so adversarial input can't blow the
+C stack.
 
 ## Concurrency
 
@@ -566,15 +611,20 @@ main.sl ──loader──> packages ──lexer/parser──> ASTs ──codege
    `core.c` (CG state, symbol tables, type helpers), `infer.c` (type
    inference), `expr.c`/`stmt.c` (expression/statement codegen),
    `program.c` (top-level orchestration and `codegen_program`'s entry
-   point), `native.c` (the `NATIVE_SIGS` table + dispatch that every
-   native package's functions go through), and one `runtime_*.c` per
-   native package (`runtime_core.c` for the always-on prelude,
-   `runtime_time.c`, `runtime_net.c`, `runtime_tls.c`) holding that
+   point), `native.c` (the `NATIVE_SIGS` table + dispatch for
+   fixed-signature native functions like `time.sleep`/`net.recv`),
+   `json.c` (`json.decode`/`json.encode`'s own dispatch, since
+   they're generic over a target type rather than fixed-signature —
+   NATIVE_SIGS doesn't fit them, so they get their own small module
+   instead), and one `runtime_*.c` per native package
+   (`runtime_core.c` for the always-on prelude, `runtime_time.c`,
+   `runtime_net.c`, `runtime_tls.c`, `runtime_json.c`) holding that
    package's embedded C source as a plain string array. `internal.h`
    holds the shared `CG` struct and cross-file declarations; adding a
-   package (e.g. a future `json` or `proc`) means a new
-   `runtime_json.c` plus a few `NATIVE_SIGS` entries in `native.c`,
-   not edits to the inference/codegen core.
+   package (e.g. a future `proc`) means a new `runtime_proc.c` plus
+   either a few `NATIVE_SIGS` entries (fixed-signature functions) or
+   a small dedicated module like `json.c` (generic-over-a-type
+   functions), not edits to the inference/codegen core.
 5. **Driver** (`src/main.c`) — glues it together and shells out to
    `cc`. Because GCC/Clang compile the generated C, you get their full
    optimizer for free.
@@ -624,6 +674,10 @@ Makefile       build/test/clean
   virtual hosting on one listener, no session resumption tuning.
   Blocking only — call `net.tls_*` from a `spawn`ed task for a
   server, same as plain `net`.
+- JSON: no dynamic/unknown-shape decoding (every decode target is a
+  concrete slang type known at compile time — see the `json` section
+  above), no `bytes` fields, and JSON object keys map to struct field
+  names verbatim (no camelCase/snake_case conversion).
 
 ## Memory management
 

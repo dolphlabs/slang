@@ -302,6 +302,8 @@ char *gen_call(CG *cg, Expr *e) {
     if (split_dotted(name, &left, &right)) {
         const char *pkg = import_try(cg, left);
         if (pkg) {
+            if (!strcmp(pkg, "json") && is_native_pkg(cg, pkg))
+                return json_call_gen(cg, right, e);
             sig = sig_find_in(cg, pkg, right);
             if (!sig && is_native_pkg(cg, pkg))
                 return native_gen(cg, pkg, right, e);
@@ -413,8 +415,10 @@ char *gen_structlit(CG *cg, Expr *e) {
             if (!strcmp(sd->fields[i], e->as.structlit.fields[j]))
                 fi = i;
         }
+        const char *saved = expect_push(cg, sd->ftypes[fi]);
         const char *vt = infer_type(cg, e->as.structlit.vals[j]);
         char *v = gen_expr(cg, e->as.structlit.vals[j]);
+        cg->expect = saved;
         v = maybe_cast(cg, sd->ftypes[fi], vt, v);
         sb_append(&sb,
                   xasprintf("_sl_s->%s = %s; ",

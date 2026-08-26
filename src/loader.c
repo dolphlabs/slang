@@ -172,7 +172,7 @@ static void merge_program(Package *pkg, Program *src, const char *fname) {
 static int load_package_dir(Loader *ld, const char *real);
 
 /* Built-in packages implemented natively by the code generator. */
-static const char *NATIVE_PKGS[] = {"time", "net", NULL};
+static const char *NATIVE_PKGS[] = {"time", "net", "json", NULL};
 
 /* If the import path refers to a built-in native package (and there is
  * no local directory of the same name), synthesize it. */

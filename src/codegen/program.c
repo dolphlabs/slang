@@ -261,26 +261,41 @@ void emit_struct_types(CG *cg) {
  * discovered during generation. Emitted after struct types so inner
  * struct types are complete. */
 
+/* Forward-declares every opt/result instantiation discovered so far
+ * (as an incomplete named-struct typedef) so struct bodies emitted
+ * afterward can hold an opt[T]/result[T,E]-typed field -- those
+ * fields are always pointers (see ctype_of), so an incomplete type
+ * is all a struct body needs; the full definition follows later via
+ * emit_opt_res_types. Must run before emit_struct_types. */
+void emit_opt_res_forward_decls(CG *cg) {
+    for (int i = 0; i < cg->opts.count; i++)
+        emit_line(cg, "typedef struct %s %s;", cg->opts.items[i].cname,
+                  cg->opts.items[i].cname);
+    for (int i = 0; i < cg->res.count; i++)
+        emit_line(cg, "typedef struct %s %s;", cg->res.items[i].cname,
+                  cg->res.items[i].cname);
+}
+
 void emit_opt_res_types(CG *cg) {
     for (int i = 0; i < cg->opts.count; i++) {
         OptInst *o = &cg->opts.items[i];
-        emit_line(cg, "typedef struct {");
+        emit_line(cg, "struct %s {", o->cname);
         cg->indent++;
         emit_line(cg, "bool has;");
         emit_line(cg, "%s v;", ctype_of(cg, o->inner));
         cg->indent--;
-        emit_line(cg, "} %s;", o->cname);
+        emit_line(cg, "};");
         emit_line(cg, "");
     }
     for (int i = 0; i < cg->res.count; i++) {
         ResInst *r = &cg->res.items[i];
-        emit_line(cg, "typedef struct {");
+        emit_line(cg, "struct %s {", r->cname);
         cg->indent++;
         emit_line(cg, "bool ok;");
         emit_line(cg, "%s v;", ctype_of(cg, r->tv));
         emit_line(cg, "%s e;", ctype_of(cg, r->te));
         cg->indent--;
-        emit_line(cg, "} %s;", r->cname);
+        emit_line(cg, "};");
         emit_line(cg, "");
     }
 }
@@ -506,12 +521,16 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
                               int main_index) {
     emit_prelude(cg);
 
+    emit_opt_res_forward_decls(cg);
     emit_struct_types(cg);
 
     force_native_result_types(cg);
     emit_opt_res_types(cg);
 
     emit_native_runtime(cg);
+
+    emit_json_runtime(cg);
+    emit_json_codecs(cg);
 
     emit_globals(cg, pkgs, npkgs, main_index);
 
