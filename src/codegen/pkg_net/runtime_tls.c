@@ -84,6 +84,7 @@ const char *TLS_RUNTIME[] = {
     "static sl_res_rawptr_str *sl_net_tls_accept(int lfd, void *ctxv) {",
     "    int cfd = accept(lfd, NULL, NULL);",
     "    if (cfd < 0) return sl_net_err_rawptr(strerror(errno));",
+    "    sl_net_ensure_blocking(cfd); /* see sl_net_ensure_blocking in NET_RUNTIME */",
     "    SSL *ssl = SSL_new((SSL_CTX *)ctxv);",
     "    if (!ssl) {",
     "        close(cfd);",

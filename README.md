@@ -32,6 +32,12 @@ Useful flags:
 | `--keep-c`  | Keep the generated C file after compiling           |
 | `--run`     | Compile, then immediately execute the result        |
 
+Want to see everything at once instead of one feature at a time? See
+**[`demo/`](demo/)** — a full server (dice game, guestbook wall, live
+dashboard) exercising every tier: `net`/`net.tls_*`, `json`,
+`spawn`/`chan[T]`, `proc` graceful shutdown, local package imports,
+and C interop, with a real HTML/CSS/JS frontend. `cd demo && ./run.sh`.
+
 ## Language tour
 
 ```slang
