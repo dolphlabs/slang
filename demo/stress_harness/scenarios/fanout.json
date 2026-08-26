@@ -1,0 +1,6 @@
+{
+  "base_url": "http://localhost:8095",
+  "requests": [
+    {"name": "fanout", "method": "POST", "path": "/api/stress/fanout", "weight": 1, "body": "{\"n\":50000,\"workers\":8}"}
+  ]
+}

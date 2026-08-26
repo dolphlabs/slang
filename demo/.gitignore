@@ -2,3 +2,5 @@ main
 main.gen.c
 cert.pem
 key.pem
+stress_harness/loadgen
+stress_harness/results/

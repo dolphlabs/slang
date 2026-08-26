@@ -12,6 +12,7 @@ import "json";
 import "httpkit";
 import "arcade";
 import "content";
+import "stress";
 
 link "slangarcade";
 extern fn sl_demo_roll_die() -> i32;
@@ -56,6 +57,12 @@ struct AppState {
     request_count: int,
     start_ns: duration,
     lock: chan[bool],
+    // stress_counter/stress_lock exist only for /api/stress/counter, to
+    // isolate pure chan[T]-mutex contention from the rest of the app's
+    // state -- kept separate from `lock` above so a stress run doesn't
+    // conflate lock overhead with real (frontend) state contention.
+    stress_counter: int,
+    stress_lock: chan[bool],
 }
 
 fn lock_state(st: AppState) {
@@ -163,6 +170,141 @@ fn route_roll(st: AppState, req: httpkit.Request) -> httpkit.Response {
     return httpkit.ok_json(body);
 }
 
+// ---- stress endpoints (demo/stress_harness/ drives these; not linked
+// from the frontend at all -- see demo/README.md) ----
+
+fn route_stress_ping() -> httpkit.Response {
+    return httpkit.ok_json("{\"pong\":true}");
+}
+
+fn route_stress_cpu(req: httpkit.Request) -> httpkit.Response {
+    let r: result[stress.CpuReq, str] = json.decode(req.body);
+    guard let cr = r else {
+        return httpkit.bad_request("invalid json");
+    }
+    let t0 = time.mono();
+    let count = stress.count_primes(cr.n);
+    let elapsed: duration = time.mono() - t0;
+    let resp = stress.CpuResp { n: cr.n, prime_count: count, elapsed_ms: (elapsed as int) / 1000000 };
+    return httpkit.ok_json(json.encode(resp));
+}
+
+fn route_stress_alloc(req: httpkit.Request) -> httpkit.Response {
+    let r: result[stress.AllocReq, str] = json.decode(req.body);
+    guard let ar = r else {
+        return httpkit.bad_request("invalid json");
+    }
+    let t0 = time.mono();
+    let sum = stress.alloc_and_sum(ar.n);
+    let elapsed: duration = time.mono() - t0;
+    let resp = stress.AllocResp { n: ar.n, sum: sum, elapsed_ms: (elapsed as int) / 1000000 };
+    return httpkit.ok_json(json.encode(resp));
+}
+
+fn route_stress_json(req: httpkit.Request) -> httpkit.Response {
+    let t0 = time.mono();
+    let r: result[stress.JsonReq, str] = json.decode(req.body);
+    guard let jr = r else {
+        return httpkit.bad_request("invalid json");
+    }
+    let total = 0;
+    for it in jr.items {
+        total = total + it.value;
+    }
+    let elapsed: duration = time.mono() - t0;
+    let resp = stress.JsonResp { tag: jr.tag, item_count: len(jr.items), total: total, elapsed_ms: (elapsed as int) / 1000000 };
+    return httpkit.ok_json(json.encode(resp));
+}
+
+fn route_stress_sleep(req: httpkit.Request) -> httpkit.Response {
+    let r: result[stress.SleepReq, str] = json.decode(req.body);
+    guard let sr = r else {
+        return httpkit.bad_request("invalid json");
+    }
+    time.sleep(sr.ms * 1000000);
+    let resp = stress.SleepResp { slept_ms: sr.ms };
+    return httpkit.ok_json(json.encode(resp));
+}
+
+fn chan_worker(n: int, results: chan[int]) {
+    let c = stress.count_primes(n);
+    chan_send(results, c);
+}
+
+fn route_stress_chan(req: httpkit.Request) -> httpkit.Response {
+    let r: result[stress.ChanReq, str] = json.decode(req.body);
+    guard let cr = r else {
+        return httpkit.bad_request("invalid json");
+    }
+    let t0 = time.mono();
+    let results: chan[int] = make_chan(1);
+    spawn chan_worker(cr.n, results);
+    let v = chan_recv(results);
+    guard let total = v else {
+        println("FAIL: stress chan closed unexpectedly");
+        exit(1);
+    }
+    let elapsed: duration = time.mono() - t0;
+    let resp = stress.ChanResp { n: cr.n, prime_count: total, elapsed_ms: (elapsed as int) / 1000000 };
+    return httpkit.ok_json(json.encode(resp));
+}
+
+fn fanout_worker(lo: int, hi: int, results: chan[int]) {
+    let c = stress.count_primes_range(lo, hi);
+    chan_send(results, c);
+}
+
+// Each call to this endpoint spawns `workers` extra OS threads on top
+// of its own connection-handling thread -- deliberately, to see how
+// the thread-per-connection model behaves when a single request fans
+// out internally instead of one thread doing all the work.
+fn route_stress_fanout(req: httpkit.Request) -> httpkit.Response {
+    let r: result[stress.FanoutReq, str] = json.decode(req.body);
+    guard let fr = r else {
+        return httpkit.bad_request("invalid json");
+    }
+    let workers = fr.workers;
+    if workers < 1 {
+        workers = 1;
+    }
+    let t0 = time.mono();
+    let results: chan[int] = make_chan(workers);
+    let chunk = fr.n / workers;
+    for w in 0..workers {
+        let lo = w * chunk;
+        let hi = lo + chunk;
+        if w == workers - 1 {
+            hi = fr.n;
+        }
+        spawn fanout_worker(lo, hi, results);
+    }
+    let total = 0;
+    for w in 0..workers {
+        let v = chan_recv(results);
+        guard let c = v else {
+            println("FAIL: fanout chan closed unexpectedly");
+            exit(1);
+        }
+        total = total + c;
+    }
+    let elapsed: duration = time.mono() - t0;
+    let resp = stress.FanoutResp { n: fr.n, workers: workers, prime_count: total, elapsed_ms: (elapsed as int) / 1000000 };
+    return httpkit.ok_json(json.encode(resp));
+}
+
+fn route_stress_counter(st: AppState) -> httpkit.Response {
+    let sv = chan_recv(st.stress_lock);
+    guard let _tok = sv else {
+        println("FAIL: stress lock channel closed unexpectedly");
+        exit(1);
+    }
+    st.stress_counter = st.stress_counter + 1;
+    let c = st.stress_counter;
+    chan_send(st.stress_lock, true);
+    let resp = stress.CounterResp { count: c };
+    return httpkit.ok_json(json.encode(resp));
+}
+
 fn route(st: AppState, req: httpkit.Request) -> httpkit.Response {
     lock_state(st);
     st.request_count = st.request_count + 1;
@@ -191,6 +333,30 @@ fn route(st: AppState, req: httpkit.Request) -> httpkit.Response {
     }
     if req.method == "POST" && req.path == "/api/roll" {
         return route_roll(st, req);
+    }
+    if req.method == "GET" && req.path == "/api/stress/ping" {
+        return route_stress_ping();
+    }
+    if req.method == "POST" && req.path == "/api/stress/cpu" {
+        return route_stress_cpu(req);
+    }
+    if req.method == "POST" && req.path == "/api/stress/alloc" {
+        return route_stress_alloc(req);
+    }
+    if req.method == "POST" && req.path == "/api/stress/json" {
+        return route_stress_json(req);
+    }
+    if req.method == "POST" && req.path == "/api/stress/sleep" {
+        return route_stress_sleep(req);
+    }
+    if req.method == "POST" && req.path == "/api/stress/chan" {
+        return route_stress_chan(req);
+    }
+    if req.method == "POST" && req.path == "/api/stress/fanout" {
+        return route_stress_fanout(req);
+    }
+    if req.method == "POST" && req.path == "/api/stress/counter" {
+        return route_stress_counter(st);
     }
     return httpkit.not_found();
 }
@@ -306,12 +472,16 @@ let no_messages: [arcade.Message] = [];
 let no_players: map[str]arcade.Player = {};
 let state_lock: chan[bool] = make_chan(1);
 chan_send(state_lock, true); // one token in the box == unlocked
+let stress_lock: chan[bool] = make_chan(1);
+chan_send(stress_lock, true);
 let st = AppState {
     messages: no_messages,
     leaderboard: no_players,
     request_count: 0,
     start_ns: time.mono(),
-    lock: state_lock
+    lock: state_lock,
+    stress_counter: 0,
+    stress_lock: stress_lock
 };
 
 let port_env: opt[str] = proc.getenv("PORT");

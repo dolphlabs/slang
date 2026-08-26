@@ -1,0 +1,6 @@
+{
+  "base_url": "http://localhost:8095",
+  "requests": [
+    {"name": "sleep", "method": "POST", "path": "/api/stress/sleep", "weight": 1, "body": "{\"ms\":50}"}
+  ]
+}

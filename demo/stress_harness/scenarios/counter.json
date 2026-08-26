@@ -1,0 +1,6 @@
+{
+  "base_url": "http://localhost:8095",
+  "requests": [
+    {"name": "counter", "method": "POST", "path": "/api/stress/counter", "weight": 1, "body": "{}"}
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "base_url": "http://localhost:8095",
+  "requests": [
+    {"name": "ping",    "method": "GET",  "path": "/api/stress/ping",    "weight": 6},
+    {"name": "json",    "method": "POST", "path": "/api/stress/json",    "weight": 4,
+     "body": "{\"tag\":\"load\",\"items\":[{\"key\":\"a\",\"value\":1},{\"key\":\"b\",\"value\":2},{\"key\":\"c\",\"value\":3},{\"key\":\"d\",\"value\":4}]}"},
+    {"name": "counter", "method": "POST", "path": "/api/stress/counter", "weight": 3, "body": "{}"},
+    {"name": "cpu",     "method": "POST", "path": "/api/stress/cpu",     "weight": 3, "body": "{\"n\":8000}"},
+    {"name": "alloc",   "method": "POST", "path": "/api/stress/alloc",   "weight": 2, "body": "{\"n\":2000}"},
+    {"name": "sleep",   "method": "POST", "path": "/api/stress/sleep",   "weight": 2, "body": "{\"ms\":20}"},
+    {"name": "chan",    "method": "POST", "path": "/api/stress/chan",    "weight": 1, "body": "{\"n\":8000}"}
+  ]
+}

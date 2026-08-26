@@ -1,0 +1,7 @@
+{
+  "base_url": "http://localhost:8095",
+  "requests": [
+    {"name": "json", "method": "POST", "path": "/api/stress/json", "weight": 1,
+     "body": "{\"tag\":\"load\",\"items\":[{\"key\":\"a\",\"value\":1},{\"key\":\"b\",\"value\":2},{\"key\":\"c\",\"value\":3},{\"key\":\"d\",\"value\":4},{\"key\":\"e\",\"value\":5},{\"key\":\"f\",\"value\":6},{\"key\":\"g\",\"value\":7},{\"key\":\"h\",\"value\":8}]}"}
+  ]
+}

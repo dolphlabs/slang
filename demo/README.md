@@ -59,6 +59,43 @@ its own C runtime.
 | local package imports, `pub`, cross-package structs | `httpkit/`, `arcade/`, `content/` — three packages imported by `main.sl` the same way `examples/pkgdemo` does |
 | C interop: `extern fn`, `link` | `lib.c` (dice RNG) via `link "slangarcade";`, plus bare libc (`getpid`, `atoi`) needing no `link` at all |
 | Lists, maps, `push`, `has`, indexing, iteration | the message wall (`[Message]`) and leaderboard (`map[str]Player`) |
+| `for i in 0..n` / `for x in list` / `for k, v in map` | `stress/stress.sl`'s prime-counting and alloc workloads |
+
+## Stress test
+
+`stress_harness/` load-tests eight `/api/stress/*` endpoints (not linked
+from the frontend -- see `stress/stress.sl` and the routes at the bottom
+of `main.sl`) that each isolate one cost center: a no-op baseline, CPU-bound
+prime counting, allocation/GC pressure, JSON (de)serialization, blocking
+sleep, a single spawned worker round-tripped through `chan[T]`, an 8-way
+spawn+chan fan-out, and a `chan[T]`-guarded counter.
+
+```sh
+cd demo/stress_harness
+go build -o loadgen loadgen.go   # one-time
+./run_stress.sh
+```
+
+Builds the server, runs per-endpoint characterization, a thread
+fan-out test, an escalating mixed-workload run, a deliberate
+breaking-point probe up to 2,000 concurrent clients, a 60-second soak,
+and a `sample`-based CPU profile, writing everything to `results/`.
+
+Headline result from one such run (8-core/16GB dev laptop, not a
+dedicated benchmark rig): a realistic mixed workload sustains
+**~3,300-3,500 req/s**, and that ceiling shows up already at 50
+concurrent clients -- pushing to 900 doesn't move it, it just adds
+errors. The CPU profile pins the reason: 68.9% of sampled time was
+threads blocked on a condvar/semaphore/mutex, not computing. Root
+causes, cited to source: `net.listen()`'s hardcoded 64-connection
+backlog (`src/codegen/pkg_net/runtime_net.c:84`), a fully serial,
+single-threaded accept loop (`main.sl`), and the real per-request cost
+of one full OS thread per connection -- confirmed directly, never a
+crash, since server-side concurrent threads never exceeded ~415 even
+when 2,000 clients were offered at once. Reaching the tens-of-thousands
+range this was aimed at needs the same architectural change that fixes
+all three: an event-loop I/O model or a green-thread scheduler instead
+of one real OS thread per connection.
 
 ## Two real bugs this demo found (and how they're addressed)
 

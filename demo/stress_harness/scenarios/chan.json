@@ -1,0 +1,6 @@
+{
+  "base_url": "http://localhost:8095",
+  "requests": [
+    {"name": "chan", "method": "POST", "path": "/api/stress/chan", "weight": 1, "body": "{\"n\":20000}"}
+  ]
+}
