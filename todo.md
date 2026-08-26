@@ -834,40 +834,126 @@ points, both permanent decisions, not "for now":
           parameter) -- a scalar sibling still gets sequenced for
           evaluation order (Risk 1 applies to every type), just never
           registered or treated as a root candidate.
-  - [ ] Documented, deliberately deferred gap: `gen_list`/`gen_maplit`/
-        `gen_structlit`/the `none` literal now correctly *register*
-        every value they sequence (closing the crash above), but their
-        own container-under-construction temp (`_sl_e`/`_sl_m`/
-        `_sl_s`) is never itself pushed as a root -- a nested call
-        inside a later element/pair/field's own evaluation isn't
-        guaranteed to keep the *partially-built* aggregate alive. Not
-        a crash (nothing scans roots yet) and not hit by anything in
-        `tests/`, but a real gap once the allocator swap below lands;
-        needs an "ambient roots for a container mid-construction"
-        extension (push the container's own temp name once
-        `sl_map_new`/`GC_malloc`/`_sl_e[]` exists, pop after) before
-        that step, or documented again there.
-  - [ ] Documented, deliberately deferred gap: only `gen_call`'s
-        plain/method call path gets a safepoint bracket. The early-
-        return paths inside `gen_call` (`gen_ctor` for `some`/`ok`/
-        `err`, `gen_builtin_call`, `native_gen`, `json_call_gen`)
-        bypass it entirely, even though liveness.c computes a
-        `live_set` for every `EX_CALL` node uniformly, native/builtin
-        calls included. Needs the same bracket-building logic
-        (or a shared helper) applied at each of those return paths.
+  - [x] Closed: `gen_maplit`/`gen_structlit`'s own container
+        (`_sl_m`/`_sl_s`) is now pushed onto `cg->ambient_roots` right
+        after allocation, before the per-pair/per-field loop's own
+        `ambient_mark` is captured -- popped by that loop's existing
+        restore, no separate bookkeeping needed. `gen_list` needs no
+        equivalent: read directly, it builds each element into a
+        plain non-GC C stack array and only calls `sl_arr_from` once,
+        atomically, after every element already exists -- there's
+        never a GC-allocated, partially-built object to protect.
+  - [x] Closed: every `EX_CALL`-shaped codegen path now gets the same
+        bracket `gen_call` already had. Extracted the bracket-building
+        logic `gen_call`'s own tail had inline into a shared
+        `wrap_safepoint` (`core.c`) -- confirmed a pure, behavior-
+        preserving extraction (byte-identical generated C before/after
+        for a representative program) -- and applied it to `gen_ctor`,
+        the `none` literal, `gen_builtin_call` (every branch, void and
+        non-void alike -- `wrap_safepoint`'s own NULL-result_ctype path
+        already produces a valid void statement-expression, so no
+        branch needed excluding), `json_call_gen`, and `native_gen`.
+        `push`/`chan_send`/`has`/`del` (the only 2-argument builtins)
+        and `native_gen`'s own N-arg loop got the same incremental
+        `sequence_one` treatment `gen_call`'s arguments already have --
+        `native_gen` had never been through the original sequencing
+        fix at all (every native function with 2+ arguments had a
+        latent Risk 1 gap since before Tier 10 started, found while
+        doing this). Result-ctype computed via `infer_type(cg, e)`,
+        guarded against two different void conventions found by
+        reading the code directly: `infer_call`'s hand-written builtin
+        cases return the string `"void"`, but `native_check`'s
+        `NatSig->ret` is genuinely `NULL` for void (confirmed in
+        `pkg_time/sigs.c`: `time.sleep`'s own table entry).
+  - [x] Two more real bugs found and fixed along the way, both in code
+        already shipped by earlier Tier 10 steps, neither previously
+        exercised by `tests/` or `demo/main.sl`:
+    - `??`'s lhs (`opt_bar() ?? baz()`, `deep(5) ?? none`) is
+          sequenced into its own temp (`_sl_qN`) for evaluation order,
+          same as always, but the temp was never registered --
+          liveness.c doesn't special-case `??`, so a call on the right
+          (now a real safepoint, e.g. `none` or a builtin) can have
+          the left's pending marker in its own `live_set`, and
+          `wrap_safepoint` had no registered temp to resolve it to.
+          Caught directly: `println((deep(5) ?? none) ?? -1)` in
+          `tests/opt` crashed with the same "no registered temp"
+          error the very first version of this step's work also hit.
+          Fixed by registering `_sl_qN` (and ambient-pushing it, since
+          `lt` here is always opt/result -- always a GC pointer) right
+          after it's created, explicitly popped before returning (its
+          C-level scope is this expression's own block alone).
+    - `sequence_one` registered and ambient-pushed *every* sequenced
+          value regardless of type, including plain scalars, which
+          would silently cast a bare `int`/`float`/`bool` to `(void*)`
+          into some later sibling's root array -- wrong on its face,
+          and caught by a real `-Wint-to-void-pointer-cast` warning on
+          `demo/main.sl`'s own `RollResult` struct literal (mixed
+          scalar and pointer fields). Fixed by gating registration on
+          `type_is_gc_ptr` of the value's own slang type (a new
+          `sequence_one` parameter, threaded through all ~20 call
+          sites) -- a scalar sibling still gets sequenced for
+          evaluation order (Risk 1 applies to every type), just never
+          registered or treated as a root candidate.
+  - [x] One critical bug found and fixed, **not** through static
+        inspection or `--dump-liveness` -- only surfaced by actually
+        running `demo/main.sl` under load and watching the server
+        crash on a request *after* the one that triggered it: a
+        `return` from inside a loop back-edge bracket (Tier 10's
+        previous step) skips that bracket's own closing
+        `sl_rt_safepoint_exit()`, entirely by construction -- this
+        language has no `break`/`continue`, so `guard let ... else {
+        return; }` (the idiomatic way to leave a loop early,
+        pervasive throughout `demo/main.sl`) hits this on every use.
+        The skipped `exit()` leaves `sl_rt_safepoint_top` (a
+        `_Thread_local` chain) pointing at a now-stack-freed
+        `sl_safepoint` the instant the containing function's C frame
+        pops. Under the *old* one-thread-per-connection model this
+        would have died with the thread, harmless; under Tier 9's
+        worker pool, threads are long-lived and handle many requests
+        in sequence with nothing ever resetting this chain between
+        them, so the corruption survives to poison the *next*
+        request's own safepoint operations on that same worker --
+        reproduced exactly this way: `demo/main.sl`'s `http_worker`
+        (`while true { ... guard let cfd = v else { return; } ... }`)
+        answered one `/api/roll` correctly, then SEGV'd inside an
+        unrelated `sl_rt_safepoint_exit()` call on the *next* request
+        handled by that same worker thread (confirmed via ASan:
+        `AddressSanitizer: SEGV ... in sl_rt_safepoint_exit`, called
+        from `sl_demo_http_worker`, i.e. `http_worker` itself). Fixed
+        with a new `cg->open_backedge_brackets` counter, incremented
+        by `emit_backedge_enter` whenever it opens a bracket and
+        decremented at each of its 5 call sites' own closing
+        `exit()` -- `ST_RETURN` now emits that many
+        `sl_rt_safepoint_exit()` calls immediately before the actual
+        `return` (after any return value is fully evaluated, since
+        its own evaluation may still need the enclosing brackets'
+        protection), correctly unwinding every currently-open loop
+        bracket regardless of nesting depth (`sl_rt_safepoint_exit`
+        itself takes no argument, so N calls unwind N levels
+        regardless of which loops they belonged to). Verified against
+        the exact reproduction (ASan-clean, server survives 60+
+        sequential requests including the original crashing sequence)
+        plus a hand-built program calling nested-loop-with-early-
+        return functions 20 times in a row on the same thread,
+        confirming byte-identical, correct output every time -- no
+        drift, no corruption, matching what worker-thread reuse
+        actually exercises.
   - Verified: full 45-test suite unchanged; a `--dump-liveness`
         cross-check against generated C for representative programs
-        (nested calls, bare-ident siblings, 2-level nesting, map/list/
-        struct literals) confirming every root array matches the
-        liveness pass's own computed set, named/pending/ambient
-        entries alike; `demo/main.sl` rebuilt and smoke-tested end to
-        end through every route including the stress endpoints
-        (`/api/stress/{ping,cpu,json,chan,fanout}`) against a freshly
-        started server; ASan+UBSan clean and byte-identical against
-        `expected.txt` on 9 representative tests (`maps`, `json`,
-        `spawn`, `structs`, `opt`, `ints`, `bytes`, `lists`, `proc`)
-        plus 6 hand-built programs covering every bug above;
-        determinism (byte-identical repeated `--emit-c` runs).
+        (a builtin/ctor as a sibling of a nested call, all four
+        2-argument builtins, a 2-argument native call, a struct/map
+        literal with a nested 2-argument call inside one field/value)
+        confirming every root array matches the liveness pass's own
+        computed set; `demo/main.sl` rebuilt and load-tested end to
+        end (60+ sequential requests across every route, including the
+        stress endpoints, against both a plain and an ASan+UBSan
+        build) -- the load test is what caught the `return`-unwind bug
+        above; `-Wall -Wextra` clean generated C; ASan+UBSan clean and
+        byte-identical against `expected.txt` on 11 representative
+        tests (`maps`, `json`, `spawn`, `structs`, `opt`, `ints`,
+        `bytes`, `lists`, `proc`, `nettest`, `time`) plus 9 hand-built
+        programs covering every bug above; determinism (byte-identical
+        repeated `--emit-c` runs).
 - [x] Compiler: codegen emits stack maps at loop back-edges too, ahead
       of Tier 11's cooperative preemption needing them. Every loop kind
       (`ST_WHILE`, `ST_FOR`, `ST_FOR_IN`'s array/bytes/map variants,

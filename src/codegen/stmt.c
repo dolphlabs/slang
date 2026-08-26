@@ -45,6 +45,12 @@ static int emit_backedge_enter(CG *cg, void *backedge_live_set) {
     emit_line(cg, "sl_safepoint _sl_bp%d;", id);
     emit_line(cg, "sl_rt_safepoint_enter(&_sl_bp%d, _sl_bp%d_roots, %d);", id,
               id, n);
+    /* Tracks how many of these are currently open so ST_RETURN can
+     * unwind exactly that many sl_rt_safepoint_exit() calls before an
+     * early return from inside this loop's body -- see its own
+     * comment. The caller decrements this right before emitting its
+     * own closing exit() call (matching every "if (has_bp)" site). */
+    cg->open_backedge_brackets++;
     return 1;
 }
 
@@ -354,8 +360,10 @@ void gen_stmt(CG *cg, Stmt *s) {
         int has_bp = emit_backedge_enter(cg, s->backedge_live_set);
         gen_stmts(cg, s->as.while_stmt.body->stmts,
                   s->as.while_stmt.body->count);
-        if (has_bp)
+        if (has_bp) {
+            cg->open_backedge_brackets--;
             emit_line(cg, "sl_rt_safepoint_exit();");
+        }
         cg->indent--;
         emit_line(cg, "}");
         break;
@@ -381,8 +389,10 @@ void gen_stmt(CG *cg, Stmt *s) {
         cg->indent++;
         int has_bp = emit_backedge_enter(cg, s->backedge_live_set);
         gen_stmts(cg, s->as.for_stmt.body->stmts, s->as.for_stmt.body->count);
-        if (has_bp)
+        if (has_bp) {
+            cg->open_backedge_brackets--;
             emit_line(cg, "sl_rt_safepoint_exit();");
+        }
         cg->indent--;
         emit_line(cg, "}");
         cg->indent--;
@@ -411,8 +421,10 @@ void gen_stmt(CG *cg, Stmt *s) {
                           "_sl_i%d, sizeof(%s)));",
                       ec, vname, ec, id, id, ec);
             gen_block(cg, s->as.for_in.body);
-            if (has_bp)
+            if (has_bp) {
+                cg->open_backedge_brackets--;
                 emit_line(cg, "sl_rt_safepoint_exit();");
+            }
             cg->indent--;
             emit_line(cg, "}");
             cg->indent--;
@@ -433,8 +445,10 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "long long %s = (long long)_sl_bt%d->ptr[_sl_i%d];",
                       vname, id, id);
             gen_block(cg, s->as.for_in.body);
-            if (has_bp)
+            if (has_bp) {
+                cg->open_backedge_brackets--;
                 emit_line(cg, "sl_rt_safepoint_exit();");
+            }
             cg->indent--;
             emit_line(cg, "}");
             cg->indent--;
@@ -473,8 +487,10 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "_sl_m%d->vsz);",
                       vc, v2name, vc, id, id, id);
             gen_block(cg, s->as.for_in.body);
-            if (has_bp)
+            if (has_bp) {
+                cg->open_backedge_brackets--;
                 emit_line(cg, "sl_rt_safepoint_exit();");
+            }
             cg->indent--;
             emit_line(cg, "}");
             cg->indent--;
@@ -487,9 +503,36 @@ void gen_stmt(CG *cg, Stmt *s) {
     case ST_RETURN: {
         if (!cg->in_function)
             cg_error(s->line, "'return' outside of a function");
+        /* Tier 10: a return from inside one or more loop bodies (this
+         * language has no break/continue, so guard-let's "else {
+         * return; }" -- extremely common -- is the normal way to
+         * leave a loop early) exits past every loop back-edge
+         * bracket's own closing sl_rt_safepoint_exit() (emitted at
+         * the BOTTOM of the loop body, see emit_backedge_enter's call
+         * sites below), skipping it entirely. Left unclosed, that
+         * bracket's own stack-allocated sl_safepoint dangles the
+         * instant this function's C frame is popped -- and on a
+         * long-lived worker-pool thread (Tier 9) that never resets
+         * this thread-local chain between requests, the *next*
+         * safepoint operation on the SAME thread walks straight into
+         * it. Caught the hard way: demo/main.sl's http_worker (a
+         * `while true { ... guard let cfd = v else { return; } ... }`
+         * loop) crashed on a request *after* the one whose guard
+         * fired, deep inside an unrelated sl_rt_safepoint_exit() call,
+         * exactly this dangling-chain shape. Closing every currently-
+         * open bracket right before the actual "return" (after the
+         * return value, if any, is fully evaluated below -- its own
+         * evaluation may still need those brackets' protection), in
+         * the correct (LIFO) order via a plain count, restores the
+         * invariant before control actually leaves the function --
+         * sl_rt_safepoint_exit() itself takes no argument (just pops
+         * one level), so N calls correctly unwind N levels regardless
+         * of which loops they belonged to. */
         if (!s->as.ret.value) {
             if (cg->cur_ret)
                 cg_error(s->line, "missing return value");
+            for (int i = 0; i < cg->open_backedge_brackets; i++)
+                emit_line(cg, "sl_rt_safepoint_exit();");
             emit_line(cg, "return;");
         } else {
             if (!cg->cur_ret)
@@ -507,6 +550,8 @@ void gen_stmt(CG *cg, Stmt *s) {
             char *val = maybe_cast(cg, cg->cur_ret, vt,
                                    gen_expr(cg, s->as.ret.value));
             cg->expect = se8;
+            for (int i = 0; i < cg->open_backedge_brackets; i++)
+                emit_line(cg, "sl_rt_safepoint_exit();");
             emit_line(cg, "return %s;", val);
         }
         break;

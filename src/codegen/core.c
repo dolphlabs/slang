@@ -2,6 +2,7 @@
  * internal.h for the shared CG state and cross-file API. */
 
 #include "internal.h"
+#include "liveness.h"
 
 #include <string.h>
 
@@ -499,6 +500,92 @@ void ambient_root_push(CG *cg, const char *name) {
             cg->ambient_roots, cg->ambient_cap * sizeof(char *));
     }
     cg->ambient_roots[cg->ambient_count++] = (char *)name;
+}
+
+/* Tier 10: wraps `inner` (already-generated C expression text for
+ * node `e`, of C type `result_ctype`, or NULL if void) with a
+ * safepoint bracket built from e->live_set (named + pending) plus
+ * whatever's currently on cg->ambient_roots -- generalizes the
+ * bracket gen_call originally built inline for its own user/method
+ * calls, so every EX_CALL-shaped codegen path (gen_call itself,
+ * gen_ctor, gen_builtin_call, native_gen, json_call_gen, and the
+ * `none` literal, which liveness.c treats as a 4th safepoint kind
+ * alongside CALL/LIST/MAPLIT/STRUCTLIT) shares one implementation
+ * instead of duplicating it. `prelude` is optional priming C
+ * statements (e.g. a caller's own argument-sequencing temps) to
+ * splice in ahead of the bracket -- pass NULL or "" when there are
+ * none. Caller is responsible for having already popped its own
+ * ambient contributions (if it pushed any while sequencing its own
+ * arguments) before calling this -- cg->ambient_count is read as-is,
+ * exactly like gen_call's own tail used to read its local
+ * ambient_mark once already restored to that value. Nothing walks
+ * sl_rt_safepoint_top yet (GC_malloc/Boehm stays authoritative until
+ * the allocator swap), so this is purely additive and cannot change
+ * any program's observable behavior. Returns `inner` unchanged (or,
+ * with a prelude but nothing to protect, just the prelude spliced
+ * ahead of it) if there's nothing to protect. */
+char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
+                     const char *prelude, char *inner) {
+    int has_prelude = prelude && prelude[0] != '\0';
+    int nlive_named = live_set_nnamed(e->live_set);
+    int nlive_pending = live_set_npending(e->live_set);
+    int nambient = cg->ambient_count;
+    int nroots = nlive_named + nlive_pending + nambient;
+    if (nroots == 0) {
+        if (!has_prelude)
+            return inner;
+        return xasprintf("({ %s%s; })", prelude, inner);
+    }
+
+    int sp_id = cg->tmp_id++;
+    StrBuf sp;
+    sb_init(&sp);
+    sb_append(&sp, xasprintf("void *_sl_sp%d_roots[] = { ", sp_id));
+    int wrote = 0;
+    for (int i = 0; i < nlive_named; i++) {
+        if (wrote++)
+            sb_append(&sp, ", ");
+        sb_append(&sp, xasprintf("(void *)%s",
+                                 sanitize_ident(live_set_named(e->live_set, i))));
+    }
+    for (int i = 0; i < nlive_pending; i++) {
+        Expr *p = live_set_pending(e->live_set, i);
+        const char *tn = expr_tmp_find(cg, p);
+        if (!tn)
+            cg_error(e->line,
+                     "internal error: liveness-pending value has no "
+                     "registered temp at line %d",
+                     p->line);
+        if (wrote++)
+            sb_append(&sp, ", ");
+        sb_append(&sp, xasprintf("(void *)%s", tn));
+    }
+    for (int i = 0; i < nambient; i++) {
+        if (wrote++)
+            sb_append(&sp, ", ");
+        sb_append(&sp, xasprintf("(void *)%s", cg->ambient_roots[i]));
+    }
+    sb_append(&sp, "}; ");
+    sb_append(&sp, xasprintf("sl_safepoint _sl_sp%d; "
+                             "sl_rt_safepoint_enter(&_sl_sp%d, _sl_sp%d_roots, %d); ",
+                             sp_id, sp_id, sp_id, nroots));
+
+    StrBuf block;
+    sb_init(&block);
+    sb_append(&block, "({ ");
+    if (has_prelude)
+        sb_append(&block, prelude);
+    sb_append(&block, sp.data);
+    if (result_ctype) {
+        sb_append(&block,
+                  xasprintf("%s _sl_spres%d = %s; sl_rt_safepoint_exit(); "
+                            "_sl_spres%d; })",
+                            result_ctype, sp_id, inner, sp_id));
+    } else {
+        sb_append(&block,
+                  xasprintf("%s; sl_rt_safepoint_exit(); })", inner));
+    }
+    return block.data;
 }
 
 FuncSig *sig_find_in(CG *cg, const char *pkg, const char *name) {

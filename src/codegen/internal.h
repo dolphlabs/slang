@@ -217,6 +217,14 @@ struct CG {
     const char *cur_pkg;
     int in_function;
     int tmp_id;
+    /* Tier 10: how many loop back-edge safepoint brackets (stmt.c's
+     * emit_backedge_enter) are currently open in the C block ST_RETURN
+     * is about to emit a "return" from -- see ST_RETURN's own comment.
+     * Always balanced within a single function by construction
+     * (incremented/decremented symmetrically around each loop body),
+     * so no explicit per-function reset is needed, same as
+     * ambient_count. */
+    int open_backedge_brackets;
     char **nat_pkgs; /* names of natively-implemented imported packages */
     int nnat;
     int want_tls; /* set once a net.tls_* function is type-checked */
@@ -327,6 +335,8 @@ void ambient_root_push(CG *cg, const char *name);
 char *sequence_one(CG *cg, int seq_id, int idx, const char *ctype,
                    const char *slang_type, char *text, Expr *expr_node,
                    StrBuf *prelude);
+char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
+                     const char *prelude, char *inner);
 FuncSig *sig_find_in(CG *cg, const char *pkg, const char *name);
 void glob_push(CG *cg, const char *name, const char *pkg,
                       const char *slang, int is_pub);

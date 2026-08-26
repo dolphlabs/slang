@@ -473,7 +473,7 @@ char *json_call_gen(CG *cg, const char *fname, Expr *e) {
             data = xasprintf("(%s)", argexpr);
             len = xasprintf("(long long)strlen(%s)", argexpr);
         }
-        return xasprintf(
+        char *inner = xasprintf(
             "({ char *_sl_jerr = NULL; sl_json_val *_sl_jv = "
             "sl_json_parse(%s, %s, &_sl_jerr); %s *_sl_jr = (%s "
             "*)GC_malloc(sizeof(%s)); if (!_sl_jv) { _sl_jr->ok = false; "
@@ -482,14 +482,21 @@ char *json_call_gen(CG *cg, const char *fname, Expr *e) {
             "true; _sl_jr->v = _sl_jout; } else { _sl_jr->ok = false; "
             "_sl_jr->e = _sl_jderr; } } _sl_jr; })",
             data, len, resname, resname, resname, fct, decfn);
+        /* Tier 10: json.decode allocates (the result[T,E] wrapper,
+         * GC_malloc, plus whatever the monomorphized decoder itself
+         * allocates) -- a real safepoint, same as any other call
+         * liveness.c computes e->live_set for. Single argument, no
+         * sibling to protect against. */
+        return wrap_safepoint(cg, e, xasprintf("%s *", resname), NULL, inner);
     }
     /* encode */
     const char *at = infer_type(cg, e->as.call.args[0]);
     const char *encfn = json_enc_fn(cg, at, e->line);
     char *argexpr = gen_expr(cg, e->as.call.args[0]);
     char *arg = json_enc_arg(at, argexpr);
-    return xasprintf(
+    char *inner = xasprintf(
         "({ sl_json_sb _sl_jsb; sl_json_sb_init(&_sl_jsb); %s(%s, "
         "&_sl_jsb); (const char *)(_sl_jsb.data ? _sl_jsb.data : \"\"); })",
         encfn, arg);
+    return wrap_safepoint(cg, e, ctype_of(cg, "str"), NULL, inner);
 }
