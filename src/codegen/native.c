@@ -21,6 +21,8 @@ static const NatSig *find_any_sig(const char *pkg, const char *fname) {
     const NatSig *ns = find_sig(TIME_SIGS, TIME_SIGS_LEN, pkg, fname);
     if (!ns)
         ns = find_sig(NET_SIGS, NET_SIGS_LEN, pkg, fname);
+    if (!ns)
+        ns = find_sig(PROC_SIGS, PROC_SIGS_LEN, pkg, fname);
     return ns;
 }
 

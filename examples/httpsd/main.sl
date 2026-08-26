@@ -2,9 +2,13 @@
 // net.recv / net.send / net.close become their net.tls_* equivalents.
 // The TLS server context (loaded from cert.pem/key.pem once) is
 // reused across every connection; each connection still gets its own
-// spawned thread so one slow client can't stall the others.
+// spawned thread so one slow client can't stall the others. SIGTERM/
+// SIGINT stop the accept loop and wait for in-flight connections to
+// finish instead of dropping them -- see the 'proc' package.
 
 import "net";
+import "proc";
+import "time";
 
 fn page(body: str) -> bytes {
     let head = "HTTP/1.0 200 OK\r\n"
@@ -48,6 +52,13 @@ guard let lfd = lr else {
 println("listening on https://localhost:8443");
 println("(self-signed cert -- e.g. curl -k https://localhost:8443/)");
 
-while true {
+while !proc.shutdown_requested() {
     accept_and_serve(lfd, sctx);
 }
+
+println("shutting down: waiting for in-flight connections to finish");
+while proc.active_tasks() > 0 {
+    time.sleep(20000000); // 20ms
+}
+net.close(lfd);
+println("done");

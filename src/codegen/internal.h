@@ -231,6 +231,11 @@ extern const int TLS_RUNTIME_LEN;
 extern const char *JSON_RUNTIME[]; /* src/codegen/pkg_json/ */
 extern const int JSON_RUNTIME_LEN;
 
+extern const NatSig PROC_SIGS[]; /* src/codegen/pkg_proc/ */
+extern const int PROC_SIGS_LEN;
+extern const char *PROC_RUNTIME[];
+extern const int PROC_RUNTIME_LEN;
+
 /* ------------------------------------------------------------------ */
 /* Functions (declarations generated from every former 'static' def)   */
 /* ------------------------------------------------------------------ */
@@ -283,6 +288,7 @@ void import_push(CG *cg, const char *owner, const char *alias,
 const char *import_try(CG *cg, const char *alias);
 const char *import_target(CG *cg, const char *alias, int line);
 int is_native_pkg(CG *cg, const char *name);
+int want_pkg(CG *cg, const char *name);
 const char *expect_push(CG *cg, const char *t);
 int split_dotted(const char *name, char **left, char **right);
 char *sanitize_pkg(const char *name);

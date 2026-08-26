@@ -1,0 +1,5 @@
+shutdown requested, loop exited
+1
+drained
+client got full response
+proc_shutdown ok

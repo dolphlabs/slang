@@ -292,9 +292,9 @@ parameter is a compile error.
 
 ## Standard packages
 
-`time`, `net`, and `json` are compiler-provided native packages — no
-source files, just `import "time";` / `import "net";` / `import
-"json";` like any other package.
+`time`, `net`, `json`, and `proc` are compiler-provided native
+packages — no source files, just `import "time";` / `import "net";`
+/ `import "json";` / `import "proc";` like any other package.
 
 #### `time`
 
@@ -422,6 +422,56 @@ a number`. Malformed input is a decode error, never a crash — the
 parser caps nesting depth at 512 so adversarial input can't blow the
 C stack.
 
+#### `proc`
+
+Graceful shutdown and environment variables. `proc.shutdown_requested()`
+turns true once the process receives `SIGTERM` or `SIGINT`; a blocked
+`net.accept()`/`net.recv()`/`net.dial()` on the main thread is
+interrupted the instant the signal arrives (an `err` result, not a
+hang), so a listener loop notices without needing `select` or a
+timeout. `proc.active_tasks()` counts currently-running `spawn`ed
+tasks, so a shutting-down program can wait for in-flight work to
+finish instead of dropping it.
+
+```slang
+import "net";
+import "proc";
+import "time";
+
+fn accept_and_serve(lfd: i32) {
+    let ar: result[i32, str] = net.accept(lfd);
+    guard let cfd = ar else { return; } // interrupted, or a real error
+    spawn serve(cfd);
+}
+
+let lr: result[i32, str] = net.listen(8080);
+guard let lfd = lr else { exit(1); }
+
+while !proc.shutdown_requested() {
+    accept_and_serve(lfd);
+}
+
+// drain: let in-flight connections finish before actually exiting
+while proc.active_tasks() > 0 {
+    time.sleep(20000000); // 20ms
+}
+```
+
+`proc.getenv(name)` reads an environment variable, returning
+`opt[str]` (`none` if unset).
+
+This works because every `spawn`ed thread has `SIGTERM`/`SIGINT`
+blocked in its own signal mask from birth (inherited at creation,
+restored in the spawning thread right after) — so the OS can only
+ever pick the main thread to run the handler, which is what lets the
+main thread's blocked `accept()` call reliably observe the
+interruption instead of the signal silently landing on some unrelated
+connection's worker thread mid-request. There's a narrow startup race
+inherent to this: a signal that arrives in the brief window before
+`main()` installs the handler gets the OS's default disposition
+(immediate termination) instead of graceful handling, same as any
+signal-handling program.
+
 ## Concurrency
 
 `spawn` runs a function on a real OS thread; `chan[T]` is a bounded,
@@ -484,8 +534,12 @@ tasks, not a type system that forbids sharing mutable state. Passing
 a struct, list, or map into a spawned task and mutating it from more
 than one task concurrently is exactly as unsafe as it is in Go or
 Java: nothing currently stops you, so don't. There's also no `select`
-over multiple channels yet, and no way to join/await a spawned task's
-completion other than coordinating through a channel yourselves.
+over multiple channels yet, and no way to join/await a *specific*
+spawned task's completion other than coordinating through a channel
+yourselves — `proc.active_tasks()` (see the `proc` section) only
+gives you the aggregate count of everything currently in flight,
+useful for draining on shutdown but not for waiting on one task in
+particular.
 
 ## C interop
 
@@ -630,9 +684,15 @@ main.sl ──loader──> packages ──lexer/parser──> ASTs ──codege
    generic over a target type — `json.decode`/`json.encode`, which
    can't be expressed as one of `native.c`'s fixed-arity `NatSig`
    rows — gets its own `dispatch.c` instead of a `sigs.c`, e.g.
-   `pkg_json/dispatch.c`. Adding a package (a future `proc`, say)
-   means a new `pkg_proc/` directory and one line in `loader.c`, not
-   edits to the inference/codegen core.
+   `pkg_json/dispatch.c`. Adding a package means a new `pkg_<name>/`
+   directory and one line in `loader.c`, not edits to the
+   inference/codegen core — `pkg_proc/` (`proc`) followed exactly
+   this shape, needing no changes to `core.c`/`infer.c`/`expr.c`
+   beyond the one place it genuinely needed to touch shared state:
+   `stmt.c`'s `spawn` codegen, which blocks `SIGTERM`/`SIGINT` in
+   every spawned thread's mask so `proc`'s signal handler only ever
+   runs on the main thread (see the `proc` section above) — gated on
+   `proc` actually being imported, same as everything else here.
 5. **Driver** (`src/main.c`) — glues it together and shells out to
    `cc`. Because GCC/Clang compile the generated C, you get their full
    optimizer for free.
@@ -664,6 +724,7 @@ src/
     pkg_time/      the 'time' package: sigs.c + runtime.c
     pkg_net/       the 'net' package: sigs.c + runtime_net.c + runtime_tls.c
     pkg_json/      the 'json' package: dispatch.c + runtime.c
+    pkg_proc/      the 'proc' package: sigs.c + runtime.c
   main.c         driver: flags, invokes cc
 examples/      one directory per example program
 tests/         one directory per test case; run via `tests/run_tests.sh`
@@ -697,6 +758,12 @@ Makefile       build/test/clean
   concrete slang type known at compile time — see the `json` section
   above), no `bytes` fields, and JSON object keys map to struct field
   names verbatim (no camelCase/snake_case conversion).
+- `proc`: only `SIGTERM`/`SIGINT` are handled (there's no general
+  signal-registration API); a signal that arrives in the narrow
+  window before `main()` installs the handler gets the OS's default
+  disposition (immediate termination) rather than graceful handling.
+  `proc.active_tasks()` is a poll-based counter, not a wait-with-
+  timeout primitive — compose it with `time.sleep` for draining.
 
 ## Memory management
 

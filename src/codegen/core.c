@@ -464,6 +464,19 @@ int is_native_pkg(CG *cg, const char *name) {
     return 0;
 }
 
+/* Whether the native package `name` is actually imported somewhere in
+ * this program -- the "should its runtime/forced types/etc. be
+ * emitted at all" check every native package's conditional-inclusion
+ * logic shares (see e.g. emit_native_runtime, force_native_result_types). */
+int want_pkg(CG *cg, const char *name) {
+    for (int i = 0; i < cg->imports.count; i++) {
+        if (!strcmp(cg->imports.items[i].target, name) &&
+            is_native_pkg(cg, name))
+            return 1;
+    }
+    return 0;
+}
+
 /* Activate cg->expect while inferring/generating an expression whose
  * type is known from context (annotated lets, returns, assignments,
  * call arguments). Returns the previous expectation so the caller can

@@ -2,9 +2,13 @@
 // dialer are built on bytes + fixed-width ints, every fallible
 // operation returns a Result unwrapped with guard let, and each
 // connection is served on its own spawned thread so one slow client
-// can't stall the others.
+// can't stall the others. SIGTERM/SIGINT (e.g. Ctrl-C, or `kill`)
+// stop the accept loop and wait for in-flight connections to finish
+// instead of dropping them -- see the 'proc' package.
 
 import "net";
+import "proc";
+import "time";
 
 fn page(body: str) -> bytes {
     let head = "HTTP/1.0 200 OK\r\n"
@@ -39,6 +43,13 @@ guard let lfd = lr else {
 }
 println("listening on http://localhost:8080");
 
-while true {
+while !proc.shutdown_requested() {
     accept_and_serve(lfd);
 }
+
+println("shutting down: waiting for in-flight connections to finish");
+while proc.active_tasks() > 0 {
+    time.sleep(20000000); // 20ms
+}
+net.close(lfd);
+println("done");

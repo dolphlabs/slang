@@ -352,7 +352,79 @@ wouldn't need to change the language surface below.
 
 ## Tier 8 — process lifecycle
 
-- [ ] Signal handling (`SIGTERM`/`SIGINT`) for graceful shutdown
-- [ ] Environment variable access
-- [ ] Tests: signal delivered during an active `net` listener results
-      in a clean shutdown (connections drained, not dropped)
+- [x] Design decision, put to the user before writing code (this tier's
+      one open question): slang's `net.accept()`/`recv()` are
+      blocking and there's no `select`/multiplexing across sockets and
+      channels yet, so "shut down cleanly on SIGTERM" needs a way to
+      actually interrupt a blocked accept loop, not just a callback
+      that never gets to run. Chose a flag (`proc.shutdown_requested()`)
+      plus interrupting the blocking syscalls themselves (no
+      `SA_RESTART`, so a blocked `accept()`/`recv()` returns an `err`
+      result the instant a signal arrives) over delivering the signal
+      as a `chan[i32]` — the channel approach doesn't by itself solve
+      interrupting a blocked accept() either (still no select), so it
+      would need the same syscall-interruption mechanism anyway for
+      not much benefit over the flag.
+  - [x] New `pkg_proc/` package (landed as a clean addition thanks to
+        the codegen-folder-split work done just before this tier):
+        `proc.shutdown_requested() -> bool`, `proc.getenv(name) ->
+        opt[str]`, `proc.active_tasks() -> int` (see below)
+  - [x] Real subtlety, caught before writing any codegen: POSIX does
+        not guarantee *which* thread of a multithreaded process
+        receives a process-directed signal like `SIGTERM` — if it
+        lands on a spawned worker thread instead of the one blocked in
+        `accept()`, the listener would never notice. Fixed by blocking
+        `SIGTERM`/`SIGINT` in every `spawn`ed thread's signal mask from
+        birth (inherited at `pthread_create` time from the spawning
+        thread, which blocks-then-restores its own mask around the
+        call) — gated on `proc` actually being imported, so a program
+        that never imports it pays nothing extra per `spawn`. Only a
+        thread that never blocks these signals can ever be chosen by
+        the OS to run the handler, which in a slang program is only
+        ever the main thread, since every other thread is spawned.
+        Validated with a standalone C spike first (main thread blocked
+        in `accept()`, a separate worker thread blocked in its own
+        `recv()` with the signals pre-blocked exactly as planned, a
+        real `kill -TERM` sent externally): the main thread's
+        `accept()` reliably observed `EINTR` while the worker's own
+        blocking call was completely unaffected, across 15+ repeated
+        runs plus ASan/UBSan.
+  - [x] Graceful *draining*, not just noticing the signal: a listener
+        loop stopping accept doesn't help if `main()` returning kills
+        every in-flight `spawn`ed connection immediately (a detached
+        pthread doesn't get waited on when the process exits). Added
+        `proc.active_tasks()`, a count of currently-running `spawn`ed
+        tasks — incremented right before `pthread_create`, decremented
+        once the task's function returns *or* panics (the existing
+        `sl_rt_error`/`pthread_exit` failure-isolation path from Tier
+        5 had to decrement it too, or a panicking task would leak the
+        count forever). Deliberately just a poll-based counter, not a
+        wait-with-timeout primitive of its own — composes with
+        `time.sleep`, which already exists, instead of adding a second
+        way to wait for something.
+  - [x] `net`'s blocking calls needed zero changes to support the
+        interruption: `accept()`/`recv()`/`connect()` already had no
+        `EINTR` retry loop (only `send()` does, correctly, so an
+        in-flight response finishes writing instead of getting cut off
+        mid-send by the shutdown signal), so an interrupted syscall
+        was already surfacing as a plain `result[_, str]` error.
+  - [x] `examples/httpd/` and `examples/httpsd/` updated to actually
+        use `proc.shutdown_requested()`/`active_tasks()` in their
+        accept loops instead of `while true`, so the two canonical
+        server examples demonstrate the real thing end to end (curl a
+        request, send SIGTERM mid-flight, confirm the response still
+        arrives in full and the process exits after draining) rather
+        than just describing it.
+- [x] Tests: `tests/proc/` (basics: initial flag/counter state,
+      `active_tasks()` transitioning around a real `spawn`, `getenv`
+      present/absent), `tests/proc_shutdown/` (the tier's actual ask:
+      a real listener, a real `SIGTERM` sent to the process itself via
+      `extern fn`'d libc `kill()`/`getpid()` — not `raise()`, which
+      targets only the calling thread and wouldn't exercise the
+      process-wide delivery path a real external `kill` uses — and a
+      real in-flight connection proven to receive its full response
+      after the signal arrives, not get dropped), plus
+      `tests/fail_proc_getenv_argtype`. Stable across repeated runs
+      (15+ for the signal-delivery mechanism alone) and clean under
+      ASan+UBSan, including the panicking-spawned-task counter-leak
+      check specifically.

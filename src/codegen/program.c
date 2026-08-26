@@ -300,44 +300,36 @@ void emit_opt_res_types(CG *cg) {
     }
 }
 
-/* The net runtime above unconditionally builds these three result
- * instantiations (i32/str for handles+ports, bytes/str for recv,
- * bool/str for nonblock) regardless of which net functions the
- * slang program actually calls or how it uses their return values;
- * register them whenever net is imported so their typedefs always
- * exist alongside the runtime code that references them. */
+/* Some native runtimes unconditionally reference a fixed set of
+ * opt/result instantiations regardless of which of their functions
+ * the slang program actually calls or how it uses their return
+ * values (net: i32/str, bytes/str, bool/str for its handles/recv/
+ * nonblock; proc: opt[str] for getenv); register them whenever the
+ * owning package is imported so their typedefs always exist
+ * alongside the runtime code that references them. */
 void force_native_result_types(CG *cg) {
-    int want_net = 0;
-    for (int i = 0; i < cg->imports.count; i++) {
-        const char *t = cg->imports.items[i].target;
-        if (!strcmp(t, "net") && is_native_pkg(cg, t))
-            want_net = 1;
+    if (want_pkg(cg, "net")) {
+        res_cname(cg, "i32", "str");
+        res_cname(cg, "bytes", "str");
+        res_cname(cg, "bool", "str");
+        /* cg->want_tls is only known for certain after the dry run
+         * has walked every statement (same "populate now, read back
+         * on the real run" pattern as opts/res/spawns above) */
+        if (cg->want_tls)
+            res_cname(cg, "rawptr", "str");
     }
-    if (!want_net)
-        return;
-    res_cname(cg, "i32", "str");
-    res_cname(cg, "bytes", "str");
-    res_cname(cg, "bool", "str");
-    /* cg->want_tls is only known for certain after the dry run has
-     * walked every statement (same "populate now, read back on the
-     * real run" pattern as opts/res/spawns above) */
-    if (cg->want_tls)
-        res_cname(cg, "rawptr", "str");
+    if (want_pkg(cg, "proc"))
+        opt_cname(cg, "str");
 }
 
 /* Emit the native-package runtime sections that this program needs,
  * based on which native packages were imported. Must run after
- * emit_opt_res_types so the fixed net result instantiations exist. */
+ * emit_opt_res_types so the fixed result/opt instantiations exist. */
 void emit_native_runtime(CG *cg) {
-    int want_time = 0, want_net = 0;
-    for (int i = 0; i < cg->imports.count; i++) {
-        const char *t = cg->imports.items[i].target;
-        if (!strcmp(t, "time") && is_native_pkg(cg, t))
-            want_time = 1;
-        if (!strcmp(t, "net") && is_native_pkg(cg, t))
-            want_net = 1;
-    }
-    if (!want_time && !want_net)
+    int want_time = want_pkg(cg, "time");
+    int want_net = want_pkg(cg, "net");
+    int want_proc = want_pkg(cg, "proc");
+    if (!want_time && !want_net && !want_proc)
         return;
     if (want_time)
         for (int i = 0; i < TIME_RUNTIME_LEN; i++)
@@ -348,6 +340,9 @@ void emit_native_runtime(CG *cg) {
     if (cg->want_tls)
         for (int i = 0; i < TLS_RUNTIME_LEN; i++)
             emit_line(cg, "%s", TLS_RUNTIME[i]);
+    if (want_proc)
+        for (int i = 0; i < PROC_RUNTIME_LEN; i++)
+            emit_line(cg, "%s", PROC_RUNTIME[i]);
 }
 
 /* Emit the args-struct + pthread trampoline for every distinct
@@ -389,6 +384,10 @@ void emit_spawn_trampolines(CG *cg) {
             }
             emit_line(cg, "%s(%s);", callee, args.data);
         }
+        /* Also decremented inside sl_rt_error's non-main-thread path
+         * (via pthread_exit), since a task that panics never reaches
+         * this line -- both paths must decrement exactly once. */
+        emit_line(cg, "sl_rt_active_spawns_dec();");
         emit_line(cg, "return NULL;");
         cg->indent--;
         emit_line(cg, "}");
@@ -562,6 +561,8 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     emit_line(cg, "int main(void) {");
     emit_line(cg, "    GC_INIT();");
     emit_line(cg, "    sl_rt_is_main_thread = 1;");
+    if (want_pkg(cg, "proc"))
+        emit_line(cg, "    sl_proc_install_signal_handlers();");
     gen_block(cg, pkgs[main_index].prog->main_body);
     emit_line(cg, "    return 0;");
     emit_line(cg, "}");
