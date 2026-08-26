@@ -331,34 +331,6 @@ char *maybe_cast(CG *cg, const char *dst, const char *src,
     return xasprintf("(%s)(%s)", ctype_of(cg, dst), expr);
 }
 
-/* Evaluates each of texts[0..n) (already-generated C expression text,
- * of C type ctypes[i]) into its own named temporary via a real,
- * ordered C statement, appended to *prelude -- guaranteeing
- * left-to-right evaluation, unlike embedding raw expression text
- * directly into one fused C expression, where C leaves the relative
- * order between sub-expressions of a function call, an aggregate
- * initializer, or a binary operator unspecified (Tier 10's liveness
- * pass assumes left-to-right order; this is what makes that
- * assumption actually true of the generated C, not just of the
- * analysis). Returns the n temp variable names to use in place of
- * `texts` in the final expression, which the caller wraps as
- * "({ <prelude> <final expr using the names>; })". A no-op (returns
- * `texts` itself unchanged, `prelude` untouched) when n <= 1 -- a
- * single child has no sibling to be unsequenced relative to. */
-char **sequence_exprs(CG *cg, char **texts, const char **ctypes, int n,
-                      StrBuf *prelude) {
-    if (n <= 1)
-        return texts;
-    char **names = (char **)xmalloc(sizeof(char *) * (size_t)n);
-    int id = cg->tmp_id++;
-    for (int i = 0; i < n; i++) {
-        names[i] = xasprintf("_sl_seq%d_%d", id, i);
-        sb_append(prelude, xasprintf("%s %s = %s; ", ctypes[i], names[i],
-                                     texts[i]));
-    }
-    return names;
-}
-
 const char *opt_cname(CG *cg, const char *inner) {
     for (int i = 0; i < cg->opts.count; i++) {
         if (!strcmp(cg->opts.items[i].inner, inner))
@@ -436,6 +408,97 @@ VarSym *var_find(CG *cg, const char *name) {
             return &cg->vars.items[i];
     }
     return NULL;
+}
+
+void expr_tmp_register(CG *cg, Expr *e, const char *name) {
+    if (cg->expr_tmps.count == cg->expr_tmps.cap) {
+        cg->expr_tmps.cap = cg->expr_tmps.cap ? cg->expr_tmps.cap * 2 : 16;
+        cg->expr_tmps.items = (ExprTmp *)xrealloc(
+            cg->expr_tmps.items, cg->expr_tmps.cap * sizeof(ExprTmp));
+    }
+    cg->expr_tmps.items[cg->expr_tmps.count].key = e;
+    cg->expr_tmps.items[cg->expr_tmps.count].name = (char *)name;
+    cg->expr_tmps.count++;
+}
+
+const char *expr_tmp_find(CG *cg, Expr *e) {
+    for (int i = cg->expr_tmps.count - 1; i >= 0; i--) {
+        if (cg->expr_tmps.items[i].key == e)
+            return cg->expr_tmps.items[i].name;
+    }
+    return NULL;
+}
+
+/* Evaluates one already-generated C expression (`text`, of C type
+ * `ctype`) into its own named temporary via a real, ordered C
+ * statement appended to *prelude -- guaranteeing left-to-right
+ * evaluation among a group of `seq_id` siblings, unlike embedding raw
+ * expression text directly into one fused C expression, where C
+ * leaves the relative order between sub-expressions of a function
+ * call, an aggregate initializer, or a binary operator unspecified
+ * (Tier 10's liveness pass assumes left-to-right order; this is what
+ * makes that assumption actually true of the generated C, not just of
+ * the analysis).
+ *
+ * Called once per sibling, in source (left-to-right) order, as each
+ * is generated -- not once in a batch after all siblings already
+ * exist. That ordering is load-bearing, not stylistic: Tier 10's
+ * liveness pass (process_children_reverse, shared by EX_BINARY/
+ * EX_INDEX/EX_SLICE/EX_LIST/EX_MAPLIT/EX_STRUCTLIT/EX_CALL alike --
+ * see liveness.c) can mark any earlier sibling as a "pending" value a
+ * LATER sibling's own nested call-site safepoint bracket must protect
+ * (`[mk_a(), mk_b()]`: mk_b()'s own bracket needs mk_a()'s temp), and
+ * a bare-identifier sibling needs the same protection via
+ * ambient_root_push even though liveness.c itself doesn't pending-
+ * track it (`combine(xs, baz())`: baz() needs xs's temp too -- see
+ * gen_call's own comment on this). Both only work if the earlier
+ * sibling's temp already exists and is registered by the time the
+ * later sibling is generated, which requires the caller to interleave
+ * generation with calls to this function, one sibling at a time.
+ *
+ * `expr_node` is the source Expr this temp materializes (registered
+ * via expr_tmp_register and pushed onto cg->ambient_roots so a nested
+ * call can find it), or NULL for a synthesized, non-source slot (e.g.
+ * gen_slice's implicit end) -- never pending-tracked by liveness.c,
+ * so never looked up either way. `slang_type` is this value's own
+ * slang type (as sequenced, i.e. after any cast the caller already
+ * applied) -- registration/ambient-push only happens when it's
+ * type_is_gc_ptr-true, matching exactly what liveness.c itself would
+ * ever track or a nested call's root list would ever need: a scalar
+ * (int/float/bool/...) sibling gets sequenced for evaluation-order
+ * (Risk 1 applies to every type, not just GC pointers) but never
+ * registered -- registering it anyway would silently cast a plain
+ * integer to (void*) into some later sibling's root array, wrong
+ * regardless of whether anything reads it yet (caught by -Wint-to-
+ * void-pointer-cast on a struct literal with scalar+GC-pointer
+ * fields mixed, e.g. demo/main.sl's RollResult). The caller must
+ * snapshot cg->ambient_count before the first sibling and restore it
+ * after the last, exactly like cg->expect's own save/restore (see
+ * every call site). A no-op (returns `text` unchanged, *prelude*
+ * untouched, no registration) when `seq_id < 0` -- the caller's
+ * signal that there's only one sibling, with no one to be unsequenced
+ * relative to. */
+char *sequence_one(CG *cg, int seq_id, int idx, const char *ctype,
+                   const char *slang_type, char *text, Expr *expr_node,
+                   StrBuf *prelude) {
+    if (seq_id < 0)
+        return text;
+    char *name = xasprintf("_sl_seq%d_%d", seq_id, idx);
+    sb_append(prelude, xasprintf("%s %s = %s; ", ctype, name, text));
+    if (expr_node && type_is_gc_ptr(cg, slang_type)) {
+        expr_tmp_register(cg, expr_node, name);
+        ambient_root_push(cg, name);
+    }
+    return name;
+}
+
+void ambient_root_push(CG *cg, const char *name) {
+    if (cg->ambient_count == cg->ambient_cap) {
+        cg->ambient_cap = cg->ambient_cap ? cg->ambient_cap * 2 : 8;
+        cg->ambient_roots = (char **)xrealloc(
+            cg->ambient_roots, cg->ambient_cap * sizeof(char *));
+    }
+    cg->ambient_roots[cg->ambient_count++] = (char *)name;
 }
 
 FuncSig *sig_find_in(CG *cg, const char *pkg, const char *name) {

@@ -195,10 +195,34 @@ void gen_stmt(CG *cg, Stmt *s) {
         /* index target: xs[i] = v, b[i] = v, or m[k] = v */
         const char *bt = infer_type(cg, tgt->as.index.base);
         const char *vt = infer_type(cg, s->as.assign.value);
+        /* base/index (and, for bytes/array, value) would otherwise be
+         * embedded directly as sibling call arguments, whose relative
+         * evaluation order C leaves unspecified -- sequence them, one
+         * at a time (not all-generated-then-sequenced): a later one
+         * that's itself a nested call needs an earlier one's temp
+         * already registered by the time it's generated (see
+         * gen_call's own comment on this ordering requirement).
+         * base/index applies uniformly to all 3 cases below, map
+         * included -- the map case's own value assignment is already
+         * safely statement-sequenced afterward (separate _sl_k/_sl_v
+         * statements), so it doesn't need its own temp for
+         * evaluation-order, only base/index need to be protected
+         * before it's generated. */
+        const char *bc = ctype_of(cg, bt);
+        StrBuf prelude;
+        sb_init(&prelude);
+        int bi_id = cg->tmp_id++;
+        int ambient_mark = cg->ambient_count;
         char *b = gen_expr(cg, tgt->as.index.base);
-        char *i = gen_expr(cg, tgt->as.index.index);
-        char *val = gen_expr(cg, s->as.assign.value);
+        b = sequence_one(cg, bi_id, 0, bc, bt, b, tgt->as.index.base,
+                         &prelude);
+
         if (is_map(bt)) {
+            /* the index sequences at the map's own KEY ctype, not a
+             * fixed "int" (Risk: str/other non-int key types) -- cast
+             * first (same order gen_call/gen_index use: cast to the
+             * destination type, then sequence the already-casted
+             * value). */
             char *k, *v;
             map_kv(bt, &k, &v);
             const char *ikt = infer_type(cg, tgt->as.index.index);
@@ -212,32 +236,33 @@ void gen_stmt(CG *cg, Stmt *s) {
                          "map value type mismatch: cannot assign %s where "
                          "%s expected",
                          vt, v);
-            char *ix = maybe_cast(cg, k, ikt, i);
-            val = maybe_cast(cg, v, vt, val);
+            char *ix =
+                maybe_cast(cg, k, ikt, gen_expr(cg, tgt->as.index.index));
+            ix = sequence_one(cg, bi_id, 1, ctype_of(cg, k), k, ix,
+                              tgt->as.index.index, &prelude);
+            char *val = maybe_cast(cg, v, vt, gen_expr(cg, s->as.assign.value));
+            cg->ambient_count = ambient_mark;
             emit_line(cg,
-                      "({ %s _sl_k = %s; %s _sl_v = %s; sl_map_put(%s, "
+                      "({ %s%s _sl_k = %s; %s _sl_v = %s; sl_map_put(%s, "
                       "&_sl_k, &_sl_v); });",
-                      ctype_of(cg, k), ix, ctype_of(cg, v), val, b);
+                      prelude.data, ctype_of(cg, k), ix, ctype_of(cg, v), val,
+                      b);
             break;
         }
+        char *i = gen_expr(cg, tgt->as.index.index);
+        i = sequence_one(cg, bi_id, 1, map_type("int"), "int", i,
+                         tgt->as.index.index, &prelude);
         if (is_bytes(bt)) {
             if (!is_int(vt))
                 cg_error(s->line,
                          "byte assignment requires an integer (got %s)",
                          vt);
-            /* base/index/value would otherwise be embedded directly as
-             * sibling call arguments, whose relative evaluation order
-             * C leaves unspecified -- sequence them first, same as
-             * every other multi-child site in expr.c (the map case
-             * above is already safe: separate statements). */
-            StrBuf prelude;
-            sb_init(&prelude);
-            char *texts[3] = {b, i, val};
-            const char *ctypes[3] = {ctype_of(cg, "bytes"), map_type("int"),
-                                     map_type("int")};
-            char **names = sequence_exprs(cg, texts, ctypes, 3, &prelude);
+            char *val = gen_expr(cg, s->as.assign.value);
+            val = sequence_one(cg, bi_id, 2, map_type("int"), "int", val,
+                               s->as.assign.value, &prelude);
+            cg->ambient_count = ambient_mark;
             emit_line(cg, "%ssl_bytes_set(%s, %s, (unsigned char)(%s));",
-                      prelude.data, names[0], names[1], names[2]);
+                      prelude.data, b, i, val);
             break;
         }
         if (is_arr(bt)) {
@@ -247,19 +272,18 @@ void gen_stmt(CG *cg, Stmt *s) {
                          "cannot assign a value of type %s to an element "
                          "of type %s",
                          vt, elem);
-            val = maybe_cast(cg, elem, vt, val);
             const char *ec = ctype_of(cg, elem);
-            StrBuf prelude;
-            sb_init(&prelude);
-            char *texts[3] = {b, i, val};
-            const char *ctypes[3] = {ctype_of(cg, bt), map_type("int"), ec};
-            char **names = sequence_exprs(cg, texts, ctypes, 3, &prelude);
+            char *val = maybe_cast(cg, elem, vt, gen_expr(cg, s->as.assign.value));
+            val = sequence_one(cg, bi_id, 2, ec, elem, val,
+                               s->as.assign.value, &prelude);
+            cg->ambient_count = ambient_mark;
             emit_line(cg,
                       "%s(*(%s *)(void *)sl_arr_get(%s, %s, sizeof(%s))) = "
                       "(%s)(%s);",
-                      prelude.data, ec, names[0], names[1], ec, ec, names[2]);
+                      prelude.data, ec, b, i, ec, ec, val);
             break;
         }
+        cg->ambient_count = ambient_mark;
         cg_error(s->line, "invalid assignment target");
         break;
     }

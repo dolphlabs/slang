@@ -1033,6 +1033,55 @@ static void print_stmts(FILE *out, Stmt **stmts, int count) {
 /* Public entry point                                                   */
 /* ------------------------------------------------------------------ */
 
+void compute_liveness(CG *cg, Package *pkgs, int npkgs, int main_index) {
+    for (int i = 0; i < npkgs; i++) {
+        Package *p = &pkgs[i];
+        for (int j = 0; j < p->prog->nfuncs; j++) {
+            FuncDecl *f = p->prog->funcs[j];
+            if (f->is_extern) continue;
+            cg->vars.count = 0;
+            cg->in_function = 1;
+            cg->cur_pkg = p->name;
+            FuncSig *sig = sig_find_in(cg, p->name, f->name);
+            cg->cur_ret = sig->ret_slang;
+            for (int k = 0; k < f->nparams; k++)
+                var_push(cg, f->params[k], sig->param_slang[k]);
+            live_function_body(cg, f->body, f->params, sig->param_slang,
+                               f->nparams);
+            cg->in_function = 0;
+        }
+        Block *body = p->prog->main_body;
+        for (int j = 0; j < body->count; j++) {
+            Stmt *s = body->stmts[j];
+            if (s->kind != ST_IMPL) continue;
+            for (int q = 0; q < s->as.impl.nfuncs; q++) {
+                FuncDecl *f = s->as.impl.funcs[q];
+                cg->vars.count = 0;
+                cg->in_function = 1;
+                cg->cur_pkg = p->name;
+                FuncSig *sig = method_find(
+                    cg, struct_find_in_pkg(cg, p->name, s->as.impl.struct_name),
+                    f->name);
+                cg->cur_ret = sig->ret_slang;
+                for (int k = 0; k < f->nparams; k++)
+                    var_push(cg, f->params[k], sig->param_slang[k]);
+                live_function_body(cg, f->body, f->params, sig->param_slang,
+                                   f->nparams);
+                cg->in_function = 0;
+            }
+        }
+    }
+
+    /* the main package's top-level statements, walked as their own
+     * pseudo-function (Risk 7): no params, void return, fresh scope */
+    cg->vars.count = 0;
+    cg->in_function = 1;
+    cg->cur_ret = NULL;
+    cg->cur_pkg = pkgs[main_index].name;
+    Block *main_body = pkgs[main_index].prog->main_body;
+    live_function_body(cg, main_body, NULL, NULL, 0);
+}
+
 void dump_liveness(Package *pkgs, int npkgs, int main_index, FILE *out) {
     CG cg;
     memset(&cg, 0, sizeof(CG));
@@ -1050,24 +1099,18 @@ void dump_liveness(Package *pkgs, int npkgs, int main_index, FILE *out) {
     }
 
     collect_decls(&cg, pkgs, npkgs);
+    compute_liveness(&cg, pkgs, npkgs, main_index);
 
+    /* second walk: printing only, reusing the same source-order
+     * traversal shape, now over an AST whose live_set/
+     * backedge_live_set fields are already fully populated. */
     for (int i = 0; i < npkgs; i++) {
         Package *p = &pkgs[i];
         for (int j = 0; j < p->prog->nfuncs; j++) {
             FuncDecl *f = p->prog->funcs[j];
             if (f->is_extern) continue;
-            cg.vars.count = 0;
-            cg.in_function = 1;
-            cg.cur_pkg = p->name;
-            FuncSig *sig = sig_find_in(&cg, p->name, f->name);
-            cg.cur_ret = sig->ret_slang;
-            for (int k = 0; k < f->nparams; k++)
-                var_push(&cg, f->params[k], sig->param_slang[k]);
             fprintf(out, "== fn %s.%s ==\n", p->name, f->name);
-            live_function_body(&cg, f->body, f->params, sig->param_slang,
-                               f->nparams);
             print_stmts(out, f->body->stmts, f->body->count);
-            cg.in_function = 0;
         }
         Block *body = p->prog->main_body;
         for (int j = 0; j < body->count; j++) {
@@ -1075,33 +1118,29 @@ void dump_liveness(Package *pkgs, int npkgs, int main_index, FILE *out) {
             if (s->kind != ST_IMPL) continue;
             for (int q = 0; q < s->as.impl.nfuncs; q++) {
                 FuncDecl *f = s->as.impl.funcs[q];
-                cg.vars.count = 0;
-                cg.in_function = 1;
-                cg.cur_pkg = p->name;
-                FuncSig *sig = method_find(
-                    &cg, struct_find_in_pkg(&cg, p->name, s->as.impl.struct_name),
-                    f->name);
-                cg.cur_ret = sig->ret_slang;
-                for (int k = 0; k < f->nparams; k++)
-                    var_push(&cg, f->params[k], sig->param_slang[k]);
                 fprintf(out, "== method %s.%s.%s ==\n", p->name,
                         s->as.impl.struct_name, f->name);
-                live_function_body(&cg, f->body, f->params, sig->param_slang,
-                                   f->nparams);
                 print_stmts(out, f->body->stmts, f->body->count);
-                cg.in_function = 0;
             }
         }
     }
-
-    /* the main package's top-level statements, walked as their own
-     * pseudo-function (Risk 7): no params, void return, fresh scope */
-    cg.vars.count = 0;
-    cg.in_function = 1;
-    cg.cur_ret = NULL;
-    cg.cur_pkg = pkgs[main_index].name;
     Block *main_body = pkgs[main_index].prog->main_body;
     fputs("== main ==\n", out);
-    live_function_body(&cg, main_body, NULL, NULL, 0);
     print_stmts(out, main_body->stmts, main_body->count);
+}
+
+int live_set_nnamed(void *ls) {
+    return ls ? ((LiveSet *)ls)->nnamed : 0;
+}
+
+const char *live_set_named(void *ls, int i) {
+    return ((LiveSet *)ls)->named[i]->name;
+}
+
+int live_set_npending(void *ls) {
+    return ls ? ((LiveSet *)ls)->npending : 0;
+}
+
+Expr *live_set_pending(void *ls, int i) {
+    return ((LiveSet *)ls)->pending[i];
 }

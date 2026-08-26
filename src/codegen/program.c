@@ -2,6 +2,7 @@
  * internal.h for the shared CG state and cross-file API. */
 
 #include "internal.h"
+#include "liveness.h"
 
 #include <string.h>
 
@@ -595,6 +596,24 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
     cg.out = &scratch;
     gen_whole_program(&cg, pkgs, npkgs, main_index);
     free(scratch.data);
+
+    /* Tier 10: populate Expr.live_set (used by gen_call's call-site
+     * safepoint brackets) once, before the real gen_whole_program pass
+     * below reads it -- codegen never mutates live_set, so computing
+     * it once and letting the real run read the same already-computed
+     * data is safe. Must run here, after the dry run and before the
+     * glob-bookkeeping reset just below: package-level (non-main)
+     * globals only exist in cg.globs once emit_globals (called from
+     * gen_whole_program) has registered them via glob_push, and a
+     * function body referencing one of its own package's globals
+     * (e.g. httpkit's find_blank_line reading the package-level `CR`)
+     * needs that to already be resolvable, exactly like the real
+     * gen_function pass just below will. Running it any earlier
+     * (before the dry run ever populates cg.globs at all) makes
+     * compute_liveness reject any such program with a spurious
+     * "undefined variable" -- caught by demo/main.sl specifically,
+     * which is exactly this shape (httpkit.sl's CR/LF/SPACE). */
+    compute_liveness(&cg, pkgs, npkgs, main_index);
 
     /* emit_globals (called from gen_whole_program) registers package
      * globals as it emits them; undo that bookkeeping before the real

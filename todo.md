@@ -725,9 +725,149 @@ points, both permanent decisions, not "for now":
       read/write, arithmetic, JSON — all correct), and 3 representative
       programs (`spawn`, `json`, `structs`) byte-identical against
       `expected.txt` under ASan+UBSan.
-- [ ] Compiler: codegen emits stack maps at call sites for every
+- [x] Compiler: codegen emits stack maps at call sites for every
       generated function (the structural piece every bullet below
-      depends on)
+      depends on). Wired the liveness pass into the real compile
+      path (`compute_liveness`, split out of `dump_liveness`,
+      called once from `codegen_program` after the dry-run
+      `gen_whole_program` pass -- package-level globals only exist
+      once `emit_globals` has run, and a function referencing its own
+      package's global needs that already resolvable) and made
+      `gen_call` emit a real, per-call-site root list at every
+      function call whose liveness-computed `live_set` is non-empty:
+      `void *_sl_spN_roots[] = { ... }; sl_safepoint _sl_spN;
+      sl_rt_safepoint_enter(&_sl_spN, _sl_spN_roots, K);` brackets the
+      call, `sl_rt_safepoint_exit()` after capturing its result. The
+      chain (`sl_safepoint`/`sl_rt_safepoint_top`, `runtime_core.c`)
+      is a lexically-scoped "handle stack" (the same shape OCaml's C
+      FFI `CAMLparam`/`CAMLlocal` uses), not a persistent per-function
+      frame+bitmask table -- chosen because nothing scans it yet
+      (`GC_malloc`/Boehm stays authoritative until the allocator-swap
+      bullet below), so a per-call bracket is the simplest thing that
+      is still real, correct, load-bearing infrastructure rather than
+      a stub.
+  - [x] `gen_call`'s own arguments are sequenced *incrementally* (one
+        temp named+registered+ambient-pushed per argument, via a new
+        shared `sequence_one`, as each argument is generated) instead
+        of the sequencing fix's original batch-at-the-end shape:
+        a pending sibling's temp has to exist before a later sibling
+        that's itself a nested call is generated (`foo(bar(), baz())`
+        -- `baz()`'s own bracket needs `bar()`'s temp).
+  - [x] A new `cg->ambient_roots` stack closes a gap liveness.c's own
+        pending tracking doesn't cover: it deliberately excludes
+        bare-identifier siblings (a named local needs a stable slot,
+        not an anonymous marker), which left nothing protecting one
+        across a *later* sibling's own nested call in the same
+        argument list (`combine(xs, baz())` -- `baz()` must see
+        `xs`). Every sequenced GC-pointer value is pushed onto this
+        shared, save/restored-per-group stack regardless of kind
+        (strictly safer than mirroring liveness.c's exact bare-ident
+        condition), so it composes correctly across nesting levels
+        (`outer(x, combine(xs, baz()))` -- `baz()`'s bracket picks up
+        both `x` and `xs`; `combine(...)`'s own bracket, built after
+        popping its own pushes, still sees `x`).
+  - [x] Four real bugs found and fixed along the way, each caught by
+        direct testing (hand-built representative programs cross-
+        checked against `--dump-liveness`), not assumed correct:
+    - Placing `compute_liveness` before the dry-run `gen_whole_program`
+          pass broke the real compiler (not just `--dump-liveness`)
+          on any program with a package-level global referenced from
+          its own package -- `demo/main.sl` itself, via `httpkit.sl`'s
+          `CR`/`LF`/`SPACE` constants, since non-main-package globals
+          only get `glob_push`-registered inside `emit_globals`.
+          Fixed by moving the call to after the dry run.
+    - `sequence_exprs`'s batch-at-the-end shape (the sequencing fix's
+          original design, correct for pure evaluation-order) turned
+          out to be actively wrong for pending-value registration: at
+          every one of its other 6 call sites, ALL siblings were
+          generated before ANY got a registered temp, so a nested
+          call within a later sibling could never find an earlier
+          one's temp -- caught by `[mk_a(), mk_b()]` (two calls in a
+          list literal) crashing with "liveness-pending value has no
+          registered temp". Fixed by replacing `sequence_exprs`
+          (removed, now fully unused) with `sequence_one`, called once
+          per sibling as it's generated, and converting every one of
+          its former call sites (`gen_index`, `gen_slice`, `gen_list`,
+          `gen_numeric_binary`/`gen_comparison`/`gen_string_concat`,
+          `ST_ASSIGN`) plus `gen_call` itself to the same incremental
+          shape.
+    - `gen_index`/`ST_ASSIGN`'s index-target case hard-coded the
+          sequenced index's C type to `int` for all three branches
+          (map/bytes/array) when only bytes/array indices are
+          actually always `int` -- a map's index is its *key* type,
+          which can be `str` or anything else map-key-eligible.
+          Caught by `tests/maps`/`tests/json` failing to compile
+          ("incompatible pointer to integer conversion") once real
+          sequencing touched the map case too. Fixed by determining
+          the map branch's index ctype from `map_kv`'s key type
+          (cast first, then sequence the already-casted value, same
+          order `gen_call` uses) before ever assuming `int`.
+    - `gen_maplit`/`gen_structlit` were left deliberately untouched by
+          the original sequencing fix (their own sub-computations were
+          already correctly *ordered* via real per-pair/per-field C
+          statements) -- but Tier 10's liveness pass tracks their
+          pairs/fields as pending siblings exactly like any other
+          multi-child site (`process_children_reverse` is shared),
+          and neither site registered anything, so a struct/map
+          literal with 2+ GC-pointer-typed fields/pairs where one is
+          itself a nested call crashed the same "no registered temp"
+          way -- caught directly (`Wrapper { a: bar(), b: baz() }`,
+          `{"k": combine(bar(), baz())}`). Compounded by their
+          existing key/value temps (`_sl_k%d`/`_sl_v%d`) being scoped
+          to a per-pair `{ ... }` block that closed immediately after
+          its own `sl_map_put`, invisible to a later pair even once
+          registered. Fixed by sequencing each field/pair value with
+          `sequence_one` into the outer `({ ... })` scope instead
+          (structlit gained a real per-field temp it never had
+          before; maplit's per-pair block wrapper is gone, no longer
+          needed once each value has its own uniquely-named temp).
+    - `sequence_one` registered and ambient-pushed *every* value
+          regardless of type, including plain scalars (int/float/
+          bool) -- harmless in the sense that nothing scans
+          `cg->ambient_roots` yet, but wrong on its face and caught by
+          a real compiler warning on `demo/main.sl`'s own
+          `RollResult` struct literal (mixed scalar and pointer
+          fields): `-Wint-to-void-pointer-cast` on `(void
+          *)_sl_seq1110_1` where the temp held a plain `int32_t`.
+          Fixed by gating registration on `type_is_gc_ptr` of the
+          value's own slang type (added as a `sequence_one`
+          parameter) -- a scalar sibling still gets sequenced for
+          evaluation order (Risk 1 applies to every type), just never
+          registered or treated as a root candidate.
+  - [ ] Documented, deliberately deferred gap: `gen_list`/`gen_maplit`/
+        `gen_structlit`/the `none` literal now correctly *register*
+        every value they sequence (closing the crash above), but their
+        own container-under-construction temp (`_sl_e`/`_sl_m`/
+        `_sl_s`) is never itself pushed as a root -- a nested call
+        inside a later element/pair/field's own evaluation isn't
+        guaranteed to keep the *partially-built* aggregate alive. Not
+        a crash (nothing scans roots yet) and not hit by anything in
+        `tests/`, but a real gap once the allocator swap below lands;
+        needs an "ambient roots for a container mid-construction"
+        extension (push the container's own temp name once
+        `sl_map_new`/`GC_malloc`/`_sl_e[]` exists, pop after) before
+        that step, or documented again there.
+  - [ ] Documented, deliberately deferred gap: only `gen_call`'s
+        plain/method call path gets a safepoint bracket. The early-
+        return paths inside `gen_call` (`gen_ctor` for `some`/`ok`/
+        `err`, `gen_builtin_call`, `native_gen`, `json_call_gen`)
+        bypass it entirely, even though liveness.c computes a
+        `live_set` for every `EX_CALL` node uniformly, native/builtin
+        calls included. Needs the same bracket-building logic
+        (or a shared helper) applied at each of those return paths.
+  - Verified: full 45-test suite unchanged; a `--dump-liveness`
+        cross-check against generated C for representative programs
+        (nested calls, bare-ident siblings, 2-level nesting, map/list/
+        struct literals) confirming every root array matches the
+        liveness pass's own computed set, named/pending/ambient
+        entries alike; `demo/main.sl` rebuilt and smoke-tested end to
+        end through every route including the stress endpoints
+        (`/api/stress/{ping,cpu,json,chan,fanout}`) against a freshly
+        started server; ASan+UBSan clean and byte-identical against
+        `expected.txt` on 9 representative tests (`maps`, `json`,
+        `spawn`, `structs`, `opt`, `ints`, `bytes`, `lists`, `proc`)
+        plus 6 hand-built programs covering every bug above;
+        determinism (byte-identical repeated `--emit-c` runs).
 - [ ] Compiler: codegen emits stack maps at loop back-edges too, ahead
       of Tier 11's cooperative preemption needing them
 - [ ] Runtime: replace every `GC_malloc`/collection call site with the

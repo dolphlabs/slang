@@ -2,6 +2,7 @@
  * internal.h for the shared CG state and cross-file API. */
 
 #include "internal.h"
+#include "liveness.h"
 
 #include <string.h>
 
@@ -58,41 +59,45 @@ char *conv_to_str(const char *t, char *expr) {
 
 char *gen_string_concat(CG *cg, Expr *e, const char *lt,
                                const char *rt) {
-    char *a = gen_expr(cg, e->as.binary.lhs);
-    char *b = gen_expr(cg, e->as.binary.rhs);
-    char *ca = conv_to_str(lt, a);
-    char *cb = conv_to_str(rt, b);
     /* lhs/rhs would otherwise be embedded directly as sl_str_concat's
      * two arguments, whose relative evaluation order C leaves
-     * unspecified -- sequence them into named temps first (Tier 10's
+     * unspecified -- sequence them into named temps (Tier 10's
      * liveness pass assumes left-to-right; this is what makes that
-     * true of the generated C). */
+     * true of the generated C). Generated and sequenced one at a
+     * time, not both-then-sequence: if rhs is itself a nested call
+     * needing lhs's value protected across its own execution (Tier
+     * 10's pending-value tracking), lhs's temp has to already exist
+     * by the time rhs is generated (see gen_call's own comment on
+     * this exact ordering requirement). */
+    const char *sc = ctype_of(cg, "str");
     StrBuf prelude;
     sb_init(&prelude);
-    char *texts[2] = {ca, cb};
-    const char *ctypes[2] = {ctype_of(cg, "str"), ctype_of(cg, "str")};
-    char **names = sequence_exprs(cg, texts, ctypes, 2, &prelude);
-    return xasprintf("({ %ssl_str_concat(%s, %s); })", prelude.data,
-                     names[0], names[1]);
+    int seq_id = cg->tmp_id++;
+    int ambient_mark = cg->ambient_count;
+    char *a = conv_to_str(lt, gen_expr(cg, e->as.binary.lhs));
+    a = sequence_one(cg, seq_id, 0, sc, "str", a, e->as.binary.lhs, &prelude);
+    char *b = conv_to_str(rt, gen_expr(cg, e->as.binary.rhs));
+    b = sequence_one(cg, seq_id, 1, sc, "str", b, e->as.binary.rhs, &prelude);
+    cg->ambient_count = ambient_mark;
+    return xasprintf("({ %ssl_str_concat(%s, %s); })", prelude.data, a, b);
 }
 
 char *gen_numeric_binary(CG *cg, Expr *e, const char *result_t) {
     const char *op = e->as.binary.op;
     const char *lt = infer_type(cg, e->as.binary.lhs);
     const char *rt = infer_type(cg, e->as.binary.rhs);
-    char *a = gen_expr(cg, e->as.binary.lhs);
-    char *b = gen_expr(cg, e->as.binary.rhs);
-    a = maybe_cast(cg, result_t, lt, a);
-    b = maybe_cast(cg, result_t, rt, b);
-
+    const char *rc = ctype_of(cg, result_t);
     StrBuf prelude;
     sb_init(&prelude);
-    char *texts[2] = {a, b};
-    const char *rc = ctype_of(cg, result_t);
-    const char *ctypes[2] = {rc, rc};
-    char **names = sequence_exprs(cg, texts, ctypes, 2, &prelude);
-    a = names[0];
-    b = names[1];
+    int seq_id = cg->tmp_id++;
+    int ambient_mark = cg->ambient_count;
+    char *a = maybe_cast(cg, result_t, lt, gen_expr(cg, e->as.binary.lhs));
+    a = sequence_one(cg, seq_id, 0, rc, result_t, a, e->as.binary.lhs,
+                     &prelude);
+    char *b = maybe_cast(cg, result_t, rt, gen_expr(cg, e->as.binary.rhs));
+    b = sequence_one(cg, seq_id, 1, rc, result_t, b, e->as.binary.rhs,
+                     &prelude);
+    cg->ambient_count = ambient_mark;
 
     /* Integer '/' and '%' by zero trap the CPU (SIGFPE) rather than
      * raising a catchable error; guard explicitly so it becomes an
@@ -117,24 +122,25 @@ char *gen_numeric_binary(CG *cg, Expr *e, const char *result_t) {
 
 char *gen_comparison(CG *cg, Expr *e, const char *lt, const char *rt) {
     const char *op = e->as.binary.op;
-    char *a = gen_expr(cg, e->as.binary.lhs);
-    char *b = gen_expr(cg, e->as.binary.rhs);
-    if (!(is_str(lt) && is_str(rt)) && !(is_bytes(lt) && is_bytes(rt))) {
-        /* mixed-width numerics: widen both to the common type */
-        const char *pt = promote(lt, rt);
-        a = maybe_cast(cg, pt, lt, a);
-        b = maybe_cast(cg, pt, rt, b);
-    }
+    int widen = !(is_str(lt) && is_str(rt)) && !(is_bytes(lt) && is_bytes(rt));
+    const char *pt = widen ? promote(lt, rt) : NULL;
+    const char *seq_t = is_str(lt) && is_str(rt)     ? "str"
+                        : is_bytes(lt) && is_bytes(rt) ? "bytes"
+                                                       : pt;
+    const char *ct = ctype_of(cg, seq_t);
     StrBuf prelude;
     sb_init(&prelude);
-    const char *ct = is_str(lt) && is_str(rt)     ? ctype_of(cg, "str")
-                     : is_bytes(lt) && is_bytes(rt) ? ctype_of(cg, "bytes")
-                                                    : ctype_of(cg, promote(lt, rt));
-    char *texts[2] = {a, b};
-    const char *ctypes[2] = {ct, ct};
-    char **names = sequence_exprs(cg, texts, ctypes, 2, &prelude);
-    a = names[0];
-    b = names[1];
+    int seq_id = cg->tmp_id++;
+    int ambient_mark = cg->ambient_count;
+    char *a = gen_expr(cg, e->as.binary.lhs);
+    if (widen)
+        a = maybe_cast(cg, pt, lt, a);
+    a = sequence_one(cg, seq_id, 0, ct, seq_t, a, e->as.binary.lhs, &prelude);
+    char *b = gen_expr(cg, e->as.binary.rhs);
+    if (widen)
+        b = maybe_cast(cg, pt, rt, b);
+    b = sequence_one(cg, seq_id, 1, ct, seq_t, b, e->as.binary.rhs, &prelude);
+    cg->ambient_count = ambient_mark;
     if (is_str(lt) && is_str(rt))
         return xasprintf("({ %s(strcmp(%s, %s) %s 0); })", prelude.data, a,
                          b, op);
@@ -380,26 +386,43 @@ char *gen_call(CG *cg, Expr *e) {
     }
     /* Explicit arguments would otherwise be embedded directly as
      * sibling call arguments, whose relative evaluation order C
-     * leaves unspecified -- sequence them first (the primary Risk 1
-     * case: foo(bar(), baz())). selfexpr is never sequenced alongside
-     * them: a method receiver is always a plain identifier in this
-     * language (never a call/allocation of its own), so it has no
-     * ordering hazard to guard against. */
+     * leaves unspecified -- sequence them via sequence_one (the
+     * primary Risk 1 case: foo(bar(), baz()); see its own comment for
+     * why each argument is generated-and-sequenced one at a time,
+     * rather than all-generated-then-sequenced -- required for
+     * bar()'s temp to already be registered by the time baz() is
+     * generated). selfexpr is never sequenced alongside them: a
+     * method receiver is always a plain identifier in this language
+     * (never a call/allocation of its own), so it has no ordering
+     * hazard to guard against, and nothing to register either. */
     int nargs = e->as.call.nargs;
-    char **texts = (char **)xmalloc(sizeof(char *) * (size_t)(nargs > 0 ? nargs : 1));
-    const char **ctypes =
-        (const char **)xmalloc(sizeof(char *) * (size_t)(nargs > 0 ? nargs : 1));
+    char **names = (char **)xmalloc(sizeof(char *) * (size_t)(nargs > 0 ? nargs : 1));
+    StrBuf prelude;
+    sb_init(&prelude);
+    int seq_id = nargs > 1 ? cg->tmp_id++ : -1;
+    int ambient_mark = cg->ambient_count;
     for (int i = 0; i < nargs; i++) {
         const char *saved = expect_push(cg, sig->param_slang[argi + i]);
         const char *at = infer_type(cg, e->as.call.args[i]);
         char *a = gen_expr(cg, e->as.call.args[i]);
         cg->expect = saved;
-        texts[i] = maybe_cast(cg, sig->param_slang[argi + i], at, a);
-        ctypes[i] = ctype_of(cg, sig->param_slang[argi + i]);
+        char *casted = maybe_cast(cg, sig->param_slang[argi + i], at, a);
+        const char *ctype = ctype_of(cg, sig->param_slang[argi + i]);
+        names[i] = sequence_one(cg, seq_id, i, ctype, sig->param_slang[argi + i],
+                                casted, e->as.call.args[i], &prelude);
     }
-    StrBuf prelude;
-    sb_init(&prelude);
-    char **names = sequence_exprs(cg, texts, ctypes, nargs, &prelude);
+    /* Pop this call's own argument-temp contributions back off; what
+     * remains (cg->ambient_roots[0..ambient_mark)) is whatever an
+     * ENCLOSING call's still-in-progress argument list pushed before
+     * this call was itself generated as one of its arguments -- e.g.
+     * outer(x, combine(xs, baz())): by the time combine(...) is
+     * generated (as outer's arg1), outer's own loop has already
+     * pushed x. combine is, from outer's point of view, exactly the
+     * same "later sibling that must see an earlier bare-ident
+     * argument" case baz() is from combine's -- so combine's own
+     * bracket (built below) needs x too, which is exactly what's left
+     * on the stack here after popping combine's own pushes. */
+    cg->ambient_count = ambient_mark;
 
     StrBuf sb;
     sb_init(&sb);
@@ -416,9 +439,85 @@ char *gen_call(CG *cg, Expr *e) {
         sb_append(&sb, names[i]);
     }
     sb_putc(&sb, ')');
-    if (prelude.len == 0)
-        return sb.data;
-    return xasprintf("({ %s%s; })", prelude.data, sb.data);
+
+    /* Tier 10: bracket this call with a root list built straight from
+     * the liveness pass's own live_set for this node -- everything
+     * that must stay scannable while this call (and anything it
+     * transitively allocates) runs. Arguments/selfexpr are excluded
+     * by construction: they're the callee's concern from the moment
+     * they're passed, never in e->live_set (see live_expr's EX_CALL
+     * case in liveness.c). Nothing walks sl_rt_safepoint_top yet
+     * (GC_malloc/Boehm stays authoritative until the allocator swap),
+     * so this is purely additive and cannot change any program's
+     * observable behavior. */
+    int nlive_named = live_set_nnamed(e->live_set);
+    int nlive_pending = live_set_npending(e->live_set);
+    /* cg->ambient_count was already popped back to ambient_mark above
+     * -- what's left, [0, ambient_mark), is exactly what an ENCLOSING
+     * call's still-open argument list pushed before this call was
+     * generated as one of its own arguments (the outer(x, combine(xs,
+     * baz())) case: by the time combine(...) is generated, outer's
+     * loop has already pushed x, and combine -- from outer's own
+     * argument list's point of view -- is exactly the same "later
+     * sibling that must protect an earlier bare-ident argument"
+     * relationship baz() has to combine's own xs). */
+    int nambient = ambient_mark;
+    int nroots = nlive_named + nlive_pending + nambient;
+    if (nroots == 0) {
+        if (prelude.len == 0)
+            return sb.data;
+        return xasprintf("({ %s%s; })", prelude.data, sb.data);
+    }
+
+    int sp_id = cg->tmp_id++;
+    StrBuf sp;
+    sb_init(&sp);
+    sb_append(&sp, xasprintf("void *_sl_sp%d_roots[] = { ", sp_id));
+    int wrote = 0;
+    for (int i = 0; i < nlive_named; i++) {
+        if (wrote++)
+            sb_append(&sp, ", ");
+        sb_append(&sp, xasprintf("(void *)%s",
+                                 sanitize_ident(live_set_named(e->live_set, i))));
+    }
+    for (int i = 0; i < nlive_pending; i++) {
+        Expr *p = live_set_pending(e->live_set, i);
+        const char *tn = expr_tmp_find(cg, p);
+        if (!tn)
+            cg_error(e->line,
+                     "internal error: liveness-pending value has no "
+                     "registered temp at line %d",
+                     p->line);
+        if (wrote++)
+            sb_append(&sp, ", ");
+        sb_append(&sp, xasprintf("(void *)%s", tn));
+    }
+    for (int i = 0; i < ambient_mark; i++) {
+        if (wrote++)
+            sb_append(&sp, ", ");
+        sb_append(&sp, xasprintf("(void *)%s", cg->ambient_roots[i]));
+    }
+    sb_append(&sp, "}; ");
+    sb_append(&sp, xasprintf("sl_safepoint _sl_sp%d; "
+                             "sl_rt_safepoint_enter(&_sl_sp%d, _sl_sp%d_roots, %d); ",
+                             sp_id, sp_id, sp_id, nroots));
+
+    StrBuf block;
+    sb_init(&block);
+    sb_append(&block, "({ ");
+    sb_append(&block, prelude.data);
+    sb_append(&block, sp.data);
+    if (sig->ret_slang) {
+        const char *retc = ctype_of(cg, sig->ret_slang);
+        sb_append(&block,
+                  xasprintf("%s _sl_spres%d = %s; sl_rt_safepoint_exit(); "
+                            "_sl_spres%d; })",
+                            retc, sp_id, sb.data, sp_id));
+    } else {
+        sb_append(&block,
+                  xasprintf("%s; sl_rt_safepoint_exit(); })", sb.data));
+    }
+    return block.data;
 }
 
 /* Generate a map literal. With expect_k/expect_v (annotated case),
@@ -443,18 +542,30 @@ char *gen_maplit(CG *cg, Expr *e, const char *expect_k,
     sb_append(&sb, "), sizeof(");
     sb_append(&sb, vc);
     sb_append(&sb, xasprintf("), %d); ", kstr));
+    /* Each key/value is sequenced into its own temp, declared directly
+     * in this outer ({ ... }) scope (not the old per-pair { ... }
+     * block, which closed immediately after its own sl_map_put --
+     * invisible to a LATER pair's own nested-call safepoint bracket
+     * needing to reference an EARLIER pair's still-live key/value, the
+     * same crash class gen_list's [mk_a(), mk_b()] hit; see
+     * sequence_one's own comment). Registered/ambient-pushed
+     * unconditionally (not just when >1 total slot, since sl_map_put
+     * always needs an addressable &name regardless of pair count). */
+    int ambient_mark = cg->ambient_count;
+    int seq_id = cg->tmp_id++;
     for (int i = 0; i < e->as.maplit.npairs; i++) {
         const char *kit = infer_type(cg, e->as.maplit.keys[i]);
-        char *k = gen_expr(cg, e->as.maplit.keys[i]);
-        k = maybe_cast(cg, kt, kit, k);
+        char *k = maybe_cast(cg, kt, kit, gen_expr(cg, e->as.maplit.keys[i]));
+        char *kname = sequence_one(cg, seq_id, i * 2, kc, kt, k,
+                                   e->as.maplit.keys[i], &sb);
         const char *vit = infer_type(cg, e->as.maplit.vals[i]);
-        char *v = gen_expr(cg, e->as.maplit.vals[i]);
-        v = maybe_cast(cg, vt, vit, v);
+        char *v = maybe_cast(cg, vt, vit, gen_expr(cg, e->as.maplit.vals[i]));
+        char *vname = sequence_one(cg, seq_id, i * 2 + 1, vc, vt, v,
+                                   e->as.maplit.vals[i], &sb);
         sb_append(&sb,
-                  xasprintf("{ %s _sl_k%d = %s; %s _sl_v%d = %s; "
-                            "sl_map_put(_sl_m, &_sl_k%d, &_sl_v%d); } ",
-                            kc, i, k, vc, i, v, i, i));
+                  xasprintf("sl_map_put(_sl_m, &%s, &%s); ", kname, vname));
     }
+    cg->ambient_count = ambient_mark;
     sb_append(&sb, "_sl_m; })");
     return sb.data;
 }
@@ -468,6 +579,16 @@ char *gen_structlit(CG *cg, Expr *e) {
     sb_append(&sb,
               xasprintf("({ %s *_sl_s = (%s *)GC_malloc(sizeof(%s)); ", sc,
                         sc, sc));
+    /* Each field value is sequenced into its own temp, declared
+     * directly in this outer ({ ... }) scope, rather than embedded
+     * raw into "_sl_s->field = %s;" -- needed so a LATER field's own
+     * nested-call safepoint bracket can reference an EARLIER field's
+     * still-live value (Wrapper{ a: bar(), b: baz() }: baz()'s own
+     * bracket needs bar()'s temp), the same crash class gen_list's
+     * [mk_a(), mk_b()] hit; see sequence_one's own comment).
+     * Registered/ambient-pushed unconditionally, matching gen_maplit. */
+    int ambient_mark = cg->ambient_count;
+    int seq_id = cg->tmp_id++;
     for (int j = 0; j < e->as.structlit.nfields; j++) {
         int fi = -1;
         for (int i = 0; i < sd->nfields; i++) {
@@ -479,96 +600,111 @@ char *gen_structlit(CG *cg, Expr *e) {
         char *v = gen_expr(cg, e->as.structlit.vals[j]);
         cg->expect = saved;
         v = maybe_cast(cg, sd->ftypes[fi], vt, v);
+        const char *fc = ctype_of(cg, sd->ftypes[fi]);
+        char *vname = sequence_one(cg, seq_id, j, fc, sd->ftypes[fi], v,
+                                   e->as.structlit.vals[j], &sb);
         sb_append(&sb,
                   xasprintf("_sl_s->%s = %s; ",
-                            sanitize_ident(sd->fields[fi]), v));
+                            sanitize_ident(sd->fields[fi]), vname));
     }
+    cg->ambient_count = ambient_mark;
     sb_append(&sb, "_sl_s; })");
     return sb.data;
 }
 
 char *gen_index(CG *cg, Expr *e) {
     const char *bt = infer_type(cg, e->as.index.base);
+    /* base and index would otherwise be embedded directly as sibling
+     * call arguments, whose relative evaluation order C leaves
+     * unspecified -- sequence them, base first (see sequence_one).
+     * Applies uniformly to all 3 cases below, map included: if index
+     * is itself a nested call, base's own pending/ambient protection
+     * has to already be registered before index is generated, exactly
+     * like every other multi-child site (see gen_call's comment on
+     * this exact ordering requirement). */
+    const char *bc = ctype_of(cg, bt);
+    StrBuf prelude;
+    sb_init(&prelude);
+    int seq_id = cg->tmp_id++;
+    int ambient_mark = cg->ambient_count;
     char *b = gen_expr(cg, e->as.index.base);
-    char *i = gen_expr(cg, e->as.index.index);
+    b = sequence_one(cg, seq_id, 0, bc, bt, b, e->as.index.base, &prelude);
+
     if (is_map(bt)) {
+        /* the index sequences at the map's own KEY ctype, not a fixed
+         * "int" (Risk: str/other non-int key types) -- cast first
+         * (same order gen_call uses: cast to the destination type,
+         * then sequence the already-casted value), matching how a
+         * map key of a narrower/wider numeric type would already need
+         * casting regardless of this sequencing concern. */
         char *k, *v;
         map_kv(bt, &k, &v);
         const char *kc = ctype_of(cg, k);
         const char *vc = ctype_of(cg, v);
         const char *ikt = infer_type(cg, e->as.index.index);
-        char *ix = maybe_cast(cg, k, ikt, i);
+        char *ix = maybe_cast(cg, k, ikt, gen_expr(cg, e->as.index.index));
+        ix = sequence_one(cg, seq_id, 1, kc, k, ix, e->as.index.index,
+                          &prelude);
+        cg->ambient_count = ambient_mark;
         int id = cg->tmp_id++;
         return xasprintf(
-            "({ %s _sl_k%d = %s; void *_sl_p%d = sl_map_get(%s, "
+            "({ %s%s _sl_k%d = %s; void *_sl_p%d = sl_map_get(%s, "
             "&_sl_k%d); if (!_sl_p%d) sl_rt_error(\"map key not found\", "
             "0, 0); *(%s *)(void *)_sl_p%d; })",
-            kc, id, ix, id, b, id, id, vc, id);
+            prelude.data, kc, id, ix, id, b, id, id, vc, id);
     }
-    /* bytes/array reads: base and index would otherwise be embedded
-     * directly as sibling call arguments, whose relative evaluation
-     * order C leaves unspecified -- sequence them first (see
-     * sequence_exprs; the map case above is already safe, it already
-     * sequences base/index via separate statements). */
+    char *i = gen_expr(cg, e->as.index.index);
+    i = sequence_one(cg, seq_id, 1, map_type("int"), "int", i,
+                     e->as.index.index, &prelude);
+    cg->ambient_count = ambient_mark;
     if (is_bytes(bt)) {
-        StrBuf prelude;
-        sb_init(&prelude);
-        char *texts[2] = {b, i};
-        const char *ctypes[2] = {ctype_of(cg, "bytes"), map_type("int")};
-        char **names = sequence_exprs(cg, texts, ctypes, 2, &prelude);
         return xasprintf("({ %s((long long)sl_bytes_at(%s, %s)); })",
-                         prelude.data, names[0], names[1]);
+                         prelude.data, b, i);
     }
     char *elem = arr_elem(bt);
     const char *ec = ctype_of(cg, elem);
-    StrBuf prelude;
-    sb_init(&prelude);
-    char *texts[2] = {b, i};
-    const char *ctypes[2] = {ctype_of(cg, bt), map_type("int")};
-    char **names = sequence_exprs(cg, texts, ctypes, 2, &prelude);
     return xasprintf(
         "({ %s(*(%s *)(void *)sl_arr_get(%s, %s, sizeof(%s))); })",
-        prelude.data, ec, names[0], names[1], ec);
+        prelude.data, ec, b, i, ec);
 }
 
 char *gen_slice(CG *cg, Expr *e) {
     const char *bt = infer_type(cg, e->as.slice.base);
-    char *b = gen_expr(cg, e->as.slice.base);
-    char *start = e->as.slice.start ? gen_expr(cg, e->as.slice.start)
-                                    : xstrdup("0");
-    int id = cg->tmp_id++;
-    /* base is already safely sequenced into its own statement below;
-     * start/end (when both given) would otherwise be embedded
-     * directly as sibling call arguments -- sequence them the same
-     * way as gen_index above. */
-    if (is_bytes(bt)) {
-        char *end = e->as.slice.end
-                        ? gen_expr(cg, e->as.slice.end)
-                        : xasprintf("_sl_b%d->len", id);
-        if (e->as.slice.inclusive)
-            end = xasprintf("(%s + 1)", end);
-        StrBuf prelude;
-        sb_init(&prelude);
-        char *texts[2] = {start, end};
-        const char *ctypes[2] = {map_type("int"), map_type("int")};
-        char **names = sequence_exprs(cg, texts, ctypes, 2, &prelude);
-        return xasprintf(
-            "({ sl_bytes *_sl_b%d = %s; %ssl_bytes_slice(_sl_b%d, %s, %s); })",
-            id, b, prelude.data, id, names[0], names[1]);
-    }
-    char *end =
-        e->as.slice.end ? gen_expr(cg, e->as.slice.end)
-                        : xasprintf("_sl_a%d->len", id);
-    if (e->as.slice.inclusive)
-        end = xasprintf("(%s + 1)", end);
+    const char *bc = ctype_of(cg, bt);
+    /* base, start, and end would otherwise be embedded directly as
+     * sibling call arguments (base always, start/end when both
+     * given), whose relative evaluation order C leaves unspecified --
+     * sequence base into its own named temp first and register it
+     * immediately (see sequence_one/gen_call's comment), since start
+     * or end may themselves be a nested call needing base's value
+     * protected across their own execution. */
     StrBuf prelude;
     sb_init(&prelude);
-    char *texts[2] = {start, end};
-    const char *ctypes[2] = {map_type("int"), map_type("int")};
-    char **names = sequence_exprs(cg, texts, ctypes, 2, &prelude);
-    return xasprintf(
-        "({ sl_arr *_sl_a%d = %s; %ssl_arr_slice(_sl_a%d, %s, %s); })", id,
-        b, prelude.data, id, names[0], names[1]);
+    int ambient_mark = cg->ambient_count;
+    int id = cg->tmp_id++;
+    char *base_name = xasprintf("_sl_b%d", id);
+    sb_append(&prelude,
+              xasprintf("%s %s = %s; ", bc, base_name,
+                        gen_expr(cg, e->as.slice.base)));
+    expr_tmp_register(cg, e->as.slice.base, base_name);
+    ambient_root_push(cg, base_name);
+
+    char *start = e->as.slice.start ? gen_expr(cg, e->as.slice.start)
+                                    : xstrdup("0");
+    char *end = e->as.slice.end
+                    ? gen_expr(cg, e->as.slice.end)
+                    : xasprintf("%s->len", base_name);
+    if (e->as.slice.inclusive)
+        end = xasprintf("(%s + 1)", end);
+    int seq_id = cg->tmp_id++;
+    start = sequence_one(cg, seq_id, 0, map_type("int"), "int", start,
+                         e->as.slice.start, &prelude);
+    end = sequence_one(cg, seq_id, 1, map_type("int"), "int", end,
+                       e->as.slice.end, &prelude);
+    cg->ambient_count = ambient_mark;
+    return xasprintf("({ %s%s(%s, %s, %s); })", prelude.data,
+                     is_bytes(bt) ? "sl_bytes_slice" : "sl_arr_slice",
+                     base_name, start, end);
 }
 
 char *gen_list(CG *cg, Expr *e, const char *expect_elem) {
@@ -578,20 +714,26 @@ char *gen_list(CG *cg, Expr *e, const char *expect_elem) {
     int n = e->as.list.nelems;
     /* elements would otherwise be embedded directly in one aggregate
      * initializer ({el0, el1, ...}), whose relative evaluation order
-     * C leaves unspecified -- sequence them first, same as every
-     * other multi-child site in this file. */
-    char **texts = (char **)xmalloc(sizeof(char *) * (size_t)(n > 0 ? n : 1));
-    const char **ctypes =
-        (const char **)xmalloc(sizeof(char *) * (size_t)(n > 0 ? n : 1));
+     * C leaves unspecified -- sequence them, same as every other
+     * multi-child site in this file. Generated and sequenced one at a
+     * time (not all-generated-then-sequenced): a later element that's
+     * itself a nested call needs an earlier element's temp to already
+     * be registered by the time it's generated (see gen_call's own
+     * comment on this exact ordering requirement -- [mk_a(), mk_b()]
+     * is exactly this file's own version of foo(bar(), baz())). */
+    char **names = (char **)xmalloc(sizeof(char *) * (size_t)(n > 0 ? n : 1));
+    StrBuf prelude;
+    sb_init(&prelude);
+    int seq_id = n > 1 ? cg->tmp_id++ : -1;
+    int ambient_mark = cg->ambient_count;
     for (int i = 0; i < n; i++) {
         const char *ti = infer_type(cg, e->as.list.elems[i]);
         char *el = gen_expr(cg, e->as.list.elems[i]);
-        texts[i] = maybe_cast(cg, t0, ti, el);
-        ctypes[i] = ec;
+        el = maybe_cast(cg, t0, ti, el);
+        names[i] = sequence_one(cg, seq_id, i, ec, t0, el, e->as.list.elems[i],
+                                &prelude);
     }
-    StrBuf prelude;
-    sb_init(&prelude);
-    char **names = sequence_exprs(cg, texts, ctypes, n, &prelude);
+    cg->ambient_count = ambient_mark;
 
     StrBuf sb;
     sb_init(&sb);

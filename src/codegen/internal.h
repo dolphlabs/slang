@@ -57,6 +57,25 @@ typedef struct {
     int cap;
 } VarTable;
 
+/* Tier 10: maps an EX_CALL argument Expr* to the C temp name gen_call
+ * assigned it, so a LATER sibling argument's own call-site safepoint
+ * bracket can reference an EARLIER sibling's already-materialized
+ * value (the liveness pass's "pending" tracking, made concrete).
+ * Append-only, scanned backward like VarTable/var_find -- codegen_
+ * program runs gen_whole_program twice (dry run then real run), and
+ * a backward scan naturally prefers the current pass's registration
+ * without needing any per-function or per-pass reset. */
+typedef struct {
+    Expr *key;
+    char *name;
+} ExprTmp;
+
+typedef struct {
+    ExprTmp *items;
+    int count;
+    int cap;
+} ExprTmpTable;
+
 typedef struct {
     char *name;
     char *pkg;               /* owning package name */
@@ -163,6 +182,28 @@ struct CG {
     StrBuf *out;
     int indent;
     VarTable vars;
+    ExprTmpTable expr_tmps;
+    /* Tier 10: a single global stack (shared across every nesting
+     * level, save/restored per gen_call the same way cg->expect is)
+     * of C temp names an EARLIER sibling argument of a call currently
+     * being generated has already materialized. Closes a gap
+     * liveness.c itself doesn't cover: its pending-value tracking
+     * (Expr.live_set) deliberately excludes bare-identifier arguments
+     * (a named local doesn't need an anonymous "pending" marker, only
+     * a stable slot -- see liveness.c's is_bare_ident), which is
+     * correct for the pass's own per-statement backward analysis but
+     * leaves nothing protecting that local across a *later sibling's*
+     * own nested call within the same argument list (`combine(xs,
+     * baz())` -- xs must survive baz()'s call, but baz()'s own
+     * live_set, seeded from process_children_reverse, doesn't know
+     * about xs at all). gen_call pushes every argument's temp name
+     * here unconditionally (not just bare idents) as it registers it,
+     * so any nested call generated for a later sibling can fold the
+     * current contents into its own safepoint bracket alongside its
+     * real live_set -- a strict superset, safe even where it's
+     * redundant with an already-pending-tracked entry. */
+    char **ambient_roots;
+    int ambient_count, ambient_cap;
     SigTable sigs;
     GlobTable globs;
     ImportTable imports;
@@ -275,13 +316,17 @@ int value_assignable(const char *dst, Expr *src, const char *srct);
 const char *promote(const char *lt, const char *rt);
 char *maybe_cast(CG *cg, const char *dst, const char *src,
                         char *expr);
-char **sequence_exprs(CG *cg, char **texts, const char **ctypes, int n,
-                      StrBuf *prelude);
 const char *opt_cname(CG *cg, const char *inner);
 const char *res_cname(CG *cg, const char *tv, const char *te);
 SpawnShape *spawn_shape_for(CG *cg, FuncSig *sig);
 void var_push(CG *cg, const char *name, const char *slang);
 VarSym *var_find(CG *cg, const char *name);
+void expr_tmp_register(CG *cg, Expr *e, const char *name);
+const char *expr_tmp_find(CG *cg, Expr *e);
+void ambient_root_push(CG *cg, const char *name);
+char *sequence_one(CG *cg, int seq_id, int idx, const char *ctype,
+                   const char *slang_type, char *text, Expr *expr_node,
+                   StrBuf *prelude);
 FuncSig *sig_find_in(CG *cg, const char *pkg, const char *name);
 void glob_push(CG *cg, const char *name, const char *pkg,
                       const char *slang, int is_pub);
