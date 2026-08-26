@@ -263,6 +263,7 @@ int is_map_key(const char *t);
 int is_opt(const char *t);
 int is_result(const char *t);
 int is_chan(const char *t);
+int type_is_gc_ptr(CG *cg, const char *t);
 char *opt_inner(const char *t);
 char *chan_elem(const char *t);
 void result_te(const char *t, char **tv, char **ev);

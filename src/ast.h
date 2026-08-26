@@ -29,6 +29,13 @@ struct Expr {
     ExprKind kind;
     int line;
     const char *inf_ty; /* memoized slang type, filled by codegen inference */
+    void *live_set; /* LiveSet*, filled by the Tier 10 liveness pass
+                      * (src/codegen/liveness.c); non-NULL only on
+                      * safepoint kinds (EX_CALL, EX_STRUCTLIT, EX_LIST,
+                      * EX_MAPLIT -- every GC_malloc call site -- plus
+                      * the one EX_IDENT case that also allocates: the
+                      * 'none' literal, unlike 'nullptr'). NULL and
+                      * unused unless that pass has run. */
     union {
         struct { long long value; } int_lit;
         struct { double value; } float_lit;
@@ -90,6 +97,12 @@ typedef struct {
 struct Stmt {
     StmtKind kind;
     int line;
+    void *backedge_live_set; /* LiveSet*, filled by the Tier 10 liveness
+                               * pass; non-NULL only for ST_WHILE/
+                               * ST_FOR/ST_FOR_IN -- the live set at the
+                               * loop's back-edge, for Tier 11's future
+                               * cooperative preemption checks. NULL and
+                               * unused unless that pass has run. */
     union {
         struct {
             char *name;

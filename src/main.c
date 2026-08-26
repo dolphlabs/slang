@@ -13,9 +13,11 @@
 #include "common.h"
 #include "loader.h"
 #include "codegen.h"
+#include "codegen/liveness.h"
 
 static void print_usage(void) {
-    fputs("usage: slangc <file.sl> [-o <name>] [--emit-c] [--keep-c] [--run]",
+    fputs("usage: slangc <file.sl> [-o <name>] [--emit-c] [--keep-c] [--run] "
+          "[--dump-liveness]",
           stderr);
     fputc(10, stderr);
 }
@@ -46,7 +48,7 @@ static char *derive_stem(const char *path) {
 int main(int argc, char **argv) {
     const char *input = NULL;
     const char *outname = NULL;
-    int emit_c = 0, keep_c = 0, run = 0;
+    int emit_c = 0, keep_c = 0, run = 0, want_liveness_dump = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-o")) {
@@ -62,6 +64,8 @@ int main(int argc, char **argv) {
             keep_c = 1;
         } else if (!strcmp(argv[i], "--run")) {
             run = 1;
+        } else if (!strcmp(argv[i], "--dump-liveness")) {
+            want_liveness_dump = 1;
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             print_usage();
             return 0;
@@ -88,6 +92,14 @@ int main(int argc, char **argv) {
     /* ---- frontend: load the main package and all imports ---- */
     PkgList pkgs;
     int main_index = load_packages(input, &pkgs);
+
+    if (want_liveness_dump) {
+        /* Tier 10's liveness analysis, fully decoupled from the real
+         * compile pipeline: never calls codegen_program, never emits
+         * C. See src/codegen/liveness.c. */
+        dump_liveness(pkgs.items, pkgs.count, main_index, stdout);
+        return 0;
+    }
 
     StrBuf out;
     sb_init(&out);

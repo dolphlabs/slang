@@ -428,3 +428,347 @@ wouldn't need to change the language surface below.
       (15+ for the signal-delivery mechanism alone) and clean under
       ASan+UBSan, including the panicking-spawned-task counter-leak
       check specifically.
+
+## Tier 9 — bounded worker pool (stopgap, ships independently)
+
+Context: an Aug 2026 stress test (`demo/stress_harness/`, see
+`demo/README.md`'s "Stress test" section and the published "Arcade
+Under Load" report) found a realistic mixed workload plateaus around
+3,300-3,500 req/s, with the ceiling appearing already at 50 concurrent
+clients. Root causes, all fixable without touching the concurrency
+model at all: a hardcoded 64-entry `listen()` backlog, a fully serial
+single-threaded accept loop, and the raw `pthread_create`/teardown
+cost of one OS thread per connection — Tier 5's shipped `spawn` design,
+correct for its scale but not free. This tier removes those three
+specific costs while leaving Tier 5's real-OS-thread `spawn` semantics
+completely unchanged. It is not the long-term fix — Tiers 10-11 are —
+but it's cheap, safe to ship immediately, and buys runway while the
+real rewrite is underway.
+
+- [x] Larger `net.listen()` backlog: hardcoded `64` -> `1024` in
+      `src/codegen/pkg_net/runtime_net.c:84`. Not made configurable via
+      a new native fn — over-requesting is harmless (the OS silently
+      clamps to its own `somaxconn`, confirmed 128 on macOS today, and
+      a real number on a tuned Linux box), so there's no caller who
+      needs a knob here yet; revisit only if one shows up. Full
+      45-test suite reverified green after the change.
+- [x] Parallelize the accept path: `N_ACCEPTORS` (4) spawned acceptor
+      OS threads sharing one listening socket, chosen over
+      `SO_REUSEPORT` — simpler and portable across macOS/Linux without
+      relying on kernel-version-specific load-balancing behavior.
+      Targeted the single-threaded accept loop in `demo/main.sl`'s
+      main loop, confirmed as the actual bottleneck (server-side
+      thread count never exceeded ~415 even at 2,000 offered clients —
+      see the stress report). Each spawned acceptor is now off the
+      main thread, so it needed the exact non-blocking-socket-plus-
+      polling treatment `tls_accept_loop` already used for the same
+      reason (`SIGTERM`/`SIGINT` blocked in every spawned thread's
+      mask — Tier 8) — plain HTTP accept picked up that treatment for
+      the first time here, since it used to run on the main thread
+      specifically to get real signal interruption for free.
+- [x] A bounded worker-pool dispatch model for accepted connections: a
+      fixed pool of pre-spawned tasks (`WORKERS` env var, default 128
+      per protocol) pulling accepted fds/TLS connections off a
+      `chan[T]` queue, instead of `spawn`ing a brand-new thread per
+      accepted connection.
+  - [x] Decided: purely an internal detail of how `demo/main.sl`'s
+        accept loop dispatches work, built entirely from `spawn` +
+        `chan[T]` (a `chan[i32]` work queue for HTTP, `chan[rawptr]`
+        for TLS since `net.tls_accept` hands back a connection handle,
+        not a bare fd). `spawn`'s own semantics (Tier 5) are completely
+        untouched — no new compiler primitive, no codegen change
+        beyond the backlog constant. Shutdown draining stays exact:
+        each acceptor signals a `done` channel on exit so the shutdown
+        sequence knows precisely when it's safe to `chan_close` the
+        work queue (unblocking every worker's `chan_recv` with `none`)
+        without a race against an acceptor still trying to `chan_send`
+        into an already-closed channel — verified directly: a
+        `POST /api/stress/sleep` request in flight when `SIGTERM` was
+        sent still completed in full (2.04s, 200 OK) before the
+        process exited, matching the exact drain guarantee the demo
+        already advertised under the old per-connection-spawn design.
+- [x] Re-run `demo/stress_harness/` against this alone, before Tiers
+      10-11 land — see `demo/README.md`'s "Stress test" section for
+      the full before/after. Headline: total errors across the whole
+      38-run matrix dropped from 3,823 to 1,885 while total requests
+      served went *up* (1.53M -> 1.74M); the realistic mixed workload
+      at high concurrency went from 2,736 req/s with 957 errors to
+      3,572 req/s with zero, and the 60s soak went from 3,371 req/s
+      with 38 errors to 3,899 req/s with zero.
+  - [x] Caught and fixed mid-implementation, worth keeping as a
+        cautionary note: the first pass reused `tls_accept_loop`'s
+        original 50ms empty-poll backoff verbatim for the new
+        HTTP/TLS acceptor loops. That interval was tuned for a
+        lightly-loaded secondary shutdown-check path (Tier 8); reused
+        as the *primary*, latency-critical accept path with only
+        `N_ACCEPTORS` (4) threads covering all traffic, it added
+        ~25-30ms to p50 latency across the board and made low-
+        concurrency throughput measurably *worse* than the design it
+        replaced (e.g. `counter_c25`: 9,960 -> 782 req/s) — caught
+        only because the harness was re-run and compared, not assumed.
+        Fixed by dropping the backoff to 1ms once these loops became
+        performance-critical instead of periodic (`main.sl`'s
+        `http_accept_loop`/`tls_accept_loop`), which restored
+        sub-2ms latency at low concurrency. Real, measured cost of the
+        fix: ~11-12% idle CPU from 8 acceptor threads (4 HTTP + 4 TLS)
+        polling a non-blocking `accept()` every 1ms even with zero
+        traffic — exactly the class of waste a real event-driven
+        reactor (Tier 11) exists to eliminate; accepted here as the
+        right tradeoff for a stopgap tier, not silently ignored.
+  - [x] One known, honest limitation carried forward, not hidden: the
+        deliberate breaking-point probe (`sleep`, holds a worker busy
+        for 50ms, pushed to 1,200-2,000 offered clients) got *worse*
+        on this metric specifically — errors rose from 32/176 to
+        557/1,219. Root cause is different from before, though: with
+        the default `WORKERS=128` per protocol, 128 workers each
+        occupied for 50ms caps real throughput near 128/0.05s = 2,560
+        req/s for this specific endpoint shape — genuine, correct
+        backpressure from a bounded pool hitting real capacity, not
+        the OS silently breaking down the way the original design did.
+        Tunable via `WORKERS`; not chased further here since it's a
+        sizing question, not a bug.
+
+## Tier 10 — a precise, GC-integrated stack model (replacing Boehm)
+
+**Design note.** Tier 5 already tried the obvious next step —
+stackful coroutines on top of Boehm GC, unchanged — and it failed in a
+specific, well-understood way: `GC_add_roots` on a separately-`mmap`'d
+stack crashed `GC_mark_from` reproducibly, because Boehm has no
+concept of "here is another stack, and here precisely are its live
+pointers." That's not a Boehm bug, it's what a *conservative*
+collector is: no notion of exact liveness, only "does this word's bit
+pattern look plausible." Go's own M:N scheduler is inseparable from
+Go's own GC for exactly this reason — the compiler emits exact stack
+maps (which stack slots hold live pointers, at every safepoint), which
+is what lets the collector scan a goroutine's stack precisely, and —
+separately — lets a goroutine's stack be *copied* to grow it,
+rewriting every pointer exactly instead of guessing. This tier builds
+the slang equivalent of that foundation. It does not build a scheduler
+or coroutines yet (Tier 11) — the deliverable here is a correct,
+precise, single-threaded-semantics-unchanged garbage collector that
+every existing slang program passes its full test suite against,
+unmodified in observable behavior.
+
+Scope deliberately narrower than Go's full runtime, on two specific
+points, both permanent decisions, not "for now":
+- **The general heap stays non-moving.** Slang already has `extern
+  fn`/`rawptr` C interop (Tier 4) where C code can hold a raw pointer
+  into slang-owned memory across a call boundary. A moving/compacting
+  collector would silently invalidate that pointer the instant it
+  relocated the object, with no way for the C side to know — strictly
+  worse than Boehm's already-documented "keep a live slang-side
+  reference" caveat, not better. Go makes the same call for the same
+  reason (`cgo`/`unsafe.Pointer` stability: Go's heap is non-moving
+  too, only goroutine stacks move). Only stacks move; nothing a
+  `rawptr` could ever point to does.
+- **Stop-the-world to start.** Concurrent tri-color marking with write
+  barriers (what Go actually ships) is one of the hardest parts of
+  Go's runtime, and it's a pause-time optimization, not a correctness
+  requirement — Boehm is *also* stop-the-world today, so even a
+  precise STW collector is a strict correctness and capability upgrade
+  over what ships now. Concurrent marking is deferred to Tier 11's
+  stretch goals, built only if a real workload's measured pause time
+  demands it.
+
+- [x] Spike (standalone C, no compiler involved — matching the
+      discipline every prior tier used before generating real code
+      against a new primitive): precise stack maps for a minimal
+      function subset. Two safepoints over one hand-crafted frame,
+      proving liveness is a per-program-point property (the same
+      physical slot is correctly included in the map at safepoint 1
+      and excluded at safepoint 2, once dead, even though its raw
+      bytes are untouched) — plus a deliberate adversarial value
+      (a plain integer crafted to numerically land inside a real heap
+      allocation) that a naive whole-frame conservative scan
+      demonstrably misidentifies as a pointer, while the map-driven
+      scan never touches that offset at all, by construction. Clean
+      under ASan+UBSan, zero warnings.
+- [x] Spike: stack copying — grew a toy two-frame stack (an interior
+      pointer from one frame into a local in the other, modeling
+      `&local` passed to a callee — the real hazard, not just heap
+      pointers) into a freshly allocated, larger buffer, then freed
+      the old one outright. Verified: the interior pointer now points
+      into the new stack at the translated offset and reads/writes
+      correctly through it; both heap pointers in the frames are
+      byte-identical, untouched; a second adversarial slot (a plain
+      integer that happens to fall inside the old stack's address
+      range) is copied byte-for-byte and never mistaken for a pointer
+      needing translation. Clean under ASan+UBSan, zero warnings.
+- [x] Spike: a non-moving, precise mark-sweep collector for the
+      general heap, standalone (single-threaded, no coroutines,
+      isolating GC correctness from stack-map and scheduler
+      correctness). A 3-hop reachable chain survives a collection; an
+      *unreachable reference cycle* (two objects pointing at each
+      other, referenced from nowhere) is correctly collected — the
+      case naive refcounting gets wrong and reachability-based
+      mark-sweep gets right; every surviving object's address is
+      byte-identical before and after the collection, making
+      "the general heap stays non-moving" (required for `rawptr`/
+      `extern fn` stability, see the design note above) a tested
+      property instead of an assumption; a second collection with zero
+      roots correctly reclaims everything remaining, proving mark bits
+      are actually reset between cycles rather than leaking state
+      forward. Clean under ASan+UBSan, zero warnings.
+- [x] A real per-call-site liveness analysis pass integrated into the
+      compiler (`src/codegen/liveness.c`/`.h`, ~950 lines), landed as a
+      fully isolated, opt-in `--dump-liveness` CLI mode that never
+      calls `codegen_program` and changes zero lines of any existing
+      `gen_*` codegen file — the only change to existing files is two
+      new nullable fields (`Expr.live_set`, `Stmt.backedge_live_set`)
+      that every current consumer already safely ignores. Verified
+      clean against the full 45-test suite (unaffected, since this
+      mode is never invoked by default) plus a separate broad sweep:
+      every real (non-`fail_*`) program under `tests/*/main.sl` and
+      `demo/main.sl` compiles through `--dump-liveness` cleanly, every
+      `fail_*` negative test is correctly rejected with the exact same
+      diagnostic the real compiler gives, and output is byte-identical
+      across repeated runs (determinism). Mirrors `gen_stmt`/`gen_stmts`/
+      `gen_block`/`gen_expr`'s own recursion shape 1:1, computes exact
+      live-GC-pointer-local sets via backward dataflow (`live_in(n) =
+      uses(n) ∪ (live_out(n) \ defs(n))`), correctly tracks anonymous
+      (non-variable) pending values across nested calls and field
+      reads (the `foo(bar(), baz())`/`foo(p.child, bar())` cases from
+      the plan), and reuses the real `var_push`/`var_find`/`infer_type`
+      family throughout rather than reimplementing name resolution or
+      type-checking. `type_is_gc_ptr()` landed first as its own
+      reviewable primitive in `core.c`, composing the existing
+      `is_arr`/`is_map`/`is_opt`/`is_result`/`is_chan`/`is_str`/
+      `is_bytes`/`is_rawptr` predicates.
+  - [x] Three real, caught-by-testing bugs along the way, each fixed
+        before moving on (same "verify, don't assume" discipline the
+        stress-test work and every prior tier used):
+    - A first design draft kept its own separate nested-scope
+          structure instead of the real `cg->vars`, on the theory that
+          `cg->vars`'s "never truncated per block" behavior (confirmed
+          real: no `ST_FOR`/`ST_FOR_IN`/guard-let case ever pops it)
+          was something to work around. Wrong call: this language's
+          *actual* scoping is function-flat, not block-nested, and a
+          parallel scope model silently diverges from what real
+          programs resolve to *and* leaves the real `infer_type`/
+          `var_find` this pass depends on unable to see this pass's
+          own declarations at all — surfaced as "undefined variable"
+          errors on programs with no such variable anywhere in them
+          (traced to two unrelated `.sl` files sharing a `/tmp`
+          directory, which `load_packages` merges into one package —
+          not a liveness bug itself, but the investigation that led to
+          finding the real one). Fixed by deleting the parallel scope
+          structure entirely and delegating name resolution to the
+          real `var_push`/`var_find`, with a small index-aligned side
+          table mapping `cg->vars` slots to this pass's own tracking
+          identity (looked up fresh by index every call, never a
+          cached `VarSym*`, since `var_push` can `xrealloc` the table
+          out from under a held pointer).
+    - The `foo(bar(), baz())` pending mechanism's first implementation
+          had the direction backward: it let a call see its *own*
+          pending marker (self-reference) and let a *later* sibling's
+          marker leak into an *earlier* one instead of the reverse.
+          Caught by hand-tracing a fixture against the analytically
+          correct answer (`bar` should protect nothing, `baz` should
+          protect `bar`'s not-yet-consumed result) rather than trusting
+          the code's own output. Fixed with a two-phase algorithm: a
+          forward pass snapshotting each child's earlier-sibling
+          pending set, then the backward pass folding it in while
+          explicitly stripping each child's own marker both before and
+          after processing it.
+    - Struct literal field values (`Wrapper{ outcome: err("boom") }`)
+          need `cg->expect` pushed to the field's declared type before
+          inference, exactly like `gen_structlit` does — missed
+          entirely in the first pass, caught by the broad sweep against
+          real tests (`tests/struct_field_expect` failed with "cannot
+          infer the type of 'err()'" through this pass specifically,
+          while compiling fine for real). Fixed by threading an
+          optional per-child `expects` array through the shared
+          children-processing helper, filled in properly for struct
+          fields and call arguments (resolving the callee's parameter
+          types the same way `gen_call` does) and left `NULL` for
+          list/map literals, which the real codegen doesn't push
+          per-element expectations for either.
+  - [x] One documented, deliberately-not-fixed limitation: `ST_FOR`/
+        `ST_FOR_IN` induction variables are declared only when this
+        pass's backward walk reaches the loop statement itself, which
+        happens *after* it has already processed everything textually
+        after the loop (a consequence of walking backward while this
+        language's variables, once declared, are visible for the rest
+        of the function). A program that references a for-loop's
+        variable from code after the loop ends (legal here, since nothing
+        ever pops it) would get a loud `cg_error` from this pass
+        instead of a resolved answer. Not hit by anything in `tests/`;
+        would need a forward declaration pre-pass to fix properly, left
+        for whoever needs it.
+- [ ] Compiler: codegen emits stack maps at call sites for every
+      generated function (the structural piece every bullet below
+      depends on)
+- [ ] Compiler: codegen emits stack maps at loop back-edges too, ahead
+      of Tier 11's cooperative preemption needing them
+- [ ] Runtime: replace every `GC_malloc`/collection call site with the
+      new allocator; drop the libgc dependency once nothing calls it
+- [ ] Gate before Tier 11 starts: the full existing test suite
+      (`tests/*`, every tier 1-8) passes unchanged — observable
+      behavior of every existing slang program must be identical; any
+      difference is a bug in this tier, not an acceptable side effect
+
+## Tier 11 — the M:N scheduler & green threads
+
+Builds on Tier 10's precise stack maps and copying mechanism to
+finally deliver what Tier 5 set out to build: cheap, real, stackful
+concurrency that doesn't cost an OS thread per task. This is the tier
+that actually removes the ceiling `demo/stress_harness/` measured —
+`spawn`, `net.*`, `time.sleep`, and `chan_send`/`chan_recv` all become
+scheduler-aware instead of OS-thread-blocking, with zero change to how
+slang code using them looks (no `async`/`await`, no closures, matching
+Tier 5's original design goal exactly — Tier 10 was the missing
+prerequisite, not a different plan).
+
+- [ ] GMP-style scheduler (Go's own term for its model): logical tasks
+      (G) run on a small, fixed pool of OS worker threads (M) sized to
+      core count, each thread executing tasks off a work-stealing run
+      queue
+- [ ] Growable, GC-owned task stacks using Tier 10's stack maps +
+      copying mechanism — start small (a few KB), grow on demand,
+      never a fixed ceiling chosen up front
+- [ ] A kqueue (macOS/BSD) / epoll (Linux) reactor behind one internal
+      interface — `net.accept`/`net.recv`/`net.send`/`net.tls_*`
+      register interest and park the calling task instead of blocking
+      the OS thread; the reactor wakes the task when the fd is ready
+- [ ] `time.sleep` parks the task with a timer instead of blocking the
+      thread
+- [ ] `chan_send`/`chan_recv` park the task on the channel's wait
+      queue instead of blocking on a condvar
+- [ ] `spawn` creates a scheduled task, not a `pthread_create` call
+- [ ] Cooperative preemption v1: a checked "should yield" flag at
+      every call and loop back-edge (using Tier 10's back-edge stack
+      maps) — known, documented gap carried forward openly: a tight
+      loop with no calls or back-edges (exactly what
+      `demo/stress/stress.sl`'s `count_primes_range` is) cannot be
+      preempted under this alone. Go shipped with exactly this
+      limitation for ~10 years before adding signal-based async
+      preemption in 1.14; that's an explicit stretch goal below, not a
+      Tier 11 requirement
+- [ ] Failure isolation (Tier 5) reimplemented for tasks instead of
+      threads: a panicking task must not take down the process,
+      matching today's `pthread_exit`-based behavior exactly in
+      observable terms
+- [ ] Signal handling (Tier 8) redesigned for far fewer real OS
+      threads: `proc.shutdown_requested()`/`SIGTERM` delivery no
+      longer has "every spawned thread blocks the signal, only main
+      can get it" to lean on, since most concurrency is now logical
+      tasks on a shared pool, not distinct OS threads — needs its own
+      design pass, not a mechanical port
+- [ ] Tests: every Tier 5/8 test (`tests/spawn`,
+      `tests/spawn_isolation`, `tests/proc_shutdown`, the
+      `examples/httpd`/`examples/httpsd` signal-drain checks) passes
+      unchanged in observable behavior, now running on the new
+      scheduler
+- [ ] Acceptance test: re-run `demo/stress_harness/` against the new
+      runtime, same methodology, directly against the numbers already
+      in the published stress report — this is the concrete,
+      falsifiable "did this work," not a vibe check
+
+**Stretch, explicitly deferred, not required to call Tier 11 done:**
+- [ ] Async/signal-based preemption (Go 1.14's mechanism) — only if
+      real workloads show the cooperative-only gap above actually
+      matters in practice
+- [ ] Concurrent marking + write barriers in Tier 10's collector, if
+      measured STW pause time under real load demands it
+- [ ] `io_uring` reactor backend for Linux, behind the same interface
+      as the kqueue/epoll backend, if warranted

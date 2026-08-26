@@ -81,7 +81,7 @@ const char *NET_RUNTIME[] = {
     "    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {",
     "        int e = errno; close(fd); return sl_net_err_i32(strerror(e));",
     "    }",
-    "    if (listen(fd, 64) != 0) {",
+    "    if (listen(fd, 1024) != 0) {",
     "        int e = errno; close(fd); return sl_net_err_i32(strerror(e));",
     "    }",
     "    return sl_net_ok_i32((int32_t)fd);",

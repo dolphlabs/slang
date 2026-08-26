@@ -81,21 +81,58 @@ fan-out test, an escalating mixed-workload run, a deliberate
 breaking-point probe up to 2,000 concurrent clients, a 60-second soak,
 and a `sample`-based CPU profile, writing everything to `results/`.
 
-Headline result from one such run (8-core/16GB dev laptop, not a
-dedicated benchmark rig): a realistic mixed workload sustains
-**~3,300-3,500 req/s**, and that ceiling shows up already at 50
-concurrent clients -- pushing to 900 doesn't move it, it just adds
-errors. The CPU profile pins the reason: 68.9% of sampled time was
-threads blocked on a condvar/semaphore/mutex, not computing. Root
-causes, cited to source: `net.listen()`'s hardcoded 64-connection
-backlog (`src/codegen/pkg_net/runtime_net.c:84`), a fully serial,
+Original headline result (8-core/16GB dev laptop, not a dedicated
+benchmark rig): a realistic mixed workload sustained **~3,300-3,500
+req/s**, and that ceiling showed up already at 50 concurrent clients --
+pushing to 900 didn't move it, it just added errors. The CPU profile
+pinned the reason: 68.9% of sampled time was threads blocked on a
+condvar/semaphore/mutex, not computing. Root causes, cited to source:
+`net.listen()`'s hardcoded 64-connection backlog
+(`src/codegen/pkg_net/runtime_net.c:84`), a fully serial,
 single-threaded accept loop (`main.sl`), and the real per-request cost
 of one full OS thread per connection -- confirmed directly, never a
 crash, since server-side concurrent threads never exceeded ~415 even
-when 2,000 clients were offered at once. Reaching the tens-of-thousands
-range this was aimed at needs the same architectural change that fixes
-all three: an event-loop I/O model or a green-thread scheduler instead
-of one real OS thread per connection.
+when 2,000 clients were offered at once.
+
+**Tier 9 (todo.md) closed the first two of those three** with a bounded
+worker pool: a larger backlog (1024), `N_ACCEPTORS` (4) spawned
+acceptor threads sharing each listener instead of one serial accept
+loop, and a fixed pool of pre-spawned workers (`WORKERS` env var,
+default 128 per protocol) pulling accepted connections off a `chan[T]`
+queue instead of a fresh thread per connection -- all built from
+`spawn` + `chan[T]`, zero new compiler primitives. Re-running the exact
+same 38-run matrix afterward: total errors across the whole run
+dropped from 3,823 to 1,885 while total requests served went *up*
+(1.53M -> 1.74M); the realistic mixed workload at 900 concurrent
+clients went from 2,736 req/s / 957 errors to **3,572 req/s / 0
+errors**; the 60-second soak went from 3,371 req/s / 38 errors to
+**3,899 req/s / 0 errors**. Every endpoint dropped to zero errors
+except the deliberate 1,200-2,000-client breaking-point probe, which
+got *worse* (32/176 errors -> 557/1,219) for a genuinely different and
+expected reason: 128 workers each held for the probe's 50ms simulated
+work caps real throughput near 2,560 req/s for that specific shape --
+real backpressure from a correctly-bounded pool hitting real capacity,
+not the OS silently breaking down the way the original design did.
+Tunable via `WORKERS`, not chased further since it's a sizing
+question, not a bug.
+
+One implementation bug worth keeping as a cautionary tale, caught only
+because the harness was re-run and compared rather than assumed: the
+first pass reused the original `tls_accept_loop`'s 50ms empty-poll
+backoff verbatim for the new acceptor loops. That interval was tuned
+for a lightly-loaded secondary shutdown check (Tier 8); reused as the
+*primary* accept path, it added ~25-30ms to p50 latency across the
+board and made low-concurrency throughput measurably *worse* than the
+design it replaced. Fixed by dropping it to 1ms once these loops became
+performance-critical instead of periodic, at a real, measured cost of
+~11-12% idle CPU from the acceptor threads polling a non-blocking
+`accept()` every millisecond even with zero traffic -- exactly the
+class of waste a real event-driven reactor (Tier 11) exists to
+eliminate, accepted here as the right tradeoff for a stopgap tier.
+
+Concurrency is still capped at pool size, and thousands-of-req/s is
+not the 100k this was ultimately aimed at -- that's Tiers 10-11's job,
+not this one's.
 
 ## Two real bugs this demo found (and how they're addressed)
 

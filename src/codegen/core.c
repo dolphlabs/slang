@@ -188,6 +188,22 @@ int is_opt(const char *t) { return !strncmp(t, "opt[", 4); }
 int is_result(const char *t) { return !strncmp(t, "result[", 7); }
 int is_chan(const char *t) { return !strncmp(t, "chan[", 5); }
 
+/* Is a value of this slang type a GC-managed heap pointer that a
+ * precise stack scanner would need to treat as a root? Excludes
+ * rawptr (foreign, never GC-owned -- see the README's C interop
+ * safety notes) and every scalar type. `str` counts: it is always a
+ * heap buffer (GC_strdup/sl_strdup), just a leaf one with no interior
+ * pointers of its own to scan further. */
+int type_is_gc_ptr(CG *cg, const char *t) {
+    if (is_rawptr(t)) return 0;
+    if (is_arr(t) || is_map(t) || is_opt(t) || is_result(t) ||
+        is_chan(t) || is_str(t) || is_bytes(t))
+        return 1;
+    return struct_find_canon(cg, t) != NULL;
+    /* else: int / i8..u64 / float / f32 / bool / duration -- scalars,
+     * never pointers */
+}
+
 /* "opt[T]" -> T (heap-allocated). Caller must pass an opt type. */
 char *opt_inner(const char *t) {
     size_t n = strlen(t);

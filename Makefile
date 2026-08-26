@@ -6,7 +6,8 @@ CFLAGS = -std=c11 -O2 -Wall -Wextra
 # pkg_*/sigs.c table plugs into.
 CODEGEN_SRCS = src/codegen/core.c src/codegen/infer.c src/codegen/expr.c \
               src/codegen/stmt.c src/codegen/native.c \
-              src/codegen/runtime_core.c src/codegen/program.c
+              src/codegen/runtime_core.c src/codegen/program.c \
+              src/codegen/liveness.c
 
 # Native packages: each lives entirely under its own
 # src/codegen/pkg_<name>/ directory (signatures + embedded C
@@ -21,7 +22,8 @@ PKG_SRCS = src/codegen/pkg_time/sigs.c src/codegen/pkg_time/runtime.c \
 SRCS = src/main.c src/loader.c src/lexer.c src/parser.c $(CODEGEN_SRCS) \
       $(PKG_SRCS)
 HDRS = src/common.h src/lexer.h src/ast.h src/parser.h src/codegen.h \
-      src/codegen/internal.h src/codegen/pkg_net/pkg_net.h \
+      src/codegen/internal.h src/codegen/liveness.h \
+      src/codegen/pkg_net/pkg_net.h \
       src/codegen/pkg_time/pkg_time.h src/codegen/pkg_json/pkg_json.h \
       src/codegen/pkg_proc/pkg_proc.h
 
