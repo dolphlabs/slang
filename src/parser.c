@@ -877,6 +877,26 @@ static Stmt *parse_return_stmt(Parser *p) {
     return s;
 }
 
+/* break;/continue; -- no payload; whether one actually sits inside a
+ * loop is a semantic question, not a syntactic one, so it's not
+ * checked here -- matches this parser's own established convention
+ * (e.g. 'return' outside a function isn't rejected here either; see
+ * gen_stmt's cg->in_function check in stmt.c). Checked independently
+ * in both stmt.c's codegen and liveness.c's own walk, since neither
+ * is guaranteed to run before the other in every code path
+ * (--dump-liveness never invokes codegen at all). */
+static Stmt *parse_break_stmt(Parser *p) {
+    Token *kw = advance(p); /* 'break' */
+    expect(p, T_SEMI, "';'");
+    return new_stmt(ST_BREAK, kw->line);
+}
+
+static Stmt *parse_continue_stmt(Parser *p) {
+    Token *kw = advance(p); /* 'continue' */
+    expect(p, T_SEMI, "';'");
+    return new_stmt(ST_CONTINUE, kw->line);
+}
+
 static Stmt *parse_statement(Parser *p) {
     Token *tk = peek(p);
     switch (tk->type) {
@@ -894,6 +914,10 @@ static Stmt *parse_statement(Parser *p) {
         return parse_spawn_stmt(p);
     case T_KW_RETURN:
         return parse_return_stmt(p);
+    case T_KW_BREAK:
+        return parse_break_stmt(p);
+    case T_KW_CONTINUE:
+        return parse_continue_stmt(p);
     case T_KW_STRUCT:
         parse_error(tk, "'struct' declarations are only allowed at top "
                         "level");

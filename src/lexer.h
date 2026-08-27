@@ -31,6 +31,8 @@ typedef enum {
     T_KW_EXTERN,
     T_KW_LINK,
     T_KW_SPAWN,
+    T_KW_BREAK,
+    T_KW_CONTINUE,
 
     /* type names */
     T_TY_INT,

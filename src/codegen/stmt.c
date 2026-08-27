@@ -358,8 +358,13 @@ void gen_stmt(CG *cg, Stmt *s) {
         emit_line(cg, "while (%s) {", cond);
         cg->indent++;
         int has_bp = emit_backedge_enter(cg, s->backedge_live_set);
+        cg->loop_depth++;
+        int saved_loop_bp = cg->cur_loop_has_bp;
+        cg->cur_loop_has_bp = has_bp;
         gen_stmts(cg, s->as.while_stmt.body->stmts,
                   s->as.while_stmt.body->count);
+        cg->loop_depth--;
+        cg->cur_loop_has_bp = saved_loop_bp;
         if (has_bp) {
             cg->open_backedge_brackets--;
             emit_line(cg, "sl_rt_safepoint_exit();");
@@ -388,7 +393,12 @@ void gen_stmt(CG *cg, Stmt *s) {
                   start, vname, op, endvar, vname);
         cg->indent++;
         int has_bp = emit_backedge_enter(cg, s->backedge_live_set);
+        cg->loop_depth++;
+        int saved_loop_bp = cg->cur_loop_has_bp;
+        cg->cur_loop_has_bp = has_bp;
         gen_stmts(cg, s->as.for_stmt.body->stmts, s->as.for_stmt.body->count);
+        cg->loop_depth--;
+        cg->cur_loop_has_bp = saved_loop_bp;
         if (has_bp) {
             cg->open_backedge_brackets--;
             emit_line(cg, "sl_rt_safepoint_exit();");
@@ -420,7 +430,12 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "%s %s = (*(%s *)(void *)sl_arr_get(_sl_it%d, "
                           "_sl_i%d, sizeof(%s)));",
                       ec, vname, ec, id, id, ec);
+            cg->loop_depth++;
+            int saved_loop_bp = cg->cur_loop_has_bp;
+            cg->cur_loop_has_bp = has_bp;
             gen_block(cg, s->as.for_in.body);
+            cg->loop_depth--;
+            cg->cur_loop_has_bp = saved_loop_bp;
             if (has_bp) {
                 cg->open_backedge_brackets--;
                 emit_line(cg, "sl_rt_safepoint_exit();");
@@ -444,7 +459,12 @@ void gen_stmt(CG *cg, Stmt *s) {
             int has_bp = emit_backedge_enter(cg, s->backedge_live_set);
             emit_line(cg, "long long %s = (long long)_sl_bt%d->ptr[_sl_i%d];",
                       vname, id, id);
+            cg->loop_depth++;
+            int saved_loop_bp = cg->cur_loop_has_bp;
+            cg->cur_loop_has_bp = has_bp;
             gen_block(cg, s->as.for_in.body);
+            cg->loop_depth--;
+            cg->cur_loop_has_bp = saved_loop_bp;
             if (has_bp) {
                 cg->open_backedge_brackets--;
                 emit_line(cg, "sl_rt_safepoint_exit();");
@@ -486,7 +506,12 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "%s %s = *(%s *)(void *)(_sl_m%d->vals + _sl_slot%d * "
                       "_sl_m%d->vsz);",
                       vc, v2name, vc, id, id, id);
+            cg->loop_depth++;
+            int saved_loop_bp = cg->cur_loop_has_bp;
+            cg->cur_loop_has_bp = has_bp;
             gen_block(cg, s->as.for_in.body);
+            cg->loop_depth--;
+            cg->cur_loop_has_bp = saved_loop_bp;
             if (has_bp) {
                 cg->open_backedge_brackets--;
                 emit_line(cg, "sl_rt_safepoint_exit();");
@@ -554,6 +579,39 @@ void gen_stmt(CG *cg, Stmt *s) {
                 emit_line(cg, "sl_rt_safepoint_exit();");
             emit_line(cg, "return %s;", val);
         }
+        break;
+    }
+    case ST_BREAK: {
+        if (cg->loop_depth == 0)
+            cg_error(s->line, "'break' outside a loop");
+        /* Only the INNERMOST enclosing loop's own bracket, never an
+         * outer one -- cur_loop_has_bp (unlike open_backedge_brackets,
+         * which ST_RETURN uses above) tracks exactly that, save/
+         * restored around each loop's own body by the 5 call sites
+         * above. Same reasoning as ST_RETURN's own unwind: each
+         * iteration's bracket is a fresh stack-allocated sl_safepoint,
+         * so leaving it open across a jump out of the loop dangles it
+         * the moment this C block's stack space is reused. */
+        if (cg->cur_loop_has_bp)
+            emit_line(cg, "sl_rt_safepoint_exit();");
+        emit_line(cg, "break;");
+        break;
+    }
+    case ST_CONTINUE: {
+        if (cg->loop_depth == 0)
+            cg_error(s->line, "'continue' outside a loop");
+        /* Same as ST_BREAK, but for jumping to the next iteration
+         * instead of out of the loop entirely: without closing the
+         * current iteration's bracket first, the next iteration's own
+         * sl_rt_safepoint_enter() would push a second level on top of
+         * an already-open one that nothing will ever pop (the loop's
+         * own closing exit(), reached once per iteration normally, is
+         * skipped exactly like a bare "continue;" skips the rest of
+         * the loop body) -- one extra, permanently unpopped level per
+         * skipped iteration. */
+        if (cg->cur_loop_has_bp)
+            emit_line(cg, "sl_rt_safepoint_exit();");
+        emit_line(cg, "continue;");
         break;
     }
     case ST_EXPR: {

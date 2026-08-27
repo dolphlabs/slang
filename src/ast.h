@@ -79,6 +79,8 @@ typedef enum {
     ST_FOR,
     ST_FOR_IN,
     ST_RETURN,
+    ST_BREAK,
+    ST_CONTINUE,
     ST_EXPR,
     ST_GUARD_LET, /* guard let x = opt_expr else { ... } */
     ST_SPAWN,  /* spawn f(args...) -- run on a new OS thread */

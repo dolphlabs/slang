@@ -593,12 +593,32 @@ static LiveSet *live_block(CG *cg, Block *b, LiveSet *live_out) {
  * for any single loop level in this language's control-flow surface. */
 static LiveSet *solve_loop_fixpoint(CG *cg, Block *body, LiveSet *live_out,
                                     LiveSet **out_backedge) {
+    /* break/continue: cur_break_live_set is exactly this loop's own
+     * live_out (whatever's needed once the whole loop finishes,
+     * regardless of which iteration breaks) -- constant across every
+     * fixpoint pass below, so set once. cur_continue_live_set is
+     * exactly this iteration's own cur_out (whatever's needed going
+     * INTO the next iteration) -- updated every pass, right before
+     * that pass's own live_block walk, so a continue textually
+     * anywhere in the body resolves against the CURRENT fixpoint
+     * iteration's own answer, not a stale one. Saved/restored around
+     * the whole solve so an enclosing loop's own targets (if this
+     * loop is nested) are exactly as it left them once this one's
+     * done -- a nested loop's own recursive call to this same
+     * function does the identical save/restore around its own
+     * processing, so this composes correctly automatically. */
+    void *saved_break = cg->cur_break_live_set;
+    void *saved_continue = cg->cur_continue_live_set;
+    cg->cur_break_live_set = live_out;
     LiveSet *cur_out = ls_clone(live_out);
     LiveSet *live_in = NULL;
     for (int iter = 0; iter < 10; iter++) {
+        cg->cur_continue_live_set = cur_out;
         live_in = live_block(cg, body, cur_out);
         if (iter > 0 && ls_named_equal(live_in, cur_out)) {
             *out_backedge = live_in;
+            cg->cur_break_live_set = saved_break;
+            cg->cur_continue_live_set = saved_continue;
             return live_in;
         }
         LiveSet *next_out = ls_clone(live_out);
@@ -771,6 +791,28 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
          * unconditional exit's own live_in is exactly uses(value) */
         if (!s->as.ret.value) return ls_new();
         return live_expr(cg, s->as.ret.value, ls_new());
+
+    case ST_BREAK:
+        /* Same "ignore the live_out I was handed, substitute a
+         * different context" shape as ST_RETURN above -- break jumps
+         * straight to whatever's live after the WHOLE loop, not
+         * whatever's live after wherever it's textually sitting.
+         * cur_break_live_set is set by solve_loop_fixpoint (this
+         * loop's own live_out, constant across its fixpoint); NULL
+         * means there's no enclosing loop at all -- caught here since
+         * this pass can run before codegen's own equivalent check in
+         * some paths (--dump-liveness never reaches gen_stmt). */
+        if (!cg->cur_break_live_set)
+            cg_error(s->line, "'break' outside a loop");
+        return ls_clone((LiveSet *)cg->cur_break_live_set);
+
+    case ST_CONTINUE:
+        /* Same shape, but "whatever's live going into the next
+         * iteration" -- solve_loop_fixpoint's own per-iteration
+         * cur_out, updated every fixpoint pass. */
+        if (!cg->cur_continue_live_set)
+            cg_error(s->line, "'continue' outside a loop");
+        return ls_clone((LiveSet *)cg->cur_continue_live_set);
 
     case ST_EXPR:
         return live_expr(cg, s->as.expr_stmt.expr, live_out);
@@ -1021,6 +1063,12 @@ static void print_stmts(FILE *out, Stmt **stmts, int count) {
             break;
         case ST_RETURN:
             if (s->as.ret.value) print_expr(out, s->as.ret.value);
+            break;
+        case ST_BREAK:
+            fprintf(out, "L%d: BREAK\n", s->line);
+            break;
+        case ST_CONTINUE:
+            fprintf(out, "L%d: CONTINUE\n", s->line);
             break;
         case ST_EXPR:
             print_expr(out, s->as.expr_stmt.expr);

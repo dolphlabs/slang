@@ -225,6 +225,30 @@ struct CG {
      * so no explicit per-function reset is needed, same as
      * ambient_count. */
     int open_backedge_brackets;
+    /* break/continue: cur_loop_has_bp tracks the INNERMOST enclosing
+     * loop's own bracket only (not the cumulative open_backedge_
+     * brackets count above, which return still uses unchanged) --
+     * break/continue must close exactly the loop they target, never
+     * an outer loop's still-needed bracket. loop_depth is codegen's
+     * own "am I inside a loop at all" check (independent of
+     * liveness.c's parallel cur_break_live_set/cur_continue_live_set
+     * check below -- neither pass is guaranteed to run before the
+     * other in every code path, see stmt.c's ST_BREAK/ST_CONTINUE).
+     * Both save/restored around each loop's own body processing,
+     * exactly like cg->expect/cg->cur_ret already are. */
+    int loop_depth;
+    int cur_loop_has_bp;
+    /* break/continue, liveness.c side: opaque LiveSet* (same idiom as
+     * Expr.live_set/Stmt.backedge_live_set) for the innermost
+     * enclosing loop's own break/continue target. cur_break_live_set
+     * is "whatever's live after the whole loop" (solve_loop_fixpoint's
+     * own live_out parameter, constant across its fixpoint
+     * iterations); cur_continue_live_set is "whatever's live going
+     * into the next iteration" (the fixpoint's own per-iteration
+     * cur_out, updated each pass). Save/restored around solve_loop_
+     * fixpoint's own processing. */
+    void *cur_break_live_set;
+    void *cur_continue_live_set;
     char **nat_pkgs; /* names of natively-implemented imported packages */
     int nnat;
     int want_tls; /* set once a net.tls_* function is type-checked */
