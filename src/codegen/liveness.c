@@ -538,15 +538,6 @@ static LiveSet *live_expr(CG *cg, Expr *e, LiveSet *live_out) {
     }
 
     case EX_CALL: {
-        /* Record the safepoint's live set BEFORE processing args: this
-         * is exactly live_out relative to the call's own subtree --
-         * everything needed after this call returns, which is what
-         * must be scannable on the CALLER's frame while the callee
-         * (and anything it transitively allocates) runs. Arguments
-         * being evaluated are the callee's concern from the moment
-         * they're passed, not tracked here. */
-        e->live_set = ls_clone(live_out);
-
         const char **expects = call_arg_expects(cg, e);
         LiveSet *cur = process_children_reverse(
             cg, e->as.call.args, e->as.call.nargs, live_out, expects);
@@ -567,6 +558,35 @@ static LiveSet *live_expr(CG *cg, Expr *e, LiveSet *live_out) {
                 if (recv) ls_add_named(cur, recv);
             }
         }
+
+        /* Tier 10: e->live_set must include not just live_out (what
+         * survives AFTER this call returns) but everything gathered
+         * while processing this call's own arguments too -- `cur`,
+         * not a pre-children snapshot of live_out. A bare identifier
+         * or a field-access base referenced ONLY as this call's own
+         * argument (e.g. to_str(n2.value): n2 has no other use in the
+         * program) still needs to be a root for THIS bracket's own
+         * entry checkin, which runs before the call itself executes --
+         * there is no other bracket protecting it (a NESTED CALL
+         * argument gets its own bracket and protects itself; that
+         * case is unaffected here). The original design point --
+         * "arguments are the callee's concern from the moment they're
+         * passed" -- is simply wrong for this collector: it's only
+         * true once control has actually entered the callee, and this
+         * bracket's checkin fires strictly before that. Using `cur`
+         * doesn't reintroduce or double-count what sequence_one/
+         * ambient_roots already owns for sibling-ordering and pending
+         * (not-yet-consumed) nested-call results: process_children_
+         * reverse already strips every child's own PENDING marker by
+         * the time it returns `cur` (see its own comment), so only
+         * NAMED uses (which are never marker-stripped) newly survive
+         * into e->live_set here -- exactly the class of case (bare
+         * idents, field-access bases) this fixes. Found via a stress
+         * test forcing real collections through actual generated code
+         * (tests/gc_stress) after the sequence_one/ambient pop-timing
+         * fixes (expr.c/native.c) turned out not to be the whole
+         * story. */
+        e->live_set = ls_clone(cur);
         return cur;
     }
     }
@@ -778,6 +798,22 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
             cg, s->as.for_in.body, live_out, &backedge);
         ls_remove_named(backedge, bound1);
         ls_remove_named(backedge, bound2);
+        /* Tier 10: the iterable itself (xs in 'for x in xs') has to be
+         * in the per-iteration backedge bracket, not just this
+         * statement's own overall live-in (the `joined`/return-value
+         * computation below, which only protects code textually
+         * BEFORE this loop). Codegen aliases it once into a stable C
+         * local before the loop (_sl_itN = xs;) and re-reads through
+         * that alias every iteration -- if xs itself isn't live
+         * afterward (its only purpose IS being iterated, the common
+         * case), it was completely absent from backedge_live_set, so
+         * a collection at any iteration's own bracket-entry checkin
+         * could sweep it out from under the loop. Caught via a stress
+         * test forcing real collections through actual generated code
+         * (tests/gc_stress at a lowered threshold) -- the exact
+         * counterpart of the same-shaped EX_CALL fix just above in
+         * this file. */
+        backedge = live_expr(cg, s->as.for_in.iter, backedge);
         s->backedge_live_set = backedge;
         LiveSet *joined = ls_clone(live_in_body);
         ls_remove_named(joined, bound1);

@@ -6,7 +6,8 @@ CFLAGS = -std=c11 -O2 -Wall -Wextra
 # pkg_*/sigs.c table plugs into.
 CODEGEN_SRCS = src/codegen/core.c src/codegen/infer.c src/codegen/expr.c \
               src/codegen/stmt.c src/codegen/native.c \
-              src/codegen/runtime_core.c src/codegen/program.c \
+              src/codegen/runtime_core.c src/codegen/runtime_gc.c \
+              src/codegen/program.c \
               src/codegen/liveness.c
 
 # Native packages: each lives entirely under its own

@@ -205,6 +205,20 @@ int type_is_gc_ptr(CG *cg, const char *t) {
      * never pointers */
 }
 
+/* Does this struct type have at least one GC-pointer field? Every
+ * GC-tracked slang type is represented as exactly one C pointer (see
+ * ctype_of), so this is exactly "does this struct need a trace
+ * function, or can its allocation sites pass a NULL tracer." Shared
+ * between emit_struct_tracers (which only emits a tracer when this is
+ * true) and every struct allocation call site (which needs the same
+ * answer to know whether to reference that tracer or pass NULL). */
+int struct_has_gc_fields(CG *cg, StructDef *sd) {
+    for (int j = 0; j < sd->nfields; j++)
+        if (type_is_gc_ptr(cg, sd->ftypes[j]))
+            return 1;
+    return 0;
+}
+
 /* "opt[T]" -> T (heap-allocated). Caller must pass an opt type. */
 char *opt_inner(const char *t) {
     size_t n = strlen(t);
@@ -388,6 +402,9 @@ SpawnShape *spawn_shape_for(CG *cg, FuncSig *sig) {
                            sanitize_ident(sig->name));
     s->sname = xasprintf("sl_spawn_args_%s", base);
     s->tname = xasprintf("sl_spawn_tramp_%s", base);
+    s->has_tracer = 0;
+    for (int j = 0; j < sig->nparams; j++)
+        if (type_is_gc_ptr(cg, sig->param_slang[j])) { s->has_tracer = 1; break; }
     return s;
 }
 
@@ -518,12 +535,12 @@ void ambient_root_push(CG *cg, const char *name) {
  * ambient contributions (if it pushed any while sequencing its own
  * arguments) before calling this -- cg->ambient_count is read as-is,
  * exactly like gen_call's own tail used to read its local
- * ambient_mark once already restored to that value. Nothing walks
- * sl_rt_safepoint_top yet (GC_malloc/Boehm stays authoritative until
- * the allocator swap), so this is purely additive and cannot change
- * any program's observable behavior. Returns `inner` unchanged (or,
- * with a prelude but nothing to protect, just the prelude spliced
- * ahead of it) if there's nothing to protect. */
+ * ambient_mark once already restored to that value. sl_rt_safepoint_top
+ * is what the mark-sweep collector (runtime_gc.c) walks for roots, so
+ * every root this bracket protects is real, load-bearing GC state, not
+ * inert bookkeeping. Returns `inner` unchanged (or, with a prelude but
+ * nothing to protect, just the prelude spliced ahead of it) if there's
+ * nothing to protect. */
 char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
                      const char *prelude, char *inner) {
     int has_prelude = prelude && prelude[0] != '\0';

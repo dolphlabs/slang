@@ -153,6 +153,9 @@ typedef struct {
     char *name;   /* target function's simple name */
     char *sname;  /* C struct type name, e.g. sl_spawn_args_main_handle */
     char *tname;  /* C trampoline function name */
+    int has_tracer; /* Tier 10: does sname's args struct have at least
+                        one GC-pointer field? decides whether call sites
+                        reference sl_gc_trace_<sname> or pass NULL */
 } SpawnShape;
 
 typedef struct {
@@ -289,6 +292,15 @@ typedef struct {
 extern const char *RUNTIME[]; /* always-on prelude, src/codegen/runtime_core.c */
 extern const int RUNTIME_LEN;
 
+extern const char *RUNTIME_GC[]; /* precise mark-sweep collector, src/codegen/runtime_gc.c */
+extern const int RUNTIME_GC_LEN;
+
+extern const char *RUNTIME_CONTAINERS[]; /* chan/bytes/arr/map/strings,
+                                             src/codegen/runtime_core.c --
+                                             after RUNTIME_GC, which they
+                                             allocate through */
+extern const int RUNTIME_CONTAINERS_LEN;
+
 extern const NatSig TIME_SIGS[]; /* src/codegen/pkg_time/ */
 extern const int TIME_SIGS_LEN;
 extern const char *TIME_RUNTIME[];
@@ -337,6 +349,7 @@ int is_opt(const char *t);
 int is_result(const char *t);
 int is_chan(const char *t);
 int type_is_gc_ptr(CG *cg, const char *t);
+int struct_has_gc_fields(CG *cg, StructDef *sd);
 char *opt_inner(const char *t);
 char *chan_elem(const char *t);
 void result_te(const char *t, char **tv, char **ev);
@@ -424,8 +437,10 @@ const char *literal_type(CG *cg, Expr *e, int line);
 char *gen_const_init(Expr *e);
 void emit_globals(CG *cg, Package *pkgs, int npkgs, int main_index);
 void emit_struct_types(CG *cg);
+void emit_struct_tracers(CG *cg);
 void emit_opt_res_forward_decls(CG *cg);
 void emit_opt_res_types(CG *cg);
+void emit_opt_res_tracers(CG *cg);
 void force_native_result_types(CG *cg);
 void emit_native_runtime(CG *cg);
 void emit_spawn_trampolines(CG *cg);

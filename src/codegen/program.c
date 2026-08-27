@@ -9,6 +9,14 @@
 void emit_prelude(CG *cg) {
     for (int i = 0; i < RUNTIME_LEN; i++)
         emit_line(cg, "%s", RUNTIME[i]);
+    /* Tier 10: the precise mark-sweep collector, then the containers
+     * that allocate through it (chan/bytes/arr/map/strings) -- order
+     * matters now: RUNTIME_CONTAINERS references sl_gc_alloc/realloc
+     * and sl_rt_gc_blocked, all defined in RUNTIME_GC. */
+    for (int i = 0; i < RUNTIME_GC_LEN; i++)
+        emit_line(cg, "%s", RUNTIME_GC[i]);
+    for (int i = 0; i < RUNTIME_CONTAINERS_LEN; i++)
+        emit_line(cg, "%s", RUNTIME_CONTAINERS[i]);
 }
 
 
@@ -258,6 +266,35 @@ void emit_struct_types(CG *cg) {
     }
 }
 
+/* Tier 10: emit a trace function for every struct type that has at
+ * least one GC-pointer field, for the mark-sweep collector to call
+ * through a heap object's own header. A struct with no GC-pointer
+ * fields gets no tracer at all -- its allocation call sites pass NULL
+ * directly rather than reference a no-op function (see
+ * struct_has_gc_fields, core.c). Must run after emit_struct_types so
+ * every struct body (and therefore every field's real name) already
+ * exists; field access is emitted directly (o->fieldname), not via
+ * offsetof, since the real names are already known here. */
+void emit_struct_tracers(CG *cg) {
+    for (int i = 0; i < cg->structs.count; i++) {
+        StructDef *sd = &cg->structs.items[i];
+        if (!struct_has_gc_fields(cg, sd))
+            continue;
+        char *m = mangle_struct(sd->canonical);
+        emit_line(cg, "static void sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
+                  m);
+        cg->indent++;
+        emit_line(cg, "%s *o = (%s *)p;", m, m);
+        for (int j = 0; j < sd->nfields; j++)
+            if (type_is_gc_ptr(cg, sd->ftypes[j]))
+                emit_line(cg, "mark((void *)o->%s);",
+                          sanitize_ident(sd->fields[j]));
+        cg->indent--;
+        emit_line(cg, "}");
+        emit_line(cg, "");
+    }
+}
+
 /* Emit C definitions for every monomorphized opt/result instantiation
  * discovered during generation. Emitted after struct types so inner
  * struct types are complete. */
@@ -297,6 +334,47 @@ void emit_opt_res_types(CG *cg) {
         emit_line(cg, "%s e;", ctype_of(cg, r->te));
         cg->indent--;
         emit_line(cg, "};");
+        emit_line(cg, "");
+    }
+}
+
+/* Tier 10: trace functions for every monomorphized opt/result
+ * instantiation, mirroring emit_struct_tracers -- only emitted when the
+ * instantiation's own payload type(s) are GC-pointer types (an opt/res
+ * of a scalar type needs no tracer at all). has/ok don't need to gate
+ * the mark: an unset payload pointer is zero-filled by sl_gc_alloc, and
+ * the collector's mark is NULL-safe, so marking unconditionally is
+ * simpler and exactly as correct as branching on the flag first. */
+void emit_opt_res_tracers(CG *cg) {
+    for (int i = 0; i < cg->opts.count; i++) {
+        OptInst *o = &cg->opts.items[i];
+        if (!type_is_gc_ptr(cg, o->inner))
+            continue;
+        emit_line(cg, "static void sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
+                  o->cname);
+        cg->indent++;
+        emit_line(cg, "%s *o = (%s *)p;", o->cname, o->cname);
+        emit_line(cg, "mark((void *)o->v);");
+        cg->indent--;
+        emit_line(cg, "}");
+        emit_line(cg, "");
+    }
+    for (int i = 0; i < cg->res.count; i++) {
+        ResInst *r = &cg->res.items[i];
+        int vptr = type_is_gc_ptr(cg, r->tv);
+        int eptr = type_is_gc_ptr(cg, r->te);
+        if (!vptr && !eptr)
+            continue;
+        emit_line(cg, "static void sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
+                  r->cname);
+        cg->indent++;
+        emit_line(cg, "%s *o = (%s *)p;", r->cname, r->cname);
+        if (vptr)
+            emit_line(cg, "mark((void *)o->v);");
+        if (eptr)
+            emit_line(cg, "mark((void *)o->e);");
+        cg->indent--;
+        emit_line(cg, "}");
         emit_line(cg, "");
     }
 }
@@ -369,8 +447,36 @@ void emit_spawn_trampolines(CG *cg) {
         emit_line(cg, "} %s;", s->sname);
         emit_line(cg, "");
 
+        /* Tier 10: trace the spawn args struct the same way a
+         * slang-declared struct's fields are traced -- it's the same
+         * shape (fixed, named fields, a0..an-1 here instead of the
+         * user's own field names), just generated from a FuncSig
+         * instead of a StructDef. s->has_tracer was computed once in
+         * spawn_shape_for (core.c), where param_slang was already at
+         * hand; reused here and by every ST_SPAWN call site later. */
+        if (s->has_tracer) {
+            emit_line(cg, "static void sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
+                      s->sname);
+            cg->indent++;
+            emit_line(cg, "%s *o = (%s *)p;", s->sname, s->sname);
+            for (int j = 0; j < sig->nparams; j++)
+                if (type_is_gc_ptr(cg, sig->param_slang[j]))
+                    emit_line(cg, "mark((void *)o->a%d);", j);
+            cg->indent--;
+            emit_line(cg, "}");
+            emit_line(cg, "");
+        }
+
         emit_line(cg, "static void *%s(void *_sl_raw) {", s->tname);
         cg->indent++;
+        /* Tier 10: register this OS thread with the collector's thread
+         * registry, and guarantee it gets unregistered on every exit --
+         * the normal fall-through below AND sl_rt_error's pthread_exit
+         * panic path -- via one pthread_cleanup_push/_pop pair. See
+         * sl_gc_cleanup_handler's own comment (runtime_gc.c) for why a
+         * single registration has to cover both. */
+        emit_line(cg, "sl_gc_register_thread();");
+        emit_line(cg, "pthread_cleanup_push(sl_gc_cleanup_handler, NULL);");
         if (sig->nparams == 0) {
             emit_line(cg, "(void)_sl_raw;");
             emit_line(cg, "%s();", callee);
@@ -389,6 +495,7 @@ void emit_spawn_trampolines(CG *cg) {
          * (via pthread_exit), since a task that panics never reaches
          * this line -- both paths must decrement exactly once. */
         emit_line(cg, "sl_rt_active_spawns_dec();");
+        emit_line(cg, "pthread_cleanup_pop(1);");
         emit_line(cg, "return NULL;");
         cg->indent--;
         emit_line(cg, "}");
@@ -523,9 +630,11 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
 
     emit_opt_res_forward_decls(cg);
     emit_struct_types(cg);
+    emit_struct_tracers(cg);
 
     force_native_result_types(cg);
     emit_opt_res_types(cg);
+    emit_opt_res_tracers(cg);
 
     emit_native_runtime(cg);
 
@@ -560,8 +669,8 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     cg->vars.count = 0;
     cg->cur_pkg = pkgs[main_index].name;
     emit_line(cg, "int main(void) {");
-    emit_line(cg, "    GC_INIT();");
     emit_line(cg, "    sl_rt_is_main_thread = 1;");
+    emit_line(cg, "    sl_gc_register_thread();");
     if (want_pkg(cg, "proc"))
         emit_line(cg, "    sl_proc_install_signal_handlers();");
     gen_block(cg, pkgs[main_index].prog->main_body);

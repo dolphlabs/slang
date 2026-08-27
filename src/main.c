@@ -123,25 +123,12 @@ int main(int argc, char **argv) {
     }
 
     /* ---- backend: invoke the system C compiler ----
-     * Resolve Boehm GC flags via pkg-config; fall back to plain
-     * -lgc (works when the library is on the default search path). */
-    char gcflags[1024] = "-lgc";
-    FILE *pc = popen("pkg-config --cflags --libs bdw-gc 2>/dev/null", "r");
-    if (pc) {
-        if (fgets(gcflags, sizeof(gcflags), pc)) {
-            size_t n = strlen(gcflags);
-            while (n && (gcflags[n - 1] == 10 || gcflags[n - 1] == 13))
-                gcflags[--n] = '\0';
-            if (n == 0)
-                snprintf(gcflags, sizeof(gcflags), "-lgc");
-        } else {
-            snprintf(gcflags, sizeof(gcflags), "-lgc");
-        }
-        pclose(pc);
-    }
+     * Tier 10: no Boehm GC dependency any more -- the collector is
+     * generated inline (src/codegen/runtime_gc.c) into every program,
+     * so there's nothing to resolve via pkg-config here. */
 
-    /* net.tls_* needs OpenSSL; resolved the same way as libgc above,
-     * but only when the program actually uses it. */
+    /* net.tls_* needs OpenSSL, resolved via pkg-config, only when the
+     * program actually uses it. */
     char tlsflags[1024] = "-lssl -lcrypto";
     if (want_tls) {
         FILE *tpc =
@@ -169,9 +156,10 @@ int main(int argc, char **argv) {
     sb_append(&cmd, gen_path);
     sb_append(&cmd, " -o ");
     sb_append(&cmd, outname);
-    sb_append(&cmd, " ");
-    sb_append(&cmd, gcflags);
-    sb_append(&cmd, " -lpthread"); /* 'spawn' always links against pthreads */
+    sb_append(&cmd, " -lpthread"); /* 'spawn' always links against pthreads,
+                                      and now so does the collector itself
+                                      (thread registry, mutex, condvar-free
+                                      spin/yield) */
     if (want_tls) {
         sb_append(&cmd, " ");
         sb_append(&cmd, tlsflags);

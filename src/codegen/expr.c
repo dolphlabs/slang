@@ -200,13 +200,25 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *v = maybe_cast(cg, elem, vt, gen_expr(cg, e->as.call.args[1]));
         v = sequence_one(cg, seq_id, 1, ctype_of(cg, elem), elem, v,
                          e->as.call.args[1], &prelude);
-        cg->ambient_count = ambient_mark;
         const char *ec = ctype_of(cg, elem);
         char *inner = xasprintf(
             "({ %s _sl_v = %s; sl_arr *_sl_a = %s; sl_arr_push(_sl_a, "
             "&_sl_v, sizeof(%s)); _sl_a; })",
             ec, v, xs, ec);
-        return wrap_safepoint(cg, e, ctype_of(cg, at), prelude.data, inner);
+        /* Tier 10: wrap_safepoint must see xs/v's ambient registrations
+         * -- unlike gen_call's own arguments, sl_arr_push is a native C
+         * helper with no safepoint bracket of its own to protect them
+         * once "passed"; THIS call's own bracket (built by
+         * wrap_safepoint below) is the only thing that can. Popping
+         * ambient before this call (the pattern gen_call's tail uses,
+         * safe there only because a real slang callee protects its own
+         * params once entered) left the freshly-built value being
+         * pushed completely unrooted at this bracket's own entry
+         * checkin -- caught by a stress test forcing a real collection
+         * exactly there. */
+        char *result = wrap_safepoint(cg, e, ctype_of(cg, at), prelude.data, inner);
+        cg->ambient_count = ambient_mark;
+        return result;
     }
     if (!strcmp(name, "pop")) {
         const char *at = infer_type(cg, e->as.call.args[0]);
@@ -241,8 +253,8 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         const char *ct = infer_type(cg, e);
         char *elem = chan_elem(ct);
         char *a = gen_expr(cg, e->as.call.args[0]);
-        char *inner = xasprintf("sl_chan_new(sizeof(%s), (int)(%s))",
-                                ctype_of(cg, elem), a);
+        char *inner = xasprintf("sl_chan_new(sizeof(%s), (int)(%s), %d)",
+                                ctype_of(cg, elem), a, type_is_gc_ptr(cg, elem));
         return wrap_safepoint(cg, e, ctype_of(cg, ct), NULL, inner);
     }
     if (!strcmp(name, "chan_send")) {
@@ -262,12 +274,17 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         v = maybe_cast(cg, elem, vt, v);
         v = sequence_one(cg, seq_id, 1, ctype_of(cg, elem), elem, v,
                          e->as.call.args[1], &prelude);
-        cg->ambient_count = ambient_mark;
         int id = cg->tmp_id++;
         char *inner = xasprintf(
             "({ %s _sl_cv%d = %s; sl_chan_send(%s, &_sl_cv%d); })",
             ctype_of(cg, elem), id, v, ch, id);
-        return wrap_safepoint(cg, e, NULL, prelude.data, inner);
+        /* Tier 10: see push's own comment (above) -- sl_chan_send is a
+         * native C helper with no bracket of its own; ch/v must still
+         * be ambiently registered when wrap_safepoint builds this
+         * call's bracket below. */
+        char *result = wrap_safepoint(cg, e, NULL, prelude.data, inner);
+        cg->ambient_count = ambient_mark;
+        return result;
     }
     if (!strcmp(name, "chan_recv")) {
         const char *ct = infer_type(cg, e->as.call.args[0]);
@@ -276,12 +293,41 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         int id = cg->tmp_id++;
         const char *ec = ctype_of(cg, elem);
         const char *oc = opt_cname(cg, elem);
+        const char *otrace = type_is_gc_ptr(cg, elem)
+                                  ? xasprintf("sl_gc_trace_%s", oc)
+                                  : "NULL";
+        /* Tier 10: _sl_co%d is allocated, then sl_chan_recv (which can
+         * BLOCK, possibly for a long time, waiting on the channel) is
+         * called before _sl_co%d is stored anywhere reachable. A
+         * blocked thread is deliberately exempt from other threads'
+         * collection waits (it can't be mutating the heap while
+         * blocked) -- but that exemption means a collection CAN run
+         * concurrently while this thread sits inside sl_chan_recv, and
+         * _sl_co%d, sitting only in a C local with no bracket of its
+         * own protecting it, would be swept out from under this
+         * statement. This can't be fixed by the OUTER bracket's static
+         * roots array (built before _sl_co%d even exists) the way an
+         * ordinary sequenced argument is -- it needs its OWN nested
+         * bracket, entered right after allocation and held open across
+         * the blocking call specifically. Found via a stress test
+         * forcing a real, concurrent collection through spawn+chan
+         * (tests/spawn_isolation at a lowered threshold) -- the same
+         * root cause as sl_net_recv/sl_net_tls_recv (runtime_net.c/
+         * runtime_tls.c), fixed the same way there. */
+        int rid = cg->tmp_id++;
         char *inner = xasprintf(
-            "({ %s _sl_cv%d; %s *_sl_co%d = (%s *)GC_malloc(sizeof(*_sl_co%d)); "
-            "if (sl_chan_recv(%s, &_sl_cv%d)) { _sl_co%d->has = true; "
+            "({ %s _sl_cv%d; %s *_sl_co%d = (%s *)sl_gc_alloc(sizeof(*_sl_co%d), %s); "
+            "void *_sl_rcv%d_roots[] = { (void *)_sl_co%d }; "
+            "sl_safepoint _sl_rcv%d; sl_rt_safepoint_enter(&_sl_rcv%d, _sl_rcv%d_roots, 1); "
+            "int _sl_rcvok%d = sl_chan_recv(%s, &_sl_cv%d); "
+            "sl_rt_safepoint_exit(); "
+            "if (_sl_rcvok%d) { _sl_co%d->has = true; "
             "_sl_co%d->v = _sl_cv%d; } else { _sl_co%d->has = false; } "
             "_sl_co%d; })",
-            ec, id, oc, id, oc, id, ch, id, id, id, id, id, id);
+            ec, id, oc, id, oc, id, otrace,
+            rid, id, rid, rid, rid,
+            rid, ch, id,
+            rid, id, id, id, id, id);
         return wrap_safepoint(cg, e, xasprintf("%s *", oc), NULL, inner);
     }
     if (!strcmp(name, "chan_close")) {
@@ -325,7 +371,6 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *ix = maybe_cast(cg, k, ikt, gen_expr(cg, e->as.call.args[1]));
         ix = sequence_one(cg, seq_id, 1, kc, k, ix, e->as.call.args[1],
                           &prelude);
-        cg->ambient_count = ambient_mark;
         char *inner;
         const char *rc;
         if (!strcmp(name, "has")) {
@@ -337,7 +382,12 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
                               kc, ix, m);
             rc = NULL;
         }
-        return wrap_safepoint(cg, e, rc, prelude.data, inner);
+        /* Tier 10: see push's own comment (above) -- m/ix must still be
+         * ambiently registered when wrap_safepoint builds this call's
+         * bracket below. */
+        char *result = wrap_safepoint(cg, e, rc, prelude.data, inner);
+        cg->ambient_count = ambient_mark;
+        return result;
     }
     *handled = 0;
     return NULL;
@@ -367,21 +417,34 @@ char *gen_ctor(CG *cg, Expr *e) {
     v = maybe_cast(cg, target, at, v);
     const char *cn = ctype_of(cg, ty);
     char *inner;
-    if (!strcmp(name, "some"))
+    if (!strcmp(name, "some")) {
+        const char *oc = opt_cname(cg, target);
+        const char *trace = type_is_gc_ptr(cg, target)
+                                 ? xasprintf("sl_gc_trace_%s", oc)
+                                 : "NULL";
         inner = xasprintf(
-            "({ %s _sl_c = (%s)GC_malloc(sizeof(*_sl_c)); "
+            "({ %s _sl_c = (%s)sl_gc_alloc(sizeof(*_sl_c), %s); "
             "_sl_c->has = true; _sl_c->v = %s; _sl_c; })",
-            cn, cn, v);
-    else if (!strcmp(name, "ok"))
-        inner = xasprintf(
-            "({ %s _sl_c = (%s)GC_malloc(sizeof(*_sl_c)); "
-            "_sl_c->ok = true; _sl_c->v = %s; _sl_c; })",
-            cn, cn, v);
-    else
-        inner = xasprintf(
-            "({ %s _sl_c = (%s)GC_malloc(sizeof(*_sl_c)); "
-            "_sl_c->ok = false; _sl_c->e = %s; _sl_c; })",
-            cn, cn, v);
+            cn, cn, trace, v);
+    } else {
+        char *tv, *tev;
+        result_te(ty, &tv, &tev);
+        const char *rc = res_cname(cg, tv, tev);
+        const char *trace =
+            (type_is_gc_ptr(cg, tv) || type_is_gc_ptr(cg, tev))
+                ? xasprintf("sl_gc_trace_%s", rc)
+                : "NULL";
+        if (!strcmp(name, "ok"))
+            inner = xasprintf(
+                "({ %s _sl_c = (%s)sl_gc_alloc(sizeof(*_sl_c), %s); "
+                "_sl_c->ok = true; _sl_c->v = %s; _sl_c; })",
+                cn, cn, trace, v);
+        else
+            inner = xasprintf(
+                "({ %s _sl_c = (%s)sl_gc_alloc(sizeof(*_sl_c), %s); "
+                "_sl_c->ok = false; _sl_c->e = %s; _sl_c; })",
+                cn, cn, trace, v);
+    }
     /* Tier 10: some()/ok()/err() allocate directly (GC_malloc), so
      * this is a real safepoint too -- liveness.c doesn't special-case
      * ctor names, e->live_set is populated for this EX_CALL node
@@ -486,19 +549,6 @@ char *gen_call(CG *cg, Expr *e) {
         names[i] = sequence_one(cg, seq_id, i, ctype, sig->param_slang[argi + i],
                                 casted, e->as.call.args[i], &prelude);
     }
-    /* Pop this call's own argument-temp contributions back off; what
-     * remains (cg->ambient_roots[0..ambient_mark)) is whatever an
-     * ENCLOSING call's still-in-progress argument list pushed before
-     * this call was itself generated as one of its arguments -- e.g.
-     * outer(x, combine(xs, baz())): by the time combine(...) is
-     * generated (as outer's arg1), outer's own loop has already
-     * pushed x. combine is, from outer's point of view, exactly the
-     * same "later sibling that must see an earlier bare-ident
-     * argument" case baz() is from combine's -- so combine's own
-     * bracket (built below) needs x too, which is exactly what's left
-     * on the stack here after popping combine's own pushes. */
-    cg->ambient_count = ambient_mark;
-
     StrBuf sb;
     sb_init(&sb);
     char *mangled = sig->is_extern ? xstrdup(sig->name)
@@ -515,20 +565,41 @@ char *gen_call(CG *cg, Expr *e) {
     }
     sb_putc(&sb, ')');
 
-    /* Tier 10: bracket this call with a root list built straight from
-     * the liveness pass's own live_set for this node (see
-     * wrap_safepoint) -- everything that must stay scannable while
-     * this call (and anything it transitively allocates) runs.
-     * Arguments/selfexpr are excluded by construction: they're the
-     * callee's concern from the moment they're passed, never in
-     * e->live_set (see live_expr's EX_CALL case in liveness.c). The
-     * argument-sequencing prelude built above is passed through so
-     * wrap_safepoint splices it in ahead of the bracket; cg->ambient_
-     * count is already correctly popped back to ambient_mark by this
-     * point (the outer(x, combine(xs, baz())) case -- see the comment
-     * on that pop above), exactly what wrap_safepoint expects. */
-    return wrap_safepoint(cg, e, sig->ret_slang ? ctype_of(cg, sig->ret_slang) : NULL,
-                          prelude.data, sb.data);
+    /* Tier 10: bracket this call with a root list built from the
+     * liveness pass's own live_set for this node (see wrap_safepoint)
+     * PLUS whatever's still on cg->ambient_roots -- which, critically,
+     * still includes THIS call's own just-sequenced argument temps
+     * (ambient_mark is not restored until after wrap_safepoint runs,
+     * below). e->live_set deliberately excludes a call's own arguments
+     * (live_expr's EX_CALL case, liveness.c: they're "the callee's
+     * concern from the moment they're passed"), but that's only true
+     * once CONTROL has actually entered the callee -- this bracket's
+     * own entry checkin fires BEFORE the call itself executes, while
+     * the arguments are still just local temps in the caller's own
+     * frame. An earlier-sequenced argument that isn't independently
+     * live afterward (e.g. foo(bar(), baz()) where bar()'s result is
+     * never used again) was completely unrooted at exactly this
+     * checkin -- found via a stress test forcing a real collection
+     * through a 2-argument BUILTIN call first (push/chan_send/has/del,
+     * expr.c; native_gen, native.c), then confirmed to be the same gap
+     * here: nothing about it is specific to natives, since this
+     * bracket's checkin runs before the callee is entered either way.
+     * The argument-sequencing prelude built above is passed through so
+     * wrap_safepoint splices it in ahead of the bracket. */
+    char *result = wrap_safepoint(
+        cg, e, sig->ret_slang ? ctype_of(cg, sig->ret_slang) : NULL,
+        prelude.data, sb.data);
+    /* Pop this call's own argument-temp contributions back off now
+     * that wrap_safepoint has seen them; what remains
+     * (cg->ambient_roots[0..ambient_mark)) is whatever an ENCLOSING
+     * call's still-in-progress argument list pushed before this call
+     * was itself generated as one of its arguments -- e.g.
+     * outer(x, combine(xs, baz())): by the time combine(...) is
+     * generated (as outer's arg1), outer's own loop has already
+     * pushed x, and combine's own bracket (just built above) needed
+     * x too -- which is exactly what's left after this pop. */
+    cg->ambient_count = ambient_mark;
+    return result;
 }
 
 /* Generate a map literal. With expect_k/expect_v (annotated case),
@@ -552,7 +623,8 @@ char *gen_maplit(CG *cg, Expr *e, const char *expect_k,
     sb_append(&sb, kc);
     sb_append(&sb, "), sizeof(");
     sb_append(&sb, vc);
-    sb_append(&sb, xasprintf("), %d); ", kstr));
+    sb_append(&sb, xasprintf("), %d, %d, %d); ", kstr,
+                             type_is_gc_ptr(cg, kt), type_is_gc_ptr(cg, vt)));
     /* Each key/value is sequenced into its own temp, declared directly
      * in this outer ({ ... }) scope (not the old per-pair { ... }
      * block, which closed immediately after its own sl_map_put --
@@ -597,11 +669,14 @@ char *gen_structlit(CG *cg, Expr *e) {
     const char *canon = infer_type(cg, e); /* validates fields too */
     StructDef *sd = struct_find_canon(cg, canon);
     const char *sc = mangle_struct(canon);
+    const char *trace = struct_has_gc_fields(cg, sd)
+                             ? xasprintf("sl_gc_trace_%s", sc)
+                             : "NULL";
     StrBuf sb;
     sb_init(&sb);
     sb_append(&sb,
-              xasprintf("({ %s *_sl_s = (%s *)GC_malloc(sizeof(%s)); ", sc,
-                        sc, sc));
+              xasprintf("({ %s *_sl_s = (%s *)sl_gc_alloc(sizeof(%s), %s); ",
+                        sc, sc, sc, trace));
     /* Each field value is sequenced into its own temp, declared
      * directly in this outer ({ ... }) scope, rather than embedded
      * raw into "_sl_s->field = %s;" -- needed so a LATER field's own
@@ -780,7 +855,7 @@ char *gen_list(CG *cg, Expr *e, const char *expect_elem) {
     sb_append(&sb, xasprintf("%d", e->as.list.nelems));
     sb_append(&sb, ", sizeof(");
     sb_append(&sb, ec);
-    sb_append(&sb, ")); })");
+    sb_append(&sb, xasprintf("), %d); })", type_is_gc_ptr(cg, t0)));
     return sb.data;
 }
 
@@ -804,10 +879,15 @@ char *gen_expr(CG *cg, Expr *e) {
             if (!cg->expect || !is_opt(cg->expect))
                 cg_error(e->line, "cannot infer the type of 'none'");
             const char *cn = ctype_of(cg, cg->expect);
+            const char *inner_t = opt_inner(cg->expect);
+            const char *oc = opt_cname(cg, inner_t);
+            const char *trace = type_is_gc_ptr(cg, inner_t)
+                                     ? xasprintf("sl_gc_trace_%s", oc)
+                                     : "NULL";
             char *inner = xasprintf(
-                "({ %s _sl_n = (%s)GC_malloc(sizeof(*_sl_n)); "
+                "({ %s _sl_n = (%s)sl_gc_alloc(sizeof(*_sl_n), %s); "
                 "_sl_n->has = false; _sl_n; })",
-                cn, cn);
+                cn, cn, trace);
             /* Tier 10: 'none' allocates a fresh opt wrapper via
              * GC_malloc every occurrence -- liveness.c treats this as
              * its own safepoint kind (the one deliberate EX_IDENT

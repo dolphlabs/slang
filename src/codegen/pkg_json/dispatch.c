@@ -174,8 +174,11 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
         char *inner = opt_inner(t);
         const char *oname = opt_cname(cg, inner);
         const char *innerfn = json_dec_fn(cg, inner, 0);
-        emit_line(cg, "%s *o = (%s *)GC_malloc(sizeof(%s));", oname, oname,
-                  oname);
+        const char *otrace = type_is_gc_ptr(cg, inner)
+                                  ? xasprintf("sl_gc_trace_%s", oname)
+                                  : "NULL";
+        emit_line(cg, "%s *o = (%s *)sl_gc_alloc(sizeof(%s), %s);", oname,
+                  oname, oname, otrace);
         emit_line(cg, "if (v->kind == SL_JV_NULL) {");
         cg->indent++;
         emit_line(cg, "o->has = false;");
@@ -200,7 +203,8 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
         emit_line(cg, "return false;");
         cg->indent--;
         emit_line(cg, "}");
-        emit_line(cg, "sl_arr *a = sl_arr_new(sizeof(%s));", ect);
+        emit_line(cg, "sl_arr *a = sl_arr_new(sizeof(%s), %d);", ect,
+                  type_is_gc_ptr(cg, elem));
         emit_line(cg, "for (long long i = 0; i < v->as.arr.len; i++) {");
         cg->indent++;
         emit_line(cg, "%s tmp;", ect);
@@ -233,8 +237,8 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
         cg->indent--;
         emit_line(cg, "}");
         emit_line(cg, "sl_map *m = sl_map_new(sizeof(const char *), "
-                       "sizeof(%s), 1);",
-                  vct);
+                       "sizeof(%s), 1, 1, %d);",
+                  vct, type_is_gc_ptr(cg, v));
         emit_line(cg, "for (long long i = 0; i < v->as.obj.len; i++) {");
         cg->indent++;
         emit_line(cg, "%s tmp;", vct);
@@ -253,6 +257,9 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
     } else {
         StructDef *sd = struct_find_canon(cg, t);
         const char *sname = mangle_struct(t);
+        const char *strace = struct_has_gc_fields(cg, sd)
+                                  ? xasprintf("sl_gc_trace_%s", sname)
+                                  : "NULL";
         emit_line(cg, "if (v->kind != SL_JV_OBJ) {");
         cg->indent++;
         emit_line(
@@ -262,8 +269,8 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
         emit_line(cg, "return false;");
         cg->indent--;
         emit_line(cg, "}");
-        emit_line(cg, "%s *tmp = (%s *)GC_malloc(sizeof(%s));", sname, sname,
-                  sname);
+        emit_line(cg, "%s *tmp = (%s *)sl_gc_alloc(sizeof(%s), %s);", sname,
+                  sname, sname, strace);
         emit_line(cg, "sl_json_val *fv;");
         for (int i = 0; i < sd->nfields; i++) {
             const char *ft = sd->ftypes[i];
@@ -272,11 +279,15 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
             emit_line(cg, "if (!fv) {");
             cg->indent++;
             if (is_opt(ft)) {
-                const char *oname = opt_cname(cg, opt_inner(ft));
+                const char *inner_t = opt_inner(ft);
+                const char *oname = opt_cname(cg, inner_t);
+                const char *otrace = type_is_gc_ptr(cg, inner_t)
+                                          ? xasprintf("sl_gc_trace_%s", oname)
+                                          : "NULL";
                 emit_line(cg,
-                          "%s *o%d = (%s *)GC_malloc(sizeof(%s)); o%d->has "
+                          "%s *o%d = (%s *)sl_gc_alloc(sizeof(%s), %s); o%d->has "
                           "= false; tmp->%s = o%d;",
-                          oname, i, oname, oname, i, fname, i);
+                          oname, i, oname, oname, otrace, i, fname, i);
             } else {
                 emit_line(cg,
                           "*err = sl_json_errf(\"missing required field "
@@ -461,6 +472,10 @@ char *json_call_gen(CG *cg, const char *fname, Expr *e) {
         char *tv, *tev;
         result_te(cg->expect, &tv, &tev);
         const char *resname = res_cname(cg, tv, tev);
+        const char *restrace =
+            (type_is_gc_ptr(cg, tv) || type_is_gc_ptr(cg, tev))
+                ? xasprintf("sl_gc_trace_%s", resname)
+                : "NULL";
         const char *decfn = json_dec_fn(cg, tv, e->line);
         const char *fct = ctype_of(cg, tv);
         const char *at = infer_type(cg, e->as.call.args[0]);
@@ -476,14 +491,14 @@ char *json_call_gen(CG *cg, const char *fname, Expr *e) {
         char *inner = xasprintf(
             "({ char *_sl_jerr = NULL; sl_json_val *_sl_jv = "
             "sl_json_parse(%s, %s, &_sl_jerr); %s *_sl_jr = (%s "
-            "*)GC_malloc(sizeof(%s)); if (!_sl_jv) { _sl_jr->ok = false; "
+            "*)sl_gc_alloc(sizeof(%s), %s); if (!_sl_jv) { _sl_jr->ok = false; "
             "_sl_jr->e = _sl_jerr; } else { %s _sl_jout; char *_sl_jderr = "
             "NULL; if (%s(_sl_jv, &_sl_jout, &_sl_jderr)) { _sl_jr->ok = "
             "true; _sl_jr->v = _sl_jout; } else { _sl_jr->ok = false; "
             "_sl_jr->e = _sl_jderr; } } _sl_jr; })",
-            data, len, resname, resname, resname, fct, decfn);
+            data, len, resname, resname, resname, restrace, fct, decfn);
         /* Tier 10: json.decode allocates (the result[T,E] wrapper,
-         * GC_malloc, plus whatever the monomorphized decoder itself
+         * plus whatever the monomorphized decoder itself
          * allocates) -- a real safepoint, same as any other call
          * liveness.c computes e->live_set for. Single argument, no
          * sibling to protect against. */

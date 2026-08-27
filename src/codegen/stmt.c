@@ -70,9 +70,9 @@ void gen_stmt(CG *cg, Stmt *s) {
                          "annotate it, e.g. let xs: [int] = []");
             char *elem = arr_elem(ann);
             var_push(cg, s->as.let.name, ann);
-            emit_line(cg, "%s %s = sl_arr_new(sizeof(%s));",
+            emit_line(cg, "%s %s = sl_arr_new(sizeof(%s), %d);",
                       ctype_of(cg, ann), sanitize_ident(s->as.let.name),
-                      ctype_of(cg, elem));
+                      ctype_of(cg, elem), type_is_gc_ptr(cg, elem));
             break;
         }
 
@@ -86,9 +86,10 @@ void gen_stmt(CG *cg, Stmt *s) {
             char *k, *v;
             map_kv(ann, &k, &v);
             var_push(cg, s->as.let.name, ann);
-            emit_line(cg, "%s %s = sl_map_new(sizeof(%s), sizeof(%s), %d);",
+            emit_line(cg, "%s %s = sl_map_new(sizeof(%s), sizeof(%s), %d, %d, %d);",
                       ctype_of(cg, ann), sanitize_ident(s->as.let.name),
-                      ctype_of(cg, k), ctype_of(cg, v), is_str(k));
+                      ctype_of(cg, k), ctype_of(cg, v), is_str(k),
+                      type_is_gc_ptr(cg, k), type_is_gc_ptr(cg, v));
             break;
         }
 
@@ -682,8 +683,21 @@ void gen_stmt(CG *cg, Stmt *s) {
         if (nargs == 0) {
             emit_line(cg, "%s *_sl_sa%d = NULL;", shape->sname, id);
         } else {
-            emit_line(cg, "%s *_sl_sa%d = (%s *)GC_malloc(sizeof(%s));",
-                      shape->sname, id, shape->sname, shape->sname);
+            emit_line(cg, "%s *_sl_sa%d = (%s *)sl_gc_alloc(sizeof(%s), %s);",
+                      shape->sname, id, shape->sname, shape->sname,
+                      shape->has_tracer
+                          ? xasprintf("sl_gc_trace_%s", shape->sname)
+                          : "NULL");
+            /* Tier 10: _sl_sa%d is under construction (allocated but not
+             * yet fully populated) for the whole loop below -- a nested
+             * call inside a LATER argument's own evaluation could
+             * trigger a collection, and without this, _sl_sa%d itself
+             * (and any earlier argument already stored into it) would
+             * not yet be reachable from anywhere. Same fix gen_structlit
+             * and gen_maplit already apply to their own under-
+             * construction containers (expr.c). */
+            int ambient_mark = cg->ambient_count;
+            ambient_root_push(cg, xasprintf("_sl_sa%d", id));
             for (int i = 0; i < nargs; i++) {
                 const char *saved = expect_push(cg, sig->param_slang[i]);
                 const char *at = infer_type(cg, call->as.call.args[i]);
@@ -698,6 +712,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                 a = maybe_cast(cg, sig->param_slang[i], at, a);
                 emit_line(cg, "_sl_sa%d->a%d = %s;", id, i, a);
             }
+            cg->ambient_count = ambient_mark;
         }
         emit_line(cg, "pthread_t _sl_tid%d;", id);
         emit_line(cg, "sl_rt_active_spawns_inc();");

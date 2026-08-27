@@ -27,7 +27,10 @@ const char *TIME_RUNTIME[] = {
     "    struct timespec ts;",
     "    ts.tv_sec = (time_t)(ns / 1000000000LL);",
     "    ts.tv_nsec = (long)(ns % 1000000000LL);",
+    "    sl_rt_gc_blocked = 1;",
     "    while (nanosleep(&ts, &ts) == -1 && errno == EINTR) {}",
+    "    sl_rt_gc_blocked = 0;",
+    "    sl_rt_gc_checkin();",
     "}",
     "",
 };

@@ -99,9 +99,22 @@ char *native_gen(CG *cg, const char *pkg, const char *fname,
                          e->as.call.args[i], &prelude);
         sb_append(&sb, a);
     }
-    cg->ambient_count = ambient_mark;
     sb_append(&sb, ")");
     const char *rt = infer_type(cg, e);
     const char *rc = (!rt || !strcmp(rt, "void")) ? NULL : ctype_of(cg, rt);
-    return wrap_safepoint(cg, e, rc, prelude.data, sb.data);
+    /* Tier 10: wrap_safepoint must see every sequenced argument's
+     * ambient registration -- a native function (net/time/proc) has no
+     * safepoint bracket of its own to protect them once "passed" the
+     * way a real slang callee would; THIS call's own bracket (built
+     * here) is the only thing that can. Popping ambient before this
+     * call (mirroring gen_call's tail, safe there only because a real
+     * slang callee protects its own params once entered) left any
+     * multi-argument native call's later arguments unrooted at this
+     * bracket's own entry checkin whenever an earlier argument wasn't
+     * independently live afterward -- the same class of bug found via
+     * a stress test forcing a real collection through push/chan_send/
+     * has/del (expr.c). */
+    char *result = wrap_safepoint(cg, e, rc, prelude.data, sb.data);
+    cg->ambient_count = ambient_mark;
+    return result;
 }
