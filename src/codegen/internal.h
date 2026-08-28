@@ -301,6 +301,19 @@ extern const char *RUNTIME_CONTAINERS[]; /* chan/bytes/arr/map/strings,
                                              allocate through */
 extern const int RUNTIME_CONTAINERS_LEN;
 
+extern const char *RUNTIME_SCHED[]; /* Tier 11 first slice: growable-stack
+                                        tasks on a hand-rolled context
+                                        switch, src/codegen/runtime_sched.c
+                                        -- landed as dead code, not yet
+                                        wired to any call site */
+extern const int RUNTIME_SCHED_LEN;
+
+extern const char *RUNTIME_POOL[]; /* Tier 11 second slice: run queue +
+                                       worker pool, src/codegen/runtime_pool.c
+                                       -- landed as dead code, not yet
+                                       wired to any call site */
+extern const int RUNTIME_POOL_LEN;
+
 extern const NatSig TIME_SIGS[]; /* src/codegen/pkg_time/ */
 extern const int TIME_SIGS_LEN;
 extern const char *TIME_RUNTIME[];

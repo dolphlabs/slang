@@ -17,6 +17,16 @@ void emit_prelude(CG *cg) {
         emit_line(cg, "%s", RUNTIME_GC[i]);
     for (int i = 0; i < RUNTIME_CONTAINERS_LEN; i++)
         emit_line(cg, "%s", RUNTIME_CONTAINERS[i]);
+    /* Tier 11 first slice: dead code only, not wired to anything below --
+     * see runtime_sched.c's own header comment. */
+    for (int i = 0; i < RUNTIME_SCHED_LEN; i++)
+        emit_line(cg, "%s", RUNTIME_SCHED[i]);
+    /* Tier 11 second slice: also dead code -- see runtime_pool.c's own
+     * header comment. Emitted last since it needs sl_ctx_switch/
+     * sl_task_stack_init (RUNTIME_SCHED) and sl_gc_register_thread/
+     * sl_rt_gc_checkin (RUNTIME_GC) already visible. */
+    for (int i = 0; i < RUNTIME_POOL_LEN; i++)
+        emit_line(cg, "%s", RUNTIME_POOL[i]);
 }
 
 
@@ -424,9 +434,21 @@ void emit_native_runtime(CG *cg) {
             emit_line(cg, "%s", PROC_RUNTIME[i]);
 }
 
-/* Emit the args-struct + pthread trampoline for every distinct
+/* Emit the args-struct + task entry function for every distinct
  * 'spawn' target discovered while generating. Must run before any
- * function body that spawns one references it by name. */
+ * function body that spawns one references it by name.
+ *
+ * Tier 11 third slice: this used to also emit an outer pthread entry
+ * point (%s(void *_sl_raw)) that registered the OS thread with the
+ * collector, ran %s_entry to completion via sl_ctx_switch, and
+ * unregistered on the way out -- one real OS thread per spawned task,
+ * created fresh by ST_SPAWN's own pthread_create call (stmt.c). Under
+ * the worker pool, a task's entry function is submitted to
+ * sl_task_submit (runtime_pool.c) instead, which already owns exactly
+ * that registration/switch/unregistration lifecycle for whichever
+ * pooled OS thread ends up running it -- the outer trampoline became
+ * genuinely dead code, not merely unused, and was deleted along with
+ * it rather than left as an inert leftover. Only %s_entry remains. */
 void emit_spawn_trampolines(CG *cg) {
     for (int i = 0; i < cg->spawns.count; i++) {
         SpawnShape *s = &cg->spawns.items[i];
@@ -467,16 +489,15 @@ void emit_spawn_trampolines(CG *cg) {
             emit_line(cg, "");
         }
 
-        emit_line(cg, "static void *%s(void *_sl_raw) {", s->tname);
+        /* Tier 11: the spawned function's own body runs on a task-owned
+         * buffer (sl_task_stack_init) instead of directly on a pthread's
+         * OS-provided stack -- %s_entry is the sl_ctx_make entry point,
+         * switched into by whichever pooled worker (runtime_pool.c)
+         * dequeues this task, and switched back out of once the user
+         * function returns, mirroring main()/sl_main_task_entry
+         * exactly. */
+        emit_line(cg, "static void %s_entry(void *_sl_raw) {", s->tname);
         cg->indent++;
-        /* Tier 10: register this OS thread with the collector's thread
-         * registry, and guarantee it gets unregistered on every exit --
-         * the normal fall-through below AND sl_rt_error's pthread_exit
-         * panic path -- via one pthread_cleanup_push/_pop pair. See
-         * sl_gc_cleanup_handler's own comment (runtime_gc.c) for why a
-         * single registration has to cover both. */
-        emit_line(cg, "sl_gc_register_thread();");
-        emit_line(cg, "pthread_cleanup_push(sl_gc_cleanup_handler, NULL);");
         if (sig->nparams == 0) {
             emit_line(cg, "(void)_sl_raw;");
             emit_line(cg, "%s();", callee);
@@ -491,12 +512,20 @@ void emit_spawn_trampolines(CG *cg) {
             }
             emit_line(cg, "%s(%s);", callee, args.data);
         }
-        /* Also decremented inside sl_rt_error's non-main-thread path
-         * (via pthread_exit), since a task that panics never reaches
-         * this line -- both paths must decrement exactly once. */
+        /* Also decremented inside sl_rt_error's non-main-thread path,
+         * since a task that panics never reaches this line -- both
+         * paths must decrement exactly once. */
         emit_line(cg, "sl_rt_active_spawns_dec();");
-        emit_line(cg, "pthread_cleanup_pop(1);");
-        emit_line(cg, "return NULL;");
+        /* switch OUT of the task, back into the worker loop's native
+         * context (runtime_pool.c) -- opposite argument order from the
+         * worker's own switch INTO the task: this call's job is to save
+         * this (finished) task context into sl_rt_current_task->rsp and
+         * resume whatever sl_rt_native_rsp holds, not the reverse. */
+        emit_line(cg, "sl_ctx_switch(&sl_rt_current_task->rsp, sl_rt_native_rsp);");
+        emit_line(cg, "fprintf(stderr, \"slang: internal error: spawn task entry \"");
+        emit_line(cg, "                \"resumed after switching back -- unreachable\\n\");");
+        emit_line(cg, "abort(); /* genuinely unreachable -- a can't-happen guard, never");
+        emit_line(cg, "            routed through sl_rt_error's panic-recovery machinery */");
         cg->indent--;
         emit_line(cg, "}");
         emit_line(cg, "");
@@ -665,16 +694,36 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
         }
     }
 
-    /* top-level statements of the main package become main() */
+    /* top-level statements of the main package become sl_main_task_entry,
+     * run on its own task-owned stack (sl_task_stack_init,
+     * runtime_sched.c) instead of directly on main()'s OS-provided one --
+     * this is what gives sl_rt_safepoint_enter's growth check something
+     * safe to relocate. cg->in_function is deliberately left at 0 here,
+     * not set to 1 the way a real gen_function call would: top-level
+     * `return` must stay a hard compile error (ST_RETURN's own check,
+     * stmt.c), exactly as before this wrapper existed. */
     cg->vars.count = 0;
     cg->cur_pkg = pkgs[main_index].name;
+    emit_line(cg, "static void sl_main_task_entry(void *_sl_unused_arg) {");
+    emit_line(cg, "    (void)_sl_unused_arg;");
+    gen_block(cg, pkgs[main_index].prog->main_body);
+    emit_line(cg, "    exit(0); /* main()'s own sl_ctx_switch never returns */");
+    emit_line(cg, "}");
+    emit_line(cg, "");
     emit_line(cg, "int main(void) {");
     emit_line(cg, "    sl_rt_is_main_thread = 1;");
     emit_line(cg, "    sl_gc_register_thread();");
     if (want_pkg(cg, "proc"))
         emit_line(cg, "    sl_proc_install_signal_handlers();");
-    gen_block(cg, pkgs[main_index].prog->main_body);
-    emit_line(cg, "    return 0;");
+    /* Pool must exist before anything can be submitted to it, and
+     * nothing is submitted before user code (which might 'spawn')
+     * starts running below. block_signals mirrors the signal-handler
+     * gate immediately above: only meaningful together, and only when
+     * 'proc' is imported at all. */
+    emit_line(cg, "    sl_pool_start(%d);", want_pkg(cg, "proc") ? 1 : 0);
+    emit_line(cg, "    sl_task_stack_init(sl_rt_current_task, sl_main_task_entry, NULL);");
+    emit_line(cg, "    sl_ctx_switch(&sl_rt_native_rsp, sl_rt_current_task->rsp);");
+    emit_line(cg, "    return 0; /* unreachable: sl_main_task_entry calls exit() */");
     emit_line(cg, "}");
 }
 

@@ -1197,9 +1197,33 @@ prerequisite, not a different plan).
       (G) run on a small, fixed pool of OS worker threads (M) sized to
       core count, each thread executing tasks off a work-stealing run
       queue
-- [ ] Growable, GC-owned task stacks using Tier 10's stack maps +
+- [x] Growable, GC-owned task stacks using Tier 10's stack maps +
       copying mechanism — start small (a few KB), grow on demand,
-      never a fixed ceiling chosen up front
+      never a fixed ceiling chosen up front. Delivered as a standalone
+      spike first (hand-rolled x86_64/arm64 context switch, grow-and-
+      relocate across both the safepoint chain and the frame-pointer
+      chain, single- and multi-threaded, plus a negative control
+      proving the `_Thread_local` scratch-stack fix is load-bearing),
+      then landed for real: `sl_task` (`runtime_core.c`), the context-
+      switch asm + grow machinery (`runtime_sched.c`), the guard-margin
+      check wired into `sl_rt_safepoint_enter`, and `main()`/every
+      `spawn` trampoline (`program.c`) now actually running on a task-
+      owned buffer (65536 bytes to start) instead of the OS-provided
+      thread stack. Full design writeup, every finding (including two
+      real bugs caught only by testing against actual generated code —
+      not just the hand-written spike — and fixed: a switch-back
+      argument-order bug causing SIGILL on every spawn-touching test,
+      and a task-exit chain-rooting bug in the spike's own test
+      harness), and full verification detail (48+1-test suite at both
+      the normal and an artificially tiny GC threshold, a dedicated
+      forced-growth test confirmed via direct instrumentation to
+      exercise 8 real grows through real generated code, UBSan+TSan
+      clean, ASan's known hand-rolled-switch incompatibility confirmed
+      to carry over from the spike rather than newly found, determinism,
+      warnings-clean generated C) live in
+      `.claude/plans/synthetic-beaming-volcano.md`. Still exactly one
+      task per OS thread — no scheduler yet, no work-stealing, no
+      parking; that's the next bullet, not this one.
 - [ ] A kqueue (macOS/BSD) / epoll (Linux) reactor behind one internal
       interface — `net.accept`/`net.recv`/`net.send`/`net.tls_*`
       register interest and park the calling task instead of blocking
@@ -1208,7 +1232,44 @@ prerequisite, not a different plan).
       thread
 - [ ] `chan_send`/`chan_recv` park the task on the channel's wait
       queue instead of blocking on a condvar
-- [ ] `spawn` creates a scheduled task, not a `pthread_create` call
+- [x] `spawn` creates a scheduled task, not a `pthread_create` call.
+      `stmt.c`'s `ST_SPAWN` now calls `sl_task_submit` (the shared run
+      queue from the scheduler-foundation bullet above) instead of
+      `pthread_create`; `main()` starts a fixed worker pool once
+      (`sl_pool_start`, floored at 8 workers — see below for why) before
+      any user code runs, instead of one OS thread per spawn. The
+      now-dead per-spawn pthread trampoline and its
+      `pthread_cleanup_push` GC-registry cleanup handler were deleted
+      rather than left inert. Landed only after a dedicated design
+      review found four real issues up front, and — during the spike
+      de-risking pass that followed — a fifth, deeper concurrency bug
+      the review itself had missed: a task dequeued from the run queue
+      could have its args struct swept by a real collection before it
+      ever ran, in two independent ways (a "popped but not yet
+      assigned" window, and a subtler wake-from-idle race where a
+      worker could dequeue and assign a task while a collection's mark
+      phase had already scanned its slot as idle). The second was found
+      only empirically, via a dedicated stress test and a from-scratch
+      sequence-numbered diagnostic build (plain concurrent-stderr file
+      order was not reliable enough to reconstruct true causal
+      ordering), at roughly a 1-in-30-to-100 failure rate with only the
+      first fix in place. Full writeup of every finding and both fixes
+      lives in `.claude/plans/synthetic-beaming-volcano.md`. Verified:
+      49/49 tests at both the normal and a lowered GC threshold; TSan
+      clean (0 races) on `spawn`/`spawn_isolation`/`proc_shutdown`'s
+      real generated code across repeated runs, byte-identical output;
+      warnings-clean generated C (checked against a pre-slice
+      baseline); a manual check that 16 genuinely blocking tasks
+      complete correctly against the 8-worker pool. The pool floor
+      (8, not a real core-count-driven size) is an explicit,
+      flagged stopgap, not a considered capacity choice —
+      `tests/proc_shutdown` already has two simultaneously-blocking
+      spawned tasks, and `chan`/`net`/`time` still block the OS thread
+      they run on until the next three (unchecked) bullets land, so a
+      low floor is a live risk today, not theoretical. No work-stealing
+      (single shared queue, not per-worker deques) — the top-level
+      GMP-style-scheduler bullet stays unchecked until that and the
+      parking bullets below land too.
 - [ ] Cooperative preemption v1: a checked "should yield" flag at
       every call and loop back-edge (using Tier 10's back-edge stack
       maps) — known, documented gap carried forward openly: a tight
@@ -1218,10 +1279,25 @@ prerequisite, not a different plan).
       limitation for ~10 years before adding signal-based async
       preemption in 1.14; that's an explicit stretch goal below, not a
       Tier 11 requirement
-- [ ] Failure isolation (Tier 5) reimplemented for tasks instead of
+- [x] Failure isolation (Tier 5) reimplemented for tasks instead of
       threads: a panicking task must not take down the process,
       matching today's `pthread_exit`-based behavior exactly in
-      observable terms
+      observable terms. `sl_rt_error`'s non-main-thread path no longer
+      calls `pthread_exit` (which would permanently shrink the pool by
+      one worker per panic, eventually draining it to zero under the
+      new pooled `spawn` above) — it abandons the panicking task by
+      context-switching back to the worker loop instead, exactly the
+      way a normal task completion already does, so the OS thread
+      keeps running future queued tasks. `tests/spawn_isolation` passes
+      unchanged (TSan clean, byte-identical output) confirming a panic
+      still isolates correctly; a dedicated spike test panics from
+      three frames of call-stack depth, mixed with normal-completing
+      tasks on a pool smaller than the task count, confirming the pool
+      never shrinks. Two genuine can't-happen guard sites (a task
+      resuming after its own switch-back — impossible by construction,
+      but the fallback that used to call `sl_rt_error` would otherwise
+      recursively re-enter the panic machinery it's already inside) now
+      `abort()` directly instead.
 - [ ] Signal handling (Tier 8) redesigned for far fewer real OS
       threads: `proc.shutdown_requested()`/`SIGTERM` delivery no
       longer has "every spawned thread blocks the signal, only main

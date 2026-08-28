@@ -7,6 +7,7 @@ CFLAGS = -std=c11 -O2 -Wall -Wextra
 CODEGEN_SRCS = src/codegen/core.c src/codegen/infer.c src/codegen/expr.c \
               src/codegen/stmt.c src/codegen/native.c \
               src/codegen/runtime_core.c src/codegen/runtime_gc.c \
+              src/codegen/runtime_sched.c src/codegen/runtime_pool.c \
               src/codegen/program.c \
               src/codegen/liveness.c
 

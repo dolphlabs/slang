@@ -714,36 +714,15 @@ void gen_stmt(CG *cg, Stmt *s) {
             }
             cg->ambient_count = ambient_mark;
         }
-        emit_line(cg, "pthread_t _sl_tid%d;", id);
+        /* Tier 11 third slice: submits to the worker pool instead of
+         * creating a one-shot OS thread. No pthread_t, no per-call
+         * sigmask dance, no detach -- SIGTERM/SIGINT blocking now
+         * happens once, at pool startup (sl_pool_start, runtime_pool.c),
+         * not per spawn call site: a pool worker is created once and
+         * runs many tasks over its life, so the mask only needs baking
+         * in once too. */
         emit_line(cg, "sl_rt_active_spawns_inc();");
-        if (want_pkg(cg, "proc")) {
-            /* Block SIGTERM/SIGINT in this spawned thread from birth
-             * (inherited from this mask at pthread_create time, then
-             * restored in the spawning thread right after) so the OS
-             * never picks a spawned worker to run proc's signal
-             * handler -- only a thread that never blocks these
-             * signals (in practice, only the main thread, since every
-             * other thread in a slang program is spawned) can ever be
-             * chosen, which is what lets a blocked net.accept()/recv()
-             * on the main thread reliably observe the interruption
-             * instead of the signal silently landing on some unrelated
-             * worker mid-request. Validated with a standalone spike
-             * before relying on it here. */
-            emit_line(cg, "sigset_t _sl_bmask%d, _sl_omask%d;", id, id);
-            emit_line(cg, "sigemptyset(&_sl_bmask%d);", id);
-            emit_line(cg, "sigaddset(&_sl_bmask%d, SIGTERM);", id);
-            emit_line(cg, "sigaddset(&_sl_bmask%d, SIGINT);", id);
-            emit_line(cg, "pthread_sigmask(SIG_BLOCK, &_sl_bmask%d, &_sl_omask%d);",
-                      id, id);
-            emit_line(cg, "pthread_create(&_sl_tid%d, NULL, %s, _sl_sa%d);",
-                      id, shape->tname, id);
-            emit_line(cg, "pthread_sigmask(SIG_SETMASK, &_sl_omask%d, NULL);",
-                      id);
-        } else {
-            emit_line(cg, "pthread_create(&_sl_tid%d, NULL, %s, _sl_sa%d);",
-                      id, shape->tname, id);
-        }
-        emit_line(cg, "pthread_detach(_sl_tid%d);", id);
+        emit_line(cg, "sl_task_submit(%s_entry, _sl_sa%d);", shape->tname, id);
         cg->indent--;
         emit_line(cg, "}");
         break;

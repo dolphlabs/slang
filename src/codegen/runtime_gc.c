@@ -1,12 +1,14 @@
 /* Tier 10: the precise, non-moving, stop-the-world mark-sweep collector
- * that replaces Boehm. Emitted right after RUNTIME[]'s safepoint chain
- * (runtime_core.c) -- sl_gc_thread.top_ptr points at a thread's own
- * sl_rt_safepoint_top, so this file depends on that chain already being
- * defined, but is otherwise self-contained. See todo.md's Tier 10 entry
- * and the design plan for the full protocol writeup, including the five
- * concurrency bugs a standalone multi-threaded spike found and fixed
- * before this file was written -- the shape below is the validated
- * result, not a first draft. */
+ * that replaces Boehm. Emitted right after RUNTIME[]'s sl_task/sl_runq
+ * definitions (runtime_core.c) -- sl_gc_thread.task_slot points at a
+ * thread's own sl_rt_current_task, and the queue-rooting walk in
+ * sl_gc_collect reads sl_global_runq directly, so this file depends on
+ * both already being defined, but is otherwise self-contained. See
+ * todo.md's Tier 10 entry and the Tier 11 plan for the full protocol
+ * writeup, including the five concurrency bugs a standalone multi-
+ * threaded spike found and fixed before this file was first written,
+ * and the seven more a later review pass found before the task_slot/
+ * run-queue-rooting fix landed. */
 
 #include "internal.h"
 
@@ -119,7 +121,20 @@ const char *RUNTIME_GC[] = {
     " * thread). Guarded by sl_gc_mu. */",
     "typedef struct sl_gc_thread {",
     "    struct sl_gc_thread *next;",
-    "    sl_safepoint **top_ptr;",
+    "    sl_task **task_slot; /* &sl_rt_current_task for this OS thread --",
+    "        NOT &sl_rt_current_task->safepoint_top. The latter (this",
+    "        field's shape before Tier 11's second slice) is a single",
+    "        dereference cached at registration time: correct as long as",
+    "        sl_rt_current_task never changes for the thread's whole life",
+    "        (true before a worker pool exists, since one task lives and",
+    "        dies with its OS thread), but stale the instant a pooled",
+    "        worker gets reassigned to a new task -- the collector would",
+    "        keep reading whichever task's safepoint_top field happened",
+    "        to be current AT REGISTRATION, not the task actually running",
+    "        now. task_slot fixes this by pointing at the STABLE",
+    "        _Thread_local variable itself; sl_gc_collect's mark phase",
+    "        below dereferences it twice instead of once, always landing",
+    "        on whichever task is current at SCAN time. */",
     "    _Atomic int *blocked_ptr;",
     "    _Atomic unsigned long *acked_cycle_ptr;",
     "} sl_gc_thread;",
@@ -136,7 +151,19 @@ const char *RUNTIME_GC[] = {
     "static void sl_gc_collect(void);",
     "",
     "static void sl_gc_register_thread(void) {",
-    "    sl_rt_gc_reg.top_ptr = &sl_rt_safepoint_top;",
+    "    /* Tier 11: this OS thread's chain lives in a per-thread sl_task",
+    "     * (sl_rt_current_task, runtime_core.c) rather than a bare",
+    "     * _Thread_local safepoint pointer -- see task_slot's own field",
+    "     * comment above for why this must be &sl_rt_current_task itself,",
+    "     * not &sl_rt_current_task->safepoint_top. Still true today (one",
+    "     * task per OS thread, no scheduler running yet) that",
+    "     * sl_rt_current_task never actually changes after this point --",
+    "     * task_slot's extra indirection costs nothing observable now and",
+    "     * is exactly what makes it safe for a future worker pool to",
+    "     * reassign sl_rt_current_task freely. */",
+    "    memset(&sl_rt_task_storage, 0, sizeof(sl_rt_task_storage));",
+    "    sl_rt_current_task = &sl_rt_task_storage;",
+    "    sl_rt_gc_reg.task_slot = &sl_rt_current_task;",
     "    sl_rt_gc_reg.blocked_ptr = &sl_rt_gc_blocked;",
     "    sl_rt_gc_reg.acked_cycle_ptr = &sl_rt_gc_acked_cycle;",
     "    pthread_mutex_lock(&sl_gc_mu);",
@@ -207,18 +234,6 @@ const char *RUNTIME_GC[] = {
     "        pthread_mutex_unlock(&sl_gc_mu);",
     "        return;",
     "    }",
-    "}",
-    "",
-    "/* pthread_cleanup_push handler for every spawn trampoline (see",
-    " * emit_spawn_trampolines, program.c): fires on both the normal",
-    " * return path (via an explicit pthread_cleanup_pop(1)) and a",
-    " * panicking task's pthread_exit (sl_rt_error's non-main-thread",
-    " * path, runtime_core.c) -- one registration covers both exits,",
-    " * instead of duplicating the unregister call the way",
-    " * sl_rt_active_spawns_dec already has to be. */",
-    "static void sl_gc_cleanup_handler(void *arg) {",
-    "    (void)arg;",
-    "    sl_gc_unregister_thread();",
     "}",
     "",
     "/* called from sl_rt_safepoint_enter, and around each of the six",
@@ -376,10 +391,43 @@ const char *RUNTIME_GC[] = {
     "",
     "    sl_gc_wl_n = 0;",
     "    for (int i = 0; i < nsnap; i++) {",
-    "        for (sl_safepoint *sp = *snap[i]->top_ptr; sp; sp = sp->prev)",
+    "        sl_task *sl_gc_scan_task = *snap[i]->task_slot; /* see",
+    "            task_slot's own field comment above: this reads whichever",
+    "            task is current AT SCAN TIME, not a value cached at",
+    "            registration -- the load-bearing fix for worker reuse. */",
+    "        sl_gc_mark(sl_gc_scan_task->entry_arg); /* Tier 11 third-slice",
+    "            review finding: root the CURRENTLY-RUNNING task's own",
+    "            entry_arg directly too, not just a queued task's (below).",
+    "            %s_entry's own generated body builds no safepoint bracket",
+    "            around its args struct before reading its fields, so",
+    "            nothing else protects it once the task starts running --",
+    "            confirmed by a dedicated dequeue-window stress spike",
+    "            (see the Tier 11 plan) that reproduced entry_arg",
+    "            corruption without this line. */",
+    "        for (sl_safepoint *sp = sl_gc_scan_task->safepoint_top; sp;",
+    "             sp = sp->prev)",
     "            for (int j = 0; j < sp->nroots; j++)",
     "                sl_gc_mark(sp->roots[j]);",
     "    }",
+    "    /* A queued (not-yet-started) task's own safepoint chain is empty",
+    "     * -- nothing about it is reachable through the loop above -- but",
+    "     * its entry_arg is a live root all the same (for real spawn,",
+    "     * always a real sl_gc_alloc'd struct). Root it directly by",
+    "     * walking the run queue here, while already holding sl_gc_mu:",
+    "     * lock order is always sl_gc_mu-then-runq-mu, consistently, and",
+    "     * sl_runq_push/pop_blocking (runtime_pool.c) never hold the",
+    "     * queue's own mutex while touching sl_gc_mu, so this can't",
+    "     * deadlock against them. sl_global_runq itself is declared in",
+    "     * RUNTIME[] (runtime_core.c), not here or in runtime_pool.c --",
+    "     * same ordering reason as sl_task: this function needs the",
+    "     * complete sl_runq type and the variable both visible at its own",
+    "     * definition site, which is well before RUNTIME_POOL is",
+    "     * emitted. */",
+    "    pthread_mutex_lock(&sl_global_runq.mu);",
+    "    for (sl_task *sl_gc_qt = sl_global_runq.head; sl_gc_qt;",
+    "         sl_gc_qt = sl_gc_qt->next)",
+    "        sl_gc_mark(sl_gc_qt->entry_arg);",
+    "    pthread_mutex_unlock(&sl_global_runq.mu);",
     "    while (sl_gc_wl_n > 0) {",
     "        void *p = sl_gc_wl[--sl_gc_wl_n];",
     "        sl_gc_obj *h = (sl_gc_obj *)p - 1;",
