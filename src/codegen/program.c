@@ -711,7 +711,6 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     emit_line(cg, "}");
     emit_line(cg, "");
     emit_line(cg, "int main(void) {");
-    emit_line(cg, "    sl_rt_is_main_thread = 1;");
     emit_line(cg, "    sl_gc_register_thread();");
     if (want_pkg(cg, "proc"))
         emit_line(cg, "    sl_proc_install_signal_handlers();");
@@ -721,9 +720,53 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
      * gate immediately above: only meaningful together, and only when
      * 'proc' is imported at all. */
     emit_line(cg, "    sl_pool_start(%d);", want_pkg(cg, "proc") ? 1 : 0);
+    /* Tier 11 fifth slice: the timer thread, gated on 'time' being
+     * imported at all -- sl_time_start (pkg_time/runtime.c, TIME_RUNTIME)
+     * is only ever DEFINED when want_pkg(cg,"time") is true
+     * (emit_native_runtime); this needs its own fresh gate here, not
+     * emit_native_runtime's own local, which has no scope reaching this
+     * function. block_signals mirrors sl_pool_start's own parameter for
+     * the identical reason: a new, always-running background thread
+     * that doesn't block SIGTERM/SIGINT is a second thread capable of
+     * receiving a signal meant only for main(). */
+    if (want_pkg(cg, "time"))
+        emit_line(cg, "    sl_time_start(%d);", want_pkg(cg, "proc") ? 1 : 0);
+    /* Tier 11 fourth slice: main's own task is heap-allocated exactly
+     * the way sl_task_submit already allocates every spawned task's
+     * struct, instead of repurposing sl_rt_task_storage (the per-thread
+     * idle placeholder sl_gc_register_thread just pointed
+     * sl_rt_current_task at) in place. Once chan_send/chan_recv can
+     * park, main's own task can become a real, externally-linked
+     * object (reachable from a channel's own wait list and the global
+     * parked-task registry) -- reusing sl_rt_task_storage for that
+     * would let it alias the SAME memory this (or any other) thread's
+     * idle-between-tasks placeholder also uses, once main's task is
+     * resumed on a different worker while this thread falls back to
+     * being idle. Heap-allocating keeps sl_rt_task_storage a uniformly
+     * private, never-externally-referenced idle placeholder for every
+     * thread, main's included -- no special case. */
+    emit_line(cg, "    sl_task *sl_rt_main_task = (sl_task *)malloc(sizeof(sl_task));");
+    emit_line(cg, "    if (!sl_rt_main_task) {");
+    emit_line(cg, "        fprintf(stderr, \"slang: out of memory allocating main task\\n\");");
+    emit_line(cg, "        exit(1);");
+    emit_line(cg, "    }");
+    emit_line(cg, "    memset(sl_rt_main_task, 0, sizeof(*sl_rt_main_task));");
+    emit_line(cg, "    sl_rt_main_task->is_main = 1;");
+    emit_line(cg, "    sl_rt_current_task = sl_rt_main_task;");
     emit_line(cg, "    sl_task_stack_init(sl_rt_current_task, sl_main_task_entry, NULL);");
     emit_line(cg, "    sl_ctx_switch(&sl_rt_native_rsp, sl_rt_current_task->rsp);");
-    emit_line(cg, "    return 0; /* unreachable: sl_main_task_entry calls exit() */");
+    /* Only reached if main's own task PARKED -- a normal finish calls
+     * exit(0) directly from sl_main_task_entry and never switches back
+     * at all. Falls into the SAME shared post-switch dispatch the real
+     * pool workers use (sl_worker_after_switch/sl_worker_run_loop,
+     * runtime_pool.c): from here on this OS thread simply joins the
+     * pool, indistinguishable from any other worker -- safe because the
+     * only way the process ever legitimately exits is a direct exit()
+     * call from somewhere, regardless of which thread is inside
+     * sl_worker_run_loop at that moment. */
+    emit_line(cg, "    sl_worker_after_switch(sl_rt_main_task);");
+    emit_line(cg, "    sl_worker_run_loop();");
+    emit_line(cg, "    return 0; /* unreachable: sl_worker_run_loop only returns on shutdown */");
     emit_line(cg, "}");
 }
 

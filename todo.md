@@ -1228,10 +1228,115 @@ prerequisite, not a different plan).
       interface — `net.accept`/`net.recv`/`net.send`/`net.tls_*`
       register interest and park the calling task instead of blocking
       the OS thread; the reactor wakes the task when the fd is ready
-- [ ] `time.sleep` parks the task with a timer instead of blocking the
-      thread
-- [ ] `chan_send`/`chan_recv` park the task on the channel's wait
-      queue instead of blocking on a condvar
+- [x] `time.sleep` parks the task with a timer instead of blocking the
+      thread. Unlike `chan`, nothing else ever "satisfies" a sleeping
+      task's wait — there's no other task to hand off to — so this
+      built the one piece that was genuinely missing: a sorted-by-
+      deadline wait list (`sl_time_sleepers`, reusing `sl_task.next`,
+      package-local to `pkg_time/runtime.c`) plus one dedicated,
+      `want_pkg(cg,"time")`-gated background thread (`sl_time_thread`)
+      that actively notices deadlines passing and calls the fourth
+      slice's own `sl_task_resume` on their behalf — no changes to the
+      parking primitive itself, only a new caller, confirming it really
+      is generic and reusable the way that slice's own writeup claimed.
+      A dedicated design review (mirroring every prior slice) caught
+      one critical, build-breaking bug before it ever compiled: the
+      first-drafted `main()`-wiring line for starting the timer thread
+      had no gate of its own, and would have called an undeclared
+      function in the 46 of 50 tests that don't import `time` — fixed
+      with a fresh `want_pkg(cg,"time")` check, mirroring the adjacent,
+      already-correct `proc` signal-handler gate. The review also
+      surfaced a real platform finding, confirmed empirically (this
+      machine's `pthread` has no `pthread_condattr_setclock`, a
+      Linux/glibc extension `pthread_cond_timedwait` needs for a
+      monotonic-clock absolute deadline) — worked around by tracking
+      deadlines in monotonic time throughout and never waiting longer
+      than a 1-second chunk in one timed-wait call, bounding rather than
+      eliminating the wall-clock-jump drift the old `nanosleep`-based
+      implementation was fully immune to (an accepted, documented
+      limitation, since no test asserts upper-bounded sleep timing).
+      Two more real gaps were disclosed rather than fixed: a GC
+      stop-the-world pause now delays every currently-due sleeper's
+      wakeup by the pause length (the old per-thread `nanosleep` had no
+      such coupling), and — more significant — parking `time.sleep` on
+      `main()`'s own task can defeat `proc`'s SIGTERM/SIGINT delivery
+      for a *later* blocking `net.*` call in the same program, since
+      the "only main can receive these signals" invariant is enforced
+      only at pool/timer-thread creation time, never re-established for
+      main's original OS thread once its own task parks and that thread
+      falls back to servicing the pool. This gap already existed
+      structurally once `chan` could park (previous bullet) but
+      `time.sleep` makes it far likelier to actually be hit; it's now a
+      concrete constraint on the still-deferred signal-handling redesign
+      below (derive "is this main" from `sl_task.is_main`, not OS-thread
+      identity). Full writeup of every finding lives in
+      `.claude/plans/synthetic-beaming-volcano.md`. Verified: 49/49
+      tests at both the normal and a lowered GC threshold; TSan clean
+      (0 races) on `time`/`proc`/`proc_shutdown`'s real generated code
+      — the latter, importing both `time` and `proc`, doubling as the
+      combined-import signal-delivery check; a manual check
+      (`scratchpad/time_check/main.sl`) proving 16 tasks sleeping 500ms
+      *simultaneously* on the 8-worker pool complete in ~507ms, not the
+      ~1000ms two serialized batches would produce — the falsifiable
+      proof of genuine concurrent capacity. A dedicated spike
+      (`scratchpad/poolspike/time_park.c`) proved the sorted-list +
+      timer-thread mechanism itself, including a test that inserts an
+      earlier deadline while the timer thread is already mid-wait on a
+      stale, longer one and confirms it re-arms correctly rather than
+      waiting out the original chunk.
+- [x] `chan_send`/`chan_recv` park the task on the channel's wait
+      queue instead of blocking on a condvar. Built the actual generic
+      parking primitive Tier 11 needed all along: `sl_task_park`/
+      `sl_task_resume` (`runtime_pool.c`) plus a new global,
+      `sl_gc_mu`-guarded `sl_parked_tasks` GC registry (`runtime_core.c`)
+      that every future parking site (`net`/`time`, still unchecked
+      below) will reuse as-is. `sl_chan`'s two condvars
+      (`not_empty`/`not_full`) are gone, replaced by
+      `send_waiters`/`recv_waiters` — plain per-channel wait lists built
+      on `sl_task.next`. A dedicated design review (mirroring every
+      prior slice) found two more critical bugs beyond the four already
+      anticipated while designing: a lost-wakeup race (a parked task
+      cannot use a condvar-style "unlock, then block" sequence — the
+      mutex it parked on must stay locked across the context switch,
+      released only by the worker loop *after* the switch safely
+      completes, or a concurrent resume can switch into a not-yet-valid
+      `rsp`), and a real deadlock in `main()`'s own top-level code the
+      moment its own blocking `chan_recv` call could park — exactly
+      what `tests/spawn`'s own top-level `chan_recv` loop already does.
+      Fixing that meant `main()`'s task itself became heap-allocated
+      (like `sl_task_submit` already does for every spawned task,
+      instead of repurposing the per-thread idle-sentinel struct in
+      place) and gained a shared `sl_worker_after_switch`/
+      `sl_worker_run_loop` dispatch used by *both* the real pool workers
+      and main's own one-off switch-in — once main's own task parks,
+      its OS thread simply joins the pool from that point on. That in
+      turn forced `sl_rt_is_main_thread` (previously `_Thread_local`,
+      safe only as long as main's OS thread could never run any task
+      but its own) to move onto the task itself
+      (`sl_task.is_main`), since a thread that's absorbed into the pool
+      can now run arbitrary other spawned tasks too. Landed in stages
+      (generic scheduler pieces first, as exercised-but-uncalled code;
+      real `chan` behavior last), each gated on the full suite. Full
+      writeup of every finding lives in
+      `.claude/plans/synthetic-beaming-volcano.md`. Verified: 49/49
+      tests at both the normal and a lowered GC threshold; TSan clean
+      (0 races) on `spawn`/`spawn_isolation`'s real generated code,
+      byte-identical output — both now genuinely exercise parking via
+      main's own top-level `chan_recv` loop, not just the old
+      condvar-blocking path; a manual check
+      (`scratchpad/chan_check/main.sl`) proving 16 tasks can be parked
+      *simultaneously* on `chan_recv` against the 8-worker pool — the
+      exact rendezvous scenario that deadlocked when tried against the
+      third slice (chan still blocked the OS thread back then), now the
+      direct, falsifiable proof of genuine concurrent capacity, not
+      just queue throughput. A dedicated spike
+      (`scratchpad/poolspike/chan_park.c`) proved the lost-wakeup race
+      and the main-parks-first deadlock are both real and both fixed,
+      via two regression tests that deliberately toggle each fix off
+      and confirm the bug reproduces (a crash and a wrong exit path,
+      respectively, each bounded by a forked+`alarm()`-bounded child so
+      neither risks hanging the test binary itself) before confirming
+      the fixed path is clean across thousands of iterations.
 - [x] `spawn` creates a scheduled task, not a `pthread_create` call.
       `stmt.c`'s `ST_SPAWN` now calls `sl_task_submit` (the shared run
       queue from the scheduler-foundation bullet above) instead of
