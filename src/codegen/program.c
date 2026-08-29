@@ -711,26 +711,52 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     emit_line(cg, "}");
     emit_line(cg, "");
     emit_line(cg, "int main(void) {");
+    if (want_pkg(cg, "proc")) {
+        /* Tier 11 sixth slice: block SIGTERM/SIGINT exactly ONCE, here,
+         * before any other thread is ever created -- every subsequently-
+         * created thread (pool workers, the timer thread, the reactor
+         * thread, the dedicated signal thread itself) inherits the
+         * blocked mask automatically via normal pthread_create
+         * semantics. Replaces the old per-subsystem block_signals
+         * parameter dance entirely: that design deliberately left
+         * exactly one OS thread (this one, main's original) unblocked
+         * and relied on a blocking net.accept() call getting EINTR on
+         * that specific thread -- correct only as long as main's own
+         * task could never migrate to a different OS thread, which
+         * stopped being true once chan/time.sleep parking made that
+         * migration possible. Now every thread blocks these signals,
+         * including this one, and exactly one dedicated thread
+         * (sl_proc_install_signal_handlers below) owns delivery via
+         * sigwait(), decoupled from which thread happens to be running
+         * which task at any given moment. */
+        emit_line(cg, "    sigset_t sl_rt_sigmask;");
+        emit_line(cg, "    sigemptyset(&sl_rt_sigmask);");
+        emit_line(cg, "    sigaddset(&sl_rt_sigmask, SIGTERM);");
+        emit_line(cg, "    sigaddset(&sl_rt_sigmask, SIGINT);");
+        emit_line(cg, "    pthread_sigmask(SIG_BLOCK, &sl_rt_sigmask, NULL);");
+    }
     emit_line(cg, "    sl_gc_register_thread();");
-    if (want_pkg(cg, "proc"))
-        emit_line(cg, "    sl_proc_install_signal_handlers();");
     /* Pool must exist before anything can be submitted to it, and
      * nothing is submitted before user code (which might 'spawn')
-     * starts running below. block_signals mirrors the signal-handler
-     * gate immediately above: only meaningful together, and only when
-     * 'proc' is imported at all. */
-    emit_line(cg, "    sl_pool_start(%d);", want_pkg(cg, "proc") ? 1 : 0);
+     * starts running below. */
+    emit_line(cg, "    sl_pool_start();");
     /* Tier 11 fifth slice: the timer thread, gated on 'time' being
      * imported at all -- sl_time_start (pkg_time/runtime.c, TIME_RUNTIME)
      * is only ever DEFINED when want_pkg(cg,"time") is true
      * (emit_native_runtime); this needs its own fresh gate here, not
      * emit_native_runtime's own local, which has no scope reaching this
-     * function. block_signals mirrors sl_pool_start's own parameter for
-     * the identical reason: a new, always-running background thread
-     * that doesn't block SIGTERM/SIGINT is a second thread capable of
-     * receiving a signal meant only for main(). */
+     * function. */
     if (want_pkg(cg, "time"))
-        emit_line(cg, "    sl_time_start(%d);", want_pkg(cg, "proc") ? 1 : 0);
+        emit_line(cg, "    sl_time_start();");
+    /* Tier 11 sixth slice: the reactor, same gating reasoning as the
+     * timer thread just above -- must start BEFORE
+     * sl_proc_install_signal_handlers() below, so sl_rt_shutdown_hook
+     * (runtime_core.c) is guaranteed set before the signal thread could
+     * ever consume a signal and try to call through it. */
+    if (want_pkg(cg, "net"))
+        emit_line(cg, "    sl_reactor_start();");
+    if (want_pkg(cg, "proc"))
+        emit_line(cg, "    sl_proc_install_signal_handlers();");
     /* Tier 11 fourth slice: main's own task is heap-allocated exactly
      * the way sl_task_submit already allocates every spawned task's
      * struct, instead of repurposing sl_rt_task_storage (the per-thread

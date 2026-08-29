@@ -363,20 +363,32 @@ fn route(st: AppState, req: httpkit.Request) -> httpkit.Response {
 
 // ---- connection handling: a bounded worker pool instead of a fresh
 // OS thread per connection (Tier 9 in todo.md; see
-// demo/stress_harness/'s "Arcade Under Load" report for why). A fixed
-// number of acceptor and worker tasks are spawned once at startup;
-// accepted connections flow through a bounded chan[T] queue instead
-// of each getting spawn'd its own thread. This removes the
-// per-request pthread_create/teardown cost and, just as importantly,
-// lets more than one accept() run at a time -- the stress report
-// found server-side thread count never exceeded ~415 even at 2,000
-// offered clients, because exactly one thread was ever calling
-// accept(). spawn's own semantics (Tier 5) are unchanged: this is
-// purely how this file chooses to dispatch work, not a new compiler
-// primitive -- the whole pattern is built from spawn + chan[T], both
-// already in the language.
+// demo/stress_harness/'s "Arcade Under Load" report for why). Accepted
+// connections flow through a bounded chan[T] queue instead of each
+// getting spawn'd its own thread -- removes the per-request
+// pthread_create/teardown cost this pattern was originally built to
+// avoid. spawn's own semantics (Tier 5) are unchanged: this is purely
+// how this file chooses to dispatch work, not a new compiler primitive.
+//
+// Plain HTTP now runs exactly ONE acceptor task (Tier 11's real kqueue
+// reactor landed -- net.accept() parks the calling task instead of
+// blocking the OS thread it runs on, so a single acceptor already lets
+// the rest of the pool stay free for connection handling; the original
+// Tier 9 stopgap ran N_ACCEPTORS=4 non-blocking, polling acceptor tasks
+// specifically to work around accept() tying up a whole thread, which
+// parking makes unnecessary). Running MORE than one acceptor on the
+// SAME listening fd is no longer just wasteful, it's actively unsafe
+// under the reactor: at most one task may be parked waiting on a given
+// (fd, direction) at a time -- a second concurrent waiter silently
+// overwrites the first's kqueue registration, permanently orphaning it
+// (see the Tier 11 sixth-slice plan's own review finding 11). TLS
+// (net.tls_*) is deliberately NOT converted to parking this slice --
+// its own accept() call still genuinely blocks the OS thread, so its
+// original multi-acceptor-plus-poll design (TLS_ACCEPTORS below) is
+// still exactly as safe and necessary as it always was; that pattern
+// simply doesn't apply to the (now-parked) plain HTTP path anymore.
 
-let N_ACCEPTORS: int = 4;
+let TLS_ACCEPTORS: int = 4;
 
 fn handle_http_conn(st: AppState, cfd: i32) {
     let recv_r: result[bytes, str] = net.recv(cfd, 65536);
@@ -408,8 +420,6 @@ fn http_worker(st: AppState, work: chan[i32]) {
     }
 }
 
-// Returns whether a connection was actually accepted, so the loop
-// below knows whether to back off before trying again.
 fn accept_and_queue_http(lfd: i32, work: chan[i32]) -> bool {
     let ar: result[i32, str] = net.accept(lfd);
     guard let cfd = ar else { return false; }
@@ -417,33 +427,21 @@ fn accept_and_queue_http(lfd: i32, work: chan[i32]) -> bool {
     return true;
 }
 
-// Runs as its own spawned background task -- which, now that accept
-// happens off the main thread so more than one can run at a time,
-// needs the exact same non-blocking-socket-plus-polling treatment the
-// original tls_accept_loop already used, for the same reason: every
-// spawned thread has SIGTERM/SIGINT blocked in its own mask from
-// birth (see stmt.c's ST_SPAWN codegen), so a blocking accept() here
-// would never notice shutdown_requested() going true, hanging the
-// drain loop below forever (the exact bug the TLS side already hit
-// and fixed, now also true of plain HTTP since accept moved off main).
-// Signals its own exit on `done` so the shutdown sequence knows
-// precisely when every acceptor has stopped -- and so can no longer
-// send to `work` -- before it's safe to close the queue.
+// Runs as the ONE spawned background acceptor task for plain HTTP
+// (see the big comment above TLS_ACCEPTORS for why exactly one, not
+// several). net.accept() itself parks this task -- no OS thread is
+// held hostage while nothing's pending, and no polling backoff is
+// needed the way TLS's own still-blocking accept loop still needs one:
+// a genuine connection resumes this task via the reactor, and a
+// shutdown signal resumes it too, returning Err("interrupted") from
+// net.accept() so the loop's own shutdown_requested() check catches it
+// on the very next iteration. Signals its own exit on `done` so the
+// shutdown sequence knows precisely when the acceptor has stopped --
+// and so can no longer send to `work` -- before it's safe to close the
+// queue.
 fn http_accept_loop(lfd: i32, work: chan[i32], done: chan[bool]) {
     while !proc.shutdown_requested() {
-        let got = accept_and_queue_http(lfd, work);
-        if !got {
-            // 1ms, not tls_accept_loop's original 50ms: this loop is
-            // now the primary, latency-critical accept path (only
-            // N_ACCEPTORS of them), not a lightly-loaded secondary
-            // check -- an idle backoff this short still costs
-            // negligible CPU, but a longer one directly adds to every
-            // accepted connection's latency under load (measured: a
-            // first pass at 50ms added ~25-30ms to p50 across the
-            // board, confirmed against demo/stress_harness/ before
-            // this got caught)
-            time.sleep(1000000);
-        }
+        accept_and_queue_http(lfd, work);
     }
     chan_send(done, true);
 }
@@ -558,30 +556,25 @@ guard let lfd = lr else {
     println("could not listen on port " + to_str(port));
     exit(1);
 }
-// non-blocking so http_accept_loop's polling actually polls instead
-// of blocking indefinitely in accept() -- see its comment. Needed now
-// that accept runs off the main thread (N_ACCEPTORS spawned loops
-// instead of the main loop calling accept() directly), the same
-// reason tls_accept_loop already needed it.
-let http_nb: result[bool, str] = net.nonblock(lfd);
-guard let _http_ok = http_nb else {
-    println("could not set listener non-blocking");
-    exit(1);
-}
+// No net.nonblock() call here anymore -- net.accept() itself parks the
+// calling task now (Tier 11's real kqueue reactor), so the listener
+// stays in its default mode and http_accept_loop's single acceptor
+// task just blocks-via-parking until a connection or a shutdown signal
+// resumes it. See the big comment above TLS_ACCEPTORS for why TLS's
+// own listener still needs net.nonblock() below and plain HTTP's
+// doesn't.
 let http_work: chan[i32] = make_chan(256);
-let http_done: chan[bool] = make_chan(N_ACCEPTORS);
-for i in 0..N_ACCEPTORS {
-    spawn http_accept_loop(lfd, http_work, http_done);
-}
+let http_done: chan[bool] = make_chan(1);
+spawn http_accept_loop(lfd, http_work, http_done);
 for i in 0..workers {
     spawn http_worker(st, http_work);
 }
 
 let tls_work: chan[rawptr] = make_chan(256);
-let tls_done: chan[bool] = make_chan(N_ACCEPTORS);
+let tls_done: chan[bool] = make_chan(TLS_ACCEPTORS);
 let tls_port_str: str = proc.getenv("TLS_PORT") ?? "8091";
 let tls_port = atoi(tls_port_str);
-let tls_ok = try_start_tls(st, tls_port, N_ACCEPTORS, workers, tls_work, tls_done);
+let tls_ok = try_start_tls(st, tls_port, TLS_ACCEPTORS, workers, tls_work, tls_done);
 
 println("Slang Arcade listening on http://localhost:" + to_str(port));
 if tls_ok {
@@ -591,8 +584,8 @@ if tls_ok {
     println("  TLS disabled: no cert.pem/key.pem here -- run via "
         + "./run.sh to generate one, or see examples/httpsd/");
 }
-println(to_str(N_ACCEPTORS) + " acceptors, " + to_str(workers)
-    + " workers per protocol (override with WORKERS=n)");
+println("1 HTTP acceptor, " + to_str(TLS_ACCEPTORS) + " TLS acceptors, "
+    + to_str(workers) + " workers per protocol (override with WORKERS=n)");
 println("Ctrl-C (or SIGTERM) for a graceful shutdown -- in-flight requests");
 println("are drained, not dropped. See demo/README.md.");
 
@@ -602,16 +595,14 @@ while !proc.shutdown_requested() {
 
 println("");
 println("shutting down: waiting for acceptors to stop...");
-for i in 0..N_ACCEPTORS {
-    let hv = chan_recv(http_done);
-    guard let _htok = hv else {
-        println("FAIL: http acceptor done-channel closed unexpectedly");
-        exit(1);
-    }
+let hv = chan_recv(http_done);
+guard let _htok = hv else {
+    println("FAIL: http acceptor done-channel closed unexpectedly");
+    exit(1);
 }
 chan_close(http_work);
 if tls_ok {
-    for i in 0..N_ACCEPTORS {
+    for i in 0..TLS_ACCEPTORS {
         let tv = chan_recv(tls_done);
         guard let _ttok = tv else {
             println("FAIL: tls acceptor done-channel closed unexpectedly");

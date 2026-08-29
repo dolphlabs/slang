@@ -1224,10 +1224,91 @@ prerequisite, not a different plan).
       `.claude/plans/synthetic-beaming-volcano.md`. Still exactly one
       task per OS thread — no scheduler yet, no work-stealing, no
       parking; that's the next bullet, not this one.
-- [ ] A kqueue (macOS/BSD) / epoll (Linux) reactor behind one internal
-      interface — `net.accept`/`net.recv`/`net.send`/`net.tls_*`
-      register interest and park the calling task instead of blocking
-      the OS thread; the reactor wakes the task when the fd is ready
+- [x] A kqueue (macOS/BSD) reactor behind one internal interface —
+      `net.accept`/`net.recv`/`net.send`/`net.dial`/`net.close`/
+      `net.nonblock` register interest and park the calling task
+      instead of blocking the OS thread; the reactor wakes the task
+      when the fd is ready. **epoll (Linux) is explicitly deferred to
+      its own follow-on slice**, confirmed with the user up front
+      (kqueue is the only backend testable on this machine) — behind
+      the same internal `sl_reactor_wait` interface, so it's additive,
+      not a rework. `net.tls_*` also stays deliberately unconverted
+      this slice (see below) — `SSL_accept`/`SSL_connect`/`SSL_read`/
+      `SSL_write`'s own `WANT_READ`/`WANT_WRITE` state machine is a
+      materially different, harder problem deserving its own dedicated
+      design pass. Landed alongside the signal-handling redesign below
+      in the same slice, since the two are coupled: the redesign only
+      becomes practical once `net.accept`/etc. themselves park instead
+      of relying on a blocking-call-plus-`EINTR` to observe shutdown.
+      A dedicated design review (mirroring every prior slice) found two
+      more critical bugs beyond the nine already anticipated while
+      designing: `sl_reactor_thread`'s per-event dispatch calling
+      `sl_task_resume` unconditionally rather than only when the
+      removal search actually found the task (a real double-resume
+      when a shutdown event and a per-fd readiness event for the same
+      task land in the same `kevent()` batch), and concurrent
+      `EV_ADD`/`EV_ONESHOT` registration for the same `(fd, filter)` by
+      two different tasks silently coalescing at the kernel level,
+      permanently orphaning whichever registered first — fixed by
+      scoping the design to exactly one waiter per `(fd, filter)`
+      rather than building per-fd multiplexing, which required
+      `demo/main.sl`'s own multi-acceptor pattern (a Tier-9 stopgap its
+      own comments already called out for eventual removal) to
+      collapse to one acceptor task per listener dispatching to the
+      existing worker pool via `chan` — simpler, not just constrained,
+      once a single parked `net.accept()` genuinely handles unlimited
+      connections. Other findings: a self-found busy-spin bug (a
+      shutdown-aware pre-check that made `net.send`'s must-keep-
+      retrying contract spin at 100% CPU instead of genuinely parking,
+      fixed with a per-call `abort_on_shutdown` parameter so
+      `accept`/`recv`/`dial` abort but `send` never does); a
+      cross-package compile-dependency problem (a program can import
+      `proc` without `net`, so the signal thread can't reference the
+      reactor's symbols directly — fixed with `sl_rt_shutdown_hook`, an
+      always-defined core function pointer the reactor sets and the
+      signal thread calls through unconditionally); every fd becoming
+      non-blocking at the OS level unconditionally (a reactor
+      fundamentally requires this), which broke `net.nonblock()`'s
+      existing synchronous "would block" contract until fixed with a
+      dedicated, self-locking `sl_net_user_nonblock` side-table
+      tracking which fds the *user* explicitly opted into that
+      contract for (own mutex, not `sl_gc_set`'s borrowed-lock
+      discipline — real once fds are touched from genuinely concurrent
+      worker threads). Full writeup of every finding lives in
+      `.claude/plans/synthetic-beaming-volcano.md`. Verified: 49/49
+      tests at both the normal and a lowered (512-byte) GC threshold,
+      byte-identical; TSan+UBSan clean on `nettest` (8/8) and `proc`
+      (6/6); `proc_shutdown` under TSan is flaky (~1 in 3 runs) but
+      root-caused conclusively to a ThreadSanitizer-internal fault
+      (crash inside TSan's own `StackDepotBase::Put`, never in
+      application code, never a reported race), isolated by elimination
+      against a minimal slang-independent repro and reproduced
+      identically on an unrelated LLVM 22.1.3 toolchain — not a defect
+      in this slice, see the plan file's Verification section for the
+      full isolation writeup; the real, non-instrumented build is
+      unaffected. A manual capacity proof (40 concurrent
+      `net.accept`/`net.dial` pairs, 5x the 8-worker pool, staggered
+      connect timing) completed 40/40 across 5 runs. A manual combined
+      `time`+`net`+`proc` check confirmed a real `SIGTERM` promptly
+      wakes a reactor-parked `net.accept()` via the dedicated signal
+      thread while leaving a `chan`-parked and a `time.sleep`-parked
+      task genuinely unaffected (matching pre-existing, unchanged
+      behavior for those). Warnings-clean (checked against the
+      pre-slice baseline — one pre-existing, unrelated
+      `-Wunused-value` warning confirmed present at `HEAD` too, not
+      newly introduced); determinism confirmed (byte-identical
+      generated C across repeated compiles). A manual end-to-end check
+      of `demo/main.sl` (rewritten per the single-acceptor scoping
+      above) found and disclosed one more real, **pre-existing** gap:
+      with TLS certs present, graceful shutdown hangs forever on an
+      idle `tls_accept_loop`'s still-blocking `accept()`, because pool
+      worker threads already had SIGTERM/SIGINT blocked
+      (`sl_pool_start(1)`) before this slice touched anything —
+      confirmed via `git show HEAD` this predates the slice entirely,
+      not a regression from the signal-handling redesign below; folded
+      into the case for TLS parking needing its own dedicated slice.
+      With TLS disabled, the same shutdown drains cleanly and exits in
+      ~200ms.
 - [x] `time.sleep` parks the task with a timer instead of blocking the
       thread. Unlike `chan`, nothing else ever "satisfies" a sleeping
       task's wait — there's no other task to hand off to — so this
@@ -1403,12 +1484,46 @@ prerequisite, not a different plan).
       but the fallback that used to call `sl_rt_error` would otherwise
       recursively re-enter the panic machinery it's already inside) now
       `abort()` directly instead.
-- [ ] Signal handling (Tier 8) redesigned for far fewer real OS
-      threads: `proc.shutdown_requested()`/`SIGTERM` delivery no
-      longer has "every spawned thread blocks the signal, only main
-      can get it" to lean on, since most concurrency is now logical
-      tasks on a shared pool, not distinct OS threads — needs its own
-      design pass, not a mechanical port
+- [x] Signal handling (Tier 8) redesigned for far fewer real OS
+      threads: replaced the old `sigaction`-installed handler (which
+      depended on leaving exactly one specific OS thread — the
+      *original* main thread — unblocked, an invariant the fourth/
+      fifth slices' own parking already broke, since main's task can
+      migrate to any pool worker) with a dedicated `sigwait()`-based
+      signal thread that owns `SIGTERM`/`SIGINT` delivery regardless of
+      which OS thread happens to be running which task. `main()`
+      blocks both signals once, globally, before any other thread is
+      ever created, so every subsequently-created thread (pool
+      workers, the timer thread, the reactor thread, the signal thread
+      itself) inherits the blocked mask automatically — collapsing the
+      old per-subsystem `block_signals` parameter threaded through
+      `sl_pool_start`/`sl_time_start` into one place.
+      `sl_rt_shutdown_flag` also drops its old `volatile sig_atomic_t`
+      type for a real `_Atomic int` with proper memory-order semantics,
+      since `sigwait`-based delivery runs as ordinary code in a normal
+      thread, not inside an actual async-signal-handler context, so the
+      old async-signal-safety constraint no longer applies. Landed in
+      the same slice as the kqueue reactor above, since the two are
+      genuinely coupled — this redesign only becomes practical once
+      `net.accept`/etc. themselves park instead of relying on a
+      blocking-call-plus-`EINTR` race to observe shutdown; see that
+      bullet for the full design-review writeup (the two critical bugs,
+      the busy-spin fix, the cross-package `sl_rt_shutdown_hook`
+      indirection) and the verification detail (49/49 tests at both GC
+      thresholds; TSan clean on `proc` real generated code, with
+      `proc_shutdown`'s TSan flakiness root-caused to a
+      ThreadSanitizer-internal fault, not a runtime bug; a manual
+      combined `time`+`net`+`proc` check proving a real `SIGTERM`
+      wakes a reactor-parked task promptly while leaving `chan`/
+      `time.sleep`-parked tasks genuinely unaffected). One real,
+      pre-existing gap surfaced (not caused) by this slice's own manual
+      `demo/main.sl` verification: TLS's still-unconverted, genuinely
+      blocking `accept()` (`net.tls_*`, deliberately out of scope this
+      slice) never gets `EINTR` when running on a pool worker thread,
+      since pool workers already had these signals blocked before this
+      redesign touched anything (confirmed via `git show HEAD`) — not
+      a regression, but one more concrete reason TLS parking needs its
+      own dedicated design pass.
 - [ ] Tests: every Tier 5/8 test (`tests/spawn`,
       `tests/spawn_isolation`, `tests/proc_shutdown`, the
       `examples/httpd`/`examples/httpsd` signal-drain checks) passes

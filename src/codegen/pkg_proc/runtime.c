@@ -4,35 +4,59 @@
 #include "../internal.h"
 
 /* ---- native 'proc' package runtime (emitted on demand) ----
- * Graceful shutdown: sl_rt_shutdown_flag is set by a signal handler
- * installed WITHOUT SA_RESTART, so a blocked net.accept()/recv() on
- * the main thread returns an 'interrupted' error the instant SIGTERM/
- * SIGINT arrives, instead of hanging forever -- see ST_SPAWN's
- * codegen (src/codegen/stmt.c) for the other half of this: every
- * spawned worker thread has these signals blocked from birth, so the
- * OS can only ever choose the main thread to run this handler. */
+ * Tier 11 sixth slice: graceful shutdown is now delivered via a
+ * dedicated sigwait() thread, not a sigaction-installed handler. The
+ * old design relied on leaving exactly one OS thread (main's own)
+ * unblocked and getting EINTR on whatever blocking net.accept()/recv()
+ * call happened to be running there -- correct only as long as main's
+ * own task could never migrate to a different OS thread. Once chan/
+ * time.sleep parking made that migration possible (Tier 11 fourth/
+ * fifth slices), the invariant broke: main's original thread could end
+ * up idle-in-the-pool while a DIFFERENT thread runs main's resumed
+ * task, with no guarantee that thread has these signals unblocked.
+ * The fix: block SIGTERM/SIGINT everywhere (main()'s own top-level
+ * code, program.c, blocks them once before any thread is ever
+ * created, so every subsequently-created thread -- pool workers, the
+ * timer thread, the reactor thread, and this signal thread itself --
+ * inherits the blocked mask automatically) and have exactly one
+ * dedicated thread block on sigwait() for them, decoupling delivery
+ * from OS-thread identity entirely -- it doesn't matter which thread
+ * happens to be running which task, since the signal never lands on
+ * any of them. This is also what makes net.*'s own parking (this same
+ * slice) able to preserve its shutdown-interruption behavior: the
+ * signal thread nudges sl_rt_shutdown_hook (runtime_core.c), which the
+ * reactor sets to its own wake-everyone-currently-parked function, if
+ * 'net' is imported. */
 const char *PROC_RUNTIME[] = {
     "#include <signal.h>",
     "",
-    "static volatile sig_atomic_t sl_rt_shutdown_flag = 0;",
-    "",
-    "static void sl_rt_signal_handler(int signum) {",
-    "    (void)signum;",
-    "    sl_rt_shutdown_flag = 1;",
+    "static void *sl_sig_thread(void *arg) {",
+    "    (void)arg;",
+    "    sigset_t mask;",
+    "    sigemptyset(&mask);",
+    "    sigaddset(&mask, SIGTERM);",
+    "    sigaddset(&mask, SIGINT);",
+    "    for (;;) {",
+    "        int sig;",
+    "        sigwait(&mask, &sig);",
+    "        atomic_store_explicit(&sl_rt_shutdown_flag, 1, memory_order_release);",
+    "        if (sl_rt_shutdown_hook) sl_rt_shutdown_hook(); /* unconditional --",
+    "            no compile-time knowledge of which packages registered a",
+    "            hook, see runtime_core.c's own comment on it */",
+    "    }",
+    "    return NULL; /* unreachable -- runs until process exit */",
     "}",
     "",
     "static void sl_proc_install_signal_handlers(void) {",
-    "    struct sigaction sa;",
-    "    memset(&sa, 0, sizeof(sa));",
-    "    sa.sa_handler = sl_rt_signal_handler;",
-    "    sigemptyset(&sa.sa_mask);",
-    "    sa.sa_flags = 0; /* no SA_RESTART -- see file comment above */",
-    "    sigaction(SIGTERM, &sa, NULL);",
-    "    sigaction(SIGINT, &sa, NULL);",
+    "    pthread_t th;",
+    "    if (pthread_create(&th, NULL, sl_sig_thread, NULL) != 0) {",
+    "        fprintf(stderr, \"slang: failed to start signal thread\\n\");",
+    "        exit(1);",
+    "    }",
     "}",
     "",
     "static bool sl_proc_shutdown_requested(void) {",
-    "    return sl_rt_shutdown_flag != 0;",
+    "    return atomic_load_explicit(&sl_rt_shutdown_flag, memory_order_acquire) != 0;",
     "}",
     "",
     "static long long sl_proc_active_tasks(void) {",

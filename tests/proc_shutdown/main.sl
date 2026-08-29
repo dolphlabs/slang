@@ -5,13 +5,17 @@
 // <pid>` uses), and a real in-flight connection that must be allowed
 // to finish rather than get dropped.
 //
-// The mechanism (see stmt.c's ST_SPAWN codegen and pkg_proc/runtime.c):
-// every 'spawn'ed thread has SIGTERM/SIGINT blocked in its own mask
-// from birth, so the OS can only ever pick the main thread to run the
-// handler -- which is what lets a blocked net.accept() on the main
-// thread reliably observe the interruption (EINTR, surfaced as a
-// result error, no SA_RESTART) instead of the signal silently landing
-// on some unrelated in-flight connection's worker thread.
+// The mechanism (see pkg_proc/runtime.c and pkg_net/runtime_net.c,
+// Tier 11's sixth slice): SIGTERM/SIGINT are blocked on every OS
+// thread from the very start of main() -- pool workers, the timer
+// thread, the reactor thread, all of them -- and a single dedicated
+// sigwait()-based signal thread owns delivery, decoupled from which
+// OS thread happens to be running main's task at the moment the
+// signal arrives. Setting the shutdown flag also nudges the kqueue
+// reactor (sl_rt_shutdown_hook), which is what lets a parked
+// net.accept() on main's task observe the interruption (surfaced as a
+// result error) instead of the signal needing to land on that task's
+// specific OS thread the old EINTR-based design depended on.
 import "proc";
 import "net";
 import "time";

@@ -4,14 +4,22 @@
 #include "../internal.h"
 
 
-/* Blocking mode only, matching net's own blocking-by-default design:
- * a spawned OS thread just blocks inside SSL_read/SSL_write like it
- * already blocks inside recv()/send(), so nothing here needs
- * non-blocking/retry handling. Client verification is strict by
- * default (SSL_VERIFY_PEER + SSL_set1_host for hostname checking --
- * the part that's easy to silently omit and end up with a TLS
- * connection that validates the certificate chain but not that it
- * belongs to the host you asked for). */
+/* Blocking mode only -- deliberately NOT converted to parking in Tier
+ * 11's sixth slice (which parks plain net.*): SSL_accept/SSL_connect/
+ * SSL_read/SSL_write's own WANT_READ/WANT_WRITE async state machine is
+ * a materially different, harder problem than a plain socket read/
+ * write, deserving its own dedicated design pass rather than a rushed
+ * extension of that one. A spawned OS thread still just blocks inside
+ * SSL_read/SSL_write here, exactly as before that slice landed -- see
+ * sl_net_ensure_blocking's own comment (runtime_net.c) for the one
+ * place plain net.*'s own changes reach into this file (net.listen()
+ * now makes every listener non-blocking by default, which
+ * sl_net_tls_accept has to force back for its own still-blocking
+ * accept() call). Client verification is strict by default
+ * (SSL_VERIFY_PEER + SSL_set1_host for hostname checking -- the part
+ * that's easy to silently omit and end up with a TLS connection that
+ * validates the certificate chain but not that it belongs to the host
+ * you asked for). */
 const char *TLS_RUNTIME[] = {
     "#include <openssl/err.h>",
     "#include <openssl/ssl.h>",
@@ -82,6 +90,11 @@ const char *TLS_RUNTIME[] = {
     "}",
     "",
     "static sl_res_rawptr_str *sl_net_tls_accept(int lfd, void *ctxv) {",
+    "    sl_net_ensure_blocking(lfd); /* Tier 11 sixth slice: net.listen()",
+    "        now makes every listener non-blocking by default (needed for",
+    "        plain net.accept's own parking, runtime_net.c) -- TLS accept",
+    "        stays deliberately unconverted and still wants a genuinely",
+    "        blocking accept() here, so force it back explicitly. */",
     "    sl_rt_gc_blocked = 1;",
     "    int cfd = accept(lfd, NULL, NULL);",
     "    sl_rt_gc_blocked = 0;",
