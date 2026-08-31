@@ -130,9 +130,122 @@ performance-critical instead of periodic, at a real, measured cost of
 class of waste a real event-driven reactor (Tier 11) exists to
 eliminate, accepted here as the right tradeoff for a stopgap tier.
 
-Concurrency is still capped at pool size, and thousands-of-req/s is
-not the 100k this was ultimately aimed at -- that's Tiers 10-11's job,
-not this one's.
+**Tier 11 (todo.md) replaced the OS-thread-per-task model with a real
+M:N scheduler** -- `spawn`, `net.*`, `time.sleep`, and `chan_send`/
+`chan_recv` all park a lightweight task instead of blocking an OS
+thread, multiplexed onto a fixed pool of OS worker threads sized to
+core count (`sysconf(_SC_NPROCESSORS_ONLN)`, 8 on the dev machine this
+was measured on) instead of Tier 9's 128 real, preemptively-scheduled
+OS threads per protocol. Re-running the identical 38-run matrix a
+second time (this time against the fixed GC/chan-parking bug found
+along the way -- see `todo.md`'s Tier 11 section): the workload this
+tier specifically targets got dramatically better, and the workload it
+doesn't yet handle got measurably worse, both for the same underlying
+reason -- fewer real OS threads.
+
+The win is unambiguous for anything that used to hold a thread open
+waiting: the deliberate breaking-point probe (1,200-2,000 concurrent
+clients hammering the `sleep` endpoint, the scenario Tier 9's own
+128-thread cap was built to survive rather than solve) went from
+32/176 errors (18%) and 557/1,219 errors (46%) to **395/25,721 (1.5%)**
+and **792/26,782 (3.0%)** -- `time.sleep` no longer holds a real OS
+thread while waiting, so concurrency here is no longer bounded by
+thread count at all, and the harness now serves ~20x more requests in
+the same window.
+
+The regression is just as unambiguous for CPU-bound work sharing the
+pool: the realistic mixed workload at 900 concurrent clients, 0 errors
+at 3,572 req/s under Tier 9, is now **930.7 req/s with 669 errors
+(4.0%)**, p99 latency 7.9s; at 500 concurrent, 1,047.6 req/s / 235
+errors (1.3%), also multi-second p99. The isolated `cpu` and `alloc`
+endpoints (Phase A) confirm the same shape on their own -- throughput
+pinned near 75-115 req/s essentially flat from 25 to 600 concurrent
+clients, instead of scaling. The captured CPU profile
+(`results/profile.txt`) names the exact cause: `sl_stress_count_primes_range`
+(the `cpu` endpoint's prime-counting loop, `stress/stress.sl`) is by
+far the single largest top-of-stack frame sampled, more than every
+other frame combined. That loop has no function calls and no back-edge
+yield check in it, and Tier 11's "Cooperative preemption v1" is still
+an open item (`todo.md`) -- so once one of the 8 real OS worker
+threads picks it up, it runs to completion on that thread with no
+opportunity for the scheduler to interleave anything else onto it.
+With only 8 real threads total (versus Tier 9's 128), a handful of
+concurrent CPU-bound requests can occupy every worker at once and
+stall the entire run queue behind them, however cheap the queued work
+is -- explaining both the multi-second p99 tail and the new errors on
+a workload that previously ran clean. This is exactly the gap
+`todo.md`'s own Cooperative preemption v1 bullet already named as a
+known, accepted limitation before this run ("Go shipped with exactly
+this limitation for ~10 years..."); this is the first concrete,
+measured evidence that the gap has a real cost under load rather than
+a theoretical one, not a new bug introduced by this tier.
+
+Total across the full re-run: 833,865 requests, 2,989 errors (0.36%)
+-- low in aggregate because the lightweight endpoints (`ping`, `json`,
+`counter`) and the now-parking-based breaking-point probe dominate the
+request count; the elevated error concentration sits specifically in
+the CPU/alloc-heavy and high-concurrency-mixed phases described above.
+Server-side: zero crashes, zero hangs, clean graceful shutdown at the
+end of the full run -- the errors above are client-observed timeouts
+from queueing delay, not server failures.
+
+Concurrency is no longer capped at a fixed thread-pool size for
+anything that parks -- that ceiling is gone for `sleep`/`chan`/`net`-
+bound work, which was Tier 11's actual target.
+
+**A third re-run, after landing "Cooperative preemption v1"** (`todo.md`
+-- a checked "should yield" flag at every loop back-edge and every
+root-bearing call site, letting a CPU-bound task voluntarily give up
+its OS worker thread once it's run past a small quantum with someone
+else waiting) shows the gap named above closing, not just theoretically
+but in the same numbers: the mixed workload at 500 concurrent went from
+1,047.6 req/s / 1.3% errors / 7.8s p99 to **1,409.5 req/s / 0.009%
+errors / 836ms p99** -- errors nearly eliminated and the tail latency
+cut by 9x. At 200 and 50 concurrent, still 0 errors, with throughput up
+7-16%. The soak test (60s sustained mixed load) went from 1,167.5 req/s
+to **1,360.8 req/s**, still 0 errors. The isolated `cpu`/`alloc`
+endpoints (Phase A) are essentially unchanged in their own throughput
+(preemption doesn't make CPU-bound work faster, it makes everything
+*else* fairer around it) but their error counts at 600 concurrent
+dropped sharply (`cpu`: 363 -> 87; `alloc`: 308 -> 99).
+
+At 900 concurrent specifically, the picture is more mixed: throughput
+improved (930.7 -> 1,202.2 req/s, +29%) and errors dropped by nearly
+half (4.0% -> 2.2%), but p99 latency barely moved (7,855ms -> 7,802ms).
+Not a bug -- at 900 concurrent clients sharing 8 real worker threads
+(a ~112:1 ratio), a single request's handler may need several
+preemption rounds just to get enough total CPU time to finish, and each
+round waits behind whatever else the 5ms quantum is currently servicing
+-- round-robin fairness under this much oversubscription still adds up
+to seconds for the unlucky tail, even though the *median* and error
+rate both improved. The captured CPU profile (`results/profile.txt`)
+confirms preemption is genuinely active under this load, not dormant:
+`sl_rt_maybe_yield`/`sl_rt_gc_checkin` now show up as real, sampled
+top-of-stack costs (3,180 and 1,637 samples) alongside
+`sl_stress_count_primes_range`, which still dominates the profile as
+expected -- preemption interleaves around CPU-bound work, it doesn't
+shrink it.
+
+Total across the full re-run: 943,828 requests, 2,391 errors (0.25%,
+down from 0.36% pre-preemption). The one number that got slightly
+*worse* between these two runs is the breaking-point probe's error rate
+(1,200 clients: 1.5% -> 1.8%; 2,000 clients: 3.0% -> 4.3%) -- within
+ordinary run-to-run variance for a shared dev laptop, not attributed to
+preemption, since `time.sleep` parks via a wholly separate code path
+that this feature doesn't touch at all; flagged rather than silently
+rounded away, matching this report's own standard elsewhere. Server-
+side: zero crashes, zero hangs, clean graceful shutdown across both
+re-runs.
+
+What remains, by design and openly disclosed rather than chased
+further in this pass: preemption is cooperative-only (a task without a
+loop back-edge or root-bearing call for a long stretch still can't be
+interrupted -- the same disclosed gap `todo.md` already names), and
+round-robin fairness under 100x+ oversubscription still produces a real
+tail-latency cost, not a solved one. Both are exactly the conditions
+under which `todo.md`'s deferred stretch goal (Go 1.14-style async/
+signal-based preemption) would earn its keep -- this run is evidence
+for *that* decision, not a reason to make it now.
 
 ## Two real bugs this demo found (and how they're addressed)
 

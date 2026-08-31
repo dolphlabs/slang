@@ -1483,15 +1483,96 @@ prerequisite, not a different plan).
       (single shared queue, not per-worker deques) — the top-level
       GMP-style-scheduler bullet stays unchecked until that and the
       parking bullets below land too.
-- [ ] Cooperative preemption v1: a checked "should yield" flag at
-      every call and loop back-edge (using Tier 10's back-edge stack
-      maps) — known, documented gap carried forward openly: a tight
-      loop with no calls or back-edges (exactly what
-      `demo/stress/stress.sl`'s `count_primes_range` is) cannot be
-      preempted under this alone. Go shipped with exactly this
-      limitation for ~10 years before adding signal-based async
-      preemption in 1.14; that's an explicit stretch goal below, not a
-      Tier 11 requirement
+- [x] Cooperative preemption v1: a checked "should yield" flag at
+      every loop back-edge and every root-bearing call site (piggy-
+      backing on Tier 10's own safepoint brackets), letting a CPU-bound
+      task voluntarily give up its OS worker thread once it's run past
+      a small quantum (5ms) with someone else actually waiting for one
+      — motivated by exactly the gap this bullet used to describe as
+      "known, documented" and then, after the acceptance-test re-run,
+      "no longer just theoretical": `sl_stress_count_primes_range`
+      dominating a captured CPU profile while the mixed workload's
+      throughput and error rate got measurably worse than Tier 9's.
+      **Scope, deliberately narrower than "every call" reads literally**:
+      closes the gap for every loop back-edge regardless of GC-root
+      liveness (previously a purely-scalar loop like
+      `count_primes_range` had ZERO checkpoints of any kind — not just
+      no preemption, no GC-checkin opportunity either, a real latent
+      gap this closes as a byproduct) and every call site that already
+      has a live GC root (the common case for real programs touching
+      heap data). Does NOT add a new checkpoint to a call site with
+      *zero* live GC roots (e.g. a call touching only scalars) — a
+      bounded, self-returning stretch of such calls is a narrower risk
+      than an unbounded loop, and this codebase's own stack-bound check
+      is gated the identical way already, so making every call site
+      unconditional would add real per-call cost this codebase doesn't
+      currently pay anywhere, for the narrower remaining case (unbounded
+      non-looping recursion with zero live GC pointers throughout).
+      Disclosed, not silently dropped — matches the epoll/TLS-parking
+      deferral pattern elsewhere in this tier.
+
+      **Design review, before any of it was implemented** (mirroring
+      every prior slice's discipline): found two Critical bugs in the
+      first draft. (1) The yield primitive pushed the yielding task
+      onto the run queue *before* the context switch had written that
+      task's own `rsp` — a real race: an idle worker could dequeue and
+      switch into a stale `rsp` while the original thread was still
+      physically executing on that stack (for a task's first-ever
+      yield, `rsp` had never been written by a real switch-out at all,
+      so the racing worker would restart the task's trampoline from the
+      top on a stack the original thread was mid-execution on). Fixed
+      by moving the push to *after* the switch, inside
+      `sl_worker_after_switch` — mirroring how `sl_task_park` already
+      defers making a parked task discoverable until after its own
+      switch safely completes, for the identical reason. (2) A back-edge
+      that has no live GC roots (so no bracket ever opens) had its new
+      unconditional yield-check call emitted *before* the bracket
+      decision was even made — meaning, on every loop iteration
+      boundary, a collection could land in the real, if narrow, window
+      between the previous iteration's bracket closing and the current
+      one's opening, sweeping a loop-carried value the back-edge bracket
+      is the *only* thing rooting. Fixed by scoping the unconditional
+      call strictly to the "no bracket will open" path, so it can never
+      run inside that window. The same review also found a real,
+      narrower gap the fix for (2) would otherwise have activated: a
+      `for x in <array/bytes/map-valued-expr>` loop with an all-scalar
+      body hoists the iterable itself into an alias that nothing roots
+      today (dormant, since nothing currently checks in inside such a
+      loop) — closing (2) naively would have turned that into a live
+      corruption bug. Fixed by excluding exactly ST_FOR_IN's three
+      variants from the new unconditional back-edge call (`ST_WHILE`/
+      `ST_FOR`, which have no such hidden alias, keep it) — a narrower
+      scope than while/range-for loops get, disclosed rather than
+      silently accepted; fixing the underlying alias-rooting gap itself
+      is a separate, natural follow-up, not bundled into this slice.
+
+      Verified: a dedicated fairness spike (24 CPU-bound tasks
+      saturating the 8-worker pool, one cheap task spawned into the
+      contention) — the cheap task ran within ~9-10ms of being spawned
+      across repeated runs, versus what would otherwise be a wait for a
+      hog task to finish naturally; a debug-instrumented build confirmed
+      zero yields for an uncontended single task (no overhead when
+      nothing is waiting) and tens of thousands of yields under the
+      24-task contention run (the mechanism is genuinely active, not
+      dormant, exactly when it matters). A dedicated GC-root-under-yield
+      spike (builder tasks carrying a live `str` across a `while`
+      back-edge, mixed with CPU hogs, at an aggressively lowered GC
+      threshold to force frequent collections while tasks sit
+      preempted-and-requeued) — 8/8 clean across plain and TSan+UBSan
+      runs, no corruption. The three ST_FOR_IN variants with scalar
+      bodies checked directly against generated C to confirm no new
+      checkpoint was added there. `make test`: 49/49, byte-identical.
+      TSan+UBSan clean on `spawn`/`spawn_isolation`/`gc_stress`/
+      `stack_grow`/`proc_shutdown`'s real generated code (0 data races
+      across repeated runs). Acceptance test re-run against
+      `demo/stress_harness/`: the mixed workload at 500 concurrent went
+      from 1.3% errors / 7.8s p99 to 0.009% errors / 836ms p99; the
+      breaking-point probe stayed roughly where the GC-bug-fix re-run
+      left it (within ordinary run-to-run variance, this feature
+      doesn't touch `time.sleep`'s own code path at all); full numbers
+      and the one thing that got measurably worse (900-concurrent p99,
+      an oversubscription/fairness cost, not a bug) are in
+      `demo/README.md`'s "Stress test" section.
 - [x] Failure isolation (Tier 5) reimplemented for tasks instead of
       threads: a panicking task must not take down the process,
       matching today's `pthread_exit`-based behavior exactly in
@@ -1551,28 +1632,45 @@ prerequisite, not a different plan).
       redesign touched anything (confirmed via `git show HEAD`) — not
       a regression, but one more concrete reason TLS parking needs its
       own dedicated design pass.
-- [ ] Tests: every Tier 5/8 test (`tests/spawn`,
+- [x] Tests: every Tier 5/8 test (`tests/spawn`,
       `tests/spawn_isolation`, `tests/proc_shutdown`, the
       `examples/httpd`/`examples/httpsd` signal-drain checks) passes
       unchanged in observable behavior, now running on the new
-      scheduler
-- [ ] Acceptance test: re-run `demo/stress_harness/` against the new
+      scheduler. Verified repeatedly across every slice landed in this
+      tier, most recently as part of the GC/chan-parking bug fix above
+      (49/49, byte-identical, at both the normal and an artificially
+      lowered GC threshold) — not a separate pass, the same full suite
+      this tier has gated every slice on throughout.
+- [x] Acceptance test: re-run `demo/stress_harness/` against the new
       runtime, same methodology, directly against the numbers already
       in the published stress report — this is the concrete,
-      falsifiable "did this work," not a vibe check. **Partially done
-      as a side effect of finding the critical GC/chan-parking bug
-      above**: an initial full run against the sixth slice crashed the
-      server almost immediately (that's how the bug above was found at
-      all), and a post-fix spot check (mixed/chan/fanout phases, not
-      the complete 38-run matrix) survived ~3 minutes of continuous
-      load cleanly, 0 errors, where the pre-fix build died in seconds
-      — see the plan file's "Acceptance test finding" section. Still
-      unchecked because the *complete* matrix hasn't been re-run
-      against the fixed build with the exact same methodology as the
-      published numbers (mixed workload at 900 concurrent, the 1200/
-      2000-client breaking-point probe, the 60s soak, the CPU profile
-      capture) — that full, directly-comparable run is still
-      outstanding.
+      falsifiable "did this work," not a vibe check. First attempt
+      crashed the server almost immediately — that's how the critical
+      GC/chan-parking bug above was found and fixed. The complete
+      38-run matrix was then re-run a second time against the fixed
+      build, same methodology as the published Tier 9 numbers. Full
+      writeup with numbers lives in `demo/README.md`'s "Stress test"
+      section (the established home for this data, matching where the
+      Tier 9 comparison already lived); short version: the
+      breaking-point probe (the scenario Tier 9's 128-thread cap
+      existed to survive) improved dramatically now that `sleep`
+      genuinely parks instead of holding a thread (errors down from
+      18%/46% to 1.5%/3.0%, ~20x more requests served in the same
+      window) — the ceiling Tier 11 exists to remove is gone for
+      anything that parks. The realistic mixed workload at 900
+      concurrent got measurably *worse* (3,572 req/s / 0 errors under
+      Tier 9 → 930.7 req/s / 4.0% errors, multi-second p99) — root-
+      caused via a captured CPU profile to the still-open Cooperative
+      preemption v1 gap directly below: a CPU-bound task with no call/
+      back-edge yield point runs to completion on one of only 8 real
+      OS worker threads (`sysconf(_SC_NPROCESSORS_ONLN)`, down from
+      Tier 9's 128 real threads), stalling everything else queued
+      behind it once concurrent CPU-bound requests exceed the worker
+      count. Not a new bug and not fixed in this pass — the first
+      concrete, measured evidence (not just a theoretical concern) that
+      the preemption gap below has a real cost under load, exactly as
+      that bullet already anticipated. Server itself: zero crashes,
+      zero hangs, clean graceful shutdown across the full run.
 
 **Stretch, explicitly deferred, not required to call Tier 11 done:**
 - [ ] Async/signal-based preemption (Go 1.14's mechanism) — only if

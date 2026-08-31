@@ -21,14 +21,54 @@
  * loop with no calls at all, or a call to a builtin/native function,
  * neither of which get one -- see todo.md's Tier 10 notes). Returns
  * 1 (bracket opened; caller must emit "sl_rt_safepoint_exit();"
- * after the body) or 0 (empty set, nothing emitted, nothing to
- * close) -- matching every other bracket built so far, skipped
- * entirely when there's nothing to protect (the common case for a
- * purely numeric loop). */
-static int emit_backedge_enter(CG *cg, void *backedge_live_set) {
+ * after the body) or 0 (empty set, nothing emitted but for the direct
+ * yield-check call below, nothing to close) -- matching every other
+ * bracket built so far, skipped entirely when there's nothing to
+ * protect (the common case for a purely numeric loop).
+ *
+ * Tier 11 seventh slice (cooperative preemption v1): when n == 0, no
+ * bracket opens and (before this slice) NOTHING was emitted at all --
+ * meaning a purely-scalar tight loop (e.g. demo/stress/stress.sl's
+ * count_primes_range, the exact motivating case) had zero checkpoints
+ * of any kind, GC or preemption. `direct_yield_ok` lets most such
+ * loops get one anyway: call sl_rt_maybe_yield() directly, unbracketed,
+ * right at loop-body entry. Deliberately NOT done for ST_FOR_IN's three
+ * variants (array/bytes/map) even at n == 0 -- an independent design
+ * review found that those loops hoist a GC-pointer alias (_sl_itN/
+ * _sl_btN/_sl_mN, the iterable itself) OUTSIDE any bracket, dereferenced
+ * every iteration; today that's dormant (n == 0 means nothing ever
+ * checks in inside such a loop, so nothing can collect it out from
+ * under the alias), and activating a checkpoint there would turn that
+ * dormant rooting gap into a live one. ST_WHILE/ST_FOR have no such
+ * hidden alias -- a numeric range loop's bounds are plain `long long`s
+ * -- so they pass 1. Fixing ST_FOR_IN's own alias-rooting gap is a
+ * separate, disclosed follow-up (see the Tier 11 plan), not bundled
+ * into this slice. */
+static int emit_backedge_enter(CG *cg, void *backedge_live_set,
+                                int direct_yield_ok) {
     int n = live_set_nnamed(backedge_live_set);
-    if (n == 0)
+    if (n == 0) {
+        /* Nothing to root, so no ordering hazard: this call can safely
+         * run before anything else here, since there's no bracket for
+         * it to run "inside of" one way or the other. Must NOT be
+         * emitted unconditionally before this check for loops that DO
+         * open a bracket below -- an earlier draft did exactly that,
+         * and a design review caught it: sl_rt_maybe_yield() calls
+         * sl_rt_gc_checkin(), which can run a full collection, and
+         * every loop iteration boundary between this point and the
+         * bracket opening a few lines down is a real window where the
+         * PREVIOUS iteration's bracket has already closed
+         * (sl_rt_safepoint_exit, at the bottom of the loop body) and
+         * the CURRENT iteration's hasn't opened yet -- exactly where a
+         * loop-carried GC pointer named in backedge_live_set is
+         * unrooted. Scoping the unconditional call to the n == 0 path
+         * only (nothing to root either way) closes that window; the
+         * n > 0 path below already reaches sl_rt_maybe_yield correctly,
+         * via sl_rt_safepoint_enter, AFTER its roots are linked in. */
+        if (direct_yield_ok)
+            emit_line(cg, "sl_rt_maybe_yield();");
         return 0;
+    }
     int id = cg->tmp_id++;
     StrBuf roots;
     sb_init(&roots);
@@ -358,7 +398,7 @@ void gen_stmt(CG *cg, Stmt *s) {
         char *cond = gen_expr(cg, s->as.while_stmt.cond);
         emit_line(cg, "while (%s) {", cond);
         cg->indent++;
-        int has_bp = emit_backedge_enter(cg, s->backedge_live_set);
+        int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 1);
         cg->loop_depth++;
         int saved_loop_bp = cg->cur_loop_has_bp;
         cg->cur_loop_has_bp = has_bp;
@@ -393,7 +433,7 @@ void gen_stmt(CG *cg, Stmt *s) {
         emit_line(cg, "for (long long %s = %s; %s %s %s; %s++) {", vname,
                   start, vname, op, endvar, vname);
         cg->indent++;
-        int has_bp = emit_backedge_enter(cg, s->backedge_live_set);
+        int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 1);
         cg->loop_depth++;
         int saved_loop_bp = cg->cur_loop_has_bp;
         cg->cur_loop_has_bp = has_bp;
@@ -427,7 +467,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
-            int has_bp = emit_backedge_enter(cg, s->backedge_live_set);
+            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0);
             emit_line(cg, "%s %s = (*(%s *)(void *)sl_arr_get(_sl_it%d, "
                           "_sl_i%d, sizeof(%s)));",
                       ec, vname, ec, id, id, ec);
@@ -457,7 +497,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
-            int has_bp = emit_backedge_enter(cg, s->backedge_live_set);
+            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0);
             emit_line(cg, "long long %s = (long long)_sl_bt%d->ptr[_sl_i%d];",
                       vname, id, id);
             cg->loop_depth++;
@@ -496,7 +536,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
-            int has_bp = emit_backedge_enter(cg, s->backedge_live_set);
+            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0);
             emit_line(cg, "long long _sl_slot%d = _sl_m%d->order[_sl_i%d];",
                       id, id, id);
             emit_line(cg,
