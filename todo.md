@@ -1418,6 +1418,33 @@ prerequisite, not a different plan).
       respectively, each bounded by a forked+`alarm()`-bounded child so
       neither risks hanging the test binary itself) before confirming
       the fixed path is clean across thousands of iterations.
+
+      **Correction, found much later (sixth slice's own acceptance
+      test, not this bullet's own verification at the time):** the
+      real-generated-code TSan/manual checks above genuinely did
+      exercise parking, but not under enough real GC pressure +
+      worker-pool contention at once to hit a critical bug in exactly
+      this slice's own work — a resumed task could sit on the run
+      queue, waiting for a free worker, with the collector's run-queue
+      walk marking only its `entry_arg` and never its safepoint chain
+      (an assumption, true before parking existed, that a queued task
+      "hasn't started running yet, so has no chain" — false the
+      instant `sl_task_resume` started pushing already-parked-and-
+      resumed tasks onto that same queue) — silently freeing whatever
+      the task alone still held live (e.g. a value just received via
+      `chan_recv`) if a collection landed while it waited. A second,
+      related bug in `sl_task_resume` itself (a brief window,
+      releasing `sl_gc_mu` before the run-queue push, where a resumed
+      task was in none of the collector's three root sources at all)
+      compounded it — both are now fixed (`sl_gc_collect`'s run-queue
+      walk, `sl_task_resume`, both `runtime_gc.c`/`runtime_pool.c`).
+      Full writeup, bisection, and verification live in
+      `.claude/plans/synthetic-beaming-volcano.md`'s "Acceptance test
+      finding" section (sixth slice). Kept here rather than only
+      there since this bullet's own original verification claims are
+      exactly what turned out to be insufficient — a future reader
+      checking this bullet's history should see the correction next
+      to the original claim, not only in a later slice's own notes.
 - [x] `spawn` creates a scheduled task, not a `pthread_create` call.
       `stmt.c`'s `ST_SPAWN` now calls `sl_task_submit` (the shared run
       queue from the scheduler-foundation bullet above) instead of
@@ -1532,7 +1559,20 @@ prerequisite, not a different plan).
 - [ ] Acceptance test: re-run `demo/stress_harness/` against the new
       runtime, same methodology, directly against the numbers already
       in the published stress report — this is the concrete,
-      falsifiable "did this work," not a vibe check
+      falsifiable "did this work," not a vibe check. **Partially done
+      as a side effect of finding the critical GC/chan-parking bug
+      above**: an initial full run against the sixth slice crashed the
+      server almost immediately (that's how the bug above was found at
+      all), and a post-fix spot check (mixed/chan/fanout phases, not
+      the complete 38-run matrix) survived ~3 minutes of continuous
+      load cleanly, 0 errors, where the pre-fix build died in seconds
+      — see the plan file's "Acceptance test finding" section. Still
+      unchecked because the *complete* matrix hasn't been re-run
+      against the fixed build with the exact same methodology as the
+      published numbers (mixed workload at 900 concurrent, the 1200/
+      2000-client breaking-point probe, the 60s soak, the CPU profile
+      capture) — that full, directly-comparable run is still
+      outstanding.
 
 **Stretch, explicitly deferred, not required to call Tier 11 done:**
 - [ ] Async/signal-based preemption (Go 1.14's mechanism) — only if
