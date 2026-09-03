@@ -2093,21 +2093,39 @@ prerequisite, not a different plan).
       real ordering/caching effect, or a latent race whose window only
       opens wide enough once the code is optimised.
 
-      `sl_worker_after_switch`'s three branches are mutually exclusive
-      (preempted → push and return; parked → return; else free), so a
-      single call cannot both push and free. That leaves the same
-      `sl_task*` reaching dispatch twice. Two leads worth taking in
-      order: (a) the node being linked into a run queue twice — a
-      double-`sl_task_resume` would do it, and this tier's own reactor
-      review already found and fixed one double-resume of exactly that
-      shape; (b) the compiler caching `t->preempted` / `t->parked`
-      across `sl_ctx_switch`, which is passed `t->rsp` by value and
-      never `t` itself, so nothing in the call signature tells it those
-      fields can change — sending `sl_worker_after_switch` down the
-      wrong branch.
+      The exact interleaving is now pinned down. Adding a `dbg_queued`
+      flag to `sl_task` — set in `sl_runq_push_raw` and cleared in every
+      dequeue path (`sl_runq_try_pop`, `sl_runq_pop_blocking`, and the
+      task `sl_runq_steal_half` returns for immediate dispatch) — and
+      asserting on it at four points gives a very sharp result:
 
-      Next step is to find how a queued `sl_task*` outlives the `free()`
-      of the struct it names. (An earlier guess here — dead-store
+      | check | fires? |
+      |---|---|
+      | `FREE WHILE QUEUED` (completion branch, flag still set) | **yes** |
+      | `DISPATCH WITH NULL rsp` | **yes** |
+      | `DOUBLE PUSH` (push with flag already set) | no |
+      | `DISPATCH WHILE QUEUED` | no |
+
+      No double-push, and dispatch always sees a properly dequeued task,
+      so only one sequence fits: (1) a worker pushes preempted task `t`;
+      (2) another worker dequeues it — clearing the flag — and starts
+      running it; (3) something pushes `t` **again while it is running**,
+      which evades a naive double-push check precisely because step 2
+      cleared the flag; (4) `t` completes and the completion branch
+      frees it while that second link is still live. The `NULL rsp`
+      dispatch is downstream: a later dequeue walks the stale link into
+      recycled memory.
+
+      So the question is no longer "how is a queued task freed" but
+      **"who pushes a task that is already running?"** Candidates, in
+      order: `sl_task_resume` called on a task that is not actually
+      parked (e.g. a `chan` waiter popped off a wait list twice, the
+      same shape as the double-resume this tier's reactor review already
+      found and fixed once); and `sl_worker_after_switch` taking its
+      preempted branch on a stale `t->preempted`, which is plausible at
+      `-O2` because `sl_ctx_switch` receives `t->rsp` by value and never
+      `t` itself, so nothing in the signature says that field can change
+      across the call. (An earlier guess here — dead-store
       elimination around `sl_ctx_make`'s initial-frame writes — is ruled
       out by the field dump: the problem is the whole struct, not the
       frame it builds.) After that, the cross-cutting TLS audit this item always
