@@ -1672,11 +1672,150 @@ prerequisite, not a different plan).
       that bullet already anticipated. Server itself: zero crashes,
       zero hangs, clean graceful shutdown across the full run.
 
-**Stretch, explicitly deferred, not required to call Tier 11 done:**
-- [ ] Async/signal-based preemption (Go 1.14's mechanism) — only if
-      real workloads show the cooperative-only gap above actually
-      matters in practice
+- [x] Async/signal-based preemption (Tier 11, eighth slice): the
+      cooperative-only gap the stretch bullet above named — a CPU-
+      bound task with no call/back-edge yield point — closed by a
+      real, Go-1.14-style mechanism: a ticker thread sends `SIGUSR1` to
+      any pool worker running a task past its quantum; a handler
+      rewrites the interrupted thread's saved PC to a trampoline
+      (stack-range veto, trampoline-range veto, and
+      `preempt_disable_depth` all gate whether it may act); the
+      trampoline saves the *full* register file (not just callee-saved
+      — RFLAGS, all GPRs, XMM0-15, plus the x86-64 red-zone skip) onto
+      the task's own stack before falling through to the existing,
+      unmodified `sl_task_yield_now`/`sl_ctx_switch`/
+      `sl_worker_after_switch` machinery, so a value live only in a
+      register at the interrupted instant is never lost. A dedicated
+      conservative stack scan (`sl_gc_collect`'s run-queue walk, gated
+      on a per-task `async_preempted` flag) covers the one gap the
+      precise safepoint chain structurally cannot: the narrow window
+      between `sl_gc_alloc` returning a pointer and generated code
+      storing it into a rooted slot, which cooperative checkpoints are
+      compiler-guaranteed to never land in but an arbitrary-instruction
+      async signal has no such guarantee against.
+
+      Landed in two rollout steps (occupant table + ticker +
+      `preempt_disable_depth` plumbing, then the real handler/
+      trampoline/conservative scan), each gated on the full suite
+      staying green, matching this tier's own established discipline.
+      What made this slice unusually hard, and unusually informative,
+      is that async preemption's core property — a signal can land at
+      *any* instruction boundary, not just compiler-placed checkpoints
+      — turned out to be the sharpest tool this project has had yet for
+      finding latent bugs nothing before it could reach. Real,
+      distinct bugs found and fixed during rollout and hardening, in
+      the order they were found:
+        - `sl_chan_send`/`recv`, `sl_reactor_wait`, `sl_time_sleep`:
+          each mutates `sl_task.next` (shared with the run-queue
+          linkage) while registering onto its own wait list, then
+          calls `sl_task_park` — unbracketed, so a signal landing in
+          that window could divert the task through the async path,
+          which overwrites the same `->next` link via
+          `sl_worker_after_switch`'s own push, corrupting whichever
+          list lost the race. Fixed: bracketed entry-to-return.
+        - `sl_task_stack_grow`: primes the *thread-local* grower
+          scratch stack, then switches into it — unbracketed, so an
+          interrupt resumed on a *different* worker read that worker's
+          own unrelated (stale or uninitialized) grower state. Fixed:
+          bracketed entry-to-return.
+        - `sl_rt_error`'s panic-abandon path and `%s_entry`'s (every
+          spawned task's) normal-completion path both did a raw
+          `sl_ctx_switch(&t->rsp, sl_rt_native_rsp)` with no bracket.
+          `sl_rt_native_rsp` is thread-local; interrupted mid-switch
+          and resumed on a different worker, the resumed code finished
+          the switch using the *original* thread's stale value —
+          putting two OS threads on one native stack. The second of
+          these is on the single most-executed code path in any
+          task-heavy workload. Fixed: bracketed.
+        - A genuine use-after-free between the ticker thread and task
+          completion: the occupant-table `.cur` field was cleared
+          *after* `sl_worker_after_switch` returned, but that function's
+          own normal-completion branch frees the task struct directly
+          — and the ticker doesn't just check `.cur` for non-NULL, it
+          *dereferences* the task it names before ever deciding to
+          signal. Fixed with a dedicated mutex serializing the ticker's
+          read-dereference-signal sequence against completion's
+          clear-then-free.
+        - A codegen gap: `m[key] = value` never wrapped the actual
+          `sl_map_put` call in a GC safepoint bracket, unlike every
+          other GC-triggering call (which all go through `gen_call`'s
+          `wrap_safepoint` — this is a hand-emitted statement, not an
+          `EX_CALL` node, so it was missed). Confirmed via
+          AddressSanitizer as a real heap-use-after-free. Fixed in
+          `stmt.c`'s codegen.
+        - `sl_map_grow`: saves the *old* key/value/order buffers into
+          plain C locals, then reassigns the owning struct's own
+          fields to freshly allocated buffers in sequence — orphaning
+          the old ones from the only thing that rooted them *before*
+          its own reinsertion loop is done reading them. Confirmed
+          live via lldb: `sl_hash_str(NULL)`, a previously-inserted key
+          already swept. Fixed: bracketed `sl_map_grow`/`sl_map_put`/
+          `sl_map_del` in full.
+        - The deepest one, and the one that had been producing every
+          remaining crash under the ones above: reading a
+          `_Thread_local` on Darwin is not a single instruction — it's
+          a call through the variable's TLV descriptor into dyld's own
+          `_tlv_get_addr`, which hands back *the calling thread's*
+          address for that variable, dereferenced immediately after.
+          A task async-preempted inside that call, or on the single
+          instruction after it returns, resumes on a *different*
+          worker holding the *original* worker's now-stale slot
+          address — every subsequent caller silently operates on
+          whatever task that worker is running instead. This alone
+          explained every remaining symptom: `preempt_disable_depth`
+          drifting negative (an increment landing on one task, its
+          matching decrement, a fresh and correct read, landing on
+          another), and `safepoint_top` corruption (a function that
+          reads the thread-local twice — once to load `->prev`, once
+          to store it back — silently over-popping a stranger's
+          chain). Forcing a single-instruction TLS model doesn't work
+          (verified directly: `tls_model("local-exec")`/
+          `("initial-exec")` both still emit the identical
+          `_tlv_get_addr` call on this toolchain), and a PC-range veto
+          can't close it either, since the vulnerable window straddles
+          dyld's own text and the caller's. Fixed by detecting the
+          migration instead of preventing it: a global, non-thread-
+          local generation counter (`sl_rt_async_epoch`), bumped by the
+          resume path on the far side of every async suspension; a new
+          `sl_rt_cur()` reads the counter, then the thread-local, then
+          the counter again, and retries if they disagree — a read
+          that observes the same value on both sides provably didn't
+          straddle a suspension of its own task. Every reachable-with-
+          `preempt_disable_depth==0` read of `sl_rt_current_task` now
+          goes through it.
+
+      Verification, independent of and beyond what gated each rollout
+      step: `make test` 49/49 byte-identical after every fix; the
+      `stress_test/programs/concurrent_compute` workload (5,000 short-
+      lived spawned tasks, each doing real CPU work plus building a
+      `map[str]int`) at 20/20 clean runs with byte-correct results, a
+      15,000-task run clean, and 4/4 clean UBSan runs — re-run
+      independently, not just trusted from the fixes' own verification.
+
 - [ ] Concurrent marking + write barriers in Tier 10's collector, if
       measured STW pause time under real load demands it
 - [ ] `io_uring` reactor backend for Linux, behind the same interface
       as the kqueue/epoll backend, if warranted
+- [ ] An epoll backend (Linux) — not a performance item, a production-
+      readiness one: the reactor is kqueue-only today, and real
+      deployment targets are overwhelmingly Linux
+- [ ] Work-stealing, per-worker run queues instead of one global
+      mutex-guarded queue — the leading explanation for the HTTP
+      concurrency cliff observed at 500-2,000 concurrent in the stress
+      report; the most Go-shaped, most-precedented fix for that
+      specific symptom
+- [ ] Shrink the initial task stack (64KB today) toward the low
+      single-digit KB Go uses, leaning on cheap, frequent growth —
+      directly raises the safe concurrent-task ceiling for the same
+      memory budget; the stress report's own test capped out at 20k
+      tasks instead of a hoped-for 100k for exactly this reason
+- [ ] Turn on `-O2` for the generated C — blocked by a hazard
+      confirmed twice now, not just suspected: `sl_rt_current_task` is
+      thread-local, and an optimizing compiler is free to cache a
+      pointer derived from it across a call that might migrate the
+      task to a different OS thread. `sl_rt_cur()` (added by the async-
+      preemption slice above) is the fix's foundation but not
+      automatically the whole fix at `-O2` — confirm the compiler can't
+      CSE a `_tlv_get_addr` result *through* `sl_rt_cur()`'s own retry
+      loop before flipping this on, not just assume the loop alone
+      suffices

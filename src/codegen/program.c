@@ -516,11 +516,29 @@ void emit_spawn_trampolines(CG *cg) {
          * since a task that panics never reaches this line -- both
          * paths must decrement exactly once. */
         emit_line(cg, "sl_rt_active_spawns_dec();");
-        /* switch OUT of the task, back into the worker loop's native
-         * context (runtime_pool.c) -- opposite argument order from the
-         * worker's own switch INTO the task: this call's job is to save
-         * this (finished) task context into sl_rt_current_task->rsp and
-         * resume whatever sl_rt_native_rsp holds, not the reverse. */
+        /* Tier 11 eighth slice: bracketed -- see sl_rt_error's own
+         * identical bracket and comment (runtime_core.c) for the exact
+         * hazard this closes, sharpened for this specific call site: an
+         * async signal landing mid-sl_ctx_switch, AFTER some but not all
+         * of its own callee-saved-register pushes but BEFORE its
+         * `mov %rsi,%rsp` has executed, diverts this task through the
+         * async trampoline instead. sl_rt_native_rsp -- %rsi's argument
+         * value here -- is _Thread_local: read ONCE, into a register,
+         * when this call's arguments are evaluated, on WHICHEVER worker
+         * thread first ran this task. The trampoline's own full-register
+         * save/restore faithfully preserves that already-loaded %rsi
+         * value across the suspension, so if this task is later resumed
+         * on a DIFFERENT worker (routine here -- any idle worker may
+         * dequeue any queued task), the resumed code finishes THIS SAME,
+         * now-stale sl_ctx_switch call and switches the NEW thread onto
+         * the ORIGINAL thread's own native scheduler stack -- two OS
+         * threads on one stack. Every spawned task hits this exact call
+         * exactly once, on completion, making it the single most-executed
+         * unbracketed switch in a task-heavy workload -- root-caused via
+         * concurrent_compute's own crashes (map/chan/array corruption in
+         * completely unrelated code, the signature of a hijacked native
+         * stack, not a clean fault at the bug's own site). */
+        emit_line(cg, "sl_rt_preempt_disable();");
         emit_line(cg, "sl_ctx_switch(&sl_rt_current_task->rsp, sl_rt_native_rsp);");
         emit_line(cg, "fprintf(stderr, \"slang: internal error: spawn task entry \"");
         emit_line(cg, "                \"resumed after switching back -- unreachable\\n\");");
@@ -797,7 +815,12 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
      * call from somewhere, regardless of which thread is inside
      * sl_worker_run_loop at that moment. */
     emit_line(cg, "    sl_worker_after_switch(sl_rt_main_task);");
-    emit_line(cg, "    sl_worker_run_loop();");
+    /* Tier 11 eighth slice: -1, not a real sl_pool_slots index -- this
+     * is main's own original OS thread, not one of sl_pool_workers[],
+     * and the async-preemption ticker's own scope note excludes it
+     * (only real pool workers are ever preemption targets in v1). See
+     * sl_worker_run_loop's own comment (runtime_pool.c). */
+    emit_line(cg, "    sl_worker_run_loop(-1);");
     emit_line(cg, "    return 0; /* unreachable: sl_worker_run_loop only returns on shutdown */");
     emit_line(cg, "}");
 }
