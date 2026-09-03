@@ -56,7 +56,8 @@ type sample struct {
 func main() {
 	configPath := flag.String("config", "", "path to scenario JSON")
 	concurrency := flag.Int("concurrency", 50, "number of concurrent workers")
-	duration := flag.Duration("duration", 10*time.Second, "how long to run")
+	duration := flag.Duration("duration", 10*time.Second, "how long to run (safety cap when -requests is set; exact stop condition otherwise)")
+	requests := flag.Int("requests", 0, "stop after exactly this many total requests (0 = duration-based instead)")
 	ratePerSec := flag.Int("rate", 0, "target total requests/sec across all workers (0 = closed-loop, workers hammer as fast as possible)")
 	timeout := flag.Duration("timeout", 10*time.Second, "per-request timeout")
 	outPath := flag.String("out", "", "path to write JSON results (default: stdout)")
@@ -150,6 +151,9 @@ func main() {
 				return
 			default:
 			}
+			if *requests > 0 && atomic.AddInt64(&issued, 1) > int64(*requests) {
+				return
+			}
 			doOne(rng)
 		}
 	}
@@ -174,8 +178,8 @@ func main() {
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "[%s] starting: concurrency=%d duration=%s rate=%d req/s target=%s\n",
-		*label, *concurrency, *duration, *ratePerSec, sc.BaseURL)
+	fmt.Fprintf(os.Stderr, "[%s] starting: concurrency=%d duration=%s requests=%d rate=%d req/s target=%s\n",
+		*label, *concurrency, *duration, *requests, *ratePerSec, sc.BaseURL)
 
 	wg.Add(*concurrency)
 	if *ratePerSec > 0 {
@@ -199,7 +203,19 @@ func main() {
 	}()
 
 	runStart := time.Now()
-	time.Sleep(*duration)
+	if *requests > 0 {
+		// Exact-count mode: poll until enough requests have been issued
+		// (or the duration cap trips as a safety net against a stalled
+		// server never letting workers finish issuing), rather than a
+		// plain sleep -- the whole point is stopping at a precise count,
+		// not a precise wall-clock duration.
+		deadline := runStart.Add(*duration)
+		for atomic.LoadInt64(&issued) < int64(*requests) && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
+	} else {
+		time.Sleep(*duration)
+	}
 	close(stop)
 	wg.Wait()
 	close(results)
