@@ -2082,6 +2082,30 @@ prerequisite, not a different plan).
       place to start, against a queue reference that outlived it.
       Timing-dependent, which is why `-O0` never shows it.
 
+      ASan at `-O2` then confirmed it directly and named both ends.
+      Heap-use-after-free: thread T6 **reads** freed memory in
+      `sl_runq_try_pop` (`q->head = t->next` — a stale link still sitting
+      in a run queue), while thread T3 **freed** it in
+      `sl_worker_after_switch`'s normal-completion branch. So a task is
+      genuinely `free()`d while still linked into a queue, and a later
+      dequeue walks the dead node. The same ASan build at `-O0` is
+      **0/6** on identical source, so this is optimiser-dependent — a
+      real ordering/caching effect, or a latent race whose window only
+      opens wide enough once the code is optimised.
+
+      `sl_worker_after_switch`'s three branches are mutually exclusive
+      (preempted → push and return; parked → return; else free), so a
+      single call cannot both push and free. That leaves the same
+      `sl_task*` reaching dispatch twice. Two leads worth taking in
+      order: (a) the node being linked into a run queue twice — a
+      double-`sl_task_resume` would do it, and this tier's own reactor
+      review already found and fixed one double-resume of exactly that
+      shape; (b) the compiler caching `t->preempted` / `t->parked`
+      across `sl_ctx_switch`, which is passed `t->rsp` by value and
+      never `t` itself, so nothing in the call signature tells it those
+      fields can change — sending `sl_worker_after_switch` down the
+      wrong branch.
+
       Next step is to find how a queued `sl_task*` outlives the `free()`
       of the struct it names. (An earlier guess here — dead-store
       elimination around `sl_ctx_make`'s initial-frame writes — is ruled
