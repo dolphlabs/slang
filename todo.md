@@ -1876,19 +1876,41 @@ prerequisite, not a different plan).
       concurrency tests including `proc_shutdown` (the `slot_idx == -1`
       path) all matching expected output byte-for-byte.
 
-      **Still owed, and the reason this is not `[x]`:** every wall-clock
-      measurement taken during this work is void. The machine turned out
-      to be running two orphaned runaway processes from an earlier
-      session (one at 159% CPU for 13 hours) and later a system storage
-      scan, with load average between 7 and 105 throughout — which is
-      also why the numbers were wildly variable and why removing a mutex
-      once appeared to make things *slower*. No performance figure from
-      that period is quoted anywhere, in this file or in the code
-      comments. Owed on a quiet machine: the interleaved `worker_fanout`
-      A/B at fine/mid/coarse granularity, and the real acceptance test —
-      the HTTP stress phase at 500-2,000 concurrency against
-      `stress_test/reports/stress_report.html`. Until those run, whether
-      this feature is a net win at all is genuinely unknown.
+      **Performance, now measured properly.** The first round of timing
+      was taken on a machine running two orphaned runaway processes from
+      an earlier session (one at 159% CPU for 13 hours) plus a system
+      storage scan, load average 7-105 — which is why those numbers were
+      wildly variable and why removing a mutex once appeared to make
+      things *slower*. Every figure from that period was discarded, not
+      merely caveated. Re-run on a quiet machine with the two builds
+      **interleaved** (alternating order within each pair, so any
+      residual load drift hits both equally), baseline built from
+      `c36be6e` in a separate worktree, medians over 9 pairs (5 for
+      coarse):
+
+      | `worker_fanout` | baseline | work-stealing | |
+      |---|---|---|---|
+      | fine, 8000 x 750 | 1329ms | **998ms** | 25% faster |
+      | mid, 2000 x 3000 | 2333ms | **2068ms** | 11% faster |
+      | coarse, 400 x 30000 | 13067ms | **12520ms** | ~4%, within noise |
+
+      The fine-grained case — many small tasks, which is the shape HTTP
+      request handling actually has — is decisive: the two ranges do not
+      overlap at all (baseline min 1245ms > work-stealing max 1068ms).
+      No granularity regressed. Idle cost, same methodology: 0.13s CPU
+      per 10s idle for baseline against 0.20s here, versus **2.78s** for
+      the originally-planned 1ms poll (~28% of a core, mostly system
+      time) — the event-driven wakeup is what buys that back, and
+      idle-pool wakeup latency stays at 24-47us average against a 50ms
+      backstop, confirming the signal rather than the timeout is what
+      wakes a sleeping worker.
+
+      **Still owed:** the real acceptance test — the HTTP stress phase
+      at 500-2,000 concurrency against
+      `stress_test/reports/stress_report.html`'s existing numbers. The
+      microbenchmark above says the scheduler change is a win in
+      isolation; it does not by itself prove the concurrency cliff that
+      motivated this item is gone.
 
       One pre-existing bug surfaced but not fixed here: roughly 1 run in
       40 of `concurrent_compute` loses a single container element
