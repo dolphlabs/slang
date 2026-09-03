@@ -2057,19 +2057,36 @@ prerequisite, not a different plan).
       published correctly and then read back as NULL by the dequeuing
       worker. Some runs hang instead of faulting.
 
-      Scope, established rather than assumed: the same workload built
-      from `c36be6e` — before work-stealing existed — segfaults **8/8**
-      at `-O2`, and the identical instrumented source at `-O0` is
-      **8/8 clean**. So this is a pre-existing `-O2` defect in the core
-      scheduler, not a work-stealing regression, and not something the
-      `sl_rt_cur` fix was ever going to address.
+      Scope. A first attempt to establish this compared against
+      `c36be6e` and found 8/8 segfaults, but that comparison was
+      invalid and its result meaningless: `c36be6e` predates the
+      `SL_RT_TLS_CUR` fix, so it was still crashing in
+      `sl_rt_safepoint_exit` — the *already-fixed* bug — and said
+      nothing about this one. Redone correctly by applying the TLS fix
+      to the baseline's own generated C: that build reproduces the
+      identical `t->rsp == NULL` crash **10/10** at `-O2`, while the
+      same source at `-O0` is clean. So the conclusion stands, now
+      actually demonstrated: pre-existing `-O2` defect in the core
+      scheduler, not a work-stealing regression.
 
-      Next step is to root-cause that NULL. Worth ruling out early:
-      dead-store elimination or aliasing around `sl_ctx_make`, which
-      builds a task's initial frame by writing through a `void **` into
-      malloc'd memory that no C code ever reads back (only the hand-
-      written asm does) — exactly the shape an optimiser is entitled to
-      discard. After that, the cross-cutting TLS audit this item always
+      And it is not an uninitialised `rsp` at all. Dumping the task's
+      other fields at the faulting dispatch shows `t` is a
+      plausible-looking heap address whose struct contents are garbage
+      in most runs and **all zeros** in others — and all-zeros is
+      precisely a task that another thread's `sl_task_submit` has just
+      `memset`, i.e. a freshly recycled allocation. So `t` points at
+      memory that was freed and handed back out: a use-after-free of
+      `sl_task`, with `rsp == NULL` merely the first field the
+      dispatcher happens to touch. `sl_worker_after_switch`'s normal-
+      completion branch (`free(t->raw_base); free(t);`) is the obvious
+      place to start, against a queue reference that outlived it.
+      Timing-dependent, which is why `-O0` never shows it.
+
+      Next step is to find how a queued `sl_task*` outlives the `free()`
+      of the struct it names. (An earlier guess here — dead-store
+      elimination around `sl_ctx_make`'s initial-frame writes — is ruled
+      out by the field dump: the problem is the whole struct, not the
+      frame it builds.) After that, the cross-cutting TLS audit this item always
       described (every access spanning a context switch:
       `sl_rt_current_task`, `sl_rt_native_rsp`, the grower state), then
       re-verification of the suite, TSan **at `-O2`**, and the stress
