@@ -1990,4 +1990,63 @@ prerequisite, not a different plan).
       stakes here, because it makes cross-thread task migration
       common rather than occasional, which is why this surfaced under
       work-stealing at `-O1` when the pre-work-stealing code at the
-      same `-O1` did not
+      same `-O1` did not.
+
+      **The open question above is now answered: no, `sl_rt_cur()`'s
+      retry loop did NOT survive optimization — and the first step of
+      the fix has landed.** Probed by building all generated C at
+      `-O2`: `tests/spawn` and `tests/spawn_isolation` segfaulted in
+      ~35-45% of runs (`gc_stress`, `stack_grow` clean). lldb put the
+      fault in `sl_rt_safepoint_exit`, on `t->safepoint_top->prev` with
+      `safepoint_top` NULL — exactly the symptom that function's own
+      comment predicts. Disassembly showed why:
+
+          movq  sl_rt_async_epoch(%rip), %rcx
+          movq  sl_rt_async_epoch(%rip), %rdx
+          cmpq  %rdx, %rcx
+          jne   .retry
+          movq  0x20(%rax), %rcx      # %rax cached from far earlier
+
+      There is no `_tlv_get_addr` call inside the loop at all. Clang
+      hoisted both the TLS address resolution and the load out of it,
+      so the loop re-read the *guard* every iteration and never re-read
+      the *thing being guarded*. Entirely legal, and the reason matters
+      because it rules out the obvious fixes: `sl_rt_current_task` is
+      `_Thread_local`, so the compiler knows no other thread can write
+      it and may treat the read as loop-invariant. That also makes the
+      seq_cst atomics powerless — they order this thread's accesses as
+      other threads observe them; they do not compel re-reading a
+      variable the compiler has proved stable. (`sl_rt_cur`'s comment
+      claimed those two loads "pin the plain TLS read between them".
+      They do not; the disassembly settles it, and the comment is now
+      corrected in place.) `volatile` alone would not fix it either: it
+      forces the *load* to repeat while still allowing the thread-affine
+      *address* to be hoisted, which is the half that matters.
+
+      Fixed with `SL_RT_TLS_CUR()` — under `__OPTIMIZE__`, a
+      `noinline` accessor wrapping the read in empty `asm volatile`
+      memory barriers, so each iteration genuinely re-resolves the
+      thread-local; otherwise a macro expanding to the bare read.
+      The gate is a correctness statement, not a micro-optimisation:
+      the hazard *is* the optimiser, so at `-O0` the barrier fixes
+      nothing while costing a real un-inlinable call at every safepoint
+      enter and exit. Verified: at `-O2`, `spawn` went 9/20 failures →
+      **0/30**, and the full suite passes 3/3 consecutive runs; at
+      `-O0` the macro expands to `(sl_rt_current_task)`, byte-for-byte
+      the previous code (checked with `cc -E`, not by timing).
+
+      **`-O2` is still NOT ready to turn on.** With that fix in place,
+      `stress_test/programs/worker_fanout` at 2000 tasks still
+      segfaults at `-O2`, this time inside `sl_ctx_switch` itself. That
+      is a *different* site: the raw `sl_rt_current_task->rsp` reads
+      that are justified as "already inside a preempt bracket". The
+      justification is sound for async preemption but not for the
+      optimiser, which can still hoist a TLS-derived address across the
+      switch — and after the switch the task may be on a different OS
+      thread. So the remaining work is the cross-cutting audit this
+      item always described: every TLS access that spans a context
+      switch (`sl_rt_current_task`, `sl_rt_native_rsp`, the grower
+      state) needs the same treatment, followed by re-verification of
+      the suite, TSan **at `-O2`**, and the stress matrix. Do not flip
+      the flag in `src/main.c` until `worker_fanout` and the stress
+      programs are clean
