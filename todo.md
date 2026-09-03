@@ -1804,11 +1804,44 @@ prerequisite, not a different plan).
       concurrency cliff observed at 500-2,000 concurrent in the stress
       report; the most Go-shaped, most-precedented fix for that
       specific symptom
-- [ ] Shrink the initial task stack (64KB today) toward the low
-      single-digit KB Go uses, leaning on cheap, frequent growth —
-      directly raises the safe concurrent-task ceiling for the same
-      memory budget; the stress report's own test capped out at 20k
-      tasks instead of a hoped-for 100k for exactly this reason
+- [x] Shrink the initial task stack: 65536 → 16384 bytes (4x, not the
+      hoped-for low-single-digit-KB Go itself starts at — that target
+      turned out to be genuinely unsafe, not just untested, and is
+      disclosed as such rather than silently abandoned). Directly
+      raises the safe concurrent-task ceiling for the same memory
+      budget; the stress report's own test capped out at 20k tasks
+      instead of a hoped-for 100k for exactly this reason.
+
+      Two smaller candidates were tried and real-crash-confirmed
+      unsafe before landing on this one, not just assumed too small by
+      arithmetic: 2048 produced a real, reproducible heap corruption
+      (macOS malloc's own "Region cookie corrupted" check tripping) on
+      the very first `tests/tls` run, root-caused to OpenSSL's lazy,
+      one-time `SSL_CTX_new_ex` → `OPENSSL_init_crypto` →
+      `err_load_strings` init path — a deep, genuinely stack-hungry
+      native call chain with zero slang checkpoints anywhere inside
+      it, so the growth mechanism has no opportunity to intervene
+      before it overflows into whatever heap memory sits just past the
+      buffer. 8192 (this codebase's own former `SL_TASK_GUARD_MARGIN`
+      value, coincidentally) looked clean on a handful of runs but
+      still failed intermittently under real repetition (1 failure in
+      3 full test-suite runs) — the same false-confidence trap a
+      single clean run already produces for `SL_TASK_GUARD_MARGIN`'s
+      own tuning history. `SL_TASK_GUARD_MARGIN` itself (8192 → 1024)
+      was re-examined alongside this change, not left untouched — the
+      two can't be picked independently, since the margin has to stay
+      large enough to cover the async trampoline's own worst-case
+      footprint (~700-900 bytes) regardless of how small the stack
+      gets.
+
+      Verified to the same bar `SL_TASK_GUARD_MARGIN`'s own original
+      150+-run tuning set: 80 consecutive standalone `tests/tls` runs,
+      6 consecutive full test-suite runs, 15 consecutive `tests/nettest`
+      runs, 23 `stress_test/programs/concurrent_compute` runs, and 4
+      clean UBSan runs — including `tests/stack_grow`, which forces
+      50,000 levels of checkpointed recursion (many stack doublings,
+      not just one) and is this codebase's own most direct exercise of
+      the growth mechanism at the new size.
 - [ ] Turn on `-O2` for the generated C — blocked by a hazard
       confirmed twice now, not just suspected: `sl_rt_current_task` is
       thread-local, and an optimizing compiler is free to cache a
