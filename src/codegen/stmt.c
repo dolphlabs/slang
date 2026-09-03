@@ -332,11 +332,60 @@ void gen_stmt(CG *cg, Stmt *s) {
                               tgt->as.index.index, &prelude);
             char *val = maybe_cast(cg, v, vt, gen_expr(cg, s->as.assign.value));
             cg->ambient_count = ambient_mark;
-            emit_line(cg,
-                      "({ %s%s _sl_k = %s; %s _sl_v = %s; sl_map_put(%s, "
-                      "&_sl_k, &_sl_v); });",
-                      prelude.data, ctype_of(cg, k), ix, ctype_of(cg, v), val,
-                      b);
+            /* Tier 11 eighth slice: sl_map_put itself was never wrapped in
+             * a safepoint bracket, unlike every other GC-triggering call
+             * this codegen ever emits (gen_call's own wrap_safepoint
+             * covers every ordinary user/method/builtin call) -- this is
+             * a hand-emitted statement, not an EX_CALL-shaped node, so it
+             * never went through that path at all. _sl_k/_sl_v are
+             * genuinely unrooted between here (prelude's own inner
+             * brackets, if any -- e.g. around a call that produced ix --
+             * have already closed) and sl_map_put's own internal use of
+             * them; sl_map_put can itself call sl_gc_alloc (via
+             * sl_map_grow), and does not root the new key/value in its
+             * own table until after that grow completes. Cooperative
+             * preemption alone never exposed this -- nothing calls
+             * sl_rt_gc_checkin between here and sl_map_put returning, and
+             * sl_map_put/sl_map_grow are hand-written runtime functions
+             * with no checkin call of their own -- but async preemption
+             * can interrupt at any instruction boundary, including deep
+             * inside sl_map_grow, with no such guarantee. Root-caused via
+             * concurrent_compute's own map[str]int-building loop
+             * (m[to_str(i)] = i), confirmed directly with AddressSanitizer
+             * (heap-use-after-free in sl_hash_str, reading a str key that
+             * had already been swept). Fixed the same way every other
+             * risky call site in this codebase already is: an explicit
+             * bracket around the call, rooting whichever of _sl_k/_sl_v
+             * are actually GC pointers (a plain int/bool/float one is
+             * never registered -- same discipline sequence_one's own
+             * comment states for exactly this reason). */
+            int k_is_ptr = type_is_gc_ptr(cg, k);
+            int v_is_ptr = type_is_gc_ptr(cg, v);
+            if (k_is_ptr || v_is_ptr) {
+                StrBuf roots;
+                sb_init(&roots);
+                if (k_is_ptr)
+                    sb_append(&roots, "(void *)_sl_k");
+                if (v_is_ptr) {
+                    if (k_is_ptr)
+                        sb_append(&roots, ", ");
+                    sb_append(&roots, "(void *)_sl_v");
+                }
+                emit_line(cg,
+                          "({ %s%s _sl_k = %s; %s _sl_v = %s; "
+                          "void *_sl_mp_roots[] = { %s }; sl_safepoint _sl_mp_sp; "
+                          "sl_rt_safepoint_enter(&_sl_mp_sp, _sl_mp_roots, %d); "
+                          "sl_map_put(%s, &_sl_k, &_sl_v); "
+                          "sl_rt_safepoint_exit(); });",
+                          prelude.data, ctype_of(cg, k), ix, ctype_of(cg, v),
+                          val, roots.data, k_is_ptr + v_is_ptr, b);
+            } else {
+                emit_line(cg,
+                          "({ %s%s _sl_k = %s; %s _sl_v = %s; sl_map_put(%s, "
+                          "&_sl_k, &_sl_v); });",
+                          prelude.data, ctype_of(cg, k), ix, ctype_of(cg, v),
+                          val, b);
+            }
             break;
         }
         char *i = gen_expr(cg, tgt->as.index.index);
