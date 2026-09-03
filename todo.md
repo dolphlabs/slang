@@ -2132,10 +2132,44 @@ prerequisite, not a different plan).
       the same double-resume shape this tier's own reactor review found
       and fixed once before, in a different wait list.
 
-      Remaining work: establish how a `chan` waiter gets resumed while
-      running (popped from a wait list twice, or resumed after already
-      being taken off it), fix it, and re-run this instrumentation to
-      confirm the trip disappears. Then return to the rest of the `-O2`
+      Narrowed further, though the causal chain is **not yet closed**.
+      Four more assertions, all on the `chan` path:
+
+      | check | fires? |
+      |---|---|
+      | `RESUME OF UNPARKED TASK <- chan_recv_wakes_sender` | **yes** |
+      | `DOUBLE WAIT-LIST PUSH` (same task pushed twice) | no |
+      | `POP OF TASK NOT IN WAIT LIST` (list corrupted) | no |
+      | `FREE WHILE QUEUED by sl_task_resume` | yes (as before) |
+
+      So the popped sender genuinely was in `send_waiters`, exactly once,
+      and was popped exactly once — yet `sl_task_resume`'s search of
+      `sl_parked_tasks` does not find it. That is the sharp remaining
+      contradiction, because the park handshake looks airtight on
+      inspection: `sl_chan_send` holds `c->mu` from before
+      `sl_chan_wl_push` through `sl_task_park`, which inserts into
+      `sl_parked_tasks` under `sl_gc_mu` *before* switching, and `c->mu`
+      is only released afterwards by `sl_worker_after_switch`. A receiver
+      therefore cannot pop a sender that has not finished registering.
+
+      Two readings remain, and they are not yet distinguished. Either
+      something resumes a waiter without popping it (no such caller is
+      apparent — `sl_chan_close` pops, and the timer/reactor do not touch
+      these lists), or `sl_parked_tasks` is itself corrupted so the
+      search terminates early — in which case this detector is firing
+      *downstream* of the first fault rather than at it, and the real
+      defect is elsewhere. Given a use-after-free is already proven, the
+      second reading is quite plausible and should be tested first:
+      validate `sl_parked_tasks`' integrity (length and membership) at
+      resume time before trusting the "unparked" signal.
+
+      One retraction, recorded so it is not repeated: an earlier pass
+      through this concluded `sl_chan_wl_push` never assigns `*tail`,
+      degenerating the wait list into a one-slot register. That was
+      false — the line is present and correct. It was an artefact of a
+      `grep -v` filter meant to strip comment continuation lines, which
+      also stripped every source line beginning with `*`, i.e. pointer
+      dereferences. Read that code unfiltered. Then return to the rest of the `-O2`
       audit. Worth noting the severity independently of `-O2`: this is a
       real double-resume in shipped code, and `-O0` is merely not
       hitting the window, not immune by construction — which makes it a
