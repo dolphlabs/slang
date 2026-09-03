@@ -2116,16 +2116,31 @@ prerequisite, not a different plan).
       dispatch is downstream: a later dequeue walks the stale link into
       recycled memory.
 
-      So the question is no longer "how is a queued task freed" but
-      **"who pushes a task that is already running?"** Candidates, in
-      order: `sl_task_resume` called on a task that is not actually
-      parked (e.g. a `chan` waiter popped off a wait list twice, the
-      same shape as the double-resume this tier's reactor review already
-      found and fixed once); and `sl_worker_after_switch` taking its
-      preempted branch on a stale `t->preempted`, which is plausible at
-      `-O2` because `sl_ctx_switch` receives `t->rsp` by value and never
-      `t` itself, so nothing in the signature says that field can change
-      across the call. (An earlier guess here — dead-store
+      **And the culprit is identified.** Tagging each of the three
+      pushers (`sl_task_submit`, `sl_task_resume`, and
+      `sl_worker_after_switch`'s preempted branch) with a marker on the
+      task and reporting it at the faulting free gives, reproducibly:
+
+          FREE WHILE QUEUED by sl_task_resume
+
+      So the stray push is `sl_task_resume` linking a task that is
+      already running — a resume of a task that is not, at that moment,
+      parked. `sl_task_resume`'s three callers are `sl_chan_send` /
+      `sl_chan_recv` popping a wait list, the timer thread, and the
+      reactor thread; `worker_fanout` uses no `net.*` and only sleeps in
+      its drain loop, so `chan` is the overwhelmingly likely source —
+      the same double-resume shape this tier's own reactor review found
+      and fixed once before, in a different wait list.
+
+      Remaining work: establish how a `chan` waiter gets resumed while
+      running (popped from a wait list twice, or resumed after already
+      being taken off it), fix it, and re-run this instrumentation to
+      confirm the trip disappears. Then return to the rest of the `-O2`
+      audit. Worth noting the severity independently of `-O2`: this is a
+      real double-resume in shipped code, and `-O0` is merely not
+      hitting the window, not immune by construction — which makes it a
+      plausible sibling of, or even the same bug as, the ~1-in-60
+      container-element loss recorded above. (An earlier guess here — dead-store
       elimination around `sl_ctx_make`'s initial-frame writes — is ruled
       out by the field dump: the problem is the whole struct, not the
       frame it builds.) After that, the cross-cutting TLS audit this item always
