@@ -2178,10 +2178,37 @@ prerequisite, not a different plan).
       unreachable, later re-pushed (double push), popped twice, resumed
       while running, and finally freed with a live queue link.
 
-      Next: verify that invariant directly rather than infer it — assert
-      single-list membership on every `sl_task`, with the owning list
-      recorded, tripping the instant a task is added to a second one.
-      That should catch the true first fault.
+      That invariant was then asserted directly — every `sl_task` carries
+      the list it belongs to (run queue / chan wait list / sleepers),
+      tripping the instant it joins a second. Result: the first trip is
+      `chan_wl_push: already in CHAN-WAITLIST`, **not** a cross-list
+      violation, so the `next`-aliasing story above is not the first
+      fault either. A further check (`PREEMPTED BRANCH TAKEN FOR A
+      PARKED TASK`, testing whether `sl_worker_after_switch` returns a
+      parked task via its preempted branch — which would let
+      `sl_task_park` return with no resume and skip the `park_mu`
+      unlock, neatly explaining the hangs) does **not** fire. That
+      theory is eliminated too.
+
+      **Methodological caution, and the reason to change tack.** Every
+      detector above stores its state *inside* `sl_task`. A
+      use-after-free is already proven, so the moment a task struct is
+      freed and recycled all of those flags become meaningless, and a
+      later trip may be post-corruption noise rather than a real
+      violation. That plausibly explains why each new assertion keeps
+      relocating the "first" fault. The only findings here that do not
+      depend on in-struct state are ASan's, and those remain solid: a
+      task freed by `sl_worker_after_switch`'s completion branch while
+      still linked in a run queue, and later dequeued by another worker.
+
+      So the next step should remove recycling from the picture entirely
+      rather than add another in-struct flag: build with `free(t)` and
+      `free(t->raw_base)` turned into no-ops (a deliberate leak, debug
+      only). With no `sl_task` memory ever reused, every debug flag stays
+      valid for the life of the run, ASan's shadow state stays
+      unambiguous, and the first *logical* violation becomes observable
+      without corruption noise on top of it. Only once the first fault
+      is identified under that build is it worth reasoning about a fix.
 
       One retraction, recorded so it is not repeated: an earlier pass
       through this concluded `sl_chan_wl_push` never assigns `*tail`,
