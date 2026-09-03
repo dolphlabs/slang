@@ -2152,16 +2152,36 @@ prerequisite, not a different plan).
       is only released afterwards by `sl_worker_after_switch`. A receiver
       therefore cannot pop a sender that has not finished registering.
 
-      Two readings remain, and they are not yet distinguished. Either
-      something resumes a waiter without popping it (no such caller is
-      apparent — `sl_chan_close` pops, and the timer/reactor do not touch
-      these lists), or `sl_parked_tasks` is itself corrupted so the
-      search terminates early — in which case this detector is firing
-      *downstream* of the first fault rather than at it, and the real
-      defect is elsewhere. Given a use-after-free is already proven, the
-      second reading is quite plausible and should be tested first:
-      validate `sl_parked_tasks`' integrity (length and membership) at
-      resume time before trusting the "unparked" signal.
+      Adding a `dbg_parked` marker (set inside `sl_task_park` under the
+      same `sl_gc_mu` as the registry insertion, cleared on a successful
+      resume) to separate "registry lost the task" from "task was never
+      parked" changed which detector trips first, and the new one is
+      earlier and more fundamental: **`DOUBLE WAIT-LIST PUSH`**. The same
+      task really is pushed onto a chan wait list twice without an
+      intervening pop. The previously-reported `RESUME OF UNPARKED` was
+      downstream of that, which is why it masked this until the ordering
+      changed — a caution worth remembering when reading any of these
+      detectors: they form a cascade from a single root, and whichever
+      fires first is only the earliest *observed* point, not necessarily
+      the cause.
+
+      The structural suspect is now explicit. `sl_task.next` is shared by
+      **three** intrusive lists — the run queue (`sl_runq_push_raw` /
+      `sl_runq_try_pop`), the chan wait lists (`sl_chan_wl_push` /
+      `_pop`), and the timer's sleeper list. The design depends on a task
+      being in at most one of them at any instant. The moment that is
+      violated, both lists corrupt each other: a run-queue push sets
+      `t->next = NULL`, which, if `t` is simultaneously in a wait list,
+      silently truncates that wait list and orphans everything behind
+      `t` while `*tail` still points into the orphaned tail. That
+      produces exactly the observed cascade — a task marked in-list but
+      unreachable, later re-pushed (double push), popped twice, resumed
+      while running, and finally freed with a live queue link.
+
+      Next: verify that invariant directly rather than infer it — assert
+      single-list membership on every `sl_task`, with the owning list
+      recorded, tripping the instant a task is added to a second one.
+      That should catch the true first fault.
 
       One retraction, recorded so it is not repeated: an earlier pass
       through this concluded `sl_chan_wl_push` never assigns `*tail`,
