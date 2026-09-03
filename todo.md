@@ -2035,18 +2035,43 @@ prerequisite, not a different plan).
       `-O0` the macro expands to `(sl_rt_current_task)`, byte-for-byte
       the previous code (checked with `cc -E`, not by timing).
 
-      **`-O2` is still NOT ready to turn on.** With that fix in place,
-      `stress_test/programs/worker_fanout` at 2000 tasks still
-      segfaults at `-O2`, this time inside `sl_ctx_switch` itself. That
-      is a *different* site: the raw `sl_rt_current_task->rsp` reads
-      that are justified as "already inside a preempt bracket". The
-      justification is sound for async preemption but not for the
-      optimiser, which can still hoist a TLS-derived address across the
-      switch — and after the switch the task may be on a different OS
-      thread. So the remaining work is the cross-cutting audit this
-      item always described: every TLS access that spans a context
-      switch (`sl_rt_current_task`, `sl_rt_native_rsp`, the grower
-      state) needs the same treatment, followed by re-verification of
-      the suite, TSan **at `-O2`**, and the stress matrix. Do not flip
-      the flag in `src/main.c` until `worker_fanout` and the stress
-      programs are clean
+      **`-O2` is still NOT ready to turn on: at least one more blocker
+      remains, and it is NOT a TLS-access problem.** With the fix above
+      in place, `stress_test/programs/worker_fanout` still segfaults at
+      `-O2`, inside `sl_ctx_switch`. (An earlier guess — recorded in
+      commit 641de4a's message — attributed this to the raw
+      `sl_rt_current_task->rsp` reads justified as "already inside a
+      preempt bracket". Instrumentation disproved that; the real site is
+      different and the note is corrected here.)
+
+      What the evidence actually says. The `sl_ctx_switch` asm faults at
+      `+16`, `popq %r15`, immediately after `mov %rsi, %rsp` — so the
+      bad value is the *second* argument, `new_rsp`. Wrapping all nine
+      `sl_ctx_switch` call sites in a null-check identifies exactly one:
+      the dispatch in `sl_worker_run_loop`,
+      `sl_ctx_switch(&sl_rt_native_rsp, t->rsp)`, with **`t->rsp ==
+      NULL`** — a task reaching a run queue with no stack pointer.
+      Checks added inside `sl_task_submit` show `t->rsp` is valid
+      immediately after `sl_task_stack_init` *and* still valid
+      immediately before the push; neither fires. So the task is
+      published correctly and then read back as NULL by the dequeuing
+      worker. Some runs hang instead of faulting.
+
+      Scope, established rather than assumed: the same workload built
+      from `c36be6e` — before work-stealing existed — segfaults **8/8**
+      at `-O2`, and the identical instrumented source at `-O0` is
+      **8/8 clean**. So this is a pre-existing `-O2` defect in the core
+      scheduler, not a work-stealing regression, and not something the
+      `sl_rt_cur` fix was ever going to address.
+
+      Next step is to root-cause that NULL. Worth ruling out early:
+      dead-store elimination or aliasing around `sl_ctx_make`, which
+      builds a task's initial frame by writing through a `void **` into
+      malloc'd memory that no C code ever reads back (only the hand-
+      written asm does) — exactly the shape an optimiser is entitled to
+      discard. After that, the cross-cutting TLS audit this item always
+      described (every access spanning a context switch:
+      `sl_rt_current_task`, `sl_rt_native_rsp`, the grower state), then
+      re-verification of the suite, TSan **at `-O2`**, and the stress
+      matrix. Do not flip the flag in `src/main.c` until `worker_fanout`
+      and the stress programs are clean
