@@ -1799,7 +1799,7 @@ prerequisite, not a different plan).
 - [ ] An epoll backend (Linux) — not a performance item, a production-
       readiness one: the reactor is kqueue-only today, and real
       deployment targets are overwhelmingly Linux
-- [ ] **Allocation is serialised on one global mutex — the top remaining
+- [~] **Allocation is serialised on one global mutex — the top remaining
       performance ceiling, and the reason concurrency does not scale.**
       Every `sl_gc_alloc` takes `sl_gc_mu` to push onto `sl_gc_all`,
       insert into `sl_gc_set`, and bump `sl_gc_bytes_since_collect`.
@@ -1836,7 +1836,46 @@ prerequisite, not a different plan).
          and is the actual fix, but it is a collector redesign, not a
          patch.
 
-      Do not attempt any of these without the safepoint/GC-quiescence
+      **Approach 2 (batching) is implemented.** Objects accumulate on a
+      per-thread list and are spliced onto `sl_gc_all`/`sl_gc_set` under
+      one lock acquisition per 32 allocations. The collector traces every
+      thread's pending list as a root (`pending_ptr` on the registry
+      entry) — required, because a pending object is not on `sl_gc_all`
+      so the sweep cannot free it, but what it *references* is, and
+      without that walk those children are freed while live. Reading
+      another thread's list during mark is safe for the same reason the
+      rest of the mark phase is: no thread can be inside `sl_gc_alloc`
+      once every registered thread is acked or `gc_blocked`.
+
+      Result is a genuine trade, measured interleaved 5 pairs each way:
+
+      | workload | before | after | |
+      |---|---|---|---|
+      | HTTP `/json` (alloc-heavy, cross-thread) | 7259 rps | **9098 rps** | **+25%** |
+      | `concurrent_compute` (pure compute) | 1305ms | 1411ms | **-8%** |
+
+      The regression is real and consistent, and its cause is instructive:
+      on Darwin each `_Thread_local` access is a call through its own TLV
+      descriptor into dyld, so the batch bookkeeping costs a lookup per
+      allocation that only pays for itself when the lock is genuinely
+      contended. A first attempt using four separate thread-locals was
+      *slower than the mutex it replaced*; bundling them into one struct
+      (one lookup, then field offsets) is what made it a win at all.
+
+      Kept on the judgement that this language targets servers, and the
+      server workload is the one that improves — the same reasoning the
+      work-stealing revert above rests on, applied in the other
+      direction. If pure-compute throughput matters more for a given
+      deployment, `SL_GC_PENDING_BATCH` is the knob.
+
+      **Still open:** approach 3 (per-thread sharding) would remove the
+      lock rather than amortise it, and would not pay the per-allocation
+      TLS cost if the shard lived on the task rather than the thread —
+      `sl_rt_cur()` is already resolved in `sl_gc_alloc`'s preempt
+      bracket, so a task-owned batch is reachable for free. That is the
+      real fix and is worth doing properly.
+
+      Do not attempt further work here without the safepoint/GC-quiescence
       invariants in `sl_gc_collect` firmly in hand — this session found a
       use-after-free in exactly this area that had been corrupting
       shipped builds silently.
