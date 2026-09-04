@@ -2314,11 +2314,25 @@ prerequisite, not a different plan).
       corruption, though 0-in-100 against a ~1/60 rate is roughly a 1-in-5
       chance of coincidence, so it is encouraging rather than proven.
 
+      **The conservative stack scan at `-O2` is now covered too**, which
+      was the last named correctness risk. That path only runs for
+      `async_preempted` tasks, so a clean result means nothing unless
+      the mechanism is shown to have fired — the same discipline the
+      async-preemption slice applied to itself. Instrumented
+      `sl_gc_scan_conservative` with a counter (reported via `atexit`,
+      since generated `main` leaves through `exit()` and an end-of-main
+      print never runs), built `concurrent_compute` at `-O2` with the GC
+      threshold temporarily lowered to 256KB, real ticker active:
+      **8/8 runs with correct invariants, and 5-20 conservative scans
+      per run (670-2652 words scanned), zero runs where it never fired.**
+      Threshold restored afterwards.
+
       Still deliberately NOT flipping the flag in `src/main.c`. What
-      remains is a risk judgement, not a known defect: the `demo/`
-      stress matrix at `-O2`, and the fact that `-O2` changes conditions
-      for the conservative stack scan and the hand-written asm in ways
-      nothing here has yet exercised.
+      remains is a judgement call rather than a known defect: the
+      `demo/` stress matrix at `-O2` (wants a quiet machine), and the
+      hand-written asm, which nothing here has exercised specifically
+      beyond the fact that every test exercising `spawn` runs through
+      it.
 
       One retraction, recorded so it is not repeated: an earlier pass
       through this concluded `sl_chan_wl_push` never assigns `*tail`,
