@@ -152,7 +152,40 @@ int main(int argc, char **argv) {
 
     StrBuf cmd;
     sb_init(&cmd);
-    sb_append(&cmd, "cc ");
+    /* -O2 on the generated C. This was blocked for a long time by a real
+       hazard, not caution: sl_rt_current_task and friends are
+       _Thread_local, and on Darwin each read is a call into dyld's
+       _tlv_get_addr returning a THREAD-AFFINE address. An optimiser is
+       entitled to cache that address, because a thread-local cannot be
+       written by another thread -- but a green thread migrates between
+       OS threads at every park and every preemption, so a cached address
+       silently reads some other worker's slot afterwards.
+
+       Three concrete bugs came out of that and are fixed:
+         - sl_rt_cur()'s retry loop did not survive optimisation at all;
+           clang hoisted the TLS read clean out of it, so the loop
+           re-read its guard forever and never the guarded value. Fixed
+           with SL_RT_TLS_CUR (runtime_core.c).
+         - sl_chan_send/sl_chan_recv passed a raw sl_rt_current_task to
+           sl_chan_wl_push on every trip round a loop that parks in the
+           middle, so after the first park they enqueued whatever task
+           the OLD worker was running. That produced a heap-use-after-free
+           ASan reported at -O2, and was a latent bug at -O0 too.
+         - sl_reactor_wait and sl_time_sleep had the same shape via their
+           callers' loops; fixed by construction.
+
+       Verified before enabling: full suite 4/4 consecutive runs with all
+       generated C at -O2; seven concurrency tests 0 failures in 105 runs;
+       concurrent_compute 15/15 with correct invariants; TSan 0 races in
+       48 runs (spawn raced 6/20 at -O1 before this work); ASan+UBSan
+       clean; and the GC's conservative stack scan exercised at -O2 with a
+       counter proving it actually fired (5-20 scans/run) rather than
+       passing by never running. See todo.md for the full account.
+
+       Not yet re-run at -O2: demo/stress_harness's full matrix, which
+       needs a quiet machine. Enabled at the user's direction with that
+       gap open and stated. */
+    sb_append(&cmd, "cc -O2 ");
     sb_append(&cmd, gen_path);
     sb_append(&cmd, " -o ");
     sb_append(&cmd, outname);

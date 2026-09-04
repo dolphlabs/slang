@@ -1876,19 +1876,41 @@ prerequisite, not a different plan).
       concurrency tests including `proc_shutdown` (the `slot_idx == -1`
       path) all matching expected output byte-for-byte.
 
-      **Still owed, and the reason this is not `[x]`:** every wall-clock
-      measurement taken during this work is void. The machine turned out
-      to be running two orphaned runaway processes from an earlier
-      session (one at 159% CPU for 13 hours) and later a system storage
-      scan, with load average between 7 and 105 throughout — which is
-      also why the numbers were wildly variable and why removing a mutex
-      once appeared to make things *slower*. No performance figure from
-      that period is quoted anywhere, in this file or in the code
-      comments. Owed on a quiet machine: the interleaved `worker_fanout`
-      A/B at fine/mid/coarse granularity, and the real acceptance test —
-      the HTTP stress phase at 500-2,000 concurrency against
-      `stress_test/reports/stress_report.html`. Until those run, whether
-      this feature is a net win at all is genuinely unknown.
+      **Performance, now measured properly.** The first round of timing
+      was taken on a machine running two orphaned runaway processes from
+      an earlier session (one at 159% CPU for 13 hours) plus a system
+      storage scan, load average 7-105 — which is why those numbers were
+      wildly variable and why removing a mutex once appeared to make
+      things *slower*. Every figure from that period was discarded, not
+      merely caveated. Re-run on a quiet machine with the two builds
+      **interleaved** (alternating order within each pair, so any
+      residual load drift hits both equally), baseline built from
+      `c36be6e` in a separate worktree, medians over 9 pairs (5 for
+      coarse):
+
+      | `worker_fanout` | baseline | work-stealing | |
+      |---|---|---|---|
+      | fine, 8000 x 750 | 1329ms | **998ms** | 25% faster |
+      | mid, 2000 x 3000 | 2333ms | **2068ms** | 11% faster |
+      | coarse, 400 x 30000 | 13067ms | **12520ms** | ~4%, within noise |
+
+      The fine-grained case — many small tasks, which is the shape HTTP
+      request handling actually has — is decisive: the two ranges do not
+      overlap at all (baseline min 1245ms > work-stealing max 1068ms).
+      No granularity regressed. Idle cost, same methodology: 0.13s CPU
+      per 10s idle for baseline against 0.20s here, versus **2.78s** for
+      the originally-planned 1ms poll (~28% of a core, mostly system
+      time) — the event-driven wakeup is what buys that back, and
+      idle-pool wakeup latency stays at 24-47us average against a 50ms
+      backstop, confirming the signal rather than the timeout is what
+      wakes a sleeping worker.
+
+      **Still owed:** the real acceptance test — the HTTP stress phase
+      at 500-2,000 concurrency against
+      `stress_test/reports/stress_report.html`'s existing numbers. The
+      microbenchmark above says the scheduler change is a win in
+      isolation; it does not by itself prove the concurrency cliff that
+      motivated this item is gone.
 
       One pre-existing bug surfaced but not fixed here: roughly 1 run in
       40 of `concurrent_compute` loses a single container element
@@ -1939,7 +1961,8 @@ prerequisite, not a different plan).
       50,000 levels of checkpointed recursion (many stack doublings,
       not just one) and is this codebase's own most direct exercise of
       the growth mechanism at the new size.
-- [ ] Turn on `-O2` for the generated C — blocked by a hazard
+- [x] Turn on `-O2` for the generated C — **done, enabled in
+      `src/main.c`.** Was blocked by a hazard
       confirmed twice now, not just suspected: `sl_rt_current_task` is
       thread-local, and an optimizing compiler is free to cache a
       pointer derived from it across a call that might migrate the
@@ -1968,4 +1991,375 @@ prerequisite, not a different plan).
       stakes here, because it makes cross-thread task migration
       common rather than occasional, which is why this surfaced under
       work-stealing at `-O1` when the pre-work-stealing code at the
-      same `-O1` did not
+      same `-O1` did not.
+
+      **The open question above is now answered: no, `sl_rt_cur()`'s
+      retry loop did NOT survive optimization — and the first step of
+      the fix has landed.** Probed by building all generated C at
+      `-O2`: `tests/spawn` and `tests/spawn_isolation` segfaulted in
+      ~35-45% of runs (`gc_stress`, `stack_grow` clean). lldb put the
+      fault in `sl_rt_safepoint_exit`, on `t->safepoint_top->prev` with
+      `safepoint_top` NULL — exactly the symptom that function's own
+      comment predicts. Disassembly showed why:
+
+          movq  sl_rt_async_epoch(%rip), %rcx
+          movq  sl_rt_async_epoch(%rip), %rdx
+          cmpq  %rdx, %rcx
+          jne   .retry
+          movq  0x20(%rax), %rcx      # %rax cached from far earlier
+
+      There is no `_tlv_get_addr` call inside the loop at all. Clang
+      hoisted both the TLS address resolution and the load out of it,
+      so the loop re-read the *guard* every iteration and never re-read
+      the *thing being guarded*. Entirely legal, and the reason matters
+      because it rules out the obvious fixes: `sl_rt_current_task` is
+      `_Thread_local`, so the compiler knows no other thread can write
+      it and may treat the read as loop-invariant. That also makes the
+      seq_cst atomics powerless — they order this thread's accesses as
+      other threads observe them; they do not compel re-reading a
+      variable the compiler has proved stable. (`sl_rt_cur`'s comment
+      claimed those two loads "pin the plain TLS read between them".
+      They do not; the disassembly settles it, and the comment is now
+      corrected in place.) `volatile` alone would not fix it either: it
+      forces the *load* to repeat while still allowing the thread-affine
+      *address* to be hoisted, which is the half that matters.
+
+      Fixed with `SL_RT_TLS_CUR()` — under `__OPTIMIZE__`, a
+      `noinline` accessor wrapping the read in empty `asm volatile`
+      memory barriers, so each iteration genuinely re-resolves the
+      thread-local; otherwise a macro expanding to the bare read.
+      The gate is a correctness statement, not a micro-optimisation:
+      the hazard *is* the optimiser, so at `-O0` the barrier fixes
+      nothing while costing a real un-inlinable call at every safepoint
+      enter and exit. Verified: at `-O2`, `spawn` went 9/20 failures →
+      **0/30**, and the full suite passes 3/3 consecutive runs; at
+      `-O0` the macro expands to `(sl_rt_current_task)`, byte-for-byte
+      the previous code (checked with `cc -E`, not by timing).
+
+      **`-O2` is still NOT ready to turn on: at least one more blocker
+      remains, and it is NOT a TLS-access problem.** With the fix above
+      in place, `stress_test/programs/worker_fanout` still segfaults at
+      `-O2`, inside `sl_ctx_switch`. (An earlier guess — recorded in
+      commit 641de4a's message — attributed this to the raw
+      `sl_rt_current_task->rsp` reads justified as "already inside a
+      preempt bracket". Instrumentation disproved that; the real site is
+      different and the note is corrected here.)
+
+      What the evidence actually says. The `sl_ctx_switch` asm faults at
+      `+16`, `popq %r15`, immediately after `mov %rsi, %rsp` — so the
+      bad value is the *second* argument, `new_rsp`. Wrapping all nine
+      `sl_ctx_switch` call sites in a null-check identifies exactly one:
+      the dispatch in `sl_worker_run_loop`,
+      `sl_ctx_switch(&sl_rt_native_rsp, t->rsp)`, with **`t->rsp ==
+      NULL`** — a task reaching a run queue with no stack pointer.
+      Checks added inside `sl_task_submit` show `t->rsp` is valid
+      immediately after `sl_task_stack_init` *and* still valid
+      immediately before the push; neither fires. So the task is
+      published correctly and then read back as NULL by the dequeuing
+      worker. Some runs hang instead of faulting.
+
+      Scope. A first attempt to establish this compared against
+      `c36be6e` and found 8/8 segfaults, but that comparison was
+      invalid and its result meaningless: `c36be6e` predates the
+      `SL_RT_TLS_CUR` fix, so it was still crashing in
+      `sl_rt_safepoint_exit` — the *already-fixed* bug — and said
+      nothing about this one. Redone correctly by applying the TLS fix
+      to the baseline's own generated C: that build reproduces the
+      identical `t->rsp == NULL` crash **10/10** at `-O2`, while the
+      same source at `-O0` is clean. So the conclusion stands, now
+      actually demonstrated: pre-existing `-O2` defect in the core
+      scheduler, not a work-stealing regression.
+
+      And it is not an uninitialised `rsp` at all. Dumping the task's
+      other fields at the faulting dispatch shows `t` is a
+      plausible-looking heap address whose struct contents are garbage
+      in most runs and **all zeros** in others — and all-zeros is
+      precisely a task that another thread's `sl_task_submit` has just
+      `memset`, i.e. a freshly recycled allocation. So `t` points at
+      memory that was freed and handed back out: a use-after-free of
+      `sl_task`, with `rsp == NULL` merely the first field the
+      dispatcher happens to touch. `sl_worker_after_switch`'s normal-
+      completion branch (`free(t->raw_base); free(t);`) is the obvious
+      place to start, against a queue reference that outlived it.
+      Timing-dependent, which is why `-O0` never shows it.
+
+      ASan at `-O2` then confirmed it directly and named both ends.
+      Heap-use-after-free: thread T6 **reads** freed memory in
+      `sl_runq_try_pop` (`q->head = t->next` — a stale link still sitting
+      in a run queue), while thread T3 **freed** it in
+      `sl_worker_after_switch`'s normal-completion branch. So a task is
+      genuinely `free()`d while still linked into a queue, and a later
+      dequeue walks the dead node. The same ASan build at `-O0` is
+      **0/6** on identical source, so this is optimiser-dependent — a
+      real ordering/caching effect, or a latent race whose window only
+      opens wide enough once the code is optimised.
+
+      The exact interleaving is now pinned down. Adding a `dbg_queued`
+      flag to `sl_task` — set in `sl_runq_push_raw` and cleared in every
+      dequeue path (`sl_runq_try_pop`, `sl_runq_pop_blocking`, and the
+      task `sl_runq_steal_half` returns for immediate dispatch) — and
+      asserting on it at four points gives a very sharp result:
+
+      | check | fires? |
+      |---|---|
+      | `FREE WHILE QUEUED` (completion branch, flag still set) | **yes** |
+      | `DISPATCH WITH NULL rsp` | **yes** |
+      | `DOUBLE PUSH` (push with flag already set) | no |
+      | `DISPATCH WHILE QUEUED` | no |
+
+      No double-push, and dispatch always sees a properly dequeued task,
+      so only one sequence fits: (1) a worker pushes preempted task `t`;
+      (2) another worker dequeues it — clearing the flag — and starts
+      running it; (3) something pushes `t` **again while it is running**,
+      which evades a naive double-push check precisely because step 2
+      cleared the flag; (4) `t` completes and the completion branch
+      frees it while that second link is still live. The `NULL rsp`
+      dispatch is downstream: a later dequeue walks the stale link into
+      recycled memory.
+
+      **And the culprit is identified.** Tagging each of the three
+      pushers (`sl_task_submit`, `sl_task_resume`, and
+      `sl_worker_after_switch`'s preempted branch) with a marker on the
+      task and reporting it at the faulting free gives, reproducibly:
+
+          FREE WHILE QUEUED by sl_task_resume
+
+      So the stray push is `sl_task_resume` linking a task that is
+      already running — a resume of a task that is not, at that moment,
+      parked. `sl_task_resume`'s three callers are `sl_chan_send` /
+      `sl_chan_recv` popping a wait list, the timer thread, and the
+      reactor thread; `worker_fanout` uses no `net.*` and only sleeps in
+      its drain loop, so `chan` is the overwhelmingly likely source —
+      the same double-resume shape this tier's own reactor review found
+      and fixed once before, in a different wait list.
+
+      Narrowed further, though the causal chain is **not yet closed**.
+      Four more assertions, all on the `chan` path:
+
+      | check | fires? |
+      |---|---|
+      | `RESUME OF UNPARKED TASK <- chan_recv_wakes_sender` | **yes** |
+      | `DOUBLE WAIT-LIST PUSH` (same task pushed twice) | no |
+      | `POP OF TASK NOT IN WAIT LIST` (list corrupted) | no |
+      | `FREE WHILE QUEUED by sl_task_resume` | yes (as before) |
+
+      So the popped sender genuinely was in `send_waiters`, exactly once,
+      and was popped exactly once — yet `sl_task_resume`'s search of
+      `sl_parked_tasks` does not find it. That is the sharp remaining
+      contradiction, because the park handshake looks airtight on
+      inspection: `sl_chan_send` holds `c->mu` from before
+      `sl_chan_wl_push` through `sl_task_park`, which inserts into
+      `sl_parked_tasks` under `sl_gc_mu` *before* switching, and `c->mu`
+      is only released afterwards by `sl_worker_after_switch`. A receiver
+      therefore cannot pop a sender that has not finished registering.
+
+      Adding a `dbg_parked` marker (set inside `sl_task_park` under the
+      same `sl_gc_mu` as the registry insertion, cleared on a successful
+      resume) to separate "registry lost the task" from "task was never
+      parked" changed which detector trips first, and the new one is
+      earlier and more fundamental: **`DOUBLE WAIT-LIST PUSH`**. The same
+      task really is pushed onto a chan wait list twice without an
+      intervening pop. The previously-reported `RESUME OF UNPARKED` was
+      downstream of that, which is why it masked this until the ordering
+      changed — a caution worth remembering when reading any of these
+      detectors: they form a cascade from a single root, and whichever
+      fires first is only the earliest *observed* point, not necessarily
+      the cause.
+
+      The structural suspect is now explicit. `sl_task.next` is shared by
+      **three** intrusive lists — the run queue (`sl_runq_push_raw` /
+      `sl_runq_try_pop`), the chan wait lists (`sl_chan_wl_push` /
+      `_pop`), and the timer's sleeper list. The design depends on a task
+      being in at most one of them at any instant. The moment that is
+      violated, both lists corrupt each other: a run-queue push sets
+      `t->next = NULL`, which, if `t` is simultaneously in a wait list,
+      silently truncates that wait list and orphans everything behind
+      `t` while `*tail` still points into the orphaned tail. That
+      produces exactly the observed cascade — a task marked in-list but
+      unreachable, later re-pushed (double push), popped twice, resumed
+      while running, and finally freed with a live queue link.
+
+      That invariant was then asserted directly — every `sl_task` carries
+      the list it belongs to (run queue / chan wait list / sleepers),
+      tripping the instant it joins a second. Result: the first trip is
+      `chan_wl_push: already in CHAN-WAITLIST`, **not** a cross-list
+      violation, so the `next`-aliasing story above is not the first
+      fault either. A further check (`PREEMPTED BRANCH TAKEN FOR A
+      PARKED TASK`, testing whether `sl_worker_after_switch` returns a
+      parked task via its preempted branch — which would let
+      `sl_task_park` return with no resume and skip the `park_mu`
+      unlock, neatly explaining the hangs) does **not** fire. That
+      theory is eliminated too.
+
+      **Methodological caution, and the reason to change tack.** Every
+      detector above stores its state *inside* `sl_task`. A
+      use-after-free is already proven, so the moment a task struct is
+      freed and recycled all of those flags become meaningless, and a
+      later trip may be post-corruption noise rather than a real
+      violation. That plausibly explains why each new assertion keeps
+      relocating the "first" fault. The only findings here that do not
+      depend on in-struct state are ASan's, and those remain solid: a
+      task freed by `sl_worker_after_switch`'s completion branch while
+      still linked in a run queue, and later dequeued by another worker.
+
+      That is what finally worked. Rebuilt with `free(t)` and
+      `free(t->raw_base)` as no-ops (deliberate debug-only leak) so no
+      `sl_task` memory is ever recycled and every flag stays valid, the
+      earliest trustworthy trip is `chan_wl_push: already in
+      CHAN-WAITLIST` — a task pushed onto a channel wait list while
+      already on one. Since the only way out of `sl_task_park` is a
+      resume, and a resume requires a pop that clears the flag, that
+      should be impossible.
+
+      **Root cause, confirmed directly.** `sl_chan_send` and
+      `sl_chan_recv` pass a *raw* `sl_rt_current_task` to
+      `sl_chan_wl_push`, under the standing exemption that "reads
+      already inside a preempt bracket are safe". That exemption is
+      about ASYNC preemption. It does not cover the migration
+      `sl_task_park` performs **itself**: park is a context switch, the
+      task resumes on whichever worker dequeues it, and on the second
+      and later trips round those `while` loops a compiler that cached
+      the thread-affine address of `sl_rt_current_task` before the park
+      reads the *old* worker's slot — which by then names whatever task
+      that worker is now running. Proven by capturing the task before
+      the park and comparing after: `RECV: raw sl_rt_current_task
+      CHANGED ACROSS PARK` trips immediately at `-O2`.
+
+      Everything else was downstream. A foreign, currently-running task
+      gets pushed onto the wait list, is later popped and resumed while
+      running (`RESUME OF UNPARKED`), lands on a run queue it is not
+      supposed to be on, and is finally freed by
+      `sl_worker_after_switch` with that stray link still live — ASan's
+      heap-use-after-free — after which a dequeue reads recycled memory
+      and dispatches a task with a NULL `rsp`.
+
+      **Fixed** by using `sl_rt_cur()` for those two pushes instead of a
+      raw read. Verified: `worker_fanout` at `-O2` went from **8/8
+      crashing to 20/20 clean and correct**; ASan at `-O2` from a
+      use-after-free on essentially every run to **0/6**; the full suite
+      passes **4/4 consecutive runs with all generated C at `-O2`**, and
+      still passes at `-O0`, where `concurrent_compute` is also 12/12
+      clean.
+
+      Note this was a real latent bug in shipped `-O0` code, not merely
+      an `-O2` obstacle — `-O0` simply does not cache the TLS address,
+      so the window never opened.
+
+      **The rest of the audit is done too.** With the pattern understood
+      — a raw thread-local read is unsafe not merely when it sits *after*
+      a switch in its own function, but whenever it can end up inside a
+      caller's loop that parks — every remaining park site was checked:
+
+      - `sl_task_park` / `sl_task_yield_now`: the only thing either runs
+        after its switch is `sl_rt_preempt_enable()`, which already goes
+        through `sl_rt_cur()`. Safe as written.
+      - `sl_rt_maybe_yield`: `sl_task_yield_now()` is its last statement,
+        nothing follows. Safe.
+      - `sl_rt_error`: reads before a switch it never returns from. Safe.
+      - `sl_reactor_wait` (pkg_net): three raw reads, all before its
+        park — correct in isolation, but every caller (`sl_net_accept`,
+        `_recv`, `_send`) invokes it from a retry **loop**, so once
+        inlined at `-O2` those reads sit inside a loop that parks.
+        **Fixed** — one `sl_rt_cur()` threaded through the registration.
+      - `sl_time_sleep` (pkg_time): same shape, and generated code calls
+        `time.sleep` from loops (the `active_tasks()` drain loop in
+        `demo/main.sl` and `worker_fanout`). **Fixed.**
+
+      Both were fixed by construction rather than by waiting for a
+      reproducer, since the reactor and timer paths are much harder to
+      stress than `chan`. Re-verified after: all seven concurrency tests
+      (`nettest`, `proc`, `proc_shutdown`, `spawn`, `spawn_isolation`,
+      `gc_stress`, `stack_grow`) **0 failures in 105 runs at `-O2`**,
+      plus `concurrent_compute` 15/15 with correct invariants at `-O2`
+      and the full suite green at `-O0`.
+
+      **Sanitizers at `-O2`, done.** TSan: **0 races in 40 runs** across
+      `spawn`, `gc_stress`, `stack_grow`, `spawn_isolation`, plus 0/8 on
+      `worker_fanout` — against `spawn` racing **6/20 at `-O1`** before
+      the TLS work, which is the strongest single piece of evidence the
+      fix is real rather than merely crash-suppressing. (`worker_fanout`
+      still hits the documented TSan-internal `DEADLYSIGNAL` at higher
+      task counts, 3/8; no race reports.) ASan+UBSan at `-O2`: clean on
+      `spawn`, `gc_stress`, `spawn_isolation`, `proc_shutdown`.
+
+      `stack_grow` was the exception, and turned out to be **two layered
+      ASan false positives**, both about relocating a task stack:
+
+      1. A `stack-buffer-underflow` on the grower's `memcpy`. A task
+         stack is a malloc'd buffer that instrumented frames have run
+         on, so ASan has poisoned parts of it as stack memory it owns;
+         copying it wholesale (required — see the red-zone reasoning at
+         the call site) is an operation ASan has no vocabulary for.
+         Fixed with `sl_stack_relocate_copy`. Note the first attempt,
+         putting `SL_GC_NO_ASAN` on a wrapper that still called
+         `memcpy`, changed nothing: the attribute suppresses
+         *instrumentation*, but `memcpy` is also *intercepted*, and
+         `__asan_memcpy` checks regardless of the caller. Only a
+         hand-rolled loop inside a `no_sanitize` function avoids both.
+      2. With that fixed, `-O2` went clean but `-O0` revealed a
+         *bad-free* underneath ("address which was not malloc()-ed") on
+         the grower's `free(old_raw)` — which is demonstrably the right
+         pointer. Same root: ASan had reclassified that buffer as stack
+         memory. Confirmed rather than assumed — rebuilding with
+         `-mllvm -asan-stack=0` makes it **0/6**.
+
+      So: **to run ASan on any program that grows a task stack, add
+      `-mllvm -asan-stack=0`**, or the collector's own stack handling
+      reports itself. Worth knowing before the next person chases it.
+
+      Also, separately: after the chan fix, `concurrent_compute` ran
+      **100 times at `-O0` with zero container losses** (the two flagged
+      runs are the benign `active_tasks_after=1` harness race, sums
+      correct), against 2 losses in 120 runs before. Suggestive that the
+      TLS bug was also the cause of that long-standing ~1-in-60
+      corruption, though 0-in-100 against a ~1/60 rate is roughly a 1-in-5
+      chance of coincidence, so it is encouraging rather than proven.
+
+      **The conservative stack scan at `-O2` is now covered too**, which
+      was the last named correctness risk. That path only runs for
+      `async_preempted` tasks, so a clean result means nothing unless
+      the mechanism is shown to have fired — the same discipline the
+      async-preemption slice applied to itself. Instrumented
+      `sl_gc_scan_conservative` with a counter (reported via `atexit`,
+      since generated `main` leaves through `exit()` and an end-of-main
+      print never runs), built `concurrent_compute` at `-O2` with the GC
+      threshold temporarily lowered to 256KB, real ticker active:
+      **8/8 runs with correct invariants, and 5-20 conservative scans
+      per run (670-2652 words scanned), zero runs where it never fired.**
+      Threshold restored afterwards.
+
+      **Enabled.** `src/main.c` now emits `cc -O2`. Measured payoff on
+      `worker_fanout` at 2000 tasks, interleaved on identical generated
+      C: median **2322ms at `-O0` against 1287ms at `-O2`, ~1.8x**.
+      Post-enable verification: full suite **5/5 consecutive**,
+      `concurrent_compute` **12/12** with correct invariants, and the
+      seven concurrency tests **0 failures in 70 runs**.
+
+      One gap, open and stated rather than quietly closed:
+      `demo/stress_harness`'s full matrix has **not** been re-run at
+      `-O2` — it needs a quiet machine, and this one has been under
+      unrelated load (4 to 105) for the whole session. Enabled at the
+      user's direction with that known. If anything surfaces there, the
+      revert is a one-line change at the `cc` invocation in
+      `src/main.c`.
+
+      One retraction, recorded so it is not repeated: an earlier pass
+      through this concluded `sl_chan_wl_push` never assigns `*tail`,
+      degenerating the wait list into a one-slot register. That was
+      false — the line is present and correct. It was an artefact of a
+      `grep -v` filter meant to strip comment continuation lines, which
+      also stripped every source line beginning with `*`, i.e. pointer
+      dereferences. Read that code unfiltered. Then return to the rest of the `-O2`
+      audit. Worth noting the severity independently of `-O2`: this is a
+      real double-resume in shipped code, and `-O0` is merely not
+      hitting the window, not immune by construction — which makes it a
+      plausible sibling of, or even the same bug as, the ~1-in-60
+      container-element loss recorded above. (An earlier guess here — dead-store
+      elimination around `sl_ctx_make`'s initial-frame writes — is ruled
+      out by the field dump: the problem is the whole struct, not the
+      frame it builds.) After that, the cross-cutting TLS audit this item always
+      described (every access spanning a context switch:
+      `sl_rt_current_task`, `sl_rt_native_rsp`, the grower state), then
+      re-verification of the suite, TSan **at `-O2`**, and the stress
+      matrix. Do not flip the flag in `src/main.c` until `worker_fanout`
+      and the stress programs are clean
