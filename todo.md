@@ -1799,6 +1799,48 @@ prerequisite, not a different plan).
 - [ ] An epoll backend (Linux) — not a performance item, a production-
       readiness one: the reactor is kqueue-only today, and real
       deployment targets are overwhelmingly Linux
+- [ ] **Allocation is serialised on one global mutex — the top remaining
+      performance ceiling, and the reason concurrency does not scale.**
+      Every `sl_gc_alloc` takes `sl_gc_mu` to push onto `sl_gc_all`,
+      insert into `sl_gc_set`, and bump `sl_gc_bytes_since_collect`.
+      Eight workers, one lock, on the hottest path in the language — and
+      it is the *same* mutex `sl_rt_gc_checkin`, `sl_task_park`,
+      `sl_task_resume` and `sl_gc_collect` use, so allocation contends
+      with all of them rather than just with other allocations.
+
+      Evidence, from a CPU profile of the demo server under mixed load
+      after the safepoint fix below: `_pthread_mutex_firstfit_lock_slow`
+      3846 samples and `__psynch_mutexwait` 3725, and of the frames
+      sitting on a contended mutex, `sl_gc_alloc` accounts for 559
+      against 156 for the next-largest. Corroborating signals: process
+      CPU peaks at ~600% of an available 800%, and HTTP throughput is
+      almost flat from concurrency 10 to 2000 — both what a single
+      serialising lock on the allocation path predicts.
+
+      Three approaches, cheapest first, none of them free:
+      1. **Split the lock.** Give the allocator its own mutex so it stops
+         contending with park/resume/checkin. Cheap, but requires
+         allocate-black during a collection cycle, or new objects can be
+         born after the mark phase has passed them and be swept.
+      2. **Batch the splice.** Accumulate new objects on a thread-local
+         list and splice under the lock every K allocations. Cuts lock
+         traffic ~K-fold. The subtlety is `sl_gc_set`: it must contain
+         every live object before any conservative scan runs, or an
+         async-preempted task's register-resident pointer will not be
+         recognised and its object will be swept. The pending list would
+         itself have to be a root, and the set insert cannot be deferred
+         past a safepoint.
+      3. **Shard per thread** — each thread owning its own object list,
+         byte counter, and set shard, with the collector walking all of
+         them. This is what real collectors do (Go's per-P allocation)
+         and is the actual fix, but it is a collector redesign, not a
+         patch.
+
+      Do not attempt any of these without the safepoint/GC-quiescence
+      invariants in `sl_gc_collect` firmly in hand — this session found a
+      use-after-free in exactly this area that had been corrupting
+      shipped builds silently.
+
 - [x] Work-stealing, per-worker run queues — **implemented, measured,
       and REVERTED.** Kept in history (`6a8f27b`, `e5b1b0f`, reverted
       here) because the measurements are the useful artifact.
