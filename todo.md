@@ -1876,7 +1876,45 @@ prerequisite, not a different plan).
       concurrency tests including `proc_shutdown` (the `slot_idx == -1`
       path) all matching expected output byte-for-byte.
 
-      **Performance, now measured properly.** The first round of timing
+      **STATUS: the HTTP acceptance test says this should NOT ship as
+      is.** The microbenchmark win below is real but does not survive
+      contact with the workload this feature was built for. Measured on
+      `demo/main.sl` at concurrency 500, mixed workload, 50k requests,
+      **both builds at `-O2`, both carrying the chan TLS fix**,
+      interleaved on one machine (3 pairs):
+
+      | build | rps | err% | p99 |
+      |---|---|---|---|
+      | baseline (no work-stealing) | 1297-1357 | **0.00%** | **859-927ms** |
+      | work-stealing | 1280-1351 | 0.42-0.47% | **3333-6202ms** |
+
+      No throughput gain, a ~0.45% error rate where baseline has none,
+      and **tail latency 4-7x worse**. The same shape appears at `-O0`
+      (baseline p99 ~1280ms against work-stealing ~9300ms), so it is not
+      an optimisation artefact. This is exactly the outcome the plan's
+      own gap #7 warned about: `worker_fanout` and `concurrent_compute`
+      cannot validate this feature, and the HTTP phase is the real
+      acceptance test.
+
+      Two hypotheses worth testing before either fixing or reverting,
+      neither yet confirmed:
+      - **Local-queue-first starves resumed tasks.** `sl_task_resume`
+        pushes to the *global* queue, but workers drain their own local
+        queue first. In an I/O-bound server almost every task is a
+        resumed one whose latency the client is waiting on, so they
+        queue behind whatever local backlog exists. That is a plausible
+        mechanism for a large p99 with unchanged throughput.
+      - **Steal batching.** `SL_STEAL_MAX_BATCH` of 64 trades latency
+        for throughput by construction. A quick test at batch=4 was
+        inconclusive because it accidentally compared an `-O2` build
+        against an `-O0` one — worth redoing cleanly.
+
+      Options: revert the feature, gate it behind a flag, or fix the
+      scheduling policy (e.g. check the global queue before the local
+      one, or bound local-queue depth). Recommend not shipping it in
+      current form.
+
+      **Performance on the microbenchmark, measured properly.** The first round of timing
       was taken on a machine running two orphaned runaway processes from
       an earlier session (one at 159% CPU for 13 hours) plus a system
       storage scan, load average 7-105 — which is why those numbers were
@@ -2356,8 +2394,24 @@ prerequisite, not a different plan).
       - `SIGTERM` afterwards drained and exited cleanly, so graceful
         shutdown still works at `-O2`.
 
-      One gap, open and stated rather than quietly closed:
-      `demo/stress_harness`'s full matrix has **not** been re-run at
+      The full stress matrix has now been run at `-O2` — see the
+      work-stealing item above, which it also settles (unfavourably).
+      For `-O2` specifically it is a clear win: HTTP p99 at concurrency
+      200 improved across the board (724→429, 638→527, 660→504,
+      719→471, 642→482ms), the soak gained +13% rps with p99 885→585,
+      and the breaking-point probe improved sharply (errors 11.6%→4.7%
+      at 3000 concurrent, 21.4%→14.7% at 5000). Isolated against the
+      same source built at `-O0`, `-O2` is +50% rps, a third of the
+      error rate, and 2.6x better p99 at 500 concurrent.
+
+      A striking independent confirmation of the chan TLS fix came out
+      of this: the pre-fix build (`c36be6e`) **cannot run at `-O2` at
+      all** — the Arcade server segfaults on startup, 100% errors, every
+      attempt. Measuring a baseline at `-O2` required backporting the
+      `SL_RT_TLS_CUR` and `sl_rt_cur()`-in-chan fixes to it first.
+
+      Old gap now closed:
+      `demo/stress_harness`'s full matrix had **not** been re-run at
       `-O2` — it needs a quiet machine, and this one has been under
       unrelated load (4 to 105) for the whole session. Enabled at the
       user's direction with that known. If anything surfaces there, the
