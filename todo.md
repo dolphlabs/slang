@@ -2201,14 +2201,48 @@ prerequisite, not a different plan).
       task freed by `sl_worker_after_switch`'s completion branch while
       still linked in a run queue, and later dequeued by another worker.
 
-      So the next step should remove recycling from the picture entirely
-      rather than add another in-struct flag: build with `free(t)` and
-      `free(t->raw_base)` turned into no-ops (a deliberate leak, debug
-      only). With no `sl_task` memory ever reused, every debug flag stays
-      valid for the life of the run, ASan's shadow state stays
-      unambiguous, and the first *logical* violation becomes observable
-      without corruption noise on top of it. Only once the first fault
-      is identified under that build is it worth reasoning about a fix.
+      That is what finally worked. Rebuilt with `free(t)` and
+      `free(t->raw_base)` as no-ops (deliberate debug-only leak) so no
+      `sl_task` memory is ever recycled and every flag stays valid, the
+      earliest trustworthy trip is `chan_wl_push: already in
+      CHAN-WAITLIST` — a task pushed onto a channel wait list while
+      already on one. Since the only way out of `sl_task_park` is a
+      resume, and a resume requires a pop that clears the flag, that
+      should be impossible.
+
+      **Root cause, confirmed directly.** `sl_chan_send` and
+      `sl_chan_recv` pass a *raw* `sl_rt_current_task` to
+      `sl_chan_wl_push`, under the standing exemption that "reads
+      already inside a preempt bracket are safe". That exemption is
+      about ASYNC preemption. It does not cover the migration
+      `sl_task_park` performs **itself**: park is a context switch, the
+      task resumes on whichever worker dequeues it, and on the second
+      and later trips round those `while` loops a compiler that cached
+      the thread-affine address of `sl_rt_current_task` before the park
+      reads the *old* worker's slot — which by then names whatever task
+      that worker is now running. Proven by capturing the task before
+      the park and comparing after: `RECV: raw sl_rt_current_task
+      CHANGED ACROSS PARK` trips immediately at `-O2`.
+
+      Everything else was downstream. A foreign, currently-running task
+      gets pushed onto the wait list, is later popped and resumed while
+      running (`RESUME OF UNPARKED`), lands on a run queue it is not
+      supposed to be on, and is finally freed by
+      `sl_worker_after_switch` with that stray link still live — ASan's
+      heap-use-after-free — after which a dequeue reads recycled memory
+      and dispatches a task with a NULL `rsp`.
+
+      **Fixed** by using `sl_rt_cur()` for those two pushes instead of a
+      raw read. Verified: `worker_fanout` at `-O2` went from **8/8
+      crashing to 20/20 clean and correct**; ASan at `-O2` from a
+      use-after-free on essentially every run to **0/6**; the full suite
+      passes **4/4 consecutive runs with all generated C at `-O2`**, and
+      still passes at `-O0`, where `concurrent_compute` is also 12/12
+      clean.
+
+      Note this was a real latent bug in shipped `-O0` code, not merely
+      an `-O2` obstacle — `-O0` simply does not cache the TLS address,
+      so the window never opened.
 
       One retraction, recorded so it is not repeated: an earlier pass
       through this concluded `sl_chan_wl_push` never assigns `*tail`,
