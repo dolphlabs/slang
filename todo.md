@@ -2272,11 +2272,53 @@ prerequisite, not a different plan).
       plus `concurrent_compute` 15/15 with correct invariants at `-O2`
       and the full suite green at `-O0`.
 
-      Still deliberately NOT flipping the flag in `src/main.c`. What is
-      left before that is a judgement call about risk rather than a
-      known defect: TSan at `-O2`, the stress matrix, and the fact that
-      `-O2` changes the conditions for the conservative stack scan and
-      the hand-written asm in ways nothing here has yet exercised.
+      **Sanitizers at `-O2`, done.** TSan: **0 races in 40 runs** across
+      `spawn`, `gc_stress`, `stack_grow`, `spawn_isolation`, plus 0/8 on
+      `worker_fanout` — against `spawn` racing **6/20 at `-O1`** before
+      the TLS work, which is the strongest single piece of evidence the
+      fix is real rather than merely crash-suppressing. (`worker_fanout`
+      still hits the documented TSan-internal `DEADLYSIGNAL` at higher
+      task counts, 3/8; no race reports.) ASan+UBSan at `-O2`: clean on
+      `spawn`, `gc_stress`, `spawn_isolation`, `proc_shutdown`.
+
+      `stack_grow` was the exception, and turned out to be **two layered
+      ASan false positives**, both about relocating a task stack:
+
+      1. A `stack-buffer-underflow` on the grower's `memcpy`. A task
+         stack is a malloc'd buffer that instrumented frames have run
+         on, so ASan has poisoned parts of it as stack memory it owns;
+         copying it wholesale (required — see the red-zone reasoning at
+         the call site) is an operation ASan has no vocabulary for.
+         Fixed with `sl_stack_relocate_copy`. Note the first attempt,
+         putting `SL_GC_NO_ASAN` on a wrapper that still called
+         `memcpy`, changed nothing: the attribute suppresses
+         *instrumentation*, but `memcpy` is also *intercepted*, and
+         `__asan_memcpy` checks regardless of the caller. Only a
+         hand-rolled loop inside a `no_sanitize` function avoids both.
+      2. With that fixed, `-O2` went clean but `-O0` revealed a
+         *bad-free* underneath ("address which was not malloc()-ed") on
+         the grower's `free(old_raw)` — which is demonstrably the right
+         pointer. Same root: ASan had reclassified that buffer as stack
+         memory. Confirmed rather than assumed — rebuilding with
+         `-mllvm -asan-stack=0` makes it **0/6**.
+
+      So: **to run ASan on any program that grows a task stack, add
+      `-mllvm -asan-stack=0`**, or the collector's own stack handling
+      reports itself. Worth knowing before the next person chases it.
+
+      Also, separately: after the chan fix, `concurrent_compute` ran
+      **100 times at `-O0` with zero container losses** (the two flagged
+      runs are the benign `active_tasks_after=1` harness race, sums
+      correct), against 2 losses in 120 runs before. Suggestive that the
+      TLS bug was also the cause of that long-standing ~1-in-60
+      corruption, though 0-in-100 against a ~1/60 rate is roughly a 1-in-5
+      chance of coincidence, so it is encouraging rather than proven.
+
+      Still deliberately NOT flipping the flag in `src/main.c`. What
+      remains is a risk judgement, not a known defect: the `demo/`
+      stress matrix at `-O2`, and the fact that `-O2` changes conditions
+      for the conservative stack scan and the hand-written asm in ways
+      nothing here has yet exercised.
 
       One retraction, recorded so it is not repeated: an earlier pass
       through this concluded `sl_chan_wl_push` never assigns `*tail`,
