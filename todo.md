@@ -2325,6 +2325,76 @@ prerequisite, not a different plan).
       `-mllvm -asan-stack=0`**, or the collector's own stack handling
       reports itself. Worth knowing before the next person chases it.
 
+- [ ] **The ~1-in-60 container corruption, characterized: it is an
+      async-preemption bug, and it has nothing to do with the GC.**
+      Chased with a proper bisection rather than more hypotheses; the
+      eliminations below are the durable part, since each one was a
+      plausible story that turned out to be wrong.
+
+      Reproducer, and the key to making any of this measurable: the
+      failure rate is ~1% per run at stock settings, which is far too
+      rare to bisect against. Patching the GENERATED C to preempt
+      aggressively -- `SL_PREEMPT_QUANTUM_NS` 5ms -> 150us and the
+      ticker interval 2ms -> 0.1ms -- raises it to ~8-12% per run, an
+      8x amplification, verified to be a real change in mechanism and
+      not just timing by counting actual preemptions: 77 -> 2,169 per
+      run. That amplified build is the tool to use for any further
+      work here; everything below rests on it.
+
+      | build (all at 6,000 tasks) | bad runs |
+      |---|---|
+      | stock | 1/70 |
+      | amplified preemption | 5-8/60 |
+      | amplified, collector NEVER runs | **7/60** |
+      | amplified, no context switch (save/restore only) | **0/30** |
+      | async preemption disabled entirely | **0/300** |
+      | amplified, conservative scan disabled | **60/60, segfaults** |
+
+      What that establishes:
+
+      1. **Async preemption is necessary.** 0/300 without it, and the
+         no-async build runs LONGER than the control (1441ms vs 1253ms),
+         so a clean result there is not "did less work".
+      2. **The collector is NOT involved at all.** The never-collect
+         build (`sl_gc_threshold = 1<<62`, verified `collects=0` by
+         direct instrumentation while preemptions ran ~2,600) still
+         fails 7/60 -- if anything more than the control. An earlier
+         reading of this as "needs both" came from comparing a
+         non-amplified no-GC arm against a 1/70 control, which had no
+         power to show anything. Do not re-chase the GC here.
+      3. **It is the CONTEXT SWITCH, not the register save/restore.**
+         Disabling only `sl_task_yield_now()` inside `sl_preempt_yield`
+         -- so the signal still lands, the trampoline still saves and
+         restores the full register file, but the task never actually
+         switches away -- is 0/30 against a ~12% base.
+      4. **Not two workers on one task.** An atomic dispatch guard on
+         `sl_task` (exchange on entry to the dispatch switch, abort if
+         already set) caught 0 double-dispatches across 30 runs while
+         5 of those same runs corrupted.
+      5. **Not a use-after-free ASan can see** -- and, importantly, ASan
+         CANNOT see this class by construction: the corrupting write
+         requires the block to have been reused, so by the time the
+         value is read back the memory is un-poisoned again. 3/12 runs
+         corrupted under a 3GB quarantine with zero reports. Do not
+         treat ASan silence here as evidence of anything.
+      6. **Not stack relocation.** The workload does zero stack growths
+         (instrumented directly), so the "raw `&_sl_v` pointer into a
+         relocated stack" story -- which fits the symptom well -- is
+         ruled out for this reproducer.
+
+      Symptom, from a probe that checks `xs[i] == i` inside the task
+      rather than only checking the aggregate sum: the array is always
+      full length (200) and a map built alongside it is always perfect;
+      a small window of elements is wrong -- one observed case was 4
+      wrong slots spanning indices 30..35, the first reading 0, right
+      across the 32-element capacity doubling. `sl_gc_alloc` zeroes
+      every allocation, so a 0 is what an unwritten slot looks like.
+
+      Incidental but valuable: the conservative stack scan is
+      load-bearing, not belt-and-braces. Disabling it under amplified
+      preemption fails 60/60 with segfaults, which is a far stronger
+      justification for it than the record previously had.
+
       Also, separately: after the chan fix, `concurrent_compute` ran
       **100 times at `-O0` with zero container losses** (the two flagged
       runs are the benign `active_tasks_after=1` harness race, sums
