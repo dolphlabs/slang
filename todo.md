@@ -2244,6 +2244,40 @@ prerequisite, not a different plan).
       an `-O2` obstacle — `-O0` simply does not cache the TLS address,
       so the window never opened.
 
+      **The rest of the audit is done too.** With the pattern understood
+      — a raw thread-local read is unsafe not merely when it sits *after*
+      a switch in its own function, but whenever it can end up inside a
+      caller's loop that parks — every remaining park site was checked:
+
+      - `sl_task_park` / `sl_task_yield_now`: the only thing either runs
+        after its switch is `sl_rt_preempt_enable()`, which already goes
+        through `sl_rt_cur()`. Safe as written.
+      - `sl_rt_maybe_yield`: `sl_task_yield_now()` is its last statement,
+        nothing follows. Safe.
+      - `sl_rt_error`: reads before a switch it never returns from. Safe.
+      - `sl_reactor_wait` (pkg_net): three raw reads, all before its
+        park — correct in isolation, but every caller (`sl_net_accept`,
+        `_recv`, `_send`) invokes it from a retry **loop**, so once
+        inlined at `-O2` those reads sit inside a loop that parks.
+        **Fixed** — one `sl_rt_cur()` threaded through the registration.
+      - `sl_time_sleep` (pkg_time): same shape, and generated code calls
+        `time.sleep` from loops (the `active_tasks()` drain loop in
+        `demo/main.sl` and `worker_fanout`). **Fixed.**
+
+      Both were fixed by construction rather than by waiting for a
+      reproducer, since the reactor and timer paths are much harder to
+      stress than `chan`. Re-verified after: all seven concurrency tests
+      (`nettest`, `proc`, `proc_shutdown`, `spawn`, `spawn_isolation`,
+      `gc_stress`, `stack_grow`) **0 failures in 105 runs at `-O2`**,
+      plus `concurrent_compute` 15/15 with correct invariants at `-O2`
+      and the full suite green at `-O0`.
+
+      Still deliberately NOT flipping the flag in `src/main.c`. What is
+      left before that is a judgement call about risk rather than a
+      known defect: TSan at `-O2`, the stress matrix, and the fact that
+      `-O2` changes the conditions for the conservative stack scan and
+      the hand-written asm in ways nothing here has yet exercised.
+
       One retraction, recorded so it is not repeated: an earlier pass
       through this concluded `sl_chan_wl_push` never assigns `*tail`,
       degenerating the wait list into a one-slot register. That was
