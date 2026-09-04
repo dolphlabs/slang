@@ -1851,8 +1851,14 @@ prerequisite, not a different plan).
 
       | workload | before | after | |
       |---|---|---|---|
-      | HTTP `/json` (alloc-heavy, cross-thread) | 7259 rps | **9098 rps** | **+25%** |
+      | HTTP `/json` (alloc-heavy, cross-thread) | 7504 rps | **8044 rps** | **+7%** |
       | `concurrent_compute` (pure compute) | 1305ms | 1411ms | **-8%** |
+
+      (The +25% originally recorded here was measured with a harness
+      that ran the two builds in a FIXED order rather than alternating
+      them, and was inflated by position bias; re-measured alternating,
+      it is +7% with overlapping ranges. See the measurement-methodology
+      note at the end of this file.)
 
       The regression is real and consistent, and its cause is instructive:
       on Darwin each `_Thread_local` access is a call through its own TLV
@@ -2412,3 +2418,27 @@ prerequisite, not a different plan).
       re-verification of the suite, TSan **at `-O2`**, and the stress
       matrix. Do not flip the flag in `src/main.c` until `worker_fanout`
       and the stress programs are clean
+
+
+## Measurement methodology — a mistake worth not repeating
+
+Several performance numbers recorded during the -O2 and runtime-tuning
+work were measured with a harness that ran build A then build B in a
+**fixed order** every round. That biases systematically toward whichever
+runs second (warm page cache, CPU clocks already ramped), and it
+inflated three claims materially:
+
+| claim | as first reported | alternated |
+|---|---|---|
+| batched allocation, HTTP `/json` | +25% | **+7%**, ranges overlap |
+| shared task lookup at safepoints | +11% | **~3%**, within noise |
+| frame-carried `safepoint_exit` | looked promising | **-17%, reverted** |
+
+Results that alternated from the start survived unchanged: the safepoint
+fast path at ~2.1x on `concurrent_compute`, and the `/cpu` endpoint at
+93-108 -> 201-235 rps with p99 roughly halved.
+
+Rule for anything measured here in future: **alternate the order within
+each pair**, report medians with the raw values, and treat a delta
+smaller than the observed spread as noise. This machine is rarely idle,
+which makes single-order comparisons especially untrustworthy.
