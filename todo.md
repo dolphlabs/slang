@@ -1876,8 +1876,58 @@ prerequisite, not a different plan).
       concurrency tests including `proc_shutdown` (the `slot_idx == -1`
       path) all matching expected output byte-for-byte.
 
-      **STATUS: the HTTP acceptance test says this should NOT ship as
-      is.** The microbenchmark win below is real but does not survive
+      **STATUS: the HTTP regression is fixed; the feature is now
+      roughly neutral on HTTP and a clear win on fan-out.** Two policy
+      bugs caused it, both found by the acceptance test and neither
+      visible in any microbenchmark:
+
+      1. **Local-queue-first starved latency-critical work.**
+         `sl_task_resume` pushes to the *global* queue — every task
+         woken by an I/O completion, a chan handoff or a timer, i.e. in
+         a server essentially every request with a client waiting.
+         `sl_worker_after_switch`'s preempted branch and
+         `sl_task_submit` push to the *local* queue. Draining local
+         first let preempted and freshly-spawned work indefinitely
+         outrank work someone was blocked on: throughput unchanged,
+         p99 collapsed. `sl_pool_scan_all` now checks **global first**,
+         then local, then steals.
+      2. **The `was_empty` wake gate lost wakeups in bursts.** Its
+         argument — a sleeping worker implies all queues are empty, so
+         the next push is a 0→1 transition and signals — holds for the
+         first push of a burst and fails for the rest: N workers asleep,
+         pushes 2..M land on a non-empty queue, signal nobody, and those
+         workers wait out the 50ms backstop. Removed; `sl_pool_wake_one`
+         already short-circuits on an atomic when nobody is idle, so the
+         gate was paying latency for nothing. (It was introduced on a
+         measurement taken while the machine was under heavy unrelated
+         load.)
+
+      Measured at concurrency 500, `-O2`, both builds carrying the chan
+      TLS fix, interleaved:
+
+      | build | rps | err% | p99 |
+      |---|---|---|---|
+      | baseline (no work-stealing) | 1291-1355 | 0.00% | 854-1020ms |
+      | work-stealing, **before** fix | 1280-1351 | 0.45% | 3333-6202ms |
+      | work-stealing, **after** fix | 1377-1425 | **0.00%** | **1129-1348ms** |
+
+      So: errors eliminated, p99 improved 3-5x, throughput now ~5% ahead
+      of baseline. A residual p99 gap remains (~1230ms against ~860ms)
+      that neither steal-batch size (tested at 8 vs 64 — no measurable
+      difference) nor the wake gate explains; unexplained, and recorded
+      as such. At concurrency 1000 both builds saturate at the load
+      generator's 10s ceiling with comparable throughput and a slightly
+      higher error rate for work-stealing (1.9-2.05% against 1.40-1.44%).
+      `worker_fanout` is unchanged by the policy fix (interleaved, both
+      `-O2`: medians ~1150ms local-first against ~1182ms global-first),
+      so the fan-out win is retained.
+
+      Honest summary: this is now shippable, but it is **not** the
+      unambiguous win the microbenchmark suggested — a modest throughput
+      gain on HTTP, a small residual tail-latency cost, and slightly
+      worse behaviour at saturation.
+
+      **Superseded — original status when only microbenchmarks had run:** The microbenchmark win below is real but does not survive
       contact with the workload this feature was built for. Measured on
       `demo/main.sl` at concurrency 500, mixed workload, 50k requests,
       **both builds at `-O2`, both carrying the chan TLS fix**,
