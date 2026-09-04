@@ -1,5 +1,5 @@
 <title>Slang Load Test Matrix</title>
-<meta name="description" content="Full re-run of the comprehensive stress suite: HTTP, raw TCP, and pure concurrent-task scaling, with CPU profiles and cross-referenced continuity against the published demo benchmarks.">
+<meta name="description" content="Stress matrix re-run after a thread-local use-after-free fix unblocked -O2, with the work-stealing scheduler tried and reverted on the evidence.">
 <style>
 :root{
   color-scheme: light;
@@ -110,406 +110,236 @@ tr:last-child td{border-bottom:none;}
 footer{padding:40px 0 0; color:var(--text-muted); font-size:12.5px; line-height:1.7;}
 footer a{color:var(--text-secondary);}
 </style>
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;650;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap">
-
 <div class="wrap">
-
 <header class="hero">
-  <p class="eyebrow">stress_test/ &middot; full matrix re-run</p>
-  <h1>Twelve phases, three surfaces, zero crashes</h1>
-  <p class="lede">HTTP through the Arcade demo server, raw TCP through a dedicated echo server, and pure
-    in-process concurrency with no network at all — the same machine, one continuous run, every phase
-    sampling RSS/CPU/thread count alongside its own throughput and latency.</p>
-  <div class="hero-stats" id="hero-stats"></div>
+  <div class="eyebrow mono">stress matrix &middot; commit 1c6c70a</div>
+  <h1>The scheduler change lost. The bug it found was the win.</h1>
+  <p class="lede">A full twelve-phase re-run across HTTP, raw TCP and pure concurrent-task
+  scaling. The headline is not the feature this work set out to land &mdash; work-stealing
+  per-worker run queues was implemented, measured across five scheduling policies, and
+  <strong>reverted</strong>. What it exposed on the way was a heap use-after-free that had
+  been silently corrupting shipped builds and made <span class="mono">-O2</span> impossible.
+  Fixing that, and turning optimisation on, improved almost every number below.</p>
+  <div class="hero-stats">
+    <div class="hstat"><div class="mono">&minus;31%</div><span>p99 at 500 concurrent<br>1272 &rarr; 878 ms</span></div>
+    <div class="hstat"><div class="mono">+16%</div><span>soak throughput<br>1131 &rarr; 1313 rps</span></div>
+    <div class="hstat"><div class="mono">1.8&times;</div><span>generated C at -O2<br>worker_fanout, isolated</span></div>
+    <div class="hstat"><div class="mono">0</div><span>work-stealing policies<br>that beat one global queue</span></div>
+  </div>
 </header>
 
-<!-- ============ HTTP ============ -->
-<section id="http">
-  <div class="sec-head"><span class="dot" style="background:var(--http)"></span><h2>HTTP</h2></div>
-  <p class="sec-sub">The Arcade demo server (<code>demo/main.sl</code>), mixed workload across eight
-    endpoints unless noted — the same server <code>demo/README.md</code>'s
-    own Tier 9 → Tier 11 → cooperative-preemption numbers were measured against.</p>
-
-  <div class="grid2" style="margin-bottom:20px;">
-    <div class="card">
-      <h3>Request-count scaling &middot; concurrency 200, mixed workload</h3>
-      <div class="chart-holder"><div id="chart-http-count" class="chart-wrap"></div></div>
-      <p class="card-note">Throughput holds a flat band (1,095–1,363 req/s) from 10k to 100k requests —
-        no warmup climb, no long-run decay, <strong style="color:var(--good)">0 errors</strong> at every point.</p>
-    </div>
-    <div class="card">
-      <h3>Concurrency scaling &middot; 50,000 requests, mixed workload</h3>
-      <div class="chart-holder"><div id="chart-http-conc" class="chart-wrap"></div></div>
-      <p class="card-note">Clean through 250 concurrent. Past 500, p99 jumps an order of magnitude and
-        errors climb — the queueing cliff this suite exists to locate, not a crash: the server logs stayed empty.</p>
-    </div>
-  </div>
-
-  <div class="card" style="margin-bottom:20px;">
-    <h3>Per-endpoint characterization &middot; concurrency 100</h3>
-    <div class="grid2">
-      <div class="chart-holder"><div id="chart-http-endpoint-rps" class="chart-wrap"></div></div>
-      <div class="chart-holder"><div id="chart-http-endpoint-p99" class="chart-wrap"></div></div>
-    </div>
-    <p class="card-note"><code>ping</code>/<code>json</code>/<code>counter</code> are near-instant routing +
-      (de)serialization; <code>sleep</code> parks a task rather than blocking a thread; <code>cpu</code>/<code>alloc</code>
-      are deliberately expensive (prime counting, allocation pressure) and <code>fanout</code> (8-way spawn +
-      chan) is the slowest by design — <code>chan</code> only completed 12,064 of its 20,000-request budget inside
-      the 120s cap at ~100 req/s, a duration limit, not a fault.</p>
-  </div>
-
-  <div class="grid2">
-    <div class="card">
-      <h3>Breaking-point probe &middot; <code>sleep</code> endpoint</h3>
-      <div class="stat-pair" id="http-break-tiles"></div>
-      <p class="card-note">Errors are client-side timeouts under deliberate overload (3,000–5,000 concurrent
-        against 8 real worker threads) — the server itself never went down; <code>http_server_final.log</code>
-        ends with a clean <code>goodbye!</code>.</p>
-    </div>
-    <div class="card">
-      <h3>Soak &middot; 60s sustained, concurrency 250</h3>
-      <div class="stat-pair" id="http-soak-tiles"></div>
-      <p class="card-note">68,180 requests over a full minute at steady concurrency, 0 errors — the shape
-        that matters for "does it stay up," not a burst.</p>
-    </div>
-  </div>
-</section>
-
-<!-- ============ TCP ============ -->
-<section id="tcp">
-  <div class="sec-head"><span class="dot" style="background:var(--tcp)"></span><h2>Raw TCP</h2></div>
-  <p class="sec-sub">A dedicated echo server (<code>programs/tcp_echo</code>) with no HTTP framing at all —
-    isolates <code>net.*</code> and the kqueue reactor from the demo server's own routing/JSON cost.
-    Scaling phases use <strong>persistent</strong> connections (one dial per worker, many round-trips) —
-    see the churn callout below for why.</p>
-
-  <div class="grid2" style="margin-bottom:20px;">
-    <div class="card">
-      <h3>Request-count scaling &middot; persistent, concurrency 100</h3>
-      <div class="chart-holder"><div id="chart-tcp-count" class="chart-wrap"></div></div>
-      <p class="card-note">21.9k–30.1k round-trips/sec across 10k–100k requests, 0 errors throughout.</p>
-    </div>
-    <div class="card">
-      <h3>Concurrency scaling &middot; persistent, 50,000 round-trips</h3>
-      <div class="chart-holder"><div id="chart-tcp-conc" class="chart-wrap"></div></div>
-      <p class="card-note">Steady 20k–28k req/s through 500 concurrent connections, then a real cliff at
-        1,000: throughput drops to 10,158 req/s, p99 crosses <strong>2.1 seconds</strong>, and 33 requests time out
-        — 128 workers genuinely saturated, the TCP-side analogue of the HTTP cliff above.</p>
-    </div>
-  </div>
-
-  <div class="callout" style="border-left-color:var(--tcp)">
-    <h3 style="margin-bottom:8px;">Why request-count/concurrency scaling use <code>-persistent</code>, and churn is measured separately</h3>
-    <div class="grid2" style="margin-top:14px; gap:24px;">
-      <div>
-        <p style="margin:0 0 10px;">A fresh TCP connection per request (the default load-generator mode) hits
-          macOS's own ephemeral-port ceiling (~16,384 ports,
-          <code>net.inet.ip.portrange.first/last</code>) well before the server does — confirmed directly:
-          it reproduces even at concurrency 10, where server capacity obviously isn't the constraint, and the
-          client fails with exactly <code>connect: can't assign requested address</code>. That's a client-side OS
-          artifact, not a server bug, so scaling phases ride one persistent connection per worker instead.</p>
-      </div>
-      <div class="stat-pair">
-        <div class="stat-tile">
-          <div class="k">Churn mode, 10k conns</div>
-          <div class="v" id="tcp-churn-rps"></div>
-          <div class="card-note" style="margin-top:8px;">p50 <span id="tcp-churn-p50" class="mono"></span> — pays full connect+close every round-trip</div>
-        </div>
-        <div class="stat-tile">
-          <div class="k">Persistent mode, same range</div>
-          <div class="v" style="color:var(--tcp)">~25k <small>req/s</small></div>
-          <div class="card-note" style="margin-top:8px;">p50 <span class="mono">~0.2ms</span> — one dial, many round-trips</div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ============ COMPUTE ============ -->
-<section id="compute">
-  <div class="sec-head"><span class="dot" style="background:var(--compute)"></span><h2>Concurrent compute</h2></div>
-  <p class="sec-sub">No network at all — <code>programs/concurrent_compute</code> spawns N tasks, each doing
-    real CPU work (prime counting) plus allocation, isolating the M:N scheduler and GC's own cost from
-    <code>net.*</code>'s.</p>
+<section>
+  <div class="sec-head"><h2>HTTP</h2><p class="sec-sub">demo/main.sl (Arcade), mixed workload, 50k requests per cell</p></div>
+  <div class="callout"><strong>Concurrency scaling.</strong> The cell that drove this entire
+  investigation is 500 &mdash; the concurrency cliff work-stealing was proposed to fix. It
+  improved without work-stealing: p99 1272 &rarr; 878 ms, from the use-after-free fix and
+  <span class="mono">-O2</span> alone.</div>
+  <table class="chart"><tr><th>case</th><th colspan="3">baseline (Sep 2, pre-fix, -O0)</th>
+<th colspan="3">shipped (1c6c70a, -O2)</th><th colspan="2">delta</th></tr>
+<tr><th></th><th>rps</th><th>err</th><th>p99 ms</th><th>rps</th><th>err</th><th>p99 ms</th><th>rps</th><th>p99</th></tr>
+<tr><td class="mono">10</td>
+<td class="mono">1093</td><td class="mono errcell err-zero">0.00%</td><td class="mono">49</td>
+<td class="mono"><strong>1207</strong></td><td class="mono errcell err-zero">0.00%</td><td class="mono"><strong>40</strong></td>
+<td class="mono good">+10%</td><td class="mono good">-17%</td></tr>
+<tr><td class="mono">50</td>
+<td class="mono">1123</td><td class="mono errcell err-zero">0.00%</td><td class="mono">196</td>
+<td class="mono"><strong>1400</strong></td><td class="mono errcell err-zero">0.00%</td><td class="mono"><strong>140</strong></td>
+<td class="mono good">+25%</td><td class="mono good">-29%</td></tr>
+<tr><td class="mono">100</td>
+<td class="mono">1253</td><td class="mono errcell err-zero">0.00%</td><td class="mono">335</td>
+<td class="mono"><strong>1426</strong></td><td class="mono errcell err-zero">0.00%</td><td class="mono"><strong>260</strong></td>
+<td class="mono good">+14%</td><td class="mono good">-22%</td></tr>
+<tr><td class="mono">250</td>
+<td class="mono">1359</td><td class="mono errcell err-zero">0.00%</td><td class="mono">654</td>
+<td class="mono"><strong>1398</strong></td><td class="mono errcell err-zero">0.00%</td><td class="mono"><strong>632</strong></td>
+<td class="mono good">+3%</td><td class="mono good">-3%</td></tr>
+<tr><td class="mono">500</td>
+<td class="mono">1113</td><td class="mono errcell err-warn">0.05%</td><td class="mono">1272</td>
+<td class="mono"><strong>1350</strong></td><td class="mono errcell err-warn">0.01%</td><td class="mono"><strong>878</strong></td>
+<td class="mono good">+21%</td><td class="mono good">-31%</td></tr>
+<tr><td class="mono">1000</td>
+<td class="mono">1275</td><td class="mono errcell err-warn">2.78%</td><td class="mono">7777</td>
+<td class="mono"><strong>1378</strong></td><td class="mono errcell err-warn">2.74%</td><td class="mono"><strong>7777</strong></td>
+<td class="mono ">+8%</td><td class="mono ">+0%</td></tr>
+<tr><td class="mono">2000</td>
+<td class="mono">1425</td><td class="mono errcell err-bad">9.31%</td><td class="mono">7882</td>
+<td class="mono"><strong>1463</strong></td><td class="mono errcell err-bad">9.08%</td><td class="mono"><strong>7853</strong></td>
+<td class="mono ">+3%</td><td class="mono ">-0%</td></tr>
+  </table>
+  <p class="card-note">Single sample per cell, consistent with interleaved three-pair A/Bs
+  run separately. Machine was not idle (load 4&ndash;12 from unrelated processes); deltas
+  within a few percent should not be read as signal.</p>
 
   <div class="grid2">
-    <div class="card">
-      <h3>Throughput vs. task count</h3>
-      <div class="chart-holder"><div id="chart-compute-tps" class="chart-wrap"></div></div>
-      <p class="card-note">891 tasks/sec at 1,000 tasks, easing down to 637 at 20,000 — a smooth curve, not a
-        cliff, and every run finished with <code>active_tasks_after=0</code>: clean drain, no leaked tasks.</p>
+    <div class="card"><h3>Request-count scaling</h3>
+      <table class="chart"><tr><th>case</th><th colspan="3">baseline (Sep 2, pre-fix, -O0)</th>
+<th colspan="3">shipped (1c6c70a, -O2)</th><th colspan="2">delta</th></tr>
+<tr><th></th><th>rps</th><th>err</th><th>p99 ms</th><th>rps</th><th>err</th><th>p99 ms</th><th>rps</th><th>p99</th></tr>
+<tr><td class="mono">10k</td>
+<td class="mono">1249</td><td class="mono errcell err-zero">0.00%</td><td class="mono">724</td>
+<td class="mono"><strong>1353</strong></td><td class="mono errcell err-zero">0.00%</td><td class="mono"><strong>591</strong></td>
+<td class="mono good">+8%</td><td class="mono good">-18%</td></tr>
+<tr><td class="mono">20k</td>
+<td class="mono">1095</td><td class="mono errcell err-zero">0.00%</td><td class="mono">801</td>
+<td class="mono"><strong>1368</strong></td><td class="mono errcell err-zero">0.00%</td><td class="mono"><strong>563</strong></td>
+<td class="mono good">+25%</td><td class="mono good">-30%</td></tr>
+<tr><td class="mono">30k</td>
+<td class="mono">1254</td><td class="mono errcell err-zero">0.00%</td><td class="mono">638</td>
+<td class="mono"><strong>1377</strong></td><td class="mono errcell err-zero">0.00%</td><td class="mono"><strong>566</strong></td>
+<td class="mono good">+10%</td><td class="mono good">-11%</td></tr>
+<tr><td class="mono">40k</td>
+<td class="mono">1344</td><td class="mono errcell err-zero">0.00%</td><td class="mono">583</td>
+<td class="mono"><strong>1454</strong></td><td class="mono errcell err-zero">0.00%</td><td class="mono"><strong>510</strong></td>
+<td class="mono good">+8%</td><td class="mono good">-13%</td></tr>
+<tr><td class="mono">50k</td>
+<td class="mono">1288</td><td class="mono errcell err-zero">0.00%</td><td class="mono">660</td>
+<td class="mono"><strong>1407</strong></td><td class="mono errcell err-zero">0.00%</td><td class="mono"><strong>539</strong></td>
+<td class="mono good">+9%</td><td class="mono good">-18%</td></tr>
+      </table>
     </div>
-    <div class="card">
-      <h3>Peak RSS vs. task count</h3>
-      <div class="chart-holder"><div id="chart-compute-mem" class="chart-wrap"></div></div>
-      <p class="card-note">9.6MB → 33.6MB from 1,000 to 20,000 concurrent tasks — sub-linear, well short of
-        one-OS-thread-per-task territory. CPU utilization climbs from 615% to 722–736% (near this 8-core
-        machine's ceiling) as more tasks give the scheduler enough parallel work to fill every worker.</p>
+    <div class="card"><h3>Breaking point &amp; soak</h3>
+      <table class="chart"><tr><th>case</th><th colspan="3">baseline (Sep 2, pre-fix, -O0)</th>
+<th colspan="3">shipped (1c6c70a, -O2)</th><th colspan="2">delta</th></tr>
+<tr><th></th><th>rps</th><th>err</th><th>p99 ms</th><th>rps</th><th>err</th><th>p99 ms</th><th>rps</th><th>p99</th></tr>
+<tr><td class="mono">break 3000</td>
+<td class="mono">1017</td><td class="mono errcell err-bad">11.61%</td><td class="mono">7910</td>
+<td class="mono"><strong>1020</strong></td><td class="mono errcell err-bad">9.82%</td><td class="mono"><strong>7900</strong></td>
+<td class="mono ">+0%</td><td class="mono ">-0%</td></tr>
+<tr><td class="mono">break 5000</td>
+<td class="mono">1013</td><td class="mono errcell err-bad">21.41%</td><td class="mono">8035</td>
+<td class="mono"><strong>1006</strong></td><td class="mono errcell err-bad">18.94%</td><td class="mono"><strong>8141</strong></td>
+<td class="mono ">-1%</td><td class="mono ">+1%</td></tr>
+<tr><td class="mono">soak</td>
+<td class="mono">1131</td><td class="mono errcell err-zero">0.00%</td><td class="mono">886</td>
+<td class="mono"><strong>1313</strong></td><td class="mono errcell err-zero">0.00%</td><td class="mono"><strong>726</strong></td>
+<td class="mono good">+16%</td><td class="mono good">-18%</td></tr>
+      </table>
+      <p class="card-note">Overload behaviour improved: error rate at 3000 concurrent
+      11.61% &rarr; 9.82%, at 5000 21.41% &rarr; 18.94%. Both remain saturated &mdash; the
+      box cannot serve these levels; the p99 figures sit at the load generator's ceiling.</p>
     </div>
   </div>
 </section>
 
-<!-- ============ PROFILES ============ -->
-<section id="profiles">
-  <div class="sec-head"><h2>Where the time actually goes</h2></div>
-  <p class="sec-sub">A <code>sample</code> capture (1ms interval) taken mid-burst against each server —
-    top-of-stack leaf frames, real counts, no interpretation layered on top.</p>
-  <div class="grid3" id="profile-charts"></div>
+<section>
+  <div class="sec-head"><h2>Raw TCP</h2><p class="sec-sub">stress_test/programs/tcp_echo, persistent connections</p></div>
+  <table class="chart"><tr><th>case</th><th colspan="3">baseline (Sep 2, pre-fix, -O0)</th>
+<th colspan="3">shipped (1c6c70a, -O2)</th><th colspan="2">delta</th></tr>
+<tr><th></th><th>rps</th><th>err</th><th>p99 ms</th><th>rps</th><th>err</th><th>p99 ms</th><th>rps</th><th>p99</th></tr>
+<tr><td class="mono">10</td>
+<td class="mono">25507</td><td class="mono errcell err-zero">0.00%</td><td class="mono">4</td>
+<td class="mono"><strong>25133</strong></td><td class="mono errcell err-zero">0.00%</td><td class="mono"><strong>3</strong></td>
+<td class="mono good">-1%</td><td class="mono good">-6%</td></tr>
+<tr><td class="mono">50</td>
+<td class="mono">22609</td><td class="mono errcell err-zero">0.00%</td><td class="mono">14</td>
+<td class="mono"><strong>24832</strong></td><td class="mono errcell err-zero">0.00%</td><td class="mono"><strong>11</strong></td>
+<td class="mono good">+10%</td><td class="mono good">-19%</td></tr>
+<tr><td class="mono">100</td>
+<td class="mono">20325</td><td class="mono errcell err-zero">0.00%</td><td class="mono">30</td>
+<td class="mono"><strong>21094</strong></td><td class="mono errcell err-zero">0.00%</td><td class="mono"><strong>22</strong></td>
+<td class="mono good">+4%</td><td class="mono good">-25%</td></tr>
+<tr><td class="mono">250</td>
+<td class="mono">23585</td><td class="mono errcell err-zero">0.00%</td><td class="mono">50</td>
+<td class="mono"><strong>30723</strong></td><td class="mono errcell err-zero">0.00%</td><td class="mono"><strong>22</strong></td>
+<td class="mono good">+30%</td><td class="mono good">-56%</td></tr>
+<tr><td class="mono">500</td>
+<td class="mono">27847</td><td class="mono errcell err-zero">0.00%</td><td class="mono">25</td>
+<td class="mono"><strong>28602</strong></td><td class="mono errcell err-zero">0.00%</td><td class="mono"><strong>26</strong></td>
+<td class="mono ">+3%</td><td class="mono ">+4%</td></tr>
+<tr><td class="mono">1000</td>
+<td class="mono">10158</td><td class="mono errcell err-warn">0.07%</td><td class="mono">2108</td>
+<td class="mono"><strong>12589</strong></td><td class="mono errcell err-zero">0.00%</td><td class="mono"><strong>1760</strong></td>
+<td class="mono good">+24%</td><td class="mono good">-16%</td></tr>
+  </table>
+  <p class="card-note">Connection-churn mode is excluded deliberately: it reports 19&ndash;49%
+  errors, and the stderr breakdown shows <span class="mono">100%</span> of them are
+  <span class="mono">connect: can't assign requested address</span> &mdash; macOS ephemeral
+  port exhaustion on the client, not a server fault. The JSON summary alone is misleading here.</p>
 </section>
 
-<!-- ============ CONTINUITY ============ -->
-<section id="continuity">
-  <div class="sec-head"><h2>Continuity with the published numbers</h2></div>
-  <div class="callout">
-    <p>This suite tests the same Arcade server <code>demo/README.md</code>'s own Tier 9 → Tier 11 →
-      cooperative-preemption progression was measured against, at different concurrency points and with a
-      different scenario mix — the two are not a rerun of each other, but they land in the same shape:</p>
-    <ul style="margin:14px 0 0; padding-left:20px;">
-      <li style="margin-bottom:8px;"><strong>CPU-bound endpoints stay flat under load, not degrading further.</strong>
-        <code>demo/README</code> found <code>cpu</code>/<code>alloc</code> pinned near 75–115 req/s from 25 to
-        600 concurrent clients; this run's isolated characterization (concurrency 100) lands at 102–107 req/s —
-        the same ceiling, for the same reason (no calls or back-edges inside the hot prime-counting loop for
-        cooperative preemption to interleave around <em>as cheaply</em> as elsewhere).</li>
-      <li style="margin-bottom:8px;"><strong>Cooperative preemption is genuinely active under this load, not dormant.</strong>
-        <code>sl_rt_maybe_yield</code>/<code>sl_rt_gc_checkin</code> are real, sampled top-of-stack costs in
-        both the HTTP profile (3,651 / 1,653 samples) and the compute profile (6,997 / 2,766) — matching
-        <code>demo/README</code>'s own finding that preemption shows up as measurable overhead precisely where
-        it's supposed to.</li>
-      <li><strong>The server never crashes under deliberate overload — it queues, and clients time out.</strong>
-        Both the HTTP breaking-point probe (up to 21.4% client errors at 5,000 concurrent) and the TCP
-        concurrency cliff (1,000 concurrent) end in clean, logged shutdowns, no different from
-        <code>demo/README</code>'s own "zero crashes, zero hangs" record across every prior re-run.</li>
-    </ul>
+<section>
+  <div class="sec-head"><h2>Concurrent compute</h2><p class="sec-sub">no network; isolates scheduler and collector</p></div>
+  <div class="grid3">
+    <div class="stat-tile"><div class="eyebrow mono">20,000 tasks</div><div class="mono">31.4s &rarr; 26.4s</div><span>+19% faster</span></div>
+    <div class="stat-tile"><div class="eyebrow mono">10,000 tasks</div><div class="mono">14.8s &rarr; 14.4s</div><span>+2%</span></div>
+    <div class="stat-tile"><div class="eyebrow mono">correctness</div><div class="mono">identical</div><span>total_primes and alloc_sum match exactly at every scale</span></div>
   </div>
 </section>
 
-<footer>
-  <p><strong>Methodology.</strong> One 8-core/16GB dev laptop, not a dedicated benchmark rig — treat
-    absolute numbers as directional, the shapes (flat vs. climbing, where the cliff sits) as the real signal.
-    Every phase samples the server process's own RSS/CPU%/thread count once per second
-    (<code>scripts/monitor.sh</code>) so throughput can be read against real resource cost. Full raw output —
-    every <code>results/*.json</code>, <code>*.csv</code>, <code>compute_*.txt</code>, and
-    <code>profile_*.txt</code> — lives alongside <code>stress_test/scripts/run_full_suite.sh</code>, gitignored
-    (fresh data every run, not meant to be committed).</p>
-  <p>Reproduce with <code>cd stress_test/scripts &amp;&amp; ./run_full_suite.sh</code> — roughly 25 minutes
-    end to end, twelve phases, no manual steps.</p>
-</footer>
+<section>
+  <div class="sec-head"><h2>Work-stealing: five policies, all rejected</h2>
+  <p class="sec-sub">measured at -O2, interleaved against one baseline binary</p></div>
+  <p>The microbenchmark said yes: <span class="mono">worker_fanout</span> &mdash; a task
+  spawned onto a worker, fanning out onto that worker's own local queue &mdash; ran ~25%
+  faster. The HTTP harness said no, at every ordering policy tried.</p>
+  <table class="chart">
+  <tr><th>policy</th><th>p99 @ conc 100</th><th>p99 @ conc 500</th></tr>
+  <tr><td><strong>no work-stealing</strong></td><td class="mono good">258&ndash;352 ms</td><td class="mono good">870&ndash;939 ms</td></tr>
+  <tr><td>local queue first</td><td class="mono">249 ms</td><td class="mono err-bad">3333&ndash;6202 ms</td></tr>
+  <tr><td>global queue first</td><td class="mono err-warn">745&ndash;855 ms</td><td class="mono">1208&ndash;1227 ms</td></tr>
+  <tr><td>rotation, global every 8th dispatch</td><td class="mono">259&ndash;294 ms</td><td class="mono err-bad">4102&ndash;5934 ms</td></tr>
+  <tr><td>global first only when non-empty</td><td class="mono err-warn">755&ndash;756 ms</td><td class="mono">1159&ndash;1209 ms</td></tr>
+  <tr><td>preempted tasks to global</td><td class="mono err-bad">1896&ndash;1923 ms</td><td class="mono err-bad">2628&ndash;3077 ms</td></tr>
+  </table>
+  <div class="callout"><strong>Why no ordering works.</strong> The two queues hold different
+  populations. The global queue receives everything <span class="mono">sl_task_resume</span>
+  wakes &mdash; I/O completions, chan handoffs, timers &mdash; which in a server is nearly
+  every request with a client blocked on it. The local queues receive preempted and
+  freshly-spawned work. Any fixed priority between them starves one population, so each
+  policy fixes one concurrency and breaks the other. Throughput was consistently +5&ndash;10%;
+  tail latency consistently 2&ndash;7&times; worse. A real attempt needs fairness
+  <em>across</em> the queues &mdash; sequence numbers, or a shared FIFO discipline &mdash;
+  which is a design change, not a tuning knob.</div>
+  <p class="card-note">Two hypotheses were tested and disproven, recorded so they are not
+  retried: that the mid-concurrency cost was contention on an <em>empty</em> global queue
+  (it is not &mdash; the depth-gated variant behaves identically to global-first), and that
+  splitting by in-flight-vs-new work would unify the populations (it made both ends worse).</p>
+</section>
 
+<section>
+  <div class="sec-head"><h2>What actually changed</h2></div>
+  <div class="grid2">
+    <div class="card"><h3>The bug</h3>
+      <p><span class="mono">sl_chan_send</span> and <span class="mono">sl_chan_recv</span> read
+      <span class="mono">sl_rt_current_task</span> raw across a <span class="mono">sl_task_park</span>.
+      Park is a context switch: the task resumes on whichever worker dequeues it, so a compiler
+      that cached the thread-affine TLS address before the park then read the <em>old</em> worker's
+      slot &mdash; naming whatever task that worker was running by then. A foreign, running task
+      was enqueued on a channel wait list, later resumed while running, and finally freed with a
+      live queue link. ASan called it a heap-use-after-free; at <span class="mono">-O0</span> the
+      window simply never opened.</p>
+      <p class="card-note">Found by removing recycling from the picture &mdash; a debug build with
+      <span class="mono">free()</span> as a no-op, so in-struct debug flags stayed valid. Before
+      that, every added assertion relocated the apparent "first" fault, because it was reading
+      recycled memory.</p>
+    </div>
+    <div class="card"><h3>The unlock</h3>
+      <p>With that fixed, <span class="mono">-O2</span> became possible for the first time. The
+      pre-fix build <em>cannot run at -O2 at all</em>: the Arcade server segfaults on startup,
+      100% errors, every attempt. Establishing an <span class="mono">-O2</span> baseline for the
+      tables above required backporting the fix to the old commit first.</p>
+      <p class="card-note">Verification before enabling: full suite 4/4 consecutive at -O2;
+      seven concurrency tests 0 failures in 105 runs; TSan 0 races in 48 runs where
+      <span class="mono">spawn</span> raced 6/20 at -O1 beforehand; ASan+UBSan clean; and the
+      collector's conservative stack scan exercised with a counter proving it fired 5&ndash;20
+      times per run rather than passing by never running.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><h2>Reading these numbers</h2></div>
+  <p>Four raw snapshots are preserved untracked under <span class="mono">stress_test/</span> so
+  the history is auditable rather than overwritten:
+  <span class="mono">results_baseline_pre_O2</span> (Sep 2, pre-fix),
+  <span class="mono">results_localfirst_regression</span> (the 4&ndash;7&times; regression),
+  <span class="mono">results_globalfirst</span> (the partial fix), and
+  <span class="mono">results</span> (shipped).</p>
+  <p class="card-note">Caveat carried throughout: this machine was not idle. Load ranged from 4
+  to 12 during these runs, and earlier in the session an orphaned runaway process drove it to
+  105 &mdash; every wall-clock figure taken during that window was discarded rather than
+  caveated. Cross-build comparisons here were re-measured interleaved, alternating order within
+  each pair, so drift affects both sides equally. Single-cell deltas under a few percent are
+  noise.</p>
+</section>
 </div>
-
-<script>
-const NS = "http://www.w3.org/2000/svg";
-function el(tag, attrs, parent){
-  const e = document.createElementNS(NS, tag);
-  for (const k in attrs) e.setAttribute(k, attrs[k]);
-  if (parent) parent.appendChild(e);
-  return e;
-}
-function fmtN(n){
-  if (n >= 1000) return (n/1000).toFixed(n>=10000?0:1).replace(/\.0$/,'') + 'k';
-  return String(Math.round(n));
-}
-function tip(container){
-  const t = document.createElement('div');
-  t.className = 'tooltip';
-  container.style.position = 'relative';
-  container.appendChild(t);
-  return {
-    show(x,y,html){ t.style.opacity=1; t.style.left=x+'px'; t.style.top=y+'px'; t.innerHTML=html; },
-    hide(){ t.style.opacity=0; }
-  };
-}
-function statusColor(rate){
-  if (rate <= 0) return 'var(--good)';
-  if (rate < 1) return 'var(--warning)';
-  if (rate < 10) return 'var(--serious)';
-  return 'var(--critical)';
-}
-
-/* ---- generic line chart: series = [{name,color,points:[[x,y],...]}], xLabel fmt fn ---- */
-function lineChart(containerId, series, opts){
-  const holder = document.getElementById(containerId).parentElement;
-  const container = document.getElementById(containerId);
-  const W = 460, H = 220, M = {t:14,r:16,b:30,l:44};
-  const allX = series[0].points.map(p=>p[0]);
-  const allY = series.flatMap(s=>s.points.map(p=>p[1]));
-  const xMin = opts.xLog ? Math.log10(Math.min(...allX)) : Math.min(...allX);
-  const xMax = opts.xLog ? Math.log10(Math.max(...allX)) : Math.max(...allX);
-  const yMax = (opts.yMax !== undefined) ? opts.yMax : Math.max(...allY) * 1.12;
-  const yMin = opts.yMin !== undefined ? opts.yMin : 0;
-  const px = x => M.l + ( (opts.xLog?Math.log10(x):x) - xMin) / (xMax - xMin || 1) * (W - M.l - M.r);
-  const py = y => H - M.b - (y - yMin) / (yMax - yMin || 1) * (H - M.t - M.b);
-
-  const svg = el('svg', {class:'chart', viewBox:`0 0 ${W} ${H}`}, container);
-  // gridlines + y ticks
-  const yTicks = opts.yTicks || 4;
-  for (let i=0;i<=yTicks;i++){
-    const val = yMin + (yMax-yMin) * i/yTicks;
-    const y = py(val);
-    el('line',{class:'gridline', x1:M.l, x2:W-M.r, y1:y, y2:y}, svg);
-    el('text',{x:M.l-6, y:y+3, 'text-anchor':'end'}, svg).textContent = opts.yFmt ? opts.yFmt(val) : fmtN(val);
-  }
-  el('line',{class:'axis-line', x1:M.l, x2:W-M.r, y1:H-M.b, y2:H-M.b}, svg);
-  // x ticks
-  allX.forEach(x=>{
-    el('text',{x:px(x), y:H-M.b+16, 'text-anchor':'middle'}, svg).textContent = opts.xFmt ? opts.xFmt(x) : fmtN(x);
-  });
-
-  const tt = tip(holder);
-  series.forEach(s=>{
-    const d = s.points.map((p,i)=> (i===0?'M':'L') + px(p[0]).toFixed(1) + ' ' + py(p[1]).toFixed(1)).join(' ');
-    el('path',{d, fill:'none', stroke:s.color, 'stroke-width':2, 'stroke-linejoin':'round', 'stroke-linecap':'round'}, svg);
-    s.points.forEach(p=>{
-      const c = el('circle',{cx:px(p[0]), cy:py(p[1]), r:3.4, fill: p[2]!==undefined ? p[2] : s.color, stroke:'var(--surface-1)', 'stroke-width':1.4}, svg);
-      c.style.cursor='pointer';
-      c.addEventListener('mouseenter', (ev)=>{
-        const rect = holder.getBoundingClientRect();
-        const cx = ev.target.getBoundingClientRect();
-        tt.show(cx.left-rect.left+cx.width/2, cx.top-rect.top, (opts.tipFn ? opts.tipFn(p) : `${fmtN(p[0])} &rarr; ${fmtN(p[1])}`));
-      });
-      c.addEventListener('mouseleave', ()=>tt.hide());
-    });
-  });
-  if (series.length > 1){
-    const leg = document.createElement('div'); leg.className='legend';
-    series.forEach(s=>{ leg.innerHTML += `<span><i style="background:${s.color}"></i>${s.name}</span>`; });
-    holder.appendChild(leg);
-  }
-}
-
-/* ---- horizontal bar chart: items = [{label,value,color,sub}] ---- */
-function hbarChart(containerId, items, opts){
-  const holder = document.getElementById(containerId).parentElement;
-  const container = document.getElementById(containerId);
-  const rowH = 26, W = 460, M = {t:6,r:52,b:6,l:64};
-  const H = M.t + M.b + items.length*rowH;
-  const max = opts.max || Math.max(...items.map(i=>i.value));
-  const scale = opts.log ? (v => Math.log10(v+1)/Math.log10(max+1)) : (v => v/max);
-  const svg = el('svg', {class:'chart', viewBox:`0 0 ${W} ${H}`}, container);
-  items.forEach((it,i)=>{
-    const y = M.t + i*rowH;
-    el('text',{x:M.l-8, y:y+rowH/2+4, 'text-anchor':'end'}, svg).textContent = it.label;
-    const w = Math.max(2,(W-M.l-M.r) * scale(it.value));
-    const bar = el('rect',{x:M.l, y:y+5, width:w, height:rowH-11, rx:3, fill:it.color||'var(--http)'}, svg);
-    el('text',{x:M.l+w+7, y:y+rowH/2+4, fill:'var(--text-secondary)'}, svg).textContent = it.sub || fmtN(it.value);
-  });
-  container.appendChild(svg);
-}
-
-/* ================= DATA ================= */
-const HTTP_COUNT = [[10000,1249.3,0,85,724],[20000,1095.2,0,91,801],[30000,1254.3,0,80,638],[40000,1344.4,0,75,583],[50000,1287.8,0,77,660],[60000,1363.1,0,74,577],[70000,1194.6,0,85,719],[80000,1274.4,0,79,647],[90000,1115.4,0,94,883],[100000,1267.2,0,80,642]];
-const HTTP_CONC = [[10,1092.7,0,50000,2,49,204],[50,1123.2,0,50000,22,196,745],[100,1252.9,0,50000,41,335,590],[250,1358.8,0,50000,104,654,986],[500,1113.1,25,50000,363,1272,7778],[1000,1274.9,1390,50000,372,7777,7877],[2000,1425.2,4655,50000,416,7882,7953]];
-const HTTP_ENDPOINT = [['ping',9739.3,0,20000,9,31],['json',6548.6,0,20000,13,71],['counter',8856.2,0,20000,9,40],['sleep',1784.5,0,20000,55,69],['chan',100.1,0,12064,979,1377],['cpu',102.4,0,3000,964,1271],['alloc',107.2,0,3000,920,1299],['fanout',23.3,0,3000,4062,6259]];
-const HTTP_BREAK = [[3000,1017.2,929,8000,309,7910],[5000,1012.6,1713,8000,1427,8035]];
-const HTTP_SOAK = [1131.0,0,68180,128,885];
-const TCP_COUNT = [[10000,23302.2,0,0.265,23.52],[20000,25279.2,0,0.228,17.556],[30000,23650.3,0,0.187,25.554],[40000,25113.4,0,0.176,29.054],[50000,29870.4,0,0.17,16.996],[60000,27931.4,0,0.192,17.29],[70000,27210.9,0,0.167,22.259],[80000,30082.7,0,0.17,17.907],[90000,27675.5,0,0.179,18.38],[100000,21933.3,0,0.172,43.018]];
-const TCP_CONC = [[10,25507.5,0,0.149,3.496],[50,22609.3,0,0.196,13.818],[100,20324.7,0,0.237,29.521],[250,23585.3,0,0.194,50.328],[500,27847.3,0,0.178,24.897],[1000,10158.4,33,0.223,2107.539]];
-const TCP_CHURN = [12747.4,0,7.111,31.769,57.541];
-const COMPUTE = [[1000,891,1122,9.6,614.6],[2500,771,3241,19.6,650.8],[5000,672,7438,25.8,676.2],[10000,676,14777,31.5,722.5],[15000,647,23165,29.6,735.7],[20000,637,31355,33.6,714.0]];
-
-const PROFILES = {
-  http: [['sl_stress_count_primes_range',26369],['swtch_pri',5261],['__sigwait',5198],['kevent',5198],['__psynch_cvwait',5068],['sl_rt_maybe_yield',3651]],
-  tcp: [['swtch_pri',18038],['_platform_bzero',15845],['__sigwait',5289],['__psynch_cvwait',5263],['kevent',5173],['__psynch_mutexwait',3788]],
-  compute: [['count_primes_range',57577],['__psynch_cvwait',7962],['__sigwait',7962],['sl_rt_maybe_yield',6997],['sl_rt_gc_checkin',2766],['_tlv_get_addr',2257]]
-};
-
-/* ================= BUILD ================= */
-// hero stats
-const totalHttpReq = HTTP_COUNT.reduce((a,r)=>a+r[0],0) + HTTP_CONC.reduce((a,r)=>a+r[3],0) + HTTP_ENDPOINT.reduce((a,r)=>a+r[3],0) + HTTP_BREAK.reduce((a,r)=>a+r[3],0) + HTTP_SOAK[2];
-const totalTcpReqExact = TCP_COUNT.reduce((a,r)=>a+r[0],0) + 50000*TCP_CONC.length + 10000;
-const totalComputeTasks = COMPUTE.reduce((a,r)=>a+r[0],0);
-const heroStats = [
-  ['12', 'phases run'],
-  ['0', 'server crashes'],
-  [fmtN(totalHttpReq), 'HTTP requests'],
-  [fmtN(totalTcpReqExact), 'TCP round-trips'],
-  [fmtN(totalComputeTasks), 'compute tasks spawned'],
-  ['~30k', 'peak TCP req/s'],
-];
-const hs = document.getElementById('hero-stats');
-heroStats.forEach(([n,l],i)=>{
-  hs.innerHTML += `<div class="hstat"><div class="n${i===1?' good':''}">${n}</div><div class="l">${l}</div></div>`;
-});
-
-// HTTP request-count chart
-lineChart('chart-http-count', [{name:'throughput', color:'var(--http)', points: HTTP_COUNT.map(r=>[r[0],r[1]])}], {
-  xFmt: v => fmtN(v), yFmt: v=>fmtN(v), yMax: 1600,
-  tipFn: p => `${fmtN(p[0])} reqs &rarr; <b>${p[1]} req/s</b>`
-});
-
-// HTTP concurrency chart: p99 with point color by error rate
-{
-  const pts = HTTP_CONC.map(r=>{
-    const rate = 100*r[2]/r[3];
-    return [r[0], r[5], statusColor(rate)];
-  });
-  lineChart('chart-http-conc', [{name:'p99 latency (ms)', color:'var(--http)', points: pts}], {
-    xLog:true, xFmt: v=>fmtN(v), yFmt: v=>fmtN(v)+'ms', yMax: 8200,
-    tipFn: p => { const r = HTTP_CONC.find(x=>x[0]===p[0]); return `conc ${r[0]} &rarr; p99 <b>${r[5]}ms</b>, ${r[2]} errors`; }
-  });
-}
-
-// HTTP per-endpoint bars
-hbarChart('chart-http-endpoint-rps', HTTP_ENDPOINT.map(r=>({label:r[0], value:r[1], color:'var(--http)', sub:r[1]+' req/s'})), {log:true});
-hbarChart('chart-http-endpoint-p99', HTTP_ENDPOINT.map(r=>({label:r[0], value:r[5], color:'var(--http)', sub:r[5]+'ms'})), {log:true});
-document.getElementById('chart-http-endpoint-rps').insertAdjacentHTML('beforebegin','<div class="card-note" style="margin-bottom:6px;font-weight:600;">throughput (req/s, log scale)</div>');
-document.getElementById('chart-http-endpoint-p99').insertAdjacentHTML('beforebegin','<div class="card-note" style="margin-bottom:6px;font-weight:600;">p99 latency (ms, log scale)</div>');
-
-// HTTP break tiles
-{
-  const c = document.getElementById('http-break-tiles');
-  HTTP_BREAK.forEach(r=>{
-    const rate = (100*r[2]/r[3]).toFixed(1);
-    c.innerHTML += `<div class="stat-tile"><div class="k">conc ${r[0]}</div>
-      <div class="v" style="color:${statusColor(rate)}">${rate}%<small> err</small></div>
-      <div class="card-note" style="margin-top:6px;">${r[2]}/${r[3]} &middot; p99 ${fmtN(r[5])}ms</div></div>`;
-  });
-}
-// HTTP soak tiles
-{
-  const c = document.getElementById('http-soak-tiles');
-  c.innerHTML = `<div class="stat-tile"><div class="k">throughput</div><div class="v">${HTTP_SOAK[0]}<small> req/s</small></div></div>
-    <div class="stat-tile"><div class="k">errors</div><div class="v" style="color:var(--good)">${HTTP_SOAK[1]}</div></div>
-    <div class="stat-tile"><div class="k">p99</div><div class="v">${HTTP_SOAK[4]}<small> ms</small></div></div>`;
-}
-
-// TCP charts
-lineChart('chart-tcp-count', [{name:'throughput', color:'var(--tcp)', points: TCP_COUNT.map(r=>[r[0],r[1]])}], {
-  xFmt: v=>fmtN(v), yFmt: v=>fmtN(v), yMax: 33000,
-  tipFn: p => `${fmtN(p[0])} reqs &rarr; <b>${fmtN(p[1])} req/s</b>`
-});
-lineChart('chart-tcp-conc', [{name:'throughput', color:'var(--tcp)', points: TCP_CONC.map(r=>[r[0], r[1], r[2]>0?'var(--critical)':'var(--tcp)'])}], {
-  xLog:true, xFmt: v=>fmtN(v), yFmt: v=>fmtN(v), yMax: 31000,
-  tipFn: p => { const r = TCP_CONC.find(x=>x[0]===p[0]); return `conc ${r[0]} &rarr; <b>${fmtN(r[1])} req/s</b>, ${r[2]} errors, p99 ${r[4]}ms`; }
-});
-
-// TCP churn callout
-document.getElementById('tcp-churn-rps').textContent = fmtN(TCP_CHURN[0]) + ' req/s';
-document.getElementById('tcp-churn-p50').textContent = TCP_CHURN[2] + 'ms';
-
-// Compute charts
-lineChart('chart-compute-tps', [{name:'tasks/sec', color:'var(--compute)', points: COMPUTE.map(r=>[r[0],r[1]])}], {
-  xFmt: v=>fmtN(v), yFmt: v=>fmtN(v), yMax: 950,
-  tipFn: p => { const r = COMPUTE.find(x=>x[0]===p[0]); return `${fmtN(r[0])} tasks &rarr; <b>${r[1]} tasks/s</b>, ${fmtN(r[2])}ms wall`; }
-});
-lineChart('chart-compute-mem', [{name:'peak RSS (MB)', color:'var(--compute)', points: COMPUTE.map(r=>[r[0],r[3]])}], {
-  xFmt: v=>fmtN(v), yFmt: v=>Math.round(v)+'MB', yMax: 38,
-  tipFn: p => { const r = COMPUTE.find(x=>x[0]===p[0]); return `${fmtN(r[0])} tasks &rarr; <b>${r[3]}MB</b> peak RSS, ${r[4]}% peak CPU`; }
-});
-
-// Profile charts
-{
-  const container = document.getElementById('profile-charts');
-  const meta = [['http','HTTP server','var(--http)'],['tcp','TCP echo','var(--tcp)'],['compute','concurrent_compute','var(--compute)']];
-  meta.forEach(([key,label,color])=>{
-    const items = PROFILES[key];
-    const max = items[0][1];
-    const div = document.createElement('div');
-    div.className = 'card';
-    div.innerHTML = `<h3>${label}</h3><div id="pf-${key}"></div>`;
-    container.appendChild(div);
-    hbarChart(`pf-${key}`, items.map(([label,val])=>({label, value:val, color, sub: fmtN(val)})), {log:true, max});
-  });
-}
-</script>
