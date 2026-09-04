@@ -121,6 +121,7 @@ footer a{color:var(--text-secondary);}
   been silently corrupting shipped builds and made <span class="mono">-O2</span> impossible.
   Fixing that, and turning optimisation on, improved almost every number below.</p>
   <div class="hero-stats">
+    <div class="hstat"><div class="mono">~2&times;</div><span>compute-bound endpoints<br>after runtime tuning</span></div>
     <div class="hstat"><div class="mono">&minus;31%</div><span>p99 at 500 concurrent<br>1272 &rarr; 878 ms</span></div>
     <div class="hstat"><div class="mono">+16%</div><span>soak throughput<br>1131 &rarr; 1313 rps</span></div>
     <div class="hstat"><div class="mono">1.8&times;</div><span>generated C at -O2<br>worker_fanout, isolated</span></div>
@@ -294,6 +295,56 @@ footer a{color:var(--text-secondary);}
   retried: that the mid-concurrency cost was contention on an <em>empty</em> global queue
   (it is not &mdash; the depth-gated variant behaves identically to global-first), and that
   splitting by in-flight-vs-new work would unify the populations (it made both ends worse).</p>
+</section>
+
+<section>
+  <div class="sec-head"><h2>Runtime tuning: the safepoint path and the allocator</h2>
+  <p class="sec-sub">profile-directed, after the scheduler work was reverted</p></div>
+  <p>With work-stealing gone, a CPU profile of the server under load put
+  <span class="mono">sl_rt_maybe_yield</span> &mdash; the runtime's own safepoint
+  checkpoint &mdash; at ~84% of the request path, with <span class="mono">sl_rt_gc_checkin</span>
+  dominating it and dyld's <span class="mono">_tlv_get_addr</span> underneath. Three changes
+  followed, all measured against the same build with the two binaries <em>alternated</em>
+  within each pair.</p>
+  <table class="chart">
+  <tr><th>endpoint (conc 100)</th><th>before</th><th>after</th><th></th></tr>
+  <tr><td>alloc</td><td class="mono">146 rps</td><td class="mono"><strong>295 rps</strong></td><td class="mono good">+102%</td></tr>
+  <tr><td>chan</td><td class="mono">100 rps</td><td class="mono"><strong>204 rps</strong></td><td class="mono good">+104%</td></tr>
+  <tr><td>cpu</td><td class="mono">104 rps</td><td class="mono"><strong>210 rps</strong></td><td class="mono good">+103%</td></tr>
+  <tr><td>fanout</td><td class="mono">24 rps</td><td class="mono"><strong>47 rps</strong></td><td class="mono good">+100%</td></tr>
+  <tr><td>ping (no-op)</td><td class="mono">8714 rps</td><td class="mono">8477 rps</td><td class="mono">-3%, worse p99</td></tr>
+  <tr><td>concurrent_compute</td><td class="mono">3183 ms</td><td class="mono"><strong>1507 ms</strong></td><td class="mono good">~2.1&times;</td></tr>
+  </table>
+  <div class="grid2">
+    <div class="card"><h3>What was actually expensive</h3>
+      <p><span class="mono">sl_rt_gc_checkin</span> bracketed itself with
+      <span class="mono">preempt_disable/enable</span>, and on Darwin each of those is a
+      <em>call into dyld</em> plus an atomic read-modify-write &mdash; paid at every loop
+      back-edge, to read two global flags and usually find nothing to do. And every
+      allocation took the global <span class="mono">sl_gc_mu</span>, the same lock
+      park, resume, checkin and collection use.</p>
+      <p class="card-note">Fixes: an inline fast path that touches no thread-local state;
+      per-thread allocation batching with the pending list traced as a GC root; and
+      sharing one task lookup between <span class="mono">safepoint_enter</span> and
+      <span class="mono">maybe_yield</span>.</p>
+    </div>
+    <div class="card"><h3>Three attempts that lost</h3>
+      <p>Raising the GC threshold 8MB&rarr;64MB: no effect, so collection frequency was
+      not the cost. Carrying the owning task in the safepoint frame to avoid the lookup at
+      bracket exit: <strong>17% slower</strong> &mdash; the extra store per entry and eight
+      more bytes per frame cost more than the dyld call saved. And
+      <span class="mono">tls_model("initial-exec")</span> to avoid
+      <span class="mono">_tlv_get_addr</span> outright: Darwin ignores it, identical codegen.</p>
+      <p class="card-note">Recorded so they are not retried. The pattern: Darwin's TLS is
+      expensive, and so is nearly anything added to the safepoint hot path to dodge it.</p>
+    </div>
+  </div>
+  <div class="callout"><strong>A correction.</strong> Two figures first reported from this
+  work &mdash; +25% for batched allocation and +11% for the shared lookup &mdash; were
+  measured with a harness that ran the two builds in a <em>fixed order</em> rather than
+  alternating them, and were inflated by position bias. Re-measured alternating, they are
+  +7% and ~3% respectively, both within or near the run-to-run spread. The doubling of the
+  compute-bound endpoints alternated from the start and is unaffected.</div>
 </section>
 
 <section>
