@@ -2382,13 +2382,37 @@ prerequisite, not a different plan).
          relocated stack" story -- which fits the symptom well -- is
          ruled out for this reproducer.
 
-      Symptom, from a probe that checks `xs[i] == i` inside the task
-      rather than only checking the aggregate sum: the array is always
-      full length (200) and a map built alongside it is always perfect;
-      a small window of elements is wrong -- one observed case was 4
-      wrong slots spanning indices 30..35, the first reading 0, right
-      across the 32-element capacity doubling. `sl_gc_alloc` zeroes
-      every allocation, so a 0 is what an unwritten slot looks like.
+      Symptom, and the sharpest lead: a probe that checks `xs[i] == i`
+      INSIDE the task (not just the aggregate sum) shows the array is
+      always full length (200) and a map built alongside it is always
+      perfect. Dumping the values around each mismatch shows the
+      corruption is never scattered and never garbage -- it is always
+      **adjacent PAIRS of zeroes starting at an EVEN index**. Observed
+      starts across five failing runs: 2, 4, 6, 38, 42, 50, 118, 122,
+      126 -- every one even, some runs carrying two separate pairs
+      (e.g. 118,119 AND 122,123). Elements are 8-byte `long long`, so
+      an even start means a **16-byte aligned, 16-byte hole**.
+
+      That width is the whole clue: 16 bytes, 16-byte aligned, is one
+      XMM register / one iteration of a vectorized `memcpy`. Reads
+      elsewhere in the array are intact, and neighbouring values sit at
+      their correct indices (`0:0 1:1 2:0 3:0 4:4 5:5`), so nothing is
+      shifted -- a 16-byte chunk is simply never written, and
+      `sl_gc_alloc` zeroes every allocation, so an unwritten slot reads
+      as 0. The obvious candidate is a chunk lost from the copy inside
+      `sl_gc_realloc` (`sl_arr_reserve`'s growth path) while the task is
+      suspended mid-copy -- which would also explain why an early hole
+      at index 2..3 survives into the final 256-element buffer, since
+      every later growth copies the hole forward.
+
+      Next step for whoever picks this up: the amplified build plus a
+      directed test that forces a preemption inside a large `memcpy`
+      and diffs the result against an uninterrupted oracle -- the same
+      shape as the eighth slice's own forced-preemption spike, which
+      already exists in that plan and was never built for this case.
+      Checking the trampoline's XMM save/restore offsets against a
+      preemption landing mid-`memcpy` is the first thing to rule in or
+      out.
 
       Incidental but valuable: the conservative stack scan is
       load-bearing, not belt-and-braces. Disabling it under amplified
