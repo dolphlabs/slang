@@ -2335,6 +2335,27 @@ prerequisite, not a different plan).
       `concurrent_compute` **12/12** with correct invariants, and the
       seven concurrency tests **0 failures in 70 runs**.
 
+      **The net/reactor paths are now exercised at `-O2` too**, which
+      matters because `sl_reactor_wait` and `sl_time_sleep` were fixed
+      *by construction* with no reproducer — the least-evidenced part of
+      this work. `stress_test/programs/tcp_echo` (single parked
+      acceptor, 64 worker tasks, raw recv/send round-trips) under
+      `tcp_loadgen`:
+
+      - persistent connections, 200 concurrent: **40,000 round-trips,
+        0 errors**, ~32k rps — the `net.recv`/`net.send` parking path.
+      - connection churn, 100 and 300 concurrent, 40,000 connects —
+        exercises `net.accept` parking. Reports 19-49% errors, and
+        **every one is client-side**: the breakdown is 100% `connect:
+        can't assign requested address`, macOS ephemeral port
+        exhaustion, which `tcp_loadgen`'s own header documents as a
+        client ceiling unrelated to the server. Zero server-side
+        errors, empty server log throughout. (The JSON summary alone
+        looks alarming here and is misleading — read the stderr error
+        breakdown before concluding anything from `total_errors`.)
+      - `SIGTERM` afterwards drained and exited cleanly, so graceful
+        shutdown still works at `-O2`.
+
       One gap, open and stated rather than quietly closed:
       `demo/stress_harness`'s full matrix has **not** been re-run at
       `-O2` — it needs a quiet machine, and this one has been under
