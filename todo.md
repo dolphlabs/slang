@@ -1961,7 +1961,8 @@ prerequisite, not a different plan).
       50,000 levels of checkpointed recursion (many stack doublings,
       not just one) and is this codebase's own most direct exercise of
       the growth mechanism at the new size.
-- [ ] Turn on `-O2` for the generated C — blocked by a hazard
+- [x] Turn on `-O2` for the generated C — **done, enabled in
+      `src/main.c`.** Was blocked by a hazard
       confirmed twice now, not just suspected: `sl_rt_current_task` is
       thread-local, and an optimizing compiler is free to cache a
       pointer derived from it across a call that might migrate the
@@ -2327,12 +2328,20 @@ prerequisite, not a different plan).
       per run (670-2652 words scanned), zero runs where it never fired.**
       Threshold restored afterwards.
 
-      Still deliberately NOT flipping the flag in `src/main.c`. What
-      remains is a judgement call rather than a known defect: the
-      `demo/` stress matrix at `-O2` (wants a quiet machine), and the
-      hand-written asm, which nothing here has exercised specifically
-      beyond the fact that every test exercising `spawn` runs through
-      it.
+      **Enabled.** `src/main.c` now emits `cc -O2`. Measured payoff on
+      `worker_fanout` at 2000 tasks, interleaved on identical generated
+      C: median **2322ms at `-O0` against 1287ms at `-O2`, ~1.8x**.
+      Post-enable verification: full suite **5/5 consecutive**,
+      `concurrent_compute` **12/12** with correct invariants, and the
+      seven concurrency tests **0 failures in 70 runs**.
+
+      One gap, open and stated rather than quietly closed:
+      `demo/stress_harness`'s full matrix has **not** been re-run at
+      `-O2` — it needs a quiet machine, and this one has been under
+      unrelated load (4 to 105) for the whole session. Enabled at the
+      user's direction with that known. If anything surfaces there, the
+      revert is a one-line change at the `cc` invocation in
+      `src/main.c`.
 
       One retraction, recorded so it is not repeated: an earlier pass
       through this concluded `sl_chan_wl_push` never assigns `*tail`,
