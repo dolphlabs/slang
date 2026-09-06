@@ -128,14 +128,9 @@ typedef struct sl_task {
     struct sl_safepoint *safepoint_top;
     int grows_seen;
     struct sl_task *next;    /* run-queue link, runtime_pool.c */
-    void *entry_arg;         /* the task's own entry-fn argument --
-                                rooted directly by the collector while
-                                queued (a not-yet-started task's
-                                safepoint chain is empty), and by the
-                                task's own chain once it starts
-                                running normally. See runtime_pool.c
-                                and sl_gc_collect's run-queue walk
-                                (runtime_gc.c) for both halves. */
+    void *entry_arg;
+    unsigned char entry_arg_store[64];
+    int entry_arg_owned;
     int is_main;             /* Tier 11 fourth slice: task-scoped (not
                                 thread-scoped) replacement for the old
                                 sl_rt_is_main_thread -- set once, only
