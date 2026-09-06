@@ -45,6 +45,21 @@ for t in tests/*/main.sl; do
             cat "/tmp/sl_${name}.diff"
             fail=1
         fi
+        if [ -f "tests/$name/expected.mir" ]; then
+            if ./slangc "$t" --dump-mir >"/tmp/sl_${name}.mir" 2>"$err"; then
+                if diff -u "tests/$name/expected.mir" "/tmp/sl_${name}.mir" >/tmp/sl_${name}.mir.diff; then
+                    echo "PASS $name (mir)"
+                else
+                    echo "FAIL $name (mir dump mismatch)"
+                    cat "/tmp/sl_${name}.mir.diff"
+                    fail=1
+                fi
+            else
+                echo "FAIL $name (--dump-mir error)"
+                cat "$err"
+                fail=1
+            fi
+        fi
     else
         echo "FAIL $name (compile or runtime error)"
         cat "$err"

@@ -249,6 +249,8 @@ Token lexer_next(Lexer *lx) {
         KW("as", T_KW_AS)
         KW("struct", T_KW_STRUCT)
         KW("gc", T_KW_GC)
+        KW("own", T_KW_OWN)
+        KW("mut", T_KW_MUT)
         KW("impl", T_KW_IMPL)
         KW("extern", T_KW_EXTERN)
         KW("link", T_KW_LINK)
@@ -326,6 +328,7 @@ Token lexer_next(Lexer *lx) {
     /* single-char tokens */
     lx->pos++;
     switch (c) {
+    case '&': return make_token(T_AMP, line);
     case '+': return make_token(T_PLUS, line);
     case '-': return make_token(T_MINUS, line);
     case '*': return make_token(T_STAR, line);
@@ -375,6 +378,9 @@ const char *token_type_name(TokenType t) {
     case T_KW_AS:    return "'as'";
     case T_KW_STRUCT:return "'struct'";
     case T_KW_GC:    return "'gc'";
+    case T_KW_OWN:   return "'own'";
+    case T_KW_MUT:   return "'mut'";
+    case T_AMP:      return "'&'";
     case T_KW_IMPL:  return "'impl'";
     case T_KW_EXTERN:return "'extern'";
     case T_KW_LINK:  return "'link'";

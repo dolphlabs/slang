@@ -315,7 +315,7 @@ static const char **call_arg_expects(CG *cg, Expr *e) {
             sig = sig_find_in(cg, pkg, right);
         } else {
             const char *recv_t = infer_ident_name(cg, left, e->line);
-            StructDef *sd = struct_find_canon(cg, recv_t);
+            StructDef *sd = struct_of_type(cg, recv_t);
             if (!sd) return NULL;
             sig = method_find(cg, sd, right);
         }

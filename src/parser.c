@@ -99,8 +99,68 @@ static void call_push_arg(Expr *call, Expr *arg) {
 /* ---- expressions (precedence climbing) ---- */
 
 static Expr *parse_expression(Parser *p);
+static Type *parse_type(Parser *p);
 static const char *parse_type_name(Parser *p);
 static FuncDecl *parse_fn_decl(Parser *p, int is_extern);
+
+static int next_is(Parser *p, TokenType t) {
+    if (p->pos + 1 >= p->count)
+        return 0;
+    return p->toks[p->pos + 1].type == t;
+}
+
+static Type *ty_new(TypeKind k) {
+    Type *t = (Type *)xmalloc(sizeof(Type));
+    memset(t, 0, sizeof(Type));
+    t->kind = k;
+    return t;
+}
+
+static Type *ty_named(char *name) {
+    Type *t = ty_new(TY_NAMED);
+    t->as.name = name;
+    return t;
+}
+
+static Type *ty_wrap(TypeKind k, Type *inner) {
+    Type *t = ty_new(k);
+    t->as.inner = inner;
+    return t;
+}
+
+static char *type_string(Type *t) {
+    switch (t->kind) {
+    case TY_NAMED:
+        return xstrdup(t->as.name);
+    case TY_ARRAY:
+        return xasprintf("[%s]", type_string(t->as.inner));
+    case TY_MAP:
+        return xasprintf("map[%s]%s", type_string(t->as.map.key),
+                         type_string(t->as.map.val));
+    case TY_OPT:
+        return xasprintf("opt[%s]", type_string(t->as.inner));
+    case TY_RESULT:
+        return xasprintf("result[%s,%s]", type_string(t->as.result.ok),
+                         type_string(t->as.result.err));
+    case TY_CHAN:
+        return xasprintf("chan[%s]", type_string(t->as.inner));
+    case TY_REF:
+        return xasprintf("&%s", type_string(t->as.inner));
+    case TY_REFMUT:
+        return xasprintf("&mut %s", type_string(t->as.inner));
+    case TY_OWN:
+        return xasprintf("own %s", type_string(t->as.inner));
+    case TY_GC:
+        return xasprintf("gc %s", type_string(t->as.inner));
+    case TY_PTR:
+        return xasprintf("ptr[%s]", type_string(t->as.inner));
+    case TY_RAW:
+        return xasprintf("*%s", type_string(t->as.inner));
+    case TY_RAWMUT:
+        return xasprintf("*mut %s", type_string(t->as.inner));
+    }
+    return NULL;
+}
 
 static void list_push_elem(Expr *list, Expr *elem) {
     int n = list->as.list.nelems;
@@ -326,6 +386,23 @@ static Expr *parse_unary(Parser *p) {
         e->as.unary.operand = operand;
         return e;
     }
+    if (tk->type == T_AMP) {
+        advance(p);
+        int mut = match(p, T_KW_MUT);
+        Expr *operand = parse_unary(p);
+        Expr *e = new_expr(EX_UNARY, tk->line);
+        e->as.unary.op = xstrdup(mut ? "&mut" : "&");
+        e->as.unary.operand = operand;
+        return e;
+    }
+    if (tk->type == T_STAR) {
+        advance(p);
+        Expr *operand = parse_unary(p);
+        Expr *e = new_expr(EX_UNARY, tk->line);
+        e->as.unary.op = xstrdup("*");
+        e->as.unary.operand = operand;
+        return e;
+    }
     Expr *e = parse_postfix(p);
     /* explicit casts: expr as T (the only way to narrow) */
     while (match(p, T_KW_AS)) {
@@ -518,121 +595,119 @@ static Expr *parse_interp_string(Token *tk) {
 
 /* ---- statements ---- */
 
-static const char *parse_type_name(Parser *p) {
+static Type *parse_type_atom(Parser *p) {
     Token *tk = peek(p);
     switch (tk->type) {
-    case T_TY_INT:   advance(p); return "int";
-    case T_TY_FLOAT: advance(p); return "float";
-    case T_TY_STR:   advance(p); return "str";
-    case T_TY_BOOL:  advance(p); return "bool";
-    case T_TY_BYTES: advance(p); return "bytes";
-    case T_TY_I8:    advance(p); return "i8";
-    case T_TY_I16:   advance(p); return "i16";
-    case T_TY_I32:   advance(p); return "i32";
-    case T_TY_I64:   advance(p); return "i64";
-    case T_TY_U8:    advance(p); return "u8";
-    case T_TY_U16:   advance(p); return "u16";
-    case T_TY_U32:   advance(p); return "u32";
-    case T_TY_U64:   advance(p); return "u64";
-    case T_TY_F32:   advance(p); return "f32";
+    case T_TY_INT:   advance(p); return ty_named(xstrdup("int"));
+    case T_TY_FLOAT: advance(p); return ty_named(xstrdup("float"));
+    case T_TY_STR:   advance(p); return ty_named(xstrdup("str"));
+    case T_TY_BOOL:  advance(p); return ty_named(xstrdup("bool"));
+    case T_TY_BYTES: advance(p); return ty_named(xstrdup("bytes"));
+    case T_TY_I8:    advance(p); return ty_named(xstrdup("i8"));
+    case T_TY_I16:   advance(p); return ty_named(xstrdup("i16"));
+    case T_TY_I32:   advance(p); return ty_named(xstrdup("i32"));
+    case T_TY_I64:   advance(p); return ty_named(xstrdup("i64"));
+    case T_TY_U8:    advance(p); return ty_named(xstrdup("u8"));
+    case T_TY_U16:   advance(p); return ty_named(xstrdup("u16"));
+    case T_TY_U32:   advance(p); return ty_named(xstrdup("u32"));
+    case T_TY_U64:   advance(p); return ty_named(xstrdup("u64"));
+    case T_TY_F32:   advance(p); return ty_named(xstrdup("f32"));
     case T_TY_MAP: {
-        /* map[K]V */
         advance(p);
         expect(p, T_LBRACKET, "'[' after 'map'");
-        const char *k = parse_type_name(p);
+        Type *k = parse_type(p);
         expect(p, T_RBRACKET, "']' between key and value types");
-        const char *v = parse_type_name(p);
-        StrBuf sb;
-        sb_init(&sb);
-        sb_append(&sb, "map[");
-        sb_append(&sb, k);
-        sb_putc(&sb, ']');
-        sb_append(&sb, v);
-        return sb.data;
+        Type *v = parse_type(p);
+        Type *t = ty_new(TY_MAP);
+        t->as.map.key = k;
+        t->as.map.val = v;
+        return t;
     }
     case T_TY_OPT: {
-        /* opt[T] */
         advance(p);
         expect(p, T_LBRACKET, "'[' after 'opt'");
-        const char *t = parse_type_name(p);
+        Type *inner = parse_type(p);
         expect(p, T_RBRACKET, "']' to close opt type");
-        StrBuf sb;
-        sb_init(&sb);
-        sb_append(&sb, "opt[");
-        sb_append(&sb, t);
-        sb_putc(&sb, ']');
-        return sb.data;
+        return ty_wrap(TY_OPT, inner);
     }
     case T_TY_CHAN: {
-        /* chan[T] */
         advance(p);
         expect(p, T_LBRACKET, "'[' after 'chan'");
-        const char *t = parse_type_name(p);
+        Type *inner = parse_type(p);
         expect(p, T_RBRACKET, "']' to close chan type");
-        StrBuf sb;
-        sb_init(&sb);
-        sb_append(&sb, "chan[");
-        sb_append(&sb, t);
-        sb_putc(&sb, ']');
-        return sb.data;
+        return ty_wrap(TY_CHAN, inner);
     }
     case T_TY_RESULT: {
-        /* result[T, E] */
         advance(p);
         expect(p, T_LBRACKET, "'[' after 'result'");
-        const char *t = parse_type_name(p);
+        Type *ok = parse_type(p);
         expect(p, T_COMMA, "',' between value and error types");
-        const char *e = parse_type_name(p);
+        Type *err = parse_type(p);
         expect(p, T_RBRACKET, "']' to close result type");
-        StrBuf sb;
-        sb_init(&sb);
-        sb_append(&sb, "result[");
-        sb_append(&sb, t);
-        sb_append(&sb, ",");
-        sb_append(&sb, e);
-        sb_putc(&sb, ']');
-        return sb.data;
+        Type *t = ty_new(TY_RESULT);
+        t->as.result.ok = ok;
+        t->as.result.err = err;
+        return t;
     }
     case T_TY_DURATION:
         advance(p);
-        return "duration";
+        return ty_named(xstrdup("duration"));
     case T_TY_RAWPTR:
         advance(p);
-        return "rawptr";
+        return ty_named(xstrdup("rawptr"));
     case T_IDENT: {
-        /* user-defined struct type: Name or pkg.Name */
+        if (!strcmp(tk->text, "ptr") && next_is(p, T_LBRACKET)) {
+            advance(p);
+            expect(p, T_LBRACKET, "'[' after 'ptr'");
+            Type *inner = parse_type(p);
+            expect(p, T_RBRACKET, "']' to close ptr type");
+            return ty_wrap(TY_PTR, inner);
+        }
         advance(p);
         char *name = tk->text;
         if (check(p, T_DOT)) {
             advance(p);
             Token *member = expect(p, T_IDENT, "a type name after '.'");
-            StrBuf sb;
-            sb_init(&sb);
-            sb_append(&sb, name);
-            sb_append(&sb, p_dot_str);
-            sb_append(&sb, member->text);
-            return sb.data;
+            return ty_named(xasprintf("%s%s%s", name, p_dot_str, member->text));
         }
-        return name;
+        return ty_named(name);
     }
     case T_LBRACKET: {
-        advance(p); /* '[' */
-        const char *inner = parse_type_name(p);
+        advance(p);
+        Type *inner = parse_type(p);
         expect(p, T_RBRACKET, "']' to close array type");
-        StrBuf sb;
-        sb_init(&sb);
-        sb_putc(&sb, '[');
-        sb_append(&sb, inner);
-        sb_putc(&sb, ']');
-        return sb.data;
+        return ty_wrap(TY_ARRAY, inner);
     }
     default:
         parse_error(tk,
                     "expected a type name (int, float, str, bool, bytes, "
                     "i8..u64, f32, [T], map[K]V, opt[T], result[T,E], "
-                    "chan[T], duration, rawptr, or a struct name)");
+                    "chan[T], duration, rawptr, ptr[T], own T, gc T, "
+                    "&T, &mut T, *T, *mut T, or a struct name)");
     }
-    return NULL; /* unreachable */
+    return NULL;
+}
+
+static Type *parse_type(Parser *p) {
+    if (match(p, T_KW_OWN))
+        return ty_wrap(TY_OWN, parse_type(p));
+    if (match(p, T_KW_GC))
+        return ty_wrap(TY_GC, parse_type(p));
+    if (match(p, T_AMP)) {
+        if (match(p, T_KW_MUT))
+            return ty_wrap(TY_REFMUT, parse_type(p));
+        return ty_wrap(TY_REF, parse_type(p));
+    }
+    if (match(p, T_STAR)) {
+        if (match(p, T_KW_MUT))
+            return ty_wrap(TY_RAWMUT, parse_type(p));
+        return ty_wrap(TY_RAW, parse_type(p));
+    }
+    return parse_type_atom(p);
+}
+
+static const char *parse_type_name(Parser *p) {
+    return type_string(parse_type(p));
 }
 
 static Stmt *parse_if_stmt(Parser *p);
@@ -935,7 +1010,8 @@ static Stmt *parse_statement(Parser *p) {
         Expr *expr = parse_expression(p);
         if (match(p, T_ASSIGN)) {
             if (expr->kind != EX_IDENT && expr->kind != EX_INDEX &&
-                expr->kind != EX_FIELD)
+                expr->kind != EX_FIELD &&
+                !(expr->kind == EX_UNARY && !strcmp(expr->as.unary.op, "*")))
                 parse_error(tk, "invalid assignment target");
             Expr *value = parse_expression(p);
             expect(p, T_SEMI, "';'");

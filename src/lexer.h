@@ -28,6 +28,8 @@ typedef enum {
     T_KW_AS,
     T_KW_STRUCT,
     T_KW_GC,
+    T_KW_OWN,
+    T_KW_MUT,
     T_KW_IMPL,
     T_KW_EXTERN,
     T_KW_LINK,
@@ -69,6 +71,7 @@ typedef enum {
     T_GT,
     T_LTE,
     T_GTE,
+    T_AMP,
     T_ANDAND,
     T_OROR,
     T_QQ, /* '??' null-coalescing */

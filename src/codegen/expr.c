@@ -175,6 +175,7 @@ char *gen_comparison(CG *cg, Expr *e, const char *lt, const char *rt) {
 char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
     const char *name = e->as.call.name;
     *handled = 1;
+    move_consume(cg, e);
 
     if (!strcmp(name, "len")) {
         const char *t = infer_type(cg, e->as.call.args[0]);
@@ -417,6 +418,7 @@ char *gen_ctor(CG *cg, Expr *e) {
     char *v = gen_expr(cg, arg);
     cg->expect = saved;
     v = maybe_cast(cg, target, at, v);
+    move_consume(cg, arg);
     const char *cn = ctype_of(cg, ty);
     char *inner;
     if (!strcmp(name, "some")) {
@@ -500,7 +502,7 @@ char *gen_call(CG *cg, Expr *e) {
                          right, pkg);
         } else {
             recv_t = infer_ident_name(cg, left, e->line);
-            StructDef *sd = struct_find_canon(cg, recv_t);
+            StructDef *sd = struct_of_type(cg, recv_t);
             if (!sd)
                 cg_error(e->line, "call to undefined function '%s'", name);
             sig = method_find(cg, sd, right);
@@ -566,6 +568,7 @@ char *gen_call(CG *cg, Expr *e) {
         sb_append(&sb, names[i]);
     }
     sb_putc(&sb, ')');
+    move_consume(cg, e);
 
     /* Tier 10: bracket this call with a root list built from the
      * liveness pass's own live_set for this node (see wrap_safepoint)
@@ -671,7 +674,7 @@ char *gen_structlit(CG *cg, Expr *e) {
     const char *canon = infer_type(cg, e); /* validates fields too */
     StructDef *sd = struct_find_canon(cg, canon);
     const char *sc = mangle_struct(canon);
-    int is_gc = sd->is_gc;
+    int is_gc = sd->is_gc && !cg->stack_box;
     const char *dot = is_gc ? "->" : ".";
     StrBuf sb;
     sb_init(&sb);
@@ -900,6 +903,10 @@ char *gen_expr(CG *cg, Expr *e) {
         if (!strcmp(e->as.unary.op, "-") && is_int(infer_type(cg, e)))
             return xasprintf("((%s)(-(%s)))", map_type(infer_type(cg, e)),
                              o);
+        if (!strcmp(e->as.unary.op, "&") || !strcmp(e->as.unary.op, "&mut"))
+            return xasprintf("(&(%s))", o);
+        if (!strcmp(e->as.unary.op, "*"))
+            return xasprintf("(*(%s))", o);
         return xasprintf("(%s%s)", e->as.unary.op, o);
     }
     case EX_CAST: {

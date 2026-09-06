@@ -13,6 +13,7 @@ extern fn sl_ffi_counter_next(h: rawptr) -> i32;
 extern fn sl_ffi_counter_free(h: rawptr);
 extern fn sl_ffi_sum_bytes(ptr: rawptr, len: i32) -> i32;
 extern fn sl_ffi_null() -> rawptr;
+extern fn sl_ffi_store(p: ptr[i32], v: i32) -> i32;
 
 println(sl_ffi_add(2, 40));
 println(sl_ffi_greet("slang"));
@@ -36,3 +37,7 @@ if sl_ffi_null() == nullptr {
 } else {
     println("FAIL null");
 }
+
+let slot: i32 = 0;
+println(sl_ffi_store(&mut slot, 99));
+println(slot);
