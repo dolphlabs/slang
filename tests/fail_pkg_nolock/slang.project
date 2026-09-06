@@ -1,0 +1,3 @@
+name t
+version 0.1.0
+pkg demo git https://example.com/demo tag v1

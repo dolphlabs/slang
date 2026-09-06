@@ -16,10 +16,16 @@
 #include "codegen/liveness.h"
 #include "codegen/mir.h"
 #include "rtpath.h"
+#include "project.h"
+
+#include <limits.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 static void print_usage(void) {
     fputs("usage: slangc <file.sl> [-o <name>] [--emit-c] [--keep-c] [--run] "
-          "[--dump-liveness] [--dump-mir]",
+          "[--dump-liveness] [--dump-mir]\n"
+          "       slangc get [file.sl|dir]",
           stderr);
     fputc(10, stderr);
 }
@@ -47,11 +53,52 @@ static char *derive_stem(const char *path) {
     return stem;
 }
 
+static int cmd_get(const char *hint) {
+    char start[PATH_MAX];
+    if (hint && hint[0]) {
+        if (!realpath(hint, start)) {
+            fputs("slang: cannot resolve '", stderr);
+            fputs(hint, stderr);
+            fputs("'\n", stderr);
+            return 1;
+        }
+        struct stat st;
+        if (stat(start, &st) == 0 && S_ISREG(st.st_mode)) {
+            char *slash = strrchr(start, '/');
+            if (slash) {
+                if (slash == start)
+                    start[1] = '\0';
+                else
+                    *slash = '\0';
+            }
+        }
+    } else if (!getcwd(start, sizeof(start))) {
+        fputs("slang: cannot determine working directory\n", stderr);
+        return 1;
+    }
+    char *root = project_find_root(start);
+    if (!root) {
+        fputs("slang: no slang.project found\n", stderr);
+        return 1;
+    }
+    SlProject *p = project_load(root);
+    project_get(p);
+    fputs("wrote ", stdout);
+    fputs(root, stdout);
+    fputs("/slang.lock\n", stdout);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     const char *input = NULL;
     const char *outname = NULL;
     int emit_c = 0, keep_c = 0, run = 0, want_liveness_dump = 0,
         want_mir_dump = 0;
+
+    if (argc >= 2 && !strcmp(argv[1], "get")) {
+        sl_compiler_argv0 = argv[0];
+        return cmd_get(argc >= 3 ? argv[2] : NULL);
+    }
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-o")) {

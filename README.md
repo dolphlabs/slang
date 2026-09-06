@@ -32,6 +32,7 @@ Useful flags:
 | `--emit-c`  | Only write the generated C file (no compilation)    |
 | `--keep-c`  | Keep the generated C file after compiling           |
 | `--run`     | Compile, then immediately execute the result        |
+| `get`       | Fetch `slang.project` pins and write `slang.lock`   |
 
 Want to see everything at once instead of one feature at a time? See
 **[`demo/`](demo/)** — a full server (dice game, guestbook wall, live
@@ -484,7 +485,8 @@ while proc.active_tasks() > 0 {
 
 `proc.getenv(name)` reads an environment variable, returning
 `opt[str]` (`none` if unset). `proc.args()` is the process argument
-list (`[str]`); `args[0]` is the executable path.
+list (`[str]`); `args[0]` is the executable path. `proc.cwd()` is the
+working directory as `result[str, str]`.
 
 #### `fs`
 
@@ -705,7 +707,7 @@ from a slang program exercising `extern fn`, `link`, `rawptr`,
 A **package is a directory**: every `.sl` file inside it is compiled
 together into one shared namespace, as if concatenated. Import paths
 resolve to a directory next to the importer, then a native package,
-then `stdlib/<path>`.
+then `stdlib/<path>`, then a pin in `slang.project`.
 
 ```slang
 import "geometry";   // binds the name "geometry" in this file's scope
@@ -744,6 +746,26 @@ Rules:
 
 See `examples/pkgdemo/` for a complete multi-package project.
 
+External packages are pinned in `slang.project` (walked up from the
+entry file). Imports stay short. `slang.lock` holds content hashes
+and is written by `slangc get`, never by hand.
+
+```
+name myserver
+version 0.1.0
+
+pkg foo git https://github.com/dolphlabs/foo tag v0.1.0
+```
+
+```slang
+import "foo";
+```
+
+`slangc get` clones each `pkg` line into `$SLANG_CACHE/pkg/<name>/<hash>`
+(`~/.cache/slang` if unset) and writes `slang.lock`. Compile does not
+hit the network. A missing lock, missing cache, or hash mismatch is
+an error.
+
 ## How it works
 
 ```
@@ -751,7 +773,7 @@ main.sl ──loader──> packages ──lexer/parser──> ASTs ──codege
 ```
 
 1. **Loader** (`src/loader.c`) — resolves imports (local directory,
-   native package, then stdlib), scans package directories for `.sl`
+   native package, stdlib, then `slang.project` pins), scans package directories for `.sl`
    files (in deterministic sorted order), merges them per package, and
    detects cycles via canonical paths.
 2. **Lexer** (`src/lexer.c`) — tokenizes source into identifiers,

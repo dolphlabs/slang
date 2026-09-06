@@ -9,6 +9,7 @@
 #include "codegen/pkg_proc/pkg_proc.h"
 #include "codegen/pkg_fs/pkg_fs.h"
 #include "rtpath.h"
+#include "project.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -63,7 +64,7 @@ static int is_ident_like(const char *s) {
 
 typedef struct {
     PkgList *pkgs;
-    /* realpaths of packages currently being loaded (cycle detection) */
+    SlProject *project;
     char **stack;
     int nstack;
     int scap;
@@ -176,7 +177,7 @@ static void merge_program(Package *pkg, Program *src, const char *fname) {
     }
 }
 
-static int load_package_dir(Loader *ld, const char *real);
+static int load_package_dir(Loader *ld, const char *real, const char *name);
 
 /* Built-in packages implemented natively by the code generator. */
 /* Each native package declares its own import name in its own
@@ -242,13 +243,29 @@ static void load_import(Loader *ld, const char *from_dir,
 
     char treal[PATH_MAX];
     if (realpath(target, treal) && is_pkg_dir(treal)) {
-        load_package_dir(ld, treal);
+        load_package_dir(ld, treal, NULL);
         return;
     }
 
     char *std = slang_stdlib_pkg(ipath);
     if (std) {
-        load_package_dir(ld, std);
+        load_package_dir(ld, std, NULL);
+        return;
+    }
+
+    SlPkgPin *pin = project_find_pin(ld->project, ipath);
+    if (pin) {
+        if (!pin->hash)
+            load_error("package '%s' is listed in slang.project; run slangc get",
+                       ipath);
+        char *cached = project_cache_dir(pin);
+        if (!project_is_dir(cached))
+            load_error("package '%s' is not in the cache; run slangc get",
+                       ipath);
+        char *got = project_tree_hash(cached);
+        if (strcmp(got, pin->hash))
+            load_error("package '%s' hash mismatch; run slangc get", ipath);
+        load_package_dir(ld, cached, pin->name);
         return;
     }
 
@@ -256,7 +273,7 @@ static void load_import(Loader *ld, const char *from_dir,
                ipath, from_pkg);
 }
 
-static int load_package_dir(Loader *ld, const char *real) {
+static int load_package_dir(Loader *ld, const char *real, const char *name) {
     int existing = pkg_index_by_path(ld, real);
     if (existing >= 0)
         return existing;
@@ -295,7 +312,7 @@ static int load_package_dir(Loader *ld, const char *real) {
     qsort(names, nnames, sizeof(char *), cmp_str);
 
     Package p;
-    p.name = path_base(real);
+    p.name = name ? xstrdup(name) : path_base(real);
     p.path = xstrdup(real);
     p.prog = new_program();
     p.native = 0;
@@ -346,6 +363,7 @@ int load_packages(const char *main_file, PkgList *out) {
 
     Loader ld;
     ld.pkgs = out;
+    ld.project = NULL;
     ld.stack = NULL;
     ld.nstack = 0;
     ld.scap = 0;
@@ -359,7 +377,11 @@ int load_packages(const char *main_file, PkgList *out) {
     if (!realpath(dir, dir_real))
         load_error("cannot resolve directory of '%s'", main_file);
 
-    return load_package_dir(&ld, dir_real);
+    char *proot = project_find_root(dir_real);
+    if (proot)
+        ld.project = project_load(proot);
+
+    return load_package_dir(&ld, dir_real, NULL);
 }
 
 char **collect_link_libs(PkgList *pkgs, int *out_count) {

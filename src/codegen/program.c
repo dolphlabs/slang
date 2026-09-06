@@ -444,7 +444,7 @@ void emit_opt_res_tracers(CG *cg) {
  * opt/result instantiations regardless of which of their functions
  * the slang program actually calls or how it uses their return
  * values (net: i32/str, bytes/str, bool/str for its handles/recv/
- * nonblock; proc: opt[str] for getenv); register them whenever the
+ * nonblock; proc: opt[str] for getenv, result[str,str] for cwd); register them whenever the
  * owning package is imported so their typedefs always exist
  * alongside the runtime code that references them. */
 void force_native_result_types(CG *cg) {
@@ -460,8 +460,10 @@ void force_native_result_types(CG *cg) {
         if (cg->want_tls)
             res_cname(cg, "rawptr", "str");
     }
-    if (want_pkg(cg, "proc"))
+    if (want_pkg(cg, "proc")) {
         opt_cname(cg, "str");
+        res_cname(cg, "str", "str");
+    }
     if (want_pkg(cg, "fs")) {
         res_cname(cg, "i32", "str");
         res_cname(cg, "bytes", "str");

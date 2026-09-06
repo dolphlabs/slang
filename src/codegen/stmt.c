@@ -913,21 +913,33 @@ void gen_stmt(CG *cg, Stmt *s) {
         emit_line(cg, "{");
         cg->indent++;
         if (nargs == 0) {
-            emit_line(cg, "%s *_sl_sa%d = NULL;", shape->sname, id);
+            move_consume(cg, call);
+            emit_line(cg, "sl_rt_active_spawns_inc();");
+            emit_line(cg, "sl_task_submit(%s_entry, NULL);", shape->tname);
+        } else if (!shape->has_tracer) {
+            emit_line(cg, "%s _sl_sa%d;", shape->sname, id);
+            for (int i = 0; i < nargs; i++) {
+                const char *saved = expect_push(cg, sig->param_slang[i]);
+                const char *at = infer_type(cg, call->as.call.args[i]);
+                cg->expect = saved;
+                if (!value_assignable(sig->param_slang[i],
+                                      call->as.call.args[i], at))
+                    cg_error(s->line,
+                             "argument %d of '%s': cannot pass %s where "
+                             "%s expected",
+                             i + 1, name, at, sig->param_slang[i]);
+                char *a = gen_expr(cg, call->as.call.args[i]);
+                a = maybe_cast(cg, sig->param_slang[i], at, a);
+                emit_line(cg, "_sl_sa%d.a%d = %s;", id, i, a);
+            }
+            move_consume(cg, call);
+            emit_line(cg, "sl_rt_active_spawns_inc();");
+            emit_line(cg, "sl_task_submit_copy(%s_entry, &_sl_sa%d, sizeof(_sl_sa%d));",
+                      shape->tname, id, id);
         } else {
             emit_line(cg, "%s *_sl_sa%d = (%s *)sl_gc_alloc(sizeof(%s), %s);",
                       shape->sname, id, shape->sname, shape->sname,
-                      shape->has_tracer
-                          ? xasprintf("sl_gc_trace_%s", shape->sname)
-                          : "NULL");
-            /* Tier 10: _sl_sa%d is under construction (allocated but not
-             * yet fully populated) for the whole loop below -- a nested
-             * call inside a LATER argument's own evaluation could
-             * trigger a collection, and without this, _sl_sa%d itself
-             * (and any earlier argument already stored into it) would
-             * not yet be reachable from anywhere. Same fix gen_structlit
-             * and gen_maplit already apply to their own under-
-             * construction containers (expr.c). */
+                      xasprintf("sl_gc_trace_%s", shape->sname));
             int ambient_mark = cg->ambient_count;
             ambient_root_push(cg, xasprintf("_sl_sa%d", id));
             for (int i = 0; i < nargs; i++) {
@@ -945,17 +957,10 @@ void gen_stmt(CG *cg, Stmt *s) {
                 emit_line(cg, "_sl_sa%d->a%d = %s;", id, i, a);
             }
             cg->ambient_count = ambient_mark;
+            move_consume(cg, call);
+            emit_line(cg, "sl_rt_active_spawns_inc();");
+            emit_line(cg, "sl_task_submit(%s_entry, _sl_sa%d);", shape->tname, id);
         }
-        move_consume(cg, call);
-        /* Tier 11 third slice: submits to the worker pool instead of
-         * creating a one-shot OS thread. No pthread_t, no per-call
-         * sigmask dance, no detach -- SIGTERM/SIGINT blocking now
-         * happens once, at pool startup (sl_pool_start, runtime_pool.c),
-         * not per spawn call site: a pool worker is created once and
-         * runs many tasks over its life, so the mask only needs baking
-         * in once too. */
-        emit_line(cg, "sl_rt_active_spawns_inc();");
-        emit_line(cg, "sl_task_submit(%s_entry, _sl_sa%d);", shape->tname, id);
         cg->indent--;
         emit_line(cg, "}");
         break;

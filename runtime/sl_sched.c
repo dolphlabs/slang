@@ -865,7 +865,7 @@ static void sl_task_stack_init(sl_task *t, void (*entry)(void *), void *arg) {
     t->preempt_disable_depth = 1;
 }
 
-static sl_task *sl_task_acquire(void (*entry)(void *), void *arg) {
+static sl_task *sl_task_grab(void) {
     sl_task *t = NULL;
 #ifndef SL_STACK_FREELIST_OFF
     sl_rt_preempt_disable();
@@ -885,7 +885,6 @@ static sl_task *sl_task_acquire(void (*entry)(void *), void *arg) {
         t->raw_base = raw;
         t->stack_base = base;
         t->stack_size = sz;
-        sl_task_stack_init(t, entry, arg);
         return t;
     }
 #endif
@@ -897,11 +896,18 @@ static sl_task *sl_task_acquire(void (*entry)(void *), void *arg) {
         exit(1);
     }
     memset(t, 0, sizeof(*t));
+    return t;
+}
+
+static sl_task *sl_task_acquire(void (*entry)(void *), void *arg) {
+    sl_task *t = sl_task_grab();
     sl_task_stack_init(t, entry, arg);
     return t;
 }
 
 static void sl_task_release(sl_task *t) {
+    if (t->entry_arg_owned)
+        free(t->entry_arg);
 #ifndef SL_STACK_FREELIST_OFF
     if (t->grows_seen == 0 && t->stack_size == SL_TASK_INITIAL_STACK_SIZE) {
         sl_rt_preempt_disable();
