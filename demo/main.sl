@@ -1,15 +1,8 @@
-// Slang Arcade -- a demo server exercising every tier of the
-// language: structs/opt/result/guard-let, the time/net/json/proc
-// native packages, net.tls_*, spawn+chan[T] concurrency, local
-// package imports (httpkit/arcade/content), and C interop via
-// extern fn + link. See demo/README.md for the tour; `./run.sh`
-// builds and runs it.
-
 import "net";
 import "proc";
 import "time";
 import "json";
-import "httpkit";
+import "http";
 import "arcade";
 import "content";
 import "stress";
@@ -79,7 +72,7 @@ fn unlock_state(st: AppState) {
 
 // ---- route handlers ----
 
-fn route_stats(st: AppState) -> httpkit.Response {
+fn route_stats(st: AppState) -> http.Response {
     let uptime: duration = time.mono() - st.start_ns;
     lock_state(st);
     let s = arcade.Stats {
@@ -92,23 +85,23 @@ fn route_stats(st: AppState) -> httpkit.Response {
     };
     unlock_state(st);
     let body: str = json.encode(s);
-    return httpkit.ok_json(body);
+    return http.ok_json(body);
 }
 
-fn route_list_messages(st: AppState) -> httpkit.Response {
+fn route_list_messages(st: AppState) -> http.Response {
     lock_state(st);
     let body: str = json.encode(st.messages);
     unlock_state(st);
-    return httpkit.ok_json(body);
+    return http.ok_json(body);
 }
 
-fn route_post_message(st: AppState, req: httpkit.Request) -> httpkit.Response {
+fn route_post_message(st: AppState, req: http.Request) -> http.Response {
     let r: result[arcade.NewMessage, str] = json.decode(req.body);
     guard let nm = r else {
-        return httpkit.bad_request("invalid message JSON");
+        return http.bad_request("invalid message JSON");
     }
     if len(nm.author) == 0 || len(nm.text) == 0 {
-        return httpkit.bad_request("author and text are required");
+        return http.bad_request("author and text are required");
     }
     let msg = arcade.Message {
         author: nm.author,
@@ -120,20 +113,20 @@ fn route_post_message(st: AppState, req: httpkit.Request) -> httpkit.Response {
     push(st.messages, msg);
     unlock_state(st);
     let body: str = json.encode(msg);
-    return httpkit.created_json(body);
+    return http.created_json(body);
 }
 
-fn route_leaderboard(st: AppState) -> httpkit.Response {
+fn route_leaderboard(st: AppState) -> http.Response {
     lock_state(st);
     let body: str = json.encode(st.leaderboard);
     unlock_state(st);
-    return httpkit.ok_json(body);
+    return http.ok_json(body);
 }
 
-fn route_roll(st: AppState, req: httpkit.Request) -> httpkit.Response {
+fn route_roll(st: AppState, req: http.Request) -> http.Response {
     let r: result[arcade.RollRequest, str] = json.decode(req.body);
     guard let rr = r else {
-        return httpkit.bad_request("invalid roll JSON");
+        return http.bad_request("invalid roll JSON");
     }
     let name = rr.player;
     if len(name) == 0 {
@@ -167,45 +160,45 @@ fn route_roll(st: AppState, req: httpkit.Request) -> httpkit.Response {
         rolls: rolls
     };
     let body: str = json.encode(result_body);
-    return httpkit.ok_json(body);
+    return http.ok_json(body);
 }
 
 // ---- stress endpoints (demo/stress_harness/ drives these; not linked
 // from the frontend at all -- see demo/README.md) ----
 
-fn route_stress_ping() -> httpkit.Response {
-    return httpkit.ok_json("{\"pong\":true}");
+fn route_stress_ping() -> http.Response {
+    return http.ok_json("{\"pong\":true}");
 }
 
-fn route_stress_cpu(req: httpkit.Request) -> httpkit.Response {
+fn route_stress_cpu(req: http.Request) -> http.Response {
     let r: result[stress.CpuReq, str] = json.decode(req.body);
     guard let cr = r else {
-        return httpkit.bad_request("invalid json");
+        return http.bad_request("invalid json");
     }
     let t0 = time.mono();
     let count = stress.count_primes(cr.n);
     let elapsed: duration = time.mono() - t0;
     let resp = stress.CpuResp { n: cr.n, prime_count: count, elapsed_ms: (elapsed as int) / 1000000 };
-    return httpkit.ok_json(json.encode(resp));
+    return http.ok_json(json.encode(resp));
 }
 
-fn route_stress_alloc(req: httpkit.Request) -> httpkit.Response {
+fn route_stress_alloc(req: http.Request) -> http.Response {
     let r: result[stress.AllocReq, str] = json.decode(req.body);
     guard let ar = r else {
-        return httpkit.bad_request("invalid json");
+        return http.bad_request("invalid json");
     }
     let t0 = time.mono();
     let sum = stress.alloc_and_sum(ar.n);
     let elapsed: duration = time.mono() - t0;
     let resp = stress.AllocResp { n: ar.n, sum: sum, elapsed_ms: (elapsed as int) / 1000000 };
-    return httpkit.ok_json(json.encode(resp));
+    return http.ok_json(json.encode(resp));
 }
 
-fn route_stress_json(req: httpkit.Request) -> httpkit.Response {
+fn route_stress_json(req: http.Request) -> http.Response {
     let t0 = time.mono();
     let r: result[stress.JsonReq, str] = json.decode(req.body);
     guard let jr = r else {
-        return httpkit.bad_request("invalid json");
+        return http.bad_request("invalid json");
     }
     let total = 0;
     for it in jr.items {
@@ -213,17 +206,17 @@ fn route_stress_json(req: httpkit.Request) -> httpkit.Response {
     }
     let elapsed: duration = time.mono() - t0;
     let resp = stress.JsonResp { tag: jr.tag, item_count: len(jr.items), total: total, elapsed_ms: (elapsed as int) / 1000000 };
-    return httpkit.ok_json(json.encode(resp));
+    return http.ok_json(json.encode(resp));
 }
 
-fn route_stress_sleep(req: httpkit.Request) -> httpkit.Response {
+fn route_stress_sleep(req: http.Request) -> http.Response {
     let r: result[stress.SleepReq, str] = json.decode(req.body);
     guard let sr = r else {
-        return httpkit.bad_request("invalid json");
+        return http.bad_request("invalid json");
     }
     time.sleep(sr.ms * 1000000);
     let resp = stress.SleepResp { slept_ms: sr.ms };
-    return httpkit.ok_json(json.encode(resp));
+    return http.ok_json(json.encode(resp));
 }
 
 fn chan_worker(n: int, results: chan[int]) {
@@ -231,10 +224,10 @@ fn chan_worker(n: int, results: chan[int]) {
     chan_send(results, c);
 }
 
-fn route_stress_chan(req: httpkit.Request) -> httpkit.Response {
+fn route_stress_chan(req: http.Request) -> http.Response {
     let r: result[stress.ChanReq, str] = json.decode(req.body);
     guard let cr = r else {
-        return httpkit.bad_request("invalid json");
+        return http.bad_request("invalid json");
     }
     let t0 = time.mono();
     let results: chan[int] = make_chan(1);
@@ -246,7 +239,7 @@ fn route_stress_chan(req: httpkit.Request) -> httpkit.Response {
     }
     let elapsed: duration = time.mono() - t0;
     let resp = stress.ChanResp { n: cr.n, prime_count: total, elapsed_ms: (elapsed as int) / 1000000 };
-    return httpkit.ok_json(json.encode(resp));
+    return http.ok_json(json.encode(resp));
 }
 
 fn fanout_worker(lo: int, hi: int, results: chan[int]) {
@@ -258,10 +251,10 @@ fn fanout_worker(lo: int, hi: int, results: chan[int]) {
 // of its own connection-handling thread -- deliberately, to see how
 // the thread-per-connection model behaves when a single request fans
 // out internally instead of one thread doing all the work.
-fn route_stress_fanout(req: httpkit.Request) -> httpkit.Response {
+fn route_stress_fanout(req: http.Request) -> http.Response {
     let r: result[stress.FanoutReq, str] = json.decode(req.body);
     guard let fr = r else {
-        return httpkit.bad_request("invalid json");
+        return http.bad_request("invalid json");
     }
     let workers = fr.workers;
     if workers < 1 {
@@ -289,10 +282,10 @@ fn route_stress_fanout(req: httpkit.Request) -> httpkit.Response {
     }
     let elapsed: duration = time.mono() - t0;
     let resp = stress.FanoutResp { n: fr.n, workers: workers, prime_count: total, elapsed_ms: (elapsed as int) / 1000000 };
-    return httpkit.ok_json(json.encode(resp));
+    return http.ok_json(json.encode(resp));
 }
 
-fn route_stress_counter(st: AppState) -> httpkit.Response {
+fn route_stress_counter(st: AppState) -> http.Response {
     let sv = chan_recv(st.stress_lock);
     guard let _tok = sv else {
         println("FAIL: stress lock channel closed unexpectedly");
@@ -302,22 +295,22 @@ fn route_stress_counter(st: AppState) -> httpkit.Response {
     let c = st.stress_counter;
     chan_send(st.stress_lock, true);
     let resp = stress.CounterResp { count: c };
-    return httpkit.ok_json(json.encode(resp));
+    return http.ok_json(json.encode(resp));
 }
 
-fn route(st: AppState, req: httpkit.Request) -> httpkit.Response {
+fn route(st: AppState, req: http.Request) -> http.Response {
     lock_state(st);
     st.request_count = st.request_count + 1;
     unlock_state(st);
 
     if req.method == "GET" && req.path == "/" {
-        return httpkit.ok_html(content.index_html());
+        return http.ok_html(content.index_html());
     }
     if req.method == "GET" && req.path == "/style.css" {
-        return httpkit.ok_css(content.style_css());
+        return http.ok_css(content.style_css());
     }
     if req.method == "GET" && req.path == "/app.js" {
-        return httpkit.ok_js(content.app_js());
+        return http.ok_js(content.app_js());
     }
     if req.method == "GET" && req.path == "/api/stats" {
         return route_stats(st);
@@ -358,7 +351,7 @@ fn route(st: AppState, req: httpkit.Request) -> httpkit.Response {
     if req.method == "POST" && req.path == "/api/stress/counter" {
         return route_stress_counter(st);
     }
-    return httpkit.not_found();
+    return http.not_found();
 }
 
 // ---- connection handling: a bounded worker pool instead of a fresh
@@ -370,52 +363,37 @@ fn route(st: AppState, req: httpkit.Request) -> httpkit.Response {
 // avoid. spawn's own semantics (Tier 5) are unchanged: this is purely
 // how this file chooses to dispatch work, not a new compiler primitive.
 //
-// One acceptor per listener. net.accept and net.tls_accept both park
+// One acceptor per listener. link.accept and net.tls_accept both park
 // on the reactor; two tasks waiting on the same (fd, direction)
 // orphan the first waiter.
 
-fn handle_http_conn(st: AppState, cfd: i32) {
-    let recv_r: result[bytes, str] = net.recv(cfd, 65536);
-    guard let raw = recv_r else {
-        net.close(cfd);
-        return;
-    }
-    let parsed: result[httpkit.Request, str] = httpkit.parse(raw);
-    guard let req = parsed else {
-        net.send(cfd, httpkit.serialize(httpkit.bad_request("malformed request")));
-        net.close(cfd);
-        return;
-    }
-    let resp = route(st, req);
-    net.send(cfd, httpkit.serialize(resp));
-    net.close(cfd);
+fn handle_http_conn(st: AppState, c: link) {
+    let a = arena_new(131072);
+    let buf = a.wire(65536);
+    let rr = http.read(&mut c, buf, until_never());
+    guard let req = rr else { return; }
+    let wr = http.write(&mut c, route(st, req), &mut a, until_never());
+    guard let _n = wr else { return; }
 }
 
-// Pulls accepted fds off the shared work queue and handles them to
-// completion, one at a time, for as long as the queue stays open --
-// chan_recv keeps returning real work while a closed channel still
-// has buffered items, and only returns none once it's truly closed
-// and drained, which is exactly the shutdown signal this loop needs.
-fn http_worker(st: AppState, work: chan[i32]) {
+fn http_worker(st: AppState, work: chan[link]) {
     while true {
         let v = chan_recv(work);
-        guard let cfd = v else { return; }
-        handle_http_conn(st, cfd);
+        guard let c = v else { return; }
+        handle_http_conn(st, c);
     }
 }
 
-fn accept_and_queue_http(lfd: i32, work: chan[i32]) -> bool {
-    let ar: result[i32, str] = net.accept(lfd);
-    guard let cfd = ar else { return false; }
-    chan_send(work, cfd);
+fn accept_and_queue_http(ln: &mut link, work: chan[link]) -> bool {
+    let ar = ln.accept(until_never());
+    guard let c = ar else { return false; }
+    chan_send(work, c);
     return true;
 }
 
-// Single parked HTTP acceptor. Shutdown resumes net.accept with
-// Err("interrupted"); `done` fires before `work` is closed.
-fn http_accept_loop(lfd: i32, work: chan[i32], done: chan[bool]) {
+fn http_accept_loop(ln: link, work: chan[link], done: chan[bool]) {
     while !proc.shutdown_requested() {
-        accept_and_queue_http(lfd, work);
+        accept_and_queue_http(&mut ln, work);
     }
     chan_send(done, true);
 }
@@ -430,14 +408,14 @@ fn handle_tls_conn(st: AppState, conn: rawptr) {
         net.tls_close(conn);
         return;
     }
-    let parsed: result[httpkit.Request, str] = httpkit.parse(raw);
+    let parsed: result[http.Request, str] = http.parse(raw);
     guard let req = parsed else {
-        net.tls_send(conn, httpkit.serialize(httpkit.bad_request("malformed request")));
+        net.tls_send(conn, http.serialize(http.bad_request("malformed request")));
         net.tls_close(conn);
         return;
     }
     let resp = route(st, req);
-    net.tls_send(conn, httpkit.serialize(resp));
+    net.tls_send(conn, http.serialize(resp));
     net.tls_close(conn);
 }
 
@@ -514,14 +492,14 @@ let port = atoi(port_str);
 let workers_str: str = proc.getenv("WORKERS") ?? "128";
 let workers = atoi(workers_str);
 
-let lr: result[i32, str] = net.listen(port);
-guard let lfd = lr else {
+let lr = link_listen(port);
+guard let ln = lr else {
     println("could not listen on port " + to_str(port));
     exit(1);
 }
-let http_work: chan[i32] = make_chan(256);
+let http_work: chan[link] = make_chan(256);
 let http_done: chan[bool] = make_chan(1);
-spawn http_accept_loop(lfd, http_work, http_done);
+spawn http_accept_loop(ln, http_work, http_done);
 for i in 0..workers {
     spawn http_worker(st, http_work);
 }
@@ -568,7 +546,6 @@ if tls_ok {
 
 println("waiting for in-flight connections to finish...");
 while proc.active_tasks() > 0 {
-    time.sleep(20000000); // 20ms
+    time.sleep(20000000);
 }
-net.close(lfd);
 println("goodbye!");
