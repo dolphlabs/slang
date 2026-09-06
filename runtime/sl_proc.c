@@ -1,4 +1,6 @@
+#include <errno.h>
 #include <signal.h>
+#include <unistd.h>
 
 static void *sl_sig_thread(void *arg) {
     (void)arg;
@@ -43,6 +45,43 @@ static sl_arr *sl_proc_args(void) {
         sl_arr_push(a, &s, sizeof(char *));
     }
     return a;
+}
+
+static sl_res_str_str *sl_proc_ok_str(char *v) {
+    sl_res_str_str *r = (sl_res_str_str *)sl_gc_alloc(
+        sizeof(sl_res_str_str), sl_gc_trace_sl_res_str_str);
+    r->ok = true;
+    r->v = v;
+    return r;
+}
+
+static sl_res_str_str *sl_proc_err_str(const char *msg) {
+    sl_res_str_str *r = (sl_res_str_str *)sl_gc_alloc(
+        sizeof(sl_res_str_str), sl_gc_trace_sl_res_str_str);
+    r->ok = false;
+    r->e = sl_strdup(msg);
+    return r;
+}
+
+static sl_res_str_str *sl_proc_cwd(void) {
+    size_t cap = 256;
+    for (;;) {
+        char *buf = (char *)malloc(cap);
+        if (!buf)
+            return sl_proc_err_str("getcwd: out of memory");
+        if (getcwd(buf, cap)) {
+            char *s = sl_strdup(buf);
+            free(buf);
+            return sl_proc_ok_str(s);
+        }
+        int e = errno;
+        free(buf);
+        if (e != ERANGE)
+            return sl_proc_err_str(strerror(e));
+        if (cap > (size_t)1 << 20)
+            return sl_proc_err_str("getcwd: path too long");
+        cap *= 2;
+    }
 }
 
 static sl_opt_str *sl_proc_getenv(const char *name) {

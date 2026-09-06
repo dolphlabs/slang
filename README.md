@@ -484,7 +484,8 @@ while proc.active_tasks() > 0 {
 
 `proc.getenv(name)` reads an environment variable, returning
 `opt[str]` (`none` if unset). `proc.args()` is the process argument
-list (`[str]`); `args[0]` is the executable path.
+list (`[str]`); `args[0]` is the executable path. `proc.cwd()` is the
+working directory as `result[str, str]`.
 
 #### `fs`
 

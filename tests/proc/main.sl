@@ -21,6 +21,14 @@ let argv = proc.args();
 println(len(argv) >= 1);
 println(len(argv[0]) > 0);
 
+let cr = proc.cwd();
+guard let cwd = cr else {
+    println("FAIL: cwd");
+    exit(1);
+}
+println(to_str(len(cwd) > 0));
+println(to_str(to_bytes(cwd)[0] == 47));
+
 let r: opt[str] = proc.getenv("PATH");
 guard let path = r else {
     println("FAIL: PATH should be set in any normal environment");
