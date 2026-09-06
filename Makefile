@@ -11,7 +11,8 @@ CODEGEN_SRCS = src/codegen/core.c src/codegen/infer.c src/codegen/expr.c \
               src/codegen/program.c \
               src/codegen/liveness.c \
               src/codegen/escape.c \
-              src/codegen/move.c
+              src/codegen/move.c \
+              src/codegen/mir.c
 
 # Native packages: signatures (and json's generic dispatch) stay in
 # src/codegen/pkg_<name>/. Their C runtimes are runtime/sl_*.c.
@@ -24,7 +25,7 @@ SRCS = src/main.c src/loader.c src/lexer.c src/parser.c src/rtpath.c \
       $(CODEGEN_SRCS) $(PKG_SRCS)
 HDRS = src/common.h src/lexer.h src/ast.h src/parser.h src/codegen.h \
       src/rtpath.h \
-      src/codegen/internal.h src/codegen/liveness.h \
+      src/codegen/internal.h src/codegen/liveness.h src/codegen/mir.h \
       src/codegen/pkg_net/pkg_net.h \
       src/codegen/pkg_time/pkg_time.h src/codegen/pkg_json/pkg_json.h \
       src/codegen/pkg_proc/pkg_proc.h

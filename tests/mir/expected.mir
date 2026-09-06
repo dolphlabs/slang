@@ -1,0 +1,63 @@
+fn mir.choose
+  local c: bool
+  local a: int
+  local b: int
+  bb0:
+    if c -> bb1 bb2
+  bb1:
+    return a
+  bb2:
+    goto bb3
+  bb3:
+    return b
+fn mir.count_to
+  local n: int
+  local i: int
+  local _t0: bool
+  bb0:
+    i = 0
+    goto bb1
+  bb1:
+    _t0 = (<)
+    if _t0 -> bb2 bb3
+  bb2:
+    i = (+)
+    goto bb1
+  bb3:
+    return i
+fn mir.add1
+  local p: &mut int
+  bb0:
+    (*p) = (+)
+    return
+fn mir.main
+  local x: int
+  local r: &mut int
+  local b: mir.Box
+  local i: int
+  local _t0: int
+  local _t1: bool
+  bb0:
+    eval call println
+    eval call println
+    x = 10
+    r = &mut x
+    eval call add1
+    eval call println
+    b = struct Box
+    b.v = 5
+    eval call println
+    i = 0
+    _t0 = 2
+    goto bb1
+  bb1:
+    _t1 = (<)
+    if _t1 -> bb2 bb4
+  bb2:
+    eval call println
+    goto bb3
+  bb3:
+    i = (+)
+    goto bb1
+  bb4:
+    return

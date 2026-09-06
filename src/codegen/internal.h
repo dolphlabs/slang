@@ -9,6 +9,7 @@
 #include "../ast.h"
 #include "../common.h"
 #include "../codegen.h"
+#include "mir.h"
 
 #include <ctype.h>
 #include <stdarg.h>
@@ -264,6 +265,7 @@ struct CG {
     int want_tls; /* set once a net.tls_* function is type-checked */
     int want_json; /* set once a json.decode/json.encode is type-checked */
     int stack_box;
+    MirTable mirs;
 };
 
 /* C typedef name for a distinct opt[T] instantiation. */
