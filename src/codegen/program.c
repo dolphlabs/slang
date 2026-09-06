@@ -882,6 +882,7 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
     compute_escape(&cg, pkgs, npkgs, main_index);
     compute_moves(&cg, pkgs, npkgs, main_index);
     compute_mir(&cg, pkgs, npkgs, main_index);
+    compute_borrowck(&cg, pkgs, npkgs, main_index);
 
     /* emit_globals (called from gen_whole_program) registers package
      * globals as it emits them; undo that bookkeeping before the real

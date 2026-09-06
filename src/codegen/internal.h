@@ -409,6 +409,7 @@ void compute_escape(CG *cg, Package *pkgs, int npkgs, int main_index);
 int type_is_copy(CG *cg, const char *t);
 int type_needs_drop(CG *cg, const char *t);
 void compute_moves(CG *cg, Package *pkgs, int npkgs, int main_index);
+void compute_borrowck(CG *cg, Package *pkgs, int npkgs, int main_index);
 void move_consume(CG *cg, Expr *e);
 void move_reinit(CG *cg, const char *name);
 void emit_drop_flag(CG *cg, const char *name);
