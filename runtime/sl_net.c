@@ -133,7 +133,6 @@ static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
         epoll_ctl(sl_reactor_fd, EPOLL_CTL_MOD, fd, &ev);
 #endif
     sl_task_park(&sl_reactor_mu);
-    sl_reactor_self->io_wake = 1;
     sl_reactor_self->io_deadline_ns = 0;
     int sl_reactor_wait_shutdown =
         atomic_load_explicit(&sl_rt_shutdown_flag, memory_order_acquire);
