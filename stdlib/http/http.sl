@@ -3,8 +3,14 @@ import "byteutil";
 pub gc struct Request {
     method: str,
     path: str,
+    version: str,
     headers: map[str]str,
     body: bytes,
+}
+
+pub gc struct Incoming {
+    req: Request,
+    filled: int,
 }
 
 pub gc struct Response {
@@ -219,6 +225,7 @@ pub fn parse(raw: bytes) -> result[Request, str] {
     return ok(Request {
         method: method,
         path: path,
+        version: ver,
         headers: headers,
         body: body
     });
@@ -231,14 +238,79 @@ pub fn serialize(r: Response) -> bytes {
             head = head + k + ": " + v + "\r\n";
         }
     }
+    let conn = "keep-alive";
+    if has(r.headers, "connection") {
+        conn = r.headers["connection"];
+    }
     head = head + "Content-Length: " + to_str(len(r.body)) + "\r\n"
-        + "Connection: close\r\n\r\n";
+        + "Connection: " + conn + "\r\n\r\n";
     return to_bytes(head) + r.body;
 }
 
-pub fn read(c: &mut link, buf: wire, deadline: until) -> result[Request, fault] {
-    let filled = 0;
-    while filled < len(buf) {
+fn compact_wire(buf: wire, used: int, filled: int) -> int {
+    if used <= 0 {
+        return filled;
+    }
+    let n = filled - used;
+    let i = 0;
+    while i < n {
+        buf[i] = buf[used + i];
+        i = i + 1;
+    }
+    return n;
+}
+
+pub fn wants_close(r: Request) -> bool {
+    let c = header(r, "connection");
+    if r.version == "HTTP/1.0" {
+        guard let v = c else {
+            return true;
+        }
+        return lower_ascii(v) != "keep-alive";
+    }
+    guard let v = c else {
+        return false;
+    }
+    return lower_ascii(v) == "close";
+}
+
+pub fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Incoming, fault] {
+    while true {
+        if filled > 0 {
+            let raw = copy_wire(buf, filled);
+            let sep = find_blank_line(raw);
+            if sep >= 0 {
+                let line_end = find_crlf(raw, 0);
+                if line_end < 0 {
+                    return err(fault_io());
+                }
+                let hr = parse_headers(raw, line_end + 2, sep);
+                guard let headers = hr else {
+                    return err(fault_io());
+                }
+                if rejects_transfer(headers) {
+                    return err(fault_io());
+                }
+                let nr = body_need(headers, sep);
+                guard let need = nr else {
+                    return err(fault_io());
+                }
+                if need > len(buf) {
+                    return err(fault_io());
+                }
+                if filled >= need {
+                    let parsed = parse(raw);
+                    guard let req = parsed else {
+                        return err(fault_io());
+                    }
+                    let rest = compact_wire(buf, need, filled);
+                    return ok(Incoming { req: req, filled: rest });
+                }
+            }
+        }
+        if filled >= len(buf) {
+            return err(fault_io());
+        }
         let tail = buf[filled..];
         let rr = c.recv(tail, deadline);
         guard let n = rr else {
@@ -251,39 +323,7 @@ pub fn read(c: &mut link, buf: wire, deadline: until) -> result[Request, fault] 
             return err(fault_io());
         }
         filled = filled + n;
-        let raw = copy_wire(buf, filled);
-        let sep = find_blank_line(raw);
-        if sep < 0 {
-            continue;
-        }
-        let line_end = find_crlf(raw, 0);
-        if line_end < 0 {
-            return err(fault_io());
-        }
-        let hr = parse_headers(raw, line_end + 2, sep);
-        guard let headers = hr else {
-            return err(fault_io());
-        }
-        if rejects_transfer(headers) {
-            return err(fault_io());
-        }
-        let nr = body_need(headers, sep);
-        guard let need = nr else {
-            return err(fault_io());
-        }
-        if need > len(buf) {
-            return err(fault_io());
-        }
-        if filled < need {
-            continue;
-        }
-        let parsed = parse(copy_wire(buf, filled));
-        guard let req = parsed else {
-            return err(fault_io());
-        }
-        return ok(req);
     }
-    return err(fault_io());
 }
 
 pub fn write(c: &mut link, r: Response, a: &mut arena, deadline: until) -> result[int, fault] {

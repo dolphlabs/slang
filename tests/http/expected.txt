@@ -6,4 +6,5 @@ chunked
 truncated
 serialize
 loopback
+keepalive
 http ok
