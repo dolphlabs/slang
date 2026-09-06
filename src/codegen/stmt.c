@@ -45,7 +45,7 @@
  * separate, disclosed follow-up (see the Tier 11 plan), not bundled
  * into this slice. */
 static int emit_backedge_enter(CG *cg, void *backedge_live_set,
-                                int direct_yield_ok) {
+                                int direct_yield_ok, int edge_id) {
     int n = live_set_nnamed(backedge_live_set);
     if (n == 0) {
         /* Nothing to root, so no ordering hazard: this call can safely
@@ -66,7 +66,9 @@ static int emit_backedge_enter(CG *cg, void *backedge_live_set,
          * n > 0 path below already reaches sl_rt_maybe_yield correctly,
          * via sl_rt_safepoint_enter, AFTER its roots are linked in. */
         if (direct_yield_ok)
-            emit_line(cg, "sl_rt_maybe_yield();");
+            emit_line(cg, "if ((++_sl_ec%d & SL_PREEMPT_SAMPLE_MASK) == 0) "
+                          "sl_rt_maybe_yield();",
+                      edge_id);
         return 0;
     }
     int id = cg->tmp_id++;
@@ -542,9 +544,14 @@ void gen_stmt(CG *cg, Stmt *s) {
         if (strcmp(ct, "bool"))
             cg_error(s->line, "while condition must be bool (got %s)", ct);
         char *cond = gen_expr(cg, s->as.while_stmt.cond);
+        int eid = 0;
+        if (live_set_nnamed(s->backedge_live_set) == 0) {
+            eid = cg->tmp_id++;
+            emit_line(cg, "unsigned long _sl_ec%d = 0;", eid);
+        }
         emit_line(cg, "while (%s) {", cond);
         cg->indent++;
-        int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 1);
+        int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 1, eid);
         cg->loop_depth++;
         int saved_loop_bp = cg->cur_loop_has_bp;
         cg->cur_loop_has_bp = has_bp;
@@ -584,10 +591,15 @@ void gen_stmt(CG *cg, Stmt *s) {
         emit_line(cg, "{");
         cg->indent++;
         emit_line(cg, "long long %s = %s;", endvar, end);
+        int eid = 0;
+        if (live_set_nnamed(s->backedge_live_set) == 0) {
+            eid = cg->tmp_id++;
+            emit_line(cg, "unsigned long _sl_ec%d = 0;", eid);
+        }
         emit_line(cg, "for (long long %s = %s; %s %s %s; %s++) {", vname,
                   start, vname, op, endvar, vname);
         cg->indent++;
-        int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 1);
+        int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 1, eid);
         cg->loop_depth++;
         int saved_loop_bp = cg->cur_loop_has_bp;
         cg->cur_loop_has_bp = has_bp;
@@ -631,7 +643,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
-            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0);
+            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0);
             emit_line(cg, "%s %s = (*(%s *)(void *)sl_arr_at(_sl_it%d, "
                           "_sl_i%d, sizeof(%s)));",
                       ec, vname, ec, id, id, ec);
@@ -663,7 +675,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
-            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0);
+            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0);
             emit_line(cg, "long long %s = (long long)_sl_bt%d->ptr[_sl_i%d];",
                       vname, id, id);
             cg->loop_depth++;
@@ -705,7 +717,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
-            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0);
+            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0);
             emit_line(cg, "long long _sl_slot%d = _sl_m%d->order[_sl_i%d];",
                       id, id, id);
             emit_line(cg,

@@ -657,14 +657,7 @@ static inline long long sl_rt_monotonic_ns(void) {
  * an sl_task* is migration-stable. It is the thread-affine ADDRESS a
  * TLS read returns that goes stale when a task moves worker, never
  * the task pointer itself. */
-static inline void sl_rt_maybe_yield_t(sl_task *t) {
-    /* caller supplied t; see sl_rt_cur's comment for why a bare
-        this runs with preempt_disable_depth == 0 by definition (it IS
-        the checkpoint), so it is squarely inside the window
-        sl_rt_async_epoch's comment describes. Read once, then use t
-        for everything below -- a sl_task* is migration-stable (a task
-        is the same task whichever worker runs it), unlike the
-        sl_rt_current_task read would be wrong here. */
+static inline void sl_rt_stack_and_gc(sl_task *t) {
     {
         char sl_rt_stack_probe;
         if ((uintptr_t)&sl_rt_stack_probe - (uintptr_t)t->stack_base <
@@ -672,26 +665,29 @@ static inline void sl_rt_maybe_yield_t(sl_task *t) {
             sl_task_stack_grow(t);
     }
     sl_rt_gc_checkin();
-    /* Sampled, not checked every visit: bounds the steady-state cost
-     * of a hot loop's checkpoint to one increment + one branch for
-     * 1023 of every 1024 visits -- see SL_PREEMPT_SAMPLE_MASK's own
-     * comment. yield_check_counter lives on the TASK, not the thread,
-     * so it travels correctly if this task migrates OS threads. */
-    if ((++t->yield_check_counter & SL_PREEMPT_SAMPLE_MASK) != 0)
-        return;
+}
+
+static inline void sl_rt_preempt_if_due(sl_task *t) {
     long long now = sl_rt_monotonic_ns();
     if (now - t->run_start_ns < SL_PREEMPT_QUANTUM_NS)
         return;
     if (atomic_load_explicit(&sl_global_runq_count, memory_order_relaxed) == 0)
-        return; /* no one waiting for a worker -- yielding here is pure
-                    overhead with no fairness benefit */
+        return;
     sl_task_yield_now();
 }
 
-/* The bare back-edge form, for call sites with no safepoint bracket
- * and so no task in hand. */
-static inline void sl_rt_maybe_yield(void) {
-    sl_rt_maybe_yield_t(sl_rt_cur());
+static inline void sl_rt_maybe_yield_t(sl_task *t) {
+    sl_rt_stack_and_gc(t);
+    if ((++t->yield_check_counter & SL_PREEMPT_SAMPLE_MASK) != 0)
+        return;
+    sl_rt_preempt_if_due(t);
+}
+
+__attribute__((noinline))
+static void sl_rt_maybe_yield(void) {
+    sl_task *t = sl_rt_cur();
+    sl_rt_stack_and_gc(t);
+    sl_rt_preempt_if_due(t);
 }
 
 /* sl_rt_gc_checkin() (now reached via sl_rt_maybe_yield) runs *after*
