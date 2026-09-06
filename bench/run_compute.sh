@@ -27,11 +27,11 @@ fi
 
 time_sec() {
     tf="$OUT_DIR/time.$$"
-    if ! /usr/bin/time -f '%e' -o "$tf" "$@"; then
+    if ! /usr/bin/time -f '%e' -o "$tf" "$@" >/dev/null; then
         echo "command failed: $*" >&2
         exit 1
     fi
-    cat "$tf"
+    tail -n 1 "$tf"
     rm -f "$tf"
 }
 
@@ -50,16 +50,27 @@ run_one() {
     bin=$2
     out=$3
     if /usr/bin/time -l true >/dev/null 2>&1; then
-        /usr/bin/time -l "$bin" >"$out" 2>"$out.time"
-        rss_b=$(awk '/maximum resident set size/ { print $1; exit }' "$out.time")
-        rss=$((rss_b / 1024))
+        /usr/bin/time -l "$bin" >"$out" 2>"$out.time" || true
+        rss_b=$(awk '/maximum resident set size/ { print $1; exit }' "$out.time" || true)
+        if [ -n "${rss_b:-}" ]; then
+            rss=$((rss_b / 1024))
+        else
+            rss="?"
+        fi
     else
-        /usr/bin/time -f 'RSS_KB=%M' "$bin" >"$out" 2>"$out.time"
+        /usr/bin/time -f 'RSS_KB=%M' "$bin" >"$out" 2>"$out.time" || true
         rss=$(sed -n 's/^RSS_KB=//p' "$out.time" | tail -n 1)
+        rss=${rss:-?}
     fi
-    wall=$(grep '^RESULT' "$out" | sed -n 's/.*wall_ms=\([0-9]*\).*/\1/p')
-    tps=$(grep '^RESULT' "$out" | sed -n 's/.*tasks_per_sec=\([0-9]*\).*/\1/p')
-    primes=$(grep '^RESULT' "$out" | sed -n 's/.*total_primes=\([0-9]*\).*/\1/p')
+    if grep -q 'Command terminated by signal' "$out.time" 2>/dev/null; then
+        sig=$(sed -n 's/.*signal //p' "$out.time" | head -n 1)
+        printf '%s CRASH signal=%s rss_kb=%s\n' "$name" "${sig:-?}" "${rss:-?}"
+        printf '%s\tcrash\t%s\t\n' "$name" "${rss:-}" >>"$OUT_DIR/runs.tsv"
+        return 0
+    fi
+    wall=$(grep '^RESULT' "$out" | sed -n 's/.*wall_ms=\([0-9]*\).*/\1/p' || true)
+    tps=$(grep '^RESULT' "$out" | sed -n 's/.*tasks_per_sec=\([0-9]*\).*/\1/p' || true)
+    primes=$(grep '^RESULT' "$out" | sed -n 's/.*total_primes=\([0-9]*\).*/\1/p' || true)
     printf '%s wall_ms=%s rss_kb=%s tasks_per_sec=%s total_primes=%s\n' \
         "$name" "${wall:-?}" "${rss:-?}" "${tps:-?}" "${primes:-?}"
     printf '%s\t%s\t%s\t%s\n' "$name" "${wall:-}" "${rss:-}" "${tps:-}" >>"$OUT_DIR/runs.tsv"
@@ -112,6 +123,7 @@ function med(a, n,    s, i, j, t) {
     if (n % 2) return s[int(n / 2) + 1]
     return (s[n / 2] + s[n / 2 + 1]) / 2
 }
+$2 == "crash" { crash[$1]++; next }
 {
     n[$1]++
     w[$1, n[$1]] = $2
@@ -123,8 +135,11 @@ END {
         nw = n[k]
         split("", aw); split("", ar); split("", at)
         for (i = 1; i <= nw; i++) { aw[i] = w[k, i]; ar[i] = r[k, i]; at[i] = t[k, i] }
-        printf "%s wall_ms=%s rss_kb=%s tasks_per_sec=%s n=%d\n", \
-            k, med(aw, nw), med(ar, nw), med(at, nw), nw
+        extra = crash[k] ? sprintf(" crashes=%d", crash[k]) : ""
+        printf "%s wall_ms=%s rss_kb=%s tasks_per_sec=%s n=%d%s\n", \
+            k, med(aw, nw), med(ar, nw), med(at, nw), nw, extra
     }
+    for (k in crash) if (!(k in n))
+        printf "%s CRASH all %d runs\n", k, crash[k]
 }
 ' "$OUT_DIR/runs.tsv"

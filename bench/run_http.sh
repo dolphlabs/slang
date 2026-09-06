@@ -30,7 +30,7 @@ fi
 
 kill_bin() {
     name=$1
-    pkill -f "$name" 2>/dev/null || true
+    pkill -KILL -f "$name" 2>/dev/null || true
 }
 
 kill_port() {
@@ -55,11 +55,11 @@ cleanup
 
 time_sec() {
     tf="$OUT_DIR/time.$$"
-    if ! /usr/bin/time -f '%e' -o "$tf" "$@"; then
+    if ! /usr/bin/time -f '%e' -o "$tf" "$@" >/dev/null; then
         echo "command failed: $*" >&2
         exit 1
     fi
-    cat "$tf"
+    tail -n 1 "$tf"
     rm -f "$tf"
 }
 
@@ -214,7 +214,7 @@ run_server() {
     if ! wait_http "$port"; then
         echo "$name conc=$conc FAIL not ready (port=${port:-?})"
         printf '%s\t%s\t%s\t0\t0\t0\t1\t?\n' "$name" "$round" "$conc" >>"$OUT_DIR/runs.tsv"
-        kill "$pid" 2>/dev/null || true
+        kill -KILL "$pid" 2>/dev/null || true
         wait "$pid" 2>/dev/null || true
         return
     fi
@@ -227,7 +227,9 @@ run_server() {
         "$name" "$conc" "$rps" "$p50" "$p99" "$err" "$rss" "$blen"
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$name" "$round" "$conc" "$rps" "$p50" "$p99" "$err" "$rss" >>"$OUT_DIR/runs.tsv"
-    kill "$pid" 2>/dev/null || true
+    kill -TERM "$pid" 2>/dev/null || true
+    sleep 0.15
+    kill -KILL "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
     sleep 0.2
 }
