@@ -276,7 +276,7 @@ void emit_globals(CG *cg, Package *pkgs, int npkgs, int main_index) {
                 emit_line(cg, "static const unsigned char %s_bdata[] = %s;",
                           m, c_bytes_literal(init->as.bytes_lit.data,
                                              init->as.bytes_lit.len));
-                emit_line(cg, "static sl_bytes %s = { %lld, (unsigned char *)%s_bdata, 1 };",
+                emit_line(cg, "static sl_bytes %s = { %lld, (unsigned char *)%s_bdata };",
                           m, init->as.bytes_lit.len, m);
             } else {
                 emit_line(cg, "static %s %s = %s;", map_type(t),
