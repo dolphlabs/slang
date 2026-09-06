@@ -486,7 +486,9 @@ signal-handling program.
 Blocking-looking code stays blocking-looking — `net.accept`,
 `net.recv`, `time.sleep`, and `chan_send`/`chan_recv` park the task
 and return the OS thread to the pool. There is no colored-function
-split. TLS (`net.tls_*`) still blocks the worker today.
+split. TLS handshake and I/O park on the same reactor as TCP
+  (`SSL_ERROR_WANT_READ`/`WANT_WRITE`). DNS (`getaddrinfo`) still
+  blocks the worker.
 
 ```slang
 fn worker(id: i32, results: chan[i32]) {
@@ -727,8 +729,8 @@ Makefile       build/test/clean
   join/await a spawned task's completion besides a channel.
 - TLS: no client certificates (mutual TLS), no SNI-based multi-cert
   virtual hosting on one listener, no session resumption tuning.
-  Blocking only — call `net.tls_*` from a `spawn`ed task for a
-  server, same as plain `net`.
+  Handshake and send/recv park; `getaddrinfo` in `tls_dial` still
+  blocks the worker.
 - JSON: no dynamic/unknown-shape decoding (every decode target is a
   concrete slang type known at compile time — see the `json` section
   above), no `bytes` fields, and JSON object keys map to struct field

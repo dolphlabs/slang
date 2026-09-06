@@ -78,30 +78,51 @@ static sl_res_rawptr_str *sl_net_tls_client_ctx(const char *ca_path) {
     return sl_net_ok_rawptr(ctx);
 }
 
+static int sl_tls_park(SSL *ssl, int ssl_err, int abort_on_shutdown) {
+    int fd = SSL_get_fd(ssl);
+    if (fd < 0) return -2;
+    if (ssl_err == SSL_ERROR_WANT_READ)
+        return sl_reactor_wait(fd, SL_REACTOR_READ, abort_on_shutdown);
+    if (ssl_err == SSL_ERROR_WANT_WRITE)
+        return sl_reactor_wait(fd, SL_REACTOR_WRITE, abort_on_shutdown);
+    return -2;
+}
+
+static int sl_tls_handshake(SSL *ssl, int server) {
+    for (;;) {
+        int n = server ? SSL_accept(ssl) : SSL_connect(ssl);
+        if (n == 1) return 0;
+        int err = SSL_get_error(ssl, n);
+        int w = sl_tls_park(ssl, err, 1);
+        if (w == 0) continue;
+        if (w == -1) return -1;
+        return -2;
+    }
+}
+
 static sl_res_rawptr_str *sl_net_tls_accept(int lfd, void *ctxv) {
-    sl_net_ensure_blocking(lfd); /* Tier 11 sixth slice: net.listen()
-        now makes every listener non-blocking by default (needed for
-        plain net.accept's own parking, runtime_net.c) -- TLS accept
-        stays deliberately unconverted and still wants a genuinely
-        blocking accept() here, so force it back explicitly. */
-    sl_rt_gc_blocked = 1;
-    int cfd = accept(lfd, NULL, NULL);
-    sl_rt_gc_blocked = 0;
-    sl_rt_gc_checkin();
-    if (cfd < 0) return sl_net_err_rawptr(strerror(errno));
-    sl_net_ensure_blocking(cfd); /* see sl_net_ensure_blocking in NET_RUNTIME */
+    int cfd;
+    for (;;) {
+        cfd = accept(lfd, NULL, NULL);
+        if (cfd >= 0) break;
+        if (errno != EAGAIN && errno != EWOULDBLOCK)
+            return sl_net_err_rawptr(strerror(errno));
+        if (sl_net_user_nonblock_contains((void *)(intptr_t)lfd))
+            return sl_net_err_rawptr("would block");
+        if (sl_reactor_wait(lfd, SL_REACTOR_READ, 1) < 0)
+            return sl_net_err_rawptr("interrupted");
+    }
+    sl_net_set_nonblocking(cfd);
     SSL *ssl = SSL_new((SSL_CTX *)ctxv);
     if (!ssl) {
         close(cfd);
         return sl_net_err_rawptr(sl_tls_last_error());
     }
     SSL_set_fd(ssl, cfd);
-    sl_rt_gc_blocked = 1;
-    int sa = SSL_accept(ssl);
-    sl_rt_gc_blocked = 0;
-    sl_rt_gc_checkin();
-    if (sa != 1) {
-        char *m = sl_tls_last_error();
+    SSL_set_mode(ssl, SSL_MODE_ENABLE_PARTIAL_WRITE);
+    int hs = sl_tls_handshake(ssl, 1);
+    if (hs != 0) {
+        char *m = hs == -1 ? sl_strdup("interrupted") : sl_tls_last_error();
         SSL_free(ssl);
         close(cfd);
         return sl_net_err_rawptr(m);
@@ -112,9 +133,7 @@ static sl_res_rawptr_str *sl_net_tls_accept(int lfd, void *ctxv) {
 static sl_res_rawptr_str *sl_net_tls_dial(const char *host, int port,
                                           void *ctxv) {
     char portstr[16];
-    sl_rt_preempt_disable(); /* Tier 11 eighth slice -- see
-        sl_net_dial's own comment (runtime_net.c) for why this is
-        scoped to just the snprintf, not the getaddrinfo call below */
+    sl_rt_preempt_disable();
     snprintf(portstr, sizeof(portstr), "%d", port);
     sl_rt_preempt_enable();
     struct addrinfo hints, *res = NULL;
@@ -128,31 +147,39 @@ static sl_res_rawptr_str *sl_net_tls_dial(const char *host, int port,
         freeaddrinfo(res);
         return sl_net_err_rawptr(strerror(errno));
     }
-    sl_rt_gc_blocked = 1;
+    sl_net_set_nonblocking(fd);
     int cres = connect(fd, res->ai_addr, res->ai_addrlen);
-    sl_rt_gc_blocked = 0;
-    sl_rt_gc_checkin();
-    if (cres != 0) {
+    freeaddrinfo(res);
+    if (cres != 0 && errno != EINPROGRESS) {
         int e = errno;
-        freeaddrinfo(res);
         close(fd);
         return sl_net_err_rawptr(strerror(e));
     }
-    freeaddrinfo(res);
+    if (cres != 0) {
+        if (sl_reactor_wait(fd, SL_REACTOR_WRITE, 1) < 0) {
+            close(fd);
+            return sl_net_err_rawptr("interrupted");
+        }
+        int so_err = 0;
+        socklen_t slen = sizeof(so_err);
+        getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_err, &slen);
+        if (so_err != 0) {
+            close(fd);
+            return sl_net_err_rawptr(strerror(so_err));
+        }
+    }
     SSL *ssl = SSL_new((SSL_CTX *)ctxv);
     if (!ssl) {
         close(fd);
         return sl_net_err_rawptr(sl_tls_last_error());
     }
     SSL_set_fd(ssl, fd);
+    SSL_set_mode(ssl, SSL_MODE_ENABLE_PARTIAL_WRITE);
     SSL_set1_host(ssl, host);
     SSL_set_tlsext_host_name(ssl, host);
-    sl_rt_gc_blocked = 1;
-    int sc = SSL_connect(ssl);
-    sl_rt_gc_blocked = 0;
-    sl_rt_gc_checkin();
-    if (sc != 1 || SSL_get_verify_result(ssl) != X509_V_OK) {
-        char *m = sl_tls_last_error();
+    int hs = sl_tls_handshake(ssl, 0);
+    if (hs != 0 || SSL_get_verify_result(ssl) != X509_V_OK) {
+        char *m = hs == -1 ? sl_strdup("interrupted") : sl_tls_last_error();
         SSL_free(ssl);
         close(fd);
         return sl_net_err_rawptr(m);
@@ -164,19 +191,16 @@ static sl_res_i32_str *sl_net_tls_send(void *sslv, sl_bytes *data) {
     SSL *ssl = (SSL *)sslv;
     long long off = 0;
     while (off < data->len) {
-        sl_rt_gc_blocked = 1;
         int n = SSL_write(ssl, data->ptr + off, (int)(data->len - off));
-        sl_rt_gc_blocked = 0;
-        sl_rt_gc_checkin();
-        if (n <= 0) return sl_net_err_i32(sl_tls_last_error());
-        off += n;
+        if (n > 0) { off += n; continue; }
+        int err = SSL_get_error(ssl, n);
+        int w = sl_tls_park(ssl, err, 0);
+        if (w == 0) continue;
+        return sl_net_err_i32(sl_tls_last_error());
     }
     return sl_net_ok_i32((int32_t)data->len);
 }
 
-/* Tier 10: see sl_net_recv's own comment (runtime_net.c) -- same
- * shape, same fix: b is allocated before the blocking SSL_read(),
- * and needs its own explicit bracket held open across it. */
 static sl_res_bytes_str *sl_net_tls_recv(void *sslv, int max) {
     if (max <= 0) max = 4096;
     SSL *ssl = (SSL *)sslv;
@@ -185,20 +209,25 @@ static sl_res_bytes_str *sl_net_tls_recv(void *sslv, int max) {
     void *_sl_rcv_roots[] = { (void *)b };
     sl_safepoint _sl_rcv_sp;
     sl_rt_safepoint_enter(&_sl_rcv_sp, _sl_rcv_roots, 1);
-    sl_rt_gc_blocked = 1;
-    int n = SSL_read(ssl, b->ptr, max);
-    sl_rt_gc_blocked = 0;
-    sl_rt_gc_checkin();
-    sl_rt_safepoint_exit();
-    if (n <= 0) {
-        if (SSL_get_error(ssl, n) == SSL_ERROR_ZERO_RETURN) {
-            b->len = 0;
+    for (;;) {
+        int n = SSL_read(ssl, b->ptr, max);
+        if (n > 0) {
+            b->len = n;
+            sl_rt_safepoint_exit();
             return sl_net_ok_bytes(b);
         }
+        int err = SSL_get_error(ssl, n);
+        if (err == SSL_ERROR_ZERO_RETURN) {
+            b->len = 0;
+            sl_rt_safepoint_exit();
+            return sl_net_ok_bytes(b);
+        }
+        int w = sl_tls_park(ssl, err, 1);
+        if (w == 0) continue;
+        sl_rt_safepoint_exit();
+        if (w == -1) return sl_net_err_bytes("interrupted");
         return sl_net_err_bytes(sl_tls_last_error());
     }
-    b->len = n;
-    return sl_net_ok_bytes(b);
 }
 
 static void sl_net_tls_close(void *sslv) {

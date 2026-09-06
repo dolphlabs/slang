@@ -707,12 +707,11 @@ static void sl_preempt_ticker_start(void) {
 /* Called once, from main(), before any user code (which might 'spawn')
  * starts running. Sizes the pool via sysconf(_SC_NPROCESSORS_ONLN),
  * floored at 8: tests/proc_shutdown already has two simultaneously-
- * BLOCKING spawned tasks today, and net's TLS handshake / time.sleep's
- * getaddrinfo call still block whichever OS thread calls them (plain
- * TCP net.* itself now parks, Tier 11 sixth slice), so a low floor
- * (sysconf can legitimately return 1, e.g. in a constrained container)
- * is a live risk to an existing test, not a hypothetical one. This is
- * an explicit stopgap, not a real fix.
+ * BLOCKING spawned tasks today, and getaddrinfo in net.dial /
+ * net.tls_dial still blocks whichever OS thread calls it, so a low
+ * floor (sysconf can legitimately return 1, e.g. in a constrained
+ * container) is a live risk to an existing test. This is an explicit
+ * stopgap, not a real fix.
  *
  * Tier 11 sixth slice: no longer takes a block_signals parameter --
  * SIGTERM/SIGINT are now blocked exactly ONCE, at the very top of

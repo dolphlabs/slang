@@ -33,25 +33,8 @@ static void sl_net_set_nonblocking(int fd) {
     if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 }
 
-/* TLS (net.tls_*, runtime_tls.c) is deliberately NOT converted to
- * parking this slice -- SSL_accept/SSL_connect/SSL_read/SSL_write's
- * own WANT_READ/WANT_WRITE async state machine is a materially
- * different, harder problem deserving its own dedicated design pass.
- * TLS's own sl_net_tls_accept still does a raw, fully-blocking
- * accept() directly on the LISTENER fd -- but net.listen() now
- * makes every listener non-blocking by default (needed for plain
- * net.accept's own parking above). This forces a listener fd back
- * to blocking immediately before TLS's own raw accept() call, and
- * (unchanged from before this slice) forces a freshly-accepted
- * connection fd to blocking too, since accept()'s own non-blocking
- * mode is platform-defined to be contagious to what it hands back
- * on some systems (macOS included). Kept specifically for TLS's
- * sake now that plain net.* no longer needs it for its own accepted
- * connections (those stay non-blocking internally, by design). */
-static void sl_net_ensure_blocking(int fd) {
-    int fl = fcntl(fd, F_GETFL, 0);
-    if (fl >= 0) fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
-}
+/* TLS parks on the same reactor (WANT_READ/WANT_WRITE). FDs stay
+ * non-blocking; sl_net_tls_* retries through sl_reactor_wait. */
 
 /* ---- the reactor ---- */
 
