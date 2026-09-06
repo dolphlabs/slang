@@ -209,6 +209,7 @@ static void sl_task_park(pthread_mutex_t *held_mu) {
     pthread_mutex_unlock(&sl_gc_mu);
     sl_rt_current_task->park_mu = held_mu;
     sl_rt_current_task->parked = 1;
+    sl_rt_current_task->io_wake = 0;
     sl_ctx_switch(&sl_rt_current_task->rsp, SL_RT_TLS_NATIVE_RSP());
     /* resumes here once re-submitted (sl_task_resume) and re-switched-
        into by some worker */
@@ -302,6 +303,7 @@ static void sl_task_yield_now(void) {
      * switch-out/switch-back-in window any safer. */
     sl_rt_preempt_disable();
     sl_task *t = sl_rt_current_task;
+    t->io_wake = 0;
     t->preempted = 1;
     sl_ctx_switch(&t->rsp, SL_RT_TLS_NATIVE_RSP());
     /* resumes here once some worker's run loop dispatches this task
@@ -599,6 +601,8 @@ static void sl_preempt_handler(int sig, siginfo_t *si, void *uctx_raw) {
     }
     if (atomic_load_explicit(&t->preempt_disable_depth, memory_order_acquire) != 0)
         return;
+    if (t->io_wake)
+        return;
     if (sl_rt_monotonic_ns() - t->run_start_ns < SL_PREEMPT_QUANTUM_NS)
         return; /* re-validate fresh -- don't trust the ticker's
             possibly-stale snapshot */
@@ -657,7 +661,7 @@ static void *sl_preempt_ticker_thread(void *arg) {
             pthread_mutex_lock(&sl_pool_slots_mu);
             sl_task *t = atomic_load_explicit(&sl_pool_slots[i].cur, memory_order_acquire);
             if (!t) { pthread_mutex_unlock(&sl_pool_slots_mu); continue; }
-            if (now - t->run_start_ns < SL_PREEMPT_QUANTUM_NS) {
+            if (t->io_wake || now - t->run_start_ns < SL_PREEMPT_QUANTUM_NS) {
                 pthread_mutex_unlock(&sl_pool_slots_mu);
                 continue;
             }
