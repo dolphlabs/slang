@@ -742,9 +742,8 @@ static Stmt *parse_guard_stmt(Parser *p) {
     return s;
 }
 
-/* spawn f(args...) ; -- run a plain/extern function call on a new
- * OS thread; arguments are evaluated in the spawning context before
- * the thread starts (no closures to worry about). */
+/* spawn f(args...) ; -- submit a task to the M:N pool.
+ * Arguments are evaluated in the spawning context (no closures). */
 static Stmt *parse_spawn_stmt(Parser *p) {
     Token *kw = advance(p); /* 'spawn' */
     Expr *call = parse_expression(p);

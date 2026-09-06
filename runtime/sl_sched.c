@@ -1,0 +1,972 @@
+/* Tier 11, first slice: growable-stack tasks on a hand-rolled
+ * context switch. main() and every spawned pthread now run their own
+ * body on a task-owned buffer (sl_task_stack_init below) instead of
+ * directly on the OS-provided thread stack, and sl_rt_safepoint_enter
+ * (runtime_core.c) grows that buffer on demand -- still exactly one
+ * task per OS thread, created and torn down with the thread itself;
+ * no scheduler, no second task, no parking. Full design writeup and
+ * the standalone spike that validated this mechanism (context switch
+ * + grow-and-relocate, both single- and multi-threaded, plus a
+ * negative control) live in the Tier 11 plan; see todo.md's Tier 11
+ * entry for the pointer once that's written up there.
+ *
+ * The x86_64 path was validated directly (150+ spike runs, ASan-
+ * free-poisoning UAF check, a negative control proving the frame-
+ * pointer-chain fix is load-bearing). The arm64 path was written
+ * from the AAPCS64 spec and cross-assembly/disassembly-verified
+ * (encoding matches this design exactly) but has NOT run on real
+ * arm64 hardware -- flagged here, not silently assumed correct.
+ * Unlike x86_64 System V (no callee-saved XMM registers at all,
+ * which is why the x86_64 switch below touches no FP/SSE state),
+ * AAPCS64 requires d8-d15 preserved across a call, so the arm64
+ * switch saves/restores them -- a real ABI divergence, not an
+ * oversight to bring in line with the x86_64 file.
+ *
+ * Darwin (Mach-O) mangles C-linkage symbols with a leading
+ * underscore; Linux (ELF) does not -- the asm below emits the
+ * matching symbol name for whichever this build targets, so the
+ * plain `sl_ctx_switch`/`sl_ctx_trampoline` C declarations below
+ * resolve correctly either way. */
+
+#if defined(__x86_64__)
+#if defined(__APPLE__)
+__asm__(
+".text\n"
+".globl _sl_ctx_switch\n"
+".p2align 4\n"
+"_sl_ctx_switch:\n"
+"    push %rbp\n"
+"    push %rbx\n"
+"    push %r12\n"
+"    push %r13\n"
+"    push %r14\n"
+"    push %r15\n"
+"    mov  %rsp, (%rdi)\n"
+"    mov  %rsi, %rsp\n"
+"    pop  %r15\n"
+"    pop  %r14\n"
+"    pop  %r13\n"
+"    pop  %r12\n"
+"    pop  %rbx\n"
+"    pop  %rbp\n"
+"    ret\n"
+".globl _sl_ctx_trampoline\n"
+".p2align 4\n"
+"_sl_ctx_trampoline:\n"
+"    call _sl_preempt_release_initial_disable\n"
+"    mov  %r12, %rdi\n"
+"    call *%r13\n"
+"    ud2\n"
+);
+/* Tier 11 eighth slice: the async-preemption trampoline -- transplanted
+ * from the validated standalone spike (see the Tier 11 plan's own
+ * 'Spike findings' section) essentially unchanged. PC lands at
+ * sl_preempt_trampoline_entry immediately after a real, prompt
+ * sigreturn from sl_preempt_handler (runtime_pool.c) -- %rsp is
+ * exactly where the interrupted code left it (call it R0), only %rip
+ * was rewritten. See the plan's own derivation for the full byte-by-
+ * byte layout reasoning; summary: lea (never sub/add, to stay flag-
+ * safe until pushfq/popfq bracket the real save/restore), 128-byte red
+ * zone skip + 8-byte resume-target slot + 8-byte disable-depth-pointer
+ * slot reserved first, then RFLAGS + 15 GPRs + XMM0-15, then the two
+ * C helper calls, then the mirror-image restore ending in a jmp
+ * through a memory operand (never a register) computed relative to
+ * the already-restored %rsp -- the second review's own confirmed-sound
+ * finding: no GPR is ever clobbered to hold the jump target. */
+__asm__(
+".text\n"
+".globl _sl_preempt_trampoline_entry\n"
+".p2align 4\n"
+"_sl_preempt_trampoline_entry:\n"
+"    lea  -144(%rsp), %rsp\n"
+"    pushfq\n"
+"    push %rax\n"
+"    push %rbx\n"
+"    push %rcx\n"
+"    push %rdx\n"
+"    push %rsi\n"
+"    push %rdi\n"
+"    push %rbp\n"
+"    push %r8\n"
+"    push %r9\n"
+"    push %r10\n"
+"    push %r11\n"
+"    push %r12\n"
+"    push %r13\n"
+"    push %r14\n"
+"    push %r15\n"
+"    lea  -256(%rsp), %rsp\n"
+"    movdqu %xmm0,  0(%rsp)\n"
+"    movdqu %xmm1,  16(%rsp)\n"
+"    movdqu %xmm2,  32(%rsp)\n"
+"    movdqu %xmm3,  48(%rsp)\n"
+"    movdqu %xmm4,  64(%rsp)\n"
+"    movdqu %xmm5,  80(%rsp)\n"
+"    movdqu %xmm6,  96(%rsp)\n"
+"    movdqu %xmm7,  112(%rsp)\n"
+"    movdqu %xmm8,  128(%rsp)\n"
+"    movdqu %xmm9,  144(%rsp)\n"
+"    movdqu %xmm10, 160(%rsp)\n"
+"    movdqu %xmm11, 176(%rsp)\n"
+"    movdqu %xmm12, 192(%rsp)\n"
+"    movdqu %xmm13, 208(%rsp)\n"
+"    movdqu %xmm14, 224(%rsp)\n"
+"    movdqu %xmm15, 240(%rsp)\n"
+"    call _sl_preempt_yield\n"
+"    call _sl_preempt_get_orig_pc\n"
+"    movq %rax, 392(%rsp)\n"
+"    call _sl_preempt_get_disable_depth_ptr\n"
+"    movq %rax, 384(%rsp)\n"
+"    movdqu 0(%rsp),   %xmm0\n"
+"    movdqu 16(%rsp),  %xmm1\n"
+"    movdqu 32(%rsp),  %xmm2\n"
+"    movdqu 48(%rsp),  %xmm3\n"
+"    movdqu 64(%rsp),  %xmm4\n"
+"    movdqu 80(%rsp),  %xmm5\n"
+"    movdqu 96(%rsp),  %xmm6\n"
+"    movdqu 112(%rsp), %xmm7\n"
+"    movdqu 128(%rsp), %xmm8\n"
+"    movdqu 144(%rsp), %xmm9\n"
+"    movdqu 160(%rsp), %xmm10\n"
+"    movdqu 176(%rsp), %xmm11\n"
+"    movdqu 192(%rsp), %xmm12\n"
+"    movdqu 208(%rsp), %xmm13\n"
+"    movdqu 224(%rsp), %xmm14\n"
+"    movdqu 240(%rsp), %xmm15\n"
+"    lea  256(%rsp), %rsp\n"
+"    pop  %r15\n"
+"    pop  %r14\n"
+"    pop  %r13\n"
+"    pop  %r12\n"
+"    pop  %r11\n"
+"    pop  %r10\n"
+"    pop  %r9\n"
+"    pop  %r8\n"
+"    pop  %rbp\n"
+"    pop  %rdi\n"
+"    pop  %rsi\n"
+"    pop  %rdx\n"
+"    pop  %rcx\n"
+"    pop  %rbx\n"
+"    movq 16(%rsp), %rax\n"
+"    lock decl (%rax)\n"
+"    pop  %rax\n"
+"    popfq\n"
+"    lea  144(%rsp), %rsp\n"
+"    jmp  *-136(%rsp)\n"
+".globl _sl_preempt_trampoline_end\n"
+"_sl_preempt_trampoline_end:\n"
+);
+/* Tier 11 eighth slice: sl_grower_trampoline -- identical shape to
+ * sl_ctx_trampoline above MINUS the sl_preempt_release_initial_disable
+ * call. The grower context (sl_task_stack_grow) reuses the same
+ * argument-smuggling trick sl_ctx_trampoline provides (arg in the
+ * right register for the callee), but for a fundamentally different
+ * purpose than a fresh task start -- sl_ctx_trampoline's own release
+ * call assumes sl_task_stack_init primed preempt_disable_depth to 1,
+ * which is simply not true for a grower-context entry, and reusing
+ * it here was a real, found-under-load bug: it silently decremented
+ * a task's preempt_disable_depth by one on every single stack grow,
+ * with nothing to balance it, corrupting the counter's own invariant
+ * over repeated grows. sl_task_grower_entry (runtime_sched.c) brackets
+ * its own malloc call directly with an ordinary, self-contained
+ * sl_rt_preempt_disable/enable pair -- no special-casing needed once
+ * this stub stops calling the fresh-task-only release for it. */
+__asm__(
+".text\n"
+".globl _sl_grower_trampoline\n"
+".p2align 4\n"
+"_sl_grower_trampoline:\n"
+"    mov  %r12, %rdi\n"
+"    call *%r13\n"
+"    ud2\n"
+);
+#else
+__asm__(
+".text\n"
+".globl sl_ctx_switch\n"
+".p2align 4\n"
+"sl_ctx_switch:\n"
+"    push %rbp\n"
+"    push %rbx\n"
+"    push %r12\n"
+"    push %r13\n"
+"    push %r14\n"
+"    push %r15\n"
+"    mov  %rsp, (%rdi)\n"
+"    mov  %rsi, %rsp\n"
+"    pop  %r15\n"
+"    pop  %r14\n"
+"    pop  %r13\n"
+"    pop  %r12\n"
+"    pop  %rbx\n"
+"    pop  %rbp\n"
+"    ret\n"
+".globl sl_ctx_trampoline\n"
+".p2align 4\n"
+"sl_ctx_trampoline:\n"
+"    call sl_preempt_release_initial_disable\n"
+"    mov  %r12, %rdi\n"
+"    call *%r13\n"
+"    ud2\n"
+);
+/* Tier 11 eighth slice: the async-preemption trampoline -- transplanted
+ * from the validated standalone spike (see the Tier 11 plan's own
+ * 'Spike findings' section) essentially unchanged. PC lands at
+ * sl_preempt_trampoline_entry immediately after a real, prompt
+ * sigreturn from sl_preempt_handler (runtime_pool.c) -- %rsp is
+ * exactly where the interrupted code left it (call it R0), only %rip
+ * was rewritten. See the plan's own derivation for the full byte-by-
+ * byte layout reasoning; summary: lea (never sub/add, to stay flag-
+ * safe until pushfq/popfq bracket the real save/restore), 128-byte red
+ * zone skip + 8-byte resume-target slot + 8-byte disable-depth-pointer
+ * slot reserved first, then RFLAGS + 15 GPRs + XMM0-15, then the two
+ * C helper calls, then the mirror-image restore ending in a jmp
+ * through a memory operand (never a register) computed relative to
+ * the already-restored %rsp -- the second review's own confirmed-sound
+ * finding: no GPR is ever clobbered to hold the jump target. */
+__asm__(
+".text\n"
+".globl sl_preempt_trampoline_entry\n"
+".p2align 4\n"
+"sl_preempt_trampoline_entry:\n"
+"    lea  -144(%rsp), %rsp\n"
+"    pushfq\n"
+"    push %rax\n"
+"    push %rbx\n"
+"    push %rcx\n"
+"    push %rdx\n"
+"    push %rsi\n"
+"    push %rdi\n"
+"    push %rbp\n"
+"    push %r8\n"
+"    push %r9\n"
+"    push %r10\n"
+"    push %r11\n"
+"    push %r12\n"
+"    push %r13\n"
+"    push %r14\n"
+"    push %r15\n"
+"    lea  -256(%rsp), %rsp\n"
+"    movdqu %xmm0,  0(%rsp)\n"
+"    movdqu %xmm1,  16(%rsp)\n"
+"    movdqu %xmm2,  32(%rsp)\n"
+"    movdqu %xmm3,  48(%rsp)\n"
+"    movdqu %xmm4,  64(%rsp)\n"
+"    movdqu %xmm5,  80(%rsp)\n"
+"    movdqu %xmm6,  96(%rsp)\n"
+"    movdqu %xmm7,  112(%rsp)\n"
+"    movdqu %xmm8,  128(%rsp)\n"
+"    movdqu %xmm9,  144(%rsp)\n"
+"    movdqu %xmm10, 160(%rsp)\n"
+"    movdqu %xmm11, 176(%rsp)\n"
+"    movdqu %xmm12, 192(%rsp)\n"
+"    movdqu %xmm13, 208(%rsp)\n"
+"    movdqu %xmm14, 224(%rsp)\n"
+"    movdqu %xmm15, 240(%rsp)\n"
+"    call sl_preempt_yield\n"
+"    call sl_preempt_get_orig_pc\n"
+"    movq %rax, 392(%rsp)\n"
+"    call sl_preempt_get_disable_depth_ptr\n"
+"    movq %rax, 384(%rsp)\n"
+"    movdqu 0(%rsp),   %xmm0\n"
+"    movdqu 16(%rsp),  %xmm1\n"
+"    movdqu 32(%rsp),  %xmm2\n"
+"    movdqu 48(%rsp),  %xmm3\n"
+"    movdqu 64(%rsp),  %xmm4\n"
+"    movdqu 80(%rsp),  %xmm5\n"
+"    movdqu 96(%rsp),  %xmm6\n"
+"    movdqu 112(%rsp), %xmm7\n"
+"    movdqu 128(%rsp), %xmm8\n"
+"    movdqu 144(%rsp), %xmm9\n"
+"    movdqu 160(%rsp), %xmm10\n"
+"    movdqu 176(%rsp), %xmm11\n"
+"    movdqu 192(%rsp), %xmm12\n"
+"    movdqu 208(%rsp), %xmm13\n"
+"    movdqu 224(%rsp), %xmm14\n"
+"    movdqu 240(%rsp), %xmm15\n"
+"    lea  256(%rsp), %rsp\n"
+"    pop  %r15\n"
+"    pop  %r14\n"
+"    pop  %r13\n"
+"    pop  %r12\n"
+"    pop  %r11\n"
+"    pop  %r10\n"
+"    pop  %r9\n"
+"    pop  %r8\n"
+"    pop  %rbp\n"
+"    pop  %rdi\n"
+"    pop  %rsi\n"
+"    pop  %rdx\n"
+"    pop  %rcx\n"
+"    pop  %rbx\n"
+"    movq 16(%rsp), %rax\n"
+"    lock decl (%rax)\n"
+"    pop  %rax\n"
+"    popfq\n"
+"    lea  144(%rsp), %rsp\n"
+"    jmp  *-136(%rsp)\n"
+".globl sl_preempt_trampoline_end\n"
+"sl_preempt_trampoline_end:\n"
+);
+/* Tier 11 eighth slice: sl_grower_trampoline -- identical shape to
+ * sl_ctx_trampoline above MINUS the sl_preempt_release_initial_disable
+ * call. The grower context (sl_task_stack_grow) reuses the same
+ * argument-smuggling trick sl_ctx_trampoline provides (arg in the
+ * right register for the callee), but for a fundamentally different
+ * purpose than a fresh task start -- sl_ctx_trampoline's own release
+ * call assumes sl_task_stack_init primed preempt_disable_depth to 1,
+ * which is simply not true for a grower-context entry, and reusing
+ * it here was a real, found-under-load bug: it silently decremented
+ * a task's preempt_disable_depth by one on every single stack grow,
+ * with nothing to balance it, corrupting the counter's own invariant
+ * over repeated grows. sl_task_grower_entry (runtime_sched.c) brackets
+ * its own malloc call directly with an ordinary, self-contained
+ * sl_rt_preempt_disable/enable pair -- no special-casing needed once
+ * this stub stops calling the fresh-task-only release for it. */
+__asm__(
+".text\n"
+".globl sl_grower_trampoline\n"
+".p2align 4\n"
+"sl_grower_trampoline:\n"
+"    mov  %r12, %rdi\n"
+"    call *%r13\n"
+"    ud2\n"
+);
+#endif
+#elif defined(__aarch64__)
+#if defined(__APPLE__)
+__asm__(
+".text\n"
+".globl _sl_ctx_switch\n"
+".p2align 2\n"
+"_sl_ctx_switch:\n"
+"    stp x19, x20, [sp, #-16]!\n"
+"    stp x21, x22, [sp, #-16]!\n"
+"    stp x23, x24, [sp, #-16]!\n"
+"    stp x25, x26, [sp, #-16]!\n"
+"    stp x27, x28, [sp, #-16]!\n"
+"    stp d8,  d9,  [sp, #-16]!\n"
+"    stp d10, d11, [sp, #-16]!\n"
+"    stp d12, d13, [sp, #-16]!\n"
+"    stp d14, d15, [sp, #-16]!\n"
+"    stp x29, x30, [sp, #-16]!\n"
+"    mov x9, sp\n"
+"    str x9, [x0]\n"
+"    mov sp, x1\n"
+"    ldp x29, x30, [sp], #16\n"
+"    ldp d14, d15, [sp], #16\n"
+"    ldp d12, d13, [sp], #16\n"
+"    ldp d10, d11, [sp], #16\n"
+"    ldp d8,  d9,  [sp], #16\n"
+"    ldp x27, x28, [sp], #16\n"
+"    ldp x25, x26, [sp], #16\n"
+"    ldp x23, x24, [sp], #16\n"
+"    ldp x21, x22, [sp], #16\n"
+"    ldp x19, x20, [sp], #16\n"
+"    ret\n"
+".globl _sl_ctx_trampoline\n"
+".p2align 2\n"
+"_sl_ctx_trampoline:\n"
+"    bl   _sl_preempt_release_initial_disable\n"
+"    mov x0, x20\n"
+"    blr x19\n"
+"    brk #1\n"
+);
+#else
+__asm__(
+".text\n"
+".globl sl_ctx_switch\n"
+".p2align 2\n"
+"sl_ctx_switch:\n"
+"    stp x19, x20, [sp, #-16]!\n"
+"    stp x21, x22, [sp, #-16]!\n"
+"    stp x23, x24, [sp, #-16]!\n"
+"    stp x25, x26, [sp, #-16]!\n"
+"    stp x27, x28, [sp, #-16]!\n"
+"    stp d8,  d9,  [sp, #-16]!\n"
+"    stp d10, d11, [sp, #-16]!\n"
+"    stp d12, d13, [sp, #-16]!\n"
+"    stp d14, d15, [sp, #-16]!\n"
+"    stp x29, x30, [sp, #-16]!\n"
+"    mov x9, sp\n"
+"    str x9, [x0]\n"
+"    mov sp, x1\n"
+"    ldp x29, x30, [sp], #16\n"
+"    ldp d14, d15, [sp], #16\n"
+"    ldp d12, d13, [sp], #16\n"
+"    ldp d10, d11, [sp], #16\n"
+"    ldp d8,  d9,  [sp], #16\n"
+"    ldp x27, x28, [sp], #16\n"
+"    ldp x25, x26, [sp], #16\n"
+"    ldp x23, x24, [sp], #16\n"
+"    ldp x21, x22, [sp], #16\n"
+"    ldp x19, x20, [sp], #16\n"
+"    ret\n"
+".globl sl_ctx_trampoline\n"
+".p2align 2\n"
+"sl_ctx_trampoline:\n"
+"    bl   sl_preempt_release_initial_disable\n"
+"    mov x0, x20\n"
+"    blr x19\n"
+"    brk #1\n"
+);
+#endif
+#else
+#error "sl_ctx_switch: unsupported architecture (only x86_64 and aarch64 have a runtime_sched.c backend)"
+#endif
+
+void sl_ctx_switch(void **old_rsp_slot, void *new_rsp);
+void sl_ctx_trampoline(void);
+void sl_grower_trampoline(void); /* Tier 11 eighth slice -- see its own
+    comment above (right after sl_preempt_trampoline_end) */
+void sl_preempt_release_initial_disable(void); /* Tier 11 eighth slice
+    -- called from sl_ctx_trampoline above, defined further down in
+    this file, near sl_task_stack_init. Deliberately NOT static, same
+    reasoning as sl_ctx_switch/sl_ctx_trampoline just above: it's
+    called exclusively from raw asm, invisible to the C compiler's own
+    call-graph analysis -- a static definition looked, to the
+    optimizer, like dead code with zero real callers and was
+    eliminated at -O2, producing a real, empirically-caught link
+    error ("symbol not found") the first time this was actually
+    built end to end, not a hypothetical concern. */
+void sl_preempt_trampoline_entry(void); /* Tier 11 eighth slice -- the
+    async-preemption trampoline itself, defined in asm above. Never
+    called directly from C; sl_preempt_handler (runtime_pool.c)
+    rewrites an interrupted context's own PC to point here. */
+void sl_preempt_trampoline_end(void); /* address-range marker only,
+    never executed -- sl_preempt_handler uses
+    [sl_preempt_trampoline_entry, sl_preempt_trampoline_end) as a hard,
+    counter-independent veto: never re-preempt the trampoline's own
+    code, no matter what preempt_disable_depth says. See the plan's
+    own derivation (standalone spike, Bug 1/the release-to-jmp tail)
+    for why a counter-based bracket alone provably cannot close this
+    gap and a PC-range check can. */
+void sl_preempt_yield(void); /* called from the trampoline asm above,
+    defined below, near sl_preempt_release_initial_disable */
+void *sl_preempt_get_orig_pc(void);
+void *sl_preempt_get_disable_depth_ptr(void);
+
+/* sl_task itself is defined earlier, in RUNTIME[] (runtime_core.c) --
+ * sl_rt_safepoint_enter/exit need its complete type at their own
+ * definition site, which is emitted well before this file. See the
+ * comment there for the full reasoning; everything below just USES
+ * sl_task, it doesn't redefine it. */
+
+/* Saved-register block layout, low address (= the saved rsp) to
+ * high, exactly mirroring sl_ctx_switch's own push order in
+ * reverse -- see ctx_x86_64.s / ctx_arm64.s spike headers for the
+ * full derivation. SAVED_FP_OFF is where a fresh (or currently
+ * suspended) task's own frame-pointer register sits within this
+ * block; the grow-and-relocate frame-pointer-chain walk below
+ * seeds from exactly this offset. Architecture-specific, not a
+ * port bug: x86_64's push-based layout puts it at +40 (6
+ * registers before it); arm64's stp-pair layout puts it at +0
+ * (pushed last, into the first pair popped).
+ *
+ * SL_CTX_BLOCK_SIZE is the total save-block size sl_ctx_make must
+ * reserve when synthesizing a fresh context below. */
+#if defined(__x86_64__)
+#define SAVED_FP_OFF 40
+#define SL_CTX_BLOCK_SIZE 56 /* 7 slots x 8 bytes */
+#elif defined(__aarch64__)
+#define SAVED_FP_OFF 0
+#define SL_CTX_BLOCK_SIZE 160 /* 10 stp pairs x 16 bytes */
+#endif
+
+/* Prime a fresh context: t->stack_base/stack_size must already be
+ * set. On first switch-in, entry(arg) starts running on this
+ * task's own stack; entry must never return. */
+static void sl_ctx_make(sl_task *t, void (*entry)(void *), void *arg) {
+    uintptr_t top = ((uintptr_t)t->stack_base + t->stack_size) &
+                    ~(uintptr_t)15;
+#if defined(__x86_64__)
+    /* low->high: r15, r14, r13, r12, rbx, rbp, return_address --
+     * r13/r12 smuggle entry/arg through to sl_ctx_trampoline (still
+     * hold their synthesized values immediately after the pop
+     * sequence's implicit ret lands there). rbp=NULL terminates
+     * the frame-pointer-chain walk at task entry. */
+    void **sp = (void **)(top - SL_CTX_BLOCK_SIZE);
+    sp[0] = NULL;              /* r15 */
+    sp[1] = NULL;              /* r14 */
+    sp[2] = (void *)entry;     /* r13 */
+    sp[3] = arg;               /* r12 */
+    sp[4] = NULL;              /* rbx */
+    sp[5] = NULL;              /* rbp -- terminates fp-chain walk */
+    sp[6] = (void *)sl_ctx_trampoline; /* return address */
+    t->rsp = sp;
+#elif defined(__aarch64__)
+    /* x19/x20 smuggle entry/arg through to sl_ctx_trampoline (same
+     * trick, arm64's callee-saved GPRs in place of r13/r12); x29=0
+     * terminates the frame-pointer-chain walk; x30 is what sl_ctx_
+     * switch's own `ret` (br x30) jumps to on first resume. */
+    unsigned char *base = (unsigned char *)(top - SL_CTX_BLOCK_SIZE);
+    void **slot = (void **)base;
+    slot[0] = NULL;                     /* x29 (fp) */
+    slot[1] = (void *)sl_ctx_trampoline; /* x30 (lr) */
+    for (int i = 2; i < 18; i++) slot[i] = NULL; /* d14..x22, unused */
+    slot[18] = (void *)entry; /* x19 */
+    slot[19] = arg;           /* x20 */
+    t->rsp = base;
+#endif
+}
+
+static void *sl_task_translate(void *ptr, void *old_base, size_t old_size,
+                              void *new_base, size_t new_size) {
+    uintptr_t p = (uintptr_t)ptr;
+    uintptr_t ob = (uintptr_t)old_base;
+    if (!ptr || p < ob || p >= ob + old_size) return ptr;
+    /* Anchor at the buffer's TOP, not its base -- the stack grows
+     * downward, and the guard check (SL_TASK_GUARD_MARGIN, defined
+     * with sl_task in RUNTIME[]) measures distance from the base, so
+     * a base-anchored translation would leave that distance
+     * unchanged, create zero headroom, and regrow infinitely on the
+     * very next check. See the plan's design section for the full
+     * derivation -- this was a real bug caught in review before
+     * implementation, not a guess. */
+    uintptr_t depth_from_old_top = (ob + old_size) - p;
+    uintptr_t nb = (uintptr_t)new_base;
+    return (void *)((nb + new_size) - depth_from_old_top);
+}
+
+static _Thread_local unsigned char sl_grower_stack[65536]; /* MUST stay
+    _Thread_local: spawn already creates genuinely concurrent OS
+    threads today, and two tasks on two different threads can grow
+    at overlapping times -- a shared scratch stack would let them
+    corrupt each other's in-flight relocation state. Caught in
+    review before implementation, and separately reproduced as a
+    reliable (30/30) crash in the spike's own negative control.
+    */
+static _Thread_local void *sl_grower_rsp;
+
+/* sl_rt_native_rsp is defined earlier, in RUNTIME[] (runtime_core.c) --
+ * sl_rt_error needs it at its own definition site, well before this
+ * file is emitted. See the comment there for the full reasoning;
+ * everything below just uses it, it doesn't redefine it. */
+
+/* The task-stack copy, and the ONLY thing here exempted from
+ * AddressSanitizer -- deliberately a one-line wrapper rather than the
+ * attribute on sl_task_grower_entry itself, so the safepoint-chain
+ * translation below keeps full ASan coverage.
+ *
+ * A task stack is a malloc'd buffer that real function frames have run
+ * on, so ASan has poisoned parts of it (redzones around each frame's
+ * locals) as stack memory it owns. Copying the buffer wholesale is
+ * exactly what this design requires -- see the red-zone comment at the
+ * call site for why it must be the WHOLE buffer, not just the live
+ * range -- but ASan cannot model relocating a stack, and reports the
+ * copy as a stack-buffer-underflow: reproducible 6/6 at -O0 and 8/8 at
+ * -O2 on tests/stack_grow before this, which made ASan unusable on any
+ * program that grows a stack. Same category, and same remedy, as
+ * SL_GC_NO_ASAN on the collector's conservative stack scan; it is a
+ * false positive about an operation ASan has no vocabulary for, not a
+ * suppression of a real finding. */
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define SL_STACK_COPY_BY_HAND 1
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__)
+#define SL_STACK_COPY_BY_HAND 1
+#endif
+#ifdef SL_STACK_COPY_BY_HAND
+/* Under ASan only, copy by hand instead of calling memcpy. The
+ * no_sanitize attribute alone is NOT enough here, which is worth
+ * stating because it looks like it should be: the attribute suppresses
+ * INSTRUMENTATION of this function's own accesses, but memcpy is also
+ * INTERCEPTED by the ASan runtime, and __asan_memcpy does its own
+ * shadow check no matter who called it. The first attempt at this fix
+ * kept the memcpy and changed nothing -- still 6/6 at -O0 and 8/8 at
+ * -O2 -- with __asan_memcpy sitting at frame #0 of the report, which
+ * is what gave it away. A hand-rolled loop inside a no_sanitize
+ * function calls no interceptor and is not instrumented, so it is the
+ * only form that actually works. Word-at-a-time so a 16KB stack
+ * relocation stays cheap; ASan builds are the only ones that pay for
+ * it at all. */
+SL_GC_NO_ASAN
+static void sl_stack_relocate_copy(void *dst, const void *src, size_t n) {
+    unsigned char *d = (unsigned char *)dst;
+    const unsigned char *s = (const unsigned char *)src;
+    size_t i = 0;
+    if (((uintptr_t)d % sizeof(size_t)) == 0 &&
+        ((uintptr_t)s % sizeof(size_t)) == 0) {
+        size_t *dw = (size_t *)dst;
+        const size_t *sw = (const size_t *)src;
+        size_t nw = n / sizeof(size_t);
+        for (size_t w = 0; w < nw; w++) dw[w] = sw[w];
+        i = nw * sizeof(size_t);
+    }
+    for (; i < n; i++) d[i] = s[i];
+}
+#else
+static void sl_stack_relocate_copy(void *dst, const void *src, size_t n) {
+    memcpy(dst, src, n);
+}
+#endif
+
+static void sl_task_grower_entry(void *arg) {
+    sl_task *t = (sl_task *)arg;
+    /* Tier 11 eighth slice: bracketed entry through right before the
+     * switch back (never entry-to-return -- this function's own switch
+     * never returns; the grower stack is reused fresh next time). Self-
+     * contained now that sl_grower_trampoline (not sl_ctx_trampoline)
+     * is what reaches this function -- no fresh-task-start release to
+     * account for. Covers malloc AND free below: both touch libSystem's
+     * own internal zone locks, and an async preemption mid-either was
+     * the concrete, empirically-reproduced bug this closes (a task
+     * migrating to a different OS thread mid-malloc/free abandons that
+     * thread's own os_unfair_lock hold, corrupting the allocator's
+     * internal state -- observed directly as os_unfair_lock's own
+     * 'recursive lock' abort on a LATER, unrelated allocation on the
+     * same OS thread). */
+    sl_rt_preempt_disable();
+    void *old_base = t->stack_base;
+    void *old_raw = t->raw_base;
+    size_t old_size = t->stack_size;
+    void *old_rsp = t->rsp;
+
+    size_t new_size = old_size * 2;
+    void *raw = malloc(new_size + 16);
+    if (!raw) { sl_rt_error("out of memory growing task stack", 0, 0); }
+    void *new_base = (void *)(((uintptr_t)raw + 15) & ~(uintptr_t)15);
+
+    /* Copy the ENTIRE old buffer to the END of the new one -- never
+     * just the live range above rsp: this is what keeps the x86_64
+     * red zone (up to 128 bytes below rsp a leaf frame may have used
+     * without moving rsp) correct for free. Load-bearing, not
+     * incidental. */
+    sl_stack_relocate_copy((char *)new_base + (new_size - old_size),
+                            old_base, old_size);
+
+    /* translate the safepoint chain */
+    for (sl_safepoint *sp = t->safepoint_top; sp; sp = sp->prev) {
+        sl_safepoint *new_sp = (sl_safepoint *)sl_task_translate(
+            sp, old_base, old_size, new_base, new_size);
+        new_sp->prev = (sl_safepoint *)sl_task_translate(
+            sp->prev, old_base, old_size, new_base, new_size);
+        new_sp->roots = (void **)sl_task_translate(
+            sp->roots, old_base, old_size, new_base, new_size);
+    }
+    t->safepoint_top = (sl_safepoint *)sl_task_translate(
+        t->safepoint_top, old_base, old_size, new_base, new_size);
+
+    /* translate the frame-pointer chain -- a SECOND, independent
+     * structural chain a raw memcpy alone leaves dangling: every
+     * saved-fp except the outermost would otherwise still point
+     * into the just-freed old buffer, corrupted lazily and
+     * silently as each caller frame returns and reloads through
+     * it. See SAVED_FP_OFF above for why this offset is
+     * architecture-specific. */
+    void *old_fp = *(void **)((char *)old_rsp + SAVED_FP_OFF);
+
+    t->rsp = sl_task_translate(old_rsp, old_base, old_size, new_base,
+                               new_size);
+
+    /* Tier 11 eighth slice: the chain's FIRST link -- the saved-fp
+     * sitting in the context block sl_ctx_switch built a few
+     * instructions ago, which its mirror-image `pop %rbp` (x86_64) /
+     * `ldp x29, x30` (arm64) will restore the moment we switch back
+     * into t. The loop below fixes up the saved-fp INSIDE each frame it
+     * walks, but it starts by READING this slot and never writes to it,
+     * so this one link kept its verbatim, memcpy'd old-buffer value --
+     * and it is the one link that goes straight into a register.
+     * Consequence: sl_task_stack_grow's own frame resumed with %rbp
+     * pointing into the buffer free()'d ten lines below, and its `leave`
+     * (mov %rbp, %rsp) then moved %rsp there too, so the task carried on
+     * running -- correctly, since the freed bytes are still a faithful
+     * copy of themselves -- on freed memory, for the rest of its life or
+     * until malloc handed that block to someone else. Everything ELSE
+     * about the task said otherwise: stack_base/stack_size, the
+     * translated safepoint chain, and sl_preempt_handler's own stack-
+     * range veto all named the NEW buffer, so the collector scanned
+     * frames nothing was executing in, and the guard-margin probe (a
+     * new-buffer base minus an old-buffer address, unsigned) came out
+     * astronomically large and never grew again. Found by probing the
+     * resumed frame's own address against [stack_base, stack_base +
+     * stack_size) right after the switch back: inside=0 on every single
+     * grow, 3/3, in a deep-recursion test -- which still printed the
+     * right answer, the signature of a use-after-free whose block simply
+     * had not been reused yet. Ordered before the walk (and after t->rsp
+     * is translated) purely so the write lands in the new buffer through
+     * an already-correct pointer; the two fixups are independent. */
+    *(void **)((char *)t->rsp + SAVED_FP_OFF) =
+        sl_task_translate(old_fp, old_base, old_size, new_base, new_size);
+
+    while (old_fp && (uintptr_t)old_fp >= (uintptr_t)old_base &&
+          (uintptr_t)old_fp < (uintptr_t)old_base + old_size) {
+        void *new_fp = sl_task_translate(old_fp, old_base, old_size,
+                                         new_base, new_size);
+        void *old_next_fp = *(void **)old_fp;
+        void *new_next_fp = sl_task_translate(old_next_fp, old_base,
+                                              old_size, new_base, new_size);
+        *(void **)new_fp = new_next_fp;
+        old_fp = old_next_fp;
+    }
+
+    free(old_raw); /* NOT old_base -- see sl_task's own raw_base field
+                       comment (runtime_core.c) for why these can
+                       differ */
+    t->stack_base = new_base;
+    t->raw_base = raw;
+    t->stack_size = new_size;
+    t->grows_seen++;
+    sl_rt_preempt_enable();
+
+    sl_ctx_switch(&sl_grower_rsp, t->rsp);
+    fprintf(stderr, "slang: internal error: grower context resumed "
+                    "after switching back -- unreachable\n");
+    abort(); /* genuinely unreachable -- a can't-happen guard, never
+                routed through sl_rt_error's panic-recovery machinery */
+}
+
+/* Growth switches to a dedicated grower context (its own small
+ * scratch stack) rather than growing in place, because a running C
+ * frame's own stack cannot be moved out from under itself in
+ * portable C -- see the plan's design section for the full
+ * reasoning. Called from sl_rt_safepoint_enter (runtime_core.c),
+ * forward-declared there since this definition comes much later. */
+static void sl_task_stack_grow(sl_task *t) {
+    /* Tier 11 eighth slice: bracketed entry-to-return -- NOT just
+     * sl_task_grower_entry's own internal bracket further down. This
+     * function's job before that point -- priming sl_grower_stack/
+     * sl_grower_rsp -- is a _Thread_local scratch buffer OWNED BY
+     * WHICHEVER OS THREAD IS CURRENTLY RUNNING t, and the priming writes
+     * plus the sl_ctx_switch call below that actually USES them are two
+     * separate steps with no protection between them. An async signal
+     * landing in that window (%rsp is still on t's own task stack here,
+     * so neither the stack-range nor trampoline-range veto in
+     * sl_preempt_handler catches it) suspends t mid-grow; if t is later
+     * RESUMED ON A DIFFERENT WORKER -- routine under this scheduler,
+     * any idle worker can dequeue any queued task -- execution continues
+     * from async_orig_pc, still inside this function, and reads
+     * sl_grower_rsp from THAT DIFFERENT THREAD'S OWN, UNRELATED
+     * thread-local storage: either never-initialized garbage, or a
+     * stale value left over from that thread's own past, completely
+     * unrelated grow. The sl_ctx_switch call below then switches the
+     * CPU into whatever that garbage points at -- full memory
+     * corruption, not a clean crash at the fault site, which is exactly
+     * why this surfaced as unrelated-looking corruption (a garbage map/
+     * chan/safepoint pointer) far from this function rather than a
+     * crash inside it. Root-caused directly: disabling the ticker's own
+     * pthread_kill (no real signal ever delivered, everything else
+     * unchanged) made concurrent_compute's crashes disappear entirely
+     * across repeated runs; re-enabling it reproduced them again. */
+    sl_rt_preempt_disable();
+    uintptr_t top = ((uintptr_t)sl_grower_stack + sizeof(sl_grower_stack)) &
+                    ~(uintptr_t)15;
+#if defined(__x86_64__)
+    void **sp = (void **)(top - SL_CTX_BLOCK_SIZE);
+    sp[0] = NULL;
+    sp[1] = NULL;
+    sp[2] = (void *)sl_task_grower_entry;
+    sp[3] = t;
+    sp[4] = NULL;
+    sp[5] = NULL;
+    sp[6] = (void *)sl_grower_trampoline; /* Tier 11 eighth slice: NOT
+        sl_ctx_trampoline -- see sl_grower_trampoline's own comment for
+        why reusing the fresh-task-start trampoline here was a real,
+        found-under-load counter-corruption bug. */
+    sl_grower_rsp = sp;
+#elif defined(__aarch64__)
+    unsigned char *base = (unsigned char *)(top - SL_CTX_BLOCK_SIZE);
+    void **slot = (void **)base;
+    slot[0] = NULL;
+    slot[1] = (void *)sl_grower_trampoline; /* see the x86_64 branch's
+        own comment just above */
+    for (int i = 2; i < 18; i++) slot[i] = NULL;
+    slot[18] = (void *)sl_task_grower_entry;
+    slot[19] = t;
+    sl_grower_rsp = base;
+#endif
+    sl_ctx_switch(&t->rsp, sl_grower_rsp);
+    /* resumes here once the grower switches back, i.e. after the
+     * grow has fully completed and t->rsp/stack_base/stack_size are
+     * already updated */
+    sl_rt_preempt_enable();
+}
+
+/* Small on purpose -- 'start small... never a fixed ceiling', per
+ * todo.md's Tier 11 entry -- and deliberately much smaller than the
+ * OS's own default thread stack (which main()/spawn used exclusively
+ * before this): most of the room a program needs now comes from
+ * growing on demand instead of being reserved unconditionally up
+ * front for every task whether it needs it or not.
+ *
+ * Shrunk from an earlier 65536, per todo.md's own stretch item -- but
+ * NOT all the way to the 'low single-digit KB' Go itself starts at,
+ * which was the original target here and turned out to be genuinely
+ * unsafe, not just untested: 2048 produced a real, reproducible heap
+ * corruption (macOS malloc's own 'Region cookie corrupted' check
+ * tripping) on the very first TLS test run, root-caused to
+ * OpenSSL's lazy, one-time SSL_CTX_new_ex -> OPENSSL_init_crypto ->
+ * err_load_strings init path -- a deep, genuinely stack-hungry native
+ * call chain with ZERO slang checkpoints anywhere inside it, so the
+ * growth mechanism below has no opportunity to intervene before it
+ * overflows into whatever heap memory sits just past the buffer.
+ * 8192 (this codebase's own former SL_TASK_GUARD_MARGIN value,
+ * coincidentally) looked clean on a handful of runs but still failed
+ * intermittently under real repetition (1 failure in 3 full test-suite
+ * runs) -- the same class of false confidence a single clean run
+ * already produces for SL_TASK_GUARD_MARGIN's own comment just below.
+ * 16384 is the value this was actually, empirically settled on: 80
+ * consecutive standalone TLS runs, 6 consecutive full test-suite runs,
+ * 15 consecutive nettest runs, 23 stress_test/concurrent_compute runs,
+ * and 4 clean UBSan runs, all clean -- a comparable bar to how
+ * SL_TASK_GUARD_MARGIN's own 8192 was originally validated (150+
+ * runs), not just 'it passed once.' Still a real, 4x reduction from
+ * 65536, just not the 32x one first proposed. See
+ * SL_TASK_GUARD_MARGIN's own comment (runtime_core.c) for why that
+ * value can't be picked independently of this one either. */
+#define SL_TASK_INITIAL_STACK_SIZE 16384
+
+/* Allocate t's stack buffer and prime it to start running entry(arg)
+ * on first switch-in -- called once, by main() (right after
+ * sl_gc_register_thread() has pointed sl_rt_current_task at t) and by
+ * sl_task_submit (runtime_pool.c, for a brand new task t that is NOT
+ * yet -- and may never become -- the calling thread's own current
+ * task). Tier 11 third slice: OOM here is a direct exit, not routed
+ * through sl_rt_error -- the caller's own sl_rt_current_task is not
+ * necessarily t (sl_task_submit calls this for a task some OTHER
+ * context is about to enqueue), so sl_rt_error's panic-switch-back
+ * would abandon the WRONG task and leave the failed submission's own
+ * sl_rt_active_spawns increment (stmt.c's call site) orphaned, never
+ * decremented. Matches sl_gc_set_grow/sl_gc_set_rebuild's own existing
+ * OOM convention (runtime_gc.c). */
+static void sl_task_stack_init(sl_task *t, void (*entry)(void *), void *arg) {
+    /* Tier 11 eighth slice: protects the CALLING task (sl_rt_current_task),
+     * not t -- for sl_task_submit's own call site (spawn), t is a brand
+     * new, not-yet-running task and the CALLER is genuinely executing on
+     * its own real stack here, vulnerable to the same malloc/os_unfair_lock
+     * class of bug sl_gc_alloc's own bracket exists for. Harmless no-op
+     * for program.c's main-task-init call site (there, t IS
+     * sl_rt_current_task, self-referentially, before stack_base is even
+     * set -- the stack-range veto in sl_preempt_handler already rejects
+     * any attempt there regardless, since t->stack_base/size both read
+     * as the memset'd zero at that point). */
+    sl_rt_preempt_disable();
+    t->stack_size = SL_TASK_INITIAL_STACK_SIZE;
+    void *raw = malloc(t->stack_size + 16);
+    if (!raw) {
+        fprintf(stderr, "slang: out of memory allocating task stack\n");
+        exit(1);
+    }
+    sl_rt_preempt_enable();
+    t->raw_base = raw;
+    t->stack_base = (void *)(((uintptr_t)raw + 15) & ~(uintptr_t)15);
+    sl_ctx_make(t, entry, arg);
+    /* Tier 11 eighth slice (async preemption): primed to 1, not 0 --
+     * a task's virgin, never-yet-dispatched first stint has a real,
+     * empirically-reproduced vulnerable window of its own (standalone
+     * spike, Bug 2: main's/a worker's OWN dispatch sl_ctx_switch moves
+     * rsp onto this task's stack several instructions before the
+     * matching pop sequence completes and real task code starts
+     * running -- during those instructions sl_rt_current_task already
+     * points at t and sp genuinely is within t's stack range, so
+     * neither veto in sl_preempt_handler catches it. Every SUBSEQUENT
+     * dispatch is naturally covered, because a previously-preempted
+     * task's preempt_disable_depth is still held elevated at that
+     * exact point -- only the never-preempted-yet case starts at the
+     * calloc-equivalent 0 this memset already produces, which is
+     * exactly the gap. Released by sl_preempt_release_initial_disable,
+     * called from sl_ctx_trampoline below as this task's own first
+     * action, before entry(arg) ever runs -- mirrors exactly how a
+     * resumed task's own bracket stays held until the trampoline's
+     * tail (pkg's async-preempt trampoline, not this one) explicitly
+     * releases it. */
+    t->preempt_disable_depth = 1;
+}
+
+/* Tier 11 eighth slice: called once, from sl_ctx_trampoline (below),
+ * as literally the first thing that runs on a task's own stack --
+ * releases the initial disable_depth=1 sl_task_stack_init primed
+ * above. sl_rt_current_task is already correctly set by whoever
+ * dispatched this task (sl_worker_run_loop, or main's own one-off
+ * switch-in, program.c) before the switch that landed us here. */
+void sl_preempt_release_initial_disable(void) {
+    atomic_fetch_sub_explicit(&sl_rt_current_task->preempt_disable_depth,
+                               1, memory_order_acq_rel);
+}
+
+/* Tier 11 eighth slice: the trampoline's own three C helpers -- called
+ * from the asm above, deliberately NOT static, same reasoning as
+ * sl_preempt_release_initial_disable's own comment (invisible to the
+ * C compiler's call-graph analysis, a static definition is dead code
+ * to the optimizer at -O2). sl_task_yield_now is forward-declared in
+ * runtime_core.c (RUNTIME[]), defined for real in runtime_pool.c,
+ * emitted after this file -- same established cross-file pattern
+ * every other park/resume/yield primitive already uses. */
+void sl_preempt_yield(void) {
+    sl_task *t = sl_rt_current_task;
+    t->async_preempted = 1;
+    sl_task_yield_now(); /* existing, unmodified -- sets t->preempted=1,
+        calls sl_ctx_switch(&t->rsp, sl_rt_native_rsp). Resuming this
+        call is exactly what makes the trampoline fall through to its
+        restore half; sl_task_yield_now's OWN preempt_disable_depth
+        bracket (runtime_pool.c) nests correctly inside the one
+        sl_preempt_handler already opened -- see the plan's own
+        derivation for why this composes rather than conflicts. */
+    /* Retire the flag HERE, on resume -- not in sl_worker_after_switch
+     * (runtime_pool.c), which is where an earlier version of this slice
+     * cleared it and thereby made sl_gc_collect's conservative scan
+     * (runtime_gc.c) dead code without changing a single line of the
+     * collector. The set/clear pair has to bracket the SUSPENSION, not
+     * the stint: async_preempted's one reader is the run-queue walk,
+     * which only ever looks at tasks that are queued, i.e. exactly the
+     * stretch between the sl_task_yield_now call above and this line.
+     * sl_worker_after_switch clears t->preempted one line before it
+     * pushes t onto that queue, so clearing async_preempted alongside it
+     * meant the walk saw 0 for every task, every time -- confirmed by
+     * counting the walk's own conservative-scan branch directly under
+     * concurrent_compute (0 hits / ~390 queued tasks per collection
+     * before, 23-30 after). What that silently removed is the ONLY
+     * cover for the alloc-to-store gap: a signal landing between
+     * sl_gc_alloc returning a fresh pointer and generated code storing
+     * it somewhere the precise safepoint chain names. Root-caused from a
+     * live hang (lldb attach, bt all): a spawned task looping
+     * essentially forever inside count_primes_range with work_n =
+     * 0x0001010001000101 and a garbage `results` channel pointer -- its
+     * whole sl_spawn_args_* struct swept out from under the spawn loop,
+     * which allocates it and then holds it ONLY in a plain C local
+     * across sl_task_submit, named by no bracket's roots array (nothing
+     * on that path checks in, so cooperatively that gap is unreachable
+     * -- which is precisely why the compiler is allowed to leave it
+     * unrooted, and precisely why async preemption needs the
+     * conservative scan to cover it). Reinstating the scan took
+     * concurrent_compute at 5,000 tasks from 1/10 clean runs to 0
+     * crashes across repeated batches.
+     *
+     * Safe to write plainly, with no lock and no atomic: t is RUNNING
+     * again by the time this line executes (the run-queue walk reads the
+     * flag only under sl_global_runq.mu, and t left that queue before
+     * being dispatched), and t cannot be re-preempted between the resume
+     * and here -- preempt_disable_depth is still held elevated by
+     * sl_preempt_handler's own increment until the trampoline's tail
+     * releases it, well after this returns. Reading sl_rt_current_task
+     * fresh rather than reusing t above is deliberate: identical value
+     * (a task's identity never changes), but this side of the yield is
+     * running on a DIFFERENT OS thread in the common case, and the habit
+     * of not carrying anything across the switch is what keeps the
+     * thread-local-vs-task-local distinction honest here. */
+    sl_rt_cur()->async_preempted = 0;
+    /* Publish that an async suspension just ENDED. Everything that reads
+     * a _Thread_local from preemptible code validates itself against this
+     * counter (sl_rt_cur, runtime_core.c) -- a read that straddled this
+     * point was resolved against the OLD worker's thread-local storage
+     * and must be redone. Bumped here rather than in sl_preempt_handler
+     * because here is on the FAR side of the migration: the task is
+     * running again, on whichever worker picked it up, and has not yet
+     * returned to the instruction it was interrupted at (the trampoline's
+     * register restore and final jmp are still ahead of us), so any
+     * interrupted read is guaranteed to observe the new value when it
+     * completes. release, pairing with sl_rt_cur's seq_cst loads. */
+    atomic_fetch_add_explicit(&sl_rt_async_epoch, 1, memory_order_release);
+}
+
+void *sl_preempt_get_orig_pc(void) {
+    return sl_rt_current_task->async_orig_pc;
+}
+
+void *sl_preempt_get_disable_depth_ptr(void) {
+    return (void *)&sl_rt_current_task->preempt_disable_depth;
+}
+

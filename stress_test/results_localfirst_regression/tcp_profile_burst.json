@@ -1,0 +1,17 @@
+{
+  "label": "tcp_profile_burst",
+  "addr": "127.0.0.1:9195",
+  "concurrency": 300,
+  "payload_bytes": 64,
+  "elapsed_sec": 10.048116989,
+  "total_count": 158280,
+  "total_errors": 344,
+  "throughput_rps": 15752.205131894289,
+  "min_ms": 0.029,
+  "mean_ms": 19.11238110310845,
+  "p50_ms": 0.381,
+  "p90_ms": 27.333,
+  "p95_ms": 32.219,
+  "p99_ms": 62.642,
+  "max_ms": 5001.118
+}

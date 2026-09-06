@@ -1,0 +1,211 @@
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+
+/* ---- net: TLS listener/dialer built on OpenSSL ---- */
+
+static sl_res_rawptr_str *sl_net_ok_rawptr(void *v) {
+    sl_res_rawptr_str *r = (sl_res_rawptr_str *)sl_gc_alloc(
+        sizeof(sl_res_rawptr_str), sl_gc_trace_sl_res_rawptr_str);
+    r->ok = true;
+    r->v = v;
+    return r;
+}
+
+static sl_res_rawptr_str *sl_net_err_rawptr(const char *msg) {
+    sl_res_rawptr_str *r = (sl_res_rawptr_str *)sl_gc_alloc(
+        sizeof(sl_res_rawptr_str), sl_gc_trace_sl_res_rawptr_str);
+    r->ok = false;
+    r->e = sl_strdup(msg);
+    return r;
+}
+
+/* Tier 11 eighth slice: the snprintf branch bracketed for the same
+ * reason as sl_gc_alloc's own comment (runtime_gc.c) -- locale-
+ * internal locking. ERR_error_string_n itself not separately
+ * addressed here: OpenSSL 1.1.0+'s error queue is thread-local, not
+ * behind a shared lock, so it doesn't share the same crash-class
+ * risk -- an async-preempted task migrating mid-call could still, in
+ * principle, read a DIFFERENT thread's error state on resume (a
+ * correctness nuance, not the crash-class bug this slice's other
+ * brackets close), not chased further here. */
+static char *sl_tls_last_error(void) {
+    unsigned long e = ERR_get_error();
+    char buf[256];
+    if (e == 0) {
+        sl_rt_preempt_disable();
+        snprintf(buf, sizeof(buf), "unknown TLS error");
+        sl_rt_preempt_enable();
+    } else {
+        ERR_error_string_n(e, buf, sizeof(buf));
+    }
+    return sl_strdup(buf);
+}
+
+static sl_res_rawptr_str *sl_net_tls_server_ctx(const char *cert_path,
+                                                const char *key_path) {
+    SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
+    if (!ctx) return sl_net_err_rawptr(sl_tls_last_error());
+    if (SSL_CTX_use_certificate_file(ctx, cert_path, SSL_FILETYPE_PEM) != 1) {
+        char *m = sl_tls_last_error();
+        SSL_CTX_free(ctx);
+        return sl_net_err_rawptr(m);
+    }
+    if (SSL_CTX_use_PrivateKey_file(ctx, key_path, SSL_FILETYPE_PEM) != 1) {
+        char *m = sl_tls_last_error();
+        SSL_CTX_free(ctx);
+        return sl_net_err_rawptr(m);
+    }
+    if (SSL_CTX_check_private_key(ctx) != 1) {
+        SSL_CTX_free(ctx);
+        return sl_net_err_rawptr("certificate/key mismatch");
+    }
+    return sl_net_ok_rawptr(ctx);
+}
+
+static sl_res_rawptr_str *sl_net_tls_client_ctx(const char *ca_path) {
+    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+    if (!ctx) return sl_net_err_rawptr(sl_tls_last_error());
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+    if (ca_path[0] != '\0') {
+        if (SSL_CTX_load_verify_locations(ctx, ca_path, NULL) != 1) {
+            char *m = sl_tls_last_error();
+            SSL_CTX_free(ctx);
+            return sl_net_err_rawptr(m);
+        }
+    } else {
+        SSL_CTX_set_default_verify_paths(ctx);
+    }
+    return sl_net_ok_rawptr(ctx);
+}
+
+static sl_res_rawptr_str *sl_net_tls_accept(int lfd, void *ctxv) {
+    sl_net_ensure_blocking(lfd); /* Tier 11 sixth slice: net.listen()
+        now makes every listener non-blocking by default (needed for
+        plain net.accept's own parking, runtime_net.c) -- TLS accept
+        stays deliberately unconverted and still wants a genuinely
+        blocking accept() here, so force it back explicitly. */
+    sl_rt_gc_blocked = 1;
+    int cfd = accept(lfd, NULL, NULL);
+    sl_rt_gc_blocked = 0;
+    sl_rt_gc_checkin();
+    if (cfd < 0) return sl_net_err_rawptr(strerror(errno));
+    sl_net_ensure_blocking(cfd); /* see sl_net_ensure_blocking in NET_RUNTIME */
+    SSL *ssl = SSL_new((SSL_CTX *)ctxv);
+    if (!ssl) {
+        close(cfd);
+        return sl_net_err_rawptr(sl_tls_last_error());
+    }
+    SSL_set_fd(ssl, cfd);
+    sl_rt_gc_blocked = 1;
+    int sa = SSL_accept(ssl);
+    sl_rt_gc_blocked = 0;
+    sl_rt_gc_checkin();
+    if (sa != 1) {
+        char *m = sl_tls_last_error();
+        SSL_free(ssl);
+        close(cfd);
+        return sl_net_err_rawptr(m);
+    }
+    return sl_net_ok_rawptr(ssl);
+}
+
+static sl_res_rawptr_str *sl_net_tls_dial(const char *host, int port,
+                                          void *ctxv) {
+    char portstr[16];
+    sl_rt_preempt_disable(); /* Tier 11 eighth slice -- see
+        sl_net_dial's own comment (runtime_net.c) for why this is
+        scoped to just the snprintf, not the getaddrinfo call below */
+    snprintf(portstr, sizeof(portstr), "%d", port);
+    sl_rt_preempt_enable();
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    int rc = getaddrinfo(host, portstr, &hints, &res);
+    if (rc != 0 || !res) return sl_net_err_rawptr(gai_strerror(rc));
+    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd < 0) {
+        freeaddrinfo(res);
+        return sl_net_err_rawptr(strerror(errno));
+    }
+    sl_rt_gc_blocked = 1;
+    int cres = connect(fd, res->ai_addr, res->ai_addrlen);
+    sl_rt_gc_blocked = 0;
+    sl_rt_gc_checkin();
+    if (cres != 0) {
+        int e = errno;
+        freeaddrinfo(res);
+        close(fd);
+        return sl_net_err_rawptr(strerror(e));
+    }
+    freeaddrinfo(res);
+    SSL *ssl = SSL_new((SSL_CTX *)ctxv);
+    if (!ssl) {
+        close(fd);
+        return sl_net_err_rawptr(sl_tls_last_error());
+    }
+    SSL_set_fd(ssl, fd);
+    SSL_set1_host(ssl, host);
+    SSL_set_tlsext_host_name(ssl, host);
+    sl_rt_gc_blocked = 1;
+    int sc = SSL_connect(ssl);
+    sl_rt_gc_blocked = 0;
+    sl_rt_gc_checkin();
+    if (sc != 1 || SSL_get_verify_result(ssl) != X509_V_OK) {
+        char *m = sl_tls_last_error();
+        SSL_free(ssl);
+        close(fd);
+        return sl_net_err_rawptr(m);
+    }
+    return sl_net_ok_rawptr(ssl);
+}
+
+static sl_res_i32_str *sl_net_tls_send(void *sslv, sl_bytes *data) {
+    SSL *ssl = (SSL *)sslv;
+    long long off = 0;
+    while (off < data->len) {
+        sl_rt_gc_blocked = 1;
+        int n = SSL_write(ssl, data->ptr + off, (int)(data->len - off));
+        sl_rt_gc_blocked = 0;
+        sl_rt_gc_checkin();
+        if (n <= 0) return sl_net_err_i32(sl_tls_last_error());
+        off += n;
+    }
+    return sl_net_ok_i32((int32_t)data->len);
+}
+
+/* Tier 10: see sl_net_recv's own comment (runtime_net.c) -- same
+ * shape, same fix: b is allocated before the blocking SSL_read(),
+ * and needs its own explicit bracket held open across it. */
+static sl_res_bytes_str *sl_net_tls_recv(void *sslv, int max) {
+    if (max <= 0) max = 4096;
+    SSL *ssl = (SSL *)sslv;
+    sl_bytes *b = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
+    b->ptr = (unsigned char *)sl_gc_alloc((size_t)max, NULL);
+    void *_sl_rcv_roots[] = { (void *)b };
+    sl_safepoint _sl_rcv_sp;
+    sl_rt_safepoint_enter(&_sl_rcv_sp, _sl_rcv_roots, 1);
+    sl_rt_gc_blocked = 1;
+    int n = SSL_read(ssl, b->ptr, max);
+    sl_rt_gc_blocked = 0;
+    sl_rt_gc_checkin();
+    sl_rt_safepoint_exit();
+    if (n <= 0) {
+        if (SSL_get_error(ssl, n) == SSL_ERROR_ZERO_RETURN) {
+            b->len = 0;
+            return sl_net_ok_bytes(b);
+        }
+        return sl_net_err_bytes(sl_tls_last_error());
+    }
+    b->len = n;
+    return sl_net_ok_bytes(b);
+}
+
+static void sl_net_tls_close(void *sslv) {
+    SSL *ssl = (SSL *)sslv;
+    int fd = SSL_get_fd(ssl);
+    SSL_shutdown(ssl);
+    SSL_free(ssl);
+    if (fd >= 0) close(fd);
+}
+

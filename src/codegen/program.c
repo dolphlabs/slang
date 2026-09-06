@@ -3,30 +3,25 @@
 
 #include "internal.h"
 #include "liveness.h"
+#include "../rtpath.h"
 
 #include <string.h>
 
+void emit_runtime_file(CG *cg, const char *name) {
+    char *path = slang_runtime_file(name);
+    char *src = read_entire_file(path);
+    sb_append(cg->out, src);
+    size_t n = strlen(src);
+    if (n == 0 || src[n - 1] != '\n')
+        sb_nl(cg->out);
+}
+
 void emit_prelude(CG *cg) {
-    for (int i = 0; i < RUNTIME_LEN; i++)
-        emit_line(cg, "%s", RUNTIME[i]);
-    /* Tier 10: the precise mark-sweep collector, then the containers
-     * that allocate through it (chan/bytes/arr/map/strings) -- order
-     * matters now: RUNTIME_CONTAINERS references sl_gc_alloc/realloc
-     * and sl_rt_gc_blocked, all defined in RUNTIME_GC. */
-    for (int i = 0; i < RUNTIME_GC_LEN; i++)
-        emit_line(cg, "%s", RUNTIME_GC[i]);
-    for (int i = 0; i < RUNTIME_CONTAINERS_LEN; i++)
-        emit_line(cg, "%s", RUNTIME_CONTAINERS[i]);
-    /* Tier 11 first slice: dead code only, not wired to anything below --
-     * see runtime_sched.c's own header comment. */
-    for (int i = 0; i < RUNTIME_SCHED_LEN; i++)
-        emit_line(cg, "%s", RUNTIME_SCHED[i]);
-    /* Tier 11 second slice: also dead code -- see runtime_pool.c's own
-     * header comment. Emitted last since it needs sl_ctx_switch/
-     * sl_task_stack_init (RUNTIME_SCHED) and sl_gc_register_thread/
-     * sl_rt_gc_checkin (RUNTIME_GC) already visible. */
-    for (int i = 0; i < RUNTIME_POOL_LEN; i++)
-        emit_line(cg, "%s", RUNTIME_POOL[i]);
+    emit_runtime_file(cg, "sl_core.c");
+    emit_runtime_file(cg, "sl_gc.c");
+    emit_runtime_file(cg, "sl_containers.c");
+    emit_runtime_file(cg, "sl_sched.c");
+    emit_runtime_file(cg, "sl_pool.c");
 }
 
 
@@ -421,17 +416,13 @@ void emit_native_runtime(CG *cg) {
     if (!want_time && !want_net && !want_proc)
         return;
     if (want_time)
-        for (int i = 0; i < TIME_RUNTIME_LEN; i++)
-            emit_line(cg, "%s", TIME_RUNTIME[i]);
+        emit_runtime_file(cg, "sl_time.c");
     if (want_net)
-        for (int i = 0; i < NET_RUNTIME_LEN; i++)
-            emit_line(cg, "%s", NET_RUNTIME[i]);
+        emit_runtime_file(cg, "sl_net.c");
     if (cg->want_tls)
-        for (int i = 0; i < TLS_RUNTIME_LEN; i++)
-            emit_line(cg, "%s", TLS_RUNTIME[i]);
+        emit_runtime_file(cg, "sl_tls.c");
     if (want_proc)
-        for (int i = 0; i < PROC_RUNTIME_LEN; i++)
-            emit_line(cg, "%s", PROC_RUNTIME[i]);
+        emit_runtime_file(cg, "sl_proc.c");
 }
 
 /* Emit the args-struct + task entry function for every distinct

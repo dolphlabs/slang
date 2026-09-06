@@ -14,6 +14,7 @@
 #include "loader.h"
 #include "codegen.h"
 #include "codegen/liveness.h"
+#include "rtpath.h"
 
 static void print_usage(void) {
     fputs("usage: slangc <file.sl> [-o <name>] [--emit-c] [--keep-c] [--run] "
@@ -84,6 +85,8 @@ int main(int argc, char **argv) {
         }
     }
 
+    sl_compiler_argv0 = argv[0];
+
     if (!input) {
         print_usage();
         return 1;
@@ -123,9 +126,8 @@ int main(int argc, char **argv) {
     }
 
     /* ---- backend: invoke the system C compiler ----
-     * Tier 10: no Boehm GC dependency any more -- the collector is
-     * generated inline (src/codegen/runtime_gc.c) into every program,
-     * so there's nothing to resolve via pkg-config here. */
+     * Collector and scheduler live in runtime/ and are spliced into
+     * the generated C; compiled programs do not link libgc. */
 
     /* net.tls_* needs OpenSSL, resolved via pkg-config, only when the
      * program actually uses it. */

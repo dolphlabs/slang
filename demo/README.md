@@ -54,7 +54,7 @@ its own C runtime.
 | `net.tls_*` | `main.sl`'s second listener, sharing the exact same routing as plain HTTP |
 | `json` (typed decode/encode, including nested structs and `map[str]Player`) | every `/api/*` route |
 | `proc` (`shutdown_requested`, `active_tasks`, `getenv`) | graceful shutdown + drain in `main.sl`, `PORT`/`TLS_PORT` |
-| `spawn` (real OS threads, one per connection) | `handle_http_conn`/`handle_tls_conn` |
+| `spawn` (M:N tasks, one per connection) | `handle_http_conn`/`handle_tls_conn` |
 | `chan[T]` | two uses: (1) as the state mutex described below, (2) is what makes `proc.active_tasks()`-based draining meaningful in the first place |
 | local package imports, `pub`, cross-package structs | `httpkit/`, `arcade/`, `content/` — three packages imported by `main.sl` the same way `examples/pkgdemo` does |
 | C interop: `extern fn`, `link` | `lib.c` (dice RNG) via `link "slangarcade";`, plus bare libc (`getpid`, `atoi`) needing no `link` at all |

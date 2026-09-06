@@ -4,14 +4,15 @@ A small, statically-typed, garbage-collected programming language that
 compiles to native binaries by transpiling to C. The compiler
 (`slangc`) is written in C and uses your system C compiler as its
 backend — no custom code generator, assembler, or linker required.
-Memory is managed by the Boehm-Demers-Weiser conservative GC: slang
-strings and allocations are traced and reclaimed automatically,
-including cycles.
+Memory is managed by a precise, non-moving, stop-the-world mark-sweep
+collector emitted into every program (see `runtime/sl_gc.c`). Strings
+and heap allocations are traced and reclaimed automatically, including
+cycles. `spawn` runs on an M:N scheduler: green-thread tasks on a
+small worker pool, not one OS thread per task.
 
 ## Quick start
 
 ```sh
-brew install libgc   # one-time dependency for compiled programs
 make                 # build the slangc compiler
 make test            # compile & run the example programs
 ```
@@ -480,12 +481,12 @@ signal-handling program.
 
 ## Concurrency
 
-`spawn` runs a function on a real OS thread; `chan[T]` is a bounded,
-thread-safe queue for getting values back out. Blocking-looking code
-stays blocking-looking — `net.accept`, `net.recv`, `time.sleep`, and
-friends need no special "async" form to be usable from a spawned
-task, and a spawned task's own function calls need no annotation
-either. There is no colored-function split to design around.
+`spawn` submits a function as an `sl_task` on the M:N worker pool
+(sized `max(8, ncpu)`); `chan[T]` is a bounded, park-aware queue.
+Blocking-looking code stays blocking-looking — `net.accept`,
+`net.recv`, `time.sleep`, and `chan_send`/`chan_recv` park the task
+and return the OS thread to the pool. There is no colored-function
+split. TLS (`net.tls_*`) still blocks the worker today.
 
 ```slang
 fn worker(id: i32, results: chan[i32]) {
@@ -513,11 +514,11 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
 ```
 
 - **`spawn f(args...);`** evaluates every argument in the spawning
-  context (no closures — nothing is captured implicitly) and starts
-  `f` running on a new thread. `f` must be a plain top-level function
-  or an `extern fn`, not a method and not a builtin. There is no
-  `spawn` on `net.*`/`time.*` calls directly; wrap the native call in
-  a plain function and spawn that instead.
+  context (no closures — nothing is captured implicitly) and submits
+  `f` as a growable-stack task on the global run queue. `f` must be a
+  plain top-level function or an `extern fn`, not a method and not a
+  builtin. There is no `spawn` on `net.*`/`time.*` calls directly;
+  wrap the native call in a plain function and spawn that instead.
 - **`chan[T]`**, built with `make_chan(capacity)` (element type
   inferred from an annotated binding, same as `none`): `chan_send(ch,
   v)` blocks while full, `chan_recv(ch) -> opt[T]` blocks while empty
@@ -592,12 +593,11 @@ consume the shim exactly like any other C library above.
 
 **Safety notes:**
 
-- Boehm GC is conservative and generally sees pointers handed to C
-  just fine, but a slang value whose *only* remaining reference lives
-  in memory the GC can't scan (rare, but possible with some C
-  libraries) could theoretically be collected while C still holds it.
-  Keep a live slang-side reference for the duration of any call that
-  retains a pointer beyond that call.
+- The collector is precise for slang values rooted at safepoints. A
+  slang value whose *only* remaining reference lives in memory the GC
+  cannot scan (possible with some C libraries) can be collected while
+  C still holds it. Keep a live slang-side reference for the duration
+  of any call that retains a pointer beyond that call.
 - Callback function pointers — C calling back into slang — aren't
   supported yet.
 
@@ -665,40 +665,18 @@ main.sl ──loader──> packages ──lexer/parser──> ASTs ──codege
    AST (`src/ast.h`).
 4. **Code generator** (`src/codegen/`) — walks the ASTs, performs type
    inference and semantic checks (including `pub` enforcement), and
-   emits readable C. A tiny runtime (string helpers, printing) is
-   embedded directly into every generated file so output is fully
-   self-contained. Split by concern rather than one monolithic file:
-   `core.c` (CG state, symbol tables, type helpers), `infer.c` (type
-   inference), `expr.c`/`stmt.c` (expression/statement codegen),
-   `program.c` (top-level orchestration and `codegen_program`'s entry
-   point), `runtime_core.c` (the always-on embedded prelude: strings,
-   lists, maps, `opt`/`result`, channels), and `native.c` (the
-   fixed-signature dispatch — `native_check`/`native_gen` — that
-   every simple native function like `time.sleep`/`net.recv` goes
-   through). `internal.h` holds the shared `CG` struct and
-   cross-file declarations.
+   emits readable C. The runtime in `runtime/` (GC, scheduler, pool,
+   containers, native packages) is real C, spliced into every
+   generated file so the binary stays self-contained. Split by
+   concern: `core.c`, `infer.c`, `expr.c`/`stmt.c`, `program.c`,
+   `liveness.c` (GC safepoint roots), and `native.c` (`NatSig`
+   dispatch). `internal.h` holds the shared `CG` struct.
 
-   Every native package lives entirely under its own
-   `src/codegen/pkg_<name>/`: a `sigs.c` with that package's `NatSig`
-   table (what `native.c` searches), a `runtime*.c` with its embedded
-   C source as a plain string array, and a tiny `pkg_<name>.h` that
-   just `#define`s the package's import name (`loader.c` pulls these
-   together into its native-package list, so a package's name is
-   declared once, next to its implementation, rather than in a
-   separate file three steps removed from it). `pkg_net/` also holds
-   `runtime_tls.c` for `net.tls_*`. A package whose functions are
-   generic over a target type — `json.decode`/`json.encode`, which
-   can't be expressed as one of `native.c`'s fixed-arity `NatSig`
-   rows — gets its own `dispatch.c` instead of a `sigs.c`, e.g.
-   `pkg_json/dispatch.c`. Adding a package means a new `pkg_<name>/`
-   directory and one line in `loader.c`, not edits to the
-   inference/codegen core — `pkg_proc/` (`proc`) followed exactly
-   this shape, needing no changes to `core.c`/`infer.c`/`expr.c`
-   beyond the one place it genuinely needed to touch shared state:
-   `stmt.c`'s `spawn` codegen, which blocks `SIGTERM`/`SIGINT` in
-   every spawned thread's mask so `proc`'s signal handler only ever
-   runs on the main thread (see the `proc` section above) — gated on
-   `proc` actually being imported, same as everything else here.
+   Native-package *signatures* live under `src/codegen/pkg_<name>/`.
+   Their C runtimes are `runtime/sl_<name>.c`. `json` uses
+   `dispatch.c` because decode/encode are generic over the target
+   type. Adding a fixed-signature package is a `pkg_<name>/` directory,
+   a `runtime/sl_<name>.c` file, and one line in `loader.c`.
 5. **Driver** (`src/main.c`) — glues it together and shells out to
    `cc`. Because GCC/Clang compile the generated C, you get their full
    optimizer for free.
@@ -718,22 +696,15 @@ src/
   lexer.h/.c     tokenizer
   ast.h          AST node definitions
   parser.h/.c    recursive-descent parser
+  rtpath.h/.c    locate runtime/ next to slangc
   codegen.h      public codegen API (one function: codegen_program)
-  codegen/       type checking + C emission, split by concern:
-    internal.h     shared CG state + cross-file declarations
-    core.c         CG state, symbol tables, type helpers
-    infer.c        type inference
-    expr.c/stmt.c  expression/statement codegen
-    program.c      top-level orchestration, codegen_program's entry point
-    native.c       fixed-signature native-function dispatch
-    runtime_core.c always-on embedded prelude (strings, lists, maps, opt/result, chan)
-    pkg_time/      the 'time' package: sigs.c + runtime.c
-    pkg_net/       the 'net' package: sigs.c + runtime_net.c + runtime_tls.c
-    pkg_json/      the 'json' package: dispatch.c + runtime.c
-    pkg_proc/      the 'proc' package: sigs.c + runtime.c
+  codegen/       type checking + C emission
   main.c         driver: flags, invokes cc
+runtime/       real C runtime spliced into generated programs
+  sl_core.c sl_gc.c sl_containers.c sl_sched.c sl_pool.c
+  sl_time.c sl_net.c sl_tls.c sl_json.c sl_proc.c
 examples/      one directory per example program
-tests/         one directory per test case; run via `tests/run_tests.sh`
+tests/         language tests plus tests/runtime/ (no slangc)
 Makefile       build/test/clean
 ```
 
@@ -741,14 +712,12 @@ Makefile       build/test/clean
 
 - No block scoping: variables declared inside an `if`/`while` body
   remain visible afterwards.
-- Strings are immutable; concatenation allocates. The Boehm GC reclaims
-  unreachable strings automatically (verified: 2M throwaway
-  interpolations hold steady at ~27 MB RSS).
+- Strings are immutable; concatenation allocates. The collector
+  reclaims unreachable strings automatically.
 - Package globals require constant-literal initializers.
 - Implicit returns only apply to the last statement of a function
   body; `if` and `{}` blocks are statements, not expressions yet.
-- No closures, and no `break`/`continue` — restructure a loop body
-  into a helper function and `return` early instead.
+- No closures. `break`/`continue` work inside loops.
 - Package-level lists are not supported yet (scalars and bytes are).
 - Map keys are limited to integers, `str`, and `bool`.
 - No data-race protection: `spawn` gives you real concurrency and
@@ -773,29 +742,27 @@ Makefile       build/test/clean
 
 ## Memory management
 
-Compiled programs link against [libgc](https://www.hboehm.info/gc/)
-(Boehm-Demers-Weiser). All runtime allocations (`sl_strdup`,
-`sl_str_concat`, conversions) go through `GC_malloc`; `main()` calls
-`GC_INIT()` before user code runs. The driver resolves flags via
-`pkg-config bdw-gc` and falls back to plain `-lgc`.
+Compiled programs embed a precise mark-sweep collector
+(`runtime/sl_gc.c`). Allocations go through `sl_gc_alloc`. `main()`
+registers the thread, starts the worker pool, and switches into the
+main task. There is no `libgc` dependency.
 
 What this means in practice:
 
 - No manual memory management in slang; no leaks from string churn.
 - Collection is tracing (mark-and-sweep), so reference cycles are
   collected — unlike refcounting.
-- Cost: a small external dependency and occasional short GC pauses.
-  For most scripts this is imperceptible.
-- Every `spawn`ed OS thread is registered with the collector
-  automatically (`GC_THREADS`/`GC_PTHREADS`); a collection pause
-  stops and scans every live task's stack, not just the main one.
+- Cost: stop-the-world pauses. The allocator still serializes on a
+  mutex (batched); that is the current throughput ceiling.
+- Every pool worker is registered with the collector. A collection
+  stops the world, walks safepoint roots, the run queue, parked
+  tasks, and (for async-preempted tasks) a conservative stack scan.
 
 ## Roadmap ideas
 
 - Block scoping and shadowing
 - If/block expressions (`let max = if a > b { a } else { b }`)
 - Range `.step(n)`
-- `break` / `continue`
 - Import aliases (`import "x" as y`)
 - A bytecode VM mode for fast iteration without invoking `cc`
 - `ptr[T]` typed pointers and `extern struct` layouts, for passing C

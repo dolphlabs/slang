@@ -1,0 +1,42 @@
+{
+  "label": "http_endpoint_chan",
+  "base_url": "http://localhost:8095",
+  "concurrency": 100,
+  "rate_target": 0,
+  "elapsed_sec": 120.511232814,
+  "total_count": 12035,
+  "total_errors": 0,
+  "throughput_rps": 99.8662093066056,
+  "overall": {
+    "name": "overall",
+    "count": 12035,
+    "errors": 0,
+    "error_rate": 0,
+    "throughput_rps": 99.8662093066056,
+    "min_ms": 510.609,
+    "mean_ms": 1000.1993857083492,
+    "p50_ms": 986.689,
+    "p90_ms": 1114.997,
+    "p95_ms": 1165.029,
+    "p99_ms": 1265.845,
+    "p999_ms": 1379.159,
+    "max_ms": 1493.112
+  },
+  "by_endpoint": [
+    {
+      "name": "chan",
+      "count": 12035,
+      "errors": 0,
+      "error_rate": 0,
+      "throughput_rps": 99.8662093066056,
+      "min_ms": 510.609,
+      "mean_ms": 1000.1993857083492,
+      "p50_ms": 986.689,
+      "p90_ms": 1114.997,
+      "p95_ms": 1165.029,
+      "p99_ms": 1265.845,
+      "p999_ms": 1379.159,
+      "max_ms": 1493.112
+    }
+  ]
+}

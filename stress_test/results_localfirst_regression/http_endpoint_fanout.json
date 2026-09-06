@@ -1,0 +1,42 @@
+{
+  "label": "http_endpoint_fanout",
+  "base_url": "http://localhost:8095",
+  "concurrency": 100,
+  "rate_target": 0,
+  "elapsed_sec": 126.855304547,
+  "total_count": 3000,
+  "total_errors": 17,
+  "throughput_rps": 23.648991350523282,
+  "overall": {
+    "name": "overall",
+    "count": 3000,
+    "errors": 17,
+    "error_rate": 0.005666666666666667,
+    "throughput_rps": 23.648991350523282,
+    "min_ms": 502.579,
+    "mean_ms": 4217.513190666672,
+    "p50_ms": 4390.954,
+    "p90_ms": 7193.924,
+    "p95_ms": 7957.972,
+    "p99_ms": 9595.059,
+    "p999_ms": 10000.875,
+    "max_ms": 10001.28
+  },
+  "by_endpoint": [
+    {
+      "name": "fanout",
+      "count": 3000,
+      "errors": 17,
+      "error_rate": 0.005666666666666667,
+      "throughput_rps": 23.648991350523282,
+      "min_ms": 502.579,
+      "mean_ms": 4217.513190666672,
+      "p50_ms": 4390.954,
+      "p90_ms": 7193.924,
+      "p95_ms": 7957.972,
+      "p99_ms": 9595.059,
+      "p999_ms": 10000.875,
+      "max_ms": 10001.28
+    }
+  ]
+}

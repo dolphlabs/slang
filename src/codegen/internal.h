@@ -289,50 +289,14 @@ typedef struct {
  * table (if any) in sigs.c, its embedded runtime in runtime*.c. */
 /* ------------------------------------------------------------------ */
 
-extern const char *RUNTIME[]; /* always-on prelude, src/codegen/runtime_core.c */
-extern const int RUNTIME_LEN;
-
-extern const char *RUNTIME_GC[]; /* precise mark-sweep collector, src/codegen/runtime_gc.c */
-extern const int RUNTIME_GC_LEN;
-
-extern const char *RUNTIME_CONTAINERS[]; /* chan/bytes/arr/map/strings,
-                                             src/codegen/runtime_core.c --
-                                             after RUNTIME_GC, which they
-                                             allocate through */
-extern const int RUNTIME_CONTAINERS_LEN;
-
-extern const char *RUNTIME_SCHED[]; /* Tier 11 first slice: growable-stack
-                                        tasks on a hand-rolled context
-                                        switch, src/codegen/runtime_sched.c
-                                        -- landed as dead code, not yet
-                                        wired to any call site */
-extern const int RUNTIME_SCHED_LEN;
-
-extern const char *RUNTIME_POOL[]; /* Tier 11 second slice: run queue +
-                                       worker pool, src/codegen/runtime_pool.c
-                                       -- landed as dead code, not yet
-                                       wired to any call site */
-extern const int RUNTIME_POOL_LEN;
-
 extern const NatSig TIME_SIGS[]; /* src/codegen/pkg_time/ */
 extern const int TIME_SIGS_LEN;
-extern const char *TIME_RUNTIME[];
-extern const int TIME_RUNTIME_LEN;
 
 extern const NatSig NET_SIGS[]; /* src/codegen/pkg_net/ */
 extern const int NET_SIGS_LEN;
-extern const char *NET_RUNTIME[];
-extern const int NET_RUNTIME_LEN;
-extern const char *TLS_RUNTIME[];
-extern const int TLS_RUNTIME_LEN;
-
-extern const char *JSON_RUNTIME[]; /* src/codegen/pkg_json/ */
-extern const int JSON_RUNTIME_LEN;
 
 extern const NatSig PROC_SIGS[]; /* src/codegen/pkg_proc/ */
 extern const int PROC_SIGS_LEN;
-extern const char *PROC_RUNTIME[];
-extern const int PROC_RUNTIME_LEN;
 
 /* ------------------------------------------------------------------ */
 /* Functions (declarations generated from every former 'static' def)   */
@@ -442,6 +406,7 @@ void gen_print(CG *cg, Expr *call, int newline);
 void gen_stmt(CG *cg, Stmt *s);
 void gen_stmts(CG *cg, Stmt **stmts, int count);
 void gen_block(CG *cg, Block *b);
+void emit_runtime_file(CG *cg, const char *name);
 void emit_prelude(CG *cg);
 void sig_register_raw(CG *cg, Package *p, FuncDecl *f,
                              const char *method_of);

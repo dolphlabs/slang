@@ -1,0 +1,579 @@
+#include <errno.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/socket.h>
+#if defined(__linux__)
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
+#define SL_REACTOR_EPOLL 1
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
+#include <sys/event.h>
+#define SL_REACTOR_KQUEUE 1
+#else
+#error "slang net: need kqueue or epoll"
+#endif
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+
+/* ---- net: TCP over bytes + fixed ints, parked (not blocked) on a
+ * kqueue reactor -- Tier 11 sixth slice. See the design plan for the
+ * full writeup and every review finding; this file's own comments
+ * cover the load-bearing ones inline. */
+
+/* Every plain-TCP fd becomes non-blocking at the OS level
+ * internally, always, unconditionally -- readiness notification via
+ * kqueue is meaningless if the read/write it's telling you to retry
+ * could itself still block. The user-visible 'net.nonblock()'
+ * contract (a fd opts into synchronous "would block" instead of
+ * parking) is tracked separately -- see sl_net_user_nonblock below
+ * -- since it can no longer be read back off the fd's own flags. */
+static void sl_net_set_nonblocking(int fd) {
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+}
+
+/* TLS (net.tls_*, runtime_tls.c) is deliberately NOT converted to
+ * parking this slice -- SSL_accept/SSL_connect/SSL_read/SSL_write's
+ * own WANT_READ/WANT_WRITE async state machine is a materially
+ * different, harder problem deserving its own dedicated design pass.
+ * TLS's own sl_net_tls_accept still does a raw, fully-blocking
+ * accept() directly on the LISTENER fd -- but net.listen() now
+ * makes every listener non-blocking by default (needed for plain
+ * net.accept's own parking above). This forces a listener fd back
+ * to blocking immediately before TLS's own raw accept() call, and
+ * (unchanged from before this slice) forces a freshly-accepted
+ * connection fd to blocking too, since accept()'s own non-blocking
+ * mode is platform-defined to be contagious to what it hands back
+ * on some systems (macOS included). Kept specifically for TLS's
+ * sake now that plain net.* no longer needs it for its own accepted
+ * connections (those stay non-blocking internally, by design). */
+static void sl_net_ensure_blocking(int fd) {
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl >= 0) fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
+}
+
+/* ---- the reactor ---- */
+
+static int sl_reactor_fd = -1;
+#if defined(SL_REACTOR_EPOLL)
+static int sl_reactor_efd = -1;
+static char sl_reactor_shutdown_token;
+#endif
+static pthread_mutex_t sl_reactor_mu = PTHREAD_MUTEX_INITIALIZER;
+static sl_task *sl_reactor_waiting = NULL; /* linked via sl_task.next,
+    guarded by sl_reactor_mu -- same reuse-`next`-for-one-wait-list-
+    at-a-time pattern chan/time already establish */
+
+#define SL_REACTOR_READ  0
+#define SL_REACTOR_WRITE 1
+#define SL_REACTOR_SHUTDOWN_IDENT 0xDEADBEEF
+
+/* abort_on_shutdown differs between callers: accept/recv/dial pass 1
+ * (check sl_rt_shutdown_flag both before parking -- so a waiter that
+ * starts AFTER the one-time shutdown nudge already fired doesn't
+ * hang forever with nothing left to wake it -- and after resuming,
+ * to return -1); send passes 0 (never pre-empted, always genuinely
+ * parks and waits for real write-readiness, since it must keep
+ * retrying through a shutdown signal to let an in-flight write
+ * finish -- tests/proc_shutdown's own 'client got full response'
+ * requirement). Passing 1 for send here would busy-spin at 100% CPU
+ * once shutdown is set and a peer's receive buffer stays full --
+ * found and fixed during this slice's own design review.
+ *
+ * At most ONE waiter per (fd, filter) at a time: EV_ADD on an
+ * already-pending (fd, filter) knote UPDATES it (including udata)
+ * rather than creating a second one -- confirmed kqueue behavior. A
+ * second concurrent sl_reactor_wait on the same fd+direction
+ * silently orphans the first waiter, not a crash, a silent
+ * permanent hang. This is a real, accepted scoping constraint, not
+ * a bug to route around -- callers must not have two tasks
+ * concurrently waiting on the same fd for the same direction (see
+ * demo/main.sl's own single-acceptor design, which this constraint
+ * requires). */
+static int sl_reactor_wait(int fd, int rw, int abort_on_shutdown) {
+    /* Tier 11 eighth slice: bracketed entry-to-every-return -- see
+     * sl_chan_send/recv's own identical bracket and comment
+     * (runtime_core.c) for the exact hazard this closes: the
+     * sl_rt_current_task->next write just below links this task into
+     * sl_reactor_waiting, and an async signal landing before
+     * sl_task_park's own switch completes would let
+     * sl_worker_after_switch overwrite that same ->next link pushing
+     * this task onto sl_global_runq instead -- corrupting the reactor's
+     * own wait list. */
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&sl_reactor_mu);
+    if (abort_on_shutdown &&
+        atomic_load_explicit(&sl_rt_shutdown_flag, memory_order_acquire)) {
+        pthread_mutex_unlock(&sl_reactor_mu);
+        sl_rt_preempt_enable();
+        return -1;
+    }
+    /* One sl_rt_cur() read, threaded through the registration below,
+     * rather than three raw sl_rt_current_task reads. All three sit
+     * BEFORE the park, so within a single call to this function a raw
+     * read would be correct -- but every caller (sl_net_accept,
+     * sl_net_recv, sl_net_send) invokes this from inside a retry LOOP,
+     * and once it is inlined at -O2 these reads land inside that loop,
+     * where the compiler may hoist the thread-affine address of
+     * sl_rt_current_task above the park that a later iteration
+     * performs. That is precisely the bug fixed in sl_chan_send and
+     * sl_chan_recv (runtime_core.c), whose loops had the same shape
+     * and which was confirmed there by measurement; fixed here by
+     * construction rather than waiting for a reproducer, since the
+     * reactor's own paths are far harder to stress. */
+    sl_task *sl_reactor_self = sl_rt_cur();
+    sl_reactor_self->next = sl_reactor_waiting;
+    sl_reactor_waiting = sl_reactor_self;
+#if defined(SL_REACTOR_KQUEUE)
+    struct kevent kev;
+    EV_SET(&kev, fd, rw == SL_REACTOR_READ ? EVFILT_READ : EVFILT_WRITE,
+           EV_ADD | EV_ONESHOT, 0, 0, (void *)sl_reactor_self);
+    kevent(sl_reactor_fd, &kev, 1, NULL, 0, NULL);
+#else
+    struct epoll_event ev;
+    ev.events = (rw == SL_REACTOR_READ ? EPOLLIN : EPOLLOUT) | EPOLLONESHOT;
+    ev.data.ptr = sl_reactor_self;
+    if (epoll_ctl(sl_reactor_fd, EPOLL_CTL_ADD, fd, &ev) != 0 &&
+        errno == EEXIST)
+        epoll_ctl(sl_reactor_fd, EPOLL_CTL_MOD, fd, &ev);
+#endif
+    sl_task_park(&sl_reactor_mu); /* leaves sl_reactor_mu locked across
+        the switch, unlocked only by sl_worker_after_switch once the
+        switch safely completes -- this is what closes the
+        registration-vs-kernel-readiness race (the same lost-wakeup
+        shape chan's own review found, just against the kernel
+        reporting readiness instead of a concurrent task: the
+        reactor thread must acquire sl_reactor_mu before it can even
+        look up which task to resume, and that acquisition blocks
+        until this task's own registration+park sequence is fully
+        complete, however early kevent() reports the fd ready). */
+    int sl_reactor_wait_shutdown =
+        atomic_load_explicit(&sl_rt_shutdown_flag, memory_order_acquire);
+    sl_rt_preempt_enable();
+    return sl_reactor_wait_shutdown ? -1 : 0;
+}
+
+static void *sl_reactor_thread(void *arg) {
+    (void)arg;
+#if defined(SL_REACTOR_KQUEUE)
+    struct kevent events[64];
+#else
+    struct epoll_event events[64];
+#endif
+    for (;;) {
+#if defined(SL_REACTOR_KQUEUE)
+        int n = kevent(sl_reactor_fd, NULL, 0, events, 64, NULL);
+#else
+        int n = epoll_wait(sl_reactor_fd, events, 64, -1);
+#endif
+        if (n < 0) { if (errno == EINTR) continue; continue; }
+        pthread_mutex_lock(&sl_reactor_mu);
+        for (int i = 0; i < n; i++) {
+#if defined(SL_REACTOR_KQUEUE)
+            int is_shutdown = events[i].filter == EVFILT_USER;
+            sl_task *t = is_shutdown ? NULL : (sl_task *)events[i].udata;
+#else
+            int is_shutdown = events[i].data.ptr == &sl_reactor_shutdown_token;
+            sl_task *t = is_shutdown ? NULL : (sl_task *)events[i].data.ptr;
+            if (is_shutdown) {
+                uint64_t x;
+                (void)read(sl_reactor_efd, &x, sizeof(x));
+            }
+#endif
+            if (is_shutdown) {
+                sl_task *w;
+                while ((w = sl_reactor_waiting)) {
+                    sl_reactor_waiting = w->next;
+                    w->next = NULL;
+                    sl_task_resume(w);
+                }
+                continue;
+            }
+            /* only resume if the removal actually found t on the
+               list -- it may already be gone if a shutdown drain
+               (above, same batch) already resumed it, e.g. the
+               shutdown EVFILT_USER event and this fd's own readiness
+               event landing in the same kevent() batch. Resuming
+               unconditionally here would double-push t onto
+               sl_global_runq -- found and fixed during this slice's
+               own design review. */
+            sl_task **pp = &sl_reactor_waiting;
+            int found = 0;
+            while (*pp) { if (*pp == t) { *pp = t->next; found = 1; break; } pp = &(*pp)->next; }
+            if (found) { t->next = NULL; sl_task_resume(t); }
+        }
+        pthread_mutex_unlock(&sl_reactor_mu);
+    }
+    return NULL; /* unreachable -- runs until process exit */
+}
+
+static void sl_net_shutdown_nudge(void) {
+#if defined(SL_REACTOR_KQUEUE)
+    struct kevent kev;
+    EV_SET(&kev, SL_REACTOR_SHUTDOWN_IDENT, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
+    kevent(sl_reactor_fd, &kev, 1, NULL, 0, NULL);
+#else
+    uint64_t one = 1;
+    (void)write(sl_reactor_efd, &one, sizeof(one));
+#endif
+}
+
+/* Called once from main() (program.c), gated on 'net' being imported
+ * at all, BEFORE sl_proc_install_signal_handlers() so
+ * sl_rt_shutdown_hook is guaranteed set before the signal thread
+ * could ever consume a signal. No GC registration needed for
+ * sl_reactor_thread, for the same reasons already established for
+ * the timer thread: it never drives a task and never touches a
+ * GC-scanned field, only sl_task.next and sl_task_resume itself
+ * (already proven safe from an unregistered caller). */
+static void sl_reactor_start(void) {
+#if defined(SL_REACTOR_KQUEUE)
+    sl_reactor_fd = kqueue();
+    if (sl_reactor_fd < 0) {
+        fprintf(stderr, "slang: failed to create kqueue\n");
+        exit(1);
+    }
+    struct kevent kev;
+    EV_SET(&kev, SL_REACTOR_SHUTDOWN_IDENT, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, NULL);
+    kevent(sl_reactor_fd, &kev, 1, NULL, 0, NULL);
+#else
+    sl_reactor_fd = epoll_create1(EPOLL_CLOEXEC);
+    if (sl_reactor_fd < 0) {
+        fprintf(stderr, "slang: failed to create epoll\n");
+        exit(1);
+    }
+    sl_reactor_efd = eventfd(0, EFD_CLOEXEC);
+    if (sl_reactor_efd < 0) {
+        fprintf(stderr, "slang: failed to create eventfd\n");
+        exit(1);
+    }
+    struct epoll_event ev;
+    ev.events = EPOLLIN;
+    ev.data.ptr = &sl_reactor_shutdown_token;
+    if (epoll_ctl(sl_reactor_fd, EPOLL_CTL_ADD, sl_reactor_efd, &ev) != 0) {
+        fprintf(stderr, "slang: failed to arm shutdown eventfd\n");
+        exit(1);
+    }
+#endif
+    sl_rt_shutdown_hook = sl_net_shutdown_nudge;
+    pthread_t th;
+    if (pthread_create(&th, NULL, sl_reactor_thread, NULL) != 0) {
+        fprintf(stderr, "slang: failed to start reactor thread\n");
+        exit(1);
+    }
+}
+
+/* ---- per-fd opt-in to synchronous "would block" (net.nonblock) ---- */
+
+/* sl_gc_set's own thread-safety (runtime_gc.c) comes entirely from
+ * its callers always already holding sl_gc_mu -- none of its own
+ * functions lock anything. net.*'s own call sites have no such
+ * existing lock to piggyback on (they can now run on genuinely
+ * different worker threads at once), so this reuses sl_gc_set's
+ * linear-probing shape but is self-locking -- found and fixed
+ * during this slice's own design review. */
+static void **sl_net_user_nonblock = NULL;
+static size_t sl_net_user_nonblock_cap = 0;
+static size_t sl_net_user_nonblock_count = 0;
+static pthread_mutex_t sl_net_user_nonblock_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static size_t sl_net_user_nonblock_hash(void *p) {
+    uintptr_t x = (uintptr_t)p;
+    x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
+    x *= 0xc4ceb9fe1a85ec53ULL; x ^= x >> 33;
+    return (size_t)x;
+}
+static void sl_net_user_nonblock_raw_insert(void **tbl, size_t cap, void *p) {
+    size_t i = sl_net_user_nonblock_hash(p) & (cap - 1);
+    while (tbl[i]) i = (i + 1) & (cap - 1);
+    tbl[i] = p;
+}
+static void sl_net_user_nonblock_grow(size_t min_cap) {
+    size_t newcap = sl_net_user_nonblock_cap ? sl_net_user_nonblock_cap : 64;
+    while (newcap < min_cap) newcap *= 2;
+    void **nt = (void **)calloc(newcap, sizeof(void *));
+    if (!nt) { fprintf(stderr, "slang: out of memory\n"); exit(1); }
+    for (size_t i = 0; i < sl_net_user_nonblock_cap; i++)
+        if (sl_net_user_nonblock[i]) sl_net_user_nonblock_raw_insert(nt, newcap, sl_net_user_nonblock[i]);
+    free(sl_net_user_nonblock);
+    sl_net_user_nonblock = nt;
+    sl_net_user_nonblock_cap = newcap;
+}
+/* Tier 11 eighth slice: all three bracketed entry-to-return -- insert
+ * transitively calls calloc/free (via _grow, same os_unfair_lock
+ * class as sl_gc_alloc's own comment describes), and all three hold
+ * sl_net_user_nonblock_mu itself: an async-preempted, queued task
+ * freezing THIS lock held would stall every other task calling
+ * net.nonblock()/net.recv()'s own EAGAIN check until it's rescheduled
+ * -- lower severity than an os_unfair_lock recursive abort, but the
+ * same class of gap this whole slice's disable_depth bracket exists
+ * to close. */
+static void sl_net_user_nonblock_insert(void *p) {
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&sl_net_user_nonblock_mu);
+    if ((sl_net_user_nonblock_count + 1) * 2 >= sl_net_user_nonblock_cap)
+        sl_net_user_nonblock_grow(sl_net_user_nonblock_cap ? sl_net_user_nonblock_cap * 2 : 64);
+    sl_net_user_nonblock_raw_insert(sl_net_user_nonblock, sl_net_user_nonblock_cap, p);
+    sl_net_user_nonblock_count++;
+    pthread_mutex_unlock(&sl_net_user_nonblock_mu);
+    sl_rt_preempt_enable();
+}
+static int sl_net_user_nonblock_contains(void *p) {
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&sl_net_user_nonblock_mu);
+    int found = 0;
+    if (sl_net_user_nonblock_cap) {
+        size_t i = sl_net_user_nonblock_hash(p) & (sl_net_user_nonblock_cap - 1);
+        for (;;) {
+            if (!sl_net_user_nonblock[i]) break;
+            if (sl_net_user_nonblock[i] == p) { found = 1; break; }
+            i = (i + 1) & (sl_net_user_nonblock_cap - 1);
+        }
+    }
+    pthread_mutex_unlock(&sl_net_user_nonblock_mu);
+    sl_rt_preempt_enable();
+    return found;
+}
+static void sl_net_user_nonblock_remove(void *p) {
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&sl_net_user_nonblock_mu);
+    if (sl_net_user_nonblock_cap) {
+        size_t i = sl_net_user_nonblock_hash(p) & (sl_net_user_nonblock_cap - 1);
+        for (;;) {
+            if (!sl_net_user_nonblock[i]) break;
+            if (sl_net_user_nonblock[i] == p) {
+                sl_net_user_nonblock[i] = NULL;
+                sl_net_user_nonblock_count--;
+                /* simple tombstone-free removal: rehash the cluster
+                   forward, standard linear-probing deletion */
+                size_t j = i;
+                for (;;) {
+                    j = (j + 1) & (sl_net_user_nonblock_cap - 1);
+                    if (!sl_net_user_nonblock[j]) break;
+                    void *rehome = sl_net_user_nonblock[j];
+                    sl_net_user_nonblock[j] = NULL;
+                    sl_net_user_nonblock_count--;
+                    sl_net_user_nonblock_raw_insert(sl_net_user_nonblock, sl_net_user_nonblock_cap, rehome);
+                    sl_net_user_nonblock_count++;
+                }
+                break;
+            }
+            i = (i + 1) & (sl_net_user_nonblock_cap - 1);
+        }
+    }
+    pthread_mutex_unlock(&sl_net_user_nonblock_mu);
+    sl_rt_preempt_enable();
+}
+
+static sl_res_i32_str *sl_net_ok_i32(int32_t v) {
+    sl_res_i32_str *r = (sl_res_i32_str *)sl_gc_alloc(
+        sizeof(sl_res_i32_str), sl_gc_trace_sl_res_i32_str);
+    r->ok = true;
+    r->v = v;
+    return r;
+}
+
+static sl_res_i32_str *sl_net_err_i32(const char *msg) {
+    sl_res_i32_str *r = (sl_res_i32_str *)sl_gc_alloc(
+        sizeof(sl_res_i32_str), sl_gc_trace_sl_res_i32_str);
+    r->ok = false;
+    r->e = sl_strdup(msg);
+    return r;
+}
+
+static sl_res_bytes_str *sl_net_ok_bytes(sl_bytes *b) {
+    sl_res_bytes_str *r = (sl_res_bytes_str *)sl_gc_alloc(
+        sizeof(sl_res_bytes_str), sl_gc_trace_sl_res_bytes_str);
+    r->ok = true;
+    r->v = b;
+    return r;
+}
+
+static sl_res_bytes_str *sl_net_err_bytes(const char *msg) {
+    sl_res_bytes_str *r = (sl_res_bytes_str *)sl_gc_alloc(
+        sizeof(sl_res_bytes_str), sl_gc_trace_sl_res_bytes_str);
+    r->ok = false;
+    r->e = sl_strdup(msg);
+    return r;
+}
+
+static sl_res_bool_str *sl_net_ok_bool(bool v) {
+    sl_res_bool_str *r = (sl_res_bool_str *)sl_gc_alloc(
+        sizeof(sl_res_bool_str), sl_gc_trace_sl_res_bool_str);
+    r->ok = true;
+    r->v = v;
+    return r;
+}
+
+static sl_res_i32_str *sl_net_listen(int port) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return sl_net_err_i32(strerror(errno));
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons((uint16_t)port);
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        int e = errno; close(fd); return sl_net_err_i32(strerror(e));
+    }
+    if (listen(fd, 1024) != 0) {
+        int e = errno; close(fd); return sl_net_err_i32(strerror(e));
+    }
+    sl_net_set_nonblocking(fd); /* net.accept's own park loop is what
+        makes this transparent to callers that never call
+        net.nonblock() themselves */
+    return sl_net_ok_i32((int32_t)fd);
+}
+
+static sl_res_i32_str *sl_net_port(int lfd) {
+    struct sockaddr_in addr;
+    socklen_t n = sizeof(addr);
+    if (getsockname(lfd, (struct sockaddr *)&addr, &n) != 0)
+        return sl_net_err_i32(strerror(errno));
+    return sl_net_ok_i32((int32_t)ntohs(addr.sin_port));
+}
+
+static sl_res_i32_str *sl_net_accept(int lfd) {
+    for (;;) {
+        int cfd = accept(lfd, NULL, NULL);
+        if (cfd >= 0) {
+            sl_net_set_nonblocking(cfd);
+            return sl_net_ok_i32((int32_t)cfd);
+        }
+        if (errno != EAGAIN && errno != EWOULDBLOCK)
+            return sl_net_err_i32(strerror(errno));
+        if (sl_net_user_nonblock_contains((void *)(intptr_t)lfd))
+            return sl_net_err_i32("would block");
+        if (sl_reactor_wait(lfd, SL_REACTOR_READ, 1) < 0)
+            return sl_net_err_i32("interrupted");
+    }
+}
+
+static sl_res_i32_str *sl_net_dial(const char *host, int port) {
+    char portstr[16];
+    sl_rt_preempt_disable(); /* Tier 11 eighth slice -- snprintf's
+        internal locale locking, see sl_gc_alloc's own comment
+        (runtime_gc.c) for the class of bug this closes. Scoped to
+        just this call, not the whole function: getaddrinfo below is
+        a genuinely slow, blocking network call (already a disclosed,
+        separate limitation of net.dial -- DNS stays synchronous),
+        and holding this bracket across it would make the task
+        unpreemptible for that whole duration, a worse tradeoff than
+        the narrow gap being closed here. */
+    snprintf(portstr, sizeof(portstr), "%d", port);
+    sl_rt_preempt_enable();
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    int rc = getaddrinfo(host, portstr, &hints, &res); /* still
+        synchronous -- async DNS resolution is a separate,
+        self-contained problem, explicitly deferred */
+    if (rc != 0 || !res) return sl_net_err_i32(gai_strerror(rc));
+    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd < 0) { freeaddrinfo(res); return sl_net_err_i32(strerror(errno)); }
+    sl_net_set_nonblocking(fd);
+    int cres = connect(fd, res->ai_addr, res->ai_addrlen);
+    freeaddrinfo(res);
+    if (cres == 0) return sl_net_ok_i32((int32_t)fd); /* connected
+        immediately -- e.g. localhost */
+    if (errno != EINPROGRESS) {
+        int e = errno; close(fd); return sl_net_err_i32(strerror(e));
+    }
+    if (sl_reactor_wait(fd, SL_REACTOR_WRITE, 1) < 0) {
+        close(fd); return sl_net_err_i32("interrupted");
+    }
+    int so_err = 0; socklen_t slen = sizeof(so_err);
+    getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_err, &slen); /* the
+        standard, historically-recommended non-blocking-connect
+        idiom: disambiguate write-readiness via SO_ERROR rather than
+        inspecting which filter fired, avoiding older select()-based
+        stacks' own readable/writable ambiguity on a failed connect */
+    if (so_err != 0) { close(fd); return sl_net_err_i32(strerror(so_err)); }
+    return sl_net_ok_i32((int32_t)fd);
+}
+
+static sl_res_i32_str *sl_net_send(int fd, sl_bytes *data) {
+    long long off = 0;
+    while (off < data->len) {
+        ssize_t n = send(fd, data->ptr + off,
+                         (size_t)(data->len - off), 0);
+        if (n >= 0) { off += n; continue; }
+        if (errno != EAGAIN && errno != EWOULDBLOCK)
+            return sl_net_err_i32(strerror(errno));
+        if (sl_net_user_nonblock_contains((void *)(intptr_t)fd))
+            return sl_net_err_i32("would block");
+        sl_reactor_wait(fd, SL_REACTOR_WRITE, 0); /* return value
+            deliberately ignored -- always keep retrying, even
+            through a shutdown nudge, to let an in-flight write
+            finish (tests/proc_shutdown's own requirement) -- see
+            sl_reactor_wait's own comment for why abort_on_shutdown
+            must be 0 here specifically, not 1 */
+    }
+    return sl_net_ok_i32((int32_t)data->len);
+}
+
+static sl_res_bytes_str *sl_net_recv(int fd, int max) {
+    if (max <= 0) max = 4096;
+    sl_bytes *b = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
+    b->len = 0;
+    b->ptr = (unsigned char *)sl_gc_alloc((size_t)max, NULL);
+    void *_sl_rcv_roots[] = { (void *)b };
+    sl_safepoint _sl_rcv_sp;
+    sl_rt_safepoint_enter(&_sl_rcv_sp, _sl_rcv_roots, 1); /* stays
+        entered across any parking below -- composes correctly with
+        a park+resume for the same reason it already composes with
+        stack growth: it resolves through
+        sl_rt_current_task->safepoint_top, not anything thread-local.
+        See the Tier 10 comment this replaces for why b needs its own
+        bracket at all (a hand-written runtime function, not codegen
+        output, so the caller's own bracket was built before b even
+        existed). */
+    for (;;) {
+        ssize_t n = recv(fd, b->ptr, (size_t)max, 0);
+        if (n >= 0) {
+            b->len = (long long)n;
+            sl_rt_safepoint_exit();
+            return sl_net_ok_bytes(b);
+        }
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            sl_rt_safepoint_exit();
+            return sl_net_err_bytes(strerror(errno));
+        }
+        if (sl_net_user_nonblock_contains((void *)(intptr_t)fd)) {
+            sl_rt_safepoint_exit();
+            return sl_net_err_bytes("would block");
+        }
+        if (sl_reactor_wait(fd, SL_REACTOR_READ, 1) < 0) {
+            sl_rt_safepoint_exit();
+            return sl_net_err_bytes("interrupted");
+        }
+    }
+}
+
+static void sl_net_close(int fd) {
+    sl_net_user_nonblock_remove((void *)(intptr_t)fd); /* avoid a
+        stale entry misapplying to a later, unrelated fd that
+        happens to reuse the same number. NOTE (known, accepted
+        limitation): if another task is genuinely parked waiting on
+        this fd via the reactor right now, closing it here silently
+        removes its kqueue registration with no event ever delivered
+        -- that task hangs forever, permanently leaking its GC roots
+        and, if it was spawned, wedging any active_tasks()-based
+        shutdown drain. Not exercised by any current test; not new
+        to this slice. */
+    close(fd);
+}
+
+static sl_res_bool_str *sl_net_nonblock(int fd) {
+    /* fd is already non-blocking at the OS level internally (every
+       fd is, now) -- this call's real job is opting IN to the
+       synchronous "would block" contract instead of parking, which
+       is what the side-table actually tracks. */
+    sl_net_user_nonblock_insert((void *)(intptr_t)fd);
+    return sl_net_ok_bool(true);
+}
+
