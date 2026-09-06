@@ -712,8 +712,11 @@ Makefile       build/test/clean
 
 ## Known limitations
 
-- No block scoping: variables declared inside an `if`/`while` body
-  remain visible afterwards.
+- Block scoping: a `let` inside `if`/`else`/`while`/`for` is not
+  visible afterwards. Loop bindings (`for i in ...`) are scoped to
+  the loop. Redeclaring a name in the same scope is an error;
+  inner blocks may shadow. `guard let` still binds for the rest of
+  its enclosing block.
 - Strings are immutable; concatenation allocates. The collector
   reclaims unreachable strings automatically.
 - Package globals require constant-literal initializers.

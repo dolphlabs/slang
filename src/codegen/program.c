@@ -628,13 +628,16 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
 void gen_function(CG *cg, Package *p, FuncDecl *f) {
     FuncSig *sig = sig_find_in(cg, p->name, f->name);
 
-    cg->vars.count = 0; /* fresh scope per function */
+    var_scope_reset(cg);
+    var_scope_push(cg);
     cg->in_function = 1;
     cg->cur_ret = sig->ret_slang;
     cg->cur_pkg = p->name;
 
-    for (int j = 0; j < f->nparams; j++)
+    for (int j = 0; j < f->nparams; j++) {
+        var_redecl_check(cg, f->params[j], f->line);
         var_push(cg, f->params[j], sig->param_slang[j]);
+    }
 
     StrBuf params;
     sb_init(&params);
@@ -711,7 +714,8 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
      * not set to 1 the way a real gen_function call would: top-level
      * `return` must stay a hard compile error (ST_RETURN's own check,
      * stmt.c), exactly as before this wrapper existed. */
-    cg->vars.count = 0;
+    var_scope_reset(cg);
+    var_scope_push(cg);
     cg->cur_pkg = pkgs[main_index].name;
     emit_line(cg, "static void sl_main_task_entry(void *_sl_unused_arg) {");
     emit_line(cg, "    (void)_sl_unused_arg;");

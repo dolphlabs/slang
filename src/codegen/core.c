@@ -408,6 +408,36 @@ SpawnShape *spawn_shape_for(CG *cg, FuncSig *sig) {
     return s;
 }
 
+void var_scope_reset(CG *cg) {
+    cg->vars.count = 0;
+    cg->var_scope_sp = 0;
+}
+
+void var_scope_push(CG *cg) {
+    if (cg->var_scope_sp == cg->var_scope_cap) {
+        cg->var_scope_cap = cg->var_scope_cap ? cg->var_scope_cap * 2 : 8;
+        cg->var_scopes = (int *)xrealloc(cg->var_scopes,
+                                         (size_t)cg->var_scope_cap * sizeof(int));
+    }
+    cg->var_scopes[cg->var_scope_sp++] = cg->vars.count;
+}
+
+void var_scope_pop(CG *cg) {
+    if (cg->var_scope_sp <= 0) {
+        cg->vars.count = 0;
+        return;
+    }
+    cg->vars.count = cg->var_scopes[--cg->var_scope_sp];
+}
+
+void var_redecl_check(CG *cg, const char *name, int line) {
+    int start = cg->var_scope_sp ? cg->var_scopes[cg->var_scope_sp - 1] : 0;
+    for (int i = start; i < cg->vars.count; i++) {
+        if (!strcmp(cg->vars.items[i].name, name))
+            cg_error(line, "redeclaration of '%s' in the same scope", name);
+    }
+}
+
 void var_push(CG *cg, const char *name, const char *slang) {
     if (cg->vars.count == cg->vars.cap) {
         cg->vars.cap = cg->vars.cap ? cg->vars.cap * 2 : 16;

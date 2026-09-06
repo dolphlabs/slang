@@ -185,6 +185,9 @@ struct CG {
     StrBuf *out;
     int indent;
     VarTable vars;
+    int *var_scopes;
+    int var_scope_sp;
+    int var_scope_cap;
     ExprTmpTable expr_tmps;
     /* Tier 10: a single global stack (shared across every nesting
      * level, save/restored per gen_call the same way cg->expect is)
@@ -342,6 +345,10 @@ const char *opt_cname(CG *cg, const char *inner);
 const char *res_cname(CG *cg, const char *tv, const char *te);
 SpawnShape *spawn_shape_for(CG *cg, FuncSig *sig);
 void var_push(CG *cg, const char *name, const char *slang);
+void var_scope_reset(CG *cg);
+void var_scope_push(CG *cg);
+void var_scope_pop(CG *cg);
+void var_redecl_check(CG *cg, const char *name, int line);
 VarSym *var_find(CG *cg, const char *name);
 void expr_tmp_register(CG *cg, Expr *e, const char *name);
 const char *expr_tmp_find(CG *cg, Expr *e);

@@ -141,21 +141,10 @@ static int ls_named_equal(LiveSet *a, LiveSet *b) {
 /* ------------------------------------------------------------------ */
 
 /* Name resolution is delegated ENTIRELY to the real compiler's own
- * var_push/var_find against cg->vars, rather than a separately
- * maintained scope structure -- a hard-won correction, not a
- * simplification for its own sake: cg->vars is flat and reset only
- * once per function (core.c:377-395, confirmed never truncated per
- * block anywhere in gen_stmt, including ST_FOR/ST_FOR_IN/guard-let,
- * none of which ever pop it either), and that IS this language's
- * actual, real scoping semantics -- a name declared inside a nested
- * block genuinely stays resolvable for the rest of the enclosing
- * function in real compiled programs. A separate nested-scope model
- * looks more "properly lexical" but would silently diverge from what
- * real programs actually resolve to, and worse, this pass calls the
- * REAL infer_type/infer_call (Risk 5/the plan's whole design), which
- * internally resolve identifiers via this exact cg->vars table -- a
- * separate scope structure that never touches cg->vars means those
- * calls can't see this pass's own declarations at all.
+ * var_push/var_find against cg->vars. Block scopes push/pop
+ * cg->vars.count in lockstep with stmt.c (if/else, loop bodies,
+ * loop bindings). This pass calls the REAL infer_type/infer_call,
+ * which resolve identifiers via that same table.
  *
  * A parallel, index-aligned array maps each cg->vars slot to this
  * pass's own LiveVar identity (only for GC-pointer-typed slots; NULL
@@ -600,7 +589,10 @@ static LiveSet *live_expr(CG *cg, Expr *e, LiveSet *live_out) {
 static LiveSet *live_stmts(CG *cg, Stmt **stmts, int count, LiveSet *live_out);
 
 static LiveSet *live_block(CG *cg, Block *b, LiveSet *live_out) {
-    return live_stmts(cg, b->stmts, b->count, live_out);
+    var_scope_push(cg);
+    LiveSet *r = live_stmts(cg, b->stmts, b->count, live_out);
+    var_scope_pop(cg);
+    return r;
 }
 
 /* Solves the loop back-edge fixpoint described in the plan (Q1/Q2):
@@ -730,27 +722,13 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
     }
 
     case ST_FOR: {
-        /* the induction variable is always int (stmt.c:281): never
-         * GC-tracked. Pushed here and never popped, matching real
-         * gen_stmt exactly (var_push with no corresponding pop) --
-         * this language's actual scoping is function-flat, not
-         * block-nested (confirmed: no ST_* case ever truncates
-         * cg->vars mid-function). KNOWN LIMITATION carried from that
-         * same fact: this declaration happens only once this case
-         * runs, which in this pass's backward walk is AFTER the tail
-         * (the rest of the enclosing block) has already been
-         * processed -- a program that references a for-loop's
-         * induction variable from code textually after the loop ends
-         * (legal in this language, since it's never popped) will hit
-         * a loud "undefined variable" cg_error from this pass rather
-         * than resolving it, instead of silently computing something
-         * wrong. Not fixed here; would need a forward declaration
-         * pre-pass to do properly. */
+        var_scope_push(cg);
         declare_var(cg, s->as.for_stmt.name, "int");
         LiveSet *backedge = NULL;
         LiveSet *live_in_body = solve_loop_fixpoint(
             cg, s->as.for_stmt.body, live_out, &backedge);
         s->backedge_live_set = backedge;
+        var_scope_pop(cg);
         LiveSet *joined = ls_clone(live_in_body);
         ls_union_named_into(joined, live_out);
         LiveSet *cur = live_expr(cg, s->as.for_stmt.end, joined);
@@ -759,7 +737,7 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
 
     case ST_FOR_IN: {
         const char *it = infer_type(cg, s->as.for_in.iter);
-        /* same "pushed, never popped" caveat as ST_FOR above */
+        var_scope_push(cg);
         LiveVar *bound1 = NULL, *bound2 = NULL;
         if (is_arr(it)) {
             bound1 = declare_var(cg, s->as.for_in.name, arr_elem(it));
@@ -819,7 +797,9 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
         ls_remove_named(joined, bound1);
         ls_remove_named(joined, bound2);
         ls_union_named_into(joined, live_out);
-        return live_expr(cg, s->as.for_in.iter, joined);
+        LiveSet *r = live_expr(cg, s->as.for_in.iter, joined);
+        var_scope_pop(cg);
+        return r;
     }
 
     case ST_RETURN:
@@ -943,9 +923,11 @@ static LiveSet *live_stmts(CG *cg, Stmt **stmts, int count, LiveSet *live_out) {
 
 static void live_function_body(CG *cg, Block *body, char **params,
                                const char **param_types, int nparams) {
+    var_scope_reset(cg);
+    var_scope_push(cg);
     for (int i = 0; i < nparams; i++)
         declare_var(cg, params[i], param_types[i]);
-    live_block(cg, body, ls_new());
+    live_stmts(cg, body->stmts, body->count, ls_new());
 }
 
 /* ------------------------------------------------------------------ */
@@ -1144,13 +1126,10 @@ void compute_liveness(CG *cg, Package *pkgs, int npkgs, int main_index) {
         for (int j = 0; j < p->prog->nfuncs; j++) {
             FuncDecl *f = p->prog->funcs[j];
             if (f->is_extern) continue;
-            cg->vars.count = 0;
             cg->in_function = 1;
             cg->cur_pkg = p->name;
             FuncSig *sig = sig_find_in(cg, p->name, f->name);
             cg->cur_ret = sig->ret_slang;
-            for (int k = 0; k < f->nparams; k++)
-                var_push(cg, f->params[k], sig->param_slang[k]);
             live_function_body(cg, f->body, f->params, sig->param_slang,
                                f->nparams);
             cg->in_function = 0;
@@ -1161,15 +1140,12 @@ void compute_liveness(CG *cg, Package *pkgs, int npkgs, int main_index) {
             if (s->kind != ST_IMPL) continue;
             for (int q = 0; q < s->as.impl.nfuncs; q++) {
                 FuncDecl *f = s->as.impl.funcs[q];
-                cg->vars.count = 0;
                 cg->in_function = 1;
                 cg->cur_pkg = p->name;
                 FuncSig *sig = method_find(
                     cg, struct_find_in_pkg(cg, p->name, s->as.impl.struct_name),
                     f->name);
                 cg->cur_ret = sig->ret_slang;
-                for (int k = 0; k < f->nparams; k++)
-                    var_push(cg, f->params[k], sig->param_slang[k]);
                 live_function_body(cg, f->body, f->params, sig->param_slang,
                                    f->nparams);
                 cg->in_function = 0;
@@ -1179,7 +1155,6 @@ void compute_liveness(CG *cg, Package *pkgs, int npkgs, int main_index) {
 
     /* the main package's top-level statements, walked as their own
      * pseudo-function (Risk 7): no params, void return, fresh scope */
-    cg->vars.count = 0;
     cg->in_function = 1;
     cg->cur_ret = NULL;
     cg->cur_pkg = pkgs[main_index].name;
