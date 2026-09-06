@@ -1,0 +1,2 @@
+concurrent_compute: tasks=20000 work_n=5000 alloc_n=50
+RESULT tasks=20000 work_n=5000 alloc_n=50 wall_ms=25063 total_primes=13380000 total_alloc_sum=49000000 tasks_per_sec=797 active_tasks_after=0

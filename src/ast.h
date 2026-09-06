@@ -83,7 +83,7 @@ typedef enum {
     ST_CONTINUE,
     ST_EXPR,
     ST_GUARD_LET, /* guard let x = opt_expr else { ... } */
-    ST_SPAWN,  /* spawn f(args...) -- run on a new OS thread */
+    ST_SPAWN,  /* spawn f(args...) -- submit an sl_task to the M:N pool */
     ST_STRUCT, /* struct Name { field: T, ... } (top level only) */
     ST_IMPL    /* impl Name { fn ... } blocks (top level only) */
 } StmtKind;
@@ -142,6 +142,7 @@ struct Stmt {
         struct {
             char *name;
             int is_pub;
+            int is_gc;
             char **fields;
             char **ftypes;
             int nfields;

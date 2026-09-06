@@ -1,0 +1,739 @@
+/* Tier 11: run queue + worker pool. The registry fix (top_ptr ->
+ * task_slot double indirection) this design depends on for
+ * correctness under worker reuse is a separate change to
+ * sl_gc_thread/sl_gc_collect (runtime_gc.c); see that file's own
+ * comments. */
+
+/* sl_runq and sl_global_runq are defined earlier, in RUNTIME[]
+ * (runtime_core.c) -- sl_gc_collect needs the complete type and the
+ * variable itself at its own definition site, well before this file
+ * is emitted. See the comment there for the full reasoning;
+ * everything below just uses them, it doesn't redefine them. One
+ * global queue (not a per-caller parameter) matches the plan's own
+ * design and the validated spike exactly. sl_global_runq is statically
+ * initialized there (PTHREAD_MUTEX_INITIALIZER/PTHREAD_COND_INITIALIZER,
+ * matching sl_gc_mu's own style) -- no separate init call needed. */
+
+/* The push itself, with NO preempt bracket of its own -- see
+ * sl_runq_push just below for who gets the bracket and who must not.
+ * The dangerous instant is pthread_mutex_unlock: the moment it runs, t
+ * is dequeue-able by any idle worker, so t may already be running (and,
+ * if it finishes, already free()d) before this function returns.
+ * Nothing here touches t after the unlock, deliberately. */
+static void sl_runq_push_raw(sl_runq *q, sl_task *t) {
+    pthread_mutex_lock(&q->mu);
+    t->next = NULL;
+    if (q->tail) q->tail->next = t; else q->head = t;
+    q->tail = t;
+    /* Tier 11 seventh slice: relaxed, heuristic-only -- see
+     * sl_global_runq_count's own comment (runtime_core.c). */
+    atomic_fetch_add_explicit(&sl_global_runq_count, 1, memory_order_relaxed);
+    pthread_cond_signal(&q->not_empty);
+    pthread_mutex_unlock(&q->mu);
+}
+
+/* Bracketed push, for the two callers that are genuinely running a
+ * DIFFERENT task's own code on that task's own stack while they push
+ * (sl_task_submit -- spawn, pushing a brand new task; sl_task_resume --
+ * some other task waking a parked one). Those callers really can be
+ * async-preempted mid-q->mu-hold, freezing the run queue's lock held
+ * while they sit queued, so they really do need the bracket.
+ *
+ * sl_worker_after_switch's own preempted branch must NOT use this, and
+ * calls sl_runq_push_raw directly instead -- the fix for a genuine use-
+ * after-free, root-caused from a full-process deadlock. The bracket
+ * targets whatever sl_rt_current_task names, and in THAT one caller
+ * sl_rt_current_task is deliberately still t itself (kept there across
+ * the push so t is never in zero of the collector's root sources -- see
+ * that branch's own comment). So the bracket's opening increment lands
+ * on t (harmless: t isn't discoverable yet), but its matching
+ * sl_rt_preempt_enable() runs AFTER pthread_mutex_unlock has made t
+ * dequeue-able -- by which point another worker may already have
+ * dispatched t, run it to completion, and free()d it in this very same
+ * function's normal-completion branch. The decrement then lands on freed
+ * memory; worse, sl_task structs are malloc'd and freed constantly here,
+ * so that block is typically already recycled into a DIFFERENT, live
+ * sl_task, whose preempt_disable_depth is silently knocked to -1. Its
+ * next legitimate sl_rt_preempt_disable() then reads 0 instead of 1, and
+ * sl_preempt_handler -- whose whole veto is 'depth != 0' -- happily
+ * async-preempts that task in the middle of a critical section every one
+ * of this slice's brackets exists to protect.
+ *
+ * Caught in the act: concurrent_compute wedged with all nine registered
+ * threads spinning in sl_gc_ack_and_wait, sl_gc_stop_requested == 1 and
+ * sl_gc_collecting == 1, and NO thread anywhere in sl_gc_collect. The
+ * collector had been suspended mid-collection: scanning every queued
+ * task's saved stack for a return address inside sl_gc_collect found it,
+ * one task deep in a 3,870-entry run queue, async_preempted == 1, frame
+ * chain reading ...count_primes_range -> sl_rt_maybe_yield ->
+ * sl_rt_gc_checkin -> sl_gc_collect -> (libSystem) -> the preemption
+ * trampoline. It had been signalled while sl_rt_gc_checkin's own bracket
+ * was open -- only possible if its depth read 0 there, i.e. if it had
+ * been -1 on entry. Nothing would ever dispatch it again (every worker
+ * was spinning waiting for the collection it was carrying), so the
+ * process spun at ~640% CPU forever. The same stray decrement, landing
+ * on a task inside sl_gc_alloc's, sl_map_put's, or malloc's bracket
+ * instead, is a crash rather than a hang -- which is what most of the
+ * remaining intermittent SIGSEGVs were.
+ *
+ * Note the bracket was never doing any USEFUL work in that caller
+ * either: sl_worker_after_switch runs on the worker's own native stack,
+ * and sl_preempt_handler's stack-range veto already rejects any signal
+ * whose sp isn't inside the current task's own buffer. It was pure
+ * hazard. */
+static void sl_runq_push(sl_runq *q, sl_task *t) {
+    sl_rt_preempt_disable();
+    sl_runq_push_raw(q, t);
+    sl_rt_preempt_enable();
+}
+
+static sl_task *sl_runq_pop_blocking(sl_runq *q) {
+    /* Tier 11 eighth slice: bracketed entry-to-return, including the
+     * cond_wait -- harmless while genuinely idle (sl_rt_current_task is
+     * the thread's own idle sentinel then, never an async-preemption
+     * target), and correctly protects the lock-held dequeue at the
+     * bottom either way. */
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&q->mu);
+    while (!q->head && !q->shutdown) {
+        /* An idle worker is the pool's own steady state -- it must
+         * tell the collector it's safe to scan around while parked
+         * here, exactly like sl_chan_send/recv already do (
+         * runtime_core.c), or a collection landing while the pool is
+         * idle hangs forever (sl_gc_collect's quiescence wait requires
+         * every registered thread to be either blocked or acked). */
+        atomic_store_explicit(&sl_rt_gc_blocked, 1, memory_order_release);
+        pthread_cond_wait(&q->not_empty, &q->mu);
+        atomic_store_explicit(&sl_rt_gc_blocked, 0, memory_order_release);
+        /* Waking here (something was pushed, or shutdown) does NOT mean
+         * it's safe to act on q->head yet. This thread's OWN quiescence
+         * requirement was satisfied while it sat blocked=1, but a
+         * collector that already scanned this thread's (idle) task_slot
+         * during its per-task mark loop has no reason to scan it again
+         * this cycle -- reproduced directly (spike stress test, Tier 11
+         * plan) as: a worker wakes, dequeues, and assigns a task
+         * WITHOUT re-checking stop_requested, landing that task in a
+         * slot a collection's mark phase already passed, while the
+         * task is simultaneously no longer visible via the run-queue
+         * walk either (it was just pulled out from under it). Checking
+         * in HERE -- after waking, before touching q->head again, with
+         * q->mu released so this can't deadlock against a collection
+         * that needs it -- correctly acks (or ack-and-waits out a
+         * still-in-flight collection) before this thread may dequeue.
+         * The task stays safely queued (protected by the run-queue
+         * walk) for the entire time this might block. */
+        pthread_mutex_unlock(&q->mu);
+        sl_rt_gc_checkin();
+        pthread_mutex_lock(&q->mu);
+    }
+    sl_task *t = q->head;
+    if (t) {
+        q->head = t->next;
+        if (!q->head) q->tail = NULL;
+        atomic_fetch_sub_explicit(&sl_global_runq_count, 1,
+                                   memory_order_relaxed);
+    }
+    pthread_mutex_unlock(&q->mu);
+    sl_rt_preempt_enable();
+    /* No checkin here anymore: it used to run right after this unlock,
+     * which left t unrooted (popped off the queue, but not yet assigned
+     * to sl_rt_current_task by the caller) for the duration of that
+     * checkin call. Moved to sl_worker_loop, after the assignment,
+     * closing the window instead of narrowing it -- see there. */
+    return t;
+}
+
+/* Not called from anywhere yet -- program.c's own main() emission
+ * always ends by calling exit() directly (sl_main_task_entry), which
+ * tears down every OS thread, pool workers included, without needing
+ * a graceful queue shutdown first. A real caller belongs to the
+ * deferred signal-handling redesign, not improvised here; kept
+ * (rather than deleted) since the pool's own tests already depend on
+ * it directly and it isn't dead in the sense sl_gc_cleanup_handler
+ * was -- there IS a real future caller, just not yet. */
+__attribute__((unused))
+static void sl_runq_shutdown(sl_runq *q) {
+    pthread_mutex_lock(&q->mu);
+    q->shutdown = 1;
+    /* broadcast, not signal -- a signal wakes exactly one worker, the
+     * rest sleep forever and pthread_join hangs. Setting the flag
+     * under the same lock pop_blocking checks it under closes the
+     * standard lost-wakeup window. Does not drain: any task still
+     * queued when shutdown is called is simply never run -- a real
+     * drain policy belongs to the deferred signal-handling redesign,
+     * not improvised here. */
+    pthread_cond_broadcast(&q->not_empty);
+    pthread_mutex_unlock(&q->mu);
+}
+
+static void sl_task_submit(void (*entry)(void *), void *arg) {
+    /* Tier 11 eighth slice: protects the CALLING task across this raw
+     * malloc -- same class of bug as sl_gc_alloc's own bracket (an
+     * async-preempted, migrated task abandoning libSystem's own
+     * thread-affine zone lock mid-hold). sl_task_stack_init/
+     * sl_runq_push below already bracket themselves. */
+    sl_rt_preempt_disable();
+    sl_task *t = (sl_task *)malloc(sizeof(sl_task));
+    sl_rt_preempt_enable();
+    /* Direct exit, not sl_rt_error -- the calling thread's own
+     * sl_rt_current_task is NOT t (t doesn't exist yet), so a panic-
+     * switch-back here would incorrectly abandon the CALLER's task.
+     * See sl_task_stack_init's own comment (runtime_sched.c) for the
+     * full reasoning; matches sl_gc_set_grow's OOM convention. */
+    if (!t) {
+        fprintf(stderr, "slang: out of memory submitting task\n");
+        exit(1);
+    }
+    memset(t, 0, sizeof(*t));
+    sl_task_stack_init(t, entry, arg);
+    t->entry_arg = arg; /* rooted directly by the collector's run-queue
+                            walk while queued -- see sl_gc_collect,
+                            runtime_gc.c */
+    sl_runq_push(&sl_global_runq, t);
+}
+
+/* Tier 11 fourth slice: generic park/resume primitives -- the pieces
+ * chan_send/recv (RUNTIME_CONTAINERS) park through, and every future
+ * net/time parking site will too. Caller contract for sl_task_park:
+ * sl_rt_current_task must already be registered wherever it needs to
+ * be found for wakeup (e.g. a channel's own wait list, via its `next`
+ * field) AND the caller must currently hold held_mu -- the SAME lock
+ * protecting that registration. This function does NOT unlock held_mu
+ * itself: a parked task cannot use a plain condvar-style 'unlock, then
+ * block' sequence, since sl_ctx_switch has no equivalent of a condvar
+ * wait's OS-guaranteed atomic unlock-and-block. Unlocking here, before
+ * the switch, would open a lost-wakeup race -- a concurrent
+ * sl_task_resume could find this task on its wait list and try to
+ * switch into t->rsp BEFORE the switch below has actually written it.
+ * held_mu stays locked across the switch instead, and is only unlocked
+ * by sl_worker_after_switch, once, immediately after the switch
+ * safely completes -- on this SAME OS thread (the task's own code
+ * locks it; that same physical thread, now running scheduler code,
+ * unlocks it a few instructions later), so this never violates
+ * POSIX's per-thread mutex-ownership rule despite the task having
+ * logically moved from application code to scheduler code in
+ * between. */
+static void sl_task_park(pthread_mutex_t *held_mu) {
+    /* Tier 11 eighth slice: bracketed entry through the switch's own
+     * resume point, not just the sl_gc_mu-held stretch -- protects the
+     * whole park-registration-then-switch-out transition, the same
+     * shape sl_task_yield_now/the async trampoline itself use for the
+     * identical class of mid-transition hazard. */
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&sl_gc_mu);
+    sl_rt_current_task->parked_next = sl_parked_tasks;
+    sl_parked_tasks = sl_rt_current_task;
+    pthread_mutex_unlock(&sl_gc_mu);
+    sl_rt_current_task->park_mu = held_mu;
+    sl_rt_current_task->parked = 1;
+    sl_ctx_switch(&sl_rt_current_task->rsp, sl_rt_native_rsp);
+    /* resumes here once re-submitted (sl_task_resume) and re-switched-
+       into by some worker */
+    sl_rt_preempt_enable();
+}
+
+/* Called by whoever finds a match (e.g. sl_chan_send finding a waiting
+ * receiver) while still holding the SAME lock that protects the
+ * primitive-specific wait list t was just removed from -- t->next is
+ * free to reuse the moment this is called.
+ *
+ * sl_gc_mu stays locked across BOTH the sl_parked_tasks removal and
+ * the sl_runq_push call below -- unlocking in between (the original,
+ * buggy shape) leaves a real window where t is registered in NONE of
+ * the collector's three root sources (not on sl_parked_tasks anymore,
+ * not yet on sl_global_runq, and not any registered thread's
+ * task_slot either, since t isn't running on any OS thread right
+ * now). A collection landing in that exact window walks all three
+ * sources, finds t nowhere, and never marks t->entry_arg or t's
+ * safepoint chain -- silently collecting whatever GC objects t alone
+ * still references (e.g. a value just received via chan_recv,
+ * sitting in t's own safepoint roots, waiting for t to resume and use
+ * it) out from under it. Reproduced directly via a standalone
+ * chan_recv-parking stress case (many workers pulling off a shared
+ * chan under real GC pressure): a received struct's own fields read
+ * back as changed-in-place moments after receipt, sometimes read as a
+ * heap pointer, sometimes zeroed -- exactly the signature of another
+ * allocation's malloc() call reusing memory this task still legitimately
+ * held live. Extending sl_gc_mu's hold across sl_runq_push closes the
+ * window entirely: t is always in at least one of the three sources.
+ * Safe against deadlock because the established lock order in this
+ * runtime is always sl_gc_mu-then-runq-mu (see sl_gc_collect's own
+ * comment, runtime_gc.c) -- sl_runq_push only ever takes q->mu, never
+ * sl_gc_mu, so acquiring it while already holding sl_gc_mu here
+ * matches the same order, not a new or reversed one.
+ *
+ * Only half the story on its own, though: closing this window makes t
+ * visible to the run-queue walk, and that walk had to start scanning a
+ * queued task's SAFEPOINT CHAIN too before being visible there meant
+ * anything for a resumed task (it used to mark entry_arg only, on the
+ * -- true until this slice -- assumption that a queued task hasn't
+ * started running and so has no chain). Same failure signature, same
+ * repro; see sl_gc_collect's run-queue walk (runtime_gc.c). */
+static void sl_task_resume(sl_task *t) {
+    /* Tier 11 eighth slice: protects the CALLING thread's own current
+     * task (sl_rt_current_task) -- t itself isn't running anywhere
+     * right now, so it isn't a preemption target; whoever is executing
+     * this function's own lock manipulation is. sl_runq_push below
+     * takes its own nested bracket too (harmless, composes). */
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&sl_gc_mu);
+    sl_task **pp = &sl_parked_tasks;
+    while (*pp) {
+        if (*pp == t) { *pp = t->parked_next; break; }
+        pp = &(*pp)->parked_next;
+    }
+    sl_runq_push(&sl_global_runq, t);
+    pthread_mutex_unlock(&sl_gc_mu);
+    sl_rt_preempt_enable();
+}
+
+/* Tier 11 seventh slice: cooperative preemption's own yield primitive --
+ * called from sl_rt_maybe_yield (runtime_core.c) once a task decides
+ * it's run long enough, with someone else waiting, to give up its OS
+ * thread voluntarily. Deliberately does NOT push t onto sl_global_runq
+ * itself before switching out -- a design review caught a real,
+ * TSan-would-catch-it race in an earlier draft that did exactly that:
+ * sl_ctx_switch only writes *old_rsp_slot (here, &t->rsp) AFTER saving
+ * this thread's own callee-saved registers, so pushing t first makes it
+ * visible to sl_runq_pop_blocking (and thus dequeue-able by a DIFFERENT
+ * idle worker) while t->rsp still holds a STALE value from t's previous
+ * switch-out -- that worker can then sl_ctx_switch into a stale rsp
+ * while THIS thread is still physically executing on t's stack,
+ * corrupting it (or, for a task on its very first-ever stint, whose rsp
+ * was never yet written by a real switch-out at all, re-entering its
+ * trampoline from the top on a stack this thread is mid-execution on).
+ * Exactly the same hazard sl_task_park's own comment above documents
+ * for held_mu and the parked-task registry -- the fix here is the same
+ * shape: don't make t discoverable until AFTER the switch has safely
+ * completed. sl_worker_after_switch does the push instead, once this
+ * function's sl_ctx_switch call has returned control to some OTHER
+ * thread's worker loop -- at which point t->rsp is guaranteed valid. */
+static void sl_task_yield_now(void) {
+    /* Tier 11 eighth slice: bracketed entry through the switch's own
+     * resume point -- this is the COOPERATIVE yield path (called
+     * directly from generated code via sl_rt_maybe_yield, never through
+     * sl_preempt_handler), and it's exactly as vulnerable to a second,
+     * async signal landing mid-transition as the async path's own
+     * trampoline is -- nothing about being a voluntary yield makes the
+     * switch-out/switch-back-in window any safer. */
+    sl_rt_preempt_disable();
+    sl_task *t = sl_rt_current_task;
+    t->preempted = 1;
+    sl_ctx_switch(&t->rsp, sl_rt_native_rsp);
+    /* resumes here once some worker's run loop dispatches this task
+       again -- run_start_ns is reset fresh by that dispatch (see
+       sl_worker_run_loop below), so the next sample-interval check
+       starts counting from zero, not from this task's pre-yield start
+       time. */
+    sl_rt_preempt_enable();
+}
+
+/* Shared post-switch dispatch: must run identically after ANY
+ * sl_ctx_switch call that could return either a finished OR a parked
+ * task -- not just the ones sl_worker_run_loop's own iteration makes.
+ * main()'s own one-off switch-in (program.c) uses this too, since
+ * main's top-level task can now park exactly like any spawned task
+ * can. */
+static void sl_worker_after_switch(sl_task *t) {
+    if (t->preempted) {
+        /* Tier 11 seventh slice: t's sl_ctx_switch has already safely
+         * completed by the time we're running here (this IS the code
+         * that ran right after that switch), so t->rsp is guaranteed
+         * valid -- now it's safe to make t discoverable again. Push
+         * BEFORE clearing sl_rt_current_task, not after: t stays
+         * reachable via this thread's own task_slot (which dereferences
+         * sl_rt_current_task, still == t here) for the whole push, so
+         * it's in >=1 of the collector's three root sources at every
+         * instant -- clearing first would open exactly the zero-source
+         * window sl_task_resume's own comment above describes. */
+        t->preempted = 0;
+        /* Deliberately does NOT clear t->async_preempted here, and that
+         * asymmetry with t->preempted just above is the whole point --
+         * an earlier version of this slice did clear it here and thereby
+         * silently disabled sl_gc_collect's conservative scan
+         * (runtime_gc.c) entirely, which is the ONLY thing covering the
+         * alloc-to-store gap async preemption opens. The two flags
+         * answer different questions. t->preempted asks 'which of
+         * sl_worker_after_switch's three branches should run', and is
+         * consumed right here, so clearing it here is correct.
+         * t->async_preempted asks 'is the suspension this task is about
+         * to sit in an ASYNC one, i.e. taken at an arbitrary instruction
+         * boundary rather than at a compiler-placed safepoint' -- and
+         * its one and only reader is the run-queue walk, which runs
+         * strictly LATER, while t sits queued. Clearing it here, one
+         * line before sl_runq_push, meant every task on that queue was
+         * observed with the flag already 0: measured directly by
+         * counting the walk's own conservative-scan branch under
+         * concurrent_compute, 0 hits out of ~390 queued tasks walked per
+         * collection, versus 23-30 once the clear moved to where it
+         * belongs. The flag is retired instead by sl_preempt_yield
+         * (runtime_sched.c), on RESUME -- the instant the async
+         * suspension it describes actually ends. See there for the full
+         * story and the concrete corruption this reinstates cover for. */
+        sl_runq_push_raw(&sl_global_runq, t); /* _raw, NOT the bracketed
+            sl_runq_push -- its bracket would target t itself here (this
+            branch deliberately leaves sl_rt_current_task == t across the
+            push, see above), and its closing sl_rt_preempt_enable() would
+            then run AFTER t is dequeue-able, i.e. potentially after
+            another worker has already finished and free()d t. See
+            sl_runq_push's own comment for the deadlock that root-caused
+            this. No protection is lost: this code runs on the worker's
+            native stack, which sl_preempt_handler's stack-range veto
+            already rejects unconditionally. */
+        sl_rt_current_task = &sl_rt_task_storage; /* the LAST thing this
+            branch does, and deliberately not a dereference of t: after
+            the push above, t may already be running, finished, and freed
+            on another worker. */
+        return;
+    }
+    if (t->parked) {
+        t->parked = 0;
+        pthread_mutex_t *mu = t->park_mu;
+        t->park_mu = NULL;
+        sl_rt_current_task = &sl_rt_task_storage; /* MUST happen before
+            the unlock below, not after: the registry's task_slot
+            dereferences through sl_rt_current_task at any time,
+            including immediately after mu is unlocked and some OTHER
+            thread could already be resuming t. */
+        if (mu) pthread_mutex_unlock(mu);
+        return;
+    }
+    sl_gc_flush_task(t);
+    sl_rt_current_task = &sl_rt_task_storage; /* MUST happen before
+        the frees below, not after -- same reasoning as the parked
+        case above. */
+    void *raw = t->raw_base;
+    free(raw);
+    free(t);
+}
+
+/* Fixed-capacity worker array -- generous, not sized to any real
+ * machine's core count; sl_pool_start's own floor/sysconf logic
+ * (further down) is what actually decides how many of these get
+ * used. Declared here, ahead of sl_worker_run_loop -- moved up from
+ * its original spot next to sl_pool_start specifically so
+ * sl_worker_run_loop (the first real user of sl_pool_slots) has both
+ * SL_POOL_MAX_WORKERS and the slot type available at its own
+ * definition site, same ordering reason as every other forward-
+ * declaration in this codebase. */
+#define SL_POOL_MAX_WORKERS 256
+static pthread_t sl_pool_workers[SL_POOL_MAX_WORKERS];
+
+/* Tier 11 eighth slice (async preemption): the 'current occupant'
+ * table -- lets the ticker thread (below) discover which task each
+ * worker is CURRENTLY running, something nothing before this slice
+ * needed (sl_rt_current_task is thread-local, only readable from a
+ * worker's own thread). .tid is written by each worker itself, once,
+ * as literally its first action -- BEFORE it ever touches .cur --
+ * closing a real startup race an early design review caught: if the
+ * pool-starting thread wrote .tid instead, after pthread_create
+ * returns, a freshly-started worker could begin dispatching (setting
+ * its own .cur) before .tid was populated, letting the ticker
+ * pthread_kill an uninitialized pthread_t. .cur is set by
+ * sl_worker_run_loop right where run_start_ns is already reset (a
+ * fresh dispatch, a resume-from-park, and a resume-from-preemption-
+ * yield all funnel through that one line), and cleared right after
+ * sl_worker_after_switch returns -- an idle worker's slot always
+ * reads NULL, so the ticker never targets a worker with nothing
+ * running on it. */
+typedef struct sl_pool_slot {
+    _Atomic(pthread_t) tid;
+    _Atomic(sl_task *) cur;
+} sl_pool_slot;
+static sl_pool_slot sl_pool_slots[SL_POOL_MAX_WORKERS];
+
+/* Tier 11 eighth slice: a genuine use-after-free the atomic .cur field
+ * alone cannot close, found only by tracing concurrent_compute's own
+ * crashes down to it (many other fixes in this same slice narrowed but
+ * never eliminated its crash rate, because this bug is unrelated to
+ * any of them). sl_worker_after_switch's own 'normal completion'
+ * branch (below) calls free(t->raw_base) and free(t) directly, and the
+ * ticker thread (further down) doesn't just read .cur to decide
+ * whether to act -- it DEREFERENCES the sl_task it names
+ * (t->run_start_ns, t->async_preempt_pending) before ever sending a
+ * signal. Clearing .cur to NULL before free(t) (see
+ * sl_worker_run_loop's own comment) only removes ONE interleaving --
+ * the ticker reading .cur AFTER the clear sees NULL correctly -- it
+ * does nothing about the ticker having ALREADY read a valid, non-NULL
+ * t a moment earlier and now being mid-dereference of it while this
+ * thread concurrently frees it. Nothing about the async-preemption
+ * VETO (sl_preempt_handler's stack-range check) touches this either:
+ * that veto only protects against a wrongly-REDIRECTED preemption, not
+ * against the ticker's own plain memory read racing a free(). This
+ * mutex serializes the two: the ticker holds it across each slot's own
+ * read-then-dereference-then-signal-decision (below), and
+ * sl_worker_run_loop holds it across clearing .cur through
+ * sl_worker_after_switch's own return (which is where the free, when
+ * it happens, actually happens) -- so a completing task's struct is
+ * never freed while the ticker could still be looking at it, and the
+ * ticker never sees a torn read. Held only briefly by either side (a
+ * few field accesses, no syscalls except pthread_kill, called AFTER
+ * this lock is released -- see the ticker's own comment), so
+ * contention is not expected to matter at this pool's scale. */
+static pthread_mutex_t sl_pool_slots_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* slot_idx: this thread's index into sl_pool_slots, or -1 -- the
+ * latter for main's own original OS thread, which also reaches this
+ * function (program.c, once main's top-level task itself parks and
+ * this thread joins the general worker loop) but is NOT one of
+ * sl_pool_workers[] and has no real slot. Tier 11 eighth slice's own
+ * scope note: the async-preemption ticker only ever targets
+ * sl_pool_workers[] threads, so a task that happens to run on main's
+ * original thread stays cooperative-preemption-only -- -1 skips the
+ * occupant-table writes below entirely rather than indexing with a
+ * meaningless value, the direct expression of that same scope
+ * decision in code, not a workaround for it. */
+static void sl_worker_run_loop(long slot_idx) {
+    for (;;) {
+        /* checkin BEFORE touching the queue at all -- as long as
+         * nothing between two checkin calls itself yields a checkin/ack
+         * opportunity, no collection can reach quiescence (let alone
+         * mark phase) while this thread is anywhere inside the
+         * pop+assign stretch below, regardless of what it's doing. This
+         * makes pop+assign atomic with respect to collections by
+         * construction, not by narrowing a window -- see
+         * sl_runq_pop_blocking's own comment for the empirically-found
+         * race this closes (Tier 11 plan). */
+        sl_rt_gc_checkin();
+        sl_task *t = sl_runq_pop_blocking(&sl_global_runq);
+        if (t) sl_rt_current_task = t;
+        if (!t) break; /* shutdown */
+        /* Tier 11 seventh slice: fresh quantum clock for every dispatch
+         * -- a fresh submit, a resume-from-park, AND (new) a resume-from-
+         * preemption-yield all funnel through this one line, so
+         * sl_rt_maybe_yield's run_start_ns comparison always measures
+         * this stint, never a stale one from before the last switch-out. */
+        t->run_start_ns = sl_rt_monotonic_ns();
+        /* Tier 11 eighth slice: publish t as this slot's occupant right
+         * where run_start_ns is already reset -- a fresh submit, a
+         * resume-from-park, and a resume-from-preemption-yield all
+         * funnel through this one line, so the ticker's own quantum
+         * check (mirroring sl_rt_maybe_yield's) is always measuring
+         * this exact stint. release: must be visible to the ticker
+         * thread (a different thread entirely) before any signal based
+         * on seeing it could land. */
+        if (slot_idx >= 0)
+            atomic_store_explicit(&sl_pool_slots[slot_idx].cur, t, memory_order_release);
+        sl_ctx_switch(&sl_rt_native_rsp, t->rsp);
+        /* resumes here once t either finishes or parks */
+        /* Tier 11 eighth slice: .cur cleared BEFORE sl_worker_after_switch,
+         * not after, AND both now held under sl_pool_slots_mu (its own
+         * comment above has the full story) -- sl_worker_after_switch's
+         * own 'normal completion' branch calls free(t) directly, and the
+         * ticker thread dereferences whatever .cur names before ever
+         * deciding to signal, not just checks it for non-NULL. Clearing
+         * .cur earlier alone only narrows that race; the mutex is what
+         * actually closes it, by making 'the ticker reads and
+         * dereferences .cur for this slot' and 'this thread clears .cur
+         * and (maybe) frees t' mutually exclusive. Safe to hold across
+         * the WHOLE sl_worker_after_switch call, not just the free: that
+         * function never itself reads .cur, only t (its own parameter)
+         * and sl_rt_current_task, so nothing about holding the lock
+         * slightly longer than strictly required changes what it does. */
+        if (slot_idx >= 0) {
+            pthread_mutex_lock(&sl_pool_slots_mu);
+            atomic_store_explicit(&sl_pool_slots[slot_idx].cur, NULL, memory_order_release);
+            sl_worker_after_switch(t);
+            pthread_mutex_unlock(&sl_pool_slots_mu);
+        } else {
+            sl_worker_after_switch(t);
+        }
+    }
+}
+
+static void *sl_worker_loop(void *arg) {
+    long slot_idx = (long)(intptr_t)arg;
+    /* Tier 11 eighth slice: this worker's OWN first action, before
+     * sl_gc_register_thread or anything else -- see sl_pool_slots' own
+     * comment for the startup race this ordering closes. */
+    atomic_store_explicit(&sl_pool_slots[slot_idx].tid, pthread_self(), memory_order_release);
+    sl_gc_register_thread();
+    sl_worker_run_loop(slot_idx);
+    sl_gc_unregister_thread(); /* this loop can only be left via
+        shutdown, at which point this OS thread is about to exit for
+        good -- omitting this would leave a registry node pointing at
+        TLS about to be torn down. */
+    return NULL;
+}
+
+/* Tier 11 eighth slice, rollout step 3: the real signal handler --
+ * replaces step 2's temporary do-nothing placeholder. Transplanted
+ * from the validated standalone spike (Tier 11 plan, 'Spike findings'),
+ * with all four fixes that spike's own two review passes required:
+ * (1) the stack-range veto (is the interrupted sp actually on t's OWN
+ * stack? sl_rt_current_task being non-NULL does not by itself prove
+ * this -- there is a genuine, if tiny, window between a scheduler
+ * assigning sl_rt_current_task = t and the dispatch's own sl_ctx_switch
+ * actually running, reproduced directly in the spike as a real crash
+ * before this check existed); (2) the trampoline-range veto (never
+ * re-preempt the trampoline's own code, independent of
+ * preempt_disable_depth -- the spike's own Bug 1, a counter-based
+ * bracket alone provably cannot close the release-to-jmp tail); (3) the
+ * preempt_disable_depth check itself (never preempt while t holds one
+ * of the runtime's own internal locks or is mid-transition); (4) a
+ * fresh quantum re-check (don't trust the ticker's possibly-stale
+ * snapshot). No locks taken anywhere in this function -- the only
+ * risky work (pushing onto the run queue) happens later, in
+ * sl_preempt_yield, from ordinary post-sigreturn code, not from
+ * signal-handler context at all. */
+static void sl_preempt_handler(int sig, siginfo_t *si, void *uctx_raw) {
+    (void)sig; (void)si;
+    sl_task *t = sl_rt_current_task;
+    if (!t) return; /* signal landed on a thread with no active task
+        (main's original OS thread before its own task ever dispatches,
+        or -- defensively -- the timer/reactor/signal threads, though
+        the ticker never targets those) */
+    atomic_store_explicit(&t->async_preempt_pending, 0, memory_order_relaxed);
+    /* clearing pending unconditionally, before either veto below,
+       matters: if it stayed set, the ticker's own dedup check would
+       permanently skip this task forever, silently going dormant for
+       the rest of the run rather than just missing this one attempt. */
+    ucontext_t *uctx = (ucontext_t *)uctx_raw;
+#if defined(__x86_64__)
+    uintptr_t pc0 = (uintptr_t)uctx->uc_mcontext->__ss.__rip;
+    uintptr_t sp0 = (uintptr_t)uctx->uc_mcontext->__ss.__rsp;
+#elif defined(__aarch64__)
+    uintptr_t pc0 = (uintptr_t)__darwin_arm_thread_state64_get_pc(uctx->uc_mcontext->__ss);
+    uintptr_t sp0 = (uintptr_t)uctx->uc_mcontext->__ss.__sp;
+#endif
+    if (sp0 < (uintptr_t)t->stack_base ||
+        sp0 >= (uintptr_t)t->stack_base + t->stack_size) {
+        return; /* not genuinely running on t's own stack right now --
+            see the spike's own Bug 2 (main comment above) for the
+            concrete failure this closes */
+    }
+    if (pc0 >= (uintptr_t)sl_preempt_trampoline_entry &&
+        pc0 < (uintptr_t)sl_preempt_trampoline_end) {
+        return; /* never re-preempt the trampoline's own code */
+    }
+    if (atomic_load_explicit(&t->preempt_disable_depth, memory_order_acquire) != 0)
+        return;
+    if (sl_rt_monotonic_ns() - t->run_start_ns < SL_PREEMPT_QUANTUM_NS)
+        return; /* re-validate fresh -- don't trust the ticker's
+            possibly-stale snapshot */
+    /* Close the re-entrancy window starting HERE, not at
+       sl_task_yield_now's own entry -- too late, leaves the handler-
+       return-through-trampoline-prologue stretch unguarded. Decremented
+       by the trampoline's own tail (the 'lock decl' against the
+       pointer sl_preempt_get_disable_depth_ptr returns), as the last
+       possible register-safe instant before its final jmp. */
+    atomic_fetch_add_explicit(&t->preempt_disable_depth, 1, memory_order_acq_rel);
+    t->async_orig_pc = (void *)pc0;
+#if defined(__x86_64__)
+    uctx->uc_mcontext->__ss.__rip = (uintptr_t)sl_preempt_trampoline_entry;
+#elif defined(__aarch64__)
+    __darwin_arm_thread_state64_set_pc_fptr(uctx->uc_mcontext->__ss,
+                                             sl_preempt_trampoline_entry);
+#endif
+}
+
+/* Ticker thread: mirrors sl_time_thread/sl_reactor_thread/
+ * sl_sig_thread's own dedicated-pthread shape. Every 2ms, for each
+ * occupied slot whose run_start_ns looks past SL_PREEMPT_QUANTUM_NS
+ * (cooperative v1's existing tunable, runtime_core.c -- reused, not
+ * duplicated) AND sl_global_runq_count > 0 (the same 'is anyone
+ * actually waiting' gate sl_rt_maybe_yield already uses), sends
+ * SIGUSR1 to that slot's tid, once per outstanding attempt
+ * (async_preempt_pending dedups). Never registered with the GC --
+ * same reasoning as sl_reactor_thread's own (pkg_net/runtime_net.c):
+ * it never drives a task and never touches a GC-scanned field, only
+ * plain atomics on sl_pool_slots and sl_task.async_preempt_pending/
+ * run_start_ns. */
+static void *sl_preempt_ticker_thread(void *arg) {
+    (void)arg;
+    struct timespec interval;
+    interval.tv_sec = 0;
+    interval.tv_nsec = 2000000; /* 2ms */
+    for (;;) {
+        nanosleep(&interval, NULL);
+        if (atomic_load_explicit(&sl_global_runq_count, memory_order_relaxed) == 0)
+            continue;
+        long long now = sl_rt_monotonic_ns();
+        for (int i = 0; i < SL_POOL_MAX_WORKERS; i++) {
+            /* Tier 11 eighth slice: held across the read of .cur AND
+             * every dereference of the sl_task it names -- see
+             * sl_pool_slots_mu's own comment above for the use-after-free
+             * this closes (a completing task's own free(t), racing this
+             * exact read-then-dereference sequence, not just a plain
+             * non-NULL check). Released before pthread_kill: that's a
+             * syscall, and by this point every field this loop needed
+             * has already been safely read (tid included) -- nothing
+             * left to protect. */
+            pthread_mutex_lock(&sl_pool_slots_mu);
+            sl_task *t = atomic_load_explicit(&sl_pool_slots[i].cur, memory_order_acquire);
+            if (!t) { pthread_mutex_unlock(&sl_pool_slots_mu); continue; }
+            if (now - t->run_start_ns < SL_PREEMPT_QUANTUM_NS) {
+                pthread_mutex_unlock(&sl_pool_slots_mu);
+                continue;
+            }
+            if (atomic_load_explicit(&t->async_preempt_pending, memory_order_relaxed)) {
+                pthread_mutex_unlock(&sl_pool_slots_mu);
+                continue;
+            }
+            atomic_store_explicit(&t->async_preempt_pending, 1, memory_order_relaxed);
+            pthread_t tid = atomic_load_explicit(&sl_pool_slots[i].tid, memory_order_acquire);
+            pthread_mutex_unlock(&sl_pool_slots_mu);
+            pthread_kill(tid, SIGUSR1);
+        }
+    }
+    return NULL;
+}
+
+static void sl_preempt_ticker_start(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    /* Tier 11 eighth slice, rollout step 3: the real handler now, not
+       step 2's placeholder -- SA_SIGINFO for the ucontext_t access it
+       needs to read/rewrite an interrupted task's saved PC. No
+       SA_ONSTACK: the handler itself never runs on an alternate stack
+       (confirmed sound by the second review) -- it inspects/rewrites
+       the interrupted context and returns immediately; the trampoline
+       that does the real work runs later, as ordinary code, after a
+       genuine sigreturn, on the task's own real stack. */
+    sa.sa_sigaction = sl_preempt_handler;
+    sa.sa_flags = SA_SIGINFO;
+    sigemptyset(&sa.sa_mask);
+    if (sigaction(SIGUSR1, &sa, NULL) != 0) {
+        fprintf(stderr, "slang: failed to install preempt handler\n");
+        exit(1);
+    }
+    pthread_t th;
+    if (pthread_create(&th, NULL, sl_preempt_ticker_thread, NULL) != 0) {
+        fprintf(stderr, "slang: failed to start preempt ticker\n");
+        exit(1);
+    }
+}
+
+/* Called once, from main(), before any user code (which might 'spawn')
+ * starts running. Sizes the pool via sysconf(_SC_NPROCESSORS_ONLN),
+ * floored at 8: tests/proc_shutdown already has two simultaneously-
+ * BLOCKING spawned tasks today, and getaddrinfo in net.dial /
+ * net.tls_dial still blocks whichever OS thread calls it, so a low
+ * floor (sysconf can legitimately return 1, e.g. in a constrained
+ * container) is a live risk to an existing test. This is an explicit
+ * stopgap, not a real fix.
+ *
+ * Tier 11 sixth slice: no longer takes a block_signals parameter --
+ * SIGTERM/SIGINT are now blocked exactly ONCE, at the very top of
+ * main() (program.c), before any thread (including this pool's own
+ * workers) is ever created, so every subsequently-created thread
+ * inherits the blocked mask automatically via normal pthread_create
+ * semantics. Only the dedicated signal thread (pkg_proc/runtime.c)
+ * ever has these signals unblocked, via its own sigwait() call --
+ * replaces the old 'exactly one thread stays unblocked' scheme
+ * entirely, see that file's own comments. */
+static void sl_pool_start(void) {
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    if (n < 8) n = 8;
+    if (n > SL_POOL_MAX_WORKERS) n = SL_POOL_MAX_WORKERS;
+
+    for (long i = 0; i < n; i++) {
+        if (pthread_create(&sl_pool_workers[i], NULL, sl_worker_loop,
+                            (void *)(intptr_t)i) != 0) {
+            fprintf(stderr, "slang: failed to start worker pool\n");
+            exit(1);
+        }
+    }
+    sl_preempt_ticker_start();
+}
+

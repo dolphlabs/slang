@@ -1,0 +1,42 @@
+{
+  "label": "http_endpoint_json",
+  "base_url": "http://localhost:8095",
+  "concurrency": 100,
+  "rate_target": 0,
+  "elapsed_sec": 2.495971844,
+  "total_count": 20000,
+  "total_errors": 0,
+  "throughput_rps": 8012.910902051025,
+  "overall": {
+    "name": "overall",
+    "count": 20000,
+    "errors": 0,
+    "error_rate": 0,
+    "throughput_rps": 8012.910902051025,
+    "min_ms": 1.068,
+    "mean_ms": 12.622608699999983,
+    "p50_ms": 9.136,
+    "p90_ms": 15.189,
+    "p95_ms": 31.716,
+    "p99_ms": 116.21,
+    "p999_ms": 181.435,
+    "max_ms": 261.514
+  },
+  "by_endpoint": [
+    {
+      "name": "json",
+      "count": 20000,
+      "errors": 0,
+      "error_rate": 0,
+      "throughput_rps": 8012.910902051025,
+      "min_ms": 1.068,
+      "mean_ms": 12.622608699999983,
+      "p50_ms": 9.136,
+      "p90_ms": 15.189,
+      "p95_ms": 31.716,
+      "p99_ms": 116.21,
+      "p999_ms": 181.435,
+      "max_ms": 261.514
+    }
+  ]
+}

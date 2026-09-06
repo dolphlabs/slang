@@ -6,26 +6,26 @@
 // primitives themselves. See demo/stress_harness/ for the driver and
 // demo/README.md for how to run it and what it found.
 
-pub struct CpuReq { n: int }
-pub struct CpuResp { n: int, prime_count: int, elapsed_ms: int }
+pub gc struct CpuReq { n: int }
+pub gc struct CpuResp { n: int, prime_count: int, elapsed_ms: int }
 
-pub struct AllocReq { n: int }
-pub struct AllocResp { n: int, sum: int, elapsed_ms: int }
+pub gc struct AllocReq { n: int }
+pub gc struct AllocResp { n: int, sum: int, elapsed_ms: int }
 
-pub struct JsonItem { key: str, value: int }
-pub struct JsonReq { tag: str, items: [JsonItem] }
-pub struct JsonResp { tag: str, item_count: int, total: int, elapsed_ms: int }
+pub gc struct JsonItem { key: str, value: int }
+pub gc struct JsonReq { tag: str, items: [JsonItem] }
+pub gc struct JsonResp { tag: str, item_count: int, total: int, elapsed_ms: int }
 
-pub struct SleepReq { ms: int }
-pub struct SleepResp { slept_ms: int }
+pub gc struct SleepReq { ms: int }
+pub gc struct SleepResp { slept_ms: int }
 
-pub struct ChanReq { n: int }
-pub struct ChanResp { n: int, prime_count: int, elapsed_ms: int }
+pub gc struct ChanReq { n: int }
+pub gc struct ChanResp { n: int, prime_count: int, elapsed_ms: int }
 
-pub struct FanoutReq { n: int, workers: int }
-pub struct FanoutResp { n: int, workers: int, prime_count: int, elapsed_ms: int }
+pub gc struct FanoutReq { n: int, workers: int }
+pub gc struct FanoutResp { n: int, workers: int, prime_count: int, elapsed_ms: int }
 
-pub struct CounterResp { count: int }
+pub gc struct CounterResp { count: int }
 
 // Trial division up to sqrt(i) for every i in [lo, hi), deliberately
 // with no early-exit once a factor is found (slang has no break) --

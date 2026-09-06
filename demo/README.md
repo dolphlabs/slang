@@ -54,7 +54,7 @@ its own C runtime.
 | `net.tls_*` | `main.sl`'s second listener, sharing the exact same routing as plain HTTP |
 | `json` (typed decode/encode, including nested structs and `map[str]Player`) | every `/api/*` route |
 | `proc` (`shutdown_requested`, `active_tasks`, `getenv`) | graceful shutdown + drain in `main.sl`, `PORT`/`TLS_PORT` |
-| `spawn` (real OS threads, one per connection) | `handle_http_conn`/`handle_tls_conn` |
+| `spawn` (M:N tasks, one per connection) | `handle_http_conn`/`handle_tls_conn` |
 | `chan[T]` | two uses: (1) as the state mutex described below, (2) is what makes `proc.active_tasks()`-based draining meaningful in the first place |
 | local package imports, `pub`, cross-package structs | `httpkit/`, `arcade/`, `content/` — three packages imported by `main.sl` the same way `examples/pkgdemo` does |
 | C interop: `extern fn`, `link` | `lib.c` (dice RNG) via `link "slangarcade";`, plus bare libc (`getpid`, `atoi`) needing no `link` at all |
@@ -255,33 +255,17 @@ rather than quietly smoothed over, because how they were found and
 fixed is as much a "clear picture" of the language as the happy path.
 
 **1. A secondary listener's accept loop can hang shutdown forever.**
-`SIGTERM`/`SIGINT` can only ever land on slang's main thread (every
-`spawn`ed thread has them blocked in its own mask — see
-`stmt.c`'s `spawn` codegen and the `proc` section of the top-level
-README). That's exactly what lets a blocked `net.accept()` on the main
-thread notice a shutdown signal. But the HTTPS listener in this demo
-runs its own accept loop on a *spawned* background thread (so the
-main thread stays free to run the plain-HTTP loop) — and a blocking
-`net.tls_accept()` there would never be interrupted, staying counted
-in `proc.active_tasks()` forever and hanging the drain loop in
-`main.sl`. Fixed by putting that listening socket in non-blocking mode
-and polling it (see `tls_accept_loop` in `main.sl`) instead of relying
-on signal interruption, which only ever works for the main thread's
-own blocking calls.
+Historically a blocking `net.tls_accept()` on a spawned task was never
+interrupted by SIGTERM. Both `net.accept` and `net.tls_accept` now
+park on the reactor and wake on shutdown (`Err("interrupted")`). One
+acceptor per listener — two parked waiters on the same fd orphan the
+first.
 
-**2. Fixing that revealed a real compiler bug**: an accepted
-connection's blocking mode is platform-defined, and on macOS it
-inherited `O_NONBLOCK` from the listening socket once *that* was
-switched to non-blocking for the fix above — so every accepted TLS
-connection silently became non-blocking too, and the very first
-`SSL_read` on it failed instantly with "would block," which the
-handler read as "connection closed" and hung up before the client had
-even sent its request. This was a latent gap in the compiler itself
-(`net.accept`/`net.tls_accept` never normalized an accepted socket's
-blocking mode), not specific to this app — fixed in
-`src/codegen/pkg_net/runtime_net.c` (`sl_net_ensure_blocking`, called
-from both `sl_net_accept` and `sl_net_tls_accept`), verified with the
-full compiler test suite plus this demo's own concurrent-load test.
+**2. Accepted sockets inherit non-blocking mode.** On macOS an
+accepted fd can inherit `O_NONBLOCK` from the listener. TLS I/O is
+non-blocking by design now and retries through the reactor
+(`SSL_ERROR_WANT_READ`/`WANT_WRITE`); a raw `SSL_read` without that
+loop still fails instantly with "would block."
 
 **3. Concurrent map/list mutation without synchronization hangs the
 process.** Ten simultaneous dice-roll requests, each a separate

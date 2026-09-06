@@ -200,7 +200,8 @@ int type_is_gc_ptr(CG *cg, const char *t) {
     if (is_arr(t) || is_map(t) || is_opt(t) || is_result(t) ||
         is_chan(t) || is_str(t) || is_bytes(t))
         return 1;
-    return struct_find_canon(cg, t) != NULL;
+    StructDef *sd = struct_find_canon(cg, t);
+    return sd && sd->is_gc;
     /* else: int / i8..u64 / float / f32 / bool / duration -- scalars,
      * never pointers */
 }
@@ -212,6 +213,15 @@ int type_is_gc_ptr(CG *cg, const char *t) {
  * between emit_struct_tracers (which only emits a tracer when this is
  * true) and every struct allocation call site (which needs the same
  * answer to know whether to reference that tracer or pass NULL). */
+int struct_type_is_gc(CG *cg, const char *t) {
+    StructDef *sd = struct_find_canon(cg, t);
+    return sd && sd->is_gc;
+}
+
+const char *struct_access(CG *cg, const char *t) {
+    return struct_type_is_gc(cg, t) ? "->" : ".";
+}
+
 int struct_has_gc_fields(CG *cg, StructDef *sd) {
     for (int j = 0; j < sd->nfields; j++)
         if (type_is_gc_ptr(cg, sd->ftypes[j]))
@@ -406,6 +416,36 @@ SpawnShape *spawn_shape_for(CG *cg, FuncSig *sig) {
     for (int j = 0; j < sig->nparams; j++)
         if (type_is_gc_ptr(cg, sig->param_slang[j])) { s->has_tracer = 1; break; }
     return s;
+}
+
+void var_scope_reset(CG *cg) {
+    cg->vars.count = 0;
+    cg->var_scope_sp = 0;
+}
+
+void var_scope_push(CG *cg) {
+    if (cg->var_scope_sp == cg->var_scope_cap) {
+        cg->var_scope_cap = cg->var_scope_cap ? cg->var_scope_cap * 2 : 8;
+        cg->var_scopes = (int *)xrealloc(cg->var_scopes,
+                                         (size_t)cg->var_scope_cap * sizeof(int));
+    }
+    cg->var_scopes[cg->var_scope_sp++] = cg->vars.count;
+}
+
+void var_scope_pop(CG *cg) {
+    if (cg->var_scope_sp <= 0) {
+        cg->vars.count = 0;
+        return;
+    }
+    cg->vars.count = cg->var_scopes[--cg->var_scope_sp];
+}
+
+void var_redecl_check(CG *cg, const char *name, int line) {
+    int start = cg->var_scope_sp ? cg->var_scopes[cg->var_scope_sp - 1] : 0;
+    for (int i = start; i < cg->vars.count; i++) {
+        if (!strcmp(cg->vars.items[i].name, name))
+            cg_error(line, "redeclaration of '%s' in the same scope", name);
+    }
 }
 
 void var_push(CG *cg, const char *name, const char *slang) {
@@ -779,8 +819,12 @@ const char *ctype_of(CG *cg, const char *t) {
         result_te(t, &tv, &tev);
         return xasprintf("%s *", res_cname(cg, tv, tev));
     }
-    if (struct_find_canon(cg, t))
-        return xasprintf("%s *", mangle_struct(t));
+    if (struct_find_canon(cg, t)) {
+        const char *m = mangle_struct(t);
+        if (struct_type_is_gc(cg, t))
+            return xasprintf("%s *", m);
+        return m;
+    }
     return NULL;
 }
 

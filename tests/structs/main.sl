@@ -46,3 +46,7 @@ let pts: [Point] = [p, q];
 push(pts, r.tl);
 println(len(pts));
 println(pts[2].x);
+
+let copy = p;
+copy.x = 99;
+println(p.x);

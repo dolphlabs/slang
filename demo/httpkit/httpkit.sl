@@ -11,13 +11,13 @@
 // bodies over loopback, but not a guarantee a production parser could
 // make.
 
-pub struct Request {
+pub gc struct Request {
     method: str,
     path: str,
     body: str,
 }
 
-pub struct Response {
+pub gc struct Response {
     status: i32,
     status_text: str,
     content_type: str,

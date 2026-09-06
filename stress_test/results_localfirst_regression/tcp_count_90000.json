@@ -1,0 +1,17 @@
+{
+  "label": "tcp_count_90000",
+  "addr": "127.0.0.1:9195",
+  "concurrency": 100,
+  "payload_bytes": 64,
+  "elapsed_sec": 4.020848731,
+  "total_count": 90000,
+  "total_errors": 0,
+  "throughput_rps": 22383.33397277959,
+  "min_ms": 0.035,
+  "mean_ms": 4.48833601111111,
+  "p50_ms": 0.225,
+  "p90_ms": 14.881,
+  "p95_ms": 16.395,
+  "p99_ms": 19.761,
+  "max_ms": 133.06
+}

@@ -393,8 +393,7 @@ static void emit_json_enc_body(CG *cg, JsonInst *it) {
 void emit_json_runtime(CG *cg) {
     if (!cg->want_json)
         return;
-    for (int i = 0; i < JSON_RUNTIME_LEN; i++)
-        emit_line(cg, "%s", JSON_RUNTIME[i]);
+    emit_runtime_file(cg, "sl_json.c");
 }
 
 void emit_json_codecs(CG *cg) {

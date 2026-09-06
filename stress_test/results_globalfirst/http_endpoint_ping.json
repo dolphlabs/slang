@@ -1,0 +1,42 @@
+{
+  "label": "http_endpoint_ping",
+  "base_url": "http://localhost:8095",
+  "concurrency": 100,
+  "rate_target": 0,
+  "elapsed_sec": 1.961295799,
+  "total_count": 20000,
+  "total_errors": 0,
+  "throughput_rps": 10197.339947496619,
+  "overall": {
+    "name": "overall",
+    "count": 20000,
+    "errors": 0,
+    "error_rate": 0,
+    "throughput_rps": 10197.339947496619,
+    "min_ms": 1.168,
+    "mean_ms": 9.69559255,
+    "p50_ms": 9.147,
+    "p90_ms": 12.917,
+    "p95_ms": 14.893,
+    "p99_ms": 22.249,
+    "p999_ms": 93.351,
+    "max_ms": 111.122
+  },
+  "by_endpoint": [
+    {
+      "name": "ping",
+      "count": 20000,
+      "errors": 0,
+      "error_rate": 0,
+      "throughput_rps": 10197.339947496619,
+      "min_ms": 1.168,
+      "mean_ms": 9.69559255,
+      "p50_ms": 9.147,
+      "p90_ms": 12.917,
+      "p95_ms": 14.893,
+      "p99_ms": 22.249,
+      "p999_ms": 93.351,
+      "max_ms": 111.122
+    }
+  ]
+}

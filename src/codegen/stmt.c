@@ -94,6 +94,12 @@ static int emit_backedge_enter(CG *cg, void *backedge_live_set,
     return 1;
 }
 
+static void gen_scoped_block(CG *cg, Block *b) {
+    var_scope_push(cg);
+    gen_block(cg, b);
+    var_scope_pop(cg);
+}
+
 void gen_stmt(CG *cg, Stmt *s) {
     switch (s->kind) {
     case ST_LET: {
@@ -109,6 +115,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                          "cannot infer the element type of an empty list; "
                          "annotate it, e.g. let xs: [int] = []");
             char *elem = arr_elem(ann);
+            var_redecl_check(cg, s->as.let.name, s->line);
             var_push(cg, s->as.let.name, ann);
             emit_line(cg, "%s %s = sl_arr_new(sizeof(%s), %d);",
                       ctype_of(cg, ann), sanitize_ident(s->as.let.name),
@@ -125,6 +132,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                          "map; annotate it, e.g. let m: map[str]int = {}");
             char *k, *v;
             map_kv(ann, &k, &v);
+            var_redecl_check(cg, s->as.let.name, s->line);
             var_push(cg, s->as.let.name, ann);
             emit_line(cg, "%s %s = sl_map_new(sizeof(%s), sizeof(%s), %d, %d, %d);",
                       ctype_of(cg, ann), sanitize_ident(s->as.let.name),
@@ -187,6 +195,7 @@ void gen_stmt(CG *cg, Stmt *s) {
             init = gen_expr(cg, s->as.let.init);
         init = maybe_cast(cg, t, it, init);
         cg->expect = saved_expect;
+        var_redecl_check(cg, s->as.let.name, s->line);
         var_push(cg, s->as.let.name, t);
         emit_line(cg, "%s %s = %s;", ctype_of(cg, t),
                   sanitize_ident(s->as.let.name), init);
@@ -229,7 +238,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                 char *val = maybe_cast(cg, sd->ftypes[fi], vt,
                                        gen_expr(cg, s->as.assign.value));
                 cg->expect = se2;
-                emit_line(cg, "%s->%s = %s;", b,
+                emit_line(cg, "%s%s%s = %s;", b, struct_access(cg, bt),
                           sanitize_ident(sd->fields[fi]), val);
                 break;
             }
@@ -278,7 +287,7 @@ void gen_stmt(CG *cg, Stmt *s) {
             char *val = maybe_cast(cg, sd->ftypes[fi], vt,
                                    gen_expr(cg, s->as.assign.value));
             cg->expect = se6;
-            emit_line(cg, "%s->%s = %s;", b,
+            emit_line(cg, "%s%s%s = %s;", b, struct_access(cg, bt),
                       sanitize_ident(sd->fields[fi]), val);
             break;
         }
@@ -432,10 +441,10 @@ void gen_stmt(CG *cg, Stmt *s) {
             cg_error(s->line, "if condition must be bool (got %s)", ct);
         char *cond = gen_expr(cg, s->as.if_stmt.cond);
         emit_line(cg, "if (%s) {", cond);
-        gen_block(cg, s->as.if_stmt.then_blk);
+        gen_scoped_block(cg, s->as.if_stmt.then_blk);
         if (s->as.if_stmt.else_blk) {
             emit_line(cg, "} else {");
-            gen_block(cg, s->as.if_stmt.else_blk);
+            gen_scoped_block(cg, s->as.if_stmt.else_blk);
         }
         emit_line(cg, "}");
         break;
@@ -451,8 +460,10 @@ void gen_stmt(CG *cg, Stmt *s) {
         cg->loop_depth++;
         int saved_loop_bp = cg->cur_loop_has_bp;
         cg->cur_loop_has_bp = has_bp;
+        var_scope_push(cg);
         gen_stmts(cg, s->as.while_stmt.body->stmts,
                   s->as.while_stmt.body->count);
+        var_scope_pop(cg);
         cg->loop_depth--;
         cg->cur_loop_has_bp = saved_loop_bp;
         if (has_bp) {
@@ -470,9 +481,11 @@ void gen_stmt(CG *cg, Stmt *s) {
             cg_error(s->line,
                      "range bounds must be integers (got %s and %s)", st,
                      et);
-        var_push(cg, s->as.for_stmt.name, "int");
         char *start = gen_expr(cg, s->as.for_stmt.start);
         char *end = gen_expr(cg, s->as.for_stmt.end);
+        var_scope_push(cg);
+        var_redecl_check(cg, s->as.for_stmt.name, s->line);
+        var_push(cg, s->as.for_stmt.name, "int");
         char *endvar = xasprintf("sl_end_%d", cg->tmp_id++);
         const char *op = s->as.for_stmt.inclusive ? "<=" : "<";
         char *vname = sanitize_ident(s->as.for_stmt.name);
@@ -486,7 +499,9 @@ void gen_stmt(CG *cg, Stmt *s) {
         cg->loop_depth++;
         int saved_loop_bp = cg->cur_loop_has_bp;
         cg->cur_loop_has_bp = has_bp;
+        var_scope_push(cg);
         gen_stmts(cg, s->as.for_stmt.body->stmts, s->as.for_stmt.body->count);
+        var_scope_pop(cg);
         cg->loop_depth--;
         cg->cur_loop_has_bp = saved_loop_bp;
         if (has_bp) {
@@ -497,6 +512,7 @@ void gen_stmt(CG *cg, Stmt *s) {
         emit_line(cg, "}");
         cg->indent--;
         emit_line(cg, "}");
+        var_scope_pop(cg);
         break;
     }
     case ST_FOR_IN: {
@@ -504,9 +520,11 @@ void gen_stmt(CG *cg, Stmt *s) {
         int id = cg->tmp_id++;
         char *iter = gen_expr(cg, s->as.for_in.iter);
         char *vname = sanitize_ident(s->as.for_in.name);
+        var_scope_push(cg);
         if (is_arr(it)) {
             char *elem = arr_elem(it);
             const char *ec = ctype_of(cg, elem);
+            var_redecl_check(cg, s->as.for_in.name, s->line);
             var_push(cg, s->as.for_in.name, elem);
             emit_line(cg, "{");
             cg->indent++;
@@ -523,7 +541,7 @@ void gen_stmt(CG *cg, Stmt *s) {
             cg->loop_depth++;
             int saved_loop_bp = cg->cur_loop_has_bp;
             cg->cur_loop_has_bp = has_bp;
-            gen_block(cg, s->as.for_in.body);
+            gen_scoped_block(cg, s->as.for_in.body);
             cg->loop_depth--;
             cg->cur_loop_has_bp = saved_loop_bp;
             if (has_bp) {
@@ -534,9 +552,11 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "}");
             cg->indent--;
             emit_line(cg, "}");
+            var_scope_pop(cg);
             break;
         }
         if (is_bytes(it)) {
+            var_redecl_check(cg, s->as.for_in.name, s->line);
             var_push(cg, s->as.for_in.name, "int");
             emit_line(cg, "{");
             cg->indent++;
@@ -552,7 +572,7 @@ void gen_stmt(CG *cg, Stmt *s) {
             cg->loop_depth++;
             int saved_loop_bp = cg->cur_loop_has_bp;
             cg->cur_loop_has_bp = has_bp;
-            gen_block(cg, s->as.for_in.body);
+            gen_scoped_block(cg, s->as.for_in.body);
             cg->loop_depth--;
             cg->cur_loop_has_bp = saved_loop_bp;
             if (has_bp) {
@@ -563,6 +583,7 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "}");
             cg->indent--;
             emit_line(cg, "}");
+            var_scope_pop(cg);
             break;
         }
         if (is_map(it)) {
@@ -575,7 +596,9 @@ void gen_stmt(CG *cg, Stmt *s) {
             const char *kc = ctype_of(cg, k);
             const char *vc = ctype_of(cg, v);
             char *v2name = sanitize_ident(s->as.for_in.name2);
+            var_redecl_check(cg, s->as.for_in.name, s->line);
             var_push(cg, s->as.for_in.name, k);
+            var_redecl_check(cg, s->as.for_in.name2, s->line);
             var_push(cg, s->as.for_in.name2, v);
             emit_line(cg, "{");
             cg->indent++;
@@ -599,7 +622,7 @@ void gen_stmt(CG *cg, Stmt *s) {
             cg->loop_depth++;
             int saved_loop_bp = cg->cur_loop_has_bp;
             cg->cur_loop_has_bp = has_bp;
-            gen_block(cg, s->as.for_in.body);
+            gen_scoped_block(cg, s->as.for_in.body);
             cg->loop_depth--;
             cg->cur_loop_has_bp = saved_loop_bp;
             if (has_bp) {
@@ -610,8 +633,10 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "}");
             cg->indent--;
             emit_line(cg, "}");
+            var_scope_pop(cg);
             break;
         }
+        var_scope_pop(cg);
         cg_error(s->line, "cannot iterate over a value of type %s", it);
         break;
     }
@@ -859,8 +884,9 @@ void gen_stmts(CG *cg, Stmt **stmts, int count) {
         cg->indent++;
         emit_line(cg, "%s _sl_g%d = %s;", oc, id, e);
         emit_line(cg, "if (!(_sl_g%d->%s)) {", id, is_res ? "ok" : "has");
-        gen_block(cg, s->as.guard_let.body);
+        gen_scoped_block(cg, s->as.guard_let.body);
         emit_line(cg, "}");
+        var_redecl_check(cg, s->as.guard_let.name, s->line);
         var_push(cg, s->as.guard_let.name, inner);
         emit_line(cg, "%s %s = _sl_g%d->v;", ic,
                   sanitize_ident(s->as.guard_let.name), id);

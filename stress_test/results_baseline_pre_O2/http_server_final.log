@@ -1,0 +1,9 @@
+Slang Arcade listening on http://localhost:8095
+  TLS disabled: no cert.pem/key.pem here -- run via ./run.sh to generate one, or see examples/httpsd/
+1 HTTP acceptor, 4 TLS acceptors, 128 workers per protocol (override with WORKERS=n)
+Ctrl-C (or SIGTERM) for a graceful shutdown -- in-flight requests
+are drained, not dropped. See demo/README.md.
+
+shutting down: waiting for acceptors to stop...
+waiting for in-flight connections to finish...
+goodbye!

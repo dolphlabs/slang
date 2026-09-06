@@ -3,30 +3,25 @@
 
 #include "internal.h"
 #include "liveness.h"
+#include "../rtpath.h"
 
 #include <string.h>
 
+void emit_runtime_file(CG *cg, const char *name) {
+    char *path = slang_runtime_file(name);
+    char *src = read_entire_file(path);
+    sb_append(cg->out, src);
+    size_t n = strlen(src);
+    if (n == 0 || src[n - 1] != '\n')
+        sb_nl(cg->out);
+}
+
 void emit_prelude(CG *cg) {
-    for (int i = 0; i < RUNTIME_LEN; i++)
-        emit_line(cg, "%s", RUNTIME[i]);
-    /* Tier 10: the precise mark-sweep collector, then the containers
-     * that allocate through it (chan/bytes/arr/map/strings) -- order
-     * matters now: RUNTIME_CONTAINERS references sl_gc_alloc/realloc
-     * and sl_rt_gc_blocked, all defined in RUNTIME_GC. */
-    for (int i = 0; i < RUNTIME_GC_LEN; i++)
-        emit_line(cg, "%s", RUNTIME_GC[i]);
-    for (int i = 0; i < RUNTIME_CONTAINERS_LEN; i++)
-        emit_line(cg, "%s", RUNTIME_CONTAINERS[i]);
-    /* Tier 11 first slice: dead code only, not wired to anything below --
-     * see runtime_sched.c's own header comment. */
-    for (int i = 0; i < RUNTIME_SCHED_LEN; i++)
-        emit_line(cg, "%s", RUNTIME_SCHED[i]);
-    /* Tier 11 second slice: also dead code -- see runtime_pool.c's own
-     * header comment. Emitted last since it needs sl_ctx_switch/
-     * sl_task_stack_init (RUNTIME_SCHED) and sl_gc_register_thread/
-     * sl_rt_gc_checkin (RUNTIME_GC) already visible. */
-    for (int i = 0; i < RUNTIME_POOL_LEN; i++)
-        emit_line(cg, "%s", RUNTIME_POOL[i]);
+    emit_runtime_file(cg, "sl_core.c");
+    emit_runtime_file(cg, "sl_gc.c");
+    emit_runtime_file(cg, "sl_containers.c");
+    emit_runtime_file(cg, "sl_sched.c");
+    emit_runtime_file(cg, "sl_pool.c");
 }
 
 
@@ -104,6 +99,7 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
             sd->pkg = p->name;
             sd->name = s->as.struct_decl.name;
             sd->is_pub = s->as.struct_decl.is_pub;
+            sd->is_gc = s->as.struct_decl.is_gc;
             sd->fields = s->as.struct_decl.fields;
             sd->ftypes = (const char **)s->as.struct_decl.ftypes;
             sd->nfields = s->as.struct_decl.nfields;
@@ -123,6 +119,15 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
                              sd->fields[j], sd->canonical);
             }
             sd->ftypes[j] = canon_type(cg, sd->ftypes[j], sd->line);
+        }
+        if (!sd->is_gc) {
+            for (j = 0; j < sd->nfields; j++) {
+                if (type_is_gc_ptr(cg, sd->ftypes[j]))
+                    cg_error(sd->line,
+                             "value struct '%s' cannot contain gc field "
+                             "'%s' (type %s); use 'gc struct'",
+                             sd->canonical, sd->fields[j], sd->ftypes[j]);
+            }
         }
     }
 
@@ -288,7 +293,7 @@ void emit_struct_types(CG *cg) {
 void emit_struct_tracers(CG *cg) {
     for (int i = 0; i < cg->structs.count; i++) {
         StructDef *sd = &cg->structs.items[i];
-        if (!struct_has_gc_fields(cg, sd))
+        if (!sd->is_gc || !struct_has_gc_fields(cg, sd))
             continue;
         char *m = mangle_struct(sd->canonical);
         emit_line(cg, "static void sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
@@ -421,17 +426,13 @@ void emit_native_runtime(CG *cg) {
     if (!want_time && !want_net && !want_proc)
         return;
     if (want_time)
-        for (int i = 0; i < TIME_RUNTIME_LEN; i++)
-            emit_line(cg, "%s", TIME_RUNTIME[i]);
+        emit_runtime_file(cg, "sl_time.c");
     if (want_net)
-        for (int i = 0; i < NET_RUNTIME_LEN; i++)
-            emit_line(cg, "%s", NET_RUNTIME[i]);
+        emit_runtime_file(cg, "sl_net.c");
     if (cg->want_tls)
-        for (int i = 0; i < TLS_RUNTIME_LEN; i++)
-            emit_line(cg, "%s", TLS_RUNTIME[i]);
+        emit_runtime_file(cg, "sl_tls.c");
     if (want_proc)
-        for (int i = 0; i < PROC_RUNTIME_LEN; i++)
-            emit_line(cg, "%s", PROC_RUNTIME[i]);
+        emit_runtime_file(cg, "sl_proc.c");
 }
 
 /* Emit the args-struct + task entry function for every distinct
@@ -637,13 +638,16 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
 void gen_function(CG *cg, Package *p, FuncDecl *f) {
     FuncSig *sig = sig_find_in(cg, p->name, f->name);
 
-    cg->vars.count = 0; /* fresh scope per function */
+    var_scope_reset(cg);
+    var_scope_push(cg);
     cg->in_function = 1;
     cg->cur_ret = sig->ret_slang;
     cg->cur_pkg = p->name;
 
-    for (int j = 0; j < f->nparams; j++)
+    for (int j = 0; j < f->nparams; j++) {
+        var_redecl_check(cg, f->params[j], f->line);
         var_push(cg, f->params[j], sig->param_slang[j]);
+    }
 
     StrBuf params;
     sb_init(&params);
@@ -720,7 +724,8 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
      * not set to 1 the way a real gen_function call would: top-level
      * `return` must stay a hard compile error (ST_RETURN's own check,
      * stmt.c), exactly as before this wrapper existed. */
-    cg->vars.count = 0;
+    var_scope_reset(cg);
+    var_scope_push(cg);
     cg->cur_pkg = pkgs[main_index].name;
     emit_line(cg, "static void sl_main_task_entry(void *_sl_unused_arg) {");
     emit_line(cg, "    (void)_sl_unused_arg;");
@@ -814,7 +819,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
      * only way the process ever legitimately exits is a direct exit()
      * call from somewhere, regardless of which thread is inside
      * sl_worker_run_loop at that moment. */
-    emit_line(cg, "    sl_worker_after_switch(sl_rt_main_task, -1);");
+    emit_line(cg, "    sl_worker_after_switch(sl_rt_main_task);");
     /* Tier 11 eighth slice: -1, not a real sl_pool_slots index -- this
      * is main's own original OS thread, not one of sl_pool_workers[],
      * and the async-preemption ticker's own scope note excludes it

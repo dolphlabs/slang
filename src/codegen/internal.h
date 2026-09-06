@@ -29,6 +29,7 @@ typedef struct {
     char *pkg;
     char *name;          /* simple name within its package */
     int is_pub;
+    int is_gc;
     char **fields;
     const char **ftypes; /* canonical slang field types */
     int nfields;
@@ -185,6 +186,9 @@ struct CG {
     StrBuf *out;
     int indent;
     VarTable vars;
+    int *var_scopes;
+    int var_scope_sp;
+    int var_scope_cap;
     ExprTmpTable expr_tmps;
     /* Tier 10: a single global stack (shared across every nesting
      * level, save/restored per gen_call the same way cg->expect is)
@@ -289,50 +293,14 @@ typedef struct {
  * table (if any) in sigs.c, its embedded runtime in runtime*.c. */
 /* ------------------------------------------------------------------ */
 
-extern const char *RUNTIME[]; /* always-on prelude, src/codegen/runtime_core.c */
-extern const int RUNTIME_LEN;
-
-extern const char *RUNTIME_GC[]; /* precise mark-sweep collector, src/codegen/runtime_gc.c */
-extern const int RUNTIME_GC_LEN;
-
-extern const char *RUNTIME_CONTAINERS[]; /* chan/bytes/arr/map/strings,
-                                             src/codegen/runtime_core.c --
-                                             after RUNTIME_GC, which they
-                                             allocate through */
-extern const int RUNTIME_CONTAINERS_LEN;
-
-extern const char *RUNTIME_SCHED[]; /* Tier 11 first slice: growable-stack
-                                        tasks on a hand-rolled context
-                                        switch, src/codegen/runtime_sched.c
-                                        -- landed as dead code, not yet
-                                        wired to any call site */
-extern const int RUNTIME_SCHED_LEN;
-
-extern const char *RUNTIME_POOL[]; /* Tier 11 second slice: run queue +
-                                       worker pool, src/codegen/runtime_pool.c
-                                       -- landed as dead code, not yet
-                                       wired to any call site */
-extern const int RUNTIME_POOL_LEN;
-
 extern const NatSig TIME_SIGS[]; /* src/codegen/pkg_time/ */
 extern const int TIME_SIGS_LEN;
-extern const char *TIME_RUNTIME[];
-extern const int TIME_RUNTIME_LEN;
 
 extern const NatSig NET_SIGS[]; /* src/codegen/pkg_net/ */
 extern const int NET_SIGS_LEN;
-extern const char *NET_RUNTIME[];
-extern const int NET_RUNTIME_LEN;
-extern const char *TLS_RUNTIME[];
-extern const int TLS_RUNTIME_LEN;
-
-extern const char *JSON_RUNTIME[]; /* src/codegen/pkg_json/ */
-extern const int JSON_RUNTIME_LEN;
 
 extern const NatSig PROC_SIGS[]; /* src/codegen/pkg_proc/ */
 extern const int PROC_SIGS_LEN;
-extern const char *PROC_RUNTIME[];
-extern const int PROC_RUNTIME_LEN;
 
 /* ------------------------------------------------------------------ */
 /* Functions (declarations generated from every former 'static' def)   */
@@ -363,6 +331,8 @@ int is_result(const char *t);
 int is_chan(const char *t);
 int type_is_gc_ptr(CG *cg, const char *t);
 int struct_has_gc_fields(CG *cg, StructDef *sd);
+int struct_type_is_gc(CG *cg, const char *t);
+const char *struct_access(CG *cg, const char *t);
 char *opt_inner(const char *t);
 char *chan_elem(const char *t);
 void result_te(const char *t, char **tv, char **ev);
@@ -378,6 +348,10 @@ const char *opt_cname(CG *cg, const char *inner);
 const char *res_cname(CG *cg, const char *tv, const char *te);
 SpawnShape *spawn_shape_for(CG *cg, FuncSig *sig);
 void var_push(CG *cg, const char *name, const char *slang);
+void var_scope_reset(CG *cg);
+void var_scope_push(CG *cg);
+void var_scope_pop(CG *cg);
+void var_redecl_check(CG *cg, const char *name, int line);
 VarSym *var_find(CG *cg, const char *name);
 void expr_tmp_register(CG *cg, Expr *e, const char *name);
 const char *expr_tmp_find(CG *cg, Expr *e);
@@ -442,6 +416,7 @@ void gen_print(CG *cg, Expr *call, int newline);
 void gen_stmt(CG *cg, Stmt *s);
 void gen_stmts(CG *cg, Stmt **stmts, int count);
 void gen_block(CG *cg, Block *b);
+void emit_runtime_file(CG *cg, const char *name);
 void emit_prelude(CG *cg);
 void sig_register_raw(CG *cg, Package *p, FuncDecl *f,
                              const char *method_of);

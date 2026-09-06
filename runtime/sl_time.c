@@ -1,0 +1,149 @@
+#include <time.h>
+#include <errno.h>
+
+/* ---- time: monotonic + wall clock; duration is nanoseconds ---- */
+
+static long long sl_time_mono(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
+}
+
+static long long sl_time_wall(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
+}
+
+/* Tier 11 fifth slice: time.sleep now PARKS the calling task
+ * (sl_task_park/sl_task_resume, runtime_pool.c) instead of blocking
+ * the OS thread in nanosleep. Unlike chan, nothing else ever
+ * 'satisfies' a sleeping task's wait -- there's no other task to
+ * hand off to -- so this package builds the one piece that's
+ * genuinely new: a sorted-by-deadline wait list plus one dedicated
+ * background thread that actively notices deadlines passing and
+ * calls sl_task_resume on their behalf. Package-local (not core
+ * scheduler infrastructure like sl_global_runq/sl_parked_tasks),
+ * since only time.sleep needs it. See the Tier 11 plan for the full
+ * design and the review findings -- notably: this machine's pthread
+ * has no pthread_condattr_setclock, so pthread_cond_timedwait's
+ * absolute deadline is CLOCK_REALTIME-based here, unlike the old
+ * nanosleep-based sleep (relative-duration, immune to wall-clock
+ * jumps) -- deadlines are tracked in monotonic time throughout, and
+ * the timer thread never waits longer than SL_TIME_MAX_WAIT_NS in
+ * one pthread_cond_timedwait call, re-deriving a fresh REALTIME
+ * absolute timeout from the monotonic remaining time every
+ * iteration, bounding (not eliminating) the wall-clock-jump drift a
+ * single long precise wait would otherwise leave unbounded. */
+static sl_task *sl_time_sleepers = NULL; /* sorted earliest-deadline-
+    first, linked via sl_task.next -- guarded by sl_time_mu */
+static pthread_mutex_t sl_time_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t sl_time_cond = PTHREAD_COND_INITIALIZER;
+
+#define SL_TIME_MAX_WAIT_NS 1000000000LL
+
+static void sl_time_insert(sl_task *t, long long deadline_ns) {
+    t->sleep_deadline_ns = deadline_ns;
+    sl_task **pp = &sl_time_sleepers;
+    while (*pp && (*pp)->sleep_deadline_ns <= deadline_ns) pp = &(*pp)->next;
+    t->next = *pp;
+    *pp = t;
+}
+
+/* Runs until process exit, same convention sl_worker_loop's own
+ * workers already follow -- no shutdown call exists for it either.
+ * Deliberately NOT registered with the GC thread registry: it never
+ * drives a task (no sl_ctx_switch calls of its own) and never
+ * touches a GC-scanned field, only the plain, non-GC-managed
+ * `next`/`sleep_deadline_ns` fields on an already-sl_parked_tasks-
+ * rooted task, and sl_task_resume itself (which needs no caller
+ * registration -- already proven safe from an unregistered caller
+ * context in exactly this shape by sl_chan_send/recv's own
+ * identical use of it). */
+static void *sl_time_thread(void *arg) {
+    (void)arg;
+    pthread_mutex_lock(&sl_time_mu);
+    for (;;) {
+        long long now_ns = sl_time_mono();
+        while (sl_time_sleepers && sl_time_sleepers->sleep_deadline_ns <= now_ns) {
+            sl_task *t = sl_time_sleepers;
+            sl_time_sleepers = t->next;
+            t->next = NULL;
+            sl_task_resume(t); /* safe while holding sl_time_mu -- only
+                touches sl_gc_mu and sl_global_runq.mu, a
+                deadlock-free ordering already proven by chan's
+                identical use of sl_task_resume */
+        }
+        long long wait_ns = sl_time_sleepers
+            ? sl_time_sleepers->sleep_deadline_ns - now_ns : -1;
+        if (wait_ns < 0) {
+            pthread_cond_wait(&sl_time_cond, &sl_time_mu); /* nothing
+                pending -- wait indefinitely for the next insert */
+            continue;
+        }
+        if (wait_ns > SL_TIME_MAX_WAIT_NS) wait_ns = SL_TIME_MAX_WAIT_NS;
+        struct timespec rt;
+        clock_gettime(CLOCK_REALTIME, &rt);
+        long long target_ns = (long long)rt.tv_sec * 1000000000LL + rt.tv_nsec + wait_ns;
+        struct timespec abstime;
+        abstime.tv_sec = (time_t)(target_ns / 1000000000LL);
+        abstime.tv_nsec = (long)(target_ns % 1000000000LL);
+        pthread_cond_timedwait(&sl_time_cond, &sl_time_mu, &abstime);
+        /* loops back regardless of why it woke -- timeout, signal, or
+           spurious -- and re-derives everything from the monotonic
+           clock and the list's own current head, never trusting the
+           wake reason itself */
+    }
+    return NULL; /* unreachable -- runs until process exit */
+}
+
+/* Called once from main() (program.c), gated on 'time' being
+ * imported at all. Tier 11 sixth slice: no longer takes a
+ * block_signals parameter -- SIGTERM/SIGINT are blocked exactly
+ * ONCE, at the very top of main(), before any thread (including
+ * this one) is created, so this thread inherits the blocked mask
+ * automatically. See sl_pool_start's own comment (runtime_pool.c)
+ * for the full reasoning. */
+static void sl_time_start(void) {
+    pthread_t th;
+    if (pthread_create(&th, NULL, sl_time_thread, NULL) != 0) {
+        fprintf(stderr, "slang: failed to start timer thread\n");
+        exit(1);
+    }
+}
+
+static void sl_time_sleep(long long ns) {
+    /* Tier 11 eighth slice: bracketed entry-to-return -- see
+     * sl_chan_send/recv's own identical bracket and comment
+     * (runtime_core.c) for the exact hazard this closes: sl_time_insert
+     * below writes sl_rt_current_task->next to link into
+     * sl_time_sleepers, and an async signal landing before
+     * sl_task_park's own switch completes would let
+     * sl_worker_after_switch overwrite that same ->next link pushing
+     * this task onto sl_global_runq instead -- corrupting the sleeper
+     * list. */
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&sl_time_mu);
+    /* sl_rt_cur(), not a raw read: this call sits before the park, so
+     * in isolation a raw read is fine -- but generated code calls
+     * time.sleep from inside loops (the active_tasks() drain loop in
+     * demo/main.sl and stress_test/programs/worker_fanout, for two),
+     * and once this body is inlined at -O2 the read lands inside that
+     * loop where its thread-affine address can be hoisted above the
+     * park a previous iteration performed. Same hazard, same fix, as
+     * sl_chan_send/sl_chan_recv (runtime_core.c). */
+    sl_time_insert(sl_rt_cur(), sl_time_mono() + ns);
+    pthread_cond_signal(&sl_time_cond); /* wake the timer thread in
+        case this is now the earliest deadline -- always safe to
+        signal unconditionally, worst case a harmless extra
+        wake-and-recheck */
+    sl_task_park(&sl_time_mu); /* leaves sl_time_mu locked across the
+        switch -- see sl_task_park's own comment (runtime_pool.c) */
+    /* resumes here once the timer thread confirms the deadline
+       passed and calls sl_task_resume -- no loop/recheck needed,
+       unlike chan: nothing else could ever resume a sleeping task
+       except the timer thread deciding its own deadline has
+       passed */
+    sl_rt_preempt_enable();
+}
+

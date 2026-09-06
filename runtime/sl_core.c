@@ -1,0 +1,788 @@
+#define _XOPEN_SOURCE 700
+#define _DARWIN_C_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdatomic.h>
+#include <pthread.h>
+#include <signal.h>
+#include <ucontext.h>
+#include <unistd.h>
+#include <time.h>
+
+/* ---- slang runtime ---- */
+
+/* number of 'spawn'ed tasks currently running -- incremented right
+ * before pthread_create, decremented once the task's function
+ * returns OR (via sl_rt_error below) panics; proc.active_tasks()
+ * reads this so a shutting-down program can wait out in-flight
+ * work instead of dropping it. Maintained unconditionally whenever
+ * 'spawn' is used, whether or not the program imports 'proc'. */
+static atomic_llong sl_rt_active_spawns = 0;
+
+static void sl_rt_active_spawns_inc(void) {
+    atomic_fetch_add(&sl_rt_active_spawns, 1);
+}
+
+static void sl_rt_active_spawns_dec(void) {
+    atomic_fetch_sub(&sl_rt_active_spawns, 1);
+}
+
+/* Tier 11 sixth slice: set by the dedicated signal thread
+ * (pkg_proc/runtime.c, only exists if 'proc' is imported) once a
+ * real SIGTERM/SIGINT arrives via sigwait(); read by
+ * proc.shutdown_requested() and by the reactor's own park loop
+ * (pkg_net/runtime_net.c) to abort accept/recv/dial waits. Defined
+ * here, unconditionally, rather than in pkg_proc/runtime.c where it
+ * conceptually belongs, for the same ordering reason as everything
+ * else in this array: pkg_net's own runtime is emitted BEFORE
+ * pkg_proc's (see emit_native_runtime, program.c), so a program
+ * importing 'net' without 'proc' still needs this symbol to exist
+ * at NET_RUNTIME's own emission point -- it simply never becomes 1
+ * in that case, since only the signal thread ever sets it, and that
+ * thread only exists when 'proc' is imported. A real _Atomic int,
+ * not the old volatile sig_atomic_t: that type was only required
+ * because the flag used to be touched from inside an actual
+ * async-signal-handler context (sigaction-based); sigwait()-based
+ * delivery runs as ordinary code in a normal thread, so no
+ * async-signal-safety constraint applies here anymore. */
+static _Atomic int sl_rt_shutdown_flag = 0;
+
+/* Tier 11 sixth slice: a single, always-defined hook the signal
+ * thread calls unconditionally (checking for NULL) on shutdown, so
+ * it can nudge whichever parking primitives need an early wake --
+ * today only the reactor (pkg_net/runtime_net.c, which sets this to
+ * its own nudge function in sl_reactor_start if 'net' is imported).
+ * A program can import 'proc' without 'net' at all, in which case
+ * pkg_net's own symbols are never emitted -- the signal thread
+ * cannot reference them directly without a compile error in that
+ * case, hence this indirection instead of a direct call. */
+static void (*sl_rt_shutdown_hook)(void) = NULL;
+
+/* Tier 10: a lexically-scoped chain of GC root lists, one per
+ * currently in-flight call-site safepoint on this thread (the
+ * same 'handle stack' shape OCaml's C FFI CAMLparam/CAMLlocal
+ * uses). Walked by the collector (runtime_gc.c) via each
+ * registered thread's own copy of this pointer. _Thread_local, so
+ * every OS thread (main, the worker pool) gets its own independent,
+ * correctly zero-initialized chain for free. */
+typedef struct sl_safepoint {
+    struct sl_safepoint *prev;
+    void **roots;
+    int nroots;
+} sl_safepoint;
+
+typedef struct sl_gc_obj sl_gc_obj;
+
+/* Tier 11 first slice: the struct that will eventually be a real
+ * scheduled task (src/codegen/runtime_sched.c has the rest of that
+ * machinery -- context switch, growable stack, grow-and-relocate).
+ * Defined here rather than there because sl_rt_safepoint_enter/exit
+ * just below need sl_task's COMPLETE type at their own definition
+ * site (they dereference ->safepoint_top), and runtime_sched.c is
+ * emitted much later (after RUNTIME_GC and RUNTIME_CONTAINERS) --
+ * a plain ordering requirement, not a change of ownership. For this
+ * slice every OS thread (main, each spawned pthread) still gets
+ * exactly one sl_task, created and torn down with the thread itself
+ * (see sl_gc_register_thread, runtime_gc.c) -- no scheduler, no
+ * second task, nothing behaviorally different from before. */
+typedef struct sl_task {
+    void *stack_base;   /* 16-byte-aligned usable base -- may NOT be
+                           what malloc() actually returned; see
+                           raw_base below */
+    void *raw_base;     /* the actual malloc() return value for the
+                           current stack_base -- free() THIS, never
+                           stack_base directly. malloc() isn't
+                           guaranteed by the C standard to already
+                           return 16-aligned memory (it happens to,
+                           on this machine's allocator, which is
+                           exactly why freeing stack_base looked fine
+                           in testing without actually being
+                           correct) */
+    size_t stack_size;
+    void *rsp;
+    struct sl_safepoint *safepoint_top;
+    int grows_seen;
+    struct sl_task *next;    /* run-queue link, runtime_pool.c */
+    void *entry_arg;         /* the task's own entry-fn argument --
+                                rooted directly by the collector while
+                                queued (a not-yet-started task's
+                                safepoint chain is empty), and by the
+                                task's own chain once it starts
+                                running normally. See runtime_pool.c
+                                and sl_gc_collect's run-queue walk
+                                (runtime_gc.c) for both halves. */
+    int is_main;             /* Tier 11 fourth slice: task-scoped (not
+                                thread-scoped) replacement for the old
+                                sl_rt_is_main_thread -- set once, only
+                                for main()'s own top-level task. A
+                                _Thread_local flag was safe only as
+                                long as main's OS thread could never
+                                run any task but its own; once it can
+                                park (chan_send/recv) and its thread
+                                joins the worker pool afterward, that
+                                stopped being true -- sl_rt_error
+                                below reads this per-TASK instead. */
+    int parked;              /* set by sl_task_park (runtime_pool.c)
+                                right before switching out; read and
+                                cleared by sl_worker_after_switch
+                                right after switching back in. */
+    pthread_mutex_t *park_mu; /* the mutex sl_worker_after_switch must
+                                unlock, once, immediately after the
+                                switch is safely complete -- NULL if
+                                not currently parked. */
+    struct sl_task *parked_next; /* sl_parked_tasks linkage -- kept
+                                separate from `next` above, since a
+                                parked task is on BOTH a primitive-
+                                specific wait list (via `next`, e.g.
+                                a channel's own send/recv_waiters) AND
+                                this global GC registry (via this
+                                field) at the same time. */
+    long long sleep_deadline_ns; /* Tier 11 fifth slice: monotonic-ns
+                                absolute wake time -- meaningful only
+                                while this task is linked into
+                                sl_time_sleepers (pkg_time/runtime.c)
+                                via `next`, exactly like park_mu is
+                                meaningful only while parked. */
+    long long run_start_ns;  /* Tier 11 seventh slice (cooperative
+                                preemption): monotonic time this task's
+                                CURRENT stint on an OS thread began --
+                                set fresh by whoever switches INTO this
+                                task (sl_worker_run_loop's normal
+                                dispatch, and main's own one-off
+                                switch-in, program.c), covering a fresh
+                                submit, a resume-from-park, AND a
+                                resume-from-preemption-yield uniformly. */
+    unsigned long yield_check_counter; /* sampling counter for
+                                sl_rt_maybe_yield -- see there. Per-task,
+                                not per-thread, so it travels correctly
+                                with a task that migrates OS threads. */
+    int preempted;           /* set by sl_task_yield_now (runtime_pool.c)
+                                right before switching out; read and
+                                cleared by sl_worker_after_switch right
+                                after switching back in -- same shape as
+                                `parked` above, but mutually exclusive
+                                with it: sl_task_park and
+                                sl_task_yield_now are the only setters
+                                of either flag, and neither can be
+                                in flight while the other runs (both
+                                only ever execute as the one currently-
+                                running task's own code, on its own
+                                OS thread, one at a time). */
+    _Atomic int preempt_disable_depth; /* Tier 11 eighth slice (async
+                                preemption): 0 = safe to async-preempt
+                                this task right now. Incremented by
+                                sl_preempt_handler as part of a
+                                successful PC rewrite (before it
+                                returns) and decremented by the
+                                trampoline's own tail, as the LAST
+                                register-safe instant before its final
+                                jmp -- not any earlier, which the
+                                standalone spike's own review found
+                                still leaves a real, if narrow, re-
+                                entrancy window (see the Tier 11 plan's
+                                'Spike findings' section, Bug 1).
+                                Bracketed by every existing runtime
+                                function enumerated there (sl_gc_alloc,
+                                sl_task_park/resume/yield_now,
+                                sl_task_stack_grow, sl_runq_push/
+                                pop_blocking, chan/reactor/time's own
+                                lock-held sections) so a task is never
+                                async-preempted while holding one of
+                                the runtime's own internal locks or
+                                mid-transition. Primed to 1, not 0, by
+                                sl_task_stack_init -- a task's virgin,
+                                never-yet-dispatched first stint has a
+                                real, empirically-reproduced vulnerable
+                                window of its own (Bug 2), closed the
+                                same way a resumed task's window
+                                already is: held elevated until the
+                                task's own first real instruction
+                                releases it. */
+    _Atomic int async_preempt_pending; /* ticker->handler de-dup --
+                                set by the ticker right before
+                                pthread_kill, cleared unconditionally
+                                as the handler's first action so a
+                                vetoed attempt doesn't permanently
+                                starve this task of future ticks. */
+    int async_preempted;      /* distinct from `preempted` above --
+                                tells sl_gc_collect's run-queue walk
+                                this task also needs the conservative
+                                register+stack scan (a signal can land
+                                anywhere, including inside an alloc-to-
+                                store gap no safepoint bracket covers),
+                                not just the precise safepoint-chain
+                                walk a cooperative yield/park already
+                                gets. */
+    void *async_orig_pc;      /* stashed by sl_preempt_handler before
+                                rewriting the interrupted PC; read back
+                                by the trampoline on resume, via a
+                                %rsp-relative effective address, never
+                                through a register (see
+                                runtime_sched.c). */
+    sl_gc_obj *gc_pend_head;
+    sl_gc_obj *gc_pend_tail;
+    long gc_pend_n;
+    size_t gc_pend_bytes;
+    size_t gc_pend_pub;
+} sl_task;
+
+/* Tier 11 second slice: the scheduler's own run queue. Defined here,
+ * not in runtime_pool.c where the rest of the pool machinery lives,
+ * for the same ordering reason as sl_task itself above --
+ * sl_gc_collect's own run-queue walk (runtime_gc.c, rooting every
+ * queued task's entry_arg) needs the complete type and the
+ * sl_global_runq variable both visible at its own definition site,
+ * well before RUNTIME_POOL is emitted. runtime_pool.c's own content
+ * just uses these, it doesn't redefine them. */
+typedef struct sl_runq {
+    sl_task *head, *tail;
+    pthread_mutex_t mu;
+    pthread_cond_t not_empty;
+    int shutdown;
+} sl_runq;
+static sl_runq sl_global_runq = {
+    .mu = PTHREAD_MUTEX_INITIALIZER,
+    .not_empty = PTHREAD_COND_INITIALIZER,
+};
+
+/* Tier 11 seventh slice: a relaxed, heuristic-only count of tasks
+ * currently sitting on sl_global_runq -- NOT used for any correctness
+ * decision, only to answer 'is anyone else waiting for a worker right
+ * now' from sl_rt_maybe_yield without taking q->mu on every checkpoint.
+ * An unsynchronized peek at q->head itself would be a real, TSan-
+ * flagged data race (concurrent unlocked read vs. locked writes); this
+ * sidesteps that with a properly-synchronized atomic instead. Updated,
+ * under q->mu (already held at both call sites), by sl_runq_push/
+ * sl_runq_pop_blocking (runtime_pool.c) -- exhaustive: those two
+ * functions are the only places a task ever enters or leaves this
+ * queue (sl_runq_shutdown does not drain it). A stale read here is
+ * harmless either way -- worst case, a spurious skipped or attempted
+ * yield, never a correctness issue -- so relaxed ordering is
+ * appropriate; nothing else is synchronized through this variable. */
+static _Atomic int sl_global_runq_count = 0;
+
+/* Tier 11 fourth slice: the global parked-task GC registry. A parked
+ * task (chan_send/recv, this slice; net/time, later) is reachable
+ * from neither a registered thread's task_slot (the worker that
+ * parked it reassigns that back to its own idle sentinel) nor the
+ * run queue (it's on some primitive's own wait list instead, e.g. a
+ * channel's send/recv_waiters) -- without this, its roots are simply
+ * never marked. Declared here, not in runtime_pool.c where the rest
+ * of the park/resume machinery lives, for the same ordering reason
+ * as sl_global_runq itself just above: sl_gc_collect needs the
+ * complete picture at its own definition site, well before
+ * RUNTIME_POOL is emitted. Guarded by sl_gc_mu. */
+static sl_task *sl_parked_tasks = NULL;
+
+/* sl_rt_current_task->safepoint_top is now the one live chain (it
+ * replaces what used to be a bare _Thread_local sl_safepoint*
+ * variable) -- sl_rt_task_storage is that thread's own sl_task,
+ * zeroed and pointed to by sl_rt_current_task inside
+ * sl_gc_register_thread() before any safepoint bracket can run.
+ * Both are _Thread_local for exactly the reason the old variable
+ * was: every OS thread (main, the worker pool, any spawn
+ * trampoline) gets its own independent, correctly zero-initialized
+ * copy for free. */
+static _Thread_local sl_task sl_rt_task_storage;
+static _Thread_local sl_task *sl_rt_current_task = NULL;
+
+/* Tier 11 eighth slice: the async-preemption generation counter, and
+ * the reason sl_rt_cur() below exists at all rather than every caller
+ * just reading sl_rt_current_task directly the way they all used to.
+ *
+ * Reading a _Thread_local is NOT a single instruction on Darwin. It is
+ * a CALL through the variable's TLV descriptor into dyld's own
+ * _tlv_get_addr, which returns THE CALLING THREAD'S address for that
+ * variable; the caller then dereferences it. Disassembled, every
+ * `sl_rt_current_task` read in this file compiles to exactly:
+ *
+ *     leaq  sl_rt_current_task(%rip), %rdi
+ *     callq *(%rdi)            # _tlv_get_addr -> %rax = THIS thread's slot
+ *     movq  (%rax), %rax       # %rax = the task
+ *
+ * and between those last two instructions %rax holds a THREAD-AFFINE
+ * ADDRESS. A green thread that is async-preempted anywhere in that
+ * window -- inside _tlv_get_addr's own body, or on the single
+ * instruction after it returns -- resumes on a DIFFERENT OS thread
+ * with that stale address still in %rax, and then loads the ORIGINAL
+ * worker's sl_rt_current_task, which by then names whatever task that
+ * worker picked up next (or its idle sentinel). Every caller then
+ * operates on the WRONG TASK. Concretely, and both reproduced:
+ *   - sl_rt_preempt_disable's increment lands on some other task while
+ *     the matching sl_rt_preempt_enable (a fresh, correct read on the
+ *     new thread) decrements this one -- so this task's own
+ *     preempt_disable_depth drifts NEGATIVE, its next legitimate
+ *     bracket reads 0 instead of 1, and sl_preempt_handler (whose
+ *     entire veto is 'depth != 0') async-preempts it in the middle of
+ *     a critical section. Caught red-handed: a task suspended inside
+ *     sl_gc_collect's own sweep, mid-free(), taking the whole process
+ *     down with it (every worker spinning in sl_gc_ack_and_wait for a
+ *     collection whose collector was sitting on the run queue).
+ *   - sl_rt_safepoint_exit, which reads the TLS variable TWICE (once
+ *     to load ->safepoint_top->prev, once to store it back), writes
+ *     this task's ->prev into a DIFFERENT task's safepoint_top --
+ *     silently over-popping a chain that belongs to someone else.
+ *     That is the sl_rt_safepoint_exit-with-safepoint_top==NULL crash,
+ *     and equally the collector walking a queued task's chain through
+ *     a dangling sl_safepoint*.
+ *
+ * Forcing a single-instruction TLS model would fix it at the root, but
+ * does not work here: clang on Darwin accepts
+ * __attribute__((tls_model("local-exec"))) / ("initial-exec") and
+ * then emits the identical _tlv_get_addr call anyway (verified by
+ * disassembling all three models). A PC-range veto in the handler
+ * cannot close it either -- the vulnerable window straddles dyld's
+ * text and the caller's, and its tail is a single instruction in
+ * arbitrary caller code.
+ *
+ * So instead of preventing the migration, sl_rt_cur() DETECTS it and
+ * redoes the read. This counter is bumped by sl_preempt_yield
+ * (runtime_sched.c) on the far side of every async suspension, i.e.
+ * after the task has been resumed and before it returns to the
+ * instruction it was interrupted at. A read that observes the same
+ * value before and after therefore provably did not straddle an async
+ * suspension of ITS OWN task, and its result is trustworthy. A bump by
+ * some OTHER task in the window is a false positive that costs one
+ * harmless retry. Global rather than per-task on purpose: finding the
+ * per-task counter would itself require the read we are trying to
+ * validate. Plain global, so reading it is a RIP-relative load with no
+ * thread-affine address anywhere in it. */
+static _Atomic unsigned long sl_rt_async_epoch = 0;
+
+/* The one safe way to ask 'which task am I' from code that can be
+ * async-preempted (i.e. anywhere preempt_disable_depth may be 0).
+ * Returns NULL on threads that never registered a task (the timer,
+ * reactor, ticker and signal threads), exactly like a bare read did.
+ *
+ * seq_cst on both loads is load-bearing and not superstition: the
+ * point is to pin the plain TLS read BETWEEN them, so neither the
+ * compiler nor the CPU may hoist it above the first load or sink it
+ * below the second. On x86_64 a seq_cst load is still a plain mov, so
+ * the steady-state cost is two extra loads and a compare.
+ *
+ * The loop is not a spin in any meaningful sense: the window it
+ * re-runs is a handful of instructions, and async suspensions arrive
+ * on the order of hundreds per second per worker, so a retry is
+ * already rare and a second consecutive one is vanishingly so.
+ *
+ * The rule this establishes, for anyone adding runtime code later:
+ * ANY read of sl_rt_current_task (or of any other _Thread_local in
+ * this runtime) that can execute with preempt_disable_depth == 0 must
+ * go through sl_rt_cur(). Reads already inside a preempt bracket are
+ * safe as they stand -- sl_preempt_handler cannot redirect a task with
+ * a non-zero depth, so no migration can occur mid-read there -- which
+ * is why sl_rt_error, sl_chan_send/recv, sl_task_park and friends keep
+ * their direct reads: each one is already downstream of its own
+ * sl_rt_preempt_disable(). The genuinely thread-affine values
+ * (sl_rt_native_rsp, sl_grower_stack/sl_grower_rsp, sl_rt_gc_blocked,
+ * sl_rt_gc_acked_cycle) are all read under a bracket for that same
+ * reason, and unlike a sl_task* they would still be wrong after a
+ * migration even if the address were resolved correctly.
+ * sl_preempt_handler itself is a deliberate exception in the other
+ * direction: it runs synchronously on the interrupted thread with the
+ * interrupted code stopped, so no migration can occur underneath it
+ * and a direct read there is not merely safe but the only meaningful
+ * one. */
+/* The actual thread-local read, deliberately opaque to the
+ * optimizer. This exists because sl_rt_cur's retry loop is useless
+ * without it -- a fact established by disassembly, not by argument.
+ *
+ * At -O0 the loop works. At -O2, clang hoisted BOTH the
+ * _tlv_get_addr call and the load out of the loop, leaving:
+ *
+ *     movq  sl_rt_async_epoch(%rip), %rcx
+ *     movq  sl_rt_async_epoch(%rip), %rdx
+ *     cmpq  %rdx, %rcx
+ *     jne   .retry
+ *     movq  0x20(%rax), %rcx      # %rax cached from far earlier
+ *
+ * i.e. it re-read the GUARD on every iteration and never re-read the
+ * thing being guarded, so it could not detect anything. The result
+ * was a hard SIGSEGV in ~35% of runs of tests/spawn at -O2, faulting
+ * on t->safepoint_top->prev with safepoint_top NULL -- precisely the
+ * symptom sl_rt_safepoint_exit's own comment predicts.
+ *
+ * The hoist is entirely legal, and the reason is worth stating
+ * plainly because it invalidates the obvious fix: sl_rt_current_task
+ * is _Thread_local, so the compiler knows NO OTHER THREAD CAN WRITE
+ * IT and is free to treat the read as loop-invariant. That also
+ * makes seq_cst atomics powerless here -- they order this thread's
+ * accesses as observed by others; they do not compel a re-read of a
+ * variable the compiler has already proved stable. (An earlier
+ * version of sl_rt_cur's comment claimed the two seq_cst loads
+ * 'pin the plain TLS read between them'. They do not, and the
+ * disassembly above is what settles it.) volatile alone is no fix
+ * either: it would force the LOAD to repeat while still letting the
+ * thread-affine ADDRESS be hoisted, which is the half that actually
+ * matters -- a repeated load from the wrong thread's slot is still
+ * wrong.
+ *
+ * So the barrier has to defeat the compiler's stability assumption
+ * outright. noinline stops the body being merged into a caller where
+ * it could be hoisted; the empty asm volatile with a memory clobber
+ * makes the call itself unmovable and un-CSE-able, so each call in
+ * sl_rt_cur's loop genuinely re-resolves the thread-local on
+ * whatever OS thread is running at that moment. */
+/* Gated on __OPTIMIZE__, and that gate is a correctness statement
+ * rather than a micro-optimization. The hazard IS the optimizer: at
+ * -O0 the compiler emits the _tlv_get_addr call and the load afresh
+ * on every iteration already, so the plain read is correct there and
+ * the barrier would buy nothing. It is not free, either -- sl_rt_cur
+ * runs at every safepoint enter and exit, and forcing an
+ * un-inlinable call there measured 10-15% slower on
+ * stress_test/programs/worker_fanout at -O0, which is the
+ * configuration slangc actually ships today (src/main.c passes no -O
+ * flag). Paying that at -O0 to fix a bug that cannot occur at -O0
+ * would be a straight loss, so the plain read stays there and the
+ * barrier appears only where the hoist it defeats is possible. */
+#ifdef __OPTIMIZE__
+__attribute__((noinline))
+static sl_task *sl_rt_tls_read_current_task(void) {
+    __asm__ __volatile__("" ::: "memory");
+    sl_task *t = sl_rt_current_task;
+    __asm__ __volatile__("" : "+r"(t) :: "memory");
+    return t;
+}
+#define SL_RT_TLS_CUR() sl_rt_tls_read_current_task()
+#else
+/* A macro, not a static inline wrapper: at -O0 clang does not inline
+ * anything, so a wrapper function would still cost a real call per
+ * safepoint enter and exit -- the very overhead this gate exists to
+ * avoid. Expanding to the bare read makes the -O0 path byte-for-byte
+ * what it was before this accessor existed. */
+#define SL_RT_TLS_CUR() (sl_rt_current_task)
+#endif
+
+static inline sl_task *sl_rt_cur(void) {
+    for (;;) {
+        unsigned long e1 = atomic_load_explicit(&sl_rt_async_epoch,
+                                                 memory_order_seq_cst);
+        sl_task *t = SL_RT_TLS_CUR();
+        unsigned long e2 = atomic_load_explicit(&sl_rt_async_epoch,
+                                                 memory_order_seq_cst);
+        if (e1 == e2) return t;
+    }
+}
+
+/* Tier 11 eighth slice (async preemption): the enumerable-function-
+ * list guard from the plan's own §6 -- every existing runtime
+ * function that holds one of the runtime's own internal locks or is
+ * mid-transition brackets itself with these, so sl_preempt_handler
+ * (not yet landed -- these calls are no-ops in every sense until it
+ * exists, since nothing reads preempt_disable_depth yet) can never
+ * decide to async-preempt a task while it holds sl_gc_mu, a channel's
+ * own lock, the reactor's, the timer's, or is mid-sl_ctx_switch-
+ * adjacent bookkeeping -- exactly the hazard finding 2/6 of the
+ * design review names (freezing a held lock while queued deadlocks a
+ * later, unrelated collection attempt on a different thread, not
+ * just corrupts state). A plain nesting counter, not a boolean --
+ * these compose correctly when one guarded function calls another
+ * (e.g. sl_task_resume calling sl_runq_push while already inside its
+ * own bracket). acq_rel on both operations: the corresponding
+ * decrement must never be reordered ahead of whatever the bracketed
+ * section actually did. */
+static inline void sl_rt_preempt_disable(void) {
+    /* NULL-guarded, not just defensively: sl_task_resume (one of the
+     * guarded functions below) is also called from the timer and
+     * reactor threads waking a sleeping/net-parked task -- neither
+     * calls sl_gc_register_thread (their own design comments already
+     * establish they never drive a task and are proven safe from an
+     * unregistered caller), so sl_rt_current_task is genuinely NULL
+     * on those threads, not just theoretically. This bracket only
+     * means anything for a POOL WORKER thread anyway -- the ticker
+     * (runtime_pool.c) only ever targets sl_pool_workers[], so a
+     * thread with no current task is never an async-preemption
+     * target and this is correctly a no-op for it, not a crash.
+     *
+     * Via sl_rt_cur(), and via a SINGLE call to it rather than the two
+     * bare reads (one for the NULL test, one for the increment) this
+     * used to make: this is the bootstrap edge of the whole preemption-
+     * disable mechanism -- by construction it runs with depth 0, so it
+     * is the one bracket that cannot protect its own acquisition, and a
+     * stale thread-affine TLS address here sends the increment to some
+     * other task entirely. See sl_rt_async_epoch's own comment above
+     * for the full mechanism and the two crashes it produced. */
+    sl_task *t = sl_rt_cur();
+    if (t)
+        atomic_fetch_add_explicit(&t->preempt_disable_depth,
+                                   1, memory_order_acq_rel);
+}
+static inline void sl_rt_preempt_enable(void) {
+    sl_task *t = sl_rt_cur();
+    if (t)
+        atomic_fetch_sub_explicit(&t->preempt_disable_depth,
+                                   1, memory_order_acq_rel);
+}
+
+/* Where main()/each worker (runtime_pool.c) saves its own
+ * OS-provided-stack context before switching onto a task's buffer --
+ * one shared slot per OS thread, since only ever one such switch-in
+ * is in flight per thread at a time. Defined here (moved up from
+ * runtime_sched.c, Tier 11 third slice) because sl_rt_error below
+ * needs it at its own definition site, well before RUNTIME_SCHED is
+ * emitted -- same ordering reason as sl_task itself above. */
+static _Thread_local void *sl_rt_native_rsp;
+
+static inline void sl_rt_gc_checkin(void); /* runtime_gc.c, forward here */
+static void sl_task_stack_grow(sl_task *t); /* runtime_sched.c, forward here */
+void sl_ctx_switch(void **old_rsp_slot, void *new_rsp); /* runtime_sched.c,
+    forward here for the same reason -- sl_rt_error below needs it at
+    its own definition site; defined for real, in assembly, still in
+    RUNTIME_SCHED. */
+static void sl_task_park(pthread_mutex_t *held_mu); /* runtime_pool.c,
+    forward here -- sl_chan_send/recv (RUNTIME_CONTAINERS, emitted
+    right after this file) call it directly, but it's defined for
+    real in RUNTIME_POOL, emitted last. */
+static void sl_task_resume(sl_task *t); /* runtime_pool.c, forward here,
+    same reason. */
+static void sl_task_yield_now(void); /* runtime_pool.c, forward here --
+    Tier 11 seventh slice (cooperative preemption): sl_rt_maybe_yield
+    below calls it directly, but it's defined for real in RUNTIME_POOL,
+    same reason as sl_task_park/sl_task_resume just above. */
+
+/* Re-examined alongside SL_TASK_INITIAL_STACK_SIZE's own drop to
+ * 16384 (runtime_sched.c -- see that comment for the full story,
+ * including the two smaller sizes that were tried and genuinely
+ * failed first) -- the two cannot be picked independently. This
+ * margin is checked only AT a cooperative checkpoint; it must
+ * therefore be large enough that nothing which can happen between
+ * one checkpoint passing the check and the NEXT one running can
+ * reach stack_base first. Two things eat into it:
+ *   1. Ordinary un-checkpointed work between two checkpoints (this
+ *      codebase's own established risk, present since growable
+ *      stacks first landed -- the original tuning here found 2048
+ *      insufficient and 8192 robust, against the OLD 65536-byte
+ *      stack, across 150+ runs of the standalone growable-stack
+ *      spike -- notably BEFORE cooperative preemption v1 added a
+ *      checkpoint to every loop back-edge, so today's checkpoints
+ *      are considerably denser than what that number was tuned
+ *      against).
+ *   2. Tier 11 eighth slice, new: the async trampoline's own worst-
+ *      case footprint. A signal can land anywhere, including right
+ *      after a checkpoint has just barely cleared the margin -- if
+ *      it lands deeper still (more un-checkpointed work) with
+ *      preempt_disable_depth == 0, the trampoline pushes its full
+ *      save block (RFLAGS + 15 GPRs + 16 XMM + the 128-byte x86-64
+ *      red-zone skip + two reserved slots = 528 bytes) plus its own
+ *      call chain into sl_preempt_yield -> sl_task_yield_now ->
+ *      sl_ctx_switch (each a real stack frame, sl_task_yield_now's
+ *      own sl_rt_cur() call included) before the task is safely
+ *      parked -- roughly 700-900 bytes by hand-tally, not merely
+ *      assumed safe. An underflow here isn't a clean crash: the
+ *      stack buffer is an ordinary malloc'd block, so it corrupts
+ *      whatever heap memory sits just before it.
+ * This value stayed at 1024 through the same validation pass that
+ * settled SL_TASK_INITIAL_STACK_SIZE at 16384 -- 80 consecutive TLS
+ * runs, 6 full test-suite runs, 15 nettest runs, 23
+ * stress_test/concurrent_compute runs, and 4 clean UBSan runs, all
+ * clean -- including tests/stack_grow, which forces 50,000 levels
+ * of checkpointed recursion (many doublings, not just one) and so
+ * is this codebase's own most direct exercise of exactly the
+ * checkpoint-to-checkpoint window this margin exists to cover.
+ * Defined here (not next to sl_task_stack_grow's own definition in
+ * runtime_sched.c) because sl_rt_safepoint_enter needs it at its
+ * own definition site, same ordering reason as sl_task itself
+ * above. */
+#define SL_TASK_GUARD_MARGIN 1024
+
+/* Tier 11 seventh slice (cooperative preemption v1): tunable, not yet
+ * empirically tuned beyond a reasonable starting guess (matching Go's
+ * own ~10ms pre-1.14 preemption granularity, halved for a smaller,
+ * more latency-sensitive pool). SL_PREEMPT_SAMPLE_MASK bounds the
+ * steady-state cost of a hot loop's checkpoint to one increment plus
+ * one branch for 1023 of every 1024 visits -- only the 1-in-1024
+ * sample pays for a clock_gettime call. */
+#define SL_PREEMPT_QUANTUM_NS 5000000LL
+#define SL_PREEMPT_SAMPLE_MASK 1023UL
+
+/* Not gated on 'time' being imported -- spawn/loops are core language
+ * features, so this must exist unconditionally. Mirrors pkg_time's own
+ * sl_time_mono exactly; duplicated rather than shared cross-package for
+ * the same reason sl_rt_shutdown_hook exists as an indirection instead
+ * of a direct call -- a program can use spawn/loops without importing
+ * time at all. */
+static inline long long sl_rt_monotonic_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+/* Tier 11 seventh slice (cooperative preemption v1): the one shared
+ * checkpoint every safepoint of any kind now funnels through -- a
+ * call-site or back-edge bracket that has at least one live GC root
+ * (via sl_rt_safepoint_enter below, in the SAME relative position its
+ * guard-margin-check-then-checkin tail always occupied), AND a loop
+ * back-edge with NO live GC roots, which never opens a bracket at all
+ * (stmt.c's emit_backedge_enter calls this directly, unconditionally,
+ * for ST_WHILE/ST_FOR specifically -- see that file's own comment for
+ * why ST_FOR_IN is deliberately excluded from that direct call).
+ * Ordering within this function is load-bearing exactly the way it
+ * was before extraction: the guard-margin probe must run after sp is
+ * already linked into the chain (when called from safepoint_enter --
+ * see the comment there), and sl_rt_gc_checkin() must run after the
+ * guard-margin probe, so a collection never lands mid-grow. The new
+ * preemption sample-check runs last, after both -- a task must never
+ * be mid-grow or mid-collection-checkin when it decides to yield. */
+/* Takes the task rather than resolving it, so a caller that has
+ * already paid for the lookup does not pay again. That matters more
+ * than it reads: on Darwin every _Thread_local access is a call
+ * through its own TLV descriptor into dyld, and a bracketed
+ * safepoint used to make TWO of them -- one in
+ * sl_rt_safepoint_enter, one here -- for the same task. A profile of
+ * the demo server put sl_rt_maybe_yield at ~72% of the request path
+ * with that redundant resolve inside it.
+ *
+ * Passing t is safe across anything this function does, including a
+ * park or a preemption inside sl_task_stack_grow or the yield below:
+ * an sl_task* is migration-stable. It is the thread-affine ADDRESS a
+ * TLS read returns that goes stale when a task moves worker, never
+ * the task pointer itself. */
+static inline void sl_rt_maybe_yield_t(sl_task *t) {
+    /* caller supplied t; see sl_rt_cur's comment for why a bare
+        this runs with preempt_disable_depth == 0 by definition (it IS
+        the checkpoint), so it is squarely inside the window
+        sl_rt_async_epoch's comment describes. Read once, then use t
+        for everything below -- a sl_task* is migration-stable (a task
+        is the same task whichever worker runs it), unlike the
+        sl_rt_current_task read would be wrong here. */
+    {
+        char sl_rt_stack_probe;
+        if ((uintptr_t)&sl_rt_stack_probe - (uintptr_t)t->stack_base <
+            SL_TASK_GUARD_MARGIN)
+            sl_task_stack_grow(t);
+    }
+    sl_rt_gc_checkin();
+    /* Sampled, not checked every visit: bounds the steady-state cost
+     * of a hot loop's checkpoint to one increment + one branch for
+     * 1023 of every 1024 visits -- see SL_PREEMPT_SAMPLE_MASK's own
+     * comment. yield_check_counter lives on the TASK, not the thread,
+     * so it travels correctly if this task migrates OS threads. */
+    if ((++t->yield_check_counter & SL_PREEMPT_SAMPLE_MASK) != 0)
+        return;
+    long long now = sl_rt_monotonic_ns();
+    if (now - t->run_start_ns < SL_PREEMPT_QUANTUM_NS)
+        return;
+    if (atomic_load_explicit(&sl_global_runq_count, memory_order_relaxed) == 0)
+        return; /* no one waiting for a worker -- yielding here is pure
+                    overhead with no fairness benefit */
+    sl_task_yield_now();
+}
+
+/* The bare back-edge form, for call sites with no safepoint bracket
+ * and so no task in hand. */
+static inline void sl_rt_maybe_yield(void) {
+    sl_rt_maybe_yield_t(sl_rt_cur());
+}
+
+/* sl_rt_gc_checkin() (now reached via sl_rt_maybe_yield) runs *after*
+ * this frame is linked into the chain, not before: every call-site
+ * bracket builds its complete roots array -- already-evaluated temps
+ * included -- before this function is even called, so a collection
+ * that ran before sp were linked in would not yet find those temps
+ * reachable through anything. Checking in only once sp is live closes
+ * that gap; the cost is that a collection can run one bracket-entry
+ * later than a naive 'checkin first' placement would, which is
+ * harmless (nothing before this point could have allocated on top of
+ * an unrooted value -- that's the entire point of building the array
+ * first). sp/roots are raw addresses into the caller's own (soon-to-
+ * be-relocated-if-we-grow) stack frame, received as plain pointer
+ * PARAMETERS -- once linked into the chain via the assignments below,
+ * sl_task_stack_grow's own chain walk (inside sl_rt_maybe_yield) reads
+ * and fixes them up correctly (same mechanism as the collector's own
+ * root scan); the sp/roots C parameters themselves must never be
+ * dereferenced again after a grow, and nothing below does -- only
+ * sl_rt_current_task->safepoint_top (itself correctly translated) is
+ * read from here on. wrap_safepoint (core.c) never writes back
+ * through &_sl_spN/_sl_spN_roots after this call either, confirmed
+ * directly before wiring this in. */
+static inline void sl_rt_safepoint_enter(sl_safepoint *sp, void **roots,
+                                         int nroots) {
+    sl_task *t = sl_rt_cur(); /* see sl_rt_safepoint_exit just below --
+        same reason, same hazard, and reading once here also removes the
+        second TLS round-trip this function used to make. */
+    sp->roots = roots;
+    sp->nroots = nroots;
+    sp->prev = t->safepoint_top;
+    t->safepoint_top = sp;
+    sl_rt_maybe_yield_t(t); /* reuse the task we just resolved -- see
+        sl_rt_maybe_yield_t's own comment for why this halves the
+        dyld TLS round-trips a bracketed safepoint makes. */
+}
+
+/* One sl_rt_cur() read, then the whole pop through that one pointer.
+ * The obvious one-liner this replaces --
+ *   sl_rt_current_task->safepoint_top = sl_rt_current_task->safepoint_top->prev;
+ * -- reads the _Thread_local TWICE, and on Darwin each read is a call
+ * into dyld returning a THREAD-AFFINE address (see sl_rt_async_epoch,
+ * above). A task async-preempted between either of those calls and the
+ * dereference that follows it resumes on a different worker holding
+ * the old worker's slot address, and the store at the end then writes
+ * THIS task's ->prev into whatever task that worker is now running --
+ * over-popping a stranger's safepoint chain while leaving this task's
+ * untouched. Both halves of that show up later as the same crash:
+ * safepoint_top == NULL on a live task at its own bracket's exit, or
+ * sl_gc_collect walking a queued task's chain through a dangling
+ * sl_safepoint*. Reading once fixes both -- t is a plain sl_task*,
+ * which stays correct across a migration. */
+static inline void sl_rt_safepoint_exit(void) {
+    sl_task *t = sl_rt_cur();
+    t->safepoint_top = t->safepoint_top->prev;
+}
+
+/* Tier 11 third slice: a panicking spawned task no longer ends its
+ * OS thread (pthread_exit) -- under the worker pool, that thread is
+ * meant to keep running future queued tasks. Instead the panic path
+ * abandons this task exactly the way a normal completion already
+ * does: switch back to whatever sl_rt_native_rsp holds (the worker
+ * loop, runtime_pool.c), same argument order as every other
+ * 'switch out of the current task' call already in the codebase
+ * (%s_entry's own normal-completion switch, sl_task_stack_grow's
+ * switch back into a relocated task). Safe from a call-stack-
+ * unwinding standpoint for the same reason pthread_exit already
+ * was: no runtime-internal lock is ever held across a point where a
+ * user-triggered panic can fire -- abandoning the intervening C
+ * frames without running any cleanup for them is exactly what
+ * already happened before, just via a different mechanism. */
+static void sl_rt_error(const char *msg, long long a, long long b) {
+    /* Tier 11 eighth slice: disabled from entry, deliberately with no
+     * matching enable anywhere on the spawned-task branch -- this
+     * branch abandons t permanently (switches out and is never
+     * resumed through this control flow again, same as sl_ctx_trampoline's
+     * own 'call that never returns' shape), so there is no resume point
+     * to place one at, and an elevated preempt_disable_depth on a task
+     * nobody will ever dispatch again is inert, not a leak. Two real
+     * bugs closed by this bracket, found directly: fprintf below (same
+     * os_unfair_lock/locale-lock vulnerability class already fixed for
+     * every other libc call in this slice -- an async-preempted task
+     * migrating mid-fprintf abandons the ORIGINAL OS thread's own stdio
+     * lock, aborting on that thread's next unrelated print) and the raw
+     * sl_ctx_switch call, previously reachable by a signal landing
+     * mid-switch and diverting this abandon into the async-preempt path
+     * instead, after sl_rt_active_spawns_dec() had already run once --
+     * a real double-accounting risk if this task were ever, against the
+     * design's own intent, dispatched again afterward. concurrent_compute's
+     * own 'element size mismatch' panics (a downstream SYMPTOM of
+     * corruption elsewhere, not this bug's own root cause) are exactly
+     * what surfaced this path was being exercised, completely
+     * unprotected, during the very runs that crashed. */
+    sl_rt_preempt_disable();
+    if (!sl_rt_current_task->is_main) {
+        fprintf(stderr,
+                "slang: task panicked: %s (index %lld, length %lld)\n",
+                msg, a, b);
+        sl_rt_active_spawns_dec();
+        sl_ctx_switch(&sl_rt_current_task->rsp, sl_rt_native_rsp);
+        fprintf(stderr,
+                "slang: internal error: task resumed after panic "
+                "switch-back\n");
+        abort(); /* genuinely unreachable -- a can't-happen guard, not
+                    routed back through this same panic machinery */
+    }
+    fprintf(stderr, "slang runtime error: %s (index %lld, length %lld)\n",
+            msg, a, b);
+    exit(1);
+}
+

@@ -1,0 +1,42 @@
+{
+  "label": "http_endpoint_alloc",
+  "base_url": "http://localhost:8095",
+  "concurrency": 100,
+  "rate_target": 0,
+  "elapsed_sec": 27.995689537,
+  "total_count": 3000,
+  "total_errors": 0,
+  "throughput_rps": 107.15935380105941,
+  "overall": {
+    "name": "overall",
+    "count": 3000,
+    "errors": 0,
+    "error_rate": 0,
+    "throughput_rps": 107.15935380105941,
+    "min_ms": 335.723,
+    "mean_ms": 930.7176406666686,
+    "p50_ms": 919.541,
+    "p90_ms": 1125.528,
+    "p95_ms": 1186.57,
+    "p99_ms": 1299.101,
+    "p999_ms": 1461.597,
+    "max_ms": 1619.966
+  },
+  "by_endpoint": [
+    {
+      "name": "alloc",
+      "count": 3000,
+      "errors": 0,
+      "error_rate": 0,
+      "throughput_rps": 107.15935380105941,
+      "min_ms": 335.723,
+      "mean_ms": 930.7176406666686,
+      "p50_ms": 919.541,
+      "p90_ms": 1125.528,
+      "p95_ms": 1186.57,
+      "p99_ms": 1299.101,
+      "p999_ms": 1461.597,
+      "max_ms": 1619.966
+    }
+  ]
+}

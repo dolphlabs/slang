@@ -1799,130 +1799,148 @@ prerequisite, not a different plan).
 - [ ] An epoll backend (Linux) — not a performance item, a production-
       readiness one: the reactor is kqueue-only today, and real
       deployment targets are overwhelmingly Linux
-- [~] Work-stealing, per-worker run queues instead of one global
-      mutex-guarded queue — the leading explanation for the HTTP
-      concurrency cliff observed at 500-2,000 concurrent in the stress
-      report; the most Go-shaped, most-precedented fix for that
-      specific symptom. **Implemented and correctness-verified; the
-      performance case is NOT yet established.** Marked `~`, not `x`,
-      for exactly that reason.
+- [~] **Allocation is serialised on one global mutex — the top remaining
+      performance ceiling, and the reason concurrency does not scale.**
+      Every `sl_gc_alloc` takes `sl_gc_mu` to push onto `sl_gc_all`,
+      insert into `sl_gc_set`, and bump `sl_gc_bytes_since_collect`.
+      Eight workers, one lock, on the hottest path in the language — and
+      it is the *same* mutex `sl_rt_gc_checkin`, `sl_task_park`,
+      `sl_task_resume` and `sl_gc_collect` use, so allocation contends
+      with all of them rather than just with other allocations.
 
-      Landed: one `sl_runq` per worker slot (`sl_worker_runq[]`) plus
-      the existing global queue as overflow/fallback; `sl_task_submit`
-      and the preempted-task requeue target the current worker's own
-      local queue (`sl_rt_my_slot_idx` / a new `slot_idx` parameter on
-      `sl_worker_after_switch`), falling back to the global queue at the
-      `-1` sentinel; `sl_pool_scan_all` (own → global → steal) plus a
-      shared idle condvar; `sl_gc_collect` walks every queue via an
-      extracted `sl_gc_scan_runq`; `sl_pool_shutdown` replaces the
-      per-queue scheme, which could not wake a worker that now sleeps on
-      `sl_pool_idle_cv` rather than on any one queue.
+      Evidence, from a CPU profile of the demo server under mixed load
+      after the safepoint fix below: `_pthread_mutex_firstfit_lock_slow`
+      3846 samples and `__psynch_mutexwait` 3725, and of the frames
+      sitting on a contended mutex, `sl_gc_alloc` accounts for 559
+      against 156 for the next-largest. Corroborating signals: process
+      CPU peaks at ~600% of an available 800%, and HTTP throughput is
+      almost flat from concurrency 10 to 2000 — both what a single
+      serialising lock on the allocation path predicts.
 
-      Four defects found during verification, three of them in the
-      design as originally planned:
+      Three approaches, cheapest first, none of them free:
+      1. **Split the lock.** Give the allocator its own mutex so it stops
+         contending with park/resume/checkin. Cheap, but requires
+         allocate-black during a collection cycle, or new objects can be
+         born after the mark phase has passed them and be swept.
+      2. **Batch the splice.** Accumulate new objects on a thread-local
+         list and splice under the lock every K allocations. Cuts lock
+         traffic ~K-fold. The subtlety is `sl_gc_set`: it must contain
+         every live object before any conservative scan runs, or an
+         async-preempted task's register-resident pointer will not be
+         recognised and its object will be swept. The pending list would
+         itself have to be a root, and the set insert cannot be deferred
+         past a safepoint.
+      3. **Shard per thread** — each thread owning its own object list,
+         byte counter, and set shard, with the collector walking all of
+         them. This is what real collectors do (Go's per-P allocation)
+         and is the actual fix, but it is a collector redesign, not a
+         patch.
 
-      1. **Idle CPU burn (~20x).** The planned "~1ms bounded poll, no
-         wakeup signal" is correct but expensive: 8 workers x 1000
-         wakeups/sec. An idle program burned 0.83s CPU per 10s wall
-         against 0.04s before — real, since `demo/main.sl` and
-         `examples/httpd` idle exactly this way between requests. Fixed
-         with an event-driven wakeup (`sl_pool_wake_one`, a Dekker pair
-         on `sl_pool_idle_count` / `sl_global_runq_count`) and the timed
-         wait demoted to a 50ms backstop: 0.08s per 10s idle, with
-         idle-pool wakeup latency measured at ~14us average / 38us
-         worst, i.e. the signal does the waking, not the timeout.
-      2. **The planned steal rotation could not reach every worker.**
-         `victim = (slot_idx + 1 + a) % n` capped at `min(4, n-1)`
-         attempts means worker `j` probes only `j+1..j+4`, so a hot
-         queue at slot `r` is unreachable from three of eight slots —
-         they idle no matter how deep `r`'s backlog gets, which is
-         precisely the pathology the feature exists to fix. This is
-         arithmetic, not a benchmark artifact. Now sweeps all `n-1`
-         other queues, affordable because the wakeup is event-driven.
-      3. **Steal-one is the wrong V1 default** (the plan deferred
-         "steal half" as an optimisation). Steal-one puts *more* traffic
-         on the hot queue's mutex than the single global queue ever
-         had — one contended acquisition per task, competing with the
-         producer's own pushes. Replaced with `sl_runq_steal_half`
-         (batch capped at 64), which needed a new per-queue `count`
-         field on `sl_runq`.
-      4. **A sweep-while-unrooted window in `sl_runq_steal_half`**,
-         found by inspection rather than by any test: between unlinking
-         a batch from the victim and splicing it into the stealer's
-         queue those tasks sit on no queue at all, invisible to the
-         run-queue walk. Not closed by locking — the collector walks one
-         queue at a time, so a batch can leave `v` after `v` was scanned
-         and reach `m` after `m` was scanned. What actually closes it is
-         `sl_gc_collect`'s quiescence protocol: a worker can only reach
-         this code when the collector is not marking (verified against
-         the real ack/`sl_rt_gc_blocked` logic, and it is the same
-         invariant `sl_runq_try_pop`'s own pop-then-assign gap already
-         relies on). `sl_task_resume` needs `sl_gc_mu` only because it
-         is *also* called from the unregistered timer and reactor
-         threads, which quiescence does not cover; every caller here is
-         a registered pool worker. Documented in full at the function.
+      **Approach 2 (batching) is implemented.** Objects accumulate on a
+      per-thread list and are spliced onto `sl_gc_all`/`sl_gc_set` under
+      one lock acquisition per 32 allocations. The collector traces every
+      thread's pending list as a root (`pending_ptr` on the registry
+      entry) — required, because a pending object is not on `sl_gc_all`
+      so the sweep cannot free it, but what it *references* is, and
+      without that walk those children are freed while live. Reading
+      another thread's list during mark is safe for the same reason the
+      rest of the mark phase is: no thread can be inside `sl_gc_alloc`
+      once every registered thread is acked or `gc_blocked`.
 
-      Also added `stress_test/programs/worker_fanout` — the plan's own
-      gap #7. `concurrent_compute` spawns entirely from main's original
-      OS thread (`slot_idx == -1`), so every task goes to the global
-      queue and it would have validated none of this; `worker_fanout`
-      spawns its root task first, so the fan-out happens *on a worker*
-      and every child lands on one hot local queue.
+      Result is a genuine trade, measured interleaved 5 pairs each way:
 
-      Correctness verified: `make test` 49/49 after every step; TSan at
-      `-O0` clean (0 races) across 50 runs — `spawn`, `spawn_isolation`,
-      `gc_stress`, `stack_grow`, and `worker_fanout`; ASan+UBSan clean
-      6/6 with the preemption ticker live; 72 runs across the six
-      concurrency tests including `proc_shutdown` (the `slot_idx == -1`
-      path) all matching expected output byte-for-byte.
-
-      **Performance, now measured properly.** The first round of timing
-      was taken on a machine running two orphaned runaway processes from
-      an earlier session (one at 159% CPU for 13 hours) plus a system
-      storage scan, load average 7-105 — which is why those numbers were
-      wildly variable and why removing a mutex once appeared to make
-      things *slower*. Every figure from that period was discarded, not
-      merely caveated. Re-run on a quiet machine with the two builds
-      **interleaved** (alternating order within each pair, so any
-      residual load drift hits both equally), baseline built from
-      `c36be6e` in a separate worktree, medians over 9 pairs (5 for
-      coarse):
-
-      | `worker_fanout` | baseline | work-stealing | |
+      | workload | before | after | |
       |---|---|---|---|
-      | fine, 8000 x 750 | 1329ms | **998ms** | 25% faster |
-      | mid, 2000 x 3000 | 2333ms | **2068ms** | 11% faster |
-      | coarse, 400 x 30000 | 13067ms | **12520ms** | ~4%, within noise |
+      | HTTP `/json` (alloc-heavy, cross-thread) | 7504 rps | **8044 rps** | **+7%** |
+      | `concurrent_compute` (pure compute) | 1305ms | 1411ms | **-8%** |
 
-      The fine-grained case — many small tasks, which is the shape HTTP
-      request handling actually has — is decisive: the two ranges do not
-      overlap at all (baseline min 1245ms > work-stealing max 1068ms).
-      No granularity regressed. Idle cost, same methodology: 0.13s CPU
-      per 10s idle for baseline against 0.20s here, versus **2.78s** for
-      the originally-planned 1ms poll (~28% of a core, mostly system
-      time) — the event-driven wakeup is what buys that back, and
-      idle-pool wakeup latency stays at 24-47us average against a 50ms
-      backstop, confirming the signal rather than the timeout is what
-      wakes a sleeping worker.
+      (The +25% originally recorded here was measured with a harness
+      that ran the two builds in a FIXED order rather than alternating
+      them, and was inflated by position bias; re-measured alternating,
+      it is +7% with overlapping ranges. See the measurement-methodology
+      note at the end of this file.)
 
-      **Still owed:** the real acceptance test — the HTTP stress phase
-      at 500-2,000 concurrency against
-      `stress_test/reports/stress_report.html`'s existing numbers. The
-      microbenchmark above says the scheduler change is a win in
-      isolation; it does not by itself prove the concurrency cliff that
-      motivated this item is gone.
+      The regression is real and consistent, and its cause is instructive:
+      on Darwin each `_Thread_local` access is a call through its own TLV
+      descriptor into dyld, so the batch bookkeeping costs a lookup per
+      allocation that only pays for itself when the lock is genuinely
+      contended. A first attempt using four separate thread-locals was
+      *slower than the mutex it replaced*; bundling them into one struct
+      (one lookup, then field offsets) is what made it a win at all.
 
-      One pre-existing bug surfaced but not fixed here: roughly 1 run in
-      40 of `concurrent_compute` loses a single container element
-      (`total_alloc_sum` short by one map/list entry). It reproduces on
-      the pre-work-stealing baseline at the same rate, so it is not
-      caused by this work, but it is a real correctness bug in the
-      collector or the containers and deserves its own investigation.
-      Separately, `concurrent_compute` reads `proc.active_tasks()` with
-      no drain wait, so an occasional `active_tasks_after=1` is a race
-      in the test program (the decrement is emitted *after* the task
-      body returns, while `chan_send` happens inside it), not a stranded
-      task — worth giving that test a drain loop like `worker_fanout`'s
+      Kept on the judgement that this language targets servers, and the
+      server workload is the one that improves — the same reasoning the
+      work-stealing revert above rests on, applied in the other
+      direction. If pure-compute throughput matters more for a given
+      deployment, `SL_GC_PENDING_BATCH` is the knob.
+
+      **Still open:** approach 3 (per-thread sharding) would remove the
+      lock rather than amortise it, and would not pay the per-allocation
+      TLS cost if the shard lived on the task rather than the thread —
+      `sl_rt_cur()` is already resolved in `sl_gc_alloc`'s preempt
+      bracket, so a task-owned batch is reachable for free. That is the
+      real fix and is worth doing properly.
+
+      Do not attempt further work here without the safepoint/GC-quiescence
+      invariants in `sl_gc_collect` firmly in hand — this session found a
+      use-after-free in exactly this area that had been corrupting
+      shipped builds silently.
+
+- [x] Work-stealing, per-worker run queues — **implemented, measured,
+      and REVERTED.** Kept in history (`6a8f27b`, `e5b1b0f`, reverted
+      here) because the measurements are the useful artifact.
+
+      It was the leading explanation for the HTTP concurrency cliff and
+      the most Go-shaped fix for it. On the microbenchmark it worked:
+      `stress_test/programs/worker_fanout` (a root task spawned onto a
+      worker, fanning out onto that worker's own local queue — the "one
+      hot queue, N-1 idle workers" pathology) ran ~25% faster. That win
+      did not transfer to the workload the feature exists for.
+
+      On `demo/main.sl` under the real HTTP harness, five scheduling
+      policies were measured, all at `-O2`, all interleaved against the
+      same baseline binary on one machine:
+
+      | policy | p99 @ conc 100 | p99 @ conc 500 |
+      |---|---|---|
+      | **no work-stealing (baseline)** | **258-352ms** | **870-939ms** |
+      | local-first | 249ms | 3333-6202ms |
+      | global-first | 745-855ms | 1208-1227ms |
+      | rotation, global every 8th dispatch | 259-294ms | 4102-5934ms |
+      | global-first only when global non-empty | 755-756ms | 1159-1209ms |
+      | preempted tasks to global, global-first | 1896-1923ms | 2628-3077ms |
+
+      No variant matches a single global queue at both ends. Every one
+      fixes one concurrency and breaks the other, for a reason that is
+      structural rather than tunable: the two queues hold different
+      populations — the global queue everything `sl_task_resume` wakes
+      (I/O completions, chan handoffs, timers), the local queues
+      preempted and freshly-spawned work — and any fixed ordering
+      between them starves one population. Throughput was consistently
+      +5-10%; tail latency consistently 2-7x worse.
+
+      Two hypotheses were tested and disproven, worth recording so they
+      are not retried: that the mid-concurrency cost was contention on
+      an *empty* global queue (it is not — the depth-gated variant
+      behaves identically to global-first, so the queue is not empty
+      there, and the cost is the ordering itself); and that splitting by
+      in-flight-vs-new work would unify the populations (it made both
+      ends worse).
+
+      What a real attempt would need: actual fairness across the two
+      queues rather than a priority rule between them — sequence
+      numbers or a shared FIFO discipline — which is a design change,
+      not a knob. Anyone revisiting this should start from the table
+      above and from `worker_fanout`, which is **retained** in
+      `stress_test/programs/` as a scheduler benchmark independent of
+      this feature. Note also that `worker_fanout` alone would have
+      passed this feature: gap #7 in the original plan predicted exactly
+      that, and it was right.
+
+      Raw data for all three states is preserved untracked:
+      `stress_test/results_baseline_pre_O2/` (pre-work-stealing,
+      pre-`-O2`), `stress_test/results_localfirst_regression/` (the
+      4-7x regression), and `stress_test/results/` (current).
 - [x] Shrink the initial task stack: 65536 → 16384 bytes (4x, not the
       hoped-for low-single-digit-KB Go itself starts at — that target
       turned out to be genuinely unsafe, not just untested, and is
@@ -2307,6 +2325,100 @@ prerequisite, not a different plan).
       `-mllvm -asan-stack=0`**, or the collector's own stack handling
       reports itself. Worth knowing before the next person chases it.
 
+- [ ] **The ~1-in-60 container corruption, characterized: it is an
+      async-preemption bug, and it has nothing to do with the GC.**
+      Chased with a proper bisection rather than more hypotheses; the
+      eliminations below are the durable part, since each one was a
+      plausible story that turned out to be wrong.
+
+      Reproducer, and the key to making any of this measurable: the
+      failure rate is ~1% per run at stock settings, which is far too
+      rare to bisect against. Patching the GENERATED C to preempt
+      aggressively -- `SL_PREEMPT_QUANTUM_NS` 5ms -> 150us and the
+      ticker interval 2ms -> 0.1ms -- raises it to ~8-12% per run, an
+      8x amplification, verified to be a real change in mechanism and
+      not just timing by counting actual preemptions: 77 -> 2,169 per
+      run. That amplified build is the tool to use for any further
+      work here; everything below rests on it.
+
+      | build (all at 6,000 tasks) | bad runs |
+      |---|---|
+      | stock | 1/70 |
+      | amplified preemption | 5-8/60 |
+      | amplified, collector NEVER runs | **7/60** |
+      | amplified, no context switch (save/restore only) | **0/30** |
+      | async preemption disabled entirely | **0/300** |
+      | amplified, conservative scan disabled | **60/60, segfaults** |
+
+      What that establishes:
+
+      1. **Async preemption is necessary.** 0/300 without it, and the
+         no-async build runs LONGER than the control (1441ms vs 1253ms),
+         so a clean result there is not "did less work".
+      2. **The collector is NOT involved at all.** The never-collect
+         build (`sl_gc_threshold = 1<<62`, verified `collects=0` by
+         direct instrumentation while preemptions ran ~2,600) still
+         fails 7/60 -- if anything more than the control. An earlier
+         reading of this as "needs both" came from comparing a
+         non-amplified no-GC arm against a 1/70 control, which had no
+         power to show anything. Do not re-chase the GC here.
+      3. **It is the CONTEXT SWITCH, not the register save/restore.**
+         Disabling only `sl_task_yield_now()` inside `sl_preempt_yield`
+         -- so the signal still lands, the trampoline still saves and
+         restores the full register file, but the task never actually
+         switches away -- is 0/30 against a ~12% base.
+      4. **Not two workers on one task.** An atomic dispatch guard on
+         `sl_task` (exchange on entry to the dispatch switch, abort if
+         already set) caught 0 double-dispatches across 30 runs while
+         5 of those same runs corrupted.
+      5. **Not a use-after-free ASan can see** -- and, importantly, ASan
+         CANNOT see this class by construction: the corrupting write
+         requires the block to have been reused, so by the time the
+         value is read back the memory is un-poisoned again. 3/12 runs
+         corrupted under a 3GB quarantine with zero reports. Do not
+         treat ASan silence here as evidence of anything.
+      6. **Not stack relocation.** The workload does zero stack growths
+         (instrumented directly), so the "raw `&_sl_v` pointer into a
+         relocated stack" story -- which fits the symptom well -- is
+         ruled out for this reproducer.
+
+      Symptom, and the sharpest lead: a probe that checks `xs[i] == i`
+      INSIDE the task (not just the aggregate sum) shows the array is
+      always full length (200) and a map built alongside it is always
+      perfect. Dumping the values around each mismatch shows the
+      corruption is never scattered and never garbage -- it is always
+      **adjacent PAIRS of zeroes starting at an EVEN index**. Observed
+      starts across five failing runs: 2, 4, 6, 38, 42, 50, 118, 122,
+      126 -- every one even, some runs carrying two separate pairs
+      (e.g. 118,119 AND 122,123). Elements are 8-byte `long long`, so
+      an even start means a **16-byte aligned, 16-byte hole**.
+
+      That width is the whole clue: 16 bytes, 16-byte aligned, is one
+      XMM register / one iteration of a vectorized `memcpy`. Reads
+      elsewhere in the array are intact, and neighbouring values sit at
+      their correct indices (`0:0 1:1 2:0 3:0 4:4 5:5`), so nothing is
+      shifted -- a 16-byte chunk is simply never written, and
+      `sl_gc_alloc` zeroes every allocation, so an unwritten slot reads
+      as 0. The obvious candidate is a chunk lost from the copy inside
+      `sl_gc_realloc` (`sl_arr_reserve`'s growth path) while the task is
+      suspended mid-copy -- which would also explain why an early hole
+      at index 2..3 survives into the final 256-element buffer, since
+      every later growth copies the hole forward.
+
+      Next step for whoever picks this up: the amplified build plus a
+      directed test that forces a preemption inside a large `memcpy`
+      and diffs the result against an uninterrupted oracle -- the same
+      shape as the eighth slice's own forced-preemption spike, which
+      already exists in that plan and was never built for this case.
+      Checking the trampoline's XMM save/restore offsets against a
+      preemption landing mid-`memcpy` is the first thing to rule in or
+      out.
+
+      Incidental but valuable: the conservative stack scan is
+      load-bearing, not belt-and-braces. Disabling it under amplified
+      preemption fails 60/60 with segfaults, which is a far stronger
+      justification for it than the record previously had.
+
       Also, separately: after the chan fix, `concurrent_compute` ran
       **100 times at `-O0` with zero container losses** (the two flagged
       runs are the benign `active_tasks_after=1` harness race, sums
@@ -2335,8 +2447,45 @@ prerequisite, not a different plan).
       `concurrent_compute` **12/12** with correct invariants, and the
       seven concurrency tests **0 failures in 70 runs**.
 
-      One gap, open and stated rather than quietly closed:
-      `demo/stress_harness`'s full matrix has **not** been re-run at
+      **The net/reactor paths are now exercised at `-O2` too**, which
+      matters because `sl_reactor_wait` and `sl_time_sleep` were fixed
+      *by construction* with no reproducer — the least-evidenced part of
+      this work. `stress_test/programs/tcp_echo` (single parked
+      acceptor, 64 worker tasks, raw recv/send round-trips) under
+      `tcp_loadgen`:
+
+      - persistent connections, 200 concurrent: **40,000 round-trips,
+        0 errors**, ~32k rps — the `net.recv`/`net.send` parking path.
+      - connection churn, 100 and 300 concurrent, 40,000 connects —
+        exercises `net.accept` parking. Reports 19-49% errors, and
+        **every one is client-side**: the breakdown is 100% `connect:
+        can't assign requested address`, macOS ephemeral port
+        exhaustion, which `tcp_loadgen`'s own header documents as a
+        client ceiling unrelated to the server. Zero server-side
+        errors, empty server log throughout. (The JSON summary alone
+        looks alarming here and is misleading — read the stderr error
+        breakdown before concluding anything from `total_errors`.)
+      - `SIGTERM` afterwards drained and exited cleanly, so graceful
+        shutdown still works at `-O2`.
+
+      The full stress matrix has now been run at `-O2` — see the
+      work-stealing item above, which it also settles (unfavourably).
+      For `-O2` specifically it is a clear win: HTTP p99 at concurrency
+      200 improved across the board (724→429, 638→527, 660→504,
+      719→471, 642→482ms), the soak gained +13% rps with p99 885→585,
+      and the breaking-point probe improved sharply (errors 11.6%→4.7%
+      at 3000 concurrent, 21.4%→14.7% at 5000). Isolated against the
+      same source built at `-O0`, `-O2` is +50% rps, a third of the
+      error rate, and 2.6x better p99 at 500 concurrent.
+
+      A striking independent confirmation of the chan TLS fix came out
+      of this: the pre-fix build (`c36be6e`) **cannot run at `-O2` at
+      all** — the Arcade server segfaults on startup, 100% errors, every
+      attempt. Measuring a baseline at `-O2` required backporting the
+      `SL_RT_TLS_CUR` and `sl_rt_cur()`-in-chan fixes to it first.
+
+      Old gap now closed:
+      `demo/stress_harness`'s full matrix had **not** been re-run at
       `-O2` — it needs a quiet machine, and this one has been under
       unrelated load (4 to 105) for the whole session. Enabled at the
       user's direction with that known. If anything surfaces there, the
@@ -2363,3 +2512,27 @@ prerequisite, not a different plan).
       re-verification of the suite, TSan **at `-O2`**, and the stress
       matrix. Do not flip the flag in `src/main.c` until `worker_fanout`
       and the stress programs are clean
+
+
+## Measurement methodology — a mistake worth not repeating
+
+Several performance numbers recorded during the -O2 and runtime-tuning
+work were measured with a harness that ran build A then build B in a
+**fixed order** every round. That biases systematically toward whichever
+runs second (warm page cache, CPU clocks already ramped), and it
+inflated three claims materially:
+
+| claim | as first reported | alternated |
+|---|---|---|
+| batched allocation, HTTP `/json` | +25% | **+7%**, ranges overlap |
+| shared task lookup at safepoints | +11% | **~3%**, within noise |
+| frame-carried `safepoint_exit` | looked promising | **-17%, reverted** |
+
+Results that alternated from the start survived unchanged: the safepoint
+fast path at ~2.1x on `concurrent_compute`, and the `/cpu` endpoint at
+93-108 -> 201-235 rps with p99 roughly halved.
+
+Rule for anything measured here in future: **alternate the order within
+each pair**, report medians with the raw values, and treat a delta
+smaller than the observed spread as noise. This machine is rarely idle,
+which makes single-order comparisons especially untrustworthy.

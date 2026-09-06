@@ -1,0 +1,3 @@
+struct Bad {
+    name: str,
+}
