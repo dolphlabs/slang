@@ -1,39 +1,16 @@
-// Minimal HTTP server: link + arena so the request buffer never
-// touches the GC heap. Each connection is a spawned task. SIGTERM/
-// SIGINT stop accept and wait for in-flight work -- see 'proc'.
-
+import "http";
 import "proc";
 import "time";
-
-fn page(body: str) -> bytes {
-    let head = "HTTP/1.0 200 OK\r\n"
-        + "Content-Type: text/html; charset=utf-8\r\n"
-        + "Content-Length: " + to_str(len(body)) + "\r\n"
-        + "Connection: close\r\n"
-        + "\r\n";
-    return to_bytes(head + body);
-}
-
-fn send_page(c: link, a: &mut arena, body: str) {
-    let raw = page(body);
-    let w = a.wire(len(raw));
-    let i = 0;
-    while i < len(raw) {
-        w[i] = raw[i];
-        i = i + 1;
-    }
-    let sr = c.send(w, until_never());
-    guard let _n = sr else { return; }
-}
 
 fn serve(c: link) {
     let a = arena_new(16384);
     let buf = a.wire(8192);
-    let rr = c.recv(buf, until_never());
-    guard let _n = rr else { return; }
+    let rr = http.read(&mut c, buf, until_never());
+    guard let _req = rr else { return; }
     let body = "<html><body><h1>Hello from slang</h1>"
-        + "<p>served by the slang net package</p></body></html>";
-    send_page(c, &mut a, body);
+        + "<p>served by the slang http package</p></body></html>";
+    let wr = http.write(&mut c, http.ok_html(body), &mut a, until_never());
+    guard let _n = wr else { return; }
 }
 
 fn accept_and_serve(ln: &mut link) {
