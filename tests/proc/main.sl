@@ -12,9 +12,9 @@ println(to_str(proc.shutdown_requested()));
 println(to_str(proc.active_tasks()));
 
 spawn slow_task();
-time.sleep(20000000); // let it actually start
+time.sleep(20000000);
 println(to_str(proc.active_tasks()));
-time.sleep(300000000); // long enough to finish
+proc.wait_idle();
 println(to_str(proc.active_tasks()));
 
 let argv = proc.args();

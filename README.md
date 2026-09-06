@@ -456,8 +456,8 @@ turns true once the process receives `SIGTERM` or `SIGINT`; a blocked
 interrupted the instant the signal arrives (an `err` result, not a
 hang), so a listener loop notices without needing `select` or a
 timeout. `proc.active_tasks()` counts currently-running `spawn`ed
-tasks, so a shutting-down program can wait for in-flight work to
-finish instead of dropping it.
+tasks. `proc.wait_idle()` parks until that count is zero, so a
+shutting-down program can drain in-flight work without polling.
 
 ```slang
 import "net";
@@ -477,10 +477,7 @@ while !proc.shutdown_requested() {
     accept_and_serve(lfd);
 }
 
-// drain: let in-flight connections finish before actually exiting
-while proc.active_tasks() > 0 {
-    time.sleep(20000000); // 20ms
-}
+proc.wait_idle();
 ```
 
 `proc.getenv(name)` reads an environment variable, returning
@@ -864,8 +861,7 @@ Makefile       build/test/clean
   signal-registration API); a signal that arrives in the narrow
   window before `main()` installs the handler gets the OS's default
   disposition (immediate termination) rather than graceful handling.
-  `proc.active_tasks()` is a poll-based counter, not a wait-with-
-  timeout primitive — compose it with `time.sleep` for draining.
+  `proc.wait_idle()` parks until `proc.active_tasks()` is zero.
 
 ## Memory management
 
