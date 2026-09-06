@@ -50,6 +50,9 @@ typedef struct {
     char *name;
     const char *slang;
     const char *ctype;
+    int drop;
+    int stack;
+    int moved;
 } VarSym;
 
 typedef struct {
@@ -401,6 +404,14 @@ char *mangle_struct(const char *canon);
 const char *ctype_of(CG *cg, const char *t);
 const char *canon_type(CG *cg, const char *t, int line);
 void compute_escape(CG *cg, Package *pkgs, int npkgs, int main_index);
+int type_is_copy(CG *cg, const char *t);
+int type_needs_drop(CG *cg, const char *t);
+void compute_moves(CG *cg, Package *pkgs, int npkgs, int main_index);
+void move_consume(CG *cg, Expr *e);
+void move_reinit(CG *cg, const char *name);
+void emit_drop_flag(CG *cg, const char *name);
+void emit_drop_overwrite(CG *cg, const char *name);
+void emit_scope_drops(CG *cg, int from);
 void emit_line(CG *cg, const char *fmt, ...);
 int is_builtin_name(const char *name);
 FuncSig *method_find(CG *cg, StructDef *sd, const char *name);

@@ -666,7 +666,10 @@ void gen_function(CG *cg, Package *p, FuncDecl *f) {
     emit_line(cg, "static %s %s(%s) {",
               sig->ret_slang ? ctype_of(cg, sig->ret_slang) : "void",
               mangle_func(p->name, f->name), params.data);
+    for (int j = 0; j < f->nparams; j++)
+        emit_drop_flag(cg, f->params[j]);
     gen_block(cg, f->body);
+    emit_scope_drops(cg, 0);
     emit_line(cg, "}");
     emit_line(cg, "");
 
@@ -730,6 +733,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     emit_line(cg, "static void sl_main_task_entry(void *_sl_unused_arg) {");
     emit_line(cg, "    (void)_sl_unused_arg;");
     gen_block(cg, pkgs[main_index].prog->main_body);
+    emit_scope_drops(cg, 0);
     emit_line(cg, "    exit(0); /* main()'s own sl_ctx_switch never returns */");
     emit_line(cg, "}");
     emit_line(cg, "");
@@ -876,6 +880,7 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
      * which is exactly this shape (httpkit.sl's CR/LF/SPACE). */
     compute_liveness(&cg, pkgs, npkgs, main_index);
     compute_escape(&cg, pkgs, npkgs, main_index);
+    compute_moves(&cg, pkgs, npkgs, main_index);
 
     /* emit_globals (called from gen_whole_program) registers package
      * globals as it emits them; undo that bookkeeping before the real

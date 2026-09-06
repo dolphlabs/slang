@@ -267,6 +267,9 @@ method `pub fn` to export it to importing packages. Structs are
 values: assignment copies. Use `gc struct` for a shared heap object
 (today's previous default). A value struct cannot yet hold `gc`
 fields (`str`, lists, maps, `opt`/`result`, or `gc struct`).
+`own T` is uniquely owned: assignment and passing **move**, and
+use-after-move is a compile error. A moved binding can be reinitialized.
+`own` is freed when its binding goes out of scope unless it was moved.
 
 #### Option / Result
 

@@ -10,7 +10,8 @@ CODEGEN_SRCS = src/codegen/core.c src/codegen/infer.c src/codegen/expr.c \
               src/codegen/stmt.c src/codegen/native.c \
               src/codegen/program.c \
               src/codegen/liveness.c \
-              src/codegen/escape.c
+              src/codegen/escape.c \
+              src/codegen/move.c
 
 # Native packages: signatures (and json's generic dispatch) stay in
 # src/codegen/pkg_<name>/. Their C runtimes are runtime/sl_*.c.

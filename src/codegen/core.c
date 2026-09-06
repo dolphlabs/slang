@@ -233,6 +233,44 @@ TypeWrap type_wrap(const char *t, char **inner) {
     return TW_NONE;
 }
 
+int type_is_copy(CG *cg, const char *t) {
+    char *inner;
+    TypeWrap w = type_wrap(t, &inner);
+    if (w == TW_OWN || w == TW_REFMUT)
+        return 0;
+    if (w != TW_NONE)
+        return 1;
+    if (is_arr(t) || is_map(t) || is_opt(t) || is_result(t) || is_chan(t))
+        return 1;
+    if (struct_type_is_gc(cg, t))
+        return 1;
+    StructDef *sd = struct_find_canon(cg, t);
+    if (!sd)
+        return 1;
+    for (int i = 0; i < sd->nfields; i++) {
+        if (!type_is_copy(cg, sd->ftypes[i]))
+            return 0;
+    }
+    return 1;
+}
+
+int type_needs_drop(CG *cg, const char *t) {
+    char *inner;
+    TypeWrap w = type_wrap(t, &inner);
+    if (w == TW_OWN)
+        return 1;
+    if (w != TW_NONE)
+        return 0;
+    StructDef *sd = struct_find_canon(cg, t);
+    if (!sd || sd->is_gc)
+        return 0;
+    for (int i = 0; i < sd->nfields; i++) {
+        if (type_needs_drop(cg, sd->ftypes[i]))
+            return 1;
+    }
+    return 0;
+}
+
 int type_is_boxable(CG *cg, const char *t) {
     char *inner;
     if (type_wrap(t, &inner) != TW_NONE)
@@ -593,6 +631,9 @@ void var_push(CG *cg, const char *name, const char *slang) {
     cg->vars.items[cg->vars.count].name = (char *)name;
     cg->vars.items[cg->vars.count].slang = slang;
     cg->vars.items[cg->vars.count].ctype = ctype_of(cg, slang);
+    cg->vars.items[cg->vars.count].drop = slang ? type_needs_drop(cg, slang) : 0;
+    cg->vars.items[cg->vars.count].stack = 0;
+    cg->vars.items[cg->vars.count].moved = 0;
     cg->vars.count++;
 }
 

@@ -175,6 +175,7 @@ char *gen_comparison(CG *cg, Expr *e, const char *lt, const char *rt) {
 char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
     const char *name = e->as.call.name;
     *handled = 1;
+    move_consume(cg, e);
 
     if (!strcmp(name, "len")) {
         const char *t = infer_type(cg, e->as.call.args[0]);
@@ -417,6 +418,7 @@ char *gen_ctor(CG *cg, Expr *e) {
     char *v = gen_expr(cg, arg);
     cg->expect = saved;
     v = maybe_cast(cg, target, at, v);
+    move_consume(cg, arg);
     const char *cn = ctype_of(cg, ty);
     char *inner;
     if (!strcmp(name, "some")) {
@@ -566,6 +568,7 @@ char *gen_call(CG *cg, Expr *e) {
         sb_append(&sb, names[i]);
     }
     sb_putc(&sb, ')');
+    move_consume(cg, e);
 
     /* Tier 10: bracket this call with a root list built from the
      * liveness pass's own live_set for this node (see wrap_safepoint)

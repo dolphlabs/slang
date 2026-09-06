@@ -96,7 +96,9 @@ static int emit_backedge_enter(CG *cg, void *backedge_live_set,
 
 static void gen_scoped_block(CG *cg, Block *b) {
     var_scope_push(cg);
+    int from = cg->vars.count;
     gen_block(cg, b);
+    emit_scope_drops(cg, from);
     var_scope_pop(cg);
 }
 
@@ -117,6 +119,7 @@ void gen_stmt(CG *cg, Stmt *s) {
             char *elem = arr_elem(ann);
             var_redecl_check(cg, s->as.let.name, s->line);
             var_push(cg, s->as.let.name, ann);
+            emit_drop_flag(cg, s->as.let.name);
             emit_line(cg, "%s %s = sl_arr_new(sizeof(%s), %d);",
                       ctype_of(cg, ann), sanitize_ident(s->as.let.name),
                       ctype_of(cg, elem), type_is_gc_ptr(cg, elem));
@@ -134,6 +137,7 @@ void gen_stmt(CG *cg, Stmt *s) {
             map_kv(ann, &k, &v);
             var_redecl_check(cg, s->as.let.name, s->line);
             var_push(cg, s->as.let.name, ann);
+            emit_drop_flag(cg, s->as.let.name);
             emit_line(cg, "%s %s = sl_map_new(sizeof(%s), sizeof(%s), %d, %d, %d);",
                       ctype_of(cg, ann), sanitize_ident(s->as.let.name),
                       ctype_of(cg, k), ctype_of(cg, v), is_str(k),
@@ -193,6 +197,7 @@ void gen_stmt(CG *cg, Stmt *s) {
             init = gen_maplit(cg, s->as.let.init, ak, av);
         else
             init = gen_expr(cg, s->as.let.init);
+        move_consume(cg, s->as.let.init);
         if (s->as.let.stack) {
             char *inner;
             TypeWrap w = type_wrap(t, &inner);
@@ -210,17 +215,25 @@ void gen_stmt(CG *cg, Stmt *s) {
             cg->expect = saved_expect;
             var_redecl_check(cg, s->as.let.name, s->line);
             var_push(cg, s->as.let.name, t);
+            cg->vars.items[cg->vars.count - 1].stack = 1;
             emit_line(cg, "%s _sl_stk%d = %s;", pc, id, init);
             emit_line(cg, "%s %s = &_sl_stk%d;", ctype_of(cg, t),
                       sanitize_ident(s->as.let.name), id);
+            emit_drop_flag(cg, s->as.let.name);
             break;
         }
         init = maybe_cast(cg, t, it, init);
         cg->expect = saved_expect;
         var_redecl_check(cg, s->as.let.name, s->line);
         var_push(cg, s->as.let.name, t);
+        if (s->as.let.init->kind == EX_IDENT) {
+            VarSym *src = var_find(cg, s->as.let.init->as.ident.name);
+            if (src)
+                cg->vars.items[cg->vars.count - 1].stack = src->stack;
+        }
         emit_line(cg, "%s %s = %s;", ctype_of(cg, t),
                   sanitize_ident(s->as.let.name), init);
+        emit_drop_flag(cg, s->as.let.name);
         break;
     }
     case ST_ASSIGN: {
@@ -260,6 +273,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                 char *val = maybe_cast(cg, sd->ftypes[fi], vt,
                                        gen_expr(cg, s->as.assign.value));
                 cg->expect = se2;
+                move_consume(cg, s->as.assign.value);
                 emit_line(cg, "%s%s%s = %s;", b, struct_access(cg, bt),
                           sanitize_ident(sd->fields[fi]), val);
                 break;
@@ -279,7 +293,13 @@ void gen_stmt(CG *cg, Stmt *s) {
                 maybe_cast(cg, v->slang, vt,
                            gen_expr(cg, s->as.assign.value));
             cg->expect = se4;
+            int same = s->as.assign.value->kind == EX_IDENT &&
+                       !strcmp(s->as.assign.value->as.ident.name, name);
+            if (!same)
+                emit_drop_overwrite(cg, name);
+            move_consume(cg, s->as.assign.value);
             emit_line(cg, "%s = %s;", sanitize_ident(name), val);
+            move_reinit(cg, name);
             break;
         }
         if (tgt->kind == EX_UNARY && !strcmp(tgt->as.unary.op, "*")) {
@@ -306,6 +326,7 @@ void gen_stmt(CG *cg, Stmt *s) {
             char *val = maybe_cast(cg, inner, vt,
                                    gen_expr(cg, s->as.assign.value));
             cg->expect = se2;
+            move_consume(cg, s->as.assign.value);
             emit_line(cg, "*(%s) = %s;", p, val);
             break;
         }
@@ -336,6 +357,7 @@ void gen_stmt(CG *cg, Stmt *s) {
             char *val = maybe_cast(cg, sd->ftypes[fi], vt,
                                    gen_expr(cg, s->as.assign.value));
             cg->expect = se6;
+            move_consume(cg, s->as.assign.value);
             emit_line(cg, "%s%s%s = %s;", b, struct_access(cg, bt),
                       sanitize_ident(sd->fields[fi]), val);
             break;
@@ -510,8 +532,12 @@ void gen_stmt(CG *cg, Stmt *s) {
         int saved_loop_bp = cg->cur_loop_has_bp;
         cg->cur_loop_has_bp = has_bp;
         var_scope_push(cg);
-        gen_stmts(cg, s->as.while_stmt.body->stmts,
-                  s->as.while_stmt.body->count);
+        {
+            int from = cg->vars.count;
+            gen_stmts(cg, s->as.while_stmt.body->stmts,
+                      s->as.while_stmt.body->count);
+            emit_scope_drops(cg, from);
+        }
         var_scope_pop(cg);
         cg->loop_depth--;
         cg->cur_loop_has_bp = saved_loop_bp;
@@ -549,7 +575,12 @@ void gen_stmt(CG *cg, Stmt *s) {
         int saved_loop_bp = cg->cur_loop_has_bp;
         cg->cur_loop_has_bp = has_bp;
         var_scope_push(cg);
-        gen_stmts(cg, s->as.for_stmt.body->stmts, s->as.for_stmt.body->count);
+        {
+            int from = cg->vars.count;
+            gen_stmts(cg, s->as.for_stmt.body->stmts,
+                      s->as.for_stmt.body->count);
+            emit_scope_drops(cg, from);
+        }
         var_scope_pop(cg);
         cg->loop_depth--;
         cg->cur_loop_has_bp = saved_loop_bp;
@@ -722,6 +753,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                 cg_error(s->line, "missing return value");
             for (int i = 0; i < cg->open_backedge_brackets; i++)
                 emit_line(cg, "sl_rt_safepoint_exit();");
+            emit_scope_drops(cg, 0);
             emit_line(cg, "return;");
         } else {
             if (!cg->cur_ret)
@@ -739,9 +771,13 @@ void gen_stmt(CG *cg, Stmt *s) {
             char *val = maybe_cast(cg, cg->cur_ret, vt,
                                    gen_expr(cg, s->as.ret.value));
             cg->expect = se8;
+            move_consume(cg, s->as.ret.value);
+            emit_line(cg, "%s _sl_rv = %s;", ctype_of(cg, cg->cur_ret),
+                      val);
             for (int i = 0; i < cg->open_backedge_brackets; i++)
                 emit_line(cg, "sl_rt_safepoint_exit();");
-            emit_line(cg, "return %s;", val);
+            emit_scope_drops(cg, 0);
+            emit_line(cg, "return _sl_rv;");
         }
         break;
     }
@@ -758,6 +794,7 @@ void gen_stmt(CG *cg, Stmt *s) {
          * the moment this C block's stack space is reused. */
         if (cg->cur_loop_has_bp)
             emit_line(cg, "sl_rt_safepoint_exit();");
+        emit_scope_drops(cg, cg->var_scope_sp ? cg->var_scopes[cg->var_scope_sp - 1] : 0);
         emit_line(cg, "break;");
         break;
     }
@@ -775,6 +812,7 @@ void gen_stmt(CG *cg, Stmt *s) {
          * skipped iteration. */
         if (cg->cur_loop_has_bp)
             emit_line(cg, "sl_rt_safepoint_exit();");
+        emit_scope_drops(cg, cg->var_scope_sp ? cg->var_scopes[cg->var_scope_sp - 1] : 0);
         emit_line(cg, "continue;");
         break;
     }
@@ -877,6 +915,7 @@ void gen_stmt(CG *cg, Stmt *s) {
             }
             cg->ambient_count = ambient_mark;
         }
+        move_consume(cg, call);
         /* Tier 11 third slice: submits to the worker pool instead of
          * creating a one-shot OS thread. No pthread_t, no per-call
          * sigmask dance, no detach -- SIGTERM/SIGINT blocking now
@@ -937,6 +976,7 @@ void gen_stmts(CG *cg, Stmt **stmts, int count) {
         emit_line(cg, "}");
         var_redecl_check(cg, s->as.guard_let.name, s->line);
         var_push(cg, s->as.guard_let.name, inner);
+        emit_drop_flag(cg, s->as.guard_let.name);
         emit_line(cg, "%s %s = _sl_g%d->v;", ic,
                   sanitize_ident(s->as.guard_let.name), id);
         gen_stmts(cg, stmts + i + 1, count - i - 1);
