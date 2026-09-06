@@ -311,9 +311,10 @@ parameter is a compile error.
 
 ## Standard packages
 
-`time`, `net`, `json`, and `proc` are compiler-provided native
+`time`, `net`, `json`, `proc`, and `fs` are compiler-provided native
 packages — no source files, just `import "time";` / `import "net";`
-/ `import "json";` / `import "proc";` like any other package.
+/ `import "json";` / `import "proc";` / `import "fs";` like any other
+package.
 
 `http` and `byteutil` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
@@ -483,6 +484,28 @@ while proc.active_tasks() > 0 {
 
 `proc.getenv(name)` reads an environment variable, returning
 `opt[str]` (`none` if unset).
+
+#### `fs`
+
+POSIX file I/O on integer fds. `open` is read-only; `create` is
+write/trunc. `read`/`write`/`close` use the fd. `mkdir` creates one
+directory. Every call returns `result[_, str]`. These calls block the
+worker — use them for config and small files, not the accept loop.
+
+```slang
+import "fs";
+
+let cr = fs.create("/tmp/note");
+guard let fd = cr else { exit(1); }
+fs.write(fd, b"hi");
+fs.close(fd);
+
+let or = fs.open("/tmp/note");
+guard let in_fd = or else { exit(1); }
+let rr = fs.read(in_fd, 16);
+guard let data = rr else { exit(1); }
+fs.close(in_fd);
+```
 
 #### `byteutil`
 
@@ -762,7 +785,7 @@ src/
   main.c         driver: flags, invokes cc
 runtime/       real C runtime spliced into generated programs
   sl_core.c sl_gc.c sl_containers.c sl_sched.c sl_pool.c
-  sl_time.c sl_net.c sl_tls.c sl_json.c sl_proc.c
+  sl_time.c sl_net.c sl_tls.c sl_json.c sl_proc.c sl_fs.c
 stdlib/        slang-source packages (`import "http"`, `import "byteutil"`)
 examples/      one directory per example program
 tests/         language tests plus tests/runtime/ (no slangc)

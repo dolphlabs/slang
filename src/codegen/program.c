@@ -448,6 +448,11 @@ void force_native_result_types(CG *cg) {
     }
     if (want_pkg(cg, "proc"))
         opt_cname(cg, "str");
+    if (want_pkg(cg, "fs")) {
+        res_cname(cg, "i32", "str");
+        res_cname(cg, "bytes", "str");
+        res_cname(cg, "bool", "str");
+    }
 }
 
 /* Emit the native-package runtime sections that this program needs,
@@ -457,7 +462,8 @@ void emit_native_runtime(CG *cg) {
     int want_time = want_pkg(cg, "time");
     int want_net = want_pkg(cg, "net") || cg->want_link;
     int want_proc = want_pkg(cg, "proc");
-    if (!want_time && !want_net && !want_proc)
+    int want_fs = want_pkg(cg, "fs");
+    if (!want_time && !want_net && !want_proc && !want_fs)
         return;
     if (want_time)
         emit_runtime_file(cg, "sl_time.c");
@@ -467,6 +473,8 @@ void emit_native_runtime(CG *cg) {
         emit_runtime_file(cg, "sl_tls.c");
     if (want_proc)
         emit_runtime_file(cg, "sl_proc.c");
+    if (want_fs)
+        emit_runtime_file(cg, "sl_fs.c");
 }
 
 /* Emit the args-struct + task entry function for every distinct
