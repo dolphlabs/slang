@@ -84,29 +84,79 @@ char *gen_string_concat(CG *cg, Expr *e, const char *lt,
     return xasprintf("({ %ssl_str_concat(%s, %s); })", prelude.data, a, b);
 }
 
+static int expr_is_flat(CG *cg, Expr *e) {
+    switch (e->kind) {
+    case EX_INT:
+    case EX_FLOAT:
+    case EX_BOOL:
+    case EX_STRING:
+    case EX_BYTES:
+        return 1;
+    case EX_IDENT:
+        return strcmp(e->as.ident.name, "none") != 0;
+    case EX_CAST:
+        return expr_is_flat(cg, e->as.cast.operand);
+    case EX_UNARY:
+        return expr_is_flat(cg, e->as.unary.operand);
+    case EX_FIELD:
+        return expr_is_flat(cg, e->as.field.base);
+    case EX_BINARY: {
+        const char *op = e->as.binary.op;
+        if (!strcmp(op, "??"))
+            return 0;
+        if (!strcmp(op, "+")) {
+            const char *lt = infer_type(cg, e->as.binary.lhs);
+            const char *rt = infer_type(cg, e->as.binary.rhs);
+            if (is_str(lt) || is_str(rt) ||
+                (is_bytes(lt) && is_bytes(rt)) ||
+                (is_arr(lt) && is_arr(rt)))
+                return 0;
+        }
+        return expr_is_flat(cg, e->as.binary.lhs) &&
+               expr_is_flat(cg, e->as.binary.rhs);
+    }
+    default:
+        return 0;
+    }
+}
+
+static int expr_nonzero_int_lit(Expr *e) {
+    if (e->kind == EX_CAST)
+        return expr_nonzero_int_lit(e->as.cast.operand);
+    if (e->kind == EX_UNARY && !strcmp(e->as.unary.op, "-") &&
+        e->as.unary.operand->kind == EX_INT)
+        return e->as.unary.operand->as.int_lit.value != 0;
+    return e->kind == EX_INT && e->as.int_lit.value != 0;
+}
+
 char *gen_numeric_binary(CG *cg, Expr *e, const char *result_t) {
     const char *op = e->as.binary.op;
     const char *lt = infer_type(cg, e->as.binary.lhs);
     const char *rt = infer_type(cg, e->as.binary.rhs);
-    const char *rc = ctype_of(cg, result_t);
+    int flat = expr_is_flat(cg, e->as.binary.lhs) &&
+               expr_is_flat(cg, e->as.binary.rhs);
+    char *a;
+    char *b;
     StrBuf prelude;
     sb_init(&prelude);
-    int seq_id = cg->tmp_id++;
     int ambient_mark = cg->ambient_count;
-    char *a = maybe_cast(cg, result_t, lt, gen_expr(cg, e->as.binary.lhs));
-    a = sequence_one(cg, seq_id, 0, rc, result_t, a, e->as.binary.lhs,
-                     &prelude);
-    char *b = maybe_cast(cg, result_t, rt, gen_expr(cg, e->as.binary.rhs));
-    b = sequence_one(cg, seq_id, 1, rc, result_t, b, e->as.binary.rhs,
-                     &prelude);
+    if (flat) {
+        a = maybe_cast(cg, result_t, lt, gen_expr(cg, e->as.binary.lhs));
+        b = maybe_cast(cg, result_t, rt, gen_expr(cg, e->as.binary.rhs));
+    } else {
+        const char *rc = ctype_of(cg, result_t);
+        int seq_id = cg->tmp_id++;
+        a = maybe_cast(cg, result_t, lt, gen_expr(cg, e->as.binary.lhs));
+        a = sequence_one(cg, seq_id, 0, rc, result_t, a, e->as.binary.lhs,
+                         &prelude);
+        b = maybe_cast(cg, result_t, rt, gen_expr(cg, e->as.binary.rhs));
+        b = sequence_one(cg, seq_id, 1, rc, result_t, b, e->as.binary.rhs,
+                         &prelude);
+    }
     cg->ambient_count = ambient_mark;
 
-    /* Integer '/' and '%' by zero trap the CPU (SIGFPE) rather than
-     * raising a catchable error; guard explicitly so it becomes an
-     * ordinary runtime error like an out-of-bounds index instead of
-     * an uncatchable signal (which would defeat per-task failure
-     * isolation once a task can crash the whole process anyway). */
-    if ((!strcmp(op, "/") || !strcmp(op, "%")) && is_int(result_t)) {
+    if ((!strcmp(op, "/") || !strcmp(op, "%")) && is_int(result_t) &&
+        !expr_nonzero_int_lit(e->as.binary.rhs)) {
         int id = cg->tmp_id++;
         return xasprintf(
             "({ %s%s _sl_dv%d = (%s); if (_sl_dv%d == 0) "
@@ -115,9 +165,9 @@ char *gen_numeric_binary(CG *cg, Expr *e, const char *result_t) {
             prelude.data, map_type(result_t), id, b, id, map_type(result_t),
             a, op, id);
     }
-    /* Cast the result back to the slang result type: C's integer
-     * promotions would otherwise widen narrow types to int and lose
-     * the documented wrap-on-overflow semantics. */
+    if (flat)
+        return xasprintf("((%s)((%s) %s (%s)))", map_type(result_t), a, op,
+                         b);
     return xasprintf("({ %s((%s)((%s) %s (%s))); })", prelude.data,
                      map_type(result_t), a, op, b);
 }
@@ -136,43 +186,59 @@ char *gen_comparison(CG *cg, Expr *e, const char *lt, const char *rt) {
                         : is_until(lt) && is_until(rt) ? "until"
                                                        : pt;
     const char *ct = ctype_of(cg, seq_t);
+    int flat = expr_is_flat(cg, e->as.binary.lhs) &&
+               expr_is_flat(cg, e->as.binary.rhs);
     StrBuf prelude;
     sb_init(&prelude);
-    int seq_id = cg->tmp_id++;
     int ambient_mark = cg->ambient_count;
     char *a = gen_expr(cg, e->as.binary.lhs);
     if (widen)
         a = maybe_cast(cg, pt, lt, a);
-    a = sequence_one(cg, seq_id, 0, ct, seq_t, a, e->as.binary.lhs, &prelude);
-    char *b = gen_expr(cg, e->as.binary.rhs);
-    if (widen)
-        b = maybe_cast(cg, pt, rt, b);
-    b = sequence_one(cg, seq_id, 1, ct, seq_t, b, e->as.binary.rhs, &prelude);
+    char *b;
+    if (flat) {
+        b = gen_expr(cg, e->as.binary.rhs);
+        if (widen)
+            b = maybe_cast(cg, pt, rt, b);
+    } else {
+        int seq_id = cg->tmp_id++;
+        a = sequence_one(cg, seq_id, 0, ct, seq_t, a, e->as.binary.lhs,
+                         &prelude);
+        b = gen_expr(cg, e->as.binary.rhs);
+        if (widen)
+            b = maybe_cast(cg, pt, rt, b);
+        b = sequence_one(cg, seq_id, 1, ct, seq_t, b, e->as.binary.rhs,
+                         &prelude);
+    }
     cg->ambient_count = ambient_mark;
+    const char *wrap = flat ? "" : prelude.data;
+    const char *open = flat ? "" : "({ ";
+    const char *close = flat ? "" : "; })";
     if (is_str(lt) && is_str(rt))
-        return xasprintf("({ %s(strcmp(%s, %s) %s 0); })", prelude.data, a,
-                         b, op);
+        return xasprintf("%s%s(strcmp(%s, %s) %s 0)%s", open, wrap, a, b,
+                         op, close);
     if (is_bytes(lt) && is_bytes(rt)) {
         if (!strcmp(op, "=="))
-            return xasprintf("({ %s(sl_bytes_eq(%s, %s)); })", prelude.data,
-                             a, b);
-        return xasprintf("({ %s(!sl_bytes_eq(%s, %s)); })", prelude.data, a,
-                         b);
+            return xasprintf("%s%ssl_bytes_eq(%s, %s)%s", open, wrap, a, b,
+                             close);
+        return xasprintf("%s%s!sl_bytes_eq(%s, %s)%s", open, wrap, a, b,
+                         close);
     }
     if (is_fault(lt) && is_fault(rt)) {
         if (!strcmp(op, "=="))
-            return xasprintf("({ %s(sl_fault_eq(%s, %s)); })", prelude.data,
-                             a, b);
-        return xasprintf("({ %s(!sl_fault_eq(%s, %s)); })", prelude.data, a,
-                         b);
+            return xasprintf("%s%ssl_fault_eq(%s, %s)%s", open, wrap, a, b,
+                             close);
+        return xasprintf("%s%s!sl_fault_eq(%s, %s)%s", open, wrap, a, b,
+                         close);
     }
     if (is_peer(lt) && is_peer(rt)) {
         if (!strcmp(op, "=="))
-            return xasprintf("({ %s(sl_peer_eq(%s, %s)); })", prelude.data, a,
-                             b);
-        return xasprintf("({ %s(!sl_peer_eq(%s, %s)); })", prelude.data, a,
-                         b);
+            return xasprintf("%s%ssl_peer_eq(%s, %s)%s", open, wrap, a, b,
+                             close);
+        return xasprintf("%s%s!sl_peer_eq(%s, %s)%s", open, wrap, a, b,
+                         close);
     }
+    if (flat)
+        return xasprintf("(%s %s %s)", a, op, b);
     return xasprintf("({ %s(%s %s %s); })", prelude.data, a, op, b);
 }
 
