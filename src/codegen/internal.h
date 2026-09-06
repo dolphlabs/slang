@@ -293,7 +293,7 @@ typedef enum { NA_INT, NA_STR, NA_BYTES, NA_RAWPTR } NatArgKind;
 typedef struct {
     const char *pkg, *name;
     int nargs;
-    NatArgKind argkinds[3];
+    NatArgKind argkinds[4];
     const char *ret;
     int is_tls; /* needs OpenSSL: gates TLS_RUNTIME + -lssl -lcrypto */
 } NatSig;

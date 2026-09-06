@@ -405,6 +405,17 @@ the host you're actually talking to). Sending/receiving is blocking,
 same as plain `net` — call these from a `spawn`ed task if you need a
 connection handled without stalling anything else.
 
+Mutual TLS: `tls_ctx_require_client(sctx, client_ca)` on the server
+context demands a client certificate chained to that CA
+(`SSL_VERIFY_FAIL_IF_NO_PEER_CERT`). The client presents one with
+`tls_ctx_use_cert(cctx, cert, key)`. Extra server names on one
+listener: `tls_ctx_add_sni(sctx, host, cert, key)` swaps in that
+cert when the ClientHello SNI matches; unmatched names keep the
+default `tls_server_ctx` cert. `require_client` applies to SNI
+certs too, regardless of call order. TLS 1.3 can let `tls_dial`
+return before the server has rejected a missing client certificate;
+the first send or recv then fails.
+
 #### `json`
 
 `json.decode`/`json.encode` (de)serialize `str`/`bytes` against a
@@ -849,10 +860,11 @@ Makefile       build/test/clean
   per-task failure isolation, not an ownership/borrow checker.
   Mutating a shared struct/list/map from more than one task is on
   you, same as Go or Java. No `select` over channels.
-- TLS: no client certificates (mutual TLS), no SNI-based multi-cert
-  virtual hosting on one listener, no session resumption tuning.
-  Handshake and send/recv park; `getaddrinfo` in `tls_dial` parks
-  the task while a dedicated thread resolves.
+- TLS: no session resumption tuning. Handshake and send/recv park;
+  `getaddrinfo` in `tls_dial` parks the task while a dedicated
+  thread resolves. mTLS (`tls_ctx_require_client` /
+  `tls_ctx_use_cert`) and SNI extra certs (`tls_ctx_add_sni`) are
+  supported.
 - JSON: no dynamic/unknown-shape decoding (every decode target is a
   concrete slang type known at compile time — see the `json` section
   above), and JSON object keys map to struct field names verbatim
@@ -892,4 +904,3 @@ What this means in practice:
   only through opaque `rawptr` handles
 - Callback function pointers (C calling back into slang)
 - `select` over multiple channels
-- Mutual TLS (client certificates) and SNI-based virtual hosting

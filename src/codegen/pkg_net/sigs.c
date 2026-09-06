@@ -23,6 +23,10 @@ const NatSig NET_SIGS[] = {
     {"net", "tls_send", 2, {NA_RAWPTR, NA_BYTES}, "result[i32,str]", 1},
     {"net", "tls_recv", 2, {NA_RAWPTR, NA_INT}, "result[bytes,str]", 1},
     {"net", "tls_close", 1, {NA_RAWPTR}, NULL, 1},
+    {"net", "tls_ctx_require_client", 2, {NA_RAWPTR, NA_STR}, "result[bool,str]", 1},
+    {"net", "tls_ctx_use_cert", 3, {NA_RAWPTR, NA_STR, NA_STR}, "result[bool,str]", 1},
+    {"net", "tls_ctx_add_sni", 4, {NA_RAWPTR, NA_STR, NA_STR, NA_STR},
+     "result[bool,str]", 1},
 };
 
 const int NET_SIGS_LEN = sizeof(NET_SIGS) / sizeof(NET_SIGS[0]);

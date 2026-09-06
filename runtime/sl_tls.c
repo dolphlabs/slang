@@ -1,5 +1,6 @@
 #include <openssl/err.h>
 #include <openssl/ssl.h>
+#include <strings.h>
 
 /* ---- net: TLS listener/dialer built on OpenSSL ---- */
 
@@ -124,6 +125,20 @@ static sl_res_rawptr_str *sl_net_tls_accept(int lfd, void *ctxv) {
     SSL_set_fd(ssl, cfd);
     SSL_set_mode(ssl, SSL_MODE_ENABLE_PARTIAL_WRITE);
     int hs = sl_tls_handshake(ssl, 1);
+    if (hs == 0 && (SSL_get_verify_mode(ssl) & SSL_VERIFY_PEER)) {
+        X509 *peer = SSL_get_peer_certificate(ssl);
+        if (!peer) {
+            SSL_free(ssl);
+            close(cfd);
+            return sl_net_err_rawptr("client certificate required");
+        }
+        X509_free(peer);
+        if (SSL_get_verify_result(ssl) != X509_V_OK) {
+            SSL_free(ssl);
+            close(cfd);
+            return sl_net_err_rawptr(sl_tls_last_error());
+        }
+    }
     if (hs != 0) {
         char *m = hs == -1 ? sl_strdup("interrupted") : sl_tls_last_error();
         SSL_free(ssl);
@@ -234,6 +249,103 @@ static sl_res_bytes_str *sl_net_tls_recv(void *sslv, int max) {
         if (w == -1) return sl_net_err_bytes("interrupted");
         return sl_net_err_bytes(sl_tls_last_error());
     }
+}
+
+typedef struct sl_sni_cert {
+    char *host;
+    SSL_CTX *ctx;
+    struct sl_sni_cert *next;
+} sl_sni_cert;
+
+static int sl_sni_ex = -1;
+
+static void sl_tls_copy_verify(SSL_CTX *dst, SSL_CTX *src) {
+    SSL_CTX_set_verify(dst, SSL_CTX_get_verify_mode(src),
+                       SSL_CTX_get_verify_callback(src));
+    X509_STORE *store = SSL_CTX_get_cert_store(src);
+    if (store)
+        SSL_CTX_set1_verify_cert_store(dst, store);
+    SSL_CTX_set_session_cache_mode(dst, SSL_CTX_get_session_cache_mode(src));
+}
+
+static sl_res_bool_str *sl_net_tls_ctx_require_client(void *ctxv,
+                                                      const char *ca_path) {
+    sl_rt_need_fat_stack();
+    SSL_CTX *ctx = (SSL_CTX *)ctxv;
+    if (!ctx) return sl_net_err_bool("nil tls context");
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
+                       NULL);
+    SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_OFF);
+    if (SSL_CTX_load_verify_locations(ctx, ca_path, NULL) != 1)
+        return sl_net_err_bool(sl_tls_last_error());
+    if (sl_sni_ex >= 0) {
+        sl_sni_cert *list = (sl_sni_cert *)SSL_CTX_get_ex_data(ctx, sl_sni_ex);
+        for (; list; list = list->next)
+            sl_tls_copy_verify(list->ctx, ctx);
+    }
+    return sl_net_ok_bool(true);
+}
+
+static sl_res_bool_str *sl_net_tls_ctx_use_cert(void *ctxv, const char *cert,
+                                               const char *key) {
+    sl_rt_need_fat_stack();
+    SSL_CTX *ctx = (SSL_CTX *)ctxv;
+    if (!ctx) return sl_net_err_bool("nil tls context");
+    if (SSL_CTX_use_certificate_file(ctx, cert, SSL_FILETYPE_PEM) != 1)
+        return sl_net_err_bool(sl_tls_last_error());
+    if (SSL_CTX_use_PrivateKey_file(ctx, key, SSL_FILETYPE_PEM) != 1)
+        return sl_net_err_bool(sl_tls_last_error());
+    if (SSL_CTX_check_private_key(ctx) != 1)
+        return sl_net_err_bool("certificate/key mismatch");
+    return sl_net_ok_bool(true);
+}
+
+static int sl_tls_sni_cb(SSL *ssl, int *ad, void *arg) {
+    (void)ad;
+    (void)arg;
+    const char *name = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
+    SSL_CTX *base = SSL_get_SSL_CTX(ssl);
+    sl_sni_cert *list = (sl_sni_cert *)SSL_CTX_get_ex_data(base, sl_sni_ex);
+    if (!name)
+        return SSL_TLSEXT_ERR_OK;
+    for (; list; list = list->next) {
+        if (strcasecmp(list->host, name) == 0) {
+            SSL_set_SSL_CTX(ssl, list->ctx);
+            return SSL_TLSEXT_ERR_OK;
+        }
+    }
+    return SSL_TLSEXT_ERR_OK;
+}
+
+static sl_res_bool_str *sl_net_tls_ctx_add_sni(void *ctxv, const char *host,
+                                              const char *cert,
+                                              const char *key) {
+    sl_rt_need_fat_stack();
+    SSL_CTX *base = (SSL_CTX *)ctxv;
+    if (!base) return sl_net_err_bool("nil tls context");
+    if (!host[0]) return sl_net_err_bool("empty SNI hostname");
+    sl_res_rawptr_str *made = sl_net_tls_server_ctx(cert, key);
+    if (!made->ok) return sl_net_err_bool(made->e);
+    SSL_CTX *leaf = (SSL_CTX *)made->v;
+    if (sl_sni_ex < 0)
+        sl_sni_ex = SSL_CTX_get_ex_new_index(0, NULL, NULL, NULL, NULL);
+    sl_sni_cert *ent = (sl_sni_cert *)malloc(sizeof(sl_sni_cert));
+    if (!ent) {
+        SSL_CTX_free(leaf);
+        return sl_net_err_bool("out of memory");
+    }
+    ent->host = strdup(host);
+    if (!ent->host) {
+        SSL_CTX_free(leaf);
+        free(ent);
+        return sl_net_err_bool("out of memory");
+    }
+    sl_tls_copy_verify(leaf, base);
+    ent->ctx = leaf;
+    ent->next = (sl_sni_cert *)SSL_CTX_get_ex_data(base, sl_sni_ex);
+    SSL_CTX_set_ex_data(base, sl_sni_ex, ent);
+    SSL_CTX_set_tlsext_servername_callback(base, sl_tls_sni_cb);
+    return sl_net_ok_bool(true);
 }
 
 static void sl_net_tls_close(void *sslv) {
