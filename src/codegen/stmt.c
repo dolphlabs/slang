@@ -44,6 +44,36 @@
  * -- so they pass 1. Fixing ST_FOR_IN's own alias-rooting gap is a
  * separate, disclosed follow-up (see the Tier 11 plan), not bundled
  * into this slice. */
+static int emit_backedge_frame(CG *cg, void *backedge_live_set, int id) {
+    int n = live_set_nnamed(backedge_live_set);
+    if (n == 0)
+        return 0;
+    StrBuf roots;
+    sb_init(&roots);
+    sb_append(&roots, xasprintf("void *_sl_bp%d_roots[] = { ", id));
+    for (int i = 0; i < n; i++) {
+        if (i)
+            sb_append(&roots, ", ");
+        sb_append(&roots, xasprintf("(void *)%s", sanitize_ident(
+                                                       live_set_named(
+                                                           backedge_live_set, i))));
+    }
+    sb_append(&roots, "};");
+    emit_line(cg, "%s", roots.data);
+    emit_line(cg, "sl_safepoint _sl_bp%d;", id);
+    return n;
+}
+
+static void emit_loop_bp_exit(CG *cg) {
+    if (!cg->cur_loop_has_bp)
+        return;
+    if (cg->cur_loop_bp_iter_pred)
+        emit_line(cg, "if (%s) sl_rt_safepoint_exit();",
+                  cg->cur_loop_bp_iter_pred);
+    else
+        emit_line(cg, "sl_rt_safepoint_exit();");
+}
+
 static int emit_backedge_enter(CG *cg, void *backedge_live_set,
                                 int direct_yield_ok, int edge_id) {
     int n = live_set_nnamed(backedge_live_set);
@@ -72,19 +102,7 @@ static int emit_backedge_enter(CG *cg, void *backedge_live_set,
         return 0;
     }
     int id = cg->tmp_id++;
-    StrBuf roots;
-    sb_init(&roots);
-    sb_append(&roots, xasprintf("void *_sl_bp%d_roots[] = { ", id));
-    for (int i = 0; i < n; i++) {
-        if (i)
-            sb_append(&roots, ", ");
-        sb_append(&roots, xasprintf("(void *)%s", sanitize_ident(
-                                                       live_set_named(
-                                                           backedge_live_set, i))));
-    }
-    sb_append(&roots, "};");
-    emit_line(cg, "%s", roots.data);
-    emit_line(cg, "sl_safepoint _sl_bp%d;", id);
+    emit_backedge_frame(cg, backedge_live_set, id);
     emit_line(cg, "sl_rt_safepoint_enter(&_sl_bp%d, _sl_bp%d_roots, %d);", id,
               id, n);
     /* Tracks how many of these are currently open so ST_RETURN can
@@ -556,7 +574,9 @@ void gen_stmt(CG *cg, Stmt *s) {
         int has_bp = emit_backedge_enter(cg, s->backedge_live_set, poll, eid);
         cg->loop_depth++;
         int saved_loop_bp = cg->cur_loop_has_bp;
+        const char *saved_iter_pred = cg->cur_loop_bp_iter_pred;
         cg->cur_loop_has_bp = has_bp;
+        cg->cur_loop_bp_iter_pred = NULL;
         var_scope_push(cg);
         {
             int from = cg->vars.count;
@@ -567,6 +587,7 @@ void gen_stmt(CG *cg, Stmt *s) {
         var_scope_pop(cg);
         cg->loop_depth--;
         cg->cur_loop_has_bp = saved_loop_bp;
+        cg->cur_loop_bp_iter_pred = saved_iter_pred;
         if (has_bp) {
             cg->open_backedge_brackets--;
             emit_line(cg, "sl_rt_safepoint_exit();");
@@ -604,7 +625,9 @@ void gen_stmt(CG *cg, Stmt *s) {
         int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 1, eid);
         cg->loop_depth++;
         int saved_loop_bp = cg->cur_loop_has_bp;
+        const char *saved_iter_pred = cg->cur_loop_bp_iter_pred;
         cg->cur_loop_has_bp = has_bp;
+        cg->cur_loop_bp_iter_pred = NULL;
         var_scope_push(cg);
         {
             int from = cg->vars.count;
@@ -615,6 +638,7 @@ void gen_stmt(CG *cg, Stmt *s) {
         var_scope_pop(cg);
         cg->loop_depth--;
         cg->cur_loop_has_bp = saved_loop_bp;
+        cg->cur_loop_bp_iter_pred = saved_iter_pred;
         if (has_bp) {
             cg->open_backedge_brackets--;
             emit_line(cg, "sl_rt_safepoint_exit();");
@@ -651,10 +675,13 @@ void gen_stmt(CG *cg, Stmt *s) {
                       ec, vname, ec, id, id, ec);
             cg->loop_depth++;
             int saved_loop_bp = cg->cur_loop_has_bp;
+            const char *saved_iter_pred = cg->cur_loop_bp_iter_pred;
             cg->cur_loop_has_bp = has_bp;
+            cg->cur_loop_bp_iter_pred = NULL;
             gen_scoped_block(cg, s->as.for_in.body);
             cg->loop_depth--;
             cg->cur_loop_has_bp = saved_loop_bp;
+            cg->cur_loop_bp_iter_pred = saved_iter_pred;
             if (has_bp) {
                 cg->open_backedge_brackets--;
                 emit_line(cg, "sl_rt_safepoint_exit();");
@@ -667,31 +694,56 @@ void gen_stmt(CG *cg, Stmt *s) {
             break;
         }
         if (is_bytes(it)) {
+            int nlive = live_set_nnamed(s->backedge_live_set);
+            int bid = 0;
+            const char *iter_pred = NULL;
+            int has_bp = 0;
             var_redecl_check(cg, s->as.for_in.name, s->line);
             var_push(cg, s->as.for_in.name, "int");
             emit_line(cg, "{");
             cg->indent++;
             emit_line(cg, "sl_bytes *_sl_bt%d = %s;", id, iter);
+            if (nlive > 0) {
+                emit_line(cg, "int _sl_in%d = _sl_bt%d->interned;", id, id);
+                bid = cg->tmp_id++;
+                emit_backedge_frame(cg, s->backedge_live_set, bid);
+                emit_line(cg,
+                          "if (_sl_in%d) sl_rt_safepoint_enter(&_sl_bp%d, "
+                          "_sl_bp%d_roots, %d);",
+                          id, bid, bid, nlive);
+                has_bp = 1;
+                cg->open_backedge_brackets++;
+                iter_pred = xasprintf("!_sl_in%d", id);
+            }
             emit_line(cg,
                       "for (long long _sl_i%d = 0; _sl_i%d < _sl_bt%d->len; "
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
-            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0);
+            if (nlive > 0)
+                emit_line(cg,
+                          "if (!_sl_in%d) sl_rt_safepoint_enter(&_sl_bp%d, "
+                          "_sl_bp%d_roots, %d);",
+                          id, bid, bid, nlive);
             emit_line(cg, "long long %s = (long long)_sl_bt%d->ptr[_sl_i%d];",
                       vname, id, id);
             cg->loop_depth++;
             int saved_loop_bp = cg->cur_loop_has_bp;
+            const char *saved_iter_pred = cg->cur_loop_bp_iter_pred;
             cg->cur_loop_has_bp = has_bp;
+            cg->cur_loop_bp_iter_pred = iter_pred;
             gen_scoped_block(cg, s->as.for_in.body);
             cg->loop_depth--;
             cg->cur_loop_has_bp = saved_loop_bp;
-            if (has_bp) {
-                cg->open_backedge_brackets--;
-                emit_line(cg, "sl_rt_safepoint_exit();");
-            }
+            cg->cur_loop_bp_iter_pred = saved_iter_pred;
+            if (nlive > 0)
+                emit_line(cg, "if (!_sl_in%d) sl_rt_safepoint_exit();", id);
             cg->indent--;
             emit_line(cg, "}");
+            if (has_bp) {
+                cg->open_backedge_brackets--;
+                emit_line(cg, "if (_sl_in%d) sl_rt_safepoint_exit();", id);
+            }
             cg->indent--;
             emit_line(cg, "}");
             var_scope_pop(cg);
@@ -732,10 +784,13 @@ void gen_stmt(CG *cg, Stmt *s) {
                       vc, v2name, vc, id, id, id);
             cg->loop_depth++;
             int saved_loop_bp = cg->cur_loop_has_bp;
+            const char *saved_iter_pred = cg->cur_loop_bp_iter_pred;
             cg->cur_loop_has_bp = has_bp;
+            cg->cur_loop_bp_iter_pred = NULL;
             gen_scoped_block(cg, s->as.for_in.body);
             cg->loop_depth--;
             cg->cur_loop_has_bp = saved_loop_bp;
+            cg->cur_loop_bp_iter_pred = saved_iter_pred;
             if (has_bp) {
                 cg->open_backedge_brackets--;
                 emit_line(cg, "sl_rt_safepoint_exit();");
@@ -823,8 +878,7 @@ void gen_stmt(CG *cg, Stmt *s) {
          * iteration's bracket is a fresh stack-allocated sl_safepoint,
          * so leaving it open across a jump out of the loop dangles it
          * the moment this C block's stack space is reused. */
-        if (cg->cur_loop_has_bp)
-            emit_line(cg, "sl_rt_safepoint_exit();");
+        emit_loop_bp_exit(cg);
         emit_scope_drops(cg, cg->var_scope_sp ? cg->var_scopes[cg->var_scope_sp - 1] : 0);
         emit_line(cg, "break;");
         break;
@@ -841,8 +895,7 @@ void gen_stmt(CG *cg, Stmt *s) {
          * skipped exactly like a bare "continue;" skips the rest of
          * the loop body) -- one extra, permanently unpopped level per
          * skipped iteration. */
-        if (cg->cur_loop_has_bp)
-            emit_line(cg, "sl_rt_safepoint_exit();");
+        emit_loop_bp_exit(cg);
         emit_scope_drops(cg, cg->var_scope_sp ? cg->var_scopes[cg->var_scope_sp - 1] : 0);
         emit_line(cg, "continue;");
         break;

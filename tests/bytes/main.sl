@@ -42,6 +42,51 @@ for byte in b"AB" {
     println(byte);                  // 65, 66
 }
 
+fn sum_bytes(src: bytes) -> int {
+    let n = 0;
+    for b in src {
+        n = n + b;
+    }
+    return n;
+}
+println(sum_bytes(b"AB"));
+println(sum_bytes(b"A" + b"B"));
+
+fn sum_until(src: bytes, stop: int) -> int {
+    let n = 0;
+    for b in src {
+        if b == stop {
+            break;
+        }
+        n = n + b;
+    }
+    return n;
+}
+println(sum_until(b"ABC", 66));
+println(sum_until(b"A" + b"BC", 66));
+
+fn sum_skip(src: bytes, skip: int) -> int {
+    let n = 0;
+    for b in src {
+        if b == skip {
+            continue;
+        }
+        n = n + b;
+    }
+    return n;
+}
+println(sum_skip(b"ABC", 66));
+println(sum_skip(b"A" + b"BC", 66));
+
+let mid = b"cat";
+let acc = 0;
+for b in mid {
+    mid[0] = 98;
+    acc = acc + b;
+}
+println(acc);
+println(to_str(mid));
+
 // raw printing of binary data (no escaping)
 print(b"xy");
 println(b"");

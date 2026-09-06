@@ -253,6 +253,7 @@ struct CG {
      * exactly like cg->expect/cg->cur_ret already are. */
     int loop_depth;
     int cur_loop_has_bp;
+    const char *cur_loop_bp_iter_pred;
     /* break/continue, liveness.c side: opaque LiveSet* (same idiom as
      * Expr.live_set/Stmt.backedge_live_set) for the innermost
      * enclosing loop's own break/continue target. cur_break_live_set
