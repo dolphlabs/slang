@@ -315,9 +315,10 @@ parameter is a compile error.
 packages — no source files, just `import "time";` / `import "net";`
 / `import "json";` / `import "proc";` like any other package.
 
-`http` is a slang-source stdlib package (`stdlib/http`). `import "http"`
-resolves to a local directory first, then a native package, then
-`stdlib/<path>` (`SLANG_STDLIB` or the compiler's `SLANG_STDLIB_DIR`).
+`http` and `byteutil` are slang-source stdlib packages under `stdlib/`.
+`import "http"` / `import "byteutil"` resolve to a local directory first,
+then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
+compiler's `SLANG_STDLIB_DIR`).
 
 #### `time`
 
@@ -482,6 +483,21 @@ while proc.active_tasks() > 0 {
 
 `proc.getenv(name)` reads an environment variable, returning
 `opt[str]` (`none` if unset).
+
+#### `byteutil`
+
+Search, trim, and split on the `bytes` type — no new syntax. The
+package cannot be named `bytes` because that token is the type.
+
+```slang
+import "byteutil";
+
+byteutil.find(b"hello", 0, 108);     // 2, or -1
+byteutil.has_prefix(b"hello", b"he");
+byteutil.has_suffix(b"hello", b"lo");
+byteutil.trim(b"  hi\r\n");          // b"hi" (space/tab/CR/LF)
+byteutil.split(b"a,b", 44);          // [b"a", b"b"]
+```
 
 #### `http`
 
@@ -747,7 +763,7 @@ src/
 runtime/       real C runtime spliced into generated programs
   sl_core.c sl_gc.c sl_containers.c sl_sched.c sl_pool.c
   sl_time.c sl_net.c sl_tls.c sl_json.c sl_proc.c
-stdlib/        slang-source packages (`import "http"`)
+stdlib/        slang-source packages (`import "http"`, `import "byteutil"`)
 examples/      one directory per example program
 tests/         language tests plus tests/runtime/ (no slangc)
 Makefile       build/test/clean
