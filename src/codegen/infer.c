@@ -141,10 +141,11 @@ const char *infer_call(CG *cg, Expr *e) {
         if (n != 1)
             cg_error(e->line, "len() takes exactly one argument");
         const char *t = infer_type(cg, e->as.call.args[0]);
-        if (is_str(t) || is_bytes(t) || is_arr(t) || is_map(t))
+        if (is_str(t) || is_bytes(t) || is_arr(t) || is_map(t) || is_wire(t))
             return "int";
         cg_error(e->line,
-                 "len() expects a str, bytes, [T], or map (got %s)", t);
+                 "len() expects a str, bytes, [T], map, or wire (got %s)",
+                 t);
     }
     if (!strcmp(name, "push")) {
         if (n != 2)
@@ -280,6 +281,97 @@ const char *infer_call(CG *cg, Expr *e) {
                      "arena_new() expects an integer capacity (got %s)", t);
         return "arena";
     }
+    if (!strcmp(name, "until_of")) {
+        if (n != 1)
+            cg_error(e->line, "until_of() takes exactly one argument");
+        const char *t = infer_type(cg, e->as.call.args[0]);
+        if (!is_int(t) && !is_until(t))
+            cg_error(e->line,
+                     "until_of() expects a duration (got %s)", t);
+        return "until";
+    }
+    if (!strcmp(name, "until_never")) {
+        if (n != 0)
+            cg_error(e->line, "until_never() takes no arguments");
+        return "until";
+    }
+    if (!strcmp(name, "until_hit")) {
+        if (n != 1)
+            cg_error(e->line, "until_hit() takes exactly one argument");
+        const char *t = infer_type(cg, e->as.call.args[0]);
+        if (!is_until(t))
+            cg_error(e->line, "until_hit() expects an until (got %s)", t);
+        return "bool";
+    }
+    if (!strcmp(name, "fault_timeout") || !strcmp(name, "fault_reset") ||
+        !strcmp(name, "fault_closed") || !strcmp(name, "fault_io") ||
+        !strcmp(name, "fault_refused")) {
+        if (n != 0)
+            cg_error(e->line, "%s() takes no arguments", name);
+        return "fault";
+    }
+    if (!strcmp(name, "fault_kind")) {
+        if (n != 1)
+            cg_error(e->line, "fault_kind() takes exactly one argument");
+        const char *t = infer_type(cg, e->as.call.args[0]);
+        if (!is_fault(t))
+            cg_error(e->line, "fault_kind() expects a fault (got %s)", t);
+        return "int";
+    }
+    if (!strcmp(name, "peer_v4")) {
+        if (n != 5)
+            cg_error(e->line, "peer_v4() takes five arguments");
+        for (int i = 0; i < 5; i++) {
+            const char *t = infer_type(cg, e->as.call.args[i]);
+            if (!is_int(t))
+                cg_error(e->line,
+                         "peer_v4() argument %d must be an integer (got %s)",
+                         i + 1, t);
+        }
+        return "peer";
+    }
+    if (!strcmp(name, "peer_port")) {
+        if (n != 1)
+            cg_error(e->line, "peer_port() takes exactly one argument");
+        const char *t = infer_type(cg, e->as.call.args[0]);
+        if (!is_peer(t))
+            cg_error(e->line, "peer_port() expects a peer (got %s)", t);
+        return "int";
+    }
+    if (!strcmp(name, "trip_new")) {
+        if (n != 0)
+            cg_error(e->line, "trip_new() takes no arguments");
+        return "trip";
+    }
+    if (!strcmp(name, "link_listen")) {
+        if (n != 1)
+            cg_error(e->line, "link_listen() takes exactly one argument");
+        const char *t = infer_type(cg, e->as.call.args[0]);
+        if (!is_int(t))
+            cg_error(e->line,
+                     "link_listen() expects an integer port (got %s)", t);
+        cg->want_link = 1;
+        res_cname(cg, "link", "fault");
+        return "result[link,fault]";
+    }
+    if (!strcmp(name, "link_dial")) {
+        if (n != 3)
+            cg_error(e->line, "link_dial() takes exactly three arguments");
+        const char *ht = infer_type(cg, e->as.call.args[0]);
+        const char *pt = infer_type(cg, e->as.call.args[1]);
+        const char *ut = infer_type(cg, e->as.call.args[2]);
+        if (!is_str(ht))
+            cg_error(e->line, "link_dial() expects a host string (got %s)",
+                     ht);
+        if (!is_int(pt))
+            cg_error(e->line, "link_dial() expects an integer port (got %s)",
+                     pt);
+        if (!is_until(ut))
+            cg_error(e->line, "link_dial() expects an until (got %s)", ut);
+        cg->want_link = 1;
+        res_cname(cg, "link", "fault");
+        return "result[link,fault]";
+    }
 
     if (!strcmp(name, "has") || !strcmp(name, "del")) {
         if (n != 2)
@@ -322,6 +414,63 @@ const char *infer_call(CG *cg, Expr *e) {
         } else {
             /* method call on a struct-typed receiver */
             recv_t = infer_ident_name(cg, left, e->line);
+            if (type_is_trip(recv_t)) {
+                if (!strcmp(right, "pull")) {
+                    if (n != 0)
+                        cg_error(e->line, "trip.pull() takes no arguments");
+                    return "void";
+                }
+                if (!strcmp(right, "down")) {
+                    if (n != 0)
+                        cg_error(e->line, "trip.down() takes no arguments");
+                    return "bool";
+                }
+                cg_error(e->line, "type 'trip' has no method '%s'", right);
+            }
+            if (type_is_link(recv_t)) {
+                cg->want_link = 1;
+                if (!strcmp(right, "accept")) {
+                    if (n != 1)
+                        cg_error(e->line,
+                                 "link.accept() takes exactly one argument");
+                    const char *ut = infer_type(cg, e->as.call.args[0]);
+                    if (!is_until(ut))
+                        cg_error(e->line,
+                                 "link.accept() expects an until (got %s)",
+                                 ut);
+                    res_cname(cg, "link", "fault");
+                    return "result[link,fault]";
+                }
+                if (!strcmp(right, "send") || !strcmp(right, "recv")) {
+                    if (n != 2)
+                        cg_error(e->line,
+                                 "link.%s() takes exactly two arguments",
+                                 right);
+                    const char *wt = infer_type(cg, e->as.call.args[0]);
+                    const char *ut = infer_type(cg, e->as.call.args[1]);
+                    if (!is_wire(wt))
+                        cg_error(e->line,
+                                 "link.%s() expects a wire (got %s)",
+                                 right, wt);
+                    if (!is_until(ut))
+                        cg_error(e->line,
+                                 "link.%s() expects an until (got %s)",
+                                 right, ut);
+                    res_cname(cg, "int", "fault");
+                    return "result[int,fault]";
+                }
+                if (!strcmp(right, "peer")) {
+                    if (n != 0)
+                        cg_error(e->line, "link.peer() takes no arguments");
+                    return "peer";
+                }
+                if (!strcmp(right, "port")) {
+                    if (n != 0)
+                        cg_error(e->line, "link.port() takes no arguments");
+                    return "int";
+                }
+                cg_error(e->line, "type 'link' has no method '%s'", right);
+            }
             if (type_is_arena(recv_t)) {
                 if (!strcmp(right, "alloc")) {
                     if (n != 1)
@@ -347,6 +496,18 @@ const char *infer_call(CG *cg, Expr *e) {
                     if (n != 0)
                         cg_error(e->line, "arena.reset() takes no arguments");
                     return "void";
+                }
+                if (!strcmp(right, "wire")) {
+                    if (n != 1)
+                        cg_error(e->line,
+                                 "arena.wire() takes exactly one argument");
+                    const char *vt = infer_type(cg, e->as.call.args[0]);
+                    if (!is_int(vt))
+                        cg_error(e->line,
+                                 "arena.wire() expects an integer byte "
+                                 "count (got %s)",
+                                 vt);
+                    return "wire";
                 }
                 cg_error(e->line, "type 'arena' has no method '%s'", right);
             }
@@ -445,6 +606,15 @@ const char *infer_binary(CG *cg, Expr *e) {
             return "bool";
         if ((!strcmp(op, "==") || !strcmp(op, "!=")) && is_rawptr(lt) &&
             is_rawptr(rt))
+            return "bool";
+        if ((!strcmp(op, "==") || !strcmp(op, "!=")) && is_fault(lt) &&
+            is_fault(rt))
+            return "bool";
+        if ((!strcmp(op, "==") || !strcmp(op, "!=")) && is_peer(lt) &&
+            is_peer(rt))
+            return "bool";
+        if ((!strcmp(op, "==") || !strcmp(op, "!=")) && is_until(lt) &&
+            is_until(rt))
             return "bool";
         cg_error(e->line, "cannot compare %s and %s", lt, rt);
     }
@@ -582,7 +752,7 @@ const char *infer_type(CG *cg, Expr *e) {
         }
         if (!is_int(it))
             cg_error(e->line, "index must be an integer (got %s)", it);
-        if (is_bytes(bt))
+        if (is_bytes(bt) || is_wire(bt))
             return "int";
         if (is_arr(bt))
             return arr_elem(bt);
@@ -604,6 +774,8 @@ const char *infer_type(CG *cg, Expr *e) {
         }
         if (is_bytes(bt))
             return "bytes";
+        if (is_wire(bt))
+            return "wire";
         if (is_arr(bt))
             return bt;
         cg_error(e->line, "cannot slice a value of type %s", bt);

@@ -60,6 +60,7 @@ static _Atomic int sl_rt_shutdown_flag = 0;
  * cannot reference them directly without a compile error in that
  * case, hence this indirection instead of a direct call. */
 static void (*sl_rt_shutdown_hook)(void) = NULL;
+static void (*sl_rt_io_kick_hook)(void) = NULL;
 
 /* Tier 10: a lexically-scoped chain of GC root lists, one per
  * currently in-flight call-site safepoint on this thread (the
@@ -146,6 +147,9 @@ typedef struct sl_task {
                                 sl_time_sleepers (pkg_time/runtime.c)
                                 via `next`, exactly like park_mu is
                                 meaningful only while parked. */
+    long long io_deadline_ns; /* absolute mono-ns; 0 means none.
+                                meaningful while parked on the net
+                                reactor wait list. */
     long long run_start_ns;  /* Tier 11 seventh slice (cooperative
                                 preemption): monotonic time this task's
                                 CURRENT stint on an OS thread began --
@@ -834,5 +838,147 @@ static void sl_arena_free(sl_arena *a) {
     a->base = NULL;
     a->cap = 0;
     a->used = 0;
+}
+
+typedef struct sl_wire {
+    unsigned char *ptr;
+    long long len;
+} sl_wire;
+
+typedef int64_t sl_until;
+
+#define SL_FAULT_TIMEOUT 1
+#define SL_FAULT_RESET   2
+#define SL_FAULT_CLOSED  3
+#define SL_FAULT_IO      4
+#define SL_FAULT_REFUSED 5
+
+typedef struct sl_fault {
+    int kind;
+    const char *detail;
+} sl_fault;
+
+typedef struct sl_peer {
+    uint32_t addr;
+    uint16_t port;
+} sl_peer;
+
+typedef struct sl_trip {
+    _Atomic int down;
+} sl_trip;
+
+typedef struct sl_link {
+    int fd;
+    int live;
+} sl_link;
+
+static long long sl_now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
+}
+
+static sl_until sl_until_of(long long abs_ns) { return (sl_until)abs_ns; }
+static sl_until sl_until_never(void) { return 0; }
+static int sl_until_hit(sl_until u) {
+    return u != 0 && sl_now_ns() >= u;
+}
+
+static sl_fault sl_fault_make(int kind, const char *d) {
+    sl_fault f;
+    f.kind = kind;
+    f.detail = d ? d : "";
+    return f;
+}
+static sl_fault sl_fault_timeout(void) {
+    return sl_fault_make(SL_FAULT_TIMEOUT, "timeout");
+}
+static sl_fault sl_fault_reset(void) {
+    return sl_fault_make(SL_FAULT_RESET, "reset");
+}
+static sl_fault sl_fault_closed(void) {
+    return sl_fault_make(SL_FAULT_CLOSED, "closed");
+}
+static sl_fault sl_fault_io(void) {
+    return sl_fault_make(SL_FAULT_IO, "io");
+}
+static sl_fault sl_fault_refused(void) {
+    return sl_fault_make(SL_FAULT_REFUSED, "refused");
+}
+static int sl_fault_kind(sl_fault f) { return f.kind; }
+static int sl_fault_eq(sl_fault a, sl_fault b) { return a.kind == b.kind; }
+
+static sl_peer sl_peer_v4(long long a, long long b, long long c, long long d,
+                          long long port) {
+    sl_peer p;
+    p.addr = ((uint32_t)(a & 255) << 24) | ((uint32_t)(b & 255) << 16) |
+             ((uint32_t)(c & 255) << 8) | (uint32_t)(d & 255);
+    p.port = (uint16_t)port;
+    return p;
+}
+static int sl_peer_port(sl_peer p) { return (int)p.port; }
+static int sl_peer_eq(sl_peer a, sl_peer b) {
+    return a.addr == b.addr && a.port == b.port;
+}
+
+static sl_trip *sl_trip_new(void) {
+    sl_trip *t = (sl_trip *)malloc(sizeof(sl_trip));
+    if (!t)
+        sl_rt_error("trip allocation failed", 0, 0);
+    atomic_init(&t->down, 0);
+    return t;
+}
+static void sl_trip_pull(sl_trip *t) {
+    if (!t)
+        return;
+    atomic_store_explicit(&t->down, 1, memory_order_release);
+    if (sl_rt_io_kick_hook)
+        sl_rt_io_kick_hook();
+}
+static int sl_trip_down(sl_trip *t) {
+    return t && atomic_load_explicit(&t->down, memory_order_acquire);
+}
+
+static sl_wire sl_wire_make(unsigned char *p, long long n) {
+    sl_wire w;
+    w.ptr = p;
+    w.len = n;
+    return w;
+}
+static int sl_wire_at(sl_wire w, long long i) {
+    if (i < 0 || i >= w.len)
+        sl_rt_error("wire index out of bounds", i, w.len);
+    return (int)w.ptr[i];
+}
+static void sl_wire_set(sl_wire w, long long i, unsigned char v) {
+    if (i < 0 || i >= w.len)
+        sl_rt_error("wire index out of bounds", i, w.len);
+    w.ptr[i] = v;
+}
+static sl_wire sl_wire_slice(sl_wire w, long long s, long long e) {
+    if (s < 0)
+        s = 0;
+    if (e > w.len)
+        e = w.len;
+    if (e < s)
+        e = s;
+    sl_wire r;
+    r.ptr = w.ptr + s;
+    r.len = e - s;
+    return r;
+}
+
+static sl_link sl_link_from_fd(int fd) {
+    sl_link l;
+    l.fd = fd;
+    l.live = fd >= 0;
+    return l;
+}
+static void sl_link_free(sl_link *l) {
+    if (!l || !l->live)
+        return;
+    close(l->fd);
+    l->live = 0;
+    l->fd = -1;
 }
 

@@ -488,6 +488,19 @@ void gen_stmt(CG *cg, Stmt *s) {
                       prelude.data, b, i, val);
             break;
         }
+        if (is_wire(bt)) {
+            if (!is_int(vt))
+                cg_error(s->line,
+                         "wire assignment requires an integer (got %s)",
+                         vt);
+            char *val = gen_expr(cg, s->as.assign.value);
+            val = sequence_one(cg, bi_id, 2, map_type("int"), "int", val,
+                               s->as.assign.value, &prelude);
+            cg->ambient_count = ambient_mark;
+            emit_line(cg, "%ssl_wire_set(%s, %s, (unsigned char)(%s));",
+                      prelude.data, b, i, val);
+            break;
+        }
         if (is_arr(bt)) {
             char *elem = arr_elem(bt);
             if (!value_assignable(elem, s->as.assign.value, vt))
@@ -984,11 +997,14 @@ void gen_stmts(CG *cg, Stmt **stmts, int count) {
         gen_scoped_block(cg, s->as.guard_let.body);
         emit_line(cg, "}");
         var_redecl_check(cg, s->as.guard_let.name, s->line);
+        int from = cg->vars.count;
         var_push(cg, s->as.guard_let.name, inner);
         emit_drop_flag(cg, s->as.guard_let.name);
         emit_line(cg, "%s %s = _sl_g%d->v;", ic,
                   sanitize_ident(s->as.guard_let.name), id);
         gen_stmts(cg, stmts + i + 1, count - i - 1);
+        emit_scope_drops(cg, from);
+        cg->vars.count = from;
         cg->indent--;
         emit_line(cg, "}");
         return;

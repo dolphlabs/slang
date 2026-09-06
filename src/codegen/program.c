@@ -434,10 +434,12 @@ void emit_opt_res_tracers(CG *cg) {
  * owning package is imported so their typedefs always exist
  * alongside the runtime code that references them. */
 void force_native_result_types(CG *cg) {
-    if (want_pkg(cg, "net")) {
+    if (want_pkg(cg, "net") || cg->want_link) {
         res_cname(cg, "i32", "str");
         res_cname(cg, "bytes", "str");
         res_cname(cg, "bool", "str");
+        res_cname(cg, "link", "fault");
+        res_cname(cg, "int", "fault");
         /* cg->want_tls is only known for certain after the dry run
          * has walked every statement (same "populate now, read back
          * on the real run" pattern as opts/res/spawns above) */
@@ -453,7 +455,7 @@ void force_native_result_types(CG *cg) {
  * emit_opt_res_types so the fixed result/opt instantiations exist. */
 void emit_native_runtime(CG *cg) {
     int want_time = want_pkg(cg, "time");
-    int want_net = want_pkg(cg, "net");
+    int want_net = want_pkg(cg, "net") || cg->want_link;
     int want_proc = want_pkg(cg, "proc");
     if (!want_time && !want_net && !want_proc)
         return;
@@ -714,11 +716,11 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
                               int main_index) {
     emit_prelude(cg);
 
+    force_native_result_types(cg);
     emit_opt_res_forward_decls(cg);
     emit_struct_types(cg);
     emit_struct_tracers(cg);
 
-    force_native_result_types(cg);
     emit_opt_res_types(cg);
     emit_opt_res_tracers(cg);
 
@@ -812,7 +814,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
      * sl_proc_install_signal_handlers() below, so sl_rt_shutdown_hook
      * (runtime_core.c) is guaranteed set before the signal thread could
      * ever consume a signal and try to call through it. */
-    if (want_pkg(cg, "net"))
+    if (want_pkg(cg, "net") || cg->want_link)
         emit_line(cg, "    sl_reactor_start();");
     if (want_pkg(cg, "proc"))
         emit_line(cg, "    sl_proc_install_signal_handlers();");

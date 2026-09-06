@@ -666,6 +666,25 @@ static Type *parse_type_atom(Parser *p) {
     case T_TY_ARENA:
         advance(p);
         return ty_named(xstrdup("arena"));
+    case T_TY_WIRE:
+        advance(p);
+        return ty_named(xstrdup("wire"));
+    case T_TY_UNTIL:
+        advance(p);
+        return ty_named(xstrdup("until"));
+    case T_TY_FAULT:
+        advance(p);
+        return ty_named(xstrdup("fault"));
+    case T_TY_PEER:
+        advance(p);
+        return ty_named(xstrdup("peer"));
+    case T_TY_TRIP:
+        advance(p);
+        return ty_named(xstrdup("trip"));
+    case T_KW_LINK:
+    case T_TY_LINK:
+        advance(p);
+        return ty_named(xstrdup("link"));
     case T_IDENT: {
         if (!strcmp(tk->text, "ptr") && next_is(p, T_LBRACKET)) {
             advance(p);
@@ -693,7 +712,8 @@ static Type *parse_type_atom(Parser *p) {
         parse_error(tk,
                     "expected a type name (int, float, str, bool, bytes, "
                     "i8..u64, f32, [T], map[K]V, opt[T], result[T,E], "
-                    "chan[T], duration, rawptr, arena, ptr[T], own T, gc T, "
+                    "chan[T], duration, rawptr, arena, wire, until, fault, "
+                    "peer, trip, link, ptr[T], own T, gc T, "
                     "&T, &'a T, &mut T, *T, *mut T, or a struct name)");
     }
     return NULL;

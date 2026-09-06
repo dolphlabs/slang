@@ -423,6 +423,12 @@ const char *token_type_name(TokenType t) {
     case T_TY_DURATION: return "'duration'";
     case T_TY_RAWPTR: return "'rawptr'";
     case T_TY_ARENA: return "'arena'";
+    case T_TY_WIRE:  return "'wire'";
+    case T_TY_UNTIL: return "'until'";
+    case T_TY_FAULT: return "'fault'";
+    case T_TY_PEER:  return "'peer'";
+    case T_TY_TRIP:  return "'trip'";
+    case T_TY_LINK:  return "'link'";
     case T_TY_CHAN:  return "'chan'";
     case T_PLUS:     return "'+'";
     case T_MINUS:    return "'-'";

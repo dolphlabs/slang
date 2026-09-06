@@ -124,10 +124,16 @@ char *gen_numeric_binary(CG *cg, Expr *e, const char *result_t) {
 
 char *gen_comparison(CG *cg, Expr *e, const char *lt, const char *rt) {
     const char *op = e->as.binary.op;
-    int widen = !(is_str(lt) && is_str(rt)) && !(is_bytes(lt) && is_bytes(rt));
+    int widen = !(is_str(lt) && is_str(rt)) && !(is_bytes(lt) && is_bytes(rt)) &&
+                !(is_fault(lt) && is_fault(rt)) &&
+                !(is_peer(lt) && is_peer(rt)) &&
+                !(is_until(lt) && is_until(rt));
     const char *pt = widen ? promote(lt, rt) : NULL;
-    const char *seq_t = is_str(lt) && is_str(rt)     ? "str"
+    const char *seq_t = is_str(lt) && is_str(rt)       ? "str"
                         : is_bytes(lt) && is_bytes(rt) ? "bytes"
+                        : is_fault(lt) && is_fault(rt) ? "fault"
+                        : is_peer(lt) && is_peer(rt)   ? "peer"
+                        : is_until(lt) && is_until(rt) ? "until"
                                                        : pt;
     const char *ct = ctype_of(cg, seq_t);
     StrBuf prelude;
@@ -151,6 +157,20 @@ char *gen_comparison(CG *cg, Expr *e, const char *lt, const char *rt) {
             return xasprintf("({ %s(sl_bytes_eq(%s, %s)); })", prelude.data,
                              a, b);
         return xasprintf("({ %s(!sl_bytes_eq(%s, %s)); })", prelude.data, a,
+                         b);
+    }
+    if (is_fault(lt) && is_fault(rt)) {
+        if (!strcmp(op, "=="))
+            return xasprintf("({ %s(sl_fault_eq(%s, %s)); })", prelude.data,
+                             a, b);
+        return xasprintf("({ %s(!sl_fault_eq(%s, %s)); })", prelude.data, a,
+                         b);
+    }
+    if (is_peer(lt) && is_peer(rt)) {
+        if (!strcmp(op, "=="))
+            return xasprintf("({ %s(sl_peer_eq(%s, %s)); })", prelude.data, a,
+                             b);
+        return xasprintf("({ %s(!sl_peer_eq(%s, %s)); })", prelude.data, a,
                          b);
     }
     return xasprintf("({ %s(%s %s %s); })", prelude.data, a, op, b);
@@ -185,6 +205,8 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
             inner = xasprintf("((long long)strlen(%s))", a);
         else if (is_map(t))
             inner = xasprintf("((%s)->count)", a);
+        else if (is_wire(t))
+            inner = xasprintf("((%s).len)", a);
         else
             inner = xasprintf("((%s)->len)", a);
         return wrap_safepoint(cg, e, ctype_of(cg, "int"), NULL, inner);
@@ -357,6 +379,77 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *a = gen_expr(cg, e->as.call.args[0]);
         char *inner = xasprintf("sl_arena_new(%s)", a);
         return wrap_safepoint(cg, e, ctype_of(cg, "arena"), NULL, inner);
+    }
+    if (!strcmp(name, "until_of")) {
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        char *inner = xasprintf("sl_until_of(%s)", a);
+        return wrap_safepoint(cg, e, ctype_of(cg, "until"), NULL, inner);
+    }
+    if (!strcmp(name, "until_never")) {
+        char *inner = xstrdup("sl_until_never()");
+        return wrap_safepoint(cg, e, ctype_of(cg, "until"), NULL, inner);
+    }
+    if (!strcmp(name, "until_hit")) {
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        char *inner = xasprintf("(sl_until_hit(%s))", a);
+        return wrap_safepoint(cg, e, ctype_of(cg, "bool"), NULL, inner);
+    }
+    if (!strcmp(name, "fault_timeout") || !strcmp(name, "fault_reset") ||
+        !strcmp(name, "fault_closed") || !strcmp(name, "fault_io") ||
+        !strcmp(name, "fault_refused")) {
+        char *inner = xasprintf("sl_%s()", name);
+        return wrap_safepoint(cg, e, ctype_of(cg, "fault"), NULL, inner);
+    }
+    if (!strcmp(name, "fault_kind")) {
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        char *inner = xasprintf("((long long)sl_fault_kind(%s))", a);
+        return wrap_safepoint(cg, e, ctype_of(cg, "int"), NULL, inner);
+    }
+    if (!strcmp(name, "peer_v4")) {
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        char *b = gen_expr(cg, e->as.call.args[1]);
+        char *c = gen_expr(cg, e->as.call.args[2]);
+        char *d = gen_expr(cg, e->as.call.args[3]);
+        char *port = gen_expr(cg, e->as.call.args[4]);
+        char *inner = xasprintf("sl_peer_v4(%s, %s, %s, %s, %s)", a, b, c,
+                                d, port);
+        return wrap_safepoint(cg, e, ctype_of(cg, "peer"), NULL, inner);
+    }
+    if (!strcmp(name, "peer_port")) {
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        char *inner = xasprintf("((long long)sl_peer_port(%s))", a);
+        return wrap_safepoint(cg, e, ctype_of(cg, "int"), NULL, inner);
+    }
+    if (!strcmp(name, "trip_new")) {
+        char *inner = xstrdup("sl_trip_new()");
+        return wrap_safepoint(cg, e, ctype_of(cg, "trip"), NULL, inner);
+    }
+    if (!strcmp(name, "link_listen")) {
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        char *inner = xasprintf("sl_link_listen(%s)", a);
+        return wrap_safepoint(cg, e, ctype_of(cg, "result[link,fault]"),
+                              NULL, inner);
+    }
+    if (!strcmp(name, "link_dial")) {
+        StrBuf prelude;
+        sb_init(&prelude);
+        int seq_id = cg->tmp_id++;
+        int ambient_mark = cg->ambient_count;
+        char *h = gen_expr(cg, e->as.call.args[0]);
+        h = sequence_one(cg, seq_id, 0, ctype_of(cg, "str"), "str", h,
+                         e->as.call.args[0], &prelude);
+        char *p = gen_expr(cg, e->as.call.args[1]);
+        p = sequence_one(cg, seq_id, 1, ctype_of(cg, "int"), "int", p,
+                         e->as.call.args[1], &prelude);
+        char *u = gen_expr(cg, e->as.call.args[2]);
+        u = sequence_one(cg, seq_id, 2, ctype_of(cg, "until"), "until", u,
+                         e->as.call.args[2], &prelude);
+        char *inner = xasprintf("sl_link_dial(%s, %s, %s)", h, p, u);
+        char *result = wrap_safepoint(cg, e,
+                                      ctype_of(cg, "result[link,fault]"),
+                                      prelude.data, inner);
+        cg->ambient_count = ambient_mark;
+        return result;
     }
     if (!strcmp(name, "exit")) {
         char *a = gen_expr(cg, e->as.call.args[0]);
@@ -536,7 +629,79 @@ char *gen_call(CG *cg, Expr *e) {
                     char *inner = xasprintf("sl_arena_reset(%s)", self);
                     return wrap_safepoint(cg, e, NULL, NULL, inner);
                 }
+                if (!strcmp(right, "wire")) {
+                    char *n = gen_expr(cg, e->as.call.args[0]);
+                    char *inner = xasprintf(
+                        "({ long long _sl_n = %s; sl_wire_make((unsigned "
+                        "char *)sl_arena_alloc(%s, (size_t)_sl_n, 1), "
+                        "_sl_n); })",
+                        n, self);
+                    return wrap_safepoint(cg, e, ctype_of(cg, "wire"), NULL,
+                                          inner);
+                }
                 cg_error(e->line, "type 'arena' has no method '%s'", right);
+            }
+            if (type_is_trip(recv_t)) {
+                char *self = gen_ident_name(cg, left, e->line);
+                char *innerw;
+                if (type_wrap(recv_t, &innerw) != TW_NONE)
+                    self = xasprintf("(*(%s))", self);
+                if (!strcmp(right, "pull")) {
+                    char *inner = xasprintf("sl_trip_pull(%s)", self);
+                    return wrap_safepoint(cg, e, NULL, NULL, inner);
+                }
+                if (!strcmp(right, "down")) {
+                    char *inner = xasprintf("(sl_trip_down(%s))", self);
+                    return wrap_safepoint(cg, e, ctype_of(cg, "bool"), NULL,
+                                          inner);
+                }
+                cg_error(e->line, "type 'trip' has no method '%s'", right);
+            }
+            if (type_is_link(recv_t)) {
+                char *self = gen_ident_name(cg, left, e->line);
+                char *innerw;
+                if (type_wrap(recv_t, &innerw) == TW_NONE)
+                    self = xasprintf("(&(%s))", self);
+                if (!strcmp(right, "accept")) {
+                    char *u = gen_expr(cg, e->as.call.args[0]);
+                    char *inner = xasprintf("sl_link_accept(%s, %s)", self,
+                                            u);
+                    return wrap_safepoint(cg, e,
+                                          ctype_of(cg, "result[link,fault]"),
+                                          NULL, inner);
+                }
+                if (!strcmp(right, "send") || !strcmp(right, "recv")) {
+                    StrBuf prelude;
+                    sb_init(&prelude);
+                    int seq_id = cg->tmp_id++;
+                    int ambient_mark = cg->ambient_count;
+                    char *w = gen_expr(cg, e->as.call.args[0]);
+                    w = sequence_one(cg, seq_id, 0, ctype_of(cg, "wire"),
+                                     "wire", w, e->as.call.args[0],
+                                     &prelude);
+                    char *u = gen_expr(cg, e->as.call.args[1]);
+                    u = sequence_one(cg, seq_id, 1, ctype_of(cg, "until"),
+                                     "until", u, e->as.call.args[1],
+                                     &prelude);
+                    char *inner = xasprintf("sl_link_%s(%s, %s, %s)", right,
+                                            self, w, u);
+                    char *result = wrap_safepoint(
+                        cg, e, ctype_of(cg, "result[int,fault]"),
+                        prelude.data, inner);
+                    cg->ambient_count = ambient_mark;
+                    return result;
+                }
+                if (!strcmp(right, "peer")) {
+                    char *inner = xasprintf("sl_link_peer(%s)", self);
+                    return wrap_safepoint(cg, e, ctype_of(cg, "peer"), NULL,
+                                          inner);
+                }
+                if (!strcmp(right, "port")) {
+                    char *inner = xasprintf("sl_link_port(%s)", self);
+                    return wrap_safepoint(cg, e, ctype_of(cg, "int"), NULL,
+                                          inner);
+                }
+                cg_error(e->line, "type 'link' has no method '%s'", right);
             }
             StructDef *sd = struct_of_type(cg, recv_t);
             if (!sd)
@@ -800,6 +965,10 @@ char *gen_index(CG *cg, Expr *e) {
         return xasprintf("({ %s((long long)sl_bytes_at(%s, %s)); })",
                          prelude.data, b, i);
     }
+    if (is_wire(bt)) {
+        return xasprintf("({ %s((long long)sl_wire_at(%s, %s)); })",
+                         prelude.data, b, i);
+    }
     char *elem = arr_elem(bt);
     const char *ec = ctype_of(cg, elem);
     return xasprintf(
@@ -832,7 +1001,8 @@ char *gen_slice(CG *cg, Expr *e) {
                                     : xstrdup("0");
     char *end = e->as.slice.end
                     ? gen_expr(cg, e->as.slice.end)
-                    : xasprintf("%s->len", base_name);
+                    : is_wire(bt) ? xasprintf("%s.len", base_name)
+                                  : xasprintf("%s->len", base_name);
     if (e->as.slice.inclusive)
         end = xasprintf("(%s + 1)", end);
     int seq_id = cg->tmp_id++;
@@ -842,7 +1012,9 @@ char *gen_slice(CG *cg, Expr *e) {
                        e->as.slice.end, &prelude);
     cg->ambient_count = ambient_mark;
     return xasprintf("({ %s%s(%s, %s, %s); })", prelude.data,
-                     is_bytes(bt) ? "sl_bytes_slice" : "sl_arr_slice",
+                     is_bytes(bt)  ? "sl_bytes_slice"
+                     : is_wire(bt) ? "sl_wire_slice"
+                                   : "sl_arr_slice",
                      base_name, start, end);
 }
 
@@ -1086,6 +1258,25 @@ void gen_print(CG *cg, Expr *call, int newline) {
                   v);
         if (newline)
             emit_line(cg, "putchar(10);");
+    } else if (is_wire(t)) {
+        emit_line(cg, "fwrite((%s).ptr, 1, (size_t)(%s).len, stdout);", v, v);
+        if (newline)
+            emit_line(cg, "putchar(10);");
+    } else if (is_until(t)) {
+        emit_line(cg, "printf(\"%%lld%s\", (long long)(%s));",
+                  newline ? "\\n" : "", v);
+    } else if (is_fault(t)) {
+        emit_line(cg, "({ sl_fault _sl_f = %s; %s(_sl_f.detail%s); });", v,
+                  newline ? "puts" : "fputs", newline ? "" : ", stdout");
+    } else if (is_peer(t)) {
+        emit_line(cg,
+                  "({ sl_peer _sl_p = %s; printf(\"%%u.%%u.%%u.%%u:%%u%s\", "
+                  "(unsigned)((_sl_p.addr >> 24) & 255u), "
+                  "(unsigned)((_sl_p.addr >> 16) & 255u), "
+                  "(unsigned)((_sl_p.addr >> 8) & 255u), "
+                  "(unsigned)(_sl_p.addr & 255u), "
+                  "(unsigned)_sl_p.port); });",
+                  v, newline ? "\\n" : "");
     } else if (!is_str(t)) {
         cg_error(call->line,
                  "cannot print a value of type %s directly", t);

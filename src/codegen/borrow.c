@@ -746,7 +746,8 @@ static int param_feeds_ret(FuncSig *sig, int pi) {
 }
 
 static int arena_alloc_meth(const char *meth) {
-    return meth && (!strcmp(meth, "alloc") || !strcmp(meth, "alloc_bytes"));
+    return meth && (!strcmp(meth, "alloc") || !strcmp(meth, "alloc_bytes") ||
+                    !strcmp(meth, "wire"));
 }
 
 static int arena_method_call(BK *bk, Expr *e, char **recv, const char **meth) {

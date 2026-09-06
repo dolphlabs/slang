@@ -268,6 +268,7 @@ struct CG {
     int nnat;
     int want_tls; /* set once a net.tls_* function is type-checked */
     int want_json; /* set once a json.decode/json.encode is type-checked */
+    int want_link; /* set once link_* / link methods are type-checked */
     int stack_box;
     MirTable mirs;
 };
@@ -331,7 +332,15 @@ int is_num(const char *t);
 int is_str(const char *t);
 int is_bytes(const char *t);
 int is_rawptr(const char *t);
+int is_wire(const char *t);
+int is_until(const char *t);
+int is_fault(const char *t);
+int is_peer(const char *t);
+int is_trip(const char *t);
+int is_link(const char *t);
 int type_is_arena(const char *t);
+int type_is_link(const char *t);
+int type_is_trip(const char *t);
 int type_is_raw_ptr(const char *t);
 int is_arr(const char *t);
 int is_map(const char *t);
