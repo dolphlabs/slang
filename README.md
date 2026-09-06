@@ -127,6 +127,8 @@ no escaping).
   `extern fn`s (see C interop below)
 - `make_chan(n)` / `chan_send(ch, v)` / `chan_recv(ch)` / `chan_close(ch)`
   — construct and use a `chan[T]` (see Concurrency below)
+- `join_wait(h)` — wait for a `join[T]` from `spawn f(...)` (see
+  Concurrency below)
 
 ### Types
 
@@ -155,6 +157,7 @@ no escaping).
 | `gc T`     | `T *`       | traced heap box of a value type    |
 | `*T` / `*mut T` | `T *`  | raw pointer                        |
 | `chan[T]`  | `sl_chan *` | bounded thread-safe queue (see Concurrency) |
+| `join[T]`  | `sl_join *` | handle for a spawned task's result          |
 
 #### Numeric conversion rules
 
@@ -611,6 +614,10 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
   plain top-level function or an `extern fn`, not a method and not a
   builtin. There is no `spawn` on `net.*`/`time.*` calls directly;
   wrap the native call in a plain function and spawn that instead.
+  As a statement, the result is discarded. As an expression,
+  `let h = spawn f(...)` has type `join[T]` when `f` returns `T`.
+  `join_wait(h) -> result[T, str]` parks until `f` finishes; a panic
+  in that task is `err`, not process death.
 - **`chan[T]`**, built with `make_chan(capacity)` (element type
   inferred from an annotated binding, same as `none`): `chan_send(ch,
   v)` blocks while full, `chan_recv(ch) -> opt[T]` blocks while empty
@@ -633,10 +640,9 @@ tasks, not a type system that forbids sharing mutable state. Passing
 a struct, list, or map into a spawned task and mutating it from more
 than one task concurrently is exactly as unsafe as it is in Go or
 Java: nothing currently stops you, so don't. There's also no `select`
-over multiple channels yet, and no way to join/await a *specific*
-spawned task's completion other than coordinating through a channel
-yourselves — `proc.active_tasks()` (see the `proc` section) only
-gives you the aggregate count of everything currently in flight,
+over multiple channels yet. `join_wait` waits for one spawned task.
+`proc.active_tasks()` (see the `proc` section) is the aggregate count
+of everything currently in flight,
 useful for draining on shutdown but not for waiting on one task in
 particular.
 
@@ -844,8 +850,7 @@ Makefile       build/test/clean
 - No data-race protection: `spawn` gives you real concurrency and
   per-task failure isolation, not an ownership/borrow checker.
   Mutating a shared struct/list/map from more than one task is on
-  you, same as Go or Java. No `select` over channels, no way to
-  join/await a spawned task's completion besides a channel.
+  you, same as Go or Java. No `select` over channels.
 - TLS: no client certificates (mutual TLS), no SNI-based multi-cert
   virtual hosting on one listener, no session resumption tuning.
   Handshake and send/recv park; `getaddrinfo` in `tls_dial` parks
@@ -890,6 +895,4 @@ What this means in practice:
   only through opaque `rawptr` handles
 - Callback function pointers (C calling back into slang)
 - `select` over multiple channels
-- A join handle for `spawn`, so a task's completion (and any value)
-  can be awaited without hand-rolling it over a channel
 - Mutual TLS (client certificates) and SNI-based virtual hosting

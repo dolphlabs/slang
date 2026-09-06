@@ -147,6 +147,8 @@ static char *type_string(Type *t) {
                          type_string(t->as.result.err));
     case TY_CHAN:
         return xasprintf("chan[%s]", type_string(t->as.inner));
+    case TY_JOIN:
+        return xasprintf("join[%s]", type_string(t->as.inner));
     case TY_REF:
         if (t->lt)
             return xasprintf("&'%s %s", t->lt, type_string(t->as.inner));
@@ -260,6 +262,16 @@ static Expr *parse_primary(Parser *p) {
         advance(p);
         Expr *e = new_expr(p, EX_BOOL, tk->line);
         e->as.bool_lit.value = (tk->type == T_KW_TRUE);
+        return e;
+    }
+    case T_KW_SPAWN: {
+        Token *kw = advance(p);
+        Expr *call = parse_primary(p);
+        if (call->kind != EX_CALL)
+            parse_error(kw, "'spawn' requires a function call, e.g. "
+                            "'spawn handle(conn)'");
+        Expr *e = new_expr(p, EX_SPAWN, kw->line);
+        e->as.spawn.call = call;
         return e;
     }
     case T_IDENT: {
@@ -645,6 +657,13 @@ static Type *parse_type_atom(Parser *p) {
         expect(p, T_RBRACKET, "']' to close chan type");
         return ty_wrap(TY_CHAN, inner);
     }
+    case T_TY_JOIN: {
+        advance(p);
+        expect(p, T_LBRACKET, "'[' after 'join'");
+        Type *inner = parse_type(p);
+        expect(p, T_RBRACKET, "']' to close join type");
+        return ty_wrap(TY_JOIN, inner);
+    }
     case T_TY_RESULT: {
         advance(p);
         expect(p, T_LBRACKET, "'[' after 'result'");
@@ -712,7 +731,7 @@ static Type *parse_type_atom(Parser *p) {
         parse_error(tk,
                     "expected a type name (int, float, str, bool, bytes, "
                     "i8..u64, f32, [T], map[K]V, opt[T], result[T,E], "
-                    "chan[T], duration, rawptr, arena, wire, until, fault, "
+                    "chan[T], join[T], duration, rawptr, arena, wire, until, fault, "
                     "peer, trip, link, ptr[T], own T, gc T, "
                     "&T, &'a T, &mut T, *T, *mut T, or a struct name)");
     }

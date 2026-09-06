@@ -526,6 +526,15 @@ static LiveSet *live_expr(CG *cg, Expr *e, LiveSet *live_out) {
         return cur;
     }
 
+    case EX_SPAWN: {
+        Expr *call = e->as.spawn.call;
+        const char **expects = call_arg_expects(cg, call);
+        LiveSet *cur = process_children_reverse(
+            cg, call->as.call.args, call->as.call.nargs, live_out, expects);
+        e->live_set = ls_clone(cur);
+        call->live_set = e->live_set;
+        return cur;
+    }
     case EX_CALL: {
         const char **expects = call_arg_expects(cg, e);
         LiveSet *cur = process_children_reverse(
@@ -1019,6 +1028,15 @@ static void print_expr(FILE *out, Expr *e) {
             print_expr(out, e->as.structlit.vals[i]);
         if (e->live_set) {
             fprintf(out, "L%d: STRUCTLIT live=", e->line);
+            print_live_set(out, (LiveSet *)e->live_set);
+            fputc('\n', out);
+        }
+        return;
+    case EX_SPAWN:
+        for (int i = 0; i < e->as.spawn.call->as.call.nargs; i++)
+            print_expr(out, e->as.spawn.call->as.call.args[i]);
+        if (e->live_set) {
+            fprintf(out, "L%d: SPAWN live=", e->line);
             print_live_set(out, (LiveSet *)e->live_set);
             fputc('\n', out);
         }

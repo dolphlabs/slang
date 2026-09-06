@@ -11,6 +11,7 @@ typedef enum {
     TY_OPT,
     TY_RESULT,
     TY_CHAN,
+    TY_JOIN,
     TY_REF,
     TY_REFMUT,
     TY_OWN,
@@ -48,7 +49,8 @@ typedef enum {
     EX_LIST,   /* [a, b, c] */
     EX_MAPLIT, /* {k: v, ...} map literal */
     EX_FIELD,  /* base.field (postfix dot) */
-    EX_STRUCTLIT /* Name { field: value, ... } */
+    EX_STRUCTLIT, /* Name { field: value, ... } */
+    EX_SPAWN      /* spawn f(args...) as a join[T] expression */
 } ExprKind;
 
 typedef struct Expr Expr;
@@ -96,6 +98,7 @@ struct Expr {
             Expr **vals;
             int nfields;
         } structlit;
+        struct { Expr *call; } spawn;
     } as;
 };
 

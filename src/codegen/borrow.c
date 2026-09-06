@@ -445,6 +445,9 @@ static void mark_expr(BK *bk, CG *cg, Expr *e) {
         mark_expr(bk, cg, e->as.binary.lhs);
         mark_expr(bk, cg, e->as.binary.rhs);
         return;
+    case EX_SPAWN:
+        mark_expr(bk, cg, e->as.spawn.call);
+        return;
     case EX_CALL:
         mark_ident(bk, cg, e->as.call.name);
         for (i = 0; i < e->as.call.nargs; i++)
@@ -870,6 +873,9 @@ static void walk_expr(BK *bk, Expr *e, const char *ret_to) {
     case EX_BINARY:
         walk_expr(bk, e->as.binary.lhs, NULL);
         walk_expr(bk, e->as.binary.rhs, NULL);
+        return;
+    case EX_SPAWN:
+        walk_expr(bk, e->as.spawn.call, NULL);
         return;
     case EX_CALL:
         walk_call(bk, e, ret_to);

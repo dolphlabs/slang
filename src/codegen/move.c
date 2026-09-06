@@ -167,6 +167,9 @@ static void check_rvalue(CG *cg, Expr *e) {
         for (int i = 0; i < e->as.structlit.nfields; i++)
             check_rvalue(cg, e->as.structlit.vals[i]);
         return;
+    case EX_SPAWN:
+        check_rvalue(cg, e->as.spawn.call);
+        return;
     case EX_CALL: {
         char *left, *right;
         if (split_dotted(e->as.call.name, &left, &right) &&
@@ -551,6 +554,9 @@ void move_consume(CG *cg, Expr *e) {
     case EX_STRUCTLIT:
         for (int i = 0; i < e->as.structlit.nfields; i++)
             move_consume(cg, e->as.structlit.vals[i]);
+        return;
+    case EX_SPAWN:
+        move_consume(cg, e->as.spawn.call);
         return;
     case EX_CALL: {
         char *left, *right;

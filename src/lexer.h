@@ -66,6 +66,7 @@ typedef enum {
     T_TY_TRIP,     /* 'trip': shared stop signal */
     T_TY_LINK,     /* 'link': move-only connection */
     T_TY_CHAN,     /* 'chan' (always followed by [T]) */
+    T_TY_JOIN,     /* 'join' (always followed by [T]) */
 
     /* operators */
     T_PLUS,

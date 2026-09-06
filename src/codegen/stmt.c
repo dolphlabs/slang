@@ -871,96 +871,35 @@ void gen_stmt(CG *cg, Stmt *s) {
     case ST_SPAWN: {
         Expr *call = s->as.spawn.call;
         const char *name = call->as.call.name;
-        if (is_builtin_name(name))
-            cg_error(s->line, "'spawn' cannot target a builtin function");
-
-        FuncSig *sig;
-        char *left, *right;
-        if (split_dotted(name, &left, &right)) {
-            const char *pkg = import_try(cg, left);
-            if (!pkg)
-                cg_error(s->line,
-                         "'spawn' does not support methods yet (only "
-                         "plain functions and pkg.func calls)");
-            if (is_native_pkg(cg, pkg))
-                cg_error(s->line,
-                         "'spawn' cannot target a native package "
-                         "function directly; wrap it in a plain "
-                         "function and spawn that instead");
-            sig = sig_find_in(cg, pkg, right);
-            if (!sig)
-                cg_error(s->line, "package '%s' has no function '%s'",
-                         pkg, right);
-            if (!sig->is_pub)
-                cg_error(s->line,
-                         "function '%s' is not exported from package "
-                         "'%s' (add 'pub' to export it)",
-                         right, pkg);
-        } else {
-            sig = sig_find_in(cg, cg->cur_pkg, name);
-            if (!sig)
-                cg_error(s->line, "call to undefined function '%s'", name);
-        }
-
+        FuncSig *sig = spawn_target(cg, call, s->line);
         int nargs = call->as.call.nargs;
-        if (nargs != sig->nparams)
-            cg_error(s->line,
-                     "function '%s' expects %d argument(s), got %d", name,
-                     sig->nparams, nargs);
-
         SpawnShape *shape = spawn_shape_for(cg, sig);
         int id = cg->tmp_id++;
         emit_line(cg, "{");
         cg->indent++;
-        if (nargs == 0) {
-            move_consume(cg, call);
-            emit_line(cg, "sl_rt_active_spawns_inc();");
-            emit_line(cg, "sl_task_submit(%s_entry, NULL);", shape->tname);
-        } else if (!shape->has_tracer) {
-            emit_line(cg, "%s _sl_sa%d;", shape->sname, id);
-            for (int i = 0; i < nargs; i++) {
-                const char *saved = expect_push(cg, sig->param_slang[i]);
-                const char *at = infer_type(cg, call->as.call.args[i]);
-                cg->expect = saved;
-                if (!value_assignable(sig->param_slang[i],
-                                      call->as.call.args[i], at))
-                    cg_error(s->line,
-                             "argument %d of '%s': cannot pass %s where "
-                             "%s expected",
-                             i + 1, name, at, sig->param_slang[i]);
-                char *a = gen_expr(cg, call->as.call.args[i]);
-                a = maybe_cast(cg, sig->param_slang[i], at, a);
-                emit_line(cg, "_sl_sa%d.a%d = %s;", id, i, a);
-            }
-            move_consume(cg, call);
-            emit_line(cg, "sl_rt_active_spawns_inc();");
-            emit_line(cg, "sl_task_submit_copy(%s_entry, &_sl_sa%d, sizeof(_sl_sa%d));",
-                      shape->tname, id, id);
-        } else {
-            emit_line(cg, "%s *_sl_sa%d = (%s *)sl_gc_alloc(sizeof(%s), %s);",
-                      shape->sname, id, shape->sname, shape->sname,
-                      xasprintf("sl_gc_trace_%s", shape->sname));
-            int ambient_mark = cg->ambient_count;
-            ambient_root_push(cg, xasprintf("_sl_sa%d", id));
-            for (int i = 0; i < nargs; i++) {
-                const char *saved = expect_push(cg, sig->param_slang[i]);
-                const char *at = infer_type(cg, call->as.call.args[i]);
-                cg->expect = saved;
-                if (!value_assignable(sig->param_slang[i],
-                                      call->as.call.args[i], at))
-                    cg_error(s->line,
-                             "argument %d of '%s': cannot pass %s where "
-                             "%s expected",
-                             i + 1, name, at, sig->param_slang[i]);
-                char *a = gen_expr(cg, call->as.call.args[i]);
-                a = maybe_cast(cg, sig->param_slang[i], at, a);
-                emit_line(cg, "_sl_sa%d->a%d = %s;", id, i, a);
-            }
-            cg->ambient_count = ambient_mark;
-            move_consume(cg, call);
-            emit_line(cg, "sl_rt_active_spawns_inc();");
-            emit_line(cg, "sl_task_submit(%s_entry, _sl_sa%d);", shape->tname, id);
+        emit_line(cg, "%s *_sl_sa%d = (%s *)sl_gc_alloc(sizeof(%s), sl_gc_trace_%s);",
+                  shape->sname, id, shape->sname, shape->sname, shape->sname);
+        emit_line(cg, "_sl_sa%d->join = NULL;", id);
+        int ambient_mark = cg->ambient_count;
+        ambient_root_push(cg, xasprintf("_sl_sa%d", id));
+        for (int i = 0; i < nargs; i++) {
+            const char *saved = expect_push(cg, sig->param_slang[i]);
+            const char *at = infer_type(cg, call->as.call.args[i]);
+            cg->expect = saved;
+            if (!value_assignable(sig->param_slang[i],
+                                  call->as.call.args[i], at))
+                cg_error(s->line,
+                         "argument %d of '%s': cannot pass %s where "
+                         "%s expected",
+                         i + 1, name, at, sig->param_slang[i]);
+            char *a = gen_expr(cg, call->as.call.args[i]);
+            a = maybe_cast(cg, sig->param_slang[i], at, a);
+            emit_line(cg, "_sl_sa%d->a%d = %s;", id, i, a);
         }
+        cg->ambient_count = ambient_mark;
+        move_consume(cg, call);
+        emit_line(cg, "sl_rt_active_spawns_inc();");
+        emit_line(cg, "sl_task_submit(%s_entry, _sl_sa%d);", shape->tname, id);
         cg->indent--;
         emit_line(cg, "}");
         break;

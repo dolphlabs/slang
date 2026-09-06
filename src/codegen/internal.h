@@ -353,6 +353,7 @@ int is_map_key(const char *t);
 int is_opt(const char *t);
 int is_result(const char *t);
 int is_chan(const char *t);
+int is_join(const char *t);
 const char *res_access(CG *cg, const char *t);
 
 typedef enum {
@@ -377,6 +378,8 @@ const char *struct_access(CG *cg, const char *t);
 StructDef *struct_of_type(CG *cg, const char *t);
 char *opt_inner(const char *t);
 char *chan_elem(const char *t);
+char *join_elem(const char *t);
+FuncSig *spawn_target(CG *cg, Expr *call, int line);
 void result_te(const char *t, char **tv, char **ev);
 char *arr_elem(const char *t);
 int can_assign(const char *dst, const char *src);

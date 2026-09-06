@@ -247,7 +247,10 @@ typedef struct sl_task {
     long gc_pend_n;
     size_t gc_pend_bytes;
     size_t gc_pend_pub;
+    void *join;
 } sl_task;
+
+static void sl_join_fail(void *j, const char *msg);
 
 /* Tier 11 second slice: the scheduler's own run queue. Defined here,
  * not in runtime_pool.c where the rest of the pool machinery lives,
@@ -812,6 +815,8 @@ static void sl_rt_error(const char *msg, long long a, long long b) {
         fprintf(stderr,
                 "slang: task panicked: %s (index %lld, length %lld)\n",
                 msg, a, b);
+        if (sl_rt_current_task->join)
+            sl_join_fail(sl_rt_current_task->join, msg);
         sl_rt_active_spawns_dec();
         sl_ctx_switch(&sl_rt_current_task->rsp, SL_RT_TLS_NATIVE_RSP());
         fprintf(stderr,
