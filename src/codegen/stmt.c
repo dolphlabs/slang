@@ -1006,16 +1006,17 @@ void gen_stmts(CG *cg, Stmt **stmts, int count) {
         const char *ic = ctype_of(cg, inner);
         emit_line(cg, "{");
         cg->indent++;
+        const char *acc = type_is_gc_ptr(cg, et) ? "->" : ".";
         emit_line(cg, "%s _sl_g%d = %s;", oc, id, e);
-        emit_line(cg, "if (!(_sl_g%d->%s)) {", id, is_res ? "ok" : "has");
+        emit_line(cg, "if (!(_sl_g%d%s%s)) {", id, acc, is_res ? "ok" : "has");
         gen_scoped_block(cg, s->as.guard_let.body);
         emit_line(cg, "}");
         var_redecl_check(cg, s->as.guard_let.name, s->line);
         int from = cg->vars.count;
         var_push(cg, s->as.guard_let.name, inner);
         emit_drop_flag(cg, s->as.guard_let.name);
-        emit_line(cg, "%s %s = _sl_g%d->v;", ic,
-                  sanitize_ident(s->as.guard_let.name), id);
+        emit_line(cg, "%s %s = _sl_g%d%sv;", ic,
+                  sanitize_ident(s->as.guard_let.name), id, acc);
         gen_stmts(cg, stmts + i + 1, count - i - 1);
         emit_scope_drops(cg, from);
         cg->vars.count = from;

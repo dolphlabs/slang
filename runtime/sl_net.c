@@ -769,46 +769,30 @@ static sl_fault sl_link_fault_errno(int e) {
     return sl_fault_io();
 }
 
-static sl_res_link_fault *sl_link_ok_link(sl_link v) {
-    sl_res_link_fault *r = (sl_res_link_fault *)sl_gc_alloc(
-        sizeof(sl_res_link_fault), NULL);
-    r->ok = true;
-    r->v = v;
-    return r;
+static sl_res_link_fault sl_link_ok_link(sl_link v) {
+    return (sl_res_link_fault){ .ok = true, .v = v };
 }
 
-static sl_res_link_fault *sl_link_err_link(sl_fault f) {
-    sl_res_link_fault *r = (sl_res_link_fault *)sl_gc_alloc(
-        sizeof(sl_res_link_fault), NULL);
-    r->ok = false;
-    r->e = f;
-    return r;
+static sl_res_link_fault sl_link_err_link(sl_fault f) {
+    return (sl_res_link_fault){ .ok = false, .e = f };
 }
 
-static sl_res_int_fault *sl_link_ok_int(long long v) {
-    sl_res_int_fault *r = (sl_res_int_fault *)sl_gc_alloc(
-        sizeof(sl_res_int_fault), NULL);
-    r->ok = true;
-    r->v = v;
-    return r;
+static sl_res_int_fault sl_link_ok_int(long long v) {
+    return (sl_res_int_fault){ .ok = true, .v = v };
 }
 
-static sl_res_int_fault *sl_link_err_int(sl_fault f) {
-    sl_res_int_fault *r = (sl_res_int_fault *)sl_gc_alloc(
-        sizeof(sl_res_int_fault), NULL);
-    r->ok = false;
-    r->e = f;
-    return r;
+static sl_res_int_fault sl_link_err_int(sl_fault f) {
+    return (sl_res_int_fault){ .ok = false, .e = f };
 }
 
-static sl_res_link_fault *sl_link_listen(long long port) {
+static sl_res_link_fault sl_link_listen(long long port) {
     sl_res_i32_str *r = sl_net_listen((int)port);
     if (!r->ok)
         return sl_link_err_link(sl_fault_io());
     return sl_link_ok_link(sl_link_from_fd((int)r->v));
 }
 
-static sl_res_link_fault *sl_link_accept(sl_link *ln, sl_until u) {
+static sl_res_link_fault sl_link_accept(sl_link *ln, sl_until u) {
     if (!ln || !ln->live)
         return sl_link_err_link(sl_fault_closed());
     for (;;) {
@@ -829,8 +813,8 @@ static sl_res_link_fault *sl_link_accept(sl_link *ln, sl_until u) {
     }
 }
 
-static sl_res_link_fault *sl_link_dial(const char *host, long long port,
-                                      sl_until u) {
+static sl_res_link_fault sl_link_dial(const char *host, long long port,
+                                     sl_until u) {
     char portstr[16];
     sl_rt_preempt_disable();
     snprintf(portstr, sizeof(portstr), "%d", (int)port);
@@ -873,7 +857,7 @@ static sl_res_link_fault *sl_link_dial(const char *host, long long port,
     return sl_link_ok_link(sl_link_from_fd(fd));
 }
 
-static sl_res_int_fault *sl_link_send(sl_link *l, sl_wire w, sl_until u) {
+static sl_res_int_fault sl_link_send(sl_link *l, sl_wire w, sl_until u) {
     long long off = 0;
     if (!l || !l->live)
         return sl_link_err_int(sl_fault_closed());
@@ -896,7 +880,7 @@ static sl_res_int_fault *sl_link_send(sl_link *l, sl_wire w, sl_until u) {
     return sl_link_ok_int(w.len);
 }
 
-static sl_res_int_fault *sl_link_recv(sl_link *l, sl_wire w, sl_until u) {
+static sl_res_int_fault sl_link_recv(sl_link *l, sl_wire w, sl_until u) {
     if (!l || !l->live)
         return sl_link_err_int(sl_fault_closed());
     if (w.len <= 0)

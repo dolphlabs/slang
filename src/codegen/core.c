@@ -415,7 +415,12 @@ int type_is_gc_ptr(CG *cg, const char *t) {
     if (is_rawptr(t) || is_wire(t) || is_until(t) || is_fault(t) ||
         is_peer(t) || is_trip(t) || is_link(t) || !strcmp(t, "arena"))
         return 0;
-    if (is_arr(t) || is_map(t) || is_opt(t) || is_result(t) ||
+    if (is_result(t)) {
+        char *tv, *te;
+        result_te(t, &tv, &te);
+        return type_is_gc_ptr(cg, tv) || type_is_gc_ptr(cg, te);
+    }
+    if (is_arr(t) || is_map(t) || is_opt(t) ||
         is_chan(t) || is_str(t) || is_bytes(t))
         return 1;
     StructDef *sd = struct_find_canon(cg, t);
@@ -662,6 +667,10 @@ const char *res_cname(CG *cg, const char *tv, const char *te) {
     r->cname =
         xasprintf("sl_res_%s_%s", sanitize_pkg(tv), sanitize_pkg(te));
     return r->cname;
+}
+
+const char *res_access(CG *cg, const char *t) {
+    return type_is_gc_ptr(cg, t) ? "->" : ".";
 }
 
 /* Args-struct + trampoline names for a spawned target, shared by
@@ -1104,7 +1113,10 @@ const char *ctype_of(CG *cg, const char *t) {
     if (is_result(t)) {
         char *tv, *tev;
         result_te(t, &tv, &tev);
-        return xasprintf("%s *", res_cname(cg, tv, tev));
+        const char *cn = res_cname(cg, tv, tev);
+        if (!type_is_gc_ptr(cg, t))
+            return cn;
+        return xasprintf("%s *", cn);
     }
     if (struct_find_canon(cg, t)) {
         const char *mn = mangle_struct(t);

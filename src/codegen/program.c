@@ -352,6 +352,21 @@ void emit_struct_tracers(CG *cg) {
  * fields are always pointers (see ctype_of), so an incomplete type
  * is all a struct body needs; the full definition follows later via
  * emit_opt_res_types. Must run before emit_struct_types. */
+static int res_inst_is_value(CG *cg, ResInst *r) {
+    return !type_is_gc_ptr(cg, r->tv) && !type_is_gc_ptr(cg, r->te);
+}
+
+static void emit_res_struct_body(CG *cg, ResInst *r) {
+    emit_line(cg, "struct %s {", r->cname);
+    cg->indent++;
+    emit_line(cg, "bool ok;");
+    emit_line(cg, "%s v;", ctype_of(cg, r->tv));
+    emit_line(cg, "%s e;", ctype_of(cg, r->te));
+    cg->indent--;
+    emit_line(cg, "};");
+    emit_line(cg, "");
+}
+
 void emit_opt_res_forward_decls(CG *cg) {
     for (int i = 0; i < cg->opts.count; i++)
         emit_line(cg, "typedef struct %s %s;", cg->opts.items[i].cname,
@@ -359,6 +374,10 @@ void emit_opt_res_forward_decls(CG *cg) {
     for (int i = 0; i < cg->res.count; i++)
         emit_line(cg, "typedef struct %s %s;", cg->res.items[i].cname,
                   cg->res.items[i].cname);
+    for (int i = 0; i < cg->res.count; i++) {
+        if (res_inst_is_value(cg, &cg->res.items[i]))
+            emit_res_struct_body(cg, &cg->res.items[i]);
+    }
 }
 
 void emit_opt_res_types(CG *cg) {
@@ -374,14 +393,9 @@ void emit_opt_res_types(CG *cg) {
     }
     for (int i = 0; i < cg->res.count; i++) {
         ResInst *r = &cg->res.items[i];
-        emit_line(cg, "struct %s {", r->cname);
-        cg->indent++;
-        emit_line(cg, "bool ok;");
-        emit_line(cg, "%s v;", ctype_of(cg, r->tv));
-        emit_line(cg, "%s e;", ctype_of(cg, r->te));
-        cg->indent--;
-        emit_line(cg, "};");
-        emit_line(cg, "");
+        if (res_inst_is_value(cg, r))
+            continue;
+        emit_res_struct_body(cg, r);
     }
 }
 
