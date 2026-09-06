@@ -315,6 +315,10 @@ parameter is a compile error.
 packages — no source files, just `import "time";` / `import "net";`
 / `import "json";` / `import "proc";` like any other package.
 
+`http` is a slang-source stdlib package (`stdlib/http`). `import "http"`
+resolves to a local directory first, then a native package, then
+`stdlib/<path>` (`SLANG_STDLIB` or the compiler's `SLANG_STDLIB_DIR`).
+
 #### `time`
 
 ```slang
@@ -353,8 +357,8 @@ let wr: result[bytes, str] = net.recv(cfd, 16); // "would block" err if idle
 net.close(cfd);
 ```
 
-See `examples/httpd/` for a minimal HTTP server built entirely on
-these primitives.
+See `examples/httpd/` for a minimal HTTP server on `link` plus the
+`http` stdlib package.
 
 #### TLS
 
@@ -478,6 +482,30 @@ while proc.active_tasks() > 0 {
 
 `proc.getenv(name)` reads an environment variable, returning
 `opt[str]` (`none` if unset).
+
+#### `http`
+
+HTTP/1.1 over `link` / `wire` / `until` / `fault`. Parse a request
+from `bytes`, or `read` from a connection into a caller-sized `wire`
+(the max request size). `write` serializes a `Response` through an
+arena. Headers are stored lowercased; `header(req, name)` looks up
+case-insensitively. `Content-Length` is honored; chunked
+`Transfer-Encoding` is rejected.
+
+```slang
+import "http";
+
+fn serve(c: link) {
+    let a = arena_new(16384);
+    let buf = a.wire(8192);
+    let rr = http.read(&mut c, buf, until_never());
+    guard let req = rr else { return; }
+    let wr = http.write(&mut c, http.ok_text(req.path), &mut a, until_never());
+    guard let _n = wr else { return; }
+}
+```
+
+See `examples/httpd/` for a listener loop on this package.
 
 This works because every `spawn`ed thread has `SIGTERM`/`SIGINT`
 blocked in its own signal mask from birth (inherited at creation,
@@ -625,7 +653,8 @@ from a slang program exercising `extern fn`, `link`, `rawptr`,
 
 A **package is a directory**: every `.sl` file inside it is compiled
 together into one shared namespace, as if concatenated. Import paths
-resolve relative to the importing file's directory.
+resolve to a directory next to the importer, then a native package,
+then `stdlib/<path>`.
 
 ```slang
 import "geometry";   // binds the name "geometry" in this file's scope
@@ -670,10 +699,10 @@ See `examples/pkgdemo/` for a complete multi-package project.
 main.sl ──loader──> packages ──lexer/parser──> ASTs ──codegen──> main.gen.c ──cc──> ./main
 ```
 
-1. **Loader** (`src/loader.c`) — resolves imports relative to each
-   importing file, scans package directories for `.sl` files (in
-   deterministic sorted order), merges them per package, and detects
-   cycles via canonical paths.
+1. **Loader** (`src/loader.c`) — resolves imports (local directory,
+   native package, then stdlib), scans package directories for `.sl`
+   files (in deterministic sorted order), merges them per package, and
+   detects cycles via canonical paths.
 2. **Lexer** (`src/lexer.c`) — tokenizes source into identifiers,
    keywords, literals, and operators.
 3. **Parser** (`src/parser.c`) — recursive-descent parser producing an
@@ -718,6 +747,7 @@ src/
 runtime/       real C runtime spliced into generated programs
   sl_core.c sl_gc.c sl_containers.c sl_sched.c sl_pool.c
   sl_time.c sl_net.c sl_tls.c sl_json.c sl_proc.c
+stdlib/        slang-source packages (`import "http"`)
 examples/      one directory per example program
 tests/         language tests plus tests/runtime/ (no slangc)
 Makefile       build/test/clean

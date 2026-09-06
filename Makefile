@@ -1,6 +1,9 @@
 CC     = cc
 RUNTIME_DIR = $(abspath runtime)
-CFLAGS = -std=c11 -O2 -Wall -Wextra -D_GNU_SOURCE -DSLANG_RUNTIME_DIR=\"$(RUNTIME_DIR)\"
+STDLIB_DIR = $(abspath stdlib)
+CFLAGS = -std=c11 -O2 -Wall -Wextra -D_GNU_SOURCE \
+	-DSLANG_RUNTIME_DIR=\"$(RUNTIME_DIR)\" \
+	-DSLANG_STDLIB_DIR=\"$(STDLIB_DIR)\"
 
 # Core codegen engine (type inference, expr/stmt codegen, program
 # orchestration) plus native.c, the fixed-signature dispatch every

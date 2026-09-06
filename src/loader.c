@@ -7,6 +7,7 @@
 #include "codegen/pkg_time/pkg_time.h"
 #include "codegen/pkg_json/pkg_json.h"
 #include "codegen/pkg_proc/pkg_proc.h"
+#include "rtpath.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -223,8 +224,11 @@ static int try_load_native(Loader *ld, const char *ipath,
     return ld->pkgs->count - 1;
 }
 
-/* Resolve one import path relative to the importing package directory
- * and load that package. */
+static int is_pkg_dir(const char *path) {
+    struct stat st;
+    return path && stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
 static void load_import(Loader *ld, const char *from_dir,
                         const char *from_pkg, const char *ipath) {
     int nat = try_load_native(ld, ipath, from_pkg);
@@ -235,17 +239,19 @@ static void load_import(Loader *ld, const char *from_dir,
     snprintf(target, sizeof(target), "%s/%s", from_dir, ipath);
 
     char treal[PATH_MAX];
-    if (!realpath(target, treal))
-        load_error("cannot resolve import '%s' (imported by package '%s')",
-                   ipath, from_pkg);
+    if (realpath(target, treal) && is_pkg_dir(treal)) {
+        load_package_dir(ld, treal);
+        return;
+    }
 
-    struct stat st;
-    if (stat(treal, &st) != 0 || !S_ISDIR(st.st_mode))
-        load_error("import '%s' is not a directory (imported by package "
-                   "'%s')",
-                   ipath, from_pkg);
+    char *std = slang_stdlib_pkg(ipath);
+    if (std) {
+        load_package_dir(ld, std);
+        return;
+    }
 
-    load_package_dir(ld, treal);
+    load_error("cannot resolve import '%s' (imported by package '%s')",
+               ipath, from_pkg);
 }
 
 static int load_package_dir(Loader *ld, const char *real) {
