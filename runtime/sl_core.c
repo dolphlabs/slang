@@ -30,6 +30,26 @@ static void sl_rt_active_spawns_dec(void) {
     atomic_fetch_sub(&sl_rt_active_spawns, 1);
 }
 
+#define SL_RT_OS_STACK 262144
+
+static int sl_rt_thread_spawn(pthread_t *th, void *(*fn)(void *), void *arg) {
+    pthread_attr_t attr;
+    if (pthread_attr_init(&attr) != 0)
+        return -1;
+    size_t sz = SL_RT_OS_STACK;
+#ifdef PTHREAD_STACK_MIN
+    if (sz < (size_t)PTHREAD_STACK_MIN)
+        sz = (size_t)PTHREAD_STACK_MIN;
+#endif
+    if (pthread_attr_setstacksize(&attr, sz) != 0) {
+        pthread_attr_destroy(&attr);
+        return -1;
+    }
+    int rc = pthread_create(th, &attr, fn, arg);
+    pthread_attr_destroy(&attr);
+    return rc;
+}
+
 /* Tier 11 sixth slice: set by the dedicated signal thread
  * (pkg_proc/runtime.c, only exists if 'proc' is imported) once a
  * real SIGTERM/SIGINT arrives via sigwait(); read by
@@ -60,6 +80,7 @@ static _Atomic int sl_rt_shutdown_flag = 0;
  * cannot reference them directly without a compile error in that
  * case, hence this indirection instead of a direct call. */
 static void (*sl_rt_shutdown_hook)(void) = NULL;
+static void (*sl_rt_io_kick_hook)(void) = NULL;
 
 /* Tier 10: a lexically-scoped chain of GC root lists, one per
  * currently in-flight call-site safepoint on this thread (the
@@ -146,6 +167,9 @@ typedef struct sl_task {
                                 sl_time_sleepers (pkg_time/runtime.c)
                                 via `next`, exactly like park_mu is
                                 meaningful only while parked. */
+    long long io_deadline_ns; /* absolute mono-ns; 0 means none.
+                                meaningful while parked on the net
+                                reactor wait list. */
     long long run_start_ns;  /* Tier 11 seventh slice (cooperative
                                 preemption): monotonic time this task's
                                 CURRENT stint on an OS thread began --
@@ -526,6 +550,19 @@ static inline void sl_rt_preempt_enable(void) {
  * emitted -- same ordering reason as sl_task itself above. */
 static _Thread_local void *sl_rt_native_rsp;
 
+#ifdef __OPTIMIZE__
+__attribute__((noinline))
+static void *sl_rt_tls_read_native_rsp(void) {
+    __asm__ __volatile__("" ::: "memory");
+    void *p = sl_rt_native_rsp;
+    __asm__ __volatile__("" : "+r"(p) :: "memory");
+    return p;
+}
+#define SL_RT_TLS_NATIVE_RSP() sl_rt_tls_read_native_rsp()
+#else
+#define SL_RT_TLS_NATIVE_RSP() (sl_rt_native_rsp)
+#endif
+
 static inline void sl_rt_gc_checkin(void); /* runtime_gc.c, forward here */
 static void sl_task_stack_grow(sl_task *t); /* runtime_sched.c, forward here */
 void sl_ctx_switch(void **old_rsp_slot, void *new_rsp); /* runtime_sched.c,
@@ -543,10 +580,9 @@ static void sl_task_yield_now(void); /* runtime_pool.c, forward here --
     below calls it directly, but it's defined for real in RUNTIME_POOL,
     same reason as sl_task_park/sl_task_resume just above. */
 
-/* Re-examined alongside SL_TASK_INITIAL_STACK_SIZE's own drop to
- * 16384 (runtime_sched.c -- see that comment for the full story,
- * including the two smaller sizes that were tried and genuinely
- * failed first) -- the two cannot be picked independently. This
+/* Re-examined alongside SL_TASK_INITIAL_STACK_SIZE (8KB default,
+ * 16KB fat for native-deep calls -- see sl_rt_need_fat_stack).
+ * The two cannot be picked independently. This
  * margin is checked only AT a cooperative checkpoint; it must
  * therefore be large enough that nothing which can happen between
  * one checkpoint passing the check and the NEXT one running can
@@ -575,7 +611,7 @@ static void sl_task_yield_now(void); /* runtime_pool.c, forward here --
  *      stack buffer is an ordinary malloc'd block, so it corrupts
  *      whatever heap memory sits just before it.
  * This value stayed at 1024 through the same validation pass that
- * settled SL_TASK_INITIAL_STACK_SIZE at 16384 -- 80 consecutive TLS
+ * settled the fat native-deep size at 16384 -- 80 consecutive TLS
  * runs, 6 full test-suite runs, 15 nettest runs, 23
  * stress_test/concurrent_compute runs, and 4 clean UBSan runs, all
  * clean -- including tests/stack_grow, which forces 50,000 levels
@@ -586,6 +622,8 @@ static void sl_task_yield_now(void); /* runtime_pool.c, forward here --
  * runtime_sched.c) because sl_rt_safepoint_enter needs it at its
  * own definition site, same ordering reason as sl_task itself
  * above. */
+#define SL_TASK_INITIAL_STACK_SIZE 8192
+#define SL_TASK_FAT_STACK_SIZE 16384
 #define SL_TASK_GUARD_MARGIN 1024
 
 /* Tier 11 seventh slice (cooperative preemption v1): tunable, not yet
@@ -640,14 +678,7 @@ static inline long long sl_rt_monotonic_ns(void) {
  * an sl_task* is migration-stable. It is the thread-affine ADDRESS a
  * TLS read returns that goes stale when a task moves worker, never
  * the task pointer itself. */
-static inline void sl_rt_maybe_yield_t(sl_task *t) {
-    /* caller supplied t; see sl_rt_cur's comment for why a bare
-        this runs with preempt_disable_depth == 0 by definition (it IS
-        the checkpoint), so it is squarely inside the window
-        sl_rt_async_epoch's comment describes. Read once, then use t
-        for everything below -- a sl_task* is migration-stable (a task
-        is the same task whichever worker runs it), unlike the
-        sl_rt_current_task read would be wrong here. */
+static inline void sl_rt_stack_and_gc(sl_task *t) {
     {
         char sl_rt_stack_probe;
         if ((uintptr_t)&sl_rt_stack_probe - (uintptr_t)t->stack_base <
@@ -655,26 +686,37 @@ static inline void sl_rt_maybe_yield_t(sl_task *t) {
             sl_task_stack_grow(t);
     }
     sl_rt_gc_checkin();
-    /* Sampled, not checked every visit: bounds the steady-state cost
-     * of a hot loop's checkpoint to one increment + one branch for
-     * 1023 of every 1024 visits -- see SL_PREEMPT_SAMPLE_MASK's own
-     * comment. yield_check_counter lives on the TASK, not the thread,
-     * so it travels correctly if this task migrates OS threads. */
-    if ((++t->yield_check_counter & SL_PREEMPT_SAMPLE_MASK) != 0)
+}
+
+static void sl_rt_need_fat_stack(void) {
+    sl_task *t = SL_RT_TLS_CUR();
+    if (!t || !t->stack_base)
         return;
+    while (t->stack_size < SL_TASK_FAT_STACK_SIZE)
+        sl_task_stack_grow(t);
+}
+
+static inline void sl_rt_preempt_if_due(sl_task *t) {
     long long now = sl_rt_monotonic_ns();
     if (now - t->run_start_ns < SL_PREEMPT_QUANTUM_NS)
         return;
     if (atomic_load_explicit(&sl_global_runq_count, memory_order_relaxed) == 0)
-        return; /* no one waiting for a worker -- yielding here is pure
-                    overhead with no fairness benefit */
+        return;
     sl_task_yield_now();
 }
 
-/* The bare back-edge form, for call sites with no safepoint bracket
- * and so no task in hand. */
-static inline void sl_rt_maybe_yield(void) {
-    sl_rt_maybe_yield_t(sl_rt_cur());
+static inline void sl_rt_maybe_yield_t(sl_task *t) {
+    sl_rt_stack_and_gc(t);
+    if ((++t->yield_check_counter & SL_PREEMPT_SAMPLE_MASK) != 0)
+        return;
+    sl_rt_preempt_if_due(t);
+}
+
+__attribute__((noinline))
+static void sl_rt_maybe_yield(void) {
+    sl_task *t = sl_rt_cur();
+    sl_rt_stack_and_gc(t);
+    sl_rt_preempt_if_due(t);
 }
 
 /* sl_rt_gc_checkin() (now reached via sl_rt_maybe_yield) runs *after*
@@ -746,6 +788,7 @@ static inline void sl_rt_safepoint_exit(void) {
  * user-triggered panic can fire -- abandoning the intervening C
  * frames without running any cleanup for them is exactly what
  * already happened before, just via a different mechanism. */
+__attribute__((noreturn))
 static void sl_rt_error(const char *msg, long long a, long long b) {
     /* Tier 11 eighth slice: disabled from entry, deliberately with no
      * matching enable anywhere on the spawned-task branch -- this
@@ -774,7 +817,7 @@ static void sl_rt_error(const char *msg, long long a, long long b) {
                 "slang: task panicked: %s (index %lld, length %lld)\n",
                 msg, a, b);
         sl_rt_active_spawns_dec();
-        sl_ctx_switch(&sl_rt_current_task->rsp, sl_rt_native_rsp);
+        sl_ctx_switch(&sl_rt_current_task->rsp, SL_RT_TLS_NATIVE_RSP());
         fprintf(stderr,
                 "slang: internal error: task resumed after panic "
                 "switch-back\n");
@@ -784,5 +827,197 @@ static void sl_rt_error(const char *msg, long long a, long long b) {
     fprintf(stderr, "slang runtime error: %s (index %lld, length %lld)\n",
             msg, a, b);
     exit(1);
+}
+
+typedef struct sl_arena {
+    char *base;
+    size_t cap;
+    size_t used;
+} sl_arena;
+
+static sl_arena sl_arena_new(long long cap) {
+    sl_arena a;
+    if (cap < 1)
+        sl_rt_error("arena capacity must be positive", cap, 0);
+    a.cap = (size_t)cap;
+    a.used = 0;
+    a.base = (char *)malloc(a.cap);
+    if (!a.base)
+        sl_rt_error("arena allocation failed", cap, 0);
+    return a;
+}
+
+static void *sl_arena_alloc(sl_arena *a, size_t n, size_t align) {
+    size_t pad;
+    if (!a || !a->base)
+        sl_rt_error("use of an uninitialized arena", 0, 0);
+    if (align < 1)
+        align = 1;
+    pad = (align - (a->used % align)) % align;
+    if (a->used + pad + n > a->cap)
+        sl_rt_error("arena out of memory", (long long)(a->used + pad + n),
+                    (long long)a->cap);
+    a->used += pad;
+    {
+        void *p = a->base + a->used;
+        a->used += n;
+        return p;
+    }
+}
+
+static void sl_arena_reset(sl_arena *a) {
+    if (a)
+        a->used = 0;
+}
+
+static void sl_arena_free(sl_arena *a) {
+    if (!a)
+        return;
+    free(a->base);
+    a->base = NULL;
+    a->cap = 0;
+    a->used = 0;
+}
+
+typedef struct sl_wire {
+    unsigned char *ptr;
+    long long len;
+} sl_wire;
+
+typedef int64_t sl_until;
+
+#define SL_FAULT_TIMEOUT 1
+#define SL_FAULT_RESET   2
+#define SL_FAULT_CLOSED  3
+#define SL_FAULT_IO      4
+#define SL_FAULT_REFUSED 5
+
+typedef struct sl_fault {
+    int kind;
+    const char *detail;
+} sl_fault;
+
+typedef struct sl_peer {
+    uint32_t addr;
+    uint16_t port;
+} sl_peer;
+
+typedef struct sl_trip {
+    _Atomic int down;
+} sl_trip;
+
+typedef struct sl_link {
+    int fd;
+    int live;
+} sl_link;
+
+static long long sl_now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
+}
+
+static sl_until sl_until_of(long long abs_ns) { return (sl_until)abs_ns; }
+static sl_until sl_until_never(void) { return 0; }
+static int sl_until_hit(sl_until u) {
+    return u != 0 && sl_now_ns() >= u;
+}
+
+static sl_fault sl_fault_make(int kind, const char *d) {
+    sl_fault f;
+    f.kind = kind;
+    f.detail = d ? d : "";
+    return f;
+}
+static sl_fault sl_fault_timeout(void) {
+    return sl_fault_make(SL_FAULT_TIMEOUT, "timeout");
+}
+static sl_fault sl_fault_reset(void) {
+    return sl_fault_make(SL_FAULT_RESET, "reset");
+}
+static sl_fault sl_fault_closed(void) {
+    return sl_fault_make(SL_FAULT_CLOSED, "closed");
+}
+static sl_fault sl_fault_io(void) {
+    return sl_fault_make(SL_FAULT_IO, "io");
+}
+static sl_fault sl_fault_refused(void) {
+    return sl_fault_make(SL_FAULT_REFUSED, "refused");
+}
+static int sl_fault_kind(sl_fault f) { return f.kind; }
+static int sl_fault_eq(sl_fault a, sl_fault b) { return a.kind == b.kind; }
+
+static sl_peer sl_peer_v4(long long a, long long b, long long c, long long d,
+                          long long port) {
+    sl_peer p;
+    p.addr = ((uint32_t)(a & 255) << 24) | ((uint32_t)(b & 255) << 16) |
+             ((uint32_t)(c & 255) << 8) | (uint32_t)(d & 255);
+    p.port = (uint16_t)port;
+    return p;
+}
+static int sl_peer_port(sl_peer p) { return (int)p.port; }
+static int sl_peer_eq(sl_peer a, sl_peer b) {
+    return a.addr == b.addr && a.port == b.port;
+}
+
+static sl_trip *sl_trip_new(void) {
+    sl_trip *t = (sl_trip *)malloc(sizeof(sl_trip));
+    if (!t)
+        sl_rt_error("trip allocation failed", 0, 0);
+    atomic_init(&t->down, 0);
+    return t;
+}
+static void sl_trip_pull(sl_trip *t) {
+    if (!t)
+        return;
+    atomic_store_explicit(&t->down, 1, memory_order_release);
+    if (sl_rt_io_kick_hook)
+        sl_rt_io_kick_hook();
+}
+static int sl_trip_down(sl_trip *t) {
+    return t && atomic_load_explicit(&t->down, memory_order_acquire);
+}
+
+static sl_wire sl_wire_make(unsigned char *p, long long n) {
+    sl_wire w;
+    w.ptr = p;
+    w.len = n;
+    return w;
+}
+static int sl_wire_at(sl_wire w, long long i) {
+    if (i < 0 || i >= w.len)
+        sl_rt_error("wire index out of bounds", i, w.len);
+    return (int)w.ptr[i];
+}
+static void sl_wire_set(sl_wire w, long long i, unsigned char v) {
+    if (i < 0 || i >= w.len)
+        sl_rt_error("wire index out of bounds", i, w.len);
+    w.ptr[i] = v;
+}
+static sl_wire sl_wire_slice(sl_wire w, long long s, long long e) {
+    if (s < 0)
+        s = 0;
+    if (e > w.len)
+        e = w.len;
+    if (e < s)
+        e = s;
+    sl_wire r;
+    r.ptr = w.ptr + s;
+    r.len = e - s;
+    return r;
+}
+
+static sl_link sl_link_from_fd(int fd) {
+    sl_link l;
+    l.fd = fd;
+    l.live = fd >= 0;
+    return l;
+}
+static void sl_link_free(sl_link *l) {
+    if (!l || !l->live)
+        return;
+    close(l->fd);
+    l->live = 0;
+    l->fd = -1;
 }
 

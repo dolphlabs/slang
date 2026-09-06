@@ -19,7 +19,7 @@ static void *sl_sig_thread(void *arg) {
 
 static void sl_proc_install_signal_handlers(void) {
     pthread_t th;
-    if (pthread_create(&th, NULL, sl_sig_thread, NULL) != 0) {
+    if (sl_rt_thread_spawn(&th, sl_sig_thread, NULL) != 0) {
         fprintf(stderr, "slang: failed to start signal thread\n");
         exit(1);
     }

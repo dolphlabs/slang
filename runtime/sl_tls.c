@@ -43,6 +43,7 @@ static char *sl_tls_last_error(void) {
 
 static sl_res_rawptr_str *sl_net_tls_server_ctx(const char *cert_path,
                                                 const char *key_path) {
+    sl_rt_need_fat_stack();
     SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
     if (!ctx) return sl_net_err_rawptr(sl_tls_last_error());
     if (SSL_CTX_use_certificate_file(ctx, cert_path, SSL_FILETYPE_PEM) != 1) {
@@ -63,6 +64,7 @@ static sl_res_rawptr_str *sl_net_tls_server_ctx(const char *cert_path,
 }
 
 static sl_res_rawptr_str *sl_net_tls_client_ctx(const char *ca_path) {
+    sl_rt_need_fat_stack();
     SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
     if (!ctx) return sl_net_err_rawptr(sl_tls_last_error());
     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
@@ -101,6 +103,7 @@ static int sl_tls_handshake(SSL *ssl, int server) {
 }
 
 static sl_res_rawptr_str *sl_net_tls_accept(int lfd, void *ctxv) {
+    sl_rt_need_fat_stack();
     int cfd;
     for (;;) {
         cfd = accept(lfd, NULL, NULL);
@@ -132,6 +135,7 @@ static sl_res_rawptr_str *sl_net_tls_accept(int lfd, void *ctxv) {
 
 static sl_res_rawptr_str *sl_net_tls_dial(const char *host, int port,
                                           void *ctxv) {
+    sl_rt_need_fat_stack();
     char portstr[16];
     sl_rt_preempt_disable();
     snprintf(portstr, sizeof(portstr), "%d", port);
@@ -188,6 +192,7 @@ static sl_res_rawptr_str *sl_net_tls_dial(const char *host, int port,
 }
 
 static sl_res_i32_str *sl_net_tls_send(void *sslv, sl_bytes *data) {
+    sl_rt_need_fat_stack();
     SSL *ssl = (SSL *)sslv;
     long long off = 0;
     while (off < data->len) {
@@ -202,6 +207,7 @@ static sl_res_i32_str *sl_net_tls_send(void *sslv, sl_bytes *data) {
 }
 
 static sl_res_bytes_str *sl_net_tls_recv(void *sslv, int max) {
+    sl_rt_need_fat_stack();
     if (max <= 0) max = 4096;
     SSL *ssl = (SSL *)sslv;
     sl_bytes *b = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
@@ -231,6 +237,7 @@ static sl_res_bytes_str *sl_net_tls_recv(void *sslv, int max) {
 }
 
 static void sl_net_tls_close(void *sslv) {
+    sl_rt_need_fat_stack();
     SSL *ssl = (SSL *)sslv;
     int fd = SSL_get_fd(ssl);
     SSL_shutdown(ssl);

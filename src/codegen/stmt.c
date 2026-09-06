@@ -45,7 +45,7 @@
  * separate, disclosed follow-up (see the Tier 11 plan), not bundled
  * into this slice. */
 static int emit_backedge_enter(CG *cg, void *backedge_live_set,
-                                int direct_yield_ok) {
+                                int direct_yield_ok, int edge_id) {
     int n = live_set_nnamed(backedge_live_set);
     if (n == 0) {
         /* Nothing to root, so no ordering hazard: this call can safely
@@ -66,7 +66,9 @@ static int emit_backedge_enter(CG *cg, void *backedge_live_set,
          * n > 0 path below already reaches sl_rt_maybe_yield correctly,
          * via sl_rt_safepoint_enter, AFTER its roots are linked in. */
         if (direct_yield_ok)
-            emit_line(cg, "sl_rt_maybe_yield();");
+            emit_line(cg, "if ((++_sl_ec%d & SL_PREEMPT_SAMPLE_MASK) == 0) "
+                          "sl_rt_maybe_yield();",
+                      edge_id);
         return 0;
     }
     int id = cg->tmp_id++;
@@ -313,6 +315,10 @@ void gen_stmt(CG *cg, Stmt *s) {
                 cg_error(s->line,
                          "cannot assign through a shared borrow of type %s",
                          pt);
+            if (type_is_raw_ptr(pt) && !tgt->in_unsafe)
+                cg_error(s->line,
+                         "dereference of a raw pointer requires an "
+                         "'unsafe' block");
             const char *se = expect_push(cg, inner);
             const char *vt = infer_type(cg, s->as.assign.value);
             cg->expect = se;
@@ -484,6 +490,19 @@ void gen_stmt(CG *cg, Stmt *s) {
                       prelude.data, b, i, val);
             break;
         }
+        if (is_wire(bt)) {
+            if (!is_int(vt))
+                cg_error(s->line,
+                         "wire assignment requires an integer (got %s)",
+                         vt);
+            char *val = gen_expr(cg, s->as.assign.value);
+            val = sequence_one(cg, bi_id, 2, map_type("int"), "int", val,
+                               s->as.assign.value, &prelude);
+            cg->ambient_count = ambient_mark;
+            emit_line(cg, "%ssl_wire_set(%s, %s, (unsigned char)(%s));",
+                      prelude.data, b, i, val);
+            break;
+        }
         if (is_arr(bt)) {
             char *elem = arr_elem(bt);
             if (!value_assignable(elem, s->as.assign.value, vt))
@@ -525,9 +544,16 @@ void gen_stmt(CG *cg, Stmt *s) {
         if (strcmp(ct, "bool"))
             cg_error(s->line, "while condition must be bool (got %s)", ct);
         char *cond = gen_expr(cg, s->as.while_stmt.cond);
+        int scalar = live_set_nnamed(s->backedge_live_set) == 0;
+        int poll = !(scalar && cg->loop_depth > 0);
+        int eid = 0;
+        if (scalar && poll) {
+            eid = cg->tmp_id++;
+            emit_line(cg, "unsigned long _sl_ec%d = 0;", eid);
+        }
         emit_line(cg, "while (%s) {", cond);
         cg->indent++;
-        int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 1);
+        int has_bp = emit_backedge_enter(cg, s->backedge_live_set, poll, eid);
         cg->loop_depth++;
         int saved_loop_bp = cg->cur_loop_has_bp;
         cg->cur_loop_has_bp = has_bp;
@@ -567,10 +593,15 @@ void gen_stmt(CG *cg, Stmt *s) {
         emit_line(cg, "{");
         cg->indent++;
         emit_line(cg, "long long %s = %s;", endvar, end);
+        int eid = 0;
+        if (live_set_nnamed(s->backedge_live_set) == 0) {
+            eid = cg->tmp_id++;
+            emit_line(cg, "unsigned long _sl_ec%d = 0;", eid);
+        }
         emit_line(cg, "for (long long %s = %s; %s %s %s; %s++) {", vname,
                   start, vname, op, endvar, vname);
         cg->indent++;
-        int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 1);
+        int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 1, eid);
         cg->loop_depth++;
         int saved_loop_bp = cg->cur_loop_has_bp;
         cg->cur_loop_has_bp = has_bp;
@@ -614,8 +645,8 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
-            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0);
-            emit_line(cg, "%s %s = (*(%s *)(void *)sl_arr_get(_sl_it%d, "
+            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0);
+            emit_line(cg, "%s %s = (*(%s *)(void *)sl_arr_at(_sl_it%d, "
                           "_sl_i%d, sizeof(%s)));",
                       ec, vname, ec, id, id, ec);
             cg->loop_depth++;
@@ -646,7 +677,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
-            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0);
+            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0);
             emit_line(cg, "long long %s = (long long)_sl_bt%d->ptr[_sl_i%d];",
                       vname, id, id);
             cg->loop_depth++;
@@ -688,7 +719,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
-            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0);
+            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0);
             emit_line(cg, "long long _sl_slot%d = _sl_m%d->order[_sl_i%d];",
                       id, id, id);
             emit_line(cg,
@@ -929,6 +960,11 @@ void gen_stmt(CG *cg, Stmt *s) {
         emit_line(cg, "}");
         break;
     }
+    case ST_UNSAFE:
+        emit_line(cg, "{");
+        gen_scoped_block(cg, s->as.unsafe_blk.body);
+        emit_line(cg, "}");
+        break;
     case ST_STRUCT:
     case ST_IMPL:
         /* declarations are processed during collect_decls; nothing to
@@ -975,11 +1011,14 @@ void gen_stmts(CG *cg, Stmt **stmts, int count) {
         gen_scoped_block(cg, s->as.guard_let.body);
         emit_line(cg, "}");
         var_redecl_check(cg, s->as.guard_let.name, s->line);
+        int from = cg->vars.count;
         var_push(cg, s->as.guard_let.name, inner);
         emit_drop_flag(cg, s->as.guard_let.name);
         emit_line(cg, "%s %s = _sl_g%d->v;", ic,
                   sanitize_ident(s->as.guard_let.name), id);
         gen_stmts(cg, stmts + i + 1, count - i - 1);
+        emit_scope_drops(cg, from);
+        cg->vars.count = from;
         cg->indent--;
         emit_line(cg, "}");
         return;

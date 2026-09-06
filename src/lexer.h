@@ -36,6 +36,7 @@ typedef enum {
     T_KW_SPAWN,
     T_KW_BREAK,
     T_KW_CONTINUE,
+    T_KW_UNSAFE,
 
     /* type names */
     T_TY_INT,
@@ -57,6 +58,13 @@ typedef enum {
     T_TY_RESULT,   /* 'result' (always followed by [T, E]) */
     T_TY_DURATION, /* 'duration': nanoseconds since an arbitrary epoch */
     T_TY_RAWPTR,   /* 'rawptr': opaque foreign pointer for C interop */
+    T_TY_ARENA,    /* 'arena': bump allocator, reset in O(1) */
+    T_TY_WIRE,     /* 'wire': borrowed byte window */
+    T_TY_UNTIL,    /* 'until': absolute deadline */
+    T_TY_FAULT,    /* 'fault': structured I/O error */
+    T_TY_PEER,     /* 'peer': IPv4 host:port */
+    T_TY_TRIP,     /* 'trip': shared stop signal */
+    T_TY_LINK,     /* 'link': move-only connection */
     T_TY_CHAN,     /* 'chan' (always followed by [T]) */
 
     /* operators */

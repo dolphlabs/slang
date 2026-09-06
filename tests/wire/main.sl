@@ -1,0 +1,17 @@
+let a = arena_new(32);
+let w = a.wire(8);
+println(len(w));
+w[0] = 65;
+w[1] = 66;
+w[2] = 67;
+println(w[0]);
+println(w[1]);
+let s = w[0..2];
+println(len(s));
+println(s[0]);
+println(s[1]);
+let tail = w[2..];
+println(len(tail));
+println(tail[0]);
+print(w[0..3]);
+println("");

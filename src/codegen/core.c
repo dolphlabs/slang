@@ -118,6 +118,13 @@ const char *map_type(const char *t) {
     if (!strcmp(t, "f32"))    return "float";
     if (!strcmp(t, "duration")) return "int64_t";
     if (!strcmp(t, "rawptr")) return "void *";
+    if (!strcmp(t, "arena"))  return "sl_arena";
+    if (!strcmp(t, "wire"))   return "sl_wire";
+    if (!strcmp(t, "until"))  return "int64_t";
+    if (!strcmp(t, "fault"))  return "sl_fault";
+    if (!strcmp(t, "peer"))   return "sl_peer";
+    if (!strcmp(t, "trip"))   return "sl_trip *";
+    if (!strcmp(t, "link"))   return "sl_link";
     if (t[0] == '[')          return "sl_arr *";
     return NULL;
 }
@@ -150,6 +157,51 @@ int is_num(const char *t) { return is_int(t) || is_flt(t); }
 int is_str(const char *t) { return !strcmp(t, "str"); }
 int is_bytes(const char *t) { return !strcmp(t, "bytes"); }
 int is_rawptr(const char *t) { return !strcmp(t, "rawptr"); }
+int is_wire(const char *t) { return !strcmp(t, "wire"); }
+int is_until(const char *t) { return !strcmp(t, "until"); }
+int is_fault(const char *t) { return !strcmp(t, "fault"); }
+int is_peer(const char *t) { return !strcmp(t, "peer"); }
+int is_trip(const char *t) { return !strcmp(t, "trip"); }
+int is_link(const char *t) { return !strcmp(t, "link"); }
+
+int type_is_arena(const char *t) {
+    char *inner;
+    TypeWrap w;
+    if (!t)
+        return 0;
+    w = type_wrap(t, &inner);
+    if (w != TW_NONE)
+        return type_is_arena(inner);
+    return !strcmp(t, "arena");
+}
+
+int type_is_link(const char *t) {
+    char *inner;
+    TypeWrap w;
+    if (!t)
+        return 0;
+    w = type_wrap(t, &inner);
+    if (w != TW_NONE)
+        return type_is_link(inner);
+    return !strcmp(t, "link");
+}
+
+int type_is_trip(const char *t) {
+    char *inner;
+    TypeWrap w;
+    if (!t)
+        return 0;
+    w = type_wrap(t, &inner);
+    if (w != TW_NONE)
+        return type_is_trip(inner);
+    return !strcmp(t, "trip");
+}
+
+int type_is_raw_ptr(const char *t) {
+    char *inner;
+    TypeWrap w = type_wrap(t, &inner);
+    return w == TW_RAW || w == TW_RAWMUT || w == TW_PTR;
+}
 int is_arr(const char *t) { return t[0] == '['; }
 int is_map(const char *t) { return !strncmp(t, "map[", 4); }
 
@@ -265,6 +317,8 @@ int type_is_copy(CG *cg, const char *t) {
         return 0;
     if (w != TW_NONE)
         return 1;
+    if (!strcmp(t, "arena") || !strcmp(t, "link"))
+        return 0;
     if (is_arr(t) || is_map(t) || is_opt(t) || is_result(t) || is_chan(t))
         return 1;
     if (struct_type_is_gc(cg, t))
@@ -286,6 +340,8 @@ int type_needs_drop(CG *cg, const char *t) {
         return 1;
     if (w != TW_NONE)
         return 0;
+    if (!strcmp(t, "arena") || !strcmp(t, "link"))
+        return 1;
     StructDef *sd = struct_find_canon(cg, t);
     if (!sd || sd->is_gc)
         return 0;
@@ -301,7 +357,9 @@ int type_is_boxable(CG *cg, const char *t) {
     if (type_wrap(t, &inner) != TW_NONE)
         return 0;
     if (is_arr(t) || is_map(t) || is_opt(t) || is_result(t) || is_chan(t) ||
-        is_str(t) || is_bytes(t) || is_rawptr(t))
+        is_str(t) || is_bytes(t) || is_rawptr(t) || !strcmp(t, "arena") ||
+        is_wire(t) || is_until(t) || is_fault(t) || is_peer(t) ||
+        is_trip(t) || is_link(t))
         return 0;
     if (struct_type_is_gc(cg, t))
         return 0;
@@ -354,7 +412,9 @@ int type_is_gc_ptr(CG *cg, const char *t) {
         return 1;
     if (w != TW_NONE)
         return 0;
-    if (is_rawptr(t)) return 0;
+    if (is_rawptr(t) || is_wire(t) || is_until(t) || is_fault(t) ||
+        is_peer(t) || is_trip(t) || is_link(t) || !strcmp(t, "arena"))
+        return 0;
     if (is_arr(t) || is_map(t) || is_opt(t) || is_result(t) ||
         is_chan(t) || is_str(t) || is_bytes(t))
         return 1;
@@ -458,6 +518,15 @@ int can_assign(const char *dst, const char *src) {
     if (dw == TW_REF && sw == TW_REFMUT && !strcmp(di, si))
         return 1;
     if (dw == TW_PTR &&
+        (sw == TW_REFMUT || sw == TW_OWN || sw == TW_RAWMUT || sw == TW_PTR) &&
+        !strcmp(di, si))
+        return 1;
+    if (dw == TW_RAW &&
+        (sw == TW_REF || sw == TW_REFMUT || sw == TW_RAW || sw == TW_RAWMUT ||
+         sw == TW_PTR) &&
+        !strcmp(di, si))
+        return 1;
+    if (dw == TW_RAWMUT &&
         (sw == TW_REFMUT || sw == TW_OWN || sw == TW_RAWMUT || sw == TW_PTR) &&
         !strcmp(di, si))
         return 1;
@@ -1019,6 +1088,8 @@ const char *ctype_of(CG *cg, const char *t) {
             return NULL;
         if (w == TW_REF)
             return xasprintf("const %s *", ic);
+        if (w == TW_REFMUT)
+            return xasprintf("%s *restrict", ic);
         return xasprintf("%s *", ic);
     }
     const char *m = map_type(t);
@@ -1161,7 +1232,15 @@ int is_builtin_name(const char *name) {
            !strcmp(name, "ok") || !strcmp(name, "err") ||
            !strcmp(name, "nullptr") || !strcmp(name, "bytes_ptr") ||
            !strcmp(name, "make_chan") || !strcmp(name, "chan_send") ||
-           !strcmp(name, "chan_recv") || !strcmp(name, "chan_close");
+           !strcmp(name, "chan_recv") || !strcmp(name, "chan_close") ||
+           !strcmp(name, "arena_new") || !strcmp(name, "until_of") ||
+           !strcmp(name, "until_never") || !strcmp(name, "until_hit") ||
+           !strcmp(name, "fault_timeout") || !strcmp(name, "fault_reset") ||
+           !strcmp(name, "fault_closed") || !strcmp(name, "fault_io") ||
+           !strcmp(name, "fault_refused") || !strcmp(name, "fault_kind") ||
+           !strcmp(name, "peer_v4") || !strcmp(name, "peer_port") ||
+           !strcmp(name, "trip_new") || !strcmp(name, "link_listen") ||
+           !strcmp(name, "link_dial");
 }
 
 /* Find a method `name` declared (via impl) for struct `sd`. */

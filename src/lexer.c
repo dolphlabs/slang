@@ -257,6 +257,7 @@ Token lexer_next(Lexer *lx) {
         KW("spawn", T_KW_SPAWN)
         KW("break", T_KW_BREAK)
         KW("continue", T_KW_CONTINUE)
+        KW("unsafe", T_KW_UNSAFE)
         KW("int", T_TY_INT)
         KW("float", T_TY_FLOAT)
         KW("str", T_TY_STR)
@@ -276,6 +277,7 @@ Token lexer_next(Lexer *lx) {
         KW("result", T_TY_RESULT)
         KW("duration", T_TY_DURATION)
         KW("rawptr", T_TY_RAWPTR)
+        KW("arena", T_TY_ARENA)
         KW("chan", T_TY_CHAN)
 #undef KW
 
@@ -400,6 +402,7 @@ const char *token_type_name(TokenType t) {
     case T_KW_SPAWN: return "'spawn'";
     case T_KW_BREAK: return "'break'";
     case T_KW_CONTINUE: return "'continue'";
+    case T_KW_UNSAFE: return "'unsafe'";
     case T_TY_INT:   return "'int'";
     case T_TY_FLOAT: return "'float'";
     case T_TY_STR:   return "'str'";
@@ -419,6 +422,13 @@ const char *token_type_name(TokenType t) {
     case T_TY_RESULT:return "'result'";
     case T_TY_DURATION: return "'duration'";
     case T_TY_RAWPTR: return "'rawptr'";
+    case T_TY_ARENA: return "'arena'";
+    case T_TY_WIRE:  return "'wire'";
+    case T_TY_UNTIL: return "'until'";
+    case T_TY_FAULT: return "'fault'";
+    case T_TY_PEER:  return "'peer'";
+    case T_TY_TRIP:  return "'trip'";
+    case T_TY_LINK:  return "'link'";
     case T_TY_CHAN:  return "'chan'";
     case T_PLUS:     return "'+'";
     case T_MINUS:    return "'-'";

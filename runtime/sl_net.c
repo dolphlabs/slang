@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <time.h>
 #include <sys/socket.h>
 #if defined(__linux__)
 #include <sys/epoll.h>
@@ -74,16 +75,38 @@ static sl_task *sl_reactor_waiting = NULL; /* linked via sl_task.next,
  * concurrently waiting on the same fd for the same direction (see
  * demo/main.sl's own single-acceptor design, which this constraint
  * requires). */
-static int sl_reactor_wait(int fd, int rw, int abort_on_shutdown) {
-    /* Tier 11 eighth slice: bracketed entry-to-every-return -- see
-     * sl_chan_send/recv's own identical bracket and comment
-     * (runtime_core.c) for the exact hazard this closes: the
-     * sl_rt_current_task->next write just below links this task into
-     * sl_reactor_waiting, and an async signal landing before
-     * sl_task_park's own switch completes would let
-     * sl_worker_after_switch overwrite that same ->next link pushing
-     * this task onto sl_global_runq instead -- corrupting the reactor's
-     * own wait list. */
+static void sl_reactor_expire_waiters(void) {
+    long long now = sl_now_ns();
+    sl_task **pp = &sl_reactor_waiting;
+    while (*pp) {
+        sl_task *t = *pp;
+        if (t->io_deadline_ns && t->io_deadline_ns <= now) {
+            *pp = t->next;
+            t->next = NULL;
+            sl_task_resume(t);
+            continue;
+        }
+        pp = &t->next;
+    }
+}
+
+static void sl_reactor_kick(void) {
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&sl_reactor_mu);
+    sl_task *w;
+    while ((w = sl_reactor_waiting)) {
+        sl_reactor_waiting = w->next;
+        w->next = NULL;
+        sl_task_resume(w);
+    }
+    pthread_mutex_unlock(&sl_reactor_mu);
+    sl_rt_preempt_enable();
+}
+
+static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
+                                 sl_until deadline) {
+    if (deadline && sl_until_hit(deadline))
+        return -2;
     sl_rt_preempt_disable();
     pthread_mutex_lock(&sl_reactor_mu);
     if (abort_on_shutdown &&
@@ -92,20 +115,8 @@ static int sl_reactor_wait(int fd, int rw, int abort_on_shutdown) {
         sl_rt_preempt_enable();
         return -1;
     }
-    /* One sl_rt_cur() read, threaded through the registration below,
-     * rather than three raw sl_rt_current_task reads. All three sit
-     * BEFORE the park, so within a single call to this function a raw
-     * read would be correct -- but every caller (sl_net_accept,
-     * sl_net_recv, sl_net_send) invokes this from inside a retry LOOP,
-     * and once it is inlined at -O2 these reads land inside that loop,
-     * where the compiler may hoist the thread-affine address of
-     * sl_rt_current_task above the park that a later iteration
-     * performs. That is precisely the bug fixed in sl_chan_send and
-     * sl_chan_recv (runtime_core.c), whose loops had the same shape
-     * and which was confirmed there by measurement; fixed here by
-     * construction rather than waiting for a reproducer, since the
-     * reactor's own paths are far harder to stress. */
     sl_task *sl_reactor_self = sl_rt_cur();
+    sl_reactor_self->io_deadline_ns = deadline;
     sl_reactor_self->next = sl_reactor_waiting;
     sl_reactor_waiting = sl_reactor_self;
 #if defined(SL_REACTOR_KQUEUE)
@@ -121,20 +132,20 @@ static int sl_reactor_wait(int fd, int rw, int abort_on_shutdown) {
         errno == EEXIST)
         epoll_ctl(sl_reactor_fd, EPOLL_CTL_MOD, fd, &ev);
 #endif
-    sl_task_park(&sl_reactor_mu); /* leaves sl_reactor_mu locked across
-        the switch, unlocked only by sl_worker_after_switch once the
-        switch safely completes -- this is what closes the
-        registration-vs-kernel-readiness race (the same lost-wakeup
-        shape chan's own review found, just against the kernel
-        reporting readiness instead of a concurrent task: the
-        reactor thread must acquire sl_reactor_mu before it can even
-        look up which task to resume, and that acquisition blocks
-        until this task's own registration+park sequence is fully
-        complete, however early kevent() reports the fd ready). */
+    sl_task_park(&sl_reactor_mu);
+    sl_reactor_self->io_deadline_ns = 0;
     int sl_reactor_wait_shutdown =
         atomic_load_explicit(&sl_rt_shutdown_flag, memory_order_acquire);
     sl_rt_preempt_enable();
-    return sl_reactor_wait_shutdown ? -1 : 0;
+    if (sl_reactor_wait_shutdown)
+        return -1;
+    if (deadline && sl_until_hit(deadline))
+        return -2;
+    return 0;
+}
+
+static int sl_reactor_wait(int fd, int rw, int abort_on_shutdown) {
+    return sl_reactor_wait_until(fd, rw, abort_on_shutdown, 0);
 }
 
 static void *sl_reactor_thread(void *arg) {
@@ -145,10 +156,33 @@ static void *sl_reactor_thread(void *arg) {
     struct epoll_event events[64];
 #endif
     for (;;) {
+        long long soonest = -1;
+        pthread_mutex_lock(&sl_reactor_mu);
+        {
+            sl_task *w;
+            long long now = sl_now_ns();
+            for (w = sl_reactor_waiting; w; w = w->next) {
+                if (!w->io_deadline_ns)
+                    continue;
+                long long rem = w->io_deadline_ns - now;
+                if (rem < 0)
+                    rem = 0;
+                if (soonest < 0 || rem < soonest)
+                    soonest = rem;
+            }
+        }
+        pthread_mutex_unlock(&sl_reactor_mu);
 #if defined(SL_REACTOR_KQUEUE)
-        int n = kevent(sl_reactor_fd, NULL, 0, events, 64, NULL);
+        struct timespec ts, *tsp = NULL;
+        if (soonest >= 0) {
+            ts.tv_sec = (time_t)(soonest / 1000000000LL);
+            ts.tv_nsec = (long)(soonest % 1000000000LL);
+            tsp = &ts;
+        }
+        int n = kevent(sl_reactor_fd, NULL, 0, events, 64, tsp);
 #else
-        int n = epoll_wait(sl_reactor_fd, events, 64, -1);
+        int timeout = soonest < 0 ? -1 : (int)(soonest / 1000000LL);
+        int n = epoll_wait(sl_reactor_fd, events, 64, timeout);
 #endif
         if (n < 0) { if (errno == EINTR) continue; continue; }
         pthread_mutex_lock(&sl_reactor_mu);
@@ -186,6 +220,7 @@ static void *sl_reactor_thread(void *arg) {
             while (*pp) { if (*pp == t) { *pp = t->next; found = 1; break; } pp = &(*pp)->next; }
             if (found) { t->next = NULL; sl_task_resume(t); }
         }
+        sl_reactor_expire_waiters();
         pthread_mutex_unlock(&sl_reactor_mu);
     }
     return NULL; /* unreachable -- runs until process exit */
@@ -240,8 +275,9 @@ static void sl_reactor_start(void) {
     }
 #endif
     sl_rt_shutdown_hook = sl_net_shutdown_nudge;
+    sl_rt_io_kick_hook = sl_reactor_kick;
     pthread_t th;
-    if (pthread_create(&th, NULL, sl_reactor_thread, NULL) != 0) {
+    if (sl_rt_thread_spawn(&th, sl_reactor_thread, NULL) != 0) {
         fprintf(stderr, "slang: failed to start reactor thread\n");
         exit(1);
     }
@@ -436,6 +472,7 @@ static sl_res_i32_str *sl_net_accept(int lfd) {
 }
 
 static sl_res_i32_str *sl_net_dial(const char *host, int port) {
+    sl_rt_need_fat_stack();
     char portstr[16];
     sl_rt_preempt_disable(); /* Tier 11 eighth slice -- snprintf's
         internal locale locking, see sl_gc_alloc's own comment
@@ -558,5 +595,194 @@ static sl_res_bool_str *sl_net_nonblock(int fd) {
        is what the side-table actually tracks. */
     sl_net_user_nonblock_insert((void *)(intptr_t)fd);
     return sl_net_ok_bool(true);
+}
+
+static sl_fault sl_link_fault_errno(int e) {
+    if (e == ETIMEDOUT)
+        return sl_fault_timeout();
+    if (e == ECONNRESET)
+        return sl_fault_reset();
+    if (e == ECONNREFUSED)
+        return sl_fault_refused();
+    if (e == EPIPE)
+        return sl_fault_closed();
+    return sl_fault_io();
+}
+
+static sl_res_link_fault *sl_link_ok_link(sl_link v) {
+    sl_res_link_fault *r = (sl_res_link_fault *)sl_gc_alloc(
+        sizeof(sl_res_link_fault), NULL);
+    r->ok = true;
+    r->v = v;
+    return r;
+}
+
+static sl_res_link_fault *sl_link_err_link(sl_fault f) {
+    sl_res_link_fault *r = (sl_res_link_fault *)sl_gc_alloc(
+        sizeof(sl_res_link_fault), NULL);
+    r->ok = false;
+    r->e = f;
+    return r;
+}
+
+static sl_res_int_fault *sl_link_ok_int(long long v) {
+    sl_res_int_fault *r = (sl_res_int_fault *)sl_gc_alloc(
+        sizeof(sl_res_int_fault), NULL);
+    r->ok = true;
+    r->v = v;
+    return r;
+}
+
+static sl_res_int_fault *sl_link_err_int(sl_fault f) {
+    sl_res_int_fault *r = (sl_res_int_fault *)sl_gc_alloc(
+        sizeof(sl_res_int_fault), NULL);
+    r->ok = false;
+    r->e = f;
+    return r;
+}
+
+static sl_res_link_fault *sl_link_listen(long long port) {
+    sl_res_i32_str *r = sl_net_listen((int)port);
+    if (!r->ok)
+        return sl_link_err_link(sl_fault_io());
+    return sl_link_ok_link(sl_link_from_fd((int)r->v));
+}
+
+static sl_res_link_fault *sl_link_accept(sl_link *ln, sl_until u) {
+    if (!ln || !ln->live)
+        return sl_link_err_link(sl_fault_closed());
+    for (;;) {
+        if (u && sl_until_hit(u))
+            return sl_link_err_link(sl_fault_timeout());
+        int cfd = accept(ln->fd, NULL, NULL);
+        if (cfd >= 0) {
+            sl_net_set_nonblocking(cfd);
+            return sl_link_ok_link(sl_link_from_fd(cfd));
+        }
+        if (errno != EAGAIN && errno != EWOULDBLOCK)
+            return sl_link_err_link(sl_link_fault_errno(errno));
+        int w = sl_reactor_wait_until(ln->fd, SL_REACTOR_READ, 1, u);
+        if (w == -2)
+            return sl_link_err_link(sl_fault_timeout());
+        if (w < 0)
+            return sl_link_err_link(sl_fault_closed());
+    }
+}
+
+static sl_res_link_fault *sl_link_dial(const char *host, long long port,
+                                      sl_until u) {
+    sl_rt_need_fat_stack();
+    char portstr[16];
+    sl_rt_preempt_disable();
+    snprintf(portstr, sizeof(portstr), "%d", (int)port);
+    sl_rt_preempt_enable();
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    int rc = getaddrinfo(host, portstr, &hints, &res);
+    if (rc != 0 || !res)
+        return sl_link_err_link(sl_fault_refused());
+    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd < 0) {
+        freeaddrinfo(res);
+        return sl_link_err_link(sl_fault_io());
+    }
+    sl_net_set_nonblocking(fd);
+    int cres = connect(fd, res->ai_addr, res->ai_addrlen);
+    freeaddrinfo(res);
+    if (cres == 0)
+        return sl_link_ok_link(sl_link_from_fd(fd));
+    if (errno != EINPROGRESS) {
+        int e = errno;
+        close(fd);
+        return sl_link_err_link(sl_link_fault_errno(e));
+    }
+    int w = sl_reactor_wait_until(fd, SL_REACTOR_WRITE, 1, u);
+    if (w == -2) {
+        close(fd);
+        return sl_link_err_link(sl_fault_timeout());
+    }
+    if (w < 0) {
+        close(fd);
+        return sl_link_err_link(sl_fault_closed());
+    }
+    int so_err = 0;
+    socklen_t slen = sizeof(so_err);
+    getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_err, &slen);
+    if (so_err != 0) {
+        close(fd);
+        return sl_link_err_link(sl_link_fault_errno(so_err));
+    }
+    return sl_link_ok_link(sl_link_from_fd(fd));
+}
+
+static sl_res_int_fault *sl_link_send(sl_link *l, sl_wire w, sl_until u) {
+    long long off = 0;
+    if (!l || !l->live)
+        return sl_link_err_int(sl_fault_closed());
+    while (off < w.len) {
+        if (u && sl_until_hit(u))
+            return sl_link_err_int(sl_fault_timeout());
+        ssize_t n = send(l->fd, w.ptr + off, (size_t)(w.len - off), 0);
+        if (n >= 0) {
+            off += n;
+            continue;
+        }
+        if (errno != EAGAIN && errno != EWOULDBLOCK)
+            return sl_link_err_int(sl_link_fault_errno(errno));
+        int wr = sl_reactor_wait_until(l->fd, SL_REACTOR_WRITE, 0, u);
+        if (wr == -2)
+            return sl_link_err_int(sl_fault_timeout());
+        if (wr < 0)
+            return sl_link_err_int(sl_fault_closed());
+    }
+    return sl_link_ok_int(w.len);
+}
+
+static sl_res_int_fault *sl_link_recv(sl_link *l, sl_wire w, sl_until u) {
+    if (!l || !l->live)
+        return sl_link_err_int(sl_fault_closed());
+    if (w.len <= 0)
+        return sl_link_ok_int(0);
+    for (;;) {
+        if (u && sl_until_hit(u))
+            return sl_link_err_int(sl_fault_timeout());
+        ssize_t n = recv(l->fd, w.ptr, (size_t)w.len, 0);
+        if (n >= 0)
+            return sl_link_ok_int((long long)n);
+        if (errno != EAGAIN && errno != EWOULDBLOCK)
+            return sl_link_err_int(sl_link_fault_errno(errno));
+        int wr = sl_reactor_wait_until(l->fd, SL_REACTOR_READ, 1, u);
+        if (wr == -2)
+            return sl_link_err_int(sl_fault_timeout());
+        if (wr < 0)
+            return sl_link_err_int(sl_fault_closed());
+    }
+}
+
+static long long sl_link_port(sl_link *l) {
+    struct sockaddr_in addr;
+    socklen_t n = sizeof(addr);
+    if (!l || !l->live)
+        return 0;
+    if (getsockname(l->fd, (struct sockaddr *)&addr, &n) != 0)
+        return 0;
+    return (long long)ntohs(addr.sin_port);
+}
+
+static sl_peer sl_link_peer(sl_link *l) {
+    sl_peer p;
+    p.addr = 0;
+    p.port = 0;
+    if (!l || !l->live)
+        return p;
+    struct sockaddr_in addr;
+    socklen_t n = sizeof(addr);
+    if (getpeername(l->fd, (struct sockaddr *)&addr, &n) != 0)
+        return p;
+    p.addr = ntohl(addr.sin_addr.s_addr);
+    p.port = ntohs(addr.sin_port);
+    return p;
 }
 

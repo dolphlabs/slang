@@ -167,25 +167,7 @@ static void sl_runq_shutdown(sl_runq *q) {
 }
 
 static void sl_task_submit(void (*entry)(void *), void *arg) {
-    /* Tier 11 eighth slice: protects the CALLING task across this raw
-     * malloc -- same class of bug as sl_gc_alloc's own bracket (an
-     * async-preempted, migrated task abandoning libSystem's own
-     * thread-affine zone lock mid-hold). sl_task_stack_init/
-     * sl_runq_push below already bracket themselves. */
-    sl_rt_preempt_disable();
-    sl_task *t = (sl_task *)malloc(sizeof(sl_task));
-    sl_rt_preempt_enable();
-    /* Direct exit, not sl_rt_error -- the calling thread's own
-     * sl_rt_current_task is NOT t (t doesn't exist yet), so a panic-
-     * switch-back here would incorrectly abandon the CALLER's task.
-     * See sl_task_stack_init's own comment (runtime_sched.c) for the
-     * full reasoning; matches sl_gc_set_grow's OOM convention. */
-    if (!t) {
-        fprintf(stderr, "slang: out of memory submitting task\n");
-        exit(1);
-    }
-    memset(t, 0, sizeof(*t));
-    sl_task_stack_init(t, entry, arg);
+    sl_task *t = sl_task_acquire(entry, arg);
     t->entry_arg = arg; /* rooted directly by the collector's run-queue
                             walk while queued -- see sl_gc_collect,
                             runtime_gc.c */
@@ -213,6 +195,7 @@ static void sl_task_submit(void (*entry)(void *), void *arg) {
  * POSIX's per-thread mutex-ownership rule despite the task having
  * logically moved from application code to scheduler code in
  * between. */
+__attribute__((noinline))
 static void sl_task_park(pthread_mutex_t *held_mu) {
     /* Tier 11 eighth slice: bracketed entry through the switch's own
      * resume point, not just the sl_gc_mu-held stretch -- protects the
@@ -226,7 +209,7 @@ static void sl_task_park(pthread_mutex_t *held_mu) {
     pthread_mutex_unlock(&sl_gc_mu);
     sl_rt_current_task->park_mu = held_mu;
     sl_rt_current_task->parked = 1;
-    sl_ctx_switch(&sl_rt_current_task->rsp, sl_rt_native_rsp);
+    sl_ctx_switch(&sl_rt_current_task->rsp, SL_RT_TLS_NATIVE_RSP());
     /* resumes here once re-submitted (sl_task_resume) and re-switched-
        into by some worker */
     sl_rt_preempt_enable();
@@ -308,6 +291,7 @@ static void sl_task_resume(sl_task *t) {
  * completed. sl_worker_after_switch does the push instead, once this
  * function's sl_ctx_switch call has returned control to some OTHER
  * thread's worker loop -- at which point t->rsp is guaranteed valid. */
+__attribute__((noinline))
 static void sl_task_yield_now(void) {
     /* Tier 11 eighth slice: bracketed entry through the switch's own
      * resume point -- this is the COOPERATIVE yield path (called
@@ -319,7 +303,7 @@ static void sl_task_yield_now(void) {
     sl_rt_preempt_disable();
     sl_task *t = sl_rt_current_task;
     t->preempted = 1;
-    sl_ctx_switch(&t->rsp, sl_rt_native_rsp);
+    sl_ctx_switch(&t->rsp, SL_RT_TLS_NATIVE_RSP());
     /* resumes here once some worker's run loop dispatches this task
        again -- run_start_ns is reset fresh by that dispatch (see
        sl_worker_run_loop below), so the next sample-interval check
@@ -400,11 +384,9 @@ static void sl_worker_after_switch(sl_task *t) {
     }
     sl_gc_flush_task(t);
     sl_rt_current_task = &sl_rt_task_storage; /* MUST happen before
-        the frees below, not after -- same reasoning as the parked
+        the release below, not after -- same reasoning as the parked
         case above. */
-    void *raw = t->raw_base;
-    free(raw);
-    free(t);
+    sl_task_release(t);
 }
 
 /* Fixed-capacity worker array -- generous, not sized to any real
@@ -447,11 +429,11 @@ static sl_pool_slot sl_pool_slots[SL_POOL_MAX_WORKERS];
  * crashes down to it (many other fixes in this same slice narrowed but
  * never eliminated its crash rate, because this bug is unrelated to
  * any of them). sl_worker_after_switch's own 'normal completion'
- * branch (below) calls free(t->raw_base) and free(t) directly, and the
+ * branch (below) calls sl_task_release(t) directly, and the
  * ticker thread (further down) doesn't just read .cur to decide
  * whether to act -- it DEREFERENCES the sl_task it names
  * (t->run_start_ns, t->async_preempt_pending) before ever sending a
- * signal. Clearing .cur to NULL before free(t) (see
+ * signal. Clearing .cur to NULL before sl_task_release (see
  * sl_worker_run_loop's own comment) only removes ONE interleaving --
  * the ticker reading .cur AFTER the clear sees NULL correctly -- it
  * does nothing about the ticker having ALREADY read a valid, non-NULL
@@ -519,7 +501,7 @@ static void sl_worker_run_loop(long slot_idx) {
         /* Tier 11 eighth slice: .cur cleared BEFORE sl_worker_after_switch,
          * not after, AND both now held under sl_pool_slots_mu (its own
          * comment above has the full story) -- sl_worker_after_switch's
-         * own 'normal completion' branch calls free(t) directly, and the
+         * own 'normal completion' branch calls sl_task_release(t), and the
          * ticker thread dereferences whatever .cur names before ever
          * deciding to signal, not just checks it for non-NULL. Clearing
          * .cur earlier alone only narrows that race; the mutex is what
@@ -653,7 +635,7 @@ static void *sl_preempt_ticker_thread(void *arg) {
             /* Tier 11 eighth slice: held across the read of .cur AND
              * every dereference of the sl_task it names -- see
              * sl_pool_slots_mu's own comment above for the use-after-free
-             * this closes (a completing task's own free(t), racing this
+             * this closes (a completing task's own sl_task_release, racing this
              * exact read-then-dereference sequence, not just a plain
              * non-NULL check). Released before pthread_kill: that's a
              * syscall, and by this point every field this loop needed
@@ -698,7 +680,7 @@ static void sl_preempt_ticker_start(void) {
         exit(1);
     }
     pthread_t th;
-    if (pthread_create(&th, NULL, sl_preempt_ticker_thread, NULL) != 0) {
+    if (sl_rt_thread_spawn(&th, sl_preempt_ticker_thread, NULL) != 0) {
         fprintf(stderr, "slang: failed to start preempt ticker\n");
         exit(1);
     }
@@ -728,8 +710,8 @@ static void sl_pool_start(void) {
     if (n > SL_POOL_MAX_WORKERS) n = SL_POOL_MAX_WORKERS;
 
     for (long i = 0; i < n; i++) {
-        if (pthread_create(&sl_pool_workers[i], NULL, sl_worker_loop,
-                            (void *)(intptr_t)i) != 0) {
+        if (sl_rt_thread_spawn(&sl_pool_workers[i], sl_worker_loop,
+                                (void *)(intptr_t)i) != 0) {
             fprintf(stderr, "slang: failed to start worker pool\n");
             exit(1);
         }

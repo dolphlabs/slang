@@ -69,6 +69,8 @@ static int method_value_self(CG *cg, Expr *call, const char *name, int line) {
     if (strcmp(left, name))
         return 0;
     const char *recv_t = infer_ident_name(cg, left, line);
+    if (type_is_arena(recv_t) || type_is_link(recv_t) || type_is_trip(recv_t))
+        return 1;
     StructDef *sd = struct_of_type(cg, recv_t);
     if (!sd)
         return 0;
@@ -332,6 +334,9 @@ static void walk_stmt(CG *cg, Esc *esc, Stmt *s) {
         }
         return;
     }
+    case ST_UNSAFE:
+        walk_block(cg, esc, s->as.unsafe_blk.body);
+        return;
     case ST_BREAK:
     case ST_CONTINUE:
     case ST_STRUCT:

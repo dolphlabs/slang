@@ -84,75 +84,164 @@ char *gen_string_concat(CG *cg, Expr *e, const char *lt,
     return xasprintf("({ %ssl_str_concat(%s, %s); })", prelude.data, a, b);
 }
 
+static int expr_is_flat(CG *cg, Expr *e) {
+    switch (e->kind) {
+    case EX_INT:
+    case EX_FLOAT:
+    case EX_BOOL:
+    case EX_STRING:
+    case EX_BYTES:
+        return 1;
+    case EX_IDENT:
+        return strcmp(e->as.ident.name, "none") != 0;
+    case EX_CAST:
+        return expr_is_flat(cg, e->as.cast.operand);
+    case EX_UNARY:
+        return expr_is_flat(cg, e->as.unary.operand);
+    case EX_FIELD:
+        return expr_is_flat(cg, e->as.field.base);
+    case EX_BINARY: {
+        const char *op = e->as.binary.op;
+        if (!strcmp(op, "??"))
+            return 0;
+        if (!strcmp(op, "+")) {
+            const char *lt = infer_type(cg, e->as.binary.lhs);
+            const char *rt = infer_type(cg, e->as.binary.rhs);
+            if (is_str(lt) || is_str(rt) ||
+                (is_bytes(lt) && is_bytes(rt)) ||
+                (is_arr(lt) && is_arr(rt)))
+                return 0;
+        }
+        return expr_is_flat(cg, e->as.binary.lhs) &&
+               expr_is_flat(cg, e->as.binary.rhs);
+    }
+    default:
+        return 0;
+    }
+}
+
+static int expr_nonzero_int_lit(Expr *e) {
+    if (e->kind == EX_CAST)
+        return expr_nonzero_int_lit(e->as.cast.operand);
+    if (e->kind == EX_UNARY && !strcmp(e->as.unary.op, "-") &&
+        e->as.unary.operand->kind == EX_INT)
+        return e->as.unary.operand->as.int_lit.value != 0;
+    return e->kind == EX_INT && e->as.int_lit.value != 0;
+}
+
 char *gen_numeric_binary(CG *cg, Expr *e, const char *result_t) {
     const char *op = e->as.binary.op;
     const char *lt = infer_type(cg, e->as.binary.lhs);
     const char *rt = infer_type(cg, e->as.binary.rhs);
-    const char *rc = ctype_of(cg, result_t);
+    int flat = expr_is_flat(cg, e->as.binary.lhs) &&
+               expr_is_flat(cg, e->as.binary.rhs);
+    char *a;
+    char *b;
     StrBuf prelude;
     sb_init(&prelude);
-    int seq_id = cg->tmp_id++;
     int ambient_mark = cg->ambient_count;
-    char *a = maybe_cast(cg, result_t, lt, gen_expr(cg, e->as.binary.lhs));
-    a = sequence_one(cg, seq_id, 0, rc, result_t, a, e->as.binary.lhs,
-                     &prelude);
-    char *b = maybe_cast(cg, result_t, rt, gen_expr(cg, e->as.binary.rhs));
-    b = sequence_one(cg, seq_id, 1, rc, result_t, b, e->as.binary.rhs,
-                     &prelude);
+    if (flat) {
+        a = maybe_cast(cg, result_t, lt, gen_expr(cg, e->as.binary.lhs));
+        b = maybe_cast(cg, result_t, rt, gen_expr(cg, e->as.binary.rhs));
+    } else {
+        const char *rc = ctype_of(cg, result_t);
+        int seq_id = cg->tmp_id++;
+        a = maybe_cast(cg, result_t, lt, gen_expr(cg, e->as.binary.lhs));
+        a = sequence_one(cg, seq_id, 0, rc, result_t, a, e->as.binary.lhs,
+                         &prelude);
+        b = maybe_cast(cg, result_t, rt, gen_expr(cg, e->as.binary.rhs));
+        b = sequence_one(cg, seq_id, 1, rc, result_t, b, e->as.binary.rhs,
+                         &prelude);
+    }
     cg->ambient_count = ambient_mark;
 
-    /* Integer '/' and '%' by zero trap the CPU (SIGFPE) rather than
-     * raising a catchable error; guard explicitly so it becomes an
-     * ordinary runtime error like an out-of-bounds index instead of
-     * an uncatchable signal (which would defeat per-task failure
-     * isolation once a task can crash the whole process anyway). */
-    if ((!strcmp(op, "/") || !strcmp(op, "%")) && is_int(result_t)) {
-        int id = cg->tmp_id++;
+    if ((!strcmp(op, "/") || !strcmp(op, "%")) && is_int(result_t) &&
+        !expr_nonzero_int_lit(e->as.binary.rhs)) {
+        const char *ty = map_type(result_t);
+        if (flat)
+            return xasprintf(
+                "((%s) == 0 ? (sl_rt_error(\"division by zero\", 0, 0), "
+                "(%s)0) : ((%s)((%s) %s (%s))))",
+                b, ty, ty, a, op, b);
         return xasprintf(
-            "({ %s%s _sl_dv%d = (%s); if (_sl_dv%d == 0) "
-            "sl_rt_error(\"division by zero\", 0, 0); "
-            "(%s)((%s) %s _sl_dv%d); })",
-            prelude.data, map_type(result_t), id, b, id, map_type(result_t),
-            a, op, id);
+            "({ %s((%s) == 0 ? (sl_rt_error(\"division by zero\", 0, 0), "
+            "(%s)0) : ((%s)((%s) %s (%s)))); })",
+            prelude.data, b, ty, ty, a, op, b);
     }
-    /* Cast the result back to the slang result type: C's integer
-     * promotions would otherwise widen narrow types to int and lose
-     * the documented wrap-on-overflow semantics. */
+    if (flat)
+        return xasprintf("((%s)((%s) %s (%s)))", map_type(result_t), a, op,
+                         b);
     return xasprintf("({ %s((%s)((%s) %s (%s))); })", prelude.data,
                      map_type(result_t), a, op, b);
 }
 
 char *gen_comparison(CG *cg, Expr *e, const char *lt, const char *rt) {
     const char *op = e->as.binary.op;
-    int widen = !(is_str(lt) && is_str(rt)) && !(is_bytes(lt) && is_bytes(rt));
+    int widen = !(is_str(lt) && is_str(rt)) && !(is_bytes(lt) && is_bytes(rt)) &&
+                !(is_fault(lt) && is_fault(rt)) &&
+                !(is_peer(lt) && is_peer(rt)) &&
+                !(is_until(lt) && is_until(rt));
     const char *pt = widen ? promote(lt, rt) : NULL;
-    const char *seq_t = is_str(lt) && is_str(rt)     ? "str"
+    const char *seq_t = is_str(lt) && is_str(rt)       ? "str"
                         : is_bytes(lt) && is_bytes(rt) ? "bytes"
+                        : is_fault(lt) && is_fault(rt) ? "fault"
+                        : is_peer(lt) && is_peer(rt)   ? "peer"
+                        : is_until(lt) && is_until(rt) ? "until"
                                                        : pt;
     const char *ct = ctype_of(cg, seq_t);
+    int flat = expr_is_flat(cg, e->as.binary.lhs) &&
+               expr_is_flat(cg, e->as.binary.rhs);
     StrBuf prelude;
     sb_init(&prelude);
-    int seq_id = cg->tmp_id++;
     int ambient_mark = cg->ambient_count;
     char *a = gen_expr(cg, e->as.binary.lhs);
     if (widen)
         a = maybe_cast(cg, pt, lt, a);
-    a = sequence_one(cg, seq_id, 0, ct, seq_t, a, e->as.binary.lhs, &prelude);
-    char *b = gen_expr(cg, e->as.binary.rhs);
-    if (widen)
-        b = maybe_cast(cg, pt, rt, b);
-    b = sequence_one(cg, seq_id, 1, ct, seq_t, b, e->as.binary.rhs, &prelude);
+    char *b;
+    if (flat) {
+        b = gen_expr(cg, e->as.binary.rhs);
+        if (widen)
+            b = maybe_cast(cg, pt, rt, b);
+    } else {
+        int seq_id = cg->tmp_id++;
+        a = sequence_one(cg, seq_id, 0, ct, seq_t, a, e->as.binary.lhs,
+                         &prelude);
+        b = gen_expr(cg, e->as.binary.rhs);
+        if (widen)
+            b = maybe_cast(cg, pt, rt, b);
+        b = sequence_one(cg, seq_id, 1, ct, seq_t, b, e->as.binary.rhs,
+                         &prelude);
+    }
     cg->ambient_count = ambient_mark;
+    const char *wrap = flat ? "" : prelude.data;
+    const char *open = flat ? "" : "({ ";
+    const char *close = flat ? "" : "; })";
     if (is_str(lt) && is_str(rt))
-        return xasprintf("({ %s(strcmp(%s, %s) %s 0); })", prelude.data, a,
-                         b, op);
+        return xasprintf("%s%s(strcmp(%s, %s) %s 0)%s", open, wrap, a, b,
+                         op, close);
     if (is_bytes(lt) && is_bytes(rt)) {
         if (!strcmp(op, "=="))
-            return xasprintf("({ %s(sl_bytes_eq(%s, %s)); })", prelude.data,
-                             a, b);
-        return xasprintf("({ %s(!sl_bytes_eq(%s, %s)); })", prelude.data, a,
-                         b);
+            return xasprintf("%s%ssl_bytes_eq(%s, %s)%s", open, wrap, a, b,
+                             close);
+        return xasprintf("%s%s!sl_bytes_eq(%s, %s)%s", open, wrap, a, b,
+                         close);
     }
+    if (is_fault(lt) && is_fault(rt)) {
+        if (!strcmp(op, "=="))
+            return xasprintf("%s%ssl_fault_eq(%s, %s)%s", open, wrap, a, b,
+                             close);
+        return xasprintf("%s%s!sl_fault_eq(%s, %s)%s", open, wrap, a, b,
+                         close);
+    }
+    if (is_peer(lt) && is_peer(rt)) {
+        if (!strcmp(op, "=="))
+            return xasprintf("%s%ssl_peer_eq(%s, %s)%s", open, wrap, a, b,
+                             close);
+        return xasprintf("%s%s!sl_peer_eq(%s, %s)%s", open, wrap, a, b,
+                         close);
+    }
+    if (flat)
+        return xasprintf("(%s %s %s)", a, op, b);
     return xasprintf("({ %s(%s %s %s); })", prelude.data, a, op, b);
 }
 
@@ -185,6 +274,8 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
             inner = xasprintf("((long long)strlen(%s))", a);
         else if (is_map(t))
             inner = xasprintf("((%s)->count)", a);
+        else if (is_wire(t))
+            inner = xasprintf("((%s).len)", a);
         else
             inner = xasprintf("((%s)->len)", a);
         return wrap_safepoint(cg, e, ctype_of(cg, "int"), NULL, inner);
@@ -353,6 +444,82 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *inner = xasprintf("((long long)sl_%s(%s))", name, a);
         return wrap_safepoint(cg, e, ctype_of(cg, "int"), NULL, inner);
     }
+    if (!strcmp(name, "arena_new")) {
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        char *inner = xasprintf("sl_arena_new(%s)", a);
+        return wrap_safepoint(cg, e, ctype_of(cg, "arena"), NULL, inner);
+    }
+    if (!strcmp(name, "until_of")) {
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        char *inner = xasprintf("sl_until_of(%s)", a);
+        return wrap_safepoint(cg, e, ctype_of(cg, "until"), NULL, inner);
+    }
+    if (!strcmp(name, "until_never")) {
+        char *inner = xstrdup("sl_until_never()");
+        return wrap_safepoint(cg, e, ctype_of(cg, "until"), NULL, inner);
+    }
+    if (!strcmp(name, "until_hit")) {
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        char *inner = xasprintf("(sl_until_hit(%s))", a);
+        return wrap_safepoint(cg, e, ctype_of(cg, "bool"), NULL, inner);
+    }
+    if (!strcmp(name, "fault_timeout") || !strcmp(name, "fault_reset") ||
+        !strcmp(name, "fault_closed") || !strcmp(name, "fault_io") ||
+        !strcmp(name, "fault_refused")) {
+        char *inner = xasprintf("sl_%s()", name);
+        return wrap_safepoint(cg, e, ctype_of(cg, "fault"), NULL, inner);
+    }
+    if (!strcmp(name, "fault_kind")) {
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        char *inner = xasprintf("((long long)sl_fault_kind(%s))", a);
+        return wrap_safepoint(cg, e, ctype_of(cg, "int"), NULL, inner);
+    }
+    if (!strcmp(name, "peer_v4")) {
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        char *b = gen_expr(cg, e->as.call.args[1]);
+        char *c = gen_expr(cg, e->as.call.args[2]);
+        char *d = gen_expr(cg, e->as.call.args[3]);
+        char *port = gen_expr(cg, e->as.call.args[4]);
+        char *inner = xasprintf("sl_peer_v4(%s, %s, %s, %s, %s)", a, b, c,
+                                d, port);
+        return wrap_safepoint(cg, e, ctype_of(cg, "peer"), NULL, inner);
+    }
+    if (!strcmp(name, "peer_port")) {
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        char *inner = xasprintf("((long long)sl_peer_port(%s))", a);
+        return wrap_safepoint(cg, e, ctype_of(cg, "int"), NULL, inner);
+    }
+    if (!strcmp(name, "trip_new")) {
+        char *inner = xstrdup("sl_trip_new()");
+        return wrap_safepoint(cg, e, ctype_of(cg, "trip"), NULL, inner);
+    }
+    if (!strcmp(name, "link_listen")) {
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        char *inner = xasprintf("sl_link_listen(%s)", a);
+        return wrap_safepoint(cg, e, ctype_of(cg, "result[link,fault]"),
+                              NULL, inner);
+    }
+    if (!strcmp(name, "link_dial")) {
+        StrBuf prelude;
+        sb_init(&prelude);
+        int seq_id = cg->tmp_id++;
+        int ambient_mark = cg->ambient_count;
+        char *h = gen_expr(cg, e->as.call.args[0]);
+        h = sequence_one(cg, seq_id, 0, ctype_of(cg, "str"), "str", h,
+                         e->as.call.args[0], &prelude);
+        char *p = gen_expr(cg, e->as.call.args[1]);
+        p = sequence_one(cg, seq_id, 1, ctype_of(cg, "int"), "int", p,
+                         e->as.call.args[1], &prelude);
+        char *u = gen_expr(cg, e->as.call.args[2]);
+        u = sequence_one(cg, seq_id, 2, ctype_of(cg, "until"), "until", u,
+                         e->as.call.args[2], &prelude);
+        char *inner = xasprintf("sl_link_dial(%s, %s, %s)", h, p, u);
+        char *result = wrap_safepoint(cg, e,
+                                      ctype_of(cg, "result[link,fault]"),
+                                      prelude.data, inner);
+        cg->ambient_count = ambient_mark;
+        return result;
+    }
     if (!strcmp(name, "exit")) {
         char *a = gen_expr(cg, e->as.call.args[0]);
         char *inner = xasprintf("exit((int)(%s))", a);
@@ -502,6 +669,109 @@ char *gen_call(CG *cg, Expr *e) {
                          right, pkg);
         } else {
             recv_t = infer_ident_name(cg, left, e->line);
+            if (type_is_arena(recv_t)) {
+                char *self = gen_ident_name(cg, left, e->line);
+                char *innerw;
+                if (type_wrap(recv_t, &innerw) == TW_NONE)
+                    self = xasprintf("(&(%s))", self);
+                if (!strcmp(right, "alloc")) {
+                    const char *vt = infer_type(cg, e->as.call.args[0]);
+                    const char *ct = ctype_of(cg, vt);
+                    char *v = maybe_cast(cg, vt, vt,
+                                         gen_expr(cg, e->as.call.args[0]));
+                    move_consume(cg, e->as.call.args[0]);
+                    char *inner = xasprintf(
+                        "({ %s *_sl_ap = (%s *)sl_arena_alloc(%s, sizeof(%s), "
+                        "_Alignof(%s)); *_sl_ap = (%s); _sl_ap; })",
+                        ct, ct, self, ct, ct, v);
+                    return wrap_safepoint(cg, e, xasprintf("%s *", ct), NULL,
+                                          inner);
+                }
+                if (!strcmp(right, "alloc_bytes")) {
+                    char *n = gen_expr(cg, e->as.call.args[0]);
+                    char *inner = xasprintf(
+                        "((uint8_t *)sl_arena_alloc(%s, (size_t)(%s), 1))",
+                        self, n);
+                    return wrap_safepoint(cg, e, "uint8_t *", NULL, inner);
+                }
+                if (!strcmp(right, "reset")) {
+                    char *inner = xasprintf("sl_arena_reset(%s)", self);
+                    return wrap_safepoint(cg, e, NULL, NULL, inner);
+                }
+                if (!strcmp(right, "wire")) {
+                    char *n = gen_expr(cg, e->as.call.args[0]);
+                    char *inner = xasprintf(
+                        "({ long long _sl_n = %s; sl_wire_make((unsigned "
+                        "char *)sl_arena_alloc(%s, (size_t)_sl_n, 1), "
+                        "_sl_n); })",
+                        n, self);
+                    return wrap_safepoint(cg, e, ctype_of(cg, "wire"), NULL,
+                                          inner);
+                }
+                cg_error(e->line, "type 'arena' has no method '%s'", right);
+            }
+            if (type_is_trip(recv_t)) {
+                char *self = gen_ident_name(cg, left, e->line);
+                char *innerw;
+                if (type_wrap(recv_t, &innerw) != TW_NONE)
+                    self = xasprintf("(*(%s))", self);
+                if (!strcmp(right, "pull")) {
+                    char *inner = xasprintf("sl_trip_pull(%s)", self);
+                    return wrap_safepoint(cg, e, NULL, NULL, inner);
+                }
+                if (!strcmp(right, "down")) {
+                    char *inner = xasprintf("(sl_trip_down(%s))", self);
+                    return wrap_safepoint(cg, e, ctype_of(cg, "bool"), NULL,
+                                          inner);
+                }
+                cg_error(e->line, "type 'trip' has no method '%s'", right);
+            }
+            if (type_is_link(recv_t)) {
+                char *self = gen_ident_name(cg, left, e->line);
+                char *innerw;
+                if (type_wrap(recv_t, &innerw) == TW_NONE)
+                    self = xasprintf("(&(%s))", self);
+                if (!strcmp(right, "accept")) {
+                    char *u = gen_expr(cg, e->as.call.args[0]);
+                    char *inner = xasprintf("sl_link_accept(%s, %s)", self,
+                                            u);
+                    return wrap_safepoint(cg, e,
+                                          ctype_of(cg, "result[link,fault]"),
+                                          NULL, inner);
+                }
+                if (!strcmp(right, "send") || !strcmp(right, "recv")) {
+                    StrBuf prelude;
+                    sb_init(&prelude);
+                    int seq_id = cg->tmp_id++;
+                    int ambient_mark = cg->ambient_count;
+                    char *w = gen_expr(cg, e->as.call.args[0]);
+                    w = sequence_one(cg, seq_id, 0, ctype_of(cg, "wire"),
+                                     "wire", w, e->as.call.args[0],
+                                     &prelude);
+                    char *u = gen_expr(cg, e->as.call.args[1]);
+                    u = sequence_one(cg, seq_id, 1, ctype_of(cg, "until"),
+                                     "until", u, e->as.call.args[1],
+                                     &prelude);
+                    char *inner = xasprintf("sl_link_%s(%s, %s, %s)", right,
+                                            self, w, u);
+                    char *result = wrap_safepoint(
+                        cg, e, ctype_of(cg, "result[int,fault]"),
+                        prelude.data, inner);
+                    cg->ambient_count = ambient_mark;
+                    return result;
+                }
+                if (!strcmp(right, "peer")) {
+                    char *inner = xasprintf("sl_link_peer(%s)", self);
+                    return wrap_safepoint(cg, e, ctype_of(cg, "peer"), NULL,
+                                          inner);
+                }
+                if (!strcmp(right, "port")) {
+                    char *inner = xasprintf("sl_link_port(%s)", self);
+                    return wrap_safepoint(cg, e, ctype_of(cg, "int"), NULL,
+                                          inner);
+                }
+                cg_error(e->line, "type 'link' has no method '%s'", right);
+            }
             StructDef *sd = struct_of_type(cg, recv_t);
             if (!sd)
                 cg_error(e->line, "call to undefined function '%s'", name);
@@ -764,6 +1034,10 @@ char *gen_index(CG *cg, Expr *e) {
         return xasprintf("({ %s((long long)sl_bytes_at(%s, %s)); })",
                          prelude.data, b, i);
     }
+    if (is_wire(bt)) {
+        return xasprintf("({ %s((long long)sl_wire_at(%s, %s)); })",
+                         prelude.data, b, i);
+    }
     char *elem = arr_elem(bt);
     const char *ec = ctype_of(cg, elem);
     return xasprintf(
@@ -796,7 +1070,8 @@ char *gen_slice(CG *cg, Expr *e) {
                                     : xstrdup("0");
     char *end = e->as.slice.end
                     ? gen_expr(cg, e->as.slice.end)
-                    : xasprintf("%s->len", base_name);
+                    : is_wire(bt) ? xasprintf("%s.len", base_name)
+                                  : xasprintf("%s->len", base_name);
     if (e->as.slice.inclusive)
         end = xasprintf("(%s + 1)", end);
     int seq_id = cg->tmp_id++;
@@ -806,7 +1081,9 @@ char *gen_slice(CG *cg, Expr *e) {
                        e->as.slice.end, &prelude);
     cg->ambient_count = ambient_mark;
     return xasprintf("({ %s%s(%s, %s, %s); })", prelude.data,
-                     is_bytes(bt) ? "sl_bytes_slice" : "sl_arr_slice",
+                     is_bytes(bt)  ? "sl_bytes_slice"
+                     : is_wire(bt) ? "sl_wire_slice"
+                                   : "sl_arr_slice",
                      base_name, start, end);
 }
 
@@ -1004,6 +1281,13 @@ char *gen_expr(CG *cg, Expr *e) {
             char *b = gen_expr(cg, e->as.binary.rhs);
             return xasprintf("sl_arr_concat(%s, %s)", a, b);
         }
+        if ((!strcmp(op, "+") || !strcmp(op, "-")) &&
+            ((type_is_raw_ptr(lt) && is_int(rt)) ||
+             (!strcmp(op, "+") && is_int(lt) && type_is_raw_ptr(rt)))) {
+            char *a = gen_expr(cg, e->as.binary.lhs);
+            char *b = gen_expr(cg, e->as.binary.rhs);
+            return xasprintf("(%s %s %s)", a, op, b);
+        }
         if (!strcmp(op, "+") || !strcmp(op, "-") || !strcmp(op, "*") ||
             !strcmp(op, "/"))
             return gen_numeric_binary(cg, e, promote(lt, rt));
@@ -1043,6 +1327,25 @@ void gen_print(CG *cg, Expr *call, int newline) {
                   v);
         if (newline)
             emit_line(cg, "putchar(10);");
+    } else if (is_wire(t)) {
+        emit_line(cg, "fwrite((%s).ptr, 1, (size_t)(%s).len, stdout);", v, v);
+        if (newline)
+            emit_line(cg, "putchar(10);");
+    } else if (is_until(t)) {
+        emit_line(cg, "printf(\"%%lld%s\", (long long)(%s));",
+                  newline ? "\\n" : "", v);
+    } else if (is_fault(t)) {
+        emit_line(cg, "({ sl_fault _sl_f = %s; %s(_sl_f.detail%s); });", v,
+                  newline ? "puts" : "fputs", newline ? "" : ", stdout");
+    } else if (is_peer(t)) {
+        emit_line(cg,
+                  "({ sl_peer _sl_p = %s; printf(\"%%u.%%u.%%u.%%u:%%u%s\", "
+                  "(unsigned)((_sl_p.addr >> 24) & 255u), "
+                  "(unsigned)((_sl_p.addr >> 16) & 255u), "
+                  "(unsigned)((_sl_p.addr >> 8) & 255u), "
+                  "(unsigned)(_sl_p.addr & 255u), "
+                  "(unsigned)_sl_p.port); });",
+                  v, newline ? "\\n" : "");
     } else if (!is_str(t)) {
         cg_error(call->line,
                  "cannot print a value of type %s directly", t);
