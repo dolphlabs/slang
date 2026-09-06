@@ -99,6 +99,7 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
             sd->pkg = p->name;
             sd->name = s->as.struct_decl.name;
             sd->is_pub = s->as.struct_decl.is_pub;
+            sd->is_gc = s->as.struct_decl.is_gc;
             sd->fields = s->as.struct_decl.fields;
             sd->ftypes = (const char **)s->as.struct_decl.ftypes;
             sd->nfields = s->as.struct_decl.nfields;
@@ -118,6 +119,15 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
                              sd->fields[j], sd->canonical);
             }
             sd->ftypes[j] = canon_type(cg, sd->ftypes[j], sd->line);
+        }
+        if (!sd->is_gc) {
+            for (j = 0; j < sd->nfields; j++) {
+                if (type_is_gc_ptr(cg, sd->ftypes[j]))
+                    cg_error(sd->line,
+                             "value struct '%s' cannot contain gc field "
+                             "'%s' (type %s); use 'gc struct'",
+                             sd->canonical, sd->fields[j], sd->ftypes[j]);
+            }
         }
     }
 
@@ -283,7 +293,7 @@ void emit_struct_types(CG *cg) {
 void emit_struct_tracers(CG *cg) {
     for (int i = 0; i < cg->structs.count; i++) {
         StructDef *sd = &cg->structs.items[i];
-        if (!struct_has_gc_fields(cg, sd))
+        if (!sd->is_gc || !struct_has_gc_fields(cg, sd))
             continue;
         char *m = mangle_struct(sd->canonical);
         emit_line(cg, "static void sl_gc_trace_%s(void *p, void (*mark)(void *)) {",

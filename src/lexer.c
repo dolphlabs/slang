@@ -248,6 +248,7 @@ Token lexer_next(Lexer *lx) {
         KW("in", T_KW_IN)
         KW("as", T_KW_AS)
         KW("struct", T_KW_STRUCT)
+        KW("gc", T_KW_GC)
         KW("impl", T_KW_IMPL)
         KW("extern", T_KW_EXTERN)
         KW("link", T_KW_LINK)
@@ -373,6 +374,7 @@ const char *token_type_name(TokenType t) {
     case T_KW_IN:    return "'in'";
     case T_KW_AS:    return "'as'";
     case T_KW_STRUCT:return "'struct'";
+    case T_KW_GC:    return "'gc'";
     case T_KW_IMPL:  return "'impl'";
     case T_KW_EXTERN:return "'extern'";
     case T_KW_LINK:  return "'link'";

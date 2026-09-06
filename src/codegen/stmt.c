@@ -238,7 +238,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                 char *val = maybe_cast(cg, sd->ftypes[fi], vt,
                                        gen_expr(cg, s->as.assign.value));
                 cg->expect = se2;
-                emit_line(cg, "%s->%s = %s;", b,
+                emit_line(cg, "%s%s%s = %s;", b, struct_access(cg, bt),
                           sanitize_ident(sd->fields[fi]), val);
                 break;
             }
@@ -287,7 +287,7 @@ void gen_stmt(CG *cg, Stmt *s) {
             char *val = maybe_cast(cg, sd->ftypes[fi], vt,
                                    gen_expr(cg, s->as.assign.value));
             cg->expect = se6;
-            emit_line(cg, "%s->%s = %s;", b,
+            emit_line(cg, "%s%s%s = %s;", b, struct_access(cg, bt),
                       sanitize_ident(sd->fields[fi]), val);
             break;
         }

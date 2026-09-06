@@ -3,7 +3,7 @@
 // arguments already are -- so 'none'/'some(..)'/'ok(..)'/'err(..)'
 // can appear directly as a field value without a redundant
 // annotation on some intermediate variable.
-struct Wrapper {
+gc struct Wrapper {
     maybe: opt[int],
     outcome: result[int, str],
 }

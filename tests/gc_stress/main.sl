@@ -9,7 +9,7 @@
 // across cycles, later rounds would misbehave even if earlier ones
 // looked fine.
 
-struct Node {
+gc struct Node {
     val: int,
     tag: str,
     next: opt[Node],

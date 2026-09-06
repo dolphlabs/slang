@@ -142,6 +142,7 @@ struct Stmt {
         struct {
             char *name;
             int is_pub;
+            int is_gc;
             char **fields;
             char **ftypes;
             int nfields;

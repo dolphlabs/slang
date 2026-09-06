@@ -23,7 +23,9 @@ char *gen_ident_name(CG *cg, const char *name, int line) {
             return mangle_glob(g->pkg, g->name);
         }
         char *base = gen_ident_name(cg, left, line);
-        return xasprintf("(%s)->%s", base, sanitize_ident(right));
+        const char *bt = infer_ident_name(cg, left, line);
+        return xasprintf("(%s)%s%s", base, struct_access(cg, bt),
+                         sanitize_ident(right));
     }
     GlobSym *g = glob_find(cg, cg->cur_pkg, name);
     if (g)
@@ -669,30 +671,23 @@ char *gen_structlit(CG *cg, Expr *e) {
     const char *canon = infer_type(cg, e); /* validates fields too */
     StructDef *sd = struct_find_canon(cg, canon);
     const char *sc = mangle_struct(canon);
-    const char *trace = struct_has_gc_fields(cg, sd)
-                             ? xasprintf("sl_gc_trace_%s", sc)
-                             : "NULL";
+    int is_gc = sd->is_gc;
+    const char *dot = is_gc ? "->" : ".";
     StrBuf sb;
     sb_init(&sb);
-    sb_append(&sb,
-              xasprintf("({ %s *_sl_s = (%s *)sl_gc_alloc(sizeof(%s), %s); ",
-                        sc, sc, sc, trace));
-    /* Each field value is sequenced into its own temp, declared
-     * directly in this outer ({ ... }) scope, rather than embedded
-     * raw into "_sl_s->field = %s;" -- needed so a LATER field's own
-     * nested-call safepoint bracket can reference an EARLIER field's
-     * still-live value (Wrapper{ a: bar(), b: baz() }: baz()'s own
-     * bracket needs bar()'s temp), the same crash class gen_list's
-     * [mk_a(), mk_b()] hit; see sequence_one's own comment).
-     * Registered/ambient-pushed unconditionally, matching gen_maplit. */
+    if (is_gc) {
+        const char *trace = struct_has_gc_fields(cg, sd)
+                                 ? xasprintf("sl_gc_trace_%s", sc)
+                                 : "NULL";
+        sb_append(&sb,
+                  xasprintf("({ %s *_sl_s = (%s *)sl_gc_alloc(sizeof(%s), %s); ",
+                            sc, sc, sc, trace));
+    } else {
+        sb_append(&sb, xasprintf("({ %s _sl_s; ", sc));
+    }
     int ambient_mark = cg->ambient_count;
-    /* _sl_s itself is ALSO pushed onto ambient, right after
-     * ambient_mark is captured (popped by the same restore at the end
-     * of the loop) -- it's under construction (GC_malloc'd but not
-     * yet populated) for the entire loop below, so a nested call
-     * inside a LATER field's own evaluation needs it protected too,
-     * matching gen_maplit's own _sl_m treatment exactly. */
-    ambient_root_push(cg, "_sl_s");
+    if (is_gc)
+        ambient_root_push(cg, "_sl_s");
     int seq_id = cg->tmp_id++;
     for (int j = 0; j < e->as.structlit.nfields; j++) {
         int fi = -1;
@@ -709,8 +704,8 @@ char *gen_structlit(CG *cg, Expr *e) {
         char *vname = sequence_one(cg, seq_id, j, fc, sd->ftypes[fi], v,
                                    e->as.structlit.vals[j], &sb);
         sb_append(&sb,
-                  xasprintf("_sl_s->%s = %s; ",
-                            sanitize_ident(sd->fields[fi]), vname));
+                  xasprintf("_sl_s%s%s = %s; ",
+                            dot, sanitize_ident(sd->fields[fi]), vname));
     }
     cg->ambient_count = ambient_mark;
     sb_append(&sb, "_sl_s; })");
@@ -921,7 +916,9 @@ char *gen_expr(CG *cg, Expr *e) {
         return gen_maplit(cg, e, NULL, NULL);
     case EX_FIELD: {
         char *b = gen_expr(cg, e->as.field.base);
-        return xasprintf("(%s)->%s", b, sanitize_ident(e->as.field.name));
+        const char *bt = infer_type(cg, e->as.field.base);
+        return xasprintf("(%s)%s%s", b, struct_access(cg, bt),
+                         sanitize_ident(e->as.field.name));
     }
     case EX_STRUCTLIT:
         return gen_structlit(cg, e);

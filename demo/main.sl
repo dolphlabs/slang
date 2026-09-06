@@ -51,7 +51,7 @@ extern fn atoi(s: str) -> i32;
 // tradeoff, and it's a direct, honest demonstration of exactly the
 // gap the README calls out plus the `chan[T]` primitive that's
 // already there to close it yourself.
-struct AppState {
+gc struct AppState {
     messages: [arcade.Message],
     leaderboard: map[str]arcade.Player,
     request_count: int,

@@ -637,7 +637,7 @@ static const char *parse_type_name(Parser *p) {
 
 static Stmt *parse_if_stmt(Parser *p);
 static Stmt *parse_statement(Parser *p);
-static Stmt *parse_struct_decl(Parser *p, int is_pub);
+static Stmt *parse_struct_decl(Parser *p, int is_pub, int is_gc);
 static Stmt *parse_impl_decl(Parser *p);
 
 static Block *parse_block(Parser *p, int fn_body) {
@@ -805,8 +805,8 @@ static Stmt *parse_for_stmt(Parser *p) {
     return s;
 }
 
-/* struct Name { field: T, ... } — top level only */
-static Stmt *parse_struct_decl(Parser *p, int is_pub) {
+/* [gc] struct Name { field: T, ... } — top level only */
+static Stmt *parse_struct_decl(Parser *p, int is_pub, int is_gc) {
     Token *kw = advance(p); /* 'struct' */
     Token *name = expect(p, T_IDENT, "a struct name");
     expect(p, T_LBRACE, "'{'");
@@ -833,6 +833,7 @@ static Stmt *parse_struct_decl(Parser *p, int is_pub) {
     Stmt *s = new_stmt(ST_STRUCT, kw->line);
     s->as.struct_decl.name = name->text;
     s->as.struct_decl.is_pub = is_pub;
+    s->as.struct_decl.is_gc = is_gc;
     s->as.struct_decl.fields = fields;
     s->as.struct_decl.ftypes = ftypes;
     s->as.struct_decl.nfields = n;
@@ -1111,8 +1112,16 @@ Program *parse_program(Token *tokens, int ntokens) {
             continue;
         }
 
+        if (check(&p, T_KW_GC)) {
+            advance(&p);
+            if (!check(&p, T_KW_STRUCT))
+                parse_error(peek(&p), "expected 'struct' after 'gc'");
+            block_push(prog->main_body, parse_struct_decl(&p, is_pub, 1));
+            continue;
+        }
+
         if (check(&p, T_KW_STRUCT)) {
-            block_push(prog->main_body, parse_struct_decl(&p, is_pub));
+            block_push(prog->main_body, parse_struct_decl(&p, is_pub, 0));
             continue;
         }
 

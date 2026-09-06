@@ -200,7 +200,8 @@ int type_is_gc_ptr(CG *cg, const char *t) {
     if (is_arr(t) || is_map(t) || is_opt(t) || is_result(t) ||
         is_chan(t) || is_str(t) || is_bytes(t))
         return 1;
-    return struct_find_canon(cg, t) != NULL;
+    StructDef *sd = struct_find_canon(cg, t);
+    return sd && sd->is_gc;
     /* else: int / i8..u64 / float / f32 / bool / duration -- scalars,
      * never pointers */
 }
@@ -212,6 +213,15 @@ int type_is_gc_ptr(CG *cg, const char *t) {
  * between emit_struct_tracers (which only emits a tracer when this is
  * true) and every struct allocation call site (which needs the same
  * answer to know whether to reference that tracer or pass NULL). */
+int struct_type_is_gc(CG *cg, const char *t) {
+    StructDef *sd = struct_find_canon(cg, t);
+    return sd && sd->is_gc;
+}
+
+const char *struct_access(CG *cg, const char *t) {
+    return struct_type_is_gc(cg, t) ? "->" : ".";
+}
+
 int struct_has_gc_fields(CG *cg, StructDef *sd) {
     for (int j = 0; j < sd->nfields; j++)
         if (type_is_gc_ptr(cg, sd->ftypes[j]))
@@ -809,8 +819,12 @@ const char *ctype_of(CG *cg, const char *t) {
         result_te(t, &tv, &tev);
         return xasprintf("%s *", res_cname(cg, tv, tev));
     }
-    if (struct_find_canon(cg, t))
-        return xasprintf("%s *", mangle_struct(t));
+    if (struct_find_canon(cg, t)) {
+        const char *m = mangle_struct(t);
+        if (struct_type_is_gc(cg, t))
+            return xasprintf("%s *", m);
+        return m;
+    }
     return NULL;
 }
 

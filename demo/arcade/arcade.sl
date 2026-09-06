@@ -5,30 +5,30 @@
 // the client shouldn't get to set server-owned fields like a
 // timestamp.
 
-pub struct NewMessage {
+pub gc struct NewMessage {
     author: str,
     text: str,
     mood: opt[str],
 }
 
-pub struct Message {
+pub gc struct Message {
     author: str,
     text: str,
     mood: opt[str],
     at_ms: int,
 }
 
-pub struct Player {
+pub gc struct Player {
     name: str,
     best: i32,
     rolls: i32,
 }
 
-pub struct RollRequest {
+pub gc struct RollRequest {
     player: str,
 }
 
-pub struct RollResult {
+pub gc struct RollResult {
     player: str,
     a: i32,
     b: i32,
@@ -38,7 +38,7 @@ pub struct RollResult {
     rolls: i32,
 }
 
-pub struct Stats {
+pub gc struct Stats {
     uptime_ms: int,
     requests: int,
     active_tasks: int,

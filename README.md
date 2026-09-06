@@ -144,7 +144,8 @@ no escaping).
 | `f32`      | `float`     | IEEE single precision          |
 | `[T]`      | `sl_arr *`  | growable array of T            |
 | `map[K]V`  | `sl_map *`  | insertion-ordered hash map     |
-| struct     | `sl_st_* *` | user-defined record (GC'd)     |
+| struct     | `sl_st_*`   | value record (copied)          |
+| `gc struct` | `sl_st_* *` | GC'd heap record (shared)     |
 | `opt[T]`   | `sl_opt_* *` | optional value: `some(v)` / `none` |
 | `result[T,E]` | `sl_res_* *` | fallible value: `ok(v)` / `err(e)` |
 | `duration` | `int64_t`   | nanosecond count (see `time`)  |
@@ -257,7 +258,9 @@ push(pts, r.tl);
 Struct literals must supply every field exactly once, with types
 checked. Methods live in top-level `impl Name { ... }` blocks; mark a
 method `pub fn` to export it to importing packages. Structs are
-heap-allocated and garbage-collected; assignment shares references.
+values: assignment copies. Use `gc struct` for a shared heap object
+(today's previous default). A value struct cannot yet hold `gc`
+fields (`str`, lists, maps, `opt`/`result`, or `gc struct`).
 
 #### Option / Result
 
@@ -398,8 +401,8 @@ a runtime panic.
 ```slang
 import "json";
 
-struct Address { city: str, zip: str }
-struct Person {
+gc struct Address { city: str, zip: str }
+gc struct Person {
     name: str,
     age: i32,
     email: opt[str],      // JSON null / missing key <-> none

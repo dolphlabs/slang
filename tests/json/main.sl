@@ -6,12 +6,12 @@
 // instantiation.
 import "json";
 
-struct Address {
+gc struct Address {
     city: str,
     zip: str,
 }
 
-struct Person {
+gc struct Person {
     name: str,
     age: i32,
     email: opt[str],
@@ -22,7 +22,7 @@ struct Person {
 // a self-referential struct (through opt[Self], which is a pointer
 // at the C level) must not send the compiler into infinite recursion
 // while discovering nested codecs
-struct Node {
+gc struct Node {
     value: i32,
     next: opt[Node],
 }
@@ -113,7 +113,7 @@ fn map_round_trip() {
     println(to_str(m2["bob"]));
 }
 
-struct Config {
+gc struct Config {
     name: str,
     count: i32,
 }
@@ -157,7 +157,7 @@ fn extra_fields_tolerated() {
     println(to_str(c.count));
 }
 
-struct Point { x: float, y: i32 }
+gc struct Point { x: float, y: i32 }
 
 fn negative_and_float() {
     let r: result[Point, str] = json.decode("{\"x\":-3.5,\"y\":-7}");
@@ -169,7 +169,7 @@ fn negative_and_float() {
     println(to_str(p.y));
 }
 
-struct Item { id: i32 }
+gc struct Item { id: i32 }
 
 fn list_of_structs() {
     let r: result[[Item], str] =
