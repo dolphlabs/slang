@@ -4,3 +4,6 @@ AGENTS.md
 main2
 .claude/
 tools/
+tests/pkgpin/slang.project
+tests/pkgpin/slang.lock
+

@@ -34,6 +34,11 @@ for t in tests/*/main.sl; do
     out="/tmp/sl_${name}.out"
     err="/tmp/sl_${name}.err"
 
+    if [ -f "tests/$name/prepare.sh" ]; then
+        # shellcheck disable=SC1090
+        . "tests/$name/prepare.sh"
+    fi
+
     if ./slangc "$t" --run >"$out" 2>"$err"; then
         if [ ! -f "tests/$name/expected.txt" ]; then
             echo "FAIL $name (missing tests/$name/expected.txt)"
