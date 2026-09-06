@@ -605,7 +605,12 @@ char *gen_ctor(CG *cg, Expr *e) {
             (type_is_gc_ptr(cg, tv) || type_is_gc_ptr(cg, tev))
                 ? xasprintf("sl_gc_trace_%s", rc)
                 : "NULL";
-        if (!strcmp(name, "ok"))
+        if (!type_is_gc_ptr(cg, ty)) {
+            if (!strcmp(name, "ok"))
+                inner = xasprintf("((%s){ .ok = true, .v = %s })", cn, v);
+            else
+                inner = xasprintf("((%s){ .ok = false, .e = %s })", cn, v);
+        } else if (!strcmp(name, "ok"))
             inner = xasprintf(
                 "({ %s _sl_c = (%s)sl_gc_alloc(sizeof(*_sl_c), %s); "
                 "_sl_c->ok = true; _sl_c->v = %s; _sl_c; })",
@@ -1227,8 +1232,10 @@ char *gen_expr(CG *cg, Expr *e) {
              * dangle for whatever generates next. */
             int ambient_mark = cg->ambient_count;
             char *qname = xasprintf("_sl_q%d", id);
-            expr_tmp_register(cg, e->as.binary.lhs, qname);
-            ambient_root_push(cg, qname);
+            if (type_is_gc_ptr(cg, lt)) {
+                expr_tmp_register(cg, e->as.binary.lhs, qname);
+                ambient_root_push(cg, qname);
+            }
             if (is_opt(lt)) {
                 char *inner = opt_inner(lt);
                 const char *oc = ctype_of(cg, lt);
@@ -1248,6 +1255,7 @@ char *gen_expr(CG *cg, Expr *e) {
             result_te(lt, &tv, &tev);
             const char *oc = ctype_of(cg, lt);
             const char *ic = ctype_of(cg, tv);
+            const char *acc = res_access(cg, lt);
             const char *saved = expect_push(cg, tv);
             const char *rt = infer_type(cg, e->as.binary.rhs);
             char *b = gen_expr(cg, e->as.binary.rhs);
@@ -1256,8 +1264,8 @@ char *gen_expr(CG *cg, Expr *e) {
             cg->ambient_count = ambient_mark;
             return xasprintf(
                 "({ %s %s = %s; "
-                "(%s->ok ? %s->v : (%s)(%s)); })",
-                oc, qname, a, qname, qname, ic, b);
+                "(%s%sok ? %s%sv : (%s)(%s)); })",
+                oc, qname, a, qname, acc, qname, acc, ic, b);
         }
 
         const char *rt = infer_type(cg, e->as.binary.rhs);
