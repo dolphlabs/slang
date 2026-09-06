@@ -472,6 +472,7 @@ static sl_res_i32_str *sl_net_accept(int lfd) {
 }
 
 static sl_res_i32_str *sl_net_dial(const char *host, int port) {
+    sl_rt_need_fat_stack();
     char portstr[16];
     sl_rt_preempt_disable(); /* Tier 11 eighth slice -- snprintf's
         internal locale locking, see sl_gc_alloc's own comment
@@ -670,6 +671,7 @@ static sl_res_link_fault *sl_link_accept(sl_link *ln, sl_until u) {
 
 static sl_res_link_fault *sl_link_dial(const char *host, long long port,
                                       sl_until u) {
+    sl_rt_need_fat_stack();
     char portstr[16];
     sl_rt_preempt_disable();
     snprintf(portstr, sizeof(portstr), "%d", (int)port);

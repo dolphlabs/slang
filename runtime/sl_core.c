@@ -580,10 +580,9 @@ static void sl_task_yield_now(void); /* runtime_pool.c, forward here --
     below calls it directly, but it's defined for real in RUNTIME_POOL,
     same reason as sl_task_park/sl_task_resume just above. */
 
-/* Re-examined alongside SL_TASK_INITIAL_STACK_SIZE's own drop to
- * 16384 (runtime_sched.c -- see that comment for the full story,
- * including the two smaller sizes that were tried and genuinely
- * failed first) -- the two cannot be picked independently. This
+/* Re-examined alongside SL_TASK_INITIAL_STACK_SIZE (8KB default,
+ * 16KB fat for native-deep calls -- see sl_rt_need_fat_stack).
+ * The two cannot be picked independently. This
  * margin is checked only AT a cooperative checkpoint; it must
  * therefore be large enough that nothing which can happen between
  * one checkpoint passing the check and the NEXT one running can
@@ -612,7 +611,7 @@ static void sl_task_yield_now(void); /* runtime_pool.c, forward here --
  *      stack buffer is an ordinary malloc'd block, so it corrupts
  *      whatever heap memory sits just before it.
  * This value stayed at 1024 through the same validation pass that
- * settled SL_TASK_INITIAL_STACK_SIZE at 16384 -- 80 consecutive TLS
+ * settled the fat native-deep size at 16384 -- 80 consecutive TLS
  * runs, 6 full test-suite runs, 15 nettest runs, 23
  * stress_test/concurrent_compute runs, and 4 clean UBSan runs, all
  * clean -- including tests/stack_grow, which forces 50,000 levels
@@ -623,6 +622,8 @@ static void sl_task_yield_now(void); /* runtime_pool.c, forward here --
  * runtime_sched.c) because sl_rt_safepoint_enter needs it at its
  * own definition site, same ordering reason as sl_task itself
  * above. */
+#define SL_TASK_INITIAL_STACK_SIZE 8192
+#define SL_TASK_FAT_STACK_SIZE 16384
 #define SL_TASK_GUARD_MARGIN 1024
 
 /* Tier 11 seventh slice (cooperative preemption v1): tunable, not yet
@@ -685,6 +686,14 @@ static inline void sl_rt_stack_and_gc(sl_task *t) {
             sl_task_stack_grow(t);
     }
     sl_rt_gc_checkin();
+}
+
+static void sl_rt_need_fat_stack(void) {
+    sl_task *t = SL_RT_TLS_CUR();
+    if (!t || !t->stack_base)
+        return;
+    while (t->stack_size < SL_TASK_FAT_STACK_SIZE)
+        sl_task_stack_grow(t);
 }
 
 static inline void sl_rt_preempt_if_due(sl_task *t) {

@@ -785,39 +785,26 @@ static void sl_task_stack_grow(sl_task *t) {
     sl_rt_preempt_enable();
 }
 
-/* Small on purpose -- 'start small... never a fixed ceiling', per
- * todo.md's Tier 11 entry -- and deliberately much smaller than the
- * OS's own default thread stack (which main()/spawn used exclusively
- * before this): most of the room a program needs now comes from
- * growing on demand instead of being reserved unconditionally up
- * front for every task whether it needs it or not.
- *
- * Shrunk from an earlier 65536, per todo.md's own stretch item -- but
- * NOT all the way to the 'low single-digit KB' Go itself starts at,
- * which was the original target here and turned out to be genuinely
- * unsafe, not just untested: 2048 produced a real, reproducible heap
- * corruption (macOS malloc's own 'Region cookie corrupted' check
- * tripping) on the very first TLS test run, root-caused to
- * OpenSSL's lazy, one-time SSL_CTX_new_ex -> OPENSSL_init_crypto ->
- * err_load_strings init path -- a deep, genuinely stack-hungry native
- * call chain with ZERO slang checkpoints anywhere inside it, so the
- * growth mechanism below has no opportunity to intervene before it
- * overflows into whatever heap memory sits just past the buffer.
- * 8192 (this codebase's own former SL_TASK_GUARD_MARGIN value,
- * coincidentally) looked clean on a handful of runs but still failed
- * intermittently under real repetition (1 failure in 3 full test-suite
- * runs) -- the same class of false confidence a single clean run
- * already produces for SL_TASK_GUARD_MARGIN's own comment just below.
- * 16384 is the value this was actually, empirically settled on: 80
- * consecutive standalone TLS runs, 6 consecutive full test-suite runs,
- * 15 consecutive nettest runs, 23 stress_test/concurrent_compute runs,
- * and 4 clean UBSan runs, all clean -- a comparable bar to how
- * SL_TASK_GUARD_MARGIN's own 8192 was originally validated (150+
- * runs), not just 'it passed once.' Still a real, 4x reduction from
- * 65536, just not the 32x one first proposed. See
- * SL_TASK_GUARD_MARGIN's own comment (runtime_core.c) for why that
- * value can't be picked independently of this one either. */
-#define SL_TASK_INITIAL_STACK_SIZE 16384
+/* Default spawn stacks are SL_TASK_INITIAL_STACK_SIZE (runtime_core.c).
+ * OpenSSL init and getaddrinfo have no slang checkpoint, so those
+ * paths call sl_rt_need_fat_stack first (16KB). 2KB/8KB as a default
+ * overflowed those native chains into the heap. */
+
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define SL_STACK_FREELIST_OFF 1
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__)
+#define SL_STACK_FREELIST_OFF 1
+#endif
+
+#define SL_STACK_FREELIST_MAX 256
+#ifndef SL_STACK_FREELIST_OFF
+static sl_task *sl_stack_fl;
+static int sl_stack_fl_n;
+static pthread_mutex_t sl_stack_fl_mu = PTHREAD_MUTEX_INITIALIZER;
+#endif
 
 /* Allocate t's stack buffer and prime it to start running entry(arg)
  * on first switch-in -- called once, by main() (right after
@@ -843,16 +830,18 @@ static void sl_task_stack_init(sl_task *t, void (*entry)(void *), void *arg) {
      * set -- the stack-range veto in sl_preempt_handler already rejects
      * any attempt there regardless, since t->stack_base/size both read
      * as the memset'd zero at that point). */
-    sl_rt_preempt_disable();
-    t->stack_size = SL_TASK_INITIAL_STACK_SIZE;
-    void *raw = malloc(t->stack_size + 16);
-    if (!raw) {
-        fprintf(stderr, "slang: out of memory allocating task stack\n");
-        exit(1);
+    if (!t->raw_base) {
+        sl_rt_preempt_disable();
+        t->stack_size = SL_TASK_INITIAL_STACK_SIZE;
+        void *raw = malloc(t->stack_size + 16);
+        if (!raw) {
+            fprintf(stderr, "slang: out of memory allocating task stack\n");
+            exit(1);
+        }
+        sl_rt_preempt_enable();
+        t->raw_base = raw;
+        t->stack_base = (void *)(((uintptr_t)raw + 15) & ~(uintptr_t)15);
     }
-    sl_rt_preempt_enable();
-    t->raw_base = raw;
-    t->stack_base = (void *)(((uintptr_t)raw + 15) & ~(uintptr_t)15);
     sl_ctx_make(t, entry, arg);
     /* Tier 11 eighth slice (async preemption): primed to 1, not 0 --
      * a task's virgin, never-yet-dispatched first stint has a real,
@@ -874,6 +863,64 @@ static void sl_task_stack_init(sl_task *t, void (*entry)(void *), void *arg) {
      * tail (pkg's async-preempt trampoline, not this one) explicitly
      * releases it. */
     t->preempt_disable_depth = 1;
+}
+
+static sl_task *sl_task_acquire(void (*entry)(void *), void *arg) {
+    sl_task *t = NULL;
+#ifndef SL_STACK_FREELIST_OFF
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&sl_stack_fl_mu);
+    if (sl_stack_fl) {
+        t = sl_stack_fl;
+        sl_stack_fl = t->next;
+        sl_stack_fl_n--;
+    }
+    pthread_mutex_unlock(&sl_stack_fl_mu);
+    sl_rt_preempt_enable();
+    if (t) {
+        void *raw = t->raw_base;
+        void *base = t->stack_base;
+        size_t sz = t->stack_size;
+        memset(t, 0, sizeof(*t));
+        t->raw_base = raw;
+        t->stack_base = base;
+        t->stack_size = sz;
+        sl_task_stack_init(t, entry, arg);
+        return t;
+    }
+#endif
+    sl_rt_preempt_disable();
+    t = (sl_task *)malloc(sizeof(sl_task));
+    sl_rt_preempt_enable();
+    if (!t) {
+        fprintf(stderr, "slang: out of memory submitting task\n");
+        exit(1);
+    }
+    memset(t, 0, sizeof(*t));
+    sl_task_stack_init(t, entry, arg);
+    return t;
+}
+
+static void sl_task_release(sl_task *t) {
+#ifndef SL_STACK_FREELIST_OFF
+    if (t->grows_seen == 0 && t->stack_size == SL_TASK_INITIAL_STACK_SIZE) {
+        sl_rt_preempt_disable();
+        pthread_mutex_lock(&sl_stack_fl_mu);
+        if (sl_stack_fl_n < SL_STACK_FREELIST_MAX) {
+            t->next = sl_stack_fl;
+            sl_stack_fl = t;
+            sl_stack_fl_n++;
+            pthread_mutex_unlock(&sl_stack_fl_mu);
+            sl_rt_preempt_enable();
+            return;
+        }
+        pthread_mutex_unlock(&sl_stack_fl_mu);
+        sl_rt_preempt_enable();
+    }
+#endif
+    void *raw = t->raw_base;
+    free(raw);
+    free(t);
 }
 
 /* Tier 11 eighth slice: called once, from sl_ctx_trampoline (below),
