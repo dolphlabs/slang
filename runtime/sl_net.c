@@ -237,6 +237,97 @@ static void sl_net_shutdown_nudge(void) {
 #endif
 }
 
+typedef struct sl_dns_job {
+    struct sl_dns_job *next;
+    char *host;
+    char portstr[16];
+    struct addrinfo hints;
+    int rc;
+    struct addrinfo *res;
+    int wake_wr;
+    _Atomic int done;
+} sl_dns_job;
+
+static pthread_mutex_t sl_dns_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t sl_dns_cv = PTHREAD_COND_INITIALIZER;
+static sl_dns_job *sl_dns_head;
+static sl_dns_job *sl_dns_tail;
+
+static void *sl_dns_thread(void *arg) {
+    (void)arg;
+    for (;;) {
+        pthread_mutex_lock(&sl_dns_mu);
+        while (!sl_dns_head)
+            pthread_cond_wait(&sl_dns_cv, &sl_dns_mu);
+        sl_dns_job *j = sl_dns_head;
+        sl_dns_head = j->next;
+        if (!sl_dns_head)
+            sl_dns_tail = NULL;
+        j->next = NULL;
+        pthread_mutex_unlock(&sl_dns_mu);
+        j->rc = getaddrinfo(j->host, j->portstr, &j->hints, &j->res);
+        atomic_store_explicit(&j->done, 1, memory_order_release);
+        char x = 1;
+        (void)write(j->wake_wr, &x, 1);
+        close(j->wake_wr);
+    }
+    return NULL;
+}
+
+static int sl_dns_lookup(const char *host, const char *portstr,
+                         struct addrinfo **res) {
+    sl_dns_job job;
+    memset(&job, 0, sizeof(job));
+    size_t n = strlen(host) + 1;
+    job.host = (char *)malloc(n);
+    if (!job.host)
+        return EAI_MEMORY;
+    memcpy(job.host, host, n);
+    sl_rt_preempt_disable();
+    snprintf(job.portstr, sizeof(job.portstr), "%s", portstr);
+    sl_rt_preempt_enable();
+    job.hints.ai_family = AF_INET;
+    job.hints.ai_socktype = SOCK_STREAM;
+    atomic_store_explicit(&job.done, 0, memory_order_relaxed);
+    int pfd[2];
+    if (pipe(pfd) != 0) {
+        free(job.host);
+        return EAI_SYSTEM;
+    }
+    fcntl(pfd[0], F_SETFD, FD_CLOEXEC);
+    fcntl(pfd[1], F_SETFD, FD_CLOEXEC);
+    sl_net_set_nonblocking(pfd[0]);
+    job.wake_wr = pfd[1];
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&sl_dns_mu);
+    job.next = NULL;
+    if (sl_dns_tail)
+        sl_dns_tail->next = &job;
+    else
+        sl_dns_head = &job;
+    sl_dns_tail = &job;
+    pthread_cond_signal(&sl_dns_cv);
+    pthread_mutex_unlock(&sl_dns_mu);
+    sl_rt_preempt_enable();
+    for (;;) {
+        sl_reactor_wait(pfd[0], SL_REACTOR_READ, 0);
+        char x;
+        ssize_t nr = read(pfd[0], &x, 1);
+        if (nr == 1)
+            break;
+        if (nr < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            continue;
+        break;
+    }
+    close(pfd[0]);
+    int rc = atomic_load_explicit(&job.done, memory_order_acquire)
+                 ? job.rc
+                 : EAI_FAIL;
+    *res = job.res;
+    free(job.host);
+    return rc;
+}
+
 /* Called once from main() (program.c), gated on 'net' being imported
  * at all, BEFORE sl_proc_install_signal_handlers() so
  * sl_rt_shutdown_hook is guaranteed set before the signal thread
@@ -279,6 +370,10 @@ static void sl_reactor_start(void) {
     pthread_t th;
     if (sl_rt_thread_spawn(&th, sl_reactor_thread, NULL) != 0) {
         fprintf(stderr, "slang: failed to start reactor thread\n");
+        exit(1);
+    }
+    if (sl_rt_thread_spawn(&th, sl_dns_thread, NULL) != 0) {
+        fprintf(stderr, "slang: failed to start dns thread\n");
         exit(1);
     }
 }
@@ -472,26 +567,12 @@ static sl_res_i32_str *sl_net_accept(int lfd) {
 }
 
 static sl_res_i32_str *sl_net_dial(const char *host, int port) {
-    sl_rt_need_fat_stack();
     char portstr[16];
-    sl_rt_preempt_disable(); /* Tier 11 eighth slice -- snprintf's
-        internal locale locking, see sl_gc_alloc's own comment
-        (runtime_gc.c) for the class of bug this closes. Scoped to
-        just this call, not the whole function: getaddrinfo below is
-        a genuinely slow, blocking network call (already a disclosed,
-        separate limitation of net.dial -- DNS stays synchronous),
-        and holding this bracket across it would make the task
-        unpreemptible for that whole duration, a worse tradeoff than
-        the narrow gap being closed here. */
+    sl_rt_preempt_disable();
     snprintf(portstr, sizeof(portstr), "%d", port);
     sl_rt_preempt_enable();
-    struct addrinfo hints, *res = NULL;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    int rc = getaddrinfo(host, portstr, &hints, &res); /* still
-        synchronous -- async DNS resolution is a separate,
-        self-contained problem, explicitly deferred */
+    struct addrinfo *res = NULL;
+    int rc = sl_dns_lookup(host, portstr, &res);
     if (rc != 0 || !res) return sl_net_err_i32(gai_strerror(rc));
     int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (fd < 0) { freeaddrinfo(res); return sl_net_err_i32(strerror(errno)); }
@@ -750,16 +831,12 @@ static sl_res_link_fault *sl_link_accept(sl_link *ln, sl_until u) {
 
 static sl_res_link_fault *sl_link_dial(const char *host, long long port,
                                       sl_until u) {
-    sl_rt_need_fat_stack();
     char portstr[16];
     sl_rt_preempt_disable();
     snprintf(portstr, sizeof(portstr), "%d", (int)port);
     sl_rt_preempt_enable();
-    struct addrinfo hints, *res = NULL;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    int rc = getaddrinfo(host, portstr, &hints, &res);
+    struct addrinfo *res = NULL;
+    int rc = sl_dns_lookup(host, portstr, &res);
     if (rc != 0 || !res)
         return sl_link_err_link(sl_fault_refused());
     int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);

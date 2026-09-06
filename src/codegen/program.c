@@ -276,7 +276,7 @@ void emit_globals(CG *cg, Package *pkgs, int npkgs, int main_index) {
                 emit_line(cg, "static const unsigned char %s_bdata[] = %s;",
                           m, c_bytes_literal(init->as.bytes_lit.data,
                                              init->as.bytes_lit.len));
-                emit_line(cg, "static sl_bytes %s = { %lld, (unsigned char *)%s_bdata, 1 };",
+                emit_line(cg, "static sl_bytes %s = { %lld, (unsigned char *)%s_bdata };",
                           m, init->as.bytes_lit.len, m);
             } else {
                 emit_line(cg, "static %s %s = %s;", map_type(t),
@@ -448,6 +448,11 @@ void force_native_result_types(CG *cg) {
     }
     if (want_pkg(cg, "proc"))
         opt_cname(cg, "str");
+    if (want_pkg(cg, "fs")) {
+        res_cname(cg, "i32", "str");
+        res_cname(cg, "bytes", "str");
+        res_cname(cg, "bool", "str");
+    }
 }
 
 /* Emit the native-package runtime sections that this program needs,
@@ -457,7 +462,8 @@ void emit_native_runtime(CG *cg) {
     int want_time = want_pkg(cg, "time");
     int want_net = want_pkg(cg, "net") || cg->want_link;
     int want_proc = want_pkg(cg, "proc");
-    if (!want_time && !want_net && !want_proc)
+    int want_fs = want_pkg(cg, "fs");
+    if (!want_time && !want_net && !want_proc && !want_fs)
         return;
     if (want_time)
         emit_runtime_file(cg, "sl_time.c");
@@ -467,6 +473,8 @@ void emit_native_runtime(CG *cg) {
         emit_runtime_file(cg, "sl_tls.c");
     if (want_proc)
         emit_runtime_file(cg, "sl_proc.c");
+    if (want_fs)
+        emit_runtime_file(cg, "sl_fs.c");
 }
 
 /* Emit the args-struct + task entry function for every distinct
@@ -771,7 +779,14 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     emit_line(cg, "    exit(0); /* main()'s own sl_ctx_switch never returns */");
     emit_line(cg, "}");
     emit_line(cg, "");
-    emit_line(cg, "int main(void) {");
+    emit_line(cg, "int main(int argc, char **argv) {");
+    if (want_pkg(cg, "proc")) {
+        emit_line(cg, "    sl_proc_argc = argc;");
+        emit_line(cg, "    sl_proc_argv = argv;");
+    } else {
+        emit_line(cg, "    (void)argc;");
+        emit_line(cg, "    (void)argv;");
+    }
     if (want_pkg(cg, "proc")) {
         /* Tier 11 sixth slice: block SIGTERM/SIGINT exactly ONCE, here,
          * before any other thread is ever created -- every subsequently-

@@ -35,7 +35,7 @@ Useful flags:
 
 Want to see everything at once instead of one feature at a time? See
 **[`demo/`](demo/)** — a full server (dice game, guestbook wall, live
-dashboard) exercising every tier: `net`/`net.tls_*`, `json`,
+dashboard) exercising every tier: `http`/`link`, `net.tls_*`, `json`,
 `spawn`/`chan[T]`, `proc` graceful shutdown, local package imports,
 and C interop, with a real HTML/CSS/JS frontend. `cd demo && ./run.sh`.
 
@@ -311,9 +311,15 @@ parameter is a compile error.
 
 ## Standard packages
 
-`time`, `net`, `json`, and `proc` are compiler-provided native
+`time`, `net`, `json`, `proc`, and `fs` are compiler-provided native
 packages — no source files, just `import "time";` / `import "net";`
-/ `import "json";` / `import "proc";` like any other package.
+/ `import "json";` / `import "proc";` / `import "fs";` like any other
+package.
+
+`http` and `byteutil` are slang-source stdlib packages under `stdlib/`.
+`import "http"` / `import "byteutil"` resolve to a local directory first,
+then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
+compiler's `SLANG_STDLIB_DIR`).
 
 #### `time`
 
@@ -353,8 +359,8 @@ let wr: result[bytes, str] = net.recv(cfd, 16); // "would block" err if idle
 net.close(cfd);
 ```
 
-See `examples/httpd/` for a minimal HTTP server built entirely on
-these primitives.
+See `examples/httpd/` for a minimal HTTP server on `link` plus the
+`http` stdlib package.
 
 #### TLS
 
@@ -477,7 +483,80 @@ while proc.active_tasks() > 0 {
 ```
 
 `proc.getenv(name)` reads an environment variable, returning
-`opt[str]` (`none` if unset).
+`opt[str]` (`none` if unset). `proc.args()` is the process argument
+list (`[str]`); `args[0]` is the executable path.
+
+#### `fs`
+
+POSIX file I/O on integer fds. `open` is read-only; `create` is
+write/trunc. `read`/`write`/`close` use the fd. `mkdir` creates one
+directory. Every call returns `result[_, str]`. These calls block the
+worker — use them for config and small files, not the accept loop.
+
+```slang
+import "fs";
+
+let cr = fs.create("/tmp/note");
+guard let fd = cr else { exit(1); }
+fs.write(fd, b"hi");
+fs.close(fd);
+
+let or = fs.open("/tmp/note");
+guard let in_fd = or else { exit(1); }
+let rr = fs.read(in_fd, 16);
+guard let data = rr else { exit(1); }
+fs.close(in_fd);
+```
+
+#### `byteutil`
+
+Search, trim, and split on the `bytes` type — no new syntax. The
+package cannot be named `bytes` because that token is the type.
+
+```slang
+import "byteutil";
+
+byteutil.find(b"hello", 0, 108);     // 2, or -1
+byteutil.has_prefix(b"hello", b"he");
+byteutil.has_suffix(b"hello", b"lo");
+byteutil.trim(b"  hi\r\n");          // b"hi" (space/tab/CR/LF)
+byteutil.split(b"a,b", 44);          // [b"a", b"b"]
+```
+
+#### `http`
+
+HTTP/1.1 over `link` / `wire` / `until` / `fault`. Parse a request
+from `bytes`, or `read` from a connection into a caller-sized `wire`
+(the max request size). `read` takes the unconsumed prefix length and
+returns `Incoming` with leftover compacted to the front of the wire,
+so one connection can carry many requests. `write` serializes a
+`Response` through an arena. Headers are stored lowercased;
+`header(req, name)` looks up case-insensitively. `Content-Length` is
+honored; chunked `Transfer-Encoding` is rejected. `wants_close`
+follows HTTP/1.1 keep-alive (and HTTP/1.0 close-by-default).
+
+```slang
+import "http";
+
+fn serve(c: link) {
+    let ra = arena_new(16384);
+    let sa = arena_new(16384);
+    let buf = ra.wire(8192);
+    let filled = 0;
+    while true {
+        let rr = http.read(&mut c, buf, filled, until_never());
+        guard let got = rr else { return; }
+        let wr = http.write(&mut c, http.ok_text(got.req.path), &mut sa,
+                            until_never());
+        guard let _n = wr else { return; }
+        sa.reset();
+        if http.wants_close(got.req) { return; }
+        filled = got.filled;
+    }
+}
+```
+
+See `examples/httpd/` for a listener loop on this package.
 
 This works because every `spawn`ed thread has `SIGTERM`/`SIGINT`
 blocked in its own signal mask from birth (inherited at creation,
@@ -494,13 +573,13 @@ signal-handling program.
 ## Concurrency
 
 `spawn` submits a function as an `sl_task` on the M:N worker pool
-(sized `max(8, ncpu)`); `chan[T]` is a bounded, park-aware queue.
+(sized `ncpu`); `chan[T]` is a bounded, park-aware queue.
 Blocking-looking code stays blocking-looking — `net.accept`,
 `net.recv`, `time.sleep`, and `chan_send`/`chan_recv` park the task
 and return the OS thread to the pool. There is no colored-function
 split. TLS handshake and I/O park on the same reactor as TCP
-  (`SSL_ERROR_WANT_READ`/`WANT_WRITE`). DNS (`getaddrinfo`) still
-  blocks the worker.
+  (`SSL_ERROR_WANT_READ`/`WANT_WRITE`). DNS (`getaddrinfo`) runs on
+  a dedicated thread; the dialing task parks until it finishes.
 
 ```slang
 fn worker(id: i32, results: chan[i32]) {
@@ -625,7 +704,8 @@ from a slang program exercising `extern fn`, `link`, `rawptr`,
 
 A **package is a directory**: every `.sl` file inside it is compiled
 together into one shared namespace, as if concatenated. Import paths
-resolve relative to the importing file's directory.
+resolve to a directory next to the importer, then a native package,
+then `stdlib/<path>`.
 
 ```slang
 import "geometry";   // binds the name "geometry" in this file's scope
@@ -670,10 +750,10 @@ See `examples/pkgdemo/` for a complete multi-package project.
 main.sl ──loader──> packages ──lexer/parser──> ASTs ──codegen──> main.gen.c ──cc──> ./main
 ```
 
-1. **Loader** (`src/loader.c`) — resolves imports relative to each
-   importing file, scans package directories for `.sl` files (in
-   deterministic sorted order), merges them per package, and detects
-   cycles via canonical paths.
+1. **Loader** (`src/loader.c`) — resolves imports (local directory,
+   native package, then stdlib), scans package directories for `.sl`
+   files (in deterministic sorted order), merges them per package, and
+   detects cycles via canonical paths.
 2. **Lexer** (`src/lexer.c`) — tokenizes source into identifiers,
    keywords, literals, and operators.
 3. **Parser** (`src/parser.c`) — recursive-descent parser producing an
@@ -717,7 +797,8 @@ src/
   main.c         driver: flags, invokes cc
 runtime/       real C runtime spliced into generated programs
   sl_core.c sl_gc.c sl_containers.c sl_sched.c sl_pool.c
-  sl_time.c sl_net.c sl_tls.c sl_json.c sl_proc.c
+  sl_time.c sl_net.c sl_tls.c sl_json.c sl_proc.c sl_fs.c
+stdlib/        slang-source packages (`import "http"`, `import "byteutil"`)
 examples/      one directory per example program
 tests/         language tests plus tests/runtime/ (no slangc)
 Makefile       build/test/clean
@@ -745,8 +826,8 @@ Makefile       build/test/clean
   join/await a spawned task's completion besides a channel.
 - TLS: no client certificates (mutual TLS), no SNI-based multi-cert
   virtual hosting on one listener, no session resumption tuning.
-  Handshake and send/recv park; `getaddrinfo` in `tls_dial` still
-  blocks the worker.
+  Handshake and send/recv park; `getaddrinfo` in `tls_dial` parks
+  the task while a dedicated thread resolves.
 - JSON: no dynamic/unknown-shape decoding (every decode target is a
   concrete slang type known at compile time — see the `json` section
   above), no `bytes` fields, and JSON object keys map to struct field

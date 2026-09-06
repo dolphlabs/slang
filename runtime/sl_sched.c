@@ -786,9 +786,9 @@ static void sl_task_stack_grow(sl_task *t) {
 }
 
 /* Default spawn stacks are SL_TASK_INITIAL_STACK_SIZE (runtime_core.c).
- * OpenSSL init and getaddrinfo have no slang checkpoint, so those
- * paths call sl_rt_need_fat_stack first (16KB). 2KB/8KB as a default
- * overflowed those native chains into the heap. */
+ * OpenSSL init has no slang checkpoint, so TLS paths call
+ * sl_rt_need_fat_stack first (16KB). 2KB/8KB as a default overflowed
+ * those native chains into the heap. */
 
 #if defined(__has_feature)
 #if __has_feature(address_sanitizer)

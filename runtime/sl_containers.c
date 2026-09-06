@@ -181,11 +181,7 @@ static void sl_chan_close(sl_chan *c) {
 
 /* ---- bytes: length-prefixed, binary-safe sequences ---- */
 
-typedef struct {
-    long long len;
-    unsigned char *ptr;
-    int interned;
-} sl_bytes;
+typedef struct { long long len; unsigned char *ptr; } sl_bytes;
 
 static void sl_gc_trace_bytes(void *p, void (*mark)(void *)) {
     mark(((sl_bytes *)p)->ptr);
@@ -205,21 +201,9 @@ static int sl_bytes_at(sl_bytes *b, long long i) {
     return (int)b->ptr[i];
 }
 
-static void sl_bytes_cow(sl_bytes *b) {
-    unsigned char *p;
-    if (!b->interned)
-        return;
-    p = (unsigned char *)sl_gc_alloc((size_t)(b->len > 0 ? b->len : 1), NULL);
-    if (b->len)
-        memcpy(p, b->ptr, (size_t)b->len);
-    b->ptr = p;
-    b->interned = 0;
-}
-
 static void sl_bytes_set(sl_bytes *b, long long i, unsigned char v) {
     if (i < 0 || i >= b->len)
         sl_rt_error("byte index out of bounds", i, b->len);
-    sl_bytes_cow(b);
     b->ptr[i] = v;
 }
 

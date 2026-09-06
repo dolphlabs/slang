@@ -1142,14 +1142,11 @@ char *gen_expr(CG *cg, Expr *e) {
         return gen_float_literal(e->as.float_lit.value);
     case EX_STRING:
         return c_string_literal(e->as.str_lit.value);
-    case EX_BYTES: {
-        int id = cg->tmp_id++;
-        return xasprintf(
-            "({ static sl_bytes _sl_blit%d = { %lld, (unsigned char *)%s, 1 }; "
-            "&_sl_blit%d; })",
-            id, e->as.bytes_lit.len,
-            c_bytes_literal(e->as.bytes_lit.data, e->as.bytes_lit.len), id);
-    }
+    case EX_BYTES:
+        return xasprintf("sl_bytes_new((const unsigned char *)%s, %lld)",
+                         c_bytes_literal(e->as.bytes_lit.data,
+                                         e->as.bytes_lit.len),
+                         e->as.bytes_lit.len);
     case EX_BOOL:
         return xstrdup(e->as.bool_lit.value ? "true" : "false");
     case EX_IDENT:

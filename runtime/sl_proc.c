@@ -33,6 +33,18 @@ static long long sl_proc_active_tasks(void) {
     return (long long)atomic_load(&sl_rt_active_spawns);
 }
 
+static int sl_proc_argc;
+static char **sl_proc_argv;
+
+static sl_arr *sl_proc_args(void) {
+    sl_arr *a = sl_arr_new(sizeof(char *), 1);
+    for (int i = 0; i < sl_proc_argc; i++) {
+        char *s = sl_strdup(sl_proc_argv[i]);
+        sl_arr_push(a, &s, sizeof(char *));
+    }
+    return a;
+}
+
 static sl_opt_str *sl_proc_getenv(const char *name) {
     sl_opt_str *o = (sl_opt_str *)sl_gc_alloc(sizeof(sl_opt_str),
                                               sl_gc_trace_sl_opt_str);

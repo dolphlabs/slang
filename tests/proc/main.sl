@@ -17,6 +17,10 @@ println(to_str(proc.active_tasks()));
 time.sleep(300000000); // long enough to finish
 println(to_str(proc.active_tasks()));
 
+let argv = proc.args();
+println(len(argv) >= 1);
+println(len(argv[0]) > 0);
+
 let r: opt[str] = proc.getenv("PATH");
 guard let path = r else {
     println("FAIL: PATH should be set in any normal environment");
