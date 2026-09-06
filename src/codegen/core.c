@@ -1088,6 +1088,8 @@ const char *ctype_of(CG *cg, const char *t) {
             return NULL;
         if (w == TW_REF)
             return xasprintf("const %s *", ic);
+        if (w == TW_REFMUT)
+            return xasprintf("%s *restrict", ic);
         return xasprintf("%s *", ic);
     }
     const char *m = map_type(t);

@@ -632,7 +632,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                       id, id, id, id);
             cg->indent++;
             int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0);
-            emit_line(cg, "%s %s = (*(%s *)(void *)sl_arr_get(_sl_it%d, "
+            emit_line(cg, "%s %s = (*(%s *)(void *)sl_arr_at(_sl_it%d, "
                           "_sl_i%d, sizeof(%s)));",
                       ec, vname, ec, id, id, ec);
             cg->loop_depth++;

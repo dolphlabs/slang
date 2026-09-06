@@ -318,6 +318,10 @@ static void *sl_arr_get(sl_arr *a, long long i, size_t esz) {
     return a->data + (size_t)i * esz;
 }
 
+static void *sl_arr_at(sl_arr *a, long long i, size_t esz) {
+    return a->data + (size_t)i * esz;
+}
+
 static void sl_arr_push(sl_arr *a, void *val, size_t esz) {
     if (esz != a->esz)
         sl_rt_error("internal: element size mismatch", (long long)esz,

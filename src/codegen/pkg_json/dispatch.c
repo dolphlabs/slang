@@ -342,8 +342,8 @@ static void emit_json_enc_body(CG *cg, JsonInst *it) {
         emit_line(cg, "for (long long i = 0; i < v->len; i++) {");
         cg->indent++;
         emit_line(cg, "if (i) sl_json_sb_append(out, \",\");");
-        emit_line(cg, "%s *ep = (%s *)sl_arr_get(v, i, sizeof(%s));", ect,
-                  ect, ect);
+        emit_line(cg, "%s *ep = (%s *)sl_arr_at(v, i, sizeof(%s));", ect, ect,
+                  ect);
         char *arg = json_enc_arg(elem, "*ep");
         emit_line(cg, "%s(%s, out);", elemfn, arg);
         cg->indent--;
