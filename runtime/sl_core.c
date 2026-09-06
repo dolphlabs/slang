@@ -831,15 +831,80 @@ typedef struct sl_arena {
     size_t used;
 } sl_arena;
 
+#define SL_ARENA_FL_MAX 64
+#define SL_ARENA_FL_BYTES (1024 * 1024)
+
+typedef struct sl_arena_chunk {
+    struct sl_arena_chunk *next;
+    size_t cap;
+} sl_arena_chunk;
+
+static sl_arena_chunk *sl_arena_fl;
+static int sl_arena_fl_n;
+static size_t sl_arena_fl_bytes;
+static pthread_mutex_t sl_arena_fl_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static sl_arena_chunk *sl_arena_chunk_get(size_t n) {
+    sl_arena_chunk *c = NULL;
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&sl_arena_fl_mu);
+    sl_arena_chunk **pp = &sl_arena_fl;
+    sl_arena_chunk *it = sl_arena_fl;
+    while (it) {
+        if (it->cap >= n) {
+            *pp = it->next;
+            sl_arena_fl_n--;
+            sl_arena_fl_bytes -= it->cap;
+            c = it;
+            break;
+        }
+        pp = &it->next;
+        it = it->next;
+    }
+    pthread_mutex_unlock(&sl_arena_fl_mu);
+    sl_rt_preempt_enable();
+    if (c)
+        return c;
+    sl_rt_preempt_disable();
+    c = (sl_arena_chunk *)malloc(sizeof(sl_arena_chunk) + n);
+    sl_rt_preempt_enable();
+    if (!c)
+        return NULL;
+    c->next = NULL;
+    c->cap = n;
+    return c;
+}
+
+static void sl_arena_chunk_put(sl_arena_chunk *c) {
+    if (!c)
+        return;
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&sl_arena_fl_mu);
+    if (sl_arena_fl_n < SL_ARENA_FL_MAX &&
+        sl_arena_fl_bytes + c->cap <= SL_ARENA_FL_BYTES) {
+        c->next = sl_arena_fl;
+        sl_arena_fl = c;
+        sl_arena_fl_n++;
+        sl_arena_fl_bytes += c->cap;
+        pthread_mutex_unlock(&sl_arena_fl_mu);
+        sl_rt_preempt_enable();
+        return;
+    }
+    pthread_mutex_unlock(&sl_arena_fl_mu);
+    sl_rt_preempt_enable();
+    free(c);
+}
+
 static sl_arena sl_arena_new(long long cap) {
     sl_arena a;
     if (cap < 1)
         sl_rt_error("arena capacity must be positive", cap, 0);
+    sl_arena_chunk *c = sl_arena_chunk_get((size_t)cap);
+    if (!c)
+        sl_rt_error("arena allocation failed", cap, 0);
     a.cap = (size_t)cap;
     a.used = 0;
-    a.base = (char *)malloc(a.cap);
-    if (!a.base)
-        sl_rt_error("arena allocation failed", cap, 0);
+    a.base = (char *)(c + 1);
     return a;
 }
 
@@ -867,9 +932,9 @@ static void sl_arena_reset(sl_arena *a) {
 }
 
 static void sl_arena_free(sl_arena *a) {
-    if (!a)
+    if (!a || !a->base)
         return;
-    free(a->base);
+    sl_arena_chunk_put(((sl_arena_chunk *)a->base) - 1);
     a->base = NULL;
     a->cap = 0;
     a->used = 0;
