@@ -762,9 +762,11 @@ import "foo";
 ```
 
 `slangc get` clones each `pkg` line into `$SLANG_CACHE/pkg/<name>/<hash>`
-(`~/.cache/slang` if unset) and writes `slang.lock`. Compile does not
-hit the network. A missing lock, missing cache, or hash mismatch is
-an error.
+(`~/.cache/slang` if unset). If a fetched package has its own
+`slang.project`, those pins are fetched too and recorded only in
+`slang.lock`. Compile does not hit the network. A missing lock, missing
+cache, or hash mismatch is an error. Same short name at two git/tag
+pairs is an error.
 
 ## How it works
 
