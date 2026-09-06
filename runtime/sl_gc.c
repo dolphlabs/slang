@@ -1,4 +1,7 @@
 #include <sched.h>
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
 
 /* ---- precise mark-sweep collector (replaces Boehm) ---- */
 
@@ -6,6 +9,7 @@ typedef struct sl_gc_obj {
     struct sl_gc_obj *next;
     size_t size;
     void (*trace)(void *payload, void (*mark)(void *ptr));
+    void (*fini)(void *payload);
     unsigned char marked;
 } sl_gc_obj;
 
@@ -421,8 +425,9 @@ static void sl_gc_for_pending_tasks(void (*fn)(sl_task *),
         fn(t);
 }
 
-static void *sl_gc_alloc(size_t n,
-                          void (*trace)(void *, void (*)(void *))) {
+static void *sl_gc_alloc_fin(size_t n,
+                             void (*trace)(void *, void (*)(void *)),
+                             void (*fini)(void *)) {
     sl_rt_preempt_disable();
     sl_task *t = sl_rt_cur();
     sl_gc_obj *h = (sl_gc_obj *)malloc(sizeof(sl_gc_obj) + n);
@@ -430,6 +435,7 @@ static void *sl_gc_alloc(size_t n,
     memset(h + 1, 0, n);
     h->size = n;
     h->trace = trace;
+    h->fini = fini;
     h->marked = 0;
     h->next = t->gc_pend_head;
     if (!t->gc_pend_head) t->gc_pend_tail = h;
@@ -440,6 +446,11 @@ static void *sl_gc_alloc(size_t n,
         sl_gc_publish_bytes(t);
     sl_rt_preempt_enable();
     return (void *)(h + 1);
+}
+
+static void *sl_gc_alloc(size_t n,
+                          void (*trace)(void *, void (*)(void *))) {
+    return sl_gc_alloc_fin(n, trace, NULL);
 }
 
 /* true drop-in for GC_realloc(p, n): old size/trace read from p's
@@ -453,7 +464,7 @@ static void *sl_gc_alloc(size_t n,
 static void *sl_gc_realloc(void *old, size_t newn) {
     if (!old) return sl_gc_alloc(newn, NULL);
     sl_gc_obj *oh = (sl_gc_obj *)old - 1;
-    void *nw = sl_gc_alloc(newn, oh->trace);
+    void *nw = sl_gc_alloc_fin(newn, oh->trace, oh->fini);
     size_t copy = oh->size < newn ? oh->size : newn;
     memcpy(nw, old, copy);
     return nw;
@@ -780,6 +791,8 @@ static void sl_gc_collect(void) {
         sl_gc_obj *h = *pp;
         if (!h->marked) {
             *pp = h->next;
+            if (h->fini)
+                h->fini((void *)(h + 1));
             free(h);
         } else {
             h->marked = 0;
@@ -807,6 +820,9 @@ static void sl_gc_collect(void) {
     free(snap);
 
     atomic_store_explicit(&sl_gc_bytes_since_collect, 0, memory_order_relaxed);
+#if defined(__GLIBC__)
+    malloc_trim(0);
+#endif
     atomic_store_explicit(&sl_gc_collect_pending, 0, memory_order_release);
     atomic_store_explicit(&sl_gc_stop_requested, 0, memory_order_release);
     atomic_store_explicit(&sl_gc_collecting, 0, memory_order_release);

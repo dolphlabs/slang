@@ -210,27 +210,30 @@ static sl_res_bytes_str *sl_net_tls_recv(void *sslv, int max) {
     sl_rt_need_fat_stack();
     if (max <= 0) max = 4096;
     SSL *ssl = (SSL *)sslv;
+    unsigned char *scratch = (unsigned char *)sl_recv_buf_get((size_t)max);
     sl_bytes *b = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
-    b->ptr = (unsigned char *)sl_gc_alloc((size_t)max, NULL);
     void *_sl_rcv_roots[] = { (void *)b };
     sl_safepoint _sl_rcv_sp;
     sl_rt_safepoint_enter(&_sl_rcv_sp, _sl_rcv_roots, 1);
     for (;;) {
-        int n = SSL_read(ssl, b->ptr, max);
+        int n = SSL_read(ssl, scratch, max);
         if (n > 0) {
-            b->len = n;
+            sl_net_recv_copy(b, scratch, n);
             sl_rt_safepoint_exit();
+            sl_recv_buf_put(scratch);
             return sl_net_ok_bytes(b);
         }
         int err = SSL_get_error(ssl, n);
         if (err == SSL_ERROR_ZERO_RETURN) {
-            b->len = 0;
+            sl_net_recv_copy(b, scratch, 0);
             sl_rt_safepoint_exit();
+            sl_recv_buf_put(scratch);
             return sl_net_ok_bytes(b);
         }
         int w = sl_tls_park(ssl, err, 1);
         if (w == 0) continue;
         sl_rt_safepoint_exit();
+        sl_recv_buf_put(scratch);
         if (w == -1) return sl_net_err_bytes("interrupted");
         return sl_net_err_bytes(sl_tls_last_error());
     }

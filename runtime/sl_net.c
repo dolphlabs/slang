@@ -536,11 +536,86 @@ static sl_res_i32_str *sl_net_send(int fd, sl_bytes *data) {
     return sl_net_ok_i32((int32_t)data->len);
 }
 
+#define SL_RECV_FL_MAX 64
+#define SL_RECV_FL_BYTES (1024 * 1024)
+
+typedef struct sl_recv_chunk {
+    struct sl_recv_chunk *next;
+    size_t cap;
+} sl_recv_chunk;
+
+static sl_recv_chunk *sl_recv_fl;
+static int sl_recv_fl_n;
+static size_t sl_recv_fl_bytes;
+static pthread_mutex_t sl_recv_fl_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static void *sl_recv_buf_get(size_t n) {
+    sl_recv_chunk *c = NULL;
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&sl_recv_fl_mu);
+    sl_recv_chunk **pp = &sl_recv_fl;
+    sl_recv_chunk *it = sl_recv_fl;
+    while (it) {
+        if (it->cap >= n) {
+            *pp = it->next;
+            sl_recv_fl_n--;
+            sl_recv_fl_bytes -= it->cap;
+            c = it;
+            break;
+        }
+        pp = &it->next;
+        it = it->next;
+    }
+    pthread_mutex_unlock(&sl_recv_fl_mu);
+    sl_rt_preempt_enable();
+    if (c)
+        return (void *)(c + 1);
+    sl_rt_preempt_disable();
+    c = (sl_recv_chunk *)malloc(sizeof(sl_recv_chunk) + n);
+    sl_rt_preempt_enable();
+    if (!c) {
+        fprintf(stderr, "slang: out of memory allocating recv buffer\n");
+        exit(1);
+    }
+    c->next = NULL;
+    c->cap = n;
+    return (void *)(c + 1);
+}
+
+static void sl_recv_buf_put(void *p) {
+    sl_recv_chunk *c;
+    if (!p)
+        return;
+    c = ((sl_recv_chunk *)p) - 1;
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&sl_recv_fl_mu);
+    if (sl_recv_fl_n < SL_RECV_FL_MAX &&
+        sl_recv_fl_bytes + c->cap <= SL_RECV_FL_BYTES) {
+        c->next = sl_recv_fl;
+        sl_recv_fl = c;
+        sl_recv_fl_n++;
+        sl_recv_fl_bytes += c->cap;
+        pthread_mutex_unlock(&sl_recv_fl_mu);
+        sl_rt_preempt_enable();
+        return;
+    }
+    pthread_mutex_unlock(&sl_recv_fl_mu);
+    sl_rt_preempt_enable();
+    free(c);
+}
+
+static void sl_net_recv_copy(sl_bytes *b, unsigned char *scratch, long long n) {
+    if (n > 0) {
+        b->ptr = (unsigned char *)sl_gc_alloc((size_t)n, NULL);
+        memcpy(b->ptr, scratch, (size_t)n);
+    }
+    b->len = n;
+}
+
 static sl_res_bytes_str *sl_net_recv(int fd, int max) {
     if (max <= 0) max = 4096;
+    unsigned char *scratch = (unsigned char *)sl_recv_buf_get((size_t)max);
     sl_bytes *b = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
-    b->len = 0;
-    b->ptr = (unsigned char *)sl_gc_alloc((size_t)max, NULL);
     void *_sl_rcv_roots[] = { (void *)b };
     sl_safepoint _sl_rcv_sp;
     sl_rt_safepoint_enter(&_sl_rcv_sp, _sl_rcv_roots, 1); /* stays
@@ -553,22 +628,26 @@ static sl_res_bytes_str *sl_net_recv(int fd, int max) {
         output, so the caller's own bracket was built before b even
         existed). */
     for (;;) {
-        ssize_t n = recv(fd, b->ptr, (size_t)max, 0);
+        ssize_t n = recv(fd, scratch, (size_t)max, 0);
         if (n >= 0) {
-            b->len = (long long)n;
+            sl_net_recv_copy(b, scratch, (long long)n);
             sl_rt_safepoint_exit();
+            sl_recv_buf_put(scratch);
             return sl_net_ok_bytes(b);
         }
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
             sl_rt_safepoint_exit();
+            sl_recv_buf_put(scratch);
             return sl_net_err_bytes(strerror(errno));
         }
         if (sl_net_user_nonblock_contains((void *)(intptr_t)fd)) {
             sl_rt_safepoint_exit();
+            sl_recv_buf_put(scratch);
             return sl_net_err_bytes("would block");
         }
         if (sl_reactor_wait(fd, SL_REACTOR_READ, 1) < 0) {
             sl_rt_safepoint_exit();
+            sl_recv_buf_put(scratch);
             return sl_net_err_bytes("interrupted");
         }
     }
