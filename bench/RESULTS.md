@@ -1,3 +1,202 @@
+# Phase E HTTP-only remasure (`545d99b`, PR #9-equivalent tree)
+
+HTTP-only remasure on this Linux VM at `545d99b` (`Revert "perf(codegen): intern bytes literals and cap glibc malloc arenas"`). Every post-#9 request-path experiment is off: interned `b"..."` + `M_ARENA_MAX`, arena freelist, interned for-in, and `io_wake`. Compute was **not** rerun.
+
+**slang does not win Phase E HTTP vs Go / C / Rust.** A true PR #9-equivalent HTTP tree did **not** restore the ~15 ms p99. Median c=50 p99 is **23.02 ms** (rounds 21.78 / 23.02 / 28.46) vs PR #9 **15.52** and PR #13 **105.97**. RPS is below #9 and above #13. RSS is a few percent below #9 (~56–62 MB) and still 3–32× Go / C / Rust.
+
+Question this run answers: dropping intern + `M_ARENA` **does** recover the #13 ~100 ms tail down to the ~20 ms class, but it does **not** bring back the #9 15 ms number. That is still a lose vs Go / C / Rust on p99 and RSS.
+
+Do not treat higher RPS than Go / Java / Zig / C# as a win. The file's own HTTP win conditions need p99 **and** RSS, and slang has neither vs Go / C / Rust.
+
+Measured SHA: `545d99b738dd1c185bdc72d7e69b6dfc12c68fb7` (`cursor/http-remeasure-pr9-equiv-b546` RESULTS commit is after this tree). Branch: `async-preemption` `545d99b` + this RESULTS commit. Log/TSV: `/tmp/slang_phase_e_http`.
+
+| commit | in this run? |
+|---|---|
+| `1c25b07` interned `b"..."` + `M_ARENA_MAX=2` | **no** (reverted by `545d99b`) |
+| `9c1763b` arena freelist | **no** (reverted by `8bedecc`) |
+| `2f7c20e` cheap interned bytes for-in | **no** (reverted by `8bedecc`) |
+| `c4cc103` skip async preempt after reactor I/O wake | **no** (reverted by `fb39867`) |
+
+## Machine
+
+| field | value |
+|---|---|
+| date (UTC) | 2026-09-06 18:34 |
+| uname | `Linux cursor 6.12.94+ #1 SMP PREEMPT_DYNAMIC Fri Sep 4 16:05:28 UTC 2026 x86_64` |
+| OS | Ubuntu 24.04.4 LTS (noble) |
+| CPU | Intel Xeon, 4 cores, 1 thread/core, 1 socket |
+| nproc | 4 |
+| RAM | 16398384 kB (~15.6 GiB); no swap |
+| cc | Ubuntu clang 18.1.3 (1ubuntu1) |
+| gcc | 13.3.0-6ubuntu2~24.04.1 |
+| go | go1.22.2 linux/amd64 |
+| rustc / cargo | 1.83.0 (90b35a623) / 1.83.0 (5ffbef321) |
+| javac / java | 21.0.10 / OpenJDK 21.0.10+7-Ubuntu-124.04 |
+| zig | 0.13.0 |
+| dotnet | SDK 8.0.424, runtime 8.0.30 |
+| wrk | debian/4.1.0-4build2 [epoll] |
+| loadgen | wrk (Go `bench/http/loadgen.go` compiled but unused) |
+| `git rev-parse HEAD` (measured tree) | `545d99b738dd1c185bdc72d7e69b6dfc12c68fb7` |
+
+No language was skipped. slang HTTP did not SIGSEGV. Zig compiled; c=200 still errors (harness limit). 8-worker floor unchanged.
+
+## Commands / env
+
+```
+make slangc
+HTTP_ROUNDS=3 HTTP_DUR=10s HTTP_CONCS="50 200" ./bench/run_http.sh
+```
+
+HTTP only. Did **not** run `./bench/run_phase_e.sh` or `./bench/run_compute.sh`.
+
+Pinned HTTP ports: slang 18180, Go 18181, C 18182, Rust 18183, Java 18184, Zig 18185, C# 18186.
+
+HTTP RSS: `/proc/$pid/status` `VmHWM` (kB). Order rotates (and reverses on even rounds) each round.
+
+Compile notes:
+
+- slangc time includes generated `cc -O3 -flto`
+- C HTTP: `cc -O3 -flto -std=c11`
+- Rust HTTP: `cargo build --release` after `cargo fetch` + `cargo clean`
+- Java: `javac` then `java -cp`
+- Zig: `zig build-exe -O ReleaseFast`
+- C#: `dotnet restore` then timed `dotnet publish -c Release --no-restore`
+- Go / Rust / Zig / C# compile seconds are higher than PR #9 on this boot (cold module / crate cache). Do not treat that as a slang compile win.
+
+## HTTP
+
+GET `/`, 200-byte `text/plain` body, `Connection: close`, no TLS. slang / C / Zig write HTTP/1.0 bytes. Go `net/http`, Rust axum, Java `HttpServer`, and C# `HttpListener` speak HTTP/1.1; body length was 200 on every probe.
+
+`wrk -t4 -c{50,200} -d10s --latency` (threads = min(nproc, conc)). 3 rounds.
+
+### Compile times (seconds)
+
+| slang | go | cc -O3 -flto | rust axum release | javac | zig ReleaseFast | dotnet publish |
+|---:|---:|---:|---:|---:|---:|---:|
+| 0.48 | 5.81 | 0.08 | 11.62 | 0.49 | 6.94 | 1.73 |
+
+### Per-round, c=50
+
+| round | lang | rps | p50_ms | p99_ms | errors | rss_kb | body |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1 | slang | 74544.38 | 0.437 | 21.78 | 0 | 60416 | 200 |
+| 1 | go | 65533.18 | 0.523 | 2.66 | 0 | 14612 | 200 |
+| 1 | c | 99600.11 | 0.218 | 1.27 | 0 | 1784 | 200 |
+| 1 | rust | 74937.99 | 0.512 | 1.11 | 0 | 4224 | 200 |
+| 1 | java | 38749.44 | 0.87 | 6.31 | 0 | 372596 | 200 |
+| 1 | zig | 36828.48 | 1.22 | 2.54 | 0 | 696 | 200 |
+| 1 | csharp | 36283.16 | 0.741 | 54.01 | 0 | 208840 | 200 |
+| 2 | slang | 73841.44 | 0.441 | 23.02 | 0 | 56408 | 200 |
+| 2 | csharp | 36731.34 | 0.735 | 46.9 | 0 | 204976 | 200 |
+| 2 | zig | 36027.83 | 1.25 | 2.53 | 0 | 728 | 200 |
+| 2 | java | 42490.02 | 0.817 | 6.05 | 0 | 447880 | 200 |
+| 2 | rust | 69430.28 | 0.533 | 1.8 | 0 | 4276 | 200 |
+| 2 | c | 95659.62 | 0.247 | 1.37 | 0 | 1780 | 200 |
+| 2 | go | 64475.63 | 0.522 | 3.34 | 0 | 15148 | 200 |
+| 3 | c | 93694.72 | 0.238 | 1.72 | 0 | 1788 | 200 |
+| 3 | rust | 72772.72 | 0.513 | 2.13 | 0 | 4152 | 200 |
+| 3 | java | 36558.38 | 0.96 | 6.89 | 0 | 372000 | 200 |
+| 3 | zig | 35637.71 | 1.26 | 2.26 | 0 | 780 | 200 |
+| 3 | csharp | 35408.24 | 0.774 | 52.13 | 0 | 204776 | 200 |
+| 3 | slang | 69243.97 | 0.461 | 28.46 | 0 | 56548 | 200 |
+| 3 | go | 54458.22 | 0.621 | 3.38 | 0 | 15200 | 200 |
+
+### Per-round, c=200
+
+| round | lang | rps | p50_ms | p99_ms | errors | rss_kb | body |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1 | slang | 80533.85 | 1.66 | 23.37 | 0 | 61660 | 200 |
+| 1 | go | 65954.45 | 2.39 | 7.32 | 0 | 19164 | 200 |
+| 1 | c | 100999.36 | 0.93 | 3.93 | 0 | 1784 | 200 |
+| 1 | rust | 72227.63 | 1.43 | 3.49 | 0 | 4956 | 200 |
+| 1 | java | 42391.90 | 4.1 | 15.49 | 0 | 374368 | 200 |
+| 1 | zig | 36868.50 | 3.41 | 304.18 | 1 | 1312 | 200 |
+| 1 | csharp | 38035.17 | 2.88 | 53.29 | 0 | 204832 | 200 |
+| 2 | slang | 76996.19 | 1.74 | 24.16 | 0 | 60828 | 200 |
+| 2 | csharp | 42746.54 | 2.71 | 42.95 | 0 | 204932 | 200 |
+| 2 | zig | 36209.93 | 3.46 | 172.5 | 37 | 1032 | 200 |
+| 2 | java | 40462.97 | 4.22 | 16.04 | 0 | 377048 | 200 |
+| 2 | rust | 74109.07 | 1.37 | 4.71 | 0 | 4804 | 200 |
+| 2 | c | 94006.07 | 1.01 | 4.21 | 0 | 1784 | 200 |
+| 2 | go | 61959.73 | 2.55 | 8.23 | 0 | 20484 | 200 |
+| 3 | c | 98242.03 | 0.94 | 4.02 | 0 | 1784 | 200 |
+| 3 | rust | 72756.43 | 1.45 | 3.52 | 0 | 4660 | 200 |
+| 3 | java | 43065.55 | 4.09 | 13.14 | 0 | 417072 | 200 |
+| 3 | zig | 33735.13 | 3.71 | 585.7 | 2 | 888 | 200 |
+| 3 | csharp | 40638.06 | 2.75 | 45.9 | 0 | 210268 | 200 |
+| 3 | slang | 80676.22 | 1.66 | 23.07 | 0 | 62040 | 200 |
+| 3 | go | 65064.76 | 2.47 | 8.45 | 0 | 17824 | 200 |
+
+### Medians (n=3)
+
+c=50
+
+| lang | rps | p50_ms | p99_ms | errors | rss_kb |
+|---|---:|---:|---:|---:|---:|
+| c | 95659.62 | 0.238 | 1.37 | 0 | 1784 |
+| slang | 73841.44 | 0.441 | 23.02 | 0 | 56548 |
+| rust | 72772.72 | 0.513 | 1.8 | 0 | 4224 |
+| go | 64475.63 | 0.523 | 3.34 | 0 | 15148 |
+| java | 38749.44 | 0.87 | 6.31 | 0 | 372596 |
+| csharp | 36283.16 | 0.741 | 52.13 | 0 | 204976 |
+| zig | 36027.83 | 1.25 | 2.53 | 0 | 728 |
+
+c=200
+
+| lang | rps | p50_ms | p99_ms | errors | rss_kb |
+|---|---:|---:|---:|---:|---:|
+| c | 98242.03 | 0.94 | 4.02 | 0 | 1784 |
+| slang | 80533.85 | 1.66 | 23.37 | 0 | 61660 |
+| rust | 72756.43 | 1.43 | 3.52 | 0 | 4804 |
+| go | 65064.76 | 2.47 | 8.23 | 0 | 19164 |
+| java | 42391.90 | 4.1 | 15.49 | 0 | 377048 |
+| csharp | 40638.06 | 2.75 | 45.9 | 0 | 204932 |
+| zig | 36209.93 | 3.46 | 304.18 | 2 | 1032 |
+
+Zig at c=200 is a raw `accept` + `Thread.spawn` per connection with no pool. It drops connections (median 2 wrk socket errors; rounds 1 / 37 / 2) and the tail blows out. That is a Zig harness limit, not a slang win to lean on.
+
+This box's C / Go / Rust RPS is a few percent below the PR #9 rows (C 95660 vs 105133 at c=50). slang p99 is still in the 22–28 ms band on every round, not 15 ms.
+
+### HTTP vs peers (median)
+
+Need **higher RPS or lower p99, and lower RSS** to call a win vs Go. Need ~10% of C on RPS/p99. Need faster compile than Rust **and** p99/RSS no worse.
+
+| vs | c=50 | c=200 | compile | result |
+|---|---|---|---|---|
+| C | RPS 23% lower (73841 / 95660); p99 16.8× worse (23.02 / 1.37); RSS 32× | RPS 18% lower; p99 5.8× worse; RSS 35× | slang 0.48s vs C 0.08s | **lose** |
+| Go | RPS +14%; p50 better; p99 6.9× worse; RSS 3.7× | RPS +24%; p50 better; p99 2.8× worse; RSS 3.2× | slang 0.48s vs Go 5.81s (cold cache) | **lose** (RPS up, tail and RSS down) |
+| Rust | RPS +1.5%; p99 12.8× worse; RSS 13.4× | RPS +11%; p99 6.6× worse; RSS 12.8× | slang 0.48s vs 11.62s | compile wins; **p99 and RSS lose** |
+| Java | RPS 1.9×; p99 3.6× worse; RSS 6.6× better | RPS 1.9×; p99 1.5× worse; RSS 6.1× better | similar (0.48 vs 0.49) | beats Java on RPS and RSS; **lose p99** |
+| Zig | RPS 2.0×; p99 9.1× worse; RSS 78× worse | RPS 2.2×; Zig errors + p99 304 ms | slang 0.48s vs 6.94s | higher RPS, much worse RSS; Zig c=200 is broken |
+| C# | RPS 2.0×; p99 better (23.02 vs 52.13); RSS 3.6× better | RPS 2.0×; p99 better; RSS 3.3× better | slang 0.48s vs 1.73s | beats C# on RPS, p99, RSS |
+
+### slang vs PR #9 / #13
+
+| metric | PR #9 (`a64f079`) | PR #13 (`8bedecc`, intern on) | this run (`545d99b`) | vs #9 | vs #13 |
+|---|---:|---:|---:|---|---|
+| c=50 rps | 80692 | 69965 | 73841 | −8.5% | +5.5% |
+| c=50 p99_ms | 15.52 | 105.97 | 23.02 | 1.48× worse | 4.6× better |
+| c=50 rss_kb | 60560 | 57764 | 56548 | −6.6% | −2.1% |
+| c=200 rps | 85751 | 73257 | 80534 | −6.1% | +9.9% |
+| c=200 p99_ms | 16.59 | 88.69 | 23.37 | 1.41× worse | 3.8× better |
+| c=200 rss_kb | 61872 | 58804 | 61660 | ~same | +4.9% |
+
+## Verdict
+
+| comparison | result |
+|---|---|
+| vs C | **lose** — 18–23% lower RPS; p99 6–17×; RSS ~32–35× |
+| vs Go | **lose** — RPS up; p99 and RSS worse |
+| vs Rust | **lose** — compile faster; p99 and RSS lose |
+| vs Java / C# | RPS and RSS better than both; p99 beats C#, **loses to Java** |
+| vs Zig | higher RPS; Zig RSS tiny; Zig c=200 errors (median 2) |
+| vs PR #9 | RPS down, p99 1.4–1.5× worse (23 vs 15 ms), RSS slightly better — **15 ms tail did not return** |
+| vs PR #13 | RPS up, p99 much better (23 vs 106 / 89 ms), RSS ~same — intern revert **improved** the tail, did not **win** Phase E |
+
+No language skipped. No slang SIGSEGV. Zig compiled; c=200 still drops connections. No LLVM. 8-worker floor unchanged. HTTP only. No slang syntax or bench changes.
+
+---
+
 # Phase E results (rerun)
 
 Measured on this Linux VM after the `-O3` SIGSEGV fix, cheap back-edges, flat arithmetic, nested-while skip, 256KB pthread stacks, 8KB green-stack freelist, and `net.recv` scratch-off-GC.
