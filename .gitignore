@@ -6,4 +6,6 @@ main2
 tools/
 tests/pkgpin/slang.project
 tests/pkgpin/slang.lock
+tests/pkgtrans/slang.project
+tests/pkgtrans/slang.lock
 

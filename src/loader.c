@@ -256,8 +256,7 @@ static void load_import(Loader *ld, const char *from_dir,
     SlPkgPin *pin = project_find_pin(ld->project, ipath);
     if (pin) {
         if (!pin->hash)
-            load_error("package '%s' is listed in slang.project; run slangc get",
-                       ipath);
+            load_error("package '%s' is pinned; run slangc get", ipath);
         char *cached = project_cache_dir(pin);
         if (!project_is_dir(cached))
             load_error("package '%s' is not in the cache; run slangc get",

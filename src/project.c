@@ -105,6 +105,26 @@ SlPkgPin *project_find_pin(SlProject *p, const char *name) {
     return p ? find_pin(p, name) : NULL;
 }
 
+static SlPkgPin *add_pin(SlProject *p, const char *name, const char *git,
+                         const char *tag) {
+    SlPkgPin *e = find_pin(p, name);
+    if (e) {
+        if (strcmp(e->git, git) || strcmp(e->tag, tag))
+            project_error("package '%s' needed as %s @ %s and %s @ %s", name,
+                          e->git, e->tag, git, tag);
+        return e;
+    }
+    if (p->npins % 8 == 0)
+        p->pins = (SlPkgPin *)xrealloc(p->pins,
+                                       (p->npins + 8) * sizeof(SlPkgPin));
+    SlPkgPin *pin = &p->pins[p->npins++];
+    pin->name = xstrdup(name);
+    pin->git = xstrdup(git);
+    pin->tag = xstrdup(tag);
+    pin->hash = NULL;
+    return pin;
+}
+
 static void parse_project_file(SlProject *p, char *src, const char *path) {
     int lineno = 0;
     char *save = NULL;
@@ -147,20 +167,27 @@ static void parse_project_file(SlProject *p, char *src, const char *path) {
                 !git || !tkw || strcmp(tkw, "tag") || !tag || cut_word(&cur))
                 project_error("%s:%d: expected 'pkg <name> git <url> tag <tag>'",
                               path, lineno);
-            if (find_pin(p, name))
-                project_error("%s:%d: duplicate pkg '%s'", path, lineno, name);
-            if (p->npins % 8 == 0)
-                p->pins = (SlPkgPin *)xrealloc(p->pins, (p->npins + 8) *
-                                                            sizeof(SlPkgPin));
-            SlPkgPin *pin = &p->pins[p->npins++];
-            pin->name = xstrdup(name);
-            pin->git = xstrdup(git);
-            pin->tag = xstrdup(tag);
-            pin->hash = NULL;
+            add_pin(p, name, git, tag);
         } else {
             project_error("%s:%d: unknown field '%s'", path, lineno, kw);
         }
     }
+}
+
+static SlProject *parse_project_path(const char *path) {
+    SlProject *p = (SlProject *)xmalloc(sizeof(SlProject));
+    memset(p, 0, sizeof(SlProject));
+    parse_project_file(p, read_entire_file(path), path);
+    return p;
+}
+
+static void ingest_dep_project(SlProject *p, const char *dir) {
+    char *proj = join2(dir, "slang.project");
+    if (access(proj, R_OK) != 0)
+        return;
+    SlProject *dep = parse_project_path(proj);
+    for (int i = 0; i < dep->npins; i++)
+        add_pin(p, dep->pins[i].name, dep->pins[i].git, dep->pins[i].tag);
 }
 
 static void parse_lock_file(SlProject *p, char *src, const char *path) {
@@ -179,14 +206,33 @@ static void parse_lock_file(SlProject *p, char *src, const char *path) {
             continue;
         char *name = cut_word(&cur);
         char *hash = cut_word(&cur);
-        if (!name || !hash || cut_word(&cur))
+        char *gkw = cut_word(&cur);
+        char *git = NULL;
+        char *tag = NULL;
+        if (!name || !hash)
             project_error("%s:%d: expected '<name> sha256:<hex>'", path, lineno);
+        if (gkw) {
+            git = cut_word(&cur);
+            char *tkw = cut_word(&cur);
+            tag = cut_word(&cur);
+            if (strcmp(gkw, "git") || !git || !tkw || strcmp(tkw, "tag") ||
+                !tag || cut_word(&cur))
+                project_error(
+                    "%s:%d: expected '<name> sha256:<hex> git <url> tag <tag>'",
+                    path, lineno);
+        }
         if (strncmp(hash, "sha256:", 7) || strlen(hash) != 7 + 64)
             project_error("%s:%d: invalid hash", path, lineno);
         SlPkgPin *pin = find_pin(p, name);
-        if (!pin)
-            project_error("%s:%d: lock entry '%s' is not in slang.project",
+        if (!pin) {
+            if (!git)
+                project_error("%s:%d: lock entry '%s' is not in slang.project",
+                              path, lineno, name);
+            pin = add_pin(p, name, git, tag);
+        } else if (git && (strcmp(pin->git, git) || strcmp(pin->tag, tag))) {
+            project_error("%s:%d: lock for '%s' disagrees with slang.project",
                           path, lineno, name);
+        }
         if (pin->hash)
             project_error("%s:%d: duplicate lock entry '%s'", path, lineno,
                           name);
@@ -487,7 +533,8 @@ static void write_lock(SlProject *p) {
     for (int i = 0; i < p->npins; i++) {
         if (!ord[i].hash)
             project_error("package '%s' has no hash after get", ord[i].name);
-        fprintf(f, "%s %s\n", ord[i].name, ord[i].hash);
+        fprintf(f, "%s %s git %s tag %s\n", ord[i].name, ord[i].hash,
+                ord[i].git, ord[i].tag);
     }
     fclose(f);
 }
@@ -496,10 +543,11 @@ void project_get(SlProject *p) {
     char *root = cache_root();
     for (int i = 0; i < p->npins; i++) {
         SlPkgPin *pin = &p->pins[i];
-        if (pin->hash) {
-            char *have = project_cache_dir(pin);
-            if (project_is_dir(have) && !strcmp(project_tree_hash(have), pin->hash))
-                continue;
+        char *have = pin->hash ? project_cache_dir(pin) : NULL;
+        if (have && project_is_dir(have) &&
+            !strcmp(project_tree_hash(have), pin->hash)) {
+            ingest_dep_project(p, have);
+            continue;
         }
         char *tmp = xasprintf("%s/pkg/%s/.tmp", root, pin->name);
         mkdir_p(xasprintf("%s/pkg/%s", root, pin->name));
@@ -514,6 +562,7 @@ void project_get(SlProject *p) {
             rm_rf(tmp);
         else if (rename(tmp, final) != 0)
             project_error("cannot store package '%s' in cache", pin->name);
+        ingest_dep_project(p, final);
     }
     write_lock(p);
 }
