@@ -629,7 +629,7 @@ static void sl_task_yield_now(void); /* runtime_pool.c, forward here --
  * steady-state cost of a hot loop's checkpoint to one increment plus
  * one branch for 1023 of every 1024 visits -- only the 1-in-1024
  * sample pays for a clock_gettime call. */
-#define SL_PREEMPT_QUANTUM_NS 5000000LL
+#define SL_PREEMPT_QUANTUM_NS 10000000LL
 #define SL_PREEMPT_SAMPLE_MASK 1023UL
 
 /* Not gated on 'time' being imported -- spawn/loops are core language
