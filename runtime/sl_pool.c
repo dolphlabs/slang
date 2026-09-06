@@ -168,9 +168,27 @@ static void sl_runq_shutdown(sl_runq *q) {
 
 static void sl_task_submit(void (*entry)(void *), void *arg) {
     sl_task *t = sl_task_acquire(entry, arg);
-    t->entry_arg = arg; /* rooted directly by the collector's run-queue
-                            walk while queued -- see sl_gc_collect,
-                            runtime_gc.c */
+    t->entry_arg = arg;
+    sl_runq_push(&sl_global_runq, t);
+}
+
+static void sl_task_submit_copy(void (*entry)(void *), const void *src,
+                               size_t n) {
+    sl_task *t = sl_task_grab();
+    if (n <= sizeof(t->entry_arg_store)) {
+        memcpy(t->entry_arg_store, src, n);
+        t->entry_arg = t->entry_arg_store;
+    } else {
+        void *p = malloc(n);
+        if (!p) {
+            fprintf(stderr, "slang: out of memory submitting task\n");
+            exit(1);
+        }
+        memcpy(p, src, n);
+        t->entry_arg = p;
+        t->entry_arg_owned = 1;
+    }
+    sl_task_stack_init(t, entry, t->entry_arg);
     sl_runq_push(&sl_global_runq, t);
 }
 
