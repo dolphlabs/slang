@@ -21,7 +21,7 @@ typedef struct {
 
 /* Loads the package containing main_file plus every transitively
  * imported package. Import paths resolve to a local directory, then a
- * native package, then stdlib/<path> (SLANG_STDLIB / SLANG_STDLIB_DIR).
+ * native package, then stdlib/<path>, then a slang.project pin.
  * Returns the index of the main package in out. Exits with a
  * diagnostic on missing packages or import cycles. */
 int load_packages(const char *main_file, PkgList *out);

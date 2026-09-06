@@ -1,0 +1,3 @@
+pub fn ping() -> int {
+    return 7;
+}
