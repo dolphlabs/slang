@@ -23,12 +23,16 @@
  * 'spawn' is used, whether or not the program imports 'proc'. */
 static atomic_llong sl_rt_active_spawns = 0;
 
+static pthread_mutex_t sl_rt_idle_mu = PTHREAD_MUTEX_INITIALIZER;
+static void sl_rt_idle_notify(void);
+
 static void sl_rt_active_spawns_inc(void) {
     atomic_fetch_add(&sl_rt_active_spawns, 1);
 }
 
 static void sl_rt_active_spawns_dec(void) {
-    atomic_fetch_sub(&sl_rt_active_spawns, 1);
+    if (atomic_fetch_sub(&sl_rt_active_spawns, 1) == 1)
+        sl_rt_idle_notify();
 }
 
 #define SL_RT_OS_STACK 262144
@@ -247,7 +251,10 @@ typedef struct sl_task {
     long gc_pend_n;
     size_t gc_pend_bytes;
     size_t gc_pend_pub;
+    void *join;
 } sl_task;
+
+static void sl_join_fail(void *j, const char *msg);
 
 /* Tier 11 second slice: the scheduler's own run queue. Defined here,
  * not in runtime_pool.c where the rest of the pool machinery lives,
@@ -571,6 +578,48 @@ static void sl_task_park(pthread_mutex_t *held_mu); /* runtime_pool.c,
     real in RUNTIME_POOL, emitted last. */
 static void sl_task_resume(sl_task *t); /* runtime_pool.c, forward here,
     same reason. */
+static sl_task *sl_rt_idle_waiters, *sl_rt_idle_waiters_tail;
+
+static void sl_rt_idle_wl_push(sl_task *t) {
+    t->next = NULL;
+    if (sl_rt_idle_waiters_tail)
+        sl_rt_idle_waiters_tail->next = t;
+    else
+        sl_rt_idle_waiters = t;
+    sl_rt_idle_waiters_tail = t;
+}
+
+static sl_task *sl_rt_idle_wl_pop(void) {
+    sl_task *t = sl_rt_idle_waiters;
+    if (t) {
+        sl_rt_idle_waiters = t->next;
+        if (!sl_rt_idle_waiters)
+            sl_rt_idle_waiters_tail = NULL;
+    }
+    return t;
+}
+
+static void sl_rt_idle_notify(void) {
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&sl_rt_idle_mu);
+    sl_task *w;
+    while ((w = sl_rt_idle_wl_pop()))
+        sl_task_resume(w);
+    pthread_mutex_unlock(&sl_rt_idle_mu);
+    sl_rt_preempt_enable();
+}
+
+static void sl_rt_wait_idle(void) {
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&sl_rt_idle_mu);
+    while (atomic_load(&sl_rt_active_spawns) > 0) {
+        sl_rt_idle_wl_push(sl_rt_cur());
+        sl_task_park(&sl_rt_idle_mu);
+        pthread_mutex_lock(&sl_rt_idle_mu);
+    }
+    pthread_mutex_unlock(&sl_rt_idle_mu);
+    sl_rt_preempt_enable();
+}
 static void sl_task_yield_now(void); /* runtime_pool.c, forward here --
     Tier 11 seventh slice (cooperative preemption): sl_rt_maybe_yield
     below calls it directly, but it's defined for real in RUNTIME_POOL,
@@ -812,6 +861,8 @@ static void sl_rt_error(const char *msg, long long a, long long b) {
         fprintf(stderr,
                 "slang: task panicked: %s (index %lld, length %lld)\n",
                 msg, a, b);
+        if (sl_rt_current_task->join)
+            sl_join_fail(sl_rt_current_task->join, msg);
         sl_rt_active_spawns_dec();
         sl_ctx_switch(&sl_rt_current_task->rsp, SL_RT_TLS_NATIVE_RSP());
         fprintf(stderr,

@@ -232,19 +232,31 @@ pub fn parse(raw: bytes) -> result[Request, str] {
 }
 
 pub fn serialize(r: Response) -> bytes {
-    let head = "HTTP/1.1 " + to_str(r.status) + " " + r.status_text + "\r\n";
+    let crlf = b"\r\n";
+    let head = to_bytes("HTTP/1.1 ");
+    head = head + to_bytes(to_str(r.status));
+    head = head + b" ";
+    head = head + to_bytes(r.status_text);
+    head = head + crlf;
     for k, v in r.headers {
         if k != "content-length" && k != "connection" {
-            head = head + k + ": " + v + "\r\n";
+            head = head + to_bytes(k);
+            head = head + b": ";
+            head = head + to_bytes(v);
+            head = head + crlf;
         }
     }
     let conn = "keep-alive";
     if has(r.headers, "connection") {
         conn = r.headers["connection"];
     }
-    head = head + "Content-Length: " + to_str(len(r.body)) + "\r\n"
-        + "Connection: " + conn + "\r\n\r\n";
-    return to_bytes(head) + r.body;
+    head = head + to_bytes("Content-Length: ");
+    head = head + to_bytes(to_str(len(r.body)));
+    head = head + crlf;
+    head = head + to_bytes("Connection: ");
+    head = head + to_bytes(conn);
+    head = head + b"\r\n\r\n";
+    return head + r.body;
 }
 
 fn compact_wire(buf: wire, used: int, filled: int) -> int {

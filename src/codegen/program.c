@@ -94,7 +94,10 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
         Package *p = &pkgs[i];
         for (j = 0; j < p->prog->nimports; j++) {
             char *ipath = p->prog->import_paths[j];
-            import_push(cg, p->name, path_base(ipath), path_base(ipath));
+            char *alias = p->prog->import_aliases && p->prog->import_aliases[j]
+                              ? p->prog->import_aliases[j]
+                              : path_base(ipath);
+            import_push(cg, p->name, alias, path_base(ipath));
         }
     }
 
@@ -147,15 +150,6 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
             }
             sd->ftypes[j] = canon_type(cg, sd->ftypes[j], sd->line);
             check_declared_lts(sd->lts, sd->nlts, sd->ftypes[j], sd->line);
-        }
-        if (!sd->is_gc) {
-            for (j = 0; j < sd->nfields; j++) {
-                if (type_is_gc_ptr(cg, sd->ftypes[j]))
-                    cg_error(sd->line,
-                             "value struct '%s' cannot contain gc field "
-                             "'%s' (type %s); use 'gc struct'",
-                             sd->canonical, sd->fields[j], sd->ftypes[j]);
-            }
         }
     }
 
@@ -517,36 +511,24 @@ void emit_spawn_trampolines(CG *cg) {
 
         emit_line(cg, "typedef struct {");
         cg->indent++;
-        if (sig->nparams == 0) {
-            emit_line(cg, "char _unused;");
-        } else {
-            for (int j = 0; j < sig->nparams; j++)
-                emit_line(cg, "%s a%d;", ctype_of(cg, sig->param_slang[j]),
-                          j);
-        }
+        emit_line(cg, "sl_join *join;");
+        for (int j = 0; j < sig->nparams; j++)
+            emit_line(cg, "%s a%d;", ctype_of(cg, sig->param_slang[j]), j);
         cg->indent--;
         emit_line(cg, "} %s;", s->sname);
         emit_line(cg, "");
 
-        /* Tier 10: trace the spawn args struct the same way a
-         * slang-declared struct's fields are traced -- it's the same
-         * shape (fixed, named fields, a0..an-1 here instead of the
-         * user's own field names), just generated from a FuncSig
-         * instead of a StructDef. s->has_tracer was computed once in
-         * spawn_shape_for (core.c), where param_slang was already at
-         * hand; reused here and by every ST_SPAWN call site later. */
-        if (s->has_tracer) {
-            emit_line(cg, "static void sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
-                      s->sname);
-            cg->indent++;
-            emit_line(cg, "%s *o = (%s *)p;", s->sname, s->sname);
-            for (int j = 0; j < sig->nparams; j++)
-                if (type_is_gc_ptr(cg, sig->param_slang[j]))
-                    emit_line(cg, "mark((void *)o->a%d);", j);
-            cg->indent--;
-            emit_line(cg, "}");
-            emit_line(cg, "");
-        }
+        emit_line(cg, "static void sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
+                  s->sname);
+        cg->indent++;
+        emit_line(cg, "%s *o = (%s *)p;", s->sname, s->sname);
+        emit_line(cg, "mark((void *)o->join);");
+        for (int j = 0; j < sig->nparams; j++)
+            if (type_is_gc_ptr(cg, sig->param_slang[j]))
+                emit_line(cg, "mark((void *)o->a%d);", j);
+        cg->indent--;
+        emit_line(cg, "}");
+        emit_line(cg, "");
 
         /* Tier 11: the spawned function's own body runs on a task-owned
          * buffer (sl_task_stack_init) instead of directly on a pthread's
@@ -557,20 +539,24 @@ void emit_spawn_trampolines(CG *cg) {
          * exactly. */
         emit_line(cg, "static void %s_entry(void *_sl_raw) {", s->tname);
         cg->indent++;
-        if (sig->nparams == 0) {
-            emit_line(cg, "(void)_sl_raw;");
-            emit_line(cg, "%s();", callee);
+        emit_line(cg, "%s *_sl_a = (%s *)_sl_raw;", s->sname, s->sname);
+        emit_line(cg, "sl_join *_sl_j = _sl_a->join;");
+        emit_line(cg, "if (_sl_j) sl_rt_cur()->join = _sl_j;");
+        StrBuf args;
+        sb_init(&args);
+        for (int j = 0; j < sig->nparams; j++) {
+            if (j)
+                sb_append(&args, ", ");
+            sb_append(&args, xasprintf("_sl_a->a%d", j));
+        }
+        if (sig->ret_slang) {
+            emit_line(cg, "%s _sl_rv = %s(%s);", ctype_of(cg, sig->ret_slang),
+                      callee, args.data);
+            emit_line(cg, "if (_sl_j) sl_join_finish(_sl_j, &_sl_rv);");
         } else {
-            emit_line(cg, "%s *_sl_a = (%s *)_sl_raw;", s->sname, s->sname);
-            StrBuf args;
-            sb_init(&args);
-            for (int j = 0; j < sig->nparams; j++) {
-                if (j)
-                    sb_append(&args, ", ");
-                sb_append(&args, xasprintf("_sl_a->a%d", j));
-            }
             emit_line(cg, "%s(%s);", callee, args.data);
         }
+        emit_line(cg, "if (_sl_j) sl_rt_cur()->join = NULL;");
         /* Also decremented inside sl_rt_error's non-main-thread path,
          * since a task that panics never reaches this line -- both
          * paths must decrement exactly once. */

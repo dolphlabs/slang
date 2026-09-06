@@ -19,6 +19,7 @@
 static const char *json_scalar_dec_name(const char *t) {
     if (!strcmp(t, "bool")) return "sl_json_dec_bool";
     if (is_str(t)) return "sl_json_dec_str";
+    if (is_bytes(t)) return "sl_json_dec_bytes";
     if (!strcmp(t, "i8")) return "sl_json_dec_i8";
     if (!strcmp(t, "i16")) return "sl_json_dec_i16";
     if (!strcmp(t, "i32")) return "sl_json_dec_i32";
@@ -37,6 +38,7 @@ static const char *json_scalar_dec_name(const char *t) {
 static const char *json_scalar_enc_name(const char *t) {
     if (!strcmp(t, "bool")) return "sl_json_enc_bool";
     if (is_str(t)) return "sl_json_enc_str";
+    if (is_bytes(t)) return "sl_json_enc_bytes";
     if (is_int(t)) return is_signed_int(t) ? "sl_json_enc_i64" : "sl_json_enc_u64";
     if (is_flt(t)) return "sl_json_enc_f64";
     return NULL;
@@ -112,8 +114,7 @@ const char *json_dec_fn(CG *cg, const char *t, int line) {
         if (!sd)
             cg_error(line,
                      "cannot json.decode into type '%s': not representable "
-                     "in JSON (rawptr, chan, result, and bytes fields "
-                     "aren't supported)",
+                     "in JSON (rawptr, chan, and result aren't supported)",
                      t);
         for (int i = 0; i < sd->nfields; i++)
             json_dec_fn(cg, sd->ftypes[i], line);
@@ -150,8 +151,7 @@ const char *json_enc_fn(CG *cg, const char *t, int line) {
         if (!sd)
             cg_error(line,
                      "cannot json.encode type '%s': not representable in "
-                     "JSON (rawptr, chan, result, and bytes fields aren't "
-                     "supported)",
+                     "JSON (rawptr, chan, and result aren't supported)",
                      t);
         for (int i = 0; i < sd->nfields; i++)
             json_enc_fn(cg, sd->ftypes[i], line);

@@ -642,5 +642,88 @@ static char *sl_str_from_bool(bool v) {
     return sl_strdup(v ? "true" : "false");
 }
 
+typedef struct {
+    int done;
+    int panicked;
+    char *err;
+    unsigned char *val;
+    size_t valsz;
+    int val_is_ptr;
+    sl_task *waiter;
+    pthread_mutex_t mu;
+} sl_join;
+
+static void sl_gc_trace_join(void *p, void (*mark)(void *)) {
+    sl_join *j = (sl_join *)p;
+    mark(j->err);
+    mark(j->val);
+    if (j->val_is_ptr && j->done && !j->panicked)
+        mark(*(void **)j->val);
+}
+
+static sl_join *sl_join_new(size_t valsz, int val_is_ptr) {
+    sl_join *j = (sl_join *)sl_gc_alloc(sizeof(sl_join), sl_gc_trace_join);
+    j->valsz = valsz;
+    j->val_is_ptr = val_is_ptr;
+    j->val = (unsigned char *)sl_gc_alloc(valsz > 0 ? valsz : 1, NULL);
+    pthread_mutex_init(&j->mu, NULL);
+    return j;
+}
+
+static void sl_join_wake(sl_join *j) {
+    if (j->waiter) {
+        sl_task *w = j->waiter;
+        j->waiter = NULL;
+        sl_task_resume(w);
+    }
+}
+
+static void sl_join_finish(sl_join *j, const void *val) {
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&j->mu);
+    if (!j->done) {
+        if (val && j->valsz)
+            memcpy(j->val, val, j->valsz);
+        j->done = 1;
+        sl_join_wake(j);
+    }
+    pthread_mutex_unlock(&j->mu);
+    sl_rt_preempt_enable();
+}
+
+static void sl_join_fail(void *jp, const char *msg) {
+    sl_join *j = (sl_join *)jp;
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&j->mu);
+    if (!j->done) {
+        j->panicked = 1;
+        j->err = sl_strdup(msg);
+        j->done = 1;
+        sl_join_wake(j);
+    }
+    pthread_mutex_unlock(&j->mu);
+    sl_rt_preempt_enable();
+}
+
+static int sl_join_wait(sl_join *j, void *out) {
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&j->mu);
+    while (!j->done) {
+        j->waiter = sl_rt_cur();
+        sl_task_park(&j->mu);
+        pthread_mutex_lock(&j->mu);
+    }
+    int ok = !j->panicked;
+    if (ok && out && j->valsz)
+        memcpy(out, j->val, j->valsz);
+    pthread_mutex_unlock(&j->mu);
+    sl_rt_preempt_enable();
+    return ok;
+}
+
+static char *sl_join_err(sl_join *j) {
+    return j->err ? j->err : sl_strdup("task panicked");
+}
+
 /* ---- user program ---- */
 

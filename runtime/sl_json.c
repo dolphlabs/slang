@@ -456,6 +456,59 @@ static bool sl_json_dec_str(sl_json_val *v, const char **out, char **err) {
     return true;
 }
 
+static const char sl_b64_alpha[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+static int sl_b64_digit(int c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+static bool sl_json_dec_bytes(sl_json_val *v, sl_bytes **out, char **err) {
+    if (v->kind != SL_JV_STR) {
+        *err = sl_json_errf("expected a base64 string, got %s",
+                            sl_json_kind_name(v));
+        return false;
+    }
+    const char *s = v->as.str;
+    size_t n = strlen(s);
+    if (n % 4 != 0) {
+        *err = sl_json_errf("invalid base64");
+        return false;
+    }
+    size_t pad = 0;
+    if (n >= 1 && s[n - 1] == '=') pad++;
+    if (n >= 2 && s[n - 2] == '=') pad++;
+    size_t outn = (n / 4) * 3 - pad;
+    sl_bytes *b = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
+    b->len = (long long)outn;
+    b->ptr = (unsigned char *)sl_gc_alloc(outn > 0 ? outn : 1, NULL);
+    size_t oi = 0;
+    for (size_t i = 0; i < n; i += 4) {
+        int a = sl_b64_digit((unsigned char)s[i]);
+        int b1 = sl_b64_digit((unsigned char)s[i + 1]);
+        int c = s[i + 2] == '=' ? 0 : sl_b64_digit((unsigned char)s[i + 2]);
+        int d = s[i + 3] == '=' ? 0 : sl_b64_digit((unsigned char)s[i + 3]);
+        if (a < 0 || b1 < 0 ||
+            (s[i + 2] != '=' && c < 0) || (s[i + 3] != '=' && d < 0) ||
+            (s[i + 2] == '=' && s[i + 3] != '=')) {
+            *err = sl_json_errf("invalid base64");
+            return false;
+        }
+        unsigned v24 = ((unsigned)a << 18) | ((unsigned)b1 << 12) |
+                       ((unsigned)c << 6) | (unsigned)d;
+        if (oi < outn) b->ptr[oi++] = (unsigned char)(v24 >> 16);
+        if (oi < outn) b->ptr[oi++] = (unsigned char)(v24 >> 8);
+        if (oi < outn) b->ptr[oi++] = (unsigned char)v24;
+    }
+    *out = b;
+    return true;
+}
+
 /* Casting an out-of-range double to long long is undefined behavior,
  * so the magnitude check must come BEFORE any cast -- never after,
  * and never combined into the same expression as one. */
@@ -561,6 +614,34 @@ static void sl_json_sb_append(sl_json_sb *sb, const char *s) {
 }
 
 /* ---- json: scalar encode helpers ---- */
+
+static void sl_json_enc_bytes(sl_bytes *b, sl_json_sb *out) {
+    sl_json_sb_append_n(out, "\"", 1);
+    long long i = 0;
+    while (i + 3 <= b->len) {
+        unsigned n = ((unsigned)b->ptr[i] << 16) |
+                     ((unsigned)b->ptr[i + 1] << 8) |
+                     (unsigned)b->ptr[i + 2];
+        char q[4];
+        q[0] = sl_b64_alpha[(n >> 18) & 63];
+        q[1] = sl_b64_alpha[(n >> 12) & 63];
+        q[2] = sl_b64_alpha[(n >> 6) & 63];
+        q[3] = sl_b64_alpha[n & 63];
+        sl_json_sb_append_n(out, q, 4);
+        i += 3;
+    }
+    if (i < b->len) {
+        unsigned n = (unsigned)b->ptr[i] << 16;
+        if (i + 1 < b->len) n |= (unsigned)b->ptr[i + 1] << 8;
+        char q[4];
+        q[0] = sl_b64_alpha[(n >> 18) & 63];
+        q[1] = sl_b64_alpha[(n >> 12) & 63];
+        q[2] = (i + 1 < b->len) ? sl_b64_alpha[(n >> 6) & 63] : '=';
+        q[3] = '=';
+        sl_json_sb_append_n(out, q, 4);
+    }
+    sl_json_sb_append_n(out, "\"", 1);
+}
 
 static void sl_json_enc_str(const char *s, sl_json_sb *out) {
     sl_json_sb_append_n(out, "\"", 1);
