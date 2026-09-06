@@ -129,7 +129,9 @@ static void merge_program(Package *pkg, Program *src, const char *fname) {
 
     for (int i = 0; i < src->nimports; i++) {
         char *ipath = src->import_paths[i];
-        char *alias = path_base(ipath);
+        char *alias = src->import_aliases && src->import_aliases[i]
+                          ? src->import_aliases[i]
+                          : path_base(ipath);
         if (!is_ident_like(alias))
             load_error("import '%s': binding name '%s' is not a valid "
                        "identifier",
@@ -137,10 +139,12 @@ static void merge_program(Package *pkg, Program *src, const char *fname) {
         int dup = 0;
         for (int j = 0; j < dst->nimports; j++) {
             if (!strcmp(dst->import_paths[j], ipath)) {
-                dup = 1; /* same package imported twice: harmless */
+                dup = 1;
                 break;
             }
-            char *other = path_base(dst->import_paths[j]);
+            char *other = dst->import_aliases && dst->import_aliases[j]
+                              ? dst->import_aliases[j]
+                              : path_base(dst->import_paths[j]);
             if (!strcmp(other, alias))
                 load_error("duplicate import binding '%s' in package '%s'",
                            alias, pkg->name);
@@ -148,11 +152,20 @@ static void merge_program(Package *pkg, Program *src, const char *fname) {
         if (dup)
             continue;
         if (dst->nimports == dst->icap) {
+            int old = dst->icap;
             dst->icap = dst->icap ? dst->icap * 2 : 8;
             dst->import_paths = (char **)xrealloc(
                 dst->import_paths, dst->icap * sizeof(char *));
+            dst->import_aliases = (char **)xrealloc(
+                dst->import_aliases, dst->icap * sizeof(char *));
+            for (int k = old; k < dst->icap; k++)
+                dst->import_aliases[k] = NULL;
         }
-        dst->import_paths[dst->nimports++] = ipath;
+        dst->import_paths[dst->nimports] = ipath;
+        dst->import_aliases[dst->nimports] = src->import_aliases
+                                                 ? src->import_aliases[i]
+                                                 : NULL;
+        dst->nimports++;
     }
 
     for (int i = 0; i < src->nlinks; i++) {

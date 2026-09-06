@@ -1160,21 +1160,32 @@ static FuncDecl *parse_fn_decl(Parser *p, int is_extern) {
     return f;
 }
 
-static void program_push_import(Program *prog, char *path) {
+static void program_push_import(Program *prog, char *path, char *alias) {
     if (prog->nimports == prog->icap) {
+        int old = prog->icap;
         prog->icap = prog->icap ? prog->icap * 2 : 8;
         prog->import_paths = (char **)xrealloc(
             prog->import_paths, prog->icap * sizeof(char *));
+        prog->import_aliases = (char **)xrealloc(
+            prog->import_aliases, prog->icap * sizeof(char *));
+        for (int i = old; i < prog->icap; i++)
+            prog->import_aliases[i] = NULL;
     }
-    prog->import_paths[prog->nimports++] = path;
+    prog->import_paths[prog->nimports] = path;
+    prog->import_aliases[prog->nimports] = alias;
+    prog->nimports++;
 }
 
-/* import "path/to/pkg" ; */
 static void parse_import(Parser *p, Program *prog) {
-    advance(p); /* 'import' */
+    advance(p);
     Token *path = expect(p, T_STRING, "a package path string");
+    char *alias = NULL;
+    if (match(p, T_KW_AS)) {
+        Token *id = expect(p, T_IDENT, "an import alias");
+        alias = id->text;
+    }
     expect(p, T_SEMI, "';'");
-    program_push_import(prog, path->text);
+    program_push_import(prog, path->text, alias);
 }
 
 static void program_push_link(Program *prog, char *name) {

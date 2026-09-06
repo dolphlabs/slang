@@ -709,6 +709,7 @@ then `stdlib/<path>`, then a pin in `slang.project`.
 ```slang
 import "geometry";   // binds the name "geometry" in this file's scope
 import "a/b/util";   // nested paths bind as "util"
+import "geometry" as geo;   // optional alias; call as geo.area(...)
 
 println(geometry.area(3.0, 4.0));   // qualified access
 println(util.format(x));
@@ -883,7 +884,6 @@ What this means in practice:
 - Block scoping and shadowing
 - If/block expressions (`let max = if a > b { a } else { b }`)
 - Range `.step(n)`
-- Import aliases (`import "x" as y`)
 - A bytecode VM mode for fast iteration without invoking `cc`
 - `extern struct` layouts, for passing C structs by value instead of
   only through opaque `rawptr` handles

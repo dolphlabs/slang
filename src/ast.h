@@ -210,6 +210,7 @@ typedef struct {
     int fcap;
     Block *main_body;   /* top-level statements (executable only in main pkg) */
     char **import_paths;/* 'import "path"' statements, in order */
+    char **import_aliases; /* NULL = bind as path_base(path) */
     int nimports;
     int icap;
     char **link_libs;   /* 'link "name"' statements, in order */
