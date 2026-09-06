@@ -34,7 +34,7 @@ const char *infer_ident_name(CG *cg, const char *name, int line) {
             return g->slang;
         }
         const char *bt = infer_ident_name(cg, left, line);
-        StructDef *sd = struct_find_canon(cg, bt);
+        StructDef *sd = struct_of_type(cg, bt);
         if (!sd)
             cg_error(line, "'%s' has no member '%s' (type %s)", left,
                      right, bt);
@@ -312,7 +312,7 @@ const char *infer_call(CG *cg, Expr *e) {
         } else {
             /* method call on a struct-typed receiver */
             recv_t = infer_ident_name(cg, left, e->line);
-            StructDef *sd = struct_find_canon(cg, recv_t);
+            StructDef *sd = struct_of_type(cg, recv_t);
             if (!sd)
                 cg_error(e->line, "call to undefined function '%s'", name);
             sig = method_find(cg, sd, right);
@@ -462,15 +462,31 @@ const char *infer_type(CG *cg, Expr *e) {
         return infer_ident_name(cg, e->as.ident.name, e->line);
     case EX_UNARY: {
         const char *t = infer_type(cg, e->as.unary.operand);
-        if (!strcmp(e->as.unary.op, "-")) {
+        const char *op = e->as.unary.op;
+        if (!strcmp(op, "-")) {
             if (!is_num(t))
                 cg_error(e->line,
                          "unary '-' requires a numeric operand (got %s)", t);
             return t;
         }
-        if (!strcmp(t, "bool"))
-            return "bool";
-        cg_error(e->line, "'!' requires a bool operand (got %s)", t);
+        if (!strcmp(op, "!")) {
+            if (!strcmp(t, "bool"))
+                return "bool";
+            cg_error(e->line, "'!' requires a bool operand (got %s)", t);
+        }
+        if (!strcmp(op, "&") || !strcmp(op, "&mut")) {
+            if (!expr_addressable(e->as.unary.operand))
+                cg_error(e->line, "cannot take the address of a temporary");
+            return !strcmp(op, "&mut") ? xasprintf("&mut %s", t)
+                                       : xasprintf("&%s", t);
+        }
+        if (!strcmp(op, "*")) {
+            char *inner;
+            if (type_wrap(t, &inner) == TW_NONE)
+                cg_error(e->line, "cannot dereference a value of type %s", t);
+            return inner;
+        }
+        cg_error(e->line, "unknown unary operator '%s'", op);
     }
     case EX_BINARY:
         return infer_binary(cg, e);
@@ -575,7 +591,7 @@ const char *infer_type(CG *cg, Expr *e) {
     }
     case EX_FIELD: {
         const char *bt = infer_type(cg, e->as.field.base);
-        StructDef *sd = struct_find_canon(cg, bt);
+        StructDef *sd = struct_of_type(cg, bt);
         if (!sd)
             cg_error(e->line, "'.' used on a value of type %s", bt);
         for (int i = 0; i < sd->nfields; i++) {

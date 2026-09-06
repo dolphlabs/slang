@@ -329,10 +329,26 @@ int is_map_key(const char *t);
 int is_opt(const char *t);
 int is_result(const char *t);
 int is_chan(const char *t);
+
+typedef enum {
+    TW_NONE = 0,
+    TW_REF,
+    TW_REFMUT,
+    TW_OWN,
+    TW_GC,
+    TW_PTR,
+    TW_RAW,
+    TW_RAWMUT
+} TypeWrap;
+
+TypeWrap type_wrap(const char *t, char **inner);
+int type_is_boxable(CG *cg, const char *t);
+int expr_addressable(Expr *e);
 int type_is_gc_ptr(CG *cg, const char *t);
 int struct_has_gc_fields(CG *cg, StructDef *sd);
 int struct_type_is_gc(CG *cg, const char *t);
 const char *struct_access(CG *cg, const char *t);
+StructDef *struct_of_type(CG *cg, const char *t);
 char *opt_inner(const char *t);
 char *chan_elem(const char *t);
 void result_te(const char *t, char **tv, char **ev);

@@ -500,7 +500,7 @@ char *gen_call(CG *cg, Expr *e) {
                          right, pkg);
         } else {
             recv_t = infer_ident_name(cg, left, e->line);
-            StructDef *sd = struct_find_canon(cg, recv_t);
+            StructDef *sd = struct_of_type(cg, recv_t);
             if (!sd)
                 cg_error(e->line, "call to undefined function '%s'", name);
             sig = method_find(cg, sd, right);
@@ -900,6 +900,10 @@ char *gen_expr(CG *cg, Expr *e) {
         if (!strcmp(e->as.unary.op, "-") && is_int(infer_type(cg, e)))
             return xasprintf("((%s)(-(%s)))", map_type(infer_type(cg, e)),
                              o);
+        if (!strcmp(e->as.unary.op, "&") || !strcmp(e->as.unary.op, "&mut"))
+            return xasprintf("(&(%s))", o);
+        if (!strcmp(e->as.unary.op, "*"))
+            return xasprintf("(*(%s))", o);
         return xasprintf("(%s%s)", e->as.unary.op, o);
     }
     case EX_CAST: {

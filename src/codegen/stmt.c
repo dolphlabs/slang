@@ -212,7 +212,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                 /* dotted field assignment: p.x = v (the parser folds
                  * 'p.x' into a single qualified identifier) */
                 const char *bt = infer_ident_name(cg, left, s->line);
-                StructDef *sd = struct_find_canon(cg, bt);
+                StructDef *sd = struct_of_type(cg, bt);
                 if (!sd)
                     cg_error(s->line, "'%s' has no member '%s'", left,
                              right);
@@ -260,10 +260,37 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "%s = %s;", sanitize_ident(name), val);
             break;
         }
+        if (tgt->kind == EX_UNARY && !strcmp(tgt->as.unary.op, "*")) {
+            const char *pt = infer_type(cg, tgt->as.unary.operand);
+            char *inner;
+            TypeWrap w = type_wrap(pt, &inner);
+            if (w == TW_NONE)
+                cg_error(s->line, "cannot dereference a value of type %s",
+                         pt);
+            if (w == TW_REF)
+                cg_error(s->line,
+                         "cannot assign through a shared borrow of type %s",
+                         pt);
+            const char *se = expect_push(cg, inner);
+            const char *vt = infer_type(cg, s->as.assign.value);
+            cg->expect = se;
+            if (!value_assignable(inner, s->as.assign.value, vt))
+                cg_error(s->line,
+                         "cannot assign a value of type %s through a "
+                         "pointer to %s",
+                         vt, inner);
+            char *p = gen_expr(cg, tgt->as.unary.operand);
+            const char *se2 = expect_push(cg, inner);
+            char *val = maybe_cast(cg, inner, vt,
+                                   gen_expr(cg, s->as.assign.value));
+            cg->expect = se2;
+            emit_line(cg, "*(%s) = %s;", p, val);
+            break;
+        }
         if (tgt->kind == EX_FIELD) {
             /* struct field target: p.x = v */
             const char *bt = infer_type(cg, tgt->as.field.base);
-            StructDef *sd = struct_find_canon(cg, bt);
+            StructDef *sd = struct_of_type(cg, bt);
             if (!sd)
                 cg_error(s->line, "'.' used on a value of type %s", bt);
             int fi = -1;

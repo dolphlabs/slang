@@ -2,6 +2,33 @@
 #define SLANG_AST_H
 
 typedef struct FuncDecl FuncDecl;
+typedef struct Type Type;
+
+typedef enum {
+    TY_NAMED,
+    TY_ARRAY,
+    TY_MAP,
+    TY_OPT,
+    TY_RESULT,
+    TY_CHAN,
+    TY_REF,
+    TY_REFMUT,
+    TY_OWN,
+    TY_GC,
+    TY_PTR,
+    TY_RAW,
+    TY_RAWMUT
+} TypeKind;
+
+struct Type {
+    TypeKind kind;
+    union {
+        char *name;
+        Type *inner;
+        struct { Type *key; Type *val; } map;
+        struct { Type *ok; Type *err; } result;
+    } as;
+};
 
 /* Expression nodes */
 typedef enum {

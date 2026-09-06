@@ -47,3 +47,8 @@ int32_t sl_ffi_sum_bytes(void *ptr, int32_t len) {
 void *sl_ffi_null(void) {
     return NULL;
 }
+
+int32_t sl_ffi_store(int32_t *p, int32_t v) {
+    *p = v;
+    return v;
+}

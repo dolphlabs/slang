@@ -158,13 +158,18 @@ int is_map(const char *t) { return !strncmp(t, "map[", 4); }
  * (opt/result/map/struct/array) are deliberately excluded -- handing
  * their internal layout to arbitrary C would be unsafe and pointless. */
 void check_extern_type(const char *t, int line, const char *what) {
+    char *inner;
+    if (type_wrap(t, &inner) == TW_PTR) {
+        check_extern_type(inner, line, what);
+        return;
+    }
     if (is_num(t) || is_str(t) || is_bytes(t) || !strcmp(t, "bool") ||
         is_rawptr(t))
         return;
     cg_error(line,
              "extern fn %s type '%s' is not FFI-safe; only numeric "
-             "types, bool, str, bytes, and rawptr may cross an extern "
-             "boundary",
+             "types, bool, str, bytes, rawptr, and ptr[T] may cross an "
+             "extern boundary",
              what, t);
 }
 
@@ -189,6 +194,90 @@ int is_opt(const char *t) { return !strncmp(t, "opt[", 4); }
 int is_result(const char *t) { return !strncmp(t, "result[", 7); }
 int is_chan(const char *t) { return !strncmp(t, "chan[", 5); }
 
+TypeWrap type_wrap(const char *t, char **inner) {
+    *inner = NULL;
+    if (!strncmp(t, "&mut ", 5)) {
+        *inner = xstrdup(t + 5);
+        return TW_REFMUT;
+    }
+    if (t[0] == '&') {
+        *inner = xstrdup(t + 1);
+        return TW_REF;
+    }
+    if (!strncmp(t, "own ", 4)) {
+        *inner = xstrdup(t + 4);
+        return TW_OWN;
+    }
+    if (!strncmp(t, "gc ", 3)) {
+        *inner = xstrdup(t + 3);
+        return TW_GC;
+    }
+    if (!strncmp(t, "*mut ", 5)) {
+        *inner = xstrdup(t + 5);
+        return TW_RAWMUT;
+    }
+    if (t[0] == '*' && t[1]) {
+        *inner = xstrdup(t + 1);
+        return TW_RAW;
+    }
+    if (!strncmp(t, "ptr[", 4)) {
+        size_t n = strlen(t);
+        if (n < 6 || t[n - 1] != ']')
+            return TW_NONE;
+        char *i = (char *)xmalloc(n - 4);
+        memcpy(i, t + 4, n - 5);
+        i[n - 5] = '\0';
+        *inner = i;
+        return TW_PTR;
+    }
+    return TW_NONE;
+}
+
+int type_is_boxable(CG *cg, const char *t) {
+    char *inner;
+    if (type_wrap(t, &inner) != TW_NONE)
+        return 0;
+    if (is_arr(t) || is_map(t) || is_opt(t) || is_result(t) || is_chan(t) ||
+        is_str(t) || is_bytes(t) || is_rawptr(t))
+        return 0;
+    if (struct_type_is_gc(cg, t))
+        return 0;
+    if (map_type(t))
+        return 1;
+    return struct_find_canon(cg, t) != NULL;
+}
+
+int expr_addressable(Expr *e) {
+    if (e->kind == EX_IDENT || e->kind == EX_FIELD || e->kind == EX_INDEX)
+        return 1;
+    return e->kind == EX_UNARY && !strcmp(e->as.unary.op, "*");
+}
+
+static const char *wrap_prefix(TypeWrap w, const char *inner) {
+    switch (w) {
+    case TW_REF:    return xasprintf("&%s", inner);
+    case TW_REFMUT: return xasprintf("&mut %s", inner);
+    case TW_OWN:    return xasprintf("own %s", inner);
+    case TW_GC:     return xasprintf("gc %s", inner);
+    case TW_PTR:    return xasprintf("ptr[%s]", inner);
+    case TW_RAW:    return xasprintf("*%s", inner);
+    case TW_RAWMUT: return xasprintf("*mut %s", inner);
+    default:        return inner;
+    }
+}
+
+static char *box_expr(const char *ic, TypeWrap w, char *expr) {
+    if (w == TW_GC)
+        return xasprintf(
+            "({ %s *_sl_b = (%s *)sl_gc_alloc(sizeof(%s), NULL); "
+            "*_sl_b = (%s); _sl_b; })",
+            ic, ic, ic, expr);
+    return xasprintf(
+        "({ %s *_sl_b = (%s *)malloc(sizeof(%s)); "
+        "if (!_sl_b) abort(); *_sl_b = (%s); _sl_b; })",
+        ic, ic, ic, expr);
+}
+
 /* Is a value of this slang type a GC-managed heap pointer that a
  * precise stack scanner would need to treat as a root? Excludes
  * rawptr (foreign, never GC-owned -- see the README's C interop
@@ -196,14 +285,18 @@ int is_chan(const char *t) { return !strncmp(t, "chan[", 5); }
  * heap buffer (GC_strdup/sl_strdup), just a leaf one with no interior
  * pointers of its own to scan further. */
 int type_is_gc_ptr(CG *cg, const char *t) {
+    char *inner;
+    TypeWrap w = type_wrap(t, &inner);
+    if (w == TW_GC)
+        return 1;
+    if (w != TW_NONE)
+        return 0;
     if (is_rawptr(t)) return 0;
     if (is_arr(t) || is_map(t) || is_opt(t) || is_result(t) ||
         is_chan(t) || is_str(t) || is_bytes(t))
         return 1;
     StructDef *sd = struct_find_canon(cg, t);
     return sd && sd->is_gc;
-    /* else: int / i8..u64 / float / f32 / bool / duration -- scalars,
-     * never pointers */
 }
 
 /* Does this struct type have at least one GC-pointer field? Every
@@ -219,7 +312,17 @@ int struct_type_is_gc(CG *cg, const char *t) {
 }
 
 const char *struct_access(CG *cg, const char *t) {
+    char *inner;
+    if (type_wrap(t, &inner) != TW_NONE)
+        return "->";
     return struct_type_is_gc(cg, t) ? "->" : ".";
+}
+
+StructDef *struct_of_type(CG *cg, const char *t) {
+    char *inner;
+    if (type_wrap(t, &inner) != TW_NONE)
+        return struct_find_canon(cg, inner);
+    return struct_find_canon(cg, t);
 }
 
 int struct_has_gc_fields(CG *cg, StructDef *sd) {
@@ -284,6 +387,17 @@ int can_assign(const char *dst, const char *src) {
         return !strcmp(src, "f32") || is_int(src);
     if (!strcmp(dst, "f32") && is_int(src))
         return 1;
+    char *di, *si;
+    TypeWrap dw = type_wrap(dst, &di);
+    TypeWrap sw = type_wrap(src, &si);
+    if (dw == TW_REF && sw == TW_REFMUT && !strcmp(di, si))
+        return 1;
+    if (dw == TW_PTR &&
+        (sw == TW_REFMUT || sw == TW_OWN || sw == TW_RAWMUT || sw == TW_PTR) &&
+        !strcmp(di, si))
+        return 1;
+    if (is_rawptr(dst) && sw != TW_NONE)
+        return 1;
     return 0;
 }
 
@@ -324,6 +438,13 @@ int value_assignable(const char *dst, Expr *src, const char *srct) {
         return 1;
     if (!strcmp(dst, "f32") && src->kind == EX_FLOAT)
         return 1;
+    char *di, *si;
+    TypeWrap dw = type_wrap(dst, &di);
+    TypeWrap sw = type_wrap(srct, &si);
+    if ((dw == TW_OWN || dw == TW_GC) && value_assignable(di, src, srct))
+        return 1;
+    if (sw != TW_NONE && (can_assign(dst, si) || !strcmp(dst, si)))
+        return 1;
     return 0;
 }
 
@@ -353,6 +474,21 @@ char *maybe_cast(CG *cg, const char *dst, const char *src,
                         char *expr) {
     if (!strcmp(dst, src))
         return expr;
+    char *di, *si;
+    TypeWrap dw = type_wrap(dst, &di);
+    TypeWrap sw = type_wrap(src, &si);
+    if (dw == TW_OWN || dw == TW_GC) {
+        char *inner_expr = maybe_cast(cg, di, src, expr);
+        return box_expr(ctype_of(cg, di), dw, inner_expr);
+    }
+    if (sw != TW_NONE && (can_assign(dst, si) || !strcmp(dst, si)))
+        return xasprintf("(*(%s))", expr);
+    if (dw == TW_REF && sw == TW_REFMUT && !strcmp(di, si))
+        return expr;
+    if (dw == TW_PTR &&
+        (sw == TW_REFMUT || sw == TW_OWN || sw == TW_RAWMUT || sw == TW_PTR) &&
+        !strcmp(di, si))
+        return xasprintf("(%s)(%s)", ctype_of(cg, dst), expr);
     return xasprintf("(%s)(%s)", ctype_of(cg, dst), expr);
 }
 
@@ -805,6 +941,16 @@ char *mangle_struct(const char *canon) {
 /* C type for a slang type, including maps, user-defined structs, and
  * monomorphized opt/result instantiations. */
 const char *ctype_of(CG *cg, const char *t) {
+    char *inner;
+    TypeWrap w = type_wrap(t, &inner);
+    if (w != TW_NONE) {
+        const char *ic = ctype_of(cg, inner);
+        if (!ic)
+            return NULL;
+        if (w == TW_REF)
+            return xasprintf("const %s *", ic);
+        return xasprintf("%s *", ic);
+    }
     const char *m = map_type(t);
     if (m)
         return m;
@@ -820,10 +966,10 @@ const char *ctype_of(CG *cg, const char *t) {
         return xasprintf("%s *", res_cname(cg, tv, tev));
     }
     if (struct_find_canon(cg, t)) {
-        const char *m = mangle_struct(t);
+        const char *mn = mangle_struct(t);
         if (struct_type_is_gc(cg, t))
-            return xasprintf("%s *", m);
-        return m;
+            return xasprintf("%s *", mn);
+        return mn;
     }
     return NULL;
 }
@@ -832,6 +978,16 @@ const char *ctype_of(CG *cg, const char *t) {
  * pass through; struct names gain their package qualifier ("Point" ->
  * "main.Point"); containers canonicalize recursively. */
 const char *canon_type(CG *cg, const char *t, int line) {
+    char *winner;
+    TypeWrap w = type_wrap(t, &winner);
+    if (w != TW_NONE) {
+        const char *ci = canon_type(cg, winner, line);
+        if ((w == TW_OWN || w == TW_GC) && !type_is_boxable(cg, ci))
+            cg_error(line,
+                     "'%s' can only wrap a value type (got '%s')",
+                     w == TW_OWN ? "own" : "gc", ci);
+        return wrap_prefix(w, ci);
+    }
     /* containers first: their inner types must be canonicalized
      * recursively (map_type() would otherwise match the whole
      * container and skip that step) */

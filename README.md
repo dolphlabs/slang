@@ -150,6 +150,12 @@ no escaping).
 | `result[T,E]` | `sl_res_* *` | fallible value: `ok(v)` / `err(e)` |
 | `duration` | `int64_t`   | nanosecond count (see `time`)  |
 | `rawptr`   | `void *`    | opaque foreign pointer (C interop) |
+| `ptr[T]`   | `T *`       | typed FFI pointer                  |
+| `&T`       | `const T *` | shared borrow                      |
+| `&mut T`   | `T *`       | unique borrow                      |
+| `own T`    | `T *`       | unique heap box (no drop yet)      |
+| `gc T`     | `T *`       | traced heap box of a value type    |
+| `*T` / `*mut T` | `T *`  | raw pointer                        |
 | `chan[T]`  | `sl_chan *` | bounded thread-safe queue (see Concurrency) |
 
 #### Numeric conversion rules
@@ -585,10 +591,11 @@ println(sqlite3_libversion());
   go through `LIBRARY_PATH`/`CPATH`, which `cc` already honors — no
   separate slangc flag for that.
 - Only types with an unambiguous C representation may cross an
-  `extern fn` boundary: numeric types, `bool`, `str`, `bytes`, and
-  `rawptr`. GC'd containers (`opt`, `result`, `map`, structs, arrays)
-  are rejected at compile time — their internal layout isn't
-  something arbitrary C code should ever see.
+  `extern fn` boundary: numeric types, `bool`, `str`, `bytes`,
+  `rawptr`, and `ptr[T]` of those types. GC'd containers (`opt`,
+  `result`, `map`, structs, arrays) are rejected at compile time —
+  their internal layout isn't something arbitrary C code should ever
+  see.
 
 **C++ is out of scope for the compiler itself.** There's no
 name-mangling/ABI support planned. Wrap the C++ library in your own
@@ -773,8 +780,8 @@ What this means in practice:
 - Range `.step(n)`
 - Import aliases (`import "x" as y`)
 - A bytecode VM mode for fast iteration without invoking `cc`
-- `ptr[T]` typed pointers and `extern struct` layouts, for passing C
-  structs by value instead of only through opaque `rawptr` handles
+- `extern struct` layouts, for passing C structs by value instead of
+  only through opaque `rawptr` handles
 - Callback function pointers (C calling back into slang)
 - `select` over multiple channels
 - A join handle for `spawn`, so a task's completion (and any value)
