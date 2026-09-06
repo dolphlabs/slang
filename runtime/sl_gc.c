@@ -152,6 +152,9 @@ static void sl_gc_register_thread(void) {
      * task_slot's extra indirection costs nothing observable now and
      * is exactly what makes it safe for a future worker pool to
      * reassign sl_rt_current_task freely. */
+#if defined(__GLIBC__)
+    mallopt(M_ARENA_MAX, 2);
+#endif
     memset(&sl_rt_task_storage, 0, sizeof(sl_rt_task_storage));
     sl_rt_current_task = &sl_rt_task_storage;
     sl_rt_gc_reg.task_slot = &sl_rt_current_task;
