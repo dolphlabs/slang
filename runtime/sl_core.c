@@ -836,15 +836,58 @@ typedef struct sl_arena {
     size_t used;
 } sl_arena;
 
+typedef struct sl_arena_hdr {
+    struct sl_arena_hdr *next;
+    size_t buf_cap;
+} sl_arena_hdr;
+
+#define SL_ARENA_FL_MAX 64
+#define SL_ARENA_FL_BYTES (1024 * 1024)
+static sl_arena_hdr *sl_arena_fl;
+static int sl_arena_fl_n;
+static size_t sl_arena_fl_bytes;
+static pthread_mutex_t sl_arena_fl_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static sl_arena_hdr *sl_arena_hdr_of(char *base) {
+    return ((sl_arena_hdr *)base) - 1;
+}
+
 static sl_arena sl_arena_new(long long cap) {
     sl_arena a;
+    sl_arena_hdr *h = NULL;
     if (cap < 1)
         sl_rt_error("arena capacity must be positive", cap, 0);
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&sl_arena_fl_mu);
+    {
+        sl_arena_hdr **pp = &sl_arena_fl;
+        sl_arena_hdr *it = sl_arena_fl;
+        while (it) {
+            if (it->buf_cap >= (size_t)cap) {
+                *pp = it->next;
+                sl_arena_fl_n--;
+                sl_arena_fl_bytes -= it->buf_cap;
+                h = it;
+                break;
+            }
+            pp = &it->next;
+            it = it->next;
+        }
+    }
+    pthread_mutex_unlock(&sl_arena_fl_mu);
+    sl_rt_preempt_enable();
+    if (!h) {
+        sl_rt_preempt_disable();
+        h = (sl_arena_hdr *)malloc(sizeof(sl_arena_hdr) + (size_t)cap);
+        sl_rt_preempt_enable();
+        if (!h)
+            sl_rt_error("arena allocation failed", cap, 0);
+        h->next = NULL;
+        h->buf_cap = (size_t)cap;
+    }
+    a.base = (char *)(h + 1);
     a.cap = (size_t)cap;
     a.used = 0;
-    a.base = (char *)malloc(a.cap);
-    if (!a.base)
-        sl_rt_error("arena allocation failed", cap, 0);
     return a;
 }
 
@@ -872,12 +915,28 @@ static void sl_arena_reset(sl_arena *a) {
 }
 
 static void sl_arena_free(sl_arena *a) {
-    if (!a)
+    sl_arena_hdr *h;
+    if (!a || !a->base)
         return;
-    free(a->base);
+    h = sl_arena_hdr_of(a->base);
     a->base = NULL;
     a->cap = 0;
     a->used = 0;
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&sl_arena_fl_mu);
+    if (sl_arena_fl_n < SL_ARENA_FL_MAX &&
+        sl_arena_fl_bytes + h->buf_cap <= SL_ARENA_FL_BYTES) {
+        h->next = sl_arena_fl;
+        sl_arena_fl = h;
+        sl_arena_fl_n++;
+        sl_arena_fl_bytes += h->buf_cap;
+        pthread_mutex_unlock(&sl_arena_fl_mu);
+        sl_rt_preempt_enable();
+        return;
+    }
+    pthread_mutex_unlock(&sl_arena_fl_mu);
+    sl_rt_preempt_enable();
+    free(h);
 }
 
 typedef struct sl_wire {
