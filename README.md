@@ -1,14 +1,11 @@
 # slang
 
-A small, statically-typed, garbage-collected programming language that
-compiles to native binaries by transpiling to C. The compiler
-(`slangc`) is written in C and uses your system C compiler as its
-backend — no custom code generator, assembler, or linker required.
-Memory is managed by a precise, non-moving, stop-the-world mark-sweep
-collector emitted into every program (see `runtime/sl_gc.c`). Strings
-and heap allocations are traced and reclaimed automatically, including
-cycles. `spawn` runs on an M:N scheduler: green-thread tasks on a
-small worker pool, not one OS thread per task.
+A statically typed language for server-side and network programming.
+`spawn` is M:N — green tasks on a worker pool, not a thread per
+connection. Accept, recv, and send park. Memory is a precise,
+non-moving, stop-the-world mark-sweep collector (`runtime/sl_gc.c`);
+cycles are collected. `slangc` emits C and your system `cc` builds the
+binary.
 
 ## Quick start
 
