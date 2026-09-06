@@ -277,6 +277,7 @@ Token lexer_next(Lexer *lx) {
         KW("result", T_TY_RESULT)
         KW("duration", T_TY_DURATION)
         KW("rawptr", T_TY_RAWPTR)
+        KW("arena", T_TY_ARENA)
         KW("chan", T_TY_CHAN)
 #undef KW
 
@@ -421,6 +422,7 @@ const char *token_type_name(TokenType t) {
     case T_TY_RESULT:return "'result'";
     case T_TY_DURATION: return "'duration'";
     case T_TY_RAWPTR: return "'rawptr'";
+    case T_TY_ARENA: return "'arena'";
     case T_TY_CHAN:  return "'chan'";
     case T_PLUS:     return "'+'";
     case T_MINUS:    return "'-'";

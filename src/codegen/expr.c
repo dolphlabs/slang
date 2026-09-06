@@ -353,6 +353,11 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *inner = xasprintf("((long long)sl_%s(%s))", name, a);
         return wrap_safepoint(cg, e, ctype_of(cg, "int"), NULL, inner);
     }
+    if (!strcmp(name, "arena_new")) {
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        char *inner = xasprintf("sl_arena_new(%s)", a);
+        return wrap_safepoint(cg, e, ctype_of(cg, "arena"), NULL, inner);
+    }
     if (!strcmp(name, "exit")) {
         char *a = gen_expr(cg, e->as.call.args[0]);
         char *inner = xasprintf("exit((int)(%s))", a);
@@ -502,6 +507,37 @@ char *gen_call(CG *cg, Expr *e) {
                          right, pkg);
         } else {
             recv_t = infer_ident_name(cg, left, e->line);
+            if (type_is_arena(recv_t)) {
+                char *self = gen_ident_name(cg, left, e->line);
+                char *innerw;
+                if (type_wrap(recv_t, &innerw) == TW_NONE)
+                    self = xasprintf("(&(%s))", self);
+                if (!strcmp(right, "alloc")) {
+                    const char *vt = infer_type(cg, e->as.call.args[0]);
+                    const char *ct = ctype_of(cg, vt);
+                    char *v = maybe_cast(cg, vt, vt,
+                                         gen_expr(cg, e->as.call.args[0]));
+                    move_consume(cg, e->as.call.args[0]);
+                    char *inner = xasprintf(
+                        "({ %s *_sl_ap = (%s *)sl_arena_alloc(%s, sizeof(%s), "
+                        "_Alignof(%s)); *_sl_ap = (%s); _sl_ap; })",
+                        ct, ct, self, ct, ct, v);
+                    return wrap_safepoint(cg, e, xasprintf("%s *", ct), NULL,
+                                          inner);
+                }
+                if (!strcmp(right, "alloc_bytes")) {
+                    char *n = gen_expr(cg, e->as.call.args[0]);
+                    char *inner = xasprintf(
+                        "((uint8_t *)sl_arena_alloc(%s, (size_t)(%s), 1))",
+                        self, n);
+                    return wrap_safepoint(cg, e, "uint8_t *", NULL, inner);
+                }
+                if (!strcmp(right, "reset")) {
+                    char *inner = xasprintf("sl_arena_reset(%s)", self);
+                    return wrap_safepoint(cg, e, NULL, NULL, inner);
+                }
+                cg_error(e->line, "type 'arena' has no method '%s'", right);
+            }
             StructDef *sd = struct_of_type(cg, recv_t);
             if (!sd)
                 cg_error(e->line, "call to undefined function '%s'", name);

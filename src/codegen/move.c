@@ -64,6 +64,8 @@ static int method_value_self(CG *cg, Expr *call, const char *name) {
     if (strcmp(left, name))
         return 0;
     const char *recv_t = infer_ident_name(cg, left, call->line);
+    if (type_is_arena(recv_t))
+        return 1;
     StructDef *sd = struct_of_type(cg, recv_t);
     if (!sd)
         return 0;
@@ -445,6 +447,10 @@ static void emit_drop_ty(CG *cg, const char *cexpr, const char *ty, int stack) {
         emit_drop_ty(cg, xasprintf("(*(%s))", cexpr), inner, 0);
         if (!stack)
             emit_line(cg, "free((void *)(%s));", cexpr);
+        return;
+    }
+    if (!strcmp(ty, "arena")) {
+        emit_line(cg, "sl_arena_free(&(%s));", cexpr);
         return;
     }
     StructDef *sd = struct_find_canon(cg, ty);

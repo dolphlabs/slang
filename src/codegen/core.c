@@ -118,6 +118,7 @@ const char *map_type(const char *t) {
     if (!strcmp(t, "f32"))    return "float";
     if (!strcmp(t, "duration")) return "int64_t";
     if (!strcmp(t, "rawptr")) return "void *";
+    if (!strcmp(t, "arena"))  return "sl_arena";
     if (t[0] == '[')          return "sl_arr *";
     return NULL;
 }
@@ -150,6 +151,17 @@ int is_num(const char *t) { return is_int(t) || is_flt(t); }
 int is_str(const char *t) { return !strcmp(t, "str"); }
 int is_bytes(const char *t) { return !strcmp(t, "bytes"); }
 int is_rawptr(const char *t) { return !strcmp(t, "rawptr"); }
+
+int type_is_arena(const char *t) {
+    char *inner;
+    TypeWrap w;
+    if (!t)
+        return 0;
+    w = type_wrap(t, &inner);
+    if (w != TW_NONE)
+        return type_is_arena(inner);
+    return !strcmp(t, "arena");
+}
 
 int type_is_raw_ptr(const char *t) {
     char *inner;
@@ -271,6 +283,8 @@ int type_is_copy(CG *cg, const char *t) {
         return 0;
     if (w != TW_NONE)
         return 1;
+    if (!strcmp(t, "arena"))
+        return 0;
     if (is_arr(t) || is_map(t) || is_opt(t) || is_result(t) || is_chan(t))
         return 1;
     if (struct_type_is_gc(cg, t))
@@ -292,6 +306,8 @@ int type_needs_drop(CG *cg, const char *t) {
         return 1;
     if (w != TW_NONE)
         return 0;
+    if (!strcmp(t, "arena"))
+        return 1;
     StructDef *sd = struct_find_canon(cg, t);
     if (!sd || sd->is_gc)
         return 0;
@@ -307,7 +323,7 @@ int type_is_boxable(CG *cg, const char *t) {
     if (type_wrap(t, &inner) != TW_NONE)
         return 0;
     if (is_arr(t) || is_map(t) || is_opt(t) || is_result(t) || is_chan(t) ||
-        is_str(t) || is_bytes(t) || is_rawptr(t))
+        is_str(t) || is_bytes(t) || is_rawptr(t) || !strcmp(t, "arena"))
         return 0;
     if (struct_type_is_gc(cg, t))
         return 0;
@@ -1176,7 +1192,8 @@ int is_builtin_name(const char *name) {
            !strcmp(name, "ok") || !strcmp(name, "err") ||
            !strcmp(name, "nullptr") || !strcmp(name, "bytes_ptr") ||
            !strcmp(name, "make_chan") || !strcmp(name, "chan_send") ||
-           !strcmp(name, "chan_recv") || !strcmp(name, "chan_close");
+           !strcmp(name, "chan_recv") || !strcmp(name, "chan_close") ||
+           !strcmp(name, "arena_new");
 }
 
 /* Find a method `name` declared (via impl) for struct `sd`. */

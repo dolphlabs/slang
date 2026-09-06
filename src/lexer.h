@@ -58,6 +58,7 @@ typedef enum {
     T_TY_RESULT,   /* 'result' (always followed by [T, E]) */
     T_TY_DURATION, /* 'duration': nanoseconds since an arbitrary epoch */
     T_TY_RAWPTR,   /* 'rawptr': opaque foreign pointer for C interop */
+    T_TY_ARENA,    /* 'arena': bump allocator, reset in O(1) */
     T_TY_CHAN,     /* 'chan' (always followed by [T]) */
 
     /* operators */

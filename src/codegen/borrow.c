@@ -745,11 +745,50 @@ static int param_feeds_ret(FuncSig *sig, int pi) {
     return plt && !strcmp(plt, ret_lt);
 }
 
+static int arena_alloc_meth(const char *meth) {
+    return meth && (!strcmp(meth, "alloc") || !strcmp(meth, "alloc_bytes"));
+}
+
+static int arena_method_call(BK *bk, Expr *e, char **recv, const char **meth) {
+    char *left, *right;
+    const char *ty;
+    *recv = NULL;
+    *meth = NULL;
+    if (!e || e->kind != EX_CALL ||
+        !split_dotted(e->as.call.name, &left, &right))
+        return 0;
+    if (import_try(bk->cg, left))
+        return 0;
+    ty = local_ty(bk->fn, left);
+    if (!ty || !type_is_arena(ty))
+        return 0;
+    *recv = left;
+    *meth = right;
+    return 1;
+}
+
 static void walk_call(BK *bk, Expr *e, const char *ret_to) {
     int i, ret_mut = 0, ret_ref, self_off = 0;
     char *recv = NULL;
+    const char *ameth = NULL;
     FuncSig *sig = call_sig_of(bk, e, &self_off, &recv);
     const char *rt = sig && sig->ret_slang ? sig->ret_slang : e->inf_ty;
+    if (arena_method_call(bk, e, &recv, &ameth) && arena_alloc_meth(ameth)) {
+        MirPlace tmp;
+        memset(&tmp, 0, sizeof(tmp));
+        tmp.kind = MP_LOCAL;
+        tmp.as.local = recv;
+        access_place(bk, &tmp, 0, 0, e->line);
+        if (ret_to) {
+            if (local_is_ref(bk, recv) || has_loans(bk, recv))
+                copy_loans(bk, recv, ret_to, 1, e->line);
+            else
+                ls_add(&bk->cur, recv, "", ret_to, 1, e->line);
+        }
+        for (i = 0; i < e->as.call.nargs; i++)
+            walk_expr(bk, e->as.call.args[i], NULL);
+        return;
+    }
     if (recv) {
         MirPlace tmp;
         memset(&tmp, 0, sizeof(tmp));
@@ -958,16 +997,38 @@ static void check_return(BK *bk, MirRvalue *r, int line) {
         }
         return;
     }
-    if (r->kind == MR_EXPR && r->expr &&
-        wrap_is_ref(r->expr->inf_ty, &mut)) {
-        walk_rvalue(bk, r, NULL);
-        if (r->expr->kind == EX_UNARY &&
-            (!strcmp(r->expr->as.unary.op, "&") ||
-             !strcmp(r->expr->as.unary.op, "&mut"))) {
-            MirPlace *p = ast_place(bk->cg, r->expr->as.unary.operand);
-            base = place_base(p);
-            if (base && !local_is_ref(bk, base) && !name_is_param(bk, base))
-                cg_error(line, "cannot return borrow of local '%s'", base);
+    if (r->kind == MR_EXPR && r->expr) {
+        char *arecv = NULL;
+        const char *ameth = NULL;
+        if (arena_method_call(bk, r->expr, &arecv, &ameth) &&
+            arena_alloc_meth(ameth)) {
+            if (local_is_ref(bk, arecv) || has_loans(bk, arecv)) {
+                for (i = 0; i < bk->cur.n; i++) {
+                    Loan *l = &bk->cur.items[i];
+                    if (!l->borrower || strcmp(l->borrower, arecv))
+                        continue;
+                    if (!name_is_param(bk, l->root) &&
+                        !local_is_ref(bk, l->root))
+                        cg_error(line, "cannot return borrow of local '%s'",
+                                 l->root);
+                    check_ret_lt(bk, l->root, line);
+                }
+                if (local_is_ref(bk, arecv))
+                    check_ret_lt(bk, arecv, line);
+            } else if (!name_is_param(bk, arecv))
+                cg_error(line, "cannot return borrow of local '%s'", arecv);
+            return;
+        }
+        if (wrap_is_ref(r->expr->inf_ty, &mut)) {
+            walk_rvalue(bk, r, NULL);
+            if (r->expr->kind == EX_UNARY &&
+                (!strcmp(r->expr->as.unary.op, "&") ||
+                 !strcmp(r->expr->as.unary.op, "&mut"))) {
+                MirPlace *p = ast_place(bk->cg, r->expr->as.unary.operand);
+                base = place_base(p);
+                if (base && !local_is_ref(bk, base) && !name_is_param(bk, base))
+                    cg_error(line, "cannot return borrow of local '%s'", base);
+            }
         }
     }
 }

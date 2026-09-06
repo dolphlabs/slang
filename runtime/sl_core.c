@@ -786,3 +786,53 @@ static void sl_rt_error(const char *msg, long long a, long long b) {
     exit(1);
 }
 
+typedef struct sl_arena {
+    char *base;
+    size_t cap;
+    size_t used;
+} sl_arena;
+
+static sl_arena sl_arena_new(long long cap) {
+    sl_arena a;
+    if (cap < 1)
+        sl_rt_error("arena capacity must be positive", cap, 0);
+    a.cap = (size_t)cap;
+    a.used = 0;
+    a.base = (char *)malloc(a.cap);
+    if (!a.base)
+        sl_rt_error("arena allocation failed", cap, 0);
+    return a;
+}
+
+static void *sl_arena_alloc(sl_arena *a, size_t n, size_t align) {
+    size_t pad;
+    if (!a || !a->base)
+        sl_rt_error("use of an uninitialized arena", 0, 0);
+    if (align < 1)
+        align = 1;
+    pad = (align - (a->used % align)) % align;
+    if (a->used + pad + n > a->cap)
+        sl_rt_error("arena out of memory", (long long)(a->used + pad + n),
+                    (long long)a->cap);
+    a->used += pad;
+    {
+        void *p = a->base + a->used;
+        a->used += n;
+        return p;
+    }
+}
+
+static void sl_arena_reset(sl_arena *a) {
+    if (a)
+        a->used = 0;
+}
+
+static void sl_arena_free(sl_arena *a) {
+    if (!a)
+        return;
+    free(a->base);
+    a->base = NULL;
+    a->cap = 0;
+    a->used = 0;
+}
+

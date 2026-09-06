@@ -663,6 +663,9 @@ static Type *parse_type_atom(Parser *p) {
     case T_TY_RAWPTR:
         advance(p);
         return ty_named(xstrdup("rawptr"));
+    case T_TY_ARENA:
+        advance(p);
+        return ty_named(xstrdup("arena"));
     case T_IDENT: {
         if (!strcmp(tk->text, "ptr") && next_is(p, T_LBRACKET)) {
             advance(p);
@@ -690,7 +693,7 @@ static Type *parse_type_atom(Parser *p) {
         parse_error(tk,
                     "expected a type name (int, float, str, bool, bytes, "
                     "i8..u64, f32, [T], map[K]V, opt[T], result[T,E], "
-                    "chan[T], duration, rawptr, ptr[T], own T, gc T, "
+                    "chan[T], duration, rawptr, arena, ptr[T], own T, gc T, "
                     "&T, &'a T, &mut T, *T, *mut T, or a struct name)");
     }
     return NULL;

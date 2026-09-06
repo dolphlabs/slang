@@ -271,6 +271,16 @@ const char *infer_call(CG *cg, Expr *e) {
     if (!strcmp(name, "none") || !strcmp(name, "some") ||
         !strcmp(name, "ok") || !strcmp(name, "err"))
         return ctor_infer(cg, e);
+    if (!strcmp(name, "arena_new")) {
+        if (n != 1)
+            cg_error(e->line, "arena_new() takes exactly one argument");
+        const char *t = infer_type(cg, e->as.call.args[0]);
+        if (!is_int(t))
+            cg_error(e->line,
+                     "arena_new() expects an integer capacity (got %s)", t);
+        return "arena";
+    }
+
     if (!strcmp(name, "has") || !strcmp(name, "del")) {
         if (n != 2)
             cg_error(e->line, "%s() takes exactly two arguments", name);
@@ -312,6 +322,34 @@ const char *infer_call(CG *cg, Expr *e) {
         } else {
             /* method call on a struct-typed receiver */
             recv_t = infer_ident_name(cg, left, e->line);
+            if (type_is_arena(recv_t)) {
+                if (!strcmp(right, "alloc")) {
+                    if (n != 1)
+                        cg_error(e->line,
+                                 "arena.alloc() takes exactly one argument");
+                    const char *vt = infer_type(cg, e->as.call.args[0]);
+                    return xasprintf("&mut %s", vt);
+                }
+                if (!strcmp(right, "alloc_bytes")) {
+                    if (n != 1)
+                        cg_error(e->line,
+                                 "arena.alloc_bytes() takes exactly one "
+                                 "argument");
+                    const char *vt = infer_type(cg, e->as.call.args[0]);
+                    if (!is_int(vt))
+                        cg_error(e->line,
+                                 "arena.alloc_bytes() expects an integer "
+                                 "byte count (got %s)",
+                                 vt);
+                    return "&mut u8";
+                }
+                if (!strcmp(right, "reset")) {
+                    if (n != 0)
+                        cg_error(e->line, "arena.reset() takes no arguments");
+                    return "void";
+                }
+                cg_error(e->line, "type 'arena' has no method '%s'", right);
+            }
             StructDef *sd = struct_of_type(cg, recv_t);
             if (!sd)
                 cg_error(e->line, "call to undefined function '%s'", name);
@@ -513,8 +551,11 @@ const char *infer_type(CG *cg, Expr *e) {
     }
     case EX_BINARY:
         return infer_binary(cg, e);
-    case EX_CALL:
-        return infer_call(cg, e);
+    case EX_CALL: {
+        const char *t = infer_call(cg, e);
+        e->inf_ty = t;
+        return t;
+    }
     case EX_CAST: {
         const char *ty = e->as.cast.ty;
         if (!map_type(ty) || !is_num(ty))
