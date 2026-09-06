@@ -22,6 +22,7 @@ typedef enum {
 
 struct Type {
     TypeKind kind;
+    char *lt;
     union {
         char *name;
         Type *inner;
@@ -174,6 +175,8 @@ struct Stmt {
             char **fields;
             char **ftypes;
             int nfields;
+            char **lts;
+            int nlts;
         } struct_decl;
         struct {
             char *struct_name;
@@ -189,6 +192,8 @@ struct FuncDecl {
     char **params;      /* parameter names */
     char **param_types; /* slang type names: "int", "bytes", "[int]", ... */
     int nparams;
+    char **lts;
+    int nlts;
     char *ret_type;     /* slang type name, or NULL for void */
     Block *body;        /* NULL for 'extern fn' declarations */
     int is_pub;         /* exported from its package */

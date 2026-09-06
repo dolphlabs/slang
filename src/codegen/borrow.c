@@ -4,6 +4,7 @@
 
 typedef struct {
     char *root;
+    char *path;
     char *borrower;
     int mut;
     int line;
@@ -85,11 +86,58 @@ static int name_is_param(BK *bk, const char *name) {
     return i >= 0 && bk->is_param[i];
 }
 
-static void ls_add(LoanSet *s, const char *root, const char *borrower, int mut,
-                   int line) {
+static int has_loans(BK *bk, const char *name) {
     int i;
+    if (!name)
+        return 0;
+    for (i = 0; i < bk->cur.n; i++) {
+        if (bk->cur.items[i].borrower &&
+            !strcmp(bk->cur.items[i].borrower, name))
+            return 1;
+    }
+    return 0;
+}
+
+static const char *path_of(const char *p) { return p ? p : ""; }
+
+static int path_eq(const char *a, const char *b) {
+    return !strcmp(path_of(a), path_of(b));
+}
+
+static int path_overlap(const char *a, const char *b) {
+    a = path_of(a);
+    b = path_of(b);
+    while (*a && *b) {
+        const char *ae = strchr(a, '.');
+        const char *be = strchr(b, '.');
+        size_t al = ae ? (size_t)(ae - a) : strlen(a);
+        size_t bl = be ? (size_t)(be - b) : strlen(b);
+        int astar = al == 1 && a[0] == '*';
+        int bstar = bl == 1 && b[0] == '*';
+        if (astar || bstar)
+            return 1;
+        if (al != bl || memcmp(a, b, al))
+            return 0;
+        a = ae ? ae + 1 : a + al;
+        b = be ? be + 1 : b + bl;
+    }
+    return 1;
+}
+
+static char *disp_place(const char *root, const char *path) {
+    path = path_of(path);
+    if (!path[0])
+        return xstrdup(root);
+    return xasprintf("%s.%s", root, path);
+}
+
+static void ls_add(LoanSet *s, const char *root, const char *path,
+                   const char *borrower, int mut, int line) {
+    int i;
+    path = path_of(path);
     for (i = 0; i < s->n; i++) {
-        if (strcmp(s->items[i].root, root))
+        if (strcmp(s->items[i].root, root) ||
+            !path_eq(s->items[i].path, path))
             continue;
         if (s->items[i].borrower && borrower &&
             !strcmp(s->items[i].borrower, borrower) &&
@@ -103,6 +151,7 @@ static void ls_add(LoanSet *s, const char *root, const char *borrower, int mut,
         s->items = (Loan *)xrealloc(s->items, (size_t)s->cap * sizeof(Loan));
     }
     s->items[s->n].root = xstrdup(root);
+    s->items[s->n].path = xstrdup(path);
     s->items[s->n].borrower = borrower ? xstrdup(borrower) : NULL;
     s->items[s->n].mut = mut;
     s->items[s->n].line = line;
@@ -139,15 +188,15 @@ static void ls_clone_into(LoanSet *dst, const LoanSet *src) {
     int i;
     dst->n = 0;
     for (i = 0; i < src->n; i++)
-        ls_add(dst, src->items[i].root, src->items[i].borrower,
-               src->items[i].mut, src->items[i].line);
+        ls_add(dst, src->items[i].root, src->items[i].path,
+               src->items[i].borrower, src->items[i].mut, src->items[i].line);
 }
 
 static void ls_union(LoanSet *dst, const LoanSet *src) {
     int i;
     for (i = 0; i < src->n; i++)
-        ls_add(dst, src->items[i].root, src->items[i].borrower,
-               src->items[i].mut, src->items[i].line);
+        ls_add(dst, src->items[i].root, src->items[i].path,
+               src->items[i].borrower, src->items[i].mut, src->items[i].line);
 }
 
 static int ls_eq(const LoanSet *a, const LoanSet *b) {
@@ -158,6 +207,8 @@ static int ls_eq(const LoanSet *a, const LoanSet *b) {
         int found = 0;
         for (j = 0; j < b->n; j++) {
             if (strcmp(a->items[i].root, b->items[j].root))
+                continue;
+            if (!path_eq(a->items[i].path, b->items[j].path))
                 continue;
             if (a->items[i].mut != b->items[j].mut)
                 continue;
@@ -177,54 +228,61 @@ static int ls_eq(const LoanSet *a, const LoanSet *b) {
     return 1;
 }
 
-static void check_borrow(BK *bk, const char *root, int mut, int line) {
+static void check_borrow(BK *bk, const char *root, const char *path, int mut,
+                         int line) {
     int i;
+    char *here;
     if (!root || skip_gc(bk, root))
         return;
+    here = disp_place(root, path);
     for (i = 0; i < bk->cur.n; i++) {
         Loan *l = &bk->cur.items[i];
-        if (strcmp(l->root, root))
+        if (strcmp(l->root, root) || !path_overlap(l->path, path))
             continue;
         if (mut && l->mut)
             cg_error(line, "cannot borrow '%s' as mutable more than once",
-                     root);
+                     here);
         if (mut && !l->mut)
             cg_error(line,
                      "cannot borrow '%s' as mutable because it is also "
                      "borrowed as immutable",
-                     root);
+                     here);
         if (!mut && l->mut)
             cg_error(line,
                      "cannot borrow '%s' as immutable because it is also "
                      "borrowed as mutable",
-                     root);
+                     here);
     }
 }
 
-static void check_write(BK *bk, const char *root, int line) {
-    int i;
-    if (!root || skip_gc(bk, root))
-        return;
-    for (i = 0; i < bk->cur.n; i++) {
-        if (!strcmp(bk->cur.items[i].root, root))
-            cg_error(line, "cannot assign to '%s' because it is borrowed",
-                     root);
-    }
-}
-
-static void check_read(BK *bk, const char *root, int moving, int line) {
+static void check_write(BK *bk, const char *root, const char *path, int line) {
     int i;
     if (!root || skip_gc(bk, root))
         return;
     for (i = 0; i < bk->cur.n; i++) {
         Loan *l = &bk->cur.items[i];
-        if (strcmp(l->root, root))
+        if (strcmp(l->root, root) || !path_overlap(l->path, path))
+            continue;
+        cg_error(line, "cannot assign to '%s' because it is borrowed",
+                 disp_place(root, path));
+    }
+}
+
+static void check_read(BK *bk, const char *root, const char *path, int moving,
+                       int line) {
+    int i;
+    if (!root || skip_gc(bk, root))
+        return;
+    for (i = 0; i < bk->cur.n; i++) {
+        Loan *l = &bk->cur.items[i];
+        if (strcmp(l->root, root) || !path_overlap(l->path, path))
             continue;
         if (moving)
-            cg_error(line, "cannot move '%s' because it is borrowed", root);
+            cg_error(line, "cannot move '%s' because it is borrowed",
+                     disp_place(root, path));
         if (l->mut)
             cg_error(line, "cannot use '%s' because it is mutably borrowed",
-                     root);
+                     disp_place(root, path));
     }
 }
 
@@ -248,16 +306,56 @@ static int place_deep(MirPlace *p) {
     return p && p->kind != MP_LOCAL;
 }
 
+static void path_push(char *buf, size_t cap, const char *seg) {
+    size_t n = strlen(buf);
+    if (!n) {
+        snprintf(buf, cap, "%s", seg);
+        return;
+    }
+    snprintf(buf + n, cap - n, ".%s", seg);
+}
+
+static void fill_path(MirPlace *p, const char **root, char *buf, size_t cap) {
+    if (!p)
+        return;
+    switch (p->kind) {
+    case MP_LOCAL:
+        *root = p->as.local;
+        return;
+    case MP_FIELD:
+        fill_path(p->as.field.base, root, buf, cap);
+        path_push(buf, cap, p->as.field.field);
+        return;
+    case MP_DEREF:
+        fill_path(p->as.deref, root, buf, cap);
+        return;
+    case MP_INDEX:
+        fill_path(p->as.index.base, root, buf, cap);
+        path_push(buf, cap, "*");
+        return;
+    }
+}
+
+static char *fields_of(MirPlace *p) {
+    const char *root = NULL;
+    char buf[256];
+    buf[0] = '\0';
+    fill_path(p, &root, buf, sizeof(buf));
+    return xstrdup(buf);
+}
+
 static void access_place(BK *bk, MirPlace *p, int write, int moving, int line) {
     const char *base = place_base(p);
+    char *path;
     if (!base)
         return;
     if (local_is_ref(bk, base) && (place_deep(p) || !write))
         return;
+    path = fields_of(p);
     if (write)
-        check_write(bk, base, line);
+        check_write(bk, base, path, line);
     else
-        check_read(bk, base, moving, line);
+        check_read(bk, base, path, moving, line);
 }
 
 static void copy_loans(BK *bk, const char *src, const char *dest, int mut,
@@ -272,26 +370,28 @@ static void copy_loans(BK *bk, const char *src, const char *dest, int mut,
         if (!l->borrower || strcmp(l->borrower, src))
             continue;
         found = 1;
-        ls_add(&bk->cur, l->root, dest, mut || l->mut, line);
+        ls_add(&bk->cur, l->root, l->path, dest, mut || l->mut, line);
     }
     if (!found && local_is_ref(bk, src)) {
         int sm = 0;
         wrap_is_ref(local_ty(bk->fn, src), &sm);
-        ls_add(&bk->cur, src, dest, mut || sm, line);
+        ls_add(&bk->cur, src, "", dest, mut || sm, line);
     }
 }
 
 static void borrow_place(BK *bk, MirPlace *p, int mut, const char *dest,
                          int line) {
     const char *base = place_base(p);
+    char *path;
     if (!base || skip_gc(bk, base))
         return;
     if (local_is_ref(bk, base)) {
         copy_loans(bk, base, dest, mut, line);
         return;
     }
-    check_borrow(bk, base, mut, line);
-    ls_add(&bk->cur, base, dest, mut, line);
+    path = fields_of(p);
+    check_borrow(bk, base, path, mut, line);
+    ls_add(&bk->cur, base, path, dest, mut, line);
 }
 
 static void mark_name(BK *bk, const char *name, int isdef) {
@@ -610,43 +710,69 @@ static MirPlace *ast_place(CG *cg, Expr *e) {
 
 static void walk_expr(BK *bk, Expr *e, const char *ret_to);
 
-static const char *call_ret_ty(BK *bk, Expr *e) {
+static FuncSig *call_sig_of(BK *bk, Expr *e, int *self_off, char **recv) {
     char *left, *right;
-    FuncSig *sig = NULL;
-    if (e->inf_ty)
-        return e->inf_ty;
+    *self_off = 0;
+    *recv = NULL;
     if (split_dotted(e->as.call.name, &left, &right)) {
         if (import_try(bk->cg, left))
-            sig = sig_find_in(bk->cg, import_try(bk->cg, left), right);
-        else {
-            const char *recv = local_ty(bk->fn, left);
-            StructDef *sd = recv ? struct_of_type(bk->cg, recv) : NULL;
+            return sig_find_in(bk->cg, import_try(bk->cg, left), right);
+        *recv = left;
+        *self_off = 1;
+        {
+            const char *rt = local_ty(bk->fn, left);
+            StructDef *sd = rt ? struct_of_type(bk->cg, rt) : NULL;
             if (sd)
-                sig = method_find(bk->cg, sd, right);
+                return method_find(bk->cg, sd, right);
         }
-    } else {
-        sig = sig_find_in(bk->cg, bk->cg->cur_pkg, e->as.call.name);
+        return NULL;
     }
-    return sig && sig->ret_slang ? sig->ret_slang : NULL;
+    return sig_find_in(bk->cg, bk->cg->cur_pkg, e->as.call.name);
+}
+
+static int param_feeds_ret(FuncSig *sig, int pi) {
+    char *ret_lt, *plt, *inner;
+    TypeWrap w;
+    if (!sig || !sig->ret_slang || pi < 0 || pi >= sig->nparams)
+        return 0;
+    w = type_wrap(sig->param_slang[pi], &inner);
+    if (w != TW_REF && w != TW_REFMUT)
+        return 0;
+    ret_lt = type_lifetime(sig->ret_slang);
+    if (!ret_lt)
+        return 1;
+    plt = type_lifetime(sig->param_slang[pi]);
+    return plt && !strcmp(plt, ret_lt);
 }
 
 static void walk_call(BK *bk, Expr *e, const char *ret_to) {
-    int i, ret_mut = 0, ret_ref;
-    const char *rt;
-    char *left, *right;
-    if (split_dotted(e->as.call.name, &left, &right) &&
-        !import_try(bk->cg, left)) {
+    int i, ret_mut = 0, ret_ref, self_off = 0;
+    char *recv = NULL;
+    FuncSig *sig = call_sig_of(bk, e, &self_off, &recv);
+    const char *rt = sig && sig->ret_slang ? sig->ret_slang : e->inf_ty;
+    if (recv) {
         MirPlace tmp;
         memset(&tmp, 0, sizeof(tmp));
         tmp.kind = MP_LOCAL;
-        tmp.as.local = left;
+        tmp.as.local = recv;
         access_place(bk, &tmp, 0, 0, e->line);
+        if (ret_to && wrap_is_ref(rt, &ret_mut) && param_feeds_ret(sig, 0)) {
+            if (local_is_ref(bk, recv) || has_loans(bk, recv))
+                copy_loans(bk, recv, ret_to, 0, e->line);
+            else
+                ls_add(&bk->cur, recv, "", ret_to, 0, e->line);
+        }
     }
-    rt = call_ret_ty(bk, e);
     ret_ref = wrap_is_ref(rt, &ret_mut);
     for (i = 0; i < e->as.call.nargs; i++) {
         Expr *a = e->as.call.args[i];
-        const char *bind = (ret_to && ret_ref) ? ret_to : NULL;
+        const char *bind = NULL;
+        if (ret_to && ret_ref) {
+            if (!sig)
+                bind = ret_to;
+            else if (param_feeds_ret(sig, i + self_off))
+                bind = ret_to;
+        }
         walk_expr(bk, a, bind);
     }
 }
@@ -665,9 +791,12 @@ static void walk_expr(BK *bk, Expr *e, const char *ret_to) {
         ty = local_ty(bk->fn, place_base(p));
         if (ty && !type_is_copy(bk->cg, ty) && !local_is_ref(bk, place_base(p)))
             moving = 1;
-        if (local_is_ref(bk, place_base(p)) && !place_deep(p)) {
+        if (!place_deep(p) &&
+            (local_is_ref(bk, place_base(p)) || has_loans(bk, place_base(p)))) {
             if (ret_to)
                 copy_loans(bk, place_base(p), ret_to, 0, e->line);
+            if (ty && !type_is_copy(bk->cg, ty))
+                ls_kill_borrower(&bk->cur, place_base(p));
         } else {
             access_place(bk, p, 0, moving, e->line);
         }
@@ -676,6 +805,8 @@ static void walk_expr(BK *bk, Expr *e, const char *ret_to) {
     case EX_FIELD:
     case EX_INDEX: {
         MirPlace *p = ast_place(bk->cg, e);
+        if (ret_to && p && has_loans(bk, place_base(p)))
+            copy_loans(bk, place_base(p), ret_to, 0, e->line);
         access_place(bk, p, 0, 0, e->line);
         if (e->kind == EX_INDEX)
             walk_expr(bk, e->as.index.index, NULL);
@@ -721,10 +852,26 @@ static void walk_expr(BK *bk, Expr *e, const char *ret_to) {
             walk_expr(bk, e->as.maplit.vals[i], NULL);
         }
         return;
-    case EX_STRUCTLIT:
-        for (i = 0; i < e->as.structlit.nfields; i++)
-            walk_expr(bk, e->as.structlit.vals[i], NULL);
+    case EX_STRUCTLIT: {
+        StructDef *sd = struct_find_canon(
+            bk->cg, canon_type(bk->cg, e->as.structlit.tyname, e->line));
+        for (i = 0; i < e->as.structlit.nfields; i++) {
+            const char *bind = NULL;
+            if (ret_to && sd) {
+                int f;
+                for (f = 0; f < sd->nfields; f++) {
+                    int mut = 0;
+                    if (strcmp(sd->fields[f], e->as.structlit.fields[i]))
+                        continue;
+                    if (wrap_is_ref(sd->ftypes[f], &mut))
+                        bind = ret_to;
+                    break;
+                }
+            }
+            walk_expr(bk, e->as.structlit.vals[i], bind);
+        }
         return;
+    }
     default:
         return;
     }
@@ -763,6 +910,19 @@ static void walk_rvalue(BK *bk, MirRvalue *r, const char *dest) {
     }
 }
 
+static void check_ret_lt(BK *bk, const char *origin, int line) {
+    char *want, *got;
+    if (!origin)
+        return;
+    want = type_lifetime(bk->cg->cur_ret);
+    got = type_lifetime(local_ty(bk->fn, origin));
+    if (want && got && strcmp(want, got))
+        cg_error(line,
+                 "lifetime mismatch: cannot return '%s' with lifetime '%s' "
+                 "where '%s' expected",
+                 origin, got, want);
+}
+
 static void check_return(BK *bk, MirRvalue *r, int line) {
     int i, mut = 0;
     const char *base;
@@ -770,20 +930,31 @@ static void check_return(BK *bk, MirRvalue *r, int line) {
         return;
     if (r->kind == MR_REF || r->kind == MR_REFMUT) {
         base = place_base(r->place);
-        if (base && !local_is_ref(bk, base) && !name_is_param(bk, base))
+        if (base && local_is_ref(bk, base)) {
+            check_ret_lt(bk, base, line);
+            return;
+        }
+        if (base && !name_is_param(bk, base))
             cg_error(line, "cannot return borrow of local '%s'", base);
+        if (base)
+            check_ret_lt(bk, base, line);
         return;
     }
     if (r->kind == MR_USE) {
         base = place_base(r->place);
-        if (!base || !local_is_ref(bk, base) || place_deep(r->place))
+        if (!base)
             return;
+        if (r->place && r->place->kind == MP_DEREF)
+            return;
+        if (local_is_ref(bk, base) && !place_deep(r->place))
+            check_ret_lt(bk, base, line);
         for (i = 0; i < bk->cur.n; i++) {
             Loan *l = &bk->cur.items[i];
             if (!l->borrower || strcmp(l->borrower, base))
                 continue;
             if (!name_is_param(bk, l->root) && !local_is_ref(bk, l->root))
                 cg_error(line, "cannot return borrow of local '%s'", l->root);
+            check_ret_lt(bk, l->root, line);
         }
         return;
     }
@@ -832,10 +1003,27 @@ static void seed_params(BK *bk) {
         int mut = 0;
         if (!bk->is_param[i])
             continue;
-        if (!wrap_is_ref(bk->fn->locals[i].ty, &mut))
+        if (wrap_is_ref(bk->fn->locals[i].ty, &mut)) {
+            ls_add(&bk->cur, bk->fn->locals[i].name, "",
+                   bk->fn->locals[i].name, mut, 0);
             continue;
-        ls_add(&bk->cur, bk->fn->locals[i].name, bk->fn->locals[i].name, mut,
-               0);
+        }
+        {
+            StructDef *sd = struct_of_type(bk->cg, bk->fn->locals[i].ty);
+            int f, hold = 0;
+            if (!sd)
+                continue;
+            for (f = 0; f < sd->nfields; f++) {
+                int fm = 0;
+                if (wrap_is_ref(sd->ftypes[f], &fm)) {
+                    hold = 1;
+                    mut = mut || fm;
+                }
+            }
+            if (hold)
+                ls_add(&bk->cur, bk->fn->locals[i].name, "",
+                       bk->fn->locals[i].name, mut, 0);
+        }
     }
 }
 
@@ -877,6 +1065,7 @@ static void check_fn(CG *cg, MirFn *fn) {
     bk.is_param = (int *)xmalloc((size_t)(bk.nlocs ? bk.nlocs : 1) * sizeof(int));
     memset(bk.is_param, 0, (size_t)(bk.nlocs ? bk.nlocs : 1) * sizeof(int));
     sig = mir_sig(cg, fn);
+    cg->cur_ret = sig ? sig->ret_slang : NULL;
     if (sig) {
         int n = sig->nparams;
         if (n > fn->nlocals)

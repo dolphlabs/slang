@@ -7,6 +7,29 @@
 
 #include <string.h>
 
+static void check_declared_lts(char **ok, int n, const char *ty, int line) {
+    const char *s = ty;
+    while (s && (s = strchr(s, '\''))) {
+        const char *e;
+        char *name;
+        int i, found = 0;
+        s++;
+        e = s;
+        while (*e && (isalnum((unsigned char)*e) || *e == '_'))
+            e++;
+        name = (char *)xmalloc((size_t)(e - s) + 1);
+        memcpy(name, s, (size_t)(e - s));
+        name[e - s] = '\0';
+        for (i = 0; i < n; i++) {
+            if (!strcmp(ok[i], name))
+                found = 1;
+        }
+        if (!found)
+            cg_error(line, "use of undeclared lifetime '%s'", name);
+        s = e;
+    }
+}
+
 void emit_runtime_file(CG *cg, const char *name) {
     char *path = slang_runtime_file(name);
     char *src = read_entire_file(path);
@@ -44,6 +67,8 @@ void sig_register_raw(CG *cg, Package *p, FuncDecl *f,
     sig.ret_slang = f->ret_type;
     sig.nparams = f->nparams;
     sig.method_of = method_of;
+    sig.lts = f->lts;
+    sig.nlts = f->nlts;
     sig.line = f->line;
     sig.param_slang =
         (const char **)xmalloc(sizeof(char *) *
@@ -103,6 +128,8 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
             sd->fields = s->as.struct_decl.fields;
             sd->ftypes = (const char **)s->as.struct_decl.ftypes;
             sd->nfields = s->as.struct_decl.nfields;
+            sd->lts = s->as.struct_decl.lts;
+            sd->nlts = s->as.struct_decl.nlts;
             sd->line = s->line;
         }
     }
@@ -119,6 +146,7 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
                              sd->fields[j], sd->canonical);
             }
             sd->ftypes[j] = canon_type(cg, sd->ftypes[j], sd->line);
+            check_declared_lts(sd->lts, sd->nlts, sd->ftypes[j], sd->line);
         }
         if (!sd->is_gc) {
             for (j = 0; j < sd->nfields; j++) {
@@ -157,12 +185,16 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
         for (j = 0; j < sig->nparams; j++) {
             ((char **)sig->param_slang)[j] =
                 (char *)canon_type(cg, sig->param_slang[j], sig->line);
+            check_declared_lts(sig->lts, sig->nlts, sig->param_slang[j],
+                              sig->line);
             if (sig->is_extern)
                 check_extern_type(sig->param_slang[j], sig->line,
                                   "parameter");
         }
-        if (sig->ret_slang)
+        if (sig->ret_slang) {
             sig->ret_slang = canon_type(cg, sig->ret_slang, sig->line);
+            check_declared_lts(sig->lts, sig->nlts, sig->ret_slang, sig->line);
+        }
         if (sig->is_extern && sig->ret_slang)
             check_extern_type(sig->ret_slang, sig->line, "return");
     }
