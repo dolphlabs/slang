@@ -589,12 +589,21 @@ static void sl_preempt_handler(int sig, siginfo_t *si, void *uctx_raw) {
        permanently skip this task forever, silently going dormant for
        the rest of the run rather than just missing this one attempt. */
     ucontext_t *uctx = (ucontext_t *)uctx_raw;
-#if defined(__x86_64__)
+#if defined(__APPLE__) && defined(__x86_64__)
     uintptr_t pc0 = (uintptr_t)uctx->uc_mcontext->__ss.__rip;
     uintptr_t sp0 = (uintptr_t)uctx->uc_mcontext->__ss.__rsp;
-#elif defined(__aarch64__)
+#elif defined(__APPLE__) && defined(__aarch64__)
     uintptr_t pc0 = (uintptr_t)__darwin_arm_thread_state64_get_pc(uctx->uc_mcontext->__ss);
     uintptr_t sp0 = (uintptr_t)uctx->uc_mcontext->__ss.__sp;
+#elif defined(__linux__) && defined(__x86_64__)
+    uintptr_t pc0 = (uintptr_t)uctx->uc_mcontext.gregs[REG_RIP];
+    uintptr_t sp0 = (uintptr_t)uctx->uc_mcontext.gregs[REG_RSP];
+#elif defined(__linux__) && defined(__aarch64__)
+    uintptr_t pc0 = (uintptr_t)uctx->uc_mcontext.pc;
+    uintptr_t sp0 = (uintptr_t)uctx->uc_mcontext.sp;
+#else
+    (void)uctx;
+    return;
 #endif
     if (sp0 < (uintptr_t)t->stack_base ||
         sp0 >= (uintptr_t)t->stack_base + t->stack_size) {
@@ -619,11 +628,15 @@ static void sl_preempt_handler(int sig, siginfo_t *si, void *uctx_raw) {
        possible register-safe instant before its final jmp. */
     atomic_fetch_add_explicit(&t->preempt_disable_depth, 1, memory_order_acq_rel);
     t->async_orig_pc = (void *)pc0;
-#if defined(__x86_64__)
+#if defined(__APPLE__) && defined(__x86_64__)
     uctx->uc_mcontext->__ss.__rip = (uintptr_t)sl_preempt_trampoline_entry;
-#elif defined(__aarch64__)
+#elif defined(__APPLE__) && defined(__aarch64__)
     __darwin_arm_thread_state64_set_pc_fptr(uctx->uc_mcontext->__ss,
                                              sl_preempt_trampoline_entry);
+#elif defined(__linux__) && defined(__x86_64__)
+    uctx->uc_mcontext.gregs[REG_RIP] = (greg_t)(uintptr_t)sl_preempt_trampoline_entry;
+#elif defined(__linux__) && defined(__aarch64__)
+    uctx->uc_mcontext.pc = (uintptr_t)sl_preempt_trampoline_entry;
 #endif
 }
 
