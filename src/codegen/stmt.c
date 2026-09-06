@@ -46,7 +46,10 @@
  * into this slice. */
 static int emit_backedge_enter(CG *cg, void *backedge_live_set,
                                 int direct_yield_ok, int edge_id) {
-    int n = live_set_nnamed(backedge_live_set);
+    int nnames = live_set_nnamed(backedge_live_set);
+    int n = 0;
+    for (int i = 0; i < nnames; i++)
+        n += count_named_gc_roots(cg, live_set_named(backedge_live_set, i));
     if (n == 0) {
         /* Nothing to root, so no ordering hazard: this call can safely
          * run before anything else here, since there's no bracket for
@@ -75,13 +78,10 @@ static int emit_backedge_enter(CG *cg, void *backedge_live_set,
     StrBuf roots;
     sb_init(&roots);
     sb_append(&roots, xasprintf("void *_sl_bp%d_roots[] = { ", id));
-    for (int i = 0; i < n; i++) {
-        if (i)
-            sb_append(&roots, ", ");
-        sb_append(&roots, xasprintf("(void *)%s", sanitize_ident(
-                                                       live_set_named(
-                                                           backedge_live_set, i))));
-    }
+    int wrote = 0;
+    for (int i = 0; i < nnames; i++)
+        append_named_gc_roots(cg, &roots, live_set_named(backedge_live_set, i),
+                              &wrote);
     sb_append(&roots, "};");
     emit_line(cg, "%s", roots.data);
     emit_line(cg, "sl_safepoint _sl_bp%d;", id);

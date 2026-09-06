@@ -456,11 +456,73 @@ StructDef *struct_of_type(CG *cg, const char *t) {
     return struct_find_canon(cg, t);
 }
 
+int type_has_gc_roots(CG *cg, const char *t) {
+    if (type_is_gc_ptr(cg, t))
+        return 1;
+    StructDef *sd = struct_find_canon(cg, t);
+    if (!sd || sd->is_gc)
+        return 0;
+    return struct_has_gc_fields(cg, sd);
+}
+
 int struct_has_gc_fields(CG *cg, StructDef *sd) {
     for (int j = 0; j < sd->nfields; j++)
-        if (type_is_gc_ptr(cg, sd->ftypes[j]))
+        if (type_has_gc_roots(cg, sd->ftypes[j]))
             return 1;
     return 0;
+}
+
+static void append_gc_root_expr(CG *cg, StrBuf *sb, const char *c_expr,
+                                const char *slang_t, int *wrote) {
+    if (type_is_gc_ptr(cg, slang_t)) {
+        if ((*wrote)++)
+            sb_append(sb, ", ");
+        sb_append(sb, xasprintf("(void *)%s", c_expr));
+        return;
+    }
+    StructDef *sd = struct_find_canon(cg, slang_t);
+    if (!sd || sd->is_gc)
+        return;
+    for (int j = 0; j < sd->nfields; j++) {
+        if (!type_has_gc_roots(cg, sd->ftypes[j]))
+            continue;
+        append_gc_root_expr(cg, sb,
+                            xasprintf("%s.%s", c_expr,
+                                      sanitize_ident(sd->fields[j])),
+                            sd->ftypes[j], wrote);
+    }
+}
+
+int count_gc_root_exprs(CG *cg, const char *slang_t) {
+    if (type_is_gc_ptr(cg, slang_t))
+        return 1;
+    StructDef *sd = struct_find_canon(cg, slang_t);
+    if (!sd || sd->is_gc)
+        return 0;
+    int n = 0;
+    for (int j = 0; j < sd->nfields; j++)
+        n += count_gc_root_exprs(cg, sd->ftypes[j]);
+    return n;
+}
+
+void append_named_gc_roots(CG *cg, StrBuf *sb, const char *name, int *wrote) {
+    VarSym *v = var_find(cg, name);
+    const char *t = v ? v->slang : NULL;
+    char *c_name = sanitize_ident(name);
+    if (t && type_has_gc_roots(cg, t) && !type_is_gc_ptr(cg, t))
+        append_gc_root_expr(cg, sb, c_name, t, wrote);
+    else {
+        if ((*wrote)++)
+            sb_append(sb, ", ");
+        sb_append(sb, xasprintf("(void *)%s", c_name));
+    }
+}
+
+int count_named_gc_roots(CG *cg, const char *name) {
+    VarSym *v = var_find(cg, name);
+    if (v && type_has_gc_roots(cg, v->slang) && !type_is_gc_ptr(cg, v->slang))
+        return count_gc_root_exprs(cg, v->slang);
+    return 1;
 }
 
 /* "opt[T]" -> T (heap-allocated). Caller must pass an opt type. */
@@ -870,9 +932,21 @@ char *sequence_one(CG *cg, int seq_id, int idx, const char *ctype,
         return text;
     char *name = xasprintf("_sl_seq%d_%d", seq_id, idx);
     sb_append(prelude, xasprintf("%s %s = %s; ", ctype, name, text));
-    if (expr_node && type_is_gc_ptr(cg, slang_type)) {
+    if (expr_node && type_has_gc_roots(cg, slang_type)) {
         expr_tmp_register(cg, expr_node, name);
-        ambient_root_push(cg, name);
+        if (type_is_gc_ptr(cg, slang_type))
+            ambient_root_push(cg, name);
+        else {
+            StructDef *sd = struct_find_canon(cg, slang_type);
+            if (sd && !sd->is_gc) {
+                for (int j = 0; j < sd->nfields; j++) {
+                    if (!type_has_gc_roots(cg, sd->ftypes[j]))
+                        continue;
+                    ambient_root_push(cg, xasprintf("%s.%s", name,
+                                                    sanitize_ident(sd->fields[j])));
+                }
+            }
+        }
     }
     return name;
 }
@@ -914,7 +988,12 @@ char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
     int nlive_named = live_set_nnamed(e->live_set);
     int nlive_pending = live_set_npending(e->live_set);
     int nambient = cg->ambient_count;
-    int nroots = nlive_named + nlive_pending + nambient;
+    int nroots = nambient;
+    for (int i = 0; i < nlive_named; i++)
+        nroots += count_named_gc_roots(cg, live_set_named(e->live_set, i));
+    for (int i = 0; i < nlive_pending; i++)
+        nroots += count_gc_root_exprs(
+            cg, infer_type(cg, live_set_pending(e->live_set, i)));
     if (nroots == 0) {
         if (!has_prelude)
             return inner;
@@ -926,12 +1005,9 @@ char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
     sb_init(&sp);
     sb_append(&sp, xasprintf("void *_sl_sp%d_roots[] = { ", sp_id));
     int wrote = 0;
-    for (int i = 0; i < nlive_named; i++) {
-        if (wrote++)
-            sb_append(&sp, ", ");
-        sb_append(&sp, xasprintf("(void *)%s",
-                                 sanitize_ident(live_set_named(e->live_set, i))));
-    }
+    for (int i = 0; i < nlive_named; i++)
+        append_named_gc_roots(cg, &sp, live_set_named(e->live_set, i),
+                              &wrote);
     for (int i = 0; i < nlive_pending; i++) {
         Expr *p = live_set_pending(e->live_set, i);
         const char *tn = expr_tmp_find(cg, p);
@@ -940,9 +1016,14 @@ char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
                      "internal error: liveness-pending value has no "
                      "registered temp at line %d",
                      p->line);
-        if (wrote++)
-            sb_append(&sp, ", ");
-        sb_append(&sp, xasprintf("(void *)%s", tn));
+        const char *pt = infer_type(cg, p);
+        if (type_is_gc_ptr(cg, pt)) {
+            if (wrote++)
+                sb_append(&sp, ", ");
+            sb_append(&sp, xasprintf("(void *)%s", tn));
+        } else {
+            append_gc_root_expr(cg, &sp, tn, pt, &wrote);
+        }
     }
     for (int i = 0; i < nambient; i++) {
         if (wrote++)

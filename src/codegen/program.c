@@ -151,15 +151,6 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
             sd->ftypes[j] = canon_type(cg, sd->ftypes[j], sd->line);
             check_declared_lts(sd->lts, sd->nlts, sd->ftypes[j], sd->line);
         }
-        if (!sd->is_gc) {
-            for (j = 0; j < sd->nfields; j++) {
-                if (type_is_gc_ptr(cg, sd->ftypes[j]))
-                    cg_error(sd->line,
-                             "value struct '%s' cannot contain gc field "
-                             "'%s' (type %s); use 'gc struct'",
-                             sd->canonical, sd->fields[j], sd->ftypes[j]);
-            }
-        }
     }
 
     /* pass 3: methods from impl blocks */

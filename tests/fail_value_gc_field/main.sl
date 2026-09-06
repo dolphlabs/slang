@@ -1,3 +1,0 @@
-struct Bad {
-    name: str,
-}

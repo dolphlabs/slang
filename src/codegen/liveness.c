@@ -174,7 +174,7 @@ static LiveVar *declare_var(CG *cg, const char *name, const char *slang_type) {
     var_push(cg, name, slang_type);
     int idx = cg->vars.count - 1;
     slot_map_ensure(cg->vars.count);
-    if (!type_is_gc_ptr(cg, slang_type)) {
+    if (!type_has_gc_roots(cg, slang_type)) {
         slot_map[idx] = NULL;
         return NULL;
     }
@@ -385,7 +385,7 @@ static LiveSet *process_children_reverse(CG *cg, Expr **children, int n,
         const char *exp_i = expects ? expects[i] : NULL;
         const char *saved = expect_push(cg, exp_i);
         needs_pending[i] = !is_bare_ident(children[i]) &&
-                           type_is_gc_ptr(cg, infer_type(cg, children[i]));
+                           type_has_gc_roots(cg, infer_type(cg, children[i]));
         cg->expect = saved;
         before[i] = acc;
         if (needs_pending[i]) {

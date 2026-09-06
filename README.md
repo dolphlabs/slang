@@ -265,9 +265,10 @@ push(pts, r.tl);
 Struct literals must supply every field exactly once, with types
 checked. Methods live in top-level `impl Name { ... }` blocks; mark a
 method `pub fn` to export it to importing packages. Structs are
-values: assignment copies. Use `gc struct` for a shared heap object
-(today's previous default). A value struct cannot yet hold `gc`
-fields (`str`, lists, maps, `opt`/`result`, or `gc struct`).
+values: assignment copies, including any `str` / list / map /
+`opt` / `result` / `gc struct` fields (shallow — the heap objects
+are shared). Use `gc struct` when the record itself should be a
+shared heap object.
 `own T` is uniquely owned: assignment and passing **move**, and
 use-after-move is a compile error. A moved binding can be reinitialized.
 `own` is freed when its binding goes out of scope unless it was moved.
