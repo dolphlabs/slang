@@ -433,8 +433,8 @@ guard let p2 = r else { exit(1); }
 
 Supported: `struct`, `opt[T]`, `[T]`, `map[str, V]` (JSON object keys
 are always strings — a map with any other key type is a compile
-error), and every scalar type except `bytes` (no implicit
-base64-or-similar encoding is applied). `rawptr`, `chan[T]`, and
+error), every scalar, and `bytes` (RFC 4648 base64 strings on the
+wire). `rawptr`, `chan[T]`, and
 `result[T,E]` can't appear anywhere in a decode/encode target type. A
 missing JSON key defaults an `opt[T]` field to `none`; for any other
 field type it's a decode error. Unknown JSON keys are ignored. Every
@@ -852,8 +852,9 @@ Makefile       build/test/clean
   the task while a dedicated thread resolves.
 - JSON: no dynamic/unknown-shape decoding (every decode target is a
   concrete slang type known at compile time — see the `json` section
-  above), no `bytes` fields, and JSON object keys map to struct field
-  names verbatim (no camelCase/snake_case conversion).
+  above), and JSON object keys map to struct field names verbatim
+  (no camelCase/snake_case conversion). `bytes` fields are base64
+  strings (RFC 4648).
 - `proc`: only `SIGTERM`/`SIGINT` are handled (there's no general
   signal-registration API); a signal that arrives in the narrow
   window before `main()` installs the handler gets the OS's default
