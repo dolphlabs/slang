@@ -4,6 +4,7 @@
 
 typedef struct {
     char *root;
+    char *path;
     char *borrower;
     int mut;
     int line;
@@ -85,11 +86,46 @@ static int name_is_param(BK *bk, const char *name) {
     return i >= 0 && bk->is_param[i];
 }
 
-static void ls_add(LoanSet *s, const char *root, const char *borrower, int mut,
-                   int line) {
+static const char *path_of(const char *p) { return p ? p : ""; }
+
+static int path_eq(const char *a, const char *b) {
+    return !strcmp(path_of(a), path_of(b));
+}
+
+static int path_overlap(const char *a, const char *b) {
+    a = path_of(a);
+    b = path_of(b);
+    while (*a && *b) {
+        const char *ae = strchr(a, '.');
+        const char *be = strchr(b, '.');
+        size_t al = ae ? (size_t)(ae - a) : strlen(a);
+        size_t bl = be ? (size_t)(be - b) : strlen(b);
+        int astar = al == 1 && a[0] == '*';
+        int bstar = bl == 1 && b[0] == '*';
+        if (astar || bstar)
+            return 1;
+        if (al != bl || memcmp(a, b, al))
+            return 0;
+        a = ae ? ae + 1 : a + al;
+        b = be ? be + 1 : b + bl;
+    }
+    return 1;
+}
+
+static char *disp_place(const char *root, const char *path) {
+    path = path_of(path);
+    if (!path[0])
+        return xstrdup(root);
+    return xasprintf("%s.%s", root, path);
+}
+
+static void ls_add(LoanSet *s, const char *root, const char *path,
+                   const char *borrower, int mut, int line) {
     int i;
+    path = path_of(path);
     for (i = 0; i < s->n; i++) {
-        if (strcmp(s->items[i].root, root))
+        if (strcmp(s->items[i].root, root) ||
+            !path_eq(s->items[i].path, path))
             continue;
         if (s->items[i].borrower && borrower &&
             !strcmp(s->items[i].borrower, borrower) &&
@@ -103,6 +139,7 @@ static void ls_add(LoanSet *s, const char *root, const char *borrower, int mut,
         s->items = (Loan *)xrealloc(s->items, (size_t)s->cap * sizeof(Loan));
     }
     s->items[s->n].root = xstrdup(root);
+    s->items[s->n].path = xstrdup(path);
     s->items[s->n].borrower = borrower ? xstrdup(borrower) : NULL;
     s->items[s->n].mut = mut;
     s->items[s->n].line = line;
@@ -139,15 +176,15 @@ static void ls_clone_into(LoanSet *dst, const LoanSet *src) {
     int i;
     dst->n = 0;
     for (i = 0; i < src->n; i++)
-        ls_add(dst, src->items[i].root, src->items[i].borrower,
-               src->items[i].mut, src->items[i].line);
+        ls_add(dst, src->items[i].root, src->items[i].path,
+               src->items[i].borrower, src->items[i].mut, src->items[i].line);
 }
 
 static void ls_union(LoanSet *dst, const LoanSet *src) {
     int i;
     for (i = 0; i < src->n; i++)
-        ls_add(dst, src->items[i].root, src->items[i].borrower,
-               src->items[i].mut, src->items[i].line);
+        ls_add(dst, src->items[i].root, src->items[i].path,
+               src->items[i].borrower, src->items[i].mut, src->items[i].line);
 }
 
 static int ls_eq(const LoanSet *a, const LoanSet *b) {
@@ -158,6 +195,8 @@ static int ls_eq(const LoanSet *a, const LoanSet *b) {
         int found = 0;
         for (j = 0; j < b->n; j++) {
             if (strcmp(a->items[i].root, b->items[j].root))
+                continue;
+            if (!path_eq(a->items[i].path, b->items[j].path))
                 continue;
             if (a->items[i].mut != b->items[j].mut)
                 continue;
@@ -177,54 +216,61 @@ static int ls_eq(const LoanSet *a, const LoanSet *b) {
     return 1;
 }
 
-static void check_borrow(BK *bk, const char *root, int mut, int line) {
+static void check_borrow(BK *bk, const char *root, const char *path, int mut,
+                         int line) {
     int i;
+    char *here;
     if (!root || skip_gc(bk, root))
         return;
+    here = disp_place(root, path);
     for (i = 0; i < bk->cur.n; i++) {
         Loan *l = &bk->cur.items[i];
-        if (strcmp(l->root, root))
+        if (strcmp(l->root, root) || !path_overlap(l->path, path))
             continue;
         if (mut && l->mut)
             cg_error(line, "cannot borrow '%s' as mutable more than once",
-                     root);
+                     here);
         if (mut && !l->mut)
             cg_error(line,
                      "cannot borrow '%s' as mutable because it is also "
                      "borrowed as immutable",
-                     root);
+                     here);
         if (!mut && l->mut)
             cg_error(line,
                      "cannot borrow '%s' as immutable because it is also "
                      "borrowed as mutable",
-                     root);
+                     here);
     }
 }
 
-static void check_write(BK *bk, const char *root, int line) {
-    int i;
-    if (!root || skip_gc(bk, root))
-        return;
-    for (i = 0; i < bk->cur.n; i++) {
-        if (!strcmp(bk->cur.items[i].root, root))
-            cg_error(line, "cannot assign to '%s' because it is borrowed",
-                     root);
-    }
-}
-
-static void check_read(BK *bk, const char *root, int moving, int line) {
+static void check_write(BK *bk, const char *root, const char *path, int line) {
     int i;
     if (!root || skip_gc(bk, root))
         return;
     for (i = 0; i < bk->cur.n; i++) {
         Loan *l = &bk->cur.items[i];
-        if (strcmp(l->root, root))
+        if (strcmp(l->root, root) || !path_overlap(l->path, path))
+            continue;
+        cg_error(line, "cannot assign to '%s' because it is borrowed",
+                 disp_place(root, path));
+    }
+}
+
+static void check_read(BK *bk, const char *root, const char *path, int moving,
+                       int line) {
+    int i;
+    if (!root || skip_gc(bk, root))
+        return;
+    for (i = 0; i < bk->cur.n; i++) {
+        Loan *l = &bk->cur.items[i];
+        if (strcmp(l->root, root) || !path_overlap(l->path, path))
             continue;
         if (moving)
-            cg_error(line, "cannot move '%s' because it is borrowed", root);
+            cg_error(line, "cannot move '%s' because it is borrowed",
+                     disp_place(root, path));
         if (l->mut)
             cg_error(line, "cannot use '%s' because it is mutably borrowed",
-                     root);
+                     disp_place(root, path));
     }
 }
 
@@ -248,16 +294,56 @@ static int place_deep(MirPlace *p) {
     return p && p->kind != MP_LOCAL;
 }
 
+static void path_push(char *buf, size_t cap, const char *seg) {
+    size_t n = strlen(buf);
+    if (!n) {
+        snprintf(buf, cap, "%s", seg);
+        return;
+    }
+    snprintf(buf + n, cap - n, ".%s", seg);
+}
+
+static void fill_path(MirPlace *p, const char **root, char *buf, size_t cap) {
+    if (!p)
+        return;
+    switch (p->kind) {
+    case MP_LOCAL:
+        *root = p->as.local;
+        return;
+    case MP_FIELD:
+        fill_path(p->as.field.base, root, buf, cap);
+        path_push(buf, cap, p->as.field.field);
+        return;
+    case MP_DEREF:
+        fill_path(p->as.deref, root, buf, cap);
+        return;
+    case MP_INDEX:
+        fill_path(p->as.index.base, root, buf, cap);
+        path_push(buf, cap, "*");
+        return;
+    }
+}
+
+static char *fields_of(MirPlace *p) {
+    const char *root = NULL;
+    char buf[256];
+    buf[0] = '\0';
+    fill_path(p, &root, buf, sizeof(buf));
+    return xstrdup(buf);
+}
+
 static void access_place(BK *bk, MirPlace *p, int write, int moving, int line) {
     const char *base = place_base(p);
+    char *path;
     if (!base)
         return;
     if (local_is_ref(bk, base) && (place_deep(p) || !write))
         return;
+    path = fields_of(p);
     if (write)
-        check_write(bk, base, line);
+        check_write(bk, base, path, line);
     else
-        check_read(bk, base, moving, line);
+        check_read(bk, base, path, moving, line);
 }
 
 static void copy_loans(BK *bk, const char *src, const char *dest, int mut,
@@ -272,26 +358,28 @@ static void copy_loans(BK *bk, const char *src, const char *dest, int mut,
         if (!l->borrower || strcmp(l->borrower, src))
             continue;
         found = 1;
-        ls_add(&bk->cur, l->root, dest, mut || l->mut, line);
+        ls_add(&bk->cur, l->root, l->path, dest, mut || l->mut, line);
     }
     if (!found && local_is_ref(bk, src)) {
         int sm = 0;
         wrap_is_ref(local_ty(bk->fn, src), &sm);
-        ls_add(&bk->cur, src, dest, mut || sm, line);
+        ls_add(&bk->cur, src, "", dest, mut || sm, line);
     }
 }
 
 static void borrow_place(BK *bk, MirPlace *p, int mut, const char *dest,
                          int line) {
     const char *base = place_base(p);
+    char *path;
     if (!base || skip_gc(bk, base))
         return;
     if (local_is_ref(bk, base)) {
         copy_loans(bk, base, dest, mut, line);
         return;
     }
-    check_borrow(bk, base, mut, line);
-    ls_add(&bk->cur, base, dest, mut, line);
+    path = fields_of(p);
+    check_borrow(bk, base, path, mut, line);
+    ls_add(&bk->cur, base, path, dest, mut, line);
 }
 
 static void mark_name(BK *bk, const char *name, int isdef) {
@@ -834,8 +922,8 @@ static void seed_params(BK *bk) {
             continue;
         if (!wrap_is_ref(bk->fn->locals[i].ty, &mut))
             continue;
-        ls_add(&bk->cur, bk->fn->locals[i].name, bk->fn->locals[i].name, mut,
-               0);
+        ls_add(&bk->cur, bk->fn->locals[i].name, "", bk->fn->locals[i].name,
+               mut, 0);
     }
 }
 

@@ -1,3 +1,8 @@
+struct Point {
+    x: int,
+    y: int,
+}
+
 fn id(p: &int) -> &int {
     return p;
 }
@@ -46,3 +51,22 @@ let r = &w;
 println(*r);
 w = 2;
 println(w);
+
+let p = Point { x: 1, y: 2 };
+let rx: &int = &p.x;
+let ry: &int = &p.y;
+println(*rx);
+println(*ry);
+
+let u = Point { x: 3, y: 4 };
+let mx: &mut int = &mut u.x;
+let my: &int = &u.y;
+*mx = 30;
+println(*mx);
+println(*my);
+
+let s = Point { x: 5, y: 6 };
+let sx = &s.x;
+s.y = 9;
+println(*sx);
+println(s.y);
