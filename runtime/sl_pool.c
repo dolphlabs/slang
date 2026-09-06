@@ -700,13 +700,9 @@ static void sl_preempt_ticker_start(void) {
 }
 
 /* Called once, from main(), before any user code (which might 'spawn')
- * starts running. Sizes the pool via sysconf(_SC_NPROCESSORS_ONLN),
- * floored at 8: tests/proc_shutdown already has two simultaneously-
- * BLOCKING spawned tasks today, and getaddrinfo in net.dial /
- * net.tls_dial still blocks whichever OS thread calls it, so a low
- * floor (sysconf can legitimately return 1, e.g. in a constrained
- * container) is a live risk to an existing test. This is an explicit
- * stopgap, not a real fix.
+ * starts running. Sizes the pool via sysconf(_SC_NPROCESSORS_ONLN).
+ * getaddrinfo runs on a dedicated thread and parks the caller, so
+ * the old floor of 8 is gone.
  *
  * Tier 11 sixth slice: no longer takes a block_signals parameter --
  * SIGTERM/SIGINT are now blocked exactly ONCE, at the very top of
@@ -719,7 +715,7 @@ static void sl_preempt_ticker_start(void) {
  * entirely, see that file's own comments. */
 static void sl_pool_start(void) {
     long n = sysconf(_SC_NPROCESSORS_ONLN);
-    if (n < 8) n = 8;
+    if (n < 1) n = 1;
     if (n > SL_POOL_MAX_WORKERS) n = SL_POOL_MAX_WORKERS;
 
     for (long i = 0; i < n; i++) {

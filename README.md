@@ -573,13 +573,13 @@ signal-handling program.
 ## Concurrency
 
 `spawn` submits a function as an `sl_task` on the M:N worker pool
-(sized `max(8, ncpu)`); `chan[T]` is a bounded, park-aware queue.
+(sized `ncpu`); `chan[T]` is a bounded, park-aware queue.
 Blocking-looking code stays blocking-looking — `net.accept`,
 `net.recv`, `time.sleep`, and `chan_send`/`chan_recv` park the task
 and return the OS thread to the pool. There is no colored-function
 split. TLS handshake and I/O park on the same reactor as TCP
-  (`SSL_ERROR_WANT_READ`/`WANT_WRITE`). DNS (`getaddrinfo`) still
-  blocks the worker.
+  (`SSL_ERROR_WANT_READ`/`WANT_WRITE`). DNS (`getaddrinfo`) runs on
+  a dedicated thread; the dialing task parks until it finishes.
 
 ```slang
 fn worker(id: i32, results: chan[i32]) {
@@ -826,8 +826,8 @@ Makefile       build/test/clean
   join/await a spawned task's completion besides a channel.
 - TLS: no client certificates (mutual TLS), no SNI-based multi-cert
   virtual hosting on one listener, no session resumption tuning.
-  Handshake and send/recv park; `getaddrinfo` in `tls_dial` still
-  blocks the worker.
+  Handshake and send/recv park; `getaddrinfo` in `tls_dial` parks
+  the task while a dedicated thread resolves.
 - JSON: no dynamic/unknown-shape decoding (every decode target is a
   concrete slang type known at compile time — see the `json` section
   above), no `bytes` fields, and JSON object keys map to struct field

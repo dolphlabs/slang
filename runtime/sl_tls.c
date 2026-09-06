@@ -140,11 +140,8 @@ static sl_res_rawptr_str *sl_net_tls_dial(const char *host, int port,
     sl_rt_preempt_disable();
     snprintf(portstr, sizeof(portstr), "%d", port);
     sl_rt_preempt_enable();
-    struct addrinfo hints, *res = NULL;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    int rc = getaddrinfo(host, portstr, &hints, &res);
+    struct addrinfo *res = NULL;
+    int rc = sl_dns_lookup(host, portstr, &res);
     if (rc != 0 || !res) return sl_net_err_rawptr(gai_strerror(rc));
     int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (fd < 0) {
