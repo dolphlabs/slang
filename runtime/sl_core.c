@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #define _XOPEN_SOURCE 700
 #define _DARWIN_C_SOURCE
 #include <stdio.h>
@@ -170,7 +171,7 @@ typedef struct sl_task {
     long long io_deadline_ns; /* absolute mono-ns; 0 means none.
                                 meaningful while parked on the net
                                 reactor wait list. */
-    long long run_start_ns;  /* Tier 11 seventh slice (cooperative
+    long long run_start_ns;  /* Tier 11 seventh slice (cooperative)
                                 preemption): monotonic time this task's
                                 CURRENT stint on an OS thread began --
                                 set fresh by whoever switches INTO this

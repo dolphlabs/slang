@@ -1,12 +1,7 @@
-// Minimal HTTP server in slang: the net package's TCP listener and
-// dialer are built on bytes + fixed-width ints, every fallible
-// operation returns a Result unwrapped with guard let, and each
-// connection is served on its own spawned thread so one slow client
-// can't stall the others. SIGTERM/SIGINT (e.g. Ctrl-C, or `kill`)
-// stop the accept loop and wait for in-flight connections to finish
-// instead of dropping them -- see the 'proc' package.
+// Minimal HTTP server: link + arena so the request buffer never
+// touches the GC heap. Each connection is a spawned task. SIGTERM/
+// SIGINT stop accept and wait for in-flight work -- see 'proc'.
 
-import "net";
 import "proc";
 import "time";
 
@@ -19,37 +14,47 @@ fn page(body: str) -> bytes {
     return to_bytes(head + body);
 }
 
-fn serve(cfd: i32) {
-    // drain the request head; a minimal server needs no parsing
-    net.recv(cfd, 8192);
+fn send_page(c: link, a: &mut arena, body: str) {
+    let raw = page(body);
+    let w = a.wire(len(raw));
+    let i = 0;
+    while i < len(raw) {
+        w[i] = raw[i];
+        i = i + 1;
+    }
+    let sr = c.send(w, until_never());
+    guard let _n = sr else { return; }
+}
+
+fn serve(c: link) {
+    let a = arena_new(16384);
+    let buf = a.wire(8192);
+    let rr = c.recv(buf, until_never());
+    guard let _n = rr else { return; }
     let body = "<html><body><h1>Hello from slang</h1>"
         + "<p>served by the slang net package</p></body></html>";
-    net.send(cfd, page(body));
-    net.close(cfd);
+    send_page(c, &mut a, body);
 }
 
-// the language has no 'continue' statement, so a failed accept just
-// returns from this helper instead of skipping ahead in the loop body
-fn accept_and_serve(lfd: i32) {
-    let ar: result[i32, str] = net.accept(lfd);
-    guard let cfd = ar else { return; }
-    spawn serve(cfd);
+fn accept_and_serve(ln: &mut link) {
+    let ar = ln.accept(until_never());
+    guard let c = ar else { return; }
+    spawn serve(c);
 }
 
-let lr: result[i32, str] = net.listen(8080);
-guard let lfd = lr else {
+let lr = link_listen(8080);
+guard let ln = lr else {
     println("could not listen on 8080");
     exit(1);
 }
 println("listening on http://localhost:8080");
 
 while !proc.shutdown_requested() {
-    accept_and_serve(lfd);
+    accept_and_serve(&mut ln);
 }
 
 println("shutting down: waiting for in-flight connections to finish");
 while proc.active_tasks() > 0 {
-    time.sleep(20000000); // 20ms
+    time.sleep(20000000);
 }
-net.close(lfd);
 println("done");
