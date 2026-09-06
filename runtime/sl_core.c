@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #define _XOPEN_SOURCE 700
 #define _DARWIN_C_SOURCE
 #include <stdio.h>
