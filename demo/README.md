@@ -50,13 +50,13 @@ its own C runtime.
 | `struct`, `impl` methods, `opt[T]`, `result[T,E]`, `guard let` | throughout — see `arcade/arcade.sl` for the domain types |
 | `??` null-coalescing | `main.sl`'s `PORT`/`TLS_PORT` env var handling |
 | `time` (mono/wall/sleep, `duration` arithmetic) | uptime tracking, drain polling, the TLS accept loop's backoff |
-| `net` (raw TCP: listen/accept/recv/send/close) | `main.sl`'s plain-HTTP path, `httpkit/httpkit.sl`'s parser working directly on `bytes` |
-| `net.tls_*` | `main.sl`'s second listener, sharing the exact same routing as plain HTTP |
+| `http` + `link` | `main.sl`'s plain-HTTP path (`http.read` / `http.write` on a worker-pool `chan[link]`) |
+| `net.tls_*` + `http.parse`/`serialize` | `main.sl`'s second listener; TLS has no `link` API yet, routing is shared |
 | `json` (typed decode/encode, including nested structs and `map[str]Player`) | every `/api/*` route |
 | `proc` (`shutdown_requested`, `active_tasks`, `getenv`) | graceful shutdown + drain in `main.sl`, `PORT`/`TLS_PORT` |
 | `spawn` (M:N tasks, one per connection) | `handle_http_conn`/`handle_tls_conn` |
 | `chan[T]` | two uses: (1) as the state mutex described below, (2) is what makes `proc.active_tasks()`-based draining meaningful in the first place |
-| local package imports, `pub`, cross-package structs | `httpkit/`, `arcade/`, `content/` — three packages imported by `main.sl` the same way `examples/pkgdemo` does |
+| local package imports, `pub`, cross-package structs | `arcade/`, `content/`, `stress/` — imported by `main.sl` the same way `examples/pkgdemo` does |
 | C interop: `extern fn`, `link` | `lib.c` (dice RNG) via `link "slangarcade";`, plus bare libc (`getpid`, `atoi`) needing no `link` at all |
 | Lists, maps, `push`, `has`, indexing, iteration | the message wall (`[Message]`) and leaderboard (`map[str]Player`) |
 | `for i in 0..n` / `for x in list` / `for k, v in map` | `stress/stress.sl`'s prime-counting and alloc workloads |
