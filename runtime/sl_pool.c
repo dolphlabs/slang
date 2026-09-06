@@ -213,6 +213,7 @@ static void sl_task_submit(void (*entry)(void *), void *arg) {
  * POSIX's per-thread mutex-ownership rule despite the task having
  * logically moved from application code to scheduler code in
  * between. */
+__attribute__((noinline))
 static void sl_task_park(pthread_mutex_t *held_mu) {
     /* Tier 11 eighth slice: bracketed entry through the switch's own
      * resume point, not just the sl_gc_mu-held stretch -- protects the
@@ -226,7 +227,7 @@ static void sl_task_park(pthread_mutex_t *held_mu) {
     pthread_mutex_unlock(&sl_gc_mu);
     sl_rt_current_task->park_mu = held_mu;
     sl_rt_current_task->parked = 1;
-    sl_ctx_switch(&sl_rt_current_task->rsp, sl_rt_native_rsp);
+    sl_ctx_switch(&sl_rt_current_task->rsp, SL_RT_TLS_NATIVE_RSP());
     /* resumes here once re-submitted (sl_task_resume) and re-switched-
        into by some worker */
     sl_rt_preempt_enable();
@@ -308,6 +309,7 @@ static void sl_task_resume(sl_task *t) {
  * completed. sl_worker_after_switch does the push instead, once this
  * function's sl_ctx_switch call has returned control to some OTHER
  * thread's worker loop -- at which point t->rsp is guaranteed valid. */
+__attribute__((noinline))
 static void sl_task_yield_now(void) {
     /* Tier 11 eighth slice: bracketed entry through the switch's own
      * resume point -- this is the COOPERATIVE yield path (called
@@ -319,7 +321,7 @@ static void sl_task_yield_now(void) {
     sl_rt_preempt_disable();
     sl_task *t = sl_rt_current_task;
     t->preempted = 1;
-    sl_ctx_switch(&t->rsp, sl_rt_native_rsp);
+    sl_ctx_switch(&t->rsp, SL_RT_TLS_NATIVE_RSP());
     /* resumes here once some worker's run loop dispatches this task
        again -- run_start_ns is reset fresh by that dispatch (see
        sl_worker_run_loop below), so the next sample-interval check

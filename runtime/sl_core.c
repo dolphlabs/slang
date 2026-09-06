@@ -530,6 +530,19 @@ static inline void sl_rt_preempt_enable(void) {
  * emitted -- same ordering reason as sl_task itself above. */
 static _Thread_local void *sl_rt_native_rsp;
 
+#ifdef __OPTIMIZE__
+__attribute__((noinline))
+static void *sl_rt_tls_read_native_rsp(void) {
+    __asm__ __volatile__("" ::: "memory");
+    void *p = sl_rt_native_rsp;
+    __asm__ __volatile__("" : "+r"(p) :: "memory");
+    return p;
+}
+#define SL_RT_TLS_NATIVE_RSP() sl_rt_tls_read_native_rsp()
+#else
+#define SL_RT_TLS_NATIVE_RSP() (sl_rt_native_rsp)
+#endif
+
 static inline void sl_rt_gc_checkin(void); /* runtime_gc.c, forward here */
 static void sl_task_stack_grow(sl_task *t); /* runtime_sched.c, forward here */
 void sl_ctx_switch(void **old_rsp_slot, void *new_rsp); /* runtime_sched.c,
@@ -778,7 +791,7 @@ static void sl_rt_error(const char *msg, long long a, long long b) {
                 "slang: task panicked: %s (index %lld, length %lld)\n",
                 msg, a, b);
         sl_rt_active_spawns_dec();
-        sl_ctx_switch(&sl_rt_current_task->rsp, sl_rt_native_rsp);
+        sl_ctx_switch(&sl_rt_current_task->rsp, SL_RT_TLS_NATIVE_RSP());
         fprintf(stderr,
                 "slang: internal error: task resumed after panic "
                 "switch-back\n");

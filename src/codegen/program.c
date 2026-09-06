@@ -574,7 +574,7 @@ void emit_spawn_trampolines(CG *cg) {
          * completely unrelated code, the signature of a hijacked native
          * stack, not a clean fault at the bug's own site). */
         emit_line(cg, "sl_rt_preempt_disable();");
-        emit_line(cg, "sl_ctx_switch(&sl_rt_current_task->rsp, sl_rt_native_rsp);");
+        emit_line(cg, "sl_ctx_switch(&sl_rt_current_task->rsp, SL_RT_TLS_NATIVE_RSP());");
         emit_line(cg, "fprintf(stderr, \"slang: internal error: spawn task entry \"");
         emit_line(cg, "                \"resumed after switching back -- unreachable\\n\");");
         emit_line(cg, "abort(); /* genuinely unreachable -- a can't-happen guard, never");
