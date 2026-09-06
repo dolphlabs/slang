@@ -106,7 +106,7 @@ static void *sl_time_thread(void *arg) {
  * for the full reasoning. */
 static void sl_time_start(void) {
     pthread_t th;
-    if (pthread_create(&th, NULL, sl_time_thread, NULL) != 0) {
+    if (sl_rt_thread_spawn(&th, sl_time_thread, NULL) != 0) {
         fprintf(stderr, "slang: failed to start timer thread\n");
         exit(1);
     }

@@ -277,7 +277,7 @@ static void sl_reactor_start(void) {
     sl_rt_shutdown_hook = sl_net_shutdown_nudge;
     sl_rt_io_kick_hook = sl_reactor_kick;
     pthread_t th;
-    if (pthread_create(&th, NULL, sl_reactor_thread, NULL) != 0) {
+    if (sl_rt_thread_spawn(&th, sl_reactor_thread, NULL) != 0) {
         fprintf(stderr, "slang: failed to start reactor thread\n");
         exit(1);
     }

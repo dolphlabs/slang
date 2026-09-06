@@ -700,7 +700,7 @@ static void sl_preempt_ticker_start(void) {
         exit(1);
     }
     pthread_t th;
-    if (pthread_create(&th, NULL, sl_preempt_ticker_thread, NULL) != 0) {
+    if (sl_rt_thread_spawn(&th, sl_preempt_ticker_thread, NULL) != 0) {
         fprintf(stderr, "slang: failed to start preempt ticker\n");
         exit(1);
     }
@@ -730,8 +730,8 @@ static void sl_pool_start(void) {
     if (n > SL_POOL_MAX_WORKERS) n = SL_POOL_MAX_WORKERS;
 
     for (long i = 0; i < n; i++) {
-        if (pthread_create(&sl_pool_workers[i], NULL, sl_worker_loop,
-                            (void *)(intptr_t)i) != 0) {
+        if (sl_rt_thread_spawn(&sl_pool_workers[i], sl_worker_loop,
+                                (void *)(intptr_t)i) != 0) {
             fprintf(stderr, "slang: failed to start worker pool\n");
             exit(1);
         }

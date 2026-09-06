@@ -30,6 +30,26 @@ static void sl_rt_active_spawns_dec(void) {
     atomic_fetch_sub(&sl_rt_active_spawns, 1);
 }
 
+#define SL_RT_OS_STACK 262144
+
+static int sl_rt_thread_spawn(pthread_t *th, void *(*fn)(void *), void *arg) {
+    pthread_attr_t attr;
+    if (pthread_attr_init(&attr) != 0)
+        return -1;
+    size_t sz = SL_RT_OS_STACK;
+#ifdef PTHREAD_STACK_MIN
+    if (sz < (size_t)PTHREAD_STACK_MIN)
+        sz = (size_t)PTHREAD_STACK_MIN;
+#endif
+    if (pthread_attr_setstacksize(&attr, sz) != 0) {
+        pthread_attr_destroy(&attr);
+        return -1;
+    }
+    int rc = pthread_create(th, &attr, fn, arg);
+    pthread_attr_destroy(&attr);
+    return rc;
+}
+
 /* Tier 11 sixth slice: set by the dedicated signal thread
  * (pkg_proc/runtime.c, only exists if 'proc' is imported) once a
  * real SIGTERM/SIGINT arrives via sigwait(); read by
