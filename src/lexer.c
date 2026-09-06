@@ -296,6 +296,19 @@ Token lexer_next(Lexer *lx) {
         return make_token(T_DOTDOT, line);
     }
 
+    if (c == '\'' && is_ident_start(src[lx->pos + 1])) {
+        lx->pos++;
+        size_t start = lx->pos;
+        while (is_ident_char(src[lx->pos]))
+            lx->pos++;
+        size_t len = lx->pos - start;
+        Token t = make_token(T_LIFETIME, line);
+        t.text = (char *)xmalloc(len + 1);
+        memcpy(t.text, src + start, len);
+        t.text[len] = '\0';
+        return t;
+    }
+
     /* string literals */
     if (c == '"') {
         lx->pos++;
@@ -436,6 +449,7 @@ const char *token_type_name(TokenType t) {
     case T_DOTDOT:   return "'..'";
     case T_DOTDOTEQ: return "'..='";
     case T_ARROW:    return "'->'";
+    case T_LIFETIME: return "lifetime";
     }
     return "?";
 }

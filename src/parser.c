@@ -102,6 +102,7 @@ static Expr *parse_expression(Parser *p);
 static Type *parse_type(Parser *p);
 static const char *parse_type_name(Parser *p);
 static FuncDecl *parse_fn_decl(Parser *p, int is_extern);
+static int parse_lt_params(Parser *p, char ***out);
 
 static int next_is(Parser *p, TokenType t) {
     if (p->pos + 1 >= p->count)
@@ -145,8 +146,12 @@ static char *type_string(Type *t) {
     case TY_CHAN:
         return xasprintf("chan[%s]", type_string(t->as.inner));
     case TY_REF:
+        if (t->lt)
+            return xasprintf("&'%s %s", t->lt, type_string(t->as.inner));
         return xasprintf("&%s", type_string(t->as.inner));
     case TY_REFMUT:
+        if (t->lt)
+            return xasprintf("&'%s mut %s", t->lt, type_string(t->as.inner));
         return xasprintf("&mut %s", type_string(t->as.inner));
     case TY_OWN:
         return xasprintf("own %s", type_string(t->as.inner));
@@ -683,7 +688,7 @@ static Type *parse_type_atom(Parser *p) {
                     "expected a type name (int, float, str, bool, bytes, "
                     "i8..u64, f32, [T], map[K]V, opt[T], result[T,E], "
                     "chan[T], duration, rawptr, ptr[T], own T, gc T, "
-                    "&T, &mut T, *T, *mut T, or a struct name)");
+                    "&T, &'a T, &mut T, *T, *mut T, or a struct name)");
     }
     return NULL;
 }
@@ -694,9 +699,16 @@ static Type *parse_type(Parser *p) {
     if (match(p, T_KW_GC))
         return ty_wrap(TY_GC, parse_type(p));
     if (match(p, T_AMP)) {
+        char *lt = NULL;
+        Type *t;
+        if (check(p, T_LIFETIME))
+            lt = advance(p)->text;
         if (match(p, T_KW_MUT))
-            return ty_wrap(TY_REFMUT, parse_type(p));
-        return ty_wrap(TY_REF, parse_type(p));
+            t = ty_wrap(TY_REFMUT, parse_type(p));
+        else
+            t = ty_wrap(TY_REF, parse_type(p));
+        t->lt = lt;
+        return t;
     }
     if (match(p, T_STAR)) {
         if (match(p, T_KW_MUT))
@@ -884,6 +896,8 @@ static Stmt *parse_for_stmt(Parser *p) {
 static Stmt *parse_struct_decl(Parser *p, int is_pub, int is_gc) {
     Token *kw = advance(p); /* 'struct' */
     Token *name = expect(p, T_IDENT, "a struct name");
+    char **lts = NULL;
+    int nlts = parse_lt_params(p, &lts);
     expect(p, T_LBRACE, "'{'");
 
     char **fields = NULL;
@@ -912,6 +926,8 @@ static Stmt *parse_struct_decl(Parser *p, int is_pub, int is_gc) {
     s->as.struct_decl.fields = fields;
     s->as.struct_decl.ftypes = ftypes;
     s->as.struct_decl.nfields = n;
+    s->as.struct_decl.lts = lts;
+    s->as.struct_decl.nlts = nlts;
     return s;
 }
 
@@ -1036,14 +1052,40 @@ static Stmt *parse_statement(Parser *p) {
 
 /* ---- declarations ---- */
 
+static int parse_lt_params(Parser *p, char ***out) {
+    char **lts = NULL;
+    int n = 0;
+    if (!match(p, T_LT))
+        return 0;
+    for (;;) {
+        Token *t = expect(p, T_LIFETIME, "a lifetime");
+        int i;
+        for (i = 0; i < n; i++) {
+            if (!strcmp(lts[i], t->text))
+                parse_error(t, "duplicate lifetime '%s'", t->text);
+        }
+        lts = (char **)xrealloc(lts, (size_t)(n + 1) * sizeof(char *));
+        lts[n++] = t->text;
+        if (!match(p, T_COMMA))
+            break;
+    }
+    expect(p, T_GT, "'>'");
+    *out = lts;
+    return n;
+}
+
 static FuncDecl *parse_fn_decl(Parser *p, int is_extern) {
     Token *kw = advance(p); /* 'fn' */
     Token *name = expect(p, T_IDENT, "a function name");
+    char **lts = NULL;
+    int nlts = parse_lt_params(p, &lts);
     expect(p, T_LPAREN, "'('");
 
     FuncDecl *f = (FuncDecl *)xmalloc(sizeof(FuncDecl));
     memset(f, 0, sizeof(FuncDecl));
     f->name = name->text;
+    f->lts = lts;
+    f->nlts = nlts;
     f->line = kw->line;
 
     int pcap = 0;

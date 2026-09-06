@@ -194,14 +194,39 @@ int is_opt(const char *t) { return !strncmp(t, "opt[", 4); }
 int is_result(const char *t) { return !strncmp(t, "result[", 7); }
 int is_chan(const char *t) { return !strncmp(t, "chan[", 5); }
 
+char *type_lifetime(const char *t) {
+    const char *s, *e;
+    char *out;
+    if (!t || t[0] != '&' || t[1] != '\'')
+        return NULL;
+    s = t + 2;
+    e = s;
+    while (*e && (isalnum((unsigned char)*e) || *e == '_'))
+        e++;
+    if (e == s)
+        return NULL;
+    out = (char *)xmalloc((size_t)(e - s) + 1);
+    memcpy(out, s, (size_t)(e - s));
+    out[e - s] = '\0';
+    return out;
+}
+
 TypeWrap type_wrap(const char *t, char **inner) {
     *inner = NULL;
-    if (!strncmp(t, "&mut ", 5)) {
-        *inner = xstrdup(t + 5);
-        return TW_REFMUT;
-    }
     if (t[0] == '&') {
-        *inner = xstrdup(t + 1);
+        const char *p = t + 1;
+        if (*p == '\'') {
+            p++;
+            while (*p && (isalnum((unsigned char)*p) || *p == '_'))
+                p++;
+            if (*p == ' ')
+                p++;
+        }
+        if (!strncmp(p, "mut ", 4)) {
+            *inner = xstrdup(p + 4);
+            return TW_REFMUT;
+        }
+        *inner = xstrdup(p);
         return TW_REF;
     }
     if (!strncmp(t, "own ", 4)) {
@@ -428,6 +453,8 @@ int can_assign(const char *dst, const char *src) {
     char *di, *si;
     TypeWrap dw = type_wrap(dst, &di);
     TypeWrap sw = type_wrap(src, &si);
+    if (dw == sw && dw != TW_NONE && di && si && !strcmp(di, si))
+        return 1;
     if (dw == TW_REF && sw == TW_REFMUT && !strcmp(di, si))
         return 1;
     if (dw == TW_PTR &&
@@ -521,6 +548,8 @@ char *maybe_cast(CG *cg, const char *dst, const char *src,
     }
     if (sw != TW_NONE && (can_assign(dst, si) || !strcmp(dst, si)))
         return xasprintf("(*(%s))", expr);
+    if (dw == sw && dw != TW_NONE && di && si && !strcmp(di, si))
+        return expr;
     if (dw == TW_REF && sw == TW_REFMUT && !strcmp(di, si))
         return expr;
     if (dw == TW_PTR &&
@@ -1023,10 +1052,15 @@ const char *canon_type(CG *cg, const char *t, int line) {
     TypeWrap w = type_wrap(t, &winner);
     if (w != TW_NONE) {
         const char *ci = canon_type(cg, winner, line);
+        char *lt = type_lifetime(t);
         if ((w == TW_OWN || w == TW_GC) && !type_is_boxable(cg, ci))
             cg_error(line,
                      "'%s' can only wrap a value type (got '%s')",
                      w == TW_OWN ? "own" : "gc", ci);
+        if (lt && w == TW_REF)
+            return xasprintf("&'%s %s", lt, ci);
+        if (lt && w == TW_REFMUT)
+            return xasprintf("&'%s mut %s", lt, ci);
         return wrap_prefix(w, ci);
     }
     /* containers first: their inner types must be canonicalized

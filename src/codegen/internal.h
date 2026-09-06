@@ -34,6 +34,8 @@ typedef struct {
     char **fields;
     const char **ftypes; /* canonical slang field types */
     int nfields;
+    char **lts;
+    int nlts;
     int line;
 } StructDef;
 
@@ -90,6 +92,8 @@ typedef struct {
     int is_pub;
     int is_extern;            /* 'extern fn': calls the bare C symbol */
     const char *method_of;   /* canonical struct name for methods, else NULL */
+    char **lts;
+    int nlts;
     int line;
 } FuncSig;
 
@@ -348,6 +352,7 @@ typedef enum {
 } TypeWrap;
 
 TypeWrap type_wrap(const char *t, char **inner);
+char *type_lifetime(const char *t);
 int type_is_boxable(CG *cg, const char *t);
 int expr_addressable(Expr *e);
 int type_is_gc_ptr(CG *cg, const char *t);
