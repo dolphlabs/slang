@@ -1,14 +1,11 @@
 # slang
 
-A small, statically-typed, garbage-collected programming language that
-compiles to native binaries by transpiling to C. The compiler
-(`slangc`) is written in C and uses your system C compiler as its
-backend — no custom code generator, assembler, or linker required.
-Memory is managed by a precise, non-moving, stop-the-world mark-sweep
-collector emitted into every program (see `runtime/sl_gc.c`). Strings
-and heap allocations are traced and reclaimed automatically, including
-cycles. `spawn` runs on an M:N scheduler: green-thread tasks on a
-small worker pool, not one OS thread per task.
+A statically typed language for server-side and network programming.
+`spawn` is M:N — green tasks on a worker pool, not a thread per
+connection. Accept, recv, and send park. Memory is a precise,
+non-moving, stop-the-world mark-sweep collector (`runtime/sl_gc.c`);
+cycles are collected. `slangc` emits C and your system `cc` builds the
+binary.
 
 ## Quick start
 
@@ -762,9 +759,11 @@ import "foo";
 ```
 
 `slangc get` clones each `pkg` line into `$SLANG_CACHE/pkg/<name>/<hash>`
-(`~/.cache/slang` if unset) and writes `slang.lock`. Compile does not
-hit the network. A missing lock, missing cache, or hash mismatch is
-an error.
+(`~/.cache/slang` if unset). If a fetched package has its own
+`slang.project`, those pins are fetched too and recorded only in
+`slang.lock`. Compile does not hit the network. A missing lock, missing
+cache, or hash mismatch is an error. Same short name at two git/tag
+pairs is an error.
 
 ## How it works
 
