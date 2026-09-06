@@ -779,7 +779,14 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     emit_line(cg, "    exit(0); /* main()'s own sl_ctx_switch never returns */");
     emit_line(cg, "}");
     emit_line(cg, "");
-    emit_line(cg, "int main(void) {");
+    emit_line(cg, "int main(int argc, char **argv) {");
+    if (want_pkg(cg, "proc")) {
+        emit_line(cg, "    sl_proc_argc = argc;");
+        emit_line(cg, "    sl_proc_argv = argv;");
+    } else {
+        emit_line(cg, "    (void)argc;");
+        emit_line(cg, "    (void)argv;");
+    }
     if (want_pkg(cg, "proc")) {
         /* Tier 11 sixth slice: block SIGTERM/SIGINT exactly ONCE, here,
          * before any other thread is ever created -- every subsequently-

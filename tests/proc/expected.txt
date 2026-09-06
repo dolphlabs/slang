@@ -3,4 +3,6 @@ false
 1
 0
 true
+true
+true
 missing env var correctly none
