@@ -432,12 +432,30 @@ const char *infer_binary(CG *cg, Expr *e) {
         }
         if (is_num(lt) && is_num(rt))
             return promote(lt, rt);
+        if (type_is_raw_ptr(lt) && is_int(rt)) {
+            if (!e->in_unsafe)
+                cg_error(e->line,
+                         "pointer arithmetic requires an 'unsafe' block");
+            return lt;
+        }
+        if (is_int(lt) && type_is_raw_ptr(rt)) {
+            if (!e->in_unsafe)
+                cg_error(e->line,
+                         "pointer arithmetic requires an 'unsafe' block");
+            return rt;
+        }
         cg_error(e->line, "unsupported operand types for '+': %s and %s",
                  lt, rt);
     }
     if (!strcmp(op, "-") || !strcmp(op, "*") || !strcmp(op, "/")) {
         if (is_num(lt) && is_num(rt))
             return promote(lt, rt);
+        if (!strcmp(op, "-") && type_is_raw_ptr(lt) && is_int(rt)) {
+            if (!e->in_unsafe)
+                cg_error(e->line,
+                         "pointer arithmetic requires an 'unsafe' block");
+            return lt;
+        }
         cg_error(e->line, "unsupported operand types for '%s': %s and %s",
                  op, lt, rt);
     }
@@ -482,8 +500,13 @@ const char *infer_type(CG *cg, Expr *e) {
         }
         if (!strcmp(op, "*")) {
             char *inner;
-            if (type_wrap(t, &inner) == TW_NONE)
+            TypeWrap w = type_wrap(t, &inner);
+            if (w == TW_NONE)
                 cg_error(e->line, "cannot dereference a value of type %s", t);
+            if (type_is_raw_ptr(t) && !e->in_unsafe)
+                cg_error(e->line,
+                         "dereference of a raw pointer requires an "
+                         "'unsafe' block");
             return inner;
         }
         cg_error(e->line, "unknown unary operator '%s'", op);

@@ -150,6 +150,12 @@ int is_num(const char *t) { return is_int(t) || is_flt(t); }
 int is_str(const char *t) { return !strcmp(t, "str"); }
 int is_bytes(const char *t) { return !strcmp(t, "bytes"); }
 int is_rawptr(const char *t) { return !strcmp(t, "rawptr"); }
+
+int type_is_raw_ptr(const char *t) {
+    char *inner;
+    TypeWrap w = type_wrap(t, &inner);
+    return w == TW_RAW || w == TW_RAWMUT || w == TW_PTR;
+}
 int is_arr(const char *t) { return t[0] == '['; }
 int is_map(const char *t) { return !strncmp(t, "map[", 4); }
 
@@ -458,6 +464,15 @@ int can_assign(const char *dst, const char *src) {
     if (dw == TW_REF && sw == TW_REFMUT && !strcmp(di, si))
         return 1;
     if (dw == TW_PTR &&
+        (sw == TW_REFMUT || sw == TW_OWN || sw == TW_RAWMUT || sw == TW_PTR) &&
+        !strcmp(di, si))
+        return 1;
+    if (dw == TW_RAW &&
+        (sw == TW_REF || sw == TW_REFMUT || sw == TW_RAW || sw == TW_RAWMUT ||
+         sw == TW_PTR) &&
+        !strcmp(di, si))
+        return 1;
+    if (dw == TW_RAWMUT &&
         (sw == TW_REFMUT || sw == TW_OWN || sw == TW_RAWMUT || sw == TW_PTR) &&
         !strcmp(di, si))
         return 1;

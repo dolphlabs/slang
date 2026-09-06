@@ -10,6 +10,7 @@ typedef struct {
     int pos;
     int count;
     int fn_body; /* inside a function body: trailing expr = implicit return */
+    int in_unsafe;
 } Parser;
 
 static void parse_error(Token *tk, const char *fmt, ...) {
@@ -51,11 +52,12 @@ static Token *expect(Parser *p, TokenType t, const char *what) {
 
 /* ---- AST constructors ---- */
 
-static Expr *new_expr(ExprKind kind, int line) {
+static Expr *new_expr(Parser *p, ExprKind kind, int line) {
     Expr *e = (Expr *)xmalloc(sizeof(Expr));
     memset(e, 0, sizeof(Expr));
     e->kind = kind;
     e->line = line;
+    e->in_unsafe = p->in_unsafe;
     return e;
 }
 
@@ -193,38 +195,38 @@ static Token *peek_at(Parser *p, int off) {
         i = p->count - 1;
     return &p->toks[i];
 }
-static Expr *parse_expr_source(const char *src, int line);
-static Expr *parse_interp_string(Token *tk);
+static Expr *parse_expr_source(const char *src, int line, int in_unsafe);
+static Expr *parse_interp_string(Parser *p, Token *tk);
 
 static Expr *parse_primary(Parser *p) {
     Token *tk = peek(p);
     switch (tk->type) {
     case T_INT: {
         advance(p);
-        Expr *e = new_expr(EX_INT, tk->line);
+        Expr *e = new_expr(p, EX_INT, tk->line);
         e->as.int_lit.value = tk->int_val;
         return e;
     }
     case T_FLOAT: {
         advance(p);
-        Expr *e = new_expr(EX_FLOAT, tk->line);
+        Expr *e = new_expr(p, EX_FLOAT, tk->line);
         e->as.float_lit.value = tk->float_val;
         return e;
     }
     case T_STRING: {
         advance(p);
-        return parse_interp_string(tk);
+        return parse_interp_string(p, tk);
     }
     case T_BYTES: {
         advance(p);
-        Expr *e = new_expr(EX_BYTES, tk->line);
+        Expr *e = new_expr(p, EX_BYTES, tk->line);
         e->as.bytes_lit.data = tk->byte_val;
         e->as.bytes_lit.len = tk->byte_len;
         return e;
     }
     case T_LBRACKET: {
         advance(p);
-        Expr *e = new_expr(EX_LIST, tk->line);
+        Expr *e = new_expr(p, EX_LIST, tk->line);
         if (!check(p, T_RBRACKET)) {
             for (;;) {
                 list_push_elem(e, parse_expression(p));
@@ -238,7 +240,7 @@ static Expr *parse_primary(Parser *p) {
     case T_LBRACE: {
         /* map literal: {key: value, ...} */
         advance(p);
-        Expr *e = new_expr(EX_MAPLIT, tk->line);
+        Expr *e = new_expr(p, EX_MAPLIT, tk->line);
         if (!check(p, T_RBRACE)) {
             for (;;) {
                 Expr *k = parse_expression(p);
@@ -256,7 +258,7 @@ static Expr *parse_primary(Parser *p) {
     case T_KW_TRUE:
     case T_KW_FALSE: {
         advance(p);
-        Expr *e = new_expr(EX_BOOL, tk->line);
+        Expr *e = new_expr(p, EX_BOOL, tk->line);
         e->as.bool_lit.value = (tk->type == T_KW_TRUE);
         return e;
     }
@@ -280,7 +282,7 @@ static Expr *parse_primary(Parser *p) {
         if (check(p, T_LBRACE) && peek_at(p, 1)->type == T_IDENT &&
             peek_at(p, 2)->type == T_COLON) {
             advance(p); /* '{' */
-            Expr *sl = new_expr(EX_STRUCTLIT, tk->line);
+            Expr *sl = new_expr(p, EX_STRUCTLIT, tk->line);
             sl->as.structlit.tyname = name;
             int nf = 0;
             for (;;) {
@@ -303,7 +305,7 @@ static Expr *parse_primary(Parser *p) {
         }
         if (check(p, T_LPAREN)) {
             advance(p); /* '(' */
-            Expr *call = new_expr(EX_CALL, tk->line);
+            Expr *call = new_expr(p, EX_CALL, tk->line);
             call->as.call.name = name;
             if (!check(p, T_RPAREN)) {
                 for (;;) {
@@ -315,7 +317,7 @@ static Expr *parse_primary(Parser *p) {
             expect(p, T_RPAREN, "')' to close argument list");
             return call;
         }
-        Expr *e = new_expr(EX_IDENT, tk->line);
+        Expr *e = new_expr(p, EX_IDENT, tk->line);
         e->as.ident.name = name;
         return e;
     }
@@ -340,7 +342,7 @@ static Expr *parse_postfix(Parser *p) {
         if (check(p, T_DOT)) {
             advance(p); /* '.' */
             Token *f = expect(p, T_IDENT, "a field name after '.'");
-            Expr *fl = new_expr(EX_FIELD, f->line);
+            Expr *fl = new_expr(p, EX_FIELD, f->line);
             fl->as.field.base = e;
             fl->as.field.name = f->text;
             e = fl;
@@ -364,7 +366,7 @@ static Expr *parse_postfix(Parser *p) {
             if (!check(p, T_RBRACKET))
                 end = parse_expression(p);
             expect(p, T_RBRACKET, "']' to close slice");
-            Expr *s = new_expr(EX_SLICE, e->line);
+            Expr *s = new_expr(p, EX_SLICE, e->line);
             s->as.slice.base = e;
             s->as.slice.start = start;
             s->as.slice.end = end;
@@ -372,7 +374,7 @@ static Expr *parse_postfix(Parser *p) {
             e = s;
         } else {
             expect(p, T_RBRACKET, "']' to close index");
-            Expr *ix = new_expr(EX_INDEX, e->line);
+            Expr *ix = new_expr(p, EX_INDEX, e->line);
             ix->as.index.base = e;
             ix->as.index.index = start;
             e = ix;
@@ -386,7 +388,7 @@ static Expr *parse_unary(Parser *p) {
     if (tk->type == T_MINUS || tk->type == T_BANG) {
         advance(p);
         Expr *operand = parse_unary(p);
-        Expr *e = new_expr(EX_UNARY, tk->line);
+        Expr *e = new_expr(p, EX_UNARY, tk->line);
         e->as.unary.op = xstrdup(tk->type == T_MINUS ? "-" : "!");
         e->as.unary.operand = operand;
         return e;
@@ -395,7 +397,7 @@ static Expr *parse_unary(Parser *p) {
         advance(p);
         int mut = match(p, T_KW_MUT);
         Expr *operand = parse_unary(p);
-        Expr *e = new_expr(EX_UNARY, tk->line);
+        Expr *e = new_expr(p, EX_UNARY, tk->line);
         e->as.unary.op = xstrdup(mut ? "&mut" : "&");
         e->as.unary.operand = operand;
         return e;
@@ -403,7 +405,7 @@ static Expr *parse_unary(Parser *p) {
     if (tk->type == T_STAR) {
         advance(p);
         Expr *operand = parse_unary(p);
-        Expr *e = new_expr(EX_UNARY, tk->line);
+        Expr *e = new_expr(p, EX_UNARY, tk->line);
         e->as.unary.op = xstrdup("*");
         e->as.unary.operand = operand;
         return e;
@@ -412,7 +414,7 @@ static Expr *parse_unary(Parser *p) {
     /* explicit casts: expr as T (the only way to narrow) */
     while (match(p, T_KW_AS)) {
         const char *ty = parse_type_name(p);
-        Expr *c = new_expr(EX_CAST, e->line);
+        Expr *c = new_expr(p, EX_CAST, e->line);
         c->as.cast.ty = xstrdup(ty);
         c->as.cast.operand = e;
         e = c;
@@ -438,8 +440,8 @@ static const char *op_text(TokenType t) {
     }
 }
 
-static Expr *make_binary(char *op, Expr *lhs, Expr *rhs, int line) {
-    Expr *e = new_expr(EX_BINARY, line);
+static Expr *make_binary(Parser *p, char *op, Expr *lhs, Expr *rhs, int line) {
+    Expr *e = new_expr(p, EX_BINARY, line);
     e->as.binary.op = op;
     e->as.binary.lhs = lhs;
     e->as.binary.rhs = rhs;
@@ -451,7 +453,7 @@ static Expr *parse_factor(Parser *p) {
     while (check(p, T_STAR) || check(p, T_SLASH) || check(p, T_PERCENT)) {
         Token *op = advance(p);
         Expr *rhs = parse_unary(p);
-        lhs = make_binary(xstrdup(op_text(op->type)), lhs, rhs, op->line);
+        lhs = make_binary(p, xstrdup(op_text(op->type)), lhs, rhs, op->line);
     }
     return lhs;
 }
@@ -461,7 +463,7 @@ static Expr *parse_term(Parser *p) {
     while (check(p, T_PLUS) || check(p, T_MINUS)) {
         Token *op = advance(p);
         Expr *rhs = parse_factor(p);
-        lhs = make_binary(xstrdup(op_text(op->type)), lhs, rhs, op->line);
+        lhs = make_binary(p, xstrdup(op_text(op->type)), lhs, rhs, op->line);
     }
     return lhs;
 }
@@ -472,7 +474,7 @@ static Expr *parse_comparison(Parser *p) {
            check(p, T_GTE)) {
         Token *op = advance(p);
         Expr *rhs = parse_term(p);
-        lhs = make_binary(xstrdup(op_text(op->type)), lhs, rhs, op->line);
+        lhs = make_binary(p, xstrdup(op_text(op->type)), lhs, rhs, op->line);
     }
     return lhs;
 }
@@ -482,7 +484,7 @@ static Expr *parse_equality(Parser *p) {
     while (check(p, T_EQEQ) || check(p, T_BANGEQ)) {
         Token *op = advance(p);
         Expr *rhs = parse_comparison(p);
-        lhs = make_binary(xstrdup(op_text(op->type)), lhs, rhs, op->line);
+        lhs = make_binary(p, xstrdup(op_text(op->type)), lhs, rhs, op->line);
     }
     return lhs;
 }
@@ -491,7 +493,7 @@ static Expr *parse_and(Parser *p) {
     Expr *lhs = parse_equality(p);
     while (match(p, T_ANDAND)) {
         Expr *rhs = parse_equality(p);
-        lhs = make_binary(xstrdup("&&"), lhs, rhs, peek(p)->line);
+        lhs = make_binary(p, xstrdup("&&"), lhs, rhs, peek(p)->line);
     }
     return lhs;
 }
@@ -500,7 +502,7 @@ static Expr *parse_or(Parser *p) {
     Expr *lhs = parse_and(p);
     while (match(p, T_OROR)) {
         Expr *rhs = parse_and(p);
-        lhs = make_binary(xstrdup("||"), lhs, rhs, peek(p)->line);
+        lhs = make_binary(p, xstrdup("||"), lhs, rhs, peek(p)->line);
     }
     return lhs;
 }
@@ -511,7 +513,7 @@ static Expr *parse_coalesce(Parser *p) {
     if (check(p, T_QQ)) {
         Token *op = advance(p);
         Expr *rhs = parse_coalesce(p);
-        lhs = make_binary(xstrdup("??"), lhs, rhs, op->line);
+        lhs = make_binary(p, xstrdup("??"), lhs, rhs, op->line);
     }
     return lhs;
 }
@@ -520,7 +522,7 @@ static Expr *parse_expression(Parser *p) { return parse_coalesce(p); }
 
 /* Parse an expression embedded in a string interpolation. The source
  * substring is lexed and parsed independently. */
-static Expr *parse_expr_source(const char *src, int line) {
+static Expr *parse_expr_source(const char *src, int line, int in_unsafe) {
     (void)line;
     Lexer lx;
     lexer_init(&lx, src);
@@ -542,6 +544,7 @@ static Expr *parse_expr_source(const char *src, int line) {
     sub.pos = 0;
     sub.count = n;
     sub.fn_body = 0;
+    sub.in_unsafe = in_unsafe;
 
     Expr *e = parse_expression(&sub);
     if (!check(&sub, T_EOF))
@@ -552,7 +555,7 @@ static Expr *parse_expr_source(const char *src, int line) {
 /* Build the expression tree for a (possibly interpolated) string
  * literal. Interpolation segments were stored between marker bytes by
  * the lexer; each becomes a sub-expression joined with '+'. */
-static Expr *parse_interp_string(Token *tk) {
+static Expr *parse_interp_string(Parser *p, Token *tk) {
     const char *s = tk->text;
     int has_marker = 0;
     for (const char *q = s; *q; q++) {
@@ -562,7 +565,7 @@ static Expr *parse_interp_string(Token *tk) {
         }
     }
     if (!has_marker) {
-        Expr *e = new_expr(EX_STRING, tk->line);
+        Expr *e = new_expr(p, EX_STRING, tk->line);
         e->as.str_lit.value = xstrdup(s);
         return e;
     }
@@ -576,15 +579,15 @@ static Expr *parse_interp_string(Token *tk) {
             char *text = xstrdup(seg.data);
             Expr *part;
             if (in_expr) {
-                part = parse_expr_source(text, tk->line);
+                part = parse_expr_source(text, tk->line, p->in_unsafe);
             } else {
-                part = new_expr(EX_STRING, tk->line);
+                part = new_expr(p, EX_STRING, tk->line);
                 part->as.str_lit.value = text;
             }
             if (!acc) {
                 acc = part;
             } else {
-                acc = make_binary(xstrdup("+"), acc, part, tk->line);
+                acc = make_binary(p, xstrdup("+"), acc, part, tk->line);
             }
             seg.len = 0;
             seg.data[0] = '\0';
@@ -820,7 +823,7 @@ static Stmt *parse_guard_stmt(Parser *p) {
     Block *body = parse_block(p, 0);
 
     Stmt *s = new_stmt(ST_IF, kw->line);
-    Expr *neg = new_expr(EX_UNARY, kw->line);
+    Expr *neg = new_expr(p, EX_UNARY, kw->line);
     neg->as.unary.op = xstrdup("!");
     neg->as.unary.operand = cond;
     s->as.if_stmt.cond = neg;
@@ -988,6 +991,16 @@ static Stmt *parse_continue_stmt(Parser *p) {
     return new_stmt(ST_CONTINUE, kw->line);
 }
 
+static Stmt *parse_unsafe_stmt(Parser *p) {
+    Token *kw = advance(p);
+    p->in_unsafe++;
+    Block *body = parse_block(p, p->fn_body);
+    p->in_unsafe--;
+    Stmt *s = new_stmt(ST_UNSAFE, kw->line);
+    s->as.unsafe_blk.body = body;
+    return s;
+}
+
 static Stmt *parse_statement(Parser *p) {
     Token *tk = peek(p);
     switch (tk->type) {
@@ -1009,6 +1022,8 @@ static Stmt *parse_statement(Parser *p) {
         return parse_break_stmt(p);
     case T_KW_CONTINUE:
         return parse_continue_stmt(p);
+    case T_KW_UNSAFE:
+        return parse_unsafe_stmt(p);
     case T_KW_STRUCT:
         parse_error(tk, "'struct' declarations are only allowed at top "
                         "level");
@@ -1179,6 +1194,7 @@ Program *parse_program(Token *tokens, int ntokens) {
     p.pos = 0;
     p.count = ntokens;
     p.fn_body = 0;
+    p.in_unsafe = 0;
 
     Program *prog = (Program *)xmalloc(sizeof(Program));
     memset(prog, 0, sizeof(Program));

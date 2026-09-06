@@ -858,6 +858,8 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
         return cur;
     }
 
+    case ST_UNSAFE:
+        return live_block(cg, s->as.unsafe_blk.body, live_out);
     case ST_STRUCT:
     case ST_IMPL:
         return live_out;
@@ -1108,6 +1110,9 @@ static void print_stmts(FILE *out, Stmt **stmts, int count) {
                 print_live_set(out, (LiveSet *)s->as.spawn.call->live_set);
                 fputc('\n', out);
             }
+            break;
+        case ST_UNSAFE:
+            print_block(out, s->as.unsafe_blk.body);
             break;
         case ST_STRUCT:
         case ST_IMPL:

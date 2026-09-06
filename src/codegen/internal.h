@@ -331,6 +331,7 @@ int is_num(const char *t);
 int is_str(const char *t);
 int is_bytes(const char *t);
 int is_rawptr(const char *t);
+int type_is_raw_ptr(const char *t);
 int is_arr(const char *t);
 int is_map(const char *t);
 void check_extern_type(const char *t, int line, const char *what);

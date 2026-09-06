@@ -57,6 +57,7 @@ struct Expr {
     ExprKind kind;
     int line;
     const char *inf_ty; /* memoized slang type, filled by codegen inference */
+    int in_unsafe;
     void *live_set; /* LiveSet*, filled by the Tier 10 liveness pass
                       * (src/codegen/liveness.c); non-NULL only on
                       * safepoint kinds (EX_CALL, EX_STRUCTLIT, EX_LIST,
@@ -113,7 +114,8 @@ typedef enum {
     ST_GUARD_LET, /* guard let x = opt_expr else { ... } */
     ST_SPAWN,  /* spawn f(args...) -- submit an sl_task to the M:N pool */
     ST_STRUCT, /* struct Name { field: T, ... } (top level only) */
-    ST_IMPL    /* impl Name { fn ... } blocks (top level only) */
+    ST_IMPL,   /* impl Name { fn ... } blocks (top level only) */
+    ST_UNSAFE  /* unsafe { ... } */
 } StmtKind;
 
 typedef struct Stmt Stmt;
@@ -168,6 +170,7 @@ struct Stmt {
             Block *body; /* else block: must exit (return/break/...) */
         } guard_let;
         struct { Expr *call; } spawn; /* EX_CALL to a plain/extern fn */
+        struct { Block *body; } unsafe_blk;
         struct {
             char *name;
             int is_pub;

@@ -489,6 +489,9 @@ static void lower_stmt(Lower *L, Stmt *s) {
         }
         return;
     }
+    case ST_UNSAFE:
+        lower_block(L, s->as.unsafe_blk.body);
+        return;
     case ST_STRUCT:
     case ST_IMPL:
         return;

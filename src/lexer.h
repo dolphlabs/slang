@@ -36,6 +36,7 @@ typedef enum {
     T_KW_SPAWN,
     T_KW_BREAK,
     T_KW_CONTINUE,
+    T_KW_UNSAFE,
 
     /* type names */
     T_TY_INT,

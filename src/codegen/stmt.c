@@ -313,6 +313,10 @@ void gen_stmt(CG *cg, Stmt *s) {
                 cg_error(s->line,
                          "cannot assign through a shared borrow of type %s",
                          pt);
+            if (type_is_raw_ptr(pt) && !tgt->in_unsafe)
+                cg_error(s->line,
+                         "dereference of a raw pointer requires an "
+                         "'unsafe' block");
             const char *se = expect_push(cg, inner);
             const char *vt = infer_type(cg, s->as.assign.value);
             cg->expect = se;
@@ -929,6 +933,11 @@ void gen_stmt(CG *cg, Stmt *s) {
         emit_line(cg, "}");
         break;
     }
+    case ST_UNSAFE:
+        emit_line(cg, "{");
+        gen_scoped_block(cg, s->as.unsafe_blk.body);
+        emit_line(cg, "}");
+        break;
     case ST_STRUCT:
     case ST_IMPL:
         /* declarations are processed during collect_decls; nothing to

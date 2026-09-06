@@ -1004,6 +1004,13 @@ char *gen_expr(CG *cg, Expr *e) {
             char *b = gen_expr(cg, e->as.binary.rhs);
             return xasprintf("sl_arr_concat(%s, %s)", a, b);
         }
+        if ((!strcmp(op, "+") || !strcmp(op, "-")) &&
+            ((type_is_raw_ptr(lt) && is_int(rt)) ||
+             (!strcmp(op, "+") && is_int(lt) && type_is_raw_ptr(rt)))) {
+            char *a = gen_expr(cg, e->as.binary.lhs);
+            char *b = gen_expr(cg, e->as.binary.rhs);
+            return xasprintf("(%s %s %s)", a, op, b);
+        }
         if (!strcmp(op, "+") || !strcmp(op, "-") || !strcmp(op, "*") ||
             !strcmp(op, "/"))
             return gen_numeric_binary(cg, e, promote(lt, rt));

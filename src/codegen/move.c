@@ -364,6 +364,9 @@ static void check_stmt(CG *cg, Stmt *s) {
         }
         return;
     }
+    case ST_UNSAFE:
+        check_block(cg, s->as.unsafe_blk.body);
+        return;
     case ST_BREAK:
     case ST_CONTINUE:
     case ST_STRUCT:
