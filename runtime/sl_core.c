@@ -226,6 +226,7 @@ typedef struct sl_task {
     sl_gc_obj *gc_pend_tail;
     long gc_pend_n;
     size_t gc_pend_bytes;
+    size_t gc_pend_pub;
 } sl_task;
 
 /* Tier 11 second slice: the scheduler's own run queue. Defined here,

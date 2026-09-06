@@ -17,6 +17,17 @@ static int sl_runtime_test_main(void) {
     memset(a, 0xab, 64);
     memset(b, 0xcd, 128);
     sl_gc_collect();
+    void *keep[48];
+    for (int i = 0; i < 48; i++) {
+        keep[i] = sl_gc_alloc(16, NULL);
+        if (!keep[i]) return 1;
+        memset(keep[i], i, 16);
+    }
+    sl_gc_collect();
+    for (int i = 0; i < 48; i++) {
+        unsigned char *p = (unsigned char *)keep[i];
+        if (p[0] != (unsigned char)i) return 1;
+    }
     void *c = sl_gc_alloc(32, NULL);
     if (!c)
         return 1;

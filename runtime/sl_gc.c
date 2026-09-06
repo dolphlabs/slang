@@ -10,8 +10,9 @@ typedef struct sl_gc_obj {
 } sl_gc_obj;
 
 static sl_gc_obj *sl_gc_all = NULL;
+static _Atomic(sl_gc_obj *) sl_gc_retired = NULL;
 static pthread_mutex_t sl_gc_mu = PTHREAD_MUTEX_INITIALIZER;
-static size_t sl_gc_bytes_since_collect = 0;
+static _Atomic size_t sl_gc_bytes_since_collect = 0;
 static size_t sl_gc_threshold = 8 * 1024 * 1024;
 
 /* A root array can legitimately hold a pointer that was never
@@ -33,18 +34,15 @@ static size_t sl_gc_threshold = 8 * 1024 * 1024;
  * freed at the end of it, rather than maintained incrementally on
  * every allocation. Three reasons, in the order they were found:
  *
- *  1. CORRECTNESS. Incremental maintenance inserted at SPLICE time
- *     (sl_gc_flush_pending), so an object still sitting in a
- *     thread's un-spliced batch was in no table -- and sl_gc_mark's
- *     first act is to reject anything not in the table. That made
- *     the collector's own 'trace every thread's pending batch' loop
- *     a silent no-op, defeating the exact hazard its comment
- *     describes: a pending object's children ARE on sl_gc_all and
- *     WERE being swept out from under it. Measured directly before
- *     this fix, at 8,000 tasks: 3,489 pending objects observed
- *     across one run's collections, every one rejected, 20 of them
- *     carrying a real trace function. Building from sl_gc_all AND
- *     every thread's pending list closes it by construction.
+ *  1. CORRECTNESS. Incremental maintenance inserted at splice time,
+ *     so an object still sitting in a task's un-spliced batch was
+ *     in no table -- and sl_gc_mark's first act is to reject
+ *     anything not in the table. That made the collector's own
+ *     'trace every task's pending batch' loop a silent no-op,
+ *     defeating the exact hazard its comment describes: a pending
+ *     object's children ARE on sl_gc_all and WERE being swept out
+ *     from under it. Building from sl_gc_all AND every live task's
+ *     pending list closes it by construction.
  *  2. MEMORY. The table is 8 bytes per live object at a 0.5 load
  *     factor -- so 16 bytes per object of permanently-resident
  *     memory, ~21 with the doubling slack, against a measured total
@@ -115,29 +113,16 @@ typedef struct sl_gc_thread {
 } sl_gc_thread;
 static sl_gc_thread *sl_gc_threads = NULL;
 
-/* Per-thread allocation batch. Allocation used to take the global
- * sl_gc_mu on EVERY object, to push onto sl_gc_all, insert into
- * sl_gc_set and bump the byte counter -- eight workers serialising
- * on one lock on the hottest path in the language, and the same lock
- * sl_rt_gc_checkin, sl_task_park, sl_task_resume and sl_gc_collect
- * use, so allocation contended with all of them too. A profile of
- * the demo server put sl_gc_alloc top of the frames blocked on a
- * contended mutex by more than 3x.
+/* Task-owned allocation shard. Mutators never take sl_gc_mu: objects
+ * stay on sl_task.gc_pend_* until the next STW harvest or the task
+ * dies (lock-free retire onto sl_gc_retired). The byte counter is
+ * an atomic published every SL_GC_PENDING_BATCH allocs.
  *
- * Objects accumulate on the current sl_task (not TLS -- Darwin TLV
- * lookups were slower than the mutex) and are spliced in batches.
- *
- * Safety rests on two things. First, a pending object is NOT on
- * sl_gc_all, so the sweep cannot free it -- being unmarked is
- * harmless. Second, it may REFERENCE objects that are on sl_gc_all,
- * so the collector traces every live task's pending list as a root.
- * Without that second half the children of a
- * pending object get swept while live.
- *
- * Reading another thread's pending list during the mark phase is
- * safe for the same reason the rest of the mark phase is: the
- * collector does not begin marking until every registered thread is
- * acked or gc_blocked, and neither state can be reached from inside
+ * Pending objects are not on sl_gc_all, so sweep cannot free them.
+ * They may reference objects that are, so the collector traces every
+ * live task's pending list as a root. Reading another task's list
+ * is safe because mark does not start until every registered thread
+ * is acked or gc_blocked, and neither state is reachable from
  * sl_gc_alloc. */
 #define SL_GC_PENDING_BATCH 32
 static _Atomic int sl_gc_stop_requested = 0;
@@ -345,25 +330,58 @@ static inline void sl_rt_gc_checkin(void) {
  * at 2,000 tasks went from ~1.4s (1,000 tasks) to still not done
  * after 2 minutes, sample showing 74% of all samples in swtch_pri
  * (the collector's own spin-wait), before this bracket was added. */
-/* Splice this thread's batch onto the global structures under one
- * lock acquisition instead of SL_GC_PENDING_BATCH of them. Must be
- * called with the preempt bracket already held (sl_gc_alloc's), for
- * the usual reason: being async-preempted while holding sl_gc_mu
- * freezes it and wedges the process. */
-static void sl_gc_flush_task(sl_task *t) {
-    if (!t || !t->gc_pend_head) return;
-    pthread_mutex_lock(&sl_gc_mu);
-    t->gc_pend_tail->next = sl_gc_all;
-    sl_gc_all = t->gc_pend_head;
-    sl_gc_bytes_since_collect += t->gc_pend_bytes;
-    if (sl_gc_bytes_since_collect >= sl_gc_threshold)
+static void sl_gc_publish_bytes(sl_task *t) {
+    size_t delta = t->gc_pend_bytes - t->gc_pend_pub;
+    if (!delta) return;
+    t->gc_pend_pub = t->gc_pend_bytes;
+    size_t prev = atomic_fetch_add_explicit(&sl_gc_bytes_since_collect, delta,
+                                            memory_order_relaxed);
+    if (prev + delta >= sl_gc_threshold)
         atomic_store_explicit(&sl_gc_collect_pending, 1,
                                memory_order_release);
-    pthread_mutex_unlock(&sl_gc_mu);
+}
+
+static void sl_gc_retire_list(sl_gc_obj *head, sl_gc_obj *tail) {
+    sl_gc_obj *old = atomic_load_explicit(&sl_gc_retired, memory_order_relaxed);
+    do {
+        tail->next = old;
+    } while (!atomic_compare_exchange_weak_explicit(
+                 &sl_gc_retired, &old, head,
+                 memory_order_release, memory_order_relaxed));
+}
+
+static void sl_gc_flush_task(sl_task *t) {
+    if (!t || !t->gc_pend_head) return;
+    sl_gc_publish_bytes(t);
+    sl_gc_obj *head = t->gc_pend_head;
+    sl_gc_obj *tail = t->gc_pend_tail;
     t->gc_pend_head = NULL;
     t->gc_pend_tail = NULL;
     t->gc_pend_n = 0;
     t->gc_pend_bytes = 0;
+    t->gc_pend_pub = 0;
+    sl_gc_retire_list(head, tail);
+}
+
+static void sl_gc_drain_retired(void) {
+    sl_gc_obj *ret = atomic_exchange_explicit(&sl_gc_retired, NULL,
+                                              memory_order_acquire);
+    if (!ret) return;
+    sl_gc_obj *tail = ret;
+    while (tail->next) tail = tail->next;
+    tail->next = sl_gc_all;
+    sl_gc_all = ret;
+}
+
+static void sl_gc_harvest_task(sl_task *t) {
+    if (!t || !t->gc_pend_head) return;
+    t->gc_pend_tail->next = sl_gc_all;
+    sl_gc_all = t->gc_pend_head;
+    t->gc_pend_head = NULL;
+    t->gc_pend_tail = NULL;
+    t->gc_pend_n = 0;
+    t->gc_pend_bytes = 0;
+    t->gc_pend_pub = 0;
 }
 
 static size_t sl_gc_pend_count(sl_task *t) {
@@ -418,7 +436,8 @@ static void *sl_gc_alloc(size_t n,
     t->gc_pend_head = h;
     t->gc_pend_n++;
     t->gc_pend_bytes += n;
-    if (t->gc_pend_n >= SL_GC_PENDING_BATCH) sl_gc_flush_task(t);
+    if ((t->gc_pend_n & (SL_GC_PENDING_BATCH - 1)) == 0)
+        sl_gc_publish_bytes(t);
     sl_rt_preempt_enable();
     return (void *)(h + 1);
 }
@@ -549,8 +568,8 @@ static void sl_gc_set_build(sl_gc_thread **snap, int nsnap) {
  * ever taken here, and the registry is only read into a private
  * snapshot under a brief lock, released before the quiescence wait
  * -- both load-bearing: holding sl_gc_mu across the whole wait would
- * deadlock against a mutator that needs the same mutex to finish an
- * in-flight sl_gc_alloc before it can reach its own next checkin;
+ * deadlock against a mutator that needs the same mutex to finish
+ * park/resume/unregister before it can reach its own next checkin;
  * reading the live list without the lock for the whole wait would
  * race a concurrent sl_gc_register_thread(). */
 static void sl_gc_collect(void) {
@@ -589,6 +608,7 @@ static void sl_gc_collect(void) {
     }
 
     pthread_mutex_lock(&sl_gc_mu);
+    sl_gc_drain_retired();
 
     /* Must run before the first sl_gc_mark of the cycle: mark's very
      * first act is to reject any pointer this table does not hold. */
@@ -775,6 +795,8 @@ static void sl_gc_collect(void) {
      * on sl_gc_all and get swept. Caught empirically -- 4 of 6
      * concurrent_compute runs segfaulting -- not by reading the code. */
     sl_gc_for_pending_tasks(sl_gc_pend_unmark, snap, nsnap);
+    sl_gc_for_pending_tasks(sl_gc_harvest_task, snap, nsnap);
+    sl_gc_drain_retired();
     /* The table's only reader is sl_gc_mark, which runs only inside
      * this function -- so it is dead weight between collections and
      * is released rather than carried. See sl_gc_set's own comment. */
@@ -784,7 +806,7 @@ static void sl_gc_collect(void) {
     sl_gc_set_count = 0;
     free(snap);
 
-    sl_gc_bytes_since_collect = 0;
+    atomic_store_explicit(&sl_gc_bytes_since_collect, 0, memory_order_relaxed);
     atomic_store_explicit(&sl_gc_collect_pending, 0, memory_order_release);
     atomic_store_explicit(&sl_gc_stop_requested, 0, memory_order_release);
     atomic_store_explicit(&sl_gc_collecting, 0, memory_order_release);
