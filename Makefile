@@ -9,7 +9,8 @@ CFLAGS = -std=c11 -O2 -Wall -Wextra -DSLANG_RUNTIME_DIR=\"$(RUNTIME_DIR)\"
 CODEGEN_SRCS = src/codegen/core.c src/codegen/infer.c src/codegen/expr.c \
               src/codegen/stmt.c src/codegen/native.c \
               src/codegen/program.c \
-              src/codegen/liveness.c
+              src/codegen/liveness.c \
+              src/codegen/escape.c
 
 # Native packages: signatures (and json's generic dispatch) stay in
 # src/codegen/pkg_<name>/. Their C runtimes are runtime/sl_*.c.

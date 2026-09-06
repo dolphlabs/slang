@@ -138,6 +138,7 @@ struct Stmt {
             char *type_ann; /* slang type name from 'let x: T = ...', or NULL */
             Expr *init;
             int is_pub;
+            int stack;
         } let;
         struct {
             Expr *target; /* EX_IDENT or EX_INDEX */

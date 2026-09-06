@@ -193,6 +193,28 @@ void gen_stmt(CG *cg, Stmt *s) {
             init = gen_maplit(cg, s->as.let.init, ak, av);
         else
             init = gen_expr(cg, s->as.let.init);
+        if (s->as.let.stack) {
+            char *inner;
+            TypeWrap w = type_wrap(t, &inner);
+            int id = cg->tmp_id++;
+            const char *pc;
+            if (w == TW_OWN || w == TW_GC) {
+                pc = ctype_of(cg, inner);
+                init = maybe_cast(cg, inner, it, init);
+            } else {
+                pc = mangle_struct(t);
+                cg->stack_box = 1;
+                init = gen_expr(cg, s->as.let.init);
+                cg->stack_box = 0;
+            }
+            cg->expect = saved_expect;
+            var_redecl_check(cg, s->as.let.name, s->line);
+            var_push(cg, s->as.let.name, t);
+            emit_line(cg, "%s _sl_stk%d = %s;", pc, id, init);
+            emit_line(cg, "%s %s = &_sl_stk%d;", ctype_of(cg, t),
+                      sanitize_ident(s->as.let.name), id);
+            break;
+        }
         init = maybe_cast(cg, t, it, init);
         cg->expect = saved_expect;
         var_redecl_check(cg, s->as.let.name, s->line);

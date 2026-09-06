@@ -671,7 +671,7 @@ char *gen_structlit(CG *cg, Expr *e) {
     const char *canon = infer_type(cg, e); /* validates fields too */
     StructDef *sd = struct_find_canon(cg, canon);
     const char *sc = mangle_struct(canon);
-    int is_gc = sd->is_gc;
+    int is_gc = sd->is_gc && !cg->stack_box;
     const char *dot = is_gc ? "->" : ".";
     StrBuf sb;
     sb_init(&sb);

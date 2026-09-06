@@ -260,6 +260,7 @@ struct CG {
     int nnat;
     int want_tls; /* set once a net.tls_* function is type-checked */
     int want_json; /* set once a json.decode/json.encode is type-checked */
+    int stack_box;
 };
 
 /* C typedef name for a distinct opt[T] instantiation. */
@@ -399,6 +400,7 @@ StructDef *struct_find_in_pkg(CG *cg, const char *pkg,
 char *mangle_struct(const char *canon);
 const char *ctype_of(CG *cg, const char *t);
 const char *canon_type(CG *cg, const char *t, int line);
+void compute_escape(CG *cg, Package *pkgs, int npkgs, int main_index);
 void emit_line(CG *cg, const char *fmt, ...);
 int is_builtin_name(const char *name);
 FuncSig *method_find(CG *cg, StructDef *sd, const char *name);

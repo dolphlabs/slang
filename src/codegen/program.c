@@ -875,6 +875,7 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
      * "undefined variable" -- caught by demo/main.sl specifically,
      * which is exactly this shape (httpkit.sl's CR/LF/SPACE). */
     compute_liveness(&cg, pkgs, npkgs, main_index);
+    compute_escape(&cg, pkgs, npkgs, main_index);
 
     /* emit_globals (called from gen_whole_program) registers package
      * globals as it emits them; undo that bookkeeping before the real
