@@ -527,21 +527,32 @@ byteutil.split(b"a,b", 44);          // [b"a", b"b"]
 
 HTTP/1.1 over `link` / `wire` / `until` / `fault`. Parse a request
 from `bytes`, or `read` from a connection into a caller-sized `wire`
-(the max request size). `write` serializes a `Response` through an
-arena. Headers are stored lowercased; `header(req, name)` looks up
-case-insensitively. `Content-Length` is honored; chunked
-`Transfer-Encoding` is rejected.
+(the max request size). `read` takes the unconsumed prefix length and
+returns `Incoming` with leftover compacted to the front of the wire,
+so one connection can carry many requests. `write` serializes a
+`Response` through an arena. Headers are stored lowercased;
+`header(req, name)` looks up case-insensitively. `Content-Length` is
+honored; chunked `Transfer-Encoding` is rejected. `wants_close`
+follows HTTP/1.1 keep-alive (and HTTP/1.0 close-by-default).
 
 ```slang
 import "http";
 
 fn serve(c: link) {
-    let a = arena_new(16384);
-    let buf = a.wire(8192);
-    let rr = http.read(&mut c, buf, until_never());
-    guard let req = rr else { return; }
-    let wr = http.write(&mut c, http.ok_text(req.path), &mut a, until_never());
-    guard let _n = wr else { return; }
+    let ra = arena_new(16384);
+    let sa = arena_new(16384);
+    let buf = ra.wire(8192);
+    let filled = 0;
+    while true {
+        let rr = http.read(&mut c, buf, filled, until_never());
+        guard let got = rr else { return; }
+        let wr = http.write(&mut c, http.ok_text(got.req.path), &mut sa,
+                            until_never());
+        guard let _n = wr else { return; }
+        sa.reset();
+        if http.wants_close(got.req) { return; }
+        filled = got.filled;
+    }
 }
 ```
 

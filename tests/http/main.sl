@@ -59,7 +59,7 @@ fn parse_errors() {
 fn serialize_ok() {
     let r = http.ok_text("hi");
     let out = http.serialize(r);
-    if out != to_bytes("HTTP/1.1 200 OK\r\ncontent-type: text/plain; charset=utf-8\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi") {
+    if out != to_bytes("HTTP/1.1 200 OK\r\ncontent-type: text/plain; charset=utf-8\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nhi") {
         die("serialize");
     }
     println("serialize");
@@ -82,16 +82,18 @@ fn loopback() {
     let ar = ln.accept(until_never());
     guard let s = ar else { die("accept"); }
     let buf = a.wire(512);
-    let rr = http.read(&mut s, buf, until_never());
+    let rr = http.read(&mut s, buf, 0, until_never());
     guard let got = rr else { die("read"); }
-    if got.method != "POST" { die("read method"); }
-    if got.path != "/echo" { die("read path"); }
-    if got.body != b"xyz" { die("read body"); }
-    let host = http.header(got, "host");
+    if got.req.method != "POST" { die("read method"); }
+    if got.req.path != "/echo" { die("read path"); }
+    if got.req.body != b"xyz" { die("read body"); }
+    if got.filled != 0 { die("no leftover"); }
+    let host = http.header(got.req, "host");
     guard let hv = host else { die("read host"); }
     if hv != "t" { die("read host value"); }
 
-    let wr = http.write(&mut s, http.ok_text("ok"), &mut a, until_never());
+    let sa = arena_new(256);
+    let wr = http.write(&mut s, http.ok_text("ok"), &mut sa, until_never());
     guard let wn = wr else { die("write"); }
     if wn <= 0 { die("write len"); }
 
@@ -107,9 +109,40 @@ fn loopback() {
     println("loopback");
 }
 
+fn keepalive() {
+    let lr = link_listen(0);
+    guard let ln = lr else { die("ka listen"); }
+    let port = ln.port();
+    let dr = link_dial("127.0.0.1", port, until_never());
+    guard let c = dr else { die("ka dial"); }
+
+    let a = arena_new(2048);
+    let req = to_bytes("GET /a HTTP/1.1\r\nHost: t\r\n\r\nGET /b HTTP/1.1\r\nHost: t\r\n\r\n");
+    let out = a.wire(len(req));
+    fill(out, req);
+    let sr = c.send(out, until_never());
+    guard let _n = sr else { die("ka send"); }
+
+    let ar = ln.accept(until_never());
+    guard let s = ar else { die("ka accept"); }
+    let buf = a.wire(512);
+    let r1 = http.read(&mut s, buf, 0, until_never());
+    guard let first = r1 else { die("ka read1"); }
+    if first.req.path != "/a" { die("ka path a"); }
+    if http.wants_close(first.req) { die("ka close a"); }
+    if first.filled <= 0 { die("ka leftover"); }
+
+    let r2 = http.read(&mut s, buf, first.filled, until_never());
+    guard let second = r2 else { die("ka read2"); }
+    if second.req.path != "/b" { die("ka path b"); }
+    if second.filled != 0 { die("ka leftover2"); }
+    println("keepalive");
+}
+
 parse_get();
 parse_post();
 parse_errors();
 serialize_ok();
 loopback();
+keepalive();
 println("http ok");

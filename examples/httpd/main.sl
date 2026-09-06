@@ -3,14 +3,23 @@ import "proc";
 import "time";
 
 fn serve(c: link) {
-    let a = arena_new(16384);
-    let buf = a.wire(8192);
-    let rr = http.read(&mut c, buf, until_never());
-    guard let _req = rr else { return; }
-    let body = "<html><body><h1>Hello from slang</h1>"
-        + "<p>served by the slang http package</p></body></html>";
-    let wr = http.write(&mut c, http.ok_html(body), &mut a, until_never());
-    guard let _n = wr else { return; }
+    let ra = arena_new(16384);
+    let sa = arena_new(16384);
+    let buf = ra.wire(8192);
+    let filled = 0;
+    while true {
+        let rr = http.read(&mut c, buf, filled, until_never());
+        guard let got = rr else { return; }
+        let body = "<html><body><h1>Hello from slang</h1>"
+            + "<p>served by the slang http package</p></body></html>";
+        let wr = http.write(&mut c, http.ok_html(body), &mut sa, until_never());
+        guard let _n = wr else { return; }
+        sa.reset();
+        if http.wants_close(got.req) {
+            return;
+        }
+        filled = got.filled;
+    }
 }
 
 fn accept_and_serve(ln: &mut link) {

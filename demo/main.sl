@@ -368,12 +368,21 @@ fn route(st: AppState, req: http.Request) -> http.Response {
 // orphan the first waiter.
 
 fn handle_http_conn(st: AppState, c: link) {
-    let a = arena_new(131072);
-    let buf = a.wire(65536);
-    let rr = http.read(&mut c, buf, until_never());
-    guard let req = rr else { return; }
-    let wr = http.write(&mut c, route(st, req), &mut a, until_never());
-    guard let _n = wr else { return; }
+    let ra = arena_new(65536);
+    let sa = arena_new(65536);
+    let buf = ra.wire(65536);
+    let filled = 0;
+    while true {
+        let rr = http.read(&mut c, buf, filled, until_never());
+        guard let got = rr else { return; }
+        let wr = http.write(&mut c, route(st, got.req), &mut sa, until_never());
+        guard let _n = wr else { return; }
+        sa.reset();
+        if http.wants_close(got.req) {
+            return;
+        }
+        filled = got.filled;
+    }
 }
 
 fn http_worker(st: AppState, work: chan[link]) {
