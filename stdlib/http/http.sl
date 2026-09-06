@@ -1,3 +1,5 @@
+import "byteutil";
+
 pub gc struct Request {
     method: str,
     path: str,
@@ -31,17 +33,6 @@ fn lower_ascii(s: str) -> str {
 
 fn is_ows(b: int) -> bool {
     return b == 32 || b == 9;
-}
-
-fn find_byte(b: bytes, from: int, target: int) -> int {
-    let i = from;
-    while i < len(b) {
-        if b[i] == target {
-            return i;
-        }
-        i = i + 1;
-    }
-    return -1;
 }
 
 fn find_crlf(b: bytes, from: int) -> int {
@@ -136,7 +127,7 @@ fn parse_headers(raw: bytes, start: int, sep: int) -> result[map[str]str, str] {
         if is_ows(raw[i]) {
             return err("folded header");
         }
-        let colon = find_byte(raw, i, 58);
+        let colon = byteutil.find(raw, i, 58);
         if colon < 0 || colon >= eol || colon == i {
             return err("malformed header");
         }
@@ -185,11 +176,11 @@ pub fn parse(raw: bytes) -> result[Request, str] {
     if line_end < 0 {
         return err("malformed request line");
     }
-    let sp1 = find_byte(raw, 0, 32);
+    let sp1 = byteutil.find(raw, 0, 32);
     if sp1 < 0 || sp1 >= line_end {
         return err("malformed request line: no method");
     }
-    let sp2 = find_byte(raw, sp1 + 1, 32);
+    let sp2 = byteutil.find(raw, sp1 + 1, 32);
     if sp2 < 0 || sp2 >= line_end {
         return err("malformed request line: no path");
     }
