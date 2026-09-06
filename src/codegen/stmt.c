@@ -544,14 +544,16 @@ void gen_stmt(CG *cg, Stmt *s) {
         if (strcmp(ct, "bool"))
             cg_error(s->line, "while condition must be bool (got %s)", ct);
         char *cond = gen_expr(cg, s->as.while_stmt.cond);
+        int scalar = live_set_nnamed(s->backedge_live_set) == 0;
+        int poll = !(scalar && cg->loop_depth > 0);
         int eid = 0;
-        if (live_set_nnamed(s->backedge_live_set) == 0) {
+        if (scalar && poll) {
             eid = cg->tmp_id++;
             emit_line(cg, "unsigned long _sl_ec%d = 0;", eid);
         }
         emit_line(cg, "while (%s) {", cond);
         cg->indent++;
-        int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 1, eid);
+        int has_bp = emit_backedge_enter(cg, s->backedge_live_set, poll, eid);
         cg->loop_depth++;
         int saved_loop_bp = cg->cur_loop_has_bp;
         cg->cur_loop_has_bp = has_bp;

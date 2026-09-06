@@ -157,13 +157,16 @@ char *gen_numeric_binary(CG *cg, Expr *e, const char *result_t) {
 
     if ((!strcmp(op, "/") || !strcmp(op, "%")) && is_int(result_t) &&
         !expr_nonzero_int_lit(e->as.binary.rhs)) {
-        int id = cg->tmp_id++;
+        const char *ty = map_type(result_t);
+        if (flat)
+            return xasprintf(
+                "((%s) == 0 ? (sl_rt_error(\"division by zero\", 0, 0), "
+                "(%s)0) : ((%s)((%s) %s (%s))))",
+                b, ty, ty, a, op, b);
         return xasprintf(
-            "({ %s%s _sl_dv%d = (%s); if (_sl_dv%d == 0) "
-            "sl_rt_error(\"division by zero\", 0, 0); "
-            "(%s)((%s) %s _sl_dv%d); })",
-            prelude.data, map_type(result_t), id, b, id, map_type(result_t),
-            a, op, id);
+            "({ %s((%s) == 0 ? (sl_rt_error(\"division by zero\", 0, 0), "
+            "(%s)0) : ((%s)((%s) %s (%s)))); })",
+            prelude.data, b, ty, ty, a, op, b);
     }
     if (flat)
         return xasprintf("((%s)((%s) %s (%s)))", map_type(result_t), a, op,

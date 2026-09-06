@@ -759,6 +759,7 @@ static inline void sl_rt_safepoint_exit(void) {
  * user-triggered panic can fire -- abandoning the intervening C
  * frames without running any cleanup for them is exactly what
  * already happened before, just via a different mechanism. */
+__attribute__((noreturn))
 static void sl_rt_error(const char *msg, long long a, long long b) {
     /* Tier 11 eighth slice: disabled from entry, deliberately with no
      * matching enable anywhere on the spawned-task branch -- this
