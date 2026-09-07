@@ -175,6 +175,8 @@ const char *infer_call(CG *cg, Expr *e) {
         const char *t = infer_type(cg, e->as.call.args[0]);
         if (is_arr(t))
             cg_error(e->line, "cannot convert a list to str");
+        if (is_result(t) || is_opt(t))
+            cg_error(e->line, "cannot convert opt/result to str; unwrap first");
         return "str";
     }
     if (!strcmp(name, "to_bytes")) {
@@ -382,6 +384,17 @@ const char *infer_call(CG *cg, Expr *e) {
         cg->want_link = 1;
         res_cname(cg, "link", "fault");
         return "result[link,fault]";
+    }
+
+    if (!strcmp(name, "err_of")) {
+        if (n != 1)
+            cg_error(e->line, "err_of() takes exactly one argument");
+        const char *t = infer_type(cg, e->as.call.args[0]);
+        if (!is_result(t))
+            cg_error(e->line, "err_of() expects a result (got %s)", t);
+        char *tv, *tev;
+        result_te(t, &tv, &tev);
+        return tev;
     }
 
     if (!strcmp(name, "has") || !strcmp(name, "del")) {

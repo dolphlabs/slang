@@ -170,6 +170,8 @@ struct Stmt {
         struct {
             char *name;  /* variable to bind the unwrapped value to */
             Expr *expr;  /* expression of type opt[T] or result[T, E] */
+            char *err_name; /* optional: else let name = err_of(expr) */
+            Expr *err_expr;
             Block *body; /* else block: must exit (return/break/...) */
         } guard_let;
         struct { Expr *call; } spawn; /* EX_CALL to a plain/extern fn */

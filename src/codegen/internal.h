@@ -316,6 +316,9 @@ extern const int PROC_SIGS_LEN;
 extern const NatSig FS_SIGS[]; /* src/codegen/pkg_fs/ */
 extern const int FS_SIGS_LEN;
 
+extern const NatSig LOG_SIGS[]; /* src/codegen/pkg_log/ */
+extern const int LOG_SIGS_LEN;
+
 /* ------------------------------------------------------------------ */
 /* Functions (declarations generated from every former 'static' def)   */
 /* ------------------------------------------------------------------ */

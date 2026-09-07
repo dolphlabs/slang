@@ -904,9 +904,20 @@ static LiveSet *live_stmts(CG *cg, Stmt **stmts, int count, LiveSet *live_out) {
         int else_falls_through = !block_always_terminates(s->as.guard_let.body);
         LiveSet *live_out_else =
             else_falls_through ? ls_clone(tail_without_gv) : ls_new();
+        LiveVar *ev = NULL;
+        if (s->as.guard_let.err_name &&
+            is_result(infer_type(cg, s->as.guard_let.expr))) {
+            char *tv, *tev;
+            result_te(infer_type(cg, s->as.guard_let.expr), &tv, &tev);
+            ev = declare_var(cg, s->as.guard_let.err_name, tev);
+        }
         LiveSet *live_in_else = live_block(cg, s->as.guard_let.body, live_out_else);
+        if (s->as.guard_let.err_name)
+            cg->vars.count--;
 
         LiveSet *joined = ls_clone(tail_without_gv);
+        if (ev)
+            ls_remove_named(live_in_else, ev);
         ls_union_named_into(joined, live_in_else);
         return live_expr(cg, s->as.guard_let.expr, joined);
     }

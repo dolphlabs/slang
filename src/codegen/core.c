@@ -1368,6 +1368,7 @@ int is_builtin_name(const char *name) {
            !strcmp(name, "del") || !strcmp(name, "exit") ||
            !strcmp(name, "some") || !strcmp(name, "none") ||
            !strcmp(name, "ok") || !strcmp(name, "err") ||
+           !strcmp(name, "err_of") ||
            !strcmp(name, "nullptr") || !strcmp(name, "bytes_ptr") ||
            !strcmp(name, "make_chan") || !strcmp(name, "chan_send") ||
            !strcmp(name, "chan_recv") || !strcmp(name, "chan_close") ||

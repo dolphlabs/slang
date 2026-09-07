@@ -55,6 +55,8 @@ char *conv_to_str(const char *t, char *expr) {
         return xasprintf("sl_str_from_bool(%s)", expr);
     if (is_bytes(t))
         return xasprintf("sl_str_from_bytes(%s)", expr);
+    if (is_fault(t))
+        return xasprintf("sl_str_from_fault(%s)", expr);
     cg_error(0, "internal: no str conversion for %s", t);
     return NULL; /* unreachable */
 }
@@ -504,6 +506,25 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *a = gen_expr(cg, e->as.call.args[0]);
         char *inner = xasprintf("((long long)sl_fault_kind(%s))", a);
         return wrap_safepoint(cg, e, ctype_of(cg, "int"), NULL, inner);
+    }
+    if (!strcmp(name, "err_of")) {
+        const char *rt = infer_type(cg, e->as.call.args[0]);
+        char *tv, *tev;
+        result_te(rt, &tv, &tev);
+        const char *rc = res_cname(cg, tv, tev);
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        char *inner;
+        if (type_is_gc_ptr(cg, rt))
+            inner = xasprintf(
+                "({ %s *_sl_r = %s; if (_sl_r->ok) sl_rt_error(\"err_of on ok "
+                "result\", 0, 0); _sl_r->e; })",
+                rc, a);
+        else
+            inner = xasprintf(
+                "({ %s _sl_r = %s; if (_sl_r.ok) sl_rt_error(\"err_of on ok "
+                "result\", 0, 0); _sl_r.e; })",
+                rc, a);
+        return wrap_safepoint(cg, e, ctype_of(cg, tev), NULL, inner);
     }
     if (!strcmp(name, "peer_v4")) {
         char *a = gen_expr(cg, e->as.call.args[0]);
