@@ -32,22 +32,16 @@
  * count_primes_range, the exact motivating case) had zero checkpoints
  * of any kind, GC or preemption. `direct_yield_ok` lets most such
  * loops get one anyway: call sl_rt_maybe_yield() directly, unbracketed,
- * right at loop-body entry. Deliberately NOT done for ST_FOR_IN's three
- * variants (array/bytes/map) even at n == 0 -- an independent design
- * review found that those loops hoist a GC-pointer alias (_sl_itN/
- * _sl_btN/_sl_mN, the iterable itself) OUTSIDE any bracket, dereferenced
- * every iteration; today that's dormant (n == 0 means nothing ever
- * checks in inside such a loop, so nothing can collect it out from
- * under the alias), and activating a checkpoint there would turn that
- * dormant rooting gap into a live one. ST_WHILE/ST_FOR have no such
- * hidden alias -- a numeric range loop's bounds are plain `long long`s
- * -- so they pass 1. Fixing ST_FOR_IN's own alias-rooting gap is a
- * separate, disclosed follow-up (see the Tier 11 plan), not bundled
- * into this slice. */
+ * right at loop-body entry. ST_FOR_IN hoists one bracket around the
+ * whole C for-loop and roots the iterable alias there, so it does not
+ * use this per-iteration enter. ST_WHILE/ST_FOR have no hidden alias
+ * -- a numeric range loop's bounds are plain `long long`s -- so they
+ * pass 1. */
 static int emit_backedge_enter(CG *cg, void *backedge_live_set,
-                                int direct_yield_ok, int edge_id) {
+                                int direct_yield_ok, int edge_id,
+                                const char *extra_root) {
     int nnames = live_set_nnamed(backedge_live_set);
-    int n = 0;
+    int n = extra_root ? 1 : 0;
     for (int i = 0; i < nnames; i++)
         n += count_named_gc_roots(cg, live_set_named(backedge_live_set, i));
     if (n == 0) {
@@ -82,6 +76,11 @@ static int emit_backedge_enter(CG *cg, void *backedge_live_set,
     for (int i = 0; i < nnames; i++)
         append_named_gc_roots(cg, &roots, live_set_named(backedge_live_set, i),
                               &wrote);
+    if (extra_root) {
+        if (wrote++)
+            sb_append(&roots, ", ");
+        sb_append(&roots, xasprintf("(void *)%s", extra_root));
+    }
     sb_append(&roots, "};");
     emit_line(cg, "%s", roots.data);
     emit_line(cg, "sl_safepoint _sl_bp%d;", id);
@@ -553,7 +552,8 @@ void gen_stmt(CG *cg, Stmt *s) {
         }
         emit_line(cg, "while (%s) {", cond);
         cg->indent++;
-        int has_bp = emit_backedge_enter(cg, s->backedge_live_set, poll, eid);
+        int has_bp = emit_backedge_enter(cg, s->backedge_live_set, poll, eid,
+                                        NULL);
         cg->loop_depth++;
         int saved_loop_bp = cg->cur_loop_has_bp;
         cg->cur_loop_has_bp = has_bp;
@@ -601,7 +601,8 @@ void gen_stmt(CG *cg, Stmt *s) {
         emit_line(cg, "for (long long %s = %s; %s %s %s; %s++) {", vname,
                   start, vname, op, endvar, vname);
         cg->indent++;
-        int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 1, eid);
+        int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 1, eid,
+                                        NULL);
         cg->loop_depth++;
         int saved_loop_bp = cg->cur_loop_has_bp;
         cg->cur_loop_has_bp = has_bp;
@@ -640,27 +641,38 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "{");
             cg->indent++;
             emit_line(cg, "sl_arr *_sl_it%d = %s;", id, iter);
+            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0,
+                                            xasprintf("_sl_it%d", id));
+            int eid = 0;
+            if (has_bp) {
+                eid = cg->tmp_id++;
+                emit_line(cg, "unsigned long _sl_ec%d = 0;", eid);
+            }
             emit_line(cg,
                       "for (long long _sl_i%d = 0; _sl_i%d < _sl_it%d->len; "
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
-            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0);
+            if (has_bp)
+                emit_line(cg,
+                          "if ((++_sl_ec%d & SL_PREEMPT_SAMPLE_MASK) == 0) "
+                          "sl_rt_maybe_yield();",
+                          eid);
             emit_line(cg, "%s %s = (*(%s *)(void *)sl_arr_at(_sl_it%d, "
                           "_sl_i%d, sizeof(%s)));",
                       ec, vname, ec, id, id, ec);
             cg->loop_depth++;
             int saved_loop_bp = cg->cur_loop_has_bp;
-            cg->cur_loop_has_bp = has_bp;
+            cg->cur_loop_has_bp = 0;
             gen_scoped_block(cg, s->as.for_in.body);
             cg->loop_depth--;
             cg->cur_loop_has_bp = saved_loop_bp;
+            cg->indent--;
+            emit_line(cg, "}");
             if (has_bp) {
                 cg->open_backedge_brackets--;
                 emit_line(cg, "sl_rt_safepoint_exit();");
             }
-            cg->indent--;
-            emit_line(cg, "}");
             cg->indent--;
             emit_line(cg, "}");
             var_scope_pop(cg);
@@ -672,26 +684,37 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "{");
             cg->indent++;
             emit_line(cg, "sl_bytes *_sl_bt%d = %s;", id, iter);
+            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0,
+                                            xasprintf("_sl_bt%d", id));
+            int eid = 0;
+            if (has_bp) {
+                eid = cg->tmp_id++;
+                emit_line(cg, "unsigned long _sl_ec%d = 0;", eid);
+            }
             emit_line(cg,
                       "for (long long _sl_i%d = 0; _sl_i%d < _sl_bt%d->len; "
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
-            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0);
+            if (has_bp)
+                emit_line(cg,
+                          "if ((++_sl_ec%d & SL_PREEMPT_SAMPLE_MASK) == 0) "
+                          "sl_rt_maybe_yield();",
+                          eid);
             emit_line(cg, "long long %s = (long long)_sl_bt%d->ptr[_sl_i%d];",
                       vname, id, id);
             cg->loop_depth++;
             int saved_loop_bp = cg->cur_loop_has_bp;
-            cg->cur_loop_has_bp = has_bp;
+            cg->cur_loop_has_bp = 0;
             gen_scoped_block(cg, s->as.for_in.body);
             cg->loop_depth--;
             cg->cur_loop_has_bp = saved_loop_bp;
+            cg->indent--;
+            emit_line(cg, "}");
             if (has_bp) {
                 cg->open_backedge_brackets--;
                 emit_line(cg, "sl_rt_safepoint_exit();");
             }
-            cg->indent--;
-            emit_line(cg, "}");
             cg->indent--;
             emit_line(cg, "}");
             var_scope_pop(cg);
@@ -714,12 +737,23 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "{");
             cg->indent++;
             emit_line(cg, "sl_map *_sl_m%d = %s;", id, iter);
+            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0,
+                                            xasprintf("_sl_m%d", id));
+            int eid = 0;
+            if (has_bp) {
+                eid = cg->tmp_id++;
+                emit_line(cg, "unsigned long _sl_ec%d = 0;", eid);
+            }
             emit_line(cg,
                       "for (long long _sl_i%d = 0; _sl_i%d < _sl_m%d->count; "
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
-            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0);
+            if (has_bp)
+                emit_line(cg,
+                          "if ((++_sl_ec%d & SL_PREEMPT_SAMPLE_MASK) == 0) "
+                          "sl_rt_maybe_yield();",
+                          eid);
             emit_line(cg, "long long _sl_slot%d = _sl_m%d->order[_sl_i%d];",
                       id, id, id);
             emit_line(cg,
@@ -732,16 +766,16 @@ void gen_stmt(CG *cg, Stmt *s) {
                       vc, v2name, vc, id, id, id);
             cg->loop_depth++;
             int saved_loop_bp = cg->cur_loop_has_bp;
-            cg->cur_loop_has_bp = has_bp;
+            cg->cur_loop_has_bp = 0;
             gen_scoped_block(cg, s->as.for_in.body);
             cg->loop_depth--;
             cg->cur_loop_has_bp = saved_loop_bp;
+            cg->indent--;
+            emit_line(cg, "}");
             if (has_bp) {
                 cg->open_backedge_brackets--;
                 emit_line(cg, "sl_rt_safepoint_exit();");
             }
-            cg->indent--;
-            emit_line(cg, "}");
             cg->indent--;
             emit_line(cg, "}");
             var_scope_pop(cg);
