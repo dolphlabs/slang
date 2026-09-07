@@ -424,6 +424,37 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
             rid, id, id, id, id, id);
         return wrap_safepoint(cg, e, xasprintf("%s *", oc), NULL, inner);
     }
+    if (!strcmp(name, "join_wait")) {
+        const char *jt = infer_type(cg, e->as.call.args[0]);
+        char *elem = join_elem(jt);
+        char *h = gen_expr(cg, e->as.call.args[0]);
+        const char *ec = ctype_of(cg, elem);
+        const char *rt = xasprintf("result[%s,str]", elem);
+        const char *rc = res_cname(cg, elem, "str");
+        const char *rct = ctype_of(cg, rt);
+        const char *trace =
+            (type_is_gc_ptr(cg, elem) || type_is_gc_ptr(cg, "str"))
+                ? xasprintf("sl_gc_trace_%s", rc)
+                : "NULL";
+        int id = cg->tmp_id++;
+        char *inner = xasprintf(
+            "({ %s _sl_jv%d; %s _sl_jr%d = (%s)sl_gc_alloc(sizeof(*_sl_jr%d), %s); "
+            "void *_sl_jwr%d_roots[] = { (void *)_sl_jr%d }; "
+            "sl_safepoint _sl_jwr%d; sl_rt_safepoint_enter(&_sl_jwr%d, _sl_jwr%d_roots, 1); "
+            "int _sl_jok%d = sl_join_wait(%s, &_sl_jv%d); "
+            "sl_rt_safepoint_exit(); "
+            "if (_sl_jok%d) { _sl_jr%d->ok = true; _sl_jr%d->v = _sl_jv%d; } "
+            "else { _sl_jr%d->ok = false; _sl_jr%d->e = sl_join_err(%s); } "
+            "_sl_jr%d; })",
+            ec, id, rct, id, rct, id, trace,
+            id, id,
+            id, id, id,
+            id, h, id,
+            id, id, id, id,
+            id, id, h,
+            id);
+        return wrap_safepoint(cg, e, rct, NULL, inner);
+    }
     if (!strcmp(name, "chan_close")) {
         char *ch = gen_expr(cg, e->as.call.args[0]);
         char *inner = xasprintf("sl_chan_close(%s)", ch);
@@ -1304,6 +1335,48 @@ char *gen_expr(CG *cg, Expr *e) {
     }
     case EX_CALL:
         return gen_call(cg, e);
+    case EX_SPAWN: {
+        Expr *call = e->as.spawn.call;
+        const char *name = call->as.call.name;
+        FuncSig *sig = spawn_target(cg, call, e->line);
+        int nargs = call->as.call.nargs;
+        SpawnShape *shape = spawn_shape_for(cg, sig);
+        int id = cg->tmp_id++;
+        StrBuf prelude;
+        sb_init(&prelude);
+        int ambient_mark = cg->ambient_count;
+        sb_append(&prelude, xasprintf(
+            "%s _sl_sa%d; "
+            "_sl_sa%d.join = sl_join_new(sizeof(%s), %d); ",
+            shape->sname, id, id, ctype_of(cg, sig->ret_slang),
+            type_is_gc_ptr(cg, sig->ret_slang)));
+        ambient_root_push(cg, xasprintf("_sl_sa%d.join", id));
+        for (int i = 0; i < nargs; i++) {
+            const char *saved = expect_push(cg, sig->param_slang[i]);
+            const char *at = infer_type(cg, call->as.call.args[i]);
+            cg->expect = saved;
+            if (!value_assignable(sig->param_slang[i], call->as.call.args[i],
+                                  at))
+                cg_error(e->line,
+                         "argument %d of '%s': cannot pass %s where "
+                         "%s expected",
+                         i + 1, name, at, sig->param_slang[i]);
+            char *a = gen_expr(cg, call->as.call.args[i]);
+            a = maybe_cast(cg, sig->param_slang[i], at, a);
+            sb_append(&prelude, xasprintf("_sl_sa%d.a%d = %s; ", id, i, a));
+            if (type_is_gc_ptr(cg, sig->param_slang[i]))
+                ambient_root_push(cg, xasprintf("_sl_sa%d.a%d", id, i));
+        }
+        move_consume(cg, call);
+        char *inner = xasprintf(
+            "({ sl_rt_active_spawns_inc(); "
+            "sl_task_submit_copy(%s_entry, &_sl_sa%d, sizeof(_sl_sa%d), sl_gc_trace_%s); "
+            "_sl_sa%d.join; })",
+            shape->tname, id, id, shape->sname, id);
+        char *result = wrap_safepoint(cg, e, "sl_join *", prelude.data, inner);
+        cg->ambient_count = ambient_mark;
+        return result;
+    }
     }
     return NULL; /* unreachable */
 }

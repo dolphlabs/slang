@@ -160,6 +160,9 @@ static void scan_expr(CG *cg, Esc *esc, Expr *e, const char *name) {
             scan_expr(cg, esc, e->as.structlit.vals[i], name);
         }
         return;
+    case EX_SPAWN:
+        scan_expr(cg, esc, e->as.spawn.call, name);
+        return;
     case EX_CALL: {
         const char *cname = e->as.call.name;
         int print = is_print_call(cname);

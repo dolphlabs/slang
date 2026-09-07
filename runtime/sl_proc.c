@@ -35,6 +35,10 @@ static long long sl_proc_active_tasks(void) {
     return (long long)atomic_load(&sl_rt_active_spawns);
 }
 
+static void sl_proc_wait_idle(void) {
+    sl_rt_wait_idle();
+}
+
 static int sl_proc_argc;
 static char **sl_proc_argv;
 

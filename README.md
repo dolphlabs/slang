@@ -127,6 +127,8 @@ no escaping).
   `extern fn`s (see C interop below)
 - `make_chan(n)` / `chan_send(ch, v)` / `chan_recv(ch)` / `chan_close(ch)`
   — construct and use a `chan[T]` (see Concurrency below)
+- `join_wait(h)` — wait for a `join[T]` from `spawn f(...)` (see
+  Concurrency below)
 
 ### Types
 
@@ -155,6 +157,7 @@ no escaping).
 | `gc T`     | `T *`       | traced heap box of a value type    |
 | `*T` / `*mut T` | `T *`  | raw pointer                        |
 | `chan[T]`  | `sl_chan *` | bounded thread-safe queue (see Concurrency) |
+| `join[T]`  | `sl_join *` | handle for a spawned task's result          |
 
 #### Numeric conversion rules
 
@@ -262,9 +265,10 @@ push(pts, r.tl);
 Struct literals must supply every field exactly once, with types
 checked. Methods live in top-level `impl Name { ... }` blocks; mark a
 method `pub fn` to export it to importing packages. Structs are
-values: assignment copies. Use `gc struct` for a shared heap object
-(today's previous default). A value struct cannot yet hold `gc`
-fields (`str`, lists, maps, `opt`/`result`, or `gc struct`).
+values: assignment copies, including any `str` / list / map /
+`opt` / `result` / `gc struct` fields (shallow — the heap objects
+are shared). Use `gc struct` when the record itself should be a
+shared heap object.
 `own T` is uniquely owned: assignment and passing **move**, and
 use-after-move is a compile error. A moved binding can be reinitialized.
 `own` is freed when its binding goes out of scope unless it was moved.
@@ -401,6 +405,17 @@ the host you're actually talking to). Sending/receiving is blocking,
 same as plain `net` — call these from a `spawn`ed task if you need a
 connection handled without stalling anything else.
 
+Mutual TLS: `tls_ctx_require_client(sctx, client_ca)` on the server
+context demands a client certificate chained to that CA
+(`SSL_VERIFY_FAIL_IF_NO_PEER_CERT`). The client presents one with
+`tls_ctx_use_cert(cctx, cert, key)`. Extra server names on one
+listener: `tls_ctx_add_sni(sctx, host, cert, key)` swaps in that
+cert when the ClientHello SNI matches; unmatched names keep the
+default `tls_server_ctx` cert. `require_client` applies to SNI
+certs too, regardless of call order. TLS 1.3 can let `tls_dial`
+return before the server has rejected a missing client certificate;
+the first send or recv then fails.
+
 #### `json`
 
 `json.decode`/`json.encode` (de)serialize `str`/`bytes` against a
@@ -433,8 +448,8 @@ guard let p2 = r else { exit(1); }
 
 Supported: `struct`, `opt[T]`, `[T]`, `map[str, V]` (JSON object keys
 are always strings — a map with any other key type is a compile
-error), and every scalar type except `bytes` (no implicit
-base64-or-similar encoding is applied). `rawptr`, `chan[T]`, and
+error), every scalar, and `bytes` (RFC 4648 base64 strings on the
+wire). `rawptr`, `chan[T]`, and
 `result[T,E]` can't appear anywhere in a decode/encode target type. A
 missing JSON key defaults an `opt[T]` field to `none`; for any other
 field type it's a decode error. Unknown JSON keys are ignored. Every
@@ -453,8 +468,8 @@ turns true once the process receives `SIGTERM` or `SIGINT`; a blocked
 interrupted the instant the signal arrives (an `err` result, not a
 hang), so a listener loop notices without needing `select` or a
 timeout. `proc.active_tasks()` counts currently-running `spawn`ed
-tasks, so a shutting-down program can wait for in-flight work to
-finish instead of dropping it.
+tasks. `proc.wait_idle()` parks until that count is zero, so a
+shutting-down program can drain in-flight work without polling.
 
 ```slang
 import "net";
@@ -474,10 +489,7 @@ while !proc.shutdown_requested() {
     accept_and_serve(lfd);
 }
 
-// drain: let in-flight connections finish before actually exiting
-while proc.active_tasks() > 0 {
-    time.sleep(20000000); // 20ms
-}
+proc.wait_idle();
 ```
 
 `proc.getenv(name)` reads an environment variable, returning
@@ -611,6 +623,10 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
   plain top-level function or an `extern fn`, not a method and not a
   builtin. There is no `spawn` on `net.*`/`time.*` calls directly;
   wrap the native call in a plain function and spawn that instead.
+  As a statement, the result is discarded. As an expression,
+  `let h = spawn f(...)` has type `join[T]` when `f` returns `T`.
+  `join_wait(h) -> result[T, str]` parks until `f` finishes; a panic
+  in that task is `err`, not process death.
 - **`chan[T]`**, built with `make_chan(capacity)` (element type
   inferred from an annotated binding, same as `none`): `chan_send(ch,
   v)` blocks while full, `chan_recv(ch) -> opt[T]` blocks while empty
@@ -633,10 +649,9 @@ tasks, not a type system that forbids sharing mutable state. Passing
 a struct, list, or map into a spawned task and mutating it from more
 than one task concurrently is exactly as unsafe as it is in Go or
 Java: nothing currently stops you, so don't. There's also no `select`
-over multiple channels yet, and no way to join/await a *specific*
-spawned task's completion other than coordinating through a channel
-yourselves — `proc.active_tasks()` (see the `proc` section) only
-gives you the aggregate count of everything currently in flight,
+over multiple channels yet. `join_wait` waits for one spawned task.
+`proc.active_tasks()` (see the `proc` section) is the aggregate count
+of everything currently in flight,
 useful for draining on shutdown but not for waiting on one task in
 particular.
 
@@ -709,6 +724,7 @@ then `stdlib/<path>`, then a pin in `slang.project`.
 ```slang
 import "geometry";   // binds the name "geometry" in this file's scope
 import "a/b/util";   // nested paths bind as "util"
+import "geometry" as geo;   // optional alias; call as geo.area(...)
 
 println(geometry.area(3.0, 4.0));   // qualified access
 println(util.format(x));
@@ -843,22 +859,22 @@ Makefile       build/test/clean
 - No data-race protection: `spawn` gives you real concurrency and
   per-task failure isolation, not an ownership/borrow checker.
   Mutating a shared struct/list/map from more than one task is on
-  you, same as Go or Java. No `select` over channels, no way to
-  join/await a spawned task's completion besides a channel.
-- TLS: no client certificates (mutual TLS), no SNI-based multi-cert
-  virtual hosting on one listener, no session resumption tuning.
-  Handshake and send/recv park; `getaddrinfo` in `tls_dial` parks
-  the task while a dedicated thread resolves.
+  you, same as Go or Java. No `select` over channels.
+- TLS: no session resumption tuning. Handshake and send/recv park;
+  `getaddrinfo` in `tls_dial` parks the task while a dedicated
+  thread resolves. mTLS (`tls_ctx_require_client` /
+  `tls_ctx_use_cert`) and SNI extra certs (`tls_ctx_add_sni`) are
+  supported.
 - JSON: no dynamic/unknown-shape decoding (every decode target is a
   concrete slang type known at compile time — see the `json` section
-  above), no `bytes` fields, and JSON object keys map to struct field
-  names verbatim (no camelCase/snake_case conversion).
+  above), and JSON object keys map to struct field names verbatim
+  (no camelCase/snake_case conversion). `bytes` fields are base64
+  strings (RFC 4648).
 - `proc`: only `SIGTERM`/`SIGINT` are handled (there's no general
   signal-registration API); a signal that arrives in the narrow
   window before `main()` installs the handler gets the OS's default
   disposition (immediate termination) rather than graceful handling.
-  `proc.active_tasks()` is a poll-based counter, not a wait-with-
-  timeout primitive — compose it with `time.sleep` for draining.
+  `proc.wait_idle()` parks until `proc.active_tasks()` is zero.
 
 ## Memory management
 
@@ -883,12 +899,8 @@ What this means in practice:
 - Block scoping and shadowing
 - If/block expressions (`let max = if a > b { a } else { b }`)
 - Range `.step(n)`
-- Import aliases (`import "x" as y`)
 - A bytecode VM mode for fast iteration without invoking `cc`
 - `extern struct` layouts, for passing C structs by value instead of
   only through opaque `rawptr` handles
 - Callback function pointers (C calling back into slang)
 - `select` over multiple channels
-- A join handle for `spawn`, so a task's completion (and any value)
-  can be awaited without hand-rolling it over a channel
-- Mutual TLS (client certificates) and SNI-based virtual hosting

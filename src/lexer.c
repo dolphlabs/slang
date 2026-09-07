@@ -279,6 +279,7 @@ Token lexer_next(Lexer *lx) {
         KW("rawptr", T_TY_RAWPTR)
         KW("arena", T_TY_ARENA)
         KW("chan", T_TY_CHAN)
+        KW("join", T_TY_JOIN)
 #undef KW
 
         t = make_token(T_IDENT, line);
@@ -430,6 +431,7 @@ const char *token_type_name(TokenType t) {
     case T_TY_TRIP:  return "'trip'";
     case T_TY_LINK:  return "'link'";
     case T_TY_CHAN:  return "'chan'";
+    case T_TY_JOIN:  return "'join'";
     case T_PLUS:     return "'+'";
     case T_MINUS:    return "'-'";
     case T_STAR:     return "'*'";

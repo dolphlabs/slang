@@ -32,21 +32,18 @@
  * count_primes_range, the exact motivating case) had zero checkpoints
  * of any kind, GC or preemption. `direct_yield_ok` lets most such
  * loops get one anyway: call sl_rt_maybe_yield() directly, unbracketed,
- * right at loop-body entry. Deliberately NOT done for ST_FOR_IN's three
- * variants (array/bytes/map) even at n == 0 -- an independent design
- * review found that those loops hoist a GC-pointer alias (_sl_itN/
- * _sl_btN/_sl_mN, the iterable itself) OUTSIDE any bracket, dereferenced
- * every iteration; today that's dormant (n == 0 means nothing ever
- * checks in inside such a loop, so nothing can collect it out from
- * under the alias), and activating a checkpoint there would turn that
- * dormant rooting gap into a live one. ST_WHILE/ST_FOR have no such
- * hidden alias -- a numeric range loop's bounds are plain `long long`s
- * -- so they pass 1. Fixing ST_FOR_IN's own alias-rooting gap is a
- * separate, disclosed follow-up (see the Tier 11 plan), not bundled
- * into this slice. */
+ * right at loop-body entry. ST_FOR_IN hoists one bracket around the
+ * whole C for-loop and roots the iterable alias there, so it does not
+ * use this per-iteration enter. ST_WHILE/ST_FOR have no hidden alias
+ * -- a numeric range loop's bounds are plain `long long`s -- so they
+ * pass 1. */
 static int emit_backedge_enter(CG *cg, void *backedge_live_set,
-                                int direct_yield_ok, int edge_id) {
-    int n = live_set_nnamed(backedge_live_set);
+                                int direct_yield_ok, int edge_id,
+                                const char *extra_root) {
+    int nnames = live_set_nnamed(backedge_live_set);
+    int n = extra_root ? 1 : 0;
+    for (int i = 0; i < nnames; i++)
+        n += count_named_gc_roots(cg, live_set_named(backedge_live_set, i));
     if (n == 0) {
         /* Nothing to root, so no ordering hazard: this call can safely
          * run before anything else here, since there's no bracket for
@@ -75,12 +72,14 @@ static int emit_backedge_enter(CG *cg, void *backedge_live_set,
     StrBuf roots;
     sb_init(&roots);
     sb_append(&roots, xasprintf("void *_sl_bp%d_roots[] = { ", id));
-    for (int i = 0; i < n; i++) {
-        if (i)
+    int wrote = 0;
+    for (int i = 0; i < nnames; i++)
+        append_named_gc_roots(cg, &roots, live_set_named(backedge_live_set, i),
+                              &wrote);
+    if (extra_root) {
+        if (wrote++)
             sb_append(&roots, ", ");
-        sb_append(&roots, xasprintf("(void *)%s", sanitize_ident(
-                                                       live_set_named(
-                                                           backedge_live_set, i))));
+        sb_append(&roots, xasprintf("(void *)%s", extra_root));
     }
     sb_append(&roots, "};");
     emit_line(cg, "%s", roots.data);
@@ -553,7 +552,8 @@ void gen_stmt(CG *cg, Stmt *s) {
         }
         emit_line(cg, "while (%s) {", cond);
         cg->indent++;
-        int has_bp = emit_backedge_enter(cg, s->backedge_live_set, poll, eid);
+        int has_bp = emit_backedge_enter(cg, s->backedge_live_set, poll, eid,
+                                        NULL);
         cg->loop_depth++;
         int saved_loop_bp = cg->cur_loop_has_bp;
         cg->cur_loop_has_bp = has_bp;
@@ -601,7 +601,8 @@ void gen_stmt(CG *cg, Stmt *s) {
         emit_line(cg, "for (long long %s = %s; %s %s %s; %s++) {", vname,
                   start, vname, op, endvar, vname);
         cg->indent++;
-        int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 1, eid);
+        int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 1, eid,
+                                        NULL);
         cg->loop_depth++;
         int saved_loop_bp = cg->cur_loop_has_bp;
         cg->cur_loop_has_bp = has_bp;
@@ -640,27 +641,38 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "{");
             cg->indent++;
             emit_line(cg, "sl_arr *_sl_it%d = %s;", id, iter);
+            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0,
+                                            xasprintf("_sl_it%d", id));
+            int eid = 0;
+            if (has_bp) {
+                eid = cg->tmp_id++;
+                emit_line(cg, "unsigned long _sl_ec%d = 0;", eid);
+            }
             emit_line(cg,
                       "for (long long _sl_i%d = 0; _sl_i%d < _sl_it%d->len; "
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
-            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0);
+            if (has_bp)
+                emit_line(cg,
+                          "if ((++_sl_ec%d & SL_PREEMPT_SAMPLE_MASK) == 0) "
+                          "sl_rt_maybe_yield();",
+                          eid);
             emit_line(cg, "%s %s = (*(%s *)(void *)sl_arr_at(_sl_it%d, "
                           "_sl_i%d, sizeof(%s)));",
                       ec, vname, ec, id, id, ec);
             cg->loop_depth++;
             int saved_loop_bp = cg->cur_loop_has_bp;
-            cg->cur_loop_has_bp = has_bp;
+            cg->cur_loop_has_bp = 0;
             gen_scoped_block(cg, s->as.for_in.body);
             cg->loop_depth--;
             cg->cur_loop_has_bp = saved_loop_bp;
+            cg->indent--;
+            emit_line(cg, "}");
             if (has_bp) {
                 cg->open_backedge_brackets--;
                 emit_line(cg, "sl_rt_safepoint_exit();");
             }
-            cg->indent--;
-            emit_line(cg, "}");
             cg->indent--;
             emit_line(cg, "}");
             var_scope_pop(cg);
@@ -672,26 +684,37 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "{");
             cg->indent++;
             emit_line(cg, "sl_bytes *_sl_bt%d = %s;", id, iter);
+            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0,
+                                            xasprintf("_sl_bt%d", id));
+            int eid = 0;
+            if (has_bp) {
+                eid = cg->tmp_id++;
+                emit_line(cg, "unsigned long _sl_ec%d = 0;", eid);
+            }
             emit_line(cg,
                       "for (long long _sl_i%d = 0; _sl_i%d < _sl_bt%d->len; "
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
-            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0);
+            if (has_bp)
+                emit_line(cg,
+                          "if ((++_sl_ec%d & SL_PREEMPT_SAMPLE_MASK) == 0) "
+                          "sl_rt_maybe_yield();",
+                          eid);
             emit_line(cg, "long long %s = (long long)_sl_bt%d->ptr[_sl_i%d];",
                       vname, id, id);
             cg->loop_depth++;
             int saved_loop_bp = cg->cur_loop_has_bp;
-            cg->cur_loop_has_bp = has_bp;
+            cg->cur_loop_has_bp = 0;
             gen_scoped_block(cg, s->as.for_in.body);
             cg->loop_depth--;
             cg->cur_loop_has_bp = saved_loop_bp;
+            cg->indent--;
+            emit_line(cg, "}");
             if (has_bp) {
                 cg->open_backedge_brackets--;
                 emit_line(cg, "sl_rt_safepoint_exit();");
             }
-            cg->indent--;
-            emit_line(cg, "}");
             cg->indent--;
             emit_line(cg, "}");
             var_scope_pop(cg);
@@ -714,12 +737,23 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "{");
             cg->indent++;
             emit_line(cg, "sl_map *_sl_m%d = %s;", id, iter);
+            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0,
+                                            xasprintf("_sl_m%d", id));
+            int eid = 0;
+            if (has_bp) {
+                eid = cg->tmp_id++;
+                emit_line(cg, "unsigned long _sl_ec%d = 0;", eid);
+            }
             emit_line(cg,
                       "for (long long _sl_i%d = 0; _sl_i%d < _sl_m%d->count; "
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
-            int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0);
+            if (has_bp)
+                emit_line(cg,
+                          "if ((++_sl_ec%d & SL_PREEMPT_SAMPLE_MASK) == 0) "
+                          "sl_rt_maybe_yield();",
+                          eid);
             emit_line(cg, "long long _sl_slot%d = _sl_m%d->order[_sl_i%d];",
                       id, id, id);
             emit_line(cg,
@@ -732,16 +766,16 @@ void gen_stmt(CG *cg, Stmt *s) {
                       vc, v2name, vc, id, id, id);
             cg->loop_depth++;
             int saved_loop_bp = cg->cur_loop_has_bp;
-            cg->cur_loop_has_bp = has_bp;
+            cg->cur_loop_has_bp = 0;
             gen_scoped_block(cg, s->as.for_in.body);
             cg->loop_depth--;
             cg->cur_loop_has_bp = saved_loop_bp;
+            cg->indent--;
+            emit_line(cg, "}");
             if (has_bp) {
                 cg->open_backedge_brackets--;
                 emit_line(cg, "sl_rt_safepoint_exit();");
             }
-            cg->indent--;
-            emit_line(cg, "}");
             cg->indent--;
             emit_line(cg, "}");
             var_scope_pop(cg);
@@ -871,96 +905,36 @@ void gen_stmt(CG *cg, Stmt *s) {
     case ST_SPAWN: {
         Expr *call = s->as.spawn.call;
         const char *name = call->as.call.name;
-        if (is_builtin_name(name))
-            cg_error(s->line, "'spawn' cannot target a builtin function");
-
-        FuncSig *sig;
-        char *left, *right;
-        if (split_dotted(name, &left, &right)) {
-            const char *pkg = import_try(cg, left);
-            if (!pkg)
-                cg_error(s->line,
-                         "'spawn' does not support methods yet (only "
-                         "plain functions and pkg.func calls)");
-            if (is_native_pkg(cg, pkg))
-                cg_error(s->line,
-                         "'spawn' cannot target a native package "
-                         "function directly; wrap it in a plain "
-                         "function and spawn that instead");
-            sig = sig_find_in(cg, pkg, right);
-            if (!sig)
-                cg_error(s->line, "package '%s' has no function '%s'",
-                         pkg, right);
-            if (!sig->is_pub)
-                cg_error(s->line,
-                         "function '%s' is not exported from package "
-                         "'%s' (add 'pub' to export it)",
-                         right, pkg);
-        } else {
-            sig = sig_find_in(cg, cg->cur_pkg, name);
-            if (!sig)
-                cg_error(s->line, "call to undefined function '%s'", name);
-        }
-
+        FuncSig *sig = spawn_target(cg, call, s->line);
         int nargs = call->as.call.nargs;
-        if (nargs != sig->nparams)
-            cg_error(s->line,
-                     "function '%s' expects %d argument(s), got %d", name,
-                     sig->nparams, nargs);
-
         SpawnShape *shape = spawn_shape_for(cg, sig);
         int id = cg->tmp_id++;
         emit_line(cg, "{");
         cg->indent++;
-        if (nargs == 0) {
-            move_consume(cg, call);
-            emit_line(cg, "sl_rt_active_spawns_inc();");
-            emit_line(cg, "sl_task_submit(%s_entry, NULL);", shape->tname);
-        } else if (!shape->has_tracer) {
-            emit_line(cg, "%s _sl_sa%d;", shape->sname, id);
-            for (int i = 0; i < nargs; i++) {
-                const char *saved = expect_push(cg, sig->param_slang[i]);
-                const char *at = infer_type(cg, call->as.call.args[i]);
-                cg->expect = saved;
-                if (!value_assignable(sig->param_slang[i],
-                                      call->as.call.args[i], at))
-                    cg_error(s->line,
-                             "argument %d of '%s': cannot pass %s where "
-                             "%s expected",
-                             i + 1, name, at, sig->param_slang[i]);
-                char *a = gen_expr(cg, call->as.call.args[i]);
-                a = maybe_cast(cg, sig->param_slang[i], at, a);
-                emit_line(cg, "_sl_sa%d.a%d = %s;", id, i, a);
-            }
-            move_consume(cg, call);
-            emit_line(cg, "sl_rt_active_spawns_inc();");
-            emit_line(cg, "sl_task_submit_copy(%s_entry, &_sl_sa%d, sizeof(_sl_sa%d));",
-                      shape->tname, id, id);
-        } else {
-            emit_line(cg, "%s *_sl_sa%d = (%s *)sl_gc_alloc(sizeof(%s), %s);",
-                      shape->sname, id, shape->sname, shape->sname,
-                      xasprintf("sl_gc_trace_%s", shape->sname));
-            int ambient_mark = cg->ambient_count;
-            ambient_root_push(cg, xasprintf("_sl_sa%d", id));
-            for (int i = 0; i < nargs; i++) {
-                const char *saved = expect_push(cg, sig->param_slang[i]);
-                const char *at = infer_type(cg, call->as.call.args[i]);
-                cg->expect = saved;
-                if (!value_assignable(sig->param_slang[i],
-                                      call->as.call.args[i], at))
-                    cg_error(s->line,
-                             "argument %d of '%s': cannot pass %s where "
-                             "%s expected",
-                             i + 1, name, at, sig->param_slang[i]);
-                char *a = gen_expr(cg, call->as.call.args[i]);
-                a = maybe_cast(cg, sig->param_slang[i], at, a);
-                emit_line(cg, "_sl_sa%d->a%d = %s;", id, i, a);
-            }
-            cg->ambient_count = ambient_mark;
-            move_consume(cg, call);
-            emit_line(cg, "sl_rt_active_spawns_inc();");
-            emit_line(cg, "sl_task_submit(%s_entry, _sl_sa%d);", shape->tname, id);
+        emit_line(cg, "%s _sl_sa%d;", shape->sname, id);
+        emit_line(cg, "_sl_sa%d.join = NULL;", id);
+        int ambient_mark = cg->ambient_count;
+        for (int i = 0; i < nargs; i++) {
+            const char *saved = expect_push(cg, sig->param_slang[i]);
+            const char *at = infer_type(cg, call->as.call.args[i]);
+            cg->expect = saved;
+            if (!value_assignable(sig->param_slang[i],
+                                  call->as.call.args[i], at))
+                cg_error(s->line,
+                         "argument %d of '%s': cannot pass %s where "
+                         "%s expected",
+                         i + 1, name, at, sig->param_slang[i]);
+            char *a = gen_expr(cg, call->as.call.args[i]);
+            a = maybe_cast(cg, sig->param_slang[i], at, a);
+            emit_line(cg, "_sl_sa%d.a%d = %s;", id, i, a);
+            if (type_is_gc_ptr(cg, sig->param_slang[i]))
+                ambient_root_push(cg, xasprintf("_sl_sa%d.a%d", id, i));
         }
+        cg->ambient_count = ambient_mark;
+        move_consume(cg, call);
+        emit_line(cg, "sl_rt_active_spawns_inc();");
+        emit_line(cg, "sl_task_submit_copy(%s_entry, &_sl_sa%d, sizeof(_sl_sa%d), sl_gc_trace_%s);",
+                  shape->tname, id, id, shape->sname);
         cg->indent--;
         emit_line(cg, "}");
         break;

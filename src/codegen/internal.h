@@ -293,7 +293,7 @@ typedef enum { NA_INT, NA_STR, NA_BYTES, NA_RAWPTR } NatArgKind;
 typedef struct {
     const char *pkg, *name;
     int nargs;
-    NatArgKind argkinds[3];
+    NatArgKind argkinds[4];
     const char *ret;
     int is_tls; /* needs OpenSSL: gates TLS_RUNTIME + -lssl -lcrypto */
 } NatSig;
@@ -353,6 +353,7 @@ int is_map_key(const char *t);
 int is_opt(const char *t);
 int is_result(const char *t);
 int is_chan(const char *t);
+int is_join(const char *t);
 const char *res_access(CG *cg, const char *t);
 
 typedef enum {
@@ -371,12 +372,18 @@ char *type_lifetime(const char *t);
 int type_is_boxable(CG *cg, const char *t);
 int expr_addressable(Expr *e);
 int type_is_gc_ptr(CG *cg, const char *t);
+int type_has_gc_roots(CG *cg, const char *t);
 int struct_has_gc_fields(CG *cg, StructDef *sd);
+int count_gc_root_exprs(CG *cg, const char *slang_t);
+int count_named_gc_roots(CG *cg, const char *name);
+void append_named_gc_roots(CG *cg, StrBuf *sb, const char *name, int *wrote);
 int struct_type_is_gc(CG *cg, const char *t);
 const char *struct_access(CG *cg, const char *t);
 StructDef *struct_of_type(CG *cg, const char *t);
 char *opt_inner(const char *t);
 char *chan_elem(const char *t);
+char *join_elem(const char *t);
+FuncSig *spawn_target(CG *cg, Expr *call, int line);
 void result_te(const char *t, char **tv, char **ev);
 char *arr_elem(const char *t);
 int can_assign(const char *dst, const char *src);

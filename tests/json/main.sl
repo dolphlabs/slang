@@ -182,6 +182,33 @@ fn list_of_structs() {
     println(to_str(items[1].id));
 }
 
+gc struct Blob { name: str, data: bytes }
+
+fn bytes_field() {
+    let p = Blob{ name: "bin", data: b"hello" };
+    let s: str = json.encode(p);
+    println(s);
+    let r: result[Blob, str] = json.decode(s);
+    guard let p2 = r else {
+        println("BUG: bytes field round-trip failed");
+        exit(1);
+    }
+    println(p2.name);
+    println(to_str(p2.data));
+    let raw: result[Blob, str] = json.decode("{\"name\":\"x\",\"data\":\"aGVsbG8=\"}");
+    guard let p3 = raw else {
+        println("BUG: known base64 decode failed");
+        exit(1);
+    }
+    println(to_str(p3.data));
+    let bad: result[Blob, str] = json.decode("{\"name\":\"x\",\"data\":\"!!!!\"}");
+    guard let _b = bad else {
+        println("invalid base64 correctly rejected");
+        return;
+    }
+    println("BUG: expected invalid base64 to fail");
+}
+
 fn bytes_input() {
     let b: bytes = to_bytes("{\"name\":\"frombytes\",\"count\":9}");
     let r: result[Config, str] = json.decode(b);
@@ -204,3 +231,4 @@ extra_fields_tolerated();
 negative_and_float();
 list_of_structs();
 bytes_input();
+bytes_field();

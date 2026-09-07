@@ -141,6 +141,14 @@ static _Thread_local _Atomic unsigned long sl_rt_gc_acked_cycle = 0;
 static void sl_gc_collect(void);
 static void sl_gc_mark(void *ptr);
 
+static void sl_gc_mark_entry_arg(sl_task *t) {
+    if (!t) return;
+    if (t->entry_arg_trace)
+        t->entry_arg_trace(t->entry_arg, sl_gc_mark);
+    else
+        sl_gc_mark(t->entry_arg);
+}
+
 static void sl_gc_register_thread(void) {
     /* Tier 11: this OS thread's chain lives in a per-thread sl_task
      * (sl_rt_current_task, runtime_core.c) rather than a bare
@@ -632,7 +640,8 @@ static void sl_gc_collect(void) {
             task_slot's own field comment above: this reads whichever
             task is current AT SCAN TIME, not a value cached at
             registration -- the load-bearing fix for worker reuse. */
-        sl_gc_mark(sl_gc_scan_task->entry_arg); /* Tier 11 third-slice
+        sl_gc_mark(sl_gc_scan_task->join);
+        sl_gc_mark_entry_arg(sl_gc_scan_task); /* Tier 11 third-slice
             review finding: root the CURRENTLY-RUNNING task's own
             entry_arg directly too, not just a queued task's (below).
             %s_entry's own generated body builds no safepoint bracket
@@ -693,7 +702,8 @@ static void sl_gc_collect(void) {
     pthread_mutex_lock(&sl_global_runq.mu);
     for (sl_task *sl_gc_qt = sl_global_runq.head; sl_gc_qt;
          sl_gc_qt = sl_gc_qt->next) {
-        sl_gc_mark(sl_gc_qt->entry_arg);
+        sl_gc_mark(sl_gc_qt->join);
+        sl_gc_mark_entry_arg(sl_gc_qt);
         sl_gc_pend_mark(sl_gc_qt);
         for (sl_safepoint *sp = sl_gc_qt->safepoint_top; sp; sp = sp->prev)
             for (int j = 0; j < sp->nroots; j++)
@@ -763,7 +773,8 @@ static void sl_gc_collect(void) {
      * by the same lock, so no extra locking needed to walk it. */
     for (sl_task *sl_gc_pt = sl_parked_tasks; sl_gc_pt;
          sl_gc_pt = sl_gc_pt->parked_next) {
-        sl_gc_mark(sl_gc_pt->entry_arg);
+        sl_gc_mark(sl_gc_pt->join);
+        sl_gc_mark_entry_arg(sl_gc_pt);
         sl_gc_pend_mark(sl_gc_pt);
         for (sl_safepoint *sp = sl_gc_pt->safepoint_top; sp; sp = sp->prev)
             for (int j = 0; j < sp->nroots; j++)

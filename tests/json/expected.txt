@@ -26,3 +26,8 @@ x
 2
 frombytes
 9
+{"name":"bin","data":"aGVsbG8="}
+bin
+hello
+hello
+invalid base64 correctly rejected

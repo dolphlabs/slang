@@ -1,3 +1,6 @@
 tls round-trip ok
 correctly rejected: untrusted CA
 correctly rejected: hostname mismatch
+mtls round-trip ok
+correctly rejected: missing client cert
+sni extra cert ok

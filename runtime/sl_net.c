@@ -520,6 +520,14 @@ static sl_res_bool_str *sl_net_ok_bool(bool v) {
     return r;
 }
 
+static sl_res_bool_str *sl_net_err_bool(const char *msg) {
+    sl_res_bool_str *r = (sl_res_bool_str *)sl_gc_alloc(
+        sizeof(sl_res_bool_str), sl_gc_trace_sl_res_bool_str);
+    r->ok = false;
+    r->e = sl_strdup(msg);
+    return r;
+}
+
 static sl_res_i32_str *sl_net_listen(int port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return sl_net_err_i32(strerror(errno));

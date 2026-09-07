@@ -650,6 +650,9 @@ static void dump_rvalue(FILE *out, MirRvalue *r) {
         case EX_CALL:
             fprintf(out, "call %s", r->expr->as.call.name);
             return;
+        case EX_SPAWN:
+            fprintf(out, "spawn %s", r->expr->as.spawn.call->as.call.name);
+            return;
         case EX_BINARY:
             fprintf(out, "(%s)", r->expr->as.binary.op);
             return;

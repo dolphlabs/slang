@@ -173,7 +173,8 @@ static void sl_task_submit(void (*entry)(void *), void *arg) {
 }
 
 static void sl_task_submit_copy(void (*entry)(void *), const void *src,
-                               size_t n) {
+                               size_t n,
+                               void (*trace)(void *, void (*)(void *))) {
     sl_task *t = sl_task_grab();
     if (n <= sizeof(t->entry_arg_store)) {
         memcpy(t->entry_arg_store, src, n);
@@ -188,6 +189,7 @@ static void sl_task_submit_copy(void (*entry)(void *), const void *src,
         t->entry_arg = p;
         t->entry_arg_owned = 1;
     }
+    t->entry_arg_trace = trace;
     sl_task_stack_init(t, entry, t->entry_arg);
     sl_runq_push(&sl_global_runq, t);
 }

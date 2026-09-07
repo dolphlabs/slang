@@ -245,6 +245,7 @@ int is_map_key(const char *t) {
 int is_opt(const char *t) { return !strncmp(t, "opt[", 4); }
 int is_result(const char *t) { return !strncmp(t, "result[", 7); }
 int is_chan(const char *t) { return !strncmp(t, "chan[", 5); }
+int is_join(const char *t) { return !strncmp(t, "join[", 5); }
 
 char *type_lifetime(const char *t) {
     const char *s, *e;
@@ -319,7 +320,8 @@ int type_is_copy(CG *cg, const char *t) {
         return 1;
     if (!strcmp(t, "arena") || !strcmp(t, "link"))
         return 0;
-    if (is_arr(t) || is_map(t) || is_opt(t) || is_result(t) || is_chan(t))
+    if (is_arr(t) || is_map(t) || is_opt(t) || is_result(t) || is_chan(t) ||
+        is_join(t))
         return 1;
     if (struct_type_is_gc(cg, t))
         return 1;
@@ -357,6 +359,7 @@ int type_is_boxable(CG *cg, const char *t) {
     if (type_wrap(t, &inner) != TW_NONE)
         return 0;
     if (is_arr(t) || is_map(t) || is_opt(t) || is_result(t) || is_chan(t) ||
+        is_join(t) ||
         is_str(t) || is_bytes(t) || is_rawptr(t) || !strcmp(t, "arena") ||
         is_wire(t) || is_until(t) || is_fault(t) || is_peer(t) ||
         is_trip(t) || is_link(t))
@@ -421,7 +424,7 @@ int type_is_gc_ptr(CG *cg, const char *t) {
         return type_is_gc_ptr(cg, tv) || type_is_gc_ptr(cg, te);
     }
     if (is_arr(t) || is_map(t) || is_opt(t) ||
-        is_chan(t) || is_str(t) || is_bytes(t))
+        is_chan(t) || is_join(t) || is_str(t) || is_bytes(t))
         return 1;
     StructDef *sd = struct_find_canon(cg, t);
     return sd && sd->is_gc;
@@ -453,11 +456,73 @@ StructDef *struct_of_type(CG *cg, const char *t) {
     return struct_find_canon(cg, t);
 }
 
+int type_has_gc_roots(CG *cg, const char *t) {
+    if (type_is_gc_ptr(cg, t))
+        return 1;
+    StructDef *sd = struct_find_canon(cg, t);
+    if (!sd || sd->is_gc)
+        return 0;
+    return struct_has_gc_fields(cg, sd);
+}
+
 int struct_has_gc_fields(CG *cg, StructDef *sd) {
     for (int j = 0; j < sd->nfields; j++)
-        if (type_is_gc_ptr(cg, sd->ftypes[j]))
+        if (type_has_gc_roots(cg, sd->ftypes[j]))
             return 1;
     return 0;
+}
+
+static void append_gc_root_expr(CG *cg, StrBuf *sb, const char *c_expr,
+                                const char *slang_t, int *wrote) {
+    if (type_is_gc_ptr(cg, slang_t)) {
+        if ((*wrote)++)
+            sb_append(sb, ", ");
+        sb_append(sb, xasprintf("(void *)%s", c_expr));
+        return;
+    }
+    StructDef *sd = struct_find_canon(cg, slang_t);
+    if (!sd || sd->is_gc)
+        return;
+    for (int j = 0; j < sd->nfields; j++) {
+        if (!type_has_gc_roots(cg, sd->ftypes[j]))
+            continue;
+        append_gc_root_expr(cg, sb,
+                            xasprintf("%s.%s", c_expr,
+                                      sanitize_ident(sd->fields[j])),
+                            sd->ftypes[j], wrote);
+    }
+}
+
+int count_gc_root_exprs(CG *cg, const char *slang_t) {
+    if (type_is_gc_ptr(cg, slang_t))
+        return 1;
+    StructDef *sd = struct_find_canon(cg, slang_t);
+    if (!sd || sd->is_gc)
+        return 0;
+    int n = 0;
+    for (int j = 0; j < sd->nfields; j++)
+        n += count_gc_root_exprs(cg, sd->ftypes[j]);
+    return n;
+}
+
+void append_named_gc_roots(CG *cg, StrBuf *sb, const char *name, int *wrote) {
+    VarSym *v = var_find(cg, name);
+    const char *t = v ? v->slang : NULL;
+    char *c_name = sanitize_ident(name);
+    if (t && type_has_gc_roots(cg, t) && !type_is_gc_ptr(cg, t))
+        append_gc_root_expr(cg, sb, c_name, t, wrote);
+    else {
+        if ((*wrote)++)
+            sb_append(sb, ", ");
+        sb_append(sb, xasprintf("(void *)%s", c_name));
+    }
+}
+
+int count_named_gc_roots(CG *cg, const char *name) {
+    VarSym *v = var_find(cg, name);
+    if (v && type_has_gc_roots(cg, v->slang) && !type_is_gc_ptr(cg, v->slang))
+        return count_gc_root_exprs(cg, v->slang);
+    return 1;
 }
 
 /* "opt[T]" -> T (heap-allocated). Caller must pass an opt type. */
@@ -476,6 +541,10 @@ char *chan_elem(const char *t) {
     memcpy(inner, t + 5, n - 6);
     inner[n - 6] = '\0';
     return inner;
+}
+
+char *join_elem(const char *t) {
+    return chan_elem(t);
 }
 
 /* "result[T,E]" -> T and E (heap-allocated). */
@@ -693,10 +762,46 @@ SpawnShape *spawn_shape_for(CG *cg, FuncSig *sig) {
                            sanitize_ident(sig->name));
     s->sname = xasprintf("sl_spawn_args_%s", base);
     s->tname = xasprintf("sl_spawn_tramp_%s", base);
-    s->has_tracer = 0;
-    for (int j = 0; j < sig->nparams; j++)
-        if (type_is_gc_ptr(cg, sig->param_slang[j])) { s->has_tracer = 1; break; }
+    s->has_tracer = 1;
     return s;
+}
+
+FuncSig *spawn_target(CG *cg, Expr *call, int line) {
+    if (call->kind != EX_CALL)
+        cg_error(line, "'spawn' requires a function call");
+    const char *name = call->as.call.name;
+    if (is_builtin_name(name))
+        cg_error(line, "'spawn' cannot target a builtin function");
+    FuncSig *sig;
+    char *left, *right;
+    if (split_dotted(name, &left, &right)) {
+        const char *pkg = import_try(cg, left);
+        if (!pkg)
+            cg_error(line,
+                     "'spawn' does not support methods yet (only "
+                     "plain functions and pkg.func calls)");
+        if (is_native_pkg(cg, pkg))
+            cg_error(line,
+                     "'spawn' cannot target a native package "
+                     "function directly; wrap it in a plain "
+                     "function and spawn that instead");
+        sig = sig_find_in(cg, pkg, right);
+        if (!sig)
+            cg_error(line, "package '%s' has no function '%s'", pkg, right);
+        if (!sig->is_pub)
+            cg_error(line,
+                     "function '%s' is not exported from package "
+                     "'%s' (add 'pub' to export it)",
+                     right, pkg);
+    } else {
+        sig = sig_find_in(cg, cg->cur_pkg, name);
+        if (!sig)
+            cg_error(line, "call to undefined function '%s'", name);
+    }
+    if (call->as.call.nargs != sig->nparams)
+        cg_error(line, "function '%s' expects %d argument(s), got %d",
+                 name, sig->nparams, call->as.call.nargs);
+    return sig;
 }
 
 void var_scope_reset(CG *cg) {
@@ -827,9 +932,21 @@ char *sequence_one(CG *cg, int seq_id, int idx, const char *ctype,
         return text;
     char *name = xasprintf("_sl_seq%d_%d", seq_id, idx);
     sb_append(prelude, xasprintf("%s %s = %s; ", ctype, name, text));
-    if (expr_node && type_is_gc_ptr(cg, slang_type)) {
+    if (expr_node && type_has_gc_roots(cg, slang_type)) {
         expr_tmp_register(cg, expr_node, name);
-        ambient_root_push(cg, name);
+        if (type_is_gc_ptr(cg, slang_type))
+            ambient_root_push(cg, name);
+        else {
+            StructDef *sd = struct_find_canon(cg, slang_type);
+            if (sd && !sd->is_gc) {
+                for (int j = 0; j < sd->nfields; j++) {
+                    if (!type_has_gc_roots(cg, sd->ftypes[j]))
+                        continue;
+                    ambient_root_push(cg, xasprintf("%s.%s", name,
+                                                    sanitize_ident(sd->fields[j])));
+                }
+            }
+        }
     }
     return name;
 }
@@ -871,7 +988,12 @@ char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
     int nlive_named = live_set_nnamed(e->live_set);
     int nlive_pending = live_set_npending(e->live_set);
     int nambient = cg->ambient_count;
-    int nroots = nlive_named + nlive_pending + nambient;
+    int nroots = nambient;
+    for (int i = 0; i < nlive_named; i++)
+        nroots += count_named_gc_roots(cg, live_set_named(e->live_set, i));
+    for (int i = 0; i < nlive_pending; i++)
+        nroots += count_gc_root_exprs(
+            cg, infer_type(cg, live_set_pending(e->live_set, i)));
     if (nroots == 0) {
         if (!has_prelude)
             return inner;
@@ -883,12 +1005,9 @@ char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
     sb_init(&sp);
     sb_append(&sp, xasprintf("void *_sl_sp%d_roots[] = { ", sp_id));
     int wrote = 0;
-    for (int i = 0; i < nlive_named; i++) {
-        if (wrote++)
-            sb_append(&sp, ", ");
-        sb_append(&sp, xasprintf("(void *)%s",
-                                 sanitize_ident(live_set_named(e->live_set, i))));
-    }
+    for (int i = 0; i < nlive_named; i++)
+        append_named_gc_roots(cg, &sp, live_set_named(e->live_set, i),
+                              &wrote);
     for (int i = 0; i < nlive_pending; i++) {
         Expr *p = live_set_pending(e->live_set, i);
         const char *tn = expr_tmp_find(cg, p);
@@ -897,9 +1016,14 @@ char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
                      "internal error: liveness-pending value has no "
                      "registered temp at line %d",
                      p->line);
-        if (wrote++)
-            sb_append(&sp, ", ");
-        sb_append(&sp, xasprintf("(void *)%s", tn));
+        const char *pt = infer_type(cg, p);
+        if (type_is_gc_ptr(cg, pt)) {
+            if (wrote++)
+                sb_append(&sp, ", ");
+            sb_append(&sp, xasprintf("(void *)%s", tn));
+        } else {
+            append_gc_root_expr(cg, &sp, tn, pt, &wrote);
+        }
     }
     for (int i = 0; i < nambient; i++) {
         if (wrote++)
@@ -1018,7 +1142,7 @@ int want_pkg(CG *cg, const char *name) {
  * restore it. */
 const char *expect_push(CG *cg, const char *t) {
     const char *saved = cg->expect;
-    if (t && (is_opt(t) || is_result(t) || is_chan(t)))
+    if (t && (is_opt(t) || is_result(t) || is_chan(t) || is_join(t)))
         cg->expect = t;
     return saved;
 }
@@ -1108,6 +1232,8 @@ const char *ctype_of(CG *cg, const char *t) {
         return "sl_map *";
     if (is_chan(t))
         return "sl_chan *";
+    if (is_join(t))
+        return "sl_join *";
     if (is_opt(t))
         return xasprintf("%s *", opt_cname(cg, opt_inner(t)));
     if (is_result(t)) {
@@ -1183,12 +1309,12 @@ const char *canon_type(CG *cg, const char *t, int line) {
         return xasprintf("result[%s,%s]", ca, cb);
     }
     if (is_chan(t)) {
-        /* the channel's own C representation (sl_chan *) does not
-         * depend on T, so unlike opt/result there is no per-element
-         * instantiation to register -- only the element type itself
-         * needs canonicalizing */
         const char *ci = canon_type(cg, chan_elem(t), line);
         return xasprintf("chan[%s]", ci);
+    }
+    if (is_join(t)) {
+        const char *ci = canon_type(cg, join_elem(t), line);
+        return xasprintf("join[%s]", ci);
     }
     if (map_type(t))
         return t;
@@ -1245,6 +1371,7 @@ int is_builtin_name(const char *name) {
            !strcmp(name, "nullptr") || !strcmp(name, "bytes_ptr") ||
            !strcmp(name, "make_chan") || !strcmp(name, "chan_send") ||
            !strcmp(name, "chan_recv") || !strcmp(name, "chan_close") ||
+           !strcmp(name, "join_wait") ||
            !strcmp(name, "arena_new") || !strcmp(name, "until_of") ||
            !strcmp(name, "until_never") || !strcmp(name, "until_hit") ||
            !strcmp(name, "fault_timeout") || !strcmp(name, "fault_reset") ||

@@ -244,6 +244,17 @@ const char *infer_call(CG *cg, Expr *e) {
             cg_error(e->line, "chan_close() expects a chan (got %s)", ct);
         return "void";
     }
+    if (!strcmp(name, "join_wait")) {
+        if (n != 1)
+            cg_error(e->line, "join_wait() takes exactly one argument");
+        const char *jt = infer_type(cg, e->as.call.args[0]);
+        if (!is_join(jt))
+            cg_error(e->line, "join_wait() expects a join handle (got %s)",
+                     jt);
+        char *elem = join_elem(jt);
+        res_cname(cg, elem, "str");
+        return xasprintf("result[%s,str]", elem);
+    }
     if (!strcmp(name, "to_le") || !strcmp(name, "to_be")) {
         if (n != 1)
             cg_error(e->line, "%s() takes exactly one argument", name);
@@ -723,6 +734,22 @@ const char *infer_type(CG *cg, Expr *e) {
         return infer_binary(cg, e);
     case EX_CALL: {
         const char *t = infer_call(cg, e);
+        e->inf_ty = t;
+        return t;
+    }
+    case EX_SPAWN: {
+        FuncSig *sig = spawn_target(cg, e->as.spawn.call, e->line);
+        if (!sig->ret_slang)
+            cg_error(e->line,
+                     "'spawn' as an expression requires a function that "
+                     "returns a value; use 'spawn f();' as a statement");
+        for (int i = 0; i < e->as.spawn.call->as.call.nargs; i++) {
+            const char *saved = expect_push(cg, sig->param_slang[i]);
+            infer_type(cg, e->as.spawn.call->as.call.args[i]);
+            cg->expect = saved;
+        }
+        spawn_shape_for(cg, sig);
+        const char *t = xasprintf("join[%s]", sig->ret_slang);
         e->inf_ty = t;
         return t;
     }
