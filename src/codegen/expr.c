@@ -1346,12 +1346,11 @@ char *gen_expr(CG *cg, Expr *e) {
         sb_init(&prelude);
         int ambient_mark = cg->ambient_count;
         sb_append(&prelude, xasprintf(
-            "%s *_sl_sa%d = (%s *)sl_gc_alloc(sizeof(%s), sl_gc_trace_%s); "
-            "_sl_sa%d->join = sl_join_new(sizeof(%s), %d); ",
-            shape->sname, id, shape->sname, shape->sname, shape->sname,
-            id, ctype_of(cg, sig->ret_slang),
+            "%s _sl_sa%d; "
+            "_sl_sa%d.join = sl_join_new(sizeof(%s), %d); ",
+            shape->sname, id, id, ctype_of(cg, sig->ret_slang),
             type_is_gc_ptr(cg, sig->ret_slang)));
-        ambient_root_push(cg, xasprintf("_sl_sa%d", id));
+        ambient_root_push(cg, xasprintf("_sl_sa%d.join", id));
         for (int i = 0; i < nargs; i++) {
             const char *saved = expect_push(cg, sig->param_slang[i]);
             const char *at = infer_type(cg, call->as.call.args[i]);
@@ -1364,13 +1363,16 @@ char *gen_expr(CG *cg, Expr *e) {
                          i + 1, name, at, sig->param_slang[i]);
             char *a = gen_expr(cg, call->as.call.args[i]);
             a = maybe_cast(cg, sig->param_slang[i], at, a);
-            sb_append(&prelude, xasprintf("_sl_sa%d->a%d = %s; ", id, i, a));
+            sb_append(&prelude, xasprintf("_sl_sa%d.a%d = %s; ", id, i, a));
+            if (type_is_gc_ptr(cg, sig->param_slang[i]))
+                ambient_root_push(cg, xasprintf("_sl_sa%d.a%d", id, i));
         }
         move_consume(cg, call);
         char *inner = xasprintf(
-            "({ sl_rt_active_spawns_inc(); sl_task_submit(%s_entry, _sl_sa%d); "
-            "_sl_sa%d->join; })",
-            shape->tname, id, id);
+            "({ sl_rt_active_spawns_inc(); "
+            "sl_task_submit_copy(%s_entry, &_sl_sa%d, sizeof(_sl_sa%d), sl_gc_trace_%s); "
+            "_sl_sa%d.join; })",
+            shape->tname, id, id, shape->sname, id);
         char *result = wrap_safepoint(cg, e, "sl_join *", prelude.data, inner);
         cg->ambient_count = ambient_mark;
         return result;

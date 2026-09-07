@@ -877,11 +877,9 @@ void gen_stmt(CG *cg, Stmt *s) {
         int id = cg->tmp_id++;
         emit_line(cg, "{");
         cg->indent++;
-        emit_line(cg, "%s *_sl_sa%d = (%s *)sl_gc_alloc(sizeof(%s), sl_gc_trace_%s);",
-                  shape->sname, id, shape->sname, shape->sname, shape->sname);
-        emit_line(cg, "_sl_sa%d->join = NULL;", id);
+        emit_line(cg, "%s _sl_sa%d;", shape->sname, id);
+        emit_line(cg, "_sl_sa%d.join = NULL;", id);
         int ambient_mark = cg->ambient_count;
-        ambient_root_push(cg, xasprintf("_sl_sa%d", id));
         for (int i = 0; i < nargs; i++) {
             const char *saved = expect_push(cg, sig->param_slang[i]);
             const char *at = infer_type(cg, call->as.call.args[i]);
@@ -894,12 +892,15 @@ void gen_stmt(CG *cg, Stmt *s) {
                          i + 1, name, at, sig->param_slang[i]);
             char *a = gen_expr(cg, call->as.call.args[i]);
             a = maybe_cast(cg, sig->param_slang[i], at, a);
-            emit_line(cg, "_sl_sa%d->a%d = %s;", id, i, a);
+            emit_line(cg, "_sl_sa%d.a%d = %s;", id, i, a);
+            if (type_is_gc_ptr(cg, sig->param_slang[i]))
+                ambient_root_push(cg, xasprintf("_sl_sa%d.a%d", id, i));
         }
         cg->ambient_count = ambient_mark;
         move_consume(cg, call);
         emit_line(cg, "sl_rt_active_spawns_inc();");
-        emit_line(cg, "sl_task_submit(%s_entry, _sl_sa%d);", shape->tname, id);
+        emit_line(cg, "sl_task_submit_copy(%s_entry, &_sl_sa%d, sizeof(_sl_sa%d), sl_gc_trace_%s);",
+                  shape->tname, id, id, shape->sname);
         cg->indent--;
         emit_line(cg, "}");
         break;

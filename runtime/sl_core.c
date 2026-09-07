@@ -135,6 +135,7 @@ typedef struct sl_task {
     void *entry_arg;
     unsigned char entry_arg_store[64];
     int entry_arg_owned;
+    void (*entry_arg_trace)(void *, void (*)(void *));
     int is_main;             /* Tier 11 fourth slice: task-scoped (not
                                 thread-scoped) replacement for the old
                                 sl_rt_is_main_thread -- set once, only
