@@ -519,6 +519,33 @@ static const size_t sl_gc_class_sizes[SL_GC_CLASS_N] = {40, 48, 56, 72, 144,
 static sl_gc_obj *sl_gc_class_fl[SL_GC_CLASS_N];
 static int sl_gc_class_fl_n[SL_GC_CLASS_N];
 static pthread_mutex_t sl_gc_class_mu = PTHREAD_MUTEX_INITIALIZER;
+static _Atomic unsigned long long sl_gc_class_stat_hits = 0;
+static _Atomic unsigned long long sl_gc_class_stat_over = 0;
+
+static int sl_gc_class_stat_enabled(void) {
+    static int cached = -1;
+    if (cached < 0)
+        cached = getenv("SLANG_GC_CLASS_STAT") ? 1 : 0;
+    return cached;
+}
+
+static void sl_gc_class_stat_dump(void) {
+    if (!sl_gc_class_stat_enabled())
+        return;
+    unsigned long long hits = atomic_load_explicit(
+        &sl_gc_class_stat_hits, memory_order_relaxed);
+    unsigned long long over = atomic_load_explicit(
+        &sl_gc_class_stat_over, memory_order_relaxed);
+    fprintf(stderr, "slang-gc-class-stat hits=%llu overflow_frees=%llu",
+            hits, over);
+    for (int i = 0; i < SL_GC_CLASS_N; i++)
+        fprintf(stderr, " c%zu=%d", sl_gc_class_sizes[i],
+                sl_gc_class_fl_n[i]);
+    fprintf(stderr, "\n");
+}
+
+__attribute__((destructor))
+static void sl_gc_class_stat_atexit(void) { sl_gc_class_stat_dump(); }
 
 static int sl_gc_class_for(size_t total) {
     for (int i = 0; i < SL_GC_CLASS_N; i++) {
@@ -541,6 +568,9 @@ static sl_gc_obj *sl_gc_class_pop(size_t total) {
     pthread_mutex_unlock(&sl_gc_class_mu);
     if (!h)
         return NULL;
+    if (sl_gc_class_stat_enabled())
+        atomic_fetch_add_explicit(&sl_gc_class_stat_hits, 1,
+                                  memory_order_relaxed);
     h->trace = NULL;
     h->fini = NULL;
     h->marked = 0;
@@ -563,6 +593,9 @@ static void sl_gc_class_push(sl_gc_obj *h) {
         return;
     }
     pthread_mutex_unlock(&sl_gc_class_mu);
+    if (sl_gc_class_stat_enabled())
+        atomic_fetch_add_explicit(&sl_gc_class_stat_over, 1,
+                                  memory_order_relaxed);
     free(h);
 }
 
