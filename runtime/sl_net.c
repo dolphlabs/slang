@@ -528,11 +528,21 @@ static sl_res_bool_str *sl_net_err_bool(const char *msg) {
     return r;
 }
 
+static sl_res_i32_str *sl_net_listen_reuse(int port, int reuse_port);
+
 static sl_res_i32_str *sl_net_listen(int port) {
+    return sl_net_listen_reuse(port, 0);
+}
+
+static sl_res_i32_str *sl_net_listen_reuse(int port, int reuse_port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return sl_net_err_i32(strerror(errno));
     int one = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+#ifdef SO_REUSEPORT
+    if (reuse_port)
+        setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one));
+#endif
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
@@ -819,6 +829,13 @@ static sl_res_int_fault sl_link_send_ptr(sl_link *l, const unsigned char *ptr,
 
 static sl_res_link_fault sl_link_listen(long long port) {
     sl_res_i32_str *r = sl_net_listen((int)port);
+    if (!r->ok)
+        return sl_link_err_link(sl_fault_io());
+    return sl_link_ok_link(sl_link_from_fd((int)r->v));
+}
+
+static sl_res_link_fault sl_link_listen_reuse(long long port, long long reuse) {
+    sl_res_i32_str *r = sl_net_listen_reuse((int)port, reuse != 0);
     if (!r->ok)
         return sl_link_err_link(sl_fault_io());
     return sl_link_ok_link(sl_link_from_fd((int)r->v));

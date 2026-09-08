@@ -357,12 +357,19 @@ const char *infer_call(CG *cg, Expr *e) {
         return "trip";
     }
     if (!strcmp(name, "link_listen")) {
-        if (n != 1)
-            cg_error(e->line, "link_listen() takes exactly one argument");
+        if (n != 1 && n != 2)
+            cg_error(e->line, "link_listen() takes one or two arguments");
         const char *t = infer_type(cg, e->as.call.args[0]);
         if (!is_int(t))
             cg_error(e->line,
                      "link_listen() expects an integer port (got %s)", t);
+        if (n == 2) {
+            const char *rt = infer_type(cg, e->as.call.args[1]);
+            if (!is_int(rt))
+                cg_error(e->line,
+                         "link_listen() expects an integer reuse flag (got %s)",
+                         rt);
+        }
         cg->want_link = 1;
         res_cname(cg, "link", "fault");
         return "result[link,fault]";

@@ -546,6 +546,24 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         return wrap_safepoint(cg, e, ctype_of(cg, "trip"), NULL, inner);
     }
     if (!strcmp(name, "link_listen")) {
+        if (e->as.call.nargs == 2) {
+            StrBuf prelude;
+            sb_init(&prelude);
+            int seq_id = cg->tmp_id++;
+            int ambient_mark = cg->ambient_count;
+            char *p = gen_expr(cg, e->as.call.args[0]);
+            p = sequence_one(cg, seq_id, 0, ctype_of(cg, "int"), "int", p,
+                             e->as.call.args[0], &prelude);
+            char *r = gen_expr(cg, e->as.call.args[1]);
+            r = sequence_one(cg, seq_id, 1, ctype_of(cg, "int"), "int", r,
+                             e->as.call.args[1], &prelude);
+            char *inner = xasprintf("sl_link_listen_reuse(%s, %s)", p, r);
+            char *result = wrap_safepoint(
+                cg, e, ctype_of(cg, "result[link,fault]"), prelude.data,
+                inner);
+            cg->ambient_count = ambient_mark;
+            return result;
+        }
         char *a = gen_expr(cg, e->as.call.args[0]);
         char *inner = xasprintf("sl_link_listen(%s)", a);
         return wrap_safepoint(cg, e, ctype_of(cg, "result[link,fault]"),

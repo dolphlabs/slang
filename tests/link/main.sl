@@ -4,10 +4,11 @@ fn die(msg: str) {
 }
 
 fn run() {
-    let lr = link_listen(0);
+    let lr = link_listen(0, 1);
     guard let ln = lr else { die("listen"); }
     let port = ln.port();
     if port <= 0 || port >= 65536 { die("port"); }
+    println("reuse listen ok");
 
     let dr = link_dial("127.0.0.1", port, until_never());
     guard let c = dr else { die("dial"); }
