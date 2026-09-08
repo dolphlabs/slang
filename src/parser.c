@@ -851,11 +851,22 @@ static Stmt *parse_guard_stmt(Parser *p) {
         expect(p, T_ASSIGN, "'='");
         Expr *expr = parse_expression(p);
         expect(p, T_KW_ELSE, "'else'");
+        char *err_name = NULL;
+        Expr *err_expr = NULL;
+        if (check(p, T_KW_LET)) {
+            advance(p);
+            Token *ename = expect(p, T_IDENT, "a variable name");
+            expect(p, T_ASSIGN, "'='");
+            err_expr = parse_expression(p);
+            err_name = ename->text;
+        }
         Block *body = parse_block(p, 0);
 
         Stmt *s = new_stmt(ST_GUARD_LET, kw->line);
         s->as.guard_let.name = name->text;
         s->as.guard_let.expr = expr;
+        s->as.guard_let.err_name = err_name;
+        s->as.guard_let.err_expr = err_expr;
         s->as.guard_let.body = body;
         return s;
     }

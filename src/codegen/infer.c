@@ -175,6 +175,8 @@ const char *infer_call(CG *cg, Expr *e) {
         const char *t = infer_type(cg, e->as.call.args[0]);
         if (is_arr(t))
             cg_error(e->line, "cannot convert a list to str");
+        if (is_result(t) || is_opt(t))
+            cg_error(e->line, "cannot convert opt/result to str; unwrap first");
         return "str";
     }
     if (!strcmp(name, "to_bytes")) {
@@ -355,12 +357,19 @@ const char *infer_call(CG *cg, Expr *e) {
         return "trip";
     }
     if (!strcmp(name, "link_listen")) {
-        if (n != 1)
-            cg_error(e->line, "link_listen() takes exactly one argument");
+        if (n != 1 && n != 2)
+            cg_error(e->line, "link_listen() takes one or two arguments");
         const char *t = infer_type(cg, e->as.call.args[0]);
         if (!is_int(t))
             cg_error(e->line,
                      "link_listen() expects an integer port (got %s)", t);
+        if (n == 2) {
+            const char *rt = infer_type(cg, e->as.call.args[1]);
+            if (!is_int(rt))
+                cg_error(e->line,
+                         "link_listen() expects an integer reuse flag (got %s)",
+                         rt);
+        }
         cg->want_link = 1;
         res_cname(cg, "link", "fault");
         return "result[link,fault]";
@@ -382,6 +391,17 @@ const char *infer_call(CG *cg, Expr *e) {
         cg->want_link = 1;
         res_cname(cg, "link", "fault");
         return "result[link,fault]";
+    }
+
+    if (!strcmp(name, "err_of")) {
+        if (n != 1)
+            cg_error(e->line, "err_of() takes exactly one argument");
+        const char *t = infer_type(cg, e->as.call.args[0]);
+        if (!is_result(t))
+            cg_error(e->line, "err_of() expects a result (got %s)", t);
+        char *tv, *tev;
+        result_te(t, &tv, &tev);
+        return tev;
     }
 
     if (!strcmp(name, "has") || !strcmp(name, "del")) {
@@ -452,17 +472,24 @@ const char *infer_call(CG *cg, Expr *e) {
                     res_cname(cg, "link", "fault");
                     return "result[link,fault]";
                 }
-                if (!strcmp(right, "send") || !strcmp(right, "recv")) {
+                if (!strcmp(right, "send") || !strcmp(right, "recv") ||
+                    !strcmp(right, "send_bytes")) {
                     if (n != 2)
                         cg_error(e->line,
                                  "link.%s() takes exactly two arguments",
                                  right);
                     const char *wt = infer_type(cg, e->as.call.args[0]);
                     const char *ut = infer_type(cg, e->as.call.args[1]);
-                    if (!is_wire(wt))
+                    if (!strcmp(right, "send_bytes")) {
+                        if (!is_bytes(wt))
+                            cg_error(e->line,
+                                     "link.%s() expects bytes (got %s)",
+                                     right, wt);
+                    } else if (!is_wire(wt)) {
                         cg_error(e->line,
                                  "link.%s() expects a wire (got %s)",
                                  right, wt);
+                    }
                     if (!is_until(ut))
                         cg_error(e->line,
                                  "link.%s() expects an until (got %s)",
@@ -630,10 +657,10 @@ const char *infer_binary(CG *cg, Expr *e) {
         cg_error(e->line, "cannot compare %s and %s", lt, rt);
     }
     if (!strcmp(op, "+")) {
-        if (is_str(lt) || is_str(rt)) {
-            const char *other = is_str(lt) ? rt : lt;
+        if (is_str(lt) || is_str(rt) || is_fault(lt) || is_fault(rt)) {
+            const char *other = (is_str(lt) || is_fault(lt)) ? rt : lt;
             if (!(is_str(other) || is_num(other) || !strcmp(other, "bool") ||
-                  is_bytes(other)))
+                  is_bytes(other) || is_fault(other)))
                 cg_error(e->line,
                          "cannot concatenate %s onto a string with '+'",
                          other);

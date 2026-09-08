@@ -4,4 +4,5 @@
 kept0
 2999
 kept2999
+alloc probe ok
 done

@@ -131,7 +131,9 @@ typedef struct sl_task {
     void *rsp;
     struct sl_safepoint *safepoint_top;
     int grows_seen;
-    struct sl_task *next;    /* run-queue link, runtime_pool.c */
+    struct sl_task *next;    /* primitive wait-list link, runtime_pool.c */
+    struct sl_task *runq_link; /* striped run-queue link -- never aliases
+                                 next: a task is queued XOR parked. */
     void *entry_arg;
     unsigned char entry_arg_store[64];
     int entry_arg_owned;
@@ -275,6 +277,68 @@ static sl_runq sl_global_runq = {
     .mu = PTHREAD_MUTEX_INITIALIZER,
     .not_empty = PTHREAD_COND_INITIALIZER,
 };
+
+/* Wake-up redesign: per-worker sleep stripes + hashed run queues. A
+    queued task lives on exactly one stripe via runq_link. A parked
+    task lives on exactly one primitive wait list via next. The two
+    linkages never alias, so queue surgery cannot corrupt a park list
+    and vice versa. Workers pop their own stripe lock-free-ish first,
+    steal siblings next, and sleep on the global doorbell only when
+    every stripe is empty. Every push broadcasts the doorbell, so no
+    sleeper misses a task parked on a foreign stripe. */
+#define SL_RUNQ_STRIPES 16
+typedef struct sl_runq_stripe {
+    sl_task *head, *tail;
+    pthread_mutex_t mu;
+    pthread_cond_t not_empty;
+} sl_runq_stripe;
+static sl_runq_stripe sl_runq_stripes[SL_RUNQ_STRIPES] = {
+    [0 ... SL_RUNQ_STRIPES - 1] = {
+        .mu = PTHREAD_MUTEX_INITIALIZER,
+        .not_empty = PTHREAD_COND_INITIALIZER,
+    },
+};
+
+static inline unsigned sl_runq_stripe_for(const sl_task *t) {
+    uintptr_t h = (uintptr_t)t;
+    h ^= h >> 16;
+    h *= (uintptr_t)0x9e3779b1u;
+    h ^= h >> 13;
+    return (unsigned)(h % (uintptr_t)SL_RUNQ_STRIPES);
+}
+
+static _Atomic unsigned long long sl_sched_stat_submit = 0;
+static _Atomic unsigned long long sl_sched_stat_resume = 0;
+static _Atomic unsigned long long sl_sched_stat_dispatch = 0;
+static _Atomic unsigned long long sl_sched_stat_preempt_yield = 0;
+static _Atomic unsigned long long sl_sched_stat_preempt_async = 0;
+
+static int sl_sched_stat_enabled(void) {
+    static int cached = -1;
+    if (cached < 0)
+        cached = getenv("SLANG_SCHED_STAT") ? 1 : 0;
+    return cached;
+}
+
+static void sl_sched_stat_dump(void) {
+    if (!sl_sched_stat_enabled())
+        return;
+    unsigned long long submit = atomic_load_explicit(&sl_sched_stat_submit,
+                                                     memory_order_relaxed);
+    unsigned long long resume = atomic_load_explicit(&sl_sched_stat_resume,
+                                                     memory_order_relaxed);
+    unsigned long long dispatch = atomic_load_explicit(
+        &sl_sched_stat_dispatch, memory_order_relaxed);
+    unsigned long long pyield = atomic_load_explicit(
+        &sl_sched_stat_preempt_yield, memory_order_relaxed);
+    unsigned long long async = atomic_load_explicit(
+        &sl_sched_stat_preempt_async, memory_order_relaxed);
+    fprintf(stderr, "slang-sched-stat submits=%llu resumes=%llu dispatches=%llu preempt_yields=%llu async_preempts=%llu\n",
+            submit, resume, dispatch, pyield, async);
+}
+
+__attribute__((destructor))
+static void sl_sched_stat_atexit(void) { sl_sched_stat_dump(); }
 
 /* Tier 11 seventh slice: a relaxed, heuristic-only count of tasks
  * currently sitting on sl_global_runq -- NOT used for any correctness
@@ -678,9 +742,41 @@ static void sl_task_yield_now(void); /* runtime_pool.c, forward here --
  * more latency-sensitive pool). SL_PREEMPT_SAMPLE_MASK bounds the
  * steady-state cost of a hot loop's checkpoint to one increment plus
  * one branch for 1023 of every 1024 visits -- only the 1-in-1024
- * sample pays for a clock_gettime call. */
-#define SL_PREEMPT_QUANTUM_NS 10000000LL
+ * sample pays for a clock_gettime call. Env overrides (read once):
+ * SLANG_PREEMPT_QUANTUM_MS (default 10), SLANG_PREEMPT_TICK_MS
+ * (default 2). IO-bound servers (sub-ms requests) want a longer
+ * quantum and slower ticker: fewer SIGUSR1 interruptions per request
+ * means less tail jitter, and cooperative park points already yield
+ * promptly on IO. */
+#define SL_PREEMPT_QUANTUM_DEFAULT_NS 10000000LL
+#define SL_PREEMPT_TICK_DEFAULT_NS 2000000LL
 #define SL_PREEMPT_SAMPLE_MASK 1023UL
+
+static long long sl_preempt_quantum_ns(void) {
+    static long long cached = -1;
+    if (cached < 0) {
+        const char *e = getenv("SLANG_PREEMPT_QUANTUM_MS");
+        long long ms = e ? atoll(e) : 10;
+        if (ms < 1) ms = 1;
+        if (ms > 1000) ms = 1000;
+        cached = ms * 1000000LL;
+    }
+    return cached;
+}
+
+static long long sl_preempt_tick_ns(void) {
+    static long long cached = -1;
+    if (cached < 0) {
+        const char *e = getenv("SLANG_PREEMPT_TICK_MS");
+        long long ms = e ? atoll(e) : 2;
+        if (ms < 1) ms = 1;
+        if (ms > 1000) ms = 1000;
+        cached = ms * 1000000LL;
+    }
+    return cached;
+}
+
+#define SL_PREEMPT_QUANTUM_NS (sl_preempt_quantum_ns())
 
 /* Not gated on 'time' being imported -- spawn/loops are core language
  * features, so this must exist unconditionally. Mirrors pkg_time's own

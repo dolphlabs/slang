@@ -288,12 +288,22 @@ fn parse_small(s: str) -> result[i32, str] {
 
 // guard let unwraps the happy path and binds it for the rest of the
 // block; the else branch must exit (return, or exit()) since the
-// bound name has no value to fall back to
+// bound name has no value to fall back to. `else let e = err_of(r)`
+// binds the error value for `result[T, E]` so failures stay visible.
 fn safe_div(n: int) -> int {
     guard let v = div10(n) else {
         return -1;
     }
     return v;
+}
+
+fn load_config(path: str) -> str {
+    let r: result[str, str] = read_file(path);
+    guard let body = r else let e = err_of(r) {
+        log.warn("config load failed: " + e);
+        return "";
+    }
+    return body;
 }
 
 // ?? recovers from none / err with a fallback value
@@ -313,10 +323,10 @@ parameter is a compile error.
 
 ## Standard packages
 
-`time`, `net`, `json`, `proc`, and `fs` are compiler-provided native
+`time`, `net`, `json`, `proc`, `fs`, and `log` are compiler-provided native
 packages — no source files, just `import "time";` / `import "net";`
-/ `import "json";` / `import "proc";` / `import "fs";` like any other
-package.
+/ `import "json";` / `import "proc";` / `import "fs";` / `import "log";`
+like any other package.
 
 `http` and `byteutil` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
@@ -517,6 +527,22 @@ guard let in_fd = or else { exit(1); }
 let rr = fs.read(in_fd, 16);
 guard let data = rr else { exit(1); }
 fs.close(in_fd);
+```
+
+#### `log`
+
+Stderr logging with a timestamp and level. Each function accepts a
+`str` or a `fault` (`to_str`/`+` already convert faults the same way),
+so `err_of` bindings and `fault` values log without manual conversion.
+
+```slang
+import "log";
+
+log.debug("cache miss for key foo");
+log.info("listening on :8080");
+log.warn("retrying dial after timeout");
+log.error("could not load config: " + e);
+log.warn(fault_timeout());
 ```
 
 #### `byteutil`

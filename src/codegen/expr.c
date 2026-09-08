@@ -55,6 +55,8 @@ char *conv_to_str(const char *t, char *expr) {
         return xasprintf("sl_str_from_bool(%s)", expr);
     if (is_bytes(t))
         return xasprintf("sl_str_from_bytes(%s)", expr);
+    if (is_fault(t))
+        return xasprintf("sl_str_from_fault(%s)", expr);
     cg_error(0, "internal: no str conversion for %s", t);
     return NULL; /* unreachable */
 }
@@ -107,7 +109,7 @@ static int expr_is_flat(CG *cg, Expr *e) {
         if (!strcmp(op, "+")) {
             const char *lt = infer_type(cg, e->as.binary.lhs);
             const char *rt = infer_type(cg, e->as.binary.rhs);
-            if (is_str(lt) || is_str(rt) ||
+            if (is_str(lt) || is_str(rt) || is_fault(lt) || is_fault(rt) ||
                 (is_bytes(lt) && is_bytes(rt)) ||
                 (is_arr(lt) && is_arr(rt)))
                 return 0;
@@ -505,6 +507,25 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *inner = xasprintf("((long long)sl_fault_kind(%s))", a);
         return wrap_safepoint(cg, e, ctype_of(cg, "int"), NULL, inner);
     }
+    if (!strcmp(name, "err_of")) {
+        const char *rt = infer_type(cg, e->as.call.args[0]);
+        char *tv, *tev;
+        result_te(rt, &tv, &tev);
+        const char *rc = res_cname(cg, tv, tev);
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        char *inner;
+        if (type_is_gc_ptr(cg, rt))
+            inner = xasprintf(
+                "({ %s *_sl_r = %s; if (_sl_r->ok) sl_rt_error(\"err_of on ok "
+                "result\", 0, 0); _sl_r->e; })",
+                rc, a);
+        else
+            inner = xasprintf(
+                "({ %s _sl_r = %s; if (_sl_r.ok) sl_rt_error(\"err_of on ok "
+                "result\", 0, 0); _sl_r.e; })",
+                rc, a);
+        return wrap_safepoint(cg, e, ctype_of(cg, tev), NULL, inner);
+    }
     if (!strcmp(name, "peer_v4")) {
         char *a = gen_expr(cg, e->as.call.args[0]);
         char *b = gen_expr(cg, e->as.call.args[1]);
@@ -525,6 +546,24 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         return wrap_safepoint(cg, e, ctype_of(cg, "trip"), NULL, inner);
     }
     if (!strcmp(name, "link_listen")) {
+        if (e->as.call.nargs == 2) {
+            StrBuf prelude;
+            sb_init(&prelude);
+            int seq_id = cg->tmp_id++;
+            int ambient_mark = cg->ambient_count;
+            char *p = gen_expr(cg, e->as.call.args[0]);
+            p = sequence_one(cg, seq_id, 0, ctype_of(cg, "int"), "int", p,
+                             e->as.call.args[0], &prelude);
+            char *r = gen_expr(cg, e->as.call.args[1]);
+            r = sequence_one(cg, seq_id, 1, ctype_of(cg, "int"), "int", r,
+                             e->as.call.args[1], &prelude);
+            char *inner = xasprintf("sl_link_listen_reuse(%s, %s)", p, r);
+            char *result = wrap_safepoint(
+                cg, e, ctype_of(cg, "result[link,fault]"), prelude.data,
+                inner);
+            cg->ambient_count = ambient_mark;
+            return result;
+        }
         char *a = gen_expr(cg, e->as.call.args[0]);
         char *inner = xasprintf("sl_link_listen(%s)", a);
         return wrap_safepoint(cg, e, ctype_of(cg, "result[link,fault]"),
@@ -775,19 +814,45 @@ char *gen_call(CG *cg, Expr *e) {
                                           ctype_of(cg, "result[link,fault]"),
                                           NULL, inner);
                 }
-                if (!strcmp(right, "send") || !strcmp(right, "recv")) {
+                if (!strcmp(right, "send") || !strcmp(right, "recv") ||
+                    !strcmp(right, "send_bytes")) {
                     StrBuf prelude;
                     sb_init(&prelude);
                     int seq_id = cg->tmp_id++;
                     int ambient_mark = cg->ambient_count;
+                    const char *wt =
+                        infer_type(cg, e->as.call.args[0]);
                     char *w = gen_expr(cg, e->as.call.args[0]);
+                    char *u = NULL;
+                    const char *op = right;
+                    if (!strcmp(right, "send_bytes")) {
+                        char *b = w;
+                        b = sequence_one(cg, seq_id, 0,
+                                         ctype_of(cg, "bytes"), "bytes", b,
+                                         e->as.call.args[0], &prelude);
+                        u = gen_expr(cg, e->as.call.args[1]);
+                        u = sequence_one(cg, seq_id, 1,
+                                         ctype_of(cg, "until"), "until", u,
+                                         e->as.call.args[1], &prelude);
+                        char *inner = xasprintf(
+                            "sl_link_send_bytes(%s, %s->ptr, %s->len, %s)",
+                            self, b, b, u);
+                        char *result = wrap_safepoint(
+                            cg, e, ctype_of(cg, "result[int,fault]"),
+                            prelude.data, inner);
+                        cg->ambient_count = ambient_mark;
+                        (void)wt;
+                        return result;
+                    }
                     w = sequence_one(cg, seq_id, 0, ctype_of(cg, "wire"),
                                      "wire", w, e->as.call.args[0],
                                      &prelude);
-                    char *u = gen_expr(cg, e->as.call.args[1]);
+                    u = gen_expr(cg, e->as.call.args[1]);
                     u = sequence_one(cg, seq_id, 1, ctype_of(cg, "until"),
                                      "until", u, e->as.call.args[1],
                                      &prelude);
+                    (void)wt;
+                    (void)op;
                     char *inner = xasprintf("sl_link_%s(%s, %s, %s)", right,
                                             self, w, u);
                     char *result = wrap_safepoint(
@@ -1308,7 +1373,7 @@ char *gen_expr(CG *cg, Expr *e) {
         if (!strcmp(op, "==") || !strcmp(op, "!=") || !strcmp(op, "<") ||
             !strcmp(op, "<=") || !strcmp(op, ">") || !strcmp(op, ">="))
             return gen_comparison(cg, e, lt, rt);
-        if (!strcmp(op, "+") && (is_str(lt) || is_str(rt)))
+        if (!strcmp(op, "+") && (is_str(lt) || is_str(rt) || is_fault(lt) || is_fault(rt)))
             return gen_string_concat(cg, e, lt, rt);
         if (!strcmp(op, "+") && is_bytes(lt) && is_bytes(rt)) {
             char *a = gen_expr(cg, e->as.binary.lhs);

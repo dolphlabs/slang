@@ -320,16 +320,27 @@ static void walk_stmt(CG *cg, Esc *esc, Stmt *s) {
         return;
     case ST_GUARD_LET: {
         scan_expr_any(cg, esc, s->as.guard_let.expr);
-        walk_block(cg, esc, s->as.guard_let.body);
+        if (s->as.guard_let.err_expr)
+            scan_expr_any(cg, esc, s->as.guard_let.err_expr);
         const char *et = infer_type(cg, s->as.guard_let.expr);
         char *inner = NULL;
+        char *tev = NULL;
         if (is_opt(et))
             inner = opt_inner(et);
         else if (is_result(et)) {
-            char *tv, *tev;
+            char *tv;
             result_te(et, &tv, &tev);
             inner = tv;
         }
+        if (s->as.guard_let.err_name && tev) {
+            var_scope_push(cg);
+            esc_push(esc, s->as.guard_let.err_name, NULL);
+            var_redecl_check(cg, s->as.guard_let.err_name, s->line);
+            var_push(cg, s->as.guard_let.err_name, tev);
+        }
+        walk_block(cg, esc, s->as.guard_let.body);
+        if (s->as.guard_let.err_name && tev)
+            var_scope_pop(cg);
         if (inner) {
             esc_push(esc, s->as.guard_let.name, NULL);
             var_redecl_check(cg, s->as.guard_let.name, s->line);

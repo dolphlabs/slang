@@ -473,7 +473,8 @@ void emit_native_runtime(CG *cg) {
     int want_net = want_pkg(cg, "net") || cg->want_link;
     int want_proc = want_pkg(cg, "proc");
     int want_fs = want_pkg(cg, "fs");
-    if (!want_time && !want_net && !want_proc && !want_fs)
+    int want_log = want_pkg(cg, "log");
+    if (!want_time && !want_net && !want_proc && !want_fs && !want_log)
         return;
     if (want_time)
         emit_runtime_file(cg, "sl_time.c");
@@ -485,6 +486,8 @@ void emit_native_runtime(CG *cg) {
         emit_runtime_file(cg, "sl_proc.c");
     if (want_fs)
         emit_runtime_file(cg, "sl_fs.c");
+    if (want_log)
+        emit_runtime_file(cg, "sl_log.c");
 }
 
 /* Emit the args-struct + task entry function for every distinct

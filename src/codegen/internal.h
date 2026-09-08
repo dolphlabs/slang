@@ -288,7 +288,7 @@ struct CG {
  * a function name/index pair the way this table used to. Each
  * package owns its own table in its own pkg_<name>/sigs.c; native.c
  * searches across all of them. */
-typedef enum { NA_INT, NA_STR, NA_BYTES, NA_RAWPTR } NatArgKind;
+typedef enum { NA_INT, NA_STR, NA_BYTES, NA_RAWPTR, NA_STR_FAULT } NatArgKind;
 
 typedef struct {
     const char *pkg, *name;
@@ -315,6 +315,9 @@ extern const int PROC_SIGS_LEN;
 
 extern const NatSig FS_SIGS[]; /* src/codegen/pkg_fs/ */
 extern const int FS_SIGS_LEN;
+
+extern const NatSig LOG_SIGS[]; /* src/codegen/pkg_log/ */
+extern const int LOG_SIGS_LEN;
 
 /* ------------------------------------------------------------------ */
 /* Functions (declarations generated from every former 'static' def)   */
@@ -408,6 +411,7 @@ void ambient_root_push(CG *cg, const char *name);
 char *sequence_one(CG *cg, int seq_id, int idx, const char *ctype,
                    const char *slang_type, char *text, Expr *expr_node,
                    StrBuf *prelude);
+int safepoint_elidable(CG *cg, Expr *e);
 char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
                      const char *prelude, char *inner);
 FuncSig *sig_find_in(CG *cg, const char *pkg, const char *name);

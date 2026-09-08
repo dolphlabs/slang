@@ -959,6 +959,114 @@ void ambient_root_push(CG *cg, const char *name) {
     }
     cg->ambient_roots[cg->ambient_count++] = (char *)name;
 }
+static int expr_can_alloc_or_park(CG *cg, Expr *e) {
+    if (!e)
+        return 0;
+    switch (e->kind) {
+    case EX_INT:
+    case EX_FLOAT:
+    case EX_BOOL:
+    case EX_STRING:
+        return 0;
+    case EX_IDENT:
+        return !strcmp(e->as.ident.name, "none");
+    case EX_BYTES:
+    case EX_LIST:
+    case EX_MAPLIT:
+    case EX_STRUCTLIT:
+        return 1;
+    case EX_CAST:
+        return expr_can_alloc_or_park(cg, e->as.cast.operand);
+    case EX_UNARY:
+        return expr_can_alloc_or_park(cg, e->as.unary.operand);
+    case EX_BINARY:
+        return expr_can_alloc_or_park(cg, e->as.binary.lhs) ||
+               expr_can_alloc_or_park(cg, e->as.binary.rhs);
+    case EX_INDEX:
+        return expr_can_alloc_or_park(cg, e->as.index.base) ||
+               expr_can_alloc_or_park(cg, e->as.index.index);
+    case EX_SLICE:
+        return expr_can_alloc_or_park(cg, e->as.slice.base) ||
+               expr_can_alloc_or_park(cg, e->as.slice.start) ||
+               expr_can_alloc_or_park(cg, e->as.slice.end);
+    case EX_FIELD:
+        return expr_can_alloc_or_park(cg, e->as.field.base);
+    case EX_SPAWN:
+        return 1;
+    case EX_CALL: {
+        const char *name = e->as.call.name;
+        if (!strcmp(name, "len") || !strcmp(name, "until_never") ||
+            !strcmp(name, "until_hit") || !strcmp(name, "fault_kind") ||
+            !strcmp(name, "peer_port") || !strcmp(name, "bytes_ptr"))
+            return 0;
+        for (int i = 0; i < e->as.call.nargs; i++) {
+            if (expr_can_alloc_or_park(cg, e->as.call.args[i]))
+                return 1;
+        }
+        char *left, *right;
+        if (split_dotted(name, &left, &right)) {
+            const char *pkg = import_try(cg, left);
+            if (pkg && is_native_pkg(cg, pkg))
+                return 1;
+            const char *recv_t = NULL;
+            if (!pkg)
+                recv_t = infer_ident_name(cg, left, e->line);
+            if (recv_t && type_is_arena(recv_t)) {
+                if (!strcmp(right, "reset"))
+                    return 0;
+                return 1;
+            }
+            if (recv_t && type_is_trip(recv_t)) {
+                if (!strcmp(right, "down"))
+                    return 0;
+                return 1;
+            }
+            if (recv_t && type_is_link(recv_t)) {
+                if (!strcmp(right, "peer") || !strcmp(right, "port"))
+                    return 0;
+                return 1;
+            }
+            return 1;
+        }
+        return 1;
+    }
+    }
+    return 1;
+}
+
+int safepoint_elidable(CG *cg, Expr *e) {
+    if (!e || e->kind != EX_CALL)
+        return 0;
+    if (cg->ambient_count != 0)
+        return 0;
+    if (!expr_can_alloc_or_park(cg, e))
+        return 1;
+    if (live_set_nnamed(e->live_set) != 0 || live_set_npending(e->live_set) != 0)
+        return 0;
+    const char *name = e->as.call.name;
+    if (!strcmp(name, "len") || !strcmp(name, "until_never") ||
+        !strcmp(name, "until_hit") || !strcmp(name, "fault_kind") ||
+        !strcmp(name, "peer_port") || !strcmp(name, "bytes_ptr"))
+        return 1;
+    char *left, *right;
+    if (split_dotted(name, &left, &right)) {
+        const char *pkg = import_try(cg, left);
+        if (pkg && is_native_pkg(cg, pkg))
+            return 0;
+        const char *recv_t = NULL;
+        if (!pkg)
+            recv_t = infer_ident_name(cg, left, e->line);
+        if (recv_t && type_is_arena(recv_t) && !strcmp(right, "reset"))
+            return 1;
+        if (recv_t && type_is_trip(recv_t) && !strcmp(right, "down"))
+            return 1;
+        if (recv_t && type_is_link(recv_t) &&
+            (!strcmp(right, "peer") || !strcmp(right, "port")))
+            return 1;
+    }
+    return 0;
+}
+
 
 /* Tier 10: wraps `inner` (already-generated C expression text for
  * node `e`, of C type `result_ctype`, or NULL if void) with a
@@ -985,6 +1093,11 @@ void ambient_root_push(CG *cg, const char *name) {
 char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
                      const char *prelude, char *inner) {
     int has_prelude = prelude && prelude[0] != '\0';
+    if (safepoint_elidable(cg, e)) {
+        if (!has_prelude)
+            return inner;
+        return xasprintf("({ %s%s; })", prelude, inner);
+    }
     int nlive_named = live_set_nnamed(e->live_set);
     int nlive_pending = live_set_npending(e->live_set);
     int nambient = cg->ambient_count;
@@ -1368,6 +1481,7 @@ int is_builtin_name(const char *name) {
            !strcmp(name, "del") || !strcmp(name, "exit") ||
            !strcmp(name, "some") || !strcmp(name, "none") ||
            !strcmp(name, "ok") || !strcmp(name, "err") ||
+           !strcmp(name, "err_of") ||
            !strcmp(name, "nullptr") || !strcmp(name, "bytes_ptr") ||
            !strcmp(name, "make_chan") || !strcmp(name, "chan_send") ||
            !strcmp(name, "chan_recv") || !strcmp(name, "chan_close") ||

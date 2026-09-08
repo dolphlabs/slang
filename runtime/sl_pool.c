@@ -81,6 +81,82 @@ static void sl_runq_push_raw(sl_runq *q, sl_task *t) {
  * and sl_preempt_handler's stack-range veto already rejects any signal
  * whose sp isn't inside the current task's own buffer. It was pure
  * hazard. */
+/* Striped push: hashed by task address, broadcast on the global
+    doorbell so a worker sleeping on the global condvar wakes and
+    steals. Takes no preempt bracket itself -- callers hold it
+    (submit/resume) or run on the native stack already vetoed
+    (after_switch preempted branch). Queued linkage is runq_link only;
+    t->next is never touched here. */
+static void sl_runq_stripe_push(sl_task *t) {
+    sl_runq_stripe *q = &sl_runq_stripes[sl_runq_stripe_for(t)];
+    pthread_mutex_lock(&q->mu);
+    t->runq_link = NULL;
+    if (q->tail) q->tail->runq_link = t; else q->head = t;
+    q->tail = t;
+    atomic_fetch_add_explicit(&sl_global_runq_count, 1, memory_order_relaxed);
+    pthread_cond_signal(&q->not_empty);
+    pthread_mutex_unlock(&q->mu);
+    pthread_mutex_lock(&sl_global_runq.mu);
+    pthread_cond_broadcast(&sl_global_runq.not_empty);
+    pthread_mutex_unlock(&sl_global_runq.mu);
+}
+
+/* Own stripe first (thread-hash), then steal siblings round-robin with
+    trylock only: never blocks holding one stripe while waiting on
+    another. NULL when every stripe is empty or contended. */
+static sl_task *sl_runq_stripe_try_pop(void) {
+    unsigned mine =
+        ((unsigned)(uintptr_t)(void *)pthread_self() * 0x9e3779b1u) %
+        (unsigned)SL_RUNQ_STRIPES;
+    for (int k = 0; k < SL_RUNQ_STRIPES; k++) {
+        unsigned i = (mine + (unsigned)k) % (unsigned)SL_RUNQ_STRIPES;
+        sl_runq_stripe *q = &sl_runq_stripes[i];
+        if (pthread_mutex_trylock(&q->mu) != 0)
+            continue;
+        sl_task *t = q->head;
+        if (t) {
+            q->head = t->runq_link;
+            if (!q->head)
+                q->tail = NULL;
+            t->runq_link = NULL;
+            atomic_fetch_sub_explicit(&sl_global_runq_count, 1,
+                                      memory_order_relaxed);
+            pthread_mutex_unlock(&q->mu);
+            return t;
+        }
+        pthread_mutex_unlock(&q->mu);
+    }
+    return NULL;
+}
+
+/* Striped pop for use while already holding the global doorbell mutex:
+    same steal order as try_pop but with blocking locks, since the
+    caller already owns sl_global_runq.mu and short critical sections
+    cannot deadlock here. */
+static sl_task *sl_runq_stripe_pop_locked(void) {
+    unsigned mine =
+        ((unsigned)(uintptr_t)(void *)pthread_self() * 0x9e3779b1u) %
+        (unsigned)SL_RUNQ_STRIPES;
+    for (int k = 0; k < SL_RUNQ_STRIPES; k++) {
+        unsigned i = (mine + (unsigned)k) % (unsigned)SL_RUNQ_STRIPES;
+        sl_runq_stripe *q = &sl_runq_stripes[i];
+        pthread_mutex_lock(&q->mu);
+        sl_task *t = q->head;
+        if (t) {
+            q->head = t->runq_link;
+            if (!q->head)
+                q->tail = NULL;
+            t->runq_link = NULL;
+            atomic_fetch_sub_explicit(&sl_global_runq_count, 1,
+                                      memory_order_relaxed);
+            pthread_mutex_unlock(&q->mu);
+            return t;
+        }
+        pthread_mutex_unlock(&q->mu);
+    }
+    return NULL;
+}
+
 static void sl_runq_push(sl_runq *q, sl_task *t) {
     sl_rt_preempt_disable();
     sl_runq_push_raw(q, t);
@@ -95,7 +171,18 @@ static sl_task *sl_runq_pop_blocking(sl_runq *q) {
      * bottom either way. */
     sl_rt_preempt_disable();
     pthread_mutex_lock(&q->mu);
-    while (!q->head && !q->shutdown) {
+    for (;;) {
+        sl_task *t = sl_runq_stripe_pop_locked();
+        if (t) {
+            pthread_mutex_unlock(&q->mu);
+            sl_rt_preempt_enable();
+            return t;
+        }
+        if (q->shutdown) {
+            pthread_mutex_unlock(&q->mu);
+            sl_rt_preempt_enable();
+            return NULL;
+        }
         /* An idle worker is the pool's own steady state -- it must
          * tell the collector it's safe to scan around while parked
          * here, exactly like sl_chan_send/recv already do (
@@ -126,21 +213,6 @@ static sl_task *sl_runq_pop_blocking(sl_runq *q) {
         sl_rt_gc_checkin();
         pthread_mutex_lock(&q->mu);
     }
-    sl_task *t = q->head;
-    if (t) {
-        q->head = t->next;
-        if (!q->head) q->tail = NULL;
-        atomic_fetch_sub_explicit(&sl_global_runq_count, 1,
-                                   memory_order_relaxed);
-    }
-    pthread_mutex_unlock(&q->mu);
-    sl_rt_preempt_enable();
-    /* No checkin here anymore: it used to run right after this unlock,
-     * which left t unrooted (popped off the queue, but not yet assigned
-     * to sl_rt_current_task by the caller) for the duration of that
-     * checkin call. Moved to sl_worker_loop, after the assignment,
-     * closing the window instead of narrowing it -- see there. */
-    return t;
 }
 
 /* Not called from anywhere yet -- program.c's own main() emission
@@ -169,7 +241,12 @@ static void sl_runq_shutdown(sl_runq *q) {
 static void sl_task_submit(void (*entry)(void *), void *arg) {
     sl_task *t = sl_task_acquire(entry, arg);
     t->entry_arg = arg;
-    sl_runq_push(&sl_global_runq, t);
+    sl_rt_preempt_disable();
+    sl_runq_stripe_push(t);
+    sl_rt_preempt_enable();
+    if (sl_sched_stat_enabled())
+        atomic_fetch_add_explicit(&sl_sched_stat_submit, 1,
+                                  memory_order_relaxed);
 }
 
 static void sl_task_submit_copy(void (*entry)(void *), const void *src,
@@ -191,7 +268,12 @@ static void sl_task_submit_copy(void (*entry)(void *), const void *src,
     }
     t->entry_arg_trace = trace;
     sl_task_stack_init(t, entry, t->entry_arg);
-    sl_runq_push(&sl_global_runq, t);
+    sl_rt_preempt_disable();
+    sl_runq_stripe_push(t);
+    sl_rt_preempt_enable();
+    if (sl_sched_stat_enabled())
+        atomic_fetch_add_explicit(&sl_sched_stat_submit, 1,
+                                  memory_order_relaxed);
 }
 
 /* Tier 11 fourth slice: generic park/resume primitives -- the pieces
@@ -285,9 +367,12 @@ static void sl_task_resume(sl_task *t) {
         if (*pp == t) { *pp = t->parked_next; break; }
         pp = &(*pp)->parked_next;
     }
-    sl_runq_push(&sl_global_runq, t);
+    sl_runq_stripe_push(t);
     pthread_mutex_unlock(&sl_gc_mu);
     sl_rt_preempt_enable();
+    if (sl_sched_stat_enabled())
+        atomic_fetch_add_explicit(&sl_sched_stat_resume, 1,
+                                  memory_order_relaxed);
 }
 
 /* Tier 11 seventh slice: cooperative preemption's own yield primitive --
@@ -313,16 +398,12 @@ static void sl_task_resume(sl_task *t) {
  * thread's worker loop -- at which point t->rsp is guaranteed valid. */
 __attribute__((noinline))
 static void sl_task_yield_now(void) {
-    /* Tier 11 eighth slice: bracketed entry through the switch's own
-     * resume point -- this is the COOPERATIVE yield path (called
-     * directly from generated code via sl_rt_maybe_yield, never through
-     * sl_preempt_handler), and it's exactly as vulnerable to a second,
-     * async signal landing mid-transition as the async path's own
-     * trampoline is -- nothing about being a voluntary yield makes the
-     * switch-out/switch-back-in window any safer. */
     sl_rt_preempt_disable();
     sl_task *t = sl_rt_current_task;
     t->preempted = 1;
+    if (sl_sched_stat_enabled())
+        atomic_fetch_add_explicit(&sl_sched_stat_preempt_yield, 1,
+                                  memory_order_relaxed);
     sl_ctx_switch(&t->rsp, SL_RT_TLS_NATIVE_RSP());
     /* resumes here once some worker's run loop dispatches this task
        again -- run_start_ns is reset fresh by that dispatch (see
@@ -351,39 +432,10 @@ static void sl_worker_after_switch(sl_task *t) {
          * instant -- clearing first would open exactly the zero-source
          * window sl_task_resume's own comment above describes. */
         t->preempted = 0;
-        /* Deliberately does NOT clear t->async_preempted here, and that
-         * asymmetry with t->preempted just above is the whole point --
-         * an earlier version of this slice did clear it here and thereby
-         * silently disabled sl_gc_collect's conservative scan
-         * (runtime_gc.c) entirely, which is the ONLY thing covering the
-         * alloc-to-store gap async preemption opens. The two flags
-         * answer different questions. t->preempted asks 'which of
-         * sl_worker_after_switch's three branches should run', and is
-         * consumed right here, so clearing it here is correct.
-         * t->async_preempted asks 'is the suspension this task is about
-         * to sit in an ASYNC one, i.e. taken at an arbitrary instruction
-         * boundary rather than at a compiler-placed safepoint' -- and
-         * its one and only reader is the run-queue walk, which runs
-         * strictly LATER, while t sits queued. Clearing it here, one
-         * line before sl_runq_push, meant every task on that queue was
-         * observed with the flag already 0: measured directly by
-         * counting the walk's own conservative-scan branch under
-         * concurrent_compute, 0 hits out of ~390 queued tasks walked per
-         * collection, versus 23-30 once the clear moved to where it
-         * belongs. The flag is retired instead by sl_preempt_yield
-         * (runtime_sched.c), on RESUME -- the instant the async
-         * suspension it describes actually ends. See there for the full
-         * story and the concrete corruption this reinstates cover for. */
-        sl_runq_push_raw(&sl_global_runq, t); /* _raw, NOT the bracketed
-            sl_runq_push -- its bracket would target t itself here (this
-            branch deliberately leaves sl_rt_current_task == t across the
-            push, see above), and its closing sl_rt_preempt_enable() would
-            then run AFTER t is dequeue-able, i.e. potentially after
-            another worker has already finished and free()d t. See
-            sl_runq_push's own comment for the deadlock that root-caused
-            this. No protection is lost: this code runs on the worker's
-            native stack, which sl_preempt_handler's stack-range veto
-            already rejects unconditionally. */
+        sl_runq_stripe_push(t); /* raw stripe push, no bracket -- same
+            reason as the old sl_runq_push_raw call here: sl_rt_current_task
+            is deliberately still t, and a bracket would decrement freed
+            memory after another worker finishes t. Native stack vetoed. */
         sl_rt_current_task = &sl_rt_task_storage; /* the LAST thing this
             branch does, and deliberately not a dereference of t: after
             the push above, t may already be running, finished, and freed
@@ -497,9 +549,14 @@ static void sl_worker_run_loop(long slot_idx) {
          * sl_runq_pop_blocking's own comment for the empirically-found
          * race this closes (Tier 11 plan). */
         sl_rt_gc_checkin();
-        sl_task *t = sl_runq_pop_blocking(&sl_global_runq);
+        sl_task *t = sl_runq_stripe_try_pop();
+        if (!t)
+            t = sl_runq_pop_blocking(&sl_global_runq);
         if (t) sl_rt_current_task = t;
         if (!t) break; /* shutdown */
+        if (sl_sched_stat_enabled())
+            atomic_fetch_add_explicit(&sl_sched_stat_dispatch, 1,
+                                      memory_order_relaxed);
         /* Tier 11 seventh slice: fresh quantum clock for every dispatch
          * -- a fresh submit, a resume-from-park, AND (new) a resume-from-
          * preemption-yield all funnel through this one line, so
@@ -629,6 +686,9 @@ static void sl_preempt_handler(int sig, siginfo_t *si, void *uctx_raw) {
        pointer sl_preempt_get_disable_depth_ptr returns), as the last
        possible register-safe instant before its final jmp. */
     atomic_fetch_add_explicit(&t->preempt_disable_depth, 1, memory_order_acq_rel);
+    if (sl_sched_stat_enabled())
+        atomic_fetch_add_explicit(&sl_sched_stat_preempt_async, 1,
+                                  memory_order_relaxed);
     t->async_orig_pc = (void *)pc0;
 #if defined(__APPLE__) && defined(__x86_64__)
     uctx->uc_mcontext->__ss.__rip = (uintptr_t)sl_preempt_trampoline_entry;
@@ -656,10 +716,11 @@ static void sl_preempt_handler(int sig, siginfo_t *si, void *uctx_raw) {
  * run_start_ns. */
 static void *sl_preempt_ticker_thread(void *arg) {
     (void)arg;
-    struct timespec interval;
-    interval.tv_sec = 0;
-    interval.tv_nsec = 2000000; /* 2ms */
     for (;;) {
+        long long tick = sl_preempt_tick_ns();
+        struct timespec interval;
+        interval.tv_sec = (time_t)(tick / 1000000000LL);
+        interval.tv_nsec = (long)(tick % 1000000000LL);
         nanosleep(&interval, NULL);
         if (atomic_load_explicit(&sl_global_runq_count, memory_order_relaxed) == 0)
             continue;

@@ -104,14 +104,6 @@ fn copy_wire(w: wire, n: int) -> bytes {
     return out;
 }
 
-fn fill_wire(dst: wire, src: bytes) {
-    let i = 0;
-    for b in src {
-        dst[i] = b;
-        i = i + 1;
-    }
-}
-
 fn recv_fault(deadline: until) -> fault {
     if until_hit(deadline) {
         return fault_timeout();
@@ -340,9 +332,7 @@ pub fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Inc
 
 pub fn write(c: &mut link, r: Response, a: &mut arena, deadline: until) -> result[int, fault] {
     let raw = serialize(r);
-    let w = a.wire(len(raw));
-    fill_wire(w, raw);
-    return c.send(w, deadline);
+    return c.send_bytes(raw, deadline);
 }
 
 pub fn text_response(status: i32, status_text: str, content_type: str,
