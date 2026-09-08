@@ -6,7 +6,7 @@ Baseline (4-core Linux VM, wrk 3x10s, spawn-inline + for-in hoist): c=50 slang p
 
 - [x] 1. GC pause attribution (histogram + per-request alloc counters, behind a flag) — PR #41 `perf/gc-pause-attribution`
 - [x] 2. Zero-alloc serve path (link.send_bytes, no wire copy) — PR #42 `perf/zero-alloc-serve`
-- [ ] 3. Safepoint elision (skip full enter for provably non-allocating/non-parking calls)
+- [x] 3. Safepoint elision (pure calls skip brackets) — PR #43 `perf/safepoint-elision`
 - [ ] 4. Multi-acceptor (SO_REUSEPORT listeners per worker or N acceptor tasks)
 - [ ] 5. Per-worker run queues + fd-sharded reactor waiters (work-steal when empty)
 - [ ] 6. Thread-local allocation fast path + size-class pooling (no malloc per request)
