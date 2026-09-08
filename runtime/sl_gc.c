@@ -19,6 +19,70 @@ static pthread_mutex_t sl_gc_mu = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic size_t sl_gc_bytes_since_collect = 0;
 static size_t sl_gc_threshold = 8 * 1024 * 1024;
 
+static _Atomic unsigned long long sl_gc_stat_collects = 0;
+static _Atomic unsigned long long sl_gc_stat_allocs = 0;
+static _Atomic unsigned long long sl_gc_stat_alloc_bytes = 0;
+static _Atomic unsigned long long sl_gc_stat_pause_ns_total = 0;
+static _Atomic unsigned long long sl_gc_stat_pause_ns_max = 0;
+static _Atomic unsigned long long sl_gc_stat_swept = 0;
+static _Atomic unsigned long long sl_gc_stat_marked = 0;
+#define SL_GC_STAT_BUCKETS 16
+static _Atomic unsigned long long sl_gc_stat_pause_buckets[SL_GC_STAT_BUCKETS];
+
+static int sl_gc_stat_enabled(void) {
+    static int cached = -1;
+    if (cached < 0)
+        cached = getenv("SLANG_GC_STAT") ? 1 : 0;
+    return cached;
+}
+
+static void sl_gc_stat_pause(long long ns, size_t marked, size_t swept) {
+    if (!sl_gc_stat_enabled())
+        return;
+    atomic_fetch_add_explicit(&sl_gc_stat_collects, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&sl_gc_stat_pause_ns_total, (unsigned long long)(ns > 0 ? ns : 0), memory_order_relaxed);
+    unsigned long long prev = atomic_load_explicit(&sl_gc_stat_pause_ns_max, memory_order_relaxed);
+    while ((unsigned long long)(ns > 0 ? ns : 0) > prev &&
+           !atomic_compare_exchange_weak_explicit(&sl_gc_stat_pause_ns_max, &prev,
+                                                  (unsigned long long)(ns > 0 ? ns : 0),
+                                                  memory_order_relaxed, memory_order_relaxed)) {
+    }
+    atomic_fetch_add_explicit(&sl_gc_stat_marked, (unsigned long long)marked, memory_order_relaxed);
+    atomic_fetch_add_explicit(&sl_gc_stat_swept, (unsigned long long)swept, memory_order_relaxed);
+    int b = 0;
+    long long bound = 100000;
+    while (b + 1 < SL_GC_STAT_BUCKETS && ns >= bound) {
+        bound *= 2;
+        b++;
+    }
+    atomic_fetch_add_explicit(&sl_gc_stat_pause_buckets[b], 1, memory_order_relaxed);
+}
+
+static void sl_gc_stat_dump(void) {
+    if (!sl_gc_stat_enabled())
+        return;
+    unsigned long long collects = atomic_load_explicit(&sl_gc_stat_collects, memory_order_relaxed);
+    unsigned long long allocs = atomic_load_explicit(&sl_gc_stat_allocs, memory_order_relaxed);
+    unsigned long long bytes = atomic_load_explicit(&sl_gc_stat_alloc_bytes, memory_order_relaxed);
+    unsigned long long total = atomic_load_explicit(&sl_gc_stat_pause_ns_total, memory_order_relaxed);
+    unsigned long long max = atomic_load_explicit(&sl_gc_stat_pause_ns_max, memory_order_relaxed);
+    unsigned long long marked = atomic_load_explicit(&sl_gc_stat_marked, memory_order_relaxed);
+    unsigned long long swept = atomic_load_explicit(&sl_gc_stat_swept, memory_order_relaxed);
+    fprintf(stderr, "slang-gc-stat collects=%llu allocs=%llu alloc_bytes=%llu pause_ns_total=%llu pause_ns_max=%llu marked=%llu swept=%llu\n",
+            collects, allocs, bytes, total, max, marked, swept);
+    fprintf(stderr, "slang-gc-stat pause_buckets_ns=[");
+    long long bound = 100000;
+    for (int b = 0; b < SL_GC_STAT_BUCKETS; b++) {
+        unsigned long long n = atomic_load_explicit(&sl_gc_stat_pause_buckets[b], memory_order_relaxed);
+        fprintf(stderr, "%s<%lld:%llu", b ? "," : "", bound, n);
+        bound *= 2;
+    }
+    fprintf(stderr, "]\n");
+}
+
+__attribute__((destructor))
+static void sl_gc_stat_atexit(void) { sl_gc_stat_dump(); }
+
 /* A root array can legitimately hold a pointer that was never
  * sl_gc_alloc'd at all: every str-typed value is type_is_gc_ptr-true
  * and gets rooted like any other GC pointer, but a slang string
@@ -449,9 +513,14 @@ static void *sl_gc_alloc_fin(size_t n,
     if (!t->gc_pend_head) t->gc_pend_tail = h;
     t->gc_pend_head = h;
     t->gc_pend_n++;
-    t->gc_pend_bytes += n;
-    if ((t->gc_pend_n & (SL_GC_PENDING_BATCH - 1)) == 0)
-        sl_gc_publish_bytes(t);
+    t->gc_pend_bytes += sizeof(sl_gc_obj) + n;
+    if (sl_gc_stat_enabled()) {
+        atomic_fetch_add_explicit(&sl_gc_stat_allocs, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&sl_gc_stat_alloc_bytes,
+                                  (unsigned long long)(sizeof(sl_gc_obj) + n),
+                                  memory_order_relaxed);
+    }
+    sl_gc_publish_bytes(t);
     sl_rt_preempt_enable();
     return (void *)(h + 1);
 }
@@ -592,6 +661,10 @@ static void sl_gc_set_build(sl_gc_thread **snap, int nsnap) {
  * reading the live list without the lock for the whole wait would
  * race a concurrent sl_gc_register_thread(). */
 static void sl_gc_collect(void) {
+    long long t0 = 0;
+    int stat_on = sl_gc_stat_enabled();
+    if (stat_on)
+        t0 = sl_rt_monotonic_ns();
     atomic_store_explicit(&sl_gc_stop_requested, 1, memory_order_release);
     unsigned long cyc = atomic_fetch_add_explicit(&sl_gc_cycle, 1,
                                     memory_order_release) + 1;
@@ -798,6 +871,7 @@ static void sl_gc_collect(void) {
     sl_gc_wl_cap = 0;
 
     sl_gc_obj **pp = &sl_gc_all;
+    size_t marked = 0, swept = 0;
     while (*pp) {
         sl_gc_obj *h = *pp;
         if (!h->marked) {
@@ -805,9 +879,11 @@ static void sl_gc_collect(void) {
             if (h->fini)
                 h->fini((void *)(h + 1));
             free(h);
+            swept++;
         } else {
             h->marked = 0;
             pp = &h->next;
+            marked++;
         }
     }
     /* Pending objects are now markable (sl_gc_set_build puts them in
@@ -834,6 +910,8 @@ static void sl_gc_collect(void) {
 #if defined(__GLIBC__)
     malloc_trim(0);
 #endif
+    if (stat_on)
+        sl_gc_stat_pause(sl_rt_monotonic_ns() - t0, marked, swept);
     atomic_store_explicit(&sl_gc_collect_pending, 0, memory_order_release);
     atomic_store_explicit(&sl_gc_stop_requested, 0, memory_order_release);
     atomic_store_explicit(&sl_gc_collecting, 0, memory_order_release);
