@@ -503,13 +503,79 @@ static void sl_gc_for_pending_tasks(void (*fn)(sl_task *),
         fn(t);
 }
 
+/* Size-class freelist for fixed-size GC headers + tiny payloads.
+    The HTTP serve path mallocs per alloc (response literal header +
+    payload, result wrappers), and glibc malloc at that rate is both
+    the p99 tax and the RSS retainer. Classes are exact total sizes
+    (header + payload); pop only reuses a block whose total matches
+    exactly, so reused blocks never need resize bookkeeping. Larger
+    sizes fall through to malloc. Freed blocks return to the class
+    list instead of the sweep free(); the sweep still frees anything
+    the freelist will not retain (bounded per class). */
+#define SL_GC_CLASS_N 6
+static const size_t sl_gc_class_sizes[SL_GC_CLASS_N] = {40, 48, 56, 72, 144,
+                                                        320};
+#define SL_GC_CLASS_MAX 64
+static sl_gc_obj *sl_gc_class_fl[SL_GC_CLASS_N];
+static int sl_gc_class_fl_n[SL_GC_CLASS_N];
+static pthread_mutex_t sl_gc_class_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static int sl_gc_class_for(size_t total) {
+    for (int i = 0; i < SL_GC_CLASS_N; i++) {
+        if (total == sl_gc_class_sizes[i])
+            return i;
+    }
+    return -1;
+}
+
+static sl_gc_obj *sl_gc_class_pop(size_t total) {
+    int c = sl_gc_class_for(total);
+    if (c < 0)
+        return NULL;
+    pthread_mutex_lock(&sl_gc_class_mu);
+    sl_gc_obj *h = sl_gc_class_fl[c];
+    if (h) {
+        sl_gc_class_fl[c] = h->next;
+        sl_gc_class_fl_n[c]--;
+    }
+    pthread_mutex_unlock(&sl_gc_class_mu);
+    if (!h)
+        return NULL;
+    h->trace = NULL;
+    h->fini = NULL;
+    h->marked = 0;
+    return h;
+}
+
+static void sl_gc_class_push(sl_gc_obj *h) {
+    size_t total = h->size + sizeof(sl_gc_obj);
+    int c = sl_gc_class_for(total);
+    if (c < 0) {
+        free(h);
+        return;
+    }
+    pthread_mutex_lock(&sl_gc_class_mu);
+    if (sl_gc_class_fl_n[c] < SL_GC_CLASS_MAX) {
+        h->next = sl_gc_class_fl[c];
+        sl_gc_class_fl[c] = h;
+        sl_gc_class_fl_n[c]++;
+        pthread_mutex_unlock(&sl_gc_class_mu);
+        return;
+    }
+    pthread_mutex_unlock(&sl_gc_class_mu);
+    free(h);
+}
+
 static void *sl_gc_alloc_fin(size_t n,
                              void (*trace)(void *, void (*)(void *)),
                              void (*fini)(void *)) {
     sl_rt_preempt_disable();
     sl_task *t = sl_rt_cur();
-    sl_gc_obj *h = (sl_gc_obj *)malloc(sizeof(sl_gc_obj) + n);
-    if (!h) { fprintf(stderr, "slang: out of memory\n"); exit(1); }
+    sl_gc_obj *h = sl_gc_class_pop(sizeof(sl_gc_obj) + n);
+    if (!h) {
+        h = (sl_gc_obj *)malloc(sizeof(sl_gc_obj) + n);
+        if (!h) { fprintf(stderr, "slang: out of memory\n"); exit(1); }
+    }
     memset(h + 1, 0, n);
     h->size = n;
     h->trace = trace;
@@ -915,7 +981,7 @@ static void sl_gc_collect(void) {
             *pp = h->next;
             if (h->fini)
                 h->fini((void *)(h + 1));
-            free(h);
+            sl_gc_class_push(h);
             swept++;
         } else {
             h->marked = 0;

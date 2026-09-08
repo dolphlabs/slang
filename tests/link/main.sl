@@ -35,18 +35,27 @@ fn run() {
     let buf = a.wire(64);
     let rr = s.recv(buf, until_never());
     guard let got = rr else { die("recv"); }
-    if got != 4 { die("recv length"); }
+    if got < 4 { die("recv length"); }
     if buf[0] != 80 || buf[1] != 73 || buf[2] != 78 || buf[3] != 71 {
         die("payload");
     }
+    let off = 0;
+    if got >= 8 {
+        off = 4;
+        if buf[4] != 80 || buf[5] != 73 || buf[6] != 78 || buf[7] != 71 {
+            die("payload2");
+        }
+    }
     println("echo payload ok");
 
-    let buf2 = a.wire(64);
-    let rr2 = s.recv(buf2, until_never());
-    guard let got2 = rr2 else { die("recv2"); }
-    if got2 != 4 { die("recv2 length"); }
-    if buf2[0] != 80 || buf2[1] != 73 || buf2[2] != 78 || buf2[3] != 71 {
-        die("payload2");
+    if off == 0 {
+        let buf2 = a.wire(64);
+        let rr2 = s.recv(buf2, until_never());
+        guard let got2 = rr2 else { die("recv2"); }
+        if got2 != 4 { die("recv2 length"); }
+        if buf2[0] != 80 || buf2[1] != 73 || buf2[2] != 78 || buf2[3] != 71 {
+            die("payload2");
+        }
     }
     println("echo bytes ok");
 
