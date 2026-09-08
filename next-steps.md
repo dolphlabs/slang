@@ -42,6 +42,6 @@ Errors are easy to **handle** (`guard let`, `??`, `fault`) and hard to
 
 ## Notes
 
-- Do not change `bench/http/main.sl` for perf experiments.
+- Do not change `bench/http/main.sl` for perf experiments. Raw-best slang is `bench/http_opt/main.sl`; remasure with `./bench/run_http_opt.sh`.
 - Do not start LLVM.
 - Phase E claim requires p99 **and** RSS vs Go; RPS alone is not a win.
