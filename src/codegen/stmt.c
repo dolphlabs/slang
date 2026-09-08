@@ -957,6 +957,81 @@ void gen_stmt(CG *cg, Stmt *s) {
  * here rather than per-statement: everything after it is emitted
  * inside a C block that first checks the option and runs the else
  * body (which must exit via return/break/continue/exit). */
+static int expr_same(Expr *a, Expr *b) {
+    if (!a || !b || a->kind != b->kind)
+        return 0;
+    switch (a->kind) {
+    case EX_INT:
+        return a->as.int_lit.value == b->as.int_lit.value;
+    case EX_FLOAT:
+        return a->as.float_lit.value == b->as.float_lit.value;
+    case EX_BOOL:
+        return a->as.bool_lit.value == b->as.bool_lit.value;
+    case EX_STRING:
+        return !strcmp(a->as.str_lit.value, b->as.str_lit.value);
+    case EX_BYTES:
+        return a->as.bytes_lit.len == b->as.bytes_lit.len &&
+               !memcmp(a->as.bytes_lit.data, b->as.bytes_lit.data,
+                       (size_t)a->as.bytes_lit.len);
+    case EX_IDENT:
+        return !strcmp(a->as.ident.name, b->as.ident.name);
+    case EX_UNARY:
+        return !strcmp(a->as.unary.op, b->as.unary.op) &&
+               expr_same(a->as.unary.operand, b->as.unary.operand);
+    case EX_BINARY:
+        return !strcmp(a->as.binary.op, b->as.binary.op) &&
+               expr_same(a->as.binary.lhs, b->as.binary.lhs) &&
+               expr_same(a->as.binary.rhs, b->as.binary.rhs);
+    case EX_CALL:
+        if (strcmp(a->as.call.name, b->as.call.name) ||
+            a->as.call.nargs != b->as.call.nargs)
+            return 0;
+        for (int i = 0; i < a->as.call.nargs; i++)
+            if (!expr_same(a->as.call.args[i], b->as.call.args[i]))
+                return 0;
+        return 1;
+    case EX_CAST:
+        return !strcmp(a->as.cast.ty, b->as.cast.ty) &&
+               expr_same(a->as.cast.operand, b->as.cast.operand);
+    case EX_INDEX:
+        return expr_same(a->as.index.base, b->as.index.base) &&
+               expr_same(a->as.index.index, b->as.index.index);
+    case EX_FIELD:
+        return !strcmp(a->as.field.name, b->as.field.name) &&
+               expr_same(a->as.field.base, b->as.field.base);
+    default:
+        return 0;
+    }
+}
+
+static void gen_guard_else_body(CG *cg, Stmt *s, int gid, const char *acc,
+                                int is_res) {
+    if (s->as.guard_let.err_name) {
+        if (!is_res)
+            cg_error(s->line,
+                     "else let error binding requires a result value");
+        Expr *ee = s->as.guard_let.err_expr;
+        if (!ee || ee->kind != EX_CALL || ee->as.call.nargs != 1 ||
+            strcmp(ee->as.call.name, "err_of"))
+            cg_error(s->line,
+                     "else let binding must be err_of(<same expression>)");
+        if (!expr_same(ee->as.call.args[0], s->as.guard_let.expr))
+            cg_error(s->line,
+                     "err_of argument must match the guard expression");
+        char *tv, *tev;
+        result_te(infer_type(cg, s->as.guard_let.expr), &tv, &tev);
+        const char *ec = ctype_of(cg, tev);
+        var_redecl_check(cg, s->as.guard_let.err_name, s->line);
+        var_push(cg, s->as.guard_let.err_name, tev);
+        emit_drop_flag(cg, s->as.guard_let.err_name);
+        emit_line(cg, "%s %s = _sl_g%d%se;", ec,
+                  sanitize_ident(s->as.guard_let.err_name), gid, acc);
+    }
+    int from = cg->vars.count;
+    gen_stmts(cg, s->as.guard_let.body->stmts, s->as.guard_let.body->count);
+    emit_scope_drops(cg, from);
+}
+
 void gen_stmts(CG *cg, Stmt **stmts, int count) {
     for (int i = 0; i < count; i++) {
         Stmt *s = stmts[i];
@@ -988,7 +1063,11 @@ void gen_stmts(CG *cg, Stmt **stmts, int count) {
         const char *acc = type_is_gc_ptr(cg, et) ? "->" : ".";
         emit_line(cg, "%s _sl_g%d = %s;", oc, id, e);
         emit_line(cg, "if (!(_sl_g%d%s%s)) {", id, acc, is_res ? "ok" : "has");
-        gen_scoped_block(cg, s->as.guard_let.body);
+        cg->indent++;
+        var_scope_push(cg);
+        gen_guard_else_body(cg, s, id, acc, is_res);
+        var_scope_pop(cg);
+        cg->indent--;
         emit_line(cg, "}");
         var_redecl_check(cg, s->as.guard_let.name, s->line);
         int from = cg->vars.count;

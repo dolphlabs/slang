@@ -353,16 +353,31 @@ static void check_stmt(CG *cg, Stmt *s) {
         return;
     case ST_GUARD_LET: {
         check_rvalue(cg, s->as.guard_let.expr);
-        check_block(cg, s->as.guard_let.body);
+        if (s->as.guard_let.err_expr)
+            check_rvalue(cg, s->as.guard_let.err_expr);
         const char *et = infer_type(cg, s->as.guard_let.expr);
         char *inner = NULL;
+        int is_res = 0;
+        char *tev = NULL;
         if (is_opt(et))
             inner = opt_inner(et);
         else if (is_result(et)) {
-            char *tv, *tev;
+            char *tv;
             result_te(et, &tv, &tev);
             inner = tv;
+            is_res = 1;
         }
+        if (s->as.guard_let.err_name) {
+            if (!is_res)
+                cg_error(s->line,
+                         "else let error binding requires a result value");
+            var_scope_push(cg);
+            var_redecl_check(cg, s->as.guard_let.err_name, s->line);
+            var_push(cg, s->as.guard_let.err_name, tev);
+        }
+        check_block(cg, s->as.guard_let.body);
+        if (s->as.guard_let.err_name)
+            var_scope_pop(cg);
         if (inner) {
             var_redecl_check(cg, s->as.guard_let.name, s->line);
             var_push(cg, s->as.guard_let.name, inner);

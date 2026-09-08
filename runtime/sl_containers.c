@@ -642,6 +642,10 @@ static char *sl_str_from_bool(bool v) {
     return sl_strdup(v ? "true" : "false");
 }
 
+static char *sl_str_from_fault(sl_fault f) {
+    return sl_strdup(f.detail);
+}
+
 typedef struct {
     int done;
     int panicked;

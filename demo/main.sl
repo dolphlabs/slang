@@ -1,11 +1,12 @@
-import "net";
-import "proc";
-import "time";
-import "json";
-import "http";
 import "arcade";
 import "content";
+import "http";
+import "json";
+import "log";
+import "net";
+import "proc";
 import "stress";
+import "time";
 
 link "slangarcade";
 extern fn sl_demo_roll_die() -> i32;
@@ -374,9 +375,15 @@ fn handle_http_conn(st: AppState, c: link) {
     let filled = 0;
     while true {
         let rr = http.read(&mut c, buf, filled, until_never());
-        guard let got = rr else { return; }
+        guard let got = rr else let e = err_of(rr) {
+            log.warn("http read failed: " + e);
+            return;
+        }
         let wr = http.write(&mut c, route(st, got.req), &mut sa, until_never());
-        guard let _n = wr else { return; }
+        guard let _n = wr else let e = err_of(wr) {
+            log.warn("http write failed: " + e);
+            return;
+        }
         sa.reset();
         if http.wants_close(got.req) {
             return;
@@ -413,12 +420,14 @@ fn http_accept_loop(ln: link, work: chan[link], done: chan[bool]) {
 // either way.
 fn handle_tls_conn(st: AppState, conn: rawptr) {
     let recv_r: result[bytes, str] = net.tls_recv(conn, 65536);
-    guard let raw = recv_r else {
+    guard let raw = recv_r else let e = err_of(recv_r) {
+        log.warn("tls recv failed: " + e);
         net.tls_close(conn);
         return;
     }
     let parsed: result[http.Request, str] = http.parse(raw);
-    guard let req = parsed else {
+    guard let req = parsed else let e = err_of(parsed) {
+        log.warn("tls request parse failed: " + e);
         net.tls_send(conn, http.serialize(http.bad_request("malformed request")));
         net.tls_close(conn);
         return;
@@ -460,11 +469,13 @@ fn tls_accept_loop(lfd: i32, sctx: rawptr, work: chan[rawptr], done: chan[bool])
 fn try_start_tls(st: AppState, tls_port: i32, workers: int,
                  work: chan[rawptr], done: chan[bool]) -> bool {
     let sctx_r: result[rawptr, str] = net.tls_server_ctx("cert.pem", "key.pem");
-    guard let sctx = sctx_r else {
+    guard let sctx = sctx_r else let e = err_of(sctx_r) {
+        log.warn("tls disabled: " + e);
         return false;
     }
     let lr: result[i32, str] = net.listen(tls_port);
-    guard let lfd = lr else {
+    guard let lfd = lr else let e = err_of(lr) {
+        log.warn("tls listen failed: " + e);
         return false;
     }
     spawn tls_accept_loop(lfd, sctx, work, done);

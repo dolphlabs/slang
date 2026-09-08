@@ -8,6 +8,7 @@
 #include "codegen/pkg_json/pkg_json.h"
 #include "codegen/pkg_proc/pkg_proc.h"
 #include "codegen/pkg_fs/pkg_fs.h"
+#include "codegen/pkg_log/pkg_log.h"
 #include "rtpath.h"
 #include "project.h"
 
@@ -198,7 +199,7 @@ static int load_package_dir(Loader *ld, const char *real, const char *name);
  * here (plus its implementation under src/codegen/pkg_<name>/). */
 static const char *NATIVE_PKGS[] = {PKG_TIME_NAME, PKG_NET_NAME,
                                     PKG_JSON_NAME, PKG_PROC_NAME,
-                                    PKG_FS_NAME, NULL};
+                                    PKG_FS_NAME, PKG_LOG_NAME, NULL};
 
 /* If the import path refers to a built-in native package (and there is
  * no local directory of the same name), synthesize it. */
