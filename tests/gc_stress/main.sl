@@ -68,4 +68,13 @@ println(kept[0].val);
 println(kept[0].tag);
 println(kept[2999].val);
 println(kept[2999].tag);
+
+let pi = 0;
+while pi < 20000 {
+    let pb = b"0123456789abcdef0123456789";
+    if len(pb) != 26 { println("FAIL probe"); exit(1); }
+    pi = pi + 1;
+}
+println("alloc probe ok");
+
 println("done");
