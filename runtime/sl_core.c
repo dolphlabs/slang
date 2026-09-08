@@ -276,6 +276,33 @@ static sl_runq sl_global_runq = {
     .not_empty = PTHREAD_COND_INITIALIZER,
 };
 
+static _Atomic unsigned long long sl_sched_stat_submit = 0;
+static _Atomic unsigned long long sl_sched_stat_resume = 0;
+static _Atomic unsigned long long sl_sched_stat_dispatch = 0;
+
+static int sl_sched_stat_enabled(void) {
+    static int cached = -1;
+    if (cached < 0)
+        cached = getenv("SLANG_SCHED_STAT") ? 1 : 0;
+    return cached;
+}
+
+static void sl_sched_stat_dump(void) {
+    if (!sl_sched_stat_enabled())
+        return;
+    unsigned long long submit = atomic_load_explicit(&sl_sched_stat_submit,
+                                                     memory_order_relaxed);
+    unsigned long long resume = atomic_load_explicit(&sl_sched_stat_resume,
+                                                     memory_order_relaxed);
+    unsigned long long dispatch = atomic_load_explicit(
+        &sl_sched_stat_dispatch, memory_order_relaxed);
+    fprintf(stderr, "slang-sched-stat submits=%llu resumes=%llu dispatches=%llu\n",
+            submit, resume, dispatch);
+}
+
+__attribute__((destructor))
+static void sl_sched_stat_atexit(void) { sl_sched_stat_dump(); }
+
 /* Tier 11 seventh slice: a relaxed, heuristic-only count of tasks
  * currently sitting on sl_global_runq -- NOT used for any correctness
  * decision, only to answer 'is anyone else waiting for a worker right
