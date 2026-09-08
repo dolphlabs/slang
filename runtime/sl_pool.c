@@ -364,6 +364,9 @@ static void sl_task_resume(sl_task *t) {
     sl_runq_stripe_push(t);
     pthread_mutex_unlock(&sl_gc_mu);
     sl_rt_preempt_enable();
+    if (sl_sched_stat_enabled())
+        atomic_fetch_add_explicit(&sl_sched_stat_resume, 1,
+                                  memory_order_relaxed);
 }
 
 /* Tier 11 seventh slice: cooperative preemption's own yield primitive --
@@ -549,6 +552,9 @@ static void sl_worker_run_loop(long slot_idx) {
             t = sl_runq_pop_blocking(&sl_global_runq);
         if (t) sl_rt_current_task = t;
         if (!t) break; /* shutdown */
+        if (sl_sched_stat_enabled())
+            atomic_fetch_add_explicit(&sl_sched_stat_dispatch, 1,
+                                      memory_order_relaxed);
         /* Tier 11 seventh slice: fresh quantum clock for every dispatch
          * -- a fresh submit, a resume-from-park, AND (new) a resume-from-
          * preemption-yield all funnel through this one line, so
