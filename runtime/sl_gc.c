@@ -493,6 +493,12 @@ static void sl_gc_for_pending_tasks(void (*fn)(sl_task *),
     for (sl_task *t = sl_global_runq.head; t; t = t->next)
         fn(t);
     pthread_mutex_unlock(&sl_global_runq.mu);
+    for (unsigned s = 0; s < (unsigned)SL_RUNQ_STRIPES; s++) {
+        pthread_mutex_lock(&sl_runq_stripes[s].mu);
+        for (sl_task *t = sl_runq_stripes[s].head; t; t = t->runq_link)
+            fn(t);
+        pthread_mutex_unlock(&sl_runq_stripes[s].mu);
+    }
     for (sl_task *t = sl_parked_tasks; t; t = t->parked_next)
         fn(t);
 }
@@ -629,6 +635,12 @@ static void sl_gc_set_build(sl_gc_thread **snap, int nsnap) {
     for (sl_task *t = sl_global_runq.head; t; t = t->next)
         n += sl_gc_pend_count(t);
     pthread_mutex_unlock(&sl_global_runq.mu);
+    for (unsigned s = 0; s < (unsigned)SL_RUNQ_STRIPES; s++) {
+        pthread_mutex_lock(&sl_runq_stripes[s].mu);
+        for (sl_task *t = sl_runq_stripes[s].head; t; t = t->runq_link)
+            n += sl_gc_pend_count(t);
+        pthread_mutex_unlock(&sl_runq_stripes[s].mu);
+    }
     for (sl_task *t = sl_parked_tasks; t; t = t->parked_next)
         n += sl_gc_pend_count(t);
     size_t cap = 1024;
@@ -643,6 +655,12 @@ static void sl_gc_set_build(sl_gc_thread **snap, int nsnap) {
     for (sl_task *t = sl_global_runq.head; t; t = t->next)
         sl_gc_pend_insert(t, tbl, cap);
     pthread_mutex_unlock(&sl_global_runq.mu);
+    for (unsigned s = 0; s < (unsigned)SL_RUNQ_STRIPES; s++) {
+        pthread_mutex_lock(&sl_runq_stripes[s].mu);
+        for (sl_task *t = sl_runq_stripes[s].head; t; t = t->runq_link)
+            sl_gc_pend_insert(t, tbl, cap);
+        pthread_mutex_unlock(&sl_runq_stripes[s].mu);
+    }
     for (sl_task *t = sl_parked_tasks; t; t = t->parked_next)
         sl_gc_pend_insert(t, tbl, cap);
     sl_gc_set = tbl;
@@ -831,6 +849,25 @@ static void sl_gc_collect(void) {
         }
     }
     pthread_mutex_unlock(&sl_global_runq.mu);
+    for (unsigned s = 0; s < (unsigned)SL_RUNQ_STRIPES; s++) {
+        pthread_mutex_lock(&sl_runq_stripes[s].mu);
+        for (sl_task *sl_gc_qt = sl_runq_stripes[s].head; sl_gc_qt;
+             sl_gc_qt = sl_gc_qt->runq_link) {
+            sl_gc_mark(sl_gc_qt->join);
+            sl_gc_mark_entry_arg(sl_gc_qt);
+            sl_gc_pend_mark(sl_gc_qt);
+            for (sl_safepoint *sp = sl_gc_qt->safepoint_top; sp; sp = sp->prev)
+                for (int j = 0; j < sp->nroots; j++)
+                    sl_gc_mark(sp->roots[j]);
+            if (sl_gc_qt->async_preempted) {
+                sl_gc_scan_conservative(
+                    (uintptr_t)sl_gc_qt->rsp,
+                    (uintptr_t)sl_gc_qt->stack_base +
+                        (uintptr_t)sl_gc_qt->stack_size);
+            }
+        }
+        pthread_mutex_unlock(&sl_runq_stripes[s].mu);
+    }
     /* Tier 11 fourth slice: a PARKED task (chan_send/recv, this slice)
      * is reachable from neither a registered thread's task_slot (the
      * worker that parked it reassigns that back to its own idle

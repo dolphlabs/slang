@@ -131,7 +131,9 @@ typedef struct sl_task {
     void *rsp;
     struct sl_safepoint *safepoint_top;
     int grows_seen;
-    struct sl_task *next;    /* run-queue link, runtime_pool.c */
+    struct sl_task *next;    /* primitive wait-list link, runtime_pool.c */
+    struct sl_task *runq_link; /* striped run-queue link -- never aliases
+                                 next: a task is queued XOR parked. */
     void *entry_arg;
     unsigned char entry_arg_store[64];
     int entry_arg_owned;
@@ -276,32 +278,34 @@ static sl_runq sl_global_runq = {
     .not_empty = PTHREAD_COND_INITIALIZER,
 };
 
-static _Atomic unsigned long long sl_sched_stat_submit = 0;
-static _Atomic unsigned long long sl_sched_stat_resume = 0;
-static _Atomic unsigned long long sl_sched_stat_dispatch = 0;
+/* Wake-up redesign: per-worker sleep stripes + hashed run queues. A
+    queued task lives on exactly one stripe via runq_link. A parked
+    task lives on exactly one primitive wait list via next. The two
+    linkages never alias, so queue surgery cannot corrupt a park list
+    and vice versa. Workers pop their own stripe lock-free-ish first,
+    steal siblings next, and sleep on the global doorbell only when
+    every stripe is empty. Every push broadcasts the doorbell, so no
+    sleeper misses a task parked on a foreign stripe. */
+#define SL_RUNQ_STRIPES 16
+typedef struct sl_runq_stripe {
+    sl_task *head, *tail;
+    pthread_mutex_t mu;
+    pthread_cond_t not_empty;
+} sl_runq_stripe;
+static sl_runq_stripe sl_runq_stripes[SL_RUNQ_STRIPES] = {
+    [0 ... SL_RUNQ_STRIPES - 1] = {
+        .mu = PTHREAD_MUTEX_INITIALIZER,
+        .not_empty = PTHREAD_COND_INITIALIZER,
+    },
+};
 
-static int sl_sched_stat_enabled(void) {
-    static int cached = -1;
-    if (cached < 0)
-        cached = getenv("SLANG_SCHED_STAT") ? 1 : 0;
-    return cached;
+static inline unsigned sl_runq_stripe_for(const sl_task *t) {
+    uintptr_t h = (uintptr_t)t;
+    h ^= h >> 16;
+    h *= (uintptr_t)0x9e3779b1u;
+    h ^= h >> 13;
+    return (unsigned)(h % (uintptr_t)SL_RUNQ_STRIPES);
 }
-
-static void sl_sched_stat_dump(void) {
-    if (!sl_sched_stat_enabled())
-        return;
-    unsigned long long submit = atomic_load_explicit(&sl_sched_stat_submit,
-                                                     memory_order_relaxed);
-    unsigned long long resume = atomic_load_explicit(&sl_sched_stat_resume,
-                                                     memory_order_relaxed);
-    unsigned long long dispatch = atomic_load_explicit(
-        &sl_sched_stat_dispatch, memory_order_relaxed);
-    fprintf(stderr, "slang-sched-stat submits=%llu resumes=%llu dispatches=%llu\n",
-            submit, resume, dispatch);
-}
-
-__attribute__((destructor))
-static void sl_sched_stat_atexit(void) { sl_sched_stat_dump(); }
 
 /* Tier 11 seventh slice: a relaxed, heuristic-only count of tasks
  * currently sitting on sl_global_runq -- NOT used for any correctness
