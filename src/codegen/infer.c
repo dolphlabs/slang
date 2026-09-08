@@ -465,17 +465,24 @@ const char *infer_call(CG *cg, Expr *e) {
                     res_cname(cg, "link", "fault");
                     return "result[link,fault]";
                 }
-                if (!strcmp(right, "send") || !strcmp(right, "recv")) {
+                if (!strcmp(right, "send") || !strcmp(right, "recv") ||
+                    !strcmp(right, "send_bytes")) {
                     if (n != 2)
                         cg_error(e->line,
                                  "link.%s() takes exactly two arguments",
                                  right);
                     const char *wt = infer_type(cg, e->as.call.args[0]);
                     const char *ut = infer_type(cg, e->as.call.args[1]);
-                    if (!is_wire(wt))
+                    if (!strcmp(right, "send_bytes")) {
+                        if (!is_bytes(wt))
+                            cg_error(e->line,
+                                     "link.%s() expects bytes (got %s)",
+                                     right, wt);
+                    } else if (!is_wire(wt)) {
                         cg_error(e->line,
                                  "link.%s() expects a wire (got %s)",
                                  right, wt);
+                    }
                     if (!is_until(ut))
                         cg_error(e->line,
                                  "link.%s() expects an until (got %s)",
