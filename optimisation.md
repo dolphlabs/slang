@@ -9,6 +9,6 @@ Baseline (4-core Linux VM, wrk 3x10s, spawn-inline + for-in hoist): c=50 slang p
 - [x] 3. Safepoint elision (pure calls skip brackets) — PR #43 `perf/safepoint-elision`
 - [x] 4. Multi-acceptor (link_listen reuse flag, SO_REUSEPORT) — PR #44 `perf/multi-acceptor`
 - [x] 5. Per-worker run queues + fd-sharded reactor waiters — scheduler counters first (PR #45 `perf/per-worker-queues`); striped queues with split linkage + stripe-aware wakeup (PR #46 `perf/runq-wakeup-redesign`)
-- [ ] 6. Thread-local allocation fast path + size-class pooling (no malloc per request)
+- [x] 6. Size-class pooling for hot fixed allocs (exact-total freelist, PR #47 `perf/tl-alloc-fastpath`)
 - [ ] 7. Preemption tuning for IO-bound loads (longer quantum / ticker, gate on runq depth)
 - [ ] 8. Memory release discipline (madvise on large freed chunks, cap freelist hoarding)
