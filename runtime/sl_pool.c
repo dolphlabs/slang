@@ -398,16 +398,12 @@ static void sl_task_resume(sl_task *t) {
  * thread's worker loop -- at which point t->rsp is guaranteed valid. */
 __attribute__((noinline))
 static void sl_task_yield_now(void) {
-    /* Tier 11 eighth slice: bracketed entry through the switch's own
-     * resume point -- this is the COOPERATIVE yield path (called
-     * directly from generated code via sl_rt_maybe_yield, never through
-     * sl_preempt_handler), and it's exactly as vulnerable to a second,
-     * async signal landing mid-transition as the async path's own
-     * trampoline is -- nothing about being a voluntary yield makes the
-     * switch-out/switch-back-in window any safer. */
     sl_rt_preempt_disable();
     sl_task *t = sl_rt_current_task;
     t->preempted = 1;
+    if (sl_sched_stat_enabled())
+        atomic_fetch_add_explicit(&sl_sched_stat_preempt_yield, 1,
+                                  memory_order_relaxed);
     sl_ctx_switch(&t->rsp, SL_RT_TLS_NATIVE_RSP());
     /* resumes here once some worker's run loop dispatches this task
        again -- run_start_ns is reset fresh by that dispatch (see
@@ -690,6 +686,9 @@ static void sl_preempt_handler(int sig, siginfo_t *si, void *uctx_raw) {
        pointer sl_preempt_get_disable_depth_ptr returns), as the last
        possible register-safe instant before its final jmp. */
     atomic_fetch_add_explicit(&t->preempt_disable_depth, 1, memory_order_acq_rel);
+    if (sl_sched_stat_enabled())
+        atomic_fetch_add_explicit(&sl_sched_stat_preempt_async, 1,
+                                  memory_order_relaxed);
     t->async_orig_pc = (void *)pc0;
 #if defined(__APPLE__) && defined(__x86_64__)
     uctx->uc_mcontext->__ss.__rip = (uintptr_t)sl_preempt_trampoline_entry;
@@ -717,10 +716,11 @@ static void sl_preempt_handler(int sig, siginfo_t *si, void *uctx_raw) {
  * run_start_ns. */
 static void *sl_preempt_ticker_thread(void *arg) {
     (void)arg;
-    struct timespec interval;
-    interval.tv_sec = 0;
-    interval.tv_nsec = 2000000; /* 2ms */
     for (;;) {
+        long long tick = sl_preempt_tick_ns();
+        struct timespec interval;
+        interval.tv_sec = (time_t)(tick / 1000000000LL);
+        interval.tv_nsec = (long)(tick % 1000000000LL);
         nanosleep(&interval, NULL);
         if (atomic_load_explicit(&sl_global_runq_count, memory_order_relaxed) == 0)
             continue;
