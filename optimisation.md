@@ -8,7 +8,7 @@ Baseline (4-core Linux VM, wrk 3x10s, spawn-inline + for-in hoist): c=50 slang p
 - [x] 2. Zero-alloc serve path (link.send_bytes, no wire copy) — PR #42 `perf/zero-alloc-serve`
 - [x] 3. Safepoint elision (pure calls skip brackets) — PR #43 `perf/safepoint-elision`
 - [x] 4. Multi-acceptor (link_listen reuse flag, SO_REUSEPORT) — PR #44 `perf/multi-acceptor`
-- [ ] 5. Per-worker run queues + fd-sharded reactor waiters (work-steal when empty)
+- [x] 5. Per-worker run queues + fd-sharded reactor waiters — scheduler counters first (PR #45 `perf/per-worker-queues`); striped queues with split linkage + stripe-aware wakeup (PR #46 `perf/runq-wakeup-redesign`)
 - [ ] 6. Thread-local allocation fast path + size-class pooling (no malloc per request)
 - [ ] 7. Preemption tuning for IO-bound loads (longer quantum / ticker, gate on runq depth)
 - [ ] 8. Memory release discipline (madvise on large freed chunks, cap freelist hoarding)
