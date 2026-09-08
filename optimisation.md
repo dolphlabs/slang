@@ -11,4 +11,4 @@ Baseline (4-core Linux VM, wrk 3x10s, spawn-inline + for-in hoist): c=50 slang p
 - [x] 5. Per-worker run queues + fd-sharded reactor waiters — scheduler counters first (PR #45 `perf/per-worker-queues`); striped queues with split linkage + stripe-aware wakeup (PR #46 `perf/runq-wakeup-redesign`)
 - [x] 6. Size-class pooling for hot fixed allocs (exact-total freelist, PR #47 `perf/tl-alloc-fastpath`)
 - [x] 7. Preemption tuning for IO-bound loads (env quantum/ticker, yield/async counters, PR #49 `perf/preempt-tuning`)
-- [ ] 8. Memory release discipline (madvise on large freed chunks, cap freelist hoarding)
+- [x] 8. Memory release discipline (DONTNEED oversize arenas, freelist visibility, PR #50 `perf/memory-release`)
