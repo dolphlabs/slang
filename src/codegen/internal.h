@@ -408,6 +408,7 @@ void ambient_root_push(CG *cg, const char *name);
 char *sequence_one(CG *cg, int seq_id, int idx, const char *ctype,
                    const char *slang_type, char *text, Expr *expr_node,
                    StrBuf *prelude);
+int safepoint_elidable(CG *cg, Expr *e);
 char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
                      const char *prelude, char *inner);
 FuncSig *sig_find_in(CG *cg, const char *pkg, const char *name);
