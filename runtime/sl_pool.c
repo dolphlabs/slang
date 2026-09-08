@@ -170,6 +170,9 @@ static void sl_task_submit(void (*entry)(void *), void *arg) {
     sl_task *t = sl_task_acquire(entry, arg);
     t->entry_arg = arg;
     sl_runq_push(&sl_global_runq, t);
+    if (sl_sched_stat_enabled())
+        atomic_fetch_add_explicit(&sl_sched_stat_submit, 1,
+                                  memory_order_relaxed);
 }
 
 static void sl_task_submit_copy(void (*entry)(void *), const void *src,
@@ -192,6 +195,9 @@ static void sl_task_submit_copy(void (*entry)(void *), const void *src,
     t->entry_arg_trace = trace;
     sl_task_stack_init(t, entry, t->entry_arg);
     sl_runq_push(&sl_global_runq, t);
+    if (sl_sched_stat_enabled())
+        atomic_fetch_add_explicit(&sl_sched_stat_submit, 1,
+                                  memory_order_relaxed);
 }
 
 /* Tier 11 fourth slice: generic park/resume primitives -- the pieces
@@ -288,6 +294,9 @@ static void sl_task_resume(sl_task *t) {
     sl_runq_push(&sl_global_runq, t);
     pthread_mutex_unlock(&sl_gc_mu);
     sl_rt_preempt_enable();
+    if (sl_sched_stat_enabled())
+        atomic_fetch_add_explicit(&sl_sched_stat_resume, 1,
+                                  memory_order_relaxed);
 }
 
 /* Tier 11 seventh slice: cooperative preemption's own yield primitive --
@@ -500,6 +509,9 @@ static void sl_worker_run_loop(long slot_idx) {
         sl_task *t = sl_runq_pop_blocking(&sl_global_runq);
         if (t) sl_rt_current_task = t;
         if (!t) break; /* shutdown */
+        if (sl_sched_stat_enabled())
+            atomic_fetch_add_explicit(&sl_sched_stat_dispatch, 1,
+                                      memory_order_relaxed);
         /* Tier 11 seventh slice: fresh quantum clock for every dispatch
          * -- a fresh submit, a resume-from-park, AND (new) a resume-from-
          * preemption-yield all funnel through this one line, so
