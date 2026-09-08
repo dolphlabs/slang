@@ -244,6 +244,9 @@ static void sl_task_submit(void (*entry)(void *), void *arg) {
     sl_rt_preempt_disable();
     sl_runq_stripe_push(t);
     sl_rt_preempt_enable();
+    if (sl_sched_stat_enabled())
+        atomic_fetch_add_explicit(&sl_sched_stat_submit, 1,
+                                  memory_order_relaxed);
 }
 
 static void sl_task_submit_copy(void (*entry)(void *), const void *src,
@@ -268,6 +271,9 @@ static void sl_task_submit_copy(void (*entry)(void *), const void *src,
     sl_rt_preempt_disable();
     sl_runq_stripe_push(t);
     sl_rt_preempt_enable();
+    if (sl_sched_stat_enabled())
+        atomic_fetch_add_explicit(&sl_sched_stat_submit, 1,
+                                  memory_order_relaxed);
 }
 
 /* Tier 11 fourth slice: generic park/resume primitives -- the pieces
