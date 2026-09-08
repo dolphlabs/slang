@@ -1,3 +1,5 @@
 sent 4 bytes
+sent bytes 4
 echo payload ok
+echo bytes ok
 link ok

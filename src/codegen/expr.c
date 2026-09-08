@@ -775,19 +775,45 @@ char *gen_call(CG *cg, Expr *e) {
                                           ctype_of(cg, "result[link,fault]"),
                                           NULL, inner);
                 }
-                if (!strcmp(right, "send") || !strcmp(right, "recv")) {
+                if (!strcmp(right, "send") || !strcmp(right, "recv") ||
+                    !strcmp(right, "send_bytes")) {
                     StrBuf prelude;
                     sb_init(&prelude);
                     int seq_id = cg->tmp_id++;
                     int ambient_mark = cg->ambient_count;
+                    const char *wt =
+                        infer_type(cg, e->as.call.args[0]);
                     char *w = gen_expr(cg, e->as.call.args[0]);
+                    char *u = NULL;
+                    const char *op = right;
+                    if (!strcmp(right, "send_bytes")) {
+                        char *b = w;
+                        b = sequence_one(cg, seq_id, 0,
+                                         ctype_of(cg, "bytes"), "bytes", b,
+                                         e->as.call.args[0], &prelude);
+                        u = gen_expr(cg, e->as.call.args[1]);
+                        u = sequence_one(cg, seq_id, 1,
+                                         ctype_of(cg, "until"), "until", u,
+                                         e->as.call.args[1], &prelude);
+                        char *inner = xasprintf(
+                            "sl_link_send_bytes(%s, %s->ptr, %s->len, %s)",
+                            self, b, b, u);
+                        char *result = wrap_safepoint(
+                            cg, e, ctype_of(cg, "result[int,fault]"),
+                            prelude.data, inner);
+                        cg->ambient_count = ambient_mark;
+                        (void)wt;
+                        return result;
+                    }
                     w = sequence_one(cg, seq_id, 0, ctype_of(cg, "wire"),
                                      "wire", w, e->as.call.args[0],
                                      &prelude);
-                    char *u = gen_expr(cg, e->as.call.args[1]);
+                    u = gen_expr(cg, e->as.call.args[1]);
                     u = sequence_one(cg, seq_id, 1, ctype_of(cg, "until"),
                                      "until", u, e->as.call.args[1],
                                      &prelude);
+                    (void)wt;
+                    (void)op;
                     char *inner = xasprintf("sl_link_%s(%s, %s, %s)", right,
                                             self, w, u);
                     char *result = wrap_safepoint(

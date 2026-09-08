@@ -23,6 +23,11 @@ fn run() {
     if n != 4 { die("send length"); }
     println("sent 4 bytes");
 
+    let br = c.send_bytes(b"PING", until_never());
+    guard let bn = br else { die("send_bytes"); }
+    if bn != 4 { die("send_bytes length"); }
+    println("sent bytes 4");
+
     let ar = ln.accept(until_never());
     guard let s = ar else { die("accept"); }
 
@@ -34,6 +39,15 @@ fn run() {
         die("payload");
     }
     println("echo payload ok");
+
+    let buf2 = a.wire(64);
+    let rr2 = s.recv(buf2, until_never());
+    guard let got2 = rr2 else { die("recv2"); }
+    if got2 != 4 { die("recv2 length"); }
+    if buf2[0] != 80 || buf2[1] != 73 || buf2[2] != 78 || buf2[3] != 71 {
+        die("payload2");
+    }
+    println("echo bytes ok");
 
     let p = s.peer();
     if peer_port(p) <= 0 { die("peer"); }
