@@ -22,8 +22,8 @@ Errors are easy to **handle** (`guard let`, `??`, `fault`) and hard to
 - [x] Implement chosen shape in parser + codegen + tests
 - [x] `to_str(fault)` via `sl_str_from_fault`
 - [x] `log` package: debug/info/warn/error to stderr with timestamp
-- [ ] `log` helpers for result/fault sugar (optional follow-up)
-- [ ] Demo: HTTP handler logs parse/I/O failures (optional follow-up)
+- [x] `log` accepts `str` or `fault`, `fault` concatenates with `+`
+- [x] Demo: HTTP/TLS handlers log parse/I/O failures via `err_of`
 
 ## Language features (after log)
 

@@ -30,6 +30,13 @@ static const NatSig *find_any_sig(const char *pkg, const char *fname) {
     return ns;
 }
 
+static NatArgKind nat_argkind(const char *pkg, const char *fname, int i) {
+    const NatSig *ns = find_any_sig(pkg, fname);
+    if (!ns || i < 0 || i >= ns->nargs)
+        return NA_INT;
+    return ns->argkinds[i];
+}
+
 /* Validate a call into a native package and return its slang return
  * type. */
 const char *native_check(CG *cg, const char *pkg, const char *fname,
@@ -51,6 +58,10 @@ const char *native_check(CG *cg, const char *pkg, const char *fname,
         const char *want;
         switch (ns->argkinds[i]) {
         case NA_STR:    ok = is_str(at);    want = "a str";    break;
+        case NA_STR_FAULT:
+            ok = is_str(at) || is_fault(at);
+            want = "a str or fault";
+            break;
         case NA_BYTES:  ok = is_bytes(at);  want = "bytes";    break;
         case NA_RAWPTR: ok = is_rawptr(at); want = "a rawptr"; break;
         default:        ok = is_int(at);    want = "an integer"; break;
@@ -95,7 +106,10 @@ char *native_gen(CG *cg, const char *pkg, const char *fname,
         const char *at = infer_type(cg, e->as.call.args[i]);
         char *a = gen_expr(cg, e->as.call.args[i]);
         const char *cast_t = at;
-        if (!is_str(at) && !is_bytes(at) && !is_rawptr(at)) {
+        if (nat_argkind(pkg, fname, i) == NA_STR_FAULT && is_fault(at)) {
+            a = conv_to_str(at, a);
+            cast_t = "str";
+        } else if (!is_str(at) && !is_bytes(at) && !is_rawptr(at)) {
             cast_t = !strcmp(pkg, "time") ? "int" : "i32";
             a = maybe_cast(cg, cast_t, at, a);
         }

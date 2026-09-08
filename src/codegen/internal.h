@@ -288,7 +288,7 @@ struct CG {
  * a function name/index pair the way this table used to. Each
  * package owns its own table in its own pkg_<name>/sigs.c; native.c
  * searches across all of them. */
-typedef enum { NA_INT, NA_STR, NA_BYTES, NA_RAWPTR } NatArgKind;
+typedef enum { NA_INT, NA_STR, NA_BYTES, NA_RAWPTR, NA_STR_FAULT } NatArgKind;
 
 typedef struct {
     const char *pkg, *name;

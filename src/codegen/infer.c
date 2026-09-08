@@ -643,10 +643,10 @@ const char *infer_binary(CG *cg, Expr *e) {
         cg_error(e->line, "cannot compare %s and %s", lt, rt);
     }
     if (!strcmp(op, "+")) {
-        if (is_str(lt) || is_str(rt)) {
-            const char *other = is_str(lt) ? rt : lt;
+        if (is_str(lt) || is_str(rt) || is_fault(lt) || is_fault(rt)) {
+            const char *other = (is_str(lt) || is_fault(lt)) ? rt : lt;
             if (!(is_str(other) || is_num(other) || !strcmp(other, "bool") ||
-                  is_bytes(other)))
+                  is_bytes(other) || is_fault(other)))
                 cg_error(e->line,
                          "cannot concatenate %s onto a string with '+'",
                          other);

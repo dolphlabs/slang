@@ -109,7 +109,7 @@ static int expr_is_flat(CG *cg, Expr *e) {
         if (!strcmp(op, "+")) {
             const char *lt = infer_type(cg, e->as.binary.lhs);
             const char *rt = infer_type(cg, e->as.binary.rhs);
-            if (is_str(lt) || is_str(rt) ||
+            if (is_str(lt) || is_str(rt) || is_fault(lt) || is_fault(rt) ||
                 (is_bytes(lt) && is_bytes(rt)) ||
                 (is_arr(lt) && is_arr(rt)))
                 return 0;
@@ -1329,7 +1329,7 @@ char *gen_expr(CG *cg, Expr *e) {
         if (!strcmp(op, "==") || !strcmp(op, "!=") || !strcmp(op, "<") ||
             !strcmp(op, "<=") || !strcmp(op, ">") || !strcmp(op, ">="))
             return gen_comparison(cg, e, lt, rt);
-        if (!strcmp(op, "+") && (is_str(lt) || is_str(rt)))
+        if (!strcmp(op, "+") && (is_str(lt) || is_str(rt) || is_fault(lt) || is_fault(rt)))
             return gen_string_concat(cg, e, lt, rt);
         if (!strcmp(op, "+") && is_bytes(lt) && is_bytes(rt)) {
             char *a = gen_expr(cg, e->as.binary.lhs);
