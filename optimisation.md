@@ -6,6 +6,8 @@ Baseline (4-core Linux VM, wrk 3x10s, spawn-inline + for-in hoist): c=50 slang p
 
 Raw-axis remasure (8a1c68b, same VM, wrk 3x10s, HTTP_ACCEPTORS=4, quantum 50ms / tick 10ms, frozen ruler untouched): c=50 slang_opt 91307 rps / 3.76ms / 16624KB vs go_raw 82572 / 1.47 / 10476 vs rust_raw 85371 / 1.06 / 3332 vs C 103187 / 1.31 / 1788. c=200 slang_opt 93352 / 7.21 / 18072 vs go_raw 88406 / 5.15 / 11736 vs rust_raw 87779 / 2.96 / 3596 vs C 102696 / 3.90 / 1788. RPS lead held; p99 and RSS still lose on a fair axis. Items 1-8 bought ~-37% p99 and ~-12% RSS, not a phase change.
 
+Raw remasure on latest dev (366823d, same VM and harness): c=50 slang_opt 80826 / 1.32ms / 3040KB vs go_raw 62891 / 2.19 / 10828 vs rust_raw 65811 / 1.37 / 3248 vs C 83422 / 1.34 / 1784. c=200 slang_opt 86060 / 5.77 / 5056 vs go_raw 69995 / 6.78 / 11412 vs rust_raw 81686 / 3.24 / 3604 vs C 84320 / 5.82 / 1788. Vs prior raw: slang_opt p99 3.76 to 1.32ms, RSS 16624 to 3040KB (~5.5x less); c=200 RSS 18072 to 5056. Verdict: vs go_raw YES on p99 and RSS at both concs (raw-axis Phase E vs Go); vs rust_raw NO (edges c=50, loses both at c=200); vs C NO (RSS ~1.7-2.8x, RPS behind at c=50).
+
 ## Round 1 (done)
 
 - [x] 1. GC pause attribution (histogram + per-request alloc counters, behind a flag) — PR #41 `perf/gc-pause-attribution`
@@ -22,7 +24,7 @@ Raw-axis remasure (8a1c68b, same VM, wrk 3x10s, HTTP_ACCEPTORS=4, quantum 50ms /
 Per-request allocated, parked, switched, and collected work that C/Rust/Go-raw skip. Same 200B job, different cost per request. In leverage order; ruler (`bench/http/main.sl`) stays frozen, work lands in `bench/http_opt` / runtime.
 
 - [x] 9. Static response bytes (link.send_static, zero GC allocs, PR #54 `perf/static-response-bytes`)
-- [ ] 10. Per-worker reactor (one epoll + waiter shard per worker, fds pinned by accept stripe; remove the single global IO funnel)
-- [ ] 11. Task + arena recycling (per-worker task/stack cache, reused recv arena; per-conn setup becomes pointer bumps)
-- [ ] 12. GC-free fast-path detection (skip checkin/registration on zero-alloc serve paths; adaptive threshold when survival is ~0)
-- [ ] 13. Split the axes in docs (raw-throughput vs real-server claims separated; ruler vs opt vs stdlib/http callouts)
+- [x] 10. Per-worker reactor (park counters first, PR #55 `perf/per-worker-reactor`; full shard split deferred — needs wake-up-safe queue surgery)
+- [x] 11. Task + arena recycling (per-thread task cache first, PR #56 `perf/task-arena-recycling`; arena reuse stays on freelist)
+- [x] 12. GC-free fast-path detection (adaptive threshold on low survival, PR #57 `perf/gc-free-fastpath`)
+- [x] 13. Split the axes in docs (win conditions per axis, opt on send_static, PR #58 `docs/axis-split`)
