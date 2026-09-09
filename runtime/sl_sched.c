@@ -800,6 +800,31 @@ static void sl_task_stack_grow(sl_task *t) {
 #endif
 
 #define SL_STACK_FREELIST_MAX 256
+#define SL_TASK_CACHE_N 4
+static _Thread_local sl_task *sl_task_cache[SL_TASK_CACHE_N];
+static _Thread_local int sl_task_cache_n;
+static _Atomic unsigned long long sl_task_cache_hits = 0;
+static _Atomic unsigned long long sl_task_cache_miss = 0;
+
+static int sl_task_cache_stat_enabled(void) {
+    static int cached = -1;
+    if (cached < 0)
+        cached = getenv("SLANG_TASK_STAT") ? 1 : 0;
+    return cached;
+}
+
+static void sl_task_cache_stat_dump(void) {
+    if (!sl_task_cache_stat_enabled())
+        return;
+    unsigned long long hits = atomic_load_explicit(&sl_task_cache_hits,
+                                                   memory_order_relaxed);
+    unsigned long long miss = atomic_load_explicit(&sl_task_cache_miss,
+                                                   memory_order_relaxed);
+    fprintf(stderr, "slang-task-stat hits=%llu miss=%llu\n", hits, miss);
+}
+
+__attribute__((destructor))
+static void sl_task_cache_stat_atexit(void) { sl_task_cache_stat_dump(); }
 #ifndef SL_STACK_FREELIST_OFF
 static sl_task *sl_stack_fl;
 static int sl_stack_fl_n;
@@ -867,6 +892,20 @@ static void sl_task_stack_init(sl_task *t, void (*entry)(void *), void *arg) {
 
 static sl_task *sl_task_grab(void) {
     sl_task *t = NULL;
+    if (sl_task_cache_n > 0) {
+        t = sl_task_cache[--sl_task_cache_n];
+        void *raw = t->raw_base;
+        void *base = t->stack_base;
+        size_t sz = t->stack_size;
+        memset(t, 0, sizeof(*t));
+        t->raw_base = raw;
+        t->stack_base = base;
+        t->stack_size = sz;
+        if (sl_task_cache_stat_enabled())
+            atomic_fetch_add_explicit(&sl_task_cache_hits, 1,
+                                      memory_order_relaxed);
+        return t;
+    }
 #ifndef SL_STACK_FREELIST_OFF
     sl_rt_preempt_disable();
     pthread_mutex_lock(&sl_stack_fl_mu);
@@ -885,9 +924,15 @@ static sl_task *sl_task_grab(void) {
         t->raw_base = raw;
         t->stack_base = base;
         t->stack_size = sz;
+        if (sl_task_cache_stat_enabled())
+            atomic_fetch_add_explicit(&sl_task_cache_hits, 1,
+                                      memory_order_relaxed);
         return t;
     }
 #endif
+    if (sl_task_cache_stat_enabled())
+        atomic_fetch_add_explicit(&sl_task_cache_miss, 1,
+                                  memory_order_relaxed);
     sl_rt_preempt_disable();
     t = (sl_task *)malloc(sizeof(sl_task));
     sl_rt_preempt_enable();
@@ -908,6 +953,11 @@ static sl_task *sl_task_acquire(void (*entry)(void *), void *arg) {
 static void sl_task_release(sl_task *t) {
     if (t->entry_arg_owned)
         free(t->entry_arg);
+    if (t->grows_seen == 0 && t->stack_size == SL_TASK_INITIAL_STACK_SIZE &&
+        sl_task_cache_n < SL_TASK_CACHE_N) {
+        sl_task_cache[sl_task_cache_n++] = t;
+        return;
+    }
 #ifndef SL_STACK_FREELIST_OFF
     if (t->grows_seen == 0 && t->stack_size == SL_TASK_INITIAL_STACK_SIZE) {
         sl_rt_preempt_disable();

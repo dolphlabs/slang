@@ -473,14 +473,19 @@ const char *infer_call(CG *cg, Expr *e) {
                     return "result[link,fault]";
                 }
                 if (!strcmp(right, "send") || !strcmp(right, "recv") ||
-                    !strcmp(right, "send_bytes")) {
+                    !strcmp(right, "send_bytes") ||
+                    !strcmp(right, "send_static")) {
                     if (n != 2)
                         cg_error(e->line,
                                  "link.%s() takes exactly two arguments",
                                  right);
                     const char *wt = infer_type(cg, e->as.call.args[0]);
                     const char *ut = infer_type(cg, e->as.call.args[1]);
-                    if (!strcmp(right, "send_bytes")) {
+                    if (!strcmp(right, "send_static")) {
+                        if (e->as.call.args[0]->kind != EX_BYTES)
+                            cg_error(e->line,
+                                     "link.send_static() expects a bytes literal");
+                    } else if (!strcmp(right, "send_bytes")) {
                         if (!is_bytes(wt))
                             cg_error(e->line,
                                      "link.%s() expects bytes (got %s)",

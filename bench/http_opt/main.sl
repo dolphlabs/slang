@@ -8,8 +8,7 @@ fn serve(c: link) {
     let rr = c.recv(buf, until_never());
     guard let n = rr else { return; }
     if n == 0 { return; }
-    let resp = b"HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 200\r\nConnection: close\r\n\r\n0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567";
-    let sr = c.send_bytes(resp, until_never());
+    let sr = c.send_static(b"HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 200\r\nConnection: close\r\n\r\n0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567", until_never());
     guard let _s = sr else { return; }
 }
 
