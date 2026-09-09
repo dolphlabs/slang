@@ -331,6 +331,22 @@ const char *infer_call(CG *cg, Expr *e) {
             cg_error(e->line, "fault_kind() expects a fault (got %s)", t);
         return "int";
     }
+    if (!strcmp(name, "fault_code")) {
+        if (n != 1)
+            cg_error(e->line, "fault_code() takes exactly one argument");
+        const char *t = infer_type(cg, e->as.call.args[0]);
+        if (!is_fault(t))
+            cg_error(e->line, "fault_code() expects a fault (got %s)", t);
+        return "int";
+    }
+    if (!strcmp(name, "fault_op")) {
+        if (n != 1)
+            cg_error(e->line, "fault_op() takes exactly one argument");
+        const char *t = infer_type(cg, e->as.call.args[0]);
+        if (!is_fault(t))
+            cg_error(e->line, "fault_op() expects a fault (got %s)", t);
+        return "str";
+    }
     if (!strcmp(name, "peer_v4")) {
         if (n != 5)
             cg_error(e->line, "peer_v4() takes five arguments");

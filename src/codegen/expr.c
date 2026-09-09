@@ -41,6 +41,14 @@ char *gen_float_literal(double v) {
     return xstrdup(buf);
 }
 
+char *panic_at(CG *cg, int line) {
+    if (cg->cur_func && cg->cur_pkg)
+        return xasprintf("\"%s.%s:%d\"", cg->cur_pkg, cg->cur_func, line);
+    if (cg->cur_func)
+        return xasprintf("\"%s:%d\"", cg->cur_func, line);
+    return xasprintf("\"main:%d\"", line);
+}
+
 /* Convert any scalar/bytes value to a slang str (C string). */
 char *conv_to_str(const char *t, char *expr) {
     if (is_str(t))
@@ -160,15 +168,16 @@ char *gen_numeric_binary(CG *cg, Expr *e, const char *result_t) {
     if ((!strcmp(op, "/") || !strcmp(op, "%")) && is_int(result_t) &&
         !expr_nonzero_int_lit(e->as.binary.rhs)) {
         const char *ty = map_type(result_t);
+        char *at = panic_at(cg, e->line);
         if (flat)
             return xasprintf(
-                "((%s) == 0 ? (sl_rt_error(\"division by zero\", 0, 0), "
+                "((%s) == 0 ? (sl_rt_error_at(\"division by zero\", 0, 0, %s), "
                 "(%s)0) : ((%s)((%s) %s (%s))))",
-                b, ty, ty, a, op, b);
+                b, at, ty, ty, a, op, b);
         return xasprintf(
-            "({ %s((%s) == 0 ? (sl_rt_error(\"division by zero\", 0, 0), "
+            "({ %s((%s) == 0 ? (sl_rt_error_at(\"division by zero\", 0, 0, %s), "
             "(%s)0) : ((%s)((%s) %s (%s)))); })",
-            prelude.data, b, ty, ty, a, op, b);
+            prelude.data, b, at, ty, ty, a, op, b);
     }
     if (flat)
         return xasprintf("((%s)((%s) %s (%s)))", map_type(result_t), a, op,
@@ -507,23 +516,34 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *inner = xasprintf("((long long)sl_fault_kind(%s))", a);
         return wrap_safepoint(cg, e, ctype_of(cg, "int"), NULL, inner);
     }
+    if (!strcmp(name, "fault_code")) {
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        char *inner = xasprintf("((long long)sl_fault_code(%s))", a);
+        return wrap_safepoint(cg, e, ctype_of(cg, "int"), NULL, inner);
+    }
+    if (!strcmp(name, "fault_op")) {
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        char *inner = xasprintf("(sl_fault_opof(%s))", a);
+        return wrap_safepoint(cg, e, ctype_of(cg, "str"), NULL, inner);
+    }
     if (!strcmp(name, "err_of")) {
         const char *rt = infer_type(cg, e->as.call.args[0]);
         char *tv, *tev;
         result_te(rt, &tv, &tev);
         const char *rc = res_cname(cg, tv, tev);
         char *a = gen_expr(cg, e->as.call.args[0]);
+        char *at = panic_at(cg, e->line);
         char *inner;
         if (type_is_gc_ptr(cg, rt))
             inner = xasprintf(
-                "({ %s *_sl_r = %s; if (_sl_r->ok) sl_rt_error(\"err_of on ok "
-                "result\", 0, 0); _sl_r->e; })",
-                rc, a);
+                "({ %s *_sl_r = %s; if (_sl_r->ok) sl_rt_error_at(\"err_of on ok "
+                "result\", 0, 0, %s); _sl_r->e; })",
+                rc, a, at);
         else
             inner = xasprintf(
-                "({ %s _sl_r = %s; if (_sl_r.ok) sl_rt_error(\"err_of on ok "
-                "result\", 0, 0); _sl_r.e; })",
-                rc, a);
+                "({ %s _sl_r = %s; if (_sl_r.ok) sl_rt_error_at(\"err_of on ok "
+                "result\", 0, 0, %s); _sl_r.e; })",
+                rc, a, at);
         return wrap_safepoint(cg, e, ctype_of(cg, tev), NULL, inner);
     }
     if (!strcmp(name, "peer_v4")) {
@@ -1146,29 +1166,33 @@ char *gen_index(CG *cg, Expr *e) {
                           &prelude);
         cg->ambient_count = ambient_mark;
         int id = cg->tmp_id++;
+        char *at = panic_at(cg, e->line);
         return xasprintf(
             "({ %s%s _sl_k%d = %s; void *_sl_p%d = sl_map_get(%s, "
-            "&_sl_k%d); if (!_sl_p%d) sl_rt_error(\"map key not found\", "
-            "0, 0); *(%s *)(void *)_sl_p%d; })",
-            prelude.data, kc, id, ix, id, b, id, id, vc, id);
+            "&_sl_k%d); if (!_sl_p%d) sl_rt_error_at(\"map key not found\", "
+            "0, 0, %s); *(%s *)(void *)_sl_p%d; })",
+            prelude.data, kc, id, ix, id, b, id, id, at, vc, id);
     }
     char *i = gen_expr(cg, e->as.index.index);
     i = sequence_one(cg, seq_id, 1, map_type("int"), "int", i,
                      e->as.index.index, &prelude);
     cg->ambient_count = ambient_mark;
     if (is_bytes(bt)) {
-        return xasprintf("({ %s((long long)sl_bytes_at(%s, %s)); })",
-                         prelude.data, b, i);
+        char *at = panic_at(cg, e->line);
+        return xasprintf("({ %ssl_bytes_at(%s, %s, %s); })",
+                         prelude.data, b, i, at);
     }
     if (is_wire(bt)) {
-        return xasprintf("({ %s((long long)sl_wire_at(%s, %s)); })",
-                         prelude.data, b, i);
+        char *at = panic_at(cg, e->line);
+        return xasprintf("({ %ssl_wire_at(%s, %s, %s); })",
+                         prelude.data, b, i, at);
     }
     char *elem = arr_elem(bt);
     const char *ec = ctype_of(cg, elem);
+    char *at = panic_at(cg, e->line);
     return xasprintf(
-        "({ %s(*(%s *)(void *)sl_arr_get(%s, %s, sizeof(%s))); })",
-        prelude.data, ec, b, i, ec);
+        "({ %s(*(%s *)(void *)sl_arr_get(%s, %s, sizeof(%s), %s)); })",
+        prelude.data, ec, b, i, ec, at);
 }
 
 char *gen_slice(CG *cg, Expr *e) {
@@ -1506,8 +1530,7 @@ void gen_print(CG *cg, Expr *call, int newline) {
         emit_line(cg, "printf(\"%%lld%s\", (long long)(%s));",
                   newline ? "\\n" : "", v);
     } else if (is_fault(t)) {
-        emit_line(cg, "({ sl_fault _sl_f = %s; %s(_sl_f.detail%s); });", v,
-                  newline ? "puts" : "fputs", newline ? "" : ", stdout");
+        emit_line(cg, "sl_fault_print(%s, %d);", v, newline ? 1 : 0);
     } else if (is_peer(t)) {
         emit_line(cg,
                   "({ sl_peer _sl_p = %s; printf(\"%%u.%%u.%%u.%%u:%%u%s\", "

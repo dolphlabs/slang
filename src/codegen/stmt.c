@@ -514,10 +514,11 @@ void gen_stmt(CG *cg, Stmt *s) {
             val = sequence_one(cg, bi_id, 2, ec, elem, val,
                                s->as.assign.value, &prelude);
             cg->ambient_count = ambient_mark;
+            char *at = panic_at(cg, s->line);
             emit_line(cg,
-                      "%s(*(%s *)(void *)sl_arr_get(%s, %s, sizeof(%s))) = "
+                      "%s(*(%s *)(void *)sl_arr_get(%s, %s, sizeof(%s), %s)) = "
                       "(%s)(%s);",
-                      prelude.data, ec, b, i, ec, ec, val);
+                      prelude.data, ec, b, i, ec, at, ec, val);
             break;
         }
         cg->ambient_count = ambient_mark;

@@ -310,16 +310,54 @@ fn load_config(path: str) -> str {
 println(div10(41) ?? -1);              // -1 (none)
 println(parse_small("big") ?? -1);     // -1 (err)
 
+// `fault` is the closed 5-kind network/runtime failure enum:
+// fault_timeout / fault_reset / fault_closed / fault_io / fault_refused.
+// `==` and `fault_kind` only see the kind. `fault_op` and `fault_code`
+// carry context: the op name ("recv", "connect", "dial", ...) and the
+// errno value (0 when none applies). `to_str` / `+` / `println` render
+// the full "op detail (code N)" form, so failures stay debuggable.
+let f = fault_io();
+println(fault_kind(f));                // 4
+println(fault_op(f));                  // "" (hand-built, no op)
+println(fault_code(f));                // 0
+
 // bare 'none' / 'err(...)' need an annotated binding to infer their
 // other type parameter
 let nothing: opt[str] = none;
 let bad: result[str, str] = err("boom");
 ```
 
+Panics (out-of-bounds index, division by zero, `err_of` on ok, missing
+map key) carry `pkg.func:line`: `list index out of bounds at
+main.foo:12`. A panicking `spawn`ed task reports through stderr and its
+`join_wait` surfaces the same string as `err`, so failures stay visible
+across task boundaries.
+
 `opt[T]` and `result[T, E]` are monomorphized per distinct type
 argument (one C struct per instantiation actually used). Constructing
 `none`/`err(...)` without enough context to infer the missing type
 parameter is a compile error.
+
+#### Error model: `opt` vs `result` vs `fault`
+
+- `opt[T]` — the value may legitimately be absent (`none`). Lookup
+  misses, optional config, end of a drained channel. Absence is not
+  failure; `??` supplies the default.
+- `result[T, E]` — the operation can fail with a *descriptive* error
+  (`err(e)`). Parsing, validation, anything where the caller needs to
+  know *why*. `E` is usually `str`; `guard let x = r else let e =
+  err_of(r)` keeps the reason visible.
+- `fault` — the operation hit the *environment*: timeout, reset,
+  closed connection, refused dial, IO error. A closed 5-kind enum
+  (`fault_timeout` / `fault_reset` / `fault_closed` / `fault_io` /
+  `fault_refused`), comparable with `==` and convertible with
+  `to_str` / `+`. Use it when the failure is about the world, not
+  the data.
+
+Rule of thumb: absent data is `opt`, bad data is `result[_, str]`,
+bad world is `result[_, fault]`. Never collapse a descriptive `str`
+error into a bare `fault_io()` at a boundary — that is where
+debuggability goes to die (see `http.read` below).
 
 ## Standard packages
 
@@ -645,7 +683,9 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
 
 - **`spawn f(args...);`** evaluates every argument in the spawning
   context (no closures — nothing is captured implicitly) and submits
-  `f` as a growable-stack task on the global run queue. `f` must be a
+  `f` as a growable-stack task on the striped run queues (16 hashed
+  stripes with work-stealing, plus a global doorbell for sleepers).
+  `f` must be a
   plain top-level function or an `extern fn`, not a method and not a
   builtin. There is no `spawn` on `net.*`/`time.*` calls directly;
   wrap the native call in a plain function and spawn that instead.
@@ -861,7 +901,8 @@ src/
 runtime/       real C runtime spliced into generated programs
   sl_core.c sl_gc.c sl_containers.c sl_sched.c sl_pool.c
   sl_time.c sl_net.c sl_tls.c sl_json.c sl_proc.c sl_fs.c
-stdlib/        slang-source packages (`import "http"`, `import "byteutil"`)
+stdlib/        slang-source packages (`import "http"`, `import "byteutil"`;
+             `import "log"` is a native package — no source files)
 examples/      one directory per example program
 tests/         language tests plus tests/runtime/ (no slangc)
 Makefile       build/test/clean

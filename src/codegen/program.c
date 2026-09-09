@@ -690,6 +690,7 @@ void gen_function(CG *cg, Package *p, FuncDecl *f) {
     cg->in_function = 1;
     cg->cur_ret = sig->ret_slang;
     cg->cur_pkg = p->name;
+    cg->cur_func = f->name;
 
     for (int j = 0; j < f->nparams; j++) {
         var_redecl_check(cg, f->params[j], f->line);
@@ -722,6 +723,7 @@ void gen_function(CG *cg, Package *p, FuncDecl *f) {
 
     cg->in_function = 0;
     cg->cur_ret = NULL;
+    cg->cur_func = NULL;
 }
 
 /* Generate the complete translation unit into cg->out. */

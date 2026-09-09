@@ -997,6 +997,7 @@ static int expr_can_alloc_or_park(CG *cg, Expr *e) {
         const char *name = e->as.call.name;
         if (!strcmp(name, "len") || !strcmp(name, "until_never") ||
             !strcmp(name, "until_hit") || !strcmp(name, "fault_kind") ||
+            !strcmp(name, "fault_code") || !strcmp(name, "fault_op") ||
             !strcmp(name, "peer_port") || !strcmp(name, "bytes_ptr"))
             return 0;
         for (int i = 0; i < e->as.call.nargs; i++) {
@@ -1046,6 +1047,7 @@ int safepoint_elidable(CG *cg, Expr *e) {
     const char *name = e->as.call.name;
     if (!strcmp(name, "len") || !strcmp(name, "until_never") ||
         !strcmp(name, "until_hit") || !strcmp(name, "fault_kind") ||
+        !strcmp(name, "fault_code") || !strcmp(name, "fault_op") ||
         !strcmp(name, "peer_port") || !strcmp(name, "bytes_ptr"))
         return 1;
     char *left, *right;
@@ -1491,6 +1493,7 @@ int is_builtin_name(const char *name) {
            !strcmp(name, "fault_timeout") || !strcmp(name, "fault_reset") ||
            !strcmp(name, "fault_closed") || !strcmp(name, "fault_io") ||
            !strcmp(name, "fault_refused") || !strcmp(name, "fault_kind") ||
+           !strcmp(name, "fault_code") || !strcmp(name, "fault_op") ||
            !strcmp(name, "peer_v4") || !strcmp(name, "peer_port") ||
            !strcmp(name, "trip_new") || !strcmp(name, "link_listen") ||
            !strcmp(name, "link_dial");

@@ -230,6 +230,7 @@ struct CG {
     const char *expect; /* expected type while inferring none/ok/err */
     const char *cur_ret;  /* slang return type of enclosing function */
     const char *cur_pkg;
+    const char *cur_func;
     int in_function;
     int tmp_id;
     /* Tier 10: how many loop back-edge safepoint brackets (stmt.c's
@@ -458,6 +459,7 @@ const char *infer_binary(CG *cg, Expr *e);
 const char *infer_type(CG *cg, Expr *e);
 char *gen_ident_name(CG *cg, const char *name, int line);
 char *gen_float_literal(double v);
+char *panic_at(CG *cg, int line);
 char *conv_to_str(const char *t, char *expr);
 char *gen_string_concat(CG *cg, Expr *e, const char *lt,
                                const char *rt);
