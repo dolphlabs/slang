@@ -164,7 +164,9 @@ int main(int argc, char **argv) {
     sb_init(&out);
     int want_tls = 0;
     int want_crypto = 0;
-    codegen_program(pkgs.items, pkgs.count, main_index, &out, &want_tls, &want_crypto);
+    int want_sql = 0;
+    codegen_program(pkgs.items, pkgs.count, main_index, &out, &want_tls,
+                    &want_crypto, &want_sql);
 
     /* ---- output ---- */
     char *stem = derive_stem(input);
@@ -227,6 +229,9 @@ int main(int argc, char **argv) {
         sb_append(&cmd, " ");
         sb_append(&cmd, tlsflags);
     }
+    if (want_sql)
+        sb_append(&cmd, " -lsqlite3"); /* the 'sql' native package;
+                                          resolves on default cc paths */
     for (int i = 0; i < nlinks; i++) {
         sb_append(&cmd, " -l");
         sb_append(&cmd, link_libs[i]);

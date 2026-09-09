@@ -29,6 +29,10 @@ static const NatSig *find_any_sig(const char *pkg, const char *fname) {
         ns = find_sig(LOG_SIGS, LOG_SIGS_LEN, pkg, fname);
     if (!ns)
         ns = find_sig(CRYPTO_SIGS, CRYPTO_SIGS_LEN, pkg, fname);
+    if (!ns)
+        ns = find_sig(SQL_SIGS, SQL_SIGS_LEN, pkg, fname);
+    if (!ns)
+        ns = find_sig(REGEX_SIGS, REGEX_SIGS_LEN, pkg, fname);
     return ns;
 }
 
@@ -66,7 +70,14 @@ const char *native_check(CG *cg, const char *pkg, const char *fname,
             break;
         case NA_BYTES:  ok = is_bytes(at);  want = "bytes";    break;
         case NA_RAWPTR: ok = is_rawptr(at); want = "a rawptr"; break;
-        default:        ok = is_int(at);    want = "an integer"; break;
+        case NA_F64:
+            ok = is_flt(at) || is_int(at);
+            want = "a float";
+            break;
+        default: /* NA_INT, NA_I64 */
+            ok = is_int(at);
+            want = "an integer";
+            break;
         }
         if (!ok)
             cg_error(e->line, "%s.%s argument %d must be %s (got %s)", pkg,
@@ -106,11 +117,18 @@ char *native_gen(CG *cg, const char *pkg, const char *fname,
         if (i)
             sb_append(&sb, ", ");
         const char *at = infer_type(cg, e->as.call.args[i]);
+        NatArgKind ak = nat_argkind(pkg, fname, i);
         char *a = gen_expr(cg, e->as.call.args[i]);
         const char *cast_t = at;
-        if (nat_argkind(pkg, fname, i) == NA_STR_FAULT && is_fault(at)) {
+        if (ak == NA_STR_FAULT && is_fault(at)) {
             a = conv_to_str(at, a);
             cast_t = "str";
+        } else if (ak == NA_F64) {
+            cast_t = "float";
+            a = maybe_cast(cg, cast_t, at, a);
+        } else if (ak == NA_I64) {
+            cast_t = "int";
+            a = maybe_cast(cg, cast_t, at, a);
         } else if (!is_str(at) && !is_bytes(at) && !is_rawptr(at)) {
             cast_t = !strcmp(pkg, "time") ? "int" : "i32";
             a = maybe_cast(cg, cast_t, at, a);

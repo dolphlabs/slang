@@ -1,0 +1,1 @@
+all integer literal checks passed

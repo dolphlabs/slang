@@ -289,7 +289,15 @@ struct CG {
  * a function name/index pair the way this table used to. Each
  * package owns its own table in its own pkg_<name>/sigs.c; native.c
  * searches across all of them. */
-typedef enum { NA_INT, NA_STR, NA_BYTES, NA_RAWPTR, NA_STR_FAULT } NatArgKind;
+typedef enum {
+    NA_INT,       /* marshaled as i32 (time: as int) -- back-compat default */
+    NA_STR,
+    NA_BYTES,
+    NA_RAWPTR,
+    NA_STR_FAULT, /* str, or a fault converted to str at the call site */
+    NA_I64,       /* full-width int: marshaled as long long, not truncated */
+    NA_F64,       /* float: marshaled as double (int widens in) */
+} NatArgKind;
 
 typedef struct {
     const char *pkg, *name;
@@ -322,6 +330,12 @@ extern const int LOG_SIGS_LEN;
 
 extern const NatSig CRYPTO_SIGS[]; /* src/codegen/pkg_crypto/ */
 extern const int CRYPTO_SIGS_LEN;
+
+extern const NatSig SQL_SIGS[]; /* src/codegen/pkg_sql/ */
+extern const int SQL_SIGS_LEN;
+
+extern const NatSig REGEX_SIGS[]; /* src/codegen/pkg_regex/ */
+extern const int REGEX_SIGS_LEN;
 
 /* ------------------------------------------------------------------ */
 /* Functions (declarations generated from every former 'static' def)   */

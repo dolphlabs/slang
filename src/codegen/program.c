@@ -466,6 +466,14 @@ void force_native_result_types(CG *cg) {
     if (want_pkg(cg, "crypto")) {
         res_cname(cg, "bytes", "str");
     }
+    if (want_pkg(cg, "sql")) {
+        res_cname(cg, "rawptr", "str");
+        res_cname(cg, "bool", "str");
+        res_cname(cg, "int", "str");
+    }
+    if (want_pkg(cg, "regex")) {
+        res_cname(cg, "rawptr", "str");
+    }
 }
 
 /* Emit the native-package runtime sections that this program needs,
@@ -478,7 +486,10 @@ void emit_native_runtime(CG *cg) {
     int want_fs = want_pkg(cg, "fs");
     int want_log = want_pkg(cg, "log");
     int want_crypto = want_pkg(cg, "crypto");
-    if (!want_time && !want_net && !want_proc && !want_fs && !want_log && !want_crypto)
+    int want_sql = want_pkg(cg, "sql");
+    int want_regex = want_pkg(cg, "regex");
+    if (!want_time && !want_net && !want_proc && !want_fs && !want_log &&
+        !want_crypto && !want_sql && !want_regex)
         return;
     if (want_time)
         emit_runtime_file(cg, "sl_time.c");
@@ -494,6 +505,10 @@ void emit_native_runtime(CG *cg) {
         emit_runtime_file(cg, "sl_log.c");
     if (want_crypto)
         emit_runtime_file(cg, "sl_crypto.c");
+    if (want_sql)
+        emit_runtime_file(cg, "sl_sql.c");
+    if (want_regex)
+        emit_runtime_file(cg, "sl_regex.c");
 }
 
 /* Emit the args-struct + task entry function for every distinct
@@ -897,7 +912,8 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
 }
 
 void codegen_program(Package *pkgs, int npkgs, int main_index,
-                     StrBuf *out, int *out_want_tls, int *out_want_crypto) {
+                     StrBuf *out, int *out_want_tls, int *out_want_crypto,
+                     int *out_want_sql) {
     CG cg;
     memset(&cg, 0, sizeof(CG));
     cg.out = out;
@@ -960,4 +976,5 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
     gen_whole_program(&cg, pkgs, npkgs, main_index);
     *out_want_tls = cg.want_tls;
     *out_want_crypto = want_pkg(&cg, "crypto");
+    *out_want_sql = want_pkg(&cg, "sql");
 }

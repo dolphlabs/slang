@@ -47,6 +47,14 @@ let name = "World";      // str
 let ok = true;           // bool
 
 // arithmetic: + - * / %   (int/int is integer division)
+// bitwise:    & | ^ ~ << >>   (integers only; see below)
+
+// compound assignment for every binary operator above
+let mut_acc = 0;
+mut_acc += 5;
+mut_acc |= 1 << 3;
+xs[i] *= 2;
+p.count += 1;
 println(x + y);
 println(x / 2.0);        // mixing int and float promotes to float
 
@@ -173,6 +181,71 @@ no escaping).
   int casts truncate toward zero.
 - Mixed-width arithmetic promotes to the wider operand; same-width
   signed/unsigned mixes resolve to the unsigned type (C semantics).
+
+#### Bitwise operations and integer literals
+
+Binary protocols are most of network programming, so the bit operators
+are first-class: `&` `|` `^` `~` `<<` `>>`, on any integer type.
+
+```slang
+// an HTTP/2 frame header, straight off the wire
+let flen  = (b[0] << 16) | (b[1] << 8) | b[2];
+let ftype = b[3];
+let flags = b[4];
+let sid   = ((b[5] & 0x7f) << 24) | (b[6] << 16) | (b[7] << 8) | b[8];
+
+if flags & 0x01 != 0 { /* END_STREAM */ }
+```
+
+Integer literals come in decimal, hex (`0xff`, `0xFF`) and binary
+(`0b1010`), and `_` may be used anywhere as a digit separator:
+`1_000_000`, `0xff_ff`, `0b1010_1010`.
+
+A literal too large for `i64` **is a `u64`**, not an overflowing `int`:
+`let mask = 18446744073709551615;` gives a `u64` holding that exact
+value, and `let x: int = 18446744073709551615;` is a compile error
+rather than a surprise. Anything past `u64` is rejected at the point of
+writing — `integer literal does not fit in 64 bits`. (Before this,
+decimal literals ran through `strtoll`, which saturates: those two
+literals and `99999999999999999999999` all silently became
+`9223372036854775807`.)
+
+**Precedence follows C exactly**, so an expression lifted from an RFC or
+a C reference implementation means the same thing here:
+
+```
+||  <  &&  <  |  <  ^  <  &  <  == !=  <  < <= > >=  <  << >>  <  + -  <  * / %  <  unary
+```
+
+Three things differ from C, all deliberately:
+
+- **`&` is never ambiguous.** Infix `&` is bitwise AND; the borrow forms
+  `&x` / `&mut x` are prefix-only, so the parser can always tell them apart.
+- **C's `x & 1 == 1` footgun is a compile error.** C parses that as
+  `x & (1 == 1)` and accepts it because `bool` is an `int`; slang rejects
+  it with "'&' requires integer operands (got int and bool)". Parenthesize
+  what you meant.
+- **An out-of-range shift count panics** instead of being undefined
+  behaviour. `x << n` where `n` is negative or at least the width of `x`
+  reports `shift count out of range at pkg.func:line`, the same way
+  division by zero and an out-of-bounds index do — this matters when the
+  count came off the network. When the count is a constant already in
+  range (`b[0] << 16`, the normal case) the check is compiled out
+  entirely, so protocol code pays nothing for it.
+
+**Compound assignment** exists for every one of these: `+= -= *= /= %=`
+and `&= |= ^= <<= >>=`. `x op= v` means `x = x op v`, which evaluates the
+target twice, so the target may not contain a **side-effecting** call —
+`xs[next()] += 1` is a compile error telling you to hoist the call.
+Names, fields, indices computed from them (`xs[i + 1] |= m`), and the
+pure builtins `len` and `has` (`xs[len(xs) - 1] += 1`) are all fine,
+since re-evaluating those observes nothing.
+
+`>>` follows the operand's signedness: arithmetic (sign-preserving) on a
+signed type, logical (zero-filling) on an unsigned one, exactly as in C.
+`&` `|` `^` promote to the wider operand; a shift keeps the width of the
+value being shifted, so `x << n` never silently widens a narrow `x`
+because `n` happens to be an `int`.
 
 #### bytes
 
@@ -361,11 +434,11 @@ debuggability goes to die (see `http.read` below).
 
 ## Standard packages
 
-`time`, `net`, `json`, `proc`, `fs`, `log`, and `crypto` are
-compiler-provided native packages — no source files, just
+`time`, `net`, `json`, `proc`, `fs`, `log`, `crypto`, `sql`, and
+`regex` are compiler-provided native packages — no source files, just
 `import "time";` / `import "net";` / `import "json";` / `import "proc";`
-/ `import "fs";` / `import "log";` / `import "crypto";` like any other
-package.
+/ `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
+/ `import "regex";` like any other package.
 
 `http` and `byteutil` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
@@ -601,6 +674,177 @@ guard let b = r else let e = err_of(r) {
 }
 ```
 
+#### `sql`
+
+A SQLite driver (linked automatically, only when a program imports
+`sql`). Connections and prepared statements are opaque `rawptr`
+handles, exactly like `net.tls_*`; free them with `sql.close` /
+`sql.finalize`. **Every fallible call returns `result[_, str]` whose
+error is SQLite's own message** — `no such table: users`, `near
+"SELCT": syntax error`, `UNIQUE constraint failed: users.id` — so a
+bad query stays as visible as a bad socket read (`guard let … else
+let e = err_of(r)`), never a silent `null`. The column getters are
+infallible (SQLite coerces types; an out-of-range index is a
+programming error, returning `0` / `""`), so they return bare values.
+
+| Function | Signature |
+|----------|-----------|
+| `sql.open(path)` | `result[rawptr, str]` — `":memory:"` for in-memory |
+| `sql.close(db)` | — |
+| `sql.exec(db, sql)` | `result[int, str]` — runs statement(s), returns rows changed |
+| `sql.last_insert_id(db)` | `int` |
+| `sql.prepare(db, sql)` | `result[rawptr, str]` |
+| `sql.finalize(st)` | — |
+| `sql.reset(st)` | `result[bool, str]` — clears bindings, re-run |
+| `sql.bind_int/bind_float/bind_text/bind_blob(st, idx, v)` | `result[bool, str]` — `idx` is 1-based |
+| `sql.bind_null(st, idx)` | `result[bool, str]` |
+| `sql.step(st)` | `result[bool, str]` — `true` = row ready, `false` = done |
+| `sql.col_count(st)` | `int` |
+| `sql.col_name(st, i)` / `col_text(st, i)` | `str` — `i` is 0-based |
+| `sql.col_int(st, i)` | `int` |
+| `sql.col_float(st, i)` | `float` |
+| `sql.col_blob(st, i)` | `bytes` |
+| `sql.col_is_null(st, i)` | `bool` |
+
+```slang
+import "sql";
+import "log";
+
+let dr = sql.open("app.db");
+guard let db = dr else let e = err_of(dr) {
+    log.error("db open: " + e);
+    exit(1);
+}
+sql.exec(db, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
+
+let pr = sql.prepare(db, "SELECT id, name FROM users WHERE id > ?");
+guard let st = pr else let e = err_of(pr) {
+    log.error("prepare: " + e);          // e.g. "no such table: users"
+    exit(1);
+}
+sql.bind_int(st, 1, 0);
+while true {
+    let sr = sql.step(st);
+    guard let more = sr else let e = err_of(sr) { log.error("step: " + e); break; }
+    if !more { break; }
+    println(to_str(sql.col_int(st, 0)) + " " + sql.col_text(st, 1));
+}
+sql.finalize(st);
+sql.close(db);
+```
+
+SQLite calls block the worker — use them for real work off the accept
+loop (wrap in a `spawn`ed task), the same caveat as `fs`. One
+connection per `rawptr`; there is no pool, no networked backend
+(Postgres/MySQL), and no async stepping.
+
+Query complexity is capped per connection so SQLite's recursion stays
+inside the task stack: at most **50 terms in a compound `SELECT`**
+(`UNION`/`INTERSECT`/`EXCEPT`) and an **expression depth of 400**
+(roughly, terms in one `AND`/`OR` chain). SQLite's stock limits of 500
+and 1000 allow a single legal query to want ~325KB of C stack, which
+would force a task stack far too fat to spawn per connection. Long
+`IN` lists, wide result sets, and recursive CTEs are *not* affected —
+they don't recurse. Exceeding a cap is a normal error through
+`result[_, str]` (`too many terms in compound SELECT`), not a crash.
+
+#### `regex`
+
+Regular expressions on `str` or `bytes`, matched by slang's own
+Thompson NFA — no external library, so a program that matches text
+stays as dependency-free as a plain TCP one. `compile` returns an
+opaque `rawptr` handle (freed with `regex.free`, like `net.tls_*` and
+`sql`), and a bad pattern comes back as a descriptive
+`result[rawptr, str]`.
+
+**Matching is linear time, always.** There is no backtracking, so the
+classic catastrophic pattern `(a+)+$` — which makes a backtracking
+engine take exponential time on a hostile input — runs in the same
+microseconds here as any other pattern. That is the point of choosing
+this engine for a server language: patterns and subjects both arrive
+from the network. The price is the RE2/Go one, and it is not
+negotiable: **no backreferences and no lookaround**. Both require
+backtracking; `(?=...)` and friends are a compile error, not a silent
+mis-parse.
+
+| Function | Signature |
+|----------|-----------|
+| `regex.compile(pat)` | `result[rawptr, str]` |
+| `regex.free(re)` | — |
+| `regex.groups(re)` | `int` — number of capture groups |
+| `regex.is_match(re, s)` | `bool` — `s` is a `str` |
+| `regex.is_match_bytes(re, b)` | `bool` — `b` is `bytes` |
+| `regex.find(re, s)` / `find_bytes(re, b)` | `[int]` |
+| `regex.find_at(re, s, from)` / `find_bytes_at(re, b, from)` | `[int]` |
+
+`find` returns byte offsets as `[start, end, g1start, g1end, ...]`, or
+an **empty list** when there is no match — so the result is GC-owned
+and there is no match handle to leak. `find_at` starts at an offset,
+which is how you walk every match.
+
+```slang
+import "regex";
+
+let cr = regex.compile("(\\d{4})-(\\d{2})-(\\d{2})");
+guard let re = cr else let e = err_of(cr) {
+    log.error("bad pattern: " + e);   // e.g. "missing ) at offset 9"
+    exit(1);
+}
+
+if regex.is_match(re, "due 2026-09-09") {
+    let m = regex.find(re, "due 2026-09-09");
+    println(to_str(m[0]) + ".." + to_str(m[1]));   // whole match: 4..14
+    println(to_str(m[2]) + ".." + to_str(m[3]));   // year:        4..8
+}
+regex.free(re);
+```
+
+Supported: literals, `.`, classes `[a-z]` `[^...]` `[[:digit:]]`,
+escapes `\d \D \w \W \s \S \b \B \A \z \xHH`, quantifiers
+`* + ? {n} {n,} {n,m}` and their lazy `?` forms, groups `(...)` and
+`(?:...)`, alternation `|`, anchors `^ $`. Matching is leftmost-first
+(Perl-style priority), and `.` does not match `\n`.
+
+Subjects are matched with an explicit length, so a `bytes` containing
+NUL matches correctly rather than stopping at the NUL — and `\D`
+matches a NUL byte like any other non-digit.
+
+Bounds, so a hostile pattern can't exhaust memory or stack: 4096
+compiled instructions, 100 nesting levels, 32 capture groups, and
+`{n,m}` counts up to 1000. Each is a descriptive compile error, never
+a crash.
+
+A compiled regex is safe to share across tasks, and is meant to be:
+it carries a small pool of reusable match buffers, so concurrent
+matchers allocate nothing per match. Compiling is the expensive part
+(it is also the only part that grows the task stack) — compile once,
+match many times, ideally not once per request.
+
+**Where this lands on speed.** Measured single-threaded on
+`^(GET|POST|PUT) (/[a-z0-9/_-]*) HTTP/1\.([01])$` against a 26-byte
+subject, 200k iterations:
+
+| engine | matches/sec | on `(a+)+$` vs a hostile input |
+|--------|-------------|-------------------------------|
+| slang `regex` | ~721k | 2µs, correct answer |
+| POSIX `regexec` | ~372k | fast here, but no limits |
+| PCRE2 (interpreted) | ~2.4M | 0.2s, then gives up (`MATCHLIMIT`) |
+| PCRE2 (JIT) | ~8.6M | same — JIT does not save it |
+
+So: ~1.9x faster than libc's POSIX engine, and several times slower
+than PCRE2 on *benign* input — PCRE2's interpreter and especially its
+JIT are very good, and this is an honest gap. The trade is deliberate:
+on adversarial input the ordering inverts completely, because linear
+time is a guarantee here and a hope there. `is_match` is markedly
+cheaper than `find` (it binds no capture slots at all), so prefer it
+when you only need a yes/no. Matching scales with tasks — ~3.2M/sec
+across 16.
+
+Because matching never grows the task stack, regex is cheap to use per
+connection: 600 concurrently-live tasks each matching and then parking
+peak at **3.9MB RSS** — about 17x lighter than the same shape holding
+`sql` connections (65.9MB), which does grow every task's stack.
+
 #### `byteutil`
 
 Search, trim, and split on the `bytes` type — no new syntax. The
@@ -792,6 +1036,15 @@ consume the shim exactly like any other C library above.
   of any call that retains a pointer beyond that call.
 - Callback function pointers — C calling back into slang — aren't
   supported yet.
+- **Deep C libraries and the task stack.** A task's stack starts at
+  8KB and grows only at slang checkpoints, which C code has none of.
+  A C function that recurses or holds large locals can therefore run
+  off the end of the stack buffer and corrupt the heap — a silent
+  `abort()` from `malloc`, not a clean crash. The compiler-provided
+  packages that wrap deep libraries grow the stack up front
+  (`sl_rt_need_stack`, used by `net.tls_*` for OpenSSL and by `sql`
+  for SQLite); an `extern fn` into a comparably deep library has no
+  such protection, so keep C-side recursion and stack buffers small.
 
 See `tests/ffi/` for a complete example: a small hand-written C
 fixture library (`lib.c`) built as a static archive, linked and called

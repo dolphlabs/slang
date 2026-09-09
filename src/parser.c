@@ -207,6 +207,7 @@ static Expr *parse_primary(Parser *p) {
         advance(p);
         Expr *e = new_expr(p, EX_INT, tk->line);
         e->as.int_lit.value = tk->int_val;
+        e->as.int_lit.big_u64 = tk->big_u64;
         return e;
     }
     case T_FLOAT: {
@@ -397,11 +398,12 @@ static Expr *parse_postfix(Parser *p) {
 
 static Expr *parse_unary(Parser *p) {
     Token *tk = peek(p);
-    if (tk->type == T_MINUS || tk->type == T_BANG) {
+    if (tk->type == T_MINUS || tk->type == T_BANG || tk->type == T_TILDE) {
         advance(p);
         Expr *operand = parse_unary(p);
         Expr *e = new_expr(p, EX_UNARY, tk->line);
-        e->as.unary.op = xstrdup(tk->type == T_MINUS ? "-" : "!");
+        e->as.unary.op = xstrdup(tk->type == T_MINUS ? "-"
+                                 : tk->type == T_TILDE ? "~" : "!");
         e->as.unary.operand = operand;
         return e;
     }
@@ -448,6 +450,11 @@ static const char *op_text(TokenType t) {
     case T_GT:      return ">";
     case T_LTE:     return "<=";
     case T_GTE:     return ">=";
+    case T_AMP:     return "&";
+    case T_PIPE:    return "|";
+    case T_CARET:   return "^";
+    case T_SHL:     return "<<";
+    case T_SHR:     return ">>";
     default:        return "?";
     }
 }
@@ -480,12 +487,28 @@ static Expr *parse_term(Parser *p) {
     return lhs;
 }
 
-static Expr *parse_comparison(Parser *p) {
+/* Bitwise precedence follows C exactly, so an expression copied out of
+ * an RFC or a C reference implementation means the same thing here:
+ *   ||  <  &&  <  |  <  ^  <  &  <  == !=  <  relational  <  << >>
+ *   <  + -  <  * / %  <  unary
+ * Infix '&' is unambiguous against the '&x' / '&mut x' borrow forms
+ * because those are parsed in prefix position by parse_unary. */
+static Expr *parse_shift(Parser *p) {
     Expr *lhs = parse_term(p);
+    while (check(p, T_SHL) || check(p, T_SHR)) {
+        Token *op = advance(p);
+        Expr *rhs = parse_term(p);
+        lhs = make_binary(p, xstrdup(op_text(op->type)), lhs, rhs, op->line);
+    }
+    return lhs;
+}
+
+static Expr *parse_comparison(Parser *p) {
+    Expr *lhs = parse_shift(p);
     while (check(p, T_LT) || check(p, T_GT) || check(p, T_LTE) ||
            check(p, T_GTE)) {
         Token *op = advance(p);
-        Expr *rhs = parse_term(p);
+        Expr *rhs = parse_shift(p);
         lhs = make_binary(p, xstrdup(op_text(op->type)), lhs, rhs, op->line);
     }
     return lhs;
@@ -501,10 +524,40 @@ static Expr *parse_equality(Parser *p) {
     return lhs;
 }
 
-static Expr *parse_and(Parser *p) {
+static Expr *parse_bitand(Parser *p) {
     Expr *lhs = parse_equality(p);
-    while (match(p, T_ANDAND)) {
+    while (check(p, T_AMP)) {
+        Token *op = advance(p);
         Expr *rhs = parse_equality(p);
+        lhs = make_binary(p, xstrdup(op_text(op->type)), lhs, rhs, op->line);
+    }
+    return lhs;
+}
+
+static Expr *parse_bitxor(Parser *p) {
+    Expr *lhs = parse_bitand(p);
+    while (check(p, T_CARET)) {
+        Token *op = advance(p);
+        Expr *rhs = parse_bitand(p);
+        lhs = make_binary(p, xstrdup(op_text(op->type)), lhs, rhs, op->line);
+    }
+    return lhs;
+}
+
+static Expr *parse_bitor(Parser *p) {
+    Expr *lhs = parse_bitxor(p);
+    while (check(p, T_PIPE)) {
+        Token *op = advance(p);
+        Expr *rhs = parse_bitxor(p);
+        lhs = make_binary(p, xstrdup(op_text(op->type)), lhs, rhs, op->line);
+    }
+    return lhs;
+}
+
+static Expr *parse_and(Parser *p) {
+    Expr *lhs = parse_bitor(p);
+    while (match(p, T_ANDAND)) {
+        Expr *rhs = parse_bitor(p);
         lhs = make_binary(p, xstrdup("&&"), lhs, rhs, peek(p)->line);
     }
     return lhs;
@@ -1054,6 +1107,143 @@ static Stmt *parse_unsafe_stmt(Parser *p) {
     return s;
 }
 
+
+/* ---- compound assignment ------------------------------------------
+ * `x op= v` is desugared to `x = x op v`, which evaluates the TARGET
+ * twice. That is only sound when re-evaluating it cannot be observed,
+ * so the target is restricted to shapes built purely from names,
+ * constant indices and field access. `xs[next()] += 1` is rejected with
+ * a message telling the caller to write it out, rather than silently
+ * calling next() twice.
+ *
+ * The target is deep-copied for the right-hand side: sharing one Expr
+ * node in two places in the tree would have later passes annotate the
+ * same node twice. */
+
+/* Builtins with no side effect, so calling one twice is unobservable.
+ * Deliberately a short allowlist rather than "builtins in general": the
+ * builtin table also holds push/pop/del/chan_send/println, every one of
+ * which WOULD be observable if the desugaring ran it twice. Adding to
+ * this list is safe only for functions that both mutate nothing and
+ * print nothing. `len` is here because `xs[len(xs) - 1] += 1` is an
+ * everyday idiom that is otherwise rejected for no real reason. */
+static int is_pure_builtin_call(const char *name) {
+    return !strcmp(name, "len") || !strcmp(name, "has");
+}
+static int compound_target_ok(Expr *e) {
+    switch (e->kind) {
+    case EX_IDENT: return 1;
+    /* every literal form: constant, so re-evaluating costs nothing and
+     * observes nothing. m["a"] += 1 and xs[0] |= 2 both land here. */
+    case EX_INT: case EX_FLOAT: case EX_STRING: case EX_BYTES: case EX_BOOL:
+        return 1;
+    case EX_FIELD: return compound_target_ok(e->as.field.base);
+    case EX_INDEX:
+        return compound_target_ok(e->as.index.base) &&
+               compound_target_ok(e->as.index.index);
+    case EX_UNARY:
+        /* every unary form here is pure: deref, negate, not, complement */
+        return compound_target_ok(e->as.unary.operand);
+    case EX_BINARY:
+        /* arithmetic on simple parts is pure too, so xs[i + 1] and
+         * xs[n - 1] are fine; a call anywhere inside still fails,
+         * because EX_CALL is not in this list. */
+        return compound_target_ok(e->as.binary.lhs) &&
+               compound_target_ok(e->as.binary.rhs);
+    case EX_CAST:
+        return compound_target_ok(e->as.cast.operand);
+    case EX_CALL:
+        /* the callee must be pure AND every argument must be too, so
+         * len(f()) is still rejected */
+        if (!is_pure_builtin_call(e->as.call.name))
+            return 0;
+        for (int i = 0; i < e->as.call.nargs; i++)
+            if (!compound_target_ok(e->as.call.args[i]))
+                return 0;
+        return 1;
+    default: return 0;
+    }
+}
+
+static Expr *clone_simple_expr(Parser *p, Expr *e) {
+    Expr *c = new_expr(p, e->kind, e->line);
+    switch (e->kind) {
+    case EX_IDENT:
+        c->as.ident.name = xstrdup(e->as.ident.name);
+        break;
+    case EX_INT:
+        c->as.int_lit.value = e->as.int_lit.value;
+        c->as.int_lit.big_u64 = e->as.int_lit.big_u64;
+        break;
+    case EX_FLOAT:
+        c->as.float_lit.value = e->as.float_lit.value;
+        break;
+    case EX_BOOL:
+        c->as.bool_lit.value = e->as.bool_lit.value;
+        break;
+    case EX_STRING:
+        c->as.str_lit.value = xstrdup(e->as.str_lit.value);
+        break;
+    case EX_BYTES: {
+        c->as.bytes_lit.len = e->as.bytes_lit.len;
+        unsigned char *d = (unsigned char *)xmalloc(
+            (size_t)(e->as.bytes_lit.len ? e->as.bytes_lit.len : 1));
+        memcpy(d, e->as.bytes_lit.data, (size_t)e->as.bytes_lit.len);
+        c->as.bytes_lit.data = d;
+        break; }
+    case EX_FIELD:
+        c->as.field.base = clone_simple_expr(p, e->as.field.base);
+        c->as.field.name = xstrdup(e->as.field.name);
+        break;
+    case EX_INDEX:
+        c->as.index.base = clone_simple_expr(p, e->as.index.base);
+        c->as.index.index = clone_simple_expr(p, e->as.index.index);
+        break;
+    case EX_UNARY:
+        c->as.unary.op = xstrdup(e->as.unary.op);
+        c->as.unary.operand = clone_simple_expr(p, e->as.unary.operand);
+        break;
+    case EX_BINARY:
+        c->as.binary.op = xstrdup(e->as.binary.op);
+        c->as.binary.lhs = clone_simple_expr(p, e->as.binary.lhs);
+        c->as.binary.rhs = clone_simple_expr(p, e->as.binary.rhs);
+        break;
+    case EX_CAST:
+        c->as.cast.ty = xstrdup(e->as.cast.ty);
+        c->as.cast.operand = clone_simple_expr(p, e->as.cast.operand);
+        break;
+    case EX_CALL: {
+        c->as.call.name = xstrdup(e->as.call.name);
+        c->as.call.nargs = e->as.call.nargs;
+        c->as.call.args = e->as.call.nargs
+            ? (Expr **)xmalloc(sizeof(Expr *) * (size_t)e->as.call.nargs)
+            : NULL;
+        for (int i = 0; i < e->as.call.nargs; i++)
+            c->as.call.args[i] = clone_simple_expr(p, e->as.call.args[i]);
+        break; }
+    default:
+        break;
+    }
+    return c;
+}
+
+/* The binary operator a compound-assignment token stands for, or NULL. */
+static const char *compound_op_text(TokenType t) {
+    switch (t) {
+    case T_PLUSEQ:    return "+";
+    case T_MINUSEQ:   return "-";
+    case T_STAREQ:    return "*";
+    case T_SLASHEQ:   return "/";
+    case T_PERCENTEQ: return "%";
+    case T_AMPEQ:     return "&";
+    case T_PIPEEQ:    return "|";
+    case T_CARETEQ:   return "^";
+    case T_SHLEQ:     return "<<";
+    case T_SHREQ:     return ">>";
+    default:          return NULL;
+    }
+}
+
 static Stmt *parse_statement(Parser *p) {
     Token *tk = peek(p);
     switch (tk->type) {
@@ -1092,12 +1282,29 @@ static Stmt *parse_statement(Parser *p) {
     default: {
         /* expression or assignment statement */
         Expr *expr = parse_expression(p);
-        if (match(p, T_ASSIGN)) {
+        const char *cop = compound_op_text(peek(p)->type);
+        if (match(p, T_ASSIGN) || cop) {
             if (expr->kind != EX_IDENT && expr->kind != EX_INDEX &&
                 expr->kind != EX_FIELD &&
                 !(expr->kind == EX_UNARY && !strcmp(expr->as.unary.op, "*")))
                 parse_error(tk, "invalid assignment target");
-            Expr *value = parse_expression(p);
+            Expr *value;
+            if (cop) {
+                Token *optk = advance(p);
+                if (!compound_target_ok(expr))
+                    parse_error(optk,
+                                "compound assignment evaluates its target "
+                                "twice, so the target may not contain a "
+                                "side-effecting call (only 'len' and 'has' "
+                                "are allowed); write 'x = x <op> v' with the "
+                                "call hoisted into a variable");
+                Expr *rhs = parse_expression(p);
+                value = make_binary(p, xstrdup(cop),
+                                    clone_simple_expr(p, expr), rhs,
+                                    optk->line);
+            } else {
+                value = parse_expression(p);
+            }
             expect(p, T_SEMI, "';'");
             Stmt *s = new_stmt(ST_ASSIGN, tk->line);
             s->as.assign.target = expr;
