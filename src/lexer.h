@@ -86,6 +86,17 @@ typedef enum {
     T_TILDE,
     T_SHL,
     T_SHR,
+    /* compound assignment: desugared by the parser into `x = x OP v` */
+    T_PLUSEQ,
+    T_MINUSEQ,
+    T_STAREQ,
+    T_SLASHEQ,
+    T_PERCENTEQ,
+    T_AMPEQ,
+    T_PIPEEQ,
+    T_CARETEQ,
+    T_SHLEQ,
+    T_SHREQ,
     T_ANDAND,
     T_OROR,
     T_QQ, /* '??' null-coalescing */

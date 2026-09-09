@@ -48,6 +48,13 @@ let ok = true;           // bool
 
 // arithmetic: + - * / %   (int/int is integer division)
 // bitwise:    & | ^ ~ << >>   (integers only; see below)
+
+// compound assignment for every binary operator above
+let mut_acc = 0;
+mut_acc += 5;
+mut_acc |= 1 << 3;
+xs[i] *= 2;
+p.count += 1;
 println(x + y);
 println(x / 2.0);        // mixing int and float promotes to float
 
@@ -225,6 +232,13 @@ Three things differ from C, all deliberately:
   count came off the network. When the count is a constant already in
   range (`b[0] << 16`, the normal case) the check is compiled out
   entirely, so protocol code pays nothing for it.
+
+**Compound assignment** exists for every one of these: `+= -= *= /= %=`
+and `&= |= ^= <<= >>=`. `x op= v` means `x = x op v`, which evaluates the
+target twice, so the target may not contain a function call —
+`xs[next()] += 1` is a compile error telling you to hoist the call.
+Names, fields, and indices computed from them (`xs[i + 1] |= m`) are all
+fine, since re-evaluating those observes nothing.
 
 `>>` follows the operand's signedness: arithmetic (sign-preserving) on a
 signed type, logical (zero-filling) on an unsigned one, exactly as in C.
