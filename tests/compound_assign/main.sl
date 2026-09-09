@@ -39,6 +39,13 @@ xs[i] *= 5;       fails = fails + ck("index-name", xs[1], 10);
 xs[i + 1] <<= 4;  fails = fails + ck("index-expr", xs[2], 48);
 xs[3] |= 0b1000;  fails = fails + ck("index-bin-literal", xs[3], 12);
 
+// ---- pure builtins are allowed in the index ----------------------
+// len() and has() mutate nothing, so evaluating them twice is
+// unobservable; xs[len(xs) - 1] += 1 is an everyday idiom.
+let ys = [1, 2, 3, 4];
+ys[len(ys) - 1] += 10;   fails = fails + ck("len-index", ys[3], 14);
+ys[len(ys) - 2] <<= 3;   fails = fails + ck("len-index-shl", ys[2], 24);
+
 // ---- map values ---------------------------------------------------
 let m: map[str]int = {"a": 1, "b": 2};
 m["a"] += 41;     fails = fails + ck("map-str-key", m["a"], 42);

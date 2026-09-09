@@ -1119,6 +1119,17 @@ static Stmt *parse_unsafe_stmt(Parser *p) {
  * The target is deep-copied for the right-hand side: sharing one Expr
  * node in two places in the tree would have later passes annotate the
  * same node twice. */
+
+/* Builtins with no side effect, so calling one twice is unobservable.
+ * Deliberately a short allowlist rather than "builtins in general": the
+ * builtin table also holds push/pop/del/chan_send/println, every one of
+ * which WOULD be observable if the desugaring ran it twice. Adding to
+ * this list is safe only for functions that both mutate nothing and
+ * print nothing. `len` is here because `xs[len(xs) - 1] += 1` is an
+ * everyday idiom that is otherwise rejected for no real reason. */
+static int is_pure_builtin_call(const char *name) {
+    return !strcmp(name, "len") || !strcmp(name, "has");
+}
 static int compound_target_ok(Expr *e) {
     switch (e->kind) {
     case EX_IDENT: return 1;
@@ -1141,6 +1152,15 @@ static int compound_target_ok(Expr *e) {
                compound_target_ok(e->as.binary.rhs);
     case EX_CAST:
         return compound_target_ok(e->as.cast.operand);
+    case EX_CALL:
+        /* the callee must be pure AND every argument must be too, so
+         * len(f()) is still rejected */
+        if (!is_pure_builtin_call(e->as.call.name))
+            return 0;
+        for (int i = 0; i < e->as.call.nargs; i++)
+            if (!compound_target_ok(e->as.call.args[i]))
+                return 0;
+        return 1;
     default: return 0;
     }
 }
@@ -1192,6 +1212,15 @@ static Expr *clone_simple_expr(Parser *p, Expr *e) {
         c->as.cast.ty = xstrdup(e->as.cast.ty);
         c->as.cast.operand = clone_simple_expr(p, e->as.cast.operand);
         break;
+    case EX_CALL: {
+        c->as.call.name = xstrdup(e->as.call.name);
+        c->as.call.nargs = e->as.call.nargs;
+        c->as.call.args = e->as.call.nargs
+            ? (Expr **)xmalloc(sizeof(Expr *) * (size_t)e->as.call.nargs)
+            : NULL;
+        for (int i = 0; i < e->as.call.nargs; i++)
+            c->as.call.args[i] = clone_simple_expr(p, e->as.call.args[i]);
+        break; }
     default:
         break;
     }
@@ -1264,10 +1293,11 @@ static Stmt *parse_statement(Parser *p) {
                 Token *optk = advance(p);
                 if (!compound_target_ok(expr))
                     parse_error(optk,
-                                "compound assignment needs a target with no "
-                                "function call in it, because 'x op= v' "
-                                "evaluates x twice; write 'x = x <op> v' "
-                                "with the call hoisted into a variable");
+                                "compound assignment evaluates its target "
+                                "twice, so the target may not contain a "
+                                "side-effecting call (only 'len' and 'has' "
+                                "are allowed); write 'x = x <op> v' with the "
+                                "call hoisted into a variable");
                 Expr *rhs = parse_expression(p);
                 value = make_binary(p, xstrdup(cop),
                                     clone_simple_expr(p, expr), rhs,

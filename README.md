@@ -235,10 +235,11 @@ Three things differ from C, all deliberately:
 
 **Compound assignment** exists for every one of these: `+= -= *= /= %=`
 and `&= |= ^= <<= >>=`. `x op= v` means `x = x op v`, which evaluates the
-target twice, so the target may not contain a function call —
+target twice, so the target may not contain a **side-effecting** call —
 `xs[next()] += 1` is a compile error telling you to hoist the call.
-Names, fields, and indices computed from them (`xs[i + 1] |= m`) are all
-fine, since re-evaluating those observes nothing.
+Names, fields, indices computed from them (`xs[i + 1] |= m`), and the
+pure builtins `len` and `has` (`xs[len(xs) - 1] += 1`) are all fine,
+since re-evaluating those observes nothing.
 
 `>>` follows the operand's signedness: arithmetic (sign-preserving) on a
 signed type, logical (zero-filling) on an unsigned one, exactly as in C.
