@@ -1,12 +1,13 @@
 #include "common.h"
 #include "lexer.h"
 #include <errno.h>
+#include <string.h>
 
 #include <ctype.h>
 
 void lexer_init(Lexer *lx, const char *src) {
+    memset(lx, 0, sizeof(*lx));
     lx->src = src;
-    lx->pos = 0;
     lx->line = 1;
 }
 
@@ -43,13 +44,16 @@ static int hexval(char c) {
     return -1;
 }
 
+/* Zero the whole Token, then set what this call cares about.
+ *
+ * Field-by-field initialisation is how a field gets forgotten: this
+ * function never set byte_val/byte_len at all, and when big_u64 was
+ * added it had to be remembered here by hand. A memset cannot forget,
+ * so adding a field to Token is now safe by construction. */
 static Token make_token(TokenType type, int line) {
     Token t;
+    memset(&t, 0, sizeof(t));
     t.type = type;
-    t.text = NULL;
-    t.int_val = 0;
-    t.big_u64 = 0;
-    t.float_val = 0.0;
     t.line = line;
     return t;
 }

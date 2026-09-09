@@ -11,6 +11,13 @@ typedef struct {
     int count;
     int fn_body; /* inside a function body: trailing expr = implicit return */
     int in_unsafe;
+    /* A statement that must be emitted immediately BEFORE the one
+     * parse_statement is about to return. Used by compound assignment to
+     * hoist a side-effecting index into its own `let`. It has to land in
+     * the enclosing block as a sibling, not nested inside the assignment:
+     * liveness/escape/move all assume a `let` appears directly in a
+     * Block ("internal: ST_LET reached live_stmt directly"). */
+    Stmt *pending;
 } Parser;
 
 static void parse_error(Token *tk, const char *fmt, ...) {
@@ -71,9 +78,7 @@ static Stmt *new_stmt(StmtKind kind, int line) {
 
 static Block *new_block(void) {
     Block *b = (Block *)xmalloc(sizeof(Block));
-    b->stmts = NULL;
-    b->count = 0;
-    b->cap = 0;
+    memset(b, 0, sizeof(Block));
     return b;
 }
 
@@ -605,10 +610,9 @@ static Expr *parse_expr_source(const char *src, int line, int in_unsafe) {
     }
 
     Parser sub;
+    memset(&sub, 0, sizeof(sub));
     sub.toks = toks;
-    sub.pos = 0;
     sub.count = n;
-    sub.fn_body = 0;
     sub.in_unsafe = in_unsafe;
 
     Expr *e = parse_expression(&sub);
@@ -825,6 +829,22 @@ static Stmt *parse_statement(Parser *p);
 static Stmt *parse_struct_decl(Parser *p, int is_pub, int is_gc);
 static Stmt *parse_impl_decl(Parser *p);
 
+/* Parse one statement into `blk`, draining any statement the parser
+ * hoisted ahead of it (compound assignment's index temporary).
+ *
+ * Every site that collects statements MUST go through this. Leaving the
+ * drain to each caller is how the hoisted `let` ends up either dropped
+ * or emitted after the statement that reads it -- and the `pub` branch
+ * in parse_program did exactly that until this helper existed. */
+static void parse_into_block(Parser *p, Block *blk) {
+    Stmt *st = parse_statement(p);
+    if (p->pending) {
+        block_push(blk, p->pending);
+        p->pending = NULL;
+    }
+    block_push(blk, st);
+}
+
 static Block *parse_block(Parser *p, int fn_body) {
     expect(p, T_LBRACE, "'{'");
     Block *blk = new_block();
@@ -833,7 +853,7 @@ static Block *parse_block(Parser *p, int fn_body) {
     while (!check(p, T_RBRACE)) {
         if (check(p, T_EOF))
             parse_error(peek(p), "unexpected end of file inside block");
-        block_push(blk, parse_statement(p));
+        parse_into_block(p, blk);
     }
     p->fn_body = saved;
     expect(p, T_RBRACE, "'}'");
@@ -1130,6 +1150,32 @@ static Stmt *parse_unsafe_stmt(Parser *p) {
 static int is_pure_builtin_call(const char *name) {
     return !strcmp(name, "len") || !strcmp(name, "has");
 }
+
+/* Does this expression need hoisting before it can be mentioned twice? */
+static int expr_needs_hoist(Expr *e) {
+    switch (e->kind) {
+    case EX_IDENT: case EX_INT: case EX_FLOAT:
+    case EX_STRING: case EX_BYTES: case EX_BOOL:
+        return 0;
+    case EX_FIELD:  return expr_needs_hoist(e->as.field.base);
+    case EX_INDEX:  return expr_needs_hoist(e->as.index.base) ||
+                           expr_needs_hoist(e->as.index.index);
+    case EX_UNARY:  return expr_needs_hoist(e->as.unary.operand);
+    case EX_CAST:   return expr_needs_hoist(e->as.cast.operand);
+    case EX_BINARY: return expr_needs_hoist(e->as.binary.lhs) ||
+                           expr_needs_hoist(e->as.binary.rhs);
+    case EX_CALL:
+        if (!is_pure_builtin_call(e->as.call.name))
+            return 1;
+        for (int i = 0; i < e->as.call.nargs; i++)
+            if (expr_needs_hoist(e->as.call.args[i]))
+                return 1;
+        return 0;
+    default: return 1;
+    }
+}
+
+static int sl_ca_tmp_seq = 0;
 static int compound_target_ok(Expr *e) {
     switch (e->kind) {
     case EX_IDENT: return 1;
@@ -1139,8 +1185,11 @@ static int compound_target_ok(Expr *e) {
         return 1;
     case EX_FIELD: return compound_target_ok(e->as.field.base);
     case EX_INDEX:
-        return compound_target_ok(e->as.index.base) &&
-               compound_target_ok(e->as.index.index);
+        /* The INDEX may be anything -- an impure one is hoisted into a
+         * temporary below, so it runs once. Only the base chain has to
+         * be re-evaluable, because hoisting a base would copy it, and
+         * for a value-type struct that would mutate the copy. */
+        return compound_target_ok(e->as.index.base);
     case EX_UNARY:
         /* every unary form here is pure: deref, negate, not, complement */
         return compound_target_ok(e->as.unary.operand);
@@ -1289,15 +1338,36 @@ static Stmt *parse_statement(Parser *p) {
                 !(expr->kind == EX_UNARY && !strcmp(expr->as.unary.op, "*")))
                 parse_error(tk, "invalid assignment target");
             Expr *value;
+            Stmt *pre = NULL;
             if (cop) {
                 Token *optk = advance(p);
                 if (!compound_target_ok(expr))
                     parse_error(optk,
-                                "compound assignment evaluates its target "
-                                "twice, so the target may not contain a "
-                                "side-effecting call (only 'len' and 'has' "
-                                "are allowed); write 'x = x <op> v' with the "
-                                "call hoisted into a variable");
+                                "compound assignment names its target "
+                                "twice, so the value being indexed or "
+                                "accessed must be a name, field or index "
+                                "chain -- not a call. The INDEX may be "
+                                "anything (it is hoisted and evaluated "
+                                "once); it is the base that must be "
+                                "re-nameable. Write 'x = x <op> v' instead");
+                /* An index with a side effect (xs[pop(xs)] += 1) is hoisted
+                 * into its own `let` so it runs exactly once, and BOTH
+                 * mentions of the target then read that temporary. */
+                if (expr->kind == EX_INDEX &&
+                    expr_needs_hoist(expr->as.index.index)) {
+                    char *tmp = xasprintf("__ca_%d", sl_ca_tmp_seq++);
+                    pre = new_stmt(ST_LET, optk->line);
+                    pre->as.let.name = tmp;
+                    pre->as.let.type_ann = NULL;
+                    pre->as.let.init = expr->as.index.index;
+                    pre->as.let.is_pub = 0;
+                    pre->as.let.stack = 0;
+                    Expr *ref = new_expr(p, EX_IDENT, optk->line);
+                    ref->as.ident.name = xstrdup(tmp);
+                    expr->as.index.index = ref;
+                    p->pending = pre;   /* emitted as a sibling, see Parser */
+                    pre = NULL;
+                }
                 Expr *rhs = parse_expression(p);
                 value = make_binary(p, xstrdup(cop),
                                     clone_simple_expr(p, expr), rhs,
@@ -1460,12 +1530,14 @@ static void parse_link(Parser *p, Program *prog) {
 }
 
 Program *parse_program(Token *tokens, int ntokens) {
+    /* memset, not field-by-field: a Parser field added later would
+     * otherwise start as stack garbage. That is not hypothetical -- the
+     * `pending` field below was added field-by-field, missed here, and
+     * segfaulted slangc by block_push-ing an uninitialised pointer. */
     Parser p;
+    memset(&p, 0, sizeof(p));
     p.toks = tokens;
-    p.pos = 0;
     p.count = ntokens;
-    p.fn_body = 0;
-    p.in_unsafe = 0;
 
     Program *prog = (Program *)xmalloc(sizeof(Program));
     memset(prog, 0, sizeof(Program));
@@ -1541,6 +1613,9 @@ Program *parse_program(Token *tokens, int ntokens) {
 
         if (is_pub) {
             Stmt *s = parse_statement(&p);
+            if (p.pending)
+                parse_error(peek(&p),
+                            "'pub' cannot precede a compound assignment");
             if (s->kind != ST_LET)
                 parse_error(peek(&p),
                             "'pub' can only precede a function, struct, "
@@ -1550,7 +1625,10 @@ Program *parse_program(Token *tokens, int ntokens) {
             continue;
         }
 
-        block_push(prog->main_body, parse_statement(&p));
+        parse_into_block(&p, prog->main_body);
     }
+    if (p.pending)
+        parse_error(peek(&p),
+                    "internal: a hoisted statement was never emitted");
     return prog;
 }

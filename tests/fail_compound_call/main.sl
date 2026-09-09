@@ -1,2 +1,2 @@
-let xs = [1,2,3];
-xs[pop(xs)] += 1;
+fn f() -> [int] { return [1, 2]; }
+f()[0] += 1;

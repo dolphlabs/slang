@@ -235,11 +235,11 @@ Three things differ from C, all deliberately:
 
 **Compound assignment** exists for every one of these: `+= -= *= /= %=`
 and `&= |= ^= <<= >>=`. `x op= v` means `x = x op v`, which evaluates the
-target twice, so the target may not contain a **side-effecting** call —
-`xs[next()] += 1` is a compile error telling you to hoist the call.
-Names, fields, indices computed from them (`xs[i + 1] |= m`), and the
-pure builtins `len` and `has` (`xs[len(xs) - 1] += 1`) are all fine,
-since re-evaluating those observes nothing.
+target twice, so a side-effecting **index** is hoisted into a temporary
+first and runs exactly once — `xs[pop(q)] += 1` pops once, not twice.
+Only the value being indexed has to be re-nameable: `f()[0] += 1` is a
+compile error, since naming `f()` twice would call it twice, and hoisting
+it would mutate a copy for a value-type struct. Write that one out.
 
 `>>` follows the operand's signedness: arithmetic (sign-preserving) on a
 signed type, logical (zero-filling) on an unsigned one, exactly as in C.

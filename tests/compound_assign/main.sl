@@ -6,6 +6,11 @@
 
 struct Counter { hits: int, mask: int }
 
+fn bump(c: [int]) -> int {
+    c[0] = c[0] + 1;
+    return 0;
+}
+
 fn ck(name: str, got: int, want: int) -> int {
     if got != want {
         println("FAIL " + name + ": got " + to_str(got) + " want " + to_str(want));
@@ -39,12 +44,37 @@ xs[i] *= 5;       fails = fails + ck("index-name", xs[1], 10);
 xs[i + 1] <<= 4;  fails = fails + ck("index-expr", xs[2], 48);
 xs[3] |= 0b1000;  fails = fails + ck("index-bin-literal", xs[3], 12);
 
-// ---- pure builtins are allowed in the index ----------------------
-// len() and has() mutate nothing, so evaluating them twice is
-// unobservable; xs[len(xs) - 1] += 1 is an everyday idiom.
+// ---- pure builtins in the index (no temporary needed) ------------
 let ys = [1, 2, 3, 4];
 ys[len(ys) - 1] += 10;   fails = fails + ck("len-index", ys[3], 14);
 ys[len(ys) - 2] <<= 3;   fails = fails + ck("len-index-shl", ys[2], 24);
+
+// ---- a SIDE-EFFECTING index runs exactly once --------------------
+// The desugaring names the target twice, so an impure index is hoisted
+// into a temporary first. If it were not, every call below would run
+// twice and these counts would be wrong.
+let popped = [2];
+let ps = [10, 20, 30];
+ps[pop(popped)] += 5;
+fails = fails + ck("impure-index-value", ps[2], 35);
+fails = fails + ck("impure-index-once", len(popped), 0);
+
+let calls = [0];
+let qs = [100, 200];
+qs[bump(calls)] += 7;
+fails = fails + ck("counted-index-value", qs[0], 107);
+fails = fails + ck("counted-index-once", calls[0], 1);
+
+// and once per iteration inside a loop, with a fresh temporary
+let ws = [0, 0, 0];
+let src = [2, 1, 0];
+for step in 0..3 {
+    ws[pop(src)] += 1;
+}
+fails = fails + ck("loop-impure-0", ws[0], 1);
+fails = fails + ck("loop-impure-1", ws[1], 1);
+fails = fails + ck("loop-impure-2", ws[2], 1);
+fails = fails + ck("loop-impure-drained", len(src), 0);
 
 // ---- map values ---------------------------------------------------
 let m: map[str]int = {"a": 1, "b": 2};
