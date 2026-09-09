@@ -27,7 +27,8 @@ PKG_SRCS = src/codegen/pkg_time/sigs.c \
           src/codegen/pkg_fs/sigs.c \
           src/codegen/pkg_log/sigs.c \
           src/codegen/pkg_crypto/sigs.c \
-          src/codegen/pkg_sql/sigs.c
+          src/codegen/pkg_sql/sigs.c \
+          src/codegen/pkg_regex/sigs.c
 
 SRCS = src/main.c src/loader.c src/lexer.c src/parser.c src/rtpath.c \
       src/project.c \
@@ -41,12 +42,13 @@ HDRS = src/common.h src/lexer.h src/ast.h src/parser.h src/codegen.h \
       src/codegen/pkg_fs/pkg_fs.h \
       src/codegen/pkg_log/pkg_log.h \
       src/codegen/pkg_crypto/pkg_crypto.h \
-      src/codegen/pkg_sql/pkg_sql.h
+      src/codegen/pkg_sql/pkg_sql.h \
+      src/codegen/pkg_regex/pkg_regex.h
 RT_SRCS = runtime/sl_core.c runtime/sl_gc.c runtime/sl_containers.c \
          runtime/sl_sched.c runtime/sl_pool.c runtime/sl_time.c \
          runtime/sl_net.c runtime/sl_tls.c runtime/sl_json.c \
          runtime/sl_proc.c runtime/sl_fs.c runtime/sl_log.c \
-         runtime/sl_crypto.c runtime/sl_sql.c
+         runtime/sl_crypto.c runtime/sl_sql.c runtime/sl_regex.c
 
 slangc: $(SRCS) $(HDRS) $(RT_SRCS)
 	$(CC) $(CFLAGS) -o slangc $(SRCS)

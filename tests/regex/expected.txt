@@ -1,0 +1,7 @@
+err: missing ) at offset 9
+err: reversed repetition range at offset 1
+err: nothing to repeat at offset 0
+err: unsupported group syntax (only (?:...) is allowed; lookaround is not supported by this engine) at offset 1
+err: reversed range in class at offset 4
+err: pattern nested too deeply at offset 303
+all regex checks passed
