@@ -400,7 +400,22 @@ Token lexer_next(Lexer *lx) {
         return t;
     }
 
+    /* three-char operators -- must precede the two-char table below,
+     * or "<<=" would lex as '<<' followed by a stray '=' */
+    if (c == '<' && src[lx->pos + 1] == '<' && src[lx->pos + 2] == '=')
+        { lx->pos += 3; return make_token(T_SHLEQ, line); }
+    if (c == '>' && src[lx->pos + 1] == '>' && src[lx->pos + 2] == '=')
+        { lx->pos += 3; return make_token(T_SHREQ, line); }
+
     /* two-char operators */
+    if (c == '+' && src[lx->pos + 1] == '=') { lx->pos += 2; return make_token(T_PLUSEQ, line); }
+    if (c == '-' && src[lx->pos + 1] == '=') { lx->pos += 2; return make_token(T_MINUSEQ, line); }
+    if (c == '*' && src[lx->pos + 1] == '=') { lx->pos += 2; return make_token(T_STAREQ, line); }
+    if (c == '/' && src[lx->pos + 1] == '=') { lx->pos += 2; return make_token(T_SLASHEQ, line); }
+    if (c == '%' && src[lx->pos + 1] == '=') { lx->pos += 2; return make_token(T_PERCENTEQ, line); }
+    if (c == '&' && src[lx->pos + 1] == '=') { lx->pos += 2; return make_token(T_AMPEQ, line); }
+    if (c == '|' && src[lx->pos + 1] == '=') { lx->pos += 2; return make_token(T_PIPEEQ, line); }
+    if (c == '^' && src[lx->pos + 1] == '=') { lx->pos += 2; return make_token(T_CARETEQ, line); }
     if (c == '=' && src[lx->pos + 1] == '=') { lx->pos += 2; return make_token(T_EQEQ, line); }
     if (c == '!' && src[lx->pos + 1] == '=') { lx->pos += 2; return make_token(T_BANGEQ, line); }
     if (c == '<' && src[lx->pos + 1] == '=') { lx->pos += 2; return make_token(T_LTE, line); }
@@ -479,6 +494,16 @@ const char *token_type_name(TokenType t) {
     case T_TILDE:    return "'~'";
     case T_SHL:      return "'<<'";
     case T_SHR:      return "'>>'";
+    case T_PLUSEQ:   return "'+='";
+    case T_MINUSEQ:  return "'-='";
+    case T_STAREQ:   return "'*='";
+    case T_SLASHEQ:  return "'/='";
+    case T_PERCENTEQ:return "'%='";
+    case T_AMPEQ:    return "'&='";
+    case T_PIPEEQ:   return "'|='";
+    case T_CARETEQ:  return "'^='";
+    case T_SHLEQ:    return "'<<='";
+    case T_SHREQ:    return "'>>='";
     case T_KW_IMPL:  return "'impl'";
     case T_KW_EXTERN:return "'extern'";
     case T_KW_LINK:  return "'link'";
