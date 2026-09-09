@@ -1476,15 +1476,55 @@ char *gen_expr(CG *cg, Expr *e) {
             return gen_comparison(cg, e, lt, rt);
         if (!strcmp(op, "+") && (is_str(lt) || is_str(rt) || is_fault(lt) || is_fault(rt)))
             return gen_string_concat(cg, e, lt, rt);
+        /* bytes and list concatenation sequence their operands for the
+         * same two reasons gen_string_concat above does, and skipping it
+         * here was a real bug, not a missing nicety:
+         *
+         *   1. Embedded directly as sibling arguments, C leaves their
+         *      relative evaluation order unspecified, while Tier 10's
+         *      liveness pass assumes left to right.
+         *   2. More seriously, when the RIGHT operand contains a call,
+         *      liveness marks the LEFT one live across it and
+         *      wrap_safepoint then looks for the temp holding it. With
+         *      no temp registered there was nothing to root, and
+         *      `b"a" + b"b" + f()` died on "internal error:
+         *      liveness-pending value has no registered temp" -- a
+         *      compiler crash on ordinary protocol-building code.
+         *
+         * Generated and sequenced one at a time, not both-then-sequence:
+         * a nested call in the right operand needs the left one's temp
+         * to exist already. */
         if (!strcmp(op, "+") && is_bytes(lt) && is_bytes(rt)) {
+            const char *bc = ctype_of(cg, "bytes");
+            StrBuf prelude;
+            sb_init(&prelude);
+            int seq_id = cg->tmp_id++;
+            int ambient_mark = cg->ambient_count;
             char *a = gen_expr(cg, e->as.binary.lhs);
+            a = sequence_one(cg, seq_id, 0, bc, "bytes", a,
+                             e->as.binary.lhs, &prelude);
             char *b = gen_expr(cg, e->as.binary.rhs);
-            return xasprintf("sl_bytes_concat(%s, %s)", a, b);
+            b = sequence_one(cg, seq_id, 1, bc, "bytes", b,
+                             e->as.binary.rhs, &prelude);
+            cg->ambient_count = ambient_mark;
+            return xasprintf("({ %ssl_bytes_concat(%s, %s); })",
+                             prelude.data, a, b);
         }
         if (!strcmp(op, "+") && is_arr(lt) && is_arr(rt)) {
+            const char *ac = ctype_of(cg, lt);
+            StrBuf prelude;
+            sb_init(&prelude);
+            int seq_id = cg->tmp_id++;
+            int ambient_mark = cg->ambient_count;
             char *a = gen_expr(cg, e->as.binary.lhs);
+            a = sequence_one(cg, seq_id, 0, ac, lt, a,
+                             e->as.binary.lhs, &prelude);
             char *b = gen_expr(cg, e->as.binary.rhs);
-            return xasprintf("sl_arr_concat(%s, %s)", a, b);
+            b = sequence_one(cg, seq_id, 1, ac, lt, b,
+                             e->as.binary.rhs, &prelude);
+            cg->ambient_count = ambient_mark;
+            return xasprintf("({ %ssl_arr_concat(%s, %s); })",
+                             prelude.data, a, b);
         }
         if ((!strcmp(op, "+") || !strcmp(op, "-")) &&
             ((type_is_raw_ptr(lt) && is_int(rt)) ||
