@@ -198,16 +198,16 @@ pub fn parse(raw: bytes) -> result[Request, str] {
     }
 
     let hr = parse_headers(raw, line_end + 2, sep);
-    guard let headers = hr else {
-        return err("malformed header");
+    guard let headers = hr else let e = err_of(hr) {
+        return err("header: " + e);
     }
     if rejects_transfer(headers) {
         return err("chunked encoding is not supported");
     }
 
     let nr = body_need(headers, sep);
-    guard let need = nr else {
-        return err("bad Content-Length");
+    guard let need = nr else let e = err_of(nr) {
+        return err("body: " + e);
     }
     if need > len(raw) {
         return err("truncated body");
@@ -278,7 +278,7 @@ pub fn wants_close(r: Request) -> bool {
     return lower_ascii(v) == "close";
 }
 
-pub fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Incoming, fault] {
+pub fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Incoming, str] {
     while true {
         if filled > 0 {
             let raw = copy_wire(buf, filled);
@@ -286,26 +286,26 @@ pub fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Inc
             if sep >= 0 {
                 let line_end = find_crlf(raw, 0);
                 if line_end < 0 {
-                    return err(fault_io());
+                    return err("malformed request line");
                 }
                 let hr = parse_headers(raw, line_end + 2, sep);
-                guard let headers = hr else {
-                    return err(fault_io());
+                guard let headers = hr else let e = err_of(hr) {
+                    return err("header: " + e);
                 }
                 if rejects_transfer(headers) {
-                    return err(fault_io());
+                    return err("chunked encoding is not supported");
                 }
                 let nr = body_need(headers, sep);
-                guard let need = nr else {
-                    return err(fault_io());
+                guard let need = nr else let e = err_of(nr) {
+                    return err("body: " + e);
                 }
                 if need > len(buf) {
-                    return err(fault_io());
+                    return err("request too large for buffer");
                 }
                 if filled >= need {
                     let parsed = parse(raw);
-                    guard let req = parsed else {
-                        return err(fault_io());
+                    guard let req = parsed else let e = err_of(parsed) {
+                        return err(e);
                     }
                     let rest = compact_wire(buf, need, filled);
                     return ok(Incoming { req: req, filled: rest });
@@ -313,18 +313,18 @@ pub fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Inc
             }
         }
         if filled >= len(buf) {
-            return err(fault_io());
+            return err("request too large for buffer");
         }
         let tail = buf[filled..];
         let rr = c.recv(tail, deadline);
-        guard let n = rr else {
-            return err(recv_fault(deadline));
+        guard let n = rr else let e = err_of(rr) {
+            return err("recv: " + to_str(e));
         }
         if n == 0 {
             if filled == 0 {
-                return err(fault_closed());
+                return err("connection closed");
             }
-            return err(fault_io());
+            return err("truncated request");
         }
         filled = filled + n;
     }

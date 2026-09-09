@@ -321,6 +321,27 @@ argument (one C struct per instantiation actually used). Constructing
 `none`/`err(...)` without enough context to infer the missing type
 parameter is a compile error.
 
+#### Error model: `opt` vs `result` vs `fault`
+
+- `opt[T]` — the value may legitimately be absent (`none`). Lookup
+  misses, optional config, end of a drained channel. Absence is not
+  failure; `??` supplies the default.
+- `result[T, E]` — the operation can fail with a *descriptive* error
+  (`err(e)`). Parsing, validation, anything where the caller needs to
+  know *why*. `E` is usually `str`; `guard let x = r else let e =
+  err_of(r)` keeps the reason visible.
+- `fault` — the operation hit the *environment*: timeout, reset,
+  closed connection, refused dial, IO error. A closed 5-kind enum
+  (`fault_timeout` / `fault_reset` / `fault_closed` / `fault_io` /
+  `fault_refused`), comparable with `==` and convertible with
+  `to_str` / `+`. Use it when the failure is about the world, not
+  the data.
+
+Rule of thumb: absent data is `opt`, bad data is `result[_, str]`,
+bad world is `result[_, fault]`. Never collapse a descriptive `str`
+error into a bare `fault_io()` at a boundary — that is where
+debuggability goes to die (see `http.read` below).
+
 ## Standard packages
 
 `time`, `net`, `json`, `proc`, `fs`, and `log` are compiler-provided native
