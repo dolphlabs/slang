@@ -1,0 +1,26 @@
+{
+  "name": "slang",
+  "displayName": "Slang",
+  "description": "Syntax highlighting for the Slang language (.sl)",
+  "version": "0.1.0",
+  "publisher": "dolphlabs",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "slang",
+        "aliases": ["Slang", "slang"],
+        "extensions": [".sl"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "slang",
+        "scopeName": "source.slang",
+        "path": "./syntaxes/slang.tmLanguage.json"
+      }
+    ]
+  }
+}
