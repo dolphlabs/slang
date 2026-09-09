@@ -18,6 +18,8 @@ static _Atomic(sl_gc_obj *) sl_gc_retired = NULL;
 static pthread_mutex_t sl_gc_mu = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic size_t sl_gc_bytes_since_collect = 0;
 static size_t sl_gc_threshold = 8 * 1024 * 1024;
+static _Atomic unsigned long long sl_gc_stat_survived = 0;
+static _Atomic unsigned long long sl_gc_stat_allocated_cycle = 0;
 
 static _Atomic unsigned long long sl_gc_stat_collects = 0;
 static _Atomic unsigned long long sl_gc_stat_allocs = 0;
@@ -49,6 +51,8 @@ static void sl_gc_stat_pause(long long ns, size_t marked, size_t swept) {
     }
     atomic_fetch_add_explicit(&sl_gc_stat_marked, (unsigned long long)marked, memory_order_relaxed);
     atomic_fetch_add_explicit(&sl_gc_stat_swept, (unsigned long long)swept, memory_order_relaxed);
+    atomic_fetch_add_explicit(&sl_gc_stat_survived, (unsigned long long)marked, memory_order_relaxed);
+    atomic_fetch_add_explicit(&sl_gc_stat_allocated_cycle, (unsigned long long)(marked + swept), memory_order_relaxed);
     int b = 0;
     long long bound = 100000;
     while (b + 1 < SL_GC_STAT_BUCKETS && ns >= bound) {
@@ -68,8 +72,10 @@ static void sl_gc_stat_dump(void) {
     unsigned long long max = atomic_load_explicit(&sl_gc_stat_pause_ns_max, memory_order_relaxed);
     unsigned long long marked = atomic_load_explicit(&sl_gc_stat_marked, memory_order_relaxed);
     unsigned long long swept = atomic_load_explicit(&sl_gc_stat_swept, memory_order_relaxed);
-    fprintf(stderr, "slang-gc-stat collects=%llu allocs=%llu alloc_bytes=%llu pause_ns_total=%llu pause_ns_max=%llu marked=%llu swept=%llu\n",
-            collects, allocs, bytes, total, max, marked, swept);
+    unsigned long long surv = atomic_load_explicit(&sl_gc_stat_survived, memory_order_relaxed);
+    unsigned long long cyc = atomic_load_explicit(&sl_gc_stat_allocated_cycle, memory_order_relaxed);
+    fprintf(stderr, "slang-gc-stat collects=%llu allocs=%llu alloc_bytes=%llu pause_ns_total=%llu pause_ns_max=%llu marked=%llu swept=%llu survived=%llu cycle_allocs=%llu threshold=%zu\n",
+            collects, allocs, bytes, total, max, marked, swept, surv, cyc, sl_gc_threshold);
     fprintf(stderr, "slang-gc-stat pause_buckets_ns=[");
     long long bound = 100000;
     for (int b = 0; b < SL_GC_STAT_BUCKETS; b++) {
@@ -1046,6 +1052,11 @@ static void sl_gc_collect(void) {
 #if defined(__GLIBC__)
     malloc_trim(0);
 #endif
+    if (marked + swept > 0 && marked * 4 < marked + swept) {
+        size_t grown = sl_gc_threshold * 2;
+        if (grown > sl_gc_threshold && grown <= 256 * 1024 * 1024)
+            sl_gc_threshold = grown;
+    }
     if (stat_on)
         sl_gc_stat_pause(sl_rt_monotonic_ns() - t0, marked, swept);
     atomic_store_explicit(&sl_gc_collect_pending, 0, memory_order_release);
