@@ -68,7 +68,7 @@ struct Expr {
                       * 'none' literal, unlike 'nullptr'). NULL and
                       * unused unless that pass has run. */
     union {
-        struct { long long value; } int_lit;
+        struct { long long value; int big_u64; } int_lit;
         struct { double value; } float_lit;
         struct { char *value; } str_lit;
         struct { unsigned char *data; long long len; } bytes_lit;

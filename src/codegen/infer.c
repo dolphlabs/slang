@@ -732,13 +732,39 @@ const char *infer_binary(CG *cg, Expr *e) {
         cg_error(e->line, "'%%' requires integer operands (got %s and %s)",
                  lt, rt);
     }
+    /* Bitwise AND/OR/XOR promote like arithmetic: the result has to be
+     * wide enough to hold either operand's bits. Floats are rejected --
+     * there is no meaningful bit pattern to combine, and silently
+     * truncating to int would hide the mistake. */
+    if (!strcmp(op, "&") || !strcmp(op, "|") || !strcmp(op, "^")) {
+        if (is_int(lt) && is_int(rt))
+            return promote(lt, rt);
+        cg_error(e->line,
+                 "'%s' requires integer operands (got %s and %s)", op, lt, rt);
+    }
+    /* Shifts do NOT promote to the wider of the two: the value being
+     * shifted keeps its own type, and the shift COUNT is just a count,
+     * so `x << n` is as wide as x regardless of n's type. Promoting here
+     * would silently widen a u8 the moment it was shifted by an int. */
+    if (!strcmp(op, "<<") || !strcmp(op, ">>")) {
+        if (is_int(lt) && is_int(rt))
+            return lt;
+        cg_error(e->line,
+                 "'%s' requires integer operands (got %s and %s)", op, lt, rt);
+    }
     cg_error(e->line, "unknown operator '%s'", op);
     return NULL; /* unreachable */
 }
 
 const char *infer_type(CG *cg, Expr *e) {
     switch (e->kind) {
-    case EX_INT:    return "int";
+    case EX_INT:
+        /* A literal too large for i64 is not an int that happens to
+         * overflow -- it is a u64. Typing it that way makes
+         * `let x = 18446744073709551615;` correct, and makes
+         * `let x: int = 18446744073709551615;` the error it should be,
+         * instead of both silently yielding LLONG_MAX. */
+        return e->as.int_lit.big_u64 ? "u64" : "int";
     case EX_FLOAT:  return "float";
     case EX_STRING: return "str";
     case EX_BYTES:  return "bytes";
@@ -758,6 +784,12 @@ const char *infer_type(CG *cg, Expr *e) {
             if (!strcmp(t, "bool"))
                 return "bool";
             cg_error(e->line, "'!' requires a bool operand (got %s)", t);
+        }
+        if (!strcmp(op, "~")) {
+            if (is_int(t))
+                return t;
+            cg_error(e->line,
+                     "'~' requires an integer operand (got %s)", t);
         }
         if (!strcmp(op, "&") || !strcmp(op, "&mut")) {
             if (!expr_addressable(e->as.unary.operand))

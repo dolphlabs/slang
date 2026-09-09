@@ -1,5 +1,6 @@
 #include "common.h"
 #include "lexer.h"
+#include <errno.h>
 
 #include <ctype.h>
 
@@ -47,6 +48,7 @@ static Token make_token(TokenType type, int line) {
     t.type = type;
     t.text = NULL;
     t.int_val = 0;
+    t.big_u64 = 0;
     t.float_val = 0.0;
     t.line = line;
     return t;
@@ -155,7 +157,51 @@ Token lexer_next(Lexer *lx) {
     /* numbers */
     if (isdigit((unsigned char)c)) {
         size_t start = lx->pos;
-        while (isdigit((unsigned char)src[lx->pos]))
+        /* Hex and binary literals, for the same reason bitwise operators
+         * exist: a protocol mask is written 0x7f in every RFC and every
+         * reference implementation, and spelling it 127 loses that. An
+         * underscore is allowed as a digit separator (0xff_ff, 0b1010_1010)
+         * and is simply skipped -- strtoll would stop at it, so the digits
+         * are copied into a scratch buffer with separators removed. */
+        if (src[lx->pos] == '0' &&
+            (src[lx->pos + 1] == 'x' || src[lx->pos + 1] == 'X' ||
+             src[lx->pos + 1] == 'b' || src[lx->pos + 1] == 'B')) {
+            int base = (src[lx->pos + 1] == 'x' || src[lx->pos + 1] == 'X')
+                           ? 16 : 2;
+            /* 0b" is a byte-string literal, not a binary number */
+            if (!(base == 2 && src[lx->pos + 2] == '"')) {
+                lx->pos += 2;
+                char digits[80];
+                size_t nd = 0;
+                for (;;) {
+                    char d = src[lx->pos];
+                    if (d == '_') { lx->pos++; continue; }
+                    int okd = base == 16 ? isxdigit((unsigned char)d)
+                                         : (d == '0' || d == '1');
+                    if (!okd)
+                        break;
+                    if (nd + 1 < sizeof(digits))
+                        digits[nd++] = d;
+                    lx->pos++;
+                }
+                if (nd == 0)
+                    lex_error(line, base == 16
+                                  ? "hex literal has no digits"
+                                  : "binary literal has no digits");
+                digits[nd] = '\0';
+                errno = 0;
+                unsigned long long uv = strtoull(digits, NULL, base);
+                if (errno == ERANGE || nd >= sizeof(digits) - 1)
+                    lex_error(line, base == 16
+                                  ? "hex literal does not fit in 64 bits"
+                                  : "binary literal does not fit in 64 bits");
+                Token t = make_token(T_INT, line);
+                t.int_val = (long long)uv;
+                t.big_u64 = uv > 9223372036854775807ULL;
+                return t;
+            }
+        }
+        while (isdigit((unsigned char)src[lx->pos]) || src[lx->pos] == '_')
             lx->pos++;
         if (src[lx->pos] == '.' && isdigit((unsigned char)src[lx->pos + 1])) {
             lx->pos++; /* consume '.' */
@@ -165,8 +211,31 @@ Token lexer_next(Lexer *lx) {
             t.float_val = strtod(src + start, NULL);
             return t;
         }
+        /* strtoULL, not strtoll: strtoll SATURATES at LLONG_MAX on
+         * overflow and sets ERANGE, which without this check turned
+         * 18446744073709551615, 9223372036854775808 and
+         * 99999999999999999999999 into the SAME silently-wrong value.
+         * A literal that fits u64 but not i64 keeps its bit pattern and
+         * is flagged big_u64, so only a u64 context will accept it;
+         * anything larger is a hard error at the point of writing. */
+        char digits[96];
+        size_t nd = 0;
+        int too_long = 0;
+        for (size_t i = start; i < lx->pos; i++) {
+            if (src[i] == '_')
+                continue;
+            if (nd + 1 >= sizeof(digits)) { too_long = 1; break; }
+            digits[nd++] = src[i];
+        }
+        digits[nd] = '\0';
+        errno = 0;
+        unsigned long long uv = strtoull(digits, NULL, 10);
+        if (too_long || errno == ERANGE)
+            lex_error(line, "integer literal does not fit in 64 bits "
+                            "(maximum is 18446744073709551615)");
         Token t = make_token(T_INT, line);
-        t.int_val = strtoll(src + start, NULL, 10);
+        t.int_val = (long long)uv;
+        t.big_u64 = uv > 9223372036854775807ULL;
         return t;
     }
 
@@ -340,11 +409,19 @@ Token lexer_next(Lexer *lx) {
     if (c == '|' && src[lx->pos + 1] == '|') { lx->pos += 2; return make_token(T_OROR, line); }
     if (c == '?' && src[lx->pos + 1] == '?') { lx->pos += 2; return make_token(T_QQ, line); }
     if (c == '-' && src[lx->pos + 1] == '>') { lx->pos += 2; return make_token(T_ARROW, line); }
+    /* Shifts are matched AFTER '<='/'>=' above, so "a >>= b" would lex as
+     * '>>' then '='; there is no compound assignment in slang, so that is
+     * a parse error either way rather than a silent mis-lex. */
+    if (c == '<' && src[lx->pos + 1] == '<') { lx->pos += 2; return make_token(T_SHL, line); }
+    if (c == '>' && src[lx->pos + 1] == '>') { lx->pos += 2; return make_token(T_SHR, line); }
 
     /* single-char tokens */
     lx->pos++;
     switch (c) {
     case '&': return make_token(T_AMP, line);
+    case '|': return make_token(T_PIPE, line);
+    case '^': return make_token(T_CARET, line);
+    case '~': return make_token(T_TILDE, line);
     case '+': return make_token(T_PLUS, line);
     case '-': return make_token(T_MINUS, line);
     case '*': return make_token(T_STAR, line);
@@ -397,6 +474,11 @@ const char *token_type_name(TokenType t) {
     case T_KW_OWN:   return "'own'";
     case T_KW_MUT:   return "'mut'";
     case T_AMP:      return "'&'";
+    case T_PIPE:     return "'|'";
+    case T_CARET:    return "'^'";
+    case T_TILDE:    return "'~'";
+    case T_SHL:      return "'<<'";
+    case T_SHR:      return "'>>'";
     case T_KW_IMPL:  return "'impl'";
     case T_KW_EXTERN:return "'extern'";
     case T_KW_LINK:  return "'link'";

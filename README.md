@@ -47,6 +47,7 @@ let name = "World";      // str
 let ok = true;           // bool
 
 // arithmetic: + - * / %   (int/int is integer division)
+// bitwise:    & | ^ ~ << >>   (integers only; see below)
 println(x + y);
 println(x / 2.0);        // mixing int and float promotes to float
 
@@ -173,6 +174,63 @@ no escaping).
   int casts truncate toward zero.
 - Mixed-width arithmetic promotes to the wider operand; same-width
   signed/unsigned mixes resolve to the unsigned type (C semantics).
+
+#### Bitwise operations and integer literals
+
+Binary protocols are most of network programming, so the bit operators
+are first-class: `&` `|` `^` `~` `<<` `>>`, on any integer type.
+
+```slang
+// an HTTP/2 frame header, straight off the wire
+let flen  = (b[0] << 16) | (b[1] << 8) | b[2];
+let ftype = b[3];
+let flags = b[4];
+let sid   = ((b[5] & 0x7f) << 24) | (b[6] << 16) | (b[7] << 8) | b[8];
+
+if flags & 0x01 != 0 { /* END_STREAM */ }
+```
+
+Integer literals come in decimal, hex (`0xff`, `0xFF`) and binary
+(`0b1010`), and `_` may be used anywhere as a digit separator:
+`1_000_000`, `0xff_ff`, `0b1010_1010`.
+
+A literal too large for `i64` **is a `u64`**, not an overflowing `int`:
+`let mask = 18446744073709551615;` gives a `u64` holding that exact
+value, and `let x: int = 18446744073709551615;` is a compile error
+rather than a surprise. Anything past `u64` is rejected at the point of
+writing — `integer literal does not fit in 64 bits`. (Before this,
+decimal literals ran through `strtoll`, which saturates: those two
+literals and `99999999999999999999999` all silently became
+`9223372036854775807`.)
+
+**Precedence follows C exactly**, so an expression lifted from an RFC or
+a C reference implementation means the same thing here:
+
+```
+||  <  &&  <  |  <  ^  <  &  <  == !=  <  < <= > >=  <  << >>  <  + -  <  * / %  <  unary
+```
+
+Three things differ from C, all deliberately:
+
+- **`&` is never ambiguous.** Infix `&` is bitwise AND; the borrow forms
+  `&x` / `&mut x` are prefix-only, so the parser can always tell them apart.
+- **C's `x & 1 == 1` footgun is a compile error.** C parses that as
+  `x & (1 == 1)` and accepts it because `bool` is an `int`; slang rejects
+  it with "'&' requires integer operands (got int and bool)". Parenthesize
+  what you meant.
+- **An out-of-range shift count panics** instead of being undefined
+  behaviour. `x << n` where `n` is negative or at least the width of `x`
+  reports `shift count out of range at pkg.func:line`, the same way
+  division by zero and an out-of-bounds index do — this matters when the
+  count came off the network. When the count is a constant already in
+  range (`b[0] << 16`, the normal case) the check is compiled out
+  entirely, so protocol code pays nothing for it.
+
+`>>` follows the operand's signedness: arithmetic (sign-preserving) on a
+signed type, logical (zero-filling) on an unsigned one, exactly as in C.
+`&` `|` `^` promote to the wider operand; a shift keeps the width of the
+value being shifted, so `x << n` never silently widens a narrow `x`
+because `n` happens to be an `int`.
 
 #### bytes
 
