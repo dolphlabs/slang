@@ -1,0 +1,75 @@
+{
+  "scopeName": "source.slang",
+  "name": "Slang",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#builtins" },
+    { "include": "#numbers" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.slang",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.slang",
+          "begin": "b?\"",
+          "end": "\"",
+          "patterns": [{ "name": "constant.character.escape.slang", "match": "\\\\." }]
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.slang",
+          "match": "\\b(let|fn|if|else|while|return|guard|for|in|break|continue|as|struct|impl|spawn|link|unsafe|extern|pub|import|mut|own|gc)\\b"
+        },
+        {
+          "name": "constant.language.slang",
+          "match": "\\b(true|false|none|some|ok|err)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.slang",
+          "match": "\\b(int|float|str|bool|bytes|i8|i16|i32|i64|u8|u16|u32|u64|f32|map|opt|result|duration|rawptr|arena|wire|until|fault|peer|trip|link|chan|join)\\b"
+        }
+      ]
+    },
+    "builtins": {
+      "patterns": [
+        {
+          "name": "support.function.slang",
+          "match": "\\b(print|println|len|push|pop|to_str|to_bytes|to_le|to_be|from_le|from_be|has|del|exit|err_of|make_chan|chan_send|chan_recv|chan_close|join_wait|arena_new|until_of|until_never|until_hit|fault_timeout|fault_reset|fault_closed|fault_io|fault_refused|fault_kind|fault_code|fault_op|peer_v4|peer_port|trip_new|link_listen|link_dial)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.float.slang", "match": "\\b\\d+\\.\\d+\\b" },
+        { "name": "constant.numeric.integer.slang", "match": "\\b\\d+\\b" }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.slang",
+          "match": "(\\?\\?|==|!=|<=|>=|&&|\\|\\||\\.\\.=|\\.\\.|->|[+\\-*/%<>=!&|.,:;()\\[\\]{}])"
+        }
+      ]
+    }
+  }
+}
