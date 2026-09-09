@@ -21,7 +21,7 @@ Raw-axis remasure (8a1c68b, same VM, wrk 3x10s, HTTP_ACCEPTORS=4, quantum 50ms /
 
 Per-request allocated, parked, switched, and collected work that C/Rust/Go-raw skip. Same 200B job, different cost per request. In leverage order; ruler (`bench/http/main.sl`) stays frozen, work lands in `bench/http_opt` / runtime.
 
-- [ ] 9. Static response bytes (no GC alloc on serve: intern `b"..."` or `send_static`; GC nearly never fires on the bench)
+- [x] 9. Static response bytes (link.send_static, zero GC allocs, PR #54 `perf/static-response-bytes`)
 - [ ] 10. Per-worker reactor (one epoll + waiter shard per worker, fds pinned by accept stripe; remove the single global IO funnel)
 - [ ] 11. Task + arena recycling (per-worker task/stack cache, reused recv arena; per-conn setup becomes pointer bumps)
 - [ ] 12. GC-free fast-path detection (skip checkin/registration on zero-alloc serve paths; adaptive threshold when survival is ~0)
