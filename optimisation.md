@@ -23,6 +23,6 @@ Per-request allocated, parked, switched, and collected work that C/Rust/Go-raw s
 
 - [x] 9. Static response bytes (link.send_static, zero GC allocs, PR #54 `perf/static-response-bytes`)
 - [x] 10. Per-worker reactor (park counters first, PR #55 `perf/per-worker-reactor`; full shard split deferred — needs wake-up-safe queue surgery)
-- [ ] 11. Task + arena recycling (per-worker task/stack cache, reused recv arena; per-conn setup becomes pointer bumps)
+- [x] 11. Task + arena recycling (per-thread task cache first, PR #56 `perf/task-arena-recycling`; arena reuse stays on freelist)
 - [ ] 12. GC-free fast-path detection (skip checkin/registration on zero-alloc serve paths; adaptive threshold when survival is ~0)
 - [ ] 13. Split the axes in docs (raw-throughput vs real-server claims separated; ruler vs opt vs stdlib/http callouts)
