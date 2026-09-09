@@ -931,46 +931,35 @@ static inline void sl_rt_safepoint_exit(void) {
  * frames without running any cleanup for them is exactly what
  * already happened before, just via a different mechanism. */
 __attribute__((noreturn))
-static void sl_rt_error(const char *msg, long long a, long long b) {
-    /* Tier 11 eighth slice: disabled from entry, deliberately with no
-     * matching enable anywhere on the spawned-task branch -- this
-     * branch abandons t permanently (switches out and is never
-     * resumed through this control flow again, same as sl_ctx_trampoline's
-     * own 'call that never returns' shape), so there is no resume point
-     * to place one at, and an elevated preempt_disable_depth on a task
-     * nobody will ever dispatch again is inert, not a leak. Two real
-     * bugs closed by this bracket, found directly: fprintf below (same
-     * os_unfair_lock/locale-lock vulnerability class already fixed for
-     * every other libc call in this slice -- an async-preempted task
-     * migrating mid-fprintf abandons the ORIGINAL OS thread's own stdio
-     * lock, aborting on that thread's next unrelated print) and the raw
-     * sl_ctx_switch call, previously reachable by a signal landing
-     * mid-switch and diverting this abandon into the async-preempt path
-     * instead, after sl_rt_active_spawns_dec() had already run once --
-     * a real double-accounting risk if this task were ever, against the
-     * design's own intent, dispatched again afterward. concurrent_compute's
-     * own 'element size mismatch' panics (a downstream SYMPTOM of
-     * corruption elsewhere, not this bug's own root cause) are exactly
-     * what surfaced this path was being exercised, completely
-     * unprotected, during the very runs that crashed. */
+static void sl_rt_error_at(const char *msg, long long a, long long b,
+                           const char *at) {
+    char loc[256];
+    if (at && at[0])
+        snprintf(loc, sizeof(loc), "%s at %s", msg, at);
+    else
+        snprintf(loc, sizeof(loc), "%s", msg);
     sl_rt_preempt_disable();
     if (!sl_rt_current_task->is_main) {
         fprintf(stderr,
                 "slang: task panicked: %s (index %lld, length %lld)\n",
-                msg, a, b);
+                loc, a, b);
         if (sl_rt_current_task->join)
-            sl_join_fail(sl_rt_current_task->join, msg);
+            sl_join_fail(sl_rt_current_task->join, loc);
         sl_rt_active_spawns_dec();
         sl_ctx_switch(&sl_rt_current_task->rsp, SL_RT_TLS_NATIVE_RSP());
         fprintf(stderr,
                 "slang: internal error: task resumed after panic "
                 "switch-back\n");
-        abort(); /* genuinely unreachable -- a can't-happen guard, not
-                    routed back through this same panic machinery */
+        abort();
     }
     fprintf(stderr, "slang runtime error: %s (index %lld, length %lld)\n",
-            msg, a, b);
+            loc, a, b);
     exit(1);
+}
+
+__attribute__((noreturn))
+static void sl_rt_error(const char *msg, long long a, long long b) {
+    sl_rt_error_at(msg, a, b, "");
 }
 
 typedef struct sl_arena {
@@ -1193,9 +1182,9 @@ static sl_wire sl_wire_make(unsigned char *p, long long n) {
     w.len = n;
     return w;
 }
-static int sl_wire_at(sl_wire w, long long i) {
+static int sl_wire_at(sl_wire w, long long i, const char *at) {
     if (i < 0 || i >= w.len)
-        sl_rt_error("wire index out of bounds", i, w.len);
+        sl_rt_error_at("wire index out of bounds", i, w.len, at);
     return (int)w.ptr[i];
 }
 static void sl_wire_set(sl_wire w, long long i, unsigned char v) {
