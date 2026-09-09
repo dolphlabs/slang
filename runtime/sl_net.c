@@ -39,6 +39,70 @@ static void sl_net_set_nonblocking(int fd) {
 
 /* ---- the reactor ---- */
 
+/* Contention instrumentation first: 16 fd-hashed shard mutexes that
+    serialize only park/wake counters, never the wait list itself.
+    Lets a remasure attribute reactor pressure per fd-hash before any
+    queue surgery, same pattern as SLANG_SCHED_STAT. The single global
+    wait list + single epoll thread below are untouched. */
+#define SL_REACTOR_SHARDS 16
+
+typedef struct sl_reactor_shard {
+    pthread_mutex_t mu;
+    _Atomic unsigned long long parks;
+    _Atomic unsigned long long wakes;
+} sl_reactor_shard;
+
+static sl_reactor_shard sl_reactor_shards[SL_REACTOR_SHARDS] = {
+    [0 ... SL_REACTOR_SHARDS - 1] = {
+        .mu = PTHREAD_MUTEX_INITIALIZER,
+    },
+};
+
+static inline unsigned sl_reactor_shard_for(int fd) {
+    unsigned u = (unsigned)(fd >= 0 ? fd : 0);
+    u ^= u >> 16;
+    u *= 2654435761u;
+    u ^= u >> 13;
+    return u % (unsigned)SL_REACTOR_SHARDS;
+}
+
+static int sl_reactor_stat_enabled(void) {
+    static int cached = -1;
+    if (cached < 0)
+        cached = getenv("SLANG_REACTOR_STAT") ? 1 : 0;
+    return cached;
+}
+
+static void sl_reactor_shard_count(unsigned shard, int wake) {
+    if (!sl_reactor_stat_enabled())
+        return;
+    pthread_mutex_lock(&sl_reactor_shards[shard].mu);
+    if (wake)
+        atomic_fetch_add_explicit(&sl_reactor_shards[shard].wakes, 1,
+                                  memory_order_relaxed);
+    else
+        atomic_fetch_add_explicit(&sl_reactor_shards[shard].parks, 1,
+                                  memory_order_relaxed);
+    pthread_mutex_unlock(&sl_reactor_shards[shard].mu);
+}
+
+static void sl_reactor_stat_dump(void) {
+    if (!sl_reactor_stat_enabled())
+        return;
+    unsigned long long parks = 0, wakes = 0;
+    for (int i = 0; i < SL_REACTOR_SHARDS; i++) {
+        parks += atomic_load_explicit(&sl_reactor_shards[i].parks,
+                                      memory_order_relaxed);
+        wakes += atomic_load_explicit(&sl_reactor_shards[i].wakes,
+                                      memory_order_relaxed);
+    }
+    fprintf(stderr, "slang-reactor-stat parks=%llu wakes=%llu\n", parks,
+            wakes);
+}
+
+__attribute__((destructor))
+static void sl_reactor_stat_atexit(void) { sl_reactor_stat_dump(); }
+
 static int sl_reactor_fd = -1;
 #if defined(SL_REACTOR_EPOLL)
 static int sl_reactor_efd = -1;
@@ -119,6 +183,7 @@ static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
     sl_reactor_self->io_deadline_ns = deadline;
     sl_reactor_self->next = sl_reactor_waiting;
     sl_reactor_waiting = sl_reactor_self;
+    sl_reactor_shard_count(sl_reactor_shard_for(fd), 0);
 #if defined(SL_REACTOR_KQUEUE)
     struct kevent kev;
     EV_SET(&kev, fd, rw == SL_REACTOR_READ ? EVFILT_READ : EVFILT_WRITE,
@@ -218,7 +283,10 @@ static void *sl_reactor_thread(void *arg) {
             sl_task **pp = &sl_reactor_waiting;
             int found = 0;
             while (*pp) { if (*pp == t) { *pp = t->next; found = 1; break; } pp = &(*pp)->next; }
-            if (found) { t->next = NULL; sl_task_resume(t); }
+            if (found) {
+                t->next = NULL;
+                sl_task_resume(t);
+            }
         }
         sl_reactor_expire_waiters();
         pthread_mutex_unlock(&sl_reactor_mu);
