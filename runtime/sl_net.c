@@ -843,16 +843,24 @@ static sl_res_bool_str *sl_net_nonblock(int fd) {
     return sl_net_ok_bool(true);
 }
 
-static sl_fault sl_link_fault_errno(int e) {
+static int sl_link_fault_kind(int e) {
     if (e == ETIMEDOUT)
-        return sl_fault_timeout();
+        return SL_FAULT_TIMEOUT;
     if (e == ECONNRESET)
-        return sl_fault_reset();
+        return SL_FAULT_RESET;
     if (e == ECONNREFUSED)
-        return sl_fault_refused();
+        return SL_FAULT_REFUSED;
     if (e == EPIPE)
-        return sl_fault_closed();
-    return sl_fault_io();
+        return SL_FAULT_CLOSED;
+    return SL_FAULT_IO;
+}
+
+static sl_fault sl_link_fault_errno(int e) {
+    return sl_fault_op(sl_link_fault_kind(e), e, "");
+}
+
+static sl_fault sl_link_fault_op(const char *op, int e) {
+    return sl_fault_op(sl_link_fault_kind(e), e, op);
 }
 
 static sl_res_link_fault sl_link_ok_link(sl_link v) {
@@ -875,22 +883,22 @@ static sl_res_int_fault sl_link_send_ptr(sl_link *l, const unsigned char *ptr,
                                          long long len, sl_until u) {
     long long off = 0;
     if (!l || !l->live)
-        return sl_link_err_int(sl_fault_closed());
+        return sl_link_err_int(sl_fault_op(SL_FAULT_CLOSED, 0, "send"));
     while (off < len) {
         if (u && sl_until_hit(u))
-            return sl_link_err_int(sl_fault_timeout());
+            return sl_link_err_int(sl_fault_op(SL_FAULT_TIMEOUT, 0, "send"));
         ssize_t n = send(l->fd, ptr + off, (size_t)(len - off), 0);
         if (n >= 0) {
             off += n;
             continue;
         }
         if (errno != EAGAIN && errno != EWOULDBLOCK)
-            return sl_link_err_int(sl_link_fault_errno(errno));
+            return sl_link_err_int(sl_link_fault_op("send", errno));
         int wr = sl_reactor_wait_until(l->fd, SL_REACTOR_WRITE, 0, u);
         if (wr == -2)
-            return sl_link_err_int(sl_fault_timeout());
+            return sl_link_err_int(sl_fault_op(SL_FAULT_TIMEOUT, 0, "send"));
         if (wr < 0)
-            return sl_link_err_int(sl_fault_closed());
+            return sl_link_err_int(sl_fault_op(SL_FAULT_CLOSED, 0, "send"));
     }
     return sl_link_ok_int(len);
 }
@@ -898,35 +906,35 @@ static sl_res_int_fault sl_link_send_ptr(sl_link *l, const unsigned char *ptr,
 static sl_res_link_fault sl_link_listen(long long port) {
     sl_res_i32_str *r = sl_net_listen((int)port);
     if (!r->ok)
-        return sl_link_err_link(sl_fault_io());
+        return sl_link_err_link(sl_fault_op(SL_FAULT_IO, 0, "listen"));
     return sl_link_ok_link(sl_link_from_fd((int)r->v));
 }
 
 static sl_res_link_fault sl_link_listen_reuse(long long port, long long reuse) {
     sl_res_i32_str *r = sl_net_listen_reuse((int)port, reuse != 0);
     if (!r->ok)
-        return sl_link_err_link(sl_fault_io());
+        return sl_link_err_link(sl_fault_op(SL_FAULT_IO, 0, "listen"));
     return sl_link_ok_link(sl_link_from_fd((int)r->v));
 }
 
 static sl_res_link_fault sl_link_accept(sl_link *ln, sl_until u) {
     if (!ln || !ln->live)
-        return sl_link_err_link(sl_fault_closed());
+        return sl_link_err_link(sl_fault_op(SL_FAULT_CLOSED, 0, "accept"));
     for (;;) {
         if (u && sl_until_hit(u))
-            return sl_link_err_link(sl_fault_timeout());
+            return sl_link_err_link(sl_fault_op(SL_FAULT_TIMEOUT, 0, "accept"));
         int cfd = accept(ln->fd, NULL, NULL);
         if (cfd >= 0) {
             sl_net_set_nonblocking(cfd);
             return sl_link_ok_link(sl_link_from_fd(cfd));
         }
         if (errno != EAGAIN && errno != EWOULDBLOCK)
-            return sl_link_err_link(sl_link_fault_errno(errno));
+            return sl_link_err_link(sl_link_fault_op("accept", errno));
         int w = sl_reactor_wait_until(ln->fd, SL_REACTOR_READ, 1, u);
         if (w == -2)
-            return sl_link_err_link(sl_fault_timeout());
+            return sl_link_err_link(sl_fault_op(SL_FAULT_TIMEOUT, 0, "accept"));
         if (w < 0)
-            return sl_link_err_link(sl_fault_closed());
+            return sl_link_err_link(sl_fault_op(SL_FAULT_CLOSED, 0, "accept"));
     }
 }
 
@@ -939,11 +947,11 @@ static sl_res_link_fault sl_link_dial(const char *host, long long port,
     struct addrinfo *res = NULL;
     int rc = sl_dns_lookup(host, portstr, &res);
     if (rc != 0 || !res)
-        return sl_link_err_link(sl_fault_refused());
+        return sl_link_err_link(sl_fault_op(SL_FAULT_REFUSED, rc, "dial"));
     int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (fd < 0) {
         freeaddrinfo(res);
-        return sl_link_err_link(sl_fault_io());
+        return sl_link_err_link(sl_link_fault_op("dial", errno));
     }
     sl_net_set_nonblocking(fd);
     int cres = connect(fd, res->ai_addr, res->ai_addrlen);
@@ -953,23 +961,23 @@ static sl_res_link_fault sl_link_dial(const char *host, long long port,
     if (errno != EINPROGRESS) {
         int e = errno;
         close(fd);
-        return sl_link_err_link(sl_link_fault_errno(e));
+        return sl_link_err_link(sl_link_fault_op("connect", e));
     }
     int w = sl_reactor_wait_until(fd, SL_REACTOR_WRITE, 1, u);
     if (w == -2) {
         close(fd);
-        return sl_link_err_link(sl_fault_timeout());
+        return sl_link_err_link(sl_fault_op(SL_FAULT_TIMEOUT, 0, "connect"));
     }
     if (w < 0) {
         close(fd);
-        return sl_link_err_link(sl_fault_closed());
+        return sl_link_err_link(sl_fault_op(SL_FAULT_CLOSED, 0, "connect"));
     }
     int so_err = 0;
     socklen_t slen = sizeof(so_err);
     getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_err, &slen);
     if (so_err != 0) {
         close(fd);
-        return sl_link_err_link(sl_link_fault_errno(so_err));
+        return sl_link_err_link(sl_link_fault_op("connect", so_err));
     }
     return sl_link_ok_link(sl_link_from_fd(fd));
 }
@@ -993,22 +1001,22 @@ static sl_res_int_fault sl_link_send_static(sl_link *l, sl_bytes b, sl_until u) 
 
 static sl_res_int_fault sl_link_recv(sl_link *l, sl_wire w, sl_until u) {
     if (!l || !l->live)
-        return sl_link_err_int(sl_fault_closed());
+        return sl_link_err_int(sl_fault_op(SL_FAULT_CLOSED, 0, "recv"));
     if (w.len <= 0)
         return sl_link_ok_int(0);
     for (;;) {
         if (u && sl_until_hit(u))
-            return sl_link_err_int(sl_fault_timeout());
+            return sl_link_err_int(sl_fault_op(SL_FAULT_TIMEOUT, 0, "recv"));
         ssize_t n = recv(l->fd, w.ptr, (size_t)w.len, 0);
         if (n >= 0)
             return sl_link_ok_int((long long)n);
         if (errno != EAGAIN && errno != EWOULDBLOCK)
-            return sl_link_err_int(sl_link_fault_errno(errno));
+            return sl_link_err_int(sl_link_fault_op("recv", errno));
         int wr = sl_reactor_wait_until(l->fd, SL_REACTOR_READ, 1, u);
         if (wr == -2)
-            return sl_link_err_int(sl_fault_timeout());
+            return sl_link_err_int(sl_fault_op(SL_FAULT_TIMEOUT, 0, "recv"));
         if (wr < 0)
-            return sl_link_err_int(sl_fault_closed());
+            return sl_link_err_int(sl_fault_op(SL_FAULT_CLOSED, 0, "recv"));
     }
 }
 

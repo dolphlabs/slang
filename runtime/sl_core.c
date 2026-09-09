@@ -1104,6 +1104,8 @@ typedef int64_t sl_until;
 typedef struct sl_fault {
     int kind;
     const char *detail;
+    const char *op;
+    int code;
 } sl_fault;
 
 typedef struct sl_peer {
@@ -1136,6 +1138,23 @@ static sl_fault sl_fault_make(int kind, const char *d) {
     sl_fault f;
     f.kind = kind;
     f.detail = d ? d : "";
+    f.op = "";
+    f.code = 0;
+    return f;
+}
+static sl_fault sl_fault_op(int kind, int code, const char *op) {
+    sl_fault f;
+    f.kind = kind;
+    f.detail = "";
+    f.code = code;
+    f.op = op ? op : "";
+    switch (kind) {
+    case SL_FAULT_TIMEOUT: f.detail = "timeout"; break;
+    case SL_FAULT_RESET: f.detail = "reset"; break;
+    case SL_FAULT_CLOSED: f.detail = "closed"; break;
+    case SL_FAULT_REFUSED: f.detail = "refused"; break;
+    default: f.detail = "io"; break;
+    }
     return f;
 }
 static sl_fault sl_fault_timeout(void) {
@@ -1155,6 +1174,8 @@ static sl_fault sl_fault_refused(void) {
 }
 static int sl_fault_kind(sl_fault f) { return f.kind; }
 static int sl_fault_eq(sl_fault a, sl_fault b) { return a.kind == b.kind; }
+static int sl_fault_code(sl_fault f) { return f.code; }
+static const char *sl_fault_opof(sl_fault f) { return f.op ? f.op : ""; }
 
 static sl_peer sl_peer_v4(long long a, long long b, long long c, long long d,
                           long long port) {
