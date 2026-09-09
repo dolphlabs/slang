@@ -4,7 +4,8 @@ Track progress top to bottom; tick items as they land. The HTTP perf
 chase is won on the raw axis (Phase E vs Go on p99 **and** RSS, PR #59
 records the numbers); the ruler stays frozen and Round 2 follow-ups
 live in `optimisation.md`. Error model gaps are done. Current focus is
-the language features; `crypto` and SQL have landed, `regex` is next.
+the language features; `crypto`, SQL and `regex` have landed, HTTP/2 is
+next.
 
 ## HTTP perf (won on raw axis, ruler frozen)
 
@@ -27,11 +28,11 @@ Errors are easy to **handle** (`guard let`, `??`, `fault`) and hard to
 - [x] `log` accepts `str` or `fault`, `fault` concatenates with `+`
 - [x] Demo: HTTP/TLS handlers log parse/I/O failures via `err_of`
 
-## Language features (crypto + SQL done, `regex` is current focus)
+## Language features (crypto, SQL, regex done; HTTP/2 is next)
 
 - [x] `crypto` — hash (SHA-256), HMAC, CSPRNG (PR #68: native package over OpenSSL; `sha256`/`hmac_sha256` return `bytes`, `rand` returns `result[bytes, str]`; `-lcrypto` gated on `want_crypto`)
 - [x] SQL — driver + `result`/connection errors wired through same visibility story (native `sql` package over SQLite; prepared-statement API with `rawptr` handles like `net.tls_*`; every fallible call is `result[_, str]` carrying `sqlite3_errmsg`; `-lsqlite3` gated on `want_sql`. Added `NA_I64`/`NA_F64` native arg kinds so bind values stop truncating through the default i32 marshal. Two independent green-thread hazards, both found by stress rather than by the suite: SQLite recursed past the 8KB task stack into the heap (13/100 runs aborted in malloc) — fixed with `sl_rt_need_stack`, TLS's `need_fat_stack` generalized; and async preemption resumed a task on another worker mid-call, breaking SQLite's thread-owner-tracked mutexes (9/15 runs SIGILL at 2000 concurrent tasks) — fixed with preempt brackets. Stack size is derived, not guessed: `sqlite3_limit` caps compound SELECT at 50 and expr depth at 400, holding the worst legal query to 35,464 measured bytes inside 64KB. 64KB over 256KB is worth 20MB RSS at 600 concurrently-live sql tasks)
-- [ ] `regex` — compile/match on `str` or `bytes`
+- [x] `regex` — compile/match on `str` or `bytes` (slang's own Thompson NFA / Pike VM in `runtime/sl_regex.c`; **no external dependency**, so unlike crypto/sql it adds no link flag. `compile -> result[rawptr,str]` with descriptive parse errors, `is_match`/`find` on `str` or `bytes` with explicit length so NUL is an ordinary byte, `find` returns `[int]` offsets — empty means no match, GC-owned, no handle to leak. Linear time by construction: `(a+)+$` on hostile input is 2us here vs PCRE2's 0.2s-then-`MATCHLIMIT`. Price is RE2's: no backreferences, no lookaround. Measured single-threaded ~721k matches/sec — 1.9x libc POSIX, but 3-10x slower than PCRE2 interp/JIT on benign input; closing that needs a lazy DFA, which is a real project. ~3.2M/sec across 16 tasks, ~1.06MB RSS, match buffers pooled lazily so concurrent matchers allocate nothing. Compile grows the task stack once; matching never does — 600 concurrently-live matching tasks peak at 3.9MB RSS, ~17x lighter than the same shape holding sql connections (65.9MB). Three self-inflicted bugs worth remembering: an uninitialised sparse-set read (40% segfault), left-deep parse trees that would blow the 8KB stack on long patterns, and 43 unbracketed mallocs causing `_os_unfair_lock_unowned_abort` — the same preempt-bracket rule `sl_gc_alloc_fin` and `sl_crypto.c` already follow)
 - [ ] HTTP/2 — multiplexing, ALPN (builds on `net` + TLS)
 - [ ] Second `os` package — env beyond `proc`, argv, cwd, file metadata (avoid duplicating `fs`)
 
