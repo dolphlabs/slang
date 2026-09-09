@@ -9,9 +9,10 @@
  * source program appended to `out`. pkgs[main_index] is the entry
  * package whose top-level statements become main(). *out_want_tls is
  * set to 1 if the program uses any net.tls_* function (so the driver
- * knows to link OpenSSL), 0 otherwise. Exits with a diagnostic on
- * semantic errors. */
+ * knows to link OpenSSL), 0 otherwise. *out_want_crypto is set to 1
+ * if the program imports crypto (needs -lcrypto), 0 otherwise.
+ * Exits with a diagnostic on semantic errors. */
 void codegen_program(Package *pkgs, int npkgs, int main_index,
-                     StrBuf *out, int *out_want_tls);
+                     StrBuf *out, int *out_want_tls, int *out_want_crypto);
 
 #endif /* SLANG_CODEGEN_H */

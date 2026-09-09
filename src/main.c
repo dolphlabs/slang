@@ -163,7 +163,8 @@ int main(int argc, char **argv) {
     StrBuf out;
     sb_init(&out);
     int want_tls = 0;
-    codegen_program(pkgs.items, pkgs.count, main_index, &out, &want_tls);
+    int want_crypto = 0;
+    codegen_program(pkgs.items, pkgs.count, main_index, &out, &want_tls, &want_crypto);
 
     /* ---- output ---- */
     char *stem = derive_stem(input);
@@ -186,9 +187,9 @@ int main(int argc, char **argv) {
      * the generated C; compiled programs do not link libgc. */
 
     /* net.tls_* needs OpenSSL, resolved via pkg-config, only when the
-     * program actually uses it. */
+     * program actually uses it. crypto needs it too. */
     char tlsflags[1024] = "-lssl -lcrypto";
-    if (want_tls) {
+    if (want_tls || want_crypto) {
         FILE *tpc =
             popen("pkg-config --cflags --libs openssl 2>/dev/null", "r");
         if (tpc) {
@@ -222,7 +223,7 @@ int main(int argc, char **argv) {
                                       and now so does the collector itself
                                       (thread registry, mutex, condvar-free
                                       spin/yield) */
-    if (want_tls) {
+    if (want_tls || want_crypto) {
         sb_append(&cmd, " ");
         sb_append(&cmd, tlsflags);
     }
