@@ -609,14 +609,24 @@ int can_assign(const char *dst, const char *src) {
     return 0;
 }
 
-/* Value of an integer literal expression (handles unary minus). */
+/* Value of an integer literal expression (handles unary minus).
+ *
+ * A literal above i64's range reports NO value: its stored bits are a
+ * u64 pattern, so handing them back as a long long would let the
+ * literal-fitting path in value_assignable below see -1 and cheerfully
+ * accept `let x: int = 18446744073709551615`. Declining here leaves
+ * ordinary u64 -> int assignability to reject it. */
 int int_literal_value(Expr *e, long long *out) {
     if (e->kind == EX_INT) {
+        if (e->as.int_lit.big_u64)
+            return 0;
         *out = e->as.int_lit.value;
         return 1;
     }
     if (e->kind == EX_UNARY && !strcmp(e->as.unary.op, "-") &&
         e->as.unary.operand->kind == EX_INT) {
+        if (e->as.unary.operand->as.int_lit.big_u64)
+            return 0;
         *out = -e->as.unary.operand->as.int_lit.value;
         return 1;
     }

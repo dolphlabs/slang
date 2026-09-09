@@ -207,6 +207,7 @@ static Expr *parse_primary(Parser *p) {
         advance(p);
         Expr *e = new_expr(p, EX_INT, tk->line);
         e->as.int_lit.value = tk->int_val;
+        e->as.int_lit.big_u64 = tk->big_u64;
         return e;
     }
     case T_FLOAT: {
@@ -397,11 +398,12 @@ static Expr *parse_postfix(Parser *p) {
 
 static Expr *parse_unary(Parser *p) {
     Token *tk = peek(p);
-    if (tk->type == T_MINUS || tk->type == T_BANG) {
+    if (tk->type == T_MINUS || tk->type == T_BANG || tk->type == T_TILDE) {
         advance(p);
         Expr *operand = parse_unary(p);
         Expr *e = new_expr(p, EX_UNARY, tk->line);
-        e->as.unary.op = xstrdup(tk->type == T_MINUS ? "-" : "!");
+        e->as.unary.op = xstrdup(tk->type == T_MINUS ? "-"
+                                 : tk->type == T_TILDE ? "~" : "!");
         e->as.unary.operand = operand;
         return e;
     }
@@ -448,6 +450,11 @@ static const char *op_text(TokenType t) {
     case T_GT:      return ">";
     case T_LTE:     return "<=";
     case T_GTE:     return ">=";
+    case T_AMP:     return "&";
+    case T_PIPE:    return "|";
+    case T_CARET:   return "^";
+    case T_SHL:     return "<<";
+    case T_SHR:     return ">>";
     default:        return "?";
     }
 }
@@ -480,12 +487,28 @@ static Expr *parse_term(Parser *p) {
     return lhs;
 }
 
-static Expr *parse_comparison(Parser *p) {
+/* Bitwise precedence follows C exactly, so an expression copied out of
+ * an RFC or a C reference implementation means the same thing here:
+ *   ||  <  &&  <  |  <  ^  <  &  <  == !=  <  relational  <  << >>
+ *   <  + -  <  * / %  <  unary
+ * Infix '&' is unambiguous against the '&x' / '&mut x' borrow forms
+ * because those are parsed in prefix position by parse_unary. */
+static Expr *parse_shift(Parser *p) {
     Expr *lhs = parse_term(p);
+    while (check(p, T_SHL) || check(p, T_SHR)) {
+        Token *op = advance(p);
+        Expr *rhs = parse_term(p);
+        lhs = make_binary(p, xstrdup(op_text(op->type)), lhs, rhs, op->line);
+    }
+    return lhs;
+}
+
+static Expr *parse_comparison(Parser *p) {
+    Expr *lhs = parse_shift(p);
     while (check(p, T_LT) || check(p, T_GT) || check(p, T_LTE) ||
            check(p, T_GTE)) {
         Token *op = advance(p);
-        Expr *rhs = parse_term(p);
+        Expr *rhs = parse_shift(p);
         lhs = make_binary(p, xstrdup(op_text(op->type)), lhs, rhs, op->line);
     }
     return lhs;
@@ -501,10 +524,40 @@ static Expr *parse_equality(Parser *p) {
     return lhs;
 }
 
-static Expr *parse_and(Parser *p) {
+static Expr *parse_bitand(Parser *p) {
     Expr *lhs = parse_equality(p);
-    while (match(p, T_ANDAND)) {
+    while (check(p, T_AMP)) {
+        Token *op = advance(p);
         Expr *rhs = parse_equality(p);
+        lhs = make_binary(p, xstrdup(op_text(op->type)), lhs, rhs, op->line);
+    }
+    return lhs;
+}
+
+static Expr *parse_bitxor(Parser *p) {
+    Expr *lhs = parse_bitand(p);
+    while (check(p, T_CARET)) {
+        Token *op = advance(p);
+        Expr *rhs = parse_bitand(p);
+        lhs = make_binary(p, xstrdup(op_text(op->type)), lhs, rhs, op->line);
+    }
+    return lhs;
+}
+
+static Expr *parse_bitor(Parser *p) {
+    Expr *lhs = parse_bitxor(p);
+    while (check(p, T_PIPE)) {
+        Token *op = advance(p);
+        Expr *rhs = parse_bitxor(p);
+        lhs = make_binary(p, xstrdup(op_text(op->type)), lhs, rhs, op->line);
+    }
+    return lhs;
+}
+
+static Expr *parse_and(Parser *p) {
+    Expr *lhs = parse_bitor(p);
+    while (match(p, T_ANDAND)) {
+        Expr *rhs = parse_bitor(p);
         lhs = make_binary(p, xstrdup("&&"), lhs, rhs, peek(p)->line);
     }
     return lhs;

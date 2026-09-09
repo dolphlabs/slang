@@ -81,6 +81,11 @@ typedef enum {
     T_LTE,
     T_GTE,
     T_AMP,
+    T_PIPE,
+    T_CARET,
+    T_TILDE,
+    T_SHL,
+    T_SHR,
     T_ANDAND,
     T_OROR,
     T_QQ, /* '??' null-coalescing */
@@ -107,7 +112,10 @@ typedef enum {
 typedef struct {
     TokenType type;
     char *text;        /* identifier name or decoded string contents */
-    long long int_val; /* T_INT */
+    long long int_val; /* T_INT -- for a value above i64's range this
+                          holds the u64 BIT PATTERN, and big_u64 is set */
+    int big_u64;       /* T_INT: literal exceeds i64 max, so it is only
+                          meaningful in a u64 context */
     double float_val;  /* T_FLOAT */
     unsigned char *byte_val; /* T_BYTES: raw bytes (may contain NULs) */
     long long byte_len;      /* T_BYTES: byte count */

@@ -139,12 +139,34 @@ static int expr_nonzero_int_lit(Expr *e) {
     return e->kind == EX_INT && e->as.int_lit.value != 0;
 }
 
+/* Bit width of an integer type, for the shift-count range check. */
+static int int_bit_width(const char *t) {
+    if (!strcmp(t, "i8") || !strcmp(t, "u8")) return 8;
+    if (!strcmp(t, "i16") || !strcmp(t, "u16")) return 16;
+    if (!strcmp(t, "i32") || !strcmp(t, "u32")) return 32;
+    return 64; /* int, i64, u64, duration */
+}
+
+/* A shift by a constant that is already in range needs no check at all --
+ * which is the overwhelmingly common case in protocol code (`b[0] << 16`),
+ * so the safety below costs nothing on the hot path. */
+static int shift_count_in_range_lit(Expr *rhs, int width) {
+    if (rhs->kind != EX_INT) return 0;
+    long long v = rhs->as.int_lit.value;
+    return v >= 0 && v < (long long)width;
+}
+
 char *gen_numeric_binary(CG *cg, Expr *e, const char *result_t) {
     const char *op = e->as.binary.op;
     const char *lt = infer_type(cg, e->as.binary.lhs);
     const char *rt = infer_type(cg, e->as.binary.rhs);
     int flat = expr_is_flat(cg, e->as.binary.lhs) &&
                expr_is_flat(cg, e->as.binary.rhs);
+    /* A shift count is a count, not an operand: it keeps its own width
+     * rather than being cast to the result type, so `x << n` cannot
+     * silently wrap n when x is narrow. */
+    int is_shift = !strcmp(op, "<<") || !strcmp(op, ">>");
+    const char *bcast_t = is_shift ? "int" : result_t;
     char *a;
     char *b;
     StrBuf prelude;
@@ -152,19 +174,44 @@ char *gen_numeric_binary(CG *cg, Expr *e, const char *result_t) {
     int ambient_mark = cg->ambient_count;
     if (flat) {
         a = maybe_cast(cg, result_t, lt, gen_expr(cg, e->as.binary.lhs));
-        b = maybe_cast(cg, result_t, rt, gen_expr(cg, e->as.binary.rhs));
+        b = maybe_cast(cg, bcast_t, rt, gen_expr(cg, e->as.binary.rhs));
     } else {
         const char *rc = ctype_of(cg, result_t);
         int seq_id = cg->tmp_id++;
         a = maybe_cast(cg, result_t, lt, gen_expr(cg, e->as.binary.lhs));
         a = sequence_one(cg, seq_id, 0, rc, result_t, a, e->as.binary.lhs,
                          &prelude);
-        b = maybe_cast(cg, result_t, rt, gen_expr(cg, e->as.binary.rhs));
-        b = sequence_one(cg, seq_id, 1, rc, result_t, b, e->as.binary.rhs,
-                         &prelude);
+        b = maybe_cast(cg, bcast_t, rt, gen_expr(cg, e->as.binary.rhs));
+        b = sequence_one(cg, seq_id, 1, ctype_of(cg, bcast_t), bcast_t, b,
+                         e->as.binary.rhs, &prelude);
     }
     cg->ambient_count = ambient_mark;
 
+    /* Out-of-range shift counts are undefined behaviour in C. slang
+     * already refuses to leave that kind of hole open (bounds-checked
+     * indexing, div-by-zero) and this one matters more than most: in a
+     * server the count can come from the wire. Same panic machinery as
+     * division by zero, carrying pkg.func:line, and elided entirely when
+     * the count is a constant already in range. */
+    if (is_shift && !shift_count_in_range_lit(e->as.binary.rhs,
+                                              int_bit_width(result_t))) {
+        const char *ty = map_type(result_t);
+        char *at = panic_at(cg, e->line);
+        int width = int_bit_width(result_t);
+        if (flat)
+            return xasprintf(
+                "((%s) < 0 || (%s) >= %d ? "
+                "(sl_rt_error_at(\"shift count out of range\", "
+                "(long long)(%s), %d, %s), (%s)0) "
+                ": ((%s)((%s) %s (%s))))",
+                b, b, width, b, width, at, ty, ty, a, op, b);
+        return xasprintf(
+            "({ %s((%s) < 0 || (%s) >= %d ? "
+            "(sl_rt_error_at(\"shift count out of range\", "
+            "(long long)(%s), %d, %s), (%s)0) "
+            ": ((%s)((%s) %s (%s)))); })",
+            prelude.data, b, b, width, b, width, at, ty, ty, a, op, b);
+    }
     if ((!strcmp(op, "/") || !strcmp(op, "%")) && is_int(result_t) &&
         !expr_nonzero_int_lit(e->as.binary.rhs)) {
         const char *ty = map_type(result_t);
@@ -1287,6 +1334,11 @@ char *gen_list(CG *cg, Expr *e, const char *expect_elem) {
 char *gen_expr(CG *cg, Expr *e) {
     switch (e->kind) {
     case EX_INT:
+        /* Above i64 the stored value is a bit pattern; print it back as
+         * the unsigned constant it came from so C sees the same number. */
+        if (e->as.int_lit.big_u64)
+            return xasprintf("%lluULL",
+                             (unsigned long long)e->as.int_lit.value);
         return xasprintf("%lld", e->as.int_lit.value);
     case EX_FLOAT:
         return gen_float_literal(e->as.float_lit.value);
