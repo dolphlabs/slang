@@ -815,7 +815,8 @@ char *gen_call(CG *cg, Expr *e) {
                                           NULL, inner);
                 }
                 if (!strcmp(right, "send") || !strcmp(right, "recv") ||
-                    !strcmp(right, "send_bytes")) {
+                    !strcmp(right, "send_bytes") ||
+                    !strcmp(right, "send_static")) {
                     StrBuf prelude;
                     sb_init(&prelude);
                     int seq_id = cg->tmp_id++;
@@ -842,6 +843,30 @@ char *gen_call(CG *cg, Expr *e) {
                             prelude.data, inner);
                         cg->ambient_count = ambient_mark;
                         (void)wt;
+                        return result;
+                    }
+                    if (!strcmp(right, "send_static")) {
+                        Expr *lit = e->as.call.args[0];
+                        if (lit->kind != EX_BYTES)
+                            cg_error(e->line,
+                                     "link.send_static() expects a bytes literal (got %s)",
+                                     wt);
+                        char *u2 = gen_expr(cg, e->as.call.args[1]);
+                        u2 = sequence_one(cg, seq_id, 0,
+                                          ctype_of(cg, "until"), "until", u2,
+                                          e->as.call.args[1], &prelude);
+                        char *inner = xasprintf(
+                            "sl_link_send_static(%s, sl_bytes_static((const unsigned char *)%s, %lld), %s)",
+                            self,
+                            c_bytes_literal(lit->as.bytes_lit.data,
+                                            lit->as.bytes_lit.len),
+                            lit->as.bytes_lit.len, u2);
+                        char *result = wrap_safepoint(
+                            cg, e, ctype_of(cg, "result[int,fault]"),
+                            prelude.data, inner);
+                        cg->ambient_count = ambient_mark;
+                        (void)wt;
+                        (void)w;
                         return result;
                     }
                     w = sequence_one(cg, seq_id, 0, ctype_of(cg, "wire"),
