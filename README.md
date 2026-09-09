@@ -361,10 +361,11 @@ debuggability goes to die (see `http.read` below).
 
 ## Standard packages
 
-`time`, `net`, `json`, `proc`, `fs`, and `log` are compiler-provided native
-packages — no source files, just `import "time";` / `import "net";`
-/ `import "json";` / `import "proc";` / `import "fs";` / `import "log";`
-like any other package.
+`time`, `net`, `json`, `proc`, `fs`, `log`, and `crypto` are
+compiler-provided native packages — no source files, just
+`import "time";` / `import "net";` / `import "json";` / `import "proc";`
+/ `import "fs";` / `import "log";` / `import "crypto";` like any other
+package.
 
 `http` and `byteutil` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
@@ -581,6 +582,23 @@ log.info("listening on :8080");
 log.warn("retrying dial after timeout");
 log.error("could not load config: " + e);
 log.warn(fault_timeout());
+```
+
+#### `crypto`
+
+SHA-256, HMAC-SHA256, and a CSPRNG over OpenSSL. Hash and HMAC are
+infallible on valid inputs and return `bytes` directly; `rand` can fail
+and returns `result[bytes, str]`.
+
+```slang
+import "crypto";
+
+let h: bytes = crypto.sha256(b"abc");              // 32 bytes
+let m: bytes = crypto.hmac_sha256(key, msg);       // 32 bytes
+let r = crypto.rand(32);
+guard let b = r else let e = err_of(r) {
+    log.error("rand failed: " + e);
+}
 ```
 
 #### `byteutil`

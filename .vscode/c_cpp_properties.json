@@ -1,0 +1,15 @@
+{
+  "configurations": [
+    {
+      "name": "Mac",
+      "includePath": [
+        "${workspaceFolder}/**",
+        "/usr/local/Homebrew/Cellar/openssl@3/3.6.2/include"
+      ],
+      "defines": ["_GNU_SOURCE"],
+      "cStandard": "c11",
+      "intelliSenseMode": "macos-clang-arm64"
+    }
+  ],
+  "version": 4
+}

@@ -3,7 +3,8 @@
 Track progress top to bottom; tick items as they land. The HTTP perf
 chase is won on the raw axis (Phase E vs Go on p99 **and** RSS, PR #59
 records the numbers); the ruler stays frozen and Round 2 follow-ups
-live in `optimisation.md`. Current focus is the error model gaps.
+live in `optimisation.md`. Error model gaps are done. Current focus is
+the language features, starting with SQL.
 
 ## HTTP perf (won on raw axis, ruler frozen)
 
@@ -26,15 +27,15 @@ Errors are easy to **handle** (`guard let`, `??`, `fault`) and hard to
 - [x] `log` accepts `str` or `fault`, `fault` concatenates with `+`
 - [x] Demo: HTTP/TLS handlers log parse/I/O failures via `err_of`
 
-## Language features (after error model)
+## Language features (crypto done, SQL is current focus)
 
-- [ ] `crypto` — hash (SHA-256), HMAC, CSPRNG (TLS exists; services need these)
+- [x] `crypto` — hash (SHA-256), HMAC, CSPRNG (PR #68: native package over OpenSSL; `sha256`/`hmac_sha256` return `bytes`, `rand` returns `result[bytes, str]`; `-lcrypto` gated on `want_crypto`)
 - [ ] SQL — driver + `result`/connection errors wired through same visibility story
 - [ ] `regex` — compile/match on `str` or `bytes`
 - [ ] HTTP/2 — multiplexing, ALPN (builds on `net` + TLS)
 - [ ] Second `os` package — env beyond `proc`, argv, cwd, file metadata (avoid duplicating `fs`)
 
-## Error model gaps (current focus)
+## Error model gaps (done)
 
 - [x] `opt` none vs `result` err vs `fault`: documented rule + stdlib audit (PR #63: README rule — absent data is `opt`, bad data is `result[_, str]`, bad world is `result[_, fault]`; `http.parse` threads `err_of` context, `http.read` returns `result[Incoming, str]` with descriptive errors)
 - [x] Richer `fault` context without breaking the closed enum (PR #64: `op` + `code` on `sl_fault`; `==`/`fault_kind` kind-only; `fault_op`/`fault_code` accessors; net tags send/recv/accept/dial/connect with op + errno)
