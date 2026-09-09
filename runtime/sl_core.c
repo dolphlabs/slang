@@ -735,6 +735,47 @@ static void sl_task_yield_now(void); /* runtime_pool.c, forward here --
 #define SL_TASK_INITIAL_STACK_SIZE 8192
 #define SL_TASK_FAT_STACK_SIZE 16384
 #define SL_TASK_GUARD_MARGIN 1024
+/* SQLite (sl_sql.c) recurses on query structure, deeper than OpenSSL.
+ * On the ungrown 8KB default it hit the very failure the fat stack
+ * exists to prevent -- a native chain running off the end of the
+ * task's malloc'd stack into the heap, surfacing as an abort() from
+ * malloc with no diagnostic, in 13 of 100 runs of tests/sql.
+ *
+ * This size is DERIVED, not guessed, and it is only safe in company
+ * with the sqlite3_limit() calls sl_sql_open makes -- change one and
+ * you must re-measure the other. Stack cost measured per query shape
+ * (callbacks fired from inside the parser and VDBE, sqlite 3.43.2):
+ *
+ *   ordinary DDL/insert/select ......  4-8KB
+ *   IN list x20000 .................  5.0KB   (not depth-recursive)
+ *   recursive CTE, 100k rows .......  6.2KB   (iterative, bounded)
+ *   1000 result columns ............  5.0KB
+ *   60 chained CTEs / 50 views ..... ~22KB
+ *   AND/OR chain ................... ~53 bytes per term
+ *   compound SELECT ................ ~640 bytes per term  <-- dominant
+ *
+ * Deeply nested expressions and subqueries need no budget here: they
+ * hit SQLite's own LALR parser stack first and come back as a clean
+ * "parser stack overflow" error. Compound SELECT does not, and at
+ * SQLite's DEFAULT limit of 500 terms it wants ~325KB -- so stock
+ * limits would force a stack far too fat to spawn per connection.
+ * sl_sql_open therefore bounds SQLite instead (COMPOUND_SELECT 50,
+ * EXPR_DEPTH 400), making the worst legal query measurable: 35,464
+ * bytes, for a 1.8x margin inside 64KB. Over-limit queries return a
+ * descriptive error through result[_, str] rather than crashing.
+ *
+ * RSS is why this is 64KB and not the 256KB first tried. A finished
+ * task keeps its grown stack (sl_task_grab's freelist reuse), so the
+ * cost multiplies by concurrently-live sql tasks -- exactly what a
+ * server with many in-flight connections has. Measured on 600 tasks
+ * that each touch sql and then park: 65.9MB at 64KB vs 86.2MB at
+ * 256KB, and the gap grows linearly with concurrency. (The delta is
+ * ~34KB/task rather than the full 192KB because RSS follows pages
+ * actually touched, which is the ~35KB worst case above -- but it is
+ * real, and it is the reason not to over-allocate "just in case".)
+ * A workload with few tasks alive at once shows almost no difference,
+ * so this only pays off under the concurrency slang is built for. */
+#define SL_TASK_SQL_STACK_SIZE 65536
 
 /* Tier 11 seventh slice (cooperative preemption v1): tunable, not yet
  * empirically tuned beyond a reasonable starting guess (matching Go's
@@ -830,12 +871,21 @@ static inline void sl_rt_stack_and_gc(sl_task *t) {
     sl_rt_gc_checkin();
 }
 
-static void sl_rt_need_fat_stack(void) {
+/* Grow the current task's stack to at least `want` bytes before a
+ * native chain that has no slang checkpoint of its own to trigger
+ * growth from. Callers pass the size their library actually needs:
+ * SL_TASK_FAT_STACK_SIZE for OpenSSL (sl_tls.c),
+ * SL_TASK_SQL_STACK_SIZE for SQLite (sl_sql.c). */
+static void sl_rt_need_stack(size_t want) {
     sl_task *t = SL_RT_TLS_CUR();
     if (!t || !t->stack_base)
         return;
-    while (t->stack_size < SL_TASK_FAT_STACK_SIZE)
+    while (t->stack_size < want)
         sl_task_stack_grow(t);
+}
+
+static void sl_rt_need_fat_stack(void) {
+    sl_rt_need_stack(SL_TASK_FAT_STACK_SIZE);
 }
 
 static inline void sl_rt_preempt_if_due(sl_task *t) {

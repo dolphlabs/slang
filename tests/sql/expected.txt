@@ -1,0 +1,14 @@
+open ok
+last id 1
+updated 2 rows
+cols 4 name
+1 ada 10.5 first
+2 bob 8.25 <null>
+wide ok
+compound cap: too many terms in compound SELECT
+expr cap: Expression tree is too large (maximum depth 400)
+in-bounds compound ok
+syntax err: near "SELCT": syntax error
+missing table: no such table: nope
+exec err: UNIQUE constraint failed: users.id
+done
