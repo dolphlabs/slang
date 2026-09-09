@@ -1,6 +1,8 @@
 reuse listen ok
 sent 4 bytes
 sent bytes 4
+sent static 4
 echo payload ok
 echo bytes ok
+echo static ok
 link ok

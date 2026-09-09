@@ -195,6 +195,13 @@ static sl_bytes *sl_bytes_new(const unsigned char *p, long long n) {
     return b;
 }
 
+static sl_bytes sl_bytes_static(const unsigned char *p, long long n) {
+    sl_bytes b;
+    b.len = n;
+    b.ptr = (unsigned char *)p;
+    return b;
+}
+
 static int sl_bytes_at(sl_bytes *b, long long i) {
     if (i < 0 || i >= b->len)
         sl_rt_error("byte index out of bounds", i, b->len);

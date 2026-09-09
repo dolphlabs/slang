@@ -917,6 +917,12 @@ static sl_res_int_fault sl_link_send_bytes(sl_link *l, const unsigned char *ptr,
     return sl_link_send_ptr(l, ptr, len, u);
 }
 
+static sl_res_int_fault sl_link_send_static(sl_link *l, sl_bytes b, sl_until u) {
+    if (!b.ptr || b.len <= 0)
+        return sl_link_ok_int(0);
+    return sl_link_send_ptr(l, b.ptr, b.len, u);
+}
+
 static sl_res_int_fault sl_link_recv(sl_link *l, sl_wire w, sl_until u) {
     if (!l || !l->live)
         return sl_link_err_int(sl_fault_closed());

@@ -29,6 +29,11 @@ fn run() {
     if bn != 4 { die("send_bytes length"); }
     println("sent bytes 4");
 
+    let st = c.send_static(b"STAT", until_never());
+    guard let sn = st else { die("send_static"); }
+    if sn != 4 { die("send_static length"); }
+    println("sent static 4");
+
     let ar = ln.accept(until_never());
     guard let s = ar else { die("accept"); }
 
@@ -39,25 +44,31 @@ fn run() {
     if buf[0] != 80 || buf[1] != 73 || buf[2] != 78 || buf[3] != 71 {
         die("payload");
     }
-    let off = 0;
-    if got >= 8 {
-        off = 4;
-        if buf[4] != 80 || buf[5] != 73 || buf[6] != 78 || buf[7] != 71 {
-            die("payload2");
+    let a2 = arena_new(64);
+    let spill = a2.wire(64);
+    let have = got;
+    while have < 12 {
+        let tail = spill[have..];
+        let rmore = s.recv(tail, until_never());
+        guard let gmore = rmore else { die("recv more"); }
+        if gmore <= 0 { die("recv more short"); }
+        let k = 0;
+        while k < gmore {
+            if have + k >= 64 { die("overflow"); }
+            buf[have + k] = spill[have + k];
+            k = k + 1;
         }
+        have = have + gmore;
+    }
+    if buf[4] != 80 || buf[5] != 73 || buf[6] != 78 || buf[7] != 71 {
+        die("payload2");
+    }
+    if buf[8] != 83 || buf[9] != 84 || buf[10] != 65 || buf[11] != 84 {
+        die("payload3");
     }
     println("echo payload ok");
-
-    if off == 0 {
-        let buf2 = a.wire(64);
-        let rr2 = s.recv(buf2, until_never());
-        guard let got2 = rr2 else { die("recv2"); }
-        if got2 != 4 { die("recv2 length"); }
-        if buf2[0] != 80 || buf2[1] != 73 || buf2[2] != 78 || buf2[3] != 71 {
-            die("payload2");
-        }
-    }
     println("echo bytes ok");
+    println("echo static ok");
 
     let p = s.peer();
     if peer_port(p) <= 0 { die("peer"); }
