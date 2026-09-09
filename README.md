@@ -327,6 +327,12 @@ let nothing: opt[str] = none;
 let bad: result[str, str] = err("boom");
 ```
 
+Panics (out-of-bounds index, division by zero, `err_of` on ok, missing
+map key) carry `pkg.func:line`: `list index out of bounds at
+main.foo:12`. A panicking `spawn`ed task reports through stderr and its
+`join_wait` surfaces the same string as `err`, so failures stay visible
+across task boundaries.
+
 `opt[T]` and `result[T, E]` are monomorphized per distinct type
 argument (one C struct per instantiation actually used). Constructing
 `none`/`err(...)` without enough context to infer the missing type

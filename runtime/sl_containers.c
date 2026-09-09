@@ -202,9 +202,9 @@ static sl_bytes sl_bytes_static(const unsigned char *p, long long n) {
     return b;
 }
 
-static int sl_bytes_at(sl_bytes *b, long long i) {
+static int sl_bytes_at(sl_bytes *b, long long i, const char *at) {
     if (i < 0 || i >= b->len)
-        sl_rt_error("byte index out of bounds", i, b->len);
+        sl_rt_error_at("byte index out of bounds", i, b->len, at);
     return (int)b->ptr[i];
 }
 
@@ -316,12 +316,12 @@ static void sl_arr_reserve(sl_arr *a, long long need) {
     a->cap = cap;
 }
 
-static void *sl_arr_get(sl_arr *a, long long i, size_t esz) {
+static void *sl_arr_get(sl_arr *a, long long i, size_t esz, const char *at) {
     if (esz != a->esz)
         sl_rt_error("internal: element size mismatch", (long long)esz,
                     (long long)a->esz);
     if (i < 0 || i >= a->len)
-        sl_rt_error("list index out of bounds", i, a->len);
+        sl_rt_error_at("list index out of bounds", i, a->len, at);
     return a->data + (size_t)i * esz;
 }
 
