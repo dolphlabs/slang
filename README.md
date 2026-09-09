@@ -645,7 +645,9 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
 
 - **`spawn f(args...);`** evaluates every argument in the spawning
   context (no closures — nothing is captured implicitly) and submits
-  `f` as a growable-stack task on the global run queue. `f` must be a
+  `f` as a growable-stack task on the striped run queues (16 hashed
+  stripes with work-stealing, plus a global doorbell for sleepers).
+  `f` must be a
   plain top-level function or an `extern fn`, not a method and not a
   builtin. There is no `spawn` on `net.*`/`time.*` calls directly;
   wrap the native call in a plain function and spawn that instead.
@@ -861,7 +863,8 @@ src/
 runtime/       real C runtime spliced into generated programs
   sl_core.c sl_gc.c sl_containers.c sl_sched.c sl_pool.c
   sl_time.c sl_net.c sl_tls.c sl_json.c sl_proc.c sl_fs.c
-stdlib/        slang-source packages (`import "http"`, `import "byteutil"`)
+stdlib/        slang-source packages (`import "http"`, `import "byteutil"`;
+             `import "log"` is a native package — no source files)
 examples/      one directory per example program
 tests/         language tests plus tests/runtime/ (no slangc)
 Makefile       build/test/clean
