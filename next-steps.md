@@ -36,9 +36,8 @@ Errors are easy to **handle** (`guard let`, `??`, `fault`) and hard to
 
 ## Error model gaps (current focus)
 
-- [x] `guard let` else binds the error value for `result[T, E]` via `err_of`
-- [ ] `opt` none vs `result` err vs `fault`: documented rule + stdlib audit (`http.parse` returns `result[_, str]` while `http.read` returns `result[_, fault]`, and `read` collapses 7 distinct failures to `fault_io()`)
-- [ ] Richer `fault` context (errno, peer, op) without breaking the closed enum (`==`, `fault_kind()` keep working; `log.warn` printing bare `io` is the symptom)
+- [x] `opt` none vs `result` err vs `fault`: documented rule + stdlib audit (PR #63: README rule — absent data is `opt`, bad data is `result[_, str]`, bad world is `result[_, fault]`; `http.parse` threads `err_of` context, `http.read` returns `result[Incoming, str]` with descriptive errors)
+- [x] Richer `fault` context without breaking the closed enum (PR #64: `op` + `code` on `sl_fault`; `==`/`fault_kind` kind-only; `fault_op`/`fault_code` accessors; net tags send/recv/accept/dial/connect with op + errno)
 - [ ] Panic message quality (`sl_rt_error` prints msg + two ints, no task/function/line; join surfaces the string, no stack yet)
 
 ## Notes
