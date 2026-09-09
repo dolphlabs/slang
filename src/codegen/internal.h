@@ -320,6 +320,9 @@ extern const int FS_SIGS_LEN;
 extern const NatSig LOG_SIGS[]; /* src/codegen/pkg_log/ */
 extern const int LOG_SIGS_LEN;
 
+extern const NatSig CRYPTO_SIGS[]; /* src/codegen/pkg_crypto/ */
+extern const int CRYPTO_SIGS_LEN;
+
 /* ------------------------------------------------------------------ */
 /* Functions (declarations generated from every former 'static' def)   */
 /* ------------------------------------------------------------------ */

@@ -27,6 +27,8 @@ static const NatSig *find_any_sig(const char *pkg, const char *fname) {
         ns = find_sig(FS_SIGS, FS_SIGS_LEN, pkg, fname);
     if (!ns)
         ns = find_sig(LOG_SIGS, LOG_SIGS_LEN, pkg, fname);
+    if (!ns)
+        ns = find_sig(CRYPTO_SIGS, CRYPTO_SIGS_LEN, pkg, fname);
     return ns;
 }
 

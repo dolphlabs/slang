@@ -1,0 +1,4 @@
+sha256 ok
+hmac ok
+rand ok
+rand neg ok

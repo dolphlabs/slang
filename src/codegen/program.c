@@ -463,6 +463,9 @@ void force_native_result_types(CG *cg) {
         res_cname(cg, "bytes", "str");
         res_cname(cg, "bool", "str");
     }
+    if (want_pkg(cg, "crypto")) {
+        res_cname(cg, "bytes", "str");
+    }
 }
 
 /* Emit the native-package runtime sections that this program needs,
@@ -474,7 +477,8 @@ void emit_native_runtime(CG *cg) {
     int want_proc = want_pkg(cg, "proc");
     int want_fs = want_pkg(cg, "fs");
     int want_log = want_pkg(cg, "log");
-    if (!want_time && !want_net && !want_proc && !want_fs && !want_log)
+    int want_crypto = want_pkg(cg, "crypto");
+    if (!want_time && !want_net && !want_proc && !want_fs && !want_log && !want_crypto)
         return;
     if (want_time)
         emit_runtime_file(cg, "sl_time.c");
@@ -488,6 +492,8 @@ void emit_native_runtime(CG *cg) {
         emit_runtime_file(cg, "sl_fs.c");
     if (want_log)
         emit_runtime_file(cg, "sl_log.c");
+    if (want_crypto)
+        emit_runtime_file(cg, "sl_crypto.c");
 }
 
 /* Emit the args-struct + task entry function for every distinct
@@ -891,7 +897,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
 }
 
 void codegen_program(Package *pkgs, int npkgs, int main_index,
-                     StrBuf *out, int *out_want_tls) {
+                     StrBuf *out, int *out_want_tls, int *out_want_crypto) {
     CG cg;
     memset(&cg, 0, sizeof(CG));
     cg.out = out;
@@ -953,4 +959,5 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
     cg.out = out;
     gen_whole_program(&cg, pkgs, npkgs, main_index);
     *out_want_tls = cg.want_tls;
+    *out_want_crypto = want_pkg(&cg, "crypto");
 }
