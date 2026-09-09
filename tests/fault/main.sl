@@ -13,6 +13,9 @@ println(fault_refused());
 
 println(to_str(fault_io()));
 
+println(fault_code(fault_io()));
+println(fault_op(fault_io()));
+
 let p = peer_v4(127, 0, 0, 1, 8080);
 println(peer_port(p));
 println(p == peer_v4(127, 0, 0, 1, 8080));

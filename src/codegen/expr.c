@@ -507,6 +507,16 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *inner = xasprintf("((long long)sl_fault_kind(%s))", a);
         return wrap_safepoint(cg, e, ctype_of(cg, "int"), NULL, inner);
     }
+    if (!strcmp(name, "fault_code")) {
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        char *inner = xasprintf("((long long)sl_fault_code(%s))", a);
+        return wrap_safepoint(cg, e, ctype_of(cg, "int"), NULL, inner);
+    }
+    if (!strcmp(name, "fault_op")) {
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        char *inner = xasprintf("(sl_fault_opof(%s))", a);
+        return wrap_safepoint(cg, e, ctype_of(cg, "str"), NULL, inner);
+    }
     if (!strcmp(name, "err_of")) {
         const char *rt = infer_type(cg, e->as.call.args[0]);
         char *tv, *tev;
@@ -1506,8 +1516,7 @@ void gen_print(CG *cg, Expr *call, int newline) {
         emit_line(cg, "printf(\"%%lld%s\", (long long)(%s));",
                   newline ? "\\n" : "", v);
     } else if (is_fault(t)) {
-        emit_line(cg, "({ sl_fault _sl_f = %s; %s(_sl_f.detail%s); });", v,
-                  newline ? "puts" : "fputs", newline ? "" : ", stdout");
+        emit_line(cg, "sl_fault_print(%s, %d);", v, newline ? 1 : 0);
     } else if (is_peer(t)) {
         emit_line(cg,
                   "({ sl_peer _sl_p = %s; printf(\"%%u.%%u.%%u.%%u:%%u%s\", "

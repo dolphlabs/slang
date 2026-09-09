@@ -310,6 +310,17 @@ fn load_config(path: str) -> str {
 println(div10(41) ?? -1);              // -1 (none)
 println(parse_small("big") ?? -1);     // -1 (err)
 
+// `fault` is the closed 5-kind network/runtime failure enum:
+// fault_timeout / fault_reset / fault_closed / fault_io / fault_refused.
+// `==` and `fault_kind` only see the kind. `fault_op` and `fault_code`
+// carry context: the op name ("recv", "connect", "dial", ...) and the
+// errno value (0 when none applies). `to_str` / `+` / `println` render
+// the full "op detail (code N)" form, so failures stay debuggable.
+let f = fault_io();
+println(fault_kind(f));                // 4
+println(fault_op(f));                  // "" (hand-built, no op)
+println(fault_code(f));                // 0
+
 // bare 'none' / 'err(...)' need an annotated binding to infer their
 // other type parameter
 let nothing: opt[str] = none;

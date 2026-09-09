@@ -650,7 +650,28 @@ static char *sl_str_from_bool(bool v) {
 }
 
 static char *sl_str_from_fault(sl_fault f) {
-    return sl_strdup(f.detail);
+    const char *d = f.detail ? f.detail : "";
+    const char *op = f.op ? f.op : "";
+    if (!op[0] && f.code == 0)
+        return sl_strdup(d);
+    sl_rt_preempt_disable();
+    char buf[160];
+    if (op[0] && f.code != 0)
+        snprintf(buf, sizeof(buf), "%s %s (code %d)", op, d, f.code);
+    else if (op[0])
+        snprintf(buf, sizeof(buf), "%s %s", op, d);
+    else
+        snprintf(buf, sizeof(buf), "%s (code %d)", d, f.code);
+    sl_rt_preempt_enable();
+    return sl_strdup(buf);
+}
+
+static void sl_fault_print(sl_fault f, int newline) {
+    char *s = sl_str_from_fault(f);
+    if (newline)
+        puts(s);
+    else
+        fputs(s, stdout);
 }
 
 typedef struct {

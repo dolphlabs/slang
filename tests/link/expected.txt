@@ -5,4 +5,5 @@ sent static 4
 echo payload ok
 echo bytes ok
 echo static ok
+dial refused op=connect code=set kind=5
 link ok

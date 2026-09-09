@@ -72,6 +72,13 @@ fn run() {
 
     let p = s.peer();
     if peer_port(p) <= 0 { die("peer"); }
+    let dr2 = link_dial("127.0.0.1", 1, until_never());
+    guard let bad = dr2 else let de = err_of(dr2) {
+        if fault_kind(de) != 5 { die("dial kind"); }
+        if fault_op(de) != "connect" { die("dial op"); }
+        if fault_code(de) == 0 { die("dial code"); }
+        println("dial refused op=connect code=set kind=5");
+    }
     println("link ok");
 }
 
