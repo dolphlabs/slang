@@ -1,19 +1,20 @@
 # next steps
 
-Track progress top to bottom; tick items as they land. This file is the
-active queue after the HTTP perf chase paused (slang is in Go's RPS/p99
-range; RSS still loses — revisit later, not now).
+Track progress top to bottom; tick items as they land. The HTTP perf
+chase is won on the raw axis (Phase E vs Go on p99 **and** RSS, PR #59
+records the numbers); the ruler stays frozen and Round 2 follow-ups
+live in `optimisation.md`. Current focus is the error model gaps.
 
-## HTTP perf (paused)
+## HTTP perf (won on raw axis, ruler frozen)
 
 - [x] Spawn-inline args (`sl_task_submit_copy`, no heap alloc per accept)
 - [x] Profile VM under wrk c=50 (safepoint/checkin on serve path, not freelist)
 - [x] Revert MPSC task freelist (no win; profile said ~0.2%)
 - [x] Revert Linux TLS-inline of `sl_rt_cur` (segfault: `sl_ctx_switch` onto rsi=0)
 - [x] Hoist for-in safepoint to once per loop (roots iterable alias)
-- [ ] Phase E win vs Go on **both** p99 and RSS (deferred)
+- [x] Raw-axis Phase E vs Go on **both** p99 and RSS (`optimisation.md`, PR #59)
 
-## Error visibility + log (current focus)
+## Error visibility + log (done)
 
 Errors are easy to **handle** (`guard let`, `??`, `fault`) and hard to
 **see** (else branch throws away `E`, no levels, no context).
@@ -25,7 +26,7 @@ Errors are easy to **handle** (`guard let`, `??`, `fault`) and hard to
 - [x] `log` accepts `str` or `fault`, `fault` concatenates with `+`
 - [x] Demo: HTTP/TLS handlers log parse/I/O failures via `err_of`
 
-## Language features (after log)
+## Language features (after error model)
 
 - [ ] `crypto` — hash (SHA-256), HMAC, CSPRNG (TLS exists; services need these)
 - [ ] SQL — driver + `result`/connection errors wired through same visibility story
@@ -33,12 +34,11 @@ Errors are easy to **handle** (`guard let`, `??`, `fault`) and hard to
 - [ ] HTTP/2 — multiplexing, ALPN (builds on `net` + TLS)
 - [ ] Second `os` package — env beyond `proc`, argv, cwd, file metadata (avoid duplicating `fs`)
 
-## Error model gaps (fold into log slice or follow immediately after)
+## Error model gaps (current focus)
 
-- [x] `guard let` else binds the error value for `result[T, E]` via `err_of`
-- [ ] Consistent story for `opt` none vs `result` err vs `fault` (when to use which in stdlib)
-- [ ] Richer `fault` context (errno, peer, op) without breaking the closed enum
-- [ ] Panic message quality (spawn join already surfaces string; no stack yet)
+- [x] `opt` none vs `result` err vs `fault`: documented rule + stdlib audit (PR #63: README rule — absent data is `opt`, bad data is `result[_, str]`, bad world is `result[_, fault]`; `http.parse` threads `err_of` context, `http.read` returns `result[Incoming, str]` with descriptive errors)
+- [x] Richer `fault` context without breaking the closed enum (PR #64: `op` + `code` on `sl_fault`; `==`/`fault_kind` kind-only; `fault_op`/`fault_code` accessors; net tags send/recv/accept/dial/connect with op + errno)
+- [x] Panic message quality (PR #65: `sl_rt_error_at` threads `pkg.func:line` through div-by-zero, `err_of`-on-ok, map-missing-key, and list/bytes/wire bounds; `join_wait` surfaces the located string)
 
 ## Notes
 
