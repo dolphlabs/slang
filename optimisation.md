@@ -25,4 +25,4 @@ Per-request allocated, parked, switched, and collected work that C/Rust/Go-raw s
 - [x] 10. Per-worker reactor (park counters first, PR #55 `perf/per-worker-reactor`; full shard split deferred — needs wake-up-safe queue surgery)
 - [x] 11. Task + arena recycling (per-thread task cache first, PR #56 `perf/task-arena-recycling`; arena reuse stays on freelist)
 - [x] 12. GC-free fast-path detection (adaptive threshold on low survival, PR #57 `perf/gc-free-fastpath`)
-- [ ] 13. Split the axes in docs (raw-throughput vs real-server claims separated; ruler vs opt vs stdlib/http callouts)
+- [x] 13. Split the axes in docs (win conditions per axis, opt on send_static, PR #58 `docs/axis-split`)
