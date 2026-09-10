@@ -912,6 +912,42 @@ browser stacks use — in both directions: blocks it produces decode here,
 and blocks produced here inflate there. Those fixtures are baked into
 `tests/http2` as literals, so the suite needs no nghttp2 to run.
 
+**Connection layer.** `accept_preface` verifies the client preface and
+sends SETTINGS; `read_request` returns a complete `Req` (method, path,
+scheme, authority, headers, body), handling SETTINGS/PING/WINDOW_UPDATE/
+GOAWAY itself and reassembling HEADERS + CONTINUATION + DATA; `respond`
+writes the response, splitting DATA to the peer's advertised max frame
+size rather than assuming ours.
+
+```slang
+fn serve(c: link) {
+    let ra = arena_new(65536);
+    let scratch = ra.wire(16384);
+    let cn = http2.conn_new();
+    let rd = http2.reader_new();
+    guard let _p = http2.accept_preface(rd, &mut c, scratch, until_never())
+        else { return; }
+    while true {
+        let rr = http2.read_request(cn, rd, &mut c, scratch, until_never());
+        guard let req = rr else { return; }
+        let hs: [http2.Header] = [];
+        http2.respond(cn, &mut c, req.stream, "200", hs,
+                      to_bytes("hello"), until_never());
+    }
+}
+```
+
+Verified against real `curl --http2-prior-knowledge`: GET, POST with a
+body, five requests multiplexed on one connection, and a 64KB upload
+that exercises DATA chunking and flow-control `WINDOW_UPDATE`.
+
+Streams are served **one complete request at a time**. That is
+conformant — a server may process requests in any order — and it keeps
+one task per connection with no writer lock. Concurrent stream
+processing needs a serialised writer and is not built yet. `PRIORITY` is
+parsed and ignored (it is deprecated in RFC 9113), and send-side flow
+control assumes the peer's window is adequate rather than tracking it.
+
 #### `byteutil`
 
 Search, trim, and split on the `bytes` type — no new syntax. The
