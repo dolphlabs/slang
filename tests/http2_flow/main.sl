@@ -20,7 +20,8 @@ fn ms(n: int) -> int { return n * 1000000; }
 fn lim() -> http2.Limits {
     return http2.Limits {
         handshake: ms(3000), idle: ms(3000),
-        request: ms(3000), write: ms(3000)
+        request: ms(3000), write: ms(3000),
+        max_concurrent: 100
     };
 }
 
@@ -42,10 +43,11 @@ fn body_for(path: str) -> bytes {
     return out[0..n];
 }
 
-fn handle(stream: i32, path: str, wch: chan[http2.WMsg]) {
+fn handle(stream: i32, path: str, wch: chan[http2.WMsg], g: chan[bool]) {
     let extra: [http2.Header] = [];
     chan_send(wch, http2.response_msg(stream as int, "200", extra,
                                       body_for(path)));
+    http2.gate_leave(g);
 }
 
 fn serve(fd: i32, out: chan[str]) {
@@ -53,6 +55,7 @@ fn serve(fd: i32, out: chan[str]) {
     let rd = http2.reader_new();
     let wch: chan[http2.WMsg] = make_chan(32);
     let l = lim();
+    let g = http2.gate(l.max_concurrent);
     spawn http2.writer_task(http2.transport_fd(fd), wch, l.write);
 
     let pr = http2.accept_preface(rd, http2.transport_fd(fd), wch,
@@ -68,7 +71,8 @@ fn serve(fd: i32, out: chan[str]) {
             chan_send(out, "done:" + e);
             return;
         }
-        spawn handle(req.stream as i32, req.path, wch);
+        http2.gate_enter(g);
+        spawn handle(req.stream as i32, req.path, wch, g);
     }
 }
 

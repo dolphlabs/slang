@@ -33,7 +33,7 @@ fn body_for(path: str) -> bytes {
     return out[0..200000];
 }
 
-fn handle(stream: i32, path: str, body: bytes, wch: chan[http2.WMsg]) {
+fn handle(stream: i32, path: str, body: bytes, wch: chan[http2.WMsg], g: chan[bool]) {
     if path == "/slow" {
         time.sleep(400000000);
     }
@@ -51,6 +51,7 @@ fn handle(stream: i32, path: str, body: bytes, wch: chan[http2.WMsg]) {
         out = out + to_bytes(" echo=") + body;
     }
     chan_send(wch, http2.response_msg(stream as int, "200", extra, out));
+    http2.gate_leave(g);
 }
 
 fn serve(fd: i32) {
@@ -58,6 +59,7 @@ fn serve(fd: i32) {
     let rd = http2.reader_new();
     let wch: chan[http2.WMsg] = make_chan(64);
     let lim = http2.default_limits();
+    let g = http2.gate(lim.max_concurrent);
     spawn http2.writer_task(http2.transport_fd(fd), wch, lim.write);
 
     let pr = http2.accept_preface(rd, http2.transport_fd(fd), wch,
@@ -74,7 +76,8 @@ fn serve(fd: i32) {
             net.close(fd);
             return;
         }
-        spawn handle(req.stream as i32, req.path, req.body, wch);
+        http2.gate_enter(g);
+        spawn handle(req.stream as i32, req.path, req.body, wch, g);
     }
 }
 

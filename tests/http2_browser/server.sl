@@ -59,7 +59,7 @@ fn page() -> str {
         + "</script></body></html>\n";
 }
 
-fn handle(stream: i32, path: str, wch: chan[http2.WMsg]) {
+fn handle(stream: i32, path: str, wch: chan[http2.WMsg], g: chan[bool]) {
     let ct = "text/plain; charset=utf-8";
     let body = b"";
     let status = "200";
@@ -83,6 +83,7 @@ fn handle(stream: i32, path: str, wch: chan[http2.WMsg]) {
         http2.Header { name: "cache-control", value: "no-store" }
     ];
     chan_send(wch, http2.response_msg(stream as int, status, extra, body));
+    http2.gate_leave(g);
 }
 
 fn serve(ssl: rawptr, n: int) {
@@ -99,6 +100,7 @@ fn serve(ssl: rawptr, n: int) {
     let rd = http2.reader_new();
     let wch: chan[http2.WMsg] = make_chan(64);
     let lim = http2.default_limits();
+    let g = http2.gate(lim.max_concurrent);
     spawn http2.writer_task(t, wch, lim.write);
 
     let pr = http2.accept_preface(rd, t, wch,
@@ -132,7 +134,8 @@ fn serve(ssl: rawptr, n: int) {
             return;
         }
         log.info("conn ${n}: stream ${req.stream} " + req.method + " " + req.path);
-        spawn handle(req.stream as i32, req.path, wch);
+        http2.gate_enter(g);
+        spawn handle(req.stream as i32, req.path, wch, g);
     }
 }
 
