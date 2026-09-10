@@ -1,4 +1,5 @@
 import "net";
+import "time";
 
 // HTTP/2 connection and stream layer (RFC 9113).
 //
@@ -19,9 +20,10 @@ import "net";
 //   net.recv also hands back `bytes` directly, so the byte-at-a-time
 //   wire copy the `link` path needed disappears from the read path.
 //
-// The cost is deadlines: net.recv has no `until` parameter, so a
-// connection cannot currently time out a slow peer. That is a real gap
-// for a public server and is noted rather than papered over.
+// Every read and every write is bounded by a deadline -- see Limits
+// below. A peer that opens a connection and then dribbles, or one that
+// stops reading our responses, is disconnected rather than allowed to
+// hold a task forever.
 //
 // Streams are served CONCURRENTLY. One task reads frames and dispatches
 // each complete request to its own spawned handler; every byte that
@@ -41,6 +43,41 @@ import "net";
 //
 // Frames for different streams still interleave at frame boundaries --
 // that is exactly what multiplexing means, and it is legal.
+
+// ---- deadlines -------------------------------------------------------
+//
+// Four separate budgets, in nanoseconds, because they defend against
+// four different peers and want wildly different numbers.
+//
+// `idle` is the generous one on purpose: an HTTP/2 connection sitting
+// open with no streams is completely normal -- that is the whole point
+// of connection reuse -- so timing it out aggressively breaks correct
+// clients. `request` is the strict one: once a client has started a
+// request it must finish it, and dribbling DATA forever is exactly the
+// slowloris shape.
+pub gc struct Limits {
+    handshake: int,   // connect -> valid preface received
+    idle: int,        // no request in flight, waiting for the next frame
+    request: int,     // first HEADERS octet -> END_STREAM
+    write: int,       // one writer_task send
+}
+
+pub fn default_limits() -> Limits {
+    return Limits {
+        handshake: 10000000000,     //  10s
+        idle: 120000000000,         // 120s
+        request: 30000000000,       //  30s
+        write: 30000000000          //  30s
+    };
+}
+
+// The reserved error string net.recv_until / net.send_until return when
+// a deadline passes. Exposed as a predicate so callers can react to a
+// slow peer (GOAWAY with ENHANCE_YOUR_CALM) differently from a broken
+// one, without hardcoding the text.
+pub fn is_timeout(e: str) -> bool {
+    return e == "timeout";
+}
 
 pub let DEFAULT_MAX_FRAME = 16384;
 pub let DEFAULT_WINDOW = 65535;
@@ -105,7 +142,12 @@ pub fn reader_new() -> Reader {
 // Note the `&mut *c` at every site below that forwards this borrow:
 // passing `c` directly MOVES it, so the second call would fail with
 // "use of moved value". Reborrowing keeps the caller's borrow usable.
-pub fn read_frame(r: Reader, fd: i32, max_frame: int)
+//
+// `u` bounds the WHOLE call, not each recv: a peer that sends one octet
+// every second must still finish the frame inside the budget, which is
+// what makes this a slowloris defence rather than a keepalive check.
+// Pass until_never() only where blocking forever is genuinely intended.
+pub fn read_frame(r: Reader, fd: i32, max_frame: int, u: until)
         -> result[Frame, str] {
     while true {
         if len(r.buf) >= FRAME_HEADER_LEN {
@@ -123,8 +165,13 @@ pub fn read_frame(r: Reader, fd: i32, max_frame: int)
                 return ok(f);
             }
         }
-        let rr = net.recv(fd, 16384);
+        let rr = net.recv_until(fd, 16384, u);
         guard let chunk = rr else let e = err_of(rr) {
+            // Passed through unprefixed so is_timeout() still matches;
+            // every other error keeps the "recv: " context.
+            if is_timeout(e) {
+                return err(e);
+            }
             return err("recv: " + e);
         }
         if len(chunk) == 0 {
@@ -137,12 +184,15 @@ pub fn read_frame(r: Reader, fd: i32, max_frame: int)
 // ---- handshake -------------------------------------------------------
 
 // Verify the 24-byte client connection preface and send ours.
-pub fn accept_preface(r: Reader, fd: i32, wch: chan[bytes])
+pub fn accept_preface(r: Reader, fd: i32, wch: chan[bytes], u: until)
         -> result[bool, str] {
     let want = preface();
     while len(r.buf) < len(want) {
-        let rr = net.recv(fd, 16384);
+        let rr = net.recv_until(fd, 16384, u);
         guard let chunk = rr else let e = err_of(rr) {
+            if is_timeout(e) {
+                return err(e);
+            }
             return err("preface recv: " + e);
         }
         if len(chunk) == 0 {
@@ -229,8 +279,35 @@ fn handle_control(cn: Conn, wch: chan[bytes], f: Frame)
         cn.gone = true;
         return ok(true);
     }
-    if f.ftype == T_RST_STREAM || f.ftype == T_PRIORITY {
-        return ok(true);           // nothing to unwind while serving serially
+    // PRIORITY is deprecated (RFC 9113 §5.3.2) and we act on none of
+    // it, but "ignore" means ignore the PRIORITISATION -- the frame
+    // itself still has to be well-formed, or a malformed one becomes an
+    // undetected desync rather than the connection error it is.
+    if f.ftype == T_PRIORITY {
+        if f.stream == 0 {
+            return err("PRIORITY on stream 0");
+        }
+        if len(f.payload) != 5 {
+            return err("PRIORITY payload must be 5 octets");
+        }
+        // The dependency is the low 31 bits; the top bit is exclusive.
+        let dep = be32(f.payload, 0) & 0x7fffffff;
+        if dep == f.stream {
+            return err("PRIORITY: stream depends on itself");
+        }
+        return ok(true);
+    }
+    if f.ftype == T_RST_STREAM {
+        if f.stream == 0 {
+            return err("RST_STREAM on stream 0");
+        }
+        if len(f.payload) != 4 {
+            return err("RST_STREAM payload must be 4 octets");
+        }
+        // Nothing to unwind here: a handler task owns its own stream and
+        // finishes on its own. Cancelling it mid-flight needs a
+        // per-stream registry, which flow control will want anyway.
+        return ok(true);
     }
     if f.ftype == T_PUSH_PROMISE {
         return err("client sent PUSH_PROMISE");
@@ -250,16 +327,26 @@ fn pseudo(hs: [Header], name: str) -> str {
 }
 
 // Read frames until one complete request has arrived.
-pub fn read_request(cn: Conn, r: Reader, fd: i32, wch: chan[bytes])
-        -> result[Req, str] {
+//
+// Two clocks, switched at the first HEADERS. Before it the connection
+// is idle and gets the generous `idle` budget, refreshed by each
+// control frame that arrives -- a client PINGing a kept-alive
+// connection is behaving correctly and must not be disconnected. After
+// it the strict `request` budget applies to the request as a WHOLE and
+// is never refreshed, so no amount of dribbled DATA or CONTINUATION can
+// extend it.
+pub fn read_request(cn: Conn, r: Reader, fd: i32, wch: chan[bytes],
+                    lim: Limits) -> result[Req, str] {
     let hdr_block = b"";
     let stream = 0;
     let collecting = false;
     let body = b"";
     let want_body = false;
+    let in_request = false;
+    let deadline = until_of(time.mono() + lim.idle);
 
     while true {
-        let fr = read_frame(r, fd, DEFAULT_MAX_FRAME);
+        let fr = read_frame(r, fd, DEFAULT_MAX_FRAME, deadline);
         guard let f = fr else let e = err_of(fr) {
             return err(e);
         }
@@ -272,7 +359,15 @@ pub fn read_request(cn: Conn, r: Reader, fd: i32, wch: chan[bytes])
             if cn.gone {
                 return err("peer sent GOAWAY");
             }
+            if !in_request {
+                deadline = until_of(time.mono() + lim.idle);
+            }
             continue;
+        }
+
+        if !in_request {
+            in_request = true;
+            deadline = until_of(time.mono() + lim.request);
         }
 
         if f.ftype == T_HEADERS {
@@ -300,6 +395,11 @@ pub fn read_request(cn: Conn, r: Reader, fd: i32, wch: chan[bytes])
             if (f.flags & FLAG_PRIORITY) != 0 {
                 if len(pay) < 5 {
                     return err("HEADERS with PRIORITY but no priority field");
+                }
+                // Same self-dependency rule as a PRIORITY frame: the
+                // prioritisation is ignored, the well-formedness is not.
+                if (be32(pay, 0) & 0x7fffffff) == f.stream {
+                    return err("HEADERS priority: stream depends on itself");
                 }
                 pay = pay[5..];
             }
@@ -370,7 +470,7 @@ pub fn read_request(cn: Conn, r: Reader, fd: i32, wch: chan[bytes])
                     stream: stream, method: m, path: p, scheme: s,
                     authority: a, headers: hs, body: b""
                 };
-                let br = read_body(cn, r, fd, stream, wch);
+                let br = read_body(cn, r, fd, stream, wch, deadline);
                 guard let bd = br else let e = err_of(br) {
                     return err(e);
                 }
@@ -393,11 +493,15 @@ pub fn read_request(cn: Conn, r: Reader, fd: i32, wch: chan[bytes])
 }
 
 // Read DATA frames for `stream` until END_STREAM.
+//
+// `u` is the caller's request deadline, passed straight through rather
+// than refreshed: the body is part of the same request, and a budget
+// that restarted per DATA frame would defend against nothing.
 fn read_body(cn: Conn, r: Reader, fd: i32, stream: int,
-             wch: chan[bytes]) -> result[bytes, str] {
+             wch: chan[bytes], u: until) -> result[bytes, str] {
     let body = b"";
     while true {
-        let fr = read_frame(r, fd, DEFAULT_MAX_FRAME);
+        let fr = read_frame(r, fd, DEFAULT_MAX_FRAME, u);
         guard let f = fr else let e = err_of(fr) {
             return err(e);
         }
@@ -437,15 +541,25 @@ fn read_body(cn: Conn, r: Reader, fd: i32, stream: int,
 // writes, opposite directions on the same socket, which is safe. Two
 // tasks WRITING would not be, and that is the whole reason this task
 // exists.
-pub fn writer_task(fd: i32, wch: chan[bytes]) {
+// The write deadline matters as much as the read one and defends
+// against the mirror-image peer: one that sends requests and then stops
+// reading. Its receive window fills, our send blocks, and this task --
+// the only writer for the connection -- parks forever while every
+// handler behind it piles up on the channel. Bounding the send turns
+// that from a permanent leak into a dropped connection.
+//
+// A timed-out send has already put an unknown number of octets on the
+// wire, so there is nothing to do but abandon the connection; retrying
+// would resume mid-frame. Returning is exactly that.
+pub fn writer_task(fd: i32, wch: chan[bytes], write_ns: int) {
     while true {
         let m = chan_recv(wch);
         guard let frames = m else {
             return;              // channel closed: connection is done
         }
-        let sr = net.send(fd, frames);
+        let sr = net.send_until(fd, frames, until_of(time.mono() + write_ns));
         guard let _n = sr else {
-            return;              // peer gone; drop the rest
+            return;              // peer gone, or too slow to read
         }
     }
 }

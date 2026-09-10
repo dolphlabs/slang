@@ -968,24 +968,33 @@ reader can no longer use it — the two-task design is impossible with
 that type. An `i32` fd is freely copyable, and one reader plus one
 writer in opposite directions on a socket is safe. `net.recv` also
 returns `bytes` directly, so no byte-at-a-time copy sits on the read
-path. The cost is deadlines: `net.recv` takes no `until`, so a
-connection cannot currently time out a slow peer — a real gap for a
-public server.
+path.
 
 ```slang
-fn serve(c: link) {
-    let ra = arena_new(65536);
-    let scratch = ra.wire(16384);
+fn handle(stream: i32, path: str, peer_max: i32, wch: chan[bytes]) {
+    let hs: [http2.Header] = [];
+    chan_send(wch, http2.response_frames(peer_max as int, stream as int,
+                                         "200", hs, to_bytes("hello")));
+}
+
+fn serve(fd: i32) {
     let cn = http2.conn_new();
     let rd = http2.reader_new();
-    guard let _p = http2.accept_preface(rd, &mut c, scratch, until_never())
-        else { return; }
+    let wch: chan[bytes] = make_chan(32);
+    let lim = http2.default_limits();
+    spawn http2.writer_task(fd, wch, lim.write);
+
+    guard let _p = http2.accept_preface(rd, fd, wch,
+            until_of(time.mono() + lim.handshake)) else { return; }
     while true {
-        let rr = http2.read_request(cn, rd, &mut c, scratch, until_never());
-        guard let req = rr else { return; }
-        let hs: [http2.Header] = [];
-        http2.respond(cn, &mut c, req.stream, "200", hs,
-                      to_bytes("hello"), until_never());
+        let rr = http2.read_request(cn, rd, fd, wch, lim);
+        guard let req = rr else let e = err_of(rr) {
+            if http2.is_timeout(e) { /* slow peer; shed it */ }
+            chan_close(wch);
+            return;
+        }
+        spawn handle(req.stream as i32, req.path,
+                     cn.peer_max_frame as i32, wch);
     }
 }
 ```
@@ -994,12 +1003,43 @@ Verified against real `curl --http2-prior-knowledge`: GET, POST with a
 body, five requests multiplexed on one connection, and a 64KB upload
 that exercises DATA chunking and flow-control `WINDOW_UPDATE`.
 
-Streams are served **one complete request at a time**. That is
-conformant — a server may process requests in any order — and it keeps
-one task per connection with no writer lock. Concurrent stream
-processing needs a serialised writer and is not built yet. `PRIORITY` is
-parsed and ignored (it is deprecated in RFC 9113), and send-side flow
-control assumes the peer's window is adequate rather than tracking it.
+##### Deadlines
+
+Every read and every write is bounded, so a peer that connects and then
+dribbles — or one that stops reading our responses — is disconnected
+rather than left holding a task forever. `http2.Limits` carries four
+separate budgets because they defend against four different peers:
+
+| Budget | Covers |
+|---|---|
+| `handshake` | connect → valid client preface |
+| `idle` | no request in flight, waiting for the next frame |
+| `request` | first HEADERS octet → END_STREAM |
+| `write` | one `writer_task` send |
+
+`idle` is deliberately generous (2 minutes by default): an HTTP/2
+connection sitting open with no streams is completely normal, and timing
+it out aggressively breaks correct clients. `request` is the strict one
+and applies to the request **as a whole** — it is never refreshed by
+incoming frames, so dribbling DATA one octet at a time cannot extend it.
+That distinction is the whole defence; a per-read timeout would never
+fire against a slowloris, because every individual read makes progress.
+
+`http2.is_timeout(e)` distinguishes a slow peer from a broken one, so a
+server can answer the first with `GOAWAY` / `E_ENHANCE_YOUR_CALM`.
+`tests/http2_deadline` runs all three attacker shapes — silent,
+idle-after-handshake, and octet-at-a-time dribbling — against a server
+with sub-second budgets and requires all three to be shed.
+
+##### Known gaps
+
+`PRIORITY` is validated but not acted on: it is deprecated in RFC 9113
+§5.3.2, so ignoring the prioritisation is conformant, but a malformed
+frame is still rejected as the connection error it is (§6.3) rather than
+waved through to desync the stream. Send-side flow control assumes the
+peer's window is adequate rather than tracking `WINDOW_UPDATE` against
+it. Interop evidence comes from curl and nghttp2, which share an
+implementation — an independent client has not been run against it.
 
 #### `byteutil`
 
