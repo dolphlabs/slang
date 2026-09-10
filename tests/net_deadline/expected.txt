@@ -1,0 +1,6 @@
+expired deadline: timeout
+silent peer: timeout after waiting
+live deadline: payload ok
+send_until: ok
+expired send: timeout
+net deadline ok

@@ -483,6 +483,43 @@ let wr: result[bytes, str] = net.recv(cfd, 16); // "would block" err if idle
 net.close(cfd);
 ```
 
+##### Deadlines
+
+`net.recv` and `net.send` wait for as long as the peer takes, which on
+a public listener is indefinitely: a client that connects and then
+neither sends nor reads parks the serving task on the reactor forever,
+holding its stack and its GC roots. That is slowloris, and the defence
+is `recv_until` / `send_until`, which take an `until` — an absolute
+monotonic instant, not a duration:
+
+```slang
+import "net";
+import "time";
+
+let deadline = until_of(time.mono() + 5000000000);   // 5s from now
+let rr = net.recv_until(cfd, 4096, deadline);
+guard let data = rr else let e = err_of(rr) {
+    if e == "timeout" { net.close(cfd); return; }    // peer went quiet
+    log.error("recv: " + e);                         // peer broke
+    return;
+}
+```
+
+`"timeout"` is a reserved error string: it means the deadline passed,
+and it is the only error text these calls invent rather than take from
+the OS. Every other error is `strerror`/OpenSSL text as before.
+
+One asymmetry worth knowing: a `send_until` that times out **has
+already written some bytes**, and `result[i32, str]` has no room to
+report both "timed out" and "wrote this much". A `"timeout"` from
+`send_until` therefore means the stream is at an unknown offset and the
+connection must be closed, not retried. For a framed protocol that is
+the right contract regardless — a half-written frame is unrecoverable.
+
+`net.tls_recv_until` / `net.tls_send_until` are the same thing over
+TLS, with the same reserved string. The `link` API takes an `until` on
+`accept`/`send`/`recv` already.
+
 See `examples/httpd/` for a minimal HTTP server on `link` plus the
 `http` stdlib package.
 

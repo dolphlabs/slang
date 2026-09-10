@@ -107,15 +107,52 @@ static int sl_reactor_fd = -1;
 #if defined(SL_REACTOR_EPOLL)
 static int sl_reactor_efd = -1;
 static char sl_reactor_shutdown_token;
+static int sl_reactor_timer_efd = -1;
+static char sl_reactor_timer_token;
 #endif
 static pthread_mutex_t sl_reactor_mu = PTHREAD_MUTEX_INITIALIZER;
 static sl_task *sl_reactor_waiting = NULL; /* linked via sl_task.next,
     guarded by sl_reactor_mu -- same reuse-`next`-for-one-wait-list-
     at-a-time pattern chan/time already establish */
+static long long sl_reactor_wake_at = 0; /* absolute mono-ns the
+    reactor's CURRENT sleep is due to end, or 0 for an indefinite
+    sleep. Guarded by sl_reactor_mu. Lets a registering waiter skip
+    the timer nudge when the reactor is already going to wake soon
+    enough to see it -- see sl_reactor_timer_nudge. */
 
 #define SL_REACTOR_READ  0
 #define SL_REACTOR_WRITE 1
 #define SL_REACTOR_SHUTDOWN_IDENT 0xDEADBEEF
+#define SL_REACTOR_TIMER_IDENT    0xDEADBEEE
+
+/* The reactor computes how long to sleep from the deadlines already on
+ * sl_reactor_waiting, and only then blocks. A task that registers a
+ * deadline AFTER that computation -- the overwhelmingly common case,
+ * since the reactor is asleep almost all the time -- would otherwise
+ * be invisible until some unrelated event happened to wake the loop,
+ * and with no other traffic the reactor sleeps forever (tsp == NULL)
+ * and the deadline never fires at all.
+ *
+ * So every deadline-bearing registration nudges the reactor once,
+ * making it round the loop and recompute its timeout with the new
+ * waiter included. Both the kqueue EVFILT_USER knote and the epoll
+ * eventfd latch a trigger that arrives before the wait begins, so
+ * there is no lost-wakeup race with the unlock/block window.
+ *
+ * This is a distinct ident from the shutdown nudge on purpose: the
+ * shutdown event deliberately drains every waiter and marks it
+ * interrupted, which is exactly the wrong response to "a timer needs
+ * recomputing". */
+static void sl_reactor_timer_nudge(void) {
+#if defined(SL_REACTOR_KQUEUE)
+    struct kevent kev;
+    EV_SET(&kev, SL_REACTOR_TIMER_IDENT, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
+    kevent(sl_reactor_fd, &kev, 1, NULL, 0, NULL);
+#else
+    uint64_t one = 1;
+    (void)write(sl_reactor_timer_efd, &one, sizeof(one));
+#endif
+}
 
 /* abort_on_shutdown differs between callers: accept/recv/dial pass 1
  * (check sl_rt_shutdown_flag both before parking -- so a waiter that
@@ -197,6 +234,16 @@ static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
         errno == EEXIST)
         epoll_ctl(sl_reactor_fd, EPOLL_CTL_MOD, fd, &ev);
 #endif
+    /* After EV_ADD, before parking, and still under sl_reactor_mu: the
+       reactor must recompute its sleep with this waiter included --
+       see sl_reactor_timer_nudge for why nothing else would ever wake
+       it. Skipped when the reactor is already due to wake at or before
+       this deadline, which is the common case once a server has more
+       than one deadline-bearing connection, and saves a syscall on
+       every park. */
+    if (deadline && (sl_reactor_wake_at == 0 ||
+                     sl_reactor_wake_at > deadline))
+        sl_reactor_timer_nudge();
     sl_task_park(&sl_reactor_mu);
     sl_reactor_self->io_deadline_ns = 0;
     int sl_reactor_wait_shutdown =
@@ -235,6 +282,17 @@ static void *sl_reactor_thread(void *arg) {
                 if (soonest < 0 || rem < soonest)
                     soonest = rem;
             }
+            /* Published to would-be nudgers while still holding the
+               lock, and read by them under the same lock -- that
+               ordering is what makes the nudge skippable. If a
+               registration wins the lock first, this computation
+               already includes it; if it loses, it reads a value that
+               provably does NOT account for it and decides from that.
+               Publishing after the unlock would leave the window where
+               a registration reads the PREVIOUS round's wake time,
+               concludes "the reactor will wake in time", and is then
+               overwritten by an indefinite sleep. */
+            sl_reactor_wake_at = soonest < 0 ? 0 : now + soonest;
         }
         pthread_mutex_unlock(&sl_reactor_mu);
 #if defined(SL_REACTOR_KQUEUE)
@@ -252,10 +310,23 @@ static void *sl_reactor_thread(void *arg) {
         if (n < 0) { if (errno == EINTR) continue; continue; }
         pthread_mutex_lock(&sl_reactor_mu);
         for (int i = 0; i < n; i++) {
+            /* A timer nudge carries no task and means nothing beyond
+               "go round again" -- the sl_reactor_expire_waiters() call
+               at the bottom of this iteration is the whole point of
+               it. Skipping it before `t` is read matters: udata /
+               data.ptr is not a task pointer on these events. */
 #if defined(SL_REACTOR_KQUEUE)
+            if (events[i].filter == EVFILT_USER &&
+                events[i].ident == SL_REACTOR_TIMER_IDENT)
+                continue;
             int is_shutdown = events[i].filter == EVFILT_USER;
             sl_task *t = is_shutdown ? NULL : (sl_task *)events[i].udata;
 #else
+            if (events[i].data.ptr == &sl_reactor_timer_token) {
+                uint64_t tx;
+                (void)read(sl_reactor_timer_efd, &tx, sizeof(tx));
+                continue;
+            }
             int is_shutdown = events[i].data.ptr == &sl_reactor_shutdown_token;
             sl_task *t = is_shutdown ? NULL : (sl_task *)events[i].data.ptr;
             if (is_shutdown) {
@@ -414,6 +485,8 @@ static void sl_reactor_start(void) {
     struct kevent kev;
     EV_SET(&kev, SL_REACTOR_SHUTDOWN_IDENT, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, NULL);
     kevent(sl_reactor_fd, &kev, 1, NULL, 0, NULL);
+    EV_SET(&kev, SL_REACTOR_TIMER_IDENT, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, NULL);
+    kevent(sl_reactor_fd, &kev, 1, NULL, 0, NULL);
 #else
     sl_reactor_fd = epoll_create1(EPOLL_CLOEXEC);
     if (sl_reactor_fd < 0) {
@@ -430,6 +503,17 @@ static void sl_reactor_start(void) {
     ev.data.ptr = &sl_reactor_shutdown_token;
     if (epoll_ctl(sl_reactor_fd, EPOLL_CTL_ADD, sl_reactor_efd, &ev) != 0) {
         fprintf(stderr, "slang: failed to arm shutdown eventfd\n");
+        exit(1);
+    }
+    sl_reactor_timer_efd = eventfd(0, EFD_CLOEXEC);
+    if (sl_reactor_timer_efd < 0) {
+        fprintf(stderr, "slang: failed to create timer eventfd\n");
+        exit(1);
+    }
+    ev.events = EPOLLIN;
+    ev.data.ptr = &sl_reactor_timer_token;
+    if (epoll_ctl(sl_reactor_fd, EPOLL_CTL_ADD, sl_reactor_timer_efd, &ev) != 0) {
+        fprintf(stderr, "slang: failed to arm timer eventfd\n");
         exit(1);
     }
 #endif
@@ -683,8 +767,17 @@ static sl_res_i32_str *sl_net_dial(const char *host, int port) {
     return sl_net_ok_i32((int32_t)fd);
 }
 
-static sl_res_i32_str *sl_net_send(int fd, sl_bytes *data) {
+/* See sl_net_recv_u for the `u` convention. A send that times out
+ * mid-buffer has ALREADY put `off` bytes on the wire, and there is no
+ * way to report both "timed out" and "wrote this much" through
+ * result[i32,str] -- so a "timeout" error here means the stream is
+ * left at an unknown offset and the connection must be closed, not
+ * retried. That is the right contract for a framed protocol anyway:
+ * a half-written frame is unrecoverable regardless. */
+static sl_res_i32_str *sl_net_send_u(int fd, sl_bytes *data, sl_until u) {
     long long off = 0;
+    if (u && sl_until_hit(u) && data->len > 0)
+        return sl_net_err_i32("timeout");
     while (off < data->len) {
         ssize_t n = send(fd, data->ptr + off,
                          (size_t)(data->len - off), 0);
@@ -693,14 +786,24 @@ static sl_res_i32_str *sl_net_send(int fd, sl_bytes *data) {
             return sl_net_err_i32(strerror(errno));
         if (sl_net_user_nonblock_contains((void *)(intptr_t)fd))
             return sl_net_err_i32("would block");
-        sl_reactor_wait(fd, SL_REACTOR_WRITE, 0); /* return value
-            deliberately ignored -- always keep retrying, even
-            through a shutdown nudge, to let an in-flight write
-            finish (tests/proc_shutdown's own requirement) -- see
-            sl_reactor_wait's own comment for why abort_on_shutdown
-            must be 0 here specifically, not 1 */
+        /* abort_on_shutdown stays 0: always keep retrying through a
+           shutdown nudge so an in-flight write can finish
+           (tests/proc_shutdown's own requirement) -- see
+           sl_reactor_wait's own comment for why 1 here would busy-spin
+           at 100% CPU. Only -2 (deadline) ends the loop; -1 is the
+           shutdown nudge and is ignored exactly as before. */
+        if (sl_reactor_wait_until(fd, SL_REACTOR_WRITE, 0, u) == -2)
+            return sl_net_err_i32("timeout");
     }
     return sl_net_ok_i32((int32_t)data->len);
+}
+
+static sl_res_i32_str *sl_net_send(int fd, sl_bytes *data) {
+    return sl_net_send_u(fd, data, 0);
+}
+
+static sl_res_i32_str *sl_net_send_until(int fd, sl_bytes *data, sl_until u) {
+    return sl_net_send_u(fd, data, u);
 }
 
 #define SL_RECV_FL_MAX 64
@@ -779,7 +882,17 @@ static void sl_net_recv_copy(sl_bytes *b, unsigned char *scratch, long long n) {
     b->len = n;
 }
 
-static sl_res_bytes_str *sl_net_recv(int fd, int max) {
+/* `u` of 0 means "no deadline" and reproduces the original blocking
+ * behaviour exactly; a non-zero `u` is an absolute monotonic instant
+ * (sl_until_of). A timeout returns the reserved error string "timeout"
+ * -- callers distinguish it from a peer error by comparing against
+ * that exact text, the same distinction the link API draws with
+ * SL_FAULT_TIMEOUT. The deadline is checked before the first recv() as
+ * well as around each park, so an already-expired deadline never
+ * performs I/O. */
+static sl_res_bytes_str *sl_net_recv_u(int fd, int max, sl_until u) {
+    if (u && sl_until_hit(u))
+        return sl_net_err_bytes("timeout");
     if (max <= 0) max = 4096;
     unsigned char *scratch = (unsigned char *)sl_recv_buf_get((size_t)max);
     sl_bytes *b = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
@@ -812,12 +925,21 @@ static sl_res_bytes_str *sl_net_recv(int fd, int max) {
             sl_recv_buf_put(scratch);
             return sl_net_err_bytes("would block");
         }
-        if (sl_reactor_wait(fd, SL_REACTOR_READ, 1) < 0) {
+        int wr = sl_reactor_wait_until(fd, SL_REACTOR_READ, 1, u);
+        if (wr < 0) {
             sl_rt_safepoint_exit();
             sl_recv_buf_put(scratch);
-            return sl_net_err_bytes("interrupted");
+            return sl_net_err_bytes(wr == -2 ? "timeout" : "interrupted");
         }
     }
+}
+
+static sl_res_bytes_str *sl_net_recv(int fd, int max) {
+    return sl_net_recv_u(fd, max, 0);
+}
+
+static sl_res_bytes_str *sl_net_recv_until(int fd, int max, sl_until u) {
+    return sl_net_recv_u(fd, max, u);
 }
 
 static void sl_net_close(int fd) {

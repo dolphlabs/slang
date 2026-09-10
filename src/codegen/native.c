@@ -74,6 +74,10 @@ const char *native_check(CG *cg, const char *pkg, const char *fname,
             ok = is_flt(at) || is_int(at);
             want = "a float";
             break;
+        case NA_UNTIL:
+            ok = is_until(at);
+            want = "an until (try until_of(time.mono() + ns))";
+            break;
         default: /* NA_INT, NA_I64 */
             ok = is_int(at);
             want = "an integer";
@@ -129,6 +133,10 @@ char *native_gen(CG *cg, const char *pkg, const char *fname,
         } else if (ak == NA_I64) {
             cast_t = "int";
             a = maybe_cast(cg, cast_t, at, a);
+        } else if (ak == NA_UNTIL) {
+            cast_t = "until"; /* already int64_t; no conversion, but the
+                                 cast_t must not fall through to the i32
+                                 default below and truncate the deadline */
         } else if (!is_str(at) && !is_bytes(at) && !is_rawptr(at)) {
             cast_t = !strcmp(pkg, "time") ? "int" : "i32";
             a = maybe_cast(cg, cast_t, at, a);
