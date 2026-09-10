@@ -32,6 +32,64 @@ void sb_putc(StrBuf *sb, char c) { sb_append_n(sb, &c, 1); }
 
 void sb_nl(StrBuf *sb) { sb_putc(sb, 10); }
 
+/* Drop ONE redundant outer parenthesis pair, if the whole expression is
+ * exactly one group.
+ *
+ * gen_expr parenthesizes every binary expression, so a condition reaches
+ * `if (%s)` already wrapped and comes out as `if ((a == b))`. clang warns
+ * on that by default (-Wparentheses-equality, since it is also how a
+ * deliberate assignment-in-a-condition is written), and slangc passes no
+ * -W flags, so every build of every program printed those warnings.
+ *
+ * Only strips when the leading '(' matches the FINAL character --
+ * "(a) && (b)" must be left alone. String and char literals are skipped
+ * so a paren inside one ("(" == c) cannot unbalance the count. Returns
+ * a fresh string when it strips and the original pointer otherwise, so
+ * the result is only ever read, never freed by the caller. */
+const char *strip_outer_parens(const char *s) {
+    if (!s || s[0] != '(')
+        return s;
+    if (s[1] == '{')
+        return s; /* a GCC statement expression, ({ ...; v; }) -- the
+                     parens are part of the construct, not redundant
+                     grouping, and removing them leaves a bare block
+                     that is not an expression at all. Safepoint
+                     brackets are emitted in exactly this form, so
+                     nearly every non-trivial condition hits this. */
+    size_t n = strlen(s);
+    if (n < 2 || s[n - 1] != ')')
+        return s;
+    int depth = 0;
+    for (size_t i = 0; i < n; i++) {
+        char c = s[i];
+        if (c == '"' || c == '\'') {
+            char q = c;
+            for (i++; i < n; i++) {
+                if (s[i] == '\\') { i++; continue; }
+                if (s[i] == q) break;
+            }
+            continue;
+        }
+        if (c == '(') {
+            depth++;
+        } else if (c == ')') {
+            depth--;
+            if (depth != 0)
+                continue;
+            /* The pair closes at the very end, so it really does wrap
+               everything. Anything else -- "(a) && (b)" -- is a pair
+               that closes early and must be left exactly as it was. */
+            if (i != n - 1)
+                return s;
+            char *out = (char *)xmalloc(n - 1);
+            memcpy(out, s + 1, n - 2);
+            out[n - 2] = 0;
+            return out;
+        }
+    }
+    return s;
+}
+
 /* Render a slang string as a C string literal (with quotes). */
 char *c_string_literal(const char *s) {
     StrBuf sb;

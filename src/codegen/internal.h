@@ -482,6 +482,10 @@ char *gen_ident_name(CG *cg, const char *name, int line);
 char *gen_float_literal(double v);
 char *panic_at(CG *cg, int line);
 char *conv_to_str(const char *t, char *expr);
+
+/* Drop one redundant outer parenthesis pair from a generated expression
+ * so `if ((a == b))` comes out as `if (a == b)` -- see core.c. */
+const char *strip_outer_parens(const char *s);
 char *gen_string_concat(CG *cg, Expr *e, const char *lt,
                                const char *rt);
 char *gen_numeric_binary(CG *cg, Expr *e, const char *result_t);
