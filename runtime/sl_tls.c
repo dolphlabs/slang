@@ -42,6 +42,8 @@ static char *sl_tls_last_error(void) {
     return sl_strdup(buf);
 }
 
+typedef struct { unsigned char *wire; unsigned int len; } sl_alpn_list;
+
 static sl_res_rawptr_str *sl_net_tls_server_ctx(const char *cert_path,
                                                 const char *key_path) {
     sl_rt_need_fat_stack();
@@ -357,3 +359,100 @@ static void sl_net_tls_close(void *sslv) {
     if (fd >= 0) close(fd);
 }
 
+
+/* ---- ALPN (RFC 7301) ------------------------------------------------
+ *
+ * HTTP/2 over TLS is negotiated here, not in-band: the client offers a
+ * protocol list in the handshake and the server picks one. Without this
+ * a client that speaks h2 silently falls back to HTTP/1.1, which looks
+ * like "h2 doesn't work" with no error anywhere.
+ *
+ * Protocol lists are stored on the wire as length-prefixed items
+ * ("\x02h2\x08http/1.1"), but that is a bad shape for a slang caller,
+ * so these take a comma-separated string ("h2,http/1.1") and do the
+ * conversion here. */
+
+/* Convert "h2,http/1.1" to the wire form. Returns malloc'd bytes and
+ * sets *outlen, or NULL if any item is empty or longer than 255. */
+static unsigned char *sl_alpn_wire(const char *csv, unsigned int *outlen) {
+    size_t n = strlen(csv);
+    unsigned char *buf = (unsigned char *)malloc(n + 2);
+    if (!buf) return NULL;
+    size_t w = 0, start = 0;
+    for (size_t i = 0; i <= n; i++) {
+        if (i == n || csv[i] == ',') {
+            size_t itemlen = i - start;
+            if (itemlen == 0 || itemlen > 255) { free(buf); return NULL; }
+            buf[w++] = (unsigned char)itemlen;
+            memcpy(buf + w, csv + start, itemlen);
+            w += itemlen;
+            start = i + 1;
+        }
+    }
+    *outlen = (unsigned int)w;
+    return buf;
+}
+
+/* Server-side selection callback. SSL_select_next_proto picks the first
+ * of OUR list that the client also offered -- server preference, which
+ * is what lets an operator decide h2 beats http/1.1 rather than leaving
+ * it to the client. */
+static int sl_alpn_select_cb(SSL *ssl, const unsigned char **out,
+                             unsigned char *outlen,
+                             const unsigned char *in, unsigned int inlen,
+                             void *arg) {
+    (void)ssl;
+    sl_alpn_list *l = (sl_alpn_list *)arg;
+    if (!l || !l->wire) return SSL_TLSEXT_ERR_NOACK;
+    unsigned char *chosen = NULL;
+    if (SSL_select_next_proto(&chosen, outlen, l->wire, l->len, in, inlen) !=
+        OPENSSL_NPN_NEGOTIATED)
+        return SSL_TLSEXT_ERR_NOACK;   /* no overlap: proceed without ALPN */
+    *out = chosen;
+    return SSL_TLSEXT_ERR_OK;
+}
+
+/* Offer a protocol list on a CLIENT context, or advertise one on a
+ * SERVER context. The list is owned by the context for its lifetime. */
+static sl_res_bool_str *sl_net_tls_ctx_alpn(void *ctxv, const char *protos) {
+    SSL_CTX *ctx = (SSL_CTX *)ctxv;
+    if (!ctx) return sl_net_err_bool("nil TLS context");
+    if (!protos || !protos[0]) return sl_net_err_bool("empty protocol list");
+    unsigned int wlen = 0;
+    unsigned char *wire = sl_alpn_wire(protos, &wlen);
+    if (!wire)
+        return sl_net_err_bool("bad ALPN list (items must be 1..255 bytes)");
+
+    /* Client side: this is the offer sent in the ClientHello. Harmless on
+     * a server context, where the select callback below does the work. */
+    if (SSL_CTX_set_alpn_protos(ctx, wire, wlen) != 0) {
+        free(wire);
+        return sl_net_err_bool("SSL_CTX_set_alpn_protos failed");
+    }
+
+    sl_alpn_list *l = (sl_alpn_list *)malloc(sizeof(sl_alpn_list));
+    if (!l) { free(wire); return sl_net_err_bool("out of memory"); }
+    l->wire = wire;
+    l->len = wlen;
+    SSL_CTX_set_alpn_select_cb(ctx, sl_alpn_select_cb, l);
+    return sl_net_ok_bool(true);
+}
+
+/* The protocol actually negotiated on a connection, or "" if the peer
+ * offered none or nothing overlapped. Callers branch on this to decide
+ * whether to speak h2 or fall back to HTTP/1.1. */
+static const char *sl_net_tls_alpn(void *sslv) {
+    SSL *ssl = (SSL *)sslv;
+    if (!ssl) return sl_strdup("");
+    const unsigned char *p = NULL;
+    unsigned int plen = 0;
+    sl_rt_preempt_disable();
+    SSL_get0_alpn_selected(ssl, &p, &plen);
+    sl_rt_preempt_enable();
+    if (!p || plen == 0) return sl_strdup("");
+    char tmp[256];
+    if (plen > sizeof(tmp) - 1) plen = sizeof(tmp) - 1;
+    memcpy(tmp, p, plen);
+    tmp[plen] = '\0';
+    return sl_strdup(tmp);
+}
