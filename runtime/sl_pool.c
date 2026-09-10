@@ -795,6 +795,26 @@ static void sl_preempt_ticker_start(void) {
  * replaces the old 'exactly one thread stays unblocked' scheme
  * entirely, see that file's own comments. */
 static void sl_pool_start(void) {
+    /* Writing to a socket whose peer has hung up raises SIGPIPE, and the
+     * default disposition is to KILL THE PROCESS. For a server that is
+     * catastrophic and routine at once: a client closing a browser tab
+     * mid-response takes down every other connection with it, because
+     * one signal ends the whole process and every green task in it.
+     *
+     * Ignoring it turns the same event into what the error model
+     * already expects -- send() returns -1 with EPIPE, which
+     * sl_net_send and sl_link_send surface as an ordinary err the
+     * caller can handle. That is the standard arrangement (Go, nginx
+     * and libcurl all do exactly this); the alternatives, per-socket
+     * SO_NOSIGPIPE on macOS or per-call MSG_NOSIGNAL on Linux, are
+     * platform-split and easy to miss on a new call site.
+     *
+     * Set here, in the one function every slang program runs before any
+     * task starts, and before the workers below exist -- signal
+     * dispositions are process-wide, so doing it first means no worker
+     * can ever race a write against it. */
+    signal(SIGPIPE, SIG_IGN);
+
     long n = sysconf(_SC_NPROCESSORS_ONLN);
     if (n < 1) n = 1;
     if (n > SL_POOL_MAX_WORKERS) n = SL_POOL_MAX_WORKERS;
