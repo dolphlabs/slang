@@ -655,13 +655,17 @@ static char *sl_str_from_fault(sl_fault f) {
     if (!op[0] && f.code == 0)
         return sl_strdup(d);
     sl_rt_preempt_disable();
-    char buf[160];
+    char buf[256];
+    /* f.code is an errno wherever it is set at all (every producer is a
+       syscall wrapper), so render it as the text a person can act on.
+       "listen: Address already in use" tells you to change the port;
+       "listen io (code 48)" makes you look 48 up. */
     if (op[0] && f.code != 0)
-        snprintf(buf, sizeof(buf), "%s %s (code %d)", op, d, f.code);
+        snprintf(buf, sizeof(buf), "%s: %s", op, strerror(f.code));
     else if (op[0])
         snprintf(buf, sizeof(buf), "%s %s", op, d);
     else
-        snprintf(buf, sizeof(buf), "%s (code %d)", d, f.code);
+        snprintf(buf, sizeof(buf), "%s: %s", d, strerror(f.code));
     sl_rt_preempt_enable();
     return sl_strdup(buf);
 }
