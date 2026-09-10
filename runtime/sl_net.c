@@ -686,9 +686,19 @@ static sl_res_i32_str *sl_net_listen(int port) {
     return sl_net_listen_reuse(port, 0);
 }
 
-static sl_res_i32_str *sl_net_listen_reuse(int port, int reuse_port) {
+/* Core listener setup: returns the fd, or -1 with *err set to the errno
+ * that caused it.
+ *
+ * Split out so the two public shapes -- net.listen's result[i32, str]
+ * and link_listen's result[link, fault] -- each build their own error
+ * from the SAME errno. Before this, link_listen called the str version
+ * and then threw the message away for a bare fault_io() with code 0, so
+ * "Address already in use" reached the program as "listen io". That is
+ * precisely the collapse the error model says not to do. */
+static int sl_net_listen_fd(int port, int reuse_port, int *err) {
+    *err = 0;
     int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return sl_net_err_i32(strerror(errno));
+    if (fd < 0) { *err = errno; return -1; }
     int one = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
 #ifdef SO_REUSEPORT
@@ -701,14 +711,21 @@ static sl_res_i32_str *sl_net_listen_reuse(int port, int reuse_port) {
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons((uint16_t)port);
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
-        int e = errno; close(fd); return sl_net_err_i32(strerror(e));
+        *err = errno; close(fd); return -1;
     }
     if (listen(fd, 1024) != 0) {
-        int e = errno; close(fd); return sl_net_err_i32(strerror(e));
+        *err = errno; close(fd); return -1;
     }
     sl_net_set_nonblocking(fd); /* net.accept's own park loop is what
         makes this transparent to callers that never call
         net.nonblock() themselves */
+    return fd;
+}
+
+static sl_res_i32_str *sl_net_listen_reuse(int port, int reuse_port) {
+    int e = 0;
+    int fd = sl_net_listen_fd(port, reuse_port, &e);
+    if (fd < 0) return sl_net_err_i32(strerror(e));
     return sl_net_ok_i32((int32_t)fd);
 }
 
@@ -1026,17 +1043,19 @@ static sl_res_int_fault sl_link_send_ptr(sl_link *l, const unsigned char *ptr,
 }
 
 static sl_res_link_fault sl_link_listen(long long port) {
-    sl_res_i32_str *r = sl_net_listen((int)port);
-    if (!r->ok)
-        return sl_link_err_link(sl_fault_op(SL_FAULT_IO, 0, "listen"));
-    return sl_link_ok_link(sl_link_from_fd((int)r->v));
+    int e = 0;
+    int fd = sl_net_listen_fd((int)port, 0, &e);
+    if (fd < 0)
+        return sl_link_err_link(sl_link_fault_op("listen", e));
+    return sl_link_ok_link(sl_link_from_fd(fd));
 }
 
 static sl_res_link_fault sl_link_listen_reuse(long long port, long long reuse) {
-    sl_res_i32_str *r = sl_net_listen_reuse((int)port, reuse != 0);
-    if (!r->ok)
-        return sl_link_err_link(sl_fault_op(SL_FAULT_IO, 0, "listen"));
-    return sl_link_ok_link(sl_link_from_fd((int)r->v));
+    int e = 0;
+    int fd = sl_net_listen_fd((int)port, reuse != 0, &e);
+    if (fd < 0)
+        return sl_link_err_link(sl_link_fault_op("listen", e));
+    return sl_link_ok_link(sl_link_from_fd(fd));
 }
 
 static sl_res_link_fault sl_link_accept(sl_link *ln, sl_until u) {
