@@ -12,6 +12,7 @@
 #include "codegen/pkg_crypto/pkg_crypto.h"
 #include "codegen/pkg_sql/pkg_sql.h"
 #include "codegen/pkg_regex/pkg_regex.h"
+#include "codegen/pkg_os/pkg_os.h"
 #include "rtpath.h"
 #include "project.h"
 
@@ -204,7 +205,7 @@ static const char *NATIVE_PKGS[] = {PKG_TIME_NAME, PKG_NET_NAME,
                                     PKG_JSON_NAME, PKG_PROC_NAME,
                                     PKG_FS_NAME,   PKG_LOG_NAME,
                                     PKG_CRYPTO_NAME, PKG_SQL_NAME,
-                                    PKG_REGEX_NAME, NULL};
+                                    PKG_REGEX_NAME, PKG_OS_NAME, NULL};
 
 /* If the import path refers to a built-in native package (and there is
  * no local directory of the same name), synthesize it. */

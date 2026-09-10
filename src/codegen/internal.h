@@ -338,6 +338,9 @@ extern const int CRYPTO_SIGS_LEN;
 extern const NatSig SQL_SIGS[]; /* src/codegen/pkg_sql/ */
 extern const int SQL_SIGS_LEN;
 
+extern const NatSig OS_SIGS[]; /* src/codegen/pkg_os/ */
+extern const int OS_SIGS_LEN;
+
 extern const NatSig REGEX_SIGS[]; /* src/codegen/pkg_regex/ */
 extern const int REGEX_SIGS_LEN;
 

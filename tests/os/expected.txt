@@ -1,0 +1,15 @@
+setenv/getenv round-trip
+environ lists it
+unsetenv removed it
+rejected a name containing '='
+metadata predicates agree
+size is exact
+mtime is plausible
+size on a missing path explains itself
+read_dir lists entries, without . and ..
+read_dir on a missing directory errors
+rename moves the file
+remove deletes a file
+remove deletes an empty directory
+remove on a missing path errors
+os ok
