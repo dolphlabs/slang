@@ -27,6 +27,9 @@ const NatSig NET_SIGS[] = {
     {"net", "tls_ctx_use_cert", 3, {NA_RAWPTR, NA_STR, NA_STR}, "result[bool,str]", 1},
     {"net", "tls_ctx_add_sni", 4, {NA_RAWPTR, NA_STR, NA_STR, NA_STR},
      "result[bool,str]", 1},
+    /* ALPN: negotiate h2 vs http/1.1 in the handshake (RFC 7301) */
+    {"net", "tls_ctx_alpn", 2, {NA_RAWPTR, NA_STR}, "result[bool,str]", 1},
+    {"net", "tls_alpn", 1, {NA_RAWPTR}, "str", 1},
 };
 
 const int NET_SIGS_LEN = sizeof(NET_SIGS) / sizeof(NET_SIGS[0]);

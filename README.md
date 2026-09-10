@@ -235,11 +235,11 @@ Three things differ from C, all deliberately:
 
 **Compound assignment** exists for every one of these: `+= -= *= /= %=`
 and `&= |= ^= <<= >>=`. `x op= v` means `x = x op v`, which evaluates the
-target twice, so the target may not contain a **side-effecting** call —
-`xs[next()] += 1` is a compile error telling you to hoist the call.
-Names, fields, indices computed from them (`xs[i + 1] |= m`), and the
-pure builtins `len` and `has` (`xs[len(xs) - 1] += 1`) are all fine,
-since re-evaluating those observes nothing.
+target twice, so a side-effecting **index** is hoisted into a temporary
+first and runs exactly once — `xs[pop(q)] += 1` pops once, not twice.
+Only the value being indexed has to be re-nameable: `f()[0] += 1` is a
+compile error, since naming `f()` twice would call it twice, and hoisting
+it would mutate a copy for a value-type struct. Write that one out.
 
 `>>` follows the operand's signedness: arithmetic (sign-preserving) on a
 signed type, logical (zero-filling) on an unsigned one, exactly as in C.
@@ -440,7 +440,7 @@ debuggability goes to die (see `http.read` below).
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` like any other package.
 
-`http` and `byteutil` are slang-source stdlib packages under `stdlib/`.
+`http`, `http2` and `byteutil` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
 then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
 compiler's `SLANG_STDLIB_DIR`).
@@ -526,6 +526,23 @@ that validates a certificate chain without checking it belongs to
 the host you're actually talking to). Sending/receiving is blocking,
 same as plain `net` — call these from a `spawn`ed task if you need a
 connection handled without stalling anything else.
+
+**ALPN** (RFC 7301) negotiates the protocol during the handshake, which
+is how HTTP/2 over TLS is selected — there is no in-band upgrade.
+`tls_ctx_alpn(ctx, "h2,http/1.1")` sets the list on a server context (in
+preference order, so the *server* decides) or the offer on a client one,
+and `tls_alpn(conn)` returns what was actually negotiated, or `""` if
+the peer offered nothing that overlapped. The list is comma-separated,
+not the length-prefixed wire form; building that by hand is an easy way
+to produce a subtly broken handshake. A client offering no protocol we
+support completes the handshake without ALPN rather than failing, so it
+simply falls back to HTTP/1.1.
+
+```slang
+net.tls_ctx_alpn(sctx, "h2,http/1.1");
+let conn = ...;                  // after tls_accept
+if net.tls_alpn(conn) == "h2" { serve_h2(conn); } else { serve_h1(conn); }
+```
 
 Mutual TLS: `tls_ctx_require_client(sctx, client_ca)` on the server
 context demands a client certificate chained to that CA
@@ -844,6 +861,92 @@ Because matching never grows the task stack, regex is cheap to use per
 connection: 600 concurrently-live tasks each matching and then parking
 peak at **3.9MB RSS** — about 17x lighter than the same shape holding
 `sql` connections (65.9MB), which does grow every task's stack.
+
+#### `http2`
+
+HTTP/2 framing and HPACK header compression (RFC 9113, RFC 7541),
+written in slang — the frame codec is what the bitwise operators were
+added for.
+
+```slang
+import "http2";
+
+let f = http2.decode(buf, 0, 16384);        // one frame, bounds-checked
+guard let fr = f else let e = err_of(f) { return; }
+
+let d = http2.decoder_new(4096);            // per-connection HPACK state
+let hr = http2.decode_block(d, fr.payload, 64);
+guard let hs = hr else let e = err_of(hr) { return; }
+for i in 0..len(hs) {
+    println(hs[i].name + ": " + hs[i].value);
+}
+```
+
+Frame layer: `decode` / `encode` / `header_bytes`, the reserved bit
+masked off the stream id as the RFC requires, `strip_padding`, and the
+common control frames (`settings_frame`, `settings_ack`, `ping_ack`,
+`rst_stream`, `goaway`, `window_update`).
+
+HPACK: prefix integers, string literals, the 61-entry static table, a
+dynamic table with the RFC's +32-per-entry accounting and eviction, and
+a **canonical Huffman decoder**. Header blocks decode through
+`decode_block`; `encode_block` builds one.
+
+The encoder is deliberately **stateless** — every field goes out as a
+static-table index or a literal *without* indexing, and nothing is added
+to a dynamic table on the encode side. That is conformant and it removes
+a whole bug class: an encoder's dynamic table must stay in lockstep with
+the peer's decoder table, and any drift silently corrupts every later
+block on the connection.
+
+Bounds against hostile peers: a frame longer than the advertised
+`SETTINGS_MAX_FRAME_SIZE` is refused before allocating, `decode_block`
+takes a `max_headers` cap (a small compressed block can otherwise expand
+without limit), a Dynamic Table Size Update above the agreed maximum is
+rejected, and NUL in a field name or value is the protocol error RFC
+9113 §8.2.1 says it is. Huffman padding must be under 8 bits and all
+ones, and EOS inside a string is refused.
+
+Validated against **nghttp2** — the HPACK implementation curl and the
+browser stacks use — in both directions: blocks it produces decode here,
+and blocks produced here inflate there. Those fixtures are baked into
+`tests/http2` as literals, so the suite needs no nghttp2 to run.
+
+**Connection layer.** `accept_preface` verifies the client preface and
+sends SETTINGS; `read_request` returns a complete `Req` (method, path,
+scheme, authority, headers, body), handling SETTINGS/PING/WINDOW_UPDATE/
+GOAWAY itself and reassembling HEADERS + CONTINUATION + DATA; `respond`
+writes the response, splitting DATA to the peer's advertised max frame
+size rather than assuming ours.
+
+```slang
+fn serve(c: link) {
+    let ra = arena_new(65536);
+    let scratch = ra.wire(16384);
+    let cn = http2.conn_new();
+    let rd = http2.reader_new();
+    guard let _p = http2.accept_preface(rd, &mut c, scratch, until_never())
+        else { return; }
+    while true {
+        let rr = http2.read_request(cn, rd, &mut c, scratch, until_never());
+        guard let req = rr else { return; }
+        let hs: [http2.Header] = [];
+        http2.respond(cn, &mut c, req.stream, "200", hs,
+                      to_bytes("hello"), until_never());
+    }
+}
+```
+
+Verified against real `curl --http2-prior-knowledge`: GET, POST with a
+body, five requests multiplexed on one connection, and a 64KB upload
+that exercises DATA chunking and flow-control `WINDOW_UPDATE`.
+
+Streams are served **one complete request at a time**. That is
+conformant — a server may process requests in any order — and it keeps
+one task per connection with no writer lock. Concurrent stream
+processing needs a serialised writer and is not built yet. `PRIORITY` is
+parsed and ignored (it is deprecated in RFC 9113), and send-side flow
+control assumes the peer's window is adequate rather than tracking it.
 
 #### `byteutil`
 
