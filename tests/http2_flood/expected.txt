@@ -1,3 +1,5 @@
 plain flood stayed bounded
 reset flood stayed bounded
+continuation flood refused
+ping flood did not wedge the connection
 flood ok

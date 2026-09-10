@@ -142,6 +142,58 @@ fn measure(port: int, n: int, with_reset: bool, lfd: i32) -> int {
     return peak;
 }
 
+// ---- control-frame and CONTINUATION floods ---------------------------
+//
+// Neither of these was vulnerable when audited -- they are here so that
+// stays true. Both were probed first and only then pinned: a test
+// written for a bug that does not exist still earns its keep by
+// catching the day it starts to.
+
+// HEADERS without END_HEADERS, then CONTINUATION forever. A server that
+// simply accumulates grows without bound (CVE-2024-27316 class); the
+// 64KB header-block cap is what stops it.
+fn continuation_flood(port: int, out: chan[str]) {
+    let dr = net.dial("127.0.0.1", port);
+    guard let fd = dr else { chan_send(out, "dial failed"); return; }
+    net.send(fd, http2.preface() + http2.our_settings());
+    let hs: [http2.Header] = [
+        http2.Header { name: ":method", value: "GET" },
+        http2.Header { name: ":scheme", value: "http" },
+        http2.Header { name: ":path", value: "/" },
+        http2.Header { name: ":authority", value: "x" }
+    ];
+    let blk = http2.encode_block(hs);
+    net.send(fd, http2.header_bytes(http2.T_HEADERS, 0, 1, len(blk)) + blk);
+    let pad = b"";
+    while len(pad) < 4096 { pad = pad + b"AAAAAAAAAAAAAAAA"; }
+    let j = 0;
+    while j < 200 {
+        let sr = net.send(fd, http2.header_bytes(http2.T_CONTINUATION, 0, 1,
+                                                 len(pad)) + pad);
+        guard let _q = sr else { j = 200; }   // hung up on us: expected
+        j = j + 1;
+    }
+    net.close(fd);
+    chan_send(out, "sent");
+}
+
+// PINGs from a peer that never reads: every one obliges an ACK the
+// server cannot deliver. Bounded by the write and idle deadlines.
+fn ping_flood(port: int, out: chan[str]) {
+    let dr = net.dial("127.0.0.1", port);
+    guard let fd = dr else { chan_send(out, "dial failed"); return; }
+    net.send(fd, http2.preface() + http2.our_settings());
+    let pings = b"";
+    let i = 0;
+    while i < 400 {
+        pings = pings + http2.header_bytes(http2.T_PING, 0, 0, 8) + b"PINGPING";
+        i = i + 1;
+    }
+    let sr = net.send(fd, pings);
+    guard let _s = sr else { chan_send(out, "sent"); return; }
+    chan_send(out, "sent");
+}
+
 fn run() {
     let lr = net.listen(0);
     guard let lfd = lr else { println("FAIL listen"); exit(1); }
@@ -166,6 +218,35 @@ fn run() {
         exit(1);
     }
     println("reset flood stayed bounded");
+
+    // 3. CONTINUATION flood: must be refused, not accumulated.
+    let o3: chan[str] = make_chan(2);
+    spawn continuation_flood(port, o3);
+    let a3 = net.accept(lfd);
+    guard let c3 = a3 else { println("FAIL accept3"); exit(1); }
+    spawn serve(c3, o3);
+    let v3a = chan_recv(o3);
+    guard let _x3 = v3a else { println("FAIL o3"); exit(1); }
+    let v3b = chan_recv(o3);
+    guard let why = v3b else { println("FAIL o3b"); exit(1); }
+    if why != "header block too large" && why != "sent" {
+        println("FAIL continuation flood ended with: " + why);
+        exit(1);
+    }
+    println("continuation flood refused");
+
+    // 4. PING flood from a peer that never reads: must not hang.
+    let o4: chan[str] = make_chan(2);
+    spawn ping_flood(port, o4);
+    let a4 = net.accept(lfd);
+    guard let c4 = a4 else { println("FAIL accept4"); exit(1); }
+    spawn serve(c4, o4);
+    let v4a = chan_recv(o4);
+    guard let _x4 = v4a else { println("FAIL o4"); exit(1); }
+    // The point is that this RETURNS. A wedged reader never would.
+    let v4b = chan_recv(o4);
+    guard let _y4 = v4b else { println("FAIL o4b"); exit(1); }
+    println("ping flood did not wedge the connection");
 
     net.close(lfd);
     println("flood ok");
