@@ -29,9 +29,9 @@ fn serve(fd: i32, done: chan[i32]) {
     let rd = http2.reader_new();
     let wch: chan[http2.WMsg] = make_chan(32);
     let lim = http2.default_limits();
-    spawn http2.writer_task(fd, wch, lim.write);
+    spawn http2.writer_task(http2.transport_fd(fd), wch, lim.write);
 
-    let pr = http2.accept_preface(rd, fd, wch,
+    let pr = http2.accept_preface(rd, http2.transport_fd(fd), wch,
                                   until_of(time.mono() + lim.handshake));
     guard let _p = pr else let e = err_of(pr) {
         println("server preface: " + e);
@@ -41,7 +41,7 @@ fn serve(fd: i32, done: chan[i32]) {
     }
     let n = 0;
     while n < 2 {
-        let rr = http2.read_request(cn, rd, fd, wch, lim);
+        let rr = http2.read_request(cn, rd, http2.transport_fd(fd), wch, lim);
         guard let req = rr else let e = err_of(rr) {
             chan_close(wch);
             chan_send(done, -2);
@@ -85,7 +85,7 @@ fn run_client(port: i32, done: chan[i32]) {
     let first_stream = 0;
     let seen = 0;
     while seen < 2 {
-        let fr = http2.read_frame(rd, fd, 16384,
+        let fr = http2.read_frame(rd, http2.transport_fd(fd), 16384,
                                   until_of(time.mono() + 10000000000));
         guard let f = fr else let e = err_of(fr) {
             println("client read: " + e);
