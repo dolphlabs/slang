@@ -962,13 +962,20 @@ which is what multiplexing means.
 Measured: four 500ms requests multiplexed on one connection complete in
 **0.53s**; served one at a time they would take about 2.0s.
 
-The connection is addressed by its **file descriptor**, not a `link`.
-`link` is move-only, so `spawn writer_task(c)` consumes it and the
-reader can no longer use it — the two-task design is impossible with
-that type. An `i32` fd is freely copyable, and one reader plus one
-writer in opposite directions on a socket is safe. `net.recv` also
-returns `bytes` directly, so no byte-at-a-time copy sits on the read
-path.
+The connection is addressed by a **`Transport`**, not a `link`. `link`
+is move-only, so `spawn writer_task(c)` consumes it and the reader can
+no longer use it — the two-task design is impossible with that type. A
+`Transport` is freely copyable, and one reader plus one writer in
+opposite directions on a socket is safe. `net.recv` also returns
+`bytes` directly, so no byte-at-a-time copy sits on the read path.
+
+A `Transport` is either a plain fd or a TLS handle, and everything above
+it is identical either way:
+
+```slang
+http2.transport_fd(fd)     // h2c: cleartext, prior knowledge
+http2.transport_tls(ssl)   // h2 over TLS, from net.tls_accept
+```
 
 ```slang
 fn handle(stream: i32, path: str, wch: chan[http2.WMsg]) {
@@ -1060,14 +1067,51 @@ server stops at, that it resumes for exactly the credit granted, and
 that the resumed bytes carry the right content for their absolute offset
 in the body.
 
+##### TLS and ALPN
+
+Browsers speak HTTP/2 **only** over TLS, and only when ALPN negotiates
+it — there is no in-band upgrade in a browser. So h2c alone, however
+conformant, cannot serve one.
+
+The server advertises what it can speak, and then checks what was
+actually chosen:
+
+```slang
+net.tls_ctx_alpn(sctx, "h2,http/1.1");     // offer both, h2 preferred
+// ... net.tls_accept(lfd, sctx) -> ssl
+if !http2.alpn_is_h2(net.tls_alpn(ssl)) {
+    // the peer picked http/1.1; serve it as HTTP/1.1 or hang up
+}
+let t = http2.transport_tls(ssl);
+```
+
+Checking is not optional politeness. A server that offers `http/1.1`
+must expect to get it, and feeding an HTTP/1.1 client into the frame
+parser produces `bad connection preface` — true, but a poor explanation
+of what went wrong.
+
+`tests/http2_tls` runs both halves over a real handshake: h2 frames
+across `SSL_read`/`SSL_write`, and an http/1.1-only client being
+declined rather than misparsed.
+
+##### Interop
+
+Checked against **Go's `golang.org/x/net/http2`**, which shares no
+ancestry with nghttp2 (curl's stack, and where the HPACK fixtures came
+from) — agreement between two implementations that share code proves
+less than it appears to. It covers a GET, a 50KB POST, a 200KB response
+verified byte-for-byte against its absolute offset, and six concurrent
+streams on one connection. Run it with `sh tests/http2_interop/run.sh`;
+it skips cleanly without a Go toolchain.
+
 ##### Known gaps
 
 `PRIORITY` is validated but not acted on: it is deprecated in RFC 9113
 §5.3.2, so ignoring the prioritisation is conformant, but a malformed
 frame is still rejected as the connection error it is (§6.3) rather than
-waved through to desync the stream. Interop evidence comes from curl and
-nghttp2, which share an implementation — an independent client has not
-been run against it.
+waved through to desync the stream. No browser has been run against the
+TLS path yet — the machinery is there and tested against slang's own
+client, but a real browser is different evidence.
 
 #### `byteutil`
 
