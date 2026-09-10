@@ -33,6 +33,8 @@ static const NatSig *find_any_sig(const char *pkg, const char *fname) {
         ns = find_sig(SQL_SIGS, SQL_SIGS_LEN, pkg, fname);
     if (!ns)
         ns = find_sig(REGEX_SIGS, REGEX_SIGS_LEN, pkg, fname);
+    if (!ns)
+        ns = find_sig(OS_SIGS, OS_SIGS_LEN, pkg, fname);
     return ns;
 }
 
