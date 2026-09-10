@@ -477,6 +477,20 @@ static void lower_stmt(Lower *L, Stmt *s) {
         emit_if(L, cond, ok_bb, else_bb, s->line);
         L->cur = else_bb;
         var_scope_push(L->cg);
+        /* `else let e = err_of(r)` binds e for the whole else block, so
+           this pass has to know about it too -- liveness, escape and
+           move all declare it before walking the body, and MIR was the
+           one that did not. A `let` inside the else block resolves its
+           initializer's type through the var table, so referring to e
+           there was rejected as an undefined variable even though the
+           emitted C was fine. Using e directly (println, a call
+           argument) happened to work, which is why this survived. */
+        if (s->as.guard_let.err_name && is_result(et)) {
+            char *gtv, *gtev;
+            result_te(et, &gtv, &gtev);
+            var_redecl_check(L->cg, s->as.guard_let.err_name, s->line);
+            var_push(L->cg, s->as.guard_let.err_name, gtev);
+        }
         lower_block(L, s->as.guard_let.body);
         var_scope_pop(L->cg);
         L->cur = ok_bb;
