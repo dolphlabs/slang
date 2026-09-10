@@ -971,16 +971,18 @@ returns `bytes` directly, so no byte-at-a-time copy sits on the read
 path.
 
 ```slang
-fn handle(stream: i32, path: str, peer_max: i32, wch: chan[bytes]) {
+fn handle(stream: i32, path: str, wch: chan[http2.WMsg]) {
     let hs: [http2.Header] = [];
-    chan_send(wch, http2.response_frames(peer_max as int, stream as int,
-                                         "200", hs, to_bytes("hello")));
+    // The body goes over UNFRAMED: the writer owns the peer's windows,
+    // so it decides how it is cut into DATA frames and when each may go.
+    chan_send(wch, http2.response_msg(stream as int, "200", hs,
+                                      to_bytes("hello")));
 }
 
 fn serve(fd: i32) {
     let cn = http2.conn_new();
     let rd = http2.reader_new();
-    let wch: chan[bytes] = make_chan(32);
+    let wch: chan[http2.WMsg] = make_chan(32);
     let lim = http2.default_limits();
     spawn http2.writer_task(fd, wch, lim.write);
 
@@ -993,8 +995,7 @@ fn serve(fd: i32) {
             chan_close(wch);
             return;
         }
-        spawn handle(req.stream as i32, req.path,
-                     cn.peer_max_frame as i32, wch);
+        spawn handle(req.stream as i32, req.path, wch);
     }
 }
 ```
@@ -1031,15 +1032,42 @@ server can answer the first with `GOAWAY` / `E_ENHANCE_YOUR_CALM`.
 idle-after-handshake, and octet-at-a-time dribbling — against a server
 with sub-second budgets and requires all three to be shed.
 
+##### Flow control
+
+DATA is flow-controlled at two levels, per-stream and per-connection
+(RFC 9113 §5.2), and the server may not exceed either. Both windows live
+in the writer task, because they are connection-wide state that the
+**read** side replenishes (`WINDOW_UPDATE` arrives there) and the
+**write** side spends — routing both into one task is what makes the
+accounting correct without a lock.
+
+A handler therefore hands over its body unframed and moves on. If the
+peer's window is too small, the *body* waits in the writer's queue, not
+the handler's task — a peer advertising a tiny window costs a queue
+entry rather than a parked task.
+
+`SETTINGS_INITIAL_WINDOW_SIZE` adjusts every open stream's window by the
+delta rather than resetting it, and does not touch the connection window
+(§6.9.2). A `WINDOW_UPDATE` that would push a window past 2³¹−1 is a
+`FLOW_CONTROL_ERROR` and ends the connection with a `GOAWAY` rather than
+being clamped.
+
+`tests/http2_flow` drives both levels: a client advertising a 100-octet
+stream window against a 5000-octet body, and a client with a large
+stream window against a 100000-octet body where the default 65535
+connection window is what binds. Each phase checks the exact octet the
+server stops at, that it resumes for exactly the credit granted, and
+that the resumed bytes carry the right content for their absolute offset
+in the body.
+
 ##### Known gaps
 
 `PRIORITY` is validated but not acted on: it is deprecated in RFC 9113
 §5.3.2, so ignoring the prioritisation is conformant, but a malformed
 frame is still rejected as the connection error it is (§6.3) rather than
-waved through to desync the stream. Send-side flow control assumes the
-peer's window is adequate rather than tracking `WINDOW_UPDATE` against
-it. Interop evidence comes from curl and nghttp2, which share an
-implementation — an independent client has not been run against it.
+waved through to desync the stream. Interop evidence comes from curl and
+nghttp2, which share an implementation — an independent client has not
+been run against it.
 
 #### `byteutil`
 
