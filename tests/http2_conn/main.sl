@@ -10,8 +10,7 @@ import "time";
 // FIRST. If streams were served one at a time the slow reply would come
 // back first; concurrency is proven by the fast one arriving first.
 
-fn handle(stream: i32, path: str, body: bytes, peer_max: i32,
-          wch: chan[bytes]) {
+fn handle(stream: i32, path: str, body: bytes, wch: chan[http2.WMsg]) {
     if path == "/slow" {
         time.sleep(300000000);
     }
@@ -22,14 +21,13 @@ fn handle(stream: i32, path: str, body: bytes, peer_max: i32,
     if len(body) > 0 {
         out = out + to_bytes(" echo=") + body;
     }
-    chan_send(wch, http2.response_frames(peer_max as int, stream as int,
-                                         "200", extra, out));
+    chan_send(wch, http2.response_msg(stream as int, "200", extra, out));
 }
 
 fn serve(fd: i32, done: chan[i32]) {
     let cn = http2.conn_new();
     let rd = http2.reader_new();
-    let wch: chan[bytes] = make_chan(32);
+    let wch: chan[http2.WMsg] = make_chan(32);
     let lim = http2.default_limits();
     spawn http2.writer_task(fd, wch, lim.write);
 
@@ -49,8 +47,7 @@ fn serve(fd: i32, done: chan[i32]) {
             chan_send(done, -2);
             return;
         }
-        spawn handle(req.stream as i32, req.path, req.body,
-                     cn.peer_max_frame as i32, wch);
+        spawn handle(req.stream as i32, req.path, req.body, wch);
         n = n + 1;
     }
     chan_send(done, 1);
