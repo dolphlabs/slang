@@ -8,12 +8,13 @@ import "time";
 // by CONTINUATION frames) followed by zero or more DATA frames, ending
 // when END_STREAM is seen.
 //
-// The connection is addressed by its FILE DESCRIPTOR, not by a `link`.
-// That is forced and it is also better:
+// The connection is addressed by a Transport -- an fd for h2c, or an
+// SSL handle for h2 over TLS -- and NOT by a `link`. That is forced and
+// it is also better:
 //
 //   `link` is move-only, so `spawn writer(c)` consumes it and the reader
 //   task can no longer use it -- the two-task design is impossible with
-//   that type. An i32 fd is an ordinary integer, so both tasks can hold
+//   that type. A Transport is freely copyable, so both tasks can hold
 //   it, which is exactly what a socket allows: one reader, one writer,
 //   opposite directions.
 //
@@ -185,6 +186,66 @@ pub fn our_settings() -> bytes {
     return settings_frame(ids, vals);
 }
 
+// ---- transport -------------------------------------------------------
+//
+// h2 runs over cleartext TCP (h2c, prior knowledge) or over TLS, and the
+// two are reached through different runtime calls: net.recv_until on an
+// fd, net.tls_recv_until on an SSL handle. Everything above this point
+// is identical either way, so the difference is confined to one struct
+// and two functions rather than duplicated through the whole layer.
+//
+// This matters beyond tidiness: browsers speak HTTP/2 ONLY over TLS with
+// ALPN, so a connection layer that can only do fds cannot serve a
+// browser at all, however conformant the rest of it is.
+pub gc struct Transport {
+    fd: i32,       // the socket; 0 and unused when ssl is set
+    ssl: rawptr,   // nullptr for cleartext
+}
+
+// h2c: cleartext, prior knowledge. curl --http2-prior-knowledge, and
+// Go's http2.Transport with AllowHTTP.
+pub fn transport_fd(fd: i32) -> Transport {
+    return Transport { fd: fd, ssl: nullptr };
+}
+
+// h2 over TLS. The handle comes from net.tls_accept, and the caller is
+// responsible for having negotiated "h2" via ALPN first -- see
+// alpn_is_h2 below.
+pub fn transport_tls(ssl: rawptr) -> Transport {
+    return Transport { fd: 0, ssl: ssl };
+}
+
+fn tr_recv(t: Transport, max: int, u: until) -> result[bytes, str] {
+    if t.ssl == nullptr {
+        return net.recv_until(t.fd, max, u);
+    }
+    return net.tls_recv_until(t.ssl, max, u);
+}
+
+fn tr_send(t: Transport, b: bytes, u: until) -> result[i32, str] {
+    if t.ssl == nullptr {
+        return net.send_until(t.fd, b, u);
+    }
+    return net.tls_send_until(t.ssl, b, u);
+}
+
+pub fn tr_close(t: Transport) {
+    if t.ssl == nullptr {
+        net.close(t.fd);
+        return;
+    }
+    net.tls_close(t.ssl);
+}
+
+// RFC 7301 §3.1: the peer either selected "h2" or it did not. A server
+// that advertised h2 and http/1.1 must look, because a browser offered
+// both and may well have picked http/1.1 -- feeding an HTTP/1.1 client
+// into this layer produces "bad connection preface", which is true but
+// unhelpful.
+pub fn alpn_is_h2(proto: str) -> bool {
+    return proto == "h2";
+}
+
 // ---- buffered frame reader ------------------------------------------
 //
 // Frames straddle recv boundaries, so bytes are accumulated until a
@@ -208,7 +269,7 @@ pub fn reader_new() -> Reader {
 // every second must still finish the frame inside the budget, which is
 // what makes this a slowloris defence rather than a keepalive check.
 // Pass until_never() only where blocking forever is genuinely intended.
-pub fn read_frame(r: Reader, fd: i32, max_frame: int, u: until)
+pub fn read_frame(r: Reader, t: Transport, max_frame: int, u: until)
         -> result[Frame, str] {
     while true {
         if len(r.buf) >= FRAME_HEADER_LEN {
@@ -226,7 +287,7 @@ pub fn read_frame(r: Reader, fd: i32, max_frame: int, u: until)
                 return ok(f);
             }
         }
-        let rr = net.recv_until(fd, 16384, u);
+        let rr = tr_recv(t, 16384, u);
         guard let chunk = rr else let e = err_of(rr) {
             // Passed through unprefixed so is_timeout() still matches;
             // every other error keeps the "recv: " context.
@@ -245,11 +306,11 @@ pub fn read_frame(r: Reader, fd: i32, max_frame: int, u: until)
 // ---- handshake -------------------------------------------------------
 
 // Verify the 24-byte client connection preface and send ours.
-pub fn accept_preface(r: Reader, fd: i32, wch: chan[WMsg], u: until)
+pub fn accept_preface(r: Reader, t: Transport, wch: chan[WMsg], u: until)
         -> result[bool, str] {
     let want = preface();
     while len(r.buf) < len(want) {
-        let rr = net.recv_until(fd, 16384, u);
+        let rr = tr_recv(t, 16384, u);
         guard let chunk = rr else let e = err_of(rr) {
             if is_timeout(e) {
                 return err(e);
@@ -408,7 +469,7 @@ fn pseudo(hs: [Header], name: str) -> str {
 // it the strict `request` budget applies to the request as a WHOLE and
 // is never refreshed, so no amount of dribbled DATA or CONTINUATION can
 // extend it.
-pub fn read_request(cn: Conn, r: Reader, fd: i32, wch: chan[WMsg],
+pub fn read_request(cn: Conn, r: Reader, t: Transport, wch: chan[WMsg],
                     lim: Limits) -> result[Req, str] {
     let hdr_block = b"";
     let stream = 0;
@@ -419,7 +480,7 @@ pub fn read_request(cn: Conn, r: Reader, fd: i32, wch: chan[WMsg],
     let deadline = until_of(time.mono() + lim.idle);
 
     while true {
-        let fr = read_frame(r, fd, DEFAULT_MAX_FRAME, deadline);
+        let fr = read_frame(r, t, DEFAULT_MAX_FRAME, deadline);
         guard let f = fr else let e = err_of(fr) {
             return err(e);
         }
@@ -543,7 +604,7 @@ pub fn read_request(cn: Conn, r: Reader, fd: i32, wch: chan[WMsg],
                     stream: stream, method: m, path: p, scheme: s,
                     authority: a, headers: hs, body: b""
                 };
-                let br = read_body(cn, r, fd, stream, wch, deadline);
+                let br = read_body(cn, r, t, stream, wch, deadline);
                 guard let bd = br else let e = err_of(br) {
                     return err(e);
                 }
@@ -570,11 +631,11 @@ pub fn read_request(cn: Conn, r: Reader, fd: i32, wch: chan[WMsg],
 // `u` is the caller's request deadline, passed straight through rather
 // than refreshed: the body is part of the same request, and a budget
 // that restarted per DATA frame would defend against nothing.
-fn read_body(cn: Conn, r: Reader, fd: i32, stream: int,
+fn read_body(cn: Conn, r: Reader, t: Transport, stream: int,
              wch: chan[WMsg], u: until) -> result[bytes, str] {
     let body = b"";
     while true {
-        let fr = read_frame(r, fd, DEFAULT_MAX_FRAME, u);
+        let fr = read_frame(r, t, DEFAULT_MAX_FRAME, u);
         guard let f = fr else let e = err_of(fr) {
             return err(e);
         }
@@ -635,11 +696,11 @@ gc struct Out {
     done: bool,
 }
 
-fn wsend(fd: i32, b: bytes, write_ns: int) -> bool {
+fn wsend(t: Transport, b: bytes, write_ns: int) -> bool {
     if len(b) == 0 {
         return true;
     }
-    let sr = net.send_until(fd, b, until_of(time.mono() + write_ns));
+    let sr = tr_send(t, b, until_of(time.mono() + write_ns));
     guard let _n = sr else {
         return false;
     }
@@ -659,7 +720,7 @@ fn window_max() -> int {
 // Both windows are decremented by every DATA octet: flow control is
 // per-stream AND per-connection, and a stream with plenty of credit
 // still cannot send when the connection has none.
-fn flush_out(fd: i32, q: [Out], conn_window: int, max_frame: int,
+fn flush_out(t: Transport, q: [Out], conn_window: int, max_frame: int,
              write_ns: int) -> result[int, str] {
     let i = 0;
     let cw = conn_window;
@@ -676,7 +737,7 @@ fn flush_out(fd: i32, q: [Out], conn_window: int, max_frame: int,
                 // exempt from flow control (§6.9.1), so it goes out even
                 // at a zero window -- otherwise such a response could
                 // never be closed.
-                if !wsend(fd, header_bytes(T_DATA, FLAG_END_STREAM,
+                if !wsend(t, header_bytes(T_DATA, FLAG_END_STREAM,
                                            o.stream, 0), write_ns) {
                     return err("peer gone");
                 }
@@ -695,7 +756,7 @@ fn flush_out(fd: i32, q: [Out], conn_window: int, max_frame: int,
             if last {
                 dflags = FLAG_END_STREAM;
             }
-            if !wsend(fd, header_bytes(T_DATA, dflags, o.stream, n)
+            if !wsend(t, header_bytes(T_DATA, dflags, o.stream, n)
                           + o.body[o.off..o.off + n], write_ns) {
                 return err("peer gone");
             }
@@ -741,7 +802,7 @@ fn flush_out(fd: i32, q: [Out], conn_window: int, max_frame: int,
 // A blocked stream parks its BODY here, not its task: the handler hands
 // the response over and moves on, so a peer with a tiny window costs a
 // queue entry rather than a live task.
-pub fn writer_task(fd: i32, wch: chan[WMsg], write_ns: int) {
+pub fn writer_task(t: Transport, wch: chan[WMsg], write_ns: int) {
     let conn_window = DEFAULT_WINDOW;
     let initial = DEFAULT_WINDOW;   // peer's SETTINGS_INITIAL_WINDOW_SIZE
     let max_frame = DEFAULT_MAX_FRAME;
@@ -758,7 +819,7 @@ pub fn writer_task(fd: i32, wch: chan[WMsg], write_ns: int) {
         }
 
         if msg.kind == W_RAW {
-            if !wsend(fd, msg.head, write_ns) {
+            if !wsend(t, msg.head, write_ns) {
                 return;
             }
         }
@@ -780,7 +841,7 @@ pub fn writer_task(fd: i32, wch: chan[WMsg], write_ns: int) {
         if msg.kind == W_GRANT {
             if msg.stream == 0 {
                 if conn_window > window_max() - msg.n {
-                    if !wsend(fd, goaway(0, E_FLOW_CONTROL_ERROR,
+                    if !wsend(t, goaway(0, E_FLOW_CONTROL_ERROR,
                                          "connection window overflow"),
                               write_ns) {
                         return;
@@ -794,7 +855,7 @@ pub fn writer_task(fd: i32, wch: chan[WMsg], write_ns: int) {
                 while k < len(q) {
                     if q[k].stream == msg.stream {
                         if q[k].window > window_max() - msg.n {
-                            if !wsend(fd, goaway(0, E_FLOW_CONTROL_ERROR,
+                            if !wsend(t, goaway(0, E_FLOW_CONTROL_ERROR,
                                                  "stream window overflow"),
                                       write_ns) {
                                 return;
@@ -819,7 +880,7 @@ pub fn writer_task(fd: i32, wch: chan[WMsg], write_ns: int) {
             }
         }
         if msg.kind == W_BODY {
-            if !wsend(fd, msg.head, write_ns) {
+            if !wsend(t, msg.head, write_ns) {
                 return;
             }
             if len(msg.body) > 0 {
@@ -833,7 +894,7 @@ pub fn writer_task(fd: i32, wch: chan[WMsg], write_ns: int) {
             }
         }
 
-        let fr = flush_out(fd, q, conn_window, max_frame, write_ns);
+        let fr = flush_out(t, q, conn_window, max_frame, write_ns);
         guard let cw = fr else {
             return;              // peer gone, or too slow to read
         }
