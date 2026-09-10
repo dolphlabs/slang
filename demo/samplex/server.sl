@@ -308,8 +308,12 @@ let port = atoi(proc.getenv("PORT") ?? "8080");
 let workers = atoi(proc.getenv("WORKERS") ?? "64");
 
 let lr = link_listen(port);
-guard let ln = lr else {
-    log.error("cannot listen on port " + to_str(port));
+guard let ln = lr else let e = err_of(lr) {
+    // Bind the fault and print it. Swallowing it leaves "cannot listen
+    // on port 8080" with no cause, and the cause is almost always
+    // "another copy is still running" -- worth saying out loud.
+    log.error("cannot listen on port " + to_str(port) + ": " + to_str(e));
+    log.error("is something already using it? try PORT=9000");
     exit(1);
 }
 
