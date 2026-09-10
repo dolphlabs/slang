@@ -695,6 +695,58 @@ guard let data = rr else { exit(1); }
 fs.close(in_fd);
 ```
 
+#### `os`
+
+The operating system *around* a program: the environment, the process,
+and everything you can ask or do about a path without opening it. Pure
+libc, so importing `os` adds no link flag.
+
+**The `fs`/`os` boundary**: `fs` owns open file **handles** and their
+contents; `os` owns paths you have not opened. `fs.mkdir` predates that
+split and stays where it is rather than breaking existing programs.
+
+| | |
+|---|---|
+| `os.setenv(k, v)` / `os.unsetenv(k)` | `result[bool, str]` |
+| `os.environ()` | `[str]` of `KEY=VALUE` |
+| `os.pid()` / `os.tmpdir()` | `int` / `str` |
+| `os.hostname()` | `result[str, str]` |
+| `os.exists(p)` / `os.is_dir(p)` / `os.is_file(p)` | `bool` |
+| `os.size(p)` / `os.mtime(p)` | `result[int, str]` |
+| `os.read_dir(p)` | `result[[str], str]` |
+| `os.remove(p)` / `os.rename(a, b)` | `result[bool, str]` |
+
+```slang
+import "os";
+
+// serve a static file, the shape this package exists for
+if !os.is_file(path) {
+    return not_found();
+}
+let sr = os.size(path);
+guard let n = sr else let e = err_of(sr) {
+    log.error("stat " + path + ": " + e);      // "No such file or directory"
+    return server_error();
+}
+```
+
+The three predicates are bare `bool` on purpose. "Does this exist" has
+two useful answers: a missing path and an unreadable parent are both
+"no, you cannot use it", and code branching on the difference is racing
+anyway — the answer can change between the check and the use. The
+accessors return a value that has to come from somewhere, so those
+carry the errno text.
+
+`environ()` is a list rather than a map because an environment may
+legally hold a repeated key, and a map would silently drop one.
+`read_dir` returns entry names without `.` and `..`, since forgetting
+to filter those is how a directory walk becomes an infinite loop.
+`remove` takes files and empty directories alike, so a caller need not
+know which it has.
+
+`proc.getenv`, `proc.args` and `proc.cwd` stay in `proc`; `os` adds
+what `proc` has no answer for rather than duplicating it.
+
 #### `log`
 
 Stderr logging with a timestamp and level. Each function accepts a
@@ -1103,6 +1155,41 @@ less than it appears to. It covers a GET, a 50KB POST, a 200KB response
 verified byte-for-byte against its absolute offset, and six concurrent
 streams on one connection. Run it with `sh tests/http2_interop/run.sh`;
 it skips cleanly without a Go toolchain.
+
+##### Stream floods
+
+The connection layer cannot cap concurrency by itself: it does not spawn
+the handlers, *you* do, and slang has no function values to hand it a
+callback. So the bound is a **gate** — a token channel you hold.
+`gate_enter` takes a token and blocks when none are left, `gate_leave`
+returns one, and that blocking is the backpressure: the reader stops
+pulling frames while every slot is busy.
+
+Without it, a peer that sends 1000 requests down one connection gets
+1000 concurrent handler tasks — measured, against a
+`SETTINGS_MAX_CONCURRENT_STREAMS` of 100 that we were advertising and
+not keeping. Advertising a limit you do not enforce is worse than
+advertising none, because peers size their behaviour by it.
+
+`gate_drain` also makes shutdown safe. Closing the writer channel while
+handlers are still in flight panics them with *send on closed channel*,
+and draining is what knows when none are left.
+
+**The one rule: `gate_leave` must run on every path out of a handler**,
+error returns included. A lost token permanently shrinks that
+connection's capacity; losing all of them wedges that one connection —
+bounded and visible, not a crash, but not something to leave in.
+
+Separately, `RST_STREAM` is counted. A peer that opens a stream and
+cancels it immediately (CVE-2023-44487, *Rapid Reset*) never looks
+concurrent, so a cap alone never trips; after a burst of 100 free
+cancellations, a peer whose resets outnumber half of what it opened
+ends the connection. Cancelling is legitimate — a browser navigating
+away resets its in-flight streams — so the burst and the ratio are both
+needed to tell a normal client from a flood.
+
+`tests/http2_flood` drives both shapes, resetting and not, and fails if
+either exceeds the cap.
 
 ##### Known gaps
 

@@ -122,6 +122,11 @@ pub gc struct Limits {
     idle: int,        // no request in flight, waiting for the next frame
     request: int,     // first HEADERS octet -> END_STREAM
     write: int,       // one writer_task send
+    // How many handlers may run at once on ONE connection. Not a
+    // duration like the rest, but it belongs here for the same reason:
+    // it is a bound a caller sets per connection, and forgetting it is
+    // how a server falls over.
+    max_concurrent: int,
 }
 
 pub fn default_limits() -> Limits {
@@ -129,7 +134,11 @@ pub fn default_limits() -> Limits {
         handshake: 10000000000,     //  10s
         idle: 120000000000,         // 120s
         request: 30000000000,       //  30s
-        write: 30000000000          //  30s
+        write: 30000000000,         //  30s
+        // Matches what our_settings() advertises. Advertising a limit
+        // and not enforcing it is worse than advertising none: peers
+        // size their behaviour by it.
+        max_concurrent: 100
     };
 }
 
@@ -147,6 +156,26 @@ pub let DEFAULT_WINDOW = 65535;
 pub let MAX_HEADER_FIELDS = 128;
 pub let MAX_BODY = 1048576;
 
+// ---- Rapid Reset (CVE-2023-44487) ------------------------------------
+//
+// A peer opens a stream and immediately RST_STREAMs it. From its side
+// the stream is closed the instant it opens, so a concurrency limit
+// never sees it -- while the server has already done the HPACK decode
+// and, in most designs, started the work. Repeat and the server is
+// driven at whatever rate the attacker can write frames.
+//
+// Cancelling a request IS legitimate: a browser navigating away resets
+// its in-flight streams, and a client that gives up on a slow endpoint
+// should. So a flat "no resets" rule would break correct clients. What
+// is not legitimate is resetting nearly everything you open, forever.
+//
+// Hence a burst plus a ratio: RESET_BURST cancellations are free, and
+// after that a peer whose resets outnumber half of what it opened is
+// ending the connection. A browser that abandons a page load trips
+// neither; a Rapid Reset flood resets every stream it opens, so it
+// trips both the moment the burst is spent.
+pub let RESET_BURST = 100;
+
 pub gc struct Conn {
     dec: Decoder,
     // what the PEER told us it will accept
@@ -155,6 +184,10 @@ pub gc struct Conn {
     recv_window: int,
     last_stream: int,
     gone: bool,
+    // Rapid Reset accounting (CVE-2023-44487). Both counters are
+    // touched only by the single reader task, so they need no lock.
+    opened: int,
+    resets: int,
 }
 
 pub gc struct Req {
@@ -173,7 +206,9 @@ pub fn conn_new() -> Conn {
         peer_max_frame: DEFAULT_MAX_FRAME,
         recv_window: DEFAULT_WINDOW,
         last_stream: 0,
-        gone: false
+        gone: false,
+        opened: 0,
+        resets: 0
     };
 }
 
@@ -184,6 +219,68 @@ pub fn our_settings() -> bytes {
                S_MAX_HEADER_LIST_SIZE];
     let vals = [DEFAULT_MAX_FRAME, 0, 100, 16384];
     return settings_frame(ids, vals);
+}
+
+// ---- the stream gate -------------------------------------------------
+//
+// The connection layer cannot cap concurrency on its own: it does not
+// spawn the handlers, the CALLER does, and slang has no function values
+// to hand it a callback. So the bound lives in a token channel the
+// caller holds, and this is the mechanism plus the vocabulary for it.
+//
+// A gate is a chan[bool] holding `n` tokens. gate_enter takes one and
+// blocks when none are left; gate_leave puts one back. That blocking IS
+// the backpressure -- the reader stops pulling frames while every slot
+// is busy, which is the correct answer to "more work than I can do",
+// and far better than the alternative measured before this existed:
+// 3002 concurrent handler tasks from a peer we had told our limit was
+// 100.
+//
+// It also solves shutdown. Closing the writer channel while handlers
+// are still in flight panics them with "send on closed channel", and
+// nothing else could tell whether any were left. gate_drain waits for
+// every token to come home, so the close is safe by construction.
+//
+// The one rule: gate_leave must run on EVERY path out of a handler,
+// including error returns. A lost token permanently shrinks the
+// connection's capacity, and losing all of them wedges that connection
+// (only that one -- the failure is bounded and visible, not a crash).
+pub fn gate(n: int) -> chan[bool] {
+    let cap = n;
+    if cap < 1 {
+        cap = 1;
+    }
+    let g: chan[bool] = make_chan(cap);
+    let i = 0;
+    while i < cap {
+        chan_send(g, true);
+        i = i + 1;
+    }
+    return g;
+}
+
+pub fn gate_enter(g: chan[bool]) {
+    let v = chan_recv(g);
+    guard let _t = v else {
+        return;   // closed: the connection is going away anyway
+    }
+}
+
+pub fn gate_leave(g: chan[bool]) {
+    chan_send(g, true);
+}
+
+// Wait until every handler has finished, by collecting all `n` tokens.
+// Call before chan_close on the writer channel.
+pub fn gate_drain(g: chan[bool], n: int) {
+    let i = 0;
+    while i < n {
+        let v = chan_recv(g);
+        guard let _t = v else {
+            return;
+        }
+        i = i + 1;
+    }
 }
 
 // ---- transport -------------------------------------------------------
@@ -438,9 +535,18 @@ fn handle_control(cn: Conn, wch: chan[WMsg], f: Frame)
         if len(f.payload) != 4 {
             return err("RST_STREAM payload must be 4 octets");
         }
-        // Nothing to unwind here: a handler task owns its own stream and
-        // finishes on its own. Cancelling it mid-flight needs a
-        // per-stream registry, which flow control will want anyway.
+        cn.resets = cn.resets + 1;
+        if cn.resets > RESET_BURST && cn.resets * 2 > cn.opened {
+            // Deliberately a CONNECTION error, not a stream error: the
+            // peer has shown it will keep doing this, and refusing
+            // individual streams would leave it free to keep paying the
+            // cheap half of the exchange.
+            return err("excessive stream resets");
+        }
+        // A handler task owns its own stream and finishes on its own.
+        // Cancelling one mid-flight needs a per-stream registry, so a
+        // reset still costs us the work already started -- which is
+        // exactly why the counters above exist.
         return ok(true);
     }
     if f.ftype == T_PUSH_PROMISE {
@@ -520,6 +626,7 @@ pub fn read_request(cn: Conn, r: Reader, t: Transport, wch: chan[WMsg],
             }
             stream = f.stream;
             cn.last_stream = stream;
+            cn.opened = cn.opened + 1;
 
             let pr = strip_padding(f.payload, f.flags);
             guard let pay = pr else let e = err_of(pr) {

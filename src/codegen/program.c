@@ -474,6 +474,12 @@ void force_native_result_types(CG *cg) {
     if (want_pkg(cg, "regex")) {
         res_cname(cg, "rawptr", "str");
     }
+    if (want_pkg(cg, "os")) {
+        res_cname(cg, "bool", "str");
+        res_cname(cg, "int", "str");
+        res_cname(cg, "str", "str");
+        res_cname(cg, "[str]", "str");
+    }
 }
 
 /* Emit the native-package runtime sections that this program needs,
@@ -488,8 +494,9 @@ void emit_native_runtime(CG *cg) {
     int want_crypto = want_pkg(cg, "crypto");
     int want_sql = want_pkg(cg, "sql");
     int want_regex = want_pkg(cg, "regex");
+    int want_os = want_pkg(cg, "os");
     if (!want_time && !want_net && !want_proc && !want_fs && !want_log &&
-        !want_crypto && !want_sql && !want_regex)
+        !want_crypto && !want_sql && !want_regex && !want_os)
         return;
     if (want_time)
         emit_runtime_file(cg, "sl_time.c");
@@ -509,6 +516,8 @@ void emit_native_runtime(CG *cg) {
         emit_runtime_file(cg, "sl_sql.c");
     if (want_regex)
         emit_runtime_file(cg, "sl_regex.c");
+    if (want_os)
+        emit_runtime_file(cg, "sl_os.c");
 }
 
 /* Emit the args-struct + task entry function for every distinct

@@ -18,7 +18,8 @@ fn tight() -> http2.Limits {
         handshake: ms(200),
         idle: ms(250),
         request: ms(250),
-        write: ms(200)
+        write: ms(200),
+        max_concurrent: 100
     };
 }
 

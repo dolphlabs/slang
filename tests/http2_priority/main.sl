@@ -16,7 +16,8 @@ fn ms(n: int) -> int { return n * 1000000; }
 fn lim() -> http2.Limits {
     return http2.Limits {
         handshake: ms(2000), idle: ms(2000),
-        request: ms(2000), write: ms(2000)
+        request: ms(2000), write: ms(2000),
+        max_concurrent: 100
     };
 }
 
