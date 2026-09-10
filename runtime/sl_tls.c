@@ -131,17 +131,33 @@ static int sl_tls_clean_eof(int ssl_err) {
         return 1;
     if (ssl_err == SSL_ERROR_SYSCALL && errno == 0)
         return 1; /* pre-3.0 spelling of the same event */
-#ifdef SSL_R_UNEXPECTED_EOF_WHILE_READING
     if (ssl_err == SSL_ERROR_SSL) {
         unsigned long e = ERR_peek_error();
-        if (ERR_GET_REASON(e) == SSL_R_UNEXPECTED_EOF_WHILE_READING) {
+        int r = (int)ERR_GET_REASON(e);
+        int clean = 0;
+#ifdef SSL_R_UNEXPECTED_EOF_WHILE_READING
+        /* Peer closed the TCP connection instead of sending
+           close_notify. Every browser does this. */
+        if (r == SSL_R_UNEXPECTED_EOF_WHILE_READING)
+            clean = 1;
+#endif
+#ifdef SSL_R_SHUTDOWN_WHILE_IN_INIT
+        /* Peer closed DURING the handshake. Browsers preconnect: Chrome
+           opens a spare connection it may never need and drops it,
+           sometimes mid-handshake. Also ordinary, and reporting it as a
+           fault made the browser test fail about one run in six -- an
+           intermittent that only showed up once the run count went past
+           the four I had originally checked. */
+        if (r == SSL_R_SHUTDOWN_WHILE_IN_INIT)
+            clean = 1;
+#endif
+        if (clean) {
             ERR_clear_error(); /* consumed: leaving it queued would make
                                   the NEXT unrelated failure report this
                                   one's text instead of its own */
             return 1;
         }
     }
-#endif
     return 0;
 }
 
