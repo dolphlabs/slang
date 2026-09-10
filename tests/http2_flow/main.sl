@@ -53,16 +53,16 @@ fn serve(fd: i32, out: chan[str]) {
     let rd = http2.reader_new();
     let wch: chan[http2.WMsg] = make_chan(32);
     let l = lim();
-    spawn http2.writer_task(fd, wch, l.write);
+    spawn http2.writer_task(http2.transport_fd(fd), wch, l.write);
 
-    let pr = http2.accept_preface(rd, fd, wch,
+    let pr = http2.accept_preface(rd, http2.transport_fd(fd), wch,
                                   until_of(time.mono() + l.handshake));
     guard let _p = pr else let e = err_of(pr) {
         chan_send(out, "preface:" + e);
         return;
     }
     while true {
-        let rr = http2.read_request(cn, rd, fd, wch, l);
+        let rr = http2.read_request(cn, rd, http2.transport_fd(fd), wch, l);
         guard let req = rr else let e = err_of(rr) {
             chan_close(wch);
             chan_send(out, "done:" + e);
@@ -91,7 +91,7 @@ fn drain(rd: http2.Reader, fd: i32, stream: int, base: int,
          quiet_ns: int) -> Got {
     let g = Got { octets: 0, ended: false, bad: false };
     while true {
-        let fr = http2.read_frame(rd, fd, 16384,
+        let fr = http2.read_frame(rd, http2.transport_fd(fd), 16384,
                                   until_of(time.mono() + quiet_ns));
         guard let f = fr else {
             return g;            // quiet: the server sent all it may

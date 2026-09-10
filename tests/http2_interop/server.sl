@@ -58,9 +58,9 @@ fn serve(fd: i32) {
     let rd = http2.reader_new();
     let wch: chan[http2.WMsg] = make_chan(64);
     let lim = http2.default_limits();
-    spawn http2.writer_task(fd, wch, lim.write);
+    spawn http2.writer_task(http2.transport_fd(fd), wch, lim.write);
 
-    let pr = http2.accept_preface(rd, fd, wch,
+    let pr = http2.accept_preface(rd, http2.transport_fd(fd), wch,
                                   until_of(time.mono() + lim.handshake));
     guard let _p = pr else {
         chan_close(wch);
@@ -68,7 +68,7 @@ fn serve(fd: i32) {
         return;
     }
     while true {
-        let rr = http2.read_request(cn, rd, fd, wch, lim);
+        let rr = http2.read_request(cn, rd, http2.transport_fd(fd), wch, lim);
         guard let req = rr else {
             chan_close(wch);
             net.close(fd);
