@@ -1,3 +1,5 @@
+import "net";
+
 // HTTP/2 connection and stream layer (RFC 9113).
 //
 // A connection is: verify the client preface, exchange SETTINGS, then
@@ -5,11 +7,40 @@
 // by CONTINUATION frames) followed by zero or more DATA frames, ending
 // when END_STREAM is seen.
 //
-// Streams are handled one complete request at a time. That is
-// conformant -- a server may process requests in any order, including
-// serially -- and it keeps a single task per connection with no writer
-// lock. True concurrent stream processing needs a serialised writer and
-// is deliberately left for later rather than half-built here.
+// The connection is addressed by its FILE DESCRIPTOR, not by a `link`.
+// That is forced and it is also better:
+//
+//   `link` is move-only, so `spawn writer(c)` consumes it and the reader
+//   task can no longer use it -- the two-task design is impossible with
+//   that type. An i32 fd is an ordinary integer, so both tasks can hold
+//   it, which is exactly what a socket allows: one reader, one writer,
+//   opposite directions.
+//
+//   net.recv also hands back `bytes` directly, so the byte-at-a-time
+//   wire copy the `link` path needed disappears from the read path.
+//
+// The cost is deadlines: net.recv has no `until` parameter, so a
+// connection cannot currently time out a slow peer. That is a real gap
+// for a public server and is noted rather than papered over.
+//
+// Streams are served CONCURRENTLY. One task reads frames and dispatches
+// each complete request to its own spawned handler; every byte that
+// leaves the connection goes through a single writer task fed by a
+// chan[bytes].
+//
+// The writer is what makes this safe without a mutex, which slang does
+// not expose anyway. Two properties matter:
+//
+//   1. Each message on the channel is a COMPLETE frame sequence, and the
+//      writer sends one message per send_bytes, so no two handlers can
+//      interleave inside a frame.
+//   2. A HEADERS block and its CONTINUATION frames must not be split by
+//      any other frame (RFC 9113 §6.2). Because a handler enqueues its
+//      whole block as one message, that holds by construction rather
+//      than by careful ordering.
+//
+// Frames for different streams still interleave at frame boundaries --
+// that is exactly what multiplexing means, and it is legal.
 
 pub let DEFAULT_MAX_FRAME = 16384;
 pub let DEFAULT_WINDOW = 65535;
@@ -69,23 +100,13 @@ pub fn reader_new() -> Reader {
     return Reader { buf: b"" };
 }
 
-fn wire_to_bytes(w: wire, n: int) -> bytes {
-    let out = b"";
-    let i = 0;
-    while i < n {
-        out = out + to_le(w[i])[0..1];
-        i = i + 1;
-    }
-    return out;
-}
-
 // Pull bytes until at least one complete frame is buffered, then return
 // it and keep the remainder.
 // Note the `&mut *c` at every site below that forwards this borrow:
 // passing `c` directly MOVES it, so the second call would fail with
 // "use of moved value". Reborrowing keeps the caller's borrow usable.
-pub fn read_frame(r: Reader, c: &mut link, scratch: wire, max_frame: int,
-                  deadline: until) -> result[Frame, str] {
+pub fn read_frame(r: Reader, fd: i32, max_frame: int)
+        -> result[Frame, str] {
     while true {
         if len(r.buf) >= FRAME_HEADER_LEN {
             let plen = be24(r.buf, 0);
@@ -102,42 +123,41 @@ pub fn read_frame(r: Reader, c: &mut link, scratch: wire, max_frame: int,
                 return ok(f);
             }
         }
-        let rr = c.recv(scratch, deadline);
-        guard let n = rr else let e = err_of(rr) {
-            return err("recv: " + to_str(e));
+        let rr = net.recv(fd, 16384);
+        guard let chunk = rr else let e = err_of(rr) {
+            return err("recv: " + e);
         }
-        if n == 0 {
+        if len(chunk) == 0 {
             return err("connection closed");
         }
-        r.buf = r.buf + wire_to_bytes(scratch, n);
+        r.buf = r.buf + chunk;
     }
 }
 
 // ---- handshake -------------------------------------------------------
 
 // Verify the 24-byte client connection preface and send ours.
-pub fn accept_preface(r: Reader, c: &mut link, scratch: wire,
-                      deadline: until) -> result[bool, str] {
+pub fn accept_preface(r: Reader, fd: i32, wch: chan[bytes])
+        -> result[bool, str] {
     let want = preface();
     while len(r.buf) < len(want) {
-        let rr = c.recv(scratch, deadline);
-        guard let n = rr else let e = err_of(rr) {
-            return err("preface recv: " + to_str(e));
+        let rr = net.recv(fd, 16384);
+        guard let chunk = rr else let e = err_of(rr) {
+            return err("preface recv: " + e);
         }
-        if n == 0 {
+        if len(chunk) == 0 {
             return err("connection closed before preface");
         }
-        r.buf = r.buf + wire_to_bytes(scratch, n);
+        r.buf = r.buf + chunk;
     }
     if r.buf[0..len(want)] != want {
         // Almost always an HTTP/1.1 client that reached an h2-only port.
         return err("bad connection preface (not an HTTP/2 client)");
     }
     r.buf = r.buf[len(want)..];
-    let sr = c.send_bytes(our_settings(), deadline);
-    guard let _n = sr else let e = err_of(sr) {
-        return err("settings send: " + to_str(e));
-    }
+    // First message on the channel, so it is the first thing the peer
+    // sees -- the writer preserves order.
+    chan_send(wch, our_settings());
     return ok(true);
 }
 
@@ -170,7 +190,10 @@ fn apply_settings(cn: Conn, payload: bytes) -> result[bool, str] {
 
 // Handle a frame that is not part of a request. Returns true if it was
 // consumed here, so the caller only sees HEADERS/DATA/CONTINUATION.
-fn handle_control(cn: Conn, c: &mut link, f: Frame, deadline: until)
+// Control frames go through the writer channel too, not straight to the
+// socket: a SETTINGS ack written directly could land in the middle of a
+// handler's HEADERS block.
+fn handle_control(cn: Conn, wch: chan[bytes], f: Frame)
         -> result[bool, str] {
     if f.ftype == T_SETTINGS {
         if (f.flags & FLAG_ACK) != 0 {
@@ -180,10 +203,7 @@ fn handle_control(cn: Conn, c: &mut link, f: Frame, deadline: until)
         guard let _a = ar else let e = err_of(ar) {
             return err(e);
         }
-        let sr = c.send_bytes(settings_ack(), deadline);
-        guard let _n = sr else let e = err_of(sr) {
-            return err("settings ack: " + to_str(e));
-        }
+        chan_send(wch, settings_ack());
         return ok(true);
     }
     if f.ftype == T_PING {
@@ -191,10 +211,7 @@ fn handle_control(cn: Conn, c: &mut link, f: Frame, deadline: until)
             return err("PING payload must be 8 octets");
         }
         if (f.flags & FLAG_ACK) == 0 {
-            let sr = c.send_bytes(ping_ack(f.payload), deadline);
-            guard let _n = sr else let e = err_of(sr) {
-                return err("ping ack: " + to_str(e));
-            }
+            chan_send(wch, ping_ack(f.payload));
         }
         return ok(true);
     }
@@ -233,8 +250,8 @@ fn pseudo(hs: [Header], name: str) -> str {
 }
 
 // Read frames until one complete request has arrived.
-pub fn read_request(cn: Conn, r: Reader, c: &mut link, scratch: wire,
-                    deadline: until) -> result[Req, str] {
+pub fn read_request(cn: Conn, r: Reader, fd: i32, wch: chan[bytes])
+        -> result[Req, str] {
     let hdr_block = b"";
     let stream = 0;
     let collecting = false;
@@ -242,12 +259,12 @@ pub fn read_request(cn: Conn, r: Reader, c: &mut link, scratch: wire,
     let want_body = false;
 
     while true {
-        let fr = read_frame(r, &mut *c, scratch, DEFAULT_MAX_FRAME, deadline);
+        let fr = read_frame(r, fd, DEFAULT_MAX_FRAME);
         guard let f = fr else let e = err_of(fr) {
             return err(e);
         }
 
-        let cr = handle_control(cn, &mut *c, f, deadline);
+        let cr = handle_control(cn, wch, f);
         guard let consumed = cr else let e = err_of(cr) {
             return err(e);
         }
@@ -321,12 +338,8 @@ pub fn read_request(cn: Conn, r: Reader, c: &mut link, scratch: wire,
                     // Give the window back so the peer can keep sending.
                     // Both levels must be replenished: connection and stream.
                     let n = len(f.payload);
-                    let wr = c.send_bytes(window_update(0, n)
-                                          + window_update(stream, n),
-                                          deadline);
-                    guard let _w = wr else let e = err_of(wr) {
-                        return err("window update: " + to_str(e));
-                    }
+                    chan_send(wch, window_update(0, n)
+                                   + window_update(stream, n));
                     if (f.flags & FLAG_END_STREAM) != 0 {
                         want_body = false;
                     }
@@ -357,7 +370,7 @@ pub fn read_request(cn: Conn, r: Reader, c: &mut link, scratch: wire,
                     stream: stream, method: m, path: p, scheme: s,
                     authority: a, headers: hs, body: b""
                 };
-                let br = read_body(cn, r, &mut *c, scratch, stream, deadline);
+                let br = read_body(cn, r, fd, stream, wch);
                 guard let bd = br else let e = err_of(br) {
                     return err(e);
                 }
@@ -380,15 +393,15 @@ pub fn read_request(cn: Conn, r: Reader, c: &mut link, scratch: wire,
 }
 
 // Read DATA frames for `stream` until END_STREAM.
-fn read_body(cn: Conn, r: Reader, c: &mut link, scratch: wire, stream: int,
-             deadline: until) -> result[bytes, str] {
+fn read_body(cn: Conn, r: Reader, fd: i32, stream: int,
+             wch: chan[bytes]) -> result[bytes, str] {
     let body = b"";
     while true {
-        let fr = read_frame(r, &mut *c, scratch, DEFAULT_MAX_FRAME, deadline);
+        let fr = read_frame(r, fd, DEFAULT_MAX_FRAME);
         guard let f = fr else let e = err_of(fr) {
             return err(e);
         }
-        let cr = handle_control(cn, &mut *c, f, deadline);
+        let cr = handle_control(cn, wch, f);
         guard let consumed = cr else let e = err_of(cr) {
             return err(e);
         }
@@ -407,25 +420,45 @@ fn read_body(cn: Conn, r: Reader, c: &mut link, scratch: wire, stream: int,
             return err("request body too large");
         }
         let n = len(f.payload);
-        let wr = c.send_bytes(window_update(0, n) + window_update(stream, n),
-                              deadline);
-        guard let _w = wr else let e = err_of(wr) {
-            return err("window update: " + to_str(e));
-        }
+        chan_send(wch, window_update(0, n) + window_update(stream, n));
         if (f.flags & FLAG_END_STREAM) != 0 {
             return ok(body);
         }
     }
 }
 
-// ---- responses -------------------------------------------------------
+// ---- serialised writer ----------------------------------------------
 
-// Send a response on `stream`. DATA is split to the peer's advertised
-// max frame size rather than assuming ours: exceeding it is a
-// connection error, and the peer may have set it lower than 16KB.
-pub fn respond(cn: Conn, c: &mut link, stream: int, status: str,
-               extra: [Header], body: bytes, deadline: until)
-        -> result[bool, str] {
+// Owns the write side of the connection. Spawn one per connection and
+// hand every producer the channel. Exits when the channel is closed, or
+// when the peer goes away.
+//
+// Takes the fd, which both this task and the reader hold: one reads, one
+// writes, opposite directions on the same socket, which is safe. Two
+// tasks WRITING would not be, and that is the whole reason this task
+// exists.
+pub fn writer_task(fd: i32, wch: chan[bytes]) {
+    while true {
+        let m = chan_recv(wch);
+        guard let frames = m else {
+            return;              // channel closed: connection is done
+        }
+        let sr = net.send(fd, frames);
+        guard let _n = sr else {
+            return;              // peer gone; drop the rest
+        }
+    }
+}
+
+// Build a complete response as one byte sequence, ready to hand to the
+// writer. Pure, so a handler task can build it without touching the
+// connection.
+//
+// DATA is split to the PEER's advertised max frame size, not ours:
+// exceeding what the peer announced is a connection error, and a peer
+// may set it below the 16KB default.
+pub fn response_frames(peer_max_frame: int, stream: int, status: str,
+                       extra: [Header], body: bytes) -> bytes {
     let hs: [Header] = [Header { name: ":status", value: status }];
     hs = hs + extra;
     hs = hs + [Header { name: "content-length", value: to_str(len(body)) }];
@@ -437,16 +470,11 @@ pub fn respond(cn: Conn, c: &mut link, stream: int, status: str,
         hflags = hflags | FLAG_END_STREAM;
     }
     let out = header_bytes(T_HEADERS, hflags, stream, len(blk)) + blk;
-    let hr = c.send_bytes(out, deadline);
-    guard let _h = hr else let e = err_of(hr) {
-        return err("headers send: " + to_str(e));
-    }
     if end_now {
-        return ok(true);
+        return out;
     }
-
     let off = 0;
-    let cap = cn.peer_max_frame;
+    let cap = peer_max_frame;
     while off < len(body) {
         let n = len(body) - off;
         if n > cap {
@@ -457,19 +485,28 @@ pub fn respond(cn: Conn, c: &mut link, stream: int, status: str,
         if last {
             dflags = FLAG_END_STREAM;
         }
-        let chunk = header_bytes(T_DATA, dflags, stream, n)
+        out = out + header_bytes(T_DATA, dflags, stream, n)
                   + body[off..off + n];
-        let dr = c.send_bytes(chunk, deadline);
-        guard let _d = dr else let e = err_of(dr) {
-            return err("data send: " + to_str(e));
-        }
         off = off + n;
     }
-    return ok(true);
+    return out;
 }
 
-pub fn send_goaway(c: &mut link, last_stream: int, code: int, msg: str,
-                   deadline: until) {
-    let g = c.send_bytes(goaway(last_stream, code, msg), deadline);
-    guard let _n = g else { return; }
+// ---- responses -------------------------------------------------------
+
+// Enqueue a response for `stream`. Every write on the connection goes
+// through the writer task, so there is deliberately no direct-write
+// variant: one would be able to interleave with a handler mid-frame.
+pub fn respond(cn: Conn, wch: chan[bytes], stream: int, status: str,
+               extra: [Header], body: bytes) {
+    chan_send(wch, response_frames(cn.peer_max_frame, stream, status,
+                                   extra, body));
+}
+
+pub fn send_reset(wch: chan[bytes], stream: int, code: int) {
+    chan_send(wch, rst_stream(stream, code));
+}
+
+pub fn send_goaway(wch: chan[bytes], last_stream: int, code: int, msg: str) {
+    chan_send(wch, goaway(last_stream, code, msg));
 }
