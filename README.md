@@ -1104,6 +1104,41 @@ verified byte-for-byte against its absolute offset, and six concurrent
 streams on one connection. Run it with `sh tests/http2_interop/run.sh`;
 it skips cleanly without a Go toolchain.
 
+##### Stream floods
+
+The connection layer cannot cap concurrency by itself: it does not spawn
+the handlers, *you* do, and slang has no function values to hand it a
+callback. So the bound is a **gate** — a token channel you hold.
+`gate_enter` takes a token and blocks when none are left, `gate_leave`
+returns one, and that blocking is the backpressure: the reader stops
+pulling frames while every slot is busy.
+
+Without it, a peer that sends 1000 requests down one connection gets
+1000 concurrent handler tasks — measured, against a
+`SETTINGS_MAX_CONCURRENT_STREAMS` of 100 that we were advertising and
+not keeping. Advertising a limit you do not enforce is worse than
+advertising none, because peers size their behaviour by it.
+
+`gate_drain` also makes shutdown safe. Closing the writer channel while
+handlers are still in flight panics them with *send on closed channel*,
+and draining is what knows when none are left.
+
+**The one rule: `gate_leave` must run on every path out of a handler**,
+error returns included. A lost token permanently shrinks that
+connection's capacity; losing all of them wedges that one connection —
+bounded and visible, not a crash, but not something to leave in.
+
+Separately, `RST_STREAM` is counted. A peer that opens a stream and
+cancels it immediately (CVE-2023-44487, *Rapid Reset*) never looks
+concurrent, so a cap alone never trips; after a burst of 100 free
+cancellations, a peer whose resets outnumber half of what it opened
+ends the connection. Cancelling is legitimate — a browser navigating
+away resets its in-flight streams — so the burst and the ratio are both
+needed to tell a normal client from a flood.
+
+`tests/http2_flood` drives both shapes, resetting and not, and fails if
+either exceeds the cap.
+
 ##### Known gaps
 
 `PRIORITY` is validated but not acted on: it is deprecated in RFC 9113

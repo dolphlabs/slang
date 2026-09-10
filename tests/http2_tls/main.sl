@@ -24,12 +24,13 @@ fn die(msg: str) {
     exit(1);
 }
 
-fn handle(stream: i32, path: str, wch: chan[http2.WMsg]) {
+fn handle(stream: i32, path: str, wch: chan[http2.WMsg], g: chan[bool]) {
     let extra: [http2.Header] = [
         http2.Header { name: "content-type", value: "text/plain" }
     ];
     chan_send(wch, http2.response_msg(stream as int, "200", extra,
                                       to_bytes("secure=" + path)));
+    http2.gate_leave(g);
 }
 
 // One TLS connection, served as h2 only if ALPN actually said so.
@@ -47,6 +48,7 @@ fn serve(ssl: rawptr, out: chan[str]) {
     let rd = http2.reader_new();
     let wch: chan[http2.WMsg] = make_chan(16);
     let lim = http2.default_limits();
+    let g = http2.gate(lim.max_concurrent);
     spawn http2.writer_task(t, wch, lim.write);
 
     let pr = http2.accept_preface(rd, t, wch,
@@ -64,7 +66,8 @@ fn serve(ssl: rawptr, out: chan[str]) {
         chan_send(out, "request:" + e);
         return;
     }
-    spawn handle(req.stream as i32, req.path, wch);
+    http2.gate_enter(g);
+    spawn handle(req.stream as i32, req.path, wch, g);
     chan_send(out, "served:" + req.path);
 }
 
