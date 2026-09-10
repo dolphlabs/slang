@@ -297,6 +297,10 @@ typedef enum {
     NA_STR_FAULT, /* str, or a fault converted to str at the call site */
     NA_I64,       /* full-width int: marshaled as long long, not truncated */
     NA_F64,       /* float: marshaled as double (int widens in) */
+    NA_UNTIL,     /* an `until` deadline: marshaled as sl_until (int64_t).
+                     Deliberately NOT int-compatible -- a deadline is an
+                     absolute monotonic instant, and silently accepting a
+                     duration would park until 1970 rather than for 5s. */
 } NatArgKind;
 
 typedef struct {

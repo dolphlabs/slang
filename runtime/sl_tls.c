@@ -83,14 +83,29 @@ static sl_res_rawptr_str *sl_net_tls_client_ctx(const char *ca_path) {
     return sl_net_ok_rawptr(ctx);
 }
 
-static int sl_tls_park(SSL *ssl, int ssl_err, int abort_on_shutdown) {
+/* Returns 0 to retry, -1 shutdown, -2 a real SSL error, and -3 the
+ * deadline passed. -3 rather than reusing -2 because the two need
+ * different error text and callers already branch on -2 meaning "ask
+ * OpenSSL what went wrong", which would report a stale or empty error
+ * queue for a timeout. `u` of 0 disables the deadline entirely, so
+ * sl_tls_park below is exactly the original function. */
+static int sl_tls_park_until(SSL *ssl, int ssl_err, int abort_on_shutdown,
+                             sl_until u) {
     int fd = SSL_get_fd(ssl);
+    int rw;
     if (fd < 0) return -2;
     if (ssl_err == SSL_ERROR_WANT_READ)
-        return sl_reactor_wait(fd, SL_REACTOR_READ, abort_on_shutdown);
-    if (ssl_err == SSL_ERROR_WANT_WRITE)
-        return sl_reactor_wait(fd, SL_REACTOR_WRITE, abort_on_shutdown);
-    return -2;
+        rw = SL_REACTOR_READ;
+    else if (ssl_err == SSL_ERROR_WANT_WRITE)
+        rw = SL_REACTOR_WRITE;
+    else
+        return -2;
+    int w = sl_reactor_wait_until(fd, rw, abort_on_shutdown, u);
+    return w == -2 ? -3 : w;
+}
+
+static int sl_tls_park(SSL *ssl, int ssl_err, int abort_on_shutdown) {
+    return sl_tls_park_until(ssl, ssl_err, abort_on_shutdown, 0);
 }
 
 static int sl_tls_handshake(SSL *ssl, int server) {
@@ -205,23 +220,41 @@ static sl_res_rawptr_str *sl_net_tls_dial(const char *host, int port,
     return sl_net_ok_rawptr(ssl);
 }
 
-static sl_res_i32_str *sl_net_tls_send(void *sslv, sl_bytes *data) {
+/* See sl_net_send_u in sl_net.c for the partial-write contract a
+ * "timeout" carries: bytes may already be on the wire, so the session
+ * must be closed rather than retried. */
+static sl_res_i32_str *sl_net_tls_send_u(void *sslv, sl_bytes *data,
+                                         sl_until u) {
     sl_rt_need_fat_stack();
     SSL *ssl = (SSL *)sslv;
     long long off = 0;
+    if (u && sl_until_hit(u) && data->len > 0)
+        return sl_net_err_i32("timeout");
     while (off < data->len) {
         int n = SSL_write(ssl, data->ptr + off, (int)(data->len - off));
         if (n > 0) { off += n; continue; }
         int err = SSL_get_error(ssl, n);
-        int w = sl_tls_park(ssl, err, 0);
+        int w = sl_tls_park_until(ssl, err, 0, u);
         if (w == 0) continue;
+        if (w == -3) return sl_net_err_i32("timeout");
         return sl_net_err_i32(sl_tls_last_error());
     }
     return sl_net_ok_i32((int32_t)data->len);
 }
 
-static sl_res_bytes_str *sl_net_tls_recv(void *sslv, int max) {
+static sl_res_i32_str *sl_net_tls_send(void *sslv, sl_bytes *data) {
+    return sl_net_tls_send_u(sslv, data, 0);
+}
+
+static sl_res_i32_str *sl_net_tls_send_until(void *sslv, sl_bytes *data,
+                                             sl_until u) {
+    return sl_net_tls_send_u(sslv, data, u);
+}
+
+static sl_res_bytes_str *sl_net_tls_recv_u(void *sslv, int max, sl_until u) {
     sl_rt_need_fat_stack();
+    if (u && sl_until_hit(u))
+        return sl_net_err_bytes("timeout");
     if (max <= 0) max = 4096;
     SSL *ssl = (SSL *)sslv;
     unsigned char *scratch = (unsigned char *)sl_recv_buf_get((size_t)max);
@@ -244,13 +277,23 @@ static sl_res_bytes_str *sl_net_tls_recv(void *sslv, int max) {
             sl_recv_buf_put(scratch);
             return sl_net_ok_bytes(b);
         }
-        int w = sl_tls_park(ssl, err, 1);
+        int w = sl_tls_park_until(ssl, err, 1, u);
         if (w == 0) continue;
         sl_rt_safepoint_exit();
         sl_recv_buf_put(scratch);
         if (w == -1) return sl_net_err_bytes("interrupted");
+        if (w == -3) return sl_net_err_bytes("timeout");
         return sl_net_err_bytes(sl_tls_last_error());
     }
+}
+
+static sl_res_bytes_str *sl_net_tls_recv(void *sslv, int max) {
+    return sl_net_tls_recv_u(sslv, max, 0);
+}
+
+static sl_res_bytes_str *sl_net_tls_recv_until(void *sslv, int max,
+                                               sl_until u) {
+    return sl_net_tls_recv_u(sslv, max, u);
 }
 
 typedef struct sl_sni_cert {
