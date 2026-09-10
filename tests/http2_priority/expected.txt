@@ -1,0 +1,6 @@
+short payload: PRIORITY payload must be 5 octets
+stream zero: PRIORITY on stream 0
+self dependency: PRIORITY: stream depends on itself
+valid ignored: served /ok
+headers self dependency: HEADERS priority: stream depends on itself
+priority validation ok
