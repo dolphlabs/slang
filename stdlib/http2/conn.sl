@@ -28,21 +28,82 @@ import "time";
 // Streams are served CONCURRENTLY. One task reads frames and dispatches
 // each complete request to its own spawned handler; every byte that
 // leaves the connection goes through a single writer task fed by a
-// chan[bytes].
+// chan[WMsg].
 //
 // The writer is what makes this safe without a mutex, which slang does
-// not expose anyway. Two properties matter:
+// not expose anyway. Three properties matter:
 //
-//   1. Each message on the channel is a COMPLETE frame sequence, and the
-//      writer sends one message per send_bytes, so no two handlers can
-//      interleave inside a frame.
+//   1. The writer emits one frame at a time and is the only writer, so
+//      no two handlers can interleave inside a frame.
 //   2. A HEADERS block and its CONTINUATION frames must not be split by
 //      any other frame (RFC 9113 §6.2). Because a handler enqueues its
 //      whole block as one message, that holds by construction rather
 //      than by careful ordering.
+//   3. Flow-control windows are connection-wide state that the read
+//      side replenishes and the write side spends. Both meet in this
+//      one task, so the accounting needs no lock either.
 //
 // Frames for different streams still interleave at frame boundaries --
 // that is exactly what multiplexing means, and it is legal.
+
+// ---- writer messages -------------------------------------------------
+//
+// Everything the writer task needs arrives on ONE channel, tagged.
+//
+// That is not a stylistic choice: slang has no `select` over channels,
+// so a writer that had to watch both "here is a response" and "the peer
+// granted more window" on two channels could only ever block on one of
+// them. Folding both into a single stream makes the writer an ordinary
+// state machine with one blocking point, and gives the ordering for
+// free -- a grant that arrives before a body is simply an earlier
+// message.
+pub let W_RAW = 0;       // pre-built frames, not flow controlled
+pub let W_BODY = 1;      // a response: HEADERS now, DATA as window allows
+pub let W_GRANT = 2;     // peer's WINDOW_UPDATE: `n` octets to `stream`
+pub let W_INITIAL = 3;   // peer's SETTINGS_INITIAL_WINDOW_SIZE is now `n`
+pub let W_MAXFRAME = 4;  // peer's SETTINGS_MAX_FRAME_SIZE is now `n`
+
+pub gc struct WMsg {
+    kind: int,
+    stream: int,
+    n: int,
+    head: bytes,   // W_BODY: the HEADERS frame; W_RAW: the whole thing
+    body: bytes,   // W_BODY: the response body, unframed
+}
+
+pub fn raw_msg(b: bytes) -> WMsg {
+    return WMsg { kind: W_RAW, stream: 0, n: 0, head: b, body: b"" };
+}
+
+pub fn grant_msg(stream: int, n: int) -> WMsg {
+    return WMsg { kind: W_GRANT, stream: stream, n: n, head: b"", body: b"" };
+}
+
+fn setting_msg(kind: int, n: int) -> WMsg {
+    return WMsg { kind: kind, stream: 0, n: n, head: b"", body: b"" };
+}
+
+// Build a response. The body is handed over UNFRAMED: the writer owns
+// the peer's window and its max frame size, so it -- not the handler --
+// decides how the body is cut into DATA frames and when each may go.
+pub fn response_msg(stream: int, status: str, extra: [Header],
+                    body: bytes) -> WMsg {
+    let hs: [Header] = [Header { name: ":status", value: status }];
+    hs = hs + extra;
+    hs = hs + [Header { name: "content-length", value: to_str(len(body)) }];
+    let blk = encode_block(hs);
+    let hflags = FLAG_END_HEADERS;
+    if len(body) == 0 {
+        hflags = hflags | FLAG_END_STREAM;
+    }
+    return WMsg {
+        kind: W_BODY,
+        stream: stream,
+        n: 0,
+        head: header_bytes(T_HEADERS, hflags, stream, len(blk)) + blk,
+        body: body
+    };
+}
 
 // ---- deadlines -------------------------------------------------------
 //
@@ -184,7 +245,7 @@ pub fn read_frame(r: Reader, fd: i32, max_frame: int, u: until)
 // ---- handshake -------------------------------------------------------
 
 // Verify the 24-byte client connection preface and send ours.
-pub fn accept_preface(r: Reader, fd: i32, wch: chan[bytes], u: until)
+pub fn accept_preface(r: Reader, fd: i32, wch: chan[WMsg], u: until)
         -> result[bool, str] {
     let want = preface();
     while len(r.buf) < len(want) {
@@ -207,13 +268,14 @@ pub fn accept_preface(r: Reader, fd: i32, wch: chan[bytes], u: until)
     r.buf = r.buf[len(want)..];
     // First message on the channel, so it is the first thing the peer
     // sees -- the writer preserves order.
-    chan_send(wch, our_settings());
+    chan_send(wch, raw_msg(our_settings()));
     return ok(true);
 }
 
 // ---- control frames --------------------------------------------------
 
-fn apply_settings(cn: Conn, payload: bytes) -> result[bool, str] {
+fn apply_settings(cn: Conn, wch: chan[WMsg], payload: bytes)
+        -> result[bool, str] {
     if len(payload) % 6 != 0 {
         return err("SETTINGS payload is not a multiple of 6");
     }
@@ -229,9 +291,17 @@ fn apply_settings(cn: Conn, payload: bytes) -> result[bool, str] {
                 return err("SETTINGS_MAX_FRAME_SIZE out of range");
             }
             cn.peer_max_frame = v;
+            chan_send(wch, setting_msg(W_MAXFRAME, v));
         }
         if id == S_HEADER_TABLE_SIZE {
             table_resize(cn.dec.table, v);
+        }
+        if id == S_INITIAL_WINDOW_SIZE {
+            // §6.5.2: above 2^31-1 is a FLOW_CONTROL_ERROR
+            if v > 2147483647 {
+                return err("SETTINGS_INITIAL_WINDOW_SIZE out of range");
+            }
+            chan_send(wch, setting_msg(W_INITIAL, v));
         }
         i = i + 6;
     }
@@ -243,17 +313,17 @@ fn apply_settings(cn: Conn, payload: bytes) -> result[bool, str] {
 // Control frames go through the writer channel too, not straight to the
 // socket: a SETTINGS ack written directly could land in the middle of a
 // handler's HEADERS block.
-fn handle_control(cn: Conn, wch: chan[bytes], f: Frame)
+fn handle_control(cn: Conn, wch: chan[WMsg], f: Frame)
         -> result[bool, str] {
     if f.ftype == T_SETTINGS {
         if (f.flags & FLAG_ACK) != 0 {
             return ok(true);       // our settings were acknowledged
         }
-        let ar = apply_settings(cn, f.payload);
+        let ar = apply_settings(cn, wch, f.payload);
         guard let _a = ar else let e = err_of(ar) {
             return err(e);
         }
-        chan_send(wch, settings_ack());
+        chan_send(wch, raw_msg(settings_ack()));
         return ok(true);
     }
     if f.ftype == T_PING {
@@ -261,7 +331,7 @@ fn handle_control(cn: Conn, wch: chan[bytes], f: Frame)
             return err("PING payload must be 8 octets");
         }
         if (f.flags & FLAG_ACK) == 0 {
-            chan_send(wch, ping_ack(f.payload));
+            chan_send(wch, raw_msg(ping_ack(f.payload)));
         }
         return ok(true);
     }
@@ -273,6 +343,9 @@ fn handle_control(cn: Conn, wch: chan[bytes], f: Frame)
         if inc == 0 {
             return err("WINDOW_UPDATE increment of 0");
         }
+        // The credit is the writer's to spend, and the writer is a
+        // different task -- forward it rather than tracking it here.
+        chan_send(wch, grant_msg(f.stream, inc));
         return ok(true);
     }
     if f.ftype == T_GOAWAY {
@@ -335,7 +408,7 @@ fn pseudo(hs: [Header], name: str) -> str {
 // it the strict `request` budget applies to the request as a WHOLE and
 // is never refreshed, so no amount of dribbled DATA or CONTINUATION can
 // extend it.
-pub fn read_request(cn: Conn, r: Reader, fd: i32, wch: chan[bytes],
+pub fn read_request(cn: Conn, r: Reader, fd: i32, wch: chan[WMsg],
                     lim: Limits) -> result[Req, str] {
     let hdr_block = b"";
     let stream = 0;
@@ -438,8 +511,8 @@ pub fn read_request(cn: Conn, r: Reader, fd: i32, wch: chan[bytes],
                     // Give the window back so the peer can keep sending.
                     // Both levels must be replenished: connection and stream.
                     let n = len(f.payload);
-                    chan_send(wch, window_update(0, n)
-                                   + window_update(stream, n));
+                    chan_send(wch, raw_msg(window_update(0, n)
+                                           + window_update(stream, n)));
                     if (f.flags & FLAG_END_STREAM) != 0 {
                         want_body = false;
                     }
@@ -498,7 +571,7 @@ pub fn read_request(cn: Conn, r: Reader, fd: i32, wch: chan[bytes],
 // than refreshed: the body is part of the same request, and a budget
 // that restarted per DATA frame would defend against nothing.
 fn read_body(cn: Conn, r: Reader, fd: i32, stream: int,
-             wch: chan[bytes], u: until) -> result[bytes, str] {
+             wch: chan[WMsg], u: until) -> result[bytes, str] {
     let body = b"";
     while true {
         let fr = read_frame(r, fd, DEFAULT_MAX_FRAME, u);
@@ -524,7 +597,7 @@ fn read_body(cn: Conn, r: Reader, fd: i32, stream: int,
             return err("request body too large");
         }
         let n = len(f.payload);
-        chan_send(wch, window_update(0, n) + window_update(stream, n));
+        chan_send(wch, raw_msg(window_update(0, n) + window_update(stream, n)));
         if (f.flags & FLAG_END_STREAM) != 0 {
             return ok(body);
         }
@@ -551,59 +624,221 @@ fn read_body(cn: Conn, r: Reader, fd: i32, stream: int,
 // A timed-out send has already put an unknown number of octets on the
 // wire, so there is nothing to do but abandon the connection; retrying
 // would resume mid-frame. Returning is exactly that.
-pub fn writer_task(fd: i32, wch: chan[bytes], write_ns: int) {
-    while true {
-        let m = chan_recv(wch);
-        guard let frames = m else {
-            return;              // channel closed: connection is done
-        }
-        let sr = net.send_until(fd, frames, until_of(time.mono() + write_ns));
-        guard let _n = sr else {
-            return;              // peer gone, or too slow to read
-        }
-    }
+// One response whose body has not finished going out. `window` is this
+// STREAM's remaining send credit; the connection's is tracked once for
+// all of them.
+gc struct Out {
+    stream: int,
+    body: bytes,
+    off: int,
+    window: int,
+    done: bool,
 }
 
-// Build a complete response as one byte sequence, ready to hand to the
-// writer. Pure, so a handler task can build it without touching the
-// connection.
-//
-// DATA is split to the PEER's advertised max frame size, not ours:
-// exceeding what the peer announced is a connection error, and a peer
-// may set it below the 16KB default.
-pub fn response_frames(peer_max_frame: int, stream: int, status: str,
-                       extra: [Header], body: bytes) -> bytes {
-    let hs: [Header] = [Header { name: ":status", value: status }];
-    hs = hs + extra;
-    hs = hs + [Header { name: "content-length", value: to_str(len(body)) }];
-    let blk = encode_block(hs);
+fn wsend(fd: i32, b: bytes, write_ns: int) -> bool {
+    if len(b) == 0 {
+        return true;
+    }
+    let sr = net.send_until(fd, b, until_of(time.mono() + write_ns));
+    guard let _n = sr else {
+        return false;
+    }
+    return true;
+}
 
-    let end_now = len(body) == 0;
-    let hflags = FLAG_END_HEADERS;
-    if end_now {
-        hflags = hflags | FLAG_END_STREAM;
-    }
-    let out = header_bytes(T_HEADERS, hflags, stream, len(blk)) + blk;
-    if end_now {
-        return out;
-    }
-    let off = 0;
-    let cap = peer_max_frame;
-    while off < len(body) {
-        let n = len(body) - off;
-        if n > cap {
-            n = cap;
+// The largest window RFC 9113 §6.9.1 permits. A WINDOW_UPDATE that
+// pushes a window past it is a FLOW_CONTROL_ERROR, not something to
+// clamp: a peer that does it has lost track of our state.
+fn window_max() -> int {
+    return 2147483647;
+}
+
+// Send whatever the two windows currently allow, oldest response first,
+// and keep what is left. Returns false if the connection died.
+//
+// Both windows are decremented by every DATA octet: flow control is
+// per-stream AND per-connection, and a stream with plenty of credit
+// still cannot send when the connection has none.
+fn flush_out(fd: i32, q: [Out], conn_window: int, max_frame: int,
+             write_ns: int) -> result[int, str] {
+    let i = 0;
+    let cw = conn_window;
+    while i < len(q) {
+        let o = q[i];
+        let sending = true;
+        while sending {
+            sending = false;
+            let left = len(o.body) - o.off;
+            if left <= 0 {
+                // Body fully sent, but the last DATA frame did not carry
+                // END_STREAM (the window ran out exactly at the end).
+                // A zero-length DATA with END_STREAM is explicitly
+                // exempt from flow control (§6.9.1), so it goes out even
+                // at a zero window -- otherwise such a response could
+                // never be closed.
+                if !wsend(fd, header_bytes(T_DATA, FLAG_END_STREAM,
+                                           o.stream, 0), write_ns) {
+                    return err("peer gone");
+                }
+                o.done = true;
+                break;
+            }
+            let n = left;
+            if n > o.window { n = o.window; }
+            if n > cw { n = cw; }
+            if n > max_frame { n = max_frame; }
+            if n <= 0 {
+                break;           // blocked; wait for a WINDOW_UPDATE
+            }
+            let last = (o.off + n) >= len(o.body);
+            let dflags = 0;
+            if last {
+                dflags = FLAG_END_STREAM;
+            }
+            if !wsend(fd, header_bytes(T_DATA, dflags, o.stream, n)
+                          + o.body[o.off..o.off + n], write_ns) {
+                return err("peer gone");
+            }
+            o.off = o.off + n;
+            o.window = o.window - n;
+            cw = cw - n;
+            if last {
+                o.done = true;
+                break;
+            }
+            sending = true;
         }
-        let last = (off + n) >= len(body);
-        let dflags = 0;
-        if last {
-            dflags = FLAG_END_STREAM;
-        }
-        out = out + header_bytes(T_DATA, dflags, stream, n)
-                  + body[off..off + n];
-        off = off + n;
+        i = i + 1;
     }
-    return out;
+    // Drop the finished entries, keeping the rest in order. Lists have
+    // no remove-at-index, so survivors are shifted down and the tail
+    // popped -- which is what a remove-at-index would do anyway.
+    let w = 0;
+    let k = 0;
+    while k < len(q) {
+        if !q[k].done {
+            q[w] = q[k];
+            w = w + 1;
+        }
+        k = k + 1;
+    }
+    while len(q) > w {
+        pop(q);
+    }
+    return ok(cw);
+}
+
+// Owns the write side, and with it the peer's send windows.
+//
+// Flow control has to live here rather than in the handlers. The window
+// is a property of the CONNECTION, shared by every concurrent stream,
+// so no handler can decide on its own whether it may send -- and the
+// WINDOW_UPDATE that grants credit arrives on the read side, in a
+// different task entirely. Routing both into this one task is what lets
+// the accounting be correct without a lock, which slang does not expose
+// anyway.
+//
+// A blocked stream parks its BODY here, not its task: the handler hands
+// the response over and moves on, so a peer with a tiny window costs a
+// queue entry rather than a live task.
+pub fn writer_task(fd: i32, wch: chan[WMsg], write_ns: int) {
+    let conn_window = DEFAULT_WINDOW;
+    let initial = DEFAULT_WINDOW;   // peer's SETTINGS_INITIAL_WINDOW_SIZE
+    let max_frame = DEFAULT_MAX_FRAME;
+    let q: [Out] = [];
+    // Stream grants that arrived before we had a body to spend them on.
+    // Entries are consumed when the body is queued, so this holds at
+    // most one per in-flight request.
+    let early: map[int]int = {};
+
+    while true {
+        let m = chan_recv(wch);
+        guard let msg = m else {
+            return;              // channel closed: connection is done
+        }
+
+        if msg.kind == W_RAW {
+            if !wsend(fd, msg.head, write_ns) {
+                return;
+            }
+        }
+        if msg.kind == W_MAXFRAME {
+            max_frame = msg.n;
+        }
+        if msg.kind == W_INITIAL {
+            // §6.9.2: changing the initial window size adjusts every
+            // OPEN stream's window by the delta -- it is not a reset,
+            // and it does not touch the connection window.
+            let delta = msg.n - initial;
+            initial = msg.n;
+            let k = 0;
+            while k < len(q) {
+                q[k].window = q[k].window + delta;
+                k = k + 1;
+            }
+        }
+        if msg.kind == W_GRANT {
+            if msg.stream == 0 {
+                if conn_window > window_max() - msg.n {
+                    if !wsend(fd, goaway(0, E_FLOW_CONTROL_ERROR,
+                                         "connection window overflow"),
+                              write_ns) {
+                        return;
+                    }
+                    return;
+                }
+                conn_window = conn_window + msg.n;
+            } else {
+                let found = false;
+                let k = 0;
+                while k < len(q) {
+                    if q[k].stream == msg.stream {
+                        if q[k].window > window_max() - msg.n {
+                            if !wsend(fd, goaway(0, E_FLOW_CONTROL_ERROR,
+                                                 "stream window overflow"),
+                                      write_ns) {
+                                return;
+                            }
+                            return;
+                        }
+                        q[k].window = q[k].window + msg.n;
+                        found = true;
+                    }
+                    k = k + 1;
+                }
+                if !found {
+                    // The peer is crediting a stream whose body we have
+                    // not queued yet. Remember it rather than dropping
+                    // it, or the body would start under-credited.
+                    let prev = 0;
+                    if has(early, msg.stream) {
+                        prev = early[msg.stream];
+                    }
+                    early[msg.stream] = prev + msg.n;
+                }
+            }
+        }
+        if msg.kind == W_BODY {
+            if !wsend(fd, msg.head, write_ns) {
+                return;
+            }
+            if len(msg.body) > 0 {
+                let w = initial;
+                if has(early, msg.stream) {
+                    w = w + early[msg.stream];
+                    del(early, msg.stream);
+                }
+                push(q, Out { stream: msg.stream, body: msg.body,
+                              off: 0, window: w, done: false });
+            }
+        }
+
+        let fr = flush_out(fd, q, conn_window, max_frame, write_ns);
+        guard let cw = fr else {
+            return;              // peer gone, or too slow to read
+        }
+        conn_window = cw;
+    }
 }
 
 // ---- responses -------------------------------------------------------
@@ -611,16 +846,15 @@ pub fn response_frames(peer_max_frame: int, stream: int, status: str,
 // Enqueue a response for `stream`. Every write on the connection goes
 // through the writer task, so there is deliberately no direct-write
 // variant: one would be able to interleave with a handler mid-frame.
-pub fn respond(cn: Conn, wch: chan[bytes], stream: int, status: str,
+pub fn respond(cn: Conn, wch: chan[WMsg], stream: int, status: str,
                extra: [Header], body: bytes) {
-    chan_send(wch, response_frames(cn.peer_max_frame, stream, status,
-                                   extra, body));
+    chan_send(wch, response_msg(stream, status, extra, body));
 }
 
-pub fn send_reset(wch: chan[bytes], stream: int, code: int) {
-    chan_send(wch, rst_stream(stream, code));
+pub fn send_reset(wch: chan[WMsg], stream: int, code: int) {
+    chan_send(wch, raw_msg(rst_stream(stream, code)));
 }
 
-pub fn send_goaway(wch: chan[bytes], last_stream: int, code: int, msg: str) {
-    chan_send(wch, goaway(last_stream, code, msg));
+pub fn send_goaway(wch: chan[WMsg], last_stream: int, code: int, msg: str) {
+    chan_send(wch, raw_msg(goaway(last_stream, code, msg)));
 }

@@ -23,7 +23,7 @@ fn lim() -> http2.Limits {
 fn serve(fd: i32, out: chan[str]) {
     let cn = http2.conn_new();
     let rd = http2.reader_new();
-    let wch: chan[bytes] = make_chan(8);
+    let wch: chan[http2.WMsg] = make_chan(8);
     let l = lim();
     spawn http2.writer_task(fd, wch, l.write);
 
