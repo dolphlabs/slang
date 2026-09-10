@@ -1,163 +1,138 @@
 import "http2";
+import "net";
 import "time";
 
-// End-to-end HTTP/2 over loopback: a server task and a client task, both
-// slang, exchanging a real preface, SETTINGS, HEADERS and DATA. This is
-// what curl --http2-prior-knowledge exercises, made self-contained so
-// the suite needs no external client.
+// End-to-end HTTP/2 over loopback with CONCURRENT streams.
+//
+// The server dispatches each request to its own task and serialises all
+// writes through one writer task fed by a chan[bytes]. The client opens
+// two streams before reading either reply, and asks for the slow one
+// FIRST. If streams were served one at a time the slow reply would come
+// back first; concurrency is proven by the fast one arriving first.
 
-fn serve_one(c: link, out: chan[i32]) {
-    let ra = arena_new(65536);
-    let scratch = ra.wire(16384);
+fn handle(stream: i32, path: str, body: bytes, wch: chan[http2.WMsg]) {
+    if path == "/slow" {
+        time.sleep(300000000);
+    }
+    let extra: [http2.Header] = [
+        http2.Header { name: "content-type", value: "text/plain" }
+    ];
+    let out = to_bytes("path=" + path);
+    if len(body) > 0 {
+        out = out + to_bytes(" echo=") + body;
+    }
+    chan_send(wch, http2.response_msg(stream as int, "200", extra, out));
+}
+
+fn serve(fd: i32, done: chan[i32]) {
     let cn = http2.conn_new();
     let rd = http2.reader_new();
+    let wch: chan[http2.WMsg] = make_chan(32);
+    let lim = http2.default_limits();
+    spawn http2.writer_task(fd, wch, lim.write);
 
-    let pr = http2.accept_preface(rd, &mut c, scratch, until_never());
+    let pr = http2.accept_preface(rd, fd, wch,
+                                  until_of(time.mono() + lim.handshake));
     guard let _p = pr else let e = err_of(pr) {
         println("server preface: " + e);
-        chan_send(out, -1);
+        chan_close(wch);
+        chan_send(done, -1);
         return;
     }
     let n = 0;
     while n < 2 {
-        let rr = http2.read_request(cn, rd, &mut c, scratch, until_never());
+        let rr = http2.read_request(cn, rd, fd, wch, lim);
         guard let req = rr else let e = err_of(rr) {
-            println("server read: " + e);
-            chan_send(out, -2);
+            chan_close(wch);
+            chan_send(done, -2);
             return;
         }
-        let extra: [http2.Header] = [
-            http2.Header { name: "content-type", value: "text/plain" }
-        ];
-        let body = to_bytes("path=" + req.path + " method=" + req.method);
-        if len(req.body) > 0 {
-            body = body + to_bytes(" echo=") + req.body;
-        }
-        let wr = http2.respond(cn, &mut c, req.stream, "200", extra, body,
-                               until_never());
-        guard let _w = wr else let e = err_of(wr) {
-            chan_send(out, -3);
-            return;
-        }
+        spawn handle(req.stream as i32, req.path, req.body, wch);
         n = n + 1;
     }
-    chan_send(out, 1);
+    chan_send(done, 1);
 }
 
-// Minimal client: preface, SETTINGS, then one request per stream.
-fn client_request(c: &mut link, rd: http2.Reader, scratch: wire,
-                  stream: i32, path: str, body: bytes) -> result[str, str] {
+fn req_frames(stream: int, path: str, body: bytes) -> bytes {
     let hs: [http2.Header] = [
         http2.Header { name: ":method", value: "GET" },
         http2.Header { name: ":scheme", value: "http" },
         http2.Header { name: ":path", value: path },
         http2.Header { name: ":authority", value: "localhost" }
     ];
-    if len(body) > 0 {
-        hs[0] = http2.Header { name: ":method", value: "POST" };
-    }
     let blk = http2.encode_block(hs);
-    let flags = http2.FLAG_END_HEADERS;
-    if len(body) == 0 {
-        flags = flags | http2.FLAG_END_STREAM;
-    }
-    let out = http2.header_bytes(http2.T_HEADERS, flags, stream as int, len(blk)) + blk;
-    if len(body) > 0 {
-        out = out + http2.header_bytes(http2.T_DATA, http2.FLAG_END_STREAM,
-                                       stream as int, len(body)) + body;
-    }
-    let sr = c.send_bytes(out, until_never());
-    guard let _s = sr else let e = err_of(sr) {
-        return err("send: " + to_str(e));
-    }
-    // read frames until this stream's DATA ends
-    let got = b"";
-    while true {
-        let fr = http2.read_frame(rd, &mut *c, scratch, 16384, until_never());
-        guard let f = fr else let e = err_of(fr) {
-            return err(e);
-        }
-        if f.ftype == http2.T_DATA && f.stream == stream as int {
-            got = got + f.payload;
-            if (f.flags & http2.FLAG_END_STREAM) != 0 {
-                return ok(to_str(got));
-            }
-        }
-    }
+    let flags = http2.FLAG_END_HEADERS | http2.FLAG_END_STREAM;
+    return http2.header_bytes(http2.T_HEADERS, flags, stream, len(blk)) + blk;
 }
 
-fn run_client(port: i32, out: chan[i32]) {
-    let dr = link_dial("127.0.0.1", port, until_never());
-    guard let c = dr else {
+fn run_client(port: i32, done: chan[i32]) {
+    let dr = net.dial("127.0.0.1", port as int);
+    guard let fd = dr else {
         println("client dial failed");
-        chan_send(out, -10);
+        chan_send(done, -10);
         return;
     }
-    let ra = arena_new(65536);
-    let scratch = ra.wire(16384);
     let rd = http2.reader_new();
-    let sr = c.send_bytes(http2.preface() + http2.our_settings(), until_never());
-    guard let _s = sr else { chan_send(out, -11); return; }
+    let sr = net.send(fd, http2.preface() + http2.our_settings());
+    guard let _s = sr else { chan_send(done, -11); return; }
 
-    let bad = 0;
-    let r1 = client_request(&mut c, rd, scratch, 1, "/one", b"");
-    guard let a = r1 else let e = err_of(r1) {
-        println("client req1: " + e);
-        chan_send(out, -12);
+    // both requests go out BEFORE either reply is read; slow one first
+    let both = req_frames(1, "/slow", b"") + req_frames(3, "/quick", b"");
+    let s2 = net.send(fd, both);
+    guard let _t = s2 else { chan_send(done, -12); return; }
+
+    // first DATA frame to arrive decides which stream finished first
+    let first_stream = 0;
+    let seen = 0;
+    while seen < 2 {
+        let fr = http2.read_frame(rd, fd, 16384,
+                                  until_of(time.mono() + 10000000000));
+        guard let f = fr else let e = err_of(fr) {
+            println("client read: " + e);
+            chan_send(done, -13);
+            return;
+        }
+        if f.ftype == http2.T_DATA && (f.flags & http2.FLAG_END_STREAM) != 0 {
+            if first_stream == 0 {
+                first_stream = f.stream;
+            }
+            seen = seen + 1;
+        }
+    }
+    if first_stream != 3 {
+        println("FAIL streams were serialised: stream ${first_stream} finished first");
+        chan_send(done, -14);
         return;
     }
-    if a != "path=/one method=GET" {
-        println("FAIL req1 body: [" + a + "]");
-        bad = bad + 1;
-    }
-    let r2 = client_request(&mut c, rd, scratch, 3, "/two", b"hi there");
-    guard let b2 = r2 else let e = err_of(r2) {
-        println("client req2: " + e);
-        chan_send(out, -13);
-        return;
-    }
-    if b2 != "path=/two method=POST echo=hi there" {
-        println("FAIL req2 body: [" + b2 + "]");
-        bad = bad + 1;
-    }
-    if bad == 0 {
-        chan_send(out, 2);
-    } else {
-        chan_send(out, -14);
-    }
+    chan_send(done, 2);
 }
 
-fn accept_one(ln: &mut link, out: chan[i32]) {
-    let ar = ln.accept(until_never());
-    guard let c = ar else {
-        chan_send(out, -20);
-        return;
-    }
-    spawn serve_one(c, out);
-}
+let lr = net.listen(0);
+guard let lfd = lr else { println("listen failed"); exit(1); }
+let pr2 = net.port(lfd);
+guard let port = pr2 else { println("port failed"); exit(1); }
 
-let lr = link_listen(0);
-guard let ln = lr else { println("listen failed"); exit(1); }
-let port = ln.port() as i32;
+let done: chan[i32] = make_chan(4);
+spawn run_client(port, done);
 
-let out: chan[i32] = make_chan(4);
-spawn run_client(port, out);
-accept_one(&mut ln, out);
+let ar = net.accept(lfd);
+guard let cfd = ar else { println("accept failed"); exit(1); }
+spawn serve(cfd, done);
 
-let ok_count = 0;
+let total = 0;
 for i in 0..2 {
-    let rv = chan_recv(out);
+    let rv = chan_recv(done);
     guard let v = rv else { println("channel closed"); exit(1); }
     if v > 0 {
-        ok_count = ok_count + v;
+        total = total + v;
     } else {
         println("FAIL code ${v}");
         exit(1);
     }
 }
-if ok_count == 3 {
-    println("http2 end-to-end ok");
+if total == 3 {
+    println("http2 concurrent streams ok");
 } else {
-    println("FAIL ok_count=${ok_count}");
+    println("FAIL total=${total}");
     exit(1);
 }

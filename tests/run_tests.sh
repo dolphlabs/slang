@@ -83,6 +83,40 @@ for t in tests/fail_*/main.sl; do
     fi
 done
 
+# Generated C must compile clean under the warnings a C compiler turns
+# on by ITSELF. slangc passes no -W flags, so anything default-on lands
+# in the user's terminal on every single build -- 79 of them across this
+# suite before the codegen was fixed to stop emitting `if ((a == b))`
+# and bare statement-expressions. Sweeping every program keeps a new
+# construct from quietly reintroducing the noise.
+echo "--- generated C warning sweep ---"
+warned=0
+for t in tests/*/main.sl examples/*/main.sl; do
+    name=$(basename "$(dirname "$t")")
+    case "$name" in
+        fail_*) continue ;;
+    esac
+    rm -f main.gen.c
+    ./slangc "$t" --emit-c >/dev/null 2>&1 || continue
+    [ -f main.gen.c ] || continue
+    # -fsyntax-only, and cc run ONCE per program with its output kept:
+    # this loop covers every test, so a second invocation just to
+    # re-read the same diagnostics would double the suite's runtime for
+    # nothing.
+    diag=$(cc -fsyntax-only main.gen.c 2>&1 | grep 'warning:')
+    if [ -n "$diag" ]; then
+        w=$(printf '%s\n' "$diag" | wc -l | tr -d ' ')
+        echo "FAIL $name ($w warning(s) in generated C)"
+        printf '%s\n' "$diag" | head -3
+        warned=$((warned + w))
+        fail=1
+    fi
+done
+rm -f main.gen.c
+if [ "$warned" -eq 0 ]; then
+    echo "PASS generated C is warning-free"
+fi
+
 if [ "$fail" -ne 0 ]; then
     echo "some tests failed"
     exit 1

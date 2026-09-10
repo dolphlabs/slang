@@ -297,6 +297,10 @@ typedef enum {
     NA_STR_FAULT, /* str, or a fault converted to str at the call site */
     NA_I64,       /* full-width int: marshaled as long long, not truncated */
     NA_F64,       /* float: marshaled as double (int widens in) */
+    NA_UNTIL,     /* an `until` deadline: marshaled as sl_until (int64_t).
+                     Deliberately NOT int-compatible -- a deadline is an
+                     absolute monotonic instant, and silently accepting a
+                     duration would park until 1970 rather than for 5s. */
 } NatArgKind;
 
 typedef struct {
@@ -478,6 +482,10 @@ char *gen_ident_name(CG *cg, const char *name, int line);
 char *gen_float_literal(double v);
 char *panic_at(CG *cg, int line);
 char *conv_to_str(const char *t, char *expr);
+
+/* Drop one redundant outer parenthesis pair from a generated expression
+ * so `if ((a == b))` comes out as `if (a == b)` -- see core.c. */
+const char *strip_outer_parens(const char *s);
 char *gen_string_concat(CG *cg, Expr *e, const char *lt,
                                const char *rt);
 char *gen_numeric_binary(CG *cg, Expr *e, const char *result_t);

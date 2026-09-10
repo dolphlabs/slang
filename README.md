@@ -483,6 +483,43 @@ let wr: result[bytes, str] = net.recv(cfd, 16); // "would block" err if idle
 net.close(cfd);
 ```
 
+##### Deadlines
+
+`net.recv` and `net.send` wait for as long as the peer takes, which on
+a public listener is indefinitely: a client that connects and then
+neither sends nor reads parks the serving task on the reactor forever,
+holding its stack and its GC roots. That is slowloris, and the defence
+is `recv_until` / `send_until`, which take an `until` — an absolute
+monotonic instant, not a duration:
+
+```slang
+import "net";
+import "time";
+
+let deadline = until_of(time.mono() + 5000000000);   // 5s from now
+let rr = net.recv_until(cfd, 4096, deadline);
+guard let data = rr else let e = err_of(rr) {
+    if e == "timeout" { net.close(cfd); return; }    // peer went quiet
+    log.error("recv: " + e);                         // peer broke
+    return;
+}
+```
+
+`"timeout"` is a reserved error string: it means the deadline passed,
+and it is the only error text these calls invent rather than take from
+the OS. Every other error is `strerror`/OpenSSL text as before.
+
+One asymmetry worth knowing: a `send_until` that times out **has
+already written some bytes**, and `result[i32, str]` has no room to
+report both "timed out" and "wrote this much". A `"timeout"` from
+`send_until` therefore means the stream is at an unknown offset and the
+connection must be closed, not retried. For a framed protocol that is
+the right contract regardless — a half-written frame is unrecoverable.
+
+`net.tls_recv_until` / `net.tls_send_until` are the same thing over
+TLS, with the same reserved string. The `link` API takes an `until` on
+`accept`/`send`/`recv` already.
+
 See `examples/httpd/` for a minimal HTTP server on `link` plus the
 `http` stdlib package.
 
@@ -912,27 +949,53 @@ browser stacks use — in both directions: blocks it produces decode here,
 and blocks produced here inflate there. Those fixtures are baked into
 `tests/http2` as literals, so the suite needs no nghttp2 to run.
 
-**Connection layer.** `accept_preface` verifies the client preface and
-sends SETTINGS; `read_request` returns a complete `Req` (method, path,
-scheme, authority, headers, body), handling SETTINGS/PING/WINDOW_UPDATE/
-GOAWAY itself and reassembling HEADERS + CONTINUATION + DATA; `respond`
-writes the response, splitting DATA to the peer's advertised max frame
-size rather than assuming ours.
+**Connection layer, with concurrent streams.** One task reads frames and
+dispatches each request to its own `spawn`ed handler; every byte leaving
+the connection goes through a single writer task fed by a `chan[bytes]`.
+No mutex is involved, and none is needed: each channel message is a
+complete frame sequence written with one `net.send`, so handlers cannot
+interleave inside a frame, and a HEADERS block plus its CONTINUATIONs
+stays contiguous by construction (RFC 9113 §6.2) rather than by careful
+ordering. Frames for different streams interleave at frame boundaries,
+which is what multiplexing means.
+
+Measured: four 500ms requests multiplexed on one connection complete in
+**0.53s**; served one at a time they would take about 2.0s.
+
+The connection is addressed by its **file descriptor**, not a `link`.
+`link` is move-only, so `spawn writer_task(c)` consumes it and the
+reader can no longer use it — the two-task design is impossible with
+that type. An `i32` fd is freely copyable, and one reader plus one
+writer in opposite directions on a socket is safe. `net.recv` also
+returns `bytes` directly, so no byte-at-a-time copy sits on the read
+path.
 
 ```slang
-fn serve(c: link) {
-    let ra = arena_new(65536);
-    let scratch = ra.wire(16384);
+fn handle(stream: i32, path: str, wch: chan[http2.WMsg]) {
+    let hs: [http2.Header] = [];
+    // The body goes over UNFRAMED: the writer owns the peer's windows,
+    // so it decides how it is cut into DATA frames and when each may go.
+    chan_send(wch, http2.response_msg(stream as int, "200", hs,
+                                      to_bytes("hello")));
+}
+
+fn serve(fd: i32) {
     let cn = http2.conn_new();
     let rd = http2.reader_new();
-    guard let _p = http2.accept_preface(rd, &mut c, scratch, until_never())
-        else { return; }
+    let wch: chan[http2.WMsg] = make_chan(32);
+    let lim = http2.default_limits();
+    spawn http2.writer_task(fd, wch, lim.write);
+
+    guard let _p = http2.accept_preface(rd, fd, wch,
+            until_of(time.mono() + lim.handshake)) else { return; }
     while true {
-        let rr = http2.read_request(cn, rd, &mut c, scratch, until_never());
-        guard let req = rr else { return; }
-        let hs: [http2.Header] = [];
-        http2.respond(cn, &mut c, req.stream, "200", hs,
-                      to_bytes("hello"), until_never());
+        let rr = http2.read_request(cn, rd, fd, wch, lim);
+        guard let req = rr else let e = err_of(rr) {
+            if http2.is_timeout(e) { /* slow peer; shed it */ }
+            chan_close(wch);
+            return;
+        }
+        spawn handle(req.stream as i32, req.path, wch);
     }
 }
 ```
@@ -941,12 +1004,70 @@ Verified against real `curl --http2-prior-knowledge`: GET, POST with a
 body, five requests multiplexed on one connection, and a 64KB upload
 that exercises DATA chunking and flow-control `WINDOW_UPDATE`.
 
-Streams are served **one complete request at a time**. That is
-conformant — a server may process requests in any order — and it keeps
-one task per connection with no writer lock. Concurrent stream
-processing needs a serialised writer and is not built yet. `PRIORITY` is
-parsed and ignored (it is deprecated in RFC 9113), and send-side flow
-control assumes the peer's window is adequate rather than tracking it.
+##### Deadlines
+
+Every read and every write is bounded, so a peer that connects and then
+dribbles — or one that stops reading our responses — is disconnected
+rather than left holding a task forever. `http2.Limits` carries four
+separate budgets because they defend against four different peers:
+
+| Budget | Covers |
+|---|---|
+| `handshake` | connect → valid client preface |
+| `idle` | no request in flight, waiting for the next frame |
+| `request` | first HEADERS octet → END_STREAM |
+| `write` | one `writer_task` send |
+
+`idle` is deliberately generous (2 minutes by default): an HTTP/2
+connection sitting open with no streams is completely normal, and timing
+it out aggressively breaks correct clients. `request` is the strict one
+and applies to the request **as a whole** — it is never refreshed by
+incoming frames, so dribbling DATA one octet at a time cannot extend it.
+That distinction is the whole defence; a per-read timeout would never
+fire against a slowloris, because every individual read makes progress.
+
+`http2.is_timeout(e)` distinguishes a slow peer from a broken one, so a
+server can answer the first with `GOAWAY` / `E_ENHANCE_YOUR_CALM`.
+`tests/http2_deadline` runs all three attacker shapes — silent,
+idle-after-handshake, and octet-at-a-time dribbling — against a server
+with sub-second budgets and requires all three to be shed.
+
+##### Flow control
+
+DATA is flow-controlled at two levels, per-stream and per-connection
+(RFC 9113 §5.2), and the server may not exceed either. Both windows live
+in the writer task, because they are connection-wide state that the
+**read** side replenishes (`WINDOW_UPDATE` arrives there) and the
+**write** side spends — routing both into one task is what makes the
+accounting correct without a lock.
+
+A handler therefore hands over its body unframed and moves on. If the
+peer's window is too small, the *body* waits in the writer's queue, not
+the handler's task — a peer advertising a tiny window costs a queue
+entry rather than a parked task.
+
+`SETTINGS_INITIAL_WINDOW_SIZE` adjusts every open stream's window by the
+delta rather than resetting it, and does not touch the connection window
+(§6.9.2). A `WINDOW_UPDATE` that would push a window past 2³¹−1 is a
+`FLOW_CONTROL_ERROR` and ends the connection with a `GOAWAY` rather than
+being clamped.
+
+`tests/http2_flow` drives both levels: a client advertising a 100-octet
+stream window against a 5000-octet body, and a client with a large
+stream window against a 100000-octet body where the default 65535
+connection window is what binds. Each phase checks the exact octet the
+server stops at, that it resumes for exactly the credit granted, and
+that the resumed bytes carry the right content for their absolute offset
+in the body.
+
+##### Known gaps
+
+`PRIORITY` is validated but not acted on: it is deprecated in RFC 9113
+§5.3.2, so ignoring the prioritisation is conformant, but a malformed
+frame is still rejected as the connection error it is (§6.3) rather than
+waved through to desync the stream. Interop evidence comes from curl and
+nghttp2, which share an implementation — an independent client has not
+been run against it.
 
 #### `byteutil`
 

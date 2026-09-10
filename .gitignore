@@ -9,3 +9,4 @@ tests/pkgpin/slang.lock
 tests/pkgtrans/slang.project
 tests/pkgtrans/slang.lock
 
+main.gen.c

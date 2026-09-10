@@ -530,7 +530,7 @@ void gen_stmt(CG *cg, Stmt *s) {
         if (strcmp(ct, "bool"))
             cg_error(s->line, "if condition must be bool (got %s)", ct);
         char *cond = gen_expr(cg, s->as.if_stmt.cond);
-        emit_line(cg, "if (%s) {", cond);
+        emit_line(cg, "if (%s) {", strip_outer_parens(cond));
         gen_scoped_block(cg, s->as.if_stmt.then_blk);
         if (s->as.if_stmt.else_blk) {
             emit_line(cg, "} else {");
@@ -551,7 +551,7 @@ void gen_stmt(CG *cg, Stmt *s) {
             eid = cg->tmp_id++;
             emit_line(cg, "unsigned long _sl_ec%d = 0;", eid);
         }
-        emit_line(cg, "while (%s) {", cond);
+        emit_line(cg, "while (%s) {", strip_outer_parens(cond));
         cg->indent++;
         int has_bp = emit_backedge_enter(cg, s->backedge_live_set, poll, eid,
                                         NULL);
@@ -896,7 +896,12 @@ void gen_stmt(CG *cg, Stmt *s) {
          * reinterpret the wrong C value instead of being rejected */
         infer_type(cg, e);
         char *code = gen_expr(cg, e);
-        emit_line(cg, "%s;", code);
+        /* Cast to void: a statement call whose value is discarded is
+           usually a GC-bracketed statement expression -- ({ ...; x; })
+           -- and clang's default -Wunused-value fires on every one of
+           them. The cast says "discarding is intended", which it is:
+           the slang program wrote the call as a statement. */
+        emit_line(cg, "(void)(%s);", code);
         break;
     }
     case ST_GUARD_LET:
