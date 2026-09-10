@@ -108,6 +108,43 @@ static int sl_tls_park(SSL *ssl, int ssl_err, int abort_on_shutdown) {
     return sl_tls_park_until(ssl, ssl_err, abort_on_shutdown, 0);
 }
 
+/* Is this read error just "the peer went away", rather than a fault?
+ *
+ * A well-behaved peer sends TLS close_notify and OpenSSL reports
+ * SSL_ERROR_ZERO_RETURN. Browsers routinely do NOT: Chrome closes the
+ * TCP connection outright, which OpenSSL 3.x reports as SSL_ERROR_SSL
+ * with reason UNEXPECTED_EOF_WHILE_READING, and older versions as
+ * SSL_ERROR_SYSCALL with errno 0.
+ *
+ * Treating that as an error means every ordinary browser disconnect
+ * surfaces as
+ *
+ *     recv: error:0A000126:SSL routines::unexpected eof while reading
+ *
+ * which is alarming, entirely normal, and would bury real failures in
+ * any server's logs. It is a truncation attack only if the application
+ * cares about a length it cannot otherwise verify; HTTP/2 frames each
+ * carry their own length and an incomplete one is already rejected, so
+ * here it is simply end-of-stream. */
+static int sl_tls_clean_eof(int ssl_err) {
+    if (ssl_err == SSL_ERROR_ZERO_RETURN)
+        return 1;
+    if (ssl_err == SSL_ERROR_SYSCALL && errno == 0)
+        return 1; /* pre-3.0 spelling of the same event */
+#ifdef SSL_R_UNEXPECTED_EOF_WHILE_READING
+    if (ssl_err == SSL_ERROR_SSL) {
+        unsigned long e = ERR_peek_error();
+        if (ERR_GET_REASON(e) == SSL_R_UNEXPECTED_EOF_WHILE_READING) {
+            ERR_clear_error(); /* consumed: leaving it queued would make
+                                  the NEXT unrelated failure report this
+                                  one's text instead of its own */
+            return 1;
+        }
+    }
+#endif
+    return 0;
+}
+
 static int sl_tls_handshake(SSL *ssl, int server) {
     for (;;) {
         int n = server ? SSL_accept(ssl) : SSL_connect(ssl);
@@ -271,7 +308,9 @@ static sl_res_bytes_str *sl_net_tls_recv_u(void *sslv, int max, sl_until u) {
             return sl_net_ok_bytes(b);
         }
         int err = SSL_get_error(ssl, n);
-        if (err == SSL_ERROR_ZERO_RETURN) {
+        if (sl_tls_clean_eof(err)) {
+            /* Zero bytes is how this API already spells end-of-stream on
+               the plain path, so callers need no new case. */
             sl_net_recv_copy(b, scratch, 0);
             sl_rt_safepoint_exit();
             sl_recv_buf_put(scratch);
