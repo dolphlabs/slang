@@ -366,6 +366,32 @@ static Expr *parse_postfix(Parser *p) {
             e = fl;
             continue;
         }
+        if (check(p, T_LPAREN)) {
+            /* A call through whatever `e` evaluated to. A plain or
+             * dotted NAME never reaches here -- parse_primary consumes
+             * its '(' itself -- so this is only ever a field, index or
+             * parenthesised expression holding a function value. */
+            advance(p); /* '(' */
+            Expr *call = new_expr(p, EX_CALL, e->line);
+            /* `callee` is the discriminator; `name` still gets a
+             * non-NULL sentinel so that the many passes which read it
+             * unconditionally (strcmp, split_dotted, sig lookups) stay
+             * safe. It cannot collide with a real identifier, so every
+             * one of those lookups simply fails to match -- which is
+             * the right answer for a call that has no name. */
+            call->as.call.name = xstrdup("<function value>");
+            call->as.call.callee = e;
+            if (!check(p, T_RPAREN)) {
+                for (;;) {
+                    call_push_arg(call, parse_expression(p));
+                    if (!match(p, T_COMMA))
+                        break;
+                }
+            }
+            expect(p, T_RPAREN, "')' to close argument list");
+            e = call;
+            continue;
+        }
         if (!check(p, T_LBRACKET))
             break;
         advance(p); /* '[' */
@@ -761,6 +787,34 @@ static Type *parse_type_atom(Parser *p) {
     case T_TY_LINK:
         advance(p);
         return ty_named(xstrdup("link"));
+    case T_KW_FN: {
+        /* fn(A, B) -> R, or fn(A) for one returning nothing. The value
+         * is a plain function pointer: slang has no closures, so there
+         * is no captured environment for this type to describe. */
+        StrBuf b;
+        advance(p);
+        expect(p, T_LPAREN, "'(' after 'fn' in a type");
+        sb_init(&b);
+        sb_append(&b, "fn(");
+        if (!check(p, T_RPAREN)) {
+            int first = 1;
+            do {
+                Type *pt = parse_type(p);
+                if (!first)
+                    sb_append(&b, ",");
+                sb_append(&b, type_string(pt));
+                first = 0;
+            } while (match(p, T_COMMA));
+        }
+        expect(p, T_RPAREN, "')' to close the parameter list");
+        sb_append(&b, ")");
+        if (match(p, T_ARROW)) {
+            Type *rt = parse_type(p);
+            sb_append(&b, "->");
+            sb_append(&b, type_string(rt));
+        }
+        return ty_named(b.data);
+    }
     case T_IDENT: {
         if (!strcmp(tk->text, "ptr") && next_is(p, T_LBRACKET)) {
             advance(p);
@@ -1353,6 +1407,9 @@ static Expr *clone_simple_expr(Parser *p, Expr *e) {
         break;
     case EX_CALL: {
         c->as.call.name = xstrdup(e->as.call.name);
+        c->as.call.callee = e->as.call.callee
+                                ? clone_simple_expr(p, e->as.call.callee)
+                                : NULL;
         c->as.call.nargs = e->as.call.nargs;
         c->as.call.args = e->as.call.nargs
             ? (Expr **)xmalloc(sizeof(Expr *) * (size_t)e->as.call.nargs)

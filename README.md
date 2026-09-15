@@ -170,6 +170,7 @@ no escaping).
 | `chan[T]`  | `sl_chan *` | bounded thread-safe queue (see Concurrency) |
 | `join[T]`  | `sl_join *` | handle for a spawned task's result          |
 | `mutex`    | `sl_mutex *` | task-parking lock (see Concurrency)        |
+| `fn(A)->R` | `R (*)(A)`  | function value (see Function values)       |
 
 #### Numeric conversion rules
 
@@ -435,6 +436,63 @@ Rule of thumb: absent data is `opt`, bad data is `result[_, str]`,
 bad world is `result[_, fault]`. Never collapse a descriptive `str`
 error into a bare `fault_io()` at a boundary — that is where
 debuggability goes to die (see `http.read` below).
+
+### Function values
+
+A `fn` type holds a function. `fn(A, B) -> R` for one that returns a
+value, `fn(A)` for one that returns nothing:
+
+```slang
+fn double(x: int) -> int { return x * 2; }
+fn triple(x: int) -> int { return x * 3; }
+
+let f: fn(int) -> int = double;   // annotated
+let g = triple;                   // or inferred from the function
+println(f(21));                   // 42
+```
+
+They work as parameters, return values, struct fields, list and map
+elements — which is what makes a dispatch table possible instead of a
+chain of string comparisons (`demo/samplex/server.sl` routes this way):
+
+```slang
+gc struct Route {
+    method: str,
+    path: str,
+    handler: fn(State, http.Request, int) -> http.Response,
+}
+
+let routes: [Route] = [
+    Route { method: "GET",  path: "/api/tasks", handler: list_tasks },
+    Route { method: "POST", path: "/api/tasks", handler: create_task }
+];
+
+for i in 0..len(routes) {
+    if routes[i].method == req.method && routes[i].path == req.path {
+        return routes[i].handler(st, req, -1);
+    }
+}
+```
+
+Anything holding a function value is callable directly —
+`routes[i].handler(...)`, `by_name["parse"](...)`, `pick(true)(4)`.
+
+**These are not closures, and that is the point.** A function value
+always names a top-level function; nothing is captured. There is no
+environment to allocate, trace, or reason about, so a `fn` value is
+exactly a C function pointer — it names code, never the heap, and the
+collector ignores it entirely. Anything a handler needs is passed to
+it, which is the same rule `spawn` already follows.
+
+Two consequences worth knowing:
+
+- **Methods cannot be used as function values.** A method takes a
+  receiver the type does not name, so `fn(Counter) -> int` would be a
+  lie about its arity. Wrap it in a plain function.
+- **A binding shadows a function of the same name.** `let scale = ...`
+  in scope means `scale` refers to the binding, never to `fn scale`.
+
+`spawn` still requires a named function, not a function value.
 
 ## Standard packages
 
@@ -1632,7 +1690,10 @@ Makefile       build/test/clean
 - Package globals require constant-literal initializers.
 - Implicit returns only apply to the last statement of a function
   body; `if` and `{}` blocks are statements, not expressions yet.
-- No closures. `break`/`continue` work inside loops.
+- No closures. Functions are values (`fn(int) -> int`), but they
+  capture nothing — a function value always names a top-level
+  function, never an environment. `break`/`continue` work inside
+  loops.
 - Package-level lists are not supported yet (scalars and bytes are).
 - Map keys are limited to integers, `str`, and `bool`.
 - No data-race protection: `spawn` gives you real concurrency and

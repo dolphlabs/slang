@@ -15,6 +15,12 @@ char *gen_ident_name(CG *cg, const char *name, int line) {
         const char *pkg = import_try(cg, left);
         if (pkg) {
             GlobSym *g = glob_find(cg, pkg, right);
+            if (!g) {
+                FuncSig *fs = sig_find_in(cg, pkg, right);
+                if (fs && fs->is_pub && !fs->method_of)
+                    return fs->is_extern ? xstrdup(fs->name)
+                                         : mangle_func(fs->pkg, fs->name);
+            }
             if (!g || !g->is_pub)
                 cg_error(line,
                          "variable '%s' is not accessible from package "
@@ -30,6 +36,15 @@ char *gen_ident_name(CG *cg, const char *name, int line) {
     GlobSym *g = glob_find(cg, cg->cur_pkg, name);
     if (g)
         return mangle_glob(g->pkg, g->name);
+    {
+        /* A bare function name used as a value -- emitted as the plain
+         * C symbol, which IS the function pointer. Same precedence as
+         * infer_ident_name: variables and globals first. */
+        FuncSig *fs = sig_find_in(cg, cg->cur_pkg, name);
+        if (fs && !fs->method_of)
+            return fs->is_extern ? xstrdup(fs->name)
+                                 : mangle_func(fs->pkg, fs->name);
+    }
     return sanitize_ident(name);
 }
 
@@ -809,6 +824,7 @@ char *gen_call(CG *cg, Expr *e) {
 
     FuncSig *sig = NULL;
     char *selfexpr = NULL;
+    char *callee = NULL; /* set only for a call through a fn value */
     const char *recv_t = NULL;
     char *left, *right;
     if (split_dotted(name, &left, &right)) {
@@ -983,8 +999,27 @@ char *gen_call(CG *cg, Expr *e) {
                 cg_error(e->line, "type 'link' has no method '%s'", right);
             }
             StructDef *sd = struct_of_type(cg, recv_t);
+            int fld = -1;
             if (!sd)
                 cg_error(e->line, "call to undefined function '%s'", name);
+            /* A fn-typed FIELD wins over a method of the same name --
+             * see infer_call's copy of this for the reasoning. The
+             * callee is the field access itself. */
+            for (int i = 0; i < sd->nfields; i++) {
+                if (!strcmp(sd->fields[i], right) && is_fn(sd->ftypes[i])) {
+                    fld = i;
+                    break;
+                }
+            }
+            if (fld >= 0) {
+                char *base = gen_ident_name(cg, left, e->line);
+                sig = fn_sig_of_type(cg, sd->ftypes[fld], name, e->line);
+                callee = xasprintf("((%s)%s%s)", base,
+                                   struct_access(cg, recv_t),
+                                   sanitize_ident(right));
+                recv_t = NULL;
+                goto have_sig;
+            }
             sig = method_find(cg, sd, right);
             if (!sig)
                 cg_error(e->line, "type '%s' has no method '%s'",
@@ -995,11 +1030,30 @@ char *gen_call(CG *cg, Expr *e) {
                          right, sd->pkg);
             selfexpr = gen_ident_name(cg, left, e->line);
         }
+    } else if (e->as.call.callee) {
+        /* Calling through an arbitrary expression holding a function
+         * value. A C function pointer is callable directly, so the
+         * generated callee is just that expression, parenthesised. */
+        const char *ct = infer_type(cg, e->as.call.callee);
+        if (!is_fn(ct))
+            cg_error(e->line,
+                     "this expression is not callable (type %s)", ct);
+        sig = fn_sig_of_type(cg, ct, "<function value>", e->line);
+        callee = xasprintf("(%s)", gen_expr(cg, e->as.call.callee));
     } else {
-        sig = sig_find_in(cg, cg->cur_pkg, name);
-        if (!sig)
-            cg_error(e->line, "call to undefined function '%s'", name);
+        const char *fvt = fn_var_type(cg, name);
+        if (fvt) {
+            /* Calling through a variable. The callee is the variable
+             * itself -- a C function pointer is callable directly. */
+            sig = fn_sig_of_type(cg, fvt, name, e->line);
+            callee = gen_ident_name(cg, name, e->line);
+        } else {
+            sig = sig_find_in(cg, cg->cur_pkg, name);
+            if (!sig)
+                cg_error(e->line, "call to undefined function '%s'", name);
+        }
     }
+have_sig:;
 
     int argi = 0;
     if (selfexpr) {
@@ -1035,8 +1089,9 @@ char *gen_call(CG *cg, Expr *e) {
     }
     StrBuf sb;
     sb_init(&sb);
-    char *mangled = sig->is_extern ? xstrdup(sig->name)
-                                   : mangle_func(sig->pkg, sig->name);
+    char *mangled = callee ? callee
+                           : sig->is_extern ? xstrdup(sig->name)
+                                            : mangle_func(sig->pkg, sig->name);
     sb_append(&sb, mangled);
     sb_putc(&sb, '(');
     if (selfexpr) {
