@@ -381,6 +381,7 @@ int is_map_key(const char *t);
 int is_opt(const char *t);
 int is_result(const char *t);
 int is_chan(const char *t);
+int is_mutex(const char *t);
 int is_join(const char *t);
 const char *res_access(CG *cg, const char *t);
 
