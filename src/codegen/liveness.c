@@ -708,6 +708,47 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
         return live_expr(cg, tgt->as.index.base, cur);
     }
 
+    case ST_SELECT: {
+        /* Exactly one arm runs, so the live-in is the union of the
+         * arms' live-ins -- same shape as if/else, widened to n+1
+         * branches. Every arm's channel expression (and a send arm's
+         * value) is evaluated before any of them, so they are live
+         * across the whole construct and fold in last. */
+        int i;
+        LiveSet *joined = s->as.select_stmt.def
+                              ? live_block(cg, s->as.select_stmt.def,
+                                           live_out)
+                              : ls_clone(live_out);
+        for (i = 0; i < s->as.select_stmt.ncases; i++) {
+            SelectCase *sc = &s->as.select_stmt.cases[i];
+            LiveSet *arm;
+            LiveVar *bound = NULL;
+            var_scope_push(cg);
+            if (sc->bind) {
+                const char *ct = infer_type(cg, sc->ch);
+                bound = declare_var(cg, sc->bind,
+                                    xasprintf("opt[%s]", chan_elem(ct)));
+            }
+            arm = live_block(cg, sc->body, live_out);
+            /* The arm's binding does not exist before the select, so it
+             * must not flow backward out of it -- the same trap for_in's
+             * loop variables document above, with the same symptom: an
+             * earlier statement's root array naming a C identifier that
+             * is not in scope there yet. */
+            if (bound)
+                ls_remove_named(arm, bound);
+            var_scope_pop(cg);
+            ls_union_named_into(joined, arm);
+        }
+        for (i = 0; i < s->as.select_stmt.ncases; i++) {
+            SelectCase *sc = &s->as.select_stmt.cases[i];
+            if (sc->val)
+                joined = live_expr(cg, sc->val, joined);
+            joined = live_expr(cg, sc->ch, joined);
+        }
+        return joined;
+    }
+
     case ST_IF: {
         LiveSet *live_in_then =
             live_block(cg, s->as.if_stmt.then_blk, live_out);
@@ -1081,6 +1122,16 @@ static void print_stmts(FILE *out, Stmt **stmts, int count) {
             print_expr(out, s->as.if_stmt.cond);
             print_block(out, s->as.if_stmt.then_blk);
             if (s->as.if_stmt.else_blk) print_block(out, s->as.if_stmt.else_blk);
+            break;
+        case ST_SELECT:
+            for (int i = 0; i < s->as.select_stmt.ncases; i++) {
+                print_expr(out, s->as.select_stmt.cases[i].ch);
+                if (s->as.select_stmt.cases[i].val)
+                    print_expr(out, s->as.select_stmt.cases[i].val);
+                print_block(out, s->as.select_stmt.cases[i].body);
+            }
+            if (s->as.select_stmt.def)
+                print_block(out, s->as.select_stmt.def);
             break;
         case ST_WHILE:
             print_expr(out, s->as.while_stmt.cond);

@@ -4,9 +4,9 @@ Track progress top to bottom; tick items as they land. The HTTP perf
 chase is won on the raw axis (Phase E vs Go on p99 **and** RSS, PR #59
 records the numbers); the ruler stays frozen and Round 2 follow-ups
 live in `optimisation.md`. Error model gaps are done. Every item below is
-now ticked; `crypto`, SQL, `regex`, HTTP/2 and `os` have all landed.
-Current focus is the concurrency-primitive gaps at the bottom of this
-file — the two the stdlib was already working around in writing.
+now ticked; `crypto`, SQL, `regex`, HTTP/2 and `os` have all landed,
+and so have the two concurrency primitives (`mutex`, `select`) at the
+bottom of this file.
 
 ## HTTP perf (won on raw axis, ruler frozen)
 
@@ -43,7 +43,7 @@ Errors are easy to **handle** (`guard let`, `??`, `fault`) and hard to
 - [x] Richer `fault` context without breaking the closed enum (PR #64: `op` + `code` on `sl_fault`; `==`/`fault_kind` kind-only; `fault_op`/`fault_code` accessors; net tags send/recv/accept/dial/connect with op + errno)
 - [x] Panic message quality (PR #65: `sl_rt_error_at` threads `pkg.func:line` through div-by-zero, `err_of`-on-ok, map-missing-key, and list/bytes/wire bounds; `join_wait` surfaces the located string)
 
-## Concurrency primitives (current focus)
+## Concurrency primitives (done)
 
 Both of these were picked because the stdlib had already written the
 workaround down as a comment, which is the strongest evidence a gap is
@@ -71,7 +71,7 @@ a single token.
   NOT converted — its single writer task also guarantees HEADERS and
   CONTINUATION are never split by another frame, which a lock does not
   give
-- [ ] `select` over channels — the harder half. The blocker is
+- [x] `select` over channels — the harder half. The blocker is
   structural, not syntactic: `sl_task.next` is the link for BOTH the
   run queue and a channel's wait list, safe today only because "a task
   is on exactly one such list at a time" (`sl_containers.c`). `select`
@@ -82,6 +82,39 @@ a single token.
   buffered (`sl_chan_new` clamps `cap` to >= 1), so a woken select can
   just re-try every case instead of being handed a value directly —
   no rendezvous handoff to get wrong
+
+  **Landed.** All of the above held up. Wait lists now hold `sl_waiter`
+  NODES allocated on the parked task's own C stack, so nothing
+  heap-allocates and chan stops writing `sl_task.next` altogether —
+  which structurally retires the async-preemption hazard the old code
+  needed a bracket for (the brackets stay; they also cover the park
+  transition). Syntax reuses the existing builtins rather than
+  inventing an arrow operator: `case let v = chan_recv(a) { }`,
+  `case chan_send(b, v) { }`, `default { }`. A recv arm binds `opt[T]`
+  exactly as `chan_recv` does, so a closed channel is `none` and needs
+  no second convention.
+
+  **The bug worth remembering.** A select cannot hold N channel locks
+  at once, so unlike `chan_recv` it cannot stay locked from "is there a
+  value" through "put me on the wait list" to the park. A sender
+  landing in that window finds an empty wait list, wakes nobody, and
+  leaves — and a select that parks without looking again loses that
+  wakeup permanently. Found as a hang (1 run in ~30, every worker idle
+  in `sl_worker_run_loop`), fixed by polling a SECOND time after
+  enqueueing. `tests/select_stress` is built around it: 300 rounds that
+  each END, because steady traffic hides the bug completely. An earlier
+  version of that test kept producers running for the whole program and
+  passed 20/20 with the fix REMOVED — that near-miss is worth more than
+  the test was. The round-based version hangs 19/20 without the fix and
+  passes 60/60 with it; `tests/select` (the original repro) went
+  150/150.
+
+  **Not supported:** no timeout arm, and no way to disable an arm (Go
+  uses a nil channel; slang has none), so a closed channel's recv arm
+  is ready forever and a loop that keeps selecting on it will spin. A
+  timeout arm needs the `sl_time` sleepers list to gain a removal
+  operation and select to coordinate two wake sources; the claim
+  protocol already generalises to it.
 
 ## Notes
 

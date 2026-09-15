@@ -245,6 +245,55 @@ static void check_stmt(CG *cg, Stmt *s) {
         check_place(cg, tgt);
         return;
     }
+    case ST_SELECT: {
+        /* The arms are mutually exclusive, so a move inside one must
+         * not be visible to the others -- each starts from the same
+         * pre-select state, exactly like if/else, and the joined
+         * result is the union. */
+        int i, n;
+        int *before, *acc = NULL;
+        for (i = 0; i < s->as.select_stmt.ncases; i++) {
+            SelectCase *sc = &s->as.select_stmt.cases[i];
+            check_rvalue(cg, sc->ch);
+            if (sc->val)
+                check_rvalue(cg, sc->val);
+        }
+        n = cg->vars.count;
+        before = snap_moved(cg, n);
+        for (i = 0; i < s->as.select_stmt.ncases; i++) {
+            SelectCase *sc = &s->as.select_stmt.cases[i];
+            int *arm;
+            restore_moved(cg, before, n);
+            var_scope_push(cg);
+            if (sc->bind) {
+                const char *ct = infer_type(cg, sc->ch);
+                var_redecl_check(cg, sc->bind, sc->line);
+                var_push(cg, sc->bind,
+                         xasprintf("opt[%s]", chan_elem(ct)));
+            }
+            check_block(cg, sc->body);
+            var_scope_pop(cg);
+            arm = snap_moved(cg, n);
+            if (!acc) {
+                acc = arm;
+            } else {
+                /* join_moved leaves cg holding the union, so re-snap to
+                   keep the running accumulator in step */
+                join_moved(cg, acc, arm, n);
+                acc = snap_moved(cg, n);
+            }
+        }
+        if (s->as.select_stmt.def) {
+            int *d;
+            restore_moved(cg, before, n);
+            check_block(cg, s->as.select_stmt.def);
+            d = snap_moved(cg, n);
+            join_moved(cg, acc, d, n);
+            acc = snap_moved(cg, n);
+        }
+        restore_moved(cg, acc, n);
+        return;
+    }
     case ST_IF: {
         check_rvalue(cg, s->as.if_stmt.cond);
         int n = cg->vars.count;

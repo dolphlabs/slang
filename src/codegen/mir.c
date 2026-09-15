@@ -506,6 +506,48 @@ static void lower_stmt(Lower *L, Stmt *s) {
     case ST_UNSAFE:
         lower_block(L, s->as.unsafe_blk.body);
         return;
+    case ST_SELECT: {
+        /* Every arm's channel (and a send arm's value) is evaluated
+         * exactly once, before any of them can block -- so they are
+         * lowered in the CURRENT block, not inside the arm. The arms
+         * themselves are mutually exclusive successors, like if/else
+         * with n+1 branches. */
+        int i;
+        int join = new_bb(L);
+        for (i = 0; i < s->as.select_stmt.ncases; i++) {
+            SelectCase *sc = &s->as.select_stmt.cases[i];
+            lower_rvalue(L, sc->ch);
+            if (sc->val)
+                lower_rvalue(L, sc->val);
+        }
+        for (i = 0; i < s->as.select_stmt.ncases; i++) {
+            SelectCase *sc = &s->as.select_stmt.cases[i];
+            int arm = new_bb(L);
+            L->cur = arm;
+            var_scope_push(L->cg);
+            if (sc->bind) {
+                const char *ct = infer_type(L->cg, sc->ch);
+                char *elem = chan_elem(ct);
+                char *ot = xasprintf("opt[%s]", elem);
+                add_local(L, sc->bind, ot);
+                var_redecl_check(L->cg, sc->bind, sc->line);
+                var_push(L->cg, sc->bind, ot);
+            }
+            lower_block(L, sc->body);
+            var_scope_pop(L->cg);
+            emit_goto(L, join, sc->line);
+        }
+        if (s->as.select_stmt.def) {
+            int d = new_bb(L);
+            L->cur = d;
+            var_scope_push(L->cg);
+            lower_block(L, s->as.select_stmt.def);
+            var_scope_pop(L->cg);
+            emit_goto(L, join, s->line);
+        }
+        L->cur = join;
+        return;
+    }
     case ST_STRUCT:
     case ST_IMPL:
         return;

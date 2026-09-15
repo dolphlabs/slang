@@ -53,13 +53,14 @@ import "time";
 //
 // Everything the writer task needs arrives on ONE channel, tagged.
 //
-// That is not a stylistic choice: slang has no `select` over channels,
-// so a writer that had to watch both "here is a response" and "the peer
-// granted more window" on two channels could only ever block on one of
-// them. Folding both into a single stream makes the writer an ordinary
-// state machine with one blocking point, and gives the ordering for
-// free -- a grant that arrives before a body is simply an earlier
-// message.
+// When this was written slang had no `select`, so a writer watching
+// both "here is a response" and "the peer granted more window" on two
+// channels could only ever block on one of them. `select` exists now
+// and would compile -- but the single tagged stream is still the better
+// design here, and stays. Two channels would make the ORDER between a
+// grant and a body a race the writer has to reason about; one channel
+// makes it the order they were sent, for free, and leaves the writer an
+// ordinary state machine with a single blocking point.
 pub let W_RAW = 0;       // pre-built frames, not flow controlled
 pub let W_BODY = 1;      // a response: HEADERS now, DATA as window allows
 pub let W_GRANT = 2;     // peer's WINDOW_UPDATE: `n` octets to `stream`
