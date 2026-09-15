@@ -247,6 +247,31 @@ static void walk_stmt(CG *cg, Esc *esc, Stmt *s) {
         if (s->as.if_stmt.else_blk)
             walk_block(cg, esc, s->as.if_stmt.else_blk);
         return;
+    case ST_SELECT: {
+        int i;
+        for (i = 0; i < s->as.select_stmt.ncases; i++) {
+            SelectCase *sc = &s->as.select_stmt.cases[i];
+            scan_expr_any(cg, esc, sc->ch);
+            if (sc->val)
+                scan_expr_any(cg, esc, sc->val);
+        }
+        for (i = 0; i < s->as.select_stmt.ncases; i++) {
+            SelectCase *sc = &s->as.select_stmt.cases[i];
+            var_scope_push(cg);
+            if (sc->bind) {
+                const char *ct = infer_type(cg, sc->ch);
+                char *ot = xasprintf("opt[%s]", chan_elem(ct));
+                esc_push(esc, sc->bind, NULL);
+                var_redecl_check(cg, sc->bind, sc->line);
+                var_push(cg, sc->bind, ot);
+            }
+            walk_block(cg, esc, sc->body);
+            var_scope_pop(cg);
+        }
+        if (s->as.select_stmt.def)
+            walk_block(cg, esc, s->as.select_stmt.def);
+        return;
+    }
     case ST_WHILE:
         scan_expr_any(cg, esc, s->as.while_stmt.cond);
         walk_block(cg, esc, s->as.while_stmt.body);

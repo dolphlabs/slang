@@ -1321,6 +1321,47 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
   of inventing a second return-value convention, it reuses `opt[T]`),
   `chan_close(ch)` wakes every blocked sender/receiver. Sending on a
   closed channel is a checked runtime error, not undefined behavior.
+- **`select`** waits on several channels at once and runs the arm that
+  becomes ready first:
+
+  ```slang
+  while running {
+      select {
+          case let job = chan_recv(work) {
+              handle(job ?? 0);
+          }
+          case let q = chan_recv(quit) {
+              running = false;
+          }
+          default {
+              // optional: runs when no arm is ready, instead of blocking
+          }
+      }
+  }
+  ```
+
+  A `case let v = chan_recv(ch)` arm binds `v` to `opt[T]` for that
+  arm's body, exactly as a plain `chan_recv` would — `none` means the
+  channel is closed and drained. A `case chan_send(ch, v)` arm is ready
+  when the channel has buffer space and binds nothing. Sending on a
+  closed channel from a send arm is the same checked runtime error as
+  `chan_send` itself.
+
+  Every arm's channel expression (and a send arm's value) is evaluated
+  **once**, before the select blocks. With no `default` and nothing ever
+  ready, `select` parks forever — the same as `chan_recv` on a channel
+  nobody sends to. Which arm wins when several are ready is not
+  specified: polling starts at a rotating offset, so a busy first
+  channel cannot starve the later arms.
+
+  **A closed channel is permanently ready.** Its recv arm fires
+  immediately and forever, with `none`. This is the same as Go, but Go
+  lets you disable an arm by setting its channel to `nil` and slang has
+  no nil channel — so a loop that keeps selecting on a closed channel
+  will spin. Structure the loop to stop instead (count the items you
+  expect, or take the close as the exit condition), as
+  `tests/select/main.sl` does.
+
 - **`mutex`**, built with `make_mutex()`: `mutex_lock(m)` /
   `mutex_unlock(m)` around whatever the lock protects, and
   `mutex_trylock(m) -> bool` when you would rather do something else
@@ -1376,8 +1417,8 @@ isolation plus channels for the values that need to move between
 tasks, not a type system that forbids sharing mutable state. Passing
 a struct, list, or map into a spawned task and mutating it from more
 than one task concurrently is exactly as unsafe as it is in Go or
-Java: nothing currently stops you, so don't. There's also no `select`
-over multiple channels yet. `join_wait` waits for one spawned task.
+Java: nothing currently stops you, so don't — `mutex` is there when
+you need it. `join_wait` waits for one spawned task.
 `proc.active_tasks()` (see the `proc` section) is the aggregate count
 of everything currently in flight,
 useful for draining on shutdown but not for waiting on one task in
@@ -1598,7 +1639,11 @@ Makefile       build/test/clean
   per-task failure isolation, not an ownership/borrow checker.
   Mutating a shared struct/list/map from more than one task is on
   you, same as Go or Java — `mutex` is available for it, but nothing
-  makes you reach for one. No `select` over channels.
+  makes you reach for one.
+- `select` has no timeout arm and no way to disable an arm. A closed
+  channel's recv arm is ready forever (see Concurrency above), and
+  there is no nil channel to switch it off with; for a deadline, feed
+  a channel from a spawned timer task.
 - `mutex` has no scope guard: without closures or `defer`, an early
   `return` between `mutex_lock` and `mutex_unlock` leaks the lock.
   Mutexes are also not recursive (locking one twice from the same
