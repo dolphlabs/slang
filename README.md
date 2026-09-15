@@ -135,6 +135,9 @@ no escaping).
   `extern fn`s (see C interop below)
 - `make_chan(n)` / `chan_send(ch, v)` / `chan_recv(ch)` / `chan_close(ch)`
   — construct and use a `chan[T]` (see Concurrency below)
+- `make_mutex()` / `mutex_lock(m)` / `mutex_unlock(m)` /
+  `mutex_trylock(m)` — construct and use a `mutex` (see Concurrency
+  below)
 - `join_wait(h)` — wait for a `join[T]` from `spawn f(...)` (see
   Concurrency below)
 
@@ -166,6 +169,7 @@ no escaping).
 | `*T` / `*mut T` | `T *`  | raw pointer                        |
 | `chan[T]`  | `sl_chan *` | bounded thread-safe queue (see Concurrency) |
 | `join[T]`  | `sl_join *` | handle for a spawned task's result          |
+| `mutex`    | `sl_mutex *` | task-parking lock (see Concurrency)        |
 
 #### Numeric conversion rules
 
@@ -1317,6 +1321,47 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
   of inventing a second return-value convention, it reuses `opt[T]`),
   `chan_close(ch)` wakes every blocked sender/receiver. Sending on a
   closed channel is a checked runtime error, not undefined behavior.
+- **`mutex`**, built with `make_mutex()`: `mutex_lock(m)` /
+  `mutex_unlock(m)` around whatever the lock protects, and
+  `mutex_trylock(m) -> bool` when you would rather do something else
+  than wait. A contended lock parks the *task*, not the worker thread,
+  so a handler waiting its turn costs a queue slot rather than one of
+  the pool's OS threads — the same reason `chan` parks. A `mutex` is a
+  handle: copying the binding aliases the same lock.
+
+  Two things are checked rather than left to chance, because both
+  otherwise present as something other than what they are:
+
+  - Locking a mutex this task already holds is a runtime error.
+    slang's mutexes are **not** recursive, and without the check the
+    task would park forever on itself — a hang is the least useful
+    diagnosis available.
+  - Unlocking a mutex this task does not hold is a runtime error. The
+    alternative is corruption in whatever the lock was protecting,
+    discovered much later and somewhere else.
+
+  There is no scope guard (no `defer`, no closures), so an early
+  `return` between lock and unlock leaks the lock. Keep the critical
+  section small enough to see both ends of it at once:
+
+  ```slang
+  gc struct State { tasks: [Task], next_id: int, lock: mutex }
+
+  fn create(st: State, title: str) -> Task {
+      mutex_lock(st.lock);
+      let t = Task { id: st.next_id, title: title, done: false };
+      st.next_id = st.next_id + 1;
+      push(st.tasks, t);
+      mutex_unlock(st.lock);
+      return t;                 // unlock BEFORE the return, every path
+  }
+  ```
+
+  A mutex is not always the right tool. `demo/samplex/server.sl` uses
+  one because many handlers touch one list. `stdlib/http2/conn.sl`
+  deliberately does not: its single writer task also guarantees that a
+  HEADERS block and its CONTINUATION frames are never split by another
+  frame, which a lock would not give.
 - **Failure isolation**: a runtime error (an out-of-bounds index, a
   missing map key, integer division by zero, ...) inside a spawned
   task ends *that task* — printed to stderr as `task panicked: ...` —
@@ -1552,7 +1597,12 @@ Makefile       build/test/clean
 - No data-race protection: `spawn` gives you real concurrency and
   per-task failure isolation, not an ownership/borrow checker.
   Mutating a shared struct/list/map from more than one task is on
-  you, same as Go or Java. No `select` over channels.
+  you, same as Go or Java — `mutex` is available for it, but nothing
+  makes you reach for one. No `select` over channels.
+- `mutex` has no scope guard: without closures or `defer`, an early
+  `return` between `mutex_lock` and `mutex_unlock` leaks the lock.
+  Mutexes are also not recursive (locking one twice from the same
+  task is a checked error, not a hang).
 - TLS: no session resumption tuning. Handshake and send/recv park;
   `getaddrinfo` in `tls_dial` parks the task while a dedicated
   thread resolves. mTLS (`tls_ctx_require_client` /

@@ -246,6 +246,20 @@ const char *infer_call(CG *cg, Expr *e) {
             cg_error(e->line, "chan_close() expects a chan (got %s)", ct);
         return "void";
     }
+    if (!strcmp(name, "make_mutex")) {
+        if (n != 0)
+            cg_error(e->line, "make_mutex() takes no arguments");
+        return "mutex";
+    }
+    if (!strcmp(name, "mutex_lock") || !strcmp(name, "mutex_unlock") ||
+        !strcmp(name, "mutex_trylock")) {
+        if (n != 1)
+            cg_error(e->line, "%s() takes exactly one argument", name);
+        const char *mt = infer_type(cg, e->as.call.args[0]);
+        if (!is_mutex(mt))
+            cg_error(e->line, "%s() expects a mutex (got %s)", name, mt);
+        return !strcmp(name, "mutex_trylock") ? "bool" : "void";
+    }
     if (!strcmp(name, "join_wait")) {
         if (n != 1)
             cg_error(e->line, "join_wait() takes exactly one argument");

@@ -45,27 +45,14 @@ gc struct Task {
 
 // ---- shared state ----------------------------------------------------
 //
-// Every worker task touches this, so it needs mutual exclusion. slang
-// has no mutex type; a chan[bool] holding exactly one token is one.
-// Taking the token is chan_recv, releasing it is chan_send, and a task
-// that finds the token gone parks until whoever holds it puts it back.
+// Every worker task touches this, so it needs mutual exclusion.
+// mutex_lock parks the task rather than the worker thread, so a handler
+// waiting its turn costs a queue slot, not one of the pool's threads.
 
 gc struct State {
     tasks: [Task],
     next_id: int,
-    lock: chan[bool],
-}
-
-fn lock(st: State) {
-    let v = chan_recv(st.lock);
-    guard let _t = v else {
-        log.error("state lock closed");
-        exit(1);
-    }
-}
-
-fn unlock(st: State) {
-    chan_send(st.lock, true);
+    lock: mutex,
 }
 
 // ---- helpers ---------------------------------------------------------
@@ -108,10 +95,10 @@ fn find_task(st: State, id: int) -> int {
 // ---- routes ----------------------------------------------------------
 
 fn list_tasks(st: State) -> http.Response {
-    lock(st);
+    mutex_lock(st.lock);
     // Encode inside the lock: the list must not be mutated mid-encode.
     let body: str = json.encode(st.tasks);
-    unlock(st);
+    mutex_unlock(st.lock);
     return http.ok_json(body);
 }
 
@@ -123,7 +110,7 @@ fn create_task(st: State, req: http.Request) -> http.Response {
     if len(nt.title) == 0 {
         return http.bad_request("title is required");
     }
-    lock(st);
+    mutex_lock(st.lock);
     let t = Task {
         id: st.next_id,
         title: nt.title,
@@ -131,7 +118,7 @@ fn create_task(st: State, req: http.Request) -> http.Response {
     };
     st.next_id = st.next_id + 1;
     push(st.tasks, t);
-    unlock(st);
+    mutex_unlock(st.lock);
     return http.created_json(json.encode(t));
 }
 
@@ -143,15 +130,15 @@ fn update_task(st: State, req: http.Request, id: int) -> http.Response {
     if len(nt.title) == 0 {
         return http.bad_request("title is required");
     }
-    lock(st);
+    mutex_lock(st.lock);
     let i = find_task(st, id);
     if i < 0 {
-        unlock(st);
+        mutex_unlock(st.lock);
         return http.not_found();
     }
     let t = Task { id: id, title: nt.title, done: nt.done ?? false };
     st.tasks[i] = t;
-    unlock(st);
+    mutex_unlock(st.lock);
     return http.ok_json(json.encode(t));
 }
 
@@ -298,11 +285,8 @@ fn index_html() -> str {
 
 // ---- startup ---------------------------------------------------------
 
-let lock_ch: chan[bool] = make_chan(1);
-chan_send(lock_ch, true);            // the single token: unlocked
-
 let seed: [Task] = [];
-let st = State { tasks: seed, next_id: 1, lock: lock_ch };
+let st = State { tasks: seed, next_id: 1, lock: make_mutex() };
 
 let port = atoi(proc.getenv("PORT") ?? "8080");
 let workers = atoi(proc.getenv("WORKERS") ?? "64");

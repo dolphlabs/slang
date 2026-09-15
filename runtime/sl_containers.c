@@ -39,12 +39,16 @@ static sl_chan *sl_chan_new(size_t elemsz, int cap, int elem_is_ptr) {
     return c;
 }
 
-static void sl_chan_wl_push(sl_task **head, sl_task **tail, sl_task *t) {
+/* Wait-list helpers, shared by chan and mutex (below). Both park their
+ * blocked tasks the same way, and both rely on the same invariant: a
+ * task is on exactly ONE such list at a time, so sl_task.next is free
+ * to reuse as the link. */
+static void sl_wl_push(sl_task **head, sl_task **tail, sl_task *t) {
     t->next = NULL;
     if (*tail) (*tail)->next = t; else *head = t;
     *tail = t;
 }
-static sl_task *sl_chan_wl_pop(sl_task **head, sl_task **tail) {
+static sl_task *sl_wl_pop(sl_task **head, sl_task **tail) {
     sl_task *t = *head;
     if (t) { *head = t->next; if (!*head) *tail = NULL; }
     return t;
@@ -71,7 +75,7 @@ static sl_task *sl_chan_wl_pop(sl_task **head, sl_task **tail) {
 static void sl_chan_send(sl_chan *c, const void *val) {
     /* Tier 11 eighth slice: bracketed entry-to-every-return -- NOT
      * just around sl_task_park's own internal body (already covered
-     * there). sl_chan_wl_push below writes sl_rt_current_task->next to
+     * there). sl_wl_push below writes sl_rt_current_task->next to
      * link into c's OWN wait list, then sl_task_park is called to
      * actually suspend -- between those two steps the task is still
      * genuinely running, and an async signal landing in that window
@@ -105,7 +109,7 @@ static void sl_chan_send(sl_chan *c, const void *val) {
          * onto a run queue it is already off, and finally freed by
          * sl_worker_after_switch with that stray queue link still live --
          * the heap-use-after-free ASan reports at -O2. */
-        sl_chan_wl_push(&c->send_waiters, &c->send_waiters_tail, sl_rt_cur());
+        sl_wl_push(&c->send_waiters, &c->send_waiters_tail, sl_rt_cur());
         sl_task_park(&c->mu); /* leaves c->mu locked across the switch --
             see sl_task_park's own comment (runtime_pool.c) for why */
         pthread_mutex_lock(&c->mu); /* re-acquire before re-checking */
@@ -120,7 +124,7 @@ static void sl_chan_send(sl_chan *c, const void *val) {
     memcpy(c->buf + (size_t)tail * c->elemsz, val, c->elemsz);
     c->count++;
     if (c->recv_waiters) {
-        sl_task *w = sl_chan_wl_pop(&c->recv_waiters, &c->recv_waiters_tail);
+        sl_task *w = sl_wl_pop(&c->recv_waiters, &c->recv_waiters_tail);
         sl_task_resume(w);
     }
     pthread_mutex_unlock(&c->mu);
@@ -147,7 +151,7 @@ static int sl_chan_recv(sl_chan *c, void *out) {
     while (c->count == 0 && !c->closed) {
         /* sl_rt_cur(), not a raw read -- see sl_chan_send's own copy of
          * this loop for the full reasoning. Same hazard, same fix. */
-        sl_chan_wl_push(&c->recv_waiters, &c->recv_waiters_tail, sl_rt_cur());
+        sl_wl_push(&c->recv_waiters, &c->recv_waiters_tail, sl_rt_cur());
         sl_task_park(&c->mu);
         pthread_mutex_lock(&c->mu);
     }
@@ -160,7 +164,7 @@ static int sl_chan_recv(sl_chan *c, void *out) {
     c->head = (c->head + 1) % c->cap;
     c->count--;
     if (c->send_waiters) {
-        sl_task *w = sl_chan_wl_pop(&c->send_waiters, &c->send_waiters_tail);
+        sl_task *w = sl_wl_pop(&c->send_waiters, &c->send_waiters_tail);
         sl_task_resume(w);
     }
     pthread_mutex_unlock(&c->mu);
@@ -172,11 +176,124 @@ static void sl_chan_close(sl_chan *c) {
     pthread_mutex_lock(&c->mu);
     c->closed = 1;
     sl_task *w;
-    while ((w = sl_chan_wl_pop(&c->recv_waiters, &c->recv_waiters_tail)))
+    while ((w = sl_wl_pop(&c->recv_waiters, &c->recv_waiters_tail)))
         sl_task_resume(w);
-    while ((w = sl_chan_wl_pop(&c->send_waiters, &c->send_waiters_tail)))
+    while ((w = sl_wl_pop(&c->send_waiters, &c->send_waiters_tail)))
         sl_task_resume(w);
     pthread_mutex_unlock(&c->mu);
+}
+
+/* ---- mutex: task-level mutual exclusion ----------------------------
+ *
+ * A pthread_mutex_t protects sl_mutex's OWN fields for microseconds at
+ * a time; it is not the lock slang code holds. Holding a real pthread
+ * lock across user code would block the WORKER THREAD, and with M:N
+ * green threads that starves every other task queued behind it -- the
+ * same reason chan parks instead of using a condvar. So a contended
+ * lock parks the task (sl_task_park) and the unlocker hands the worker
+ * back to the run queue.
+ *
+ * Deliberately NOT recursive. A task that locks a mutex it already
+ * holds would otherwise park forever on itself, and a hang is the
+ * worst possible diagnosis to be handed; sl_rt_error names it instead.
+ * For the same reason unlock checks ownership: unlocking someone
+ * else's mutex is always a bug, and it is one that otherwise shows up
+ * much later as corruption in unrelated data.
+ *
+ * `owner` is compared, never dereferenced -- it is a task identity,
+ * not a live reference, so it stays correct even if that task has
+ * since exited (which is itself the bug of dropping a held lock). The
+ * struct needs no GC tracer: it holds no GC pointers, and parked
+ * waiters are already roots via sl_parked_tasks. */
+
+typedef struct {
+    pthread_mutex_t mu;   /* guards the fields below, never user code */
+    int held;
+    sl_task *owner;       /* identity only; see the note above */
+    sl_task *waiters, *waiters_tail;
+} sl_mutex;
+
+static sl_mutex *sl_mutex_new(void) {
+    sl_mutex *m = (sl_mutex *)sl_gc_alloc(sizeof(sl_mutex), NULL);
+    m->held = 0;
+    m->owner = NULL;
+    m->waiters = NULL;
+    m->waiters_tail = NULL;
+    pthread_mutex_init(&m->mu, NULL);
+    return m;
+}
+
+/* Bracketed entry-to-every-return, exactly like sl_chan_send/recv: the
+ * window between sl_wl_push writing this task's ->next and
+ * sl_task_park actually suspending is a live async-preemption target,
+ * and a preemption landing there would overwrite that same ->next with
+ * a run-queue link. See sl_chan_send's own comment for the full
+ * reasoning -- same hazard, same fix, same sl_rt_cur() rule across the
+ * park (the task may resume on a different worker). */
+static void sl_mutex_lock(sl_mutex *m) {
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&m->mu);
+    if (m->held && m->owner == sl_rt_cur()) {
+        pthread_mutex_unlock(&m->mu);
+        sl_rt_preempt_enable();
+        sl_rt_error("mutex_lock: this task already holds this mutex "
+                    "(slang mutexes are not recursive)", 0, 0);
+        return;
+    }
+    while (m->held) {
+        sl_wl_push(&m->waiters, &m->waiters_tail, sl_rt_cur());
+        sl_task_park(&m->mu); /* leaves m->mu locked across the switch */
+        pthread_mutex_lock(&m->mu);
+    }
+    m->held = 1;
+    m->owner = sl_rt_cur();
+    pthread_mutex_unlock(&m->mu);
+    sl_rt_preempt_enable();
+}
+
+/* returns 1 if the lock was taken, 0 if it is held by someone else */
+static int sl_mutex_trylock(sl_mutex *m) {
+    int got = 0;
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&m->mu);
+    if (!m->held) {
+        m->held = 1;
+        m->owner = sl_rt_cur();
+        got = 1;
+    }
+    pthread_mutex_unlock(&m->mu);
+    sl_rt_preempt_enable();
+    return got;
+}
+
+static void sl_mutex_unlock(sl_mutex *m) {
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&m->mu);
+    if (!m->held) {
+        pthread_mutex_unlock(&m->mu);
+        sl_rt_preempt_enable();
+        sl_rt_error("mutex_unlock: this mutex is not locked", 0, 0);
+        return;
+    }
+    if (m->owner != sl_rt_cur()) {
+        pthread_mutex_unlock(&m->mu);
+        sl_rt_preempt_enable();
+        sl_rt_error("mutex_unlock: this task does not hold this mutex",
+                    0, 0);
+        return;
+    }
+    m->held = 0;
+    m->owner = NULL;
+    /* Resumed while m->mu is still held -- the same rule sl_task_resume
+     * documents: the waker holds the lock protecting the wait list the
+     * task was just removed from, so t->next is free to reuse. The
+     * woken task re-checks m->held itself; it is not handed the lock,
+     * so a trylock racing in between is a legal outcome, not a bug. */
+    sl_task *w = sl_wl_pop(&m->waiters, &m->waiters_tail);
+    if (w)
+        sl_task_resume(w);
+    pthread_mutex_unlock(&m->mu);
+    sl_rt_preempt_enable();
 }
 
 /* ---- bytes: length-prefixed, binary-safe sequences ---- */

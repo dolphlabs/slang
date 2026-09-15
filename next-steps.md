@@ -5,6 +5,8 @@ chase is won on the raw axis (Phase E vs Go on p99 **and** RSS, PR #59
 records the numbers); the ruler stays frozen and Round 2 follow-ups
 live in `optimisation.md`. Error model gaps are done. Every item below is
 now ticked; `crypto`, SQL, `regex`, HTTP/2 and `os` have all landed.
+Current focus is the concurrency-primitive gaps at the bottom of this
+file — the two the stdlib was already working around in writing.
 
 ## HTTP perf (won on raw axis, ruler frozen)
 
@@ -40,6 +42,46 @@ Errors are easy to **handle** (`guard let`, `??`, `fault`) and hard to
 - [x] `opt` none vs `result` err vs `fault`: documented rule + stdlib audit (PR #63: README rule — absent data is `opt`, bad data is `result[_, str]`, bad world is `result[_, fault]`; `http.parse` threads `err_of` context, `http.read` returns `result[Incoming, str]` with descriptive errors)
 - [x] Richer `fault` context without breaking the closed enum (PR #64: `op` + `code` on `sl_fault`; `==`/`fault_kind` kind-only; `fault_op`/`fault_code` accessors; net tags send/recv/accept/dial/connect with op + errno)
 - [x] Panic message quality (PR #65: `sl_rt_error_at` threads `pkg.func:line` through div-by-zero, `err_of`-on-ok, map-missing-key, and list/bytes/wire bounds; `join_wait` surfaces the located string)
+
+## Concurrency primitives (current focus)
+
+Both of these were picked because the stdlib had already written the
+workaround down as a comment, which is the strongest evidence a gap is
+real: `stdlib/http2/conn.sl` noted the missing mutex, and
+`demo/samplex/server.sl` was emulating one with a `chan[bool]` holding
+a single token.
+
+- [x] `mutex` — `make_mutex()` / `mutex_lock` / `mutex_unlock` /
+  `mutex_trylock`. Parks the TASK, not the worker thread: holding a
+  real pthread lock across user code would block an OS thread and
+  starve every task queued behind it, the same reason `chan` parks
+  rather than using a condvar. Needed no lexer or parser change —
+  `mutex` rides the same soft-name path `trip`/`peer`/`wire` already
+  use, so it is three table entries plus the builtins. Two conditions
+  are checked rather than left to chance, both because they otherwise
+  present as something other than what they are: a recursive lock
+  would park the task forever on itself (a hang is the least useful
+  diagnosis available), and unlocking someone else's mutex shows up
+  much later as corruption in whatever the lock protected. The test is
+  a real one — 8 tasks × 2000 increments is exactly 16000 on 20/20
+  runs, and the same program with the lock/unlock pair deleted scores
+  5035/7343/6204/5880/6717, so it fails without the thing it tests.
+  `demo/samplex` converted and verified end-to-end: 200 concurrent
+  POSTs produce 200 tasks with 200 unique ids. `http2` deliberately
+  NOT converted — its single writer task also guarantees HEADERS and
+  CONTINUATION are never split by another frame, which a lock does not
+  give
+- [ ] `select` over channels — the harder half. The blocker is
+  structural, not syntactic: `sl_task.next` is the link for BOTH the
+  run queue and a channel's wait list, safe today only because "a task
+  is on exactly one such list at a time" (`sl_containers.c`). `select`
+  needs one task on N wait lists at once, so it needs per-waiter nodes
+  (Go's `sudog` shape) rather than linking the task itself, plus a
+  claim protocol so exactly one channel wins the wake. One
+  simplification is already in hand: slang channels are always
+  buffered (`sl_chan_new` clamps `cap` to >= 1), so a woken select can
+  just re-try every case instead of being handed a value directly —
+  no rendezvous handoff to get wrong
 
 ## Notes
 
