@@ -183,6 +183,7 @@ const char *map_type(const char *t) {
     if (!strcmp(t, "peer"))   return "sl_peer";
     if (!strcmp(t, "trip"))   return "sl_trip *";
     if (!strcmp(t, "link"))   return "sl_link";
+    if (!strcmp(t, "mutex"))  return "sl_mutex *";
     if (t[0] == '[')          return "sl_arr *";
     return NULL;
 }
@@ -221,6 +222,7 @@ int is_fault(const char *t) { return !strcmp(t, "fault"); }
 int is_peer(const char *t) { return !strcmp(t, "peer"); }
 int is_trip(const char *t) { return !strcmp(t, "trip"); }
 int is_link(const char *t) { return !strcmp(t, "link"); }
+int is_mutex(const char *t) { return !strcmp(t, "mutex"); }
 
 int type_is_arena(const char *t) {
     char *inner;
@@ -379,7 +381,7 @@ int type_is_copy(CG *cg, const char *t) {
     if (!strcmp(t, "arena") || !strcmp(t, "link"))
         return 0;
     if (is_arr(t) || is_map(t) || is_opt(t) || is_result(t) || is_chan(t) ||
-        is_join(t))
+        is_join(t) || is_mutex(t))
         return 1;
     if (struct_type_is_gc(cg, t))
         return 1;
@@ -420,7 +422,7 @@ int type_is_boxable(CG *cg, const char *t) {
         is_join(t) ||
         is_str(t) || is_bytes(t) || is_rawptr(t) || !strcmp(t, "arena") ||
         is_wire(t) || is_until(t) || is_fault(t) || is_peer(t) ||
-        is_trip(t) || is_link(t))
+        is_trip(t) || is_link(t) || is_mutex(t))
         return 0;
     if (struct_type_is_gc(cg, t))
         return 0;
@@ -482,7 +484,7 @@ int type_is_gc_ptr(CG *cg, const char *t) {
         return type_is_gc_ptr(cg, tv) || type_is_gc_ptr(cg, te);
     }
     if (is_arr(t) || is_map(t) || is_opt(t) ||
-        is_chan(t) || is_join(t) || is_str(t) || is_bytes(t))
+        is_chan(t) || is_join(t) || is_mutex(t) || is_str(t) || is_bytes(t))
         return 1;
     StructDef *sd = struct_find_canon(cg, t);
     return sd && sd->is_gc;
@@ -1555,6 +1557,9 @@ int is_builtin_name(const char *name) {
            !strcmp(name, "nullptr") || !strcmp(name, "bytes_ptr") ||
            !strcmp(name, "make_chan") || !strcmp(name, "chan_send") ||
            !strcmp(name, "chan_recv") || !strcmp(name, "chan_close") ||
+           !strcmp(name, "make_mutex") || !strcmp(name, "mutex_lock") ||
+           !strcmp(name, "mutex_unlock") ||
+           !strcmp(name, "mutex_trylock") ||
            !strcmp(name, "join_wait") ||
            !strcmp(name, "arena_new") || !strcmp(name, "until_of") ||
            !strcmp(name, "until_never") || !strcmp(name, "until_hit") ||

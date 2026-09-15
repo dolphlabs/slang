@@ -31,8 +31,10 @@ import "time";
 // leaves the connection goes through a single writer task fed by a
 // chan[WMsg].
 //
-// The writer is what makes this safe without a mutex, which slang does
-// not expose anyway. Three properties matter:
+// The writer is what makes this safe without a mutex. slang now has
+// one (`make_mutex`), but a lock would be the wrong tool here: it would
+// serialise writers without giving property 2 below at all. Three
+// properties matter:
 //
 //   1. The writer emits one frame at a time and is the only writer, so
 //      no two handlers can interleave inside a frame.

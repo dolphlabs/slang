@@ -518,6 +518,23 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *inner = xasprintf("sl_chan_close(%s)", ch);
         return wrap_safepoint(cg, e, NULL, NULL, inner);
     }
+    if (!strcmp(name, "make_mutex")) {
+        char *inner = xstrdup("sl_mutex_new()");
+        return wrap_safepoint(cg, e, ctype_of(cg, "mutex"), NULL, inner);
+    }
+    if (!strcmp(name, "mutex_lock") || !strcmp(name, "mutex_unlock")) {
+        /* Like chan_send/chan_recv, these park: the handle must stay
+         * ambiently registered across the call, which wrap_safepoint's
+         * bracket does. */
+        char *m = gen_expr(cg, e->as.call.args[0]);
+        char *inner = xasprintf("sl_%s(%s)", name, m);
+        return wrap_safepoint(cg, e, NULL, NULL, inner);
+    }
+    if (!strcmp(name, "mutex_trylock")) {
+        char *m = gen_expr(cg, e->as.call.args[0]);
+        char *inner = xasprintf("(sl_mutex_trylock(%s) != 0)", m);
+        return wrap_safepoint(cg, e, ctype_of(cg, "bool"), NULL, inner);
+    }
     if (!strcmp(name, "to_le") || !strcmp(name, "to_be")) {
         const char *t = infer_type(cg, e->as.call.args[0]);
         char *a = gen_expr(cg, e->as.call.args[0]);
