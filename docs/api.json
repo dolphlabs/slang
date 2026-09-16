@@ -1510,7 +1510,7 @@
           "sig": "fn parse_url(u: str) -> result[Url, str]",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 98
+          "line": 104
         },
         {
           "name": "header",
@@ -1518,7 +1518,7 @@
           "sig": "fn header(r: Response, name: str) -> opt[str]",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 385
+          "line": 396
         },
         {
           "name": "Client",
@@ -1526,7 +1526,7 @@
           "sig": "gc struct Client",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 753
+          "line": 764
         },
         {
           "name": "new_client",
@@ -1534,7 +1534,55 @@
           "sig": "fn new_client() -> Client",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 769
+          "line": 784
+        },
+        {
+          "name": "Cookie",
+          "decl": "struct",
+          "sig": "gc struct Cookie",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 971
+        },
+        {
+          "name": "enable_cookies",
+          "decl": "fn",
+          "sig": "fn enable_cookies(c: Client)",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 990
+        },
+        {
+          "name": "clear_cookies",
+          "decl": "fn",
+          "sig": "fn clear_cookies(c: Client)",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 996
+        },
+        {
+          "name": "parse_cookie_date",
+          "decl": "fn",
+          "sig": "fn parse_cookie_date(s: str) -> int",
+          "doc": "Unix nanoseconds, or -1 when the string is not a cookie date.",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 1202
+        },
+        {
+          "name": "set_cookie",
+          "decl": "fn",
+          "sig": "fn set_cookie(c: Client, url: str, line: str)",
+          "doc": "Record a Set-Cookie line as if `url` had sent it, under exactly the rules a real response gets -- the same function does both. For a program restoring a session it saved, or seeding a jar for a test. Has no effect unless enable_cookies was called, the same as a response would not.",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 1490
+        },
+        {
+          "name": "cookies",
+          "decl": "fn",
+          "sig": "fn cookies(c: Client, url: str) -> [Cookie]",
+          "doc": "What the jar would send to `url` right now. For inspection and tests; a request does this itself.",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 1565
         },
         {
           "name": "new_request",
@@ -1542,7 +1590,7 @@
           "sig": "fn new_request(method: str, url: str) -> Request",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 937
+          "line": 1590
         },
         {
           "name": "client_send",
@@ -1550,7 +1598,7 @@
           "sig": "fn client_send(c: Client, req: Request, deadline: until)",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 1027
+          "line": 1704
         },
         {
           "name": "client_get",
@@ -1558,7 +1606,7 @@
           "sig": "fn client_get(c: Client, url: str, deadline: until)",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 1032
+          "line": 1709
         },
         {
           "name": "client_head",
@@ -1566,7 +1614,7 @@
           "sig": "fn client_head(c: Client, url: str, deadline: until)",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 1037
+          "line": 1714
         },
         {
           "name": "client_post",
@@ -1574,7 +1622,7 @@
           "sig": "fn client_post(c: Client, url: str, content_type: str, body: bytes,",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 1042
+          "line": 1719
         },
         {
           "name": "idle_count",
@@ -1582,7 +1630,7 @@
           "sig": "fn idle_count(c: Client) -> int",
           "doc": "How many connections are idle in the pool right now. With dials and reuses, the third number that makes the pool's behaviour checkable rather than asserted -- and the only one that shows a reuse DECISION before the server's own close can mask it.",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 1054
+          "line": 1731
         },
         {
           "name": "close_idle",
@@ -1590,7 +1638,7 @@
           "sig": "fn close_idle(c: Client)",
           "doc": "Close every idle connection now. A long-lived service does not need this -- idle_timeout reaps them -- but a program about to exit, or a test counting connections, does.",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 1064
+          "line": 1741
         },
         {
           "name": "send",
@@ -1598,7 +1646,7 @@
           "sig": "fn send(req: Request, deadline: until) -> result[Response, str]",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 1085
+          "line": 1762
         },
         {
           "name": "get",
@@ -1606,7 +1654,7 @@
           "sig": "fn get(url: str, deadline: until) -> result[Response, str]",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 1089
+          "line": 1766
         },
         {
           "name": "head",
@@ -1614,7 +1662,7 @@
           "sig": "fn head(url: str, deadline: until) -> result[Response, str]",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 1093
+          "line": 1770
         },
         {
           "name": "post",
@@ -1622,7 +1670,7 @@
           "sig": "fn post(url: str, content_type: str, body: bytes,",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 1097
+          "line": 1774
         }
       ]
     },
