@@ -165,6 +165,7 @@ PACKAGE_SECTIONS = {
     "encoding": ["`encoding`"],
     "byteutil": ["`byteutil`"],
     "http": ["`http`"],
+    "httpc": ["`httpc`"],
 }
 
 # --------------------------------------------------------------------

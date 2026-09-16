@@ -23,6 +23,7 @@ Every page on this site has a Markdown twin at the same path with a .md extensio
 - [fs](packages/fs.md): Package fs.
 - [http](packages/http.md): Package http.
 - [http2](packages/http2.md): Package http2.
+- [httpc](packages/httpc.md): Package httpc.
 - [json](packages/json.md): Package json.
 - [log](packages/log.md): Package log.
 - [net](packages/net.md): Package net.

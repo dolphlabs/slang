@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>httpc — slang</title>
+<meta name="description" content="Package httpc.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="httpc">
+<meta property="og:description" content="Package httpc.">
+<meta property="og:type" content="website">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/httpc.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <nav class="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../bench/index.html">Benchmarks</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>httpc</h1>
+      <p class="tagline">Package httpc.</p>
+      <p class="agentline">
+        <a href="../packages/httpc.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>An HTTP/1.1 <strong>client</strong> — the mirror of <code>http</code>, which serves. Speaks <code>http://</code> and <code>https://</code>, follows redirects, and decodes chunked responses.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;httpc&quot;</span>;
+<span class="k">import</span> <span class="s">&quot;time&quot;</span>;
+
+<span class="k">let</span> dl = <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">5000000000</span>);   <span class="c">// 5s for the whole request</span>
+
+<span class="k">let</span> r = httpc.<span class="f">get</span>(<span class="s">&quot;https://api.example.com/users?id=1&quot;</span>, dl);
+<span class="k">guard</span> <span class="k">let</span> resp = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
+    log.<span class="f">error</span>(<span class="s">&quot;request failed: &quot;</span> + e);
+    <span class="k">return</span>;
+}
+<span class="b">println</span>(<span class="b">to_str</span>(resp.status) + <span class="s">&quot; &quot;</span> + <span class="b">to_str</span>(<span class="b">len</span>(resp.body)) + <span class="s">&quot; bytes&quot;</span>);
+
+<span class="c">// a POST, and a header the request owns</span>
+<span class="k">let</span> req = httpc.<span class="f">new_request</span>(<span class="s">&quot;POST&quot;</span>, <span class="s">&quot;https://api.example.com/users&quot;</span>);
+req.headers[<span class="s">&quot;Authorization&quot;</span>] = <span class="s">&quot;Bearer &quot;</span> + token;
+req.body = <span class="b">to_bytes</span>(payload);
+<span class="k">let</span> r2 = httpc.<span class="f">send</span>(req, dl);</code></pre></div>
+<div class="tablewrap"><table><thead><tr><th>Function</th><th>Signature</th></tr></thead><tbody><tr><td><code>httpc.get</code></td><td><code>(url: str, deadline: until) -&gt; result[Response, str]</code></td></tr><tr><td><code>httpc.head</code></td><td><code>(url: str, deadline: until) -&gt; result[Response, str]</code></td></tr><tr><td><code>httpc.post</code></td><td><code>(url: str, content_type: str, body: bytes, deadline: until) -&gt; result[Response, str]</code></td></tr><tr><td><code>httpc.send</code></td><td><code>(req: Request, deadline: until) -&gt; result[Response, str]</code></td></tr><tr><td><code>httpc.new_request</code></td><td><code>(method: str, url: str) -&gt; Request</code></td></tr><tr><td><code>httpc.header</code></td><td><code>(r: Response, name: str) -&gt; opt[str]</code></td></tr><tr><td><code>httpc.parse_url</code></td><td><code>(url: str) -&gt; result[Url, str]</code></td></tr></tbody></table></div>
+<p><code>Request</code> carries <code>method</code>, <code>url</code>, <code>headers</code>, <code>body</code>, <code>max_redirects</code> (default 5, <code>0</code> disables following) and <code>ca_path</code> (<code>&quot;&quot;</code> = the system trust store). <code>Response</code> carries <code>status</code>, <code>status_text</code>, <code>headers</code>, <code>body</code> and <code>url</code> — the last being the URL that actually answered, which after a redirect is not the one you asked for.</p>
+<p>Separate from <code>http</code> rather than folded into it because <code>http</code> imports only <code>byteutil</code>, while a client necessarily imports <code>net</code> — and for a TLS request that drags <code>-lssl</code>/<code>-lcrypto</code> onto the link line of every program that merely wanted to serve HTTP.</p>
+<p>Five things worth knowing:</p>
+<ul><li><strong>A 404 is a <code>Response</code>, not an <code>err</code>.</strong> The <code>result</code> is about whether the exchange happened — DNS, connect, TLS, framing. A server that answers &quot;no&quot; answered. Collapsing the two would make a 404 and a connection refusal indistinguishable at the call site, and they need different handling.</li><li><strong>Certificates are verified, and there is no flag to stop that.</strong> Verified against <code>expired</code>, <code>self-signed</code> and <code>wrong.host</code> on badssl.com: all three are refused, a valid one is accepted. For an internal service signed by a private CA, set <code>ca_path</code> to that bundle — the answer is a different trust anchor, never a disabled check.</li><li><strong>Credentials do not survive a cross-origin redirect.</strong> <code>Authorization</code>, <code>Cookie</code> and <code>Proxy-Authorization</code> are dropped when the scheme, host or port changes, because the server that sent the <code>Location</code> chose where it points, and that is exactly how a token gets exfiltrated. Same-origin redirects keep them.</li><li><strong>Redirect method rules follow browsers, not the RFC&#x27;s original wording.</strong> 303 always becomes GET; 301 and 302 after a POST also become GET and drop the body, which is what every browser and curl do and therefore what servers expect. 307 and 308 exist to preserve the method, so they do. A redirect loop stops at <code>max_redirects</code> and hands back the last 3xx rather than spinning.</li><li><strong>Everything a server can make you allocate has a ceiling</strong> — 64 KiB of headers, 32 MiB of body, and a bounded chunk-size line. A client talks to servers it does not control, so a buffer sized on their say-so is a denial of service arriving through an ordinary call.</li></ul>
+<p><strong>Not done, deliberately:</strong> no connection pooling (every request opens a connection and sends <code>Connection: close</code>), no gzip (nothing links zlib, and advertising an encoding you cannot decode is worse than not asking), no cookie jar, no HTTP/2, no multipart bodies. All additive; none of them changes the shapes above.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="url"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Url</code> <span class="src">stdlib/httpc/httpc.sl:46</span><a class="anchor" href="#url">#</a></div></div><div class="api-item" id="request"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Request</code> <span class="src">stdlib/httpc/httpc.sl:53</span><a class="anchor" href="#request">#</a></div></div><div class="api-item" id="response"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Response</code> <span class="src">stdlib/httpc/httpc.sl:70</span><a class="anchor" href="#response">#</a></div></div><div class="api-item" id="parse-url"><div class="api-sig"><code><span class="k">fn</span> <span class="f">parse_url</span>(u: <span class="t">str</span>) -&gt; <span class="t">result</span>[Url, <span class="t">str</span>]</code> <span class="src">stdlib/httpc/httpc.sl:101</span><a class="anchor" href="#parse-url">#</a></div></div><div class="api-item" id="header"><div class="api-sig"><code><span class="k">fn</span> <span class="f">header</span>(r: Response, name: <span class="t">str</span>) -&gt; <span class="t">opt</span>[<span class="t">str</span>]</code> <span class="src">stdlib/httpc/httpc.sl:385</span><a class="anchor" href="#header">#</a></div></div><div class="api-item" id="new-request"><div class="api-sig"><code><span class="k">fn</span> <span class="f">new_request</span>(method: <span class="t">str</span>, url: <span class="t">str</span>) -&gt; Request</code> <span class="src">stdlib/httpc/httpc.sl:658</span><a class="anchor" href="#new-request">#</a></div></div><div class="api-item" id="send"><div class="api-sig"><code><span class="k">fn</span> <span class="f">send</span>(req: Request, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Response, <span class="t">str</span>]</code> <span class="src">stdlib/httpc/httpc.sl:684</span><a class="anchor" href="#send">#</a></div></div><div class="api-item" id="get"><div class="api-sig"><code><span class="k">fn</span> <span class="f">get</span>(url: <span class="t">str</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Response, <span class="t">str</span>]</code> <span class="src">stdlib/httpc/httpc.sl:748</span><a class="anchor" href="#get">#</a></div></div><div class="api-item" id="head"><div class="api-sig"><code><span class="k">fn</span> <span class="f">head</span>(url: <span class="t">str</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Response, <span class="t">str</span>]</code> <span class="src">stdlib/httpc/httpc.sl:752</span><a class="anchor" href="#head">#</a></div></div><div class="api-item" id="post"><div class="api-sig"><code><span class="k">fn</span> <span class="f">post</span>(url: <span class="t">str</span>, content_type: <span class="t">str</span>, body: <span class="t">bytes</span>,</code> <span class="src">stdlib/httpc/httpc.sl:756</span><a class="anchor" href="#post">#</a></div></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

@@ -331,6 +331,97 @@ a single token.
   can be async-preempted between the `snprintf` and the copy and resume
   on another worker, where thread-local storage is a different thread's.
 
+## HTTP client (done)
+
+- [x] `httpc` — HTTP/1.1 client over `net`, http and https. A slang
+  source package, not native: it is composition over `net` + `strings`,
+  with no C to write.
+
+  **Why it was the next thing.** `stdlib/http` is entirely server-facing
+  — `parse` reads a REQUEST, `serialize` writes a RESPONSE — so a slang
+  service could answer calls and could not make one. No webhooks, no
+  payment APIs, no object storage, no auth callback, no talking to
+  another service in the same cluster. For a language built primarily
+  for server-side and network programming that is a larger hole than any
+  single missing syntax feature. It waited on `encoding` because
+  percent-encoding and base64 are its prerequisites, not its garnish.
+
+  **Separate package rather than folded into `http`.** `http` imports
+  only `byteutil`; a client must import `net`, and an https request
+  drags `-lssl`/`-lcrypto` onto the link line. Folding them would put
+  that cost on every program that merely wanted to serve HTTP.
+
+  **Transport, not `link`.** The same call `http2/conn.sl` made and for
+  the same reason: `link` is move-only, and a redirect chain hands the
+  connection through several frames. An fd for http, an SSL handle for
+  https, behind three functions.
+
+  **A 404 is a `Response`, not an `err`.** The `result` is about whether
+  the exchange happened — DNS, connect, TLS, framing. A server that
+  answers "no" answered. Collapsing them would make a 404
+  indistinguishable from a connection refusal at the call site.
+
+  **Security decisions, all verified rather than assumed:**
+
+  - Certificates are verified and nothing turns that off. Checked
+    against badssl.com: `expired`, `self-signed` and `wrong.host` are
+    all refused with `certificate verify failed`; a valid cert is
+    accepted. A private CA is served by `ca_path`, which is a different
+    trust anchor rather than a disabled check. (The first attempt got
+    this wrong in the other direction: `net.tls_client_ctx` takes a CA
+    PATH, not a hostname, and passing the host made every https request
+    fail with "No such file or directory". SNI and hostname
+    verification are `net.tls_dial`'s job — `SSL_set_tlsext_host_name`
+    plus `SSL_set1_host`.)
+  - `Authorization`, `Cookie` and `Proxy-Authorization` are dropped when
+    a redirect changes scheme, host or port. The server that sent the
+    `Location` chose where it points, which is exactly how a token gets
+    exfiltrated. Same-origin redirects keep them.
+  - Credentials in a URL (`http://user:pw@host`) are REFUSED, not
+    silently dropped — dropping them sends an unauthenticated request
+    that returns 401 with no visible cause.
+  - Every buffer a server can make the client fill has a ceiling: 64 KiB
+    of headers, 32 MiB of body, a bounded chunk-size line.
+
+  **Redirect method rules follow browsers, not the RFC's original
+  wording**: 303 always becomes GET, and 301/302 after a POST do too,
+  because that is what browsers and curl do and therefore what servers
+  expect. 307/308 preserve the method, which is what they exist for.
+
+  **Response framing covers all four shapes** a real server produces:
+  Content-Length, chunked (with extensions ignored and trailers read and
+  discarded), bodiless by status (HEAD, 204, 304, 1xx — where a
+  Content-Length is advisory and believing it hangs the client), and
+  framed only by the connection closing, which is why every request
+  sends `Connection: close`.
+
+  **Testing is against a canned server in the test program itself**,
+  speaking raw fds, because most of these cases are response shapes a
+  cooperative server will not produce on demand — a chunked body with a
+  trailer, a 204 carrying a Content-Length it is not allowed to have, a
+  redirect loop, a HEAD whose Content-Length describes a body that never
+  arrives. Writing the bytes by hand is the only way to be sure the
+  client saw them. The https path is NOT in the suite, because a test
+  that needs the internet fails for reasons that have nothing to do with
+  the code; it was verified by hand against example.com and badssl.com.
+
+  Confirmed to FAIL under three controls: cross-origin credential
+  stripping disabled (the `Bearer` token reached the other origin),
+  302-after-POST preserving the method, and chunk extensions no longer
+  ignored.
+
+  One trap worth remembering, and it cost a compile: a test directory
+  named `tests/httpc/` makes the TEST's own package `httpc`, which
+  collides with the stdlib package it imports. Renamed to
+  `tests/http_client/`.
+
+  **Not done, deliberately:** no connection pooling (pooling means
+  idle-connection eviction, per-host limits and a reaper task — a real
+  project, built on top of this rather than inside it), no gzip (nothing
+  links zlib, and advertising an encoding you cannot decode is worse
+  than not asking), no cookie jar, no HTTP/2 client, no multipart
+  bodies. All additive.
+
 ## Notes
 
 - Do not change `bench/http/main.sl` for perf experiments. Raw-best slang is `bench/http_opt/main.sl`; remasure with `./bench/run_http_opt.sh`.
