@@ -337,6 +337,27 @@ tr:last-child td { border-bottom: 0; }
 .features h3 { margin: 0 0 .35rem; font: 600 1rem var(--sans); }
 .features p { margin: 0; color: var(--fg-2); font-size: .92rem; }
 
+/* ---- benchmark scoreboard ----
+   Semantic colour is separate from the accent, and never the only
+   signal: the verdict column carries a word, and win/lose cells are
+   weighted as well as tinted, so the table survives a monochrome
+   print and a colour-blind reader. */
+td.win  { color: var(--trace); font-weight: 550; }
+td.lose { color: var(--amber); }
+.v {
+  display: inline-block; font: 600 .68rem var(--mono);
+  text-transform: uppercase; letter-spacing: .06em;
+  padding: .12rem .45rem; border-radius: 3px; border: 1px solid;
+}
+.v.win   { color: var(--trace); border-color: var(--trace); }
+.v.lose  { color: var(--amber); border-color: var(--amber); }
+.v.mixed { color: var(--fg-2); border-color: var(--line-2); }
+.figure-note {
+  font-size: .82rem; color: var(--fg-3); margin-top: -.4rem;
+  padding-left: .1rem; border-left: 2px solid var(--line);
+  padding-left: .7rem;
+}
+
 /* ---- table of contents ---- */
 .toc { display: none; }
 @media (min-width: 64rem) {

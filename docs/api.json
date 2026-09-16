@@ -86,6 +86,121 @@
         }
       ]
     },
+    "encoding": {
+      "name": "encoding",
+      "kind": "native",
+      "items": [
+        {
+          "name": "hex_encode",
+          "params": [
+            "bytes"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "encoding.hex_encode(bytes) -> str"
+        },
+        {
+          "name": "hex_decode",
+          "params": [
+            "str"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "encoding.hex_decode(str) -> result[bytes,str]"
+        },
+        {
+          "name": "base64_encode",
+          "params": [
+            "bytes"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "encoding.base64_encode(bytes) -> str"
+        },
+        {
+          "name": "base64_decode",
+          "params": [
+            "str"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "encoding.base64_decode(str) -> result[bytes,str]"
+        },
+        {
+          "name": "base64url_encode",
+          "params": [
+            "bytes"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "encoding.base64url_encode(bytes) -> str"
+        },
+        {
+          "name": "base64url_decode",
+          "params": [
+            "str"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "encoding.base64url_decode(str) -> result[bytes,str]"
+        },
+        {
+          "name": "url_encode",
+          "params": [
+            "str"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "encoding.url_encode(str) -> str"
+        },
+        {
+          "name": "url_decode",
+          "params": [
+            "str"
+          ],
+          "ret": "result[str,str]",
+          "tls": false,
+          "sig": "encoding.url_decode(str) -> result[str,str]"
+        },
+        {
+          "name": "form_encode",
+          "params": [
+            "str"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "encoding.form_encode(str) -> str"
+        },
+        {
+          "name": "form_decode",
+          "params": [
+            "str"
+          ],
+          "ret": "result[str,str]",
+          "tls": false,
+          "sig": "encoding.form_decode(str) -> result[str,str]"
+        },
+        {
+          "name": "query_get",
+          "params": [
+            "str",
+            "str"
+          ],
+          "ret": "opt[str]",
+          "tls": false,
+          "sig": "encoding.query_get(str, str) -> opt[str]"
+        },
+        {
+          "name": "query_keys",
+          "params": [
+            "str"
+          ],
+          "ret": "[str]",
+          "tls": false,
+          "sig": "encoding.query_keys(str) -> [str]"
+        }
+      ]
+    },
     "fs": {
       "name": "fs",
       "kind": "native",
@@ -1285,6 +1400,92 @@
           "doc": "Index of any entry with this name, or 0 -- lets the encoder reference a known name and send only the value as a literal.",
           "file": "stdlib/http2/static_table.sl",
           "line": 81
+        }
+      ]
+    },
+    "httpc": {
+      "name": "httpc",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Url",
+          "decl": "struct",
+          "sig": "gc struct Url",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 46
+        },
+        {
+          "name": "Request",
+          "decl": "struct",
+          "sig": "gc struct Request",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 53
+        },
+        {
+          "name": "Response",
+          "decl": "struct",
+          "sig": "gc struct Response",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 70
+        },
+        {
+          "name": "parse_url",
+          "decl": "fn",
+          "sig": "fn parse_url(u: str) -> result[Url, str]",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 101
+        },
+        {
+          "name": "header",
+          "decl": "fn",
+          "sig": "fn header(r: Response, name: str) -> opt[str]",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 385
+        },
+        {
+          "name": "new_request",
+          "decl": "fn",
+          "sig": "fn new_request(method: str, url: str) -> Request",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 658
+        },
+        {
+          "name": "send",
+          "decl": "fn",
+          "sig": "fn send(req: Request, deadline: until) -> result[Response, str]",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 684
+        },
+        {
+          "name": "get",
+          "decl": "fn",
+          "sig": "fn get(url: str, deadline: until) -> result[Response, str]",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 748
+        },
+        {
+          "name": "head",
+          "decl": "fn",
+          "sig": "fn head(url: str, deadline: until) -> result[Response, str]",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 752
+        },
+        {
+          "name": "post",
+          "decl": "fn",
+          "sig": "fn post(url: str, content_type: str, body: bytes,",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 756
         }
       ]
     },

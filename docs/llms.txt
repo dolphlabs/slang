@@ -12,15 +12,18 @@ Every page on this site has a Markdown twin at the same path with a .md extensio
 - [Errors](guide/errors.md): opt, result and fault -- and the rule for choosing.
 - [Function values](guide/functions.md): Functions as values, deliberately without closures.
 - [Concurrency](concurrency/index.md): M:N green threads, channels, select and mutex.
+- [Benchmarks](bench/index.md): Every cross-language run, including the ones slang loses.
 - [Packages](packages/index.md): The standard library, and how imports resolve.
 - [C interop](interop/index.md): Calling C, and the safety rules that come with it.
 - [How it works](internals/index.md): The compiler pipeline, the collector, the scheduler.
 - [Limitations](limitations/index.md): What slang does not do, stated plainly.
 - [byteutil](packages/byteutil.md): Package byteutil.
 - [crypto](packages/crypto.md): Package crypto.
+- [encoding](packages/encoding.md): Package encoding.
 - [fs](packages/fs.md): Package fs.
 - [http](packages/http.md): Package http.
 - [http2](packages/http2.md): Package http2.
+- [httpc](packages/httpc.md): Package httpc.
 - [json](packages/json.md): Package json.
 - [log](packages/log.md): Package log.
 - [net](packages/net.md): Package net.

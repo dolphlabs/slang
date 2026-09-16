@@ -106,6 +106,14 @@ PAGES = [
         "sections": ["Concurrency"],
     },
     {
+        "path": "bench/index.html",
+        "title": "Benchmarks",
+        "tagline": "Every cross-language run, including the ones slang loses.",
+        "kind": "bench",
+        "nav": "Benchmarks",
+        "sections": [],
+    },
+    {
         "path": "packages/index.html",
         "title": "Packages",
         "tagline": "The standard library, and how imports resolve.",
@@ -154,8 +162,10 @@ PACKAGE_SECTIONS = {
     "regex": ["`regex`"],
     "http2": ["`http2`"],
     "strings": ["`strings`"],
+    "encoding": ["`encoding`"],
     "byteutil": ["`byteutil`"],
     "http": ["`http`"],
+    "httpc": ["`httpc`"],
 }
 
 # --------------------------------------------------------------------
@@ -382,6 +392,9 @@ def inline(text):
     return text
 
 
+SLUGS = set()
+
+
 def md_to_html(lines, heading_shift=0):
     out, i, n = [], 0, len(lines)
     while i < n:
@@ -407,6 +420,15 @@ def md_to_html(lines, heading_shift=0):
             text = m.group(2)
             slug = re.sub(r"[^a-z0-9]+", "-",
                           re.sub(r"`", "", text).lower()).strip("-")
+            # RESULTS.md holds two runs, each with its own "Verdict" and
+            # "Machine" heading; duplicate ids would make every anchor to
+            # the second one land on the first.
+            if slug in SLUGS:
+                k = 2
+                while "%s-%d" % (slug, k) in SLUGS:
+                    k += 1
+                slug = "%s-%d" % (slug, k)
+            SLUGS.add(slug)
             out.append('<h%d id="%s">%s<a class="anchor" href="#%s" '
                        'aria-label="Link to this section">#</a></h%d>'
                        % (lv, slug, inline(text), slug, lv))
@@ -558,6 +580,7 @@ def build(out_dir):
     for p in pages:
         depth = p["path"].count("/")
         body_parts, md_parts = [], []
+        SLUGS.clear()
 
         if p["kind"] == "home":
             body_parts.append(home_body())
@@ -592,6 +615,17 @@ def build(out_dir):
                 body_parts.append(md_to_html(lines, heading_shift=shift))
                 md_parts.append("## %s\n\n%s" % (name.replace("`", ""),
                                                  "\n".join(lines).strip()))
+
+        if p["kind"] == "bench":
+            body_parts.append(bench_body())
+            md_parts.append(bench_md())
+            results = ROOT / "bench" / "RESULTS.md"
+            if results.exists():
+                raw = results.read_text(encoding="utf-8").splitlines()
+                body_parts.append(md_to_html(raw, heading_shift=1))
+                md_parts.append("\n".join(raw).strip())
+            else:
+                print("  ! bench/RESULTS.md not found", file=sys.stderr)
 
         if p["kind"] == "packages":
             body_parts.append(package_index_html(all_pkgs, depth))
@@ -797,6 +831,7 @@ HERO = """
     <div class="cta">
       <a class="btn primary" href="./guide/">Read the guide</a>
       <a class="btn" href="./packages/">Browse packages</a>
+      <a class="btn" href="./bench/">Benchmarks</a>
       <a class="btn ghost" href="./llms.txt">llms.txt</a>
     </div>
   </div>
@@ -814,6 +849,97 @@ HERO = """
   </div>
 </div>
 """
+
+
+BENCH_LEAD_MD = """slang is measured against C, Go, Rust, Java, Zig and C# on the same
+machine, in the same session, with every toolchain version and the exact
+commit recorded. The full record below is reproduced verbatim from
+`bench/RESULTS.md`, including the runs where slang loses.
+
+**The headline is a loss.** In that file's own words: *slang does not win
+Phase E HTTP vs Go / C / Rust.* It is faster than Go on HTTP throughput
+and compute wall time, and compiles far faster than Rust, but it loses
+tail latency and memory to Go, C and Rust -- and those are the axes that
+were declared the win conditions before the numbers came in.
+
+The rule that makes this worth reading: **RPS alone is not a win.** A
+win against Go requires higher throughput *or* lower p99, **and** lower
+RSS. slang has the first and not the second, so it is recorded as a
+loss."""
+
+
+def bench_body():
+    return """
+<p>slang is measured against <strong>C, Go, Rust, Java, Zig and
+  C#</strong> on the same machine, in the same session, with every
+  toolchain version and the exact commit recorded. The full record below
+  is reproduced verbatim from <code>bench/RESULTS.md</code>, including
+  the runs where slang loses.</p>
+
+<blockquote><p><strong>The headline is a loss.</strong> In that file\'s
+  own words: <em>slang does not win Phase E HTTP vs Go / C /
+  Rust.</em></p></blockquote>
+
+<p>It is faster than Go on HTTP throughput and on compute wall time, and
+  compiles far faster than Rust &mdash; but it loses tail latency and
+  memory to Go, C and Rust, and those are the axes that were declared
+  the win conditions <em>before</em> the numbers came in.</p>
+
+<h2 id="the-rule">The rule that makes this worth reading
+  <a class="anchor" href="#the-rule">#</a></h2>
+
+<p><strong>RPS alone is not a win.</strong> A win against Go requires
+  higher throughput <em>or</em> lower p99, <strong>and</strong> lower
+  RSS. slang has the first and not the second, so it is recorded as a
+  loss. Benchmarks that quote only the number that flatters them are
+  the reason nobody believes benchmarks.</p>
+
+<h2 id="where-it-stands">Where it stands
+  <a class="anchor" href="#where-it-stands">#</a></h2>
+
+<div class="tablewrap"><table>
+<thead><tr><th>vs</th><th>HTTP throughput</th><th>HTTP p99</th>
+  <th>Memory</th><th>Compile</th><th>Verdict</th></tr></thead>
+<tbody>
+<tr><td>C</td><td class="lose">23% lower</td><td class="lose">16.8&times; worse</td>
+  <td class="lose">32&times;</td><td class="lose">0.48s vs 0.08s</td>
+  <td><span class="v lose">lose</span></td></tr>
+<tr><td>Go</td><td class="win">+14%</td><td class="lose">6.9&times; worse</td>
+  <td class="lose">3.7&times;</td><td class="win">0.48s vs 5.81s</td>
+  <td><span class="v lose">lose</span></td></tr>
+<tr><td>Rust</td><td class="win">+1.5%</td><td class="lose">12.8&times; worse</td>
+  <td class="lose">13.4&times;</td><td class="win">0.48s vs 11.62s</td>
+  <td><span class="v lose">lose</span></td></tr>
+<tr><td>Java</td><td class="win">1.9&times;</td><td class="lose">3.6&times; worse</td>
+  <td class="win">6.6&times; better</td><td>similar</td>
+  <td><span class="v mixed">mixed</span></td></tr>
+<tr><td>Zig</td><td class="win">2.0&times;</td><td class="lose">9.1&times; worse</td>
+  <td class="lose">78&times; worse</td><td class="win">0.48s vs 6.94s</td>
+  <td><span class="v mixed">mixed</span></td></tr>
+<tr><td>C#</td><td class="win">2.0&times;</td><td class="win">better</td>
+  <td class="win">3.6&times; better</td><td class="win">0.48s vs 1.73s</td>
+  <td><span class="v win">win</span></td></tr>
+</tbody></table></div>
+
+<p class="figure-note">Median of three rounds at c=50, Linux, 4-core
+  Xeon. Full per-round tables, the c=200 set, compute wall times and the
+  machine specification are below.</p>
+
+<h2 id="also-measured">Also measured
+  <a class="anchor" href="#also-measured">#</a></h2>
+
+<p>Beyond the cross-language comparison, <code>stress_test/</code> holds
+  a scaling suite for slang on its own: request-count scaling from 10k
+  to 100k, concurrency scaling to 2,000 connections, per-endpoint
+  characterisation, a breaking-point probe, a soak test, CPU profiles,
+  and a concurrent-task curve with no network in the way at all. Its
+  write-up is
+  <code>stress_test/reports/stress_report.html</code>.</p>
+"""
+
+
+def bench_md():
+    return BENCH_LEAD_MD
 
 
 def home_body():

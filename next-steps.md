@@ -4,9 +4,9 @@ Track progress top to bottom; tick items as they land. The HTTP perf
 chase is won on the raw axis (Phase E vs Go on p99 **and** RSS, PR #59
 records the numbers); the ruler stays frozen and Round 2 follow-ups
 live in `optimisation.md`. Error model gaps are done. Every item below is
-now ticked; `crypto`, SQL, `regex`, HTTP/2 and `os` have all landed,
-and so have the two concurrency primitives (`mutex`, `select`) at the
-bottom of this file.
+now ticked; `crypto`, SQL, `regex`, HTTP/2, `os` and `encoding` have all
+landed, and so have the two concurrency primitives (`mutex`, `select`)
+at the bottom of this file.
 
 ## HTTP perf (won on raw axis, ruler frozen)
 
@@ -259,6 +259,168 @@ a single token.
   public, one-way actions; `make dist` produces the relocatable tarball
   and the tag is one command when someone decides to cut v0.1.0.
 
+
+## Encoding (done)
+
+- [x] `encoding` — hex, base64, base64url, percent-encoding, query
+  strings. Native package, pure computation, no link flag (like
+  `regex`/`strings`/`os`).
+
+  **Picked by the same test the rest of this file uses: the codebase had
+  already written the gap down.** `tests/crypto/main.sl` asserts on a
+  SHA-256 digest byte by DECIMAL value (`expect_byte(h, 0, 186)` —
+  that is `0xba` hand-converted) because slang could compute a digest
+  and then had no way to display or store one. base64 had existed since
+  `json` landed but only INSIDE `sl_json.c`, as a private detail of
+  encoding a `bytes` field; nothing could call it. Between them that
+  ruled out HTTP Basic auth, JWTs, `application/x-www-form-urlencoded`
+  bodies, percent-decoded query parameters and hex digests in logs or
+  ETags — for a language built primarily for server-side and network
+  programming.
+
+  **The shape is asymmetric on purpose.** Encoding never fails — any
+  byte string has a hex form — so the encoders return a bare `str`.
+  Decoding takes input the program did not produce, so every decoder
+  returns `result[_, str]` naming the byte OFFSET it gave up at, because
+  "invalid base64" about a 400-character token is not a diagnosis.
+
+  **`str` vs `bytes` decides every return type, and is load-bearing.**
+  `hex_decode`/`base64_decode` yield arbitrary bytes and return `bytes`,
+  which carries an explicit length, so a decoded zero byte is ordinary
+  data. `url_decode`/`form_decode` yield text and return `str`, which is
+  NUL-terminated — so `%00` CANNOT be represented, and they refuse it
+  rather than hand back a value silently cut short. That is the same
+  rule `to_int` follows: leniency a caller did not ask for cannot be
+  undone.
+
+  **`url_*` and `form_*` are separate names rather than one function
+  with a flag**, because they differ only in `+` (a space in a form
+  body, a literal plus in a URI) and getting it backwards is SILENT —
+  the failure surfaces much later as a lookup that does not match. A
+  flag would have made that the default mistake.
+
+  `query_get` returns `opt[str]` (a missing parameter is absent data,
+  not bad data) and takes the first value; `query_keys` returns a list
+  rather than a map, because a query may legally repeat a key and a map
+  would have to drop one — the same reasoning that made `os.environ` a
+  list. A bare `?debug` is present with an empty value, not absent.
+
+  Two details checked against the specs rather than assumed: percent-
+  escapes are emitted UPPERCASE (RFC 3986 §2.1) while hex digests are
+  lowercase (`sha256sum`, git, every API that returns one), with both
+  decoders accepting either case; and `base64url` omits padding (RFC
+  4648 §5, what JWT uses) but TOLERATES it on the way in, since
+  producers differ. The alphabets are not interchangeable and the error
+  says which to try.
+
+  Every vector in `tests/encoding/` was cross-checked against Python's
+  `base64`/`hashlib`/`urllib.parse` before the expected output was
+  frozen — all seven RFC 4648 padding cases, the RFC 7617 Basic-auth
+  example, UTF-8 percent-encoding, and query parsing including the bare
+  flag. The test was then confirmed to FAIL under three separate
+  controls: `form_decode` not treating `+` as a space (the silent bug
+  above), `%00` accepted instead of refused, and percent-escapes emitted
+  lowercase.
+
+  One runtime detail worth keeping: `sl_bytes_new` COPIES from its
+  argument, so it cannot allocate a buffer to be filled in place —
+  `sl_bytes_new(NULL, n)` memcpys from NULL. The decoders know their
+  output size up front, so they allocate the same two-part shape
+  directly (`sl_enc_bytes_raw`). Error messages format into a buffer the
+  caller owns on its own stack rather than a `_Thread_local` one: a task
+  can be async-preempted between the `snprintf` and the copy and resume
+  on another worker, where thread-local storage is a different thread's.
+
+## HTTP client (done)
+
+- [x] `httpc` — HTTP/1.1 client over `net`, http and https. A slang
+  source package, not native: it is composition over `net` + `strings`,
+  with no C to write.
+
+  **Why it was the next thing.** `stdlib/http` is entirely server-facing
+  — `parse` reads a REQUEST, `serialize` writes a RESPONSE — so a slang
+  service could answer calls and could not make one. No webhooks, no
+  payment APIs, no object storage, no auth callback, no talking to
+  another service in the same cluster. For a language built primarily
+  for server-side and network programming that is a larger hole than any
+  single missing syntax feature. It waited on `encoding` because
+  percent-encoding and base64 are its prerequisites, not its garnish.
+
+  **Separate package rather than folded into `http`.** `http` imports
+  only `byteutil`; a client must import `net`, and an https request
+  drags `-lssl`/`-lcrypto` onto the link line. Folding them would put
+  that cost on every program that merely wanted to serve HTTP.
+
+  **Transport, not `link`.** The same call `http2/conn.sl` made and for
+  the same reason: `link` is move-only, and a redirect chain hands the
+  connection through several frames. An fd for http, an SSL handle for
+  https, behind three functions.
+
+  **A 404 is a `Response`, not an `err`.** The `result` is about whether
+  the exchange happened — DNS, connect, TLS, framing. A server that
+  answers "no" answered. Collapsing them would make a 404
+  indistinguishable from a connection refusal at the call site.
+
+  **Security decisions, all verified rather than assumed:**
+
+  - Certificates are verified and nothing turns that off. Checked
+    against badssl.com: `expired`, `self-signed` and `wrong.host` are
+    all refused with `certificate verify failed`; a valid cert is
+    accepted. A private CA is served by `ca_path`, which is a different
+    trust anchor rather than a disabled check. (The first attempt got
+    this wrong in the other direction: `net.tls_client_ctx` takes a CA
+    PATH, not a hostname, and passing the host made every https request
+    fail with "No such file or directory". SNI and hostname
+    verification are `net.tls_dial`'s job — `SSL_set_tlsext_host_name`
+    plus `SSL_set1_host`.)
+  - `Authorization`, `Cookie` and `Proxy-Authorization` are dropped when
+    a redirect changes scheme, host or port. The server that sent the
+    `Location` chose where it points, which is exactly how a token gets
+    exfiltrated. Same-origin redirects keep them.
+  - Credentials in a URL (`http://user:pw@host`) are REFUSED, not
+    silently dropped — dropping them sends an unauthenticated request
+    that returns 401 with no visible cause.
+  - Every buffer a server can make the client fill has a ceiling: 64 KiB
+    of headers, 32 MiB of body, a bounded chunk-size line.
+
+  **Redirect method rules follow browsers, not the RFC's original
+  wording**: 303 always becomes GET, and 301/302 after a POST do too,
+  because that is what browsers and curl do and therefore what servers
+  expect. 307/308 preserve the method, which is what they exist for.
+
+  **Response framing covers all four shapes** a real server produces:
+  Content-Length, chunked (with extensions ignored and trailers read and
+  discarded), bodiless by status (HEAD, 204, 304, 1xx — where a
+  Content-Length is advisory and believing it hangs the client), and
+  framed only by the connection closing, which is why every request
+  sends `Connection: close`.
+
+  **Testing is against a canned server in the test program itself**,
+  speaking raw fds, because most of these cases are response shapes a
+  cooperative server will not produce on demand — a chunked body with a
+  trailer, a 204 carrying a Content-Length it is not allowed to have, a
+  redirect loop, a HEAD whose Content-Length describes a body that never
+  arrives. Writing the bytes by hand is the only way to be sure the
+  client saw them. The https path is NOT in the suite, because a test
+  that needs the internet fails for reasons that have nothing to do with
+  the code; it was verified by hand against example.com and badssl.com.
+
+  Confirmed to FAIL under three controls: cross-origin credential
+  stripping disabled (the `Bearer` token reached the other origin),
+  302-after-POST preserving the method, and chunk extensions no longer
+  ignored.
+
+  One trap worth remembering, and it cost a compile: a test directory
+  named `tests/httpc/` makes the TEST's own package `httpc`, which
+  collides with the stdlib package it imports. Renamed to
+  `tests/http_client/`.
+
+  **Not done, deliberately:** no connection pooling (pooling means
+  idle-connection eviction, per-host limits and a reaper task — a real
+  project, built on top of this rather than inside it), no gzip (nothing
+  links zlib, and advertising an encoding you cannot decode is worse
+  than not asking), no cookie jar, no HTTP/2 client, no multipart
+  bodies. All additive.
 
 ## Notes
 

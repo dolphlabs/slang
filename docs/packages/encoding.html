@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>encoding — slang</title>
+<meta name="description" content="Package encoding.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="encoding">
+<meta property="og:description" content="Package encoding.">
+<meta property="og:type" content="website">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/encoding.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <nav class="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../bench/index.html">Benchmarks</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>encoding</h1>
+      <p class="tagline">Package encoding.</p>
+      <p class="agentline">
+        <a href="../packages/encoding.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>Hex, base64, base64url, percent-encoding and query strings — the four ways arbitrary bytes travel through a channel that only carries text.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;encoding&quot;</span>;
+
+encoding.<span class="f">hex_encode</span>(crypto.<span class="f">sha256</span>(b<span class="s">&quot;abc&quot;</span>));   <span class="c">// &quot;ba7816bf8f01cfea...&quot;</span>
+encoding.<span class="f">base64_encode</span>(b<span class="s">&quot;aladdin:opensesame&quot;</span>);<span class="c">// HTTP Basic credentials</span>
+encoding.<span class="f">base64url_encode</span>(sig);               <span class="c">// a JWT segment: -_ alphabet, no padding</span>
+encoding.<span class="f">url_encode</span>(<span class="s">&quot;a b&amp;c&quot;</span>);                 <span class="c">// &quot;a%20b%26c&quot;</span>
+encoding.<span class="f">form_encode</span>(<span class="s">&quot;a b&amp;c&quot;</span>);                <span class="c">// &quot;a+b%26c&quot;</span>
+
+<span class="k">let</span> q = <span class="s">&quot;/search?q=hello+world&amp;page=2&quot;</span>;
+<span class="k">guard</span> <span class="k">let</span> term = encoding.<span class="f">query_get</span>(q, <span class="s">&quot;q&quot;</span>) <span class="k">else</span> { <span class="k">return</span>; }   <span class="c">// &quot;hello world&quot;</span>
+encoding.<span class="f">query_keys</span>(q);                                        <span class="c">// [&quot;q&quot;, &quot;page&quot;]</span></code></pre></div>
+<div class="tablewrap"><table><thead><tr><th>Function</th><th>Signature</th></tr></thead><tbody><tr><td><code>encoding.hex_encode</code></td><td><code>(b: bytes) -&gt; str</code></td></tr><tr><td><code>encoding.hex_decode</code></td><td><code>(s: str) -&gt; result[bytes, str]</code></td></tr><tr><td><code>encoding.base64_encode</code></td><td><code>(b: bytes) -&gt; str</code></td></tr><tr><td><code>encoding.base64_decode</code></td><td><code>(s: str) -&gt; result[bytes, str]</code></td></tr><tr><td><code>encoding.base64url_encode</code></td><td><code>(b: bytes) -&gt; str</code></td></tr><tr><td><code>encoding.base64url_decode</code></td><td><code>(s: str) -&gt; result[bytes, str]</code></td></tr><tr><td><code>encoding.url_encode</code></td><td><code>(s: str) -&gt; str</code></td></tr><tr><td><code>encoding.url_decode</code></td><td><code>(s: str) -&gt; result[str, str]</code></td></tr><tr><td><code>encoding.form_encode</code></td><td><code>(s: str) -&gt; str</code></td></tr><tr><td><code>encoding.form_decode</code></td><td><code>(s: str) -&gt; result[str, str]</code></td></tr><tr><td><code>encoding.query_get</code></td><td><code>(url: str, key: str) -&gt; opt[str]</code></td></tr><tr><td><code>encoding.query_keys</code></td><td><code>(url: str) -&gt; [str]</code></td></tr></tbody></table></div>
+<p>Like <code>regex</code>, <code>strings</code> and <code>os</code> — and unlike <code>crypto</code> and <code>sql</code> — this is pure computation, so importing it adds no link flag.</p>
+<p>Four things worth knowing:</p>
+<ul><li><strong>Encoders are infallible; decoders are not.</strong> Any byte string has a hex form, so <code>hex_encode</code> returns a bare <code>str</code>. Decoding takes input the program did not produce — a query string, a header, a token — so every decoder returns <code>result[_, str]</code>, and the message names the byte offset it gave up at. &quot;invalid base64&quot; about a 400-character token is not a diagnosis.</li><li><strong><code>url_*</code> and <code>form_*</code> differ only in <code>+</code>, and that is exactly why they have separate names.</strong> In <code>application/x-www-form-urlencoded</code> a space is <code>+</code>; in a URI it is <code>%20</code>. Decoding a form body with <code>url_decode</code> leaves literal <code>+</code> where every space belongs, and nothing reports it — the failure surfaces later as a lookup that does not match. One function with a flag would make that the default mistake.</li><li><strong><code>%00</code> is an error, not a truncation.</strong> <code>url_decode</code> and <code>form_decode</code> return <code>str</code>, which is NUL-terminated, so a decoded zero byte would silently cut the value short. They refuse it and say so. <code>hex_decode</code> and <code>base64_decode</code> return <code>bytes</code>, which carries an explicit length, so a zero byte there is ordinary data and round-trips exactly.</li><li><strong><code>query_get</code> is <code>opt</code>, and <code>query_keys</code> is a list.</strong> A missing parameter is absent data, not bad data, so it is <code>opt[str]</code> — the README rule above. Keys come back as a list rather than a map because a query may legally repeat a key and a map would have to drop one, the same reason <code>os.environ</code> is a list. <code>query_get</code> takes the first value; a bare <code>?debug</code> is present with an empty value, not absent.</li></ul>
+<p>Percent-escapes are emitted uppercase (RFC 3986 §2.1) and hex digests lowercase (what <code>sha256sum</code>, git and every API that returns one use). Both decoders accept either case.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="hex-encode"><div class="api-sig"><code>encoding.<span class="f">hex_encode</span>(<span class="t">bytes</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#hex-encode">#</a></div></div><div class="api-item" id="hex-decode"><div class="api-sig"><code>encoding.<span class="f">hex_decode</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>,<span class="t">str</span>]</code><a class="anchor" href="#hex-decode">#</a></div></div><div class="api-item" id="base64-encode"><div class="api-sig"><code>encoding.<span class="f">base64_encode</span>(<span class="t">bytes</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#base64-encode">#</a></div></div><div class="api-item" id="base64-decode"><div class="api-sig"><code>encoding.<span class="f">base64_decode</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>,<span class="t">str</span>]</code><a class="anchor" href="#base64-decode">#</a></div></div><div class="api-item" id="base64url-encode"><div class="api-sig"><code>encoding.<span class="f">base64url_encode</span>(<span class="t">bytes</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#base64url-encode">#</a></div></div><div class="api-item" id="base64url-decode"><div class="api-sig"><code>encoding.<span class="f">base64url_decode</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>,<span class="t">str</span>]</code><a class="anchor" href="#base64url-decode">#</a></div></div><div class="api-item" id="url-encode"><div class="api-sig"><code>encoding.<span class="f">url_encode</span>(<span class="t">str</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#url-encode">#</a></div></div><div class="api-item" id="url-decode"><div class="api-sig"><code>encoding.<span class="f">url_decode</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>,<span class="t">str</span>]</code><a class="anchor" href="#url-decode">#</a></div></div><div class="api-item" id="form-encode"><div class="api-sig"><code>encoding.<span class="f">form_encode</span>(<span class="t">str</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#form-encode">#</a></div></div><div class="api-item" id="form-decode"><div class="api-sig"><code>encoding.<span class="f">form_decode</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>,<span class="t">str</span>]</code><a class="anchor" href="#form-decode">#</a></div></div><div class="api-item" id="query-get"><div class="api-sig"><code>encoding.<span class="f">query_get</span>(<span class="t">str</span>, <span class="t">str</span>) -&gt; <span class="t">opt</span>[<span class="t">str</span>]</code><a class="anchor" href="#query-get">#</a></div></div><div class="api-item" id="query-keys"><div class="api-sig"><code>encoding.<span class="f">query_keys</span>(<span class="t">str</span>) -&gt; [<span class="t">str</span>]</code><a class="anchor" href="#query-keys">#</a></div></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

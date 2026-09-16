@@ -5,12 +5,12 @@
 ## Standard packages
 
 `time`, `net`, `json`, `proc`, `fs`, `log`, `crypto`, `sql`, `regex`,
-`os` and `strings` are compiler-provided native packages — no source files, just
+`os`, `strings` and `encoding` are compiler-provided native packages — no source files, just
 `import "time";` / `import "net";` / `import "json";` / `import "proc";`
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
-/ `import "regex";` like any other package.
+/ `import "regex";` / `import "encoding";` like any other package.
 
-`http`, `http2` and `byteutil` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2` and `byteutil` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
 then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
 compiler's `SLANG_STDLIB_DIR`).
@@ -821,6 +821,163 @@ Three behaviours worth knowing:
   and `join(split(s, sep), sep) == s` for any non-empty separator. An
   empty separator splits into single bytes.
 
+#### `encoding`
+
+Hex, base64, base64url, percent-encoding and query strings — the four
+ways arbitrary bytes travel through a channel that only carries text.
+
+```slang
+import "encoding";
+
+encoding.hex_encode(crypto.sha256(b"abc"));   // "ba7816bf8f01cfea..."
+encoding.base64_encode(b"aladdin:opensesame");// HTTP Basic credentials
+encoding.base64url_encode(sig);               // a JWT segment: -_ alphabet, no padding
+encoding.url_encode("a b&c");                 // "a%20b%26c"
+encoding.form_encode("a b&c");                // "a+b%26c"
+
+let q = "/search?q=hello+world&page=2";
+guard let term = encoding.query_get(q, "q") else { return; }   // "hello world"
+encoding.query_keys(q);                                        // ["q", "page"]
+```
+
+| Function | Signature |
+|---|---|
+| `encoding.hex_encode` | `(b: bytes) -> str` |
+| `encoding.hex_decode` | `(s: str) -> result[bytes, str]` |
+| `encoding.base64_encode` | `(b: bytes) -> str` |
+| `encoding.base64_decode` | `(s: str) -> result[bytes, str]` |
+| `encoding.base64url_encode` | `(b: bytes) -> str` |
+| `encoding.base64url_decode` | `(s: str) -> result[bytes, str]` |
+| `encoding.url_encode` | `(s: str) -> str` |
+| `encoding.url_decode` | `(s: str) -> result[str, str]` |
+| `encoding.form_encode` | `(s: str) -> str` |
+| `encoding.form_decode` | `(s: str) -> result[str, str]` |
+| `encoding.query_get` | `(url: str, key: str) -> opt[str]` |
+| `encoding.query_keys` | `(url: str) -> [str]` |
+
+Like `regex`, `strings` and `os` — and unlike `crypto` and `sql` — this
+is pure computation, so importing it adds no link flag.
+
+Four things worth knowing:
+
+- **Encoders are infallible; decoders are not.** Any byte string has a
+  hex form, so `hex_encode` returns a bare `str`. Decoding takes input
+  the program did not produce — a query string, a header, a token — so
+  every decoder returns `result[_, str]`, and the message names the byte
+  offset it gave up at. "invalid base64" about a 400-character token is
+  not a diagnosis.
+
+- **`url_*` and `form_*` differ only in `+`, and that is exactly why
+  they have separate names.** In `application/x-www-form-urlencoded` a
+  space is `+`; in a URI it is `%20`. Decoding a form body with
+  `url_decode` leaves literal `+` where every space belongs, and nothing
+  reports it — the failure surfaces later as a lookup that does not
+  match. One function with a flag would make that the default mistake.
+
+- **`%00` is an error, not a truncation.** `url_decode` and
+  `form_decode` return `str`, which is NUL-terminated, so a decoded zero
+  byte would silently cut the value short. They refuse it and say so.
+  `hex_decode` and `base64_decode` return `bytes`, which carries an
+  explicit length, so a zero byte there is ordinary data and round-trips
+  exactly.
+
+- **`query_get` is `opt`, and `query_keys` is a list.** A missing
+  parameter is absent data, not bad data, so it is `opt[str]` — the
+  README rule above. Keys come back as a list rather than a map because
+  a query may legally repeat a key and a map would have to drop one,
+  the same reason `os.environ` is a list. `query_get` takes the first
+  value; a bare `?debug` is present with an empty value, not absent.
+
+Percent-escapes are emitted uppercase (RFC 3986 §2.1) and hex digests
+lowercase (what `sha256sum`, git and every API that returns one use).
+Both decoders accept either case.
+
+#### `httpc`
+
+An HTTP/1.1 **client** — the mirror of `http`, which serves. Speaks
+`http://` and `https://`, follows redirects, and decodes chunked
+responses.
+
+```slang
+import "httpc";
+import "time";
+
+let dl = until_of(time.mono() + 5000000000);   // 5s for the whole request
+
+let r = httpc.get("https://api.example.com/users?id=1", dl);
+guard let resp = r else let e = err_of(r) {
+    log.error("request failed: " + e);
+    return;
+}
+println(to_str(resp.status) + " " + to_str(len(resp.body)) + " bytes");
+
+// a POST, and a header the request owns
+let req = httpc.new_request("POST", "https://api.example.com/users");
+req.headers["Authorization"] = "Bearer " + token;
+req.body = to_bytes(payload);
+let r2 = httpc.send(req, dl);
+```
+
+| Function | Signature |
+|---|---|
+| `httpc.get` | `(url: str, deadline: until) -> result[Response, str]` |
+| `httpc.head` | `(url: str, deadline: until) -> result[Response, str]` |
+| `httpc.post` | `(url: str, content_type: str, body: bytes, deadline: until) -> result[Response, str]` |
+| `httpc.send` | `(req: Request, deadline: until) -> result[Response, str]` |
+| `httpc.new_request` | `(method: str, url: str) -> Request` |
+| `httpc.header` | `(r: Response, name: str) -> opt[str]` |
+| `httpc.parse_url` | `(url: str) -> result[Url, str]` |
+
+`Request` carries `method`, `url`, `headers`, `body`, `max_redirects`
+(default 5, `0` disables following) and `ca_path` (`""` = the system
+trust store). `Response` carries `status`, `status_text`, `headers`,
+`body` and `url` — the last being the URL that actually answered, which
+after a redirect is not the one you asked for.
+
+Separate from `http` rather than folded into it because `http` imports
+only `byteutil`, while a client necessarily imports `net` — and for a
+TLS request that drags `-lssl`/`-lcrypto` onto the link line of every
+program that merely wanted to serve HTTP.
+
+Five things worth knowing:
+
+- **A 404 is a `Response`, not an `err`.** The `result` is about whether
+  the exchange happened — DNS, connect, TLS, framing. A server that
+  answers "no" answered. Collapsing the two would make a 404 and a
+  connection refusal indistinguishable at the call site, and they need
+  different handling.
+
+- **Certificates are verified, and there is no flag to stop that.**
+  Verified against `expired`, `self-signed` and `wrong.host` on
+  badssl.com: all three are refused, a valid one is accepted. For an
+  internal service signed by a private CA, set `ca_path` to that
+  bundle — the answer is a different trust anchor, never a disabled
+  check.
+
+- **Credentials do not survive a cross-origin redirect.** `Authorization`,
+  `Cookie` and `Proxy-Authorization` are dropped when the scheme, host
+  or port changes, because the server that sent the `Location` chose
+  where it points, and that is exactly how a token gets exfiltrated.
+  Same-origin redirects keep them.
+
+- **Redirect method rules follow browsers, not the RFC's original
+  wording.** 303 always becomes GET; 301 and 302 after a POST also
+  become GET and drop the body, which is what every browser and curl do
+  and therefore what servers expect. 307 and 308 exist to preserve the
+  method, so they do. A redirect loop stops at `max_redirects` and hands
+  back the last 3xx rather than spinning.
+
+- **Everything a server can make you allocate has a ceiling** — 64 KiB
+  of headers, 32 MiB of body, and a bounded chunk-size line. A client
+  talks to servers it does not control, so a buffer sized on their
+  say-so is a denial of service arriving through an ordinary call.
+
+**Not done, deliberately:** no connection pooling (every request opens a
+connection and sends `Connection: close`), no gzip (nothing links zlib,
+and advertising an encoding you cannot decode is worse than not asking),
+no cookie jar, no HTTP/2, no multipart bodies. All additive; none of
+them changes the shapes above.
+
 #### `byteutil`
 
 Search, trim, and split on the `bytes` type — no new syntax. The
@@ -887,9 +1044,11 @@ signal-handling program.
 
 - [byteutil](packages/byteutil.md) -- source package, 5 public items
 - [crypto](packages/crypto.md) -- compiler-provided, 3 public items
+- [encoding](packages/encoding.md) -- compiler-provided, 12 public items
 - [fs](packages/fs.md) -- compiler-provided, 6 public items
 - [http](packages/http.md) -- source package, 19 public items
 - [http2](packages/http2.md) -- source package, 122 public items
+- [httpc](packages/httpc.md) -- source package, 10 public items
 - [json](packages/json.md) -- compiler-provided, 0 public items
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [net](packages/net.md) -- compiler-provided, 24 public items
