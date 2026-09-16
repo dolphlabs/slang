@@ -113,7 +113,7 @@ println("Hello, " + name + "! " + x);
 // string interpolation with ${expr} (any expression allowed)
 println("pi doubled is ${pi * 2}");
 
-// comparisons: == != < <= > >=   logic: && || !
+// comparisons: == != < <= > >=   (bools: == and != only)   logic: && || !
 if x > y && ok {
     println("bigger");
 } else if x == y {
