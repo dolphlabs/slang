@@ -422,6 +422,190 @@ a single token.
   than not asking), no cookie jar, no HTTP/2 client, no multipart
   bodies. All additive.
 
+## Compression (done)
+
+- [x] `compress` — gzip, zlib and raw DEFLATE over zlib. Native package,
+  `-lz` gated on `want_compress`, the same shape crypto (`-lcrypto`) and
+  sql (`-lsqlite3`) use.
+
+  **zlib rather than our own, which is the opposite of the `regex`
+  call.** regex was written in-house because a backtracking engine has a
+  catastrophic input class and being immune to it by construction was
+  the entire point. DEFLATE has no equivalent argument. What it has is
+  thirty years of hostile input and a reference implementation on every
+  platform slang targets, and every bug in a hand-written inflate is a
+  buffer overrun driven by attacker-controlled input — a memory-safety
+  surface with no upside.
+
+  **Decompression takes a MANDATORY output limit.** `max_out` is a
+  required argument, not an optional one with a generous default,
+  because the expansion ratio is unbounded and a default would be a
+  number nobody chose applied at every call site that never thought
+  about it. The ceiling is enforced before the allocation that would
+  cross it rather than by inspecting the result: a 65,250-byte gzip
+  holding 64 MiB was refused at **3.9 MB peak RSS** against a 0.86 MB
+  baseline for the same program without the call.
+
+  **Three containers because HTTP needs three.** Same bits, different
+  headers: gzip (RFC 1952) is what servers send, zlib (RFC 1950) is what
+  the `deflate` content-coding is supposed to mean, and raw (RFC 1951)
+  is what the servers that get it wrong send instead — so `inflate_raw`
+  is a compatibility requirement, not a completist's flourish.
+  `deflate_raw` exists so `inflate_raw` has an inverse to be tested
+  against, and because permessage-deflate (RFC 7692) needs it.
+
+  **Format correctness is checked against the system tool, not against
+  itself.** slang's gzip output is read by `gzip -dc`, and `gzip`'s
+  output is read by `compress.gunzip`. Agreeing with your own encoder
+  proves nothing, which is the same reasoning that put the HTTP/2
+  interop test against Go's `x/net/http2` rather than curl.
+
+  **Two controls landed and one did not, which was the useful part.**
+  Confirmed failing: gunzip made to auto-detect zlib (the containers
+  must not be interchangeable), and empty input silently returning empty
+  rather than erroring. NOT caught: an off-by-one in the ceiling — and
+  chasing why exposed that the boundary the test named was not the
+  boundary the code turned on, because the geometric doubling never
+  lands on `max_out - 1`. The limit now measures what was PRODUCED
+  instead of inferring "too big" from a full buffer, with one byte of
+  allocation slack so an exact-size output never depends on when zlib
+  chooses to report `Z_STREAM_END`.
+
+  Stated plainly because it would be easy to imply otherwise: removing
+  that slack byte does **not** fail the test on this zlib (1.2.12),
+  which reports `Z_STREAM_END` on the filling call. The guard protects
+  against behaviour that could not be reproduced here. What IS
+  demonstrated is the post-loop size check (removing it breaks the
+  one-byte-short case) and the in-loop ceiling, whose removal makes the
+  grow loop **spin** rather than over-allocate — which is how the
+  no-progress guard in the inflate loop got written.
+
+## HTTP client: pooling and decompression (done)
+
+- [x] `httpc.Client` with connection pooling, and transparent gzip /
+  deflate decoding. Cookies are the next and separate piece.
+
+  **One code path.** The one-shot `httpc.get` / `post` / `head` / `send`
+  are a `Client` with `max_idle_per_host = 0`. Framing, redirects,
+  decompression and every security rule therefore cannot drift between
+  the pooled and unpooled paths, because there is only one.
+
+  **Stale connections are detected by a new primitive, not a timing
+  trick.** Servers close idle connections on their own timers (Node's
+  default is 5s). The obvious probe — `recv_until` with an
+  already-expired deadline — does not work, and the reason was found by
+  reading `sl_net_recv_u` rather than by testing: it checks the deadline
+  BEFORE touching the socket, so it would report every dead connection
+  alive. `net.idle_alive` / `net.tls_idle_alive` are one non-blocking
+  `MSG_PEEK`: no latency, nothing consumed, verified in all three
+  states (open and quiet, peer sent a byte, peer closed).
+
+  **Retry is idempotent-only.** A reused connection that dies before the
+  first response byte is retried once on a fresh connection for
+  GET/HEAD/PUT/DELETE/OPTIONS/TRACE. POST is never resent, because it may
+  already have been acted on. The probe protects POST; retry is the
+  backstop for the race between probe and write.
+
+  **The pool key includes `ca_path`**, so a connection verified against
+  one trust anchor is never reused for a request that demanded another.
+  Tested over real TLS with two different certificates.
+
+  **Decompression follows Go's rule:** requests advertise gzip/deflate
+  and responses are decoded ONLY when the caller did not set
+  Accept-Encoding. Decoded size shares the 32 MiB body ceiling, so a
+  gzip bomb in a response is refused. `deflate` tries zlib and then raw
+  DEFLATE, since a real share of servers mislabel raw.
+
+  **The test checks the pool from both ends.** The canned server counts
+  the connections it actually accepted, and that must agree with the
+  client's own `dials` / `reuses`. Under 16 concurrent tasks the
+  invariant `dials + reuses == requests` must hold exactly. 30/30 stable.
+
+  **Nine controls, all caught — but three only after the test was
+  fixed, which is the point of running them.**
+  - A "close-delimited" reader flag could never change the outcome (a
+    close-delimited body always ends at EOF, which already blocks
+    reuse). Removed as dead state rather than kept.
+  - Ignoring the server's `Connection: close` was masked by the probe:
+    the test server also closed, so the dead connection was discarded on
+    the next request anyway. A server that says close and lingers would
+    have slipped through. Fixed by asserting the reuse DECISION directly
+    with `httpc.idle_count`.
+  - Dropping `!r.eof` from the reuse check was masked because a
+    non-empty close-delimited body is still in the read buffer. Only an
+    EMPTY close-delimited body isolates it; that case now exists.
+  - Removing the CA path from the pool key was not exercised at all
+    until the TLS section existed. It is the one that matters most.
+  - Removing the pool lock: 64/160 concurrent requests succeeded.
+
+  **Building the TLS test exposed a runtime memory-safety bug** — stack
+  relocation leaving compiler-hoisted stack addresses dangling — fixed
+  separately in PR #120 before this landed. See todo.md.
+
+  **Two language limits hit and routed around, not fixed here:**
+  - A method cannot share a name with a package function
+    (`impl Client { fn get }` collides with `httpc.get`); methods are
+    emitted under the same C symbol. Client operations are therefore
+    handle-first functions, `client_get(c, ...)`, matching every other
+    stdlib package (`sql.exec(db, ...)`).
+  - `pub fn` inside `impl` is documented in the README but rejected by
+    the parser, and method visibility is not enforced at all
+    (`method_find` checks only package and name).
+  - Separately: `==` between two `bool`s is a compile error.
+
+## HTTP client: cookies (done)
+
+- [x] Cookie jar on `httpc.Client` — RFC 6265, with 6265bis's `Secure`
+  and `__Secure-` / `__Host-` rules. Completes the three-part request
+  (compression, pooling, cookies).
+
+  **Off by default, the opposite of a browser.** A server's Client is
+  usually shared across the users it serves; a jar there sends user A's
+  session on user B's request. `enable_cookies` scopes a Client to one
+  identity. Go's `http.Client` (Jar nil) makes the same call.
+
+  **A pre-existing bug fixed on the way:** `parse_headers` joined
+  repeated headers with `", "`, and its comment claimed that kept two
+  Set-Cookie lines as two cookies. It did the opposite once a cookie
+  carried an `Expires` date, which contains a comma — joined lines
+  cannot be split back apart. RFC 9110 exempts Set-Cookie from joining
+  for exactly this. `Response.set_cookies` now holds each line.
+
+  **Per-hop, not per-request.** Cookies are stored from every response
+  in a redirect chain and computed for every hop, so a cookie set by a
+  302 reaches its target (how login flows work) and a redirect to another
+  host carries that host's cookies.
+
+  **`set_cookie(c, url, line)` exists because the test could not see
+  three security bugs without it.** The first refusal checks inspected
+  the jar from the host that sent each cookie, over http, and all three
+  of the most important refusals passed with their checks DELETED:
+  - a wrongly stored Secure cookie is still not SENT over http,
+  - a wrongly stored `Domain=evil.example` cookie does not match
+    127.0.0.1,
+  - and `Domain=com` from 127.0.0.1 is refused by the foreign-domain
+    rule before the TLD rule is ever reached.
+  The storage was wrong and the test was blind to it. Checking from the
+  URL that would EXPOSE a wrongly stored cookie needs hosts like
+  `a.example.com`, which loopback cannot provide; `set_cookie` applies a
+  line through exactly the path a response takes (Go's `Jar.SetCookies`
+  equivalent, and also how a program restores a saved session).
+
+  **The concurrency check was blind the first time too.** 16 tasks
+  writing 400 cookies against a 50-per-domain cap "passed" with the lock
+  removed, because later writes refilled the jar to 50. Rewritten to 48
+  cookies, under the cap: without the lock, 23 / 19 / 16 survived across
+  three runs.
+
+  17 controls in all, every one caught after those fixes. Cookie-date
+  expected values come from Python's `calendar.timegm`, not the parser
+  under test. 25/25 stable.
+
+  **Not done, and stated in the README rather than left to be found:**
+  no public-suffix list, so `Domain=co.uk` from `a.example.co.uk` is
+  accepted and sent to every `*.co.uk` host. A bare TLD is refused; that
+  case is not.
+
 ## Notes
 
 - Do not change `bench/http/main.sl` for perf experiments. Raw-best slang is `bench/http_opt/main.sl`; remasure with `./bench/run_http_opt.sh`.

@@ -959,6 +959,16 @@ static sl_res_bytes_str *sl_net_recv_until(int fd, int max, sl_until u) {
     return sl_net_recv_u(fd, max, u);
 }
 
+/* See pkg_net/sigs.c. EAGAIN is the only answer that means "open and
+ * quiet": 0 is an orderly close, >0 is bytes nobody asked for (a pooled
+ * HTTP connection must be silent between requests, so it is unusable),
+ * and any other error is a reset or worse. */
+static bool sl_net_idle_alive(int fd) {
+    unsigned char b;
+    ssize_t n = recv(fd, &b, 1, MSG_PEEK | MSG_DONTWAIT);
+    return n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK);
+}
+
 static void sl_net_close(int fd) {
     sl_net_user_nonblock_remove((void *)(intptr_t)fd); /* avoid a
         stale entry misapplying to a later, unrelated fd that

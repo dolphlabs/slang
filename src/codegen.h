@@ -11,11 +11,12 @@
  * set to 1 if the program uses any net.tls_* function (so the driver
  * knows to link OpenSSL), 0 otherwise. *out_want_crypto is set to 1
  * if the program imports crypto (needs -lcrypto), 0 otherwise.
- * *out_want_sql is set to 1 if the program imports sql (needs
+ * *out_want_compress is set to 1 if the program imports compress
+ * (needs -lz). *out_want_sql is set to 1 if the program imports sql (needs
  * -lsqlite3), 0 otherwise. Exits with a diagnostic on semantic
  * errors. */
 void codegen_program(Package *pkgs, int npkgs, int main_index,
                      StrBuf *out, int *out_want_tls, int *out_want_crypto,
-                     int *out_want_sql);
+                     int *out_want_sql, int *out_want_compress);
 
 #endif /* SLANG_CODEGEN_H */

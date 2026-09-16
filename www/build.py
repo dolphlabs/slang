@@ -163,6 +163,7 @@ PACKAGE_SECTIONS = {
     "http2": ["`http2`"],
     "strings": ["`strings`"],
     "encoding": ["`encoding`"],
+    "compress": ["`compress`"],
     "byteutil": ["`byteutil`"],
     "http": ["`http`"],
     "httpc": ["`httpc`"],
