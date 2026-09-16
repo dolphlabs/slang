@@ -36,3 +36,7 @@ Does `b` end with `suffix`? A suffix longer than `b` is false rather than an err
 ### `fn split(b: bytes, sep: int) -> [bytes]`
 
 Split `b` on every occurrence of the `sep` byte. Adjacent separators yield empty elements, so the result always has one more element than there were separators.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com

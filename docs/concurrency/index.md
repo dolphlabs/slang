@@ -160,3 +160,7 @@ you need it. `join_wait` waits for one spawned task.
 of everything currently in flight,
 useful for draining on shutdown but not for waiting on one task in
 particular.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com

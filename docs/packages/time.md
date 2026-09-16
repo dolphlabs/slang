@@ -20,3 +20,7 @@ let wall = time.wall();   // unix epoch time in nanoseconds
 ### `time.wall() -> int`
 
 ### `time.sleep(int)`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com

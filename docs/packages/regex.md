@@ -116,3 +116,7 @@ peak at **3.9MB RSS** — about 17x lighter than the same shape holding
 ### `regex.find_bytes(rawptr, bytes) -> [int]`
 
 ### `regex.find_bytes_at(rawptr, bytes, int) -> [int]`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com

@@ -570,3 +570,7 @@ Index of an exact name+value match, or 0. Used by the encoder to send a one-byte
 ### `fn static_find_name(name: str) -> int`
 
 Index of any entry with this name, or 0 -- lets the encoder reference a known name and send only the value as a literal.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com

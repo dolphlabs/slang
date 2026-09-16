@@ -33,3 +33,7 @@ Want to see everything at once instead of one feature at a time? See
 dashboard) exercising every tier: `http`/`link`, `net.tls_*`, `json`,
 `spawn`/`chan[T]`, `proc` graceful shutdown, local package imports,
 and C interop, with a real HTML/CSS/JS frontend. `cd demo && ./run.sh`.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com

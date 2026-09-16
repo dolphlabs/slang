@@ -181,3 +181,7 @@ the first send or recv then fails.
 ### `net.tls_ctx_alpn(rawptr, str) -> result[bool,str]`
 
 ### `net.tls_alpn(rawptr) -> str`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com

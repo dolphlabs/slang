@@ -100,3 +100,7 @@ shared heap object.
 `own T` is uniquely owned: assignment and passing **move**, and
 use-after-move is a compile error. A moved binding can be reinitialized.
 `own` is freed when its binding goes out of scope unless it was moved.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com

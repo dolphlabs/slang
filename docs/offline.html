@@ -4,7 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>slang Documentation</title>
-<meta name="description" content="The whole site, in one file.">
+<meta name="description" content="The whole site, in one file. Built and maintained by Dolphlabs (Dolph Tech Limited).">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="slang documentation">
+<meta property="og:description" content="The whole site, in one file. Built and maintained by Dolphlabs (Dolph Tech Limited).">
+<meta property="og:type" content="website">
 <!-- Agents: every page here has a Markdown twin at the same path, and
      the whole site is one document at /llms-full.txt -->
 <link rel="alternate" type="text/markdown" href="llms-full.txt" title="Markdown">
@@ -367,9 +373,47 @@ tr:last-child td { border-bottom: 0; }
 #toc a.h3 { padding-left: 1.3rem; font-size: .79rem; }
 #toc a.active { color: var(--accent); border-left-color: var(--accent); }
 
-.foot { border-top: 1px solid var(--line); padding: 1.6rem;
-  text-align: center; color: var(--fg-3); font-size: .82rem; }
-.foot p { max-width: 44rem; margin: 0 auto; }
+/* ---- footer: the attribution is the point, the provenance note is
+   the footnote. Sized accordingly. ---- */
+.foot {
+  border-top: 2px solid var(--line-2); margin-top: 2rem;
+  padding: 2.2rem clamp(1rem, 4vw, 2.5rem) 2.6rem;
+  background: var(--panel);
+}
+.foot-main {
+  max-width: 78rem; margin: 0 auto 1.1rem; text-align: center;
+  display: flex; flex-direction: column; gap: .25rem; align-items: center;
+}
+.foot-by {
+  margin: 0; font: 600 clamp(1.05rem, 2.4vw, 1.3rem)/1.3 var(--display);
+  letter-spacing: -.015em; color: var(--fg);
+}
+.foot-by .org {
+  color: var(--accent); text-decoration: none;
+  border-bottom: 2px solid var(--accent);
+  padding-bottom: 1px;
+}
+.foot-by .org:hover { color: var(--fg); border-bottom-color: var(--fg); }
+.foot-entity {
+  margin: 0; font: .82rem var(--mono); color: var(--fg-2);
+  letter-spacing: .01em;
+}
+.foot-entity a { color: var(--fg-2); }
+.foot-entity a:hover { color: var(--accent); }
+.foot-note {
+  max-width: 44rem; margin: 0 auto; text-align: center;
+  color: var(--fg-3); font-size: .78rem; line-height: 1.6;
+  padding-top: 1.1rem; border-top: 1px solid var(--line-2);
+}
+
+/* hero eyebrow */
+.eyebrow {
+  margin: 0 0 .7rem; font: 600 .74rem var(--mono);
+  text-transform: uppercase; letter-spacing: .12em; color: var(--fg-3);
+}
+.eyebrow a { color: var(--accent); text-decoration: none;
+  border-bottom: 1px solid var(--accent); }
+.eyebrow a:hover { color: var(--fg); border-bottom-color: var(--fg); }
 
 .reveal { opacity: 0; transform: translateY(6px);
   transition: opacity .45s ease, transform .45s ease; }
@@ -407,6 +451,8 @@ tr:last-child td { border-bottom: 0; }
 
 <div class="hero">
   <div class="hero-copy">
+    <p class="eyebrow">A <a href="https://dolphlabs.com"
+       rel="noopener">Dolphlabs</a> project</p>
     <h1>slang</h1>
     <p class="lede">A statically typed language for server-side and
       network programming. It compiles to C, schedules
@@ -437,7 +483,7 @@ tr:last-child td { border-bottom: 0; }
   <article class="content">
     <header class="page-head">
       <h1>slang documentation</h1>
-      <p class="tagline">The whole site, in one file.</p>
+      <p class="tagline">The whole site, in one file. Built and maintained by Dolphlabs (Dolph Tech Limited).</p>
       <p class="agentline">
         <a href="llms-full.txt">Markdown version</a> ·
         <a href="llms.txt">llms.txt</a> ·
@@ -1809,9 +1855,20 @@ time.<span class="f">sleep</span>(<span class="n">20000000</span>);     <span cl
 </main>
 
 <footer class="foot">
-  <p>Generated from the repository by <code>www/build.py</code> — the
-     guide comes from <code>README.md</code>, the API from the compiler's
-     own signature tables and the <code>pub</code> declarations in
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
      <code>stdlib/</code>. Nothing here is written twice.</p>
 </footer>
 

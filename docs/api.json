@@ -1,4 +1,10 @@
 {
+  "project": "slang",
+  "maintainer": {
+    "name": "Dolphlabs",
+    "entity": "Dolph Tech Limited",
+    "url": "https://dolphlabs.com"
+  },
   "packages": {
     "byteutil": {
       "name": "byteutil",

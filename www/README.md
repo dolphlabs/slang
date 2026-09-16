@@ -96,3 +96,12 @@ Nothing else to configure.
 
 To host elsewhere, copy `docs/` to any static host — it is plain files
 with relative links and no server-side requirements.
+
+## Attribution
+
+slang is built and maintained by **[Dolphlabs](https://dolphlabs.com)**
+(Dolph Tech Limited). The generator threads that through every surface
+it produces — the footer of each page, the hero byline, the `author`
+and `og:site_name` metadata, the end of every Markdown twin, the header
+of `llms.txt`, and a `maintainer` object in `api.json` — from the single
+`ORG` definition at the top of `build.py`. Change it in one place.

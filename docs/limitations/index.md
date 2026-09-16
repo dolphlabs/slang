@@ -48,3 +48,7 @@
   window before `main()` installs the handler gets the OS's default
   disposition (immediate termination) rather than graceful handling.
   `proc.wait_idle()` parks until `proc.active_tasks()` is zero.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com

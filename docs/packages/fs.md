@@ -35,3 +35,7 @@ fs.close(in_fd);
 ### `fs.close(int) -> result[bool,str]`
 
 ### `fs.mkdir(str) -> result[bool,str]`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com

@@ -352,9 +352,47 @@ tr:last-child td { border-bottom: 0; }
 #toc a.h3 { padding-left: 1.3rem; font-size: .79rem; }
 #toc a.active { color: var(--accent); border-left-color: var(--accent); }
 
-.foot { border-top: 1px solid var(--line); padding: 1.6rem;
-  text-align: center; color: var(--fg-3); font-size: .82rem; }
-.foot p { max-width: 44rem; margin: 0 auto; }
+/* ---- footer: the attribution is the point, the provenance note is
+   the footnote. Sized accordingly. ---- */
+.foot {
+  border-top: 2px solid var(--line-2); margin-top: 2rem;
+  padding: 2.2rem clamp(1rem, 4vw, 2.5rem) 2.6rem;
+  background: var(--panel);
+}
+.foot-main {
+  max-width: 78rem; margin: 0 auto 1.1rem; text-align: center;
+  display: flex; flex-direction: column; gap: .25rem; align-items: center;
+}
+.foot-by {
+  margin: 0; font: 600 clamp(1.05rem, 2.4vw, 1.3rem)/1.3 var(--display);
+  letter-spacing: -.015em; color: var(--fg);
+}
+.foot-by .org {
+  color: var(--accent); text-decoration: none;
+  border-bottom: 2px solid var(--accent);
+  padding-bottom: 1px;
+}
+.foot-by .org:hover { color: var(--fg); border-bottom-color: var(--fg); }
+.foot-entity {
+  margin: 0; font: .82rem var(--mono); color: var(--fg-2);
+  letter-spacing: .01em;
+}
+.foot-entity a { color: var(--fg-2); }
+.foot-entity a:hover { color: var(--accent); }
+.foot-note {
+  max-width: 44rem; margin: 0 auto; text-align: center;
+  color: var(--fg-3); font-size: .78rem; line-height: 1.6;
+  padding-top: 1.1rem; border-top: 1px solid var(--line-2);
+}
+
+/* hero eyebrow */
+.eyebrow {
+  margin: 0 0 .7rem; font: 600 .74rem var(--mono);
+  text-transform: uppercase; letter-spacing: .12em; color: var(--fg-3);
+}
+.eyebrow a { color: var(--accent); text-decoration: none;
+  border-bottom: 1px solid var(--accent); }
+.eyebrow a:hover { color: var(--fg); border-bottom-color: var(--fg); }
 
 .reveal { opacity: 0; transform: translateY(6px);
   transition: opacity .45s ease, transform .45s ease; }

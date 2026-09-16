@@ -81,3 +81,7 @@ what `proc` has no answer for rather than duplicating it.
 ### `os.remove(str) -> result[bool,str]`
 
 ### `os.rename(str, str) -> result[bool,str]`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com

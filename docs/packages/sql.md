@@ -115,3 +115,7 @@ they don't recurse. Exceeding a cap is a normal error through
 ### `sql.col_text(rawptr, int) -> str`
 
 ### `sql.col_blob(rawptr, int) -> bytes`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com

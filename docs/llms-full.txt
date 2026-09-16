@@ -36,6 +36,10 @@ dashboard) exercising every tier: `http`/`link`, `net.tls_*`, `json`,
 `spawn`/`chan[T]`, `proc` graceful shutdown, local package imports,
 and C interop, with a real HTML/CSS/JS frontend. `cd demo && ./run.sh`.
 
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
 
 
 # Language guide
@@ -908,6 +912,10 @@ signed type, logical (zero-filling) on an unsigned one, exactly as in C.
 value being shifted, so `x << n` never silently widens a narrow `x`
 because `n` happens to be an `int`.
 
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
 
 
 # Data types
@@ -1015,6 +1023,10 @@ shared heap object.
 use-after-move is a compile error. A moved binding can be reinitialized.
 `own` is freed when its binding goes out of scope unless it was moved.
 
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
 
 
 # Errors
@@ -1109,6 +1121,10 @@ bad world is `result[_, fault]`. Never collapse a descriptive `str`
 error into a bare `fault_io()` at a boundary — that is where
 debuggability goes to die (see `http.read` below).
 
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
 
 
 # Function values
@@ -1174,6 +1190,10 @@ Two consequences worth knowing:
 
 `spawn` takes a function value too — `spawn handlers[i](job);` — see
 Concurrency below.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
 
 
 
@@ -1341,6 +1361,10 @@ you need it. `join_wait` waits for one spawned task.
 of everything currently in flight,
 useful for draining on shutdown but not for waiting on one task in
 particular.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
 
 
 
@@ -2198,6 +2222,10 @@ signal-handling program.
 - [sql](packages/sql.md) -- compiler-provided, 20 public items
 - [time](packages/time.md) -- compiler-provided, 3 public items
 
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
 
 
 # C interop
@@ -2341,6 +2369,10 @@ import "foo";
 cache, or hash mismatch is an error. Same short name at two git/tag
 pairs is an error.
 
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
 
 
 # How it works
@@ -2428,6 +2460,10 @@ tests/         language tests plus tests/runtime/ (no slangc)
 Makefile       build/test/clean
 ```
 
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
 
 
 # Limitations
@@ -2483,6 +2519,10 @@ Makefile       build/test/clean
   disposition (immediate termination) rather than graceful handling.
   `proc.wait_idle()` parks until `proc.active_tasks()` is zero.
 
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
 
 
 # byteutil
@@ -2526,6 +2566,10 @@ Does `b` end with `suffix`? A suffix longer than `b` is false rather than an err
 
 Split `b` on every occurrence of the `sep` byte. Adjacent separators yield empty elements, so the result always has one more element than there were separators.
 
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
 
 
 # crypto
@@ -2556,6 +2600,10 @@ guard let b = r else let e = err_of(r) {
 ### `crypto.hmac_sha256(bytes, bytes) -> bytes`
 
 ### `crypto.rand(int) -> result[bytes,str]`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
 
 
 
@@ -2598,6 +2646,10 @@ fs.close(in_fd);
 ### `fs.close(int) -> result[bool,str]`
 
 ### `fs.mkdir(str) -> result[bool,str]`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
 
 
 
@@ -2691,6 +2743,10 @@ signal-handling program.
 ### `fn not_found() -> Response`
 
 ### `fn method_not_allowed() -> Response`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
 
 
 
@@ -3269,6 +3325,10 @@ Index of an exact name+value match, or 0. Used by the encoder to send a one-byte
 
 Index of any entry with this name, or 0 -- lets the encoder reference a known name and send only the value as a literal.
 
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
 
 
 # json
@@ -3319,6 +3379,10 @@ a number`. Malformed input is a decode error, never a crash — the
 parser caps nesting depth at 512 so adversarial input can't blow the
 C stack.
 
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
 
 
 # log
@@ -3350,6 +3414,10 @@ log.warn(fault_timeout());
 ### `log.warn(str)`
 
 ### `log.error(str)`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
 
 
 
@@ -3539,6 +3607,10 @@ the first send or recv then fails.
 
 ### `net.tls_alpn(rawptr) -> str`
 
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
 
 
 # os
@@ -3627,6 +3699,10 @@ what `proc` has no answer for rather than duplicating it.
 
 ### `os.rename(str, str) -> result[bool,str]`
 
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
 
 
 # proc
@@ -3683,6 +3759,10 @@ working directory as `result[str, str]`.
 ### `proc.args() -> [str]`
 
 ### `proc.cwd() -> result[str,str]`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
 
 
 
@@ -3807,6 +3887,10 @@ peak at **3.9MB RSS** — about 17x lighter than the same shape holding
 
 ### `regex.find_bytes_at(rawptr, bytes, int) -> [int]`
 
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
 
 
 # sql
@@ -3929,6 +4013,10 @@ they don't recurse. Exceeding a cap is a normal error through
 
 ### `sql.col_blob(rawptr, int) -> bytes`
 
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
 
 
 # time
@@ -3955,4 +4043,8 @@ let wall = time.wall();   // unix epoch time in nanoseconds
 ### `time.wall() -> int`
 
 ### `time.sleep(int)`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
 

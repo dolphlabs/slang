@@ -43,3 +43,7 @@ above fails with `field 'addr': field 'city': expected a string, got
 a number`. Malformed input is a decode error, never a crash — the
 parser caps nesting depth at 512 so adversarial input can't blow the
 C stack.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com

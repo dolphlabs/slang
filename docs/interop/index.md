@@ -136,3 +136,7 @@ import "foo";
 `slang.lock`. Compile does not hit the network. A missing lock, missing
 cache, or hash mismatch is an error. Same short name at two git/tag
 pairs is an error.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com

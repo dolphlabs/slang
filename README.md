@@ -7,6 +7,9 @@ non-moving, stop-the-world mark-sweep collector (`runtime/sl_gc.c`);
 cycles are collected. `slangc` emits C and your system `cc` builds the
 binary.
 
+**Built and maintained by [Dolphlabs](https://dolphlabs.com)** — Dolph
+Tech Limited.
+
 ## Documentation
 
 Full documentation site: **<https://dolphlabs.github.io/slang/>**

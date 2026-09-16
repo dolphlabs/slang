@@ -86,3 +86,7 @@ signal-handling program.
 ### `fn not_found() -> Response`
 
 ### `fn method_not_allowed() -> Response`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com

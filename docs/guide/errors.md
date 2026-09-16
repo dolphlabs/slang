@@ -87,3 +87,7 @@ Rule of thumb: absent data is `opt`, bad data is `result[_, str]`,
 bad world is `result[_, fault]`. Never collapse a descriptive `str`
 error into a bare `fault_io()` at a boundary — that is where
 debuggability goes to die (see `http.read` below).
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com

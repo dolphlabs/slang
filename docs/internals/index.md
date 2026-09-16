@@ -80,3 +80,7 @@ examples/      one directory per example program
 tests/         language tests plus tests/runtime/ (no slangc)
 Makefile       build/test/clean
 ```
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com

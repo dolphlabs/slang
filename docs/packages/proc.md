@@ -50,3 +50,7 @@ working directory as `result[str, str]`.
 ### `proc.args() -> [str]`
 
 ### `proc.cwd() -> result[str,str]`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com

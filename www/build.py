@@ -34,6 +34,13 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# Who builds this. Stated once here and threaded through the HTML, the
+# Markdown twins, llms.txt and api.json -- an agent reading the plain
+# text should learn it as readily as someone looking at the footer.
+ORG = "Dolphlabs"
+ORG_ENTITY = "Dolph Tech Limited"
+ORG_URL = "https://dolphlabs.com"
 WWW = ROOT / "www"
 
 # --------------------------------------------------------------------
@@ -509,7 +516,9 @@ def page_html(tpl, *, title, tagline, body, depth, nav, mdpath,
 def md_twin(title, tagline, sections_md):
     head = "# %s\n\n> %s\n\n" % (title, tagline)
     body = "\n\n".join(p.strip() for p in sections_md if p.strip())
-    return head + body + "\n"
+    foot = ("\n\n---\n\nslang is built and maintained by **%s** "
+            "(%s) — %s\n" % (ORG, ORG_ENTITY, ORG_URL))
+    return head + body + foot
 
 
 def build(out_dir):
@@ -613,13 +622,19 @@ def build(out_dir):
     # ---- agent surfaces ----
     (out / "search.json").write_text(json.dumps(search), encoding="utf-8")
     (out / "api.json").write_text(
-        json.dumps({"packages": all_pkgs}, indent=2), encoding="utf-8")
+        json.dumps({
+            "project": "slang",
+            "maintainer": {"name": ORG, "entity": ORG_ENTITY,
+                           "url": ORG_URL},
+            "packages": all_pkgs,
+        }, indent=2), encoding="utf-8")
 
     llms = ["# slang",
             "",
             "> A statically typed language for server-side and network "
             "programming. Compiles to C. M:N green threads, a precise "
-            "mark-sweep collector, and native packages.",
+            "mark-sweep collector, and native packages. Built and "
+            "maintained by %s (%s), %s." % (ORG, ORG_ENTITY, ORG_URL),
             "",
             "Every page on this site has a Markdown twin at the same path "
             "with a .md extension. /api.json is the machine-readable index "
@@ -684,7 +699,9 @@ def write_single_file(out, tpl, pages):
                     "<script>%s</script><script>%s</script>"
                     % (js, ROUTER_JS))
            .replace("{{TITLE}}", "slang documentation")
-           .replace("{{TAGLINE}}", "The whole site, in one file.")
+           .replace("{{TAGLINE}}",
+                    "The whole site, in one file. Built and maintained "
+                    "by %s (%s)." % (ORG, ORG_ENTITY))
            .replace("{{NAV}}", nav)
            .replace('href="{{ROOT}}index.html"', 'href="#home"')
            .replace("{{ROOT}}", "")
@@ -737,6 +754,8 @@ ROUTER_JS = """
 HERO = """
 <div class="hero">
   <div class="hero-copy">
+    <p class="eyebrow">A <a href="https://dolphlabs.com"
+       rel="noopener">Dolphlabs</a> project</p>
     <h1>slang</h1>
     <p class="lede">A statically typed language for server-side and
       network programming. It compiles to C, schedules

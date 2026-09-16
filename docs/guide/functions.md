@@ -59,3 +59,7 @@ Two consequences worth knowing:
 
 `spawn` takes a function value too — `spawn handlers[i](job);` — see
 Concurrency below.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com

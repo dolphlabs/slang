@@ -865,3 +865,7 @@ signed type, logical (zero-filling) on an unsigned one, exactly as in C.
 `&` `|` `^` promote to the wider operand; a shift keeps the width of the
 value being shifted, so `x << n` never silently widens a narrow `x`
 because `n` happens to be an `int`.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com

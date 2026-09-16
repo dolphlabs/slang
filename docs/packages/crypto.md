@@ -24,3 +24,7 @@ guard let b = r else let e = err_of(r) {
 ### `crypto.hmac_sha256(bytes, bytes) -> bytes`
 
 ### `crypto.rand(int) -> result[bytes,str]`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com

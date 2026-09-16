@@ -25,3 +25,7 @@ log.warn(fault_timeout());
 ### `log.warn(str)`
 
 ### `log.error(str)`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
