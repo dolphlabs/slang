@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How it works — slang</title>
+<meta name="description" content="The compiler pipeline, the collector, the scheduler.">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../internals/index.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <nav class="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a class="active" href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>How it works</h1>
+      <p class="tagline">The compiler pipeline, the collector, the scheduler.</p>
+      <p class="agentline">
+        <a href="../internals/index.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<h2 id="how-it-works">How it works</h2>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>main.sl ──loader──&gt; packages ──lexer/parser──&gt; ASTs ──codegen──&gt; main.gen.c ──cc──&gt; ./main</code></pre></div>
+<ol><li><strong>Loader</strong> (<code>src/loader.c</code>) — resolves imports (local directory, native package, stdlib, then <code>slang.project</code> pins), scans package directories for <code>.sl</code> files (in deterministic sorted order), merges them per package, and detects cycles via canonical paths.</li><li><strong>Lexer</strong> (<code>src/lexer.c</code>) — tokenizes source into identifiers, keywords, literals, and operators.</li><li><strong>Parser</strong> (<code>src/parser.c</code>) — recursive-descent parser producing an AST (<code>src/ast.h</code>).</li><li><strong>Code generator</strong> (<code>src/codegen/</code>) — walks the ASTs, performs type inference and semantic checks (including <code>pub</code> enforcement), and emits readable C. The runtime in <code>runtime/</code> (GC, scheduler, pool, containers, native packages) is real C, spliced into every generated file so the binary stays self-contained. Split by concern: <code>core.c</code>, <code>infer.c</code>, <code>expr.c</code>/<code>stmt.c</code>, <code>program.c</code>, <code>liveness.c</code> (GC safepoint roots), and <code>native.c</code> (<code>NatSig</code> dispatch). <code>internal.h</code> holds the shared <code>CG</code> struct.</li></ol>
+<p>Native-package <em>signatures</em> live under <code>src/codegen/pkg_&lt;name&gt;/</code>. Their C runtimes are <code>runtime/sl_&lt;name&gt;.c</code>. <code>json</code> uses <code>dispatch.c</code> because decode/encode are generic over the target type. Adding a fixed-signature package is a <code>pkg_&lt;name&gt;/</code> directory, a <code>runtime/sl_&lt;name&gt;.c</code> file, and one line in <code>loader.c</code>.</p>
+<ol><li><strong>Driver</strong> (<code>src/main.c</code>) — glues it together and shells out to <code>cc</code>. Because GCC/Clang compile the generated C, you get their full optimizer for free.</li></ol>
+<p>Inspect what slang generates:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>./slangc examples/hello/main.sl --emit-c &amp;&amp; cat main.gen.c</code></pre></div>
+<h2 id="memory-management">Memory management</h2>
+<p>Compiled programs embed a precise mark-sweep collector (<code>runtime/sl_gc.c</code>). Allocations go through <code>sl_gc_alloc</code>. <code>main()</code> registers the thread, starts the worker pool, and switches into the main task. There is no <code>libgc</code> dependency.</p>
+<p>What this means in practice:</p>
+<ul><li>No manual memory management in slang; no leaks from string churn.</li><li>Collection is tracing (mark-and-sweep), so reference cycles are collected — unlike refcounting.</li><li>Cost: stop-the-world pauses. The allocator still serializes on a mutex (batched); that is the current throughput ceiling.</li><li>Every pool worker is registered with the collector. A collection stops the world, walks safepoint roots, the run queue, parked tasks, and (for async-preempted tasks) a conservative stack scan.</li></ul>
+<h2 id="project-layout">Project layout</h2>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>src/
+  common.h       allocation helpers, growable string buffer, file I/O
+  loader.h/.c    package discovery, merging, cycle detection
+  lexer.h/.c     tokenizer
+  ast.h          AST node definitions
+  parser.h/.c    recursive-descent parser
+  rtpath.h/.c    locate runtime/ next to slangc
+  codegen.h      public codegen API (one function: codegen_program)
+  codegen/       type checking + C emission
+  main.c         driver: flags, invokes cc
+runtime/       real C runtime spliced into generated programs
+  sl_core.c sl_gc.c sl_containers.c sl_sched.c sl_pool.c
+  sl_time.c sl_net.c sl_tls.c sl_json.c sl_proc.c sl_fs.c
+stdlib/        slang-source packages (`<span class="k">import</span> <span class="s">&quot;http&quot;</span>`, `<span class="k">import</span> <span class="s">&quot;byteutil&quot;</span>`;
+             `<span class="k">import</span> <span class="s">&quot;log&quot;</span>` is a native package — no source files)
+examples/      one directory per example program
+tests/         language tests plus tests/runtime/ (no slangc)
+Makefile       build/test/clean</code></pre></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <p>Generated from the repository by <code>www/build.py</code> — the
+     guide comes from <code>README.md</code>, the API from the compiler's
+     own signature tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

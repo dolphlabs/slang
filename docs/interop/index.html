@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>C interop — slang</title>
+<meta name="description" content="Calling C, and the safety rules that come with it.">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../interop/index.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <nav class="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../packages/index.html">Packages</a><a class="active" href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>C interop</h1>
+      <p class="tagline">Calling C, and the safety rules that come with it.</p>
+      <p class="agentline">
+        <a href="../interop/index.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<h2 id="c-interop">C interop</h2>
+<p>slang already transpiles to C and shells out to <code>cc</code>, so calling into existing C libraries is a thin layer on top of that, not a new ecosystem: declare the C function&#x27;s signature, tell the linker which library to pull in, and call it like any other function.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">link</span> <span class="s">&quot;sqlite3&quot;</span>;   <span class="c">// -&gt; &#x27;-lsqlite3&#x27; on the final cc invocation</span>
+
+<span class="k">extern</span> <span class="k">fn</span> <span class="f">sqlite3_libversion</span>() -&gt; <span class="t">str</span>;
+<span class="b">println</span>(<span class="f">sqlite3_libversion</span>());</code></pre></div>
+<ul><li><strong><code>extern fn name(params) -&gt; ret;</code></strong> declares a C function with no body — it calls the real, unmangled C symbol directly. <code>int</code>, <code>i8..u64</code>, <code>f32</code>, <code>float</code>, <code>bool</code>, and <code>str</code> already share their C representation, so they marshal for free. <code>bytes</code> does not auto-decay (it is a boxed struct internally); pass <code>bytes_ptr(b)</code> and <code>len(b)</code> as two separate <code>rawptr</code>/<code>i32</code> arguments instead of inventing implicit multi-argument expansion for one type.</li><li><strong><code>rawptr</code></strong> is an opaque foreign pointer (<code>void *</code>) for handles a C library owns, like <code>sqlite3*</code> or <code>FILE*</code>. It can be passed around and compared against <strong><code>nullptr</code></strong>, nothing else — no arithmetic, no field access, no dereference. A <code>rawptr</code> is never GC-owned: if a C library allocated it, free it through another <code>extern fn</code>, not by letting it go out of scope.</li><li><strong><code>link &quot;name&quot;;</code></strong> is a top-level directive (parsed like <code>import</code>) that adds <code>-lname</code> to the <code>cc</code> invocation. Non-default search paths go through <code>LIBRARY_PATH</code>/<code>CPATH</code>, which <code>cc</code> already honors — no separate slangc flag for that.</li><li>Only types with an unambiguous C representation may cross an <code>extern fn</code> boundary: numeric types, <code>bool</code>, <code>str</code>, <code>bytes</code>, <code>rawptr</code>, and <code>ptr[T]</code> of those types. GC&#x27;d containers (<code>opt</code>, <code>result</code>, <code>map</code>, structs, arrays) are rejected at compile time — their internal layout isn&#x27;t something arbitrary C code should ever see.</li></ul>
+<p><strong>C++ is out of scope for the compiler itself.</strong> There&#x27;s no name-mangling/ABI support planned. Wrap the C++ library in your own <code>extern &quot;C&quot;</code> shim (catching every exception at that boundary — an uncaught C++ exception unwinding into C is undefined behavior) and consume the shim exactly like any other C library above.</p>
+<p><strong>Safety notes:</strong></p>
+<ul><li>The collector is precise for slang values rooted at safepoints. A slang value whose <em>only</em> remaining reference lives in memory the GC cannot scan (possible with some C libraries) can be collected while C still holds it. Keep a live slang-side reference for the duration of any call that retains a pointer beyond that call.</li><li>Callback function pointers — C calling back into slang — aren&#x27;t supported yet.</li><li><strong>Deep C libraries and the task stack.</strong> A task&#x27;s stack starts at 8KB and grows only at slang checkpoints, which C code has none of. A C function that recurses or holds large locals can therefore run off the end of the stack buffer and corrupt the heap — a silent <code>abort()</code> from <code>malloc</code>, not a clean crash. The compiler-provided packages that wrap deep libraries grow the stack up front (<code>sl_rt_need_stack</code>, used by <code>net.tls_*</code> for OpenSSL and by <code>sql</code> for SQLite); an <code>extern fn</code> into a comparably deep library has no such protection, so keep C-side recursion and stack buffers small.</li></ul>
+<p>See <code>tests/ffi/</code> for a complete example: a small hand-written C fixture library (<code>lib.c</code>) built as a static archive, linked and called from a slang program exercising <code>extern fn</code>, <code>link</code>, <code>rawptr</code>, <code>bytes_ptr</code>, and <code>nullptr</code>.</p>
+<h2 id="packages-go-odin-style">Packages (Go/Odin style)</h2>
+<p>A <strong>package is a directory</strong>: every <code>.sl</code> file inside it is compiled together into one shared namespace, as if concatenated. Import paths resolve to a directory next to the importer, then a native package, then <code>stdlib/&lt;path&gt;</code>, then a pin in <code>slang.project</code>.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;geometry&quot;</span>;   <span class="c">// binds the name &quot;geometry&quot; in this file&#x27;s scope</span>
+<span class="k">import</span> <span class="s">&quot;a/b/util&quot;</span>;   <span class="c">// nested paths bind as &quot;util&quot;</span>
+<span class="k">import</span> <span class="s">&quot;geometry&quot;</span> <span class="k">as</span> geo;   <span class="c">// optional alias; call as geo.area(...)</span>
+
+<span class="b">println</span>(geometry.<span class="f">area</span>(<span class="n">3.0</span>, <span class="n">4.0</span>));   <span class="c">// qualified access</span>
+<span class="b">println</span>(util.<span class="f">format</span>(x));</code></pre></div>
+<p><strong>Exports are explicit.</strong> Only declarations marked with <code>pub</code> are visible to importers; everything else is private to its package:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="c">// geometry/shapes.sl</span>
+<span class="k">pub</span> <span class="k">fn</span> <span class="f">area</span>(w: <span class="t">float</span>, h: <span class="t">float</span>) -&gt; <span class="t">float</span> { ... }   <span class="c">// exported</span>
+<span class="k">fn</span> <span class="f">scale</span>(v: <span class="t">float</span>) -&gt; <span class="t">float</span> { ... }                <span class="c">// private</span>
+
+<span class="c">// geometry/consts.sl</span>
+<span class="k">pub</span> <span class="k">let</span> pi = <span class="n">3.14159</span>;   <span class="c">// exported package constant</span>
+<span class="k">let</span> secret = <span class="n">42</span>;        <span class="c">// private package global</span></code></pre></div>
+<p>Rules:</p>
+<ul><li>Accessing a non-<code>pub</code> member from outside is a compile error.</li><li>Within a package, members are used unqualified: <code>area(1, 2)</code>.</li><li>In an imported package, top-level <code>let</code> becomes a package global; its initializer must be a constant literal.</li><li>The entry point is the file you pass to <code>slangc</code>; its directory is the main package, and its top-level statements run in order in <code>main()</code>. Other files of the main package share its namespace.</li><li>Duplicate names within a package, duplicate import bindings, and import cycles are all compile errors.</li><li>Symbols are mangled per package (<code>sl_&lt;pkg&gt;_&lt;name&gt;</code>), so different packages can safely use the same names.</li></ul>
+<p>See <code>examples/pkgdemo/</code> for a complete multi-package project.</p>
+<p>External packages are pinned in <code>slang.project</code> (walked up from the entry file). Imports stay short. <code>slang.lock</code> holds content hashes and is written by <code>slangc get</code>, never by hand.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>name myserver
+version <span class="n">0.1.0</span>
+
+pkg foo git https:<span class="c">//github.com/dolphlabs/foo tag v0.1.0</span></code></pre></div>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;foo&quot;</span>;</code></pre></div>
+<p><code>slangc get</code> clones each <code>pkg</code> line into <code>$SLANG_CACHE/pkg/&lt;name&gt;/&lt;hash&gt;</code> (<code>~/.cache/slang</code> if unset). If a fetched package has its own <code>slang.project</code>, those pins are fetched too and recorded only in <code>slang.lock</code>. Compile does not hit the network. A missing lock, missing cache, or hash mismatch is an error. Same short name at two git/tag pairs is an error.</p>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <p>Generated from the repository by <code>www/build.py</code> — the
+     guide comes from <code>README.md</code>, the API from the compiler's
+     own signature tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

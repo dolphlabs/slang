@@ -1,3 +1,6 @@
+// Index of the first `target` byte in `b` at or after `from`, or -1
+// if it does not occur. `target` is a byte value, not a substring:
+// 44 is a comma.
 pub fn find(b: bytes, from: int, target: int) -> int {
     let i = from;
     while i < len(b) {
@@ -9,6 +12,8 @@ pub fn find(b: bytes, from: int, target: int) -> int {
     return -1;
 }
 
+// Does `b` begin with `prefix`? A prefix longer than `b` is false
+// rather than an error.
 pub fn has_prefix(b: bytes, prefix: bytes) -> bool {
     if len(prefix) > len(b) {
         return false;
@@ -23,6 +28,8 @@ pub fn has_prefix(b: bytes, prefix: bytes) -> bool {
     return true;
 }
 
+// Does `b` end with `suffix`? A suffix longer than `b` is false
+// rather than an error.
 pub fn has_suffix(b: bytes, suffix: bytes) -> bool {
     if len(suffix) > len(b) {
         return false;
@@ -42,6 +49,8 @@ fn is_space(b: int) -> bool {
     return b == 9 || b == 10 || b == 13 || b == 32;
 }
 
+// `b` without leading or trailing ASCII whitespace -- space, tab, CR
+// and LF. Returns a new `bytes`; the input is unchanged.
 pub fn trim(b: bytes) -> bytes {
     let lo = 0;
     let hi = len(b);
@@ -54,6 +63,9 @@ pub fn trim(b: bytes) -> bytes {
     return b[lo..hi];
 }
 
+// Split `b` on every occurrence of the `sep` byte. Adjacent
+// separators yield empty elements, so the result always has one more
+// element than there were separators.
 pub fn split(b: bytes, sep: int) -> [bytes] {
     let parts: [bytes] = [];
     let start = 0;

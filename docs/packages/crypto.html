@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>crypto — slang</title>
+<meta name="description" content="Package crypto.">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/crypto.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <nav class="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>crypto</h1>
+      <p class="tagline">Package crypto.</p>
+      <p class="agentline">
+        <a href="../packages/crypto.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>SHA-256, HMAC-SHA256, and a CSPRNG over OpenSSL. Hash and HMAC are infallible on valid inputs and return <code>bytes</code> directly; <code>rand</code> can fail and returns <code>result[bytes, str]</code>.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;crypto&quot;</span>;
+
+<span class="k">let</span> h: <span class="t">bytes</span> = crypto.<span class="f">sha256</span>(b<span class="s">&quot;abc&quot;</span>);              <span class="c">// 32 bytes</span>
+<span class="k">let</span> m: <span class="t">bytes</span> = crypto.<span class="f">hmac_sha256</span>(key, msg);       <span class="c">// 32 bytes</span>
+<span class="k">let</span> r = crypto.<span class="f">rand</span>(<span class="n">32</span>);
+<span class="k">guard</span> <span class="k">let</span> b = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
+    log.<span class="f">error</span>(<span class="s">&quot;rand failed: &quot;</span> + e);
+}</code></pre></div>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="sha256"><div class="api-sig"><code>crypto.<span class="f">sha256</span>(<span class="t">bytes</span>) -&gt; <span class="t">bytes</span></code><a class="anchor" href="#sha256">#</a></div></div><div class="api-item" id="hmac-sha256"><div class="api-sig"><code>crypto.<span class="f">hmac_sha256</span>(<span class="t">bytes</span>, <span class="t">bytes</span>) -&gt; <span class="t">bytes</span></code><a class="anchor" href="#hmac-sha256">#</a></div></div><div class="api-item" id="rand"><div class="api-sig"><code>crypto.<span class="f">rand</span>(<span class="t">int</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>,<span class="t">str</span>]</code><a class="anchor" href="#rand">#</a></div></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <p>Generated from the repository by <code>www/build.py</code> — the
+     guide comes from <code>README.md</code>, the API from the compiler's
+     own signature tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

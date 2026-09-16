@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>http — slang</title>
+<meta name="description" content="Package http.">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/http.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <nav class="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>http</h1>
+      <p class="tagline">Package http.</p>
+      <p class="agentline">
+        <a href="../packages/http.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>HTTP/1.1 over <code>link</code> / <code>wire</code> / <code>until</code> / <code>fault</code>. Parse a request from <code>bytes</code>, or <code>read</code> from a connection into a caller-sized <code>wire</code> (the max request size). <code>read</code> takes the unconsumed prefix length and returns <code>Incoming</code> with leftover compacted to the front of the wire, so one connection can carry many requests. <code>write</code> serializes a <code>Response</code> through an arena. Headers are stored lowercased; <code>header(req, name)</code> looks up case-insensitively. <code>Content-Length</code> is honored; chunked <code>Transfer-Encoding</code> is rejected. <code>wants_close</code> follows HTTP/1.1 keep-alive (and HTTP/1.0 close-by-default).</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;http&quot;</span>;
+
+<span class="k">fn</span> <span class="f">serve</span>(c: <span class="k">link</span>) {
+    <span class="k">let</span> ra = <span class="b">arena_new</span>(<span class="n">16384</span>);
+    <span class="k">let</span> sa = <span class="b">arena_new</span>(<span class="n">16384</span>);
+    <span class="k">let</span> buf = ra.<span class="t">wire</span>(<span class="n">8192</span>);
+    <span class="k">let</span> filled = <span class="n">0</span>;
+    <span class="k">while</span> <span class="k">true</span> {
+        <span class="k">let</span> rr = http.<span class="f">read</span>(&amp;<span class="k">mut</span> c, buf, filled, <span class="b">until_never</span>());
+        <span class="k">guard</span> <span class="k">let</span> got = rr <span class="k">else</span> { <span class="k">return</span>; }
+        <span class="k">let</span> wr = http.<span class="f">write</span>(&amp;<span class="k">mut</span> c, http.<span class="f">ok_text</span>(got.req.path), &amp;<span class="k">mut</span> sa,
+                            <span class="b">until_never</span>());
+        <span class="k">guard</span> <span class="k">let</span> _n = wr <span class="k">else</span> { <span class="k">return</span>; }
+        sa.<span class="f">reset</span>();
+        <span class="k">if</span> http.<span class="f">wants_close</span>(got.req) { <span class="k">return</span>; }
+        filled = got.filled;
+    }
+}</code></pre></div>
+<p>See <code>examples/httpd/</code> for a listener loop on this package.</p>
+<p>This works because every <code>spawn</code>ed thread has <code>SIGTERM</code>/<code>SIGINT</code> blocked in its own signal mask from birth (inherited at creation, restored in the spawning thread right after) — so the OS can only ever pick the main thread to run the handler, which is what lets the main thread&#x27;s blocked <code>accept()</code> call reliably observe the interruption instead of the signal silently landing on some unrelated connection&#x27;s worker thread mid-request. There&#x27;s a narrow startup race inherent to this: a signal that arrives in the brief window before <code>main()</code> installs the handler gets the OS&#x27;s default disposition (immediate termination) instead of graceful handling, same as any signal-handling program.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="request"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Request</code> <span class="src">stdlib/http/http.sl:3</span><a class="anchor" href="#request">#</a></div></div><div class="api-item" id="incoming"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Incoming</code> <span class="src">stdlib/http/http.sl:11</span><a class="anchor" href="#incoming">#</a></div></div><div class="api-item" id="response"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Response</code> <span class="src">stdlib/http/http.sl:16</span><a class="anchor" href="#response">#</a></div></div><div class="api-item" id="header"><div class="api-sig"><code><span class="k">fn</span> <span class="f">header</span>(r: Request, name: <span class="t">str</span>) -&gt; <span class="t">opt</span>[<span class="t">str</span>]</code> <span class="src">stdlib/http/http.sl:161</span><a class="anchor" href="#header">#</a></div></div><div class="api-item" id="parse"><div class="api-sig"><code><span class="k">fn</span> <span class="f">parse</span>(raw: <span class="t">bytes</span>) -&gt; <span class="t">result</span>[Request, <span class="t">str</span>]</code> <span class="src">stdlib/http/http.sl:169</span><a class="anchor" href="#parse">#</a></div></div><div class="api-item" id="serialize"><div class="api-sig"><code><span class="k">fn</span> <span class="f">serialize</span>(r: Response) -&gt; <span class="t">bytes</span></code> <span class="src">stdlib/http/http.sl:226</span><a class="anchor" href="#serialize">#</a></div></div><div class="api-item" id="wants-close"><div class="api-sig"><code><span class="k">fn</span> <span class="f">wants_close</span>(r: Request) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/http/http.sl:267</span><a class="anchor" href="#wants-close">#</a></div></div><div class="api-item" id="read"><div class="api-sig"><code><span class="k">fn</span> <span class="f">read</span>(c: &amp;<span class="k">mut</span> <span class="k">link</span>, buf: <span class="t">wire</span>, filled: <span class="t">int</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Incoming, <span class="t">str</span>]</code> <span class="src">stdlib/http/http.sl:281</span><a class="anchor" href="#read">#</a></div></div><div class="api-item" id="write"><div class="api-sig"><code><span class="k">fn</span> <span class="f">write</span>(c: &amp;<span class="k">mut</span> <span class="k">link</span>, r: Response, a: &amp;<span class="k">mut</span> <span class="t">arena</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">int</span>, <span class="t">fault</span>]</code> <span class="src">stdlib/http/http.sl:333</span><a class="anchor" href="#write">#</a></div></div><div class="api-item" id="text-response"><div class="api-sig"><code><span class="k">fn</span> <span class="f">text_response</span>(status: <span class="t">i32</span>, status_text: <span class="t">str</span>, content_type: <span class="t">str</span>,</code> <span class="src">stdlib/http/http.sl:338</span><a class="anchor" href="#text-response">#</a></div></div><div class="api-item" id="ok-html"><div class="api-sig"><code><span class="k">fn</span> <span class="f">ok_html</span>(body: <span class="t">str</span>) -&gt; Response</code> <span class="src">stdlib/http/http.sl:350</span><a class="anchor" href="#ok-html">#</a></div></div><div class="api-item" id="ok-css"><div class="api-sig"><code><span class="k">fn</span> <span class="f">ok_css</span>(body: <span class="t">str</span>) -&gt; Response</code> <span class="src">stdlib/http/http.sl:354</span><a class="anchor" href="#ok-css">#</a></div></div><div class="api-item" id="ok-js"><div class="api-sig"><code><span class="k">fn</span> <span class="f">ok_js</span>(body: <span class="t">str</span>) -&gt; Response</code> <span class="src">stdlib/http/http.sl:358</span><a class="anchor" href="#ok-js">#</a></div></div><div class="api-item" id="ok-json"><div class="api-sig"><code><span class="k">fn</span> <span class="f">ok_json</span>(body: <span class="t">str</span>) -&gt; Response</code> <span class="src">stdlib/http/http.sl:363</span><a class="anchor" href="#ok-json">#</a></div></div><div class="api-item" id="ok-text"><div class="api-sig"><code><span class="k">fn</span> <span class="f">ok_text</span>(body: <span class="t">str</span>) -&gt; Response</code> <span class="src">stdlib/http/http.sl:367</span><a class="anchor" href="#ok-text">#</a></div></div><div class="api-item" id="created-json"><div class="api-sig"><code><span class="k">fn</span> <span class="f">created_json</span>(body: <span class="t">str</span>) -&gt; Response</code> <span class="src">stdlib/http/http.sl:371</span><a class="anchor" href="#created-json">#</a></div></div><div class="api-item" id="bad-request"><div class="api-sig"><code><span class="k">fn</span> <span class="f">bad_request</span>(msg: <span class="t">str</span>) -&gt; Response</code> <span class="src">stdlib/http/http.sl:376</span><a class="anchor" href="#bad-request">#</a></div></div><div class="api-item" id="not-found"><div class="api-sig"><code><span class="k">fn</span> <span class="f">not_found</span>() -&gt; Response</code> <span class="src">stdlib/http/http.sl:381</span><a class="anchor" href="#not-found">#</a></div></div><div class="api-item" id="method-not-allowed"><div class="api-sig"><code><span class="k">fn</span> <span class="f">method_not_allowed</span>() -&gt; Response</code> <span class="src">stdlib/http/http.sl:386</span><a class="anchor" href="#method-not-allowed">#</a></div></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <p>Generated from the repository by <code>www/build.py</code> — the
+     guide comes from <code>README.md</code>, the API from the compiler's
+     own signature tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>time — slang</title>
+<meta name="description" content="Package time.">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/time.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <nav class="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>time</h1>
+      <p class="tagline">Package time.</p>
+      <p class="agentline">
+        <a href="../packages/time.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;time&quot;</span>;
+
+<span class="k">let</span> t0 = time.<span class="f">mono</span>();     <span class="c">// monotonic clock; a `duration` (int64 ns)</span>
+time.<span class="f">sleep</span>(<span class="n">20000000</span>);     <span class="c">// sleep for a duration (ns)</span>
+<span class="k">let</span> elapsed = time.<span class="f">mono</span>() - t0;   <span class="c">// duration arithmetic</span>
+<span class="k">let</span> deadline = time.<span class="f">mono</span>() + <span class="n">5000000</span>;  <span class="c">// timeout math for net calls</span>
+
+<span class="k">let</span> wall = time.<span class="f">wall</span>();   <span class="c">// unix epoch time in nanoseconds</span></code></pre></div>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="mono"><div class="api-sig"><code>time.<span class="f">mono</span>() -&gt; <span class="t">duration</span></code><a class="anchor" href="#mono">#</a></div></div><div class="api-item" id="wall"><div class="api-sig"><code>time.<span class="f">wall</span>() -&gt; <span class="t">int</span></code><a class="anchor" href="#wall">#</a></div></div><div class="api-item" id="sleep"><div class="api-sig"><code>time.<span class="f">sleep</span>(<span class="t">int</span>)</code><a class="anchor" href="#sleep">#</a></div></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <p>Generated from the repository by <code>www/build.py</code> — the
+     guide comes from <code>README.md</code>, the API from the compiler's
+     own signature tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>
