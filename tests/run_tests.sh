@@ -83,6 +83,32 @@ for t in tests/fail_*/main.sl; do
     fi
 done
 
+# ---- slangc new ------------------------------------------------------
+# Scaffolding is part of the compiler, so it is part of the suite. The
+# check is end-to-end on purpose: a project that is created but does not
+# compile is worse than no scaffolding, because the first thing a new
+# user does with it is run it.
+echo "--- slangc new ---"
+NEWDIR=$(mktemp -d)
+if ./slangc new "$NEWDIR/scaffold" >/dev/null 2>&1 &&
+   [ -f "$NEWDIR/scaffold/slang.project" ] &&
+   [ -f "$NEWDIR/scaffold/main.sl" ] &&
+   (cd "$NEWDIR/scaffold" && "$OLDPWD/slangc" main.sl --run 2>/dev/null |
+        grep -q "hello from scaffold")
+then
+    # a second `new` over the same directory must refuse rather than clobber
+    if ./slangc new "$NEWDIR/scaffold" >/dev/null 2>&1; then
+        echo "FAIL slangc new (overwrote an existing slang.project)"
+        fail=1
+    else
+        echo "PASS slangc new"
+    fi
+else
+    echo "FAIL slangc new (scaffold did not build and run)"
+    fail=1
+fi
+rm -rf "$NEWDIR"
+
 # Generated C must compile clean under the warnings a C compiler turns
 # on by ITSELF. slangc passes no -W flags, so anything default-on lands
 # in the user's terminal on every single build -- 79 of them across this

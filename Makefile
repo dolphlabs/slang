@@ -1,9 +1,13 @@
 CC     = cc
+VERSION = 0.1.0
+PREFIX ?= /usr/local
+DESTDIR ?=
 RUNTIME_DIR = $(abspath runtime)
 STDLIB_DIR = $(abspath stdlib)
 CFLAGS = -std=c11 -O2 -Wall -Wextra -D_GNU_SOURCE \
 	-DSLANG_RUNTIME_DIR=\"$(RUNTIME_DIR)\" \
-	-DSLANG_STDLIB_DIR=\"$(STDLIB_DIR)\"
+	-DSLANG_STDLIB_DIR=\"$(STDLIB_DIR)\" \
+	-DSLANG_VERSION=\"$(VERSION)\"
 
 # Core codegen engine (type inference, expr/stmt codegen, program
 # orchestration) plus native.c, the fixed-signature dispatch every
@@ -57,7 +61,7 @@ tests/runtime/test_gc: tests/runtime/test_gc.c $(RT_SRCS)
 	$(CC) -std=c11 -O2 -Wall -Wno-unused-function -I runtime \
 		tests/runtime/test_gc.c -lpthread -o tests/runtime/test_gc
 
-.PHONY: test clean docs docs-serve
+.PHONY: test clean docs docs-serve install uninstall dist slangc-dist
 
 test: slangc tests/runtime/test_gc
 	./tests/runtime/test_gc
@@ -79,3 +83,55 @@ docs:
 
 docs-serve: docs
 	python3 -m http.server -d docs 8000
+
+# ---- installation ---------------------------------------------------
+#
+# slangc needs its runtime/ and stdlib/ at COMPILE time -- it splices the
+# runtime C into every program it builds -- so installing the binary
+# alone produces a compiler that cannot compile anything. Both trees go
+# to $(PREFIX)/lib/slang, which rtpath.c finds relative to argv0.
+#
+# The installed binary is built WITHOUT -DSLANG_RUNTIME_DIR /
+# -DSLANG_STDLIB_DIR. Those bake absolute paths into this working copy,
+# and they are checked before the argv0-relative lookup -- so an
+# installed binary carrying them would quietly keep using the source
+# tree it was built from, and would break the day that tree moved.
+DIST_CFLAGS = -std=c11 -O2 -Wall -Wextra -D_GNU_SOURCE \
+	-DSLANG_VERSION=\"$(VERSION)\"
+
+slangc-dist: $(SRCS) $(HDRS) $(RT_SRCS)
+	$(CC) $(DIST_CFLAGS) -o slangc-dist $(SRCS)
+
+install: slangc-dist
+	mkdir -p $(DESTDIR)$(PREFIX)/bin
+	mkdir -p $(DESTDIR)$(PREFIX)/lib/slang/runtime
+	mkdir -p $(DESTDIR)$(PREFIX)/lib/slang/stdlib
+	cp slangc-dist $(DESTDIR)$(PREFIX)/bin/slangc
+	chmod 755 $(DESTDIR)$(PREFIX)/bin/slangc
+	cp runtime/*.c $(DESTDIR)$(PREFIX)/lib/slang/runtime/
+	cp -R stdlib/. $(DESTDIR)$(PREFIX)/lib/slang/stdlib/
+	@echo
+	@echo "installed slangc $(VERSION) -> $(DESTDIR)$(PREFIX)/bin/slangc"
+	@echo "         runtime + stdlib -> $(DESTDIR)$(PREFIX)/lib/slang"
+	@echo
+	@echo "try:  slangc new hello && cd hello && slangc main.sl --run"
+
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/bin/slangc
+	rm -rf $(DESTDIR)$(PREFIX)/lib/slang
+	@echo "removed slangc and $(DESTDIR)$(PREFIX)/lib/slang"
+
+# A relocatable tarball with the same layout install produces, so a
+# release asset can be unpacked anywhere and used in place.
+DIST_NAME = slang-$(VERSION)-$(shell uname -s | tr A-Z a-z)-$(shell uname -m)
+dist: slangc-dist
+	rm -rf dist/$(DIST_NAME)
+	mkdir -p dist/$(DIST_NAME)/bin dist/$(DIST_NAME)/lib/slang/runtime
+	mkdir -p dist/$(DIST_NAME)/lib/slang/stdlib
+	cp slangc-dist dist/$(DIST_NAME)/bin/slangc
+	cp runtime/*.c dist/$(DIST_NAME)/lib/slang/runtime/
+	cp -R stdlib/. dist/$(DIST_NAME)/lib/slang/stdlib/
+	cp README.md LICENSE dist/$(DIST_NAME)/ 2>/dev/null || \
+		cp README.md dist/$(DIST_NAME)/
+	tar -czf dist/$(DIST_NAME).tar.gz -C dist $(DIST_NAME)
+	@echo "wrote dist/$(DIST_NAME).tar.gz"

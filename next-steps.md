@@ -212,6 +212,54 @@ a single token.
   a property of the measured runs, and editing a benchmark program to
   tidy it would invalidate the numbers taken with it.
 
+## Packaging (done)
+
+- [x] `make install` / `uninstall` / `dist`, `slangc new`, `--version`.
+  Before this there were no tags, no releases and no install target:
+  the only way to get slang was `git clone && make`, with the binary
+  left in the source tree. The docs site made that worse rather than
+  better -- a Packages page listing 14 packages for a language with no
+  front door.
+
+  **The bug worth remembering** is that the first install did not work.
+  `slangc` splices its runtime C into every program it compiles, so the
+  binary alone is useless; runtime/ and stdlib/ go to
+  `$(PREFIX)/lib/slang`. But even with those in place it failed with
+  "cannot find runtime file", because rtpath.c resolved relative to
+  `argv[0]` -- and an installed compiler is invoked through PATH, where
+  `argv[0]` is just "slangc" with no directory, so every lookup
+  resolved against the CURRENT WORKING DIRECTORY. Fixed by asking the
+  OS for the executable's real path (`_NSGetExecutablePath` on macOS,
+  `/proc/self/exe` on Linux), with realpath so a symlinked install
+  finds lib/ next to the real binary rather than next to the link.
+  Verified under `env -i` with only the install prefix on PATH: source
+  stdlib packages, native packages and a package with a link flag all
+  compile and run.
+
+  The installed binary is built WITHOUT `-DSLANG_RUNTIME_DIR` /
+  `-DSLANG_STDLIB_DIR`. Those bake absolute paths to the build tree and
+  are checked BEFORE the argv0-relative lookup, so an installed binary
+  carrying them would quietly keep using the source tree it was built
+  from and break the day that tree moved.
+
+  `slangc new <name>|.` scaffolds `slang.project`, `main.sl` and
+  `.gitignore`. It lives in the compiler rather than a companion tool
+  because the compiler already owns both formats -- `project.c` parses
+  `slang.project` and WRITES `slang.lock` -- so a separate tool would
+  reimplement a grammar it does not control. It deliberately does not
+  write `slang.lock`: the lock is derived from the `pkg` pins by
+  `slangc get`, and a lock for a project with no dependencies records
+  nothing. `cargo new` and `go mod init` draw the same line.
+
+  The suite checks scaffolding end to end (create, build, run, and
+  refuse to overwrite), and the check was confirmed to FAIL when the
+  generated main.sl is broken.
+
+  **Not done, deliberately:** no git tag and no GitHub release. Both are
+  public, one-way actions; `make dist` produces the relocatable tarball
+  and the tag is one command when someone decides to cut v0.1.0.
+
+
 ## Notes
 
 - Do not change `bench/http/main.sl` for perf experiments. Raw-best slang is `bench/http_opt/main.sl`; remasure with `./bench/run_http_opt.sh`.
