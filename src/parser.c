@@ -1246,10 +1246,18 @@ static Stmt *parse_impl_decl(Parser *p) {
     while (!check(p, T_RBRACE)) {
         if (check(p, T_EOF))
             parse_error(peek(p), "unexpected end of file inside impl block");
+        /* `pub fn` exports a method, as the README documents. This used to
+           be rejected here while infer.c already enforced method
+           visibility -- so a method was uncallable from any other
+           package, and the error for trying ("add 'pub' to export it")
+           sent the caller straight into this one. */
+        int is_pub = match(p, T_KW_PUB);
         if (!check(p, T_KW_FN))
             parse_error(peek(p),
-                        "only 'fn' declarations are allowed inside 'impl'");
+                        "only 'fn' or 'pub fn' declarations are allowed "
+                        "inside 'impl'");
         FuncDecl *f = parse_fn_decl(p, 0);
+        f->is_pub = is_pub;
         funcs = (FuncDecl **)xrealloc(funcs, (n + 1) * sizeof(FuncDecl *));
         funcs[n++] = f;
     }

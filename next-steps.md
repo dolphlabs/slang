@@ -548,10 +548,14 @@ a single token.
     emitted under the same C symbol. Client operations are therefore
     handle-first functions, `client_get(c, ...)`, matching every other
     stdlib package (`sql.exec(db, ...)`).
-  - `pub fn` inside `impl` is documented in the README but rejected by
-    the parser, and method visibility is not enforced at all
-    (`method_find` checks only package and name).
-  - Separately: `==` between two `bool`s is a compile error.
+  - `pub fn` inside `impl` was rejected by the parser. FIXED (#126).
+    An earlier version of this note also said method visibility was
+    "not enforced at all", inferred from reading `method_find` alone.
+    That was wrong: infer.c already refused a non-pub method called from
+    another package. The two together meant NO method could be called
+    from outside its package, and the refusal's own advice ("add 'pub'")
+    led straight to the parse error.
+  - `==` between two `bool`s was a compile error. FIXED (#125).
 
 ## HTTP client: cookies (done)
 
