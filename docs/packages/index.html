@@ -30,7 +30,7 @@
   <a class="brand" href="../index.html">
     <span class="mark" aria-hidden="true"></span> slang
   </a>
-  <nav class="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a class="active" href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <nav class="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../bench/index.html">Benchmarks</a><a class="active" href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
   <div class="tools">
     <input id="search" type="search" placeholder="Search docs…"
            autocomplete="off" aria-label="Search documentation">
@@ -327,7 +327,7 @@ http2.<span class="f">transport_tls</span>(ssl)   <span class="c">// h2 over TLS
     }
 }</code></pre></div>
 <p>Verified against real <code>curl --http2-prior-knowledge</code>: GET, POST with a body, five requests multiplexed on one connection, and a 64KB upload that exercises DATA chunking and flow-control <code>WINDOW_UPDATE</code>.</p>
-<h5 id="deadlines">Deadlines<a class="anchor" href="#deadlines" aria-label="Link to this section">#</a></h5>
+<h5 id="deadlines-2">Deadlines<a class="anchor" href="#deadlines-2" aria-label="Link to this section">#</a></h5>
 <p>Every read and every write is bounded, so a peer that connects and then dribbles — or one that stops reading our responses — is disconnected rather than left holding a task forever. <code>http2.Limits</code> carries four separate budgets because they defend against four different peers:</p>
 <div class="tablewrap"><table><thead><tr><th>Budget</th><th>Covers</th></tr></thead><tbody><tr><td><code>handshake</code></td><td>connect → valid client preface</td></tr><tr><td><code>idle</code></td><td>no request in flight, waiting for the next frame</td></tr><tr><td><code>request</code></td><td>first HEADERS octet → END_STREAM</td></tr><tr><td><code>write</code></td><td>one <code>writer_task</code> send</td></tr></tbody></table></div>
 <p><code>idle</code> is deliberately generous (2 minutes by default): an HTTP/2 connection sitting open with no streams is completely normal, and timing it out aggressively breaks correct clients. <code>request</code> is the strict one and applies to the request <strong>as a whole</strong> — it is never refreshed by incoming frames, so dribbling DATA one octet at a time cannot extend it. That distinction is the whole defence; a per-read timeout would never fire against a slowloris, because every individual read makes progress.</p>
