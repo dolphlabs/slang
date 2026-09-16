@@ -1877,12 +1877,40 @@ prerequisite, not a different plan).
       direction. If pure-compute throughput matters more for a given
       deployment, `SL_GC_PENDING_BATCH` is the knob.
 
-      **Still open:** approach 3 (per-thread sharding) would remove the
-      lock rather than amortise it, and would not pay the per-allocation
-      TLS cost if the shard lived on the task rather than the thread —
-      `sl_rt_cur()` is already resolved in `sl_gc_alloc`'s preempt
-      bracket, so a task-owned batch is reachable for free. That is the
-      real fix and is worth doing properly.
+      **Closed by measurement, not by more work.** The suggestion
+      recorded here — move the batch from the thread to the task, since
+      `sl_rt_cur()` is already resolved inside `sl_gc_alloc`'s preempt
+      bracket — has since been done, and it took the lock off the
+      allocation path entirely rather than amortising it. `sl_gc_alloc_fin`
+      now pushes onto a per-TASK pending list, publishes bytes with a
+      relaxed atomic add, and retires batches through a CAS loop. There
+      is no `pthread_mutex_lock` on the fast path at all; `sl_gc_mu` is
+      taken in six places in the whole runtime, none of them here.
+
+      Re-profiled before attempting approach 3, because the evidence
+      above predates that change and a fix for a bottleneck that has
+      moved is worse than no fix:
+
+      | | recorded above | measured now |
+      |---|---|---|
+      | `__psynch_mutexwait` | 3725 | **97** (compute), **0** (HTTP) |
+      | `_pthread_mutex_firstfit_lock_slow` | 3846 | 10 |
+      | `sl_gc_alloc_fin`, leaf samples | — | **31**, against 33,113 in the user's own worker |
+
+      Per-thread sharding (approach 3 proper) would now be optimising
+      something that costs 31 samples out of 33,000. Not worth doing,
+      and the entry is closed rather than carried.
+
+      The other symptom recorded above — "HTTP throughput almost flat
+      from concurrency 10 to 2000" — no longer reproduces either: a
+      sweep with `ab` gives 16.3k rps at c=10 falling to 10.9k at c=500,
+      which is a decline, not a ceiling. That decline is NOT
+      characterised: `ab` is single-threaded and may well be the limit
+      at that concurrency, and an attempt to test that with two
+      concurrent clients failed to produce numbers. Anyone chasing
+      throughput scaling should start by getting a load generator that
+      is definitely not the bottleneck (`wrk` is absent on this
+      machine), not by assuming the server.
 
       Do not attempt further work here without the safepoint/GC-quiescence
       invariants in `sl_gc_collect` firmly in hand — this session found a
