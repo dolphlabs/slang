@@ -20,3 +20,7 @@ server
 arr
 cc
 hb
+
+# built by `make test` from tests/runtime/test_gc.c; a committed copy is
+# a macOS binary that a Linux checkout would try to execute
+tests/runtime/test_gc

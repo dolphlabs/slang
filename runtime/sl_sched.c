@@ -504,6 +504,14 @@ void sl_ctx_switch(void **old_rsp_slot, void *new_rsp);
 void sl_ctx_trampoline(void);
 void sl_grower_trampoline(void); /* Tier 11 eighth slice -- see its own
     comment above (right after sl_preempt_trampoline_end) */
+/* Every C function called FROM the __asm__ blocks above is marked
+ * __attribute__((used)). The assembly is an opaque string to the C
+ * optimizer, so under -flto nothing visibly calls these, and GCC drops
+ * them: on Linux every slang program -- hello included -- failed to link
+ * with "undefined reference to sl_preempt_yield". clang on macOS happened
+ * to keep them, which is why it went unnoticed until the first Linux
+ * build. sl_cpu_avx_ok (sl_core.c) already carried the same attribute for
+ * the same reason. */
 void sl_preempt_release_initial_disable(void); /* Tier 11 eighth slice
     -- called from sl_ctx_trampoline above, defined further down in
     this file, near sl_task_stack_init. Deliberately NOT static, same
@@ -1196,7 +1204,7 @@ static void sl_task_release(sl_task *t) {
  * above. sl_rt_current_task is already correctly set by whoever
  * dispatched this task (sl_worker_run_loop, or main's own one-off
  * switch-in, program.c) before the switch that landed us here. */
-void sl_preempt_release_initial_disable(void) {
+__attribute__((used)) void sl_preempt_release_initial_disable(void) {
     atomic_fetch_sub_explicit(&sl_rt_current_task->preempt_disable_depth,
                                1, memory_order_acq_rel);
 }
@@ -1209,7 +1217,7 @@ void sl_preempt_release_initial_disable(void) {
  * runtime_core.c (RUNTIME[]), defined for real in runtime_pool.c,
  * emitted after this file -- same established cross-file pattern
  * every other park/resume/yield primitive already uses. */
-void sl_preempt_yield(void) {
+__attribute__((used)) void sl_preempt_yield(void) {
     sl_task *t = sl_rt_current_task;
     t->async_preempted = 1;
     sl_task_yield_now(); /* existing, unmodified -- sets t->preempted=1,
@@ -1276,11 +1284,11 @@ void sl_preempt_yield(void) {
     atomic_fetch_add_explicit(&sl_rt_async_epoch, 1, memory_order_release);
 }
 
-void *sl_preempt_get_orig_pc(void) {
+__attribute__((used)) void *sl_preempt_get_orig_pc(void) {
     return sl_rt_current_task->async_orig_pc;
 }
 
-void *sl_preempt_get_disable_depth_ptr(void) {
+__attribute__((used)) void *sl_preempt_get_disable_depth_ptr(void) {
     return (void *)&sl_rt_current_task->preempt_disable_depth;
 }
 
