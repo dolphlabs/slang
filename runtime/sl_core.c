@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>   /* sl_str_parse_f64 (sl_containers.c) checks ERANGE */
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdatomic.h>

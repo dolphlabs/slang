@@ -2055,6 +2055,169 @@
         }
       ]
     },
+    "strings": {
+      "name": "strings",
+      "kind": "native",
+      "items": [
+        {
+          "name": "find",
+          "params": [
+            "str",
+            "str"
+          ],
+          "ret": "int",
+          "tls": false,
+          "sig": "strings.find(str, str) -> int"
+        },
+        {
+          "name": "rfind",
+          "params": [
+            "str",
+            "str"
+          ],
+          "ret": "int",
+          "tls": false,
+          "sig": "strings.rfind(str, str) -> int"
+        },
+        {
+          "name": "contains",
+          "params": [
+            "str",
+            "str"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "strings.contains(str, str) -> bool"
+        },
+        {
+          "name": "has_prefix",
+          "params": [
+            "str",
+            "str"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "strings.has_prefix(str, str) -> bool"
+        },
+        {
+          "name": "has_suffix",
+          "params": [
+            "str",
+            "str"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "strings.has_suffix(str, str) -> bool"
+        },
+        {
+          "name": "count",
+          "params": [
+            "str",
+            "str"
+          ],
+          "ret": "int",
+          "tls": false,
+          "sig": "strings.count(str, str) -> int"
+        },
+        {
+          "name": "trim",
+          "params": [
+            "str"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "strings.trim(str) -> str"
+        },
+        {
+          "name": "trim_start",
+          "params": [
+            "str"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "strings.trim_start(str) -> str"
+        },
+        {
+          "name": "trim_end",
+          "params": [
+            "str"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "strings.trim_end(str) -> str"
+        },
+        {
+          "name": "to_upper",
+          "params": [
+            "str"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "strings.to_upper(str) -> str"
+        },
+        {
+          "name": "to_lower",
+          "params": [
+            "str"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "strings.to_lower(str) -> str"
+        },
+        {
+          "name": "slice",
+          "params": [
+            "str",
+            "int",
+            "int"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "strings.slice(str, int, int) -> str"
+        },
+        {
+          "name": "repeat",
+          "params": [
+            "str",
+            "int"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "strings.repeat(str, int) -> str"
+        },
+        {
+          "name": "replace",
+          "params": [
+            "str",
+            "str",
+            "str"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "strings.replace(str, str, str) -> str"
+        },
+        {
+          "name": "split",
+          "params": [
+            "str",
+            "str"
+          ],
+          "ret": "[str]",
+          "tls": false,
+          "sig": "strings.split(str, str) -> [str]"
+        },
+        {
+          "name": "join",
+          "params": [
+            "NA_ARR_STR",
+            "str"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "strings.join(NA_ARR_STR, str) -> str"
+        }
+      ]
+    },
     "time": {
       "name": "time",
       "kind": "native",

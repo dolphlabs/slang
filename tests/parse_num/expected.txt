@@ -1,0 +1,27 @@
+8080 -> 8080
+-42 -> -42
++7 -> 7
+0 -> 0
+abc -> err: not a base-10 integer
+80x80 -> err: not a base-10 integer
+ -> err: cannot parse an empty string as int
+  12 -> err: not a base-10 integer
+12  -> err: not a base-10 integer
+1_000 -> err: not a base-10 integer
+0x10 -> err: not a base-10 integer
+- -> err: no digits after the sign
+9223372036854775807 -> 9223372036854775807
+-9223372036854775808 -> -9223372036854775808
+9223372036854775808 -> err: out of range for int
+-9223372036854775809 -> err: out of range for int
+3.5 -> 3.5
+-0.25 -> -0.25
+1e3 -> 1000
+0 -> 0
+inf -> err: not a decimal number
+nan -> err: not a decimal number
+1.5x -> err: not a decimal number
+ -> err: cannot parse an empty string as float
+-1
+77
+done

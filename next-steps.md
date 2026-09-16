@@ -167,6 +167,51 @@ a single token.
   `join[T]`. `pkg.func` deliberately keeps the named path so it still
   emits a direct call rather than an indirect one.
 
+## Strings (done)
+
+- [x] `to_int` / `to_float` builtins and a `strings` native package.
+  Picked because three separate files had written the gap down:
+  `demo/httpkit` ("slang has no string search/split builtins yet"),
+  `demo/samplex` (`extern fn atoi`), and samplex's `path_id`, twenty
+  lines of hand-rolled byte loop to read a trailing integer.
+
+  **The atoi problem was a live bug, not an ergonomic one.** Both demos
+  parsed their port with libc `atoi`, which returns 0 for `"abc"`, 80
+  for `"80x80"` and 0 for `""`, reporting nothing in any case -- so
+  `PORT=abc` silently bound an ephemeral port. That directly inverts
+  the README's own rule about never collapsing a descriptive error.
+  `to_int` returns `result[int, str]` and both demos now name the bad
+  value and exit.
+
+  Strict on purpose: whitespace, `1_000`, `0x10`, trailing characters,
+  `inf` and `nan` are all rejected. A caller who wants leniency can trim
+  first; a caller who gets leniency they did not ask for cannot undo it.
+  The int64 range check is derived from the sign rather than assumed
+  symmetric, so `-9223372036854775808` parses and
+  `9223372036854775808` does not.
+
+  `strings` is native because it has to be: `str` supports `len`, `+`
+  and `==` and nothing else -- no indexing, no slicing -- so none of it
+  could be written in slang without a `bytes` round trip per call. 16
+  functions; `split`/`join` are exact inverses; `slice` clamps rather
+  than panicking because slicing is what you do to a string you just
+  searched.
+
+  Two things fell out of it. A new `NA_ARR_STR` native arg kind, since
+  `join` is the first native function to take a list. And a real parser
+  fix: `strings.join` did not parse, because `join` lexes as the
+  `join[T]` type keyword. Keywords now carry their spelling and any
+  identifier-shaped token is accepted after a `.`, so `x.map`,
+  `r.result` and `strings.join` all work. A first attempt used a token
+  RANGE over the `T_TY_*` block and silently missed `chan` and `join`,
+  which sit after `T_TY_LINK` in the enum -- testing by shape instead
+  of by range is what makes it stay fixed.
+
+  `bench/` and `stress_test/` still use `extern fn atoi` and are left
+  alone deliberately: `bench/RESULTS.md` records "no bench changes" as
+  a property of the measured runs, and editing a benchmark program to
+  tidy it would invalidate the numbers taken with it.
+
 ## Notes
 
 - Do not change `bench/http/main.sl` for perf experiments. Raw-best slang is `bench/http_opt/main.sl`; remasure with `./bench/run_http_opt.sh`.
