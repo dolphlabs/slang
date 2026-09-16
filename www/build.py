@@ -149,6 +149,8 @@ PAGES = [
 
 # Package pages are generated from extracted API data; this table adds
 # the one thing source cannot carry -- which README section describes it.
+DOC_ERRORS = []
+
 PACKAGE_SECTIONS = {
     "time": ["`time`"],
     "net": ["`net`", "TLS"],      # TLS lives in net as net.tls_*
@@ -589,11 +591,20 @@ def build(out_dir):
 
         if p["kind"] == "package":
             pkg = all_pkgs[p["_pkg"]]
+            # Both of these used to be a warning on stderr, and a package
+            # page quietly shipped as a bare API list -- twice: `encoding`
+            # was never listed here, and `compress` lost its README section
+            # to an overlapping edit. Each time the warning was lost in the
+            # build output. A package page without its explanation is a
+            # broken page, so the build now refuses to produce one.
+            if pkg["name"] not in PACKAGE_SECTIONS:
+                DOC_ERRORS.append("package %r has no PACKAGE_SECTIONS entry"
+                                  % pkg["name"])
             for sec in PACKAGE_SECTIONS.get(pkg["name"], []):
                 prose = readme.get(sec)
                 if not prose:
-                    print("  ! missing README section: %r" % sec,
-                          file=sys.stderr)
+                    DOC_ERRORS.append("package %r: README section %r is "
+                                      "missing" % (pkg["name"], sec))
                     continue
                 body_parts.append(md_to_html(prose[1], heading_shift=1))
                 md_parts.append("\n".join(prose[1]).strip())
@@ -1054,6 +1065,12 @@ def main():
     ap.add_argument("--out", default=str(ROOT / "docs"))
     args = ap.parse_args()
     build(args.out)
+    if DOC_ERRORS:
+        for e in DOC_ERRORS:
+            print("error: " + e, file=sys.stderr)
+        print("docs build FAILED: %d package page(s) would ship without "
+              "their README explanation" % len(DOC_ERRORS), file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
