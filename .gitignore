@@ -10,3 +10,5 @@ tests/pkgtrans/slang.project
 tests/pkgtrans/slang.lock
 
 main.gen.c
+slangc-dist
+dist/

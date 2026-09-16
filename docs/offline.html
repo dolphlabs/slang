@@ -522,8 +522,23 @@ tr:last-child td { border-bottom: 0; }
 </section>
 
 <h2 id="quick-start">Quick start</h2>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>make                 # build the slangc compiler
-make test            # compile &amp; run the example programs</code></pre></div>
+<p>Install the compiler, then start a project:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>git clone https://github.com/dolphlabs/slang &amp;&amp; cd slang
+sudo make install            # /usr/local by default; PREFIX=~/.local works too
+
+slangc new hello
+cd hello
+slangc main.sl --run         # hello from hello</code></pre></div>
+<p><code>make install</code> puts <code>slangc</code> in <code>$(PREFIX)/bin</code> and the runtime and standard library in <code>$(PREFIX)/lib/slang</code> — both are needed, because <code>slangc</code> splices its runtime C into every program it compiles. Remove it all with <code>make uninstall</code>. <code>make dist</code> builds a relocatable tarball with the same layout, which can be unpacked anywhere and run in place.</p>
+<p>Working on the compiler itself:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>make                 # build ./slangc against this working tree
+make test            # compile &amp; run the example programs
+make docs            # rebuild the documentation site</code></pre></div>
+<h3 id="starting-a-project">Starting a project<a class="anchor" href="#starting-a-project" aria-label="Link to this section">#</a></h3>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>slangc new myapp     # creates myapp/ with slang.project, main.sl, .gitignore
+slangc new .         # same, in the directory you are already in</code></pre></div>
+<p><code>slangc new</code> writes <code>slang.project</code> but <strong>not</strong> <code>slang.lock</code>. The lock is derived: <code>slangc get</code> generates it from the <code>pkg</code> lines in <code>slang.project</code>, and a lock file for a project with no dependencies records nothing. Cargo and Go draw the same line — <code>cargo new</code> writes <code>Cargo.toml</code> and not <code>Cargo.lock</code>.</p>
+<p>Scaffolding lives in <code>slangc</code> rather than a companion tool because the compiler already owns both formats: it parses <code>slang.project</code> and writes <code>slang.lock</code>. A separate tool would have to reimplement a grammar it does not control.</p>
 <p>Compile a slang program:</p>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>./slangc examples/hello/main.sl     # produces ./main
 ./main                              # run it</code></pre></div>

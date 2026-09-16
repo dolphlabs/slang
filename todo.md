@@ -1796,9 +1796,12 @@ prerequisite, not a different plan).
       measured STW pause time under real load demands it
 - [ ] `io_uring` reactor backend for Linux, behind the same interface
       as the kqueue/epoll backend, if warranted
-- [ ] An epoll backend (Linux) — not a performance item, a production-
-      readiness one: the reactor is kqueue-only today, and real
-      deployment targets are overwhelmingly Linux
+- [x] An epoll backend (Linux) — landed. `runtime/sl_net.c` includes
+      `<sys/epoll.h>` and drives it through `epoll_ctl`/`epoll_wait`
+      behind the same interface as kqueue. This entry stayed unticked
+      long after the work was done, which is its own lesson: an open
+      item that reads "slang does not work properly on Linux" is worse
+      than no roadmap at all.
 - [~] **Allocation is serialised on one global mutex — the top remaining
       performance ceiling, and the reason concurrency does not scale.**
       Every `sl_gc_alloc` takes `sl_gc_mu` to push onto `sl_gc_all`,

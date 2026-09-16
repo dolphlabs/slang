@@ -8,6 +8,9 @@
  *   slangc <file.sl> --emit-c     only write the generated C file
  *   slangc <file.sl> --keep-c     keep the generated C file after compiling
  *   slangc <file.sl> --run        compile and immediately run the result
+ *   slangc new <name>|.           scaffold a new project
+ *   slangc get [file.sl|dir]      resolve dependencies, write slang.lock
+ *   slangc --version              print the version
  */
 
 #include "common.h"
@@ -18,16 +21,152 @@
 #include "rtpath.h"
 #include "project.h"
 
+#include <ctype.h>
 #include <limits.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
+#ifndef SLANG_VERSION
+#define SLANG_VERSION "0.1.0"
+#endif
+
 static void print_usage(void) {
     fputs("usage: slangc <file.sl> [-o <name>] [--emit-c] [--keep-c] [--run] "
           "[--dump-liveness] [--dump-mir]\n"
-          "       slangc get [file.sl|dir]",
+          "       slangc new <name>|.        scaffold a project here or in <name>\n"
+          "       slangc get [file.sl|dir]   resolve deps, write slang.lock\n"
+          "       slangc --version",
           stderr);
     fputc(10, stderr);
+}
+
+static void write_file(const char *path, const char *data, size_t len);
+
+/* ---- slangc new -----------------------------------------------------
+ *
+ * Scaffolding lives in the compiler rather than a companion tool
+ * because the compiler already OWNS both formats: project.c parses
+ * slang.project and writes slang.lock. A separate `slang-init` would
+ * have to reimplement a grammar it does not control, and would drift
+ * from it on the first change.
+ *
+ * It deliberately does NOT write slang.lock. The lock is derived --
+ * `slangc get` generates it from the pins in slang.project -- and a
+ * lock file for a project with no dependencies records nothing. Cargo
+ * and Go draw the same line: `cargo new` writes Cargo.toml but not
+ * Cargo.lock, `go mod init` writes go.mod but not go.sum. */
+
+static int valid_pkg_name(const char *n) {
+    if (!n || !*n)
+        return 0;
+    if (!isalpha((unsigned char)n[0]) && n[0] != '_')
+        return 0;
+    for (const char *p = n; *p; p++)
+        if (!isalnum((unsigned char)*p) && *p != '_')
+            return 0;
+    return 1;
+}
+
+static int exists(const char *p) {
+    struct stat st;
+    return stat(p, &st) == 0;
+}
+
+static int cmd_new(const char *arg) {
+    char dirbuf[4096];
+    const char *dir;
+    char namebuf[256];
+    const char *name;
+
+    if (!arg) {
+        fputs("slang: usage: slangc new <name>|.\n", stderr);
+        return 1;
+    }
+
+    if (!strcmp(arg, ".")) {
+        if (!getcwd(dirbuf, sizeof(dirbuf))) {
+            fputs("slang: cannot determine working directory\n", stderr);
+            return 1;
+        }
+        dir = dirbuf;
+        const char *slash = strrchr(dir, '/');
+        snprintf(namebuf, sizeof(namebuf), "%s", slash ? slash + 1 : dir);
+        /* A directory may legally be called "my-app"; a package may not.
+           Translate rather than refuse, since the user did not choose
+           this name as a package name. */
+        for (char *q = namebuf; *q; q++)
+            if (!isalnum((unsigned char)*q) && *q != '_')
+                *q = '_';
+        name = namebuf;
+    } else {
+        dir = arg;
+        const char *slash = strrchr(arg, '/');
+        name = slash ? slash + 1 : arg;
+        if (mkdir(dir, 0755) != 0 && !exists(dir)) {
+            fputs("slang: cannot create directory: ", stderr);
+            fputs(dir, stderr);
+            fputc(10, stderr);
+            return 1;
+        }
+    }
+
+    if (!valid_pkg_name(name)) {
+        fputs("slang: '", stderr);
+        fputs(name, stderr);
+        fputs("' is not a usable package name (letters, digits and "
+              "underscore; must not start with a digit)\n", stderr);
+        return 1;
+    }
+
+    char *proj = xasprintf("%s/slang.project", dir);
+    if (exists(proj)) {
+        fputs("slang: ", stderr);
+        fputs(proj, stderr);
+        fputs(" already exists -- refusing to overwrite\n", stderr);
+        return 1;
+    }
+
+    char *pbody = xasprintf("name %s\nversion 0.1.0\n", name);
+    write_file(proj, pbody, strlen(pbody));
+
+    char *mainsl = xasprintf("%s/main.sl", dir);
+    if (!exists(mainsl)) {
+        char *mbody = xasprintf(
+            "// %s\n"
+            "//\n"
+            "// Build and run:  slangc main.sl --run\n"
+            "// Add a package:  add a `pkg` line to slang.project, then\n"
+            "//                 `slangc get` to write slang.lock\n"
+            "\n"
+            "println(\"hello from %s\");\n",
+            name, name);
+        write_file(mainsl, mbody, strlen(mbody));
+    }
+
+    char *ign = xasprintf("%s/.gitignore", dir);
+    if (!exists(ign)) {
+        const char *ibody =
+            "# slangc writes the binary next to the source it compiled,\n"
+            "# and keeps generated C only with --keep-c.\n"
+            "main\n"
+            "*.gen.c\n";
+        write_file(ign, ibody, strlen(ibody));
+    }
+
+    fputs("created ", stdout);
+    fputs(proj, stdout);
+    fputc(10, stdout);
+    fputs("created ", stdout);
+    fputs(mainsl, stdout);
+    fputc(10, stdout);
+    fputs("\nnext:  ", stdout);
+    if (strcmp(arg, ".")) {
+        fputs("cd ", stdout);
+        fputs(dir, stdout);
+        fputs(" && ", stdout);
+    }
+    fputs("slangc main.sl --run\n", stdout);
+    return 0;
 }
 
 static void write_file(const char *path, const char *data, size_t len) {
@@ -98,6 +237,15 @@ int main(int argc, char **argv) {
     if (argc >= 2 && !strcmp(argv[1], "get")) {
         sl_compiler_argv0 = argv[0];
         return cmd_get(argc >= 3 ? argv[2] : NULL);
+    }
+    if (argc >= 2 && !strcmp(argv[1], "new")) {
+        sl_compiler_argv0 = argv[0];
+        return cmd_new(argc >= 3 ? argv[2] : NULL);
+    }
+    if (argc >= 2 && (!strcmp(argv[1], "--version") ||
+                      !strcmp(argv[1], "-V"))) {
+        fputs("slangc " SLANG_VERSION "\n", stdout);
+        return 0;
     }
 
     for (int i = 1; i < argc; i++) {
