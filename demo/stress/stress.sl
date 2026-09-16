@@ -28,10 +28,10 @@ pub gc struct FanoutResp { n: int, workers: int, prime_count: int, elapsed_ms: i
 pub gc struct CounterResp { count: int }
 
 // Trial division up to sqrt(i) for every i in [lo, hi), deliberately
-// with no early-exit once a factor is found (slang has no break) --
-// that actually makes for a more predictable, steady CPU cost per
-// call, which is more useful for a stress test than the usual
-// early-exit optimization would be.
+// with no early-exit once a factor is found. `break` would work here;
+// the point is that a fixed amount of work per call gives a
+// predictable, steady CPU cost, which is what a stress test wants and
+// the usual early-exit optimization would destroy.
 pub fn count_primes_range(lo: int, hi: int) -> int {
     let count = 0;
     for i in lo..hi {

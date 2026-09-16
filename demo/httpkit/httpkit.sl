@@ -29,8 +29,9 @@ let LF: int = 10;
 let SPACE: int = 32;
 
 // Returns the index of the first occurrence of `target` in `b` at or
-// after `from`, or -1 if not found. slang has no `break`/`continue`,
-// so an early `return` from inside the loop stands in for `break`.
+// after `from`, or -1 if not found. The early `return` is the natural
+// shape for a search -- it carries the answer out with it, which a
+// `break` would then have to reconstruct.
 fn find_byte(b: bytes, from: int, target: int) -> int {
     let i = from;
     while i < len(b) {

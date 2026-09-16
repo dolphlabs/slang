@@ -901,7 +901,7 @@ points, both permanent decisions, not "for now":
         `return` from inside a loop back-edge bracket (Tier 10's
         previous step) skips that bracket's own closing
         `sl_rt_safepoint_exit()`, entirely by construction -- this
-        language has no `break`/`continue`, so `guard let ... else {
+        language had no `break`/`continue` at the time, so `guard let ... else {
         return; }` (the idiomatic way to leave a loop early,
         pervasive throughout `demo/main.sl`) hits this on every use.
         The skipped `exit()` leaves `sl_rt_safepoint_top` (a

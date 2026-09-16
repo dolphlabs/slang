@@ -2,8 +2,8 @@
 //
 // The server advertises SETTINGS_MAX_CONCURRENT_STREAMS=100. Before the
 // stream gate existed it did not ENFORCE it: the connection layer does
-// not spawn handlers, the caller does, and slang has no function values
-// to hand it a callback, so nothing counted. A peer sending 3000
+// not spawn handlers, the caller does, so nothing counted. A peer
+// sending 3000
 // requests down one connection got 3000 concurrent handler tasks --
 // measured, not theorised.
 //

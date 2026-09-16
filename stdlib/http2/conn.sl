@@ -227,9 +227,11 @@ pub fn our_settings() -> bytes {
 // ---- the stream gate -------------------------------------------------
 //
 // The connection layer cannot cap concurrency on its own: it does not
-// spawn the handlers, the CALLER does, and slang has no function values
-// to hand it a callback. So the bound lives in a token channel the
-// caller holds, and this is the mechanism plus the vocabulary for it.
+// spawn the handlers, the CALLER does. (slang has function values now,
+// so handing it a callback would compile -- but that only moves the
+// same question inside, and the answer would still be this.) So the
+// bound lives in a token channel the caller holds, and this is the
+// mechanism plus the vocabulary for it.
 //
 // A gate is a chan[bool] holding `n` tokens. gate_enter takes one and
 // blocks when none are left; gate_leave puts one back. That blocking IS
@@ -906,8 +908,10 @@ fn flush_out(t: Transport, q: [Out], conn_window: int, max_frame: int,
 // so no handler can decide on its own whether it may send -- and the
 // WINDOW_UPDATE that grants credit arrives on the read side, in a
 // different task entirely. Routing both into this one task is what lets
-// the accounting be correct without a lock, which slang does not expose
-// anyway.
+// the accounting be correct without a lock at all. slang does have a
+// mutex now, but reaching for one here would be the worse design: it
+// would serialise the writers without making the window arithmetic any
+// less shared.
 //
 // A blocked stream parks its BODY here, not its task: the handler hands
 // the response over and moves on, so a peer with a tiny window costs a
