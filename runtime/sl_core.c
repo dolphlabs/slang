@@ -711,8 +711,9 @@ static void sl_task_yield_now(void); /* runtime_pool.c, forward here --
  *      after a checkpoint has just barely cleared the margin -- if
  *      it lands deeper still (more un-checkpointed work) with
  *      preempt_disable_depth == 0, the trampoline pushes its full
- *      save block (RFLAGS + 15 GPRs + 16 XMM + the 128-byte x86-64
- *      red-zone skip + two reserved slots = 528 bytes) plus its own
+ *      save block (RFLAGS + 15 GPRs + the 128-byte x86-64 red-zone
+ *      skip + two reserved slots + a 512-byte VECTOR area = 784
+ *      bytes) plus its own
  *      call chain into sl_preempt_yield -> sl_task_yield_now ->
  *      sl_ctx_switch (each a real stack frame, sl_task_yield_now's
  *      own sl_rt_cur() call included) before the task is safely
@@ -720,7 +721,13 @@ static void sl_task_yield_now(void); /* runtime_pool.c, forward here --
  *      assumed safe. An underflow here isn't a clean crash: the
  *      stack buffer is an ordinary malloc'd block, so it corrupts
  *      whatever heap memory sits just before it.
- * This value stayed at 1024 through the same validation pass that
+ * Raised 1024 -> 2048 when the vector area grew from 256 bytes (16
+ * XMM) to 512 (16 YMM): the old margin left roughly 700-900 bytes of
+ * headroom against a 528-byte block, and a 784-byte block overruns it.
+ * That is not theoretical -- building the larger save block WITHOUT
+ * raising this reproduced SIGBUS in 3 of 20 runs of
+ * stress_test/concurrent_compute, and raising it returned that to 0.
+ * The previous value stayed at 1024 through the validation pass that
  * settled the fat native-deep size at 16384 -- 80 consecutive TLS
  * runs, 6 full test-suite runs, 15 nettest runs, 23
  * stress_test/concurrent_compute runs, and 4 clean UBSan runs, all
@@ -732,9 +739,46 @@ static void sl_task_yield_now(void); /* runtime_pool.c, forward here --
  * runtime_sched.c) because sl_rt_safepoint_enter needs it at its
  * own definition site, same ordering reason as sl_task itself
  * above. */
+/* Does this CPU -- and this OS -- support AVX, i.e. are the upper
+ * halves of the YMM registers live state that must be preserved across
+ * an asynchronous preemption?
+ *
+ * The async trampoline reads this directly from its assembly. It is a
+ * plain byte, written once by sl_cpu_detect() before any worker thread
+ * or task exists, and only ever read afterwards, so it needs no
+ * synchronisation.
+ *
+ * Both halves of the test matter. CPUID reports what the SILICON can
+ * do; XGETBV reports what the OS has actually enabled in XCR0. An OS
+ * that has not enabled YMM state will not preserve it across its own
+ * context switches, and executing VEX-encoded instructions there
+ * faults. Checking OSXSAVE before XGETBV is likewise required -- XGETBV
+ * itself is unavailable without it. */
+/* Not static, and marked used: its only reader is the trampoline's
+ * assembly, so to the C compiler it is write-only and a file-local
+ * symbol would be renamed or discarded outright. */
+__attribute__((used)) unsigned char sl_cpu_avx_ok = 0;
+
+static void sl_cpu_detect(void) {
+#if defined(__x86_64__)
+    unsigned eax, ebx, ecx, edx, xlo, xhi;
+    __asm__ volatile("cpuid"
+                     : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                     : "a"(1u), "c"(0u));
+    if (!(ecx & (1u << 27)))  /* OSXSAVE: XGETBV is usable at all */
+        return;
+    if (!(ecx & (1u << 28)))  /* AVX */
+        return;
+    __asm__ volatile("xgetbv" : "=a"(xlo), "=d"(xhi) : "c"(0u));
+    (void)xhi;
+    if ((xlo & 0x6u) == 0x6u) /* XMM and YMM state enabled by the OS */
+        sl_cpu_avx_ok = 1;
+#endif
+}
+
 #define SL_TASK_INITIAL_STACK_SIZE 8192
 #define SL_TASK_FAT_STACK_SIZE 16384
-#define SL_TASK_GUARD_MARGIN 1024
+#define SL_TASK_GUARD_MARGIN 2048
 /* SQLite (sl_sql.c) recurses on query structure, deeper than OpenSSL.
  * On the ungrown 8KB default it hit the very failure the fat stack
  * exists to prevent -- a native chain running off the end of the
