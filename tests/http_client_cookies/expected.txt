@@ -1,0 +1,14 @@
+cookie dates parse in all three historical formats, and refuse impossible ones
+the jar is off unless enable_cookies is called
+Set-Cookie lines with Expires commas are kept apart, and both cookies return
+replacement keeps order; Max-Age=0 and a past Expires both delete
+default path is the request's directory, and /p does not match /pathx
+more specific paths are sent first
+Secure cookies: only set from https, only sent to https
+refused: a foreign Domain, a bare TLD, and a Domain that is part of an IP address
+Domain=.example.com is shared with siblings; a host-only cookie is not
+refused: __Host- without Secure or with a Domain, oversized, nameless
+cookies set by a redirect apply to its target, and host-only cookies stay on their host
+a caller's own Cookie header is kept and the jar's cookies appended
+16 concurrent writers store 48 cookies and lose none
+done

@@ -25,7 +25,7 @@ import "compress";
 // between the two.
 //
 // WHAT THIS DOES NOT DO, deliberately: no HTTP/2, no multipart bodies,
-// no proxy support.
+// no proxy support, no public-suffix list for cookies (see there).
 
 // ---- limits ----------------------------------------------------------
 //
@@ -73,6 +73,12 @@ pub gc struct Response {
     // is NOT the URL the caller asked for, and a caller resolving
     // relative links in the body needs the one that answered.
     url: str,
+    // Every Set-Cookie line, one entry each. headers["set-cookie"] is
+    // NOT a reliable substitute: repeated headers are joined with ", ",
+    // and a cookie's Expires date contains a comma ("Wed, 21 Oct 2037"),
+    // so two joined Set-Cookie lines cannot be split apart again. RFC
+    // 9110 exempts Set-Cookie from joining for exactly that reason.
+    set_cookies: [str],
 }
 
 // ---- URL parsing -----------------------------------------------------
@@ -340,11 +346,12 @@ fn parse_status(line: str) -> result[Response, str] {
         return err("malformed status code: " + line);
     }
     let h: map[str]str = {};
+    let sc: [str] = [];
     return ok(Response { status: code, status_text: reason, headers: h,
-                         body: b"", url: "" });
+                         body: b"", url: "", set_cookies: sc });
 }
 
-fn parse_headers(raw: bytes, start: int, stop: int)
+fn parse_headers(raw: bytes, start: int, stop: int, resp: Response)
         -> result[map[str]str, str] {
     let headers: map[str]str = {};
     let i = start;
@@ -369,9 +376,13 @@ fn parse_headers(raw: bytes, start: int, stop: int)
         }
         let name = strings.to_lower(strings.slice(line, 0, colon));
         let value = trim_ows(strings.slice(line, colon + 1, len(line)));
+        if name == "set-cookie" {
+            resp.set_cookies = resp.set_cookies + [value];
+        }
         // Repeats are joined with ", " per RFC 9110 section 5.3 rather
-        // than overwritten: two Set-Cookie lines are two cookies, and
-        // keeping only the last one loses data silently.
+        // than overwritten. Set-Cookie is the exception that rule itself
+        // names -- see Response.set_cookies -- and is joined here only so
+        // headers["set-cookie"] keeps its old meaning.
         if has(headers, name) {
             headers[name] = headers[name] + ", " + value;
         } else {
@@ -616,7 +627,7 @@ fn read_response(r: Reader, method: str, deadline: until)
     guard let resp = sr else let e = err_of(sr) {
         return err(e);
     }
-    let hr = parse_headers(r.buf, line_end + 2, sep);
+    let hr = parse_headers(r.buf, line_end + 2, sep, resp);
     guard let headers = hr else let e = err_of(hr) {
         return err(e);
     }
@@ -764,13 +775,19 @@ pub gc struct Client {
     // nothing can check.
     dials: int,
     reuses: int,
+    // Cookie jar. OFF unless enable_cookies is called -- see there.
+    cookies_on: bool,
+    jar: [Cookie],
+    cookie_seq: int,
 }
 
 pub fn new_client() -> Client {
     let none_idle: [Idle] = [];
+    let no_cookies: [Cookie] = [];
     return Client { max_idle_per_host: 4, idle_timeout: 30000000000,
                     idle: none_idle, lock: make_mutex(), dials: 0,
-                    reuses: 0 };
+                    reuses: 0, cookies_on: false, jar: no_cookies,
+                    cookie_seq: 0 };
 }
 
 fn tr_alive(t: Transport) -> bool {
@@ -932,6 +949,642 @@ fn exchange(c: Client, method: str, u: Url, headers: map[str]str,
     return err("unreachable");
 }
 
+// ---- cookies (RFC 6265) --------------------------------------------------
+//
+// OFF BY DEFAULT, which is the opposite of a browser and deliberately so.
+// A browser jar belongs to one person. A server's Client is usually
+// shared -- one per process, used on behalf of every user it serves --
+// and a jar on that client would store user A's session cookie and send
+// it on user B's request. Go's http.Client makes the same call (Jar is
+// nil unless set). A program that is itself acting as one client -- a
+// scraper, a test driver, an integration against a login-based API --
+// turns it on per Client with enable_cookies, and scopes the Client to
+// that one identity.
+//
+// No public-suffix list is applied: nothing in slang ships one, and an
+// embedded copy goes stale. The consequence is stated rather than
+// hidden: a response from a.example.co.uk may set a cookie for Domain
+// co.uk, and this jar will then send it to every *.co.uk host. A bare
+// single-label Domain ("com") is still refused, which stops the common
+// case but not that one.
+
+pub gc struct Cookie {
+    name: str,
+    value: str,
+    domain: str,      // lowercase, no leading dot
+    path: str,
+    host_only: bool,  // set without a Domain attribute: exact host only
+    secure: bool,
+    expires: int,     // unix nanoseconds; 0 for a session cookie
+    seq: int,         // creation order, which RFC 6265 sorts on
+}
+
+// Bounds on what servers can make the jar hold. The per-cookie and
+// per-domain figures are RFC 6265 section 6.1's minimums for a user
+// agent; a client that honours no limit can be grown without bound by
+// any server it talks to.
+let MAX_COOKIE_BYTES = 4096;
+let MAX_COOKIES_PER_DOMAIN = 50;
+let MAX_COOKIES_TOTAL = 3000;
+
+pub fn enable_cookies(c: Client) {
+    mutex_lock(c.lock);
+    c.cookies_on = true;
+    mutex_unlock(c.lock);
+}
+
+pub fn clear_cookies(c: Client) {
+    mutex_lock(c.lock);
+    let none_left: [Cookie] = [];
+    c.jar = none_left;
+    mutex_unlock(c.lock);
+}
+
+fn is_ip_host(h: str) -> bool {
+    if strings.contains(h, ":") {
+        return true;
+    }
+    let b = to_bytes(h);
+    if len(b) == 0 {
+        return false;
+    }
+    let i = 0;
+    while i < len(b) {
+        if !((b[i] >= 48 && b[i] <= 57) || b[i] == 46) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// RFC 6265 5.1.3. An IP address only ever matches itself: "1.2.3.4" is
+// not a subdomain of "2.3.4".
+fn domain_match(host: str, domain: str) -> bool {
+    if host == domain {
+        return true;
+    }
+    if is_ip_host(host) {
+        return false;
+    }
+    return strings.has_suffix(host, "." + domain);
+}
+
+fn request_path(p: str) -> str {
+    let q = strings.find(p, "?");
+    if q >= 0 {
+        p = strings.slice(p, 0, q);
+    }
+    let f = strings.find(p, "#");
+    if f >= 0 {
+        p = strings.slice(p, 0, f);
+    }
+    if p == "" {
+        return "/";
+    }
+    return p;
+}
+
+// RFC 6265 5.1.4: the directory of the request path.
+fn default_path(p: str) -> str {
+    let rp = request_path(p);
+    if !strings.has_prefix(rp, "/") {
+        return "/";
+    }
+    let last = strings.rfind(rp, "/");
+    if last <= 0 {
+        return "/";
+    }
+    return strings.slice(rp, 0, last);
+}
+
+// RFC 6265 5.1.4. "/api" matches "/api" and "/api/x" but NOT "/apix":
+// a bare prefix test would send a cookie scoped to one path to its
+// unrelated neighbours.
+fn path_match(req: str, cp: str) -> bool {
+    if req == cp {
+        return true;
+    }
+    if strings.has_prefix(req, cp) {
+        if strings.has_suffix(cp, "/") {
+            return true;
+        }
+        if strings.slice(req, len(cp), len(cp) + 1) == "/" {
+            return true;
+        }
+    }
+    return false;
+}
+
+// ---- cookie dates (RFC 6265 5.1.1) ----------------------------------------
+//
+// Not HTTP-date. Real servers send every historical format -- RFC 1123,
+// RFC 850 with two-digit years, asctime, and assorted inventions -- so
+// the RFC defines a deliberately lenient token-scanning algorithm rather
+// than a grammar, and this is that algorithm.
+
+fn is_date_delim(b: int) -> bool {
+    return b == 9 || (b >= 32 && b <= 47) || (b >= 59 && b <= 64) ||
+           (b >= 91 && b <= 96) || (b >= 123 && b <= 126);
+}
+
+gc struct DateParts {
+    ok: bool,
+    a: int,
+    b: int,
+    c: int,
+}
+
+fn no_parts() -> DateParts {
+    return DateParts { ok: false, a: 0, b: 0, c: 0 };
+}
+
+// Leading digits of t, between lo and hi of them, followed by the end or
+// a non-digit. Returns the value, or -1.
+fn lead_digits(t: bytes, lo: int, hi: int) -> int {
+    let n = 0;
+    let v = 0;
+    while n < len(t) && t[n] >= 48 && t[n] <= 57 {
+        v = v * 10 + (t[n] - 48);
+        n = n + 1;
+        if n > hi {
+            return -1;
+        }
+    }
+    if n < lo {
+        return -1;
+    }
+    return v;
+}
+
+// hms-time = 1*2DIGIT ":" 1*2DIGIT ":" 1*2DIGIT, then anything non-digit.
+fn parse_hms(t: bytes) -> DateParts {
+    let vals = [0, 0, 0];
+    let i = 0;
+    let k = 0;
+    while k < 3 {
+        let n = 0;
+        let v = 0;
+        while i < len(t) && t[i] >= 48 && t[i] <= 57 && n < 3 {
+            v = v * 10 + (t[i] - 48);
+            i = i + 1;
+            n = n + 1;
+        }
+        if n < 1 || n > 2 {
+            return no_parts();
+        }
+        vals[k] = v;
+        if k < 2 {
+            if i >= len(t) || t[i] != 58 {
+                return no_parts();
+            }
+            i = i + 1;
+        }
+        k = k + 1;
+    }
+    if i < len(t) && t[i] >= 48 && t[i] <= 57 {
+        return no_parts();
+    }
+    return DateParts { ok: true, a: vals[0], b: vals[1], c: vals[2] };
+}
+
+fn month_of(t: str) -> int {
+    if len(t) < 3 {
+        return 0;
+    }
+    let m = strings.to_lower(strings.slice(t, 0, 3));
+    let names = ["jan", "feb", "mar", "apr", "may", "jun",
+                 "jul", "aug", "sep", "oct", "nov", "dec"];
+    let i = 0;
+    while i < 12 {
+        if names[i] == m {
+            return i + 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn is_leap(y: int) -> bool {
+    return (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+}
+
+fn days_in_month(y: int, m: int) -> int {
+    if m == 2 {
+        if is_leap(y) {
+            return 29;
+        }
+        return 28;
+    }
+    if m == 4 || m == 6 || m == 9 || m == 11 {
+        return 30;
+    }
+    return 31;
+}
+
+// Days since 1970-01-01 for a proleptic Gregorian date (Hinnant's
+// days_from_civil). Only called with year >= 1601, so every division
+// here is of a non-negative number and truncation is floor.
+fn days_from_civil(y: int, m: int, d: int) -> int {
+    let yy = y;
+    if m <= 2 {
+        yy = y - 1;
+    }
+    let era = yy / 400;
+    let yoe = yy - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
+
+// Unix nanoseconds, or -1 when the string is not a cookie date.
+pub fn parse_cookie_date(s: str) -> int {
+    let b = to_bytes(s);
+    let tokens: [bytes] = [];
+    let i = 0;
+    while i < len(b) {
+        while i < len(b) && is_date_delim(b[i]) {
+            i = i + 1;
+        }
+        let start = i;
+        while i < len(b) && !is_date_delim(b[i]) {
+            i = i + 1;
+        }
+        if i > start {
+            push(tokens, b[start..i]);
+        }
+    }
+
+    let have_time = false;
+    let have_day = false;
+    let have_month = false;
+    let have_year = false;
+    let hh = 0;
+    let mi = 0;
+    let ss = 0;
+    let day = 0;
+    let month = 0;
+    let year = 0;
+    for t in tokens {
+        if !have_time {
+            let hp = parse_hms(t);
+            if hp.ok {
+                have_time = true;
+                hh = hp.a;
+                mi = hp.b;
+                ss = hp.c;
+                continue;
+            }
+        }
+        if !have_day {
+            let d = lead_digits(t, 1, 2);
+            if d >= 0 {
+                have_day = true;
+                day = d;
+                continue;
+            }
+        }
+        if !have_month {
+            let m = month_of(to_str(t));
+            if m > 0 {
+                have_month = true;
+                month = m;
+                continue;
+            }
+        }
+        if !have_year {
+            let y = lead_digits(t, 2, 4);
+            if y >= 0 {
+                have_year = true;
+                year = y;
+                continue;
+            }
+        }
+    }
+    if !have_time || !have_day || !have_month || !have_year {
+        return -1;
+    }
+    // Two-digit years: 70-99 are 19xx and 00-69 are 20xx (5.1.1 step 3-4).
+    if year >= 70 && year <= 99 {
+        year = year + 1900;
+    } else if year >= 0 && year <= 69 {
+        year = year + 2000;
+    }
+    if year < 1601 || hh > 23 || mi > 59 || ss > 59 {
+        return -1;
+    }
+    if day < 1 || day > days_in_month(year, month) {
+        return -1;
+    }
+    let secs = days_from_civil(year, month, day) * 86400 + hh * 3600 +
+               mi * 60 + ss;
+    // int64 nanoseconds run out in 2262. A later expiry is clamped to
+    // that rather than overflowing into the past, which would delete the
+    // cookie it was meant to keep.
+    if secs > 9000000000 {
+        secs = 9000000000;
+    }
+    if secs < 0 {
+        return -1;
+    }
+    return secs * 1000000000;
+}
+
+// ---- Set-Cookie (RFC 6265 5.2 and 5.3, with 6265bis's Secure rules) ------
+
+fn no_cookie() -> Cookie {
+    return Cookie { name: "", value: "", domain: "", path: "",
+                    host_only: true, secure: false, expires: 0, seq: 0 };
+}
+
+// A Cookie with an empty name means "ignore this line". A cookie whose
+// expiry is already past is returned, not dropped: storing it is how a
+// server deletes the one it set earlier.
+fn parse_set_cookie(raw: str, u: Url, now: int) -> Cookie {
+    let parts = strings.split(raw, ";");
+    let nv = parts[0];
+    let eq = strings.find(nv, "=");
+    if eq < 0 {
+        return no_cookie();
+    }
+    let name = strings.trim(strings.slice(nv, 0, eq));
+    let value = strings.trim(strings.slice(nv, eq + 1, len(nv)));
+    if name == "" || len(name) + len(value) > MAX_COOKIE_BYTES {
+        return no_cookie();
+    }
+
+    let host = strings.to_lower(u.host);
+    let domain_attr = "";
+    let path = default_path(u.path);
+    let secure = false;
+    let from_expires = 0;
+    let have_expires = false;
+    let from_max_age = 0;
+    let have_max_age = false;
+
+    let i = 1;
+    while i < len(parts) {
+        let a = parts[i];
+        i = i + 1;
+        let ae = strings.find(a, "=");
+        let key = "";
+        let val = "";
+        if ae < 0 {
+            key = strings.to_lower(strings.trim(a));
+        } else {
+            key = strings.to_lower(strings.trim(strings.slice(a, 0, ae)));
+            val = strings.trim(strings.slice(a, ae + 1, len(a)));
+        }
+        if key == "expires" {
+            let d = parse_cookie_date(val);
+            if d >= 0 {
+                have_expires = true;
+                from_expires = d;
+                if from_expires == 0 {
+                    from_expires = 1;     // 0 means "session cookie"
+                }
+            }
+        } else if key == "max-age" {
+            let mr = to_int(val);
+            guard let delta = mr else {
+                continue;               // not an integer: ignore the attribute
+            }
+            have_max_age = true;
+            if delta <= 0 {
+                from_max_age = 1;       // earliest representable: delete
+            } else if delta > 9000000000 {
+                from_max_age = now + 9000000000 * 1000000000;
+            } else {
+                from_max_age = now + delta * 1000000000;
+            }
+        } else if key == "domain" {
+            if val != "" {
+                let d = strings.to_lower(val);
+                if strings.has_prefix(d, ".") {
+                    d = strings.slice(d, 1, len(d));
+                }
+                domain_attr = d;
+            }
+        } else if key == "path" {
+            if strings.has_prefix(val, "/") {
+                path = val;
+            } else {
+                path = default_path(u.path);
+            }
+        } else if key == "secure" {
+            secure = true;
+        }
+    }
+
+    let expires = 0;
+    if have_max_age {
+        expires = from_max_age;         // Max-Age wins over Expires
+    } else if have_expires {
+        expires = from_expires;
+    }
+
+    let domain = host;
+    let host_only = true;
+    if domain_attr != "" {
+        // A bare single label is a TLD, never a cookie scope -- unless it
+        // is the host itself ("localhost").
+        if domain_attr != host && !strings.contains(domain_attr, ".") {
+            return no_cookie();
+        }
+        if !domain_match(host, domain_attr) {
+            return no_cookie();         // a server may not set cookies
+        }                               // for somebody else's domain
+        domain = domain_attr;
+        host_only = false;
+    }
+
+    // RFC 6265bis: a cleartext response may not set a Secure cookie. It
+    // would otherwise let a network attacker on http:// overwrite the
+    // session an https:// login established.
+    let https = u.scheme == "https";
+    if secure && !https {
+        return no_cookie();
+    }
+    if strings.has_prefix(name, "__Secure-") && !(secure && https) {
+        return no_cookie();
+    }
+    if strings.has_prefix(name, "__Host-") &&
+       !(secure && https && domain_attr == "" && path == "/") {
+        return no_cookie();
+    }
+
+    return Cookie { name: name, value: value, domain: domain, path: path,
+                    host_only: host_only, secure: secure, expires: expires,
+                    seq: 0 };
+}
+
+fn expired(ck: Cookie, now: int) -> bool {
+    return ck.expires != 0 && ck.expires <= now;
+}
+
+fn store_cookies(c: Client, u: Url, raws: [str]) {
+    if len(raws) == 0 {
+        return;
+    }
+    let now = time.wall();
+    mutex_lock(c.lock);
+    if !c.cookies_on {
+        mutex_unlock(c.lock);
+        return;
+    }
+    for raw in raws {
+        let ck = parse_set_cookie(raw, u, now);
+        if ck.name == "" {
+            continue;
+        }
+        // Same name, domain and path replaces -- and keeps the ORIGINAL
+        // creation order, which RFC 6265 5.3 step 11 requires so that an
+        // update does not reorder the Cookie header.
+        let keep: [Cookie] = [];
+        let old_seq = -1;
+        for ex in c.jar {
+            if ex.name == ck.name && ex.domain == ck.domain &&
+               ex.path == ck.path {
+                old_seq = ex.seq;
+            } else if !expired(ex, now) {
+                keep = keep + [ex];
+            }
+        }
+        c.jar = keep;
+        if expired(ck, now) {
+            continue;                   // that was a deletion
+        }
+        if old_seq >= 0 {
+            ck.seq = old_seq;
+        } else {
+            ck.seq = c.cookie_seq;
+            c.cookie_seq = c.cookie_seq + 1;
+        }
+        c.jar = c.jar + [ck];
+
+        // Limits evict the OLDEST, so a server flooding the jar pushes
+        // out its own earlier cookies before anyone else's.
+        let in_domain = 0;
+        for ex in c.jar {
+            if ex.domain == ck.domain {
+                in_domain = in_domain + 1;
+            }
+        }
+        while in_domain > MAX_COOKIES_PER_DOMAIN {
+            c.jar = evict_oldest(c.jar, ck.domain);
+            in_domain = in_domain - 1;
+        }
+        while len(c.jar) > MAX_COOKIES_TOTAL {
+            c.jar = evict_oldest(c.jar, "");
+        }
+    }
+    mutex_unlock(c.lock);
+}
+
+// Record a Set-Cookie line as if `url` had sent it, under exactly the
+// rules a real response gets -- the same function does both. For a
+// program restoring a session it saved, or seeding a jar for a test.
+// Has no effect unless enable_cookies was called, the same as a
+// response would not.
+pub fn set_cookie(c: Client, url: str, line: str) {
+    let ur = parse_url(url);
+    guard let u = ur else {
+        return;
+    }
+    store_cookies(c, u, [line]);
+}
+
+// Oldest in `domain`, or oldest overall when domain is "".
+fn evict_oldest(jar: [Cookie], domain: str) -> [Cookie] {
+    let victim = -1;
+    let i = 0;
+    while i < len(jar) {
+        if domain == "" || jar[i].domain == domain {
+            if victim < 0 || jar[i].seq < jar[victim].seq {
+                victim = i;
+            }
+        }
+        i = i + 1;
+    }
+    if victim < 0 {
+        return jar;
+    }
+    return jar[0..victim] + jar[victim + 1..];
+}
+
+// RFC 6265 5.4: the cookies for this request, longest path first and,
+// among equal paths, oldest first.
+fn matching_cookies(c: Client, u: Url) -> [Cookie] {
+    let now = time.wall();
+    let host = strings.to_lower(u.host);
+    let rp = request_path(u.path);
+    let https = u.scheme == "https";
+    let hits: [Cookie] = [];
+    mutex_lock(c.lock);
+    let keep: [Cookie] = [];
+    for ck in c.jar {
+        if expired(ck, now) {
+            continue;
+        }
+        keep = keep + [ck];
+        let host_ok = false;
+        if ck.host_only {
+            host_ok = host == ck.domain;
+        } else {
+            host_ok = domain_match(host, ck.domain);
+        }
+        if host_ok && path_match(rp, ck.path) && (!ck.secure || https) {
+            hits = hits + [ck];
+        }
+    }
+    c.jar = keep;
+    mutex_unlock(c.lock);
+
+    let out: [Cookie] = [];
+    while len(hits) > 0 {
+        let best = 0;
+        let j = 1;
+        while j < len(hits) {
+            let a = hits[j];
+            let b = hits[best];
+            if len(a.path) > len(b.path) ||
+               (len(a.path) == len(b.path) && a.seq < b.seq) {
+                best = j;
+            }
+            j = j + 1;
+        }
+        out = out + [hits[best]];
+        hits = hits[0..best] + hits[best + 1..];
+    }
+    return out;
+}
+
+// What the jar would send to `url` right now. For inspection and tests;
+// a request does this itself.
+pub fn cookies(c: Client, url: str) -> [Cookie] {
+    let ur = parse_url(url);
+    guard let u = ur else {
+        let none_: [Cookie] = [];
+        return none_;
+    }
+    return matching_cookies(c, u);
+}
+
+fn cookie_header(c: Client, u: Url) -> str {
+    if !c.cookies_on {
+        return "";
+    }
+    let out = "";
+    for ck in matching_cookies(c, u) {
+        if out != "" {
+            out = out + "; ";
+        }
+        out = out + ck.name + "=" + ck.value;
+    }
+    return out;
+}
+
 // ---- the request ------------------------------------------------------
 
 pub fn new_request(method: str, url: str) -> Request {
@@ -964,11 +1617,35 @@ fn run(c: Client, req: Request, deadline: until) -> result[Response, str] {
             return err(e);
         }
 
-        let rr = exchange(c, method, u, headers, body, ca_path, deadline);
+        // Cookies are computed per HOP, not once per request: a redirect
+        // to another host must carry that host's cookies, not the first
+        // one's, and a cookie set by a 302 must reach the page it
+        // redirects to -- which is how nearly every login flow works.
+        let hop = headers;
+        let jar_cookies = cookie_header(c, u);
+        if jar_cookies != "" {
+            let merged: map[str]str = {};
+            let placed = false;
+            for k, v in headers {
+                if strings.to_lower(k) == "cookie" {
+                    merged[k] = v + "; " + jar_cookies;
+                    placed = true;
+                } else {
+                    merged[k] = v;
+                }
+            }
+            if !placed {
+                merged["Cookie"] = jar_cookies;
+            }
+            hop = merged;
+        }
+
+        let rr = exchange(c, method, u, hop, body, ca_path, deadline);
         guard let resp = rr else let e = err_of(rr) {
             return err(e);
         }
         resp.url = url;
+        store_cookies(c, u, resp.set_cookies);
 
         if !is_redirect(resp.status) || left <= 0 ||
            !has(resp.headers, "location") {

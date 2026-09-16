@@ -553,6 +553,59 @@ a single token.
     (`method_find` checks only package and name).
   - Separately: `==` between two `bool`s is a compile error.
 
+## HTTP client: cookies (done)
+
+- [x] Cookie jar on `httpc.Client` — RFC 6265, with 6265bis's `Secure`
+  and `__Secure-` / `__Host-` rules. Completes the three-part request
+  (compression, pooling, cookies).
+
+  **Off by default, the opposite of a browser.** A server's Client is
+  usually shared across the users it serves; a jar there sends user A's
+  session on user B's request. `enable_cookies` scopes a Client to one
+  identity. Go's `http.Client` (Jar nil) makes the same call.
+
+  **A pre-existing bug fixed on the way:** `parse_headers` joined
+  repeated headers with `", "`, and its comment claimed that kept two
+  Set-Cookie lines as two cookies. It did the opposite once a cookie
+  carried an `Expires` date, which contains a comma — joined lines
+  cannot be split back apart. RFC 9110 exempts Set-Cookie from joining
+  for exactly this. `Response.set_cookies` now holds each line.
+
+  **Per-hop, not per-request.** Cookies are stored from every response
+  in a redirect chain and computed for every hop, so a cookie set by a
+  302 reaches its target (how login flows work) and a redirect to another
+  host carries that host's cookies.
+
+  **`set_cookie(c, url, line)` exists because the test could not see
+  three security bugs without it.** The first refusal checks inspected
+  the jar from the host that sent each cookie, over http, and all three
+  of the most important refusals passed with their checks DELETED:
+  - a wrongly stored Secure cookie is still not SENT over http,
+  - a wrongly stored `Domain=evil.example` cookie does not match
+    127.0.0.1,
+  - and `Domain=com` from 127.0.0.1 is refused by the foreign-domain
+    rule before the TLD rule is ever reached.
+  The storage was wrong and the test was blind to it. Checking from the
+  URL that would EXPOSE a wrongly stored cookie needs hosts like
+  `a.example.com`, which loopback cannot provide; `set_cookie` applies a
+  line through exactly the path a response takes (Go's `Jar.SetCookies`
+  equivalent, and also how a program restores a saved session).
+
+  **The concurrency check was blind the first time too.** 16 tasks
+  writing 400 cookies against a 50-per-domain cap "passed" with the lock
+  removed, because later writes refilled the jar to 50. Rewritten to 48
+  cookies, under the cap: without the lock, 23 / 19 / 16 survived across
+  three runs.
+
+  17 controls in all, every one caught after those fixes. Cookie-date
+  expected values come from Python's `calendar.timegm`, not the parser
+  under test. 25/25 stable.
+
+  **Not done, and stated in the README rather than left to be found:**
+  no public-suffix list, so `Domain=co.uk` from `a.example.co.uk` is
+  accepted and sent to every `*.co.uk` host. A bare TLD is refused; that
+  case is not.
+
 ## Notes
 
 - Do not change `bench/http/main.sl` for perf experiments. Raw-best slang is `bench/http_opt/main.sl`; remasure with `./bench/run_http_opt.sh`.

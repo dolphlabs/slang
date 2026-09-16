@@ -2919,6 +2919,10 @@ let r2 = httpc.send(req, dl);
 | `httpc.client_send` | `(c: Client, req: Request, deadline: until) -> result[Response, str]` |
 | `httpc.idle_count` | `(c: Client) -> int` |
 | `httpc.close_idle` | `(c: Client)` |
+| `httpc.enable_cookies` / `clear_cookies` | `(c: Client)` |
+| `httpc.set_cookie` | `(c: Client, url: str, set_cookie_line: str)` |
+| `httpc.cookies` | `(c: Client, url: str) -> [Cookie]` |
+| `httpc.parse_cookie_date` | `(s: str) -> int` (unix ns, or -1) |
 
 `Request` carries `method`, `url`, `headers`, `body`, `max_redirects`
 (default 5, `0` disables following) and `ca_path` (`""` = the system
@@ -3027,8 +3031,57 @@ decompressing behind their back would hand them something else.
 - An encoding the client did not ask for and cannot read is left alone,
   header included — visible, not silent.
 
-**Not done, deliberately:** no cookie jar, no HTTP/2 client, no
-multipart bodies, no proxy support.
+##### Cookies
+
+RFC 6265, with RFC 6265bis's rules for `Secure` and the `__Secure-` /
+`__Host-` prefixes. **Off by default** — the opposite of a browser, on
+purpose:
+
+```slang
+let c = httpc.new_client();
+httpc.enable_cookies(c);             // this Client now acts as ONE identity
+```
+
+A browser's jar belongs to one person. A server's `Client` is usually
+shared, one per process, used on behalf of every user it serves, and a
+jar there would store user A's session cookie and send it on user B's
+request. Go's `http.Client` makes the same call. Turn the jar on for a
+`Client` that represents one identity: a scraper, a test driver, an
+integration with a login-based API.
+
+- **Cookies are applied per redirect hop.** A cookie set by a `302` reaches
+  the page it points to, which is how nearly every login works; a
+  redirect to another host carries that host's cookies, not the first
+  one's.
+- **Refused:** a `Secure` cookie from `http://` (a network attacker could
+  otherwise overwrite an https session); a `Domain` the host does not
+  belong to; a bare single-label `Domain` such as `com`; a `Domain` that
+  is part of an IP address; `__Host-` without `Secure`, or with a
+  `Domain`, or with a path other than `/`; a line with no `=`; anything
+  over 4096 bytes. `Secure` cookies are only ever sent over https.
+- **Scoping:** a cookie set without `Domain` goes back to *exactly* that
+  host (`127.0.0.1` and `localhost` are different scopes); `Path=/p`
+  matches `/p` and `/p/x` but not `/pathx`. Longer paths are sent first.
+- **Expiry:** `Max-Age` wins over `Expires` whatever order they arrive
+  in, and a past date or `Max-Age=0` deletes. Dates are parsed with RFC
+  6265's lenient algorithm, since servers send RFC 1123, RFC 850 with
+  two-digit years and asctime alike; `httpc.parse_cookie_date` exposes it.
+- **Limits:** 50 cookies per domain and 3000 in total, evicting the oldest,
+  so a server flooding the jar pushes out its own cookies first.
+- **`Response.set_cookies`** holds each `Set-Cookie` line separately. Use
+  it rather than `headers["set-cookie"]`: repeated headers are joined
+  with `", "`, and an `Expires` date contains a comma, so two joined
+  lines cannot be split apart again.
+
+**No public-suffix list is applied**, and the consequence is stated
+rather than left to be discovered: a response from `a.example.co.uk` may
+set a cookie for `Domain=co.uk`, and this jar will then send it to every
+`*.co.uk` host. Nothing in slang ships a suffix list, and an embedded
+copy goes stale. The bare-TLD rule stops `Domain=com`; it does not stop
+that case.
+
+**Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
+proxy support, no public-suffix list.
 
 #### `byteutil`
 
@@ -3101,7 +3154,7 @@ signal-handling program.
 - [fs](packages/fs.md) -- compiler-provided, 6 public items
 - [http](packages/http.md) -- source package, 19 public items
 - [http2](packages/http2.md) -- source package, 122 public items
-- [httpc](packages/httpc.md) -- source package, 18 public items
+- [httpc](packages/httpc.md) -- source package, 24 public items
 - [json](packages/json.md) -- compiler-provided, 0 public items
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [net](packages/net.md) -- compiler-provided, 26 public items
@@ -4401,6 +4454,10 @@ let r2 = httpc.send(req, dl);
 | `httpc.client_send` | `(c: Client, req: Request, deadline: until) -> result[Response, str]` |
 | `httpc.idle_count` | `(c: Client) -> int` |
 | `httpc.close_idle` | `(c: Client)` |
+| `httpc.enable_cookies` / `clear_cookies` | `(c: Client)` |
+| `httpc.set_cookie` | `(c: Client, url: str, set_cookie_line: str)` |
+| `httpc.cookies` | `(c: Client, url: str) -> [Cookie]` |
+| `httpc.parse_cookie_date` | `(s: str) -> int` (unix ns, or -1) |
 
 `Request` carries `method`, `url`, `headers`, `body`, `max_redirects`
 (default 5, `0` disables following) and `ca_path` (`""` = the system
@@ -4509,8 +4566,57 @@ decompressing behind their back would hand them something else.
 - An encoding the client did not ask for and cannot read is left alone,
   header included — visible, not silent.
 
-**Not done, deliberately:** no cookie jar, no HTTP/2 client, no
-multipart bodies, no proxy support.
+##### Cookies
+
+RFC 6265, with RFC 6265bis's rules for `Secure` and the `__Secure-` /
+`__Host-` prefixes. **Off by default** — the opposite of a browser, on
+purpose:
+
+```slang
+let c = httpc.new_client();
+httpc.enable_cookies(c);             // this Client now acts as ONE identity
+```
+
+A browser's jar belongs to one person. A server's `Client` is usually
+shared, one per process, used on behalf of every user it serves, and a
+jar there would store user A's session cookie and send it on user B's
+request. Go's `http.Client` makes the same call. Turn the jar on for a
+`Client` that represents one identity: a scraper, a test driver, an
+integration with a login-based API.
+
+- **Cookies are applied per redirect hop.** A cookie set by a `302` reaches
+  the page it points to, which is how nearly every login works; a
+  redirect to another host carries that host's cookies, not the first
+  one's.
+- **Refused:** a `Secure` cookie from `http://` (a network attacker could
+  otherwise overwrite an https session); a `Domain` the host does not
+  belong to; a bare single-label `Domain` such as `com`; a `Domain` that
+  is part of an IP address; `__Host-` without `Secure`, or with a
+  `Domain`, or with a path other than `/`; a line with no `=`; anything
+  over 4096 bytes. `Secure` cookies are only ever sent over https.
+- **Scoping:** a cookie set without `Domain` goes back to *exactly* that
+  host (`127.0.0.1` and `localhost` are different scopes); `Path=/p`
+  matches `/p` and `/p/x` but not `/pathx`. Longer paths are sent first.
+- **Expiry:** `Max-Age` wins over `Expires` whatever order they arrive
+  in, and a past date or `Max-Age=0` deletes. Dates are parsed with RFC
+  6265's lenient algorithm, since servers send RFC 1123, RFC 850 with
+  two-digit years and asctime alike; `httpc.parse_cookie_date` exposes it.
+- **Limits:** 50 cookies per domain and 3000 in total, evicting the oldest,
+  so a server flooding the jar pushes out its own cookies first.
+- **`Response.set_cookies`** holds each `Set-Cookie` line separately. Use
+  it rather than `headers["set-cookie"]`: repeated headers are joined
+  with `", "`, and an `Expires` date contains a comma, so two joined
+  lines cannot be split apart again.
+
+**No public-suffix list is applied**, and the consequence is stated
+rather than left to be discovered: a response from `a.example.co.uk` may
+set a cookie for `Domain=co.uk`, and this jar will then send it to every
+`*.co.uk` host. Nothing in slang ships a suffix list, and an embedded
+copy goes stale. The bare-TLD rule stops `Domain=com`; it does not stop
+that case.
+
+**Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
+proxy support, no public-suffix list.
 
 ## API
 
@@ -4527,6 +4633,24 @@ multipart bodies, no proxy support.
 ### `gc struct Client`
 
 ### `fn new_client() -> Client`
+
+### `gc struct Cookie`
+
+### `fn enable_cookies(c: Client)`
+
+### `fn clear_cookies(c: Client)`
+
+### `fn parse_cookie_date(s: str) -> int`
+
+Unix nanoseconds, or -1 when the string is not a cookie date.
+
+### `fn set_cookie(c: Client, url: str, line: str)`
+
+Record a Set-Cookie line as if `url` had sent it, under exactly the rules a real response gets -- the same function does both. For a program restoring a session it saved, or seeding a jar for a test. Has no effect unless enable_cookies was called, the same as a response would not.
+
+### `fn cookies(c: Client, url: str) -> [Cookie]`
+
+What the jar would send to `url` right now. For inspection and tests; a request does this itself.
 
 ### `fn new_request(method: str, url: str) -> Request`
 
