@@ -52,6 +52,79 @@
         }
       ]
     },
+    "compress": {
+      "name": "compress",
+      "kind": "native",
+      "items": [
+        {
+          "name": "gzip",
+          "params": [
+            "bytes"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "compress.gzip(bytes) -> result[bytes,str]"
+        },
+        {
+          "name": "gzip_level",
+          "params": [
+            "bytes",
+            "int"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "compress.gzip_level(bytes, int) -> result[bytes,str]"
+        },
+        {
+          "name": "deflate",
+          "params": [
+            "bytes"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "compress.deflate(bytes) -> result[bytes,str]"
+        },
+        {
+          "name": "deflate_raw",
+          "params": [
+            "bytes"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "compress.deflate_raw(bytes) -> result[bytes,str]"
+        },
+        {
+          "name": "gunzip",
+          "params": [
+            "bytes",
+            "int"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "compress.gunzip(bytes, int) -> result[bytes,str]"
+        },
+        {
+          "name": "inflate",
+          "params": [
+            "bytes",
+            "int"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "compress.inflate(bytes, int) -> result[bytes,str]"
+        },
+        {
+          "name": "inflate_raw",
+          "params": [
+            "bytes",
+            "int"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "compress.inflate_raw(bytes, int) -> result[bytes,str]"
+        }
+      ]
+    },
     "crypto": {
       "name": "crypto",
       "kind": "native",

@@ -422,6 +422,64 @@ a single token.
   than not asking), no cookie jar, no HTTP/2 client, no multipart
   bodies. All additive.
 
+## Compression (done)
+
+- [x] `compress` — gzip, zlib and raw DEFLATE over zlib. Native package,
+  `-lz` gated on `want_compress`, the same shape crypto (`-lcrypto`) and
+  sql (`-lsqlite3`) use.
+
+  **zlib rather than our own, which is the opposite of the `regex`
+  call.** regex was written in-house because a backtracking engine has a
+  catastrophic input class and being immune to it by construction was
+  the entire point. DEFLATE has no equivalent argument. What it has is
+  thirty years of hostile input and a reference implementation on every
+  platform slang targets, and every bug in a hand-written inflate is a
+  buffer overrun driven by attacker-controlled input — a memory-safety
+  surface with no upside.
+
+  **Decompression takes a MANDATORY output limit.** `max_out` is a
+  required argument, not an optional one with a generous default,
+  because the expansion ratio is unbounded and a default would be a
+  number nobody chose applied at every call site that never thought
+  about it. The ceiling is enforced before the allocation that would
+  cross it rather than by inspecting the result: a 65,250-byte gzip
+  holding 64 MiB was refused at **3.9 MB peak RSS** against a 0.86 MB
+  baseline for the same program without the call.
+
+  **Three containers because HTTP needs three.** Same bits, different
+  headers: gzip (RFC 1952) is what servers send, zlib (RFC 1950) is what
+  the `deflate` content-coding is supposed to mean, and raw (RFC 1951)
+  is what the servers that get it wrong send instead — so `inflate_raw`
+  is a compatibility requirement, not a completist's flourish.
+  `deflate_raw` exists so `inflate_raw` has an inverse to be tested
+  against, and because permessage-deflate (RFC 7692) needs it.
+
+  **Format correctness is checked against the system tool, not against
+  itself.** slang's gzip output is read by `gzip -dc`, and `gzip`'s
+  output is read by `compress.gunzip`. Agreeing with your own encoder
+  proves nothing, which is the same reasoning that put the HTTP/2
+  interop test against Go's `x/net/http2` rather than curl.
+
+  **Two controls landed and one did not, which was the useful part.**
+  Confirmed failing: gunzip made to auto-detect zlib (the containers
+  must not be interchangeable), and empty input silently returning empty
+  rather than erroring. NOT caught: an off-by-one in the ceiling — and
+  chasing why exposed that the boundary the test named was not the
+  boundary the code turned on, because the geometric doubling never
+  lands on `max_out - 1`. The limit now measures what was PRODUCED
+  instead of inferring "too big" from a full buffer, with one byte of
+  allocation slack so an exact-size output never depends on when zlib
+  chooses to report `Z_STREAM_END`.
+
+  Stated plainly because it would be easy to imply otherwise: removing
+  that slack byte does **not** fail the test on this zlib (1.2.12),
+  which reports `Z_STREAM_END` on the filling call. The guard protects
+  against behaviour that could not be reproduced here. What IS
+  demonstrated is the post-loop size check (removing it breaks the
+  one-byte-short case) and the in-loop ceiling, whose removal makes the
+  grow loop **spin** rather than over-allocate — which is how the
+  no-progress guard in the inflate loop got written.
+
 ## Notes
 
 - Do not change `bench/http/main.sl` for perf experiments. Raw-best slang is `bench/http_opt/main.sl`; remasure with `./bench/run_http_opt.sh`.

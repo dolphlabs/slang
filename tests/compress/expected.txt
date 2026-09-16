@@ -1,0 +1,13 @@
+gzip compresses
+levels 0 and 9 both round-trip
+compression level must be between 0 and 9
+raw < zlib < gzip, as their headers imply
+gunzip rejects zlib data
+inflate rejects gzip data
+inflate rejects raw data
+empty input
+corrupt input rejected
+truncated input rejected
+max_out one byte short is refused
+expansion past max_out refused
+done
