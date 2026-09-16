@@ -1,0 +1,9 @@
+rejected a non-http scheme
+rejected a url with no scheme
+rejected a url with no host
+rejected credentials in the url
+rejected port 0
+rejected an out-of-range port
+rejected a non-numeric port
+connection refused reported, not panicked
+done
