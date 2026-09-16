@@ -2409,6 +2409,57 @@ prerequisite, not a different plan).
       stack" came from a 0/12 run that was simply luck against a ~10%
       rate; the control settles it.
 
+- [x] **Stack relocation left compiler-hoisted stack addresses
+      dangling.** A real, deterministic memory-safety bug, found by the
+      httpc pooling work rather than by looking for it.
+
+      Growing a task stack copies it and unmaps the old one. Relocation
+      translated the pointers the RUNTIME creates -- the safepoint chain
+      and the frame-pointer chain -- but at -O2 clang creates more of its
+      own. It hoists a loop-invariant stack address (a safepoint struct,
+      its roots array) into a callee-saved register before a call that
+      grows the stack, and reuses that register afterwards:
+
+          leaq -0x50(%rbp), %r15      ; &_sl_sp54, computed once
+          callq sl_net_tls_recv       ; grows: copied, old unmapped
+          movq %r15, %rdi             ; pre-relocation address
+          callq sl_rt_safepoint_enter ; writes through it -> SIGSEGV
+
+      Trigger: a SPAWNED task (small initial stack) calling a HELPER that
+      does TLS I/O. 3/3 crashes; the same I/O inline in the task, or in an
+      unspawned function, never tripped it. That is the ordinary shape of
+      a TLS server -- a task per connection, reading through a helper.
+
+      Before guard-paged stacks the old buffer was free()d rather than
+      unmapped, so these same writes went silently into freed heap
+      memory. The guard-page change did not introduce the bug; it made it
+      visible.
+
+      Fix: after the two precise walks, sl_task_grower_entry scans every
+      live word of the new stack and translates any value inside the old
+      stack's range. The registers are all on the stack by then -- the
+      context block at t->rsp plus each frame's own pushes -- just at
+      offsets nothing records. Cost is O(live stack) per grow, and grows
+      are rare and bounded by doubling. The false-positive case is an
+      integer that happens to equal an address inside the old mapping; it
+      is named in the code rather than hidden.
+
+      Controls, on the same branch: with the scan disabled, three repro
+      variants crash 3/3 each; with it enabled, 5/5 clean.
+
+      **The regression test is fragile, and that is recorded in it.**
+      tests/stack_grow_hoisted is the crashing program VERBATIM. Tidied
+      versions -- a renamed helper, a short reply literal, extra client
+      rounds -- passed with the fix disabled, and so did two compress-
+      based shapes written to cover it independently. Whether clang
+      hoists depends on code well away from the crash. It fails 5/5 with
+      the scan off today; a compiler upgrade can make it pass against a
+      regression.
+
+      **What this is NOT:** the ~5% SIGBUS above. That workload performs
+      zero stack grows. This exact fix was once built for it and reverted
+      as dead code, which remains correct for that bug.
+
 - [ ] **STILL OPEN: ~5% SIGBUS under amplified preemption.** Guard
       pages did NOT fix it. Recorded here in full because three
       plausible explanations were tested and eliminated, and the next
@@ -2430,6 +2481,12 @@ prerequisite, not a different plan).
          two-variable change read as one. A fix built on it
          (conservatively translating register spills on relocation) was
          dead code that never executed.
+
+         **Later landed anyway, for a DIFFERENT bug** -- see "Stack
+         relocation left compiler-hoisted stack addresses dangling"
+         below. That fix does execute, on a workload that grows. It is
+         still not evidence about THIS crash, whose workload does not
+         grow at all; do not read the two as connected.
       2. **Overflow past stack_base.** Real, and now fixed
          independently -- see the guard-page entry below -- but not the
          cause of THIS crash. With a PROT_NONE page under every stack,

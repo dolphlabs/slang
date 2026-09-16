@@ -864,6 +864,51 @@ static void sl_task_grower_entry(void *arg) {
         old_fp = old_next_fp;
     }
 
+    /* Every OTHER pointer into the old stack. The two chains above are
+     * the pointers this runtime created; the C compiler creates more,
+     * and nothing named them. At -O2 clang hoists a loop-invariant
+     * stack address -- `&local`, a roots array -- into a callee-saved
+     * register BEFORE a call that grows the stack, and reuses the
+     * register afterwards:
+     *
+     *     leaq -0x50(%rbp), %r15      ; &_sl_sp54, computed once
+     *     callq sl_net_tls_recv       ; grows: stack copied, old unmapped
+     *     movq %r15, %rdi             ; pre-relocation address
+     *     callq sl_rt_safepoint_enter ; writes through it
+     *
+     * Those registers are not lost: sl_ctx_switch pushed them into the
+     * context block at t->rsp, and every frame between here and the top
+     * pushed its own on entry. So they are all ON the stack, just at
+     * offsets nothing records -- which is why this is a scan of every
+     * live word rather than a third precise walk.
+     *
+     * Before guard-paged stacks the old buffer was free()d, so these
+     * writes landed silently in freed heap memory: corruption that
+     * surfaced far away, if at all. Once it was munmap()ed they became
+     * an immediate SEGV, which is how this was found -- a spawned task
+     * calling a helper that did TLS I/O crashed 3/3, while the same
+     * I/O inline in the task, or in an unspawned function, did not.
+     *
+     * Conservative, and the false-positive case is stated rather than
+     * hidden: a non-pointer word that happens to equal an address inside
+     * the OLD stack's mapping would be rewritten. That window is a few
+     * kilobytes of a 64-bit address space chosen by mmap, so an integer
+     * would have to be an address in all but name. The walks above
+     * already rewrote their links to NEW addresses, which fall outside
+     * the old range, so nothing here is translated twice. */
+    {
+        uintptr_t lo = (uintptr_t)t->rsp & ~(uintptr_t)(sizeof(void *) - 1);
+        uintptr_t hi = (uintptr_t)new_base + new_size;
+        uintptr_t ob = (uintptr_t)old_base;
+        for (uintptr_t a = lo; a + sizeof(void *) <= hi;
+             a += sizeof(void *)) {
+            uintptr_t v = (uintptr_t)*(void **)a;
+            if (v >= ob && v < ob + old_size)
+                *(void **)a = sl_task_translate((void *)v, old_base, old_size,
+                                                new_base, new_size);
+        }
+    }
+
     sl_stack_unmap(old_raw, old_size); /* NOT old_base -- see sl_task's
                        own raw_base field comment (runtime_core.c) for
                        why these differ: raw_base is the mapping,
