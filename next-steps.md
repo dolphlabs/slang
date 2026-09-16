@@ -4,9 +4,9 @@ Track progress top to bottom; tick items as they land. The HTTP perf
 chase is won on the raw axis (Phase E vs Go on p99 **and** RSS, PR #59
 records the numbers); the ruler stays frozen and Round 2 follow-ups
 live in `optimisation.md`. Error model gaps are done. Every item below is
-now ticked; `crypto`, SQL, `regex`, HTTP/2 and `os` have all landed,
-and so have the two concurrency primitives (`mutex`, `select`) at the
-bottom of this file.
+now ticked; `crypto`, SQL, `regex`, HTTP/2, `os` and `encoding` have all
+landed, and so have the two concurrency primitives (`mutex`, `select`)
+at the bottom of this file.
 
 ## HTTP perf (won on raw axis, ruler frozen)
 
@@ -259,6 +259,77 @@ a single token.
   public, one-way actions; `make dist` produces the relocatable tarball
   and the tag is one command when someone decides to cut v0.1.0.
 
+
+## Encoding (done)
+
+- [x] `encoding` — hex, base64, base64url, percent-encoding, query
+  strings. Native package, pure computation, no link flag (like
+  `regex`/`strings`/`os`).
+
+  **Picked by the same test the rest of this file uses: the codebase had
+  already written the gap down.** `tests/crypto/main.sl` asserts on a
+  SHA-256 digest byte by DECIMAL value (`expect_byte(h, 0, 186)` —
+  that is `0xba` hand-converted) because slang could compute a digest
+  and then had no way to display or store one. base64 had existed since
+  `json` landed but only INSIDE `sl_json.c`, as a private detail of
+  encoding a `bytes` field; nothing could call it. Between them that
+  ruled out HTTP Basic auth, JWTs, `application/x-www-form-urlencoded`
+  bodies, percent-decoded query parameters and hex digests in logs or
+  ETags — for a language built primarily for server-side and network
+  programming.
+
+  **The shape is asymmetric on purpose.** Encoding never fails — any
+  byte string has a hex form — so the encoders return a bare `str`.
+  Decoding takes input the program did not produce, so every decoder
+  returns `result[_, str]` naming the byte OFFSET it gave up at, because
+  "invalid base64" about a 400-character token is not a diagnosis.
+
+  **`str` vs `bytes` decides every return type, and is load-bearing.**
+  `hex_decode`/`base64_decode` yield arbitrary bytes and return `bytes`,
+  which carries an explicit length, so a decoded zero byte is ordinary
+  data. `url_decode`/`form_decode` yield text and return `str`, which is
+  NUL-terminated — so `%00` CANNOT be represented, and they refuse it
+  rather than hand back a value silently cut short. That is the same
+  rule `to_int` follows: leniency a caller did not ask for cannot be
+  undone.
+
+  **`url_*` and `form_*` are separate names rather than one function
+  with a flag**, because they differ only in `+` (a space in a form
+  body, a literal plus in a URI) and getting it backwards is SILENT —
+  the failure surfaces much later as a lookup that does not match. A
+  flag would have made that the default mistake.
+
+  `query_get` returns `opt[str]` (a missing parameter is absent data,
+  not bad data) and takes the first value; `query_keys` returns a list
+  rather than a map, because a query may legally repeat a key and a map
+  would have to drop one — the same reasoning that made `os.environ` a
+  list. A bare `?debug` is present with an empty value, not absent.
+
+  Two details checked against the specs rather than assumed: percent-
+  escapes are emitted UPPERCASE (RFC 3986 §2.1) while hex digests are
+  lowercase (`sha256sum`, git, every API that returns one), with both
+  decoders accepting either case; and `base64url` omits padding (RFC
+  4648 §5, what JWT uses) but TOLERATES it on the way in, since
+  producers differ. The alphabets are not interchangeable and the error
+  says which to try.
+
+  Every vector in `tests/encoding/` was cross-checked against Python's
+  `base64`/`hashlib`/`urllib.parse` before the expected output was
+  frozen — all seven RFC 4648 padding cases, the RFC 7617 Basic-auth
+  example, UTF-8 percent-encoding, and query parsing including the bare
+  flag. The test was then confirmed to FAIL under three separate
+  controls: `form_decode` not treating `+` as a space (the silent bug
+  above), `%00` accepted instead of refused, and percent-escapes emitted
+  lowercase.
+
+  One runtime detail worth keeping: `sl_bytes_new` COPIES from its
+  argument, so it cannot allocate a buffer to be filled in place —
+  `sl_bytes_new(NULL, n)` memcpys from NULL. The decoders know their
+  output size up front, so they allocate the same two-part shape
+  directly (`sl_enc_bytes_raw`). Error messages format into a buffer the
+  caller owns on its own stack rather than a `_Thread_local` one: a task
+  can be async-preempted between the `snprintf` and the copy and resume
+  on another worker, where thread-local storage is a different thread's.
 
 ## Notes
 

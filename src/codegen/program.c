@@ -559,6 +559,16 @@ void force_native_result_types(CG *cg) {
            instantiations are needed. */
         (void)0;
     }
+    if (want_pkg(cg, "encoding")) {
+        /* encoders are infallible (any byte string has a hex form);
+           decoders take input the program did not produce, so each
+           yields result[_, str]. query_get is opt because a missing
+           parameter is absent data, not bad data -- the README's
+           opt-vs-result rule. */
+        res_cname(cg, "bytes", "str");
+        res_cname(cg, "str", "str");
+        opt_cname(cg, "str");
+    }
     if (want_pkg(cg, "os")) {
         res_cname(cg, "bool", "str");
         res_cname(cg, "int", "str");
@@ -581,9 +591,10 @@ void emit_native_runtime(CG *cg) {
     int want_regex = want_pkg(cg, "regex");
     int want_os = want_pkg(cg, "os");
     int want_strings = want_pkg(cg, "strings");
+    int want_encoding = want_pkg(cg, "encoding");
     if (!want_time && !want_net && !want_proc && !want_fs && !want_log &&
         !want_crypto && !want_sql && !want_regex && !want_os &&
-        !want_strings)
+        !want_strings && !want_encoding)
         return;
     if (want_time)
         emit_runtime_file(cg, "sl_time.c");
@@ -607,6 +618,8 @@ void emit_native_runtime(CG *cg) {
         emit_runtime_file(cg, "sl_os.c");
     if (want_strings)
         emit_runtime_file(cg, "sl_strings.c");
+    if (want_encoding)
+        emit_runtime_file(cg, "sl_encoding.c");
 }
 
 /* Emit the args-struct + task entry function for every distinct

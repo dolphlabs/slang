@@ -1,0 +1,54 @@
+616263
+[]
+5
+72
+ff00ab
+0
+hex_decode: not a hex digit at offset 2
+hex_decode: odd number of digits (a byte needs two)
+ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+
+Zg==
+Zm8=
+Zm9v
+Zm9vYg==
+Zm9vYmE=
+Zm9vYmFy
+6
+666f6f626172
+1
+2
+YWxhZGRpbjpvcGVuc2VzYW1l
+base64_decode: length is not a multiple of 4 (input is truncated, or is base64url -- try base64url_decode)
++/8=
+-_8
+fbff
+fbff
+base64_decode: byte not in the alphabet at offset 0
+hello%20world
+a%2Bb%26c%3Dd
+safe-._~
+caf%C3%A9
+hello world
+a+b
+a b
+hello+world
+a b&c=d%e
+percent-escape is not two hex digits
+truncated percent-escape (needs two hex digits)
+%00 cannot be represented in a str (decode to bytes with hex_decode or base64_decode instead)
+hello world
+2
+a&b
+[]
+absent key is none
+[fallback]
+4
+q,page,tag,debug
+2
+1
+1
+2
+v
+fragment excluded
+done

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>encoding — slang</title>
+<meta name="description" content="Package encoding.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="encoding">
+<meta property="og:description" content="Package encoding.">
+<meta property="og:type" content="website">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/encoding.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <nav class="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>encoding</h1>
+      <p class="tagline">Package encoding.</p>
+      <p class="agentline">
+        <a href="../packages/encoding.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="hex-encode"><div class="api-sig"><code>encoding.<span class="f">hex_encode</span>(<span class="t">bytes</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#hex-encode">#</a></div></div><div class="api-item" id="hex-decode"><div class="api-sig"><code>encoding.<span class="f">hex_decode</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>,<span class="t">str</span>]</code><a class="anchor" href="#hex-decode">#</a></div></div><div class="api-item" id="base64-encode"><div class="api-sig"><code>encoding.<span class="f">base64_encode</span>(<span class="t">bytes</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#base64-encode">#</a></div></div><div class="api-item" id="base64-decode"><div class="api-sig"><code>encoding.<span class="f">base64_decode</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>,<span class="t">str</span>]</code><a class="anchor" href="#base64-decode">#</a></div></div><div class="api-item" id="base64url-encode"><div class="api-sig"><code>encoding.<span class="f">base64url_encode</span>(<span class="t">bytes</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#base64url-encode">#</a></div></div><div class="api-item" id="base64url-decode"><div class="api-sig"><code>encoding.<span class="f">base64url_decode</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>,<span class="t">str</span>]</code><a class="anchor" href="#base64url-decode">#</a></div></div><div class="api-item" id="url-encode"><div class="api-sig"><code>encoding.<span class="f">url_encode</span>(<span class="t">str</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#url-encode">#</a></div></div><div class="api-item" id="url-decode"><div class="api-sig"><code>encoding.<span class="f">url_decode</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>,<span class="t">str</span>]</code><a class="anchor" href="#url-decode">#</a></div></div><div class="api-item" id="form-encode"><div class="api-sig"><code>encoding.<span class="f">form_encode</span>(<span class="t">str</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#form-encode">#</a></div></div><div class="api-item" id="form-decode"><div class="api-sig"><code>encoding.<span class="f">form_decode</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>,<span class="t">str</span>]</code><a class="anchor" href="#form-decode">#</a></div></div><div class="api-item" id="query-get"><div class="api-sig"><code>encoding.<span class="f">query_get</span>(<span class="t">str</span>, <span class="t">str</span>) -&gt; <span class="t">opt</span>[<span class="t">str</span>]</code><a class="anchor" href="#query-get">#</a></div></div><div class="api-item" id="query-keys"><div class="api-sig"><code>encoding.<span class="f">query_keys</span>(<span class="t">str</span>) -&gt; [<span class="t">str</span>]</code><a class="anchor" href="#query-keys">#</a></div></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

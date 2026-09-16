@@ -86,6 +86,121 @@
         }
       ]
     },
+    "encoding": {
+      "name": "encoding",
+      "kind": "native",
+      "items": [
+        {
+          "name": "hex_encode",
+          "params": [
+            "bytes"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "encoding.hex_encode(bytes) -> str"
+        },
+        {
+          "name": "hex_decode",
+          "params": [
+            "str"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "encoding.hex_decode(str) -> result[bytes,str]"
+        },
+        {
+          "name": "base64_encode",
+          "params": [
+            "bytes"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "encoding.base64_encode(bytes) -> str"
+        },
+        {
+          "name": "base64_decode",
+          "params": [
+            "str"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "encoding.base64_decode(str) -> result[bytes,str]"
+        },
+        {
+          "name": "base64url_encode",
+          "params": [
+            "bytes"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "encoding.base64url_encode(bytes) -> str"
+        },
+        {
+          "name": "base64url_decode",
+          "params": [
+            "str"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "encoding.base64url_decode(str) -> result[bytes,str]"
+        },
+        {
+          "name": "url_encode",
+          "params": [
+            "str"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "encoding.url_encode(str) -> str"
+        },
+        {
+          "name": "url_decode",
+          "params": [
+            "str"
+          ],
+          "ret": "result[str,str]",
+          "tls": false,
+          "sig": "encoding.url_decode(str) -> result[str,str]"
+        },
+        {
+          "name": "form_encode",
+          "params": [
+            "str"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "encoding.form_encode(str) -> str"
+        },
+        {
+          "name": "form_decode",
+          "params": [
+            "str"
+          ],
+          "ret": "result[str,str]",
+          "tls": false,
+          "sig": "encoding.form_decode(str) -> result[str,str]"
+        },
+        {
+          "name": "query_get",
+          "params": [
+            "str",
+            "str"
+          ],
+          "ret": "opt[str]",
+          "tls": false,
+          "sig": "encoding.query_get(str, str) -> opt[str]"
+        },
+        {
+          "name": "query_keys",
+          "params": [
+            "str"
+          ],
+          "ret": "[str]",
+          "tls": false,
+          "sig": "encoding.query_keys(str) -> [str]"
+        }
+      ]
+    },
     "fs": {
       "name": "fs",
       "kind": "native",
