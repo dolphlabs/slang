@@ -155,6 +155,22 @@ typedef struct {
     int cap;
 } ResTable;
 
+/* One distinct fn(...) -> R instantiation. Unlike opt/result these
+ * describe no storage of their own -- the value is a bare C function
+ * pointer -- but they still need a typedef, because C function-pointer
+ * declarators put the name INSIDE the type ("R (*f)(A)") and every
+ * emitter here builds declarations as "<ctype> <name>". */
+typedef struct {
+    char *slang; /* canonical slang type, e.g. fn(int,str)->bool */
+    char *cname; /* C typedef name, e.g. sl_fn_0 */
+} FnInst;
+
+typedef struct {
+    FnInst *items;
+    int count;
+    int cap;
+} FnTable;
+
 /* One args-struct + pthread trampoline per distinct spawned target
  * function (shared across every 'spawn' call site targeting it). */
 typedef struct {
@@ -225,6 +241,7 @@ struct CG {
     StructTable structs;
     OptTable opts;
     ResTable res;
+    FnTable fns;
     SpawnTable spawns;
     JsonTable json;
     const char *expect; /* expected type while inferring none/ok/err */
@@ -382,6 +399,13 @@ int is_opt(const char *t);
 int is_result(const char *t);
 int is_chan(const char *t);
 int is_mutex(const char *t);
+int is_fn(const char *t);
+char *fn_type_of_sig(CG *cg, FuncSig *sig);
+const char *fn_var_type(CG *cg, const char *name);
+FuncSig *fn_sig_of_type(CG *cg, const char *t, const char *name, int line);
+void emit_fn_types(CG *cg);
+int fn_parts(const char *t, char ***out, char **ret);
+const char *fn_cname(CG *cg, const char *t);
 int is_join(const char *t);
 const char *res_access(CG *cg, const char *t);
 
@@ -518,6 +542,7 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs);
 const char *literal_type(CG *cg, Expr *e, int line);
 char *gen_const_init(Expr *e);
 void emit_globals(CG *cg, Package *pkgs, int npkgs, int main_index);
+void emit_struct_fwd_decls(CG *cg);
 void emit_struct_types(CG *cg);
 void emit_struct_tracers(CG *cg);
 void emit_opt_res_forward_decls(CG *cg);

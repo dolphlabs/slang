@@ -76,7 +76,11 @@ struct Expr {
         struct { char *name; } ident;
         struct { char *op; Expr *lhs; Expr *rhs; } binary;
         struct { char *op; Expr *operand; } unary;
-        struct { char *name; Expr **args; int nargs; } call;
+        /* `name` names the callee for an ordinary call. `callee` is set
+         * instead when the call goes through an arbitrary expression
+         * holding a function value -- routes[i].handler(req) -- in which
+         * case `name` is NULL. Exactly one of the two is set. */
+        struct { char *name; Expr *callee; Expr **args; int nargs; } call;
         struct { char *ty; Expr *operand; } cast; /* slang type name */
         struct { Expr *base; Expr *index; } index;
         struct {

@@ -116,6 +116,46 @@ a single token.
   operation and select to coordinate two wake sources; the claim
   protocol already generalises to it.
 
+## Function values (done)
+
+- [x] `fn(A,B) -> R` as a type, holding a top-level function. Picked
+  over full closures deliberately: the hard parts of closures are all
+  in the CAPTURE (heap-allocating an environment, tracing it, making
+  it agree with the borrow checker), and none of that is needed for
+  the thing the codebase actually kept wanting — a dispatch table. A
+  value that captures nothing is exactly a C function pointer: it
+  names code, never the heap, so `type_is_gc_ptr` is 0 and the
+  collector ignores it. The README's "no closures" position stays
+  true, and closures remain strictly additive later.
+
+  Two implementation notes worth keeping. **Typedefs**: C puts the
+  declarator's name inside a function-pointer type (`R (*f)(A)`), which
+  cannot be spliced into this codegen's `"<ctype> <name>"` shape — so
+  every distinct fn type gets a `typedef`, the same monomorphisation
+  trick `opt`/`result` already use. Emitting them means splitting the
+  struct forward declarations from the struct bodies, because the
+  dependency is genuinely circular (a struct field may hold a function
+  value; a function type may take a struct) and only the fn typedef can
+  tolerate an incomplete type. **Calls**: `EX_CALL` gained a `callee`
+  expression alongside `name`, so `routes[i].handler(req)` parses;
+  `name` keeps a non-NULL sentinel rather than becoming NULL, because
+  ~20 sites across the passes read it unconditionally and a sentinel
+  that cannot collide with a real identifier makes all of them safe at
+  once. A NULL there segfaulted the compiler in `strchr`.
+
+  A fn-typed FIELD beats a method of the same name, since the parser
+  folds one dot into the call's name and both shapes arrive at the same
+  place. Methods are not usable as values at all (they take a receiver
+  the type does not name) — `spawn` already draws that line.
+
+  `demo/samplex` converted as the proof: the `if path == ... if method
+  == ...` chain is now a four-row table, verified end to end on every
+  route plus the 404/405 split, and 200 concurrent POSTs still produce
+  200 unique ids.
+
+  Not supported: `spawn` still requires a named function, not a
+  function value.
+
 ## Notes
 
 - Do not change `bench/http/main.sl` for perf experiments. Raw-best slang is `bench/http_opt/main.sl`; remasure with `./bench/run_http_opt.sh`.
