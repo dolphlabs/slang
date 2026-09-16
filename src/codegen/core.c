@@ -934,7 +934,8 @@ const char *res_access(CG *cg, const char *t) {
  * every 'spawn' call site targeting the same function. */
 SpawnShape *spawn_shape_for(CG *cg, FuncSig *sig) {
     for (int i = 0; i < cg->spawns.count; i++) {
-        if (!strcmp(cg->spawns.items[i].pkg, sig->pkg) &&
+        if (!cg->spawns.items[i].fntype &&
+            !strcmp(cg->spawns.items[i].pkg, sig->pkg) &&
             !strcmp(cg->spawns.items[i].name, sig->name))
             return &cg->spawns.items[i];
     }
@@ -946,6 +947,7 @@ SpawnShape *spawn_shape_for(CG *cg, FuncSig *sig) {
     SpawnShape *s = &cg->spawns.items[cg->spawns.count++];
     s->pkg = sig->pkg;
     s->name = sig->name;
+    s->fntype = NULL;
     char *base = xasprintf("%s_%s", sanitize_pkg(sig->pkg),
                            sanitize_ident(sig->name));
     s->sname = xasprintf("sl_spawn_args_%s", base);
@@ -954,10 +956,81 @@ SpawnShape *spawn_shape_for(CG *cg, FuncSig *sig) {
     return s;
 }
 
+/* If this spawn targets a function VALUE rather than a named function,
+ * the value's fn type; otherwise NULL. A spawned value needs no less
+ * information than a spawned name -- the trampoline only ever used the
+ * name to know the SIGNATURE, which the fn type carries in full. */
+const char *spawn_fn_type(CG *cg, Expr *call) {
+    char *left, *right;
+    const char *name;
+    if (call->kind != EX_CALL)
+        return NULL;
+    if (call->as.call.callee)
+        return infer_type(cg, call->as.call.callee);
+    name = call->as.call.name;
+    if (split_dotted(name, &left, &right)) {
+        /* `obj.field(...)` where field holds a function value. Only a
+         * STRUCT receiver qualifies: `pkg.func(...)` names a function
+         * directly and keeps the named path, which emits a direct call
+         * rather than an indirect one. */
+        VarSym *v;
+        StructDef *sd;
+        if (import_try(cg, left))
+            return NULL;
+        v = var_find(cg, left);
+        if (!v)
+            return NULL;
+        sd = struct_of_type(cg, v->slang);
+        if (!sd)
+            return NULL;
+        for (int i = 0; i < sd->nfields; i++) {
+            if (!strcmp(sd->fields[i], right) && is_fn(sd->ftypes[i]))
+                return sd->ftypes[i];
+        }
+        return NULL;
+    }
+    return fn_var_type(cg, name);
+}
+
+/* Shape for spawning a function value: keyed by the fn TYPE, because
+ * that is all a trampoline needs and every value of one type can share
+ * a single trampoline. The target itself travels in the args struct. */
+SpawnShape *spawn_shape_for_fn(CG *cg, const char *fntype) {
+    for (int i = 0; i < cg->spawns.count; i++) {
+        if (cg->spawns.items[i].fntype &&
+            !strcmp(cg->spawns.items[i].fntype, fntype))
+            return &cg->spawns.items[i];
+    }
+    if (cg->spawns.count == cg->spawns.cap) {
+        cg->spawns.cap = cg->spawns.cap ? cg->spawns.cap * 2 : 8;
+        cg->spawns.items = (SpawnShape *)xrealloc(
+            cg->spawns.items, cg->spawns.cap * sizeof(SpawnShape));
+    }
+    SpawnShape *s = &cg->spawns.items[cg->spawns.count++];
+    s->pkg = (char *)"";
+    s->name = (char *)"<function value>";
+    s->fntype = xstrdup(fntype);
+    s->sname = xasprintf("sl_spawn_argsv_%d", cg->spawns.count - 1);
+    s->tname = xasprintf("sl_spawn_trampv_%d", cg->spawns.count - 1);
+    s->has_tracer = 1;
+    return s;
+}
+
 FuncSig *spawn_target(CG *cg, Expr *call, int line) {
     if (call->kind != EX_CALL)
         cg_error(line, "'spawn' requires a function call");
     const char *name = call->as.call.name;
+    const char *sft = spawn_fn_type(cg, call);
+    if (sft) {
+        if (!is_fn(sft))
+            cg_error(line, "'spawn' target is not callable (type %s)", sft);
+        FuncSig *vs = fn_sig_of_type(cg, sft, name, line);
+        if (call->as.call.nargs != vs->nparams)
+            cg_error(line,
+                     "function '%s' expects %d argument(s), got %d", name,
+                     vs->nparams, call->as.call.nargs);
+        return vs;
+    }
     if (is_builtin_name(name))
         cg_error(line, "'spawn' cannot target a builtin function");
     FuncSig *sig;

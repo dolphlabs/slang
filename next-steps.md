@@ -153,8 +153,19 @@ a single token.
   route plus the 404/405 split, and 200 concurrent POSTs still produce
   200 unique ids.
 
-  Not supported: `spawn` still requires a named function, not a
-  function value.
+- [x] `spawn` through a function value — closed the inconsistency the
+  item above shipped with. The fix was smaller than it looked because
+  the trampoline never actually needed the target's NAME, only its
+  SIGNATURE, which it recovered from the name. A fn type carries the
+  signature in full, so a `SpawnShape` can be keyed on the TYPE
+  instead and the target travels in the args struct: one trampoline
+  per fn type, calling `_sl_a->fn(...)` rather than a fixed C symbol.
+  The args-struct tracer must NOT mark that field — a function value
+  names code, not the heap, and marking it would hand the collector an
+  address it never allocated (verified in the emitted C). Works
+  through a variable, a struct field, and as an expression yielding
+  `join[T]`. `pkg.func` deliberately keeps the named path so it still
+  emits a direct call rather than an indirect one.
 
 ## Notes
 

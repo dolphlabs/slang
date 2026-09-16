@@ -492,7 +492,8 @@ Two consequences worth knowing:
 - **A binding shadows a function of the same name.** `let scale = ...`
   in scope means `scale` refers to the binding, never to `fn scale`.
 
-`spawn` still requires a named function, not a function value.
+`spawn` takes a function value too — `spawn handlers[i](job);` — see
+Concurrency below.
 
 ## Standard packages
 
@@ -1221,8 +1222,10 @@ it skips cleanly without a Go toolchain.
 ##### Stream floods
 
 The connection layer cannot cap concurrency by itself: it does not spawn
-the handlers, *you* do, and slang has no function values to hand it a
-callback. So the bound is a **gate** — a token channel you hold.
+the handlers, *you* do. (slang has function values now, so handing it a
+callback would compile — but a callback would only move the same
+question inside, and the gate below is the answer either way.) So the
+bound is a **gate** — a token channel you hold.
 `gate_enter` takes a token and blocks when none are left, `gate_leave`
 returns one, and that blocking is the backpressure: the reader stops
 pulling frames while every slot is busy.
@@ -1364,10 +1367,11 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
   context (no closures — nothing is captured implicitly) and submits
   `f` as a growable-stack task on the striped run queues (16 hashed
   stripes with work-stealing, plus a global doorbell for sleepers).
-  `f` must be a
-  plain top-level function or an `extern fn`, not a method and not a
-  builtin. There is no `spawn` on `net.*`/`time.*` calls directly;
-  wrap the native call in a plain function and spawn that instead.
+  `f` may be a plain top-level function, an `extern fn`, or a
+  **function value** (`spawn w(1, out);`, `spawn job.run(x);`) — not a
+  method and not a builtin. There is no `spawn` on `net.*`/`time.*`
+  calls directly; wrap the native call in a plain function and spawn
+  that instead.
   As a statement, the result is discarded. As an expression,
   `let h = spawn f(...)` has type `join[T]` when `f` returns `T`.
   `join_wait(h) -> result[T, str]` parks until `f` finishes; a panic

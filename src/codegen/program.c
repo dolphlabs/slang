@@ -618,13 +618,26 @@ void emit_native_runtime(CG *cg) {
 void emit_spawn_trampolines(CG *cg) {
     for (int i = 0; i < cg->spawns.count; i++) {
         SpawnShape *s = &cg->spawns.items[i];
-        FuncSig *sig = sig_find_in(cg, s->pkg, s->name);
-        char *callee = sig->is_extern ? xstrdup(sig->name)
-                                      : mangle_func(sig->pkg, sig->name);
+        /* A value shape knows the signature but not the target: the
+         * function pointer rides in the args struct and the trampoline
+         * calls through it. Everything else about the two is identical,
+         * because the name was only ever used to recover the signature
+         * this fn type already carries. */
+        FuncSig *sig = s->fntype
+                           ? fn_sig_of_type(cg, s->fntype,
+                                            "<function value>", 0)
+                           : sig_find_in(cg, s->pkg, s->name);
+        char *callee = s->fntype
+                           ? xstrdup("_sl_a->fn")
+                           : sig->is_extern
+                                 ? xstrdup(sig->name)
+                                 : mangle_func(sig->pkg, sig->name);
 
         emit_line(cg, "typedef struct {");
         cg->indent++;
         emit_line(cg, "sl_join *join;");
+        if (s->fntype)
+            emit_line(cg, "%s fn;", ctype_of(cg, s->fntype));
         for (int j = 0; j < sig->nparams; j++)
             emit_line(cg, "%s a%d;", ctype_of(cg, sig->param_slang[j]), j);
         cg->indent--;
@@ -636,6 +649,9 @@ void emit_spawn_trampolines(CG *cg) {
         cg->indent++;
         emit_line(cg, "%s *o = (%s *)p;", s->sname, s->sname);
         emit_line(cg, "mark((void *)o->join);");
+        /* `fn` is deliberately NOT marked: a function value names code,
+         * not the heap. Marking it would hand the collector an address
+         * it never allocated. */
         for (int j = 0; j < sig->nparams; j++)
             if (type_is_gc_ptr(cg, sig->param_slang[j]))
                 emit_line(cg, "mark((void *)o->a%d);", j);

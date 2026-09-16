@@ -1616,9 +1616,11 @@ char *gen_expr(CG *cg, Expr *e) {
     case EX_SPAWN: {
         Expr *call = e->as.spawn.call;
         const char *name = call->as.call.name;
+        const char *sft = spawn_fn_type(cg, call);
         FuncSig *sig = spawn_target(cg, call, e->line);
         int nargs = call->as.call.nargs;
-        SpawnShape *shape = spawn_shape_for(cg, sig);
+        SpawnShape *shape = sft ? spawn_shape_for_fn(cg, sft)
+                                : spawn_shape_for(cg, sig);
         int id = cg->tmp_id++;
         StrBuf prelude;
         sb_init(&prelude);
@@ -1628,6 +1630,12 @@ char *gen_expr(CG *cg, Expr *e) {
             "_sl_sa%d.join = sl_join_new(sizeof(%s), %d); ",
             shape->sname, id, id, ctype_of(cg, sig->ret_slang),
             type_is_gc_ptr(cg, sig->ret_slang)));
+        if (sft)
+            sb_append(&prelude,
+                      xasprintf("_sl_sa%d.fn = %s; ", id,
+                                call->as.call.callee
+                                    ? gen_expr(cg, call->as.call.callee)
+                                    : gen_ident_name(cg, name, e->line)));
         ambient_root_push(cg, xasprintf("_sl_sa%d.join", id));
         for (int i = 0; i < nargs; i++) {
             const char *saved = expect_push(cg, sig->param_slang[i]);

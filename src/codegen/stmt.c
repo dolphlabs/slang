@@ -1060,14 +1060,21 @@ void gen_stmt(CG *cg, Stmt *s) {
     case ST_SPAWN: {
         Expr *call = s->as.spawn.call;
         const char *name = call->as.call.name;
+        const char *sft = spawn_fn_type(cg, call);
         FuncSig *sig = spawn_target(cg, call, s->line);
         int nargs = call->as.call.nargs;
-        SpawnShape *shape = spawn_shape_for(cg, sig);
+        SpawnShape *shape = sft ? spawn_shape_for_fn(cg, sft)
+                                : spawn_shape_for(cg, sig);
         int id = cg->tmp_id++;
         emit_line(cg, "{");
         cg->indent++;
         emit_line(cg, "%s _sl_sa%d;", shape->sname, id);
         emit_line(cg, "_sl_sa%d.join = NULL;", id);
+        if (sft)
+            emit_line(cg, "_sl_sa%d.fn = %s;", id,
+                      call->as.call.callee
+                          ? gen_expr(cg, call->as.call.callee)
+                          : gen_ident_name(cg, name, s->line));
         int ambient_mark = cg->ambient_count;
         for (int i = 0; i < nargs; i++) {
             const char *saved = expect_push(cg, sig->param_slang[i]);
