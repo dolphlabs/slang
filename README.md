@@ -1,11 +1,30 @@
 # slang
 
-A statically typed language for server-side and network programming.
+A statically typed language built primarily for server-side and
+network programming.
 `spawn` is M:N — green tasks on a worker pool, not a thread per
 connection. Accept, recv, and send park. Memory is a precise,
 non-moving, stop-the-world mark-sweep collector (`runtime/sl_gc.c`);
 cycles are collected. `slangc` emits C and your system `cc` builds the
 binary.
+
+**Built and maintained by [Dolphlabs](https://dolphlabs.com)** — Dolph
+Tech Limited.
+
+## Documentation
+
+Full documentation site: **<https://dolphlabs.github.io/slang/>**
+
+Build it locally with `make docs` (dependency-free Python 3) and serve
+with `make docs-serve`. The site is generated from this repository --
+these README sections, the compiler's own signature tables, and the
+`pub` declarations in `stdlib/` -- so it cannot drift from the code.
+See [`www/README.md`](www/README.md) for the documentation convention
+every slang package follows.
+
+Reading with an agent? Every page has a Markdown twin at the same path,
+`/llms.txt` indexes the site, `/llms-full.txt` is the whole thing as one
+document, and `/api.json` is the machine-readable API index.
 
 ## Quick start
 

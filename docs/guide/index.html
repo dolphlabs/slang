@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Language guide — slang</title>
+<meta name="description" content="Values, types, and the shape of a slang program.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="Language guide">
+<meta property="og:description" content="Values, types, and the shape of a slang program.">
+<meta property="og:type" content="website">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../guide/index.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <nav class="mainnav"><a href="../index.html">Home</a><a class="active" href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>Language guide</h1>
+      <p class="tagline">Values, types, and the shape of a slang program.</p>
+      <p class="agentline">
+        <a href="../guide/index.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<h2 id="language-tour">Language tour</h2>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="c">// variables with inferred types</span>
+<span class="k">let</span> x = <span class="n">10</span>;              <span class="c">// int  (64-bit)</span>
+<span class="k">let</span> pi = <span class="n">3.14</span>;           <span class="c">// float (double)</span>
+<span class="k">let</span> name = <span class="s">&quot;World&quot;</span>;      <span class="c">// str</span>
+<span class="k">let</span> <span class="b">ok</span> = <span class="k">true</span>;           <span class="c">// bool</span>
+
+<span class="c">// arithmetic: + - * / %   (int/int is integer division)</span>
+<span class="c">// bitwise:    &amp; | ^ ~ &lt;&lt; &gt;&gt;   (integers only; see below)</span>
+
+<span class="c">// compound assignment for every binary operator above</span>
+<span class="k">let</span> mut_acc = <span class="n">0</span>;
+mut_acc += <span class="n">5</span>;
+mut_acc |= <span class="n">1</span> &lt;&lt; <span class="n">3</span>;
+xs[i] *= <span class="n">2</span>;
+p.count += <span class="n">1</span>;
+<span class="b">println</span>(x + y);
+<span class="b">println</span>(x / <span class="n">2.0</span>);        <span class="c">// mixing int and float promotes to float</span>
+
+<span class="c">// strings concatenate with + ; numbers/bools convert automatically</span>
+<span class="b">println</span>(<span class="s">&quot;Hello, &quot;</span> + name + <span class="s">&quot;! &quot;</span> + x);
+
+<span class="c">// string interpolation with ${expr} (any expression allowed)</span>
+<span class="b">println</span>(<span class="s">&quot;pi doubled is ${pi * 2}&quot;</span>);
+
+<span class="c">// comparisons: == != &lt; &lt;= &gt; &gt;=   logic: &amp;&amp; || !</span>
+<span class="k">if</span> x &gt; y &amp;&amp; <span class="b">ok</span> {
+    <span class="b">println</span>(<span class="s">&quot;bigger&quot;</span>);
+} <span class="k">else</span> <span class="k">if</span> x == y {
+    <span class="b">println</span>(<span class="s">&quot;equal&quot;</span>);
+} <span class="k">else</span> {
+    <span class="b">println</span>(<span class="s">&quot;smaller&quot;</span>);
+}
+
+<span class="c">// loops</span>
+<span class="k">let</span> i = <span class="n">0</span>;
+<span class="k">while</span> i &lt; <span class="n">5</span> {
+    <span class="b">print</span>(i);
+    i = i + <span class="n">1</span>;
+}
+
+<span class="k">for</span> j <span class="k">in</span> <span class="n">0..5</span> {        <span class="c">// exclusive range: 0,1,2,3,4</span>
+    <span class="b">print</span>(j);
+}
+<span class="k">for</span> k <span class="k">in</span> <span class="n">1</span>..=<span class="n">3</span> {       <span class="c">// inclusive range: 1,2,3</span>
+    <span class="b">println</span>(<span class="s">&quot;tick ${k}&quot;</span>);
+}
+
+<span class="c">// functions (parameters and return types are annotated)</span>
+<span class="k">fn</span> <span class="f">add</span>(a: <span class="t">int</span>, b: <span class="t">int</span>) -&gt; <span class="t">int</span> {
+    a + b          <span class="c">// implicit return: last expression is the value</span>
+}
+
+<span class="k">fn</span> <span class="f">abs</span>(n: <span class="t">int</span>) -&gt; <span class="t">int</span> {
+    <span class="k">guard</span> n &gt;= <span class="n">0</span> <span class="k">else</span> {
+        <span class="k">return</span> -n; <span class="c">// guard: early exit when the condition fails</span>
+    }
+    n
+}
+
+<span class="c">// void functions just omit the return type</span>
+<span class="k">fn</span> <span class="f">shout</span>(msg: <span class="t">str</span>) {
+    <span class="b">println</span>(msg + <span class="s">&quot;!!!&quot;</span>);
+}
+
+<span class="c">// recursion works (functions are forward-declared automatically)</span>
+<span class="k">fn</span> <span class="f">fib</span>(n: <span class="t">int</span>) -&gt; <span class="t">int</span> {
+    <span class="k">if</span> n &lt; <span class="n">2</span> { <span class="k">return</span> n; }
+    <span class="k">return</span> <span class="f">fib</span>(n - <span class="n">1</span>) + <span class="f">fib</span>(n - <span class="n">2</span>);
+}</code></pre></div>
+<h3 id="built-ins">Built-ins<a class="anchor" href="#built-ins" aria-label="Link to this section">#</a></h3>
+<ul><li><code>print(expr)</code> — print a value without a newline</li><li><code>println(expr)</code> — print a value followed by a newline</li></ul>
+<p>Both accept any single value of type <code>int</code>, any fixed-width integer, <code>float</code>, <code>f32</code>, <code>str</code>, <code>bool</code>, or <code>bytes</code> (bytes are written raw, with no escaping).</p>
+<ul><li><code>len(x)</code> — length of a <code>str</code>, <code>bytes</code>, <code>[T]</code>, or map</li><li><code>push(xs, v)</code> / <code>pop(xs)</code> — append to / remove the last element of a list</li><li><code>has(m, k)</code> — does map <code>m</code> contain key <code>k</code>?</li><li><code>del(m, k)</code> — remove key <code>k</code> (and its value) from map <code>m</code></li><li><code>to_str(x)</code> — convert any scalar or bytes value to <code>str</code></li><li><code>to_bytes(s)</code> — convert a <code>str</code> to its raw bytes</li><li><code>to_le(n)</code> / <code>to_be(n)</code> — integer to 8-byte little/big-endian <code>bytes</code></li><li><code>from_le(b)</code> / <code>from_be(b)</code> — 8-byte little/big-endian <code>bytes</code> to integer</li><li><code>exit(code)</code> — terminate the process immediately with the given status</li><li><code>some(v)</code> / <code>none</code> / <code>ok(v)</code> / <code>err(e)</code> — construct <code>opt</code>/<code>result</code> values (see below)</li><li><code>bytes_ptr(b)</code> — raw <code>rawptr</code> to a <code>bytes</code> buffer, for passing to <code>extern fn</code>s (see C interop below)</li><li><code>make_chan(n)</code> / <code>chan_send(ch, v)</code> / <code>chan_recv(ch)</code> / <code>chan_close(ch)</code> — construct and use a <code>chan[T]</code> (see Concurrency below)</li><li><code>make_mutex()</code> / <code>mutex_lock(m)</code> / <code>mutex_unlock(m)</code> / <code>mutex_trylock(m)</code> — construct and use a <code>mutex</code> (see Concurrency below)</li><li><code>join_wait(h)</code> — wait for a <code>join[T]</code> from <code>spawn f(...)</code> (see Concurrency below)</li></ul>
+<h3 id="types">Types<a class="anchor" href="#types" aria-label="Link to this section">#</a></h3>
+<div class="tablewrap"><table><thead><tr><th>slang type</th><th>C type</th><th>Notes</th></tr></thead><tbody><tr><td><code>int</code></td><td><code>long long</code></td><td>64-bit signed integer</td></tr><tr><td><code>float</code></td><td><code>double</code></td><td>IEEE double</td></tr><tr><td><code>str</code></td><td><code>const char *</code></td><td>NUL-terminated UTF-8 bytes</td></tr><tr><td><code>bool</code></td><td><code>bool</code></td><td><code>true</code> / <code>false</code></td></tr><tr><td><code>bytes</code></td><td><code>sl_bytes *</code></td><td>binary-safe byte sequence</td></tr><tr><td><code>i8 i16 i32 i64</code></td><td><code>int8_t</code> .. <code>int64_t</code></td><td>signed fixed-width ints</td></tr><tr><td><code>u8 u16 u32 u64</code></td><td><code>uint8_t</code> .. <code>uint64_t</code></td><td>unsigned fixed-width ints</td></tr><tr><td><code>f32</code></td><td><code>float</code></td><td>IEEE single precision</td></tr><tr><td><code>[T]</code></td><td><code>sl_arr *</code></td><td>growable array of T</td></tr><tr><td><code>map[K]V</code></td><td><code>sl_map *</code></td><td>insertion-ordered hash map</td></tr><tr><td>struct</td><td><code>sl_st_*</code></td><td>value record (copied)</td></tr><tr><td><code>gc struct</code></td><td><code>sl_st_* *</code></td><td>GC&#x27;d heap record (shared)</td></tr><tr><td><code>opt[T]</code></td><td><code>sl_opt_* *</code></td><td>optional value: <code>some(v)</code> / <code>none</code></td></tr><tr><td><code>result[T,E]</code></td><td><code>sl_res_* *</code></td><td>fallible value: <code>ok(v)</code> / <code>err(e)</code></td></tr><tr><td><code>duration</code></td><td><code>int64_t</code></td><td>nanosecond count (see <code>time</code>)</td></tr><tr><td><code>rawptr</code></td><td><code>void *</code></td><td>opaque foreign pointer (C interop)</td></tr><tr><td><code>ptr[T]</code></td><td><code>T *</code></td><td>typed FFI pointer</td></tr><tr><td><code>&amp;T</code></td><td><code>const T *</code></td><td>shared borrow</td></tr><tr><td><code>&amp;mut T</code></td><td><code>T *</code></td><td>unique borrow</td></tr><tr><td><code>own T</code></td><td><code>T *</code></td><td>unique heap box (no drop yet)</td></tr><tr><td><code>gc T</code></td><td><code>T *</code></td><td>traced heap box of a value type</td></tr><tr><td><code>*T</code> / <code>*mut T</code></td><td><code>T *</code></td><td>raw pointer</td></tr><tr><td><code>chan[T]</code></td><td><code>sl_chan *</code></td><td>bounded thread-safe queue (see Concurrency)</td></tr><tr><td><code>join[T]</code></td><td><code>sl_join *</code></td><td>handle for a spawned task&#x27;s result</td></tr><tr><td><code>mutex</code></td><td><code>sl_mutex *</code></td><td>task-parking lock (see Concurrency)</td></tr><tr><td><code>fn(A)-&gt;R</code></td><td><code>R (*)(A)</code></td><td>function value (see Function values)</td></tr></tbody></table></div>
+<h4 id="numeric-conversion-rules">Numeric conversion rules<a class="anchor" href="#numeric-conversion-rules" aria-label="Link to this section">#</a></h4>
+<ul><li><strong>Implicit widening</strong> within the integer family: a narrower int may be used wherever a strictly wider one is expected (<code>i32</code> -&gt; <code>i64</code>, <code>u32</code> -&gt; <code>u64</code>, and unsigned into a wider <em>signed</em> type). Widening toward floats is also implicit (<code>i32</code> -&gt; <code>float</code>, <code>f32</code> -&gt; <code>float</code>).</li><li><strong>Narrowing and sign changes require an explicit cast</strong> with <code>as</code>: <code>x as i8</code>, <code>n as u32</code>, <code>3.9 as i32</code>. Integer literals that fit the target width may initialize/pass without a cast.</li><li><strong>Wrap on cast/overflow</strong>: casts and arithmetic wrap two&#x27;s-complement style. <code>(0 as u8) - (1 as u8)</code> is <code>255</code>; <code>300 as i8</code> is <code>44</code>. Float -&gt; int casts truncate toward zero.</li><li>Mixed-width arithmetic promotes to the wider operand; same-width signed/unsigned mixes resolve to the unsigned type (C semantics).</li></ul>
+<h4 id="bitwise-operations-and-integer-literals">Bitwise operations and integer literals<a class="anchor" href="#bitwise-operations-and-integer-literals" aria-label="Link to this section">#</a></h4>
+<p>Binary protocols are most of network programming, so the bit operators are first-class: <code>&amp;</code> <code>|</code> <code>^</code> <code>~</code> <code>&lt;&lt;</code> <code>&gt;&gt;</code>, on any integer type.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="c">// an HTTP/2 frame header, straight off the wire</span>
+<span class="k">let</span> flen  = (b[<span class="n">0</span>] &lt;&lt; <span class="n">16</span>) | (b[<span class="n">1</span>] &lt;&lt; <span class="n">8</span>) | b[<span class="n">2</span>];
+<span class="k">let</span> ftype = b[<span class="n">3</span>];
+<span class="k">let</span> flags = b[<span class="n">4</span>];
+<span class="k">let</span> sid   = ((b[<span class="n">5</span>] &amp; <span class="n">0x7f</span>) &lt;&lt; <span class="n">24</span>) | (b[<span class="n">6</span>] &lt;&lt; <span class="n">16</span>) | (b[<span class="n">7</span>] &lt;&lt; <span class="n">8</span>) | b[<span class="n">8</span>];
+
+<span class="k">if</span> flags &amp; <span class="n">0x01</span> != <span class="n">0</span> { /* END_STREAM */ }</code></pre></div>
+<p>Integer literals come in decimal, hex (<code>0xff</code>, <code>0xFF</code>) and binary (<code>0b1010</code>), and <code>_</code> may be used anywhere as a digit separator: <code>1_000_000</code>, <code>0xff_ff</code>, <code>0b1010_1010</code>.</p>
+<p>A literal too large for <code>i64</code> <strong>is a <code>u64</code></strong>, not an overflowing <code>int</code>: <code>let mask = 18446744073709551615;</code> gives a <code>u64</code> holding that exact value, and <code>let x: int = 18446744073709551615;</code> is a compile error rather than a surprise. Anything past <code>u64</code> is rejected at the point of writing — <code>integer literal does not fit in 64 bits</code>. (Before this, decimal literals ran through <code>strtoll</code>, which saturates: those two literals and <code>99999999999999999999999</code> all silently became <code>9223372036854775807</code>.)</p>
+<p><strong>Precedence follows C exactly</strong>, so an expression lifted from an RFC or a C reference implementation means the same thing here:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>||  &lt;  &amp;&amp;  &lt;  |  &lt;  ^  &lt;  &amp;  &lt;  == !=  &lt;  &lt; &lt;= &gt; &gt;=  &lt;  &lt;&lt; &gt;&gt;  &lt;  + -  &lt;  * / %  &lt;  unary</code></pre></div>
+<p>Three things differ from C, all deliberately:</p>
+<ul><li><strong><code>&amp;</code> is never ambiguous.</strong> Infix <code>&amp;</code> is bitwise AND; the borrow forms <code>&amp;x</code> / <code>&amp;mut x</code> are prefix-only, so the parser can always tell them apart.</li><li><strong>C&#x27;s <code>x &amp; 1 == 1</code> footgun is a compile error.</strong> C parses that as <code>x &amp; (1 == 1)</code> and accepts it because <code>bool</code> is an <code>int</code>; slang rejects it with &quot;&#x27;&amp;&#x27; requires integer operands (got int and bool)&quot;. Parenthesize what you meant.</li><li><strong>An out-of-range shift count panics</strong> instead of being undefined behaviour. <code>x &lt;&lt; n</code> where <code>n</code> is negative or at least the width of <code>x</code> reports <code>shift count out of range at pkg.func:line</code>, the same way division by zero and an out-of-bounds index do — this matters when the count came off the network. When the count is a constant already in range (<code>b[0] &lt;&lt; 16</code>, the normal case) the check is compiled out entirely, so protocol code pays nothing for it.</li></ul>
+<p><strong>Compound assignment</strong> exists for every one of these: <code>+= -= *= /= %=</code> and <code>&amp;= |= ^= &lt;&lt;= &gt;&gt;=</code>. <code>x op= v</code> means <code>x = x op v</code>, which evaluates the target twice, so a side-effecting <strong>index</strong> is hoisted into a temporary first and runs exactly once — <code>xs[pop(q)] += 1</code> pops once, not twice. Only the value being indexed has to be re-nameable: <code>f()[0] += 1</code> is a compile error, since naming <code>f()</code> twice would call it twice, and hoisting it would mutate a copy for a value-type struct. Write that one out.</p>
+<p><code>&gt;&gt;</code> follows the operand&#x27;s signedness: arithmetic (sign-preserving) on a signed type, logical (zero-filling) on an unsigned one, exactly as in C. <code>&amp;</code> <code>|</code> <code>^</code> promote to the wider operand; a shift keeps the width of the value being shifted, so <code>x &lt;&lt; n</code> never silently widens a narrow <code>x</code> because <code>n</code> happens to be an <code>int</code>.</p>
+<h4 id="bytes">bytes<a class="anchor" href="#bytes" aria-label="Link to this section">#</a></h4>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> b = b<span class="s">&quot;raw\x00bytes&quot;</span>;   <span class="c">// binary-safe literal; \0 \xHH escapes</span>
+<span class="b">println</span>(<span class="b">len</span>(b));           <span class="c">// byte count, not strlen</span>
+<span class="b">println</span>(b[<span class="n">0</span>]);             <span class="c">// indexing yields an int (0..255)</span>
+b[<span class="n">0</span>] = <span class="n">65</span>;                 <span class="c">// mutable in place</span>
+<span class="k">let</span> head = b[..<span class="n">2</span>];         <span class="c">// slicing: b[a..b], b[..n], b[n..], b[..]</span>
+<span class="k">let</span> both = b<span class="s">&quot;ab&quot;</span> + b<span class="s">&quot;cd&quot;</span>;  <span class="c">// concatenation</span>
+<span class="k">if</span> b == other { ... }      <span class="c">// content equality via ==</span>
+<span class="k">for</span> byte <span class="k">in</span> b { ... }      <span class="c">// iterate byte values</span></code></pre></div>
+<p><code>bytes</code> values carry an explicit length and may contain NULs — safe for network buffers and binary formats.</p>
+<h4 id="lists-t">Lists <code>[T]</code><a class="anchor" href="#lists-t" aria-label="Link to this section">#</a></h4>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> xs = [<span class="n">10</span>, <span class="n">20</span>, <span class="n">30</span>];         <span class="c">// inferred [int]</span>
+<span class="k">let</span> empty: [<span class="t">str</span>] = [];         <span class="c">// empty lists need an annotation</span>
+<span class="b">push</span>(xs, <span class="n">40</span>);                  <span class="c">// grow (amortized O(1))</span>
+<span class="b">println</span>(<span class="b">pop</span>(xs));              <span class="c">// shrink from the end</span>
+xs[<span class="n">0</span>] = <span class="n">5</span>;                     <span class="c">// bounds-checked index assignment</span>
+<span class="k">for</span> x <span class="k">in</span> xs { <span class="b">println</span>(x); }    <span class="c">// iteration</span>
+<span class="k">let</span> ys = xs[<span class="n">0..2</span>] + xs[<span class="n">1</span>..];   <span class="c">// slicing + concatenation</span>
+<span class="k">let</span> grid = [[<span class="n">1</span>, <span class="n">2</span>], [<span class="n">3</span>, <span class="n">4</span>]];   <span class="c">// nested lists</span></code></pre></div>
+<p>Indexing is bounds-checked at runtime; violations abort with a clear message.</p>
+<h4 id="maps-map-k-v">Maps <code>map[K]V</code><a class="anchor" href="#maps-map-k-v" aria-label="Link to this section">#</a></h4>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> scores: <span class="t">map</span>[<span class="t">str</span>]<span class="t">int</span> = {<span class="s">&quot;alice&quot;</span>: <span class="n">90</span>, <span class="s">&quot;bob&quot;</span>: <span class="n">85</span>};
+scores[<span class="s">&quot;carol&quot;</span>] = <span class="n">78</span>;          <span class="c">// insert or overwrite</span>
+<span class="b">println</span>(scores[<span class="s">&quot;alice&quot;</span>]);      <span class="c">// lookup (missing key = runtime error)</span>
+<span class="b">println</span>(<span class="b">len</span>(scores));          <span class="c">// entry count</span>
+<span class="k">if</span> <span class="b">has</span>(scores, <span class="s">&quot;dave&quot;</span>) { ... } <span class="c">// membership test (no error)</span>
+<span class="b">del</span>(scores, <span class="s">&quot;bob&quot;</span>);            <span class="c">// removal</span>
+
+<span class="k">let</span> empty: <span class="t">map</span>[<span class="t">int</span>]<span class="t">str</span> = {};   <span class="c">// empty maps need an annotation</span>
+<span class="k">for</span> k, v <span class="k">in</span> scores {           <span class="c">// iteration in insertion order</span>
+    <span class="b">println</span>(k + <span class="s">&quot;: &quot;</span> + <span class="b">to_str</span>(v));
+}</code></pre></div>
+<p>Keys may be any integer type, <code>str</code>, or <code>bool</code>; values may be any type, including structs and lists. Backed by an open-addressing hash table (FNV-1a) that keeps entries in insertion order and grows automatically at 75% load.</p>
+<h4 id="structs">Structs<a class="anchor" href="#structs" aria-label="Link to this section">#</a></h4>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">struct</span> Point {
+    x: <span class="t">int</span>,
+    y: <span class="t">int</span>,
+}
+
+<span class="k">impl</span> Point {
+    <span class="k">fn</span> <span class="f">sum</span>(self: Point) -&gt; <span class="t">int</span> {
+        <span class="k">return</span> self.x + self.y;
+    }
+
+    <span class="k">fn</span> <span class="f">moved</span>(self: Point, dx: <span class="t">int</span>, dy: <span class="t">int</span>) -&gt; Point {
+        <span class="k">return</span> Point { x: self.x + dx, y: self.y + dy };
+    }
+}
+
+<span class="k">let</span> p = Point { x: <span class="n">3</span>, y: <span class="n">4</span> };
+<span class="b">println</span>(p.<span class="f">sum</span>());        <span class="c">// method call; self passed implicitly</span>
+p.x = <span class="n">10</span>;                <span class="c">// field mutation</span>
+<span class="k">let</span> q = p.<span class="f">moved</span>(<span class="n">1</span>, <span class="n">2</span>);   <span class="c">// methods can build and return structs</span>
+
+<span class="k">struct</span> Rect {
+    tl: Point,
+    br: Point,
+}
+<span class="k">let</span> r = Rect { tl: Point { x: <span class="n">0</span>, y: <span class="n">0</span> }, br: Point { x: <span class="n">4</span>, y: <span class="n">5</span> } };
+<span class="b">println</span>(r.tl.y);         <span class="c">// nested field chains</span>
+r.br.x = <span class="n">6</span>;
+
+<span class="k">let</span> pts: [Point] = [p, q];  <span class="c">// structs compose with lists &amp; maps</span>
+<span class="b">push</span>(pts, r.tl);</code></pre></div>
+<p>Struct literals must supply every field exactly once, with types checked. Methods live in top-level <code>impl Name { ... }</code> blocks; mark a method <code>pub fn</code> to export it to importing packages. Structs are values: assignment copies, including any <code>str</code> / list / map / <code>opt</code> / <code>result</code> / <code>gc struct</code> fields (shallow — the heap objects are shared). Use <code>gc struct</code> when the record itself should be a shared heap object. <code>own T</code> is uniquely owned: assignment and passing <strong>move</strong>, and use-after-move is a compile error. A moved binding can be reinitialized. <code>own</code> is freed when its binding goes out of scope unless it was moved.</p>
+<h4 id="option-result">Option / Result<a class="anchor" href="#option-result" aria-label="Link to this section">#</a></h4>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">fn</span> <span class="f">div10</span>(n: <span class="t">int</span>) -&gt; <span class="t">opt</span>[<span class="t">int</span>] {
+    <span class="k">if</span> n % <span class="n">10</span> == <span class="n">0</span> { <span class="k">return</span> <span class="b">some</span>(n / <span class="n">10</span>); }
+    <span class="k">return</span> <span class="b">none</span>;
+}
+
+<span class="k">fn</span> <span class="f">parse_small</span>(s: <span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">i32</span>, <span class="t">str</span>] {
+    <span class="k">if</span> s == <span class="s">&quot;big&quot;</span> { <span class="k">return</span> <span class="b">err</span>(<span class="s">&quot;value too large&quot;</span>); }
+    <span class="k">return</span> <span class="b">ok</span>(<span class="n">7</span>);
+}
+
+<span class="c">// guard let unwraps the happy path and binds it for the rest of the</span>
+<span class="c">// block; the else branch must exit (return, or exit()) since the</span>
+<span class="c">// bound name has no value to fall back to. `else let e = err_of(r)`</span>
+<span class="c">// binds the error value for `result[T, E]` so failures stay visible.</span>
+<span class="k">fn</span> <span class="f">safe_div</span>(n: <span class="t">int</span>) -&gt; <span class="t">int</span> {
+    <span class="k">guard</span> <span class="k">let</span> v = <span class="f">div10</span>(n) <span class="k">else</span> {
+        <span class="k">return</span> -<span class="n">1</span>;
+    }
+    <span class="k">return</span> v;
+}
+
+<span class="k">fn</span> <span class="f">load_config</span>(path: <span class="t">str</span>) -&gt; <span class="t">str</span> {
+    <span class="k">let</span> r: <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>] = <span class="f">read_file</span>(path);
+    <span class="k">guard</span> <span class="k">let</span> body = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
+        log.<span class="f">warn</span>(<span class="s">&quot;config load failed: &quot;</span> + e);
+        <span class="k">return</span> <span class="s">&quot;&quot;</span>;
+    }
+    <span class="k">return</span> body;
+}
+
+<span class="c">// ?? recovers from none / err with a fallback value</span>
+<span class="b">println</span>(<span class="f">div10</span>(<span class="n">41</span>) ?? -<span class="n">1</span>);              <span class="c">// -1 (none)</span>
+<span class="b">println</span>(<span class="f">parse_small</span>(<span class="s">&quot;big&quot;</span>) ?? -<span class="n">1</span>);     <span class="c">// -1 (err)</span>
+
+<span class="c">// `fault` is the closed 5-kind network/runtime failure enum:</span>
+<span class="c">// fault_timeout / fault_reset / fault_closed / fault_io / fault_refused.</span>
+<span class="c">// `==` and `fault_kind` only see the kind. `fault_op` and `fault_code`</span>
+<span class="c">// carry context: the op name (&quot;recv&quot;, &quot;connect&quot;, &quot;dial&quot;, ...) and the</span>
+<span class="c">// errno value (0 when none applies). `to_str` / `+` / `println` render</span>
+<span class="c">// the full &quot;op detail (code N)&quot; form, so failures stay debuggable.</span>
+<span class="k">let</span> f = <span class="f">fault_io</span>();
+<span class="b">println</span>(<span class="f">fault_kind</span>(f));                <span class="c">// 4</span>
+<span class="b">println</span>(<span class="f">fault_op</span>(f));                  <span class="c">// &quot;&quot; (hand-built, no op)</span>
+<span class="b">println</span>(<span class="f">fault_code</span>(f));                <span class="c">// 0</span>
+
+<span class="c">// bare &#x27;none&#x27; / &#x27;err(...)&#x27; need an annotated binding to infer their</span>
+<span class="c">// other type parameter</span>
+<span class="k">let</span> nothing: <span class="t">opt</span>[<span class="t">str</span>] = <span class="b">none</span>;
+<span class="k">let</span> bad: <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>] = <span class="b">err</span>(<span class="s">&quot;boom&quot;</span>);</code></pre></div>
+<p>Panics (out-of-bounds index, division by zero, <code>err_of</code> on ok, missing map key) carry <code>pkg.func:line</code>: <code>list index out of bounds at main.foo:12</code>. A panicking <code>spawn</code>ed task reports through stderr and its <code>join_wait</code> surfaces the same string as <code>err</code>, so failures stay visible across task boundaries.</p>
+<p><code>opt[T]</code> and <code>result[T, E]</code> are monomorphized per distinct type argument (one C struct per instantiation actually used). Constructing <code>none</code>/<code>err(...)</code> without enough context to infer the missing type parameter is a compile error.</p>
+<h4 id="error-model-opt-vs-result-vs-fault">Error model: <code>opt</code> vs <code>result</code> vs <code>fault</code><a class="anchor" href="#error-model-opt-vs-result-vs-fault" aria-label="Link to this section">#</a></h4>
+<ul><li><code>opt[T]</code> — the value may legitimately be absent (<code>none</code>). Lookup misses, optional config, end of a drained channel. Absence is not failure; <code>??</code> supplies the default.</li><li><code>result[T, E]</code> — the operation can fail with a <em>descriptive</em> error (<code>err(e)</code>). Parsing, validation, anything where the caller needs to know <em>why</em>. <code>E</code> is usually <code>str</code>; <code>guard let x = r else let e = err_of(r)</code> keeps the reason visible.</li><li><code>fault</code> — the operation hit the <em>environment</em>: timeout, reset, closed connection, refused dial, IO error. A closed 5-kind enum (<code>fault_timeout</code> / <code>fault_reset</code> / <code>fault_closed</code> / <code>fault_io</code> / <code>fault_refused</code>), comparable with <code>==</code> and convertible with <code>to_str</code> / <code>+</code>. Use it when the failure is about the world, not the data.</li></ul>
+<p>Rule of thumb: absent data is <code>opt</code>, bad data is <code>result[_, str]</code>, bad world is <code>result[_, fault]</code>. Never collapse a descriptive <code>str</code> error into a bare <code>fault_io()</code> at a boundary — that is where debuggability goes to die (see <code>http.read</code> below).</p>
+<h3 id="function-values">Function values<a class="anchor" href="#function-values" aria-label="Link to this section">#</a></h3>
+<p>A <code>fn</code> type holds a function. <code>fn(A, B) -&gt; R</code> for one that returns a value, <code>fn(A)</code> for one that returns nothing:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">fn</span> <span class="f">double</span>(x: <span class="t">int</span>) -&gt; <span class="t">int</span> { <span class="k">return</span> x * <span class="n">2</span>; }
+<span class="k">fn</span> <span class="f">triple</span>(x: <span class="t">int</span>) -&gt; <span class="t">int</span> { <span class="k">return</span> x * <span class="n">3</span>; }
+
+<span class="k">let</span> f: <span class="k">fn</span>(<span class="t">int</span>) -&gt; <span class="t">int</span> = double;   <span class="c">// annotated</span>
+<span class="k">let</span> g = triple;                   <span class="c">// or inferred from the function</span>
+<span class="b">println</span>(<span class="f">f</span>(<span class="n">21</span>));                   <span class="c">// 42</span></code></pre></div>
+<p>They work as parameters, return values, struct fields, list and map elements — which is what makes a dispatch table possible instead of a chain of string comparisons (<code>demo/samplex/server.sl</code> routes this way):</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">gc</span> <span class="k">struct</span> Route {
+    method: <span class="t">str</span>,
+    path: <span class="t">str</span>,
+    handler: <span class="k">fn</span>(State, http.Request, <span class="t">int</span>) -&gt; http.Response,
+}
+
+<span class="k">let</span> routes: [Route] = [
+    Route { method: <span class="s">&quot;GET&quot;</span>,  path: <span class="s">&quot;/api/tasks&quot;</span>, handler: list_tasks },
+    Route { method: <span class="s">&quot;POST&quot;</span>, path: <span class="s">&quot;/api/tasks&quot;</span>, handler: create_task }
+];
+
+<span class="k">for</span> i <span class="k">in</span> <span class="n">0..len</span>(routes) {
+    <span class="k">if</span> routes[i].method == req.method &amp;&amp; routes[i].path == req.path {
+        <span class="k">return</span> routes[i].<span class="f">handler</span>(st, req, -<span class="n">1</span>);
+    }
+}</code></pre></div>
+<p>Anything holding a function value is callable directly — <code>routes[i].handler(...)</code>, <code>by_name[&quot;parse&quot;](...)</code>, <code>pick(true)(4)</code>.</p>
+<p><strong>These are not closures, and that is the point.</strong> A function value always names a top-level function; nothing is captured. There is no environment to allocate, trace, or reason about, so a <code>fn</code> value is exactly a C function pointer — it names code, never the heap, and the collector ignores it entirely. Anything a handler needs is passed to it, which is the same rule <code>spawn</code> already follows.</p>
+<p>Two consequences worth knowing:</p>
+<ul><li><strong>Methods cannot be used as function values.</strong> A method takes a receiver the type does not name, so <code>fn(Counter) -&gt; int</code> would be a lie about its arity. Wrap it in a plain function.</li><li><strong>A binding shadows a function of the same name.</strong> <code>let scale = ...</code> in scope means <code>scale</code> refers to the binding, never to <code>fn scale</code>.</li></ul>
+<p><code>spawn</code> takes a function value too — <code>spawn handlers[i](job);</code> — see Concurrency below.</p>
+<h2 id="built-ins">Built-ins</h2>
+<ul><li><code>print(expr)</code> — print a value without a newline</li><li><code>println(expr)</code> — print a value followed by a newline</li></ul>
+<p>Both accept any single value of type <code>int</code>, any fixed-width integer, <code>float</code>, <code>f32</code>, <code>str</code>, <code>bool</code>, or <code>bytes</code> (bytes are written raw, with no escaping).</p>
+<ul><li><code>len(x)</code> — length of a <code>str</code>, <code>bytes</code>, <code>[T]</code>, or map</li><li><code>push(xs, v)</code> / <code>pop(xs)</code> — append to / remove the last element of a list</li><li><code>has(m, k)</code> — does map <code>m</code> contain key <code>k</code>?</li><li><code>del(m, k)</code> — remove key <code>k</code> (and its value) from map <code>m</code></li><li><code>to_str(x)</code> — convert any scalar or bytes value to <code>str</code></li><li><code>to_bytes(s)</code> — convert a <code>str</code> to its raw bytes</li><li><code>to_le(n)</code> / <code>to_be(n)</code> — integer to 8-byte little/big-endian <code>bytes</code></li><li><code>from_le(b)</code> / <code>from_be(b)</code> — 8-byte little/big-endian <code>bytes</code> to integer</li><li><code>exit(code)</code> — terminate the process immediately with the given status</li><li><code>some(v)</code> / <code>none</code> / <code>ok(v)</code> / <code>err(e)</code> — construct <code>opt</code>/<code>result</code> values (see below)</li><li><code>bytes_ptr(b)</code> — raw <code>rawptr</code> to a <code>bytes</code> buffer, for passing to <code>extern fn</code>s (see C interop below)</li><li><code>make_chan(n)</code> / <code>chan_send(ch, v)</code> / <code>chan_recv(ch)</code> / <code>chan_close(ch)</code> — construct and use a <code>chan[T]</code> (see Concurrency below)</li><li><code>make_mutex()</code> / <code>mutex_lock(m)</code> / <code>mutex_unlock(m)</code> / <code>mutex_trylock(m)</code> — construct and use a <code>mutex</code> (see Concurrency below)</li><li><code>join_wait(h)</code> — wait for a <code>join[T]</code> from <code>spawn f(...)</code> (see Concurrency below)</li></ul>
+<h2 id="types">Types</h2>
+<div class="tablewrap"><table><thead><tr><th>slang type</th><th>C type</th><th>Notes</th></tr></thead><tbody><tr><td><code>int</code></td><td><code>long long</code></td><td>64-bit signed integer</td></tr><tr><td><code>float</code></td><td><code>double</code></td><td>IEEE double</td></tr><tr><td><code>str</code></td><td><code>const char *</code></td><td>NUL-terminated UTF-8 bytes</td></tr><tr><td><code>bool</code></td><td><code>bool</code></td><td><code>true</code> / <code>false</code></td></tr><tr><td><code>bytes</code></td><td><code>sl_bytes *</code></td><td>binary-safe byte sequence</td></tr><tr><td><code>i8 i16 i32 i64</code></td><td><code>int8_t</code> .. <code>int64_t</code></td><td>signed fixed-width ints</td></tr><tr><td><code>u8 u16 u32 u64</code></td><td><code>uint8_t</code> .. <code>uint64_t</code></td><td>unsigned fixed-width ints</td></tr><tr><td><code>f32</code></td><td><code>float</code></td><td>IEEE single precision</td></tr><tr><td><code>[T]</code></td><td><code>sl_arr *</code></td><td>growable array of T</td></tr><tr><td><code>map[K]V</code></td><td><code>sl_map *</code></td><td>insertion-ordered hash map</td></tr><tr><td>struct</td><td><code>sl_st_*</code></td><td>value record (copied)</td></tr><tr><td><code>gc struct</code></td><td><code>sl_st_* *</code></td><td>GC&#x27;d heap record (shared)</td></tr><tr><td><code>opt[T]</code></td><td><code>sl_opt_* *</code></td><td>optional value: <code>some(v)</code> / <code>none</code></td></tr><tr><td><code>result[T,E]</code></td><td><code>sl_res_* *</code></td><td>fallible value: <code>ok(v)</code> / <code>err(e)</code></td></tr><tr><td><code>duration</code></td><td><code>int64_t</code></td><td>nanosecond count (see <code>time</code>)</td></tr><tr><td><code>rawptr</code></td><td><code>void *</code></td><td>opaque foreign pointer (C interop)</td></tr><tr><td><code>ptr[T]</code></td><td><code>T *</code></td><td>typed FFI pointer</td></tr><tr><td><code>&amp;T</code></td><td><code>const T *</code></td><td>shared borrow</td></tr><tr><td><code>&amp;mut T</code></td><td><code>T *</code></td><td>unique borrow</td></tr><tr><td><code>own T</code></td><td><code>T *</code></td><td>unique heap box (no drop yet)</td></tr><tr><td><code>gc T</code></td><td><code>T *</code></td><td>traced heap box of a value type</td></tr><tr><td><code>*T</code> / <code>*mut T</code></td><td><code>T *</code></td><td>raw pointer</td></tr><tr><td><code>chan[T]</code></td><td><code>sl_chan *</code></td><td>bounded thread-safe queue (see Concurrency)</td></tr><tr><td><code>join[T]</code></td><td><code>sl_join *</code></td><td>handle for a spawned task&#x27;s result</td></tr><tr><td><code>mutex</code></td><td><code>sl_mutex *</code></td><td>task-parking lock (see Concurrency)</td></tr><tr><td><code>fn(A)-&gt;R</code></td><td><code>R (*)(A)</code></td><td>function value (see Function values)</td></tr></tbody></table></div>
+<h3 id="numeric-conversion-rules">Numeric conversion rules<a class="anchor" href="#numeric-conversion-rules" aria-label="Link to this section">#</a></h3>
+<ul><li><strong>Implicit widening</strong> within the integer family: a narrower int may be used wherever a strictly wider one is expected (<code>i32</code> -&gt; <code>i64</code>, <code>u32</code> -&gt; <code>u64</code>, and unsigned into a wider <em>signed</em> type). Widening toward floats is also implicit (<code>i32</code> -&gt; <code>float</code>, <code>f32</code> -&gt; <code>float</code>).</li><li><strong>Narrowing and sign changes require an explicit cast</strong> with <code>as</code>: <code>x as i8</code>, <code>n as u32</code>, <code>3.9 as i32</code>. Integer literals that fit the target width may initialize/pass without a cast.</li><li><strong>Wrap on cast/overflow</strong>: casts and arithmetic wrap two&#x27;s-complement style. <code>(0 as u8) - (1 as u8)</code> is <code>255</code>; <code>300 as i8</code> is <code>44</code>. Float -&gt; int casts truncate toward zero.</li><li>Mixed-width arithmetic promotes to the wider operand; same-width signed/unsigned mixes resolve to the unsigned type (C semantics).</li></ul>
+<h3 id="bitwise-operations-and-integer-literals">Bitwise operations and integer literals<a class="anchor" href="#bitwise-operations-and-integer-literals" aria-label="Link to this section">#</a></h3>
+<p>Binary protocols are most of network programming, so the bit operators are first-class: <code>&amp;</code> <code>|</code> <code>^</code> <code>~</code> <code>&lt;&lt;</code> <code>&gt;&gt;</code>, on any integer type.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="c">// an HTTP/2 frame header, straight off the wire</span>
+<span class="k">let</span> flen  = (b[<span class="n">0</span>] &lt;&lt; <span class="n">16</span>) | (b[<span class="n">1</span>] &lt;&lt; <span class="n">8</span>) | b[<span class="n">2</span>];
+<span class="k">let</span> ftype = b[<span class="n">3</span>];
+<span class="k">let</span> flags = b[<span class="n">4</span>];
+<span class="k">let</span> sid   = ((b[<span class="n">5</span>] &amp; <span class="n">0x7f</span>) &lt;&lt; <span class="n">24</span>) | (b[<span class="n">6</span>] &lt;&lt; <span class="n">16</span>) | (b[<span class="n">7</span>] &lt;&lt; <span class="n">8</span>) | b[<span class="n">8</span>];
+
+<span class="k">if</span> flags &amp; <span class="n">0x01</span> != <span class="n">0</span> { /* END_STREAM */ }</code></pre></div>
+<p>Integer literals come in decimal, hex (<code>0xff</code>, <code>0xFF</code>) and binary (<code>0b1010</code>), and <code>_</code> may be used anywhere as a digit separator: <code>1_000_000</code>, <code>0xff_ff</code>, <code>0b1010_1010</code>.</p>
+<p>A literal too large for <code>i64</code> <strong>is a <code>u64</code></strong>, not an overflowing <code>int</code>: <code>let mask = 18446744073709551615;</code> gives a <code>u64</code> holding that exact value, and <code>let x: int = 18446744073709551615;</code> is a compile error rather than a surprise. Anything past <code>u64</code> is rejected at the point of writing — <code>integer literal does not fit in 64 bits</code>. (Before this, decimal literals ran through <code>strtoll</code>, which saturates: those two literals and <code>99999999999999999999999</code> all silently became <code>9223372036854775807</code>.)</p>
+<p><strong>Precedence follows C exactly</strong>, so an expression lifted from an RFC or a C reference implementation means the same thing here:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>||  &lt;  &amp;&amp;  &lt;  |  &lt;  ^  &lt;  &amp;  &lt;  == !=  &lt;  &lt; &lt;= &gt; &gt;=  &lt;  &lt;&lt; &gt;&gt;  &lt;  + -  &lt;  * / %  &lt;  unary</code></pre></div>
+<p>Three things differ from C, all deliberately:</p>
+<ul><li><strong><code>&amp;</code> is never ambiguous.</strong> Infix <code>&amp;</code> is bitwise AND; the borrow forms <code>&amp;x</code> / <code>&amp;mut x</code> are prefix-only, so the parser can always tell them apart.</li><li><strong>C&#x27;s <code>x &amp; 1 == 1</code> footgun is a compile error.</strong> C parses that as <code>x &amp; (1 == 1)</code> and accepts it because <code>bool</code> is an <code>int</code>; slang rejects it with &quot;&#x27;&amp;&#x27; requires integer operands (got int and bool)&quot;. Parenthesize what you meant.</li><li><strong>An out-of-range shift count panics</strong> instead of being undefined behaviour. <code>x &lt;&lt; n</code> where <code>n</code> is negative or at least the width of <code>x</code> reports <code>shift count out of range at pkg.func:line</code>, the same way division by zero and an out-of-bounds index do — this matters when the count came off the network. When the count is a constant already in range (<code>b[0] &lt;&lt; 16</code>, the normal case) the check is compiled out entirely, so protocol code pays nothing for it.</li></ul>
+<p><strong>Compound assignment</strong> exists for every one of these: <code>+= -= *= /= %=</code> and <code>&amp;= |= ^= &lt;&lt;= &gt;&gt;=</code>. <code>x op= v</code> means <code>x = x op v</code>, which evaluates the target twice, so a side-effecting <strong>index</strong> is hoisted into a temporary first and runs exactly once — <code>xs[pop(q)] += 1</code> pops once, not twice. Only the value being indexed has to be re-nameable: <code>f()[0] += 1</code> is a compile error, since naming <code>f()</code> twice would call it twice, and hoisting it would mutate a copy for a value-type struct. Write that one out.</p>
+<p><code>&gt;&gt;</code> follows the operand&#x27;s signedness: arithmetic (sign-preserving) on a signed type, logical (zero-filling) on an unsigned one, exactly as in C. <code>&amp;</code> <code>|</code> <code>^</code> promote to the wider operand; a shift keeps the width of the value being shifted, so <code>x &lt;&lt; n</code> never silently widens a narrow <code>x</code> because <code>n</code> happens to be an <code>int</code>.</p>
+<h3 id="bytes">bytes<a class="anchor" href="#bytes" aria-label="Link to this section">#</a></h3>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> b = b<span class="s">&quot;raw\x00bytes&quot;</span>;   <span class="c">// binary-safe literal; \0 \xHH escapes</span>
+<span class="b">println</span>(<span class="b">len</span>(b));           <span class="c">// byte count, not strlen</span>
+<span class="b">println</span>(b[<span class="n">0</span>]);             <span class="c">// indexing yields an int (0..255)</span>
+b[<span class="n">0</span>] = <span class="n">65</span>;                 <span class="c">// mutable in place</span>
+<span class="k">let</span> head = b[..<span class="n">2</span>];         <span class="c">// slicing: b[a..b], b[..n], b[n..], b[..]</span>
+<span class="k">let</span> both = b<span class="s">&quot;ab&quot;</span> + b<span class="s">&quot;cd&quot;</span>;  <span class="c">// concatenation</span>
+<span class="k">if</span> b == other { ... }      <span class="c">// content equality via ==</span>
+<span class="k">for</span> byte <span class="k">in</span> b { ... }      <span class="c">// iterate byte values</span></code></pre></div>
+<p><code>bytes</code> values carry an explicit length and may contain NULs — safe for network buffers and binary formats.</p>
+<h3 id="lists-t">Lists <code>[T]</code><a class="anchor" href="#lists-t" aria-label="Link to this section">#</a></h3>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> xs = [<span class="n">10</span>, <span class="n">20</span>, <span class="n">30</span>];         <span class="c">// inferred [int]</span>
+<span class="k">let</span> empty: [<span class="t">str</span>] = [];         <span class="c">// empty lists need an annotation</span>
+<span class="b">push</span>(xs, <span class="n">40</span>);                  <span class="c">// grow (amortized O(1))</span>
+<span class="b">println</span>(<span class="b">pop</span>(xs));              <span class="c">// shrink from the end</span>
+xs[<span class="n">0</span>] = <span class="n">5</span>;                     <span class="c">// bounds-checked index assignment</span>
+<span class="k">for</span> x <span class="k">in</span> xs { <span class="b">println</span>(x); }    <span class="c">// iteration</span>
+<span class="k">let</span> ys = xs[<span class="n">0..2</span>] + xs[<span class="n">1</span>..];   <span class="c">// slicing + concatenation</span>
+<span class="k">let</span> grid = [[<span class="n">1</span>, <span class="n">2</span>], [<span class="n">3</span>, <span class="n">4</span>]];   <span class="c">// nested lists</span></code></pre></div>
+<p>Indexing is bounds-checked at runtime; violations abort with a clear message.</p>
+<h3 id="maps-map-k-v">Maps <code>map[K]V</code><a class="anchor" href="#maps-map-k-v" aria-label="Link to this section">#</a></h3>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> scores: <span class="t">map</span>[<span class="t">str</span>]<span class="t">int</span> = {<span class="s">&quot;alice&quot;</span>: <span class="n">90</span>, <span class="s">&quot;bob&quot;</span>: <span class="n">85</span>};
+scores[<span class="s">&quot;carol&quot;</span>] = <span class="n">78</span>;          <span class="c">// insert or overwrite</span>
+<span class="b">println</span>(scores[<span class="s">&quot;alice&quot;</span>]);      <span class="c">// lookup (missing key = runtime error)</span>
+<span class="b">println</span>(<span class="b">len</span>(scores));          <span class="c">// entry count</span>
+<span class="k">if</span> <span class="b">has</span>(scores, <span class="s">&quot;dave&quot;</span>) { ... } <span class="c">// membership test (no error)</span>
+<span class="b">del</span>(scores, <span class="s">&quot;bob&quot;</span>);            <span class="c">// removal</span>
+
+<span class="k">let</span> empty: <span class="t">map</span>[<span class="t">int</span>]<span class="t">str</span> = {};   <span class="c">// empty maps need an annotation</span>
+<span class="k">for</span> k, v <span class="k">in</span> scores {           <span class="c">// iteration in insertion order</span>
+    <span class="b">println</span>(k + <span class="s">&quot;: &quot;</span> + <span class="b">to_str</span>(v));
+}</code></pre></div>
+<p>Keys may be any integer type, <code>str</code>, or <code>bool</code>; values may be any type, including structs and lists. Backed by an open-addressing hash table (FNV-1a) that keeps entries in insertion order and grows automatically at 75% load.</p>
+<h3 id="structs">Structs<a class="anchor" href="#structs" aria-label="Link to this section">#</a></h3>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">struct</span> Point {
+    x: <span class="t">int</span>,
+    y: <span class="t">int</span>,
+}
+
+<span class="k">impl</span> Point {
+    <span class="k">fn</span> <span class="f">sum</span>(self: Point) -&gt; <span class="t">int</span> {
+        <span class="k">return</span> self.x + self.y;
+    }
+
+    <span class="k">fn</span> <span class="f">moved</span>(self: Point, dx: <span class="t">int</span>, dy: <span class="t">int</span>) -&gt; Point {
+        <span class="k">return</span> Point { x: self.x + dx, y: self.y + dy };
+    }
+}
+
+<span class="k">let</span> p = Point { x: <span class="n">3</span>, y: <span class="n">4</span> };
+<span class="b">println</span>(p.<span class="f">sum</span>());        <span class="c">// method call; self passed implicitly</span>
+p.x = <span class="n">10</span>;                <span class="c">// field mutation</span>
+<span class="k">let</span> q = p.<span class="f">moved</span>(<span class="n">1</span>, <span class="n">2</span>);   <span class="c">// methods can build and return structs</span>
+
+<span class="k">struct</span> Rect {
+    tl: Point,
+    br: Point,
+}
+<span class="k">let</span> r = Rect { tl: Point { x: <span class="n">0</span>, y: <span class="n">0</span> }, br: Point { x: <span class="n">4</span>, y: <span class="n">5</span> } };
+<span class="b">println</span>(r.tl.y);         <span class="c">// nested field chains</span>
+r.br.x = <span class="n">6</span>;
+
+<span class="k">let</span> pts: [Point] = [p, q];  <span class="c">// structs compose with lists &amp; maps</span>
+<span class="b">push</span>(pts, r.tl);</code></pre></div>
+<p>Struct literals must supply every field exactly once, with types checked. Methods live in top-level <code>impl Name { ... }</code> blocks; mark a method <code>pub fn</code> to export it to importing packages. Structs are values: assignment copies, including any <code>str</code> / list / map / <code>opt</code> / <code>result</code> / <code>gc struct</code> fields (shallow — the heap objects are shared). Use <code>gc struct</code> when the record itself should be a shared heap object. <code>own T</code> is uniquely owned: assignment and passing <strong>move</strong>, and use-after-move is a compile error. A moved binding can be reinitialized. <code>own</code> is freed when its binding goes out of scope unless it was moved.</p>
+<h3 id="option-result">Option / Result<a class="anchor" href="#option-result" aria-label="Link to this section">#</a></h3>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">fn</span> <span class="f">div10</span>(n: <span class="t">int</span>) -&gt; <span class="t">opt</span>[<span class="t">int</span>] {
+    <span class="k">if</span> n % <span class="n">10</span> == <span class="n">0</span> { <span class="k">return</span> <span class="b">some</span>(n / <span class="n">10</span>); }
+    <span class="k">return</span> <span class="b">none</span>;
+}
+
+<span class="k">fn</span> <span class="f">parse_small</span>(s: <span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">i32</span>, <span class="t">str</span>] {
+    <span class="k">if</span> s == <span class="s">&quot;big&quot;</span> { <span class="k">return</span> <span class="b">err</span>(<span class="s">&quot;value too large&quot;</span>); }
+    <span class="k">return</span> <span class="b">ok</span>(<span class="n">7</span>);
+}
+
+<span class="c">// guard let unwraps the happy path and binds it for the rest of the</span>
+<span class="c">// block; the else branch must exit (return, or exit()) since the</span>
+<span class="c">// bound name has no value to fall back to. `else let e = err_of(r)`</span>
+<span class="c">// binds the error value for `result[T, E]` so failures stay visible.</span>
+<span class="k">fn</span> <span class="f">safe_div</span>(n: <span class="t">int</span>) -&gt; <span class="t">int</span> {
+    <span class="k">guard</span> <span class="k">let</span> v = <span class="f">div10</span>(n) <span class="k">else</span> {
+        <span class="k">return</span> -<span class="n">1</span>;
+    }
+    <span class="k">return</span> v;
+}
+
+<span class="k">fn</span> <span class="f">load_config</span>(path: <span class="t">str</span>) -&gt; <span class="t">str</span> {
+    <span class="k">let</span> r: <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>] = <span class="f">read_file</span>(path);
+    <span class="k">guard</span> <span class="k">let</span> body = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
+        log.<span class="f">warn</span>(<span class="s">&quot;config load failed: &quot;</span> + e);
+        <span class="k">return</span> <span class="s">&quot;&quot;</span>;
+    }
+    <span class="k">return</span> body;
+}
+
+<span class="c">// ?? recovers from none / err with a fallback value</span>
+<span class="b">println</span>(<span class="f">div10</span>(<span class="n">41</span>) ?? -<span class="n">1</span>);              <span class="c">// -1 (none)</span>
+<span class="b">println</span>(<span class="f">parse_small</span>(<span class="s">&quot;big&quot;</span>) ?? -<span class="n">1</span>);     <span class="c">// -1 (err)</span>
+
+<span class="c">// `fault` is the closed 5-kind network/runtime failure enum:</span>
+<span class="c">// fault_timeout / fault_reset / fault_closed / fault_io / fault_refused.</span>
+<span class="c">// `==` and `fault_kind` only see the kind. `fault_op` and `fault_code`</span>
+<span class="c">// carry context: the op name (&quot;recv&quot;, &quot;connect&quot;, &quot;dial&quot;, ...) and the</span>
+<span class="c">// errno value (0 when none applies). `to_str` / `+` / `println` render</span>
+<span class="c">// the full &quot;op detail (code N)&quot; form, so failures stay debuggable.</span>
+<span class="k">let</span> f = <span class="f">fault_io</span>();
+<span class="b">println</span>(<span class="f">fault_kind</span>(f));                <span class="c">// 4</span>
+<span class="b">println</span>(<span class="f">fault_op</span>(f));                  <span class="c">// &quot;&quot; (hand-built, no op)</span>
+<span class="b">println</span>(<span class="f">fault_code</span>(f));                <span class="c">// 0</span>
+
+<span class="c">// bare &#x27;none&#x27; / &#x27;err(...)&#x27; need an annotated binding to infer their</span>
+<span class="c">// other type parameter</span>
+<span class="k">let</span> nothing: <span class="t">opt</span>[<span class="t">str</span>] = <span class="b">none</span>;
+<span class="k">let</span> bad: <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>] = <span class="b">err</span>(<span class="s">&quot;boom&quot;</span>);</code></pre></div>
+<p>Panics (out-of-bounds index, division by zero, <code>err_of</code> on ok, missing map key) carry <code>pkg.func:line</code>: <code>list index out of bounds at main.foo:12</code>. A panicking <code>spawn</code>ed task reports through stderr and its <code>join_wait</code> surfaces the same string as <code>err</code>, so failures stay visible across task boundaries.</p>
+<p><code>opt[T]</code> and <code>result[T, E]</code> are monomorphized per distinct type argument (one C struct per instantiation actually used). Constructing <code>none</code>/<code>err(...)</code> without enough context to infer the missing type parameter is a compile error.</p>
+<h3 id="error-model-opt-vs-result-vs-fault">Error model: <code>opt</code> vs <code>result</code> vs <code>fault</code><a class="anchor" href="#error-model-opt-vs-result-vs-fault" aria-label="Link to this section">#</a></h3>
+<ul><li><code>opt[T]</code> — the value may legitimately be absent (<code>none</code>). Lookup misses, optional config, end of a drained channel. Absence is not failure; <code>??</code> supplies the default.</li><li><code>result[T, E]</code> — the operation can fail with a <em>descriptive</em> error (<code>err(e)</code>). Parsing, validation, anything where the caller needs to know <em>why</em>. <code>E</code> is usually <code>str</code>; <code>guard let x = r else let e = err_of(r)</code> keeps the reason visible.</li><li><code>fault</code> — the operation hit the <em>environment</em>: timeout, reset, closed connection, refused dial, IO error. A closed 5-kind enum (<code>fault_timeout</code> / <code>fault_reset</code> / <code>fault_closed</code> / <code>fault_io</code> / <code>fault_refused</code>), comparable with <code>==</code> and convertible with <code>to_str</code> / <code>+</code>. Use it when the failure is about the world, not the data.</li></ul>
+<p>Rule of thumb: absent data is <code>opt</code>, bad data is <code>result[_, str]</code>, bad world is <code>result[_, fault]</code>. Never collapse a descriptive <code>str</code> error into a bare <code>fault_io()</code> at a boundary — that is where debuggability goes to die (see <code>http.read</code> below).</p>
+<h2 id="numeric-conversion-rules">Numeric conversion rules</h2>
+<ul><li><strong>Implicit widening</strong> within the integer family: a narrower int may be used wherever a strictly wider one is expected (<code>i32</code> -&gt; <code>i64</code>, <code>u32</code> -&gt; <code>u64</code>, and unsigned into a wider <em>signed</em> type). Widening toward floats is also implicit (<code>i32</code> -&gt; <code>float</code>, <code>f32</code> -&gt; <code>float</code>).</li><li><strong>Narrowing and sign changes require an explicit cast</strong> with <code>as</code>: <code>x as i8</code>, <code>n as u32</code>, <code>3.9 as i32</code>. Integer literals that fit the target width may initialize/pass without a cast.</li><li><strong>Wrap on cast/overflow</strong>: casts and arithmetic wrap two&#x27;s-complement style. <code>(0 as u8) - (1 as u8)</code> is <code>255</code>; <code>300 as i8</code> is <code>44</code>. Float -&gt; int casts truncate toward zero.</li><li>Mixed-width arithmetic promotes to the wider operand; same-width signed/unsigned mixes resolve to the unsigned type (C semantics).</li></ul>
+<h2 id="bitwise-operations-and-integer-literals">Bitwise operations and integer literals</h2>
+<p>Binary protocols are most of network programming, so the bit operators are first-class: <code>&amp;</code> <code>|</code> <code>^</code> <code>~</code> <code>&lt;&lt;</code> <code>&gt;&gt;</code>, on any integer type.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="c">// an HTTP/2 frame header, straight off the wire</span>
+<span class="k">let</span> flen  = (b[<span class="n">0</span>] &lt;&lt; <span class="n">16</span>) | (b[<span class="n">1</span>] &lt;&lt; <span class="n">8</span>) | b[<span class="n">2</span>];
+<span class="k">let</span> ftype = b[<span class="n">3</span>];
+<span class="k">let</span> flags = b[<span class="n">4</span>];
+<span class="k">let</span> sid   = ((b[<span class="n">5</span>] &amp; <span class="n">0x7f</span>) &lt;&lt; <span class="n">24</span>) | (b[<span class="n">6</span>] &lt;&lt; <span class="n">16</span>) | (b[<span class="n">7</span>] &lt;&lt; <span class="n">8</span>) | b[<span class="n">8</span>];
+
+<span class="k">if</span> flags &amp; <span class="n">0x01</span> != <span class="n">0</span> { /* END_STREAM */ }</code></pre></div>
+<p>Integer literals come in decimal, hex (<code>0xff</code>, <code>0xFF</code>) and binary (<code>0b1010</code>), and <code>_</code> may be used anywhere as a digit separator: <code>1_000_000</code>, <code>0xff_ff</code>, <code>0b1010_1010</code>.</p>
+<p>A literal too large for <code>i64</code> <strong>is a <code>u64</code></strong>, not an overflowing <code>int</code>: <code>let mask = 18446744073709551615;</code> gives a <code>u64</code> holding that exact value, and <code>let x: int = 18446744073709551615;</code> is a compile error rather than a surprise. Anything past <code>u64</code> is rejected at the point of writing — <code>integer literal does not fit in 64 bits</code>. (Before this, decimal literals ran through <code>strtoll</code>, which saturates: those two literals and <code>99999999999999999999999</code> all silently became <code>9223372036854775807</code>.)</p>
+<p><strong>Precedence follows C exactly</strong>, so an expression lifted from an RFC or a C reference implementation means the same thing here:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>||  &lt;  &amp;&amp;  &lt;  |  &lt;  ^  &lt;  &amp;  &lt;  == !=  &lt;  &lt; &lt;= &gt; &gt;=  &lt;  &lt;&lt; &gt;&gt;  &lt;  + -  &lt;  * / %  &lt;  unary</code></pre></div>
+<p>Three things differ from C, all deliberately:</p>
+<ul><li><strong><code>&amp;</code> is never ambiguous.</strong> Infix <code>&amp;</code> is bitwise AND; the borrow forms <code>&amp;x</code> / <code>&amp;mut x</code> are prefix-only, so the parser can always tell them apart.</li><li><strong>C&#x27;s <code>x &amp; 1 == 1</code> footgun is a compile error.</strong> C parses that as <code>x &amp; (1 == 1)</code> and accepts it because <code>bool</code> is an <code>int</code>; slang rejects it with &quot;&#x27;&amp;&#x27; requires integer operands (got int and bool)&quot;. Parenthesize what you meant.</li><li><strong>An out-of-range shift count panics</strong> instead of being undefined behaviour. <code>x &lt;&lt; n</code> where <code>n</code> is negative or at least the width of <code>x</code> reports <code>shift count out of range at pkg.func:line</code>, the same way division by zero and an out-of-bounds index do — this matters when the count came off the network. When the count is a constant already in range (<code>b[0] &lt;&lt; 16</code>, the normal case) the check is compiled out entirely, so protocol code pays nothing for it.</li></ul>
+<p><strong>Compound assignment</strong> exists for every one of these: <code>+= -= *= /= %=</code> and <code>&amp;= |= ^= &lt;&lt;= &gt;&gt;=</code>. <code>x op= v</code> means <code>x = x op v</code>, which evaluates the target twice, so a side-effecting <strong>index</strong> is hoisted into a temporary first and runs exactly once — <code>xs[pop(q)] += 1</code> pops once, not twice. Only the value being indexed has to be re-nameable: <code>f()[0] += 1</code> is a compile error, since naming <code>f()</code> twice would call it twice, and hoisting it would mutate a copy for a value-type struct. Write that one out.</p>
+<p><code>&gt;&gt;</code> follows the operand&#x27;s signedness: arithmetic (sign-preserving) on a signed type, logical (zero-filling) on an unsigned one, exactly as in C. <code>&amp;</code> <code>|</code> <code>^</code> promote to the wider operand; a shift keeps the width of the value being shifted, so <code>x &lt;&lt; n</code> never silently widens a narrow <code>x</code> because <code>n</code> happens to be an <code>int</code>.</p>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

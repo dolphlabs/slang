@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>json — slang</title>
+<meta name="description" content="Package json.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="json">
+<meta property="og:description" content="Package json.">
+<meta property="og:type" content="website">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/json.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <nav class="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>json</h1>
+      <p class="tagline">Package json.</p>
+      <p class="agentline">
+        <a href="../packages/json.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p><code>json.decode</code>/<code>json.encode</code> (de)serialize <code>str</code>/<code>bytes</code> against a concrete slang type — the target type for <code>decode</code> is inferred from the binding&#x27;s annotation, the same mechanism <code>ok()</code>/<code>err()</code> already use to infer <code>result[T,E]</code>. There is no dynamic &quot;JSON value&quot; type: every decode is checked field-by-field against the struct shape you asked for, and a mismatch is a <code>result</code> error, not a silent <code>null</code> or a runtime panic.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;json&quot;</span>;
+
+<span class="k">gc</span> <span class="k">struct</span> Address { city: <span class="t">str</span>, zip: <span class="t">str</span> }
+<span class="k">gc</span> <span class="k">struct</span> Person {
+    name: <span class="t">str</span>,
+    age: <span class="t">i32</span>,
+    email: <span class="t">opt</span>[<span class="t">str</span>],      <span class="c">// JSON null / missing key &lt;-&gt; none</span>
+    tags: [<span class="t">str</span>],
+    addr: Address,         <span class="c">// structs nest</span>
+}
+
+<span class="k">let</span> p = Person{ name: <span class="s">&quot;Ada&quot;</span>, age: <span class="n">36</span>, email: <span class="b">some</span>(<span class="s">&quot;ada@example.com&quot;</span>),
+                tags: [<span class="s">&quot;math&quot;</span>], addr: Address{ city: <span class="s">&quot;London&quot;</span>, zip: <span class="s">&quot;SW1&quot;</span> } };
+<span class="k">let</span> s: <span class="t">str</span> = json.<span class="f">encode</span>(p);
+
+<span class="k">let</span> r: <span class="t">result</span>[Person, <span class="t">str</span>] = json.<span class="f">decode</span>(s);
+<span class="k">guard</span> <span class="k">let</span> p2 = r <span class="k">else</span> { <span class="b">exit</span>(<span class="n">1</span>); }</code></pre></div>
+<p>Supported: <code>struct</code>, <code>opt[T]</code>, <code>[T]</code>, <code>map[str, V]</code> (JSON object keys are always strings — a map with any other key type is a compile error), every scalar, and <code>bytes</code> (RFC 4648 base64 strings on the wire). <code>rawptr</code>, <code>chan[T]</code>, and <code>result[T,E]</code> can&#x27;t appear anywhere in a decode/encode target type. A missing JSON key defaults an <code>opt[T]</code> field to <code>none</code>; for any other field type it&#x27;s a decode error. Unknown JSON keys are ignored. Every decode error names where it happened, composed through nesting — <code>json.decode</code> on <code>{&quot;addr&quot;:{&quot;city&quot;:5}}</code> against the <code>Person</code> shape above fails with <code>field &#x27;addr&#x27;: field &#x27;city&#x27;: expected a string, got a number</code>. Malformed input is a decode error, never a crash — the parser caps nesting depth at 512 so adversarial input can&#x27;t blow the C stack.</p>
+
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

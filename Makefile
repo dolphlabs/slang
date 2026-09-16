@@ -57,7 +57,7 @@ tests/runtime/test_gc: tests/runtime/test_gc.c $(RT_SRCS)
 	$(CC) -std=c11 -O2 -Wall -Wno-unused-function -I runtime \
 		tests/runtime/test_gc.c -lpthread -o tests/runtime/test_gc
 
-.PHONY: test clean
+.PHONY: test clean docs docs-serve
 
 test: slangc tests/runtime/test_gc
 	./tests/runtime/test_gc
@@ -69,3 +69,13 @@ test: slangc tests/runtime/test_gc
 clean:
 	rm -f slangc hello main fib bytes ints lists fail_narrow fail_index \
 		tests/runtime/test_gc
+
+# Documentation site. Generated from this repository -- README.md
+# sections, the compiler's own signature tables, and the `pub`
+# declarations in stdlib/ -- so it cannot drift from the code.
+# Output lands in docs/, which GitHub Pages serves directly.
+docs:
+	python3 www/build.py
+
+docs-serve: docs
+	python3 -m http.server -d docs 8000

@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>regex — slang</title>
+<meta name="description" content="Package regex.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="regex">
+<meta property="og:description" content="Package regex.">
+<meta property="og:type" content="website">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/regex.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <nav class="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>regex</h1>
+      <p class="tagline">Package regex.</p>
+      <p class="agentline">
+        <a href="../packages/regex.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>Regular expressions on <code>str</code> or <code>bytes</code>, matched by slang&#x27;s own Thompson NFA — no external library, so a program that matches text stays as dependency-free as a plain TCP one. <code>compile</code> returns an opaque <code>rawptr</code> handle (freed with <code>regex.free</code>, like <code>net.tls_*</code> and <code>sql</code>), and a bad pattern comes back as a descriptive <code>result[rawptr, str]</code>.</p>
+<p><strong>Matching is linear time, always.</strong> There is no backtracking, so the classic catastrophic pattern <code>(a+)+$</code> — which makes a backtracking engine take exponential time on a hostile input — runs in the same microseconds here as any other pattern. That is the point of choosing this engine for a server language: patterns and subjects both arrive from the network. The price is the RE2/Go one, and it is not negotiable: <strong>no backreferences and no lookaround</strong>. Both require backtracking; <code>(?=...)</code> and friends are a compile error, not a silent mis-parse.</p>
+<div class="tablewrap"><table><thead><tr><th>Function</th><th>Signature</th></tr></thead><tbody><tr><td><code>regex.compile(pat)</code></td><td><code>result[rawptr, str]</code></td></tr><tr><td><code>regex.free(re)</code></td><td>—</td></tr><tr><td><code>regex.groups(re)</code></td><td><code>int</code> — number of capture groups</td></tr><tr><td><code>regex.is_match(re, s)</code></td><td><code>bool</code> — <code>s</code> is a <code>str</code></td></tr><tr><td><code>regex.is_match_bytes(re, b)</code></td><td><code>bool</code> — <code>b</code> is <code>bytes</code></td></tr><tr><td><code>regex.find(re, s)</code> / <code>find_bytes(re, b)</code></td><td><code>[int]</code></td></tr><tr><td><code>regex.find_at(re, s, from)</code> / <code>find_bytes_at(re, b, from)</code></td><td><code>[int]</code></td></tr></tbody></table></div>
+<p><code>find</code> returns byte offsets as <code>[start, end, g1start, g1end, ...]</code>, or an <strong>empty list</strong> when there is no match — so the result is GC-owned and there is no match handle to leak. <code>find_at</code> starts at an offset, which is how you walk every match.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;regex&quot;</span>;
+
+<span class="k">let</span> cr = regex.<span class="f">compile</span>(<span class="s">&quot;(\\d{4})-(\\d{2})-(\\d{2})&quot;</span>);
+<span class="k">guard</span> <span class="k">let</span> re = cr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(cr) {
+    log.<span class="f">error</span>(<span class="s">&quot;bad pattern: &quot;</span> + e);   <span class="c">// e.g. &quot;missing ) at offset 9&quot;</span>
+    <span class="b">exit</span>(<span class="n">1</span>);
+}
+
+<span class="k">if</span> regex.<span class="f">is_match</span>(re, <span class="s">&quot;due 2026-09-09&quot;</span>) {
+    <span class="k">let</span> m = regex.<span class="f">find</span>(re, <span class="s">&quot;due 2026-09-09&quot;</span>);
+    <span class="b">println</span>(<span class="b">to_str</span>(m[<span class="n">0</span>]) + <span class="s">&quot;..&quot;</span> + <span class="b">to_str</span>(m[<span class="n">1</span>]));   <span class="c">// whole match: 4..14</span>
+    <span class="b">println</span>(<span class="b">to_str</span>(m[<span class="n">2</span>]) + <span class="s">&quot;..&quot;</span> + <span class="b">to_str</span>(m[<span class="n">3</span>]));   <span class="c">// year:        4..8</span>
+}
+regex.<span class="f">free</span>(re);</code></pre></div>
+<p>Supported: literals, <code>.</code>, classes <code>[a-z]</code> <code>[^...]</code> <code>[[:digit:]]</code>, escapes <code>\d \D \w \W \s \S \b \B \A \z \xHH</code>, quantifiers <code>* + ? {n} {n,} {n,m}</code> and their lazy <code>?</code> forms, groups <code>(...)</code> and <code>(?:...)</code>, alternation <code>|</code>, anchors <code>^ $</code>. Matching is leftmost-first (Perl-style priority), and <code>.</code> does not match <code>\n</code>.</p>
+<p>Subjects are matched with an explicit length, so a <code>bytes</code> containing NUL matches correctly rather than stopping at the NUL — and <code>\D</code> matches a NUL byte like any other non-digit.</p>
+<p>Bounds, so a hostile pattern can&#x27;t exhaust memory or stack: 4096 compiled instructions, 100 nesting levels, 32 capture groups, and <code>{n,m}</code> counts up to 1000. Each is a descriptive compile error, never a crash.</p>
+<p>A compiled regex is safe to share across tasks, and is meant to be: it carries a small pool of reusable match buffers, so concurrent matchers allocate nothing per match. Compiling is the expensive part (it is also the only part that grows the task stack) — compile once, match many times, ideally not once per request.</p>
+<p><strong>Where this lands on speed.</strong> Measured single-threaded on <code>^(GET|POST|PUT) (/[a-z0-9/_-]*) HTTP/1\.([01])$</code> against a 26-byte subject, 200k iterations:</p>
+<div class="tablewrap"><table><thead><tr><th>engine</th><th>matches/sec</th><th>on <code>(a+)+$</code> vs a hostile input</th></tr></thead><tbody><tr><td>slang <code>regex</code></td><td>~721k</td><td>2µs, correct answer</td></tr><tr><td>POSIX <code>regexec</code></td><td>~372k</td><td>fast here, but no limits</td></tr><tr><td>PCRE2 (interpreted)</td><td>~2.4M</td><td>0.2s, then gives up (<code>MATCHLIMIT</code>)</td></tr><tr><td>PCRE2 (JIT)</td><td>~8.6M</td><td>same — JIT does not save it</td></tr></tbody></table></div>
+<p>So: ~1.9x faster than libc&#x27;s POSIX engine, and several times slower than PCRE2 on <em>benign</em> input — PCRE2&#x27;s interpreter and especially its JIT are very good, and this is an honest gap. The trade is deliberate: on adversarial input the ordering inverts completely, because linear time is a guarantee here and a hope there. <code>is_match</code> is markedly cheaper than <code>find</code> (it binds no capture slots at all), so prefer it when you only need a yes/no. Matching scales with tasks — ~3.2M/sec across 16.</p>
+<p>Because matching never grows the task stack, regex is cheap to use per connection: 600 concurrently-live tasks each matching and then parking peak at <strong>3.9MB RSS</strong> — about 17x lighter than the same shape holding <code>sql</code> connections (65.9MB), which does grow every task&#x27;s stack.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="compile"><div class="api-sig"><code>regex.<span class="f">compile</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">rawptr</span>,<span class="t">str</span>]</code><a class="anchor" href="#compile">#</a></div></div><div class="api-item" id="free"><div class="api-sig"><code>regex.<span class="f">free</span>(<span class="t">rawptr</span>)</code><a class="anchor" href="#free">#</a></div></div><div class="api-item" id="groups"><div class="api-sig"><code>regex.<span class="f">groups</span>(<span class="t">rawptr</span>) -&gt; <span class="t">int</span></code><a class="anchor" href="#groups">#</a></div></div><div class="api-item" id="is-match"><div class="api-sig"><code>regex.<span class="f">is_match</span>(<span class="t">rawptr</span>, <span class="t">str</span>) -&gt; <span class="t">bool</span></code><a class="anchor" href="#is-match">#</a></div></div><div class="api-item" id="is-match-bytes"><div class="api-sig"><code>regex.<span class="f">is_match_bytes</span>(<span class="t">rawptr</span>, <span class="t">bytes</span>) -&gt; <span class="t">bool</span></code><a class="anchor" href="#is-match-bytes">#</a></div></div><div class="api-item" id="find"><div class="api-sig"><code>regex.<span class="f">find</span>(<span class="t">rawptr</span>, <span class="t">str</span>) -&gt; [<span class="t">int</span>]</code><a class="anchor" href="#find">#</a></div></div><div class="api-item" id="find-at"><div class="api-sig"><code>regex.<span class="f">find_at</span>(<span class="t">rawptr</span>, <span class="t">str</span>, <span class="t">int</span>) -&gt; [<span class="t">int</span>]</code><a class="anchor" href="#find-at">#</a></div></div><div class="api-item" id="find-bytes"><div class="api-sig"><code>regex.<span class="f">find_bytes</span>(<span class="t">rawptr</span>, <span class="t">bytes</span>) -&gt; [<span class="t">int</span>]</code><a class="anchor" href="#find-bytes">#</a></div></div><div class="api-item" id="find-bytes-at"><div class="api-sig"><code>regex.<span class="f">find_bytes_at</span>(<span class="t">rawptr</span>, <span class="t">bytes</span>, <span class="t">int</span>) -&gt; [<span class="t">int</span>]</code><a class="anchor" href="#find-bytes-at">#</a></div></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>
