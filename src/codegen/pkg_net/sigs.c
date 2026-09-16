@@ -22,6 +22,14 @@ const NatSig NET_SIGS[] = {
     {"net", "recv_until", 3, {NA_INT, NA_INT, NA_UNTIL}, "result[bytes,str]", 0},
     {"net", "send_until", 3, {NA_INT, NA_BYTES, NA_UNTIL}, "result[i32,str]", 0},
     {"net", "close", 1, {NA_INT}, NULL, 0},
+    /* Is an IDLE connection still reusable? True only when the peer has
+     * neither closed nor sent anything. Non-blocking and non-consuming
+     * (MSG_PEEK | MSG_DONTWAIT), so it costs one syscall and no latency.
+     * Exists for connection pools: recv_until cannot do this job, because
+     * it checks its deadline BEFORE touching the socket -- an
+     * already-expired deadline reports "timeout" without ever looking,
+     * which would call every dead connection alive. */
+    {"net", "idle_alive", 1, {NA_INT}, "bool", 0},
     {"net", "nonblock", 1, {NA_INT}, "result[bool,str]", 0},
     {"net", "tls_server_ctx", 2, {NA_STR, NA_STR}, "result[rawptr,str]", 1},
     {"net", "tls_client_ctx", 1, {NA_STR}, "result[rawptr,str]", 1},
@@ -35,6 +43,9 @@ const NatSig NET_SIGS[] = {
     {"net", "tls_send_until", 3, {NA_RAWPTR, NA_BYTES, NA_UNTIL},
      "result[i32,str]", 1},
     {"net", "tls_close", 1, {NA_RAWPTR}, NULL, 1},
+    /* idle_alive for a TLS connection: also false when OpenSSL already
+       holds decrypted-but-unread bytes (a close_notify, or anything). */
+    {"net", "tls_idle_alive", 1, {NA_RAWPTR}, "bool", 1},
     {"net", "tls_ctx_require_client", 2, {NA_RAWPTR, NA_STR}, "result[bool,str]", 1},
     {"net", "tls_ctx_use_cert", 3, {NA_RAWPTR, NA_STR, NA_STR}, "result[bool,str]", 1},
     {"net", "tls_ctx_add_sni", 4, {NA_RAWPTR, NA_STR, NA_STR, NA_STR},

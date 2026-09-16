@@ -1,0 +1,14 @@
+5 sequential requests rode one connection (client and server agree)
+one-shot says close; a pooling client says nothing (keep-alive is the default)
+Connection: close and close-delimited bodies are never reused
+a connection the server closed while idle is detected before use
+a dropped GET is retried; a dropped POST is reported, never resent
+chunked responses leave the connection clean for the next request
+gzip response decoded, and its Content-Encoding removed
+deflate decodes whether the server sent zlib or raw DEFLATE
+a caller who sets Accept-Encoding gets the compressed bytes untouched
+a gzip bomb in a response is refused at the body ceiling
+16 tasks sharing one client: 160/160 correct, dials + reuses == 160
+a pooled TLS connection is never reused under a different CA
+TLS connections pool and are reused under the same CA
+done

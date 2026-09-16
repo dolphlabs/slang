@@ -1486,7 +1486,7 @@
           "sig": "gc struct Url",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 46
+          "line": 43
         },
         {
           "name": "Request",
@@ -1494,7 +1494,7 @@
           "sig": "gc struct Request",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 53
+          "line": 50
         },
         {
           "name": "Response",
@@ -1502,7 +1502,7 @@
           "sig": "gc struct Response",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 70
+          "line": 67
         },
         {
           "name": "parse_url",
@@ -1510,7 +1510,7 @@
           "sig": "fn parse_url(u: str) -> result[Url, str]",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 101
+          "line": 98
         },
         {
           "name": "header",
@@ -1521,12 +1521,76 @@
           "line": 385
         },
         {
+          "name": "Client",
+          "decl": "struct",
+          "sig": "gc struct Client",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 753
+        },
+        {
+          "name": "new_client",
+          "decl": "fn",
+          "sig": "fn new_client() -> Client",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 769
+        },
+        {
           "name": "new_request",
           "decl": "fn",
           "sig": "fn new_request(method: str, url: str) -> Request",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 658
+          "line": 937
+        },
+        {
+          "name": "client_send",
+          "decl": "fn",
+          "sig": "fn client_send(c: Client, req: Request, deadline: until)",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 1027
+        },
+        {
+          "name": "client_get",
+          "decl": "fn",
+          "sig": "fn client_get(c: Client, url: str, deadline: until)",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 1032
+        },
+        {
+          "name": "client_head",
+          "decl": "fn",
+          "sig": "fn client_head(c: Client, url: str, deadline: until)",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 1037
+        },
+        {
+          "name": "client_post",
+          "decl": "fn",
+          "sig": "fn client_post(c: Client, url: str, content_type: str, body: bytes,",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 1042
+        },
+        {
+          "name": "idle_count",
+          "decl": "fn",
+          "sig": "fn idle_count(c: Client) -> int",
+          "doc": "How many connections are idle in the pool right now. With dials and reuses, the third number that makes the pool's behaviour checkable rather than asserted -- and the only one that shows a reuse DECISION before the server's own close can mask it.",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 1054
+        },
+        {
+          "name": "close_idle",
+          "decl": "fn",
+          "sig": "fn close_idle(c: Client)",
+          "doc": "Close every idle connection now. A long-lived service does not need this -- idle_timeout reaps them -- but a program about to exit, or a test counting connections, does.",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 1064
         },
         {
           "name": "send",
@@ -1534,7 +1598,7 @@
           "sig": "fn send(req: Request, deadline: until) -> result[Response, str]",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 684
+          "line": 1085
         },
         {
           "name": "get",
@@ -1542,7 +1606,7 @@
           "sig": "fn get(url: str, deadline: until) -> result[Response, str]",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 748
+          "line": 1089
         },
         {
           "name": "head",
@@ -1550,7 +1614,7 @@
           "sig": "fn head(url: str, deadline: until) -> result[Response, str]",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 752
+          "line": 1093
         },
         {
           "name": "post",
@@ -1558,7 +1622,7 @@
           "sig": "fn post(url: str, content_type: str, body: bytes,",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
-          "line": 756
+          "line": 1097
         }
       ]
     },
@@ -1702,6 +1766,15 @@
           "sig": "net.close(int)"
         },
         {
+          "name": "idle_alive",
+          "params": [
+            "int"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "net.idle_alive(int) -> bool"
+        },
+        {
           "name": "nonblock",
           "params": [
             "int"
@@ -1800,6 +1873,15 @@
           "ret": null,
           "tls": true,
           "sig": "net.tls_close(rawptr)"
+        },
+        {
+          "name": "tls_idle_alive",
+          "params": [
+            "rawptr"
+          ],
+          "ret": "bool",
+          "tls": true,
+          "sig": "net.tls_idle_alive(rawptr) -> bool"
         },
         {
           "name": "tls_ctx_require_client",
