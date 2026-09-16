@@ -2381,29 +2381,83 @@ prerequisite, not a different plan).
       stack" came from a 0/12 run that was simply luck against a ~10%
       rate; the control settles it.
 
-- [ ] **Open: ~10% SIGBUS under amplified preemption, pre-existing.**
-      Distinct from the corruption above and untouched by fixing it
-      (4/30 before, 3/30 after). Signature is identical every time: the
-      OS crash report shows `EXC_BAD_ACCESS / KERN_PROTECTION_FAILURE`
-      where the faulting address IS the program counter, and that PC is
-      a heap address, reached from a spawned task's trampoline entry --
-      i.e. the task jumped through a corrupted resume target.
+- [ ] **STILL OPEN: ~5% SIGBUS under amplified preemption.** Guard
+      pages did NOT fix it. Recorded here in full because three
+      plausible explanations were tested and eliminated, and the next
+      person should not re-run them.
 
-      Only visible under the amplified build (quantum 150us, ticker
-      0.1ms); not yet seen at stock settings, where preemptions are
-      ~1000x rarer. The likely shape, not yet demonstrated: task stacks
-      are ordinary malloc'd blocks, so one task overrunning its own
-      stack writes into whatever block sits below it -- possibly
-      another task's stack, including the saved resume address in its
-      trampoline frame. That would explain a heap-looking PC. Raising
-      `SL_TASK_GUARD_MARGIN` to 2048 did NOT fix it, so if that is the
-      mechanism the overrun is larger than one margin's worth.
+      Signature, unchanged throughout: `EXC_BAD_ACCESS /
+      KERN_PROTECTION_FAILURE` where the faulting address IS the
+      program counter, reached from a spawned task's trampoline entry.
+      A task jumps through a corrupted resume target.
 
-      Next step for whoever picks it up: the crash reports in
-      `~/Library/Logs/DiagnosticReports/*.ips` carry a full backtrace
-      per crash and cost nothing to collect -- read those first rather
-      than re-deriving from exit codes, which is what made this look
-      like my own regression for an hour.
+      **Eliminated -- do not re-chase:**
+
+      1. **Stack growth / relocation.** Instrumented directly: this
+         workload performs ZERO stack grows in every configuration
+         (4KB, 8KB and 256KB initial). An earlier reading of "growth is
+         necessary" came from comparing a 4KB arm (5/20 crashes) against
+         a 256KB arm (0/20) -- but 6000 tasks x 4KB and 6000 x 256KB are
+         also completely different heap layouts, so that was a
+         two-variable change read as one. A fix built on it
+         (conservatively translating register spills on relocation) was
+         dead code that never executed.
+      2. **Overflow past stack_base.** Real, and now fixed
+         independently -- see the guard-page entry below -- but not the
+         cause of THIS crash. With a PROT_NONE page under every stack,
+         an overflow faults precisely at the overflow; these crashes
+         still present as a corrupted jump target instead. 4/50 runs at
+         stock size with guard pages, against 1/25 without: unchanged.
+      3. **The trampoline frame not fitting.** A headroom veto in
+         `sl_preempt_handler` (refuse to redirect when there is less
+         than SL_TASK_GUARD_MARGIN below sp) measured 3/20 against 5/20
+         in the pathological 4KB arm -- not distinguishable from noise
+         at n=20. Kept as hardening, since the handler cannot grow a
+         stack from signal context and skipping costs only one tick.
+
+      **What is known:** async preemption is necessary (0/300 without
+      it, from the original bisection). Something corrupts a saved
+      return address or the trampoline's resume-target slot. It is not
+      the GC, not double dispatch, not relocation, and not overflow
+      past the stack base.
+
+      **Suggested next step:** the resume-target slot is written by the
+      trampoline at a fixed offset and read by its final `jmp`. Poison
+      that slot with a known sentinel on entry and validate it
+      immediately before the jump; a mismatch turns this into a
+      detection at the moment of corruption rather than at the moment
+      of use, which is the same move the guard page made for stacks.
+
+- [x] **Task stacks are mapped with a guard page.** Not a fix for the
+      item above -- it was built for it and did not fix it -- but it
+      closed a real and separate bug, and it is why that bug was
+      findable at all.
+
+      A task stack used to be a plain malloc block, so overflowing one
+      did not fault: it silently overwrote whatever sat below, which in
+      a task-heavy workload is routinely another task's stack. A canary
+      zone below every stack confirmed this happens, 1-3 times per run
+      of concurrent_compute under amplified preemption, up to 2336
+      bytes deep -- which is also why raising SL_TASK_GUARD_MARGIN from
+      1024 to 2048 never helped.
+
+      With PROT_NONE under each stack, the FIRST thing that faulted was
+      a bug nobody knew about: OpenSSL loads providers lazily through
+      `DSO_load` -> `dlopen` -> **dyld**, which needs more stack than a
+      green task starts with. `sl_crypto.c` called `sl_rt_need_stack`
+      nowhere at all, and `sl_rt_need_fat_stack` asked for 16KB when
+      dyld needs more. Measured: tests/crypto fails 0/3 at 8KB and at
+      16KB, passes 3/3 at 24KB. Set to 64KB for margin, matching the
+      SQLite figure. Every crypto and TLS program had been overflowing
+      its task stack silently, on first use, since those packages
+      landed.
+
+      Cost, 2000 tasks: RSS 49MB against 54-58MB before -- mapped pages
+      fault in lazily, so this is cheaper, not dearer. Wall time 3764ms
+      against 3519ms on the mean, but the ranges overlap (3301-3835
+      before), so the time signal is weak. On a 16KB-page system (Apple
+      Silicon) the usable region rounds up to 16KB, so a task's minimum
+      resident stack doubles; that cost is real and accepted.
 
 - [x] **The original characterization, kept because every elimination
       in it is still valid and was what made the fix findable.**

@@ -2,6 +2,17 @@
 #include <openssl/hmac.h>
 #include <openssl/rand.h>
 
+/* OpenSSL loads providers lazily, and on this platform that reaches
+ * DSO_load -> dlopen -> dyld, which needs far more stack than a green
+ * task starts with. Before task stacks had a guard page this overflowed
+ * SILENTLY into whatever heap block sat below -- routinely another
+ * task's stack. It only became visible when the guard page turned it
+ * into a fault at the instant it happened.
+ *
+ * Same mechanism sl_tls.c and sl_sql.c already use, with a size chosen
+ * for dyld rather than for OpenSSL's own frames. */
+#define SL_CRYPTO_STACK() sl_rt_need_stack(SL_TASK_DYLD_STACK_SIZE)
+
 static sl_res_bytes_str *sl_crypto_ok_bytes(sl_bytes *b) {
     sl_res_bytes_str *r = (sl_res_bytes_str *)sl_gc_alloc(
         sizeof(sl_res_bytes_str), sl_gc_trace_sl_res_bytes_str);
@@ -19,6 +30,7 @@ static sl_res_bytes_str *sl_crypto_err_bytes(const char *msg) {
 }
 
 static sl_bytes *sl_crypto_sha256(sl_bytes *input) {
+    SL_CRYPTO_STACK();
     unsigned char hash[SHA256_DIGEST_LENGTH];
     sl_rt_preempt_disable();
     SHA256(input->ptr, (size_t)input->len, hash);
@@ -27,6 +39,7 @@ static sl_bytes *sl_crypto_sha256(sl_bytes *input) {
 }
 
 static sl_bytes *sl_crypto_hmac_sha256(sl_bytes *key, sl_bytes *message) {
+    SL_CRYPTO_STACK();
     unsigned char hash[SHA256_DIGEST_LENGTH];
     sl_rt_preempt_disable();
     int ok = HMAC(EVP_sha256(), key->ptr, (int)key->len, message->ptr,
@@ -38,6 +51,7 @@ static sl_bytes *sl_crypto_hmac_sha256(sl_bytes *key, sl_bytes *message) {
 }
 
 static sl_res_bytes_str *sl_crypto_rand(long long n) {
+    SL_CRYPTO_STACK();
     if (n < 0 || n > 1024 * 1024)
         return sl_crypto_err_bytes("invalid size: must be between 0 and 1MB");
     if (n == 0)

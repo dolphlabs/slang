@@ -674,6 +674,41 @@ static void sl_preempt_handler(int sig, siginfo_t *si, void *uctx_raw) {
         pc0 < (uintptr_t)sl_preempt_trampoline_end) {
         return; /* never re-preempt the trampoline's own code */
     }
+    if (sp0 - (uintptr_t)t->stack_base < SL_TASK_GUARD_MARGIN) {
+        return; /* Not enough room left below sp for the trampoline's
+            own frame. Redirecting here would push 784 bytes of save
+            block plus the call chain into sl_preempt_yield ->
+            sl_task_yield_now -> sl_ctx_switch off the bottom of this
+            task's stack -- and a task stack is an ordinary malloc'd
+            block, so that does not fault. It silently overwrites
+            whatever the allocator put below it, which under this
+            workload is routinely ANOTHER TASK'S STACK, including the
+            return address that task will later jump through.
+
+            SL_TASK_GUARD_MARGIN is reused deliberately: it is already
+            the number sized against this exact frame, by the hand-tally
+            in its own comment. The cooperative checkpoint enforces it
+            when a task can see it coming; a signal can land anywhere,
+            so the handler has to enforce it too.
+
+            Skipping costs nothing: the ticker retries, and the task is
+            shallower at almost every later instant. It is also the only
+            safe answer -- the handler cannot grow the stack from a
+            signal context.
+
+            HARDENING, NOT A PROVEN FIX. Overflow past stack_base is
+            confirmed: a canary zone below every task stack is clobbered
+            1-3 times per run, up to 2336 bytes deep -- which is why
+            raising SL_TASK_GUARD_MARGIN from 1024 to 2048 did not help,
+            the overflow simply goes further than that. This veto closes
+            the one overflow source the handler itself controls, and
+            measured 3/20 crashing runs against 5/20 without it under
+            amplified preemption with 4KB stacks. At n=20 that is not
+            distinguishable from noise, so it is recorded as a
+            reasonable guard rather than a cure. The remaining overflow
+            comes from somewhere else on the deep path and is still
+            open; see todo.md. */
+    }
     if (atomic_load_explicit(&t->preempt_disable_depth, memory_order_acquire) != 0)
         return;
     if (sl_rt_monotonic_ns() - t->run_start_ns < SL_PREEMPT_QUANTUM_NS)
