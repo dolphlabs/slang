@@ -91,6 +91,8 @@ no escaping).
 - `del(m, k)` — remove key `k` (and its value) from map `m`
 - `to_str(x)` — convert any scalar or bytes value to `str`
 - `to_bytes(s)` — convert a `str` to its raw bytes
+- `to_int(s)` / `to_float(s)` — parse a `str`, returning
+  `result[int, str]` / `result[float, str]` (see below)
 - `to_le(n)` / `to_be(n)` — integer to 8-byte little/big-endian `bytes`
 - `from_le(b)` / `from_be(b)` — 8-byte little/big-endian `bytes` to integer
 - `exit(code)` — terminate the process immediately with the given status
@@ -151,6 +153,41 @@ no escaping).
   int casts truncate toward zero.
 - Mixed-width arithmetic promotes to the wider operand; same-width
   signed/unsigned mixes resolve to the unsigned type (C semantics).
+
+#### Parsing numbers from text
+
+`to_int(s)` and `to_float(s)` are the inverse of `to_str`, and they are
+**fallible**, because parsing is:
+
+```slang
+let r = to_int(proc.getenv("PORT") ?? "8080");
+guard let port = r else let e = err_of(r) {
+    log.error("PORT is not a number: " + e);
+    exit(2);
+}
+```
+
+They are strict on purpose. Every one of these is an error, with a
+message saying which:
+
+| input | `to_int` | C's `atoi` would give |
+|---|---|---|
+| `"8080"` | `8080` | 8080 |
+| `"abc"` | err: not a base-10 integer | **0** |
+| `"80x80"` | err: not a base-10 integer | **80** |
+| `""` | err: cannot parse an empty string as int | **0** |
+| `"  12"` | err: not a base-10 integer | 12 |
+| `"9223372036854775808"` | err: out of range for int | undefined |
+
+Surrounding whitespace, `1_000`, `0x10` and trailing characters are all
+rejected. A caller who wants leniency can `strings.trim` first; a caller
+who gets leniency they did not ask for cannot undo it. `to_float`
+likewise rejects `inf` and `nan`, which `strtod` would accept and which
+are almost never what a config value meant.
+
+The error message does not echo the offending input — the caller already
+has it, and building that string would mean another allocation on the
+failure path.
 
 #### Bitwise operations and integer literals
 
@@ -475,6 +512,8 @@ no escaping).
 - `del(m, k)` — remove key `k` (and its value) from map `m`
 - `to_str(x)` — convert any scalar or bytes value to `str`
 - `to_bytes(s)` — convert a `str` to its raw bytes
+- `to_int(s)` / `to_float(s)` — parse a `str`, returning
+  `result[int, str]` / `result[float, str]` (see below)
 - `to_le(n)` / `to_be(n)` — integer to 8-byte little/big-endian `bytes`
 - `from_le(b)` / `from_be(b)` — 8-byte little/big-endian `bytes` to integer
 - `exit(code)` — terminate the process immediately with the given status
@@ -535,6 +574,41 @@ no escaping).
   int casts truncate toward zero.
 - Mixed-width arithmetic promotes to the wider operand; same-width
   signed/unsigned mixes resolve to the unsigned type (C semantics).
+
+#### Parsing numbers from text
+
+`to_int(s)` and `to_float(s)` are the inverse of `to_str`, and they are
+**fallible**, because parsing is:
+
+```slang
+let r = to_int(proc.getenv("PORT") ?? "8080");
+guard let port = r else let e = err_of(r) {
+    log.error("PORT is not a number: " + e);
+    exit(2);
+}
+```
+
+They are strict on purpose. Every one of these is an error, with a
+message saying which:
+
+| input | `to_int` | C's `atoi` would give |
+|---|---|---|
+| `"8080"` | `8080` | 8080 |
+| `"abc"` | err: not a base-10 integer | **0** |
+| `"80x80"` | err: not a base-10 integer | **80** |
+| `""` | err: cannot parse an empty string as int | **0** |
+| `"  12"` | err: not a base-10 integer | 12 |
+| `"9223372036854775808"` | err: out of range for int | undefined |
+
+Surrounding whitespace, `1_000`, `0x10` and trailing characters are all
+rejected. A caller who wants leniency can `strings.trim` first; a caller
+who gets leniency they did not ask for cannot undo it. `to_float`
+likewise rejects `inf` and `nan`, which `strtod` would accept and which
+are almost never what a config value meant.
+
+The error message does not echo the offending input — the caller already
+has it, and building that string would mean another allocation on the
+failure path.
 
 #### Bitwise operations and integer literals
 

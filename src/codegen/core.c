@@ -1764,7 +1764,8 @@ int is_builtin_name(const char *name) {
     return !strcmp(name, "print") || !strcmp(name, "println") ||
            !strcmp(name, "len") || !strcmp(name, "push") ||
            !strcmp(name, "pop") || !strcmp(name, "to_str") ||
-           !strcmp(name, "to_bytes") || !strcmp(name, "to_le") ||
+           !strcmp(name, "to_bytes") || !strcmp(name, "to_int") ||
+           !strcmp(name, "to_float") || !strcmp(name, "to_le") ||
            !strcmp(name, "to_be") || !strcmp(name, "from_le") ||
            !strcmp(name, "from_be") || !strcmp(name, "has") ||
            !strcmp(name, "del") || !strcmp(name, "exit") ||

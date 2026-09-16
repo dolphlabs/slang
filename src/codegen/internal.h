@@ -318,6 +318,9 @@ typedef enum {
     NA_STR_FAULT, /* str, or a fault converted to str at the call site */
     NA_I64,       /* full-width int: marshaled as long long, not truncated */
     NA_F64,       /* float: marshaled as double (int widens in) */
+    NA_ARR_STR,   /* a [str] list, marshaled as sl_arr *. The only
+                     aggregate a native function takes; strings.join
+                     needs it to be the inverse of strings.split. */
     NA_UNTIL,     /* an `until` deadline: marshaled as sl_until (int64_t).
                      Deliberately NOT int-compatible -- a deadline is an
                      absolute monotonic instant, and silently accepting a
@@ -359,8 +362,10 @@ extern const int CRYPTO_SIGS_LEN;
 extern const NatSig SQL_SIGS[]; /* src/codegen/pkg_sql/ */
 extern const int SQL_SIGS_LEN;
 
-extern const NatSig OS_SIGS[]; /* src/codegen/pkg_os/ */
+extern const NatSig OS_SIGS[];
+extern const NatSig STRINGS_SIGS[]; /* src/codegen/pkg_os/ */
 extern const int OS_SIGS_LEN;
+extern const int STRINGS_SIGS_LEN;
 
 extern const NatSig REGEX_SIGS[]; /* src/codegen/pkg_regex/ */
 extern const int REGEX_SIGS_LEN;

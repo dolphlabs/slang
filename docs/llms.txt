@@ -28,4 +28,5 @@ Every page on this site has a Markdown twin at the same path with a .md extensio
 - [proc](packages/proc.md): Package proc.
 - [regex](packages/regex.md): Package regex.
 - [sql](packages/sql.md): Package sql.
+- [strings](packages/strings.md): Package strings.
 - [time](packages/time.md): Package time.

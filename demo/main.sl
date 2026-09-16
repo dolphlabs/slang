@@ -11,7 +11,6 @@ import "time";
 link "slangarcade";
 extern fn sl_demo_roll_die() -> i32;
 extern fn getpid() -> i32;
-extern fn atoi(s: str) -> i32;
 
 // All mutable server state lives in one struct, passed explicitly to
 // every handler. slang has no closures -- functions are values, but
@@ -507,11 +506,20 @@ let st = AppState {
     stress_lock: stress_lock
 };
 
-let port_env: opt[str] = proc.getenv("PORT");
-let port_str: str = port_env ?? "8090";
-let port = atoi(port_str);
-let workers_str: str = proc.getenv("WORKERS") ?? "128";
-let workers = atoi(workers_str);
+// to_int, not libc atoi: atoi("abc") is 0 and reports nothing, so a
+// typo in PORT used to bind an ephemeral port silently.
+fn env_int(name: str, fallback: str) -> int {
+    let raw = proc.getenv(name) ?? fallback;
+    let r = to_int(raw);
+    guard let n = r else let e = err_of(r) {
+        println(name + "=" + raw + " is not a number: " + e);
+        exit(2);
+    }
+    return n;
+}
+
+let port = env_int("PORT", "8090");
+let workers = env_int("WORKERS", "128");
 
 let lr = link_listen(port);
 guard let ln = lr else {
@@ -527,9 +535,9 @@ for i in 0..workers {
 
 let tls_work: chan[rawptr] = make_chan(256);
 let tls_done: chan[bool] = make_chan(1);
-let tls_port_str: str = proc.getenv("TLS_PORT") ?? "8091";
-let tls_port = atoi(tls_port_str);
-let tls_ok = try_start_tls(st, tls_port, workers, tls_work, tls_done);
+let tls_port = env_int("TLS_PORT", "8091");
+let tls_ok = try_start_tls(st, tls_port as i32, workers, tls_work,
+                           tls_done);
 
 println("Slang Arcade listening on http://localhost:" + to_str(port));
 if tls_ok {

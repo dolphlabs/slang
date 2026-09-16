@@ -302,9 +302,17 @@ Token lexer_next(Lexer *lx) {
         size_t len = lx->pos - start;
         Token t;
 
+/* Keywords carry their spelling as well as their type. A member name
+ * may legitimately BE a keyword -- `strings.join`, `x.map`, `r.result`
+ * -- and the parser can only accept those if it can recover the text
+ * to use as the name. Costs one allocation per keyword token. */
 #define KW(s, tt)                                                            \
     if (len == sizeof(s) - 1 && strncmp(src + start, s, len) == 0) {         \
-        return make_token(tt, line);                                         \
+        Token kt = make_token(tt, line);                                     \
+        kt.text = (char *)xmalloc(len + 1);                                  \
+        memcpy(kt.text, src + start, len);                                   \
+        kt.text[len] = '\0';                                                 \
+        return kt;                                                           \
     }
         KW("let", T_KW_LET)
         KW("fn", T_KW_FN)

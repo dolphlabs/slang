@@ -554,6 +554,11 @@ void force_native_result_types(CG *cg) {
     if (want_pkg(cg, "regex")) {
         res_cname(cg, "rawptr", "str");
     }
+    if (want_pkg(cg, "strings")) {
+        /* split returns [str]; nothing here is fallible, so no result
+           instantiations are needed. */
+        (void)0;
+    }
     if (want_pkg(cg, "os")) {
         res_cname(cg, "bool", "str");
         res_cname(cg, "int", "str");
@@ -575,8 +580,10 @@ void emit_native_runtime(CG *cg) {
     int want_sql = want_pkg(cg, "sql");
     int want_regex = want_pkg(cg, "regex");
     int want_os = want_pkg(cg, "os");
+    int want_strings = want_pkg(cg, "strings");
     if (!want_time && !want_net && !want_proc && !want_fs && !want_log &&
-        !want_crypto && !want_sql && !want_regex && !want_os)
+        !want_crypto && !want_sql && !want_regex && !want_os &&
+        !want_strings)
         return;
     if (want_time)
         emit_runtime_file(cg, "sl_time.c");
@@ -598,6 +605,8 @@ void emit_native_runtime(CG *cg) {
         emit_runtime_file(cg, "sl_regex.c");
     if (want_os)
         emit_runtime_file(cg, "sl_os.c");
+    if (want_strings)
+        emit_runtime_file(cg, "sl_strings.c");
 }
 
 /* Emit the args-struct + task entry function for every distinct

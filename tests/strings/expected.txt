@@ -1,0 +1,36 @@
+6
+-1
+0
+3
+-1
+true
+true
+false
+true
+2
+1
+[hi]
+[hi  ]
+[  hi]
+[]
+HELLO, WORLD 42!
+hello, world 42!
+el
+llo
+
+
+ababab
+[]
+a | b | c
+
+abc
+4
+a,b,,c
+a-b--c
+1
+1
+x.y.z
+3
+[]
+host/example.com
+done

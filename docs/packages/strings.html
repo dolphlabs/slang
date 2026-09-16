@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>strings — slang</title>
+<meta name="description" content="Package strings.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="strings">
+<meta property="og:description" content="Package strings.">
+<meta property="og:type" content="website">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/strings.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <nav class="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>strings</h1>
+      <p class="tagline">Package strings.</p>
+      <p class="agentline">
+        <a href="../packages/strings.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>Search, trim, case, split and join on <code>str</code>. The package cannot be named <code>str</code> because that token is the type — the same reason Go calls its own <code>strings</code>.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;strings&quot;</span>;
+
+strings.<span class="f">find</span>(<span class="s">&quot;hello world&quot;</span>, <span class="s">&quot;world&quot;</span>);   <span class="c">// 6, or -1</span>
+strings.<span class="f">rfind</span>(<span class="s">&quot;a/b/c&quot;</span>, <span class="s">&quot;/&quot;</span>);            <span class="c">// 3</span>
+strings.<span class="f">contains</span>(<span class="s">&quot;hello&quot;</span>, <span class="s">&quot;ell&quot;</span>);
+strings.<span class="f">has_prefix</span>(<span class="s">&quot;hello&quot;</span>, <span class="s">&quot;he&quot;</span>);
+strings.<span class="f">has_suffix</span>(<span class="s">&quot;hello&quot;</span>, <span class="s">&quot;lo&quot;</span>);
+strings.<span class="f">count</span>(<span class="s">&quot;a,b,c&quot;</span>, <span class="s">&quot;,&quot;</span>);            <span class="c">// 2</span>
+
+strings.<span class="f">trim</span>(<span class="s">&quot;  hi \r\n&quot;</span>);              <span class="c">// &quot;hi&quot; (space/tab/CR/LF)</span>
+strings.<span class="f">trim_start</span>(s); strings.<span class="f">trim_end</span>(s);
+strings.<span class="f">to_upper</span>(<span class="s">&quot;hi&quot;</span>); strings.<span class="f">to_lower</span>(<span class="s">&quot;HI&quot;</span>);   <span class="c">// ASCII only</span>
+
+strings.<span class="f">slice</span>(<span class="s">&quot;hello&quot;</span>, <span class="n">1</span>, <span class="n">3</span>);           <span class="c">// &quot;el&quot;</span>
+strings.<span class="f">slice</span>(<span class="s">&quot;hello&quot;</span>, -<span class="n">3</span>, <span class="n">5</span>);          <span class="c">// &quot;llo&quot; — negative counts back</span>
+strings.<span class="f">repeat</span>(<span class="s">&quot;ab&quot;</span>, <span class="n">3</span>);                <span class="c">// &quot;ababab&quot;</span>
+strings.<span class="f">replace</span>(<span class="s">&quot;a,b,c&quot;</span>, <span class="s">&quot;,&quot;</span>, <span class="s">&quot; | &quot;</span>);
+
+strings.<span class="f">split</span>(<span class="s">&quot;a,b,,c&quot;</span>, <span class="s">&quot;,&quot;</span>);           <span class="c">// [&quot;a&quot;, &quot;b&quot;, &quot;&quot;, &quot;c&quot;]</span>
+strings.<span class="t">join</span>(parts, <span class="s">&quot;,&quot;</span>);               <span class="c">// the inverse of split</span></code></pre></div>
+<p>This is a compiler-provided native package, and it has to be: <code>str</code> supports <code>len</code>, <code>+</code> and <code>==</code> and nothing else — it cannot be indexed or sliced — so none of it could be written in slang without converting to <code>bytes</code> and back on every call. <code>byteutil</code> covers the <code>bytes</code> side.</p>
+<p>Three behaviours worth knowing:</p>
+<ul><li><strong>Indices are byte offsets and the case operations are ASCII-only.</strong> <code>str</code> is UTF-8 bytes; doing better means shipping a Unicode table and a normalisation policy, which is a different project. Treat these as byte operations, because that is what they are.</li><li><strong><code>slice</code> clamps rather than panics.</strong> Slicing is how you narrow a string you just searched, and a <code>find</code> that returned -1 on the line above should not turn the next line into a crash. A negative index counts from the end.</li><li><strong><code>split</code> and <code>join</code> are exact inverses.</strong> Adjacent separators produce empty elements, so the result always has <code>count(s, sep) + 1</code> elements and <code>join(split(s, sep), sep) == s</code> for any non-empty separator. An empty separator splits into single bytes.</li></ul>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="find"><div class="api-sig"><code>strings.<span class="f">find</span>(<span class="t">str</span>, <span class="t">str</span>) -&gt; <span class="t">int</span></code><a class="anchor" href="#find">#</a></div></div><div class="api-item" id="rfind"><div class="api-sig"><code>strings.<span class="f">rfind</span>(<span class="t">str</span>, <span class="t">str</span>) -&gt; <span class="t">int</span></code><a class="anchor" href="#rfind">#</a></div></div><div class="api-item" id="contains"><div class="api-sig"><code>strings.<span class="f">contains</span>(<span class="t">str</span>, <span class="t">str</span>) -&gt; <span class="t">bool</span></code><a class="anchor" href="#contains">#</a></div></div><div class="api-item" id="has-prefix"><div class="api-sig"><code>strings.<span class="f">has_prefix</span>(<span class="t">str</span>, <span class="t">str</span>) -&gt; <span class="t">bool</span></code><a class="anchor" href="#has-prefix">#</a></div></div><div class="api-item" id="has-suffix"><div class="api-sig"><code>strings.<span class="f">has_suffix</span>(<span class="t">str</span>, <span class="t">str</span>) -&gt; <span class="t">bool</span></code><a class="anchor" href="#has-suffix">#</a></div></div><div class="api-item" id="count"><div class="api-sig"><code>strings.<span class="f">count</span>(<span class="t">str</span>, <span class="t">str</span>) -&gt; <span class="t">int</span></code><a class="anchor" href="#count">#</a></div></div><div class="api-item" id="trim"><div class="api-sig"><code>strings.<span class="f">trim</span>(<span class="t">str</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#trim">#</a></div></div><div class="api-item" id="trim-start"><div class="api-sig"><code>strings.<span class="f">trim_start</span>(<span class="t">str</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#trim-start">#</a></div></div><div class="api-item" id="trim-end"><div class="api-sig"><code>strings.<span class="f">trim_end</span>(<span class="t">str</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#trim-end">#</a></div></div><div class="api-item" id="to-upper"><div class="api-sig"><code>strings.<span class="f">to_upper</span>(<span class="t">str</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#to-upper">#</a></div></div><div class="api-item" id="to-lower"><div class="api-sig"><code>strings.<span class="f">to_lower</span>(<span class="t">str</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#to-lower">#</a></div></div><div class="api-item" id="slice"><div class="api-sig"><code>strings.<span class="f">slice</span>(<span class="t">str</span>, <span class="t">int</span>, <span class="t">int</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#slice">#</a></div></div><div class="api-item" id="repeat"><div class="api-sig"><code>strings.<span class="f">repeat</span>(<span class="t">str</span>, <span class="t">int</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#repeat">#</a></div></div><div class="api-item" id="replace"><div class="api-sig"><code>strings.<span class="f">replace</span>(<span class="t">str</span>, <span class="t">str</span>, <span class="t">str</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#replace">#</a></div></div><div class="api-item" id="split"><div class="api-sig"><code>strings.<span class="f">split</span>(<span class="t">str</span>, <span class="t">str</span>) -&gt; [<span class="t">str</span>]</code><a class="anchor" href="#split">#</a></div></div><div class="api-item" id="join"><div class="api-sig"><code>strings.<span class="t">join</span>(NA_ARR_STR, <span class="t">str</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#join">#</a></div></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

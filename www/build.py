@@ -153,6 +153,7 @@ PACKAGE_SECTIONS = {
     "sql": ["`sql`"],
     "regex": ["`regex`"],
     "http2": ["`http2`"],
+    "strings": ["`strings`"],
     "byteutil": ["`byteutil`"],
     "http": ["`http`"],
 }

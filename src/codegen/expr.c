@@ -533,6 +533,40 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *inner = xasprintf("sl_chan_close(%s)", ch);
         return wrap_safepoint(cg, e, NULL, NULL, inner);
     }
+    if (!strcmp(name, "to_int") || !strcmp(name, "to_float")) {
+        int isint = !strcmp(name, "to_int");
+        const char *vt = isint ? "int" : "float";
+        const char *rt = isint ? "result[int,str]" : "result[float,str]";
+        const char *rc = res_cname(cg, vt, "str");
+        const char *rct = ctype_of(cg, rt);
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        int id = cg->tmp_id++;
+        /* One allocation, and it is the last thing that happens. The
+         * error strings sl_str_parse_* hand back are string LITERALS,
+         * so they are assigned straight into ->e with no sl_strdup:
+         * that keeps a second allocation from running while the result
+         * struct is sitting in a C local with nothing rooting it, and
+         * sl_gc_mark already ignores addresses it never allocated.
+         *
+         * The message does not echo the offending input. The caller has
+         * it, and building that string here would put the allocation
+         * back. */
+        char *inner = xasprintf(
+            "({ %s _sl_pv%d = 0; const char *_sl_pe%d = \"\"; "
+            "int _sl_pok%d = sl_str_parse_%s(%s, &_sl_pv%d, &_sl_pe%d); "
+            "%s _sl_pr%d = (%s)sl_gc_alloc(sizeof(*_sl_pr%d), "
+            "sl_gc_trace_%s); "
+            "if (_sl_pok%d) { _sl_pr%d->ok = true; _sl_pr%d->v = _sl_pv%d; } "
+            "else { _sl_pr%d->ok = false; _sl_pr%d->e = _sl_pe%d; } "
+            "_sl_pr%d; })",
+            isint ? "long long" : "double", id, id,
+            id, isint ? "int" : "f64", a, id, id,
+            rct, id, rct, id, rc,
+            id, id, id, id,
+            id, id, id,
+            id);
+        return wrap_safepoint(cg, e, rct, NULL, inner);
+    }
     if (!strcmp(name, "make_mutex")) {
         char *inner = xstrdup("sl_mutex_new()");
         return wrap_safepoint(cg, e, ctype_of(cg, "mutex"), NULL, inner);
