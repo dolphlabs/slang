@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>   /* sl_str_parse_f64 (sl_containers.c) checks ERANGE */
+#include <sys/mman.h> /* task stacks are mapped with a guard page */
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdatomic.h>
@@ -118,11 +120,15 @@ typedef struct sl_task {
     void *stack_base;   /* 16-byte-aligned usable base -- may NOT be
                            what malloc() actually returned; see
                            raw_base below */
-    void *raw_base;     /* the actual malloc() return value for the
-                           current stack_base -- free() THIS, never
-                           stack_base directly. malloc() isn't
-                           guaranteed by the C standard to already
-                           return 16-aligned memory (it happens to,
+    void *raw_base;     /* the mmap() base for the current stack --
+                           sl_stack_unmap() THIS, never stack_base
+                           directly. stack_base sits ONE GUARD PAGE
+                           above it (sl_stack_map, runtime_sched.c), so
+                           an overflow faults instead of silently
+                           overwriting the next heap block. Historically
+                           this was a malloc() return value, and the
+                           16-byte alignment fudge mattered because
+                           malloc isn't
                            on this machine's allocator, which is
                            exactly why freeing stack_base looked fine
                            in testing without actually being
@@ -778,6 +784,15 @@ static void sl_cpu_detect(void) {
 
 #define SL_TASK_INITIAL_STACK_SIZE 8192
 #define SL_TASK_FAT_STACK_SIZE 16384
+/* dyld -- reached through dlopen when OpenSSL loads a provider -- needs
+ * far more stack than OpenSSL's own frames do. Measured, not guessed:
+ * tests/crypto fails 0/3 at 8KB and at 16KB, and passes 3/3 at 24KB, so
+ * the requirement sits between 16K and 24K on this platform. Set to 64K
+ * for margin against a different dyld build or a deeper provider chain,
+ * matching SL_TASK_SQL_STACK_SIZE's own choice.
+ *
+ * Only tasks that actually call into OpenSSL pay it, and only once. */
+#define SL_TASK_DYLD_STACK_SIZE 65536
 #define SL_TASK_GUARD_MARGIN 2048
 /* SQLite (sl_sql.c) recurses on query structure, deeper than OpenSSL.
  * On the ungrown 8KB default it hit the very failure the fat stack
@@ -928,8 +943,14 @@ static void sl_rt_need_stack(size_t want) {
         sl_task_stack_grow(t);
 }
 
+/* Every caller of this is an OpenSSL entry point, and OpenSSL's lazy
+ * provider load reaches dlopen -> dyld, which dominates the
+ * requirement -- see SL_TASK_DYLD_STACK_SIZE for the measurement.
+ * SL_TASK_FAT_STACK_SIZE (16KB) was sized against OpenSSL's OWN frames,
+ * back when a stack overflow was silent and this came out looking
+ * sufficient. It was not; the guard page is what made that visible. */
 static void sl_rt_need_fat_stack(void) {
-    sl_rt_need_stack(SL_TASK_FAT_STACK_SIZE);
+    sl_rt_need_stack(SL_TASK_DYLD_STACK_SIZE);
 }
 
 static inline void sl_rt_preempt_if_due(sl_task *t) {

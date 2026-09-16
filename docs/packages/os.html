@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>os — slang</title>
+<meta name="description" content="Package os.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="os">
+<meta property="og:description" content="Package os.">
+<meta property="og:type" content="website">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/os.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <nav class="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>os</h1>
+      <p class="tagline">Package os.</p>
+      <p class="agentline">
+        <a href="../packages/os.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>The operating system <em>around</em> a program: the environment, the process, and everything you can ask or do about a path without opening it. Pure libc, so importing <code>os</code> adds no link flag.</p>
+<p><strong>The <code>fs</code>/<code>os</code> boundary</strong>: <code>fs</code> owns open file <strong>handles</strong> and their contents; <code>os</code> owns paths you have not opened. <code>fs.mkdir</code> predates that split and stays where it is rather than breaking existing programs.</p>
+<div class="tablewrap"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><code>os.setenv(k, v)</code> / <code>os.unsetenv(k)</code></td><td><code>result[bool, str]</code></td></tr><tr><td><code>os.environ()</code></td><td><code>[str]</code> of <code>KEY=VALUE</code></td></tr><tr><td><code>os.pid()</code> / <code>os.tmpdir()</code></td><td><code>int</code> / <code>str</code></td></tr><tr><td><code>os.hostname()</code></td><td><code>result[str, str]</code></td></tr><tr><td><code>os.exists(p)</code> / <code>os.is_dir(p)</code> / <code>os.is_file(p)</code></td><td><code>bool</code></td></tr><tr><td><code>os.size(p)</code> / <code>os.mtime(p)</code></td><td><code>result[int, str]</code></td></tr><tr><td><code>os.read_dir(p)</code></td><td><code>result[[str], str]</code></td></tr><tr><td><code>os.remove(p)</code> / <code>os.rename(a, b)</code></td><td><code>result[bool, str]</code></td></tr></tbody></table></div>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;os&quot;</span>;
+
+<span class="c">// serve a static file, the shape this package exists for</span>
+<span class="k">if</span> !os.<span class="f">is_file</span>(path) {
+    <span class="k">return</span> <span class="f">not_found</span>();
+}
+<span class="k">let</span> sr = os.<span class="f">size</span>(path);
+<span class="k">guard</span> <span class="k">let</span> n = sr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(sr) {
+    log.<span class="f">error</span>(<span class="s">&quot;stat &quot;</span> + path + <span class="s">&quot;: &quot;</span> + e);      <span class="c">// &quot;No such file or directory&quot;</span>
+    <span class="k">return</span> <span class="f">server_error</span>();
+}</code></pre></div>
+<p>The three predicates are bare <code>bool</code> on purpose. &quot;Does this exist&quot; has two useful answers: a missing path and an unreadable parent are both &quot;no, you cannot use it&quot;, and code branching on the difference is racing anyway — the answer can change between the check and the use. The accessors return a value that has to come from somewhere, so those carry the errno text.</p>
+<p><code>environ()</code> is a list rather than a map because an environment may legally hold a repeated key, and a map would silently drop one. <code>read_dir</code> returns entry names without <code>.</code> and <code>..</code>, since forgetting to filter those is how a directory walk becomes an infinite loop. <code>remove</code> takes files and empty directories alike, so a caller need not know which it has.</p>
+<p><code>proc.getenv</code>, <code>proc.args</code> and <code>proc.cwd</code> stay in <code>proc</code>; <code>os</code> adds what <code>proc</code> has no answer for rather than duplicating it.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="setenv"><div class="api-sig"><code>os.<span class="f">setenv</span>(<span class="t">str</span>, <span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>,<span class="t">str</span>]</code><a class="anchor" href="#setenv">#</a></div></div><div class="api-item" id="unsetenv"><div class="api-sig"><code>os.<span class="f">unsetenv</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>,<span class="t">str</span>]</code><a class="anchor" href="#unsetenv">#</a></div></div><div class="api-item" id="environ"><div class="api-sig"><code>os.<span class="f">environ</span>() -&gt; [<span class="t">str</span>]</code><a class="anchor" href="#environ">#</a></div></div><div class="api-item" id="pid"><div class="api-sig"><code>os.<span class="f">pid</span>() -&gt; <span class="t">int</span></code><a class="anchor" href="#pid">#</a></div></div><div class="api-item" id="hostname"><div class="api-sig"><code>os.<span class="f">hostname</span>() -&gt; <span class="t">result</span>[<span class="t">str</span>,<span class="t">str</span>]</code><a class="anchor" href="#hostname">#</a></div></div><div class="api-item" id="tmpdir"><div class="api-sig"><code>os.<span class="f">tmpdir</span>() -&gt; <span class="t">str</span></code><a class="anchor" href="#tmpdir">#</a></div></div><div class="api-item" id="exists"><div class="api-sig"><code>os.<span class="f">exists</span>(<span class="t">str</span>) -&gt; <span class="t">bool</span></code><a class="anchor" href="#exists">#</a></div></div><div class="api-item" id="is-dir"><div class="api-sig"><code>os.<span class="f">is_dir</span>(<span class="t">str</span>) -&gt; <span class="t">bool</span></code><a class="anchor" href="#is-dir">#</a></div></div><div class="api-item" id="is-file"><div class="api-sig"><code>os.<span class="f">is_file</span>(<span class="t">str</span>) -&gt; <span class="t">bool</span></code><a class="anchor" href="#is-file">#</a></div></div><div class="api-item" id="size"><div class="api-sig"><code>os.<span class="f">size</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">int</span>,<span class="t">str</span>]</code><a class="anchor" href="#size">#</a></div></div><div class="api-item" id="mtime"><div class="api-sig"><code>os.<span class="f">mtime</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">int</span>,<span class="t">str</span>]</code><a class="anchor" href="#mtime">#</a></div></div><div class="api-item" id="read-dir"><div class="api-sig"><code>os.<span class="f">read_dir</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[[<span class="t">str</span>],<span class="t">str</span>]</code><a class="anchor" href="#read-dir">#</a></div></div><div class="api-item" id="remove"><div class="api-sig"><code>os.<span class="f">remove</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>,<span class="t">str</span>]</code><a class="anchor" href="#remove">#</a></div></div><div class="api-item" id="rename"><div class="api-sig"><code>os.<span class="f">rename</span>(<span class="t">str</span>, <span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>,<span class="t">str</span>]</code><a class="anchor" href="#rename">#</a></div></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Function values — slang</title>
+<meta name="description" content="Functions as values, deliberately without closures.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="Function values">
+<meta property="og:description" content="Functions as values, deliberately without closures.">
+<meta property="og:type" content="website">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../guide/functions.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <nav class="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a class="active" href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>Function values</h1>
+      <p class="tagline">Functions as values, deliberately without closures.</p>
+      <p class="agentline">
+        <a href="../guide/functions.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<h2 id="function-values">Function values</h2>
+<p>A <code>fn</code> type holds a function. <code>fn(A, B) -&gt; R</code> for one that returns a value, <code>fn(A)</code> for one that returns nothing:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">fn</span> <span class="f">double</span>(x: <span class="t">int</span>) -&gt; <span class="t">int</span> { <span class="k">return</span> x * <span class="n">2</span>; }
+<span class="k">fn</span> <span class="f">triple</span>(x: <span class="t">int</span>) -&gt; <span class="t">int</span> { <span class="k">return</span> x * <span class="n">3</span>; }
+
+<span class="k">let</span> f: <span class="k">fn</span>(<span class="t">int</span>) -&gt; <span class="t">int</span> = double;   <span class="c">// annotated</span>
+<span class="k">let</span> g = triple;                   <span class="c">// or inferred from the function</span>
+<span class="b">println</span>(<span class="f">f</span>(<span class="n">21</span>));                   <span class="c">// 42</span></code></pre></div>
+<p>They work as parameters, return values, struct fields, list and map elements — which is what makes a dispatch table possible instead of a chain of string comparisons (<code>demo/samplex/server.sl</code> routes this way):</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">gc</span> <span class="k">struct</span> Route {
+    method: <span class="t">str</span>,
+    path: <span class="t">str</span>,
+    handler: <span class="k">fn</span>(State, http.Request, <span class="t">int</span>) -&gt; http.Response,
+}
+
+<span class="k">let</span> routes: [Route] = [
+    Route { method: <span class="s">&quot;GET&quot;</span>,  path: <span class="s">&quot;/api/tasks&quot;</span>, handler: list_tasks },
+    Route { method: <span class="s">&quot;POST&quot;</span>, path: <span class="s">&quot;/api/tasks&quot;</span>, handler: create_task }
+];
+
+<span class="k">for</span> i <span class="k">in</span> <span class="n">0..len</span>(routes) {
+    <span class="k">if</span> routes[i].method == req.method &amp;&amp; routes[i].path == req.path {
+        <span class="k">return</span> routes[i].<span class="f">handler</span>(st, req, -<span class="n">1</span>);
+    }
+}</code></pre></div>
+<p>Anything holding a function value is callable directly — <code>routes[i].handler(...)</code>, <code>by_name[&quot;parse&quot;](...)</code>, <code>pick(true)(4)</code>.</p>
+<p><strong>These are not closures, and that is the point.</strong> A function value always names a top-level function; nothing is captured. There is no environment to allocate, trace, or reason about, so a <code>fn</code> value is exactly a C function pointer — it names code, never the heap, and the collector ignores it entirely. Anything a handler needs is passed to it, which is the same rule <code>spawn</code> already follows.</p>
+<p>Two consequences worth knowing:</p>
+<ul><li><strong>Methods cannot be used as function values.</strong> A method takes a receiver the type does not name, so <code>fn(Counter) -&gt; int</code> would be a lie about its arity. Wrap it in a plain function.</li><li><strong>A binding shadows a function of the same name.</strong> <code>let scale = ...</code> in scope means <code>scale</code> refers to the binding, never to <code>fn scale</code>.</li></ul>
+<p><code>spawn</code> takes a function value too — <code>spawn handlers[i](job);</code> — see Concurrency below.</p>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

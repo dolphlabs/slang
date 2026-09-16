@@ -1,0 +1,32 @@
+# slang
+
+> A statically typed language built primarily for server-side and network programming -- that is the focus, not a limit. Compiles to C. M:N green threads, a precise mark-sweep collector, and native packages. Built and maintained by Dolphlabs (Dolph Tech Limited), https://dolphlabs.com.
+
+Every page on this site has a Markdown twin at the same path with a .md extension. /api.json is the machine-readable index of every package and function. /llms-full.txt is this entire site as one plain-text document.
+
+## Pages
+
+- [slang](index.md): A statically typed language built primarily for server-side and network programming. Compiles to C.
+- [Language guide](guide/index.md): Values, types, and the shape of a slang program.
+- [Data types](guide/data.md): bytes, lists, maps and structs.
+- [Errors](guide/errors.md): opt, result and fault -- and the rule for choosing.
+- [Function values](guide/functions.md): Functions as values, deliberately without closures.
+- [Concurrency](concurrency/index.md): M:N green threads, channels, select and mutex.
+- [Packages](packages/index.md): The standard library, and how imports resolve.
+- [C interop](interop/index.md): Calling C, and the safety rules that come with it.
+- [How it works](internals/index.md): The compiler pipeline, the collector, the scheduler.
+- [Limitations](limitations/index.md): What slang does not do, stated plainly.
+- [byteutil](packages/byteutil.md): Package byteutil.
+- [crypto](packages/crypto.md): Package crypto.
+- [fs](packages/fs.md): Package fs.
+- [http](packages/http.md): Package http.
+- [http2](packages/http2.md): Package http2.
+- [json](packages/json.md): Package json.
+- [log](packages/log.md): Package log.
+- [net](packages/net.md): Package net.
+- [os](packages/os.md): Package os.
+- [proc](packages/proc.md): Package proc.
+- [regex](packages/regex.md): Package regex.
+- [sql](packages/sql.md): Package sql.
+- [strings](packages/strings.md): Package strings.
+- [time](packages/time.md): Package time.

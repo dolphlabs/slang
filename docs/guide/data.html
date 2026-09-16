@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data types — slang</title>
+<meta name="description" content="bytes, lists, maps and structs.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="Data types">
+<meta property="og:description" content="bytes, lists, maps and structs.">
+<meta property="og:type" content="website">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../guide/data.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <nav class="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a class="active" href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>Data types</h1>
+      <p class="tagline">bytes, lists, maps and structs.</p>
+      <p class="agentline">
+        <a href="../guide/data.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<h2 id="bytes">bytes</h2>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> b = b<span class="s">&quot;raw\x00bytes&quot;</span>;   <span class="c">// binary-safe literal; \0 \xHH escapes</span>
+<span class="b">println</span>(<span class="b">len</span>(b));           <span class="c">// byte count, not strlen</span>
+<span class="b">println</span>(b[<span class="n">0</span>]);             <span class="c">// indexing yields an int (0..255)</span>
+b[<span class="n">0</span>] = <span class="n">65</span>;                 <span class="c">// mutable in place</span>
+<span class="k">let</span> head = b[..<span class="n">2</span>];         <span class="c">// slicing: b[a..b], b[..n], b[n..], b[..]</span>
+<span class="k">let</span> both = b<span class="s">&quot;ab&quot;</span> + b<span class="s">&quot;cd&quot;</span>;  <span class="c">// concatenation</span>
+<span class="k">if</span> b == other { ... }      <span class="c">// content equality via ==</span>
+<span class="k">for</span> byte <span class="k">in</span> b { ... }      <span class="c">// iterate byte values</span></code></pre></div>
+<p><code>bytes</code> values carry an explicit length and may contain NULs — safe for network buffers and binary formats.</p>
+<h2 id="lists-t">Lists <code>[T]</code></h2>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> xs = [<span class="n">10</span>, <span class="n">20</span>, <span class="n">30</span>];         <span class="c">// inferred [int]</span>
+<span class="k">let</span> empty: [<span class="t">str</span>] = [];         <span class="c">// empty lists need an annotation</span>
+<span class="b">push</span>(xs, <span class="n">40</span>);                  <span class="c">// grow (amortized O(1))</span>
+<span class="b">println</span>(<span class="b">pop</span>(xs));              <span class="c">// shrink from the end</span>
+xs[<span class="n">0</span>] = <span class="n">5</span>;                     <span class="c">// bounds-checked index assignment</span>
+<span class="k">for</span> x <span class="k">in</span> xs { <span class="b">println</span>(x); }    <span class="c">// iteration</span>
+<span class="k">let</span> ys = xs[<span class="n">0..2</span>] + xs[<span class="n">1</span>..];   <span class="c">// slicing + concatenation</span>
+<span class="k">let</span> grid = [[<span class="n">1</span>, <span class="n">2</span>], [<span class="n">3</span>, <span class="n">4</span>]];   <span class="c">// nested lists</span></code></pre></div>
+<p>Indexing is bounds-checked at runtime; violations abort with a clear message.</p>
+<h2 id="maps-map-k-v">Maps <code>map[K]V</code></h2>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> scores: <span class="t">map</span>[<span class="t">str</span>]<span class="t">int</span> = {<span class="s">&quot;alice&quot;</span>: <span class="n">90</span>, <span class="s">&quot;bob&quot;</span>: <span class="n">85</span>};
+scores[<span class="s">&quot;carol&quot;</span>] = <span class="n">78</span>;          <span class="c">// insert or overwrite</span>
+<span class="b">println</span>(scores[<span class="s">&quot;alice&quot;</span>]);      <span class="c">// lookup (missing key = runtime error)</span>
+<span class="b">println</span>(<span class="b">len</span>(scores));          <span class="c">// entry count</span>
+<span class="k">if</span> <span class="b">has</span>(scores, <span class="s">&quot;dave&quot;</span>) { ... } <span class="c">// membership test (no error)</span>
+<span class="b">del</span>(scores, <span class="s">&quot;bob&quot;</span>);            <span class="c">// removal</span>
+
+<span class="k">let</span> empty: <span class="t">map</span>[<span class="t">int</span>]<span class="t">str</span> = {};   <span class="c">// empty maps need an annotation</span>
+<span class="k">for</span> k, v <span class="k">in</span> scores {           <span class="c">// iteration in insertion order</span>
+    <span class="b">println</span>(k + <span class="s">&quot;: &quot;</span> + <span class="b">to_str</span>(v));
+}</code></pre></div>
+<p>Keys may be any integer type, <code>str</code>, or <code>bool</code>; values may be any type, including structs and lists. Backed by an open-addressing hash table (FNV-1a) that keeps entries in insertion order and grows automatically at 75% load.</p>
+<h2 id="structs">Structs</h2>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">struct</span> Point {
+    x: <span class="t">int</span>,
+    y: <span class="t">int</span>,
+}
+
+<span class="k">impl</span> Point {
+    <span class="k">fn</span> <span class="f">sum</span>(self: Point) -&gt; <span class="t">int</span> {
+        <span class="k">return</span> self.x + self.y;
+    }
+
+    <span class="k">fn</span> <span class="f">moved</span>(self: Point, dx: <span class="t">int</span>, dy: <span class="t">int</span>) -&gt; Point {
+        <span class="k">return</span> Point { x: self.x + dx, y: self.y + dy };
+    }
+}
+
+<span class="k">let</span> p = Point { x: <span class="n">3</span>, y: <span class="n">4</span> };
+<span class="b">println</span>(p.<span class="f">sum</span>());        <span class="c">// method call; self passed implicitly</span>
+p.x = <span class="n">10</span>;                <span class="c">// field mutation</span>
+<span class="k">let</span> q = p.<span class="f">moved</span>(<span class="n">1</span>, <span class="n">2</span>);   <span class="c">// methods can build and return structs</span>
+
+<span class="k">struct</span> Rect {
+    tl: Point,
+    br: Point,
+}
+<span class="k">let</span> r = Rect { tl: Point { x: <span class="n">0</span>, y: <span class="n">0</span> }, br: Point { x: <span class="n">4</span>, y: <span class="n">5</span> } };
+<span class="b">println</span>(r.tl.y);         <span class="c">// nested field chains</span>
+r.br.x = <span class="n">6</span>;
+
+<span class="k">let</span> pts: [Point] = [p, q];  <span class="c">// structs compose with lists &amp; maps</span>
+<span class="b">push</span>(pts, r.tl);</code></pre></div>
+<p>Struct literals must supply every field exactly once, with types checked. Methods live in top-level <code>impl Name { ... }</code> blocks; mark a method <code>pub fn</code> to export it to importing packages. Structs are values: assignment copies, including any <code>str</code> / list / map / <code>opt</code> / <code>result</code> / <code>gc struct</code> fields (shallow — the heap objects are shared). Use <code>gc struct</code> when the record itself should be a shared heap object. <code>own T</code> is uniquely owned: assignment and passing <strong>move</strong>, and use-after-move is a compile error. A moved binding can be reinitialized. <code>own</code> is freed when its binding goes out of scope unless it was moved.</p>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

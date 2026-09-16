@@ -1,9 +1,11 @@
 // httpkit: a tiny hand-rolled HTTP/1.1 layer over the raw net
-// package. slang has no string search/split builtins yet, so parsing
-// works directly on `bytes` (indexing yields an int 0..255, and
+// package. Parsing works directly on `bytes` (indexing yields an int
+// 0..255, and
 // slicing/concatenation/equality all just work -- see the README's
 // "bytes" section) and only converts to `str` once a field's exact
-// boundaries are known.
+// boundaries are known. The `strings` package would read better, but a
+// wire parser wants the raw octets: a request line is bytes until it
+// has been validated, and converting first would mean converting twice.
 //
 // Deliberately minimal for a demo: no header parsing (Content-Length,
 // chunked encoding, etc. are ignored), and it assumes one net.recv()

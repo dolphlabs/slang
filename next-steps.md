@@ -167,6 +167,99 @@ a single token.
   `join[T]`. `pkg.func` deliberately keeps the named path so it still
   emits a direct call rather than an indirect one.
 
+## Strings (done)
+
+- [x] `to_int` / `to_float` builtins and a `strings` native package.
+  Picked because three separate files had written the gap down:
+  `demo/httpkit` ("slang has no string search/split builtins yet"),
+  `demo/samplex` (`extern fn atoi`), and samplex's `path_id`, twenty
+  lines of hand-rolled byte loop to read a trailing integer.
+
+  **The atoi problem was a live bug, not an ergonomic one.** Both demos
+  parsed their port with libc `atoi`, which returns 0 for `"abc"`, 80
+  for `"80x80"` and 0 for `""`, reporting nothing in any case -- so
+  `PORT=abc` silently bound an ephemeral port. That directly inverts
+  the README's own rule about never collapsing a descriptive error.
+  `to_int` returns `result[int, str]` and both demos now name the bad
+  value and exit.
+
+  Strict on purpose: whitespace, `1_000`, `0x10`, trailing characters,
+  `inf` and `nan` are all rejected. A caller who wants leniency can trim
+  first; a caller who gets leniency they did not ask for cannot undo it.
+  The int64 range check is derived from the sign rather than assumed
+  symmetric, so `-9223372036854775808` parses and
+  `9223372036854775808` does not.
+
+  `strings` is native because it has to be: `str` supports `len`, `+`
+  and `==` and nothing else -- no indexing, no slicing -- so none of it
+  could be written in slang without a `bytes` round trip per call. 16
+  functions; `split`/`join` are exact inverses; `slice` clamps rather
+  than panicking because slicing is what you do to a string you just
+  searched.
+
+  Two things fell out of it. A new `NA_ARR_STR` native arg kind, since
+  `join` is the first native function to take a list. And a real parser
+  fix: `strings.join` did not parse, because `join` lexes as the
+  `join[T]` type keyword. Keywords now carry their spelling and any
+  identifier-shaped token is accepted after a `.`, so `x.map`,
+  `r.result` and `strings.join` all work. A first attempt used a token
+  RANGE over the `T_TY_*` block and silently missed `chan` and `join`,
+  which sit after `T_TY_LINK` in the enum -- testing by shape instead
+  of by range is what makes it stay fixed.
+
+  `bench/` and `stress_test/` still use `extern fn atoi` and are left
+  alone deliberately: `bench/RESULTS.md` records "no bench changes" as
+  a property of the measured runs, and editing a benchmark program to
+  tidy it would invalidate the numbers taken with it.
+
+## Packaging (done)
+
+- [x] `make install` / `uninstall` / `dist`, `slangc new`, `--version`.
+  Before this there were no tags, no releases and no install target:
+  the only way to get slang was `git clone && make`, with the binary
+  left in the source tree. The docs site made that worse rather than
+  better -- a Packages page listing 14 packages for a language with no
+  front door.
+
+  **The bug worth remembering** is that the first install did not work.
+  `slangc` splices its runtime C into every program it compiles, so the
+  binary alone is useless; runtime/ and stdlib/ go to
+  `$(PREFIX)/lib/slang`. But even with those in place it failed with
+  "cannot find runtime file", because rtpath.c resolved relative to
+  `argv[0]` -- and an installed compiler is invoked through PATH, where
+  `argv[0]` is just "slangc" with no directory, so every lookup
+  resolved against the CURRENT WORKING DIRECTORY. Fixed by asking the
+  OS for the executable's real path (`_NSGetExecutablePath` on macOS,
+  `/proc/self/exe` on Linux), with realpath so a symlinked install
+  finds lib/ next to the real binary rather than next to the link.
+  Verified under `env -i` with only the install prefix on PATH: source
+  stdlib packages, native packages and a package with a link flag all
+  compile and run.
+
+  The installed binary is built WITHOUT `-DSLANG_RUNTIME_DIR` /
+  `-DSLANG_STDLIB_DIR`. Those bake absolute paths to the build tree and
+  are checked BEFORE the argv0-relative lookup, so an installed binary
+  carrying them would quietly keep using the source tree it was built
+  from and break the day that tree moved.
+
+  `slangc new <name>|.` scaffolds `slang.project`, `main.sl` and
+  `.gitignore`. It lives in the compiler rather than a companion tool
+  because the compiler already owns both formats -- `project.c` parses
+  `slang.project` and WRITES `slang.lock` -- so a separate tool would
+  reimplement a grammar it does not control. It deliberately does not
+  write `slang.lock`: the lock is derived from the `pkg` pins by
+  `slangc get`, and a lock for a project with no dependencies records
+  nothing. `cargo new` and `go mod init` draw the same line.
+
+  The suite checks scaffolding end to end (create, build, run, and
+  refuse to overwrite), and the check was confirmed to FAIL when the
+  generated main.sl is broken.
+
+  **Not done, deliberately:** no git tag and no GitHub release. Both are
+  public, one-way actions; `make dist` produces the relocatable tarball
+  and the tag is one command when someone decides to cut v0.1.0.
+
+
 ## Notes
 
 - Do not change `bench/http/main.sl` for perf experiments. Raw-best slang is `bench/http_opt/main.sl`; remasure with `./bench/run_http_opt.sh`.

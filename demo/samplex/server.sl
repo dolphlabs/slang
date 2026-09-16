@@ -17,14 +17,11 @@
 // hundreds of OS threads.
 
 import "http";
-import "byteutil";
+import "strings";
 import "json";
 import "log";
 import "proc";
 import "time";
-
-// str -> int straight from libc; slang has no atoi builtin.
-extern fn atoi(s: str) -> i32;
 
 // ---- domain types ----------------------------------------------------
 //
@@ -76,27 +73,16 @@ gc struct Route {
 // ---- helpers ---------------------------------------------------------
 
 // Pull the trailing integer out of "/api/tasks/42". Returns -1 when the
-// path does not match the prefix or the remainder is not all digits, so
+// path does not match the prefix or the remainder is not an integer, so
 // /api/tasks/abc is a 404 rather than task 0.
 fn path_id(path: str, prefix: str) -> int {
-    let p = to_bytes(path);
-    let pre = to_bytes(prefix);
-    if !byteutil.has_prefix(p, pre) {
+    if !strings.has_prefix(path, prefix) {
         return -1;
     }
-    let rest = p[len(pre)..];
-    if len(rest) == 0 {
+    let rest = strings.slice(path, len(prefix), len(path));
+    let r = to_int(rest);
+    guard let n = r else {
         return -1;
-    }
-    let n = 0;
-    let i = 0;
-    while i < len(rest) {
-        let c = rest[i];
-        if c < 48 || c > 57 {
-            return -1;
-        }
-        n = n * 10 + (c - 48);
-        i = i + 1;
     }
     return n;
 }
@@ -322,8 +308,21 @@ let st = State {
     routes: routes
 };
 
-let port = atoi(proc.getenv("PORT") ?? "8080");
-let workers = atoi(proc.getenv("WORKERS") ?? "64");
+// to_int rather than libc atoi: atoi("abc") is 0, so PORT=abc used to
+// bind an ephemeral port and say nothing. A bad value now names itself
+// and stops the server.
+fn env_int(name: str, fallback: str) -> int {
+    let raw = proc.getenv(name) ?? fallback;
+    let r = to_int(raw);
+    guard let n = r else let e = err_of(r) {
+        log.error(name + "=" + raw + " is not a number: " + e);
+        exit(2);
+    }
+    return n;
+}
+
+let port = env_int("PORT", "8080");
+let workers = env_int("WORKERS", "64");
 
 let lr = link_listen(port);
 guard let ln = lr else let e = err_of(lr) {

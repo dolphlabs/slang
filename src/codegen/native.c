@@ -35,6 +35,8 @@ static const NatSig *find_any_sig(const char *pkg, const char *fname) {
         ns = find_sig(REGEX_SIGS, REGEX_SIGS_LEN, pkg, fname);
     if (!ns)
         ns = find_sig(OS_SIGS, OS_SIGS_LEN, pkg, fname);
+    if (!ns)
+        ns = find_sig(STRINGS_SIGS, STRINGS_SIGS_LEN, pkg, fname);
     return ns;
 }
 
@@ -75,6 +77,10 @@ const char *native_check(CG *cg, const char *pkg, const char *fname,
         case NA_F64:
             ok = is_flt(at) || is_int(at);
             want = "a float";
+            break;
+        case NA_ARR_STR:
+            ok = is_arr(at) && is_str(arr_elem(at));
+            want = "a [str]";
             break;
         case NA_UNTIL:
             ok = is_until(at);
@@ -135,6 +141,9 @@ char *native_gen(CG *cg, const char *pkg, const char *fname,
         } else if (ak == NA_I64) {
             cast_t = "int";
             a = maybe_cast(cg, cast_t, at, a);
+        } else if (ak == NA_ARR_STR) {
+            cast_t = "[str]"; /* already sl_arr *; must not fall through
+                                 to the i32 default below */
         } else if (ak == NA_UNTIL) {
             cast_t = "until"; /* already int64_t; no conversion, but the
                                  cast_t must not fall through to the i32

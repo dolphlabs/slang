@@ -1,0 +1,4305 @@
+# slang
+
+# slang
+
+> A statically typed language built primarily for server-side and network programming. Compiles to C.
+
+slang is a statically typed language built primarily for server-side and network programming -- that is the focus, not a limit. It compiles to C, schedules M:N green threads, collects with a precise mark-sweep GC, and ships its standard library inside the compiler.
+
+## Quick start
+
+Install the compiler, then start a project:
+
+```sh
+git clone https://github.com/dolphlabs/slang && cd slang
+sudo make install            # /usr/local by default; PREFIX=~/.local works too
+
+slangc new hello
+cd hello
+slangc main.sl --run         # hello from hello
+```
+
+`make install` puts `slangc` in `$(PREFIX)/bin` and the runtime and
+standard library in `$(PREFIX)/lib/slang` — both are needed, because
+`slangc` splices its runtime C into every program it compiles. Remove it
+all with `make uninstall`. `make dist` builds a relocatable tarball with
+the same layout, which can be unpacked anywhere and run in place.
+
+Working on the compiler itself:
+
+```sh
+make                 # build ./slangc against this working tree
+make test            # compile & run the example programs
+make docs            # rebuild the documentation site
+```
+
+### Starting a project
+
+```sh
+slangc new myapp     # creates myapp/ with slang.project, main.sl, .gitignore
+slangc new .         # same, in the directory you are already in
+```
+
+`slangc new` writes `slang.project` but **not** `slang.lock`. The lock is
+derived: `slangc get` generates it from the `pkg` lines in
+`slang.project`, and a lock file for a project with no dependencies
+records nothing. Cargo and Go draw the same line — `cargo new` writes
+`Cargo.toml` and not `Cargo.lock`.
+
+Scaffolding lives in `slangc` rather than a companion tool because the
+compiler already owns both formats: it parses `slang.project` and writes
+`slang.lock`. A separate tool would have to reimplement a grammar it
+does not control.
+
+Compile a slang program:
+
+```sh
+./slangc examples/hello/main.sl     # produces ./main
+./main                              # run it
+```
+
+Useful flags:
+
+| Flag        | Effect                                              |
+|-------------|-----------------------------------------------------|
+| `-o <name>` | Choose the output binary name                       |
+| `--emit-c`  | Only write the generated C file (no compilation)    |
+| `--keep-c`  | Keep the generated C file after compiling           |
+| `--run`     | Compile, then immediately execute the result        |
+| `get`       | Fetch `slang.project` pins and write `slang.lock`   |
+
+Want to see everything at once instead of one feature at a time? See
+**[`demo/`](demo/)** — a full server (dice game, guestbook wall, live
+dashboard) exercising every tier: `http`/`link`, `net.tls_*`, `json`,
+`spawn`/`chan[T]`, `proc` graceful shutdown, local package imports,
+and C interop, with a real HTML/CSS/JS frontend. `cd demo && ./run.sh`.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# Language guide
+
+# Language guide
+
+> Values, types, and the shape of a slang program.
+
+## Language tour
+
+```slang
+// variables with inferred types
+let x = 10;              // int  (64-bit)
+let pi = 3.14;           // float (double)
+let name = "World";      // str
+let ok = true;           // bool
+
+// arithmetic: + - * / %   (int/int is integer division)
+// bitwise:    & | ^ ~ << >>   (integers only; see below)
+
+// compound assignment for every binary operator above
+let mut_acc = 0;
+mut_acc += 5;
+mut_acc |= 1 << 3;
+xs[i] *= 2;
+p.count += 1;
+println(x + y);
+println(x / 2.0);        // mixing int and float promotes to float
+
+// strings concatenate with + ; numbers/bools convert automatically
+println("Hello, " + name + "! " + x);
+
+// string interpolation with ${expr} (any expression allowed)
+println("pi doubled is ${pi * 2}");
+
+// comparisons: == != < <= > >=   logic: && || !
+if x > y && ok {
+    println("bigger");
+} else if x == y {
+    println("equal");
+} else {
+    println("smaller");
+}
+
+// loops
+let i = 0;
+while i < 5 {
+    print(i);
+    i = i + 1;
+}
+
+for j in 0..5 {        // exclusive range: 0,1,2,3,4
+    print(j);
+}
+for k in 1..=3 {       // inclusive range: 1,2,3
+    println("tick ${k}");
+}
+
+// functions (parameters and return types are annotated)
+fn add(a: int, b: int) -> int {
+    a + b          // implicit return: last expression is the value
+}
+
+fn abs(n: int) -> int {
+    guard n >= 0 else {
+        return -n; // guard: early exit when the condition fails
+    }
+    n
+}
+
+// void functions just omit the return type
+fn shout(msg: str) {
+    println(msg + "!!!");
+}
+
+// recursion works (functions are forward-declared automatically)
+fn fib(n: int) -> int {
+    if n < 2 { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+```
+
+### Built-ins
+
+- `print(expr)` — print a value without a newline
+- `println(expr)` — print a value followed by a newline
+
+Both accept any single value of type `int`, any fixed-width integer,
+`float`, `f32`, `str`, `bool`, or `bytes` (bytes are written raw, with
+no escaping).
+
+- `len(x)` — length of a `str`, `bytes`, `[T]`, or map
+- `push(xs, v)` / `pop(xs)` — append to / remove the last element of a list
+- `has(m, k)` — does map `m` contain key `k`?
+- `del(m, k)` — remove key `k` (and its value) from map `m`
+- `to_str(x)` — convert any scalar or bytes value to `str`
+- `to_bytes(s)` — convert a `str` to its raw bytes
+- `to_int(s)` / `to_float(s)` — parse a `str`, returning
+  `result[int, str]` / `result[float, str]` (see below)
+- `to_le(n)` / `to_be(n)` — integer to 8-byte little/big-endian `bytes`
+- `from_le(b)` / `from_be(b)` — 8-byte little/big-endian `bytes` to integer
+- `exit(code)` — terminate the process immediately with the given status
+- `some(v)` / `none` / `ok(v)` / `err(e)` — construct `opt`/`result` values
+  (see below)
+- `bytes_ptr(b)` — raw `rawptr` to a `bytes` buffer, for passing to
+  `extern fn`s (see C interop below)
+- `make_chan(n)` / `chan_send(ch, v)` / `chan_recv(ch)` / `chan_close(ch)`
+  — construct and use a `chan[T]` (see Concurrency below)
+- `make_mutex()` / `mutex_lock(m)` / `mutex_unlock(m)` /
+  `mutex_trylock(m)` — construct and use a `mutex` (see Concurrency
+  below)
+- `join_wait(h)` — wait for a `join[T]` from `spawn f(...)` (see
+  Concurrency below)
+
+### Types
+
+| slang type | C type      | Notes                          |
+|------------|-------------|--------------------------------|
+| `int`      | `long long` | 64-bit signed integer          |
+| `float`    | `double`    | IEEE double                    |
+| `str`      | `const char *` | NUL-terminated UTF-8 bytes  |
+| `bool`     | `bool`      | `true` / `false`               |
+| `bytes`    | `sl_bytes *` | binary-safe byte sequence     |
+| `i8 i16 i32 i64` | `int8_t` .. `int64_t` | signed fixed-width ints |
+| `u8 u16 u32 u64` | `uint8_t` .. `uint64_t` | unsigned fixed-width ints |
+| `f32`      | `float`     | IEEE single precision          |
+| `[T]`      | `sl_arr *`  | growable array of T            |
+| `map[K]V`  | `sl_map *`  | insertion-ordered hash map     |
+| struct     | `sl_st_*`   | value record (copied)          |
+| `gc struct` | `sl_st_* *` | GC'd heap record (shared)     |
+| `opt[T]`   | `sl_opt_* *` | optional value: `some(v)` / `none` |
+| `result[T,E]` | `sl_res_* *` | fallible value: `ok(v)` / `err(e)` |
+| `duration` | `int64_t`   | nanosecond count (see `time`)  |
+| `rawptr`   | `void *`    | opaque foreign pointer (C interop) |
+| `ptr[T]`   | `T *`       | typed FFI pointer                  |
+| `&T`       | `const T *` | shared borrow                      |
+| `&mut T`   | `T *`       | unique borrow                      |
+| `own T`    | `T *`       | unique heap box (no drop yet)      |
+| `gc T`     | `T *`       | traced heap box of a value type    |
+| `*T` / `*mut T` | `T *`  | raw pointer                        |
+| `chan[T]`  | `sl_chan *` | bounded thread-safe queue (see Concurrency) |
+| `join[T]`  | `sl_join *` | handle for a spawned task's result          |
+| `mutex`    | `sl_mutex *` | task-parking lock (see Concurrency)        |
+| `fn(A)->R` | `R (*)(A)`  | function value (see Function values)       |
+
+#### Numeric conversion rules
+
+- **Implicit widening** within the integer family: a narrower int may be
+  used wherever a strictly wider one is expected (`i32` -> `i64`,
+  `u32` -> `u64`, and unsigned into a wider *signed* type). Widening
+  toward floats is also implicit (`i32` -> `float`, `f32` -> `float`).
+- **Narrowing and sign changes require an explicit cast** with `as`:
+  `x as i8`, `n as u32`, `3.9 as i32`. Integer literals that fit the
+  target width may initialize/pass without a cast.
+- **Wrap on cast/overflow**: casts and arithmetic wrap two's-complement
+  style. `(0 as u8) - (1 as u8)` is `255`; `300 as i8` is `44`. Float ->
+  int casts truncate toward zero.
+- Mixed-width arithmetic promotes to the wider operand; same-width
+  signed/unsigned mixes resolve to the unsigned type (C semantics).
+
+#### Parsing numbers from text
+
+`to_int(s)` and `to_float(s)` are the inverse of `to_str`, and they are
+**fallible**, because parsing is:
+
+```slang
+let r = to_int(proc.getenv("PORT") ?? "8080");
+guard let port = r else let e = err_of(r) {
+    log.error("PORT is not a number: " + e);
+    exit(2);
+}
+```
+
+They are strict on purpose. Every one of these is an error, with a
+message saying which:
+
+| input | `to_int` | C's `atoi` would give |
+|---|---|---|
+| `"8080"` | `8080` | 8080 |
+| `"abc"` | err: not a base-10 integer | **0** |
+| `"80x80"` | err: not a base-10 integer | **80** |
+| `""` | err: cannot parse an empty string as int | **0** |
+| `"  12"` | err: not a base-10 integer | 12 |
+| `"9223372036854775808"` | err: out of range for int | undefined |
+
+Surrounding whitespace, `1_000`, `0x10` and trailing characters are all
+rejected. A caller who wants leniency can `strings.trim` first; a caller
+who gets leniency they did not ask for cannot undo it. `to_float`
+likewise rejects `inf` and `nan`, which `strtod` would accept and which
+are almost never what a config value meant.
+
+The error message does not echo the offending input — the caller already
+has it, and building that string would mean another allocation on the
+failure path.
+
+#### Bitwise operations and integer literals
+
+Binary protocols are most of network programming, so the bit operators
+are first-class: `&` `|` `^` `~` `<<` `>>`, on any integer type.
+
+```slang
+// an HTTP/2 frame header, straight off the wire
+let flen  = (b[0] << 16) | (b[1] << 8) | b[2];
+let ftype = b[3];
+let flags = b[4];
+let sid   = ((b[5] & 0x7f) << 24) | (b[6] << 16) | (b[7] << 8) | b[8];
+
+if flags & 0x01 != 0 { /* END_STREAM */ }
+```
+
+Integer literals come in decimal, hex (`0xff`, `0xFF`) and binary
+(`0b1010`), and `_` may be used anywhere as a digit separator:
+`1_000_000`, `0xff_ff`, `0b1010_1010`.
+
+A literal too large for `i64` **is a `u64`**, not an overflowing `int`:
+`let mask = 18446744073709551615;` gives a `u64` holding that exact
+value, and `let x: int = 18446744073709551615;` is a compile error
+rather than a surprise. Anything past `u64` is rejected at the point of
+writing — `integer literal does not fit in 64 bits`. (Before this,
+decimal literals ran through `strtoll`, which saturates: those two
+literals and `99999999999999999999999` all silently became
+`9223372036854775807`.)
+
+**Precedence follows C exactly**, so an expression lifted from an RFC or
+a C reference implementation means the same thing here:
+
+```
+||  <  &&  <  |  <  ^  <  &  <  == !=  <  < <= > >=  <  << >>  <  + -  <  * / %  <  unary
+```
+
+Three things differ from C, all deliberately:
+
+- **`&` is never ambiguous.** Infix `&` is bitwise AND; the borrow forms
+  `&x` / `&mut x` are prefix-only, so the parser can always tell them apart.
+- **C's `x & 1 == 1` footgun is a compile error.** C parses that as
+  `x & (1 == 1)` and accepts it because `bool` is an `int`; slang rejects
+  it with "'&' requires integer operands (got int and bool)". Parenthesize
+  what you meant.
+- **An out-of-range shift count panics** instead of being undefined
+  behaviour. `x << n` where `n` is negative or at least the width of `x`
+  reports `shift count out of range at pkg.func:line`, the same way
+  division by zero and an out-of-bounds index do — this matters when the
+  count came off the network. When the count is a constant already in
+  range (`b[0] << 16`, the normal case) the check is compiled out
+  entirely, so protocol code pays nothing for it.
+
+**Compound assignment** exists for every one of these: `+= -= *= /= %=`
+and `&= |= ^= <<= >>=`. `x op= v` means `x = x op v`, which evaluates the
+target twice, so a side-effecting **index** is hoisted into a temporary
+first and runs exactly once — `xs[pop(q)] += 1` pops once, not twice.
+Only the value being indexed has to be re-nameable: `f()[0] += 1` is a
+compile error, since naming `f()` twice would call it twice, and hoisting
+it would mutate a copy for a value-type struct. Write that one out.
+
+`>>` follows the operand's signedness: arithmetic (sign-preserving) on a
+signed type, logical (zero-filling) on an unsigned one, exactly as in C.
+`&` `|` `^` promote to the wider operand; a shift keeps the width of the
+value being shifted, so `x << n` never silently widens a narrow `x`
+because `n` happens to be an `int`.
+
+#### bytes
+
+```slang
+let b = b"raw\x00bytes";   // binary-safe literal; \0 \xHH escapes
+println(len(b));           // byte count, not strlen
+println(b[0]);             // indexing yields an int (0..255)
+b[0] = 65;                 // mutable in place
+let head = b[..2];         // slicing: b[a..b], b[..n], b[n..], b[..]
+let both = b"ab" + b"cd";  // concatenation
+if b == other { ... }      // content equality via ==
+for byte in b { ... }      // iterate byte values
+```
+
+`bytes` values carry an explicit length and may contain NULs — safe for
+network buffers and binary formats.
+
+#### Lists `[T]`
+
+```slang
+let xs = [10, 20, 30];         // inferred [int]
+let empty: [str] = [];         // empty lists need an annotation
+push(xs, 40);                  // grow (amortized O(1))
+println(pop(xs));              // shrink from the end
+xs[0] = 5;                     // bounds-checked index assignment
+for x in xs { println(x); }    // iteration
+let ys = xs[0..2] + xs[1..];   // slicing + concatenation
+let grid = [[1, 2], [3, 4]];   // nested lists
+```
+
+Indexing is bounds-checked at runtime; violations abort with a clear
+message.
+
+#### Maps `map[K]V`
+
+```slang
+let scores: map[str]int = {"alice": 90, "bob": 85};
+scores["carol"] = 78;          // insert or overwrite
+println(scores["alice"]);      // lookup (missing key = runtime error)
+println(len(scores));          // entry count
+if has(scores, "dave") { ... } // membership test (no error)
+del(scores, "bob");            // removal
+
+let empty: map[int]str = {};   // empty maps need an annotation
+for k, v in scores {           // iteration in insertion order
+    println(k + ": " + to_str(v));
+}
+```
+
+Keys may be any integer type, `str`, or `bool`; values may be any type,
+including structs and lists. Backed by an open-addressing hash table
+(FNV-1a) that keeps entries in insertion order and grows automatically
+at 75% load.
+
+#### Structs
+
+```slang
+struct Point {
+    x: int,
+    y: int,
+}
+
+impl Point {
+    fn sum(self: Point) -> int {
+        return self.x + self.y;
+    }
+
+    fn moved(self: Point, dx: int, dy: int) -> Point {
+        return Point { x: self.x + dx, y: self.y + dy };
+    }
+}
+
+let p = Point { x: 3, y: 4 };
+println(p.sum());        // method call; self passed implicitly
+p.x = 10;                // field mutation
+let q = p.moved(1, 2);   // methods can build and return structs
+
+struct Rect {
+    tl: Point,
+    br: Point,
+}
+let r = Rect { tl: Point { x: 0, y: 0 }, br: Point { x: 4, y: 5 } };
+println(r.tl.y);         // nested field chains
+r.br.x = 6;
+
+let pts: [Point] = [p, q];  // structs compose with lists & maps
+push(pts, r.tl);
+```
+
+Struct literals must supply every field exactly once, with types
+checked. Methods live in top-level `impl Name { ... }` blocks; mark a
+method `pub fn` to export it to importing packages. Structs are
+values: assignment copies, including any `str` / list / map /
+`opt` / `result` / `gc struct` fields (shallow — the heap objects
+are shared). Use `gc struct` when the record itself should be a
+shared heap object.
+`own T` is uniquely owned: assignment and passing **move**, and
+use-after-move is a compile error. A moved binding can be reinitialized.
+`own` is freed when its binding goes out of scope unless it was moved.
+
+#### Option / Result
+
+```slang
+fn div10(n: int) -> opt[int] {
+    if n % 10 == 0 { return some(n / 10); }
+    return none;
+}
+
+fn parse_small(s: str) -> result[i32, str] {
+    if s == "big" { return err("value too large"); }
+    return ok(7);
+}
+
+// guard let unwraps the happy path and binds it for the rest of the
+// block; the else branch must exit (return, or exit()) since the
+// bound name has no value to fall back to. `else let e = err_of(r)`
+// binds the error value for `result[T, E]` so failures stay visible.
+fn safe_div(n: int) -> int {
+    guard let v = div10(n) else {
+        return -1;
+    }
+    return v;
+}
+
+fn load_config(path: str) -> str {
+    let r: result[str, str] = read_file(path);
+    guard let body = r else let e = err_of(r) {
+        log.warn("config load failed: " + e);
+        return "";
+    }
+    return body;
+}
+
+// ?? recovers from none / err with a fallback value
+println(div10(41) ?? -1);              // -1 (none)
+println(parse_small("big") ?? -1);     // -1 (err)
+
+// `fault` is the closed 5-kind network/runtime failure enum:
+// fault_timeout / fault_reset / fault_closed / fault_io / fault_refused.
+// `==` and `fault_kind` only see the kind. `fault_op` and `fault_code`
+// carry context: the op name ("recv", "connect", "dial", ...) and the
+// errno value (0 when none applies). `to_str` / `+` / `println` render
+// the full "op detail (code N)" form, so failures stay debuggable.
+let f = fault_io();
+println(fault_kind(f));                // 4
+println(fault_op(f));                  // "" (hand-built, no op)
+println(fault_code(f));                // 0
+
+// bare 'none' / 'err(...)' need an annotated binding to infer their
+// other type parameter
+let nothing: opt[str] = none;
+let bad: result[str, str] = err("boom");
+```
+
+Panics (out-of-bounds index, division by zero, `err_of` on ok, missing
+map key) carry `pkg.func:line`: `list index out of bounds at
+main.foo:12`. A panicking `spawn`ed task reports through stderr and its
+`join_wait` surfaces the same string as `err`, so failures stay visible
+across task boundaries.
+
+`opt[T]` and `result[T, E]` are monomorphized per distinct type
+argument (one C struct per instantiation actually used). Constructing
+`none`/`err(...)` without enough context to infer the missing type
+parameter is a compile error.
+
+#### Error model: `opt` vs `result` vs `fault`
+
+- `opt[T]` — the value may legitimately be absent (`none`). Lookup
+  misses, optional config, end of a drained channel. Absence is not
+  failure; `??` supplies the default.
+- `result[T, E]` — the operation can fail with a *descriptive* error
+  (`err(e)`). Parsing, validation, anything where the caller needs to
+  know *why*. `E` is usually `str`; `guard let x = r else let e =
+  err_of(r)` keeps the reason visible.
+- `fault` — the operation hit the *environment*: timeout, reset,
+  closed connection, refused dial, IO error. A closed 5-kind enum
+  (`fault_timeout` / `fault_reset` / `fault_closed` / `fault_io` /
+  `fault_refused`), comparable with `==` and convertible with
+  `to_str` / `+`. Use it when the failure is about the world, not
+  the data.
+
+Rule of thumb: absent data is `opt`, bad data is `result[_, str]`,
+bad world is `result[_, fault]`. Never collapse a descriptive `str`
+error into a bare `fault_io()` at a boundary — that is where
+debuggability goes to die (see `http.read` below).
+
+### Function values
+
+A `fn` type holds a function. `fn(A, B) -> R` for one that returns a
+value, `fn(A)` for one that returns nothing:
+
+```slang
+fn double(x: int) -> int { return x * 2; }
+fn triple(x: int) -> int { return x * 3; }
+
+let f: fn(int) -> int = double;   // annotated
+let g = triple;                   // or inferred from the function
+println(f(21));                   // 42
+```
+
+They work as parameters, return values, struct fields, list and map
+elements — which is what makes a dispatch table possible instead of a
+chain of string comparisons (`demo/samplex/server.sl` routes this way):
+
+```slang
+gc struct Route {
+    method: str,
+    path: str,
+    handler: fn(State, http.Request, int) -> http.Response,
+}
+
+let routes: [Route] = [
+    Route { method: "GET",  path: "/api/tasks", handler: list_tasks },
+    Route { method: "POST", path: "/api/tasks", handler: create_task }
+];
+
+for i in 0..len(routes) {
+    if routes[i].method == req.method && routes[i].path == req.path {
+        return routes[i].handler(st, req, -1);
+    }
+}
+```
+
+Anything holding a function value is callable directly —
+`routes[i].handler(...)`, `by_name["parse"](...)`, `pick(true)(4)`.
+
+**These are not closures, and that is the point.** A function value
+always names a top-level function; nothing is captured. There is no
+environment to allocate, trace, or reason about, so a `fn` value is
+exactly a C function pointer — it names code, never the heap, and the
+collector ignores it entirely. Anything a handler needs is passed to
+it, which is the same rule `spawn` already follows.
+
+Two consequences worth knowing:
+
+- **Methods cannot be used as function values.** A method takes a
+  receiver the type does not name, so `fn(Counter) -> int` would be a
+  lie about its arity. Wrap it in a plain function.
+- **A binding shadows a function of the same name.** `let scale = ...`
+  in scope means `scale` refers to the binding, never to `fn scale`.
+
+`spawn` takes a function value too — `spawn handlers[i](job);` — see
+Concurrency below.
+
+## Built-ins
+
+- `print(expr)` — print a value without a newline
+- `println(expr)` — print a value followed by a newline
+
+Both accept any single value of type `int`, any fixed-width integer,
+`float`, `f32`, `str`, `bool`, or `bytes` (bytes are written raw, with
+no escaping).
+
+- `len(x)` — length of a `str`, `bytes`, `[T]`, or map
+- `push(xs, v)` / `pop(xs)` — append to / remove the last element of a list
+- `has(m, k)` — does map `m` contain key `k`?
+- `del(m, k)` — remove key `k` (and its value) from map `m`
+- `to_str(x)` — convert any scalar or bytes value to `str`
+- `to_bytes(s)` — convert a `str` to its raw bytes
+- `to_int(s)` / `to_float(s)` — parse a `str`, returning
+  `result[int, str]` / `result[float, str]` (see below)
+- `to_le(n)` / `to_be(n)` — integer to 8-byte little/big-endian `bytes`
+- `from_le(b)` / `from_be(b)` — 8-byte little/big-endian `bytes` to integer
+- `exit(code)` — terminate the process immediately with the given status
+- `some(v)` / `none` / `ok(v)` / `err(e)` — construct `opt`/`result` values
+  (see below)
+- `bytes_ptr(b)` — raw `rawptr` to a `bytes` buffer, for passing to
+  `extern fn`s (see C interop below)
+- `make_chan(n)` / `chan_send(ch, v)` / `chan_recv(ch)` / `chan_close(ch)`
+  — construct and use a `chan[T]` (see Concurrency below)
+- `make_mutex()` / `mutex_lock(m)` / `mutex_unlock(m)` /
+  `mutex_trylock(m)` — construct and use a `mutex` (see Concurrency
+  below)
+- `join_wait(h)` — wait for a `join[T]` from `spawn f(...)` (see
+  Concurrency below)
+
+## Types
+
+| slang type | C type      | Notes                          |
+|------------|-------------|--------------------------------|
+| `int`      | `long long` | 64-bit signed integer          |
+| `float`    | `double`    | IEEE double                    |
+| `str`      | `const char *` | NUL-terminated UTF-8 bytes  |
+| `bool`     | `bool`      | `true` / `false`               |
+| `bytes`    | `sl_bytes *` | binary-safe byte sequence     |
+| `i8 i16 i32 i64` | `int8_t` .. `int64_t` | signed fixed-width ints |
+| `u8 u16 u32 u64` | `uint8_t` .. `uint64_t` | unsigned fixed-width ints |
+| `f32`      | `float`     | IEEE single precision          |
+| `[T]`      | `sl_arr *`  | growable array of T            |
+| `map[K]V`  | `sl_map *`  | insertion-ordered hash map     |
+| struct     | `sl_st_*`   | value record (copied)          |
+| `gc struct` | `sl_st_* *` | GC'd heap record (shared)     |
+| `opt[T]`   | `sl_opt_* *` | optional value: `some(v)` / `none` |
+| `result[T,E]` | `sl_res_* *` | fallible value: `ok(v)` / `err(e)` |
+| `duration` | `int64_t`   | nanosecond count (see `time`)  |
+| `rawptr`   | `void *`    | opaque foreign pointer (C interop) |
+| `ptr[T]`   | `T *`       | typed FFI pointer                  |
+| `&T`       | `const T *` | shared borrow                      |
+| `&mut T`   | `T *`       | unique borrow                      |
+| `own T`    | `T *`       | unique heap box (no drop yet)      |
+| `gc T`     | `T *`       | traced heap box of a value type    |
+| `*T` / `*mut T` | `T *`  | raw pointer                        |
+| `chan[T]`  | `sl_chan *` | bounded thread-safe queue (see Concurrency) |
+| `join[T]`  | `sl_join *` | handle for a spawned task's result          |
+| `mutex`    | `sl_mutex *` | task-parking lock (see Concurrency)        |
+| `fn(A)->R` | `R (*)(A)`  | function value (see Function values)       |
+
+#### Numeric conversion rules
+
+- **Implicit widening** within the integer family: a narrower int may be
+  used wherever a strictly wider one is expected (`i32` -> `i64`,
+  `u32` -> `u64`, and unsigned into a wider *signed* type). Widening
+  toward floats is also implicit (`i32` -> `float`, `f32` -> `float`).
+- **Narrowing and sign changes require an explicit cast** with `as`:
+  `x as i8`, `n as u32`, `3.9 as i32`. Integer literals that fit the
+  target width may initialize/pass without a cast.
+- **Wrap on cast/overflow**: casts and arithmetic wrap two's-complement
+  style. `(0 as u8) - (1 as u8)` is `255`; `300 as i8` is `44`. Float ->
+  int casts truncate toward zero.
+- Mixed-width arithmetic promotes to the wider operand; same-width
+  signed/unsigned mixes resolve to the unsigned type (C semantics).
+
+#### Parsing numbers from text
+
+`to_int(s)` and `to_float(s)` are the inverse of `to_str`, and they are
+**fallible**, because parsing is:
+
+```slang
+let r = to_int(proc.getenv("PORT") ?? "8080");
+guard let port = r else let e = err_of(r) {
+    log.error("PORT is not a number: " + e);
+    exit(2);
+}
+```
+
+They are strict on purpose. Every one of these is an error, with a
+message saying which:
+
+| input | `to_int` | C's `atoi` would give |
+|---|---|---|
+| `"8080"` | `8080` | 8080 |
+| `"abc"` | err: not a base-10 integer | **0** |
+| `"80x80"` | err: not a base-10 integer | **80** |
+| `""` | err: cannot parse an empty string as int | **0** |
+| `"  12"` | err: not a base-10 integer | 12 |
+| `"9223372036854775808"` | err: out of range for int | undefined |
+
+Surrounding whitespace, `1_000`, `0x10` and trailing characters are all
+rejected. A caller who wants leniency can `strings.trim` first; a caller
+who gets leniency they did not ask for cannot undo it. `to_float`
+likewise rejects `inf` and `nan`, which `strtod` would accept and which
+are almost never what a config value meant.
+
+The error message does not echo the offending input — the caller already
+has it, and building that string would mean another allocation on the
+failure path.
+
+#### Bitwise operations and integer literals
+
+Binary protocols are most of network programming, so the bit operators
+are first-class: `&` `|` `^` `~` `<<` `>>`, on any integer type.
+
+```slang
+// an HTTP/2 frame header, straight off the wire
+let flen  = (b[0] << 16) | (b[1] << 8) | b[2];
+let ftype = b[3];
+let flags = b[4];
+let sid   = ((b[5] & 0x7f) << 24) | (b[6] << 16) | (b[7] << 8) | b[8];
+
+if flags & 0x01 != 0 { /* END_STREAM */ }
+```
+
+Integer literals come in decimal, hex (`0xff`, `0xFF`) and binary
+(`0b1010`), and `_` may be used anywhere as a digit separator:
+`1_000_000`, `0xff_ff`, `0b1010_1010`.
+
+A literal too large for `i64` **is a `u64`**, not an overflowing `int`:
+`let mask = 18446744073709551615;` gives a `u64` holding that exact
+value, and `let x: int = 18446744073709551615;` is a compile error
+rather than a surprise. Anything past `u64` is rejected at the point of
+writing — `integer literal does not fit in 64 bits`. (Before this,
+decimal literals ran through `strtoll`, which saturates: those two
+literals and `99999999999999999999999` all silently became
+`9223372036854775807`.)
+
+**Precedence follows C exactly**, so an expression lifted from an RFC or
+a C reference implementation means the same thing here:
+
+```
+||  <  &&  <  |  <  ^  <  &  <  == !=  <  < <= > >=  <  << >>  <  + -  <  * / %  <  unary
+```
+
+Three things differ from C, all deliberately:
+
+- **`&` is never ambiguous.** Infix `&` is bitwise AND; the borrow forms
+  `&x` / `&mut x` are prefix-only, so the parser can always tell them apart.
+- **C's `x & 1 == 1` footgun is a compile error.** C parses that as
+  `x & (1 == 1)` and accepts it because `bool` is an `int`; slang rejects
+  it with "'&' requires integer operands (got int and bool)". Parenthesize
+  what you meant.
+- **An out-of-range shift count panics** instead of being undefined
+  behaviour. `x << n` where `n` is negative or at least the width of `x`
+  reports `shift count out of range at pkg.func:line`, the same way
+  division by zero and an out-of-bounds index do — this matters when the
+  count came off the network. When the count is a constant already in
+  range (`b[0] << 16`, the normal case) the check is compiled out
+  entirely, so protocol code pays nothing for it.
+
+**Compound assignment** exists for every one of these: `+= -= *= /= %=`
+and `&= |= ^= <<= >>=`. `x op= v` means `x = x op v`, which evaluates the
+target twice, so a side-effecting **index** is hoisted into a temporary
+first and runs exactly once — `xs[pop(q)] += 1` pops once, not twice.
+Only the value being indexed has to be re-nameable: `f()[0] += 1` is a
+compile error, since naming `f()` twice would call it twice, and hoisting
+it would mutate a copy for a value-type struct. Write that one out.
+
+`>>` follows the operand's signedness: arithmetic (sign-preserving) on a
+signed type, logical (zero-filling) on an unsigned one, exactly as in C.
+`&` `|` `^` promote to the wider operand; a shift keeps the width of the
+value being shifted, so `x << n` never silently widens a narrow `x`
+because `n` happens to be an `int`.
+
+#### bytes
+
+```slang
+let b = b"raw\x00bytes";   // binary-safe literal; \0 \xHH escapes
+println(len(b));           // byte count, not strlen
+println(b[0]);             // indexing yields an int (0..255)
+b[0] = 65;                 // mutable in place
+let head = b[..2];         // slicing: b[a..b], b[..n], b[n..], b[..]
+let both = b"ab" + b"cd";  // concatenation
+if b == other { ... }      // content equality via ==
+for byte in b { ... }      // iterate byte values
+```
+
+`bytes` values carry an explicit length and may contain NULs — safe for
+network buffers and binary formats.
+
+#### Lists `[T]`
+
+```slang
+let xs = [10, 20, 30];         // inferred [int]
+let empty: [str] = [];         // empty lists need an annotation
+push(xs, 40);                  // grow (amortized O(1))
+println(pop(xs));              // shrink from the end
+xs[0] = 5;                     // bounds-checked index assignment
+for x in xs { println(x); }    // iteration
+let ys = xs[0..2] + xs[1..];   // slicing + concatenation
+let grid = [[1, 2], [3, 4]];   // nested lists
+```
+
+Indexing is bounds-checked at runtime; violations abort with a clear
+message.
+
+#### Maps `map[K]V`
+
+```slang
+let scores: map[str]int = {"alice": 90, "bob": 85};
+scores["carol"] = 78;          // insert or overwrite
+println(scores["alice"]);      // lookup (missing key = runtime error)
+println(len(scores));          // entry count
+if has(scores, "dave") { ... } // membership test (no error)
+del(scores, "bob");            // removal
+
+let empty: map[int]str = {};   // empty maps need an annotation
+for k, v in scores {           // iteration in insertion order
+    println(k + ": " + to_str(v));
+}
+```
+
+Keys may be any integer type, `str`, or `bool`; values may be any type,
+including structs and lists. Backed by an open-addressing hash table
+(FNV-1a) that keeps entries in insertion order and grows automatically
+at 75% load.
+
+#### Structs
+
+```slang
+struct Point {
+    x: int,
+    y: int,
+}
+
+impl Point {
+    fn sum(self: Point) -> int {
+        return self.x + self.y;
+    }
+
+    fn moved(self: Point, dx: int, dy: int) -> Point {
+        return Point { x: self.x + dx, y: self.y + dy };
+    }
+}
+
+let p = Point { x: 3, y: 4 };
+println(p.sum());        // method call; self passed implicitly
+p.x = 10;                // field mutation
+let q = p.moved(1, 2);   // methods can build and return structs
+
+struct Rect {
+    tl: Point,
+    br: Point,
+}
+let r = Rect { tl: Point { x: 0, y: 0 }, br: Point { x: 4, y: 5 } };
+println(r.tl.y);         // nested field chains
+r.br.x = 6;
+
+let pts: [Point] = [p, q];  // structs compose with lists & maps
+push(pts, r.tl);
+```
+
+Struct literals must supply every field exactly once, with types
+checked. Methods live in top-level `impl Name { ... }` blocks; mark a
+method `pub fn` to export it to importing packages. Structs are
+values: assignment copies, including any `str` / list / map /
+`opt` / `result` / `gc struct` fields (shallow — the heap objects
+are shared). Use `gc struct` when the record itself should be a
+shared heap object.
+`own T` is uniquely owned: assignment and passing **move**, and
+use-after-move is a compile error. A moved binding can be reinitialized.
+`own` is freed when its binding goes out of scope unless it was moved.
+
+#### Option / Result
+
+```slang
+fn div10(n: int) -> opt[int] {
+    if n % 10 == 0 { return some(n / 10); }
+    return none;
+}
+
+fn parse_small(s: str) -> result[i32, str] {
+    if s == "big" { return err("value too large"); }
+    return ok(7);
+}
+
+// guard let unwraps the happy path and binds it for the rest of the
+// block; the else branch must exit (return, or exit()) since the
+// bound name has no value to fall back to. `else let e = err_of(r)`
+// binds the error value for `result[T, E]` so failures stay visible.
+fn safe_div(n: int) -> int {
+    guard let v = div10(n) else {
+        return -1;
+    }
+    return v;
+}
+
+fn load_config(path: str) -> str {
+    let r: result[str, str] = read_file(path);
+    guard let body = r else let e = err_of(r) {
+        log.warn("config load failed: " + e);
+        return "";
+    }
+    return body;
+}
+
+// ?? recovers from none / err with a fallback value
+println(div10(41) ?? -1);              // -1 (none)
+println(parse_small("big") ?? -1);     // -1 (err)
+
+// `fault` is the closed 5-kind network/runtime failure enum:
+// fault_timeout / fault_reset / fault_closed / fault_io / fault_refused.
+// `==` and `fault_kind` only see the kind. `fault_op` and `fault_code`
+// carry context: the op name ("recv", "connect", "dial", ...) and the
+// errno value (0 when none applies). `to_str` / `+` / `println` render
+// the full "op detail (code N)" form, so failures stay debuggable.
+let f = fault_io();
+println(fault_kind(f));                // 4
+println(fault_op(f));                  // "" (hand-built, no op)
+println(fault_code(f));                // 0
+
+// bare 'none' / 'err(...)' need an annotated binding to infer their
+// other type parameter
+let nothing: opt[str] = none;
+let bad: result[str, str] = err("boom");
+```
+
+Panics (out-of-bounds index, division by zero, `err_of` on ok, missing
+map key) carry `pkg.func:line`: `list index out of bounds at
+main.foo:12`. A panicking `spawn`ed task reports through stderr and its
+`join_wait` surfaces the same string as `err`, so failures stay visible
+across task boundaries.
+
+`opt[T]` and `result[T, E]` are monomorphized per distinct type
+argument (one C struct per instantiation actually used). Constructing
+`none`/`err(...)` without enough context to infer the missing type
+parameter is a compile error.
+
+#### Error model: `opt` vs `result` vs `fault`
+
+- `opt[T]` — the value may legitimately be absent (`none`). Lookup
+  misses, optional config, end of a drained channel. Absence is not
+  failure; `??` supplies the default.
+- `result[T, E]` — the operation can fail with a *descriptive* error
+  (`err(e)`). Parsing, validation, anything where the caller needs to
+  know *why*. `E` is usually `str`; `guard let x = r else let e =
+  err_of(r)` keeps the reason visible.
+- `fault` — the operation hit the *environment*: timeout, reset,
+  closed connection, refused dial, IO error. A closed 5-kind enum
+  (`fault_timeout` / `fault_reset` / `fault_closed` / `fault_io` /
+  `fault_refused`), comparable with `==` and convertible with
+  `to_str` / `+`. Use it when the failure is about the world, not
+  the data.
+
+Rule of thumb: absent data is `opt`, bad data is `result[_, str]`,
+bad world is `result[_, fault]`. Never collapse a descriptive `str`
+error into a bare `fault_io()` at a boundary — that is where
+debuggability goes to die (see `http.read` below).
+
+## Numeric conversion rules
+
+- **Implicit widening** within the integer family: a narrower int may be
+  used wherever a strictly wider one is expected (`i32` -> `i64`,
+  `u32` -> `u64`, and unsigned into a wider *signed* type). Widening
+  toward floats is also implicit (`i32` -> `float`, `f32` -> `float`).
+- **Narrowing and sign changes require an explicit cast** with `as`:
+  `x as i8`, `n as u32`, `3.9 as i32`. Integer literals that fit the
+  target width may initialize/pass without a cast.
+- **Wrap on cast/overflow**: casts and arithmetic wrap two's-complement
+  style. `(0 as u8) - (1 as u8)` is `255`; `300 as i8` is `44`. Float ->
+  int casts truncate toward zero.
+- Mixed-width arithmetic promotes to the wider operand; same-width
+  signed/unsigned mixes resolve to the unsigned type (C semantics).
+
+## Bitwise operations and integer literals
+
+Binary protocols are most of network programming, so the bit operators
+are first-class: `&` `|` `^` `~` `<<` `>>`, on any integer type.
+
+```slang
+// an HTTP/2 frame header, straight off the wire
+let flen  = (b[0] << 16) | (b[1] << 8) | b[2];
+let ftype = b[3];
+let flags = b[4];
+let sid   = ((b[5] & 0x7f) << 24) | (b[6] << 16) | (b[7] << 8) | b[8];
+
+if flags & 0x01 != 0 { /* END_STREAM */ }
+```
+
+Integer literals come in decimal, hex (`0xff`, `0xFF`) and binary
+(`0b1010`), and `_` may be used anywhere as a digit separator:
+`1_000_000`, `0xff_ff`, `0b1010_1010`.
+
+A literal too large for `i64` **is a `u64`**, not an overflowing `int`:
+`let mask = 18446744073709551615;` gives a `u64` holding that exact
+value, and `let x: int = 18446744073709551615;` is a compile error
+rather than a surprise. Anything past `u64` is rejected at the point of
+writing — `integer literal does not fit in 64 bits`. (Before this,
+decimal literals ran through `strtoll`, which saturates: those two
+literals and `99999999999999999999999` all silently became
+`9223372036854775807`.)
+
+**Precedence follows C exactly**, so an expression lifted from an RFC or
+a C reference implementation means the same thing here:
+
+```
+||  <  &&  <  |  <  ^  <  &  <  == !=  <  < <= > >=  <  << >>  <  + -  <  * / %  <  unary
+```
+
+Three things differ from C, all deliberately:
+
+- **`&` is never ambiguous.** Infix `&` is bitwise AND; the borrow forms
+  `&x` / `&mut x` are prefix-only, so the parser can always tell them apart.
+- **C's `x & 1 == 1` footgun is a compile error.** C parses that as
+  `x & (1 == 1)` and accepts it because `bool` is an `int`; slang rejects
+  it with "'&' requires integer operands (got int and bool)". Parenthesize
+  what you meant.
+- **An out-of-range shift count panics** instead of being undefined
+  behaviour. `x << n` where `n` is negative or at least the width of `x`
+  reports `shift count out of range at pkg.func:line`, the same way
+  division by zero and an out-of-bounds index do — this matters when the
+  count came off the network. When the count is a constant already in
+  range (`b[0] << 16`, the normal case) the check is compiled out
+  entirely, so protocol code pays nothing for it.
+
+**Compound assignment** exists for every one of these: `+= -= *= /= %=`
+and `&= |= ^= <<= >>=`. `x op= v` means `x = x op v`, which evaluates the
+target twice, so a side-effecting **index** is hoisted into a temporary
+first and runs exactly once — `xs[pop(q)] += 1` pops once, not twice.
+Only the value being indexed has to be re-nameable: `f()[0] += 1` is a
+compile error, since naming `f()` twice would call it twice, and hoisting
+it would mutate a copy for a value-type struct. Write that one out.
+
+`>>` follows the operand's signedness: arithmetic (sign-preserving) on a
+signed type, logical (zero-filling) on an unsigned one, exactly as in C.
+`&` `|` `^` promote to the wider operand; a shift keeps the width of the
+value being shifted, so `x << n` never silently widens a narrow `x`
+because `n` happens to be an `int`.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# Data types
+
+# Data types
+
+> bytes, lists, maps and structs.
+
+## bytes
+
+```slang
+let b = b"raw\x00bytes";   // binary-safe literal; \0 \xHH escapes
+println(len(b));           // byte count, not strlen
+println(b[0]);             // indexing yields an int (0..255)
+b[0] = 65;                 // mutable in place
+let head = b[..2];         // slicing: b[a..b], b[..n], b[n..], b[..]
+let both = b"ab" + b"cd";  // concatenation
+if b == other { ... }      // content equality via ==
+for byte in b { ... }      // iterate byte values
+```
+
+`bytes` values carry an explicit length and may contain NULs — safe for
+network buffers and binary formats.
+
+## Lists [T]
+
+```slang
+let xs = [10, 20, 30];         // inferred [int]
+let empty: [str] = [];         // empty lists need an annotation
+push(xs, 40);                  // grow (amortized O(1))
+println(pop(xs));              // shrink from the end
+xs[0] = 5;                     // bounds-checked index assignment
+for x in xs { println(x); }    // iteration
+let ys = xs[0..2] + xs[1..];   // slicing + concatenation
+let grid = [[1, 2], [3, 4]];   // nested lists
+```
+
+Indexing is bounds-checked at runtime; violations abort with a clear
+message.
+
+## Maps map[K]V
+
+```slang
+let scores: map[str]int = {"alice": 90, "bob": 85};
+scores["carol"] = 78;          // insert or overwrite
+println(scores["alice"]);      // lookup (missing key = runtime error)
+println(len(scores));          // entry count
+if has(scores, "dave") { ... } // membership test (no error)
+del(scores, "bob");            // removal
+
+let empty: map[int]str = {};   // empty maps need an annotation
+for k, v in scores {           // iteration in insertion order
+    println(k + ": " + to_str(v));
+}
+```
+
+Keys may be any integer type, `str`, or `bool`; values may be any type,
+including structs and lists. Backed by an open-addressing hash table
+(FNV-1a) that keeps entries in insertion order and grows automatically
+at 75% load.
+
+## Structs
+
+```slang
+struct Point {
+    x: int,
+    y: int,
+}
+
+impl Point {
+    fn sum(self: Point) -> int {
+        return self.x + self.y;
+    }
+
+    fn moved(self: Point, dx: int, dy: int) -> Point {
+        return Point { x: self.x + dx, y: self.y + dy };
+    }
+}
+
+let p = Point { x: 3, y: 4 };
+println(p.sum());        // method call; self passed implicitly
+p.x = 10;                // field mutation
+let q = p.moved(1, 2);   // methods can build and return structs
+
+struct Rect {
+    tl: Point,
+    br: Point,
+}
+let r = Rect { tl: Point { x: 0, y: 0 }, br: Point { x: 4, y: 5 } };
+println(r.tl.y);         // nested field chains
+r.br.x = 6;
+
+let pts: [Point] = [p, q];  // structs compose with lists & maps
+push(pts, r.tl);
+```
+
+Struct literals must supply every field exactly once, with types
+checked. Methods live in top-level `impl Name { ... }` blocks; mark a
+method `pub fn` to export it to importing packages. Structs are
+values: assignment copies, including any `str` / list / map /
+`opt` / `result` / `gc struct` fields (shallow — the heap objects
+are shared). Use `gc struct` when the record itself should be a
+shared heap object.
+`own T` is uniquely owned: assignment and passing **move**, and
+use-after-move is a compile error. A moved binding can be reinitialized.
+`own` is freed when its binding goes out of scope unless it was moved.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# Errors
+
+# Errors
+
+> opt, result and fault -- and the rule for choosing.
+
+## Option / Result
+
+```slang
+fn div10(n: int) -> opt[int] {
+    if n % 10 == 0 { return some(n / 10); }
+    return none;
+}
+
+fn parse_small(s: str) -> result[i32, str] {
+    if s == "big" { return err("value too large"); }
+    return ok(7);
+}
+
+// guard let unwraps the happy path and binds it for the rest of the
+// block; the else branch must exit (return, or exit()) since the
+// bound name has no value to fall back to. `else let e = err_of(r)`
+// binds the error value for `result[T, E]` so failures stay visible.
+fn safe_div(n: int) -> int {
+    guard let v = div10(n) else {
+        return -1;
+    }
+    return v;
+}
+
+fn load_config(path: str) -> str {
+    let r: result[str, str] = read_file(path);
+    guard let body = r else let e = err_of(r) {
+        log.warn("config load failed: " + e);
+        return "";
+    }
+    return body;
+}
+
+// ?? recovers from none / err with a fallback value
+println(div10(41) ?? -1);              // -1 (none)
+println(parse_small("big") ?? -1);     // -1 (err)
+
+// `fault` is the closed 5-kind network/runtime failure enum:
+// fault_timeout / fault_reset / fault_closed / fault_io / fault_refused.
+// `==` and `fault_kind` only see the kind. `fault_op` and `fault_code`
+// carry context: the op name ("recv", "connect", "dial", ...) and the
+// errno value (0 when none applies). `to_str` / `+` / `println` render
+// the full "op detail (code N)" form, so failures stay debuggable.
+let f = fault_io();
+println(fault_kind(f));                // 4
+println(fault_op(f));                  // "" (hand-built, no op)
+println(fault_code(f));                // 0
+
+// bare 'none' / 'err(...)' need an annotated binding to infer their
+// other type parameter
+let nothing: opt[str] = none;
+let bad: result[str, str] = err("boom");
+```
+
+Panics (out-of-bounds index, division by zero, `err_of` on ok, missing
+map key) carry `pkg.func:line`: `list index out of bounds at
+main.foo:12`. A panicking `spawn`ed task reports through stderr and its
+`join_wait` surfaces the same string as `err`, so failures stay visible
+across task boundaries.
+
+`opt[T]` and `result[T, E]` are monomorphized per distinct type
+argument (one C struct per instantiation actually used). Constructing
+`none`/`err(...)` without enough context to infer the missing type
+parameter is a compile error.
+
+## Error model: opt vs result vs fault
+
+- `opt[T]` — the value may legitimately be absent (`none`). Lookup
+  misses, optional config, end of a drained channel. Absence is not
+  failure; `??` supplies the default.
+- `result[T, E]` — the operation can fail with a *descriptive* error
+  (`err(e)`). Parsing, validation, anything where the caller needs to
+  know *why*. `E` is usually `str`; `guard let x = r else let e =
+  err_of(r)` keeps the reason visible.
+- `fault` — the operation hit the *environment*: timeout, reset,
+  closed connection, refused dial, IO error. A closed 5-kind enum
+  (`fault_timeout` / `fault_reset` / `fault_closed` / `fault_io` /
+  `fault_refused`), comparable with `==` and convertible with
+  `to_str` / `+`. Use it when the failure is about the world, not
+  the data.
+
+Rule of thumb: absent data is `opt`, bad data is `result[_, str]`,
+bad world is `result[_, fault]`. Never collapse a descriptive `str`
+error into a bare `fault_io()` at a boundary — that is where
+debuggability goes to die (see `http.read` below).
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# Function values
+
+# Function values
+
+> Functions as values, deliberately without closures.
+
+## Function values
+
+A `fn` type holds a function. `fn(A, B) -> R` for one that returns a
+value, `fn(A)` for one that returns nothing:
+
+```slang
+fn double(x: int) -> int { return x * 2; }
+fn triple(x: int) -> int { return x * 3; }
+
+let f: fn(int) -> int = double;   // annotated
+let g = triple;                   // or inferred from the function
+println(f(21));                   // 42
+```
+
+They work as parameters, return values, struct fields, list and map
+elements — which is what makes a dispatch table possible instead of a
+chain of string comparisons (`demo/samplex/server.sl` routes this way):
+
+```slang
+gc struct Route {
+    method: str,
+    path: str,
+    handler: fn(State, http.Request, int) -> http.Response,
+}
+
+let routes: [Route] = [
+    Route { method: "GET",  path: "/api/tasks", handler: list_tasks },
+    Route { method: "POST", path: "/api/tasks", handler: create_task }
+];
+
+for i in 0..len(routes) {
+    if routes[i].method == req.method && routes[i].path == req.path {
+        return routes[i].handler(st, req, -1);
+    }
+}
+```
+
+Anything holding a function value is callable directly —
+`routes[i].handler(...)`, `by_name["parse"](...)`, `pick(true)(4)`.
+
+**These are not closures, and that is the point.** A function value
+always names a top-level function; nothing is captured. There is no
+environment to allocate, trace, or reason about, so a `fn` value is
+exactly a C function pointer — it names code, never the heap, and the
+collector ignores it entirely. Anything a handler needs is passed to
+it, which is the same rule `spawn` already follows.
+
+Two consequences worth knowing:
+
+- **Methods cannot be used as function values.** A method takes a
+  receiver the type does not name, so `fn(Counter) -> int` would be a
+  lie about its arity. Wrap it in a plain function.
+- **A binding shadows a function of the same name.** `let scale = ...`
+  in scope means `scale` refers to the binding, never to `fn scale`.
+
+`spawn` takes a function value too — `spawn handlers[i](job);` — see
+Concurrency below.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# Concurrency
+
+# Concurrency
+
+> M:N green threads, channels, select and mutex.
+
+## Concurrency
+
+`spawn` submits a function as an `sl_task` on the M:N worker pool
+(sized `ncpu`); `chan[T]` is a bounded, park-aware queue.
+Blocking-looking code stays blocking-looking — `net.accept`,
+`net.recv`, `time.sleep`, and `chan_send`/`chan_recv` park the task
+and return the OS thread to the pool. There is no colored-function
+split. TLS handshake and I/O park on the same reactor as TCP
+  (`SSL_ERROR_WANT_READ`/`WANT_WRITE`). DNS (`getaddrinfo`) runs on
+  a dedicated thread; the dialing task parks until it finishes.
+
+```slang
+fn worker(id: i32, results: chan[i32]) {
+    chan_send(results, (id * 10) as i32);
+}
+
+let results: chan[i32] = make_chan(3);
+spawn worker(1, results);
+spawn worker(2, results);
+spawn worker(3, results);
+
+let mut_sum = 0;
+for i in 0..3 {
+    let v = chan_recv(results);       // blocks until a value or close
+    guard let x = v else {
+        println("channel closed early");
+        exit(1);
+    }
+    mut_sum = mut_sum + x;
+}
+println(mut_sum); // 60
+
+chan_close(results);
+chan_recv(results) ?? -1;  // none after close+drain -> -1
+```
+
+- **`spawn f(args...);`** evaluates every argument in the spawning
+  context (no closures — nothing is captured implicitly) and submits
+  `f` as a growable-stack task on the striped run queues (16 hashed
+  stripes with work-stealing, plus a global doorbell for sleepers).
+  `f` may be a plain top-level function, an `extern fn`, or a
+  **function value** (`spawn w(1, out);`, `spawn job.run(x);`) — not a
+  method and not a builtin. There is no `spawn` on `net.*`/`time.*`
+  calls directly; wrap the native call in a plain function and spawn
+  that instead.
+  As a statement, the result is discarded. As an expression,
+  `let h = spawn f(...)` has type `join[T]` when `f` returns `T`.
+  `join_wait(h) -> result[T, str]` parks until `f` finishes; a panic
+  in that task is `err`, not process death.
+- **`chan[T]`**, built with `make_chan(capacity)` (element type
+  inferred from an annotated binding, same as `none`): `chan_send(ch,
+  v)` blocks while full, `chan_recv(ch) -> opt[T]` blocks while empty
+  and returns `none` once the channel is closed and drained (instead
+  of inventing a second return-value convention, it reuses `opt[T]`),
+  `chan_close(ch)` wakes every blocked sender/receiver. Sending on a
+  closed channel is a checked runtime error, not undefined behavior.
+- **`select`** waits on several channels at once and runs the arm that
+  becomes ready first:
+
+  ```slang
+  while running {
+      select {
+          case let job = chan_recv(work) {
+              handle(job ?? 0);
+          }
+          case let q = chan_recv(quit) {
+              running = false;
+          }
+          default {
+              // optional: runs when no arm is ready, instead of blocking
+          }
+      }
+  }
+  ```
+
+  A `case let v = chan_recv(ch)` arm binds `v` to `opt[T]` for that
+  arm's body, exactly as a plain `chan_recv` would — `none` means the
+  channel is closed and drained. A `case chan_send(ch, v)` arm is ready
+  when the channel has buffer space and binds nothing. Sending on a
+  closed channel from a send arm is the same checked runtime error as
+  `chan_send` itself.
+
+  Every arm's channel expression (and a send arm's value) is evaluated
+  **once**, before the select blocks. With no `default` and nothing ever
+  ready, `select` parks forever — the same as `chan_recv` on a channel
+  nobody sends to. Which arm wins when several are ready is not
+  specified: polling starts at a rotating offset, so a busy first
+  channel cannot starve the later arms.
+
+  **A closed channel is permanently ready.** Its recv arm fires
+  immediately and forever, with `none`. This is the same as Go, but Go
+  lets you disable an arm by setting its channel to `nil` and slang has
+  no nil channel — so a loop that keeps selecting on a closed channel
+  will spin. Structure the loop to stop instead (count the items you
+  expect, or take the close as the exit condition), as
+  `tests/select/main.sl` does.
+
+- **`mutex`**, built with `make_mutex()`: `mutex_lock(m)` /
+  `mutex_unlock(m)` around whatever the lock protects, and
+  `mutex_trylock(m) -> bool` when you would rather do something else
+  than wait. A contended lock parks the *task*, not the worker thread,
+  so a handler waiting its turn costs a queue slot rather than one of
+  the pool's OS threads — the same reason `chan` parks. A `mutex` is a
+  handle: copying the binding aliases the same lock.
+
+  Two things are checked rather than left to chance, because both
+  otherwise present as something other than what they are:
+
+  - Locking a mutex this task already holds is a runtime error.
+    slang's mutexes are **not** recursive, and without the check the
+    task would park forever on itself — a hang is the least useful
+    diagnosis available.
+  - Unlocking a mutex this task does not hold is a runtime error. The
+    alternative is corruption in whatever the lock was protecting,
+    discovered much later and somewhere else.
+
+  There is no scope guard (no `defer`, no closures), so an early
+  `return` between lock and unlock leaks the lock. Keep the critical
+  section small enough to see both ends of it at once:
+
+  ```slang
+  gc struct State { tasks: [Task], next_id: int, lock: mutex }
+
+  fn create(st: State, title: str) -> Task {
+      mutex_lock(st.lock);
+      let t = Task { id: st.next_id, title: title, done: false };
+      st.next_id = st.next_id + 1;
+      push(st.tasks, t);
+      mutex_unlock(st.lock);
+      return t;                 // unlock BEFORE the return, every path
+  }
+  ```
+
+  A mutex is not always the right tool. `demo/samplex/server.sl` uses
+  one because many handlers touch one list. `stdlib/http2/conn.sl`
+  deliberately does not: its single writer task also guarantees that a
+  HEADERS block and its CONTINUATION frames are never split by another
+  frame, which a lock would not give.
+- **Failure isolation**: a runtime error (an out-of-bounds index, a
+  missing map key, integer division by zero, ...) inside a spawned
+  task ends *that task* — printed to stderr as `task panicked: ...` —
+  not the whole process. The same error in the main task still ends
+  the process, same as today; there is no isolation boundary around
+  top-level code. `exit(code)` always ends the whole process
+  regardless of which task calls it — it means what it always means.
+
+**What this does not give you.** There is no ownership/borrow checker
+here — slang's answer to "many tasks, no data races" is thread
+isolation plus channels for the values that need to move between
+tasks, not a type system that forbids sharing mutable state. Passing
+a struct, list, or map into a spawned task and mutating it from more
+than one task concurrently is exactly as unsafe as it is in Go or
+Java: nothing currently stops you, so don't — `mutex` is there when
+you need it. `join_wait` waits for one spawned task.
+`proc.active_tasks()` (see the `proc` section) is the aggregate count
+of everything currently in flight,
+useful for draining on shutdown but not for waiting on one task in
+particular.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# Packages
+
+# Packages
+
+> The standard library, and how imports resolve.
+
+## Standard packages
+
+`time`, `net`, `json`, `proc`, `fs`, `log`, `crypto`, `sql`, `regex`,
+`os` and `strings` are compiler-provided native packages — no source files, just
+`import "time";` / `import "net";` / `import "json";` / `import "proc";`
+/ `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
+/ `import "regex";` like any other package.
+
+`http`, `http2` and `byteutil` are slang-source stdlib packages under `stdlib/`.
+`import "http"` / `import "byteutil"` resolve to a local directory first,
+then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
+compiler's `SLANG_STDLIB_DIR`).
+
+#### `time`
+
+```slang
+import "time";
+
+let t0 = time.mono();     // monotonic clock; a `duration` (int64 ns)
+time.sleep(20000000);     // sleep for a duration (ns)
+let elapsed = time.mono() - t0;   // duration arithmetic
+let deadline = time.mono() + 5000000;  // timeout math for net calls
+
+let wall = time.wall();   // unix epoch time in nanoseconds
+```
+
+#### `net`
+
+TCP listener/dialer built on `bytes` and fixed-width ints; every
+fallible call returns a `result[_, str]` unwrapped with `guard let`.
+
+```slang
+import "net";
+
+let lr: result[i32, str] = net.listen(8080);   // 0 = ephemeral port
+guard let lfd = lr else { exit(1); }
+
+let pr: result[i32, str] = net.port(lfd);      // assigned port number
+
+let ar: result[i32, str] = net.accept(lfd);    // blocks until a peer connects
+guard let cfd = ar else { exit(1); }
+
+net.send(cfd, b"hello");
+let rr: result[bytes, str] = net.recv(cfd, 4096);
+let data: bytes = rr ?? b"";
+
+net.nonblock(cfd);                              // switch to non-blocking mode
+let wr: result[bytes, str] = net.recv(cfd, 16); // "would block" err if idle
+net.close(cfd);
+```
+
+##### Deadlines
+
+`net.recv` and `net.send` wait for as long as the peer takes, which on
+a public listener is indefinitely: a client that connects and then
+neither sends nor reads parks the serving task on the reactor forever,
+holding its stack and its GC roots. That is slowloris, and the defence
+is `recv_until` / `send_until`, which take an `until` — an absolute
+monotonic instant, not a duration:
+
+```slang
+import "net";
+import "time";
+
+let deadline = until_of(time.mono() + 5000000000);   // 5s from now
+let rr = net.recv_until(cfd, 4096, deadline);
+guard let data = rr else let e = err_of(rr) {
+    if e == "timeout" { net.close(cfd); return; }    // peer went quiet
+    log.error("recv: " + e);                         // peer broke
+    return;
+}
+```
+
+`"timeout"` is a reserved error string: it means the deadline passed,
+and it is the only error text these calls invent rather than take from
+the OS. Every other error is `strerror`/OpenSSL text as before.
+
+One asymmetry worth knowing: a `send_until` that times out **has
+already written some bytes**, and `result[i32, str]` has no room to
+report both "timed out" and "wrote this much". A `"timeout"` from
+`send_until` therefore means the stream is at an unknown offset and the
+connection must be closed, not retried. For a framed protocol that is
+the right contract regardless — a half-written frame is unrecoverable.
+
+`net.tls_recv_until` / `net.tls_send_until` are the same thing over
+TLS, with the same reserved string. The `link` API takes an `until` on
+`accept`/`send`/`recv` already.
+
+See `examples/httpd/` for a minimal HTTP server on `link` plus the
+`http` stdlib package.
+
+#### TLS
+
+`net.tls_*` adds a TLS listener/dialer on top of the plain `net`
+primitives above, built on OpenSSL (linked automatically, and only
+when a program actually calls one of these — a plain-TCP `net`
+program stays dependency-free). A `SSL_CTX`-equivalent config is
+created once (`tls_server_ctx` / `tls_client_ctx`) and reused across
+many connections; each connection is a separate `rawptr` handle.
+
+```slang
+import "net";
+
+// server: load a cert + key once, reuse the context for every connection
+let sctx_r: result[rawptr, str] = net.tls_server_ctx("cert.pem", "key.pem");
+guard let sctx = sctx_r else { exit(1); }
+
+let lr: result[i32, str] = net.listen(8443);
+guard let lfd = lr else { exit(1); }
+let ar: result[rawptr, str] = net.tls_accept(lfd, sctx);  // TCP accept + handshake
+guard let sconn = ar else { exit(1); }
+net.tls_send(sconn, b"hello");
+net.tls_close(sconn);
+
+// client: verify against a CA file, or "" for the system trust store
+let cctx_r: result[rawptr, str] = net.tls_client_ctx("");
+guard let cctx = cctx_r else { exit(1); }
+let dr: result[rawptr, str] = net.tls_dial("example.com", 443, cctx);
+guard let cconn = dr else { exit(1); }
+let rr: result[bytes, str] = net.tls_recv(cconn, 4096);
+net.tls_close(cconn);
+```
+
+Client verification is strict by default: `tls_client_ctx` enables
+peer verification, and `tls_dial` checks the certificate against
+*both* the CA and the hostname you asked for (`SSL_set1_host` — the
+check that's easy to forget and, if skipped, leaves you with "TLS"
+that validates a certificate chain without checking it belongs to
+the host you're actually talking to). Sending/receiving is blocking,
+same as plain `net` — call these from a `spawn`ed task if you need a
+connection handled without stalling anything else.
+
+**ALPN** (RFC 7301) negotiates the protocol during the handshake, which
+is how HTTP/2 over TLS is selected — there is no in-band upgrade.
+`tls_ctx_alpn(ctx, "h2,http/1.1")` sets the list on a server context (in
+preference order, so the *server* decides) or the offer on a client one,
+and `tls_alpn(conn)` returns what was actually negotiated, or `""` if
+the peer offered nothing that overlapped. The list is comma-separated,
+not the length-prefixed wire form; building that by hand is an easy way
+to produce a subtly broken handshake. A client offering no protocol we
+support completes the handshake without ALPN rather than failing, so it
+simply falls back to HTTP/1.1.
+
+```slang
+net.tls_ctx_alpn(sctx, "h2,http/1.1");
+let conn = ...;                  // after tls_accept
+if net.tls_alpn(conn) == "h2" { serve_h2(conn); } else { serve_h1(conn); }
+```
+
+Mutual TLS: `tls_ctx_require_client(sctx, client_ca)` on the server
+context demands a client certificate chained to that CA
+(`SSL_VERIFY_FAIL_IF_NO_PEER_CERT`). The client presents one with
+`tls_ctx_use_cert(cctx, cert, key)`. Extra server names on one
+listener: `tls_ctx_add_sni(sctx, host, cert, key)` swaps in that
+cert when the ClientHello SNI matches; unmatched names keep the
+default `tls_server_ctx` cert. `require_client` applies to SNI
+certs too, regardless of call order. TLS 1.3 can let `tls_dial`
+return before the server has rejected a missing client certificate;
+the first send or recv then fails.
+
+#### `json`
+
+`json.decode`/`json.encode` (de)serialize `str`/`bytes` against a
+concrete slang type — the target type for `decode` is inferred from
+the binding's annotation, the same mechanism `ok()`/`err()` already
+use to infer `result[T,E]`. There is no dynamic "JSON value" type:
+every decode is checked field-by-field against the struct shape you
+asked for, and a mismatch is a `result` error, not a silent `null` or
+a runtime panic.
+
+```slang
+import "json";
+
+gc struct Address { city: str, zip: str }
+gc struct Person {
+    name: str,
+    age: i32,
+    email: opt[str],      // JSON null / missing key <-> none
+    tags: [str],
+    addr: Address,         // structs nest
+}
+
+let p = Person{ name: "Ada", age: 36, email: some("ada@example.com"),
+                tags: ["math"], addr: Address{ city: "London", zip: "SW1" } };
+let s: str = json.encode(p);
+
+let r: result[Person, str] = json.decode(s);
+guard let p2 = r else { exit(1); }
+```
+
+Supported: `struct`, `opt[T]`, `[T]`, `map[str, V]` (JSON object keys
+are always strings — a map with any other key type is a compile
+error), every scalar, and `bytes` (RFC 4648 base64 strings on the
+wire). `rawptr`, `chan[T]`, and
+`result[T,E]` can't appear anywhere in a decode/encode target type. A
+missing JSON key defaults an `opt[T]` field to `none`; for any other
+field type it's a decode error. Unknown JSON keys are ignored. Every
+decode error names where it happened, composed through nesting —
+`json.decode` on `{"addr":{"city":5}}` against the `Person` shape
+above fails with `field 'addr': field 'city': expected a string, got
+a number`. Malformed input is a decode error, never a crash — the
+parser caps nesting depth at 512 so adversarial input can't blow the
+C stack.
+
+#### `proc`
+
+Graceful shutdown and environment variables. `proc.shutdown_requested()`
+turns true once the process receives `SIGTERM` or `SIGINT`; a blocked
+`net.accept()`/`net.recv()`/`net.dial()` on the main thread is
+interrupted the instant the signal arrives (an `err` result, not a
+hang), so a listener loop notices without needing `select` or a
+timeout. `proc.active_tasks()` counts currently-running `spawn`ed
+tasks. `proc.wait_idle()` parks until that count is zero, so a
+shutting-down program can drain in-flight work without polling.
+
+```slang
+import "net";
+import "proc";
+import "time";
+
+fn accept_and_serve(lfd: i32) {
+    let ar: result[i32, str] = net.accept(lfd);
+    guard let cfd = ar else { return; } // interrupted, or a real error
+    spawn serve(cfd);
+}
+
+let lr: result[i32, str] = net.listen(8080);
+guard let lfd = lr else { exit(1); }
+
+while !proc.shutdown_requested() {
+    accept_and_serve(lfd);
+}
+
+proc.wait_idle();
+```
+
+`proc.getenv(name)` reads an environment variable, returning
+`opt[str]` (`none` if unset). `proc.args()` is the process argument
+list (`[str]`); `args[0]` is the executable path. `proc.cwd()` is the
+working directory as `result[str, str]`.
+
+#### `fs`
+
+POSIX file I/O on integer fds. `open` is read-only; `create` is
+write/trunc. `read`/`write`/`close` use the fd. `mkdir` creates one
+directory. Every call returns `result[_, str]`. These calls block the
+worker — use them for config and small files, not the accept loop.
+
+```slang
+import "fs";
+
+let cr = fs.create("/tmp/note");
+guard let fd = cr else { exit(1); }
+fs.write(fd, b"hi");
+fs.close(fd);
+
+let or = fs.open("/tmp/note");
+guard let in_fd = or else { exit(1); }
+let rr = fs.read(in_fd, 16);
+guard let data = rr else { exit(1); }
+fs.close(in_fd);
+```
+
+#### `os`
+
+The operating system *around* a program: the environment, the process,
+and everything you can ask or do about a path without opening it. Pure
+libc, so importing `os` adds no link flag.
+
+**The `fs`/`os` boundary**: `fs` owns open file **handles** and their
+contents; `os` owns paths you have not opened. `fs.mkdir` predates that
+split and stays where it is rather than breaking existing programs.
+
+| | |
+|---|---|
+| `os.setenv(k, v)` / `os.unsetenv(k)` | `result[bool, str]` |
+| `os.environ()` | `[str]` of `KEY=VALUE` |
+| `os.pid()` / `os.tmpdir()` | `int` / `str` |
+| `os.hostname()` | `result[str, str]` |
+| `os.exists(p)` / `os.is_dir(p)` / `os.is_file(p)` | `bool` |
+| `os.size(p)` / `os.mtime(p)` | `result[int, str]` |
+| `os.read_dir(p)` | `result[[str], str]` |
+| `os.remove(p)` / `os.rename(a, b)` | `result[bool, str]` |
+
+```slang
+import "os";
+
+// serve a static file, the shape this package exists for
+if !os.is_file(path) {
+    return not_found();
+}
+let sr = os.size(path);
+guard let n = sr else let e = err_of(sr) {
+    log.error("stat " + path + ": " + e);      // "No such file or directory"
+    return server_error();
+}
+```
+
+The three predicates are bare `bool` on purpose. "Does this exist" has
+two useful answers: a missing path and an unreadable parent are both
+"no, you cannot use it", and code branching on the difference is racing
+anyway — the answer can change between the check and the use. The
+accessors return a value that has to come from somewhere, so those
+carry the errno text.
+
+`environ()` is a list rather than a map because an environment may
+legally hold a repeated key, and a map would silently drop one.
+`read_dir` returns entry names without `.` and `..`, since forgetting
+to filter those is how a directory walk becomes an infinite loop.
+`remove` takes files and empty directories alike, so a caller need not
+know which it has.
+
+`proc.getenv`, `proc.args` and `proc.cwd` stay in `proc`; `os` adds
+what `proc` has no answer for rather than duplicating it.
+
+#### `log`
+
+Stderr logging with a timestamp and level. Each function accepts a
+`str` or a `fault` (`to_str`/`+` already convert faults the same way),
+so `err_of` bindings and `fault` values log without manual conversion.
+
+```slang
+import "log";
+
+log.debug("cache miss for key foo");
+log.info("listening on :8080");
+log.warn("retrying dial after timeout");
+log.error("could not load config: " + e);
+log.warn(fault_timeout());
+```
+
+#### `crypto`
+
+SHA-256, HMAC-SHA256, and a CSPRNG over OpenSSL. Hash and HMAC are
+infallible on valid inputs and return `bytes` directly; `rand` can fail
+and returns `result[bytes, str]`.
+
+```slang
+import "crypto";
+
+let h: bytes = crypto.sha256(b"abc");              // 32 bytes
+let m: bytes = crypto.hmac_sha256(key, msg);       // 32 bytes
+let r = crypto.rand(32);
+guard let b = r else let e = err_of(r) {
+    log.error("rand failed: " + e);
+}
+```
+
+#### `sql`
+
+A SQLite driver (linked automatically, only when a program imports
+`sql`). Connections and prepared statements are opaque `rawptr`
+handles, exactly like `net.tls_*`; free them with `sql.close` /
+`sql.finalize`. **Every fallible call returns `result[_, str]` whose
+error is SQLite's own message** — `no such table: users`, `near
+"SELCT": syntax error`, `UNIQUE constraint failed: users.id` — so a
+bad query stays as visible as a bad socket read (`guard let … else
+let e = err_of(r)`), never a silent `null`. The column getters are
+infallible (SQLite coerces types; an out-of-range index is a
+programming error, returning `0` / `""`), so they return bare values.
+
+| Function | Signature |
+|----------|-----------|
+| `sql.open(path)` | `result[rawptr, str]` — `":memory:"` for in-memory |
+| `sql.close(db)` | — |
+| `sql.exec(db, sql)` | `result[int, str]` — runs statement(s), returns rows changed |
+| `sql.last_insert_id(db)` | `int` |
+| `sql.prepare(db, sql)` | `result[rawptr, str]` |
+| `sql.finalize(st)` | — |
+| `sql.reset(st)` | `result[bool, str]` — clears bindings, re-run |
+| `sql.bind_int/bind_float/bind_text/bind_blob(st, idx, v)` | `result[bool, str]` — `idx` is 1-based |
+| `sql.bind_null(st, idx)` | `result[bool, str]` |
+| `sql.step(st)` | `result[bool, str]` — `true` = row ready, `false` = done |
+| `sql.col_count(st)` | `int` |
+| `sql.col_name(st, i)` / `col_text(st, i)` | `str` — `i` is 0-based |
+| `sql.col_int(st, i)` | `int` |
+| `sql.col_float(st, i)` | `float` |
+| `sql.col_blob(st, i)` | `bytes` |
+| `sql.col_is_null(st, i)` | `bool` |
+
+```slang
+import "sql";
+import "log";
+
+let dr = sql.open("app.db");
+guard let db = dr else let e = err_of(dr) {
+    log.error("db open: " + e);
+    exit(1);
+}
+sql.exec(db, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
+
+let pr = sql.prepare(db, "SELECT id, name FROM users WHERE id > ?");
+guard let st = pr else let e = err_of(pr) {
+    log.error("prepare: " + e);          // e.g. "no such table: users"
+    exit(1);
+}
+sql.bind_int(st, 1, 0);
+while true {
+    let sr = sql.step(st);
+    guard let more = sr else let e = err_of(sr) { log.error("step: " + e); break; }
+    if !more { break; }
+    println(to_str(sql.col_int(st, 0)) + " " + sql.col_text(st, 1));
+}
+sql.finalize(st);
+sql.close(db);
+```
+
+SQLite calls block the worker — use them for real work off the accept
+loop (wrap in a `spawn`ed task), the same caveat as `fs`. One
+connection per `rawptr`; there is no pool, no networked backend
+(Postgres/MySQL), and no async stepping.
+
+Query complexity is capped per connection so SQLite's recursion stays
+inside the task stack: at most **50 terms in a compound `SELECT`**
+(`UNION`/`INTERSECT`/`EXCEPT`) and an **expression depth of 400**
+(roughly, terms in one `AND`/`OR` chain). SQLite's stock limits of 500
+and 1000 allow a single legal query to want ~325KB of C stack, which
+would force a task stack far too fat to spawn per connection. Long
+`IN` lists, wide result sets, and recursive CTEs are *not* affected —
+they don't recurse. Exceeding a cap is a normal error through
+`result[_, str]` (`too many terms in compound SELECT`), not a crash.
+
+#### `regex`
+
+Regular expressions on `str` or `bytes`, matched by slang's own
+Thompson NFA — no external library, so a program that matches text
+stays as dependency-free as a plain TCP one. `compile` returns an
+opaque `rawptr` handle (freed with `regex.free`, like `net.tls_*` and
+`sql`), and a bad pattern comes back as a descriptive
+`result[rawptr, str]`.
+
+**Matching is linear time, always.** There is no backtracking, so the
+classic catastrophic pattern `(a+)+$` — which makes a backtracking
+engine take exponential time on a hostile input — runs in the same
+microseconds here as any other pattern. That is the point of choosing
+this engine for a server language: patterns and subjects both arrive
+from the network. The price is the RE2/Go one, and it is not
+negotiable: **no backreferences and no lookaround**. Both require
+backtracking; `(?=...)` and friends are a compile error, not a silent
+mis-parse.
+
+| Function | Signature |
+|----------|-----------|
+| `regex.compile(pat)` | `result[rawptr, str]` |
+| `regex.free(re)` | — |
+| `regex.groups(re)` | `int` — number of capture groups |
+| `regex.is_match(re, s)` | `bool` — `s` is a `str` |
+| `regex.is_match_bytes(re, b)` | `bool` — `b` is `bytes` |
+| `regex.find(re, s)` / `find_bytes(re, b)` | `[int]` |
+| `regex.find_at(re, s, from)` / `find_bytes_at(re, b, from)` | `[int]` |
+
+`find` returns byte offsets as `[start, end, g1start, g1end, ...]`, or
+an **empty list** when there is no match — so the result is GC-owned
+and there is no match handle to leak. `find_at` starts at an offset,
+which is how you walk every match.
+
+```slang
+import "regex";
+
+let cr = regex.compile("(\\d{4})-(\\d{2})-(\\d{2})");
+guard let re = cr else let e = err_of(cr) {
+    log.error("bad pattern: " + e);   // e.g. "missing ) at offset 9"
+    exit(1);
+}
+
+if regex.is_match(re, "due 2026-09-09") {
+    let m = regex.find(re, "due 2026-09-09");
+    println(to_str(m[0]) + ".." + to_str(m[1]));   // whole match: 4..14
+    println(to_str(m[2]) + ".." + to_str(m[3]));   // year:        4..8
+}
+regex.free(re);
+```
+
+Supported: literals, `.`, classes `[a-z]` `[^...]` `[[:digit:]]`,
+escapes `\d \D \w \W \s \S \b \B \A \z \xHH`, quantifiers
+`* + ? {n} {n,} {n,m}` and their lazy `?` forms, groups `(...)` and
+`(?:...)`, alternation `|`, anchors `^ $`. Matching is leftmost-first
+(Perl-style priority), and `.` does not match `\n`.
+
+Subjects are matched with an explicit length, so a `bytes` containing
+NUL matches correctly rather than stopping at the NUL — and `\D`
+matches a NUL byte like any other non-digit.
+
+Bounds, so a hostile pattern can't exhaust memory or stack: 4096
+compiled instructions, 100 nesting levels, 32 capture groups, and
+`{n,m}` counts up to 1000. Each is a descriptive compile error, never
+a crash.
+
+A compiled regex is safe to share across tasks, and is meant to be:
+it carries a small pool of reusable match buffers, so concurrent
+matchers allocate nothing per match. Compiling is the expensive part
+(it is also the only part that grows the task stack) — compile once,
+match many times, ideally not once per request.
+
+**Where this lands on speed.** Measured single-threaded on
+`^(GET|POST|PUT) (/[a-z0-9/_-]*) HTTP/1\.([01])$` against a 26-byte
+subject, 200k iterations:
+
+| engine | matches/sec | on `(a+)+$` vs a hostile input |
+|--------|-------------|-------------------------------|
+| slang `regex` | ~721k | 2µs, correct answer |
+| POSIX `regexec` | ~372k | fast here, but no limits |
+| PCRE2 (interpreted) | ~2.4M | 0.2s, then gives up (`MATCHLIMIT`) |
+| PCRE2 (JIT) | ~8.6M | same — JIT does not save it |
+
+So: ~1.9x faster than libc's POSIX engine, and several times slower
+than PCRE2 on *benign* input — PCRE2's interpreter and especially its
+JIT are very good, and this is an honest gap. The trade is deliberate:
+on adversarial input the ordering inverts completely, because linear
+time is a guarantee here and a hope there. `is_match` is markedly
+cheaper than `find` (it binds no capture slots at all), so prefer it
+when you only need a yes/no. Matching scales with tasks — ~3.2M/sec
+across 16.
+
+Because matching never grows the task stack, regex is cheap to use per
+connection: 600 concurrently-live tasks each matching and then parking
+peak at **3.9MB RSS** — about 17x lighter than the same shape holding
+`sql` connections (65.9MB), which does grow every task's stack.
+
+#### `http2`
+
+HTTP/2 framing and HPACK header compression (RFC 9113, RFC 7541),
+written in slang — the frame codec is what the bitwise operators were
+added for.
+
+```slang
+import "http2";
+
+let f = http2.decode(buf, 0, 16384);        // one frame, bounds-checked
+guard let fr = f else let e = err_of(f) { return; }
+
+let d = http2.decoder_new(4096);            // per-connection HPACK state
+let hr = http2.decode_block(d, fr.payload, 64);
+guard let hs = hr else let e = err_of(hr) { return; }
+for i in 0..len(hs) {
+    println(hs[i].name + ": " + hs[i].value);
+}
+```
+
+Frame layer: `decode` / `encode` / `header_bytes`, the reserved bit
+masked off the stream id as the RFC requires, `strip_padding`, and the
+common control frames (`settings_frame`, `settings_ack`, `ping_ack`,
+`rst_stream`, `goaway`, `window_update`).
+
+HPACK: prefix integers, string literals, the 61-entry static table, a
+dynamic table with the RFC's +32-per-entry accounting and eviction, and
+a **canonical Huffman decoder**. Header blocks decode through
+`decode_block`; `encode_block` builds one.
+
+The encoder is deliberately **stateless** — every field goes out as a
+static-table index or a literal *without* indexing, and nothing is added
+to a dynamic table on the encode side. That is conformant and it removes
+a whole bug class: an encoder's dynamic table must stay in lockstep with
+the peer's decoder table, and any drift silently corrupts every later
+block on the connection.
+
+Bounds against hostile peers: a frame longer than the advertised
+`SETTINGS_MAX_FRAME_SIZE` is refused before allocating, `decode_block`
+takes a `max_headers` cap (a small compressed block can otherwise expand
+without limit), a Dynamic Table Size Update above the agreed maximum is
+rejected, and NUL in a field name or value is the protocol error RFC
+9113 §8.2.1 says it is. Huffman padding must be under 8 bits and all
+ones, and EOS inside a string is refused.
+
+Validated against **nghttp2** — the HPACK implementation curl and the
+browser stacks use — in both directions: blocks it produces decode here,
+and blocks produced here inflate there. Those fixtures are baked into
+`tests/http2` as literals, so the suite needs no nghttp2 to run.
+
+**Connection layer, with concurrent streams.** One task reads frames and
+dispatches each request to its own `spawn`ed handler; every byte leaving
+the connection goes through a single writer task fed by a `chan[bytes]`.
+No mutex is involved, and none is needed: each channel message is a
+complete frame sequence written with one `net.send`, so handlers cannot
+interleave inside a frame, and a HEADERS block plus its CONTINUATIONs
+stays contiguous by construction (RFC 9113 §6.2) rather than by careful
+ordering. Frames for different streams interleave at frame boundaries,
+which is what multiplexing means.
+
+Measured: four 500ms requests multiplexed on one connection complete in
+**0.53s**; served one at a time they would take about 2.0s.
+
+The connection is addressed by a **`Transport`**, not a `link`. `link`
+is move-only, so `spawn writer_task(c)` consumes it and the reader can
+no longer use it — the two-task design is impossible with that type. A
+`Transport` is freely copyable, and one reader plus one writer in
+opposite directions on a socket is safe. `net.recv` also returns
+`bytes` directly, so no byte-at-a-time copy sits on the read path.
+
+A `Transport` is either a plain fd or a TLS handle, and everything above
+it is identical either way:
+
+```slang
+http2.transport_fd(fd)     // h2c: cleartext, prior knowledge
+http2.transport_tls(ssl)   // h2 over TLS, from net.tls_accept
+```
+
+```slang
+fn handle(stream: i32, path: str, wch: chan[http2.WMsg]) {
+    let hs: [http2.Header] = [];
+    // The body goes over UNFRAMED: the writer owns the peer's windows,
+    // so it decides how it is cut into DATA frames and when each may go.
+    chan_send(wch, http2.response_msg(stream as int, "200", hs,
+                                      to_bytes("hello")));
+}
+
+fn serve(fd: i32) {
+    let cn = http2.conn_new();
+    let rd = http2.reader_new();
+    let wch: chan[http2.WMsg] = make_chan(32);
+    let lim = http2.default_limits();
+    spawn http2.writer_task(fd, wch, lim.write);
+
+    guard let _p = http2.accept_preface(rd, fd, wch,
+            until_of(time.mono() + lim.handshake)) else { return; }
+    while true {
+        let rr = http2.read_request(cn, rd, fd, wch, lim);
+        guard let req = rr else let e = err_of(rr) {
+            if http2.is_timeout(e) { /* slow peer; shed it */ }
+            chan_close(wch);
+            return;
+        }
+        spawn handle(req.stream as i32, req.path, wch);
+    }
+}
+```
+
+Verified against real `curl --http2-prior-knowledge`: GET, POST with a
+body, five requests multiplexed on one connection, and a 64KB upload
+that exercises DATA chunking and flow-control `WINDOW_UPDATE`.
+
+##### Deadlines
+
+Every read and every write is bounded, so a peer that connects and then
+dribbles — or one that stops reading our responses — is disconnected
+rather than left holding a task forever. `http2.Limits` carries four
+separate budgets because they defend against four different peers:
+
+| Budget | Covers |
+|---|---|
+| `handshake` | connect → valid client preface |
+| `idle` | no request in flight, waiting for the next frame |
+| `request` | first HEADERS octet → END_STREAM |
+| `write` | one `writer_task` send |
+
+`idle` is deliberately generous (2 minutes by default): an HTTP/2
+connection sitting open with no streams is completely normal, and timing
+it out aggressively breaks correct clients. `request` is the strict one
+and applies to the request **as a whole** — it is never refreshed by
+incoming frames, so dribbling DATA one octet at a time cannot extend it.
+That distinction is the whole defence; a per-read timeout would never
+fire against a slowloris, because every individual read makes progress.
+
+`http2.is_timeout(e)` distinguishes a slow peer from a broken one, so a
+server can answer the first with `GOAWAY` / `E_ENHANCE_YOUR_CALM`.
+`tests/http2_deadline` runs all three attacker shapes — silent,
+idle-after-handshake, and octet-at-a-time dribbling — against a server
+with sub-second budgets and requires all three to be shed.
+
+##### Flow control
+
+DATA is flow-controlled at two levels, per-stream and per-connection
+(RFC 9113 §5.2), and the server may not exceed either. Both windows live
+in the writer task, because they are connection-wide state that the
+**read** side replenishes (`WINDOW_UPDATE` arrives there) and the
+**write** side spends — routing both into one task is what makes the
+accounting correct without a lock.
+
+A handler therefore hands over its body unframed and moves on. If the
+peer's window is too small, the *body* waits in the writer's queue, not
+the handler's task — a peer advertising a tiny window costs a queue
+entry rather than a parked task.
+
+`SETTINGS_INITIAL_WINDOW_SIZE` adjusts every open stream's window by the
+delta rather than resetting it, and does not touch the connection window
+(§6.9.2). A `WINDOW_UPDATE` that would push a window past 2³¹−1 is a
+`FLOW_CONTROL_ERROR` and ends the connection with a `GOAWAY` rather than
+being clamped.
+
+`tests/http2_flow` drives both levels: a client advertising a 100-octet
+stream window against a 5000-octet body, and a client with a large
+stream window against a 100000-octet body where the default 65535
+connection window is what binds. Each phase checks the exact octet the
+server stops at, that it resumes for exactly the credit granted, and
+that the resumed bytes carry the right content for their absolute offset
+in the body.
+
+##### TLS and ALPN
+
+Browsers speak HTTP/2 **only** over TLS, and only when ALPN negotiates
+it — there is no in-band upgrade in a browser. So h2c alone, however
+conformant, cannot serve one.
+
+The server advertises what it can speak, and then checks what was
+actually chosen:
+
+```slang
+net.tls_ctx_alpn(sctx, "h2,http/1.1");     // offer both, h2 preferred
+// ... net.tls_accept(lfd, sctx) -> ssl
+if !http2.alpn_is_h2(net.tls_alpn(ssl)) {
+    // the peer picked http/1.1; serve it as HTTP/1.1 or hang up
+}
+let t = http2.transport_tls(ssl);
+```
+
+Checking is not optional politeness. A server that offers `http/1.1`
+must expect to get it, and feeding an HTTP/1.1 client into the frame
+parser produces `bad connection preface` — true, but a poor explanation
+of what went wrong.
+
+`tests/http2_tls` runs both halves over a real handshake: h2 frames
+across `SSL_read`/`SSL_write`, and an http/1.1-only client being
+declined rather than misparsed.
+
+##### Interop
+
+Checked against **Go's `golang.org/x/net/http2`**, which shares no
+ancestry with nghttp2 (curl's stack, and where the HPACK fixtures came
+from) — agreement between two implementations that share code proves
+less than it appears to. It covers a GET, a 50KB POST, a 200KB response
+verified byte-for-byte against its absolute offset, and six concurrent
+streams on one connection. Run it with `sh tests/http2_interop/run.sh`;
+it skips cleanly without a Go toolchain.
+
+##### Stream floods
+
+The connection layer cannot cap concurrency by itself: it does not spawn
+the handlers, *you* do. (slang has function values now, so handing it a
+callback would compile — but a callback would only move the same
+question inside, and the gate below is the answer either way.) So the
+bound is a **gate** — a token channel you hold.
+`gate_enter` takes a token and blocks when none are left, `gate_leave`
+returns one, and that blocking is the backpressure: the reader stops
+pulling frames while every slot is busy.
+
+Without it, a peer that sends 1000 requests down one connection gets
+1000 concurrent handler tasks — measured, against a
+`SETTINGS_MAX_CONCURRENT_STREAMS` of 100 that we were advertising and
+not keeping. Advertising a limit you do not enforce is worse than
+advertising none, because peers size their behaviour by it.
+
+`gate_drain` also makes shutdown safe. Closing the writer channel while
+handlers are still in flight panics them with *send on closed channel*,
+and draining is what knows when none are left.
+
+**The one rule: `gate_leave` must run on every path out of a handler**,
+error returns included. A lost token permanently shrinks that
+connection's capacity; losing all of them wedges that one connection —
+bounded and visible, not a crash, but not something to leave in.
+
+Separately, `RST_STREAM` is counted. A peer that opens a stream and
+cancels it immediately (CVE-2023-44487, *Rapid Reset*) never looks
+concurrent, so a cap alone never trips; after a burst of 100 free
+cancellations, a peer whose resets outnumber half of what it opened
+ends the connection. Cancelling is legitimate — a browser navigating
+away resets its in-flight streams — so the burst and the ratio are both
+needed to tell a normal client from a flood.
+
+`tests/http2_flood` drives both shapes, resetting and not, and fails if
+either exceeds the cap.
+
+##### Known gaps
+
+`PRIORITY` is validated but not acted on: it is deprecated in RFC 9113
+§5.3.2, so ignoring the prioritisation is conformant, but a malformed
+frame is still rejected as the connection error it is (§6.3) rather than
+waved through to desync the stream. No browser has been run against the
+TLS path yet — the machinery is there and tested against slang's own
+client, but a real browser is different evidence.
+
+#### `strings`
+
+Search, trim, case, split and join on `str`. The package cannot be named
+`str` because that token is the type — the same reason Go calls its own
+`strings`.
+
+```slang
+import "strings";
+
+strings.find("hello world", "world");   // 6, or -1
+strings.rfind("a/b/c", "/");            // 3
+strings.contains("hello", "ell");
+strings.has_prefix("hello", "he");
+strings.has_suffix("hello", "lo");
+strings.count("a,b,c", ",");            // 2
+
+strings.trim("  hi \r\n");              // "hi" (space/tab/CR/LF)
+strings.trim_start(s); strings.trim_end(s);
+strings.to_upper("hi"); strings.to_lower("HI");   // ASCII only
+
+strings.slice("hello", 1, 3);           // "el"
+strings.slice("hello", -3, 5);          // "llo" — negative counts back
+strings.repeat("ab", 3);                // "ababab"
+strings.replace("a,b,c", ",", " | ");
+
+strings.split("a,b,,c", ",");           // ["a", "b", "", "c"]
+strings.join(parts, ",");               // the inverse of split
+```
+
+This is a compiler-provided native package, and it has to be: `str`
+supports `len`, `+` and `==` and nothing else — it cannot be indexed or
+sliced — so none of it could be written in slang without converting to
+`bytes` and back on every call. `byteutil` covers the `bytes` side.
+
+Three behaviours worth knowing:
+
+- **Indices are byte offsets and the case operations are ASCII-only.**
+  `str` is UTF-8 bytes; doing better means shipping a Unicode table and
+  a normalisation policy, which is a different project. Treat these as
+  byte operations, because that is what they are.
+- **`slice` clamps rather than panics.** Slicing is how you narrow a
+  string you just searched, and a `find` that returned -1 on the line
+  above should not turn the next line into a crash. A negative index
+  counts from the end.
+- **`split` and `join` are exact inverses.** Adjacent separators produce
+  empty elements, so the result always has `count(s, sep) + 1` elements
+  and `join(split(s, sep), sep) == s` for any non-empty separator. An
+  empty separator splits into single bytes.
+
+#### `byteutil`
+
+Search, trim, and split on the `bytes` type — no new syntax. The
+package cannot be named `bytes` because that token is the type.
+
+```slang
+import "byteutil";
+
+byteutil.find(b"hello", 0, 108);     // 2, or -1
+byteutil.has_prefix(b"hello", b"he");
+byteutil.has_suffix(b"hello", b"lo");
+byteutil.trim(b"  hi\r\n");          // b"hi" (space/tab/CR/LF)
+byteutil.split(b"a,b", 44);          // [b"a", b"b"]
+```
+
+#### `http`
+
+HTTP/1.1 over `link` / `wire` / `until` / `fault`. Parse a request
+from `bytes`, or `read` from a connection into a caller-sized `wire`
+(the max request size). `read` takes the unconsumed prefix length and
+returns `Incoming` with leftover compacted to the front of the wire,
+so one connection can carry many requests. `write` serializes a
+`Response` through an arena. Headers are stored lowercased;
+`header(req, name)` looks up case-insensitively. `Content-Length` is
+honored; chunked `Transfer-Encoding` is rejected. `wants_close`
+follows HTTP/1.1 keep-alive (and HTTP/1.0 close-by-default).
+
+```slang
+import "http";
+
+fn serve(c: link) {
+    let ra = arena_new(16384);
+    let sa = arena_new(16384);
+    let buf = ra.wire(8192);
+    let filled = 0;
+    while true {
+        let rr = http.read(&mut c, buf, filled, until_never());
+        guard let got = rr else { return; }
+        let wr = http.write(&mut c, http.ok_text(got.req.path), &mut sa,
+                            until_never());
+        guard let _n = wr else { return; }
+        sa.reset();
+        if http.wants_close(got.req) { return; }
+        filled = got.filled;
+    }
+}
+```
+
+See `examples/httpd/` for a listener loop on this package.
+
+This works because every `spawn`ed thread has `SIGTERM`/`SIGINT`
+blocked in its own signal mask from birth (inherited at creation,
+restored in the spawning thread right after) — so the OS can only
+ever pick the main thread to run the handler, which is what lets the
+main thread's blocked `accept()` call reliably observe the
+interruption instead of the signal silently landing on some unrelated
+connection's worker thread mid-request. There's a narrow startup race
+inherent to this: a signal that arrives in the brief window before
+`main()` installs the handler gets the OS's default disposition
+(immediate termination) instead of graceful handling, same as any
+signal-handling program.
+
+## All packages
+
+- [byteutil](packages/byteutil.md) -- source package, 5 public items
+- [crypto](packages/crypto.md) -- compiler-provided, 3 public items
+- [fs](packages/fs.md) -- compiler-provided, 6 public items
+- [http](packages/http.md) -- source package, 19 public items
+- [http2](packages/http2.md) -- source package, 122 public items
+- [json](packages/json.md) -- compiler-provided, 0 public items
+- [log](packages/log.md) -- compiler-provided, 4 public items
+- [net](packages/net.md) -- compiler-provided, 24 public items
+- [os](packages/os.md) -- compiler-provided, 14 public items
+- [proc](packages/proc.md) -- compiler-provided, 6 public items
+- [regex](packages/regex.md) -- compiler-provided, 9 public items
+- [sql](packages/sql.md) -- compiler-provided, 20 public items
+- [strings](packages/strings.md) -- compiler-provided, 16 public items
+- [time](packages/time.md) -- compiler-provided, 3 public items
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# C interop
+
+# C interop
+
+> Calling C, and the safety rules that come with it.
+
+## C interop
+
+slang already transpiles to C and shells out to `cc`, so calling into
+existing C libraries is a thin layer on top of that, not a new
+ecosystem: declare the C function's signature, tell the linker which
+library to pull in, and call it like any other function.
+
+```slang
+link "sqlite3";   // -> '-lsqlite3' on the final cc invocation
+
+extern fn sqlite3_libversion() -> str;
+println(sqlite3_libversion());
+```
+
+- **`extern fn name(params) -> ret;`** declares a C function with no
+  body — it calls the real, unmangled C symbol directly. `int`,
+  `i8..u64`, `f32`, `float`, `bool`, and `str` already share their C
+  representation, so they marshal for free. `bytes` does not
+  auto-decay (it is a boxed struct internally); pass `bytes_ptr(b)`
+  and `len(b)` as two separate `rawptr`/`i32` arguments instead of
+  inventing implicit multi-argument expansion for one type.
+- **`rawptr`** is an opaque foreign pointer (`void *`) for handles a C
+  library owns, like `sqlite3*` or `FILE*`. It can be passed around
+  and compared against **`nullptr`**, nothing else — no arithmetic,
+  no field access, no dereference. A `rawptr` is never GC-owned: if a
+  C library allocated it, free it through another `extern fn`, not by
+  letting it go out of scope.
+- **`link "name";`** is a top-level directive (parsed like `import`)
+  that adds `-lname` to the `cc` invocation. Non-default search paths
+  go through `LIBRARY_PATH`/`CPATH`, which `cc` already honors — no
+  separate slangc flag for that.
+- Only types with an unambiguous C representation may cross an
+  `extern fn` boundary: numeric types, `bool`, `str`, `bytes`,
+  `rawptr`, and `ptr[T]` of those types. GC'd containers (`opt`,
+  `result`, `map`, structs, arrays) are rejected at compile time —
+  their internal layout isn't something arbitrary C code should ever
+  see.
+
+**C++ is out of scope for the compiler itself.** There's no
+name-mangling/ABI support planned. Wrap the C++ library in your own
+`extern "C"` shim (catching every exception at that boundary — an
+uncaught C++ exception unwinding into C is undefined behavior) and
+consume the shim exactly like any other C library above.
+
+**Safety notes:**
+
+- The collector is precise for slang values rooted at safepoints. A
+  slang value whose *only* remaining reference lives in memory the GC
+  cannot scan (possible with some C libraries) can be collected while
+  C still holds it. Keep a live slang-side reference for the duration
+  of any call that retains a pointer beyond that call.
+- Callback function pointers — C calling back into slang — aren't
+  supported yet.
+- **Deep C libraries and the task stack.** A task's stack starts at
+  8KB and grows only at slang checkpoints, which C code has none of.
+  A C function that recurses or holds large locals can therefore run
+  off the end of the stack buffer and corrupt the heap — a silent
+  `abort()` from `malloc`, not a clean crash. The compiler-provided
+  packages that wrap deep libraries grow the stack up front
+  (`sl_rt_need_stack`, used by `net.tls_*` for OpenSSL and by `sql`
+  for SQLite); an `extern fn` into a comparably deep library has no
+  such protection, so keep C-side recursion and stack buffers small.
+
+See `tests/ffi/` for a complete example: a small hand-written C
+fixture library (`lib.c`) built as a static archive, linked and called
+from a slang program exercising `extern fn`, `link`, `rawptr`,
+`bytes_ptr`, and `nullptr`.
+
+## Packages (Go/Odin style)
+
+A **package is a directory**: every `.sl` file inside it is compiled
+together into one shared namespace, as if concatenated. Import paths
+resolve to a directory next to the importer, then a native package,
+then `stdlib/<path>`, then a pin in `slang.project`.
+
+```slang
+import "geometry";   // binds the name "geometry" in this file's scope
+import "a/b/util";   // nested paths bind as "util"
+import "geometry" as geo;   // optional alias; call as geo.area(...)
+
+println(geometry.area(3.0, 4.0));   // qualified access
+println(util.format(x));
+```
+
+**Exports are explicit.** Only declarations marked with `pub` are
+visible to importers; everything else is private to its package:
+
+```slang
+// geometry/shapes.sl
+pub fn area(w: float, h: float) -> float { ... }   // exported
+fn scale(v: float) -> float { ... }                // private
+
+// geometry/consts.sl
+pub let pi = 3.14159;   // exported package constant
+let secret = 42;        // private package global
+```
+
+Rules:
+
+- Accessing a non-`pub` member from outside is a compile error.
+- Within a package, members are used unqualified: `area(1, 2)`.
+- In an imported package, top-level `let` becomes a package global;
+  its initializer must be a constant literal.
+- The entry point is the file you pass to `slangc`; its directory is
+  the main package, and its top-level statements run in order in
+  `main()`. Other files of the main package share its namespace.
+- Duplicate names within a package, duplicate import bindings, and
+  import cycles are all compile errors.
+- Symbols are mangled per package (`sl_<pkg>_<name>`), so different
+  packages can safely use the same names.
+
+See `examples/pkgdemo/` for a complete multi-package project.
+
+External packages are pinned in `slang.project` (walked up from the
+entry file). Imports stay short. `slang.lock` holds content hashes
+and is written by `slangc get`, never by hand.
+
+```
+name myserver
+version 0.1.0
+
+pkg foo git https://github.com/dolphlabs/foo tag v0.1.0
+```
+
+```slang
+import "foo";
+```
+
+`slangc get` clones each `pkg` line into `$SLANG_CACHE/pkg/<name>/<hash>`
+(`~/.cache/slang` if unset). If a fetched package has its own
+`slang.project`, those pins are fetched too and recorded only in
+`slang.lock`. Compile does not hit the network. A missing lock, missing
+cache, or hash mismatch is an error. Same short name at two git/tag
+pairs is an error.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# How it works
+
+# How it works
+
+> The compiler pipeline, the collector, the scheduler.
+
+## How it works
+
+```
+main.sl ──loader──> packages ──lexer/parser──> ASTs ──codegen──> main.gen.c ──cc──> ./main
+```
+
+1. **Loader** (`src/loader.c`) — resolves imports (local directory,
+   native package, stdlib, then `slang.project` pins), scans package directories for `.sl`
+   files (in deterministic sorted order), merges them per package, and
+   detects cycles via canonical paths.
+2. **Lexer** (`src/lexer.c`) — tokenizes source into identifiers,
+   keywords, literals, and operators.
+3. **Parser** (`src/parser.c`) — recursive-descent parser producing an
+   AST (`src/ast.h`).
+4. **Code generator** (`src/codegen/`) — walks the ASTs, performs type
+   inference and semantic checks (including `pub` enforcement), and
+   emits readable C. The runtime in `runtime/` (GC, scheduler, pool,
+   containers, native packages) is real C, spliced into every
+   generated file so the binary stays self-contained. Split by
+   concern: `core.c`, `infer.c`, `expr.c`/`stmt.c`, `program.c`,
+   `liveness.c` (GC safepoint roots), and `native.c` (`NatSig`
+   dispatch). `internal.h` holds the shared `CG` struct.
+
+   Native-package *signatures* live under `src/codegen/pkg_<name>/`.
+   Their C runtimes are `runtime/sl_<name>.c`. `json` uses
+   `dispatch.c` because decode/encode are generic over the target
+   type. Adding a fixed-signature package is a `pkg_<name>/` directory,
+   a `runtime/sl_<name>.c` file, and one line in `loader.c`.
+5. **Driver** (`src/main.c`) — glues it together and shells out to
+   `cc`. Because GCC/Clang compile the generated C, you get their full
+   optimizer for free.
+
+Inspect what slang generates:
+
+```sh
+./slangc examples/hello/main.sl --emit-c && cat main.gen.c
+```
+
+## Memory management
+
+Compiled programs embed a precise mark-sweep collector
+(`runtime/sl_gc.c`). Allocations go through `sl_gc_alloc`. `main()`
+registers the thread, starts the worker pool, and switches into the
+main task. There is no `libgc` dependency.
+
+What this means in practice:
+
+- No manual memory management in slang; no leaks from string churn.
+- Collection is tracing (mark-and-sweep), so reference cycles are
+  collected — unlike refcounting.
+- Cost: stop-the-world pauses. The allocator still serializes on a
+  mutex (batched); that is the current throughput ceiling.
+- Every pool worker is registered with the collector. A collection
+  stops the world, walks safepoint roots, the run queue, parked
+  tasks, and (for async-preempted tasks) a conservative stack scan.
+
+## Project layout
+
+```
+src/
+  common.h       allocation helpers, growable string buffer, file I/O
+  loader.h/.c    package discovery, merging, cycle detection
+  lexer.h/.c     tokenizer
+  ast.h          AST node definitions
+  parser.h/.c    recursive-descent parser
+  rtpath.h/.c    locate runtime/ next to slangc
+  codegen.h      public codegen API (one function: codegen_program)
+  codegen/       type checking + C emission
+  main.c         driver: flags, invokes cc
+runtime/       real C runtime spliced into generated programs
+  sl_core.c sl_gc.c sl_containers.c sl_sched.c sl_pool.c
+  sl_time.c sl_net.c sl_tls.c sl_json.c sl_proc.c sl_fs.c
+stdlib/        slang-source packages (`import "http"`, `import "byteutil"`;
+             `import "log"` is a native package — no source files)
+examples/      one directory per example program
+tests/         language tests plus tests/runtime/ (no slangc)
+Makefile       build/test/clean
+```
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# Limitations
+
+# Limitations
+
+> What slang does not do, stated plainly.
+
+## Known limitations
+
+- Block scoping: a `let` inside `if`/`else`/`while`/`for` is not
+  visible afterwards. Loop bindings (`for i in ...`) are scoped to
+  the loop. Redeclaring a name in the same scope is an error;
+  inner blocks may shadow. `guard let` still binds for the rest of
+  its enclosing block.
+- Strings are immutable; concatenation allocates. The collector
+  reclaims unreachable strings automatically.
+- Package globals require constant-literal initializers.
+- Implicit returns only apply to the last statement of a function
+  body; `if` and `{}` blocks are statements, not expressions yet.
+- No closures. Functions are values (`fn(int) -> int`), but they
+  capture nothing — a function value always names a top-level
+  function, never an environment. `break`/`continue` work inside
+  loops.
+- Package-level lists are not supported yet (scalars and bytes are).
+- Map keys are limited to integers, `str`, and `bool`.
+- No data-race protection: `spawn` gives you real concurrency and
+  per-task failure isolation, not an ownership/borrow checker.
+  Mutating a shared struct/list/map from more than one task is on
+  you, same as Go or Java — `mutex` is available for it, but nothing
+  makes you reach for one.
+- `select` has no timeout arm and no way to disable an arm. A closed
+  channel's recv arm is ready forever (see Concurrency above), and
+  there is no nil channel to switch it off with; for a deadline, feed
+  a channel from a spawned timer task.
+- `mutex` has no scope guard: without closures or `defer`, an early
+  `return` between `mutex_lock` and `mutex_unlock` leaks the lock.
+  Mutexes are also not recursive (locking one twice from the same
+  task is a checked error, not a hang).
+- TLS: no session resumption tuning. Handshake and send/recv park;
+  `getaddrinfo` in `tls_dial` parks the task while a dedicated
+  thread resolves. mTLS (`tls_ctx_require_client` /
+  `tls_ctx_use_cert`) and SNI extra certs (`tls_ctx_add_sni`) are
+  supported.
+- JSON: no dynamic/unknown-shape decoding (every decode target is a
+  concrete slang type known at compile time — see the `json` section
+  above), and JSON object keys map to struct field names verbatim
+  (no camelCase/snake_case conversion). `bytes` fields are base64
+  strings (RFC 4648).
+- `proc`: only `SIGTERM`/`SIGINT` are handled (there's no general
+  signal-registration API); a signal that arrives in the narrow
+  window before `main()` installs the handler gets the OS's default
+  disposition (immediate termination) rather than graceful handling.
+  `proc.wait_idle()` parks until `proc.active_tasks()` is zero.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# byteutil
+
+# byteutil
+
+> Package byteutil.
+
+Search, trim, and split on the `bytes` type — no new syntax. The
+package cannot be named `bytes` because that token is the type.
+
+```slang
+import "byteutil";
+
+byteutil.find(b"hello", 0, 108);     // 2, or -1
+byteutil.has_prefix(b"hello", b"he");
+byteutil.has_suffix(b"hello", b"lo");
+byteutil.trim(b"  hi\r\n");          // b"hi" (space/tab/CR/LF)
+byteutil.split(b"a,b", 44);          // [b"a", b"b"]
+```
+
+## API
+
+### `fn find(b: bytes, from: int, target: int) -> int`
+
+Index of the first `target` byte in `b` at or after `from`, or -1 if it does not occur. `target` is a byte value, not a substring: 44 is a comma.
+
+### `fn has_prefix(b: bytes, prefix: bytes) -> bool`
+
+Does `b` begin with `prefix`? A prefix longer than `b` is false rather than an error.
+
+### `fn has_suffix(b: bytes, suffix: bytes) -> bool`
+
+Does `b` end with `suffix`? A suffix longer than `b` is false rather than an error.
+
+### `fn trim(b: bytes) -> bytes`
+
+`b` without leading or trailing ASCII whitespace -- space, tab, CR and LF. Returns a new `bytes`; the input is unchanged.
+
+### `fn split(b: bytes, sep: int) -> [bytes]`
+
+Split `b` on every occurrence of the `sep` byte. Adjacent separators yield empty elements, so the result always has one more element than there were separators.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# crypto
+
+# crypto
+
+> Package crypto.
+
+SHA-256, HMAC-SHA256, and a CSPRNG over OpenSSL. Hash and HMAC are
+infallible on valid inputs and return `bytes` directly; `rand` can fail
+and returns `result[bytes, str]`.
+
+```slang
+import "crypto";
+
+let h: bytes = crypto.sha256(b"abc");              // 32 bytes
+let m: bytes = crypto.hmac_sha256(key, msg);       // 32 bytes
+let r = crypto.rand(32);
+guard let b = r else let e = err_of(r) {
+    log.error("rand failed: " + e);
+}
+```
+
+## API
+
+### `crypto.sha256(bytes) -> bytes`
+
+### `crypto.hmac_sha256(bytes, bytes) -> bytes`
+
+### `crypto.rand(int) -> result[bytes,str]`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# fs
+
+# fs
+
+> Package fs.
+
+POSIX file I/O on integer fds. `open` is read-only; `create` is
+write/trunc. `read`/`write`/`close` use the fd. `mkdir` creates one
+directory. Every call returns `result[_, str]`. These calls block the
+worker — use them for config and small files, not the accept loop.
+
+```slang
+import "fs";
+
+let cr = fs.create("/tmp/note");
+guard let fd = cr else { exit(1); }
+fs.write(fd, b"hi");
+fs.close(fd);
+
+let or = fs.open("/tmp/note");
+guard let in_fd = or else { exit(1); }
+let rr = fs.read(in_fd, 16);
+guard let data = rr else { exit(1); }
+fs.close(in_fd);
+```
+
+## API
+
+### `fs.open(str) -> result[i32,str]`
+
+### `fs.create(str) -> result[i32,str]`
+
+### `fs.read(int, int) -> result[bytes,str]`
+
+### `fs.write(int, bytes) -> result[i32,str]`
+
+### `fs.close(int) -> result[bool,str]`
+
+### `fs.mkdir(str) -> result[bool,str]`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# http
+
+# http
+
+> Package http.
+
+HTTP/1.1 over `link` / `wire` / `until` / `fault`. Parse a request
+from `bytes`, or `read` from a connection into a caller-sized `wire`
+(the max request size). `read` takes the unconsumed prefix length and
+returns `Incoming` with leftover compacted to the front of the wire,
+so one connection can carry many requests. `write` serializes a
+`Response` through an arena. Headers are stored lowercased;
+`header(req, name)` looks up case-insensitively. `Content-Length` is
+honored; chunked `Transfer-Encoding` is rejected. `wants_close`
+follows HTTP/1.1 keep-alive (and HTTP/1.0 close-by-default).
+
+```slang
+import "http";
+
+fn serve(c: link) {
+    let ra = arena_new(16384);
+    let sa = arena_new(16384);
+    let buf = ra.wire(8192);
+    let filled = 0;
+    while true {
+        let rr = http.read(&mut c, buf, filled, until_never());
+        guard let got = rr else { return; }
+        let wr = http.write(&mut c, http.ok_text(got.req.path), &mut sa,
+                            until_never());
+        guard let _n = wr else { return; }
+        sa.reset();
+        if http.wants_close(got.req) { return; }
+        filled = got.filled;
+    }
+}
+```
+
+See `examples/httpd/` for a listener loop on this package.
+
+This works because every `spawn`ed thread has `SIGTERM`/`SIGINT`
+blocked in its own signal mask from birth (inherited at creation,
+restored in the spawning thread right after) — so the OS can only
+ever pick the main thread to run the handler, which is what lets the
+main thread's blocked `accept()` call reliably observe the
+interruption instead of the signal silently landing on some unrelated
+connection's worker thread mid-request. There's a narrow startup race
+inherent to this: a signal that arrives in the brief window before
+`main()` installs the handler gets the OS's default disposition
+(immediate termination) instead of graceful handling, same as any
+signal-handling program.
+
+## API
+
+### `gc struct Request`
+
+### `gc struct Incoming`
+
+### `gc struct Response`
+
+### `fn header(r: Request, name: str) -> opt[str]`
+
+### `fn parse(raw: bytes) -> result[Request, str]`
+
+### `fn serialize(r: Response) -> bytes`
+
+### `fn wants_close(r: Request) -> bool`
+
+### `fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Incoming, str]`
+
+### `fn write(c: &mut link, r: Response, a: &mut arena, deadline: until) -> result[int, fault]`
+
+### `fn text_response(status: i32, status_text: str, content_type: str,`
+
+### `fn ok_html(body: str) -> Response`
+
+### `fn ok_css(body: str) -> Response`
+
+### `fn ok_js(body: str) -> Response`
+
+### `fn ok_json(body: str) -> Response`
+
+### `fn ok_text(body: str) -> Response`
+
+### `fn created_json(body: str) -> Response`
+
+### `fn bad_request(msg: str) -> Response`
+
+### `fn not_found() -> Response`
+
+### `fn method_not_allowed() -> Response`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# http2
+
+# http2
+
+> Package http2.
+
+HTTP/2 framing and HPACK header compression (RFC 9113, RFC 7541),
+written in slang — the frame codec is what the bitwise operators were
+added for.
+
+```slang
+import "http2";
+
+let f = http2.decode(buf, 0, 16384);        // one frame, bounds-checked
+guard let fr = f else let e = err_of(f) { return; }
+
+let d = http2.decoder_new(4096);            // per-connection HPACK state
+let hr = http2.decode_block(d, fr.payload, 64);
+guard let hs = hr else let e = err_of(hr) { return; }
+for i in 0..len(hs) {
+    println(hs[i].name + ": " + hs[i].value);
+}
+```
+
+Frame layer: `decode` / `encode` / `header_bytes`, the reserved bit
+masked off the stream id as the RFC requires, `strip_padding`, and the
+common control frames (`settings_frame`, `settings_ack`, `ping_ack`,
+`rst_stream`, `goaway`, `window_update`).
+
+HPACK: prefix integers, string literals, the 61-entry static table, a
+dynamic table with the RFC's +32-per-entry accounting and eviction, and
+a **canonical Huffman decoder**. Header blocks decode through
+`decode_block`; `encode_block` builds one.
+
+The encoder is deliberately **stateless** — every field goes out as a
+static-table index or a literal *without* indexing, and nothing is added
+to a dynamic table on the encode side. That is conformant and it removes
+a whole bug class: an encoder's dynamic table must stay in lockstep with
+the peer's decoder table, and any drift silently corrupts every later
+block on the connection.
+
+Bounds against hostile peers: a frame longer than the advertised
+`SETTINGS_MAX_FRAME_SIZE` is refused before allocating, `decode_block`
+takes a `max_headers` cap (a small compressed block can otherwise expand
+without limit), a Dynamic Table Size Update above the agreed maximum is
+rejected, and NUL in a field name or value is the protocol error RFC
+9113 §8.2.1 says it is. Huffman padding must be under 8 bits and all
+ones, and EOS inside a string is refused.
+
+Validated against **nghttp2** — the HPACK implementation curl and the
+browser stacks use — in both directions: blocks it produces decode here,
+and blocks produced here inflate there. Those fixtures are baked into
+`tests/http2` as literals, so the suite needs no nghttp2 to run.
+
+**Connection layer, with concurrent streams.** One task reads frames and
+dispatches each request to its own `spawn`ed handler; every byte leaving
+the connection goes through a single writer task fed by a `chan[bytes]`.
+No mutex is involved, and none is needed: each channel message is a
+complete frame sequence written with one `net.send`, so handlers cannot
+interleave inside a frame, and a HEADERS block plus its CONTINUATIONs
+stays contiguous by construction (RFC 9113 §6.2) rather than by careful
+ordering. Frames for different streams interleave at frame boundaries,
+which is what multiplexing means.
+
+Measured: four 500ms requests multiplexed on one connection complete in
+**0.53s**; served one at a time they would take about 2.0s.
+
+The connection is addressed by a **`Transport`**, not a `link`. `link`
+is move-only, so `spawn writer_task(c)` consumes it and the reader can
+no longer use it — the two-task design is impossible with that type. A
+`Transport` is freely copyable, and one reader plus one writer in
+opposite directions on a socket is safe. `net.recv` also returns
+`bytes` directly, so no byte-at-a-time copy sits on the read path.
+
+A `Transport` is either a plain fd or a TLS handle, and everything above
+it is identical either way:
+
+```slang
+http2.transport_fd(fd)     // h2c: cleartext, prior knowledge
+http2.transport_tls(ssl)   // h2 over TLS, from net.tls_accept
+```
+
+```slang
+fn handle(stream: i32, path: str, wch: chan[http2.WMsg]) {
+    let hs: [http2.Header] = [];
+    // The body goes over UNFRAMED: the writer owns the peer's windows,
+    // so it decides how it is cut into DATA frames and when each may go.
+    chan_send(wch, http2.response_msg(stream as int, "200", hs,
+                                      to_bytes("hello")));
+}
+
+fn serve(fd: i32) {
+    let cn = http2.conn_new();
+    let rd = http2.reader_new();
+    let wch: chan[http2.WMsg] = make_chan(32);
+    let lim = http2.default_limits();
+    spawn http2.writer_task(fd, wch, lim.write);
+
+    guard let _p = http2.accept_preface(rd, fd, wch,
+            until_of(time.mono() + lim.handshake)) else { return; }
+    while true {
+        let rr = http2.read_request(cn, rd, fd, wch, lim);
+        guard let req = rr else let e = err_of(rr) {
+            if http2.is_timeout(e) { /* slow peer; shed it */ }
+            chan_close(wch);
+            return;
+        }
+        spawn handle(req.stream as i32, req.path, wch);
+    }
+}
+```
+
+Verified against real `curl --http2-prior-knowledge`: GET, POST with a
+body, five requests multiplexed on one connection, and a 64KB upload
+that exercises DATA chunking and flow-control `WINDOW_UPDATE`.
+
+##### Deadlines
+
+Every read and every write is bounded, so a peer that connects and then
+dribbles — or one that stops reading our responses — is disconnected
+rather than left holding a task forever. `http2.Limits` carries four
+separate budgets because they defend against four different peers:
+
+| Budget | Covers |
+|---|---|
+| `handshake` | connect → valid client preface |
+| `idle` | no request in flight, waiting for the next frame |
+| `request` | first HEADERS octet → END_STREAM |
+| `write` | one `writer_task` send |
+
+`idle` is deliberately generous (2 minutes by default): an HTTP/2
+connection sitting open with no streams is completely normal, and timing
+it out aggressively breaks correct clients. `request` is the strict one
+and applies to the request **as a whole** — it is never refreshed by
+incoming frames, so dribbling DATA one octet at a time cannot extend it.
+That distinction is the whole defence; a per-read timeout would never
+fire against a slowloris, because every individual read makes progress.
+
+`http2.is_timeout(e)` distinguishes a slow peer from a broken one, so a
+server can answer the first with `GOAWAY` / `E_ENHANCE_YOUR_CALM`.
+`tests/http2_deadline` runs all three attacker shapes — silent,
+idle-after-handshake, and octet-at-a-time dribbling — against a server
+with sub-second budgets and requires all three to be shed.
+
+##### Flow control
+
+DATA is flow-controlled at two levels, per-stream and per-connection
+(RFC 9113 §5.2), and the server may not exceed either. Both windows live
+in the writer task, because they are connection-wide state that the
+**read** side replenishes (`WINDOW_UPDATE` arrives there) and the
+**write** side spends — routing both into one task is what makes the
+accounting correct without a lock.
+
+A handler therefore hands over its body unframed and moves on. If the
+peer's window is too small, the *body* waits in the writer's queue, not
+the handler's task — a peer advertising a tiny window costs a queue
+entry rather than a parked task.
+
+`SETTINGS_INITIAL_WINDOW_SIZE` adjusts every open stream's window by the
+delta rather than resetting it, and does not touch the connection window
+(§6.9.2). A `WINDOW_UPDATE` that would push a window past 2³¹−1 is a
+`FLOW_CONTROL_ERROR` and ends the connection with a `GOAWAY` rather than
+being clamped.
+
+`tests/http2_flow` drives both levels: a client advertising a 100-octet
+stream window against a 5000-octet body, and a client with a large
+stream window against a 100000-octet body where the default 65535
+connection window is what binds. Each phase checks the exact octet the
+server stops at, that it resumes for exactly the credit granted, and
+that the resumed bytes carry the right content for their absolute offset
+in the body.
+
+##### TLS and ALPN
+
+Browsers speak HTTP/2 **only** over TLS, and only when ALPN negotiates
+it — there is no in-band upgrade in a browser. So h2c alone, however
+conformant, cannot serve one.
+
+The server advertises what it can speak, and then checks what was
+actually chosen:
+
+```slang
+net.tls_ctx_alpn(sctx, "h2,http/1.1");     // offer both, h2 preferred
+// ... net.tls_accept(lfd, sctx) -> ssl
+if !http2.alpn_is_h2(net.tls_alpn(ssl)) {
+    // the peer picked http/1.1; serve it as HTTP/1.1 or hang up
+}
+let t = http2.transport_tls(ssl);
+```
+
+Checking is not optional politeness. A server that offers `http/1.1`
+must expect to get it, and feeding an HTTP/1.1 client into the frame
+parser produces `bad connection preface` — true, but a poor explanation
+of what went wrong.
+
+`tests/http2_tls` runs both halves over a real handshake: h2 frames
+across `SSL_read`/`SSL_write`, and an http/1.1-only client being
+declined rather than misparsed.
+
+##### Interop
+
+Checked against **Go's `golang.org/x/net/http2`**, which shares no
+ancestry with nghttp2 (curl's stack, and where the HPACK fixtures came
+from) — agreement between two implementations that share code proves
+less than it appears to. It covers a GET, a 50KB POST, a 200KB response
+verified byte-for-byte against its absolute offset, and six concurrent
+streams on one connection. Run it with `sh tests/http2_interop/run.sh`;
+it skips cleanly without a Go toolchain.
+
+##### Stream floods
+
+The connection layer cannot cap concurrency by itself: it does not spawn
+the handlers, *you* do. (slang has function values now, so handing it a
+callback would compile — but a callback would only move the same
+question inside, and the gate below is the answer either way.) So the
+bound is a **gate** — a token channel you hold.
+`gate_enter` takes a token and blocks when none are left, `gate_leave`
+returns one, and that blocking is the backpressure: the reader stops
+pulling frames while every slot is busy.
+
+Without it, a peer that sends 1000 requests down one connection gets
+1000 concurrent handler tasks — measured, against a
+`SETTINGS_MAX_CONCURRENT_STREAMS` of 100 that we were advertising and
+not keeping. Advertising a limit you do not enforce is worse than
+advertising none, because peers size their behaviour by it.
+
+`gate_drain` also makes shutdown safe. Closing the writer channel while
+handlers are still in flight panics them with *send on closed channel*,
+and draining is what knows when none are left.
+
+**The one rule: `gate_leave` must run on every path out of a handler**,
+error returns included. A lost token permanently shrinks that
+connection's capacity; losing all of them wedges that one connection —
+bounded and visible, not a crash, but not something to leave in.
+
+Separately, `RST_STREAM` is counted. A peer that opens a stream and
+cancels it immediately (CVE-2023-44487, *Rapid Reset*) never looks
+concurrent, so a cap alone never trips; after a burst of 100 free
+cancellations, a peer whose resets outnumber half of what it opened
+ends the connection. Cancelling is legitimate — a browser navigating
+away resets its in-flight streams — so the burst and the ratio are both
+needed to tell a normal client from a flood.
+
+`tests/http2_flood` drives both shapes, resetting and not, and fails if
+either exceeds the cap.
+
+##### Known gaps
+
+`PRIORITY` is validated but not acted on: it is deprecated in RFC 9113
+§5.3.2, so ignoring the prioritisation is conformant, but a malformed
+frame is still rejected as the connection error it is (§6.3) rather than
+waved through to desync the stream. No browser has been run against the
+TLS path yet — the machinery is there and tested against slang's own
+client, but a real browser is different evidence.
+
+## API
+
+### `let W_RAW = 0;       // pre-built frames, not flow controlled`
+
+---- writer messages -------------------------------------------------  Everything the writer task needs arrives on ONE channel, tagged.  When this was written slang had no `select`, so a writer watching both "here is a response" and "the peer granted more window" on two channels could only ever block on one of them. `select` exists now and would compile -- but the single tagged stream is still the better design here, and stays. Two channels would make the ORDER between a grant and a body a race the writer has to reason about; one channel makes it the order they were sent, for free, and leaves the writer an ordinary state machine with a single blocking point.
+
+### `let W_BODY = 1;      // a response: HEADERS now, DATA as window allows`
+
+### `let W_GRANT = 2;     // peer's WINDOW_UPDATE: `n` octets to `stream``
+
+### `let W_INITIAL = 3;   // peer's SETTINGS_INITIAL_WINDOW_SIZE is now `n``
+
+### `let W_MAXFRAME = 4;  // peer's SETTINGS_MAX_FRAME_SIZE is now `n``
+
+### `gc struct WMsg`
+
+### `fn raw_msg(b: bytes) -> WMsg`
+
+### `fn grant_msg(stream: int, n: int) -> WMsg`
+
+### `fn response_msg(stream: int, status: str, extra: [Header],`
+
+Build a response. The body is handed over UNFRAMED: the writer owns the peer's window and its max frame size, so it -- not the handler -- decides how the body is cut into DATA frames and when each may go.
+
+### `gc struct Limits`
+
+---- deadlines -------------------------------------------------------  Four separate budgets, in nanoseconds, because they defend against four different peers and want wildly different numbers.  `idle` is the generous one on purpose: an HTTP/2 connection sitting open with no streams is completely normal -- that is the whole point of connection reuse -- so timing it out aggressively breaks correct clients. `request` is the strict one: once a client has started a request it must finish it, and dribbling DATA forever is exactly the slowloris shape.
+
+### `fn default_limits() -> Limits`
+
+### `fn is_timeout(e: str) -> bool`
+
+The reserved error string net.recv_until / net.send_until return when a deadline passes. Exposed as a predicate so callers can react to a slow peer (GOAWAY with ENHANCE_YOUR_CALM) differently from a broken one, without hardcoding the text.
+
+### `let DEFAULT_MAX_FRAME = 16384;`
+
+### `let DEFAULT_WINDOW = 65535;`
+
+### `let MAX_HEADER_FIELDS = 128;`
+
+Our own limits, advertised in SETTINGS and enforced on receipt.
+
+### `let MAX_BODY = 1048576;`
+
+### `let RESET_BURST = 100;`
+
+---- Rapid Reset (CVE-2023-44487) ------------------------------------  A peer opens a stream and immediately RST_STREAMs it. From its side the stream is closed the instant it opens, so a concurrency limit never sees it -- while the server has already done the HPACK decode and, in most designs, started the work. Repeat and the server is driven at whatever rate the attacker can write frames.  Cancelling a request IS legitimate: a browser navigating away resets its in-flight streams, and a client that gives up on a slow endpoint should. So a flat "no resets" rule would break correct clients. What is not legitimate is resetting nearly everything you open, forever.  Hence a burst plus a ratio: RESET_BURST cancellations are free, and after that a peer whose resets outnumber half of what it opened is ending the connection. A browser that abandons a page load trips neither; a Rapid Reset flood resets every stream it opens, so it trips both the moment the burst is spent.
+
+### `gc struct Conn`
+
+### `gc struct Req`
+
+### `fn conn_new() -> Conn`
+
+### `fn our_settings() -> bytes`
+
+Our SETTINGS: a modest frame size, and push disabled because server push is deprecated and no current client wants it.
+
+### `fn gate(n: int) -> chan[bool]`
+
+---- the stream gate -------------------------------------------------  The connection layer cannot cap concurrency on its own: it does not spawn the handlers, the CALLER does. (slang has function values now, so handing it a callback would compile -- but that only moves the same question inside, and the answer would still be this.) So the bound lives in a token channel the caller holds, and this is the mechanism plus the vocabulary for it.  A gate is a chan[bool] holding `n` tokens. gate_enter takes one and blocks when none are left; gate_leave puts one back. That blocking IS the backpressure -- the reader stops pulling frames while every slot is busy, which is the correct answer to "more work than I can do", and far better than the alternative measured before this existed: 3002 concurrent handler tasks from a peer we had told our limit was 100.  It also solves shutdown. Closing the writer channel while handlers are still in flight panics them with "send on closed channel", and nothing else could tell whether any were left. gate_drain waits for every token to come home, so the close is safe by construction.  The one rule: gate_leave must run on EVERY path out of a handler, including error returns. A lost token permanently shrinks the connection's capacity, and losing all of them wedges that connection (only that one -- the failure is bounded and visible, not a crash).
+
+### `fn gate_enter(g: chan[bool])`
+
+### `fn gate_leave(g: chan[bool])`
+
+### `fn gate_drain(g: chan[bool], n: int)`
+
+Wait until every handler has finished, by collecting all `n` tokens. Call before chan_close on the writer channel.
+
+### `gc struct Transport`
+
+---- transport -------------------------------------------------------  h2 runs over cleartext TCP (h2c, prior knowledge) or over TLS, and the two are reached through different runtime calls: net.recv_until on an fd, net.tls_recv_until on an SSL handle. Everything above this point is identical either way, so the difference is confined to one struct and two functions rather than duplicated through the whole layer.  This matters beyond tidiness: browsers speak HTTP/2 ONLY over TLS with ALPN, so a connection layer that can only do fds cannot serve a browser at all, however conformant the rest of it is.
+
+### `fn transport_fd(fd: i32) -> Transport`
+
+h2c: cleartext, prior knowledge. curl --http2-prior-knowledge, and Go's http2.Transport with AllowHTTP.
+
+### `fn transport_tls(ssl: rawptr) -> Transport`
+
+h2 over TLS. The handle comes from net.tls_accept, and the caller is responsible for having negotiated "h2" via ALPN first -- see alpn_is_h2 below.
+
+### `fn tr_close(t: Transport)`
+
+### `fn alpn_is_h2(proto: str) -> bool`
+
+RFC 7301 §3.1: the peer either selected "h2" or it did not. A server that advertised h2 and http/1.1 must look, because a browser offered both and may well have picked http/1.1 -- feeding an HTTP/1.1 client into this layer produces "bad connection preface", which is true but unhelpful.
+
+### `gc struct Reader`
+
+### `fn reader_new() -> Reader`
+
+### `fn read_frame(r: Reader, t: Transport, max_frame: int, u: until)`
+
+Pull bytes until at least one complete frame is buffered, then return it and keep the remainder. Note the `&mut *c` at every site below that forwards this borrow: passing `c` directly MOVES it, so the second call would fail with "use of moved value". Reborrowing keeps the caller's borrow usable.  `u` bounds the WHOLE call, not each recv: a peer that sends one octet every second must still finish the frame inside the budget, which is what makes this a slowloris defence rather than a keepalive check. Pass until_never() only where blocking forever is genuinely intended.
+
+### `fn accept_preface(r: Reader, t: Transport, wch: chan[WMsg], u: until)`
+
+Verify the 24-byte client connection preface and send ours.
+
+### `fn read_request(cn: Conn, r: Reader, t: Transport, wch: chan[WMsg],`
+
+Read frames until one complete request has arrived.  Two clocks, switched at the first HEADERS. Before it the connection is idle and gets the generous `idle` budget, refreshed by each control frame that arrives -- a client PINGing a kept-alive connection is behaving correctly and must not be disconnected. After it the strict `request` budget applies to the request as a WHOLE and is never refreshed, so no amount of dribbled DATA or CONTINUATION can extend it.
+
+### `fn writer_task(t: Transport, wch: chan[WMsg], write_ns: int)`
+
+Owns the write side, and with it the peer's send windows.  Flow control has to live here rather than in the handlers. The window is a property of the CONNECTION, shared by every concurrent stream, so no handler can decide on its own whether it may send -- and the WINDOW_UPDATE that grants credit arrives on the read side, in a different task entirely. Routing both into this one task is what lets the accounting be correct without a lock at all. slang does have a mutex now, but reaching for one here would be the worse design: it would serialise the writers without making the window arithmetic any less shared.  A blocked stream parks its BODY here, not its task: the handler hands the response over and moves on, so a peer with a tiny window costs a queue entry rather than a live task.
+
+### `fn respond(cn: Conn, wch: chan[WMsg], stream: int, status: str,`
+
+Enqueue a response for `stream`. Every write on the connection goes through the writer task, so there is deliberately no direct-write variant: one would be able to interleave with a handler mid-frame.
+
+### `fn send_reset(wch: chan[WMsg], stream: int, code: int)`
+
+### `fn send_goaway(wch: chan[WMsg], last_stream: int, code: int, msg: str)`
+
+### `let FRAME_HEADER_LEN = 9;`
+
+### `let T_DATA = 0x0;`
+
+Frame types (RFC 9113 §6). PUSH_PROMISE is parsed but never sent: server push is deprecated and no major client accepts it any more.
+
+### `let T_HEADERS = 0x1;`
+
+### `let T_PRIORITY = 0x2;`
+
+### `let T_RST_STREAM = 0x3;`
+
+### `let T_SETTINGS = 0x4;`
+
+### `let T_PUSH_PROMISE = 0x5;`
+
+### `let T_PING = 0x6;`
+
+### `let T_GOAWAY = 0x7;`
+
+### `let T_WINDOW_UPDATE = 0x8;`
+
+### `let T_CONTINUATION = 0x9;`
+
+### `let FLAG_END_STREAM = 0x1;`
+
+Flags. The same bit means different things per frame type, which is why these are named by type: 0x1 is END_STREAM on DATA/HEADERS but ACK on SETTINGS/PING.
+
+### `let FLAG_ACK = 0x1;`
+
+### `let FLAG_END_HEADERS = 0x4;`
+
+### `let FLAG_PADDED = 0x8;`
+
+### `let FLAG_PRIORITY = 0x20;`
+
+### `let E_NO_ERROR = 0x0;`
+
+Error codes (RFC 9113 §7).
+
+### `let E_PROTOCOL_ERROR = 0x1;`
+
+### `let E_INTERNAL_ERROR = 0x2;`
+
+### `let E_FLOW_CONTROL_ERROR = 0x3;`
+
+### `let E_SETTINGS_TIMEOUT = 0x4;`
+
+### `let E_STREAM_CLOSED = 0x5;`
+
+### `let E_FRAME_SIZE_ERROR = 0x6;`
+
+### `let E_REFUSED_STREAM = 0x7;`
+
+### `let E_CANCEL = 0x8;`
+
+### `let E_COMPRESSION_ERROR = 0x9;`
+
+### `let E_CONNECT_ERROR = 0xa;`
+
+### `let E_ENHANCE_YOUR_CALM = 0xb;`
+
+### `let E_INADEQUATE_SECURITY = 0xc;`
+
+### `let E_HTTP_1_1_REQUIRED = 0xd;`
+
+### `let S_HEADER_TABLE_SIZE = 0x1;`
+
+Settings parameters (RFC 9113 §6.5.2).
+
+### `let S_ENABLE_PUSH = 0x2;`
+
+### `let S_MAX_CONCURRENT_STREAMS = 0x3;`
+
+### `let S_INITIAL_WINDOW_SIZE = 0x4;`
+
+### `let S_MAX_FRAME_SIZE = 0x5;`
+
+### `let S_MAX_HEADER_LIST_SIZE = 0x6;`
+
+### `fn preface() -> bytes`
+
+The connection preface a client must send first (RFC 9113 §3.4).
+
+### `gc struct Frame`
+
+### `fn be16(b: bytes, off: int) -> int`
+
+### `fn be24(b: bytes, off: int) -> int`
+
+### `fn be32(b: bytes, off: int) -> int`
+
+### `fn put16(v: int) -> bytes`
+
+### `fn put24(v: int) -> bytes`
+
+### `fn put32(v: int) -> bytes`
+
+### `fn header_bytes(ftype: int, flags: int, stream: int, plen: int) -> bytes`
+
+Serialize a frame header. The caller appends the payload.
+
+### `fn encode(f: Frame) -> bytes`
+
+### `fn peek_length(b: bytes, off: int) -> int`
+
+Payload length of the frame starting at `off`, or -1 if the 9-byte header is not fully buffered yet.
+
+### `fn decode(b: bytes, off: int, max_frame: int) -> result[Frame, str]`
+
+Decode one frame at `off`. `max_frame` is our advertised SETTINGS_MAX_FRAME_SIZE: a peer exceeding it is a connection error, and checking here keeps a bogus length from driving a huge allocation.
+
+### `fn strip_padding(payload: bytes, flags: int) -> result[bytes, str]`
+
+Strip padding from a DATA or HEADERS payload when FLAG_PADDED is set: one length octet, then the field, then that many padding octets.
+
+### `fn settings_ack() -> bytes`
+
+### `fn ping_ack(opaque: bytes) -> bytes`
+
+### `fn rst_stream(stream: int, code: int) -> bytes`
+
+### `fn goaway(last_stream: int, code: int, debug: str) -> bytes`
+
+### `fn window_update(stream: int, increment: int) -> bytes`
+
+### `fn settings_frame(ids: [int], vals: [int]) -> bytes`
+
+One SETTINGS entry is a 16-bit identifier and a 32-bit value.
+
+### `gc struct Decoder`
+
+### `fn decoder_new(cap: int) -> Decoder`
+
+### `fn decode_block(d: Decoder, b: bytes, max_headers: int)`
+
+Decode one complete header block. `max_headers` caps how many fields a peer may send: without it a small compressed block can expand into an unbounded list, which is the HPACK bomb.
+
+### `fn encode_header(name: str, value: str) -> bytes`
+
+### `fn encode_block(hs: [Header]) -> bytes`
+
+### `gc struct Header`
+
+### `gc struct Table`
+
+A decoder's dynamic table. Bounded by `cap` octets, where each entry costs len(name) + len(value) + 32 (RFC 7541 §4.1); the constant accounts for per-entry overhead so a peer cannot exhaust memory with many tiny headers.
+
+### `fn table_new(cap: int) -> Table`
+
+### `fn table_add(t: Table, name: str, value: str)`
+
+### `fn table_resize(t: Table, cap: int)`
+
+### `gc struct IntRead`
+
+### `fn read_int(b: bytes, off: int, prefix_bits: int) -> result[IntRead, str]`
+
+### `fn write_int(v: int, prefix_bits: int, first: int) -> bytes`
+
+`first` supplies the bits ABOVE the prefix (the representation tag).
+
+### `gc struct StrRead`
+
+### `fn read_string(h: Huff, b: bytes, off: int) -> result[StrRead, str]`
+
+### `fn write_string(s: str) -> bytes`
+
+Always emitted as a raw literal, never Huffman-coded. That is fully legal (the H bit says which), costs a few bytes per response, and avoids shipping an encoder table for a saving the transport layer mostly recovers anyway.
+
+### `gc struct Huff`
+
+### `fn huff_new() -> Huff`
+
+### `fn huff_decode(h: Huff, src: bytes) -> result[bytes, str]`
+
+Decode a Huffman-coded byte string to BYTES, not str.  Returning str here would be a silent data-loss bug: symbol 0 is NUL, and to_str truncates there, so a value containing \x00 came back empty. Header field values are byte sequences on the wire; the caller decides whether to reject NUL (read_string does) rather than having the codec quietly drop everything after it.  Padding rules (RFC 7541 §5.2) are enforced rather than ignored: the tail must be fewer than 8 bits, must be all ones, and must not encode a symbol. A decoder that skips these accepts streams a conforming one rejects, which is how HPACK implementations end up disagreeing.
+
+### `let HUFF_MAX_BITS = 30;`
+
+### `let HUFF_EOS = 256;`
+
+### `fn huff_counts() -> [int]`
+
+counts[l] = number of codes of length l (index 0..30; 0..4 are zero)
+
+### `fn huff_symbols() -> [int]`
+
+symbols in canonical order: all 5-bit codes, then 6-bit, and so on
+
+### `let STATIC_LEN = 61;`
+
+### `fn static_name(idx: int) -> str`
+
+### `fn static_value(idx: int) -> str`
+
+### `fn static_find(name: str, value: str) -> int`
+
+Index of an exact name+value match, or 0. Used by the encoder to send a one-byte indexed field for the common cases (:status 200, :method GET) instead of a literal.
+
+### `fn static_find_name(name: str) -> int`
+
+Index of any entry with this name, or 0 -- lets the encoder reference a known name and send only the value as a literal.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# json
+
+# json
+
+> Package json.
+
+`json.decode`/`json.encode` (de)serialize `str`/`bytes` against a
+concrete slang type — the target type for `decode` is inferred from
+the binding's annotation, the same mechanism `ok()`/`err()` already
+use to infer `result[T,E]`. There is no dynamic "JSON value" type:
+every decode is checked field-by-field against the struct shape you
+asked for, and a mismatch is a `result` error, not a silent `null` or
+a runtime panic.
+
+```slang
+import "json";
+
+gc struct Address { city: str, zip: str }
+gc struct Person {
+    name: str,
+    age: i32,
+    email: opt[str],      // JSON null / missing key <-> none
+    tags: [str],
+    addr: Address,         // structs nest
+}
+
+let p = Person{ name: "Ada", age: 36, email: some("ada@example.com"),
+                tags: ["math"], addr: Address{ city: "London", zip: "SW1" } };
+let s: str = json.encode(p);
+
+let r: result[Person, str] = json.decode(s);
+guard let p2 = r else { exit(1); }
+```
+
+Supported: `struct`, `opt[T]`, `[T]`, `map[str, V]` (JSON object keys
+are always strings — a map with any other key type is a compile
+error), every scalar, and `bytes` (RFC 4648 base64 strings on the
+wire). `rawptr`, `chan[T]`, and
+`result[T,E]` can't appear anywhere in a decode/encode target type. A
+missing JSON key defaults an `opt[T]` field to `none`; for any other
+field type it's a decode error. Unknown JSON keys are ignored. Every
+decode error names where it happened, composed through nesting —
+`json.decode` on `{"addr":{"city":5}}` against the `Person` shape
+above fails with `field 'addr': field 'city': expected a string, got
+a number`. Malformed input is a decode error, never a crash — the
+parser caps nesting depth at 512 so adversarial input can't blow the
+C stack.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# log
+
+# log
+
+> Package log.
+
+Stderr logging with a timestamp and level. Each function accepts a
+`str` or a `fault` (`to_str`/`+` already convert faults the same way),
+so `err_of` bindings and `fault` values log without manual conversion.
+
+```slang
+import "log";
+
+log.debug("cache miss for key foo");
+log.info("listening on :8080");
+log.warn("retrying dial after timeout");
+log.error("could not load config: " + e);
+log.warn(fault_timeout());
+```
+
+## API
+
+### `log.debug(str)`
+
+### `log.info(str)`
+
+### `log.warn(str)`
+
+### `log.error(str)`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# net
+
+# net
+
+> Package net.
+
+TCP listener/dialer built on `bytes` and fixed-width ints; every
+fallible call returns a `result[_, str]` unwrapped with `guard let`.
+
+```slang
+import "net";
+
+let lr: result[i32, str] = net.listen(8080);   // 0 = ephemeral port
+guard let lfd = lr else { exit(1); }
+
+let pr: result[i32, str] = net.port(lfd);      // assigned port number
+
+let ar: result[i32, str] = net.accept(lfd);    // blocks until a peer connects
+guard let cfd = ar else { exit(1); }
+
+net.send(cfd, b"hello");
+let rr: result[bytes, str] = net.recv(cfd, 4096);
+let data: bytes = rr ?? b"";
+
+net.nonblock(cfd);                              // switch to non-blocking mode
+let wr: result[bytes, str] = net.recv(cfd, 16); // "would block" err if idle
+net.close(cfd);
+```
+
+##### Deadlines
+
+`net.recv` and `net.send` wait for as long as the peer takes, which on
+a public listener is indefinitely: a client that connects and then
+neither sends nor reads parks the serving task on the reactor forever,
+holding its stack and its GC roots. That is slowloris, and the defence
+is `recv_until` / `send_until`, which take an `until` — an absolute
+monotonic instant, not a duration:
+
+```slang
+import "net";
+import "time";
+
+let deadline = until_of(time.mono() + 5000000000);   // 5s from now
+let rr = net.recv_until(cfd, 4096, deadline);
+guard let data = rr else let e = err_of(rr) {
+    if e == "timeout" { net.close(cfd); return; }    // peer went quiet
+    log.error("recv: " + e);                         // peer broke
+    return;
+}
+```
+
+`"timeout"` is a reserved error string: it means the deadline passed,
+and it is the only error text these calls invent rather than take from
+the OS. Every other error is `strerror`/OpenSSL text as before.
+
+One asymmetry worth knowing: a `send_until` that times out **has
+already written some bytes**, and `result[i32, str]` has no room to
+report both "timed out" and "wrote this much". A `"timeout"` from
+`send_until` therefore means the stream is at an unknown offset and the
+connection must be closed, not retried. For a framed protocol that is
+the right contract regardless — a half-written frame is unrecoverable.
+
+`net.tls_recv_until` / `net.tls_send_until` are the same thing over
+TLS, with the same reserved string. The `link` API takes an `until` on
+`accept`/`send`/`recv` already.
+
+See `examples/httpd/` for a minimal HTTP server on `link` plus the
+`http` stdlib package.
+
+`net.tls_*` adds a TLS listener/dialer on top of the plain `net`
+primitives above, built on OpenSSL (linked automatically, and only
+when a program actually calls one of these — a plain-TCP `net`
+program stays dependency-free). A `SSL_CTX`-equivalent config is
+created once (`tls_server_ctx` / `tls_client_ctx`) and reused across
+many connections; each connection is a separate `rawptr` handle.
+
+```slang
+import "net";
+
+// server: load a cert + key once, reuse the context for every connection
+let sctx_r: result[rawptr, str] = net.tls_server_ctx("cert.pem", "key.pem");
+guard let sctx = sctx_r else { exit(1); }
+
+let lr: result[i32, str] = net.listen(8443);
+guard let lfd = lr else { exit(1); }
+let ar: result[rawptr, str] = net.tls_accept(lfd, sctx);  // TCP accept + handshake
+guard let sconn = ar else { exit(1); }
+net.tls_send(sconn, b"hello");
+net.tls_close(sconn);
+
+// client: verify against a CA file, or "" for the system trust store
+let cctx_r: result[rawptr, str] = net.tls_client_ctx("");
+guard let cctx = cctx_r else { exit(1); }
+let dr: result[rawptr, str] = net.tls_dial("example.com", 443, cctx);
+guard let cconn = dr else { exit(1); }
+let rr: result[bytes, str] = net.tls_recv(cconn, 4096);
+net.tls_close(cconn);
+```
+
+Client verification is strict by default: `tls_client_ctx` enables
+peer verification, and `tls_dial` checks the certificate against
+*both* the CA and the hostname you asked for (`SSL_set1_host` — the
+check that's easy to forget and, if skipped, leaves you with "TLS"
+that validates a certificate chain without checking it belongs to
+the host you're actually talking to). Sending/receiving is blocking,
+same as plain `net` — call these from a `spawn`ed task if you need a
+connection handled without stalling anything else.
+
+**ALPN** (RFC 7301) negotiates the protocol during the handshake, which
+is how HTTP/2 over TLS is selected — there is no in-band upgrade.
+`tls_ctx_alpn(ctx, "h2,http/1.1")` sets the list on a server context (in
+preference order, so the *server* decides) or the offer on a client one,
+and `tls_alpn(conn)` returns what was actually negotiated, or `""` if
+the peer offered nothing that overlapped. The list is comma-separated,
+not the length-prefixed wire form; building that by hand is an easy way
+to produce a subtly broken handshake. A client offering no protocol we
+support completes the handshake without ALPN rather than failing, so it
+simply falls back to HTTP/1.1.
+
+```slang
+net.tls_ctx_alpn(sctx, "h2,http/1.1");
+let conn = ...;                  // after tls_accept
+if net.tls_alpn(conn) == "h2" { serve_h2(conn); } else { serve_h1(conn); }
+```
+
+Mutual TLS: `tls_ctx_require_client(sctx, client_ca)` on the server
+context demands a client certificate chained to that CA
+(`SSL_VERIFY_FAIL_IF_NO_PEER_CERT`). The client presents one with
+`tls_ctx_use_cert(cctx, cert, key)`. Extra server names on one
+listener: `tls_ctx_add_sni(sctx, host, cert, key)` swaps in that
+cert when the ClientHello SNI matches; unmatched names keep the
+default `tls_server_ctx` cert. `require_client` applies to SNI
+certs too, regardless of call order. TLS 1.3 can let `tls_dial`
+return before the server has rejected a missing client certificate;
+the first send or recv then fails.
+
+## API
+
+### `net.listen(int) -> result[i32,str]`
+
+### `net.port(int) -> result[i32,str]`
+
+### `net.accept(int) -> result[i32,str]`
+
+### `net.dial(str, int) -> result[i32,str]`
+
+### `net.send(int, bytes) -> result[i32,str]`
+
+### `net.recv(int, int) -> result[bytes,str]`
+
+### `net.recv_until(int, int, until) -> result[bytes,str]`
+
+### `net.send_until(int, bytes, until) -> result[i32,str]`
+
+### `net.close(int)`
+
+### `net.nonblock(int) -> result[bool,str]`
+
+### `net.tls_server_ctx(str, str) -> result[rawptr,str]`
+
+### `net.tls_client_ctx(str) -> result[rawptr,str]`
+
+### `net.tls_accept(int, rawptr) -> result[rawptr,str]`
+
+### `net.tls_dial(str, int, rawptr) -> result[rawptr,str]`
+
+### `net.tls_send(rawptr, bytes) -> result[i32,str]`
+
+### `net.tls_recv(rawptr, int) -> result[bytes,str]`
+
+### `net.tls_recv_until(rawptr, int, until) -> result[bytes,str]`
+
+### `net.tls_send_until(rawptr, bytes, until) -> result[i32,str]`
+
+### `net.tls_close(rawptr)`
+
+### `net.tls_ctx_require_client(rawptr, str) -> result[bool,str]`
+
+### `net.tls_ctx_use_cert(rawptr, str, str) -> result[bool,str]`
+
+### `net.tls_ctx_add_sni(rawptr, str, str, str) -> result[bool,str]`
+
+### `net.tls_ctx_alpn(rawptr, str) -> result[bool,str]`
+
+### `net.tls_alpn(rawptr) -> str`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# os
+
+# os
+
+> Package os.
+
+The operating system *around* a program: the environment, the process,
+and everything you can ask or do about a path without opening it. Pure
+libc, so importing `os` adds no link flag.
+
+**The `fs`/`os` boundary**: `fs` owns open file **handles** and their
+contents; `os` owns paths you have not opened. `fs.mkdir` predates that
+split and stays where it is rather than breaking existing programs.
+
+| | |
+|---|---|
+| `os.setenv(k, v)` / `os.unsetenv(k)` | `result[bool, str]` |
+| `os.environ()` | `[str]` of `KEY=VALUE` |
+| `os.pid()` / `os.tmpdir()` | `int` / `str` |
+| `os.hostname()` | `result[str, str]` |
+| `os.exists(p)` / `os.is_dir(p)` / `os.is_file(p)` | `bool` |
+| `os.size(p)` / `os.mtime(p)` | `result[int, str]` |
+| `os.read_dir(p)` | `result[[str], str]` |
+| `os.remove(p)` / `os.rename(a, b)` | `result[bool, str]` |
+
+```slang
+import "os";
+
+// serve a static file, the shape this package exists for
+if !os.is_file(path) {
+    return not_found();
+}
+let sr = os.size(path);
+guard let n = sr else let e = err_of(sr) {
+    log.error("stat " + path + ": " + e);      // "No such file or directory"
+    return server_error();
+}
+```
+
+The three predicates are bare `bool` on purpose. "Does this exist" has
+two useful answers: a missing path and an unreadable parent are both
+"no, you cannot use it", and code branching on the difference is racing
+anyway — the answer can change between the check and the use. The
+accessors return a value that has to come from somewhere, so those
+carry the errno text.
+
+`environ()` is a list rather than a map because an environment may
+legally hold a repeated key, and a map would silently drop one.
+`read_dir` returns entry names without `.` and `..`, since forgetting
+to filter those is how a directory walk becomes an infinite loop.
+`remove` takes files and empty directories alike, so a caller need not
+know which it has.
+
+`proc.getenv`, `proc.args` and `proc.cwd` stay in `proc`; `os` adds
+what `proc` has no answer for rather than duplicating it.
+
+## API
+
+### `os.setenv(str, str) -> result[bool,str]`
+
+### `os.unsetenv(str) -> result[bool,str]`
+
+### `os.environ() -> [str]`
+
+### `os.pid() -> int`
+
+### `os.hostname() -> result[str,str]`
+
+### `os.tmpdir() -> str`
+
+### `os.exists(str) -> bool`
+
+### `os.is_dir(str) -> bool`
+
+### `os.is_file(str) -> bool`
+
+### `os.size(str) -> result[int,str]`
+
+### `os.mtime(str) -> result[int,str]`
+
+### `os.read_dir(str) -> result[[str],str]`
+
+### `os.remove(str) -> result[bool,str]`
+
+### `os.rename(str, str) -> result[bool,str]`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# proc
+
+# proc
+
+> Package proc.
+
+Graceful shutdown and environment variables. `proc.shutdown_requested()`
+turns true once the process receives `SIGTERM` or `SIGINT`; a blocked
+`net.accept()`/`net.recv()`/`net.dial()` on the main thread is
+interrupted the instant the signal arrives (an `err` result, not a
+hang), so a listener loop notices without needing `select` or a
+timeout. `proc.active_tasks()` counts currently-running `spawn`ed
+tasks. `proc.wait_idle()` parks until that count is zero, so a
+shutting-down program can drain in-flight work without polling.
+
+```slang
+import "net";
+import "proc";
+import "time";
+
+fn accept_and_serve(lfd: i32) {
+    let ar: result[i32, str] = net.accept(lfd);
+    guard let cfd = ar else { return; } // interrupted, or a real error
+    spawn serve(cfd);
+}
+
+let lr: result[i32, str] = net.listen(8080);
+guard let lfd = lr else { exit(1); }
+
+while !proc.shutdown_requested() {
+    accept_and_serve(lfd);
+}
+
+proc.wait_idle();
+```
+
+`proc.getenv(name)` reads an environment variable, returning
+`opt[str]` (`none` if unset). `proc.args()` is the process argument
+list (`[str]`); `args[0]` is the executable path. `proc.cwd()` is the
+working directory as `result[str, str]`.
+
+## API
+
+### `proc.shutdown_requested() -> bool`
+
+### `proc.active_tasks() -> int`
+
+### `proc.wait_idle()`
+
+### `proc.getenv(str) -> opt[str]`
+
+### `proc.args() -> [str]`
+
+### `proc.cwd() -> result[str,str]`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# regex
+
+# regex
+
+> Package regex.
+
+Regular expressions on `str` or `bytes`, matched by slang's own
+Thompson NFA — no external library, so a program that matches text
+stays as dependency-free as a plain TCP one. `compile` returns an
+opaque `rawptr` handle (freed with `regex.free`, like `net.tls_*` and
+`sql`), and a bad pattern comes back as a descriptive
+`result[rawptr, str]`.
+
+**Matching is linear time, always.** There is no backtracking, so the
+classic catastrophic pattern `(a+)+$` — which makes a backtracking
+engine take exponential time on a hostile input — runs in the same
+microseconds here as any other pattern. That is the point of choosing
+this engine for a server language: patterns and subjects both arrive
+from the network. The price is the RE2/Go one, and it is not
+negotiable: **no backreferences and no lookaround**. Both require
+backtracking; `(?=...)` and friends are a compile error, not a silent
+mis-parse.
+
+| Function | Signature |
+|----------|-----------|
+| `regex.compile(pat)` | `result[rawptr, str]` |
+| `regex.free(re)` | — |
+| `regex.groups(re)` | `int` — number of capture groups |
+| `regex.is_match(re, s)` | `bool` — `s` is a `str` |
+| `regex.is_match_bytes(re, b)` | `bool` — `b` is `bytes` |
+| `regex.find(re, s)` / `find_bytes(re, b)` | `[int]` |
+| `regex.find_at(re, s, from)` / `find_bytes_at(re, b, from)` | `[int]` |
+
+`find` returns byte offsets as `[start, end, g1start, g1end, ...]`, or
+an **empty list** when there is no match — so the result is GC-owned
+and there is no match handle to leak. `find_at` starts at an offset,
+which is how you walk every match.
+
+```slang
+import "regex";
+
+let cr = regex.compile("(\\d{4})-(\\d{2})-(\\d{2})");
+guard let re = cr else let e = err_of(cr) {
+    log.error("bad pattern: " + e);   // e.g. "missing ) at offset 9"
+    exit(1);
+}
+
+if regex.is_match(re, "due 2026-09-09") {
+    let m = regex.find(re, "due 2026-09-09");
+    println(to_str(m[0]) + ".." + to_str(m[1]));   // whole match: 4..14
+    println(to_str(m[2]) + ".." + to_str(m[3]));   // year:        4..8
+}
+regex.free(re);
+```
+
+Supported: literals, `.`, classes `[a-z]` `[^...]` `[[:digit:]]`,
+escapes `\d \D \w \W \s \S \b \B \A \z \xHH`, quantifiers
+`* + ? {n} {n,} {n,m}` and their lazy `?` forms, groups `(...)` and
+`(?:...)`, alternation `|`, anchors `^ $`. Matching is leftmost-first
+(Perl-style priority), and `.` does not match `\n`.
+
+Subjects are matched with an explicit length, so a `bytes` containing
+NUL matches correctly rather than stopping at the NUL — and `\D`
+matches a NUL byte like any other non-digit.
+
+Bounds, so a hostile pattern can't exhaust memory or stack: 4096
+compiled instructions, 100 nesting levels, 32 capture groups, and
+`{n,m}` counts up to 1000. Each is a descriptive compile error, never
+a crash.
+
+A compiled regex is safe to share across tasks, and is meant to be:
+it carries a small pool of reusable match buffers, so concurrent
+matchers allocate nothing per match. Compiling is the expensive part
+(it is also the only part that grows the task stack) — compile once,
+match many times, ideally not once per request.
+
+**Where this lands on speed.** Measured single-threaded on
+`^(GET|POST|PUT) (/[a-z0-9/_-]*) HTTP/1\.([01])$` against a 26-byte
+subject, 200k iterations:
+
+| engine | matches/sec | on `(a+)+$` vs a hostile input |
+|--------|-------------|-------------------------------|
+| slang `regex` | ~721k | 2µs, correct answer |
+| POSIX `regexec` | ~372k | fast here, but no limits |
+| PCRE2 (interpreted) | ~2.4M | 0.2s, then gives up (`MATCHLIMIT`) |
+| PCRE2 (JIT) | ~8.6M | same — JIT does not save it |
+
+So: ~1.9x faster than libc's POSIX engine, and several times slower
+than PCRE2 on *benign* input — PCRE2's interpreter and especially its
+JIT are very good, and this is an honest gap. The trade is deliberate:
+on adversarial input the ordering inverts completely, because linear
+time is a guarantee here and a hope there. `is_match` is markedly
+cheaper than `find` (it binds no capture slots at all), so prefer it
+when you only need a yes/no. Matching scales with tasks — ~3.2M/sec
+across 16.
+
+Because matching never grows the task stack, regex is cheap to use per
+connection: 600 concurrently-live tasks each matching and then parking
+peak at **3.9MB RSS** — about 17x lighter than the same shape holding
+`sql` connections (65.9MB), which does grow every task's stack.
+
+## API
+
+### `regex.compile(str) -> result[rawptr,str]`
+
+### `regex.free(rawptr)`
+
+### `regex.groups(rawptr) -> int`
+
+### `regex.is_match(rawptr, str) -> bool`
+
+### `regex.is_match_bytes(rawptr, bytes) -> bool`
+
+### `regex.find(rawptr, str) -> [int]`
+
+### `regex.find_at(rawptr, str, int) -> [int]`
+
+### `regex.find_bytes(rawptr, bytes) -> [int]`
+
+### `regex.find_bytes_at(rawptr, bytes, int) -> [int]`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# sql
+
+# sql
+
+> Package sql.
+
+A SQLite driver (linked automatically, only when a program imports
+`sql`). Connections and prepared statements are opaque `rawptr`
+handles, exactly like `net.tls_*`; free them with `sql.close` /
+`sql.finalize`. **Every fallible call returns `result[_, str]` whose
+error is SQLite's own message** — `no such table: users`, `near
+"SELCT": syntax error`, `UNIQUE constraint failed: users.id` — so a
+bad query stays as visible as a bad socket read (`guard let … else
+let e = err_of(r)`), never a silent `null`. The column getters are
+infallible (SQLite coerces types; an out-of-range index is a
+programming error, returning `0` / `""`), so they return bare values.
+
+| Function | Signature |
+|----------|-----------|
+| `sql.open(path)` | `result[rawptr, str]` — `":memory:"` for in-memory |
+| `sql.close(db)` | — |
+| `sql.exec(db, sql)` | `result[int, str]` — runs statement(s), returns rows changed |
+| `sql.last_insert_id(db)` | `int` |
+| `sql.prepare(db, sql)` | `result[rawptr, str]` |
+| `sql.finalize(st)` | — |
+| `sql.reset(st)` | `result[bool, str]` — clears bindings, re-run |
+| `sql.bind_int/bind_float/bind_text/bind_blob(st, idx, v)` | `result[bool, str]` — `idx` is 1-based |
+| `sql.bind_null(st, idx)` | `result[bool, str]` |
+| `sql.step(st)` | `result[bool, str]` — `true` = row ready, `false` = done |
+| `sql.col_count(st)` | `int` |
+| `sql.col_name(st, i)` / `col_text(st, i)` | `str` — `i` is 0-based |
+| `sql.col_int(st, i)` | `int` |
+| `sql.col_float(st, i)` | `float` |
+| `sql.col_blob(st, i)` | `bytes` |
+| `sql.col_is_null(st, i)` | `bool` |
+
+```slang
+import "sql";
+import "log";
+
+let dr = sql.open("app.db");
+guard let db = dr else let e = err_of(dr) {
+    log.error("db open: " + e);
+    exit(1);
+}
+sql.exec(db, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
+
+let pr = sql.prepare(db, "SELECT id, name FROM users WHERE id > ?");
+guard let st = pr else let e = err_of(pr) {
+    log.error("prepare: " + e);          // e.g. "no such table: users"
+    exit(1);
+}
+sql.bind_int(st, 1, 0);
+while true {
+    let sr = sql.step(st);
+    guard let more = sr else let e = err_of(sr) { log.error("step: " + e); break; }
+    if !more { break; }
+    println(to_str(sql.col_int(st, 0)) + " " + sql.col_text(st, 1));
+}
+sql.finalize(st);
+sql.close(db);
+```
+
+SQLite calls block the worker — use them for real work off the accept
+loop (wrap in a `spawn`ed task), the same caveat as `fs`. One
+connection per `rawptr`; there is no pool, no networked backend
+(Postgres/MySQL), and no async stepping.
+
+Query complexity is capped per connection so SQLite's recursion stays
+inside the task stack: at most **50 terms in a compound `SELECT`**
+(`UNION`/`INTERSECT`/`EXCEPT`) and an **expression depth of 400**
+(roughly, terms in one `AND`/`OR` chain). SQLite's stock limits of 500
+and 1000 allow a single legal query to want ~325KB of C stack, which
+would force a task stack far too fat to spawn per connection. Long
+`IN` lists, wide result sets, and recursive CTEs are *not* affected —
+they don't recurse. Exceeding a cap is a normal error through
+`result[_, str]` (`too many terms in compound SELECT`), not a crash.
+
+## API
+
+### `sql.open(str) -> result[rawptr,str]`
+
+### `sql.close(rawptr)`
+
+### `sql.exec(rawptr, str) -> result[int,str]`
+
+### `sql.last_insert_id(rawptr) -> int`
+
+### `sql.prepare(rawptr, str) -> result[rawptr,str]`
+
+### `sql.finalize(rawptr)`
+
+### `sql.reset(rawptr) -> result[bool,str]`
+
+### `sql.bind_int(rawptr, int, int) -> result[bool,str]`
+
+### `sql.bind_float(rawptr, int, float) -> result[bool,str]`
+
+### `sql.bind_text(rawptr, int, str) -> result[bool,str]`
+
+### `sql.bind_blob(rawptr, int, bytes) -> result[bool,str]`
+
+### `sql.bind_null(rawptr, int) -> result[bool,str]`
+
+### `sql.step(rawptr) -> result[bool,str]`
+
+### `sql.col_count(rawptr) -> int`
+
+### `sql.col_name(rawptr, int) -> str`
+
+### `sql.col_is_null(rawptr, int) -> bool`
+
+### `sql.col_int(rawptr, int) -> int`
+
+### `sql.col_float(rawptr, int) -> float`
+
+### `sql.col_text(rawptr, int) -> str`
+
+### `sql.col_blob(rawptr, int) -> bytes`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# strings
+
+# strings
+
+> Package strings.
+
+Search, trim, case, split and join on `str`. The package cannot be named
+`str` because that token is the type — the same reason Go calls its own
+`strings`.
+
+```slang
+import "strings";
+
+strings.find("hello world", "world");   // 6, or -1
+strings.rfind("a/b/c", "/");            // 3
+strings.contains("hello", "ell");
+strings.has_prefix("hello", "he");
+strings.has_suffix("hello", "lo");
+strings.count("a,b,c", ",");            // 2
+
+strings.trim("  hi \r\n");              // "hi" (space/tab/CR/LF)
+strings.trim_start(s); strings.trim_end(s);
+strings.to_upper("hi"); strings.to_lower("HI");   // ASCII only
+
+strings.slice("hello", 1, 3);           // "el"
+strings.slice("hello", -3, 5);          // "llo" — negative counts back
+strings.repeat("ab", 3);                // "ababab"
+strings.replace("a,b,c", ",", " | ");
+
+strings.split("a,b,,c", ",");           // ["a", "b", "", "c"]
+strings.join(parts, ",");               // the inverse of split
+```
+
+This is a compiler-provided native package, and it has to be: `str`
+supports `len`, `+` and `==` and nothing else — it cannot be indexed or
+sliced — so none of it could be written in slang without converting to
+`bytes` and back on every call. `byteutil` covers the `bytes` side.
+
+Three behaviours worth knowing:
+
+- **Indices are byte offsets and the case operations are ASCII-only.**
+  `str` is UTF-8 bytes; doing better means shipping a Unicode table and
+  a normalisation policy, which is a different project. Treat these as
+  byte operations, because that is what they are.
+- **`slice` clamps rather than panics.** Slicing is how you narrow a
+  string you just searched, and a `find` that returned -1 on the line
+  above should not turn the next line into a crash. A negative index
+  counts from the end.
+- **`split` and `join` are exact inverses.** Adjacent separators produce
+  empty elements, so the result always has `count(s, sep) + 1` elements
+  and `join(split(s, sep), sep) == s` for any non-empty separator. An
+  empty separator splits into single bytes.
+
+## API
+
+### `strings.find(str, str) -> int`
+
+### `strings.rfind(str, str) -> int`
+
+### `strings.contains(str, str) -> bool`
+
+### `strings.has_prefix(str, str) -> bool`
+
+### `strings.has_suffix(str, str) -> bool`
+
+### `strings.count(str, str) -> int`
+
+### `strings.trim(str) -> str`
+
+### `strings.trim_start(str) -> str`
+
+### `strings.trim_end(str) -> str`
+
+### `strings.to_upper(str) -> str`
+
+### `strings.to_lower(str) -> str`
+
+### `strings.slice(str, int, int) -> str`
+
+### `strings.repeat(str, int) -> str`
+
+### `strings.replace(str, str, str) -> str`
+
+### `strings.split(str, str) -> [str]`
+
+### `strings.join(NA_ARR_STR, str) -> str`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# time
+
+# time
+
+> Package time.
+
+```slang
+import "time";
+
+let t0 = time.mono();     // monotonic clock; a `duration` (int64 ns)
+time.sleep(20000000);     // sleep for a duration (ns)
+let elapsed = time.mono() - t0;   // duration arithmetic
+let deadline = time.mono() + 5000000;  // timeout math for net calls
+
+let wall = time.wall();   // unix epoch time in nanoseconds
+```
+
+## API
+
+### `time.mono() -> duration`
+
+### `time.wall() -> int`
+
+### `time.sleep(int)`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+

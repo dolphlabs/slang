@@ -205,6 +205,36 @@ static Token *peek_at(Parser *p, int off) {
 static Expr *parse_expr_source(const char *src, int line, int in_unsafe);
 static Expr *parse_interp_string(Parser *p, Token *tk);
 
+/* A member name after '.' may be spelled the same as a keyword:
+ * `strings.join` collides with the `join[T]` type, `x.map` with
+ * `map[K]V`, `r.result` with `result[T,E]`. There is no ambiguity in
+ * this position -- whatever follows a dot is a name -- so accept any
+ * identifier-shaped token rather than making package authors memorise
+ * a list of words they may not use.
+ *
+ * Tested by shape rather than by token range: every keyword now carries
+ * its spelling (see the KW macro in lexer.c), and a range check over
+ * the T_TY_* block silently excluded `chan` and `join` because those
+ * two sit after T_TY_LINK in the enum. A range would break again the
+ * next time a type token is appended. */
+static int ident_shaped(const Token *tk) {
+    if (!tk->text || !tk->text[0])
+        return 0;
+    if (!isalpha((unsigned char)tk->text[0]) && tk->text[0] != '_')
+        return 0;
+    for (const char *p = tk->text; *p; p++)
+        if (!isalnum((unsigned char)*p) && *p != '_')
+            return 0;
+    return 1;
+}
+
+static Token *expect_member(Parser *p, const char *what) {
+    Token *tk = peek(p);
+    if (tk->type == T_IDENT || ident_shaped(tk))
+        return advance(p);
+    return expect(p, T_IDENT, what);
+}
+
 static Expr *parse_primary(Parser *p) {
     Token *tk = peek(p);
     switch (tk->type) {
@@ -286,7 +316,7 @@ static Expr *parse_primary(Parser *p) {
         char *name = tk->text;
         if (check(p, T_DOT)) {
             advance(p);
-            Token *member = expect(p, T_IDENT, "a member name after '.'");
+            Token *member = expect_member(p, "a member name after '.'");
             StrBuf sb;
             sb_init(&sb);
             sb_append(&sb, tk->text);
@@ -359,7 +389,7 @@ static Expr *parse_postfix(Parser *p) {
     for (;;) {
         if (check(p, T_DOT)) {
             advance(p); /* '.' */
-            Token *f = expect(p, T_IDENT, "a field name after '.'");
+            Token *f = expect_member(p, "a field name after '.'");
             Expr *fl = new_expr(p, EX_FIELD, f->line);
             fl->as.field.base = e;
             fl->as.field.name = f->text;

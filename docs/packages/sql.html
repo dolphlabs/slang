@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sql — slang</title>
+<meta name="description" content="Package sql.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="sql">
+<meta property="og:description" content="Package sql.">
+<meta property="og:type" content="website">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/sql.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <nav class="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>sql</h1>
+      <p class="tagline">Package sql.</p>
+      <p class="agentline">
+        <a href="../packages/sql.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>A SQLite driver (linked automatically, only when a program imports <code>sql</code>). Connections and prepared statements are opaque <code>rawptr</code> handles, exactly like <code>net.tls_*</code>; free them with <code>sql.close</code> / <code>sql.finalize</code>. <strong>Every fallible call returns <code>result[_, str]</code> whose error is SQLite&#x27;s own message</strong> — <code>no such table: users</code>, <code>near &quot;SELCT&quot;: syntax error</code>, <code>UNIQUE constraint failed: users.id</code> — so a bad query stays as visible as a bad socket read (<code>guard let … else let e = err_of(r)</code>), never a silent <code>null</code>. The column getters are infallible (SQLite coerces types; an out-of-range index is a programming error, returning <code>0</code> / <code>&quot;&quot;</code>), so they return bare values.</p>
+<div class="tablewrap"><table><thead><tr><th>Function</th><th>Signature</th></tr></thead><tbody><tr><td><code>sql.open(path)</code></td><td><code>result[rawptr, str]</code> — <code>&quot;:memory:&quot;</code> for in-memory</td></tr><tr><td><code>sql.close(db)</code></td><td>—</td></tr><tr><td><code>sql.exec(db, sql)</code></td><td><code>result[int, str]</code> — runs statement(s), returns rows changed</td></tr><tr><td><code>sql.last_insert_id(db)</code></td><td><code>int</code></td></tr><tr><td><code>sql.prepare(db, sql)</code></td><td><code>result[rawptr, str]</code></td></tr><tr><td><code>sql.finalize(st)</code></td><td>—</td></tr><tr><td><code>sql.reset(st)</code></td><td><code>result[bool, str]</code> — clears bindings, re-run</td></tr><tr><td><code>sql.bind_int/bind_float/bind_text/bind_blob(st, idx, v)</code></td><td><code>result[bool, str]</code> — <code>idx</code> is 1-based</td></tr><tr><td><code>sql.bind_null(st, idx)</code></td><td><code>result[bool, str]</code></td></tr><tr><td><code>sql.step(st)</code></td><td><code>result[bool, str]</code> — <code>true</code> = row ready, <code>false</code> = done</td></tr><tr><td><code>sql.col_count(st)</code></td><td><code>int</code></td></tr><tr><td><code>sql.col_name(st, i)</code> / <code>col_text(st, i)</code></td><td><code>str</code> — <code>i</code> is 0-based</td></tr><tr><td><code>sql.col_int(st, i)</code></td><td><code>int</code></td></tr><tr><td><code>sql.col_float(st, i)</code></td><td><code>float</code></td></tr><tr><td><code>sql.col_blob(st, i)</code></td><td><code>bytes</code></td></tr><tr><td><code>sql.col_is_null(st, i)</code></td><td><code>bool</code></td></tr></tbody></table></div>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;sql&quot;</span>;
+<span class="k">import</span> <span class="s">&quot;log&quot;</span>;
+
+<span class="k">let</span> dr = sql.<span class="f">open</span>(<span class="s">&quot;app.db&quot;</span>);
+<span class="k">guard</span> <span class="k">let</span> db = dr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(dr) {
+    log.<span class="f">error</span>(<span class="s">&quot;db open: &quot;</span> + e);
+    <span class="b">exit</span>(<span class="n">1</span>);
+}
+sql.<span class="f">exec</span>(db, <span class="s">&quot;CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)&quot;</span>);
+
+<span class="k">let</span> pr = sql.<span class="f">prepare</span>(db, <span class="s">&quot;SELECT id, name FROM users WHERE id &gt; ?&quot;</span>);
+<span class="k">guard</span> <span class="k">let</span> st = pr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(pr) {
+    log.<span class="f">error</span>(<span class="s">&quot;prepare: &quot;</span> + e);          <span class="c">// e.g. &quot;no such table: users&quot;</span>
+    <span class="b">exit</span>(<span class="n">1</span>);
+}
+sql.<span class="f">bind_int</span>(st, <span class="n">1</span>, <span class="n">0</span>);
+<span class="k">while</span> <span class="k">true</span> {
+    <span class="k">let</span> sr = sql.<span class="f">step</span>(st);
+    <span class="k">guard</span> <span class="k">let</span> more = sr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(sr) { log.<span class="f">error</span>(<span class="s">&quot;step: &quot;</span> + e); <span class="k">break</span>; }
+    <span class="k">if</span> !more { <span class="k">break</span>; }
+    <span class="b">println</span>(<span class="b">to_str</span>(sql.<span class="f">col_int</span>(st, <span class="n">0</span>)) + <span class="s">&quot; &quot;</span> + sql.<span class="f">col_text</span>(st, <span class="n">1</span>));
+}
+sql.<span class="f">finalize</span>(st);
+sql.<span class="f">close</span>(db);</code></pre></div>
+<p>SQLite calls block the worker — use them for real work off the accept loop (wrap in a <code>spawn</code>ed task), the same caveat as <code>fs</code>. One connection per <code>rawptr</code>; there is no pool, no networked backend (Postgres/MySQL), and no async stepping.</p>
+<p>Query complexity is capped per connection so SQLite&#x27;s recursion stays inside the task stack: at most <strong>50 terms in a compound <code>SELECT</code></strong> (<code>UNION</code>/<code>INTERSECT</code>/<code>EXCEPT</code>) and an <strong>expression depth of 400</strong> (roughly, terms in one <code>AND</code>/<code>OR</code> chain). SQLite&#x27;s stock limits of 500 and 1000 allow a single legal query to want ~325KB of C stack, which would force a task stack far too fat to spawn per connection. Long <code>IN</code> lists, wide result sets, and recursive CTEs are <em>not</em> affected — they don&#x27;t recurse. Exceeding a cap is a normal error through <code>result[_, str]</code> (<code>too many terms in compound SELECT</code>), not a crash.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="open"><div class="api-sig"><code>sql.<span class="f">open</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">rawptr</span>,<span class="t">str</span>]</code><a class="anchor" href="#open">#</a></div></div><div class="api-item" id="close"><div class="api-sig"><code>sql.<span class="f">close</span>(<span class="t">rawptr</span>)</code><a class="anchor" href="#close">#</a></div></div><div class="api-item" id="exec"><div class="api-sig"><code>sql.<span class="f">exec</span>(<span class="t">rawptr</span>, <span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">int</span>,<span class="t">str</span>]</code><a class="anchor" href="#exec">#</a></div></div><div class="api-item" id="last-insert-id"><div class="api-sig"><code>sql.<span class="f">last_insert_id</span>(<span class="t">rawptr</span>) -&gt; <span class="t">int</span></code><a class="anchor" href="#last-insert-id">#</a></div></div><div class="api-item" id="prepare"><div class="api-sig"><code>sql.<span class="f">prepare</span>(<span class="t">rawptr</span>, <span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">rawptr</span>,<span class="t">str</span>]</code><a class="anchor" href="#prepare">#</a></div></div><div class="api-item" id="finalize"><div class="api-sig"><code>sql.<span class="f">finalize</span>(<span class="t">rawptr</span>)</code><a class="anchor" href="#finalize">#</a></div></div><div class="api-item" id="reset"><div class="api-sig"><code>sql.<span class="f">reset</span>(<span class="t">rawptr</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>,<span class="t">str</span>]</code><a class="anchor" href="#reset">#</a></div></div><div class="api-item" id="bind-int"><div class="api-sig"><code>sql.<span class="f">bind_int</span>(<span class="t">rawptr</span>, <span class="t">int</span>, <span class="t">int</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>,<span class="t">str</span>]</code><a class="anchor" href="#bind-int">#</a></div></div><div class="api-item" id="bind-float"><div class="api-sig"><code>sql.<span class="f">bind_float</span>(<span class="t">rawptr</span>, <span class="t">int</span>, <span class="t">float</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>,<span class="t">str</span>]</code><a class="anchor" href="#bind-float">#</a></div></div><div class="api-item" id="bind-text"><div class="api-sig"><code>sql.<span class="f">bind_text</span>(<span class="t">rawptr</span>, <span class="t">int</span>, <span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>,<span class="t">str</span>]</code><a class="anchor" href="#bind-text">#</a></div></div><div class="api-item" id="bind-blob"><div class="api-sig"><code>sql.<span class="f">bind_blob</span>(<span class="t">rawptr</span>, <span class="t">int</span>, <span class="t">bytes</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>,<span class="t">str</span>]</code><a class="anchor" href="#bind-blob">#</a></div></div><div class="api-item" id="bind-null"><div class="api-sig"><code>sql.<span class="f">bind_null</span>(<span class="t">rawptr</span>, <span class="t">int</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>,<span class="t">str</span>]</code><a class="anchor" href="#bind-null">#</a></div></div><div class="api-item" id="step"><div class="api-sig"><code>sql.<span class="f">step</span>(<span class="t">rawptr</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>,<span class="t">str</span>]</code><a class="anchor" href="#step">#</a></div></div><div class="api-item" id="col-count"><div class="api-sig"><code>sql.<span class="f">col_count</span>(<span class="t">rawptr</span>) -&gt; <span class="t">int</span></code><a class="anchor" href="#col-count">#</a></div></div><div class="api-item" id="col-name"><div class="api-sig"><code>sql.<span class="f">col_name</span>(<span class="t">rawptr</span>, <span class="t">int</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#col-name">#</a></div></div><div class="api-item" id="col-is-null"><div class="api-sig"><code>sql.<span class="f">col_is_null</span>(<span class="t">rawptr</span>, <span class="t">int</span>) -&gt; <span class="t">bool</span></code><a class="anchor" href="#col-is-null">#</a></div></div><div class="api-item" id="col-int"><div class="api-sig"><code>sql.<span class="f">col_int</span>(<span class="t">rawptr</span>, <span class="t">int</span>) -&gt; <span class="t">int</span></code><a class="anchor" href="#col-int">#</a></div></div><div class="api-item" id="col-float"><div class="api-sig"><code>sql.<span class="f">col_float</span>(<span class="t">rawptr</span>, <span class="t">int</span>) -&gt; <span class="t">float</span></code><a class="anchor" href="#col-float">#</a></div></div><div class="api-item" id="col-text"><div class="api-sig"><code>sql.<span class="f">col_text</span>(<span class="t">rawptr</span>, <span class="t">int</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#col-text">#</a></div></div><div class="api-item" id="col-blob"><div class="api-sig"><code>sql.<span class="f">col_blob</span>(<span class="t">rawptr</span>, <span class="t">int</span>) -&gt; <span class="t">bytes</span></code><a class="anchor" href="#col-blob">#</a></div></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

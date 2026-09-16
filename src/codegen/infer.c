@@ -272,6 +272,19 @@ const char *infer_call(CG *cg, Expr *e) {
             cg_error(e->line, "chan_close() expects a chan (got %s)", ct);
         return "void";
     }
+    if (!strcmp(name, "to_int") || !strcmp(name, "to_float")) {
+        if (n != 1)
+            cg_error(e->line, "%s() takes exactly one argument", name);
+        const char *t = infer_type(cg, e->as.call.args[0]);
+        if (!is_str(t))
+            cg_error(e->line, "%s() expects a str (got %s)", name, t);
+        /* Fallible on purpose, and the inverse of to_str: parsing can
+           fail, and a parser that cannot say so is how `PORT=abc` ends
+           up binding port 0. */
+        const char *v = !strcmp(name, "to_int") ? "int" : "float";
+        res_cname(cg, v, "str"); /* register the instantiation */
+        return xasprintf("result[%s,str]", v);
+    }
     if (!strcmp(name, "make_mutex")) {
         if (n != 0)
             cg_error(e->line, "make_mutex() takes no arguments");

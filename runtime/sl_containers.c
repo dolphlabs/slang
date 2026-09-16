@@ -1028,6 +1028,72 @@ static char *sl_strdup(const char *s) {
     return p;
 }
 
+/* ---- parsing: str -> number ----------------------------------------
+ *
+ * These return a flag plus an out-parameter rather than a result[T,str]
+ * because this file is spliced into the program BEFORE the monomorphized
+ * result types exist. The generated code wraps the answer into the right
+ * result struct at the call site (see to_int/to_float in expr.c).
+ *
+ * Strict on purpose. The demos this replaces used libc atoi(), which
+ * returns 0 for "abc", 80 for "80x80", and 0 for "", reporting nothing
+ * in any of those cases -- so `PORT=abc` silently bound an ephemeral
+ * port. Every one of those inputs is an error here, with a message that
+ * names the input. That is the whole reason to_int exists rather than
+ * an `extern fn atoi`.
+ *
+ * Rejected deliberately: surrounding whitespace, a lone sign, embedded
+ * underscores, "0x" prefixes, and anything after the digits. A caller
+ * who wants leniency can trim first; a caller who gets leniency they
+ * did not ask for cannot undo it. */
+
+static int sl_str_parse_int(const char *s, long long *out,
+                            const char **err) {
+    if (!s || !*s) { *err = "cannot parse an empty string as int"; return 0; }
+    const char *p = s;
+    int neg = 0;
+    if (*p == '+' || *p == '-') { neg = (*p == '-'); p++; }
+    if (!*p) { *err = "no digits after the sign"; return 0; }
+    unsigned long long acc = 0;
+    /* The positive limit is one smaller than the negative one, so the
+       bound is computed from the sign rather than assumed symmetric --
+       otherwise "-9223372036854775808" is rejected as overflow despite
+       being exactly representable. */
+    const unsigned long long limit =
+        neg ? 9223372036854775808ULL : 9223372036854775807ULL;
+    for (; *p; p++) {
+        if (*p < '0' || *p > '9') { *err = "not a base-10 integer"; return 0; }
+        unsigned d = (unsigned)(*p - '0');
+        if (acc > (limit - d) / 10ULL) { *err = "out of range for int"; return 0; }
+        acc = acc * 10ULL + d;
+    }
+    *out = neg ? -(long long)acc : (long long)acc;
+    return 1;
+}
+
+static int sl_str_parse_f64(const char *s, double *out, const char **err) {
+    if (!s || !*s) { *err = "cannot parse an empty string as float"; return 0; }
+    /* strtod accepts "inf", "nan" and hex floats. Those are almost never
+       what a config value or a request field meant, and accepting them
+       silently turns a typo into a NaN that propagates. */
+    for (const char *q = s; *q; q++) {
+        char c = *q;
+        if (!((c >= '0' && c <= '9') || c == '.' || c == '-' || c == '+' ||
+              c == 'e' || c == 'E')) {
+            *err = "not a decimal number";
+            return 0;
+        }
+    }
+    errno = 0;
+    char *end = NULL;
+    double v = strtod(s, &end);
+    if (end == s) { *err = "not a decimal number"; return 0; }
+    if (*end) { *err = "trailing characters after the number"; return 0; }
+    if (errno == ERANGE) { *err = "out of range for float"; return 0; }
+    *out = v;
+    return 1;
+}
+
 static char *sl_str_concat(const char *a, const char *b) {
     size_t la = strlen(a), lb = strlen(b);
     char *p = (char *)sl_gc_alloc(la + lb + 1, NULL);

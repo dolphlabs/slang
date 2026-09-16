@@ -10,3 +10,13 @@ tests/pkgtrans/slang.project
 tests/pkgtrans/slang.lock
 
 main.gen.c
+slangc-dist
+dist/
+
+# `slangc --run file.sl` leaves a binary named after the source next to
+# it. demo/samplex/server.sl produced a committed `server` binary once
+# already; these are the ones this repo actually builds.
+server
+arr
+cc
+hb

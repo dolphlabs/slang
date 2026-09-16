@@ -1,18 +1,75 @@
 # slang
 
-A statically typed language for server-side and network programming.
+A statically typed language built primarily for server-side and
+network programming.
 `spawn` is M:N — green tasks on a worker pool, not a thread per
 connection. Accept, recv, and send park. Memory is a precise,
 non-moving, stop-the-world mark-sweep collector (`runtime/sl_gc.c`);
 cycles are collected. `slangc` emits C and your system `cc` builds the
 binary.
 
+**Built and maintained by [Dolphlabs](https://dolphlabs.com)** — Dolph
+Tech Limited.
+
+## Documentation
+
+Full documentation site: **<https://dolphlabs.github.io/slang/>**
+
+Build it locally with `make docs` (dependency-free Python 3) and serve
+with `make docs-serve`. The site is generated from this repository --
+these README sections, the compiler's own signature tables, and the
+`pub` declarations in `stdlib/` -- so it cannot drift from the code.
+See [`www/README.md`](www/README.md) for the documentation convention
+every slang package follows.
+
+Reading with an agent? Every page has a Markdown twin at the same path,
+`/llms.txt` indexes the site, `/llms-full.txt` is the whole thing as one
+document, and `/api.json` is the machine-readable API index.
+
 ## Quick start
 
+Install the compiler, then start a project:
+
 ```sh
-make                 # build the slangc compiler
-make test            # compile & run the example programs
+git clone https://github.com/dolphlabs/slang && cd slang
+sudo make install            # /usr/local by default; PREFIX=~/.local works too
+
+slangc new hello
+cd hello
+slangc main.sl --run         # hello from hello
 ```
+
+`make install` puts `slangc` in `$(PREFIX)/bin` and the runtime and
+standard library in `$(PREFIX)/lib/slang` — both are needed, because
+`slangc` splices its runtime C into every program it compiles. Remove it
+all with `make uninstall`. `make dist` builds a relocatable tarball with
+the same layout, which can be unpacked anywhere and run in place.
+
+Working on the compiler itself:
+
+```sh
+make                 # build ./slangc against this working tree
+make test            # compile & run the example programs
+make docs            # rebuild the documentation site
+```
+
+### Starting a project
+
+```sh
+slangc new myapp     # creates myapp/ with slang.project, main.sl, .gitignore
+slangc new .         # same, in the directory you are already in
+```
+
+`slangc new` writes `slang.project` but **not** `slang.lock`. The lock is
+derived: `slangc get` generates it from the `pkg` lines in
+`slang.project`, and a lock file for a project with no dependencies
+records nothing. Cargo and Go draw the same line — `cargo new` writes
+`Cargo.toml` and not `Cargo.lock`.
+
+Scaffolding lives in `slangc` rather than a companion tool because the
+compiler already owns both formats: it parses `slang.project` and writes
+`slang.lock`. A separate tool would have to reimplement a grammar it
+does not control.
 
 Compile a slang program:
 
@@ -126,6 +183,8 @@ no escaping).
 - `del(m, k)` — remove key `k` (and its value) from map `m`
 - `to_str(x)` — convert any scalar or bytes value to `str`
 - `to_bytes(s)` — convert a `str` to its raw bytes
+- `to_int(s)` / `to_float(s)` — parse a `str`, returning
+  `result[int, str]` / `result[float, str]` (see below)
 - `to_le(n)` / `to_be(n)` — integer to 8-byte little/big-endian `bytes`
 - `from_le(b)` / `from_be(b)` — 8-byte little/big-endian `bytes` to integer
 - `exit(code)` — terminate the process immediately with the given status
@@ -186,6 +245,41 @@ no escaping).
   int casts truncate toward zero.
 - Mixed-width arithmetic promotes to the wider operand; same-width
   signed/unsigned mixes resolve to the unsigned type (C semantics).
+
+#### Parsing numbers from text
+
+`to_int(s)` and `to_float(s)` are the inverse of `to_str`, and they are
+**fallible**, because parsing is:
+
+```slang
+let r = to_int(proc.getenv("PORT") ?? "8080");
+guard let port = r else let e = err_of(r) {
+    log.error("PORT is not a number: " + e);
+    exit(2);
+}
+```
+
+They are strict on purpose. Every one of these is an error, with a
+message saying which:
+
+| input | `to_int` | C's `atoi` would give |
+|---|---|---|
+| `"8080"` | `8080` | 8080 |
+| `"abc"` | err: not a base-10 integer | **0** |
+| `"80x80"` | err: not a base-10 integer | **80** |
+| `""` | err: cannot parse an empty string as int | **0** |
+| `"  12"` | err: not a base-10 integer | 12 |
+| `"9223372036854775808"` | err: out of range for int | undefined |
+
+Surrounding whitespace, `1_000`, `0x10` and trailing characters are all
+rejected. A caller who wants leniency can `strings.trim` first; a caller
+who gets leniency they did not ask for cannot undo it. `to_float`
+likewise rejects `inf` and `nan`, which `strtod` would accept and which
+are almost never what a config value meant.
+
+The error message does not echo the offending input — the caller already
+has it, and building that string would mean another allocation on the
+failure path.
 
 #### Bitwise operations and integer literals
 
@@ -497,8 +591,8 @@ Concurrency below.
 
 ## Standard packages
 
-`time`, `net`, `json`, `proc`, `fs`, `log`, `crypto`, `sql`, and
-`regex` are compiler-provided native packages — no source files, just
+`time`, `net`, `json`, `proc`, `fs`, `log`, `crypto`, `sql`, `regex`,
+`os` and `strings` are compiler-provided native packages — no source files, just
 `import "time";` / `import "net";` / `import "json";` / `import "proc";`
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` like any other package.
@@ -1264,6 +1358,55 @@ frame is still rejected as the connection error it is (§6.3) rather than
 waved through to desync the stream. No browser has been run against the
 TLS path yet — the machinery is there and tested against slang's own
 client, but a real browser is different evidence.
+
+#### `strings`
+
+Search, trim, case, split and join on `str`. The package cannot be named
+`str` because that token is the type — the same reason Go calls its own
+`strings`.
+
+```slang
+import "strings";
+
+strings.find("hello world", "world");   // 6, or -1
+strings.rfind("a/b/c", "/");            // 3
+strings.contains("hello", "ell");
+strings.has_prefix("hello", "he");
+strings.has_suffix("hello", "lo");
+strings.count("a,b,c", ",");            // 2
+
+strings.trim("  hi \r\n");              // "hi" (space/tab/CR/LF)
+strings.trim_start(s); strings.trim_end(s);
+strings.to_upper("hi"); strings.to_lower("HI");   // ASCII only
+
+strings.slice("hello", 1, 3);           // "el"
+strings.slice("hello", -3, 5);          // "llo" — negative counts back
+strings.repeat("ab", 3);                // "ababab"
+strings.replace("a,b,c", ",", " | ");
+
+strings.split("a,b,,c", ",");           // ["a", "b", "", "c"]
+strings.join(parts, ",");               // the inverse of split
+```
+
+This is a compiler-provided native package, and it has to be: `str`
+supports `len`, `+` and `==` and nothing else — it cannot be indexed or
+sliced — so none of it could be written in slang without converting to
+`bytes` and back on every call. `byteutil` covers the `bytes` side.
+
+Three behaviours worth knowing:
+
+- **Indices are byte offsets and the case operations are ASCII-only.**
+  `str` is UTF-8 bytes; doing better means shipping a Unicode table and
+  a normalisation policy, which is a different project. Treat these as
+  byte operations, because that is what they are.
+- **`slice` clamps rather than panics.** Slicing is how you narrow a
+  string you just searched, and a `find` that returned -1 on the line
+  above should not turn the next line into a crash. A negative index
+  counts from the end.
+- **`split` and `join` are exact inverses.** Adjacent separators produce
+  empty elements, so the result always has `count(s, sep) + 1` elements
+  and `join(split(s, sep), sep) == s` for any non-empty separator. An
+  empty separator splits into single bytes.
 
 #### `byteutil`
 

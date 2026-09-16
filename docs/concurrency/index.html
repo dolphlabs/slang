@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Concurrency — slang</title>
+<meta name="description" content="M:N green threads, channels, select and mutex.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="Concurrency">
+<meta property="og:description" content="M:N green threads, channels, select and mutex.">
+<meta property="og:type" content="website">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../concurrency/index.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <nav class="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a class="active" href="../concurrency/index.html">Concurrency</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>Concurrency</h1>
+      <p class="tagline">M:N green threads, channels, select and mutex.</p>
+      <p class="agentline">
+        <a href="../concurrency/index.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<h2 id="concurrency">Concurrency</h2>
+<p><code>spawn</code> submits a function as an <code>sl_task</code> on the M:N worker pool (sized <code>ncpu</code>); <code>chan[T]</code> is a bounded, park-aware queue. Blocking-looking code stays blocking-looking — <code>net.accept</code>, <code>net.recv</code>, <code>time.sleep</code>, and <code>chan_send</code>/<code>chan_recv</code> park the task and return the OS thread to the pool. There is no colored-function split. TLS handshake and I/O park on the same reactor as TCP (<code>SSL_ERROR_WANT_READ</code>/<code>WANT_WRITE</code>). DNS (<code>getaddrinfo</code>) runs on a dedicated thread; the dialing task parks until it finishes.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">fn</span> <span class="f">worker</span>(id: <span class="t">i32</span>, results: <span class="t">chan</span>[<span class="t">i32</span>]) {
+    <span class="b">chan_send</span>(results, (id * <span class="n">10</span>) <span class="k">as</span> <span class="t">i32</span>);
+}
+
+<span class="k">let</span> results: <span class="t">chan</span>[<span class="t">i32</span>] = <span class="b">make_chan</span>(<span class="n">3</span>);
+<span class="k">spawn</span> <span class="f">worker</span>(<span class="n">1</span>, results);
+<span class="k">spawn</span> <span class="f">worker</span>(<span class="n">2</span>, results);
+<span class="k">spawn</span> <span class="f">worker</span>(<span class="n">3</span>, results);
+
+<span class="k">let</span> mut_sum = <span class="n">0</span>;
+<span class="k">for</span> i <span class="k">in</span> <span class="n">0..3</span> {
+    <span class="k">let</span> v = <span class="b">chan_recv</span>(results);       <span class="c">// blocks until a value or close</span>
+    <span class="k">guard</span> <span class="k">let</span> x = v <span class="k">else</span> {
+        <span class="b">println</span>(<span class="s">&quot;channel closed early&quot;</span>);
+        <span class="b">exit</span>(<span class="n">1</span>);
+    }
+    mut_sum = mut_sum + x;
+}
+<span class="b">println</span>(mut_sum); <span class="c">// 60</span>
+
+<span class="b">chan_close</span>(results);
+<span class="b">chan_recv</span>(results) ?? -<span class="n">1</span>;  <span class="c">// none after close+drain -&gt; -1</span></code></pre></div>
+<ul><li><strong><code>spawn f(args...);</code></strong> evaluates every argument in the spawning context (no closures — nothing is captured implicitly) and submits <code>f</code> as a growable-stack task on the striped run queues (16 hashed stripes with work-stealing, plus a global doorbell for sleepers). <code>f</code> may be a plain top-level function, an <code>extern fn</code>, or a <strong>function value</strong> (<code>spawn w(1, out);</code>, <code>spawn job.run(x);</code>) — not a method and not a builtin. There is no <code>spawn</code> on <code>net.*</code>/<code>time.*</code> calls directly; wrap the native call in a plain function and spawn that instead. As a statement, the result is discarded. As an expression, <code>let h = spawn f(...)</code> has type <code>join[T]</code> when <code>f</code> returns <code>T</code>. <code>join_wait(h) -&gt; result[T, str]</code> parks until <code>f</code> finishes; a panic in that task is <code>err</code>, not process death.</li><li><strong><code>chan[T]</code></strong>, built with <code>make_chan(capacity)</code> (element type inferred from an annotated binding, same as <code>none</code>): <code>chan_send(ch, v)</code> blocks while full, <code>chan_recv(ch) -&gt; opt[T]</code> blocks while empty and returns <code>none</code> once the channel is closed and drained (instead of inventing a second return-value convention, it reuses <code>opt[T]</code>), <code>chan_close(ch)</code> wakes every blocked sender/receiver. Sending on a closed channel is a checked runtime error, not undefined behavior.</li><li><strong><code>select</code></strong> waits on several channels at once and runs the arm that becomes ready first:</li></ul>
+<p>``<code>slang while running { select { case let job = chan_recv(work) { handle(job ?? 0); } case let q = chan_recv(quit) { running = false; } default { // optional: runs when no arm is ready, instead of blocking } } } </code>``</p>
+<p>A <code>case let v = chan_recv(ch)</code> arm binds <code>v</code> to <code>opt[T]</code> for that arm&#x27;s body, exactly as a plain <code>chan_recv</code> would — <code>none</code> means the channel is closed and drained. A <code>case chan_send(ch, v)</code> arm is ready when the channel has buffer space and binds nothing. Sending on a closed channel from a send arm is the same checked runtime error as <code>chan_send</code> itself.</p>
+<p>Every arm&#x27;s channel expression (and a send arm&#x27;s value) is evaluated <strong>once</strong>, before the select blocks. With no <code>default</code> and nothing ever ready, <code>select</code> parks forever — the same as <code>chan_recv</code> on a channel nobody sends to. Which arm wins when several are ready is not specified: polling starts at a rotating offset, so a busy first channel cannot starve the later arms.</p>
+<p><strong>A closed channel is permanently ready.</strong> Its recv arm fires immediately and forever, with <code>none</code>. This is the same as Go, but Go lets you disable an arm by setting its channel to <code>nil</code> and slang has no nil channel — so a loop that keeps selecting on a closed channel will spin. Structure the loop to stop instead (count the items you expect, or take the close as the exit condition), as <code>tests/select/main.sl</code> does.</p>
+<ul><li><strong><code>mutex</code></strong>, built with <code>make_mutex()</code>: <code>mutex_lock(m)</code> / <code>mutex_unlock(m)</code> around whatever the lock protects, and <code>mutex_trylock(m) -&gt; bool</code> when you would rather do something else than wait. A contended lock parks the <em>task</em>, not the worker thread, so a handler waiting its turn costs a queue slot rather than one of the pool&#x27;s OS threads — the same reason <code>chan</code> parks. A <code>mutex</code> is a handle: copying the binding aliases the same lock.</li></ul>
+<p>Two things are checked rather than left to chance, because both otherwise present as something other than what they are:</p>
+<ul><li>Locking a mutex this task already holds is a runtime error. slang&#x27;s mutexes are <strong>not</strong> recursive, and without the check the task would park forever on itself — a hang is the least useful diagnosis available.</li><li>Unlocking a mutex this task does not hold is a runtime error. The alternative is corruption in whatever the lock was protecting, discovered much later and somewhere else.</li></ul>
+<p>There is no scope guard (no <code>defer</code>, no closures), so an early <code>return</code> between lock and unlock leaks the lock. Keep the critical section small enough to see both ends of it at once:</p>
+<p>```slang gc struct State { tasks: [Task], next_id: int, lock: mutex }</p>
+<p>fn create(st: State, title: str) -&gt; Task { mutex_lock(st.lock); let t = Task { id: st.next_id, title: title, done: false }; st.next_id = st.next_id + 1; push(st.tasks, t); mutex_unlock(st.lock); return t;                 // unlock BEFORE the return, every path } ```</p>
+<p>A mutex is not always the right tool. <code>demo/samplex/server.sl</code> uses one because many handlers touch one list. <code>stdlib/http2/conn.sl</code> deliberately does not: its single writer task also guarantees that a HEADERS block and its CONTINUATION frames are never split by another frame, which a lock would not give.</p>
+<ul><li><strong>Failure isolation</strong>: a runtime error (an out-of-bounds index, a missing map key, integer division by zero, ...) inside a spawned task ends <em>that task</em> — printed to stderr as <code>task panicked: ...</code> — not the whole process. The same error in the main task still ends the process, same as today; there is no isolation boundary around top-level code. <code>exit(code)</code> always ends the whole process regardless of which task calls it — it means what it always means.</li></ul>
+<p><strong>What this does not give you.</strong> There is no ownership/borrow checker here — slang&#x27;s answer to &quot;many tasks, no data races&quot; is thread isolation plus channels for the values that need to move between tasks, not a type system that forbids sharing mutable state. Passing a struct, list, or map into a spawned task and mutating it from more than one task concurrently is exactly as unsafe as it is in Go or Java: nothing currently stops you, so don&#x27;t — <code>mutex</code> is there when you need it. <code>join_wait</code> waits for one spawned task. <code>proc.active_tasks()</code> (see the <code>proc</code> section) is the aggregate count of everything currently in flight, useful for draining on shutdown but not for waiting on one task in particular.</p>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

@@ -595,6 +595,83 @@ static void sl_ctx_make(sl_task *t, void (*entry)(void *), void *arg) {
 #endif
 }
 
+/* ---- task stacks: mapped, with a guard page underneath ------------
+ *
+ * A task stack used to be a plain malloc() block. Overflowing one
+ * therefore did not fault -- it silently overwrote whatever the
+ * allocator had placed below, which under a task-heavy workload is
+ * routinely ANOTHER TASK'S STACK, including the return address that
+ * task would later jump through. The crash then surfaced minutes
+ * later, in an unrelated task, as a jump to a heap address: an
+ * EXC_BAD_ACCESS whose faulting address IS the program counter.
+ *
+ * That was not a hypothetical. A canary zone below every stack was
+ * clobbered 1-3 times per run of stress_test/concurrent_compute under
+ * amplified preemption, up to 2336 bytes deep -- which also explains
+ * why raising SL_TASK_GUARD_MARGIN from 1024 to 2048 never helped: the
+ * overflow simply reaches further than the margin does.
+ *
+ * A PROT_NONE page below the usable region turns that silent
+ * corruption into an immediate, precise fault AT THE INSTANT OF THE
+ * OVERFLOW, in the task that caused it, with the offending frame still
+ * on the stack. It does not make overflow impossible; it makes it
+ * report itself instead of damaging a bystander.
+ *
+ * Cost is address space, not resident memory: the guard page is never
+ * backed, and mapped stack pages fault in only as they are touched.
+ * On a 4KB-page system (x86_64, and Linux on arm64) an 8KB stack costs
+ * 12KB of address space and the same 8KB resident as before. On a
+ * 16KB-page system (Apple Silicon) the usable region rounds up to
+ * 16KB, so a task's minimum resident stack doubles -- a real cost,
+ * accepted because silent cross-task corruption is worse than a page
+ * of slack.
+ *
+ * stack_size is kept page-rounded so the unmap length is always
+ * derivable as guard + stack_size, with no extra field on sl_task. */
+
+#ifndef MAP_ANONYMOUS
+#define MAP_ANONYMOUS MAP_ANON
+#endif
+
+static size_t sl_stack_page(void) {
+    static size_t pg = 0;
+    if (!pg) {
+        long v = sysconf(_SC_PAGESIZE);
+        pg = (v > 0) ? (size_t)v : 4096;
+    }
+    return pg;
+}
+
+static size_t sl_stack_round(size_t want) {
+    size_t pg = sl_stack_page();
+    return ((want + pg - 1) / pg) * pg;
+}
+
+/* Returns the mapping base; *usable is updated to the page-rounded
+   size, and the caller's stack_base is base + one guard page. */
+static void *sl_stack_map(size_t *usable) {
+    size_t pg = sl_stack_page();
+    size_t sz = sl_stack_round(*usable);
+    void *base = mmap(NULL, pg + sz, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (base == MAP_FAILED)
+        return NULL;
+    /* The lowest page is the guard. Losing this mprotect would leave a
+       working stack with no protection at all, so a failure here is
+       fatal rather than ignored. */
+    if (mprotect(base, pg, PROT_NONE) != 0) {
+        munmap(base, pg + sz);
+        return NULL;
+    }
+    *usable = sz;
+    return base;
+}
+
+static void sl_stack_unmap(void *base, size_t usable) {
+    if (base)
+        munmap(base, sl_stack_page() + usable);
+}
+
 static void *sl_task_translate(void *ptr, void *old_base, size_t old_size,
                               void *new_base, size_t new_size) {
     uintptr_t p = (uintptr_t)ptr;
@@ -710,9 +787,9 @@ static void sl_task_grower_entry(void *arg) {
     void *old_rsp = t->rsp;
 
     size_t new_size = old_size * 2;
-    void *raw = malloc(new_size + 16);
+    void *raw = sl_stack_map(&new_size);
     if (!raw) { sl_rt_error("out of memory growing task stack", 0, 0); }
-    void *new_base = (void *)(((uintptr_t)raw + 15) & ~(uintptr_t)15);
+    void *new_base = (void *)((char *)raw + sl_stack_page());
 
     /* Copy the ENTIRE old buffer to the END of the new one -- never
      * just the live range above rsp: this is what keeps the x86_64
@@ -787,9 +864,10 @@ static void sl_task_grower_entry(void *arg) {
         old_fp = old_next_fp;
     }
 
-    free(old_raw); /* NOT old_base -- see sl_task's own raw_base field
-                       comment (runtime_core.c) for why these can
-                       differ */
+    sl_stack_unmap(old_raw, old_size); /* NOT old_base -- see sl_task's
+                       own raw_base field comment (runtime_core.c) for
+                       why these differ: raw_base is the mapping,
+                       stack_base is one guard page above it */
     t->stack_base = new_base;
     t->raw_base = raw;
     t->stack_size = new_size;
@@ -942,14 +1020,19 @@ static void sl_task_stack_init(sl_task *t, void (*entry)(void *), void *arg) {
     if (!t->raw_base) {
         sl_rt_preempt_disable();
         t->stack_size = SL_TASK_INITIAL_STACK_SIZE;
-        void *raw = malloc(t->stack_size + 16);
+        size_t usable = t->stack_size;
+        void *raw = sl_stack_map(&usable);
         if (!raw) {
             fprintf(stderr, "slang: out of memory allocating task stack\n");
             exit(1);
         }
         sl_rt_preempt_enable();
         t->raw_base = raw;
-        t->stack_base = (void *)(((uintptr_t)raw + 15) & ~(uintptr_t)15);
+        t->stack_size = usable; /* page-rounded; the unmap length is
+                                   derived from it */
+        /* One guard page up. Page-aligned, so the old 16-byte
+           alignment fudge is unnecessary. */
+        t->stack_base = (void *)((char *)raw + sl_stack_page());
     }
     sl_ctx_make(t, entry, arg);
     /* Tier 11 eighth slice (async preemption): primed to 1, not 0 --
@@ -1058,8 +1141,7 @@ static void sl_task_release(sl_task *t) {
         sl_rt_preempt_enable();
     }
 #endif
-    void *raw = t->raw_base;
-    free(raw);
+    sl_stack_unmap(t->raw_base, t->stack_size);
     free(t);
 }
 
