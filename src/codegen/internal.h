@@ -176,6 +176,10 @@ typedef struct {
 typedef struct {
     char *pkg;    /* target function's owning package */
     char *name;   /* target function's simple name */
+    char *fntype; /* set instead when spawning a function VALUE: the
+                     shape is keyed by fn type, and the target travels
+                     in the args struct rather than being a fixed C
+                     symbol baked into the trampoline */
     char *sname;  /* C struct type name, e.g. sl_spawn_args_main_handle */
     char *tname;  /* C trampoline function name */
     int has_tracer; /* Tier 10: does sname's args struct have at least
@@ -449,6 +453,8 @@ char *maybe_cast(CG *cg, const char *dst, const char *src,
 const char *opt_cname(CG *cg, const char *inner);
 const char *res_cname(CG *cg, const char *tv, const char *te);
 SpawnShape *spawn_shape_for(CG *cg, FuncSig *sig);
+SpawnShape *spawn_shape_for_fn(CG *cg, const char *fntype);
+const char *spawn_fn_type(CG *cg, Expr *call);
 void var_push(CG *cg, const char *name, const char *slang);
 void var_scope_reset(CG *cg);
 void var_scope_push(CG *cg);

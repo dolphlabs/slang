@@ -897,7 +897,13 @@ const char *infer_type(CG *cg, Expr *e) {
             infer_type(cg, e->as.spawn.call->as.call.args[i]);
             cg->expect = saved;
         }
-        spawn_shape_for(cg, sig);
+        {
+            const char *sft = spawn_fn_type(cg, e->as.spawn.call);
+            if (sft)
+                spawn_shape_for_fn(cg, sft);
+            else
+                spawn_shape_for(cg, sig);
+        }
         const char *t = xasprintf("join[%s]", sig->ret_slang);
         e->inf_ty = t;
         return t;
