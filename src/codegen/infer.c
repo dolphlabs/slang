@@ -757,6 +757,16 @@ const char *infer_binary(CG *cg, Expr *e) {
         if ((!strcmp(op, "==") || !strcmp(op, "!=")) && is_until(lt) &&
             is_until(rt))
             return "bool";
+        /* Equality only: `true < false` has no meaning worth giving it.
+           Before this, `a == b` on two bools was "cannot compare bool and
+           bool", forcing `a && b || !a && !b` for the most basic test a
+           language has. */
+        if ((!strcmp(op, "==") || !strcmp(op, "!=")) &&
+            !strcmp(lt, "bool") && !strcmp(rt, "bool"))
+            return "bool";
+        if (!strcmp(lt, "bool") && !strcmp(rt, "bool"))
+            cg_error(e->line, "'%s' does not apply to bool (only == and != "
+                              "do)", op);
         cg_error(e->line, "cannot compare %s and %s", lt, rt);
     }
     if (!strcmp(op, "+")) {

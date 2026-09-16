@@ -253,9 +253,11 @@ char *gen_comparison(CG *cg, Expr *e, const char *lt, const char *rt) {
     int widen = !(is_str(lt) && is_str(rt)) && !(is_bytes(lt) && is_bytes(rt)) &&
                 !(is_fault(lt) && is_fault(rt)) &&
                 !(is_peer(lt) && is_peer(rt)) &&
-                !(is_until(lt) && is_until(rt));
+                !(is_until(lt) && is_until(rt)) &&
+                !(!strcmp(lt, "bool") && !strcmp(rt, "bool"));
     const char *pt = widen ? promote(lt, rt) : NULL;
-    const char *seq_t = is_str(lt) && is_str(rt)       ? "str"
+    const char *seq_t = !strcmp(lt, "bool") && !strcmp(rt, "bool") ? "bool"
+                        : is_str(lt) && is_str(rt)     ? "str"
                         : is_bytes(lt) && is_bytes(rt) ? "bytes"
                         : is_fault(lt) && is_fault(rt) ? "fault"
                         : is_peer(lt) && is_peer(rt)   ? "peer"
