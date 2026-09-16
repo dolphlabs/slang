@@ -813,6 +813,10 @@ static void sl_pool_start(void) {
      * task starts, and before the workers below exist -- signal
      * dispositions are process-wide, so doing it first means no worker
      * can ever race a write against it. */
+    /* Before any worker exists, so the async trampoline's own read
+     * of the flag can never race the write. */
+    sl_cpu_detect();
+
     signal(SIGPIPE, SIG_IGN);
 
     long n = sysconf(_SC_NPROCESSORS_ONLN);
