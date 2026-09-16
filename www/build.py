@@ -56,8 +56,8 @@ PAGES = [
     {
         "path": "index.html",
         "title": "slang",
-        "tagline": "A statically typed language for server-side and network "
-                   "programming that compiles to C.",
+        "tagline": "A statically typed language built primarily for "
+                   "server-side and network programming. Compiles to C.",
         "kind": "home",
         "nav": "Home",
         "sections": ["Quick start"],
@@ -631,8 +631,9 @@ def build(out_dir):
 
     llms = ["# slang",
             "",
-            "> A statically typed language for server-side and network "
-            "programming. Compiles to C. M:N green threads, a precise "
+            "> A statically typed language built primarily for "
+            "server-side and network programming -- that is the focus, "
+            "not a limit. Compiles to C. M:N green threads, a precise "
             "mark-sweep collector, and native packages. Built and "
             "maintained by %s (%s), %s." % (ORG, ORG_ENTITY, ORG_URL),
             "",
@@ -652,6 +653,35 @@ def build(out_dir):
     for asset in ("style.css", "app.js"):
         shutil.copy(WWW / "theme" / asset, out / asset)
     (out / ".nojekyll").write_text("", encoding="utf-8")
+
+    # Cloudflare Pages reads _headers; GitHub Pages ignores the file, so
+    # shipping it costs nothing and fixes two things on Cloudflare.
+    #
+    # text/plain rather than text/markdown for the .md twins: both are
+    # defensible, but text/markdown makes some browsers DOWNLOAD the file
+    # instead of showing it, and these pages are meant to be readable by
+    # a person who clicked "Markdown version" as much as by a program.
+    #
+    # The CORS header is what lets a tool running on another origin fetch
+    # api.json or llms.txt at all. Without it the agent-facing half of
+    # this site is only reachable by things that ignore the browser's
+    # same-origin rules.
+    (out / "_headers").write_text("""/*.md
+  Content-Type: text/plain; charset=utf-8
+  Access-Control-Allow-Origin: *
+
+/*.txt
+  Content-Type: text/plain; charset=utf-8
+  Access-Control-Allow-Origin: *
+
+/*.json
+  Content-Type: application/json; charset=utf-8
+  Access-Control-Allow-Origin: *
+
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+""", encoding="utf-8")
     (out / "robots.txt").write_text(
         "User-agent: *\nAllow: /\n", encoding="utf-8")
 
@@ -757,8 +787,9 @@ HERO = """
     <p class="eyebrow">A <a href="https://dolphlabs.com"
        rel="noopener">Dolphlabs</a> project</p>
     <h1>slang</h1>
-    <p class="lede">A statically typed language for server-side and
-      network programming. It compiles to C, schedules
+    <p class="lede">A statically typed language built <strong>primarily
+      for server-side and network programming</strong> &mdash; that is
+      where it is aimed, not where it stops. It compiles to C, schedules
       <strong>M:N green threads</strong>, collects with a precise
       mark-sweep GC, and ships its standard library inside the
       compiler.</p>
@@ -819,8 +850,9 @@ def home_body():
 
 def home_md():
     return (
-        "slang is a statically typed language for server-side and network "
-        "programming. It compiles to C, schedules M:N green threads, "
+        "slang is a statically typed language built primarily for "
+        "server-side and network programming -- that is the focus, not a "
+        "limit. It compiles to C, schedules M:N green threads, "
         "collects with a precise mark-sweep GC, and ships its standard "
         "library inside the compiler.\n")
 

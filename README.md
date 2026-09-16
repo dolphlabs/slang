@@ -1,6 +1,7 @@
 # slang
 
-A statically typed language for server-side and network programming.
+A statically typed language built primarily for server-side and
+network programming.
 `spawn` is M:N — green tasks on a worker pool, not a thread per
 connection. Accept, recv, and send park. Memory is a precise,
 non-moving, stop-the-world mark-sweep collector (`runtime/sl_gc.c`);

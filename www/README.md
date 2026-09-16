@@ -90,12 +90,52 @@ docs/               generated output, committed, served by Pages
 
 ## Deploying
 
-`docs/` is committed, so publishing is: run `make docs`, commit, push,
-and set Pages to serve from the `docs/` folder on your default branch.
-Nothing else to configure.
+The output is plain files with relative links and no server-side
+requirements, so any static host works. `docs/` is committed, which
+means **no host has to run a build at all** — the directory is already
+what gets served.
 
-To host elsewhere, copy `docs/` to any static host — it is plain files
-with relative links and no server-side requirements.
+### Cloudflare Pages
+
+Connect the repository, then:
+
+| Setting | Value |
+|---|---|
+| Framework preset | **None** |
+| Build command | *(leave empty)* — or `python3 www/build.py` |
+| Build output directory | **`docs`** |
+| Root directory | *(leave empty — the repo root)* |
+| Production branch | `main` (or whichever you publish from) |
+
+Leaving the build command empty is the recommended setup: `docs/` is
+committed, so Cloudflare just uploads it. Set it to `python3
+www/build.py` only if you would rather the site be rebuilt on every
+push than remember to run `make docs` before committing — Cloudflare's
+build image has Python 3, and the generator needs nothing else.
+
+`docs/_headers` is generated for Cloudflare and does two things that
+matter here:
+
+- serves the `.md` twins and `.txt` files as `text/plain`, so a browser
+  displays them instead of downloading them;
+- sends `Access-Control-Allow-Origin: *` on `.md`, `.txt` and `.json`,
+  which is what lets a tool on another origin fetch `api.json`,
+  `llms.txt` or any page's Markdown twin. Without it the agent-facing
+  half of this site is unreachable from a browser-based client.
+
+GitHub Pages ignores `_headers`, so shipping it costs nothing there.
+
+### GitHub Pages
+
+Settings → Pages → Source: *Deploy from a branch* → your branch,
+folder **`/docs`**. The generated `.nojekyll` stops Jekyll from
+touching the output.
+
+### Anywhere else
+
+Copy `docs/` to the host. If it lets you set response headers, mirror
+`docs/_headers`; if not, the site still works — only the cross-origin
+fetches and the in-browser Markdown rendering are affected.
 
 ## Attribution
 

@@ -1,8 +1,8 @@
 # slang
 
-> A statically typed language for server-side and network programming that compiles to C.
+> A statically typed language built primarily for server-side and network programming. Compiles to C.
 
-slang is a statically typed language for server-side and network programming. It compiles to C, schedules M:N green threads, collects with a precise mark-sweep GC, and ships its standard library inside the compiler.
+slang is a statically typed language built primarily for server-side and network programming -- that is the focus, not a limit. It compiles to C, schedules M:N green threads, collects with a precise mark-sweep GC, and ships its standard library inside the compiler.
 
 ## Quick start
 
