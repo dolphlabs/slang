@@ -35,6 +35,12 @@ let r2 = httpc.send(req, dl);
 | `httpc.new_request` | `(method: str, url: str) -> Request` |
 | `httpc.header` | `(r: Response, name: str) -> opt[str]` |
 | `httpc.parse_url` | `(url: str) -> result[Url, str]` |
+| `httpc.new_client` | `() -> Client` |
+| `httpc.client_get` / `client_head` | `(c: Client, url: str, deadline: until) -> result[Response, str]` |
+| `httpc.client_post` | `(c: Client, url: str, content_type: str, body: bytes, deadline: until) -> result[Response, str]` |
+| `httpc.client_send` | `(c: Client, req: Request, deadline: until) -> result[Response, str]` |
+| `httpc.idle_count` | `(c: Client) -> int` |
+| `httpc.close_idle` | `(c: Client)` |
 
 `Request` carries `method`, `url`, `headers`, `body`, `max_redirects`
 (default 5, `0` disables following) and `ca_path` (`""` = the system
@@ -80,11 +86,71 @@ Five things worth knowing:
   talks to servers it does not control, so a buffer sized on their
   say-so is a denial of service arriving through an ordinary call.
 
-**Not done, deliberately:** no connection pooling (every request opens a
-connection and sends `Connection: close`), no gzip (nothing links zlib,
-and advertising an encoding you cannot decode is worse than not asking),
-no cookie jar, no HTTP/2, no multipart bodies. All additive; none of
-them changes the shapes above.
+##### Connection pooling
+
+`httpc.get` and friends are one-shot: a connection per request, closed
+afterwards, with `Connection: close` sent so the server does not hold
+it open. A **`Client`** keeps idle connections and reuses them — up to
+`max_idle_per_host` per origin (default 4), for `idle_timeout`
+nanoseconds (default 30s), and 64 across all origins.
+
+```slang
+let c = httpc.new_client();          // share one across tasks
+let r = httpc.client_get(c, "https://api.example.com/v1/items", dl);
+```
+
+The one-shot functions ARE a client — one that keeps nothing — so
+framing, redirects, decompression and every security rule are one code
+path, and cannot drift between the two.
+
+A `Client` is safe to share between tasks: the pool is behind a
+`mutex`. Its `dials` and `reuses` fields and `httpc.idle_count(c)` make
+its behaviour checkable rather than asserted.
+
+- **Every pooled connection is probed before use.** Servers close idle
+  connections on their own timers (Node's default is 5 seconds), and a
+  request written onto one fails indistinguishably from the server
+  failing mid-request. The probe is `net.idle_alive` — one non-blocking
+  `MSG_PEEK`, no latency, nothing consumed.
+- **A dropped request is retried once, and only if it is idempotent.**
+  If a reused connection dies before a single response byte arrives,
+  GET/HEAD/PUT/DELETE/OPTIONS/TRACE retry on a fresh connection. POST
+  does not: it may already have been acted on, and sending it twice
+  could charge a card twice. The probe is what protects a POST; the
+  retry is the backstop for the race between probe and write.
+- **The pool key includes `ca_path`.** A connection verified against
+  one trust anchor is never handed to a request that asked for another —
+  tested over real TLS: the second request, demanding a different CA,
+  fails verification instead of riding the verified connection.
+- **Reuse requires a clean end:** HTTP/1.1, no `Connection: close`, a
+  framed body read exactly, and nothing left over. A body delimited by
+  the connection closing is never reused.
+
+Client operations are handle-first package functions — `client_get(c,
+...)`, the same idiom as `sql.exec(db, ...)` — rather than methods,
+because a method cannot currently share a name with a package function
+(`impl Client { fn get }` collides with `httpc.get`).
+
+##### Decompression
+
+Requests carry `Accept-Encoding: gzip, deflate` and responses are
+decoded transparently — **unless the caller set `Accept-Encoding`
+themselves**, in which case the body comes back exactly as sent. A
+caller who asked for gzip wants the gzip (to proxy it, to store it), and
+decompressing behind their back would hand them something else.
+
+- The decoded size is held to the same 32 MiB ceiling as a plain body.
+  Without that the wire limit would mean nothing: 32 MiB of gzip holds
+  tens of gigabytes.
+- `deflate` is tried as zlib (what RFC 9110 says it means) and then as
+  raw DEFLATE (what a real share of servers send under that name).
+- After decoding, `Content-Encoding` and `Content-Length` are removed:
+  both describe the bytes that crossed the wire, not the body in hand.
+- An encoding the client did not ask for and cannot read is left alone,
+  header included — visible, not silent.
+
+**Not done, deliberately:** no cookie jar, no HTTP/2 client, no
+multipart bodies, no proxy support.
 
 ## API
 
@@ -98,7 +164,27 @@ them changes the shapes above.
 
 ### `fn header(r: Response, name: str) -> opt[str]`
 
+### `gc struct Client`
+
+### `fn new_client() -> Client`
+
 ### `fn new_request(method: str, url: str) -> Request`
+
+### `fn client_send(c: Client, req: Request, deadline: until)`
+
+### `fn client_get(c: Client, url: str, deadline: until)`
+
+### `fn client_head(c: Client, url: str, deadline: until)`
+
+### `fn client_post(c: Client, url: str, content_type: str, body: bytes,`
+
+### `fn idle_count(c: Client) -> int`
+
+How many connections are idle in the pool right now. With dials and reuses, the third number that makes the pool's behaviour checkable rather than asserted -- and the only one that shows a reuse DECISION before the server's own close can mask it.
+
+### `fn close_idle(c: Client)`
+
+Close every idle connection now. A long-lived service does not need this -- idle_timeout reaps them -- but a program about to exit, or a test counting connections, does.
 
 ### `fn send(req: Request, deadline: until) -> result[Response, str]`
 

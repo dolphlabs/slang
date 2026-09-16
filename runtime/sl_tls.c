@@ -448,6 +448,18 @@ static sl_res_bool_str *sl_net_tls_ctx_add_sni(void *ctxv, const char *host,
     return sl_net_ok_bool(true);
 }
 
+static bool sl_net_tls_idle_alive(void *sslv) {
+    SSL *ssl = (SSL *)sslv;
+    if (!ssl) return false;
+    int fd = SSL_get_fd(ssl);
+    if (fd < 0) return false;
+    sl_rt_preempt_disable();
+    int pending = SSL_pending(ssl);
+    sl_rt_preempt_enable();
+    if (pending > 0) return false;
+    return sl_net_idle_alive(fd);
+}
+
 static void sl_net_tls_close(void *sslv) {
     sl_rt_need_fat_stack();
     SSL *ssl = (SSL *)sslv;

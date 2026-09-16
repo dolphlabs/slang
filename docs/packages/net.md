@@ -25,6 +25,16 @@ let wr: result[bytes, str] = net.recv(cfd, 16); // "would block" err if idle
 net.close(cfd);
 ```
 
+
+`net.idle_alive(fd) -> bool` and `net.tls_idle_alive(ssl) -> bool`
+report whether an IDLE connection is still reusable: true only when the
+peer has neither closed nor sent anything. One non-blocking `MSG_PEEK`,
+nothing consumed; the TLS form is also false when OpenSSL holds
+decrypted-but-unread bytes. They exist for connection pools, and they
+are a primitive rather than a `recv_until` with an expired deadline
+because `recv_until` checks its deadline *before* touching the socket —
+it would report every dead connection as alive.
+
 ##### Deadlines
 
 `net.recv` and `net.send` wait for as long as the peer takes, which on
@@ -152,6 +162,8 @@ the first send or recv then fails.
 
 ### `net.close(int)`
 
+### `net.idle_alive(int) -> bool`
+
 ### `net.nonblock(int) -> result[bool,str]`
 
 ### `net.tls_server_ctx(str, str) -> result[rawptr,str]`
@@ -171,6 +183,8 @@ the first send or recv then fails.
 ### `net.tls_send_until(rawptr, bytes, until) -> result[i32,str]`
 
 ### `net.tls_close(rawptr)`
+
+### `net.tls_idle_alive(rawptr) -> bool`
 
 ### `net.tls_ctx_require_client(rawptr, str) -> result[bool,str]`
 

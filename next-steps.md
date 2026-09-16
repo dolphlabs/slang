@@ -480,6 +480,79 @@ a single token.
   grow loop **spin** rather than over-allocate — which is how the
   no-progress guard in the inflate loop got written.
 
+## HTTP client: pooling and decompression (done)
+
+- [x] `httpc.Client` with connection pooling, and transparent gzip /
+  deflate decoding. Cookies are the next and separate piece.
+
+  **One code path.** The one-shot `httpc.get` / `post` / `head` / `send`
+  are a `Client` with `max_idle_per_host = 0`. Framing, redirects,
+  decompression and every security rule therefore cannot drift between
+  the pooled and unpooled paths, because there is only one.
+
+  **Stale connections are detected by a new primitive, not a timing
+  trick.** Servers close idle connections on their own timers (Node's
+  default is 5s). The obvious probe — `recv_until` with an
+  already-expired deadline — does not work, and the reason was found by
+  reading `sl_net_recv_u` rather than by testing: it checks the deadline
+  BEFORE touching the socket, so it would report every dead connection
+  alive. `net.idle_alive` / `net.tls_idle_alive` are one non-blocking
+  `MSG_PEEK`: no latency, nothing consumed, verified in all three
+  states (open and quiet, peer sent a byte, peer closed).
+
+  **Retry is idempotent-only.** A reused connection that dies before the
+  first response byte is retried once on a fresh connection for
+  GET/HEAD/PUT/DELETE/OPTIONS/TRACE. POST is never resent, because it may
+  already have been acted on. The probe protects POST; retry is the
+  backstop for the race between probe and write.
+
+  **The pool key includes `ca_path`**, so a connection verified against
+  one trust anchor is never reused for a request that demanded another.
+  Tested over real TLS with two different certificates.
+
+  **Decompression follows Go's rule:** requests advertise gzip/deflate
+  and responses are decoded ONLY when the caller did not set
+  Accept-Encoding. Decoded size shares the 32 MiB body ceiling, so a
+  gzip bomb in a response is refused. `deflate` tries zlib and then raw
+  DEFLATE, since a real share of servers mislabel raw.
+
+  **The test checks the pool from both ends.** The canned server counts
+  the connections it actually accepted, and that must agree with the
+  client's own `dials` / `reuses`. Under 16 concurrent tasks the
+  invariant `dials + reuses == requests` must hold exactly. 30/30 stable.
+
+  **Nine controls, all caught — but three only after the test was
+  fixed, which is the point of running them.**
+  - A "close-delimited" reader flag could never change the outcome (a
+    close-delimited body always ends at EOF, which already blocks
+    reuse). Removed as dead state rather than kept.
+  - Ignoring the server's `Connection: close` was masked by the probe:
+    the test server also closed, so the dead connection was discarded on
+    the next request anyway. A server that says close and lingers would
+    have slipped through. Fixed by asserting the reuse DECISION directly
+    with `httpc.idle_count`.
+  - Dropping `!r.eof` from the reuse check was masked because a
+    non-empty close-delimited body is still in the read buffer. Only an
+    EMPTY close-delimited body isolates it; that case now exists.
+  - Removing the CA path from the pool key was not exercised at all
+    until the TLS section existed. It is the one that matters most.
+  - Removing the pool lock: 64/160 concurrent requests succeeded.
+
+  **Building the TLS test exposed a runtime memory-safety bug** — stack
+  relocation leaving compiler-hoisted stack addresses dangling — fixed
+  separately in PR #120 before this landed. See todo.md.
+
+  **Two language limits hit and routed around, not fixed here:**
+  - A method cannot share a name with a package function
+    (`impl Client { fn get }` collides with `httpc.get`); methods are
+    emitted under the same C symbol. Client operations are therefore
+    handle-first functions, `client_get(c, ...)`, matching every other
+    stdlib package (`sql.exec(db, ...)`).
+  - `pub fn` inside `impl` is documented in the README but rejected by
+    the parser, and method visibility is not enforced at all
+    (`method_find` checks only package and name).
+  - Separately: `==` between two `bool`s is a compile error.
+
 ## Notes
 
 - Do not change `bench/http/main.sl` for perf experiments. Raw-best slang is `bench/http_opt/main.sl`; remasure with `./bench/run_http_opt.sh`.
