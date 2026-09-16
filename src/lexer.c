@@ -331,6 +331,9 @@ Token lexer_next(Lexer *lx) {
         KW("break", T_KW_BREAK)
         KW("continue", T_KW_CONTINUE)
         KW("unsafe", T_KW_UNSAFE)
+        KW("select", T_KW_SELECT)
+        KW("case", T_KW_CASE)
+        KW("default", T_KW_DEFAULT)
         KW("int", T_TY_INT)
         KW("float", T_TY_FLOAT)
         KW("str", T_TY_STR)
@@ -515,6 +518,9 @@ const char *token_type_name(TokenType t) {
     case T_KW_BREAK: return "'break'";
     case T_KW_CONTINUE: return "'continue'";
     case T_KW_UNSAFE: return "'unsafe'";
+    case T_KW_SELECT: return "'select'";
+    case T_KW_CASE:   return "'case'";
+    case T_KW_DEFAULT: return "'default'";
     case T_TY_INT:   return "'int'";
     case T_TY_FLOAT: return "'float'";
     case T_TY_STR:   return "'str'";

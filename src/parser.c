@@ -366,6 +366,32 @@ static Expr *parse_postfix(Parser *p) {
             e = fl;
             continue;
         }
+        if (check(p, T_LPAREN)) {
+            /* A call through whatever `e` evaluated to. A plain or
+             * dotted NAME never reaches here -- parse_primary consumes
+             * its '(' itself -- so this is only ever a field, index or
+             * parenthesised expression holding a function value. */
+            advance(p); /* '(' */
+            Expr *call = new_expr(p, EX_CALL, e->line);
+            /* `callee` is the discriminator; `name` still gets a
+             * non-NULL sentinel so that the many passes which read it
+             * unconditionally (strcmp, split_dotted, sig lookups) stay
+             * safe. It cannot collide with a real identifier, so every
+             * one of those lookups simply fails to match -- which is
+             * the right answer for a call that has no name. */
+            call->as.call.name = xstrdup("<function value>");
+            call->as.call.callee = e;
+            if (!check(p, T_RPAREN)) {
+                for (;;) {
+                    call_push_arg(call, parse_expression(p));
+                    if (!match(p, T_COMMA))
+                        break;
+                }
+            }
+            expect(p, T_RPAREN, "')' to close argument list");
+            e = call;
+            continue;
+        }
         if (!check(p, T_LBRACKET))
             break;
         advance(p); /* '[' */
@@ -761,6 +787,34 @@ static Type *parse_type_atom(Parser *p) {
     case T_TY_LINK:
         advance(p);
         return ty_named(xstrdup("link"));
+    case T_KW_FN: {
+        /* fn(A, B) -> R, or fn(A) for one returning nothing. The value
+         * is a plain function pointer: slang has no closures, so there
+         * is no captured environment for this type to describe. */
+        StrBuf b;
+        advance(p);
+        expect(p, T_LPAREN, "'(' after 'fn' in a type");
+        sb_init(&b);
+        sb_append(&b, "fn(");
+        if (!check(p, T_RPAREN)) {
+            int first = 1;
+            do {
+                Type *pt = parse_type(p);
+                if (!first)
+                    sb_append(&b, ",");
+                sb_append(&b, type_string(pt));
+                first = 0;
+            } while (match(p, T_COMMA));
+        }
+        expect(p, T_RPAREN, "')' to close the parameter list");
+        sb_append(&b, ")");
+        if (match(p, T_ARROW)) {
+            Type *rt = parse_type(p);
+            sb_append(&b, "->");
+            sb_append(&b, type_string(rt));
+        }
+        return ty_named(b.data);
+    }
     case T_IDENT: {
         if (!strcmp(tk->text, "ptr") && next_is(p, T_LBRACKET)) {
             advance(p);
@@ -970,6 +1024,96 @@ static Stmt *parse_spawn_stmt(Parser *p) {
 
     Stmt *s = new_stmt(ST_SPAWN, kw->line);
     s->as.spawn.call = call;
+    return s;
+}
+
+/* select {
+ *     case let v = chan_recv(ch) { ... }
+ *     case chan_send(ch, v)      { ... }
+ *     default                    { ... }
+ * }
+ *
+ * The arms reuse chan_recv/chan_send rather than inventing an arrow
+ * operator: they already name exactly what each arm does, and a reader
+ * who knows the builtins needs no second notation for them. What they
+ * are NOT here is expressions -- they are the arm's shape, matched
+ * syntactically, which is why an arbitrary call is rejected below. */
+static Stmt *parse_select_stmt(Parser *p) {
+    Token *kw = advance(p); /* 'select' */
+    expect(p, T_LBRACE, "'{' after 'select'");
+
+    SelectCase *cases = NULL;
+    int ncases = 0, cap = 0;
+    Block *def = NULL;
+
+    while (!check(p, T_RBRACE) && !check(p, T_EOF)) {
+        if (check(p, T_KW_DEFAULT)) {
+            Token *dk = advance(p);
+            if (def)
+                parse_error(dk, "'select' already has a 'default' arm");
+            def = parse_block(p, 0);
+            continue;
+        }
+        Token *ck = expect(p, T_KW_CASE,
+                           "'case' or 'default' inside 'select'");
+        SelectCase sc;
+        sc.is_send = 0;
+        sc.bind = NULL;
+        sc.ch = NULL;
+        sc.val = NULL;
+        sc.body = NULL;
+        sc.line = ck->line;
+
+        if (match(p, T_KW_LET)) {
+            Token *nm = expect(p, T_IDENT, "a name to bind the received "
+                                           "value to");
+            sc.bind = nm->text;
+            expect(p, T_ASSIGN, "'=' after the bound name");
+        }
+
+        Expr *call = parse_expression(p);
+        if (call->kind != EX_CALL)
+            parse_error(ck,
+                        "a 'select' arm must be 'chan_recv(ch)' or "
+                        "'chan_send(ch, v)'");
+        const char *fname = call->as.call.name;
+        if (fname && !strcmp(fname, "chan_recv")) {
+            if (call->as.call.nargs != 1)
+                parse_error(ck, "chan_recv() takes exactly one argument");
+            sc.is_send = 0;
+            sc.ch = call->as.call.args[0];
+        } else if (fname && !strcmp(fname, "chan_send")) {
+            if (sc.bind)
+                parse_error(ck, "a 'chan_send' arm binds nothing; drop "
+                                "the 'let'");
+            if (call->as.call.nargs != 2)
+                parse_error(ck, "chan_send() takes exactly two arguments");
+            sc.is_send = 1;
+            sc.ch = call->as.call.args[0];
+            sc.val = call->as.call.args[1];
+        } else {
+            parse_error(ck,
+                        "a 'select' arm must be 'chan_recv(ch)' or "
+                        "'chan_send(ch, v)'");
+        }
+
+        sc.body = parse_block(p, 0);
+        if (ncases == cap) {
+            cap = cap ? cap * 2 : 4;
+            cases = (SelectCase *)xrealloc(cases,
+                                           (size_t)cap * sizeof(*cases));
+        }
+        cases[ncases++] = sc;
+    }
+    expect(p, T_RBRACE, "'}' to close 'select'");
+
+    if (ncases == 0)
+        parse_error(kw, "'select' needs at least one 'case' arm");
+
+    Stmt *s = new_stmt(ST_SELECT, kw->line);
+    s->as.select_stmt.cases = cases;
+    s->as.select_stmt.ncases = ncases;
+    s->as.select_stmt.def = def;
     return s;
 }
 
@@ -1263,6 +1407,9 @@ static Expr *clone_simple_expr(Parser *p, Expr *e) {
         break;
     case EX_CALL: {
         c->as.call.name = xstrdup(e->as.call.name);
+        c->as.call.callee = e->as.call.callee
+                                ? clone_simple_expr(p, e->as.call.callee)
+                                : NULL;
         c->as.call.nargs = e->as.call.nargs;
         c->as.call.args = e->as.call.nargs
             ? (Expr **)xmalloc(sizeof(Expr *) * (size_t)e->as.call.nargs)
@@ -1316,6 +1463,8 @@ static Stmt *parse_statement(Parser *p) {
         return parse_continue_stmt(p);
     case T_KW_UNSAFE:
         return parse_unsafe_stmt(p);
+    case T_KW_SELECT:
+        return parse_select_stmt(p);
     case T_KW_STRUCT:
         parse_error(tk, "'struct' declarations are only allowed at top "
                         "level");

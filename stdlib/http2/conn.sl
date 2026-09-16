@@ -53,13 +53,14 @@ import "time";
 //
 // Everything the writer task needs arrives on ONE channel, tagged.
 //
-// That is not a stylistic choice: slang has no `select` over channels,
-// so a writer that had to watch both "here is a response" and "the peer
-// granted more window" on two channels could only ever block on one of
-// them. Folding both into a single stream makes the writer an ordinary
-// state machine with one blocking point, and gives the ordering for
-// free -- a grant that arrives before a body is simply an earlier
-// message.
+// When this was written slang had no `select`, so a writer watching
+// both "here is a response" and "the peer granted more window" on two
+// channels could only ever block on one of them. `select` exists now
+// and would compile -- but the single tagged stream is still the better
+// design here, and stays. Two channels would make the ORDER between a
+// grant and a body a race the writer has to reason about; one channel
+// makes it the order they were sent, for free, and leaves the writer an
+// ordinary state machine with a single blocking point.
 pub let W_RAW = 0;       // pre-built frames, not flow controlled
 pub let W_BODY = 1;      // a response: HEADERS now, DATA as window allows
 pub let W_GRANT = 2;     // peer's WINDOW_UPDATE: `n` octets to `stream`
@@ -226,9 +227,11 @@ pub fn our_settings() -> bytes {
 // ---- the stream gate -------------------------------------------------
 //
 // The connection layer cannot cap concurrency on its own: it does not
-// spawn the handlers, the CALLER does, and slang has no function values
-// to hand it a callback. So the bound lives in a token channel the
-// caller holds, and this is the mechanism plus the vocabulary for it.
+// spawn the handlers, the CALLER does. (slang has function values now,
+// so handing it a callback would compile -- but that only moves the
+// same question inside, and the answer would still be this.) So the
+// bound lives in a token channel the caller holds, and this is the
+// mechanism plus the vocabulary for it.
 //
 // A gate is a chan[bool] holding `n` tokens. gate_enter takes one and
 // blocks when none are left; gate_leave puts one back. That blocking IS
@@ -905,8 +908,10 @@ fn flush_out(t: Transport, q: [Out], conn_window: int, max_frame: int,
 // so no handler can decide on its own whether it may send -- and the
 // WINDOW_UPDATE that grants credit arrives on the read side, in a
 // different task entirely. Routing both into this one task is what lets
-// the accounting be correct without a lock, which slang does not expose
-// anyway.
+// the accounting be correct without a lock at all. slang does have a
+// mutex now, but reaching for one here would be the worse design: it
+// would serialise the writers without making the window arithmetic any
+// less shared.
 //
 // A blocked stream parks its BODY here, not its task: the handler hands
 // the response over and moves on, so a peer with a tiny window costs a

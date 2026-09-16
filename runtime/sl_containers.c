@@ -1,3 +1,48 @@
+/* ---- wait lists -----------------------------------------------------
+ *
+ * A blocked party is represented by an sl_waiter NODE rather than by
+ * the sl_task itself. The node lives on the blocked task's own C stack,
+ * which is alive for exactly as long as that task stays parked inside
+ * the call that pushed it.
+ *
+ * The old shape linked tasks directly through sl_task.next. That field
+ * is also the run queue's link, so a task could only ever be on ONE
+ * list -- an invariant the previous version of this file documented at
+ * length, and which `select` cannot live with: it needs one task
+ * waiting on N channels at once.
+ *
+ * Moving the link into the node has a second effect worth naming, since
+ * the comments below used to turn on it. chan no longer writes
+ * sl_task.next at all, so the specific async-preemption hazard those
+ * comments describe -- a signal landing between the list push and the
+ * park, redirecting through sl_worker_after_switch, which pushes the
+ * SAME task onto the run queue by overwriting the very ->next link the
+ * push just set -- is structurally gone for channels. The preempt
+ * brackets stay: they also cover the park transition itself, which is a
+ * separate hazard with its own history (see sl_task_park), and
+ * sl_rt_cur() is still mandatory across a park because the task resumes
+ * on whichever worker dequeues it.
+ *
+ * Two rules keep the stack-allocated nodes safe:
+ *
+ *   1. Every read or write of a node happens under the owning
+ *      channel's (or mutex's) lock.
+ *   2. A waker must not touch a node after resuming it. The resumed
+ *      task can return from the parking call on another worker
+ *      immediately and take its stack frame -- node included -- with
+ *      it. Pop first, resume last, never look again.
+ */
+
+struct sl_select;
+
+typedef struct sl_waiter {
+    struct sl_waiter *next;
+    sl_task *task;
+    struct sl_select *sel; /* NULL for a plain chan_send/chan_recv or a
+                              mutex_lock; set when this node is one arm
+                              of a select (see sl_select_run) */
+} sl_waiter;
+
 /* ---- chan[T]: bounded, thread-safe queue for 'spawn'ed tasks ---- */
 
 typedef struct {
@@ -6,14 +51,10 @@ typedef struct {
     int cap, head, count, closed;
     int elem_is_ptr;
     pthread_mutex_t mu;
-    sl_task *send_waiters, *send_waiters_tail; /* Tier 11 fourth slice:
-        tasks parked waiting for buffer space, oldest first -- replaces
-        the old not_full condvar. A plain singly-linked list via
-        sl_task.next (push-to-tail/pop-from-head): a task is never on
-        a channel's wait list and the run queue at the same time, so
-        reusing that field is safe. */
-    sl_task *recv_waiters, *recv_waiters_tail; /* same, for tasks
-        parked waiting for data -- replaces the old not_empty condvar */
+    sl_waiter *send_waiters, *send_waiters_tail; /* parties parked
+        waiting for buffer space, oldest first */
+    sl_waiter *recv_waiters, *recv_waiters_tail; /* same, for parties
+        parked waiting for data */
 } sl_chan;
 
 static void sl_gc_trace_chan(void *p, void (*mark)(void *)) {
@@ -39,19 +80,95 @@ static sl_chan *sl_chan_new(size_t elemsz, int cap, int elem_is_ptr) {
     return c;
 }
 
-/* Wait-list helpers, shared by chan and mutex (below). Both park their
- * blocked tasks the same way, and both rely on the same invariant: a
- * task is on exactly ONE such list at a time, so sl_task.next is free
- * to reuse as the link. */
-static void sl_wl_push(sl_task **head, sl_task **tail, sl_task *t) {
-    t->next = NULL;
-    if (*tail) (*tail)->next = t; else *head = t;
-    *tail = t;
+/* Wait-list helpers, shared by chan, mutex and select. All three park
+ * their blocked tasks the same way. */
+static void sl_wl_push(sl_waiter **head, sl_waiter **tail, sl_waiter *w) {
+    w->next = NULL;
+    if (*tail) (*tail)->next = w; else *head = w;
+    *tail = w;
 }
-static sl_task *sl_wl_pop(sl_task **head, sl_task **tail) {
-    sl_task *t = *head;
-    if (t) { *head = t->next; if (!*head) *tail = NULL; }
-    return t;
+static sl_waiter *sl_wl_pop(sl_waiter **head, sl_waiter **tail) {
+    sl_waiter *w = *head;
+    if (w) { *head = w->next; if (!*head) *tail = NULL; w->next = NULL; }
+    return w;
+}
+/* Only select needs this: a plain waiter is always removed by whoever
+ * wakes it, but a select that fires on ONE channel has to take its
+ * nodes off the other N-1. A missing node is not an error -- a waker
+ * may already have popped it (see sl_waiter_wake returning 0). */
+static void sl_wl_remove(sl_waiter **head, sl_waiter **tail,
+                         sl_waiter *w) {
+    sl_waiter **pp = head;
+    sl_waiter *prev = NULL;
+    while (*pp) {
+        if (*pp == w) {
+            *pp = w->next;
+            if (*tail == w) *tail = prev;
+            w->next = NULL;
+            return;
+        }
+        prev = *pp;
+        pp = &(*pp)->next;
+    }
+}
+
+/* The select bookkeeping a waiter points at. Lives on the selecting
+ * task's own stack, like the nodes themselves. */
+typedef struct sl_select {
+    pthread_mutex_t mu;
+    int woken;  /* some channel has claimed this select; at most one may */
+    int parked; /* the task has actually switched out, so resuming it is
+                   legal -- see sl_select_run for why this is separate */
+    sl_task *task;
+} sl_select;
+
+/* Wake one waiter, under the owning channel's lock.
+ *
+ * Returns 1 if the task was resumed (or is guaranteed to be), 0 if this
+ * node belonged to a select that another channel already claimed -- in
+ * which case the caller should move on to the next waiter, because this
+ * one is not going to consume anything.
+ *
+ * Lock order is channel-then-select, always. sl_select_run never holds
+ * sel->mu while taking a channel lock, so there is no cycle.
+ *
+ * `woken` and `parked` are separate on purpose. Setting `woken` claims
+ * the select, but the selecting task may not have switched out yet: it
+ * enqueues on every channel BEFORE it parks, so a waker can find the
+ * node while the task is still running. Resuming a task that is not
+ * parked is precisely the corruption sl_worker_after_switch's comments
+ * describe. So a waker that claims an unparked select resumes nothing
+ * and returns 1 anyway -- the claim is enough, because the selecting
+ * task checks `woken` under this same lock before deciding to park, and
+ * will skip the park and re-poll instead. */
+static int sl_waiter_wake(sl_waiter *w) {
+    struct sl_select *s = w->sel;
+    if (!s) {
+        sl_task_resume(w->task);
+        return 1;
+    }
+    pthread_mutex_lock(&s->mu);
+    if (s->woken) {
+        pthread_mutex_unlock(&s->mu);
+        return 0;
+    }
+    s->woken = 1;
+    if (!s->parked) {
+        pthread_mutex_unlock(&s->mu);
+        return 1; /* claimed; it has not parked yet and now never will */
+    }
+    pthread_mutex_unlock(&s->mu);
+    sl_task_resume(s->task);
+    return 1;
+}
+
+/* Hand the value to the first waiter that can actually take it. A
+ * claimed-elsewhere select is skipped rather than counted. */
+static void sl_wl_wake_one(sl_waiter **head, sl_waiter **tail) {
+    sl_waiter *w;
+    while ((w = sl_wl_pop(head, tail)))
+        if (sl_waiter_wake(w))
+            return;
 }
 
 /* Tier 11 fourth slice: chan_send/chan_recv now PARK a blocked task
@@ -75,20 +192,14 @@ static sl_task *sl_wl_pop(sl_task **head, sl_task **tail) {
 static void sl_chan_send(sl_chan *c, const void *val) {
     /* Tier 11 eighth slice: bracketed entry-to-every-return -- NOT
      * just around sl_task_park's own internal body (already covered
-     * there). sl_wl_push below writes sl_rt_current_task->next to
-     * link into c's OWN wait list, then sl_task_park is called to
-     * actually suspend -- between those two steps the task is still
-     * genuinely running, and an async signal landing in that window
-     * would redirect it through the trampoline -> sl_preempt_yield ->
-     * sl_task_yield_now -> sl_worker_after_switch, which pushes the
-     * SAME task onto sl_global_runq by overwriting the very ->next
-     * link this function just set for c's wait list -- corrupting
-     * whichever list loses the race (the classic sl_task.next-is-
-     * shared-across-exactly-one-list-at-a-time invariant every other
-     * user of it, sl_task_park included, already depends on). Found by
-     * tracing concurrent_compute's own chan_recv-in-a-loop collection
-     * pattern -- see sl_chan_recv's identical bracket below, the far
-     * more heavily-exercised half of this pair in that workload. */
+     * there). The bracket covers the whole park transition, which is
+     * a live async-preemption target in its own right; see
+     * sl_task_park's own comment (runtime_pool.c). The wait-list half
+     * of the original hazard is gone now that the link lives in a
+     * stack node rather than in sl_task.next -- see the wait-list
+     * commentary at the top of this file. */
+    sl_waiter self;
+    self.sel = NULL;
     sl_rt_preempt_disable();
     pthread_mutex_lock(&c->mu);
     while (c->count == c->cap && !c->closed) {
@@ -103,13 +214,9 @@ static void sl_chan_send(sl_chan *c, const void *val) {
          * worker's slot -- which by then names whatever task that worker
          * is now running. Confirmed at -O2, not theorised: comparing the
          * raw read against a value captured before the park trips
-         * immediately. The consequence is that a completely unrelated,
-         * currently-RUNNING task gets pushed onto this channel's wait
-         * list, later popped and resumed while it is running, pushed
-         * onto a run queue it is already off, and finally freed by
-         * sl_worker_after_switch with that stray queue link still live --
-         * the heap-use-after-free ASan reports at -O2. */
-        sl_wl_push(&c->send_waiters, &c->send_waiters_tail, sl_rt_cur());
+         * immediately. */
+        self.task = sl_rt_cur();
+        sl_wl_push(&c->send_waiters, &c->send_waiters_tail, &self);
         sl_task_park(&c->mu); /* leaves c->mu locked across the switch --
             see sl_task_park's own comment (runtime_pool.c) for why */
         pthread_mutex_lock(&c->mu); /* re-acquire before re-checking */
@@ -123,10 +230,7 @@ static void sl_chan_send(sl_chan *c, const void *val) {
     int tail = (c->head + c->count) % c->cap;
     memcpy(c->buf + (size_t)tail * c->elemsz, val, c->elemsz);
     c->count++;
-    if (c->recv_waiters) {
-        sl_task *w = sl_wl_pop(&c->recv_waiters, &c->recv_waiters_tail);
-        sl_task_resume(w);
-    }
+    sl_wl_wake_one(&c->recv_waiters, &c->recv_waiters_tail);
     pthread_mutex_unlock(&c->mu);
     sl_rt_preempt_enable();
 }
@@ -146,12 +250,15 @@ static int sl_chan_recv(sl_chan *c, void *out) {
      * tiny, garbage address, from the run queue's own ->next chain
      * having been corrupted by exactly this unbracketed window) before
      * this fix. */
+    sl_waiter self;
+    self.sel = NULL;
     sl_rt_preempt_disable();
     pthread_mutex_lock(&c->mu);
     while (c->count == 0 && !c->closed) {
         /* sl_rt_cur(), not a raw read -- see sl_chan_send's own copy of
          * this loop for the full reasoning. Same hazard, same fix. */
-        sl_wl_push(&c->recv_waiters, &c->recv_waiters_tail, sl_rt_cur());
+        self.task = sl_rt_cur();
+        sl_wl_push(&c->recv_waiters, &c->recv_waiters_tail, &self);
         sl_task_park(&c->mu);
         pthread_mutex_lock(&c->mu);
     }
@@ -163,23 +270,24 @@ static int sl_chan_recv(sl_chan *c, void *out) {
     memcpy(out, c->buf + (size_t)c->head * c->elemsz, c->elemsz);
     c->head = (c->head + 1) % c->cap;
     c->count--;
-    if (c->send_waiters) {
-        sl_task *w = sl_wl_pop(&c->send_waiters, &c->send_waiters_tail);
-        sl_task_resume(w);
-    }
+    sl_wl_wake_one(&c->send_waiters, &c->send_waiters_tail);
     pthread_mutex_unlock(&c->mu);
     sl_rt_preempt_enable();
     return 1;
 }
 
+/* Wakes everyone it can. A select already claimed by another channel is
+ * skipped (sl_waiter_wake returns 0) rather than retried -- it is about
+ * to re-poll every one of its cases anyway, and will see the close
+ * then. */
 static void sl_chan_close(sl_chan *c) {
     pthread_mutex_lock(&c->mu);
     c->closed = 1;
-    sl_task *w;
+    sl_waiter *w;
     while ((w = sl_wl_pop(&c->recv_waiters, &c->recv_waiters_tail)))
-        sl_task_resume(w);
+        sl_waiter_wake(w);
     while ((w = sl_wl_pop(&c->send_waiters, &c->send_waiters_tail)))
-        sl_task_resume(w);
+        sl_waiter_wake(w);
     pthread_mutex_unlock(&c->mu);
 }
 
@@ -210,7 +318,7 @@ typedef struct {
     pthread_mutex_t mu;   /* guards the fields below, never user code */
     int held;
     sl_task *owner;       /* identity only; see the note above */
-    sl_task *waiters, *waiters_tail;
+    sl_waiter *waiters, *waiters_tail;
 } sl_mutex;
 
 static sl_mutex *sl_mutex_new(void) {
@@ -231,6 +339,8 @@ static sl_mutex *sl_mutex_new(void) {
  * reasoning -- same hazard, same fix, same sl_rt_cur() rule across the
  * park (the task may resume on a different worker). */
 static void sl_mutex_lock(sl_mutex *m) {
+    sl_waiter self;
+    self.sel = NULL;
     sl_rt_preempt_disable();
     pthread_mutex_lock(&m->mu);
     if (m->held && m->owner == sl_rt_cur()) {
@@ -241,7 +351,8 @@ static void sl_mutex_lock(sl_mutex *m) {
         return;
     }
     while (m->held) {
-        sl_wl_push(&m->waiters, &m->waiters_tail, sl_rt_cur());
+        self.task = sl_rt_cur();
+        sl_wl_push(&m->waiters, &m->waiters_tail, &self);
         sl_task_park(&m->mu); /* leaves m->mu locked across the switch */
         pthread_mutex_lock(&m->mu);
     }
@@ -289,11 +400,210 @@ static void sl_mutex_unlock(sl_mutex *m) {
      * task was just removed from, so t->next is free to reuse. The
      * woken task re-checks m->held itself; it is not handed the lock,
      * so a trylock racing in between is a legal outcome, not a bug. */
-    sl_task *w = sl_wl_pop(&m->waiters, &m->waiters_tail);
+    sl_waiter *w = sl_wl_pop(&m->waiters, &m->waiters_tail);
     if (w)
-        sl_task_resume(w);
+        sl_waiter_wake(w);
     pthread_mutex_unlock(&m->mu);
     sl_rt_preempt_enable();
+}
+
+/* ---- select: wait on several channels at once -----------------------
+ *
+ * One sl_sel_case per arm, built by the caller (generated C) alongside
+ * an sl_waiter array of the same length. Both live on the selecting
+ * task's stack, and so does the sl_select they share -- nothing here
+ * allocates.
+ *
+ * The shape is poll-then-park-then-repoll rather than a rendezvous
+ * handoff. That is affordable because slang channels are ALWAYS
+ * buffered (sl_chan_new clamps cap to >= 1), so a value is never handed
+ * from one task directly into another's frame: it always goes through
+ * the buffer, and a woken select can simply look again. Losing the race
+ * to another receiver just means going round once more, which is
+ * correct, if occasionally wasteful, and removes the whole class of
+ * handoff bugs.
+ *
+ * Polling starts at a rotating offset. Without it, case 0 would win
+ * every time both are ready, and a busy first channel would starve
+ * every later arm indefinitely. The counter is deliberately relaxed:
+ * it only has to vary, never to be exact. */
+
+typedef struct {
+    sl_chan *ch;
+    int is_send;
+    void *val;  /* recv: where to put the value; send: what to send */
+    int closed; /* recv result: the channel was closed and drained, so
+                   this arm fires with `none` rather than a value --
+                   the same convention chan_recv already uses */
+} sl_sel_case;
+
+static _Atomic unsigned sl_sel_rr = 0;
+
+/* 1 = this arm fired, 0 = not ready, -1 = send on a closed channel
+ * (the caller reports it after unlocking; panicking with a lock held
+ * is what sl_rt_error_at's own comment forbids). Called with ch->mu
+ * held. */
+static int sl_sel_try_locked(sl_sel_case *sc) {
+    sl_chan *c = sc->ch;
+    if (sc->is_send) {
+        if (c->closed)
+            return -1;
+        if (c->count == c->cap)
+            return 0;
+        int tail = (c->head + c->count) % c->cap;
+        memcpy(c->buf + (size_t)tail * c->elemsz, sc->val, c->elemsz);
+        c->count++;
+        sl_wl_wake_one(&c->recv_waiters, &c->recv_waiters_tail);
+        return 1;
+    }
+    if (c->count > 0) {
+        memcpy(sc->val, c->buf + (size_t)c->head * c->elemsz, c->elemsz);
+        c->head = (c->head + 1) % c->cap;
+        c->count--;
+        sc->closed = 0;
+        sl_wl_wake_one(&c->send_waiters, &c->send_waiters_tail);
+        return 1;
+    }
+    if (c->closed) {
+        sc->closed = 1; /* fires immediately, forever, with none */
+        return 1;
+    }
+    return 0;
+}
+
+/* One pass over every arm, starting at a rotating offset. Returns the
+ * index that fired, or -1 for none; sets *bad on a send to a closed
+ * channel. */
+static int sl_sel_poll(sl_sel_case *cs, int n, int *bad) {
+    unsigned start = atomic_fetch_add(&sl_sel_rr, 1u);
+    int k;
+    for (k = 0; k < n; k++) {
+        int r;
+        int i = (int)((start + (unsigned)k) % (unsigned)n);
+        pthread_mutex_lock(&cs[i].ch->mu);
+        r = sl_sel_try_locked(&cs[i]);
+        pthread_mutex_unlock(&cs[i].ch->mu);
+        if (r < 0) {
+            *bad = 1;
+            return -1;
+        }
+        if (r > 0)
+            return i;
+    }
+    return -1;
+}
+
+static void sl_sel_enqueue(sl_sel_case *cs, sl_waiter *nodes, int n,
+                           struct sl_select *sel, sl_task *t) {
+    int i;
+    for (i = 0; i < n; i++) {
+        nodes[i].task = t;
+        nodes[i].sel = sel;
+        pthread_mutex_lock(&cs[i].ch->mu);
+        if (cs[i].is_send)
+            sl_wl_push(&cs[i].ch->send_waiters,
+                       &cs[i].ch->send_waiters_tail, &nodes[i]);
+        else
+            sl_wl_push(&cs[i].ch->recv_waiters,
+                       &cs[i].ch->recv_waiters_tail, &nodes[i]);
+        pthread_mutex_unlock(&cs[i].ch->mu);
+    }
+}
+
+/* Off every list before `sel` and `nodes` (both stack objects in
+ * sl_select_run's frame) can go out of scope. Taking each channel lock
+ * here is also what serialises against a waker part-way through
+ * sl_waiter_wake on one of these nodes. A node a waker already popped
+ * is simply not found, which sl_wl_remove treats as success. */
+static void sl_sel_dequeue(sl_sel_case *cs, sl_waiter *nodes, int n) {
+    int i;
+    for (i = 0; i < n; i++) {
+        pthread_mutex_lock(&cs[i].ch->mu);
+        if (cs[i].is_send)
+            sl_wl_remove(&cs[i].ch->send_waiters,
+                         &cs[i].ch->send_waiters_tail, &nodes[i]);
+        else
+            sl_wl_remove(&cs[i].ch->recv_waiters,
+                         &cs[i].ch->recv_waiters_tail, &nodes[i]);
+        pthread_mutex_unlock(&cs[i].ch->mu);
+    }
+}
+
+/* Returns the index of the arm that fired, or -1 for the default arm.
+ * With no default and no arm ever becoming ready, this parks forever --
+ * exactly like chan_recv on a channel nobody sends to.
+ *
+ * The second poll, after enqueueing, is not redundant: it is the whole
+ * reason this terminates. A plain chan_recv holds c->mu continuously
+ * from "is there a value" through "put me on the wait list" to the
+ * park, so a sender cannot slip between the check and the sleep. A
+ * select cannot do that -- it would have to hold N locks at once -- so
+ * there is a real window between the first poll and the enqueue in
+ * which a sender deposits a value, finds an empty wait list, wakes
+ * nobody, and goes away. Parking after that window without looking
+ * again loses the wakeup permanently: the value is sitting in the
+ * buffer and no further send is coming. Once the nodes are on the
+ * lists, a sender either sees them (and claims us) or landed before
+ * them (and the second poll sees the value); it cannot fall between.
+ *
+ * Found by a hang, not by reading: 1 run in ~30 of tests/select
+ * deadlocked with every worker idle in sl_worker_run_loop. */
+static int sl_select_run(sl_sel_case *cs, sl_waiter *nodes, int n,
+                         int has_default) {
+    sl_select sel;
+    int fired, bad_send = 0;
+
+    pthread_mutex_init(&sel.mu, NULL);
+    sel.woken = 0;
+    sel.parked = 0;
+    sel.task = NULL;
+
+    /* Bracketed entry-to-every-return, the same rule chan and mutex
+     * follow: this function parks, and the park transition is a live
+     * async-preemption target. */
+    sl_rt_preempt_disable();
+    for (;;) {
+        fired = sl_sel_poll(cs, n, &bad_send);
+        if (bad_send || fired >= 0 || has_default)
+            break;
+
+        sel.task = sl_rt_cur();
+        sl_sel_enqueue(cs, nodes, n, &sel, sel.task);
+
+        fired = sl_sel_poll(cs, n, &bad_send);
+        if (bad_send || fired >= 0) {
+            /* Never parked, so no waker can be holding a resume for us;
+             * sl_waiter_wake only resumes when `parked` is set. */
+            sl_sel_dequeue(cs, nodes, n);
+            break;
+        }
+
+        pthread_mutex_lock(&sel.mu);
+        if (sel.woken) {
+            /* Claimed while we were enqueueing or polling. Do NOT park:
+             * that waker resumed nothing, because it saw parked == 0.
+             * The claim was the whole message. */
+            pthread_mutex_unlock(&sel.mu);
+        } else {
+            sel.parked = 1; /* set under sel.mu, which is not released
+                until the context switch has completed -- so a waker
+                that observes this is looking at a task that really has
+                switched out */
+            sl_task_park(&sel.mu);
+        }
+
+        sl_sel_dequeue(cs, nodes, n);
+        /* Safe to reset unlocked: every node is unlinked above, so no
+         * waker can still reach &sel. */
+        sel.woken = 0;
+        sel.parked = 0;
+    }
+
+    pthread_mutex_destroy(&sel.mu);
+    sl_rt_preempt_enable();
+    if (bad_send)
+        sl_rt_error("send on closed channel", 0, 0);
+    return fired;
 }
 
 /* ---- bytes: length-prefixed, binary-safe sequences ---- */

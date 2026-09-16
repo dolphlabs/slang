@@ -76,7 +76,11 @@ struct Expr {
         struct { char *name; } ident;
         struct { char *op; Expr *lhs; Expr *rhs; } binary;
         struct { char *op; Expr *operand; } unary;
-        struct { char *name; Expr **args; int nargs; } call;
+        /* `name` names the callee for an ordinary call. `callee` is set
+         * instead when the call goes through an arbitrary expression
+         * holding a function value -- routes[i].handler(req) -- in which
+         * case `name` is NULL. Exactly one of the two is set. */
+        struct { char *name; Expr *callee; Expr **args; int nargs; } call;
         struct { char *ty; Expr *operand; } cast; /* slang type name */
         struct { Expr *base; Expr *index; } index;
         struct {
@@ -118,7 +122,8 @@ typedef enum {
     ST_SPAWN,  /* spawn f(args...) -- submit an sl_task to the M:N pool */
     ST_STRUCT, /* struct Name { field: T, ... } (top level only) */
     ST_IMPL,   /* impl Name { fn ... } blocks (top level only) */
-    ST_UNSAFE  /* unsafe { ... } */
+    ST_UNSAFE, /* unsafe { ... } */
+    ST_SELECT  /* select { case ... { } ... default { } } */
 } StmtKind;
 
 typedef struct Stmt Stmt;
@@ -128,6 +133,22 @@ typedef struct {
     int count;
     int cap;
 } Block;
+
+/* One arm of a `select`. A recv arm is
+ *     case let v = chan_recv(ch) { ... }
+ * and binds `v` to opt[T] for the arm's body, exactly as a plain
+ * chan_recv would; a send arm is
+ *     case chan_send(ch, v) { ... }
+ * and binds nothing. The channel expression is evaluated ONCE, before
+ * the select blocks -- see the codegen in stmt.c. */
+typedef struct {
+    int is_send;
+    char *bind;  /* recv arm's binding name; NULL for a send arm */
+    Expr *ch;    /* the channel */
+    Expr *val;   /* send arm's value; NULL for a recv arm */
+    Block *body;
+    int line;
+} SelectCase;
 
 struct Stmt {
     StmtKind kind;
@@ -176,6 +197,11 @@ struct Stmt {
         } guard_let;
         struct { Expr *call; } spawn; /* EX_CALL to a plain/extern fn */
         struct { Block *body; } unsafe_blk;
+        struct {
+            SelectCase *cases;
+            int ncases;
+            Block *def; /* the `default` arm, or NULL */
+        } select_stmt;
         struct {
             char *name;
             int is_pub;

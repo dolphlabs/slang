@@ -14,7 +14,8 @@ extern fn getpid() -> i32;
 extern fn atoi(s: str) -> i32;
 
 // All mutable server state lives in one struct, passed explicitly to
-// every handler. slang has no closures, so a plain top-level `let`
+// every handler. slang has no closures -- functions are values, but
+// they capture nothing -- so a plain top-level `let`
 // declared in main's body is invisible to a separately-defined `fn`
 // -- but struct instances are GC'd heap pointers (see the Types
 // table), so passing this struct around and mutating its fields from

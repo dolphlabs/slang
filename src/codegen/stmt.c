@@ -908,17 +908,173 @@ void gen_stmt(CG *cg, Stmt *s) {
         /* handled by gen_stmts, which needs to see the statements that
          * follow it in the same block */
         break;
+    case ST_SELECT: {
+        /* Every arm's channel -- and a send arm's value -- is evaluated
+         * ONCE here, before anything can block. Evaluating them lazily
+         * per arm would mean re-running side effects on every trip round
+         * sl_select_run's internal retry loop, and would make "which
+         * channel did this arm mean" depend on when it fired.
+         *
+         * One safepoint covers sl_select_run AND the opt allocation for
+         * whichever arm fires. It has to: the received value lands in an
+         * ordinary C temp, and allocating the opt is exactly the thing
+         * that can trigger a collection while that temp is the only
+         * reference to it. Allocating all n opts up front instead would
+         * be simpler but would produce n-1 pieces of garbage per pass
+         * through a select loop. Only the arm that fired allocates, so
+         * at most one allocation happens inside the bracket and nothing
+         * is unrooted across it. This is the same hazard chan_recv's own
+         * codegen documents, in the same shape. */
+        int n = s->as.select_stmt.ncases;
+        int id = cg->tmp_id++;
+        int i, nroots = 0;
+        char **elems = (char **)xmalloc((size_t)n * sizeof(char *));
+        StrBuf roots;
+
+        emit_line(cg, "{");
+        cg->indent++;
+        for (i = 0; i < n; i++) {
+            SelectCase *sc = &s->as.select_stmt.cases[i];
+            const char *ct = infer_type(cg, sc->ch);
+            if (!is_chan(ct))
+                cg_error(sc->line,
+                         "select: chan_%s() expects a chan (got %s)",
+                         sc->is_send ? "send" : "recv", ct);
+            elems[i] = chan_elem(ct);
+            char *ch = gen_expr(cg, sc->ch);
+            emit_line(cg, "sl_chan *_sl_selh%d_%d = %s;", id, i, ch);
+            emit_line(cg, "%s _sl_selv%d_%d;", ctype_of(cg, elems[i]), id,
+                      i);
+            if (sc->is_send) {
+                const char *saved = expect_push(cg, elems[i]);
+                const char *vt = infer_type(cg, sc->val);
+                char *v = gen_expr(cg, sc->val);
+                cg->expect = saved;
+                if (!value_assignable(elems[i], sc->val, vt))
+                    cg_error(sc->line,
+                             "chan_send(): cannot send %s on a chan[%s]",
+                             vt, elems[i]);
+                v = maybe_cast(cg, elems[i], vt, v);
+                emit_line(cg, "_sl_selv%d_%d = %s;", id, i, v);
+            } else {
+                /* Zeroed, not merely declared: a recv arm that fires
+                 * because the channel is CLOSED never writes this slot,
+                 * and it is named in the root array below. An
+                 * uninitialised pointer there would be a garbage root.
+                 * (sl_gc_mark tolerates NULL and non-GC addresses.) */
+                emit_line(cg,
+                          "memset(&_sl_selv%d_%d, 0, "
+                          "sizeof(_sl_selv%d_%d));",
+                          id, i, id, i);
+            }
+        }
+        emit_line(cg, "sl_sel_case _sl_selc%d[%d];", id, n);
+        emit_line(cg, "sl_waiter _sl_seln%d[%d];", id, n);
+        for (i = 0; i < n; i++) {
+            SelectCase *sc = &s->as.select_stmt.cases[i];
+            emit_line(cg, "_sl_selc%d[%d].ch = _sl_selh%d_%d;", id, i, id,
+                      i);
+            emit_line(cg, "_sl_selc%d[%d].is_send = %d;", id, i,
+                      sc->is_send);
+            emit_line(cg, "_sl_selc%d[%d].val = (void *)&_sl_selv%d_%d;",
+                      id, i, id, i);
+            emit_line(cg, "_sl_selc%d[%d].closed = 0;", id, i);
+        }
+
+        sb_init(&roots);
+        for (i = 0; i < n; i++) {
+            sb_append(&roots, nroots ? ", " : "");
+            sb_append(&roots, xasprintf("(void *)_sl_selh%d_%d", id, i));
+            nroots++;
+            if (type_is_gc_ptr(cg, elems[i])) {
+                sb_append(&roots,
+                          xasprintf(", (void *)_sl_selv%d_%d", id, i));
+                nroots++;
+            }
+        }
+        emit_line(cg, "void *_sl_selr%d[] = { %s };", id, roots.data);
+        emit_line(cg, "sl_safepoint _sl_selsp%d;", id);
+        emit_line(cg,
+                  "sl_rt_safepoint_enter(&_sl_selsp%d, _sl_selr%d, %d);",
+                  id, id, nroots);
+        emit_line(cg,
+                  "int _sl_seli%d = sl_select_run(_sl_selc%d, "
+                  "_sl_seln%d, %d, %d);",
+                  id, id, id, n, s->as.select_stmt.def ? 1 : 0);
+        for (i = 0; i < n; i++) {
+            SelectCase *sc = &s->as.select_stmt.cases[i];
+            const char *oc;
+            if (!sc->bind)
+                continue;
+            oc = opt_cname(cg, elems[i]);
+            emit_line(cg, "%s *_sl_selo%d_%d = NULL;", oc, id, i);
+            emit_line(cg,
+                      "if (_sl_seli%d == %d) _sl_selo%d_%d = (%s *)"
+                      "sl_gc_alloc(sizeof(*_sl_selo%d_%d), %s);",
+                      id, i, id, i, oc, id, i,
+                      type_is_gc_ptr(cg, elems[i])
+                          ? xasprintf("sl_gc_trace_%s", oc)
+                          : "NULL");
+        }
+        emit_line(cg, "sl_rt_safepoint_exit();");
+
+        for (i = 0; i < n; i++) {
+            SelectCase *sc = &s->as.select_stmt.cases[i];
+            emit_line(cg, "%sif (_sl_seli%d == %d) {", i ? "} else " : "",
+                      id, i);
+            cg->indent++;
+            var_scope_push(cg);
+            {
+                int from = cg->vars.count;
+                if (sc->bind) {
+                    char *ot = xasprintf("opt[%s]", elems[i]);
+                    emit_line(cg,
+                              "_sl_selo%d_%d->has = !_sl_selc%d[%d].closed;",
+                              id, i, id, i);
+                    emit_line(cg,
+                              "if (_sl_selo%d_%d->has) _sl_selo%d_%d->v = "
+                              "_sl_selv%d_%d;",
+                              id, i, id, i, id, i);
+                    var_redecl_check(cg, sc->bind, sc->line);
+                    var_push(cg, sc->bind, ot);
+                    emit_line(cg, "%s %s = _sl_selo%d_%d;", ctype_of(cg, ot),
+                              sanitize_ident(sc->bind), id, i);
+                }
+                gen_block(cg, sc->body);
+                emit_scope_drops(cg, from);
+            }
+            var_scope_pop(cg);
+            cg->indent--;
+        }
+        if (s->as.select_stmt.def) {
+            emit_line(cg, "} else {");
+            cg->indent++;
+            gen_scoped_block(cg, s->as.select_stmt.def);
+            cg->indent--;
+        }
+        emit_line(cg, "}");
+        cg->indent--;
+        emit_line(cg, "}");
+        break;
+    }
     case ST_SPAWN: {
         Expr *call = s->as.spawn.call;
         const char *name = call->as.call.name;
+        const char *sft = spawn_fn_type(cg, call);
         FuncSig *sig = spawn_target(cg, call, s->line);
         int nargs = call->as.call.nargs;
-        SpawnShape *shape = spawn_shape_for(cg, sig);
+        SpawnShape *shape = sft ? spawn_shape_for_fn(cg, sft)
+                                : spawn_shape_for(cg, sig);
         int id = cg->tmp_id++;
         emit_line(cg, "{");
         cg->indent++;
         emit_line(cg, "%s _sl_sa%d;", shape->sname, id);
         emit_line(cg, "_sl_sa%d.join = NULL;", id);
+        if (sft)
+            emit_line(cg, "_sl_sa%d.fn = %s;", id,
+                      call->as.call.callee
+                          ? gen_expr(cg, call->as.call.callee)
+                          : gen_ident_name(cg, name, s->line));
         int ambient_mark = cg->ambient_count;
         for (int i = 0; i < nargs; i++) {
             const char *saved = expect_push(cg, sig->param_slang[i]);

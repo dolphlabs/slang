@@ -23,9 +23,20 @@ const char *infer_ident_name(CG *cg, const char *name, int line) {
         const char *pkg = import_try(cg, left);
         if (pkg) {
             GlobSym *g = glob_find(cg, pkg, right);
-            if (!g)
+            if (!g) {
+                /* pkg.f used as a VALUE rather than called */
+                FuncSig *fs = sig_find_in(cg, pkg, right);
+                if (fs && !fs->method_of) {
+                    if (!fs->is_pub)
+                        cg_error(line,
+                                 "function '%s' is not exported from "
+                                 "package '%s'",
+                                 right, pkg);
+                    return fn_type_of_sig(cg, fs);
+                }
                 cg_error(line, "package '%s' has no variable '%s'", pkg,
                          right);
+            }
             if (!g->is_pub)
                 cg_error(line,
                          "variable '%s' is not exported from package '%s' "
@@ -48,6 +59,21 @@ const char *infer_ident_name(CG *cg, const char *name, int line) {
     GlobSym *g = glob_find(cg, cg->cur_pkg, name);
     if (g)
         return g->slang;
+    {
+        /* A bare function name used as a value. Checked after variables
+         * and globals, so a binding always shadows a function of the
+         * same name rather than silently becoming one. */
+        FuncSig *fs = sig_find_in(cg, cg->cur_pkg, name);
+        if (fs) {
+            if (fs->method_of)
+                cg_error(line,
+                         "'%s' is a method; methods cannot be used as "
+                         "function values (they take a receiver the type "
+                         "does not name)",
+                         name);
+            return fn_type_of_sig(cg, fs);
+        }
+    }
     cg_error(line, "undefined variable '%s'", name);
     return NULL; /* unreachable */
 }
@@ -585,8 +611,25 @@ const char *infer_call(CG *cg, Expr *e) {
                 cg_error(e->line, "type 'arena' has no method '%s'", right);
             }
             StructDef *sd = struct_of_type(cg, recv_t);
+            int fld = -1;
             if (!sd)
                 cg_error(e->line, "call to undefined function '%s'", name);
+            /* A fn-typed FIELD wins over a method of the same name:
+             * `x.f(1)` where f is a field holding a function value is a
+             * call through that value, and it takes no receiver. The
+             * parser folds one dot into the call's name, so this is the
+             * only place that shape can be recognised. */
+            for (int i = 0; i < sd->nfields; i++) {
+                if (!strcmp(sd->fields[i], right) && is_fn(sd->ftypes[i])) {
+                    fld = i;
+                    break;
+                }
+            }
+            if (fld >= 0) {
+                sig = fn_sig_of_type(cg, sd->ftypes[fld], name, e->line);
+                recv_t = NULL; /* no implicit self for a field call */
+                goto have_sig;
+            }
             sig = method_find(cg, sd, right);
             if (!sig)
                 cg_error(e->line, "type '%s' has no method '%s'",
@@ -597,11 +640,23 @@ const char *infer_call(CG *cg, Expr *e) {
                          "(add 'pub' to export it)",
                          right, sd->pkg);
         }
+    } else if (e->as.call.callee) {
+        const char *ct = infer_type(cg, e->as.call.callee);
+        if (!is_fn(ct))
+            cg_error(e->line,
+                     "this expression is not callable (type %s)", ct);
+        sig = fn_sig_of_type(cg, ct, "<function value>", e->line);
     } else {
-        sig = sig_find_in(cg, cg->cur_pkg, name);
-        if (!sig)
-            cg_error(e->line, "call to undefined function '%s'", name);
+        const char *fvt = fn_var_type(cg, name);
+        if (fvt) {
+            sig = fn_sig_of_type(cg, fvt, name, e->line);
+        } else {
+            sig = sig_find_in(cg, cg->cur_pkg, name);
+            if (!sig)
+                cg_error(e->line, "call to undefined function '%s'", name);
+        }
     }
+have_sig:;
     int self_off = recv_t ? 1 : 0;
     if (n + self_off != sig->nparams)
         cg_error(e->line,
@@ -842,7 +897,13 @@ const char *infer_type(CG *cg, Expr *e) {
             infer_type(cg, e->as.spawn.call->as.call.args[i]);
             cg->expect = saved;
         }
-        spawn_shape_for(cg, sig);
+        {
+            const char *sft = spawn_fn_type(cg, e->as.spawn.call);
+            if (sft)
+                spawn_shape_for_fn(cg, sft);
+            else
+                spawn_shape_for(cg, sig);
+        }
         const char *t = xasprintf("join[%s]", sig->ret_slang);
         e->inf_ty = t;
         return t;

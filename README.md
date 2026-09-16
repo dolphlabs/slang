@@ -170,6 +170,7 @@ no escaping).
 | `chan[T]`  | `sl_chan *` | bounded thread-safe queue (see Concurrency) |
 | `join[T]`  | `sl_join *` | handle for a spawned task's result          |
 | `mutex`    | `sl_mutex *` | task-parking lock (see Concurrency)        |
+| `fn(A)->R` | `R (*)(A)`  | function value (see Function values)       |
 
 #### Numeric conversion rules
 
@@ -435,6 +436,64 @@ Rule of thumb: absent data is `opt`, bad data is `result[_, str]`,
 bad world is `result[_, fault]`. Never collapse a descriptive `str`
 error into a bare `fault_io()` at a boundary — that is where
 debuggability goes to die (see `http.read` below).
+
+### Function values
+
+A `fn` type holds a function. `fn(A, B) -> R` for one that returns a
+value, `fn(A)` for one that returns nothing:
+
+```slang
+fn double(x: int) -> int { return x * 2; }
+fn triple(x: int) -> int { return x * 3; }
+
+let f: fn(int) -> int = double;   // annotated
+let g = triple;                   // or inferred from the function
+println(f(21));                   // 42
+```
+
+They work as parameters, return values, struct fields, list and map
+elements — which is what makes a dispatch table possible instead of a
+chain of string comparisons (`demo/samplex/server.sl` routes this way):
+
+```slang
+gc struct Route {
+    method: str,
+    path: str,
+    handler: fn(State, http.Request, int) -> http.Response,
+}
+
+let routes: [Route] = [
+    Route { method: "GET",  path: "/api/tasks", handler: list_tasks },
+    Route { method: "POST", path: "/api/tasks", handler: create_task }
+];
+
+for i in 0..len(routes) {
+    if routes[i].method == req.method && routes[i].path == req.path {
+        return routes[i].handler(st, req, -1);
+    }
+}
+```
+
+Anything holding a function value is callable directly —
+`routes[i].handler(...)`, `by_name["parse"](...)`, `pick(true)(4)`.
+
+**These are not closures, and that is the point.** A function value
+always names a top-level function; nothing is captured. There is no
+environment to allocate, trace, or reason about, so a `fn` value is
+exactly a C function pointer — it names code, never the heap, and the
+collector ignores it entirely. Anything a handler needs is passed to
+it, which is the same rule `spawn` already follows.
+
+Two consequences worth knowing:
+
+- **Methods cannot be used as function values.** A method takes a
+  receiver the type does not name, so `fn(Counter) -> int` would be a
+  lie about its arity. Wrap it in a plain function.
+- **A binding shadows a function of the same name.** `let scale = ...`
+  in scope means `scale` refers to the binding, never to `fn scale`.
+
+`spawn` takes a function value too — `spawn handlers[i](job);` — see
+Concurrency below.
 
 ## Standard packages
 
@@ -1163,8 +1222,10 @@ it skips cleanly without a Go toolchain.
 ##### Stream floods
 
 The connection layer cannot cap concurrency by itself: it does not spawn
-the handlers, *you* do, and slang has no function values to hand it a
-callback. So the bound is a **gate** — a token channel you hold.
+the handlers, *you* do. (slang has function values now, so handing it a
+callback would compile — but a callback would only move the same
+question inside, and the gate below is the answer either way.) So the
+bound is a **gate** — a token channel you hold.
 `gate_enter` takes a token and blocks when none are left, `gate_leave`
 returns one, and that blocking is the backpressure: the reader stops
 pulling frames while every slot is busy.
@@ -1306,10 +1367,11 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
   context (no closures — nothing is captured implicitly) and submits
   `f` as a growable-stack task on the striped run queues (16 hashed
   stripes with work-stealing, plus a global doorbell for sleepers).
-  `f` must be a
-  plain top-level function or an `extern fn`, not a method and not a
-  builtin. There is no `spawn` on `net.*`/`time.*` calls directly;
-  wrap the native call in a plain function and spawn that instead.
+  `f` may be a plain top-level function, an `extern fn`, or a
+  **function value** (`spawn w(1, out);`, `spawn job.run(x);`) — not a
+  method and not a builtin. There is no `spawn` on `net.*`/`time.*`
+  calls directly; wrap the native call in a plain function and spawn
+  that instead.
   As a statement, the result is discarded. As an expression,
   `let h = spawn f(...)` has type `join[T]` when `f` returns `T`.
   `join_wait(h) -> result[T, str]` parks until `f` finishes; a panic
@@ -1321,6 +1383,47 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
   of inventing a second return-value convention, it reuses `opt[T]`),
   `chan_close(ch)` wakes every blocked sender/receiver. Sending on a
   closed channel is a checked runtime error, not undefined behavior.
+- **`select`** waits on several channels at once and runs the arm that
+  becomes ready first:
+
+  ```slang
+  while running {
+      select {
+          case let job = chan_recv(work) {
+              handle(job ?? 0);
+          }
+          case let q = chan_recv(quit) {
+              running = false;
+          }
+          default {
+              // optional: runs when no arm is ready, instead of blocking
+          }
+      }
+  }
+  ```
+
+  A `case let v = chan_recv(ch)` arm binds `v` to `opt[T]` for that
+  arm's body, exactly as a plain `chan_recv` would — `none` means the
+  channel is closed and drained. A `case chan_send(ch, v)` arm is ready
+  when the channel has buffer space and binds nothing. Sending on a
+  closed channel from a send arm is the same checked runtime error as
+  `chan_send` itself.
+
+  Every arm's channel expression (and a send arm's value) is evaluated
+  **once**, before the select blocks. With no `default` and nothing ever
+  ready, `select` parks forever — the same as `chan_recv` on a channel
+  nobody sends to. Which arm wins when several are ready is not
+  specified: polling starts at a rotating offset, so a busy first
+  channel cannot starve the later arms.
+
+  **A closed channel is permanently ready.** Its recv arm fires
+  immediately and forever, with `none`. This is the same as Go, but Go
+  lets you disable an arm by setting its channel to `nil` and slang has
+  no nil channel — so a loop that keeps selecting on a closed channel
+  will spin. Structure the loop to stop instead (count the items you
+  expect, or take the close as the exit condition), as
+  `tests/select/main.sl` does.
+
 - **`mutex`**, built with `make_mutex()`: `mutex_lock(m)` /
   `mutex_unlock(m)` around whatever the lock protects, and
   `mutex_trylock(m) -> bool` when you would rather do something else
@@ -1376,8 +1479,8 @@ isolation plus channels for the values that need to move between
 tasks, not a type system that forbids sharing mutable state. Passing
 a struct, list, or map into a spawned task and mutating it from more
 than one task concurrently is exactly as unsafe as it is in Go or
-Java: nothing currently stops you, so don't. There's also no `select`
-over multiple channels yet. `join_wait` waits for one spawned task.
+Java: nothing currently stops you, so don't — `mutex` is there when
+you need it. `join_wait` waits for one spawned task.
 `proc.active_tasks()` (see the `proc` section) is the aggregate count
 of everything currently in flight,
 useful for draining on shutdown but not for waiting on one task in
@@ -1591,14 +1694,21 @@ Makefile       build/test/clean
 - Package globals require constant-literal initializers.
 - Implicit returns only apply to the last statement of a function
   body; `if` and `{}` blocks are statements, not expressions yet.
-- No closures. `break`/`continue` work inside loops.
+- No closures. Functions are values (`fn(int) -> int`), but they
+  capture nothing — a function value always names a top-level
+  function, never an environment. `break`/`continue` work inside
+  loops.
 - Package-level lists are not supported yet (scalars and bytes are).
 - Map keys are limited to integers, `str`, and `bool`.
 - No data-race protection: `spawn` gives you real concurrency and
   per-task failure isolation, not an ownership/borrow checker.
   Mutating a shared struct/list/map from more than one task is on
   you, same as Go or Java — `mutex` is available for it, but nothing
-  makes you reach for one. No `select` over channels.
+  makes you reach for one.
+- `select` has no timeout arm and no way to disable an arm. A closed
+  channel's recv arm is ready forever (see Concurrency above), and
+  there is no nil channel to switch it off with; for a deadline, feed
+  a channel from a spawned timer task.
 - `mutex` has no scope guard: without closures or `defer`, an early
   `return` between `mutex_lock` and `mutex_unlock` leaks the lock.
   Mutexes are also not recursive (locking one twice from the same

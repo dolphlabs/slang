@@ -285,7 +285,15 @@ void emit_globals(CG *cg, Package *pkgs, int npkgs, int main_index) {
 }
 
 /* Emit forward declarations and definitions for every struct. */
-void emit_struct_types(CG *cg) {
+/* Split from the bodies below so fn typedefs can sit BETWEEN them.
+ * The dependency is genuinely circular -- a struct field may hold a
+ * function value, and a function type may take a struct -- so one of
+ * the two has to be satisfied by an incomplete type. A forward-declared
+ * struct is legal in a function-pointer typedef's parameter list (it
+ * only has to be complete where the pointer is CALLED, by which point
+ * the bodies below have been emitted); the reverse is not, because a
+ * struct field needs its member's size. */
+void emit_struct_fwd_decls(CG *cg) {
     if (!cg->structs.count)
         return;
     for (int i = 0; i < cg->structs.count; i++) {
@@ -293,6 +301,11 @@ void emit_struct_types(CG *cg) {
         emit_line(cg, "typedef struct %s %s;", m, m);
     }
     emit_line(cg, "");
+}
+
+void emit_struct_types(CG *cg) {
+    if (!cg->structs.count)
+        return;
     for (int i = 0; i < cg->structs.count; i++) {
         StructDef *sd = &cg->structs.items[i];
         char *m = mangle_struct(sd->canonical);
@@ -358,6 +371,73 @@ static void emit_res_struct_body(CG *cg, ResInst *r) {
     emit_line(cg, "%s e;", ctype_of(cg, r->te));
     cg->indent--;
     emit_line(cg, "};");
+    emit_line(cg, "");
+}
+
+/* The slang fn type a declared function would have as a VALUE.
+ * Methods are excluded: they take a receiver that the type does not
+ * name, and `spawn` already draws the same line. */
+char *fn_type_of_sig(CG *cg, FuncSig *sig) {
+    StrBuf b;
+    (void)cg;
+    sb_init(&b);
+    sb_append(&b, "fn(");
+    for (int i = 0; i < sig->nparams; i++) {
+        if (i)
+            sb_append(&b, ",");
+        sb_append(&b, sig->param_slang[i]);
+    }
+    sb_append(&b, ")");
+    if (sig->ret_slang) {
+        sb_append(&b, "->");
+        sb_append(&b, sig->ret_slang);
+    }
+    return b.data;
+}
+
+/* Typedefs for every fn type, emitted once, before anything can use
+ * one. C puts the declarator's name INSIDE a function-pointer type
+ * ("R (*f)(A)"), so there is no way to splice one into this codegen's
+ * "<ctype> <name>" shape without a typedef standing in for it.
+ *
+ * The table has to be COMPLETE by the time this runs, because output
+ * is written sequentially -- a type discovered later would be used
+ * before its typedef exists. Signature and struct-field annotations are
+ * already canonicalised earlier (which registers them); what this adds
+ * is every declared function's own value type, which is the only other
+ * way a fn type can enter a program (a function value's type is by
+ * construction the type of some declared function). A type that still
+ * escaped both would not miscompile silently -- it would be an
+ * undeclared C identifier, which the build and the suite's warning
+ * sweep both fail on loudly. */
+void emit_fn_types(CG *cg) {
+    for (int i = 0; i < cg->sigs.count; i++) {
+        FuncSig *sig = &cg->sigs.items[i];
+        if (sig->method_of)
+            continue;
+        fn_cname(cg, fn_type_of_sig(cg, sig));
+    }
+    if (cg->fns.count == 0)
+        return;
+    for (int i = 0; i < cg->fns.count; i++) {
+        FnInst *f = &cg->fns.items[i];
+        char **ps, *r;
+        int np = fn_parts(f->slang, &ps, &r);
+        StrBuf params;
+        sb_init(&params);
+        if (np <= 0) {
+            sb_append(&params, "void");
+        } else {
+            for (int j = 0; j < np; j++) {
+                if (j)
+                    sb_append(&params, ", ");
+                sb_append(&params, ctype_of(cg, ps[j]));
+            }
+        }
+        emit_line(cg, "typedef %s (*%s)(%s); /* %s */",
+                  r ? ctype_of(cg, r) : "void", f->cname, params.data,
+                  f->slang);
+    }
     emit_line(cg, "");
 }
 
@@ -538,13 +618,26 @@ void emit_native_runtime(CG *cg) {
 void emit_spawn_trampolines(CG *cg) {
     for (int i = 0; i < cg->spawns.count; i++) {
         SpawnShape *s = &cg->spawns.items[i];
-        FuncSig *sig = sig_find_in(cg, s->pkg, s->name);
-        char *callee = sig->is_extern ? xstrdup(sig->name)
-                                      : mangle_func(sig->pkg, sig->name);
+        /* A value shape knows the signature but not the target: the
+         * function pointer rides in the args struct and the trampoline
+         * calls through it. Everything else about the two is identical,
+         * because the name was only ever used to recover the signature
+         * this fn type already carries. */
+        FuncSig *sig = s->fntype
+                           ? fn_sig_of_type(cg, s->fntype,
+                                            "<function value>", 0)
+                           : sig_find_in(cg, s->pkg, s->name);
+        char *callee = s->fntype
+                           ? xstrdup("_sl_a->fn")
+                           : sig->is_extern
+                                 ? xstrdup(sig->name)
+                                 : mangle_func(sig->pkg, sig->name);
 
         emit_line(cg, "typedef struct {");
         cg->indent++;
         emit_line(cg, "sl_join *join;");
+        if (s->fntype)
+            emit_line(cg, "%s fn;", ctype_of(cg, s->fntype));
         for (int j = 0; j < sig->nparams; j++)
             emit_line(cg, "%s a%d;", ctype_of(cg, sig->param_slang[j]), j);
         cg->indent--;
@@ -556,6 +649,9 @@ void emit_spawn_trampolines(CG *cg) {
         cg->indent++;
         emit_line(cg, "%s *o = (%s *)p;", s->sname, s->sname);
         emit_line(cg, "mark((void *)o->join);");
+        /* `fn` is deliberately NOT marked: a function value names code,
+         * not the heap. Marking it would hand the collector an address
+         * it never allocated. */
         for (int j = 0; j < sig->nparams; j++)
             if (type_is_gc_ptr(cg, sig->param_slang[j]))
                 emit_line(cg, "mark((void *)o->a%d);", j);
@@ -763,6 +859,8 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
 
     force_native_result_types(cg);
     emit_opt_res_forward_decls(cg);
+    emit_struct_fwd_decls(cg);
+    emit_fn_types(cg); /* between the struct names and the struct bodies */
     emit_struct_types(cg);
     emit_struct_tracers(cg);
 

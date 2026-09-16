@@ -223,6 +223,122 @@ int is_peer(const char *t) { return !strcmp(t, "peer"); }
 int is_trip(const char *t) { return !strcmp(t, "trip"); }
 int is_link(const char *t) { return !strcmp(t, "link"); }
 int is_mutex(const char *t) { return !strcmp(t, "mutex"); }
+int is_fn(const char *t) { return t && !strncmp(t, "fn(", 3); }
+
+/* Split "fn(A,B)->R" into its parts. Returns the parameter count;
+ * *ret is the return type, or NULL for a void fn. Params are returned
+ * as freshly allocated strings in *out (caller-owned, at most 32).
+ *
+ * Nesting is why this counts brackets rather than splitting on commas:
+ * fn(map[str]int,fn(int)->bool)->str has commas at two different
+ * depths, and only the outermost ones separate parameters. */
+int fn_parts(const char *t, char ***out, char **ret) {
+    const char *p, *start;
+    int depth = 0, n = 0;
+    char **ps = (char **)xmalloc(32 * sizeof(char *));
+    *ret = NULL;
+    *out = ps;
+    if (!is_fn(t))
+        return 0;
+    p = t + 3;
+    start = p;
+    for (;; p++) {
+        if (*p == '[' || *p == '(') {
+            depth++;
+            continue;
+        }
+        if (*p == ')' && depth == 0) {
+            if (p > start) {
+                if (n == 32)
+                    return -1;
+                ps[n] = (char *)xmalloc((size_t)(p - start) + 1);
+                memcpy(ps[n], start, (size_t)(p - start));
+                ps[n][p - start] = '\0';
+                n++;
+            }
+            break;
+        }
+        if (*p == ']' || *p == ')') {
+            depth--;
+            continue;
+        }
+        if (*p == ',' && depth == 0) {
+            if (n == 32)
+                return -1;
+            ps[n] = (char *)xmalloc((size_t)(p - start) + 1);
+            memcpy(ps[n], start, (size_t)(p - start));
+            ps[n][p - start] = '\0';
+            n++;
+            start = p + 1;
+            continue;
+        }
+        if (!*p)
+            return -1;
+    }
+    p++; /* past ')' */
+    if (p[0] == '-' && p[1] == '>')
+        *ret = xstrdup(p + 2);
+    return n;
+}
+
+/* If `name` is a variable or package global holding a function value,
+ * its fn type; otherwise NULL. Variables are checked before globals,
+ * and both before any function of the same name, so a binding always
+ * shadows rather than silently resolving to the function. */
+const char *fn_var_type(CG *cg, const char *name) {
+    VarSym *v = var_find(cg, name);
+    if (v)
+        return is_fn(v->slang) ? v->slang : NULL;
+    if (!strchr(name, '.')) {
+        GlobSym *g = glob_find(cg, cg->cur_pkg, name);
+        if (g && is_fn(g->slang))
+            return g->slang;
+    }
+    return NULL;
+}
+
+/* A throwaway FuncSig describing a value of fn type, so that a call
+ * THROUGH a variable reuses every arity check, assignability check,
+ * argument-sequencing step and safepoint the existing named-call path
+ * already performs -- rather than growing a second, subtly different
+ * copy of all of it. */
+FuncSig *fn_sig_of_type(CG *cg, const char *t, const char *name, int line) {
+    char **ps, *r;
+    int np = fn_parts(t, &ps, &r);
+    FuncSig *sig;
+    (void)cg;
+    if (np < 0)
+        cg_error(line, "malformed function type '%s'", t);
+    sig = (FuncSig *)xmalloc(sizeof(FuncSig));
+    memset(sig, 0, sizeof(*sig));
+    sig->name = xstrdup(name);
+    sig->pkg = xstrdup("");
+    sig->ret_slang = r;
+    sig->param_slang = (const char **)ps;
+    sig->nparams = np;
+    sig->line = line;
+    return sig;
+}
+
+/* C typedef name for a distinct fn type. Numbered rather than spelled
+ * out of the slang type: a name built from "fn(map[str]int)->opt[str]"
+ * needs so much escaping that the result is unreadable anyway, and a
+ * comment on the typedef carries the real signature. */
+const char *fn_cname(CG *cg, const char *t) {
+    for (int i = 0; i < cg->fns.count; i++) {
+        if (!strcmp(cg->fns.items[i].slang, t))
+            return cg->fns.items[i].cname;
+    }
+    if (cg->fns.count == cg->fns.cap) {
+        cg->fns.cap = cg->fns.cap ? cg->fns.cap * 2 : 8;
+        cg->fns.items = (FnInst *)xrealloc(cg->fns.items,
+                                           cg->fns.cap * sizeof(FnInst));
+    }
+    FnInst *f = &cg->fns.items[cg->fns.count++];
+    f->slang = xstrdup(t);
+    f->cname = xasprintf("sl_fn_%d", cg->fns.count - 1);
+    return f->cname;
+}
 
 int type_is_arena(const char *t) {
     char *inner;
@@ -381,7 +497,7 @@ int type_is_copy(CG *cg, const char *t) {
     if (!strcmp(t, "arena") || !strcmp(t, "link"))
         return 0;
     if (is_arr(t) || is_map(t) || is_opt(t) || is_result(t) || is_chan(t) ||
-        is_join(t) || is_mutex(t))
+        is_join(t) || is_mutex(t) || is_fn(t))
         return 1;
     if (struct_type_is_gc(cg, t))
         return 1;
@@ -422,7 +538,7 @@ int type_is_boxable(CG *cg, const char *t) {
         is_join(t) ||
         is_str(t) || is_bytes(t) || is_rawptr(t) || !strcmp(t, "arena") ||
         is_wire(t) || is_until(t) || is_fault(t) || is_peer(t) ||
-        is_trip(t) || is_link(t) || is_mutex(t))
+        is_trip(t) || is_link(t) || is_mutex(t) || is_fn(t))
         return 0;
     if (struct_type_is_gc(cg, t))
         return 0;
@@ -478,6 +594,8 @@ int type_is_gc_ptr(CG *cg, const char *t) {
     if (is_rawptr(t) || is_wire(t) || is_until(t) || is_fault(t) ||
         is_peer(t) || is_trip(t) || is_link(t) || !strcmp(t, "arena"))
         return 0;
+    if (is_fn(t))
+        return 0; /* names code, never the heap -- nothing to trace */
     if (is_result(t)) {
         char *tv, *te;
         result_te(t, &tv, &te);
@@ -816,7 +934,8 @@ const char *res_access(CG *cg, const char *t) {
  * every 'spawn' call site targeting the same function. */
 SpawnShape *spawn_shape_for(CG *cg, FuncSig *sig) {
     for (int i = 0; i < cg->spawns.count; i++) {
-        if (!strcmp(cg->spawns.items[i].pkg, sig->pkg) &&
+        if (!cg->spawns.items[i].fntype &&
+            !strcmp(cg->spawns.items[i].pkg, sig->pkg) &&
             !strcmp(cg->spawns.items[i].name, sig->name))
             return &cg->spawns.items[i];
     }
@@ -828,6 +947,7 @@ SpawnShape *spawn_shape_for(CG *cg, FuncSig *sig) {
     SpawnShape *s = &cg->spawns.items[cg->spawns.count++];
     s->pkg = sig->pkg;
     s->name = sig->name;
+    s->fntype = NULL;
     char *base = xasprintf("%s_%s", sanitize_pkg(sig->pkg),
                            sanitize_ident(sig->name));
     s->sname = xasprintf("sl_spawn_args_%s", base);
@@ -836,10 +956,81 @@ SpawnShape *spawn_shape_for(CG *cg, FuncSig *sig) {
     return s;
 }
 
+/* If this spawn targets a function VALUE rather than a named function,
+ * the value's fn type; otherwise NULL. A spawned value needs no less
+ * information than a spawned name -- the trampoline only ever used the
+ * name to know the SIGNATURE, which the fn type carries in full. */
+const char *spawn_fn_type(CG *cg, Expr *call) {
+    char *left, *right;
+    const char *name;
+    if (call->kind != EX_CALL)
+        return NULL;
+    if (call->as.call.callee)
+        return infer_type(cg, call->as.call.callee);
+    name = call->as.call.name;
+    if (split_dotted(name, &left, &right)) {
+        /* `obj.field(...)` where field holds a function value. Only a
+         * STRUCT receiver qualifies: `pkg.func(...)` names a function
+         * directly and keeps the named path, which emits a direct call
+         * rather than an indirect one. */
+        VarSym *v;
+        StructDef *sd;
+        if (import_try(cg, left))
+            return NULL;
+        v = var_find(cg, left);
+        if (!v)
+            return NULL;
+        sd = struct_of_type(cg, v->slang);
+        if (!sd)
+            return NULL;
+        for (int i = 0; i < sd->nfields; i++) {
+            if (!strcmp(sd->fields[i], right) && is_fn(sd->ftypes[i]))
+                return sd->ftypes[i];
+        }
+        return NULL;
+    }
+    return fn_var_type(cg, name);
+}
+
+/* Shape for spawning a function value: keyed by the fn TYPE, because
+ * that is all a trampoline needs and every value of one type can share
+ * a single trampoline. The target itself travels in the args struct. */
+SpawnShape *spawn_shape_for_fn(CG *cg, const char *fntype) {
+    for (int i = 0; i < cg->spawns.count; i++) {
+        if (cg->spawns.items[i].fntype &&
+            !strcmp(cg->spawns.items[i].fntype, fntype))
+            return &cg->spawns.items[i];
+    }
+    if (cg->spawns.count == cg->spawns.cap) {
+        cg->spawns.cap = cg->spawns.cap ? cg->spawns.cap * 2 : 8;
+        cg->spawns.items = (SpawnShape *)xrealloc(
+            cg->spawns.items, cg->spawns.cap * sizeof(SpawnShape));
+    }
+    SpawnShape *s = &cg->spawns.items[cg->spawns.count++];
+    s->pkg = (char *)"";
+    s->name = (char *)"<function value>";
+    s->fntype = xstrdup(fntype);
+    s->sname = xasprintf("sl_spawn_argsv_%d", cg->spawns.count - 1);
+    s->tname = xasprintf("sl_spawn_trampv_%d", cg->spawns.count - 1);
+    s->has_tracer = 1;
+    return s;
+}
+
 FuncSig *spawn_target(CG *cg, Expr *call, int line) {
     if (call->kind != EX_CALL)
         cg_error(line, "'spawn' requires a function call");
     const char *name = call->as.call.name;
+    const char *sft = spawn_fn_type(cg, call);
+    if (sft) {
+        if (!is_fn(sft))
+            cg_error(line, "'spawn' target is not callable (type %s)", sft);
+        FuncSig *vs = fn_sig_of_type(cg, sft, name, line);
+        if (call->as.call.nargs != vs->nparams)
+            cg_error(line,
+                     "function '%s' expects %d argument(s), got %d", name,
+                     vs->nparams, call->as.call.nargs);
+        return vs;
+    }
     if (is_builtin_name(name))
         cg_error(line, "'spawn' cannot target a builtin function");
     FuncSig *sig;
@@ -1419,6 +1610,8 @@ const char *ctype_of(CG *cg, const char *t) {
         return "sl_chan *";
     if (is_join(t))
         return "sl_join *";
+    if (is_fn(t))
+        return fn_cname(cg, t);
     if (is_opt(t))
         return xasprintf("%s *", opt_cname(cg, opt_inner(t)));
     if (is_result(t)) {
@@ -1500,6 +1693,30 @@ const char *canon_type(CG *cg, const char *t, int line) {
     if (is_join(t)) {
         const char *ci = canon_type(cg, join_elem(t), line);
         return xasprintf("join[%s]", ci);
+    }
+    if (is_fn(t)) {
+        /* Canonicalise the parts, so fn(Point) and fn(geom.Point)
+           resolve to one type rather than two that never compare
+           equal. */
+        char **ps, *r;
+        int np = fn_parts(t, &ps, &r);
+        StrBuf b;
+        if (np < 0)
+            cg_error(line, "malformed function type '%s'", t);
+        sb_init(&b);
+        sb_append(&b, "fn(");
+        for (int i = 0; i < np; i++) {
+            if (i)
+                sb_append(&b, ",");
+            sb_append(&b, canon_type(cg, ps[i], line));
+        }
+        sb_append(&b, ")");
+        if (r) {
+            sb_append(&b, "->");
+            sb_append(&b, canon_type(cg, r, line));
+        }
+        fn_cname(cg, b.data); /* register the instantiation */
+        return b.data;
     }
     if (map_type(t))
         return t;

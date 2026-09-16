@@ -53,6 +53,24 @@ gc struct State {
     tasks: [Task],
     next_id: int,
     lock: mutex,
+    routes: [Route],
+}
+
+// ---- routing table ---------------------------------------------------
+//
+// Adding a route is one line here, not another arm in a chain of string
+// comparisons. That needs handlers to be VALUES, which is what the `fn`
+// type gives: `handler` holds a top-level function, nothing captured.
+//
+// Every handler therefore takes the same three arguments whether it uses
+// them or not -- a table cannot hold two different shapes. `id` is the
+// trailing integer for prefix routes and -1 for exact ones.
+
+gc struct Route {
+    method: str,
+    path: str,    // exact match, when prefix is ""
+    prefix: str,  // "/api/tasks/" style match, capturing a trailing id
+    handler: fn(State, http.Request, int) -> http.Response,
 }
 
 // ---- helpers ---------------------------------------------------------
@@ -94,7 +112,11 @@ fn find_task(st: State, id: int) -> int {
 
 // ---- routes ----------------------------------------------------------
 
-fn list_tasks(st: State) -> http.Response {
+fn home(st: State, req: http.Request, id: int) -> http.Response {
+    return http.ok_html(index_html());
+}
+
+fn list_tasks(st: State, req: http.Request, id: int) -> http.Response {
     mutex_lock(st.lock);
     // Encode inside the lock: the list must not be mutated mid-encode.
     let body: str = json.encode(st.tasks);
@@ -102,7 +124,7 @@ fn list_tasks(st: State) -> http.Response {
     return http.ok_json(body);
 }
 
-fn create_task(st: State, req: http.Request) -> http.Response {
+fn create_task(st: State, req: http.Request, id: int) -> http.Response {
     let r: result[NewTask, str] = json.decode(req.body);
     guard let nt = r else let e = err_of(r) {
         return http.bad_request("invalid JSON: " + e);
@@ -143,26 +165,27 @@ fn update_task(st: State, req: http.Request, id: int) -> http.Response {
 }
 
 fn route(st: State, req: http.Request) -> http.Response {
-    if req.path == "/" {
-        if req.method == "GET" {
-            return http.ok_html(index_html());
+    // A path that matches but with the wrong method is 405, not 404, so
+    // the two outcomes are tracked apart.
+    let path_matched = false;
+    for i in 0..len(st.routes) {
+        let r = st.routes[i];
+        let id = -1;
+        let hit = false;
+        if len(r.prefix) > 0 {
+            id = path_id(req.path, r.prefix);
+            hit = id >= 0;
+        } else {
+            hit = req.path == r.path;
         }
-        return http.method_not_allowed();
+        if hit {
+            path_matched = true;
+            if r.method == req.method {
+                return r.handler(st, req, id);
+            }
+        }
     }
-    if req.path == "/api/tasks" {
-        if req.method == "GET" {
-            return list_tasks(st);
-        }
-        if req.method == "POST" {
-            return create_task(st, req);
-        }
-        return http.method_not_allowed();
-    }
-    let id = path_id(req.path, "/api/tasks/");
-    if id >= 0 {
-        if req.method == "PUT" {
-            return update_task(st, req, id);
-        }
+    if path_matched {
         return http.method_not_allowed();
     }
     return http.not_found();
@@ -286,7 +309,18 @@ fn index_html() -> str {
 // ---- startup ---------------------------------------------------------
 
 let seed: [Task] = [];
-let st = State { tasks: seed, next_id: 1, lock: make_mutex() };
+let routes: [Route] = [
+    Route { method: "GET",  path: "/",           prefix: "",             handler: home },
+    Route { method: "GET",  path: "/api/tasks",  prefix: "",             handler: list_tasks },
+    Route { method: "POST", path: "/api/tasks",  prefix: "",             handler: create_task },
+    Route { method: "PUT",  path: "",            prefix: "/api/tasks/",  handler: update_task }
+];
+let st = State {
+    tasks: seed,
+    next_id: 1,
+    lock: make_mutex(),
+    routes: routes
+};
 
 let port = atoi(proc.getenv("PORT") ?? "8080");
 let workers = atoi(proc.getenv("WORKERS") ?? "64");

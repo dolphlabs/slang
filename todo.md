@@ -901,7 +901,7 @@ points, both permanent decisions, not "for now":
         `return` from inside a loop back-edge bracket (Tier 10's
         previous step) skips that bracket's own closing
         `sl_rt_safepoint_exit()`, entirely by construction -- this
-        language has no `break`/`continue`, so `guard let ... else {
+        language had no `break`/`continue` at the time, so `guard let ... else {
         return; }` (the idiomatic way to leave a loop early,
         pervasive throughout `demo/main.sl`) hits this on every use.
         The skipped `exit()` leaves `sl_rt_safepoint_top` (a
@@ -2325,8 +2325,85 @@ prerequisite, not a different plan).
       `-mllvm -asan-stack=0`**, or the collector's own stack handling
       reports itself. Worth knowing before the next person chases it.
 
-- [ ] **The ~1-in-60 container corruption, characterized: it is an
-      async-preemption bug, and it has nothing to do with the GC.**
+- [x] **FIXED: the ~1-in-60 container corruption was the async
+      trampoline dropping the upper halves of the YMM registers.**
+
+      The characterization below was right in every particular and led
+      straight to it; the missing step was asking WHICH registers the
+      trampoline saves. It saved `%xmm0-15` with `movdqu` -- the low
+      128 bits of each vector register. This machine's libc uses AVX2
+      string/memory routines (`$VARIANT$Haswell`), so an interrupted
+      `memcpy` has live data in the UPPER 128 bits of `%ymm`, which the
+      trampoline neither saved nor restored. Compilers emit
+      `vzeroupper` constantly in AVX code, so while the task was
+      switched out something else zeroed exactly those halves; on
+      resume the in-flight 32-byte store wrote 16 correct bytes and 16
+      zero bytes.
+
+      That predicts the signature below exactly, which is why it is
+      the right answer and not merely a plausible one: 8-byte elements,
+      so the lost upper half of one YMM store is **two adjacent
+      elements reading zero at a 16-byte-aligned offset** -- the
+      "adjacent PAIRS of zeroes starting at an EVEN index" already
+      observed. It also explains why the GC was never involved, why
+      disabling the context switch cured it (no switch, no window for
+      another task's `vzeroupper`), and why ASan could not see it (no
+      out-of-bounds access ever happens).
+
+      Fix: save and restore the full 256-bit registers. The vector area
+      grows 256 -> 512 bytes and `SL_TASK_GUARD_MARGIN` grows with it
+      (1024 -> 2048), since that margin is sized against a hand-tally
+      of this exact frame. The choice is made at runtime, not compile
+      time: `sl_cpu_detect()` checks CPUID for AVX **and** XGETBV for
+      OS-enabled YMM state, and the trampoline branches on the result,
+      so a CPU without AVX still takes the `movdqu` path instead of
+      taking SIGILL. Verified both ways -- forcing the flag to 0
+      exercises the SSE branch and still runs correctly.
+
+      Evidence, 30 runs each, same machine, back to back, nothing else
+      running (`CC_TASKS=6000 CC_WORK=20000 CC_ALLOC=200`, amplified
+      preemption):
+
+      | build | corrupted | SIGBUS |
+      |---|---|---|
+      | before | **10/30** | 4/30 |
+      | after | **0/30** | 3/30 |
+
+      Cost at stock settings is not measurable: wall time and peak RSS
+      both land inside the baseline's own run-to-run spread.
+
+      **The SIGBUS column is a SEPARATE, still-open bug** -- see the
+      item below. It is unchanged by this fix and was present before
+      it. An earlier reading of it as "my larger frame overflowed the
+      stack" came from a 0/12 run that was simply luck against a ~10%
+      rate; the control settles it.
+
+- [ ] **Open: ~10% SIGBUS under amplified preemption, pre-existing.**
+      Distinct from the corruption above and untouched by fixing it
+      (4/30 before, 3/30 after). Signature is identical every time: the
+      OS crash report shows `EXC_BAD_ACCESS / KERN_PROTECTION_FAILURE`
+      where the faulting address IS the program counter, and that PC is
+      a heap address, reached from a spawned task's trampoline entry --
+      i.e. the task jumped through a corrupted resume target.
+
+      Only visible under the amplified build (quantum 150us, ticker
+      0.1ms); not yet seen at stock settings, where preemptions are
+      ~1000x rarer. The likely shape, not yet demonstrated: task stacks
+      are ordinary malloc'd blocks, so one task overrunning its own
+      stack writes into whatever block sits below it -- possibly
+      another task's stack, including the saved resume address in its
+      trampoline frame. That would explain a heap-looking PC. Raising
+      `SL_TASK_GUARD_MARGIN` to 2048 did NOT fix it, so if that is the
+      mechanism the overrun is larger than one margin's worth.
+
+      Next step for whoever picks it up: the crash reports in
+      `~/Library/Logs/DiagnosticReports/*.ips` carry a full backtrace
+      per crash and cost nothing to collect -- read those first rather
+      than re-deriving from exit codes, which is what made this look
+      like my own regression for an hour.
+
+- [x] **The original characterization, kept because every elimination
+      in it is still valid and was what made the fix findable.**
       Chased with a proper bisection rather than more hypotheses; the
       eliminations below are the durable part, since each one was a
       plausible story that turned out to be wrong.
