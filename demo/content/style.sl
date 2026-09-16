@@ -1,8 +1,10 @@
 // content/style.sl: the demo's CSS, served at GET /style.css.
-// Embedded as a string (slang has no static-file serving -- there's
-// no file-I/O builtin exposed to slang programs at all, so the whole
-// frontend lives in source, built the same way the compiler embeds
-// its own C runtime: chunks of string literal, concatenated).
+// Embedded as a string: there is no static-file serving helper in the
+// http package, so the whole frontend lives in source, built the same
+// way the compiler embeds its own C runtime -- chunks of string
+// literal, concatenated. (The `fs` and `os` packages can read files;
+// what is missing is an http helper that turns a path into a
+// response, with the content-type and caching questions that implies.)
 
 pub fn style_css() -> str {
     let base = "*, *::before, *::after { box-sizing: border-box; }\n"
