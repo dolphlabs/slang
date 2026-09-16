@@ -10,24 +10,52 @@ live in `todo.md`.
 
 ## 1. Linux CI
 
-- [ ] GitHub Actions: build and run the full suite on Ubuntu, x86_64 and
-  arm64, on every PR; attach Linux tarballs to releases.
+- [x] **x86_64:** `.github/workflows/ci.yml` builds `slangc`, runs the full
+  suite and the docs build on Ubuntu 24.04 on every merge to `main` (and
+  on manual dispatch), and attaches a verified Linux tarball to every
+  published release. Confirm the first run on `main` goes green.
 
-  **Why first.** slang is built primarily for servers, which mostly run
-  Linux, and it has only ever been built and tested on macOS. Every
-  release so far has shipped a macOS-only binary for that reason. The
-  runtime has Linux-specific code that has never run: `/proc/self/exe` in
-  `src/rtpath.c`, the arm64 context switch, and the Linux side of the
-  scheduler and I/O (all testing so far used kqueue). The stack-relocation
-  bug (#120) showed that exactly this kind of code hides real crashes.
+  Reproduced locally in Docker before writing the workflow, and the first
+  Linux run found **three bugs that had shipped**:
+  - `tests/runtime/test_gc` was a committed macOS binary. A fresh checkout
+    made `make` think it was built, so Linux tried to execute a Mach-O
+    file before any test ran.
+  - **No slang program linked on Linux**, hello included. The preemption
+    and context-switch trampolines call four C functions from top-level
+    `__asm__`, which GCC's `-flto` cannot see into, so it discarded them.
+    clang on macOS kept them by chance. Now `__attribute__((used))`.
+  - `json` decoded `int` (C `long long`) through an `int64_t *`. Same type
+    on macOS, different on Linux glibc, where GCC flagged it in every
+    program decoding an int field.
 
-  Expect the first run to fail. That is the point: every failure it finds
-  is a bug that already shipped.
+  After those: 176/176 on Linux x86_64 with GCC 13, generated C
+  warning-free under GCC as well as clang. The Linux tarball was verified
+  with the source tree deleted, including through a symlink on PATH, which
+  exercises the never-before-run `/proc/self/exe` lookup.
 
-  Needs no server: GitHub's hosted runners are enough, which is what
-  unblocks this where the remote benchmarks (item 8) stalled. Tests that
-  reach the internet must not be added to CI — the https client checks are
-  verified by hand for that reason.
+- [ ] **arm64 — a port, not a CI fix.** arm64 does not build on ANY
+  platform, Apple Silicon included: `runtime/sl_sched.c` has the async
+  preemption trampoline (`sl_preempt_trampoline_entry`/`_end`) and the
+  stack-growth trampoline (`sl_grower_trampoline`) only in x86_64
+  assembly, so every program fails to link. It went unnoticed because
+  every machine it has been built on is Intel. The signal handler in
+  `sl_pool.c` already has arm64 code for macOS and Linux; only the
+  assembly is missing.
+
+  - The **grower trampoline** is small: x86_64's is three instructions.
+  - The **preemption trampoline** is the hard part. After restoring every
+    register, x86_64 resumes the interrupted code with `push`/`ret`,
+    which needs no free register. arm64 has no equivalent: branching needs
+    a register, and at an arbitrary interrupted instruction in C code any
+    of them may be live (x16/x17 included, inside veneers). Candidate
+    designs: resume through a second, synchronous signal whose handler
+    restores the full context, so the kernel sets every register
+    atomically; or a staged port that ships arm64 with async preemption
+    off (loops already yield cooperatively at back-edges) and adds it
+    afterwards.
+
+  Add `ubuntu-24.04-arm` back to both CI matrices when it lands; GitHub's
+  arm64 runners are native, where local Docker could only emulate.
 
 ## 2. OpenSSL discovery fallback
 
