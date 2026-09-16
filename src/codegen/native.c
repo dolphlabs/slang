@@ -39,6 +39,8 @@ static const NatSig *find_any_sig(const char *pkg, const char *fname) {
         ns = find_sig(STRINGS_SIGS, STRINGS_SIGS_LEN, pkg, fname);
     if (!ns)
         ns = find_sig(ENCODING_SIGS, ENCODING_SIGS_LEN, pkg, fname);
+    if (!ns)
+        ns = find_sig(COMPRESS_SIGS, COMPRESS_SIGS_LEN, pkg, fname);
     return ns;
 }
 

@@ -569,6 +569,10 @@ void force_native_result_types(CG *cg) {
         res_cname(cg, "str", "str");
         opt_cname(cg, "str");
     }
+    if (want_pkg(cg, "compress")) {
+        /* every entry point is result[bytes, str] */
+        res_cname(cg, "bytes", "str");
+    }
     if (want_pkg(cg, "os")) {
         res_cname(cg, "bool", "str");
         res_cname(cg, "int", "str");
@@ -592,9 +596,10 @@ void emit_native_runtime(CG *cg) {
     int want_os = want_pkg(cg, "os");
     int want_strings = want_pkg(cg, "strings");
     int want_encoding = want_pkg(cg, "encoding");
+    int want_compress = want_pkg(cg, "compress");
     if (!want_time && !want_net && !want_proc && !want_fs && !want_log &&
         !want_crypto && !want_sql && !want_regex && !want_os &&
-        !want_strings && !want_encoding)
+        !want_strings && !want_encoding && !want_compress)
         return;
     if (want_time)
         emit_runtime_file(cg, "sl_time.c");
@@ -620,6 +625,8 @@ void emit_native_runtime(CG *cg) {
         emit_runtime_file(cg, "sl_strings.c");
     if (want_encoding)
         emit_runtime_file(cg, "sl_encoding.c");
+    if (want_compress)
+        emit_runtime_file(cg, "sl_compress.c");
 }
 
 /* Emit the args-struct + task entry function for every distinct
@@ -1042,7 +1049,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
 
 void codegen_program(Package *pkgs, int npkgs, int main_index,
                      StrBuf *out, int *out_want_tls, int *out_want_crypto,
-                     int *out_want_sql) {
+                     int *out_want_sql, int *out_want_compress) {
     CG cg;
     memset(&cg, 0, sizeof(CG));
     cg.out = out;
@@ -1106,4 +1113,5 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
     *out_want_tls = cg.want_tls;
     *out_want_crypto = want_pkg(&cg, "crypto");
     *out_want_sql = want_pkg(&cg, "sql");
+    *out_want_compress = want_pkg(&cg, "compress");
 }

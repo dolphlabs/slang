@@ -313,8 +313,9 @@ int main(int argc, char **argv) {
     int want_tls = 0;
     int want_crypto = 0;
     int want_sql = 0;
+    int want_compress = 0;
     codegen_program(pkgs.items, pkgs.count, main_index, &out, &want_tls,
-                    &want_crypto, &want_sql);
+                    &want_crypto, &want_sql, &want_compress);
 
     /* ---- output ---- */
     char *stem = derive_stem(input);
@@ -380,6 +381,9 @@ int main(int argc, char **argv) {
     if (want_sql)
         sb_append(&cmd, " -lsqlite3"); /* the 'sql' native package;
                                           resolves on default cc paths */
+    if (want_compress)
+        sb_append(&cmd, " -lz"); /* the 'compress' native package; zlib
+                                    ships with every supported platform */
     for (int i = 0; i < nlinks; i++) {
         sb_append(&cmd, " -l");
         sb_append(&cmd, link_libs[i]);

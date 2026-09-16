@@ -18,6 +18,7 @@ Every page on this site has a Markdown twin at the same path with a .md extensio
 - [How it works](internals/index.md): The compiler pipeline, the collector, the scheduler.
 - [Limitations](limitations/index.md): What slang does not do, stated plainly.
 - [byteutil](packages/byteutil.md): Package byteutil.
+- [compress](packages/compress.md): Package compress.
 - [crypto](packages/crypto.md): Package crypto.
 - [encoding](packages/encoding.md): Package encoding.
 - [fs](packages/fs.md): Package fs.
