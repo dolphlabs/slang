@@ -370,6 +370,9 @@ extern const int STRINGS_SIGS_LEN;
 extern const NatSig REGEX_SIGS[]; /* src/codegen/pkg_regex/ */
 extern const int REGEX_SIGS_LEN;
 
+extern const NatSig ENCODING_SIGS[]; /* src/codegen/pkg_encoding/ */
+extern const int ENCODING_SIGS_LEN;
+
 /* ------------------------------------------------------------------ */
 /* Functions (declarations generated from every former 'static' def)   */
 /* ------------------------------------------------------------------ */
