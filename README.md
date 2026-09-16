@@ -13,7 +13,7 @@ Tech Limited.
 
 ## Documentation
 
-Full documentation site: **<https://dolphlabs.github.io/slang/>**
+Full documentation site: **<https://slang.dolphlabs.com/>**
 
 Build it locally with `make docs` (dependency-free Python 3) and serve
 with `make docs-serve`. The site is generated from this repository --
