@@ -28,6 +28,42 @@
     });
   }
 
+  /* ---- mobile nav --------------------------------------------------
+   * Below 64rem (style.css) .mainnav starts collapsed; this just
+   * toggles the .open class and mirrors it into aria-expanded and the
+   * tap-outside scrim. Without JS the panel stays collapsed and the
+   * links are still there in the HTML, just not reachable through the
+   * toggle -- a real loss on a phone, but every page is also on its
+   * own line in the footer-less nav of the Markdown twin, so nothing
+   * is unreachable, only less convenient. */
+  var navToggle = document.getElementById("navtoggle");
+  var mainNav = document.getElementById("mainnav");
+  var navScrim = document.getElementById("navscrim");
+  if (navToggle && mainNav && navScrim) {
+    var closeNav = function () {
+      mainNav.classList.remove("open");
+      navToggle.setAttribute("aria-expanded", "false");
+      navScrim.hidden = true;
+    };
+    var openNav = function () {
+      mainNav.classList.add("open");
+      navToggle.setAttribute("aria-expanded", "true");
+      navScrim.hidden = false;
+    };
+    navToggle.addEventListener("click", function () {
+      if (mainNav.classList.contains("open")) closeNav(); else openNav();
+    });
+    navScrim.addEventListener("click", closeNav);
+    mainNav.addEventListener("click", function (e) {
+      if (e.target.tagName === "A") closeNav();
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && mainNav.classList.contains("open")) {
+        closeNav(); navToggle.focus();
+      }
+    });
+  }
+
   /* ---- copy buttons ----------------------------------------------- */
   document.querySelectorAll(".code .copy").forEach(function (btn) {
     btn.addEventListener("click", function () {
