@@ -155,13 +155,33 @@ live in `todo.md`.
 
 ## 4. Chunked request bodies in the `http` server
 
-- [ ] Accept `Transfer-Encoding: chunked` on requests in `stdlib/http`.
+- [x] `Transfer-Encoding: chunked` requests, in `read` and `parse`, which
+  now share one framing function so they cannot disagree about the same
+  bytes. Chunk extensions ignored; trailers read and discarded (merged into
+  headers, a trailer could rewrite one after the handler checked it).
 
-  The server rejects them outright ("chunked encoding is not supported",
-  `stdlib/http/http.sl`), yet common clients and proxies send them for
-  streamed uploads. `httpc` already decodes chunked responses with bounded
-  size lines and a total-size ceiling; the same limits apply here, where
-  the input is even less trusted.
+  **Two request-smuggling holes, found in the framing code and confirmed
+  against the old code before fixing:** two disagreeing `Content-Length`
+  headers were accepted with the last one silently winning, and
+  `Content-Length: 18446744073709551619` (2^64 + 3) wrapped to 3, leaving
+  the rest of the body to be read as the next request. Now refused, along
+  with `Transfer-Encoding` plus `Content-Length`, `Transfer-Encoding` in
+  HTTP/1.0, coding lists, bare LFs, and oversized size lines and trailers.
+
+  **A denial of service, found by testing with real clients:** reading a
+  request was quadratic in its size, because `copy_wire` rebuilt the
+  receive buffer a byte at a time (`out = out + one_byte`) on every recv.
+  Measured on the old code: a 50KB POST took 1.0s and a 200KB one 24.7s, of
+  CPU. `to_bytes` now accepts a `wire` and copies it once: 200KB, chunked
+  or not, in under 10ms.
+
+  **Verified:** `tests/http_chunked` covers decoding (extensions, trailers
+  not merged, 2000 one-byte chunks), every refusal, a body split across
+  seven sends, a chunked request pipelined with the next one, and a body
+  larger than the buffer; 25/25 stable. Six controls each caught their bug.
+  Real clients: curl's and Python `http.client`'s chunked uploads decode
+  correctly, and TE+CL, duplicate `Content-Length`, the overflow and a bare
+  LF each get a 400 naming the reason over a real socket.
 
 ## 5. Methods that share a name with a package function
 

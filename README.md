@@ -1846,9 +1846,27 @@ from `bytes`, or `read` from a connection into a caller-sized `wire`
 returns `Incoming` with leftover compacted to the front of the wire,
 so one connection can carry many requests. `write` serializes a
 `Response` through an arena. Headers are stored lowercased;
-`header(req, name)` looks up case-insensitively. `Content-Length` is
-honored; chunked `Transfer-Encoding` is rejected. `wants_close`
-follows HTTP/1.1 keep-alive (and HTTP/1.0 close-by-default).
+`header(req, name)` looks up case-insensitively. A body is framed by
+`Content-Length` or by `Transfer-Encoding: chunked` (chunk extensions
+ignored, trailers read and discarded). `wants_close` follows HTTP/1.1
+keep-alive (and HTTP/1.0 close-by-default).
+
+Framing decides where a request ENDS, so it is a security boundary: if a
+proxy in front and this server frame the same bytes differently, the
+leftover is read as a second request the proxy never saw (request
+smuggling). `read` and `parse` therefore refuse, rather than guess at:
+
+- `Transfer-Encoding` together with `Content-Length`, or in an HTTP/1.0
+  request;
+- any coding but exactly `chunked` (no lists such as `gzip, chunked`);
+- a repeated `Content-Length` or `Transfer-Encoding` header;
+- a `Content-Length` longer than 18 digits, or not all digits;
+- chunk-size lines over 1KB, sizes over 15 hex digits, bare LFs, chunk data
+  not followed by CRLF, or trailers over 8KB.
+
+**After `read` returns an error, close the connection** (the examples all
+`return`). The error means this server could not tell where the request
+ended, so it cannot tell where the next one begins either.
 
 ```slang
 import "http";

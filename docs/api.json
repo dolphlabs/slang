@@ -370,7 +370,7 @@
           "sig": "fn header(r: Request, name: str) -> opt[str]",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 161
+          "line": 386
         },
         {
           "name": "parse",
@@ -378,7 +378,7 @@
           "sig": "fn parse(raw: bytes) -> result[Request, str]",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 169
+          "line": 394
         },
         {
           "name": "serialize",
@@ -386,7 +386,7 @@
           "sig": "fn serialize(r: Response) -> bytes",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 226
+          "line": 422
         },
         {
           "name": "wants_close",
@@ -394,7 +394,7 @@
           "sig": "fn wants_close(r: Request) -> bool",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 267
+          "line": 463
         },
         {
           "name": "read",
@@ -402,7 +402,7 @@
           "sig": "fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Incoming, str]",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 281
+          "line": 477
         },
         {
           "name": "write",
@@ -410,7 +410,7 @@
           "sig": "fn write(c: &mut link, r: Response, a: &mut arena, deadline: until) -> result[int, fault]",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 333
+          "line": 526
         },
         {
           "name": "text_response",
@@ -418,7 +418,7 @@
           "sig": "fn text_response(status: i32, status_text: str, content_type: str,",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 338
+          "line": 531
         },
         {
           "name": "ok_html",
@@ -426,7 +426,7 @@
           "sig": "fn ok_html(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 350
+          "line": 543
         },
         {
           "name": "ok_css",
@@ -434,7 +434,7 @@
           "sig": "fn ok_css(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 354
+          "line": 547
         },
         {
           "name": "ok_js",
@@ -442,7 +442,7 @@
           "sig": "fn ok_js(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 358
+          "line": 551
         },
         {
           "name": "ok_json",
@@ -450,7 +450,7 @@
           "sig": "fn ok_json(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 363
+          "line": 556
         },
         {
           "name": "ok_text",
@@ -458,7 +458,7 @@
           "sig": "fn ok_text(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 367
+          "line": 560
         },
         {
           "name": "created_json",
@@ -466,7 +466,7 @@
           "sig": "fn created_json(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 371
+          "line": 564
         },
         {
           "name": "bad_request",
@@ -474,7 +474,7 @@
           "sig": "fn bad_request(msg: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 376
+          "line": 569
         },
         {
           "name": "not_found",
@@ -482,7 +482,7 @@
           "sig": "fn not_found() -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 381
+          "line": 574
         },
         {
           "name": "method_not_allowed",
@@ -490,7 +490,7 @@
           "sig": "fn method_not_allowed() -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 386
+          "line": 579
         }
       ]
     },
