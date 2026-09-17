@@ -692,7 +692,7 @@ b[<span class="n">0</span>] = <span class="n">65</span>;                 <span c
 <p><code>bytes</code> values carry an explicit length and may contain NULs — safe for network buffers and binary formats.</p>
 <h4 id="lists-t">Lists <code>[T]</code><a class="anchor" href="#lists-t" aria-label="Link to this section">#</a></h4>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> xs = [<span class="n">10</span>, <span class="n">20</span>, <span class="n">30</span>];         <span class="c">// inferred [int]</span>
-<span class="k">let</span> empty: [<span class="t">str</span>] = [];         <span class="c">// empty lists need an annotation</span>
+<span class="k">let</span> empty: [<span class="t">str</span>] = [];         <span class="c">// an empty list needs a type from context</span>
 <span class="b">push</span>(xs, <span class="n">40</span>);                  <span class="c">// grow (amortized O(1))</span>
 <span class="b">println</span>(<span class="b">pop</span>(xs));              <span class="c">// shrink from the end</span>
 xs[<span class="n">0</span>] = <span class="n">5</span>;                     <span class="c">// bounds-checked index assignment</span>
@@ -700,6 +700,10 @@ xs[<span class="n">0</span>] = <span class="n">5</span>;                     <sp
 <span class="k">let</span> ys = xs[<span class="n">0..2</span>] + xs[<span class="n">1</span>..];   <span class="c">// slicing + concatenation</span>
 <span class="k">let</span> grid = [[<span class="n">1</span>, <span class="n">2</span>], [<span class="n">3</span>, <span class="n">4</span>]];   <span class="c">// nested lists</span></code></pre></div>
 <p>Indexing is bounds-checked at runtime; violations abort with a clear message.</p>
+<p><code>[]</code> has no element type of its own, so it takes one from what is expected of it — the same way <code>none</code> does: an annotated <code>let</code>, a function or method parameter, a struct field, a <code>return</code>, an assignment, <code>ok([])</code>/<code>some([])</code>, <code>push(grid, [])</code>, or an element of an outer list. With nothing expected (<code>let xs = [];</code>) it is a compile error.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">fn</span> <span class="f">total</span>(xs: [<span class="t">int</span>]) -&gt; <span class="t">int</span> { <span class="k">return</span> <span class="b">len</span>(xs); }
+<span class="f">total</span>([]);                          <span class="c">// [int], from the parameter</span>
+<span class="k">let</span> b = Basket { items: [] };       <span class="c">// from the field</span></code></pre></div>
 <h4 id="maps-map-k-v">Maps <code>map[K]V</code><a class="anchor" href="#maps-map-k-v" aria-label="Link to this section">#</a></h4>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> scores: <span class="t">map</span>[<span class="t">str</span>]<span class="t">int</span> = {<span class="s">&quot;alice&quot;</span>: <span class="n">90</span>, <span class="s">&quot;bob&quot;</span>: <span class="n">85</span>};
 scores[<span class="s">&quot;carol&quot;</span>] = <span class="n">78</span>;          <span class="c">// insert or overwrite</span>
@@ -883,7 +887,7 @@ b[<span class="n">0</span>] = <span class="n">65</span>;                 <span c
 <p><code>bytes</code> values carry an explicit length and may contain NULs — safe for network buffers and binary formats.</p>
 <h3 id="lists-t-2">Lists <code>[T]</code><a class="anchor" href="#lists-t-2" aria-label="Link to this section">#</a></h3>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> xs = [<span class="n">10</span>, <span class="n">20</span>, <span class="n">30</span>];         <span class="c">// inferred [int]</span>
-<span class="k">let</span> empty: [<span class="t">str</span>] = [];         <span class="c">// empty lists need an annotation</span>
+<span class="k">let</span> empty: [<span class="t">str</span>] = [];         <span class="c">// an empty list needs a type from context</span>
 <span class="b">push</span>(xs, <span class="n">40</span>);                  <span class="c">// grow (amortized O(1))</span>
 <span class="b">println</span>(<span class="b">pop</span>(xs));              <span class="c">// shrink from the end</span>
 xs[<span class="n">0</span>] = <span class="n">5</span>;                     <span class="c">// bounds-checked index assignment</span>
@@ -891,6 +895,10 @@ xs[<span class="n">0</span>] = <span class="n">5</span>;                     <sp
 <span class="k">let</span> ys = xs[<span class="n">0..2</span>] + xs[<span class="n">1</span>..];   <span class="c">// slicing + concatenation</span>
 <span class="k">let</span> grid = [[<span class="n">1</span>, <span class="n">2</span>], [<span class="n">3</span>, <span class="n">4</span>]];   <span class="c">// nested lists</span></code></pre></div>
 <p>Indexing is bounds-checked at runtime; violations abort with a clear message.</p>
+<p><code>[]</code> has no element type of its own, so it takes one from what is expected of it — the same way <code>none</code> does: an annotated <code>let</code>, a function or method parameter, a struct field, a <code>return</code>, an assignment, <code>ok([])</code>/<code>some([])</code>, <code>push(grid, [])</code>, or an element of an outer list. With nothing expected (<code>let xs = [];</code>) it is a compile error.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">fn</span> <span class="f">total</span>(xs: [<span class="t">int</span>]) -&gt; <span class="t">int</span> { <span class="k">return</span> <span class="b">len</span>(xs); }
+<span class="f">total</span>([]);                          <span class="c">// [int], from the parameter</span>
+<span class="k">let</span> b = Basket { items: [] };       <span class="c">// from the field</span></code></pre></div>
 <h3 id="maps-map-k-v-2">Maps <code>map[K]V</code><a class="anchor" href="#maps-map-k-v-2" aria-label="Link to this section">#</a></h3>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> scores: <span class="t">map</span>[<span class="t">str</span>]<span class="t">int</span> = {<span class="s">&quot;alice&quot;</span>: <span class="n">90</span>, <span class="s">&quot;bob&quot;</span>: <span class="n">85</span>};
 scores[<span class="s">&quot;carol&quot;</span>] = <span class="n">78</span>;          <span class="c">// insert or overwrite</span>
@@ -1021,7 +1029,7 @@ b[<span class="n">0</span>] = <span class="n">65</span>;                 <span c
 <p><code>bytes</code> values carry an explicit length and may contain NULs — safe for network buffers and binary formats.</p>
 <h2 id="lists-t">Lists <code>[T]</code></h2>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> xs = [<span class="n">10</span>, <span class="n">20</span>, <span class="n">30</span>];         <span class="c">// inferred [int]</span>
-<span class="k">let</span> empty: [<span class="t">str</span>] = [];         <span class="c">// empty lists need an annotation</span>
+<span class="k">let</span> empty: [<span class="t">str</span>] = [];         <span class="c">// an empty list needs a type from context</span>
 <span class="b">push</span>(xs, <span class="n">40</span>);                  <span class="c">// grow (amortized O(1))</span>
 <span class="b">println</span>(<span class="b">pop</span>(xs));              <span class="c">// shrink from the end</span>
 xs[<span class="n">0</span>] = <span class="n">5</span>;                     <span class="c">// bounds-checked index assignment</span>
@@ -1029,6 +1037,10 @@ xs[<span class="n">0</span>] = <span class="n">5</span>;                     <sp
 <span class="k">let</span> ys = xs[<span class="n">0..2</span>] + xs[<span class="n">1</span>..];   <span class="c">// slicing + concatenation</span>
 <span class="k">let</span> grid = [[<span class="n">1</span>, <span class="n">2</span>], [<span class="n">3</span>, <span class="n">4</span>]];   <span class="c">// nested lists</span></code></pre></div>
 <p>Indexing is bounds-checked at runtime; violations abort with a clear message.</p>
+<p><code>[]</code> has no element type of its own, so it takes one from what is expected of it — the same way <code>none</code> does: an annotated <code>let</code>, a function or method parameter, a struct field, a <code>return</code>, an assignment, <code>ok([])</code>/<code>some([])</code>, <code>push(grid, [])</code>, or an element of an outer list. With nothing expected (<code>let xs = [];</code>) it is a compile error.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">fn</span> <span class="f">total</span>(xs: [<span class="t">int</span>]) -&gt; <span class="t">int</span> { <span class="k">return</span> <span class="b">len</span>(xs); }
+<span class="f">total</span>([]);                          <span class="c">// [int], from the parameter</span>
+<span class="k">let</span> b = Basket { items: [] };       <span class="c">// from the field</span></code></pre></div>
 <h2 id="maps-map-k-v">Maps <code>map[K]V</code></h2>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> scores: <span class="t">map</span>[<span class="t">str</span>]<span class="t">int</span> = {<span class="s">&quot;alice&quot;</span>: <span class="n">90</span>, <span class="s">&quot;bob&quot;</span>: <span class="n">85</span>};
 scores[<span class="s">&quot;carol&quot;</span>] = <span class="n">78</span>;          <span class="c">// insert or overwrite</span>

@@ -303,8 +303,30 @@ static int is_bare_ident(Expr *e) {
  * for -- if that changes, extend this the same way). */
 static const char **call_arg_expects(CG *cg, Expr *e) {
     const char *name = e->as.call.name;
-    if (!strcmp(name, "some") || !strcmp(name, "ok") || !strcmp(name, "err"))
-        return NULL;
+    if (!strcmp(name, "some") || !strcmp(name, "ok") || !strcmp(name, "err")) {
+        /* The argument is expected to be the wrapped type, as ctor_infer
+         * pushes it: ok([]) with result[[int], str] expected. */
+        if (e->as.call.nargs != 1 || !cg->expect) return NULL;
+        const char **one = (const char **)xmalloc(sizeof(char *));
+        one[0] = NULL;
+        if (!strcmp(name, "some") && is_opt(cg->expect)) {
+            one[0] = opt_inner(cg->expect);
+        } else if (is_result(cg->expect)) {
+            char *tv, *tev;
+            result_te(cg->expect, &tv, &tev);
+            one[0] = !strcmp(name, "ok") ? tv : tev;
+        }
+        return one;
+    }
+    if (!strcmp(name, "push") && e->as.call.nargs == 2) {
+        /* the value expects the list's element type: push(grid, []) */
+        const char *lt = infer_type(cg, e->as.call.args[0]);
+        if (!is_arr(lt)) return NULL;
+        const char **two = (const char **)xmalloc(sizeof(char *) * 2);
+        two[0] = NULL;
+        two[1] = arr_elem(lt);
+        return two;
+    }
     if (is_builtin_name(name)) return NULL;
 
     FuncSig *sig = NULL;
@@ -857,7 +879,12 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
         /* kills everything after it in the same block: an
          * unconditional exit's own live_in is exactly uses(value) */
         if (!s->as.ret.value) return ls_new();
-        return live_expr(cg, s->as.ret.value, ls_new());
+        {
+            const char *saved = expect_push(cg, cg->cur_ret);
+            LiveSet *r = live_expr(cg, s->as.ret.value, ls_new());
+            cg->expect = saved;
+            return r;
+        }
 
     case ST_BREAK:
         /* Same "ignore the live_out I was handed, substitute a
@@ -974,7 +1001,15 @@ static LiveSet *live_stmts(CG *cg, Stmt **stmts, int count, LiveSet *live_out) {
                             * scope BEFORE this let (stmt.c:100's
                             * var_push happens after gen_expr on
                             * s->as.let.init, never before) */
-        return live_expr(cg, s->as.let.init, out2);
+        /* the initializer sees the annotation, as gen_stmt's does:
+         * ok([]) or some(none) against let r: result[[int], str] */
+        const char *ann = s->as.let.type_ann
+                              ? canon_type(cg, s->as.let.type_ann, s->line)
+                              : NULL;
+        const char *saved = expect_push(cg, ann);
+        LiveSet *r = live_expr(cg, s->as.let.init, out2);
+        cg->expect = saved;
+        return r;
     }
 
     LiveSet *live_out_of_s = live_stmts(cg, stmts + 1, count - 1, live_out);

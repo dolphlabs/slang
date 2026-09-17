@@ -366,7 +366,9 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
     if (!strcmp(name, "push")) {
         const char *at = infer_type(cg, e->as.call.args[0]);
         char *elem = arr_elem(at);
+        const char *vsaved = expect_push(cg, elem);
         const char *vt = infer_type(cg, e->as.call.args[1]);
+        cg->expect = vsaved;
         StrBuf prelude;
         sb_init(&prelude);
         int seq_id = cg->tmp_id++;
@@ -1559,6 +1561,14 @@ char *gen_expr(CG *cg, Expr *e) {
     case EX_SLICE:
         return gen_slice(cg, e);
     case EX_LIST:
+        if (e->as.list.nelems == 0) {
+            /* typed by infer_type from the expected type; errors there
+             * if there was none */
+            const char *lt = infer_type(cg, e);
+            char *elem = arr_elem(lt);
+            return xasprintf("sl_arr_new(sizeof(%s), %d)", ctype_of(cg, elem),
+                             type_is_gc_ptr(cg, elem));
+        }
         return gen_list(cg, e, NULL);
     case EX_MAPLIT:
         return gen_maplit(cg, e, NULL, NULL);
