@@ -261,7 +261,46 @@ live in `todo.md`.
 
   **Gap found:** a bare `[]` cannot be passed as an argument (an empty list
   literal needs a declared type and the parameter's is not used), hence
-  `pg.no_args()`. Documented under Known limitations.
+  `pg.no_args()`. Fixed separately in the compiler (#142).
+
+  **Then, the rest of what was left out:**
+  - **Streaming** (`stream` / `next_row` / `stream_close`): one row in
+    memory at a time. `stream_close` cancels the query and waits for the
+    cancel to be delivered before draining, so it can never land on a
+    later query. 1M rows in 2.0s; 200k in 41MB of RSS. It does not stay
+    flat beyond that (195MB at 1M, 555MB at 3M), and that turned out to be
+    the runtime, not the driver: a ten-line loop of short-lived results
+    grows the same way on macOS and Linux. Recorded in `todo.md`. The
+    driver's own share was fixed: fresh lists per row, which the
+    collector does not count, took 3M rows to 800MB.
+  - **COPY** in both directions, one-call and streaming forms, with a
+    COPY of the wrong direction refused and the connection kept.
+  - **LISTEN/NOTIFY**: notifications queue whenever they arrive, even in
+    the middle of a query's result. Reaching the deadline in
+    `wait_notification` returns `none` without breaking the connection;
+    a message cut off by that deadline is kept (`fill` now puts back what
+    it read on any failure).
+  - **Unix-domain sockets**, named by directory as libpq does, plus
+    `net.dial_unix` / `net.listen_unix`.
+  - **The connect deadline** now covers everything: `net.dial_until`
+    (the DNS lookup is abandoned to the resolver thread on timeout, with
+    ownership handed over atomically) and `net.tls_upgrade_until`.
+    `net.dial` also now tries every resolved address, not just the first.
+
+  **Another compiler bug, found running the driver on Linux:** GCC
+  predefines `unix` and `linux` as `1`, so a slang variable named `unix`
+  compiled on macOS and failed on Linux. `sanitize_ident` now mangles
+  those and the libc macros (`errno`, `stdin`, …). Test:
+  `tests/c_macro_names`.
+
+  **Verified:** 15 fake-server scenarios (6 new) and 14 new controls. 12
+  caught. "copy_out error lost" was a real gap, and a test was added. The
+  pool-mode check is redundant with the status check (a busy connection
+  has read no ReadyForQuery), so removing it alone changes nothing. The
+  live test (11 checks) passes against Postgres 16 on macOS and, in a
+  Linux container, over a Unix socket too. `tests/net_dial_until` covers
+  the new `net` calls, including 3,000 dials racing short deadlines
+  through the abandon path.
 
 ## 7. The ~5% SIGBUS under amplified preemption
 

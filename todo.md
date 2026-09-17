@@ -2460,6 +2460,32 @@ prerequisite, not a different plan).
       zero stack grows. This exact fix was once built for it and reverted
       as dead code, which remains correct for that bug.
 
+- [ ] **RSS follows total allocation, not the live heap, for short-lived
+      garbage.** Ten lines reproduce it, with nothing live but a counter:
+
+      ```slang
+      fn step(i: int) -> result[int, str] { return ok(i); }
+      let i = 0; let sum = 0;
+      while i < n { sum = sum + (step(i) ?? 0); i = i + 1; }
+      ```
+
+      | n | macOS RSS | Linux RSS (Ubuntu 24.04, glibc) |
+      |---|---|---|
+      | 2M | 136MB | 118MB |
+      | 6M | 429MB | 330MB |
+      | 18M | 1212MB | 971MB |
+
+      SLANG_GC_STAT shows collections running (9 at 18M, threshold at its
+      256MB cap, 12.6M objects swept) and SLANG_GC_CLASS_STAT shows the
+      size-class freelists empty, so swept objects go back through
+      `free()` -- yet RSS is ~85% of everything ever allocated, on both
+      platforms, so it is not macOS's allocator alone. Found streaming
+      3M rows through `pg` (555MB). Unexplained; first things to check are
+      whether swept memory is actually released before the next
+      threshold's worth is allocated (the retire/drain path), and whether
+      allocation happens on a different thread from the free.
+      Related: [the pacing lead below].
+
 - [ ] **Lead: GC pacing is quadratic for a heap that keeps growing with
       few dead objects.** The collection threshold starts at 8MB and only
       doubles when a cycle finds under a quarter of objects alive; it never

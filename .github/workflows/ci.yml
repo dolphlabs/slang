@@ -187,8 +187,12 @@ jobs:
           # ONE line: inside bash -c a newline ends the command, and the
           # cert options on a second line silently never reached postgres.
           PGTLS_START='cp /certs/server.crt /certs/server.key /tmp/ && chown postgres /tmp/server.* && chmod 600 /tmp/server.key && exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/tmp/server.crt -c ssl_key_file=/tmp/server.key'
+          # Its Unix-domain socket is shared with the runner through a
+          # bind mount, for the socket check.
+          mkdir -p /tmp/pgsock && chmod 777 /tmp/pgsock
           docker run -d --name pg -e POSTGRES_USER=slang \
-            -e POSTGRES_PASSWORD=secret -p 55432:5432 postgres:16
+            -e POSTGRES_PASSWORD=secret -p 55432:5432 \
+            -v /tmp/pgsock:/var/run/postgresql postgres:16
           docker run -d --name pgtls -e POSTGRES_USER=slang \
             -e POSTGRES_PASSWORD=secret -p 55433:5432 \
             -v /tmp/pgtls:/certs:ro --entrypoint bash postgres:16 -c \
@@ -210,11 +214,13 @@ jobs:
               echo "$name never became ready"; docker ps -a; docker logs $name; exit 1
             fi
           done
+          [ -S /tmp/pgsock/.s.PGSQL.5432 ] || { echo "no socket file"; ls -la /tmp/pgsock; exit 1; }
 
       - name: Live test
         env:
           PG_URL: postgres://slang:secret@127.0.0.1:55432/slang
           PG_TLS_URL: postgres://slang:secret@localhost:55433/slang?sslmode=require&sslrootcert=/tmp/pgtls/ca.crt
+          PG_SOCKET_URL: postgres://slang:secret@%2Ftmp%2Fpgsock/slang
         run: ./slangc tests/live/postgres/main.sl --run
 
   # Attach a tarball per platform to a published release.

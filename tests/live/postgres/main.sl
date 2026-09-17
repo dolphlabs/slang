@@ -13,7 +13,8 @@ import "strings";
 //       ./slangc tests/live/postgres/main.sl --run
 //
 // PG_TLS_URL, if set, is a server with TLS on: the test checks the
-// session really is encrypted.
+// session really is encrypted. PG_SOCKET_URL, if set, reaches the server
+// over a Unix-domain socket.
 
 fn die(msg: str) {
     println("FAIL " + msg);
@@ -321,9 +322,191 @@ fn tls() {
     println("ok tls");
 }
 
+// ---- COPY ---------------------------------------------------------------
+
+fn copy() {
+    let c = conn();
+    ex(c, "DROP TABLE IF EXISTS slang_copy; CREATE TABLE slang_copy (id int, name text)");
+    let parts: [str] = [];
+    let i = 0;
+    while i < 100000 {
+        push(parts, to_str(i) + ",name " + to_str(i) + "\n");
+        i = i + 1;
+    }
+    let csv = to_bytes(strings.join(parts, ""));
+    let nr = pg.copy_from(c, "COPY slang_copy FROM STDIN (FORMAT csv)", csv, soon());
+    guard let n = nr else let e = err_of(nr) {
+        die("copy_from: " + e);
+        return;
+    }
+    if n != 100000 {
+        die("copy_from count " + to_str(n));
+    }
+    let bad = pg.copy_from(c, "COPY slang_copy FROM STDIN (FORMAT csv)",
+                           b"1,ok\nnot a number,x\n", soon());
+    guard let b = bad else let e = err_of(bad) {
+        if pg.sqlstate(e) != "22P02" {
+            die("bad copy data: " + e);
+        }
+        let out = pg.copy_to(c, "COPY (SELECT id, name FROM slang_copy ORDER BY id) TO STDOUT (FORMAT csv)",
+                             soon());
+        guard let dumped = out else let e2 = err_of(out) {
+            die("copy_to: " + e2);
+            return;
+        }
+        if dumped != csv {
+            die("copy round trip differs");
+        }
+        ex(c, "DROP TABLE slang_copy");
+        pg.close(c);
+        println("ok copy");
+        return;
+    }
+    die("bad copy data was loaded");
+}
+
+// ---- streaming ----------------------------------------------------------
+
+fn streaming() {
+    let c = conn();
+    let sr = pg.stream(c, "SELECT g FROM generate_series(1, 1000000) g", pg.no_args(), soon());
+    guard let rows = sr else let e = err_of(sr) {
+        die("stream: " + e);
+        return;
+    }
+    let sum = 0;
+    let n = 0;
+    while true {
+        let nr = pg.next_row(c, rows, soon());
+        guard let more = nr else let e = err_of(nr) {
+            die("next_row: " + e);
+            return;
+        }
+        if !more {
+            break;
+        }
+        sum = sum + pg.get_int(rows, 0, 0);
+        n = n + 1;
+    }
+    if n != 1000000 || sum != 500000500000 || rows.affected != 1000000 {
+        die("streamed " + to_str(n));
+    }
+    // closed early: the server must stop generating, and the connection
+    // must be usable straight away
+    let br = pg.stream(c, "SELECT g, pg_sleep(0.001) FROM generate_series(1, 100000) g",
+                       pg.no_args(), soon());
+    guard let big = br else let e = err_of(br) {
+        die("stream to close: " + e);
+        return;
+    }
+    pg.next_row(c, big, soon());
+    let t0 = time.mono();
+    let cr = pg.stream_close(c, big, soon());
+    guard let closed = cr else let e = err_of(cr) {
+        die("stream_close: " + e);
+        return;
+    }
+    if time.mono() - t0 > 5000000000 {
+        die("stream_close waited for the query instead of cancelling it");
+    }
+    if pg.get_int(q(c, "SELECT 7", pg.no_args()), 0, 0) != 7 {
+        die("query after stream_close");
+    }
+    pg.close(c);
+    println("ok streaming");
+}
+
+// ---- LISTEN / NOTIFY ----------------------------------------------------
+
+fn notifications() {
+    let listener = conn();
+    let talker = conn();
+    let lr = pg.listen(listener, "slang \"events\"", soon());
+    guard let l = lr else let e = err_of(lr) {
+        die("listen: " + e);
+        return;
+    }
+    let idle = pg.wait_notification(listener, until_of(time.mono() + 200000000));
+    guard let nothing = idle else let e = err_of(idle) {
+        die("idle wait: " + e);
+        return;
+    }
+    guard let unexpected = nothing else {
+        pg.notify(talker, "slang \"events\"", "first", soon());
+        ex(talker, "NOTIFY \"slang \"\"events\"\"\", 'second'");
+        let a = pg.wait_notification(listener, soon()) ?? none;
+        let b = pg.wait_notification(listener, soon()) ?? none;
+        guard let na = a else {
+            die("first notification missing");
+            return;
+        }
+        guard let nb = b else {
+            die("second notification missing");
+            return;
+        }
+        if na.payload != "first" || nb.payload != "second" ||
+           na.channel != "slang \"events\"" {
+            die("notifications: " + na.channel + " " + na.payload + " " + nb.payload);
+        }
+        pg.close(listener);
+        pg.close(talker);
+        println("ok notifications");
+        return;
+    }
+    die("a notification arrived before any was sent");
+}
+
+// ---- the connect deadline -----------------------------------------------
+
+fn connect_deadline() {
+    // the whole connect, against a real server, inside a short deadline
+    let cr = pg.connect(url(), until_of(time.mono() + 5000000000));
+    guard let c = cr else let e = err_of(cr) {
+        die("connect within 5s: " + e);
+        return;
+    }
+    pg.close(c);
+    let late = pg.connect(url(), until_of(time.mono() - 1));
+    guard let x = late else let e = err_of(late) {
+        if e != "timeout" {
+            die("expired connect deadline: " + e);
+        }
+        println("ok connect deadline");
+        return;
+    }
+    die("connected with an expired deadline");
+}
+
+// ---- Unix-domain socket -------------------------------------------------
+
+fn unix_socket() {
+    guard let u = proc.getenv("PG_SOCKET_URL") else {
+        println("ok unix socket (skipped: PG_SOCKET_URL not set)");
+        return;
+    }
+    let cr = pg.connect(u, soon());
+    guard let c = cr else let e = err_of(cr) {
+        die("unix socket connect: " + e);
+        return;
+    }
+    // client_addr is NULL exactly when the session came over a socket
+    let rows = q(c, "SELECT client_addr IS NULL FROM pg_stat_activity WHERE pid = pg_backend_pid()",
+                 pg.no_args());
+    if !pg.get_bool(rows, 0, 0) {
+        die("session is not over a unix socket");
+    }
+    pg.close(c);
+    println("ok unix socket");
+}
+
 values();
 errors();
 cancel();
 pool();
 large();
 tls();
+copy();
+streaming();
+notifications();
+connect_deadline();
+unix_socket();

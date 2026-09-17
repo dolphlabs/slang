@@ -4,6 +4,8 @@ import "time";
 import "crypto";
 import "encoding";
 import "strings";
+import "os";
+import "fs";
 
 // The pg driver against scripted fake servers: every behaviour a real
 // Postgres would not volunteer -- a lying SCRAM server, a malformed
@@ -487,7 +489,7 @@ fn scenario_errors() {
         }
         let cp = pg.query(c, "COPY t FROM STDIN", pg.no_args(), soon());
         guard let y = cp else let e3 = err_of(cp) {
-            if !strings.contains(e3, "COPY FROM STDIN is not supported") ||
+            if !strings.contains(e3, "COPY FROM STDIN needs pg.copy_from") ||
                pg.sqlstate(e3) != "57014" {
                 die("copy: " + e3);
             }
@@ -743,6 +745,10 @@ fn srv_pool_conn(fd: i32) {
         if g.typ == -1 || g.typ == 88 {
             break;
         }
+        if g.typ == 81 && strings.contains(to_str(g.body), "COPY") {
+            send(p, msg(71, to_be(0)[7..] + be16(0)));
+            continue;
+        }
         if g.typ == 81 {
             let status = 73;
             if strings.contains(to_str(g.body), "BEGIN") {
@@ -813,6 +819,25 @@ fn scenario_pool() {
         if p.dials != 2 {
             die("expected a fresh dial after the transaction was discarded");
         }
+        // Released in the middle of a COPY: closed too.
+        let cc = pg.acquire(p, soon());
+        guard let copying = cc else let ce = err_of(cc) {
+            die("acquire for copy: " + ce);
+            return;
+        }
+        let started = pg.copy_in_start(copying, "COPY t FROM STDIN", soon());
+        guard let st = started else let se = err_of(started) {
+            die("copy_in_start in pool: " + se);
+            return;
+        }
+        pg.release(p, copying);
+        if p.open != 0 || pg.usable(copying) {
+            die("a connection released mid-COPY was kept");
+        }
+        pg.pool_exec(p, "SELECT 1", soon());
+        if p.dials != 3 {
+            die("expected a fresh dial after the COPY was discarded");
+        }
         let e2 = panic_text(spawn release_twice(p));
         if !strings.contains(e2, "released twice") {
             die("double release: " + e2);
@@ -844,6 +869,554 @@ fn scenario_pool() {
     die("second acquire on a full pool succeeded");
 }
 
+
+// ---- scenario: COPY FROM STDIN ------------------------------------------
+
+fn copy_in_response() -> bytes {
+    return msg(71, to_be(0)[7..] + be16(2) + be16(0) + be16(0));
+}
+
+// Collects CopyData until CopyDone or CopyFail. Returns the data, the
+// number of CopyData messages, and the terminating type.
+gc struct CopyGot {
+    data: bytes,
+    pieces: int,
+    end: int,
+}
+
+fn read_copy(p: Peer) -> CopyGot {
+    let parts: [bytes] = [];
+    let n = 0;
+    while true {
+        let g = next(p);
+        if g.typ == 100 {
+            push(parts, g.body);
+            n = n + 1;
+            continue;
+        }
+        let all = b"";
+        for part in parts {
+            all = all + part;
+        }
+        return CopyGot { data: all, pieces: n, end: g.typ };
+    }
+    return CopyGot { data: b"", pieces: 0, end: -1 };
+}
+
+fn srv_copy_in(lfd: i32, seen: chan[str]) {
+    let p = accept_peer(lfd);
+    startup(p);
+    send(p, hello());
+
+    // 1. copy_from: 2.5 MiB arrives in three 1 MiB-or-less messages
+    next(p);
+    send(p, copy_in_response());
+    let got = read_copy(p);
+    chan_send(seen, to_str(len(got.data)) + " bytes in " + to_str(got.pieces) +
+                    " pieces, end " + to_str(got.end));
+    send(p, msg(67, cstr("COPY 3")) + ready(73));
+
+    // 2. start / send / abort
+    next(p);
+    send(p, copy_in_response());
+    let aborted = read_copy(p);
+    if aborted.end == 102 {
+        send(p, error_msg("57014", "COPY from stdin failed: changed my mind"));
+    }
+    send(p, ready(73));
+
+    // 3. the data is bad: the error comes after CopyDone
+    next(p);
+    send(p, copy_in_response());
+    read_copy(p);
+    send(p, error_msg("22P02", "invalid input syntax for type integer") + ready(73));
+
+    // 4. not a COPY at all
+    next(p);
+    send(p, msg(67, cstr("SELECT 1")) + ready(73));
+
+    // 5. a query after all that
+    drain_query(p);
+    send(p, msg(67, cstr("SELECT 0")) + ready(73));
+    next(p);
+    net.close(p.fd);
+}
+
+fn scenario_copy_in() {
+    let lfd = listener();
+    let seen: chan[str] = make_chan(1);
+    spawn srv_copy_in(lfd, seen);
+    let c = must_connect(url_for(lfd, "u"));
+
+    let big = to_bytes(strings.repeat("1,a\n", 655360));     // 2.5 MiB
+    let n = pg.copy_from(c, "COPY t FROM STDIN (FORMAT csv)", big, soon()) ?? -1;
+    let how = chan_recv(seen) ?? "";
+    if n != 3 || how != "2621440 bytes in 3 pieces, end 99" {
+        die("copy_from: " + to_str(n) + ", " + how);
+    }
+
+    let sr = pg.copy_in_start(c, "COPY t FROM STDIN", soon());
+    guard let started = sr else let e = err_of(sr) {
+        die("copy_in_start: " + e);
+        return;
+    }
+    let busy = pg.query(c, "SELECT 1", pg.no_args(), soon());
+    guard let b = busy else let e = err_of(busy) {
+        if !strings.contains(e, "busy: COPY FROM STDIN is in progress") {
+            die("busy during copy: " + e);
+        }
+        pg.copy_in_send(c, b"half a row", soon());
+        let ab = pg.copy_in_abort(c, "changed my mind", soon());
+        guard let a = ab else let e2 = err_of(ab) {
+            die("copy_in_abort: " + e2);
+            return;
+        }
+        let bad = pg.copy_from(c, "COPY t FROM STDIN", b"x\n", soon());
+        guard let bb = bad else let e3 = err_of(bad) {
+            if pg.sqlstate(e3) != "22P02" || !pg.usable(c) {
+                die("bad copy data: " + e3);
+            }
+            let notcopy = pg.copy_from(c, "SELECT 1", b"", soon());
+            guard let nc = notcopy else let e4 = err_of(notcopy) {
+                if e4 != "not a COPY ... FROM STDIN statement" {
+                    die("not a copy: " + e4);
+                }
+                let after = pg.query(c, "SELECT 1", pg.no_args(), soon());
+                guard let af = after else let e5 = err_of(after) {
+                    die("query after copies: " + e5);
+                    return;
+                }
+                pg.close(c);
+                println("ok copy in");
+                return;
+            }
+            die("copy_from on a SELECT succeeded");
+            return;
+        }
+        die("bad copy data accepted");
+        return;
+    }
+    die("query ran during a COPY");
+}
+
+// ---- scenario: COPY TO STDOUT -------------------------------------------
+
+fn srv_copy_out(lfd: i32, seen: chan[str]) {
+    let p = accept_peer(lfd);
+    startup(p);
+    send(p, hello());
+    let out = msg(72, to_be(0)[7..] + be16(2) + be16(0) + be16(0)) +
+              msg(100, b"1\ta\n") + msg(100, b"2\tb\n") + msg(99, b"") +
+              msg(67, cstr("COPY 2")) + ready(73);
+    next(p);
+    send(p, out);
+    next(p);
+    send(p, out);
+    // fails part way through
+    next(p);
+    send(p, msg(72, to_be(0)[7..] + be16(1) + be16(0)) + msg(100, b"1\n") +
+            error_msg("53200", "out of memory") + ready(73));
+    // copy_to on a COPY FROM STDIN: the driver must refuse the upload
+    next(p);
+    send(p, copy_in_response());
+    let refused = read_copy(p);
+    chan_send(seen, "end " + to_str(refused.end));
+    send(p, error_msg("57014", "COPY from stdin failed") + ready(73));
+    next(p);
+    net.close(p.fd);
+}
+
+fn copy_to_error(c: pg.Conn, sql: str) -> str {
+    let r = pg.copy_to(c, sql, soon());
+    guard let b = r else let e = err_of(r) {
+        return e;
+    }
+    return "no error";
+}
+
+fn scenario_copy_out() {
+    let lfd = listener();
+    let seen: chan[str] = make_chan(1);
+    spawn srv_copy_out(lfd, seen);
+    let c = must_connect(url_for(lfd, "u"));
+    let all = pg.copy_to(c, "COPY t TO STDOUT", soon()) ?? b"";
+    if all != b"1\ta\n2\tb\n" {
+        die("copy_to: " + to_str(all));
+    }
+    let sr = pg.copy_out_start(c, "COPY t TO STDOUT", soon());
+    guard let s1 = sr else let e = err_of(sr) {
+        die("copy_out_start: " + e);
+        return;
+    }
+    let pieces = 0;
+    while true {
+        let nr = pg.copy_out_next(c, soon());
+        guard let piece = nr else let e = err_of(nr) {
+            die("copy_out_next: " + e);
+            return;
+        }
+        guard let pc = piece else {
+            break;
+        }
+        pieces = pieces + 1;
+    }
+    if pieces != 2 {
+        die("copy_out pieces " + to_str(pieces));
+    }
+    let fe = copy_to_error(c, "COPY huge TO STDOUT");
+    if pg.sqlstate(fe) != "53200" || !pg.usable(c) {
+        die("copy_to failing part way: " + fe);
+    }
+    let wrong = pg.copy_to(c, "COPY t FROM STDIN", soon());
+    let how = chan_recv(seen) ?? "";
+    guard let w = wrong else let e = err_of(wrong) {
+        if e != "not a COPY ... TO STDOUT statement" || how != "end 102" ||
+           !pg.usable(c) {
+            die("copy_to on an upload: " + e + ", " + how);
+        }
+        pg.close(c);
+        println("ok copy out");
+        return;
+    }
+    die("copy_to on COPY FROM STDIN succeeded");
+}
+
+// ---- scenario: streamed results -----------------------------------------
+
+fn int_row(n: int) -> bytes {
+    let t = to_bytes(to_str(n));
+    return msg(68, be16(1) + be32(len(t)) + t);
+}
+
+fn srv_stream(lfd: i32, cancel: chan[str]) {
+    let p = accept_peer(lfd);
+    startup(p);
+    send(p, hello());
+    let head = msg(49, b"") + msg(50, b"") + row_desc(["n"], [23]);
+
+    // 1. a thousand rows
+    drain_query(p);
+    let body = head;
+    let i = 1;
+    while i <= 1000 {
+        body = body + int_row(i);
+        i = i + 1;
+    }
+    send(p, body + msg(67, cstr("SELECT 1000")) + ready(73));
+
+    // 2. no rows at all: an INSERT
+    drain_query(p);
+    send(p, msg(49, b"") + msg(50, b"") + msg(110, b"") +
+            msg(67, cstr("INSERT 0 1")) + ready(73));
+
+    // 3. an error part way through
+    drain_query(p);
+    send(p, head + int_row(1) + error_msg("22012", "division by zero") + ready(73));
+
+    // 4. closed early: ten rows, then nothing until the cancel arrives
+    drain_query(p);
+    let ten = head;
+    i = 1;
+    while i <= 10 {
+        ten = ten + int_row(i);
+        i = i + 1;
+    }
+    send(p, ten);
+    let q = accept_peer(lfd);
+    let req = startup(q);
+    if len(req) == 16 && rd32(req, 4) == 80877102 && rd32(req, 8) == 4242 {
+        chan_send(cancel, "cancel ok");
+    } else {
+        chan_send(cancel, "bad cancel");
+    }
+    net.close(q.fd);
+    send(p, int_row(11) + error_msg("57014", "canceling statement due to user request") +
+            ready(73));
+
+    // 5. the connection is free again
+    drain_query(p);
+    send(p, msg(67, cstr("SELECT 0")) + ready(73));
+    next(p);
+    net.close(p.fd);
+}
+
+fn scenario_stream() {
+    let lfd = listener();
+    let cancel: chan[str] = make_chan(1);
+    spawn srv_stream(lfd, cancel);
+    let c = must_connect(url_for(lfd, "u"));
+
+    let sr = pg.stream(c, "SELECT n FROM big", pg.no_args(), soon());
+    guard let rows = sr else let e = err_of(sr) {
+        die("stream: " + e);
+        return;
+    }
+    let busy = pg.exec(c, "SELECT 1", soon());
+    guard let b = busy else let e = err_of(busy) {
+        if !strings.contains(e, "a streamed result is still open") {
+            die("busy during stream: " + e);
+        }
+    }
+    let sum = 0;
+    let count = 0;
+    while true {
+        let nr = pg.next_row(c, rows, soon());
+        guard let more = nr else let e = err_of(nr) {
+            die("next_row: " + e);
+            return;
+        }
+        if !more {
+            break;
+        }
+        if rows.count != 1 {
+            die("a streamed row is not alone in rows");
+        }
+        sum = sum + pg.get_int(rows, 0, 0);
+        count = count + 1;
+    }
+    if count != 1000 || sum != 500500 || rows.affected != 1000 {
+        die("streamed rows: " + to_str(count) + " sum " + to_str(sum));
+    }
+    if pg.next_row(c, rows, soon()) ?? true {
+        die("next_row after the end");
+    }
+
+    let ins = pg.stream(c, "INSERT INTO t VALUES (1)", pg.no_args(), soon());
+    guard let ir = ins else let e = err_of(ins) {
+        die("stream of an insert: " + e);
+        return;
+    }
+    if !ir.done || ir.affected != 1 || (pg.next_row(c, ir, soon()) ?? true) {
+        die("stream of an insert should be complete at once");
+    }
+
+    let div = pg.stream(c, "SELECT 1/0", pg.no_args(), soon());
+    guard let dr = div else let e = err_of(div) {
+        die("stream before the error: " + e);
+        return;
+    }
+    let first = pg.next_row(c, dr, soon()) ?? false;
+    let second = pg.next_row(c, dr, soon());
+    guard let s2 = second else let e = err_of(second) {
+        if !first || pg.sqlstate(e) != "22012" || !pg.usable(c) {
+            die("error mid-stream: " + e);
+        }
+        let big = pg.stream(c, "SELECT n FROM endless", pg.no_args(), soon());
+        guard let br = big else let e2 = err_of(big) {
+            die("stream to close: " + e2);
+            return;
+        }
+        pg.next_row(c, br, soon());
+        pg.next_row(c, br, soon());
+        let cr = pg.stream_close(c, br, soon());
+        guard let closed = cr else let e3 = err_of(cr) {
+            die("stream_close: " + e3);
+            return;
+        }
+        if (chan_recv(cancel) ?? "") != "cancel ok" {
+            die("stream_close sent no cancel");
+        }
+        let after = pg.query(c, "SELECT 0", pg.no_args(), soon());
+        guard let af = after else let e4 = err_of(after) {
+            die("query after stream_close: " + e4);
+            return;
+        }
+        pg.close(c);
+        println("ok stream");
+        return;
+    }
+    die("stream error was lost");
+}
+
+// ---- scenario: LISTEN / NOTIFY ------------------------------------------
+
+fn notification(pid: int, channel: str, payload: str) -> bytes {
+    return msg(65, be32(pid) + cstr(channel) + cstr(payload));
+}
+
+fn srv_notify(lfd: i32, go: chan[bool]) {
+    let p = accept_peer(lfd);
+    startup(p);
+    // one before any query at all
+    send(p, hello() + notification(7, "jobs", "early"));
+    // LISTEN: one arrives in the middle of its own reply
+    next(p);
+    send(p, msg(67, cstr("LISTEN")) + notification(7, "jobs", "mid-query") + ready(73));
+    // one arriving while the client waits, split across two sends with a
+    // pause longer than the client's first deadline
+    chan_recv(go);
+    let late = notification(8, "jobs", "split");
+    send(p, late[..3]);
+    time.sleep(300000000);
+    send(p, late[3..]);
+    // notify(): extended protocol
+    drain_query(p);
+    send(p, msg(49, b"") + msg(50, b"") + row_desc(["pg_notify"], [2278]) +
+            msg(68, be16(1) + be32(0)) + msg(67, cstr("SELECT 1")) + ready(73));
+    // then the server shuts the session down
+    chan_recv(go);
+    send(p, msg(69, b"SFATAL\x00VFATAL\x00C57P01\x00Mterminating connection due to administrator command\x00\x00"));
+    net.close(p.fd);
+}
+
+fn scenario_notify() {
+    let lfd = listener();
+    let go: chan[bool] = make_chan(1);
+    spawn srv_notify(lfd, go);
+    let c = must_connect(url_for(lfd, "u"));
+    let lr = pg.listen(c, "jobs", soon());
+    guard let l = lr else let e = err_of(lr) {
+        die("listen: " + e);
+        return;
+    }
+    let n1 = pg.wait_notification(c, soon()) ?? none;
+    let n2 = pg.wait_notification(c, soon()) ?? none;
+    guard let a = n1 else {
+        die("first notification missing");
+        return;
+    }
+    guard let b = n2 else {
+        die("second notification missing");
+        return;
+    }
+    if a.payload != "early" || b.payload != "mid-query" || a.channel != "jobs" ||
+       a.pid != 7 {
+        die("queued notifications: " + a.payload + ", " + b.payload);
+    }
+    chan_send(go, true);
+    // the first wait ends mid-message: none, and the half message kept
+    let w1 = pg.wait_notification(c, until_of(time.mono() + 100000000));
+    guard let none1 = w1 else let e = err_of(w1) {
+        die("wait with a deadline: " + e);
+        return;
+    }
+    if !pg.usable(c) {
+        die("a wait that timed out broke the connection");
+    }
+    guard let x = none1 else {
+        let w2 = pg.wait_notification(c, soon()) ?? none;
+        guard let split = w2 else {
+            die("the split notification was lost");
+            return;
+        }
+        if split.payload != "split" || split.pid != 8 {
+            die("split notification: " + split.payload);
+        }
+        let nr = pg.notify(c, "jobs", "hello", soon());
+        guard let sent = nr else let e = err_of(nr) {
+            die("notify: " + e);
+            return;
+        }
+        chan_send(go, true);
+        let dead = pg.wait_notification(c, soon());
+        guard let d = dead else let e = err_of(dead) {
+            if pg.sqlstate(e) != "57P01" || pg.usable(c) {
+                die("server shutdown while waiting: " + e);
+            }
+            println("ok notify");
+            return;
+        }
+        die("a FATAL error while waiting was not reported");
+        return;
+    }
+    die("a wait returned a notification that had not arrived");
+}
+
+// ---- scenario: the connect deadline -------------------------------------
+
+// mode 0: agrees to TLS, then never handshakes. 1: reads the startup
+// message and never answers it.
+fn srv_stall(lfd: i32, mode: int, done: chan[bool]) {
+    let p = accept_peer(lfd);
+    startup(p);
+    if mode == 0 {
+        send(p, b"S");
+    }
+    chan_recv(done);
+    net.close(p.fd);
+}
+
+fn stall_try(mode: int, url_tail: str) -> str {
+    let lfd = listener();
+    let done: chan[bool] = make_chan(1);
+    spawn srv_stall(lfd, mode, done);
+    let t0 = time.mono();
+    let cr = pg.connect(url_for(lfd, "u") + url_tail,
+                        until_of(time.mono() + 300000000));
+    let took = time.mono() - t0;
+    chan_send(done, true);
+    guard let c = cr else let e = err_of(cr) {
+        if took > 3000000000 {
+            return "took too long";
+        }
+        return e;
+    }
+    return "connected";
+}
+
+fn scenario_connect_deadline() {
+    let tls = stall_try(0, "?sslmode=require");
+    if tls != "timeout" {
+        die("stalled TLS handshake: " + tls);
+    }
+    let auth = stall_try(1, "");
+    if auth != "timeout" {
+        die("stalled startup: " + auth);
+    }
+    let expired = pg.connect("postgres://u@127.0.0.1:1/d", until_of(time.mono() - 1));
+    guard let x = expired else let e = err_of(expired) {
+        if e != "timeout" {
+            die("expired connect deadline: " + e);
+        }
+        println("ok connect deadline");
+        return;
+    }
+    die("connect with an expired deadline succeeded");
+}
+
+// ---- scenario: a Unix-domain socket -------------------------------------
+
+fn srv_unix(lfd: i32, conns: int) {
+    let k = 0;
+    while k < conns {
+        let p = accept_peer(lfd);
+        startup(p);
+        send(p, hello());
+        drain_query(p);
+        send(p, msg(67, cstr("SELECT 0")) + ready(73));
+        next(p);
+        net.close(p.fd);
+        k = k + 1;
+    }
+}
+
+fn scenario_unix() {
+    let dir = "/tmp/sl_pg_" + to_str(os.pid());
+    fs.mkdir(dir);
+    let path = dir + "/.s.PGSQL.5999";
+    os.remove(path);
+    let lr = net.listen_unix(path);
+    guard let lfd = lr else let e = err_of(lr) {
+        die("listen_unix: " + e);
+        return;
+    }
+    spawn srv_unix(lfd, 2);
+    let encoded = "postgres://u@" + strings.replace(dir, "/", "%2F") + ":5999/d";
+    let byparam = "postgres://u@/d?host=" + dir + "&port=5999";
+    for u in [encoded, byparam] {
+        let c = must_connect(u);
+        let r = pg.exec(c, "SELECT 1", soon());
+        guard let n = r else let e = err_of(r) {
+            die("query over a unix socket: " + e);
+            return;
+        }
+        pg.close(c);
+    }
+    net.close(lfd);
+    os.remove(path);
+    println("ok unix socket");
+}
+
 // A scenario whose failure is a missing message would otherwise wait
 // forever rather than fail.
 fn watchdog() {
@@ -861,3 +1434,9 @@ scenario_timeout();
 scenario_tls_refused();
 scenario_getters();
 scenario_pool();
+scenario_copy_in();
+scenario_copy_out();
+scenario_stream();
+scenario_notify();
+scenario_connect_deadline();
+scenario_unix();
