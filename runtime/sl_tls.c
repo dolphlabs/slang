@@ -218,6 +218,25 @@ static sl_res_rawptr_str *sl_net_tls_accept(int lfd, void *ctxv) {
     return sl_net_ok_rawptr(ssl);
 }
 
+/* The client half shared by tls_dial and tls_upgrade: handshake on a
+ * connected fd, verifying chain and hostname. Never closes the fd. */
+static sl_res_rawptr_str *sl_tls_client_on_fd(int fd, const char *host,
+                                              void *ctxv) {
+    SSL *ssl = SSL_new((SSL_CTX *)ctxv);
+    if (!ssl) return sl_net_err_rawptr(sl_tls_last_error());
+    SSL_set_fd(ssl, fd);
+    SSL_set_mode(ssl, SSL_MODE_ENABLE_PARTIAL_WRITE);
+    SSL_set1_host(ssl, host);
+    SSL_set_tlsext_host_name(ssl, host);
+    int hs = sl_tls_handshake(ssl, 0);
+    if (hs != 0 || SSL_get_verify_result(ssl) != X509_V_OK) {
+        char *m = hs == -1 ? sl_strdup("interrupted") : sl_tls_last_error();
+        SSL_free(ssl);
+        return sl_net_err_rawptr(m);
+    }
+    return sl_net_ok_rawptr(ssl);
+}
+
 static sl_res_rawptr_str *sl_net_tls_dial(const char *host, int port,
                                           void *ctxv) {
     sl_rt_need_fat_stack();
@@ -254,23 +273,27 @@ static sl_res_rawptr_str *sl_net_tls_dial(const char *host, int port,
             return sl_net_err_rawptr(strerror(so_err));
         }
     }
-    SSL *ssl = SSL_new((SSL_CTX *)ctxv);
-    if (!ssl) {
-        close(fd);
-        return sl_net_err_rawptr(sl_tls_last_error());
-    }
-    SSL_set_fd(ssl, fd);
-    SSL_set_mode(ssl, SSL_MODE_ENABLE_PARTIAL_WRITE);
-    SSL_set1_host(ssl, host);
-    SSL_set_tlsext_host_name(ssl, host);
-    int hs = sl_tls_handshake(ssl, 0);
-    if (hs != 0 || SSL_get_verify_result(ssl) != X509_V_OK) {
-        char *m = hs == -1 ? sl_strdup("interrupted") : sl_tls_last_error();
-        SSL_free(ssl);
-        close(fd);
-        return sl_net_err_rawptr(m);
-    }
-    return sl_net_ok_rawptr(ssl);
+    sl_res_rawptr_str *r = sl_tls_client_on_fd(fd, host, ctxv);
+    if (!r->ok) close(fd);
+    return r;
+}
+
+/* STARTTLS: a TLS client handshake on a socket that is already connected
+ * and has already spoken cleartext -- Postgres (SSLRequest), SMTP, IMAP.
+ * Verification is the same as tls_dial's, hostname included; the host is
+ * a separate argument because an fd does not remember what was dialled.
+ *
+ * On failure the fd is NOT closed: the caller dialled it and still owns
+ * it. On success it belongs to the returned handle, and tls_close closes
+ * it. The caller must not have read past the server's go-ahead -- bytes a
+ * man in the middle queued behind it would otherwise be trusted as if
+ * they had arrived inside TLS (CVE-2021-23222 in libpq). */
+static sl_res_rawptr_str *sl_net_tls_upgrade(int fd, const char *host,
+                                             void *ctxv) {
+    sl_rt_need_fat_stack();
+    if (fd < 0) return sl_net_err_rawptr("bad file descriptor");
+    sl_net_set_nonblocking(fd);
+    return sl_tls_client_on_fd(fd, host, ctxv);
 }
 
 /* See sl_net_send_u in sl_net.c for the partial-write contract a

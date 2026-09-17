@@ -36,6 +36,9 @@ const NatSig NET_SIGS[] = {
     {"net", "tls_accept", 2, {NA_INT, NA_RAWPTR}, "result[rawptr,str]", 1},
     {"net", "tls_dial", 3, {NA_STR, NA_INT, NA_RAWPTR}, "result[rawptr,str]",
      1},
+    /* STARTTLS on an fd from net.dial; see sl_net_tls_upgrade */
+    {"net", "tls_upgrade", 3, {NA_INT, NA_STR, NA_RAWPTR},
+     "result[rawptr,str]", 1},
     {"net", "tls_send", 2, {NA_RAWPTR, NA_BYTES}, "result[i32,str]", 1},
     {"net", "tls_recv", 2, {NA_RAWPTR, NA_INT}, "result[bytes,str]", 1},
     {"net", "tls_recv_until", 3, {NA_RAWPTR, NA_INT, NA_UNTIL},
