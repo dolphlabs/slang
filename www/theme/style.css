@@ -82,10 +82,15 @@ a:hover { color: var(--fg); }
 .skip:focus { left: 1rem; top: 1rem; background: var(--surface);
   padding: .5rem 1rem; border-radius: 8px; z-index: 50; }
 
-/* ---- top bar: a instrument rail ---- */
+/* ---- top bar: a instrument rail ----
+ * Mobile-first, matching every other breakpoint in this file: below
+ * 64rem the nav is a collapsed panel behind a hamburger, because a
+ * dozen top-level pages have nowhere to go in a phone-width row --
+ * wrapping them inline (the old behaviour) just made the bar as tall
+ * as the viewport. At 64rem+ it reverts to the plain inline strip. */
 .topbar {
   position: sticky; top: 0; z-index: 30;
-  display: flex; align-items: center; gap: 1rem;
+  display: flex; align-items: center; flex-wrap: wrap; gap: .75rem;
   padding: .6rem clamp(1rem, 4vw, 2.5rem);
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(10px);
@@ -95,31 +100,85 @@ a:hover { color: var(--fg); }
   font: 700 1.05rem/1 var(--display); letter-spacing: -.02em;
   color: var(--fg); text-decoration: none;
   display: flex; align-items: center; gap: .5rem;
+  flex-shrink: 0;
 }
 .brand .mark {
   width: .5rem; height: .95rem; background: var(--accent);
   display: inline-block; border-radius: 1px; font-size: 0;
 }
-.mainnav { display: flex; gap: .1rem; flex: 1; flex-wrap: wrap; }
+
+.navtoggle {
+  flex-shrink: 0; margin-left: auto;
+  width: 2.1rem; height: 2.1rem; padding: 0;
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: .27rem;
+  background: var(--surface); border: 1px solid var(--line-2);
+  border-radius: 6px; cursor: pointer;
+}
+.navtoggle span {
+  width: 1.05rem; height: 2px; background: var(--fg-2);
+  border-radius: 1px; transition: transform .15s ease, opacity .15s ease;
+}
+.navtoggle:hover span { background: var(--fg); }
+.navtoggle[aria-expanded="true"] span:nth-child(1) {
+  transform: translateY(.34rem) rotate(45deg);
+}
+.navtoggle[aria-expanded="true"] span:nth-child(2) { opacity: 0; }
+.navtoggle[aria-expanded="true"] span:nth-child(3) {
+  transform: translateY(-.34rem) rotate(-45deg);
+}
+
+.mainnav {
+  order: 10; flex-basis: 100%;
+  display: flex; flex-direction: column; gap: .1rem;
+  max-height: 0; overflow: hidden;
+}
+.mainnav.open {
+  max-height: calc(100vh - 3.6rem); overflow-y: auto;
+  margin-top: .5rem; padding-top: .5rem;
+  border-top: 1px solid var(--line);
+}
 .mainnav a {
   color: var(--fg-2); text-decoration: none;
-  font: 500 .86rem/1 var(--sans);
-  padding: .42rem .6rem; border-radius: 6px;
+  font: 500 .92rem/1 var(--sans);
+  padding: .6rem .5rem; border-radius: 6px;
 }
 .mainnav a:hover { background: var(--panel); color: var(--fg); }
 .mainnav a.active { color: var(--accent); background: var(--accent-soft); }
-.tools { display: flex; gap: .5rem; align-items: center; }
+
+.tools { display: flex; gap: .5rem; align-items: center; flex-shrink: 0; }
 #search {
-  font: .84rem var(--mono); padding: .38rem .7rem; width: 12rem;
+  font: .84rem var(--mono); padding: .38rem .7rem;
+  width: clamp(6.5rem, 26vw, 12rem);
   border: 1px solid var(--line-2); border-radius: 6px;
   background: var(--surface); color: var(--fg);
 }
 #theme {
   background: var(--surface); border: 1px solid var(--line-2);
-  color: var(--fg-2); border-radius: 6px; width: 2rem; height: 2rem;
+  color: var(--fg-2); border-radius: 6px; width: 2.1rem; height: 2.1rem;
+  flex-shrink: 0;
   cursor: pointer; font-size: .85rem; line-height: 1;
 }
 #theme:hover { color: var(--accent); border-color: var(--accent); }
+
+/* A tap-anywhere-else-to-close scrim, under the panel but above the
+ * page. Empty and inert until JS opens the nav; with no JS it is
+ * never shown, so it never blocks anything. */
+.navscrim {
+  position: fixed; inset: 3.6rem 0 0 0; z-index: 20;
+  background: transparent;
+}
+
+@media (min-width: 64rem) {
+  .navtoggle { display: none; }
+  .navscrim { display: none; }
+  .mainnav {
+    order: 0; flex-basis: auto; flex-direction: row; flex: 1;
+    flex-wrap: wrap; max-height: none; overflow: visible;
+  }
+  .mainnav.open { margin-top: 0; padding-top: 0; border-top: none; }
+  .mainnav a { font-size: .86rem; padding: .42rem .6rem; }
+}
 
 .results {
   position: fixed; top: 3.5rem; right: clamp(1rem, 4vw, 2.5rem);
