@@ -2460,6 +2460,17 @@ prerequisite, not a different plan).
       zero stack grows. This exact fix was once built for it and reverted
       as dead code, which remains correct for that bug.
 
+- [ ] **Intermittent: `tests/sigpipe` on GitHub's macOS runner.** Failed
+      twice in about 255 runs, both inside the full suite; never alone
+      (40/40) and never under 8x parallel load (200/200). The failures
+      showed only "compile or runtime error" with no output, because the
+      test reports on stdout and `--run` flattened every exit to 1. Both are
+      fixed, so the next occurrence prints the program's real exit code
+      (141 would mean SIGPIPE killed it) and its `FAIL ...` line. Not
+      changed on a guess: the most plausible cause is the 200-send loop
+      finishing before a slow VM processes the peer's RST, but that is
+      unconfirmed.
+
 - [ ] **STILL OPEN: ~5% SIGBUS under amplified preemption.** Guard
       pages did NOT fix it. Recorded here in full because three
       plausible explanations were tested and eliminated, and the next
