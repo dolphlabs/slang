@@ -1,0 +1,7 @@
+/workspace/bench/http/main.c:1:9: warning: '_GNU_SOURCE' macro redefined [-Wmacro-redefined]
+    1 | #define _GNU_SOURCE
+      |         ^
+<command line>:1:9: note: previous definition is here
+    1 | #define _GNU_SOURCE 1
+      |         ^
+1 warning generated.

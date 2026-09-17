@@ -1,0 +1,14 @@
+{
+  "api": {
+    "csharp": {
+      "status": "pass",
+      "detail": ""
+    }
+  },
+  "batch": {
+    "csharp": {
+      "status": "pass",
+      "detail": ""
+    }
+  }
+}

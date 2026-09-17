@@ -1,0 +1,12 @@
+src/loader.c:219:40: warning: unused parameter 'from_pkg' [-Wunused-parameter]
+  219 |                            const char *from_pkg) {
+      |                                        ^
+1 warning generated.
+src/lexer.c:573:31: warning: trigraph converted to '^' character [-Wtrigraphs]
+  573 |     case T_QQ:       return "'??'";
+      |                               ^
+1 warning generated.
+compiled /workspace/bench/http_opt/main.sl -> /workspace/bench/.build/slang/http
+compiled /workspace/stress_test/programs/concurrent_compute/main.sl -> /workspace/bench/.build/slang/compute
+compiled /workspace/bench/suite/api/slang/main.sl -> /workspace/bench/.build/slang/api
+compiled /workspace/bench/suite/batch/slang/main.sl -> /workspace/bench/.build/slang/batch

@@ -1,0 +1,14 @@
+{
+  "api": {
+    "csharp": {
+      "status": "fail",
+      "detail": "raw/conformance-api-csharp.log"
+    }
+  },
+  "batch": {
+    "csharp": {
+      "status": "fail",
+      "detail": "raw/check-batch-csharp.out"
+    }
+  }
+}

@@ -1,0 +1,127 @@
+20:34:34 run 20260917T203432Z-cursor-scaled20 -> /workspace/bench/results/20260917T203432Z-cursor-scaled20
+20:34:34 cpus: server=0-1 (2) loadgen=2-2 (1) db=3-3
+20:34:34 building: slang go rust c csharp java python bun node
+20:34:58 built: slang go rust c csharp java python bun node
+20:34:58 seeding database: users=200000 orders=4000000 (this takes a while at full scale)
+Time: 343.437 ms
+Time: 7092.316 ms (00:07.092)
+ setval  
+---------
+ 4000000
+(1 row)
+
+Time: 0.516 ms
+Time: 2975.680 ms (00:02.976)
+Time: 58.661 ms
+Time: 145.185 ms
+psql:bench/suite/db/seed.sql:33: NOTICE:  relation "bench_meta" already exists, skipping
+Time: 0.411 ms
+Time: 0.385 ms
+20:35:09 generating /workspace/bench/.data/batch_20000000_1000000.csv
+20:35:12 conformance api/slang
+20:35:24 correctness batch/slang
+20:35:25 conformance api/go
+20:35:28 correctness batch/go
+20:35:28 conformance api/rust
+20:35:30 correctness batch/rust
+20:35:30 conformance api/c
+20:35:33 correctness batch/c
+20:35:33 conformance api/csharp
+20:35:36 correctness batch/csharp
+20:35:36 conformance api/java
+20:35:36 CONFORMANCE FAILED: api/java (see raw/conformance-api-java.log)
+20:35:37 correctness batch/java
+20:35:38 conformance api/python
+20:35:40 correctness batch/python
+20:35:41 conformance api/bun
+20:35:43 correctness batch/bun
+20:35:44 conformance api/node
+20:35:46 correctness batch/node
+20:35:47 light http go round 1 c=50
+20:36:17 light http go round 1 c=200
+20:36:48 light http rust round 1 c=50
+20:37:19 light http rust round 1 c=200
+20:37:50 light http c round 1 c=50
+20:38:20 light http c round 1 c=200
+20:38:51 light http csharp round 1 c=50
+20:39:22 light http csharp round 1 c=200
+20:39:53 light http java round 1 c=50
+20:40:23 light http java round 1 c=200
+20:40:55 light http python round 1 c=50
+20:41:26 light http python round 1 c=200
+20:41:57 light http bun round 1 c=50
+20:42:27 light http bun round 1 c=200
+20:42:59 light http node round 1 c=50
+20:43:29 light http node round 1 c=200
+20:44:00 light http slang round 1 c=50
+20:44:31 light http slang round 1 c=200
+20:45:12 light http rust round 2 c=50
+20:45:42 light http rust round 2 c=200
+20:46:13 light http c round 2 c=50
+20:46:43 light http c round 2 c=200
+20:47:15 light http csharp round 2 c=50
+20:47:45 light http csharp round 2 c=200
+20:48:17 light http java round 2 c=50
+20:48:47 light http java round 2 c=200
+20:49:19 light http python round 2 c=50
+20:49:49 light http python round 2 c=200
+20:50:20 light http bun round 2 c=50
+20:50:51 light http bun round 2 c=200
+20:51:22 light http node round 2 c=50
+20:51:52 light http node round 2 c=200
+20:52:24 light http slang round 2 c=50
+20:52:54 light http slang round 2 c=200
+20:53:35 light http go round 2 c=50
+20:54:05 light http go round 2 c=200
+20:54:37 light http c round 3 c=50
+20:55:07 light http c round 3 c=200
+20:55:38 light http csharp round 3 c=50
+21:11:08 light http csharp round 3 c=200
+21:11:39 light http java round 3 c=50
+21:12:10 light http java round 3 c=200
+21:12:41 light http python round 3 c=50
+21:13:12 light http python round 3 c=200
+21:13:43 light http bun round 3 c=50
+21:14:13 light http bun round 3 c=200
+21:14:45 light http node round 3 c=50
+21:15:15 light http node round 3 c=200
+21:15:47 light http slang round 3 c=50
+21:16:17 light http slang round 3 c=200
+21:16:59 light http go round 3 c=50
+21:17:29 light http go round 3 c=200
+21:18:00 light http rust round 3 c=50
+21:18:31 light http rust round 3 c=200
+21:19:02 light compute go round 1
+21:19:05 light compute rust round 1
+21:19:07 light compute c round 1
+21:19:08 light compute csharp round 1
+21:19:11 light compute java round 1
+21:19:13 light compute python round 1
+21:19:41 light compute bun round 1
+21:19:44 light compute node round 1
+21:19:46 light compute slang round 1
+21:19:47 light compute rust round 2
+21:19:49 light compute c round 2
+21:19:51 light compute csharp round 2
+21:19:53 light compute java round 2
+21:19:55 light compute python round 2
+21:20:23 light compute bun round 2
+21:20:25 light compute node round 2
+21:20:27 light compute slang round 2
+21:20:29 light compute go round 2
+21:20:32 light compute c round 3
+21:20:34 light compute csharp round 3
+21:20:36 light compute java round 3
+21:20:38 light compute python round 3
+21:21:06 light compute bun round 3
+21:21:08 light compute node round 3
+21:21:10 light compute slang round 3
+21:21:12 light compute go round 3
+21:21:15 light compute rust round 3
+21:21:17 heavy api go round 1 warm-up 15s
+21:21:32 heavy api go round 1 mix c=64
+21:22:33 heavy api go round 1 mix c=512
+21:23:33 heavy api go round 1 point c=64
+21:24:33 heavy api go round 1 point c=512
+21:25:34 heavy api go round 1 quote c=64
+STOPPED_BY_AGENT 2026-09-17T21:37:11Z — credit budget; partial heavy api only

@@ -1,0 +1,16 @@
+20:07:46 run 20260917T200746Z-cursor -> /workspace/bench/results/20260917T200746Z-cursor
+20:07:46 cpus: server=0-1 (2) loadgen=2-2 (1) db=3-3
+20:07:47 building: csharp
+20:07:51 built: csharp
+20:07:51 conformance api/csharp
+20:07:51 CONFORMANCE FAILED: api/csharp (see raw/conformance-api-csharp.log)
+20:07:52 correctness batch/csharp
+20:07:52 CORRECTNESS FAILED: batch/csharp
+20:07:52 http/csharp did not start
+20:07:53 light compute csharp round 1
+20:07:53 skip api/csharp: failed conformance
+20:07:53 warming the page cache with /workspace/bench/.data/batch_2000000_100000.csv
+20:07:53 skip batch/csharp: failed correctness
+20:07:53 measurements done; writing results.json and summary.md
+wrote /workspace/bench/results/20260917T200746Z-cursor/results.json and summary.md (1 measurements)
+20:07:54 done: /workspace/bench/results/20260917T200746Z-cursor
