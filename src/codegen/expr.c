@@ -848,6 +848,17 @@ char *gen_ctor(CG *cg, Expr *e) {
     v = maybe_cast(cg, target, at, v);
     move_consume(cg, arg);
     const char *cn = ctype_of(cg, ty);
+    /* The payload is evaluated BEFORE the wrapper is allocated, into
+     * _sl_cv. The other order held the fresh wrapper in a C local that
+     * no safepoint knew about while the payload ran -- and a payload
+     * containing a call (ok(Msg { body: msg_body(c) })) enters a
+     * safepoint, which can collect, which swept the wrapper; the
+     * `_sl_c->v = ...` store then wrote into freed memory another
+     * object had been given. Hidden for as long as the collector
+     * treated each task's recent allocations as roots. Holding the
+     * payload unregistered across sl_gc_alloc instead is safe: an
+     * allocation never collects (see sl_gc_alloc_fin). */
+    const char *vc = ctype_of(cg, target);
     char *inner;
     if (!strcmp(name, "some")) {
         const char *oc = opt_cname(cg, target);
@@ -855,9 +866,9 @@ char *gen_ctor(CG *cg, Expr *e) {
                                  ? xasprintf("sl_gc_trace_%s", oc)
                                  : "NULL";
         inner = xasprintf(
-            "({ %s _sl_c = (%s)sl_gc_alloc(sizeof(*_sl_c), %s); "
-            "_sl_c->has = true; _sl_c->v = %s; _sl_c; })",
-            cn, cn, trace, v);
+            "({ %s _sl_cv = %s; %s _sl_c = (%s)sl_gc_alloc(sizeof(*_sl_c), %s); "
+            "_sl_c->has = true; _sl_c->v = _sl_cv; _sl_c; })",
+            vc, v, cn, cn, trace);
     } else {
         char *tv, *tev;
         result_te(ty, &tv, &tev);
@@ -873,14 +884,14 @@ char *gen_ctor(CG *cg, Expr *e) {
                 inner = xasprintf("((%s){ .ok = false, .e = %s })", cn, v);
         } else if (!strcmp(name, "ok"))
             inner = xasprintf(
-                "({ %s _sl_c = (%s)sl_gc_alloc(sizeof(*_sl_c), %s); "
-                "_sl_c->ok = true; _sl_c->v = %s; _sl_c; })",
-                cn, cn, trace, v);
+                "({ %s _sl_cv = %s; %s _sl_c = (%s)sl_gc_alloc(sizeof(*_sl_c), %s); "
+                "_sl_c->ok = true; _sl_c->v = _sl_cv; _sl_c; })",
+                vc, v, cn, cn, trace);
         else
             inner = xasprintf(
-                "({ %s _sl_c = (%s)sl_gc_alloc(sizeof(*_sl_c), %s); "
-                "_sl_c->ok = false; _sl_c->e = %s; _sl_c; })",
-                cn, cn, trace, v);
+                "({ %s _sl_cv = %s; %s _sl_c = (%s)sl_gc_alloc(sizeof(*_sl_c), %s); "
+                "_sl_c->ok = false; _sl_c->e = _sl_cv; _sl_c; })",
+                vc, v, cn, cn, trace);
     }
     /* Tier 10: some()/ok()/err() allocate directly (GC_malloc), so
      * this is a real safepoint too -- liveness.c doesn't special-case

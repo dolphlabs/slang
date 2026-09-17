@@ -2665,6 +2665,15 @@ What this means in practice:
 - Every pool worker is registered with the collector. A collection
   stops the world, walks safepoint roots, the run queue, parked
   tasks, and (for async-preempted tasks) a conservative stack scan.
+- Pacing follows the live heap, like Go's default (`GOGC=100`): the next
+  collection comes after allocating as much as survived the last one,
+  and never before 8MB. The heap peaks near twice what is live, however
+  much garbage a program makes — streaming three million database rows
+  runs in under 20MB.
+- `SLANG_GC_STAT=1` prints collection counts and pause times at exit.
+  `SLANG_GC_THRESHOLD_KB=n` collects every n KB instead, with no pacing:
+  for tests, since a rooting bug only shows when a collection lands at
+  the one safepoint where an object is unrooted.
 
 ## Roadmap ideas
 

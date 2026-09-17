@@ -575,11 +575,14 @@ static const char *wrap_prefix(TypeWrap w, const char *inner) {
 }
 
 static char *box_expr(const char *ic, TypeWrap w, char *expr) {
+    /* The value first, then the box: see gen_ctor for why an
+     * allocation must never be held in an unregistered C local while
+     * an expression that can reach a safepoint runs. */
     if (w == TW_GC)
         return xasprintf(
-            "({ %s *_sl_b = (%s *)sl_gc_alloc(sizeof(%s), NULL); "
-            "*_sl_b = (%s); _sl_b; })",
-            ic, ic, ic, expr);
+            "({ %s _sl_bv = (%s); %s *_sl_b = (%s *)sl_gc_alloc(sizeof(%s), NULL); "
+            "*_sl_b = _sl_bv; _sl_b; })",
+            ic, expr, ic, ic, ic);
     return xasprintf(
         "({ %s *_sl_b = (%s *)malloc(sizeof(%s)); "
         "if (!_sl_b) abort(); *_sl_b = (%s); _sl_b; })",
