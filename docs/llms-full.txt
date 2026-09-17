@@ -45,49 +45,8 @@ make test            # compile & run the example programs
 make docs            # rebuild the documentation site
 ```
 
-### Testing
-
-Tests live next to the code they test, Go-style: files named `*_test.sl`
-hold functions named `test_*`, taking nothing and returning nothing, which
-fail through `assert` or `panic`.
-
-```slang
-// calc_test.sl
-fn test_add() {
-    assert(add(2, 3) == 5);
-}
-
-fn test_clamp() {
-    let got = clamp(15, 0, 10);       // private functions are reachable:
-    assert(got == 10, "got " + to_str(got));   // tests are in the package
-}
-```
-
-```sh
-slangc test                 # the package in the current directory
-slangc test path/to/pkg     # another one
-slangc test --run clamp     # only tests whose name contains "clamp"
-```
-
-```
-ok   test_add (52us)
-FAIL test_clamp (30us)
-     got 15 at calc.test_clamp:7
-FAIL: 1 of 2 failed (190us)
-```
-
-- **Each test runs in its own task**, so a failing test is reported with
-  its message and location and the run carries on. Tests run one at a
-  time, so output stays in order.
-- **`*_test.sl` files never reach a normal build.** Test helpers can't leak
-  into a program, and a test file's imports can't add link flags to one.
-- **Programs are testable too.** When the package is a program rather than
-  a library, `slangc test` does not run its top-level statements: the test
-  runner is `main`. Functions, structs and methods are all there.
-- Exit status is 0 when every test passes, 1 when any fails, and 2 when the
-  tests cannot be run (a `test_` function with parameters, say). A package
-  with no test files exits 0 and says so.
-- `--keep` keeps the generated runner and prints where it is.
+Tests live in `*_test.sl` files and run with `slangc test` — covered in
+the Testing section.
 
 ### Starting a project
 
@@ -121,7 +80,7 @@ Useful flags:
 | `-o <name>` | Choose the output binary name                       |
 | `--emit-c`  | Only write the generated C file (no compilation)    |
 | `--keep-c`  | Keep the generated C file after compiling           |
-| `--run`     | Compile, then immediately execute the result        |
+| `--run`     | Compile, then run it; exit with the program's own status |
 | `get`       | Fetch `slang.project` pins and write `slang.lock`   |
 
 Want to see everything at once instead of one feature at a time? See
@@ -230,7 +189,7 @@ no escaping).
 - `has(m, k)` — does map `m` contain key `k`?
 - `del(m, k)` — remove key `k` (and its value) from map `m`
 - `to_str(x)` — convert any scalar or bytes value to `str`
-- `to_bytes(s)` — convert a `str` to its raw bytes
+- `to_bytes(x)` — copy a `str` or a `wire` into new `bytes`
 - `to_int(s)` / `to_float(s)` — parse a `str`, returning
   `result[int, str]` / `result[float, str]` (see below)
 - `to_le(n)` / `to_be(n)` — integer to 8-byte little/big-endian `bytes`
@@ -667,7 +626,7 @@ no escaping).
 - `has(m, k)` — does map `m` contain key `k`?
 - `del(m, k)` — remove key `k` (and its value) from map `m`
 - `to_str(x)` — convert any scalar or bytes value to `str`
-- `to_bytes(s)` — convert a `str` to its raw bytes
+- `to_bytes(x)` — copy a `str` or a `wire` into new `bytes`
 - `to_int(s)` / `to_float(s)` — parse a `str`, returning
   `result[int, str]` / `result[float, str]` (see below)
 - `to_le(n)` / `to_be(n)` — integer to 8-byte little/big-endian `bytes`
@@ -1561,6 +1520,62 @@ you need it. `join_wait` waits for one spawned task.
 of everything currently in flight,
 useful for draining on shutdown but not for waiting on one task in
 particular.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# Testing
+
+# Testing
+
+> slangc test, with assert and panic.
+
+## Testing
+
+Tests live next to the code they test, Go-style: files named `*_test.sl`
+hold functions named `test_*`, taking nothing and returning nothing, which
+fail through `assert` or `panic`.
+
+```slang
+// calc_test.sl
+fn test_add() {
+    assert(add(2, 3) == 5);
+}
+
+fn test_clamp() {
+    let got = clamp(15, 0, 10);       // private functions are reachable:
+    assert(got == 10, "got " + to_str(got));   // tests are in the package
+}
+```
+
+```sh
+slangc test                 # the package in the current directory
+slangc test path/to/pkg     # another one
+slangc test --run clamp     # only tests whose name contains "clamp"
+```
+
+```
+ok   test_add (52us)
+FAIL test_clamp (30us)
+     got 15 at calc.test_clamp:7
+FAIL: 1 of 2 failed (190us)
+```
+
+- **Each test runs in its own task**, so a failing test is reported with
+  its message and location and the run carries on. Tests run one at a
+  time, so output stays in order.
+- **`*_test.sl` files never reach a normal build.** Test helpers can't leak
+  into a program, and a test file's imports can't add link flags to one.
+- **Programs are testable too.** When the package is a program rather than
+  a library, `slangc test` does not run its top-level statements: the test
+  runner is `main`. Functions, structs and methods are all there.
+- Exit status is 0 when every test passes, 1 when any fails, and 2 when the
+  tests cannot be run (a `test_` function with parameters, say). A package
+  with no test files exits 0 and says so.
+- `--keep` keeps the generated runner and prints where it is.
 
 ---
 

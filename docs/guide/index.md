@@ -90,7 +90,7 @@ no escaping).
 - `has(m, k)` — does map `m` contain key `k`?
 - `del(m, k)` — remove key `k` (and its value) from map `m`
 - `to_str(x)` — convert any scalar or bytes value to `str`
-- `to_bytes(s)` — convert a `str` to its raw bytes
+- `to_bytes(x)` — copy a `str` or a `wire` into new `bytes`
 - `to_int(s)` / `to_float(s)` — parse a `str`, returning
   `result[int, str]` / `result[float, str]` (see below)
 - `to_le(n)` / `to_be(n)` — integer to 8-byte little/big-endian `bytes`
@@ -527,7 +527,7 @@ no escaping).
 - `has(m, k)` — does map `m` contain key `k`?
 - `del(m, k)` — remove key `k` (and its value) from map `m`
 - `to_str(x)` — convert any scalar or bytes value to `str`
-- `to_bytes(s)` — convert a `str` to its raw bytes
+- `to_bytes(x)` — copy a `str` or a `wire` into new `bytes`
 - `to_int(s)` / `to_float(s)` — parse a `str`, returning
   `result[int, str]` / `result[float, str]` (see below)
 - `to_le(n)` / `to_be(n)` — integer to 8-byte little/big-endian `bytes`
