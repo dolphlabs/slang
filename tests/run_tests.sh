@@ -165,6 +165,17 @@ tc_tmp_after=$(ls -d "${TMPDIR:-/tmp}"/slangtest_* 2>/dev/null | wc -l)
 [ "$tc_tmp_after" -eq "$tc_tmp_before" ] || tc_fail "runner temp directories left behind"
 [ "$tc_bad" -eq 0 ] && echo "PASS slangc test"
 
+# Stdlib packages that carry their own unit tests.
+for pkg in stdlib/pg; do
+    if out=$(./slangc test "$pkg" 2>&1); then
+        echo "PASS slangc test $pkg"
+    else
+        echo "FAIL slangc test $pkg"
+        printf '%s\n' "$out" | grep -v '^ok ' | tail -20
+        fail=1
+    fi
+done
+
 # Generated C must compile clean under the warnings a C compiler turns
 # on by ITSELF. slangc passes no -W flags, so anything default-on lands
 # in the user's terminal on every single build -- 79 of them across this

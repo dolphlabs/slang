@@ -1,0 +1,9 @@
+ok query
+ok passwords
+ok scram
+ok errors
+ok broken
+ok timeout
+ok tls refused
+ok getters
+ok pool
