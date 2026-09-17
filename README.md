@@ -48,8 +48,14 @@ the same layout, which can be unpacked anywhere and run in place.
 **Platforms.** CI builds and runs the full test suite on every merge to
 `main` on Linux x86_64 (GCC), Linux arm64 (GCC) and macOS on Apple Silicon
 (clang), and it is developed on macOS x86_64. Building needs a C compiler;
-`net` over TLS, `crypto` and `httpc` over https also need OpenSSL headers
-and `pkg-config` (on macOS: `brew install openssl pkg-config`).
+`net` over TLS, `crypto` and `httpc` over https also need OpenSSL (macOS:
+`brew install openssl`; Debian/Ubuntu: `apt install libssl-dev`).
+
+slangc finds OpenSSL itself: `OPENSSL_DIR` if set, then `pkg-config`, then
+the standard Homebrew and MacPorts locations, then `brew --prefix`, then the
+system headers. If none of those finds it and compilation fails, slangc says
+so and suggests the fix, rather than leaving only the compiler's
+"openssl/… file not found".
 
 Working on the compiler itself:
 

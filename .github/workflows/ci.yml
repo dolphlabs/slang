@@ -58,14 +58,12 @@ jobs:
             build-essential pkg-config libssl-dev libsqlite3-dev \
             zlib1g-dev git python3
 
-      # Homebrew's OpenSSL is keg-only, so pkg-config cannot find it without
-      # PKG_CONFIG_PATH. next-steps.md item 2 makes slangc find it itself;
-      # until then CI states it explicitly.
+      # No PKG_CONFIG_PATH: slangc locates Homebrew's keg-only OpenSSL
+      # itself (find_openssl, src/main.c), and the suite should run the way
+      # a user's machine would.
       - name: Install build dependencies (macOS)
         if: runner.os == 'macOS'
-        run: |
-          brew install pkg-config openssl@3
-          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig" >> "$GITHUB_ENV"
+        run: brew install pkg-config openssl@3
 
       - name: Toolchain
         run: |
@@ -78,6 +76,18 @@ jobs:
 
       - name: Test suite
         run: make test
+
+      # With pkg-config unable to see OpenSSL, slangc must still find it
+      # itself: Homebrew's prefix on macOS, the system headers on Linux.
+      # Before the fallback existed this failed with "openssl/sha.h file not
+      # found" -- the first error a new macOS user met with https.
+      - name: OpenSSL discovery without pkg-config
+        env:
+          PKG_CONFIG_LIBDIR: /nonexistent
+          PKG_CONFIG_PATH: ""
+        run: |
+          mkdir -p /tmp/ossl && cp tests/crypto/main.sl /tmp/ossl/main.sl
+          ./slangc /tmp/ossl/main.sl --run    # no pipe: the exit status must be slangc's
 
       # The suite's own preemption probe loops with cooperative yields, so
       # it never takes the async signal path at all. Deep recursion has no
