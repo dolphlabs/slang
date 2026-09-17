@@ -444,33 +444,42 @@ void gen_stmt(CG *cg, Stmt *s) {
              * are actually GC pointers (a plain int/bool/float one is
              * never registered -- same discipline sequence_one's own
              * comment states for exactly this reason). */
+            /* ...and the map itself, plus every local live after this
+             * statement. The bracket's enter is a safepoint and can
+             * collect; rooting only _sl_k/_sl_v let a collection there
+             * free the map, when nothing else referenced it --
+             * httpc.run's per-request `headers`, built one put after
+             * another, was swept between two of them. Hidden while the
+             * collector treated each task's recent allocations as
+             * roots. */
             int k_is_ptr = type_is_gc_ptr(cg, k);
             int v_is_ptr = type_is_gc_ptr(cg, v);
-            if (k_is_ptr || v_is_ptr) {
-                StrBuf roots;
-                sb_init(&roots);
-                if (k_is_ptr)
-                    sb_append(&roots, "(void *)_sl_k");
-                if (v_is_ptr) {
-                    if (k_is_ptr)
-                        sb_append(&roots, ", ");
-                    sb_append(&roots, "(void *)_sl_v");
-                }
-                emit_line(cg,
-                          "({ %s%s _sl_k = %s; %s _sl_v = %s; "
-                          "void *_sl_mp_roots[] = { %s }; sl_safepoint _sl_mp_sp; "
-                          "sl_rt_safepoint_enter(&_sl_mp_sp, _sl_mp_roots, %d); "
-                          "sl_map_put(%s, &_sl_k, &_sl_v); "
-                          "sl_rt_safepoint_exit(); });",
-                          prelude.data, ctype_of(cg, k), ix, ctype_of(cg, v),
-                          val, roots.data, k_is_ptr + v_is_ptr, b);
-            } else {
-                emit_line(cg,
-                          "({ %s%s _sl_k = %s; %s _sl_v = %s; sl_map_put(%s, "
-                          "&_sl_k, &_sl_v); });",
-                          prelude.data, ctype_of(cg, k), ix, ctype_of(cg, v),
-                          val, b);
-            }
+            void *after = tgt->live_set;
+            int nroots = 1 + k_is_ptr + v_is_ptr + cg->ambient_count;
+            for (int li = 0; li < live_set_nnamed(after); li++)
+                nroots += count_named_gc_roots(cg, live_set_named(after, li));
+            StrBuf roots;
+            sb_init(&roots);
+            sb_append(&roots, "(void *)_sl_mpm");
+            int wrote = 1;
+            if (k_is_ptr)
+                sb_append(&roots, ", (void *)_sl_k");
+            if (v_is_ptr)
+                sb_append(&roots, ", (void *)_sl_v");
+            wrote += k_is_ptr + v_is_ptr;
+            for (int li = 0; li < live_set_nnamed(after); li++)
+                append_named_gc_roots(cg, &roots, live_set_named(after, li),
+                                      &wrote);
+            for (int ai = 0; ai < cg->ambient_count; ai++)
+                sb_append(&roots, xasprintf(", (void *)%s", cg->ambient_roots[ai]));
+            emit_line(cg,
+                      "({ %ssl_map *_sl_mpm = %s; %s _sl_k = %s; %s _sl_v = %s; "
+                      "void *_sl_mp_roots[] = { %s }; sl_safepoint _sl_mp_sp; "
+                      "sl_rt_safepoint_enter(&_sl_mp_sp, _sl_mp_roots, %d); "
+                      "sl_map_put(_sl_mpm, &_sl_k, &_sl_v); "
+                      "sl_rt_safepoint_exit(); });",
+                      prelude.data, b, ctype_of(cg, k), ix, ctype_of(cg, v),
+                      val, roots.data, nroots);
             break;
         }
         char *i = gen_expr(cg, tgt->as.index.index);
