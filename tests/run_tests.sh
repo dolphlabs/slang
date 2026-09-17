@@ -39,7 +39,9 @@ for t in tests/*/main.sl; do
         . "tests/$name/prepare.sh"
     fi
 
-    if ./slangc "$t" --run >"$out" 2>"$err"; then
+    ./slangc "$t" --run >"$out" 2>"$err"
+    code=$?
+    if [ "$code" -eq 0 ]; then
         if [ ! -f "tests/$name/expected.txt" ]; then
             echo "FAIL $name (missing tests/$name/expected.txt)"
             fail=1
@@ -66,8 +68,17 @@ for t in tests/*/main.sl; do
             fi
         fi
     else
-        echo "FAIL $name (compile or runtime error)"
+        # Exit code AND stdout, not just stderr: many tests report what went
+        # wrong with println("FAIL ...") before exit(1), and 141 means a
+        # signal (SIGPIPE) killed the process outright. Without both, an
+        # intermittent CI failure showed only "compile or runtime error"
+        # with nothing after it, and could not be diagnosed from the log.
+        echo "FAIL $name (compile or runtime error, exit $code)"
         cat "$err"
+        if [ -s "$out" ]; then
+            echo "  --- stdout (last 10 lines) ---"
+            tail -10 "$out" | sed 's/^/  /'
+        fi
         fail=1
     fi
 done
