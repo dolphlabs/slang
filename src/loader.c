@@ -298,6 +298,17 @@ static void load_import(Loader *ld, const char *from_dir,
                ipath, from_pkg);
 }
 
+static const char *loader_test_target = NULL;
+
+void loader_set_test_target(const char *real_dir) {
+    loader_test_target = real_dir;
+}
+
+static int is_test_file(const char *fname) {
+    size_t n = strlen(fname);
+    return n > 8 && !strcmp(fname + n - 8, "_test.sl");
+}
+
 static int load_package_dir(Loader *ld, const char *real, const char *name) {
     int existing = pkg_index_by_path(ld, real);
     if (existing >= 0)
@@ -319,6 +330,12 @@ static int load_package_dir(Loader *ld, const char *real, const char *name) {
     struct dirent *ent;
     while ((ent = readdir(dir)) != NULL) {
         size_t len = strlen(ent->d_name);
+        int testing_this = loader_test_target && !strcmp(real, loader_test_target);
+        /* *_test.sl belongs to `slangc test` only. A normal build never
+           sees it, so test helpers cannot leak into a program, and a test
+           file's own imports cannot add link flags to one. */
+        if (is_test_file(ent->d_name) && !testing_this)
+            continue;
         if (len > 3 && !strcmp(ent->d_name + len - 3, ".sl")) {
             if (nnames == ncap) {
                 ncap = ncap ? ncap * 2 : 8;
@@ -362,6 +379,16 @@ static int load_package_dir(Loader *ld, const char *real, const char *name) {
         }
 
         Program *fprog = parse_program(toks, tcount);
+        /* The generated runner lives in another package, so the tests it
+           calls must be exported. Only test_* functions in test files:
+           the package's own non-pub functions stay private, and a test
+           reaches them from inside the package as usual. */
+        if (loader_test_target && !strcmp(real, loader_test_target) &&
+            is_test_file(names[i])) {
+            for (int k = 0; k < fprog->nfuncs; k++)
+                if (!strncmp(fprog->funcs[k]->name, "test_", 5))
+                    fprog->funcs[k]->is_pub = 1;
+        }
         merge_program(&p, fprog, names[i]);
 
         /* imports are resolved relative to this package's directory */
@@ -370,6 +397,31 @@ static int load_package_dir(Loader *ld, const char *real, const char *name) {
     }
 
     stack_pop(ld);
+
+    /* Testing a PROGRAM: its top-level statements are main's body, and
+       they must not run -- the test runner is main now. Structs and impl
+       blocks stay, since tests use them. Top-level lets go too: in a
+       program they are main's locals, which no function can see, so
+       nothing a test calls depends on them. A LIBRARY keeps its lets,
+       which are package globals. */
+    if (loader_test_target && !strcmp(real, loader_test_target)) {
+        Block *body = p.prog->main_body;
+        int program_shaped = 0;
+        for (int k = 0; k < body->count; k++) {
+            int kind = body->stmts[k]->kind;
+            if (kind != ST_LET && kind != ST_STRUCT && kind != ST_IMPL)
+                program_shaped = 1;
+        }
+        if (program_shaped) {
+            int w = 0;
+            for (int k = 0; k < body->count; k++) {
+                int kind = body->stmts[k]->kind;
+                if (kind == ST_STRUCT || kind == ST_IMPL)
+                    body->stmts[w++] = body->stmts[k];
+            }
+            body->count = w;
+        }
+    }
 
     if (ld->pkgs->count == ld->pkgs->cap) {
         ld->pkgs->cap = ld->pkgs->cap ? ld->pkgs->cap * 2 : 8;

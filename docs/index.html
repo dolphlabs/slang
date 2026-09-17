@@ -30,7 +30,7 @@
   <a class="brand" href="./index.html">
     <span class="mark" aria-hidden="true"></span> slang
   </a>
-  <nav class="mainnav"><a class="active" href="./index.html">Home</a><a href="./guide/index.html">Guide</a><a href="./guide/data.html">Data types</a><a href="./guide/errors.html">Errors</a><a href="./guide/functions.html">Functions</a><a href="./concurrency/index.html">Concurrency</a><a href="./bench/index.html">Benchmarks</a><a href="./packages/index.html">Packages</a><a href="./interop/index.html">C interop</a><a href="./internals/index.html">Internals</a><a href="./limitations/index.html">Limitations</a></nav>
+  <nav class="mainnav"><a class="active" href="./index.html">Home</a><a href="./guide/index.html">Guide</a><a href="./guide/data.html">Data types</a><a href="./guide/errors.html">Errors</a><a href="./guide/functions.html">Functions</a><a href="./concurrency/index.html">Concurrency</a><a href="./testing/index.html">Testing</a><a href="./bench/index.html">Benchmarks</a><a href="./packages/index.html">Packages</a><a href="./interop/index.html">C interop</a><a href="./internals/index.html">Internals</a><a href="./limitations/index.html">Limitations</a></nav>
   <div class="tools">
     <input id="search" type="search" placeholder="Search docs…"
            autocomplete="off" aria-label="Search documentation">
@@ -129,6 +129,7 @@ slangc main.sl --run         # hello from hello</code></pre></div>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>make                 # build ./slangc against this working tree
 make test            # compile &amp; run the example programs
 make docs            # rebuild the documentation site</code></pre></div>
+<p>Tests live in <code>*_test.sl</code> files and run with <code>slangc test</code> — covered in the Testing section.</p>
 <h3 id="starting-a-project">Starting a project<a class="anchor" href="#starting-a-project" aria-label="Link to this section">#</a></h3>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>slangc new myapp     # creates myapp/ with slang.project, main.sl, .gitignore
 slangc new .         # same, in the directory you are already in</code></pre></div>
@@ -138,7 +139,7 @@ slangc new .         # same, in the directory you are already in</code></pre></d
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>./slangc examples/hello/main.sl     # produces ./main
 ./main                              # run it</code></pre></div>
 <p>Useful flags:</p>
-<div class="tablewrap"><table><thead><tr><th>Flag</th><th>Effect</th></tr></thead><tbody><tr><td><code>-o &lt;name&gt;</code></td><td>Choose the output binary name</td></tr><tr><td><code>--emit-c</code></td><td>Only write the generated C file (no compilation)</td></tr><tr><td><code>--keep-c</code></td><td>Keep the generated C file after compiling</td></tr><tr><td><code>--run</code></td><td>Compile, then immediately execute the result</td></tr><tr><td><code>get</code></td><td>Fetch <code>slang.project</code> pins and write <code>slang.lock</code></td></tr></tbody></table></div>
+<div class="tablewrap"><table><thead><tr><th>Flag</th><th>Effect</th></tr></thead><tbody><tr><td><code>-o &lt;name&gt;</code></td><td>Choose the output binary name</td></tr><tr><td><code>--emit-c</code></td><td>Only write the generated C file (no compilation)</td></tr><tr><td><code>--keep-c</code></td><td>Keep the generated C file after compiling</td></tr><tr><td><code>--run</code></td><td>Compile, then run it; exit with the program&#x27;s own status</td></tr><tr><td><code>get</code></td><td>Fetch <code>slang.project</code> pins and write <code>slang.lock</code></td></tr></tbody></table></div>
 <p>Want to see everything at once instead of one feature at a time? See <strong><a href="demo/"><code>demo/</code></a></strong> — a full server (dice game, guestbook wall, live dashboard) exercising every tier: <code>http</code>/<code>link</code>, <code>net.tls_*</code>, <code>json</code>, <code>spawn</code>/<code>chan[T]</code>, <code>proc</code> graceful shutdown, local package imports, and C interop, with a real HTML/CSS/JS frontend. <code>cd demo &amp;&amp; ./run.sh</code>.</p>
   </article>
   <aside class="toc">

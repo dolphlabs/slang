@@ -30,7 +30,7 @@
   <a class="brand" href="../index.html">
     <span class="mark" aria-hidden="true"></span> slang
   </a>
-  <nav class="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../bench/index.html">Benchmarks</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <nav class="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../testing/index.html">Testing</a><a href="../bench/index.html">Benchmarks</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
   <div class="tools">
     <input id="search" type="search" placeholder="Search docs…"
            autocomplete="off" aria-label="Search documentation">
@@ -52,7 +52,7 @@
         <a href="../api.json">api.json</a>
       </p>
     </header>
-<p>SHA-256, HMAC-SHA256, and a CSPRNG over OpenSSL. Hash and HMAC are infallible on valid inputs and return <code>bytes</code> directly; <code>rand</code> can fail and returns <code>result[bytes, str]</code>.</p>
+<p>SHA-256, HMAC-SHA256, PBKDF2, MD5 and a CSPRNG over OpenSSL. Hashes and HMAC are infallible on valid inputs and return <code>bytes</code> directly; <code>rand</code> and <code>pbkdf2_sha256</code> can fail and return <code>result[bytes, str]</code>.</p>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;crypto&quot;</span>;
 
 <span class="k">let</span> h: <span class="t">bytes</span> = crypto.<span class="f">sha256</span>(b<span class="s">&quot;abc&quot;</span>);              <span class="c">// 32 bytes</span>
@@ -60,8 +60,12 @@
 <span class="k">let</span> r = crypto.<span class="f">rand</span>(<span class="n">32</span>);
 <span class="k">guard</span> <span class="k">let</span> b = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
     log.<span class="f">error</span>(<span class="s">&quot;rand failed: &quot;</span> + e);
-}</code></pre></div>
-<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="sha256"><div class="api-sig"><code>crypto.<span class="f">sha256</span>(<span class="t">bytes</span>) -&gt; <span class="t">bytes</span></code><a class="anchor" href="#sha256">#</a></div></div><div class="api-item" id="hmac-sha256"><div class="api-sig"><code>crypto.<span class="f">hmac_sha256</span>(<span class="t">bytes</span>, <span class="t">bytes</span>) -&gt; <span class="t">bytes</span></code><a class="anchor" href="#hmac-sha256">#</a></div></div><div class="api-item" id="rand"><div class="api-sig"><code>crypto.<span class="f">rand</span>(<span class="t">int</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>,<span class="t">str</span>]</code><a class="anchor" href="#rand">#</a></div></div></div>
+}
+<span class="k">let</span> k = crypto.<span class="f">pbkdf2_sha256</span>(password, salt, <span class="n">600000</span>, <span class="n">32</span>);   <span class="c">// RFC 8018</span>
+<span class="k">let</span> d: <span class="t">bytes</span> = crypto.<span class="f">md5</span>(b<span class="s">&quot;abc&quot;</span>);                 <span class="c">// 16 bytes</span></code></pre></div>
+<p><code>pbkdf2_sha256(password, salt, iterations, length)</code> accepts 1 to 10,000,000 iterations and a length of 1 to 1024 bytes; anything else is an <code>err</code>. The iteration count is capped because it is often chosen by the other side of a protocol (a SCRAM server sends it) and the whole derivation runs without yielding the worker thread.</p>
+<p><code>md5</code> is broken for collision resistance. It exists for the protocols that still specify it -- Postgres md5 authentication, <code>Content-MD5</code>, legacy ETags -- and must not protect anything new.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="sha256"><div class="api-sig"><code>crypto.<span class="f">sha256</span>(<span class="t">bytes</span>) -&gt; <span class="t">bytes</span></code><a class="anchor" href="#sha256">#</a></div></div><div class="api-item" id="hmac-sha256"><div class="api-sig"><code>crypto.<span class="f">hmac_sha256</span>(<span class="t">bytes</span>, <span class="t">bytes</span>) -&gt; <span class="t">bytes</span></code><a class="anchor" href="#hmac-sha256">#</a></div></div><div class="api-item" id="rand"><div class="api-sig"><code>crypto.<span class="f">rand</span>(<span class="t">int</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>,<span class="t">str</span>]</code><a class="anchor" href="#rand">#</a></div></div><div class="api-item" id="md5"><div class="api-sig"><code>crypto.<span class="f">md5</span>(<span class="t">bytes</span>) -&gt; <span class="t">bytes</span></code><a class="anchor" href="#md5">#</a></div></div><div class="api-item" id="pbkdf2-sha256"><div class="api-sig"><code>crypto.<span class="f">pbkdf2_sha256</span>(<span class="t">bytes</span>, <span class="t">bytes</span>, <span class="t">int</span>, <span class="t">int</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>,<span class="t">str</span>]</code><a class="anchor" href="#pbkdf2-sha256">#</a></div></div></div>
   </article>
   <aside class="toc">
     <p class="toc-title">On this page</p>

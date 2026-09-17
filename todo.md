@@ -2460,6 +2460,24 @@ prerequisite, not a different plan).
       zero stack grows. This exact fix was once built for it and reverted
       as dead code, which remains correct for that bug.
 
+- [ ] **Lead: GC pacing is quadratic for a heap that keeps growing with
+      few dead objects.** The collection threshold starts at 8MB and only
+      doubles when a cycle finds under a quarter of objects alive; it never
+      follows the live heap. A workload whose allocations mostly SURVIVE
+      therefore collects every 8MB and re-marks the whole growing heap each
+      time. Measured on the first `pg` driver, which kept one `bytes` object
+      per result cell (~2M live objects for 1M rows): 35.8s for 1M rows vs
+      2.5s for 200k (14x for 5x). Setting the threshold to
+      max(floor, live bytes after the cycle) -- Go's GOGC=100 -- cut that
+      to 15.1s. **Not shipped:** the driver was then changed to keep a
+      result in a few large chunks (2.1s for 1M rows), where the pacing
+      change measured no faster (2.1-2.3s either way, alternated) and ~20MB
+      more RSS; and two simple probes that should have shown it (a list of
+      2M live strings, with and without garbage alongside) showed no
+      difference either. Revisit with a reproducer that holds millions of
+      small live GC objects, e.g. a map of 2M entries or a list of 2M
+      `bytes`, before changing pacing.
+
 - [ ] **Intermittent: `tests/sigpipe` on GitHub's macOS runner.** Failed
       twice in about 255 runs, both inside the full suite; never alone
       (40/40) and never under 8x parallel load (200/200). The failures

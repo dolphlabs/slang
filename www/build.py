@@ -106,6 +106,14 @@ PAGES = [
         "sections": ["Concurrency"],
     },
     {
+        "path": "testing/index.html",
+        "title": "Testing",
+        "tagline": "slangc test, with assert and panic.",
+        "kind": "doc",
+        "nav": "Testing",
+        "sections": ["Testing"],
+    },
+    {
         "path": "bench/index.html",
         "title": "Benchmarks",
         "tagline": "Every cross-language run, including the ones slang loses.",
@@ -169,6 +177,7 @@ PACKAGE_SECTIONS = {
     "byteutil": ["`byteutil`"],
     "http": ["`http`"],
     "httpc": ["`httpc`"],
+    "pg": ["`pg`"],
 }
 
 # --------------------------------------------------------------------

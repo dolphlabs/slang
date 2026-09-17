@@ -1,0 +1,9 @@
+chunked bodies decode, with extensions ignored and hex in either case
+trailers are consumed and discarded, never merged into headers
+2000 one-byte chunks assemble correctly
+refused: TE with CL, coding lists, TE in HTTP/1.0, repeated framing headers, overflowing and negative lengths
+refused: bad or oversized sizes, missing CRLFs, bare LFs, oversized trailers, truncation
+a chunked body split across seven sends is read whole
+a chunked request followed by another in one send: both framed exactly
+a chunked body larger than the buffer is refused
+done

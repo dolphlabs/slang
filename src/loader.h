@@ -26,6 +26,14 @@ typedef struct {
  * diagnostic on missing packages or import cycles. */
 int load_packages(const char *main_file, PkgList *out);
 
+/* Test mode, for `slangc test`. When set to a package directory
+ * (realpath), that one package is loaded with its *_test.sl files, its
+ * test_* functions become callable from the generated runner, and -- if
+ * the package is a program rather than a library -- its top-level
+ * statements are dropped, since tests run instead of the program.
+ * *_test.sl files are otherwise never loaded, in any package. */
+void loader_set_test_target(const char *real_dir);
+
 /* Collects every 'link "name"' directive across all loaded packages,
  * deduplicated in first-occurrence order. *out_count is set to the
  * number of names returned (0 if none). */

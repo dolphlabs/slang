@@ -156,6 +156,27 @@
           "ret": "result[bytes,str]",
           "tls": false,
           "sig": "crypto.rand(int) -> result[bytes,str]"
+        },
+        {
+          "name": "md5",
+          "params": [
+            "bytes"
+          ],
+          "ret": "bytes",
+          "tls": false,
+          "sig": "crypto.md5(bytes) -> bytes"
+        },
+        {
+          "name": "pbkdf2_sha256",
+          "params": [
+            "bytes",
+            "bytes",
+            "int",
+            "int"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.pbkdf2_sha256(bytes, bytes, int, int) -> result[bytes,str]"
         }
       ]
     },
@@ -370,7 +391,7 @@
           "sig": "fn header(r: Request, name: str) -> opt[str]",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 161
+          "line": 386
         },
         {
           "name": "parse",
@@ -378,7 +399,7 @@
           "sig": "fn parse(raw: bytes) -> result[Request, str]",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 169
+          "line": 394
         },
         {
           "name": "serialize",
@@ -386,7 +407,7 @@
           "sig": "fn serialize(r: Response) -> bytes",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 226
+          "line": 422
         },
         {
           "name": "wants_close",
@@ -394,7 +415,7 @@
           "sig": "fn wants_close(r: Request) -> bool",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 267
+          "line": 463
         },
         {
           "name": "read",
@@ -402,7 +423,7 @@
           "sig": "fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Incoming, str]",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 281
+          "line": 477
         },
         {
           "name": "write",
@@ -410,7 +431,7 @@
           "sig": "fn write(c: &mut link, r: Response, a: &mut arena, deadline: until) -> result[int, fault]",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 333
+          "line": 526
         },
         {
           "name": "text_response",
@@ -418,7 +439,7 @@
           "sig": "fn text_response(status: i32, status_text: str, content_type: str,",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 338
+          "line": 531
         },
         {
           "name": "ok_html",
@@ -426,7 +447,7 @@
           "sig": "fn ok_html(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 350
+          "line": 543
         },
         {
           "name": "ok_css",
@@ -434,7 +455,7 @@
           "sig": "fn ok_css(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 354
+          "line": 547
         },
         {
           "name": "ok_js",
@@ -442,7 +463,7 @@
           "sig": "fn ok_js(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 358
+          "line": 551
         },
         {
           "name": "ok_json",
@@ -450,7 +471,7 @@
           "sig": "fn ok_json(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 363
+          "line": 556
         },
         {
           "name": "ok_text",
@@ -458,7 +479,7 @@
           "sig": "fn ok_text(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 367
+          "line": 560
         },
         {
           "name": "created_json",
@@ -466,7 +487,7 @@
           "sig": "fn created_json(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 371
+          "line": 564
         },
         {
           "name": "bad_request",
@@ -474,7 +495,7 @@
           "sig": "fn bad_request(msg: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 376
+          "line": 569
         },
         {
           "name": "not_found",
@@ -482,7 +503,7 @@
           "sig": "fn not_found() -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 381
+          "line": 574
         },
         {
           "name": "method_not_allowed",
@@ -490,7 +511,7 @@
           "sig": "fn method_not_allowed() -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 386
+          "line": 579
         }
       ]
     },
@@ -1872,6 +1893,17 @@
           "sig": "net.tls_dial(str, int, rawptr) -> result[rawptr,str]"
         },
         {
+          "name": "tls_upgrade",
+          "params": [
+            "int",
+            "str",
+            "rawptr"
+          ],
+          "ret": "result[rawptr,str]",
+          "tls": true,
+          "sig": "net.tls_upgrade(int, str, rawptr) -> result[rawptr,str]"
+        },
+        {
           "name": "tls_send",
           "params": [
             "rawptr",
@@ -2108,6 +2140,308 @@
           "ret": "result[bool,str]",
           "tls": false,
           "sig": "os.rename(str, str) -> result[bool,str]"
+        }
+      ]
+    },
+    "pg": {
+      "name": "pg",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Config",
+          "decl": "struct",
+          "sig": "gc struct Config",
+          "doc": "",
+          "file": "stdlib/pg/pg.sl",
+          "line": 46
+        },
+        {
+          "name": "Conn",
+          "decl": "struct",
+          "sig": "gc struct Conn",
+          "doc": "",
+          "file": "stdlib/pg/pg.sl",
+          "line": 72
+        },
+        {
+          "name": "Arg",
+          "decl": "struct",
+          "sig": "gc struct Arg",
+          "doc": "A query parameter. Build one with arg_text, arg_int, arg_float, arg_bool, arg_bytes or arg_null.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 105
+        },
+        {
+          "name": "Rows",
+          "decl": "struct",
+          "sig": "gc struct Rows",
+          "doc": "A buffered result. Read cells with get_text / get_int / get_float / get_bool / get_bytes, by row and column index; col() finds an index by name.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 114
+        },
+        {
+          "name": "parse_url",
+          "decl": "fn",
+          "sig": "fn parse_url(url: str) -> result[Config, str]",
+          "doc": "postgres://user:password@host:port/database?sslmode=require  Recognised parameters: sslmode, sslrootcert, application_name. Any other parameter is an error rather than ignored: a misspelt \"sslmdoe=require\" that was silently dropped would connect in the clear, and nothing would ever say so.  sslmode: disable      cleartext. require      TLS, certificate and hostname verified. verify-full  the same as require (the libpq spelling of it). prefer, allow, verify-ca are refused. The first two fall back to cleartext when TLS fails, which is exactly what an attacker in the middle would arrange; verify-ca checks the chain but not the host.  With no sslmode the default is \"require\" -- except for a loopback host, where it is \"disable\", because traffic that never leaves the machine gains nothing from TLS and a local development server almost never has it configured.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 284
+        },
+        {
+          "name": "sqlstate",
+          "decl": "fn",
+          "sig": "fn sqlstate(e: str) -> str",
+          "doc": "The SQLSTATE of an error returned by this package, or \"\" when the error did not come from the server (a dial failure, a timeout).  if pg.sqlstate(e) == \"23505\" { /* unique_violation */ }",
+          "file": "stdlib/pg/pg.sl",
+          "line": 635
+        },
+        {
+          "name": "Scram",
+          "decl": "struct",
+          "sig": "gc struct Scram",
+          "doc": "One SCRAM-SHA-256 exchange (RFC 5802, RFC 7677), as pure functions of its inputs, so the published test vector can check it.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 701
+        },
+        {
+          "name": "scram_client_final",
+          "decl": "fn",
+          "sig": "fn scram_client_final(password: str, client_first_bare: str,",
+          "doc": "",
+          "file": "stdlib/pg/pg.sl",
+          "line": 706
+        },
+        {
+          "name": "connect",
+          "decl": "fn",
+          "sig": "fn connect(url: str, deadline: until) -> result[Conn, str]",
+          "doc": "",
+          "file": "stdlib/pg/pg.sl",
+          "line": 934
+        },
+        {
+          "name": "connect_config",
+          "decl": "fn",
+          "sig": "fn connect_config(cfg: Config, deadline: until) -> result[Conn, str]",
+          "doc": "The deadline bounds the startup and authentication exchange. It does not bound the TCP connect or the TLS handshake themselves, which net.dial and net.tls_upgrade do not yet take one for.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 945
+        },
+        {
+          "name": "close",
+          "decl": "fn",
+          "sig": "fn close(c: Conn)",
+          "doc": "Ends the session politely (Terminate) and closes the socket. Safe to call on a broken or already-closed connection.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 965
+        },
+        {
+          "name": "usable",
+          "decl": "fn",
+          "sig": "fn usable(c: Conn) -> bool",
+          "doc": "Is the connection still usable? False once it has been closed or has broken; a false Conn only ever returns errors.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 977
+        },
+        {
+          "name": "in_transaction",
+          "decl": "fn",
+          "sig": "fn in_transaction(c: Conn) -> bool",
+          "doc": "Inside a transaction block (including a failed one that still needs ROLLBACK)?",
+          "file": "stdlib/pg/pg.sl",
+          "line": 983
+        },
+        {
+          "name": "server_param",
+          "decl": "fn",
+          "sig": "fn server_param(c: Conn, name: str) -> opt[str]",
+          "doc": "A server setting reported at startup or after SET: \"server_version\", \"TimeZone\", \"standard_conforming_strings\", ...",
+          "file": "stdlib/pg/pg.sl",
+          "line": 989
+        },
+        {
+          "name": "arg_text",
+          "decl": "fn",
+          "sig": "fn arg_text(s: str) -> Arg",
+          "doc": "",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1013
+        },
+        {
+          "name": "arg_int",
+          "decl": "fn",
+          "sig": "fn arg_int(n: int) -> Arg",
+          "doc": "",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1017
+        },
+        {
+          "name": "arg_float",
+          "decl": "fn",
+          "sig": "fn arg_float(x: float) -> Arg",
+          "doc": "Sent as the shortest text that reads back as exactly this float: to_str's six significant digits would round it.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1023
+        },
+        {
+          "name": "arg_bool",
+          "decl": "fn",
+          "sig": "fn arg_bool(b: bool) -> Arg",
+          "doc": "",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1028
+        },
+        {
+          "name": "arg_bytes",
+          "decl": "fn",
+          "sig": "fn arg_bytes(b: bytes) -> Arg",
+          "doc": "Sent in binary, so any byte values -- NULs included -- arrive intact. For a bytea column.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1038
+        },
+        {
+          "name": "arg_null",
+          "decl": "fn",
+          "sig": "fn arg_null() -> Arg",
+          "doc": "",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1042
+        },
+        {
+          "name": "no_args",
+          "decl": "fn",
+          "sig": "fn no_args() -> [Arg]",
+          "doc": "The argument list of a query with no parameters. A bare [] cannot be passed yet: an empty list literal needs a declared type, and the compiler does not take it from the parameter.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1049
+        },
+        {
+          "name": "query",
+          "decl": "fn",
+          "sig": "fn query(c: Conn, sql: str, args: [Arg], deadline: until)",
+          "doc": "Runs one query with parameters ($1, $2, ...) through the extended protocol: the values travel separately from the SQL text, so they can never be parsed as SQL. Returns every row, buffered.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1253
+        },
+        {
+          "name": "exec",
+          "decl": "fn",
+          "sig": "fn exec(c: Conn, sql: str, deadline: until) -> result[int, str]",
+          "doc": "Runs SQL with no parameters through the simple protocol, which accepts several statements separated by semicolons -- a migration, a schema. Returns the rows affected by the last statement. Rows a statement returns are read and discarded.  Never build `sql` from untrusted input: use query() and parameters.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1310
+        },
+        {
+          "name": "col",
+          "decl": "fn",
+          "sig": "fn col(rows: Rows, name: str) -> int",
+          "doc": "The index of the column called `name`. Panics if there is none: the query and the code reading it disagree, which is a bug, not a condition to handle.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1359
+        },
+        {
+          "name": "is_null",
+          "decl": "fn",
+          "sig": "fn is_null(rows: Rows, r: int, c: int) -> bool",
+          "doc": "",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1384
+        },
+        {
+          "name": "get_text",
+          "decl": "fn",
+          "sig": "fn get_text(rows: Rows, r: int, c: int) -> str",
+          "doc": "Any column, in Postgres's text form: numbers, dates, uuid and json all arrive this way.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1410
+        },
+        {
+          "name": "get_int",
+          "decl": "fn",
+          "sig": "fn get_int(rows: Rows, r: int, c: int) -> int",
+          "doc": "int2, int4, int8 and oid.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1415
+        },
+        {
+          "name": "get_float",
+          "decl": "fn",
+          "sig": "fn get_float(rows: Rows, r: int, c: int) -> float",
+          "doc": "float4, float8, numeric, and the integer types. A numeric too precise for a double is rounded; read it with get_text to keep every digit.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1431
+        },
+        {
+          "name": "get_bool",
+          "decl": "fn",
+          "sig": "fn get_bool(rows: Rows, r: int, c: int) -> bool",
+          "doc": "",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1450
+        },
+        {
+          "name": "get_bytes",
+          "decl": "fn",
+          "sig": "fn get_bytes(rows: Rows, r: int, c: int) -> bytes",
+          "doc": "bytea, decoded from the server's hex output format.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1459
+        },
+        {
+          "name": "Pool",
+          "decl": "struct",
+          "sig": "gc struct Pool",
+          "doc": "A bounded set of connections to one database, shared by any number of tasks.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1485
+        },
+        {
+          "name": "new_pool",
+          "decl": "fn",
+          "sig": "fn new_pool(url: str, max_open: int) -> result[Pool, str]",
+          "doc": "Parses the url; connects nothing until the first acquire.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1503
+        },
+        {
+          "name": "acquire",
+          "decl": "fn",
+          "sig": "fn acquire(p: Pool, deadline: until) -> result[Conn, str]",
+          "doc": "A connection for the caller's exclusive use, until release(). Prefer pool_query / pool_exec, which cannot forget to release; acquire is for a transaction, which needs several statements on one connection.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1520
+        },
+        {
+          "name": "release",
+          "decl": "fn",
+          "sig": "fn release(p: Pool, c: Conn)",
+          "doc": "Returns a connection to the pool. One that is broken, closed, or still inside a transaction is closed instead: handing an open transaction to the next caller would run its statements inside someone else's uncommitted work.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1575
+        },
+        {
+          "name": "pool_query",
+          "decl": "fn",
+          "sig": "fn pool_query(p: Pool, sql: str, args: [Arg], deadline: until)",
+          "doc": "",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1592
+        },
+        {
+          "name": "pool_exec",
+          "decl": "fn",
+          "sig": "fn pool_exec(p: Pool, sql: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1603
+        },
+        {
+          "name": "pool_close",
+          "decl": "fn",
+          "sig": "fn pool_close(p: Pool)",
+          "doc": "Closes every idle connection. Connections in use are closed as they are released; acquire fails from now on.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1615
         }
       ]
     },
@@ -2619,6 +2953,15 @@
           "ret": "str",
           "tls": false,
           "sig": "strings.join(NA_ARR_STR, str) -> str"
+        },
+        {
+          "name": "from_float",
+          "params": [
+            "float"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "strings.from_float(float) -> str"
         }
       ]
     },

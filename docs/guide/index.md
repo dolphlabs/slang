@@ -90,12 +90,28 @@ no escaping).
 - `has(m, k)` — does map `m` contain key `k`?
 - `del(m, k)` — remove key `k` (and its value) from map `m`
 - `to_str(x)` — convert any scalar or bytes value to `str`
-- `to_bytes(s)` — convert a `str` to its raw bytes
+- `to_bytes(x)` — copy a `str` or a `wire` into new `bytes`
 - `to_int(s)` / `to_float(s)` — parse a `str`, returning
   `result[int, str]` / `result[float, str]` (see below)
 - `to_le(n)` / `to_be(n)` — integer to 8-byte little/big-endian `bytes`
 - `from_le(b)` / `from_be(b)` — 8-byte little/big-endian `bytes` to integer
 - `exit(code)` — terminate the process immediately with the given status
+- `assert(cond)` / `assert(cond, msg)` — fail if `cond` is false, with
+  `msg` (built only when the assertion fails) and the location
+- `panic(msg)` — fail unconditionally with `msg` and the location
+
+`assert` and `panic` end the **current task**. In a spawned task, the
+message becomes the `err` of its `join_wait`, e.g.
+`x must be positive, got -3 at shapes.area:9`; in the main task the program
+exits with status 1. `panic` never returns, so it can be the only thing in
+a function that must return a value, and it satisfies `guard`'s requirement
+that `else` leave the scope:
+
+```slang
+guard let user = find(id) else {
+    panic("user " + to_str(id) + " vanished between check and use");
+}
+```
 - `some(v)` / `none` / `ok(v)` / `err(e)` — construct `opt`/`result` values
   (see below)
 - `bytes_ptr(b)` — raw `rawptr` to a `bytes` buffer, for passing to
@@ -511,12 +527,28 @@ no escaping).
 - `has(m, k)` — does map `m` contain key `k`?
 - `del(m, k)` — remove key `k` (and its value) from map `m`
 - `to_str(x)` — convert any scalar or bytes value to `str`
-- `to_bytes(s)` — convert a `str` to its raw bytes
+- `to_bytes(x)` — copy a `str` or a `wire` into new `bytes`
 - `to_int(s)` / `to_float(s)` — parse a `str`, returning
   `result[int, str]` / `result[float, str]` (see below)
 - `to_le(n)` / `to_be(n)` — integer to 8-byte little/big-endian `bytes`
 - `from_le(b)` / `from_be(b)` — 8-byte little/big-endian `bytes` to integer
 - `exit(code)` — terminate the process immediately with the given status
+- `assert(cond)` / `assert(cond, msg)` — fail if `cond` is false, with
+  `msg` (built only when the assertion fails) and the location
+- `panic(msg)` — fail unconditionally with `msg` and the location
+
+`assert` and `panic` end the **current task**. In a spawned task, the
+message becomes the `err` of its `join_wait`, e.g.
+`x must be positive, got -3 at shapes.area:9`; in the main task the program
+exits with status 1. `panic` never returns, so it can be the only thing in
+a function that must return a value, and it satisfies `guard`'s requirement
+that `else` leave the scope:
+
+```slang
+guard let user = find(id) else {
+    panic("user " + to_str(id) + " vanished between check and use");
+}
+```
 - `some(v)` / `none` / `ok(v)` / `err(e)` — construct `opt`/`result` values
   (see below)
 - `bytes_ptr(b)` — raw `rawptr` to a `bytes` buffer, for passing to

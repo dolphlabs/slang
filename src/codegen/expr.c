@@ -48,9 +48,17 @@ char *gen_ident_name(CG *cg, const char *name, int line) {
     return sanitize_ident(name);
 }
 
+/* The shortest text C reads back as exactly `v`. This was "%g" -- six
+ * significant digits -- so `let pi = 3.141592653589793;` compiled to
+ * 3.14159 and 123456789.125 to 123457000: every float literal with more
+ * than six digits was silently a different number. */
 char *gen_float_literal(double v) {
     char buf[64];
-    snprintf(buf, sizeof(buf), "%g", v);
+    for (int prec = 1; prec <= 17; prec++) {
+        snprintf(buf, sizeof(buf), "%.*g", prec, v);
+        if (strtod(buf, NULL) == v)
+            break;
+    }
     if (!strpbrk(buf, ".eE"))
         strcat(buf, ".0");
     return xstrdup(buf);
@@ -408,6 +416,18 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
     }
     if (!strcmp(name, "to_bytes")) {
         char *a = gen_expr(cg, e->as.call.args[0]);
+        /* A wire (arena memory, not GC-owned) is copied into bytes in one
+           allocation. Without this, stdlib/http copied its receive buffer
+           a byte at a time -- `out = out + one_byte` -- on EVERY recv, so
+           reading a request was quadratic in its size: a 50KB body took a
+           second, a 200KB one about fifteen. */
+        if (is_wire(infer_type(cg, e->as.call.args[0]))) {
+            int id = cg->tmp_id++;
+            char *inner = xasprintf("({ sl_wire _sl_tw%d = %s; "
+                                    "sl_bytes_new(_sl_tw%d.ptr, _sl_tw%d.len); })",
+                                    id, a, id, id);
+            return wrap_safepoint(cg, e, ctype_of(cg, "bytes"), NULL, inner);
+        }
         char *inner = xasprintf("sl_bytes_from_str(%s)", a);
         return wrap_safepoint(cg, e, ctype_of(cg, "bytes"), NULL, inner);
     }
@@ -512,21 +532,38 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
                 ? xasprintf("sl_gc_trace_%s", rc)
                 : "NULL";
         int id = cg->tmp_id++;
+        /* The handle is evaluated ONCE, into _sl_jh. It used to be spliced
+         * into both sl_join_wait(...) and sl_join_err(...), so for
+         * `join_wait(spawn f())` a failure SPAWNED f A SECOND TIME to ask
+         * the fresh, unfinished copy for its error: the real message was
+         * lost ("task panicked"), and any side effect of f ran twice.
+         *
+         * The handle is also a GC root for the whole wait. Written inline,
+         * the join object is referenced only by this expression, and a
+         * collection while this task is parked could otherwise free it.
+         * Its slot starts NULL and is filled once the spawn has run; the
+         * collector reads roots when it scans, not when the bracket opens,
+         * and sl_gc_mark ignores NULL. The error is read inside the bracket
+         * because sl_join_err can allocate. */
         char *inner = xasprintf(
             "({ %s _sl_jv%d; %s _sl_jr%d = (%s)sl_gc_alloc(sizeof(*_sl_jr%d), %s); "
-            "void *_sl_jwr%d_roots[] = { (void *)_sl_jr%d }; "
-            "sl_safepoint _sl_jwr%d; sl_rt_safepoint_enter(&_sl_jwr%d, _sl_jwr%d_roots, 1); "
-            "int _sl_jok%d = sl_join_wait(%s, &_sl_jv%d); "
-            "sl_rt_safepoint_exit(); "
+            "void *_sl_jwr%d_roots[] = { (void *)_sl_jr%d, NULL }; "
+            "sl_safepoint _sl_jwr%d; sl_rt_safepoint_enter(&_sl_jwr%d, _sl_jwr%d_roots, 2); "
+            "sl_join *_sl_jh%d = %s; "
+            "_sl_jwr%d_roots[1] = (void *)_sl_jh%d; "
+            "int _sl_jok%d = sl_join_wait(_sl_jh%d, &_sl_jv%d); "
             "if (_sl_jok%d) { _sl_jr%d->ok = true; _sl_jr%d->v = _sl_jv%d; } "
-            "else { _sl_jr%d->ok = false; _sl_jr%d->e = sl_join_err(%s); } "
+            "else { _sl_jr%d->ok = false; _sl_jr%d->e = sl_join_err(_sl_jh%d); } "
+            "sl_rt_safepoint_exit(); "
             "_sl_jr%d; })",
             ec, id, rct, id, rct, id, trace,
             id, id,
             id, id, id,
-            id, h, id,
+            id, h,
+            id, id,
+            id, id, id,
             id, id, id, id,
-            id, id, h,
+            id, id, id,
             id);
         return wrap_safepoint(cg, e, rct, NULL, inner);
     }
@@ -724,6 +761,23 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
                                       prelude.data, inner);
         cg->ambient_count = ambient_mark;
         return result;
+    }
+    if (!strcmp(name, "panic")) {
+        char *m = gen_expr(cg, e->as.call.args[0]);
+        char *inner = xasprintf("sl_rt_panic(%s, %s)", m, panic_at(cg, e->line));
+        return wrap_safepoint(cg, e, NULL, NULL, inner);
+    }
+    if (!strcmp(name, "assert")) {
+        /* The message is built only when the assertion FAILS: a ternary,
+           not a call with both arguments evaluated up front, so
+           assert(ok, "got " + to_str(x)) costs a string concatenation per
+           failure rather than per check. */
+        char *c = gen_expr(cg, e->as.call.args[0]);
+        char *m = e->as.call.nargs == 2 ? gen_expr(cg, e->as.call.args[1])
+                                        : xstrdup("\"assertion failed\"");
+        char *inner = xasprintf("((%s) ? (void)0 : sl_rt_panic(%s, %s))", c, m,
+                                panic_at(cg, e->line));
+        return wrap_safepoint(cg, e, NULL, NULL, inner);
     }
     if (!strcmp(name, "exit")) {
         char *a = gen_expr(cg, e->as.call.args[0]);

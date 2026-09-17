@@ -209,8 +209,8 @@ const char *infer_call(CG *cg, Expr *e) {
         if (n != 1)
             cg_error(e->line, "to_bytes() takes exactly one argument");
         const char *t = infer_type(cg, e->as.call.args[0]);
-        if (!is_str(t))
-            cg_error(e->line, "to_bytes() expects a str (got %s)", t);
+        if (!is_str(t) && !is_wire(t))
+            cg_error(e->line, "to_bytes() expects a str or a wire (got %s)", t);
         return "bytes";
     }
     if (!strcmp(name, "bytes_ptr")) {
@@ -325,6 +325,32 @@ const char *infer_call(CG *cg, Expr *e) {
         if (!is_bytes(t))
             cg_error(e->line, "%s() expects bytes (got %s)", name, t);
         return "int";
+    }
+    /* panic(msg) and assert(cond[, msg]) end the current task with a
+       located message: in a spawned task that becomes the err of its
+       join_wait, which is what lets `slangc test` report a failing test
+       and carry on; in the main task it ends the program. */
+    if (!strcmp(name, "panic")) {
+        if (n != 1)
+            cg_error(e->line, "panic() takes exactly one argument, the message");
+        const char *t = infer_type(cg, e->as.call.args[0]);
+        if (!is_str(t))
+            cg_error(e->line, "panic() expects a str message (got %s)", t);
+        return "void";
+    }
+    if (!strcmp(name, "assert")) {
+        if (n != 1 && n != 2)
+            cg_error(e->line,
+                     "assert() takes a condition and an optional message");
+        const char *ct = infer_type(cg, e->as.call.args[0]);
+        if (strcmp(ct, "bool"))
+            cg_error(e->line, "assert() expects a bool condition (got %s)", ct);
+        if (n == 2) {
+            const char *mt = infer_type(cg, e->as.call.args[1]);
+            if (!is_str(mt))
+                cg_error(e->line, "assert() expects a str message (got %s)", mt);
+        }
+        return "void";
     }
     if (!strcmp(name, "exit")) {
         if (n != 1)

@@ -19,6 +19,9 @@
   function, never an environment. `break`/`continue` work inside
   loops.
 - Package-level lists are not supported yet (scalars and bytes are).
+- An empty list literal needs a declared type, and the compiler does not
+  take it from a function parameter: `f([])` is an error, so declare
+  `let none: [T] = [];` and pass that.
 - Map keys are limited to integers, `str`, and `bool`.
 - No data-race protection: `spawn` gives you real concurrency and
   per-task failure isolation, not an ownership/borrow checker.

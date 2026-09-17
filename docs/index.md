@@ -43,6 +43,9 @@ make test            # compile & run the example programs
 make docs            # rebuild the documentation site
 ```
 
+Tests live in `*_test.sl` files and run with `slangc test` — covered in
+the Testing section.
+
 ### Starting a project
 
 ```sh
@@ -75,7 +78,7 @@ Useful flags:
 | `-o <name>` | Choose the output binary name                       |
 | `--emit-c`  | Only write the generated C file (no compilation)    |
 | `--keep-c`  | Keep the generated C file after compiling           |
-| `--run`     | Compile, then immediately execute the result        |
+| `--run`     | Compile, then run it; exit with the program's own status |
 | `get`       | Fetch `slang.project` pins and write `slang.lock`   |
 
 Want to see everything at once instead of one feature at a time? See

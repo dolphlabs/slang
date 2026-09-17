@@ -141,6 +141,71 @@ jobs:
       - name: Docs build
         run: make docs
 
+  # The pg driver against a real Postgres, in cleartext and over TLS with
+  # a verified certificate. A separate job because it needs Docker, which
+  # the macOS runners lack; `make test` covers the driver everywhere
+  # against scripted fake servers. The image pull is setup, like
+  # apt-get -- the test itself talks only to localhost.
+  postgres:
+    name: postgres (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            runner: ubuntu-24.04
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev libsqlite3-dev zlib1g-dev
+
+      - name: Build slangc
+        run: make slangc
+
+      # One server as the Docker image ships it (SCRAM, no TLS), and one
+      # with TLS on, its certificate signed by a CA made here for
+      # localhost -- so the test can check verification against it.
+      - name: Start Postgres
+        run: |
+          mkdir -p /tmp/pgtls && cd /tmp/pgtls
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key \
+            -out ca.crt -days 2 -subj "/CN=slang CI CA"
+          openssl req -newkey rsa:2048 -nodes -keyout server.key \
+            -out server.csr -subj "/CN=localhost"
+          printf 'subjectAltName=DNS:localhost\n' > ext.cnf
+          openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key \
+            -CAcreateserial -out server.crt -days 2 -extfile ext.cnf
+          chmod 644 server.key
+          docker run -d --name pg -e POSTGRES_USER=slang \
+            -e POSTGRES_PASSWORD=secret -p 55432:5432 postgres:16
+          docker run -d --name pgtls -e POSTGRES_USER=slang \
+            -e POSTGRES_PASSWORD=secret -p 55433:5432 \
+            -v /tmp/pgtls:/certs:ro --entrypoint bash postgres:16 -c \
+            'cp /certs/server.crt /certs/server.key /tmp/ &&
+             chown postgres /tmp/server.* && chmod 600 /tmp/server.key &&
+             exec docker-entrypoint.sh postgres -c ssl=on
+               -c ssl_cert_file=/tmp/server.crt -c ssl_key_file=/tmp/server.key'
+          for c in pg pgtls; do
+            for i in $(seq 60); do
+              docker exec $c pg_isready -U slang -h 127.0.0.1 >/dev/null 2>&1 && break
+              sleep 1
+            done
+          done
+
+      - name: Live test
+        env:
+          PG_URL: postgres://slang:secret@127.0.0.1:55432/slang
+          PG_TLS_URL: postgres://slang:secret@localhost:55433/slang?sslmode=require&sslrootcert=/tmp/pgtls/ca.crt
+        run: ./slangc tests/live/postgres/main.sl --run
+
   # Attach a tarball per platform to a published release.
   release-tarballs:
     if: github.event_name == 'release'

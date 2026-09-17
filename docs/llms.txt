@@ -12,6 +12,7 @@ Every page on this site has a Markdown twin at the same path with a .md extensio
 - [Errors](guide/errors.md): opt, result and fault -- and the rule for choosing.
 - [Function values](guide/functions.md): Functions as values, deliberately without closures.
 - [Concurrency](concurrency/index.md): M:N green threads, channels, select and mutex.
+- [Testing](testing/index.md): slangc test, with assert and panic.
 - [Benchmarks](bench/index.md): Every cross-language run, including the ones slang loses.
 - [Packages](packages/index.md): The standard library, and how imports resolve.
 - [C interop](interop/index.md): Calling C, and the safety rules that come with it.
@@ -29,6 +30,7 @@ Every page on this site has a Markdown twin at the same path with a .md extensio
 - [log](packages/log.md): Package log.
 - [net](packages/net.md): Package net.
 - [os](packages/os.md): Package os.
+- [pg](packages/pg.md): Package pg.
 - [proc](packages/proc.md): Package proc.
 - [regex](packages/regex.md): Package regex.
 - [sql](packages/sql.md): Package sql.
