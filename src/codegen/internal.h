@@ -495,6 +495,8 @@ const char *expect_push(CG *cg, const char *t);
 int split_dotted(const char *name, char **left, char **right);
 char *sanitize_pkg(const char *name);
 char *mangle_func(const char *pkg, const char *name);
+char *mangle_sig(FuncSig *sig);
+FuncSig *sig_of_decl(CG *cg, FuncDecl *f);
 char *mangle_glob(const char *pkg, const char *name);
 char *path_base(const char *path);
 StructDef *struct_find_canon(CG *cg, const char *canon);

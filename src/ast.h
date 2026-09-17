@@ -241,6 +241,9 @@ struct FuncDecl {
     int is_pub;         /* exported from its package */
     int is_extern;       /* 'extern fn': no body, calls the bare C symbol */
     int line;
+    int sig_idx;        /* 1 + index of its FuncSig in cg->sigs, 0 before
+                           registration: a method and a package function
+                           may share a name, so a name does not find it */
 };
 
 typedef struct {

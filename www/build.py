@@ -242,6 +242,10 @@ def extract_native_packages():
 
 DECL = re.compile(
     r"^pub\s+(fn|struct|gc\s+struct|let)\s+([A-Za-z_][A-Za-z0-9_]*)")
+# `impl Name {` at column 0 opens a block whose indented `pub fn`s are
+# methods, documented as Name.method; a `}` at column 0 closes it.
+IMPL = re.compile(r"^impl\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{")
+METHOD = re.compile(r"^\s+pub\s+fn\s+([A-Za-z_][A-Za-z0-9_]*)")
 
 
 def extract_source_packages():
@@ -256,11 +260,23 @@ def extract_source_packages():
     for sl in sorted(stdlib.rglob("*.sl")):
         pkg = sl.relative_to(stdlib).parts[0]
         lines = sl.read_text(encoding="utf-8").splitlines()
+        impl = None
         for i, line in enumerate(lines):
-            m = DECL.match(line)
-            if not m:
+            im = IMPL.match(line)
+            if im:
+                impl = im.group(1)
                 continue
-            kind, name = m.group(1), m.group(2)
+            if impl and line.startswith("}"):
+                impl = None
+                continue
+            m = DECL.match(line)
+            if m:
+                kind, name = m.group(1), m.group(2)
+            else:
+                mm = METHOD.match(line) if impl else None
+                if not mm:
+                    continue
+                kind, name = "fn", impl + "." + mm.group(1)
             # walk back over a contiguous run of // comments
             doc = []
             j = i - 1

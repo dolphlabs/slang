@@ -53,10 +53,18 @@ void sig_register_raw(CG *cg, Package *p, FuncDecl *f,
                              const char *method_of) {
     if (is_builtin_name(f->name))
         cg_error(f->line, "cannot redefine builtin '%s'", f->name);
-    if (sig_find_in(cg, p->name, f->name))
+    if (method_of) {
+        const char *dot = strrchr(method_of, '.');
+        StructDef *sd = struct_find_in_pkg(cg, p->name,
+                                           dot ? dot + 1 : method_of);
+        if (sd && method_find(cg, sd, f->name))
+            cg_error(f->line, "redefinition of method '%s' on '%s'", f->name,
+                     method_of);
+    } else if (sig_find_in(cg, p->name, f->name)) {
         cg_error(f->line,
                  "redefinition of function '%s' in package '%s'", f->name,
                  p->name);
+    }
 
     FuncSig sig;
     memset(&sig, 0, sizeof(sig));
@@ -82,6 +90,7 @@ void sig_register_raw(CG *cg, Package *p, FuncDecl *f,
             cg->sigs.items, cg->sigs.cap * sizeof(FuncSig));
     }
     cg->sigs.items[cg->sigs.count++] = sig;
+    f->sig_idx = cg->sigs.count;
 }
 
 /* Collect imports, structs, free functions, and methods from every
@@ -169,6 +178,29 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
             for (int q = 0; q < s->as.impl.nfuncs; q++)
                 sig_register_raw(cg, p, s->as.impl.funcs[q],
                                  sd->canonical);
+        }
+    }
+
+    /* Two declarations must never share a C symbol. mangle_sig keeps
+     * methods apart from functions, but slang identifiers may contain
+     * "__", so `fn Point__m_x` could still spell a method's symbol. Caught
+     * here, by name, rather than as a duplicate definition in the C. */
+    {
+        char **syms = (char **)xmalloc(sizeof(char *) *
+                                       (cg->sigs.count ? cg->sigs.count : 1));
+        for (i = 0; i < cg->sigs.count; i++) {
+            FuncSig *a = &cg->sigs.items[i];
+            syms[i] = mangle_sig(a);
+            if (a->is_extern)
+                continue;
+            for (j = 0; j < i; j++) {
+                FuncSig *b = &cg->sigs.items[j];
+                if (!b->is_extern && !strcmp(syms[i], syms[j]))
+                    cg_error(a->line,
+                             "'%s' and '%s' (line %d) would be the same C "
+                             "function %s; rename one",
+                             a->name, b->name, b->line, syms[i]);
+            }
         }
     }
 
@@ -660,7 +692,7 @@ void emit_spawn_trampolines(CG *cg) {
                            ? xstrdup("_sl_a->fn")
                            : sig->is_extern
                                  ? xstrdup(sig->name)
-                                 : mangle_func(sig->pkg, sig->name);
+                                 : mangle_sig(sig);
 
         emit_line(cg, "typedef struct {");
         cg->indent++;
@@ -761,7 +793,7 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
         /* free functions */
         for (int j = 0; j < prog->nfuncs; j++) {
             FuncDecl *f = prog->funcs[j];
-            FuncSig *sig = sig_find_in(cg, pkgs[i].name, f->name);
+            FuncSig *sig = sig_of_decl(cg, f);
             StrBuf params;
             sb_init(&params);
             if (f->is_extern) {
@@ -798,7 +830,7 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
             emit_line(cg, "static %s %s(%s);",
                       sig->ret_slang ? ctype_of(cg, sig->ret_slang)
                                      : "void",
-                      mangle_func(pkgs[i].name, f->name), params.data);
+                      mangle_sig(sig), params.data);
             any = 1;
         }
 
@@ -810,7 +842,7 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
                 continue;
             for (int q = 0; q < s->as.impl.nfuncs; q++) {
                 FuncDecl *f = s->as.impl.funcs[q];
-                FuncSig *sig = sig_find_in(cg, pkgs[i].name, f->name);
+                FuncSig *sig = sig_of_decl(cg, f);
                 StrBuf params;
                 sb_init(&params);
                 if (f->nparams == 0) {
@@ -828,7 +860,7 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
                 emit_line(cg, "static %s %s(%s);",
                           sig->ret_slang ? ctype_of(cg, sig->ret_slang)
                                          : "void",
-                          mangle_func(pkgs[i].name, f->name), params.data);
+                          mangle_sig(sig), params.data);
                 any = 1;
             }
         }
@@ -838,7 +870,7 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
 }
 
 void gen_function(CG *cg, Package *p, FuncDecl *f) {
-    FuncSig *sig = sig_find_in(cg, p->name, f->name);
+    FuncSig *sig = sig_of_decl(cg, f);
 
     var_scope_reset(cg);
     var_scope_push(cg);
@@ -868,7 +900,7 @@ void gen_function(CG *cg, Package *p, FuncDecl *f) {
 
     emit_line(cg, "static %s %s(%s) {",
               sig->ret_slang ? ctype_of(cg, sig->ret_slang) : "void",
-              mangle_func(p->name, f->name), params.data);
+              mangle_sig(sig), params.data);
     for (int j = 0; j < f->nparams; j++)
         emit_drop_flag(cg, f->params[j]);
     gen_block(cg, f->body);

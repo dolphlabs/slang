@@ -1194,7 +1194,7 @@ have_sig:;
     sb_init(&sb);
     char *mangled = callee ? callee
                            : sig->is_extern ? xstrdup(sig->name)
-                                            : mangle_func(sig->pkg, sig->name);
+                                            : mangle_sig(sig);
     sb_append(&sb, mangled);
     sb_putc(&sb, '(');
     if (selfexpr) {

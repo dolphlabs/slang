@@ -1692,6 +1692,94 @@
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
           "line": 1774
+        },
+        {
+          "name": "Client.send",
+          "decl": "fn",
+          "sig": "fn send(self: Client, req: Request, deadline: until)",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 1791
+        },
+        {
+          "name": "Client.get",
+          "decl": "fn",
+          "sig": "fn get(self: Client, url: str, deadline: until)",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 1796
+        },
+        {
+          "name": "Client.head",
+          "decl": "fn",
+          "sig": "fn head(self: Client, url: str, deadline: until)",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 1801
+        },
+        {
+          "name": "Client.post",
+          "decl": "fn",
+          "sig": "fn post(self: Client, url: str, content_type: str, body: bytes,",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 1806
+        },
+        {
+          "name": "Client.idle_count",
+          "decl": "fn",
+          "sig": "fn idle_count(self: Client) -> int",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 1811
+        },
+        {
+          "name": "Client.close_idle",
+          "decl": "fn",
+          "sig": "fn close_idle(self: Client)",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 1815
+        },
+        {
+          "name": "Client.enable_cookies",
+          "decl": "fn",
+          "sig": "fn enable_cookies(self: Client)",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 1819
+        },
+        {
+          "name": "Client.clear_cookies",
+          "decl": "fn",
+          "sig": "fn clear_cookies(self: Client)",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 1823
+        },
+        {
+          "name": "Client.set_cookie",
+          "decl": "fn",
+          "sig": "fn set_cookie(self: Client, url: str, line: str)",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 1827
+        },
+        {
+          "name": "Client.cookies",
+          "decl": "fn",
+          "sig": "fn cookies(self: Client, url: str) -> [Cookie]",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 1831
+        },
+        {
+          "name": "Response.header",
+          "decl": "fn",
+          "sig": "fn header(self: Response, name: str) -> opt[str]",
+          "doc": "",
+          "file": "stdlib/httpc/httpc.sl",
+          "line": 1837
         }
       ]
     },

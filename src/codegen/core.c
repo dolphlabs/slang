@@ -1440,9 +1440,12 @@ char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
     return block.data;
 }
 
+/* A package-level function (or extern) by name. Never a method: those
+ * live in their struct's namespace -- see method_find. */
 FuncSig *sig_find_in(CG *cg, const char *pkg, const char *name) {
     for (int i = 0; i < cg->sigs.count; i++) {
-        if (!strcmp(cg->sigs.items[i].pkg, pkg) &&
+        if (!cg->sigs.items[i].method_of &&
+            !strcmp(cg->sigs.items[i].pkg, pkg) &&
             !strcmp(cg->sigs.items[i].name, name))
             return &cg->sigs.items[i];
     }
@@ -1563,6 +1566,28 @@ char *sanitize_pkg(const char *name) {
 
 char *mangle_func(const char *pkg, const char *name) {
     return xasprintf("sl_%s_%s", sanitize_pkg(pkg), sanitize_ident(name));
+}
+
+/* The C symbol for a signature. A method's includes its struct, so
+ * `impl Client { fn get }` and a package-level `fn get` -- or two structs'
+ * `get` methods -- are different functions in C as they are in slang.
+ * collect_decls checks the whole set for collisions. */
+char *mangle_sig(FuncSig *sig) {
+    if (sig->is_extern)
+        return xstrdup(sig->name);
+    if (sig->method_of) {
+        const char *dot = strrchr(sig->method_of, '.');
+        const char *sname = dot ? dot + 1 : sig->method_of;
+        return xasprintf("sl_%s_%s__m_%s", sanitize_pkg(sig->pkg),
+                         sanitize_ident(sname), sanitize_ident(sig->name));
+    }
+    return mangle_func(sig->pkg, sig->name);
+}
+
+FuncSig *sig_of_decl(CG *cg, FuncDecl *f) {
+    if (f->sig_idx <= 0 || f->sig_idx > cg->sigs.count)
+        return NULL;
+    return &cg->sigs.items[f->sig_idx - 1];
 }
 
 char *mangle_glob(const char *pkg, const char *name) {
