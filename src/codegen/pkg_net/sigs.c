@@ -11,6 +11,11 @@ const NatSig NET_SIGS[] = {
     {"net", "port", 1, {NA_INT}, "result[i32,str]", 0},
     {"net", "accept", 1, {NA_INT}, "result[i32,str]", 0},
     {"net", "dial", 2, {NA_STR, NA_INT}, "result[i32,str]", 0},
+    /* dial bounded by a deadline: the lookup and the connect together */
+    {"net", "dial_until", 3, {NA_STR, NA_INT, NA_UNTIL}, "result[i32,str]", 0},
+    /* Unix-domain stream sockets; the fds work with every fd-based call */
+    {"net", "dial_unix", 2, {NA_STR, NA_UNTIL}, "result[i32,str]", 0},
+    {"net", "listen_unix", 1, {NA_STR}, "result[i32,str]", 0},
     {"net", "send", 2, {NA_INT, NA_BYTES}, "result[i32,str]", 0},
     {"net", "recv", 2, {NA_INT, NA_INT}, "result[bytes,str]", 0},
     /* Deadline-bounded variants. Same result type as the plain calls,
@@ -38,6 +43,8 @@ const NatSig NET_SIGS[] = {
      1},
     /* STARTTLS on an fd from net.dial; see sl_net_tls_upgrade */
     {"net", "tls_upgrade", 3, {NA_INT, NA_STR, NA_RAWPTR},
+     "result[rawptr,str]", 1},
+    {"net", "tls_upgrade_until", 4, {NA_INT, NA_STR, NA_RAWPTR, NA_UNTIL},
      "result[rawptr,str]", 1},
     {"net", "tls_send", 2, {NA_RAWPTR, NA_BYTES}, "result[i32,str]", 1},
     {"net", "tls_recv", 2, {NA_RAWPTR, NA_INT}, "result[bytes,str]", 1},

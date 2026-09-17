@@ -16,6 +16,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <sys/un.h>
 
 /* ---- net: TCP over bytes + fixed ints, parked (not blocked) on a
  * kqueue reactor -- Tier 11 sixth slice. See the design plan for the
@@ -376,6 +377,12 @@ static void sl_net_shutdown_nudge(void) {
 #endif
 }
 
+/* A lookup handed to the resolver thread. Heap-allocated, and owned by
+ * whichever side gives it up LAST: a caller whose deadline passes
+ * abandons the job instead of waiting, and the resolver thread -- still
+ * inside getaddrinfo, which cannot be interrupted -- frees it when it
+ * finishes. `state` decides who that is, atomically: 0 pending, 1 done
+ * (the caller frees), 2 abandoned (the resolver frees). */
 typedef struct sl_dns_job {
     struct sl_dns_job *next;
     char *host;
@@ -384,7 +391,7 @@ typedef struct sl_dns_job {
     int rc;
     struct addrinfo *res;
     int wake_wr;
-    _Atomic int done;
+    _Atomic int state;
 } sl_dns_job;
 
 static pthread_mutex_t sl_dns_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -405,51 +412,91 @@ static void *sl_dns_thread(void *arg) {
         j->next = NULL;
         pthread_mutex_unlock(&sl_dns_mu);
         j->rc = getaddrinfo(j->host, j->portstr, &j->hints, &j->res);
-        atomic_store_explicit(&j->done, 1, memory_order_release);
-        char x = 1;
-        (void)write(j->wake_wr, &x, 1);
-        close(j->wake_wr);
+        int expect = 0;
+        if (atomic_compare_exchange_strong_explicit(
+                &j->state, &expect, 1, memory_order_acq_rel,
+                memory_order_acquire)) {
+            char x = 1;
+            (void)write(j->wake_wr, &x, 1);
+            close(j->wake_wr);
+        } else {
+            /* the caller gave up; nobody else will ever look at this */
+            if (j->rc == 0 && j->res)
+                freeaddrinfo(j->res);
+            close(j->wake_wr);
+            free(j->host);
+            free(j);
+        }
     }
     return NULL;
 }
 
-static int sl_dns_lookup(const char *host, const char *portstr,
-                         struct addrinfo **res) {
-    sl_dns_job job;
-    memset(&job, 0, sizeof(job));
-    size_t n = strlen(host) + 1;
-    job.host = (char *)malloc(n);
-    if (!job.host)
-        return EAI_MEMORY;
-    memcpy(job.host, host, n);
+/* getaddrinfo on the resolver thread while this task parks. `u` of 0
+ * waits for as long as the lookup takes; otherwise a passed deadline
+ * returns EAI_AGAIN with *timed_out set, and the job is abandoned to the
+ * resolver thread. */
+static int sl_dns_lookup_until(const char *host, const char *portstr,
+                               struct addrinfo **res, sl_until u,
+                               int *timed_out) {
+    *timed_out = 0;
+    *res = NULL;
+    if (u && sl_until_hit(u)) {
+        *timed_out = 1;
+        return EAI_AGAIN;
+    }
     sl_rt_preempt_disable();
-    snprintf(job.portstr, sizeof(job.portstr), "%s", portstr);
+    sl_dns_job *job = (sl_dns_job *)calloc(1, sizeof(sl_dns_job));
+    size_t n = strlen(host) + 1;
+    char *hcopy = job ? (char *)malloc(n) : NULL;
     sl_rt_preempt_enable();
-    job.hints.ai_family = AF_INET;
-    job.hints.ai_socktype = SOCK_STREAM;
-    atomic_store_explicit(&job.done, 0, memory_order_relaxed);
+    if (!job || !hcopy) {
+        free(job);
+        return EAI_MEMORY;
+    }
+    memcpy(hcopy, host, n);
+    job->host = hcopy;
+    sl_rt_preempt_disable();
+    snprintf(job->portstr, sizeof(job->portstr), "%s", portstr);
+    sl_rt_preempt_enable();
+    job->hints.ai_family = AF_INET;
+    job->hints.ai_socktype = SOCK_STREAM;
+    atomic_store_explicit(&job->state, 0, memory_order_relaxed);
     int pfd[2];
     if (pipe(pfd) != 0) {
-        free(job.host);
+        free(job->host);
+        free(job);
         return EAI_SYSTEM;
     }
     fcntl(pfd[0], F_SETFD, FD_CLOEXEC);
     fcntl(pfd[1], F_SETFD, FD_CLOEXEC);
     sl_net_set_nonblocking(pfd[0]);
-    job.wake_wr = pfd[1];
+    job->wake_wr = pfd[1];
     sl_rt_preempt_disable();
     pthread_mutex_lock(&sl_dns_mu);
-    job.next = NULL;
+    job->next = NULL;
     if (sl_dns_tail)
-        sl_dns_tail->next = &job;
+        sl_dns_tail->next = job;
     else
-        sl_dns_head = &job;
-    sl_dns_tail = &job;
+        sl_dns_head = job;
+    sl_dns_tail = job;
     pthread_cond_signal(&sl_dns_cv);
     pthread_mutex_unlock(&sl_dns_mu);
     sl_rt_preempt_enable();
     for (;;) {
-        sl_reactor_wait(pfd[0], SL_REACTOR_READ, 0);
+        int w = sl_reactor_wait_until(pfd[0], SL_REACTOR_READ, 0, u);
+        if (w == -2) {
+            int expect = 0;
+            if (atomic_compare_exchange_strong_explicit(
+                    &job->state, &expect, 2, memory_order_acq_rel,
+                    memory_order_acquire)) {
+                close(pfd[0]);
+                *timed_out = 1;
+                return EAI_AGAIN;       /* the resolver frees the job */
+            }
+            /* finished just as the deadline passed: use the answer,
+               waiting (no deadline now) for its wake byte */
+            u = 0;
+        }
         char x;
         ssize_t nr = read(pfd[0], &x, 1);
         if (nr == 1)
@@ -459,12 +506,19 @@ static int sl_dns_lookup(const char *host, const char *portstr,
         break;
     }
     close(pfd[0]);
-    int rc = atomic_load_explicit(&job.done, memory_order_acquire)
-                 ? job.rc
+    int rc = atomic_load_explicit(&job->state, memory_order_acquire) == 1
+                 ? job->rc
                  : EAI_FAIL;
-    *res = job.res;
-    free(job.host);
+    *res = job->res;
+    free(job->host);
+    free(job);
     return rc;
+}
+
+static int sl_dns_lookup(const char *host, const char *portstr,
+                         struct addrinfo **res) {
+    int timed_out;
+    return sl_dns_lookup_until(host, portstr, res, 0, &timed_out);
 }
 
 /* Called once from main() (program.c), gated on 'net' being imported
@@ -753,34 +807,115 @@ static sl_res_i32_str *sl_net_accept(int lfd) {
     }
 }
 
-static sl_res_i32_str *sl_net_dial(const char *host, int port) {
+/* Connect a non-blocking socket to one address, parking until it
+ * completes. Returns the fd, or -1 with *err set (errno, or -2 for the
+ * deadline). */
+static int sl_net_connect_addr(struct sockaddr *addr, socklen_t alen,
+                               int family, sl_until u, int *err) {
+    int fd = socket(family, SOCK_STREAM, 0);
+    if (fd < 0) { *err = errno; return -1; }
+    sl_net_set_nonblocking(fd);
+    if (connect(fd, addr, alen) == 0)
+        return fd;                  /* connected immediately -- localhost */
+    /* EAGAIN: a Unix-domain listener whose backlog is full (Linux) */
+    if (errno != EINPROGRESS && errno != EAGAIN) {
+        *err = errno; close(fd); return -1;
+    }
+    int w = sl_reactor_wait_until(fd, SL_REACTOR_WRITE, 1, u);
+    if (w == -2) { *err = -2; close(fd); return -1; }
+    if (w < 0) { *err = EINTR; close(fd); return -1; }
+    int so_err = 0; socklen_t slen = sizeof(so_err);
+    getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_err, &slen); /* the
+        standard non-blocking-connect idiom: disambiguate write-readiness
+        via SO_ERROR rather than inspecting which filter fired */
+    if (so_err != 0) { *err = so_err; close(fd); return -1; }
+    return fd;
+}
+
+/* net.dial / net.dial_until. Every resolved address is tried in turn,
+ * not just the first: a name with a stale or unreachable record ahead
+ * of a working one would otherwise fail outright. The deadline, when
+ * set, covers the lookup and every attempt together. */
+static sl_res_i32_str *sl_net_dial_u(const char *host, int port, sl_until u) {
     char portstr[16];
     sl_rt_preempt_disable();
     snprintf(portstr, sizeof(portstr), "%d", port);
     sl_rt_preempt_enable();
     struct addrinfo *res = NULL;
-    int rc = sl_dns_lookup(host, portstr, &res);
+    int timed_out = 0;
+    int rc = sl_dns_lookup_until(host, portstr, &res, u, &timed_out);
+    if (timed_out) return sl_net_err_i32("timeout");
     if (rc != 0 || !res) return sl_net_err_i32(gai_strerror(rc));
-    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) { freeaddrinfo(res); return sl_net_err_i32(strerror(errno)); }
-    sl_net_set_nonblocking(fd);
-    int cres = connect(fd, res->ai_addr, res->ai_addrlen);
+    int err = 0;
+    for (struct addrinfo *a = res; a; a = a->ai_next) {
+        int fd = sl_net_connect_addr(a->ai_addr, a->ai_addrlen, a->ai_family,
+                                     u, &err);
+        if (fd >= 0) {
+            freeaddrinfo(res);
+            return sl_net_ok_i32((int32_t)fd);
+        }
+        if (err == -2 || err == EINTR) break;
+    }
     freeaddrinfo(res);
-    if (cres == 0) return sl_net_ok_i32((int32_t)fd); /* connected
-        immediately -- e.g. localhost */
-    if (errno != EINPROGRESS) {
-        int e = errno; close(fd); return sl_net_err_i32(strerror(e));
+    if (err == -2) return sl_net_err_i32("timeout");
+    if (err == EINTR) return sl_net_err_i32("interrupted");
+    return sl_net_err_i32(strerror(err));
+}
+
+static sl_res_i32_str *sl_net_dial(const char *host, int port) {
+    return sl_net_dial_u(host, port, 0);
+}
+
+static sl_res_i32_str *sl_net_dial_until(const char *host, int port,
+                                         sl_until u) {
+    return sl_net_dial_u(host, port, u);
+}
+
+/* A Unix-domain stream socket. The fd works with every fd-based call:
+ * send/recv and their _until forms, close, idle_alive. */
+static int sl_net_unix_addr(const char *path, struct sockaddr_un *sa,
+                            const char **why) {
+    memset(sa, 0, sizeof(*sa));
+    sa->sun_family = AF_UNIX;
+    size_t n = strlen(path);
+    if (n == 0) { *why = "empty socket path"; return -1; }
+    if (n >= sizeof(sa->sun_path)) {
+        *why = "socket path too long";
+        return -1;
     }
-    if (sl_reactor_wait(fd, SL_REACTOR_WRITE, 1) < 0) {
-        close(fd); return sl_net_err_i32("interrupted");
+    memcpy(sa->sun_path, path, n);
+    return 0;
+}
+
+static sl_res_i32_str *sl_net_dial_unix(const char *path, sl_until u) {
+    struct sockaddr_un sa;
+    const char *why = NULL;
+    if (sl_net_unix_addr(path, &sa, &why) != 0) return sl_net_err_i32(why);
+    int err = 0;
+    int fd = sl_net_connect_addr((struct sockaddr *)&sa, sizeof(sa), AF_UNIX,
+                                 u, &err);
+    if (fd >= 0) return sl_net_ok_i32((int32_t)fd);
+    if (err == -2) return sl_net_err_i32("timeout");
+    if (err == EINTR) return sl_net_err_i32("interrupted");
+    return sl_net_err_i32(strerror(err));
+}
+
+/* Listen on a Unix-domain socket at `path`, which must not exist yet --
+ * a stale file is an error, not silently removed, since it might belong
+ * to a server that is still running. Accept with net.accept. */
+static sl_res_i32_str *sl_net_listen_unix(const char *path) {
+    struct sockaddr_un sa;
+    const char *why = NULL;
+    if (sl_net_unix_addr(path, &sa, &why) != 0) return sl_net_err_i32(why);
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return sl_net_err_i32(strerror(errno));
+    if (bind(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0 ||
+        listen(fd, 1024) != 0) {
+        int e = errno;
+        close(fd);
+        return sl_net_err_i32(strerror(e));
     }
-    int so_err = 0; socklen_t slen = sizeof(so_err);
-    getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_err, &slen); /* the
-        standard, historically-recommended non-blocking-connect
-        idiom: disambiguate write-readiness via SO_ERROR rather than
-        inspecting which filter fired, avoiding older select()-based
-        stacks' own readable/writable ambiguity on a failed connect */
-    if (so_err != 0) { close(fd); return sl_net_err_i32(strerror(so_err)); }
+    sl_net_set_nonblocking(fd);
     return sl_net_ok_i32((int32_t)fd);
 }
 
