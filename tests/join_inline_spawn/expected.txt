@@ -1,0 +1,6 @@
+ran
+err: the real message at join_inline_spawn.noisy_failure:12
+ran
+ok: 7
+ran
+err: the real message at join_inline_spawn.noisy_failure:12
