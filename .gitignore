@@ -4,6 +4,14 @@ AGENTS.md
 main2
 .claude/
 tools/
+
+# `main`/`main2` above are unanchored on purpose, to catch the
+# `slangc --run file.sl` leftover binary (named after its source)
+# wherever a test/example directory produces one -- but that also
+# swallows this one legitimate `src/main/` Maven source tree, silently
+# (bench's Java api implementation shipped without Main.java for
+# exactly this reason). Un-ignore it explicitly.
+!bench/suite/api/java/src/main/
 tests/pkgpin/slang.project
 tests/pkgpin/slang.lock
 tests/pkgtrans/slang.project
