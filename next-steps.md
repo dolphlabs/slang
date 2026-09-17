@@ -112,14 +112,46 @@ live in `todo.md`.
 
 ## 3. `slangc test`
 
-- [ ] A test runner in the compiler: discover test functions, run them,
-  report pass/fail with locations.
+- [x] `slangc test [dir] [--run substr] [--keep]`, plus two builtins,
+  `assert(cond[, msg])` and `panic(msg)`, usable anywhere.
 
-  Every test in this repository is a shell script comparing stdout to an
-  `expected.txt`. That works for the compiler's own suite; it is not
-  something a team writing a service in slang can adopt. Design questions
-  to settle first: how tests are marked, whether each runs in its own
-  task (so one panic does not end the run), and how it fits `slang.project`.
+  **Go's shape, because it is proven and familiar:** `*_test.sl` files,
+  excluded from normal builds, holding `fn test_*()` functions inside the
+  package they test, so tests reach private functions and globals.
+
+  **Failure is a panic in the test's own task.** `assert`/`panic` end the
+  current task with a located message; in a spawned task that becomes the
+  `err` of `join_wait`. The runner spawns each test and joins it before
+  starting the next, so a failure is reported with its message and
+  location and the run continues. `assert`'s message is built only when it
+  fails. `panic` is noreturn, so it can end a function that must return a
+  value and satisfies `guard`'s else.
+
+  **How:** discover the tests by parsing `*_test.sl`, generate a runner
+  program that imports the package under test (by a computed relative
+  path, since imports resolve relative to the importer) and calls each
+  test, and compile it with the ordinary pipeline, factored out of `main()`
+  into `build()`. The loader's test mode adds the test files, exports only
+  the `test_*` functions to the runner, and for a PROGRAM drops the
+  top-level statements, because the runner is `main` now. A library keeps
+  its top-level `let`s, which are package globals.
+
+  **A real compiler bug, found building it:** `join_wait(spawn f())` written
+  inline evaluated its argument TWICE. When `f` failed, the error path
+  spawned `f` again to ask the fresh copy for its error, so every side
+  effect of a failing task ran twice and the real message became "task
+  panicked". Confirmed on the compiler from `dev` (the task's output printed
+  twice). Fixed by evaluating the handle once and keeping it a GC root for
+  the whole wait: written inline, the join object is referenced only by that
+  expression. Regression test: `tests/join_inline_spawn`.
+
+  **Verified:** 182 passing. The suite drives `slangc test` end to end
+  against fixture packages in `tests/testcmd/` (a library, a program whose
+  top-level code would `exit 7` if run, a bad test signature, a package
+  with no tests, the `--run` filter), and checks that a normal build of the
+  program contains no test code. Two controls confirmed the checks bite:
+  keeping a program's top-level code under test, and letting `*_test.sl`
+  into normal builds, each failed the section.
 
 ## 4. Chunked request bodies in the `http` server
 
