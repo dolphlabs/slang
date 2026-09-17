@@ -87,6 +87,37 @@ static sl_res_bytes_str *sl_fs_read(int fd, int max) {
     return sl_fs_ok_bytes(b);
 }
 
+/* Up to `len` bytes starting at `offset`, without moving the file
+ * position -- so several tasks can read different ranges of one fd at
+ * once. Loops over short reads; fewer bytes than asked only at EOF. */
+static sl_res_bytes_str *sl_fs_pread(int fd, long long offset, long long len) {
+    if (fd < 0)
+        return sl_fs_err_bytes("invalid fd");
+    if (offset < 0 || len < 0)
+        return sl_fs_err_bytes("invalid offset or length");
+    if (len > (1LL << 31))
+        return sl_fs_err_bytes("length over 2GB; read in pieces");
+    if (len == 0)
+        return sl_fs_ok_bytes(sl_bytes_new(NULL, 0));
+    sl_bytes *b = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
+    b->len = 0;
+    b->ptr = (unsigned char *)sl_gc_alloc((size_t)len, NULL);
+    long long got = 0;
+    while (got < len) {
+        ssize_t n = pread(fd, b->ptr + got, (size_t)(len - got), (off_t)(offset + got));
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+            return sl_fs_err_bytes(strerror(errno));
+        }
+        if (n == 0)
+            break;
+        got += n;
+    }
+    b->len = got;
+    return sl_fs_ok_bytes(b);
+}
+
 static sl_res_i32_str *sl_fs_write(int fd, sl_bytes *data) {
     if (fd < 0)
         return sl_fs_err_i32("invalid fd");

@@ -35,6 +35,15 @@ if data != payload { die("roundtrip"); }
 let zr = fs.read(rfd, 8);
 guard let z = zr else { die("eof"); }
 if len(z) != 0 { die("eof len"); }
+// pread: any range, in any order, without moving the position
+// (the file is the 4 bytes of payload; a range past the end is short)
+let pa = fs.pread(rfd, 2, 5) ?? b"";
+let pb = fs.pread(rfd, 0, 2) ?? b"";
+let past = fs.pread(rfd, 1000, 4) ?? b"x";
+if len(pa) != 2 || len(pb) != 2 || len(past) != 0 { die("pread lengths"); }
+guard let full = fs.pread(rfd, 0, 1000000) else { die("pread whole"); }
+if pb + pa != full || full != payload { die("pread contents"); }
+guard let bad = fs.pread(rfd, -1, 4) else { println("pread refuses a negative offset"); }
 let cr2 = fs.close(rfd);
 guard let _c2 = cr2 else { die("close read"); }
 println("roundtrip");

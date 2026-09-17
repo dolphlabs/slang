@@ -1,4 +1,5 @@
 open missing
+pread refuses a negative offset
 roundtrip
 mkdir exists
 fs ok
