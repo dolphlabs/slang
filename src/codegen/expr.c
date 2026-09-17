@@ -48,9 +48,17 @@ char *gen_ident_name(CG *cg, const char *name, int line) {
     return sanitize_ident(name);
 }
 
+/* The shortest text C reads back as exactly `v`. This was "%g" -- six
+ * significant digits -- so `let pi = 3.141592653589793;` compiled to
+ * 3.14159 and 123456789.125 to 123457000: every float literal with more
+ * than six digits was silently a different number. */
 char *gen_float_literal(double v) {
     char buf[64];
-    snprintf(buf, sizeof(buf), "%g", v);
+    for (int prec = 1; prec <= 17; prec++) {
+        snprintf(buf, sizeof(buf), "%.*g", prec, v);
+        if (strtod(buf, NULL) == v)
+            break;
+    }
     if (!strpbrk(buf, ".eE"))
         strcat(buf, ".0");
     return xstrdup(buf);
