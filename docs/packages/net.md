@@ -142,6 +142,16 @@ certs too, regardless of call order. TLS 1.3 can let `tls_dial`
 return before the server has rejected a missing client certificate;
 the first send or recv then fails.
 
+**STARTTLS**: `tls_upgrade(fd, host, ctx)` runs a client handshake on a
+socket from `net.dial` that has already spoken cleartext — how Postgres,
+SMTP and IMAP switch to TLS. Verification is exactly `tls_dial`'s,
+hostname included, which is why the host is an argument: an fd does not
+remember what was dialled. On failure the fd is left open for the caller
+to close; on success it belongs to the returned handle and `tls_close`
+closes it. Read no further than the server's go-ahead before upgrading:
+anything a man in the middle queued behind it would otherwise be trusted
+as if it had arrived encrypted (libpq's CVE-2021-23222).
+
 ## API
 
 ### `net.listen(int) -> result[i32,str]`
@@ -173,6 +183,8 @@ the first send or recv then fails.
 ### `net.tls_accept(int, rawptr) -> result[rawptr,str]`
 
 ### `net.tls_dial(str, int, rawptr) -> result[rawptr,str]`
+
+### `net.tls_upgrade(int, str, rawptr) -> result[rawptr,str]`
 
 ### `net.tls_send(rawptr, bytes) -> result[i32,str]`
 

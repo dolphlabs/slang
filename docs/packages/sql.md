@@ -61,8 +61,8 @@ sql.close(db);
 
 SQLite calls block the worker — use them for real work off the accept
 loop (wrap in a `spawn`ed task), the same caveat as `fs`. One
-connection per `rawptr`; there is no pool, no networked backend
-(Postgres/MySQL), and no async stepping.
+connection per `rawptr`; there is no pool and no async stepping. For
+Postgres, see [`pg`](#pg), which runs on the scheduler instead.
 
 Query complexity is capped per connection so SQLite's recursion stays
 inside the task stack: at most **50 terms in a compound `SELECT`**

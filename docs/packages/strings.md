@@ -27,7 +27,15 @@ strings.replace("a,b,c", ",", " | ");
 
 strings.split("a,b,,c", ",");           // ["a", "b", "", "c"]
 strings.join(parts, ",");               // the inverse of split
+
+strings.from_float(0.1 + 0.2);          // "0.30000000000000004"
 ```
+
+`to_str` prints a float with six significant digits, which suits output
+and loses information: `to_str(123456789.125)` is `"1.23457e+08"`.
+`from_float` returns the shortest text that `to_float` reads back as
+exactly the same number — use it whenever a float is stored or sent.
+NaN and the infinities come out as `NaN`, `Infinity` and `-Infinity`.
 
 This is a compiler-provided native package, and it has to be: `str`
 supports `len`, `+` and `==` and nothing else — it cannot be indexed or
@@ -82,6 +90,8 @@ Three behaviours worth knowing:
 ### `strings.split(str, str) -> [str]`
 
 ### `strings.join(NA_ARR_STR, str) -> str`
+
+### `strings.from_float(float) -> str`
 
 ---
 

@@ -197,12 +197,71 @@ live in `todo.md`.
 
 ## 6. Postgres driver
 
-- [ ] A networked database driver, speaking the Postgres wire protocol
-  over `net`, with errors through the same `result[_, str]` story as `sql`.
+- [x] `stdlib/pg`: a Postgres client in slang over `net`, so a query
+  waiting on the server parks its task instead of blocking a worker (taken
+  ahead of item 5, which is still open).
 
-  `sql` is SQLite only, and most server applications need a networked
-  database. Unlike SQLite this is a protocol, not a C library call, so it
-  can run on the scheduler without blocking a worker.
+  **What it does:** SCRAM-SHA-256, md5 and cleartext login; TLS negotiated
+  in-band; parameterised queries on the extended protocol and
+  multi-statement `exec` on the simple one; typed getters; server errors
+  with their SQLSTATE; a pool that never hands on a connection still
+  inside a transaction; a deadline on every call, whose expiry sends a
+  CancelRequest from its own task.
+
+  **Security choices, each deliberate:** `sslmode=require` verifies the
+  certificate and hostname (libpq's does not); `prefer`/`allow`/
+  `verify-ca` are refused; unknown url parameters are errors, so a typo
+  cannot silently mean cleartext; the default is TLS except for loopback
+  hosts. SCRAM refuses a server that skips or fails its own proof.
+  Reading exactly one byte after SSLRequest avoids libpq's
+  CVE-2021-23222. Server-chosen sizes are capped (256 MiB message and
+  result, 1M SCRAM iterations).
+
+  **New natives it needed:** `net.tls_upgrade` (STARTTLS on an fd, sharing
+  `tls_dial`'s verification), `crypto.pbkdf2_sha256`, `crypto.md5`, and
+  `strings.from_float` (shortest round-trip text).
+
+  **A compiler bug, found building it:** float LITERALS were emitted into
+  the C with `%g`, six significant digits, so `3.141592653589793` compiled
+  to `3.14159` and `123456789.125` to `123457000`. Now the shortest
+  round-trip form. Regression test `tests/float_literal`; the control
+  (six digits again) fails it.
+
+  **Performance, found by measuring:** the first version kept one `bytes`
+  per cell and took 35.8s for 1M rows (2.5s for 200k: quadratic, all GC
+  marking). Cells now point into the receive buffers themselves, with no
+  per-row allocation: 2.1s and 150MB for 1M rows, 0.4s for 200k, a 20MB
+  value in 0.3s. The GC pacing behind the original cliff is recorded in
+  `todo.md` as a lead; a pacing change helped the old design but measured
+  nothing on the new one, so it was not shipped.
+
+  **Verified:**
+  - `slangc test stdlib/pg` (in `make test`): URL parsing and refusals,
+    and SCRAM against RFC 7677's published exchange.
+  - `tests/postgres`: scripted fake servers for what a real one will not
+    do. That covers the Bind encoding on the wire, md5 (answer computed
+    independently), four dishonest SCRAM servers, and a COPY refused and
+    resynchronised. It also covers six malformed or truncated streams,
+    each breaking the connection, a timeout that sends a correct
+    CancelRequest, getter panics, and pool exhaustion, transaction
+    discard, double release and close.
+  - 16 controls, each disabling one check, and every one is caught. One
+    first MISSED (a field length running past its row), because the
+    trailing-bytes check also covers it; with both removed the test fails.
+  - `tests/live/postgres` against Postgres 16, locally and in a new CI job
+    on Linux x86_64 and arm64. It checks every getter's types round-trip
+    (all 256 byte values, int8 extremes, exact floats, UTF-8), and that a
+    parameter cannot be parsed as SQL. It checks real SQLSTATEs,
+    transaction states, and that a timed-out `pg_sleep` is really
+    cancelled on the server; the control, with no cancel, fails. It runs
+    32 pooled queries concurrently on 8 connections, a 200k-row result
+    and a 20MB value, and TLS with a verified certificate. By hand: a
+    missing CA, a wrong hostname and a server without TLS are each
+    refused, and md5 and cleartext servers log in.
+
+  **Gap found:** a bare `[]` cannot be passed as an argument (an empty list
+  literal needs a declared type and the parameter's is not used), hence
+  `pg.no_args()`. Documented under Known limitations.
 
 ## 7. The ~5% SIGBUS under amplified preemption
 

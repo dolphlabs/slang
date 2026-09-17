@@ -50,6 +50,11 @@ const NatSig STRINGS_SIGS[] = {
        unrelated operations. */
     {"strings", "split", 2, {NA_STR, NA_STR}, "[str]", 0},
     {"strings", "join", 2, {NA_ARR_STR, NA_STR}, "str", 0},
+
+    /* the shortest text that parses back to exactly this float.
+       to_str uses %g, six significant digits, which is right for
+       printing and wrong for anything that must round-trip. */
+    {"strings", "from_float", 1, {NA_F64}, "str", 0},
 };
 
 const int STRINGS_SIGS_LEN = sizeof(STRINGS_SIGS) / sizeof(STRINGS_SIGS[0]);

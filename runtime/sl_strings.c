@@ -247,3 +247,24 @@ static char *sl_strings_join(sl_arr *parts, const char *sep) {
     *w = 0;
     return out;
 }
+
+/* Shortest round-trip: try 1..17 significant digits and keep the first
+ * that strtod reads back as the same double. 17 always succeeds for an
+ * IEEE double. NaN and the infinities use the spellings Postgres and
+ * JavaScript accept, since printf's "nan"/"inf" parse nowhere useful.
+ * snprintf/strtod are bracketed: both can take locale locks (see
+ * sl_gc_alloc's comment in sl_gc.c). */
+static char *sl_strings_from_float(double x) {
+    if (x != x) return sl_strdup("NaN");
+    if (x > 1.7976931348623157e308) return sl_strdup("Infinity");
+    if (x < -1.7976931348623157e308) return sl_strdup("-Infinity");
+    char buf[40];
+    sl_rt_preempt_disable();
+    for (int prec = 1; prec <= 17; prec++) {
+        snprintf(buf, sizeof(buf), "%.*g", prec, x);
+        if (strtod(buf, NULL) == x) break;
+    }
+    sl_rt_preempt_enable();
+    return sl_strdup(buf);
+}
+

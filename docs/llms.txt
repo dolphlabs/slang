@@ -30,6 +30,7 @@ Every page on this site has a Markdown twin at the same path with a .md extensio
 - [log](packages/log.md): Package log.
 - [net](packages/net.md): Package net.
 - [os](packages/os.md): Package os.
+- [pg](packages/pg.md): Package pg.
 - [proc](packages/proc.md): Package proc.
 - [regex](packages/regex.md): Package regex.
 - [sql](packages/sql.md): Package sql.
