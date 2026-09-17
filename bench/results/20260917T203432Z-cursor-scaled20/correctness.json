@@ -1,0 +1,78 @@
+{
+  "api": {
+    "slang": {
+      "status": "pass",
+      "detail": ""
+    },
+    "go": {
+      "status": "pass",
+      "detail": ""
+    },
+    "rust": {
+      "status": "pass",
+      "detail": ""
+    },
+    "c": {
+      "status": "pass",
+      "detail": ""
+    },
+    "csharp": {
+      "status": "pass",
+      "detail": ""
+    },
+    "java": {
+      "status": "fail",
+      "detail": "raw/conformance-api-java.log"
+    },
+    "python": {
+      "status": "pass",
+      "detail": ""
+    },
+    "bun": {
+      "status": "pass",
+      "detail": ""
+    },
+    "node": {
+      "status": "pass",
+      "detail": ""
+    }
+  },
+  "batch": {
+    "slang": {
+      "status": "pass",
+      "detail": ""
+    },
+    "go": {
+      "status": "pass",
+      "detail": ""
+    },
+    "rust": {
+      "status": "pass",
+      "detail": ""
+    },
+    "c": {
+      "status": "pass",
+      "detail": ""
+    },
+    "csharp": {
+      "status": "pass",
+      "detail": ""
+    },
+    "java": {
+      "status": "pass",
+      "detail": ""
+    },
+    "python": {
+      "status": "pass",
+      "detail": ""
+    },
+    "bun": {
+      "status": "pass",
+      "detail": ""
+    },
+    "node": {
+      "status": "pass",
+      "detail": ""
+    }
+  }
+}

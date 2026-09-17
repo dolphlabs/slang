@@ -1,0 +1,1 @@
+{"tier": "light", "workload": "compute", "scenario": "compute", "lang": "csharp", "round": 1, "exit": 131, "log": "raw/light/compute/csharp/round1/out.txt", "sample": "raw/light/compute/csharp/round1/sample.json"}

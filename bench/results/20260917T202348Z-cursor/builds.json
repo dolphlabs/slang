@@ -1,0 +1,7 @@
+{
+  "csharp": {
+    "ok": true,
+    "seconds": 4.1,
+    "log": "raw/build-csharp.log"
+  }
+}
