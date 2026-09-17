@@ -176,6 +176,30 @@ for pkg in stdlib/pg; do
     fi
 done
 
+# ---- GC at a tiny threshold ------------------------------------------
+# A rooting bug -- a live object held only where no safepoint knows about
+# it -- surfaces only when a collection lands at that exact safepoint. At
+# the default threshold (8MB, growing to 256MB) collections are too rare
+# to land there reliably, so these run again collecting every 16KB. Each
+# of the first three was a real bug hidden for eleven days by the
+# collector treating every task's recent allocations as roots.
+echo "--- GC stress (SLANG_GC_THRESHOLD_KB=16) ---"
+gc_bad=0
+for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood \
+            spawn_isolation gc_stress maps json; do
+    out="/tmp/sl_gcstress_${name}.out"
+    if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
+            >"$out" 2>/dev/null; then
+        echo "FAIL gc stress $name (exit $?)"
+        tail -5 "$out" | sed 's/^/  /'
+        gc_bad=1; fail=1
+    elif ! diff -q "tests/$name/expected.txt" "$out" >/dev/null; then
+        echo "FAIL gc stress $name (output mismatch)"
+        gc_bad=1; fail=1
+    fi
+done
+[ "$gc_bad" -eq 0 ] && echo "PASS gc stress"
+
 # Generated C must compile clean under the warnings a C compiler turns
 # on by ITSELF. slangc passes no -W flags, so anything default-on lands
 # in the user's terminal on every single build -- 79 of them across this

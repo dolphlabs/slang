@@ -18,6 +18,12 @@ static _Atomic(sl_gc_obj *) sl_gc_retired = NULL;
 static pthread_mutex_t sl_gc_mu = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic size_t sl_gc_bytes_since_collect = 0;
 static size_t sl_gc_threshold = 8 * 1024 * 1024;
+/* SLANG_GC_THRESHOLD_KB: collect every that-many KB allocated, and never
+ * grow the threshold. For tests: a rooting bug shows up only when a
+ * collection lands at the one safepoint where the object is unrooted,
+ * and at the default threshold (which grows to 256MB) collections are
+ * too rare to land there reliably. */
+static int sl_gc_threshold_fixed = 0;
 static _Atomic unsigned long long sl_gc_stat_survived = 0;
 static _Atomic unsigned long long sl_gc_stat_allocated_cycle = 0;
 
@@ -192,12 +198,20 @@ static sl_gc_thread *sl_gc_threads = NULL;
  * dies (lock-free retire onto sl_gc_retired). The byte counter is
  * an atomic published every SL_GC_PENDING_BATCH allocs.
  *
- * Pending objects are not on sl_gc_all, so sweep cannot free them.
- * They may reference objects that are, so the collector traces every
- * live task's pending list as a root. Reading another task's list
- * is safe because mark does not start until every registered thread
- * is acked or gc_blocked, and neither state is reachable from
- * sl_gc_alloc. */
+ * A collection first splices EVERY task's pending list onto sl_gc_all
+ * (sl_gc_harvest_task), before building sl_gc_set or marking anything,
+ * so a pending object is an ordinary object for that cycle: kept if a
+ * root reaches it, swept if not. Doing that is safe because mark does
+ * not start until every registered thread is acked or gc_blocked, and
+ * neither state is reachable from sl_gc_alloc.
+ *
+ * Pending lists used to be traced as ROOTS instead, and spliced only
+ * after the sweep. When they held at most SL_GC_PENDING_BATCH objects
+ * that was harmless; once shards stayed on the task until the next
+ * collection, it meant everything allocated since the last collection
+ * was kept alive by it -- so every short-lived object survived one full
+ * extra cycle, and a loop producing nothing but garbage held two cycles
+ * of it: 1.2GB of RSS for 18M small results (the pg streaming case). */
 #define SL_GC_PENDING_BATCH 32
 static _Atomic int sl_gc_stop_requested = 0;
 static _Atomic unsigned long sl_gc_cycle = 0;
@@ -238,6 +252,14 @@ static void sl_gc_register_thread(void) {
     pthread_mutex_lock(&sl_gc_mu);
     sl_rt_gc_reg.next = sl_gc_threads;
     sl_gc_threads = &sl_rt_gc_reg;
+    if (!sl_gc_threshold_fixed) {
+        const char *kb = getenv("SLANG_GC_THRESHOLD_KB");
+        long v = kb ? strtol(kb, NULL, 10) : 0;
+        if (v > 0) {
+            sl_gc_threshold = (size_t)v * 1024;
+            sl_gc_threshold_fixed = 1;
+        }
+    }
     pthread_mutex_unlock(&sl_gc_mu);
 }
 
@@ -464,31 +486,6 @@ static void sl_gc_harvest_task(sl_task *t) {
     t->gc_pend_n = 0;
     t->gc_pend_bytes = 0;
     t->gc_pend_pub = 0;
-}
-
-static size_t sl_gc_pend_count(sl_task *t) {
-    size_t n = 0;
-    if (!t) return 0;
-    for (sl_gc_obj *po = t->gc_pend_head; po; po = po->next) n++;
-    return n;
-}
-
-static void sl_gc_pend_insert(sl_task *t, void **tbl, size_t cap) {
-    if (!t) return;
-    for (sl_gc_obj *po = t->gc_pend_head; po; po = po->next)
-        sl_gc_set_raw_insert(tbl, cap, (void *)(po + 1));
-}
-
-static void sl_gc_pend_mark(sl_task *t) {
-    if (!t) return;
-    for (sl_gc_obj *po = t->gc_pend_head; po; po = po->next)
-        sl_gc_mark((void *)(po + 1));
-}
-
-static void sl_gc_pend_unmark(sl_task *t) {
-    if (!t) return;
-    for (sl_gc_obj *po = t->gc_pend_head; po; po = po->next)
-        po->marked = 0;
 }
 
 static void sl_gc_for_pending_tasks(void (*fn)(sl_task *),
@@ -721,53 +718,19 @@ static void sl_gc_scan_conservative(uintptr_t lo, uintptr_t hi) {
 }
 
 /* Build the 'is this pointer one of mine' table for one collection,
- * from every object the collector can reach a header for: sl_gc_all,
- * plus every registered thread's un-spliced allocation batch. The
- * pending lists are not optional -- omitting them is what made the
- * pending-tracing loop below a no-op. See sl_gc_set's own comment.
- *
- * Safe to read each thread's batch here for the same reason the
- * pending-tracing loop can: every thread in snap has acked the stop
- * request or is gc_blocked, so none of them is inside sl_gc_alloc
- * mutating its own batch. Sized for the whole population up front at
- * a 0.5 load factor, so sl_gc_set_raw_insert needs no grow path. */
-static void sl_gc_set_build(sl_gc_thread **snap, int nsnap) {
+ * from sl_gc_all -- which by now also holds every task's pending
+ * allocations, spliced on just before this runs. See sl_gc_set's own
+ * comment. Sized for the whole population up front at a 0.5 load
+ * factor, so sl_gc_set_raw_insert needs no grow path. */
+static void sl_gc_set_build(void) {
     size_t n = 0;
     for (sl_gc_obj *o = sl_gc_all; o; o = o->next) n++;
-    for (int i = 0; i < nsnap; i++)
-        n += sl_gc_pend_count(*snap[i]->task_slot);
-    pthread_mutex_lock(&sl_global_runq.mu);
-    for (sl_task *t = sl_global_runq.head; t; t = t->next)
-        n += sl_gc_pend_count(t);
-    pthread_mutex_unlock(&sl_global_runq.mu);
-    for (unsigned s = 0; s < (unsigned)SL_RUNQ_STRIPES; s++) {
-        pthread_mutex_lock(&sl_runq_stripes[s].mu);
-        for (sl_task *t = sl_runq_stripes[s].head; t; t = t->runq_link)
-            n += sl_gc_pend_count(t);
-        pthread_mutex_unlock(&sl_runq_stripes[s].mu);
-    }
-    for (sl_task *t = sl_parked_tasks; t; t = t->parked_next)
-        n += sl_gc_pend_count(t);
     size_t cap = 1024;
     while (cap < (n + 1) * 2) cap *= 2;
     void **tbl = (void **)calloc(cap, sizeof(void *));
     if (!tbl) { fprintf(stderr, "slang: out of memory\n"); exit(1); }
     for (sl_gc_obj *o = sl_gc_all; o; o = o->next)
         sl_gc_set_raw_insert(tbl, cap, (void *)(o + 1));
-    for (int i = 0; i < nsnap; i++)
-        sl_gc_pend_insert(*snap[i]->task_slot, tbl, cap);
-    pthread_mutex_lock(&sl_global_runq.mu);
-    for (sl_task *t = sl_global_runq.head; t; t = t->next)
-        sl_gc_pend_insert(t, tbl, cap);
-    pthread_mutex_unlock(&sl_global_runq.mu);
-    for (unsigned s = 0; s < (unsigned)SL_RUNQ_STRIPES; s++) {
-        pthread_mutex_lock(&sl_runq_stripes[s].mu);
-        for (sl_task *t = sl_runq_stripes[s].head; t; t = t->runq_link)
-            sl_gc_pend_insert(t, tbl, cap);
-        pthread_mutex_unlock(&sl_runq_stripes[s].mu);
-    }
-    for (sl_task *t = sl_parked_tasks; t; t = t->parked_next)
-        sl_gc_pend_insert(t, tbl, cap);
     sl_gc_set = tbl;
     sl_gc_set_cap = cap;
     sl_gc_set_count = n;
@@ -824,14 +787,16 @@ static void sl_gc_collect(void) {
 
     pthread_mutex_lock(&sl_gc_mu);
     sl_gc_drain_retired();
+    /* Every live task's pending allocations join sl_gc_all BEFORE the
+     * mark, so this cycle can free the ones nothing reaches. */
+    sl_gc_for_pending_tasks(sl_gc_harvest_task, snap, nsnap);
 
     /* Must run before the first sl_gc_mark of the cycle: mark's very
      * first act is to reject any pointer this table does not hold. */
-    sl_gc_set_build(snap, nsnap);
+    sl_gc_set_build();
 
     sl_gc_wl_n = 0;
     for (int i = 0; i < nsnap; i++) {
-        sl_gc_pend_mark(*snap[i]->task_slot);
         sl_task *sl_gc_scan_task = *snap[i]->task_slot; /* see
             task_slot's own field comment above: this reads whichever
             task is current AT SCAN TIME, not a value cached at
@@ -900,7 +865,6 @@ static void sl_gc_collect(void) {
          sl_gc_qt = sl_gc_qt->next) {
         sl_gc_mark(sl_gc_qt->join);
         sl_gc_mark_entry_arg(sl_gc_qt);
-        sl_gc_pend_mark(sl_gc_qt);
         for (sl_safepoint *sp = sl_gc_qt->safepoint_top; sp; sp = sp->prev)
             for (int j = 0; j < sp->nroots; j++)
                 sl_gc_mark(sp->roots[j]);
@@ -960,7 +924,6 @@ static void sl_gc_collect(void) {
              sl_gc_qt = sl_gc_qt->runq_link) {
             sl_gc_mark(sl_gc_qt->join);
             sl_gc_mark_entry_arg(sl_gc_qt);
-            sl_gc_pend_mark(sl_gc_qt);
             for (sl_safepoint *sp = sl_gc_qt->safepoint_top; sp; sp = sp->prev)
                 for (int j = 0; j < sp->nroots; j++)
                     sl_gc_mark(sp->roots[j]);
@@ -990,7 +953,6 @@ static void sl_gc_collect(void) {
          sl_gc_pt = sl_gc_pt->parked_next) {
         sl_gc_mark(sl_gc_pt->join);
         sl_gc_mark_entry_arg(sl_gc_pt);
-        sl_gc_pend_mark(sl_gc_pt);
         for (sl_safepoint *sp = sl_gc_pt->safepoint_top; sp; sp = sp->prev)
             for (int j = 0; j < sp->nroots; j++)
                 sl_gc_mark(sp->roots[j]);
@@ -1013,9 +975,11 @@ static void sl_gc_collect(void) {
     sl_gc_wl_cap = 0;
 
     sl_gc_obj **pp = &sl_gc_all;
-    size_t marked = 0, swept = 0;
+    size_t marked = 0, swept = 0, live_bytes = 0;
     while (*pp) {
         sl_gc_obj *h = *pp;
+        if (h->marked)
+            live_bytes += sizeof(sl_gc_obj) + h->size;
         if (!h->marked) {
             *pp = h->next;
             if (h->fini)
@@ -1028,16 +992,6 @@ static void sl_gc_collect(void) {
             marked++;
         }
     }
-    /* Pending objects are now markable (sl_gc_set_build puts them in
-     * the table), but they are NOT on sl_gc_all, so the sweep loop
-     * above never reaches them to clear the flag it just set. Leaving
-     * it set is not a leak, it is a use-after-free: sl_gc_mark's own
-     * 'if (h->marked) return' would then skip the object on the NEXT
-     * cycle without ever tracing its children, and those children ARE
-     * on sl_gc_all and get swept. Caught empirically -- 4 of 6
-     * concurrent_compute runs segfaulting -- not by reading the code. */
-    sl_gc_for_pending_tasks(sl_gc_pend_unmark, snap, nsnap);
-    sl_gc_for_pending_tasks(sl_gc_harvest_task, snap, nsnap);
     sl_gc_drain_retired();
     /* The table's only reader is sl_gc_mark, which runs only inside
      * this function -- so it is dead weight between collections and
@@ -1052,10 +1006,22 @@ static void sl_gc_collect(void) {
 #if defined(__GLIBC__)
     malloc_trim(0);
 #endif
-    if (marked + swept > 0 && marked * 4 < marked + swept) {
-        size_t grown = sl_gc_threshold * 2;
-        if (grown > sl_gc_threshold && grown <= 256 * 1024 * 1024)
-            sl_gc_threshold = grown;
+    /* Pace by the live heap, as Go's GOGC=100 does: the next collection
+     * comes after allocating as much as survived this one, and never
+     * before 8MB. The heap then peaks near twice what is live, however
+     * much garbage the program makes.
+     *
+     * This replaced a threshold that doubled, up to 256MB, whenever a
+     * collection found under a quarter of objects alive -- which is
+     * every collection of a program that mostly makes garbage, so it
+     * sat at 256MB and a program with 1MB live held hundreds of MB.
+     * Measured on 18M short-lived results (macOS): 514MB and 3.6s with
+     * the ratchet, 19MB and 3.0s collecting every 8MB. It also never
+     * followed a heap that GROWS: 8MB forever re-marked an ever-larger
+     * live set, which pacing by live bytes avoids. */
+    if (!sl_gc_threshold_fixed) {
+        size_t floor = 8 * 1024 * 1024;
+        sl_gc_threshold = live_bytes > floor ? live_bytes : floor;
     }
     if (stat_on)
         sl_gc_stat_pause(sl_rt_monotonic_ns() - t0, marked, swept);
