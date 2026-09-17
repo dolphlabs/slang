@@ -541,7 +541,7 @@ cells by row and column index; `pg.col(rows, "name")` finds an index.
 | Getter | Reads |
 |---|---|
 | `pg.get_text(rows, r, c)` | any column, in Postgres's text form (dates, `numeric`, `uuid`, `json`) |
-| `pg.get_int(rows, r, c)` | `int2`, `int4`, `int8`, `oid` |
+| `pg.get_int(rows, r, c)` | `int2`, `int4`, `int8`, `oid`, and a whole-number `numeric` (what `sum()` of an integer column returns) |
 | `pg.get_float(rows, r, c)` | `float4`, `float8`, `numeric`, the integer types |
 | `pg.get_bool(rows, r, c)` | `bool` |
 | `pg.get_bytes(rows, r, c)` | `bytea` |
@@ -1581,7 +1581,7 @@ signal-handling program.
 - [compress](packages/compress.md) -- compiler-provided, 7 public items
 - [crypto](packages/crypto.md) -- compiler-provided, 5 public items
 - [encoding](packages/encoding.md) -- compiler-provided, 12 public items
-- [fs](packages/fs.md) -- compiler-provided, 6 public items
+- [fs](packages/fs.md) -- compiler-provided, 7 public items
 - [http](packages/http.md) -- source package, 19 public items
 - [http2](packages/http2.md) -- source package, 122 public items
 - [httpc](packages/httpc.md) -- source package, 35 public items
