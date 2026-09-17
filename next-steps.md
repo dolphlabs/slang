@@ -97,6 +97,19 @@ live in `todo.md`.
   on every platform, and the macOS job no longer sets `PKG_CONFIG_PATH` by
   hand, so its suite uses slangc's own discovery.
 
+  **Found along the way, on the macOS runner:**
+  - `tests/proc` failed about 1 run in 5: it needed a 20ms sleep to finish
+    before a 150ms one. Measured on the runner, a 20ms sleep took up to
+    167ms, and plain C `nanosleep` up to 126ms on the same machine, so the
+    overshoot is the virtualised runner's, not slang's. The test now holds
+    its task on a channel instead of racing timers.
+  - `tests/sigpipe` failed twice in ~255 runs and never reproduced alone or
+    under load. It is recorded in `todo.md` rather than changed on a guess.
+    Its failure printed nothing useful, for two fixable reasons: `--run`
+    flattened every exit status to 1, and the test runner never printed a
+    failing test's stdout. `--run` now passes the program's exit code
+    through (128+N for a signal, with a message), and failures print both.
+
 ## 3. `slangc test`
 
 - [ ] A test runner in the compiler: discover test functions, run them,
