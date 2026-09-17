@@ -1769,6 +1769,7 @@ int is_builtin_name(const char *name) {
            !strcmp(name, "to_be") || !strcmp(name, "from_le") ||
            !strcmp(name, "from_be") || !strcmp(name, "has") ||
            !strcmp(name, "del") || !strcmp(name, "exit") ||
+           !strcmp(name, "panic") || !strcmp(name, "assert") ||
            !strcmp(name, "some") || !strcmp(name, "none") ||
            !strcmp(name, "ok") || !strcmp(name, "err") ||
            !strcmp(name, "err_of") ||

@@ -1,0 +1,7 @@
+ok: 7
+err: x must be positive, got -3 at assert_panic.positive:9
+err: this path was supposed to be impossible at assert_panic.unreachable_value:16
+ok: 5
+err: must_have: no value at assert_panic.must_have:22
+err: assertion failed at assert_panic.default_message:28
+passing assert built no message
