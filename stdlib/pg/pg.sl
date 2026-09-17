@@ -2071,12 +2071,20 @@ pub fn get_text(rows: Rows, r: int, c: int) -> str {
 pub fn get_int(rows: Rows, r: int, c: int) -> int {
     cell_index(rows, r, c);
     let oid = rows.types[c];
-    if oid != 20 && oid != 21 && oid != 23 && oid != 26 {
+    // numeric (1700) too, when the value is a whole number: sum() of an
+    // integer column is numeric in Postgres, and reading a total should
+    // not need a cast in the SQL. A fraction or a value beyond 64 bits
+    // still panics, naming the column.
+    if oid != 20 && oid != 21 && oid != 23 && oid != 26 && oid != 1700 {
         wrong_type(rows, c, "int");
     }
     let s = to_str(cell(rows, r, c, "int"));
     let ir = to_int(s);
     guard let v = ir else let e = err_of(ir) {
+        if oid == 1700 {
+            panic("column '" + rows.columns[c] + "' is numeric " + s +
+                  ", which is not a 64-bit integer; use get_float or get_text");
+        }
         panic("column '" + rows.columns[c] + "': " + e);
     }
     return v;
