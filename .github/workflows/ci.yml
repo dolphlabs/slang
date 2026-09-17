@@ -193,11 +193,22 @@ jobs:
              chown postgres /tmp/server.* && chmod 600 /tmp/server.key &&
              exec docker-entrypoint.sh postgres -c ssl=on
                -c ssl_cert_file=/tmp/server.crt -c ssl_key_file=/tmp/server.key'
-          for c in pg pgtls; do
-            for i in $(seq 60); do
-              docker exec $c pg_isready -U slang -h 127.0.0.1 >/dev/null 2>&1 && break
+          # Ready means accepting TCP on the MAPPED port, from the host:
+          # the image's init phase runs a server that listens only on a
+          # Unix socket, then restarts it.
+          for c in pg:55432 pgtls:55433; do
+            name=${c%%:*}; port=${c##*:}
+            ok=0
+            for i in $(seq 90); do
+              if docker exec $name pg_isready -U slang -h 127.0.0.1 >/dev/null 2>&1 &&
+                 (exec 3<>/dev/tcp/127.0.0.1/$port) 2>/dev/null; then
+                ok=1; break
+              fi
               sleep 1
             done
+            if [ $ok -ne 1 ]; then
+              echo "$name never became ready"; docker ps -a; docker logs $name; exit 1
+            fi
           done
 
       - name: Live test
