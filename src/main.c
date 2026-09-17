@@ -192,6 +192,108 @@ static char *derive_stem(const char *path) {
     return stem;
 }
 
+/* ---- finding OpenSSL -------------------------------------------------
+ *
+ * `net` over TLS, `crypto` and `httpc` over https compile against
+ * OpenSSL. pkg-config used to be the only way slangc looked for it, and
+ * when pkg-config was not on PATH -- or could not see a keg-only Homebrew
+ * install -- the first a user heard of it was the C compiler's
+ * "'openssl/err.h' file not found", which does not say what to do. Found
+ * while verifying the v0.2.0 tarball, on a machine whose Homebrew lives at
+ * /usr/local/Homebrew rather than either standard prefix.
+ *
+ * Tried in order, first hit wins:
+ *   1. OPENSSL_DIR       an explicit answer beats every guess
+ *   2. pkg-config        what a correctly configured machine already has
+ *   3. known prefixes    Homebrew on Apple Silicon, Intel, and the older
+ *                        /usr/local/Homebrew layout; MacPorts
+ *   4. brew --prefix     a Homebrew installed somewhere unusual
+ *   5. system headers    Linux distributions: no flags needed at all
+ * A prefix counts only if include/openssl/ssl.h is really there, so a
+ * stale directory is skipped rather than handed to the compiler.
+ *
+ * Nothing found is NOT an error here. A compiler can have include paths
+ * this cannot see (CPATH, a sysroot, a wrapper script), so refusing to
+ * compile would block working setups. The result is instead remembered,
+ * and if compilation then fails, slangc explains the likely cause. */
+
+static int openssl_prefix_ok(const char *prefix) {
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/include/openssl/ssl.h", prefix);
+    return exists(path);
+}
+
+static void openssl_flags_for_prefix(char *out, size_t n, const char *prefix) {
+    snprintf(out, n, "-I%s/include -L%s/lib -lssl -lcrypto", prefix, prefix);
+}
+
+/* Runs `cmd` and keeps its first line in `out`. Returns 1 only when the
+ * command exited 0 and printed something: pkg-config prints nothing to
+ * stdout when it fails, and a bare "-lssl -lcrypto" from a fallback path
+ * must not be mistaken for a real answer. */
+static int first_line_of(const char *cmd, char *out, size_t n) {
+    FILE *f = popen(cmd, "r");
+    if (!f)
+        return 0;
+    int got = fgets(out, (int)n, f) != NULL;
+    int status = pclose(f);
+    if (!got || status != 0)
+        return 0;
+    size_t len = strlen(out);
+    while (len && (out[len - 1] == '\n' || out[len - 1] == '\r'))
+        out[--len] = '\0';
+    return len > 0;
+}
+
+/* Fills `out` with compiler flags for OpenSSL. Returns where they came
+ * from, or NULL when no install was located and plain -lssl -lcrypto is
+ * a hope rather than an answer. */
+static const char *find_openssl(char *out, size_t n) {
+    const char *dir = getenv("OPENSSL_DIR");
+    if (dir && *dir) {
+        if (openssl_prefix_ok(dir)) {
+            openssl_flags_for_prefix(out, n, dir);
+            return "OPENSSL_DIR";
+        }
+        fprintf(stderr,
+                "slang: warning: OPENSSL_DIR=%s has no include/openssl/ssl.h; "
+                "looking elsewhere\n", dir);
+    }
+
+    if (first_line_of("pkg-config --cflags --libs openssl 2>/dev/null", out, n))
+        return "pkg-config";
+
+    static const char *const prefixes[] = {
+        "/opt/homebrew/opt/openssl@3",       /* Homebrew, Apple Silicon */
+        "/opt/homebrew/opt/openssl",
+        "/usr/local/opt/openssl@3",          /* Homebrew, Intel */
+        "/usr/local/opt/openssl",
+        "/usr/local/Homebrew/opt/openssl@3", /* older Homebrew layout */
+        "/usr/local/Homebrew/opt/openssl",
+        "/opt/local",                        /* MacPorts */
+        NULL,
+    };
+    for (int i = 0; prefixes[i]; i++) {
+        if (openssl_prefix_ok(prefixes[i])) {
+            openssl_flags_for_prefix(out, n, prefixes[i]);
+            return prefixes[i];
+        }
+    }
+
+    char brew[4096];
+    if (first_line_of("brew --prefix openssl@3 2>/dev/null", brew, sizeof(brew)) &&
+        openssl_prefix_ok(brew)) {
+        openssl_flags_for_prefix(out, n, brew);
+        return "brew --prefix";
+    }
+
+    snprintf(out, n, "-lssl -lcrypto");
+    if (exists("/usr/include/openssl/ssl.h") ||
+        exists("/usr/local/include/openssl/ssl.h"))
+        return "system headers";
+    return NULL;
+}
+
 static int cmd_get(const char *hint) {
     char start[PATH_MAX];
     if (hint && hint[0]) {
@@ -337,25 +439,12 @@ int main(int argc, char **argv) {
      * Collector and scheduler live in runtime/ and are spliced into
      * the generated C; compiled programs do not link libgc. */
 
-    /* net.tls_* needs OpenSSL, resolved via pkg-config, only when the
-     * program actually uses it. crypto needs it too. */
+    /* net.tls_* needs OpenSSL, and crypto does too -- located only when
+     * the program actually uses it. See find_openssl. */
     char tlsflags[1024] = "-lssl -lcrypto";
-    if (want_tls || want_crypto) {
-        FILE *tpc =
-            popen("pkg-config --cflags --libs openssl 2>/dev/null", "r");
-        if (tpc) {
-            if (fgets(tlsflags, sizeof(tlsflags), tpc)) {
-                size_t n = strlen(tlsflags);
-                while (n && (tlsflags[n - 1] == 10 || tlsflags[n - 1] == 13))
-                    tlsflags[--n] = '\0';
-                if (n == 0)
-                    snprintf(tlsflags, sizeof(tlsflags), "-lssl -lcrypto");
-            } else {
-                snprintf(tlsflags, sizeof(tlsflags), "-lssl -lcrypto");
-            }
-            pclose(tpc);
-        }
-    }
+    const char *openssl_source = "";
+    if (want_tls || want_crypto)
+        openssl_source = find_openssl(tlsflags, sizeof(tlsflags));
 
     int nlinks = 0;
     char **link_libs = collect_link_libs(&pkgs, &nlinks);
@@ -393,6 +482,17 @@ int main(int argc, char **argv) {
         fputs("slang: C compilation failed; generated code kept at ", stderr);
         fputs(gen_path, stderr);
         fputc(10, stderr);
+        if ((want_tls || want_crypto) && !openssl_source)
+            /* Worded as a condition, not a diagnosis: slangc could not
+               locate OpenSSL, but the compile may have failed for another
+               reason, or found headers through a path slangc cannot see. */
+            fputs("slang: note: this program uses TLS or crypto, and slangc "
+                  "could not locate OpenSSL.\n"
+                  "       If the error above is about openssl/ headers, install "
+                  "it (macOS: brew install openssl;\n"
+                  "       Debian/Ubuntu: apt install libssl-dev) or set "
+                  "OPENSSL_DIR=/path/to/openssl.\n",
+                  stderr);
         return 1;
     }
 
