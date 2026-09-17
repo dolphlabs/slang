@@ -1,3 +1,6 @@
+#if defined(__linux__)
+#include <sched.h>
+#endif
 /* Tier 11: run queue + worker pool. The registry fix (top_ptr ->
  * task_slot double indirection) this design depends on for
  * correctness under worker reuse is a separate change to
@@ -996,7 +999,24 @@ static void sl_pool_start(void) {
     /* the main thread runs tasks too (sl_worker_run_loop(-1)) */
     sl_rt_install_altstack();
 
+    /* One worker per core the process may actually run on. Online cores
+     * are the fallback, but under taskset or a container cpuset they
+     * overcount: a server pinned to 4 of 32 cores would start 32 workers
+     * contending for 4 cores. SLANG_WORKERS overrides both. */
     long n = sysconf(_SC_NPROCESSORS_ONLN);
+#if defined(__linux__)
+    {
+        cpu_set_t set;
+        CPU_ZERO(&set);
+        if (sched_getaffinity(0, sizeof(set), &set) == 0 && CPU_COUNT(&set) > 0)
+            n = CPU_COUNT(&set);
+    }
+#endif
+    {
+        const char *w = getenv("SLANG_WORKERS");
+        long v = w ? strtol(w, NULL, 10) : 0;
+        if (v > 0) n = v;
+    }
     if (n < 1) n = 1;
     if (n > SL_POOL_MAX_WORKERS) n = SL_POOL_MAX_WORKERS;
 

@@ -1174,7 +1174,7 @@ cells by row and column index; `pg.col(rows, "name")` finds an index.
 | Getter | Reads |
 |---|---|
 | `pg.get_text(rows, r, c)` | any column, in Postgres's text form (dates, `numeric`, `uuid`, `json`) |
-| `pg.get_int(rows, r, c)` | `int2`, `int4`, `int8`, `oid` |
+| `pg.get_int(rows, r, c)` | `int2`, `int4`, `int8`, `oid`, and a whole-number `numeric` (what `sum()` of an integer column returns) |
 | `pg.get_float(rows, r, c)` | `float4`, `float8`, `numeric`, the integer types |
 | `pg.get_bool(rows, r, c)` | `bool` |
 | `pg.get_bytes(rows, r, c)` | `bytea` |
