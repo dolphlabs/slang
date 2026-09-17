@@ -479,7 +479,10 @@ push(pts, r.tl);
 
 Struct literals must supply every field exactly once, with types
 checked. Methods live in top-level `impl Name { ... }` blocks; mark a
-method `pub fn` to export it to importing packages. Structs are
+method `pub fn` to export it to importing packages. A method's name
+belongs to its struct: it may match a package-level function or another
+struct's method (`impl Client { fn get }` beside `fn get`), and a bare
+call `get(x)` always means the function. Structs are
 values: assignment copies, including any `str` / list / map /
 `opt` / `result` / `gc struct` fields (shallow — the heap objects
 are shared). Use `gc struct` when the record itself should be a
@@ -1990,10 +1993,13 @@ its behaviour checkable rather than asserted.
   framed body read exactly, and nothing left over. A body delimited by
   the connection closing is never reused.
 
-Client operations are handle-first package functions — `client_get(c,
-...)`, the same idiom as `sql.exec(db, ...)` — rather than methods,
-because a method cannot currently share a name with a package function
-(`impl Client { fn get }` collides with `httpc.get`).
+Client operations come in two equivalent forms: handle-first package
+functions — `httpc.client_get(c, url, dl)`, the same idiom as
+`sql.exec(db, ...)` — and methods, `c.get(url, dl)`. The methods are
+`get`, `head`, `post`, `send`, `idle_count`, `close_idle`,
+`enable_cookies`, `clear_cookies`, `set_cookie` and `cookies` on `Client`,
+and `header` on `Response`. `c.get` and the one-shot `httpc.get` share a
+name; the method is the pooled client's, the function is not.
 
 ##### Decompression
 
