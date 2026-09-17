@@ -182,7 +182,9 @@ const char *infer_call(CG *cg, Expr *e) {
                               "(got %s)",
                      t);
         char *elem = arr_elem(t);
+        const char *saved = expect_push(cg, elem);
         const char *vt = infer_type(cg, e->as.call.args[1]);
+        cg->expect = saved;
         if (!value_assignable(elem, e->as.call.args[1], vt))
             cg_error(e->line, "cannot push %s onto a [%s]", vt, elem);
         return t;
@@ -1012,10 +1014,23 @@ const char *infer_type(CG *cg, Expr *e) {
         cg_error(e->line, "cannot slice a value of type %s", bt);
     }
     case EX_LIST: {
+        /* [] takes its type from context -- a parameter, a struct field,
+         * a return, an assignment -- through cg->expect, exactly as
+         * `none` does. Only with no list type expected is it an error. */
+        if (e->as.list.nelems == 0 && cg->expect && is_arr(cg->expect)) {
+            e->as.list.resolved = cg->expect;
+            return cg->expect;
+        }
+        if (e->as.list.nelems == 0 && e->as.list.resolved)
+            return e->as.list.resolved;
         if (e->as.list.nelems == 0)
             cg_error(e->line,
                      "cannot infer the element type of an empty list; "
                      "annotate the variable, e.g. let xs: [int] = []");
+        /* elements expect the ELEMENT type: [[]] against [[int]] */
+        const char *outer = cg->expect;
+        if (outer && is_arr(outer))
+            cg->expect = arr_elem(outer);
         const char *t0 = infer_type(cg, e->as.list.elems[0]);
         for (int i = 1; i < e->as.list.nelems; i++) {
             const char *ti = infer_type(cg, e->as.list.elems[i]);
@@ -1026,6 +1041,7 @@ const char *infer_type(CG *cg, Expr *e) {
                          "element",
                          ti, t0);
         }
+        cg->expect = outer;
         return xasprintf("[%s]", t0);
     }
     case EX_MAPLIT: {

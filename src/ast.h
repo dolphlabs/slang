@@ -89,7 +89,15 @@ struct Expr {
             Expr *end;   /* NULL => through the end */
             int inclusive;
         } slice;
-        struct { Expr **elems; int nelems; } list;
+        struct {
+            Expr **elems;
+            int nelems;
+            /* An EMPTY literal's type, as infer_type resolved it from
+             * the expected type. Codegen reads it here: several sites
+             * infer an argument with the expectation pushed and then
+             * pop it before generating the argument. */
+            const char *resolved;
+        } list;
         struct {
             Expr **keys;
             Expr **vals;

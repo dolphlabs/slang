@@ -100,6 +100,24 @@ the right contract regardless — a half-written frame is unrecoverable.
 TLS, with the same reserved string. The `link` API takes an `until` on
 `accept`/`send`/`recv` already.
 
+`net.dial_until(host, port, deadline)` bounds connecting: the DNS lookup
+and the TCP connect together. A lookup still running when the deadline
+passes is abandoned to the resolver thread (`getaddrinfo` cannot be
+interrupted), so the caller gets `"timeout"` on time. Every address the
+name resolves to is tried in turn — `net.dial` does the same, without a
+deadline.
+
+##### Unix-domain sockets
+
+`net.dial_unix(path, deadline)` connects to a Unix-domain stream socket
+and `net.listen_unix(path)` listens on one (accept with `net.accept`).
+The fds work with every fd-based call — `send`/`recv` and their `_until`
+forms, `close`, `idle_alive`. `listen_unix` refuses a path that already
+exists rather than deleting it, since the file may belong to a server
+that is still running; remove a stale one with `os.remove` first. A path
+longer than the platform allows (104 bytes on macOS, 108 on Linux) is an
+error, not truncated.
+
 See `examples/httpd/` for a minimal HTTP server on `link` plus the
 `http` stdlib package.
 
@@ -181,6 +199,8 @@ to close; on success it belongs to the returned handle and `tls_close`
 closes it. Read no further than the server's go-ahead before upgrading:
 anything a man in the middle queued behind it would otherwise be trusted
 as if it had arrived encrypted (libpq's CVE-2021-23222).
+`tls_upgrade_until(fd, host, ctx, deadline)` bounds the handshake; a
+server that stops answering part way through gives `"timeout"`.
 
 #### `json`
 
@@ -492,7 +512,8 @@ while i < rows.count {
 ```
 
 Every call that talks to the server takes a deadline (`until`), like
-`httpc`; `until_of(0)` waits indefinitely.
+`httpc`; `until_of(0)` waits indefinitely. For `connect` it covers the
+whole connection: DNS lookup, TCP connect, TLS handshake and login.
 
 | Function | Signature |
 |---|---|
@@ -509,11 +530,10 @@ Every call that talks to the server takes a deadline (`until`), like
 be parsed as SQL, whatever it contains. Build them with `pg.arg_text(s)`,
 `arg_int(n)`, `arg_float(x)` (sent exactly, not rounded), `arg_bool(b)`,
 `arg_bytes(b)` (binary, for `bytea`) and `arg_null()`. A query with none
-takes `pg.no_args()`: a bare `[]` cannot be passed yet, because an empty
-list literal needs a declared type and the compiler does not take it from
-the parameter.
+takes `[]`.
 
-**Results** are buffered whole in a `Rows`: `rows.count`, `rows.columns`
+**Results** from `query` are buffered whole in a `Rows` (for one too big
+for that, see [Streaming](#streaming)): `rows.count`, `rows.columns`
 (names), `rows.affected` (from the command tag, so an `INSERT` or
 `UPDATE` through `query` reports its row count) and `rows.tag`. Read
 cells by row and column index; `pg.col(rows, "name")` finds an index.
@@ -571,7 +591,8 @@ Releasing the same connection twice panics. `pool.dials` and
 escapes in any part. The port defaults to 5432 and the database to the
 user name. Recognised parameters are `sslmode`, `sslrootcert` (a CA
 bundle to verify against, for providers that sign with their own CA) and
-`application_name`. **Anything else is an error, not ignored**: a
+`application_name`, plus `host` and `port`, which override the ones in the
+authority, as in libpq. **Anything else is an error, not ignored**: a
 misspelt `sslmdoe=require` that was quietly dropped would connect in
 cleartext and nothing would ever say so.
 
@@ -588,6 +609,13 @@ except for a loopback host (`localhost`, `127.x`, `::1`), where it is
 `disable`, because traffic that never leaves the machine gains nothing
 from TLS and local servers rarely have it set up. A server that does not
 offer TLS gets a message saying to add `sslmode=disable`.
+
+**Unix-domain sockets** are named by their directory, as libpq does:
+`postgres://app@%2Fvar%2Frun%2Fpostgresql/shop` (the host
+percent-encoded) or `postgres://app@/shop?host=/var/run/postgresql`. The
+socket file is `<dir>/.s.PGSQL.<port>`. Postgres does not use TLS over a
+socket, so `sslmode` defaults to `disable` there and `require` is an
+error.
 
 Authentication: SCRAM-SHA-256 (the default since Postgres 14), md5 and
 cleartext password. SCRAM checks that the **server** knows the password
@@ -616,26 +644,115 @@ guard let ok_ = r else let e = err_of(r) {
 A `Conn` is safe to share between tasks (calls take turns), but a pool is
 the better tool for that.
 
+##### Streaming
+
+`pg.stream` runs a query like `query` but hands the rows over one at a
+time, so memory holds one row however large the result, and the server
+is held back by TCP flow control rather than the client reading ahead:
+
+```slang
+let sr = pg.stream(c, "SELECT id, body FROM events ORDER BY id", [], dl);
+guard let rows = sr else let e = err_of(sr) { return; }
+while true {
+    let nr = pg.next_row(c, rows, dl);
+    guard let more = nr else let e = err_of(nr) { log.error(e); break; }
+    if !more { break; }
+    archive(pg.get_int(rows, 0, 0), pg.get_text(rows, 0, 1));   // always row 0
+}
+```
+
+Each `next_row` replaces the row in `rows`, read at index 0; after the
+last, `rows.affected` and `rows.tag` are set. A server error part way
+through comes from `next_row`, after the rows before it. While a stream
+is open the connection serves nothing else — other calls fail with
+`connection is busy` — so read it to the end or call
+`pg.stream_close(c, rows, dl)`. That asks the server to cancel the query,
+waits until the request has been delivered (so it cannot hit a *later*
+query on the same connection), then drops whatever was already sent. A
+connection released to a pool mid-stream is closed.
+
+| Function | Signature |
+|---|---|
+| `pg.stream(c, sql, args, deadline)` | `result[Rows, str]` |
+| `pg.next_row(c, rows, deadline)` | `result[bool, str]` — `false` after the last row |
+| `pg.stream_close(c, rows, deadline)` | `result[bool, str]` |
+
+##### COPY
+
+`COPY … FROM STDIN` bulk-loads data in COPY's text or CSV format, far
+faster than one `INSERT` per row; `COPY … TO STDOUT` dumps it.
+
+```slang
+let n = pg.copy_from(c, "COPY users (id, email) FROM STDIN (FORMAT csv)",
+                     to_bytes("1,a@example.com\n2,b@example.com\n"), dl);
+let dump = pg.copy_to(c, "COPY users TO STDOUT (FORMAT csv)", dl);
+```
+
+| Function | Signature |
+|---|---|
+| `pg.copy_from(c, sql, data, deadline)` | `result[int, str]` — rows loaded |
+| `pg.copy_in_start(c, sql, deadline)` | `result[bool, str]` |
+| `pg.copy_in_send(c, data, deadline)` | `result[bool, str]` — any split, not only whole rows |
+| `pg.copy_in_end(c, deadline)` | `result[int, str]` — rows loaded |
+| `pg.copy_in_abort(c, reason, deadline)` | `result[bool, str]` — the server discards everything |
+| `pg.copy_to(c, sql, deadline)` | `result[bytes, str]` — buffered, up to the 256 MiB limit |
+| `pg.copy_out_start(c, sql, deadline)` | `result[bool, str]` |
+| `pg.copy_out_next(c, deadline)` | `result[opt[bytes], str]` — a row's worth, `none` at the end |
+
+The start/send/end and start/next forms stream, for data that should not
+be held in memory at once. A bad row fails the whole COPY — the error
+comes from `copy_in_end` (or `copy_from`) with its SQLSTATE, and nothing
+was loaded. A COPY of the wrong direction is refused with `not a COPY …
+FROM STDIN statement`, and a COPY through `query` or `exec` fails with a
+message pointing here, the connection intact either way. Only the text
+and CSV formats are meant: binary COPY data passes through untouched but
+this package does not build or parse it.
+
+##### LISTEN / NOTIFY
+
+```slang
+pg.listen(c, "jobs", dl);
+while true {
+    let wr = pg.wait_notification(c, until_of(time.mono() + 30000000000));
+    guard let got = wr else let e = err_of(wr) { log.error(e); break; }
+    guard let note = got else { continue; }        // 30s with nothing: none
+    run_job(note.payload);
+}
+```
+
+| Function | Signature |
+|---|---|
+| `pg.listen(c, channel, deadline)` / `pg.unlisten(c, channel, deadline)` | `result[bool, str]` — `unlisten(c, "*", dl)` for all |
+| `pg.notify(c, channel, payload, deadline)` | `result[bool, str]` |
+| `pg.wait_notification(c, deadline)` | `result[opt[Notification], str]` — `pid`, `channel`, `payload` |
+
+Channel names are quoted as identifiers, so any name is safe to pass.
+Notifications that arrive during other calls — even in the middle of a
+query's result — are queued on the connection (up to 10,000;
+`c.notes_dropped` counts any beyond that) and handed out oldest first.
+**Reaching the deadline in `wait_notification` returns `none` and leaves
+the connection usable**, unlike every other call: waiting is the point,
+and a message cut off by the deadline is kept and completed by the next
+wait. A server that ends the session while one waits (an administrator's
+`pg_terminate_backend`, a restart) is an error with its SQLSTATE. Listen
+on a connection of its own, not a pooled one: a pooled connection with a
+notification waiting fails the pool's idle probe and is closed.
+
 ##### Limits
 
 A driver trusts the server with its memory, so what it will buffer is
 capped: one protocol message at 256 MiB, and one result at 256 MiB of
 cell data, which is an error rather than an allocation. A SCRAM server may
-ask for at most 1,000,000 PBKDF2 iterations (Postgres uses 4096). The
-deadline covers the startup exchange but not the TCP connect or TLS
-handshake themselves, which `net.dial` and `net.tls_upgrade` do not take
-one for yet.
+ask for at most 1,000,000 PBKDF2 iterations (Postgres uses 4096).
 
 Measured against Postgres 16 in Docker on the development Mac: 1M rows
 of two columns in about 2.1s and 150MB, a single 20MB value in about
 0.3s.
 
-**Not supported:** `COPY` (a `COPY FROM STDIN` is refused cleanly),
-`LISTEN`/`NOTIFY` delivery, named prepared statements, binary result
-format, streaming results, Unix-domain sockets, Kerberos/GSSAPI, SCRAM
-channel binding (`SCRAM-SHA-256-PLUS`), multiple hosts in one url, and
-SASLprep normalisation of non-ASCII passwords (an ASCII password is
-unaffected).
+**Not supported:** named prepared statements, binary result format,
+building or parsing binary COPY data, Kerberos/GSSAPI, SCRAM channel
+binding (`SCRAM-SHA-256-PLUS`), multiple hosts in one url, and SASLprep
+normalisation of non-ASCII passwords (an ASCII password is unaffected).
 
 #### `regex`
 
@@ -1467,9 +1584,9 @@ signal-handling program.
 - [httpc](packages/httpc.md) -- source package, 24 public items
 - [json](packages/json.md) -- compiler-provided, 0 public items
 - [log](packages/log.md) -- compiler-provided, 4 public items
-- [net](packages/net.md) -- compiler-provided, 27 public items
+- [net](packages/net.md) -- compiler-provided, 31 public items
 - [os](packages/os.md) -- compiler-provided, 14 public items
-- [pg](packages/pg.md) -- source package, 37 public items
+- [pg](packages/pg.md) -- source package, 52 public items
 - [proc](packages/proc.md) -- compiler-provided, 6 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [sql](packages/sql.md) -- compiler-provided, 20 public items

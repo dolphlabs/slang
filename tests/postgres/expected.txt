@@ -7,3 +7,9 @@ ok timeout
 ok tls refused
 ok getters
 ok pool
+ok copy in
+ok copy out
+ok stream
+ok notify
+ok connect deadline
+ok unix socket

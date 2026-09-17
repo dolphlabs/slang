@@ -36,7 +36,8 @@ while i < rows.count {
 ```
 
 Every call that talks to the server takes a deadline (`until`), like
-`httpc`; `until_of(0)` waits indefinitely.
+`httpc`; `until_of(0)` waits indefinitely. For `connect` it covers the
+whole connection: DNS lookup, TCP connect, TLS handshake and login.
 
 | Function | Signature |
 |---|---|
@@ -53,11 +54,10 @@ Every call that talks to the server takes a deadline (`until`), like
 be parsed as SQL, whatever it contains. Build them with `pg.arg_text(s)`,
 `arg_int(n)`, `arg_float(x)` (sent exactly, not rounded), `arg_bool(b)`,
 `arg_bytes(b)` (binary, for `bytea`) and `arg_null()`. A query with none
-takes `pg.no_args()`: a bare `[]` cannot be passed yet, because an empty
-list literal needs a declared type and the compiler does not take it from
-the parameter.
+takes `[]`.
 
-**Results** are buffered whole in a `Rows`: `rows.count`, `rows.columns`
+**Results** from `query` are buffered whole in a `Rows` (for one too big
+for that, see [Streaming](#streaming)): `rows.count`, `rows.columns`
 (names), `rows.affected` (from the command tag, so an `INSERT` or
 `UPDATE` through `query` reports its row count) and `rows.tag`. Read
 cells by row and column index; `pg.col(rows, "name")` finds an index.
@@ -115,7 +115,8 @@ Releasing the same connection twice panics. `pool.dials` and
 escapes in any part. The port defaults to 5432 and the database to the
 user name. Recognised parameters are `sslmode`, `sslrootcert` (a CA
 bundle to verify against, for providers that sign with their own CA) and
-`application_name`. **Anything else is an error, not ignored**: a
+`application_name`, plus `host` and `port`, which override the ones in the
+authority, as in libpq. **Anything else is an error, not ignored**: a
 misspelt `sslmdoe=require` that was quietly dropped would connect in
 cleartext and nothing would ever say so.
 
@@ -132,6 +133,13 @@ except for a loopback host (`localhost`, `127.x`, `::1`), where it is
 `disable`, because traffic that never leaves the machine gains nothing
 from TLS and local servers rarely have it set up. A server that does not
 offer TLS gets a message saying to add `sslmode=disable`.
+
+**Unix-domain sockets** are named by their directory, as libpq does:
+`postgres://app@%2Fvar%2Frun%2Fpostgresql/shop` (the host
+percent-encoded) or `postgres://app@/shop?host=/var/run/postgresql`. The
+socket file is `<dir>/.s.PGSQL.<port>`. Postgres does not use TLS over a
+socket, so `sslmode` defaults to `disable` there and `require` is an
+error.
 
 Authentication: SCRAM-SHA-256 (the default since Postgres 14), md5 and
 cleartext password. SCRAM checks that the **server** knows the password
@@ -160,32 +168,125 @@ guard let ok_ = r else let e = err_of(r) {
 A `Conn` is safe to share between tasks (calls take turns), but a pool is
 the better tool for that.
 
+##### Streaming
+
+`pg.stream` runs a query like `query` but hands the rows over one at a
+time, so memory holds one row however large the result, and the server
+is held back by TCP flow control rather than the client reading ahead:
+
+```slang
+let sr = pg.stream(c, "SELECT id, body FROM events ORDER BY id", [], dl);
+guard let rows = sr else let e = err_of(sr) { return; }
+while true {
+    let nr = pg.next_row(c, rows, dl);
+    guard let more = nr else let e = err_of(nr) { log.error(e); break; }
+    if !more { break; }
+    archive(pg.get_int(rows, 0, 0), pg.get_text(rows, 0, 1));   // always row 0
+}
+```
+
+Each `next_row` replaces the row in `rows`, read at index 0; after the
+last, `rows.affected` and `rows.tag` are set. A server error part way
+through comes from `next_row`, after the rows before it. While a stream
+is open the connection serves nothing else — other calls fail with
+`connection is busy` — so read it to the end or call
+`pg.stream_close(c, rows, dl)`. That asks the server to cancel the query,
+waits until the request has been delivered (so it cannot hit a *later*
+query on the same connection), then drops whatever was already sent. A
+connection released to a pool mid-stream is closed.
+
+| Function | Signature |
+|---|---|
+| `pg.stream(c, sql, args, deadline)` | `result[Rows, str]` |
+| `pg.next_row(c, rows, deadline)` | `result[bool, str]` — `false` after the last row |
+| `pg.stream_close(c, rows, deadline)` | `result[bool, str]` |
+
+##### COPY
+
+`COPY … FROM STDIN` bulk-loads data in COPY's text or CSV format, far
+faster than one `INSERT` per row; `COPY … TO STDOUT` dumps it.
+
+```slang
+let n = pg.copy_from(c, "COPY users (id, email) FROM STDIN (FORMAT csv)",
+                     to_bytes("1,a@example.com\n2,b@example.com\n"), dl);
+let dump = pg.copy_to(c, "COPY users TO STDOUT (FORMAT csv)", dl);
+```
+
+| Function | Signature |
+|---|---|
+| `pg.copy_from(c, sql, data, deadline)` | `result[int, str]` — rows loaded |
+| `pg.copy_in_start(c, sql, deadline)` | `result[bool, str]` |
+| `pg.copy_in_send(c, data, deadline)` | `result[bool, str]` — any split, not only whole rows |
+| `pg.copy_in_end(c, deadline)` | `result[int, str]` — rows loaded |
+| `pg.copy_in_abort(c, reason, deadline)` | `result[bool, str]` — the server discards everything |
+| `pg.copy_to(c, sql, deadline)` | `result[bytes, str]` — buffered, up to the 256 MiB limit |
+| `pg.copy_out_start(c, sql, deadline)` | `result[bool, str]` |
+| `pg.copy_out_next(c, deadline)` | `result[opt[bytes], str]` — a row's worth, `none` at the end |
+
+The start/send/end and start/next forms stream, for data that should not
+be held in memory at once. A bad row fails the whole COPY — the error
+comes from `copy_in_end` (or `copy_from`) with its SQLSTATE, and nothing
+was loaded. A COPY of the wrong direction is refused with `not a COPY …
+FROM STDIN statement`, and a COPY through `query` or `exec` fails with a
+message pointing here, the connection intact either way. Only the text
+and CSV formats are meant: binary COPY data passes through untouched but
+this package does not build or parse it.
+
+##### LISTEN / NOTIFY
+
+```slang
+pg.listen(c, "jobs", dl);
+while true {
+    let wr = pg.wait_notification(c, until_of(time.mono() + 30000000000));
+    guard let got = wr else let e = err_of(wr) { log.error(e); break; }
+    guard let note = got else { continue; }        // 30s with nothing: none
+    run_job(note.payload);
+}
+```
+
+| Function | Signature |
+|---|---|
+| `pg.listen(c, channel, deadline)` / `pg.unlisten(c, channel, deadline)` | `result[bool, str]` — `unlisten(c, "*", dl)` for all |
+| `pg.notify(c, channel, payload, deadline)` | `result[bool, str]` |
+| `pg.wait_notification(c, deadline)` | `result[opt[Notification], str]` — `pid`, `channel`, `payload` |
+
+Channel names are quoted as identifiers, so any name is safe to pass.
+Notifications that arrive during other calls — even in the middle of a
+query's result — are queued on the connection (up to 10,000;
+`c.notes_dropped` counts any beyond that) and handed out oldest first.
+**Reaching the deadline in `wait_notification` returns `none` and leaves
+the connection usable**, unlike every other call: waiting is the point,
+and a message cut off by the deadline is kept and completed by the next
+wait. A server that ends the session while one waits (an administrator's
+`pg_terminate_backend`, a restart) is an error with its SQLSTATE. Listen
+on a connection of its own, not a pooled one: a pooled connection with a
+notification waiting fails the pool's idle probe and is closed.
+
 ##### Limits
 
 A driver trusts the server with its memory, so what it will buffer is
 capped: one protocol message at 256 MiB, and one result at 256 MiB of
 cell data, which is an error rather than an allocation. A SCRAM server may
-ask for at most 1,000,000 PBKDF2 iterations (Postgres uses 4096). The
-deadline covers the startup exchange but not the TCP connect or TLS
-handshake themselves, which `net.dial` and `net.tls_upgrade` do not take
-one for yet.
+ask for at most 1,000,000 PBKDF2 iterations (Postgres uses 4096).
 
 Measured against Postgres 16 in Docker on the development Mac: 1M rows
 of two columns in about 2.1s and 150MB, a single 20MB value in about
 0.3s.
 
-**Not supported:** `COPY` (a `COPY FROM STDIN` is refused cleanly),
-`LISTEN`/`NOTIFY` delivery, named prepared statements, binary result
-format, streaming results, Unix-domain sockets, Kerberos/GSSAPI, SCRAM
-channel binding (`SCRAM-SHA-256-PLUS`), multiple hosts in one url, and
-SASLprep normalisation of non-ASCII passwords (an ASCII password is
-unaffected).
+**Not supported:** named prepared statements, binary result format,
+building or parsing binary COPY data, Kerberos/GSSAPI, SCRAM channel
+binding (`SCRAM-SHA-256-PLUS`), multiple hosts in one url, and SASLprep
+normalisation of non-ASCII passwords (an ASCII password is unaffected).
 
 ## API
 
 ### `gc struct Config`
 
 ### `gc struct Conn`
+
+### `gc struct Notification`
+
+A NOTIFY delivered to a connection that LISTENs on its channel.
 
 ### `gc struct Arg`
 
@@ -197,7 +298,7 @@ A buffered result. Read cells with get_text / get_int / get_float / get_bool / g
 
 ### `fn parse_url(url: str) -> result[Config, str]`
 
-postgres://user:password@host:port/database?sslmode=require  Recognised parameters: sslmode, sslrootcert, application_name. Any other parameter is an error rather than ignored: a misspelt "sslmdoe=require" that was silently dropped would connect in the clear, and nothing would ever say so.  sslmode: disable      cleartext. require      TLS, certificate and hostname verified. verify-full  the same as require (the libpq spelling of it). prefer, allow, verify-ca are refused. The first two fall back to cleartext when TLS fails, which is exactly what an attacker in the middle would arrange; verify-ca checks the chain but not the host.  With no sslmode the default is "require" -- except for a loopback host, where it is "disable", because traffic that never leaves the machine gains nothing from TLS and a local development server almost never has it configured.
+postgres://user:password@host:port/database?sslmode=require  Recognised parameters: sslmode, sslrootcert, application_name, host and port. Any other parameter is an error rather than ignored: a misspelt "sslmdoe=require" that was silently dropped would connect in the clear, and nothing would ever say so.  sslmode: disable      cleartext. require      TLS, certificate and hostname verified. verify-full  the same as require (the libpq spelling of it). prefer, allow, verify-ca are refused. The first two fall back to cleartext when TLS fails, which is exactly what an attacker in the middle would arrange; verify-ca checks the chain but not the host.  With no sslmode the default is "require" -- except for a loopback host, where it is "disable", because traffic that never leaves the machine gains nothing from TLS and a local development server almost never has it configured.  A Unix-domain socket is named by its DIRECTORY, as libpq does: either percent-encoded as the host (postgres://app@%2Fvar%2Frun%2Fpostgresql/db) or as ?host=/var/run/postgresql. The socket file is <dir>/.s.PGSQL.<port>. Postgres does not use TLS over one, so sslmode defaults to disable and asking for require is an error.
 
 ### `fn sqlstate(e: str) -> str`
 
@@ -213,7 +314,7 @@ One SCRAM-SHA-256 exchange (RFC 5802, RFC 7677), as pure functions of its inputs
 
 ### `fn connect_config(cfg: Config, deadline: until) -> result[Conn, str]`
 
-The deadline bounds the startup and authentication exchange. It does not bound the TCP connect or the TLS handshake themselves, which net.dial and net.tls_upgrade do not yet take one for.
+The deadline bounds the whole connection: the lookup, the TCP connect, the TLS handshake and the startup and authentication exchange.
 
 ### `fn close(c: Conn)`
 
@@ -247,17 +348,67 @@ Sent in binary, so any byte values -- NULs included -- arrive intact. For a byte
 
 ### `fn arg_null() -> Arg`
 
-### `fn no_args() -> [Arg]`
-
-The argument list of a query with no parameters. A bare [] cannot be passed yet: an empty list literal needs a declared type, and the compiler does not take it from the parameter.
-
 ### `fn query(c: Conn, sql: str, args: [Arg], deadline: until)`
 
-Runs one query with parameters ($1, $2, ...) through the extended protocol: the values travel separately from the SQL text, so they can never be parsed as SQL. Returns every row, buffered.
+Runs one query with parameters ($1, $2, ...) through the extended protocol: the values travel separately from the SQL text, so they can never be parsed as SQL. Returns every row, buffered; for a result too big to hold at once, use stream().
 
 ### `fn exec(c: Conn, sql: str, deadline: until) -> result[int, str]`
 
 Runs SQL with no parameters through the simple protocol, which accepts several statements separated by semicolons -- a migration, a schema. Returns the rows affected by the last statement. Rows a statement returns are read and discarded.  Never build `sql` from untrusted input: use query() and parameters.
+
+### `fn stream(c: Conn, sql: str, args: [Arg], deadline: until)`
+
+### `fn next_row(c: Conn, rows: Rows, deadline: until) -> result[bool, str]`
+
+Reads the next row of a stream into `rows` (at index 0). Returns false once there are no more; rows.affected and rows.tag are set then.
+
+### `fn stream_close(c: Conn, rows: Rows, deadline: until) -> result[bool, str]`
+
+Ends a stream early. The server is asked to cancel the query first -- and that request is seen through before the rest is drained, so it can never land on a LATER query on this connection -- then whatever it had already sent is read and dropped. The connection is then free.
+
+### `fn copy_in_start(c: Conn, sql: str, deadline: until) -> result[bool, str]`
+
+Starts COPY ... FROM STDIN. Send data with copy_in_send, then finish with copy_in_end -- or copy_in_abort, which rolls the COPY back.
+
+### `fn copy_in_send(c: Conn, data: bytes, deadline: until) -> result[bool, str]`
+
+Sends COPY data. It need not end on a row boundary; the server reassembles it. An error in the data is reported by copy_in_end.
+
+### `fn copy_in_end(c: Conn, deadline: until) -> result[int, str]`
+
+Ends the COPY. Returns the number of rows loaded, or the server's error about the data -- in which case nothing was loaded.
+
+### `fn copy_in_abort(c: Conn, reason: str, deadline: until) -> result[bool, str]`
+
+Abandons the COPY: the server discards everything sent. Ok once the server has confirmed; its "COPY from stdin failed" is the expected answer, not an error.
+
+### `fn copy_from(c: Conn, sql: str, data: bytes, deadline: until)`
+
+COPY ... FROM STDIN in one call. Returns the rows loaded.  pg.copy_from(c, "COPY users (id, email) FROM STDIN (FORMAT csv)", to_bytes("1,a@example.com\n2,b@example.com\n"), dl)
+
+### `fn copy_out_start(c: Conn, sql: str, deadline: until) -> result[bool, str]`
+
+Starts COPY ... TO STDOUT. Read it with copy_out_next.
+
+### `fn copy_out_next(c: Conn, deadline: until) -> result[opt[bytes], str]`
+
+The next piece of COPY output -- in text and CSV formats, one row -- or none when it is complete.
+
+### `fn copy_to(c: Conn, sql: str, deadline: until) -> result[bytes, str]`
+
+COPY ... TO STDOUT in one call, buffered (up to the 256 MiB result limit; stream a larger one with copy_out_start / copy_out_next).
+
+### `fn listen(c: Conn, channel: str, deadline: until) -> result[bool, str]`
+
+### `fn unlisten(c: Conn, channel: str, deadline: until) -> result[bool, str]`
+
+"*" stops listening on every channel.
+
+### `fn notify(c: Conn, channel: str, payload: str, deadline: until)`
+
+### `fn wait_notification(c: Conn, deadline: until)`
+
+The oldest queued notification, or waits for one until the deadline: none then. Unlike every other call, reaching the deadline here is not an error and does not break the connection -- waiting is the point.
 
 ### `fn col(rows: Rows, name: str) -> int`
 

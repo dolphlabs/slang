@@ -127,3 +127,23 @@ fn test_startup_message() {
     assert(rd32(m, 4) == 196608, "protocol 3.0");
     assert(m[len(m) - 1] == 0 && m[len(m) - 2] == 0, "double NUL terminator");
 }
+
+fn test_parse_url_unix_socket() {
+    let a = cfg_of("postgres://app@%2Fvar%2Frun%2Fpostgresql/db");
+    assert(a.host == "/var/run/postgresql", a.host);
+    assert(a.port == 5432 && a.database == "db");
+    assert(a.sslmode == "disable", "no TLS over a unix socket: " + a.sslmode);
+    let b = cfg_of("postgres://app@/db?host=/tmp&port=5433");
+    assert(b.host == "/tmp" && b.port == 5433, b.host);
+    // host= overrides the authority, as in libpq
+    assert(cfg_of("postgres://app@db.internal/x?host=/run/pg").host == "/run/pg");
+    assert(strings.contains(url_error("postgres://app@/db?host=/tmp&sslmode=require"),
+                            "Unix-domain"));
+    assert(strings.contains(url_error("postgres://app@/db"), "no host"));
+    assert(strings.contains(url_error("postgres://app@/db?host=/tmp&port=x"), "port"));
+}
+
+fn test_quote_ident() {
+    assert(quote_ident("jobs") == "\"jobs\"");
+    assert(quote_ident("a\"; DROP TABLE t; --") == "\"a\"\"; DROP TABLE t; --\"");
+}

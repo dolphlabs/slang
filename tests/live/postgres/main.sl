@@ -13,7 +13,8 @@ import "strings";
 //       ./slangc tests/live/postgres/main.sl --run
 //
 // PG_TLS_URL, if set, is a server with TLS on: the test checks the
-// session really is encrypted.
+// session really is encrypted. PG_SOCKET_URL, if set, reaches the server
+// over a Unix-domain socket.
 
 fn die(msg: str) {
     println("FAIL " + msg);
@@ -99,7 +100,7 @@ fn values() {
         die("insert tag: " + ins.tag);
     }
 
-    let rows = q(c, "SELECT * FROM slang_vals ORDER BY i8 DESC", pg.no_args());
+    let rows = q(c, "SELECT * FROM slang_vals ORDER BY i8 DESC", []);
     if rows.count != 2 || len(rows.columns) != 12 {
         die("shape");
     }
@@ -147,7 +148,7 @@ fn values() {
 
 fn errors() {
     let c = conn();
-    let syn = query_error(c, "SELEC 1", pg.no_args());
+    let syn = query_error(c, "SELEC 1", []);
     if pg.sqlstate(syn) != "42601" || !strings.contains(syn, "syntax error") {
         die("syntax: " + syn);
     }
@@ -168,12 +169,12 @@ fn errors() {
         die("BEGIN not seen");
     }
     query_error(c, "INSERT INTO slang_tx VALUES ($1)", [pg.arg_int(1)]);
-    let aborted = query_error(c, "SELECT 1", pg.no_args());
+    let aborted = query_error(c, "SELECT 1", []);
     if pg.sqlstate(aborted) != "25P02" || !pg.in_transaction(c) {
         die("failed transaction: " + aborted);
     }
     ex(c, "ROLLBACK");
-    if pg.in_transaction(c) || pg.get_int(q(c, "SELECT count(*) FROM slang_tx", pg.no_args()), 0, 0) != 1 {
+    if pg.in_transaction(c) || pg.get_int(q(c, "SELECT count(*) FROM slang_tx", []), 0, 0) != 1 {
         die("rollback");
     }
     // several statements, one call; the count is the last one's
@@ -201,7 +202,7 @@ fn errors() {
 fn cancel() {
     let c = conn();
     let t0 = time.mono();
-    let r = pg.query(c, "SELECT pg_sleep(30) /* slang-cancel-probe */", pg.no_args(),
+    let r = pg.query(c, "SELECT pg_sleep(30) /* slang-cancel-probe */", [],
                      until_of(time.mono() + 300000000));
     guard let x = r else let e = err_of(r) {
         if e != "timeout" || time.mono() - t0 > 2000000000 {
@@ -214,7 +215,7 @@ fn cancel() {
             let n = pg.get_int(q(watcher,
                 "SELECT count(*) FROM pg_stat_activity WHERE state = 'active' " +
                 "AND query LIKE '%slang-cancel-probe%' AND pid <> pg_backend_pid()",
-                pg.no_args()), 0, 0);
+                []), 0, 0);
             if n == 0 {
                 pg.close(watcher);
                 println("ok cancel");
@@ -279,7 +280,7 @@ fn pool() {
 fn large() {
     let c = conn();
     let t0 = time.mono();
-    let rows = q(c, "SELECT g, md5(g::text) FROM generate_series(1, 200000) g", pg.no_args());
+    let rows = q(c, "SELECT g, md5(g::text) FROM generate_series(1, 200000) g", []);
     let sum = 0;
     let r = 0;
     while r < rows.count {
@@ -289,7 +290,7 @@ fn large() {
     if rows.count != 200000 || sum != 20000100000 || len(pg.get_text(rows, 199999, 1)) != 32 {
         die("200k rows");
     }
-    let big = q(c, "SELECT repeat('x', 20000000)", pg.no_args());
+    let big = q(c, "SELECT repeat('x', 20000000)", []);
     if len(pg.get_text(big, 0, 0)) != 20000000 {
         die("20 MB value");
     }
@@ -313,12 +314,189 @@ fn tls() {
         die("tls connect: " + e);
         return;
     }
-    let rows = q(c, "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()", pg.no_args());
+    let rows = q(c, "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()", []);
     if !pg.get_bool(rows, 0, 0) {
         die("session is not encrypted");
     }
     pg.close(c);
     println("ok tls");
+}
+
+// ---- COPY ---------------------------------------------------------------
+
+fn copy() {
+    let c = conn();
+    ex(c, "DROP TABLE IF EXISTS slang_copy; CREATE TABLE slang_copy (id int, name text)");
+    let parts: [str] = [];
+    let i = 0;
+    while i < 100000 {
+        push(parts, to_str(i) + ",name " + to_str(i) + "\n");
+        i = i + 1;
+    }
+    let csv = to_bytes(strings.join(parts, ""));
+    let nr = pg.copy_from(c, "COPY slang_copy FROM STDIN (FORMAT csv)", csv, soon());
+    guard let n = nr else let e = err_of(nr) {
+        die("copy_from: " + e);
+        return;
+    }
+    if n != 100000 {
+        die("copy_from count " + to_str(n));
+    }
+    let bad = pg.copy_from(c, "COPY slang_copy FROM STDIN (FORMAT csv)",
+                           b"1,ok\nnot a number,x\n", soon());
+    guard let b = bad else let e = err_of(bad) {
+        if pg.sqlstate(e) != "22P02" {
+            die("bad copy data: " + e);
+        }
+        let out = pg.copy_to(c, "COPY (SELECT id, name FROM slang_copy ORDER BY id) TO STDOUT (FORMAT csv)",
+                             soon());
+        guard let dumped = out else let e2 = err_of(out) {
+            die("copy_to: " + e2);
+            return;
+        }
+        if dumped != csv {
+            die("copy round trip differs");
+        }
+        ex(c, "DROP TABLE slang_copy");
+        pg.close(c);
+        println("ok copy");
+        return;
+    }
+    die("bad copy data was loaded");
+}
+
+// ---- streaming ----------------------------------------------------------
+
+fn streaming() {
+    let c = conn();
+    let sr = pg.stream(c, "SELECT g FROM generate_series(1, 1000000) g", [], soon());
+    guard let rows = sr else let e = err_of(sr) {
+        die("stream: " + e);
+        return;
+    }
+    let sum = 0;
+    let n = 0;
+    while true {
+        let nr = pg.next_row(c, rows, soon());
+        guard let more = nr else let e = err_of(nr) {
+            die("next_row: " + e);
+            return;
+        }
+        if !more {
+            break;
+        }
+        sum = sum + pg.get_int(rows, 0, 0);
+        n = n + 1;
+    }
+    if n != 1000000 || sum != 500000500000 || rows.affected != 1000000 {
+        die("streamed " + to_str(n));
+    }
+    // closed early: the server must stop generating, and the connection
+    // must be usable straight away
+    let br = pg.stream(c, "SELECT g, pg_sleep(0.001) FROM generate_series(1, 100000) g",
+                       [], soon());
+    guard let big = br else let e = err_of(br) {
+        die("stream to close: " + e);
+        return;
+    }
+    pg.next_row(c, big, soon());
+    let t0 = time.mono();
+    let cr = pg.stream_close(c, big, soon());
+    guard let closed = cr else let e = err_of(cr) {
+        die("stream_close: " + e);
+        return;
+    }
+    if time.mono() - t0 > 5000000000 {
+        die("stream_close waited for the query instead of cancelling it");
+    }
+    if pg.get_int(q(c, "SELECT 7", []), 0, 0) != 7 {
+        die("query after stream_close");
+    }
+    pg.close(c);
+    println("ok streaming");
+}
+
+// ---- LISTEN / NOTIFY ----------------------------------------------------
+
+fn notifications() {
+    let listener = conn();
+    let talker = conn();
+    let lr = pg.listen(listener, "slang \"events\"", soon());
+    guard let l = lr else let e = err_of(lr) {
+        die("listen: " + e);
+        return;
+    }
+    let idle = pg.wait_notification(listener, until_of(time.mono() + 200000000));
+    guard let nothing = idle else let e = err_of(idle) {
+        die("idle wait: " + e);
+        return;
+    }
+    guard let unexpected = nothing else {
+        pg.notify(talker, "slang \"events\"", "first", soon());
+        ex(talker, "NOTIFY \"slang \"\"events\"\"\", 'second'");
+        let a = pg.wait_notification(listener, soon()) ?? none;
+        let b = pg.wait_notification(listener, soon()) ?? none;
+        guard let na = a else {
+            die("first notification missing");
+            return;
+        }
+        guard let nb = b else {
+            die("second notification missing");
+            return;
+        }
+        if na.payload != "first" || nb.payload != "second" ||
+           na.channel != "slang \"events\"" {
+            die("notifications: " + na.channel + " " + na.payload + " " + nb.payload);
+        }
+        pg.close(listener);
+        pg.close(talker);
+        println("ok notifications");
+        return;
+    }
+    die("a notification arrived before any was sent");
+}
+
+// ---- the connect deadline -----------------------------------------------
+
+fn connect_deadline() {
+    // the whole connect, against a real server, inside a short deadline
+    let cr = pg.connect(url(), until_of(time.mono() + 5000000000));
+    guard let c = cr else let e = err_of(cr) {
+        die("connect within 5s: " + e);
+        return;
+    }
+    pg.close(c);
+    let late = pg.connect(url(), until_of(time.mono() - 1));
+    guard let x = late else let e = err_of(late) {
+        if e != "timeout" {
+            die("expired connect deadline: " + e);
+        }
+        println("ok connect deadline");
+        return;
+    }
+    die("connected with an expired deadline");
+}
+
+// ---- Unix-domain socket -------------------------------------------------
+
+fn unix_socket() {
+    guard let u = proc.getenv("PG_SOCKET_URL") else {
+        println("ok unix socket (skipped: PG_SOCKET_URL not set)");
+        return;
+    }
+    let cr = pg.connect(u, soon());
+    guard let c = cr else let e = err_of(cr) {
+        die("unix socket connect: " + e);
+        return;
+    }
+    // client_addr is NULL exactly when the session came over a socket
+    let rows = q(c, "SELECT client_addr IS NULL FROM pg_stat_activity WHERE pid = pg_backend_pid()",
+                 []);
+    if !pg.get_bool(rows, 0, 0) {
+        die("session is not over a unix socket");
+    }
+    pg.close(c);
+    println("ok unix socket");
 }
 
 values();
@@ -327,3 +505,8 @@ cancel();
 pool();
 large();
 tls();
+copy();
+streaming();
+notifications();
+connect_deadline();
+unix_socket();

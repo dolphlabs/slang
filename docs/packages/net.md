@@ -72,6 +72,24 @@ the right contract regardless — a half-written frame is unrecoverable.
 TLS, with the same reserved string. The `link` API takes an `until` on
 `accept`/`send`/`recv` already.
 
+`net.dial_until(host, port, deadline)` bounds connecting: the DNS lookup
+and the TCP connect together. A lookup still running when the deadline
+passes is abandoned to the resolver thread (`getaddrinfo` cannot be
+interrupted), so the caller gets `"timeout"` on time. Every address the
+name resolves to is tried in turn — `net.dial` does the same, without a
+deadline.
+
+##### Unix-domain sockets
+
+`net.dial_unix(path, deadline)` connects to a Unix-domain stream socket
+and `net.listen_unix(path)` listens on one (accept with `net.accept`).
+The fds work with every fd-based call — `send`/`recv` and their `_until`
+forms, `close`, `idle_alive`. `listen_unix` refuses a path that already
+exists rather than deleting it, since the file may belong to a server
+that is still running; remove a stale one with `os.remove` first. A path
+longer than the platform allows (104 bytes on macOS, 108 on Linux) is an
+error, not truncated.
+
 See `examples/httpd/` for a minimal HTTP server on `link` plus the
 `http` stdlib package.
 
@@ -151,6 +169,8 @@ to close; on success it belongs to the returned handle and `tls_close`
 closes it. Read no further than the server's go-ahead before upgrading:
 anything a man in the middle queued behind it would otherwise be trusted
 as if it had arrived encrypted (libpq's CVE-2021-23222).
+`tls_upgrade_until(fd, host, ctx, deadline)` bounds the handshake; a
+server that stops answering part way through gives `"timeout"`.
 
 ## API
 
@@ -161,6 +181,12 @@ as if it had arrived encrypted (libpq's CVE-2021-23222).
 ### `net.accept(int) -> result[i32,str]`
 
 ### `net.dial(str, int) -> result[i32,str]`
+
+### `net.dial_until(str, int, until) -> result[i32,str]`
+
+### `net.dial_unix(str, until) -> result[i32,str]`
+
+### `net.listen_unix(str) -> result[i32,str]`
 
 ### `net.send(int, bytes) -> result[i32,str]`
 
@@ -185,6 +211,8 @@ as if it had arrived encrypted (libpq's CVE-2021-23222).
 ### `net.tls_dial(str, int, rawptr) -> result[rawptr,str]`
 
 ### `net.tls_upgrade(int, str, rawptr) -> result[rawptr,str]`
+
+### `net.tls_upgrade_until(int, str, rawptr, until) -> result[rawptr,str]`
 
 ### `net.tls_send(rawptr, bytes) -> result[i32,str]`
 
