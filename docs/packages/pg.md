@@ -54,9 +54,7 @@ whole connection: DNS lookup, TCP connect, TLS handshake and login.
 be parsed as SQL, whatever it contains. Build them with `pg.arg_text(s)`,
 `arg_int(n)`, `arg_float(x)` (sent exactly, not rounded), `arg_bool(b)`,
 `arg_bytes(b)` (binary, for `bytea`) and `arg_null()`. A query with none
-takes `pg.no_args()`: a bare `[]` cannot be passed yet, because an empty
-list literal needs a declared type and the compiler does not take it from
-the parameter.
+takes `[]`.
 
 **Results** from `query` are buffered whole in a `Rows` (for one too big
 for that, see [Streaming](#streaming)): `rows.count`, `rows.columns`
@@ -177,7 +175,7 @@ time, so memory holds one row however large the result, and the server
 is held back by TCP flow control rather than the client reading ahead:
 
 ```slang
-let sr = pg.stream(c, "SELECT id, body FROM events ORDER BY id", pg.no_args(), dl);
+let sr = pg.stream(c, "SELECT id, body FROM events ORDER BY id", [], dl);
 guard let rows = sr else let e = err_of(sr) { return; }
 while true {
     let nr = pg.next_row(c, rows, dl);
@@ -349,10 +347,6 @@ Sent as the shortest text that reads back as exactly this float: to_str's six si
 Sent in binary, so any byte values -- NULs included -- arrive intact. For a bytea column.
 
 ### `fn arg_null() -> Arg`
-
-### `fn no_args() -> [Arg]`
-
-The argument list of a query with no parameters. A bare [] cannot be passed yet: an empty list literal needs a declared type, and the compiler does not take it from the parameter.
 
 ### `fn query(c: Conn, sql: str, args: [Arg], deadline: until)`
 

@@ -397,7 +397,7 @@ network buffers and binary formats.
 
 ```slang
 let xs = [10, 20, 30];         // inferred [int]
-let empty: [str] = [];         // empty lists need an annotation
+let empty: [str] = [];         // an empty list needs a type from context
 push(xs, 40);                  // grow (amortized O(1))
 println(pop(xs));              // shrink from the end
 xs[0] = 5;                     // bounds-checked index assignment
@@ -408,6 +408,18 @@ let grid = [[1, 2], [3, 4]];   // nested lists
 
 Indexing is bounds-checked at runtime; violations abort with a clear
 message.
+
+`[]` has no element type of its own, so it takes one from what is
+expected of it — the same way `none` does: an annotated `let`, a function
+or method parameter, a struct field, a `return`, an assignment,
+`ok([])`/`some([])`, `push(grid, [])`, or an element of an outer list.
+With nothing expected (`let xs = [];`) it is a compile error.
+
+```slang
+fn total(xs: [int]) -> int { return len(xs); }
+total([]);                          // [int], from the parameter
+let b = Basket { items: [] };       // from the field
+```
 
 #### Maps `map[K]V`
 
@@ -1148,9 +1160,7 @@ whole connection: DNS lookup, TCP connect, TLS handshake and login.
 be parsed as SQL, whatever it contains. Build them with `pg.arg_text(s)`,
 `arg_int(n)`, `arg_float(x)` (sent exactly, not rounded), `arg_bool(b)`,
 `arg_bytes(b)` (binary, for `bytea`) and `arg_null()`. A query with none
-takes `pg.no_args()`: a bare `[]` cannot be passed yet, because an empty
-list literal needs a declared type and the compiler does not take it from
-the parameter.
+takes `[]`.
 
 **Results** from `query` are buffered whole in a `Rows` (for one too big
 for that, see [Streaming](#streaming)): `rows.count`, `rows.columns`
@@ -1271,7 +1281,7 @@ time, so memory holds one row however large the result, and the server
 is held back by TCP flow control rather than the client reading ahead:
 
 ```slang
-let sr = pg.stream(c, "SELECT id, body FROM events ORDER BY id", pg.no_args(), dl);
+let sr = pg.stream(c, "SELECT id, body FROM events ORDER BY id", [], dl);
 guard let rows = sr else let e = err_of(sr) { return; }
 while true {
     let nr = pg.next_row(c, rows, dl);
@@ -2608,9 +2618,6 @@ Makefile       build/test/clean
   function, never an environment. `break`/`continue` work inside
   loops.
 - Package-level lists are not supported yet (scalars and bytes are).
-- An empty list literal needs a declared type, and the compiler does not
-  take it from a function parameter: `f([])` is an error, so declare
-  `let none: [T] = [];` and pass that.
 - Map keys are limited to integers, `str`, and `bool`.
 - No data-race protection: `spawn` gives you real concurrency and
   per-task failure isolation, not an ownership/borrow checker.

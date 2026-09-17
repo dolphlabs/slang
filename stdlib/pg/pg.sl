@@ -1139,13 +1139,6 @@ pub fn arg_null() -> Arg {
     return Arg { is_null: true, binary: false, data: b"" };
 }
 
-// The argument list of a query with no parameters. A bare [] cannot be
-// passed yet: an empty list literal needs a declared type, and the
-// compiler does not take it from the parameter.
-pub fn no_args() -> [Arg] {
-    let none_args: [Arg] = [];
-    return none_args;
-}
 
 // ---- running queries -------------------------------------------------
 

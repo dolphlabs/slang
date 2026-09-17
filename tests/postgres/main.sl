@@ -265,7 +265,7 @@ fn scenario_query() {
     if pg.usable(c) {
         die("usable after close");
     }
-    let after = pg.query(c, "SELECT 1", pg.no_args(), soon());
+    let after = pg.query(c, "SELECT 1", [], soon());
     guard let x = after else let e = err_of(after) {
         if e != "connection is closed" {
             die("query after close: " + e);
@@ -467,7 +467,7 @@ fn scenario_errors() {
     let lfd = listener();
     spawn srv_errors(lfd);
     let c = must_connect(url_for(lfd, "u"));
-    let r1 = pg.query(c, "SELECT * FROM nope", pg.no_args(), soon());
+    let r1 = pg.query(c, "SELECT * FROM nope", [], soon());
     guard let x = r1 else let e = err_of(r1) {
         if e != "ERROR: relation \"nope\" does not exist (SQLSTATE 42P01)" {
             die("server error text: " + e);
@@ -475,7 +475,7 @@ fn scenario_errors() {
         if !pg.usable(c) || pg.sqlstate(e) != "42P01" {
             die("server error broke the connection");
         }
-        let r2 = pg.query(c, "UPDATE t SET x = 1", pg.no_args(), soon());
+        let r2 = pg.query(c, "UPDATE t SET x = 1", [], soon());
         guard let rows = r2 else let e2 = err_of(r2) {
             die("query after server error: " + e2);
             return;
@@ -487,13 +487,13 @@ fn scenario_errors() {
         if n != 5 || !pg.in_transaction(c) {
             die("exec: last statement's count, and transaction status");
         }
-        let cp = pg.query(c, "COPY t FROM STDIN", pg.no_args(), soon());
+        let cp = pg.query(c, "COPY t FROM STDIN", [], soon());
         guard let y = cp else let e3 = err_of(cp) {
             if !strings.contains(e3, "COPY FROM STDIN needs pg.copy_from") ||
                pg.sqlstate(e3) != "57014" {
                 die("copy: " + e3);
             }
-            let r4 = pg.query(c, "SELECT 1", pg.no_args(), soon());
+            let r4 = pg.query(c, "SELECT 1", [], soon());
             guard let z = r4 else let e4 = err_of(r4) {
                 die("query after copy: " + e4);
                 return;
@@ -543,12 +543,12 @@ fn broken_try(mode: int) -> str {
     let lfd = listener();
     spawn srv_broken(lfd, mode);
     let c = must_connect(url_for(lfd, "u"));
-    let r = pg.query(c, "SELECT a, b FROM t", pg.no_args(), soon());
+    let r = pg.query(c, "SELECT a, b FROM t", [], soon());
     guard let x = r else let e = err_of(r) {
         if pg.usable(c) {
             die("connection still usable after: " + e);
         }
-        let again = pg.query(c, "SELECT 1", pg.no_args(), soon());
+        let again = pg.query(c, "SELECT 1", [], soon());
         guard let y = again else let e2 = err_of(again) {
             if !strings.has_prefix(e2, "connection is broken: ") {
                 die("reuse of a broken connection: " + e2);
@@ -618,7 +618,7 @@ fn scenario_timeout() {
     spawn srv_slow(lfd, cancel);
     let c = must_connect(url_for(lfd, "u"));
     let t0 = time.mono();
-    let r = pg.query(c, "SELECT pg_sleep(60)", pg.no_args(),
+    let r = pg.query(c, "SELECT pg_sleep(60)", [],
                      until_of(time.mono() + 200000000));
     let took = time.mono() - t0;
     guard let x = r else let e = err_of(r) {
@@ -706,7 +706,7 @@ fn scenario_getters() {
     let lfd = listener();
     spawn srv_one_row(lfd);
     let c = must_connect(url_for(lfd, "u"));
-    let qr = pg.query(c, "SELECT n, t", pg.no_args(), soon());
+    let qr = pg.query(c, "SELECT n, t", [], soon());
     guard let rows = qr else let e = err_of(qr) {
         die("query: " + e);
         return;
@@ -960,7 +960,7 @@ fn scenario_copy_in() {
         die("copy_in_start: " + e);
         return;
     }
-    let busy = pg.query(c, "SELECT 1", pg.no_args(), soon());
+    let busy = pg.query(c, "SELECT 1", [], soon());
     guard let b = busy else let e = err_of(busy) {
         if !strings.contains(e, "busy: COPY FROM STDIN is in progress") {
             die("busy during copy: " + e);
@@ -981,7 +981,7 @@ fn scenario_copy_in() {
                 if e4 != "not a COPY ... FROM STDIN statement" {
                     die("not a copy: " + e4);
                 }
-                let after = pg.query(c, "SELECT 1", pg.no_args(), soon());
+                let after = pg.query(c, "SELECT 1", [], soon());
                 guard let af = after else let e5 = err_of(after) {
                     die("query after copies: " + e5);
                     return;
@@ -1146,7 +1146,7 @@ fn scenario_stream() {
     spawn srv_stream(lfd, cancel);
     let c = must_connect(url_for(lfd, "u"));
 
-    let sr = pg.stream(c, "SELECT n FROM big", pg.no_args(), soon());
+    let sr = pg.stream(c, "SELECT n FROM big", [], soon());
     guard let rows = sr else let e = err_of(sr) {
         die("stream: " + e);
         return;
@@ -1181,7 +1181,7 @@ fn scenario_stream() {
         die("next_row after the end");
     }
 
-    let ins = pg.stream(c, "INSERT INTO t VALUES (1)", pg.no_args(), soon());
+    let ins = pg.stream(c, "INSERT INTO t VALUES (1)", [], soon());
     guard let ir = ins else let e = err_of(ins) {
         die("stream of an insert: " + e);
         return;
@@ -1190,7 +1190,7 @@ fn scenario_stream() {
         die("stream of an insert should be complete at once");
     }
 
-    let div = pg.stream(c, "SELECT 1/0", pg.no_args(), soon());
+    let div = pg.stream(c, "SELECT 1/0", [], soon());
     guard let dr = div else let e = err_of(div) {
         die("stream before the error: " + e);
         return;
@@ -1201,7 +1201,7 @@ fn scenario_stream() {
         if !first || pg.sqlstate(e) != "22012" || !pg.usable(c) {
             die("error mid-stream: " + e);
         }
-        let big = pg.stream(c, "SELECT n FROM endless", pg.no_args(), soon());
+        let big = pg.stream(c, "SELECT n FROM endless", [], soon());
         guard let br = big else let e2 = err_of(big) {
             die("stream to close: " + e2);
             return;
@@ -1216,7 +1216,7 @@ fn scenario_stream() {
         if (chan_recv(cancel) ?? "") != "cancel ok" {
             die("stream_close sent no cancel");
         }
-        let after = pg.query(c, "SELECT 0", pg.no_args(), soon());
+        let after = pg.query(c, "SELECT 0", [], soon());
         guard let af = after else let e4 = err_of(after) {
             die("query after stream_close: " + e4);
             return;

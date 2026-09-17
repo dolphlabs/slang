@@ -530,9 +530,7 @@ whole connection: DNS lookup, TCP connect, TLS handshake and login.
 be parsed as SQL, whatever it contains. Build them with `pg.arg_text(s)`,
 `arg_int(n)`, `arg_float(x)` (sent exactly, not rounded), `arg_bool(b)`,
 `arg_bytes(b)` (binary, for `bytea`) and `arg_null()`. A query with none
-takes `pg.no_args()`: a bare `[]` cannot be passed yet, because an empty
-list literal needs a declared type and the compiler does not take it from
-the parameter.
+takes `[]`.
 
 **Results** from `query` are buffered whole in a `Rows` (for one too big
 for that, see [Streaming](#streaming)): `rows.count`, `rows.columns`
@@ -653,7 +651,7 @@ time, so memory holds one row however large the result, and the server
 is held back by TCP flow control rather than the client reading ahead:
 
 ```slang
-let sr = pg.stream(c, "SELECT id, body FROM events ORDER BY id", pg.no_args(), dl);
+let sr = pg.stream(c, "SELECT id, body FROM events ORDER BY id", [], dl);
 guard let rows = sr else let e = err_of(sr) { return; }
 while true {
     let nr = pg.next_row(c, rows, dl);
@@ -1588,7 +1586,7 @@ signal-handling program.
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [net](packages/net.md) -- compiler-provided, 31 public items
 - [os](packages/os.md) -- compiler-provided, 14 public items
-- [pg](packages/pg.md) -- source package, 53 public items
+- [pg](packages/pg.md) -- source package, 52 public items
 - [proc](packages/proc.md) -- compiler-provided, 6 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [sql](packages/sql.md) -- compiler-provided, 20 public items

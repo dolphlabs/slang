@@ -100,7 +100,7 @@ fn values() {
         die("insert tag: " + ins.tag);
     }
 
-    let rows = q(c, "SELECT * FROM slang_vals ORDER BY i8 DESC", pg.no_args());
+    let rows = q(c, "SELECT * FROM slang_vals ORDER BY i8 DESC", []);
     if rows.count != 2 || len(rows.columns) != 12 {
         die("shape");
     }
@@ -148,7 +148,7 @@ fn values() {
 
 fn errors() {
     let c = conn();
-    let syn = query_error(c, "SELEC 1", pg.no_args());
+    let syn = query_error(c, "SELEC 1", []);
     if pg.sqlstate(syn) != "42601" || !strings.contains(syn, "syntax error") {
         die("syntax: " + syn);
     }
@@ -169,12 +169,12 @@ fn errors() {
         die("BEGIN not seen");
     }
     query_error(c, "INSERT INTO slang_tx VALUES ($1)", [pg.arg_int(1)]);
-    let aborted = query_error(c, "SELECT 1", pg.no_args());
+    let aborted = query_error(c, "SELECT 1", []);
     if pg.sqlstate(aborted) != "25P02" || !pg.in_transaction(c) {
         die("failed transaction: " + aborted);
     }
     ex(c, "ROLLBACK");
-    if pg.in_transaction(c) || pg.get_int(q(c, "SELECT count(*) FROM slang_tx", pg.no_args()), 0, 0) != 1 {
+    if pg.in_transaction(c) || pg.get_int(q(c, "SELECT count(*) FROM slang_tx", []), 0, 0) != 1 {
         die("rollback");
     }
     // several statements, one call; the count is the last one's
@@ -202,7 +202,7 @@ fn errors() {
 fn cancel() {
     let c = conn();
     let t0 = time.mono();
-    let r = pg.query(c, "SELECT pg_sleep(30) /* slang-cancel-probe */", pg.no_args(),
+    let r = pg.query(c, "SELECT pg_sleep(30) /* slang-cancel-probe */", [],
                      until_of(time.mono() + 300000000));
     guard let x = r else let e = err_of(r) {
         if e != "timeout" || time.mono() - t0 > 2000000000 {
@@ -215,7 +215,7 @@ fn cancel() {
             let n = pg.get_int(q(watcher,
                 "SELECT count(*) FROM pg_stat_activity WHERE state = 'active' " +
                 "AND query LIKE '%slang-cancel-probe%' AND pid <> pg_backend_pid()",
-                pg.no_args()), 0, 0);
+                []), 0, 0);
             if n == 0 {
                 pg.close(watcher);
                 println("ok cancel");
@@ -280,7 +280,7 @@ fn pool() {
 fn large() {
     let c = conn();
     let t0 = time.mono();
-    let rows = q(c, "SELECT g, md5(g::text) FROM generate_series(1, 200000) g", pg.no_args());
+    let rows = q(c, "SELECT g, md5(g::text) FROM generate_series(1, 200000) g", []);
     let sum = 0;
     let r = 0;
     while r < rows.count {
@@ -290,7 +290,7 @@ fn large() {
     if rows.count != 200000 || sum != 20000100000 || len(pg.get_text(rows, 199999, 1)) != 32 {
         die("200k rows");
     }
-    let big = q(c, "SELECT repeat('x', 20000000)", pg.no_args());
+    let big = q(c, "SELECT repeat('x', 20000000)", []);
     if len(pg.get_text(big, 0, 0)) != 20000000 {
         die("20 MB value");
     }
@@ -314,7 +314,7 @@ fn tls() {
         die("tls connect: " + e);
         return;
     }
-    let rows = q(c, "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()", pg.no_args());
+    let rows = q(c, "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()", []);
     if !pg.get_bool(rows, 0, 0) {
         die("session is not encrypted");
     }
@@ -369,7 +369,7 @@ fn copy() {
 
 fn streaming() {
     let c = conn();
-    let sr = pg.stream(c, "SELECT g FROM generate_series(1, 1000000) g", pg.no_args(), soon());
+    let sr = pg.stream(c, "SELECT g FROM generate_series(1, 1000000) g", [], soon());
     guard let rows = sr else let e = err_of(sr) {
         die("stream: " + e);
         return;
@@ -394,7 +394,7 @@ fn streaming() {
     // closed early: the server must stop generating, and the connection
     // must be usable straight away
     let br = pg.stream(c, "SELECT g, pg_sleep(0.001) FROM generate_series(1, 100000) g",
-                       pg.no_args(), soon());
+                       [], soon());
     guard let big = br else let e = err_of(br) {
         die("stream to close: " + e);
         return;
@@ -409,7 +409,7 @@ fn streaming() {
     if time.mono() - t0 > 5000000000 {
         die("stream_close waited for the query instead of cancelling it");
     }
-    if pg.get_int(q(c, "SELECT 7", pg.no_args()), 0, 0) != 7 {
+    if pg.get_int(q(c, "SELECT 7", []), 0, 0) != 7 {
         die("query after stream_close");
     }
     pg.close(c);
@@ -491,7 +491,7 @@ fn unix_socket() {
     }
     // client_addr is NULL exactly when the session came over a socket
     let rows = q(c, "SELECT client_addr IS NULL FROM pg_stat_activity WHERE pid = pg_backend_pid()",
-                 pg.no_args());
+                 []);
     if !pg.get_bool(rows, 0, 0) {
         die("session is not over a unix socket");
     }

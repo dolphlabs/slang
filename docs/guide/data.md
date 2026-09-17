@@ -22,7 +22,7 @@ network buffers and binary formats.
 
 ```slang
 let xs = [10, 20, 30];         // inferred [int]
-let empty: [str] = [];         // empty lists need an annotation
+let empty: [str] = [];         // an empty list needs a type from context
 push(xs, 40);                  // grow (amortized O(1))
 println(pop(xs));              // shrink from the end
 xs[0] = 5;                     // bounds-checked index assignment
@@ -33,6 +33,18 @@ let grid = [[1, 2], [3, 4]];   // nested lists
 
 Indexing is bounds-checked at runtime; violations abort with a clear
 message.
+
+`[]` has no element type of its own, so it takes one from what is
+expected of it — the same way `none` does: an annotated `let`, a function
+or method parameter, a struct field, a `return`, an assignment,
+`ok([])`/`some([])`, `push(grid, [])`, or an element of an outer list.
+With nothing expected (`let xs = [];`) it is a compile error.
+
+```slang
+fn total(xs: [int]) -> int { return len(xs); }
+total([]);                          // [int], from the parameter
+let b = Basket { items: [] };       // from the field
+```
 
 ## Maps map[K]V
 

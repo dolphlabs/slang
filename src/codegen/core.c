@@ -1526,7 +1526,8 @@ int want_pkg(CG *cg, const char *name) {
  * restore it. */
 const char *expect_push(CG *cg, const char *t) {
     const char *saved = cg->expect;
-    if (t && (is_opt(t) || is_result(t) || is_chan(t) || is_join(t)))
+    if (t && (is_opt(t) || is_result(t) || is_chan(t) || is_join(t) ||
+              is_arr(t)))
         cg->expect = t;
     return saved;
 }
