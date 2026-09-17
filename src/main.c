@@ -24,6 +24,7 @@
 #include <ctype.h>
 #include <limits.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #ifndef SLANG_VERSION
@@ -507,7 +508,22 @@ int main(int argc, char **argv) {
         snprintf(rcmd, sizeof(rcmd), "%s%s", strchr(outname, '/') ? "" : "./",
                  outname);
         status = system(rcmd);
-        return status == 0 ? 0 : 1;
+        /* Pass the program's own outcome through rather than flattening
+           every failure to 1: `slangc main.sl --run; echo $?` should say
+           what the program said, and a signal death -- SIGPIPE's 141 above
+           all -- is the clue a failing test most needs. The shell's 128+N
+           convention is used for signals. */
+        if (status == -1)
+            return 1;
+        if (WIFSIGNALED(status)) {
+            int sig = WTERMSIG(status);
+            fprintf(stderr, "slang: program killed by signal %d (%s)\n", sig,
+                    strsignal(sig));
+            return 128 + sig;
+        }
+        if (WIFEXITED(status))
+            return WEXITSTATUS(status);
+        return 1;
     }
 
     fputs("compiled ", stdout);
