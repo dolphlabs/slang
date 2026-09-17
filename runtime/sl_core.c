@@ -1054,19 +1054,32 @@ static inline void sl_rt_safepoint_exit(void) {
  * user-triggered panic can fire -- abandoning the intervening C
  * frames without running any cleanup for them is exactly what
  * already happened before, just via a different mechanism. */
+/* The one way a task (or the program) dies of an error: report it, and
+ * either hand the message to whoever joins this task or end the process.
+ * `detail` is appended verbatim when non-empty -- the bounds-check family
+ * passes "(index N, length M)", while panic() and assert() pass nothing,
+ * because a message the programmer wrote needs no numbers bolted on. */
 __attribute__((noreturn))
-static void sl_rt_error_at(const char *msg, long long a, long long b,
-                           const char *at) {
-    char loc[256];
+static void sl_rt_fail(const char *msg, const char *at, const char *detail) {
+    char loc[1024];
     if (at && at[0])
         snprintf(loc, sizeof(loc), "%s at %s", msg, at);
     else
         snprintf(loc, sizeof(loc), "%s", msg);
+    const char *sep = (detail && detail[0]) ? " " : "";
+    if (!detail)
+        detail = "";
     sl_rt_preempt_disable();
     if (!sl_rt_current_task->is_main) {
-        fprintf(stderr,
-                "slang: task panicked: %s (index %lld, length %lld)\n",
-                loc, a, b);
+        /* Under `slangc test` a joined task's panic is the test's failure
+           report, and the runner prints it; saying it here too would print
+           every failure twice. Only when something is joining: a
+           fire-and-forget task's panic has no other place to be seen. */
+        static int quiet = -1;
+        if (quiet < 0)
+            quiet = getenv("SLANG_TEST_RUNNER") ? 1 : 0;
+        if (!(quiet && sl_rt_current_task->join))
+            fprintf(stderr, "slang: task panicked: %s%s%s\n", loc, sep, detail);
         if (sl_rt_current_task->join)
             sl_join_fail(sl_rt_current_task->join, loc);
         sl_rt_active_spawns_dec();
@@ -1076,9 +1089,24 @@ static void sl_rt_error_at(const char *msg, long long a, long long b,
                 "switch-back\n");
         abort();
     }
-    fprintf(stderr, "slang runtime error: %s (index %lld, length %lld)\n",
-            loc, a, b);
+    fprintf(stderr, "slang runtime error: %s%s%s\n", loc, sep, detail);
     exit(1);
+}
+
+__attribute__((noreturn))
+static void sl_rt_error_at(const char *msg, long long a, long long b,
+                           const char *at) {
+    char detail[64];
+    snprintf(detail, sizeof(detail), "(index %lld, length %lld)", a, b);
+    sl_rt_fail(msg, at, detail);
+}
+
+/* panic("...") and a failed assert(cond, "..."). Noreturn: liveness treats
+ * a panic call like exit(), so `guard let x = r else { panic("..."); }`
+ * leaves scope the way the guard requires. */
+__attribute__((noreturn))
+static void sl_rt_panic(const char *msg, const char *at) {
+    sl_rt_fail(msg ? msg : "panic", at, "");
 }
 
 __attribute__((noreturn))

@@ -254,7 +254,8 @@ static const char *guard_let_inner_type(CG *cg, Stmt *s) {
  * stays deliberately conservative in the "does it terminate" answer,
  * requiring an unconditional return or exit() on every path). */
 static int expr_is_exit_call(Expr *e) {
-    return e->kind == EX_CALL && !strcmp(e->as.call.name, "exit");
+    return e->kind == EX_CALL && (!strcmp(e->as.call.name, "exit") ||
+                                  !strcmp(e->as.call.name, "panic"));
 }
 
 static int block_always_terminates(Block *b) {

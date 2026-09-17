@@ -15,6 +15,8 @@
 
 #include "common.h"
 #include "loader.h"
+#include "lexer.h"
+#include "parser.h"
 #include "codegen.h"
 #include "codegen/liveness.h"
 #include "codegen/mir.h"
@@ -22,6 +24,7 @@
 #include "project.h"
 
 #include <ctype.h>
+#include <dirent.h>
 #include <limits.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -36,12 +39,16 @@ static void print_usage(void) {
           "[--dump-liveness] [--dump-mir]\n"
           "       slangc new <name>|.        scaffold a project here or in <name>\n"
           "       slangc get [file.sl|dir]   resolve deps, write slang.lock\n"
+          "       slangc test [dir] [--run substr] [--keep]   run test_* functions in *_test.sl\n"
           "       slangc --version",
           stderr);
     fputc(10, stderr);
 }
 
 static void write_file(const char *path, const char *data, size_t len);
+static int build(const char *input, const char *outname, int emit_c,
+                 int keep_c, int run, int want_liveness_dump,
+                 int want_mir_dump);
 
 /* ---- slangc new -----------------------------------------------------
  *
@@ -331,69 +338,269 @@ static int cmd_get(const char *hint) {
     return 0;
 }
 
-int main(int argc, char **argv) {
-    const char *input = NULL;
-    const char *outname = NULL;
-    int emit_c = 0, keep_c = 0, run = 0, want_liveness_dump = 0,
-        want_mir_dump = 0;
+/* ---- slangc test ----------------------------------------------------
+ *
+ * Go's shape, because it is proven and server developers already know it:
+ *
+ *   - test files are *_test.sl, and a normal build never sees them;
+ *   - a test is `fn test_name()` in a test file, inside the package it
+ *     tests, so it can reach that package's private functions;
+ *   - a test fails by panicking: assert(cond, msg) or panic(msg).
+ *
+ * Each test runs in its OWN task and is joined before the next starts, so
+ * a failure is a joined task's err -- reported with the test's name and
+ * the location of the assert -- and the run carries on. Tests run one at a
+ * time on purpose: output stays in order, and nothing is concurrent that
+ * the test did not make concurrent itself.
+ *
+ * How: discover the test functions, generate a runner program that
+ * imports the package under test and calls each one, and compile it with
+ * the ordinary pipeline. The loader's test mode (loader.c) is what adds
+ * the test files, exports the test functions to the runner, and -- for a
+ * program rather than a library -- drops the top-level statements, since
+ * the runner is main now. */
 
-    if (argc >= 2 && !strcmp(argv[1], "get")) {
-        sl_compiler_argv0 = argv[0];
-        return cmd_get(argc >= 3 ? argv[2] : NULL);
-    }
-    if (argc >= 2 && !strcmp(argv[1], "new")) {
-        sl_compiler_argv0 = argv[0];
-        return cmd_new(argc >= 3 ? argv[2] : NULL);
-    }
-    if (argc >= 2 && (!strcmp(argv[1], "--version") ||
-                      !strcmp(argv[1], "-V"))) {
-        fputs("slangc " SLANG_VERSION "\n", stdout);
-        return 0;
-    }
+static int ends_with(const char *s, const char *suffix) {
+    size_t a = strlen(s), b = strlen(suffix);
+    return a >= b && !strcmp(s + a - b, suffix);
+}
 
-    for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "-o")) {
-            if (i + 1 >= argc) {
-                fputs("slang: -o requires a name", stderr);
-                fputc(10, stderr);
-                return 1;
-            }
-            outname = argv[++i];
-        } else if (!strcmp(argv[i], "--emit-c")) {
-            emit_c = 1;
-        } else if (!strcmp(argv[i], "--keep-c")) {
-            keep_c = 1;
+/* Relative path from directory `from` to directory `to`, both absolute
+ * and canonical. Imports resolve relative to the importing file, so this
+ * is how the runner, which lives in a temporary directory, reaches the
+ * package under test without the language gaining absolute imports. */
+static char *relative_path(const char *from, const char *to) {
+    const char *a = from, *b = to;
+    const char *last_common = from;
+    while (*a && *b && *a == *b) {
+        if (*a == '/')
+            last_common = a;
+        a++;
+        b++;
+    }
+    if ((*a == '\0' && (*b == '/' || *b == '\0')) ||
+        (*b == '\0' && *a == '/'))
+        last_common = a;
+    const char *rest_from = from + (last_common - from);
+    const char *rest_to = to + (last_common - from);
+    StrBuf sb;
+    sb_init(&sb);
+    for (const char *q = rest_from; *q; q++)
+        if (*q == '/')
+            sb_append(&sb, sb.len ? "/.." : "..");
+    if (*rest_to == '/')
+        rest_to++;
+    if (*rest_to) {
+        if (sb.len)
+            sb_append(&sb, "/");
+        sb_append(&sb, rest_to);
+    }
+    if (!sb.len)
+        sb_append(&sb, ".");
+    return sb.data;
+}
+
+static int cmd_test(int argc, char **argv) {
+    const char *target = ".";
+    const char *filter = NULL;
+    int keep = 0;
+    for (int i = 2; i < argc; i++) {
+        if (!strcmp(argv[i], "--keep")) {
+            keep = 1;   /* keep the generated runner, and say where */
         } else if (!strcmp(argv[i], "--run")) {
-            run = 1;
-        } else if (!strcmp(argv[i], "--dump-liveness")) {
-            want_liveness_dump = 1;
-        } else if (!strcmp(argv[i], "--dump-mir")) {
-            want_mir_dump = 1;
-        } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-            print_usage();
-            return 0;
+            if (i + 1 >= argc) {
+                fputs("slang: --run needs a substring of the test names to run\n",
+                      stderr);
+                return 2;
+            }
+            filter = argv[++i];
         } else if (argv[i][0] == '-') {
-            fputs("slang: unknown option: ", stderr);
-            fputs(argv[i], stderr);
-            fputc(10, stderr);
-            print_usage();
-            return 1;
-        } else if (!input) {
-            input = argv[i];
+            fprintf(stderr, "slang: unknown option for test: %s\n", argv[i]);
+            return 2;
         } else {
-            fputs("slang: multiple input files given", stderr);
-            fputc(10, stderr);
-            return 1;
+            target = argv[i];
         }
     }
 
-    sl_compiler_argv0 = argv[0];
-
-    if (!input) {
-        print_usage();
-        return 1;
+    char treal[PATH_MAX];
+    if (!realpath(target, treal)) {
+        fprintf(stderr, "slang: cannot find '%s'\n", target);
+        return 2;
+    }
+    struct stat st;
+    if (stat(treal, &st) == 0 && S_ISREG(st.st_mode)) {
+        char *slash = strrchr(treal, '/');
+        if (slash)
+            *slash = '\0';
     }
 
+    DIR *d = opendir(treal);
+    if (!d) {
+        fprintf(stderr, "slang: cannot open '%s'\n", treal);
+        return 2;
+    }
+    char **files = NULL;
+    int nfiles = 0;
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (ends_with(ent->d_name, "_test.sl") && strlen(ent->d_name) > 8) {
+            files = (char **)xrealloc(files, (nfiles + 1) * sizeof(char *));
+            files[nfiles++] = xstrdup(ent->d_name);
+        }
+    }
+    closedir(d);
+    if (nfiles == 0) {
+        printf("no test files (*_test.sl) in %s\n", treal);
+        return 0;
+    }
+    for (int i = 0; i < nfiles; i++)          /* stable, readable order */
+        for (int j = i + 1; j < nfiles; j++)
+            if (strcmp(files[i], files[j]) > 0) {
+                char *t = files[i];
+                files[i] = files[j];
+                files[j] = t;
+            }
+
+    char **tests = NULL;
+    int ntests = 0, nfound = 0;
+    for (int i = 0; i < nfiles; i++) {
+        char fpath[PATH_MAX];
+        snprintf(fpath, sizeof(fpath), "%s/%s", treal, files[i]);
+        char *src = read_entire_file(fpath);
+        Lexer lx;
+        lexer_init(&lx, src);
+        int tcap = 256, tcount = 0;
+        Token *toks = (Token *)xmalloc(tcap * sizeof(Token));
+        for (;;) {
+            if (tcount == tcap) {
+                tcap *= 2;
+                toks = (Token *)xrealloc(toks, tcap * sizeof(Token));
+            }
+            toks[tcount++] = lexer_next(&lx);
+            if (toks[tcount - 1].type == T_EOF)
+                break;
+        }
+        Program *prog = parse_program(toks, tcount);
+        for (int k = 0; k < prog->nfuncs; k++) {
+            FuncDecl *f = prog->funcs[k];
+            if (strncmp(f->name, "test_", 5))
+                continue;
+            /* A test takes nothing and returns nothing: anything else was
+               meant as a helper, and silently skipping it would make a
+               typo'd test pass by never running. */
+            if (f->nparams != 0 || f->ret_type) {
+                fprintf(stderr,
+                        "slang: %s:%d: test function '%s' must take no "
+                        "parameters and return nothing\n",
+                        files[i], f->line, f->name);
+                return 2;
+            }
+            nfound++;
+            if (filter && !strstr(f->name, filter))
+                continue;
+            tests = (char **)xrealloc(tests, (ntests + 1) * sizeof(char *));
+            tests[ntests++] = xstrdup(f->name);
+        }
+    }
+    if (nfound == 0) {
+        printf("no test_ functions in the *_test.sl files of %s\n", treal);
+        return 0;
+    }
+    if (ntests == 0) {
+        printf("no tests match \"%s\" (%d test%s in %s)\n", filter, nfound,
+               nfound == 1 ? "" : "s", treal);
+        return 0;
+    }
+
+    const char *tmp = getenv("TMPDIR");
+    char tmpl[PATH_MAX];
+    snprintf(tmpl, sizeof(tmpl), "%s/slangtest_XXXXXX",
+             tmp && *tmp ? tmp : "/tmp");
+    size_t tl = strlen(tmpl);
+    if (tl > 16 && tmpl[tl - 17] == '/' && tmpl[tl - 18] == '/')
+        memmove(tmpl + tl - 17, tmpl + tl - 16, 17);   /* TMPDIR ending in '/' */
+    if (!mkdtemp(tmpl)) {
+        fprintf(stderr, "slang: cannot create a temporary directory\n");
+        return 2;
+    }
+    char tmpreal[PATH_MAX];
+    if (!realpath(tmpl, tmpreal)) {
+        fprintf(stderr, "slang: cannot resolve %s\n", tmpl);
+        return 2;
+    }
+
+    StrBuf r;
+    sb_init(&r);
+    sb_append(&r, "import \"time\";\n");
+    sb_append(&r, xasprintf("import \"%s\" as sltest_pkg;\n\n",
+                            relative_path(tmpreal, treal)));
+    sb_append(&r,
+        "fn sltest_ms(d: duration) -> str {\n"
+        "    let us = d / 1000;\n"
+        "    if us < 1000 {\n"
+        "        return to_str(us) + \"us\";\n"
+        "    }\n"
+        "    return to_str(us / 1000) + \"ms\";\n"
+        "}\n\n"
+        "fn sltest_report(name: str, r: result[bool, str], d: duration) -> int {\n"
+        "    guard let _passed = r else let e = err_of(r) {\n"
+        "        println(\"FAIL \" + name + \" (\" + sltest_ms(d) + \")\");\n"
+        "        println(\"     \" + e);\n"
+        "        return 1;\n"
+        "    }\n"
+        "    println(\"ok   \" + name + \" (\" + sltest_ms(d) + \")\");\n"
+        "    return 0;\n"
+        "}\n\n");
+    for (int i = 0; i < ntests; i++)
+        sb_append(&r, xasprintf("fn sltest_run_%d() -> bool {\n"
+                                "    sltest_pkg.%s();\n"
+                                "    return true;\n"
+                                "}\n\n", i, tests[i]));
+    sb_append(&r, "let sltest_failed = 0;\nlet sltest_all = time.mono();\n");
+    for (int i = 0; i < ntests; i++)
+        sb_append(&r, xasprintf(
+            "let sltest_t%d = time.mono();\n"
+            "sltest_failed = sltest_failed + sltest_report(\"%s\", "
+            "join_wait(spawn sltest_run_%d()), time.mono() - sltest_t%d);\n",
+            i, tests[i], i, i));
+    sb_append(&r, xasprintf(
+        "let sltest_took = sltest_ms(time.mono() - sltest_all);\n"
+        "if sltest_failed > 0 {\n"
+        "    println(\"FAIL: \" + to_str(sltest_failed) + \" of %d failed (\" + sltest_took + \")\");\n"
+        "    exit(1);\n"
+        "}\n"
+        "println(\"ok: %d passed (\" + sltest_took + \")\");\n",
+        ntests, ntests));
+
+    char runner_src[PATH_MAX], runner_bin[PATH_MAX];
+    snprintf(runner_src, sizeof(runner_src), "%s/main.sl", tmpreal);
+    snprintf(runner_bin, sizeof(runner_bin), "%s/runner", tmpreal);
+    write_file(runner_src, r.data, r.len);
+
+    loader_set_test_target(treal);
+    setenv("SLANG_TEST_RUNNER", "1", 1);
+    int rc = build(runner_src, runner_bin, 0, 0, 1, 0, 0);
+
+    char gen[PATH_MAX];
+    snprintf(gen, sizeof(gen), "%s.gen.c", runner_bin);
+    if (keep || exists(gen)) {
+        /* build keeps generated C only when compiling it failed -- then it
+           is worth keeping, and the message above already names it. */
+        fprintf(stderr, "slang: runner left in %s for inspection\n", tmpreal);
+        return rc;
+    }
+    unlink(runner_src);
+    unlink(runner_bin);
+    rmdir(tmpreal);
+    return rc;
+}
+
+/* The compile pipeline: load, generate C, compile, and optionally run.
+ * main() reaches it after parsing flags; `slangc test` reaches it with a
+ * generated runner as the input. */
+static int build(const char *input, const char *outname, int emit_c,
+                 int keep_c, int run, int want_liveness_dump,
+                 int want_mir_dump) {
     /* ---- frontend: load the main package and all imports ---- */
     PkgList pkgs;
     int main_index = load_packages(input, &pkgs);
@@ -532,4 +739,75 @@ int main(int argc, char **argv) {
     fputs(outname, stdout);
     fputc(10, stdout);
     return 0;
+}
+
+int main(int argc, char **argv) {
+    const char *input = NULL;
+    const char *outname = NULL;
+    int emit_c = 0, keep_c = 0, run = 0, want_liveness_dump = 0,
+        want_mir_dump = 0;
+
+    if (argc >= 2 && !strcmp(argv[1], "get")) {
+        sl_compiler_argv0 = argv[0];
+        return cmd_get(argc >= 3 ? argv[2] : NULL);
+    }
+    if (argc >= 2 && !strcmp(argv[1], "test")) {
+        sl_compiler_argv0 = argv[0];
+        return cmd_test(argc, argv);
+    }
+    if (argc >= 2 && !strcmp(argv[1], "new")) {
+        sl_compiler_argv0 = argv[0];
+        return cmd_new(argc >= 3 ? argv[2] : NULL);
+    }
+    if (argc >= 2 && (!strcmp(argv[1], "--version") ||
+                      !strcmp(argv[1], "-V"))) {
+        fputs("slangc " SLANG_VERSION "\n", stdout);
+        return 0;
+    }
+
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-o")) {
+            if (i + 1 >= argc) {
+                fputs("slang: -o requires a name", stderr);
+                fputc(10, stderr);
+                return 1;
+            }
+            outname = argv[++i];
+        } else if (!strcmp(argv[i], "--emit-c")) {
+            emit_c = 1;
+        } else if (!strcmp(argv[i], "--keep-c")) {
+            keep_c = 1;
+        } else if (!strcmp(argv[i], "--run")) {
+            run = 1;
+        } else if (!strcmp(argv[i], "--dump-liveness")) {
+            want_liveness_dump = 1;
+        } else if (!strcmp(argv[i], "--dump-mir")) {
+            want_mir_dump = 1;
+        } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+            print_usage();
+            return 0;
+        } else if (argv[i][0] == '-') {
+            fputs("slang: unknown option: ", stderr);
+            fputs(argv[i], stderr);
+            fputc(10, stderr);
+            print_usage();
+            return 1;
+        } else if (!input) {
+            input = argv[i];
+        } else {
+            fputs("slang: multiple input files given", stderr);
+            fputc(10, stderr);
+            return 1;
+        }
+    }
+
+    sl_compiler_argv0 = argv[0];
+
+    if (!input) {
+        print_usage();
+        return 1;
+    }
+
+    return build(input, outname, emit_c, keep_c, run, want_liveness_dump,
+                 want_mir_dump);
 }
