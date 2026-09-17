@@ -379,6 +379,7 @@ static void walk_stmt(CG *cg, Esc *esc, Stmt *s) {
     case ST_BREAK:
     case ST_CONTINUE:
     case ST_STRUCT:
+    case ST_ENUM:
     case ST_IMPL:
         return;
     }

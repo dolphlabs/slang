@@ -62,7 +62,7 @@ for k, v in scores {           // iteration in insertion order
 }
 ```
 
-Keys may be any integer type, `str`, or `bool`; values may be any type,
+Keys may be any integer type, `str`, `bool`, or `enum`; values may be any type,
 including structs and lists. Backed by an open-addressing hash table
 (FNV-1a) that keeps entries in insertion order and grows automatically
 at 75% load.

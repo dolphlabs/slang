@@ -287,6 +287,23 @@ const char *infer_call(CG *cg, Expr *e) {
         res_cname(cg, v, "str"); /* register the instantiation */
         return xasprintf("result[%s,str]", v);
     }
+    /* resolve_enum_refs (enum.c) rewrites Type.from_int(n)/Type.from_str(s)
+     * into these sentinel names, tagging which enum via call.enum_ty.
+     * Fallible for the same reason to_int is: not every int/str is a
+     * valid variant. */
+    if (!strcmp(name, "__enum_from_int") || !strcmp(name, "__enum_from_str")) {
+        int from_int = !strcmp(name, "__enum_from_int");
+        if (n != 1)
+            cg_error(e->line, "%s() takes exactly one argument",
+                     from_int ? "from_int" : "from_str");
+        const char *at = infer_type(cg, e->as.call.args[0]);
+        if (from_int ? !is_int(at) : !is_str(at))
+            cg_error(e->line, "%s() expects %s (got %s)",
+                     from_int ? "from_int" : "from_str",
+                     from_int ? "an int" : "a str", at);
+        res_cname(cg, e->as.call.enum_ty, "str"); /* register the instantiation */
+        return xasprintf("result[%s,str]", e->as.call.enum_ty);
+    }
     if (!strcmp(name, "make_mutex")) {
         if (n != 0)
             cg_error(e->line, "make_mutex() takes no arguments");
@@ -785,6 +802,9 @@ const char *infer_binary(CG *cg, Expr *e) {
         if ((!strcmp(op, "==") || !strcmp(op, "!=")) && is_until(lt) &&
             is_until(rt))
             return "bool";
+        if ((!strcmp(op, "==") || !strcmp(op, "!=")) && is_enum(cg, lt) &&
+            !strcmp(lt, rt))
+            return "bool";
         /* Equality only: `true < false` has no meaning worth giving it.
            Before this, `a == b` on two bools was "cannot compare bool and
            bool", forcing `a && b || !a && !b` for the most basic test a
@@ -798,10 +818,12 @@ const char *infer_binary(CG *cg, Expr *e) {
         cg_error(e->line, "cannot compare %s and %s", lt, rt);
     }
     if (!strcmp(op, "+")) {
-        if (is_str(lt) || is_str(rt) || is_fault(lt) || is_fault(rt)) {
-            const char *other = (is_str(lt) || is_fault(lt)) ? rt : lt;
+        if (is_str(lt) || is_str(rt) || is_fault(lt) || is_fault(rt) ||
+            is_enum(cg, lt) || is_enum(cg, rt)) {
+            const char *other =
+                (is_str(lt) || is_fault(lt) || is_enum(cg, lt)) ? rt : lt;
             if (!(is_str(other) || is_num(other) || !strcmp(other, "bool") ||
-                  is_bytes(other) || is_fault(other)))
+                  is_bytes(other) || is_fault(other) || is_enum(cg, other)))
                 cg_error(e->line,
                          "cannot concatenate %s onto a string with '+'",
                          other);
@@ -879,6 +901,11 @@ const char *infer_binary(CG *cg, Expr *e) {
 const char *infer_type(CG *cg, Expr *e) {
     switch (e->kind) {
     case EX_INT:
+        /* resolve_enum_refs (enum.c) rewrites a `Type.Variant` reference
+         * into this same node shape, tagged with enum_ty -- check that
+         * first, before the ordinary-literal typing below. */
+        if (e->as.int_lit.enum_ty)
+            return e->as.int_lit.enum_ty;
         /* A literal too large for i64 is not an int that happens to
          * overflow -- it is a u64. Typing it that way makes
          * `let x = 18446744073709551615;` correct, and makes
@@ -961,9 +988,25 @@ const char *infer_type(CG *cg, Expr *e) {
     }
     case EX_CAST: {
         const char *ty = e->as.cast.ty;
+        const char *t = infer_type(cg, e->as.cast.operand);
+        /* enum -> i32 (its backing type) is a separate, narrow allowance
+         * from the general numeric casts below -- NOT a change to
+         * is_num(), which arithmetic and other numeric contexts also
+         * rely on; folding enums into it would silently let
+         * `Status.Pending + 1` compile. There's no reverse direction
+         * here: int -> enum is fallible (not every int is a valid
+         * variant), so it goes through Type.from_int instead, which
+         * returns a result. */
+        if (is_enum(cg, t)) {
+            if (strcmp(ty, "i32"))
+                cg_error(e->line,
+                         "enum '%s' can only be cast to i32 (its backing "
+                         "type), not %s",
+                         enum_find_canon(cg, t)->name, ty);
+            return ty;
+        }
         if (!map_type(ty) || !is_num(ty))
             cg_error(e->line, "invalid cast target type '%s'", ty);
-        const char *t = infer_type(cg, e->as.cast.operand);
         if (!is_num(t))
             cg_error(e->line, "cannot cast %s to %s (only numeric types "
                               "participate in casts)",
@@ -1050,10 +1093,10 @@ const char *infer_type(CG *cg, Expr *e) {
                      "cannot infer the key/value types of an empty map; "
                      "annotate the variable, e.g. let m: map[str]int = {}");
         const char *kt = infer_type(cg, e->as.maplit.keys[0]);
-        if (!is_map_key(kt))
+        if (!is_map_key(cg, kt))
             cg_error(e->line,
-                     "map keys must be an integer type, str, or bool "
-                     "(got %s)",
+                     "map keys must be an integer type, str, bool, or "
+                     "enum (got %s)",
                      kt);
         const char *vt = infer_type(cg, e->as.maplit.vals[0]);
         for (int i = 1; i < e->as.maplit.npairs; i++) {

@@ -88,7 +88,7 @@ scores[<span class="s">&quot;carol&quot;</span>] = <span class="n">78</span>;   
 <span class="k">for</span> k, v <span class="k">in</span> scores {           <span class="c">// iteration in insertion order</span>
     <span class="b">println</span>(k + <span class="s">&quot;: &quot;</span> + <span class="b">to_str</span>(v));
 }</code></pre></div>
-<p>Keys may be any integer type, <code>str</code>, or <code>bool</code>; values may be any type, including structs and lists. Backed by an open-addressing hash table (FNV-1a) that keeps entries in insertion order and grows automatically at 75% load.</p>
+<p>Keys may be any integer type, <code>str</code>, <code>bool</code>, or <code>enum</code>; values may be any type, including structs and lists. Backed by an open-addressing hash table (FNV-1a) that keeps entries in insertion order and grows automatically at 75% load.</p>
 <h2 id="structs">Structs</h2>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">struct</span> Point {
     x: <span class="t">int</span>,

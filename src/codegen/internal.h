@@ -13,6 +13,7 @@
 
 #include <ctype.h>
 #include <stdarg.h>
+#include <stdint.h>
 
 /* ------------------------------------------------------------------ */
 /* Compile-time state (formerly codegen.c:309-465)                     */
@@ -44,6 +45,27 @@ typedef struct {
     int count;
     int cap;
 } StructTable;
+
+/* ------------------------------------------------------------------ */
+/* User-defined enums                                                  */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    char *canonical;   /* "pkg.Name" */
+    char *pkg;
+    char *name;        /* simple name within its package */
+    int is_pub;
+    char **variants;   /* variant names, in declared order */
+    int32_t *values;   /* resolved ordinal per variant, parallel array */
+    int nvariants;
+    int line;
+} EnumDef;
+
+typedef struct {
+    EnumDef *items;
+    int count;
+    int cap;
+} EnumTable;
 
 /* ------------------------------------------------------------------ */
 /* Symbol tables                                                       */
@@ -243,6 +265,7 @@ struct CG {
     GlobTable globs;
     ImportTable imports;
     StructTable structs;
+    EnumTable enums;
     OptTable opts;
     ResTable res;
     FnTable fns;
@@ -409,7 +432,7 @@ int is_arr(const char *t);
 int is_map(const char *t);
 void check_extern_type(const char *t, int line, const char *what);
 void map_kv(const char *t, char **k, char **v);
-int is_map_key(const char *t);
+int is_map_key(CG *cg, const char *t);
 int is_opt(const char *t);
 int is_result(const char *t);
 int is_chan(const char *t);
@@ -503,6 +526,13 @@ StructDef *struct_find_canon(CG *cg, const char *canon);
 StructDef *struct_find_in_pkg(CG *cg, const char *pkg,
                                      const char *name);
 char *mangle_struct(const char *canon);
+EnumDef *enum_find_canon(CG *cg, const char *canon);
+EnumDef *enum_find_in_pkg(CG *cg, const char *pkg, const char *name);
+int is_enum(CG *cg, const char *t);
+char *mangle_enum(const char *canon);
+void collect_enum_decls(CG *cg, Package *pkgs, int npkgs);
+void resolve_enum_refs(CG *cg, Package *pkgs, int npkgs);
+void emit_enum_tables(CG *cg);
 const char *ctype_of(CG *cg, const char *t);
 const char *canon_type(CG *cg, const char *t, int line);
 void compute_escape(CG *cg, Package *pkgs, int npkgs, int main_index);
@@ -528,7 +558,7 @@ const char *infer_type(CG *cg, Expr *e);
 char *gen_ident_name(CG *cg, const char *name, int line);
 char *gen_float_literal(double v);
 char *panic_at(CG *cg, int line);
-char *conv_to_str(const char *t, char *expr);
+char *conv_to_str(CG *cg, const char *t, char *expr);
 
 /* Drop one redundant outer parenthesis pair from a generated expression
  * so `if ((a == b))` comes out as `if (a == b)` -- see core.c. */

@@ -421,9 +421,12 @@ void map_kv(const char *t, char **k, char **v) {
     *v = xstrdup(close + 1);
 }
 
-/* Valid map key types: integers, str, bool. */
-int is_map_key(const char *t) {
-    return is_int(t) || is_str(t) || !strcmp(t, "bool");
+/* Valid map key types: integers, str, bool, enums. An enum is a plain
+ * i32 scalar at runtime (ctype_of), so the existing fixed-size-blob map
+ * key path (sl_map_new's kstr=0 case) handles it with no further
+ * changes. */
+int is_map_key(CG *cg, const char *t) {
+    return is_int(t) || is_str(t) || !strcmp(t, "bool") || is_enum(cg, t);
 }
 
 int is_opt(const char *t) { return !strncmp(t, "opt[", 4); }
@@ -1641,6 +1644,8 @@ const char *ctype_of(CG *cg, const char *t) {
     const char *m = map_type(t);
     if (m)
         return m;
+    if (is_enum(cg, t))
+        return "int32_t";
     if (is_map(t))
         return "sl_map *";
     if (is_chan(t))
@@ -1701,13 +1706,19 @@ const char *canon_type(CG *cg, const char *t, int line) {
     if (is_map(t)) {
         char *k, *v;
         map_kv(t, &k, &v);
-        if (!is_map_key(k))
+        /* canonicalize the key too (not just the value) so a bare or
+         * dotted enum type name resolves the same way any other type
+         * reference does, before the is_map_key check. is_map_key's own
+         * built-ins (int/str/bool) are unaffected: map_type() already
+         * returns them unchanged from canon_type. */
+        const char *ck = canon_type(cg, k, line);
+        if (!is_map_key(cg, ck))
             cg_error(line,
-                     "map keys must be an integer type, str, or bool "
-                     "(got '%s')",
-                     k);
+                     "map keys must be an integer type, str, bool, or "
+                     "enum (got '%s')",
+                     ck);
         const char *cv = canon_type(cg, v, line);
-        return xasprintf("map[%s]%s", k, cv);
+        return xasprintf("map[%s]%s", ck, cv);
     }
     if (is_opt(t)) {
         char *inner = opt_inner(t);
@@ -1759,22 +1770,34 @@ const char *canon_type(CG *cg, const char *t, int line) {
         return t;
     if (!strchr(t, '.')) {
         StructDef *sd = struct_find_in_pkg(cg, cg->cur_pkg, t);
-        if (!sd)
+        if (sd)
+            return sd->canonical;
+        EnumDef *ed = enum_find_in_pkg(cg, cg->cur_pkg, t);
+        if (!ed)
             cg_error(line, "unknown type '%s'", t);
-        return sd->canonical;
+        return ed->canonical;
     }
     char *l, *r;
     split_dotted(t, &l, &r);
     const char *pkg = import_target(cg, l, line);
     StructDef *sd = struct_find_in_pkg(cg, pkg, r);
-    if (!sd)
+    if (sd) {
+        if (!sd->is_pub)
+            cg_error(line,
+                     "type '%s' is not exported from package '%s' (add "
+                     "'pub' to export it)",
+                     r, pkg);
+        return sd->canonical;
+    }
+    EnumDef *ed = enum_find_in_pkg(cg, pkg, r);
+    if (!ed)
         cg_error(line, "package '%s' has no type '%s'", pkg, r);
-    if (!sd->is_pub)
+    if (!ed->is_pub)
         cg_error(line,
                  "type '%s' is not exported from package '%s' (add 'pub' "
                  "to export it)",
                  r, pkg);
-    return sd->canonical;
+    return ed->canonical;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1825,7 +1848,9 @@ int is_builtin_name(const char *name) {
            !strcmp(name, "fault_code") || !strcmp(name, "fault_op") ||
            !strcmp(name, "peer_v4") || !strcmp(name, "peer_port") ||
            !strcmp(name, "trip_new") || !strcmp(name, "link_listen") ||
-           !strcmp(name, "link_dial");
+           !strcmp(name, "link_dial") ||
+           !strcmp(name, "__enum_from_int") ||
+           !strcmp(name, "__enum_from_str");
 }
 
 /* Find a method `name` declared (via impl) for struct `sd`. */

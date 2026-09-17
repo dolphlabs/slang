@@ -1116,6 +1116,7 @@ void gen_stmt(CG *cg, Stmt *s) {
         emit_line(cg, "}");
         break;
     case ST_STRUCT:
+    case ST_ENUM:
     case ST_IMPL:
         /* declarations are processed during collect_decls; nothing to
          * execute at runtime */

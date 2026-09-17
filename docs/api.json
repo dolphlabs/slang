@@ -2587,7 +2587,7 @@
           "sig": "fn col(rows: Rows, name: str) -> int",
           "doc": "The index of the column called `name`. Panics if there is none: the query and the code reading it disagree, which is a bug, not a condition to handle.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2015
+          "line": 2025
         },
         {
           "name": "is_null",
@@ -2595,7 +2595,7 @@
           "sig": "fn is_null(rows: Rows, r: int, c: int) -> bool",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2040
+          "line": 2050
         },
         {
           "name": "get_text",
@@ -2603,7 +2603,7 @@
           "sig": "fn get_text(rows: Rows, r: int, c: int) -> str",
           "doc": "Any column, in Postgres's text form: numbers, dates, uuid and json all arrive this way.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2066
+          "line": 2076
         },
         {
           "name": "get_int",
@@ -2611,7 +2611,7 @@
           "sig": "fn get_int(rows: Rows, r: int, c: int) -> int",
           "doc": "int2, int4, int8 and oid.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2071
+          "line": 2081
         },
         {
           "name": "get_float",
@@ -2619,7 +2619,7 @@
           "sig": "fn get_float(rows: Rows, r: int, c: int) -> float",
           "doc": "float4, float8, numeric, and the integer types. A numeric too precise for a double is rounded; read it with get_text to keep every digit.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2087
+          "line": 2097
         },
         {
           "name": "get_bool",
@@ -2627,7 +2627,7 @@
           "sig": "fn get_bool(rows: Rows, r: int, c: int) -> bool",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2106
+          "line": 2116
         },
         {
           "name": "get_bytes",
@@ -2635,7 +2635,7 @@
           "sig": "fn get_bytes(rows: Rows, r: int, c: int) -> bytes",
           "doc": "bytea, decoded from the server's hex output format.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2115
+          "line": 2125
         },
         {
           "name": "Pool",
@@ -2643,7 +2643,7 @@
           "sig": "gc struct Pool",
           "doc": "A bounded set of connections to one database, shared by any number of tasks.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2141
+          "line": 2151
         },
         {
           "name": "new_pool",
@@ -2651,7 +2651,7 @@
           "sig": "fn new_pool(url: str, max_open: int) -> result[Pool, str]",
           "doc": "Parses the url; connects nothing until the first acquire.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2159
+          "line": 2169
         },
         {
           "name": "acquire",
@@ -2659,7 +2659,7 @@
           "sig": "fn acquire(p: Pool, deadline: until) -> result[Conn, str]",
           "doc": "A connection for the caller's exclusive use, until release(). Prefer pool_query / pool_exec, which cannot forget to release; acquire is for a transaction, which needs several statements on one connection.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2176
+          "line": 2186
         },
         {
           "name": "release",
@@ -2667,7 +2667,7 @@
           "sig": "fn release(p: Pool, c: Conn)",
           "doc": "Returns a connection to the pool. One that is broken, closed, or still inside a transaction is closed instead: handing an open transaction to the next caller would run its statements inside someone else's uncommitted work.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2231
+          "line": 2241
         },
         {
           "name": "pool_query",
@@ -2675,7 +2675,7 @@
           "sig": "fn pool_query(p: Pool, sql: str, args: [Arg], deadline: until)",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2248
+          "line": 2258
         },
         {
           "name": "pool_exec",
@@ -2683,7 +2683,7 @@
           "sig": "fn pool_exec(p: Pool, sql: str, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2259
+          "line": 2269
         },
         {
           "name": "pool_close",
@@ -2691,7 +2691,7 @@
           "sig": "fn pool_close(p: Pool)",
           "doc": "Closes every idle connection. Connections in use are closed as they are released; acquire fails from now on.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2271
+          "line": 2281
         }
       ]
     },

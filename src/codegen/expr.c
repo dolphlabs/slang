@@ -73,7 +73,7 @@ char *panic_at(CG *cg, int line) {
 }
 
 /* Convert any scalar/bytes value to a slang str (C string). */
-char *conv_to_str(const char *t, char *expr) {
+char *conv_to_str(CG *cg, const char *t, char *expr) {
     if (is_str(t))
         return expr;
     if (is_int(t) && is_signed_int(t))
@@ -88,6 +88,12 @@ char *conv_to_str(const char *t, char *expr) {
         return xasprintf("sl_str_from_bytes(%s)", expr);
     if (is_fault(t))
         return xasprintf("sl_str_from_fault(%s)", expr);
+    if (is_enum(cg, t)) {
+        char *m = mangle_enum(t);
+        EnumDef *ed = enum_find_canon(cg, t);
+        return xasprintf("sl_enum_name((int32_t)(%s), %s_names, %s_values, %d)",
+                         expr, m, m, ed->nvariants);
+    }
     cg_error(0, "internal: no str conversion for %s", t);
     return NULL; /* unreachable */
 }
@@ -109,9 +115,9 @@ char *gen_string_concat(CG *cg, Expr *e, const char *lt,
     sb_init(&prelude);
     int seq_id = cg->tmp_id++;
     int ambient_mark = cg->ambient_count;
-    char *a = conv_to_str(lt, gen_expr(cg, e->as.binary.lhs));
+    char *a = conv_to_str(cg, lt, gen_expr(cg, e->as.binary.lhs));
     a = sequence_one(cg, seq_id, 0, sc, "str", a, e->as.binary.lhs, &prelude);
-    char *b = conv_to_str(rt, gen_expr(cg, e->as.binary.rhs));
+    char *b = conv_to_str(cg, rt, gen_expr(cg, e->as.binary.rhs));
     b = sequence_one(cg, seq_id, 1, sc, "str", b, e->as.binary.rhs, &prelude);
     cg->ambient_count = ambient_mark;
     return xasprintf("({ %ssl_str_concat(%s, %s); })", prelude.data, a, b);
@@ -141,6 +147,7 @@ static int expr_is_flat(CG *cg, Expr *e) {
             const char *lt = infer_type(cg, e->as.binary.lhs);
             const char *rt = infer_type(cg, e->as.binary.rhs);
             if (is_str(lt) || is_str(rt) || is_fault(lt) || is_fault(rt) ||
+                is_enum(cg, lt) || is_enum(cg, rt) ||
                 (is_bytes(lt) && is_bytes(rt)) ||
                 (is_arr(lt) && is_arr(rt)))
                 return 0;
@@ -262,6 +269,7 @@ char *gen_comparison(CG *cg, Expr *e, const char *lt, const char *rt) {
                 !(is_fault(lt) && is_fault(rt)) &&
                 !(is_peer(lt) && is_peer(rt)) &&
                 !(is_until(lt) && is_until(rt)) &&
+                !(is_enum(cg, lt) && is_enum(cg, rt)) &&
                 !(!strcmp(lt, "bool") && !strcmp(rt, "bool"));
     const char *pt = widen ? promote(lt, rt) : NULL;
     const char *seq_t = !strcmp(lt, "bool") && !strcmp(rt, "bool") ? "bool"
@@ -270,6 +278,7 @@ char *gen_comparison(CG *cg, Expr *e, const char *lt, const char *rt) {
                         : is_fault(lt) && is_fault(rt) ? "fault"
                         : is_peer(lt) && is_peer(rt)   ? "peer"
                         : is_until(lt) && is_until(rt) ? "until"
+                        : is_enum(cg, lt) && is_enum(cg, rt) ? lt
                                                        : pt;
     const char *ct = ctype_of(cg, seq_t);
     int flat = expr_is_flat(cg, e->as.binary.lhs) &&
@@ -413,7 +422,7 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
     if (!strcmp(name, "to_str")) {
         const char *t = infer_type(cg, e->as.call.args[0]);
         char *a = gen_expr(cg, e->as.call.args[0]);
-        char *inner = conv_to_str(t, a);
+        char *inner = conv_to_str(cg, t, a);
         return wrap_safepoint(cg, e, ctype_of(cg, "str"), NULL, inner);
     }
     if (!strcmp(name, "to_bytes")) {
@@ -605,6 +614,44 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
             rct, id, rct, id, rc,
             id, id, id, id,
             id, id, id,
+            id);
+        return wrap_safepoint(cg, e, rct, NULL, inner);
+    }
+    if (!strcmp(name, "__enum_from_int") || !strcmp(name, "__enum_from_str")) {
+        /* Same shape as to_int/to_float just above: one allocation, the
+         * result struct built directly by a flag + out-index scan
+         * (sl_enum_from_int/sl_enum_from_str, runtime/sl_containers.c),
+         * with the error text a compile-time string literal (naming the
+         * enum, not the bad input -- same reasoning as to_int's comment
+         * above: the caller already has the input, and building a
+         * message here would be a second allocation). */
+        int isint = !strcmp(name, "__enum_from_int");
+        const char *et = e->as.call.enum_ty;
+        const char *rt = xasprintf("result[%s,str]", et);
+        const char *rc = res_cname(cg, et, "str");
+        const char *rct = ctype_of(cg, rt);
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        char *m = mangle_enum(et);
+        EnumDef *ed = enum_find_canon(cg, et);
+        int id = cg->tmp_id++;
+        char *inner = xasprintf(
+            "({ int32_t _sl_eidx%d = -1; "
+            "int _sl_eok%d = sl_enum_from_%s(%s, %s_%s, %d, &_sl_eidx%d); "
+            "%s _sl_er%d = (%s)sl_gc_alloc(sizeof(*_sl_er%d), "
+            "sl_gc_trace_%s); "
+            "if (_sl_eok%d) { _sl_er%d->ok = true; "
+            "_sl_er%d->v = (int32_t)%s_values[_sl_eidx%d]; } "
+            "else { _sl_er%d->ok = false; "
+            "_sl_er%d->e = \"not a valid %s variant\"; } "
+            "_sl_er%d; })",
+            id,
+            id, isint ? "int" : "str", a, m, isint ? "values" : "names",
+            ed->nvariants, id,
+            rct, id, rct, id, rc,
+            id, id,
+            id, m, id,
+            id,
+            id, ed->name,
             id);
         return wrap_safepoint(cg, e, rct, NULL, inner);
     }
@@ -1657,7 +1704,8 @@ char *gen_expr(CG *cg, Expr *e) {
         if (!strcmp(op, "==") || !strcmp(op, "!=") || !strcmp(op, "<") ||
             !strcmp(op, "<=") || !strcmp(op, ">") || !strcmp(op, ">="))
             return gen_comparison(cg, e, lt, rt);
-        if (!strcmp(op, "+") && (is_str(lt) || is_str(rt) || is_fault(lt) || is_fault(rt)))
+        if (!strcmp(op, "+") && (is_str(lt) || is_str(rt) || is_fault(lt) ||
+                                 is_fault(rt) || is_enum(cg, lt) || is_enum(cg, rt)))
             return gen_string_concat(cg, e, lt, rt);
         /* bytes and list concatenation sequence their operands for the
          * same two reasons gen_string_concat above does, and skipping it
@@ -1823,6 +1871,17 @@ void gen_print(CG *cg, Expr *call, int newline) {
                   "(unsigned)(_sl_p.addr & 255u), "
                   "(unsigned)_sl_p.port); });",
                   v, newline ? "\\n" : "");
+    } else if (is_enum(cg, t)) {
+        char *m = mangle_enum(t);
+        EnumDef *ed = enum_find_canon(cg, t);
+        if (newline)
+            emit_line(cg, "puts(sl_enum_name((int32_t)(%s), %s_names, "
+                          "%s_values, %d));",
+                      v, m, m, ed->nvariants);
+        else
+            emit_line(cg, "fputs(sl_enum_name((int32_t)(%s), %s_names, "
+                          "%s_values, %d), stdout);",
+                      v, m, m, ed->nvariants);
     } else if (!is_str(t)) {
         cg_error(call->line,
                  "cannot print a value of type %s directly", t);

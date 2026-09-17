@@ -439,6 +439,7 @@ static void check_stmt(CG *cg, Stmt *s) {
     case ST_BREAK:
     case ST_CONTINUE:
     case ST_STRUCT:
+    case ST_ENUM:
     case ST_IMPL:
         return;
     }

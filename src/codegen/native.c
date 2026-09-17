@@ -137,7 +137,7 @@ char *native_gen(CG *cg, const char *pkg, const char *fname,
         char *a = gen_expr(cg, e->as.call.args[i]);
         const char *cast_t = at;
         if (ak == NA_STR_FAULT && is_fault(at)) {
-            a = conv_to_str(at, a);
+            a = conv_to_str(cg, at, a);
             cast_t = "str";
         } else if (ak == NA_F64) {
             cast_t = "float";

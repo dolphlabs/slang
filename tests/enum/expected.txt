@@ -1,0 +1,8 @@
+ordinals ok
+comparison ok
+Paid
+comparison and to_str ok
+from_int/from_str ok
+struct field ok
+map key ok
+json ok

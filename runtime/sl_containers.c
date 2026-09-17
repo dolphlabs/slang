@@ -1047,6 +1047,58 @@ static char *sl_strdup(const char *s) {
  * who wants leniency can trim first; a caller who gets leniency they
  * did not ask for cannot undo it. */
 
+/* ---- user-declared enums --------------------------------------------
+ *
+ * A slang `enum` is an i32 ordinal at runtime (see src/codegen/enum.c);
+ * each declared enum gets one static `sl_en_<pkg>_<Name>_names[]` /
+ * `_values[]` pair emitted alongside it (emit_enum_tables), and every
+ * generated call into these three helpers passes that enum's own pair.
+ * Ordinals are not guaranteed contiguous (explicit '= N' values may
+ * leave gaps), so this is a linear scan, not an array index -- fine at
+ * the sizes an enum realistically has. from_int/from_str use the same
+ * flag-plus-out-param convention as sl_str_parse_int below, for the
+ * same reason: the generated call site wraps the answer into the real
+ * result[EnumT,str] struct (see the "__enum_from_int"/"__enum_from_str"
+ * codegen in expr.c), which doesn't exist yet when this file is
+ * spliced in. */
+
+static const char *sl_enum_name(int32_t ord, const char **names,
+                                const int32_t *values, int n) {
+    for (int i = 0; i < n; i++) {
+        if (values[i] == ord)
+            return names[i];
+    }
+    /* Every value of an enum-typed slang expression was produced by
+     * this same closed set (a variant literal, or a from_int/from_str
+     * lookup that already validated against it) -- reaching here means
+     * a codegen bug, not bad input, so this is an internal error, not
+     * a user-facing panic. */
+    sl_rt_error("internal: enum value has no matching variant", ord, n);
+    return NULL; /* unreachable */
+}
+
+static int sl_enum_from_int(int32_t v, const int32_t *values, int n,
+                            int32_t *out_idx) {
+    for (int i = 0; i < n; i++) {
+        if (values[i] == v) {
+            *out_idx = i;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int sl_enum_from_str(const char *s, const char **names, int n,
+                            int32_t *out_idx) {
+    for (int i = 0; i < n; i++) {
+        if (!strcmp(names[i], s)) {
+            *out_idx = i;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int sl_str_parse_int(const char *s, long long *out,
                             const char **err) {
     if (!s || !*s) { *err = "cannot parse an empty string as int"; return 0; }

@@ -146,6 +146,11 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
         }
     }
 
+    /* pass 1b: enum shells. Registered before pass 2 so a struct field
+     * of enum type (or an enum's own future needs) can already resolve
+     * it via canon_type. */
+    collect_enum_decls(cg, pkgs, npkgs);
+
     /* pass 2: canonicalize struct field types */
     for (i = 0; i < cg->structs.count; i++) {
         StructDef *sd = &cg->structs.items[i];
@@ -282,7 +287,7 @@ void emit_globals(CG *cg, Package *pkgs, int npkgs, int main_index) {
         Block *body = p->prog->main_body;
         for (int j = 0; j < body->count; j++) {
             Stmt *s = body->stmts[j];
-            if (s->kind == ST_STRUCT || s->kind == ST_IMPL)
+            if (s->kind == ST_STRUCT || s->kind == ST_ENUM || s->kind == ST_IMPL)
                 continue; /* handled by collect_decls */
             if (s->kind != ST_LET)
                 cg_error(s->line,
@@ -924,6 +929,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     emit_fn_types(cg); /* between the struct names and the struct bodies */
     emit_struct_types(cg);
     emit_struct_tracers(cg);
+    emit_enum_tables(cg);
 
     emit_opt_res_types(cg);
     emit_opt_res_tracers(cg);
@@ -1097,6 +1103,17 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
     }
 
     collect_decls(&cg, pkgs, npkgs);
+
+    /* Rewrite every `Type.Variant`/`Type.from_int`/`Type.from_str`
+     * reference into plain literal/sentinel-call nodes (see enum.c)
+     * before anything else walks the tree, so infer/borrow/liveness/
+     * move/mir/escape/codegen never need to know enums exist as a
+     * dotted-name concept -- they only ever see the rewritten shapes.
+     * Must run once, after collect_decls has populated cg.enums and
+     * before the dry run below (which is just gen_whole_program
+     * generating into a scratch buffer -- both it and the real run
+     * must see the same, already-rewritten tree). */
+    resolve_enum_refs(&cg, pkgs, npkgs);
 
     /* Dry run: generation populates the opt/result monomorphization
      * tables as it goes, but typedefs must be emitted before any use.
