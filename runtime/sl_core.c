@@ -11,6 +11,7 @@
 #include <stdatomic.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stddef.h> /* offsetof, for the arm64 preemption frame asserts */
 #include <ucontext.h>
 #include <unistd.h>
 #include <time.h>
@@ -255,6 +256,14 @@ typedef struct sl_task {
                                 %rsp-relative effective address, never
                                 through a register (see
                                 runtime_sched.c). */
+    void *async_resume_frame; /* arm64 only: the trampoline's register
+                                save block, set just before it raises
+                                SIGUSR2 to have the kernel restore every
+                                register at once. arm64 has no way to
+                                branch back without a free register --
+                                see the aarch64 trampoline in
+                                sl_sched.c. NULL except for that one
+                                instant. */
     sl_gc_obj *gc_pend_head;
     sl_gc_obj *gc_pend_tail;
     long gc_pend_n;
