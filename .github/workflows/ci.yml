@@ -184,15 +184,15 @@ jobs:
           openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key \
             -CAcreateserial -out server.crt -days 2 -extfile ext.cnf
           chmod 644 server.key
+          # ONE line: inside bash -c a newline ends the command, and the
+          # cert options on a second line silently never reached postgres.
+          PGTLS_START='cp /certs/server.crt /certs/server.key /tmp/ && chown postgres /tmp/server.* && chmod 600 /tmp/server.key && exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/tmp/server.crt -c ssl_key_file=/tmp/server.key'
           docker run -d --name pg -e POSTGRES_USER=slang \
             -e POSTGRES_PASSWORD=secret -p 55432:5432 postgres:16
           docker run -d --name pgtls -e POSTGRES_USER=slang \
             -e POSTGRES_PASSWORD=secret -p 55433:5432 \
             -v /tmp/pgtls:/certs:ro --entrypoint bash postgres:16 -c \
-            'cp /certs/server.crt /certs/server.key /tmp/ &&
-             chown postgres /tmp/server.* && chmod 600 /tmp/server.key &&
-             exec docker-entrypoint.sh postgres -c ssl=on
-               -c ssl_cert_file=/tmp/server.crt -c ssl_key_file=/tmp/server.key'
+            "$PGTLS_START"
           # Ready means accepting TCP on the MAPPED port, from the host:
           # the image's init phase runs a server that listens only on a
           # Unix socket, then restarts it.
