@@ -17,9 +17,9 @@ LANGS_ALL="slang go rust c csharp java python bun node"
 : "${ROOT:?ROOT must be the repository root}"
 : "${BIN:?BIN must be the build output directory}"
 
-JAVA_API_OPTS="-XX:+UseParallelGC -Xmx2g"
-JAVA_BATCH_OPTS="-XX:+UseParallelGC -Xmx12g"
-JAVA_LIGHT_OPTS="-XX:+UseParallelGC"
+JAVA_API_OPTS="${JAVA_API_OPTS:--XX:+UseParallelGC -Xmx2g}"
+JAVA_BATCH_OPTS="${JAVA_BATCH_OPTS:--XX:+UseParallelGC -Xmx12g}"
+JAVA_LIGHT_OPTS="${JAVA_LIGHT_OPTS:--XX:+UseParallelGC}"
 
 build_lang() {
     lang=$1
@@ -111,10 +111,10 @@ cmd() {
     slang/api)     echo "env WORKERS=$WORKERS SLANG_WORKERS=$WORKERS $out/api" ;;
     slang/batch)   echo "env WORKERS=$WORKERS SLANG_WORKERS=$WORKERS $out/batch" ;;
     go/*|rust/*|c/*) echo "$out/$workload" ;;
-    csharp/http)    echo "$out/http/HttpRaw" ;;
-    csharp/compute) echo "$out/compute/Compute" ;;
-    csharp/api)     echo "$out/api/Api" ;;
-    csharp/batch)   echo "$out/batch/Batch" ;;
+    csharp/http)    echo "env DOTNET_ROOT=/usr/local/dotnet $out/http/HttpRaw" ;;
+    csharp/compute) echo "env DOTNET_ROOT=/usr/local/dotnet $out/compute/Compute" ;;
+    csharp/api)     echo "env DOTNET_ROOT=/usr/local/dotnet $out/api/Api" ;;
+    csharp/batch)   echo "env DOTNET_ROOT=/usr/local/dotnet $out/batch/Batch" ;;
     java/http)    echo "java $JAVA_LIGHT_OPTS -cp $out/http HttpRaw" ;;
     java/compute) echo "java $JAVA_LIGHT_OPTS -cp $out/compute Compute" ;;
     java/api)     echo "java $JAVA_API_OPTS -jar $out/api.jar" ;;

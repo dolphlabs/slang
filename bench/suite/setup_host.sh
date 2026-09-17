@@ -52,6 +52,10 @@ echo "== wrk2 ($WRK2_COMMIT)"
 if ! command -v wrk2 >/dev/null; then
     rm -rf /tmp/wrk2 && git clone -q https://github.com/giltene/wrk2.git /tmp/wrk2
     (cd /tmp/wrk2 && git checkout -q "$WRK2_COMMIT")
+    # Clang/GCC on Ubuntu 24.04 with -D_POSIX_C_SOURCE hide gettimeofday
+    # unless <sys/time.h> is included; wrk2's pinned commit omits it.
+    grep -q 'sys/time.h' /tmp/wrk2/src/script.c ||
+        sed -i '1a #include <sys/time.h>' /tmp/wrk2/src/script.c
     if [ "$ARCH" = aarch64 ]; then
         # wrk2's bundled LuaJIT predates arm64; build against the system one
         apt-get install -y -qq libluajit-5.1-dev >/dev/null
@@ -82,7 +86,16 @@ if ! /usr/local/dotnet/dotnet --list-sdks 2>/dev/null | grep -q "^$DOTNET_CHANNE
     bash /tmp/dotnet-install.sh --channel "$DOTNET_CHANNEL" --install-dir /usr/local/dotnet >/dev/null
 fi
 ln -sf /usr/local/dotnet/dotnet /usr/local/bin/dotnet
-echo 'DOTNET_CLI_TELEMETRY_OPTOUT=1' >/etc/profile.d/dotnet-bench.sh
+cat >/etc/profile.d/dotnet-bench.sh <<'EOF'
+DOTNET_CLI_TELEMETRY_OPTOUT=1
+DOTNET_ROOT=/usr/local/dotnet
+export DOTNET_CLI_TELEMETRY_OPTOUT DOTNET_ROOT
+EOF
+mkdir -p /etc/dotnet
+echo /usr/local/dotnet >/etc/dotnet/install_location
+echo /usr/local/dotnet >/etc/dotnet/install_location_x64
+export DOTNET_ROOT=/usr/local/dotnet
+export DOTNET_CLI_TELEMETRY_OPTOUT=1
 
 echo "== Node $NODE_VERSION"
 if ! node --version 2>/dev/null | grep -q "v$NODE_VERSION"; then
@@ -104,8 +117,22 @@ cat >/etc/systemd/system/postgresql@16-main.service.d/bench-cpus.conf <<EOF
 [Service]
 CPUAffinity=$(echo "$DB_CPUS" | tr ',' ' ')
 EOF
-systemctl daemon-reload
-systemctl restart postgresql@16-main
+if command -v systemctl >/dev/null && systemctl is-system-running >/dev/null 2>&1; then
+    systemctl daemon-reload
+    systemctl restart postgresql@16-main
+else
+    # Containers without systemd: start the cluster with pg_ctlcluster.
+    pg_ctlcluster 16 main stop >/dev/null 2>&1 || true
+    pg_ctlcluster 16 main start
+fi
+# Optional CPU pin when taskset is available (systemd Affinity is a no-op without systemd).
+if command -v taskset >/dev/null; then
+    PG_PID=$(head -1 /var/lib/postgresql/16/main/postmaster.pid 2>/dev/null || true)
+    if [ -n "${PG_PID:-}" ]; then
+        taskset -pc $(echo "$DB_CPUS" | tr '-' ',') "$PG_PID" >/dev/null 2>&1 ||
+            taskset -pc "${DB_CPUS%%-*}" "$PG_PID" >/dev/null 2>&1 || true
+    fi
+fi
 sudo -u postgres psql -q -c "DO \$\$BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'bench') THEN CREATE ROLE bench LOGIN PASSWORD 'bench'; END IF;
 END\$\$;"
@@ -125,7 +152,7 @@ net.core.netdev_max_backlog = 65535
 fs.file-max = 4194304
 vm.swappiness = 1
 EOF
-sysctl -q --system
+sysctl -q --system || true
 cat >/etc/security/limits.d/90-slang-bench.conf <<'EOF'
 * soft nofile 1048576
 * hard nofile 1048576

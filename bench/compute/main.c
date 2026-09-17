@@ -29,19 +29,24 @@ static int count_primes_range(int lo, int hi) {
 
 static int alloc_and_sum(int n) {
     int *xs = (int *)malloc((size_t)n * sizeof(int));
-    if (!xs)
+    char (*keys)[32] = (char (*)[32])malloc((size_t)n * sizeof(*keys));
+    int *map_vals = (int *)malloc((size_t)n * sizeof(int));
+    if (!xs || !keys || !map_vals)
         exit(1);
     for (int i = 0; i < n; i++)
         xs[i] = i;
+    for (int i = 0; i < n; i++) {
+        snprintf(keys[i], sizeof(keys[i]), "%d", i);
+        map_vals[i] = i;
+    }
     int sum = 0;
     for (int i = 0; i < n; i++)
         sum += xs[i];
-    for (int i = 0; i < n; i++) {
-        char buf[32];
-        snprintf(buf, sizeof(buf), "%d", i);
-        sum += i + (int)strlen(buf);
-    }
+    for (int i = 0; i < n; i++)
+        sum += map_vals[i];
     free(xs);
+    free(keys);
+    free(map_vals);
     return sum;
 }
 
