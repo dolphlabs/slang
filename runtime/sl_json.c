@@ -556,6 +556,19 @@ static bool sl_json_dec_i64(sl_json_val *v, int64_t *out, char **err) {
     return true;
 }
 
+/* slang's `int` is C `long long`, while `i64` and `duration` are
+ * `int64_t`. On macOS those are the same type; on Linux glibc int64_t is
+ * `long`, a DIFFERENT type of the same size, so one decoder taking
+ * int64_t* was passed a long long* and GCC rejected it as an incompatible
+ * pointer. One decoder per C type, sharing the range and integrality
+ * checks, keeps both exact on every platform. */
+static bool sl_json_dec_int(sl_json_val *v, long long *out, char **err) {
+    int64_t tmp;
+    if (!sl_json_dec_i64(v, &tmp, err)) return false;
+    *out = (long long)tmp;
+    return true;
+}
+
 static bool sl_json_dec_u64(sl_json_val *v, uint64_t *out, char **err) {
     double d;
     if (!sl_json_dec_num(v, &d, err)) return false;

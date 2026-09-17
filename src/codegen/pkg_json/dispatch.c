@@ -29,8 +29,10 @@ static const char *json_scalar_dec_name(const char *t) {
     if (!strcmp(t, "u64")) return "sl_json_dec_u64";
     if (!strcmp(t, "f32")) return "sl_json_dec_f32";
     if (!strcmp(t, "float")) return "sl_json_dec_f64";
-    /* int/i64/duration all share the 64-bit signed C representation */
-    if (!strcmp(t, "i64") || !strcmp(t, "int") || !strcmp(t, "duration"))
+    /* Same 64-bit width, but not the same C type everywhere: int is
+       long long, i64 and duration are int64_t (see sl_json_dec_int). */
+    if (!strcmp(t, "int")) return "sl_json_dec_int";
+    if (!strcmp(t, "i64") || !strcmp(t, "duration"))
         return "sl_json_dec_i64";
     return NULL;
 }
