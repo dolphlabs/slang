@@ -1,22 +1,22 @@
-# Linux CI.
+# CI: Linux x86_64, Linux arm64, and macOS on Apple Silicon.
 #
 # slang is built primarily for servers, which mostly run Linux, and until
-# this workflow it had only ever been built and tested on macOS. The first
-# Linux run found three bugs that had shipped: a committed macOS binary a
-# Linux checkout tried to execute, every program failing to link under
-# GCC -flto (C functions called only from assembly were discarded), and a
-# long long / int64_t mismatch in the JSON decoder.
+# this workflow existed it had only ever been built and tested on Intel
+# macOS. The first Linux run found three bugs that had shipped: a committed
+# macOS binary a Linux checkout tried to execute, every program failing to
+# link under GCC -flto (C functions called only from assembly were
+# discarded), and a long long / int64_t mismatch in the JSON decoder.
 #
-# x86_64 only for now. arm64 does not build on ANY platform -- Linux or
-# Apple Silicon: the async-preemption and stack-growth trampolines exist
-# only in x86_64 assembly (runtime/sl_sched.c), so every program fails to
-# link. That is a port, tracked in next-steps.md; its job goes back into
-# both matrices below when it lands, rather than sitting here failing on
-# every merge.
+# arm64 was worse: it did not build on any platform, Apple Silicon
+# included, because the preemption and stack-growth trampolines existed
+# only in x86_64 assembly. Both arm64 runners are native here -- local
+# Docker could only emulate them.
 #
-# Runs on merge to main. Nothing here may reach the internet -- a test
-# that needs the network fails for reasons unrelated to the code, which is
-# why the https client checks are verified by hand instead.
+# Runs on merge to main, and on manual dispatch (which runs the workflow as
+# it exists on the chosen branch -- how a change to this file is tried
+# before it merges). Nothing here may reach the internet: a test that needs
+# the network fails for reasons unrelated to the code, which is why the
+# https client checks are verified by hand instead.
 
 name: CI
 
@@ -32,30 +32,44 @@ permissions:
 
 jobs:
   test:
-    name: test (${{ matrix.arch }})
+    name: test (${{ matrix.name }})
     strategy:
-      fail-fast: false
+      fail-fast: false        # one platform failing must not hide the others
       matrix:
         include:
-          - runner: ubuntu-24.04
-            arch: x86_64
+          - name: linux-x86_64
+            runner: ubuntu-24.04
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+          - name: macos-arm64
+            runner: macos-14
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
-      # cc is GCC here, not clang: the generated-C warning sweep in the
-      # suite therefore checks GCC's warnings as well as clang's on macOS.
-      - name: Install build dependencies
+      # cc is GCC on Linux and clang on macOS, so the suite's generated-C
+      # warning sweep checks both compilers' warnings.
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config libssl-dev libsqlite3-dev \
             zlib1g-dev git python3
 
+      # Homebrew's OpenSSL is keg-only, so pkg-config cannot find it without
+      # PKG_CONFIG_PATH. next-steps.md item 2 makes slangc find it itself;
+      # until then CI states it explicitly.
+      - name: Install build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install pkg-config openssl@3
+          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig" >> "$GITHUB_ENV"
+
       - name: Toolchain
         run: |
-          uname -m
+          uname -sm
           cc --version | head -1
           pkg-config --modversion openssl
 
@@ -65,20 +79,68 @@ jobs:
       - name: Test suite
         run: make test
 
+      # The suite's own preemption probe loops with cooperative yields, so
+      # it never takes the async signal path at all. Deep recursion has no
+      # loop back-edges, and oversubscribing the cores makes the ticker
+      # fire: this is the check that the preemption trampoline and its
+      # resume path restore every register. Fails if no async preemption
+      # happened, since then it proved nothing.
+      - name: Async preemption
+        run: |
+          mkdir -p /tmp/async && cat > /tmp/async/main.sl <<'EOF'
+          fn fib(n: int) -> int {
+              if n < 2 {
+                  return n;
+              }
+              return fib(n - 1) + fib(n - 2);
+          }
+          fn work(n: int) -> int {
+              return fib(n);
+          }
+          let hs: [join[int]] = [];
+          let i = 0;
+          while i < 64 {
+              push(hs, spawn work(30));
+              i = i + 1;
+          }
+          let total = 0;
+          for h in hs {
+              let r = join_wait(h);
+              guard let v = r else { println("FAIL: a task panicked"); exit(1); }
+              total = total + v;
+          }
+          println(total);
+          EOF
+          ./slangc /tmp/async/main.sl -o /tmp/async/t
+          seen=0
+          for run in 1 2 3 4 5; do
+            out=$(SLANG_SCHED_STAT=1 SLANG_PREEMPT_QUANTUM_MS=1 \
+                  SLANG_PREEMPT_TICK_MS=1 /tmp/async/t 2>&1)
+            total=$(printf '%s\n' "$out" | grep -E '^[0-9]+$' || true)
+            n=$(printf '%s\n' "$out" | grep -o 'async_preempts=[0-9]*' | cut -d= -f2)
+            echo "run $run: total=$total async_preempts=$n"
+            if [ "$total" != "53250560" ]; then
+              echo "wrong result -- registers were not restored"; exit 1
+            fi
+            seen=$((seen + ${n:-0}))
+          done
+          if [ "$seen" -eq 0 ]; then
+            echo "no async preemption happened; this step proved nothing"; exit 1
+          fi
+
       - name: Docs build
         run: make docs
 
-  # Attach a Linux tarball per architecture to a published release. The
-  # macOS tarball is still built and attached by hand.
+  # Attach a tarball per platform to a published release.
   release-tarballs:
-    name: release tarball (${{ matrix.arch }})
     if: github.event_name == 'release'
     needs: test
     strategy:
       matrix:
         include:
           - runner: ubuntu-24.04
-            arch: x86_64
+          - runner: ubuntu-24.04-arm
+          - runner: macos-14
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     permissions:
@@ -86,7 +148,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install build dependencies
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -96,8 +159,8 @@ jobs:
         run: make dist
 
       # Verify the tarball the way a user gets it: unpacked somewhere
-      # unrelated, compiling and running a program with the installed
-      # layout rather than the source tree.
+      # unrelated, compiling and running a program with the installed layout
+      # rather than the source tree.
       - name: Verify tarball
         run: |
           mkdir -p /tmp/verify && tar -xzf dist/*.tar.gz -C /tmp/verify

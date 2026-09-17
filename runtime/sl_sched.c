@@ -457,6 +457,110 @@ __asm__(
 "    blr x19\n"
 "    brk #1\n"
 );
+/* arm64: the async-preemption trampoline and the stack-growth trampoline.
+ *
+ * Until these existed, arm64 did not build on ANY platform -- Linux or
+ * Apple Silicon -- because both were only ever written in x86_64
+ * assembly, and every program failed to link.
+ *
+ * WHY THIS IS NOT A TRANSLATION OF THE x86_64 VERSION
+ *
+ * The x86_64 trampoline restores every register and then jumps back
+ * through a slot BELOW %rsp -- sound only because x86_64 has a 128-byte
+ * red zone that signal frames skip. arm64 has neither a red zone nor a
+ * memory-indirect branch: branching back needs a register, and at an
+ * arbitrary interrupted instruction in C code any register may be live
+ * (x16/x17 included, inside PLT stubs and veneers).
+ *
+ * So the final restore is done by the kernel. The trampoline saves every
+ * register into an 816-byte block, yields, then raises SIGUSR2 on its own
+ * thread. sl_preempt_resume_handler (sl_pool.c) writes the saved general
+ * registers, sp, NZCV and the original pc into the signal context, and
+ * sigreturn restores all of them atomically. No register is ever needed
+ * as a scratch.
+ *
+ * Block layout (sl_arm_frame in sl_pool.c must match):
+ *   0..247 x0-x30   248 sp   256 nzcv   264 fpsr   272 fpcr   288..799 q0-q31
+ *
+ * Vector state differs by platform, deliberately:
+ *   Linux  restores q0-q31/fpsr/fpcr HERE, then raises the signal with raw
+ *          syscalls (getpid, gettid, tgkill), which preserve vector
+ *          registers. The kernel's signal frame therefore already holds
+ *          the originals, and the handler never touches vector state.
+ *          This matters on SVE hardware (GitHub's arm runners): there the
+ *          kernel can restore vector state from an SVE record rather than
+ *          the FPSIMD one, so writing FPSIMD from a handler would be
+ *          silently ignored.
+ *   Apple  has no stable syscall ABI but also no SVE, so the resume goes
+ *          through pthread_kill in C and the handler restores NEON state
+ *          from the block via uc_mcontext->__ns.
+ *
+ * Accepted limit, the same one x86_64 has with AVX-512: only the low 128
+ * bits of each vector register are preserved. SVE upper bits live across
+ * a preemption would be lost.
+ *
+ * The stack-growth trampoline is the x86_64 one's shape: sl_task_stack_grow
+ * primes x19 (entry) and x20 (arg) in the context block, exactly as
+ * sl_ctx_trampoline receives them. */
+__asm__(
+".text\n"
+".globl _sl_preempt_trampoline_entry\n"
+".p2align 2\n"
+"_sl_preempt_trampoline_entry:\n"
+"    sub  sp, sp, #816\n"
+"    stp  x0, x1, [sp, #0]\n"
+"    stp  x2, x3, [sp, #16]\n"
+"    stp  x4, x5, [sp, #32]\n"
+"    stp  x6, x7, [sp, #48]\n"
+"    stp  x8, x9, [sp, #64]\n"
+"    stp  x10, x11, [sp, #80]\n"
+"    stp  x12, x13, [sp, #96]\n"
+"    stp  x14, x15, [sp, #112]\n"
+"    stp  x16, x17, [sp, #128]\n"
+"    stp  x18, x19, [sp, #144]\n"
+"    stp  x20, x21, [sp, #160]\n"
+"    stp  x22, x23, [sp, #176]\n"
+"    stp  x24, x25, [sp, #192]\n"
+"    stp  x26, x27, [sp, #208]\n"
+"    stp  x28, x29, [sp, #224]\n"
+"    str  x30, [sp, #240]\n"
+"    add  x0, sp, #816\n"
+"    str  x0, [sp, #248]\n"
+"    mrs  x0, nzcv\n"
+"    str  x0, [sp, #256]\n"
+"    mrs  x0, fpsr\n"
+"    str  x0, [sp, #264]\n"
+"    mrs  x0, fpcr\n"
+"    str  x0, [sp, #272]\n"
+"    stp  q0, q1, [sp, #288]\n"
+"    stp  q2, q3, [sp, #320]\n"
+"    stp  q4, q5, [sp, #352]\n"
+"    stp  q6, q7, [sp, #384]\n"
+"    stp  q8, q9, [sp, #416]\n"
+"    stp  q10, q11, [sp, #448]\n"
+"    stp  q12, q13, [sp, #480]\n"
+"    stp  q14, q15, [sp, #512]\n"
+"    stp  q16, q17, [sp, #544]\n"
+"    stp  q18, q19, [sp, #576]\n"
+"    stp  q20, q21, [sp, #608]\n"
+"    stp  q22, q23, [sp, #640]\n"
+"    stp  q24, q25, [sp, #672]\n"
+"    stp  q26, q27, [sp, #704]\n"
+"    stp  q28, q29, [sp, #736]\n"
+"    stp  q30, q31, [sp, #768]\n"
+"    bl   _sl_preempt_yield\n"
+"    mov  x0, sp\n"
+"    bl   _sl_preempt_arm_resume\n"
+"    brk  #2\n"
+".globl _sl_preempt_trampoline_end\n"
+"_sl_preempt_trampoline_end:\n"
+".globl _sl_grower_trampoline\n"
+".p2align 2\n"
+"_sl_grower_trampoline:\n"
+"    mov  x0, x20\n"
+"    blr  x19\n"
+"    brk  #1\n"
+);
 #else
 __asm__(
 ".text\n"
@@ -495,6 +599,96 @@ __asm__(
 "    blr x19\n"
 "    brk #1\n"
 );
+/* arm64 trampolines: see the Apple block above for the full design. */
+__asm__(
+".text\n"
+".globl sl_preempt_trampoline_entry\n"
+".p2align 2\n"
+"sl_preempt_trampoline_entry:\n"
+"    sub  sp, sp, #816\n"
+"    stp  x0, x1, [sp, #0]\n"
+"    stp  x2, x3, [sp, #16]\n"
+"    stp  x4, x5, [sp, #32]\n"
+"    stp  x6, x7, [sp, #48]\n"
+"    stp  x8, x9, [sp, #64]\n"
+"    stp  x10, x11, [sp, #80]\n"
+"    stp  x12, x13, [sp, #96]\n"
+"    stp  x14, x15, [sp, #112]\n"
+"    stp  x16, x17, [sp, #128]\n"
+"    stp  x18, x19, [sp, #144]\n"
+"    stp  x20, x21, [sp, #160]\n"
+"    stp  x22, x23, [sp, #176]\n"
+"    stp  x24, x25, [sp, #192]\n"
+"    stp  x26, x27, [sp, #208]\n"
+"    stp  x28, x29, [sp, #224]\n"
+"    str  x30, [sp, #240]\n"
+"    add  x0, sp, #816\n"
+"    str  x0, [sp, #248]\n"
+"    mrs  x0, nzcv\n"
+"    str  x0, [sp, #256]\n"
+"    mrs  x0, fpsr\n"
+"    str  x0, [sp, #264]\n"
+"    mrs  x0, fpcr\n"
+"    str  x0, [sp, #272]\n"
+"    stp  q0, q1, [sp, #288]\n"
+"    stp  q2, q3, [sp, #320]\n"
+"    stp  q4, q5, [sp, #352]\n"
+"    stp  q6, q7, [sp, #384]\n"
+"    stp  q8, q9, [sp, #416]\n"
+"    stp  q10, q11, [sp, #448]\n"
+"    stp  q12, q13, [sp, #480]\n"
+"    stp  q14, q15, [sp, #512]\n"
+"    stp  q16, q17, [sp, #544]\n"
+"    stp  q18, q19, [sp, #576]\n"
+"    stp  q20, q21, [sp, #608]\n"
+"    stp  q22, q23, [sp, #640]\n"
+"    stp  q24, q25, [sp, #672]\n"
+"    stp  q26, q27, [sp, #704]\n"
+"    stp  q28, q29, [sp, #736]\n"
+"    stp  q30, q31, [sp, #768]\n"
+"    bl   sl_preempt_yield\n"
+"    mov  x0, sp\n"
+"    bl   sl_preempt_arm_resume\n"
+"    ldr  x9, [sp, #264]\n"
+"    msr  fpsr, x9\n"
+"    ldr  x9, [sp, #272]\n"
+"    msr  fpcr, x9\n"
+"    ldp  q0, q1, [sp, #288]\n"
+"    ldp  q2, q3, [sp, #320]\n"
+"    ldp  q4, q5, [sp, #352]\n"
+"    ldp  q6, q7, [sp, #384]\n"
+"    ldp  q8, q9, [sp, #416]\n"
+"    ldp  q10, q11, [sp, #448]\n"
+"    ldp  q12, q13, [sp, #480]\n"
+"    ldp  q14, q15, [sp, #512]\n"
+"    ldp  q16, q17, [sp, #544]\n"
+"    ldp  q18, q19, [sp, #576]\n"
+"    ldp  q20, q21, [sp, #608]\n"
+"    ldp  q22, q23, [sp, #640]\n"
+"    ldp  q24, q25, [sp, #672]\n"
+"    ldp  q26, q27, [sp, #704]\n"
+"    ldp  q28, q29, [sp, #736]\n"
+"    ldp  q30, q31, [sp, #768]\n"
+"    mov  x8, #172\n"
+"    svc  #0\n"
+"    mov  x9, x0\n"
+"    mov  x8, #178\n"
+"    svc  #0\n"
+"    mov  x1, x0\n"
+"    mov  x0, x9\n"
+"    mov  x2, #12\n"
+"    mov  x8, #131\n"
+"    svc  #0\n"
+"    brk  #2\n"
+".globl sl_preempt_trampoline_end\n"
+"sl_preempt_trampoline_end:\n"
+".globl sl_grower_trampoline\n"
+".p2align 2\n"
+"sl_grower_trampoline:\n"
+"    mov  x0, x20\n"
+"    blr  x19\n"
+"    brk  #1\n"
+);
 #endif
 #else
 #error "sl_ctx_switch: unsupported architecture (only x86_64 and aarch64 have a runtime_sched.c backend)"
@@ -512,6 +706,7 @@ void sl_grower_trampoline(void); /* Tier 11 eighth slice -- see its own
  * to keep them, which is why it went unnoticed until the first Linux
  * build. sl_cpu_avx_ok (sl_core.c) already carried the same attribute for
  * the same reason. */
+void sl_preempt_arm_resume(void *frame); /* arm64 trampoline tail, sl_pool.c */
 void sl_preempt_release_initial_disable(void); /* Tier 11 eighth slice
     -- called from sl_ctx_trampoline above, defined further down in
     this file, near sl_task_stack_init. Deliberately NOT static, same

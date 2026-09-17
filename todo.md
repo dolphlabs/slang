@@ -2506,6 +2506,18 @@ prerequisite, not a different plan).
       the GC, not double dispatch, not relocation, and not overflow
       past the stack base.
 
+      **Unverified lead (noted during the arm64 port, not yet tested):**
+      the x86_64 preemption handler runs on the TASK stack (no
+      SA_ONSTACK), and the kernel pushes the signal frame before the
+      handler's headroom veto ever runs. An x86_64 signal frame carrying
+      AVX state is roughly 2.5KB -- close to the "up to 2336 bytes deep"
+      overflow below task stacks measured in the guard-page entry below.
+      If the frame itself is what overflows, the veto cannot prevent it by
+      construction. Test: give x86_64 the same per-thread alternate signal
+      stack arm64 now uses (sl_rt_install_altstack, sl_pool.c) and re-run
+      the amplified-preemption measurement. A drop to 0/50 would connect
+      them; an unchanged rate would eliminate a fourth explanation.
+
       **Suggested next step:** the resume-target slot is written by the
       trampoline at a fixed offset and read by its final `jmp`. Poison
       that slot with a known sentinel on entry and validate it

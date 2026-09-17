@@ -600,12 +600,15 @@ static void sl_worker_run_loop(long slot_idx) {
     }
 }
 
+static void sl_rt_install_altstack(void); /* defined below, before the preempt handler */
+
 static void *sl_worker_loop(void *arg) {
     long slot_idx = (long)(intptr_t)arg;
     /* Tier 11 eighth slice: this worker's OWN first action, before
      * sl_gc_register_thread or anything else -- see sl_pool_slots' own
      * comment for the startup race this ordering closes. */
     atomic_store_explicit(&sl_pool_slots[slot_idx].tid, pthread_self(), memory_order_release);
+    sl_rt_install_altstack();
     sl_gc_register_thread();
     sl_worker_run_loop(slot_idx);
     sl_gc_unregister_thread(); /* this loop can only be left via
@@ -613,6 +616,123 @@ static void *sl_worker_loop(void *arg) {
         good -- omitting this would leave a registry node pointing at
         TLS about to be torn down. */
     return NULL;
+}
+
+#if defined(__aarch64__)
+/* The register block the arm64 trampoline builds (sl_sched.c). Offsets are
+ * fixed by the assembly; the static asserts keep the two in step. */
+typedef struct {
+    uint64_t x[31];          /* 0..247 */
+    uint64_t sp;             /* 248 */
+    uint64_t nzcv;           /* 256 */
+    uint64_t fpsr;           /* 264 */
+    uint64_t fpcr;           /* 272 */
+    uint64_t pad;            /* 280 */
+    __uint128_t q[32];       /* 288..799 */
+} sl_arm_frame;
+_Static_assert(offsetof(sl_arm_frame, sp) == 248, "arm64 frame: sp");
+_Static_assert(offsetof(sl_arm_frame, nzcv) == 256, "arm64 frame: nzcv");
+_Static_assert(offsetof(sl_arm_frame, fpsr) == 264, "arm64 frame: fpsr");
+_Static_assert(offsetof(sl_arm_frame, q) == 288, "arm64 frame: q");
+_Static_assert(sizeof(sl_arm_frame) <= 816, "arm64 frame: size");
+
+#define SL_ARM_NZCV_MASK 0xF0000000ULL
+
+/* Called from the trampoline's tail with preemption still disabled, so
+ * the task cannot move to another OS thread between here and the signal
+ * it raises. Records where the block is. On Linux it returns and the
+ * assembly raises SIGUSR2 itself (see sl_sched.c on why); on Apple it
+ * raises the signal here. Either way control never comes back past the
+ * signal: the handler redirects pc to where the task was interrupted. */
+__attribute__((used)) void sl_preempt_arm_resume(void *frame) {
+    sl_task *t = sl_rt_current_task;
+    t->async_resume_frame = frame;
+#if defined(__APPLE__)
+    pthread_kill(pthread_self(), SIGUSR2);
+    /* A signal sent to the calling thread is delivered before
+       pthread_kill returns. If some platform ever did not, carrying on
+       would run arbitrary code with the wrong registers; fail loudly. */
+    fprintf(stderr, "slang: internal error: preemption resume signal was "
+                    "not delivered synchronously\n");
+    abort();
+#endif
+}
+
+/* SIGUSR2: restore the interrupted task's registers through the signal
+ * context, so the kernel sets every one of them -- and pc -- atomically
+ * on sigreturn. See the aarch64 trampoline in sl_sched.c. */
+static void sl_preempt_resume_handler(int sig, siginfo_t *si, void *uctx_raw) {
+    (void)sig; (void)si;
+    sl_task *t = sl_rt_current_task;
+    if (!t || !t->async_resume_frame)
+        return;              /* not ours: nothing of slang's raised it */
+    sl_arm_frame *f = (sl_arm_frame *)t->async_resume_frame;
+    ucontext_t *uc = (ucontext_t *)uctx_raw;
+#if defined(__linux__)
+    for (int i = 0; i < 31; i++)
+        uc->uc_mcontext.regs[i] = f->x[i];
+    uc->uc_mcontext.sp = f->sp;
+    uc->uc_mcontext.pc = (uint64_t)(uintptr_t)t->async_orig_pc;
+    uc->uc_mcontext.pstate = (uc->uc_mcontext.pstate & ~SL_ARM_NZCV_MASK) |
+                             (f->nzcv & SL_ARM_NZCV_MASK);
+    /* Vector state deliberately untouched: the assembly restored it before
+       raising the signal, so the kernel's frame already holds it. */
+#elif defined(__APPLE__)
+    for (int i = 0; i < 29; i++)
+        uc->uc_mcontext->__ss.__x[i] = f->x[i];
+    __darwin_arm_thread_state64_set_fp(uc->uc_mcontext->__ss, f->x[29]);
+    __darwin_arm_thread_state64_set_lr_fptr(uc->uc_mcontext->__ss,
+                                            (void *)(uintptr_t)f->x[30]);
+    __darwin_arm_thread_state64_set_sp(uc->uc_mcontext->__ss, f->sp);
+    __darwin_arm_thread_state64_set_pc_fptr(uc->uc_mcontext->__ss,
+                                            t->async_orig_pc);
+    uc->uc_mcontext->__ss.__cpsr =
+        (uint32_t)((uc->uc_mcontext->__ss.__cpsr & ~SL_ARM_NZCV_MASK) |
+                   (f->nzcv & SL_ARM_NZCV_MASK));
+    for (int i = 0; i < 32; i++)
+        uc->uc_mcontext->__ns.__v[i] = f->q[i];
+    uc->uc_mcontext->__ns.__fpsr = (uint32_t)f->fpsr;
+    uc->uc_mcontext->__ns.__fpcr = (uint32_t)f->fpcr;
+#endif
+    t->async_resume_frame = NULL;
+    /* The x86_64 trampoline releases this with `lock decl` as its last
+       instruction before the jump. Here the last instant is inside this
+       handler: SIGUSR1 is blocked in its sa_mask, so no preemption can land
+       between this and sigreturn completing. */
+    atomic_fetch_sub_explicit(&t->preempt_disable_depth, 1, memory_order_acq_rel);
+}
+#endif
+
+/* An alternate signal stack for the calling thread, on arm64.
+ *
+ * An arm64 signal frame is at least ~4.6KB and larger with SVE state,
+ * against an 8KB initial task stack. Delivered on the task's own stack,
+ * the preemption signal could overflow it -- and the resume signal lands
+ * below the trampoline's 816-byte block on top of that. With SA_ONSTACK
+ * and a per-thread alternate stack, no handler frame ever touches a task
+ * stack. Every thread that runs tasks needs one: the workers and the main
+ * thread, since a task preempted on one thread can resume on another.
+ *
+ * x86_64 is left as it was, where the handler has always run on the task
+ * stack; see todo.md for why that may deserve the same treatment. */
+static void sl_rt_install_altstack(void) {
+#if defined(__aarch64__)
+    size_t sz = 65536;
+    void *mem = mmap(NULL, sz, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (mem == MAP_FAILED) {
+        fprintf(stderr, "slang: failed to allocate a signal stack\n");
+        exit(1);
+    }
+    stack_t ss;
+    memset(&ss, 0, sizeof(ss));
+    ss.ss_sp = mem;
+    ss.ss_size = sz;
+    if (sigaltstack(&ss, NULL) != 0) {
+        fprintf(stderr, "slang: sigaltstack failed\n");
+        exit(1);
+    }
+#endif
 }
 
 /* Tier 11 eighth slice, rollout step 3: the real signal handler --
@@ -804,10 +924,30 @@ static void sl_preempt_ticker_start(void) {
     sa.sa_sigaction = sl_preempt_handler;
     sa.sa_flags = SA_SIGINFO;
     sigemptyset(&sa.sa_mask);
+#if defined(__aarch64__)
+    /* arm64 runs both handlers on the per-thread alternate stack, and
+       each masks the other: the resume handler's release of
+       preempt_disable_depth must not be interleaved with a new
+       preemption before sigreturn completes. */
+    sa.sa_flags |= SA_ONSTACK;
+    sigaddset(&sa.sa_mask, SIGUSR2);
+#endif
     if (sigaction(SIGUSR1, &sa, NULL) != 0) {
         fprintf(stderr, "slang: failed to install preempt handler\n");
         exit(1);
     }
+#if defined(__aarch64__)
+    struct sigaction ra;
+    memset(&ra, 0, sizeof(ra));
+    ra.sa_sigaction = sl_preempt_resume_handler;
+    ra.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sigemptyset(&ra.sa_mask);
+    sigaddset(&ra.sa_mask, SIGUSR1);
+    if (sigaction(SIGUSR2, &ra, NULL) != 0) {
+        fprintf(stderr, "slang: failed to install preempt resume handler\n");
+        exit(1);
+    }
+#endif
     pthread_t th;
     if (sl_rt_thread_spawn(&th, sl_preempt_ticker_thread, NULL) != 0) {
         fprintf(stderr, "slang: failed to start preempt ticker\n");
@@ -853,6 +993,8 @@ static void sl_pool_start(void) {
     sl_cpu_detect();
 
     signal(SIGPIPE, SIG_IGN);
+    /* the main thread runs tasks too (sl_worker_run_loop(-1)) */
+    sl_rt_install_altstack();
 
     long n = sysconf(_SC_NPROCESSORS_ONLN);
     if (n < 1) n = 1;
