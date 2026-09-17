@@ -911,6 +911,7 @@ static const char *parse_type_name(Parser *p) {
 static Stmt *parse_if_stmt(Parser *p);
 static Stmt *parse_statement(Parser *p);
 static Stmt *parse_struct_decl(Parser *p, int is_pub, int is_gc);
+static Stmt *parse_enum_decl(Parser *p, int is_pub);
 static Stmt *parse_impl_decl(Parser *p);
 
 /* Parse one statement into `blk`, draining any statement the parser
@@ -1234,6 +1235,57 @@ static Stmt *parse_struct_decl(Parser *p, int is_pub, int is_gc) {
     return s;
 }
 
+/* enum Name { Variant [= N], ... } — a closed, i32-backed set of named
+ * constants. Ordinals auto-increment ("previous + 1", starting at 0)
+ * unless a variant gives one explicitly; duplicate variant names and
+ * duplicate explicit ordinals are rejected later, in collect_enum_decls
+ * (src/codegen/enum.c), which sees every enum in the package at once. */
+static Stmt *parse_enum_decl(Parser *p, int is_pub) {
+    Token *kw = advance(p); /* 'enum' */
+    Token *name = expect(p, T_IDENT, "an enum name");
+    expect(p, T_LBRACE, "'{'");
+
+    char **variants = NULL;
+    int *has_explicit = NULL;
+    long long *values = NULL;
+    int n = 0;
+    long long next_ordinal = 0;
+    while (!check(p, T_RBRACE)) {
+        if (check(p, T_EOF))
+            parse_error(peek(p), "unexpected end of file inside enum");
+        Token *v = expect(p, T_IDENT, "a variant name");
+        long long val = next_ordinal;
+        int explicit_val = 0;
+        if (match(p, T_ASSIGN)) {
+            Token *lit = expect(p, T_INT, "an integer literal");
+            if (lit->big_u64 || lit->int_val < 0)
+                parse_error(lit, "enum variant values must be a non-negative int32");
+            val = lit->int_val;
+            explicit_val = 1;
+        }
+        variants = (char **)xrealloc(variants, (n + 1) * sizeof(char *));
+        has_explicit = (int *)xrealloc(has_explicit, (n + 1) * sizeof(int));
+        values = (long long *)xrealloc(values, (n + 1) * sizeof(long long));
+        variants[n] = v->text;
+        has_explicit[n] = explicit_val;
+        values[n] = val;
+        n++;
+        next_ordinal = val + 1;
+        if (!match(p, T_COMMA))
+            break;
+    }
+    expect(p, T_RBRACE, "'}'");
+
+    Stmt *s = new_stmt(ST_ENUM, kw->line);
+    s->as.enum_decl.name = name->text;
+    s->as.enum_decl.is_pub = is_pub;
+    s->as.enum_decl.variants = variants;
+    s->as.enum_decl.has_explicit = has_explicit;
+    s->as.enum_decl.values = values;
+    s->as.enum_decl.nvariants = n;
+    return s;
+}
+
 /* impl Name { fn ... } — methods become package functions whose first
  * parameter conventionally receives the struct ('self'). */
 static Stmt *parse_impl_decl(Parser *p) {
@@ -1506,6 +1558,9 @@ static Stmt *parse_statement(Parser *p) {
     case T_KW_STRUCT:
         parse_error(tk, "'struct' declarations are only allowed at top "
                         "level");
+        return NULL; /* unreachable */
+    case T_KW_ENUM:
+        parse_error(tk, "'enum' declarations are only allowed at top level");
         return NULL; /* unreachable */
     case T_KW_IMPL:
         parse_error(tk, "'impl' blocks are only allowed at top level");
@@ -1786,6 +1841,11 @@ Program *parse_program(Token *tokens, int ntokens) {
 
         if (check(&p, T_KW_STRUCT)) {
             block_push(prog->main_body, parse_struct_decl(&p, is_pub, 0));
+            continue;
+        }
+
+        if (check(&p, T_KW_ENUM)) {
+            block_push(prog->main_body, parse_enum_decl(&p, is_pub));
             continue;
         }
 

@@ -491,6 +491,23 @@ if cl.reuses < 1 {
 }
 println("TLS connections pool and are reused under the same CA");
 
+// ---- M: the method forms are the same client -------------------------
+
+let cm = httpc.new_client();
+let m1 = cm.get(base + "/ka", dl());
+guard let m1r = m1 else let e = err_of(m1) { die("M1: " + e); }
+expect(to_str(m1r.body), "ka", "M1 body");
+let m2 = cm.get(base + "/ka", dl());
+guard let m2r = m2 else let e = err_of(m2) { die("M2: " + e); }
+expect(to_str(cm.dials) + "/" + to_str(cm.reuses), "1/1", "M: c.get pools like client_get");
+expect(to_str(cm.idle_count()), "1", "M: idle_count method");
+if (m2r.header("Content-Length") ?? "") == "" {
+    die("M: header method found no Content-Length");
+}
+cm.close_idle();
+expect(to_str(cm.idle_count()), "0", "M: close_idle method");
+println("Client and Response methods share the function forms' behaviour");
+
 httpc.close_idle(ck);
 httpc.close_idle(cl);
 println("done");

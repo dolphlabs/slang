@@ -130,10 +130,13 @@ its behaviour checkable rather than asserted.
   framed body read exactly, and nothing left over. A body delimited by
   the connection closing is never reused.
 
-Client operations are handle-first package functions — `client_get(c,
-...)`, the same idiom as `sql.exec(db, ...)` — rather than methods,
-because a method cannot currently share a name with a package function
-(`impl Client { fn get }` collides with `httpc.get`).
+Client operations come in two equivalent forms: handle-first package
+functions — `httpc.client_get(c, url, dl)`, the same idiom as
+`sql.exec(db, ...)` — and methods, `c.get(url, dl)`. The methods are
+`get`, `head`, `post`, `send`, `idle_count`, `close_idle`,
+`enable_cookies`, `clear_cookies`, `set_cookie` and `cookies` on `Client`,
+and `header` on `Response`. `c.get` and the one-shot `httpc.get` share a
+name; the method is the pooled client's, the function is not.
 
 ##### Decompression
 
@@ -264,6 +267,28 @@ Close every idle connection now. A long-lived service does not need this -- idle
 ### `fn head(url: str, deadline: until) -> result[Response, str]`
 
 ### `fn post(url: str, content_type: str, body: bytes,`
+
+### `fn send(self: Client, req: Request, deadline: until)`
+
+### `fn get(self: Client, url: str, deadline: until)`
+
+### `fn head(self: Client, url: str, deadline: until)`
+
+### `fn post(self: Client, url: str, content_type: str, body: bytes,`
+
+### `fn idle_count(self: Client) -> int`
+
+### `fn close_idle(self: Client)`
+
+### `fn enable_cookies(self: Client)`
+
+### `fn clear_cookies(self: Client)`
+
+### `fn set_cookie(self: Client, url: str, line: str)`
+
+### `fn cookies(self: Client, url: str) -> [Cookie]`
+
+### `fn header(self: Response, name: str) -> opt[str]`
 
 ---
 

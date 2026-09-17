@@ -1987,26 +1987,36 @@ pub fn wait_notification(c: Conn, deadline: until)
 
 // ---- reading results -------------------------------------------------
 
+// Postgres type OIDs this driver knows how to read, keyed to the wire
+// values pg_type assigns them (see pg_type.dat upstream). Variant names
+// are PascalCase, as every slang enum's are; type_name() below lowercases
+// on the way out so panic messages still read the actual Postgres type
+// name ("int8", not "Int8").
+enum PgType {
+    Bool = 16,
+    Bytea = 17,
+    Int8 = 20,
+    Int2 = 21,
+    Int4 = 23,
+    Text = 25,
+    Oid = 26,
+    Json = 114,
+    Float4 = 700,
+    Float8 = 701,
+    Char = 1042,
+    Varchar = 1043,
+    Date = 1082,
+    Timestamp = 1114,
+    Timestamptz = 1184,
+    Numeric = 1700,
+    Uuid = 2950,
+    Jsonb = 3802,
+}
+
 fn type_name(oid: int) -> str {
-    if oid == 16 { return "bool"; }
-    if oid == 17 { return "bytea"; }
-    if oid == 20 { return "int8"; }
-    if oid == 21 { return "int2"; }
-    if oid == 23 { return "int4"; }
-    if oid == 25 { return "text"; }
-    if oid == 26 { return "oid"; }
-    if oid == 114 { return "json"; }
-    if oid == 700 { return "float4"; }
-    if oid == 701 { return "float8"; }
-    if oid == 1042 { return "char"; }
-    if oid == 1043 { return "varchar"; }
-    if oid == 1082 { return "date"; }
-    if oid == 1114 { return "timestamp"; }
-    if oid == 1184 { return "timestamptz"; }
-    if oid == 1700 { return "numeric"; }
-    if oid == 2950 { return "uuid"; }
-    if oid == 3802 { return "jsonb"; }
-    return "type " + to_str(oid);
+    let r = PgType.from_int(oid);
+    guard let t = r else { return "type " + to_str(oid); }
+    return strings.to_lower(to_str(t));
 }
 
 // The index of the column called `name`. Panics if there is none: the
@@ -2071,12 +2081,20 @@ pub fn get_text(rows: Rows, r: int, c: int) -> str {
 pub fn get_int(rows: Rows, r: int, c: int) -> int {
     cell_index(rows, r, c);
     let oid = rows.types[c];
-    if oid != 20 && oid != 21 && oid != 23 && oid != 26 {
+    // numeric (1700) too, when the value is a whole number: sum() of an
+    // integer column is numeric in Postgres, and reading a total should
+    // not need a cast in the SQL. A fraction or a value beyond 64 bits
+    // still panics, naming the column.
+    if oid != 20 && oid != 21 && oid != 23 && oid != 26 && oid != 1700 {
         wrong_type(rows, c, "int");
     }
     let s = to_str(cell(rows, r, c, "int"));
     let ir = to_int(s);
     guard let v = ir else let e = err_of(ir) {
+        if oid == 1700 {
+            panic("column '" + rows.columns[c] + "' is numeric " + s +
+                  ", which is not a 64-bit integer; use get_float or get_text");
+        }
         panic("column '" + rows.columns[c] + "': " + e);
     }
     return v;

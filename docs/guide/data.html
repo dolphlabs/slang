@@ -88,7 +88,7 @@ scores[<span class="s">&quot;carol&quot;</span>] = <span class="n">78</span>;   
 <span class="k">for</span> k, v <span class="k">in</span> scores {           <span class="c">// iteration in insertion order</span>
     <span class="b">println</span>(k + <span class="s">&quot;: &quot;</span> + <span class="b">to_str</span>(v));
 }</code></pre></div>
-<p>Keys may be any integer type, <code>str</code>, or <code>bool</code>; values may be any type, including structs and lists. Backed by an open-addressing hash table (FNV-1a) that keeps entries in insertion order and grows automatically at 75% load.</p>
+<p>Keys may be any integer type, <code>str</code>, <code>bool</code>, or <code>enum</code>; values may be any type, including structs and lists. Backed by an open-addressing hash table (FNV-1a) that keeps entries in insertion order and grows automatically at 75% load.</p>
 <h2 id="structs">Structs</h2>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">struct</span> Point {
     x: <span class="t">int</span>,
@@ -120,7 +120,7 @@ r.br.x = <span class="n">6</span>;
 
 <span class="k">let</span> pts: [Point] = [p, q];  <span class="c">// structs compose with lists &amp; maps</span>
 <span class="b">push</span>(pts, r.tl);</code></pre></div>
-<p>Struct literals must supply every field exactly once, with types checked. Methods live in top-level <code>impl Name { ... }</code> blocks; mark a method <code>pub fn</code> to export it to importing packages. Structs are values: assignment copies, including any <code>str</code> / list / map / <code>opt</code> / <code>result</code> / <code>gc struct</code> fields (shallow — the heap objects are shared). Use <code>gc struct</code> when the record itself should be a shared heap object. <code>own T</code> is uniquely owned: assignment and passing <strong>move</strong>, and use-after-move is a compile error. A moved binding can be reinitialized. <code>own</code> is freed when its binding goes out of scope unless it was moved.</p>
+<p>Struct literals must supply every field exactly once, with types checked. Methods live in top-level <code>impl Name { ... }</code> blocks; mark a method <code>pub fn</code> to export it to importing packages. A method&#x27;s name belongs to its struct: it may match a package-level function or another struct&#x27;s method (<code>impl Client { fn get }</code> beside <code>fn get</code>), and a bare call <code>get(x)</code> always means the function. Structs are values: assignment copies, including any <code>str</code> / list / map / <code>opt</code> / <code>result</code> / <code>gc struct</code> fields (shallow — the heap objects are shared). Use <code>gc struct</code> when the record itself should be a shared heap object. <code>own T</code> is uniquely owned: assignment and passing <strong>move</strong>, and use-after-move is a compile error. A moved binding can be reinitialized. <code>own</code> is freed when its binding goes out of scope unless it was moved.</p>
   </article>
   <aside class="toc">
     <p class="toc-title">On this page</p>

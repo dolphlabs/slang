@@ -1697,9 +1697,9 @@ fn run(c: Client, req: Request, deadline: until) -> result[Response, str] {
 
 // Client operations are handle-first package functions -- the idiom
 // every stdlib package already uses (sql.exec(db, ...), net.tls_send(ssl,
-// ...)) -- rather than methods. Methods were tried first and hit a
-// language limit: a method cannot share a name with a package function,
-// so `impl Client { fn get }` collides with httpc.get.
+// ...)). The same operations are also methods on Client -- c.get(url,
+// dl) -- defined at the end of this file; the function forms came first,
+// when a method could not share a name with a package function.
 
 pub fn client_send(c: Client, req: Request, deadline: until)
         -> result[Response, str] {
@@ -1777,4 +1777,64 @@ pub fn post(url: str, content_type: str, body: bytes,
     r.headers["Content-Type"] = content_type;
     r.body = body;
     return run(oneshot(), r, deadline);
+}
+
+// ---- methods --------------------------------------------------------------
+//
+// Client and Response operations as methods, beside the function forms
+// above: `c.get(url, dl)` is `httpc.client_get(c, url, dl)`. They share
+// names with the one-shot httpc.get / post / head / send, which is why
+// they are thin wrappers over the client_ functions rather than calls to
+// the same-named ones.
+
+impl Client {
+    pub fn send(self: Client, req: Request, deadline: until)
+                -> result[Response, str] {
+        return run(self, req, deadline);
+    }
+
+    pub fn get(self: Client, url: str, deadline: until)
+               -> result[Response, str] {
+        return client_get(self, url, deadline);
+    }
+
+    pub fn head(self: Client, url: str, deadline: until)
+                -> result[Response, str] {
+        return client_head(self, url, deadline);
+    }
+
+    pub fn post(self: Client, url: str, content_type: str, body: bytes,
+                deadline: until) -> result[Response, str] {
+        return client_post(self, url, content_type, body, deadline);
+    }
+
+    pub fn idle_count(self: Client) -> int {
+        return idle_count(self);
+    }
+
+    pub fn close_idle(self: Client) {
+        close_idle(self);
+    }
+
+    pub fn enable_cookies(self: Client) {
+        enable_cookies(self);
+    }
+
+    pub fn clear_cookies(self: Client) {
+        clear_cookies(self);
+    }
+
+    pub fn set_cookie(self: Client, url: str, line: str) {
+        set_cookie(self, url, line);
+    }
+
+    pub fn cookies(self: Client, url: str) -> [Cookie] {
+        return cookies(self, url);
+    }
+}
+
+impl Response {
+    pub fn header(self: Response, name: str) -> opt[str] {
+        return header(self, name);
+    }
 }

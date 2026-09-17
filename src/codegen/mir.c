@@ -549,6 +549,7 @@ static void lower_stmt(Lower *L, Stmt *s) {
         return;
     }
     case ST_STRUCT:
+    case ST_ENUM:
     case ST_IMPL:
         return;
     }
@@ -614,7 +615,7 @@ void compute_mir(CG *cg, Package *pkgs, int npkgs, int main_index) {
                 continue;
             cg->in_function = 1;
             cg->cur_pkg = p->name;
-            FuncSig *sig = sig_find_in(cg, p->name, f->name);
+            FuncSig *sig = sig_of_decl(cg, f);
             cg->cur_ret = sig->ret_slang;
             mir_push(cg, lower_fn(cg, p->name, f->name, f->body, f->params,
                                   sig->param_slang, f->nparams));

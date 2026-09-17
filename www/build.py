@@ -242,6 +242,10 @@ def extract_native_packages():
 
 DECL = re.compile(
     r"^pub\s+(fn|struct|gc\s+struct|let)\s+([A-Za-z_][A-Za-z0-9_]*)")
+# `impl Name {` at column 0 opens a block whose indented `pub fn`s are
+# methods, documented as Name.method; a `}` at column 0 closes it.
+IMPL = re.compile(r"^impl\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{")
+METHOD = re.compile(r"^\s+pub\s+fn\s+([A-Za-z_][A-Za-z0-9_]*)")
 
 
 def extract_source_packages():
@@ -256,11 +260,23 @@ def extract_source_packages():
     for sl in sorted(stdlib.rglob("*.sl")):
         pkg = sl.relative_to(stdlib).parts[0]
         lines = sl.read_text(encoding="utf-8").splitlines()
+        impl = None
         for i, line in enumerate(lines):
-            m = DECL.match(line)
-            if not m:
+            im = IMPL.match(line)
+            if im:
+                impl = im.group(1)
                 continue
-            kind, name = m.group(1), m.group(2)
+            if impl and line.startswith("}"):
+                impl = None
+                continue
+            m = DECL.match(line)
+            if m:
+                kind, name = m.group(1), m.group(2)
+            else:
+                mm = METHOD.match(line) if impl else None
+                if not mm:
+                    continue
+                kind, name = "fn", impl + "." + mm.group(1)
             # walk back over a contiguous run of // comments
             doc = []
             j = i - 1
@@ -872,79 +888,50 @@ HERO = """
 """
 
 
-BENCH_LEAD_MD = """slang is measured against C, Go, Rust, Java, Zig and C# on the same
-machine, in the same session, with every toolchain version and the exact
-commit recorded. The full record below is reproduced verbatim from
-`bench/RESULTS.md`, including the runs where slang loses.
+BENCH_LEAD_MD = """slang is measured against C, Go, Rust, C#, Java, Python, Bun and
+Node.js by [`bench/suite`](https://github.com/dolphlabs/slang/tree/dev/bench/suite):
+the same SQL, the same response contracts, the same dataset, and a
+conformance gate that runs before anything is timed, so a language that
+fails to build or fails conformance is reported as failed, not
+measured -- a number here means the implementation actually did the
+work. Two tiers: **light** (raw HTTP connection handling, CPU +
+allocation throughput) and **heavy** (a Postgres-backed JSON API and a
+big-data batch job), full contract in
+[`bench/SPEC.md`](https://github.com/dolphlabs/slang/blob/dev/bench/SPEC.md).
 
-**The headline is a loss.** In that file's own words: *slang does not win
-Phase E HTTP vs Go / C / Rust.* It is faster than Go on HTTP throughput
-and compute wall time, and compiles far faster than Rust, but it loses
-tail latency and memory to Go, C and Rust -- and those are the axes that
-were declared the win conditions before the numbers came in.
-
-The rule that makes this worth reading: **RPS alone is not a win.** A
-win against Go requires higher throughput *or* lower p99, **and** lower
-RSS. slang has the first and not the second, so it is recorded as a
-loss."""
+The full record below is reproduced verbatim from `bench/RESULTS.md`,
+including the runs where slang loses and the runs that are only
+partial. **RPS alone is not a win**: a result worth trusting needs
+throughput considered alongside tail latency and memory together, on a
+dedicated host at the scale the SPEC calls for -- not whichever single
+number happens to flatter one runtime."""
 
 
 def bench_body():
     return """
-<p>slang is measured against <strong>C, Go, Rust, Java, Zig and
-  C#</strong> on the same machine, in the same session, with every
-  toolchain version and the exact commit recorded. The full record below
-  is reproduced verbatim from <code>bench/RESULTS.md</code>, including
-  the runs where slang loses.</p>
+<p>slang is measured against <strong>C, Go, Rust, C#, Java, Python, Bun
+  and Node.js</strong> by
+  <a href="https://github.com/dolphlabs/slang/tree/dev/bench/suite"><code>bench/suite</code></a>:
+  the same SQL, the same response contracts, the same dataset, and a
+  <strong>conformance gate that runs before anything is timed</strong>
+  &mdash; a language that fails to build or fails conformance is
+  reported as failed, not measured, so a number here means the
+  implementation actually did the work, not just that it ran.</p>
 
-<blockquote><p><strong>The headline is a loss.</strong> In that file\'s
-  own words: <em>slang does not win Phase E HTTP vs Go / C /
-  Rust.</em></p></blockquote>
+<p>Two tiers: <strong>light</strong> (raw HTTP connection handling, CPU
+  + allocation throughput) and <strong>heavy</strong> (a Postgres-backed
+  JSON API and a big-data batch job). Full contract in
+  <a href="https://github.com/dolphlabs/slang/blob/dev/bench/SPEC.md"><code>bench/SPEC.md</code></a>.
+  The full record below is reproduced verbatim from
+  <code>bench/RESULTS.md</code>, including the runs where slang loses
+  and the runs that are only partial.</p>
 
-<p>It is faster than Go on HTTP throughput and on compute wall time, and
-  compiles far faster than Rust &mdash; but it loses tail latency and
-  memory to Go, C and Rust, and those are the axes that were declared
-  the win conditions <em>before</em> the numbers came in.</p>
-
-<h2 id="the-rule">The rule that makes this worth reading
-  <a class="anchor" href="#the-rule">#</a></h2>
-
-<p><strong>RPS alone is not a win.</strong> A win against Go requires
-  higher throughput <em>or</em> lower p99, <strong>and</strong> lower
-  RSS. slang has the first and not the second, so it is recorded as a
-  loss. Benchmarks that quote only the number that flatters them are
-  the reason nobody believes benchmarks.</p>
-
-<h2 id="where-it-stands">Where it stands
-  <a class="anchor" href="#where-it-stands">#</a></h2>
-
-<div class="tablewrap"><table>
-<thead><tr><th>vs</th><th>HTTP throughput</th><th>HTTP p99</th>
-  <th>Memory</th><th>Compile</th><th>Verdict</th></tr></thead>
-<tbody>
-<tr><td>C</td><td class="lose">23% lower</td><td class="lose">16.8&times; worse</td>
-  <td class="lose">32&times;</td><td class="lose">0.48s vs 0.08s</td>
-  <td><span class="v lose">lose</span></td></tr>
-<tr><td>Go</td><td class="win">+14%</td><td class="lose">6.9&times; worse</td>
-  <td class="lose">3.7&times;</td><td class="win">0.48s vs 5.81s</td>
-  <td><span class="v lose">lose</span></td></tr>
-<tr><td>Rust</td><td class="win">+1.5%</td><td class="lose">12.8&times; worse</td>
-  <td class="lose">13.4&times;</td><td class="win">0.48s vs 11.62s</td>
-  <td><span class="v lose">lose</span></td></tr>
-<tr><td>Java</td><td class="win">1.9&times;</td><td class="lose">3.6&times; worse</td>
-  <td class="win">6.6&times; better</td><td>similar</td>
-  <td><span class="v mixed">mixed</span></td></tr>
-<tr><td>Zig</td><td class="win">2.0&times;</td><td class="lose">9.1&times; worse</td>
-  <td class="lose">78&times; worse</td><td class="win">0.48s vs 6.94s</td>
-  <td><span class="v mixed">mixed</span></td></tr>
-<tr><td>C#</td><td class="win">2.0&times;</td><td class="win">better</td>
-  <td class="win">3.6&times; better</td><td class="win">0.48s vs 1.73s</td>
-  <td><span class="v win">win</span></td></tr>
-</tbody></table></div>
-
-<p class="figure-note">Median of three rounds at c=50, Linux, 4-core
-  Xeon. Full per-round tables, the c=200 set, compute wall times and the
-  machine specification are below.</p>
+<blockquote><p><strong>RPS alone is not a win.</strong> A result worth
+  trusting needs throughput considered alongside tail latency and
+  memory together, measured on a dedicated host at the scale the SPEC
+  calls for &mdash; not whichever single number happens to flatter one
+  runtime. Benchmarks that quote only the number that flatters them
+  are the reason nobody believes benchmarks.</p></blockquote>
 
 <h2 id="also-measured">Also measured
   <a class="anchor" href="#also-measured">#</a></h2>

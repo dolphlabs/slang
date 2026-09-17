@@ -541,7 +541,7 @@ cells by row and column index; `pg.col(rows, "name")` finds an index.
 | Getter | Reads |
 |---|---|
 | `pg.get_text(rows, r, c)` | any column, in Postgres's text form (dates, `numeric`, `uuid`, `json`) |
-| `pg.get_int(rows, r, c)` | `int2`, `int4`, `int8`, `oid` |
+| `pg.get_int(rows, r, c)` | `int2`, `int4`, `int8`, `oid`, and a whole-number `numeric` (what `sum()` of an integer column returns) |
 | `pg.get_float(rows, r, c)` | `float4`, `float8`, `numeric`, the integer types |
 | `pg.get_bool(rows, r, c)` | `bool` |
 | `pg.get_bytes(rows, r, c)` | `bytea` |
@@ -1360,10 +1360,13 @@ its behaviour checkable rather than asserted.
   framed body read exactly, and nothing left over. A body delimited by
   the connection closing is never reused.
 
-Client operations are handle-first package functions — `client_get(c,
-...)`, the same idiom as `sql.exec(db, ...)` — rather than methods,
-because a method cannot currently share a name with a package function
-(`impl Client { fn get }` collides with `httpc.get`).
+Client operations come in two equivalent forms: handle-first package
+functions — `httpc.client_get(c, url, dl)`, the same idiom as
+`sql.exec(db, ...)` — and methods, `c.get(url, dl)`. The methods are
+`get`, `head`, `post`, `send`, `idle_count`, `close_idle`,
+`enable_cookies`, `clear_cookies`, `set_cookie` and `cookies` on `Client`,
+and `header` on `Response`. `c.get` and the one-shot `httpc.get` share a
+name; the method is the pooled client's, the function is not.
 
 ##### Decompression
 
@@ -1578,10 +1581,10 @@ signal-handling program.
 - [compress](packages/compress.md) -- compiler-provided, 7 public items
 - [crypto](packages/crypto.md) -- compiler-provided, 5 public items
 - [encoding](packages/encoding.md) -- compiler-provided, 12 public items
-- [fs](packages/fs.md) -- compiler-provided, 6 public items
+- [fs](packages/fs.md) -- compiler-provided, 7 public items
 - [http](packages/http.md) -- source package, 19 public items
 - [http2](packages/http2.md) -- source package, 122 public items
-- [httpc](packages/httpc.md) -- source package, 24 public items
+- [httpc](packages/httpc.md) -- source package, 35 public items
 - [json](packages/json.md) -- compiler-provided, 0 public items
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [net](packages/net.md) -- compiler-provided, 31 public items

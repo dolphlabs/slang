@@ -62,7 +62,7 @@ for k, v in scores {           // iteration in insertion order
 }
 ```
 
-Keys may be any integer type, `str`, or `bool`; values may be any type,
+Keys may be any integer type, `str`, `bool`, or `enum`; values may be any type,
 including structs and lists. Backed by an open-addressing hash table
 (FNV-1a) that keeps entries in insertion order and grows automatically
 at 75% load.
@@ -104,7 +104,10 @@ push(pts, r.tl);
 
 Struct literals must supply every field exactly once, with types
 checked. Methods live in top-level `impl Name { ... }` blocks; mark a
-method `pub fn` to export it to importing packages. Structs are
+method `pub fn` to export it to importing packages. A method's name
+belongs to its struct: it may match a package-level function or another
+struct's method (`impl Client { fn get }` beside `fn get`), and a bare
+call `get(x)` always means the function. Structs are
 values: assignment copies, including any `str` / list / map /
 `opt` / `result` / `gc struct` fields (shallow — the heap objects
 are shared). Use `gc struct` when the record itself should be a

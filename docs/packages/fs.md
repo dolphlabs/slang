@@ -30,6 +30,8 @@ fs.close(in_fd);
 
 ### `fs.read(int, int) -> result[bytes,str]`
 
+### `fs.pread(int, int, int) -> result[bytes,str]`
+
 ### `fs.write(int, bytes) -> result[i32,str]`
 
 ### `fs.close(int) -> result[bool,str]`

@@ -943,6 +943,7 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
     case ST_UNSAFE:
         return live_block(cg, s->as.unsafe_blk.body, live_out);
     case ST_STRUCT:
+    case ST_ENUM:
     case ST_IMPL:
         return live_out;
     }
@@ -1235,6 +1236,7 @@ static void print_stmts(FILE *out, Stmt **stmts, int count) {
             print_block(out, s->as.unsafe_blk.body);
             break;
         case ST_STRUCT:
+        case ST_ENUM:
         case ST_IMPL:
             break;
         }
@@ -1253,7 +1255,7 @@ void compute_liveness(CG *cg, Package *pkgs, int npkgs, int main_index) {
             if (f->is_extern) continue;
             cg->in_function = 1;
             cg->cur_pkg = p->name;
-            FuncSig *sig = sig_find_in(cg, p->name, f->name);
+            FuncSig *sig = sig_of_decl(cg, f);
             cg->cur_ret = sig->ret_slang;
             live_function_body(cg, f->body, f->params, sig->param_slang,
                                f->nparams);

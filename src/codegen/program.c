@@ -53,10 +53,18 @@ void sig_register_raw(CG *cg, Package *p, FuncDecl *f,
                              const char *method_of) {
     if (is_builtin_name(f->name))
         cg_error(f->line, "cannot redefine builtin '%s'", f->name);
-    if (sig_find_in(cg, p->name, f->name))
+    if (method_of) {
+        const char *dot = strrchr(method_of, '.');
+        StructDef *sd = struct_find_in_pkg(cg, p->name,
+                                           dot ? dot + 1 : method_of);
+        if (sd && method_find(cg, sd, f->name))
+            cg_error(f->line, "redefinition of method '%s' on '%s'", f->name,
+                     method_of);
+    } else if (sig_find_in(cg, p->name, f->name)) {
         cg_error(f->line,
                  "redefinition of function '%s' in package '%s'", f->name,
                  p->name);
+    }
 
     FuncSig sig;
     memset(&sig, 0, sizeof(sig));
@@ -82,6 +90,7 @@ void sig_register_raw(CG *cg, Package *p, FuncDecl *f,
             cg->sigs.items, cg->sigs.cap * sizeof(FuncSig));
     }
     cg->sigs.items[cg->sigs.count++] = sig;
+    f->sig_idx = cg->sigs.count;
 }
 
 /* Collect imports, structs, free functions, and methods from every
@@ -137,6 +146,11 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
         }
     }
 
+    /* pass 1b: enum shells. Registered before pass 2 so a struct field
+     * of enum type (or an enum's own future needs) can already resolve
+     * it via canon_type. */
+    collect_enum_decls(cg, pkgs, npkgs);
+
     /* pass 2: canonicalize struct field types */
     for (i = 0; i < cg->structs.count; i++) {
         StructDef *sd = &cg->structs.items[i];
@@ -169,6 +183,29 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
             for (int q = 0; q < s->as.impl.nfuncs; q++)
                 sig_register_raw(cg, p, s->as.impl.funcs[q],
                                  sd->canonical);
+        }
+    }
+
+    /* Two declarations must never share a C symbol. mangle_sig keeps
+     * methods apart from functions, but slang identifiers may contain
+     * "__", so `fn Point__m_x` could still spell a method's symbol. Caught
+     * here, by name, rather than as a duplicate definition in the C. */
+    {
+        char **syms = (char **)xmalloc(sizeof(char *) *
+                                       (cg->sigs.count ? cg->sigs.count : 1));
+        for (i = 0; i < cg->sigs.count; i++) {
+            FuncSig *a = &cg->sigs.items[i];
+            syms[i] = mangle_sig(a);
+            if (a->is_extern)
+                continue;
+            for (j = 0; j < i; j++) {
+                FuncSig *b = &cg->sigs.items[j];
+                if (!b->is_extern && !strcmp(syms[i], syms[j]))
+                    cg_error(a->line,
+                             "'%s' and '%s' (line %d) would be the same C "
+                             "function %s; rename one",
+                             a->name, b->name, b->line, syms[i]);
+            }
         }
     }
 
@@ -250,7 +287,7 @@ void emit_globals(CG *cg, Package *pkgs, int npkgs, int main_index) {
         Block *body = p->prog->main_body;
         for (int j = 0; j < body->count; j++) {
             Stmt *s = body->stmts[j];
-            if (s->kind == ST_STRUCT || s->kind == ST_IMPL)
+            if (s->kind == ST_STRUCT || s->kind == ST_ENUM || s->kind == ST_IMPL)
                 continue; /* handled by collect_decls */
             if (s->kind != ST_LET)
                 cg_error(s->line,
@@ -660,7 +697,7 @@ void emit_spawn_trampolines(CG *cg) {
                            ? xstrdup("_sl_a->fn")
                            : sig->is_extern
                                  ? xstrdup(sig->name)
-                                 : mangle_func(sig->pkg, sig->name);
+                                 : mangle_sig(sig);
 
         emit_line(cg, "typedef struct {");
         cg->indent++;
@@ -761,7 +798,7 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
         /* free functions */
         for (int j = 0; j < prog->nfuncs; j++) {
             FuncDecl *f = prog->funcs[j];
-            FuncSig *sig = sig_find_in(cg, pkgs[i].name, f->name);
+            FuncSig *sig = sig_of_decl(cg, f);
             StrBuf params;
             sb_init(&params);
             if (f->is_extern) {
@@ -798,7 +835,7 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
             emit_line(cg, "static %s %s(%s);",
                       sig->ret_slang ? ctype_of(cg, sig->ret_slang)
                                      : "void",
-                      mangle_func(pkgs[i].name, f->name), params.data);
+                      mangle_sig(sig), params.data);
             any = 1;
         }
 
@@ -810,7 +847,7 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
                 continue;
             for (int q = 0; q < s->as.impl.nfuncs; q++) {
                 FuncDecl *f = s->as.impl.funcs[q];
-                FuncSig *sig = sig_find_in(cg, pkgs[i].name, f->name);
+                FuncSig *sig = sig_of_decl(cg, f);
                 StrBuf params;
                 sb_init(&params);
                 if (f->nparams == 0) {
@@ -828,7 +865,7 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
                 emit_line(cg, "static %s %s(%s);",
                           sig->ret_slang ? ctype_of(cg, sig->ret_slang)
                                          : "void",
-                          mangle_func(pkgs[i].name, f->name), params.data);
+                          mangle_sig(sig), params.data);
                 any = 1;
             }
         }
@@ -838,7 +875,7 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
 }
 
 void gen_function(CG *cg, Package *p, FuncDecl *f) {
-    FuncSig *sig = sig_find_in(cg, p->name, f->name);
+    FuncSig *sig = sig_of_decl(cg, f);
 
     var_scope_reset(cg);
     var_scope_push(cg);
@@ -868,7 +905,7 @@ void gen_function(CG *cg, Package *p, FuncDecl *f) {
 
     emit_line(cg, "static %s %s(%s) {",
               sig->ret_slang ? ctype_of(cg, sig->ret_slang) : "void",
-              mangle_func(p->name, f->name), params.data);
+              mangle_sig(sig), params.data);
     for (int j = 0; j < f->nparams; j++)
         emit_drop_flag(cg, f->params[j]);
     gen_block(cg, f->body);
@@ -892,6 +929,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     emit_fn_types(cg); /* between the struct names and the struct bodies */
     emit_struct_types(cg);
     emit_struct_tracers(cg);
+    emit_enum_tables(cg);
 
     emit_opt_res_types(cg);
     emit_opt_res_tracers(cg);
@@ -1065,6 +1103,17 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
     }
 
     collect_decls(&cg, pkgs, npkgs);
+
+    /* Rewrite every `Type.Variant`/`Type.from_int`/`Type.from_str`
+     * reference into plain literal/sentinel-call nodes (see enum.c)
+     * before anything else walks the tree, so infer/borrow/liveness/
+     * move/mir/escape/codegen never need to know enums exist as a
+     * dotted-name concept -- they only ever see the rewritten shapes.
+     * Must run once, after collect_decls has populated cg.enums and
+     * before the dry run below (which is just gen_whole_program
+     * generating into a scratch buffer -- both it and the real run
+     * must see the same, already-rewritten tree). */
+    resolve_enum_refs(&cg, pkgs, npkgs);
 
     /* Dry run: generation populates the opt/result monomorphization
      * tables as it goes, but typedefs must be emitted before any use.

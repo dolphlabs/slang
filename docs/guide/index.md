@@ -140,6 +140,7 @@ guard let user = find(id) else {
 | `map[K]V`  | `sl_map *`  | insertion-ordered hash map     |
 | struct     | `sl_st_*`   | value record (copied)          |
 | `gc struct` | `sl_st_* *` | GC'd heap record (shared)     |
+| `enum`     | `int32_t`   | closed set of named constants (see below) |
 | `opt[T]`   | `sl_opt_* *` | optional value: `some(v)` / `none` |
 | `result[T,E]` | `sl_res_* *` | fallible value: `ok(v)` / `err(e)` |
 | `duration` | `int64_t`   | nanosecond count (see `time`)  |
@@ -330,7 +331,7 @@ for k, v in scores {           // iteration in insertion order
 }
 ```
 
-Keys may be any integer type, `str`, or `bool`; values may be any type,
+Keys may be any integer type, `str`, `bool`, or `enum`; values may be any type,
 including structs and lists. Backed by an open-addressing hash table
 (FNV-1a) that keeps entries in insertion order and grows automatically
 at 75% load.
@@ -372,7 +373,10 @@ push(pts, r.tl);
 
 Struct literals must supply every field exactly once, with types
 checked. Methods live in top-level `impl Name { ... }` blocks; mark a
-method `pub fn` to export it to importing packages. Structs are
+method `pub fn` to export it to importing packages. A method's name
+belongs to its struct: it may match a package-level function or another
+struct's method (`impl Client { fn get }` beside `fn get`), and a bare
+call `get(x)` always means the function. Structs are
 values: assignment copies, including any `str` / list / map /
 `opt` / `result` / `gc struct` fields (shallow — the heap objects
 are shared). Use `gc struct` when the record itself should be a
@@ -380,6 +384,69 @@ shared heap object.
 `own T` is uniquely owned: assignment and passing **move**, and
 use-after-move is a compile error. A moved binding can be reinitialized.
 `own` is freed when its binding goes out of scope unless it was moved.
+
+#### Enums
+
+A closed, `i32`-backed set of named constants:
+
+```slang
+enum Status {
+    Pending,
+    Paid,
+    Shipped,
+    Delivered,
+    Cancelled,
+}
+
+// explicit values are allowed per variant; unwritten ones auto-increment
+// from the previous one (0-based). Duplicate variant names and duplicate
+// explicit values within one enum are both compile errors.
+enum PgType {
+    Bool = 16,
+    Bytea = 17,
+    Int8 = 20,
+}
+
+let s: Status = Status.Paid;      // Type.Variant access
+println(s == Status.Paid);        // true -- == is only defined between
+                                   // the same enum type (no <, <=, >, >=)
+println(s);                       // "Paid" -- to_str/println/+ all render
+                                   // the exact declared variant name
+println(s as i32);                // 1 -- enum -> its backing i32 is a
+                                   // safe, total `as` cast (one direction
+                                   // only: not every int is a valid variant,
+                                   // so int -> enum goes through from_int
+                                   // below instead, which can fail)
+
+// fallible, like to_int(s): a result, not a silent wrap
+let r: result[Status, str] = Status.from_int(2);
+guard let s2 = r else let e = err_of(r) {
+    log.error("bad status: " + e);      // "2 is not a valid Status" (approx)
+    return;
+}
+let r2: result[Status, str] = Status.from_str("Shipped");
+```
+
+An enum works as a struct field and as a `map[K]V` key (alongside
+integers, `str` and `bool`), and `json.encode`/`json.decode` support it
+as a field type, on the wire as the exact variant name string:
+
+```slang
+import "json";
+
+gc struct Order { id: int, status: Status }
+let o = Order{ id: 1, status: Status.Shipped };
+json.encode(o);   // {"id":1,"status":"Shipped"}
+
+let counts: map[Status]int = {};
+counts[Status.Paid] = 3;
+```
+
+There is no per-variant wire label yet (`to_str`/JSON always use the
+declared name as written), no explicit backing-width syntax
+(`enum Name: i64 { ... }`), and no payload-carrying variants or a
+`match` statement — enums here are a closed set of names, not a tagged
+union.
 
 #### Option / Result
 
@@ -589,6 +656,7 @@ guard let user = find(id) else {
 | `map[K]V`  | `sl_map *`  | insertion-ordered hash map     |
 | struct     | `sl_st_*`   | value record (copied)          |
 | `gc struct` | `sl_st_* *` | GC'd heap record (shared)     |
+| `enum`     | `int32_t`   | closed set of named constants (see below) |
 | `opt[T]`   | `sl_opt_* *` | optional value: `some(v)` / `none` |
 | `result[T,E]` | `sl_res_* *` | fallible value: `ok(v)` / `err(e)` |
 | `duration` | `int64_t`   | nanosecond count (see `time`)  |
@@ -779,7 +847,7 @@ for k, v in scores {           // iteration in insertion order
 }
 ```
 
-Keys may be any integer type, `str`, or `bool`; values may be any type,
+Keys may be any integer type, `str`, `bool`, or `enum`; values may be any type,
 including structs and lists. Backed by an open-addressing hash table
 (FNV-1a) that keeps entries in insertion order and grows automatically
 at 75% load.
@@ -821,7 +889,10 @@ push(pts, r.tl);
 
 Struct literals must supply every field exactly once, with types
 checked. Methods live in top-level `impl Name { ... }` blocks; mark a
-method `pub fn` to export it to importing packages. Structs are
+method `pub fn` to export it to importing packages. A method's name
+belongs to its struct: it may match a package-level function or another
+struct's method (`impl Client { fn get }` beside `fn get`), and a bare
+call `get(x)` always means the function. Structs are
 values: assignment copies, including any `str` / list / map /
 `opt` / `result` / `gc struct` fields (shallow — the heap objects
 are shared). Use `gc struct` when the record itself should be a
@@ -829,6 +900,69 @@ shared heap object.
 `own T` is uniquely owned: assignment and passing **move**, and
 use-after-move is a compile error. A moved binding can be reinitialized.
 `own` is freed when its binding goes out of scope unless it was moved.
+
+#### Enums
+
+A closed, `i32`-backed set of named constants:
+
+```slang
+enum Status {
+    Pending,
+    Paid,
+    Shipped,
+    Delivered,
+    Cancelled,
+}
+
+// explicit values are allowed per variant; unwritten ones auto-increment
+// from the previous one (0-based). Duplicate variant names and duplicate
+// explicit values within one enum are both compile errors.
+enum PgType {
+    Bool = 16,
+    Bytea = 17,
+    Int8 = 20,
+}
+
+let s: Status = Status.Paid;      // Type.Variant access
+println(s == Status.Paid);        // true -- == is only defined between
+                                   // the same enum type (no <, <=, >, >=)
+println(s);                       // "Paid" -- to_str/println/+ all render
+                                   // the exact declared variant name
+println(s as i32);                // 1 -- enum -> its backing i32 is a
+                                   // safe, total `as` cast (one direction
+                                   // only: not every int is a valid variant,
+                                   // so int -> enum goes through from_int
+                                   // below instead, which can fail)
+
+// fallible, like to_int(s): a result, not a silent wrap
+let r: result[Status, str] = Status.from_int(2);
+guard let s2 = r else let e = err_of(r) {
+    log.error("bad status: " + e);      // "2 is not a valid Status" (approx)
+    return;
+}
+let r2: result[Status, str] = Status.from_str("Shipped");
+```
+
+An enum works as a struct field and as a `map[K]V` key (alongside
+integers, `str` and `bool`), and `json.encode`/`json.decode` support it
+as a field type, on the wire as the exact variant name string:
+
+```slang
+import "json";
+
+gc struct Order { id: int, status: Status }
+let o = Order{ id: 1, status: Status.Shipped };
+json.encode(o);   // {"id":1,"status":"Shipped"}
+
+let counts: map[Status]int = {};
+counts[Status.Paid] = 3;
+```
+
+There is no per-variant wire label yet (`to_str`/JSON always use the
+declared name as written), no explicit backing-width syntax
+(`enum Name: i64 { ... }`), and no payload-carrying variants or a
+`match` statement — enums here are a closed set of names, not a tagged
+union.
 
 #### Option / Result
 

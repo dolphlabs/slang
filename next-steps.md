@@ -185,15 +185,34 @@ live in `todo.md`.
 
 ## 5. Methods that share a name with a package function
 
-- [ ] Let `impl T { fn get }` coexist with a package-level `fn get`.
+- [x] `impl T { fn get }` now coexists with a package-level `fn get`, and
+  two structs in one package may each have a method of the same name.
 
-  Methods are emitted under the same C symbol as package functions
-  (`mangle_func(pkg, name)`), and registered in the same namespace, so the
-  two collide with "redefinition of function". This is why `httpc` exposes
-  `client_get(c, ...)` rather than `c.get(...)`. Touches the redefinition
-  check in `sig_register_raw`, the name lookup in `sig_find_in`, the
-  prototype and definition emitters in `program.c`, and the method call
-  site in `expr.c`. Once fixed, `httpc` can gain method forms.
+  Methods now live in their struct's namespace. `sig_find_in` finds only
+  package-level functions; methods are found through their struct; a
+  method is redefined only by another of the same name on the same struct.
+  Each gets its own C symbol (`sl_<pkg>_<Struct>__m_<name>`, via
+  `mangle_sig`), and passes that walk declarations take each one's
+  signature from the declaration itself rather than looking it up by a
+  name that is no longer unique. Because identifiers may contain `__`, a
+  function that would spell a method's symbol is refused by name at
+  compile time rather than left as a duplicate definition in the C.
+
+  `httpc` gained the method forms this blocked: `c.get(url, dl)`,
+  `c.post(...)`, `c.idle_count()`, `resp.header(name)` and the rest, beside
+  the function forms, which stay.
+
+  **Verified:** `tests/method_fn_same_name` covers a method matching a
+  package function and a method of the same name on two structs, in both
+  directions across a package boundary, plus `spawn` and function values.
+  Three negative tests: a method redefined on one struct, a bare call to a
+  name that exists only as a method, and a symbol collision. Two controls:
+  mangling methods like functions fails the positive test (caught by the
+  collision check), and letting `sig_find_in` return methods lets
+  `close(s)` compile against `Store.close` -- which the method-as-function
+  test catches; the positive test alone did not, because functions are
+  registered first and always win the lookup. `tests/http_client_pool`
+  checks the method forms pool exactly like the functions.
 
 ## 6. Postgres driver
 
