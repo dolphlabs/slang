@@ -147,7 +147,15 @@ char *sanitize_ident(const char *name) {
         "if", "inline", "int", "long", "register", "restrict", "return",
         "short", "signed", "sizeof", "static", "struct", "switch",
         "typedef", "union", "unsigned", "void", "volatile", "while",
-        "_Bool", NULL};
+        "_Bool", "_Alignas", "_Alignof", "_Atomic", "_Complex", "_Generic",
+        "_Imaginary", "_Noreturn", "_Static_assert", "_Thread_local",
+        /* Macros, not keywords, but just as fatal as a name: GCC in its
+         * default GNU mode predefines `unix`, `linux` and `i386` as 1, so
+         * `let unix = ...` compiled on macOS and failed on Linux with
+         * "expected identifier before numeric constant". The libc ones
+         * expand to expressions (errno is (*__errno_location()) on glibc). */
+        "unix", "linux", "i386", "errno", "stdin", "stdout", "stderr", "EOF",
+        "NULL", NULL};
     for (int i = 0; kws[i]; i++) {
         if (!strcmp(name, kws[i]))
             return xasprintf("%s_", name);
