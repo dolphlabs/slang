@@ -68,7 +68,10 @@ struct Expr {
                       * 'none' literal, unlike 'nullptr'). NULL and
                       * unused unless that pass has run. */
     union {
-        struct { long long value; int big_u64; } int_lit;
+        /* enum_ty is NULL for an ordinary int literal; the resolve_enum_refs
+         * pass (src/codegen/enum.c) sets it to the canonical enum type name
+         * when it rewrites a `Type.Variant` reference into this node. */
+        struct { long long value; int big_u64; const char *enum_ty; } int_lit;
         struct { double value; } float_lit;
         struct { char *value; } str_lit;
         struct { unsigned char *data; long long len; } bytes_lit;
@@ -79,8 +82,12 @@ struct Expr {
         /* `name` names the callee for an ordinary call. `callee` is set
          * instead when the call goes through an arbitrary expression
          * holding a function value -- routes[i].handler(req) -- in which
-         * case `name` is NULL. Exactly one of the two is set. */
-        struct { char *name; Expr *callee; Expr **args; int nargs; } call;
+         * case `name` is NULL. Exactly one of the two is set.
+         * `enum_ty` is NULL except when resolve_enum_refs has rewritten a
+         * `Type.from_int`/`Type.from_str` call into the internal sentinel
+         * name ("__enum_from_int"/"__enum_from_str"); then it names which
+         * enum type. */
+        struct { char *name; Expr *callee; Expr **args; int nargs; char *enum_ty; } call;
         struct { char *ty; Expr *operand; } cast; /* slang type name */
         struct { Expr *base; Expr *index; } index;
         struct {
@@ -129,6 +136,7 @@ typedef enum {
     ST_GUARD_LET, /* guard let x = opt_expr else { ... } */
     ST_SPAWN,  /* spawn f(args...) -- submit an sl_task to the M:N pool */
     ST_STRUCT, /* struct Name { field: T, ... } (top level only) */
+    ST_ENUM,   /* enum Name { Variant [= N], ... } (top level only) */
     ST_IMPL,   /* impl Name { fn ... } blocks (top level only) */
     ST_UNSAFE, /* unsafe { ... } */
     ST_SELECT  /* select { case ... { } ... default { } } */
@@ -225,6 +233,14 @@ struct Stmt {
             FuncDecl **funcs;
             int nfuncs;
         } impl;
+        struct {
+            char *name;
+            int is_pub;
+            char **variants;     /* variant names, in declared order */
+            int *has_explicit;   /* 1 if this variant wrote '= N' itself */
+            long long *values;   /* resolved ordinal per variant */
+            int nvariants;
+        } enum_decl;
     } as;
 };
 

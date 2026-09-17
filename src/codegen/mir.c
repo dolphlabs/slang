@@ -549,6 +549,7 @@ static void lower_stmt(Lower *L, Stmt *s) {
         return;
     }
     case ST_STRUCT:
+    case ST_ENUM:
     case ST_IMPL:
         return;
     }

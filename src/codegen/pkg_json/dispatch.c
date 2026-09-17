@@ -111,6 +111,8 @@ const char *json_dec_fn(CG *cg, const char *t, int line) {
                      "must be str (got map[%s]...)",
                      k, v, k);
         json_dec_fn(cg, v, line);
+    } else if (is_enum(cg, t)) {
+        /* leaf scalar: no element/field types to recurse into */
     } else {
         StructDef *sd = struct_find_canon(cg, t);
         if (!sd)
@@ -148,6 +150,8 @@ const char *json_enc_fn(CG *cg, const char *t, int line) {
                      "be str (got map[%s]...)",
                      k, v, k);
         json_enc_fn(cg, v, line);
+    } else if (is_enum(cg, t)) {
+        /* leaf scalar: no element/field types to recurse into */
     } else {
         StructDef *sd = struct_find_canon(cg, t);
         if (!sd)
@@ -255,6 +259,29 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
         cg->indent--;
         emit_line(cg, "}");
         emit_line(cg, "*out = m;");
+        emit_line(cg, "return true;");
+    } else if (is_enum(cg, t)) {
+        char *m = mangle_enum(t);
+        EnumDef *ed = enum_find_canon(cg, t);
+        emit_line(cg, "if (v->kind != SL_JV_STR) {");
+        cg->indent++;
+        emit_line(cg,
+                  "*err = sl_json_errf(\"expected a string, got %%s\", "
+                  "sl_json_kind_name(v));");
+        emit_line(cg, "return false;");
+        cg->indent--;
+        emit_line(cg, "}");
+        emit_line(cg, "int32_t idx;");
+        emit_line(cg, "if (!sl_enum_from_str(v->as.str, %s_names, %d, &idx)) {",
+                  m, ed->nvariants);
+        cg->indent++;
+        emit_line(cg,
+                  "*err = sl_json_errf(\"not a valid %s: %%s\", v->as.str);",
+                  ed->name);
+        emit_line(cg, "return false;");
+        cg->indent--;
+        emit_line(cg, "}");
+        emit_line(cg, "*out = (int32_t)%s_values[idx];", m);
         emit_line(cg, "return true;");
     } else {
         StructDef *sd = struct_find_canon(cg, t);
@@ -369,6 +396,13 @@ static void emit_json_enc_body(CG *cg, JsonInst *it) {
         cg->indent--;
         emit_line(cg, "}");
         emit_line(cg, "sl_json_sb_append(out, \"}\");");
+    } else if (is_enum(cg, t)) {
+        char *m = mangle_enum(t);
+        EnumDef *ed = enum_find_canon(cg, t);
+        emit_line(cg,
+                  "sl_json_enc_str(sl_enum_name((int32_t)v, %s_names, "
+                  "%s_values, %d), out);",
+                  m, m, ed->nvariants);
     } else {
         StructDef *sd = struct_find_canon(cg, t);
         emit_line(cg, "sl_json_sb_append(out, \"{\");");

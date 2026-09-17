@@ -329,6 +329,7 @@ Token lexer_next(Lexer *lx) {
         KW("in", T_KW_IN)
         KW("as", T_KW_AS)
         KW("struct", T_KW_STRUCT)
+        KW("enum", T_KW_ENUM)
         KW("gc", T_KW_GC)
         KW("own", T_KW_OWN)
         KW("mut", T_KW_MUT)
@@ -500,6 +501,7 @@ const char *token_type_name(TokenType t) {
     case T_KW_IN:    return "'in'";
     case T_KW_AS:    return "'as'";
     case T_KW_STRUCT:return "'struct'";
+    case T_KW_ENUM:  return "'enum'";
     case T_KW_GC:    return "'gc'";
     case T_KW_OWN:   return "'own'";
     case T_KW_MUT:   return "'mut'";

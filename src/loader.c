@@ -409,14 +409,15 @@ static int load_package_dir(Loader *ld, const char *real, const char *name) {
         int program_shaped = 0;
         for (int k = 0; k < body->count; k++) {
             int kind = body->stmts[k]->kind;
-            if (kind != ST_LET && kind != ST_STRUCT && kind != ST_IMPL)
+            if (kind != ST_LET && kind != ST_STRUCT && kind != ST_ENUM &&
+                kind != ST_IMPL)
                 program_shaped = 1;
         }
         if (program_shaped) {
             int w = 0;
             for (int k = 0; k < body->count; k++) {
                 int kind = body->stmts[k]->kind;
-                if (kind == ST_STRUCT || kind == ST_IMPL)
+                if (kind == ST_STRUCT || kind == ST_ENUM || kind == ST_IMPL)
                     body->stmts[w++] = body->stmts[k];
             }
             body->count = w;

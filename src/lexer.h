@@ -27,6 +27,7 @@ typedef enum {
     T_KW_IN,
     T_KW_AS,
     T_KW_STRUCT,
+    T_KW_ENUM,
     T_KW_GC,
     T_KW_OWN,
     T_KW_MUT,
