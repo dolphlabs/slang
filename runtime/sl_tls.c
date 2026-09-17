@@ -161,16 +161,23 @@ static int sl_tls_clean_eof(int ssl_err) {
     return 0;
 }
 
-static int sl_tls_handshake(SSL *ssl, int server) {
+/* 0 done, -1 interrupted, -2 an SSL error, -3 the deadline (u of 0:
+ * none). */
+static int sl_tls_handshake_until(SSL *ssl, int server, sl_until u) {
     for (;;) {
         int n = server ? SSL_accept(ssl) : SSL_connect(ssl);
         if (n == 1) return 0;
         int err = SSL_get_error(ssl, n);
-        int w = sl_tls_park(ssl, err, 1);
+        int w = sl_tls_park_until(ssl, err, 1, u);
         if (w == 0) continue;
         if (w == -1) return -1;
+        if (w == -3) return -3;
         return -2;
     }
+}
+
+static int sl_tls_handshake(SSL *ssl, int server) {
+    return sl_tls_handshake_until(ssl, server, 0);
 }
 
 static sl_res_rawptr_str *sl_net_tls_accept(int lfd, void *ctxv) {
@@ -221,16 +228,18 @@ static sl_res_rawptr_str *sl_net_tls_accept(int lfd, void *ctxv) {
 /* The client half shared by tls_dial and tls_upgrade: handshake on a
  * connected fd, verifying chain and hostname. Never closes the fd. */
 static sl_res_rawptr_str *sl_tls_client_on_fd(int fd, const char *host,
-                                              void *ctxv) {
+                                              void *ctxv, sl_until u) {
     SSL *ssl = SSL_new((SSL_CTX *)ctxv);
     if (!ssl) return sl_net_err_rawptr(sl_tls_last_error());
     SSL_set_fd(ssl, fd);
     SSL_set_mode(ssl, SSL_MODE_ENABLE_PARTIAL_WRITE);
     SSL_set1_host(ssl, host);
     SSL_set_tlsext_host_name(ssl, host);
-    int hs = sl_tls_handshake(ssl, 0);
+    int hs = sl_tls_handshake_until(ssl, 0, u);
     if (hs != 0 || SSL_get_verify_result(ssl) != X509_V_OK) {
-        char *m = hs == -1 ? sl_strdup("interrupted") : sl_tls_last_error();
+        char *m = hs == -1   ? sl_strdup("interrupted")
+                  : hs == -3 ? sl_strdup("timeout")
+                             : sl_tls_last_error();
         SSL_free(ssl);
         return sl_net_err_rawptr(m);
     }
@@ -273,7 +282,7 @@ static sl_res_rawptr_str *sl_net_tls_dial(const char *host, int port,
             return sl_net_err_rawptr(strerror(so_err));
         }
     }
-    sl_res_rawptr_str *r = sl_tls_client_on_fd(fd, host, ctxv);
+    sl_res_rawptr_str *r = sl_tls_client_on_fd(fd, host, ctxv, 0);
     if (!r->ok) close(fd);
     return r;
 }
@@ -288,12 +297,24 @@ static sl_res_rawptr_str *sl_net_tls_dial(const char *host, int port,
  * it. The caller must not have read past the server's go-ahead -- bytes a
  * man in the middle queued behind it would otherwise be trusted as if
  * they had arrived inside TLS (CVE-2021-23222 in libpq). */
-static sl_res_rawptr_str *sl_net_tls_upgrade(int fd, const char *host,
-                                             void *ctxv) {
+static sl_res_rawptr_str *sl_net_tls_upgrade_u(int fd, const char *host,
+                                               void *ctxv, sl_until u) {
     sl_rt_need_fat_stack();
     if (fd < 0) return sl_net_err_rawptr("bad file descriptor");
     sl_net_set_nonblocking(fd);
-    return sl_tls_client_on_fd(fd, host, ctxv);
+    return sl_tls_client_on_fd(fd, host, ctxv, u);
+}
+
+static sl_res_rawptr_str *sl_net_tls_upgrade(int fd, const char *host,
+                                             void *ctxv) {
+    return sl_net_tls_upgrade_u(fd, host, ctxv, 0);
+}
+
+/* tls_upgrade with a deadline on the handshake: "timeout" when it passes,
+ * the fd still the caller's to close, as for any failure. */
+static sl_res_rawptr_str *sl_net_tls_upgrade_until(int fd, const char *host,
+                                                   void *ctxv, sl_until u) {
+    return sl_net_tls_upgrade_u(fd, host, ctxv, u);
 }
 
 /* See sl_net_send_u in sl_net.c for the partial-write contract a
