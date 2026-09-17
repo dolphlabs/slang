@@ -13,7 +13,8 @@ live in `todo.md`.
 - [x] **x86_64:** `.github/workflows/ci.yml` builds `slangc`, runs the full
   suite and the docs build on Ubuntu 24.04 on every merge to `main` (and
   on manual dispatch), and attaches a verified Linux tarball to every
-  published release. Confirm the first run on `main` goes green.
+  published release. First run on `main` went green: 176/176 on
+  GitHub's Ubuntu runner.
 
   Reproduced locally in Docker before writing the workflow, and the first
   Linux run found **three bugs that had shipped**:
@@ -33,29 +34,42 @@ live in `todo.md`.
   with the source tree deleted, including through a symlink on PATH, which
   exercises the never-before-run `/proc/self/exe` lookup.
 
-- [ ] **arm64 — a port, not a CI fix.** arm64 does not build on ANY
-  platform, Apple Silicon included: `runtime/sl_sched.c` has the async
-  preemption trampoline (`sl_preempt_trampoline_entry`/`_end`) and the
-  stack-growth trampoline (`sl_grower_trampoline`) only in x86_64
-  assembly, so every program fails to link. It went unnoticed because
-  every machine it has been built on is Intel. The signal handler in
-  `sl_pool.c` already has arm64 code for macOS and Linux; only the
-  assembly is missing.
+- [x] **arm64** — Linux arm64 and Apple Silicon. Neither had ever built:
+  the async-preemption and stack-growth trampolines existed only in x86_64
+  assembly, so every program failed to link.
 
-  - The **grower trampoline** is small: x86_64's is three instructions.
-  - The **preemption trampoline** is the hard part. After restoring every
-    register, x86_64 resumes the interrupted code with `push`/`ret`,
-    which needs no free register. arm64 has no equivalent: branching needs
-    a register, and at an arbitrary interrupted instruction in C code any
-    of them may be live (x16/x17 included, inside veneers). Candidate
-    designs: resume through a second, synchronous signal whose handler
-    restores the full context, so the kernel sets every register
-    atomically; or a staged port that ships arm64 with async preemption
-    off (loops already yield cooperatively at back-edges) and adds it
-    afterwards.
+  **The design is not a translation of x86_64.** x86_64 resumes the
+  interrupted code by jumping through a slot below `%rsp`, which is sound
+  only because of its 128-byte red zone. arm64 has no red zone and no
+  memory-indirect branch, and branching back needs a register that, at an
+  arbitrary interrupted instruction, may be live. So the kernel does the
+  final restore: the trampoline saves every register, yields, then raises
+  SIGUSR2 on its own thread; the handler writes the saved registers, sp,
+  NZCV and the original pc into the signal context, and sigreturn restores
+  all of them atomically. Linux restores vector state in assembly and
+  raises the signal with raw syscalls (so SVE-capable hardware can't make
+  the kernel ignore a handler's FPSIMD edits); Apple, with no SVE and no
+  stable syscall ABI, goes through `pthread_kill` and restores NEON in the
+  handler. Both signal handlers run on a per-thread alternate stack, since
+  an arm64 signal frame (~4.6KB+) could overflow an 8KB task stack.
 
-  Add `ubuntu-24.04-arm` back to both CI matrices when it lands; GitHub's
-  arm64 runners are native, where local Docker could only emulate.
+  **Verified on native runners**, by manual dispatch of the branch before
+  merging: 176/176 on Linux arm64 and on macOS arm64. A new CI step forces
+  genuine async preemption — the suite's own probe never did, because its
+  loop yields cooperatively — and fails if none happened: 150 async
+  preemptions on Linux arm64 and 70 on Apple Silicon across five runs,
+  every result correct. Under QEMU emulation, ~1,700 per run, also correct.
+
+  **Two controls, and the first was weak.** Skipping `x19`–`x28` in the
+  resume handler failed macOS but PASSED Linux: on Linux the signal is
+  raised from the trampoline itself, after C calls that preserve those
+  registers by convention, so the kernel's frame already held them. Only
+  the registers the trampoline clobbers depend on the handler there.
+  Skipping `x0`–`x18` failed BOTH (wrong totals, panicked tasks), which is
+  the evidence the check detects a broken restore on each platform.
+
+  Accepted limit, the same as x86_64 with AVX-512: only the low 128 bits of
+  each vector register survive a preemption.
 
 ## 2. OpenSSL discovery fallback
 
