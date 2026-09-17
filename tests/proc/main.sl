@@ -1,19 +1,28 @@
 // proc: process lifecycle -- shutdown_requested()/active_tasks() are
 // exercised more fully (real signal, real listener, real drain) in
 // tests/proc_shutdown; this covers the basics deterministically.
+//
+// Deterministically for real now. This used to spawn a task that slept
+// 150ms, sleep 20ms itself, and expect the task still running. On
+// GitHub's macOS runners a 20ms sleep was measured taking up to 167ms --
+// and plain C nanosleep up to 126ms on the same machine, so the timer
+// overshoot is the virtualised runner's, not slang's -- and the test
+// failed about one run in five. The task now waits on a channel, so it is
+// still running when counted because nothing has released it, not because
+// a race was won.
 import "proc";
-import "time";
 
-fn slow_task() {
-    time.sleep(150000000);
+fn held_task(gate: chan[bool]) {
+    let _released = chan_recv(gate);
 }
 
 println(to_str(proc.shutdown_requested()));
 println(to_str(proc.active_tasks()));
 
-spawn slow_task();
-time.sleep(20000000);
-println(to_str(proc.active_tasks()));
+let gate: chan[bool] = make_chan(1);
+spawn held_task(gate);
+println(to_str(proc.active_tasks()));   // counted from the spawn, held open by the gate
+chan_send(gate, true);
 proc.wait_idle();
 println(to_str(proc.active_tasks()));
 
