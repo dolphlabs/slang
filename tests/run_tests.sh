@@ -120,6 +120,51 @@ else
 fi
 rm -rf "$NEWDIR"
 
+# ---- slangc test ------------------------------------------------------
+# End to end against fixture packages in tests/testcmd/ (they have no
+# main.sl at the top level of tests/, so the loop above never runs them as
+# ordinary tests).
+echo "--- slangc test ---"
+tc_bad=0
+tc_fail() { echo "FAIL slangc test ($1)"; fail=1; tc_bad=1; }
+tc_tmp_before=$(ls -d "${TMPDIR:-/tmp}"/slangtest_* 2>/dev/null | wc -l)
+
+out=$(./slangc test tests/testcmd/lib 2>&1); code=$?
+[ "$code" -eq 1 ] || tc_fail "a failing test must exit 1, got $code"
+printf '%s\n' "$out" | grep -q '^ok   test_scaled ' || tc_fail "passing test not reported"
+printf '%s\n' "$out" | grep -q '^ok   test_clamp_private ' || tc_fail "private function or global unreachable from a test"
+printf '%s\n' "$out" | grep -q 'expected 99, got 20 at lib.test_fails_on_purpose:13' || tc_fail "failure message or location missing"
+printf '%s\n' "$out" | grep -q '^ok   test_after_failure ' || tc_fail "run stopped at the first failure"
+printf '%s\n' "$out" | grep -q 'helper_not_a_test must never run' && tc_fail "a non-test_ function was run"
+printf '%s\n' "$out" | grep -q '^FAIL: 1 of 4 failed' || tc_fail "summary line wrong"
+
+out=$(./slangc test tests/testcmd/lib --run clamp 2>&1); code=$?
+[ "$code" -eq 0 ] && printf '%s\n' "$out" | grep -q '^ok: 1 passed' || tc_fail "--run filter"
+
+# A PROGRAM under test: its top-level statements (which exit 7) must not run.
+out=$(./slangc test tests/testcmd/prog 2>&1); code=$?
+[ "$code" -eq 0 ] && printf '%s\n' "$out" | grep -q '^ok: 2 passed' || tc_fail "program package: tests did not run cleanly (exit $code)"
+
+# ...and a normal build of that program must not contain test code.
+rm -f main.gen.c
+(cd tests/testcmd/prog && "$OLDPWD/slangc" main.sl --emit-c >/dev/null 2>&1)
+if grep -q test_only_symbol_marker tests/testcmd/prog/main.gen.c 2>/dev/null; then
+    tc_fail "a normal build compiled *_test.sl"
+fi
+rm -f tests/testcmd/prog/main.gen.c
+
+./slangc test tests/testcmd/badsig >/dev/null 2>&1; code=$?
+[ "$code" -eq 2 ] || tc_fail "a test with parameters must be rejected (exit 2), got $code"
+
+out=$(./slangc test tests/testcmd/empty 2>&1); code=$?
+[ "$code" -eq 0 ] && printf '%s\n' "$out" | grep -q 'no test files' || tc_fail "package without tests"
+
+# Runners that compile are cleaned up. (One whose compile FAILS is kept on
+# purpose for inspection, so compare against what was there before.)
+tc_tmp_after=$(ls -d "${TMPDIR:-/tmp}"/slangtest_* 2>/dev/null | wc -l)
+[ "$tc_tmp_after" -eq "$tc_tmp_before" ] || tc_fail "runner temp directories left behind"
+[ "$tc_bad" -eq 0 ] && echo "PASS slangc test"
+
 # Generated C must compile clean under the warnings a C compiler turns
 # on by ITSELF. slangc passes no -W flags, so anything default-on lands
 # in the user's terminal on every single build -- 79 of them across this
