@@ -1,0 +1,20 @@
+[package]
+name = "api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
+tokio-postgres = "0.7"
+deadpool-postgres = "0.14"
+rust_decimal = { version = "1", features = ["db-tokio-postgres"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+mimalloc = { version = "0.1", default-features = false }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
