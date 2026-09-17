@@ -23,10 +23,9 @@ import "encoding";
 // rather than methods, for the reason httpc gives: a method cannot yet
 // share a name with a package function.
 //
-// WHAT THIS DOES NOT DO, deliberately: no COPY, no LISTEN/NOTIFY
-// delivery, no named prepared statements, no binary result format, no
-// Unix-domain sockets, no Kerberos/GSSAPI, no SCRAM channel binding
-// (SCRAM-SHA-256-PLUS). Results are buffered whole, not streamed.
+// WHAT THIS DOES NOT DO, deliberately: no named prepared statements, no
+// binary result format, no Kerberos/GSSAPI, no SCRAM channel binding
+// (SCRAM-SHA-256-PLUS), no COPY in binary format.
 
 // ---- limits ----------------------------------------------------------
 //
@@ -40,6 +39,8 @@ let MAX_SCRAM_ITERATIONS = 1000000;
 let READ_CHUNK = 65536;
 let MAX_READ = 4194304;
 let POOL_POLL = 2000000;          // 2ms between checks for a free conn
+let MAX_NOTIFICATIONS = 10000;    // queued, unread, per connection
+let COPY_CHUNK = 1048576;         // CopyData message size when sending
 
 // ---- types -----------------------------------------------------------
 
@@ -98,6 +99,25 @@ pub gc struct Conn {
     // ParameterStatus values: server_version, TimeZone, ...
     params: map[str]str,
     in_pool: bool,
+    // What the connection is in the middle of, between calls: 0 nothing,
+    // 1 a streamed result, 2 COPY FROM STDIN, 3 COPY TO STDOUT. Anything
+    // else is refused until it ends.
+    mode: int,
+    stream_id: int,       // bumped per stream(), to match its Rows
+    // The first server error of the exchange in progress.
+    server_err: str,
+    result_size: int,
+    // Notifications from LISTEN, oldest first, and how many were
+    // dropped because MAX_NOTIFICATIONS went unread.
+    notes: [Notification],
+    notes_dropped: int,
+}
+
+// A NOTIFY delivered to a connection that LISTENs on its channel.
+pub gc struct Notification {
+    pid: int,           // the backend that sent it
+    channel: str,
+    payload: str,
 }
 
 // A query parameter. Build one with arg_text, arg_int, arg_float,
@@ -129,6 +149,10 @@ pub gc struct Rows {
     locs: [int],
     lens: [int],
     chunk_gen: int,       // the Conn.gen of the last chunk
+    // For a streamed result: which stream() it came from, and whether
+    // the last row has been read.
+    stream: int,
+    done: bool,
 }
 
 // ---- wire encoding ---------------------------------------------------
@@ -264,8 +288,8 @@ fn is_loopback(host: str) -> bool {
 
 // postgres://user:password@host:port/database?sslmode=require
 //
-// Recognised parameters: sslmode, sslrootcert, application_name. Any
-// other parameter is an error rather than ignored: a misspelt
+// Recognised parameters: sslmode, sslrootcert, application_name, host
+// and port. Any other parameter is an error rather than ignored: a misspelt
 // "sslmdoe=require" that was silently dropped would connect in the
 // clear, and nothing would ever say so.
 //
@@ -281,6 +305,12 @@ fn is_loopback(host: str) -> bool {
 // host, where it is "disable", because traffic that never leaves the
 // machine gains nothing from TLS and a local development server almost
 // never has it configured.
+//
+// A Unix-domain socket is named by its DIRECTORY, as libpq does: either
+// percent-encoded as the host (postgres://app@%2Fvar%2Frun%2Fpostgresql/db)
+// or as ?host=/var/run/postgresql. The socket file is
+// <dir>/.s.PGSQL.<port>. Postgres does not use TLS over one, so sslmode
+// defaults to disable and asking for require is an error.
 pub fn parse_url(url: str) -> result[Config, str] {
     let rest = "";
     if strings.has_prefix(url, "postgres://") {
@@ -372,26 +402,29 @@ pub fn parse_url(url: str) -> result[Config, str] {
             host = strings.slice(authority, 0, colon);
         }
     }
-    if host == "" {
-        return err("url has no host");
-    }
-    if strings.contains(host, ",") {
-        return err("multiple hosts in one url are not supported");
-    }
-    if port <= 0 || port > 65535 {
-        return err("port out of range in url");
+    if strings.contains(host, "%") {
+        let hr = encoding.url_decode(host);
+        guard let h = hr else let e = err_of(hr) {
+            return err("bad host in url: " + e);
+        }
+        host = h;
     }
 
-    let sslmode = "require";
-    if is_loopback(host) {
-        sslmode = "disable";
-    }
+    let sslmode = "";
     let ca_path = "";
     let app = "";
     let qurl = "?" + query;
     for k in encoding.query_keys(qurl) {
         let v = encoding.query_get(qurl, k) ?? "";
-        if k == "sslmode" {
+        if k == "host" {
+            host = v;
+        } else if k == "port" {
+            let pr = to_int(v);
+            guard let p = pr else let e = err_of(pr) {
+                return err("bad port in url: " + e);
+            }
+            port = p;
+        } else if k == "sslmode" {
             if v == "disable" {
                 sslmode = "disable";
             } else if v == "require" || v == "verify-full" {
@@ -414,6 +447,27 @@ pub fn parse_url(url: str) -> result[Config, str] {
         } else {
             return err("unsupported url parameter: " + k);
         }
+    }
+
+    if host == "" {
+        return err("url has no host");
+    }
+    if strings.contains(host, ",") {
+        return err("multiple hosts in one url are not supported");
+    }
+    if port <= 0 || port > 65535 {
+        return err("port out of range in url");
+    }
+    let unix = strings.has_prefix(host, "/");
+    if sslmode == "" {
+        sslmode = "require";
+        if unix || is_loopback(host) {
+            sslmode = "disable";
+        }
+    }
+    if unix && sslmode != "disable" {
+        return err("sslmode=require cannot be used with a Unix-domain " +
+                   "socket: Postgres does not use TLS over one");
     }
 
     return ok(Config { host: host, port: port, user: user,
@@ -448,13 +502,24 @@ fn tr_close(t: Transport) {
 
 // Dial, and negotiate TLS in-band if the Config asks for it: an 8-byte
 // SSLRequest, one byte back ('S' or 'N'), then the handshake on the same
-// socket.
+// socket. The deadline covers all of it: lookup, connect, handshake.
 fn open_transport(cfg: Config, deadline: until) -> result[Transport, str] {
     if strings.has_prefix(cfg.host, "/") {
-        return err("unix-domain sockets are not supported: " + cfg.host);
+        let path = cfg.host + "/.s.PGSQL." + to_str(cfg.port);
+        let ur = net.dial_unix(path, deadline);
+        guard let ufd = ur else let e = err_of(ur) {
+            if e == "timeout" {
+                return err(e);
+            }
+            return err("dial " + path + ": " + e);
+        }
+        return ok(Transport { fd: ufd, ssl: nullptr });
     }
-    let dr = net.dial(cfg.host, cfg.port);
+    let dr = net.dial_until(cfg.host, cfg.port, deadline);
     guard let fd = dr else let e = err_of(dr) {
+        if e == "timeout" {
+            return err(e);
+        }
         return err("dial " + cfg.host + ": " + e);
     }
     if cfg.sslmode == "disable" {
@@ -498,9 +563,12 @@ fn open_transport(cfg: Config, deadline: until) -> result[Transport, str] {
         }
         cfg.tls_ctx = ctx;
     }
-    let ur = net.tls_upgrade(fd, cfg.host, cfg.tls_ctx);
+    let ur = net.tls_upgrade_until(fd, cfg.host, cfg.tls_ctx, deadline);
     guard let ssl = ur else let e = err_of(ur) {
         net.close(fd);
+        if e == "timeout" {
+            return err(e);
+        }
         let hint = "";
         if strings.contains(e, "certificate verify failed") && cfg.ca_path == "" {
             hint = " (if the server uses its provider's own CA, pass its " +
@@ -533,6 +601,9 @@ fn fill(c: Conn, need: int, deadline: until) -> str {
     c.buf = b"";
     c.pos = 0;
     c.gen = c.gen + 1;
+    // On any failure the bytes already read go back into buf: a timeout
+    // while WAITING (for a notification) must leave the stream exactly
+    // where it was, half a message included.
     while have < need {
         // A large message is read in large pieces: fewer pieces means
         // fewer rounds of joining them. The runtime copies out only what
@@ -546,9 +617,11 @@ fn fill(c: Conn, need: int, deadline: until) -> str {
         }
         let rr = tr_recv(c.t, want, deadline);
         guard let got = rr else let e = err_of(rr) {
+            c.buf = concat_parts(parts);
             return e;
         }
         if len(got) == 0 {
+            c.buf = concat_parts(parts);
             return "server closed the connection";
         }
         push(parts, got);
@@ -650,14 +723,23 @@ fn break_conn(c: Conn, why: str) {
     }
     c.broken = true;
     c.why = why;
+    c.mode = 0;
     if why == "timeout" && c.pid != 0 {
-        spawn send_cancel(c.cfg, c.pid, c.secret);
+        spawn cancel_later(c.cfg, c.pid, c.secret);
     }
     tr_close(c.t);
 }
 
-fn send_cancel(cfg: Config, pid: int, secret: int) {
-    let deadline = until_of(time.mono() + 10000000000);
+fn cancel_later(cfg: Config, pid: int, secret: int) {
+    send_cancel(cfg, pid, secret, until_of(time.mono() + 10000000000));
+}
+
+// Returns once the server has read the request (it closes the connection
+// then), or the deadline passes.
+fn send_cancel(cfg: Config, pid: int, secret: int, deadline: until) {
+    if pid == 0 {
+        return;
+    }
     let tr = open_transport(cfg, deadline);
     guard let t = tr else {
         return;
@@ -939,19 +1021,21 @@ pub fn connect(url: str, deadline: until) -> result[Conn, str] {
     return connect_config(cfg, deadline);
 }
 
-// The deadline bounds the startup and authentication exchange. It does
-// not bound the TCP connect or the TLS handshake themselves, which
-// net.dial and net.tls_upgrade do not yet take one for.
+// The deadline bounds the whole connection: the lookup, the TCP connect,
+// the TLS handshake and the startup and authentication exchange.
 pub fn connect_config(cfg: Config, deadline: until) -> result[Conn, str] {
     let tr = open_transport(cfg, deadline);
     guard let t = tr else let e = err_of(tr) {
         return err(e);
     }
     let params: map[str]str = {};
+    let no_notes: [Notification] = [];
     let c = Conn { cfg: cfg, t: t, buf: b"", pos: 0, gen: 0, mtyp: 0,
                    mstart: 0, mlen: 0, lock: make_mutex(),
                    broken: false, why: "", closed: false, pid: 0, secret: 0,
-                   status: 0, params: params, in_pool: false };
+                   status: 0, params: params, in_pool: false, mode: 0,
+                   stream_id: 0, server_err: "", result_size: 0,
+                   notes: no_notes, notes_dropped: 0 };
     let hr = handshake(c, deadline);
     guard let h = hr else let e = err_of(hr) {
         tr_close(t);
@@ -1000,6 +1084,18 @@ fn check_usable(c: Conn, deadline: until) -> result[bool, str] {
     if c.broken {
         return err("connection is broken: " + c.why);
     }
+    if c.mode == 1 {
+        return err("connection is busy: a streamed result is still open " +
+                   "(read it to the end, or pg.stream_close)");
+    }
+    if c.mode == 2 {
+        return err("connection is busy: COPY FROM STDIN is in progress " +
+                   "(pg.copy_in_end or pg.copy_in_abort)");
+    }
+    if c.mode == 3 {
+        return err("connection is busy: COPY TO STDOUT is in progress " +
+                   "(read it to the end with pg.copy_out_next)");
+    }
     // Checked before a byte is written: a deadline that has already
     // passed should fail the call, not break a healthy connection.
     if until_hit(deadline) {
@@ -1043,13 +1139,6 @@ pub fn arg_null() -> Arg {
     return Arg { is_null: true, binary: false, data: b"" };
 }
 
-// The argument list of a query with no parameters. A bare [] cannot be
-// passed yet: an empty list literal needs a declared type, and the
-// compiler does not take it from the parameter.
-pub fn no_args() -> [Arg] {
-    let none_args: [Arg] = [];
-    return none_args;
-}
 
 // ---- running queries -------------------------------------------------
 
@@ -1071,7 +1160,23 @@ fn empty_rows() -> Rows {
     let lens: [int] = [];
     return Rows { columns: cols, types: types, count: 0, affected: 0,
                   tag: "", chunks: chunks, locs: locs, lens: lens,
-                  chunk_gen: -1 };
+                  chunk_gen: -1, stream: 0, done: true };
+}
+
+// Empties the cell storage in place. Popping rather than allocating new
+// lists: a stream calls this once per row, and fresh lists per row were
+// garbage the collector does not count (list storage is not GC bytes),
+// so a streamed million rows grew to 600MB before anything collected.
+fn clear_cells(rows: Rows) {
+    while len(rows.locs) > 0 {
+        pop(rows.locs);
+        pop(rows.lens);
+    }
+    while len(rows.chunks) > 0 {
+        pop(rows.chunks);
+    }
+    rows.count = 0;
+    rows.chunk_gen = -1;
 }
 
 // Records the DataRow next_msg just read, in place. Returns "" or what
@@ -1122,13 +1227,50 @@ fn add_row(rows: Rows, c: Conn) -> str {
     return "";
 }
 
-// Reads responses up to ReadyForQuery. `rows` collects the result;
-// `synced` says whether a Sync was sent (extended protocol), which
-// changes how a COPY FROM STDIN has to be refused.
-fn collect(c: Conn, rows: Rows, synced: bool, deadline: until)
-           -> result[bool, str] {
-    let server_err = "";
-    let size = 0;
+// ---- the message loop -------------------------------------------------
+//
+// step() reads server messages for the exchange in progress until one
+// the caller asked to stop at, or ReadyForQuery, which always ends it.
+// A server error does not end it -- the server follows one with
+// ReadyForQuery -- so the first is kept in c.server_err for the caller.
+
+let EV_READY = 0;       // ReadyForQuery read; the exchange is over
+let EV_ROW = 1;         // a DataRow was added to rows
+let EV_DESC = 2;        // RowDescription read
+let EV_NODATA = 3;      // NoData: the statement returns no rows
+let EV_COPY_IN = 4;     // CopyInResponse
+let EV_COPY_OUT = 5;    // CopyOutResponse
+let EV_COPY_DATA = 6;   // CopyData; its body is msg_body(c)
+
+let STOP_ROW = 1;
+let STOP_DESC = 2;
+let STOP_COPY = 4;
+
+fn keep_err(c: Conn, e: str) {
+    if c.server_err == "" {
+        c.server_err = e;
+    }
+}
+
+fn parse_notification(c: Conn) {
+    let cur = cur_of(msg_body(c));
+    let pid = get32(cur);
+    let channel = get_cstr(cur);
+    let payload = get_cstr(cur);
+    if cur.bad {
+        return;
+    }
+    if len(c.notes) >= MAX_NOTIFICATIONS {
+        c.notes = c.notes[1..];
+        c.notes_dropped = c.notes_dropped + 1;
+    }
+    push(c.notes, Notification { pid: pid, channel: channel, payload: payload });
+}
+
+// `synced`: whether the exchange was sent with Sync (extended protocol),
+// which changes how an unwanted COPY FROM STDIN has to be refused.
+fn step(c: Conn, rows: Rows, stop: int, synced: bool, deadline: until)
+        -> result[int, str] {
     while true {
         let ne = next_msg(c, deadline);
         if ne != "" {
@@ -1140,14 +1282,24 @@ fn collect(c: Conn, rows: Rows, synced: bool, deadline: until)
             if bad != "" {
                 return err(bad);
             }
-            size = size + c.mlen;
-            if size > MAX_RESULT {
-                return err("result exceeds the 256 MiB limit");
+            c.result_size = c.result_size + c.mlen;
+            if c.result_size > MAX_RESULT && rows.stream == 0 {
+                return err("result exceeds the 256 MiB limit; read it with " +
+                           "pg.stream");
+            }
+            if (stop & STOP_ROW) != 0 {
+                return ok(EV_ROW);
+            }
+            continue;
+        }
+        if t == 100 {               // 'd' CopyData
+            if (stop & STOP_COPY) != 0 {
+                return ok(EV_COPY_DATA);
             }
             continue;
         }
         let body = msg_body(c);
-        if t == 84 {         // 'T' RowDescription
+        if t == 84 {                // 'T' RowDescription
             let cur = cur_of(body);
             let n = get16(cur);
             let cols: [str] = [];
@@ -1170,53 +1322,58 @@ fn collect(c: Conn, rows: Rows, synced: bool, deadline: until)
             // last; only the final one is kept.
             rows.columns = cols;
             rows.types = types;
-            let fresh = empty_rows();
-            rows.count = 0;
-            rows.chunks = fresh.chunks;
-            rows.locs = fresh.locs;
-            rows.lens = fresh.lens;
-            rows.chunk_gen = -1;
+            clear_cells(rows);
+            if (stop & STOP_DESC) != 0 {
+                return ok(EV_DESC);
+            }
+        } else if t == 110 {        // 'n' NoData
+            if (stop & STOP_DESC) != 0 {
+                return ok(EV_NODATA);
+            }
         } else if t == 67 {         // 'C' CommandComplete
             let cur = cur_of(body);
             rows.tag = get_cstr(cur);
             rows.affected = tag_count(rows.tag);
         } else if t == 69 {         // 'E' ErrorResponse
-            if server_err == "" {
-                server_err = format_error(body);
-            }
+            keep_err(c, format_error(body));
         } else if t == 90 {         // 'Z' ReadyForQuery
             if len(body) < 1 {
                 return err("protocol error: empty ReadyForQuery");
             }
             c.status = body[0];
-            if server_err != "" {
-                return err(server_err);
-            }
-            return ok(true);
+            return ok(EV_READY);
         } else if t == 71 {         // 'G' CopyInResponse
-            // The server now wants data this API has no way to supply.
-            // CopyFail ends the COPY with an error; after an extended-
-            // protocol query the server ignored our earlier Sync while
-            // in copy mode, so it needs another.
-            let out = msg(102, cstr("COPY FROM STDIN is not supported by pg"));
+            if (stop & STOP_COPY) != 0 {
+                return ok(EV_COPY_IN);
+            }
+            // Not asked for. CopyFail ends the COPY with an error; after
+            // an extended-protocol query the server ignored our earlier
+            // Sync while in copy mode, so it needs another.
+            let out = msg(102, cstr("COPY FROM STDIN needs pg.copy_from"));
             if synced {
                 out = out + msg(83, b"");
             }
             let sr = send_raw(c, out, deadline);
-            guard let s = sr else let e = err_of(sr) {
+            guard let sent = sr else let e = err_of(sr) {
                 return err(e);
             }
+        } else if t == 72 {         // 'H' CopyOutResponse
+            if (stop & STOP_COPY) != 0 {
+                return ok(EV_COPY_OUT);
+            }
+            // Not asked for: the data is skipped, and the call fails.
+            keep_err(c, "COPY TO STDOUT needs pg.copy_to");
+        } else if t == 65 {         // 'A' NotificationResponse
+            parse_notification(c);
         } else if t == 83 {         // 'S' ParameterStatus, after SET
             let cur = cur_of(body);
             let k = get_cstr(cur);
             let v = get_cstr(cur);
             c.params[k] = v;
-        } else if t == 49 || t == 50 || t == 110 || t == 73 || t == 78 ||
-                  t == 65 || t == 72 || t == 100 || t == 99 || t == 116 {
-            // '1' ParseComplete, '2' BindComplete, 'n' NoData,
-            // 'I' EmptyQueryResponse, 'N' notice, 'A' notification,
-            // 'H' CopyOutResponse, 'd' CopyData, 'c' CopyDone,
-            // 't' ParameterDescription: nothing to keep.
+        } else if t == 49 || t == 50 || t == 73 || t == 78 || t == 99 ||
+                  t == 116 {
+            // '1' ParseComplete, '2' BindComplete, 'I' EmptyQueryResponse,
+            // 'N' notice, 'c' CopyDone, 't' ParameterDescription.
         } else {
             return err("protocol error: unexpected message " + to_str(t));
         }
@@ -1224,46 +1381,50 @@ fn collect(c: Conn, rows: Rows, synced: bool, deadline: until)
     return err("unreachable");
 }
 
-fn send_and_collect(c: Conn, out: bytes, rows: Rows, synced: bool,
-                    deadline: until) -> result[bool, str] {
-    let sr = send_raw(c, out, deadline);
-    guard let sent = sr else let e = err_of(sr) {
-        return err(e);
-    }
-    return collect(c, rows, synced, deadline);
-}
-
-// A failure while a query is on the wire leaves the stream at an unknown
-// offset, so the connection is broken rather than reused. A server-side
-// error is not such a failure: its ReadyForQuery has been read, the
-// stream is back at a boundary and the connection is fine.
-fn finish(c: Conn, r: result[bool, str]) -> result[bool, str] {
-    guard let v = r else let e = err_of(r) {
-        if c.status == 0 {      // no ReadyForQuery: mid-stream
-            break_conn(c, e);
+// Drives step() to ReadyForQuery, then fails with the server's error if
+// there was one.
+fn to_ready(c: Conn, rows: Rows, synced: bool, deadline: until)
+            -> result[bool, str] {
+    while true {
+        let sr = step(c, rows, 0, synced, deadline);
+        guard let ev = sr else let e = err_of(sr) {
+            return err(e);
         }
-        return err(e);
+        if ev == EV_READY {
+            if c.server_err != "" {
+                return err(c.server_err);
+            }
+            return ok(true);
+        }
     }
-    return ok(v);
+    return err("unreachable");
 }
 
-// Runs one query with parameters ($1, $2, ...) through the extended
-// protocol: the values travel separately from the SQL text, so they can
-// never be parsed as SQL. Returns every row, buffered.
-pub fn query(c: Conn, sql: str, args: [Arg], deadline: until)
-             -> result[Rows, str] {
-    mutex_lock(c.lock);
-    let ur = check_usable(c, deadline);
-    guard let u = ur else let e = err_of(ur) {
-        mutex_unlock(c.lock);
-        return err(e);
-    }
-    if len(args) > 65535 {
-        mutex_unlock(c.lock);
-        return err("too many parameters: " + to_str(len(args)) +
-                   " (the protocol allows 65535)");
-    }
+// Starts an exchange: resets its state and sends `out`. Status 0 marks
+// "no ReadyForQuery read yet", which fail() uses to tell a clean server
+// error from a stream left mid-message.
+fn begin(c: Conn, out: bytes, deadline: until) -> result[bool, str] {
+    c.status = 0;
+    c.server_err = "";
+    c.result_size = 0;
+    return send_raw(c, out, deadline);
+}
 
+// The error path of every call. A failure while an exchange is on the
+// wire leaves the stream at an unknown offset, so the connection is
+// broken rather than reused. A server error is not such a failure: its
+// ReadyForQuery has been read, the stream is back at a boundary, and
+// the connection is fine.
+fn fail(c: Conn, e: str, status_before: int) -> str {
+    if c.status == 0 {
+        break_conn(c, e);
+        c.status = status_before;
+    }
+    c.mode = 0;
+    return e;
+}
+
+fn extended(sql: str, args: [Arg]) -> bytes {
     let formats = be16(len(args));
     let values = be16(len(args));
     for a in args {
@@ -1278,26 +1439,54 @@ pub fn query(c: Conn, sql: str, args: [Arg], deadline: until)
             values = values + be32(len(a.data)) + a.data;
         }
     }
-    let out = msg(80, cstr("") + cstr(sql) + be16(0)) +            // Parse
-              msg(66, cstr("") + cstr("") + formats + values +     // Bind
-                  be16(0)) +                                       //   text results
-              msg(68, b"P" + cstr("")) +                           // Describe portal
-              msg(69, cstr("") + be32(0)) +                        // Execute, all rows
-              msg(83, b"");                                        // Sync
+    return msg(80, cstr("") + cstr(sql) + be16(0)) +            // Parse
+           msg(66, cstr("") + cstr("") + formats + values +     // Bind
+               be16(0)) +                                       //   text results
+           msg(68, b"P" + cstr("")) +                           // Describe portal
+           msg(69, cstr("") + be32(0)) +                        // Execute, all rows
+           msg(83, b"");                                        // Sync
+}
 
-    // Status 0 marks "no ReadyForQuery read yet", which finish() uses to
-    // tell a clean server error from a stream left mid-message.
-    let before = c.status;
-    c.status = 0;
-    let rows = empty_rows();
-    let fr = finish(c, send_and_collect(c, out, rows, true, deadline));
-    if c.status == 0 {
-        c.status = before;
+fn check_args(args: [Arg]) -> str {
+    if len(args) > 65535 {
+        return "too many parameters: " + to_str(len(args)) +
+               " (the protocol allows 65535)";
     }
-    mutex_unlock(c.lock);
-    guard let f = fr else let e = err_of(fr) {
+    return "";
+}
+
+// Runs one query with parameters ($1, $2, ...) through the extended
+// protocol: the values travel separately from the SQL text, so they can
+// never be parsed as SQL. Returns every row, buffered; for a result too
+// big to hold at once, use stream().
+pub fn query(c: Conn, sql: str, args: [Arg], deadline: until)
+             -> result[Rows, str] {
+    mutex_lock(c.lock);
+    let ur = check_usable(c, deadline);
+    guard let u = ur else let e = err_of(ur) {
+        mutex_unlock(c.lock);
         return err(e);
     }
+    let ae = check_args(args);
+    if ae != "" {
+        mutex_unlock(c.lock);
+        return err(ae);
+    }
+    let before = c.status;
+    let rows = empty_rows();
+    let br = begin(c, extended(sql, args), deadline);
+    guard let b = br else let e = err_of(br) {
+        let fe = fail(c, e, before);
+        mutex_unlock(c.lock);
+        return err(fe);
+    }
+    let rr = to_ready(c, rows, true, deadline);
+    guard let r = rr else let e = err_of(rr) {
+        let fe = fail(c, e, before);
+        mutex_unlock(c.lock);
+        return err(fe);
+    }
+    mutex_unlock(c.lock);
     return ok(rows);
 }
 
@@ -1315,18 +1504,485 @@ pub fn exec(c: Conn, sql: str, deadline: until) -> result[int, str] {
         return err(e);
     }
     let before = c.status;
-    c.status = 0;
     let rows = empty_rows();
-    let fr = finish(c, send_and_collect(c, msg(81, cstr(sql)), rows, false,
-                                        deadline));
-    if c.status == 0 {
-        c.status = before;
+    let br = begin(c, msg(81, cstr(sql)), deadline);
+    guard let b = br else let e = err_of(br) {
+        let fe = fail(c, e, before);
+        mutex_unlock(c.lock);
+        return err(fe);
+    }
+    let rr = to_ready(c, rows, false, deadline);
+    guard let r = rr else let e = err_of(rr) {
+        let fe = fail(c, e, before);
+        mutex_unlock(c.lock);
+        return err(fe);
     }
     mutex_unlock(c.lock);
-    guard let f = fr else let e = err_of(fr) {
+    return ok(rows.affected);
+}
+
+// ---- streamed results --------------------------------------------------
+//
+//     let sr = pg.stream(c, "SELECT id, body FROM events", [], dl);
+//     guard let rows = sr else let e = err_of(sr) { ... }
+//     while true {
+//         let nr = pg.next_row(c, rows, dl);
+//         guard let more = nr else let e = err_of(nr) { ... }
+//         if !more { break; }
+//         handle(pg.get_int(rows, 0, 0), pg.get_text(rows, 0, 1));
+//     }
+//
+// The result is read one row at a time, so memory stays at one row (and
+// one receive buffer) however large it is, and the server is held back
+// by TCP flow control rather than the client buffering ahead. Each
+// next_row replaces the row in `rows`: read it at index 0. The
+// connection serves nothing else until the last row has been read or
+// stream_close is called.
+
+pub fn stream(c: Conn, sql: str, args: [Arg], deadline: until)
+              -> result[Rows, str] {
+    mutex_lock(c.lock);
+    let ur = check_usable(c, deadline);
+    guard let u = ur else let e = err_of(ur) {
+        mutex_unlock(c.lock);
         return err(e);
     }
+    let ae = check_args(args);
+    if ae != "" {
+        mutex_unlock(c.lock);
+        return err(ae);
+    }
+    let before = c.status;
+    let rows = empty_rows();
+    let br = begin(c, extended(sql, args), deadline);
+    guard let b = br else let e = err_of(br) {
+        let fe = fail(c, e, before);
+        mutex_unlock(c.lock);
+        return err(fe);
+    }
+    let sr = step(c, rows, STOP_DESC, true, deadline);
+    guard let ev = sr else let e = err_of(sr) {
+        let fe = fail(c, e, before);
+        mutex_unlock(c.lock);
+        return err(fe);
+    }
+    if ev == EV_DESC {
+        c.stream_id = c.stream_id + 1;
+        c.mode = 1;
+        rows.stream = c.stream_id;
+        rows.done = false;
+        mutex_unlock(c.lock);
+        return ok(rows);
+    }
+    // No rows to stream (an INSERT), or an error before any: finish now.
+    let rr = to_ready(c, rows, true, deadline);
+    guard let r = rr else let e = err_of(rr) {
+        let fe = fail(c, e, before);
+        mutex_unlock(c.lock);
+        return err(fe);
+    }
+    mutex_unlock(c.lock);
+    return ok(rows);
+}
+
+fn is_open_stream(c: Conn, rows: Rows) -> bool {
+    return c.mode == 1 && rows.stream == c.stream_id && !rows.done;
+}
+
+// Reads the next row of a stream into `rows` (at index 0). Returns false
+// once there are no more; rows.affected and rows.tag are set then.
+pub fn next_row(c: Conn, rows: Rows, deadline: until) -> result[bool, str] {
+    mutex_lock(c.lock);
+    if rows.done {
+        mutex_unlock(c.lock);
+        return ok(false);
+    }
+    if c.closed || c.broken || !is_open_stream(c, rows) {
+        mutex_unlock(c.lock);
+        return err("the stream is no longer open on this connection");
+    }
+    clear_cells(rows);
+    let sr = step(c, rows, STOP_ROW, true, deadline);
+    guard let ev = sr else let e = err_of(sr) {
+        rows.done = true;
+        let fe = fail(c, e, 0);
+        mutex_unlock(c.lock);
+        return err(fe);
+    }
+    if ev == EV_ROW {
+        mutex_unlock(c.lock);
+        return ok(true);
+    }
+    rows.done = true;
+    c.mode = 0;
+    mutex_unlock(c.lock);
+    if c.server_err != "" {
+        return err(c.server_err);
+    }
+    return ok(false);
+}
+
+// Ends a stream early. The server is asked to cancel the query first --
+// and that request is seen through before the rest is drained, so it can
+// never land on a LATER query on this connection -- then whatever it had
+// already sent is read and dropped. The connection is then free.
+pub fn stream_close(c: Conn, rows: Rows, deadline: until) -> result[bool, str] {
+    mutex_lock(c.lock);
+    if rows.done || !is_open_stream(c, rows) {
+        rows.done = true;
+        mutex_unlock(c.lock);
+        return ok(true);
+    }
+    send_cancel(c.cfg, c.pid, c.secret, deadline);
+    while true {
+        clear_cells(rows);
+        let sr = step(c, rows, STOP_ROW, true, deadline);
+        guard let ev = sr else let e = err_of(sr) {
+            rows.done = true;
+            let fe = fail(c, e, 0);
+            mutex_unlock(c.lock);
+            return err(fe);
+        }
+        if ev == EV_READY {
+            break;
+        }
+    }
+    clear_cells(rows);
+    rows.done = true;
+    c.mode = 0;
+    c.server_err = "";      // 57014 query_canceled, which was the point
+    mutex_unlock(c.lock);
+    return ok(true);
+}
+
+// ---- COPY ----------------------------------------------------------------
+//
+// COPY ... FROM STDIN loads data in COPY's text or CSV format; COPY ... TO
+// STDOUT dumps it. The one-call forms buffer; the start/send/end and
+// start/next forms stream.
+
+fn copy_start(c: Conn, sql: str, want: int, deadline: until)
+              -> result[bool, str] {
+    mutex_lock(c.lock);
+    let ur = check_usable(c, deadline);
+    guard let u = ur else let e = err_of(ur) {
+        mutex_unlock(c.lock);
+        return err(e);
+    }
+    let before = c.status;
+    let rows = empty_rows();
+    let br = begin(c, msg(81, cstr(sql)), deadline);
+    guard let b = br else let e = err_of(br) {
+        let fe = fail(c, e, before);
+        mutex_unlock(c.lock);
+        return err(fe);
+    }
+    let sr = step(c, rows, STOP_COPY, false, deadline);
+    guard let ev = sr else let e = err_of(sr) {
+        let fe = fail(c, e, before);
+        mutex_unlock(c.lock);
+        return err(fe);
+    }
+    if ev == want {
+        c.mode = 2;
+        if want == EV_COPY_OUT {
+            c.mode = 3;
+        }
+        mutex_unlock(c.lock);
+        return ok(true);
+    }
+    // The statement was not the kind of COPY asked for.
+    let wrong = "not a COPY ... FROM STDIN statement";
+    if want == EV_COPY_OUT {
+        wrong = "not a COPY ... TO STDOUT statement";
+    }
+    if ev == EV_COPY_IN {
+        let fr = send_raw(c, msg(102, cstr(wrong)), deadline);
+        guard let f = fr else let e = err_of(fr) {
+            let fe = fail(c, e, before);
+            mutex_unlock(c.lock);
+            return err(fe);
+        }
+    }
+    if ev == EV_READY {
+        // already over: a statement that failed, or ran without COPY
+        mutex_unlock(c.lock);
+        if c.server_err != "" {
+            return err(c.server_err);
+        }
+        return err(wrong);
+    }
+    let rr = to_ready(c, rows, false, deadline);
+    guard let r = rr else let e = err_of(rr) {
+        if c.status == 0 {
+            let fe = fail(c, e, before);
+            mutex_unlock(c.lock);
+            return err(fe);
+        }
+    }
+    mutex_unlock(c.lock);
+    return err(wrong);
+}
+
+// Starts COPY ... FROM STDIN. Send data with copy_in_send, then finish
+// with copy_in_end -- or copy_in_abort, which rolls the COPY back.
+pub fn copy_in_start(c: Conn, sql: str, deadline: until) -> result[bool, str] {
+    return copy_start(c, sql, EV_COPY_IN, deadline);
+}
+
+// Sends COPY data. It need not end on a row boundary; the server
+// reassembles it. An error in the data is reported by copy_in_end.
+pub fn copy_in_send(c: Conn, data: bytes, deadline: until) -> result[bool, str] {
+    mutex_lock(c.lock);
+    if c.closed || c.broken || c.mode != 2 {
+        mutex_unlock(c.lock);
+        return err("no COPY FROM STDIN in progress on this connection");
+    }
+    let off = 0;
+    while off < len(data) {
+        let end = off + COPY_CHUNK;
+        if end > len(data) {
+            end = len(data);
+        }
+        let sr = send_raw(c, msg(100, data[off..end]), deadline);
+        guard let s = sr else let e = err_of(sr) {
+            let fe = fail(c, e, 0);
+            mutex_unlock(c.lock);
+            return err(fe);
+        }
+        off = end;
+    }
+    mutex_unlock(c.lock);
+    return ok(true);
+}
+
+fn copy_in_finish(c: Conn, done: bytes, deadline: until) -> result[int, str] {
+    mutex_lock(c.lock);
+    if c.closed || c.broken || c.mode != 2 {
+        mutex_unlock(c.lock);
+        return err("no COPY FROM STDIN in progress on this connection");
+    }
+    let rows = empty_rows();
+    let sr = send_raw(c, done, deadline);
+    guard let s = sr else let e = err_of(sr) {
+        let fe = fail(c, e, 0);
+        mutex_unlock(c.lock);
+        return err(fe);
+    }
+    let rr = to_ready(c, rows, false, deadline);
+    guard let r = rr else let e = err_of(rr) {
+        let fe = fail(c, e, 0);
+        mutex_unlock(c.lock);
+        return err(fe);
+    }
+    c.mode = 0;
+    mutex_unlock(c.lock);
     return ok(rows.affected);
+}
+
+// Ends the COPY. Returns the number of rows loaded, or the server's
+// error about the data -- in which case nothing was loaded.
+pub fn copy_in_end(c: Conn, deadline: until) -> result[int, str] {
+    return copy_in_finish(c, msg(99, b""), deadline);
+}
+
+// Abandons the COPY: the server discards everything sent. Ok once the
+// server has confirmed; its "COPY from stdin failed" is the expected
+// answer, not an error.
+pub fn copy_in_abort(c: Conn, reason: str, deadline: until) -> result[bool, str] {
+    let r = copy_in_finish(c, msg(102, cstr(reason)), deadline);
+    guard let n = r else let e = err_of(r) {
+        if sqlstate(e) == "57014" {
+            return ok(true);
+        }
+        return err(e);
+    }
+    return ok(true);
+}
+
+// COPY ... FROM STDIN in one call. Returns the rows loaded.
+//
+//     pg.copy_from(c, "COPY users (id, email) FROM STDIN (FORMAT csv)",
+//                  to_bytes("1,a@example.com\n2,b@example.com\n"), dl)
+pub fn copy_from(c: Conn, sql: str, data: bytes, deadline: until)
+                 -> result[int, str] {
+    let sr = copy_in_start(c, sql, deadline);
+    guard let s = sr else let e = err_of(sr) {
+        return err(e);
+    }
+    let dr = copy_in_send(c, data, deadline);
+    guard let d = dr else let e = err_of(dr) {
+        return err(e);
+    }
+    return copy_in_end(c, deadline);
+}
+
+// Starts COPY ... TO STDOUT. Read it with copy_out_next.
+pub fn copy_out_start(c: Conn, sql: str, deadline: until) -> result[bool, str] {
+    return copy_start(c, sql, EV_COPY_OUT, deadline);
+}
+
+// The next piece of COPY output -- in text and CSV formats, one row --
+// or none when it is complete.
+pub fn copy_out_next(c: Conn, deadline: until) -> result[opt[bytes], str] {
+    mutex_lock(c.lock);
+    if c.closed || c.broken || c.mode != 3 {
+        mutex_unlock(c.lock);
+        return err("no COPY TO STDOUT in progress on this connection");
+    }
+    let rows = empty_rows();
+    let sr = step(c, rows, STOP_COPY, false, deadline);
+    guard let ev = sr else let e = err_of(sr) {
+        let fe = fail(c, e, 0);
+        mutex_unlock(c.lock);
+        return err(fe);
+    }
+    if ev == EV_COPY_DATA {
+        let piece = msg_body(c);
+        mutex_unlock(c.lock);
+        return ok(some(piece));
+    }
+    if ev != EV_READY {
+        let fe = fail(c, "protocol error: unexpected COPY message", 0);
+        mutex_unlock(c.lock);
+        return err(fe);
+    }
+    c.mode = 0;
+    mutex_unlock(c.lock);
+    if c.server_err != "" {
+        return err(c.server_err);
+    }
+    let none_left: opt[bytes] = none;
+    return ok(none_left);
+}
+
+// COPY ... TO STDOUT in one call, buffered (up to the 256 MiB result
+// limit; stream a larger one with copy_out_start / copy_out_next).
+pub fn copy_to(c: Conn, sql: str, deadline: until) -> result[bytes, str] {
+    let sr = copy_out_start(c, sql, deadline);
+    guard let s = sr else let e = err_of(sr) {
+        return err(e);
+    }
+    let parts: [bytes] = [];
+    let size = 0;
+    while true {
+        let nr = copy_out_next(c, deadline);
+        guard let piece = nr else let e = err_of(nr) {
+            return err(e);
+        }
+        guard let p = piece else {
+            break;
+        }
+        size = size + len(p);
+        if size > MAX_RESULT {
+            mutex_lock(c.lock);
+            break_conn(c, "COPY output exceeds the 256 MiB limit");
+            mutex_unlock(c.lock);
+            return err("COPY output exceeds the 256 MiB limit; read it " +
+                       "with pg.copy_out_next");
+        }
+        push(parts, p);
+    }
+    return ok(concat_parts(parts));
+}
+
+// ---- LISTEN / NOTIFY -----------------------------------------------------
+//
+// Notifications arrive whenever the server has one, including in the
+// middle of other results; they are queued on the connection and handed
+// out by wait_notification. LISTEN on a connection of its own, not a
+// pooled one: a pooled connection with a notification waiting fails the
+// pool's idle probe and is closed.
+
+// Postgres identifier quoting: "name", with embedded quotes doubled.
+fn quote_ident(name: str) -> str {
+    return "\"" + strings.replace(name, "\"", "\"\"") + "\"";
+}
+
+pub fn listen(c: Conn, channel: str, deadline: until) -> result[bool, str] {
+    let r = exec(c, "LISTEN " + quote_ident(channel), deadline);
+    guard let n = r else let e = err_of(r) {
+        return err(e);
+    }
+    return ok(true);
+}
+
+// "*" stops listening on every channel.
+pub fn unlisten(c: Conn, channel: str, deadline: until) -> result[bool, str] {
+    let target = "*";
+    if channel != "*" {
+        target = quote_ident(channel);
+    }
+    let r = exec(c, "UNLISTEN " + target, deadline);
+    guard let n = r else let e = err_of(r) {
+        return err(e);
+    }
+    return ok(true);
+}
+
+pub fn notify(c: Conn, channel: str, payload: str, deadline: until)
+              -> result[bool, str] {
+    let r = query(c, "SELECT pg_notify($1, $2)",
+                  [arg_text(channel), arg_text(payload)], deadline);
+    guard let rows = r else let e = err_of(r) {
+        return err(e);
+    }
+    return ok(true);
+}
+
+// The oldest queued notification, or waits for one until the deadline:
+// none then. Unlike every other call, reaching the deadline here is not
+// an error and does not break the connection -- waiting is the point.
+pub fn wait_notification(c: Conn, deadline: until)
+                         -> result[opt[Notification], str] {
+    let nothing: opt[Notification] = none;
+    mutex_lock(c.lock);
+    let ur = check_usable(c, until_of(0));
+    guard let u = ur else let e = err_of(ur) {
+        mutex_unlock(c.lock);
+        return err(e);
+    }
+    while true {
+        if len(c.notes) > 0 {
+            let first = c.notes[0];
+            c.notes = c.notes[1..];
+            mutex_unlock(c.lock);
+            return ok(some(first));
+        }
+        let ne = next_msg(c, deadline);
+        if ne == "timeout" {
+            mutex_unlock(c.lock);
+            return ok(nothing);
+        }
+        if ne != "" {
+            break_conn(c, ne);
+            mutex_unlock(c.lock);
+            return err(ne);
+        }
+        let t = c.mtyp;
+        if t == 65 {
+            parse_notification(c);
+        } else if t == 83 {
+            let cur = cur_of(msg_body(c));
+            let k = get_cstr(cur);
+            let v = get_cstr(cur);
+            c.params[k] = v;
+        } else if t == 69 {
+            // unprompted, so fatal: the server is ending the session
+            let e = format_error(msg_body(c));
+            break_conn(c, e);
+            mutex_unlock(c.lock);
+            return err(e);
+        } else if t != 78 {
+            let e = "protocol error: unexpected message " + to_str(t) +
+                    " while idle";
+            break_conn(c, e);
+            mutex_unlock(c.lock);
+            return err(e);
+        }
+    }
+    mutex_unlock(c.lock);
+    return ok(nothing);
 }
 
 // ---- reading results -------------------------------------------------
@@ -1576,7 +2232,7 @@ pub fn release(p: Pool, c: Conn) {
     if c.in_pool {
         panic("pg.release: connection released twice");
     }
-    let reusable = usable(c) && c.status == 73;
+    let reusable = usable(c) && c.status == 73 && c.mode == 0;
     mutex_lock(p.lock);
     if p.closed || !reusable {
         p.open = p.open - 1;
