@@ -725,7 +725,11 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
             LiveSet *cur = live_expr(cg, s->as.assign.value, live_out);
             return live_expr(cg, tgt->as.field.base, cur);
         }
-        /* EX_INDEX: xs[i]=v, m[k]=v, b[i]=v */
+        /* EX_INDEX: xs[i]=v, m[k]=v, b[i]=v. What is live AFTER the
+         * store is recorded on the target: m[k]=v's sl_map_put is a
+         * safepoint (the map may grow), and its bracket must root every
+         * one of those locals, not just the key and value. */
+        tgt->live_set = ls_clone(live_out);
         LiveSet *cur = live_expr(cg, s->as.assign.value, live_out);
         cur = live_expr(cg, tgt->as.index.index, cur);
         return live_expr(cg, tgt->as.index.base, cur);

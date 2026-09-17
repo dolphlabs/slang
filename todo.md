@@ -2460,49 +2460,49 @@ prerequisite, not a different plan).
       zero stack grows. This exact fix was once built for it and reverted
       as dead code, which remains correct for that bug.
 
-- [ ] **RSS follows total allocation, not the live heap, for short-lived
-      garbage.** Ten lines reproduce it, with nothing live but a counter:
+- [x] **RSS followed total allocation, not the live heap.** Fixed on
+      `fix/gc-garbage-rss`. Two causes, both in the collector:
+      - Since 2026-09-06 (200dbd2) each task's allocations stayed on its
+        pending list until the next collection, and pending lists were
+        traced as ROOTS -- a rule written when a list held at most 32
+        objects. Everything allocated since the last collection was
+        therefore kept alive by it, so every short-lived object survived
+        one full extra cycle. Now the lists are spliced onto the heap
+        before marking, and swept like anything else.
+      - The threshold doubled (to 256MB) whenever under a quarter of
+        objects survived, which is every collection of a program that
+        mostly makes garbage. Now paced by the live heap (GOGC=100 style,
+        8MB floor).
 
-      ```slang
-      fn step(i: int) -> result[int, str] { return ok(i); }
-      let i = 0; let sum = 0;
-      while i < n { sum = sum + (step(i) ?? 0); i = i + 1; }
-      ```
+      Removing the pending-list roots exposed THREE compiler rooting bugs
+      it had been hiding, each a live object held only in a C local
+      across a safepoint: `ok()`/`err()`/`some()` allocating their wrapper
+      before evaluating the payload, `gc` boxes the same, and `m[k] = v`
+      rooting only the key and value (not the map, not other live locals).
+      Each has a regression test that fails without its fix under
+      `SLANG_GC_THRESHOLD_KB=16`, a new knob the suite now uses.
 
-      | n | macOS RSS | Linux RSS (Ubuntu 24.04, glibc) |
-      |---|---|---|
-      | 2M | 136MB | 118MB |
-      | 6M | 429MB | 330MB |
-      | 18M | 1212MB | 971MB |
+      Measured, alternated against `dev` (macOS): 18M short-lived results
+      1.1GB/5.3s -> 19MB/3.0s; streaming 3M Postgres rows 529MB -> 18MB;
+      a list of 2M live strings 1.44s -> 0.64s; a 1M-entry map 2.45s ->
+      1.35s; a buffered 1M-row query unchanged (1.9s, ~130MB). HTTP
+      (`bench/http`, ab, 10k requests, c=50) overlapped within noise
+      (dev 15.9-19.4k rps, branch 15.1-19.0k) -- that server allocates
+      from arenas, so it barely exercises the collector; a GC-heavy server
+      benchmark on Linux is still owed before any Phase E claim.
 
-      SLANG_GC_STAT shows collections running (9 at 18M, threshold at its
-      256MB cap, 12.6M objects swept) and SLANG_GC_CLASS_STAT shows the
-      size-class freelists empty, so swept objects go back through
-      `free()` -- yet RSS is ~85% of everything ever allocated, on both
-      platforms, so it is not macOS's allocator alone. Found streaming
-      3M rows through `pg` (555MB). Unexplained; first things to check are
-      whether swept memory is actually released before the next
-      threshold's worth is allocated (the retire/drain path), and whether
-      allocation happens on a different thread from the free.
-      Related: [the pacing lead below].
+- [ ] **`tests/http2_tls` exited 132 (SIGILL) once in 125 runs** during the
+      GC stress campaign on `fix/gc-garbage-rss` (16KB threshold, 1ms
+      preemption). Not reproduced in 120 further runs on the branch or 40
+      on `dev` under the same amplified preemption. Possibly the known
+      amplified-preemption crash (next-steps item 7); not attributed to
+      either side without a reproduction.
 
-- [ ] **Lead: GC pacing is quadratic for a heap that keeps growing with
-      few dead objects.** The collection threshold starts at 8MB and only
-      doubles when a cycle finds under a quarter of objects alive; it never
-      follows the live heap. A workload whose allocations mostly SURVIVE
-      therefore collects every 8MB and re-marks the whole growing heap each
-      time. Measured on the first `pg` driver, which kept one `bytes` object
-      per result cell (~2M live objects for 1M rows): 35.8s for 1M rows vs
-      2.5s for 200k (14x for 5x). Setting the threshold to
-      max(floor, live bytes after the cycle) -- Go's GOGC=100 -- cut that
-      to 15.1s. **Not shipped:** the driver was then changed to keep a
-      result in a few large chunks (2.1s for 1M rows), where the pacing
-      change measured no faster (2.1-2.3s either way, alternated) and ~20MB
-      more RSS; and two simple probes that should have shown it (a list of
-      2M live strings, with and without garbage alongside) showed no
-      difference either. Revisit with a reproducer that holds millions of
-      small live GC objects, e.g. a map of 2M entries or a list of 2M
-      `bytes`, before changing pacing.
+- [ ] **`bench/http`'s server does not exit on SIGTERM** once it has served
+      requests -- a benchmark script that `kill`s it and `wait`s hangs
+      (found with the `dev` build, so not new). Probably the graceful
+      shutdown waiting on the accept loop's task. Check against
+      `proc.shutdown_requested`'s intended contract.
 
 - [ ] **Intermittent: `tests/sigpipe` on GitHub's macOS runner.** Failed
       twice in about 255 runs, both inside the full suite; never alone
