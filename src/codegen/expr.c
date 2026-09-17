@@ -408,6 +408,18 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
     }
     if (!strcmp(name, "to_bytes")) {
         char *a = gen_expr(cg, e->as.call.args[0]);
+        /* A wire (arena memory, not GC-owned) is copied into bytes in one
+           allocation. Without this, stdlib/http copied its receive buffer
+           a byte at a time -- `out = out + one_byte` -- on EVERY recv, so
+           reading a request was quadratic in its size: a 50KB body took a
+           second, a 200KB one about fifteen. */
+        if (is_wire(infer_type(cg, e->as.call.args[0]))) {
+            int id = cg->tmp_id++;
+            char *inner = xasprintf("({ sl_wire _sl_tw%d = %s; "
+                                    "sl_bytes_new(_sl_tw%d.ptr, _sl_tw%d.len); })",
+                                    id, a, id, id);
+            return wrap_safepoint(cg, e, ctype_of(cg, "bytes"), NULL, inner);
+        }
         char *inner = xasprintf("sl_bytes_from_str(%s)", a);
         return wrap_safepoint(cg, e, ctype_of(cg, "bytes"), NULL, inner);
     }

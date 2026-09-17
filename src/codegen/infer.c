@@ -209,8 +209,8 @@ const char *infer_call(CG *cg, Expr *e) {
         if (n != 1)
             cg_error(e->line, "to_bytes() takes exactly one argument");
         const char *t = infer_type(cg, e->as.call.args[0]);
-        if (!is_str(t))
-            cg_error(e->line, "to_bytes() expects a str (got %s)", t);
+        if (!is_str(t) && !is_wire(t))
+            cg_error(e->line, "to_bytes() expects a str or a wire (got %s)", t);
         return "bytes";
     }
     if (!strcmp(name, "bytes_ptr")) {
