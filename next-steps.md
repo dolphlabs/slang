@@ -73,16 +73,29 @@ live in `todo.md`.
 
 ## 2. OpenSSL discovery fallback
 
-- [ ] When `pkg-config` is missing or cannot find OpenSSL, try `brew
-  --prefix openssl` and the standard install locations before giving up;
-  if nothing is found, say so in slang's own words.
+- [x] `find_openssl` (`src/main.c`) tries, first hit wins: `OPENSSL_DIR`,
+  `pkg-config`, the standard Homebrew prefixes (Apple Silicon, Intel, the
+  older `/usr/local/Homebrew` layout) and MacPorts, `brew --prefix`, then
+  the system headers. A prefix counts only if `include/openssl/ssl.h` is
+  really there.
 
   Found while verifying the v0.2.0 tarball: an https or `crypto` program
-  fails with `'openssl/err.h' file not found` whenever `pkg-config` is not
-  on PATH (`src/main.c`, the `tlsflags` block). On this machine Homebrew
-  lives at `/usr/local/Homebrew/bin`, not `/usr/local/bin`, so even a
-  sensible PATH misses it. It is the first error a new macOS user meets
-  with https, and the raw C compiler error does not point at the cause.
+  failed with `'openssl/sha.h' file not found` whenever `pkg-config` was not
+  on PATH or could not see a keg-only Homebrew OpenSSL.
+
+  **Not finding it is not an error.** A compiler can have include paths
+  slangc cannot see (CPATH, a sysroot, a wrapper), so refusing to compile
+  would block working setups. Instead, if compilation fails and OpenSSL was
+  not located, slangc adds a note worded as a condition ("if the error above
+  is about openssl/ headers…") rather than a diagnosis it cannot be sure of.
+
+  Verified on both sides of the change: with no `pkg-config` or `brew` on
+  PATH, and with `pkg-config` unable to see OpenSSL, the compiler from
+  `dev` failed with the missing-header error and the new one compiles. On
+  Linux, the system-headers route works with `pkg-config` blind, and with
+  OpenSSL removed entirely the note appears. CI now exercises the fallback
+  on every platform, and the macOS job no longer sets `PKG_CONFIG_PATH` by
+  hand, so its suite uses slangc's own discovery.
 
 ## 3. `slangc test`
 
