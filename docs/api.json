@@ -328,6 +328,17 @@
           "sig": "fs.read(int, int) -> result[bytes,str]"
         },
         {
+          "name": "pread",
+          "params": [
+            "int",
+            "int",
+            "int"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "fs.pread(int, int, int) -> result[bytes,str]"
+        },
+        {
           "name": "write",
           "params": [
             "int",
@@ -2619,7 +2630,7 @@
           "sig": "fn get_float(rows: Rows, r: int, c: int) -> float",
           "doc": "float4, float8, numeric, and the integer types. A numeric too precise for a double is rounded; read it with get_text to keep every digit.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2097
+          "line": 2105
         },
         {
           "name": "get_bool",
@@ -2627,7 +2638,7 @@
           "sig": "fn get_bool(rows: Rows, r: int, c: int) -> bool",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2116
+          "line": 2124
         },
         {
           "name": "get_bytes",
@@ -2635,7 +2646,7 @@
           "sig": "fn get_bytes(rows: Rows, r: int, c: int) -> bytes",
           "doc": "bytea, decoded from the server's hex output format.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2125
+          "line": 2133
         },
         {
           "name": "Pool",
@@ -2643,7 +2654,7 @@
           "sig": "gc struct Pool",
           "doc": "A bounded set of connections to one database, shared by any number of tasks.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2151
+          "line": 2159
         },
         {
           "name": "new_pool",
@@ -2651,7 +2662,7 @@
           "sig": "fn new_pool(url: str, max_open: int) -> result[Pool, str]",
           "doc": "Parses the url; connects nothing until the first acquire.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2169
+          "line": 2177
         },
         {
           "name": "acquire",
@@ -2659,7 +2670,7 @@
           "sig": "fn acquire(p: Pool, deadline: until) -> result[Conn, str]",
           "doc": "A connection for the caller's exclusive use, until release(). Prefer pool_query / pool_exec, which cannot forget to release; acquire is for a transaction, which needs several statements on one connection.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2186
+          "line": 2194
         },
         {
           "name": "release",
@@ -2667,7 +2678,7 @@
           "sig": "fn release(p: Pool, c: Conn)",
           "doc": "Returns a connection to the pool. One that is broken, closed, or still inside a transaction is closed instead: handing an open transaction to the next caller would run its statements inside someone else's uncommitted work.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2241
+          "line": 2249
         },
         {
           "name": "pool_query",
@@ -2675,7 +2686,7 @@
           "sig": "fn pool_query(p: Pool, sql: str, args: [Arg], deadline: until)",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2258
+          "line": 2266
         },
         {
           "name": "pool_exec",
@@ -2683,7 +2694,7 @@
           "sig": "fn pool_exec(p: Pool, sql: str, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2269
+          "line": 2277
         },
         {
           "name": "pool_close",
@@ -2691,7 +2702,7 @@
           "sig": "fn pool_close(p: Pool)",
           "doc": "Closes every idle connection. Connections in use are closed as they are released; acquire fails from now on.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2281
+          "line": 2289
         }
       ]
     },
