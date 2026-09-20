@@ -166,6 +166,7 @@ PACKAGE_SECTIONS = {
     "proc": ["`proc`"],
     "fs": ["`fs`"],
     "os": ["`os`"],
+    "io": ["`io`"],
     "log": ["`log`"],
     "crypto": ["`crypto`"],
     "sql": ["`sql`"],

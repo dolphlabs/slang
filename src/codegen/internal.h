@@ -390,6 +390,9 @@ extern const NatSig STRINGS_SIGS[]; /* src/codegen/pkg_os/ */
 extern const int OS_SIGS_LEN;
 extern const int STRINGS_SIGS_LEN;
 
+extern const NatSig IO_SIGS[]; /* src/codegen/pkg_io/ */
+extern const int IO_SIGS_LEN;
+
 extern const NatSig REGEX_SIGS[]; /* src/codegen/pkg_regex/ */
 extern const int REGEX_SIGS_LEN;
 

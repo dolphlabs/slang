@@ -13,6 +13,7 @@
 #include "codegen/pkg_sql/pkg_sql.h"
 #include "codegen/pkg_regex/pkg_regex.h"
 #include "codegen/pkg_os/pkg_os.h"
+#include "codegen/pkg_io/pkg_io.h"
 #include "codegen/pkg_strings/pkg_strings.h"
 #include "codegen/pkg_encoding/pkg_encoding.h"
 #include "codegen/pkg_compress/pkg_compress.h"
@@ -208,7 +209,7 @@ static const char *NATIVE_PKGS[] = {PKG_TIME_NAME, PKG_NET_NAME,
                                     PKG_JSON_NAME, PKG_PROC_NAME,
                                     PKG_FS_NAME,   PKG_LOG_NAME,
                                     PKG_CRYPTO_NAME, PKG_SQL_NAME,
-                                    PKG_REGEX_NAME, PKG_OS_NAME,
+                                    PKG_REGEX_NAME, PKG_OS_NAME, PKG_IO_NAME,
                                     PKG_STRINGS_NAME,
                                     PKG_ENCODING_NAME,
                                     PKG_COMPRESS_NAME, NULL};

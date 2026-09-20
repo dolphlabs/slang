@@ -1,0 +1,9 @@
+line 1: [hello] len 5
+line 2: [] len 0
+line 3: [crlf line] len 9
+line 4: [  spaces kept  ] len 15
+line 5: 20000 bytes
+line 6: [unicode: héllo ✓] len 19
+line 7: [last line, no trailing newline] len 30
+lines: 7
+io ok

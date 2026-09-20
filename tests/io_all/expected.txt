@@ -1,0 +1,5 @@
+first: first line
+rest: 31 bytes
+second line
+third, unterminated
+after: 0
