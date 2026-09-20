@@ -558,8 +558,15 @@ void emit_opt_res_tracers(CG *cg) {
  * nonblock; proc: opt[str] for getenv, result[str,str] for cwd); register them whenever the
  * owning package is imported so their typedefs always exist
  * alongside the runtime code that references them. */
+/* The reactor (park a task until an fd is ready) lives in sl_net.c, so
+ * anything that waits on an fd needs that runtime spliced in and started:
+ * net, `link`, and `io` (which waits for stdin the same way). */
+static int needs_reactor(CG *cg) {
+    return want_pkg(cg, "net") || want_pkg(cg, "io") || cg->want_link;
+}
+
 void force_native_result_types(CG *cg) {
-    if (want_pkg(cg, "net") || cg->want_link) {
+    if (needs_reactor(cg)) {
         res_cname(cg, "i32", "str");
         res_cname(cg, "bytes", "str");
         res_cname(cg, "bool", "str");
@@ -610,6 +617,11 @@ void force_native_result_types(CG *cg) {
         /* every entry point is result[bytes, str] */
         res_cname(cg, "bytes", "str");
     }
+    if (want_pkg(cg, "io")) {
+        opt_cname(cg, "str");
+        res_cname(cg, "opt[str]", "str");
+        res_cname(cg, "bytes", "str");
+    }
     if (want_pkg(cg, "os")) {
         res_cname(cg, "bool", "str");
         res_cname(cg, "int", "str");
@@ -623,7 +635,7 @@ void force_native_result_types(CG *cg) {
  * emit_opt_res_types so the fixed result/opt instantiations exist. */
 void emit_native_runtime(CG *cg) {
     int want_time = want_pkg(cg, "time");
-    int want_net = want_pkg(cg, "net") || cg->want_link;
+    int want_net = needs_reactor(cg);
     int want_proc = want_pkg(cg, "proc");
     int want_fs = want_pkg(cg, "fs");
     int want_log = want_pkg(cg, "log");
@@ -631,12 +643,13 @@ void emit_native_runtime(CG *cg) {
     int want_sql = want_pkg(cg, "sql");
     int want_regex = want_pkg(cg, "regex");
     int want_os = want_pkg(cg, "os");
+    int want_io = want_pkg(cg, "io");
     int want_strings = want_pkg(cg, "strings");
     int want_encoding = want_pkg(cg, "encoding");
     int want_compress = want_pkg(cg, "compress");
     if (!want_time && !want_net && !want_proc && !want_fs && !want_log &&
         !want_crypto && !want_sql && !want_regex && !want_os &&
-        !want_strings && !want_encoding && !want_compress)
+        !want_io && !want_strings && !want_encoding && !want_compress)
         return;
     if (want_time)
         emit_runtime_file(cg, "sl_time.c");
@@ -658,6 +671,8 @@ void emit_native_runtime(CG *cg) {
         emit_runtime_file(cg, "sl_regex.c");
     if (want_os)
         emit_runtime_file(cg, "sl_os.c");
+    if (want_io)
+        emit_runtime_file(cg, "sl_io.c"); /* after sl_net.c: uses its reactor */
     if (want_strings)
         emit_runtime_file(cg, "sl_strings.c");
     if (want_encoding)
@@ -1031,7 +1046,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
      * sl_proc_install_signal_handlers() below, so sl_rt_shutdown_hook
      * (runtime_core.c) is guaranteed set before the signal thread could
      * ever consume a signal and try to call through it. */
-    if (want_pkg(cg, "net") || cg->want_link)
+    if (needs_reactor(cg))
         emit_line(cg, "    sl_reactor_start();");
     if (want_pkg(cg, "proc"))
         emit_line(cg, "    sl_proc_install_signal_handlers();");

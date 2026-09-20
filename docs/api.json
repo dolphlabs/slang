@@ -1794,6 +1794,60 @@
         }
       ]
     },
+    "io": {
+      "name": "io",
+      "kind": "native",
+      "items": [
+        {
+          "name": "read_line",
+          "params": [],
+          "ret": "result[opt[str],str]",
+          "tls": false,
+          "sig": "io.read_line() -> result[opt[str],str]"
+        },
+        {
+          "name": "read_all",
+          "params": [],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "io.read_all() -> result[bytes,str]"
+        },
+        {
+          "name": "eprint",
+          "params": [
+            "str"
+          ],
+          "ret": null,
+          "tls": false,
+          "sig": "io.eprint(str)"
+        },
+        {
+          "name": "eprintln",
+          "params": [
+            "str"
+          ],
+          "ret": null,
+          "tls": false,
+          "sig": "io.eprintln(str)"
+        },
+        {
+          "name": "flush",
+          "params": [],
+          "ret": null,
+          "tls": false,
+          "sig": "io.flush()"
+        },
+        {
+          "name": "is_tty",
+          "params": [
+            "int"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "io.is_tty(int) -> bool"
+        }
+      ]
+    },
     "json": {
       "name": "json",
       "kind": "native",
