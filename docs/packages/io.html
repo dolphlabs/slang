@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>io — slang</title>
+<meta name="description" content="Package io.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="io">
+<meta property="og:description" content="Package io.">
+<meta property="og:type" content="website">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/io.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <button id="navtoggle" class="navtoggle" type="button"
+          aria-label="Toggle navigation" aria-expanded="false"
+          aria-controls="mainnav">
+    <span></span><span></span><span></span>
+  </button>
+  <nav class="mainnav" id="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../testing/index.html">Testing</a><a href="../bench/index.html">Benchmarks</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="navscrim" class="navscrim" hidden></div>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>io</h1>
+      <p class="tagline">Package io.</p>
+      <p class="agentline">
+        <a href="../packages/io.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>The process&#x27;s standard streams: what a command-line program needs that <code>print</code>/<code>println</code> and <code>proc.args()</code> don&#x27;t already give it. Pure libc, so importing <code>io</code> adds no link flag.</p>
+<div class="tablewrap"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><code>io.read_line()</code></td><td><code>result[opt[str], str]</code> — one line of stdin, without its newline</td></tr><tr><td><code>io.read_all()</code></td><td><code>result[bytes, str]</code> — everything until the end of input</td></tr><tr><td><code>io.eprint(s)</code> / <code>io.eprintln(s)</code></td><td><code>s</code> (a <code>str</code> or a <code>fault</code>) to stderr, nothing added</td></tr><tr><td><code>io.flush()</code></td><td>flush stdout</td></tr><tr><td><code>io.is_tty(fd)</code></td><td><code>bool</code> — whether <code>fd</code> (0, 1, 2) is a terminal</td></tr></tbody></table></div>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;io&quot;</span>;
+<span class="k">import</span> <span class="s">&quot;log&quot;</span>;
+
+<span class="b">print</span>(<span class="s">&quot;name? &quot;</span>);                         <span class="c">// no io.flush() needed: reading flushes it</span>
+<span class="k">let</span> r = io.<span class="f">read_line</span>();
+<span class="k">guard</span> <span class="k">let</span> maybe = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
+    io.<span class="f">eprintln</span>(<span class="s">&quot;cannot read input: &quot;</span> + e);
+    <span class="b">exit</span>(<span class="n">1</span>);
+}
+<span class="k">guard</span> <span class="k">let</span> name = maybe <span class="k">else</span> {            <span class="c">// none: the input ended (Ctrl-D, end of pipe)</span>
+    <span class="b">exit</span>(<span class="n">0</span>);
+}
+<span class="b">println</span>(<span class="s">&quot;hello, &quot;</span> + name);</code></pre></div>
+<p>A loop over every line is the same two guards inside <code>while true</code>:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> total = <span class="n">0</span>;
+<span class="k">while</span> <span class="k">true</span> {
+    <span class="k">let</span> r = io.<span class="f">read_line</span>();
+    <span class="k">guard</span> <span class="k">let</span> maybe = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { io.<span class="f">eprintln</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
+    <span class="k">guard</span> <span class="k">let</span> line = maybe <span class="k">else</span> { <span class="k">break</span>; }         <span class="c">// end of input</span>
+    total = total + <span class="b">len</span>(line);
+}</code></pre></div>
+<p><strong><code>opt</code> inside <code>result</code>, on purpose.</strong> The end of input is not a failure — it is what a filter is <em>waiting for</em> — so it is <code>none</code>, the way a drained channel is; a failed read is an <code>err</code>. That is the README&#x27;s own rule (absent data is <code>opt</code>, a bad world is <code>result</code>), at the cost of two guards.</p>
+<p><strong>Lines.</strong> <code>&quot;\n&quot;</code> or <code>&quot;\r\n&quot;</code> ends one and is not returned; an empty line is <code>some(&quot;&quot;)</code>, which is not <code>none</code>. A final line with no terminator is still a line. Ctrl-D on a terminal ends <em>one</em> read — the next <code>read_line</code> reads again, as in a shell — while on a pipe or file every later call is <code>none</code> too.</p>
+<p><strong>Waiting parks the task, not the thread.</strong> On a terminal, a pipe or a socket, <code>read_line</code> and <code>read_all</code> wait on the same reactor as <code>net.recv</code>, so other tasks keep running while a person thinks. (Reading fd 0 with <code>fs.read</code> blocks a whole worker thread; with one worker that stalls the entire program.) A regular file or <code>/dev/null</code> never blocks and is read directly. Before it waits, <code>io</code> flushes stdout, so a prompt written with <code>print</code> is on screen before the user types.</p>
+<p><strong>Ctrl-C.</strong> With <code>proc</code> imported the shutdown signal is not fatal: a waiting <code>read_line</code> returns <code>err(&quot;interrupted&quot;)</code> and the program can clean up (without <code>proc</code>, Ctrl-C ends the process as usual).</p>
+<p><strong>Limits.</strong> Input is buffered in memory, so one line — or <code>read_all</code>&#x27;s whole input — is capped at 256 MiB; past that the call returns an <code>err</code> rather than allocating without bound. stdin is one shared stream: two tasks reading it at once are memory-safe but see interleaved chunks, so give it to one task.</p>
+<p><code>eprint</code>/<code>eprintln</code> write straight to stderr with no timestamp or level — for the messages a command prints to a person; <code>log</code> is for a service&#x27;s diagnostics.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="read-line"><div class="api-sig"><code>io.<span class="f">read_line</span>() -&gt; <span class="t">result</span>[<span class="t">opt</span>[<span class="t">str</span>],<span class="t">str</span>]</code><a class="anchor" href="#read-line">#</a></div></div><div class="api-item" id="read-all"><div class="api-sig"><code>io.<span class="f">read_all</span>() -&gt; <span class="t">result</span>[<span class="t">bytes</span>,<span class="t">str</span>]</code><a class="anchor" href="#read-all">#</a></div></div><div class="api-item" id="eprint"><div class="api-sig"><code>io.<span class="f">eprint</span>(<span class="t">str</span>)</code><a class="anchor" href="#eprint">#</a></div></div><div class="api-item" id="eprintln"><div class="api-sig"><code>io.<span class="f">eprintln</span>(<span class="t">str</span>)</code><a class="anchor" href="#eprintln">#</a></div></div><div class="api-item" id="flush"><div class="api-sig"><code>io.<span class="f">flush</span>()</code><a class="anchor" href="#flush">#</a></div></div><div class="api-item" id="is-tty"><div class="api-sig"><code>io.<span class="f">is_tty</span>(<span class="t">int</span>) -&gt; <span class="t">bool</span></code><a class="anchor" href="#is-tty">#</a></div></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

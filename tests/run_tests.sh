@@ -6,6 +6,10 @@
 #
 # Negative tests: tests/fail_<name>/main.sl must fail (nonzero exit)
 # at compile time or runtime.
+#
+# stdin: a test that reads it (the io package) supplies tests/<name>/stdin.txt;
+# every other test gets /dev/null. Inheriting the runner's stdin would make a
+# test that reads it hang on a terminal, or read the CI job's own input.
 
 set -u
 cd "$(dirname "$0")/.." || exit 1
@@ -39,7 +43,9 @@ for t in tests/*/main.sl; do
         . "tests/$name/prepare.sh"
     fi
 
-    ./slangc "$t" --run >"$out" 2>"$err"
+    stdin_file=/dev/null
+    [ -f "tests/$name/stdin.txt" ] && stdin_file="tests/$name/stdin.txt"
+    ./slangc "$t" --run >"$out" 2>"$err" <"$stdin_file"
     code=$?
     if [ "$code" -eq 0 ]; then
         if [ ! -f "tests/$name/expected.txt" ]; then
@@ -86,13 +92,23 @@ done
 # negative tests: compilation or execution must fail
 for t in tests/fail_*/main.sl; do
     name=$(basename "$(dirname "$t")")
-    if ./slangc "$t" --run >/dev/null 2>&1; then
+    if ./slangc "$t" --run >/dev/null 2>&1 </dev/null; then
         echo "FAIL $name (expected failure, but it succeeded)"
         fail=1
     else
         echo "PASS $name"
     fi
 done
+
+# ---- io: what a pipe cannot show ------------------------------------
+# A prompt appearing before the person types, Ctrl-D / Ctrl-C on a terminal,
+# and other tasks running while main waits for input all need a real tty.
+echo "--- io (terminal and scheduling) ---"
+if command -v python3 >/dev/null 2>&1; then
+    python3 tests/io_tty/check.py ./slangc || fail=1
+else
+    echo "SKIP io terminal tests (python3 not found)"
+fi
 
 # ---- slangc new ------------------------------------------------------
 # Scaffolding is part of the compiler, so it is part of the suite. The

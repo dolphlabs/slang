@@ -6,6 +6,9 @@ POSIX file I/O on integer fds. `open` is read-only; `create` is
 write/trunc. `read`/`write`/`close` use the fd. `mkdir` creates one
 directory. Every call returns `result[_, str]`. These calls block the
 worker — use them for config and small files, not the accept loop.
+To read standard input use [`io`](#io) instead: `fs.read(0, n)` works, but
+waits by blocking a whole worker thread, and a program waiting on a person
+at a keyboard would stall every other task with it.
 
 ```slang
 import "fs";
