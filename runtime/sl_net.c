@@ -412,13 +412,20 @@ static void *sl_dns_thread(void *arg) {
         j->next = NULL;
         pthread_mutex_unlock(&sl_dns_mu);
         j->rc = getaddrinfo(j->host, j->portstr, &j->hints, &j->res);
+        /* Read before the exchange: once it succeeds the caller owns the
+           job and frees it the moment the wake byte lands, so nothing
+           after the handoff may touch `j`. Re-reading j->wake_wr for the
+           close() used to hit a freed -- or already re-calloc'd, wake_wr
+           still 0 -- job, and closed fd 0, then whichever socket had
+           been given fd 0 since. */
+        int wake_wr = j->wake_wr;
         int expect = 0;
         if (atomic_compare_exchange_strong_explicit(
                 &j->state, &expect, 1, memory_order_acq_rel,
                 memory_order_acquire)) {
             char x = 1;
-            (void)write(j->wake_wr, &x, 1);
-            close(j->wake_wr);
+            (void)write(wake_wr, &x, 1);
+            close(wake_wr);
         } else {
             /* the caller gave up; nobody else will ever look at this */
             if (j->rc == 0 && j->res)

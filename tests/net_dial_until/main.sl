@@ -37,6 +37,16 @@ fn accept_all(lfd: i32) {
     }
 }
 
+// Is fd 0 open? getsockname on it fails with ENOTSOCK when it is (whatever
+// stdin is) and EBADF when it is not; unlike a read it never blocks.
+fn fd0_open() -> bool {
+    let r = net.port(0);
+    guard let p = r else let e = err_of(r) {
+        return !strings.contains(e, "Bad file descriptor");
+    }
+    return true;
+}
+
 // ---- dial_until ------------------------------------------------------
 
 fn dial() {
@@ -216,6 +226,14 @@ fn tls_deadline() {
 }
 
 dial();
+let had_stdin = fd0_open();
 dial_racing();
+// The resolver thread hands each lookup back to its caller and must never
+// touch it afterwards: a late read of a freed job once turned into
+// close(0), which took stdin and then, once socket() reused fd 0, a live
+// connection with it.
+if had_stdin && !fd0_open() {
+    die("fd 0 was closed under the program");
+}
 unix_sockets();
 tls_deadline();
