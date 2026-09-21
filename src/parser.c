@@ -116,8 +116,10 @@ static void call_push_arg(Expr *call, Expr *arg) {
 static Expr *parse_expression(Parser *p);
 static Type *parse_type(Parser *p);
 static const char *parse_type_name(Parser *p);
+static char *parse_type_args(Parser *p);
 static FuncDecl *parse_fn_decl(Parser *p, int is_extern);
 static int parse_lt_params(Parser *p, char ***out);
+static int parse_type_params(Parser *p, char ***out);
 
 static int next_is(Parser *p, TokenType t) {
     if (p->pos + 1 >= p->count)
@@ -243,6 +245,42 @@ static Token *expect_member(Parser *p, const char *what) {
     return expect(p, T_IDENT, what);
 }
 
+/* At a '[' after a name: is this `[type arguments] { field:` rather than
+ * an index? Scans to the matching ']' (types nest brackets and parens) and
+ * then applies the same 'ident {' + 'ident :' test a plain struct literal
+ * uses, which a block after an index expression never satisfies. */
+static int generic_literal_ahead(Parser *p) {
+    int depth = 0;
+    for (int i = p->pos; i < p->count; i++) {
+        switch (p->toks[i].type) {
+        case T_LBRACKET:
+        case T_LPAREN:
+            depth++;
+            break;
+        case T_RPAREN:
+            depth--;
+            break;
+        case T_RBRACKET:
+            if (--depth == 0) {
+                if (i + 3 >= p->count)
+                    return 0;
+                return p->toks[i + 1].type == T_LBRACE &&
+                       p->toks[i + 2].type == T_IDENT &&
+                       p->toks[i + 3].type == T_COLON;
+            }
+            break;
+        case T_SEMI:
+        case T_LBRACE:
+        case T_RBRACE:
+        case T_EOF:
+            return 0;
+        default:
+            break;
+        }
+    }
+    return 0;
+}
+
 static Expr *parse_primary(Parser *p) {
     Token *tk = peek(p);
     switch (tk->type) {
@@ -332,6 +370,11 @@ static Expr *parse_primary(Parser *p) {
             sb_append(&sb, member->text);
             name = sb.data;
         }
+        /* `Box[int] { ... }`. `Box[int]` is otherwise an index expression,
+         * so the type arguments are only taken when the matching ']' is
+         * followed by the struct-literal opening below. */
+        if (check(p, T_LBRACKET) && generic_literal_ahead(p))
+            name = xasprintf("%s%s", name, parse_type_args(p));
         /* struct literal: Name { field: value, ... } — recognized by the
          * 'ident {' + 'ident :' lookahead so it can't collide with
          * blocks following conditions like 'while running {'. */
@@ -893,8 +936,14 @@ static Type *parse_type_atom(Parser *p) {
         if (check(p, T_DOT)) {
             advance(p);
             Token *member = expect(p, T_IDENT, "a type name after '.'");
-            return ty_named(xasprintf("%s%s%s", name, p_dot_str, member->text));
+            name = xasprintf("%s%s%s", name, p_dot_str, member->text);
         }
+        /* A generic struct's arguments: Box[int], geom.Pair[str,int].
+         * The result stays a plain named type -- its text is what every
+         * later stage keys on -- so nothing downstream needs a new Type
+         * kind. */
+        if (check(p, T_LBRACKET))
+            name = xasprintf("%s%s", name, parse_type_args(p));
         return ty_named(name);
     }
     case T_LBRACKET: {
@@ -937,6 +986,30 @@ static Type *parse_type(Parser *p) {
         return ty_wrap(TY_RAW, parse_type(p));
     }
     return parse_type_atom(p);
+}
+
+/* `[A, B]` after a generic struct's name, as the text "[A,B]". The
+ * arguments are types, so `Box[Box[int]]` and `Pair[str,[int]]` nest. */
+static char *parse_type_args(Parser *p) {
+    Token *open = expect(p, T_LBRACKET, "'['");
+    StrBuf sb;
+    sb_init(&sb);
+    sb_append(&sb, "[");
+    int n = 0;
+    for (;;) {
+        if (n == MAX_TYPE_PARAMS)
+            parse_error(open, "a generic type takes at most %d type "
+                              "arguments", MAX_TYPE_PARAMS);
+        if (n)
+            sb_append(&sb, ",");
+        sb_append(&sb, type_string(parse_type(p)));
+        n++;
+        if (!match(p, T_COMMA))
+            break;
+    }
+    expect(p, T_RBRACKET, "']' to close the type arguments");
+    sb_append(&sb, "]");
+    return sb.data;
 }
 
 static const char *parse_type_name(Parser *p) {
@@ -1235,8 +1308,13 @@ static Stmt *parse_for_stmt(Parser *p) {
 static Stmt *parse_struct_decl(Parser *p, int is_pub, int is_gc) {
     Token *kw = advance(p); /* 'struct' */
     Token *name = expect(p, T_IDENT, "a struct name");
+    char **tparams = NULL;
+    int ntparams = parse_type_params(p, &tparams);
     char **lts = NULL;
     int nlts = parse_lt_params(p, &lts);
+    if (ntparams && nlts)
+        parse_error(kw, "a generic struct cannot declare lifetime "
+                        "parameters yet");
     expect(p, T_LBRACE, "'{'");
 
     char **fields = NULL;
@@ -1267,6 +1345,8 @@ static Stmt *parse_struct_decl(Parser *p, int is_pub, int is_gc) {
     s->as.struct_decl.nfields = n;
     s->as.struct_decl.lts = lts;
     s->as.struct_decl.nlts = nlts;
+    s->as.struct_decl.tparams = tparams;
+    s->as.struct_decl.ntparams = ntparams;
     return s;
 }
 
@@ -1326,6 +1406,9 @@ static Stmt *parse_enum_decl(Parser *p, int is_pub) {
 static Stmt *parse_impl_decl(Parser *p) {
     Token *kw = advance(p); /* 'impl' */
     Token *name = expect(p, T_IDENT, "a struct name");
+    if (check(p, T_LBRACKET))
+        parse_error(peek(p), "methods on a generic struct are not "
+                             "supported yet");
     expect(p, T_LBRACE, "'{'");
 
     FuncDecl **funcs = NULL;
@@ -1674,6 +1757,32 @@ static Stmt *parse_statement(Parser *p) {
 
 /* ---- declarations ---- */
 
+/* `[T, U]` after a declaration's name: its type parameters. */
+static int parse_type_params(Parser *p, char ***out) {
+    char **names = NULL;
+    int n = 0;
+    Token *open = peek(p);
+    if (!match(p, T_LBRACKET))
+        return 0;
+    for (;;) {
+        Token *t = expect(p, T_IDENT, "a type parameter name");
+        if (n == MAX_TYPE_PARAMS)
+            parse_error(open, "a generic type takes at most %d type "
+                              "parameters", MAX_TYPE_PARAMS);
+        for (int i = 0; i < n; i++) {
+            if (!strcmp(names[i], t->text))
+                parse_error(t, "duplicate type parameter '%s'", t->text);
+        }
+        names = (char **)xrealloc(names, (size_t)(n + 1) * sizeof(char *));
+        names[n++] = t->text;
+        if (!match(p, T_COMMA))
+            break;
+    }
+    expect(p, T_RBRACKET, "']' to close the type parameters");
+    *out = names;
+    return n;
+}
+
 static int parse_lt_params(Parser *p, char ***out) {
     char **lts = NULL;
     int n = 0;
@@ -1699,6 +1808,8 @@ static int parse_lt_params(Parser *p, char ***out) {
 static FuncDecl *parse_fn_decl(Parser *p, int is_extern) {
     Token *kw = advance(p); /* 'fn' */
     Token *name = expect(p, T_IDENT, "a function name");
+    if (check(p, T_LBRACKET))
+        parse_error(peek(p), "generic functions are not supported yet");
     char **lts = NULL;
     int nlts = parse_lt_params(p, &lts);
     expect(p, T_LPAREN, "'('");

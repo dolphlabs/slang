@@ -13,12 +13,18 @@
 
 void cg_error(int line, const char *fmt, ...) {
     va_list ap;
+    const char *inst;
+    int req_line;
     fputs("slang: error at line ", stderr);
     fprintf(stderr, "%d", line);
     fputs(": ", stderr);
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
     va_end(ap);
+    generic_error_note(&inst, &req_line);
+    if (inst)
+        fprintf(stderr, " (in %.72s%s, requested at line %d)", inst,
+                strlen(inst) > 72 ? "..." : "", req_line);
     fputc(10, stderr);
     exit(1);
 }
@@ -410,9 +416,17 @@ void check_extern_type(const char *t, int line, const char *what) {
 }
 
 /* "map[K]V" -> K and V (heap-allocated). Caller must pass a map type.
- * Keys are scalars (no nested ']'), values may be any type. */
+ * Values may be any type. */
 void map_kv(const char *t, char **k, char **v) {
-    const char *close = strchr(t + 4, ']');
+    /* the ']' that closes THIS map's key: a key written as a generic
+     * instance (rejected later, as not a valid key) has brackets of its own */
+    const char *close = t + 4;
+    for (int depth = 0; *close; close++) {
+        if (*close == '[')
+            depth++;
+        else if (*close == ']' && depth-- == 0)
+            break;
+    }
     size_t kl = (size_t)(close - (t + 4));
     char *kt = (char *)xmalloc(kl + 1);
     memcpy(kt, t + 4, kl);
@@ -741,7 +755,17 @@ char *join_elem(const char *t) {
 
 /* "result[T,E]" -> T and E (heap-allocated). */
 void result_te(const char *t, char **tv, char **ev) {
-    const char *comma = strchr(t + 7, ',');
+    /* the comma between the two types, not one inside a generic
+     * instance's own arguments: result[Pair[int,str],str] */
+    const char *comma = t + 7;
+    for (int depth = 0; *comma; comma++) {
+        if (*comma == '[' || *comma == '(')
+            depth++;
+        else if (*comma == ']' || *comma == ')')
+            depth--;
+        else if (*comma == ',' && depth == 0)
+            break;
+    }
     size_t tl = (size_t)(comma - (t + 7));
     char *a = (char *)xmalloc(tl + 1);
     memcpy(a, t + 7, tl);
@@ -1624,9 +1648,29 @@ StructDef *struct_find_in_pkg(CG *cg, const char *pkg,
     return NULL;
 }
 
+/* 64-bit FNV-1a. Only ever names a generic instance's C symbol. */
+static unsigned long long fnv64(const char *s) {
+    unsigned long long h = 1469598103934665603ULL;
+    for (; *s; s++) {
+        h ^= (unsigned char)*s;
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
 char *mangle_struct(const char *canon) {
     char *l, *r;
     split_dotted(canon, &l, &r);
+    /* A generic instance's canonical name carries its arguments, which C
+     * cannot spell: `main.Box[main.Point]`. Keep the readable part and add
+     * a hash of the whole, so two instances never collide and a
+     * non-generic struct's name is exactly what it always was. */
+    char *br = strchr(r, '[');
+    if (br) {
+        *br = '\0';
+        return xasprintf("sl_st_%s_%s__g%016llx", sanitize_pkg(l),
+                         sanitize_ident(r), fnv64(canon));
+    }
     return xasprintf("sl_st_%s_%s", sanitize_pkg(l), sanitize_ident(r));
 }
 
@@ -1681,6 +1725,11 @@ const char *ctype_of(CG *cg, const char *t) {
  * pass through; struct names gain their package qualifier ("Point" ->
  * "main.Point"); containers canonicalize recursively. */
 const char *canon_type(CG *cg, const char *t, int line) {
+    const char *bound;
+    /* a type parameter of the generic instance being built: its argument
+     * is already canonical, so it is the answer as it stands */
+    if (cg->tenv && tenv_lookup(cg, t, &bound))
+        return bound;
     char *winner;
     TypeWrap w = type_wrap(t, &winner);
     if (w != TW_NONE) {
@@ -1772,13 +1821,20 @@ const char *canon_type(CG *cg, const char *t, int line) {
     }
     if (map_type(t))
         return t;
+    {
+        const char *g = generic_canon(cg, t, line);
+        if (g)
+            return g;
+    }
     if (!strchr(t, '.')) {
         StructDef *sd = struct_find_in_pkg(cg, cg->cur_pkg, t);
         if (sd)
             return sd->canonical;
         EnumDef *ed = enum_find_in_pkg(cg, cg->cur_pkg, t);
-        if (!ed)
+        if (!ed) {
+            generic_needs_args(cg, cg->cur_pkg, t, line);
             cg_error(line, "unknown type '%s'", t);
+        }
         return ed->canonical;
     }
     char *l, *r;
@@ -1794,8 +1850,10 @@ const char *canon_type(CG *cg, const char *t, int line) {
         return sd->canonical;
     }
     EnumDef *ed = enum_find_in_pkg(cg, pkg, r);
-    if (!ed)
+    if (!ed) {
+        generic_needs_args(cg, pkg, r, line);
         cg_error(line, "package '%s' has no type '%s'", pkg, r);
+    }
     if (!ed->is_pub)
         cg_error(line,
                  "type '%s' is not exported from package '%s' (add 'pub' "

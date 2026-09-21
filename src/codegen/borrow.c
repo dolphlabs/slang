@@ -928,8 +928,8 @@ static void walk_expr(BK *bk, Expr *e, const char *ret_to) {
         }
         return;
     case EX_STRUCTLIT: {
-        StructDef *sd = struct_find_canon(
-            bk->cg, canon_type(bk->cg, e->as.structlit.tyname, e->line));
+        StructDef *sd =
+            struct_find_canon(bk->cg, structlit_type(bk->cg, e));
         for (i = 0; i < e->as.structlit.nfields; i++) {
             const char *bind = NULL;
             if (ret_to && sd) {

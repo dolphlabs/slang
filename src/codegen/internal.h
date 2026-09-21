@@ -38,7 +38,44 @@ typedef struct {
     char **lts;
     int nlts;
     int line;
+    int inst;            /* an instance of a generic struct: its fields were
+                            canonicalized when it was made, not in pass 2 */
 } StructDef;
+
+/* A generic struct declaration: `struct Box[T] { v: T }`. Not a type by
+ * itself, so it lives in its own table and every pass that walks `structs`
+ * sees only real, fully-typed structs. Its field types stay as written
+ * (mentioning the parameters); each instance canonicalizes them afresh with
+ * the parameters bound. */
+typedef struct {
+    char *pkg;
+    char *name;
+    int is_pub;
+    int is_gc;
+    char **tparams;
+    int ntparams;
+    char **fields;
+    char **ftypes;       /* as written; never canonicalized */
+    int nfields;
+    int line;
+} StructTmpl;
+
+typedef struct {
+    StructTmpl **items;
+    int count;
+    int cap;
+} TmplTable;
+
+/* The type parameters bound while an instance's own declaration is being
+ * canonicalized. canon_type answers a bare parameter name with the bound
+ * CANONICAL type and returns it as-is: re-resolving text would fail, since a
+ * canonical name such as `main.App` does not resolve from inside another
+ * package. */
+typedef struct {
+    const char *names[MAX_TYPE_PARAMS];
+    const char *types[MAX_TYPE_PARAMS];
+    int n;
+} TypeEnv;
 
 /* Entries are individually allocated and the table holds POINTERS to them.
  * A StructDef * or FuncSig * handed out by struct_find_* / sig_find_* /
@@ -271,6 +308,9 @@ struct CG {
     GlobTable globs;
     ImportTable imports;
     StructTable structs;
+    TmplTable tmpls;
+    TypeEnv *tenv;      /* parameters in scope, or NULL */
+    int inst_depth;     /* generic instances currently being built */
     EnumTable enums;
     OptTable opts;
     ResTable res;
@@ -535,6 +575,15 @@ StructDef *struct_find_canon(CG *cg, const char *canon);
 StructDef *struct_find_in_pkg(CG *cg, const char *pkg,
                                      const char *name);
 char *mangle_struct(const char *canon);
+
+/* generics.c */
+void tmpl_register(CG *cg, const char *pkg, Stmt *decl);
+StructTmpl *tmpl_find_in_pkg(CG *cg, const char *pkg, const char *name);
+const char *generic_canon(CG *cg, const char *t, int line);
+void generic_needs_args(CG *cg, const char *pkg, const char *name, int line);
+int tenv_lookup(CG *cg, const char *name, const char **type);
+const char *structlit_type(CG *cg, Expr *e);
+void generic_error_note(const char **canon, int *line);
 EnumDef *enum_find_canon(CG *cg, const char *canon);
 EnumDef *enum_find_in_pkg(CG *cg, const char *pkg, const char *name);
 int is_enum(CG *cg, const char *t);
