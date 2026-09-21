@@ -860,6 +860,51 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
         emit_line(cg, "");
 }
 
+/* ---- frame guards (see sl_rt_stack_reserve in runtime/sl_core.c) ------ */
+
+static const char **fg_syms;
+static int *fg_frames;
+static int fg_n;
+
+void codegen_set_frame_guards(const char *const *symbols, const int *frames,
+                              int n) {
+    fg_syms = (const char **)xmalloc(sizeof(char *) * (size_t)(n ? n : 1));
+    fg_frames = (int *)xmalloc(sizeof(int) * (size_t)(n ? n : 1));
+    for (int i = 0; i < n; i++) {
+        fg_syms[i] = xstrdup(symbols[i]);
+        fg_frames[i] = frames[i];
+    }
+    fg_n = n;
+}
+
+/* The measured frame of `sym`, or 0 when it is not guarded. */
+static int frame_guard_of(const char *sym) {
+    for (int i = 0; i < fg_n; i++)
+        if (!strcmp(fg_syms[i], sym))
+            return fg_frames[i];
+    return 0;
+}
+
+static const char **emitted_syms;
+static int emitted_n, emitted_cap;
+
+static void note_emitted_symbol(const char *sym) {
+    for (int i = 0; i < emitted_n; i++)
+        if (!strcmp(emitted_syms[i], sym))
+            return;
+    if (emitted_n == emitted_cap) {
+        emitted_cap = emitted_cap ? emitted_cap * 2 : 64;
+        emitted_syms = (const char **)xrealloc(
+            emitted_syms, sizeof(char *) * (size_t)emitted_cap);
+    }
+    emitted_syms[emitted_n++] = xstrdup(sym);
+}
+
+const char *const *codegen_function_symbols(int *n) {
+    *n = emitted_n;
+    return emitted_syms;
+}
+
 void gen_function(CG *cg, Package *p, FuncDecl *f) {
     FuncSig *sig = sig_of_decl(cg, f);
 
@@ -889,15 +934,40 @@ void gen_function(CG *cg, Package *p, FuncDecl *f) {
         }
     }
 
-    emit_line(cg, "static %s %s(%s) {",
-              sig->ret_slang ? ctype_of(cg, sig->ret_slang) : "void",
-              mangle_sig(sig), params.data);
+    const char *sym = mangle_sig(sig);
+    note_emitted_symbol(sym);
+    int guard = frame_guard_of(sym);
+    const char *rett = sig->ret_slang ? ctype_of(cg, sig->ret_slang) : "void";
+    if (guard)
+        /* The body keeps its own frame; a wrapper of the original name goes
+         * in front of it, so every caller (direct, spawned, through a
+         * function value) reaches the guard. noinline keeps the body's frame
+         * out of its callers, which is what the wrapper is protecting. */
+        emit_line(cg, "static __attribute__((noinline)) %s %s__body(%s) {",
+                  rett, sym, params.data);
+    else
+        emit_line(cg, "static %s %s(%s) {", rett, sym, params.data);
     for (int j = 0; j < f->nparams; j++)
         emit_drop_flag(cg, f->params[j]);
     gen_block(cg, f->body);
     emit_scope_drops(cg, 0);
     emit_line(cg, "}");
     emit_line(cg, "");
+    if (guard) {
+        StrBuf args;
+        sb_init(&args);
+        for (int j = 0; j < f->nparams; j++) {
+            if (j)
+                sb_append(&args, ", ");
+            sb_append(&args, sanitize_ident(f->params[j]));
+        }
+        emit_line(cg, "static %s %s(%s) {", rett, sym, params.data);
+        emit_line(cg, "    sl_rt_stack_reserve(%d);", guard);
+        emit_line(cg, "    %s%s__body(%s);", sig->ret_slang ? "return " : "",
+                  sym, args.data);
+        emit_line(cg, "}");
+        emit_line(cg, "");
+    }
 
     cg->in_function = 0;
     cg->cur_ret = NULL;
@@ -949,13 +1019,27 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     var_scope_reset(cg);
     var_scope_push(cg);
     cg->cur_pkg = pkgs[main_index].name;
-    emit_line(cg, "static void sl_main_task_entry(void *_sl_unused_arg) {");
+    note_emitted_symbol("sl_main_task_entry");
+    int main_guard = frame_guard_of("sl_main_task_entry");
+    emit_line(cg, main_guard
+                      ? "static __attribute__((noinline)) void "
+                        "sl_main_task_entry__body(void *_sl_unused_arg) {"
+                      : "static void sl_main_task_entry(void *_sl_unused_arg) {");
     emit_line(cg, "    (void)_sl_unused_arg;");
     gen_block(cg, pkgs[main_index].prog->main_body);
     emit_scope_drops(cg, 0);
     emit_line(cg, "    exit(0); /* main()'s own sl_ctx_switch never returns */");
     emit_line(cg, "}");
     emit_line(cg, "");
+    if (main_guard) {
+        /* The main task starts on the initial 8KB stack, so a large
+         * top-level body needs the same entry guard as any function. */
+        emit_line(cg, "static void sl_main_task_entry(void *_sl_unused_arg) {");
+        emit_line(cg, "    sl_rt_stack_reserve(%d);", main_guard);
+        emit_line(cg, "    sl_main_task_entry__body(_sl_unused_arg);");
+        emit_line(cg, "}");
+        emit_line(cg, "");
+    }
     emit_line(cg, "int main(int argc, char **argv) {");
     if (want_pkg(cg, "proc")) {
         emit_line(cg, "    sl_proc_argc = argc;");

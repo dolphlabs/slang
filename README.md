@@ -2926,6 +2926,22 @@ main.sl ──loader──> packages ──lexer/parser──> ASTs ──codege
    `cc`. Because GCC/Clang compile the generated C, you get their full
    optimizer for free.
 
+   **Large stack frames.** A task starts on an 8KB stack that grows only at a
+   safepoint, which runs after the current function's frame already exists.
+   How big a frame is depends on the C compiler: clang gives every call site
+   its own spill slot and inlines callees into their caller, so a function
+   with a few hundred call sites can need more than the whole stack and used
+   to die with `SIGBUS` before printing anything (gcc gave the same C a frame
+   of a few hundred bytes). The driver therefore asks the compiler for the
+   real frame of every function (`-Wframe-larger-than`, read from clang's and
+   gcc's own reports). A slang function reported over the limit is
+   regenerated behind a thin wrapper that grows the stack *before* the
+   function is entered, and the program is compiled a second time. Nothing
+   else pays for it: no program in this repository, `tyto` included, has a
+   function that needs one, and `--emit-c` output has none. The limit is 1536
+   bytes; `SLANG_FRAME_LIMIT` overrides it (the tests set a tiny one to put a
+   guard on nearly every function).
+
 Inspect what slang generates:
 
 ```sh
@@ -2942,7 +2958,7 @@ src/
   ast.h          AST node definitions
   parser.h/.c    recursive-descent parser
   rtpath.h/.c    locate runtime/ next to slangc
-  codegen.h      public codegen API (one function: codegen_program)
+  codegen.h      public codegen API (codegen_program, and the frame guards)
   codegen/       type checking + C emission
   main.c         driver: flags, invokes cc
 runtime/       real C runtime spliced into generated programs

@@ -952,6 +952,41 @@ static void sl_rt_need_stack(size_t want) {
         sl_task_stack_grow(t);
 }
 
+/* A slang function whose C frame is big is entered through a thin wrapper
+ * that calls this first (see the frame guards in codegen and main.c).
+ *
+ * The check has to come BEFORE the function's frame exists. Growth is only
+ * triggered from inside a safepoint (sl_rt_stack_and_gc), which runs after
+ * the frame has been allocated, and a frame bigger than the headroom
+ * overflows into the guard page before any safepoint gets there: SIGBUS.
+ *
+ * How much headroom is enough is not just `frame`. Two more terms:
+ *   - SL_TASK_GUARD_MARGIN, so the first safepoint inside the function still
+ *     finds the margin the rest of the runtime assumes;
+ *   - SL_TASK_FRAME_PROBE. On macOS a frame over 4KB is allocated through
+ *     ___chkstk_darwin, which probes one whole page BELOW the frame's lowest
+ *     address. Measured, not inferred: a 4152-byte frame faulted at an address
+ *     8248 bytes below rsp (rax = 0x1038, the frame; rcx = the probe) with
+ *     8118 bytes of headroom -- frame + 4096 was needed, and asking for
+ *     frame + margin passed the check and crashed anyway.
+ * Growth relocates the stack (frame pointers, the safepoint chain and every
+ * live word that looks like an old-stack address are translated), and this
+ * runs from the same kind of place the existing growth points do -- a call
+ * site in generated code -- so it is as safe as they are. */
+#define SL_TASK_FRAME_PROBE 4096
+static void sl_rt_stack_reserve(size_t frame) {
+    sl_task *t = SL_RT_TLS_CUR();
+    if (!t || !t->stack_base)
+        return;
+    size_t want = frame + SL_TASK_FRAME_PROBE + SL_TASK_GUARD_MARGIN;
+    for (;;) {
+        char probe;
+        if ((uintptr_t)&probe - (uintptr_t)t->stack_base >= want)
+            return;
+        sl_task_stack_grow(t);
+    }
+}
+
 /* Every caller of this is an OpenSSL entry point, and OpenSSL's lazy
  * provider load reaches dlopen -> dyld, which dominates the
  * requirement -- see SL_TASK_DYLD_STACK_SIZE for the measurement.
