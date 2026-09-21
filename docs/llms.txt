@@ -22,6 +22,7 @@ Every page on this site has a Markdown twin at the same path with a .md extensio
 - [compress](packages/compress.md): Package compress.
 - [crypto](packages/crypto.md): Package crypto.
 - [encoding](packages/encoding.md): Package encoding.
+- [flags](packages/flags.md): Package flags.
 - [fs](packages/fs.md): Package fs.
 - [http](packages/http.md): Package http.
 - [http2](packages/http2.md): Package http2.

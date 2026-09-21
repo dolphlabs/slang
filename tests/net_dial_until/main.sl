@@ -85,20 +85,62 @@ fn dial() {
     die("dial with an expired deadline succeeded");
 }
 
-// Deadlines short enough that some lookups are still inside getaddrinfo
-// when they pass: the job is abandoned to the resolver thread, which must
-// free it without touching the caller's stack. Every result is either a
-// connection or "timeout".
+// The time one dial takes here, in ns: the median of a few. A lookup plus
+// connect to localhost is a few hundred microseconds on a laptop and about
+// a millisecond in a Linux VM, so no fixed range of deadlines is right on
+// both -- 0-400us made every dial time out on the slow one.
+fn dial_scale(port: int) -> int {
+    let samples: [int] = [];
+    let k = 0;
+    while k < 15 {
+        let t0 = time.mono();
+        let r = net.dial_until("localhost", port, in_ms(5000));
+        let took: int = (time.mono() - t0) as int;
+        guard let fd = r else let e = err_of(r) {
+            die("calibration dial: " + e);
+            return 0;
+        }
+        net.close(fd);
+        push(samples, took);
+        k = k + 1;
+    }
+    // insertion sort; 15 elements
+    let a = 1;
+    while a < len(samples) {
+        let v = samples[a];
+        let b = a - 1;
+        while b >= 0 && samples[b] > v {
+            samples[b + 1] = samples[b];
+            b = b - 1;
+        }
+        samples[b + 1] = v;
+        a = a + 1;
+    }
+    return samples[len(samples) / 2];
+}
+
+// Deadlines spread across the time a dial takes, so that some lookups are
+// still inside getaddrinfo when they pass: the job is abandoned to the
+// resolver thread, which must free it without touching the caller's stack.
+// Every result is either a connection or "timeout", and both must occur --
+// which is why the range is measured rather than fixed.
 fn dial_racing() {
     let lfd = listener();
     let port = port_of(lfd);
     spawn accept_all(lfd);
+    // 0 .. 3x the median, in 400 steps. The first step is a deadline that
+    // has already passed, so timeouts cannot be zero; the top third is long
+    // enough that dials get through even when the median is unrepresentative.
+    let step = 3 * dial_scale(port) / 400;
+    if step < 1 {
+        step = 1;
+    }
     let timeouts = 0;
     let conns = 0;
     let i = 0;
     while i < 3000 {
         let r = net.dial_until("localhost", port,
-                               until_of(time.mono() + (i % 400) * 1000));
+                               until_of(time.mono() + (i % 400) * step));
         guard let fd = r else let e = err_of(r) {
             if e != "timeout" {
                 die("racing dial: " + e);
@@ -111,8 +153,9 @@ fn dial_racing() {
         conns = conns + 1;
         i = i + 1;
     }
-    if timeouts + conns != 3000 || conns == 0 {
-        die("racing dial counts");
+    if timeouts + conns != 3000 || timeouts == 0 || conns == 0 {
+        die("racing dial counts: " + to_str(timeouts) + " timeouts, "
+            + to_str(conns) + " connections");
     }
     println("ok dial racing deadlines");
 }
