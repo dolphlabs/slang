@@ -1,6 +1,10 @@
 #ifndef SLANG_AST_H
 #define SLANG_AST_H
 
+/* A generic declaration's type parameters, and a generic type's arguments,
+ * are capped: each is a fixed-size slot in the compiler's environment. */
+#define MAX_TYPE_PARAMS 8
+
 typedef struct FuncDecl FuncDecl;
 typedef struct Type Type;
 
@@ -120,10 +124,15 @@ struct Expr {
         /* `recv` is evaluated exactly once, before the arguments. */
         struct { Expr *recv; char *name; Expr **args; int nargs; } method;
         struct {
-            char *tyname;      /* struct name as written: "Point" or "pkg.Point" */
+            char *tyname;      /* struct name as written: "Point", "pkg.Point",
+                                  or with type arguments: "Box[int]" */
             char **fields;
             Expr **vals;
             int nfields;
+            /* Set by codegen when `tyname` names a generic struct written
+             * WITHOUT type arguments (`Box { v: 1 }`): the canonical
+             * instance the arguments were inferred to be. */
+            const char *inst;
         } structlit;
         struct { Expr *call; } spawn;
     } as;
@@ -235,6 +244,8 @@ struct Stmt {
             int nfields;
             char **lts;
             int nlts;
+            char **tparams; /* type parameters: struct Box[T, U] */
+            int ntparams;
         } struct_decl;
         struct {
             char *struct_name;

@@ -1194,8 +1194,7 @@ const char *infer_type(CG *cg, Expr *e) {
                  e->as.field.name);
     }
     case EX_STRUCTLIT: {
-        const char *canon =
-            canon_type(cg, e->as.structlit.tyname, e->line);
+        const char *canon = structlit_type(cg, e);
         StructDef *sd = struct_find_canon(cg, canon);
         for (int i = 0; i < sd->nfields; i++) {
             int found = -1;

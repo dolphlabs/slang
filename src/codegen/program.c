@@ -122,7 +122,12 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
             Stmt *s = body->stmts[j];
             if (s->kind != ST_STRUCT)
                 continue;
-            if (struct_find_in_pkg(cg, p->name, s->as.struct_decl.name))
+            if (s->as.struct_decl.ntparams) {
+                tmpl_register(cg, p->name, s);
+                continue;
+            }
+            if (struct_find_in_pkg(cg, p->name, s->as.struct_decl.name) ||
+                tmpl_find_in_pkg(cg, p->name, s->as.struct_decl.name))
                 cg_error(s->line,
                          "redefinition of struct '%s' in package '%s'",
                          s->as.struct_decl.name, p->name);
@@ -158,6 +163,8 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
     /* pass 2: canonicalize struct field types */
     for (i = 0; i < cg->structs.count; i++) {
         StructDef *sd = cg->structs.items[i];
+        if (sd->inst)
+            continue; /* made, and canonicalized, by generic_canon */
         cg->cur_pkg = sd->pkg;
         for (j = 0; j < sd->nfields; j++) {
             for (int q = 0; q < j; q++) {
@@ -181,6 +188,11 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
                 continue;
             StructDef *sd =
                 struct_find_in_pkg(cg, p->name, s->as.impl.struct_name);
+            if (!sd && tmpl_find_in_pkg(cg, p->name, s->as.impl.struct_name))
+                cg_error(s->line,
+                         "methods on the generic struct '%s' are not "
+                         "supported yet",
+                         s->as.impl.struct_name);
             if (!sd)
                 cg_error(s->line, "impl of unknown struct '%s'",
                          s->as.impl.struct_name);
@@ -344,21 +356,58 @@ void emit_struct_fwd_decls(CG *cg) {
     emit_line(cg, "");
 }
 
+/* A struct's body needs each by-value field's struct complete before it,
+ * so bodies go out dependencies first. Declaration order is kept wherever
+ * it already works (a struct is emitted at its own position unless a
+ * by-value field's struct has not been yet), which is what makes the
+ * output for programs without this problem unchanged. A generic instance is
+ * the case that needs it: `Pair[Point,Point]` is entered in the table
+ * after every declared struct, but a struct declared BEFORE the use can
+ * hold it by value. */
+static void emit_struct_body(CG *cg, StructDef *sd, unsigned char *state) {
+    int self = -1;
+    for (int i = 0; i < cg->structs.count; i++) {
+        if (cg->structs.items[i] == sd)
+            self = i;
+    }
+    if (state[self])
+        return;
+    state[self] = 1; /* in progress */
+    for (int j = 0; j < sd->nfields; j++) {
+        StructDef *dep = struct_find_canon(cg, sd->ftypes[j]);
+        if (!dep || dep->is_gc)
+            continue; /* not a struct, or held by pointer */
+        int di = -1;
+        for (int i = 0; i < cg->structs.count; i++) {
+            if (cg->structs.items[i] == dep)
+                di = i;
+        }
+        if (state[di] == 1)
+            cg_error(sd->line,
+                     "struct '%s' contains itself by value through field "
+                     "'%s'; hold it in an opt[...], or make it a gc struct",
+                     sd->canonical, sd->fields[j]);
+        emit_struct_body(cg, dep, state);
+    }
+    char *m = mangle_struct(sd->canonical);
+    emit_line(cg, "struct %s {", m);
+    cg->indent++;
+    for (int j = 0; j < sd->nfields; j++)
+        emit_line(cg, "%s %s;", ctype_of(cg, sd->ftypes[j]),
+                  sanitize_ident(sd->fields[j]));
+    cg->indent--;
+    emit_line(cg, "};");
+    emit_line(cg, "");
+    state[self] = 2;
+}
+
 void emit_struct_types(CG *cg) {
     if (!cg->structs.count)
         return;
-    for (int i = 0; i < cg->structs.count; i++) {
-        StructDef *sd = cg->structs.items[i];
-        char *m = mangle_struct(sd->canonical);
-        emit_line(cg, "struct %s {", m);
-        cg->indent++;
-        for (int j = 0; j < sd->nfields; j++)
-            emit_line(cg, "%s %s;", ctype_of(cg, sd->ftypes[j]),
-                      sanitize_ident(sd->fields[j]));
-        cg->indent--;
-        emit_line(cg, "};");
-        emit_line(cg, "");
-    }
+    unsigned char *state = (unsigned char *)xmalloc((size_t)cg->structs.count);
+    memset(state, 0, (size_t)cg->structs.count);
+    for (int i = 0; i < cg->structs.count; i++)
+        emit_struct_body(cg, cg->structs.items[i], state);
 }
 
 /* Tier 10: emit a trace function for every struct type that has at

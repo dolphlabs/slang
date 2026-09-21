@@ -479,7 +479,7 @@ push(pts, r.tl);
 ```
 
 Struct literals must supply every field exactly once, with types
-checked. Methods live in top-level `impl Name { ... }` blocks; mark a
+checked. A struct may be declared after one that holds it by value. Methods live in top-level `impl Name { ... }` blocks; mark a
 method `pub fn` to export it to importing packages. A method's name
 belongs to its struct: it may match a package-level function or another
 struct's method (`impl Client { fn get }` beside `fn get`), and a bare
@@ -501,6 +501,60 @@ a variable.
 `own T` is uniquely owned: assignment and passing **move**, and
 use-after-move is a compile error. A moved binding can be reinitialized.
 `own` is freed when its binding goes out of scope unless it was moved.
+
+#### Generic structs
+
+A struct can take type parameters, written in brackets like the built-in
+`opt[T]` and `map[K]V`:
+
+```slang
+struct Box[T] {
+    v: T,
+}
+
+struct Pair[K, V] {
+    k: K,
+    v: V,
+}
+
+gc struct Node[T] {
+    val: T,
+    next: opt[Node[T]],      // a list: recursion goes through opt
+}
+
+let a = Box { v: 41 };                      // T inferred from the field: Box[int]
+let b: Box[str] = Box[str] { v: "hi" };     // or written out
+let p = Pair { k: 1, v: Point { x: 3, y: 4 } };
+let n = Box { v: Box { v: 7 } };            // Box[Box[int]]
+
+fn unwrap(b: Box[int]) -> int { return b.v; }
+```
+
+`Box[int]` is an ordinary struct that the compiler writes out the first
+time the program names it, so it costs exactly what a hand-written `IntBox`
+does: the same layout, the same C, no boxing and no runtime type
+information. Two instances of one template are two different types
+(`Box[int]` is not `Box[str]`), and instances work anywhere a type does,
+including inside `[T]`, `map`, `opt`, `result`, `chan`, `fn` types,
+`json.encode` / `json.decode` (of a `gc struct`), and across packages
+(`stash.Stack[Thing]`, where `Thing` is the importing package's own type).
+
+A literal infers its arguments from its fields, so it needs at least one
+field whose value fixes each parameter. `Box { v: none }` or
+`Bag { items: [] }` cannot say what `T` is; write `Box[int] { v: none }`.
+Type arguments are never written at a call site or on a literal's name
+unless the inference has nothing to go on.
+
+Each instance is checked when it is made, with the arguments in place: a
+parameter is unconstrained, and what a field can do with it is decided by
+the type it turns out to be. An error inside a template therefore names the
+instance and where it was asked for
+(`... (in main.Keyed[float], requested at line 9)`), and a template nobody
+instantiates is not checked at all.
+
+Not yet supported, and each says so when used: methods on a generic struct
+(`impl Box[T]`), generic functions (`fn first[T](xs: [T]) -> T`), and
+lifetime parameters on a generic struct.
 
 #### Enums
 

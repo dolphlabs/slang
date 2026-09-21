@@ -5,7 +5,10 @@
 # and its stdout must match tests/<name>/expected.txt exactly.
 #
 # Negative tests: tests/fail_<name>/main.sl must fail (nonzero exit)
-# at compile time or runtime.
+# at compile time or runtime. If tests/fail_<name>/expected_error.txt exists,
+# its first line must also appear in the error output: a program that fails
+# for some OTHER reason (a typo in the test, a regression elsewhere) would
+# otherwise count as passing.
 #
 # stdin: a test that reads it (the io package) supplies tests/<name>/stdin.txt;
 # every other test gets /dev/null. Inheriting the runner's stdin would make a
@@ -91,9 +94,18 @@ done
 
 # negative tests: compilation or execution must fail
 for t in tests/fail_*/main.sl; do
-    name=$(basename "$(dirname "$t")")
-    if ./slangc "$t" --run >/dev/null 2>&1 </dev/null; then
+    dir=$(dirname "$t")
+    name=$(basename "$dir")
+    errout=$(./slangc "$t" --run 2>&1 >/dev/null </dev/null)
+    status=$?
+    if [ "$status" -eq 0 ]; then
         echo "FAIL $name (expected failure, but it succeeded)"
+        fail=1
+    elif [ -f "$dir/expected_error.txt" ] &&
+         ! printf '%s\n' "$errout" | grep -qF -- "$(head -1 "$dir/expected_error.txt")"; then
+        echo "FAIL $name (failed, but not with the expected message)"
+        echo "  wanted: $(head -1 "$dir/expected_error.txt")"
+        printf '%s\n' "$errout" | head -3 | sed 's/^/  got:    /'
         fail=1
     else
         echo "PASS $name"
@@ -212,7 +224,8 @@ echo "--- GC stress (SLANG_GC_THRESHOLD_KB=16) ---"
 gc_bad=0
 for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood \
             spawn_isolation gc_stress maps json flags method_recv \
-            method_recv_gc indirect_callee; do
+            method_recv_gc indirect_callee generics_structs generics_json generics_infer \
+            generics_pkg; do
     out="/tmp/sl_gcstress_${name}.out"
     if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -237,7 +250,7 @@ echo "--- frame guards (SLANG_FRAME_LIMIT=64) ---"
 fg_bad=0
 for name in fn_values spawn_isolation gc_stress maps json flags method_recv \
             method_recv_own method_pub indirect_callee enum move own structs \
-            mutex select big_frame; do
+            mutex select big_frame generics_structs generics_pkg; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_fg_${name}.out"
     if ! SLANG_FRAME_LIMIT=64 ./slangc "tests/$name/main.sl" --run \

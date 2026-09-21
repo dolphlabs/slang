@@ -1,0 +1,10 @@
+{"v":7}
+7
+{"v":"text"}
+text
+{"k":"origin","v":{"x":3,"y":4}}
+origin
+4
+{"val":1,"next":{"val":2,"next":null}}
+3
+rejected
