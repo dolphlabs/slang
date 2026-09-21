@@ -211,7 +211,8 @@ done
 echo "--- GC stress (SLANG_GC_THRESHOLD_KB=16) ---"
 gc_bad=0
 for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood \
-            spawn_isolation gc_stress maps json flags; do
+            spawn_isolation gc_stress maps json flags method_recv \
+            method_recv_gc indirect_callee; do
     out="/tmp/sl_gcstress_${name}.out"
     if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then

@@ -86,6 +86,23 @@ static int method_value_self(CG *cg, Expr *call, const char *name, int line) {
     return 1;
 }
 
+/* For an EX_METHOD: is `self` passed as a plain value -- a non-gc struct,
+ * not a reference -- so nothing of the receiver outlives the call? */
+static int method_recv_by_value(CG *cg, Expr *call) {
+    const char *recv_t = infer_type(cg, call->as.method.recv);
+    StructDef *sd = struct_of_type(cg, recv_t);
+    if (!sd)
+        return 0;
+    FuncSig *sig = method_find(cg, sd, call->as.method.name);
+    if (!sig || sig->nparams < 1)
+        return 0;
+    const char *self_t = sig->param_slang[0];
+    char *inner;
+    if (type_wrap(self_t, &inner) != TW_NONE)
+        return 0;
+    return !struct_type_is_gc(cg, self_t);
+}
+
 static int is_print_call(const char *name) {
     return !strcmp(name, "print") || !strcmp(name, "println");
 }
@@ -171,6 +188,8 @@ static void scan_expr(CG *cg, Esc *esc, Expr *e, const char *name) {
         if (split_dotted(cname, &left, &right) && !import_try(cg, left) &&
             ident_is(left, name) && !value_self)
             mark_escape(esc, name);
+        if (e->as.call.callee)
+            scan_expr(cg, esc, e->as.call.callee, name);
         for (int i = 0; i < e->as.call.nargs; i++) {
             if (!print && ptr_result(e->as.call.args[i], name))
                 mark_escape(esc, name);
@@ -178,6 +197,21 @@ static void scan_expr(CG *cg, Esc *esc, Expr *e, const char *name) {
         }
         return;
     }
+    case EX_METHOD:
+        /* The receiver is (part of) the candidate: unless `self` is taken
+         * by value, the method is handed a pointer into it and may keep
+         * it, exactly as for a bare `p.m()` above. Marking it escaping is
+         * the conservative answer -- it only heap-allocates the local. */
+        if (operand_of_name(e->as.method.recv, name) &&
+            !method_recv_by_value(cg, e))
+            mark_escape(esc, name);
+        scan_expr(cg, esc, e->as.method.recv, name);
+        for (int i = 0; i < e->as.method.nargs; i++) {
+            if (ptr_result(e->as.method.args[i], name))
+                mark_escape(esc, name);
+            scan_expr(cg, esc, e->as.method.args[i], name);
+        }
+        return;
     }
 }
 

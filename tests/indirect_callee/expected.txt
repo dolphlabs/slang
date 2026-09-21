@@ -1,0 +1,16 @@
+ok callee kept alive
+ok spawn
+callee 0
+arg 5
+10
+callee 1
+arg 6
+18
+arg 7
+21
+arg 8
+16
+ok ordering
+ok shapes
+ok ownership
+ok guard

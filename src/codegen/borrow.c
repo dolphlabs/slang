@@ -450,8 +450,14 @@ static void mark_expr(BK *bk, CG *cg, Expr *e) {
         return;
     case EX_CALL:
         mark_ident(bk, cg, e->as.call.name);
+        mark_expr(bk, cg, e->as.call.callee);
         for (i = 0; i < e->as.call.nargs; i++)
             mark_expr(bk, cg, e->as.call.args[i]);
+        return;
+    case EX_METHOD:
+        mark_expr(bk, cg, e->as.method.recv);
+        for (i = 0; i < e->as.method.nargs; i++)
+            mark_expr(bk, cg, e->as.method.args[i]);
         return;
     case EX_CAST:
         mark_expr(bk, cg, e->as.cast.operand);
@@ -807,6 +813,10 @@ static void walk_call(BK *bk, Expr *e, const char *ret_to) {
         }
     }
     ret_ref = wrap_is_ref(rt, &ret_mut);
+    /* the callee of a call through a function value is an expression like
+     * any other: what it borrows and moves counts */
+    if (e->as.call.callee)
+        walk_expr(bk, e->as.call.callee, NULL);
     for (i = 0; i < e->as.call.nargs; i++) {
         Expr *a = e->as.call.args[i];
         const char *bind = NULL;
@@ -880,6 +890,25 @@ static void walk_expr(BK *bk, Expr *e, const char *ret_to) {
     case EX_CALL:
         walk_call(bk, e, ret_to);
         return;
+    case EX_METHOD: {
+        int mut = 0;
+        /* walk_call tracks which named local a method borrows from. A
+         * receiver that is an arbitrary expression has no name to record a
+         * loan against, so a result that borrows from `self` cannot be
+         * tracked -- and a reference into a temporary would dangle anyway.
+         * Refuse it with a way out, instead of accepting it unchecked. */
+        if (wrap_is_ref(e->inf_ty, &mut))
+            cg_error(e->line,
+                     "method '%s' returns a reference, so it cannot be "
+                     "called on a temporary or a field/element path: bind "
+                     "the receiver to a variable first, so the borrow has "
+                     "an owner",
+                     e->as.method.name);
+        walk_expr(bk, e->as.method.recv, NULL);
+        for (i = 0; i < e->as.method.nargs; i++)
+            walk_expr(bk, e->as.method.args[i], NULL);
+        return;
+    }
     case EX_CAST:
         walk_expr(bk, e->as.cast.operand, ret_to);
         return;
