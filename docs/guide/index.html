@@ -332,6 +332,16 @@ json.<span class="f">encode</span>(o);   <span class="c">// {&quot;id&quot;:1,&q
 
 <span class="k">let</span> counts: <span class="t">map</span>[Status]<span class="t">int</span> = {};
 counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
+<p>An exported enum is usable from another package, variants and all:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="c">// orders/orders.sl</span>
+<span class="k">pub</span> enum Status { Pending, Paid, Shipped }
+
+<span class="c">// main.sl</span>
+<span class="k">import</span> <span class="s">&quot;orders&quot;</span>;
+<span class="k">let</span> o = orders.Order{ id: <span class="n">1</span>, status: orders.Status.Paid };
+<span class="b">println</span>(o.status == orders.Status.Paid);
+<span class="k">let</span> r: <span class="t">result</span>[orders.Status, <span class="t">str</span>] = orders.Status.<span class="f">from_str</span>(<span class="s">&quot;Shipped&quot;</span>);</code></pre></div>
+<p>An enum without <code>pub</code> is private to its package, like any other type.</p>
 <p>There is no per-variant wire label yet (<code>to_str</code>/JSON always use the declared name as written), no explicit backing-width syntax (<code>enum Name: i64 { ... }</code>), and no payload-carrying variants or a <code>match</code> statement — enums here are a closed set of names, not a tagged union.</p>
 <h4 id="option-result">Option / Result<a class="anchor" href="#option-result" aria-label="Link to this section">#</a></h4>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">fn</span> <span class="f">div10</span>(n: <span class="t">int</span>) -&gt; <span class="t">opt</span>[<span class="t">int</span>] {
@@ -622,6 +632,16 @@ json.<span class="f">encode</span>(o);   <span class="c">// {&quot;id&quot;:1,&q
 
 <span class="k">let</span> counts: <span class="t">map</span>[Status]<span class="t">int</span> = {};
 counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
+<p>An exported enum is usable from another package, variants and all:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="c">// orders/orders.sl</span>
+<span class="k">pub</span> enum Status { Pending, Paid, Shipped }
+
+<span class="c">// main.sl</span>
+<span class="k">import</span> <span class="s">&quot;orders&quot;</span>;
+<span class="k">let</span> o = orders.Order{ id: <span class="n">1</span>, status: orders.Status.Paid };
+<span class="b">println</span>(o.status == orders.Status.Paid);
+<span class="k">let</span> r: <span class="t">result</span>[orders.Status, <span class="t">str</span>] = orders.Status.<span class="f">from_str</span>(<span class="s">&quot;Shipped&quot;</span>);</code></pre></div>
+<p>An enum without <code>pub</code> is private to its package, like any other type.</p>
 <p>There is no per-variant wire label yet (<code>to_str</code>/JSON always use the declared name as written), no explicit backing-width syntax (<code>enum Name: i64 { ... }</code>), and no payload-carrying variants or a <code>match</code> statement — enums here are a closed set of names, not a tagged union.</p>
 <h3 id="option-result-2">Option / Result<a class="anchor" href="#option-result-2" aria-label="Link to this section">#</a></h3>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">fn</span> <span class="f">div10</span>(n: <span class="t">int</span>) -&gt; <span class="t">opt</span>[<span class="t">int</span>] {
