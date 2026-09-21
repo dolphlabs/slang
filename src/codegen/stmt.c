@@ -1158,6 +1158,13 @@ static int expr_same(Expr *a, Expr *b) {
         if (strcmp(a->as.call.name, b->as.call.name) ||
             a->as.call.nargs != b->as.call.nargs)
             return 0;
+        /* every call through a function value is named "<function value>",
+         * so the name alone cannot tell `fs[0](x)` from `fs[1](x)` */
+        if ((a->as.call.callee != NULL) != (b->as.call.callee != NULL))
+            return 0;
+        if (a->as.call.callee &&
+            !expr_same(a->as.call.callee, b->as.call.callee))
+            return 0;
         for (int i = 0; i < a->as.call.nargs; i++)
             if (!expr_same(a->as.call.args[i], b->as.call.args[i]))
                 return 0;

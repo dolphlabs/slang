@@ -441,6 +441,34 @@ static LiveSet *process_children_reverse(CG *cg, Expr **children, int n,
     return cur;
 }
 
+/* The operands of a call, in evaluation order, folded into `live_out`. For
+ * a call through an EXPRESSION holding a function value -- `fns[i](x)`,
+ * `pick(0)(x)` -- the callee is child 0: gen_call evaluates it before the
+ * arguments. Not visiting it left every local named only there (`fns`)
+ * looking dead at its last visible use, so nothing rooted it across the
+ * allocations in between and a collection freed it before the call read
+ * it; it also left every call inside the callee without a live set. Shared
+ * by ordinary calls and by both spawn forms, which carry their own copy of
+ * the call. */
+static LiveSet *live_call_operands(CG *cg, Expr *call, LiveSet *live_out) {
+    int n = call->as.call.nargs;
+    if (!call->as.call.callee)
+        return process_children_reverse(cg, call->as.call.args, n, live_out,
+                                        call_arg_expects(cg, call));
+    const char *ct = infer_type(cg, call->as.call.callee);
+    FuncSig *fs = fn_sig_of_type(cg, ct, "<function value>", call->line);
+    Expr **kids = (Expr **)xmalloc(sizeof(Expr *) * (size_t)(n + 1));
+    const char **expects =
+        (const char **)xmalloc(sizeof(char *) * (size_t)(n + 1));
+    kids[0] = call->as.call.callee;
+    expects[0] = NULL;
+    for (int i = 0; i < n; i++) {
+        kids[i + 1] = call->as.call.args[i];
+        expects[i + 1] = fs->param_slang[i];
+    }
+    return process_children_reverse(cg, kids, n + 1, live_out, expects);
+}
+
 static LiveSet *live_expr(CG *cg, Expr *e, LiveSet *live_out) {
     switch (e->kind) {
     case EX_INT:
@@ -551,9 +579,7 @@ static LiveSet *live_expr(CG *cg, Expr *e, LiveSet *live_out) {
 
     case EX_SPAWN: {
         Expr *call = e->as.spawn.call;
-        const char **expects = call_arg_expects(cg, call);
-        LiveSet *cur = process_children_reverse(
-            cg, call->as.call.args, call->as.call.nargs, live_out, expects);
+        LiveSet *cur = live_call_operands(cg, call, live_out);
         e->live_set = ls_clone(cur);
         call->live_set = e->live_set;
         return cur;
@@ -589,6 +615,11 @@ static LiveSet *live_expr(CG *cg, Expr *e, LiveSet *live_out) {
         return cur;
     }
     case EX_CALL: {
+        if (e->as.call.callee) {
+            LiveSet *cur = live_call_operands(cg, e, live_out);
+            e->live_set = ls_clone(cur);
+            return cur;
+        }
         const char **expects = call_arg_expects(cg, e);
         LiveSet *cur = process_children_reverse(
             cg, e->as.call.args, e->as.call.nargs, live_out, expects);
@@ -963,9 +994,7 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
         /* spawn's target is always a plain/package-qualified function
          * (stmt.c rejects builtins/native/methods), exactly the case
          * call_arg_expects already resolves via sig_find_in. */
-        LiveSet *cur =
-            process_children_reverse(cg, call->as.call.args, nargs,
-                                     live_out, call_arg_expects(cg, call));
+        LiveSet *cur = live_call_operands(cg, call, live_out);
         if (nargs > 0) call->live_set = ls_clone(cur);
         return cur;
     }
@@ -1156,6 +1185,8 @@ static void print_expr(FILE *out, Expr *e) {
         }
         return;
     case EX_SPAWN:
+        if (e->as.spawn.call->as.call.callee)
+            print_expr(out, e->as.spawn.call->as.call.callee);
         for (int i = 0; i < e->as.spawn.call->as.call.nargs; i++)
             print_expr(out, e->as.spawn.call->as.call.args[i]);
         if (e->live_set) {
@@ -1165,6 +1196,8 @@ static void print_expr(FILE *out, Expr *e) {
         }
         return;
     case EX_CALL:
+        if (e->as.call.callee)
+            print_expr(out, e->as.call.callee);
         for (int i = 0; i < e->as.call.nargs; i++)
             print_expr(out, e->as.call.args[i]);
         if (e->live_set) {
@@ -1264,6 +1297,8 @@ static void print_stmts(FILE *out, Stmt **stmts, int count) {
              * live_set with the ordinary EX_CALL case (see live_stmt's
              * ST_SPAWN), which would print a second, redundant "CALL"
              * line labeled with the same set as SPAWN-ALLOC below */
+            if (s->as.spawn.call->as.call.callee)
+                print_expr(out, s->as.spawn.call->as.call.callee);
             for (int a = 0; a < s->as.spawn.call->as.call.nargs; a++)
                 print_expr(out, s->as.spawn.call->as.call.args[a]);
             if (s->as.spawn.call->live_set) {

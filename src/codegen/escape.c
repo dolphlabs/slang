@@ -188,6 +188,8 @@ static void scan_expr(CG *cg, Esc *esc, Expr *e, const char *name) {
         if (split_dotted(cname, &left, &right) && !import_try(cg, left) &&
             ident_is(left, name) && !value_self)
             mark_escape(esc, name);
+        if (e->as.call.callee)
+            scan_expr(cg, esc, e->as.call.callee, name);
         for (int i = 0; i < e->as.call.nargs; i++) {
             if (!print && ptr_result(e->as.call.args[i], name))
                 mark_escape(esc, name);

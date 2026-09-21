@@ -450,6 +450,7 @@ static void mark_expr(BK *bk, CG *cg, Expr *e) {
         return;
     case EX_CALL:
         mark_ident(bk, cg, e->as.call.name);
+        mark_expr(bk, cg, e->as.call.callee);
         for (i = 0; i < e->as.call.nargs; i++)
             mark_expr(bk, cg, e->as.call.args[i]);
         return;
@@ -812,6 +813,10 @@ static void walk_call(BK *bk, Expr *e, const char *ret_to) {
         }
     }
     ret_ref = wrap_is_ref(rt, &ret_mut);
+    /* the callee of a call through a function value is an expression like
+     * any other: what it borrows and moves counts */
+    if (e->as.call.callee)
+        walk_expr(bk, e->as.call.callee, NULL);
     for (i = 0; i < e->as.call.nargs; i++) {
         Expr *a = e->as.call.args[i];
         const char *bind = NULL;
