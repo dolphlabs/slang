@@ -21,7 +21,8 @@ CODEGEN_SRCS = src/codegen/core.c src/codegen/infer.c src/codegen/expr.c \
               src/codegen/move.c \
               src/codegen/mir.c \
               src/codegen/borrow.c \
-              src/codegen/enum.c
+              src/codegen/enum.c \
+              src/codegen/funcs.c
 
 # Native packages: signatures (and json's generic dispatch) stay in
 # src/codegen/pkg_<name>/. Their C runtimes are runtime/sl_*.c.
@@ -137,7 +138,6 @@ dist: slangc-dist
 	cp slangc-dist dist/$(DIST_NAME)/bin/slangc
 	cp runtime/*.c dist/$(DIST_NAME)/lib/slang/runtime/
 	cp -R stdlib/. dist/$(DIST_NAME)/lib/slang/stdlib/
-	cp README.md LICENSE dist/$(DIST_NAME)/ 2>/dev/null || \
-		cp README.md dist/$(DIST_NAME)/
+	cp README.md LICENSE THIRD_PARTY.md dist/$(DIST_NAME)/
 	tar -czf dist/$(DIST_NAME).tar.gz -C dist $(DIST_NAME)
 	@echo "wrote dist/$(DIST_NAME).tar.gz"

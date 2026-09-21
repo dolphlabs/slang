@@ -4,6 +4,7 @@
   "description": "Syntax highlighting for the Slang language (.sl)",
   "version": "0.1.0",
   "publisher": "dolphlabs",
+  "license": "MIT",
   "engines": { "vscode": "^1.80.0" },
   "categories": ["Programming Languages"],
   "contributes": {
