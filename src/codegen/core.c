@@ -711,10 +711,62 @@ int count_gc_root_exprs(CG *cg, const char *slang_t) {
     return n;
 }
 
+/* A variable escape analysis kept on the stack (`let x = Outer { ... }`
+ * that never leaves the function) points at a stack slot, not a heap
+ * object. Rooting the pointer roots nothing -- the collector ignores
+ * addresses it never allocated -- so the heap objects its FIELDS hold (a
+ * list, a string, another gc struct) would be freed while the variable is
+ * still in use. Root the fields instead, as a by-value struct's are.
+ *
+ * Returns the type whose contents are the roots, or NULL when `v` is not a
+ * stack box or holds nothing the collector owns. */
+static const char *stack_box_pointee(CG *cg, VarSym *v) {
+    if (!v || !v->stack)
+        return NULL;
+    char *inner;
+    TypeWrap w = type_wrap(v->slang, &inner);
+    if (w == TW_GC)
+        return type_has_gc_roots(cg, inner) ? inner : NULL;
+    if (w == TW_NONE && struct_type_is_gc(cg, v->slang))
+        return v->slang;
+    return NULL;
+}
+
+/* The roots of the pointee of a stack-boxed variable: the gc-pointer
+ * fields of a gc struct (the struct itself is not a root, it is on the
+ * stack), or whatever a by-value `gc T` payload holds. */
+static void stack_box_roots(CG *cg, StrBuf *sb, const char *c_name,
+                            const char *pointee, int *wrote, int *count) {
+    const char *expr = xasprintf("(*%s)", c_name);
+    StructDef *sd = struct_find_canon(cg, pointee);
+    if (sd && sd->is_gc) {
+        for (int j = 0; j < sd->nfields; j++) {
+            if (!type_has_gc_roots(cg, sd->ftypes[j]))
+                continue;
+            const char *fe = xasprintf("%s.%s", expr,
+                                       sanitize_ident(sd->fields[j]));
+            if (sb)
+                append_gc_root_expr(cg, sb, fe, sd->ftypes[j], wrote);
+            *count += count_gc_root_exprs(cg, sd->ftypes[j]);
+        }
+        return;
+    }
+    if (sb)
+        append_gc_root_expr(cg, sb, expr, pointee, wrote);
+    *count += count_gc_root_exprs(cg, pointee);
+}
+
 void append_named_gc_roots(CG *cg, StrBuf *sb, const char *name, int *wrote) {
     VarSym *v = var_find(cg, name);
     const char *t = v ? v->slang : NULL;
     char *c_name = sanitize_ident(name);
+    if (v && v->stack) {
+        const char *boxed = stack_box_pointee(cg, v);
+        int count = 0;
+        if (boxed)
+            stack_box_roots(cg, sb, c_name, boxed, wrote, &count);
+        return;
+    }
     if (t && type_has_gc_roots(cg, t) && !type_is_gc_ptr(cg, t))
         append_gc_root_expr(cg, sb, c_name, t, wrote);
     else {
@@ -726,6 +778,14 @@ void append_named_gc_roots(CG *cg, StrBuf *sb, const char *name, int *wrote) {
 
 int count_named_gc_roots(CG *cg, const char *name) {
     VarSym *v = var_find(cg, name);
+    if (v && v->stack) {
+        const char *boxed = stack_box_pointee(cg, v);
+        int count = 0;
+        if (boxed)
+            stack_box_roots(cg, NULL, sanitize_ident(name), boxed, NULL,
+                            &count);
+        return count;
+    }
     if (v && type_has_gc_roots(cg, v->slang) && !type_is_gc_ptr(cg, v->slang))
         return count_gc_root_exprs(cg, v->slang);
     return 1;
