@@ -428,6 +428,16 @@ static void resolve_block(CG *cg, const char *pkg, Block *b) {
         resolve_stmt(cg, pkg, b->stmts[i]);
 }
 
+/* The same rewrite, for ONE function body.
+ *
+ * A generic method's instance is parsed fresh, long after the walk below
+ * has finished, so its `Status.Paid` would reach the type checker as an
+ * undefined variable. Every instance runs this on its own body. */
+void resolve_enum_in_body(CG *cg, const char *pkg, FuncDecl *f) {
+    if (f && f->body)
+        resolve_block(cg, pkg, f->body);
+}
+
 void resolve_enum_refs(CG *cg, Package *pkgs, int npkgs) {
     for (int i = 0; i < npkgs; i++) {
         Package *p = &pkgs[i];
