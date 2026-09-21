@@ -1,0 +1,27 @@
+ok defaults
+ok long forms
+ok short forms
+ok bools
+ok lists
+ok positionals
+ok errors
+ok help and required
+Usage: greet [options] [args...]
+
+print a greeting
+
+Options:
+  -n, --name <str>     who to greet (default: "world")
+  -c, --count <int>    how many times (required)
+  -r, --ratio <float>  scale factor (default: 0.5)
+  -l, --loud           shout
+      --color          use colour (default: true)
+  -I, --include <str>  extra directory
+  -h, --help           show this help
+Usage: tool [options]
+
+Options:
+      --v     verbose
+  -h, --help  show this help
+ok subcommands
+ok mistakes
