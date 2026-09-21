@@ -1268,6 +1268,10 @@ static int expr_can_alloc_or_park(CG *cg, Expr *e) {
         return expr_can_alloc_or_park(cg, e->as.field.base);
     case EX_SPAWN:
         return 1;
+    case EX_METHOD:
+        /* a user method: like the dotted-call case below, it may allocate
+         * or park, whatever its receiver and arguments are */
+        return 1;
     case EX_CALL: {
         const char *name = e->as.call.name;
         if (!strcmp(name, "len") || !strcmp(name, "until_never") ||

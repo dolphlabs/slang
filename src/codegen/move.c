@@ -81,6 +81,31 @@ static int method_value_self(CG *cg, Expr *call, const char *name) {
     return type_is_copy(cg, self_t);
 }
 
+/* The receiver of an EX_METHOD, the way method_value_self answers it for
+ * a bare `p.m()`: is `self` a plain, Copy value struct (read in place, so
+ * the receiver is not consumed)? Anything else -- a reference, an `own`,
+ * a gc struct -- takes `p.m()` down the consuming path, which for a
+ * receiver that is itself Copy (a gc struct, an ordinary value struct
+ * without `own` fields) does nothing. */
+static int recv_value_self(CG *cg, Expr *call) {
+    const char *recv_t = infer_type(cg, call->as.method.recv);
+    if (type_is_arena(recv_t) || type_is_link(recv_t) || type_is_trip(recv_t))
+        return 1;
+    StructDef *sd = struct_of_type(cg, recv_t);
+    if (!sd)
+        return 0;
+    FuncSig *sig = method_find(cg, sd, call->as.method.name);
+    if (!sig || sig->nparams < 1)
+        return 0; /* a fn-typed field: the value is called, not consumed */
+    const char *self_t = sig->param_slang[0];
+    char *inner;
+    if (type_wrap(self_t, &inner) != TW_NONE)
+        return 0;
+    if (struct_type_is_gc(cg, self_t))
+        return 0;
+    return type_is_copy(cg, self_t);
+}
+
 static void check_rvalue(CG *cg, Expr *e) {
     switch (e->kind) {
     case EX_INT:
@@ -183,6 +208,18 @@ static void check_rvalue(CG *cg, Expr *e) {
             check_rvalue(cg, e->as.call.args[i]);
         return;
     }
+    case EX_METHOD:
+        /* Same rule as the EX_CALL case for a bare receiver, applied to an
+         * expression: a method that reads `self` in place only uses the
+         * receiver as a place; any other consumes it, which for a field or
+         * an index is "cannot move out of ...". */
+        if (recv_value_self(cg, e))
+            check_place(cg, e->as.method.recv);
+        else
+            check_rvalue(cg, e->as.method.recv);
+        for (int i = 0; i < e->as.method.nargs; i++)
+            check_rvalue(cg, e->as.method.args[i]);
+        return;
     }
 }
 
@@ -632,6 +669,14 @@ void move_consume(CG *cg, Expr *e) {
             move_consume(cg, e->as.call.args[i]);
         return;
     }
+    case EX_METHOD:
+        /* Skipping this would leave an `own` argument's drop flag set: the
+         * callee frees its parameter and the caller frees the binding. */
+        if (!recv_value_self(cg, e))
+            move_consume(cg, e->as.method.recv);
+        for (int i = 0; i < e->as.method.nargs; i++)
+            move_consume(cg, e->as.method.args[i]);
+        return;
     default:
         return;
     }

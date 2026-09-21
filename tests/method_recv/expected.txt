@@ -1,0 +1,16 @@
+ok receiver forms
+recv a
+arg b
+arg c
+recv solo
+recv outer
+recv inner
+ok ordering
+ok value semantics
+ok fn field
+report 4
+16
+big4
+small5
+in a condition
+ok positions

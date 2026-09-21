@@ -95,6 +95,14 @@ static const char p_dot_str[2] = {'.', 0};
 
 static void sb_putc(StrBuf *sb, char c) { sb_append_n(sb, &c, 1); }
 
+static void method_push_arg(Expr *m, Expr *arg) {
+    int n = m->as.method.nargs;
+    m->as.method.args =
+        (Expr **)xrealloc(m->as.method.args, (n + 1) * sizeof(Expr *));
+    m->as.method.args[n] = arg;
+    m->as.method.nargs = n + 1;
+}
+
 static void call_push_arg(Expr *call, Expr *arg) {
     int n = call->as.call.nargs;
     call->as.call.args =
@@ -388,6 +396,33 @@ static Expr *parse_postfix(Parser *p) {
     Expr *e = parse_primary(p);
     for (;;) {
         if (check(p, T_DOT)) {
+            /* `.name(` is a method call on whatever `e` evaluated to. A
+             * bare `ident.name(` never reaches here -- parse_primary folds
+             * it into a dotted-name EX_CALL itself -- so `e` is a call, an
+             * index, a field of a field (`a.b.c()`), or a parenthesised
+             * expression. A fn-typed FIELD called this way
+             * (`routes[i].handler(req)`) also lands here; which one it is
+             * depends on the receiver's type, so infer_method decides. */
+            Token *nm = peek_at(p, 1);
+            if ((nm->type == T_IDENT || ident_shaped(nm)) &&
+                peek_at(p, 2)->type == T_LPAREN) {
+                advance(p); /* '.' */
+                Token *mt = expect_member(p, "a method name after '.'");
+                advance(p); /* '(' */
+                Expr *m = new_expr(p, EX_METHOD, mt->line);
+                m->as.method.recv = e;
+                m->as.method.name = mt->text;
+                if (!check(p, T_RPAREN)) {
+                    for (;;) {
+                        method_push_arg(m, parse_expression(p));
+                        if (!match(p, T_COMMA))
+                            break;
+                    }
+                }
+                expect(p, T_RPAREN, "')' to close argument list");
+                e = m;
+                continue;
+            }
             advance(p); /* '.' */
             Token *f = expect_member(p, "a field name after '.'");
             Expr *fl = new_expr(p, EX_FIELD, f->line);
