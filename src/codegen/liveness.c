@@ -1323,36 +1323,13 @@ static void print_stmts(FILE *out, Stmt **stmts, int count) {
 /* ------------------------------------------------------------------ */
 
 void compute_liveness(CG *cg, Package *pkgs, int npkgs, int main_index) {
-    for (int i = 0; i < npkgs; i++) {
-        Package *p = &pkgs[i];
-        for (int j = 0; j < p->prog->nfuncs; j++) {
-            FuncDecl *f = p->prog->funcs[j];
-            if (f->is_extern) continue;
-            cg->in_function = 1;
-            cg->cur_pkg = p->name;
-            FuncSig *sig = sig_of_decl(cg, f);
-            cg->cur_ret = sig->ret_slang;
-            live_function_body(cg, f->body, f->params, sig->param_slang,
-                               f->nparams);
-            cg->in_function = 0;
-        }
-        Block *body = p->prog->main_body;
-        for (int j = 0; j < body->count; j++) {
-            Stmt *s = body->stmts[j];
-            if (s->kind != ST_IMPL) continue;
-            for (int q = 0; q < s->as.impl.nfuncs; q++) {
-                FuncDecl *f = s->as.impl.funcs[q];
-                cg->in_function = 1;
-                cg->cur_pkg = p->name;
-                FuncSig *sig = method_find(
-                    cg, struct_find_in_pkg(cg, p->name, s->as.impl.struct_name),
-                    f->name);
-                cg->cur_ret = sig->ret_slang;
-                live_function_body(cg, f->body, f->params, sig->param_slang,
-                                   f->nparams);
-                cg->in_function = 0;
-            }
-        }
+    FuncCursor fc;
+    func_cursor_init(&fc);
+    while (func_cursor_next(cg, pkgs, npkgs, &fc, 0)) {
+        func_cursor_enter(cg, &fc);
+        live_function_body(cg, fc.fn->body, fc.fn->params,
+                           fc.sig->param_slang, fc.fn->nparams);
+        cg->in_function = 0;
     }
 
     /* the main package's top-level statements, walked as their own

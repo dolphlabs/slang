@@ -1451,10 +1451,10 @@ char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
  * live in their struct's namespace -- see method_find. */
 FuncSig *sig_find_in(CG *cg, const char *pkg, const char *name) {
     for (int i = 0; i < cg->sigs.count; i++) {
-        if (!cg->sigs.items[i].method_of &&
-            !strcmp(cg->sigs.items[i].pkg, pkg) &&
-            !strcmp(cg->sigs.items[i].name, name))
-            return &cg->sigs.items[i];
+        if (!cg->sigs.items[i]->method_of &&
+            !strcmp(cg->sigs.items[i]->pkg, pkg) &&
+            !strcmp(cg->sigs.items[i]->name, name))
+            return cg->sigs.items[i];
     }
     return NULL;
 }
@@ -1594,7 +1594,7 @@ char *mangle_sig(FuncSig *sig) {
 FuncSig *sig_of_decl(CG *cg, FuncDecl *f) {
     if (f->sig_idx <= 0 || f->sig_idx > cg->sigs.count)
         return NULL;
-    return &cg->sigs.items[f->sig_idx - 1];
+    return cg->sigs.items[f->sig_idx - 1];
 }
 
 char *mangle_glob(const char *pkg, const char *name) {
@@ -1608,8 +1608,8 @@ char *path_base(const char *path) {
 
 StructDef *struct_find_canon(CG *cg, const char *canon) {
     for (int i = 0; i < cg->structs.count; i++) {
-        if (!strcmp(cg->structs.items[i].canonical, canon))
-            return &cg->structs.items[i];
+        if (!strcmp(cg->structs.items[i]->canonical, canon))
+            return cg->structs.items[i];
     }
     return NULL;
 }
@@ -1617,9 +1617,9 @@ StructDef *struct_find_canon(CG *cg, const char *canon) {
 StructDef *struct_find_in_pkg(CG *cg, const char *pkg,
                                      const char *name) {
     for (int i = 0; i < cg->structs.count; i++) {
-        if (!strcmp(cg->structs.items[i].pkg, pkg) &&
-            !strcmp(cg->structs.items[i].name, name))
-            return &cg->structs.items[i];
+        if (!strcmp(cg->structs.items[i]->pkg, pkg) &&
+            !strcmp(cg->structs.items[i]->name, name))
+            return cg->structs.items[i];
     }
     return NULL;
 }
@@ -1860,7 +1860,7 @@ int is_builtin_name(const char *name) {
 /* Find a method `name` declared (via impl) for struct `sd`. */
 FuncSig *method_find(CG *cg, StructDef *sd, const char *name) {
     for (int i = 0; i < cg->sigs.count; i++) {
-        FuncSig *s = &cg->sigs.items[i];
+        FuncSig *s = cg->sigs.items[i];
         if (!strcmp(s->pkg, sd->pkg) && !strcmp(s->name, name) &&
             s->method_of && !strcmp(s->method_of, sd->canonical))
             return s;

@@ -607,41 +607,17 @@ static void mir_push(CG *cg, MirFn *fn) {
 
 void compute_mir(CG *cg, Package *pkgs, int npkgs, int main_index) {
     cg->mirs.count = 0;
-    for (int i = 0; i < npkgs; i++) {
-        Package *p = &pkgs[i];
-        for (int j = 0; j < p->prog->nfuncs; j++) {
-            FuncDecl *f = p->prog->funcs[j];
-            if (f->is_extern)
-                continue;
-            cg->in_function = 1;
-            cg->cur_pkg = p->name;
-            FuncSig *sig = sig_of_decl(cg, f);
-            cg->cur_ret = sig->ret_slang;
-            mir_push(cg, lower_fn(cg, p->name, f->name, f->body, f->params,
-                                  sig->param_slang, f->nparams));
-            cg->in_function = 0;
-        }
-        Block *body = p->prog->main_body;
-        for (int j = 0; j < body->count; j++) {
-            Stmt *s = body->stmts[j];
-            if (s->kind != ST_IMPL)
-                continue;
-            for (int q = 0; q < s->as.impl.nfuncs; q++) {
-                FuncDecl *f = s->as.impl.funcs[q];
-                cg->in_function = 1;
-                cg->cur_pkg = p->name;
-                FuncSig *sig = method_find(
-                    cg,
-                    struct_find_in_pkg(cg, p->name, s->as.impl.struct_name),
-                    f->name);
-                cg->cur_ret = sig->ret_slang;
-                char *mname =
-                    xasprintf("%s.%s", s->as.impl.struct_name, f->name);
-                mir_push(cg, lower_fn(cg, p->name, mname, f->body, f->params,
-                                      sig->param_slang, f->nparams));
-                cg->in_function = 0;
-            }
-        }
+    FuncCursor fc;
+    func_cursor_init(&fc);
+    while (func_cursor_next(cg, pkgs, npkgs, &fc, 0)) {
+        func_cursor_enter(cg, &fc);
+        FuncDecl *f = fc.fn;
+        char *fname = fc.impl_struct
+                          ? xasprintf("%s.%s", fc.impl_struct, f->name)
+                          : f->name;
+        mir_push(cg, lower_fn(cg, fc.pkg->name, fname, f->body, f->params,
+                              fc.sig->param_slang, f->nparams));
+        cg->in_function = 0;
     }
     cg->in_function = 1;
     cg->cur_ret = NULL;
