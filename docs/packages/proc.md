@@ -34,7 +34,8 @@ proc.wait_idle();
 
 `proc.getenv(name)` reads an environment variable, returning
 `opt[str]` (`none` if unset). `proc.args()` is the process argument
-list (`[str]`); `args[0]` is the executable path. `proc.cwd()` is the
+list (`[str]`); `args[0]` is the executable path. To parse options out of it, see
+[`flags`](#flags). `proc.cwd()` is the
 working directory as `result[str, str]`.
 
 ## API

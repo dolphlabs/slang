@@ -295,6 +295,196 @@
         }
       ]
     },
+    "flags": {
+      "name": "flags",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Flag",
+          "decl": "struct",
+          "sig": "gc struct Flag",
+          "doc": "",
+          "file": "stdlib/flags/flags.sl",
+          "line": 41
+        },
+        {
+          "name": "Set",
+          "decl": "struct",
+          "sig": "gc struct Set",
+          "doc": "The declared flags. Build one with `new`, add flags, then `parse`.",
+          "file": "stdlib/flags/flags.sl",
+          "line": 54
+        },
+        {
+          "name": "Parsed",
+          "decl": "struct",
+          "sig": "gc struct Parsed",
+          "doc": "What `parse` found: every declared flag with its value (the default when the command line did not set it), the positional arguments, and whether -h / --help was given.",
+          "file": "stdlib/flags/flags.sl",
+          "line": 65
+        },
+        {
+          "name": "new",
+          "decl": "fn",
+          "sig": "fn new(prog: str, about: str) -> Set",
+          "doc": "A flag set for the program `prog`. `about` is one line for the top of the usage text (\"\" for none).",
+          "file": "stdlib/flags/flags.sl",
+          "line": 78
+        },
+        {
+          "name": "Set.add_str",
+          "decl": "fn",
+          "sig": "fn add_str(self: Set, name: str, short: str, def: str, usage: str)",
+          "doc": "`--name value`, `--name=value`, `-n value`, `-nvalue`. Pass \"\" as `short` for a flag with no short form.",
+          "file": "stdlib/flags/flags.sl",
+          "line": 145
+        },
+        {
+          "name": "Set.add_int",
+          "decl": "fn",
+          "sig": "fn add_int(self: Set, name: str, short: str, def: int, usage: str)",
+          "doc": "Like add_str, for a base-10 integer.",
+          "file": "stdlib/flags/flags.sl",
+          "line": 151
+        },
+        {
+          "name": "Set.add_float",
+          "decl": "fn",
+          "sig": "fn add_float(self: Set, name: str, short: str, def: float, usage: str)",
+          "doc": "Like add_str, for a float.",
+          "file": "stdlib/flags/flags.sl",
+          "line": 157
+        },
+        {
+          "name": "Set.add_bool",
+          "decl": "fn",
+          "sig": "fn add_bool(self: Set, name: str, short: str, def: bool, usage: str)",
+          "doc": "`--name` sets it true, `--name=false` (or `--no-name`) sets it false. Short bool flags combine: `-vq` is `-v -q`.",
+          "file": "stdlib/flags/flags.sl",
+          "line": 164
+        },
+        {
+          "name": "Set.add_list",
+          "decl": "fn",
+          "sig": "fn add_list(self: Set, name: str, short: str, usage: str)",
+          "doc": "A repeatable string flag: `-I a -I b` gives [\"a\", \"b\"]. Empty when never given.",
+          "file": "stdlib/flags/flags.sl",
+          "line": 171
+        },
+        {
+          "name": "Set.require",
+          "decl": "fn",
+          "sig": "fn require(self: Set, name: str)",
+          "doc": "Make `name` mandatory: `parse` fails if the command line leaves it out (unless --help was asked for). A default is meaningless for a required flag, and the usage text says \"required\" instead.",
+          "file": "stdlib/flags/flags.sl",
+          "line": 178
+        },
+        {
+          "name": "Set.set_takes",
+          "decl": "fn",
+          "sig": "fn set_takes(self: Set, takes: str)",
+          "doc": "What follows the options on the usage line: \"<file>...\", \"[dir]\". \"\" for a program that takes no positional arguments.",
+          "file": "stdlib/flags/flags.sl",
+          "line": 188
+        },
+        {
+          "name": "Set.stop_at_first_arg",
+          "decl": "fn",
+          "sig": "fn stop_at_first_arg(self: Set)",
+          "doc": "Treat the first positional argument, and everything after it, as positional -- even what looks like a flag. Needed for programs with subcommands, where the rest belongs to the subcommand.",
+          "file": "stdlib/flags/flags.sl",
+          "line": 195
+        },
+        {
+          "name": "Set.parse",
+          "decl": "fn",
+          "sig": "fn parse(self: Set, args: [str]) -> result[Parsed, str]",
+          "doc": "Parse `args` -- proc.args(), or the positional list a parent parse left behind. Element 0 is the program (or subcommand) name and is skipped. Flags and positional arguments may be mixed; `--` ends the flags, and a lone `-` is a positional argument (the usual \"stdin\").  Fails, with a message fit to show a user, on an unknown flag, a missing or malformed value, or a required flag left out. `-h` and `--help` do not fail: check `wants_help()` on the result.",
+          "file": "stdlib/flags/flags.sl",
+          "line": 397
+        },
+        {
+          "name": "Set.parse_or_exit",
+          "decl": "fn",
+          "sig": "fn parse_or_exit(self: Set, args: [str]) -> Parsed",
+          "doc": "`parse` for a program's own command line, with the conventional failure handling: a usage error prints \"prog: message\" and a pointer to --help on stderr and exits 2; --help prints the usage text on stdout and exits 0.",
+          "file": "stdlib/flags/flags.sl",
+          "line": 447
+        },
+        {
+          "name": "Set.usage",
+          "decl": "fn",
+          "sig": "fn usage(self: Set) -> str",
+          "doc": "The help text: usage line, the `about` line, then every flag in the order it was declared with its default.",
+          "file": "stdlib/flags/flags.sl",
+          "line": 463
+        },
+        {
+          "name": "Parsed.get_str",
+          "decl": "fn",
+          "sig": "fn get_str(self: Parsed, name: str) -> str",
+          "doc": "The value of the str flag `name`: what the command line gave, or the default. Panics if no str flag by that name was declared.",
+          "file": "stdlib/flags/flags.sl",
+          "line": 540
+        },
+        {
+          "name": "Parsed.get_int",
+          "decl": "fn",
+          "sig": "fn get_int(self: Parsed, name: str) -> int",
+          "doc": "",
+          "file": "stdlib/flags/flags.sl",
+          "line": 547
+        },
+        {
+          "name": "Parsed.get_float",
+          "decl": "fn",
+          "sig": "fn get_float(self: Parsed, name: str) -> float",
+          "doc": "",
+          "file": "stdlib/flags/flags.sl",
+          "line": 554
+        },
+        {
+          "name": "Parsed.get_bool",
+          "decl": "fn",
+          "sig": "fn get_bool(self: Parsed, name: str) -> bool",
+          "doc": "",
+          "file": "stdlib/flags/flags.sl",
+          "line": 561
+        },
+        {
+          "name": "Parsed.get_list",
+          "decl": "fn",
+          "sig": "fn get_list(self: Parsed, name: str) -> [str]",
+          "doc": "Every value of the list flag `name`, in command-line order.",
+          "file": "stdlib/flags/flags.sl",
+          "line": 569
+        },
+        {
+          "name": "Parsed.is_set",
+          "decl": "fn",
+          "sig": "fn is_set(self: Parsed, name: str) -> bool",
+          "doc": "Did the command line set `name` -- as opposed to it holding its default? Works for every kind of flag.",
+          "file": "stdlib/flags/flags.sl",
+          "line": 578
+        },
+        {
+          "name": "Parsed.args",
+          "decl": "fn",
+          "sig": "fn args(self: Parsed) -> [str]",
+          "doc": "The positional arguments, in order, without the program name.",
+          "file": "stdlib/flags/flags.sl",
+          "line": 583
+        },
+        {
+          "name": "Parsed.wants_help",
+          "decl": "fn",
+          "sig": "fn wants_help(self: Parsed) -> bool",
+          "doc": "Was -h or --help given?",
+          "file": "stdlib/flags/flags.sl",
+          "line": 588
+        }
+      ]
+    },
     "fs": {
       "name": "fs",
       "kind": "native",
@@ -1845,6 +2035,48 @@
           "ret": "bool",
           "tls": false,
           "sig": "io.is_tty(int) -> bool"
+        },
+        {
+          "name": "term_width",
+          "params": [],
+          "ret": "opt[int]",
+          "tls": false,
+          "sig": "io.term_width() -> opt[int]"
+        },
+        {
+          "name": "term_height",
+          "params": [],
+          "ret": "opt[int]",
+          "tls": false,
+          "sig": "io.term_height() -> opt[int]"
+        },
+        {
+          "name": "read_secret",
+          "params": [],
+          "ret": "result[opt[str],str]",
+          "tls": false,
+          "sig": "io.read_secret() -> result[opt[str],str]"
+        },
+        {
+          "name": "raw_on",
+          "params": [],
+          "ret": "result[bool,str]",
+          "tls": false,
+          "sig": "io.raw_on() -> result[bool,str]"
+        },
+        {
+          "name": "raw_off",
+          "params": [],
+          "ret": "result[bool,str]",
+          "tls": false,
+          "sig": "io.raw_off() -> result[bool,str]"
+        },
+        {
+          "name": "read_key",
+          "params": [],
+          "ret": "result[opt[str],str]",
+          "tls": false,
+          "sig": "io.read_key() -> result[opt[str],str]"
         }
       ]
     },

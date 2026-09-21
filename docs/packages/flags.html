@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>flags — slang</title>
+<meta name="description" content="Package flags.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="flags">
+<meta property="og:description" content="Package flags.">
+<meta property="og:type" content="website">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/flags.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <button id="navtoggle" class="navtoggle" type="button"
+          aria-label="Toggle navigation" aria-expanded="false"
+          aria-controls="mainnav">
+    <span></span><span></span><span></span>
+  </button>
+  <nav class="mainnav" id="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../testing/index.html">Testing</a><a href="../bench/index.html">Benchmarks</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="navscrim" class="navscrim" hidden></div>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>flags</h1>
+      <p class="tagline">Package flags.</p>
+      <p class="agentline">
+        <a href="../packages/flags.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>Command-line options, parsed out of <code>proc.args()</code>. A slang-source stdlib package. Declare the flags on a <code>Set</code>, parse, read the values back:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;flags&quot;</span>;
+<span class="k">import</span> <span class="s">&quot;proc&quot;</span>;
+
+<span class="k">let</span> fs = flags.<span class="f">new</span>(<span class="s">&quot;greet&quot;</span>, <span class="s">&quot;print a greeting&quot;</span>);
+fs.<span class="f">add_str</span>(<span class="s">&quot;name&quot;</span>, <span class="s">&quot;n&quot;</span>, <span class="s">&quot;world&quot;</span>, <span class="s">&quot;who to greet&quot;</span>);
+fs.<span class="f">add_int</span>(<span class="s">&quot;count&quot;</span>, <span class="s">&quot;c&quot;</span>, <span class="n">1</span>, <span class="s">&quot;how many times&quot;</span>);
+fs.<span class="f">add_bool</span>(<span class="s">&quot;loud&quot;</span>, <span class="s">&quot;l&quot;</span>, <span class="k">false</span>, <span class="s">&quot;shout&quot;</span>);
+fs.<span class="f">add_list</span>(<span class="s">&quot;tag&quot;</span>, <span class="s">&quot;t&quot;</span>, <span class="s">&quot;label to attach (repeatable)&quot;</span>);
+
+<span class="k">let</span> p = fs.<span class="f">parse_or_exit</span>(proc.<span class="f">args</span>());
+
+<span class="k">let</span> greeting = <span class="s">&quot;hello &quot;</span> + p.<span class="f">get_str</span>(<span class="s">&quot;name&quot;</span>);
+<span class="k">if</span> p.<span class="f">get_bool</span>(<span class="s">&quot;loud&quot;</span>) { greeting = greeting + <span class="s">&quot;!&quot;</span>; }
+<span class="k">let</span> i = <span class="n">0</span>;
+<span class="k">while</span> i &lt; p.<span class="f">get_int</span>(<span class="s">&quot;count&quot;</span>) { <span class="b">println</span>(greeting); i = i + <span class="n">1</span>; }
+<span class="k">for</span> file <span class="k">in</span> p.<span class="f">args</span>() { <span class="b">println</span>(<span class="s">&quot;file: &quot;</span> + file); }</code></pre></div>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>$ greet -n bob -c <span class="n">2</span> -l a.txt b.txt
+hello bob!
+hello bob!
+file: a.txt
+file: b.txt
+$ greet --help
+Usage: greet [options] [args...]
+
+<span class="b">print</span> a greeting
+
+Options:
+  -n, --name &lt;<span class="t">str</span>&gt;   who to greet (<span class="k">default</span>: <span class="s">&quot;world&quot;</span>)
+  -c, --count &lt;<span class="t">int</span>&gt;  how many times (<span class="k">default</span>: <span class="n">1</span>)
+  -l, --loud         shout
+  -t, --tag &lt;<span class="t">str</span>&gt;    label to attach (repeatable)
+  -h, --help         show this help</code></pre></div>
+<div class="tablewrap"><table><thead><tr><th>Declare</th><th>Value type</th></tr></thead><tbody><tr><td><code>fs.add_str(name, short, default, usage)</code></td><td><code>str</code></td></tr><tr><td><code>fs.add_int(name, short, default, usage)</code></td><td><code>int</code></td></tr><tr><td><code>fs.add_float(name, short, default, usage)</code></td><td><code>float</code></td></tr><tr><td><code>fs.add_bool(name, short, default, usage)</code></td><td><code>bool</code></td></tr><tr><td><code>fs.add_list(name, short, usage)</code></td><td><code>[str]</code>, one entry per occurrence</td></tr><tr><td><code>fs.require(name)</code></td><td>the flag must appear</td></tr><tr><td><code>fs.set_takes(&quot;&lt;file&gt;...&quot;)</code></td><td>positional synopsis on the usage line (<code>&quot;&quot;</code> for none)</td></tr><tr><td><code>fs.stop_at_first_arg()</code></td><td>flags end at the first positional (subcommands)</td></tr></tbody></table></div>
+<div class="tablewrap"><table><thead><tr><th>Read</th><th></th></tr></thead><tbody><tr><td><code>p.get_str(name)</code> / <code>get_int</code> / <code>get_float</code> / <code>get_bool</code> / <code>get_list</code></td><td>the value, or the default</td></tr><tr><td><code>p.is_set(name)</code></td><td>did the command line set it?</td></tr><tr><td><code>p.args()</code></td><td>positional arguments, in order</td></tr><tr><td><code>p.wants_help()</code></td><td>was <code>-h</code> / <code>--help</code> given?</td></tr><tr><td><code>fs.parse(args)</code></td><td><code>result[Parsed, str]</code></td></tr><tr><td><code>fs.parse_or_exit(args)</code></td><td><code>Parsed</code>; on a usage error prints to stderr and exits 2, on <code>--help</code> prints the usage and exits 0</td></tr><tr><td><code>fs.usage()</code></td><td>the help text as a <code>str</code></td></tr></tbody></table></div>
+<p>What a command line may contain:</p>
+<ul><li><strong>Long flags</strong>: <code>--name bob</code> or <code>--name=bob</code>. <strong>Short flags</strong>: <code>-n bob</code>, <code>-nbob</code> or <code>-n=bob</code>. Give <code>&quot;&quot;</code> for a flag with no short form.</li><li><strong>Bools</strong> take no value: <code>--loud</code> sets true, <code>--loud=false</code> or <code>--no-loud</code> sets false. Short bools combine, <code>-lv</code> is <code>-l -v</code>, and a value flag may end a cluster: <code>-lc5</code>.</li><li><strong>Positional arguments</strong> may be mixed with flags. <code>--</code> ends the flags, and a lone <code>-</code> is a positional argument (the usual &quot;read stdin&quot;). The last occurrence of a flag wins, except a list flag, which collects them.</li><li>A value flag takes the next token as its value even if it starts with <code>-</code>, so <code>--offset -5</code> works. A positional argument that looks like a flag needs a <code>--</code> before it.</li></ul>
+<p><code>parse</code> takes the list exactly as <code>proc.args()</code> returns it and skips element 0, the program name. The positionals come back without it, so a subcommand parses what its parent left with the same call:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> global = flags.<span class="f">new</span>(<span class="s">&quot;tool&quot;</span>, <span class="s">&quot;&quot;</span>);
+global.<span class="f">add_bool</span>(<span class="s">&quot;verbose&quot;</span>, <span class="s">&quot;v&quot;</span>, <span class="k">false</span>, <span class="s">&quot;chatty output&quot;</span>);
+global.<span class="f">stop_at_first_arg</span>();                  <span class="c">// &quot;push --force&quot; is not ours</span>
+<span class="k">let</span> g = global.<span class="f">parse_or_exit</span>(proc.<span class="f">args</span>());   <span class="c">// g.args() == [&quot;push&quot;, &quot;--force&quot;, &quot;origin&quot;]</span>
+
+<span class="k">let</span> <span class="b">push</span> = flags.<span class="f">new</span>(<span class="s">&quot;push&quot;</span>, <span class="s">&quot;&quot;</span>);
+<span class="b">push</span>.<span class="f">add_bool</span>(<span class="s">&quot;force&quot;</span>, <span class="s">&quot;f&quot;</span>, <span class="k">false</span>, <span class="s">&quot;overwrite&quot;</span>);
+<span class="k">let</span> s = <span class="b">push</span>.<span class="f">parse_or_exit</span>(g.<span class="f">args</span>());        <span class="c">// element 0, &quot;push&quot;, is skipped</span></code></pre></div>
+<p><strong>Two kinds of failure.</strong> What a user can type wrong (an unknown flag, a missing or malformed value, a required flag left out) comes back as an <code>err</code> from <code>parse</code>: bad data, so <code>result[_, str]</code>. What only a programmer can get wrong (a duplicate or empty flag name, a short name longer than one character, reading a flag that was never declared, <code>get_int</code> on a str flag) panics, because no input can cause it and it should fail the first time the program runs, not on the user&#x27;s third flag.</p>
+<p><strong>Why declare, then read.</strong> Go&#x27;s <code>flag.String</code> hands back a pointer that is filled in later. slang has no references to locals, so the values live on the <code>Parsed</code> result and are read by name. The declaring methods are <code>add_str</code> and so on because <code>str</code>, <code>int</code>, <code>float</code> and <code>bool</code> are type keywords.</p>
+<p>Not supported: flags that take several values in one occurrence, <code>--flag value1 value2</code>; abbreviations of long names; environment-variable fallbacks. Set a default from <code>proc.getenv</code> yourself when you want one.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="flag"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Flag</code> <span class="src">stdlib/flags/flags.sl:41</span><a class="anchor" href="#flag">#</a></div></div><div class="api-item" id="set"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Set</code> <span class="src">stdlib/flags/flags.sl:54</span><a class="anchor" href="#set">#</a></div><p class="api-doc">The declared flags. Build one with <code>new</code>, add flags, then <code>parse</code>.</p></div><div class="api-item" id="parsed"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Parsed</code> <span class="src">stdlib/flags/flags.sl:65</span><a class="anchor" href="#parsed">#</a></div><p class="api-doc">What <code>parse</code> found: every declared flag with its value (the default when the command line did not set it), the positional arguments, and whether -h / --help was given.</p></div><div class="api-item" id="new"><div class="api-sig"><code><span class="k">fn</span> <span class="f">new</span>(prog: <span class="t">str</span>, about: <span class="t">str</span>) -&gt; Set</code> <span class="src">stdlib/flags/flags.sl:78</span><a class="anchor" href="#new">#</a></div><p class="api-doc">A flag set for the program <code>prog</code>. <code>about</code> is one line for the top of the usage text (&quot;&quot; for none).</p></div><div class="api-item" id="set-add-str"><div class="api-sig"><code><span class="k">fn</span> <span class="f">add_str</span>(self: Set, name: <span class="t">str</span>, short: <span class="t">str</span>, def: <span class="t">str</span>, usage: <span class="t">str</span>)</code> <span class="src">stdlib/flags/flags.sl:145</span><a class="anchor" href="#set-add-str">#</a></div><p class="api-doc"><code>--name value</code>, <code>--name=value</code>, <code>-n value</code>, <code>-nvalue</code>. Pass &quot;&quot; as <code>short</code> for a flag with no short form.</p></div><div class="api-item" id="set-add-int"><div class="api-sig"><code><span class="k">fn</span> <span class="f">add_int</span>(self: Set, name: <span class="t">str</span>, short: <span class="t">str</span>, def: <span class="t">int</span>, usage: <span class="t">str</span>)</code> <span class="src">stdlib/flags/flags.sl:151</span><a class="anchor" href="#set-add-int">#</a></div><p class="api-doc">Like add_str, for a base-10 integer.</p></div><div class="api-item" id="set-add-float"><div class="api-sig"><code><span class="k">fn</span> <span class="f">add_float</span>(self: Set, name: <span class="t">str</span>, short: <span class="t">str</span>, def: <span class="t">float</span>, usage: <span class="t">str</span>)</code> <span class="src">stdlib/flags/flags.sl:157</span><a class="anchor" href="#set-add-float">#</a></div><p class="api-doc">Like add_str, for a float.</p></div><div class="api-item" id="set-add-bool"><div class="api-sig"><code><span class="k">fn</span> <span class="f">add_bool</span>(self: Set, name: <span class="t">str</span>, short: <span class="t">str</span>, def: <span class="t">bool</span>, usage: <span class="t">str</span>)</code> <span class="src">stdlib/flags/flags.sl:164</span><a class="anchor" href="#set-add-bool">#</a></div><p class="api-doc"><code>--name</code> sets it true, <code>--name=false</code> (or <code>--no-name</code>) sets it false. Short bool flags combine: <code>-vq</code> is <code>-v -q</code>.</p></div><div class="api-item" id="set-add-list"><div class="api-sig"><code><span class="k">fn</span> <span class="f">add_list</span>(self: Set, name: <span class="t">str</span>, short: <span class="t">str</span>, usage: <span class="t">str</span>)</code> <span class="src">stdlib/flags/flags.sl:171</span><a class="anchor" href="#set-add-list">#</a></div><p class="api-doc">A repeatable string flag: <code>-I a -I b</code> gives [&quot;a&quot;, &quot;b&quot;]. Empty when never given.</p></div><div class="api-item" id="set-require"><div class="api-sig"><code><span class="k">fn</span> <span class="f">require</span>(self: Set, name: <span class="t">str</span>)</code> <span class="src">stdlib/flags/flags.sl:178</span><a class="anchor" href="#set-require">#</a></div><p class="api-doc">Make <code>name</code> mandatory: <code>parse</code> fails if the command line leaves it out (unless --help was asked for). A default is meaningless for a required flag, and the usage text says &quot;required&quot; instead.</p></div><div class="api-item" id="set-set-takes"><div class="api-sig"><code><span class="k">fn</span> <span class="f">set_takes</span>(self: Set, takes: <span class="t">str</span>)</code> <span class="src">stdlib/flags/flags.sl:188</span><a class="anchor" href="#set-set-takes">#</a></div><p class="api-doc">What follows the options on the usage line: &quot;&lt;file&gt;...&quot;, &quot;[dir]&quot;. &quot;&quot; for a program that takes no positional arguments.</p></div><div class="api-item" id="set-stop-at-first-arg"><div class="api-sig"><code><span class="k">fn</span> <span class="f">stop_at_first_arg</span>(self: Set)</code> <span class="src">stdlib/flags/flags.sl:195</span><a class="anchor" href="#set-stop-at-first-arg">#</a></div><p class="api-doc">Treat the first positional argument, and everything after it, as positional -- even what looks like a flag. Needed for programs with subcommands, where the rest belongs to the subcommand.</p></div><div class="api-item" id="set-parse"><div class="api-sig"><code><span class="k">fn</span> <span class="f">parse</span>(self: Set, args: [<span class="t">str</span>]) -&gt; <span class="t">result</span>[Parsed, <span class="t">str</span>]</code> <span class="src">stdlib/flags/flags.sl:397</span><a class="anchor" href="#set-parse">#</a></div><p class="api-doc">Parse <code>args</code> -- proc.args(), or the positional list a parent parse left behind. Element 0 is the program (or subcommand) name and is skipped. Flags and positional arguments may be mixed; <code>--</code> ends the flags, and a lone <code>-</code> is a positional argument (the usual &quot;stdin&quot;).  Fails, with a message fit to show a user, on an unknown flag, a missing or malformed value, or a required flag left out. <code>-h</code> and <code>--help</code> do not fail: check <code>wants_help()</code> on the result.</p></div><div class="api-item" id="set-parse-or-exit"><div class="api-sig"><code><span class="k">fn</span> <span class="f">parse_or_exit</span>(self: Set, args: [<span class="t">str</span>]) -&gt; Parsed</code> <span class="src">stdlib/flags/flags.sl:447</span><a class="anchor" href="#set-parse-or-exit">#</a></div><p class="api-doc"><code>parse</code> for a program&#x27;s own command line, with the conventional failure handling: a usage error prints &quot;prog: message&quot; and a pointer to --help on stderr and exits 2; --help prints the usage text on stdout and exits 0.</p></div><div class="api-item" id="set-usage"><div class="api-sig"><code><span class="k">fn</span> <span class="f">usage</span>(self: Set) -&gt; <span class="t">str</span></code> <span class="src">stdlib/flags/flags.sl:463</span><a class="anchor" href="#set-usage">#</a></div><p class="api-doc">The help text: usage line, the <code>about</code> line, then every flag in the order it was declared with its default.</p></div><div class="api-item" id="parsed-get-str"><div class="api-sig"><code><span class="k">fn</span> <span class="f">get_str</span>(self: Parsed, name: <span class="t">str</span>) -&gt; <span class="t">str</span></code> <span class="src">stdlib/flags/flags.sl:540</span><a class="anchor" href="#parsed-get-str">#</a></div><p class="api-doc">The value of the str flag <code>name</code>: what the command line gave, or the default. Panics if no str flag by that name was declared.</p></div><div class="api-item" id="parsed-get-int"><div class="api-sig"><code><span class="k">fn</span> <span class="f">get_int</span>(self: Parsed, name: <span class="t">str</span>) -&gt; <span class="t">int</span></code> <span class="src">stdlib/flags/flags.sl:547</span><a class="anchor" href="#parsed-get-int">#</a></div></div><div class="api-item" id="parsed-get-float"><div class="api-sig"><code><span class="k">fn</span> <span class="f">get_float</span>(self: Parsed, name: <span class="t">str</span>) -&gt; <span class="t">float</span></code> <span class="src">stdlib/flags/flags.sl:554</span><a class="anchor" href="#parsed-get-float">#</a></div></div><div class="api-item" id="parsed-get-bool"><div class="api-sig"><code><span class="k">fn</span> <span class="f">get_bool</span>(self: Parsed, name: <span class="t">str</span>) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/flags/flags.sl:561</span><a class="anchor" href="#parsed-get-bool">#</a></div></div><div class="api-item" id="parsed-get-list"><div class="api-sig"><code><span class="k">fn</span> <span class="f">get_list</span>(self: Parsed, name: <span class="t">str</span>) -&gt; [<span class="t">str</span>]</code> <span class="src">stdlib/flags/flags.sl:569</span><a class="anchor" href="#parsed-get-list">#</a></div><p class="api-doc">Every value of the list flag <code>name</code>, in command-line order.</p></div><div class="api-item" id="parsed-is-set"><div class="api-sig"><code><span class="k">fn</span> <span class="f">is_set</span>(self: Parsed, name: <span class="t">str</span>) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/flags/flags.sl:578</span><a class="anchor" href="#parsed-is-set">#</a></div><p class="api-doc">Did the command line set <code>name</code> -- as opposed to it holding its default? Works for every kind of flag.</p></div><div class="api-item" id="parsed-args"><div class="api-sig"><code><span class="k">fn</span> <span class="f">args</span>(self: Parsed) -&gt; [<span class="t">str</span>]</code> <span class="src">stdlib/flags/flags.sl:583</span><a class="anchor" href="#parsed-args">#</a></div><p class="api-doc">The positional arguments, in order, without the program name.</p></div><div class="api-item" id="parsed-wants-help"><div class="api-sig"><code><span class="k">fn</span> <span class="f">wants_help</span>(self: Parsed) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/flags/flags.sl:588</span><a class="anchor" href="#parsed-wants-help">#</a></div><p class="api-doc">Was -h or --help given?</p></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>
