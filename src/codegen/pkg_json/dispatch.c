@@ -83,6 +83,21 @@ static JsonInst *json_reserve(CG *cg, const char *t) {
     return it;
 }
 
+/* The generated codecs read and build a struct through a pointer (a
+ * decoded struct is a heap object; an encoded one is walked with `->`), so
+ * they only exist for `gc struct`. Without this a plain struct got as far
+ * as the C compiler, which said `member reference type is not a pointer`
+ * about generated code. Checked at every struct the walk reaches, so a
+ * plain struct nested inside a gc one is named too. */
+static void json_require_gc_struct(StructDef *sd, const char *what, int line) {
+    if (sd->is_gc)
+        return;
+    cg_error(line,
+             "cannot json.%s '%s': json supports only gc structs (declare "
+             "it 'gc struct %s')",
+             what, sd->canonical, sd->name);
+}
+
 const char *json_dec_fn(CG *cg, const char *t, int line) {
     const char *scalar = json_scalar_dec_name(t);
     if (scalar)
@@ -120,6 +135,7 @@ const char *json_dec_fn(CG *cg, const char *t, int line) {
                      "cannot json.decode into type '%s': not representable "
                      "in JSON (rawptr, chan, and result aren't supported)",
                      t);
+        json_require_gc_struct(sd, "decode into", line);
         for (int i = 0; i < sd->nfields; i++)
             json_dec_fn(cg, sd->ftypes[i], line);
     }
@@ -159,6 +175,7 @@ const char *json_enc_fn(CG *cg, const char *t, int line) {
                      "cannot json.encode type '%s': not representable in "
                      "JSON (rawptr, chan, and result aren't supported)",
                      t);
+        json_require_gc_struct(sd, "encode", line);
         for (int i = 0; i < sd->nfields; i++)
             json_enc_fn(cg, sd->ftypes[i], line);
     }
