@@ -176,6 +176,7 @@ PACKAGE_SECTIONS = {
     "encoding": ["`encoding`"],
     "compress": ["`compress`"],
     "byteutil": ["`byteutil`"],
+    "flags": ["`flags`"],
     "http": ["`http`"],
     "httpc": ["`httpc`"],
     "pg": ["`pg`"],
