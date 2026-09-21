@@ -219,6 +219,11 @@ static void resolve_expr(CG *cg, const char *pkg, Expr *e) {
     case EX_FIELD:
         resolve_expr(cg, pkg, e->as.field.base);
         return;
+    case EX_METHOD:
+        resolve_expr(cg, pkg, e->as.method.recv);
+        for (int i = 0; i < e->as.method.nargs; i++)
+            resolve_expr(cg, pkg, e->as.method.args[i]);
+        return;
     case EX_STRUCTLIT:
         for (int i = 0; i < e->as.structlit.nfields; i++)
             resolve_expr(cg, pkg, e->as.structlit.vals[i]);

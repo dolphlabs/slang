@@ -734,6 +734,67 @@ have_sig:;
     return sig->ret_slang ? sig->ret_slang : "void";
 }
 
+FuncSig *method_target(CG *cg, const char *recv_t, const char *name,
+                       int line, StructDef **sd_out, int *fld) {
+    /* arena, link and trip have hand-written pseudo-methods that are
+     * emitted from a variable's name (gen_call). They are handles that
+     * live in locals; say so instead of the misleading "no such field". */
+    if (type_is_arena(recv_t) || type_is_link(recv_t) || type_is_trip(recv_t))
+        cg_error(line,
+                 "'%s' is a method of the built-in type %s, which can only "
+                 "be called on a variable: assign the receiver to a name "
+                 "first",
+                 name, recv_t);
+    StructDef *sd = struct_of_type(cg, recv_t);
+    if (!sd)
+        cg_error(line, "cannot call '%s' on a value of type %s: it has no "
+                       "methods", name, recv_t);
+    *sd_out = sd;
+    *fld = -1;
+    /* A fn-typed FIELD wins over a method of the same name, exactly as it
+     * does for `x.f(1)` on a variable. */
+    for (int i = 0; i < sd->nfields; i++) {
+        if (!strcmp(sd->fields[i], name) && is_fn(sd->ftypes[i])) {
+            *fld = i;
+            return fn_sig_of_type(cg, sd->ftypes[i], name, line);
+        }
+    }
+    FuncSig *sig = method_find(cg, sd, name);
+    if (!sig)
+        cg_error(line, "type '%s' has no method '%s'", sd->canonical, name);
+    if (!sig->is_pub && strcmp(sd->pkg, cg->cur_pkg))
+        cg_error(line,
+                 "method '%s' is not exported from package '%s' (add 'pub' "
+                 "to export it)",
+                 name, sd->pkg);
+    return sig;
+}
+
+/* recv.name(args) where recv is an arbitrary expression. */
+const char *infer_method(CG *cg, Expr *e) {
+    const char *name = e->as.method.name;
+    const char *recv_t = infer_type(cg, e->as.method.recv);
+    StructDef *sd;
+    int fld;
+    FuncSig *sig = method_target(cg, recv_t, name, e->line, &sd, &fld);
+    int self_off = fld >= 0 ? 0 : 1;
+    int n = e->as.method.nargs;
+    if (n + self_off != sig->nparams)
+        cg_error(e->line, "function '%s' expects %d argument(s), got %d",
+                 name, sig->nparams - self_off, n);
+    for (int i = 0; i < n; i++) {
+        const char *saved = expect_push(cg, sig->param_slang[i + self_off]);
+        const char *at = infer_type(cg, e->as.method.args[i]);
+        cg->expect = saved;
+        if (!value_assignable(sig->param_slang[i + self_off],
+                              e->as.method.args[i], at))
+            cg_error(e->line,
+                     "argument %d of '%s': cannot pass %s where %s expected",
+                     i + 1, name, at, sig->param_slang[i + self_off]);
+    }
+    return sig->ret_slang ? sig->ret_slang : "void";
+}
+
 const char *infer_binary(CG *cg, Expr *e) {
     const char *op = e->as.binary.op;
     const char *lt = infer_type(cg, e->as.binary.lhs);
@@ -961,6 +1022,11 @@ const char *infer_type(CG *cg, Expr *e) {
         return infer_binary(cg, e);
     case EX_CALL: {
         const char *t = infer_call(cg, e);
+        e->inf_ty = t;
+        return t;
+    }
+    case EX_METHOD: {
+        const char *t = infer_method(cg, e);
         e->inf_ty = t;
         return t;
     }

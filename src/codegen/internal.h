@@ -556,6 +556,14 @@ const char *ctor_infer(CG *cg, Expr *e);
 const char *native_check(CG *cg, const char *pkg, const char *fname,
                                 Expr *e);
 const char *infer_call(CG *cg, Expr *e);
+const char *infer_method(CG *cg, Expr *e);
+/* What `recv.name(...)` names for a receiver of type `recv_t`: the method's
+ * FuncSig (self is param 0), or -- when the struct has a fn-typed FIELD of
+ * that name, which wins -- the signature of the function it holds, with
+ * *fld set to the field's index and no implicit self. *fld is -1 for a
+ * method. Shared by infer_method and gen_method so they cannot disagree. */
+FuncSig *method_target(CG *cg, const char *recv_t, const char *name,
+                       int line, StructDef **sd_out, int *fld);
 const char *infer_binary(CG *cg, Expr *e);
 const char *infer_type(CG *cg, Expr *e);
 char *gen_ident_name(CG *cg, const char *name, int line);
@@ -575,6 +583,7 @@ char *gen_ctor(CG *cg, Expr *e);
 char *native_gen(CG *cg, const char *pkg, const char *fname,
                         Expr *e);
 char *gen_call(CG *cg, Expr *e);
+char *gen_method(CG *cg, Expr *e);
 char *gen_maplit(CG *cg, Expr *e, const char *expect_k,
                         const char *expect_v);
 char *gen_structlit(CG *cg, Expr *e);

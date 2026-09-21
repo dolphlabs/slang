@@ -381,6 +381,16 @@ values: assignment copies, including any `str` / list / map /
 `opt` / `result` / `gc struct` fields (shallow — the heap objects
 are shared). Use `gc struct` when the record itself should be a
 shared heap object.
+A method can be called on any expression, not only on a variable, so calls
+chain: `p.moved(1, 2).sum()`, `make().sum()`, `points[0].sum()`,
+`scores["ann"].sum()`, `line.tl.sum()`. The receiver is evaluated exactly once,
+before the arguments, which run left to right. Two things are not allowed on
+such a receiver, and both say what to do instead: a method that returns a
+reference (`fn get(self: &Bag) -> &int`) — the reference would have no owner,
+so bind the receiver to a variable first — and the `arena`, `link` and `trip`
+methods (`a.alloc(..)`, `conn.send(..)`, `t.pull()`), which are only callable on
+a variable.
+
 `own T` is uniquely owned: assignment and passing **move**, and
 use-after-move is a compile error. A moved binding can be reinitialized.
 `own` is freed when its binding goes out of scope unless it was moved.
@@ -897,6 +907,16 @@ values: assignment copies, including any `str` / list / map /
 `opt` / `result` / `gc struct` fields (shallow — the heap objects
 are shared). Use `gc struct` when the record itself should be a
 shared heap object.
+A method can be called on any expression, not only on a variable, so calls
+chain: `p.moved(1, 2).sum()`, `make().sum()`, `points[0].sum()`,
+`scores["ann"].sum()`, `line.tl.sum()`. The receiver is evaluated exactly once,
+before the arguments, which run left to right. Two things are not allowed on
+such a receiver, and both say what to do instead: a method that returns a
+reference (`fn get(self: &Bag) -> &int`) — the reference would have no owner,
+so bind the receiver to a variable first — and the `arena`, `link` and `trip`
+methods (`a.alloc(..)`, `conn.send(..)`, `t.pull()`), which are only callable on
+a variable.
+
 `own T` is uniquely owned: assignment and passing **move**, and
 use-after-move is a compile error. A moved binding can be reinitialized.
 `own` is freed when its binding goes out of scope unless it was moved.

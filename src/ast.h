@@ -49,6 +49,12 @@ typedef enum {
     EX_LIST,   /* [a, b, c] */
     EX_MAPLIT, /* {k: v, ...} map literal */
     EX_FIELD,  /* base.field (postfix dot) */
+    EX_METHOD, /* recv.name(args) where recv is NOT a bare identifier --
+                * `make().m()`, `a.b.c()`, `xs[0].m()`. A bare `p.m()` keeps
+                * its dotted-name EX_CALL form (see parse_primary), so the
+                * many passes that resolve it via split_dotted are untouched;
+                * this is the third shape, for a receiver that is an
+                * arbitrary expression. */
     EX_STRUCTLIT, /* Name { field: value, ... } */
     EX_SPAWN      /* spawn f(args...) as a join[T] expression */
 } ExprKind;
@@ -111,6 +117,8 @@ struct Expr {
             int npairs;
         } maplit;
         struct { Expr *base; char *name; } field;
+        /* `recv` is evaluated exactly once, before the arguments. */
+        struct { Expr *recv; char *name; Expr **args; int nargs; } method;
         struct {
             char *tyname;      /* struct name as written: "Point" or "pkg.Point" */
             char **fields;

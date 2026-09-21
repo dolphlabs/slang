@@ -558,6 +558,36 @@ static LiveSet *live_expr(CG *cg, Expr *e, LiveSet *live_out) {
         call->live_set = e->live_set;
         return cur;
     }
+    case EX_METHOD: {
+        /* recv.name(args): the receiver is child 0 -- evaluated before the
+         * arguments, and (unlike the bare-identifier receiver of an
+         * EX_CALL) possibly a call or allocation of its own. Treating it
+         * as the first sibling gives it the same "pending" protection the
+         * foo(bar(), baz()) mechanism gives an earlier argument: its
+         * not-yet-consumed result is a root at every later sibling's
+         * safepoint. gen_method sequences it into a temp registered
+         * against this same Expr, which is what those markers resolve to. */
+        int n = e->as.method.nargs;
+        const char *recv_t = infer_type(cg, e->as.method.recv);
+        StructDef *sd;
+        int fld;
+        FuncSig *sig = method_target(cg, recv_t, e->as.method.name, e->line,
+                                     &sd, &fld);
+        int argi = fld >= 0 ? 0 : 1;
+        Expr **kids = (Expr **)xmalloc(sizeof(Expr *) * (size_t)(n + 1));
+        const char **expects =
+            (const char **)xmalloc(sizeof(char *) * (size_t)(n + 1));
+        kids[0] = e->as.method.recv;
+        expects[0] = NULL;
+        for (int i = 0; i < n; i++) {
+            kids[i + 1] = e->as.method.args[i];
+            expects[i + 1] = sig->param_slang[argi + i];
+        }
+        LiveSet *cur =
+            process_children_reverse(cg, kids, n + 1, live_out, expects);
+        e->live_set = ls_clone(cur);
+        return cur;
+    }
     case EX_CALL: {
         const char **expects = call_arg_expects(cg, e);
         LiveSet *cur = process_children_reverse(
@@ -1139,6 +1169,16 @@ static void print_expr(FILE *out, Expr *e) {
             print_expr(out, e->as.call.args[i]);
         if (e->live_set) {
             fprintf(out, "L%d: CALL %s live=", e->line, e->as.call.name);
+            print_live_set(out, (LiveSet *)e->live_set);
+            fputc('\n', out);
+        }
+        return;
+    case EX_METHOD:
+        print_expr(out, e->as.method.recv);
+        for (int i = 0; i < e->as.method.nargs; i++)
+            print_expr(out, e->as.method.args[i]);
+        if (e->live_set) {
+            fprintf(out, "L%d: METHOD %s live=", e->line, e->as.method.name);
             print_live_set(out, (LiveSet *)e->live_set);
             fputc('\n', out);
         }

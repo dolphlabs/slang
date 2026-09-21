@@ -1292,6 +1292,77 @@ have_sig:;
     return result;
 }
 
+/* recv.name(args) where recv is an arbitrary expression (EX_METHOD).
+ *
+ * gen_call may assume a method receiver is a plain identifier -- "never a
+ * call/allocation of its own, so no ordering hazard, nothing to register".
+ * None of that holds here: the receiver can be a call that allocates, and
+ * it must run exactly once, before the arguments. So it is sequenced FIRST,
+ * always (even with no arguments, unlike gen_call's `nargs > 1` rule), into
+ * a temp that sequence_one also registers with liveness and pushes onto
+ * cg->ambient_roots -- which is what keeps it alive across the arguments'
+ * own safepoints. Slot 0 is the receiver; argument i is slot i + 1. */
+char *gen_method(CG *cg, Expr *e) {
+    const char *name = e->as.method.name;
+    Expr *recv = e->as.method.recv;
+    const char *recv_t = infer_type(cg, recv);
+    StructDef *sd;
+    int fld;
+    FuncSig *sig = method_target(cg, recv_t, name, e->line, &sd, &fld);
+    int argi = fld >= 0 ? 0 : 1; /* param 0 is the implicit self */
+
+    int nargs = e->as.method.nargs;
+    int seq_id = cg->tmp_id++;
+    int ambient_mark = cg->ambient_count;
+    StrBuf prelude;
+    sb_init(&prelude);
+
+    char *rtmp = sequence_one(cg, seq_id, 0, ctype_of(cg, recv_t), recv_t,
+                              gen_expr(cg, recv), recv, &prelude);
+    char *selfexpr = NULL;
+    char *callee = NULL;
+    if (fld >= 0)
+        callee = xasprintf("((%s)%s%s)", rtmp, struct_access(cg, recv_t),
+                           sanitize_ident(name));
+    else
+        selfexpr = maybe_cast(cg, sig->param_slang[0], recv_t, rtmp);
+
+    char **names =
+        (char **)xmalloc(sizeof(char *) * (size_t)(nargs > 0 ? nargs : 1));
+    for (int i = 0; i < nargs; i++) {
+        const char *pt = sig->param_slang[argi + i];
+        const char *saved = expect_push(cg, pt);
+        const char *at = infer_type(cg, e->as.method.args[i]);
+        char *a = gen_expr(cg, e->as.method.args[i]);
+        cg->expect = saved;
+        names[i] = sequence_one(cg, seq_id, i + 1, ctype_of(cg, pt), pt,
+                                maybe_cast(cg, pt, at, a),
+                                e->as.method.args[i], &prelude);
+    }
+
+    StrBuf sb;
+    sb_init(&sb);
+    sb_append(&sb, callee ? callee
+                          : sig->is_extern ? xstrdup(sig->name)
+                                           : mangle_sig(sig));
+    sb_putc(&sb, '(');
+    if (selfexpr)
+        sb_append(&sb, selfexpr);
+    for (int i = 0; i < nargs; i++) {
+        if (i || selfexpr)
+            sb_append(&sb, ", ");
+        sb_append(&sb, names[i]);
+    }
+    sb_putc(&sb, ')');
+    move_consume(cg, e);
+
+    char *result = wrap_safepoint(
+        cg, e, sig->ret_slang ? ctype_of(cg, sig->ret_slang) : NULL,
+        prelude.data, sb.data);
+    cg->ambient_count = ambient_mark;
+    return result;
+}
+
 /* Generate a map literal. With expect_k/expect_v (annotated case),
  * elements are checked/cast against those types instead of inferred. */
 char *gen_maplit(CG *cg, Expr *e, const char *expect_k,
@@ -1772,6 +1843,8 @@ char *gen_expr(CG *cg, Expr *e) {
     }
     case EX_CALL:
         return gen_call(cg, e);
+    case EX_METHOD:
+        return gen_method(cg, e);
     case EX_SPAWN: {
         Expr *call = e->as.spawn.call;
         const char *name = call->as.call.name;
