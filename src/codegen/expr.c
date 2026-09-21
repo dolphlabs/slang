@@ -975,6 +975,11 @@ char *gen_call(CG *cg, Expr *e) {
     FuncSig *sig = NULL;
     char *selfexpr = NULL;
     char *callee = NULL; /* set only for a call through a fn value */
+    /* A callee that is an EXPRESSION (not a name) is generated first and
+     * hoisted into a temp ahead of the arguments below: C leaves the order
+     * of a function designator and its arguments unspecified, and `pick()(f())`
+     * must run pick() before f(). */
+    const char *callee_expr_t = NULL;
     const char *recv_t = NULL;
     char *left, *right;
     if (split_dotted(name, &left, &right)) {
@@ -1189,7 +1194,8 @@ char *gen_call(CG *cg, Expr *e) {
             cg_error(e->line,
                      "this expression is not callable (type %s)", ct);
         sig = fn_sig_of_type(cg, ct, "<function value>", e->line);
-        callee = xasprintf("(%s)", gen_expr(cg, e->as.call.callee));
+        callee = gen_expr(cg, e->as.call.callee);
+        callee_expr_t = ct;
     } else {
         const char *fvt = fn_var_type(cg, name);
         if (fvt) {
@@ -1225,6 +1231,13 @@ have_sig:;
     char **names = (char **)xmalloc(sizeof(char *) * (size_t)(nargs > 0 ? nargs : 1));
     StrBuf prelude;
     sb_init(&prelude);
+    if (callee_expr_t) {
+        /* a fn value is a plain C function pointer: no GC roots, so this
+         * only fixes the order, and registers nothing */
+        callee = sequence_one(cg, cg->tmp_id++, 0,
+                              ctype_of(cg, callee_expr_t), callee_expr_t,
+                              callee, e->as.call.callee, &prelude);
+    }
     int seq_id = nargs > 1 ? cg->tmp_id++ : -1;
     int ambient_mark = cg->ambient_count;
     for (int i = 0; i < nargs; i++) {

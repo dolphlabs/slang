@@ -204,6 +204,10 @@ static void check_rvalue(CG *cg, Expr *e) {
             else
                 use_ident(cg, left, e->line, 0);
         }
+        /* a call through a function value: the callee expression is used
+         * (and can name a moved value) like any other operand */
+        if (e->as.call.callee)
+            check_rvalue(cg, e->as.call.callee);
         for (int i = 0; i < e->as.call.nargs; i++)
             check_rvalue(cg, e->as.call.args[i]);
         return;
@@ -665,6 +669,11 @@ void move_consume(CG *cg, Expr *e) {
         if (split_dotted(e->as.call.name, &left, &right) &&
             !import_try(cg, left) && !method_value_self(cg, e, left))
             consume_ident(cg, left);
+        /* `pick(own_thing)(x)`: the call inside the callee consumes its own
+         * arguments; skipping it left that drop flag set, so the callee
+         * freed the value and the caller freed it again. */
+        if (e->as.call.callee)
+            move_consume(cg, e->as.call.callee);
         for (int i = 0; i < e->as.call.nargs; i++)
             move_consume(cg, e->as.call.args[i]);
         return;
