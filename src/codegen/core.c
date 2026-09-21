@@ -1667,6 +1667,13 @@ char *mangle_sig(FuncSig *sig) {
     if (sig->is_extern)
         return xstrdup(sig->name);
     if (sig->method_of) {
+        /* An instance's canonical name carries its arguments and their
+         * dots (`main.Box[main.Point]`), which neither the last-dot split
+         * below nor C itself can spell -- take the struct's own C name,
+         * hash and all, so two instances' methods never collide. */
+        if (strchr(sig->method_of, '['))
+            return xasprintf("%s__m_%s", mangle_struct(sig->method_of),
+                             sanitize_ident(sig->name));
         const char *dot = strrchr(sig->method_of, '.');
         const char *sname = dot ? dot + 1 : sig->method_of;
         return xasprintf("sl_%s_%s__m_%s", sanitize_pkg(sig->pkg),
@@ -1975,14 +1982,21 @@ int is_builtin_name(const char *name) {
            !strcmp(name, "__enum_from_str");
 }
 
-/* Find a method `name` declared (via impl) for struct `sd`. */
-FuncSig *method_find(CG *cg, StructDef *sd, const char *name) {
+/* Find a method `name` declared (via impl) for struct `sd`. `line` is
+ * where it is being asked for: an instance's method is made on demand, and
+ * an error inside its body reports that line as the request site. */
+FuncSig *method_find(CG *cg, StructDef *sd, const char *name, int line) {
     for (int i = 0; i < cg->sigs.count; i++) {
         FuncSig *s = cg->sigs.items[i];
         if (!strcmp(s->pkg, sd->pkg) && !strcmp(s->name, name) &&
             s->method_of && !strcmp(s->method_of, sd->canonical))
             return s;
     }
+    /* An instance of a generic struct has no methods until one is asked
+     * for. Every caller goes through here, so this is the only place that
+     * has to know. */
+    if (sd->inst)
+        return method_instantiate(cg, sd, name, line ? line : sd->line);
     return NULL;
 }
 

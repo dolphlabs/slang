@@ -225,7 +225,8 @@ gc_bad=0
 for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood \
             spawn_isolation gc_stress maps json flags method_recv \
             method_recv_gc indirect_callee generics_structs generics_json generics_infer \
-            generics_pkg gc_nested_literal; do
+            generics_pkg gc_nested_literal generics_methods \
+            generics_methods_pkg generics_methods_passes; do
     out="/tmp/sl_gcstress_${name}.out"
     if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -250,7 +251,8 @@ echo "--- frame guards (SLANG_FRAME_LIMIT=64) ---"
 fg_bad=0
 for name in fn_values spawn_isolation gc_stress maps json flags method_recv \
             method_recv_own method_pub indirect_callee enum move own structs \
-            mutex select big_frame generics_structs generics_pkg; do
+            mutex select big_frame generics_structs generics_pkg \
+            generics_methods; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_fg_${name}.out"
     if ! SLANG_FRAME_LIMIT=64 ./slangc "tests/$name/main.sl" --run \

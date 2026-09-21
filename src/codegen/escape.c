@@ -74,7 +74,7 @@ static int method_value_self(CG *cg, Expr *call, const char *name, int line) {
     StructDef *sd = struct_of_type(cg, recv_t);
     if (!sd)
         return 0;
-    FuncSig *sig = method_find(cg, sd, right);
+    FuncSig *sig = method_find(cg, sd, right, line);
     if (!sig || sig->nparams < 1)
         return 0;
     const char *self_t = sig->param_slang[0];
@@ -93,7 +93,7 @@ static int method_recv_by_value(CG *cg, Expr *call) {
     StructDef *sd = struct_of_type(cg, recv_t);
     if (!sd)
         return 0;
-    FuncSig *sig = method_find(cg, sd, call->as.method.name);
+    FuncSig *sig = method_find(cg, sd, call->as.method.name, call->line);
     if (!sig || sig->nparams < 1)
         return 0;
     const char *self_t = sig->param_slang[0];

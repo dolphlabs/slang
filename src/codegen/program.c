@@ -57,7 +57,7 @@ void sig_register_raw(CG *cg, Package *p, FuncDecl *f,
         const char *dot = strrchr(method_of, '.');
         StructDef *sd = struct_find_in_pkg(cg, p->name,
                                            dot ? dot + 1 : method_of);
-        if (sd && method_find(cg, sd, f->name))
+        if (sd && method_find(cg, sd, f->name, f->line))
             cg_error(f->line, "redefinition of method '%s' on '%s'", f->name,
                      method_of);
     } else if (sig_find_in(cg, p->name, f->name)) {
@@ -188,11 +188,16 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
                 continue;
             StructDef *sd =
                 struct_find_in_pkg(cg, p->name, s->as.impl.struct_name);
-            if (!sd && tmpl_find_in_pkg(cg, p->name, s->as.impl.struct_name))
+            if (sd && s->as.impl.ntparams)
                 cg_error(s->line,
-                         "methods on the generic struct '%s' are not "
-                         "supported yet",
-                         s->as.impl.struct_name);
+                         "'%s' is not generic; this impl block declares %d "
+                         "type parameter%s",
+                         s->as.impl.struct_name, s->as.impl.ntparams,
+                         s->as.impl.ntparams == 1 ? "" : "s");
+            if (!sd && tmpl_find_in_pkg(cg, p->name, s->as.impl.struct_name)) {
+                tmpl_register_impl(cg, p, s);
+                continue;
+            }
             if (!sd)
                 cg_error(s->line, "impl of unknown struct '%s'",
                          s->as.impl.struct_name);
@@ -1254,6 +1259,11 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
     compute_moves(&cg, pkgs, npkgs, main_index);
     compute_mir(&cg, pkgs, npkgs, main_index);
     compute_borrowck(&cg, pkgs, npkgs, main_index);
+
+    /* Every instance the program needs was discovered by the dry run, and
+     * the passes just above have now walked them all. One appearing later
+     * would be generated but never checked or rooted, so say so instead. */
+    cg.insts_frozen = 1;
 
     /* emit_globals (called from gen_whole_program) registers package
      * globals as it emits them; undo that bookkeeping before the real

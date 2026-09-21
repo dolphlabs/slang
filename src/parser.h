@@ -8,4 +8,8 @@
  * syntax errors. */
 Program *parse_program(Token *tokens, int ntokens);
 
+/* Re-parse one `fn`/`pub fn` declaration from where it was first parsed.
+ * Each instance of a generic method needs its own AST; see FuncDecl. */
+FuncDecl *parse_fn_decl_again(const FuncDecl *from);
+
 #endif /* SLANG_PARSER_H */
