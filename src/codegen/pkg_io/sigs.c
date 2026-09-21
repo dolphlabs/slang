@@ -15,6 +15,11 @@
  *   read_all    result[bytes, str]      EOF is how it finishes, so it
  *               has no opt to return; err = the read failed or the
  *               input was too large to hold
+ *   read_secret, read_key   the same shape as read_line
+ *   term_width, term_height opt[int]: none = not a terminal, which is
+ *               absence, not failure
+ *   raw_on      result[bool,str]  err = stdin is not a terminal, or the
+ *               terminal refused; raw_off cannot fail and says so
  * The write side (eprint/eprintln/flush) cannot fail in a way a caller
  * can act on -- a closed stderr has nowhere left to report it -- so
  * those return nothing, like log.
@@ -36,6 +41,14 @@ const NatSig IO_SIGS[] = {
 
     {"io", "flush", 0, {0}, NULL, 0},
     {"io", "is_tty", 1, {NA_INT}, "bool", 0},
+
+    /* the terminal */
+    {"io", "term_width", 0, {0}, "opt[int]", 0},
+    {"io", "term_height", 0, {0}, "opt[int]", 0},
+    {"io", "read_secret", 0, {0}, "result[opt[str],str]", 0},
+    {"io", "raw_on", 0, {0}, "result[bool,str]", 0},
+    {"io", "raw_off", 0, {0}, "result[bool,str]", 0},
+    {"io", "read_key", 0, {0}, "result[opt[str],str]", 0},
 };
 
 const int IO_SIGS_LEN = sizeof(IO_SIGS) / sizeof(IO_SIGS[0]);

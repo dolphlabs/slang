@@ -1071,6 +1071,10 @@ importing `io` adds no link flag.
 | `io.eprint(s)` / `io.eprintln(s)` | `s` (a `str` or a `fault`) to stderr, nothing added |
 | `io.flush()` | flush stdout |
 | `io.is_tty(fd)` | `bool` — whether `fd` (0, 1, 2) is a terminal |
+| `io.term_width()` / `io.term_height()` | `opt[int]` — columns / rows of the terminal; `none` without one |
+| `io.read_secret()` | `result[opt[str], str]` — like `read_line`, with echo off |
+| `io.raw_on()` / `io.raw_off()` | `result[bool, str]` — key-at-a-time input on / off |
+| `io.read_key()` | `result[opt[str], str]` — one key press, by name |
 
 ```slang
 import "io";
@@ -1132,6 +1136,87 @@ give it to one task.
 `eprint`/`eprintln` write straight to stderr with no timestamp or level —
 for the messages a command prints to a person; `log` is for a service's
 diagnostics.
+
+##### The terminal
+
+```slang
+import "io";
+
+// a password: nothing is echoed while it is typed
+print("password: ");
+let r = io.read_secret();
+guard let maybe = r else let e = err_of(r) { io.eprintln(e); exit(1); }
+let password = maybe ?? "";
+
+// wrap to the window; a pipe or a file has no width
+let width = io.term_width() ?? 80;
+```
+
+`read_secret` is `read_line` with the terminal's echo off for the length of
+the read. The Enter is not echoed either, so it writes the newline for you.
+When stdin is not a terminal (a pipe, a file, a test) it is exactly
+`read_line`: nothing to turn off. `term_width` and `term_height` ask the
+terminal every time, so they follow a resized window — poll them, there is
+no resize event. They look at stdout, then stderr, then stdin, and are `none`
+when none of the three is a terminal.
+
+**Key by key.** `raw_on` switches stdin from line-at-a-time to key-at-a-time:
+no line editing, no echo, and each key press is available as it happens.
+`read_key` names it:
+
+```slang
+let r = io.raw_on();
+guard let ok = r else let e = err_of(r) { io.eprintln(e); exit(1); }   // stdin is not a terminal
+while true {
+    let k = io.read_key();
+    guard let maybe = k else let e = err_of(k) { break; }
+    guard let key = maybe else { break; }                              // end of input
+    if key == "q" || key == "esc" { break; }
+    if key == "up" { println("up"); }
+}
+io.raw_off();
+```
+
+| Key | Name |
+|---|---|
+| a printable character (a whole UTF-8 character) | itself: `"a"`, `"é"`, `" "` |
+| Enter, Tab, Backspace | `"enter"`, `"tab"`, `"backspace"` |
+| Escape | `"esc"` |
+| Ctrl with a letter | `"ctrl-a"` … `"ctrl-z"` |
+| Alt with a key | `"alt-x"` |
+| cursor and editing keys | `"up"` `"down"` `"left"` `"right"` `"home"` `"end"` `"insert"` `"delete"` `"pageup"` `"pagedown"` |
+| function keys | `"f1"` … `"f12"` |
+| with modifiers | `"ctrl-right"`, `"shift-up"`, `"ctrl-shift-left"`, `"shift-tab"` — always in the order ctrl, alt, shift |
+
+Anything else is `"unknown"`, and it is consumed whole, so a mouse report or
+an unfamiliar sequence cannot leak into the next key. `read_key` waits like
+`read_line` does, parking the task and not the thread, and also works on a
+pipe, where it decodes the same bytes.
+
+A lone Escape and the first byte of an escape sequence are the same byte;
+what follows it within 50 ms is part of the sequence, and silence means the
+Escape key. Over a slow link a sequence split across that gap reads as an
+Escape followed by its tail.
+
+**The terminal is put back.** A program that dies while the terminal is raw
+leaves the person's shell with no echo and no line editing, so restoring is
+not left to the caller. The terminal's original settings are saved once and
+restored when the last of `raw_off` and `read_secret` ends, and also:
+
+- when the program exits — `exit()`, a panic in the main task, falling off
+  the end of `main` — so a forgotten `raw_off` costs nothing;
+- when SIGINT, SIGTERM, SIGHUP, SIGQUIT or SIGABRT ends the process
+  (only where the program has not installed its own handling for them).
+
+Raw mode leaves signals on, so **Ctrl-C still works**: with `proc` imported it
+makes the next `read_key` return `err("interrupted")`; without it, it ends
+the process, and the terminal is restored first. It also leaves output
+processing on, so `"\n"` still starts a new line. Not covered: `SIGKILL`
+and crashes cannot be caught, and Ctrl-Z stops the process with the terminal
+still raw.
+
+`raw_on` fails with `"stdin is not a terminal"` when it is not one, so a
+program can fall back to line input when it is run from a script.
 
 #### `log`
 

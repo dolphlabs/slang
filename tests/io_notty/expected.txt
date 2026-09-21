@@ -1,0 +1,4 @@
+secret: first secret
+line: second line
+raw_on: stdin is not a terminal
+raw_off ok

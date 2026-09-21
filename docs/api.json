@@ -2035,6 +2035,48 @@
           "ret": "bool",
           "tls": false,
           "sig": "io.is_tty(int) -> bool"
+        },
+        {
+          "name": "term_width",
+          "params": [],
+          "ret": "opt[int]",
+          "tls": false,
+          "sig": "io.term_width() -> opt[int]"
+        },
+        {
+          "name": "term_height",
+          "params": [],
+          "ret": "opt[int]",
+          "tls": false,
+          "sig": "io.term_height() -> opt[int]"
+        },
+        {
+          "name": "read_secret",
+          "params": [],
+          "ret": "result[opt[str],str]",
+          "tls": false,
+          "sig": "io.read_secret() -> result[opt[str],str]"
+        },
+        {
+          "name": "raw_on",
+          "params": [],
+          "ret": "result[bool,str]",
+          "tls": false,
+          "sig": "io.raw_on() -> result[bool,str]"
+        },
+        {
+          "name": "raw_off",
+          "params": [],
+          "ret": "result[bool,str]",
+          "tls": false,
+          "sig": "io.raw_off() -> result[bool,str]"
+        },
+        {
+          "name": "read_key",
+          "params": [],
+          "ret": "result[opt[str],str]",
+          "tls": false,
+          "sig": "io.read_key() -> result[opt[str],str]"
         }
       ]
     },

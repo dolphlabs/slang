@@ -48,3 +48,7 @@ bench/suite/api/java/target/
 bench/suite/api/java/dependency-reduced-pom.xml
 bench/suite/**/__pycache__/
 bench/suite/**/*.pyc
+
+# Python bytecode from tests/*/check.py
+__pycache__/
+*.pyc
