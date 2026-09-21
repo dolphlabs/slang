@@ -544,6 +544,21 @@ let counts: map[Status]int = {};
 counts[Status.Paid] = 3;
 ```
 
+An exported enum is usable from another package, variants and all:
+
+```slang
+// orders/orders.sl
+pub enum Status { Pending, Paid, Shipped }
+
+// main.sl
+import "orders";
+let o = orders.Order{ id: 1, status: orders.Status.Paid };
+println(o.status == orders.Status.Paid);
+let r: result[orders.Status, str] = orders.Status.from_str("Shipped");
+```
+
+An enum without `pub` is private to its package, like any other type.
+
 There is no per-variant wire label yet (`to_str`/JSON always use the
 declared name as written), no explicit backing-width syntax
 (`enum Name: i64 { ... }`), and no payload-carrying variants or a
@@ -1161,6 +1176,21 @@ json.encode(o);   // {"id":1,"status":"Shipped"}
 let counts: map[Status]int = {};
 counts[Status.Paid] = 3;
 ```
+
+An exported enum is usable from another package, variants and all:
+
+```slang
+// orders/orders.sl
+pub enum Status { Pending, Paid, Shipped }
+
+// main.sl
+import "orders";
+let o = orders.Order{ id: 1, status: orders.Status.Paid };
+println(o.status == orders.Status.Paid);
+let r: result[orders.Status, str] = orders.Status.from_str("Shipped");
+```
+
+An enum without `pub` is private to its package, like any other type.
 
 There is no per-variant wire label yet (`to_str`/JSON always use the
 declared name as written), no explicit backing-width syntax
