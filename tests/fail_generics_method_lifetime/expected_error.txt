@@ -1,0 +1,1 @@
+lifetime parameters on a method of a generic struct are not supported yet

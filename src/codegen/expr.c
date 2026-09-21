@@ -1175,7 +1175,7 @@ char *gen_call(CG *cg, Expr *e) {
                 recv_t = NULL;
                 goto have_sig;
             }
-            sig = method_find(cg, sd, right);
+            sig = method_find(cg, sd, right, e->line);
             if (!sig)
                 cg_error(e->line, "type '%s' has no method '%s'",
                          sd->canonical, right);
@@ -1443,7 +1443,13 @@ char *gen_structlit(CG *cg, Expr *e) {
     const char *canon = infer_type(cg, e); /* validates fields too */
     StructDef *sd = struct_find_canon(cg, canon);
     const char *sc = mangle_struct(canon);
-    int is_gc = sd->is_gc && !cg->stack_box;
+    /* stack_box asks for THIS literal, the `let`'s own initializer, to be
+     * built by value. Take it and clear it: the literals nested in its
+     * fields are ordinary values headed for pointer-typed fields, and
+     * building one by value there is a C type error. */
+    int boxed_here = cg->stack_box;
+    cg->stack_box = 0;
+    int is_gc = sd->is_gc && !boxed_here;
     const char *dot = is_gc ? "->" : ".";
     StrBuf sb;
     sb_init(&sb);

@@ -1,0 +1,6 @@
+4
+42
+6
+index ok
+flag ok
+s

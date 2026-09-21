@@ -479,7 +479,7 @@ push(pts, r.tl);
 ```
 
 Struct literals must supply every field exactly once, with types
-checked. Methods live in top-level `impl Name { ... }` blocks; mark a
+checked. A struct may be declared after one that holds it by value. Methods live in top-level `impl Name { ... }` blocks; mark a
 method `pub fn` to export it to importing packages. A method's name
 belongs to its struct: it may match a package-level function or another
 struct's method (`impl Client { fn get }` beside `fn get`), and a bare
@@ -501,6 +501,98 @@ a variable.
 `own T` is uniquely owned: assignment and passing **move**, and
 use-after-move is a compile error. A moved binding can be reinitialized.
 `own` is freed when its binding goes out of scope unless it was moved.
+
+#### Generic structs
+
+A struct can take type parameters, written in brackets like the built-in
+`opt[T]` and `map[K]V`:
+
+```slang
+struct Box[T] {
+    v: T,
+}
+
+struct Pair[K, V] {
+    k: K,
+    v: V,
+}
+
+gc struct Node[T] {
+    val: T,
+    next: opt[Node[T]],      // a list: recursion goes through opt
+}
+
+let a = Box { v: 41 };                      // T inferred from the field: Box[int]
+let b: Box[str] = Box[str] { v: "hi" };     // or written out
+let p = Pair { k: 1, v: Point { x: 3, y: 4 } };
+let n = Box { v: Box { v: 7 } };            // Box[Box[int]]
+
+fn unwrap(b: Box[int]) -> int { return b.v; }
+```
+
+`Box[int]` is an ordinary struct that the compiler writes out the first
+time the program names it, so it costs exactly what a hand-written `IntBox`
+does: the same layout, the same C, no boxing and no runtime type
+information. Two instances of one template are two different types
+(`Box[int]` is not `Box[str]`), and instances work anywhere a type does,
+including inside `[T]`, `map`, `opt`, `result`, `chan`, `fn` types,
+`json.encode` / `json.decode` (of a `gc struct`), and across packages
+(`stash.Stack[Thing]`, where `Thing` is the importing package's own type).
+
+A literal infers its arguments from its fields, so it needs at least one
+field whose value fixes each parameter. `Box { v: none }` or
+`Bag { items: [] }` cannot say what `T` is; write `Box[int] { v: none }`.
+Type arguments are never written at a call site or on a literal's name
+unless the inference has nothing to go on.
+
+Each instance is checked when it is made, with the arguments in place: a
+parameter is unconstrained, and what a field can do with it is decided by
+the type it turns out to be. An error inside a template therefore names the
+instance and where it was asked for
+(`... (in main.Keyed[float], requested at line 9)`), and a template nobody
+instantiates is not checked at all.
+
+A generic struct has methods like any other, in an `impl` block that
+declares the parameters:
+
+```slang
+impl Box[T] {
+    fn get(self: Box[T]) -> T {
+        return self.v;
+    }
+
+    pub fn apply(self: Box[T], f: fn(T) -> T) -> Box[T] {
+        return Box[T] { v: f(self.v) };
+    }
+
+    fn doubled(self: Box[T]) -> int {
+        return self.v * 2;       // only ever asked for on a Box of numbers
+    }
+}
+
+println(Box { v: 21 }.doubled());        // 42
+println(Box { v: "hi" }.get());          // "hi" -- doubled is never checked here
+```
+
+The `impl` block may name its parameters whatever it likes (`impl Pair[A, B]`
+for `struct Pair[K, V]`); they match by position. `pub fn` exports a method,
+as it does elsewhere.
+
+**A method is checked when an instance asks for it**, not when it is
+declared. `doubled` above multiplies, which `Box[str]` cannot do — and that
+is fine, because nothing calls `doubled` on a `Box[str]`. This is what makes
+unbounded type parameters usable without interfaces, and it is why an error
+in a method body names the instance and the line that asked for it:
+
+```
+error at line 5: unsupported operand types for '*': str and int
+  (in main.Box[str].doubled, requested at line 9)
+```
+
+Not yet supported, and each says so when used: generic functions
+(`fn first[T](xs: [T]) -> T`), lifetime parameters on a generic struct or on
+one of its methods, and a generic method's own extra parameters
+(`fn map[U](self: Box[T]) -> Box[U]`).
 
 #### Enums
 
@@ -939,7 +1031,9 @@ let r: result[Person, str] = json.decode(s);
 guard let p2 = r else { exit(1); }
 ```
 
-Supported: `struct`, `opt[T]`, `[T]`, `map[str, V]` (JSON object keys
+Supported: `gc struct` (a plain `struct` is a compile error naming it, since
+the codecs read and build structs through a pointer), `opt[T]`, `[T]`,
+`map[str, V]` (JSON object keys
 are always strings — a map with any other key type is a compile
 error), every scalar, and `bytes` (RFC 4648 base64 strings on the
 wire). `rawptr`, `chan[T]`, and
@@ -2926,6 +3020,22 @@ main.sl ──loader──> packages ──lexer/parser──> ASTs ──codege
    `cc`. Because GCC/Clang compile the generated C, you get their full
    optimizer for free.
 
+   **Large stack frames.** A task starts on an 8KB stack that grows only at a
+   safepoint, which runs after the current function's frame already exists.
+   How big a frame is depends on the C compiler: clang gives every call site
+   its own spill slot and inlines callees into their caller, so a function
+   with a few hundred call sites can need more than the whole stack and used
+   to die with `SIGBUS` before printing anything (gcc gave the same C a frame
+   of a few hundred bytes). The driver therefore asks the compiler for the
+   real frame of every function (`-Wframe-larger-than`, read from clang's and
+   gcc's own reports). A slang function reported over the limit is
+   regenerated behind a thin wrapper that grows the stack *before* the
+   function is entered, and the program is compiled a second time. Nothing
+   else pays for it: no program in this repository, `tyto` included, has a
+   function that needs one, and `--emit-c` output has none. The limit is 1536
+   bytes; `SLANG_FRAME_LIMIT` overrides it (the tests set a tiny one to put a
+   guard on nearly every function).
+
 Inspect what slang generates:
 
 ```sh
@@ -2942,7 +3052,7 @@ src/
   ast.h          AST node definitions
   parser.h/.c    recursive-descent parser
   rtpath.h/.c    locate runtime/ next to slangc
-  codegen.h      public codegen API (one function: codegen_program)
+  codegen.h      public codegen API (codegen_program, and the frame guards)
   codegen/       type checking + C emission
   main.c         driver: flags, invokes cc
 runtime/       real C runtime spliced into generated programs

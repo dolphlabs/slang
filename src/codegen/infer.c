@@ -688,7 +688,7 @@ const char *infer_call(CG *cg, Expr *e) {
                 recv_t = NULL; /* no implicit self for a field call */
                 goto have_sig;
             }
-            sig = method_find(cg, sd, right);
+            sig = method_find(cg, sd, right, e->line);
             if (!sig)
                 cg_error(e->line, "type '%s' has no method '%s'",
                          sd->canonical, right);
@@ -759,7 +759,7 @@ FuncSig *method_target(CG *cg, const char *recv_t, const char *name,
             return fn_sig_of_type(cg, sd->ftypes[i], name, line);
         }
     }
-    FuncSig *sig = method_find(cg, sd, name);
+    FuncSig *sig = method_find(cg, sd, name, line);
     if (!sig)
         cg_error(line, "type '%s' has no method '%s'", sd->canonical, name);
     if (!sig->is_pub && strcmp(sd->pkg, cg->cur_pkg))
@@ -1194,8 +1194,7 @@ const char *infer_type(CG *cg, Expr *e) {
                  e->as.field.name);
     }
     case EX_STRUCTLIT: {
-        const char *canon =
-            canon_type(cg, e->as.structlit.tyname, e->line);
+        const char *canon = structlit_type(cg, e);
         StructDef *sd = struct_find_canon(cg, canon);
         for (int i = 0; i < sd->nfields; i++) {
             int found = -1;

@@ -57,7 +57,7 @@ void sig_register_raw(CG *cg, Package *p, FuncDecl *f,
         const char *dot = strrchr(method_of, '.');
         StructDef *sd = struct_find_in_pkg(cg, p->name,
                                            dot ? dot + 1 : method_of);
-        if (sd && method_find(cg, sd, f->name))
+        if (sd && method_find(cg, sd, f->name, f->line))
             cg_error(f->line, "redefinition of method '%s' on '%s'", f->name,
                      method_of);
     } else if (sig_find_in(cg, p->name, f->name)) {
@@ -122,7 +122,12 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
             Stmt *s = body->stmts[j];
             if (s->kind != ST_STRUCT)
                 continue;
-            if (struct_find_in_pkg(cg, p->name, s->as.struct_decl.name))
+            if (s->as.struct_decl.ntparams) {
+                tmpl_register(cg, p->name, s);
+                continue;
+            }
+            if (struct_find_in_pkg(cg, p->name, s->as.struct_decl.name) ||
+                tmpl_find_in_pkg(cg, p->name, s->as.struct_decl.name))
                 cg_error(s->line,
                          "redefinition of struct '%s' in package '%s'",
                          s->as.struct_decl.name, p->name);
@@ -158,6 +163,8 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
     /* pass 2: canonicalize struct field types */
     for (i = 0; i < cg->structs.count; i++) {
         StructDef *sd = cg->structs.items[i];
+        if (sd->inst)
+            continue; /* made, and canonicalized, by generic_canon */
         cg->cur_pkg = sd->pkg;
         for (j = 0; j < sd->nfields; j++) {
             for (int q = 0; q < j; q++) {
@@ -181,6 +188,16 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
                 continue;
             StructDef *sd =
                 struct_find_in_pkg(cg, p->name, s->as.impl.struct_name);
+            if (sd && s->as.impl.ntparams)
+                cg_error(s->line,
+                         "'%s' is not generic; this impl block declares %d "
+                         "type parameter%s",
+                         s->as.impl.struct_name, s->as.impl.ntparams,
+                         s->as.impl.ntparams == 1 ? "" : "s");
+            if (!sd && tmpl_find_in_pkg(cg, p->name, s->as.impl.struct_name)) {
+                tmpl_register_impl(cg, p, s);
+                continue;
+            }
             if (!sd)
                 cg_error(s->line, "impl of unknown struct '%s'",
                          s->as.impl.struct_name);
@@ -344,21 +361,58 @@ void emit_struct_fwd_decls(CG *cg) {
     emit_line(cg, "");
 }
 
+/* A struct's body needs each by-value field's struct complete before it,
+ * so bodies go out dependencies first. Declaration order is kept wherever
+ * it already works (a struct is emitted at its own position unless a
+ * by-value field's struct has not been yet), which is what makes the
+ * output for programs without this problem unchanged. A generic instance is
+ * the case that needs it: `Pair[Point,Point]` is entered in the table
+ * after every declared struct, but a struct declared BEFORE the use can
+ * hold it by value. */
+static void emit_struct_body(CG *cg, StructDef *sd, unsigned char *state) {
+    int self = -1;
+    for (int i = 0; i < cg->structs.count; i++) {
+        if (cg->structs.items[i] == sd)
+            self = i;
+    }
+    if (state[self])
+        return;
+    state[self] = 1; /* in progress */
+    for (int j = 0; j < sd->nfields; j++) {
+        StructDef *dep = struct_find_canon(cg, sd->ftypes[j]);
+        if (!dep || dep->is_gc)
+            continue; /* not a struct, or held by pointer */
+        int di = -1;
+        for (int i = 0; i < cg->structs.count; i++) {
+            if (cg->structs.items[i] == dep)
+                di = i;
+        }
+        if (state[di] == 1)
+            cg_error(sd->line,
+                     "struct '%s' contains itself by value through field "
+                     "'%s'; hold it in an opt[...], or make it a gc struct",
+                     sd->canonical, sd->fields[j]);
+        emit_struct_body(cg, dep, state);
+    }
+    char *m = mangle_struct(sd->canonical);
+    emit_line(cg, "struct %s {", m);
+    cg->indent++;
+    for (int j = 0; j < sd->nfields; j++)
+        emit_line(cg, "%s %s;", ctype_of(cg, sd->ftypes[j]),
+                  sanitize_ident(sd->fields[j]));
+    cg->indent--;
+    emit_line(cg, "};");
+    emit_line(cg, "");
+    state[self] = 2;
+}
+
 void emit_struct_types(CG *cg) {
     if (!cg->structs.count)
         return;
-    for (int i = 0; i < cg->structs.count; i++) {
-        StructDef *sd = cg->structs.items[i];
-        char *m = mangle_struct(sd->canonical);
-        emit_line(cg, "struct %s {", m);
-        cg->indent++;
-        for (int j = 0; j < sd->nfields; j++)
-            emit_line(cg, "%s %s;", ctype_of(cg, sd->ftypes[j]),
-                      sanitize_ident(sd->fields[j]));
-        cg->indent--;
-        emit_line(cg, "};");
-        emit_line(cg, "");
-    }
+    unsigned char *state = (unsigned char *)xmalloc((size_t)cg->structs.count);
+    memset(state, 0, (size_t)cg->structs.count);
+    for (int i = 0; i < cg->structs.count; i++)
+        emit_struct_body(cg, cg->structs.items[i], state);
 }
 
 /* Tier 10: emit a trace function for every struct type that has at
@@ -860,6 +914,51 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
         emit_line(cg, "");
 }
 
+/* ---- frame guards (see sl_rt_stack_reserve in runtime/sl_core.c) ------ */
+
+static const char **fg_syms;
+static int *fg_frames;
+static int fg_n;
+
+void codegen_set_frame_guards(const char *const *symbols, const int *frames,
+                              int n) {
+    fg_syms = (const char **)xmalloc(sizeof(char *) * (size_t)(n ? n : 1));
+    fg_frames = (int *)xmalloc(sizeof(int) * (size_t)(n ? n : 1));
+    for (int i = 0; i < n; i++) {
+        fg_syms[i] = xstrdup(symbols[i]);
+        fg_frames[i] = frames[i];
+    }
+    fg_n = n;
+}
+
+/* The measured frame of `sym`, or 0 when it is not guarded. */
+static int frame_guard_of(const char *sym) {
+    for (int i = 0; i < fg_n; i++)
+        if (!strcmp(fg_syms[i], sym))
+            return fg_frames[i];
+    return 0;
+}
+
+static const char **emitted_syms;
+static int emitted_n, emitted_cap;
+
+static void note_emitted_symbol(const char *sym) {
+    for (int i = 0; i < emitted_n; i++)
+        if (!strcmp(emitted_syms[i], sym))
+            return;
+    if (emitted_n == emitted_cap) {
+        emitted_cap = emitted_cap ? emitted_cap * 2 : 64;
+        emitted_syms = (const char **)xrealloc(
+            emitted_syms, sizeof(char *) * (size_t)emitted_cap);
+    }
+    emitted_syms[emitted_n++] = xstrdup(sym);
+}
+
+const char *const *codegen_function_symbols(int *n) {
+    *n = emitted_n;
+    return emitted_syms;
+}
+
 void gen_function(CG *cg, Package *p, FuncDecl *f) {
     FuncSig *sig = sig_of_decl(cg, f);
 
@@ -889,15 +988,40 @@ void gen_function(CG *cg, Package *p, FuncDecl *f) {
         }
     }
 
-    emit_line(cg, "static %s %s(%s) {",
-              sig->ret_slang ? ctype_of(cg, sig->ret_slang) : "void",
-              mangle_sig(sig), params.data);
+    const char *sym = mangle_sig(sig);
+    note_emitted_symbol(sym);
+    int guard = frame_guard_of(sym);
+    const char *rett = sig->ret_slang ? ctype_of(cg, sig->ret_slang) : "void";
+    if (guard)
+        /* The body keeps its own frame; a wrapper of the original name goes
+         * in front of it, so every caller (direct, spawned, through a
+         * function value) reaches the guard. noinline keeps the body's frame
+         * out of its callers, which is what the wrapper is protecting. */
+        emit_line(cg, "static __attribute__((noinline)) %s %s__body(%s) {",
+                  rett, sym, params.data);
+    else
+        emit_line(cg, "static %s %s(%s) {", rett, sym, params.data);
     for (int j = 0; j < f->nparams; j++)
         emit_drop_flag(cg, f->params[j]);
     gen_block(cg, f->body);
     emit_scope_drops(cg, 0);
     emit_line(cg, "}");
     emit_line(cg, "");
+    if (guard) {
+        StrBuf args;
+        sb_init(&args);
+        for (int j = 0; j < f->nparams; j++) {
+            if (j)
+                sb_append(&args, ", ");
+            sb_append(&args, sanitize_ident(f->params[j]));
+        }
+        emit_line(cg, "static %s %s(%s) {", rett, sym, params.data);
+        emit_line(cg, "    sl_rt_stack_reserve(%d);", guard);
+        emit_line(cg, "    %s%s__body(%s);", sig->ret_slang ? "return " : "",
+                  sym, args.data);
+        emit_line(cg, "}");
+        emit_line(cg, "");
+    }
 
     cg->in_function = 0;
     cg->cur_ret = NULL;
@@ -949,13 +1073,27 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     var_scope_reset(cg);
     var_scope_push(cg);
     cg->cur_pkg = pkgs[main_index].name;
-    emit_line(cg, "static void sl_main_task_entry(void *_sl_unused_arg) {");
+    note_emitted_symbol("sl_main_task_entry");
+    int main_guard = frame_guard_of("sl_main_task_entry");
+    emit_line(cg, main_guard
+                      ? "static __attribute__((noinline)) void "
+                        "sl_main_task_entry__body(void *_sl_unused_arg) {"
+                      : "static void sl_main_task_entry(void *_sl_unused_arg) {");
     emit_line(cg, "    (void)_sl_unused_arg;");
     gen_block(cg, pkgs[main_index].prog->main_body);
     emit_scope_drops(cg, 0);
     emit_line(cg, "    exit(0); /* main()'s own sl_ctx_switch never returns */");
     emit_line(cg, "}");
     emit_line(cg, "");
+    if (main_guard) {
+        /* The main task starts on the initial 8KB stack, so a large
+         * top-level body needs the same entry guard as any function. */
+        emit_line(cg, "static void sl_main_task_entry(void *_sl_unused_arg) {");
+        emit_line(cg, "    sl_rt_stack_reserve(%d);", main_guard);
+        emit_line(cg, "    sl_main_task_entry__body(_sl_unused_arg);");
+        emit_line(cg, "}");
+        emit_line(cg, "");
+    }
     emit_line(cg, "int main(int argc, char **argv) {");
     if (want_pkg(cg, "proc")) {
         emit_line(cg, "    sl_proc_argc = argc;");
@@ -1121,6 +1259,11 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
     compute_moves(&cg, pkgs, npkgs, main_index);
     compute_mir(&cg, pkgs, npkgs, main_index);
     compute_borrowck(&cg, pkgs, npkgs, main_index);
+
+    /* Every instance the program needs was discovered by the dry run, and
+     * the passes just above have now walked them all. One appearing later
+     * would be generated but never checked or rooted, so say so instead. */
+    cg.insts_frozen = 1;
 
     /* emit_globals (called from gen_whole_program) registers package
      * globals as it emits them; undo that bookkeeping before the real

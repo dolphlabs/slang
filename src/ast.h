@@ -1,7 +1,12 @@
 #ifndef SLANG_AST_H
 #define SLANG_AST_H
 
+/* A generic declaration's type parameters, and a generic type's arguments,
+ * are capped: each is a fixed-size slot in the compiler's environment. */
+#define MAX_TYPE_PARAMS 8
+
 typedef struct FuncDecl FuncDecl;
+struct Token;
 typedef struct Type Type;
 
 typedef enum {
@@ -120,10 +125,15 @@ struct Expr {
         /* `recv` is evaluated exactly once, before the arguments. */
         struct { Expr *recv; char *name; Expr **args; int nargs; } method;
         struct {
-            char *tyname;      /* struct name as written: "Point" or "pkg.Point" */
+            char *tyname;      /* struct name as written: "Point", "pkg.Point",
+                                  or with type arguments: "Box[int]" */
             char **fields;
             Expr **vals;
             int nfields;
+            /* Set by codegen when `tyname` names a generic struct written
+             * WITHOUT type arguments (`Box { v: 1 }`): the canonical
+             * instance the arguments were inferred to be. */
+            const char *inst;
         } structlit;
         struct { Expr *call; } spawn;
     } as;
@@ -235,11 +245,16 @@ struct Stmt {
             int nfields;
             char **lts;
             int nlts;
+            char **tparams; /* type parameters: struct Box[T, U] */
+            int ntparams;
         } struct_decl;
         struct {
             char *struct_name;
             FuncDecl **funcs;
             int nfuncs;
+            char **tparams;  /* impl Box[T]: the parameters, matched by
+                                position against the struct's own */
+            int ntparams;
         } impl;
         struct {
             char *name;
@@ -268,6 +283,16 @@ struct FuncDecl {
     int sig_idx;        /* 1 + index of its FuncSig in cg->sigs, 0 before
                            registration: a method and a package function
                            may share a name, so a name does not find it */
+    /* Where this declaration was parsed from. A method of a generic struct
+     * is parsed AGAIN, once per instance, from exactly here: an instance
+     * needs its own AST, because every annotation a pass leaves (inf_ty,
+     * live_set, the expression-temp keys) is per node and two instances
+     * disagree about what `T` is. Re-parsing, rather than cloning, also
+     * means a field added to the AST later cannot silently fail to be
+     * copied. The token array is never freed (see the loader and main). */
+    struct Token *toks;
+    int ntoks;
+    int tok_pos;        /* index of this declaration's first token */
 };
 
 typedef struct {

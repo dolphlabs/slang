@@ -13,12 +13,18 @@
 
 void cg_error(int line, const char *fmt, ...) {
     va_list ap;
+    const char *inst;
+    int req_line;
     fputs("slang: error at line ", stderr);
     fprintf(stderr, "%d", line);
     fputs(": ", stderr);
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
     va_end(ap);
+    generic_error_note(&inst, &req_line);
+    if (inst)
+        fprintf(stderr, " (in %.72s%s, requested at line %d)", inst,
+                strlen(inst) > 72 ? "..." : "", req_line);
     fputc(10, stderr);
     exit(1);
 }
@@ -410,9 +416,17 @@ void check_extern_type(const char *t, int line, const char *what) {
 }
 
 /* "map[K]V" -> K and V (heap-allocated). Caller must pass a map type.
- * Keys are scalars (no nested ']'), values may be any type. */
+ * Values may be any type. */
 void map_kv(const char *t, char **k, char **v) {
-    const char *close = strchr(t + 4, ']');
+    /* the ']' that closes THIS map's key: a key written as a generic
+     * instance (rejected later, as not a valid key) has brackets of its own */
+    const char *close = t + 4;
+    for (int depth = 0; *close; close++) {
+        if (*close == '[')
+            depth++;
+        else if (*close == ']' && depth-- == 0)
+            break;
+    }
     size_t kl = (size_t)(close - (t + 4));
     char *kt = (char *)xmalloc(kl + 1);
     memcpy(kt, t + 4, kl);
@@ -697,10 +711,62 @@ int count_gc_root_exprs(CG *cg, const char *slang_t) {
     return n;
 }
 
+/* A variable escape analysis kept on the stack (`let x = Outer { ... }`
+ * that never leaves the function) points at a stack slot, not a heap
+ * object. Rooting the pointer roots nothing -- the collector ignores
+ * addresses it never allocated -- so the heap objects its FIELDS hold (a
+ * list, a string, another gc struct) would be freed while the variable is
+ * still in use. Root the fields instead, as a by-value struct's are.
+ *
+ * Returns the type whose contents are the roots, or NULL when `v` is not a
+ * stack box or holds nothing the collector owns. */
+static const char *stack_box_pointee(CG *cg, VarSym *v) {
+    if (!v || !v->stack)
+        return NULL;
+    char *inner;
+    TypeWrap w = type_wrap(v->slang, &inner);
+    if (w == TW_GC)
+        return type_has_gc_roots(cg, inner) ? inner : NULL;
+    if (w == TW_NONE && struct_type_is_gc(cg, v->slang))
+        return v->slang;
+    return NULL;
+}
+
+/* The roots of the pointee of a stack-boxed variable: the gc-pointer
+ * fields of a gc struct (the struct itself is not a root, it is on the
+ * stack), or whatever a by-value `gc T` payload holds. */
+static void stack_box_roots(CG *cg, StrBuf *sb, const char *c_name,
+                            const char *pointee, int *wrote, int *count) {
+    const char *expr = xasprintf("(*%s)", c_name);
+    StructDef *sd = struct_find_canon(cg, pointee);
+    if (sd && sd->is_gc) {
+        for (int j = 0; j < sd->nfields; j++) {
+            if (!type_has_gc_roots(cg, sd->ftypes[j]))
+                continue;
+            const char *fe = xasprintf("%s.%s", expr,
+                                       sanitize_ident(sd->fields[j]));
+            if (sb)
+                append_gc_root_expr(cg, sb, fe, sd->ftypes[j], wrote);
+            *count += count_gc_root_exprs(cg, sd->ftypes[j]);
+        }
+        return;
+    }
+    if (sb)
+        append_gc_root_expr(cg, sb, expr, pointee, wrote);
+    *count += count_gc_root_exprs(cg, pointee);
+}
+
 void append_named_gc_roots(CG *cg, StrBuf *sb, const char *name, int *wrote) {
     VarSym *v = var_find(cg, name);
     const char *t = v ? v->slang : NULL;
     char *c_name = sanitize_ident(name);
+    if (v && v->stack) {
+        const char *boxed = stack_box_pointee(cg, v);
+        int count = 0;
+        if (boxed)
+            stack_box_roots(cg, sb, c_name, boxed, wrote, &count);
+        return;
+    }
     if (t && type_has_gc_roots(cg, t) && !type_is_gc_ptr(cg, t))
         append_gc_root_expr(cg, sb, c_name, t, wrote);
     else {
@@ -712,6 +778,14 @@ void append_named_gc_roots(CG *cg, StrBuf *sb, const char *name, int *wrote) {
 
 int count_named_gc_roots(CG *cg, const char *name) {
     VarSym *v = var_find(cg, name);
+    if (v && v->stack) {
+        const char *boxed = stack_box_pointee(cg, v);
+        int count = 0;
+        if (boxed)
+            stack_box_roots(cg, NULL, sanitize_ident(name), boxed, NULL,
+                            &count);
+        return count;
+    }
     if (v && type_has_gc_roots(cg, v->slang) && !type_is_gc_ptr(cg, v->slang))
         return count_gc_root_exprs(cg, v->slang);
     return 1;
@@ -741,7 +815,17 @@ char *join_elem(const char *t) {
 
 /* "result[T,E]" -> T and E (heap-allocated). */
 void result_te(const char *t, char **tv, char **ev) {
-    const char *comma = strchr(t + 7, ',');
+    /* the comma between the two types, not one inside a generic
+     * instance's own arguments: result[Pair[int,str],str] */
+    const char *comma = t + 7;
+    for (int depth = 0; *comma; comma++) {
+        if (*comma == '[' || *comma == '(')
+            depth++;
+        else if (*comma == ']' || *comma == ')')
+            depth--;
+        else if (*comma == ',' && depth == 0)
+            break;
+    }
     size_t tl = (size_t)(comma - (t + 7));
     char *a = (char *)xmalloc(tl + 1);
     memcpy(a, t + 7, tl);
@@ -1583,6 +1667,13 @@ char *mangle_sig(FuncSig *sig) {
     if (sig->is_extern)
         return xstrdup(sig->name);
     if (sig->method_of) {
+        /* An instance's canonical name carries its arguments and their
+         * dots (`main.Box[main.Point]`), which neither the last-dot split
+         * below nor C itself can spell -- take the struct's own C name,
+         * hash and all, so two instances' methods never collide. */
+        if (strchr(sig->method_of, '['))
+            return xasprintf("%s__m_%s", mangle_struct(sig->method_of),
+                             sanitize_ident(sig->name));
         const char *dot = strrchr(sig->method_of, '.');
         const char *sname = dot ? dot + 1 : sig->method_of;
         return xasprintf("sl_%s_%s__m_%s", sanitize_pkg(sig->pkg),
@@ -1624,9 +1715,29 @@ StructDef *struct_find_in_pkg(CG *cg, const char *pkg,
     return NULL;
 }
 
+/* 64-bit FNV-1a. Only ever names a generic instance's C symbol. */
+static unsigned long long fnv64(const char *s) {
+    unsigned long long h = 1469598103934665603ULL;
+    for (; *s; s++) {
+        h ^= (unsigned char)*s;
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
 char *mangle_struct(const char *canon) {
     char *l, *r;
     split_dotted(canon, &l, &r);
+    /* A generic instance's canonical name carries its arguments, which C
+     * cannot spell: `main.Box[main.Point]`. Keep the readable part and add
+     * a hash of the whole, so two instances never collide and a
+     * non-generic struct's name is exactly what it always was. */
+    char *br = strchr(r, '[');
+    if (br) {
+        *br = '\0';
+        return xasprintf("sl_st_%s_%s__g%016llx", sanitize_pkg(l),
+                         sanitize_ident(r), fnv64(canon));
+    }
     return xasprintf("sl_st_%s_%s", sanitize_pkg(l), sanitize_ident(r));
 }
 
@@ -1681,6 +1792,11 @@ const char *ctype_of(CG *cg, const char *t) {
  * pass through; struct names gain their package qualifier ("Point" ->
  * "main.Point"); containers canonicalize recursively. */
 const char *canon_type(CG *cg, const char *t, int line) {
+    const char *bound;
+    /* a type parameter of the generic instance being built: its argument
+     * is already canonical, so it is the answer as it stands */
+    if (cg->tenv && tenv_lookup(cg, t, &bound))
+        return bound;
     char *winner;
     TypeWrap w = type_wrap(t, &winner);
     if (w != TW_NONE) {
@@ -1772,13 +1888,20 @@ const char *canon_type(CG *cg, const char *t, int line) {
     }
     if (map_type(t))
         return t;
+    {
+        const char *g = generic_canon(cg, t, line);
+        if (g)
+            return g;
+    }
     if (!strchr(t, '.')) {
         StructDef *sd = struct_find_in_pkg(cg, cg->cur_pkg, t);
         if (sd)
             return sd->canonical;
         EnumDef *ed = enum_find_in_pkg(cg, cg->cur_pkg, t);
-        if (!ed)
+        if (!ed) {
+            generic_needs_args(cg, cg->cur_pkg, t, line);
             cg_error(line, "unknown type '%s'", t);
+        }
         return ed->canonical;
     }
     char *l, *r;
@@ -1794,8 +1917,10 @@ const char *canon_type(CG *cg, const char *t, int line) {
         return sd->canonical;
     }
     EnumDef *ed = enum_find_in_pkg(cg, pkg, r);
-    if (!ed)
+    if (!ed) {
+        generic_needs_args(cg, pkg, r, line);
         cg_error(line, "package '%s' has no type '%s'", pkg, r);
+    }
     if (!ed->is_pub)
         cg_error(line,
                  "type '%s' is not exported from package '%s' (add 'pub' "
@@ -1857,14 +1982,21 @@ int is_builtin_name(const char *name) {
            !strcmp(name, "__enum_from_str");
 }
 
-/* Find a method `name` declared (via impl) for struct `sd`. */
-FuncSig *method_find(CG *cg, StructDef *sd, const char *name) {
+/* Find a method `name` declared (via impl) for struct `sd`. `line` is
+ * where it is being asked for: an instance's method is made on demand, and
+ * an error inside its body reports that line as the request site. */
+FuncSig *method_find(CG *cg, StructDef *sd, const char *name, int line) {
     for (int i = 0; i < cg->sigs.count; i++) {
         FuncSig *s = cg->sigs.items[i];
         if (!strcmp(s->pkg, sd->pkg) && !strcmp(s->name, name) &&
             s->method_of && !strcmp(s->method_of, sd->canonical))
             return s;
     }
+    /* An instance of a generic struct has no methods until one is asked
+     * for. Every caller goes through here, so this is the only place that
+     * has to know. */
+    if (sd->inst)
+        return method_instantiate(cg, sd, name, line ? line : sd->line);
     return NULL;
 }
 

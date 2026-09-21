@@ -598,6 +598,196 @@ static int cmd_test(int argc, char **argv) {
 /* The compile pipeline: load, generate C, compile, and optionally run.
  * main() reaches it after parsing flags; `slangc test` reaches it with a
  * generated runner as the input. */
+/* ---- frame guards: measure with the C compiler, guard what needs it ----
+ *
+ * How big a function's C frame is depends on the C compiler, and it can be
+ * far more than the generated code suggests: clang gives every call site its
+ * own 8-byte spill slot and inlines callees into their caller, so a function
+ * with about 250 call sites had a 4,200-byte frame and crashed on the 8KB task
+ * stack, while gcc gave the same C a 240-byte one. slangc cannot know that
+ * without asking the compiler, and estimating it would be wrong in one
+ * direction or the other.
+ *
+ * So the first compile asks: -Wframe-larger-than=N makes both compilers
+ * report the true frame of every function above N bytes (clang at link time
+ * under -flto, gcc at compile time with an "In function" line). A slang
+ * function on that list is regenerated behind an entry guard
+ * (sl_rt_stack_reserve) and the program is compiled again. Programs with no
+ * such function -- almost all of them -- take the one compile they always
+ * did, and pay nothing at run time. SLANG_FRAME_LIMIT overrides N (the tests
+ * use a tiny one to put a guard on nearly every function). */
+
+#define FRAME_LIMIT_DEFAULT 1536
+#define FRAME_ROUNDS_MAX 3
+
+static int frame_limit(void) {
+    const char *e = getenv("SLANG_FRAME_LIMIT");
+    int v = e ? atoi(e) : 0;
+    return v > 0 ? v : FRAME_LIMIT_DEFAULT;
+}
+
+/* Run `cmd` through the shell with stderr folded into stdout; return its exit
+ * status and all of its output. */
+static int run_capture(const char *cmd, char **out_text) {
+    StrBuf cap;
+    sb_init(&cap);
+    StrBuf full;
+    sb_init(&full);
+    sb_append(&full, "LC_ALL=C ");     /* ASCII quotes around names in gcc */
+    sb_append(&full, cmd);
+    sb_append(&full, " 2>&1");
+    FILE *fp = popen(full.data, "r");
+    if (!fp) {
+        *out_text = xstrdup("");
+        return -1;
+    }
+    char buf[4096];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), fp)) > 0)
+        sb_append_n(&cap, buf, n);
+    int st = pclose(fp);
+    *out_text = cap.data ? cap.data : xstrdup("");
+    return st;
+}
+
+typedef struct {
+    char *name;
+    int bytes;
+} FrameDiag;
+
+/* clang:  ... stack frame size (4200) exceeds limit (1500) in function 'f'
+ *         (in 'f' without "function" when it is not the linker reporting)
+ * gcc:    file.c: In function 'f':
+ *         file.c:9:1: warning: the frame size of 1040 bytes is larger than 800 bytes
+ * Returns how many were found. */
+static int parse_frame_diags(const char *text, FrameDiag **out) {
+    int n = 0, cap = 0;
+    FrameDiag *v = NULL;
+    char gcc_fn[256] = "";
+    const char *p = text;
+    while (*p) {
+        const char *eol = strchr(p, '\n');
+        size_t len = eol ? (size_t)(eol - p) : strlen(p);
+        char *line = (char *)xmalloc(len + 1);
+        memcpy(line, p, len);
+        line[len] = '\0';
+        const char *q;
+        if ((q = strstr(line, "In function '")) != NULL) {
+            q += strlen("In function '");
+            const char *e = strchr(q, '\'');
+            if (e && (size_t)(e - q) < sizeof(gcc_fn)) {
+                memcpy(gcc_fn, q, (size_t)(e - q));
+                gcc_fn[e - q] = '\0';
+            }
+        } else {
+            int bytes = 0;
+            char name[256] = "";
+            if ((q = strstr(line, "stack frame size (")) != NULL) {
+                bytes = atoi(q + strlen("stack frame size ("));
+                const char *in = strstr(q, ") in ");
+                if (in) {
+                    in += strlen(") in ");
+                    if (!strncmp(in, "function ", 9))
+                        in += 9;
+                    if (*in == '\'') {
+                        in++;
+                        const char *e = strchr(in, '\'');
+                        if (e && (size_t)(e - in) < sizeof(name)) {
+                            memcpy(name, in, (size_t)(e - in));
+                            name[e - in] = '\0';
+                        }
+                    }
+                }
+            } else if ((q = strstr(line, "the frame size of ")) != NULL) {
+                bytes = atoi(q + strlen("the frame size of "));
+                snprintf(name, sizeof(name), "%s", gcc_fn);
+            }
+            if (bytes > 0 && name[0]) {
+                if (n == cap) {
+                    cap = cap ? cap * 2 : 8;
+                    v = (FrameDiag *)xrealloc(v, sizeof(FrameDiag) * (size_t)cap);
+                }
+                v[n].name = xstrdup(name);
+                v[n].bytes = bytes;
+                n++;
+            }
+        }
+        free(line);
+        if (!eol)
+            break;
+        p = eol + 1;
+    }
+    *out = v;
+    return n;
+}
+
+/* The compiler's own output with the frame diagnostics removed: every other
+ * warning still reaches the user exactly as before. */
+static char *strip_frame_diags(const char *text) {
+    StrBuf keep;
+    sb_init(&keep);
+    const char *p = text;
+    char *held = NULL; /* an "In function" line waiting to learn what follows */
+    int in_diag = 0;   /* inside a frame diagnostic's source/caret lines */
+    while (*p) {
+        const char *eol = strchr(p, '\n');
+        size_t len = eol ? (size_t)(eol - p) : strlen(p);
+        char *line = (char *)xmalloc(len + 2);
+        memcpy(line, p, len);
+        line[len] = '\n';
+        line[len + 1] = '\0';
+        int is_frame = strstr(line, "stack frame size (") ||
+                       strstr(line, "the frame size of ");
+        int is_ctx = strstr(line, "In function '") != NULL;
+        int is_snippet = in_diag && (strchr(line, '|') != NULL);
+        if (is_frame) {
+            free(held);
+            held = NULL;
+            in_diag = 1;
+        } else if (is_snippet) {
+            /* source or caret line of a frame diagnostic: dropped */
+        } else if (is_ctx) {
+            free(held);
+            held = line;
+            line = NULL;
+            in_diag = 0;
+        } else {
+            if (held) {
+                sb_append(&keep, held);
+                free(held);
+                held = NULL;
+            }
+            in_diag = 0;
+            sb_append(&keep, line);
+        }
+        free(line);
+        if (!eol)
+            break;
+        p = eol + 1;
+    }
+    if (held) {
+        sb_append(&keep, held);
+        free(held);
+    }
+    return keep.data ? keep.data : xstrdup("");
+}
+
+/* True if `name` is the C name of a slang function this build emitted; a
+ * guarded function's body is reported as NAME__body. `*base` gets the
+ * function's own name. */
+static int is_slang_symbol(const char *name, char *base, size_t cap) {
+    snprintf(base, cap, "%s", name);
+    size_t l = strlen(base);
+    if (l > 6 && !strcmp(base + l - 6, "__body"))
+        base[l - 6] = '\0';
+    int n = 0;
+    const char *const *syms = codegen_function_symbols(&n);
+    for (int i = 0; i < n; i++)
+        if (!strcmp(syms[i], base))
+            return 1;
+    return 0;
+}
+
 static int build(const char *input, const char *outname, int emit_c,
                  int keep_c, int run, int want_liveness_dump,
                  int want_mir_dump) {
@@ -664,6 +854,7 @@ static int build(const char *input, const char *outname, int emit_c,
        or preemption: the address is OS-thread affine, the task is not.
        Reads go through SL_RT_TLS_CUR. */
     sb_append(&cmd, "cc -O3 -flto ");
+    sb_append(&cmd, xasprintf("-Wframe-larger-than=%d ", frame_limit()));
     sb_append(&cmd, gen_path);
     sb_append(&cmd, " -o ");
     sb_append(&cmd, outname);
@@ -685,7 +876,64 @@ static int build(const char *input, const char *outname, int emit_c,
         sb_append(&cmd, " -l");
         sb_append(&cmd, link_libs[i]);
     }
-    int status = system(cmd.data);
+    /* Compile, and if the compiler reports a slang function with a large
+     * frame, regenerate it behind an entry guard and compile again. */
+    int status = 0;
+    char *cc_out = NULL;
+    const char **guard_syms = NULL;
+    int *guard_frames = NULL;
+    int nguard = 0;
+    for (int round = 0;; round++) {
+        status = run_capture(cmd.data, &cc_out);
+        if (status != 0)
+            break;
+        FrameDiag *diags = NULL;
+        int nd = parse_frame_diags(cc_out, &diags);
+        int changed = 0;
+        for (int i = 0; i < nd; i++) {
+            char base[256];
+            if (!is_slang_symbol(diags[i].name, base, sizeof(base)))
+                continue;
+            int at = -1;
+            for (int k = 0; k < nguard; k++)
+                if (!strcmp(guard_syms[k], base))
+                    at = k;
+            if (at < 0) {
+                guard_syms = (const char **)xrealloc(
+                    guard_syms, sizeof(char *) * (size_t)(nguard + 1));
+                guard_frames = (int *)xrealloc(
+                    guard_frames, sizeof(int) * (size_t)(nguard + 1));
+                guard_syms[nguard] = xstrdup(base);
+                guard_frames[nguard] = diags[i].bytes;
+                nguard++;
+                changed = 1;
+            } else if (diags[i].bytes > guard_frames[at]) {
+                guard_frames[at] = diags[i].bytes;
+                changed = 1;
+            }
+        }
+        if (!changed || round >= FRAME_ROUNDS_MAX)
+            break;
+        /* Fresh AST: codegen canonicalizes types in place, so a second run
+         * over the same tree is not safe. */
+        PkgList pkgs2;
+        int main2 = load_packages(input, &pkgs2);
+        codegen_set_frame_guards(guard_syms, guard_frames, nguard);
+        StrBuf out2;
+        sb_init(&out2);
+        int t2 = 0, c2 = 0, s2 = 0, z2 = 0;
+        codegen_program(pkgs2.items, pkgs2.count, main2, &out2, &t2, &c2, &s2,
+                        &z2);
+        write_file(gen_path, out2.data, out2.len);
+    }
+    if (status == 0) {
+        /* Every compiler message except the frame report, unchanged. */
+        char *rest = strip_frame_diags(cc_out);
+        if (rest[0])
+            fputs(rest, stderr);
+    } else {
+        fputs(cc_out, stderr);
+    }
     if (status != 0) {
         fputs("slang: C compilation failed; generated code kept at ", stderr);
         fputs(gen_path, stderr);

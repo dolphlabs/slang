@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Data types — slang</title>
-<meta name="description" content="bytes, lists, maps and structs.">
+<meta name="description" content="bytes, lists, maps, structs and generic structs.">
 <meta name="author" content="Dolphlabs (Dolph Tech Limited)">
 <link rel="author" href="https://dolphlabs.com">
 <meta property="og:site_name" content="slang — by Dolphlabs">
 <meta property="og:title" content="Data types">
-<meta property="og:description" content="bytes, lists, maps and structs.">
+<meta property="og:description" content="bytes, lists, maps, structs and generic structs.">
 <meta property="og:type" content="website">
 <!-- Agents: every page here has a Markdown twin at the same path, and
      the whole site is one document at /llms-full.txt -->
@@ -51,7 +51,7 @@
   <article class="content">
     <header class="page-head">
       <h1>Data types</h1>
-      <p class="tagline">bytes, lists, maps and structs.</p>
+      <p class="tagline">bytes, lists, maps, structs and generic structs.</p>
       <p class="agentline">
         <a href="../guide/data.md">Markdown version</a> ·
         <a href="../llms.txt">llms.txt</a> ·
@@ -126,8 +126,34 @@ r.br.x = <span class="n">6</span>;
 
 <span class="k">let</span> pts: [Point] = [p, q];  <span class="c">// structs compose with lists &amp; maps</span>
 <span class="b">push</span>(pts, r.tl);</code></pre></div>
-<p>Struct literals must supply every field exactly once, with types checked. Methods live in top-level <code>impl Name { ... }</code> blocks; mark a method <code>pub fn</code> to export it to importing packages. A method&#x27;s name belongs to its struct: it may match a package-level function or another struct&#x27;s method (<code>impl Client { fn get }</code> beside <code>fn get</code>), and a bare call <code>get(x)</code> always means the function. Structs are values: assignment copies, including any <code>str</code> / list / map / <code>opt</code> / <code>result</code> / <code>gc struct</code> fields (shallow — the heap objects are shared). Use <code>gc struct</code> when the record itself should be a shared heap object. A method can be called on any expression, not only on a variable, so calls chain: <code>p.moved(1, 2).sum()</code>, <code>make().sum()</code>, <code>points[0].sum()</code>, <code>scores[&quot;ann&quot;].sum()</code>, <code>line.tl.sum()</code>. The receiver is evaluated exactly once, before the arguments, which run left to right. Two things are not allowed on such a receiver, and both say what to do instead: a method that returns a reference (<code>fn get(self: &amp;Bag) -&gt; &amp;int</code>) — the reference would have no owner, so bind the receiver to a variable first — and the <code>arena</code>, <code>link</code> and <code>trip</code> methods (<code>a.alloc(..)</code>, <code>conn.send(..)</code>, <code>t.pull()</code>), which are only callable on a variable.</p>
+<p>Struct literals must supply every field exactly once, with types checked. A struct may be declared after one that holds it by value. Methods live in top-level <code>impl Name { ... }</code> blocks; mark a method <code>pub fn</code> to export it to importing packages. A method&#x27;s name belongs to its struct: it may match a package-level function or another struct&#x27;s method (<code>impl Client { fn get }</code> beside <code>fn get</code>), and a bare call <code>get(x)</code> always means the function. Structs are values: assignment copies, including any <code>str</code> / list / map / <code>opt</code> / <code>result</code> / <code>gc struct</code> fields (shallow — the heap objects are shared). Use <code>gc struct</code> when the record itself should be a shared heap object. A method can be called on any expression, not only on a variable, so calls chain: <code>p.moved(1, 2).sum()</code>, <code>make().sum()</code>, <code>points[0].sum()</code>, <code>scores[&quot;ann&quot;].sum()</code>, <code>line.tl.sum()</code>. The receiver is evaluated exactly once, before the arguments, which run left to right. Two things are not allowed on such a receiver, and both say what to do instead: a method that returns a reference (<code>fn get(self: &amp;Bag) -&gt; &amp;int</code>) — the reference would have no owner, so bind the receiver to a variable first — and the <code>arena</code>, <code>link</code> and <code>trip</code> methods (<code>a.alloc(..)</code>, <code>conn.send(..)</code>, <code>t.pull()</code>), which are only callable on a variable.</p>
 <p><code>own T</code> is uniquely owned: assignment and passing <strong>move</strong>, and use-after-move is a compile error. A moved binding can be reinitialized. <code>own</code> is freed when its binding goes out of scope unless it was moved.</p>
+<h2 id="generic-structs">Generic structs</h2>
+<p>A struct can take type parameters, written in brackets like the built-in <code>opt[T]</code> and <code>map[K]V</code>:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">struct</span> Box[T] {
+    v: T,
+}
+
+<span class="k">struct</span> Pair[K, V] {
+    k: K,
+    v: V,
+}
+
+<span class="k">gc</span> <span class="k">struct</span> Node[T] {
+    val: T,
+    next: <span class="t">opt</span>[Node[T]],      <span class="c">// a list: recursion goes through opt</span>
+}
+
+<span class="k">let</span> a = Box { v: <span class="n">41</span> };                      <span class="c">// T inferred from the field: Box[int]</span>
+<span class="k">let</span> b: Box[<span class="t">str</span>] = Box[<span class="t">str</span>] { v: <span class="s">&quot;hi&quot;</span> };     <span class="c">// or written out</span>
+<span class="k">let</span> p = Pair { k: <span class="n">1</span>, v: Point { x: <span class="n">3</span>, y: <span class="n">4</span> } };
+<span class="k">let</span> n = Box { v: Box { v: <span class="n">7</span> } };            <span class="c">// Box[Box[int]]</span>
+
+<span class="k">fn</span> <span class="f">unwrap</span>(b: Box[<span class="t">int</span>]) -&gt; <span class="t">int</span> { <span class="k">return</span> b.v; }</code></pre></div>
+<p><code>Box[int]</code> is an ordinary struct that the compiler writes out the first time the program names it, so it costs exactly what a hand-written <code>IntBox</code> does: the same layout, the same C, no boxing and no runtime type information. Two instances of one template are two different types (<code>Box[int]</code> is not <code>Box[str]</code>), and instances work anywhere a type does, including inside <code>[T]</code>, <code>map</code>, <code>opt</code>, <code>result</code>, <code>chan</code>, <code>fn</code> types, <code>json.encode</code> / <code>json.decode</code> (of a <code>gc struct</code>), and across packages (<code>stash.Stack[Thing]</code>, where <code>Thing</code> is the importing package&#x27;s own type).</p>
+<p>A literal infers its arguments from its fields, so it needs at least one field whose value fixes each parameter. <code>Box { v: none }</code> or <code>Bag { items: [] }</code> cannot say what <code>T</code> is; write <code>Box[int] { v: none }</code>. Type arguments are never written at a call site or on a literal&#x27;s name unless the inference has nothing to go on.</p>
+<p>Each instance is checked when it is made, with the arguments in place: a parameter is unconstrained, and what a field can do with it is decided by the type it turns out to be. An error inside a template therefore names the instance and where it was asked for (<code>... (in main.Keyed[float], requested at line 9)</code>), and a template nobody instantiates is not checked at all.</p>
+<p>Not yet supported, and each says so when used: methods on a generic struct (<code>impl Box[T]</code>), generic functions (<code>fn first[T](xs: [T]) -&gt; T</code>), and lifetime parameters on a generic struct.</p>
   </article>
   <aside class="toc">
     <p class="toc-title">On this page</p>

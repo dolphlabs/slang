@@ -1,0 +1,1 @@
+cannot infer type parameter 'T' of 'Tag' from this literal

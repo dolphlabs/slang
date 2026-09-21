@@ -75,10 +75,11 @@ PAGES = [
     {
         "path": "guide/data.html",
         "title": "Data types",
-        "tagline": "bytes, lists, maps and structs.",
+        "tagline": "bytes, lists, maps, structs and generic structs.",
         "kind": "doc",
         "nav": "Data types",
-        "sections": ["bytes", "Lists `[T]`", "Maps `map[K]V`", "Structs"],
+        "sections": ["bytes", "Lists `[T]`", "Maps `map[K]V`", "Structs",
+                     "Generic structs"],
     },
     {
         "path": "guide/errors.html",
