@@ -288,10 +288,16 @@ static void load_import(Loader *ld, const char *from_dir,
         if (!project_is_dir(cached))
             load_error("package '%s' is not in the cache; run slangc get",
                        ipath);
+        /* The hash covers the WHOLE clone, `dir` or not: what was
+           verified must be what was fetched, not the part of it this
+           project happens to compile. */
         char *got = project_tree_hash(cached);
         if (strcmp(got, pin->hash))
             load_error("package '%s' hash mismatch; run slangc get", ipath);
-        load_package_dir(ld, cached, pin->name);
+        char *pkgdir = project_pkg_dir(pin);
+        if (!project_is_dir(pkgdir))
+            load_error("package '%s' has no directory '%s'", ipath, pin->dir);
+        load_package_dir(ld, pkgdir, pin->name);
         return;
     }
 

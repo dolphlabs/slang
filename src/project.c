@@ -25,6 +25,32 @@ int project_is_dir(const char *path) {
     return path && stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
+/* A pin's `dir`: a relative path inside the repository, one or more
+ * path segments of ordinary characters. Anything that could climb out
+ * of the clone ("..", a leading "/") is refused here rather than
+ * discovered as a mysterious read outside the cache. */
+static int is_pkg_subdir(const char *s) {
+    if (!s || !*s || *s == '/')
+        return 0;
+    int seg = 0;
+    for (const char *c = s; ; c++) {
+        if (*c == '/' || !*c) {
+            if (seg == 0)
+                return 0;
+            seg = 0;
+            if (!*c)
+                return 1;
+            continue;
+        }
+        if (*c == '.' && seg == 0 && (c[1] == '.' || c[1] == '/' || !c[1]))
+            return 0;
+        if (!(isalnum((unsigned char)*c) || *c == '_' || *c == '-' ||
+              *c == '.'))
+            return 0;
+        seg++;
+    }
+}
+
 static int is_ident(const char *s) {
     if (!s || !s[0])
         return 0;
@@ -105,13 +131,18 @@ SlPkgPin *project_find_pin(SlProject *p, const char *name) {
     return p ? find_pin(p, name) : NULL;
 }
 
+static const char *dir_of(const SlPkgPin *p) { return p->dir ? p->dir : ""; }
+
 static SlPkgPin *add_pin(SlProject *p, const char *name, const char *git,
-                         const char *tag) {
+                         const char *tag, const char *dir) {
     SlPkgPin *e = find_pin(p, name);
     if (e) {
         if (strcmp(e->git, git) || strcmp(e->tag, tag))
             project_error("package '%s' needed as %s @ %s and %s @ %s", name,
                           e->git, e->tag, git, tag);
+        if (strcmp(dir_of(e), dir ? dir : ""))
+            project_error("package '%s' needed from dir '%s' and dir '%s'",
+                          name, dir_of(e), dir ? dir : "");
         return e;
     }
     if (p->npins % 8 == 0)
@@ -121,6 +152,7 @@ static SlPkgPin *add_pin(SlProject *p, const char *name, const char *git,
     pin->name = xstrdup(name);
     pin->git = xstrdup(git);
     pin->tag = xstrdup(tag);
+    pin->dir = dir && dir[0] ? xstrdup(dir) : NULL;
     pin->hash = NULL;
     return pin;
 }
@@ -163,11 +195,22 @@ static void parse_project_file(SlProject *p, char *src, const char *path) {
             char *git = cut_word(&cur);
             char *tkw = cut_word(&cur);
             char *tag = cut_word(&cur);
+            char *dkw = cut_word(&cur);
+            char *dir = NULL;
+            if (dkw) {
+                dir = cut_word(&cur);
+                if (strcmp(dkw, "dir") || !dir || !is_pkg_subdir(dir) ||
+                    cut_word(&cur))
+                    project_error("%s:%d: expected 'pkg <name> git <url> tag "
+                                  "<tag> [dir <subdir>]'",
+                                  path, lineno);
+            }
             if (!name || !is_ident(name) || !gkw || strcmp(gkw, "git") ||
-                !git || !tkw || strcmp(tkw, "tag") || !tag || cut_word(&cur))
-                project_error("%s:%d: expected 'pkg <name> git <url> tag <tag>'",
+                !git || !tkw || strcmp(tkw, "tag") || !tag)
+                project_error("%s:%d: expected 'pkg <name> git <url> tag <tag> "
+                              "[dir <subdir>]'",
                               path, lineno);
-            add_pin(p, name, git, tag);
+            add_pin(p, name, git, tag, dir);
         } else {
             project_error("%s:%d: unknown field '%s'", path, lineno, kw);
         }
@@ -187,7 +230,8 @@ static void ingest_dep_project(SlProject *p, const char *dir) {
         return;
     SlProject *dep = parse_project_path(proj);
     for (int i = 0; i < dep->npins; i++)
-        add_pin(p, dep->pins[i].name, dep->pins[i].git, dep->pins[i].tag);
+        add_pin(p, dep->pins[i].name, dep->pins[i].git, dep->pins[i].tag,
+                dep->pins[i].dir);
 }
 
 static void parse_lock_file(SlProject *p, char *src, const char *path) {
@@ -209,14 +253,24 @@ static void parse_lock_file(SlProject *p, char *src, const char *path) {
         char *gkw = cut_word(&cur);
         char *git = NULL;
         char *tag = NULL;
+        char *dir = NULL;
         if (!name || !hash)
             project_error("%s:%d: expected '<name> sha256:<hex>'", path, lineno);
         if (gkw) {
             git = cut_word(&cur);
             char *tkw = cut_word(&cur);
             tag = cut_word(&cur);
+            char *dkw = cut_word(&cur);
+            if (dkw) {
+                dir = cut_word(&cur);
+                if (strcmp(dkw, "dir") || !dir || !is_pkg_subdir(dir) ||
+                    cut_word(&cur))
+                    project_error("%s:%d: expected '<name> sha256:<hex> git "
+                                  "<url> tag <tag> [dir <subdir>]'",
+                                  path, lineno);
+            }
             if (strcmp(gkw, "git") || !git || !tkw || strcmp(tkw, "tag") ||
-                !tag || cut_word(&cur))
+                !tag)
                 project_error(
                     "%s:%d: expected '<name> sha256:<hex> git <url> tag <tag>'",
                     path, lineno);
@@ -228,8 +282,9 @@ static void parse_lock_file(SlProject *p, char *src, const char *path) {
             if (!git)
                 project_error("%s:%d: lock entry '%s' is not in slang.project",
                               path, lineno, name);
-            pin = add_pin(p, name, git, tag);
-        } else if (git && (strcmp(pin->git, git) || strcmp(pin->tag, tag))) {
+            pin = add_pin(p, name, git, tag, dir);
+        } else if (git && (strcmp(pin->git, git) || strcmp(pin->tag, tag) ||
+                           strcmp(dir_of(pin), dir ? dir : ""))) {
             project_error("%s:%d: lock for '%s' disagrees with slang.project",
                           path, lineno, name);
         }
@@ -276,6 +331,13 @@ static void mkdir_p(const char *path) {
     }
     if (mkdir(buf, 0755) != 0 && errno != EEXIST)
         project_error("cannot create directory '%s'", buf);
+}
+
+char *project_pkg_dir(const SlPkgPin *pin) {
+    char *cached = project_cache_dir(pin);
+    if (!pin->dir)
+        return cached;
+    return join2(cached, pin->dir);
 }
 
 char *project_cache_dir(const SlPkgPin *pin) {
@@ -533,8 +595,12 @@ static void write_lock(SlProject *p) {
     for (int i = 0; i < p->npins; i++) {
         if (!ord[i].hash)
             project_error("package '%s' has no hash after get", ord[i].name);
-        fprintf(f, "%s %s git %s tag %s\n", ord[i].name, ord[i].hash,
-                ord[i].git, ord[i].tag);
+        if (ord[i].dir)
+            fprintf(f, "%s %s git %s tag %s dir %s\n", ord[i].name,
+                    ord[i].hash, ord[i].git, ord[i].tag, ord[i].dir);
+        else
+            fprintf(f, "%s %s git %s tag %s\n", ord[i].name, ord[i].hash,
+                    ord[i].git, ord[i].tag);
     }
     fclose(f);
 }
