@@ -137,7 +137,6 @@ dist: slangc-dist
 	cp slangc-dist dist/$(DIST_NAME)/bin/slangc
 	cp runtime/*.c dist/$(DIST_NAME)/lib/slang/runtime/
 	cp -R stdlib/. dist/$(DIST_NAME)/lib/slang/stdlib/
-	cp README.md LICENSE dist/$(DIST_NAME)/ 2>/dev/null || \
-		cp README.md dist/$(DIST_NAME)/
+	cp README.md LICENSE THIRD_PARTY.md dist/$(DIST_NAME)/
 	tar -czf dist/$(DIST_NAME).tar.gz -C dist $(DIST_NAME)
 	@echo "wrote dist/$(DIST_NAME).tar.gz"
