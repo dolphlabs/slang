@@ -226,6 +226,31 @@ for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood \
 done
 [ "$gc_bad" -eq 0 ] && echo "PASS gc stress"
 
+# ---- frame guards --------------------------------------------------------
+# A function whose C frame is large is compiled behind an entry guard that
+# grows the stack first (see the frame loop in src/main.c). Real programs
+# almost never need one, so the guard would go untested; a 64-byte limit puts
+# one on nearly every function and on the main entry, on any compiler, and
+# the output must not change. tests/big_frame is the one program that needs
+# it for real: without the guard it dies with SIGBUS on clang.
+echo "--- frame guards (SLANG_FRAME_LIMIT=64) ---"
+fg_bad=0
+for name in fn_values spawn_isolation gc_stress maps json flags method_recv \
+            method_recv_own method_pub indirect_callee enum move own structs \
+            mutex select big_frame; do
+    [ -f "tests/$name/main.sl" ] || continue
+    out="/tmp/sl_fg_${name}.out"
+    if ! SLANG_FRAME_LIMIT=64 ./slangc "tests/$name/main.sl" --run \
+            >"$out" 2>/dev/null </dev/null; then
+        echo "FAIL frame guards $name (exit $?)"
+        fg_bad=1; fail=1
+    elif ! diff -q "tests/$name/expected.txt" "$out" >/dev/null; then
+        echo "FAIL frame guards $name (output mismatch)"
+        fg_bad=1; fail=1
+    fi
+done
+[ "$fg_bad" -eq 0 ] && echo "PASS frame guards"
+
 # Generated C must compile clean under the warnings a C compiler turns
 # on by ITSELF. slangc passes no -W flags, so anything default-on lands
 # in the user's terminal on every single build -- 79 of them across this
