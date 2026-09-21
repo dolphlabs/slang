@@ -993,7 +993,9 @@ let r: result[Person, str] = json.decode(s);
 guard let p2 = r else { exit(1); }
 ```
 
-Supported: `struct`, `opt[T]`, `[T]`, `map[str, V]` (JSON object keys
+Supported: `gc struct` (a plain `struct` is a compile error naming it, since
+the codecs read and build structs through a pointer), `opt[T]`, `[T]`,
+`map[str, V]` (JSON object keys
 are always strings — a map with any other key type is a compile
 error), every scalar, and `bytes` (RFC 4648 base64 strings on the
 wire). `rawptr`, `chan[T]`, and

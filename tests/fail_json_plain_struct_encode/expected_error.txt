@@ -1,0 +1,1 @@
+cannot json.encode 'fail_json_plain_struct_encode.Plain': json supports only gc structs (declare it 'gc struct Plain')
