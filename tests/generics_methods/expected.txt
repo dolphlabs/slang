@@ -1,0 +1,17 @@
+42
+21
+22
+21
+text
+true
+false
+one
+1
+1
+301
+a
+s-tag
+-1
+3
+3
+c

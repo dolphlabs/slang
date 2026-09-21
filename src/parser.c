@@ -1406,9 +1406,8 @@ static Stmt *parse_enum_decl(Parser *p, int is_pub) {
 static Stmt *parse_impl_decl(Parser *p) {
     Token *kw = advance(p); /* 'impl' */
     Token *name = expect(p, T_IDENT, "a struct name");
-    if (check(p, T_LBRACKET))
-        parse_error(peek(p), "methods on a generic struct are not "
-                             "supported yet");
+    char **tparams = NULL;
+    int ntparams = parse_type_params(p, &tparams);
     expect(p, T_LBRACE, "'{'");
 
     FuncDecl **funcs = NULL;
@@ -1421,6 +1420,7 @@ static Stmt *parse_impl_decl(Parser *p) {
            visibility -- so a method was uncallable from any other
            package, and the error for trying ("add 'pub' to export it")
            sent the caller straight into this one. */
+        int start = p->pos;
         int is_pub = match(p, T_KW_PUB);
         if (!check(p, T_KW_FN))
             parse_error(peek(p),
@@ -1428,6 +1428,7 @@ static Stmt *parse_impl_decl(Parser *p) {
                         "inside 'impl'");
         FuncDecl *f = parse_fn_decl(p, 0);
         f->is_pub = is_pub;
+        f->tok_pos = start; /* at `pub`, so a re-parse sees it too */
         funcs = (FuncDecl **)xrealloc(funcs, (n + 1) * sizeof(FuncDecl *));
         funcs[n++] = f;
     }
@@ -1437,6 +1438,8 @@ static Stmt *parse_impl_decl(Parser *p) {
     s->as.impl.struct_name = name->text;
     s->as.impl.funcs = funcs;
     s->as.impl.nfuncs = n;
+    s->as.impl.tparams = tparams;
+    s->as.impl.ntparams = ntparams;
     return s;
 }
 
@@ -1806,6 +1809,7 @@ static int parse_lt_params(Parser *p, char ***out) {
 }
 
 static FuncDecl *parse_fn_decl(Parser *p, int is_extern) {
+    int start = p->pos;
     Token *kw = advance(p); /* 'fn' */
     Token *name = expect(p, T_IDENT, "a function name");
     if (check(p, T_LBRACKET))
@@ -1852,6 +1856,25 @@ static FuncDecl *parse_fn_decl(Parser *p, int is_extern) {
     } else {
         f->body = parse_block(p, 1);
     }
+    f->toks = (struct Token *)p->toks;
+    f->ntoks = p->count;
+    f->tok_pos = start;
+    return f;
+}
+
+/* Parse one `fn` (or `pub fn`) declaration again, from the token array and
+ * position a FuncDecl recorded. Every instance of a generic method is a
+ * fresh AST produced by this. */
+FuncDecl *parse_fn_decl_again(const FuncDecl *from) {
+    Parser p;
+    memset(&p, 0, sizeof(p));
+    p.toks = (Token *)from->toks;
+    p.count = from->ntoks;
+    p.pos = from->tok_pos;
+    int is_pub = match(&p, T_KW_PUB) ? 1 : 0;
+    FuncDecl *f = parse_fn_decl(&p, 0);
+    f->is_pub = is_pub;
+    f->tok_pos = from->tok_pos; /* the span it came from, pub included */
     return f;
 }
 

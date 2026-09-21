@@ -1175,7 +1175,7 @@ char *gen_call(CG *cg, Expr *e) {
                 recv_t = NULL;
                 goto have_sig;
             }
-            sig = method_find(cg, sd, right);
+            sig = method_find(cg, sd, right, e->line);
             if (!sig)
                 cg_error(e->line, "type '%s' has no method '%s'",
                          sd->canonical, right);

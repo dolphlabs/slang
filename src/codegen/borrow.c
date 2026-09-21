@@ -732,7 +732,7 @@ static FuncSig *call_sig_of(BK *bk, Expr *e, int *self_off, char **recv) {
             const char *rt = local_ty(bk->fn, left);
             StructDef *sd = rt ? struct_of_type(bk->cg, rt) : NULL;
             if (sd)
-                return method_find(bk->cg, sd, right);
+                return method_find(bk->cg, sd, right, e->line);
         }
         return NULL;
     }
@@ -1141,7 +1141,7 @@ static FuncSig *mir_sig(CG *cg, MirFn *fn) {
     if (split_dotted(fn->name, &left, &right)) {
         StructDef *sd = struct_find_in_pkg(cg, fn->pkg, left);
         if (sd)
-            return method_find(cg, sd, right);
+            return method_find(cg, sd, right, 0);
     }
     return sig_find_in(cg, fn->pkg, fn->name);
 }

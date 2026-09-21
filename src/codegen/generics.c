@@ -14,6 +14,7 @@
  * recursing. */
 
 #include "internal.h"
+#include "../parser.h"
 
 /* `struct Bad[T] { x: Bad[[T]] }` names a new type every time it is
  * instantiated. Legitimate nesting -- Box[Box[Box[int]]] -- is a handful of
@@ -29,6 +30,15 @@ static int note_line;
 void generic_error_note(const char **canon, int *line) {
     *canon = note_canon;
     *line = note_line;
+}
+
+/* Which instance body a pass is walking, so an error inside a template
+ * says which T made it fail and who asked for that instance. The cursor
+ * sets this on every yield -- NULL for a declared function -- so no pass
+ * has to remember to. */
+void generic_note_body(const char *what, int line) {
+    note_canon = what;
+    note_line = line;
 }
 
 /* ------------------------------------------------------------------ */
@@ -75,6 +85,38 @@ void tmpl_register(CG *cg, const char *pkg, Stmt *decl) {
     t->nfields = decl->as.struct_decl.nfields;
     t->line = decl->line;
     cg->tmpls.items[cg->tmpls.count++] = t;
+}
+
+/* `impl Box[T] { ... }`: the method declarations, kept as written against
+ * the struct template. Nothing is checked here -- a method is checked once
+ * per instance that uses it, with T bound. */
+void tmpl_register_impl(CG *cg, Package *pkg, Stmt *decl) {
+    StructTmpl *tm = tmpl_find_in_pkg(cg, pkg->name, decl->as.impl.struct_name);
+    if (!tm)
+        cg_error(decl->line, "impl of unknown struct '%s'",
+                 decl->as.impl.struct_name);
+    if (decl->as.impl.ntparams != tm->ntparams)
+        cg_error(decl->line,
+                 "'%s' takes %d type parameter%s, but this impl block "
+                 "declares %d",
+                 tm->name, tm->ntparams, tm->ntparams == 1 ? "" : "s",
+                 decl->as.impl.ntparams);
+    if (tm->nmethods)
+        cg_error(decl->line, "duplicate impl block for '%s'", tm->name);
+    for (int i = 0; i < decl->as.impl.nfuncs; i++) {
+        const char *nm = decl->as.impl.funcs[i]->name;
+        for (int q = 0; q < i; q++) {
+            if (!strcmp(decl->as.impl.funcs[q]->name, nm))
+                cg_error(decl->as.impl.funcs[i]->line,
+                         "redefinition of method '%s' on '%s'", nm, tm->name);
+        }
+    }
+    tm->owner = pkg;
+    tm->methods = decl->as.impl.funcs;
+    tm->nmethods = decl->as.impl.nfuncs;
+    tm->mparams = decl->as.impl.tparams;
+    tm->nmparams = decl->as.impl.ntparams;
+    tm->impl_line = decl->line;
 }
 
 /* The template a possibly-dotted name refers to, or NULL. `line` is only
@@ -239,6 +281,8 @@ static const char *instantiate(CG *cg, StructTmpl *tm, char **args, int n,
         env.names[i] = tm->tparams[i];
         env.types[i] = args[i];
     }
+    sd->tmpl = tm;
+    sd->env = env;
     /* REPLACE the environment, do not extend it: an instance made from
      * inside another one must not see that one's parameters. */
     TypeEnv *saved_env = cg->tenv;
@@ -282,6 +326,113 @@ const char *generic_canon(CG *cg, const char *t, int line) {
     for (int i = 0; i < n; i++)
         cargs[i] = (char *)canon_type(cg, args[i], line);
     return instantiate(cg, tm, cargs, n, line);
+}
+
+/* ------------------------------------------------------------------ */
+/* Methods of an instance                                              */
+/* ------------------------------------------------------------------ */
+
+/* The method `name` of instance `sd`, made on first use, or NULL if the
+ * template declares no such method.
+ *
+ * Lazy on purpose: a method is type-checked once per instance that asks
+ * for it, so `Box[int].sum()` adding its values is fine even though
+ * `Box[str]` exists, as long as nobody calls `sum` on `Box[str]`. That is
+ * the C++ template rule, and it is what makes unbounded parameters
+ * workable without interfaces. */
+FuncSig *method_instantiate(CG *cg, StructDef *sd, const char *name,
+                            int line) {
+    StructTmpl *tm = sd->tmpl;
+    if (!tm)
+        return NULL;
+    FuncDecl *decl = NULL;
+    for (int i = 0; i < tm->nmethods; i++) {
+        if (!strcmp(tm->methods[i]->name, name))
+            decl = tm->methods[i];
+    }
+    if (!decl)
+        return NULL;
+    if (decl->nlts)
+        cg_error(decl->line,
+                 "lifetime parameters on a method of a generic struct are "
+                 "not supported yet");
+    /* After the passes that walk bodies have run, a new body would never
+     * be checked or rooted. It cannot happen -- the real run repeats the
+     * dry run's walk -- but a silent miscompile is what it would cost. */
+    if (cg->insts_frozen)
+        cg_error(line,
+                 "internal: '%s' of '%s' was first needed after the "
+                 "analysis passes; please report this program",
+                 name, sd->canonical);
+    if (cg->inst_depth >= INST_DEPTH_MAX)
+        cg_error(line,
+                 "'%s' expands without end: instantiating it needs another "
+                 "new instance, %d levels deep",
+                 tm->name, INST_DEPTH_MAX);
+
+    FuncInst *fi = (FuncInst *)xmalloc(sizeof(FuncInst));
+    memset(fi, 0, sizeof(*fi));
+    fi->pkg = tm->owner;
+    fi->fn = parse_fn_decl_again(decl);
+    fi->recv = sd->canonical;
+    fi->line = line;
+    fi->note = xasprintf("%s.%s", sd->canonical, name);
+    /* The impl block names the parameters itself (`impl Box[U]` is legal),
+     * so bind ITS names, positionally, to this instance's arguments. */
+    fi->env.n = sd->env.n;
+    for (int i = 0; i < sd->env.n; i++) {
+        fi->env.names[i] = i < tm->nmparams ? tm->mparams[i] : sd->env.names[i];
+        fi->env.types[i] = sd->env.types[i];
+    }
+
+    FuncSig *sig = (FuncSig *)xmalloc(sizeof(FuncSig));
+    memset(sig, 0, sizeof(*sig));
+    sig->name = fi->fn->name;
+    sig->pkg = tm->pkg;
+    sig->is_pub = fi->fn->is_pub;
+    sig->ret_slang = fi->fn->ret_type;
+    sig->nparams = fi->fn->nparams;
+    sig->method_of = sd->canonical;
+    sig->line = fi->fn->line;
+    sig->param_slang = (const char **)xmalloc(
+        sizeof(char *) * (sig->nparams ? sig->nparams : 1));
+
+    TypeEnv *saved_env = cg->tenv;
+    const char *saved_pkg = cg->cur_pkg;
+    const char *saved_note = note_canon;
+    int saved_note_line = note_line;
+    cg->tenv = &fi->env;
+    cg->cur_pkg = tm->pkg;
+    note_canon = fi->note;
+    note_line = line;
+    cg->inst_depth++;
+    for (int m = 0; m < fi->fn->nparams; m++)
+        sig->param_slang[m] =
+            canon_type(cg, fi->fn->param_types[m], sig->line);
+    if (sig->ret_slang)
+        sig->ret_slang = canon_type(cg, sig->ret_slang, sig->line);
+    cg->inst_depth--;
+    cg->tenv = saved_env;
+    cg->cur_pkg = saved_pkg;
+    note_canon = saved_note;
+    note_line = saved_note_line;
+
+    if (cg->sigs.count == cg->sigs.cap) {
+        cg->sigs.cap = cg->sigs.cap ? cg->sigs.cap * 2 : 8;
+        cg->sigs.items = (FuncSig **)xrealloc(
+            cg->sigs.items, cg->sigs.cap * sizeof(FuncSig *));
+    }
+    cg->sigs.items[cg->sigs.count++] = sig;
+    fi->fn->sig_idx = cg->sigs.count;
+    fi->sig = sig;
+
+    if (cg->finsts.count == cg->finsts.cap) {
+        cg->finsts.cap = cg->finsts.cap ? cg->finsts.cap * 2 : 8;
+        cg->finsts.items = (FuncInst **)xrealloc(
+            cg->finsts.items, cg->finsts.cap * sizeof(FuncInst *));
+    }
+    cg->finsts.items[cg->finsts.count++] = fi;
+    return sig;
 }
 
 /* ------------------------------------------------------------------ */

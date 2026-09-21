@@ -1,0 +1,1 @@
+(in fail_generics_method_body.Box[str].doubled, requested at line 9)

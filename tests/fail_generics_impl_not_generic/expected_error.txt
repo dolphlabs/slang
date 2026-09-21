@@ -1,0 +1,1 @@
+'Point' is not generic; this impl block declares 1 type parameter

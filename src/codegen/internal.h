@@ -22,6 +22,17 @@
 typedef struct CG CG;
 
 
+/* The type parameters bound while an instance's own declaration is being
+ * canonicalized. canon_type answers a bare parameter name with the bound
+ * CANONICAL type and returns it as-is: re-resolving text would fail, since a
+ * canonical name such as `main.App` does not resolve from inside another
+ * package. */
+typedef struct {
+    const char *names[MAX_TYPE_PARAMS];
+    const char *types[MAX_TYPE_PARAMS];
+    int n;
+} TypeEnv;
+
 /* ------------------------------------------------------------------ */
 /* User-defined structs                                                */
 /* ------------------------------------------------------------------ */
@@ -40,7 +51,10 @@ typedef struct {
     int line;
     int inst;            /* an instance of a generic struct: its fields were
                             canonicalized when it was made, not in pass 2 */
+    struct StructTmpl *tmpl; /* the template it came from, for its methods */
+    TypeEnv env;             /* its type parameters, bound */
 } StructDef;
+
 
 /* A generic struct declaration: `struct Box[T] { v: T }`. Not a type by
  * itself, so it lives in its own table and every pass that walks `structs`
@@ -58,7 +72,18 @@ typedef struct {
     char **ftypes;       /* as written; never canonicalized */
     int nfields;
     int line;
+    /* `impl Box[T]`: the method declarations, as written. Each instance
+     * gets its OWN re-parsed copy, made the first time that instance is
+     * asked for that method -- so a method that does not type-check for
+     * some T is fine as long as nobody calls it for that T. */
+    Package *owner;      /* the package, for the body walks */
+    FuncDecl **methods;
+    int nmethods;
+    char **mparams;      /* the impl block's own parameter names */
+    int nmparams;
+    int impl_line;
 } StructTmpl;
+
 
 typedef struct {
     StructTmpl **items;
@@ -66,16 +91,6 @@ typedef struct {
     int cap;
 } TmplTable;
 
-/* The type parameters bound while an instance's own declaration is being
- * canonicalized. canon_type answers a bare parameter name with the bound
- * CANONICAL type and returns it as-is: re-resolving text would fail, since a
- * canonical name such as `main.App` does not resolve from inside another
- * package. */
-typedef struct {
-    const char *names[MAX_TYPE_PARAMS];
-    const char *types[MAX_TYPE_PARAMS];
-    int n;
-} TypeEnv;
 
 /* Entries are individually allocated and the table holds POINTERS to them.
  * A StructDef * or FuncSig * handed out by struct_find_* / sig_find_* /
@@ -161,6 +176,26 @@ typedef struct {
     int nlts;
     int line;
 } FuncSig;
+
+/* One instance of a generic method: a body no package declares, which
+ * every pass must nonetheless visit. The cursor in funcs.c yields these
+ * after the declared functions, with `env` installed, so a pass reaches
+ * them without knowing generics exist. */
+typedef struct {
+    Package *pkg;
+    FuncDecl *fn;
+    FuncSig *sig;
+    TypeEnv env;
+    const char *recv;    /* the instance the method belongs to */
+    const char *note;    /* "pkg.Box[int].get", for errors in its body */
+    int line;            /* where it was first requested */
+} FuncInst;
+
+typedef struct {
+    FuncInst **items;
+    int count;
+    int cap;
+} FuncInstTable;
 
 typedef struct {
     FuncSig **items;   /* pointers, for the same reason as StructTable */
@@ -309,6 +344,10 @@ struct CG {
     ImportTable imports;
     StructTable structs;
     TmplTable tmpls;
+    FuncInstTable finsts;
+    int insts_frozen;   /* set once the passes after the dry run have run:
+                           a new instance from here on would never be
+                           walked by them (see codegen_program) */
     TypeEnv *tenv;      /* parameters in scope, or NULL */
     int inst_depth;     /* generic instances currently being built */
     EnumTable enums;
@@ -578,12 +617,15 @@ char *mangle_struct(const char *canon);
 
 /* generics.c */
 void tmpl_register(CG *cg, const char *pkg, Stmt *decl);
+void tmpl_register_impl(CG *cg, Package *pkg, Stmt *decl);
+FuncSig *method_instantiate(CG *cg, StructDef *sd, const char *name, int line);
 StructTmpl *tmpl_find_in_pkg(CG *cg, const char *pkg, const char *name);
 const char *generic_canon(CG *cg, const char *t, int line);
 void generic_needs_args(CG *cg, const char *pkg, const char *name, int line);
 int tenv_lookup(CG *cg, const char *name, const char **type);
 const char *structlit_type(CG *cg, Expr *e);
 void generic_error_note(const char **canon, int *line);
+void generic_note_body(const char *what, int line);
 EnumDef *enum_find_canon(CG *cg, const char *canon);
 EnumDef *enum_find_in_pkg(CG *cg, const char *pkg, const char *name);
 int is_enum(CG *cg, const char *t);
@@ -599,7 +641,8 @@ typedef struct {
     FuncDecl *fn;
     FuncSig *sig;
     const char *impl_struct; /* the impl block's struct as written; NULL for a plain function */
-    int i_pkg, phase, i_fn, i_stmt, i_impl; /* position: private to funcs.c */
+    const TypeEnv *tenv;     /* a generic instance's parameters; NULL otherwise */
+    int i_pkg, phase, i_fn, i_stmt, i_impl, i_inst; /* position: private to funcs.c */
 } FuncCursor;
 void func_cursor_init(FuncCursor *c);
 int func_cursor_next(CG *cg, Package *pkgs, int npkgs, FuncCursor *c,
@@ -617,7 +660,7 @@ void emit_drop_overwrite(CG *cg, const char *name);
 void emit_scope_drops(CG *cg, int from);
 void emit_line(CG *cg, const char *fmt, ...);
 int is_builtin_name(const char *name);
-FuncSig *method_find(CG *cg, StructDef *sd, const char *name);
+FuncSig *method_find(CG *cg, StructDef *sd, const char *name, int line);
 const char *infer_ident_name(CG *cg, const char *name, int line);
 const char *ctor_infer(CG *cg, Expr *e);
 const char *native_check(CG *cg, const char *pkg, const char *fname,

@@ -1,1 +1,0 @@
-methods on a generic struct are not supported yet
