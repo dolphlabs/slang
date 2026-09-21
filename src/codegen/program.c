@@ -619,8 +619,10 @@ void force_native_result_types(CG *cg) {
     }
     if (want_pkg(cg, "io")) {
         opt_cname(cg, "str");
+        opt_cname(cg, "int");
         res_cname(cg, "opt[str]", "str");
         res_cname(cg, "bytes", "str");
+        res_cname(cg, "bool", "str");
     }
     if (want_pkg(cg, "os")) {
         res_cname(cg, "bool", "str");
