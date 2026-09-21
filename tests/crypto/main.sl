@@ -41,6 +41,25 @@ if len(b) != 32 {
 println("rand ok");
 
 // RFC 1321 appendix A.5
+// SHA-1: the two standard vectors, plus RFC 6455's own WebSocket
+// handshake example, which is the reason this hash is here at all.
+if len(crypto.sha1(b"abc")) != 20 {
+    die("sha1 length");
+}
+if encoding.hex_encode(crypto.sha1(b"")) != "da39a3ee5e6b4b0d3255bfef95601890afd80709" {
+    die("sha1 empty");
+}
+if encoding.hex_encode(crypto.sha1(b"abc")) != "a9993e364706816aba3e25717850c26c9cd0d89d" {
+    die("sha1 abc");
+}
+let ws_key = "dGhlIHNhbXBsZSBub25jZQ==";
+let ws_guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+if encoding.base64_encode(crypto.sha1(to_bytes(ws_key + ws_guid))) !=
+   "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=" {
+    die("sha1 websocket accept");
+}
+println("sha1 ok");
+
 if encoding.hex_encode(crypto.md5(b"")) != "d41d8cd98f00b204e9800998ecf8427e" {
     die("md5 empty");
 }
