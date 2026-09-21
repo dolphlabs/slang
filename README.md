@@ -3039,3 +3039,17 @@ What this means in practice:
   only through opaque `rawptr` handles
 - Callback function pointers (C calling back into slang)
 - `select` over multiple channels
+
+## License
+
+slang is released under the [MIT licence](LICENSE). The compiler splices its
+runtime into every program it produces; that runtime is covered by the same
+licence, and keeping the copyright notice with it is the only condition.
+
+A program you build links OpenSSL, SQLite or zlib from your system only if it
+uses the package that needs it, and those libraries keep their own terms: see
+[THIRD_PARTY.md](THIRD_PARTY.md).
+
+Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[Code of Conduct](CODE_OF_CONDUCT.md). To report a vulnerability, read
+[SECURITY.md](SECURITY.md); please do not open a public issue for one.
