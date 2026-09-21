@@ -92,8 +92,11 @@
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>name myserver
 version <span class="n">0.1.0</span>
 
-pkg foo git https:<span class="c">//github.com/dolphlabs/foo tag v0.1.0</span></code></pre></div>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;foo&quot;</span>;</code></pre></div>
+pkg foo git https:<span class="c">//github.com/dolphlabs/foo tag v0.1.0</span>
+pkg bar git https:<span class="c">//github.com/dolphlabs/bar tag v0.2.0 dir src</span></code></pre></div>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;foo&quot;</span>;
+<span class="k">import</span> <span class="s">&quot;bar&quot;</span>;</code></pre></div>
+<p><code>dir &lt;subdir&gt;</code> points a pin at the package <strong>inside</strong> the repository, for a library that also ships examples, docs and its own tests: only that directory is compiled into your program, and nothing else in the repository can affect your build. The subdirectory is a relative path within the clone — <code>..</code>, absolute paths and empty segments are refused — and the lock still hashes the whole clone, so what was verified is what was fetched.</p>
 <p><code>slangc get</code> clones each <code>pkg</code> line into <code>$SLANG_CACHE/pkg/&lt;name&gt;/&lt;hash&gt;</code> (<code>~/.cache/slang</code> if unset). If a fetched package has its own <code>slang.project</code>, those pins are fetched too and recorded only in <code>slang.lock</code>. Compile does not hit the network. A missing lock, missing cache, or hash mismatch is an error. Same short name at two git/tag pairs is an error.</p>
   </article>
   <aside class="toc">

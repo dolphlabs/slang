@@ -124,11 +124,21 @@ name myserver
 version 0.1.0
 
 pkg foo git https://github.com/dolphlabs/foo tag v0.1.0
+pkg bar git https://github.com/dolphlabs/bar tag v0.2.0 dir src
 ```
 
 ```slang
 import "foo";
+import "bar";
 ```
+
+`dir <subdir>` points a pin at the package **inside** the repository,
+for a library that also ships examples, docs and its own tests: only
+that directory is compiled into your program, and nothing else in the
+repository can affect your build. The subdirectory is a relative path
+within the clone — `..`, absolute paths and empty segments are refused —
+and the lock still hashes the whole clone, so what was verified is what
+was fetched.
 
 `slangc get` clones each `pkg` line into `$SLANG_CACHE/pkg/<name>/<hash>`
 (`~/.cache/slang` if unset). If a fetched package has its own

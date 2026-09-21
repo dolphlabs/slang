@@ -544,9 +544,47 @@ instance and where it was asked for
 (`... (in main.Keyed[float], requested at line 9)`), and a template nobody
 instantiates is not checked at all.
 
-Not yet supported, and each says so when used: methods on a generic struct
-(`impl Box[T]`), generic functions (`fn first[T](xs: [T]) -> T`), and
-lifetime parameters on a generic struct.
+A generic struct has methods like any other, in an `impl` block that
+declares the parameters:
+
+```slang
+impl Box[T] {
+    fn get(self: Box[T]) -> T {
+        return self.v;
+    }
+
+    pub fn apply(self: Box[T], f: fn(T) -> T) -> Box[T] {
+        return Box[T] { v: f(self.v) };
+    }
+
+    fn doubled(self: Box[T]) -> int {
+        return self.v * 2;       // only ever asked for on a Box of numbers
+    }
+}
+
+println(Box { v: 21 }.doubled());        // 42
+println(Box { v: "hi" }.get());          // "hi" -- doubled is never checked here
+```
+
+The `impl` block may name its parameters whatever it likes (`impl Pair[A, B]`
+for `struct Pair[K, V]`); they match by position. `pub fn` exports a method,
+as it does elsewhere.
+
+**A method is checked when an instance asks for it**, not when it is
+declared. `doubled` above multiplies, which `Box[str]` cannot do — and that
+is fine, because nothing calls `doubled` on a `Box[str]`. This is what makes
+unbounded type parameters usable without interfaces, and it is why an error
+in a method body names the instance and the line that asked for it:
+
+```
+error at line 5: unsupported operand types for '*': str and int
+  (in main.Box[str].doubled, requested at line 9)
+```
+
+Not yet supported, and each says so when used: generic functions
+(`fn first[T](xs: [T]) -> T`), lifetime parameters on a generic struct or on
+one of its methods, and a generic method's own extra parameters
+(`fn map[U](self: Box[T]) -> Box[U]`).
 
 #### Enums
 
@@ -1124,9 +1162,47 @@ instance and where it was asked for
 (`... (in main.Keyed[float], requested at line 9)`), and a template nobody
 instantiates is not checked at all.
 
-Not yet supported, and each says so when used: methods on a generic struct
-(`impl Box[T]`), generic functions (`fn first[T](xs: [T]) -> T`), and
-lifetime parameters on a generic struct.
+A generic struct has methods like any other, in an `impl` block that
+declares the parameters:
+
+```slang
+impl Box[T] {
+    fn get(self: Box[T]) -> T {
+        return self.v;
+    }
+
+    pub fn apply(self: Box[T], f: fn(T) -> T) -> Box[T] {
+        return Box[T] { v: f(self.v) };
+    }
+
+    fn doubled(self: Box[T]) -> int {
+        return self.v * 2;       // only ever asked for on a Box of numbers
+    }
+}
+
+println(Box { v: 21 }.doubled());        // 42
+println(Box { v: "hi" }.get());          // "hi" -- doubled is never checked here
+```
+
+The `impl` block may name its parameters whatever it likes (`impl Pair[A, B]`
+for `struct Pair[K, V]`); they match by position. `pub fn` exports a method,
+as it does elsewhere.
+
+**A method is checked when an instance asks for it**, not when it is
+declared. `doubled` above multiplies, which `Box[str]` cannot do — and that
+is fine, because nothing calls `doubled` on a `Box[str]`. This is what makes
+unbounded type parameters usable without interfaces, and it is why an error
+in a method body names the instance and the line that asked for it:
+
+```
+error at line 5: unsupported operand types for '*': str and int
+  (in main.Box[str].doubled, requested at line 9)
+```
+
+Not yet supported, and each says so when used: generic functions
+(`fn first[T](xs: [T]) -> T`), lifetime parameters on a generic struct or on
+one of its methods, and a generic method's own extra parameters
+(`fn map[U](self: Box[T]) -> Box[U]`).
 
 #### Enums
 
@@ -1543,9 +1619,47 @@ instance and where it was asked for
 (`... (in main.Keyed[float], requested at line 9)`), and a template nobody
 instantiates is not checked at all.
 
-Not yet supported, and each says so when used: methods on a generic struct
-(`impl Box[T]`), generic functions (`fn first[T](xs: [T]) -> T`), and
-lifetime parameters on a generic struct.
+A generic struct has methods like any other, in an `impl` block that
+declares the parameters:
+
+```slang
+impl Box[T] {
+    fn get(self: Box[T]) -> T {
+        return self.v;
+    }
+
+    pub fn apply(self: Box[T], f: fn(T) -> T) -> Box[T] {
+        return Box[T] { v: f(self.v) };
+    }
+
+    fn doubled(self: Box[T]) -> int {
+        return self.v * 2;       // only ever asked for on a Box of numbers
+    }
+}
+
+println(Box { v: 21 }.doubled());        // 42
+println(Box { v: "hi" }.get());          // "hi" -- doubled is never checked here
+```
+
+The `impl` block may name its parameters whatever it likes (`impl Pair[A, B]`
+for `struct Pair[K, V]`); they match by position. `pub fn` exports a method,
+as it does elsewhere.
+
+**A method is checked when an instance asks for it**, not when it is
+declared. `doubled` above multiplies, which `Box[str]` cannot do — and that
+is fine, because nothing calls `doubled` on a `Box[str]`. This is what makes
+unbounded type parameters usable without interfaces, and it is why an error
+in a method body names the instance and the line that asked for it:
+
+```
+error at line 5: unsupported operand types for '*': str and int
+  (in main.Box[str].doubled, requested at line 9)
+```
+
+Not yet supported, and each says so when used: generic functions
+(`fn first[T](xs: [T]) -> T`), lifetime parameters on a generic struct or on
+one of its methods, and a generic method's own extra parameters
+(`fn map[U](self: Box[T]) -> Box[U]`).
 
 ---
 
@@ -2344,7 +2458,9 @@ let r: result[Person, str] = json.decode(s);
 guard let p2 = r else { exit(1); }
 ```
 
-Supported: `struct`, `opt[T]`, `[T]`, `map[str, V]` (JSON object keys
+Supported: `gc struct` (a plain `struct` is a compile error naming it, since
+the codecs read and build structs through a pointer), `opt[T]`, `[T]`,
+`map[str, V]` (JSON object keys
 are always strings — a map with any other key type is a compile
 error), every scalar, and `bytes` (RFC 4648 base64 strings on the
 wire). `rawptr`, `chan[T]`, and
@@ -4118,11 +4234,21 @@ name myserver
 version 0.1.0
 
 pkg foo git https://github.com/dolphlabs/foo tag v0.1.0
+pkg bar git https://github.com/dolphlabs/bar tag v0.2.0 dir src
 ```
 
 ```slang
 import "foo";
+import "bar";
 ```
+
+`dir <subdir>` points a pin at the package **inside** the repository,
+for a library that also ships examples, docs and its own tests: only
+that directory is compiled into your program, and nothing else in the
+repository can affect your build. The subdirectory is a relative path
+within the clone — `..`, absolute paths and empty segments are refused —
+and the lock still hashes the whole clone, so what was verified is what
+was fetched.
 
 `slangc get` clones each `pkg` line into `$SLANG_CACHE/pkg/<name>/<hash>`
 (`~/.cache/slang` if unset). If a fetched package has its own
@@ -6083,7 +6209,9 @@ let r: result[Person, str] = json.decode(s);
 guard let p2 = r else { exit(1); }
 ```
 
-Supported: `struct`, `opt[T]`, `[T]`, `map[str, V]` (JSON object keys
+Supported: `gc struct` (a plain `struct` is a compile error naming it, since
+the codecs read and build structs through a pointer), `opt[T]`, `[T]`,
+`map[str, V]` (JSON object keys
 are always strings — a map with any other key type is a compile
 error), every scalar, and `bytes` (RFC 4648 base64 strings on the
 wire). `rawptr`, `chan[T]`, and
