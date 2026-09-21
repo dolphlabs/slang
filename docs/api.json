@@ -158,6 +158,15 @@
           "sig": "crypto.rand(int) -> result[bytes,str]"
         },
         {
+          "name": "sha1",
+          "params": [
+            "bytes"
+          ],
+          "ret": "bytes",
+          "tls": false,
+          "sig": "crypto.sha1(bytes) -> bytes"
+        },
+        {
           "name": "md5",
           "params": [
             "bytes"

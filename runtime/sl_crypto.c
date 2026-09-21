@@ -75,6 +75,24 @@ static sl_res_bytes_str *sl_crypto_rand(long long n) {
     return sl_crypto_ok_bytes(out);
 }
 
+/* SHA-1 is broken for collision resistance. It is here for the
+ * protocols that still specify it and cannot be changed -- the
+ * WebSocket handshake (RFC 6455) hashes the client's key with a fixed
+ * GUID, Git object ids, older TOTP -- and must not be used to protect
+ * anything new. EVP rather than SHA1(), which OpenSSL 3 deprecates. */
+static sl_bytes *sl_crypto_sha1(sl_bytes *input) {
+    SL_CRYPTO_STACK();
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    unsigned int n = 0;
+    sl_rt_preempt_disable();
+    int ok = EVP_Digest(input->ptr, (size_t)input->len, hash, &n, EVP_sha1(),
+                        NULL);
+    sl_rt_preempt_enable();
+    if (!ok)
+        return NULL;
+    return sl_bytes_new(hash, n);
+}
+
 /* MD5 is broken for collision resistance. It is here for the protocols
  * that still specify it -- Postgres md5 authentication, Content-MD5,
  * legacy ETags -- and must not be used to protect anything new. EVP

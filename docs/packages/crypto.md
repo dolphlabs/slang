@@ -16,6 +16,7 @@ guard let b = r else let e = err_of(r) {
     log.error("rand failed: " + e);
 }
 let k = crypto.pbkdf2_sha256(password, salt, 600000, 32);   // RFC 8018
+let s1: bytes = crypto.sha1(b"abc");               // 20 bytes
 let d: bytes = crypto.md5(b"abc");                 // 16 bytes
 ```
 
@@ -25,8 +26,10 @@ an `err`. The iteration count is capped because it is often chosen by the
 other side of a protocol (a SCRAM server sends it) and the whole
 derivation runs without yielding the worker thread.
 
-`md5` is broken for collision resistance. It exists for the protocols
-that still specify it -- Postgres md5 authentication, `Content-MD5`,
+`sha1` and `md5` are broken for collision resistance. They exist for the
+protocols that still specify them and cannot be changed -- the WebSocket
+handshake (RFC 6455) hashes the client's key with a fixed GUID, Git
+object ids, Postgres md5 authentication, `Content-MD5`,
 legacy ETags -- and must not protect anything new.
 
 ## API
@@ -36,6 +39,8 @@ legacy ETags -- and must not protect anything new.
 ### `crypto.hmac_sha256(bytes, bytes) -> bytes`
 
 ### `crypto.rand(int) -> result[bytes,str]`
+
+### `crypto.sha1(bytes) -> bytes`
 
 ### `crypto.md5(bytes) -> bytes`
 
