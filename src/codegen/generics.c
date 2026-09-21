@@ -374,6 +374,9 @@ FuncSig *method_instantiate(CG *cg, StructDef *sd, const char *name,
     memset(fi, 0, sizeof(*fi));
     fi->pkg = tm->owner;
     fi->fn = parse_fn_decl_again(decl);
+    /* This body has never been through the enum rewrite: it did not
+     * exist when that pass ran over the program. */
+    resolve_enum_in_body(cg, tm->pkg, fi->fn);
     fi->recv = sd->canonical;
     fi->line = line;
     fi->note = xasprintf("%s.%s", sd->canonical, name);

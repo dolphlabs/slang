@@ -632,6 +632,7 @@ int is_enum(CG *cg, const char *t);
 char *mangle_enum(const char *canon);
 void collect_enum_decls(CG *cg, Package *pkgs, int npkgs);
 void resolve_enum_refs(CG *cg, Package *pkgs, int npkgs);
+void resolve_enum_in_body(CG *cg, const char *pkg, FuncDecl *f);
 void emit_enum_tables(CG *cg);
 const char *ctype_of(CG *cg, const char *t);
 const char *canon_type(CG *cg, const char *t, int line);
