@@ -544,6 +544,18 @@ void resolve_enum_refs(CG *cg, Package *pkgs, int npkgs);
 void emit_enum_tables(CG *cg);
 const char *ctype_of(CG *cg, const char *t);
 const char *canon_type(CG *cg, const char *t, int line);
+/* funcs.c: the one iterator over every function body a pass must visit. */
+typedef struct {
+    Package *pkg;            /* the package declaring `fn` */
+    FuncDecl *fn;
+    FuncSig *sig;
+    const char *impl_struct; /* the impl block's struct as written; NULL for a plain function */
+    int i_pkg, phase, i_fn, i_stmt, i_impl; /* position: private to funcs.c */
+} FuncCursor;
+void func_cursor_init(FuncCursor *c);
+int func_cursor_next(CG *cg, Package *pkgs, int npkgs, FuncCursor *c,
+                     int with_extern);
+void func_cursor_enter(CG *cg, const FuncCursor *c);
 void compute_escape(CG *cg, Package *pkgs, int npkgs, int main_index);
 int type_is_copy(CG *cg, const char *t);
 int type_needs_drop(CG *cg, const char *t);

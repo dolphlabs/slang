@@ -813,83 +813,48 @@ void emit_spawn_trampolines(CG *cg) {
 
 void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
     int any = 0;
-    for (int i = 0; i < npkgs; i++) {
-        Program *prog = pkgs[i].prog;
-
-        /* free functions */
-        for (int j = 0; j < prog->nfuncs; j++) {
-            FuncDecl *f = prog->funcs[j];
-            FuncSig *sig = sig_of_decl(cg, f);
-            StrBuf params;
-            sb_init(&params);
-            if (f->is_extern) {
-                /* no body defined here, so the real symbol just needs
-                 * a matching prototype for the C compiler + linker;
-                 * parameter names are irrelevant in a prototype */
-                if (sig->nparams == 0) {
-                    sb_append(&params, "void");
-                } else {
-                    for (int m = 0; m < sig->nparams; m++) {
-                        if (m)
-                            sb_append(&params, ", ");
-                        sb_append(&params, ctype_of(cg, sig->param_slang[m]));
-                    }
-                }
-                emit_line(cg, "extern %s %s(%s);",
-                          sig->ret_slang ? ctype_of(cg, sig->ret_slang)
-                                         : "void",
-                          f->name, params.data);
-                any = 1;
-                continue;
-            }
-            if (f->nparams == 0) {
+    FuncCursor fc;
+    func_cursor_init(&fc);
+    /* plain functions (including `extern fn`) then methods, per package */
+    while (func_cursor_next(cg, pkgs, npkgs, &fc, 1)) {
+        FuncDecl *f = fc.fn;
+        FuncSig *sig = fc.sig;
+        StrBuf params;
+        sb_init(&params);
+        if (f->is_extern) {
+            /* no body defined here, so the real symbol just needs
+             * a matching prototype for the C compiler + linker;
+             * parameter names are irrelevant in a prototype */
+            if (sig->nparams == 0) {
                 sb_append(&params, "void");
             } else {
-                for (int m = 0; m < f->nparams; m++) {
+                for (int m = 0; m < sig->nparams; m++) {
                     if (m)
                         sb_append(&params, ", ");
                     sb_append(&params, ctype_of(cg, sig->param_slang[m]));
-                    sb_putc(&params, ' ');
-                    sb_append(&params, sanitize_ident(f->params[m]));
                 }
             }
-            emit_line(cg, "static %s %s(%s);",
-                      sig->ret_slang ? ctype_of(cg, sig->ret_slang)
-                                     : "void",
-                      mangle_sig(sig), params.data);
+            emit_line(cg, "extern %s %s(%s);",
+                      sig->ret_slang ? ctype_of(cg, sig->ret_slang) : "void",
+                      f->name, params.data);
             any = 1;
+            continue;
         }
-
-        /* methods from impl blocks */
-        Block *body = prog->main_body;
-        for (int j = 0; j < body->count; j++) {
-            Stmt *s = body->stmts[j];
-            if (s->kind != ST_IMPL)
-                continue;
-            for (int q = 0; q < s->as.impl.nfuncs; q++) {
-                FuncDecl *f = s->as.impl.funcs[q];
-                FuncSig *sig = sig_of_decl(cg, f);
-                StrBuf params;
-                sb_init(&params);
-                if (f->nparams == 0) {
-                    sb_append(&params, "void");
-                } else {
-                    for (int m = 0; m < f->nparams; m++) {
-                        if (m)
-                            sb_append(&params, ", ");
-                        sb_append(&params,
-                                  ctype_of(cg, sig->param_slang[m]));
-                        sb_putc(&params, ' ');
-                        sb_append(&params, sanitize_ident(f->params[m]));
-                    }
-                }
-                emit_line(cg, "static %s %s(%s);",
-                          sig->ret_slang ? ctype_of(cg, sig->ret_slang)
-                                         : "void",
-                          mangle_sig(sig), params.data);
-                any = 1;
+        if (f->nparams == 0) {
+            sb_append(&params, "void");
+        } else {
+            for (int m = 0; m < f->nparams; m++) {
+                if (m)
+                    sb_append(&params, ", ");
+                sb_append(&params, ctype_of(cg, sig->param_slang[m]));
+                sb_putc(&params, ' ');
+                sb_append(&params, sanitize_ident(f->params[m]));
             }
         }
+        emit_line(cg, "static %s %s(%s);",
+                  sig->ret_slang ? ctype_of(cg, sig->ret_slang) : "void",
+                  mangle_sig(sig), params.data);
+        any = 1;
     }
     if (any)
         emit_line(cg, "");
@@ -966,22 +931,11 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
 
     emit_spawn_trampolines(cg);
 
-    for (int i = 0; i < npkgs; i++) {
-        Package *p = &pkgs[i];
-        for (int j = 0; j < p->prog->nfuncs; j++) {
-            if (p->prog->funcs[j]->is_extern)
-                continue; /* declared only; no body to emit */
-            gen_function(cg, p, p->prog->funcs[j]);
-        }
-        /* methods from impl blocks */
-        Block *body = p->prog->main_body;
-        for (int j = 0; j < body->count; j++) {
-            Stmt *s = body->stmts[j];
-            if (s->kind != ST_IMPL)
-                continue;
-            for (int q = 0; q < s->as.impl.nfuncs; q++)
-                gen_function(cg, p, s->as.impl.funcs[q]);
-        }
+    {
+        FuncCursor fc;
+        func_cursor_init(&fc);
+        while (func_cursor_next(cg, pkgs, npkgs, &fc, 0))
+            gen_function(cg, fc.pkg, fc.fn);
     }
 
     /* top-level statements of the main package become sl_main_task_entry,
