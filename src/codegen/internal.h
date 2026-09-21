@@ -40,8 +40,14 @@ typedef struct {
     int line;
 } StructDef;
 
+/* Entries are individually allocated and the table holds POINTERS to them.
+ * A StructDef * or FuncSig * handed out by struct_find_* / sig_find_* /
+ * method_find stays valid however many more entries are added later: a
+ * generic instance is appended in the middle of type-checking, while callers
+ * up the stack still hold pointers into these tables. With the entries stored
+ * by value, that append would xrealloc them out from under those callers. */
 typedef struct {
-    StructDef *items;
+    StructDef **items;
     int count;
     int cap;
 } StructTable;
@@ -120,7 +126,7 @@ typedef struct {
 } FuncSig;
 
 typedef struct {
-    FuncSig *items;
+    FuncSig **items;   /* pointers, for the same reason as StructTable */
     int count;
     int cap;
 } SigTable;

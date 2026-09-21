@@ -86,10 +86,12 @@ void sig_register_raw(CG *cg, Package *p, FuncDecl *f,
 
     if (cg->sigs.count == cg->sigs.cap) {
         cg->sigs.cap = cg->sigs.cap ? cg->sigs.cap * 2 : 8;
-        cg->sigs.items = (FuncSig *)xrealloc(
-            cg->sigs.items, cg->sigs.cap * sizeof(FuncSig));
+        cg->sigs.items = (FuncSig **)xrealloc(
+            cg->sigs.items, cg->sigs.cap * sizeof(FuncSig *));
     }
-    cg->sigs.items[cg->sigs.count++] = sig;
+    FuncSig *stored = (FuncSig *)xmalloc(sizeof(FuncSig));
+    *stored = sig;
+    cg->sigs.items[cg->sigs.count++] = stored;
     f->sig_idx = cg->sigs.count;
 }
 
@@ -126,11 +128,13 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
                          s->as.struct_decl.name, p->name);
             if (cg->structs.count == cg->structs.cap) {
                 cg->structs.cap = cg->structs.cap ? cg->structs.cap * 2 : 8;
-                cg->structs.items = (StructDef *)xrealloc(
+                cg->structs.items = (StructDef **)xrealloc(
                     cg->structs.items,
-                    cg->structs.cap * sizeof(StructDef));
+                    cg->structs.cap * sizeof(StructDef *));
             }
-            StructDef *sd = &cg->structs.items[cg->structs.count++];
+            StructDef *sd = (StructDef *)xmalloc(sizeof(StructDef));
+            memset(sd, 0, sizeof(*sd));
+            cg->structs.items[cg->structs.count++] = sd;
             sd->canonical =
                 xasprintf("%s.%s", p->name, s->as.struct_decl.name);
             sd->pkg = p->name;
@@ -153,7 +157,7 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
 
     /* pass 2: canonicalize struct field types */
     for (i = 0; i < cg->structs.count; i++) {
-        StructDef *sd = &cg->structs.items[i];
+        StructDef *sd = cg->structs.items[i];
         cg->cur_pkg = sd->pkg;
         for (j = 0; j < sd->nfields; j++) {
             for (int q = 0; q < j; q++) {
@@ -194,12 +198,12 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
         char **syms = (char **)xmalloc(sizeof(char *) *
                                        (cg->sigs.count ? cg->sigs.count : 1));
         for (i = 0; i < cg->sigs.count; i++) {
-            FuncSig *a = &cg->sigs.items[i];
+            FuncSig *a = cg->sigs.items[i];
             syms[i] = mangle_sig(a);
             if (a->is_extern)
                 continue;
             for (j = 0; j < i; j++) {
-                FuncSig *b = &cg->sigs.items[j];
+                FuncSig *b = cg->sigs.items[j];
                 if (!b->is_extern && !strcmp(syms[i], syms[j]))
                     cg_error(a->line,
                              "'%s' and '%s' (line %d) would be the same C "
@@ -211,7 +215,7 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
 
     /* pass 4: canonicalize all signatures */
     for (i = 0; i < cg->sigs.count; i++) {
-        FuncSig *sig = &cg->sigs.items[i];
+        FuncSig *sig = cg->sigs.items[i];
         cg->cur_pkg = sig->pkg;
         for (j = 0; j < sig->nparams; j++) {
             ((char **)sig->param_slang)[j] =
@@ -334,7 +338,7 @@ void emit_struct_fwd_decls(CG *cg) {
     if (!cg->structs.count)
         return;
     for (int i = 0; i < cg->structs.count; i++) {
-        char *m = mangle_struct(cg->structs.items[i].canonical);
+        char *m = mangle_struct(cg->structs.items[i]->canonical);
         emit_line(cg, "typedef struct %s %s;", m, m);
     }
     emit_line(cg, "");
@@ -344,7 +348,7 @@ void emit_struct_types(CG *cg) {
     if (!cg->structs.count)
         return;
     for (int i = 0; i < cg->structs.count; i++) {
-        StructDef *sd = &cg->structs.items[i];
+        StructDef *sd = cg->structs.items[i];
         char *m = mangle_struct(sd->canonical);
         emit_line(cg, "struct %s {", m);
         cg->indent++;
@@ -368,7 +372,7 @@ void emit_struct_types(CG *cg) {
  * offsetof, since the real names are already known here. */
 void emit_struct_tracers(CG *cg) {
     for (int i = 0; i < cg->structs.count; i++) {
-        StructDef *sd = &cg->structs.items[i];
+        StructDef *sd = cg->structs.items[i];
         if (!sd->is_gc || !struct_has_gc_fields(cg, sd))
             continue;
         char *m = mangle_struct(sd->canonical);
@@ -449,7 +453,7 @@ char *fn_type_of_sig(CG *cg, FuncSig *sig) {
  * sweep both fail on loudly. */
 void emit_fn_types(CG *cg) {
     for (int i = 0; i < cg->sigs.count; i++) {
-        FuncSig *sig = &cg->sigs.items[i];
+        FuncSig *sig = cg->sigs.items[i];
         if (sig->method_of)
             continue;
         fn_cname(cg, fn_type_of_sig(cg, sig));
