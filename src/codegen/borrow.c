@@ -1173,6 +1173,7 @@ static void check_fn(CG *cg, MirFn *fn) {
     var_scope_reset(cg);
     var_scope_push(cg);
     cg->cur_pkg = fn->pkg;
+    cg->tenv = (TypeEnv *)fn->tenv;
     for (i = 0; i < fn->nlocals; i++)
         if (fn->locals[i].ty)
             var_push(cg, fn->locals[i].name, fn->locals[i].ty);
@@ -1216,4 +1217,5 @@ void compute_borrowck(CG *cg, Package *pkgs, int npkgs, int main_index) {
     (void)main_index;
     for (i = 0; i < cg->mirs.count; i++)
         check_fn(cg, cg->mirs.items[i]);
+    cg->tenv = NULL;
 }

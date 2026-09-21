@@ -615,8 +615,10 @@ void compute_mir(CG *cg, Package *pkgs, int npkgs, int main_index) {
         char *fname = fc.impl_struct
                           ? xasprintf("%s.%s", fc.impl_struct, f->name)
                           : f->name;
-        mir_push(cg, lower_fn(cg, fc.pkg->name, fname, f->body, f->params,
-                              fc.sig->param_slang, f->nparams));
+        MirFn *mf = lower_fn(cg, fc.pkg->name, fname, f->body, f->params,
+                             fc.sig->param_slang, f->nparams);
+        mf->tenv = fc.tenv;
+        mir_push(cg, mf);
         cg->in_function = 0;
     }
     cg->in_function = 1;

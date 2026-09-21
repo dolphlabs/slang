@@ -100,6 +100,12 @@ typedef struct {
 struct MirFn {
     char *pkg;
     char *name;
+    /* The type parameters in scope for the body this was lowered from, or
+     * NULL. The borrow checker re-reads the original expressions (a struct
+     * literal names its own type), so it has to put them back -- it runs
+     * long after the cursor that installed them. Typed void * because
+     * TypeEnv lives in internal.h, which this header precedes. */
+    const void *tenv;
     MirLocal *locals;
     int nlocals;
     int lcap;
