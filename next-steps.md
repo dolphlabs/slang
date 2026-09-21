@@ -13,13 +13,70 @@ caught what — are in git history and the PR descriptions:
 
 Runtime bugs and their investigations live in `todo.md`.
 
-Landed since that clear-out (PRs #157, #159–#162, #164, #165): `io` (stdin,
-then terminal control: size, no-echo, raw mode, keys), `flags`, method calls
-on any expression, the callee of an indirect call made visible to every
-compiler pass, a use-after-free in the DNS resolver, and a Linux-only test
-timing assumption.
+Landed since that clear-out (PRs #157, #159–#162, #164, #165, #168, #169,
+#171): `io` (stdin, then terminal control: size, no-echo, raw mode, keys),
+`flags`, method calls on any expression, the callee of an indirect call made
+visible to every compiler pass, a use-after-free in the DNS resolver, a
+Linux-only test timing assumption, the licence and community files, stable
+table storage and one iterator over function bodies (generics PR 0), and an
+entry guard for functions with a large C frame (a 700-call function died with
+SIGBUS on clang).
 
-## 1. CI on `dev`, not only `main`
+## 1. User-defined generics, then zokor
+
+- [ ] **Why.** zokor, the backend framework (`dolphlabs/zokor`, empty), has to
+  carry the application's own state through a router, middleware and handlers:
+  `Router[S]`, `Ctx[S]`, `fn(Ctx[S]) -> Response`. slang has no generics,
+  interfaces, closures or `any`, so a library cannot name a type the app
+  defines. `tyto`'s 12-parameter `dispatch` is the symptom, and `tyto` and
+  `slang-lipo` already copy the same infrastructure between them (`dotenv.sl`
+  is byte-identical). Decided: generics come first, all of structs, methods and
+  functions, before any zokor code.
+
+  **Model.** Monomorphized, type parameters unbounded, bodies checked per
+  instance (the C++ template model) with an "in instantiation of" note on
+  errors. `Box[T]` bracket syntax, matching `opt[T]` and `chan[T]`. Type
+  arguments are inferred, never written at a call site. Each instance is
+  produced by re-parsing the generic's tokens, so an instance cannot inherit
+  another's annotations and a new AST field cannot escape it.
+
+  **Sequence**, one PR each, merged and verified on macOS and Linux before the
+  next, none stacked:
+  - [x] **0.** Stable table storage; one iterator over function bodies (#169).
+    Generated C byte-identical for 115 programs.
+  - [ ] **1.** Generic structs: `struct Box[T]`, `Name[args]` in types,
+    struct-literal inference, templates and instances, mangling. Needs an
+    explicit call to the enum rewrite on each fresh instance, since
+    `resolve_enum_refs` runs before any instance exists.
+  - [ ] **2.** Methods on generic structs (`impl Box[T]`), instantiated lazily.
+  - [ ] **3.** Generic functions, with unification and expected-type inference.
+  - [ ] **4.** Hardening: cross-package generics, the refusals for `spawn` and
+    for a generic used as a value, error notes, `slangc test`, docs. **Warn
+    when a program's instance count passes a threshold**, so a framework
+    cannot silently bloat a binary.
+  - [ ] **5.** A mini `Router[S]` with `Ctx[S]` over an app-defined `S`, as the
+    proof; then zokor.
+
+  **Acceptance test for PR 1:** `Box[int]` must generate the same C as a
+  hand-written `IntBox`, apart from names. That shows the "no runtime cost"
+  claim directly instead of arguing it.
+
+  **Cost model** (measured on one Mac; treat as an order of magnitude): about
+  97% of a build is `cc -O3 -flto`, every program carries a ~6,300-line
+  runtime, and one representative 12-line function adds ~33 lines of C, ~1.1 KB
+  and 25 to 38 ms. Instances multiply that by instances *used* times methods
+  *used*; a typical app has one `S`.
+
+  **zokor v0.1**, as agreed: config and dotenv, the error-code registry, the
+  rate limiter, a router with `:params` and before/after middleware, the serve
+  loop with graceful shutdown; WebSocket, **rewritten from RFC 6455** (not
+  ported from `slang-lipo`); a `zokor check` layout checker; Postgres helpers
+  and a testing kit. Needs `crypto.sha1` in slang first. The layer rules to
+  enforce are already written down in `tyto`'s `AGENTS.md`: import direction,
+  only the DB adapter imports `pg`, every package has tests, routes private by
+  default, tenant id an explicit parameter.
+
+## 2. CI on `dev`, not only `main`
 
 - [ ] `.github/workflows/ci.yml` runs on a push to `main`, on manual
   dispatch and on a published release. **Nothing runs on a pull request to
@@ -43,7 +100,7 @@ timing assumption.
   fast legs; the arm64 legs and the live Postgres job are slower, and the
   file's own constraint stands (nothing in it may reach the internet).
 
-## 2. Audit: values a compiler pass cannot see
+## 3. Audit: values a compiler pass cannot see
 
 - [ ] Two memory-safety bugs of one shape, found in a row (#164, #165): a
   compiler pass walks an expression's children by hand, and a child it never
@@ -82,7 +139,7 @@ timing assumption.
   flake that first pointed here was not this (#159): async preemptions were
   zero in that test.
 
-## 3. The ~5% SIGBUS under amplified preemption
+## 4. The ~5% SIGBUS under amplified preemption
 
 - [ ] Find and fix it.
 
@@ -92,7 +149,7 @@ timing assumption.
   it before the final `jmp`, turning corruption into a detection at the
   moment it happens.
 
-## 4. Remote benchmarks
+## 5. Remote benchmarks
 
 - [ ] Run the cross-language suite on a Linux host and record it in
   `bench/RESULTS.md` as its own run.
@@ -110,7 +167,7 @@ timing assumption.
   - the Java `api` heavy tier should now build (a `.gitignore` pattern had
     been hiding its `Main.java`); check that it does.
 
-## 5. Language gaps found and left alone
+## 6. Language gaps found and left alone
 
 - [ ] **`spawn fns[i](x)` as an expression** (`let t = spawn fns[i](x);`) is a
   parse error: `spawn` in expression position takes only a named call. The
@@ -126,11 +183,18 @@ timing assumption.
   Restoring on stop and re-applying on continue is what a full-screen program
   would need. `SIGKILL` and a crash cannot be handled at all, and are
   documented as such.
+- [ ] **The frame guard's edges** (#171). A program that needs a guard is
+  compiled twice, so its build time roughly doubles; none of the real programs
+  measured needs one. `--emit-c` output has no guards, since it does not
+  compile. Frames under 1536 bytes are still trusted to fit the 2 KB safepoint
+  margin, which was not re-derived. The real cause of the growth on clang (one
+  spill slot per call result, and callees inlined into their caller) is not
+  something slang can change; only the guard contains it.
 - [ ] **Terminal resize events and mouse input** for `io`. `term_width` /
   `term_height` are polled; there is no event, and a mouse report decodes to
   `"unknown"`.
 
-## 6. Command-line programs: what is still missing
+## 7. Command-line programs: what is still missing
 
 - [ ] A line-editing helper built on `io.read_key`: cursor movement, history,
   a prompt that redraws. Not scoped. Candidate only; worth deciding whether
