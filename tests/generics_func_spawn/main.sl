@@ -57,3 +57,16 @@ fn ping[T](v: T, ch: chan[int]) {
 spawn ping("x", done);
 let got = chan_recv(done);
 println(to_str(got ?? 0));
+
+// A spawn inside ANOTHER generic function's body. The instance holding
+// it is made from a top-level call, which happens after the body loop
+// has finished -- so the shape it needs is discovered by the dry run's
+// own second pass over late instances, not by the first.
+fn relay[T](v: T, ch: chan[int]) {
+    spawn ping(v, ch);
+}
+
+let relayed: chan[int] = make_chan(1);
+relay(7, relayed);
+let r2 = chan_recv(relayed);
+println(to_str(r2 ?? 0));
