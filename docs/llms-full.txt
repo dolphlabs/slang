@@ -544,9 +544,47 @@ instance and where it was asked for
 (`... (in main.Keyed[float], requested at line 9)`), and a template nobody
 instantiates is not checked at all.
 
-Not yet supported, and each says so when used: methods on a generic struct
-(`impl Box[T]`), generic functions (`fn first[T](xs: [T]) -> T`), and
-lifetime parameters on a generic struct.
+A generic struct has methods like any other, in an `impl` block that
+declares the parameters:
+
+```slang
+impl Box[T] {
+    fn get(self: Box[T]) -> T {
+        return self.v;
+    }
+
+    pub fn apply(self: Box[T], f: fn(T) -> T) -> Box[T] {
+        return Box[T] { v: f(self.v) };
+    }
+
+    fn doubled(self: Box[T]) -> int {
+        return self.v * 2;       // only ever asked for on a Box of numbers
+    }
+}
+
+println(Box { v: 21 }.doubled());        // 42
+println(Box { v: "hi" }.get());          // "hi" -- doubled is never checked here
+```
+
+The `impl` block may name its parameters whatever it likes (`impl Pair[A, B]`
+for `struct Pair[K, V]`); they match by position. `pub fn` exports a method,
+as it does elsewhere.
+
+**A method is checked when an instance asks for it**, not when it is
+declared. `doubled` above multiplies, which `Box[str]` cannot do — and that
+is fine, because nothing calls `doubled` on a `Box[str]`. This is what makes
+unbounded type parameters usable without interfaces, and it is why an error
+in a method body names the instance and the line that asked for it:
+
+```
+error at line 5: unsupported operand types for '*': str and int
+  (in main.Box[str].doubled, requested at line 9)
+```
+
+Not yet supported, and each says so when used: generic functions
+(`fn first[T](xs: [T]) -> T`), lifetime parameters on a generic struct or on
+one of its methods, and a generic method's own extra parameters
+(`fn map[U](self: Box[T]) -> Box[U]`).
 
 #### Enums
 
@@ -604,6 +642,21 @@ json.encode(o);   // {"id":1,"status":"Shipped"}
 let counts: map[Status]int = {};
 counts[Status.Paid] = 3;
 ```
+
+An exported enum is usable from another package, variants and all:
+
+```slang
+// orders/orders.sl
+pub enum Status { Pending, Paid, Shipped }
+
+// main.sl
+import "orders";
+let o = orders.Order{ id: 1, status: orders.Status.Paid };
+println(o.status == orders.Status.Paid);
+let r: result[orders.Status, str] = orders.Status.from_str("Shipped");
+```
+
+An enum without `pub` is private to its package, like any other type.
 
 There is no per-variant wire label yet (`to_str`/JSON always use the
 declared name as written), no explicit backing-width syntax
@@ -1124,9 +1177,47 @@ instance and where it was asked for
 (`... (in main.Keyed[float], requested at line 9)`), and a template nobody
 instantiates is not checked at all.
 
-Not yet supported, and each says so when used: methods on a generic struct
-(`impl Box[T]`), generic functions (`fn first[T](xs: [T]) -> T`), and
-lifetime parameters on a generic struct.
+A generic struct has methods like any other, in an `impl` block that
+declares the parameters:
+
+```slang
+impl Box[T] {
+    fn get(self: Box[T]) -> T {
+        return self.v;
+    }
+
+    pub fn apply(self: Box[T], f: fn(T) -> T) -> Box[T] {
+        return Box[T] { v: f(self.v) };
+    }
+
+    fn doubled(self: Box[T]) -> int {
+        return self.v * 2;       // only ever asked for on a Box of numbers
+    }
+}
+
+println(Box { v: 21 }.doubled());        // 42
+println(Box { v: "hi" }.get());          // "hi" -- doubled is never checked here
+```
+
+The `impl` block may name its parameters whatever it likes (`impl Pair[A, B]`
+for `struct Pair[K, V]`); they match by position. `pub fn` exports a method,
+as it does elsewhere.
+
+**A method is checked when an instance asks for it**, not when it is
+declared. `doubled` above multiplies, which `Box[str]` cannot do — and that
+is fine, because nothing calls `doubled` on a `Box[str]`. This is what makes
+unbounded type parameters usable without interfaces, and it is why an error
+in a method body names the instance and the line that asked for it:
+
+```
+error at line 5: unsupported operand types for '*': str and int
+  (in main.Box[str].doubled, requested at line 9)
+```
+
+Not yet supported, and each says so when used: generic functions
+(`fn first[T](xs: [T]) -> T`), lifetime parameters on a generic struct or on
+one of its methods, and a generic method's own extra parameters
+(`fn map[U](self: Box[T]) -> Box[U]`).
 
 #### Enums
 
@@ -1184,6 +1275,21 @@ json.encode(o);   // {"id":1,"status":"Shipped"}
 let counts: map[Status]int = {};
 counts[Status.Paid] = 3;
 ```
+
+An exported enum is usable from another package, variants and all:
+
+```slang
+// orders/orders.sl
+pub enum Status { Pending, Paid, Shipped }
+
+// main.sl
+import "orders";
+let o = orders.Order{ id: 1, status: orders.Status.Paid };
+println(o.status == orders.Status.Paid);
+let r: result[orders.Status, str] = orders.Status.from_str("Shipped");
+```
+
+An enum without `pub` is private to its package, like any other type.
 
 There is no per-variant wire label yet (`to_str`/JSON always use the
 declared name as written), no explicit backing-width syntax
@@ -1543,9 +1649,47 @@ instance and where it was asked for
 (`... (in main.Keyed[float], requested at line 9)`), and a template nobody
 instantiates is not checked at all.
 
-Not yet supported, and each says so when used: methods on a generic struct
-(`impl Box[T]`), generic functions (`fn first[T](xs: [T]) -> T`), and
-lifetime parameters on a generic struct.
+A generic struct has methods like any other, in an `impl` block that
+declares the parameters:
+
+```slang
+impl Box[T] {
+    fn get(self: Box[T]) -> T {
+        return self.v;
+    }
+
+    pub fn apply(self: Box[T], f: fn(T) -> T) -> Box[T] {
+        return Box[T] { v: f(self.v) };
+    }
+
+    fn doubled(self: Box[T]) -> int {
+        return self.v * 2;       // only ever asked for on a Box of numbers
+    }
+}
+
+println(Box { v: 21 }.doubled());        // 42
+println(Box { v: "hi" }.get());          // "hi" -- doubled is never checked here
+```
+
+The `impl` block may name its parameters whatever it likes (`impl Pair[A, B]`
+for `struct Pair[K, V]`); they match by position. `pub fn` exports a method,
+as it does elsewhere.
+
+**A method is checked when an instance asks for it**, not when it is
+declared. `doubled` above multiplies, which `Box[str]` cannot do — and that
+is fine, because nothing calls `doubled` on a `Box[str]`. This is what makes
+unbounded type parameters usable without interfaces, and it is why an error
+in a method body names the instance and the line that asked for it:
+
+```
+error at line 5: unsupported operand types for '*': str and int
+  (in main.Box[str].doubled, requested at line 9)
+```
+
+Not yet supported, and each says so when used: generic functions
+(`fn first[T](xs: [T]) -> T`), lifetime parameters on a generic struct or on
+one of its methods, and a generic method's own extra parameters
+(`fn map[U](self: Box[T]) -> Box[U]`).
 
 ---
 
@@ -2314,6 +2458,39 @@ as if it had arrived encrypted (libpq's CVE-2021-23222).
 `tls_upgrade_until(fd, host, ctx, deadline)` bounds the handshake; a
 server that stops answering part way through gives `"timeout"`.
 
+#### `builder`
+
+Assembling a result one piece at a time with `+` is **quadratic**: `a + b`
+allocates and copies both sides, so the cost is the sum of every
+intermediate length. Building 80 KB one byte at a time takes about two
+seconds, and a megabyte would take minutes. `builder` collects the pieces
+and copies each once, at the end.
+
+```slang
+import "builder";
+
+let b = builder.new_str();
+b.write("hello").write(", ").write(name).write_int(42).write_line("!");
+let s = b.finish();                    // one allocation, linear in the total
+
+let y = builder.new_bytes();
+y.write_byte(104).write(b"ello").write_str(" world");
+let raw: bytes = y.finish();
+```
+
+`Str` is for text and `Bytes` for binary data. Both chain, report
+`size()` in bytes without assembling anything, and offer `finish()` (which
+can be called again after more writes), `take()` (finish and start over)
+and `reset()`. `Bytes.write_byte` fills a 512-byte chunk in place, so a
+million single-byte writes make about two thousand allocations rather than a
+million: 4 million of them take 136 ms. `Bytes` keeps a **copy** of what you
+write, because bytes are mutable and a later change of yours must not
+rewrite what was already written.
+
+For assembling a `[bytes]` you already hold, `strings.join_bytes(parts,
+sep)` is the counterpart of `strings.join`. `bench/builder/` prints the
+naive loop beside the builder.
+
 #### `json`
 
 `json.decode`/`json.encode` (de)serialize `str`/`bytes` against a
@@ -2344,7 +2521,9 @@ let r: result[Person, str] = json.decode(s);
 guard let p2 = r else { exit(1); }
 ```
 
-Supported: `struct`, `opt[T]`, `[T]`, `map[str, V]` (JSON object keys
+Supported: `gc struct` (a plain `struct` is a compile error naming it, since
+the codecs read and build structs through a pointer), `opt[T]`, `[T]`,
+`map[str, V]` (JSON object keys
 are always strings — a map with any other key type is a compile
 error), every scalar, and `bytes` (RFC 4648 base64 strings on the
 wire). `rawptr`, `chan[T]`, and
@@ -2665,6 +2844,7 @@ guard let b = r else let e = err_of(r) {
     log.error("rand failed: " + e);
 }
 let k = crypto.pbkdf2_sha256(password, salt, 600000, 32);   // RFC 8018
+let s1: bytes = crypto.sha1(b"abc");               // 20 bytes
 let d: bytes = crypto.md5(b"abc");                 // 16 bytes
 ```
 
@@ -2674,8 +2854,10 @@ an `err`. The iteration count is capped because it is often chosen by the
 other side of a protocol (a SCRAM server sends it) and the whole
 derivation runs without yielding the worker thread.
 
-`md5` is broken for collision resistance. It exists for the protocols
-that still specify it -- Postgres md5 authentication, `Content-MD5`,
+`sha1` and `md5` are broken for collision resistance. They exist for the
+protocols that still specify them and cannot be changed -- the WebSocket
+handshake (RFC 6455) hashes the client's key with a fixed GUID, Git
+object ids, Postgres md5 authentication, `Content-MD5`,
 legacy ETags -- and must not protect anything new.
 
 #### `sql`
@@ -3405,6 +3587,7 @@ strings.replace("a,b,c", ",", " | ");
 
 strings.split("a,b,,c", ",");           // ["a", "b", "", "c"]
 strings.join(parts, ",");               // the inverse of split
+strings.join_bytes(parts, b",");        // the same for [bytes]: sized once, copied once
 
 strings.from_float(0.1 + 0.2);          // "0.30000000000000004"
 ```
@@ -3963,9 +4146,10 @@ signal-handling program.
 
 ## All packages
 
+- [builder](packages/builder.md) -- source package, 20 public items
 - [byteutil](packages/byteutil.md) -- source package, 5 public items
 - [compress](packages/compress.md) -- compiler-provided, 7 public items
-- [crypto](packages/crypto.md) -- compiler-provided, 5 public items
+- [crypto](packages/crypto.md) -- compiler-provided, 6 public items
 - [encoding](packages/encoding.md) -- compiler-provided, 12 public items
 - [flags](packages/flags.md) -- source package, 23 public items
 - [fs](packages/fs.md) -- compiler-provided, 7 public items
@@ -3981,7 +4165,7 @@ signal-handling program.
 - [proc](packages/proc.md) -- compiler-provided, 6 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [sql](packages/sql.md) -- compiler-provided, 20 public items
-- [strings](packages/strings.md) -- compiler-provided, 17 public items
+- [strings](packages/strings.md) -- compiler-provided, 18 public items
 - [time](packages/time.md) -- compiler-provided, 3 public items
 
 ---
@@ -4118,11 +4302,21 @@ name myserver
 version 0.1.0
 
 pkg foo git https://github.com/dolphlabs/foo tag v0.1.0
+pkg bar git https://github.com/dolphlabs/bar tag v0.2.0 dir src
 ```
 
 ```slang
 import "foo";
+import "bar";
 ```
+
+`dir <subdir>` points a pin at the package **inside** the repository,
+for a library that also ships examples, docs and its own tests: only
+that directory is compiled into your program, and nothing else in the
+repository can affect your build. The subdirectory is a relative path
+within the clone — `..`, absolute paths and empty segments are refused —
+and the lock still hashes the whole clone, so what was verified is what
+was fetched.
 
 `slangc get` clones each `pkg` line into `$SLANG_CACHE/pkg/<name>/<hash>`
 (`~/.cache/slang` if unset). If a fetched package has its own
@@ -4312,6 +4506,74 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 
 
 
+# builder
+
+# builder
+
+> Package builder.
+
+## API
+
+### `gc struct Str`
+
+### `fn new_str() -> Str`
+
+### `fn write(self: Str, s: str) -> Str`
+
+Appends, and returns the builder so writes chain. A str is immutable, so the builder holds the caller's value, not a copy.
+
+### `fn write_int(self: Str, n: int) -> Str`
+
+### `fn write_line(self: Str, s: str) -> Str`
+
+### `fn size(self: Str) -> int`
+
+The bytes written so far, without assembling anything.
+
+### `fn is_empty(self: Str) -> bool`
+
+### `fn finish(self: Str) -> str`
+
+The whole result, in one allocation. Can be called again after more writes; each call assembles what is there, so ask once when you are done rather than after every write.
+
+### `fn take(self: Str) -> str`
+
+finish() and start over.
+
+### `fn reset(self: Str) -> int`
+
+### `gc struct Bytes`
+
+### `fn new_bytes() -> Bytes`
+
+### `fn write_byte(self: Bytes, b: int) -> Bytes`
+
+### `fn write(self: Bytes, b: bytes) -> Bytes`
+
+Appends a copy. Bytes are mutable in slang, so keeping the caller's own value would let a later change of theirs rewrite what was already written.
+
+### `fn write_str(self: Bytes, s: str) -> Bytes`
+
+Text goes in as its UTF-8 bytes. `to_bytes` already makes a fresh value, so a long string is kept as-is rather than copied twice.
+
+### `fn size(self: Bytes) -> int`
+
+### `fn is_empty(self: Bytes) -> bool`
+
+### `fn finish(self: Bytes) -> bytes`
+
+The whole result, in one allocation. Leaves the builder as it was, so it can be written to and finished again; call it once when you are done rather than after every write.
+
+### `fn take(self: Bytes) -> bytes`
+
+### `fn reset(self: Bytes) -> int`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
 # byteutil
 
 # byteutil
@@ -4462,6 +4724,7 @@ guard let b = r else let e = err_of(r) {
     log.error("rand failed: " + e);
 }
 let k = crypto.pbkdf2_sha256(password, salt, 600000, 32);   // RFC 8018
+let s1: bytes = crypto.sha1(b"abc");               // 20 bytes
 let d: bytes = crypto.md5(b"abc");                 // 16 bytes
 ```
 
@@ -4471,8 +4734,10 @@ an `err`. The iteration count is capped because it is often chosen by the
 other side of a protocol (a SCRAM server sends it) and the whole
 derivation runs without yielding the worker thread.
 
-`md5` is broken for collision resistance. It exists for the protocols
-that still specify it -- Postgres md5 authentication, `Content-MD5`,
+`sha1` and `md5` are broken for collision resistance. They exist for the
+protocols that still specify them and cannot be changed -- the WebSocket
+handshake (RFC 6455) hashes the client's key with a fixed GUID, Git
+object ids, Postgres md5 authentication, `Content-MD5`,
 legacy ETags -- and must not protect anything new.
 
 ## API
@@ -4482,6 +4747,8 @@ legacy ETags -- and must not protect anything new.
 ### `crypto.hmac_sha256(bytes, bytes) -> bytes`
 
 ### `crypto.rand(int) -> result[bytes,str]`
+
+### `crypto.sha1(bytes) -> bytes`
 
 ### `crypto.md5(bytes) -> bytes`
 
@@ -6083,7 +6350,9 @@ let r: result[Person, str] = json.decode(s);
 guard let p2 = r else { exit(1); }
 ```
 
-Supported: `struct`, `opt[T]`, `[T]`, `map[str, V]` (JSON object keys
+Supported: `gc struct` (a plain `struct` is a compile error naming it, since
+the codecs read and build structs through a pointer), `opt[T]`, `[T]`,
+`map[str, V]` (JSON object keys
 are always strings — a map with any other key type is a compile
 error), every scalar, and `bytes` (RFC 4648 base64 strings on the
 wire). `rawptr`, `chan[T]`, and
@@ -7291,6 +7560,7 @@ strings.replace("a,b,c", ",", " | ");
 
 strings.split("a,b,,c", ",");           // ["a", "b", "", "c"]
 strings.join(parts, ",");               // the inverse of split
+strings.join_bytes(parts, b",");        // the same for [bytes]: sized once, copied once
 
 strings.from_float(0.1 + 0.2);          // "0.30000000000000004"
 ```
@@ -7354,6 +7624,8 @@ Three behaviours worth knowing:
 ### `strings.split(str, str) -> [str]`
 
 ### `strings.join(NA_ARR_STR, str) -> str`
+
+### `strings.join_bytes(NA_ARR_BYTES, bytes) -> bytes`
 
 ### `strings.from_float(float) -> str`
 

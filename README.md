@@ -651,6 +651,21 @@ let counts: map[Status]int = {};
 counts[Status.Paid] = 3;
 ```
 
+An exported enum is usable from another package, variants and all:
+
+```slang
+// orders/orders.sl
+pub enum Status { Pending, Paid, Shipped }
+
+// main.sl
+import "orders";
+let o = orders.Order{ id: 1, status: orders.Status.Paid };
+println(o.status == orders.Status.Paid);
+let r: result[orders.Status, str] = orders.Status.from_str("Shipped");
+```
+
+An enum without `pub` is private to its package, like any other type.
+
 There is no per-variant wire label yet (`to_str`/JSON always use the
 declared name as written), no explicit backing-width syntax
 (`enum Name: i64 { ... }`), and no payload-carrying variants or a
@@ -1000,6 +1015,39 @@ anything a man in the middle queued behind it would otherwise be trusted
 as if it had arrived encrypted (libpq's CVE-2021-23222).
 `tls_upgrade_until(fd, host, ctx, deadline)` bounds the handshake; a
 server that stops answering part way through gives `"timeout"`.
+
+#### `builder`
+
+Assembling a result one piece at a time with `+` is **quadratic**: `a + b`
+allocates and copies both sides, so the cost is the sum of every
+intermediate length. Building 80 KB one byte at a time takes about two
+seconds, and a megabyte would take minutes. `builder` collects the pieces
+and copies each once, at the end.
+
+```slang
+import "builder";
+
+let b = builder.new_str();
+b.write("hello").write(", ").write(name).write_int(42).write_line("!");
+let s = b.finish();                    // one allocation, linear in the total
+
+let y = builder.new_bytes();
+y.write_byte(104).write(b"ello").write_str(" world");
+let raw: bytes = y.finish();
+```
+
+`Str` is for text and `Bytes` for binary data. Both chain, report
+`size()` in bytes without assembling anything, and offer `finish()` (which
+can be called again after more writes), `take()` (finish and start over)
+and `reset()`. `Bytes.write_byte` fills a 512-byte chunk in place, so a
+million single-byte writes make about two thousand allocations rather than a
+million: 4 million of them take 136 ms. `Bytes` keeps a **copy** of what you
+write, because bytes are mutable and a later change of yours must not
+rewrite what was already written.
+
+For assembling a `[bytes]` you already hold, `strings.join_bytes(parts,
+sep)` is the counterpart of `strings.join`. `bench/builder/` prints the
+naive loop beside the builder.
 
 #### `json`
 
@@ -1354,6 +1402,7 @@ guard let b = r else let e = err_of(r) {
     log.error("rand failed: " + e);
 }
 let k = crypto.pbkdf2_sha256(password, salt, 600000, 32);   // RFC 8018
+let s1: bytes = crypto.sha1(b"abc");               // 20 bytes
 let d: bytes = crypto.md5(b"abc");                 // 16 bytes
 ```
 
@@ -1363,8 +1412,10 @@ an `err`. The iteration count is capped because it is often chosen by the
 other side of a protocol (a SCRAM server sends it) and the whole
 derivation runs without yielding the worker thread.
 
-`md5` is broken for collision resistance. It exists for the protocols
-that still specify it -- Postgres md5 authentication, `Content-MD5`,
+`sha1` and `md5` are broken for collision resistance. They exist for the
+protocols that still specify them and cannot be changed -- the WebSocket
+handshake (RFC 6455) hashes the client's key with a fixed GUID, Git
+object ids, Postgres md5 authentication, `Content-MD5`,
 legacy ETags -- and must not protect anything new.
 
 #### `sql`
@@ -2094,6 +2145,7 @@ strings.replace("a,b,c", ",", " | ");
 
 strings.split("a,b,,c", ",");           // ["a", "b", "", "c"]
 strings.join(parts, ",");               // the inverse of split
+strings.join_bytes(parts, b",");        // the same for [bytes]: sized once, copied once
 
 strings.from_float(0.1 + 0.2);          // "0.30000000000000004"
 ```
@@ -2975,11 +3027,21 @@ name myserver
 version 0.1.0
 
 pkg foo git https://github.com/dolphlabs/foo tag v0.1.0
+pkg bar git https://github.com/dolphlabs/bar tag v0.2.0 dir src
 ```
 
 ```slang
 import "foo";
+import "bar";
 ```
+
+`dir <subdir>` points a pin at the package **inside** the repository,
+for a library that also ships examples, docs and its own tests: only
+that directory is compiled into your program, and nothing else in the
+repository can affect your build. The subdirectory is a relative path
+within the clone — `..`, absolute paths and empty segments are refused —
+and the lock still hashes the whole clone, so what was verified is what
+was fetched.
 
 `slangc get` clones each `pkg` line into `$SLANG_CACHE/pkg/<name>/<hash>`
 (`~/.cache/slang` if unset). If a fetched package has its own

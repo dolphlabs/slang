@@ -50,6 +50,10 @@ const NatSig STRINGS_SIGS[] = {
        unrelated operations. */
     {"strings", "split", 2, {NA_STR, NA_STR}, "[str]", 0},
     {"strings", "join", 2, {NA_ARR_STR, NA_STR}, "str", 0},
+    /* The bytes counterpart. Concatenating bytes with `+` copies both
+       sides, so assembling n pieces that way costs O(n^2); this sizes
+       the result once and copies each piece once. */
+    {"strings", "join_bytes", 2, {NA_ARR_BYTES, NA_BYTES}, "bytes", 0},
 
     /* the shortest text that parses back to exactly this float.
        to_str uses %g, six significant digits, which is right for

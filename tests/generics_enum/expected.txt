@@ -1,0 +1,11 @@
+Green
+false
+true
+status:Paid
+colour Blue
+status Shipped
+neither
+1
+true
+false
+status:Pending

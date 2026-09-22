@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>builder — slang</title>
+<meta name="description" content="Package builder.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="builder">
+<meta property="og:description" content="Package builder.">
+<meta property="og:type" content="website">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/builder.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <button id="navtoggle" class="navtoggle" type="button"
+          aria-label="Toggle navigation" aria-expanded="false"
+          aria-controls="mainnav">
+    <span></span><span></span><span></span>
+  </button>
+  <nav class="mainnav" id="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../testing/index.html">Testing</a><a href="../bench/index.html">Benchmarks</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="navscrim" class="navscrim" hidden></div>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>builder</h1>
+      <p class="tagline">Package builder.</p>
+      <p class="agentline">
+        <a href="../packages/builder.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="str"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Str</code> <span class="src">stdlib/builder/builder.sl:33</span><a class="anchor" href="#str">#</a></div></div><div class="api-item" id="new-str"><div class="api-sig"><code><span class="k">fn</span> <span class="f">new_str</span>() -&gt; Str</code> <span class="src">stdlib/builder/builder.sl:38</span><a class="anchor" href="#new-str">#</a></div></div><div class="api-item" id="str-write"><div class="api-sig"><code><span class="k">fn</span> <span class="f">write</span>(self: Str, s: <span class="t">str</span>) -&gt; Str</code> <span class="src">stdlib/builder/builder.sl:46</span><a class="anchor" href="#str-write">#</a></div><p class="api-doc">Appends, and returns the builder so writes chain. A str is immutable, so the builder holds the caller&#x27;s value, not a copy.</p></div><div class="api-item" id="str-write-int"><div class="api-sig"><code><span class="k">fn</span> <span class="f">write_int</span>(self: Str, n: <span class="t">int</span>) -&gt; Str</code> <span class="src">stdlib/builder/builder.sl:54</span><a class="anchor" href="#str-write-int">#</a></div></div><div class="api-item" id="str-write-line"><div class="api-sig"><code><span class="k">fn</span> <span class="f">write_line</span>(self: Str, s: <span class="t">str</span>) -&gt; Str</code> <span class="src">stdlib/builder/builder.sl:58</span><a class="anchor" href="#str-write-line">#</a></div></div><div class="api-item" id="str-size"><div class="api-sig"><code><span class="k">fn</span> <span class="f">size</span>(self: Str) -&gt; <span class="t">int</span></code> <span class="src">stdlib/builder/builder.sl:63</span><a class="anchor" href="#str-size">#</a></div><p class="api-doc">The bytes written so far, without assembling anything.</p></div><div class="api-item" id="str-is-empty"><div class="api-sig"><code><span class="k">fn</span> <span class="f">is_empty</span>(self: Str) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/builder/builder.sl:67</span><a class="anchor" href="#str-is-empty">#</a></div></div><div class="api-item" id="str-finish"><div class="api-sig"><code><span class="k">fn</span> <span class="f">finish</span>(self: Str) -&gt; <span class="t">str</span></code> <span class="src">stdlib/builder/builder.sl:74</span><a class="anchor" href="#str-finish">#</a></div><p class="api-doc">The whole result, in one allocation. Can be called again after more writes; each call assembles what is there, so ask once when you are done rather than after every write.</p></div><div class="api-item" id="str-take"><div class="api-sig"><code><span class="k">fn</span> <span class="f">take</span>(self: Str) -&gt; <span class="t">str</span></code> <span class="src">stdlib/builder/builder.sl:79</span><a class="anchor" href="#str-take">#</a></div><p class="api-doc">finish() and start over.</p></div><div class="api-item" id="str-reset"><div class="api-sig"><code><span class="k">fn</span> <span class="f">reset</span>(self: Str) -&gt; <span class="t">int</span></code> <span class="src">stdlib/builder/builder.sl:85</span><a class="anchor" href="#str-reset">#</a></div></div><div class="api-item" id="bytes"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Bytes</code> <span class="src">stdlib/builder/builder.sl:111</span><a class="anchor" href="#bytes">#</a></div></div><div class="api-item" id="new-bytes"><div class="api-sig"><code><span class="k">fn</span> <span class="f">new_bytes</span>() -&gt; Bytes</code> <span class="src">stdlib/builder/builder.sl:118</span><a class="anchor" href="#new-bytes">#</a></div></div><div class="api-item" id="bytes-write-byte"><div class="api-sig"><code><span class="k">fn</span> <span class="f">write_byte</span>(self: Bytes, b: <span class="t">int</span>) -&gt; Bytes</code> <span class="src">stdlib/builder/builder.sl:139</span><a class="anchor" href="#bytes-write-byte">#</a></div></div><div class="api-item" id="bytes-write"><div class="api-sig"><code><span class="k">fn</span> <span class="f">write</span>(self: Bytes, b: <span class="t">bytes</span>) -&gt; Bytes</code> <span class="src">stdlib/builder/builder.sl:152</span><a class="anchor" href="#bytes-write">#</a></div><p class="api-doc">Appends a copy. Bytes are mutable in slang, so keeping the caller&#x27;s own value would let a later change of theirs rewrite what was already written.</p></div><div class="api-item" id="bytes-write-str"><div class="api-sig"><code><span class="k">fn</span> <span class="f">write_str</span>(self: Bytes, s: <span class="t">str</span>) -&gt; Bytes</code> <span class="src">stdlib/builder/builder.sl:177</span><a class="anchor" href="#bytes-write-str">#</a></div><p class="api-doc">Text goes in as its UTF-8 bytes. <code>to_bytes</code> already makes a fresh value, so a long string is kept as-is rather than copied twice.</p></div><div class="api-item" id="bytes-size"><div class="api-sig"><code><span class="k">fn</span> <span class="f">size</span>(self: Bytes) -&gt; <span class="t">int</span></code> <span class="src">stdlib/builder/builder.sl:191</span><a class="anchor" href="#bytes-size">#</a></div></div><div class="api-item" id="bytes-is-empty"><div class="api-sig"><code><span class="k">fn</span> <span class="f">is_empty</span>(self: Bytes) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/builder/builder.sl:195</span><a class="anchor" href="#bytes-is-empty">#</a></div></div><div class="api-item" id="bytes-finish"><div class="api-sig"><code><span class="k">fn</span> <span class="f">finish</span>(self: Bytes) -&gt; <span class="t">bytes</span></code> <span class="src">stdlib/builder/builder.sl:202</span><a class="anchor" href="#bytes-finish">#</a></div><p class="api-doc">The whole result, in one allocation. Leaves the builder as it was, so it can be written to and finished again; call it once when you are done rather than after every write.</p></div><div class="api-item" id="bytes-take"><div class="api-sig"><code><span class="k">fn</span> <span class="f">take</span>(self: Bytes) -&gt; <span class="t">bytes</span></code> <span class="src">stdlib/builder/builder.sl:207</span><a class="anchor" href="#bytes-take">#</a></div></div><div class="api-item" id="bytes-reset"><div class="api-sig"><code><span class="k">fn</span> <span class="f">reset</span>(self: Bytes) -&gt; <span class="t">int</span></code> <span class="src">stdlib/builder/builder.sl:213</span><a class="anchor" href="#bytes-reset">#</a></div></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

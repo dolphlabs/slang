@@ -6,6 +6,172 @@
     "url": "https://dolphlabs.com"
   },
   "packages": {
+    "builder": {
+      "name": "builder",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Str",
+          "decl": "struct",
+          "sig": "gc struct Str",
+          "doc": "",
+          "file": "stdlib/builder/builder.sl",
+          "line": 33
+        },
+        {
+          "name": "new_str",
+          "decl": "fn",
+          "sig": "fn new_str() -> Str",
+          "doc": "",
+          "file": "stdlib/builder/builder.sl",
+          "line": 38
+        },
+        {
+          "name": "Str.write",
+          "decl": "fn",
+          "sig": "fn write(self: Str, s: str) -> Str",
+          "doc": "Appends, and returns the builder so writes chain. A str is immutable, so the builder holds the caller's value, not a copy.",
+          "file": "stdlib/builder/builder.sl",
+          "line": 46
+        },
+        {
+          "name": "Str.write_int",
+          "decl": "fn",
+          "sig": "fn write_int(self: Str, n: int) -> Str",
+          "doc": "",
+          "file": "stdlib/builder/builder.sl",
+          "line": 54
+        },
+        {
+          "name": "Str.write_line",
+          "decl": "fn",
+          "sig": "fn write_line(self: Str, s: str) -> Str",
+          "doc": "",
+          "file": "stdlib/builder/builder.sl",
+          "line": 58
+        },
+        {
+          "name": "Str.size",
+          "decl": "fn",
+          "sig": "fn size(self: Str) -> int",
+          "doc": "The bytes written so far, without assembling anything.",
+          "file": "stdlib/builder/builder.sl",
+          "line": 63
+        },
+        {
+          "name": "Str.is_empty",
+          "decl": "fn",
+          "sig": "fn is_empty(self: Str) -> bool",
+          "doc": "",
+          "file": "stdlib/builder/builder.sl",
+          "line": 67
+        },
+        {
+          "name": "Str.finish",
+          "decl": "fn",
+          "sig": "fn finish(self: Str) -> str",
+          "doc": "The whole result, in one allocation. Can be called again after more writes; each call assembles what is there, so ask once when you are done rather than after every write.",
+          "file": "stdlib/builder/builder.sl",
+          "line": 74
+        },
+        {
+          "name": "Str.take",
+          "decl": "fn",
+          "sig": "fn take(self: Str) -> str",
+          "doc": "finish() and start over.",
+          "file": "stdlib/builder/builder.sl",
+          "line": 79
+        },
+        {
+          "name": "Str.reset",
+          "decl": "fn",
+          "sig": "fn reset(self: Str) -> int",
+          "doc": "",
+          "file": "stdlib/builder/builder.sl",
+          "line": 85
+        },
+        {
+          "name": "Bytes",
+          "decl": "struct",
+          "sig": "gc struct Bytes",
+          "doc": "",
+          "file": "stdlib/builder/builder.sl",
+          "line": 111
+        },
+        {
+          "name": "new_bytes",
+          "decl": "fn",
+          "sig": "fn new_bytes() -> Bytes",
+          "doc": "",
+          "file": "stdlib/builder/builder.sl",
+          "line": 118
+        },
+        {
+          "name": "Bytes.write_byte",
+          "decl": "fn",
+          "sig": "fn write_byte(self: Bytes, b: int) -> Bytes",
+          "doc": "",
+          "file": "stdlib/builder/builder.sl",
+          "line": 139
+        },
+        {
+          "name": "Bytes.write",
+          "decl": "fn",
+          "sig": "fn write(self: Bytes, b: bytes) -> Bytes",
+          "doc": "Appends a copy. Bytes are mutable in slang, so keeping the caller's own value would let a later change of theirs rewrite what was already written.",
+          "file": "stdlib/builder/builder.sl",
+          "line": 152
+        },
+        {
+          "name": "Bytes.write_str",
+          "decl": "fn",
+          "sig": "fn write_str(self: Bytes, s: str) -> Bytes",
+          "doc": "Text goes in as its UTF-8 bytes. `to_bytes` already makes a fresh value, so a long string is kept as-is rather than copied twice.",
+          "file": "stdlib/builder/builder.sl",
+          "line": 177
+        },
+        {
+          "name": "Bytes.size",
+          "decl": "fn",
+          "sig": "fn size(self: Bytes) -> int",
+          "doc": "",
+          "file": "stdlib/builder/builder.sl",
+          "line": 191
+        },
+        {
+          "name": "Bytes.is_empty",
+          "decl": "fn",
+          "sig": "fn is_empty(self: Bytes) -> bool",
+          "doc": "",
+          "file": "stdlib/builder/builder.sl",
+          "line": 195
+        },
+        {
+          "name": "Bytes.finish",
+          "decl": "fn",
+          "sig": "fn finish(self: Bytes) -> bytes",
+          "doc": "The whole result, in one allocation. Leaves the builder as it was, so it can be written to and finished again; call it once when you are done rather than after every write.",
+          "file": "stdlib/builder/builder.sl",
+          "line": 202
+        },
+        {
+          "name": "Bytes.take",
+          "decl": "fn",
+          "sig": "fn take(self: Bytes) -> bytes",
+          "doc": "",
+          "file": "stdlib/builder/builder.sl",
+          "line": 207
+        },
+        {
+          "name": "Bytes.reset",
+          "decl": "fn",
+          "sig": "fn reset(self: Bytes) -> int",
+          "doc": "",
+          "file": "stdlib/builder/builder.sl",
+          "line": 213
+        }
+      ]
+    },
     "byteutil": {
       "name": "byteutil",
       "kind": "source",
@@ -156,6 +322,15 @@
           "ret": "result[bytes,str]",
           "tls": false,
           "sig": "crypto.rand(int) -> result[bytes,str]"
+        },
+        {
+          "name": "sha1",
+          "params": [
+            "bytes"
+          ],
+          "ret": "bytes",
+          "tls": false,
+          "sig": "crypto.sha1(bytes) -> bytes"
         },
         {
           "name": "md5",
@@ -3500,6 +3675,16 @@
           "ret": "str",
           "tls": false,
           "sig": "strings.join(NA_ARR_STR, str) -> str"
+        },
+        {
+          "name": "join_bytes",
+          "params": [
+            "NA_ARR_BYTES",
+            "bytes"
+          ],
+          "ret": "bytes",
+          "tls": false,
+          "sig": "strings.join_bytes(NA_ARR_BYTES, bytes) -> bytes"
         },
         {
           "name": "from_float",

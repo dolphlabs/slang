@@ -1,0 +1,3 @@
+name pkgsubdir
+version 0.1.0
+pkg demo git /tmp/sl_pkgsubdir_repo tag v1 dir src

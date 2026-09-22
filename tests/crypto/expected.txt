@@ -1,6 +1,7 @@
 sha256 ok
 hmac ok
 rand ok
+sha1 ok
 md5 ok
 pbkdf2 ok
 rand neg ok

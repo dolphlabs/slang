@@ -1,0 +1,13 @@
+1:Paid
+Pending
+5
+6
+true
+true
+false
+Shipped
+rejected: not a valid Status variant
+Paid
+from_int rejected 99
+3
+0

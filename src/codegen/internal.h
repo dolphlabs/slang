@@ -429,6 +429,8 @@ typedef enum {
     NA_ARR_STR,   /* a [str] list, marshaled as sl_arr *. The only
                      aggregate a native function takes; strings.join
                      needs it to be the inverse of strings.split. */
+    NA_ARR_BYTES, /* a [bytes] list, marshaled as sl_arr *. strings.join_bytes
+                     is the bytes counterpart of strings.join. */
     NA_UNTIL,     /* an `until` deadline: marshaled as sl_until (int64_t).
                      Deliberately NOT int-compatible -- a deadline is an
                      absolute monotonic instant, and silently accepting a
@@ -632,6 +634,7 @@ int is_enum(CG *cg, const char *t);
 char *mangle_enum(const char *canon);
 void collect_enum_decls(CG *cg, Package *pkgs, int npkgs);
 void resolve_enum_refs(CG *cg, Package *pkgs, int npkgs);
+void resolve_enum_in_body(CG *cg, const char *pkg, FuncDecl *f);
 void emit_enum_tables(CG *cg);
 const char *ctype_of(CG *cg, const char *t);
 const char *canon_type(CG *cg, const char *t, int line);

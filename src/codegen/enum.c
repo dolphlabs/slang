@@ -120,11 +120,46 @@ void collect_enum_decls(CG *cg, Package *pkgs, int npkgs) {
 
 static void resolve_expr(CG *cg, const char *pkg, Expr *e);
 
-static void resolve_ident(CG *cg, const char *pkg, Expr *e) {
+/* The enum a dotted name refers to, and the member after it.
+ *
+ * `Status.Paid` in this package, or `orders.Status.Paid` from another --
+ * a library whose API takes an enum is useless if only its own package
+ * can name the variants. The import alias is resolved against the
+ * package being walked, not cg->cur_pkg, which is not set this early. */
+static EnumDef *enum_ref(CG *cg, const char *pkg, const char *dotted,
+                         char **member, int line) {
     char *left, *right;
-    if (!split_dotted(e->as.ident.name, &left, &right))
-        return;
+    if (!split_dotted(dotted, &left, &right))
+        return NULL;
     EnumDef *ed = enum_find_in_pkg(cg, pkg, left);
+    if (ed) {
+        *member = right;
+        return ed;
+    }
+    char *ename, *vname;
+    if (!split_dotted(right, &ename, &vname))
+        return NULL;
+    const char *saved = cg->cur_pkg;
+    cg->cur_pkg = pkg;
+    const char *target = import_try(cg, left);
+    cg->cur_pkg = saved;
+    if (!target)
+        return NULL;
+    ed = enum_find_in_pkg(cg, target, ename);
+    if (!ed)
+        return NULL;
+    if (!ed->is_pub)
+        cg_error(line,
+                 "type '%s' is not exported from package '%s' (add 'pub' "
+                 "to export it)",
+                 ename, target);
+    *member = vname;
+    return ed;
+}
+
+static void resolve_ident(CG *cg, const char *pkg, Expr *e) {
+    char *right;
+    EnumDef *ed = enum_ref(cg, pkg, e->as.ident.name, &right, e->line);
     if (!ed)
         return; /* not an enum reference -- leave for the usual
                   * package/field resolution in infer.c */
@@ -148,10 +183,8 @@ static void resolve_ident(CG *cg, const char *pkg, Expr *e) {
 static void resolve_call_name(CG *cg, const char *pkg, Expr *e) {
     if (!e->as.call.name)
         return;
-    char *left, *right;
-    if (!split_dotted(e->as.call.name, &left, &right))
-        return;
-    EnumDef *ed = enum_find_in_pkg(cg, pkg, left);
+    char *right;
+    EnumDef *ed = enum_ref(cg, pkg, e->as.call.name, &right, e->line);
     if (!ed)
         return;
     if (!strcmp(right, "from_int")) {
@@ -166,6 +199,82 @@ static void resolve_call_name(CG *cg, const char *pkg, Expr *e) {
                  "from_int/from_str)",
                  ed->name, right);
     }
+}
+
+/* The enum an `EX_IDENT` of the form `pkg.Enum` names, or NULL. */
+static EnumDef *enum_of_qualified(CG *cg, const char *pkg, Expr *base,
+                                  int line) {
+    if (!base || base->kind != EX_IDENT)
+        return NULL;
+    char *alias, *ename;
+    if (!split_dotted(base->as.ident.name, &alias, &ename))
+        return NULL;
+    if (strchr(ename, '.'))
+        return NULL;
+    const char *saved = cg->cur_pkg;
+    cg->cur_pkg = pkg;
+    const char *target = import_try(cg, alias);
+    cg->cur_pkg = saved;
+    if (!target)
+        return NULL;
+    EnumDef *ed = enum_find_in_pkg(cg, target, ename);
+    if (!ed)
+        return NULL;
+    if (!ed->is_pub)
+        cg_error(line,
+                 "type '%s' is not exported from package '%s' (add 'pub' "
+                 "to export it)",
+                 ename, target);
+    return ed;
+}
+
+/* `pkg.Enum.Variant` -> the variant's value. */
+static int resolve_dotted_variant(CG *cg, const char *pkg, Expr *e) {
+    EnumDef *ed = enum_of_qualified(cg, pkg, e->as.field.base, e->line);
+    if (!ed)
+        return 0;
+    const char *name = e->as.field.name;
+    for (int i = 0; i < ed->nvariants; i++) {
+        if (!strcmp(ed->variants[i], name)) {
+            int32_t val = ed->values[i];
+            e->kind = EX_INT;
+            e->as.int_lit.value = val;
+            e->as.int_lit.big_u64 = 0;
+            e->as.int_lit.enum_ty = ed->canonical;
+            return 1;
+        }
+    }
+    cg_error(e->line, "enum '%s' has no variant '%s'", ed->name, name);
+    return 0;
+}
+
+/* `pkg.Enum.from_str(s)` / `from_int(n)` -> the builtin call. */
+static int resolve_dotted_assoc(CG *cg, const char *pkg, Expr *e) {
+    EnumDef *ed = enum_of_qualified(cg, pkg, e->as.method.recv, e->line);
+    if (!ed)
+        return 0;
+    const char *name = e->as.method.name;
+    const char *builtin = NULL;
+    if (!strcmp(name, "from_int"))
+        builtin = "__enum_from_int";
+    else if (!strcmp(name, "from_str"))
+        builtin = "__enum_from_str";
+    else
+        cg_error(e->line,
+                 "enum '%s' has no associated function '%s' (only "
+                 "from_int/from_str)",
+                 ed->name, name);
+    Expr **args = e->as.method.args;
+    int nargs = e->as.method.nargs;
+    for (int i = 0; i < nargs; i++)
+        resolve_expr(cg, pkg, args[i]);
+    e->kind = EX_CALL;
+    e->as.call.name = xstrdup(builtin);
+    e->as.call.args = args;
+    e->as.call.nargs = nargs;
+    e->as.call.callee = NULL;
+    e->as.call.enum_ty = ed->canonical;
+    return 1;
 }
 
 static void resolve_expr(CG *cg, const char *pkg, Expr *e) {
@@ -217,9 +326,16 @@ static void resolve_expr(CG *cg, const char *pkg, Expr *e) {
         }
         return;
     case EX_FIELD:
+        /* `orders.Status.Paid` parses as a FIELD of `orders.Status`,
+           because an identifier carries at most one dot. */
+        if (resolve_dotted_variant(cg, pkg, e))
+            return;
         resolve_expr(cg, pkg, e->as.field.base);
         return;
     case EX_METHOD:
+        /* and `orders.Status.from_str(s)` as a METHOD call on it */
+        if (resolve_dotted_assoc(cg, pkg, e))
+            return;
         resolve_expr(cg, pkg, e->as.method.recv);
         for (int i = 0; i < e->as.method.nargs; i++)
             resolve_expr(cg, pkg, e->as.method.args[i]);
@@ -310,6 +426,16 @@ static void resolve_block(CG *cg, const char *pkg, Block *b) {
         return;
     for (int i = 0; i < b->count; i++)
         resolve_stmt(cg, pkg, b->stmts[i]);
+}
+
+/* The same rewrite, for ONE function body.
+ *
+ * A generic method's instance is parsed fresh, long after the walk below
+ * has finished, so its `Status.Paid` would reach the type checker as an
+ * undefined variable. Every instance runs this on its own body. */
+void resolve_enum_in_body(CG *cg, const char *pkg, FuncDecl *f) {
+    if (f && f->body)
+        resolve_block(cg, pkg, f->body);
 }
 
 void resolve_enum_refs(CG *cg, Package *pkgs, int npkgs) {

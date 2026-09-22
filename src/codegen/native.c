@@ -88,6 +88,10 @@ const char *native_check(CG *cg, const char *pkg, const char *fname,
             ok = is_arr(at) && is_str(arr_elem(at));
             want = "a [str]";
             break;
+        case NA_ARR_BYTES:
+            ok = is_arr(at) && is_bytes(arr_elem(at));
+            want = "a [bytes]";
+            break;
         case NA_UNTIL:
             ok = is_until(at);
             want = "an until (try until_of(time.mono() + ns))";
@@ -150,6 +154,8 @@ char *native_gen(CG *cg, const char *pkg, const char *fname,
         } else if (ak == NA_ARR_STR) {
             cast_t = "[str]"; /* already sl_arr *; must not fall through
                                  to the i32 default below */
+        } else if (ak == NA_ARR_BYTES) {
+            cast_t = "[bytes]"; /* already sl_arr *, like [str] above */
         } else if (ak == NA_UNTIL) {
             cast_t = "until"; /* already int64_t; no conversion, but the
                                  cast_t must not fall through to the i32
