@@ -44,6 +44,11 @@ int func_cursor_next(CG *cg, Package *pkgs, int npkgs, FuncCursor *c,
         if (c->phase == 0) { /* plain functions */
             if (c->i_fn < p->prog->nfuncs) {
                 FuncDecl *f = p->prog->funcs[c->i_fn++];
+                /* `fn f[T](...)` is a template, not a body: no signature,
+                 * no meaning until a T is known. Its instances are
+                 * yielded at the end, like a generic method's. */
+                if (f->ntparams)
+                    continue;
                 if (f->is_extern && !with_extern)
                     continue;
                 c->pkg = p;

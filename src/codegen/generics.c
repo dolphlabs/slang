@@ -329,6 +329,45 @@ const char *generic_canon(CG *cg, const char *t, int line) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Generic functions                                                    */
+/* ------------------------------------------------------------------ */
+
+FuncTmpl *func_tmpl_find_in_pkg(CG *cg, const char *pkg, const char *name) {
+    for (int i = 0; i < cg->ftmpls.count; i++) {
+        FuncTmpl *t = cg->ftmpls.items[i];
+        if (!strcmp(t->pkg, pkg) && !strcmp(t->decl->name, name))
+            return t;
+    }
+    return NULL;
+}
+
+/* `fn first[T](xs: [T]) -> T { ... }`: a template, not a callable
+ * function. Registered instead of the normal sig_register_raw path
+ * (collect_decls skips a generic fn's own canonicalization -- its
+ * parameter types mention type variables, not real types). */
+void func_tmpl_register(CG *cg, Package *pkg, FuncDecl *f) {
+    if (is_builtin_name(f->name))
+        cg_error(f->line, "cannot redefine builtin '%s'", f->name);
+    if (sig_find_in(cg, pkg->name, f->name) ||
+        func_tmpl_find_in_pkg(cg, pkg->name, f->name))
+        cg_error(f->line, "redefinition of function '%s' in package '%s'",
+                 f->name, pkg->name);
+    FuncTmpl *t = (FuncTmpl *)xmalloc(sizeof(FuncTmpl));
+    memset(t, 0, sizeof(*t));
+    t->pkg = pkg->name;
+    t->owner = pkg;
+    t->decl = f;
+    t->is_pub = f->is_pub;
+    t->line = f->line;
+    if (cg->ftmpls.count == cg->ftmpls.cap) {
+        cg->ftmpls.cap = cg->ftmpls.cap ? cg->ftmpls.cap * 2 : 4;
+        cg->ftmpls.items = (FuncTmpl **)xrealloc(
+            cg->ftmpls.items, cg->ftmpls.cap * sizeof(FuncTmpl *));
+    }
+    cg->ftmpls.items[cg->ftmpls.count++] = t;
+}
+
+/* ------------------------------------------------------------------ */
 /* Methods of an instance                                              */
 /* ------------------------------------------------------------------ */
 
@@ -442,15 +481,19 @@ FuncSig *method_instantiate(CG *cg, StructDef *sd, const char *name,
 /* Inference from a struct literal                                     */
 /* ------------------------------------------------------------------ */
 
+/* Not tied to a StructTmpl: a generic FUNCTION unifies its parameter
+ * types too, and has no struct behind it. */
 typedef struct {
-    StructTmpl *tm;
+    const char *const *tparams;
+    int ntparams;
     const char *bound[MAX_TYPE_PARAMS];
+    const char *what; /* "Box" or "first", for error messages */
     int line;
 } Unify;
 
-static int tparam_index(const StructTmpl *tm, const char *name) {
-    for (int i = 0; i < tm->ntparams; i++) {
-        if (!strcmp(tm->tparams[i], name))
+static int tparam_index(const char *const *tparams, int n, const char *name) {
+    for (int i = 0; i < n; i++) {
+        if (!strcmp(tparams[i], name))
             return i;
     }
     return -1;
@@ -472,15 +515,15 @@ static const char *last_segment(const char *s) {
  * here: the assignability check the literal goes through next says it
  * better, with the field's name. */
 static void unify(Unify *u, const char *pat, const char *act) {
-    int k = tparam_index(u->tm, pat);
+    int k = tparam_index(u->tparams, u->ntparams, pat);
     if (k >= 0) {
         if (!u->bound[k])
             u->bound[k] = act;
         else if (strcmp(u->bound[k], act))
             cg_error(u->line,
-                     "type parameter '%s' of '%s' is %s in one field and %s "
+                     "type parameter '%s' of '%s' is %s in one place and %s "
                      "in another; write the type arguments to choose",
-                     pat, u->tm->name, u->bound[k], act);
+                     pat, u->what, u->bound[k], act);
         return;
     }
     char *pin, *ain;
@@ -540,7 +583,9 @@ static void unify(Unify *u, const char *pat, const char *act) {
 static const char *infer_generic_lit(CG *cg, Expr *e, StructTmpl *tm) {
     Unify u;
     memset(&u, 0, sizeof(u));
-    u.tm = tm;
+    u.tparams = (const char *const *)tm->tparams;
+    u.ntparams = tm->ntparams;
+    u.what = tm->name;
     u.line = e->line;
     for (int j = 0; j < e->as.structlit.nfields; j++) {
         int fi = -1;
@@ -587,4 +632,190 @@ const char *structlit_type(CG *cg, Expr *e) {
         }
     }
     return canon_type(cg, name, e->line);
+}
+
+/* ------------------------------------------------------------------ */
+/* Generic functions: unifying a call                                  */
+/* ------------------------------------------------------------------ */
+
+static const char *func_instance_key(const char *pkg, const char *name,
+                                     char **args, int n) {
+    StrBuf b;
+    sb_init(&b);
+    sb_append(&b, pkg);
+    sb_append(&b, ".");
+    sb_append(&b, name);
+    sb_append(&b, "[");
+    for (int i = 0; i < n; i++) {
+        if (i)
+            sb_append(&b, ",");
+        sb_append(&b, args[i]);
+    }
+    sb_append(&b, "]");
+    return b.data;
+}
+
+/* An instance already made for this exact key, or NULL. Instances are
+ * cached the same way a generic struct's are: asking for `first[int]`
+ * twice must return the SAME instance, because the dry run and the real
+ * run both ask for it and have to agree. */
+static FuncInst *func_inst_find(CG *cg, const char *key) {
+    for (int i = 0; i < cg->finsts.count; i++) {
+        if (cg->finsts.items[i]->note &&
+            !strcmp(cg->finsts.items[i]->note, key))
+            return cg->finsts.items[i];
+    }
+    return NULL;
+}
+
+/* `fn first[T](xs: [T]) -> T { ... }` called as `first(xs)`.
+ *
+ * There is no `first[int](xs)` at a call site -- the plan settled that
+ * once, to keep brackets from colliding with indexing -- so every type
+ * argument is inferred: first from the arguments, by walking each
+ * parameter's declared type alongside the argument's actual type with
+ * the same `unify()` a struct literal's fields already use; then, for a
+ * parameter the arguments never mention (`fn make[T]() -> Box[T]`),
+ * from cg->expect against the return type, the same mechanism `none`
+ * and `[]` already use to learn what they are.
+ *
+ * Returns NULL when `pkg` has no such template, so the caller falls
+ * through to its own "undefined function" error -- this only ever
+ * finds a template, never rejects one; arity, inference and visibility
+ * are the caller's normal FuncSig checks once a concrete signature
+ * comes back. */
+FuncSig *generic_call_sig(CG *cg, const char *pkg, const char *name, Expr *e) {
+    if (e->as.call.gsig)
+        return (FuncSig *)e->as.call.gsig;
+    FuncTmpl *tm = func_tmpl_find_in_pkg(cg, pkg, name);
+    if (!tm)
+        return NULL;
+    FuncDecl *decl = tm->decl;
+    int n = e->as.call.nargs;
+    if (n != decl->nparams)
+        cg_error(e->line, "function '%s' expects %d argument(s), got %d",
+                 name, decl->nparams, n);
+
+    Unify u;
+    memset(&u, 0, sizeof(u));
+    u.tparams = (const char *const *)decl->tparams;
+    u.ntparams = decl->ntparams;
+    u.what = decl->name;
+    u.line = e->line;
+
+    /* Each argument is inferred once here, with no expectation flowing
+     * in -- the parameter type it would push isn't a real type yet, it
+     * still mentions a type variable. infer_call's own argument loop,
+     * once `have_sig` has a concrete signature, infers every argument
+     * again with the real expected type and does the assignability
+     * check; EX_STRUCTLIT's field loop follows the same two-pass shape
+     * for exactly the same reason. */
+    for (int i = 0; i < n; i++) {
+        const char *saved = cg->expect;
+        cg->expect = NULL;
+        const char *at = infer_type(cg, e->as.call.args[i]);
+        cg->expect = saved;
+        unify(&u, decl->param_types[i], at);
+    }
+    if (decl->ret_type && cg->expect)
+        unify(&u, decl->ret_type, cg->expect);
+
+    for (int k = 0; k < decl->ntparams; k++) {
+        if (!u.bound[k])
+            cg_error(e->line,
+                     "cannot infer type parameter '%s' of '%s' from its "
+                     "arguments; a parameter only the return type "
+                     "mentions is inferred from an annotated 'let' only "
+                     "when the return type is opt[T]/result/[T]/chan/"
+                     "join-shaped",
+                     decl->tparams[k], name);
+    }
+    char *cargs[MAX_TYPE_PARAMS];
+    for (int k = 0; k < decl->ntparams; k++)
+        cargs[k] = (char *)canon_type(cg, u.bound[k], e->line);
+
+    const char *key = func_instance_key(pkg, name, cargs, decl->ntparams);
+    FuncInst *have = func_inst_find(cg, key);
+    if (have) {
+        e->as.call.gsig = (void *)have->sig;
+        return have->sig;
+    }
+
+    if (cg->inst_depth >= INST_DEPTH_MAX)
+        cg_error(e->line,
+                 "'%s' expands without end: instantiating it needs another "
+                 "new instance, %d levels deep",
+                 name, INST_DEPTH_MAX);
+    if (cg->insts_frozen)
+        cg_error(e->line,
+                 "internal: '%s' was first needed after the analysis "
+                 "passes; please report this program",
+                 key);
+
+    FuncInst *fi = (FuncInst *)xmalloc(sizeof(FuncInst));
+    memset(fi, 0, sizeof(*fi));
+    fi->pkg = tm->owner;
+    fi->fn = parse_fn_decl_again(decl);
+    /* This body has never been through the enum rewrite: it did not
+     * exist (as this AST) when that pass walked the program. */
+    resolve_enum_in_body(cg, tm->pkg, fi->fn);
+    fi->recv = NULL;
+    fi->note = key;
+    fi->line = e->line;
+    fi->env.n = decl->ntparams;
+    for (int i = 0; i < decl->ntparams; i++) {
+        fi->env.names[i] = decl->tparams[i];
+        fi->env.types[i] = cargs[i];
+    }
+
+    FuncSig *sig = (FuncSig *)xmalloc(sizeof(FuncSig));
+    memset(sig, 0, sizeof(*sig));
+    sig->name = fi->fn->name;
+    sig->pkg = tm->pkg;
+    sig->is_pub = fi->fn->is_pub;
+    sig->ret_slang = fi->fn->ret_type;
+    sig->nparams = fi->fn->nparams;
+    sig->method_of = NULL;
+    sig->inst_key = key;
+    sig->line = fi->fn->line;
+    sig->param_slang = (const char **)xmalloc(
+        sizeof(char *) * (sig->nparams ? sig->nparams : 1));
+
+    TypeEnv *saved_env = cg->tenv;
+    const char *saved_pkg = cg->cur_pkg;
+    const char *saved_note = note_canon;
+    int saved_note_line = note_line;
+    cg->tenv = &fi->env;
+    cg->cur_pkg = tm->pkg;
+    note_canon = key;
+    note_line = e->line;
+    cg->inst_depth++;
+    for (int m = 0; m < fi->fn->nparams; m++)
+        sig->param_slang[m] = canon_type(cg, fi->fn->param_types[m],
+                                         sig->line);
+    if (sig->ret_slang)
+        sig->ret_slang = canon_type(cg, sig->ret_slang, sig->line);
+    cg->inst_depth--;
+    cg->tenv = saved_env;
+    cg->cur_pkg = saved_pkg;
+    note_canon = saved_note;
+    note_line = saved_note_line;
+
+    if (cg->sigs.count == cg->sigs.cap) {
+        cg->sigs.cap = cg->sigs.cap ? cg->sigs.cap * 2 : 8;
+        cg->sigs.items = (FuncSig **)xrealloc(
+            cg->sigs.items, cg->sigs.cap * sizeof(FuncSig *));
+    }
+    cg->sigs.items[cg->sigs.count++] = sig;
+    fi->fn->sig_idx = cg->sigs.count;
+    fi->sig = sig;
+
+    if (cg->finsts.count == cg->finsts.cap) {
+        cg->finsts.cap = cg->finsts.cap ? cg->finsts.cap * 2 : 8;
+        cg->finsts.items = (FuncInst **)xrealloc(
+            cg->finsts.items, cg->finsts.cap * sizeof(FuncInst *));
+    }
+    cg->finsts.items[cg->finsts.count++] = fi;
+    e->as.call.gsig = (void *)sig;
+    return sig;
 }

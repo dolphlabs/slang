@@ -98,7 +98,22 @@ struct Expr {
          * `Type.from_int`/`Type.from_str` call into the internal sentinel
          * name ("__enum_from_int"/"__enum_from_str"); then it names which
          * enum type. */
-        struct { char *name; Expr *callee; Expr **args; int nargs; char *enum_ty; } call;
+        struct {
+            char *name;
+            Expr *callee;
+            Expr **args;
+            int nargs;
+            char *enum_ty;
+            /* A generic function call's resolved instance, cached the
+             * first time it is asked for -- so a LATER pass, which may
+             * revisit this node without the same cg->expect context the
+             * original call had (a `let` annotation is only in scope
+             * while ITS OWN statement infers its right-hand side), still
+             * gets the SAME instance rather than failing to re-derive
+             * it. `void *` because FuncSig lives in codegen/internal.h,
+             * a layer above this file. */
+            void *gsig;
+        } call;
         struct { char *ty; Expr *operand; } cast; /* slang type name */
         struct { Expr *base; Expr *index; } index;
         struct {
@@ -293,6 +308,8 @@ struct FuncDecl {
     struct Token *toks;
     int ntoks;
     int tok_pos;        /* index of this declaration's first token */
+    char **tparams;     /* fn f[T, U](...): the type parameters, or NULL */
+    int ntparams;
 };
 
 typedef struct {

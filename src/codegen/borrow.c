@@ -724,8 +724,11 @@ static FuncSig *call_sig_of(BK *bk, Expr *e, int *self_off, char **recv) {
     *self_off = 0;
     *recv = NULL;
     if (split_dotted(e->as.call.name, &left, &right)) {
-        if (import_try(bk->cg, left))
-            return sig_find_in(bk->cg, import_try(bk->cg, left), right);
+        const char *pkg = import_try(bk->cg, left);
+        if (pkg) {
+            FuncSig *sig = sig_find_in(bk->cg, pkg, right);
+            return sig ? sig : generic_call_sig(bk->cg, pkg, right, e);
+        }
         *recv = left;
         *self_off = 1;
         {
@@ -736,7 +739,12 @@ static FuncSig *call_sig_of(BK *bk, Expr *e, int *self_off, char **recv) {
         }
         return NULL;
     }
-    return sig_find_in(bk->cg, bk->cg->cur_pkg, e->as.call.name);
+    {
+        FuncSig *sig = sig_find_in(bk->cg, bk->cg->cur_pkg, e->as.call.name);
+        return sig ? sig
+                   : generic_call_sig(bk->cg, bk->cg->cur_pkg,
+                                      e->as.call.name, e);
+    }
 }
 
 static int param_feeds_ret(FuncSig *sig, int pi) {
@@ -1136,14 +1144,15 @@ static void run_block(BK *bk, int bbi, LoanSet *out) {
     ls_clone_into(out, &bk->cur);
 }
 
+/* fn->sig is set directly at MIR lowering time (compute_mir), from the
+ * exact FuncSig that body was lowered from. It used to be re-derived here
+ * by splitting fn->name on its first dot -- which cannot tell a package
+ * name from a struct name, and cannot parse a generic instance's
+ * three-part display name ("pkg.Box[int].get") at all, silently returning
+ * NULL for every one. */
 static FuncSig *mir_sig(CG *cg, MirFn *fn) {
-    char *left, *right;
-    if (split_dotted(fn->name, &left, &right)) {
-        StructDef *sd = struct_find_in_pkg(cg, fn->pkg, left);
-        if (sd)
-            return method_find(cg, sd, right, 0);
-    }
-    return sig_find_in(cg, fn->pkg, fn->name);
+    (void)cg;
+    return (FuncSig *)fn->sig;
 }
 
 static void check_fn(CG *cg, MirFn *fn) {

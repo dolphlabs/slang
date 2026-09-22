@@ -175,6 +175,13 @@ typedef struct {
     char **lts;
     int nlts;
     int line;
+    /* An instance of a generic FUNCTION: "pkg.first[int]", the same kind
+     * of key a generic struct's canonical name is. Never set together
+     * with method_of, which a generic struct's own method instances use
+     * instead. mangle_sig hashes it into the C symbol, the same way
+     * mangle_struct hashes a struct instance's canonical name, so two
+     * instantiations of one function never share a name. */
+    const char *inst_key;
 } FuncSig;
 
 /* One instance of a generic method: a body no package declares, which
@@ -196,6 +203,26 @@ typedef struct {
     int count;
     int cap;
 } FuncInstTable;
+
+/* A generic function declaration: `fn first[T](xs: [T]) -> T { ... }`.
+ * Not callable itself -- calling its name triggers unification against
+ * the call's arguments (and, for a parameter only the return type
+ * mentions, against cg->expect), which produces an instance the same
+ * way a generic struct's instance is produced from its type arguments. */
+typedef struct {
+    char *pkg;
+    Package *owner;
+    FuncDecl *decl;    /* tparams, param_types and ret_type as written;
+                          re-parsed per instance, like a method template */
+    int is_pub;
+    int line;
+} FuncTmpl;
+
+typedef struct {
+    FuncTmpl **items;
+    int count;
+    int cap;
+} FuncTmplTable;
 
 typedef struct {
     FuncSig **items;   /* pointers, for the same reason as StructTable */
@@ -344,6 +371,7 @@ struct CG {
     ImportTable imports;
     StructTable structs;
     TmplTable tmpls;
+    FuncTmplTable ftmpls;
     FuncInstTable finsts;
     int insts_frozen;   /* set once the passes after the dry run have run:
                            a new instance from here on would never be
@@ -621,6 +649,9 @@ char *mangle_struct(const char *canon);
 void tmpl_register(CG *cg, const char *pkg, Stmt *decl);
 void tmpl_register_impl(CG *cg, Package *pkg, Stmt *decl);
 FuncSig *method_instantiate(CG *cg, StructDef *sd, const char *name, int line);
+void func_tmpl_register(CG *cg, Package *pkg, FuncDecl *f);
+FuncTmpl *func_tmpl_find_in_pkg(CG *cg, const char *pkg, const char *name);
+FuncSig *generic_call_sig(CG *cg, const char *pkg, const char *name, Expr *e);
 StructTmpl *tmpl_find_in_pkg(CG *cg, const char *pkg, const char *name);
 const char *generic_canon(CG *cg, const char *t, int line);
 void generic_needs_args(CG *cg, const char *pkg, const char *name, int line);

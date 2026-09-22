@@ -73,6 +73,12 @@ const char *infer_ident_name(CG *cg, const char *name, int line) {
                          name);
             return fn_type_of_sig(cg, fs);
         }
+        if (func_tmpl_find_in_pkg(cg, cg->cur_pkg, name))
+            cg_error(line,
+                     "'%s' is a generic function; it cannot be used as a "
+                     "value or spawned (write a plain function that calls "
+                     "it with a concrete type, and use that instead)",
+                     name);
     }
     cg_error(line, "undefined variable '%s'", name);
     return NULL; /* unreachable */
@@ -549,6 +555,8 @@ const char *infer_call(CG *cg, Expr *e) {
             if (!sig && is_native_pkg(cg, pkg))
                 return native_check(cg, pkg, right, e);
             if (!sig)
+                sig = generic_call_sig(cg, pkg, right, e);
+            if (!sig)
                 cg_error(e->line, "package '%s' has no function '%s'", pkg,
                          right);
             if (!sig->is_pub)
@@ -710,6 +718,8 @@ const char *infer_call(CG *cg, Expr *e) {
             sig = fn_sig_of_type(cg, fvt, name, e->line);
         } else {
             sig = sig_find_in(cg, cg->cur_pkg, name);
+            if (!sig)
+                sig = generic_call_sig(cg, cg->cur_pkg, name, e);
             if (!sig)
                 cg_error(e->line, "call to undefined function '%s'", name);
         }

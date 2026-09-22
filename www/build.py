@@ -79,7 +79,7 @@ PAGES = [
         "kind": "doc",
         "nav": "Data types",
         "sections": ["bytes", "Lists `[T]`", "Maps `map[K]V`", "Structs",
-                     "Generic structs"],
+                     "Generic structs", "Generic functions"],
     },
     {
         "path": "guide/errors.html",
