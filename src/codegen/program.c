@@ -115,8 +115,14 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
     /* pass 1: free functions + struct shells */
     for (i = 0; i < npkgs; i++) {
         Package *p = &pkgs[i];
-        for (j = 0; j < p->prog->nfuncs; j++)
-            sig_register_raw(cg, p, p->prog->funcs[j], NULL);
+        for (j = 0; j < p->prog->nfuncs; j++) {
+            FuncDecl *f = p->prog->funcs[j];
+            if (f->ntparams) {
+                func_tmpl_register(cg, p, f);
+                continue;
+            }
+            sig_register_raw(cg, p, f, NULL);
+        }
         Block *body = p->prog->main_body;
         for (j = 0; j < body->count; j++) {
             Stmt *s = body->stmts[j];

@@ -1,1 +1,1 @@
-type parameter 'T' of 'Two' is int in one field and str in another
+type parameter 'T' of 'Two' is int in one place and str in another

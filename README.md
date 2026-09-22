@@ -589,10 +589,74 @@ error at line 5: unsupported operand types for '*': str and int
   (in main.Box[str].doubled, requested at line 9)
 ```
 
-Not yet supported, and each says so when used: generic functions
-(`fn first[T](xs: [T]) -> T`), lifetime parameters on a generic struct or on
-one of its methods, and a generic method's own extra parameters
-(`fn map[U](self: Box[T]) -> Box[U]`).
+Not yet supported, and each says so when used: lifetime parameters on a
+generic struct or on one of its methods, and a generic method's own extra
+parameters (`fn map[U](self: Box[T]) -> Box[U]`).
+
+#### Generic functions
+
+A plain function can take type parameters too. There is no `first[int](xs)`
+at a call site — a type argument is only ever written in a type position —
+so every one is inferred, by unifying each parameter's declared type against
+the argument's actual type:
+
+```slang
+fn first[T](xs: [T]) -> T {
+    return xs[0];
+}
+
+fn choose_second[A, B](a: A, b: B) -> B {
+    return b;
+}
+
+println(first([1, 2, 3]));            // 1, T = int
+println(first(["a", "b", "c"]));      // "a" -- a different instance, T = str
+println(choose_second(1, "two"));     // "two"
+```
+
+Unification walks through containers, not just a bare parameter, so `T` is
+found inside `[T]`, `Box[T]`, `opt[T]` and the rest exactly where it sits:
+
+```slang
+struct Box[T] {
+    v: T,
+}
+fn unbox[T](b: Box[T]) -> T {
+    return b.v;
+}
+fn zip_first[A, B](pairs: [Box[A]], extra: B) -> A {
+    return pairs[0].v;
+}
+```
+
+A type parameter that only the return type mentions cannot be found in any
+argument, so it is inferred from the expected type instead, the same
+mechanism `none` and `[]` already use — which means it only reaches a
+return type shaped like `opt[T]` / `result` / `[T]` / `chan` / `join`:
+
+```slang
+fn empty_of[T]() -> [T] {
+    return [];
+}
+let xs: [int] = empty_of();           // T = int, from the let's type
+```
+
+A parameter only a scalar or struct return type mentions has nothing to
+infer it from; write a plain function that calls the generic one with a
+concrete type argument, and use that instead.
+
+Each combination of argument types is its own instance, checked the first
+time the program calls it that way — same rule as a generic struct's
+methods, including the instantiation note on an error inside one. A generic
+function can call another, including itself, and two instances of one
+template used in the same expression do not share type parameters
+(`first([identity(1), identity(2)]) + first([identity(3)])` is two separate
+`identity` instances and two separate `first` instances).
+
+Not yet supported: `extern fn` cannot be generic, and neither can it declare
+lifetime parameters. A generic function is not one function until its type
+is chosen, so it cannot be used as a value or `spawn`ed directly — write a
+plain function that calls it with a concrete type, and use that instead.
 
 #### Enums
 

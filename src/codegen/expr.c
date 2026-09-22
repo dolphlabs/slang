@@ -991,6 +991,8 @@ char *gen_call(CG *cg, Expr *e) {
             if (!sig && is_native_pkg(cg, pkg))
                 return native_gen(cg, pkg, right, e);
             if (!sig)
+                sig = generic_call_sig(cg, pkg, right, e);
+            if (!sig)
                 cg_error(e->line, "package '%s' has no function '%s'", pkg,
                          right);
             if (!sig->is_pub)
@@ -1205,6 +1207,8 @@ char *gen_call(CG *cg, Expr *e) {
             callee = gen_ident_name(cg, name, e->line);
         } else {
             sig = sig_find_in(cg, cg->cur_pkg, name);
+            if (!sig)
+                sig = generic_call_sig(cg, cg->cur_pkg, name, e);
             if (!sig)
                 cg_error(e->line, "call to undefined function '%s'", name);
         }
