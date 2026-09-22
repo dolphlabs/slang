@@ -770,10 +770,14 @@ void emit_spawn_trampolines(CG *cg) {
          * calls through it. Everything else about the two is identical,
          * because the name was only ever used to recover the signature
          * this fn type already carries. */
+        /* s->sig is the signature this shape was built from. It used to
+         * be looked up again here by (pkg, name), which cannot find an
+         * instance of a generic function -- sig_find_in excludes them,
+         * because every instance shares that name. */
         FuncSig *sig = s->fntype
                            ? fn_sig_of_type(cg, s->fntype,
                                             "<function value>", 0)
-                           : sig_find_in(cg, s->pkg, s->name);
+                           : s->sig;
         char *callee = s->fntype
                            ? xstrdup("_sl_a->fn")
                            : sig->is_extern

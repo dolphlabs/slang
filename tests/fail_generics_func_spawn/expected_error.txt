@@ -1,1 +1,1 @@
-'spawn' cannot target a generic function yet
+cannot infer type parameter 'T' of 'make_empty' from its arguments

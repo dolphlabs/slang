@@ -307,6 +307,12 @@ typedef struct {
                      shape is keyed by fn type, and the target travels
                      in the args struct rather than being a fixed C
                      symbol baked into the trampoline */
+    /* The signature this shape was built from, kept rather than looked
+     * up again by (pkg, name) when the trampoline is emitted: an
+     * instance of a generic function shares its name with every other
+     * instance, so sig_find_in deliberately cannot find it. NULL for a
+     * function-value shape, which recovers its signature from fntype. */
+    FuncSig *sig;
     char *sname;  /* C struct type name, e.g. sl_spawn_args_main_handle */
     char *tname;  /* C trampoline function name */
     int has_tracer; /* Tier 10: does sname's args struct have at least

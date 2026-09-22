@@ -1030,10 +1030,24 @@ const char *res_access(CG *cg, const char *t) {
 
 /* Args-struct + trampoline names for a spawned target, shared by
  * every 'spawn' call site targeting the same function. */
+static unsigned long long fnv64(const char *s);
+
 SpawnShape *spawn_shape_for(CG *cg, FuncSig *sig) {
     for (int i = 0; i < cg->spawns.count; i++) {
-        if (!cg->spawns.items[i].fntype &&
-            !strcmp(cg->spawns.items[i].pkg, sig->pkg) &&
+        if (cg->spawns.items[i].fntype)
+            continue;
+        /* Two instances of one generic function share (pkg, name) and
+         * differ only in their parameter types -- which is exactly what
+         * this shape's args struct is made of, so they must not share
+         * one. Identity of the signature is the key for an instance;
+         * name still is for everything else, so an ordinary function
+         * spawned from two call sites keeps sharing one trampoline. */
+        if (sig->inst_key || cg->spawns.items[i].sig->inst_key) {
+            if (cg->spawns.items[i].sig == sig)
+                return &cg->spawns.items[i];
+            continue;
+        }
+        if (!strcmp(cg->spawns.items[i].pkg, sig->pkg) &&
             !strcmp(cg->spawns.items[i].name, sig->name))
             return &cg->spawns.items[i];
     }
@@ -1046,8 +1060,17 @@ SpawnShape *spawn_shape_for(CG *cg, FuncSig *sig) {
     s->pkg = sig->pkg;
     s->name = sig->name;
     s->fntype = NULL;
-    char *base = xasprintf("%s_%s", sanitize_pkg(sig->pkg),
-                           sanitize_ident(sig->name));
+    s->sig = sig;
+    /* An instance's C names carry its own hash, the same one mangle_sig
+     * gives its function, so two instances never collide here either.
+     * A non-generic function keeps the name it always had, so the
+     * generated C for every existing program is unchanged. */
+    char *base = sig->inst_key
+                     ? xasprintf("%s_%s__g%016llx", sanitize_pkg(sig->pkg),
+                                 sanitize_ident(sig->name),
+                                 (unsigned long long)fnv64(sig->inst_key))
+                     : xasprintf("%s_%s", sanitize_pkg(sig->pkg),
+                                 sanitize_ident(sig->name));
     s->sname = xasprintf("sl_spawn_args_%s", base);
     s->tname = xasprintf("sl_spawn_tramp_%s", base);
     s->has_tracer = 1;
@@ -1108,6 +1131,7 @@ SpawnShape *spawn_shape_for_fn(CG *cg, const char *fntype) {
     s->pkg = (char *)"";
     s->name = (char *)"<function value>";
     s->fntype = xstrdup(fntype);
+    s->sig = NULL; /* recovered from fntype instead */
     s->sname = xasprintf("sl_spawn_argsv_%d", cg->spawns.count - 1);
     s->tname = xasprintf("sl_spawn_trampv_%d", cg->spawns.count - 1);
     s->has_tracer = 1;
@@ -1145,8 +1169,13 @@ FuncSig *spawn_target(CG *cg, Expr *call, int line) {
                      "function directly; wrap it in a plain "
                      "function and spawn that instead");
         sig = sig_find_in(cg, pkg, right);
-        if (!sig && func_tmpl_find_in_pkg(cg, pkg, right))
-            cg_error(line, "'spawn' cannot target a generic function yet");
+        /* A generic function resolves the same way here as at any other
+         * call site: from the arguments. Once unified it is one concrete
+         * instance with its own C symbol, which is all spawn ever needed
+         * -- what it cannot take is a template, and a call that named one
+         * without fixing its parameters errors inside generic_call_sig. */
+        if (!sig)
+            sig = generic_call_sig(cg, pkg, right, call);
         if (!sig)
             cg_error(line, "package '%s' has no function '%s'", pkg, right);
         if (!sig->is_pub)
@@ -1156,8 +1185,8 @@ FuncSig *spawn_target(CG *cg, Expr *call, int line) {
                      right, pkg);
     } else {
         sig = sig_find_in(cg, cg->cur_pkg, name);
-        if (!sig && func_tmpl_find_in_pkg(cg, cg->cur_pkg, name))
-            cg_error(line, "'spawn' cannot target a generic function yet");
+        if (!sig)
+            sig = generic_call_sig(cg, cg->cur_pkg, name, call);
         if (!sig)
             cg_error(line, "call to undefined function '%s'", name);
     }
