@@ -27,6 +27,7 @@ strings.replace("a,b,c", ",", " | ");
 
 strings.split("a,b,,c", ",");           // ["a", "b", "", "c"]
 strings.join(parts, ",");               // the inverse of split
+strings.join_bytes(parts, b",");        // the same for [bytes]: sized once, copied once
 
 strings.from_float(0.1 + 0.2);          // "0.30000000000000004"
 ```
@@ -90,6 +91,8 @@ Three behaviours worth knowing:
 ### `strings.split(str, str) -> [str]`
 
 ### `strings.join(NA_ARR_STR, str) -> str`
+
+### `strings.join_bytes(NA_ARR_BYTES, bytes) -> bytes`
 
 ### `strings.from_float(float) -> str`
 

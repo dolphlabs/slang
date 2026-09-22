@@ -248,6 +248,36 @@ static char *sl_strings_join(sl_arr *parts, const char *sep) {
     return out;
 }
 
+/* The bytes counterpart of strings.join: one allocation for the result,
+ * one copy of each piece. A list element is never NULL for [bytes]
+ * built by the language, but the check costs nothing and a native
+ * function should not trust its caller's list. */
+static sl_bytes *sl_strings_join_bytes(sl_arr *parts, sl_bytes *sep) {
+    long long n = parts ? parts->len : 0;
+    sl_bytes **items = parts ? (sl_bytes **)parts->data : NULL;
+    long long sepl = sep ? sep->len : 0;
+    long long total = 0;
+    for (long long i = 0; i < n; i++)
+        total += items[i] ? items[i]->len : 0;
+    if (n > 1) total += sepl * (n - 1);
+    sl_bytes *r = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
+    r->len = total;
+    r->ptr = NULL;
+    r->ptr = (unsigned char *)sl_gc_alloc((size_t)(total > 0 ? total : 1), NULL);
+    unsigned char *w = r->ptr;
+    for (long long i = 0; i < n; i++) {
+        if (i && sepl) {
+            memcpy(w, sep->ptr, (size_t)sepl);
+            w += sepl;
+        }
+        if (items[i] && items[i]->len) {
+            memcpy(w, items[i]->ptr, (size_t)items[i]->len);
+            w += items[i]->len;
+        }
+    }
+    return r;
+}
+
 /* Shortest round-trip: try 1..17 significant digits and keep the first
  * that strtod reads back as the same double. 17 always succeeds for an
  * IEEE double. NaN and the infinities use the spellings Postgres and

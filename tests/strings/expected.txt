@@ -33,4 +33,10 @@ x.y.z
 3
 []
 host/example.com
+ab--cd-e
+abcde
+0
+solo
+2
+255
 done

@@ -63,4 +63,22 @@ println("[" + strings.join(empty, ",") + "]");
 let cfg = "  host = example.com  ";
 let kv = strings.split(strings.trim(cfg), "=");
 println(strings.trim(kv[0]) + "/" + strings.trim(kv[1]));
+// join_bytes: the bytes counterpart, sized once and copied once
+let bp: [bytes] = [b"ab", b"", b"cd", b"e"];
+println(to_str(strings.join_bytes(bp, b"-")));    // ab--cd-e
+println(to_str(strings.join_bytes(bp, b"")));     // abcde
+let bempty: [bytes] = [];
+println(len(strings.join_bytes(bempty, b",")));   // 0
+let bone: [bytes] = [b"solo"];
+println(to_str(strings.join_bytes(bone, b",")));  // solo -- no separator
+let bbin: [bytes] = [];
+let zb: bytes = b".";
+zb[0] = 0;
+push(bbin, zb);
+let fb: bytes = b".";
+fb[0] = 255;
+push(bbin, fb);
+let bj = strings.join_bytes(bbin, b"");
+println(len(bj));                                  // 2 -- NUL is not a terminator
+println(bj[0] + bj[1]);                            // 255
 println("done");
