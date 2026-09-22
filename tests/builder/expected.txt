@@ -1,0 +1,7 @@
+str ok
+bytes single ok
+bytes mix ok
+bytes edge ok
+bytes alias ok
+bytes ok
+scale ok
