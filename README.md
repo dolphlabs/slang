@@ -653,10 +653,24 @@ template used in the same expression do not share type parameters
 (`first([identity(1), identity(2)]) + first([identity(3)])` is two separate
 `identity` instances and two separate `first` instances).
 
+`spawn` takes a generic function like any other call — the arguments fix
+the type parameters first, and what is spawned is the one instance they
+resolve to:
+
+```slang
+fn handle[T](conn: T, id: int) { ... }
+
+spawn handle(conn, 1);           // spawns handle[Conn], not a template
+```
+
+A spawn has no annotated `let` to infer from, so a parameter only the
+return type mentions cannot be resolved there, and says so.
+
 Not yet supported: `extern fn` cannot be generic, and neither can it declare
 lifetime parameters. A generic function is not one function until its type
-is chosen, so it cannot be used as a value or `spawn`ed directly — write a
-plain function that calls it with a concrete type, and use that instead.
+is chosen, so it cannot be used as a bare value — write a plain function
+that calls it with a concrete type, and use that instead. `spawn` does not
+take a method, generic or not.
 
 #### Enums
 

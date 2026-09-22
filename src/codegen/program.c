@@ -770,10 +770,14 @@ void emit_spawn_trampolines(CG *cg) {
          * calls through it. Everything else about the two is identical,
          * because the name was only ever used to recover the signature
          * this fn type already carries. */
+        /* s->sig is the signature this shape was built from. It used to
+         * be looked up again here by (pkg, name), which cannot find an
+         * instance of a generic function -- sig_find_in excludes them,
+         * because every instance shares that name. */
         FuncSig *sig = s->fntype
                            ? fn_sig_of_type(cg, s->fntype,
                                             "<function value>", 0)
-                           : sig_find_in(cg, s->pkg, s->name);
+                           : s->sig;
         char *callee = s->fntype
                            ? xstrdup("_sl_a->fn")
                            : sig->is_extern
@@ -1076,6 +1080,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
      * not set to 1 the way a real gen_function call would: top-level
      * `return` must stay a hard compile error (ST_RETURN's own check,
      * stmt.c), exactly as before this wrapper existed. */
+    int insts_before_main = cg->finsts.count;
     var_scope_reset(cg);
     var_scope_push(cg);
     cg->cur_pkg = pkgs[main_index].name;
@@ -1091,6 +1096,28 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     emit_line(cg, "    exit(0); /* main()'s own sl_ctx_switch never returns */");
     emit_line(cg, "}");
     emit_line(cg, "");
+
+    /* An instance first reached from a TOP-LEVEL call is made after the
+     * body loop above has already finished, so its own body is walked
+     * here instead. The dry run has to reach it: whatever that body
+     * discovers -- a spawn shape, an opt/result instantiation, another
+     * instance -- has to be on file before the real run emits the
+     * declarations for it, and the real run emits them before it
+     * generates any body at all.
+     *
+     * Only in the dry run. `insts_frozen` is set between the two, and by
+     * the real run these bodies are in the main loop's own range, where
+     * generating them a second time here would define them twice. The
+     * cursor re-reads the instance count, so an instance discovered by
+     * one of these bodies is walked by the same loop. */
+    if (!cg->insts_frozen) {
+        FuncCursor fc;
+        func_cursor_init(&fc);
+        fc.i_pkg = npkgs; /* skip declared functions: instances only */
+        fc.i_inst = insts_before_main;
+        while (func_cursor_next(cg, pkgs, npkgs, &fc, 0))
+            gen_function(cg, fc.pkg, fc.fn);
+    }
     if (main_guard) {
         /* The main task starts on the initial 8KB stack, so a large
          * top-level body needs the same entry guard as any function. */
