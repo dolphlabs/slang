@@ -1030,10 +1030,24 @@ const char *res_access(CG *cg, const char *t) {
 
 /* Args-struct + trampoline names for a spawned target, shared by
  * every 'spawn' call site targeting the same function. */
+static unsigned long long fnv64(const char *s);
+
 SpawnShape *spawn_shape_for(CG *cg, FuncSig *sig) {
     for (int i = 0; i < cg->spawns.count; i++) {
-        if (!cg->spawns.items[i].fntype &&
-            !strcmp(cg->spawns.items[i].pkg, sig->pkg) &&
+        if (cg->spawns.items[i].fntype)
+            continue;
+        /* Two instances of one generic function share (pkg, name) and
+         * differ only in their parameter types -- which is exactly what
+         * this shape's args struct is made of, so they must not share
+         * one. Identity of the signature is the key for an instance;
+         * name still is for everything else, so an ordinary function
+         * spawned from two call sites keeps sharing one trampoline. */
+        if (sig->inst_key || cg->spawns.items[i].sig->inst_key) {
+            if (cg->spawns.items[i].sig == sig)
+                return &cg->spawns.items[i];
+            continue;
+        }
+        if (!strcmp(cg->spawns.items[i].pkg, sig->pkg) &&
             !strcmp(cg->spawns.items[i].name, sig->name))
             return &cg->spawns.items[i];
     }
@@ -1046,8 +1060,17 @@ SpawnShape *spawn_shape_for(CG *cg, FuncSig *sig) {
     s->pkg = sig->pkg;
     s->name = sig->name;
     s->fntype = NULL;
-    char *base = xasprintf("%s_%s", sanitize_pkg(sig->pkg),
-                           sanitize_ident(sig->name));
+    s->sig = sig;
+    /* An instance's C names carry its own hash, the same one mangle_sig
+     * gives its function, so two instances never collide here either.
+     * A non-generic function keeps the name it always had, so the
+     * generated C for every existing program is unchanged. */
+    char *base = sig->inst_key
+                     ? xasprintf("%s_%s__g%016llx", sanitize_pkg(sig->pkg),
+                                 sanitize_ident(sig->name),
+                                 (unsigned long long)fnv64(sig->inst_key))
+                     : xasprintf("%s_%s", sanitize_pkg(sig->pkg),
+                                 sanitize_ident(sig->name));
     s->sname = xasprintf("sl_spawn_args_%s", base);
     s->tname = xasprintf("sl_spawn_tramp_%s", base);
     s->has_tracer = 1;
@@ -1108,6 +1131,7 @@ SpawnShape *spawn_shape_for_fn(CG *cg, const char *fntype) {
     s->pkg = (char *)"";
     s->name = (char *)"<function value>";
     s->fntype = xstrdup(fntype);
+    s->sig = NULL; /* recovered from fntype instead */
     s->sname = xasprintf("sl_spawn_argsv_%d", cg->spawns.count - 1);
     s->tname = xasprintf("sl_spawn_trampv_%d", cg->spawns.count - 1);
     s->has_tracer = 1;
@@ -1145,6 +1169,13 @@ FuncSig *spawn_target(CG *cg, Expr *call, int line) {
                      "function directly; wrap it in a plain "
                      "function and spawn that instead");
         sig = sig_find_in(cg, pkg, right);
+        /* A generic function resolves the same way here as at any other
+         * call site: from the arguments. Once unified it is one concrete
+         * instance with its own C symbol, which is all spawn ever needed
+         * -- what it cannot take is a template, and a call that named one
+         * without fixing its parameters errors inside generic_call_sig. */
+        if (!sig)
+            sig = generic_call_sig(cg, pkg, right, call);
         if (!sig)
             cg_error(line, "package '%s' has no function '%s'", pkg, right);
         if (!sig->is_pub)
@@ -1154,6 +1185,8 @@ FuncSig *spawn_target(CG *cg, Expr *call, int line) {
                      right, pkg);
     } else {
         sig = sig_find_in(cg, cg->cur_pkg, name);
+        if (!sig)
+            sig = generic_call_sig(cg, cg->cur_pkg, name, call);
         if (!sig)
             cg_error(line, "call to undefined function '%s'", name);
     }
@@ -1535,6 +1568,15 @@ char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
  * live in their struct's namespace -- see method_find. */
 FuncSig *sig_find_in(CG *cg, const char *pkg, const char *name) {
     for (int i = 0; i < cg->sigs.count; i++) {
+        /* An instance of a generic function is excluded: it shares its
+         * (pkg, name) with every OTHER instance of the same function, so
+         * a bare name search cannot tell them apart -- only the call
+         * site's argument types can, which is what generic_call_sig
+         * unifies against. A caller that reaches here for a call that
+         * might be generic must fall back to generic_call_sig itself
+         * when this returns NULL. */
+        if (cg->sigs.items[i]->inst_key)
+            continue;
         if (!cg->sigs.items[i]->method_of &&
             !strcmp(cg->sigs.items[i]->pkg, pkg) &&
             !strcmp(cg->sigs.items[i]->name, name))
@@ -1623,6 +1665,21 @@ int want_pkg(CG *cg, const char *name) {
  * restore it. */
 const char *expect_push(CG *cg, const char *t) {
     const char *saved = cg->expect;
+    /* Narrow on purpose: a builtin like len()/push() infers its OWN
+     * argument without clearing expect around it first (nothing needed
+     * to, historically -- expect only mattered to none/some/ok/err/[]
+     * literals, which len()'s argument can never structurally be), so
+     * whatever expect already holds leaks straight through a call
+     * nested inside one. Widening this filter to plain scalar/struct
+     * types made that leak observable: a generic function's OWN
+     * return-only unification, several calls further in, picked up an
+     * unrelated outer expectation and bound its type parameter to the
+     * wrong thing. Kept to opt/result/chan/join/arr, a generic
+     * function's return-only type parameter is inferrable exactly when
+     * none/[] can already infer theirs from the same expected type --
+     * which is the mechanism the generics plan named. A scalar/struct
+     * return-only parameter is refused with a clear message instead of
+     * risking that leak. */
     if (t && (is_opt(t) || is_result(t) || is_chan(t) || is_join(t) ||
               is_arr(t)))
         cg->expect = t;
@@ -1663,6 +1720,15 @@ char *mangle_func(const char *pkg, const char *name) {
  * `impl Client { fn get }` and a package-level `fn get` -- or two structs'
  * `get` methods -- are different functions in C as they are in slang.
  * collect_decls checks the whole set for collisions. */
+static unsigned long long fnv64(const char *s) {
+    unsigned long long h = 1469598103934665603ULL;
+    for (; *s; s++) {
+        h ^= (unsigned char)*s;
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
 char *mangle_sig(FuncSig *sig) {
     if (sig->is_extern)
         return xstrdup(sig->name);
@@ -1679,6 +1745,9 @@ char *mangle_sig(FuncSig *sig) {
         return xasprintf("sl_%s_%s__m_%s", sanitize_pkg(sig->pkg),
                          sanitize_ident(sname), sanitize_ident(sig->name));
     }
+    if (sig->inst_key)
+        return xasprintf("%s__g%016llx", mangle_func(sig->pkg, sig->name),
+                         fnv64(sig->inst_key));
     return mangle_func(sig->pkg, sig->name);
 }
 
@@ -1716,14 +1785,6 @@ StructDef *struct_find_in_pkg(CG *cg, const char *pkg,
 }
 
 /* 64-bit FNV-1a. Only ever names a generic instance's C symbol. */
-static unsigned long long fnv64(const char *s) {
-    unsigned long long h = 1469598103934665603ULL;
-    for (; *s; s++) {
-        h ^= (unsigned char)*s;
-        h *= 1099511628211ULL;
-    }
-    return h;
-}
 
 char *mangle_struct(const char *canon) {
     char *l, *r;
@@ -1906,7 +1967,26 @@ const char *canon_type(CG *cg, const char *t, int line) {
     }
     char *l, *r;
     split_dotted(t, &l, &r);
-    const char *pkg = import_target(cg, l, line);
+    const char *pkg = import_try(cg, l);
+    if (!pkg) {
+        /* `l` is not an import alias of the CURRENT package -- but `t`
+         * may not be text the programmer wrote at all. Generic-function
+         * unification canonicalizes an ARGUMENT'S OWN inferred type,
+         * which is already canonical and carries its real package name,
+         * not necessarily one cur_pkg imports (a function in package
+         * "lib" instantiated with an argument from package "main" never
+         * imports "main"). Recognising it here, by its canonical name
+         * already being on file, is what keeps canon_type idempotent;
+         * genuinely unresolvable text still falls through to the error
+         * below exactly as before. */
+        StructDef *known = struct_find_canon(cg, t);
+        if (known)
+            return known->canonical;
+        EnumDef *ked = enum_find_canon(cg, t);
+        if (ked)
+            return ked->canonical;
+        cg_error(line, "'%s' is not an imported package", l);
+    }
     StructDef *sd = struct_find_in_pkg(cg, pkg, r);
     if (sd) {
         if (!sd->is_pub)

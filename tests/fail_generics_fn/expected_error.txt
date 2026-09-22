@@ -1,1 +1,0 @@
-generic functions are not supported yet

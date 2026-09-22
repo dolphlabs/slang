@@ -63,15 +63,40 @@ static sl_res_bytes_str *sl_crypto_rand(long long n) {
     sl_rt_preempt_enable();
     if (!tmp)
         return sl_crypto_err_bytes("out of memory");
+    /* Serialized across every task, and not only because OpenSSL's own
+     * locks would otherwise be entered from one OS thread and left from
+     * another -- preempt_disable already covers that. RAND_bytes lazily
+     * builds its DRBG on first use (EVP_RAND_fetch -> ossl_namemap_*),
+     * and two threads reaching that construction at once deadlock
+     * inside libcrypto's rwlock, not in anything slang can see: every
+     * worker ends up parked in CRYPTO_THREAD_write_lock and the process
+     * stops. Two tasks calling crypto.rand in a loop reproduced it
+     * every time. One mutex makes the first call finish before the
+     * second starts; after that the fetch is cached and the lock is
+     * uncontended in practice. */
+    static pthread_mutex_t sl_rand_mu = PTHREAD_MUTEX_INITIALIZER;
     sl_rt_preempt_disable();
+    pthread_mutex_lock(&sl_rand_mu);
     int rc = RAND_bytes(tmp, (int)n);
+    pthread_mutex_unlock(&sl_rand_mu);
     sl_rt_preempt_enable();
+    /* Both frees are bracketed for the same reason the malloc above is:
+     * free touches libSystem's own zone locks, and a task preempted
+     * mid-free and resumed on a different OS thread abandons that
+     * thread's lock hold. It corrupts the allocator rather than this
+     * call, so it surfaces later and somewhere else -- as a wild
+     * failure in whatever allocates next. Two concurrent tasks calling
+     * crypto.rand in a loop was enough to hit it. */
     if (rc != 1) {
+        sl_rt_preempt_disable();
         free(tmp);
+        sl_rt_preempt_enable();
         return sl_crypto_err_bytes("RAND_bytes failed");
     }
     sl_bytes *out = sl_bytes_new(tmp, n);
+    sl_rt_preempt_disable();
     free(tmp);
+    sl_rt_preempt_enable();
     return sl_crypto_ok_bytes(out);
 }
 

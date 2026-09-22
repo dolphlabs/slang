@@ -618,6 +618,7 @@ void compute_mir(CG *cg, Package *pkgs, int npkgs, int main_index) {
         MirFn *mf = lower_fn(cg, fc.pkg->name, fname, f->body, f->params,
                              fc.sig->param_slang, f->nparams);
         mf->tenv = fc.tenv;
+        mf->sig = fc.sig;
         mir_push(cg, mf);
         cg->in_function = 0;
     }

@@ -1812,10 +1812,15 @@ static FuncDecl *parse_fn_decl(Parser *p, int is_extern) {
     int start = p->pos;
     Token *kw = advance(p); /* 'fn' */
     Token *name = expect(p, T_IDENT, "a function name");
-    if (check(p, T_LBRACKET))
-        parse_error(peek(p), "generic functions are not supported yet");
+    char **tparams = NULL;
+    int ntparams = parse_type_params(p, &tparams);
+    if (ntparams && is_extern)
+        parse_error(kw, "'extern fn' cannot be generic");
     char **lts = NULL;
     int nlts = parse_lt_params(p, &lts);
+    if (ntparams && nlts)
+        parse_error(kw, "a generic function cannot declare lifetime "
+                        "parameters yet");
     expect(p, T_LPAREN, "'('");
 
     FuncDecl *f = (FuncDecl *)xmalloc(sizeof(FuncDecl));
@@ -1824,6 +1829,8 @@ static FuncDecl *parse_fn_decl(Parser *p, int is_extern) {
     f->lts = lts;
     f->nlts = nlts;
     f->line = kw->line;
+    f->tparams = tparams;
+    f->ntparams = ntparams;
 
     int pcap = 0;
     if (!check(p, T_RPAREN)) {
@@ -1955,6 +1962,7 @@ Program *parse_program(Token *tokens, int ntokens) {
     prog->main_body = new_block();
 
     while (!check(&p, T_EOF)) {
+        int decl_start = p.pos; /* before 'pub', for a generic fn's re-parse */
         int is_pub = 0;
         if (match(&p, T_KW_PUB))
             is_pub = 1;
@@ -1976,6 +1984,10 @@ Program *parse_program(Token *tokens, int ntokens) {
         if (check(&p, T_KW_FN)) {
             FuncDecl *f = parse_fn_decl(&p, 0);
             f->is_pub = is_pub;
+            /* at 'pub' (or 'fn' if there was none), so a generic
+             * function's re-parse sees 'pub' too -- see FuncDecl's own
+             * comment and parse_impl_decl's matching fix for methods. */
+            f->tok_pos = decl_start;
             if (prog->nfuncs == prog->fcap) {
                 prog->fcap = prog->fcap ? prog->fcap * 2 : 8;
                 prog->funcs = (FuncDecl **)xrealloc(

@@ -1,0 +1,1 @@
+function 'hidden_id' is not exported from package 'stash'

@@ -106,6 +106,14 @@ struct MirFn {
      * long after the cursor that installed them. Typed void * because
      * TypeEnv lives in internal.h, which this header precedes. */
     const void *tenv;
+    /* The signature this body was lowered from. Set directly, rather than
+     * re-derived from `name` by splitting on dots: an instance's display
+     * name ("pkg.Box[int].get", three parts) does not fit the two-part
+     * split that lookup used, so for every generic instance it silently
+     * found nothing -- cur_ret stayed NULL and no parameter was marked as
+     * one in borrowck's initial loan seeding (seed_params). Typed void *
+     * for the same reason tenv is. */
+    const void *sig;
     MirLocal *locals;
     int nlocals;
     int lcap;

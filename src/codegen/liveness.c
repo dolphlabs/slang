@@ -336,6 +336,7 @@ static const char **call_arg_expects(CG *cg, Expr *e) {
         if (pkg) {
             if (is_native_pkg(cg, pkg)) return NULL;
             sig = sig_find_in(cg, pkg, right);
+            if (!sig) sig = generic_call_sig(cg, pkg, right, e);
         } else {
             const char *recv_t = infer_ident_name(cg, left, e->line);
             StructDef *sd = struct_of_type(cg, recv_t);
@@ -344,6 +345,7 @@ static const char **call_arg_expects(CG *cg, Expr *e) {
         }
     } else {
         sig = sig_find_in(cg, cg->cur_pkg, name);
+        if (!sig) sig = generic_call_sig(cg, cg->cur_pkg, name, e);
     }
     if (!sig) return NULL;
 

@@ -1,0 +1,1 @@
+cannot infer type parameter 'T' of 'make_empty' from its arguments
