@@ -1,5 +1,6 @@
 import "builder";
 import "byteutil";
+import "strings";
 
 pub gc struct Request {
     method: str,
@@ -38,88 +39,22 @@ fn lower_ascii(s: str) -> str {
     return to_str(b);
 }
 
-// ---- header names, without allocating for the ones everybody sends -----
+// A header name, lowercased, in one allocation.
 //
-// `lower_ascii(to_str(raw[lo..hi]))` is four allocations for one header
-// name: a slice, a str, the bytes lower_ascii copies it back into, and the
-// str it returns. Every request pays that for every header, and they are
-// overwhelmingly the same two dozen names.
+// This was `lower_ascii(to_str(raw[lo..hi]))`: a slice, a str, the bytes
+// lower_ascii copied it back into, and the str it returned -- four
+// allocations and three passes over the same few characters, per header,
+// per request. `strings.from_bytes_lower` sizes the str once and
+// lowercases as it copies.
 //
-// So: compare the bytes in place against the known ones, lowercasing as we
-// go, and hand back the literal on a match. Nothing is allocated for a
-// request made of ordinary headers. A name we do not know still costs one
-// lowercased copy rather than four.
-
-// Case-insensitive compare of raw[lo..hi] against an already-lowercase
-// literal. Reads bytes; allocates nothing.
-fn range_is(raw: bytes, lo: int, hi: int, want: str) -> bool {
-    let w = to_bytes(want);
-    if hi - lo != len(w) {
-        return false;
-    }
-    let i = 0;
-    while i < len(w) {
-        if lower_byte(raw[lo + i]) != w[i] {
-            return false;
-        }
-        i = i + 1;
-    }
-    return true;
-}
-
-// One allocation for the bytes, one for the str -- still half of what
-// lower_ascii(to_str(slice)) costs, and only for names off the list.
-fn lower_range(raw: bytes, lo: int, hi: int) -> str {
-    let out = raw[lo..hi];
-    let i = 0;
-    while i < len(out) {
-        out[i] = lower_byte(out[i]);
-        i = i + 1;
-    }
-    return to_str(out);
-}
-
-// Grouped by length so a miss costs a length check rather than a compare.
+// An interning table of the common names was tried first, to make the
+// usual ones cost nothing at all. It needs the names as `bytes` to
+// compare against, and a package-level `b"..."` is a by-value global that
+// cannot be passed where a `bytes` is expected -- and building them per
+// call is an allocation per comparison to save one per match. One
+// allocation with no table beats it and is a quarter of the code.
 fn header_name(raw: bytes, lo: int, hi: int) -> str {
-    let n = hi - lo;
-    if n == 4 {
-        if range_is(raw, lo, hi, "host") { return "host"; }
-        if range_is(raw, lo, hi, "date") { return "date"; }
-    } else if n == 6 {
-        if range_is(raw, lo, hi, "accept") { return "accept"; }
-        if range_is(raw, lo, hi, "cookie") { return "cookie"; }
-        if range_is(raw, lo, hi, "origin") { return "origin"; }
-        if range_is(raw, lo, hi, "expect") { return "expect"; }
-    } else if n == 7 {
-        if range_is(raw, lo, hi, "referer") { return "referer"; }
-        if range_is(raw, lo, hi, "upgrade") { return "upgrade"; }
-    } else if n == 10 {
-        if range_is(raw, lo, hi, "connection") { return "connection"; }
-        if range_is(raw, lo, hi, "user-agent") { return "user-agent"; }
-        if range_is(raw, lo, hi, "keep-alive") { return "keep-alive"; }
-    } else if n == 12 {
-        if range_is(raw, lo, hi, "content-type") { return "content-type"; }
-    } else if n == 13 {
-        if range_is(raw, lo, hi, "authorization") { return "authorization"; }
-        if range_is(raw, lo, hi, "cache-control") { return "cache-control"; }
-        if range_is(raw, lo, hi, "if-none-match") { return "if-none-match"; }
-    } else if n == 14 {
-        if range_is(raw, lo, hi, "content-length") { return "content-length"; }
-    } else if n == 15 {
-        if range_is(raw, lo, hi, "accept-encoding") { return "accept-encoding"; }
-        if range_is(raw, lo, hi, "accept-language") { return "accept-language"; }
-        if range_is(raw, lo, hi, "x-forwarded-for") { return "x-forwarded-for"; }
-    } else if n == 17 {
-        if range_is(raw, lo, hi, "transfer-encoding") { return "transfer-encoding"; }
-        if range_is(raw, lo, hi, "if-modified-since") { return "if-modified-since"; }
-    } else if n == 18 {
-        if range_is(raw, lo, hi, "sec-websocket-key") { return "sec-websocket-key"; }
-    } else if n == 21 {
-        if range_is(raw, lo, hi, "sec-websocket-version") {
-            return "sec-websocket-version";
-        }
-    }
-    return lower_range(raw, lo, hi);
+    return strings.from_bytes_lower(raw, lo, hi);
 }
 
 fn is_ows(b: int) -> bool {
@@ -231,7 +166,7 @@ fn parse_headers(raw: bytes, start: int, sep: int) -> result[map[str]str, str] {
         while vhi > vlo && is_ows(raw[vhi - 1]) {
             vhi = vhi - 1;
         }
-        let value = to_str(raw[vlo..vhi]);
+        let value = strings.from_bytes(raw, vlo, vhi);
         // The two headers that decide where a request ENDS may not repeat.
         // Other headers still take the last value, as before; these two
         // did too, so two disagreeing Content-Lengths were accepted with
@@ -467,7 +402,18 @@ fn parse_head(raw: bytes, sep: int) -> result[Head, str] {
     if sp1 == 0 || sp2 == sp1 + 1 {
         return err("malformed request line");
     }
-    let ver = to_str(trim_ows(raw[sp2 + 1..line_end]));
+    // Trimmed by moving the bounds, not by slicing: same tolerance for
+    // trailing OWS the trim_ows call here used to give, without the two
+    // allocations it cost.
+    let vlo2 = sp2 + 1;
+    let vhi2 = line_end;
+    while vlo2 < vhi2 && is_ows(raw[vlo2]) {
+        vlo2 = vlo2 + 1;
+    }
+    while vhi2 > vlo2 && is_ows(raw[vhi2 - 1]) {
+        vhi2 = vhi2 - 1;
+    }
+    let ver = strings.from_bytes(raw, vlo2, vhi2);
     if ver != "HTTP/1.0" && ver != "HTTP/1.1" {
         return err("unsupported HTTP version");
     }
@@ -475,7 +421,8 @@ fn parse_head(raw: bytes, sep: int) -> result[Head, str] {
     guard let headers = hr else let e = err_of(hr) {
         return err("header: " + e);
     }
-    return ok(Head { method: to_str(raw[0..sp1]), path: to_str(raw[sp1 + 1..sp2]),
+    return ok(Head { method: strings.from_bytes(raw, 0, sp1),
+                     path: strings.from_bytes(raw, sp1 + 1, sp2),
                      version: ver, headers: headers, sep: sep });
 }
 
@@ -535,11 +482,12 @@ pub fn serialize(r: Response) -> bytes {
     // list form was tried and measured slower, because a piece per header
     // means an allocation per header before anything is joined.
     //
-    // This plus the header-name work below is worth about 20% on a
-    // keep-alive server with a 200-byte body and four headers -- medians
-    // of three interleaved A/B runs, 17.5k -> 21.2k req/s. The box varies
-    // by ~12% run to run, so single runs on it say very little; the
-    // ordering held across all three.
+    // This plus the single-allocation field extraction below is worth
+    // ~40% on a keep-alive server with a 200-byte body and four headers:
+    // medians of five interleaved A/B runs against the unmodified
+    // package, 14.9k -> 20.8k req/s, and the new one won all five paired
+    // rounds. The box swings ~20% run to run, so the pairing and the
+    // medians are the claim, not any single number.
     let sb = builder.new_bytes();
     sb.write_str("HTTP/1.1 ");
     sb.write_str(to_str(r.status));

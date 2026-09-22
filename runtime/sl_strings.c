@@ -252,6 +252,36 @@ static char *sl_strings_join(sl_arr *parts, const char *sep) {
  * one copy of each piece. A list element is never NULL for [bytes]
  * built by the language, but the check costs nothing and a native
  * function should not trust its caller's list. */
+/* One allocation for a str made from a byte range, where
+   `to_str(b[lo..hi])` costs two: the slice, then the str built from it.
+   Bounds are clamped the way strings.slice clamps, and a negative index
+   counts from the end, so a caller cannot read outside the buffer. */
+static char *sl_strings_from_bytes(sl_bytes *b, long long lo, long long hi) {
+    long long n = b ? b->len : 0;
+    if (lo < 0) lo += n;
+    if (hi < 0) hi += n;
+    if (lo < 0) lo = 0;
+    if (hi > n) hi = n;
+    if (!b || lo >= n || hi <= lo) return sl_strings_dupn("", 0);
+    return sl_strings_dupn((const char *)(b->ptr + lo), (size_t)(hi - lo));
+}
+
+/* from_bytes, lowercasing ASCII during the copy. */
+static char *sl_strings_from_bytes_lower(sl_bytes *b, long long lo,
+                                         long long hi) {
+    long long n = b ? b->len : 0;
+    if (lo < 0) lo += n;
+    if (hi < 0) hi += n;
+    if (lo < 0) lo = 0;
+    if (hi > n) hi = n;
+    if (!b || lo >= n || hi <= lo) return sl_strings_dupn("", 0);
+    char *out = sl_strings_dupn((const char *)(b->ptr + lo), (size_t)(hi - lo));
+    for (long long i = 0; i < hi - lo; i++) {
+        if (out[i] >= 'A' && out[i] <= 'Z') out[i] = (char)(out[i] + 32);
+    }
+    return out;
+}
+
 static sl_bytes *sl_strings_join_bytes(sl_arr *parts, sl_bytes *sep) {
     long long n = parts ? parts->len : 0;
     sl_bytes **items = parts ? (sl_bytes **)parts->data : NULL;
