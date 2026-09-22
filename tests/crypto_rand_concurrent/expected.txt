@@ -1,0 +1,2 @@
+workers: 8
+failures: 0
