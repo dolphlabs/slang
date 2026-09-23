@@ -2,11 +2,22 @@ import "builder";
 import "byteutil";
 import "strings";
 
+// `raw_headers` is exactly the CRLF-separated "name: value" lines this
+// request's header block was made of, unparsed -- not a map[str]str.
+// Building a map costs an allocation for the map plus roughly two more
+// per header, on every request, whether or not anything ever reads a
+// header; most requests never do. `header`/`header_or` scan this
+// directly (strings.find_field, no allocation for the search itself);
+// `headers()` builds a map from it on demand for a caller that
+// genuinely wants one. Constructed only by `parse`/`read` (off the
+// wire) or `request` (validated, from a map) -- never assign this field
+// directly from unvalidated bytes; a value containing "\r\n" inside a
+// hand-built block is a second header no map ever held.
 pub gc struct Request {
     method: str,
     path: str,
     version: str,
-    headers: map[str]str,
+    raw_headers: bytes,
     body: bytes,
 }
 
@@ -89,18 +100,22 @@ fn find_blank_line(b: bytes) -> int {
 // the rest of the body was read as the NEXT request -- a request-smuggling
 // primitive against any proxy that computes the length correctly. 18
 // digits cannot overflow a 64-bit int, and no real body is an exabyte.
-fn parse_digits(s: str) -> result[int, str] {
-    let b = to_bytes(s);
-    if len(b) == 0 {
+//
+// Takes the range directly rather than a str: the only caller has a
+// Content-Length value sitting in the request's own bytes already, and
+// to_bytes(str) to get back to bytes just to read digits off it was a
+// copy this never needed to make.
+fn parse_digits(raw: bytes, lo: int, hi: int) -> result[int, str] {
+    if hi <= lo {
         return err("empty number");
     }
-    if len(b) > 18 {
+    if hi - lo > 18 {
         return err("number too large");
     }
     let n = 0;
-    let i = 0;
-    while i < len(b) {
-        let d = b[i];
+    let i = lo;
+    while i < hi {
+        let d = raw[i];
         if d < 48 || d > 57 {
             return err("bad number");
         }
@@ -136,9 +151,110 @@ fn recv_fault(deadline: until) -> fault {
     return fault_io();
 }
 
-fn parse_headers(raw: bytes, start: int, sep: int) -> result[map[str]str, str] {
-    let headers: map[str]str = {};
+// What one pass over a header block needs to hand back to build both a
+// Request (raw_headers, unparsed) and answer frame()'s two questions
+// (is there a Content-Length or a Transfer-Encoding, and what does each
+// say) without extracting either as a string unless frame() actually
+// needs to -- most requests have neither on the hot GET path, and a POST
+// has one, not both.
+gc struct HeaderScan {
+    raw_headers: bytes,
+    has_content_length: bool,
+    cl_lo: int,
+    cl_hi: int,
+    has_transfer_encoding: bool,
+    te_is_chunked: bool,
+}
+
+// Zero-allocation case-insensitive compares against the handful of fixed
+// literals the parser itself cares about (as opposed to `header_name`,
+// which lowercases and allocates ANY header name a caller might later
+// ask `header()` for by an arbitrary str -- see its own comment). These
+// three are the entire fixed set scan_headers and frame() ever compare
+// against, so hand-writing each as a length check plus a chain of byte
+// compares costs nothing per call and, unlike header_name, nothing per
+// header line scanned either. Generated from the literal's own ASCII
+// codes rather than typed by hand, to keep a single mistyped digit out
+// of code that decides where a request's body starts.
+fn value_is_chunked(raw: bytes, lo: int, hi: int) -> bool {
+    if hi - lo != 7 {
+        return false;
+    }
+    return lower_byte(raw[lo]) == 99 && lower_byte(raw[lo + 1]) == 104 &&
+           lower_byte(raw[lo + 2]) == 117 && lower_byte(raw[lo + 3]) == 110 &&
+           lower_byte(raw[lo + 4]) == 107 && lower_byte(raw[lo + 5]) == 101 &&
+           lower_byte(raw[lo + 6]) == 100;
+}
+
+fn is_content_length(raw: bytes, lo: int, hi: int) -> bool {
+    if hi - lo != 14 {
+        return false;
+    }
+    return lower_byte(raw[lo + 0]) == 99 &&
+           lower_byte(raw[lo + 1]) == 111 &&
+           lower_byte(raw[lo + 2]) == 110 &&
+           lower_byte(raw[lo + 3]) == 116 &&
+           lower_byte(raw[lo + 4]) == 101 &&
+           lower_byte(raw[lo + 5]) == 110 &&
+           lower_byte(raw[lo + 6]) == 116 &&
+           lower_byte(raw[lo + 7]) == 45 &&
+           lower_byte(raw[lo + 8]) == 108 &&
+           lower_byte(raw[lo + 9]) == 101 &&
+           lower_byte(raw[lo + 10]) == 110 &&
+           lower_byte(raw[lo + 11]) == 103 &&
+           lower_byte(raw[lo + 12]) == 116 &&
+           lower_byte(raw[lo + 13]) == 104;
+}
+
+fn is_transfer_encoding(raw: bytes, lo: int, hi: int) -> bool {
+    if hi - lo != 17 {
+        return false;
+    }
+    return lower_byte(raw[lo + 0]) == 116 &&
+           lower_byte(raw[lo + 1]) == 114 &&
+           lower_byte(raw[lo + 2]) == 97 &&
+           lower_byte(raw[lo + 3]) == 110 &&
+           lower_byte(raw[lo + 4]) == 115 &&
+           lower_byte(raw[lo + 5]) == 102 &&
+           lower_byte(raw[lo + 6]) == 101 &&
+           lower_byte(raw[lo + 7]) == 114 &&
+           lower_byte(raw[lo + 8]) == 45 &&
+           lower_byte(raw[lo + 9]) == 101 &&
+           lower_byte(raw[lo + 10]) == 110 &&
+           lower_byte(raw[lo + 11]) == 99 &&
+           lower_byte(raw[lo + 12]) == 111 &&
+           lower_byte(raw[lo + 13]) == 100 &&
+           lower_byte(raw[lo + 14]) == 105 &&
+           lower_byte(raw[lo + 15]) == 110 &&
+           lower_byte(raw[lo + 16]) == 103;
+}
+
+// One pass, same structural rules parse_headers always enforced (folded
+// header, no colon, missing terminator, a repeated Content-Length or
+// Transfer-Encoding) -- this removes the allocations that rule enforced
+// them, not the rule. `header_name` still costs one allocation per line
+// (it's how every line's name is compared against the two names that
+// matter here), which is the one allocation scan_headers spends; nothing
+// beyond it is extracted unless it's the CL/TE value, and even those are
+// offsets, never a string, here.
+fn scan_headers(raw: bytes, start: int, sep: int) -> result[HeaderScan, str] {
+    // Walked in `raw`'s own absolute positions, not a block pre-sliced to
+    // `raw[start..sep]` -- for any request with at least one header, the
+    // LAST header's own terminating "\r\n" is not separate from the blank
+    // line's: find_blank_line's 4-byte match sits exactly where a header
+    // section ends and the blank line begins, so that "\r\n" is shared
+    // between the two, and slicing at `sep` cuts it off the block
+    // entirely, silently. `eol > sep` (not `>=`) is what let the ORIGINAL
+    // parse_headers accept a last header line whose own eol lands
+    // exactly on `sep` -- this keeps that, and the header block sliced
+    // out below is exactly as much of `raw` as this loop actually
+    // consumed, however that boundary fell.
     let i = start;
+    let has_cl = false;
+    let cl_lo = 0;
+    let cl_hi = 0;
+    let has_te = false;
+    let te_chunked = false;
     while i < sep {
         let eol = find_crlf(raw, i);
         if eol < 0 || eol > sep {
@@ -154,10 +270,6 @@ fn parse_headers(raw: bytes, start: int, sep: int) -> result[map[str]str, str] {
         if colon < 0 || colon >= eol || colon == i {
             return err("malformed header");
         }
-        let name = header_name(raw, i, colon);
-        // Trim in place and slice once: `to_str(trim_ows(raw[a..b]))` cut
-        // the range, cut it again, and copied it into a str -- three
-        // allocations to move bytes that were already sitting there.
         let vlo = colon + 1;
         let vhi = eol;
         while vlo < vhi && is_ows(raw[vlo]) {
@@ -166,20 +278,51 @@ fn parse_headers(raw: bytes, start: int, sep: int) -> result[map[str]str, str] {
         while vhi > vlo && is_ows(raw[vhi - 1]) {
             vhi = vhi - 1;
         }
-        let value = strings.from_bytes(raw, vlo, vhi);
+        // Compared against the two fixed names directly, not through
+        // header_name(): that allocates a lowercased copy of EVERY
+        // header's name to compare it against these same two literals,
+        // which is the one cost scan_headers still had after the first
+        // pass at this file -- most headers are neither of these two, so
+        // most of that allocation bought nothing. is_content_length/
+        // is_transfer_encoding compare in place instead.
+        //
         // The two headers that decide where a request ENDS may not repeat.
         // Other headers still take the last value, as before; these two
         // did too, so two disagreeing Content-Lengths were accepted with
         // the last silently winning -- while a proxy honouring the first
         // framed the same bytes differently. RFC 9112 section 6.3: reject.
-        if (name == "content-length" || name == "transfer-encoding") &&
-           has(headers, name) {
-            return err("repeated " + name + " header");
+        // The offsets recorded here (cl_lo/cl_hi) are into `raw`, same as
+        // vlo/vhi -- NOT re-based to the sliced block below, which is why
+        // frame() is handed `raw` alongside the scan result rather than
+        // reading through raw_headers alone.
+        if is_content_length(raw, i, colon) {
+            if has_cl {
+                return err("repeated content-length header");
+            }
+            has_cl = true;
+            cl_lo = vlo;
+            cl_hi = vhi;
+        } else if is_transfer_encoding(raw, i, colon) {
+            if has_te {
+                return err("repeated transfer-encoding header");
+            }
+            has_te = true;
+            te_chunked = value_is_chunked(raw, vlo, vhi);
         }
-        headers[name] = value;
         i = eol + 2;
     }
-    return ok(headers);
+    // `i` is exactly as far as the loop above actually consumed: for one
+    // or more headers, the position right after the last one's own
+    // "\r\n" (which, per the comment at the top of this function, is
+    // always sep + 2 for a well-formed section, but this reads the
+    // position the loop actually reached rather than trusting a formula
+    // to agree with it); for zero headers, the loop body never ran and i
+    // is still `start`, giving an empty slice.
+    return ok(HeaderScan {
+        raw_headers: raw[start..i],
+        has_content_length: has_cl, cl_lo: cl_lo, cl_hi: cl_hi,
+        has_transfer_encoding: has_te, te_is_chunked: te_chunked
+    });
 }
 
 // ---- framing: where does this request's body end? ----------------------
@@ -343,18 +486,17 @@ fn scan_chunked(raw: bytes, start: int) -> result[Framing, str] {
     return err("unreachable");
 }
 
-fn frame(raw: bytes, headers: map[str]str, sep: int,
+fn frame(raw: bytes, hs: HeaderScan, sep: int,
          version: str) -> result[Framing, str] {
     let body_start = sep + 4;
-    if has(headers, "transfer-encoding") {
-        let te = lower_ascii(headers["transfer-encoding"]);
-        if te != "chunked" {
+    if hs.has_transfer_encoding {
+        if !hs.te_is_chunked {
             // The value is NOT echoed: it is client-controlled, and servers
             // pass read errors to bad_request, which embeds the message in a
             // JSON string unescaped.
             return err("unsupported Transfer-Encoding");
         }
-        if has(headers, "content-length") {
+        if hs.has_content_length {
             return err("both Transfer-Encoding and Content-Length");
         }
         if version == "HTTP/1.0" {
@@ -362,11 +504,14 @@ fn frame(raw: bytes, headers: map[str]str, sep: int,
         }
         return scan_chunked(raw, body_start);
     }
-    if !has(headers, "content-length") {
+    if !hs.has_content_length {
         return ok(Framing { complete: true, end: body_start, need: body_start,
                             body: b"" });
     }
-    let clr = parse_digits(headers["content-length"]);
+    // cl_lo/cl_hi are offsets into `raw` (scan_headers walked it directly,
+    // not the sliced-out raw_headers), so they're read from raw here, not
+    // from hs.raw_headers.
+    let clr = parse_digits(raw, hs.cl_lo, hs.cl_hi);
     guard let cl = clr else let e = err_of(clr) {
         return err("bad Content-Length: " + e);
     }
@@ -382,7 +527,7 @@ gc struct Head {
     method: str,
     path: str,
     version: str,
-    headers: map[str]str,
+    hs: HeaderScan,
     sep: int,
 }
 
@@ -417,43 +562,79 @@ fn parse_head(raw: bytes, sep: int) -> result[Head, str] {
     if ver != "HTTP/1.0" && ver != "HTTP/1.1" {
         return err("unsupported HTTP version");
     }
-    let hr = parse_headers(raw, line_end + 2, sep);
-    guard let headers = hr else let e = err_of(hr) {
+    let hr = scan_headers(raw, line_end + 2, sep);
+    guard let hs = hr else let e = err_of(hr) {
         return err("header: " + e);
     }
     return ok(Head { method: strings.from_bytes(raw, 0, sp1),
                      path: strings.from_bytes(raw, sp1 + 1, sp2),
-                     version: ver, headers: headers, sep: sep });
+                     version: ver, hs: hs, sep: sep });
+}
+
+// The value at a match strings.find_field already found: from just past
+// its colon to the line's end, OWS-trimmed, one allocation. Shared by
+// header() and header_or() below, which differ only in what a miss does.
+fn value_at(raw: bytes, at: int) -> str {
+    let eol = find_crlf(raw, at);
+    if eol < 0 {
+        eol = len(raw);
+    }
+    let vlo = at;
+    let vhi = eol;
+    while vlo < vhi && is_ows(raw[vlo]) {
+        vlo = vlo + 1;
+    }
+    while vhi > vlo && is_ows(raw[vhi - 1]) {
+        vhi = vhi - 1;
+    }
+    return strings.from_bytes(raw, vlo, vhi);
 }
 
 pub fn header(r: Request, name: str) -> opt[str] {
-    let k = lower_ascii(name);
-    if has(r.headers, k) {
-        return some(r.headers[k]);
+    let at = strings.find_field(r.raw_headers, name);
+    if at < 0 {
+        return none;
     }
-    return none;
+    return some(value_at(r.raw_headers, at));
 }
 
 // header()'s two real call sites (Ctx.header in zokor, the WebSocket
 // handshake) are both `header(...) ?? fallback` already -- this is that,
 // without the opt allocation `??` unwraps.
 pub fn header_or(r: Request, name: str, fallback: str) -> str {
-    let k = lower_ascii(name);
-    if has(r.headers, k) {
-        return r.headers[k];
+    let at = strings.find_field(r.raw_headers, name);
+    if at < 0 {
+        return fallback;
     }
-    return fallback;
+    return value_at(r.raw_headers, at);
 }
 
-// Every header a request carries, as a map -- built fresh on each call,
-// which costs nothing today (Request's own field still is one, this
-// just copies it) and will cost a scan once the representation underneath
-// changes; nothing in either repo iterates this today, which is what
-// makes "built on demand" the right default rather than a cached field.
+// Every header a request carries, as a map -- built fresh on each call by
+// scanning raw_headers once. Nothing in either repo iterates a request's
+// headers today (confirmed by grep), which is what makes "built on
+// demand" the right default over a cached field: a cache nothing reads
+// is pure cost. Walks the same line shape scan_headers does, for a
+// different reason (that one validates and extracts two offsets; this
+// one assumes an already-valid block and extracts every name and value)
+// -- kept as two functions rather than one parameterized by what to do
+// with each line, which would obscure both to save repeating six lines.
 pub fn headers(r: Request) -> map[str]str {
     let out: map[str]str = {};
-    for k, v in r.headers {
-        out[k] = v;
+    let raw = r.raw_headers;
+    let n = len(raw);
+    let i = 0;
+    while i < n {
+        let eol = find_crlf(raw, i);
+        if eol < 0 || eol == i {
+            return out;
+        }
+        let colon = byteutil.find(raw, i, 58);
+        if colon < 0 || colon >= eol {
+            return out;
+        }
+        let name = header_name(raw, i, colon);
+        out[name] = value_at(raw, colon + 1);
+        i = eol + 2;
     }
     return out;
 }
@@ -470,19 +651,18 @@ fn header_part_ok(s: str) -> bool {
     return true;
 }
 
-// Builds a Request the way the eager parser already enforces off the
+// Builds a Request from a map the way the eager parser builds one off the
 // wire: a header name or value may not contain CR or LF (an application-
 // or test-constructed header gets no such check for free the way one
 // read off the wire does -- this is where that rule lives for this
 // path), and a name may not contain the colon that separates it from its
-// value on the wire. Both are a real hazard here, not a theoretical one:
-// once the representation is a raw header block instead of a map
-// (planned, not yet true), a value containing "\r\n" would become a
-// second header nobody's map ever held -- header injection, structurally
-// impossible while the representation IS the map, so this validates now
-// rather than changing behaviour silently the day it stops being one.
+// value on the wire. Both are a real hazard, not a theoretical one, now
+// that raw_headers is what a request's headers actually are: a value
+// containing "\r\n" would be concatenated straight into the block below
+// as a SECOND header line -- injection -- if it weren't rejected first.
 pub fn request(method: str, path: str, version: str,
                headers: map[str]str, body: bytes) -> result[Request, str] {
+    let sb = builder.new_bytes();
     for k, v in headers {
         if byteutil.find(to_bytes(k), 0, 58) >= 0 {
             return err("header name contains ':': '" + k + "'");
@@ -493,9 +673,13 @@ pub fn request(method: str, path: str, version: str,
         if !header_part_ok(v) {
             return err("header value contains CR or LF (header '" + k + "')");
         }
+        sb.write_str(k);
+        sb.write_str(": ");
+        sb.write_str(v);
+        sb.write_str("\r\n");
     }
     return ok(Request { method: method, path: path, version: version,
-                        headers: headers, body: body });
+                        raw_headers: sb.finish(), body: body });
 }
 
 pub fn parse(raw: bytes) -> result[Request, str] {
@@ -510,7 +694,7 @@ pub fn parse(raw: bytes) -> result[Request, str] {
     guard let head = hr else let e = err_of(hr) {
         return err(e);
     }
-    let fr = frame(raw, head.headers, sep, head.version);
+    let fr = frame(raw, head.hs, sep, head.version);
     guard let f = fr else let e = err_of(fr) {
         return err("body: " + e);
     }
@@ -521,7 +705,7 @@ pub fn parse(raw: bytes) -> result[Request, str] {
         method: head.method,
         path: head.path,
         version: head.version,
-        headers: head.headers,
+        raw_headers: head.hs.raw_headers,
         body: f.body
     });
 }
@@ -609,7 +793,7 @@ pub fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Inc
                 guard let head = hr else let e = err_of(hr) {
                     return err(e);
                 }
-                let fr = frame(raw, head.headers, sep, head.version);
+                let fr = frame(raw, head.hs, sep, head.version);
                 guard let f = fr else let e = err_of(fr) {
                     return err("body: " + e);
                 }
@@ -621,7 +805,7 @@ pub fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Inc
                         method: head.method,
                         path: head.path,
                         version: head.version,
-                        headers: head.headers,
+                        raw_headers: head.hs.raw_headers,
                         body: f.body
                     };
                     // Pipelined bytes after this request stay for the next.
