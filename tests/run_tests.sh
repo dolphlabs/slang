@@ -240,6 +240,33 @@ for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood \
 done
 [ "$gc_bad" -eq 0 ] && echo "PASS gc stress"
 
+# ---- nursery stress (tiny young generation) ---------------------------
+# Same discipline as the threshold loop above, applied to the nursery:
+# a rooting or barrier bug in the generational collector -- a live young
+# object the minor sweep frees, or an old->young edge the remembered set
+# misses -- surfaces only when a minor collection lands at that exact
+# safepoint. At the default nursery (512KB) minors are too rare to land
+# there reliably, so the GC-bearing tests (plus the two nursery-specific
+# ones) run again with a 16KB nursery, forcing a minor on nearly every
+# allocation.
+echo "--- nursery stress (SLANG_GC_NURSERY_KB=16) ---"
+nur_bad=0
+for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put \
+            gc_nested_literal gc_stress gc_stat spawn_isolation maps json flags \
+            method_recv method_recv_gc indirect_callee; do
+    out="/tmp/sl_nursery_${name}.out"
+    if ! SLANG_GC_NURSERY_KB=16 ./slangc "tests/$name/main.sl" --run \
+            >"$out" 2>/dev/null; then
+        echo "FAIL nursery stress $name (exit $?)"
+        tail -5 "$out" | sed 's/^/  /'
+        nur_bad=1; fail=1
+    elif ! diff -q "tests/$name/expected.txt" "$out" >/dev/null; then
+        echo "FAIL nursery stress $name (output mismatch)"
+        nur_bad=1; fail=1
+    fi
+done
+[ "$nur_bad" -eq 0 ] && echo "PASS nursery stress"
+
 # ---- frame guards --------------------------------------------------------
 # A function whose C frame is large is compiled behind an entry guard that
 # grows the stack first (see the frame loop in src/main.c). Real programs

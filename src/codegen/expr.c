@@ -1727,6 +1727,42 @@ char *gen_expr(CG *cg, Expr *e) {
          * address-of folds it into a bare pointer. */
         if (!strcmp(e->as.unary.op, "&mut")) {
             Expr *op = e->as.unary.operand;
+            /* Dotted field path: the parser folds `a.b` into a single
+             * qualified EX_IDENT ("a.b"), not an EX_FIELD node -- but it
+             * is still an interior mutable reference into a GC container
+             * and needs the same creation-site barrier. Split it the
+             * same way gen_ident_name does. */
+            if (op->kind == EX_IDENT) {
+                char *left, *right;
+                if (split_dotted(op->as.ident.name, &left, &right) &&
+                    !import_try(cg, left)) {
+                    const char *bt = infer_ident_name(cg, left, e->line);
+                    StructDef *sd = struct_of_type(cg, bt);
+                    if (sd) {
+                        int fi = -1;
+                        for (int i = 0; i < sd->nfields; i++) {
+                            if (!strcmp(sd->fields[i], right)) {
+                                fi = i;
+                                break;
+                            }
+                        }
+                        if (fi >= 0) {
+                            char *binner;
+                            int bboxed = type_wrap(bt, &binner) == TW_GC;
+                            if (!bboxed && struct_type_is_gc(cg, bt) &&
+                                type_has_gc_roots(cg, sd->ftypes[fi])) {
+                                char *b = gen_ident_name(cg, left, e->line);
+                                char *o = xasprintf(
+                                    "((%s)%s%s)", b, struct_access(cg, bt),
+                                    sanitize_ident(right));
+                                return xasprintf(
+                                    "({ sl_rt_preempt_disable(); sl_gc_remember((void *)(%s)); sl_rt_preempt_enable(); (&(%s)); })",
+                                    b, o);
+                            }
+                        }
+                    }
+                }
+            }
             if (op->kind == EX_FIELD) {
                 const char *bt = infer_type(cg, op->as.field.base);
                 char *binner;
