@@ -121,9 +121,12 @@ void gen_stmt(CG *cg, Stmt *s) {
             var_redecl_check(cg, s->as.let.name, s->line);
             var_push(cg, s->as.let.name, ann);
             emit_drop_flag(cg, s->as.let.name);
+            /* Same elem_is_ptr fix as gen_list (see expr.c): use
+             * type_has_gc_roots so [ValueStruct] empties trace interior
+             * pointers on minor collections. */
             emit_line(cg, "%s %s = sl_arr_new(sizeof(%s), %d);",
                       ctype_of(cg, ann), sanitize_ident(s->as.let.name),
-                      ctype_of(cg, elem), type_is_gc_ptr(cg, elem));
+                      ctype_of(cg, elem), type_has_gc_roots(cg, elem));
             break;
         }
 
@@ -139,10 +142,11 @@ void gen_stmt(CG *cg, Stmt *s) {
             var_redecl_check(cg, s->as.let.name, s->line);
             var_push(cg, s->as.let.name, ann);
             emit_drop_flag(cg, s->as.let.name);
+            /* Same map flag fix as gen_maplit (see expr.c). */
             emit_line(cg, "%s %s = sl_map_new(sizeof(%s), sizeof(%s), %d, %d, %d);",
                       ctype_of(cg, ann), sanitize_ident(s->as.let.name),
                       ctype_of(cg, k), ctype_of(cg, v), is_str(k),
-                      type_is_gc_ptr(cg, k), type_is_gc_ptr(cg, v));
+                      type_has_gc_roots(cg, k), type_has_gc_roots(cg, v));
             break;
         }
 
@@ -277,6 +281,13 @@ void gen_stmt(CG *cg, Stmt *s) {
                 move_consume(cg, s->as.assign.value);
                 emit_line(cg, "%s%s%s = %s;", b, struct_access(cg, bt),
                           sanitize_ident(sd->fields[fi]), val);
+                /* Same barrier as the EX_FIELD case. */
+                {
+                    char *bin2;
+                    int is_box2 = type_wrap(bt, &bin2) == TW_GC;
+                    if (!is_box2 && type_has_gc_roots(cg, sd->ftypes[fi]) && struct_type_is_gc(cg, bt))
+                        emit_line(cg, "{ sl_rt_preempt_disable(); sl_gc_remember((void *)(%s)); sl_rt_preempt_enable(); }", b);
+                }
                 break;
             }
             if (!v)
@@ -365,6 +376,16 @@ void gen_stmt(CG *cg, Stmt *s) {
             move_consume(cg, s->as.assign.value);
             emit_line(cg, "%s%s%s = %s;", b, struct_access(cg, bt),
                       sanitize_ident(sd->fields[fi]), val);
+            /* Generational barrier (coarse v1): unconditional remember
+             * when the field has GC roots and the container is
+             * GC-traced and not a `gc T` box (malloc'd inline wrapper,
+             * not a sl_gc_obj). Own preempt bracket (inline store). */
+            {
+                char *bin;
+                int is_box = type_wrap(bt, &bin) == TW_GC;
+                if (!is_box && type_has_gc_roots(cg, sd->ftypes[fi]) && struct_type_is_gc(cg, bt))
+                    emit_line(cg, "{ sl_rt_preempt_disable(); sl_gc_remember((void *)(%s)); sl_rt_preempt_enable(); }", b);
+            }
             break;
         }
         /* index target: xs[i] = v, b[i] = v, or m[k] = v */
@@ -528,6 +549,11 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "%s(*(%s *)(void *)sl_arr_get(%s, %s, sizeof(%s), %s)) = "
                       "(%s)(%s);",
                       prelude.data, ec, b, i, ec, at, ec, val);
+            /* Generational barrier: unconditional remember when the
+             * element has GC roots. Own preempt bracket (inline store;
+             * map stores are covered inside sl_map_put). */
+            if (type_has_gc_roots(cg, elem))
+                emit_line(cg, "{ sl_rt_preempt_disable(); sl_gc_remember((void *)(%s)); sl_rt_preempt_enable(); }", b);
             break;
         }
         cg->ambient_count = ambient_mark;

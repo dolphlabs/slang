@@ -61,7 +61,17 @@ static void sl_gc_trace_chan(void *p, void (*mark)(void *)) {
     sl_chan *c = (sl_chan *)p;
     if (!c->buf) return;
     mark(c->buf);
-    if (!c->elem_is_ptr) return;
+    /* Value-struct interiors (same as sl_gc_trace_arr). */
+    if (!c->elem_is_ptr) {
+        if (c->elemsz < (long long)sizeof(void *)) return;
+        for (int i = 0; i < c->cap; i++) {
+            unsigned char *el = c->buf + (size_t)i * (size_t)c->elemsz;
+            for (size_t off = 0; off + sizeof(void *) <= (size_t)c->elemsz;
+                 off += sizeof(void *))
+                mark(*(void **)(el + off));
+        }
+        return;
+    }
     for (int i = 0; i < c->cap; i++)
         mark(*(void **)(c->buf + (size_t)i * c->elemsz));
 }
@@ -230,6 +240,8 @@ static void sl_chan_send(sl_chan *c, const void *val) {
     int tail = (c->head + c->count) % c->cap;
     memcpy(c->buf + (size_t)tail * c->elemsz, val, c->elemsz);
     c->count++;
+    /* Generational barrier (inside the existing bracket). */
+    sl_gc_remember(c);
     sl_wl_wake_one(&c->recv_waiters, &c->recv_waiters_tail);
     pthread_mutex_unlock(&c->mu);
     sl_rt_preempt_enable();
@@ -747,7 +759,31 @@ static void sl_gc_trace_arr(void *p, void (*mark)(void *)) {
     sl_arr *a = (sl_arr *)p;
     if (!a->data) return;
     mark(a->data);
-    if (!a->elem_is_ptr) return;
+    /* Phase-2 FIX (orphan-buffer interiors): the DATA buffer is a bare
+     * sl_gc_alloc with trace=NULL -- marked but never TRACED. Its words
+     * are scanned HERE, through the header, instead: every element word
+     * when elem_is_ptr is false ([ValueStruct] interiors), every element
+     * pointer when true. mark() validates via sl_gc_set.
+     *
+     * This covers whichever buffer a->data names TODAY. An OLD buffer
+     * replaced by realloc is NOT covered (nothing names it) -- but its
+     * stale interior pointers name the SAME young objects the new
+     * buffer's copy names (memcpy copies pointers). Those objects are
+     * kept alive through the new buffer; freeing "via" the orphan would
+     * kill them -- EXCEPT the orphan is unreachable, so no mark ever
+     * visits it, so it marks nothing, so it frees nothing THROUGH
+     * itself. The orphan's own storage is reclaimed unmarked. Its
+     * stale words are never READ as roots. Sound. */
+    if (!a->elem_is_ptr) {
+        if (a->esz < (long long)sizeof(void *)) return;
+        for (long long i = 0; i < a->len; i++) {
+            unsigned char *el = a->data + (size_t)i * a->esz;
+            for (size_t off = 0; off + sizeof(void *) <= (size_t)a->esz;
+                 off += sizeof(void *))
+                mark(*(void **)(el + off));
+        }
+        return;
+    }
     for (long long i = 0; i < a->len; i++)
         mark(*(void **)(a->data + (size_t)i * a->esz));
 }
@@ -768,6 +804,16 @@ static void sl_arr_reserve(sl_arr *a, long long need) {
     while (cap < need) cap *= 2;
     a->data = (unsigned char *)sl_gc_realloc(a->data, (size_t)cap * a->esz);
     a->cap = cap;
+    /* Post-swap barrier: `a` itself may be old, and the swap above
+     * overwrote its a->data field (which sl_gc_trace_arr follows).
+     * Registers `a` for the NEXT minor, no matter how many cycles
+     * intervene since the last store. (A pre-swap barrier is useless:
+     * realloc never collects synchronously, so no collection can land
+     * between a pre-barrier and the swap; dedup would make it free
+     * anyway. Post-only.) */
+    sl_rt_preempt_disable();
+    sl_gc_remember(a);
+    sl_rt_preempt_enable();
 }
 
 static void *sl_arr_get(sl_arr *a, long long i, size_t esz, const char *at) {
@@ -790,6 +836,13 @@ static void sl_arr_push(sl_arr *a, void *val, size_t esz) {
     sl_arr_reserve(a, a->len + 1);
     memcpy(a->data + (size_t)a->len * esz, val, esz);
     a->len++;
+    /* Element store into a potentially-old container. sl_gc_remember
+     * no-ops for young containers; the remembered flag dedups repeats. */
+    {
+        sl_rt_preempt_disable();
+        sl_gc_remember(a);
+        sl_rt_preempt_enable();
+    }
 }
 
 static void *sl_arr_pop(sl_arr *a, size_t esz) {
@@ -855,13 +908,25 @@ static void sl_gc_trace_map(void *p, void (*mark)(void *)) {
     if (m->vals) mark(m->vals);
     if (m->state) mark(m->state);
     if (m->order) mark(m->order);
-    if (!m->key_is_ptr && !m->val_is_ptr) return;
+    /* Value-struct interiors (same as sl_gc_trace_arr): scan every word
+     * of every occupied slot when the precise flag is unset. mark()
+     * validates, so non-pointer words are harmless. */
     for (long long i = 0; i < m->count; i++) {
         long long slot = m->order[i];
         if (m->key_is_ptr)
             mark(*(void **)(m->keys + (size_t)slot * m->ksz));
+        else if (m->ksz >= sizeof(void *)) {
+            for (size_t off = 0; off + sizeof(void *) <= m->ksz;
+                 off += sizeof(void *))
+                mark(*(void **)(m->keys + (size_t)slot * m->ksz + off));
+        }
         if (m->val_is_ptr)
             mark(*(void **)(m->vals + (size_t)slot * m->vsz));
+        else if (m->vsz >= sizeof(void *)) {
+            for (size_t off = 0; off + sizeof(void *) <= m->vsz;
+                 off += sizeof(void *))
+                mark(*(void **)(m->vals + (size_t)slot * m->vsz + off));
+        }
     }
 }
 
@@ -940,6 +1005,7 @@ static void sl_map_grow(sl_map *m) {
      * meaning a PREVIOUSLY-inserted key had already been swept by the
      * time this grow tried to rehash it. */
     sl_rt_preempt_disable();
+    sl_gc_remember(m);
     long long old_cap = m->cap;
     unsigned char *ok = m->keys, *ov = m->vals;
     unsigned char *ost = m->state;
@@ -986,6 +1052,8 @@ static void sl_map_put(sl_map *m, const void *k, const void *v) {
      * is the same discipline sl_gc_alloc/sl_task_park/every other
      * fully-bracketed function in this codebase already follows. */
     sl_rt_preempt_disable();
+    /* Generational barrier (inside the existing bracket). */
+    sl_gc_remember(m);
     unsigned long long h = m->kstr
                               ? sl_hash_str(*(const char *const *)k)
                               : sl_hash_bytes((const unsigned char *)k,
@@ -1265,8 +1333,15 @@ static void sl_gc_trace_join(void *p, void (*mark)(void *)) {
     sl_join *j = (sl_join *)p;
     mark(j->err);
     mark(j->val);
-    if (j->val_is_ptr && j->done && !j->panicked)
+    if (!j->done || j->panicked) return;
+    /* Value-struct interiors (same as sl_gc_trace_arr). */
+    if (j->val_is_ptr) {
         mark(*(void **)j->val);
+        return;
+    }
+    for (size_t off = 0; off + sizeof(void *) <= j->valsz;
+         off += sizeof(void *))
+        mark(*(void **)(j->val + off));
 }
 
 static sl_join *sl_join_new(size_t valsz, int val_is_ptr) {
