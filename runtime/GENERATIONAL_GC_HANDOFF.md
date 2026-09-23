@@ -350,10 +350,24 @@ under real load.
 4. Full `make test` + Ubuntu 24.04 Docker verification against `dev`'s
    own baseline (established pattern this whole session — same ~8
    pre-existing environment-gap failures expected, zero new ones) +
-   an ASan pass (per `asan-needs-bigger-task-stacks` memory: raise the
-   green-thread stack size before trusting any ASan finding, the
-   default 8KB fails every slang program under ASan regardless of
-   this change).
+   an ASan pass. **Correction, found and reconciled after this doc was
+   first written: the task stack does not need raising for ASan.** An
+   earlier note claiming otherwise (`asan-needs-bigger-task-stacks`
+   memory) turned out to be a compiler-ASan-vs-runtime-ASan
+   measurement mix-up — an ASan build of `slangc` itself only
+   instruments the compiler's own C, never the runtime or generated
+   program code, so a finding from that build says nothing about task
+   stacks. The real test: `./slangc <t>/main.sl --emit-c`, then
+   `clang -fsanitize=address main.gen.c` (linking the real runtime
+   instrumented), then run the resulting binary directly. Confirmed
+   clean this way at the default 8KB stack across a 45-test GC/nursery
+   battery and `tests/regex` (the test the retracted guidance was
+   originally measured against). The one real, narrow ASan gap is
+   `tests/stack_grow` — ASan's fiber-switch bookkeeping doesn't
+   understand `sl_ctx_switch`'s hand-rolled `rsp` jump (same class of
+   issue `sl_gc_scan_conservative`'s existing `no_sanitize("address")`
+   already accommodates), not a stack-size problem and not this
+   design's concern.
 5. Branch per phase, `gh pr create --base dev`, verify merge by the
    PR's actual `state`/`merged` field value, not command exit code —
    per this project's standing workflow rules (persistent memory:
