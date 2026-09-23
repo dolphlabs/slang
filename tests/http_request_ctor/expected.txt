@@ -1,0 +1,5 @@
+request/headers/header_or ok
+CRLF in a header value rejected
+bare LF in a header value rejected
+':' in a header name rejected
+injection guard ok
