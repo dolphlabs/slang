@@ -95,6 +95,23 @@ fn find_blank_line(b: bytes) -> int {
     return -1;
 }
 
+// Same scan as find_blank_line, directly on the socket buffer: read()'s
+// only use of copy_wire used to be so it had bytes to search, which
+// meant copying the body along with the head just to find where the
+// head ends. `n` is `filled`, not `len(w)` -- the buffer usually has
+// unread capacity past what's actually arrived, and this must not match
+// inside it.
+fn find_blank_line_wire(w: wire, n: int) -> int {
+    let i = 0;
+    while i + 3 < n {
+        if w[i] == 13 && w[i + 1] == 10 && w[i + 2] == 13 && w[i + 3] == 10 {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
 // Digits only, and at most 18 of them. Unbounded, `n * 10 + d` wrapped:
 // "Content-Length: 18446744073709551619" (2^64 + 3) framed as 3 bytes, and
 // the rest of the body was read as the NEXT request -- a request-smuggling
@@ -786,30 +803,87 @@ pub fn wants_close(r: Request) -> bool {
 pub fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Incoming, str] {
     while true {
         if filled > 0 {
-            let raw = copy_wire(buf, filled);
-            let sep = find_blank_line(raw);
+            let sep = find_blank_line_wire(buf, filled);
             if sep >= 0 {
-                let hr = parse_head(raw, sep);
-                guard let head = hr else let e = err_of(hr) {
+                let body_start = sep + 4;
+                // Head only: to_bytes(w[a..b]) is a zero-copy slice plus one
+                // memcpy, so this copies just the header block, not the
+                // body sitting after it -- which for an upload can be far
+                // bigger than the headers that describe it.
+                let head = to_bytes(buf[0..body_start]);
+                let hr = parse_head(head, sep);
+                guard let hd = hr else let e = err_of(hr) {
                     return err(e);
                 }
-                let fr = frame(raw, head.hs, sep, head.version);
-                guard let f = fr else let e = err_of(fr) {
-                    return err("body: " + e);
-                }
-                if f.need > len(buf) {
-                    return err("request too large for buffer");
-                }
-                if f.complete {
+                if hd.hs.has_transfer_encoding {
+                    // Chunked framing has to walk the body byte by byte
+                    // (chunk-size lines, trailers), and scan_chunked
+                    // already does that once, for parse() too. Doing it
+                    // again here on wire-sliced pieces would be a second
+                    // implementation of the same framing rules -- so this
+                    // one case still copies the whole buffer, unchanged.
+                    let raw = copy_wire(buf, filled);
+                    let fr = frame(raw, hd.hs, sep, hd.version);
+                    guard let f = fr else let e = err_of(fr) {
+                        return err("body: " + e);
+                    }
+                    if f.need > len(buf) {
+                        return err("request too large for buffer");
+                    }
+                    if f.complete {
+                        let req = Request {
+                            method: hd.method,
+                            path: hd.path,
+                            version: hd.version,
+                            raw_headers: hd.hs.raw_headers,
+                            body: f.body
+                        };
+                        let rest = compact_wire(buf, f.end, filled);
+                        return ok(Incoming { req: req, filled: rest });
+                    }
+                } else if hd.hs.has_content_length {
+                    // cl_lo/cl_hi are offsets into `head` (scan_headers
+                    // walked it directly), same as frame()'s own use of
+                    // them against raw -- valid here because they never
+                    // point past body_start, and head is exactly [0,
+                    // body_start).
+                    let clr = parse_digits(head, hd.hs.cl_lo, hd.hs.cl_hi);
+                    guard let cl = clr else let e = err_of(clr) {
+                        return err("body: bad Content-Length: " + e);
+                    }
+                    let end = body_start + cl;
+                    if end > len(buf) {
+                        return err("request too large for buffer");
+                    }
+                    if end <= filled {
+                        // Body only: the other half of the same head/body
+                        // split, so a large body is copied once here and
+                        // never a second time as part of a whole-buffer
+                        // copy that also dragged the already-parsed head
+                        // along with it.
+                        let body = to_bytes(buf[body_start..end]);
+                        let req = Request {
+                            method: hd.method,
+                            path: hd.path,
+                            version: hd.version,
+                            raw_headers: hd.hs.raw_headers,
+                            body: body
+                        };
+                        let rest = compact_wire(buf, end, filled);
+                        return ok(Incoming { req: req, filled: rest });
+                    }
+                    // else: body not fully arrived yet -- fall through and
+                    // read more, same as the chunked and no-body cases.
+                } else {
                     let req = Request {
-                        method: head.method,
-                        path: head.path,
-                        version: head.version,
-                        raw_headers: head.hs.raw_headers,
-                        body: f.body
+                        method: hd.method,
+                        path: hd.path,
+                        version: hd.version,
+                        raw_headers: hd.hs.raw_headers,
+                        body: b""
                     };
                     // Pipelined bytes after this request stay for the next.
-                    let rest = compact_wire(buf, f.end, filled);
+                    let rest = compact_wire(buf, body_start, filled);
                     return ok(Incoming { req: req, filled: rest });
                 }
             }
