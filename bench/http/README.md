@@ -34,8 +34,15 @@ task.
 
 Real-server is the fair "what does a service cost?" question. Slang
 goes through `stdlib/http` `parse` + `read`/`write`; Go stays on
-`net/http`; Rust stays on axum. No numbers claimed on this axis yet —
-that harness is future work, not this one.
+`net/http`. `bench/run_http_realserver.sh` races `bench/http/
+realserver/main.sl` against `bench/http/main.go`, both left at their
+default HTTP/1.1 keep-alive rather than forced to close, since a
+per-request reconnect cost would swamp the thing this axis exists to
+measure. It uses `bench/http/loadgen.go -keepalive` rather than `wrk`
+for the load, since this axis is specifically about a connection
+carrying many requests and this repo doesn't pin a `wrk` version with
+confirmed keep-alive behavior across hosts. Rust/axum on this axis is
+still future work, not this one.
 
 ## What `http_opt/main.sl` changes vs `http/main.sl`
 
@@ -71,6 +78,17 @@ Output: `/tmp/slang_http_opt`.
 
 Frozen-ruler remasure stays `./bench/run_http.sh` (ports 18180–18186,
 `/tmp/slang_phase_e_http`).
+
+## Remeasure (real-server axis)
+
+```
+make slangc
+HTTP_ROUNDS=3 HTTP_DUR=10s HTTP_CONCS="50 200" ./bench/run_http_realserver.sh
+```
+
+Ports: slang_realserver 18201, go_realserver 18202. Output:
+`/tmp/slang_http_realserver`. `HTTP_ACCEPTORS` defaults to `nproc`, same
+as the raw axis above.
 
 Phase E vs Go still needs **p99 and RSS** on the claimed axis. RPS
 alone is not a win, on any axis.

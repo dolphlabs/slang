@@ -78,6 +78,14 @@ Median of 3 rounds, sorted fastest first.
 `GET /`, a fixed 200-byte body, `wrk -c{50,200} -d30s --latency`.
 Median of 3 rounds, sorted by req/s (fastest first).
 
+None of these implementations parse an HTTP request -- every language's
+`http-static` entry is a raw-socket responder (slang's is
+`bench/http/main.sl`/`go_raw`'s shape; see
+[`bench/http/README.md`](https://github.com/dolphlabs/slang/blob/dev/bench/http/README.md)'s
+axis table). This tier answers "how fast is the socket layer," not
+"what does a real HTTP server cost" -- `bench/run_http_realserver.sh`
+is the harness for that question, and it is not this one.
+
 ### 50 connections
 
 | lang | req/s | p50 ms | p99 ms | peak RSS MB | CPU cores |

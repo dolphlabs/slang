@@ -1,3 +1,7 @@
+// The real-server axis: net/http actually parsing each request, keep-
+// alive left at its default (net/http reuses the connection unless a
+// handler or client asks otherwise) -- see bench/http/README.md and
+// bench/http/realserver/main.sl, its slang peer on this axis.
 package main
 
 import (
@@ -14,7 +18,6 @@ func main() {
 	}
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		w.Header().Set("Connection", "close")
 		w.Write([]byte(body))
 	})
 	println("LISTEN_PORT " + port)
