@@ -1,0 +1,7 @@
+no headers, empty body ok (70 bytes)
+one header, small body ok (90 bytes)
+many headers ok (126 bytes)
+>64-byte body ok (163 bytes)
+capitalized Connection quirk ok (82 bytes)
+arena-overflow fallback ok (163 bytes)
+http_write_arena ok
