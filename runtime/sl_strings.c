@@ -252,6 +252,90 @@ static char *sl_strings_join(sl_arr *parts, const char *sep) {
  * one copy of each piece. A list element is never NULL for [bytes]
  * built by the language, but the check costs nothing and a native
  * function should not trust its caller's list. */
+/* One allocation for a str made from a byte range, where
+   `to_str(b[lo..hi])` costs two: the slice, then the str built from it.
+   Bounds are clamped the way strings.slice clamps, and a negative index
+   counts from the end, so a caller cannot read outside the buffer. */
+static char *sl_strings_from_bytes(sl_bytes *b, long long lo, long long hi) {
+    long long n = b ? b->len : 0;
+    if (lo < 0) lo += n;
+    if (hi < 0) hi += n;
+    if (lo < 0) lo = 0;
+    if (hi > n) hi = n;
+    if (!b || lo >= n || hi <= lo) return sl_strings_dupn("", 0);
+    return sl_strings_dupn((const char *)(b->ptr + lo), (size_t)(hi - lo));
+}
+
+/* from_bytes, lowercasing ASCII during the copy. */
+static char *sl_strings_from_bytes_lower(sl_bytes *b, long long lo,
+                                         long long hi) {
+    long long n = b ? b->len : 0;
+    if (lo < 0) lo += n;
+    if (hi < 0) hi += n;
+    if (lo < 0) lo = 0;
+    if (hi > n) hi = n;
+    if (!b || lo >= n || hi <= lo) return sl_strings_dupn("", 0);
+    char *out = sl_strings_dupn((const char *)(b->ptr + lo), (size_t)(hi - lo));
+    for (long long i = 0; i < hi - lo; i++) {
+        if (out[i] >= 'A' && out[i] <= 'Z') out[i] = (char)(out[i] + 32);
+    }
+    return out;
+}
+
+/* See pkg_strings/sigs.c for the contract. `block` is CRLF-separated
+ * "name: value" lines with no blank-line terminator (the http package's
+ * own scan already validated that shape before this is ever called, and
+ * strips the terminator when it slices the block out) -- so a line with
+ * no CRLF ahead of it only happens at true end-of-block, which the outer
+ * loop condition already guards. */
+static long long sl_strings_find_field(sl_bytes *block, const char *name) {
+    if (!block || !name)
+        return -1;
+    size_t namelen = strlen(name);
+    unsigned char *p = block->ptr;
+    long long n = block->len;
+    long long result = -1;
+    long long i = 0;
+    while (i < n) {
+        long long line_start = i;
+        long long j = i;
+        while (j + 1 < n && !(p[j] == '\r' && p[j + 1] == '\n'))
+            j++;
+        long long line_end = (j + 1 < n) ? j : n;
+        long long colon = -1;
+        for (long long k = line_start; k < line_end; k++) {
+            if (p[k] == ':') {
+                colon = k;
+                break;
+            }
+        }
+        if (colon > line_start) {
+            long long here_len = colon - line_start;
+            if ((size_t)here_len == namelen) {
+                int match = 1;
+                for (size_t m = 0; m < namelen; m++) {
+                    unsigned char c = p[line_start + m];
+                    unsigned char w = (unsigned char)name[m];
+                    if (c >= 'A' && c <= 'Z')
+                        c = (unsigned char)(c + 32);
+                    if (w >= 'A' && w <= 'Z')
+                        w = (unsigned char)(w + 32);
+                    if (c != w) {
+                        match = 0;
+                        break;
+                    }
+                }
+                if (match)
+                    result = colon + 1; /* last match wins; keep scanning */
+            }
+        }
+        if (line_end >= n)
+            break;
+        i = line_end + 2;
+    }
+    return result;
+}
+
 static sl_bytes *sl_strings_join_bytes(sl_arr *parts, sl_bytes *sep) {
     long long n = parts ? parts->len : 0;
     sl_bytes **items = parts ? (sl_bytes **)parts->data : NULL;

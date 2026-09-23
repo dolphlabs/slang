@@ -55,6 +55,29 @@ const NatSig STRINGS_SIGS[] = {
        the result once and copies each piece once. */
     {"strings", "join_bytes", 2, {NA_ARR_BYTES, NA_BYTES}, "bytes", 0},
 
+    /* `to_str(b[lo..hi])` is two allocations and two copies: the slice,
+       then the str made from it. A parser pulling a field out of a buffer
+       does that for every field of every message -- http's header values,
+       method, path and version are all this shape. Sizing the str once
+       and copying the range straight into it halves both. */
+    {"strings", "from_bytes", 3, {NA_BYTES, NA_INT, NA_INT}, "str", 0},
+
+    /* The same, lowercasing ASCII as it copies. A header name is wanted
+       lowercased and nothing else, and doing it here costs one pass over
+       bytes already being copied -- where `lower_ascii(to_str(b[lo..hi]))`
+       cost four allocations and three passes. */
+    {"strings", "from_bytes_lower", 3, {NA_BYTES, NA_INT, NA_INT}, "str", 0},
+
+    /* Case-insensitive last-match search for one HTTP header's value
+       inside an already-framed header block: CRLF-separated "name:
+       value" lines. Returns the offset just past the matching line's
+       colon (before OWS trimming), or -1. A native rather than a slang
+       loop specifically because the caller's own `name: str` is compared
+       directly, with no to_bytes(name) to pay for first -- that
+       conversion alone would cost more than the whole point of not
+       building a map. */
+    {"strings", "find_field", 2, {NA_BYTES, NA_STR}, "int", 0},
+
     /* the shortest text that parses back to exactly this float.
        to_str uses %g, six significant digits, which is right for
        printing and wrong for anything that must round-trip. */
