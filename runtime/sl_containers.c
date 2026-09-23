@@ -230,6 +230,11 @@ static void sl_chan_send(sl_chan *c, const void *val) {
     int tail = (c->head + c->count) % c->cap;
     memcpy(c->buf + (size_t)tail * c->elemsz, val, c->elemsz);
     c->count++;
+    /* Generational barrier: element store into a potentially-old chan
+     * buffer (chan[T] buffers hold GC pointers when elem_is_ptr).
+     * Inside the existing entry-to-return bracket. */
+    if (c->elem_is_ptr)
+        sl_gc_remember(c);
     sl_wl_wake_one(&c->recv_waiters, &c->recv_waiters_tail);
     pthread_mutex_unlock(&c->mu);
     sl_rt_preempt_enable();
@@ -764,6 +769,15 @@ static sl_arr *sl_arr_new(size_t esz, int elem_is_ptr) {
 
 static void sl_arr_reserve(sl_arr *a, long long need) {
     if (need <= a->cap) return;
+    /* Pre-barrier: `a` itself may be old, and the swap below overwrites
+     * its a->data field (which sl_gc_trace_arr follows). A minor GC
+     * that lands after the swap without `a` remembered would never
+     * visit the new buffer. sl_gc_realloc never collects synchronously
+     * (see sl_gc_alloc_fin), so no collection can land between this
+     * barrier and the swap it protects. */
+    sl_rt_preempt_disable();
+    sl_gc_remember(a);
+    sl_rt_preempt_enable();
     long long cap = a->cap ? a->cap : 8;
     while (cap < need) cap *= 2;
     a->data = (unsigned char *)sl_gc_realloc(a->data, (size_t)cap * a->esz);
@@ -790,6 +804,14 @@ static void sl_arr_push(sl_arr *a, void *val, size_t esz) {
     sl_arr_reserve(a, a->len + 1);
     memcpy(a->data + (size_t)a->len * esz, val, esz);
     a->len++;
+    /* Element store into a potentially-old container: coarse barrier
+     * when the element type can hold a GC pointer. Scalar element
+     * stores (bytes/ints) never create old->young edges. */
+    if (a->elem_is_ptr) {
+        sl_rt_preempt_disable();
+        sl_gc_remember(a);
+        sl_rt_preempt_enable();
+    }
 }
 
 static void *sl_arr_pop(sl_arr *a, size_t esz) {
@@ -940,6 +962,10 @@ static void sl_map_grow(sl_map *m) {
      * meaning a PREVIOUSLY-inserted key had already been swept by the
      * time this grow tried to rehash it. */
     sl_rt_preempt_disable();
+    /* Pre-barrier (same as sl_arr_reserve): `m` itself may be old and
+     * the assignments below overwrite its keys/vals/state/order fields
+     * (all GC-pointer fields sl_gc_trace_map follows). */
+    sl_gc_remember(m);
     long long old_cap = m->cap;
     unsigned char *ok = m->keys, *ov = m->vals;
     unsigned char *ost = m->state;
@@ -986,6 +1012,11 @@ static void sl_map_put(sl_map *m, const void *k, const void *v) {
      * is the same discipline sl_gc_alloc/sl_task_park/every other
      * fully-bracketed function in this codebase already follows. */
     sl_rt_preempt_disable();
+    /* Generational barrier: this store may create an old->young edge
+     * (m itself old, key/value freshly allocated). Coarse v1: always
+     * remember m when it is old, regardless of the value's own
+     * generation. Inside the existing bracket (shard grow mallocs). */
+    sl_gc_remember(m);
     unsigned long long h = m->kstr
                               ? sl_hash_str(*(const char *const *)k)
                               : sl_hash_bytes((const unsigned char *)k,

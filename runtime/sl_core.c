@@ -269,6 +269,15 @@ typedef struct sl_task {
     long gc_pend_n;
     size_t gc_pend_bytes;
     size_t gc_pend_pub;
+    /* Generational (young/old) remembered set shard. Mutators append
+     * old-generation objects they store a GC pointer into here via
+     * sl_gc_remember(); the next minor GC harvests every task's shard
+     * STW (same retire-then-harvest discipline as gc_pend_*, same
+     * reason: no sl_gc_mu on the mutator write path). Array of
+     * sl_gc_obj* (headers, not payloads), malloc'd lazily. */
+    sl_gc_obj **gc_rem_buf;
+    size_t gc_rem_n;
+    size_t gc_rem_cap;
     void *join;
 } sl_task;
 

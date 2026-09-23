@@ -919,6 +919,13 @@ char *gen_ctor(CG *cg, Expr *e) {
      * allocation never collects (see sl_gc_alloc_fin). */
     const char *vc = ctype_of(cg, target);
     char *inner;
+    /* Generational barrier for the wrapper stores below (_sl_c->v /
+     * _sl_c->e / _sl_c->has's sibling): the wrapper is YOUNG (just
+     * allocated), so no barrier is needed for THESE stores -- but the
+     * same reasoning does NOT extend to res/opt unwrapping or field
+     * projection elsewhere; those go through the struct-field barrier
+     * in stmt.c. Newborn-into-newborn stores never create old->young
+     * edges by construction. */
     if (!strcmp(name, "some")) {
         const char *oc = opt_cname(cg, target);
         const char *trace = type_is_gc_ptr(cg, target)
@@ -1709,6 +1716,68 @@ char *gen_expr(CG *cg, Expr *e) {
             return xstrdup("((void *)0)");
         return gen_ident_name(cg, e->as.ident.name, e->line);
     case EX_UNARY: {
+        /* Generational barrier for interior `&mut` (see
+         * runtime/GENERATIONAL_GC_HANDOFF.md, "Resolved: interior
+         * &mut references"): `&mut o.field` / `&mut a[i]` smuggles a
+         * bare pointer past the direct-assignment barrier sites in
+         * stmt.c, so the store through it (`*r = v`) can create an
+         * old->young edge with no barrier at the store itself (the
+         * store only sees the folded pointer, not the container). The
+         * container is still identifiable HERE, before folding, so
+         * remember it now, unconditionally (coarse v1 -- runtime
+         * no-ops for young containers). Shared `&` needs none (cannot
+         * be stored through). `&mut x` of a whole local is not
+         * interior into a GC container: nothing to remember.
+         *
+         * Emitted as a comma-expression barrier sequenced BEFORE the
+         * address-of: evaluation order matters (the barrier call must
+         * see the container value, and the address-of operand must not
+         * run first inside an unspecified-order sibling context). The
+         * caller sequences this whole rvalue via its own
+         * sequence_one/ambient handling like any other expression. */
+        if (!strcmp(e->as.unary.op, "&mut")) {
+            Expr *op = e->as.unary.operand;
+            if (op->kind == EX_FIELD) {
+                const char *bt = infer_type(cg, op->as.field.base);
+                char *binner;
+                int bboxed = type_wrap(bt, &binner) == TW_GC;
+                if (!bboxed && struct_type_is_gc(cg, bt)) {
+                    char *b = gen_expr(cg, op->as.field.base);
+                    char *o = xasprintf(
+                        "((%s)%s%s)", b, struct_access(cg, bt),
+                        sanitize_ident(op->as.field.name));
+                    /* Own preempt bracket: sl_gc_remember mallocs/reads
+                     * TLS; this is an inline expression site with no
+                     * surrounding runtime bracket. */
+                    return xasprintf(
+                        "({ sl_rt_preempt_disable(); sl_gc_remember((void *)(%s)); sl_rt_preempt_enable(); (&(%s)); })",
+                        b, o);
+                }
+            } else if (op->kind == EX_INDEX) {
+                const char *bt = infer_type(cg, op->as.index.base);
+                if (is_arr(bt)) {
+                    char *elem = arr_elem(bt);
+                    if (type_is_gc_ptr(cg, elem)) {
+                        char *b = gen_expr(cg, op->as.index.base);
+                        char *ix = gen_expr(cg, op->as.index.index);
+                        char *at = panic_at(cg, e->line);
+                        const char *ec = ctype_of(cg, elem);
+                        char *o = xasprintf(
+                            "(*(%s *)(void *)sl_arr_get(%s, %s, "
+                            "sizeof(%s), %s))",
+                            ec, b, ix, ec, at);
+                        return xasprintf(
+                            "({ sl_rt_preempt_disable(); sl_gc_remember((void *)(%s)); sl_rt_preempt_enable(); (&(%s)); })",
+                            b, o);
+                    }
+                }
+                /* map interior `&mut m[k]`: the map's own sl_map_put
+                 * barrier covers the eventual store through the
+                 * returned slot pointer's user-visible path (map value
+                 * slots are only ever committed via sl_map_put in
+                 * generated code); bytes/wire hold no GC pointers. */
+            }
+        }
         char *o = gen_expr(cg, e->as.unary.operand);
         /* keep narrow-int wrap semantics across unary minus */
         if (!strcmp(e->as.unary.op, "-") && is_int(infer_type(cg, e)))
