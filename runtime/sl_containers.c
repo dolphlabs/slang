@@ -673,6 +673,33 @@ static char *sl_str_from_bytes(sl_bytes *b) {
     return p;
 }
 
+/* The wire counterpart. A wire is a view into arena (non-GC) memory, so
+ * this is the one allocation -- there is no header to also allocate the
+ * way sl_bytes has one, which is what makes to_str(w[a..b]) one
+ * allocation where to_str(to_bytes(w[a..b])) was three. */
+static char *sl_str_from_wire(sl_wire w) {
+    char *p = (char *)sl_gc_alloc((size_t)w.len + 1, NULL);
+    if (w.len) memcpy(p, w.ptr, (size_t)w.len);
+    p[w.len] = 0;
+    return p;
+}
+
+/* wire_put_bytes: the sl_bytes counterpart of sl_wire_put (sl_core.c) --
+ * split across the two files because sl_bytes isn't defined yet where
+ * sl_wire is. Same contract: writes only what fits, returns the count. */
+static long long sl_wire_put_bytes(sl_wire w, long long off, sl_bytes *b) {
+    long long room, n;
+    if (!b || off < 0 || off > w.len)
+        return 0;
+    room = w.len - off;
+    n = b->len;
+    if (n > room)
+        n = room;
+    if (n > 0)
+        memcpy(w.ptr + off, b->ptr, (size_t)n);
+    return n;
+}
+
 static sl_bytes *sl_bytes_from_str(const char *s) {
     return sl_bytes_new((const unsigned char *)s, (long long)strlen(s));
 }

@@ -229,6 +229,27 @@ const char *infer_call(CG *cg, Expr *e) {
             cg_error(e->line, "bytes_ptr() expects bytes (got %s)", t);
         return "rawptr";
     }
+    if (!strcmp(name, "wire_put") || !strcmp(name, "wire_put_bytes")) {
+        int is_bytes_form = !strcmp(name, "wire_put_bytes");
+        if (n != 3)
+            cg_error(e->line, "%s() takes exactly three arguments", name);
+        const char *wt = infer_type(cg, e->as.call.args[0]);
+        if (!is_wire(wt))
+            cg_error(e->line, "%s() expects a wire (got %s)", name, wt);
+        const char *ot = infer_type(cg, e->as.call.args[1]);
+        if (!is_int(ot))
+            cg_error(e->line, "%s() expects an integer offset (got %s)",
+                     name, ot);
+        const char *st = infer_type(cg, e->as.call.args[2]);
+        if (is_bytes_form) {
+            if (!is_bytes(st))
+                cg_error(e->line, "%s() expects bytes (got %s)", name, st);
+        } else {
+            if (!is_str(st))
+                cg_error(e->line, "%s() expects a str (got %s)", name, st);
+        }
+        return "int";
+    }
     if (!strcmp(name, "make_chan")) {
         if (n != 1)
             cg_error(e->line, "make_chan() takes exactly one argument");
@@ -661,6 +682,11 @@ const char *infer_call(CG *cg, Expr *e) {
                     if (n != 0)
                         cg_error(e->line, "arena.reset() takes no arguments");
                     return "void";
+                }
+                if (!strcmp(right, "left")) {
+                    if (n != 0)
+                        cg_error(e->line, "arena.left() takes no arguments");
+                    return "int";
                 }
                 if (!strcmp(right, "wire")) {
                     if (n != 1)
