@@ -1,5 +1,20 @@
 #!/bin/sh
-# Alternate-order HTTP bench: slang / Go / C / Rust / Java / Zig / C#.
+# Alternate-order HTTP bench for the frozen ruler (bench/http/main.sl,
+# bench/http/README.md's Ruler/Raw-throughput axis): raw bytes, one
+# recv, canned response, no HTTP parsing. Its Go peer is go_raw, the
+# same shape -- NOT net/http (bench/http/main.go), which parses real
+# requests and belongs to a different axis; racing the ruler against it
+# was this script's own mixed-axis bug (see bench/http/README.md's "one
+# rule"), fixed by this comment's neighboring line.
+#
+# C and Zig below are the same raw shape as the ruler. Rust, Java and
+# C# here are NOT: rust/ is axum, HttpBench.java is
+# com.sun.net.httpserver, and cs/ is HttpListener -- all real HTTP
+# frameworks doing real parsing, raced here anyway for lack of a raw
+# peer in those three languages. Numbers against those three mix axes
+# the same way the slang/Go pairing used to; bench/run_http_realserver.sh
+# is where a framework-vs-framework claim (currently slang vs Go only)
+# belongs instead.
 # Usage: HTTP_ROUNDS=3 HTTP_DUR=10s ./bench/run_http.sh
 # Missing toolchains are skipped.
 
@@ -101,10 +116,10 @@ else
     skip slang "slangc failed"
     c_sl="fail"
 fi
-if command -v go >/dev/null 2>&1 && c_go=$(time_sec go build -o "$GO_BIN" bench/http/main.go); then
+if command -v go >/dev/null 2>&1 && c_go=$(time_sec go build -o "$GO_BIN" bench/http/go_raw/main.go); then
     HAVE_GO=1
 else
-    skip go "go missing or build failed"
+    skip go_raw "go missing or build failed"
     c_go="fail"
 fi
 if c_cc=$(time_sec cc -O3 -flto -std=c11 bench/http/main.c -lpthread -o "$C_BIN"); then
