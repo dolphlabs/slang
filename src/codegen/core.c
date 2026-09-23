@@ -1394,7 +1394,8 @@ static int expr_can_alloc_or_park(CG *cg, Expr *e) {
         if (!strcmp(name, "len") || !strcmp(name, "until_never") ||
             !strcmp(name, "until_hit") || !strcmp(name, "fault_kind") ||
             !strcmp(name, "fault_code") || !strcmp(name, "fault_op") ||
-            !strcmp(name, "peer_port") || !strcmp(name, "bytes_ptr"))
+            !strcmp(name, "peer_port") || !strcmp(name, "bytes_ptr") ||
+            !strcmp(name, "wire_put") || !strcmp(name, "wire_put_bytes"))
             return 0;
         for (int i = 0; i < e->as.call.nargs; i++) {
             if (expr_can_alloc_or_park(cg, e->as.call.args[i]))
@@ -1409,7 +1410,7 @@ static int expr_can_alloc_or_park(CG *cg, Expr *e) {
             if (!pkg)
                 recv_t = infer_ident_name(cg, left, e->line);
             if (recv_t && type_is_arena(recv_t)) {
-                if (!strcmp(right, "reset"))
+                if (!strcmp(right, "reset") || !strcmp(right, "left"))
                     return 0;
                 return 1;
             }
@@ -1444,7 +1445,8 @@ int safepoint_elidable(CG *cg, Expr *e) {
     if (!strcmp(name, "len") || !strcmp(name, "until_never") ||
         !strcmp(name, "until_hit") || !strcmp(name, "fault_kind") ||
         !strcmp(name, "fault_code") || !strcmp(name, "fault_op") ||
-        !strcmp(name, "peer_port") || !strcmp(name, "bytes_ptr"))
+        !strcmp(name, "peer_port") || !strcmp(name, "bytes_ptr") ||
+        !strcmp(name, "wire_put") || !strcmp(name, "wire_put_bytes"))
         return 1;
     char *left, *right;
     if (split_dotted(name, &left, &right)) {
@@ -1454,7 +1456,8 @@ int safepoint_elidable(CG *cg, Expr *e) {
         const char *recv_t = NULL;
         if (!pkg)
             recv_t = infer_ident_name(cg, left, e->line);
-        if (recv_t && type_is_arena(recv_t) && !strcmp(right, "reset"))
+        if (recv_t && type_is_arena(recv_t) &&
+            (!strcmp(right, "reset") || !strcmp(right, "left")))
             return 1;
         if (recv_t && type_is_trip(recv_t) && !strcmp(right, "down"))
             return 1;
@@ -2043,6 +2046,7 @@ int is_builtin_name(const char *name) {
            !strcmp(name, "ok") || !strcmp(name, "err") ||
            !strcmp(name, "err_of") ||
            !strcmp(name, "nullptr") || !strcmp(name, "bytes_ptr") ||
+           !strcmp(name, "wire_put") || !strcmp(name, "wire_put_bytes") ||
            !strcmp(name, "make_chan") || !strcmp(name, "chan_send") ||
            !strcmp(name, "chan_recv") || !strcmp(name, "chan_close") ||
            !strcmp(name, "make_mutex") || !strcmp(name, "mutex_lock") ||

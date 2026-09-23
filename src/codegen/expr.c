@@ -86,6 +86,8 @@ char *conv_to_str(CG *cg, const char *t, char *expr) {
         return xasprintf("sl_str_from_bool(%s)", expr);
     if (is_bytes(t))
         return xasprintf("sl_str_from_bytes(%s)", expr);
+    if (is_wire(t))
+        return xasprintf("sl_str_from_wire(%s)", expr);
     if (is_fault(t))
         return xasprintf("sl_str_from_fault(%s)", expr);
     if (is_enum(cg, t)) {
@@ -446,6 +448,16 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *a = gen_expr(cg, e->as.call.args[0]);
         char *inner = xasprintf("((void *)(%s)->ptr)", a);
         return wrap_safepoint(cg, e, ctype_of(cg, "rawptr"), NULL, inner);
+    }
+    if (!strcmp(name, "wire_put") || !strcmp(name, "wire_put_bytes")) {
+        char *w = gen_expr(cg, e->as.call.args[0]);
+        char *off = gen_expr(cg, e->as.call.args[1]);
+        char *src = gen_expr(cg, e->as.call.args[2]);
+        const char *fn = !strcmp(name, "wire_put_bytes")
+                             ? "sl_wire_put_bytes"
+                             : "sl_wire_put";
+        char *inner = xasprintf("%s(%s, %s, %s)", fn, w, off, src);
+        return wrap_safepoint(cg, e, "long long", NULL, inner);
     }
     if (!strcmp(name, "make_chan")) {
         /* cg->expect must still hold the annotated chan[T] target,
@@ -1029,6 +1041,10 @@ char *gen_call(CG *cg, Expr *e) {
                 if (!strcmp(right, "reset")) {
                     char *inner = xasprintf("sl_arena_reset(%s)", self);
                     return wrap_safepoint(cg, e, NULL, NULL, inner);
+                }
+                if (!strcmp(right, "left")) {
+                    char *inner = xasprintf("sl_arena_left(%s)", self);
+                    return wrap_safepoint(cg, e, "long long", NULL, inner);
                 }
                 if (!strcmp(right, "wire")) {
                     char *n = gen_expr(cg, e->as.call.args[0]);

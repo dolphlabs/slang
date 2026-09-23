@@ -1255,6 +1255,19 @@ static void sl_arena_reset(sl_arena *a) {
         a->used = 0;
 }
 
+/* Bytes still available before the next allocation would panic. A caller
+ * that might exceed the arena checks this and falls back instead of
+ * finding out by crashing the task -- there was no way to ask this from
+ * slang before, which is what made arena-backed assembly unsafe to use
+ * for anything whose size isn't known to fit ahead of time. */
+static long long sl_arena_left(sl_arena *a) {
+    if (!a || !a->base)
+        return 0;
+    if (a->used >= a->cap)
+        return 0;
+    return (long long)(a->cap - a->used);
+}
+
 static void sl_arena_free(sl_arena *a) {
     if (!a || !a->base)
         return;
@@ -1411,6 +1424,31 @@ static sl_wire sl_wire_slice(sl_wire w, long long s, long long e) {
     r.ptr = w.ptr + s;
     r.len = e - s;
     return r;
+}
+
+/* wire_put: the bulk-copy-into-wire primitive that never existed before
+ * this -- every str into a wire used to be a byte-at-a-time slang loop.
+ * (wire_put_bytes, the sl_bytes counterpart, is in sl_containers.c,
+ * emitted after this file -- sl_bytes isn't defined yet here.) Writes
+ * only what fits from `off`, returns the count actually written so a
+ * caller sizing then filling in two passes (the http write path) can
+ * size and fill with the same numbers, or notice a mismatch. off outside
+ * the wire, or a non-positive room, writes nothing and returns 0 -- never
+ * a panic; a bulk copy that can silently write short is safer here than
+ * one that aborts the task, since the caller already checked capacity to
+ * get a wire this size in the first place and a mismatch means a bug in
+ * that accounting, not a hostile input. */
+static long long sl_wire_put(sl_wire w, long long off, const char *s) {
+    long long room, n;
+    if (!s || off < 0 || off > w.len)
+        return 0;
+    room = w.len - off;
+    n = (long long)strlen(s);
+    if (n > room)
+        n = room;
+    if (n > 0)
+        memcpy(w.ptr + off, s, (size_t)n);
+    return n;
 }
 
 static sl_link sl_link_from_fd(int fd) {

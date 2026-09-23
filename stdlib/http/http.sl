@@ -469,25 +469,16 @@ pub fn parse(raw: bytes) -> result[Request, str] {
 // whole response once per header -- on every response the server sends.
 // This is the same quadratic assembly `builder` was added to fix
 // elsewhere; the stdlib's own HTTP path still had it.
+//
+// A builder rather than a `[bytes]` and one `strings.join_bytes`: the
+// list form was tried and measured slower, because a piece per header is
+// an allocation per header before anything is joined.
+//
+// This is the standalone/TLS path (`demo/main.sl` calls it directly) and
+// `write`'s fallback for a response too large for its caller's arena.
+// `write` itself does not call this when the response fits -- see `emit`
+// below, which skips these allocations entirely.
 pub fn serialize(r: Response) -> bytes {
-    // Assembled through a builder, not by `+`.
-    //
-    // Every `+` on bytes allocates a new buffer and copies everything
-    // written so far into it, so a response was re-copied once per header,
-    // on every response the server sends -- the same quadratic assembly
-    // `builder` exists to fix, still sitting in the stdlib's own HTTP
-    // path.
-    //
-    // A builder rather than a `[bytes]` and one `strings.join_bytes`: the
-    // list form was tried and measured slower, because a piece per header
-    // means an allocation per header before anything is joined.
-    //
-    // This plus the single-allocation field extraction below is worth
-    // ~40% on a keep-alive server with a 200-byte body and four headers:
-    // medians of five interleaved A/B runs against the unmodified
-    // package, 14.9k -> 20.8k req/s, and the new one won all five paired
-    // rounds. The box swings ~20% run to run, so the pairing and the
-    // medians are the claim, not any single number.
     let sb = builder.new_bytes();
     sb.write_str("HTTP/1.1 ");
     sb.write_str(to_str(r.status));
@@ -593,9 +584,76 @@ pub fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Inc
     }
 }
 
+// Writes into `w` starting at `off` and returns the offset just past what
+// was written -- the TRUE length of the piece, whether or not `w` had
+// room for all of it. That's what makes `emit` below one implementation
+// for two passes: called with a zero-length probe wire, every put_*
+// silently writes nothing (there is no room) but `off` still advances by
+// each piece's real length, so the function returns the response's exact
+// total size without writing a byte of it. Called again with a wire that
+// size, the same calls this time have all the room they need and every
+// byte lands.
+fn put_str(w: wire, off: int, s: str) -> int {
+    wire_put(w, off, s);
+    return off + len(s);
+}
+fn put_bytes(w: wire, off: int, b: bytes) -> int {
+    wire_put_bytes(w, off, b);
+    return off + len(b);
+}
+
+// The exact byte layout of serialize() above, written directly into a
+// wire instead of built up through GC allocations. One function serving
+// both the size pass and the fill pass (see put_str/put_bytes) is what
+// keeps them from drifting apart under maintenance -- a future field
+// added to one and not the other is exactly the bug two implementations
+// would eventually grow. Must stay byte-identical to serialize(): same
+// order, same "Connection"-capitalised quirk in the skip filter below
+// (kept deliberately -- see serialize()'s own history).
+fn emit(r: Response, w: wire) -> int {
+    let off = 0;
+    off = put_str(w, off, "HTTP/1.1 ");
+    off = put_str(w, off, to_str(r.status));
+    off = put_str(w, off, " ");
+    off = put_str(w, off, r.status_text);
+    off = put_str(w, off, "\r\n");
+    for k, v in r.headers {
+        if k != "content-length" && k != "connection" {
+            off = put_str(w, off, k);
+            off = put_str(w, off, ": ");
+            off = put_str(w, off, v);
+            off = put_str(w, off, "\r\n");
+        }
+    }
+    let conn = "keep-alive";
+    if has(r.headers, "connection") {
+        conn = r.headers["connection"];
+    }
+    off = put_str(w, off, "Content-Length: ");
+    off = put_str(w, off, to_str(len(r.body)));
+    off = put_str(w, off, "\r\nConnection: ");
+    off = put_str(w, off, conn);
+    off = put_str(w, off, "\r\n\r\n");
+    off = put_bytes(w, off, r.body);
+    return off;
+}
+
+// serialize()'s GC allocations (~40 of them for a typical response, see
+// serialize()'s own comment) replaced with two passes over the caller's
+// own arena: size, then fill. If the response is larger than what's left
+// of the arena, falls back to serialize() + send_bytes rather than
+// letting a.wire(need) past capacity kill the task -- a slow response
+// stays a slow response instead of becoming a dropped connection.
 pub fn write(c: &mut link, r: Response, a: &mut arena, deadline: until) -> result[int, fault] {
-    let raw = serialize(r);
-    return c.send_bytes(raw, deadline);
+    let probe = a.wire(0);
+    let need = emit(r, probe);
+    if need > a.left() {
+        let raw = serialize(r);
+        return c.send_bytes(raw, deadline);
+    }
+    let w = a.wire(need);
+    emit(r, w);
+    return c.send(w, deadline);
 }
 
 pub fn text_response(status: i32, status_text: str, content_type: str,
