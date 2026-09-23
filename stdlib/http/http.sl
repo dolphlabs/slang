@@ -434,6 +434,70 @@ pub fn header(r: Request, name: str) -> opt[str] {
     return none;
 }
 
+// header()'s two real call sites (Ctx.header in zokor, the WebSocket
+// handshake) are both `header(...) ?? fallback` already -- this is that,
+// without the opt allocation `??` unwraps.
+pub fn header_or(r: Request, name: str, fallback: str) -> str {
+    let k = lower_ascii(name);
+    if has(r.headers, k) {
+        return r.headers[k];
+    }
+    return fallback;
+}
+
+// Every header a request carries, as a map -- built fresh on each call,
+// which costs nothing today (Request's own field still is one, this
+// just copies it) and will cost a scan once the representation underneath
+// changes; nothing in either repo iterates this today, which is what
+// makes "built on demand" the right default rather than a cached field.
+pub fn headers(r: Request) -> map[str]str {
+    let out: map[str]str = {};
+    for k, v in r.headers {
+        out[k] = v;
+    }
+    return out;
+}
+
+fn header_part_ok(s: str) -> bool {
+    let b = to_bytes(s);
+    let i = 0;
+    while i < len(b) {
+        if b[i] == 13 || b[i] == 10 {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// Builds a Request the way the eager parser already enforces off the
+// wire: a header name or value may not contain CR or LF (an application-
+// or test-constructed header gets no such check for free the way one
+// read off the wire does -- this is where that rule lives for this
+// path), and a name may not contain the colon that separates it from its
+// value on the wire. Both are a real hazard here, not a theoretical one:
+// once the representation is a raw header block instead of a map
+// (planned, not yet true), a value containing "\r\n" would become a
+// second header nobody's map ever held -- header injection, structurally
+// impossible while the representation IS the map, so this validates now
+// rather than changing behaviour silently the day it stops being one.
+pub fn request(method: str, path: str, version: str,
+               headers: map[str]str, body: bytes) -> result[Request, str] {
+    for k, v in headers {
+        if byteutil.find(to_bytes(k), 0, 58) >= 0 {
+            return err("header name contains ':': '" + k + "'");
+        }
+        if !header_part_ok(k) {
+            return err("header name contains CR or LF: '" + k + "'");
+        }
+        if !header_part_ok(v) {
+            return err("header value contains CR or LF (header '" + k + "')");
+        }
+    }
+    return ok(Request { method: method, path: path, version: version,
+                        headers: headers, body: body });
+}
+
 pub fn parse(raw: bytes) -> result[Request, str] {
     if len(raw) == 0 {
         return err("empty request");
