@@ -1,0 +1,3 @@
+direct barrier ok
+&mut barrier ok
+done
