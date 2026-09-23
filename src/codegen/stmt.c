@@ -277,6 +277,16 @@ void gen_stmt(CG *cg, Stmt *s) {
                 move_consume(cg, s->as.assign.value);
                 emit_line(cg, "%s%s%s = %s;", b, struct_access(cg, bt),
                           sanitize_ident(sd->fields[fi]), val);
+                /* Generational barrier, same as the EX_FIELD case below:
+                 * only when the field can hold a GC pointer and the
+                 * container is itself GC-traced (and not a `gc T` box).
+                 * Own preempt bracket (inline store, no runtime bracket). */
+                {
+                    char *bin2;
+                    int is_box2 = type_wrap(bt, &bin2) == TW_GC;
+                    if (!is_box2 && type_is_gc_ptr(cg, sd->ftypes[fi]) && struct_type_is_gc(cg, bt))
+                        emit_line(cg, "{ sl_rt_preempt_disable(); sl_gc_remember((void *)(%s)); sl_rt_preempt_enable(); }", b);
+                }
                 break;
             }
             if (!v)
@@ -365,6 +375,29 @@ void gen_stmt(CG *cg, Stmt *s) {
             move_consume(cg, s->as.assign.value);
             emit_line(cg, "%s%s%s = %s;", b, struct_access(cg, bt),
                       sanitize_ident(sd->fields[fi]), val);
+            /* Generational barrier: storing a GC pointer into a field
+             * of an already-allocated (potentially old) struct may
+             * create an old->young edge. Coarse v1: unconditional
+             * sl_gc_remember on the container when the FIELD type can
+             * hold a GC pointer and the container type is itself GC
+             * (a barrier on a non-GC/value struct is meaningless --
+             * nothing traces it). sl_gc_remember no-ops at runtime
+             * for young containers. Box-wrapped containers (`gc T`,
+             * TW_GC) are excluded: a `gc T` box is a malloc'd wrapper
+             * with the payload INLINE (see box_expr, core.c), not a
+             * sl_gc_obj -- passing it to sl_gc_remember would read
+             * malloc metadata as a header, and storing into it creates
+             * no old->young edge anyway (no container object exists).
+             *
+             * Bracket: same as the list-element site below -- the store
+             * is inline (no runtime bracket of its own), so open one
+             * around the barrier call. */
+            {
+                char *bin;
+                int is_box = type_wrap(bt, &bin) == TW_GC;
+                if (!is_box && type_is_gc_ptr(cg, sd->ftypes[fi]) && struct_type_is_gc(cg, bt))
+                    emit_line(cg, "{ sl_rt_preempt_disable(); sl_gc_remember((void *)(%s)); sl_rt_preempt_enable(); }", b);
+            }
             break;
         }
         /* index target: xs[i] = v, b[i] = v, or m[k] = v */
@@ -528,6 +561,21 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "%s(*(%s *)(void *)sl_arr_get(%s, %s, sizeof(%s), %s)) = "
                       "(%s)(%s);",
                       prelude.data, ec, b, i, ec, at, ec, val);
+            /* Generational barrier: element store into a potentially-old
+             * list. Coarse v1: unconditional remember when the element
+             * type can hold a GC pointer (runtime no-ops for young
+             * containers). Scalar element stores need none. Map stores
+             * are covered inside sl_map_put; bytes/wire hold no GC
+             * pointers at all.
+             *
+             * Bracket: sl_gc_remember's shard-grow mallocs and reads
+             * TLS, so it must run under preempt_disable (see
+             * sl_gc_remember_obj's own comment). The store above is a
+             * plain inline memcpy-equivalent, NOT a bracketed runtime
+             * call like sl_map_put -- so this site opens its own
+             * bracket around the barrier call itself. */
+            if (type_is_gc_ptr(cg, elem))
+                emit_line(cg, "{ sl_rt_preempt_disable(); sl_gc_remember((void *)(%s)); sl_rt_preempt_enable(); }", b);
             break;
         }
         cg->ambient_count = ambient_mark;
