@@ -784,6 +784,14 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
             }
             return out2;
         }
+        if (tgt->kind == EX_UNARY) {
+            /* Dereference store: *p = v (stmt.c:317). Not an index --
+             * falls through to the EX_INDEX path below without this,
+             * misreading as.index memory as Expr* children. No
+             * safepoint (a plain C store), so both sides are uses. */
+            LiveSet *cur = live_expr(cg, s->as.assign.value, live_out);
+            return live_expr(cg, tgt->as.unary.operand, cur);
+        }
         if (tgt->kind == EX_FIELD) {
             LiveSet *cur = live_expr(cg, s->as.assign.value, live_out);
             return live_expr(cg, tgt->as.field.base, cur);
