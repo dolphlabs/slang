@@ -617,14 +617,10 @@ static void sl_gc_harvest_rem_task(sl_task *t) {
  * the collector STW (all mutators stopped). No atomics needed.
  *
  * SOUNDNESS NOTE: this function trusts its caller to pass a real
- * sl_gc_obj header. Every barrier site is audited for that:
- * struct-field barriers (stmt.c) fire only for GC-traced containers
- * (struct_type_is_gc) that are not `gc T` boxes (TW_GC -- a malloc'd
- * inline-payload wrapper, not a sl_gc_obj); list-element barriers only
- * for sl_arr containers; map/chan barriers pass their own well-typed
- * self pointer from inside their runtime implementation. A missed site
- * is silent heap corruption (an old->young edge the next minor never
- * scans); an EXTRA site (young container) is just a wasted no-op. */
+ * sl_gc_obj header. Every barrier site is audited for that. A missed
+ * site is silent heap corruption (an old->young edge the next minor
+ * never scans); an EXTRA site (young container) is just a wasted
+ * no-op. */
 static void sl_gc_remember_obj(sl_gc_obj *h) {
     if (!h) return;
     if (h->gen != 1 || h->remembered) return;
@@ -751,6 +747,19 @@ static void sl_gc_class_push(sl_gc_obj *h) {
         free(h);
         return;
     }
+    /* Scrub GC state before freelisting: a recycled header must be
+     * indistinguishable from a fresh malloc (gen young, unmarked,
+     * unremembered). The sweep already cleared marked, but gen may be
+     * 1 (a swept OLD object) and remembered may be set -- either would
+     * corrupt the next owner's lifecycle (an old-gen young object
+     * escapes nursery sweeping; a set remembered flag suppresses the
+     * barrier that should re-register it). Belt and suspenders with
+     * sl_gc_class_pop's own reset: push scrubs so an idle freelist
+     * header never carries stale GC state, pop scrubs so a recycled
+     * header always re-enters young even if push is ever bypassed. */
+    h->marked = 0;
+    h->gen = 0;
+    h->remembered = 0;
     pthread_mutex_lock(&sl_gc_class_mu);
     if (sl_gc_class_fl_n[c] < SL_GC_CLASS_MAX) {
         h->next = sl_gc_class_fl[c];
@@ -1194,25 +1203,111 @@ static void sl_gc_mark_roots(sl_gc_thread **snap, int nsnap,
 }
 
 /* Minor (nursery) STW collection: sweeps ONLY sl_gc_young. Roots are
- * the full Tier-11 set (via sl_gc_mark_roots with sl_gc_mark_minor)
- * plus every harvested remembered-set object traced as a root. Old
- * objects reached during mark are marked but NOT traced; survivors on
- * sl_gc_young promote to sl_gc_old. sl_gc_old itself is never swept
- * here -- that is what makes this fast.
- *
- * STATUS: minor SWEEP + PROMOTION path is DISABLED pending root-cause
- * of promotion corruption (gc_ctor_payload's `keep` list loses items
- * once minors actually sweep+promote; with the wrapper below routing
- * minor triggers into sl_gc_collect, every GC test passes at default
- * AND low nursery thresholds). The disabled body is kept in-tree
- * (renamed, uncalled) so the mark/remember/promote logic stays
- * reviewable; re-enable by deleting the wrapper and restoring the
- * original name. */
-static void sl_gc_collect_minor_disabled_body(void);
+ * the full Tier-11 set (full mark through old objects reachable from
+ * roots -- see sl_gc_collect_minor_real's comment for why the root
+ * phase traces old) plus every harvested remembered-set object (minor
+ * mark: old entries marked, not traced). Survivors on sl_gc_young
+ * promote to sl_gc_old. sl_gc_old itself is never swept here -- that
+ * is what makes this fast. */
+static void sl_gc_collect_minor(void);
+static void sl_gc_collect_minor_fullmark(void);
+static void sl_gc_collect_minor_real(void);
 static void sl_gc_collect_minor(void) {
-    sl_gc_collect();
+    sl_gc_collect_minor_real();
 }
-static void sl_gc_collect_minor_disabled_body(void) {
+/* Phase-2 bisect helper: FULL-mark minor (kept for diagnosis; not on
+ * the collection path). Same nursery-only sweep + promote as the real
+ * minor, but marks everything with sl_gc_mark. */
+static void sl_gc_collect_minor_fullmark(void) {
+    long long t0 = 0;
+    int stat_on = sl_gc_stat_enabled();
+    if (stat_on)
+        t0 = sl_rt_monotonic_ns();
+    sl_gc_thread **snap = NULL;
+    int nsnap = 0;
+    sl_gc_stw_sync(&snap, &nsnap);
+
+    pthread_mutex_lock(&sl_gc_mu);
+    sl_gc_drain_retired();
+    sl_gc_for_pending_tasks(sl_gc_harvest_task, snap, nsnap);
+    sl_gc_rem_harvest_n = 0;
+    sl_gc_for_pending_tasks(sl_gc_harvest_rem_task, snap, nsnap);
+    for (size_t i = 0; i < sl_gc_rem_harvest_n; i++)
+        sl_gc_rem_harvest_buf[i]->remembered = 0;
+    sl_gc_rem_harvest_n = 0;
+    sl_gc_set_build();
+    sl_gc_wl_n = 0;
+    sl_gc_cur_mark = sl_gc_mark;
+    sl_gc_mark_roots(snap, nsnap, sl_gc_mark);
+    while (sl_gc_wl_n > 0) {
+        void *p = sl_gc_wl[--sl_gc_wl_n];
+        sl_gc_obj *h = (sl_gc_obj *)p - 1;
+        if (h->trace) h->trace(p, sl_gc_mark);
+    }
+    free(sl_gc_wl);
+    sl_gc_wl = NULL;
+    sl_gc_wl_cap = 0;
+
+    sl_gc_obj **mpp = &sl_gc_young;
+    size_t swept = 0, promoted = 0;
+    while (*mpp) {
+        sl_gc_obj *h = *mpp;
+        if (!h->marked) {
+            *mpp = h->next;
+            if (h->fini)
+                h->fini((void *)(h + 1));
+            sl_gc_class_push(h);
+            swept++;
+        } else {
+            *mpp = h->next;
+            h->marked = 0;
+            h->remembered = 0;
+            h->gen = 1;
+            h->next = sl_gc_old;
+            sl_gc_old = h;
+            promoted++;
+        }
+    }
+    for (sl_gc_obj *o = sl_gc_old; o; o = o->next)
+        o->marked = 0;
+    sl_gc_drain_retired();
+    free(sl_gc_set);
+    sl_gc_set = NULL;
+    sl_gc_set_cap = 0;
+    sl_gc_set_count = 0;
+    free(snap);
+
+    atomic_store_explicit(&sl_gc_bytes_since_minor, 0, memory_order_relaxed);
+    if (stat_on)
+        sl_gc_stat_minor_pause(sl_rt_monotonic_ns() - t0, swept, promoted);
+    atomic_store_explicit(&sl_gc_collect_minor_pending, 0, memory_order_release);
+    if (!atomic_load_explicit(&sl_gc_collect_pending, memory_order_acquire)) {
+        atomic_store_explicit(&sl_gc_stop_requested, 0, memory_order_release);
+        atomic_store_explicit(&sl_gc_collecting, 0, memory_order_release);
+    } else {
+        atomic_store_explicit(&sl_gc_collecting, 0, memory_order_release);
+    }
+    pthread_mutex_unlock(&sl_gc_mu);
+    if (atomic_load_explicit(&sl_gc_collect_pending, memory_order_acquire)) {
+        if (!atomic_exchange_explicit(&sl_gc_collecting, 1, memory_order_acq_rel))
+            sl_gc_collect();
+    }
+}
+
+/* Real minor (nursery) STW collection: nursery-only sweep + promotion.
+ *
+ * Root phase uses the FULL mark (traces through old objects reachable
+ * from roots); the remembered phase + drains use the minor mark (old
+ * entries marked, not traced). Rationale: fatal minors have EMPTY
+ * remembered sets (no old store since the last minor), yet young
+ * victims reachable via an OLD buffer die -- the edge was created by
+ * memcpy (push/realloc copies), and intra-expression C-locals are
+ * missed via roots by both marks; the full mark is saved by tracing
+ * old buffers, the minor mark has no backstop. Tracing
+ * roots-reachable old subgraphs per minor closes the hole; old garbage
+ * NOT under roots is still skipped (the nursery win). Cost per minor
+ * grows by exactly the roots-reachable old subgraph -- small. */
+static void sl_gc_collect_minor_real(void) {
     long long t0 = 0;
     int stat_on = sl_gc_stat_enabled();
     if (stat_on)
@@ -1228,9 +1323,18 @@ static void sl_gc_collect_minor_disabled_body(void) {
     sl_gc_for_pending_tasks(sl_gc_harvest_rem_task, snap, nsnap);
     size_t rem_n = sl_gc_rem_harvest_n;
     sl_gc_set_build();
+    /* Root phase with FULL mark: trace through old objects reachable
+     * from roots (see the function comment). Remembered phase + drains
+     * stay minor (old reached only via remembered entries is marked,
+     * not traced). */
     sl_gc_wl_n = 0;
-    sl_gc_cur_mark = sl_gc_mark_minor;
-    sl_gc_mark_roots(snap, nsnap, sl_gc_mark_minor);
+    sl_gc_cur_mark = sl_gc_mark;
+    sl_gc_mark_roots(snap, nsnap, sl_gc_mark);
+    while (sl_gc_wl_n > 0) {
+        void *p = sl_gc_wl[--sl_gc_wl_n];
+        sl_gc_obj *h = (sl_gc_obj *)p - 1;
+        if (h->trace) h->trace(p, sl_gc_mark);
+    }
     for (size_t i = 0; i < rem_n; i++) {
         sl_gc_obj *rh = sl_gc_rem_harvest_buf[i];
         void *payload = (void *)(rh + 1);
@@ -1248,6 +1352,106 @@ static void sl_gc_collect_minor_disabled_body(void) {
         void *p = sl_gc_wl[--sl_gc_wl_n];
         sl_gc_obj *h = (sl_gc_obj *)p - 1;
         if (h->trace) h->trace(p, sl_gc_mark_minor);
+    }
+    /* Phase-2 SHADOW VERIFY (SLANG_GC_SHADOW=1): before sweeping, run a
+     * FULL mark and check every young object the minor is about to
+     * SWEEP is also unmarked under full semantics. (Diagnostic only;
+     * with the root-phase fix above, saves should be zero.) */
+    int shadow = getenv("SLANG_GC_SHADOW") ? 1 : 0;
+    /* Fatal-cycle correlation: ALWAYS record rem_n (cheap counter, no
+     * log spam); the shadow block dumps it when it saves objects. */
+    static _Atomic unsigned long long sl_gc_minor_count = 0;
+    static _Atomic unsigned long long sl_gc_minor_empty_rem = 0;
+    unsigned long long my_minor = atomic_fetch_add_explicit(&sl_gc_minor_count, 1, memory_order_relaxed);
+    if (rem_n == 0)
+        atomic_fetch_add_explicit(&sl_gc_minor_empty_rem, 1, memory_order_relaxed);
+    if (shadow) {
+        /* stash minor decisions */
+        for (sl_gc_obj *o = sl_gc_young; o; o = o->next)
+            o->remembered = o->marked ? 1 : 0; /* reuse flag as stash */
+        for (sl_gc_obj *o = sl_gc_old; o; o = o->next)
+            o->marked = 0;
+        for (sl_gc_obj *o = sl_gc_young; o; o = o->next)
+            o->marked = 0;
+        sl_gc_wl_n = 0;
+        sl_gc_cur_mark = sl_gc_mark;
+        sl_gc_mark_roots(snap, nsnap, sl_gc_mark);
+        while (sl_gc_wl_n > 0) {
+            void *p = sl_gc_wl[--sl_gc_wl_n];
+            sl_gc_obj *h = (sl_gc_obj *)p - 1;
+            if (h->trace) h->trace(p, sl_gc_mark);
+        }
+        size_t shadow_saved = 0;
+        int shadow_path = getenv("SLANG_GC_SHADOW_PATH") ? 1 : 0;
+        for (sl_gc_obj *o = sl_gc_young; o; o = o->next) {
+            int minor_live = o->remembered ? 1 : 0;
+            o->remembered = 0;
+            if (!minor_live && o->marked) {
+                shadow_saved++;
+                if (shadow_saved <= 3) {
+                    void **pl = (void **)(o + 1);
+                    fprintf(stderr, "slang-gc-shadow: minor would free %p (size=%zu trace=%p gen=%d) payload_w0=%p w1=%p\n",
+                            (void *)(o + 1), o->size, (void *)o->trace, (int)o->gen,
+                            o->size >= sizeof(void *) ? pl[0] : NULL,
+                            o->size >= 2 * sizeof(void *) ? pl[1] : NULL);
+                    if (shadow_path) {
+                        void *victim = (void *)(o + 1);
+                        for (int si = 0; si < nsnap; si++) {
+                            sl_task *st = *snap[si]->task_slot;
+                            if (st->join == victim)
+                                fprintf(stderr, "slang-gc-shadow-path: victim %p is task join root\n", victim);
+                            for (sl_safepoint *sp = st->safepoint_top; sp; sp = sp->prev)
+                                for (int j = 0; j < sp->nroots; j++)
+                                    if (sp->roots[j] == victim)
+                                        fprintf(stderr, "slang-gc-shadow-path: victim %p is DIRECT safepoint root\n", victim);
+                        }
+                        for (sl_gc_obj *yo = sl_gc_young; yo; yo = yo->next) {
+                            if (yo == o) continue;
+                            unsigned char *base = (unsigned char *)(yo + 1);
+                            for (size_t off = 0; off + sizeof(void *) <= yo->size;
+                                 off += 1) {
+                                void *w;
+                                memcpy(&w, base + off, sizeof(w));
+                                if (w == victim) {
+                                    fprintf(stderr, "slang-gc-shadow-path: victim %p reached via YOUNG %p (size=%zu trace=%p gen=%d) at offset %zu\n",
+                                            victim, (void *)(yo + 1), yo->size, (void *)yo->trace, (int)yo->gen, off);
+                                    goto shadow_path_young_done;
+                                }
+                            }
+                        }
+shadow_path_young_done:;
+                        for (sl_gc_obj *oo = sl_gc_old; oo; oo = oo->next) {
+                            unsigned char *base = (unsigned char *)(oo + 1);
+                            for (size_t off = 0; off + sizeof(void *) <= oo->size;
+                                 off += 1) {
+                                void *w;
+                                memcpy(&w, base + off, sizeof(w));
+                                if (w == victim) {
+                                    fprintf(stderr, "slang-gc-shadow-path: victim %p reached via old %p (size=%zu trace=%p) at payload offset %zu\n",
+                                            victim, (void *)(oo + 1), oo->size, (void *)oo->trace, off);
+                                    goto shadow_path_done;
+                                }
+                            }
+                        }
+                        fprintf(stderr, "slang-gc-shadow-path: victim %p NOT found in any old payload (reached via young chain or roots)\n", victim);
+shadow_path_done:;
+                    }
+                }
+            }
+            o->marked = minor_live ? 1 : o->marked;
+        }
+        if (shadow_saved) {
+            unsigned long long nempty = atomic_load_explicit(&sl_gc_minor_empty_rem, memory_order_relaxed);
+            fprintf(stderr, "slang-gc-shadow: saved %zu objects this cycle (minor #%llu rem_n=%zu empties_so_far=%llu)\n",
+                    shadow_saved, my_minor, rem_n, nempty);
+        }
+        free(sl_gc_wl);
+        sl_gc_wl = NULL;
+        sl_gc_wl_cap = 0;
+        sl_gc_wl_n = 0;
+        /* re-run minor worklist drain state: marks are now union, sweep
+         * below frees only objects NEITHER mark reached. */
+        sl_gc_cur_mark = sl_gc_mark_minor;
     }
     free(sl_gc_wl);
     sl_gc_wl = NULL;
