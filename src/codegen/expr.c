@@ -461,12 +461,13 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
     }
     if (!strcmp(name, "make_chan")) {
         /* cg->expect must still hold the annotated chan[T] target,
-         * exactly as ctor_infer relies on for some/none/ok/err */
+         * exactly as ctor_infer relies on for some/none/ok/err.
+         * Same elem flag fix as gen_list: type_has_gc_roots. */
         const char *ct = infer_type(cg, e);
         char *elem = chan_elem(ct);
         char *a = gen_expr(cg, e->as.call.args[0]);
         char *inner = xasprintf("sl_chan_new(sizeof(%s), (int)(%s), %d)",
-                                ctype_of(cg, elem), a, type_is_gc_ptr(cg, elem));
+                                ctype_of(cg, elem), a, type_has_gc_roots(cg, elem));
         return wrap_safepoint(cg, e, ctype_of(cg, ct), NULL, inner);
     }
     if (!strcmp(name, "chan_send")) {
@@ -1425,7 +1426,9 @@ char *gen_maplit(CG *cg, Expr *e, const char *expect_k,
     sb_append(&sb, "), sizeof(");
     sb_append(&sb, vc);
     sb_append(&sb, xasprintf("), %d, %d, %d); ", kstr,
-                             type_is_gc_ptr(cg, kt), type_is_gc_ptr(cg, vt)));
+                             /* Same flag fix: interior pointers in value-
+                              * struct keys/values must trace. */
+                             type_has_gc_roots(cg, kt), type_has_gc_roots(cg, vt)));
     /* Each key/value is sequenced into its own temp, declared directly
      * in this outer ({ ... }) scope (not the old per-pair { ... }
      * block, which closed immediately after its own sl_map_put --
@@ -1666,7 +1669,9 @@ char *gen_list(CG *cg, Expr *e, const char *expect_elem) {
     sb_append(&sb, xasprintf("%d", e->as.list.nelems));
     sb_append(&sb, ", sizeof(");
     sb_append(&sb, ec);
-    sb_append(&sb, xasprintf("), %d); })", type_is_gc_ptr(cg, t0)));
+    /* elem flag must cover value structs with interior GC pointers
+     * (type_has_gc_roots), not just bare GC pointers. */
+    sb_append(&sb, xasprintf("), %d); })", type_has_gc_roots(cg, t0)));
     return sb.data;
 }
 
@@ -1718,23 +1723,8 @@ char *gen_expr(CG *cg, Expr *e) {
     case EX_UNARY: {
         /* Generational barrier for interior `&mut` (see
          * runtime/GENERATIONAL_GC_HANDOFF.md, "Resolved: interior
-         * &mut references"): `&mut o.field` / `&mut a[i]` smuggles a
-         * bare pointer past the direct-assignment barrier sites in
-         * stmt.c, so the store through it (`*r = v`) can create an
-         * old->young edge with no barrier at the store itself (the
-         * store only sees the folded pointer, not the container). The
-         * container is still identifiable HERE, before folding, so
-         * remember it now, unconditionally (coarse v1 -- runtime
-         * no-ops for young containers). Shared `&` needs none (cannot
-         * be stored through). `&mut x` of a whole local is not
-         * interior into a GC container: nothing to remember.
-         *
-         * Emitted as a comma-expression barrier sequenced BEFORE the
-         * address-of: evaluation order matters (the barrier call must
-         * see the container value, and the address-of operand must not
-         * run first inside an unspecified-order sibling context). The
-         * caller sequences this whole rvalue via its own
-         * sequence_one/ambient handling like any other expression. */
+         * &mut references"): remember the container now, before the
+         * address-of folds it into a bare pointer. */
         if (!strcmp(e->as.unary.op, "&mut")) {
             Expr *op = e->as.unary.operand;
             if (op->kind == EX_FIELD) {
@@ -1757,7 +1747,7 @@ char *gen_expr(CG *cg, Expr *e) {
                 const char *bt = infer_type(cg, op->as.index.base);
                 if (is_arr(bt)) {
                     char *elem = arr_elem(bt);
-                    if (type_is_gc_ptr(cg, elem)) {
+                    if (type_has_gc_roots(cg, elem)) {
                         char *b = gen_expr(cg, op->as.index.base);
                         char *ix = gen_expr(cg, op->as.index.index);
                         char *at = panic_at(cg, e->line);
@@ -1771,11 +1761,8 @@ char *gen_expr(CG *cg, Expr *e) {
                             b, o);
                     }
                 }
-                /* map interior `&mut m[k]`: the map's own sl_map_put
-                 * barrier covers the eventual store through the
-                 * returned slot pointer's user-visible path (map value
-                 * slots are only ever committed via sl_map_put in
-                 * generated code); bytes/wire hold no GC pointers. */
+                /* Map/bytes/wire interiors need no barrier here (map stores
+                 * commit via sl_map_put; bytes/wire hold no GC pointers). */
             }
         }
         char *o = gen_expr(cg, e->as.unary.operand);
@@ -1800,11 +1787,12 @@ char *gen_expr(CG *cg, Expr *e) {
     case EX_LIST:
         if (e->as.list.nelems == 0) {
             /* typed by infer_type from the expected type; errors there
-             * if there was none */
+             * if there was none. Same elem_is_ptr fix as gen_list: use
+             * type_has_gc_roots so [ValueStruct] empties trace. */
             const char *lt = infer_type(cg, e);
             char *elem = arr_elem(lt);
             return xasprintf("sl_arr_new(sizeof(%s), %d)", ctype_of(cg, elem),
-                             type_is_gc_ptr(cg, elem));
+                             type_has_gc_roots(cg, elem));
         }
         return gen_list(cg, e, NULL);
     case EX_MAPLIT:
@@ -1969,7 +1957,8 @@ char *gen_expr(CG *cg, Expr *e) {
             "%s _sl_sa%d; "
             "_sl_sa%d.join = sl_join_new(sizeof(%s), %d); ",
             shape->sname, id, id, ctype_of(cg, sig->ret_slang),
-            type_is_gc_ptr(cg, sig->ret_slang)));
+            /* Same flag fix: join[ValueStruct] interior pointers. */
+            type_has_gc_roots(cg, sig->ret_slang)));
         if (sft)
             sb_append(&prelude,
                       xasprintf("_sl_sa%d.fn = %s; ", id,

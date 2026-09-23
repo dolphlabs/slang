@@ -227,7 +227,8 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
         cg->indent--;
         emit_line(cg, "}");
         emit_line(cg, "sl_arr *a = sl_arr_new(sizeof(%s), %d);", ect,
-                  type_is_gc_ptr(cg, elem));
+                  /* Same elem flag fix as gen_list: interior pointers. */
+                  type_has_gc_roots(cg, elem));
         emit_line(cg, "for (long long i = 0; i < v->as.arr.len; i++) {");
         cg->indent++;
         emit_line(cg, "%s tmp;", ect);
@@ -261,7 +262,7 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
         emit_line(cg, "}");
         emit_line(cg, "sl_map *m = sl_map_new(sizeof(const char *), "
                        "sizeof(%s), 1, 1, %d);",
-                  vct, type_is_gc_ptr(cg, v));
+                  vct, type_has_gc_roots(cg, v));
         emit_line(cg, "for (long long i = 0; i < v->as.obj.len; i++) {");
         cg->indent++;
         emit_line(cg, "%s tmp;", vct);
