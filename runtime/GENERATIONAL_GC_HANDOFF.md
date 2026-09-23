@@ -227,16 +227,75 @@ every GC-pointer store is the actual first task):
   every generated call. Check whether the map's backing storage is
   itself a `sl_gc_obj` (it should be, maps are gc-traced) before
   assuming this shortcut works.
-- List/array element assignment (`a[i] = v`) — not located this
-  session; grep `src/codegen/stmt.c` and `expr.c` for how index-assign
-  codegen works (search near `ST_ASSIGN`'s handling of
-  `EX_INDEX`-kind targets, past line ~305 in stmt.c where the `*`
-  deref case starts — the index case is nearby).
+- **A second struct-field-assignment site**, distinct from the one
+  above: `src/codegen/stmt.c:366` (`EX_FIELD` target, `p.x = v` where
+  `p` is itself an expression, not a bare identifier the parser folded
+  into a dotted name — `stmt.c:278` only handles the latter). Same
+  emitted shape (`"%s%s%s = %s;"`), same guard condition, needs the
+  same barrier call. Two sites doing the same job for two different
+  parse shapes of "the same" assignment — don't instrument only one.
+- List/array element assignment (`a[i] = v`) and map assignment both
+  reachable from `ST_ASSIGN`'s index-target branch, `stmt.c:370`
+  onward (right after the `EX_FIELD` case above) — not fully traced
+  this session, follow it from there; `sl_map_put` call sites already
+  found are `expr.c:1455` and `stmt.c:479`.
 - Closures/captured variables, if slang closures capture by reference
   into a heap-allocated environment struct — check whether that
   environment struct already goes through `emit_struct_tracers`'s
   path (if so, already covered by the struct-field case above) or
   needs its own site.
+
+### Resolved: interior `&mut` references (`*p = v` through a field/
+### index reference) need the barrier at reference CREATION, not at
+### the deref-assignment
+
+This came up as an open question in a later planning pass and is worth
+settling explicitly rather than leaving as "lean unconditional," which
+is incomplete as stated. Checked directly against codegen:
+
+`&mut`/`&` is fully generic (`expr.c:1717-1718`): `&mut expr` compiles
+to `(&(<expr>))` for *any* `expr`, including `EX_FIELD` (`&mut
+obj.field`) and `EX_INDEX` (`&mut arr[i]`) — nothing stops an interior
+mutable reference into the middle of a GC struct or array. The
+deref-assignment codegen (`stmt.c:306-336`, the `*p = v` case) permits
+this for `TW_REFMUT` (`&mut`) and raw-pointer wraps, rejecting only
+`TW_REF` (shared `&`, correctly — can't mutate through it at all).
+
+**The problem with barrier-at-deref**: at `stmt.c:335`
+(`emit_line(cg, "*(%s) = %s;", p, val)`), `p` is a bare interior
+pointer — it does not point at the start of an allocation, so
+`(sl_gc_obj *)p - 1` does not reach a valid header. There is nothing
+correct to pass to a barrier call at that site. "Emit it
+unconditionally" doesn't fix this; it just calls a function with no
+way to identify what to remember.
+
+**The fix**: trigger the barrier when the interior reference is
+*created*, not when it's dereferenced. At the `&mut` codegen site
+(`expr.c:1717-1718`), when the operand is `EX_FIELD` or `EX_INDEX`,
+the compiler still has the CONTAINER's own pointer available right
+there (see how `EX_FIELD`'s own codegen at `expr.c:1743-1748` computes
+`b` — the base struct pointer — before erasing anything) — before it
+gets folded into `&(o->field)`. Emit the remember-call there,
+unconditionally, on the container, the moment a mutable interior
+reference into it is taken — regardless of whether the reference ends
+up actually written through. This is the same coarse-over-remember
+philosophy already chosen for the direct-assignment barrier above,
+just applied at the point where enough information still exists to
+act on it. A plain `&mut x` where `x` is a whole local (not a field or
+index) needs nothing — it's not an interior pointer into a GC
+container in the first place.
+
+Raw pointers (`unsafe` block required per `stmt.c:317-320`) are a
+separate, lower-priority case: if a raw pointer is ever manufactured
+FROM a GC object via an unsafe cast (not confirmed either way this
+session — check whether the language allows this at all) the same
+base-recovery problem applies, with no equivalent "creation site" to
+hook since raw pointer arithmetic is exactly what `unsafe` exists to
+allow. Worth a documented decision before shipping (e.g. "unsafe code
+must not write GC pointers through a raw pointer into old-generation
+memory" as a stated invariant, unenforced), but not a blocker for the
+mainstream `&mut` case above, which covers the actual borrow-checked
+language.
 
 The barrier call itself (`sl_gc_remember(void *old_obj)` or similar,
 in `sl_gc.c`) must follow the **exact same preempt-disable bracketing
@@ -263,10 +322,16 @@ under real load.
 2. **Correctness tests first, before any benchmark.** New tests
    needed: (a) an object survives 2+ minor GCs (promotion happens,
    nothing frees it prematurely); (b) mutate an *old* object's field
-   to point at a *freshly allocated* object, force a minor GC, assert
-   the new object survived — this is THE test that catches a missing
-   or buggy write barrier, the exact failure mode this design risks.
-   Also: run the existing stress harness's pattern
+   to point at a *freshly allocated* object via ordinary `p.x = v`,
+   force a minor GC, assert the new object survived — this is THE test
+   that catches a missing or buggy write barrier, the exact failure
+   mode this design risks; (c) the same as (b) but through an interior
+   `&mut` reference (`let r = &mut old_obj.field; *r = new_obj;`) —
+   the direct-assignment barrier and the reference-creation barrier
+   (see "Resolved: interior `&mut` references" above) are two
+   different code paths and a test only exercising (b) would not catch
+   a bug in the reference-creation one. Also: run the existing stress
+   harness's pattern
    (`SLANG_GC_THRESHOLD_KB=16` in `tests/run_tests.sh`) with an
    equivalent low `SLANG_GC_NURSERY_KB` so minor collections happen on
    nearly every allocation during the whole existing test suite — that
