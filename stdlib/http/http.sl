@@ -23,13 +23,12 @@ pub gc struct Request {
 
 // `read` couples two things that only sometimes belong together:
 // filling the caller's buffer and framing what's in it. serve_conn
-// needs the split for frame dispatch (route on segs without strs):
-// it frames with parse_frame off the head bytes, but the head bytes
-// themselves still come from read's own framing -- one to_bytes of
-// the head, not one per field. read_frame is that split: same scan,
-// same errors, same close/body rules as read, but it ALSO returns the
-// head bytes the router matches on, so the serve loop copies once
-// and routes without building a second Request.
+// needs the split for frame dispatch: read_frame frames with the
+// same scans/errors/rules as read, but returns the parsed head
+// (method/path strs, header block, body) instead of a Request --
+// so the router matches on strs with no raw copy, no rescan, no
+// second slice. Offsets stay for Frame callers and tests; the
+// serve path does not use them.
 pub gc struct WireFrame {
     line_end: int,
     head_end: int,
@@ -39,9 +38,10 @@ pub gc struct WireFrame {
     version: int,
     close: bool,
     filled: int,
-    head: bytes,
-    chunked_body: bytes,
-    is_chunked: bool,
+    method: str,
+    path: str,
+    headers: bytes,
+    body: bytes,
 }
 
 pub gc struct Incoming {
@@ -1608,15 +1608,21 @@ pub fn frame_body(raw: bytes, f: Frame) -> bytes {
     return raw[f.body_start..f.body_end];
 }
 
-// The body slice off read_frame's head copy: chunked bodies decoded
-// out of raw (reassembled), identity bodies sliced in place -- same
-// rule as frame_body, over WireFrame offsets. read_frame's head copy
-// holds the whole message, so no second copy.
-pub fn wire_frame_body(raw: bytes, f: WireFrame) -> bytes {
-    if f.is_chunked {
-        return f.chunked_body;
+// The Request for a WireFrame: method/path already parsed, headers
+// + body already sliced -- no offsets, no raw, no second copy.
+// version comes from the flag (no version str is stored).
+pub fn wire_request(f: WireFrame) -> Request {
+    let v = "HTTP/1.1";
+    if f.version == 0 {
+        v = "HTTP/1.0";
     }
-    return raw[f.body_start..f.body_end];
+    return Request {
+        method: f.method,
+        path: f.path,
+        version: v,
+        raw_headers: f.headers,
+        body: f.body
+    };
 }
 
 pub fn frame_raw_headers(raw: bytes, f: Frame, line_end: int) -> bytes {
@@ -2143,6 +2149,34 @@ pub fn wants_close(r: Request) -> bool {
     return lower_ascii(v) == "close";
 }
 
+// The close decision off the ALREADY-PARSED head: same rules as
+// wants_close, but the version is hd.version (a str, no flag
+// conversion) and the connection value is read off hd.headers (the
+// block copy parse_head_wire already made) -- no head copy, no
+// rescan, no second slice. read_frame uses this so the serve loop
+// never builds a Request just to learn the connection closes.
+fn wants_close_head(hd: Head) -> bool {
+    let at = strings.find_field(hd.headers, "connection");
+    if at < 0 {
+        return hd.version == "HTTP/1.0";
+    }
+    let v = value_at(hd.headers, at);
+    if hd.version == "HTTP/1.0" {
+        return lower_ascii(v) != "keep-alive";
+    }
+    return lower_ascii(v) == "close";
+}
+
+// The int-flag twin, for callers holding a version str rather than
+// a Head (read_frame's WireFrame.version). Same rules; the block is
+// passed explicitly because there is no Head in scope.
+pub fn version_flag_of(v: str) -> int {
+    if v == "HTTP/1.0" {
+        return 0;
+    }
+    return 1;
+}
+
 // The close decision straight off framed bytes: same rules as
 // wants_close, but no Request, no header str -- the connection line
 // is compared in place and only its value (rare, and only when
@@ -2308,30 +2342,28 @@ fn hr_ok(r: result[Head, str]) -> bool {
     return true;
 }
 
-// read_frame: read's framing, plus the head bytes the router matches
+// read_frame: read's framing, plus the parsed head the router matches
 // on. Implemented INSIDE read's loop shape (not as read-plus-copy):
 // read compacts the buffer before returning, so after read there is
 // no head left to copy -- buf[0..filled] is the NEXT request. This
 // duplicates read's loop deliberately (same scans, same errors, same
 // close rules), and the duplication is the contract: any change to
-// read's framing must land here too. What differs: on a complete
-// frame it copies the message bytes once (to_bytes of buf[0..end])
-// and derives offsets DIRECTLY from the wire scan it already ran
-// (hd2's request line + sep + fm's end) instead of re-framing the
-// copy with parse_frame -- that second pass cost a full header
-// rescan, a version-str compare, a find_field slice plus a value_at
-// copy for the close decision, and a second body slice per request.
-// serve_frame routes on the copy with no Request strs, no segs list,
-// and no second copy.
+// read's framing must land here too.
 //
-// Chunked bodies need care: frame_body_wire REASSEMBLES them
-// (concat_parts) because chunks arrive discontiguous, but the head
-// copy above holds the raw chunked bytes -- slicing body offsets out
-// of it would serve chunk framing as the body. So for chunked, the
-// WireFrame's body IS the reassembled copy (fm.body, one alloc the
-// old path also spent); body_start/body_end are 0/0 and unused --
-// wire_frame_body is only for the identity path, and frame_request_at
-// takes the body explicitly for exactly this reason.
+// What differs from read: on a complete frame the method/path strs
+// and the header block + body are COPIED OUT of the wire ONCE --
+// the same strs + copies read already pays (hd2.method/path,
+// hd2.headers, fm.body) -- and NO separate message copy is made.
+// The old shape did to_bytes(buf[0..end]) PLUS parse_frame over the
+// copy PLUS wants_close_scan over the copy: a full second framing
+// pass and a whole-message copy per request. Now the WireFrame
+// carries what the router needs directly: method/path strs for the
+// enum + Request build, headers/body slices for the Ctx. Routing
+// matches on strs (==), never on raw bytes -- no path_is_at rescan,
+// no per-route to_bytes. The message copy is gone entirely.
+//
+// Chunked bodies: fm.body IS the reassembled copy (one alloc the
+// old path also spent); the WireFrame body is that copy directly.
 pub fn read_frame(c: &mut link, buf: wire, filled: int,
                   deadline: until) -> result[WireFrame, str] {
     let n = filled;
@@ -2356,42 +2388,21 @@ pub fn read_frame(c: &mut link, buf: wire, filled: int,
                         return err("request too large for buffer");
                     }
                 } else {
-                    let raw = to_bytes(buf[0..fm.end]);
-                    // Offsets straight from the scan that just framed:
-                    // request line is buf[0..line_end], headers end at
-                    // sep, body runs sep+4..end. No parse_frame rescan.
-                    let line_end = find_crlf_wire_n(buf, 0, n);
-                    let v = 1;
-                    if hd2.version == "HTTP/1.0" {
-                        v = 0;
-                    }
-                    // The close decision off the wire scan's own
-                    // verdicts: HTTP/1.0 closes unless keep-alive was
-                    // seen; HTTP/1.1 stays unless close was seen. The
-                    // wire scan records CL/TE verdicts but not the
-                    // connection value -- one find on the head copy,
-                    // same as before, but no Request and no second
-                    // framing pass around it.
-                    let close = wants_close_scan(raw, hd2.sep, v);
+                    let close = wants_close_head(hd2);
                     let rest = compact_wire(buf, fm.end, n);
-                    let bs = hd2.sep + 4;
-                    let be = fm.end;
-                    if hd2.hs.has_transfer_encoding && hd2.hs.te_is_chunked {
-                        bs = 0;
-                        be = 0;
-                    }
                     return ok(WireFrame {
-                        line_end: line_end,
+                        line_end: 0,
                         head_end: hd2.sep,
-                        body_start: bs,
-                        body_end: be,
+                        body_start: 0,
+                        body_end: 0,
                         end: fm.end,
-                        version: v,
+                        version: version_flag_of(hd2.version),
                         close: close,
                         filled: rest,
-                        head: raw,
-                        chunked_body: fm.body,
-                        is_chunked: hd2.hs.has_transfer_encoding && hd2.hs.te_is_chunked
+                        method: hd2.method,
+                        path: hd2.path,
+                        headers: hd2.headers,
+                        body: fm.body
                     });
                 }
             }
