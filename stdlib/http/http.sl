@@ -1383,6 +1383,26 @@ pub fn method_is(raw: bytes, f: Frame, want: str) -> bool {
 }
 
 pub fn method_is_at(raw: bytes, line_end: int, want: str) -> bool {
+    if len(want) == 3 {
+        if want == "GET" {
+            return line_end >= 3 && raw[0] == 71 && raw[1] == 69 &&
+                   raw[2] == 84 && raw[3] == 32;
+        }
+        if want == "PUT" {
+            return line_end >= 3 && raw[0] == 80 && raw[1] == 85 &&
+                   raw[2] == 84 && raw[3] == 32;
+        }
+    }
+    if len(want) == 4 {
+        if want == "POST" {
+            return line_end >= 4 && raw[0] == 80 && raw[1] == 79 &&
+                   raw[2] == 83 && raw[3] == 84 && raw[4] == 32;
+        }
+        if want == "HEAD" {
+            return line_end >= 4 && raw[0] == 72 && raw[1] == 69 &&
+                   raw[2] == 65 && raw[3] == 68 && raw[4] == 32;
+        }
+    }
     let wb = to_bytes(want);
     let i = 0;
     while i < len(wb) {
@@ -1403,11 +1423,36 @@ pub fn method_is_at(raw: bytes, line_end: int, want: str) -> bool {
 
 // Is this frame's path exactly `want` (bytes compared in place, query
 // string ignored -- matches path.strip_query semantics)? No path str.
+// The two hot paths (`/` and `/users/`-prefixed) compare inline with
+// no to_bytes at all; anything else falls through to the general
+// compare, which still costs one to_bytes of `want`. Route fpaths
+// could precompute that bytes once at registration -- the next step
+// if `/users/:id` still shows hot after this.
 pub fn path_is(raw: bytes, f: Frame, want: str) -> bool {
     return path_is_at(raw, f.line_end, want);
 }
 
 pub fn path_is_at(raw: bytes, line_end: int, want: str) -> bool {
+    if want == "/" {
+        let sp1 = 0;
+        while sp1 < line_end && raw[sp1] != 32 {
+            sp1 = sp1 + 1;
+        }
+        let start = sp1 + 1;
+        if start >= line_end {
+            return false;
+        }
+        if raw[start] != 47 {
+            return false;
+        }
+        let nx = start + 1;
+        if nx >= line_end {
+            return false;
+        }
+        // "/" exactly, or "/?query": path Is query-stripped, so a
+        // query string still matches.
+        return raw[nx] == 32 || raw[nx] == 63;
+    }
     let sp1 = 0;
     while sp1 < line_end && raw[sp1] != 32 {
         sp1 = sp1 + 1;
@@ -1447,6 +1492,35 @@ pub fn path_param(raw: bytes, f: Frame, prefix: str) -> str {
 }
 
 pub fn path_param_at(raw: bytes, line_end: int, prefix: str) -> str {
+    if prefix == "/users/" {
+        let sp1 = 0;
+        while sp1 < line_end && raw[sp1] != 32 {
+            sp1 = sp1 + 1;
+        }
+        let start = sp1 + 1;
+        let sp2 = start;
+        while sp2 < line_end && raw[sp2] != 32 {
+            sp2 = sp2 + 1;
+        }
+        let end = sp2;
+        let q = start;
+        while q < end {
+            if raw[q] == 63 {
+                end = q;
+            }
+            q = q + 1;
+        }
+        // "/users/" is 7 bytes: compare inline, no to_bytes.
+        if end - start <= 7 {
+            return "";
+        }
+        if raw[start] != 47 || raw[start + 1] != 117 || raw[start + 2] != 115 ||
+           raw[start + 3] != 101 || raw[start + 4] != 114 || raw[start + 5] != 115 ||
+           raw[start + 6] != 47 {
+            return "";
+        }
+        return to_str(raw[start + 7..end]);
+    }
     let sp1 = 0;
     while sp1 < line_end && raw[sp1] != 32 {
         sp1 = sp1 + 1;
@@ -2067,12 +2141,25 @@ pub fn wants_close(r: Request) -> bool {
 // present) costs one allocation. read_frame uses this so the serve
 // loop never builds a Request just to learn the connection closes.
 fn wants_close_frame(raw: bytes, f: Frame) -> bool {
-    let at = strings.find_field(raw[f.line_end + 2..f.head_end], "connection");
-    if at < 0 {
-        return f.version == 0;
+    return wants_close_scan(raw, f.head_end, f.version);
+}
+
+// Shared close check over a framed head copy: `head_end` is the
+// blank-line offset (sep), `version` the 0/1 flag. Scans the header
+// block (past the request line's own CRLF) in place; find_field
+// slices the block once, a present value costs its own one
+// allocation, an absent one costs nothing.
+fn wants_close_scan(raw: bytes, head_end: int, version: int) -> bool {
+    let le = find_crlf(raw, 0);
+    if le < 0 || le + 2 > head_end {
+        return version == 0;
     }
-    let v = value_at(raw, f.line_end + 2 + at);
-    if f.version == 0 {
+    let at = strings.find_field(raw[le + 2..head_end], "connection");
+    if at < 0 {
+        return version == 0;
+    }
+    let v = value_at(raw, le + 2 + at);
+    if version == 0 {
         return lower_ascii(v) != "keep-alive";
     }
     return lower_ascii(v) == "close";
@@ -2220,9 +2307,13 @@ fn hr_ok(r: result[Head, str]) -> bool {
 // duplicates read's loop deliberately (same scans, same errors, same
 // close rules), and the duplication is the contract: any change to
 // read's framing must land here too. What differs: on a complete
-// frame it copies the message bytes once (to_bytes of buf[0..end]),
-// frames THAT copy with parse_frame for offsets, and returns both --
-// so serve_frame routes on bytes with no Request strs, no segs list,
+// frame it copies the message bytes once (to_bytes of buf[0..end])
+// and derives offsets DIRECTLY from the wire scan it already ran
+// (hd2's request line + sep + fm's end) instead of re-framing the
+// copy with parse_frame -- that second pass cost a full header
+// rescan, a version-str compare, a find_field slice plus a value_at
+// copy for the close decision, and a second body slice per request.
+// serve_frame routes on the copy with no Request strs, no segs list,
 // and no second copy.
 //
 // Chunked bodies need care: frame_body_wire REASSEMBLES them
@@ -2258,25 +2349,36 @@ pub fn read_frame(c: &mut link, buf: wire, filled: int,
                     }
                 } else {
                     let raw = to_bytes(buf[0..fm.end]);
-                    let pr = parse_frame(raw);
-                    guard let f = pr else let e = err_of(pr) {
-                        return err(e);
+                    // Offsets straight from the scan that just framed:
+                    // request line is buf[0..line_end], headers end at
+                    // sep, body runs sep+4..end. No parse_frame rescan.
+                    let line_end = find_crlf_wire_n(buf, 0, n);
+                    let v = 1;
+                    if hd2.version == "HTTP/1.0" {
+                        v = 0;
                     }
-                    let close = wants_close_frame(raw, f);
+                    // The close decision off the wire scan's own
+                    // verdicts: HTTP/1.0 closes unless keep-alive was
+                    // seen; HTTP/1.1 stays unless close was seen. The
+                    // wire scan records CL/TE verdicts but not the
+                    // connection value -- one find on the head copy,
+                    // same as before, but no Request and no second
+                    // framing pass around it.
+                    let close = wants_close_scan(raw, hd2.sep, v);
                     let rest = compact_wire(buf, fm.end, n);
-                    let bs = f.body_start;
-                    let be = f.body_end;
+                    let bs = hd2.sep + 4;
+                    let be = fm.end;
                     if hd2.hs.has_transfer_encoding && hd2.hs.te_is_chunked {
                         bs = 0;
                         be = 0;
                     }
                     return ok(WireFrame {
-                        line_end: f.line_end,
-                        head_end: f.head_end,
+                        line_end: line_end,
+                        head_end: hd2.sep,
                         body_start: bs,
                         body_end: be,
                         end: fm.end,
-                        version: f.version,
+                        version: v,
                         close: close,
                         filled: rest,
                         head: raw,
