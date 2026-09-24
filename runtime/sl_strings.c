@@ -282,6 +282,35 @@ static char *sl_strings_from_bytes_lower(sl_bytes *b, long long lo,
     return out;
 }
 
+/* One allocation for a str made from a wire range, where
+   `to_str(w[lo..hi])` on a wire slice costs the slice view plus the
+   str. Bounds clamp like strings.slice; negative counts from the end. */
+static char *sl_strings_from_wire(sl_wire w, long long lo, long long hi) {
+    long long n = w.len;
+    if (lo < 0) lo += n;
+    if (hi < 0) hi += n;
+    if (lo < 0) lo = 0;
+    if (hi > n) hi = n;
+    if (lo >= n || hi <= lo) return sl_strings_dupn("", 0);
+    return sl_strings_dupn((const char *)(w.ptr + lo), (size_t)(hi - lo));
+}
+
+/* from_wire, lowercasing ASCII during the copy. */
+static char *sl_strings_from_wire_lower(sl_wire w, long long lo,
+                                         long long hi) {
+    long long n = w.len;
+    if (lo < 0) lo += n;
+    if (hi < 0) hi += n;
+    if (lo < 0) lo = 0;
+    if (hi > n) hi = n;
+    if (lo >= n || hi <= lo) return sl_strings_dupn("", 0);
+    char *out = sl_strings_dupn((const char *)(w.ptr + lo), (size_t)(hi - lo));
+    for (long long i = 0; i < hi - lo; i++) {
+        if (out[i] >= 'A' && out[i] <= 'Z') out[i] = (char)(out[i] + 32);
+    }
+    return out;
+}
+
 /* See pkg_strings/sigs.c for the contract. `block` is CRLF-separated
  * "name: value" lines with no blank-line terminator (the http package's
  * own scan already validated that shape before this is ever called, and

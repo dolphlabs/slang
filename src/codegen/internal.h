@@ -465,6 +465,10 @@ typedef enum {
                      needs it to be the inverse of strings.split. */
     NA_ARR_BYTES, /* a [bytes] list, marshaled as sl_arr *. strings.join_bytes
                      is the bytes counterpart of strings.join. */
+    NA_WIRE,      /* an arena `wire` view: passed as sl_wire by value, no
+                     allocation. Lets a native read directly out of the
+                     caller's buffer (http head scan, wire-range str copy)
+                     instead of via an intermediate GC bytes. */
     NA_UNTIL,     /* an `until` deadline: marshaled as sl_until (int64_t).
                      Deliberately NOT int-compatible -- a deadline is an
                      absolute monotonic instant, and silently accepting a

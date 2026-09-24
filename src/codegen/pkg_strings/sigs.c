@@ -68,6 +68,15 @@ const NatSig STRINGS_SIGS[] = {
        cost four allocations and three passes. */
     {"strings", "from_bytes_lower", 3, {NA_BYTES, NA_INT, NA_INT}, "str", 0},
 
+    /* The wire-range counterparts: one allocation for a str straight out
+       of an arena buffer, where to_str(w[lo..hi]) costs the slice view
+       plus the str. http's head fields (method, path, version, header
+       names/values) are all this shape when the buffer stays a wire. */
+    {"strings", "from_wire", 3, {NA_WIRE, NA_INT, NA_INT}, "str", 0},
+
+    /* from_wire, lowercasing ASCII during the copy. */
+    {"strings", "from_wire_lower", 3, {NA_WIRE, NA_INT, NA_INT}, "str", 0},
+
     /* Case-insensitive last-match search for one HTTP header's value
        inside an already-framed header block: CRLF-separated "name:
        value" lines. Returns the offset just past the matching line's

@@ -50,26 +50,35 @@ fn lower_ascii(s: str) -> str {
     return to_str(b);
 }
 
-// A header name, lowercased, in one allocation.
+// A header name, lowercased, in one allocation straight off the wire.
 //
 // This was `lower_ascii(to_str(raw[lo..hi]))`: a slice, a str, the bytes
 // lower_ascii copied it back into, and the str it returned -- four
 // allocations and three passes over the same few characters, per header,
-// per request. `strings.from_bytes_lower` sizes the str once and
-// lowercases as it copies.
-//
-// An interning table of the common names was tried first, to make the
-// usual ones cost nothing at all. It needs the names as `bytes` to
-// compare against, and a package-level `b"..."` is a by-value global that
-// cannot be passed where a `bytes` is expected -- and building them per
-// call is an allocation per comparison to save one per match. One
-// allocation with no table beats it and is a quarter of the code.
+// per request. `strings.from_bytes_lower` cut that to one; the wire
+// form below keeps the one allocation but skips the bytes copy too,
+// since the head already sits in the caller's arena buffer.
 fn header_name(raw: bytes, lo: int, hi: int) -> str {
     return strings.from_bytes_lower(raw, lo, hi);
 }
 
+fn header_name_wire(raw: wire, lo: int, hi: int) -> str {
+    return strings.from_wire_lower(raw, lo, hi);
+}
+
 fn is_ows(b: int) -> bool {
     return b == 32 || b == 9;
+}
+
+fn find_crlf_wire(b: wire, from: int) -> int {
+    let i = from;
+    while i + 1 < len(b) {
+        if b[i] == 13 && b[i + 1] == 10 {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
 }
 
 fn find_crlf(b: bytes, from: int) -> int {
@@ -142,6 +151,23 @@ fn parse_digits(raw: bytes, lo: int, hi: int) -> result[int, str] {
     return ok(n);
 }
 
+fn parse_digits_wire(raw: wire, lo: int, hi: int) -> result[int, str] {
+    if hi <= lo {
+        return err("empty number");
+    }
+    let v = 0;
+    let i = lo;
+    while i < hi {
+        let d = raw[i] - 48;
+        if d < 0 || d > 9 {
+            return err("bad digit");
+        }
+        v = v * 10 + d;
+        i = i + 1;
+    }
+    return ok(v);
+}
+
 fn trim_ows(b: bytes) -> bytes {
     let lo = 0;
     let hi = len(b);
@@ -201,6 +227,134 @@ fn value_is_chunked(raw: bytes, lo: int, hi: int) -> bool {
            lower_byte(raw[lo + 2]) == 117 && lower_byte(raw[lo + 3]) == 110 &&
            lower_byte(raw[lo + 4]) == 107 && lower_byte(raw[lo + 5]) == 101 &&
            lower_byte(raw[lo + 6]) == 100;
+}
+
+fn is_content_length_wire(raw: wire, lo: int, hi: int) -> bool {
+    if hi - lo != 14 {
+        return false;
+    }
+    return lower_byte(raw[lo + 0]) == 99 &&
+           lower_byte(raw[lo + 1]) == 111 &&
+           lower_byte(raw[lo + 2]) == 110 &&
+           lower_byte(raw[lo + 3]) == 116 &&
+           lower_byte(raw[lo + 4]) == 101 &&
+           lower_byte(raw[lo + 5]) == 110 &&
+           lower_byte(raw[lo + 6]) == 116 &&
+           lower_byte(raw[lo + 7]) == 45 &&
+           lower_byte(raw[lo + 8]) == 108 &&
+           lower_byte(raw[lo + 9]) == 101 &&
+           lower_byte(raw[lo + 10]) == 110 &&
+           lower_byte(raw[lo + 11]) == 103 &&
+           lower_byte(raw[lo + 12]) == 116 &&
+           lower_byte(raw[lo + 13]) == 104;
+}
+
+fn is_transfer_encoding_wire(raw: wire, lo: int, hi: int) -> bool {
+    if hi - lo != 17 {
+        return false;
+    }
+    return lower_byte(raw[lo + 0]) == 116 &&
+           lower_byte(raw[lo + 1]) == 114 &&
+           lower_byte(raw[lo + 2]) == 97 &&
+           lower_byte(raw[lo + 3]) == 110 &&
+           lower_byte(raw[lo + 4]) == 115 &&
+           lower_byte(raw[lo + 5]) == 102 &&
+           lower_byte(raw[lo + 6]) == 101 &&
+           lower_byte(raw[lo + 7]) == 114 &&
+           lower_byte(raw[lo + 8]) == 45 &&
+           lower_byte(raw[lo + 9]) == 101 &&
+           lower_byte(raw[lo + 10]) == 110 &&
+           lower_byte(raw[lo + 11]) == 99 &&
+           lower_byte(raw[lo + 12]) == 111 &&
+           lower_byte(raw[lo + 13]) == 100 &&
+           lower_byte(raw[lo + 14]) == 105 &&
+           lower_byte(raw[lo + 15]) == 110 &&
+           lower_byte(raw[lo + 16]) == 103;
+}
+
+// Same, directly on the socket buffer: `read` already framed the
+// value there and only needs the match, not a `str` for it.
+fn value_is_chunked_wire(raw: wire, lo: int, hi: int) -> bool {
+    let i = lo;
+    while i < hi {
+        while i < hi && (raw[i] == 32 || raw[i] == 9 || raw[i] == 44) {
+            i = i + 1;
+        }
+        let s = i;
+        while i < hi && raw[i] != 32 && raw[i] != 9 && raw[i] != 44 {
+            i = i + 1;
+        }
+        if i - s == 7 {
+            if lower_byte(raw[s]) == 99 && lower_byte(raw[s + 1]) == 104
+                && lower_byte(raw[s + 2]) == 117 && lower_byte(raw[s + 3]) == 110
+                && lower_byte(raw[s + 4]) == 107 && lower_byte(raw[s + 5]) == 101
+                && lower_byte(raw[s + 6]) == 100 {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+fn value_at_wire(raw: wire, at: int) -> str {
+    let end = find_crlf_wire(raw, at);
+    if end < 0 {
+        end = len(raw);
+    }
+    return strings.from_wire(raw, at, end);
+}
+
+fn scan_headers_wire(raw: wire, start: int, sep: int) -> result[HeaderScan, str] {
+    let i = start;
+    let has_cl = false;
+    let cl_lo = 0;
+    let cl_hi = 0;
+    let has_te = false;
+    let te_chunked = false;
+    while i < sep {
+        let eol = find_crlf_wire(raw, i);
+        if eol < 0 || eol > sep {
+            return err("malformed header");
+        }
+        if eol == i {
+            break;
+        }
+        if is_ows(raw[i]) {
+            return err("folded header");
+        }
+        let colon = byteutil.find_wire(raw, i, 58);
+        if colon < 0 || colon >= eol || colon == i {
+            return err("malformed header");
+        }
+        let vlo = colon + 1;
+        let vhi = eol;
+        while vlo < vhi && is_ows(raw[vlo]) {
+            vlo = vlo + 1;
+        }
+        while vhi > vlo && is_ows(raw[vhi - 1]) {
+            vhi = vhi - 1;
+        }
+        if is_content_length_wire(raw, i, colon) {
+            if has_cl {
+                return err("repeated content-length header");
+            }
+            has_cl = true;
+            cl_lo = vlo;
+            cl_hi = vhi;
+        } else if is_transfer_encoding_wire(raw, i, colon) {
+            if has_te {
+                return err("repeated transfer-encoding header");
+            }
+            has_te = true;
+            te_chunked = value_is_chunked_wire(raw, vlo, vhi);
+        }
+        i = eol + 2;
+    }
+    return ok(HeaderScan {
+        raw_headers: b"",
+        has_content_length: has_cl, cl_lo: cl_lo, cl_hi: cl_hi,
+        has_transfer_encoding: has_te, te_is_chunked: te_chunked
+    });
 }
 
 fn is_content_length(raw: bytes, lo: int, hi: int) -> bool {
