@@ -48,10 +48,20 @@ fn via_write(resp: http.Response, arena_bytes: int) -> bytes {
 fn check(label: str, resp: http.Response, arena_bytes: int) {
     let via_arena = via_write(resp, arena_bytes);
     let via_gc = http.serialize(resp);
+    let via_sized = http.serialize_sized(resp);
+    let via_builder = http.serialize_builder(resp);
     if via_arena != via_gc {
         println("FAIL " + label + ": arena and serialize disagree");
         println("  arena: " + to_str(via_arena));
         println("  gc:    " + to_str(via_gc));
+        exit(1);
+    }
+    if via_sized != via_gc {
+        println("FAIL " + label + ": serialize_sized disagrees");
+        exit(1);
+    }
+    if via_builder != via_gc {
+        println("FAIL " + label + ": serialize_builder disagrees");
         exit(1);
     }
     println(label + " ok (" + to_str(len(via_gc)) + " bytes)");

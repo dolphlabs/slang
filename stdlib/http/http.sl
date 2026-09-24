@@ -1269,6 +1269,12 @@ pub fn has_resp_header(r: Response, name: str) -> bool {
 }
 
 pub fn serialize(r: Response) -> bytes {
+    return serialize_sized(r);
+}
+
+// The old builder path, kept for the differential test: must stay
+// byte-identical to serialize_sized() above for every shape.
+pub fn serialize_builder(r: Response) -> bytes {
     let sb2 = builder.new_bytes();
     sb2.write_str("HTTP/1.1 ");
     sb2.write_str(to_str(r.status));
@@ -1283,6 +1289,175 @@ pub fn serialize(r: Response) -> bytes {
     sb2.write_str("\r\n\r\n");
     sb2.write(r.body);
     return sb2.finish();
+}
+
+// Writes one non-negative int as ASCII decimal into a builder.
+fn push_int(sb: builder.Bytes, v: int) -> int {
+    if v == 0 {
+        sb.write_str("0");
+        return 0;
+    }
+    let digits: [int] = [];
+    let n = v;
+    while n > 0 {
+        push(digits, 48 + (n % 10));
+        n = n / 10;
+    }
+    let i = len(digits) - 1;
+    while i >= 0 {
+        sb.write_byte(digits[i]);
+        i = i - 1;
+    }
+    return 0;
+}
+
+// Serialize with a handful of allocations, not ~40: size the response
+// first (status line + headers + framing + body, all cheap integer
+// arithmetic over lengths -- see emit_len below), allocate exactly
+// that many bytes, then fill by slice assignment. The old builder
+// path stays below as serialize_builder for the differential test;
+// this is what `serialize` and `write`'s fallback call, so an
+// oversized response costs a few allocations instead of ~40.
+//
+// The remaining handful is load-bearing, not waste: one str+bytes
+// pair for the sizing pad (strings.repeat returns str, to_bytes
+// copies it -- but only because slang has no uninitialised-bytes
+// constructor; a runtime alloc would drop both), one to_bytes per
+// fill_str piece (the str->bytes copy the compiler cannot fuse), one
+// filtered-extra list, and the response_conn scan's own line strs.
+// Counting them is what keeps this honest -- see the probe notes.
+pub fn serialize_sized(r: Response) -> bytes {
+    let need = emit_len(r);
+    let out: bytes = b"";
+    if need > 0 {
+        let pad = strings.repeat(" ", need);
+        out = to_bytes(pad);
+    }
+    let off = 0;
+    off = fill_str(out, off, "HTTP/1.1 ");
+    off = fill_int(out, off, r.status);
+    off = fill_str(out, off, " ");
+    off = fill_str(out, off, r.status_text);
+    off = fill_str(out, off, "\r\n");
+    off = fill_block(out, off, r);
+    off = fill_str(out, off, "Content-Length: ");
+    off = fill_int(out, off, len(r.body));
+    off = fill_str(out, off, "\r\nConnection: ");
+    off = fill_str(out, off, response_conn(r));
+    off = fill_str(out, off, "\r\n\r\n");
+    off = fill_bytes(out, off, r.body);
+    return out;
+}
+
+fn digits_len(v: int) -> int {
+    if v < 10 {
+        return 1;
+    }
+    if v < 100 {
+        return 2;
+    }
+    if v < 1000 {
+        return 3;
+    }
+    if v < 10000 {
+        return 4;
+    }
+    if v < 100000 {
+        return 5;
+    }
+    if v < 1000000 {
+        return 6;
+    }
+    if v < 10000000 {
+        return 7;
+    }
+    if v < 100000000 {
+        return 8;
+    }
+    if v < 1000000000 {
+        return 9;
+    }
+    return 10;
+}
+
+// Exact byte length emit()/serialize_sized() will write: status line,
+// shaped content-type/location line, filtered extra lines (each plus
+// its CRLF -- see response_block), framing, body. Must stay in lock
+// step with fill_block below; the arena test's differential check pins
+// them together through serialize().
+fn emit_len(r: Response) -> int {
+    let n = len("HTTP/1.1 ") + digits_len(r.status) + 1 + len(r.status_text) + 2;
+    if len(r.location) > 0 {
+        n = n + len("location: ") + len(r.location) + 2;
+    } else if len(r.content_type) > 0 {
+        n = n + len("content-type: ") + len(r.content_type) + 2;
+    }
+    for line in response_extra_filtered(r) {
+        n = n + len(line) + 2;
+    }
+    n = n + len("Content-Length: ") + digits_len(len(r.body));
+    n = n + len("\r\nConnection: ") + len(response_conn(r)) + 4;
+    return n + len(r.body);
+}
+
+fn fill_str(out: bytes, off: int, s: str) -> int {
+    let b = to_bytes(s);
+    let i = 0;
+    while i < len(b) {
+        out[off + i] = b[i];
+        i = i + 1;
+    }
+    return off + len(b);
+}
+
+fn fill_int(out: bytes, off: int, v: int) -> int {
+    if v == 0 {
+        out[off] = 48;
+        return off + 1;
+    }
+    let start = off;
+    let n = v;
+    while n > 0 {
+        out[off] = 48 + (n % 10);
+        off = off + 1;
+        n = n / 10;
+    }
+    let lo = start;
+    let hi = off - 1;
+    while lo < hi {
+        let t = out[lo];
+        out[lo] = out[hi];
+        out[hi] = t;
+        lo = lo + 1;
+        hi = hi - 1;
+    }
+    return off;
+}
+
+fn fill_bytes(out: bytes, off: int, b: bytes) -> int {
+    let i = 0;
+    while i < len(b) {
+        out[off + i] = b[i];
+        i = i + 1;
+    }
+    return off + len(b);
+}
+
+fn fill_block(out: bytes, off: int, r: Response) -> int {
+    if len(r.location) > 0 {
+        off = fill_str(out, off, "location: ");
+        off = fill_str(out, off, r.location);
+        off = fill_str(out, off, "\r\n");
+    } else if len(r.content_type) > 0 {
+        off = fill_str(out, off, "content-type: ");
+        off = fill_str(out, off, r.content_type);
+        off = fill_str(out, off, "\r\n");
+    }
+    for line in response_extra_filtered(r) {
+        off = fill_str(out, off, line);
+        off = fill_str(out, off, "\r\n");
+    }
+    return off;
 }
 
 // JSON-ESCAPE-SHARED: `"` -> `\"`, `\` -> `\\`, controls -> `\n` etc.
@@ -1810,7 +1985,7 @@ pub fn write(c: &mut link, r: Response, a: &mut arena, deadline: until) -> resul
         let probe = a.wire(0);
         let need = emit_into(probe, r.status, r.status_text, ct, r.body, conn);
         if need > a.left() {
-            let raw = serialize(r);
+            let raw = serialize_sized(r);
             return c.send_bytes(raw, deadline);
         }
         let w = a.wire(need);
@@ -1820,7 +1995,7 @@ pub fn write(c: &mut link, r: Response, a: &mut arena, deadline: until) -> resul
     let probe = a.wire(0);
     let need = emit(r, probe);
     if need > a.left() {
-        let raw = serialize(r);
+        let raw = serialize_sized(r);
         return c.send_bytes(raw, deadline);
     }
     let w = a.wire(need);
