@@ -391,6 +391,22 @@ static sl_bytes *sl_strings_join_bytes(sl_arr *parts, sl_bytes *sep) {
     return r;
 }
 
+/* Zeroed bytes of exactly n bytes: one header plus one buffer, where
+ * sizing via strings.repeat + to_bytes costs a throwaway str of the
+ * same size first. http.serialize_sized uses this for its exact-sized
+ * response buffer; memset (not a loop) because the fill pass
+ * overwrites every byte anyway and calloc's zeroing is free next to
+ * the GC alloc it already pays. Negative reads as 0, matching
+ * strings.repeat's own clamp. */
+static sl_bytes *sl_strings_bytes_zero(long long n) {
+    if (n < 0) n = 0;
+    sl_bytes *r = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
+    r->len = n;
+    r->ptr = (unsigned char *)sl_gc_alloc((size_t)(n > 0 ? n : 1), NULL);
+    if (n > 0) memset(r->ptr, 0, (size_t)n);
+    return r;
+}
+
 /* Shortest round-trip: try 1..17 significant digits and keep the first
  * that strtod reads back as the same double. 17 always succeeds for an
  * IEEE double. NaN and the infinities use the spellings Postgres and

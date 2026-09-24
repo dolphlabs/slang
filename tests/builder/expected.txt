@@ -5,3 +5,4 @@ bytes edge ok
 bytes alias ok
 bytes ok
 scale ok
+bytes_zero ok

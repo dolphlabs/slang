@@ -1,5 +1,6 @@
 // builder: assembling text and bytes in linear time.
 import "builder";
+import "strings";
 
 fn check(name: str, ok: bool) {
     if !ok {
@@ -202,9 +203,18 @@ check("scale len", len(bigger) == 200000);
 check("scale content", bigger[0] == 97 && bigger[199999] == 97 + (199999 % 26));
 println("scale ok");
 
+// bytes_zero: one allocation for zeroed bytes, no throwaway str
+let bz = strings.bytes_zero(16);
+check("bytes_zero len", len(bz) == 16);
+check("bytes_zero zeroed", bz[0] == 0 && bz[15] == 0);
+let bzn = strings.bytes_zero(-5);
+check("bytes_zero negative", len(bzn) == 0);
+println("bytes_zero ok");
+
 // helper used above; the repeat lives in strings, but this file only
 // needs the builder to be imported, so it is spelled out here
 fn strings_repeat(s: str, n: int) -> str {
+
     let b = builder.new_str();
     let k = 0;
     while k < n {

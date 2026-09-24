@@ -55,6 +55,13 @@ const NatSig STRINGS_SIGS[] = {
        the result once and copies each piece once. */
     {"strings", "join_bytes", 2, {NA_ARR_BYTES, NA_BYTES}, "bytes", 0},
 
+    /* Zeroed bytes of exactly n bytes, in one allocation instead of
+       two: sizing a response via strings.repeat (a str) + to_bytes
+       (a copy) costs a throwaway str of the same size on every call.
+       Negative counts read as 0, the same clamp strings.repeat uses,
+       so a caller cannot request a negative allocation. */
+    {"strings", "bytes_zero", 1, {NA_INT}, "bytes", 0},
+
     /* `to_str(b[lo..hi])` is two allocations and two copies: the slice,
        then the str made from it. A parser pulling a field out of a buffer
        does that for every field of every message -- http's header values,

@@ -1701,25 +1701,19 @@ fn push_int(sb: builder.Bytes, v: int) -> int {
 // Serialize with a handful of allocations, not ~40: size the response
 // first (status line + headers + framing + body, all cheap integer
 // arithmetic over lengths -- see emit_len below), allocate exactly
-// that many bytes, then fill by slice assignment. The old builder
-// path stays below as serialize_builder for the differential test;
-// this is what `serialize` and `write`'s fallback call, so an
+// that many bytes with strings.bytes_zero (one header plus one
+// buffer -- no throwaway str), then fill by slice assignment. The old
+// builder path stays below as serialize_builder for the differential
+// test; this is what `serialize` and `write`'s fallback call, so an
 // oversized response costs a few allocations instead of ~40.
 //
-// The remaining handful is load-bearing, not waste: one str+bytes
-// pair for the sizing pad (strings.repeat returns str, to_bytes
-// copies it -- but only because slang has no uninitialised-bytes
-// constructor; a runtime alloc would drop both), one to_bytes per
+// The remaining handful is load-bearing, not waste: one to_bytes per
 // fill_str piece (the str->bytes copy the compiler cannot fuse), one
 // filtered-extra list, and the response_conn scan's own line strs.
 // Counting them is what keeps this honest -- see the probe notes.
 pub fn serialize_sized(r: Response) -> bytes {
     let need = emit_len(r);
-    let out: bytes = b"";
-    if need > 0 {
-        let pad = strings.repeat(" ", need);
-        out = to_bytes(pad);
-    }
+    let out = strings.bytes_zero(need);
     let off = 0;
     off = fill_str(out, off, "HTTP/1.1 ");
     off = fill_int(out, off, r.status);
