@@ -80,6 +80,10 @@ const char *native_check(CG *cg, const char *pkg, const char *fname,
             break;
         case NA_BYTES:  ok = is_bytes(at);  want = "bytes";    break;
         case NA_RAWPTR: ok = is_rawptr(at); want = "a rawptr"; break;
+        case NA_WIRE:
+            ok = is_wire(at);
+            want = "a wire";
+            break;
         case NA_F64:
             ok = is_flt(at) || is_int(at);
             want = "a float";
@@ -156,11 +160,15 @@ char *native_gen(CG *cg, const char *pkg, const char *fname,
                                  to the i32 default below */
         } else if (ak == NA_ARR_BYTES) {
             cast_t = "[bytes]"; /* already sl_arr *, like [str] above */
+        } else if (ak == NA_WIRE) {
+            cast_t = "wire"; /* already sl_wire; must not fall through
+                                to the i32 default below */
         } else if (ak == NA_UNTIL) {
             cast_t = "until"; /* already int64_t; no conversion, but the
                                  cast_t must not fall through to the i32
                                  default below and truncate the deadline */
-        } else if (!is_str(at) && !is_bytes(at) && !is_rawptr(at)) {
+        } else if (!is_str(at) && !is_bytes(at) && !is_rawptr(at) &&
+                   !is_wire(at)) {
             cast_t = !strcmp(pkg, "time") ? "int" : "i32";
             a = maybe_cast(cg, cast_t, at, a);
         }

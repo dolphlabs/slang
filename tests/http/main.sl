@@ -56,6 +56,65 @@ fn parse_errors() {
                "truncated");
 }
 
+fn frame_parity() {
+    let cases = [
+        "GET /hi HTTP/1.1\r\nHost: t\r\nX-A: B\r\n\r\n",
+        "GET /users/42 HTTP/1.1\r\nHost: t\r\nUser-Agent: bench\r\nAccept: */*\r\n\r\n",
+        "POST /x HTTP/1.0\r\nContent-Length: 5\r\n\r\nhelloTRAIL",
+        "POST /up HTTP/1.1\r\nHost: t\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n",
+        "GET /a HTTP/1.1\r\nHost: t\r\n\r\nGET /b HTTP/1.1\r\nHost: t\r\n\r\n"
+    ];
+    let ci = 0;
+    while ci < len(cases) {
+        let raw = to_bytes(cases[ci]);
+        let pr = parse(raw);
+        guard let want = pr else let e = err_of(pr) {
+            die("parity parse case " + to_str(ci) + ": " + e);
+        }
+        let fr = parse_frame(raw);
+        guard let got = fr else let e = err_of(fr) {
+            die("parity frame case " + to_str(ci) + ": " + e);
+        }
+        if !method_is(raw, got, want.method) {
+            die("parity method case " + to_str(ci));
+        }
+        if !path_is(raw, got, want.path) {
+            die("parity path case " + to_str(ci));
+        }
+        if frame_version(got) != version_flag(want.version) {
+            die("parity version case " + to_str(ci));
+        }
+        if frame_body(raw, got) != want.body {
+            die("parity body case " + to_str(ci));
+        }
+        ci = ci + 1;
+    }
+    // error parity: every corpus parse() rejects, parse_frame rejects too
+    let bad = [
+        b"",
+        to_bytes("GET / HTTP/2.0\r\n\r\n"),
+        to_bytes("POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n"),
+        to_bytes("POST / HTTP/1.1\r\nContent-Length: 4\r\n\r\nab")
+    ];
+    let bi = 0;
+    while bi < len(bad) {
+        let fr = parse_frame(bad[bi]);
+        guard let _g = fr else {
+            bi = bi + 1;
+            continue;
+        }
+        die("parity accepted bad case " + to_str(bi));
+    }
+    println("frame parity");
+}
+
+fn version_flag(v: str) -> int {
+    if v == "HTTP/1.0" {
+        return 0;
+    }
+    return 1;
+}
+
 fn serialize_ok() {
     let r = http.ok_text("hi");
     let out = http.serialize(r);
@@ -142,6 +201,7 @@ fn keepalive() {
 parse_get();
 parse_post();
 parse_errors();
+frame_parity();
 serialize_ok();
 loopback();
 keepalive();
