@@ -1285,6 +1285,77 @@ pub fn serialize(r: Response) -> bytes {
     return sb2.finish();
 }
 
+// JSON-ESCAPE-SHARED: `"` -> `\"`, `\` -> `\\`, controls -> `\n` etc.
+// `bad_request_bytes` uses this so an error message never passes
+// through a str `+` chain; zokor's error envelope uses the same
+// routine via `escape_json_bytes` below.
+fn escape_json_into(bb: builder.Bytes, msg: bytes) -> int {
+    let start = 0;
+    let i = 0;
+    let n = len(msg);
+    while i < n {
+        let c = msg[i];
+        let esc = "";
+        if c == 34 {
+            esc = "\\\"";
+        } else if c == 92 {
+            esc = "\\\\";
+        } else if c == 10 {
+            esc = "\\n";
+        } else if c == 13 {
+            esc = "\\r";
+        } else if c == 9 {
+            esc = "\\t";
+        } else if c < 32 {
+            esc = "\\u00" + hex2(c);
+        }
+        if len(esc) > 0 {
+            if i > start {
+                bb.write(msg[start..i]);
+            }
+            bb.write_str(esc);
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    if n > start {
+        bb.write(msg[start..n]);
+    }
+    return 0;
+}
+
+fn hex2(c: int) -> str {
+    let digits = "0123456789abcdef";
+    let d = to_bytes(digits);
+    let hi = d[(c / 16) % 16];
+    let lo = d[c % 16];
+    let out: bytes = b"..";
+    out[0] = hi;
+    out[1] = lo;
+    return to_str(out);
+}
+
+// The escaped form of `msg` as bytes, for a caller that already holds
+// bytes and wants the quoted payload without a str in between.
+pub fn escape_json_bytes(msg: bytes) -> bytes {
+    let bb = builder.new_bytes();
+    escape_json_into(bb, msg);
+    return bb.finish();
+}
+
+fn compact_wire(buf: wire, used: int, filled: int) -> int {
+    if used <= 0 {
+        return filled;
+    }
+    let n = filled - used;
+    let i = 0;
+    while i < n {
+        buf[i] = buf[used + i];
+        i = i + 1;
+    }
+    return n;
+}
+
 pub fn with_headers(r: Response, lines: [str]) -> Response {
     for line in lines {
         push(r.extra, line);
@@ -1326,21 +1397,6 @@ pub fn without_header(r: Response, name: str) -> Response {
     }
     r.extra = kept;
     return r;
-}
-
-
-
-fn compact_wire(buf: wire, used: int, filled: int) -> int {
-    if used <= 0 {
-        return filled;
-    }
-    let n = filled - used;
-    let i = 0;
-    while i < n {
-        buf[i] = buf[used + i];
-        i = i + 1;
-    }
-    return n;
 }
 
 pub fn wants_close(r: Request) -> bool {
@@ -1772,8 +1828,12 @@ pub fn write(c: &mut link, r: Response, a: &mut arena, deadline: until) -> resul
     return c.send(w, deadline);
 }
 
-pub fn text_response(status: i32, status_text: str, content_type: str,
-                     body: str) -> Response {
+// `text_response` with a BYTES body: same shape, no `to_bytes` copy.
+// The hot path (zokor's JSON renderers, static bodies) already holds
+// bytes; forcing them through str and back cost a full copy plus the
+// literal's own allocation on every response.
+pub fn text_response_bytes(status: i32, status_text: str, content_type: str,
+                           body: bytes) -> Response {
     let extra: [str] = [];
     return Response {
         status: status,
@@ -1781,8 +1841,14 @@ pub fn text_response(status: i32, status_text: str, content_type: str,
         content_type: content_type,
         location: "",
         extra: extra,
-        body: to_bytes(body)
+        body: body
     };
+}
+
+pub fn text_response(status: i32, status_text: str, content_type: str,
+                     body: str) -> Response {
+    return text_response_bytes(status, status_text, content_type,
+                               to_bytes(body));
 }
 
 pub fn ok_html(body: str) -> Response {
@@ -1812,8 +1878,19 @@ pub fn created_json(body: str) -> Response {
 }
 
 pub fn bad_request(msg: str) -> Response {
-    return text_response(400, "Bad Request", "application/json; charset=utf-8",
-                         "{\"error\":\"" + msg + "\"}");
+    return bad_request_bytes(to_bytes(msg));
+}
+
+// `bad_request` with a BYTES message: same envelope, no `to_bytes`
+// round-trip. The message still rides inside a JSON string, so it is
+// escaped the same way -- see `escape_json_into` below.
+pub fn bad_request_bytes(msg: bytes) -> Response {
+    let bb = builder.new_bytes();
+    bb.write_str("{\"error\":\"");
+    escape_json_into(bb, msg);
+    bb.write_str("\"}");
+    return text_response_bytes(400, "Bad Request",
+                               "application/json; charset=utf-8", bb.finish());
 }
 
 pub fn not_found() -> Response {
