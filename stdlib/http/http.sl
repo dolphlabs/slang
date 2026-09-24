@@ -29,7 +29,9 @@ pub gc struct Incoming {
 pub gc struct Response {
     status: i32,
     status_text: str,
-    headers: map[str]str,
+    content_type: str,
+    location: str,
+    extra: [str],
     body: bytes,
 }
 
@@ -1112,32 +1114,218 @@ pub fn parse(raw: bytes) -> result[Request, str] {
 // `write`'s fallback for a response too large for its caller's arena.
 // `write` itself does not call this when the response fits -- see `emit`
 // below, which skips these allocations entirely.
+fn content_len_name() -> str {
+    return "content-length";
+}
+
+fn conn_name() -> str {
+    return "connection";
+}
+
+fn content_type_name() -> str {
+    return "content-type";
+}
+
+fn location_name() -> str {
+    return "location";
+}
+
+fn extra_line_name(line: str) -> str {
+    let b = to_bytes(line);
+    let i = 0;
+    while i < len(b) && b[i] != 58 {
+        i = i + 1;
+    }
+    return to_str(b[0..i]);
+}
+
+fn extra_line_value(line: str) -> str {
+    let b = to_bytes(line);
+    let j = 0;
+    while j < len(b) && b[j] != 58 {
+        j = j + 1;
+    }
+    j = j + 1;
+    while j < len(b) && (b[j] == 32 || b[j] == 9) {
+        j = j + 1;
+    }
+    return to_str(b[j..]);
+}
+
+fn response_extra_filtered(r: Response) -> [str] {
+    let skip_ct = len(r.content_type) > 0;
+    let skip_loc = len(r.location) > 0;
+    if skip_loc {
+        skip_ct = false;
+    }
+    let out: [str] = [];
+    for line in r.extra {
+        let nm = lower_ascii(extra_line_name(line));
+        if nm == content_len_name() {
+            continue;
+        }
+        if nm == conn_name() {
+            continue;
+        }
+        if skip_ct && nm == content_type_name() {
+            continue;
+        }
+        if skip_loc && nm == location_name() {
+            continue;
+        }
+        push(out, line);
+    }
+    return out;
+}
+
+fn response_conn(r: Response) -> str {
+    let i = len(r.extra) - 1;
+    while i >= 0 {
+        if lower_ascii(extra_line_name(r.extra[i])) == conn_name() {
+            return extra_line_value(r.extra[i]);
+        }
+        i = i - 1;
+    }
+    return "keep-alive";
+}
+
+fn response_block(r: Response) -> bytes {
+    let bb = builder.new_bytes();
+    if len(r.location) > 0 {
+        bb.write_str("location: ");
+        bb.write_str(r.location);
+        bb.write_str("\r\n");
+    } else if len(r.content_type) > 0 {
+        bb.write_str("content-type: ");
+        bb.write_str(r.content_type);
+        bb.write_str("\r\n");
+    }
+    for line in response_extra_filtered(r) {
+        bb.write_str(line);
+        bb.write_str("\r\n");
+    }
+    return bb.finish();
+}
+
+pub fn resp_headers(r: Response) -> map[str]str {
+    let out: map[str]str = {};
+    if len(r.location) > 0 {
+        out["location"] = r.location;
+    } else if len(r.content_type) > 0 {
+        out["content-type"] = r.content_type;
+    }
+    for line in r.extra {
+        let b = to_bytes(line);
+        let k = 0;
+        while k < len(b) && b[k] != 58 {
+            k = k + 1;
+        }
+        if k >= len(b) {
+            continue;
+        }
+        let name = lower_ascii(to_str(b[0..k]));
+        let v = k + 1;
+        while v < len(b) && (b[v] == 32 || b[v] == 9) {
+            v = v + 1;
+        }
+        out[name] = to_str(b[v..]);
+    }
+    return out;
+}
+
+pub fn resp_header(r: Response, name: str) -> opt[str] {
+    let want = lower_ascii(name);
+    if want == "content-type" && len(r.content_type) > 0 && len(r.location) == 0 {
+        return some(r.content_type);
+    }
+    if want == "location" && len(r.location) > 0 {
+        return some(r.location);
+    }
+    let i = len(r.extra) - 1;
+    while i >= 0 {
+        let line = r.extra[i];
+        let b = to_bytes(line);
+        let k = 0;
+        while k < len(b) && b[k] != 58 {
+            k = k + 1;
+        }
+        if k < len(b) && lower_ascii(to_str(b[0..k])) == want {
+            let v = k + 1;
+            while v < len(b) && (b[v] == 32 || b[v] == 9) {
+                v = v + 1;
+            }
+            return some(to_str(b[v..]));
+        }
+        i = i - 1;
+    }
+    return none;
+}
+
+pub fn has_resp_header(r: Response, name: str) -> bool {
+    guard let _v = resp_header(r, name) else {
+        return false;
+    }
+    return true;
+}
+
 pub fn serialize(r: Response) -> bytes {
-    let sb = builder.new_bytes();
-    sb.write_str("HTTP/1.1 ");
-    sb.write_str(to_str(r.status));
-    sb.write_str(" ");
-    sb.write_str(r.status_text);
-    sb.write_str("\r\n");
-    for k, v in r.headers {
-        if k != "content-length" && k != "connection" {
-            sb.write_str(k);
-            sb.write_str(": ");
-            sb.write_str(v);
-            sb.write_str("\r\n");
+    let sb2 = builder.new_bytes();
+    sb2.write_str("HTTP/1.1 ");
+    sb2.write_str(to_str(r.status));
+    sb2.write_str(" ");
+    sb2.write_str(r.status_text);
+    sb2.write_str("\r\n");
+    sb2.write(response_block(r));
+    sb2.write_str("Content-Length: ");
+    sb2.write_str(to_str(len(r.body)));
+    sb2.write_str("\r\nConnection: ");
+    sb2.write_str(response_conn(r));
+    sb2.write_str("\r\n\r\n");
+    sb2.write(r.body);
+    return sb2.finish();
+}
+
+pub fn with_headers(r: Response, lines: [str]) -> Response {
+    for line in lines {
+        push(r.extra, line);
+    }
+    return r;
+}
+
+pub fn with_header(r: Response, name: str, value: str) -> Response {
+    let nm = lower_ascii(name);
+    if nm == "content-type" && len(r.location) == 0 && len(r.extra) == 0 {
+        r.content_type = value;
+        return r;
+    }
+    if nm == "location" {
+        r.location = value;
+        return r;
+    }
+    if nm == "content-type" || nm == "location" {
+        push(r.extra, nm + ": " + value);
+        return r;
+    }
+    push(r.extra, nm + ": " + value);
+    return r;
+}
+
+pub fn without_header(r: Response, name: str) -> Response {
+    let want = lower_ascii(name);
+    if want == "content-type" {
+        r.content_type = "";
+    }
+    if want == "location" {
+        r.location = "";
+    }
+    let kept: [str] = [];
+    for line in r.extra {
+        if lower_ascii(extra_line_name(line)) != want {
+            push(kept, line);
         }
     }
-    let conn = "keep-alive";
-    if has(r.headers, "connection") {
-        conn = r.headers["connection"];
-    }
-    sb.write_str("Content-Length: ");
-    sb.write_str(to_str(len(r.body)));
-    sb.write_str("\r\nConnection: ");
-    sb.write_str(conn);
-    sb.write_str("\r\n\r\n");
-    sb.write(r.body);
-    return sb.finish();
+    r.extra = kept;
+    return r;
 }
 
 
@@ -1452,26 +1640,28 @@ fn put_int(w: wire, off: int, v: int) -> int {
 }
 
 // SHAPE-CHECK (fast response path -- the only definition): true when
-// `r` has exactly the shape `text_response` builds -- one
-// content-type header and nothing else the fast path would drop. The
-// connection header is read, not matched: any value (or none) rides
-// along through `conn`, so it never changes the shape decision.
+// `r` is exactly what `text_response` builds -- a content-type, an
+// empty extra list, and no location. No map, no scan: three field
+// reads. A response that gained a header via with_header carries it in
+// `extra`, so it can never take the fixed layout by mistake; the
+// connection value still rides along through `conn`, never changing
+// the shape decision.
 fn is_fast_response(r: Response) -> bool {
-    if len(r.headers) != 1 {
+    if len(r.location) > 0 {
         return false;
     }
-    return has(r.headers, "content-type");
+    if len(r.extra) > 0 {
+        return false;
+    }
+    return len(r.content_type) > 0;
 }
 
 fn fast_content_type(r: Response) -> str {
-    return r.headers["content-type"];
+    return r.content_type;
 }
 
 fn fast_conn(r: Response) -> str {
-    if has(r.headers, "connection") {
-        return r.headers["connection"];
-    }
-    return "keep-alive";
+    return response_conn(r);
 }
 
 // EMIT (general response path): `emit` and `serialize` are two
@@ -1535,18 +1725,8 @@ fn emit(r: Response, w: wire) -> int {
     off = put_str(w, off, " ");
     off = put_str(w, off, r.status_text);
     off = put_str(w, off, "\r\n");
-    for k, v in r.headers {
-        if k != "content-length" && k != "connection" {
-            off = put_str(w, off, k);
-            off = put_str(w, off, ": ");
-            off = put_str(w, off, v);
-            off = put_str(w, off, "\r\n");
-        }
-    }
-    let conn = "keep-alive";
-    if has(r.headers, "connection") {
-        conn = r.headers["connection"];
-    }
+    off = put_bytes(w, off, response_block(r));
+    let conn = response_conn(r);
     off = put_str(w, off, "Content-Length: ");
     off = put_str(w, off, to_str(len(r.body)));
     off = put_str(w, off, "\r\nConnection: ");
@@ -1594,12 +1774,13 @@ pub fn write(c: &mut link, r: Response, a: &mut arena, deadline: until) -> resul
 
 pub fn text_response(status: i32, status_text: str, content_type: str,
                      body: str) -> Response {
-    let headers: map[str]str = {};
-    headers["content-type"] = content_type;
+    let extra: [str] = [];
     return Response {
         status: status,
         status_text: status_text,
-        headers: headers,
+        content_type: content_type,
+        location: "",
+        extra: extra,
         body: to_bytes(body)
     };
 }
