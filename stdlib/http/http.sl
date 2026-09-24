@@ -21,6 +21,29 @@ pub gc struct Request {
     body: bytes,
 }
 
+// `read` couples two things that only sometimes belong together:
+// filling the caller's buffer and framing what's in it. serve_conn
+// needs the split for frame dispatch (route on segs without strs):
+// it frames with parse_frame off the head bytes, but the head bytes
+// themselves still come from read's own framing -- one to_bytes of
+// the head, not one per field. read_frame is that split: same scan,
+// same errors, same close/body rules as read, but it ALSO returns the
+// head bytes the router matches on, so the serve loop copies once
+// and routes without building a second Request.
+pub gc struct WireFrame {
+    line_end: int,
+    head_end: int,
+    body_start: int,
+    body_end: int,
+    end: int,
+    version: int,
+    close: bool,
+    filled: int,
+    head: bytes,
+    chunked_body: bytes,
+    is_chunked: bool,
+}
+
 pub gc struct Incoming {
     req: Request,
     filled: int,
@@ -1353,8 +1376,13 @@ fn ver_str(v: int) -> str {
 }
 
 // Is this frame's method exactly `want` (e.g. "GET"), compared in
-// place -- no method str is ever built.
+// place -- no method str is ever built. Takes a line_end int (not a
+// Frame) so both Frame and WireFrame callers share it.
 pub fn method_is(raw: bytes, f: Frame, want: str) -> bool {
+    return method_is_at(raw, f.line_end, want);
+}
+
+pub fn method_is_at(raw: bytes, line_end: int, want: str) -> bool {
     let wb = to_bytes(want);
     let i = 0;
     while i < len(wb) {
@@ -1367,7 +1395,7 @@ pub fn method_is(raw: bytes, f: Frame, want: str) -> bool {
         return false;
     }
     let sp = 0;
-    while sp < f.line_end && raw[sp] != 32 {
+    while sp < line_end && raw[sp] != 32 {
         sp = sp + 1;
     }
     return sp == len(wb);
@@ -1376,13 +1404,17 @@ pub fn method_is(raw: bytes, f: Frame, want: str) -> bool {
 // Is this frame's path exactly `want` (bytes compared in place, query
 // string ignored -- matches path.strip_query semantics)? No path str.
 pub fn path_is(raw: bytes, f: Frame, want: str) -> bool {
+    return path_is_at(raw, f.line_end, want);
+}
+
+pub fn path_is_at(raw: bytes, line_end: int, want: str) -> bool {
     let sp1 = 0;
-    while sp1 < f.line_end && raw[sp1] != 32 {
+    while sp1 < line_end && raw[sp1] != 32 {
         sp1 = sp1 + 1;
     }
     let start = sp1 + 1;
     let sp2 = start;
-    while sp2 < f.line_end && raw[sp2] != 32 {
+    while sp2 < line_end && raw[sp2] != 32 {
         sp2 = sp2 + 1;
     }
     let end = sp2;
@@ -1411,13 +1443,17 @@ pub fn path_is(raw: bytes, f: Frame, want: str) -> bool {
 // shape -- the ONE allocation the params map used to cost per route
 // scanned. Returns "" when the shape does not match.
 pub fn path_param(raw: bytes, f: Frame, prefix: str) -> str {
+    return path_param_at(raw, f.line_end, prefix);
+}
+
+pub fn path_param_at(raw: bytes, line_end: int, prefix: str) -> str {
     let sp1 = 0;
-    while sp1 < f.line_end && raw[sp1] != 32 {
+    while sp1 < line_end && raw[sp1] != 32 {
         sp1 = sp1 + 1;
     }
     let start = sp1 + 1;
     let sp2 = start;
-    while sp2 < f.line_end && raw[sp2] != 32 {
+    while sp2 < line_end && raw[sp2] != 32 {
         sp2 = sp2 + 1;
     }
     let end = sp2;
@@ -1442,6 +1478,51 @@ pub fn path_param(raw: bytes, f: Frame, prefix: str) -> str {
     return to_str(raw[start + len(pb)..end]);
 }
 
+// The method bytes as a str: the ONE framing str frame dispatch
+// needs (to map to the Method enum). Everything else matches in
+// place; this is 1 alloc where parse() spent ~10. Takes line_end so
+// Frame and WireFrame share it.
+pub fn frame_method(raw: bytes, f: Frame) -> str {
+    return frame_method_at(raw, f.line_end);
+}
+
+pub fn frame_method_at(raw: bytes, line_end: int) -> str {
+    let sp = 0;
+    while sp < line_end && raw[sp] != 32 {
+        sp = sp + 1;
+    }
+    return to_str(raw[0..sp]);
+}
+
+// The full Request for a frame, built ONCE for the route that runs:
+// method/path/version strs, raw_headers slice, body slice. serve()
+// callers already hold one; serve_frame builds one -- never both.
+// Takes explicit offsets so Frame and WireFrame share it.
+pub fn frame_request(raw: bytes, f: Frame) -> Request {
+    return frame_request_at(raw, f.line_end, f.head_end, frame_body(raw, f));
+}
+
+pub fn frame_request_at(raw: bytes, line_end: int, head_end: int,
+                        body: bytes) -> Request {
+    let sp1 = 0;
+    while sp1 < line_end && raw[sp1] != 32 {
+        sp1 = sp1 + 1;
+    }
+    let pstart = sp1 + 1;
+    let sp2 = pstart;
+    while sp2 < line_end && raw[sp2] != 32 {
+        sp2 = sp2 + 1;
+    }
+    let vstart = sp2 + 1;
+    return Request {
+        method: to_str(raw[0..sp1]),
+        path: to_str(raw[pstart..sp2]),
+        version: to_str(raw[vstart..line_end]),
+        raw_headers: raw[line_end + 2..head_end],
+        body: body
+    };
+}
+
 pub fn frame_version(f: Frame) -> int {
     return f.version;
 }
@@ -1449,6 +1530,17 @@ pub fn frame_version(f: Frame) -> int {
 pub fn frame_body(raw: bytes, f: Frame) -> bytes {
     if f.has_decoded {
         return f.decoded;
+    }
+    return raw[f.body_start..f.body_end];
+}
+
+// The body slice off read_frame's head copy: chunked bodies decoded
+// out of raw (reassembled), identity bodies sliced in place -- same
+// rule as frame_body, over WireFrame offsets. read_frame's head copy
+// holds the whole message, so no second copy.
+pub fn wire_frame_body(raw: bytes, f: WireFrame) -> bytes {
+    if f.is_chunked {
+        return f.chunked_body;
     }
     return raw[f.body_start..f.body_end];
 }
@@ -1969,6 +2061,23 @@ pub fn wants_close(r: Request) -> bool {
     return lower_ascii(v) == "close";
 }
 
+// The close decision straight off framed bytes: same rules as
+// wants_close, but no Request, no header str -- the connection line
+// is compared in place and only its value (rare, and only when
+// present) costs one allocation. read_frame uses this so the serve
+// loop never builds a Request just to learn the connection closes.
+fn wants_close_frame(raw: bytes, f: Frame) -> bool {
+    let at = strings.find_field(raw[f.line_end + 2..f.head_end], "connection");
+    if at < 0 {
+        return f.version == 0;
+    }
+    let v = value_at(raw, f.line_end + 2 + at);
+    if f.version == 0 {
+        return lower_ascii(v) != "keep-alive";
+    }
+    return lower_ascii(v) == "close";
+}
+
 // `read` knows this request's `Content-Length` value as an integer
 // without allocating a `str` for the digits; mirrors `parse_digits`
 // but returns -1 instead of an error since `read` treats a malformed
@@ -2103,6 +2212,99 @@ fn hr_ok(r: result[Head, str]) -> bool {
     }
     return true;
 }
+
+// read_frame: read's framing, plus the head bytes the router matches
+// on. Implemented INSIDE read's loop shape (not as read-plus-copy):
+// read compacts the buffer before returning, so after read there is
+// no head left to copy -- buf[0..filled] is the NEXT request. This
+// duplicates read's loop deliberately (same scans, same errors, same
+// close rules), and the duplication is the contract: any change to
+// read's framing must land here too. What differs: on a complete
+// frame it copies the message bytes once (to_bytes of buf[0..end]),
+// frames THAT copy with parse_frame for offsets, and returns both --
+// so serve_frame routes on bytes with no Request strs, no segs list,
+// and no second copy.
+//
+// Chunked bodies need care: frame_body_wire REASSEMBLES them
+// (concat_parts) because chunks arrive discontiguous, but the head
+// copy above holds the raw chunked bytes -- slicing body offsets out
+// of it would serve chunk framing as the body. So for chunked, the
+// WireFrame's body IS the reassembled copy (fm.body, one alloc the
+// old path also spent); body_start/body_end are 0/0 and unused --
+// wire_frame_body is only for the identity path, and frame_request_at
+// takes the body explicitly for exactly this reason.
+pub fn read_frame(c: &mut link, buf: wire, filled: int,
+                  deadline: until) -> result[WireFrame, str] {
+    let n = filled;
+    while true {
+        if n > 0 {
+            let hr = frame_head_wire(buf, n);
+            guard let hd = hr else let he = err_of(hr) {
+                if he != "need more" {
+                    return err(he);
+                }
+            }
+            if hr_ok(hr) {
+                guard let hd2 = hr else {
+                    return err("unreachable");
+                }
+                let fr = frame_body_wire(buf, n, hd2.version, hd2.hs, hd2.sep);
+                guard let fm = fr else let fe = err_of(fr) {
+                    return err(fe);
+                }
+                if !fm.complete {
+                    if fm.need > 0 && fm.need > len(buf) {
+                        return err("request too large for buffer");
+                    }
+                } else {
+                    let raw = to_bytes(buf[0..fm.end]);
+                    let pr = parse_frame(raw);
+                    guard let f = pr else let e = err_of(pr) {
+                        return err(e);
+                    }
+                    let close = wants_close_frame(raw, f);
+                    let rest = compact_wire(buf, fm.end, n);
+                    let bs = f.body_start;
+                    let be = f.body_end;
+                    if hd2.hs.has_transfer_encoding && hd2.hs.te_is_chunked {
+                        bs = 0;
+                        be = 0;
+                    }
+                    return ok(WireFrame {
+                        line_end: f.line_end,
+                        head_end: f.head_end,
+                        body_start: bs,
+                        body_end: be,
+                        end: fm.end,
+                        version: f.version,
+                        close: close,
+                        filled: rest,
+                        head: raw,
+                        chunked_body: fm.body,
+                        is_chunked: hd2.hs.has_transfer_encoding && hd2.hs.te_is_chunked
+                    });
+                }
+            }
+        }
+        if n >= len(buf) {
+            return err("request too large for buffer");
+        }
+        let tail = buf[n..];
+        let rr = c.recv(tail, deadline);
+        guard let m = rr else let e = err_of(rr) {
+            return err("recv: " + to_str(e));
+        }
+        if m == 0 {
+            if n == 0 {
+                return err("connection closed");
+            }
+            return err("truncated request");
+        }
+        n = n + m;
+    }
+}
+
+
 
 pub fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Incoming, str] {
     let n = filled;
