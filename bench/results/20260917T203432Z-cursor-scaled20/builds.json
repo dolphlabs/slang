@@ -1,0 +1,47 @@
+{
+  "slang": {
+    "ok": true,
+    "seconds": 8.7,
+    "log": "raw/build-slang.log"
+  },
+  "go": {
+    "ok": true,
+    "seconds": 0.9,
+    "log": "raw/build-go.log"
+  },
+  "rust": {
+    "ok": true,
+    "seconds": 0.6,
+    "log": "raw/build-rust.log"
+  },
+  "c": {
+    "ok": true,
+    "seconds": 1.0,
+    "log": "raw/build-c.log"
+  },
+  "csharp": {
+    "ok": true,
+    "seconds": 6.6,
+    "log": "raw/build-csharp.log"
+  },
+  "java": {
+    "ok": true,
+    "seconds": 3.4,
+    "log": "raw/build-java.log"
+  },
+  "python": {
+    "ok": true,
+    "seconds": 1.6,
+    "log": "raw/build-python.log"
+  },
+  "bun": {
+    "ok": true,
+    "seconds": 0.0,
+    "log": "raw/build-bun.log"
+  },
+  "node": {
+    "ok": true,
+    "seconds": 0.4,
+    "log": "raw/build-node.log"
+  }
+}

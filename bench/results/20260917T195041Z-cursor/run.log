@@ -1,0 +1,139 @@
+19:50:41 run 20260917T195041Z-cursor -> /workspace/bench/results/20260917T195041Z-cursor
+19:50:41 cpus: server=0-1 (2) loadgen=2-2 (1) db=3-3
+19:50:42 building: slang go rust c csharp java python bun node
+19:51:54 BUILD FAILED: csharp (see raw/build-csharp.log)
+19:52:13 built: slang go rust c java python bun node
+19:52:13 seeding database: users=20000 orders=400000 (this takes a while at full scale)
+psql:bench/suite/db/schema.sql:2: NOTICE:  table "orders" does not exist, skipping
+psql:bench/suite/db/schema.sql:3: NOTICE:  table "users" does not exist, skipping
+Time: 34.909 ms
+Time: 731.095 ms
+ setval 
+--------
+ 400000
+(1 row)
+
+Time: 0.599 ms
+Time: 280.022 ms
+Time: 25.543 ms
+Time: 70.510 ms
+Time: 1.491 ms
+Time: 0.626 ms
+19:52:15 generating /workspace/bench/.data/batch_2000000_100000.csv
+19:52:16 conformance api/slang
+19:52:28 correctness batch/slang
+19:52:29 conformance api/go
+19:52:31 correctness batch/go
+19:52:32 conformance api/rust
+19:52:34 correctness batch/rust
+19:52:34 conformance api/c
+19:52:36 correctness batch/c
+19:52:36 conformance api/java
+19:52:37 CONFORMANCE FAILED: api/java (see raw/conformance-api-java.log)
+19:52:38 correctness batch/java
+19:52:38 conformance api/python
+19:52:40 correctness batch/python
+19:52:41 conformance api/bun
+19:52:43 correctness batch/bun
+19:52:43 conformance api/node
+19:52:46 correctness batch/node
+19:52:46 light http go round 1 c=50
+19:52:52 light http go round 1 c=200
+19:52:58 light http rust round 1 c=50
+19:53:03 light http rust round 1 c=200
+19:53:09 light http c round 1 c=50
+19:53:14 light http c round 1 c=200
+19:53:20 light http java round 1 c=50
+19:53:26 light http java round 1 c=200
+19:53:32 light http python round 1 c=50
+19:53:38 light http python round 1 c=200
+19:53:44 light http bun round 1 c=50
+19:53:49 light http bun round 1 c=200
+19:53:55 light http node round 1 c=50
+19:54:01 light http node round 1 c=200
+19:54:07 light http slang round 1 c=50
+19:54:12 light http slang round 1 c=200
+19:54:28 light compute go round 1
+19:54:29 light compute rust round 1
+19:54:29 light compute c round 1
+19:54:29 light compute java round 1
+19:54:29 light compute python round 1
+19:54:31 light compute bun round 1
+19:54:31 light compute node round 1
+19:54:31 light compute slang round 1
+19:54:32 heavy api go round 1 warm-up 3s
+19:54:35 heavy api go round 1 mix c=64
+19:54:45 heavy api go round 1 mix c=512
+19:54:56 heavy api go round 1 point c=64
+19:55:07 heavy api go round 1 point c=512
+19:55:17 heavy api go round 1 quote c=64
+19:55:28 heavy api go round 1 quote c=512
+19:55:38 heavy api go round 1 mix fixed rate 2000/s
+19:55:49 heavy api go round 1 mix fixed rate 10000/s
+19:56:00 heavy api rust round 1 warm-up 3s
+19:56:03 heavy api rust round 1 mix c=64
+19:56:14 heavy api rust round 1 mix c=512
+19:56:25 heavy api rust round 1 point c=64
+19:56:35 heavy api rust round 1 point c=512
+19:56:46 heavy api rust round 1 quote c=64
+19:56:56 heavy api rust round 1 quote c=512
+19:57:07 heavy api rust round 1 mix fixed rate 2000/s
+19:57:17 heavy api rust round 1 mix fixed rate 10000/s
+19:57:29 heavy api c round 1 warm-up 3s
+19:57:32 heavy api c round 1 mix c=64
+19:57:43 heavy api c round 1 mix c=512
+19:57:53 heavy api c round 1 point c=64
+19:58:04 heavy api c round 1 point c=512
+19:58:14 heavy api c round 1 quote c=64
+19:58:25 heavy api c round 1 quote c=512
+19:58:36 heavy api c round 1 mix fixed rate 2000/s
+19:58:46 heavy api c round 1 mix fixed rate 10000/s
+19:58:57 skip api/java: failed conformance
+19:58:58 heavy api python round 1 warm-up 3s
+19:59:01 heavy api python round 1 mix c=64
+19:59:12 heavy api python round 1 mix c=512
+19:59:22 heavy api python round 1 point c=64
+19:59:33 heavy api python round 1 point c=512
+19:59:43 heavy api python round 1 quote c=64
+19:59:54 heavy api python round 1 quote c=512
+20:00:05 heavy api python round 1 mix fixed rate 2000/s
+20:00:15 heavy api python round 1 mix fixed rate 10000/s
+20:00:26 heavy api bun round 1 warm-up 3s
+20:00:29 heavy api bun round 1 mix c=64
+20:00:40 heavy api bun round 1 mix c=512
+20:00:51 heavy api bun round 1 point c=64
+20:01:01 heavy api bun round 1 point c=512
+20:01:12 heavy api bun round 1 quote c=64
+20:01:22 heavy api bun round 1 quote c=512
+20:01:33 heavy api bun round 1 mix fixed rate 2000/s
+20:01:43 heavy api bun round 1 mix fixed rate 10000/s
+20:01:55 heavy api node round 1 warm-up 3s
+20:01:58 heavy api node round 1 mix c=64
+20:02:09 heavy api node round 1 mix c=512
+20:02:19 heavy api node round 1 point c=64
+20:02:30 heavy api node round 1 point c=512
+20:02:40 heavy api node round 1 quote c=64
+20:02:51 heavy api node round 1 quote c=512
+20:03:02 heavy api node round 1 mix fixed rate 2000/s
+20:03:12 heavy api node round 1 mix fixed rate 10000/s
+20:03:23 heavy api slang round 1 warm-up 3s
+20:03:26 heavy api slang round 1 mix c=64
+20:03:37 heavy api slang round 1 mix c=512
+20:03:48 heavy api slang round 1 point c=64
+20:03:58 heavy api slang round 1 point c=512
+20:04:09 heavy api slang round 1 quote c=64
+20:04:19 heavy api slang round 1 quote c=512
+20:04:30 heavy api slang round 1 mix fixed rate 2000/s
+20:04:41 heavy api slang round 1 mix fixed rate 10000/s
+20:05:04 warming the page cache with /workspace/bench/.data/batch_2000000_100000.csv
+20:05:04 heavy batch go round 1
+20:05:05 heavy batch rust round 1
+20:05:05 heavy batch c round 1
+20:05:05 heavy batch java round 1
+20:05:06 heavy batch python round 1
+20:05:07 heavy batch bun round 1
+20:05:08 heavy batch node round 1
+20:05:09 heavy batch slang round 1
+20:05:11 measurements done; writing results.json and summary.md
+wrote /workspace/bench/results/20260917T195041Z-cursor/results.json and summary.md (88 measurements)
+20:05:11 done: /workspace/bench/results/20260917T195041Z-cursor

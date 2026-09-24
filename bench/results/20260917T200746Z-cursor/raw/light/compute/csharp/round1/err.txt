@@ -1,0 +1,23 @@
+You must install .NET to run this application.
+
+App: /workspace/bench/.build/csharp/compute/Compute
+Architecture: x64
+App host version: 10.0.12
+.NET location: Not found
+
+The following locations were searched:
+  Application directory:
+    /workspace/bench/.build/csharp/compute/
+  Environment variable:
+    DOTNET_ROOT_X64 = <not set>
+    DOTNET_ROOT = <not set>
+  Registered location:
+    /etc/dotnet/install_location_x64 = <not set>
+  Default location:
+    /usr/share/dotnet
+
+Learn more:
+https://aka.ms/dotnet/app-launch-failed
+
+Download the .NET runtime:
+https://aka.ms/dotnet-core-applaunch?missing_runtime=true&arch=x64&rid=linux-x64&os=ubuntu.24.04&apphost_version=10.0.12
