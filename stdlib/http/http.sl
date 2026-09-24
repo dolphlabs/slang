@@ -1315,12 +1315,6 @@ pub fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Inc
             // and the body is one copy out. `parse` keeps the bytes path;
             // this is the socket path.
             let hr = frame_head_wire(buf, n);
-            let done = false;
-            let req_out = Request {
-                method: "", path: "", version: "",
-                raw_headers: b"", body: b""
-            };
-            let rest_out = 0;
             guard let hd = hr else let he = err_of(hr) {
                 if he != "need more" {
                     return err(he);
@@ -1389,14 +1383,151 @@ fn put_bytes(w: wire, off: int, b: bytes) -> int {
     return off + len(b);
 }
 
-// The exact byte layout of serialize() above, written directly into a
-// wire instead of built up through GC allocations. One function serving
-// both the size pass and the fill pass (see put_str/put_bytes) is what
-// keeps them from drifting apart under maintenance -- a future field
-// added to one and not the other is exactly the bug two implementations
-// would eventually grow. Must stay byte-identical to serialize(): same
-// order, same "Connection"-capitalised quirk in the skip filter below
-// (kept deliberately -- see serialize()'s own history).
+// The integer twin: serializes `v` as ASCII digits straight into the
+// wire, no `to_str` allocation. Same probe/fill contract: `off`
+// advances by the true digit count either way. Single ASCII bytes go
+// through one-byte wires: `wire_put(w, at, "5")` is one call, not one
+// allocation (string literals are constants, not GC values).
+fn put_byte(w: wire, off: int, b: int) -> int {
+    if b == 48 {
+        wire_put(w, off, "0");
+    } else if b == 49 {
+        wire_put(w, off, "1");
+    } else if b == 50 {
+        wire_put(w, off, "2");
+    } else if b == 51 {
+        wire_put(w, off, "3");
+    } else if b == 52 {
+        wire_put(w, off, "4");
+    } else if b == 53 {
+        wire_put(w, off, "5");
+    } else if b == 54 {
+        wire_put(w, off, "6");
+    } else if b == 55 {
+        wire_put(w, off, "7");
+    } else if b == 56 {
+        wire_put(w, off, "8");
+    } else {
+        wire_put(w, off, "9");
+    }
+    return off + 1;
+}
+
+fn put_int(w: wire, off: int, v: int) -> int {
+    if v == 0 {
+        return put_byte(w, off, 48);
+    }
+    let neg = false;
+    let u = v;
+    if v < 0 {
+        neg = true;
+        u = -v;
+    }
+    let digits = 0;
+    let t = u;
+    while t > 0 {
+        digits = digits + 1;
+        t = t / 10;
+    }
+    let total = digits;
+    let at = off;
+    if neg {
+        wire_put(w, off, "-");
+        at = off + 1;
+        total = total + 1;
+    }
+    let i = 0;
+    while i < digits {
+        let p = 1;
+        let k = 0;
+        while k < digits - 1 - i {
+            p = p * 10;
+            k = k + 1;
+        }
+        let d = (u / p) % 10 + 48;
+        put_byte(w, at + i, d);
+        i = i + 1;
+    }
+    return off + total;
+}
+
+// SHAPE-CHECK (fast response path -- the only definition): true when
+// `r` has exactly the shape `text_response` builds -- one
+// content-type header and nothing else the fast path would drop. The
+// connection header is read, not matched: any value (or none) rides
+// along through `conn`, so it never changes the shape decision.
+fn is_fast_response(r: Response) -> bool {
+    if len(r.headers) != 1 {
+        return false;
+    }
+    return has(r.headers, "content-type");
+}
+
+fn fast_content_type(r: Response) -> str {
+    return r.headers["content-type"];
+}
+
+fn fast_conn(r: Response) -> str {
+    if has(r.headers, "connection") {
+        return r.headers["connection"];
+    }
+    return "keep-alive";
+}
+
+// EMIT (general response path): `emit` and `serialize` are two
+// implementations of the same byte layout that must never disagree --
+// see tests/http_write_arena, which sends every response shape through
+// both and compares. `emit_into` above is the third: the fixed
+// fast-path layout (status line, one content-type, content-length,
+// connection, blank line, body) written straight into the caller's
+// arena with no map, no integer str, and no intermediate bytes.
+// `write` uses it when the response has exactly the shape
+// `text_response` builds; anything else falls back to
+// `emit`/`serialize` unchanged.
+//
+// EMIT-GENERAL-CONTRACT: one implementation serving both the size
+// pass and the fill pass keeps them from drifting apart under
+// maintenance -- a future field added to one and not the other is
+// exactly the bug two implementations would eventually grow. Must
+// stay byte-identical to serialize(): same order, same
+// "Connection"-capitalised quirk in the skip filter below (kept
+// deliberately -- see serialize()'s own history).
+//
+// EMIT-INTO-CONTRACT (fixed fast-path layout): status line, one
+// content-type, content-length, connection, blank line, body --
+// written straight into the caller's wire with no map lookup, no
+// integer str, and no intermediate bytes. Same probe/fill contract as
+// `emit` (off advances by true lengths), same byte layout as
+// `serialize` for this shape.
+// EMIT-INTO (fixed fast-path layout): status line, one content-type,
+// content-length, connection, blank line, body -- written straight
+// into the caller's wire with no map lookup, no integer str, and no
+// intermediate bytes. Same probe/fill contract as `emit` (off advances
+// by true lengths), same byte layout as `serialize` for this shape.
+//
+// SHAPE-CHECK: `is_fast_response` is true when `r` has exactly the
+// shape `text_response` builds -- one content-type header and nothing
+// else the fast path would drop. The connection header is read, not
+// matched: any value (or none) rides along through `conn`, so it
+// never changes the shape decision.
+fn emit_into(w: wire, status: i32, status_text: str, content_type: str,
+             body: bytes, conn: str) -> int {
+    let off = 0;
+    off = put_str(w, off, "HTTP/1.1 ");
+    off = put_int(w, off, status);
+    off = put_str(w, off, " ");
+    off = put_str(w, off, status_text);
+    off = put_str(w, off, "\r\ncontent-type: ");
+    off = put_str(w, off, content_type);
+    off = put_str(w, off, "\r\nContent-Length: ");
+    off = put_int(w, off, len(body));
+    off = put_str(w, off, "\r\nConnection: ");
+    off = put_str(w, off, conn);
+    off = put_str(w, off, "\r\n\r\n");
+    off = put_bytes(w, off, body);
+    return off;
+}
+
 fn emit(r: Response, w: wire) -> int {
     let off = 0;
     off = put_str(w, off, "HTTP/1.1 ");
@@ -1431,7 +1562,25 @@ fn emit(r: Response, w: wire) -> int {
 // of the arena, falls back to serialize() + send_bytes rather than
 // letting a.wire(need) past capacity kill the task -- a slow response
 // stays a slow response instead of becoming a dropped connection.
+//
+// Responses with exactly the `text_response` shape (one content-type,
+// nothing else) take the fixed fast path above: no map iteration, no
+// integer str, no intermediate bytes. Anything else uses the general
+// `emit` below, unchanged.
 pub fn write(c: &mut link, r: Response, a: &mut arena, deadline: until) -> result[int, fault] {
+    if is_fast_response(r) {
+        let ct = fast_content_type(r);
+        let conn = fast_conn(r);
+        let probe = a.wire(0);
+        let need = emit_into(probe, r.status, r.status_text, ct, r.body, conn);
+        if need > a.left() {
+            let raw = serialize(r);
+            return c.send_bytes(raw, deadline);
+        }
+        let w = a.wire(need);
+        emit_into(w, r.status, r.status_text, ct, r.body, conn);
+        return c.send(w, deadline);
+    }
     let probe = a.wire(0);
     let need = emit(r, probe);
     if need > a.left() {
