@@ -48,34 +48,33 @@ fn via_write(resp: http.Response, arena_bytes: int) -> bytes {
 fn check(label: str, resp: http.Response, arena_bytes: int) {
     let via_arena = via_write(resp, arena_bytes);
     let via_gc = http.serialize(resp);
+    let via_sized = http.serialize_sized(resp);
+    let via_builder = http.serialize_builder(resp);
     if via_arena != via_gc {
         println("FAIL " + label + ": arena and serialize disagree");
         println("  arena: " + to_str(via_arena));
         println("  gc:    " + to_str(via_gc));
         exit(1);
     }
+    if via_sized != via_gc {
+        println("FAIL " + label + ": serialize_sized disagrees");
+        exit(1);
+    }
+    if via_builder != via_gc {
+        println("FAIL " + label + ": serialize_builder disagrees");
+        exit(1);
+    }
     println(label + " ok (" + to_str(len(via_gc)) + " bytes)");
 }
 
-let no_headers: map[str]str = {};
-
 // no headers, empty body
-check("no headers, empty body", http.Response {
-    status: 204, status_text: "No Content", headers: no_headers, body: b""
-}, 512);
+check("no headers, empty body", http.text_response(204, "No Content", "", ""), 512);
 
 // one header, small body -- the shape tests/http/main.sl:62 pins
 check("one header, small body", http.text_response(200, "OK", "text/plain", "hi"), 512);
 
 // many headers
-let many: map[str]str = {};
-many["x-a"] = "1";
-many["x-b"] = "2";
-many["x-c"] = "3";
-many["x-request-id"] = "req_deadbeef";
-check("many headers", http.Response {
-    status: 200, status_text: "OK", headers: many, body: to_bytes("{\"ok\":true}")
-}, 512);
+check("many headers", http.with_headers(http.text_response(200, "OK", "text/plain", "{\"ok\":true}"), ["x-a: 1", "x-b: 2", "x-c: 3", "x-request-id: req_deadbeef"]), 512);
 
 // a body over 64 bytes (past builder's write_str fast-path threshold)
 let long_body = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
@@ -84,11 +83,7 @@ check(">64-byte body", http.text_response(200, "OK", "text/plain", long_body), 5
 // the "Connection" (capitalised) quirk: escapes the lowercase-only skip
 // filter and is emitted both as the user header AND the trailing
 // Connection: line -- must reproduce identically, not silently fixed
-let capitalized: map[str]str = {};
-capitalized["Connection"] = "close";
-check("capitalized Connection quirk", http.Response {
-    status: 200, status_text: "OK", headers: capitalized, body: b"x"
-}, 512);
+check("capitalized Connection quirk", http.with_headers(http.text_response(200, "OK", "", "x"), ["Connection: close"]), 512);
 
 // arena too small to hold the response: write() must fall back to
 // serialize()+send_bytes, not kill the connection

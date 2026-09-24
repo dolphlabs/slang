@@ -12,6 +12,20 @@ pub fn find(b: bytes, from: int, target: int) -> int {
     return -1;
 }
 
+// Same directly on an arena buffer: the http head scan walks the
+// socket wire and needs the colon position without copying the line
+// into GC bytes first.
+pub fn find_wire(b: wire, from: int, target: int) -> int {
+    let i = from;
+    while i < len(b) {
+        if b[i] == target {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
 // Does `b` begin with `prefix`? A prefix longer than `b` is false
 // rather than an error.
 pub fn has_prefix(b: bytes, prefix: bytes) -> bool {
