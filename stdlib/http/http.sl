@@ -255,11 +255,11 @@ fn recv_fault(deadline: until) -> fault {
 }
 
 // What one pass over a header block needs to hand back to build both a
-// Request (raw_headers, unparsed) and answer frame()'s two questions
-// (is there a Content-Length or a Transfer-Encoding, and what does each
-// say) without extracting either as a string unless frame() actually
-// needs to -- most requests have neither on the hot GET path, and a POST
-// has one, not both.
+// Request (raw_headers, unparsed) and answer frame()'s questions
+// (Content-Length / Transfer-Encoding verdicts, plus the connection
+// close verdict) without extracting anything as a string unless a
+// later stage actually needs it -- most GETs have none of the three
+// on the hot path, and a POST has one, not all.
 gc struct HeaderScan {
     raw_headers: bytes,
     has_content_length: bool,
@@ -267,6 +267,12 @@ gc struct HeaderScan {
     cl_hi: int,
     has_transfer_encoding: bool,
     te_is_chunked: bool,
+    // Connection verdict, recorded during the same single pass:
+    // 0 = absent, 1 = "close", 2 = "keep-alive", 3 = other. In-place
+    // byte compares, no value str -- wants_close_head used to cost
+    // a find_field slice + a value_at copy per request; now it is
+    // two field reads.
+    conn: int,
     end: int,
 }
 
@@ -365,6 +371,53 @@ fn value_at_wire(raw: wire, at: int) -> str {
     return strings.from_wire(raw, at, end);
 }
 
+// "connection" is 10 bytes: c-o-n-n-e-c-t-i-o-n. Length check plus
+// inline lowercased compares, same hand-written shape as the CL/TE
+// matchers above -- the scan already walks every header name, so
+// matching this one costs nothing extra per line.
+fn is_connection_wire(raw: wire, lo: int, hi: int) -> bool {
+    if hi - lo != 10 {
+        return false;
+    }
+    return lower_byte(raw[lo + 0]) == 99 &&
+           lower_byte(raw[lo + 1]) == 111 &&
+           lower_byte(raw[lo + 2]) == 110 &&
+           lower_byte(raw[lo + 3]) == 110 &&
+           lower_byte(raw[lo + 4]) == 101 &&
+           lower_byte(raw[lo + 5]) == 99 &&
+           lower_byte(raw[lo + 6]) == 116 &&
+           lower_byte(raw[lo + 7]) == 105 &&
+           lower_byte(raw[lo + 8]) == 111 &&
+           lower_byte(raw[lo + 9]) == 110;
+}
+
+// The connection VALUE verdict, in place: 1 = "close", 2 =
+// "keep-alive", 3 = anything else. OWS already trimmed (vlo/vhi),
+// case-insensitive, no allocation -- the only values the close
+// decision branches on.
+fn conn_value_wire(raw: wire, vlo: int, vhi: int) -> int {
+    let n = vhi - vlo;
+    if n == 5 {
+        if lower_byte(raw[vlo]) == 99 && lower_byte(raw[vlo + 1]) == 108 &&
+           lower_byte(raw[vlo + 2]) == 111 && lower_byte(raw[vlo + 3]) == 115 &&
+           lower_byte(raw[vlo + 4]) == 101 {
+            return 1;
+        }
+        return 3;
+    }
+    if n == 10 {
+        if lower_byte(raw[vlo]) == 107 && lower_byte(raw[vlo + 1]) == 101 &&
+           lower_byte(raw[vlo + 2]) == 101 && lower_byte(raw[vlo + 3]) == 112 &&
+           lower_byte(raw[vlo + 4]) == 45 && lower_byte(raw[vlo + 5]) == 97 &&
+           lower_byte(raw[vlo + 6]) == 108 && lower_byte(raw[vlo + 7]) == 105 &&
+           lower_byte(raw[vlo + 8]) == 118 && lower_byte(raw[vlo + 9]) == 101 {
+            return 2;
+        }
+        return 3;
+    }
+    return 3;
+}
+
 fn scan_headers_wire(raw: wire, start: int, sep: int) -> result[HeaderScan, str] {
     let i = start;
     let has_cl = false;
@@ -372,6 +425,7 @@ fn scan_headers_wire(raw: wire, start: int, sep: int) -> result[HeaderScan, str]
     let cl_hi = 0;
     let has_te = false;
     let te_chunked = false;
+    let conn = 0;
     while i < sep {
         let eol = find_crlf_wire(raw, i);
         if eol < 0 || eol > sep {
@@ -408,6 +462,10 @@ fn scan_headers_wire(raw: wire, start: int, sep: int) -> result[HeaderScan, str]
             }
             has_te = true;
             te_chunked = value_is_chunked_wire(raw, vlo, vhi);
+        } else if is_connection_wire(raw, i, colon) {
+            // Last one wins, same as header() -- a repeated
+            // Connection is not a framing error, just unusual.
+            conn = conn_value_wire(raw, vlo, vhi);
         }
         i = eol + 2;
     }
@@ -415,6 +473,7 @@ fn scan_headers_wire(raw: wire, start: int, sep: int) -> result[HeaderScan, str]
         raw_headers: b"",
         has_content_length: has_cl, cl_lo: cl_lo, cl_hi: cl_hi,
         has_transfer_encoding: has_te, te_is_chunked: te_chunked,
+        conn: conn,
         end: i
     });
 }
@@ -598,7 +657,7 @@ fn framing_ok(raw: bytes, start: int, sep: int) -> result[HeaderScan, str] {
     // present) rather than recording offsets for every line.
     let hs = HeaderScan {
         raw_headers: b"", has_content_length: false, cl_lo: -1, cl_hi: -1,
-        has_transfer_encoding: false, te_is_chunked: false, end: sep
+        has_transfer_encoding: false, te_is_chunked: false, conn: 0, end: sep
     };
     if te == 1 {
         hs.has_transfer_encoding = true;
@@ -728,6 +787,7 @@ fn scan_headers(raw: bytes, start: int, sep: int) -> result[HeaderScan, str] {
         raw_headers: raw[start..i],
         has_content_length: has_cl, cl_lo: cl_lo, cl_hi: cl_hi,
         has_transfer_encoding: has_te, te_is_chunked: te_chunked,
+        conn: 0,
         end: i
     });
 }
@@ -1121,6 +1181,9 @@ fn parse_head_wire(raw: wire, sep: int, n: int) -> result[Head, str] {
     // The header block is one bytes copy for the block `header()`
     // searches, not one per field. Consumed length is hs.end - start
     // (the blank line's own CRLF excluded, same as the bytes path).
+    // NOTE: read_frame (serve path) does NOT pay this -- it leaves
+    // headers empty and materialises on first handler read. `read`
+    // is the eager path (tests, handshakes), so it copies here.
     let start = eol + 2;
     let hb = to_bytes(raw[start..hs.end]);
     return ok(Head {
@@ -1608,9 +1671,12 @@ pub fn frame_body(raw: bytes, f: Frame) -> bytes {
     return raw[f.body_start..f.body_end];
 }
 
-// The Request for a WireFrame: method/path already parsed, headers
-// + body already sliced -- no offsets, no raw, no second copy.
-// version comes from the flag (no version str is stored).
+// The Request for a WireFrame: method/path already parsed, body
+// already sliced -- no offsets, no raw, no second copy. headers
+// rides along (one block copy, same as read -- the wire is
+// compacted before return, so there is nothing to materialise
+// from later). version comes from the flag (no version str is
+// stored).
 pub fn wire_request(f: WireFrame) -> Request {
     let v = "HTTP/1.1";
     if f.version == 0 {
@@ -2023,25 +2089,49 @@ fn escape_json_into(bb: builder.Bytes, msg: bytes) -> int {
     let n = len(msg);
     while i < n {
         let c = msg[i];
-        let esc = "";
-        if c == 34 {
-            esc = "\\\"";
-        } else if c == 92 {
-            esc = "\\\\";
-        } else if c == 10 {
-            esc = "\\n";
-        } else if c == 13 {
-            esc = "\\r";
-        } else if c == 9 {
-            esc = "\\t";
-        } else if c < 32 {
-            esc = "\\u00" + hex2(c);
+        // Fast path first: printable non-quote, non-backslash bytes
+        // (letters, digits, '/', ':', '-', the id charset) never
+        // escape. One compare, no str alloc -- the old shape built
+        // an `esc` str per byte position and measured len() on it.
+        if c != 34 && c != 92 && c >= 32 {
+            i = i + 1;
+            continue;
         }
-        if len(esc) > 0 {
+        if c == 34 {
             if i > start {
                 bb.write(msg[start..i]);
             }
-            bb.write_str(esc);
+            bb.write_str("\\\"");
+            start = i + 1;
+        } else if c == 92 {
+            if i > start {
+                bb.write(msg[start..i]);
+            }
+            bb.write_str("\\\\");
+            start = i + 1;
+        } else if c == 10 {
+            if i > start {
+                bb.write(msg[start..i]);
+            }
+            bb.write_str("\\n");
+            start = i + 1;
+        } else if c == 13 {
+            if i > start {
+                bb.write(msg[start..i]);
+            }
+            bb.write_str("\\r");
+            start = i + 1;
+        } else if c == 9 {
+            if i > start {
+                bb.write(msg[start..i]);
+            }
+            bb.write_str("\\t");
+            start = i + 1;
+        } else if c < 32 {
+            if i > start {
+                bb.write(msg[start..i]);
+            }
+            bb.write_str("\\u00" + hex2(c));
             start = i + 1;
         }
         i = i + 1;
@@ -2150,21 +2240,16 @@ pub fn wants_close(r: Request) -> bool {
 }
 
 // The close decision off the ALREADY-PARSED head: same rules as
-// wants_close, but the version is hd.version (a str, no flag
-// conversion) and the connection value is read off hd.headers (the
-// block copy parse_head_wire already made) -- no head copy, no
-// rescan, no second slice. read_frame uses this so the serve loop
-// never builds a Request just to learn the connection closes.
+// wants_close, but decided from the scan's own conn verdict --
+// zero allocations, not even the find_field slice. conn: 0 =
+// absent, 1 = "close", 2 = "keep-alive", 3 = other.
 fn wants_close_head(hd: Head) -> bool {
-    let at = strings.find_field(hd.headers, "connection");
-    if at < 0 {
-        return hd.version == "HTTP/1.0";
-    }
-    let v = value_at(hd.headers, at);
     if hd.version == "HTTP/1.0" {
-        return lower_ascii(v) != "keep-alive";
+        // 1.0 closes unless keep-alive was seen.
+        return hd.hs.conn != 2;
     }
-    return lower_ascii(v) == "close";
+    // 1.1 stays unless close was seen.
+    return hd.hs.conn == 1;
 }
 
 // The int-flag twin, for callers holding a version str rather than
@@ -2322,6 +2407,12 @@ fn frame_body_wire(buf: wire, n: int, version: str, hs: HeaderScan,
         if n < end {
             return ok(need_more(end));
         }
+        // The copy here is earned: a real body the handler will
+        // read. GETs never take this branch (no Content-Length --
+        // the empty return below). A `Content-Length: 0` still
+        // copies zero bytes via to_bytes of an empty range -- one
+        // header + 1 byte, same as the b"" below; not worth a
+        // branch to save nothing.
         return ok(Framing { complete: true, end: end, need: end,
                             body: to_bytes(buf[body_start..end]),
                             body_lo: body_start });
