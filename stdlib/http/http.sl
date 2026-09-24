@@ -2070,6 +2070,14 @@ fn compact_wire(buf: wire, used: int, filled: int) -> int {
         return filled;
     }
     let n = filled - used;
+    // Pipelined bytes are the exception, not the rule: wrk/ab send
+    // one request per connection turn, so used == filled and there
+    // is nothing to move. Skip the loop rather than memmoving zero
+    // bytes (the loop is cheap but the bounds check per iteration
+    // is not free at 70k rps).
+    if n <= 0 {
+        return 0;
+    }
     let i = 0;
     while i < n {
         buf[i] = buf[used + i];
@@ -2663,6 +2671,94 @@ fn emit(r: Response, w: wire) -> int {
 // nothing else) take the fixed fast path above: no map iteration, no
 // integer str, no intermediate bytes. Anything else uses the general
 // `emit` below, unchanged.
+// A static route's answer: status, content type, and body -- no
+// Response struct, no extra list, nothing to shape-check. serve_conn
+// gets one from serve_static and hands it straight to write_static,
+// which sends the PREBUILT keep-alive rendering (assembled once at
+// registration -- see static_render below) with one wire alloc and
+// one memcpy. The static snapshot lives on the Route (see
+// router.sl); this is just the per-request view of it.
+pub gc struct StaticBody {
+    status: i32,
+    content_type: str,
+    body: bytes,
+    keep_alive: bytes,
+}
+
+// The static emit: the keep-alive rendering is prebuilt, not
+// emitted. Hot path (HTTP/1.1 keep-alive, which is every wrk/ab
+// request): one wire, one memcpy, one send -- no probe pass, no
+// Response struct, no map, no integer str, no per-piece puts. The
+// close variant (HTTP/1.0, Connection: close) is rare and pays the
+// emit cost below; it never touches the hot path.
+pub fn write_static(c: &mut link, b: StaticBody, a: &mut arena,
+                    close: bool, deadline: until) -> result[int, fault] {
+    if !close && len(b.keep_alive) > 0 {
+        if len(b.keep_alive) > a.left() {
+            return c.send_bytes(b.keep_alive, deadline);
+        }
+        let w = a.wire(len(b.keep_alive));
+        wire_put_bytes(w, 0, b.keep_alive);
+        return c.send(w, deadline);
+    }
+    // Close variant only: HTTP/1.0 or Connection: close. Rare --
+    // keep-alive never comes here -- so plain emit cost is fine.
+    let sb = builder.new_bytes();
+    sb.write_str("HTTP/1.1 ");
+    sb.write_str(to_str(b.status));
+    sb.write_str(" ");
+    sb.write_str(status_text_of(b.status));
+    sb.write_str("\r\ncontent-type: ");
+    sb.write_str(b.content_type);
+    sb.write_str("\r\nContent-Length: ");
+    sb.write_str(to_str(len(b.body)));
+    sb.write_str("\r\nConnection: close\r\n\r\n");
+    sb.write(b.body);
+    return c.send_bytes(sb.finish(), deadline);
+}
+
+// The keep-alive rendering, assembled ONCE at registration: status
+// line, one content-type, content-length, connection, blank line,
+// body -- the exact bytes write_static memcpys per request.
+// status_text_of covers the statuses static routes return; the
+// fallback ("OK") matches write_static's own close variant above,
+// so the two can never disagree on a reason phrase.
+pub fn static_render(status: i32, content_type: str, body: bytes) -> bytes {
+    let sb = builder.new_bytes();
+    sb.write_str("HTTP/1.1 ");
+    sb.write_str(to_str(status));
+    sb.write_str(" ");
+    sb.write_str(status_text_of(status));
+    sb.write_str("\r\ncontent-type: ");
+    sb.write_str(content_type);
+    sb.write_str("\r\nContent-Length: ");
+    sb.write_str(to_str(len(body)));
+    sb.write_str("\r\nConnection: keep-alive\r\n\r\n");
+    sb.write(body);
+    return sb.finish();
+}
+
+// The status text for a static status without carrying the str on
+// the StaticBody: the snapshot stores status + ctype + body, and the
+// text is derived here. Covers the statuses static routes actually
+// return; anything else falls back to "OK" rather than failing --
+// a wrong reason phrase is a cosmetic bug, a failed request is not.
+fn status_text_of(status: i32) -> str {
+    if status == 200 {
+        return "OK";
+    }
+    if status == 201 {
+        return "Created";
+    }
+    if status == 204 {
+        return "No Content";
+    }
+    if status == 404 {
+        return "Not Found";
+    }
+    return "OK";
+}
+
 pub fn write(c: &mut link, r: Response, a: &mut arena, deadline: until) -> result[int, fault] {
     if is_fast_response(r) {
         let ct = fast_content_type(r);
