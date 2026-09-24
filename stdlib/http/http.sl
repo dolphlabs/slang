@@ -71,9 +71,27 @@ fn is_ows(b: int) -> bool {
 }
 
 fn find_crlf_wire(b: wire, from: int) -> int {
+    let n = len(b);
     let i = from;
-    while i + 1 < len(b) {
+    while i + 1 < n {
         if b[i] == 13 && b[i + 1] == 10 {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// Bounded twin: searches only `buf[from..n]`, for walkers over bytes
+// that have arrived but a wire that is larger. Unbounded find_crlf_wire
+// above is for the head scan, where `filled == n` already.
+fn find_crlf_wire_n(buf: wire, from: int, n: int) -> int {
+    if n > len(buf) {
+        n = len(buf);
+    }
+    let i = from;
+    while i + 1 < n {
+        if buf[i] == 13 && buf[i + 1] == 10 {
             return i;
         }
         i = i + 1;
@@ -111,6 +129,9 @@ fn find_blank_line(b: bytes) -> int {
 // unread capacity past what's actually arrived, and this must not match
 // inside it.
 fn find_blank_line_wire(w: wire, n: int) -> int {
+    if n > len(w) {
+        n = len(w);
+    }
     let i = 0;
     while i + 3 < n {
         if w[i] == 13 && w[i + 1] == 10 && w[i + 2] == 13 && w[i + 3] == 10 {
@@ -207,6 +228,7 @@ gc struct HeaderScan {
     cl_hi: int,
     has_transfer_encoding: bool,
     te_is_chunked: bool,
+    end: int,
 }
 
 // Zero-allocation case-insensitive compares against the handful of fixed
@@ -353,7 +375,8 @@ fn scan_headers_wire(raw: wire, start: int, sep: int) -> result[HeaderScan, str]
     return ok(HeaderScan {
         raw_headers: b"",
         has_content_length: has_cl, cl_lo: cl_lo, cl_hi: cl_hi,
-        has_transfer_encoding: has_te, te_is_chunked: te_chunked
+        has_transfer_encoding: has_te, te_is_chunked: te_chunked,
+        end: i
     });
 }
 
@@ -492,14 +515,17 @@ fn scan_headers(raw: bytes, start: int, sep: int) -> result[HeaderScan, str] {
     return ok(HeaderScan {
         raw_headers: raw[start..i],
         has_content_length: has_cl, cl_lo: cl_lo, cl_hi: cl_hi,
-        has_transfer_encoding: has_te, te_is_chunked: te_chunked
+        has_transfer_encoding: has_te, te_is_chunked: te_chunked,
+        end: i
     });
 }
 
 // ---- framing: where does this request's body end? ----------------------
 //
-// One function answers it for both parse() and read(), so they cannot
-// disagree about the same bytes. Getting this wrong is not a parsing bug
+// `frame` answers it for `parse()` (bytes already in hand); `read`
+// answers it for the socket path with the wire twin below. Same rules
+// (folded/no-colon/terminator/repeated-CL-or-TE) in both; the recorded
+// offsets are into `raw`'s own positions either way.
 // but a security one: if a front proxy and this server frame a request
 // differently, the leftover bytes are read as a second request the proxy
 // never saw -- request smuggling.
@@ -524,10 +550,15 @@ gc struct Framing {
     end: int,      // offset one past the message, when complete
     need: int,     // total size when known up front (Content-Length), else -1
     body: bytes,
+    body_lo: int,  // wire twin only: body start for the caller's own copy
 }
 
 fn incomplete(need: int) -> Framing {
-    return Framing { complete: false, end: 0, need: need, body: b"" };
+    return Framing { complete: false, end: 0, need: need, body: b"", body_lo: 0 };
+}
+
+fn need_more(need: int) -> Framing {
+    return Framing { complete: false, end: 0, need: need, body: b"", body_lo: 0 };
 }
 
 fn hex_val(b: int) -> int {
@@ -535,6 +566,110 @@ fn hex_val(b: int) -> int {
     if b >= 97 && b <= 102 { return b - 87; }
     if b >= 65 && b <= 70 { return b - 55; }
     return -1;
+}
+
+// Wire twin of scan_chunked: same ceilings, same errors, same refusal
+// rules, but offsets are into `buf[0..n]` and bounded by `n`, never by
+// the wire's full capacity -- bytes past `n` haven't arrived yet and
+// must not be read. Chunk data is described by (body_lo, end) for the
+// caller's own single copy instead of being assembled here. Chunked
+// request bodies are rare on this path (and bounded by the buffer
+// either way); keeping one framing decision and one copy is the volume
+// win, not re-implementing the walker twice.
+fn scan_chunked_wire(buf: wire, n: int, start: int) -> result[Framing, str] {
+    let cap = len(buf);
+    if n > cap {
+        n = cap;
+    }
+    let i = start;
+    while true {
+        let eol = find_crlf_wire_n(buf, i, n);
+        if eol < 0 {
+            if bare_lf_wire(buf, i, n) {
+                return err("bare LF in chunk size line");
+            }
+            if n - i > MAX_CHUNK_LINE {
+                return err("chunk size line too long");
+            }
+            return ok(incomplete(-1));
+        }
+        if eol + 2 - i > MAX_CHUNK_LINE {
+            return err("chunk size line too long");
+        }
+        if bare_lf_wire(buf, i, eol) {
+            return err("bare LF in chunk size line");
+        }
+        let size = 0;
+        let digits = 0;
+        let j = i;
+        while j < eol && hex_val(buf[j]) >= 0 {
+            if digits == 15 {
+                return err("chunk size too large");
+            }
+            size = size * 16 + hex_val(buf[j]);
+            digits = digits + 1;
+            j = j + 1;
+        }
+        if digits == 0 {
+            return err("malformed chunk size");
+        }
+        while j < eol && is_ows(buf[j]) {
+            j = j + 1;
+        }
+        if j < eol && buf[j] != 59 {
+            return err("malformed chunk size");
+        }
+        i = eol + 2;
+
+        if size == 0 {
+            let tstart = i;
+            while true {
+                let teol = find_crlf_wire_n(buf, i, n);
+                if teol < 0 {
+                    if bare_lf_wire(buf, i, n) {
+                        return err("bare LF in trailer");
+                    }
+                    if n - tstart > MAX_TRAILERS {
+                        return err("trailers too large");
+                    }
+                    return ok(incomplete(-1));
+                }
+                if bare_lf_wire(buf, i, teol) {
+                    return err("bare LF in trailer");
+                }
+                if teol == i {
+                    return ok(Framing { complete: true, end: i + 2, need: -1,
+                                        body: b"", body_lo: start });
+                }
+                if teol + 2 - tstart > MAX_TRAILERS {
+                    return err("trailers too large");
+                }
+                i = teol + 2;
+            }
+        }
+
+        if i + size + 2 > n {
+            return ok(incomplete(-1));
+        }
+        if buf[i + size] != 13 || buf[i + size + 1] != 10 {
+            return err("chunk data not followed by CRLF");
+        }
+        i = i + size + 2;
+    }
+    return err("unreachable");
+}
+
+fn bare_lf_wire(raw: wire, from: int, to: int) -> bool {
+    let i = from;
+    while i < to {
+        if raw[i] == 10 {
+            if i == from || raw[i - 1] != 13 {
+                return true;
+            }
+        }
+        i = i + 1;
+    }
+    return false;
 }
 
 // A line feed without its carriage return. Lenient parsers accept it and
@@ -636,7 +771,7 @@ fn scan_chunked(raw: bytes, start: int) -> result[Framing, str] {
                 }
                 if teol == i {
                     return ok(Framing { complete: true, end: i + 2, need: -1,
-                                        body: concat_parts(parts) });
+                                        body: concat_parts(parts), body_lo: 0 });
                 }
                 if teol + 2 - tstart > MAX_TRAILERS {
                     return err("trailers too large");
@@ -655,6 +790,18 @@ fn scan_chunked(raw: bytes, start: int) -> result[Framing, str] {
         i = i + size + 2;
     }
     return err("unreachable");
+}
+
+fn frame_head_wire(buf: wire, n: int) -> result[Head, str] {
+    let sep = find_blank_line_wire(buf, n);
+    if sep < 0 {
+        return err("need more");
+    }
+    let hd = parse_head_wire(buf, sep, n);
+    guard let h = hd else {
+        return err(err_of(hd));
+    }
+    return ok(h);
 }
 
 fn frame(raw: bytes, hs: HeaderScan, sep: int,
@@ -677,7 +824,7 @@ fn frame(raw: bytes, hs: HeaderScan, sep: int,
     }
     if !hs.has_content_length {
         return ok(Framing { complete: true, end: body_start, need: body_start,
-                            body: b"" });
+                            body: b"", body_lo: body_start });
     }
     // cl_lo/cl_hi are offsets into `raw` (scan_headers walked it directly,
     // not the sliced-out raw_headers), so they're read from raw here, not
@@ -691,7 +838,7 @@ fn frame(raw: bytes, hs: HeaderScan, sep: int,
         return ok(incomplete(end));
     }
     return ok(Framing { complete: true, end: end, need: end,
-                        body: raw[body_start..end] });
+                        body: raw[body_start..end], body_lo: body_start });
 }
 
 gc struct Head {
@@ -699,7 +846,75 @@ gc struct Head {
     path: str,
     version: str,
     hs: HeaderScan,
+    headers: bytes,
     sep: int,
+}
+
+fn parse_head_wire(raw: wire, sep: int, n: int) -> result[Head, str] {
+    let cap = len(raw);
+    if n > cap {
+        n = cap;
+    }
+    if sep > n {
+        return err("need more");
+    }
+    let eol = find_crlf_wire(raw, 0);
+    if eol < 0 || eol >= sep {
+        return err("malformed request line");
+    }
+    let sp1 = -1;
+    let i = 0;
+    while i < eol {
+        if raw[i] == 32 {
+            sp1 = i;
+            break;
+        }
+        i = i + 1;
+    }
+    if sp1 <= 0 {
+        return err("malformed request line");
+    }
+    let sp2 = -1;
+    let j = eol - 1;
+    while j > sp1 {
+        if raw[j] == 32 {
+            sp2 = j;
+            break;
+        }
+        j = j - 1;
+    }
+    if sp2 <= sp1 + 1 || sp2 + 1 >= eol {
+        return err("malformed request line");
+    }
+    if eol + 2 > sep {
+        return err("malformed request line");
+    }
+    // One allocation per field, sized once and copied straight out of
+    // the socket buffer -- no intermediate bytes slice per field.
+    // `n` bounds every read: bytes past it haven't arrived yet even
+    // when the wire is larger.
+    let method = strings.from_wire(raw, 0, sp1);
+    let path = strings.from_wire(raw, sp1 + 1, sp2);
+    let version = strings.from_wire(raw, sp2 + 1, eol);
+    if version != "HTTP/1.1" && version != "HTTP/1.0" {
+        return err("unsupported version");
+    }
+    if len(path) == 0 {
+        return err("empty path");
+    }
+    let scan = scan_headers_wire(raw, eol + 2, sep);
+    guard let hs = scan else {
+        return err(err_of(scan));
+    }
+    // The header block is one bytes copy for the block `header()`
+    // searches, not one per field. Consumed length is hs.end - start
+    // (the blank line's own CRLF excluded, same as the bytes path).
+    let start = eol + 2;
+    let hb = to_bytes(raw[start..hs.end]);
+    return ok(Head {
+        method: method, path: path, version: version, hs: hs, headers: hb,
+        sep: sep
+    });
 }
 
 fn parse_head(raw: bytes, sep: int) -> result[Head, str] {
@@ -739,7 +954,7 @@ fn parse_head(raw: bytes, sep: int) -> result[Head, str] {
     }
     return ok(Head { method: strings.from_bytes(raw, 0, sp1),
                      path: strings.from_bytes(raw, sp1 + 1, sp2),
-                     version: ver, hs: hs, sep: sep });
+                     version: ver, hs: hs, headers: b"", sep: sep });
 }
 
 // The value at a match strings.find_field already found: from just past
@@ -954,109 +1169,205 @@ pub fn wants_close(r: Request) -> bool {
     return lower_ascii(v) == "close";
 }
 
-pub fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Incoming, str] {
-    while true {
-        if filled > 0 {
-            let sep = find_blank_line_wire(buf, filled);
-            if sep >= 0 {
-                let body_start = sep + 4;
-                // Head only: to_bytes(w[a..b]) is a zero-copy slice plus one
-                // memcpy, so this copies just the header block, not the
-                // body sitting after it -- which for an upload can be far
-                // bigger than the headers that describe it.
-                let head = to_bytes(buf[0..body_start]);
-                let hr = parse_head(head, sep);
-                guard let hd = hr else let e = err_of(hr) {
-                    return err(e);
+// `read` knows this request's `Content-Length` value as an integer
+// without allocating a `str` for the digits; mirrors `parse_digits`
+// but returns -1 instead of an error since `read` treats a malformed
+// value as no body.
+fn content_length_wire(raw: wire, lo: int, hi: int) -> int {
+    if hi <= lo {
+        return -1;
+    }
+    let v = 0;
+    let i = lo;
+    while i < hi {
+        let d = raw[i] - 48;
+        if d < 0 || d > 9 {
+            return -1;
+        }
+        v = v * 10 + d;
+        i = i + 1;
+    }
+    return v;
+}
+
+// `read` frames the body directly on the socket buffer: same rules as
+// `frame` (chunked-only-TE, no TE+CL, no TE-on-1.0, CL length, empty),
+// but the offsets are into `buf[0..n]` and the body is one copy out,
+// never via an intermediate head-bytes.
+fn frame_body_wire(buf: wire, n: int, version: str, hs: HeaderScan,
+                   sep: int) -> result[Framing, str] {
+    let cap = len(buf);
+    if n > cap {
+        n = cap;
+    }
+    let body_start = sep + 4;
+    if body_start > n {
+        return ok(need_more(body_start));
+    }
+    if hs.has_transfer_encoding {
+        if !hs.te_is_chunked {
+            return err("unsupported transfer coding");
+        }
+        if hs.has_content_length {
+            return err("Transfer-Encoding and Content-Length together");
+        }
+        if version == "HTTP/1.0" {
+            return err("transfer-encoding on HTTP/1.0");
+        }
+        let cr = scan_chunked_wire(buf, n, body_start);
+        guard let fr = cr else {
+            return err(err_of(cr));
+        }
+        if !fr.complete {
+            if fr.need > 0 {
+                if fr.need > len(buf) {
+                    return err("request too large for buffer");
                 }
-                if hd.hs.has_transfer_encoding {
-                    // Chunked framing has to walk the body byte by byte
-                    // (chunk-size lines, trailers), and scan_chunked
-                    // already does that once, for parse() too. Doing it
-                    // again here on wire-sliced pieces would be a second
-                    // implementation of the same framing rules -- so this
-                    // one case still copies the whole buffer, unchanged.
-                    let raw = copy_wire(buf, filled);
-                    let fr = frame(raw, hd.hs, sep, hd.version);
-                    guard let f = fr else let e = err_of(fr) {
-                        return err("body: " + e);
-                    }
-                    if f.need > len(buf) {
+                return ok(need_more(fr.need));
+            }
+            // Incomplete, size unknown: read more unless the buffer is
+            // already full, in which case this request cannot fit.
+            // scan_chunked_wire refuses an oversized size line or
+            // trailers itself once they exceed the buffer, so reaching
+            // here with a full buffer means the body genuinely needs
+            // more room than exists.
+            if n >= len(buf) {
+                return err("request too large for buffer");
+            }
+            return ok(incomplete(-1));
+        }
+        // Chunked bodies arrive discontiguous (size lines, CRLFs between
+        // chunks), so unlike the CL path there is no single range to copy:
+        // reassemble from the framed ranges. One copy per chunk, same as
+        // the bytes path's concat_parts, but straight out of the wire.
+        let parts: [bytes] = [];
+        let ci = body_start;
+        while ci < fr.end {
+            let eol = find_crlf_wire(buf, ci);
+            if eol < 0 || eol >= fr.end {
+                break;
+            }
+            let size = 0;
+            let digits = 0;
+            let j = ci;
+            while j < eol && hex_val(buf[j]) >= 0 {
+                size = size * 16 + hex_val(buf[j]);
+                digits = digits + 1;
+                j = j + 1;
+            }
+            if digits == 0 {
+                break;
+            }
+            ci = eol + 2;
+            if size == 0 {
+                break;
+            }
+            push(parts, to_bytes(buf[ci..ci + size]));
+            ci = ci + size + 2;
+        }
+        return ok(Framing { complete: true, end: fr.end, need: fr.end,
+                            body: concat_parts(parts),
+                            body_lo: body_start });
+    }
+    if hs.has_content_length {
+        let cl = content_length_wire(buf, hs.cl_lo, hs.cl_hi);
+        if cl < 0 {
+            return err("bad Content-Length");
+        }
+        // A declared body larger than the buffer is refused, not waited
+        // on: read() would otherwise recv forever into a wire that cannot
+        // hold it. Same rule the old path enforced via read_more.
+        if body_start + cl > len(buf) {
+            return err("request too large for buffer");
+        }
+        let end = body_start + cl;
+        if n < end {
+            return ok(need_more(end));
+        }
+        return ok(Framing { complete: true, end: end, need: end,
+                            body: to_bytes(buf[body_start..end]),
+                            body_lo: body_start });
+    }
+    return ok(Framing { complete: true, end: body_start, need: body_start,
+                        body: b"", body_lo: body_start });
+}
+
+// `read`'s loop re-tests the head result after the guard above: the
+// guard returns every real error and falls through only on
+// "need more", so reaching here with an error means need-more and
+// reaching here with a value means framed. A helper rather than
+// inlining because slang has no `is_ok()` method on results.
+fn hr_ok(r: result[Head, str]) -> bool {
+    guard let _v = r else {
+        return false;
+    }
+    return true;
+}
+
+pub fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Incoming, str] {
+    let n = filled;
+    while true {
+        if n > 0 {
+            // Hot path: frame head + body directly on the socket buffer.
+            // No head-bytes copy, no per-field slices: method/path/version
+            // materialize straight out of the wire (one alloc each), the
+            // header block is the single block copy `header()` searches,
+            // and the body is one copy out. `parse` keeps the bytes path;
+            // this is the socket path.
+            let hr = frame_head_wire(buf, n);
+            let done = false;
+            let req_out = Request {
+                method: "", path: "", version: "",
+                raw_headers: b"", body: b""
+            };
+            let rest_out = 0;
+            guard let hd = hr else let he = err_of(hr) {
+                if he != "need more" {
+                    return err(he);
+                }
+                // else: head not fully arrived yet -- read more below.
+            }
+            if hr_ok(hr) {
+                guard let hd2 = hr else {
+                    return err("unreachable");
+                }
+                let fr = frame_body_wire(buf, n, hd2.version, hd2.hs, hd2.sep);
+                guard let fm = fr else let fe = err_of(fr) {
+                    return err(fe);
+                }
+                if !fm.complete {
+                    if fm.need > 0 && fm.need > len(buf) {
                         return err("request too large for buffer");
                     }
-                    if f.complete {
-                        let req = Request {
-                            method: hd.method,
-                            path: hd.path,
-                            version: hd.version,
-                            raw_headers: hd.hs.raw_headers,
-                            body: f.body
-                        };
-                        let rest = compact_wire(buf, f.end, filled);
-                        return ok(Incoming { req: req, filled: rest });
-                    }
-                } else if hd.hs.has_content_length {
-                    // cl_lo/cl_hi are offsets into `head` (scan_headers
-                    // walked it directly), same as frame()'s own use of
-                    // them against raw -- valid here because they never
-                    // point past body_start, and head is exactly [0,
-                    // body_start).
-                    let clr = parse_digits(head, hd.hs.cl_lo, hd.hs.cl_hi);
-                    guard let cl = clr else let e = err_of(clr) {
-                        return err("body: bad Content-Length: " + e);
-                    }
-                    let end = body_start + cl;
-                    if end > len(buf) {
-                        return err("request too large for buffer");
-                    }
-                    if end <= filled {
-                        // Body only: the other half of the same head/body
-                        // split, so a large body is copied once here and
-                        // never a second time as part of a whole-buffer
-                        // copy that also dragged the already-parsed head
-                        // along with it.
-                        let body = to_bytes(buf[body_start..end]);
-                        let req = Request {
-                            method: hd.method,
-                            path: hd.path,
-                            version: hd.version,
-                            raw_headers: hd.hs.raw_headers,
-                            body: body
-                        };
-                        let rest = compact_wire(buf, end, filled);
-                        return ok(Incoming { req: req, filled: rest });
-                    }
-                    // else: body not fully arrived yet -- fall through and
-                    // read more, same as the chunked and no-body cases.
+                    // else: body not fully arrived yet -- read more below.
                 } else {
                     let req = Request {
-                        method: hd.method,
-                        path: hd.path,
-                        version: hd.version,
-                        raw_headers: hd.hs.raw_headers,
-                        body: b""
+                        method: hd2.method,
+                        path: hd2.path,
+                        version: hd2.version,
+                        raw_headers: hd2.headers,
+                        body: fm.body
                     };
-                    // Pipelined bytes after this request stay for the next.
-                    let rest = compact_wire(buf, body_start, filled);
+                    let rest = compact_wire(buf, fm.end, n);
                     return ok(Incoming { req: req, filled: rest });
                 }
             }
         }
-        if filled >= len(buf) {
+        if n >= len(buf) {
             return err("request too large for buffer");
         }
-        let tail = buf[filled..];
+        let tail = buf[n..];
         let rr = c.recv(tail, deadline);
-        guard let n = rr else let e = err_of(rr) {
+        guard let m = rr else let e = err_of(rr) {
             return err("recv: " + to_str(e));
         }
-        if n == 0 {
-            if filled == 0 {
+        if m == 0 {
+            if n == 0 {
                 return err("connection closed");
             }
             return err("truncated request");
         }
-        filled = filled + n;
+        n = n + m;
     }
 }
 
