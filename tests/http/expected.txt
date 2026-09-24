@@ -4,6 +4,7 @@ empty
 version
 chunked
 truncated
+frame parity
 serialize
 loopback
 keepalive

@@ -26,6 +26,20 @@ pub gc struct Incoming {
     filled: int,
 }
 
+// The request WITHOUT materialising method/path/version strs: framing
+// offsets only. `read`/`serve` use this when they only route on the
+// raw path bytes (see path_matches below); `parse` keeps returning
+// strs for callers that actually need them.
+pub gc struct Frame {
+    line_end: int,
+    head_end: int,
+    body_start: int,
+    body_end: int,
+    version: int,
+    has_decoded: bool,
+    decoded: bytes,
+}
+
 pub gc struct Response {
     status: i32,
     status_text: str,
@@ -433,6 +447,179 @@ fn is_transfer_encoding(raw: bytes, lo: int, hi: int) -> bool {
 // matter here), which is the one allocation scan_headers spends; nothing
 // beyond it is extracted unless it's the CL/TE value, and even those are
 // offsets, never a string, here.
+// `parse_frame`'s own copy: same framing numbers as fold_line, but
+// the name/value arrive as offsets so no strs are built. Carries
+// cl/te/close as three ints in the caller: clen (or -1), te (0/1),
+// close (0/1). Returns 0 on success.
+fn fold_framing_line(raw: bytes, nlo: int, nhi: int, vlo: int, vhi: int,
+                     clen: int, te: int) -> result[int, str] {
+    if match_token_range(raw, nlo, nhi, "content-length") {
+        let n = parse_digits(raw, vlo, vhi);
+        guard let v = n else let e = err_of(n) {
+            return err(e);
+        }
+        if te == 1 {
+            return err("both Content-Length and Transfer-Encoding");
+        }
+        if clen >= 0 {
+            return err("repeated Content-Length");
+        }
+        return ok(v);
+    }
+    if match_token_range(raw, nlo, nhi, "transfer-encoding") {
+        if clen >= 0 {
+            return err("both Content-Length and Transfer-Encoding");
+        }
+        if te == 1 {
+            return err("repeated Transfer-Encoding");
+        }
+        let t = trim_range(raw, vlo, vhi);
+        if t != "chunked" {
+            return err("unsupported Transfer-Encoding");
+        }
+        return ok(-2);
+    }
+    return ok(-3);
+}
+
+fn framing_close_line(raw: bytes, nlo: int, nhi: int, vlo: int,
+                      vhi: int) -> bool {
+    if !match_token_range(raw, nlo, nhi, "connection") {
+        return false;
+    }
+    return trim_range(raw, vlo, vhi) == "close";
+}
+
+// Framing check WITHOUT scan_headers' one allocation: walks the same
+// line shape (name ':' value with no bare CR/LF) but keeps only the
+// CL/TE verdict -- no offsets, no raw_headers slice. parse_frame uses
+// this; scan_headers stays for parse() and the header readers, which
+// need the offsets.
+// Compare raw[nlo..nhi] against a lowercase token without building a
+// str: length check, then byte compare with ASCII folding.
+fn match_token_range(raw: bytes, nlo: int, nhi: int, tok: str) -> bool {
+    let tb = to_bytes(tok);
+    if nhi - nlo != len(tb) {
+        return false;
+    }
+    let i = 0;
+    while i < len(tb) {
+        if lower_byte(raw[nlo + i]) != tb[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// Trim OWS off raw[lo..hi] as a str: the ONE allocation framing_ok
+// still spends, and only on a TE/connection line (rare). CL digits
+// never pass through here -- parse_digits reads them in place.
+fn trim_range(raw: bytes, lo: int, hi: int) -> str {
+    let vlo = lo;
+    let vhi = hi;
+    while vlo < vhi && is_ows(raw[vlo]) {
+        vlo = vlo + 1;
+    }
+    while vhi > vlo && is_ows(raw[vhi - 1]) {
+        vhi = vhi - 1;
+    }
+    return strings.from_bytes_lower(raw, vlo, vhi);
+}
+
+fn framing_ok(raw: bytes, start: int, sep: int) -> result[HeaderScan, str] {
+    // parse_frame's verdicts live in two ints, not a struct: clen (or
+    // -1), te (0/1). The hot loop owns zero GC.
+    let clen = -1;
+    let te = 0;
+    let i = start;
+    while i < sep {
+        let eol = find_crlf(raw, i);
+        if eol < 0 || eol > sep {
+            return err("malformed header line");
+        }
+        if eol == i {
+            return err("malformed header line");
+        }
+        let c = i;
+        while c < eol && raw[c] != 58 {
+            if raw[c] == 13 || raw[c] == 10 {
+                return err("malformed header line");
+            }
+            c = c + 1;
+        }
+        if c >= eol {
+            return err("header without colon");
+        }
+        if c == i {
+            return err("empty header name");
+        }
+        let v = c + 1;
+        while v < eol && is_ows(raw[v]) {
+            v = v + 1;
+        }
+        let frr = fold_framing_line(raw, i, c, v, eol, clen, te);
+        guard let code = frr else let e = err_of(frr) {
+            return err(e);
+        }
+        if code >= 0 {
+            clen = code;
+        } else if code == -2 {
+            te = 1;
+        }
+        i = eol + 2;
+    }
+    // Unpack into the scan result frame() expects: cl presence, TE
+    // verdict, end. The CL DIGITS still need offsets for frame() to
+    // parse -- rescan just that one line (rare: only when CL is
+    // present) rather than recording offsets for every line.
+    let hs = HeaderScan {
+        raw_headers: b"", has_content_length: false, cl_lo: -1, cl_hi: -1,
+        has_transfer_encoding: false, te_is_chunked: false, end: sep
+    };
+    if te == 1 {
+        hs.has_transfer_encoding = true;
+        hs.te_is_chunked = true;
+        return ok(hs);
+    }
+    if clen < 0 {
+        return ok(hs);
+    }
+    hs.has_content_length = true;
+    let j = start;
+    while j < sep {
+        let eol = find_crlf(raw, j);
+        if eol < 0 || eol > sep {
+            return err("malformed header line");
+        }
+        let c = j;
+        while c < eol && raw[c] != 58 {
+            c = c + 1;
+        }
+        if c < eol && match_token_range(raw, j, c, "content-length") {
+            let v = c + 1;
+            while v < eol && is_ows(raw[v]) {
+                v = v + 1;
+            }
+            let w = eol;
+            while w > v && is_ows(raw[w - 1]) {
+                w = w - 1;
+            }
+            hs.cl_lo = v;
+            hs.cl_hi = w;
+            return ok(hs);
+        }
+        j = eol + 2;
+    }
+    return ok(hs);
+}
+
+
+// Framing check WITHOUT scan_headers' one allocation: walks the same
+// line shape (name ':' value with no bare CR/LF, first line is the
+// already-validated request line) but keeps only the CL/TE verdict.
+// parse_frame uses this; scan_headers stays for parse() and the
+// header readers, which need the offsets.
 fn scan_headers(raw: bytes, start: int, sep: int) -> result[HeaderScan, str] {
     // Walked in `raw`'s own absolute positions, not a block pre-sliced to
     // `raw[start..sep]` -- for any request with at least one header, the
@@ -1068,6 +1255,206 @@ pub fn request(method: str, path: str, version: str,
     }
     return ok(Request { method: method, path: path, version: version,
                         raw_headers: sb.finish(), body: body });
+}
+
+// Framing offsets for one request inside `raw`, with NOTHING
+// materialised: no method/path/version strs, no header copies. The
+// request line is validated (two spaces, HTTP/1.x token); the header
+// block is validated by scan_headers; the body is framed by frame().
+// Callers that need strs (logging, tests) use parse(); the server
+// path matches/routes directly on these offsets -- see path_matches
+// and method_is below -- so the ~10 framing strs per request never
+// exist.
+pub fn parse_frame(raw: bytes) -> result[Frame, str] {
+    if len(raw) == 0 {
+        return err("empty request");
+    }
+    let sep = find_blank_line(raw);
+    if sep < 0 {
+        return err("missing header terminator");
+    }
+    let line_end = find_crlf(raw, 0);
+    if line_end < 0 || line_end > sep {
+        return err("malformed request line");
+    }
+    let sp1 = -1;
+    let sp2 = -1;
+    let i = 0;
+    while i < line_end {
+        if raw[i] == 32 {
+            if sp1 < 0 {
+                sp1 = i;
+            } else {
+                sp2 = i;
+            }
+        }
+        i = i + 1;
+    }
+    if sp1 < 0 || sp2 < 0 {
+        return err("malformed request line");
+    }
+    if sp2 + 1 >= line_end {
+        return err("malformed request line");
+    }
+    let vstart = sp2 + 1;
+    let vlen = line_end - vstart;
+    if vlen != 8 {
+        return err("unsupported version");
+    }
+    if to_str(raw[vstart..line_end]) != "HTTP/1.0" &&
+       to_str(raw[vstart..line_end]) != "HTTP/1.1" {
+        return err("unsupported version");
+    }
+    let ver = 0;
+    if raw[line_end - 1] == 49 {
+        ver = 1;
+    } else if raw[line_end - 1] != 48 {
+        return err("unsupported version");
+    }
+    let hr = framing_ok(raw, line_end + 2, sep);
+    guard let hs = hr else let e = err_of(hr) {
+        return err(e);
+    }
+    // framing_ok returns a HeaderScan with empty raw_headers: frame()
+    // only reads the CL/TE verdict + offsets, which is all it sets.
+    let fr = frame(raw, hs, sep, ver_str(ver));
+    guard let f = fr else let e = err_of(fr) {
+        return err("body: " + e);
+    }
+    if !f.complete {
+        return err("truncated body");
+    }
+    let body_start = sep + 4;
+    // Chunked bodies decode OUT of the raw bytes (reassembled), so the
+    // frame carries the decoded copy; identity bodies slice the raw in
+    // place -- see frame_body. has_decoded tells them apart.
+    let has_d = false;
+    let dec: bytes = b"";
+    if hs.has_transfer_encoding && hs.te_is_chunked {
+        has_d = true;
+        dec = f.body;
+    }
+    return ok(Frame {
+        line_end: line_end,
+        head_end: sep,
+        body_start: body_start,
+        body_end: body_start + len(f.body),
+        version: ver,
+        has_decoded: has_d,
+        decoded: dec
+    });
+}
+
+fn ver_str(v: int) -> str {
+    if v == 0 {
+        return "HTTP/1.0";
+    }
+    return "HTTP/1.1";
+}
+
+// Is this frame's method exactly `want` (e.g. "GET"), compared in
+// place -- no method str is ever built.
+pub fn method_is(raw: bytes, f: Frame, want: str) -> bool {
+    let wb = to_bytes(want);
+    let i = 0;
+    while i < len(wb) {
+        if raw[i] != wb[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    if raw[len(wb)] != 32 {
+        return false;
+    }
+    let sp = 0;
+    while sp < f.line_end && raw[sp] != 32 {
+        sp = sp + 1;
+    }
+    return sp == len(wb);
+}
+
+// Is this frame's path exactly `want` (bytes compared in place, query
+// string ignored -- matches path.strip_query semantics)? No path str.
+pub fn path_is(raw: bytes, f: Frame, want: str) -> bool {
+    let sp1 = 0;
+    while sp1 < f.line_end && raw[sp1] != 32 {
+        sp1 = sp1 + 1;
+    }
+    let start = sp1 + 1;
+    let sp2 = start;
+    while sp2 < f.line_end && raw[sp2] != 32 {
+        sp2 = sp2 + 1;
+    }
+    let end = sp2;
+    let q = start;
+    while q < end {
+        if raw[q] == 63 {
+            end = q;
+        }
+        q = q + 1;
+    }
+    let wb = to_bytes(want);
+    if end - start != len(wb) {
+        return false;
+    }
+    let i = 0;
+    while i < len(wb) {
+        if raw[start + i] != wb[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// The :id in "/users/:id" for a frame already known to match that
+// shape -- the ONE allocation the params map used to cost per route
+// scanned. Returns "" when the shape does not match.
+pub fn path_param(raw: bytes, f: Frame, prefix: str) -> str {
+    let sp1 = 0;
+    while sp1 < f.line_end && raw[sp1] != 32 {
+        sp1 = sp1 + 1;
+    }
+    let start = sp1 + 1;
+    let sp2 = start;
+    while sp2 < f.line_end && raw[sp2] != 32 {
+        sp2 = sp2 + 1;
+    }
+    let end = sp2;
+    let q = start;
+    while q < end {
+        if raw[q] == 63 {
+            end = q;
+        }
+        q = q + 1;
+    }
+    let pb = to_bytes(prefix);
+    if end - start <= len(pb) {
+        return "";
+    }
+    let i = 0;
+    while i < len(pb) {
+        if raw[start + i] != pb[i] {
+            return "";
+        }
+        i = i + 1;
+    }
+    return to_str(raw[start + len(pb)..end]);
+}
+
+pub fn frame_version(f: Frame) -> int {
+    return f.version;
+}
+
+pub fn frame_body(raw: bytes, f: Frame) -> bytes {
+    if f.has_decoded {
+        return f.decoded;
+    }
+    return raw[f.body_start..f.body_end];
+}
+
+pub fn frame_raw_headers(raw: bytes, f: Frame, line_end: int) -> bytes {
+    return raw[line_end + 2..f.head_end];
 }
 
 pub fn parse(raw: bytes) -> result[Request, str] {
