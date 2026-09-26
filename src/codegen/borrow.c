@@ -485,6 +485,10 @@ static void mark_expr(BK *bk, CG *cg, Expr *e) {
         for (i = 0; i < e->as.structlit.nfields; i++)
             mark_expr(bk, cg, e->as.structlit.vals[i]);
         return;
+    case EX_SWITCH:
+        /* No definitions inside: the scrutinee, labels, and arm
+         * values only read. Nothing to mark. */
+        return;
     default:
         return;
     }
@@ -894,6 +898,20 @@ static void walk_expr(BK *bk, Expr *e, const char *ret_to) {
         return;
     case EX_SPAWN:
         walk_expr(bk, e->as.spawn.call, NULL);
+        return;
+    case EX_SWITCH:
+        /* Nested inside another expression (MIR decomposes a
+         * top-level switch into blocks itself): walk every child so
+         * borrows in the scrutinee, labels, or arm values are seen. */
+        walk_expr(bk, e->as.switch_expr.scrut, NULL);
+        for (i = 0; i < e->as.switch_expr.ncases; i++) {
+            int j;
+            for (j = 0; j < e->as.switch_expr.cases[i].nvals; j++)
+                walk_expr(bk, e->as.switch_expr.cases[i].vals[j], NULL);
+            walk_expr(bk, e->as.switch_expr.cases[i].value, NULL);
+        }
+        if (e->as.switch_expr.def)
+            walk_expr(bk, e->as.switch_expr.def, NULL);
         return;
     case EX_CALL:
         walk_call(bk, e, ret_to);

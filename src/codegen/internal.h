@@ -417,6 +417,20 @@ struct CG {
      * exactly like cg->expect/cg->cur_ret already are. */
     int loop_depth;
     int cur_loop_has_bp;
+    /* break/continue targets: the nesting of loops (kind 0) and
+     * switches (kind 1) currently open in codegen. ST_BREAK targets
+     * the innermost entry -- a loop entry emits the existing C
+     * `break`, a switch entry a `goto` to that switch's end label.
+     * The end label is only emitted when some break actually used it
+     * (break_used), keeping -Wall clean. ST_CONTINUE targets the
+     * nearest loop entry. loop_depth/cur_loop_has_bp keep their
+     * existing loop-only meanings. switch_depth mirrors break_len's
+     * switch entries for quick checks. */
+    int *break_kind;
+    char **break_end;
+    int *break_used;
+    int break_len, break_cap;
+    int switch_depth;
     /* break/continue, liveness.c side: opaque LiveSet* (same idiom as
      * Expr.live_set/Stmt.backedge_live_set) for the innermost
      * enclosing loop's own break/continue target. cur_break_live_set
@@ -605,6 +619,13 @@ int can_assign(const char *dst, const char *src);
 int int_literal_value(Expr *e, long long *out);
 int fits_in(const char *t, long long v);
 int value_assignable(const char *dst, Expr *src, const char *srct);
+/* switch statements/expressions (core.c): kind 1=int, 2=bool, 3=str,
+ * 4=enum, 0=not switchable. */
+int switch_kind(CG *cg, const char *t);
+int switch_validate(CG *cg, const char *scrut_t, Expr ***label_groups,
+                    int *group_counts, int ngroups, int has_default,
+                    int line);
+char *switch_label_c_const(Expr *lb);
 const char *promote(const char *lt, const char *rt);
 char *maybe_cast(CG *cg, const char *dst, const char *src,
                         char *expr);

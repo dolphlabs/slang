@@ -1385,6 +1385,12 @@ static int expr_can_alloc_or_park(CG *cg, Expr *e) {
         return expr_can_alloc_or_park(cg, e->as.field.base);
     case EX_SPAWN:
         return 1;
+    case EX_SWITCH:
+        /* An arm value may allocate or park; the arms carry their
+         * own safepoint brackets, so the switch itself needs none --
+         * but callers asking "can this park" get the conservative
+         * answer. */
+        return 1;
     case EX_METHOD:
         /* a user method: like the dotted-call case below, it may allocate
          * or park, whatever its receiver and arguments are */
@@ -2087,3 +2093,197 @@ FuncSig *method_find(CG *cg, StructDef *sd, const char *name, int line) {
 /* Resolve a possibly-dotted identifier to its slang type: locals,
  * package globals, imported package members, or struct field chains
  * ("rect.center.x"). */
+// (implemented in infer.c as infer_ident_name)
+
+/* ------------------------------------------------------------------ */
+/* switch statements and expressions                                   */
+/* ------------------------------------------------------------------ */
+
+/* Classify a switch scrutinee type: 1 = integer family, 2 = bool,
+// 3 = str, 4 = enum, 0 = anything else (not switchable). */
+int switch_kind(CG *cg, const char *t) {
+    if (is_int(t))
+        return 1;
+    if (!strcmp(t, "bool"))
+        return 2;
+    if (is_str(t))
+        return 3;
+    if (is_enum(cg, t))
+        return 4;
+    return 0;
+}
+
+/* Integer value of a case label: a plain int literal, a unary-minus
+ * int, or an enum variant (rewritten to EX_INT with enum_ty by the
+ * enum pass). big_u64 literals have no long long value (see
+ * int_literal_value) and are rejected by the caller. */
+static int switch_int_label_value(Expr *e, long long *out) {
+    if (e->kind == EX_INT) {
+        if (e->as.int_lit.big_u64)
+            return 0;
+        *out = e->as.int_lit.value;
+        return 1;
+    }
+    return int_literal_value(e, out);
+}
+
+/* Raw u64 pattern of an int-literal label (the lexer's int_val holds
+ * the bit pattern when big_u64 is set). Only meaningful for a u64
+ * scrutinee; everything else goes through switch_int_label_value. */
+static int switch_u64_label_value(Expr *e, unsigned long long *out) {
+    if (e->kind == EX_INT) {
+        *out = (unsigned long long)e->as.int_lit.value;
+        return 1;
+    }
+    long long v;
+    if (int_literal_value(e, &v) && v >= 0) {
+        *out = (unsigned long long)v;
+        return 1;
+    }
+    return 0;
+}
+
+/* Validate one arm's labels against the scrutinee kind. Returns 1 on
+ * success; on failure reports the diagnostic and returns 0 (cg_error
+ * never returns, so 0 is unreachable but keeps callers honest). */
+static int switch_check_labels(int kind, const char *scrut_t,
+                               EnumDef *ed, Expr **vals, int nvals,
+                               long long *seen_ints, const char **seen_strs,
+                               int *nseen) {
+    for (int i = 0; i < nvals; i++) {
+        Expr *lb = vals[i];
+        if (kind == 1) {
+            long long v;
+            if (lb->kind == EX_INT && lb->as.int_lit.enum_ty)
+                cg_error(lb->line,
+                         "switch on %s: use integer literals, not enum "
+                         "variants",
+                         scrut_t);
+            if (!strcmp(scrut_t, "u64")) {
+                /* u64 is the one width whose literals can exceed i64:
+                 * compare bit patterns, which are equal exactly when
+                 * the values are. Any pattern fits. */
+                unsigned long long u;
+                if (!switch_u64_label_value(lb, &u))
+                    cg_error(lb->line,
+                             "case labels must be integer literals (got a "
+                             "non-constant expression)");
+                long long bits = (long long)u;
+                for (int s = 0; s < *nseen; s++)
+                    if (seen_ints[s] == bits)
+                        cg_error(lb->line, "duplicate case value");
+                seen_ints[(*nseen)++] = bits;
+                continue;
+            }
+            if (!switch_int_label_value(lb, &v)) {
+                if (lb->kind == EX_INT && lb->as.int_lit.big_u64)
+                    cg_error(lb->line,
+                             "case value does not fit in %s", scrut_t);
+                cg_error(lb->line,
+                         "case labels must be integer literals (got a "
+                         "non-constant expression)");
+            }
+            if (!fits_in(scrut_t, v))
+                cg_error(lb->line,
+                         "case value %lld does not fit in %s", v, scrut_t);
+            for (int s = 0; s < *nseen; s++)
+                if (seen_ints[s] == v)
+                    cg_error(lb->line, "duplicate case value %lld", v);
+            seen_ints[(*nseen)++] = v;
+        } else if (kind == 2) {
+            if (lb->kind != EX_BOOL)
+                cg_error(lb->line,
+                         "case labels must be 'true' or 'false' when "
+                         "switching on bool");
+            long long v = lb->as.bool_lit.value;
+            for (int s = 0; s < *nseen; s++)
+                if (seen_ints[s] == v)
+                    cg_error(lb->line, "duplicate case value");
+            seen_ints[(*nseen)++] = v;
+        } else if (kind == 3) {
+            if (lb->kind != EX_STRING)
+                cg_error(lb->line,
+                         "case labels must be string literals when "
+                         "switching on str");
+            for (int s = 0; s < *nseen; s++)
+                if (!strcmp(seen_strs[s], lb->as.str_lit.value))
+                    cg_error(lb->line, "duplicate case value \"%s\"",
+                             lb->as.str_lit.value);
+            seen_strs[(*nseen)++] = lb->as.str_lit.value;
+        } else {
+            if (lb->kind != EX_INT || !lb->as.int_lit.enum_ty ||
+                strcmp(lb->as.int_lit.enum_ty, scrut_t))
+                cg_error(lb->line,
+                         "case labels must be %s variants when switching "
+                         "on %s",
+                         ed->name, scrut_t);
+            long long v = lb->as.int_lit.value;
+            for (int s = 0; s < *nseen; s++)
+                if (seen_ints[s] == v)
+                    cg_error(lb->line, "duplicate case variant");
+            seen_ints[(*nseen)++] = v;
+        }
+    }
+    return 1;
+}
+
+/* Shared validation for statement and expression switch: the
+ * scrutinee type must be switchable, every label a literal of that
+ * type with no duplicates, and an enum switch without `default` must
+ * cover every variant. label_groups[i] holds arm i's labels;
+ * group_counts[i] its count. Returns the scrutinee kind (1/2/3/4). */
+int switch_validate(CG *cg, const char *scrut_t, Expr ***label_groups,
+                    int *group_counts, int ngroups, int has_default,
+                    int line) {
+    int kind = switch_kind(cg, scrut_t);
+    if (!kind)
+        cg_error(line,
+                 "switch scrutinee must be an integer, bool, str, or enum "
+                 "(got %s)",
+                 scrut_t);
+    EnumDef *ed = kind == 4 ? enum_find_canon(cg, scrut_t) : NULL;
+    int total = 0;
+    for (int i = 0; i < ngroups; i++)
+        total += group_counts[i];
+    long long *seen_ints = total
+                                ? (long long *)xmalloc(sizeof(long long) *
+                                                       (size_t)total)
+                                : NULL;
+    const char **seen_strs = total
+                                 ? (const char **)xmalloc(sizeof(char *) *
+                                                          (size_t)total)
+                                 : NULL;
+    int nseen = 0;
+    for (int i = 0; i < ngroups; i++)
+        switch_check_labels(kind, scrut_t, ed, label_groups[i],
+                            group_counts[i], seen_ints, seen_strs, &nseen);
+    if (kind == 4 && !has_default) {
+        for (int v = 0; v < ed->nvariants; v++) {
+            int found = 0;
+            for (int s = 0; s < nseen; s++)
+                if (seen_ints[s] == ed->values[v])
+                    found = 1;
+            if (!found)
+                cg_error(line,
+                         "switch on enum %s is missing variant '%s' (add "
+                         "it or a 'default' arm)",
+                         ed->name, ed->variants[v]);
+        }
+    }
+    return kind;
+}
+
+/* C constant for an int/bool/enum case label (labels are validated
+ * literals by switch_validate, so this cannot fail). A big_u64 label
+ * (only valid on a u64 scrutinee) prints as an unsigned decimal. */
+char *switch_label_c_const(Expr *lb) {
+    if (lb->kind == EX_BOOL)
+        return xstrdup(lb->as.bool_lit.value ? "1" : "0");
+    if (lb->kind == EX_INT && lb->as.int_lit.big_u64)
+        return xasprintf("%lluULL",
+                         (unsigned long long)lb->as.int_lit.value);
+    long long v;
+    if (switch_int_label_value(lb, &v))
+        return xasprintf("%lld", v);
+    return xstrdup("0"); /* unreachable: validated */
+}

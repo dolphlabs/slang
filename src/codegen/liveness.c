@@ -586,6 +586,30 @@ static LiveSet *live_expr(CG *cg, Expr *e, LiveSet *live_out) {
         call->live_set = e->live_set;
         return cur;
     }
+    case EX_SWITCH: {
+        /* Mutually exclusive arms, like if/else widened to n+1
+         * branches: union the NAMED uses of every arm value (pending
+         * markers are intra-arm and never cross a branch), then fold
+         * the labels and the scrutinee in last -- they run before
+         * any arm. The switch itself emits no safepoint of its own
+         * (arm calls carry their own brackets), so no live_set is
+         * recorded here. */
+        LiveSet *joined = ls_clone(live_out);
+        for (int i = 0; i < e->as.switch_expr.ncases; i++) {
+            LiveSet *arm = live_expr(cg, e->as.switch_expr.cases[i].value,
+                                     live_out);
+            ls_union_named_into(joined, arm);
+        }
+        if (e->as.switch_expr.def) {
+            LiveSet *d = live_expr(cg, e->as.switch_expr.def, live_out);
+            ls_union_named_into(joined, d);
+        }
+        for (int i = 0; i < e->as.switch_expr.ncases; i++)
+            for (int j = 0; j < e->as.switch_expr.cases[i].nvals; j++)
+                joined = live_expr(cg, e->as.switch_expr.cases[i].vals[j],
+                                   joined);
+        return live_expr(cg, e->as.switch_expr.scrut, joined);
+    }
     case EX_METHOD: {
         /* recv.name(args): the receiver is child 0 -- evaluated before the
          * arguments, and (unlike the bare-identifier receiver of an
@@ -859,6 +883,31 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
         return live_expr(cg, s->as.if_stmt.cond, joined);
     }
 
+    case ST_SWITCH: {
+        /* Same n+1-branch union as ST_SELECT/ST_IF. A `break` inside
+         * an arm jumps to just past the whole switch, so arms are
+         * walked with cur_break_live_set pointing at this switch's
+         * own live_out (save/restored, composing across nesting);
+         * `continue` still targets the enclosing loop, untouched. */
+        void *saved_break = cg->cur_break_live_set;
+        cg->cur_break_live_set = live_out;
+        LiveSet *joined = s->as.switch_stmt.def
+                              ? live_block(cg, s->as.switch_stmt.def,
+                                           live_out)
+                              : ls_clone(live_out);
+        for (int i = 0; i < s->as.switch_stmt.ncases; i++) {
+            LiveSet *arm =
+                live_block(cg, s->as.switch_stmt.cases[i].body, live_out);
+            ls_union_named_into(joined, arm);
+        }
+        cg->cur_break_live_set = saved_break;
+        for (int i = 0; i < s->as.switch_stmt.ncases; i++)
+            for (int j = 0; j < s->as.switch_stmt.cases[i].nvals; j++)
+                joined = live_expr(cg, s->as.switch_stmt.cases[i].vals[j],
+                                   joined);
+        return live_expr(cg, s->as.switch_stmt.scrut, joined);
+    }
+
     case ST_WHILE: {
         LiveSet *backedge = NULL;
         LiveSet *live_in_body = solve_loop_fixpoint(
@@ -972,7 +1021,7 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
          * this pass can run before codegen's own equivalent check in
          * some paths (--dump-liveness never reaches gen_stmt). */
         if (!cg->cur_break_live_set)
-            cg_error(s->line, "'break' outside a loop");
+            cg_error(s->line, "'break' outside a loop or switch");
         return ls_clone((LiveSet *)cg->cur_break_live_set);
 
     case ST_CONTINUE:
@@ -1205,6 +1254,16 @@ static void print_expr(FILE *out, Expr *e) {
             fputc('\n', out);
         }
         return;
+    case EX_SWITCH:
+        print_expr(out, e->as.switch_expr.scrut);
+        for (int i = 0; i < e->as.switch_expr.ncases; i++) {
+            for (int j = 0; j < e->as.switch_expr.cases[i].nvals; j++)
+                print_expr(out, e->as.switch_expr.cases[i].vals[j]);
+            print_expr(out, e->as.switch_expr.cases[i].value);
+        }
+        if (e->as.switch_expr.def)
+            print_expr(out, e->as.switch_expr.def);
+        return;
     case EX_CALL:
         if (e->as.call.callee)
             print_expr(out, e->as.call.callee);
@@ -1256,6 +1315,16 @@ static void print_stmts(FILE *out, Stmt **stmts, int count) {
             }
             if (s->as.select_stmt.def)
                 print_block(out, s->as.select_stmt.def);
+            break;
+        case ST_SWITCH:
+            print_expr(out, s->as.switch_stmt.scrut);
+            for (int i = 0; i < s->as.switch_stmt.ncases; i++) {
+                for (int j = 0; j < s->as.switch_stmt.cases[i].nvals; j++)
+                    print_expr(out, s->as.switch_stmt.cases[i].vals[j]);
+                print_block(out, s->as.switch_stmt.cases[i].body);
+            }
+            if (s->as.switch_stmt.def)
+                print_block(out, s->as.switch_stmt.def);
             break;
         case ST_WHILE:
             print_expr(out, s->as.while_stmt.cond);
