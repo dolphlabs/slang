@@ -1,0 +1,9 @@
+ok ping
+ok auth
+ok auth-refused
+ok split
+ok binary
+ok corrupt
+ok drop
+ok timeout
+ok server-error

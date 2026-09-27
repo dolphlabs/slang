@@ -3246,12 +3246,52 @@
       "kind": "source",
       "items": [
         {
+          "name": "REPLY_SIMPLE",
+          "decl": "let",
+          "sig": "let REPLY_SIMPLE = 0;   // +str           (text holds the text)",
+          "doc": "The five RESP2 reply types. A reply is always one of exactly one.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 38
+        },
+        {
+          "name": "REPLY_ERROR",
+          "decl": "let",
+          "sig": "let REPLY_ERROR = 1;    // -err           (text holds the text)",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 39
+        },
+        {
+          "name": "REPLY_INT",
+          "decl": "let",
+          "sig": "let REPLY_INT = 2;      // :num           (num holds the value)",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 40
+        },
+        {
+          "name": "REPLY_BULK",
+          "decl": "let",
+          "sig": "let REPLY_BULK = 3;     // $len\\r\\n<bytes> (bulk holds it, none when nil)",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 41
+        },
+        {
+          "name": "REPLY_ARRAY",
+          "decl": "let",
+          "sig": "let REPLY_ARRAY = 4;    // *n\\r\\n...      (items holds them)",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 42
+        },
+        {
           "name": "Reply",
           "decl": "struct",
           "sig": "gc struct Reply",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 43
+          "line": 44
         },
         {
           "name": "Decoded",
@@ -3259,7 +3299,7 @@
           "sig": "gc struct Decoded",
           "doc": "A decoded reply plus how many bytes of the input it consumed, so a connection holding a read buffer knows what to keep.",
           "file": "stdlib/redis/redis.sl",
-          "line": 54
+          "line": 55
         },
         {
           "name": "encode",
@@ -3267,7 +3307,7 @@
           "sig": "fn encode(args: [bytes]) -> bytes",
           "doc": "Encode one command invocation as a RESP2 array of bulk strings: SET key value  ->  *3\\r\\n$3\\r\\nSET\\r\\n$3\\r\\nkey\\r\\n$5\\r\\nvalue\\r\\n Takes already-encoded argument bytes, so binary-safe values pass through untouched. Pure: no I/O, no allocation beyond the result.",
           "file": "stdlib/redis/redis.sl",
-          "line": 99
+          "line": 100
         },
         {
           "name": "decode",
@@ -3275,7 +3315,15 @@
           "sig": "fn decode(buf: bytes) -> result[opt[Decoded], str]",
           "doc": "Decode one RESP2 reply from the front of `buf`. ok(none) means the buffer ends mid-message -- feed more bytes and retry. ok(some(d)) consumed d.consumed bytes; anything after them is the next message. err means the bytes violate the protocol: never retry on the same connection.",
           "file": "stdlib/redis/redis.sl",
-          "line": 350
+          "line": 351
+        },
+        {
+          "name": "decode_at",
+          "decl": "fn",
+          "sig": "fn decode_at(buf: bytes, pos: int) -> result[opt[Decoded], str]",
+          "doc": "Decode one reply starting at `pos` instead of 0, for readers that keep one long-lived buffer and an offset into it (see Conn): no slicing, so no per-recv copy of everything already buffered. consumed counts from `pos`.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 359
         },
         {
           "name": "slot",
@@ -3283,7 +3331,7 @@
           "sig": "fn slot(key: str) -> int",
           "doc": "The hash slot of a key, 0..16383. `{...}` hash tags force colocation: only what sits between the first `{` and the next `}` is hashed. Empty tags hash the whole key, and a `{` with no `}` is literal.",
           "file": "stdlib/redis/redis.sl",
-          "line": 387
+          "line": 399
         },
         {
           "name": "Config",
@@ -3291,7 +3339,7 @@
           "sig": "gc struct Config",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 415
+          "line": 427
         },
         {
           "name": "parse_url",
@@ -3299,7 +3347,55 @@
           "sig": "fn parse_url(url: str) -> result[Config, str]",
           "doc": "Parse redis://[[username:]password@]host[:port][/db][?sslmode=...]. rediss:// forces sslmode=require. Percent-escapes in credentials and database decode the same way pg's URLs do.",
           "file": "stdlib/redis/redis.sl",
-          "line": 475
+          "line": 487
+        },
+        {
+          "name": "Conn",
+          "decl": "struct",
+          "sig": "gc struct Conn",
+          "doc": "One server connection: exactly one round trip in flight at a time, serialized by lock. A Conn is safe to share between tasks; every public call below takes the lock for its whole exchange.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 610
+        },
+        {
+          "name": "connect_config",
+          "decl": "fn",
+          "sig": "fn connect_config(cfg: Config, deadline: until) -> result[Conn, str]",
+          "doc": "Open a connection from a parsed Config and run the handshake (AUTH when a password is set, SELECT when db is not 0). The deadline covers everything: DNS, TCP connect, TLS upgrade, login.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 745
+        },
+        {
+          "name": "connect",
+          "decl": "fn",
+          "sig": "fn connect(url: str, deadline: until) -> result[Conn, str]",
+          "doc": "Open a connection from a URL. See parse_url for the shape.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 807
+        },
+        {
+          "name": "do",
+          "decl": "fn",
+          "sig": "fn do(c: Conn, args: [bytes], deadline: until) -> result[Reply, str]",
+          "doc": "Run one command: args[0] is the command name. Exactly one reply is consumed, so at most one command is ever in flight per Conn; hold no lock of your own -- this takes c.lock for the round trip.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 818
+        },
+        {
+          "name": "close",
+          "decl": "fn",
+          "sig": "fn close(c: Conn)",
+          "doc": "Shut the connection down. In-flight calls on other tasks finish (or hit their own deadlines) first; close waits for the lock.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 827
+        },
+        {
+          "name": "usable",
+          "decl": "fn",
+          "sig": "fn usable(c: Conn) -> bool",
+          "doc": "True while commands may still be attempted: not closed, not broken. A server-side idle close is discovered on use, which marks the connection broken then.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 839
         }
       ]
     },

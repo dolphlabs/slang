@@ -148,6 +148,35 @@ fn test_roundtrip() {
     assert(d.kind == REPLY_ARRAY, "roundtrip shape");
 }
 
+fn test_decode_at() {
+    let buf = b"junk+OK\r\n:7\r\n";
+    let r = decode_at(buf, 4);
+    guard let o = r else let e = err_of(r) {
+        panic("decode_at failed: " + e);
+    }
+    guard let d = o else {
+        panic("decode_at incomplete");
+    }
+    assert(d.reply.kind == REPLY_SIMPLE, "decode_at kind");
+    assert(d.consumed == 5, "decode_at consumed");
+    let r2 = decode_at(buf, 9);
+    guard let o2 = r2 else let e = err_of(r2) {
+        panic("decode_at failed: " + e);
+    }
+    guard let d2 = o2 else {
+        panic("decode_at incomplete");
+    }
+    assert(d2.reply.num == 7, "decode_at second");
+    let rb = decode_at(buf, 99);
+    guard let ob = rb else {
+        return;
+    }
+    guard let db = ob else {
+        panic("out of range decoded");
+    }
+    panic("out of range decoded");
+}
+
 fn test_slot_vectors() {
     // foo -> 12182 is the worked example in the Redis docs
     assert(slot("foo") == 12182, "slot foo");

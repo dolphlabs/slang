@@ -22,6 +22,7 @@
 
 import "strings";
 import "encoding";
+import "net";
 
 // ---- limits ----------------------------------------------------------
 
@@ -34,11 +35,11 @@ let MAX_SLOTS = 16384;       // cluster hash slots, 0..16383
 // ---- reply model -----------------------------------------------------
 
 // The five RESP2 reply types. A reply is always one of exactly one.
-let REPLY_SIMPLE = 0;   // +str           (str holds the text)
-let REPLY_ERROR = 1;    // -err           (str holds the text)
-let REPLY_INT = 2;      // :num           (num holds the value)
-let REPLY_BULK = 3;     // $len\r\n<bytes> (bulk holds it, none when nil)
-let REPLY_ARRAY = 4;    // *n\r\n...      (items holds them)
+pub let REPLY_SIMPLE = 0;   // +str           (text holds the text)
+pub let REPLY_ERROR = 1;    // -err           (text holds the text)
+pub let REPLY_INT = 2;      // :num           (num holds the value)
+pub let REPLY_BULK = 3;     // $len\r\n<bytes> (bulk holds it, none when nil)
+pub let REPLY_ARRAY = 4;    // *n\r\n...      (items holds them)
 
 pub gc struct Reply {
     kind: int,
@@ -348,7 +349,18 @@ fn parse_value(buf: bytes, pos: int, depth: int) -> parse_res {
 // err means the bytes violate the protocol: never retry on the same
 // connection.
 pub fn decode(buf: bytes) -> result[opt[Decoded], str] {
-    let r = parse_value(buf, 0, 0);
+    return decode_at(buf, 0);
+}
+
+// Decode one reply starting at `pos` instead of 0, for readers that
+// keep one long-lived buffer and an offset into it (see Conn): no
+// slicing, so no per-recv copy of everything already buffered.
+// consumed counts from `pos`.
+pub fn decode_at(buf: bytes, pos: int) -> result[opt[Decoded], str] {
+    if pos < 0 || pos > len(buf) {
+        return err("decode position out of range");
+    }
+    let r = parse_value(buf, pos, 0);
     if !r.done {
         if r.err == "" {
             let nothing: opt[Decoded] = none;
@@ -356,7 +368,7 @@ pub fn decode(buf: bytes) -> result[opt[Decoded], str] {
         }
         return err(r.err);
     }
-    return ok(some(Decoded { reply: r.reply, consumed: r.next }));
+    return ok(some(Decoded { reply: r.reply, consumed: r.next - pos }));
 }
 
 // ---- cluster hashing -------------------------------------------------
@@ -588,4 +600,242 @@ pub fn parse_url(url: str) -> result[Config, str] {
     c.db = db;
     c.sslmode = sslmode;
     return ok(c);
+}
+
+// ---- connections -----------------------------------------------------
+
+// One server connection: exactly one round trip in flight at a time,
+// serialized by lock. A Conn is safe to share between tasks; every
+// public call below takes the lock for its whole exchange.
+pub gc struct Conn {
+    cfg: Config,
+    fd: i32,
+    ssl: rawptr,     // nullptr on cleartext
+    buf: bytes,      // received and not yet consumed, from pos
+    pos: int,
+    lock: mutex,
+    // Set when the connection can no longer be trusted to be at a
+    // reply boundary: an I/O error, a timeout, a protocol violation.
+    // A broken connection is never used again; `why` says what broke
+    // it. Server-side command errors (WRONGTYPE and friends) do NOT
+    // break it: exactly one reply was consumed either way.
+    broken: bool,
+    why: str,
+    closed: bool,
+}
+
+fn tr_send(c: Conn, b: bytes, u: until) -> result[i32, str] {
+    if c.ssl == nullptr {
+        return net.send_until(c.fd, b, u);
+    }
+    return net.tls_send_until(c.ssl, b, u);
+}
+
+fn tr_recv(c: Conn, max: int, u: until) -> result[bytes, str] {
+    if c.ssl == nullptr {
+        return net.recv_until(c.fd, max, u);
+    }
+    return net.tls_recv_until(c.ssl, max, u);
+}
+
+fn tr_close(c: Conn) {
+    if c.ssl == nullptr {
+        net.close(c.fd);
+        return;
+    }
+    net.tls_close(c.ssl);
+}
+
+fn mark_broken(c: Conn, why: str) {
+    c.broken = true;
+    c.why = why;
+}
+
+// Drop consumed bytes once they dominate the buffer, so a long-lived
+// connection does not grow without bound. Amortized: each byte is
+// copied at most twice per megabyte consumed.
+fn compact(c: Conn) {
+    if c.pos > 1048576 && c.pos * 2 > len(c.buf) {
+        c.buf = c.buf[c.pos..];
+        c.pos = 0;
+    }
+}
+
+fn read_reply(c: Conn, deadline: until) -> result[Reply, str] {
+    while true {
+        let r = decode_at(c.buf, c.pos);
+        guard let o = r else let e = err_of(r) {
+            mark_broken(c, e);
+            return err(e);
+        }
+        guard let d = o else {
+            compact(c);
+            let rr = tr_recv(c, 65536, deadline);
+            guard let b = rr else let e = err_of(rr) {
+                mark_broken(c, "recv: " + e);
+                return err("recv: " + e);
+            }
+            if len(b) == 0 {
+                mark_broken(c, "server closed the connection");
+                return err("server closed the connection");
+            }
+            c.buf = c.buf + b;
+            continue;
+        }
+        c.pos = c.pos + d.consumed;
+        return ok(d.reply);
+    }
+}
+
+// One command round trip. The caller must hold c.lock (every public
+// call below does, except connect_config's own handshake on a conn
+// nothing else can see yet). A server error reply is an err return,
+// not a broken connection: the reply was fully consumed.
+fn exchange(c: Conn, args: [bytes], deadline: until) -> result[Reply, str] {
+    if c.closed {
+        return err("connection is closed");
+    }
+    if c.broken {
+        return err("connection is broken: " + c.why);
+    }
+    let wire = encode(args);
+    let off = 0;
+    while off < len(wire) {
+        let sr = tr_send(c, wire[off..], deadline);
+        guard let n = sr else let e = err_of(sr) {
+            // A send that times out mid-write leaves the stream at an
+            // unknown offset: the connection must go, not retry.
+            mark_broken(c, "send: " + e);
+            return err("send: " + e);
+        }
+        off = off + n;
+    }
+    let rr = read_reply(c, deadline);
+    guard let r = rr else let e = err_of(rr) {
+        return err(e);
+    }
+    if r.kind == REPLY_ERROR {
+        return err(r.text);
+    }
+    return ok(r);
+}
+
+fn expect_ok(r: Reply, what: str) -> result[bool, str] {
+    if r.kind == REPLY_SIMPLE {
+        return ok(true);
+    }
+    return err(what + ": unexpected reply");
+}
+
+fn tls_ctx_of(cfg: Config) -> result[rawptr, str] {
+    if cfg.tls_ctx != nullptr {
+        return ok(cfg.tls_ctx);
+    }
+    let r = net.tls_client_ctx(cfg.ca_path);
+    guard let ctx = r else let e = err_of(r) {
+        return err(e);
+    }
+    cfg.tls_ctx = ctx;
+    return ok(ctx);
+}
+
+// Open a connection from a parsed Config and run the handshake
+// (AUTH when a password is set, SELECT when db is not 0). The
+// deadline covers everything: DNS, TCP connect, TLS upgrade, login.
+pub fn connect_config(cfg: Config, deadline: until) -> result[Conn, str] {
+    if cfg.sslmode != "disable" && cfg.sslmode != "require" {
+        return err("sslmode must be disable or require");
+    }
+    if cfg.port <= 0 || cfg.port > 65535 {
+        return err("port out of range");
+    }
+    let dr = net.dial_until(cfg.host, cfg.port, deadline);
+    guard let fd = dr else let e = err_of(dr) {
+        return err("dial: " + e);
+    }
+    let ssl = nullptr;
+    if cfg.sslmode == "require" {
+        let cr = tls_ctx_of(cfg);
+        guard let ctx = cr else let e = err_of(cr) {
+            net.close(fd);
+            return err(e);
+        }
+        // Direct TLS on a fresh socket: nothing was read before the
+        // handshake, so there is nothing queued behind it to mistrust.
+        let ur = net.tls_upgrade_until(fd, cfg.host, ctx, deadline);
+        guard let s = ur else let e = err_of(ur) {
+            net.close(fd);
+            return err("tls: " + e);
+        }
+        ssl = s;
+    }
+    let c = Conn { cfg: cfg, fd: fd, ssl: ssl, buf: b"", pos: 0,
+                   lock: make_mutex(), broken: false, why: "",
+                   closed: false };
+    if len(cfg.password) > 0 {
+        let args: [bytes] = [to_bytes("AUTH"), to_bytes(cfg.password)];
+        if len(cfg.username) > 0 {
+            args = [to_bytes("AUTH"), to_bytes(cfg.username),
+                    to_bytes(cfg.password)];
+        }
+        let ar = exchange(c, args, deadline);
+        guard let r = ar else let e = err_of(ar) {
+            tr_close(c);
+            return err("auth: " + e);
+        }
+        guard let okv = expect_ok(r, "auth") else let e = err_of(expect_ok(r, "auth")) {
+            tr_close(c);
+            return err(e);
+        }
+    }
+    if cfg.db != 0 {
+        let sr = exchange(c, [to_bytes("SELECT"), to_bytes(to_str(cfg.db))],
+                          deadline);
+        guard let r = sr else let e = err_of(sr) {
+            tr_close(c);
+            return err("select: " + e);
+        }
+        guard let okv = expect_ok(r, "select") else let e = err_of(expect_ok(r, "select")) {
+            tr_close(c);
+            return err(e);
+        }
+    }
+    return ok(c);
+}
+
+// Open a connection from a URL. See parse_url for the shape.
+pub fn connect(url: str, deadline: until) -> result[Conn, str] {
+    let cr = parse_url(url);
+    guard let cfg = cr else let e = err_of(cr) {
+        return err(e);
+    }
+    return connect_config(cfg, deadline);
+}
+
+// Run one command: args[0] is the command name. Exactly one reply is
+// consumed, so at most one command is ever in flight per Conn; hold
+// no lock of your own -- this takes c.lock for the round trip.
+pub fn do(c: Conn, args: [bytes], deadline: until) -> result[Reply, str] {
+    mutex_lock(c.lock);
+    let r = exchange(c, args, deadline);
+    mutex_unlock(c.lock);
+    return r;
+}
+
+// Shut the connection down. In-flight calls on other tasks finish
+// (or hit their own deadlines) first; close waits for the lock.
+pub fn close(c: Conn) {
+    mutex_lock(c.lock);
+    if !c.closed {
+        c.closed = true;
+        tr_close(c);
+    }
+    mutex_unlock(c.lock);
+}
+
+// True while commands may still be attempted: not closed, not broken.
+// A server-side idle close is discovered on use, which marks the
+// connection broken then.
+pub fn usable(c: Conn) -> bool {
+    return !c.closed && !c.broken;
 }
