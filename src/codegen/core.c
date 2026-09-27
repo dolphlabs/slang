@@ -770,13 +770,6 @@ void append_named_gc_roots(CG *cg, StrBuf *sb, const char *name, int *wrote) {
     VarSym *v = var_find(cg, name);
     const char *t = v ? v->slang : NULL;
     char *c_name = sanitize_ident(name);
-    if (v && v->stack) {
-        const char *boxed = stack_box_pointee(cg, v);
-        int count = 0;
-        if (boxed)
-            stack_box_roots(cg, sb, c_name, boxed, wrote, &count);
-        return;
-    }
     /* An `own` box is malloc'd, so rooting the box pointer roots
      * nothing -- the collector ignores addresses it never allocated.
      * But the box's FIELDS may hold live heap objects (a str, a list
@@ -784,7 +777,9 @@ void append_named_gc_roots(CG *cg, StrBuf *sb, const char *name, int *wrote) {
      * while the box is still live. Root the fields through the box
      * instead, the same way a stack box roots its pointee's. Only
      * value structs can sit in an own box (type_is_boxable refuses
-     * everything else), so `->field` is always the right shape. */
+     * everything else), so `->field` is always the right shape.
+     * Checked before the stack-box case below on purpose: a box is a
+     * box no matter what flag escape analysis left on the binding. */
     if (t) {
         char *inner = NULL;
         if (type_wrap(t, &inner) == TW_OWN) {
@@ -803,6 +798,13 @@ void append_named_gc_roots(CG *cg, StrBuf *sb, const char *name, int *wrote) {
             }
         }
     }
+    if (v && v->stack) {
+        const char *boxed = stack_box_pointee(cg, v);
+        int count = 0;
+        if (boxed)
+            stack_box_roots(cg, sb, c_name, boxed, wrote, &count);
+        return;
+    }
     if (t && type_has_gc_roots(cg, t) && !type_is_gc_ptr(cg, t))
         append_gc_root_expr(cg, sb, c_name, t, wrote);
     else {
@@ -814,16 +816,9 @@ void append_named_gc_roots(CG *cg, StrBuf *sb, const char *name, int *wrote) {
 
 int count_named_gc_roots(CG *cg, const char *name) {
     VarSym *v = var_find(cg, name);
-    if (v && v->stack) {
-        const char *boxed = stack_box_pointee(cg, v);
-        int count = 0;
-        if (boxed)
-            stack_box_roots(cg, NULL, sanitize_ident(name), boxed, NULL,
-                            &count);
-        return count;
-    }
-    /* Mirror of the own-box branch above: count exactly what it
-     * emits, or the root array overruns. */
+    /* Own-box first, for the same reason as above: a box is a box no
+     * matter the flag. Mirror of the emit branch: count exactly what
+     * it emits, or the root array overruns. */
     if (v) {
         char *inner = NULL;
         if (type_wrap(v->slang, &inner) == TW_OWN) {
@@ -835,6 +830,14 @@ int count_named_gc_roots(CG *cg, const char *name) {
                 return n;
             }
         }
+    }
+    if (v && v->stack) {
+        const char *boxed = stack_box_pointee(cg, v);
+        int count = 0;
+        if (boxed)
+            stack_box_roots(cg, NULL, sanitize_ident(name), boxed, NULL,
+                            &count);
+        return count;
     }
     if (v && type_has_gc_roots(cg, v->slang) && !type_is_gc_ptr(cg, v->slang))
         return count_gc_root_exprs(cg, v->slang);
