@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>redis — slang</title>
+<meta name="description" content="Package redis.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="redis">
+<meta property="og:description" content="Package redis.">
+<meta property="og:type" content="website">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/redis.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <button id="navtoggle" class="navtoggle" type="button"
+          aria-label="Toggle navigation" aria-expanded="false"
+          aria-controls="mainnav">
+    <span></span><span></span><span></span>
+  </button>
+  <nav class="mainnav" id="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../testing/index.html">Testing</a><a href="../bench/index.html">Benchmarks</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="navscrim" class="navscrim" hidden></div>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>redis</h1>
+      <p class="tagline">Package redis.</p>
+      <p class="agentline">
+        <a href="../packages/redis.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>A <strong>Redis</strong> client, written in slang over <code>net</code> like <code>pg</code>: commands waiting on the server park the task on the reactor instead of blocking a worker thread. Errors keep the server&#x27;s own text through the same <code>result[_, str]</code> story as every other package.</p>
+<p>The protocol core is usable now; connections, pooling, cluster routing and pub/sub arrive in later phases:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;redis&quot;</span>;
+
+<span class="c">// encode a command to wire bytes (binary-safe values pass through)</span>
+<span class="k">let</span> <span class="t">wire</span>: <span class="t">bytes</span> = redis.<span class="f">encode</span>([<span class="b">to_bytes</span>(<span class="s">&quot;SET&quot;</span>), <span class="b">to_bytes</span>(<span class="s">&quot;k&quot;</span>),
+                                <span class="b">to_bytes</span>(<span class="s">&quot;v&quot;</span>)]);
+
+<span class="c">// decode one reply; ok(none) means feed more bytes and retry,</span>
+<span class="c">// err means the bytes violate the protocol</span>
+<span class="k">let</span> r: <span class="t">result</span>[<span class="t">opt</span>[redis.Decoded], <span class="t">str</span>] = redis.<span class="f">decode</span>(<span class="t">wire</span>);
+
+<span class="c">// cluster hash slot of a key (0..16383), honouring {...} hash tags</span>
+<span class="k">let</span> s: <span class="t">int</span> = redis.<span class="f">slot</span>(<span class="s">&quot;{user1000}.following&quot;</span>);
+
+<span class="c">// connection strings for the coming phases</span>
+<span class="k">let</span> cr = redis.<span class="f">parse_url</span>(<span class="s">&quot;redis://alice:secret@cache.internal:6380/2&quot;</span>);</code></pre></div>
+<div class="tablewrap"><table><thead><tr><th>Function</th><th>Signature</th></tr></thead><tbody><tr><td><code>redis.encode(args)</code></td><td><code>bytes</code> — one command as a RESP2 array of bulk strings</td></tr><tr><td><code>redis.decode(buf)</code></td><td><code>result[opt[Decoded], str]</code> — one reply plus bytes consumed</td></tr><tr><td><code>redis.slot(key)</code></td><td><code>int</code> — cluster hash slot with <code>{...}</code> tag support</td></tr><tr><td><code>redis.parse_url(url)</code></td><td><code>result[Config, str]</code> — <code>redis://</code> / <code>rediss://</code></td></tr></tbody></table></div>
+<p>A reply is a <code>redis.Reply</code>: <code>kind</code> is one of <code>REPLY_SIMPLE</code>, <code>REPLY_ERROR</code>, <code>REPLY_INT</code>, <code>REPLY_BULK</code> or <code>REPLY_ARRAY</code>, with the payload in <code>text</code>, <code>num</code>, <code>bulk</code> (<code>none</code> for nil) or <code>items</code> (empty with <code>is_nil</code> for a nil array).</p>
+<p><strong>Not supported yet:</strong> connections and commands (phase 2+), RESP3, server-side sharding.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="reply"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Reply</code> <span class="src">stdlib/redis/redis.sl:43</span><a class="anchor" href="#reply">#</a></div></div><div class="api-item" id="decoded"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Decoded</code> <span class="src">stdlib/redis/redis.sl:54</span><a class="anchor" href="#decoded">#</a></div><p class="api-doc">A decoded reply plus how many bytes of the input it consumed, so a connection holding a read buffer knows what to keep.</p></div><div class="api-item" id="encode"><div class="api-sig"><code><span class="k">fn</span> <span class="f">encode</span>(args: [<span class="t">bytes</span>]) -&gt; <span class="t">bytes</span></code> <span class="src">stdlib/redis/redis.sl:99</span><a class="anchor" href="#encode">#</a></div><p class="api-doc">Encode one command invocation as a RESP2 array of bulk strings: SET key value  -&gt;  *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n Takes already-encoded argument bytes, so binary-safe values pass through untouched. Pure: no I/O, no allocation beyond the result.</p></div><div class="api-item" id="decode"><div class="api-sig"><code><span class="k">fn</span> <span class="f">decode</span>(buf: <span class="t">bytes</span>) -&gt; <span class="t">result</span>[<span class="t">opt</span>[Decoded], <span class="t">str</span>]</code> <span class="src">stdlib/redis/redis.sl:350</span><a class="anchor" href="#decode">#</a></div><p class="api-doc">Decode one RESP2 reply from the front of <code>buf</code>. ok(none) means the buffer ends mid-message -- feed more bytes and retry. ok(some(d)) consumed d.consumed bytes; anything after them is the next message. err means the bytes violate the protocol: never retry on the same connection.</p></div><div class="api-item" id="slot"><div class="api-sig"><code><span class="k">fn</span> <span class="f">slot</span>(key: <span class="t">str</span>) -&gt; <span class="t">int</span></code> <span class="src">stdlib/redis/redis.sl:387</span><a class="anchor" href="#slot">#</a></div><p class="api-doc">The hash slot of a key, 0..16383. <code>{...}</code> hash tags force colocation: only what sits between the first <code>{</code> and the next <code>}</code> is hashed. Empty tags hash the whole key, and a <code>{</code> with no <code>}</code> is literal.</p></div><div class="api-item" id="config"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Config</code> <span class="src">stdlib/redis/redis.sl:415</span><a class="anchor" href="#config">#</a></div></div><div class="api-item" id="parse-url"><div class="api-sig"><code><span class="k">fn</span> <span class="f">parse_url</span>(url: <span class="t">str</span>) -&gt; <span class="t">result</span>[Config, <span class="t">str</span>]</code> <span class="src">stdlib/redis/redis.sl:475</span><a class="anchor" href="#parse-url">#</a></div><p class="api-doc">Parse redis://[[username:]password@]host[:port][/db][?sslmode=...]. rediss:// forces sslmode=require. Percent-escapes in credentials and database decode the same way pg&#x27;s URLs do.</p></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

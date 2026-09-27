@@ -35,6 +35,7 @@ Every page on this site has a Markdown twin at the same path with a .md extensio
 - [os](packages/os.md): Package os.
 - [pg](packages/pg.md): Package pg.
 - [proc](packages/proc.md): Package proc.
+- [redis](packages/redis.md): Package redis.
 - [regex](packages/regex.md): Package regex.
 - [sql](packages/sql.md): Package sql.
 - [strings](packages/strings.md): Package strings.

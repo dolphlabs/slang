@@ -94,6 +94,12 @@ Three behaviours worth knowing:
 
 ### `strings.join_bytes(NA_ARR_BYTES, bytes) -> bytes`
 
+### `strings.from_bytes(bytes, int, int) -> str`
+
+### `strings.from_bytes_lower(bytes, int, int) -> str`
+
+### `strings.find_field(bytes, str) -> int`
+
 ### `strings.from_float(float) -> str`
 
 ---

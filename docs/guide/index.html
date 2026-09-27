@@ -285,7 +285,43 @@ r.br.x = <span class="n">6</span>;
 <p><strong>A method is checked when an instance asks for it</strong>, not when it is declared. <code>doubled</code> above multiplies, which <code>Box[str]</code> cannot do — and that is fine, because nothing calls <code>doubled</code> on a <code>Box[str]</code>. This is what makes unbounded type parameters usable without interfaces, and it is why an error in a method body names the instance and the line that asked for it:</p>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>error at line <span class="n">5</span>: unsupported operand types <span class="k">for</span> &#x27;*&#x27;: <span class="t">str</span> and <span class="t">int</span>
   (<span class="k">in</span> main.Box[<span class="t">str</span>].doubled, requested at line <span class="n">9</span>)</code></pre></div>
-<p>Not yet supported, and each says so when used: generic functions (<code>fn first[T](xs: [T]) -&gt; T</code>), lifetime parameters on a generic struct or on one of its methods, and a generic method&#x27;s own extra parameters (<code>fn map[U](self: Box[T]) -&gt; Box[U]</code>).</p>
+<p>Not yet supported, and each says so when used: lifetime parameters on a generic struct or on one of its methods, and a generic method&#x27;s own extra parameters (<code>fn map[U](self: Box[T]) -&gt; Box[U]</code>).</p>
+<h4 id="generic-functions">Generic functions<a class="anchor" href="#generic-functions" aria-label="Link to this section">#</a></h4>
+<p>A plain function can take type parameters too. There is no <code>first[int](xs)</code> at a call site — a type argument is only ever written in a type position — so every one is inferred, by unifying each parameter&#x27;s declared type against the argument&#x27;s actual type:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">fn</span> first[T](xs: [T]) -&gt; T {
+    <span class="k">return</span> xs[<span class="n">0</span>];
+}
+
+<span class="k">fn</span> choose_second[A, B](a: A, b: B) -&gt; B {
+    <span class="k">return</span> b;
+}
+
+<span class="b">println</span>(<span class="f">first</span>([<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]));            <span class="c">// 1, T = int</span>
+<span class="b">println</span>(<span class="f">first</span>([<span class="s">&quot;a&quot;</span>, <span class="s">&quot;b&quot;</span>, <span class="s">&quot;c&quot;</span>]));      <span class="c">// &quot;a&quot; -- a different instance, T = str</span>
+<span class="b">println</span>(<span class="f">choose_second</span>(<span class="n">1</span>, <span class="s">&quot;two&quot;</span>));     <span class="c">// &quot;two&quot;</span></code></pre></div>
+<p>Unification walks through containers, not just a bare parameter, so <code>T</code> is found inside <code>[T]</code>, <code>Box[T]</code>, <code>opt[T]</code> and the rest exactly where it sits:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">struct</span> Box[T] {
+    v: T,
+}
+<span class="k">fn</span> unbox[T](b: Box[T]) -&gt; T {
+    <span class="k">return</span> b.v;
+}
+<span class="k">fn</span> zip_first[A, B](pairs: [Box[A]], extra: B) -&gt; A {
+    <span class="k">return</span> pairs[<span class="n">0</span>].v;
+}</code></pre></div>
+<p>A type parameter that only the return type mentions cannot be found in any argument, so it is inferred from the expected type instead, the same mechanism <code>none</code> and <code>[]</code> already use — which means it only reaches a return type shaped like <code>opt[T]</code> / <code>result</code> / <code>[T]</code> / <code>chan</code> / <code>join</code>:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">fn</span> empty_of[T]() -&gt; [T] {
+    <span class="k">return</span> [];
+}
+<span class="k">let</span> xs: [<span class="t">int</span>] = <span class="f">empty_of</span>();           <span class="c">// T = int, from the let&#x27;s type</span></code></pre></div>
+<p>A parameter only a scalar or struct return type mentions has nothing to infer it from; write a plain function that calls the generic one with a concrete type argument, and use that instead.</p>
+<p>Each combination of argument types is its own instance, checked the first time the program calls it that way — same rule as a generic struct&#x27;s methods, including the instantiation note on an error inside one. A generic function can call another, including itself, and two instances of one template used in the same expression do not share type parameters (<code>first([identity(1), identity(2)]) + first([identity(3)])</code> is two separate <code>identity</code> instances and two separate <code>first</code> instances).</p>
+<p><code>spawn</code> takes a generic function like any other call — the arguments fix the type parameters first, and what is spawned is the one instance they resolve to:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">fn</span> handle[T](conn: T, id: <span class="t">int</span>) { ... }
+
+<span class="k">spawn</span> <span class="f">handle</span>(conn, <span class="n">1</span>);           <span class="c">// spawns handle[Conn], not a template</span></code></pre></div>
+<p>A spawn has no annotated <code>let</code> to infer from, so a parameter only the return type mentions cannot be resolved there, and says so.</p>
+<p>Not yet supported: <code>extern fn</code> cannot be generic, and neither can it declare lifetime parameters. A generic function is not one function until its type is chosen, so it cannot be used as a bare value — write a plain function that calls it with a concrete type, and use that instead. <code>spawn</code> does not take a method, generic or not.</p>
 <h4 id="enums">Enums<a class="anchor" href="#enums" aria-label="Link to this section">#</a></h4>
 <p>A closed, <code>i32</code>-backed set of named constants:</p>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>enum Status {
@@ -585,7 +621,43 @@ r.br.x = <span class="n">6</span>;
 <p><strong>A method is checked when an instance asks for it</strong>, not when it is declared. <code>doubled</code> above multiplies, which <code>Box[str]</code> cannot do — and that is fine, because nothing calls <code>doubled</code> on a <code>Box[str]</code>. This is what makes unbounded type parameters usable without interfaces, and it is why an error in a method body names the instance and the line that asked for it:</p>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>error at line <span class="n">5</span>: unsupported operand types <span class="k">for</span> &#x27;*&#x27;: <span class="t">str</span> and <span class="t">int</span>
   (<span class="k">in</span> main.Box[<span class="t">str</span>].doubled, requested at line <span class="n">9</span>)</code></pre></div>
-<p>Not yet supported, and each says so when used: generic functions (<code>fn first[T](xs: [T]) -&gt; T</code>), lifetime parameters on a generic struct or on one of its methods, and a generic method&#x27;s own extra parameters (<code>fn map[U](self: Box[T]) -&gt; Box[U]</code>).</p>
+<p>Not yet supported, and each says so when used: lifetime parameters on a generic struct or on one of its methods, and a generic method&#x27;s own extra parameters (<code>fn map[U](self: Box[T]) -&gt; Box[U]</code>).</p>
+<h3 id="generic-functions-2">Generic functions<a class="anchor" href="#generic-functions-2" aria-label="Link to this section">#</a></h3>
+<p>A plain function can take type parameters too. There is no <code>first[int](xs)</code> at a call site — a type argument is only ever written in a type position — so every one is inferred, by unifying each parameter&#x27;s declared type against the argument&#x27;s actual type:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">fn</span> first[T](xs: [T]) -&gt; T {
+    <span class="k">return</span> xs[<span class="n">0</span>];
+}
+
+<span class="k">fn</span> choose_second[A, B](a: A, b: B) -&gt; B {
+    <span class="k">return</span> b;
+}
+
+<span class="b">println</span>(<span class="f">first</span>([<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]));            <span class="c">// 1, T = int</span>
+<span class="b">println</span>(<span class="f">first</span>([<span class="s">&quot;a&quot;</span>, <span class="s">&quot;b&quot;</span>, <span class="s">&quot;c&quot;</span>]));      <span class="c">// &quot;a&quot; -- a different instance, T = str</span>
+<span class="b">println</span>(<span class="f">choose_second</span>(<span class="n">1</span>, <span class="s">&quot;two&quot;</span>));     <span class="c">// &quot;two&quot;</span></code></pre></div>
+<p>Unification walks through containers, not just a bare parameter, so <code>T</code> is found inside <code>[T]</code>, <code>Box[T]</code>, <code>opt[T]</code> and the rest exactly where it sits:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">struct</span> Box[T] {
+    v: T,
+}
+<span class="k">fn</span> unbox[T](b: Box[T]) -&gt; T {
+    <span class="k">return</span> b.v;
+}
+<span class="k">fn</span> zip_first[A, B](pairs: [Box[A]], extra: B) -&gt; A {
+    <span class="k">return</span> pairs[<span class="n">0</span>].v;
+}</code></pre></div>
+<p>A type parameter that only the return type mentions cannot be found in any argument, so it is inferred from the expected type instead, the same mechanism <code>none</code> and <code>[]</code> already use — which means it only reaches a return type shaped like <code>opt[T]</code> / <code>result</code> / <code>[T]</code> / <code>chan</code> / <code>join</code>:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">fn</span> empty_of[T]() -&gt; [T] {
+    <span class="k">return</span> [];
+}
+<span class="k">let</span> xs: [<span class="t">int</span>] = <span class="f">empty_of</span>();           <span class="c">// T = int, from the let&#x27;s type</span></code></pre></div>
+<p>A parameter only a scalar or struct return type mentions has nothing to infer it from; write a plain function that calls the generic one with a concrete type argument, and use that instead.</p>
+<p>Each combination of argument types is its own instance, checked the first time the program calls it that way — same rule as a generic struct&#x27;s methods, including the instantiation note on an error inside one. A generic function can call another, including itself, and two instances of one template used in the same expression do not share type parameters (<code>first([identity(1), identity(2)]) + first([identity(3)])</code> is two separate <code>identity</code> instances and two separate <code>first</code> instances).</p>
+<p><code>spawn</code> takes a generic function like any other call — the arguments fix the type parameters first, and what is spawned is the one instance they resolve to:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">fn</span> handle[T](conn: T, id: <span class="t">int</span>) { ... }
+
+<span class="k">spawn</span> <span class="f">handle</span>(conn, <span class="n">1</span>);           <span class="c">// spawns handle[Conn], not a template</span></code></pre></div>
+<p>A spawn has no annotated <code>let</code> to infer from, so a parameter only the return type mentions cannot be resolved there, and says so.</p>
+<p>Not yet supported: <code>extern fn</code> cannot be generic, and neither can it declare lifetime parameters. A generic function is not one function until its type is chosen, so it cannot be used as a bare value — write a plain function that calls it with a concrete type, and use that instead. <code>spawn</code> does not take a method, generic or not.</p>
 <h3 id="enums-2">Enums<a class="anchor" href="#enums-2" aria-label="Link to this section">#</a></h3>
 <p>A closed, <code>i32</code>-backed set of named constants:</p>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>enum Status {

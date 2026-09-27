@@ -1848,6 +1848,49 @@ building or parsing binary COPY data, Kerberos/GSSAPI, SCRAM channel
 binding (`SCRAM-SHA-256-PLUS`), multiple hosts in one url, and SASLprep
 normalisation of non-ASCII passwords (an ASCII password is unaffected).
 
+#### `redis`
+
+A **Redis** client, written in slang over `net` like `pg`: commands
+waiting on the server park the task on the reactor instead of
+blocking a worker thread. Errors keep the server's own text through
+the same `result[_, str]` story as every other package.
+
+The protocol core is usable now; connections, pooling, cluster
+routing and pub/sub arrive in later phases:
+
+```slang
+import "redis";
+
+// encode a command to wire bytes (binary-safe values pass through)
+let wire: bytes = redis.encode([to_bytes("SET"), to_bytes("k"),
+                                to_bytes("v")]);
+
+// decode one reply; ok(none) means feed more bytes and retry,
+// err means the bytes violate the protocol
+let r: result[opt[redis.Decoded], str] = redis.decode(wire);
+
+// cluster hash slot of a key (0..16383), honouring {...} hash tags
+let s: int = redis.slot("{user1000}.following");
+
+// connection strings for the coming phases
+let cr = redis.parse_url("redis://alice:secret@cache.internal:6380/2");
+```
+
+| Function | Signature |
+|---|---|
+| `redis.encode(args)` | `bytes` — one command as a RESP2 array of bulk strings |
+| `redis.decode(buf)` | `result[opt[Decoded], str]` — one reply plus bytes consumed |
+| `redis.slot(key)` | `int` — cluster hash slot with `{...}` tag support |
+| `redis.parse_url(url)` | `result[Config, str]` — `redis://` / `rediss://` |
+
+A reply is a `redis.Reply`: `kind` is one of `REPLY_SIMPLE`,
+`REPLY_ERROR`, `REPLY_INT`, `REPLY_BULK` or `REPLY_ARRAY`, with the
+payload in `text`, `num`, `bulk` (`none` for nil) or `items` (empty
+with `is_nil` for a nil array).
+
+**Not supported yet:** connections and commands (phase 2+), RESP3,
+server-side sharding.
+
 #### `regex`
 
 Regular expressions on `str` or `bytes`, matched by slang's own
