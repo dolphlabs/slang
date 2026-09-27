@@ -22,6 +22,9 @@ static void use_ident(CG *cg, const char *name, int line, int as_place) {
 
 static void check_place(CG *cg, Expr *e);
 static void check_rvalue(CG *cg, Expr *e);
+static int *snap_moved(CG *cg, int n);
+static void restore_moved(CG *cg, int *s, int n);
+static void join_moved(CG *cg, int *a, int *b, int n);
 
 static void cannot_move_out(int line, const char *what) {
     cg_error(line, "cannot move out of %s", what);
@@ -195,6 +198,48 @@ static void check_rvalue(CG *cg, Expr *e) {
     case EX_SPAWN:
         check_rvalue(cg, e->as.spawn.call);
         return;
+    case EX_SWITCH: {
+        /* The scrutinee and labels run before any arm; the arms are
+         * mutually exclusive, so each is checked from the same
+         * pre-switch state and the result is the union -- the same
+         * shape as ST_IF/ST_SELECT above, at expression level. */
+        check_rvalue(cg, e->as.switch_expr.scrut);
+        int n = cg->vars.count;
+        int *before = snap_moved(cg, n);
+        int *acc = NULL;
+        for (int i = 0; i < e->as.switch_expr.ncases; i++) {
+            for (int j = 0; j < e->as.switch_expr.cases[i].nvals; j++)
+                check_rvalue(cg, e->as.switch_expr.cases[i].vals[j]);
+        }
+        for (int i = 0; i < e->as.switch_expr.ncases; i++) {
+            int *arm;
+            restore_moved(cg, before, n);
+            check_rvalue(cg, e->as.switch_expr.cases[i].value);
+            arm = snap_moved(cg, n);
+            if (!acc) {
+                acc = arm;
+            } else {
+                join_moved(cg, acc, arm, n);
+                acc = snap_moved(cg, n);
+            }
+        }
+        if (e->as.switch_expr.def) {
+            int *d;
+            restore_moved(cg, before, n);
+            check_rvalue(cg, e->as.switch_expr.def);
+            d = snap_moved(cg, n);
+            if (!acc) {
+                acc = d;
+            } else {
+                join_moved(cg, acc, d, n);
+                acc = snap_moved(cg, n);
+            }
+        }
+        if (!acc)
+            acc = before;
+        restore_moved(cg, acc, n);
+        return;
+    }
     case EX_CALL: {
         char *left, *right;
         if (split_dotted(e->as.call.name, &left, &right) &&
@@ -346,6 +391,55 @@ static void check_stmt(CG *cg, Stmt *s) {
             check_block(cg, s->as.if_stmt.else_blk);
         int *else_m = snap_moved(cg, n);
         join_moved(cg, then_m, else_m, n);
+        return;
+    }
+    case ST_SWITCH: {
+        /* Same exclusivity shape as ST_IF/ST_SELECT: the scrutinee
+         * runs once up front; each arm starts from the same
+         * pre-switch state; without a `default` the "no arm runs"
+         * path keeps the pre-switch state. */
+        check_rvalue(cg, s->as.switch_stmt.scrut);
+        int n = cg->vars.count;
+        int *before = snap_moved(cg, n);
+        int *acc = NULL;
+        for (int i = 0; i < s->as.switch_stmt.ncases; i++) {
+            for (int j = 0; j < s->as.switch_stmt.cases[i].nvals; j++)
+                check_rvalue(cg, s->as.switch_stmt.cases[i].vals[j]);
+        }
+        for (int i = 0; i < s->as.switch_stmt.ncases; i++) {
+            int *arm;
+            restore_moved(cg, before, n);
+            var_scope_push(cg);
+            check_block(cg, s->as.switch_stmt.cases[i].body);
+            var_scope_pop(cg);
+            arm = snap_moved(cg, n);
+            if (!acc) {
+                acc = arm;
+            } else {
+                join_moved(cg, acc, arm, n);
+                acc = snap_moved(cg, n);
+            }
+        }
+        if (s->as.switch_stmt.def) {
+            int *d;
+            restore_moved(cg, before, n);
+            var_scope_push(cg);
+            check_block(cg, s->as.switch_stmt.def);
+            var_scope_pop(cg);
+            d = snap_moved(cg, n);
+            if (!acc) {
+                acc = d;
+            } else {
+                join_moved(cg, acc, d, n);
+                acc = snap_moved(cg, n);
+            }
+        } else if (!acc) {
+            acc = before;
+        } else {
+            join_moved(cg, acc, before, n);
+            acc = snap_moved(cg, n);
+        }
+        restore_moved(cg, acc, n);
         return;
     }
     case ST_WHILE: {
@@ -638,6 +732,11 @@ void move_consume(CG *cg, Expr *e) {
         return;
     case EX_SPAWN:
         move_consume(cg, e->as.spawn.call);
+        return;
+    case EX_SWITCH:
+        /* The scrutinee is only read (and can never be `own`: only
+         * int/bool/str/enum switch); arm values are consumed
+         * individually by their own codegen. Nothing to do here. */
         return;
     case EX_CALL: {
         char *left, *right;

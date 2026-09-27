@@ -114,6 +114,8 @@ static void call_push_arg(Expr *call, Expr *arg) {
 /* ---- expressions (precedence climbing) ---- */
 
 static Expr *parse_expression(Parser *p);
+static Expr *parse_switch_expr(Parser *p);
+static Stmt *parse_switch_stmt(Parser *p);
 static Type *parse_type(Parser *p);
 static const char *parse_type_name(Parser *p);
 static char *parse_type_args(Parser *p);
@@ -346,6 +348,8 @@ static Expr *parse_primary(Parser *p) {
         e->as.bool_lit.value = (tk->type == T_KW_TRUE);
         return e;
     }
+    case T_KW_SWITCH:
+        return parse_switch_expr(p);
     case T_KW_SPAWN: {
         Token *kw = advance(p);
         Expr *call = parse_primary(p);
@@ -1256,6 +1260,126 @@ static Stmt *parse_select_stmt(Parser *p) {
     return s;
 }
 
+/* switch <scrut> { case v, ... { ... } ... default { ... } }
+ * Labels are literal expressions (int/str/bool, unary-minus ints, or
+ * Type.Variant); arbitrary expressions are rejected so every arm stays
+ * a compile-time constant of the scrutinee's type. The scrutinee runs
+ * exactly once. No fallthrough: exactly one arm runs. */
+static Stmt *parse_switch_stmt(Parser *p) {
+    Token *kw = advance(p); /* 'switch' */
+    Expr *scrut = parse_expression(p);
+    expect(p, T_LBRACE, "'{' after 'switch' scrutinee");
+
+    SwitchCase *cases = NULL;
+    int ncases = 0, cap = 0;
+    Block *def = NULL;
+
+    while (!check(p, T_RBRACE) && !check(p, T_EOF)) {
+        if (check(p, T_KW_DEFAULT)) {
+            Token *dk = advance(p);
+            if (def)
+                parse_error(dk, "'switch' already has a 'default' arm");
+            def = parse_block(p, 0);
+            continue;
+        }
+        Token *ck = expect(p, T_KW_CASE,
+                           "'case' or 'default' inside 'switch'");
+        SwitchCase sc;
+        memset(&sc, 0, sizeof(sc));
+        sc.line = ck->line;
+        for (;;) {
+            Expr *label = parse_expression(p);
+            sc.vals = (Expr **)xrealloc(sc.vals,
+                                       (size_t)(sc.nvals + 1) * sizeof(Expr *));
+            sc.vals[sc.nvals++] = label;
+            if (!match(p, T_COMMA))
+                break;
+        }
+        if (sc.nvals == 0)
+            parse_error(ck, "'case' needs at least one value");
+        sc.body = parse_block(p, 0);
+        if (ncases == cap) {
+            cap = cap ? cap * 2 : 4;
+            cases = (SwitchCase *)xrealloc(cases,
+                                          (size_t)cap * sizeof(*cases));
+        }
+        cases[ncases++] = sc;
+    }
+    expect(p, T_RBRACE, "'}' to close 'switch'");
+
+    if (ncases == 0 && !def)
+        parse_error(kw, "'switch' needs at least one 'case' or 'default' arm");
+
+    Stmt *s = new_stmt(ST_SWITCH, kw->line);
+    s->as.switch_stmt.scrut = scrut;
+    s->as.switch_stmt.cases = cases;
+    s->as.switch_stmt.ncases = ncases;
+    s->as.switch_stmt.def = def;
+    return s;
+}
+
+/* switch <scrut> { case v, ... { <expr> } ... default { <expr> } }
+ * Expression form: every arm yields a single value expression (no
+ * statements, no semicolons inside the arm braces). */
+static Expr *parse_switch_expr(Parser *p) {
+    Token *kw = advance(p); /* 'switch' */
+    Expr *scrut = parse_expression(p);
+    expect(p, T_LBRACE, "'{' after 'switch' scrutinee");
+
+    SwitchExprCase *cases = NULL;
+    int ncases = 0, cap = 0;
+    Expr *def = NULL;
+
+    while (!check(p, T_RBRACE) && !check(p, T_EOF)) {
+        if (check(p, T_KW_DEFAULT)) {
+            advance(p);
+            if (def)
+                parse_error(peek(p),
+                            "'switch' already has a 'default' arm");
+            expect(p, T_LBRACE, "'{'");
+            def = parse_expression(p);
+            expect(p, T_RBRACE, "'}' to close 'default' value");
+            continue;
+        }
+        Token *ck = expect(p, T_KW_CASE,
+                           "'case' or 'default' inside 'switch'");
+        SwitchExprCase sc;
+        memset(&sc, 0, sizeof(sc));
+        sc.line = ck->line;
+        for (;;) {
+            Expr *label = parse_expression(p);
+            sc.vals = (Expr **)xrealloc(sc.vals,
+                                       (size_t)(sc.nvals + 1) * sizeof(Expr *));
+            sc.vals[sc.nvals++] = label;
+            if (!match(p, T_COMMA))
+                break;
+        }
+        if (sc.nvals == 0)
+            parse_error(ck, "'case' needs at least one value");
+        expect(p, T_LBRACE, "'{'");
+        sc.value = parse_expression(p);
+        expect(p, T_RBRACE, "'}' to close 'case' value");
+        if (ncases == cap) {
+            cap = cap ? cap * 2 : 4;
+            cases = (SwitchExprCase *)xrealloc(
+                cases, (size_t)cap * sizeof(*cases));
+        }
+        cases[ncases++] = sc;
+    }
+    expect(p, T_RBRACE, "'}' to close 'switch'");
+
+    if (ncases == 0 && !def)
+        parse_error(kw, "'switch' needs at least one 'case' or 'default' arm");
+
+    Expr *e = new_expr(p, EX_SWITCH, kw->line);
+    e->as.switch_expr.scrut = scrut;
+    e->as.switch_expr.cases = cases;
+    e->as.switch_expr.ncases = ncases;
+    e->as.switch_expr.def = def;
+    e->as.switch_expr.resolved = NULL;
+    return e;
+}
+
 /* for <name> in <start>..[=]<end> { ... }     (range)
  * for <name> in <iterable> { ... }            (array, bytes)
  * for <k>, <v> in <map> { ... }               (map) */
@@ -1676,6 +1800,8 @@ static Stmt *parse_statement(Parser *p) {
         return parse_unsafe_stmt(p);
     case T_KW_SELECT:
         return parse_select_stmt(p);
+    case T_KW_SWITCH:
+        return parse_switch_stmt(p);
     case T_KW_STRUCT:
         parse_error(tk, "'struct' declarations are only allowed at top "
                         "level");

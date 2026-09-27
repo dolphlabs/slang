@@ -37,6 +37,52 @@ struct Type {
     } as;
 };
 
+typedef struct Expr Expr;
+typedef struct Stmt Stmt;
+
+typedef struct {
+    Stmt **stmts;
+    int count;
+    int cap;
+} Block;
+
+/* One arm of a `select`. A recv arm is
+ *     case let v = chan_recv(ch) { ... }
+ * and binds `v` to opt[T] for the arm's body, exactly as a plain
+ * chan_recv would; a send arm is
+ *     case chan_send(ch, v) { ... }
+ * and binds nothing. The channel expression is evaluated ONCE, before
+ * the select blocks -- see the codegen in stmt.c. */
+typedef struct {
+    int is_send;
+    char *bind;  /* recv arm's binding name; NULL for a send arm */
+    Expr *ch;    /* the channel */
+    Expr *val;   /* send arm's value; NULL for a recv arm */
+    Block *body;
+    int line;
+} SelectCase;
+
+/* One `case` arm of a statement `switch`: a list of literal labels
+ * sharing one block. `vals` holds the label expressions as parsed
+ * (int/str/bool literals, unary-minus ints, or Type.Variant idents --
+ * the enum rewrite turns the last into EX_INT before type-checking).
+ * A `default` arm is stored separately on the Stmt, not here. */
+typedef struct {
+    Expr **vals;
+    int nvals;
+    Block *body;
+    int line;
+} SwitchCase;
+
+/* One `case` arm of a `switch` expression: same labels, but a single
+ * value expression instead of a block. */
+typedef struct {
+    Expr **vals;
+    int nvals;
+    Expr *value;
+    int line;
+} SwitchExprCase;
+
 /* Expression nodes */
 typedef enum {
     EX_INT,
@@ -61,7 +107,8 @@ typedef enum {
                 * this is the third shape, for a receiver that is an
                 * arbitrary expression. */
     EX_STRUCTLIT, /* Name { field: value, ... } */
-    EX_SPAWN      /* spawn f(args...) as a join[T] expression */
+    EX_SPAWN,      /* spawn f(args...) as a join[T] expression */
+    EX_SWITCH      /* switch scrut { case v { expr } ... default { expr } } */
 } ExprKind;
 
 typedef struct Expr Expr;
@@ -151,6 +198,14 @@ struct Expr {
             const char *inst;
         } structlit;
         struct { Expr *call; } spawn;
+        struct {
+            Expr *scrut;
+            SwitchExprCase *cases;
+            int ncases;
+            Expr *def; /* the `default` value, or NULL */
+            /* Resolved by infer_type: the common value type of the arms. */
+            const char *resolved;
+        } switch_expr;
     } as;
 };
 
@@ -172,32 +227,11 @@ typedef enum {
     ST_ENUM,   /* enum Name { Variant [= N], ... } (top level only) */
     ST_IMPL,   /* impl Name { fn ... } blocks (top level only) */
     ST_UNSAFE, /* unsafe { ... } */
-    ST_SELECT  /* select { case ... { } ... default { } } */
+    ST_SELECT,  /* select { case ... { } ... default { } } */
+    ST_SWITCH  /* switch scrut { case v, ... { } ... default { } } */
 } StmtKind;
 
 typedef struct Stmt Stmt;
-
-typedef struct {
-    Stmt **stmts;
-    int count;
-    int cap;
-} Block;
-
-/* One arm of a `select`. A recv arm is
- *     case let v = chan_recv(ch) { ... }
- * and binds `v` to opt[T] for the arm's body, exactly as a plain
- * chan_recv would; a send arm is
- *     case chan_send(ch, v) { ... }
- * and binds nothing. The channel expression is evaluated ONCE, before
- * the select blocks -- see the codegen in stmt.c. */
-typedef struct {
-    int is_send;
-    char *bind;  /* recv arm's binding name; NULL for a send arm */
-    Expr *ch;    /* the channel */
-    Expr *val;   /* send arm's value; NULL for a recv arm */
-    Block *body;
-    int line;
-} SelectCase;
 
 struct Stmt {
     StmtKind kind;
@@ -251,6 +285,12 @@ struct Stmt {
             int ncases;
             Block *def; /* the `default` arm, or NULL */
         } select_stmt;
+        struct {
+            Expr *scrut;
+            SwitchCase *cases;
+            int ncases;
+            Block *def; /* the `default` arm, or NULL */
+        } switch_stmt;
         struct {
             char *name;
             int is_pub;

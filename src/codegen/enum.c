@@ -347,6 +347,15 @@ static void resolve_expr(CG *cg, const char *pkg, Expr *e) {
     case EX_SPAWN:
         resolve_expr(cg, pkg, e->as.spawn.call);
         return;
+    case EX_SWITCH:
+        resolve_expr(cg, pkg, e->as.switch_expr.scrut);
+        for (int i = 0; i < e->as.switch_expr.ncases; i++) {
+            for (int j = 0; j < e->as.switch_expr.cases[i].nvals; j++)
+                resolve_expr(cg, pkg, e->as.switch_expr.cases[i].vals[j]);
+            resolve_expr(cg, pkg, e->as.switch_expr.cases[i].value);
+        }
+        resolve_expr(cg, pkg, e->as.switch_expr.def);
+        return;
     }
 }
 
@@ -407,6 +416,15 @@ static void resolve_stmt(CG *cg, const char *pkg, Stmt *s) {
             resolve_block(cg, pkg, c->body);
         }
         resolve_block(cg, pkg, s->as.select_stmt.def);
+        return;
+    case ST_SWITCH:
+        resolve_expr(cg, pkg, s->as.switch_stmt.scrut);
+        for (int i = 0; i < s->as.switch_stmt.ncases; i++) {
+            for (int j = 0; j < s->as.switch_stmt.cases[i].nvals; j++)
+                resolve_expr(cg, pkg, s->as.switch_stmt.cases[i].vals[j]);
+            resolve_block(cg, pkg, s->as.switch_stmt.cases[i].body);
+        }
+        resolve_block(cg, pkg, s->as.switch_stmt.def);
         return;
     case ST_STRUCT:
     case ST_ENUM:

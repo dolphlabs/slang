@@ -159,6 +159,27 @@ for k in 1..=3 {       // inclusive range: 1,2,3
     println("tick ${k}");
 }
 
+// switch: one arm runs, chosen by value. Labels are literals of the
+// scrutinee's type (int family, bool, str, or enum); several labels
+// may share an arm with commas. No fallthrough: arms never run into
+// each other. `break` exits the switch, `continue` still targets an
+// enclosing loop.
+switch code {
+  case 200, 201 { println("ok"); }
+  case 404 { println("missing"); }
+  default { println("other"); }   // optional, except that an enum
+                                  // switch without one must cover
+                                  // every variant
+}
+
+// switch is also an expression: every arm yields one value, all of
+// the same type, and `default` is required unless an enum scrutinee
+// covers every variant
+let label: str = switch code {
+  case 200 { "ok" }
+  default { "other" }
+};
+
 // functions (parameters and return types are annotated)
 fn add(a: int, b: int) -> int {
     a + b          // implicit return: last expression is the value
@@ -746,9 +767,10 @@ An enum without `pub` is private to its package, like any other type.
 
 There is no per-variant wire label yet (`to_str`/JSON always use the
 declared name as written), no explicit backing-width syntax
-(`enum Name: i64 { ... }`), and no payload-carrying variants or a
-`match` statement — enums here are a closed set of names, not a tagged
-union.
+(`enum Name: i64 { ... }`), and no payload-carrying variants — enums
+here are a closed set of names, not a tagged union. Branching on one
+uses `switch`, which checks exhaustiveness: an enum switch without a
+`default` arm must list every variant.
 
 #### Option / Result
 

@@ -5,6 +5,7 @@
 typedef struct {
     int cont;
     int brk;
+    int is_loop; /* 1 = loop (break+continue target), 0 = switch (break only) */
 } LoopFrame;
 
 typedef struct {
@@ -181,10 +182,27 @@ static void push_loop(Lower *L, int cont, int brk) {
     }
     L->loops[L->nloops].cont = cont;
     L->loops[L->nloops].brk = brk;
+    L->loops[L->nloops].is_loop = 1;
+    L->nloops++;
+}
+
+/* A `switch` arm block: `break` targets the switch join, `continue`
+ * still targets the enclosing loop. */
+static void push_switch(Lower *L, int join) {
+    if (L->nloops == L->loopcap) {
+        L->loopcap = L->loopcap ? L->loopcap * 2 : 4;
+        L->loops = (LoopFrame *)xrealloc(L->loops,
+                                         (size_t)L->loopcap * sizeof(LoopFrame));
+    }
+    L->loops[L->nloops].cont = -1;
+    L->loops[L->nloops].brk = join;
+    L->loops[L->nloops].is_loop = 0;
     L->nloops++;
 }
 
 static void pop_loop(Lower *L) { L->nloops--; }
+
+static MirRvalue *lower_switch_value(Lower *L, Expr *e);
 
 static MirPlace *as_place(CG *cg, Expr *e) {
     if (!e)
@@ -223,6 +241,8 @@ static MirRvalue *lower_rvalue(Lower *L, Expr *e) {
         if (pl)
             return rv_ref(pl, !strcmp(e->as.unary.op, "&mut"), e->line);
     }
+    if (e->kind == EX_SWITCH)
+        return lower_switch_value(L, e);
     MirPlace *pl = as_place(L->cg, e);
     if (pl)
         return rv_use(pl, e->line);
@@ -445,14 +465,17 @@ static void lower_stmt(Lower *L, Stmt *s) {
     }
     case ST_BREAK: {
         if (L->nloops <= 0)
-            cg_error(s->line, "'break' outside a loop");
+            cg_error(s->line, "'break' outside a loop or switch");
         emit_goto(L, L->loops[L->nloops - 1].brk, s->line);
         return;
     }
     case ST_CONTINUE: {
-        if (L->nloops <= 0)
+        int i = L->nloops - 1;
+        while (i >= 0 && !L->loops[i].is_loop)
+            i--;
+        if (i < 0)
             cg_error(s->line, "'continue' outside a loop");
-        emit_goto(L, L->loops[L->nloops - 1].cont, s->line);
+        emit_goto(L, L->loops[i].cont, s->line);
         return;
     }
     case ST_EXPR:
@@ -548,11 +571,101 @@ static void lower_stmt(Lower *L, Stmt *s) {
         L->cur = join;
         return;
     }
+    case ST_SWITCH: {
+        /* Desugared to an if-ladder over synthetic `sv == label`
+         * comparisons (labels are validated literals, so every one
+         * supports `==`): the borrow checker reasons about exclusive
+         * arms and break-to-join exactly like if/else with n+1
+         * branches. The scrutinee is evaluated once into a temp. */
+        const char *st = infer_type(L->cg, s->as.switch_stmt.scrut);
+        char *sv = fresh(L, st);
+        emit_assign(L, pl_local(sv),
+                    lower_rvalue(L, s->as.switch_stmt.scrut), s->line);
+        int join = new_bb(L);
+        for (int i = 0; i < s->as.switch_stmt.ncases; i++) {
+            int body = new_bb(L);
+            for (int j = 0; j < s->as.switch_stmt.cases[i].nvals; j++) {
+                int next = new_bb(L);
+                Expr *cmp = ex_bin("==", ex_ident(sv, s->line),
+                                   s->as.switch_stmt.cases[i].vals[j],
+                                   s->line);
+                MirPlace *cond = lower_cond(L, cmp);
+                emit_if(L, cond, body, next, s->line);
+                L->cur = next;
+            }
+            L->cur = body;
+            push_switch(L, join);
+            var_scope_push(L->cg);
+            lower_block(L, s->as.switch_stmt.cases[i].body);
+            var_scope_pop(L->cg);
+            pop_loop(L);
+            emit_goto(L, join, s->line);
+        }
+        if (s->as.switch_stmt.def) {
+            int d = new_bb(L);
+            emit_goto(L, d, s->line);
+            L->cur = d;
+            push_switch(L, join);
+            var_scope_push(L->cg);
+            lower_block(L, s->as.switch_stmt.def);
+            var_scope_pop(L->cg);
+            pop_loop(L);
+            emit_goto(L, join, s->line);
+        } else {
+            emit_goto(L, join, s->line);
+        }
+        L->cur = join;
+        return;
+    }
     case ST_STRUCT:
     case ST_ENUM:
     case ST_IMPL:
         return;
     }
+}
+
+static MirRvalue *lower_switch_value(Lower *L, Expr *e) {
+    /* Expression form: same if-ladder, but every arm assigns its
+     * value into a shared result temp. */
+    const char *st = infer_type(L->cg, e->as.switch_expr.scrut);
+    const char *t = infer_type(L->cg, e);
+    char *sv = fresh(L, st);
+    emit_assign(L, pl_local(sv), lower_rvalue(L, e->as.switch_expr.scrut),
+                e->line);
+    char *tmp = fresh(L, t);
+    int join = new_bb(L);
+    for (int i = 0; i < e->as.switch_expr.ncases; i++) {
+        int body = new_bb(L);
+        for (int j = 0; j < e->as.switch_expr.cases[i].nvals; j++) {
+            int next = new_bb(L);
+            Expr *cmp = ex_bin("==", ex_ident(sv, e->line),
+                               e->as.switch_expr.cases[i].vals[j], e->line);
+            MirPlace *cond = lower_cond(L, cmp);
+            emit_if(L, cond, body, next, e->line);
+            L->cur = next;
+        }
+        L->cur = body;
+        push_switch(L, join);
+        emit_assign(L, pl_local(tmp),
+                    lower_rvalue(L, e->as.switch_expr.cases[i].value),
+                    e->line);
+        pop_loop(L);
+        emit_goto(L, join, e->line);
+    }
+    if (e->as.switch_expr.def) {
+        int d = new_bb(L);
+        emit_goto(L, d, e->line);
+        L->cur = d;
+        push_switch(L, join);
+        emit_assign(L, pl_local(tmp),
+                    lower_rvalue(L, e->as.switch_expr.def), e->line);
+        pop_loop(L);
+        emit_goto(L, join, e->line);
+    } else {
+        emit_goto(L, join, e->line);
+    }
+    L->cur = join;
+    return rv_use(pl_local(tmp), e->line);
 }
 
 static void lower_stmts(Lower *L, Stmt **stmts, int count) {

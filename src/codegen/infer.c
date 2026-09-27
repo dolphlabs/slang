@@ -1263,6 +1263,88 @@ const char *infer_type(CG *cg, Expr *e) {
         }
         return canon;
     }
+    case EX_SWITCH: {
+        /* Every arm value shares one type (the first arm's), exactly
+         * like list elements; a `default` is required unless an enum
+         * scrutinee is exhaustively covered. Labels are validated
+         * here too, so every pass after inference can rely on them.
+         *
+         * `ctx` is the type `none`/`[]`/`ok()`/`err()` arms infer
+         * against: the live expectation, or -- when some pass
+         * re-infers without one (MIR lowers the init after let_ty
+         * already restored it) -- the type a previous pass resolved,
+         * the same memo trick empty lists use (`list.resolved`). */
+        const char *ctx =
+            cg->expect ? cg->expect : e->as.switch_expr.resolved;
+        const char *st = infer_type(cg, e->as.switch_expr.scrut);
+        int total = 0;
+        for (int i = 0; i < e->as.switch_expr.ncases; i++)
+            total += e->as.switch_expr.cases[i].nvals;
+        Expr ***groups = total
+                              ? (Expr ***)xmalloc(sizeof(Expr **) *
+                                                  (size_t)(e->as.switch_expr
+                                                               .ncases))
+                              : NULL;
+        int *counts = total
+                          ? (int *)xmalloc(sizeof(int) *
+                                           (size_t)(e->as.switch_expr.ncases))
+                          : NULL;
+        for (int i = 0; i < e->as.switch_expr.ncases; i++) {
+            groups[i] = e->as.switch_expr.cases[i].vals;
+            counts[i] = e->as.switch_expr.cases[i].nvals;
+        }
+        switch_validate(cg, st, groups, counts, e->as.switch_expr.ncases,
+                        e->as.switch_expr.def != NULL, e->line);
+        free(groups);
+        free(counts);
+        /* A value switch must produce a value on every path: without
+         * `default`, only an exhaustive enum (checked above) qualifies.
+         * A statement switch without `default` simply does nothing
+         * when no arm matches. */
+        if (!e->as.switch_expr.def && switch_kind(cg, st) != 4)
+            cg_error(e->line,
+                     "switch expression without 'default' needs an enum "
+                     "scrutinee covering every variant");
+        const char *t0 = NULL;
+        if (e->as.switch_expr.ncases > 0) {
+            const char *saved = expect_push(cg, ctx);
+            t0 = infer_type(cg, e->as.switch_expr.cases[0].value);
+            cg->expect = saved;
+            for (int i = 1; i < e->as.switch_expr.ncases; i++) {
+                const char *saved2 = expect_push(cg, t0);
+                const char *ti = infer_type(
+                    cg, e->as.switch_expr.cases[i].value);
+                cg->expect = saved2;
+                if (!value_assignable(t0, e->as.switch_expr.cases[i].value,
+                                      ti))
+                    cg_error(e->line,
+                             "switch arms must share a common type: cannot "
+                             "use %s where %s was established by the first "
+                             "arm",
+                             ti, t0);
+            }
+        }
+        if (e->as.switch_expr.def) {
+            const char *saved = expect_push(cg, t0 ? t0 : ctx);
+            const char *dt = infer_type(cg, e->as.switch_expr.def);
+            cg->expect = saved;
+            if (t0) {
+                if (!value_assignable(t0, e->as.switch_expr.def, dt))
+                    cg_error(e->line,
+                             "switch arms must share a common type: cannot "
+                             "use %s where %s was established by the first "
+                             "arm",
+                             dt, t0);
+            } else {
+                t0 = dt;
+            }
+        }
+        if (!t0)
+            cg_error(e->line, "cannot infer the type of an empty 'switch'");
+        e->as.switch_expr.resolved = t0;
+        e->inf_ty = t0;
+        return t0;
+    }
     }
     return NULL; /* unreachable */
 }

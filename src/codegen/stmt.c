@@ -103,6 +103,29 @@ static void gen_scoped_block(CG *cg, Block *b) {
     var_scope_pop(cg);
 }
 
+/* Break-target stack: loops push kind 0 around their bodies (see the
+ * three loop cases below), switches push kind 1 around their arms
+ * (see ST_SWITCH). ST_BREAK reads the top; ST_CONTINUE scans down
+ * for the nearest loop. */
+static void break_push(CG *cg, int kind, const char *end) {
+    if (cg->break_len == cg->break_cap) {
+        cg->break_cap = cg->break_cap ? cg->break_cap * 2 : 8;
+        cg->break_kind = (int *)xrealloc(cg->break_kind,
+                                        (size_t)cg->break_cap * sizeof(int));
+        cg->break_end = (char **)xrealloc(cg->break_end,
+                                         (size_t)cg->break_cap *
+                                             sizeof(char *));
+        cg->break_used = (int *)xrealloc(cg->break_used,
+                                        (size_t)cg->break_cap * sizeof(int));
+    }
+    cg->break_kind[cg->break_len] = kind;
+    cg->break_end[cg->break_len] = end ? xstrdup(end) : NULL;
+    cg->break_used[cg->break_len] = 0;
+    cg->break_len++;
+}
+
+static void break_pop(CG *cg) { cg->break_len--; }
+
 void gen_stmt(CG *cg, Stmt *s) {
     switch (s->kind) {
     case ST_LET: {
@@ -591,6 +614,7 @@ void gen_stmt(CG *cg, Stmt *s) {
         int has_bp = emit_backedge_enter(cg, s->backedge_live_set, poll, eid,
                                         NULL);
         cg->loop_depth++;
+        break_push(cg, 0, NULL);
         int saved_loop_bp = cg->cur_loop_has_bp;
         cg->cur_loop_has_bp = has_bp;
         var_scope_push(cg);
@@ -602,6 +626,7 @@ void gen_stmt(CG *cg, Stmt *s) {
         }
         var_scope_pop(cg);
         cg->loop_depth--;
+        break_pop(cg);
         cg->cur_loop_has_bp = saved_loop_bp;
         if (has_bp) {
             cg->open_backedge_brackets--;
@@ -640,6 +665,7 @@ void gen_stmt(CG *cg, Stmt *s) {
         int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 1, eid,
                                         NULL);
         cg->loop_depth++;
+        break_push(cg, 0, NULL);
         int saved_loop_bp = cg->cur_loop_has_bp;
         cg->cur_loop_has_bp = has_bp;
         var_scope_push(cg);
@@ -651,6 +677,7 @@ void gen_stmt(CG *cg, Stmt *s) {
         }
         var_scope_pop(cg);
         cg->loop_depth--;
+        break_pop(cg);
         cg->cur_loop_has_bp = saved_loop_bp;
         if (has_bp) {
             cg->open_backedge_brackets--;
@@ -698,10 +725,12 @@ void gen_stmt(CG *cg, Stmt *s) {
                           "_sl_i%d, sizeof(%s)));",
                       ec, vname, ec, id, id, ec);
             cg->loop_depth++;
+            break_push(cg, 0, NULL);
             int saved_loop_bp = cg->cur_loop_has_bp;
             cg->cur_loop_has_bp = 0;
             gen_scoped_block(cg, s->as.for_in.body);
             cg->loop_depth--;
+            break_pop(cg);
             cg->cur_loop_has_bp = saved_loop_bp;
             cg->indent--;
             emit_line(cg, "}");
@@ -740,10 +769,12 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "long long %s = (long long)_sl_bt%d->ptr[_sl_i%d];",
                       vname, id, id);
             cg->loop_depth++;
+            break_push(cg, 0, NULL);
             int saved_loop_bp = cg->cur_loop_has_bp;
             cg->cur_loop_has_bp = 0;
             gen_scoped_block(cg, s->as.for_in.body);
             cg->loop_depth--;
+            break_pop(cg);
             cg->cur_loop_has_bp = saved_loop_bp;
             cg->indent--;
             emit_line(cg, "}");
@@ -801,10 +832,12 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "_sl_m%d->vsz);",
                       vc, v2name, vc, id, id, id);
             cg->loop_depth++;
+            break_push(cg, 0, NULL);
             int saved_loop_bp = cg->cur_loop_has_bp;
             cg->cur_loop_has_bp = 0;
             gen_scoped_block(cg, s->as.for_in.body);
             cg->loop_depth--;
+            break_pop(cg);
             cg->cur_loop_has_bp = saved_loop_bp;
             cg->indent--;
             emit_line(cg, "}");
@@ -883,8 +916,21 @@ void gen_stmt(CG *cg, Stmt *s) {
         break;
     }
     case ST_BREAK: {
+        if (cg->break_len == 0)
+            cg_error(s->line, "'break' outside a loop or switch");
+        int top = cg->break_len - 1;
+        if (cg->break_kind[top] == 1) {
+            /* Inside a `switch` arm: no loop bracket to close
+             * (switches open none), just drop arm locals and jump to
+             * the switch end. The label itself is only emitted when
+             * some break used it (see ST_SWITCH). */
+            cg->break_used[top] = 1;
+            emit_scope_drops(cg, cg->var_scope_sp ? cg->var_scopes[cg->var_scope_sp - 1] : 0);
+            emit_line(cg, "goto %s;", cg->break_end[top]);
+            break;
+        }
         if (cg->loop_depth == 0)
-            cg_error(s->line, "'break' outside a loop");
+            cg_error(s->line, "'break' outside a loop or switch");
         /* Only the INNERMOST enclosing loop's own bracket, never an
          * outer one -- cur_loop_has_bp (unlike open_backedge_brackets,
          * which ST_RETURN uses above) tracks exactly that, save/
@@ -1092,6 +1138,84 @@ void gen_stmt(CG *cg, Stmt *s) {
         emit_line(cg, "}");
         break;
     }
+    case ST_SWITCH: {
+        /* A uniform if-ladder over the arms (one C `if` per arm, `||`
+         * across its labels): int/bool/enum compare with ==, str
+         * with !strcmp. A single ladder keeps one obviously-correct
+         * path instead of two; clang builds the jump table itself at
+         * -O2 for dense integer arms. The scrutinee runs once into a
+         * temp; the str temp is ambient-rooted across the arms like
+         * ??'s own _sl_qN. No fallthrough: every arm ends its own
+         * block. `break` in an arm jumps to the end label (see
+         * ST_BREAK); `continue` still targets the enclosing loop. */
+        const char *st = infer_type(cg, s->as.switch_stmt.scrut);
+        int ncases = s->as.switch_stmt.ncases;
+        Expr ***groups = ncases ? (Expr ***)xmalloc(sizeof(Expr **) *
+                                                   (size_t)ncases)
+                               : NULL;
+        int *counts = ncases ? (int *)xmalloc(sizeof(int) * (size_t)ncases)
+                             : NULL;
+        for (int i = 0; i < ncases; i++) {
+            groups[i] = s->as.switch_stmt.cases[i].vals;
+            counts[i] = s->as.switch_stmt.cases[i].nvals;
+        }
+        switch_validate(cg, st, groups, counts, ncases,
+                        s->as.switch_stmt.def != NULL, s->line);
+        free(groups);
+        free(counts);
+        int kind = switch_kind(cg, st);
+        int id = cg->tmp_id++;
+        char *sv = gen_expr(cg, s->as.switch_stmt.scrut);
+        char *svname = xasprintf("_sl_sv%d", id);
+        char *endname = xasprintf("_sl_sw_end%d", id);
+        emit_line(cg, "{");
+        cg->indent++;
+        emit_line(cg, "%s %s = %s;", ctype_of(cg, st), svname, sv);
+        int ambient_mark = cg->ambient_count;
+        if (type_is_gc_ptr(cg, st))
+            ambient_root_push(cg, svname);
+        break_push(cg, 1, endname);
+        cg->switch_depth++;
+        for (int i = 0; i < ncases; i++) {
+            char *cond = xstrdup("");
+            for (int j = 0; j < s->as.switch_stmt.cases[i].nvals; j++) {
+                Expr *lb = s->as.switch_stmt.cases[i].vals[j];
+                char *term = kind == 3
+                                 ? xasprintf("!strcmp(%s, %s)", svname,
+                                             c_string_literal(
+                                                 lb->as.str_lit.value))
+                                 : xasprintf("%s == %s", svname,
+                                             switch_label_c_const(lb));
+                cond = xasprintf("%s%s%s", cond, j ? " || " : "", term);
+            }
+            emit_line(cg, "%sif (%s) {", i ? "} else " : "", cond);
+            cg->indent++;
+            var_scope_push(cg);
+            {
+                int from = cg->vars.count;
+                gen_block(cg, s->as.switch_stmt.cases[i].body);
+                emit_scope_drops(cg, from);
+            }
+            var_scope_pop(cg);
+            cg->indent--;
+        }
+        if (s->as.switch_stmt.def) {
+            emit_line(cg, "%s{", ncases ? "} else " : "");
+            cg->indent++;
+            gen_scoped_block(cg, s->as.switch_stmt.def);
+            cg->indent--;
+        }
+        emit_line(cg, "}");
+        int used = cg->break_used[cg->break_len - 1];
+        break_pop(cg);
+        cg->switch_depth--;
+        cg->ambient_count = ambient_mark;
+        if (used)
+            emit_line(cg, "%s: (void)0;", endname);
+        cg->indent--;
+        emit_line(cg, "}");
+        break;
+    }
     case ST_SPAWN: {
         Expr *call = s->as.spawn.call;
         const char *name = call->as.call.name;
@@ -1204,6 +1328,31 @@ static int expr_same(Expr *a, Expr *b) {
     case EX_FIELD:
         return !strcmp(a->as.field.name, b->as.field.name) &&
                expr_same(a->as.field.base, b->as.field.base);
+    case EX_SWITCH: {
+        if (a->as.switch_expr.ncases != b->as.switch_expr.ncases)
+            return 0;
+        if ((a->as.switch_expr.def != NULL) !=
+            (b->as.switch_expr.def != NULL))
+            return 0;
+        if (!expr_same(a->as.switch_expr.scrut, b->as.switch_expr.scrut))
+            return 0;
+        for (int i = 0; i < a->as.switch_expr.ncases; i++) {
+            if (a->as.switch_expr.cases[i].nvals !=
+                b->as.switch_expr.cases[i].nvals)
+                return 0;
+            for (int j = 0; j < a->as.switch_expr.cases[i].nvals; j++)
+                if (!expr_same(a->as.switch_expr.cases[i].vals[j],
+                               b->as.switch_expr.cases[i].vals[j]))
+                    return 0;
+            if (!expr_same(a->as.switch_expr.cases[i].value,
+                           b->as.switch_expr.cases[i].value))
+                return 0;
+        }
+        if (a->as.switch_expr.def &&
+            !expr_same(a->as.switch_expr.def, b->as.switch_expr.def))
+            return 0;
+        return 1;
+    }
     default:
         return 0;
     }
