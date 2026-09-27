@@ -2852,3 +2852,27 @@ slang bug, and unfixable from slang code without bigger task stacks.
 Redis memory-safety verification therefore rests on UBSan (clean),
 default/low-threshold runs (clean), and the collector's own stress
 paths, not ASan.
+
+## Pass audit, first findings (Sep 2026)
+
+Scope so far: every hand-walked child reviewed in liveness, move,
+borrow, escape, mir, and the enum rewrite; `-Wswitch-enum` confirms
+no pass is missing a whole kind (only non-AST enums flag, all
+intentional). Empirical battery `tests/audit_roots` (13 positions)
+plus `tests/escape_roots`, both gcstress-listed at 16KB.
+
+Found and fixed, each failing-first:
+- `own`-box heap fields unrooted (option (a) from the `own T` item
+  above: root `box->field`, since malloc'd boxes trace nothing).
+- `gc` conversion boxes allocated with a NULL tracer: the box
+  survived, its fields did not. Tracers now emitted for value
+  structs too (`__attribute__((unused))` keeps the warning sweep
+  green), with recursive dotted walks so nested value structs trace.
+- Switch scrutinee ambient root removed again after proof the temp
+  dies before any arm call (its last read precedes all calls).
+
+Checked clean (no finding): select arms, guard-let `err_expr`
+(provably the same expression gen enforces), for-in iterables,
+struct/map literals, spawn args, slice optionals, `??`
+(conservative is the safe direction), indirect callees, methods,
+ST_IMPL via the function cursor.
