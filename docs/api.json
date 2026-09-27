@@ -185,12 +185,20 @@
           "line": 4
         },
         {
+          "name": "find_wire",
+          "decl": "fn",
+          "sig": "fn find_wire(b: wire, from: int, target: int) -> int",
+          "doc": "Same directly on an arena buffer: the http head scan walks the socket wire and needs the colon position without copying the line into GC bytes first.",
+          "file": "stdlib/byteutil/byteutil.sl",
+          "line": 18
+        },
+        {
           "name": "has_prefix",
           "decl": "fn",
           "sig": "fn has_prefix(b: bytes, prefix: bytes) -> bool",
           "doc": "Does `b` begin with `prefix`? A prefix longer than `b` is false rather than an error.",
           "file": "stdlib/byteutil/byteutil.sl",
-          "line": 17
+          "line": 31
         },
         {
           "name": "has_suffix",
@@ -198,7 +206,7 @@
           "sig": "fn has_suffix(b: bytes, suffix: bytes) -> bool",
           "doc": "Does `b` end with `suffix`? A suffix longer than `b` is false rather than an error.",
           "file": "stdlib/byteutil/byteutil.sl",
-          "line": 33
+          "line": 47
         },
         {
           "name": "trim",
@@ -206,7 +214,7 @@
           "sig": "fn trim(b: bytes) -> bytes",
           "doc": "`b` without leading or trailing ASCII whitespace -- space, tab, CR and LF. Returns a new `bytes`; the input is unchanged.",
           "file": "stdlib/byteutil/byteutil.sl",
-          "line": 54
+          "line": 68
         },
         {
           "name": "split",
@@ -214,7 +222,7 @@
           "sig": "fn split(b: bytes, sep: int) -> [bytes]",
           "doc": "Split `b` on every occurrence of the `sep` byte. Adjacent separators yield empty elements, so the result always has one more element than there were separators.",
           "file": "stdlib/byteutil/byteutil.sl",
-          "line": 69
+          "line": 83
         }
       ]
     },
@@ -746,12 +754,28 @@
           "line": 16
         },
         {
+          "name": "WireFrame",
+          "decl": "struct",
+          "sig": "gc struct WireFrame",
+          "doc": "`read` couples two things that only sometimes belong together: filling the caller's buffer and framing what's in it. serve_conn needs the split for frame dispatch: read_frame frames with the same scans/errors/rules as read, but returns the parsed head (method/path strs, header block, body) instead of a Request -- so the router matches on strs with no raw copy, no rescan, no second slice. Offsets stay for Frame callers and tests; the serve path does not use them.",
+          "file": "stdlib/http/http.sl",
+          "line": 32
+        },
+        {
           "name": "Incoming",
           "decl": "struct",
           "sig": "gc struct Incoming",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 24
+          "line": 47
+        },
+        {
+          "name": "Frame",
+          "decl": "struct",
+          "sig": "gc struct Frame",
+          "doc": "The request WITHOUT materialising method/path/version strs: framing offsets only. `read`/`serve` use this when they only route on the raw path bytes (see path_matches below); `parse` keeps returning strs for callers that actually need them.",
+          "file": "stdlib/http/http.sl",
+          "line": 56
         },
         {
           "name": "Response",
@@ -759,7 +783,7 @@
           "sig": "gc struct Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 29
+          "line": 66
         },
         {
           "name": "header",
@@ -767,7 +791,7 @@
           "sig": "fn header(r: Request, name: str) -> opt[str]",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 610
+          "line": 1254
         },
         {
           "name": "header_or",
@@ -775,7 +799,7 @@
           "sig": "fn header_or(r: Request, name: str, fallback: str) -> str",
           "doc": "header()'s two real call sites (Ctx.header in zokor, the WebSocket handshake) are both `header(...) ?? fallback` already -- this is that, without the opt allocation `??` unwraps.",
           "file": "stdlib/http/http.sl",
-          "line": 621
+          "line": 1265
         },
         {
           "name": "headers",
@@ -783,7 +807,7 @@
           "sig": "fn headers(r: Request) -> map[str]str",
           "doc": "Every header a request carries, as a map -- built fresh on each call by scanning raw_headers once. Nothing in either repo iterates a request's headers today (confirmed by grep), which is what makes \"built on demand\" the right default over a cached field: a cache nothing reads is pure cost. Walks the same line shape scan_headers does, for a different reason (that one validates and extracts two offsets; this one assumes an already-valid block and extracts every name and value) -- kept as two functions rather than one parameterized by what to do with each line, which would obscure both to save repeating six lines.",
           "file": "stdlib/http/http.sl",
-          "line": 638
+          "line": 1282
         },
         {
           "name": "request",
@@ -791,7 +815,127 @@
           "sig": "fn request(method: str, path: str, version: str,",
           "doc": "Builds a Request from a map the way the eager parser builds one off the wire: a header name or value may not contain CR or LF (an application- or test-constructed header gets no such check for free the way one read off the wire does -- this is where that rule lives for this path), and a name may not contain the colon that separates it from its value on the wire. Both are a real hazard, not a theoretical one, now that raw_headers is what a request's headers actually are: a value containing \"\\r\\n\" would be concatenated straight into the block below as a SECOND header line -- injection -- if it weren't rejected first.",
           "file": "stdlib/http/http.sl",
-          "line": 680
+          "line": 1324
+        },
+        {
+          "name": "parse_frame",
+          "decl": "fn",
+          "sig": "fn parse_frame(raw: bytes) -> result[Frame, str]",
+          "doc": "Framing offsets for one request inside `raw`, with NOTHING materialised: no method/path/version strs, no header copies. The request line is validated (two spaces, HTTP/1.x token); the header block is validated by scan_headers; the body is framed by frame(). Callers that need strs (logging, tests) use parse(); the server path matches/routes directly on these offsets -- see path_matches and method_is below -- so the ~10 framing strs per request never exist.",
+          "file": "stdlib/http/http.sl",
+          "line": 1354
+        },
+        {
+          "name": "method_is",
+          "decl": "fn",
+          "sig": "fn method_is(raw: bytes, f: Frame, want: str) -> bool",
+          "doc": "Is this frame's method exactly `want` (e.g. \"GET\"), compared in place -- no method str is ever built. Takes a line_end int (not a Frame) so both Frame and WireFrame callers share it.",
+          "file": "stdlib/http/http.sl",
+          "line": 1444
+        },
+        {
+          "name": "method_is_at",
+          "decl": "fn",
+          "sig": "fn method_is_at(raw: bytes, line_end: int, want: str) -> bool",
+          "doc": "",
+          "file": "stdlib/http/http.sl",
+          "line": 1448
+        },
+        {
+          "name": "path_is",
+          "decl": "fn",
+          "sig": "fn path_is(raw: bytes, f: Frame, want: str) -> bool",
+          "doc": "Is this frame's path exactly `want` (bytes compared in place, query string ignored -- matches path.strip_query semantics)? No path str. The two hot paths (`/` and `/users/`-prefixed) compare inline with no to_bytes at all; anything else falls through to the general compare, which still costs one to_bytes of `want`. Route fpaths could precompute that bytes once at registration -- the next step if `/users/:id` still shows hot after this.",
+          "file": "stdlib/http/http.sl",
+          "line": 1494
+        },
+        {
+          "name": "path_is_at",
+          "decl": "fn",
+          "sig": "fn path_is_at(raw: bytes, line_end: int, want: str) -> bool",
+          "doc": "",
+          "file": "stdlib/http/http.sl",
+          "line": 1498
+        },
+        {
+          "name": "path_param",
+          "decl": "fn",
+          "sig": "fn path_param(raw: bytes, f: Frame, prefix: str) -> str",
+          "doc": "The :id in \"/users/:id\" for a frame already known to match that shape -- the ONE allocation the params map used to cost per route scanned. Returns \"\" when the shape does not match.",
+          "file": "stdlib/http/http.sl",
+          "line": 1553
+        },
+        {
+          "name": "path_param_at",
+          "decl": "fn",
+          "sig": "fn path_param_at(raw: bytes, line_end: int, prefix: str) -> str",
+          "doc": "",
+          "file": "stdlib/http/http.sl",
+          "line": 1557
+        },
+        {
+          "name": "frame_method",
+          "decl": "fn",
+          "sig": "fn frame_method(raw: bytes, f: Frame) -> str",
+          "doc": "The method bytes as a str: the ONE framing str frame dispatch needs (to map to the Method enum). Everything else matches in place; this is 1 alloc where parse() spent ~10. Takes line_end so Frame and WireFrame share it.",
+          "file": "stdlib/http/http.sl",
+          "line": 1622
+        },
+        {
+          "name": "frame_method_at",
+          "decl": "fn",
+          "sig": "fn frame_method_at(raw: bytes, line_end: int) -> str",
+          "doc": "",
+          "file": "stdlib/http/http.sl",
+          "line": 1626
+        },
+        {
+          "name": "frame_request",
+          "decl": "fn",
+          "sig": "fn frame_request(raw: bytes, f: Frame) -> Request",
+          "doc": "The full Request for a frame, built ONCE for the route that runs: method/path/version strs, raw_headers slice, body slice. serve() callers already hold one; serve_frame builds one -- never both. Takes explicit offsets so Frame and WireFrame share it.",
+          "file": "stdlib/http/http.sl",
+          "line": 1638
+        },
+        {
+          "name": "frame_request_at",
+          "decl": "fn",
+          "sig": "fn frame_request_at(raw: bytes, line_end: int, head_end: int,",
+          "doc": "",
+          "file": "stdlib/http/http.sl",
+          "line": 1642
+        },
+        {
+          "name": "frame_version",
+          "decl": "fn",
+          "sig": "fn frame_version(f: Frame) -> int",
+          "doc": "",
+          "file": "stdlib/http/http.sl",
+          "line": 1663
+        },
+        {
+          "name": "frame_body",
+          "decl": "fn",
+          "sig": "fn frame_body(raw: bytes, f: Frame) -> bytes",
+          "doc": "",
+          "file": "stdlib/http/http.sl",
+          "line": 1667
+        },
+        {
+          "name": "wire_request",
+          "decl": "fn",
+          "sig": "fn wire_request(f: WireFrame) -> Request",
+          "doc": "The Request for a WireFrame: method/path already parsed, body already sliced -- no offsets, no raw, no second copy. headers rides along (one block copy, same as read -- the wire is compacted before return, so there is nothing to materialise from later). version comes from the flag (no version str is stored).",
+          "file": "stdlib/http/http.sl",
+          "line": 1680
+        },
+        {
+          "name": "frame_raw_headers",
+          "decl": "fn",
+          "sig": "fn frame_raw_headers(raw: bytes, f: Frame, line_end: int) -> bytes",
+          "doc": "",
+          "file": "stdlib/http/http.sl",
+          "line": 1694
         },
         {
           "name": "parse",
@@ -799,15 +943,87 @@
           "sig": "fn parse(raw: bytes) -> result[Request, str]",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 702
+          "line": 1698
+        },
+        {
+          "name": "resp_headers",
+          "decl": "fn",
+          "sig": "fn resp_headers(r: Response) -> map[str]str",
+          "doc": "",
+          "file": "stdlib/http/http.sl",
+          "line": 1835
+        },
+        {
+          "name": "resp_header",
+          "decl": "fn",
+          "sig": "fn resp_header(r: Response, name: str) -> opt[str]",
+          "doc": "",
+          "file": "stdlib/http/http.sl",
+          "line": 1861
+        },
+        {
+          "name": "has_resp_header",
+          "decl": "fn",
+          "sig": "fn has_resp_header(r: Response, name: str) -> bool",
+          "doc": "",
+          "file": "stdlib/http/http.sl",
+          "line": 1889
         },
         {
           "name": "serialize",
           "decl": "fn",
           "sig": "fn serialize(r: Response) -> bytes",
-          "doc": "Assembled through a builder, not by `+`.  Every `+` on bytes allocates a new buffer and copies everything written so far into it, so building a response header by header re-copied the whole response once per header -- on every response the server sends. This is the same quadratic assembly `builder` was added to fix elsewhere; the stdlib's own HTTP path still had it.  A builder rather than a `[bytes]` and one `strings.join_bytes`: the list form was tried and measured slower, because a piece per header is an allocation per header before anything is joined.  This is the standalone/TLS path (`demo/main.sl` calls it directly) and `write`'s fallback for a response too large for its caller's arena. `write` itself does not call this when the response fits -- see `emit` below, which skips these allocations entirely.",
+          "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 746
+          "line": 1896
+        },
+        {
+          "name": "serialize_builder",
+          "decl": "fn",
+          "sig": "fn serialize_builder(r: Response) -> bytes",
+          "doc": "The old builder path, kept for the differential test: must stay byte-identical to serialize_sized() above for every shape.",
+          "file": "stdlib/http/http.sl",
+          "line": 1902
+        },
+        {
+          "name": "serialize_sized",
+          "decl": "fn",
+          "sig": "fn serialize_sized(r: Response) -> bytes",
+          "doc": "Serialize with a handful of allocations, not ~40: size the response first (status line + headers + framing + body, all cheap integer arithmetic over lengths -- see emit_len below), allocate exactly that many bytes with strings.bytes_zero (one header plus one buffer -- no throwaway str), then fill by slice assignment. The old builder path stays below as serialize_builder for the differential test; this is what `serialize` and `write`'s fallback call, so an oversized response costs a few allocations instead of ~40.  The remaining handful is load-bearing, not waste: one to_bytes per fill_str piece (the str->bytes copy the compiler cannot fuse), one filtered-extra list, and the response_conn scan's own line strs. Counting them is what keeps this honest -- see the probe notes.",
+          "file": "stdlib/http/http.sl",
+          "line": 1952
+        },
+        {
+          "name": "escape_json_bytes",
+          "decl": "fn",
+          "sig": "fn escape_json_bytes(msg: bytes) -> bytes",
+          "doc": "The escaped form of `msg` as bytes, for a caller that already holds bytes and wants the quoted payload without a str in between.",
+          "file": "stdlib/http/http.sl",
+          "line": 2158
+        },
+        {
+          "name": "with_headers",
+          "decl": "fn",
+          "sig": "fn with_headers(r: Response, lines: [str]) -> Response",
+          "doc": "",
+          "file": "stdlib/http/http.sl",
+          "line": 2185
+        },
+        {
+          "name": "with_header",
+          "decl": "fn",
+          "sig": "fn with_header(r: Response, name: str, value: str) -> Response",
+          "doc": "",
+          "file": "stdlib/http/http.sl",
+          "line": 2192
+        },
+        {
+          "name": "without_header",
+          "decl": "fn",
+          "sig": "fn without_header(r: Response, name: str) -> Response",
+          "doc": "",
+          "file": "stdlib/http/http.sl",
+          "line": 2210
         },
         {
           "name": "wants_close",
@@ -815,7 +1031,23 @@
           "sig": "fn wants_close(r: Request) -> bool",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 789
+          "line": 2228
+        },
+        {
+          "name": "version_flag_of",
+          "decl": "fn",
+          "sig": "fn version_flag_of(v: str) -> int",
+          "doc": "The int-flag twin, for callers holding a version str rather than a Head (read_frame's WireFrame.version). Same rules; the block is passed explicitly because there is no Head in scope.",
+          "file": "stdlib/http/http.sl",
+          "line": 2258
+        },
+        {
+          "name": "read_frame",
+          "decl": "fn",
+          "sig": "fn read_frame(c: &mut link, buf: wire, filled: int,",
+          "doc": "read_frame: read's framing, plus the parsed head the router matches on. Implemented INSIDE read's loop shape (not as read-plus-copy): read compacts the buffer before returning, so after read there is no head left to copy -- buf[0..filled] is the NEXT request. This duplicates read's loop deliberately (same scans, same errors, same close rules), and the duplication is the contract: any change to read's framing must land here too.  What differs from read: on a complete frame the method/path strs and the header block + body are COPIED OUT of the wire ONCE -- the same strs + copies read already pays (hd2.method/path, hd2.headers, fm.body) -- and NO separate message copy is made. The old shape did to_bytes(buf[0..end]) PLUS parse_frame over the copy PLUS wants_close_scan over the copy: a full second framing pass and a whole-message copy per request. Now the WireFrame carries what the router needs directly: method/path strs for the enum + Request build, headers/body slices for the Ctx. Routing matches on strs (==), never on raw bytes -- no path_is_at rescan, no per-route to_bytes. The message copy is gone entirely.  Chunked bodies: fm.body IS the reassembled copy (one alloc the old path also spent); the WireFrame body is that copy directly.",
+          "file": "stdlib/http/http.sl",
+          "line": 2458
         },
         {
           "name": "read",
@@ -823,15 +1055,47 @@
           "sig": "fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Incoming, str]",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 803
+          "line": 2521
+        },
+        {
+          "name": "StaticBody",
+          "decl": "struct",
+          "sig": "gc struct StaticBody",
+          "doc": "serialize()'s GC allocations (~40 of them for a typical response, see serialize()'s own comment) replaced with two passes over the caller's own arena: size, then fill. If the response is larger than what's left of the arena, falls back to serialize() + send_bytes rather than letting a.wire(need) past capacity kill the task -- a slow response stays a slow response instead of becoming a dropped connection.  Responses with exactly the `text_response` shape (one content-type, nothing else) take the fixed fast path above: no map iteration, no integer str, no intermediate bytes. Anything else uses the general `emit` below, unchanged. A static route's answer: status, content type, and body -- no Response struct, no extra list, nothing to shape-check. serve_conn gets one from serve_static and hands it straight to write_static, which sends the PREBUILT keep-alive rendering (assembled once at registration -- see static_render below) with one wire alloc and one memcpy. The static snapshot lives on the Route (see router.sl); this is just the per-request view of it.",
+          "file": "stdlib/http/http.sl",
+          "line": 2783
+        },
+        {
+          "name": "write_static",
+          "decl": "fn",
+          "sig": "fn write_static(c: &mut link, b: StaticBody, a: &mut arena,",
+          "doc": "The static emit: the keep-alive rendering is prebuilt, not emitted. Hot path (HTTP/1.1 keep-alive, which is every wrk/ab request): one wire, one memcpy, one send -- no probe pass, no Response struct, no map, no integer str, no per-piece puts. The close variant (HTTP/1.0, Connection: close) is rare and pays the emit cost below; it never touches the hot path.",
+          "file": "stdlib/http/http.sl",
+          "line": 2796
+        },
+        {
+          "name": "static_render",
+          "decl": "fn",
+          "sig": "fn static_render(status: i32, content_type: str, body: bytes) -> bytes",
+          "doc": "The keep-alive rendering, assembled ONCE at registration: status line, one content-type, content-length, connection, blank line, body -- the exact bytes write_static memcpys per request. status_text_of covers the statuses static routes return; the fallback (\"OK\") matches write_static's own close variant above, so the two can never disagree on a reason phrase.",
+          "file": "stdlib/http/http.sl",
+          "line": 2828
         },
         {
           "name": "write",
           "decl": "fn",
           "sig": "fn write(c: &mut link, r: Response, a: &mut arena, deadline: until) -> result[int, fault]",
-          "doc": "serialize()'s GC allocations (~40 of them for a typical response, see serialize()'s own comment) replaced with two passes over the caller's own arena: size, then fill. If the response is larger than what's left of the arena, falls back to serialize() + send_bytes rather than letting a.wire(need) past capacity kill the task -- a slow response stays a slow response instead of becoming a dropped connection.",
+          "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 969
+          "line": 2864
+        },
+        {
+          "name": "text_response_bytes",
+          "decl": "fn",
+          "sig": "fn text_response_bytes(status: i32, status_text: str, content_type: str,",
+          "doc": "`text_response` with a BYTES body: same shape, no `to_bytes` copy. The hot path (zokor's JSON renderers, static bodies) already holds bytes; forcing them through str and back cost a full copy plus the literal's own allocation on every response.",
+          "file": "stdlib/http/http.sl",
+          "line": 2893
         },
         {
           "name": "text_response",
@@ -839,7 +1103,7 @@
           "sig": "fn text_response(status: i32, status_text: str, content_type: str,",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 981
+          "line": 2906
         },
         {
           "name": "ok_html",
@@ -847,7 +1111,7 @@
           "sig": "fn ok_html(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 993
+          "line": 2912
         },
         {
           "name": "ok_css",
@@ -855,7 +1119,7 @@
           "sig": "fn ok_css(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 997
+          "line": 2916
         },
         {
           "name": "ok_js",
@@ -863,7 +1127,7 @@
           "sig": "fn ok_js(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1001
+          "line": 2920
         },
         {
           "name": "ok_json",
@@ -871,7 +1135,7 @@
           "sig": "fn ok_json(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1006
+          "line": 2925
         },
         {
           "name": "ok_text",
@@ -879,7 +1143,7 @@
           "sig": "fn ok_text(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1010
+          "line": 2929
         },
         {
           "name": "created_json",
@@ -887,7 +1151,7 @@
           "sig": "fn created_json(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1014
+          "line": 2933
         },
         {
           "name": "bad_request",
@@ -895,7 +1159,15 @@
           "sig": "fn bad_request(msg: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1019
+          "line": 2938
+        },
+        {
+          "name": "bad_request_bytes",
+          "decl": "fn",
+          "sig": "fn bad_request_bytes(msg: bytes) -> Response",
+          "doc": "`bad_request` with a BYTES message: same envelope, no `to_bytes` round-trip. The message still rides inside a JSON string, so it is escaped the same way -- see `escape_json_into` below.",
+          "file": "stdlib/http/http.sl",
+          "line": 2945
         },
         {
           "name": "not_found",
@@ -903,7 +1175,7 @@
           "sig": "fn not_found() -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1024
+          "line": 2954
         },
         {
           "name": "method_not_allowed",
@@ -911,7 +1183,7 @@
           "sig": "fn method_not_allowed() -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1029
+          "line": 2959
         }
       ]
     },
@@ -3939,7 +4211,7 @@
           "sig": "fn new_cluster(cfg: Config, seeds: [str],",
           "doc": "Connect to a cluster: try each seed until one serves CLUSTER SLOTS. Only database 0 exists in cluster mode. The deadline covers the whole bootstrap.",
           "file": "stdlib/redis/redis.sl",
-          "line": 2069
+          "line": 2077
         },
         {
           "name": "cluster_refresh",
@@ -3947,7 +4219,7 @@
           "sig": "fn cluster_refresh(cl: Cluster, deadline: until) -> result[bool, str]",
           "doc": "Re-learn the whole slot map from a known node (any current pool will do; the first one wins) or a bootstrap seed. Manual recovery for outages the MOVED path cannot see.",
           "file": "stdlib/redis/redis.sl",
-          "line": 2098
+          "line": 2106
         },
         {
           "name": "cluster_do",
@@ -3955,7 +4227,7 @@
           "sig": "fn cluster_do(cl: Cluster, key: str, args: [bytes],",
           "doc": "Run args against the node owning key, following MOVED (map update plus retry, up to MAX_REDIRECTS) and ASK (one directed ASKING hop, returned directly). Every other error returns verbatim.",
           "file": "stdlib/redis/redis.sl",
-          "line": 2156
+          "line": 2164
         },
         {
           "name": "cluster_close",
@@ -3963,7 +4235,7 @@
           "sig": "fn cluster_close(cl: Cluster)",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2246
+          "line": 2254
         },
         {
           "name": "cping",
@@ -3971,7 +4243,7 @@
           "sig": "fn cping(cl: Cluster, deadline: until) -> result[str, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2274
+          "line": 2282
         },
         {
           "name": "cecho",
@@ -3979,7 +4251,7 @@
           "sig": "fn cecho(cl: Cluster, v: bytes, deadline: until) -> result[bytes, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2282
+          "line": 2290
         },
         {
           "name": "cget",
@@ -3987,7 +4259,7 @@
           "sig": "fn cget(cl: Cluster, key: str, deadline: until) -> result[opt[bytes], str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2290
+          "line": 2298
         },
         {
           "name": "cset",
@@ -3995,7 +4267,7 @@
           "sig": "fn cset(cl: Cluster, key: str, val: bytes,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2302
+          "line": 2310
         },
         {
           "name": "cset_ex",
@@ -4003,7 +4275,7 @@
           "sig": "fn cset_ex(cl: Cluster, key: str, seconds: int, val: bytes,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2315
+          "line": 2323
         },
         {
           "name": "cset_nx",
@@ -4011,7 +4283,7 @@
           "sig": "fn cset_nx(cl: Cluster, key: str, val: bytes,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2329
+          "line": 2337
         },
         {
           "name": "cdel_keys",
@@ -4019,7 +4291,7 @@
           "sig": "fn cdel_keys(cl: Cluster, keys: [str],",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2339
+          "line": 2347
         },
         {
           "name": "cexists",
@@ -4027,7 +4299,7 @@
           "sig": "fn cexists(cl: Cluster, keys: [str],",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2355
+          "line": 2363
         },
         {
           "name": "cexpire",
@@ -4035,7 +4307,7 @@
           "sig": "fn cexpire(cl: Cluster, key: str, seconds: int,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2371
+          "line": 2379
         },
         {
           "name": "cpexpire",
@@ -4043,7 +4315,7 @@
           "sig": "fn cpexpire(cl: Cluster, key: str, ms: int,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2381
+          "line": 2389
         },
         {
           "name": "cttl",
@@ -4051,7 +4323,7 @@
           "sig": "fn cttl(cl: Cluster, key: str, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2391
+          "line": 2399
         },
         {
           "name": "cpttl",
@@ -4059,7 +4331,7 @@
           "sig": "fn cpttl(cl: Cluster, key: str, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2400
+          "line": 2408
         },
         {
           "name": "cpersist",
@@ -4067,7 +4339,7 @@
           "sig": "fn cpersist(cl: Cluster, key: str,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2409
+          "line": 2417
         },
         {
           "name": "cincr",
@@ -4075,7 +4347,7 @@
           "sig": "fn cincr(cl: Cluster, key: str, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2419
+          "line": 2427
         },
         {
           "name": "cdecr",
@@ -4083,7 +4355,7 @@
           "sig": "fn cdecr(cl: Cluster, key: str, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2428
+          "line": 2436
         },
         {
           "name": "cincr_by",
@@ -4091,7 +4363,7 @@
           "sig": "fn cincr_by(cl: Cluster, key: str, n: int,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2437
+          "line": 2445
         },
         {
           "name": "cdecr_by",
@@ -4099,7 +4371,7 @@
           "sig": "fn cdecr_by(cl: Cluster, key: str, n: int,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2447
+          "line": 2455
         },
         {
           "name": "cappend",
@@ -4107,7 +4379,7 @@
           "sig": "fn cappend(cl: Cluster, key: str, val: bytes,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2457
+          "line": 2465
         },
         {
           "name": "cstrlen",
@@ -4115,7 +4387,7 @@
           "sig": "fn cstrlen(cl: Cluster, key: str,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2467
+          "line": 2475
         },
         {
           "name": "cmget",
@@ -4123,7 +4395,7 @@
           "sig": "fn cmget(cl: Cluster, keys: [str],",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2477
+          "line": 2485
         },
         {
           "name": "cmset",
@@ -4131,7 +4403,7 @@
           "sig": "fn cmset(cl: Cluster, kv: map[str]bytes,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2503
+          "line": 2511
         },
         {
           "name": "chset",
@@ -4139,7 +4411,7 @@
           "sig": "fn chset(cl: Cluster, key: str, field: str, val: bytes,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2530
+          "line": 2538
         },
         {
           "name": "chget",
@@ -4147,7 +4419,7 @@
           "sig": "fn chget(cl: Cluster, key: str, field: str,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2540
+          "line": 2548
         },
         {
           "name": "chdel",
@@ -4155,7 +4427,7 @@
           "sig": "fn chdel(cl: Cluster, key: str, fields: [str],",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2553
+          "line": 2561
         },
         {
           "name": "chexists",
@@ -4163,7 +4435,7 @@
           "sig": "fn chexists(cl: Cluster, key: str, field: str,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2566
+          "line": 2574
         },
         {
           "name": "chlen",
@@ -4171,7 +4443,7 @@
           "sig": "fn chlen(cl: Cluster, key: str, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2576
+          "line": 2584
         },
         {
           "name": "chincr_by",
@@ -4179,7 +4451,7 @@
           "sig": "fn chincr_by(cl: Cluster, key: str, field: str, n: int,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2585
+          "line": 2593
         },
         {
           "name": "clpush",
@@ -4187,7 +4459,7 @@
           "sig": "fn clpush(cl: Cluster, key: str, vals: [bytes],",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2596
+          "line": 2604
         },
         {
           "name": "crpush",
@@ -4195,7 +4467,7 @@
           "sig": "fn crpush(cl: Cluster, key: str, vals: [bytes],",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2609
+          "line": 2617
         },
         {
           "name": "clpop",
@@ -4203,7 +4475,7 @@
           "sig": "fn clpop(cl: Cluster, key: str,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2622
+          "line": 2630
         },
         {
           "name": "crpop",
@@ -4211,7 +4483,7 @@
           "sig": "fn crpop(cl: Cluster, key: str,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2635
+          "line": 2643
         },
         {
           "name": "cllen",
@@ -4219,7 +4491,7 @@
           "sig": "fn cllen(cl: Cluster, key: str, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2648
+          "line": 2656
         },
         {
           "name": "csadd",
@@ -4227,7 +4499,7 @@
           "sig": "fn csadd(cl: Cluster, key: str, members: [bytes],",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2657
+          "line": 2665
         },
         {
           "name": "csrem",
@@ -4235,7 +4507,7 @@
           "sig": "fn csrem(cl: Cluster, key: str, members: [bytes],",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2670
+          "line": 2678
         },
         {
           "name": "cscard",
@@ -4243,7 +4515,7 @@
           "sig": "fn cscard(cl: Cluster, key: str, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2683
+          "line": 2691
         },
         {
           "name": "csismember",
@@ -4251,7 +4523,7 @@
           "sig": "fn csismember(cl: Cluster, key: str, member: bytes,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2692
+          "line": 2700
         },
         {
           "name": "czadd",
@@ -4259,7 +4531,7 @@
           "sig": "fn czadd(cl: Cluster, key: str, members: map[str]float,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2702
+          "line": 2710
         },
         {
           "name": "czrem",
@@ -4267,7 +4539,7 @@
           "sig": "fn czrem(cl: Cluster, key: str, members: [bytes],",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2716
+          "line": 2724
         },
         {
           "name": "czcard",
@@ -4275,7 +4547,7 @@
           "sig": "fn czcard(cl: Cluster, key: str, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2729
+          "line": 2737
         },
         {
           "name": "czscore",
@@ -4283,7 +4555,7 @@
           "sig": "fn czscore(cl: Cluster, key: str, member: bytes,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2738
+          "line": 2746
         },
         {
           "name": "ckey_type",
@@ -4291,7 +4563,7 @@
           "sig": "fn ckey_type(cl: Cluster, key: str,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2758
+          "line": 2766
         },
         {
           "name": "crename",
@@ -4299,7 +4571,7 @@
           "sig": "fn crename(cl: Cluster, key: str, newkey: str,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2768
+          "line": 2776
         },
         {
           "name": "cscan",
@@ -4307,7 +4579,7 @@
           "sig": "fn cscan(cl: Cluster, cursor: int, match: opt[str], count: opt[int],",
           "doc": "SCAN steps one node only (slot 0's owner): cluster-wide iteration fans out per node with cluster_refresh's map in hand.",
           "file": "stdlib/redis/redis.sl",
-          "line": 2787
+          "line": 2795
         },
         {
           "name": "multi",
@@ -4315,7 +4587,7 @@
           "sig": "fn multi(c: Conn, deadline: until) -> result[bool, str]",
           "doc": "MULTI: true on +OK. The connection leaves the pool from here until EXEC or DISCARD.",
           "file": "stdlib/redis/redis.sl",
-          "line": 2861
+          "line": 2869
         },
         {
           "name": "queue",
@@ -4323,7 +4595,7 @@
           "sig": "fn queue(c: Conn, args: [bytes],",
           "doc": "Queue one command inside MULTI. Anything but +QUEUED aborts the whole transaction server-side; that surfaces here as an err, and a later EXEC answers EXECABORT.",
           "file": "stdlib/redis/redis.sl",
-          "line": 2884
+          "line": 2892
         },
         {
           "name": "exec",
@@ -4331,7 +4603,7 @@
           "sig": "fn exec(c: Conn, deadline: until) -> result[[Reply], str]",
           "doc": "EXEC: the queued replies in order, error elements included. A nil array means nothing ran (watched keys changed): an err, since no caller could use an empty success. Always leaves MULTI, even on EXECABORT -- the server does too.",
           "file": "stdlib/redis/redis.sl",
-          "line": 2908
+          "line": 2916
         },
         {
           "name": "discard",
@@ -4339,7 +4611,7 @@
           "sig": "fn discard(c: Conn, deadline: until) -> result[bool, str]",
           "doc": "DISCARD: true on +OK, back outside MULTI either way the server answers.",
           "file": "stdlib/redis/redis.sl",
-          "line": 2935
+          "line": 2943
         },
         {
           "name": "watch",
@@ -4347,7 +4619,7 @@
           "sig": "fn watch(c: Conn, keys: [str],",
           "doc": "WATCH/UNWATCH for optimistic locking: watch, read, MULTI, queue, EXEC; a nil EXEC (err here) means someone else wrote first, so retry the whole sequence.",
           "file": "stdlib/redis/redis.sl",
-          "line": 2954
+          "line": 2962
         },
         {
           "name": "unwatch",
@@ -4355,7 +4627,7 @@
           "sig": "fn unwatch(c: Conn, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 2978
+          "line": 2986
         },
         {
           "name": "eval",
@@ -4363,7 +4635,7 @@
           "sig": "fn eval(c: Conn, script: str, keys: [str], args: [bytes],",
           "doc": "EVAL: the script's raw reply, whose shape depends on what it returns -- bulk, int, array, or error, decoded verbatim.",
           "file": "stdlib/redis/redis.sl",
-          "line": 3009
+          "line": 3017
         },
         {
           "name": "evalsha",
@@ -4371,7 +4643,7 @@
           "sig": "fn evalsha(c: Conn, script: str, keys: [str], args: [bytes],",
           "doc": "EVALSHA with automatic EVAL fallback: the common path sends only 40 hex characters; a server that never saw the script answers NOSCRIPT and the call transparently re-sends the source.",
           "file": "stdlib/redis/redis.sl",
-          "line": 3018
+          "line": 3026
         },
         {
           "name": "Message",
@@ -4379,7 +4651,7 @@
           "sig": "gc struct Message",
           "doc": "A published message. kind is \"message\" or \"pmessage\"; pattern is set only for the latter (the glob that matched).",
           "file": "stdlib/redis/redis.sl",
-          "line": 3050
+          "line": 3058
         },
         {
           "name": "Sub",
@@ -4387,7 +4659,7 @@
           "sig": "gc struct Sub",
           "doc": "A live subscription: a dedicated subscriber-mode connection plus messages that arrived while someone else held the lock. Never use sub.c directly (do, close, anything): concurrent socket readers would split the stream mid-reply. Everything here serializes on the Sub lock instead.",
           "file": "stdlib/redis/redis.sl",
-          "line": 3062
+          "line": 3070
         },
         {
           "name": "subscribe",
@@ -4395,7 +4667,7 @@
           "sig": "fn subscribe(url: str, channels: [str], patterns: [str],",
           "doc": "Subscribe, returning a live Sub. channels and patterns are the SUBSCRIBE and PSUBSCRIBE lists; at least one of them is nonempty.",
           "file": "stdlib/redis/redis.sl",
-          "line": 3146
+          "line": 3154
         },
         {
           "name": "sub_add",
@@ -4403,7 +4675,7 @@
           "sig": "fn sub_add(sub: Sub, channels: [str], patterns: [str],",
           "doc": "Add subscriptions to a live Sub.",
           "file": "stdlib/redis/redis.sl",
-          "line": 3165
+          "line": 3173
         },
         {
           "name": "sub_next",
@@ -4411,7 +4683,7 @@
           "sig": "fn sub_next(sub: Sub, deadline: until) -> result[opt[Message], str]",
           "doc": "Next message, or none when the deadline passes first. Confirms and pongs the server interleaves are skipped, never surfaced; a malformed reply is an error, since valid RESP has only the shapes as_message knows.",
           "file": "stdlib/redis/redis.sl",
-          "line": 3211
+          "line": 3219
         },
         {
           "name": "sub_remove",
@@ -4419,7 +4691,7 @@
           "sig": "fn sub_remove(sub: Sub, channels: [str], patterns: [str],",
           "doc": "Remove subscriptions. Fully unsubscribing returns the connection to plain unicast mode; close it or subscribe again after.",
           "file": "stdlib/redis/redis.sl",
-          "line": 3246
+          "line": 3254
         },
         {
           "name": "sub_close",
@@ -4427,7 +4699,7 @@
           "sig": "fn sub_close(sub: Sub)",
           "doc": "Shut a subscription down. A task blocked in sub_next wakes with an error from the closed socket.",
           "file": "stdlib/redis/redis.sl",
-          "line": 3287
+          "line": 3295
         },
         {
           "name": "StreamEntry",
@@ -4435,7 +4707,7 @@
           "sig": "gc struct StreamEntry",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 3297
+          "line": 3305
         },
         {
           "name": "StreamRead",
@@ -4443,7 +4715,7 @@
           "sig": "gc struct StreamRead",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 3302
+          "line": 3310
         },
         {
           "name": "xadd",
@@ -4451,7 +4723,7 @@
           "sig": "fn xadd(c: Conn, key: str, id: str, fields: map[str]bytes,",
           "doc": "XADD: the new entry's ID.",
           "file": "stdlib/redis/redis.sl",
-          "line": 3350
+          "line": 3358
         },
         {
           "name": "xadd_maxlen",
@@ -4459,7 +4731,7 @@
           "sig": "fn xadd_maxlen(c: Conn, key: str, maxlen: int, approx: bool, id: str,",
           "doc": "XADD with MAXLEN trimming: approx picks ~ (cheap) over exact.",
           "file": "stdlib/redis/redis.sl",
-          "line": 3371
+          "line": 3379
         },
         {
           "name": "xrange",
@@ -4467,7 +4739,7 @@
           "sig": "fn xrange(c: Conn, key: str, start: str, end: str, count: opt[int],",
           "doc": "XRANGE/XREVRANGE: entries between two IDs (\"-\" and \"+\" are the ends), oldest first (XREVRANGE newest first). count caps the reply, none for no cap.",
           "file": "stdlib/redis/redis.sl",
-          "line": 3438
+          "line": 3446
         },
         {
           "name": "xrevrange",
@@ -4475,7 +4747,7 @@
           "sig": "fn xrevrange(c: Conn, key: str, end: str, start: str, count: opt[int],",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 3443
+          "line": 3451
         },
         {
           "name": "xlen",
@@ -4483,7 +4755,7 @@
           "sig": "fn xlen(c: Conn, key: str, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 3448
+          "line": 3456
         },
         {
           "name": "xtrim",
@@ -4491,7 +4763,7 @@
           "sig": "fn xtrim(c: Conn, key: str, maxlen: int, approx: bool,",
           "doc": "XTRIM MAXLEN: how many entries were removed.",
           "file": "stdlib/redis/redis.sl",
-          "line": 3457
+          "line": 3465
         },
         {
           "name": "xdel",
@@ -4499,7 +4771,7 @@
           "sig": "fn xdel(c: Conn, key: str, ids: [str],",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 3472
+          "line": 3480
         },
         {
           "name": "xread",
@@ -4507,7 +4779,7 @@
           "sig": "fn xread(c: Conn, keys: [str], ids: [str], block_ms: opt[int],",
           "doc": "XREAD: new entries per key since each id (\"$\" means \"everything after now\" on first call, then the last seen id after). block_ms waits that long for data (none => return at once); a wait that finds nothing is ok(none), not an error. count caps per call.",
           "file": "stdlib/redis/redis.sl",
-          "line": 3489
+          "line": 3497
         },
         {
           "name": "cxadd",
@@ -4515,7 +4787,7 @@
           "sig": "fn cxadd(cl: Cluster, key: str, id: str, fields: map[str]bytes,",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 3566
+          "line": 3574
         },
         {
           "name": "cxlen",
@@ -4523,7 +4795,7 @@
           "sig": "fn cxlen(cl: Cluster, key: str, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 3586
+          "line": 3594
         },
         {
           "name": "cxread",
@@ -4531,7 +4803,7 @@
           "sig": "fn cxread(cl: Cluster, keys: [str], ids: [str], block_ms: opt[int],",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
-          "line": 3595
+          "line": 3603
         }
       ]
     },
@@ -5005,6 +5277,15 @@
           "sig": "strings.join_bytes(NA_ARR_BYTES, bytes) -> bytes"
         },
         {
+          "name": "bytes_zero",
+          "params": [
+            "int"
+          ],
+          "ret": "bytes",
+          "tls": false,
+          "sig": "strings.bytes_zero(int) -> bytes"
+        },
+        {
           "name": "from_bytes",
           "params": [
             "bytes",
@@ -5025,6 +5306,28 @@
           "ret": "str",
           "tls": false,
           "sig": "strings.from_bytes_lower(bytes, int, int) -> str"
+        },
+        {
+          "name": "from_wire",
+          "params": [
+            "NA_WIRE",
+            "int",
+            "int"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "strings.from_wire(NA_WIRE, int, int) -> str"
+        },
+        {
+          "name": "from_wire_lower",
+          "params": [
+            "NA_WIRE",
+            "int",
+            "int"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "strings.from_wire_lower(NA_WIRE, int, int) -> str"
         },
         {
           "name": "find_field",
