@@ -1314,4 +1314,33 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
     *out_want_crypto = want_pkg(&cg, "crypto");
     *out_want_sql = want_pkg(&cg, "sql");
     *out_want_compress = want_pkg(&cg, "compress");
+
+    /* Generics hardening: every used instance is a separate copy in
+     * the binary, so a program that instantiates without bound (a
+     * framework used at dozens of types) bloats silently. Warn past
+     * a threshold instead. SLANG_INSTANCE_WARN overrides it (tests
+     * set a tiny one); a warning, not an error, since big is
+     * sometimes exactly what was asked for. Counted after the dry
+     * run reached its fixpoint, so late instances are included. */
+    {
+        int ninst = 0;
+        for (int i = 0; i < cg.structs.count; i++)
+            if (cg.structs.items[i]->inst)
+                ninst++;
+        ninst += cg.finsts.count;
+        int threshold = 64;
+        const char *env = getenv("SLANG_INSTANCE_WARN");
+        if (env && env[0]) {
+            char *end = NULL;
+            long v = strtol(env, &end, 10);
+            if (end != env && v > 0 && v < 1000000)
+                threshold = (int)v;
+        }
+        if (ninst > threshold)
+            fprintf(stderr,
+                    "slang: warning: program instantiates %d generic "
+                    "types/functions (threshold %d); each emits its own "
+                    "copy in the binary\n",
+                    ninst, threshold);
+    }
 }
