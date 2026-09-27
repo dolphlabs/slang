@@ -1992,7 +1992,9 @@ fn cluster_pool_locked(cl: Cluster, addr: str) -> result[Pool, str] {
     return ok(pool);
 }
 
-// Learn the slot map from one node. Returns "" or the error.
+// Learn the slot map from one node. Returns "" or the error. The
+// map splices under the cluster lock: refresh runs shared, and a
+// MOVED update may land mid-bootstrap.
 fn bootstrap_from(cl: Cluster, addr: str, deadline: until) -> str {
     let ar = split_addr(addr);
     guard let a = ar else let e = err_of(ar) {
@@ -2011,6 +2013,7 @@ fn bootstrap_from(cl: Cluster, addr: str, deadline: until) -> str {
     if reply.kind != REPLY_ARRAY || reply.is_nil {
         return "CLUSTER SLOTS: expected an array";
     }
+    let fresh: map[int]str = {};
     let count = 0;
     for entry in reply.items {
         if entry.kind != REPLY_ARRAY || entry.is_nil ||
@@ -2052,7 +2055,7 @@ fn bootstrap_from(cl: Cluster, addr: str, deadline: until) -> str {
         let node = host + ":" + to_str(master.items[1].num);
         let s = start;
         while s <= end {
-            cl.slots[s] = node;
+            fresh[s] = node;
             s = s + 1;
         }
         count = count + 1;
@@ -2060,6 +2063,11 @@ fn bootstrap_from(cl: Cluster, addr: str, deadline: until) -> str {
     if count == 0 {
         return "CLUSTER SLOTS: no slots assigned";
     }
+    mutex_lock(cl.mu);
+    for s, node in fresh {
+        cl.slots[s] = node;
+    }
+    mutex_unlock(cl.mu);
     return "";
 }
 
