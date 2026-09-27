@@ -151,6 +151,27 @@ for k in 1..=3 {       // inclusive range: 1,2,3
     println("tick ${k}");
 }
 
+// switch: one arm runs, chosen by value. Labels are literals of the
+// scrutinee's type (int family, bool, str, or enum); several labels
+// may share an arm with commas. No fallthrough: arms never run into
+// each other. `break` exits the switch, `continue` still targets an
+// enclosing loop.
+switch code {
+  case 200, 201 { println("ok"); }
+  case 404 { println("missing"); }
+  default { println("other"); }   // optional, except that an enum
+                                  // switch without one must cover
+                                  // every variant
+}
+
+// switch is also an expression: every arm yields one value, all of
+// the same type, and `default` is required unless an enum scrutinee
+// covers every variant
+let label: str = switch code {
+  case 200 { "ok" }
+  default { "other" }
+};
+
 // functions (parameters and return types are annotated)
 fn add(a: int, b: int) -> int {
     a + b          // implicit return: last expression is the value
@@ -581,10 +602,88 @@ error at line 5: unsupported operand types for '*': str and int
   (in main.Box[str].doubled, requested at line 9)
 ```
 
-Not yet supported, and each says so when used: generic functions
-(`fn first[T](xs: [T]) -> T`), lifetime parameters on a generic struct or on
-one of its methods, and a generic method's own extra parameters
-(`fn map[U](self: Box[T]) -> Box[U]`).
+Not yet supported, and each says so when used: lifetime parameters on a
+generic struct or on one of its methods, and a generic method's own extra
+parameters (`fn map[U](self: Box[T]) -> Box[U]`).
+
+#### Generic functions
+
+A plain function can take type parameters too. There is no `first[int](xs)`
+at a call site — a type argument is only ever written in a type position —
+so every one is inferred, by unifying each parameter's declared type against
+the argument's actual type:
+
+```slang
+fn first[T](xs: [T]) -> T {
+    return xs[0];
+}
+
+fn choose_second[A, B](a: A, b: B) -> B {
+    return b;
+}
+
+println(first([1, 2, 3]));            // 1, T = int
+println(first(["a", "b", "c"]));      // "a" -- a different instance, T = str
+println(choose_second(1, "two"));     // "two"
+```
+
+Unification walks through containers, not just a bare parameter, so `T` is
+found inside `[T]`, `Box[T]`, `opt[T]` and the rest exactly where it sits:
+
+```slang
+struct Box[T] {
+    v: T,
+}
+fn unbox[T](b: Box[T]) -> T {
+    return b.v;
+}
+fn zip_first[A, B](pairs: [Box[A]], extra: B) -> A {
+    return pairs[0].v;
+}
+```
+
+A type parameter that only the return type mentions cannot be found in any
+argument, so it is inferred from the expected type instead, the same
+mechanism `none` and `[]` already use — which means it only reaches a
+return type shaped like `opt[T]` / `result` / `[T]` / `chan` / `join`:
+
+```slang
+fn empty_of[T]() -> [T] {
+    return [];
+}
+let xs: [int] = empty_of();           // T = int, from the let's type
+```
+
+A parameter only a scalar or struct return type mentions has nothing to
+infer it from; write a plain function that calls the generic one with a
+concrete type argument, and use that instead.
+
+Each combination of argument types is its own instance, checked the first
+time the program calls it that way — same rule as a generic struct's
+methods, including the instantiation note on an error inside one. A generic
+function can call another, including itself, and two instances of one
+template used in the same expression do not share type parameters
+(`first([identity(1), identity(2)]) + first([identity(3)])` is two separate
+`identity` instances and two separate `first` instances).
+
+`spawn` takes a generic function like any other call — the arguments fix
+the type parameters first, and what is spawned is the one instance they
+resolve to:
+
+```slang
+fn handle[T](conn: T, id: int) { ... }
+
+spawn handle(conn, 1);           // spawns handle[Conn], not a template
+```
+
+A spawn has no annotated `let` to infer from, so a parameter only the
+return type mentions cannot be resolved there, and says so.
+
+Not yet supported: `extern fn` cannot be generic, and neither can it declare
+lifetime parameters. A generic function is not one function until its type
+is chosen, so it cannot be used as a bare value — write a plain function
+that calls it with a concrete type, and use that instead. `spawn` does not
+take a method, generic or not.
 
 #### Enums
 
@@ -660,9 +759,10 @@ An enum without `pub` is private to its package, like any other type.
 
 There is no per-variant wire label yet (`to_str`/JSON always use the
 declared name as written), no explicit backing-width syntax
-(`enum Name: i64 { ... }`), and no payload-carrying variants or a
-`match` statement — enums here are a closed set of names, not a tagged
-union.
+(`enum Name: i64 { ... }`), and no payload-carrying variants — enums
+here are a closed set of names, not a tagged union. Branching on one
+uses `switch`, which checks exhaustiveness: an enum switch without a
+`default` arm must list every variant.
 
 #### Option / Result
 
@@ -1214,10 +1314,88 @@ error at line 5: unsupported operand types for '*': str and int
   (in main.Box[str].doubled, requested at line 9)
 ```
 
-Not yet supported, and each says so when used: generic functions
-(`fn first[T](xs: [T]) -> T`), lifetime parameters on a generic struct or on
-one of its methods, and a generic method's own extra parameters
-(`fn map[U](self: Box[T]) -> Box[U]`).
+Not yet supported, and each says so when used: lifetime parameters on a
+generic struct or on one of its methods, and a generic method's own extra
+parameters (`fn map[U](self: Box[T]) -> Box[U]`).
+
+#### Generic functions
+
+A plain function can take type parameters too. There is no `first[int](xs)`
+at a call site — a type argument is only ever written in a type position —
+so every one is inferred, by unifying each parameter's declared type against
+the argument's actual type:
+
+```slang
+fn first[T](xs: [T]) -> T {
+    return xs[0];
+}
+
+fn choose_second[A, B](a: A, b: B) -> B {
+    return b;
+}
+
+println(first([1, 2, 3]));            // 1, T = int
+println(first(["a", "b", "c"]));      // "a" -- a different instance, T = str
+println(choose_second(1, "two"));     // "two"
+```
+
+Unification walks through containers, not just a bare parameter, so `T` is
+found inside `[T]`, `Box[T]`, `opt[T]` and the rest exactly where it sits:
+
+```slang
+struct Box[T] {
+    v: T,
+}
+fn unbox[T](b: Box[T]) -> T {
+    return b.v;
+}
+fn zip_first[A, B](pairs: [Box[A]], extra: B) -> A {
+    return pairs[0].v;
+}
+```
+
+A type parameter that only the return type mentions cannot be found in any
+argument, so it is inferred from the expected type instead, the same
+mechanism `none` and `[]` already use — which means it only reaches a
+return type shaped like `opt[T]` / `result` / `[T]` / `chan` / `join`:
+
+```slang
+fn empty_of[T]() -> [T] {
+    return [];
+}
+let xs: [int] = empty_of();           // T = int, from the let's type
+```
+
+A parameter only a scalar or struct return type mentions has nothing to
+infer it from; write a plain function that calls the generic one with a
+concrete type argument, and use that instead.
+
+Each combination of argument types is its own instance, checked the first
+time the program calls it that way — same rule as a generic struct's
+methods, including the instantiation note on an error inside one. A generic
+function can call another, including itself, and two instances of one
+template used in the same expression do not share type parameters
+(`first([identity(1), identity(2)]) + first([identity(3)])` is two separate
+`identity` instances and two separate `first` instances).
+
+`spawn` takes a generic function like any other call — the arguments fix
+the type parameters first, and what is spawned is the one instance they
+resolve to:
+
+```slang
+fn handle[T](conn: T, id: int) { ... }
+
+spawn handle(conn, 1);           // spawns handle[Conn], not a template
+```
+
+A spawn has no annotated `let` to infer from, so a parameter only the
+return type mentions cannot be resolved there, and says so.
+
+Not yet supported: `extern fn` cannot be generic, and neither can it declare
+lifetime parameters. A generic function is not one function until its type
+is chosen, so it cannot be used as a bare value — write a plain function
+that calls it with a concrete type, and use that instead. `spawn` does not
+take a method, generic or not.
 
 #### Enums
 
@@ -1293,9 +1471,10 @@ An enum without `pub` is private to its package, like any other type.
 
 There is no per-variant wire label yet (`to_str`/JSON always use the
 declared name as written), no explicit backing-width syntax
-(`enum Name: i64 { ... }`), and no payload-carrying variants or a
-`match` statement — enums here are a closed set of names, not a tagged
-union.
+(`enum Name: i64 { ... }`), and no payload-carrying variants — enums
+here are a closed set of names, not a tagged union. Branching on one
+uses `switch`, which checks exhaustiveness: an enum switch without a
+`default` arm must list every variant.
 
 #### Option / Result
 
@@ -1686,10 +1865,88 @@ error at line 5: unsupported operand types for '*': str and int
   (in main.Box[str].doubled, requested at line 9)
 ```
 
-Not yet supported, and each says so when used: generic functions
-(`fn first[T](xs: [T]) -> T`), lifetime parameters on a generic struct or on
-one of its methods, and a generic method's own extra parameters
-(`fn map[U](self: Box[T]) -> Box[U]`).
+Not yet supported, and each says so when used: lifetime parameters on a
+generic struct or on one of its methods, and a generic method's own extra
+parameters (`fn map[U](self: Box[T]) -> Box[U]`).
+
+## Generic functions
+
+A plain function can take type parameters too. There is no `first[int](xs)`
+at a call site — a type argument is only ever written in a type position —
+so every one is inferred, by unifying each parameter's declared type against
+the argument's actual type:
+
+```slang
+fn first[T](xs: [T]) -> T {
+    return xs[0];
+}
+
+fn choose_second[A, B](a: A, b: B) -> B {
+    return b;
+}
+
+println(first([1, 2, 3]));            // 1, T = int
+println(first(["a", "b", "c"]));      // "a" -- a different instance, T = str
+println(choose_second(1, "two"));     // "two"
+```
+
+Unification walks through containers, not just a bare parameter, so `T` is
+found inside `[T]`, `Box[T]`, `opt[T]` and the rest exactly where it sits:
+
+```slang
+struct Box[T] {
+    v: T,
+}
+fn unbox[T](b: Box[T]) -> T {
+    return b.v;
+}
+fn zip_first[A, B](pairs: [Box[A]], extra: B) -> A {
+    return pairs[0].v;
+}
+```
+
+A type parameter that only the return type mentions cannot be found in any
+argument, so it is inferred from the expected type instead, the same
+mechanism `none` and `[]` already use — which means it only reaches a
+return type shaped like `opt[T]` / `result` / `[T]` / `chan` / `join`:
+
+```slang
+fn empty_of[T]() -> [T] {
+    return [];
+}
+let xs: [int] = empty_of();           // T = int, from the let's type
+```
+
+A parameter only a scalar or struct return type mentions has nothing to
+infer it from; write a plain function that calls the generic one with a
+concrete type argument, and use that instead.
+
+Each combination of argument types is its own instance, checked the first
+time the program calls it that way — same rule as a generic struct's
+methods, including the instantiation note on an error inside one. A generic
+function can call another, including itself, and two instances of one
+template used in the same expression do not share type parameters
+(`first([identity(1), identity(2)]) + first([identity(3)])` is two separate
+`identity` instances and two separate `first` instances).
+
+`spawn` takes a generic function like any other call — the arguments fix
+the type parameters first, and what is spawned is the one instance they
+resolve to:
+
+```slang
+fn handle[T](conn: T, id: int) { ... }
+
+spawn handle(conn, 1);           // spawns handle[Conn], not a template
+```
+
+A spawn has no annotated `let` to infer from, so a parameter only the
+return type mentions cannot be resolved there, and says so.
+
+Not yet supported: `extern fn` cannot be generic, and neither can it declare
+lifetime parameters. A generic function is not one function until its type
+is chosen, so it cannot be used as a bare value — write a plain function
+that calls it with a concrete type, and use that instead. `spawn` does not
+take a method, generic or not.
 
 ---
 
@@ -2195,6 +2452,14 @@ Median of 3 rounds, sorted fastest first.
 
 `GET /`, a fixed 200-byte body, `wrk -c{50,200} -d30s --latency`.
 Median of 3 rounds, sorted by req/s (fastest first).
+
+None of these implementations parse an HTTP request -- every language's
+`http-static` entry is a raw-socket responder (slang's is
+`bench/http/main.sl`/`go_raw`'s shape; see
+[`bench/http/README.md`](https://github.com/dolphlabs/slang/blob/dev/bench/http/README.md)'s
+axis table). This tier answers "how fast is the socket layer," not
+"what does a real HTTP server cost" -- `bench/run_http_realserver.sh`
+is the harness for that question, and it is not this one.
 
 ### 50 connections
 
@@ -4153,7 +4418,7 @@ signal-handling program.
 - [encoding](packages/encoding.md) -- compiler-provided, 12 public items
 - [flags](packages/flags.md) -- source package, 23 public items
 - [fs](packages/fs.md) -- compiler-provided, 7 public items
-- [http](packages/http.md) -- source package, 19 public items
+- [http](packages/http.md) -- source package, 22 public items
 - [http2](packages/http2.md) -- source package, 122 public items
 - [httpc](packages/httpc.md) -- source package, 35 public items
 - [io](packages/io.md) -- compiler-provided, 12 public items
@@ -4165,7 +4430,7 @@ signal-handling program.
 - [proc](packages/proc.md) -- compiler-provided, 6 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [sql](packages/sql.md) -- compiler-provided, 20 public items
-- [strings](packages/strings.md) -- compiler-provided, 18 public items
+- [strings](packages/strings.md) -- compiler-provided, 21 public items
 - [time](packages/time.md) -- compiler-provided, 3 public items
 
 ---
@@ -4511,6 +4776,37 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 # builder
 
 > Package builder.
+
+Assembling a result one piece at a time with `+` is **quadratic**: `a + b`
+allocates and copies both sides, so the cost is the sum of every
+intermediate length. Building 80 KB one byte at a time takes about two
+seconds, and a megabyte would take minutes. `builder` collects the pieces
+and copies each once, at the end.
+
+```slang
+import "builder";
+
+let b = builder.new_str();
+b.write("hello").write(", ").write(name).write_int(42).write_line("!");
+let s = b.finish();                    // one allocation, linear in the total
+
+let y = builder.new_bytes();
+y.write_byte(104).write(b"ello").write_str(" world");
+let raw: bytes = y.finish();
+```
+
+`Str` is for text and `Bytes` for binary data. Both chain, report
+`size()` in bytes without assembling anything, and offer `finish()` (which
+can be called again after more writes), `take()` (finish and start over)
+and `reset()`. `Bytes.write_byte` fills a 512-byte chunk in place, so a
+million single-byte writes make about two thousand allocations rather than a
+million: 4 million of them take 136 ms. `Bytes` keeps a **copy** of what you
+write, because bytes are mutable and a later change of yours must not
+rewrite what was already written.
+
+For assembling a `[bytes]` you already hold, `strings.join_bytes(parts,
+sep)` is the counterpart of `strings.join`. `bench/builder/` prints the
+naive loop beside the builder.
 
 ## API
 
@@ -5197,21 +5493,39 @@ signal-handling program.
 
 ### `gc struct Request`
 
+`raw_headers` is exactly the CRLF-separated "name: value" lines this request's header block was made of, unparsed -- not a map[str]str. Building a map costs an allocation for the map plus roughly two more per header, on every request, whether or not anything ever reads a header; most requests never do. `header`/`header_or` scan this directly (strings.find_field, no allocation for the search itself); `headers()` builds a map from it on demand for a caller that genuinely wants one. Constructed only by `parse`/`read` (off the wire) or `request` (validated, from a map) -- never assign this field directly from unvalidated bytes; a value containing "\r\n" inside a hand-built block is a second header no map ever held.
+
 ### `gc struct Incoming`
 
 ### `gc struct Response`
 
 ### `fn header(r: Request, name: str) -> opt[str]`
 
+### `fn header_or(r: Request, name: str, fallback: str) -> str`
+
+header()'s two real call sites (Ctx.header in zokor, the WebSocket handshake) are both `header(...) ?? fallback` already -- this is that, without the opt allocation `??` unwraps.
+
+### `fn headers(r: Request) -> map[str]str`
+
+Every header a request carries, as a map -- built fresh on each call by scanning raw_headers once. Nothing in either repo iterates a request's headers today (confirmed by grep), which is what makes "built on demand" the right default over a cached field: a cache nothing reads is pure cost. Walks the same line shape scan_headers does, for a different reason (that one validates and extracts two offsets; this one assumes an already-valid block and extracts every name and value) -- kept as two functions rather than one parameterized by what to do with each line, which would obscure both to save repeating six lines.
+
+### `fn request(method: str, path: str, version: str,`
+
+Builds a Request from a map the way the eager parser builds one off the wire: a header name or value may not contain CR or LF (an application- or test-constructed header gets no such check for free the way one read off the wire does -- this is where that rule lives for this path), and a name may not contain the colon that separates it from its value on the wire. Both are a real hazard, not a theoretical one, now that raw_headers is what a request's headers actually are: a value containing "\r\n" would be concatenated straight into the block below as a SECOND header line -- injection -- if it weren't rejected first.
+
 ### `fn parse(raw: bytes) -> result[Request, str]`
 
 ### `fn serialize(r: Response) -> bytes`
+
+Assembled through a builder, not by `+`.  Every `+` on bytes allocates a new buffer and copies everything written so far into it, so building a response header by header re-copied the whole response once per header -- on every response the server sends. This is the same quadratic assembly `builder` was added to fix elsewhere; the stdlib's own HTTP path still had it.  A builder rather than a `[bytes]` and one `strings.join_bytes`: the list form was tried and measured slower, because a piece per header is an allocation per header before anything is joined.  This is the standalone/TLS path (`demo/main.sl` calls it directly) and `write`'s fallback for a response too large for its caller's arena. `write` itself does not call this when the response fits -- see `emit` below, which skips these allocations entirely.
 
 ### `fn wants_close(r: Request) -> bool`
 
 ### `fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Incoming, str]`
 
 ### `fn write(c: &mut link, r: Response, a: &mut arena, deadline: until) -> result[int, fault]`
+
+serialize()'s GC allocations (~40 of them for a typical response, see serialize()'s own comment) replaced with two passes over the caller's own arena: size, then fill. If the response is larger than what's left of the arena, falls back to serialize() + send_bytes rather than letting a.wire(need) past capacity kill the task -- a slow response stays a slow response instead of becoming a dropped connection.
 
 ### `fn text_response(status: i32, status_text: str, content_type: str,`
 
@@ -7626,6 +7940,12 @@ Three behaviours worth knowing:
 ### `strings.join(NA_ARR_STR, str) -> str`
 
 ### `strings.join_bytes(NA_ARR_BYTES, bytes) -> bytes`
+
+### `strings.from_bytes(bytes, int, int) -> str`
+
+### `strings.from_bytes_lower(bytes, int, int) -> str`
+
+### `strings.find_field(bytes, str) -> int`
 
 ### `strings.from_float(float) -> str`
 

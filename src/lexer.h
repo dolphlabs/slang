@@ -39,6 +39,7 @@ typedef enum {
     T_KW_CONTINUE,
     T_KW_UNSAFE,
     T_KW_SELECT,
+    T_KW_SWITCH,
     T_KW_CASE,
     T_KW_DEFAULT,
 

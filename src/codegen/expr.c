@@ -2028,6 +2028,81 @@ char *gen_expr(CG *cg, Expr *e) {
         cg->ambient_count = ambient_mark;
         return result;
     }
+    case EX_SWITCH: {
+        /* A ({ ... }) statement-expression: the scrutinee runs once
+         * into a temp; an if-ladder over the arms assigns the result
+         * temp. Labels are validated literals (see infer_type), so
+         * int/bool/enum compare with == and str with !strcmp. The
+         * str temp is ambient-rooted across the arms, the same way
+         * ?? roots its own _sl_qN temp. */
+        const char *st = infer_type(cg, e->as.switch_expr.scrut);
+        const char *t = e->as.switch_expr.resolved
+                            ? e->as.switch_expr.resolved
+                            : infer_type(cg, e);
+        int kind = switch_kind(cg, st);
+        if (!kind)
+            cg_error(e->line,
+                     "switch scrutinee must be an integer, bool, str, or "
+                     "enum (got %s)",
+                     st);
+        int id = cg->tmp_id++;
+        int ambient_mark = cg->ambient_count;
+        char *sv = gen_expr(cg, e->as.switch_expr.scrut);
+        char *svname = xasprintf("_sl_sv%d", id);
+        char *tname = xasprintf("_sl_sw%d", id);
+        StrBuf b;
+        sb_init(&b);
+        /* The result temp is zero-initialized: an exhaustive enum
+         * switch without `default` assigns on every path the
+         * language admits, but the C compiler cannot see that, and
+         * -Wsometimes-uninitialized would otherwise fire on exactly
+         * the programs exhaustiveness checking exists to bless. NULL
+         * for GC-pointer types, 0 for everything else -- both safe
+         * precisely because the path is unreachable. */
+        sb_append(&b, xasprintf("({ %s %s = %s; %s %s = {0}; ",
+                                ctype_of(cg, st), svname, sv,
+                                ctype_of(cg, t), tname));
+        if (type_is_gc_ptr(cg, st))
+            ambient_root_push(cg, svname);
+        for (int i = 0; i < e->as.switch_expr.ncases; i++) {
+            sb_append(&b, i ? "else " : "");
+            sb_append(&b, "if (");
+            for (int j = 0; j < e->as.switch_expr.cases[i].nvals; j++) {
+                Expr *lb = e->as.switch_expr.cases[i].vals[j];
+                if (j)
+                    sb_append(&b, " || ");
+                if (kind == 3)
+                    sb_append(&b, xasprintf(
+                                      "!strcmp(%s, %s)", svname,
+                                      c_string_literal(lb->as.str_lit.value)));
+                else
+                    sb_append(&b, xasprintf("%s == %s", svname,
+                                            switch_label_c_const(lb)));
+            }
+            const char *saved = expect_push(cg, t);
+            const char *vt = infer_type(
+                cg, e->as.switch_expr.cases[i].value);
+            char *v = gen_expr(cg, e->as.switch_expr.cases[i].value);
+            cg->expect = saved;
+            v = maybe_cast(cg, t, vt, v);
+            move_consume(cg, e->as.switch_expr.cases[i].value);
+            sb_append(&b, xasprintf(") { %s = %s; } ", tname, v));
+        }
+        if (e->as.switch_expr.def) {
+            const char *saved = expect_push(cg, t);
+            const char *dt = infer_type(cg, e->as.switch_expr.def);
+            char *d = gen_expr(cg, e->as.switch_expr.def);
+            cg->expect = saved;
+            d = maybe_cast(cg, t, dt, d);
+            move_consume(cg, e->as.switch_expr.def);
+            if (e->as.switch_expr.ncases > 0)
+                sb_append(&b, "else ");
+            sb_append(&b, xasprintf("{ %s = %s; } ", tname, d));
+        }
+        sb_append(&b, xasprintf("%s; })", tname));
+        cg->ambient_count = ambient_mark;
+        return b.data;
+    }
     }
     return NULL; /* unreachable */
 }

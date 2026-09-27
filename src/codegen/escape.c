@@ -180,6 +180,22 @@ static void scan_expr(CG *cg, Esc *esc, Expr *e, const char *name) {
     case EX_SPAWN:
         scan_expr(cg, esc, e->as.spawn.call, name);
         return;
+    case EX_SWITCH:
+        scan_expr(cg, esc, e->as.switch_expr.scrut, name);
+        for (int i = 0; i < e->as.switch_expr.ncases; i++) {
+            for (int j = 0; j < e->as.switch_expr.cases[i].nvals; j++)
+                scan_expr(cg, esc, e->as.switch_expr.cases[i].vals[j],
+                          name);
+            if (ptr_result(e->as.switch_expr.cases[i].value, name))
+                mark_escape(esc, name);
+            scan_expr(cg, esc, e->as.switch_expr.cases[i].value, name);
+        }
+        if (e->as.switch_expr.def) {
+            if (ptr_result(e->as.switch_expr.def, name))
+                mark_escape(esc, name);
+            scan_expr(cg, esc, e->as.switch_expr.def, name);
+        }
+        return;
     case EX_CALL: {
         const char *cname = e->as.call.name;
         int print = is_print_call(cname);
@@ -365,6 +381,17 @@ static void walk_stmt(CG *cg, Esc *esc, Stmt *s) {
     case ST_EXPR:
         scan_expr_any(cg, esc, s->as.expr_stmt.expr);
         return;
+    case ST_SWITCH: {
+        scan_expr_any(cg, esc, s->as.switch_stmt.scrut);
+        for (int i = 0; i < s->as.switch_stmt.ncases; i++) {
+            for (int j = 0; j < s->as.switch_stmt.cases[i].nvals; j++)
+                scan_expr_any(cg, esc, s->as.switch_stmt.cases[i].vals[j]);
+            walk_block(cg, esc, s->as.switch_stmt.cases[i].body);
+        }
+        if (s->as.switch_stmt.def)
+            walk_block(cg, esc, s->as.switch_stmt.def);
+        return;
+    }
     case ST_SPAWN:
         scan_expr_any(cg, esc, s->as.spawn.call);
         for (int i = 0; i < s->as.spawn.call->as.call.nargs; i++) {
