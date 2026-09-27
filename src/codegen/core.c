@@ -665,6 +665,16 @@ StructDef *struct_of_type(CG *cg, const char *t) {
 int type_has_gc_roots(CG *cg, const char *t) {
     if (type_is_gc_ptr(cg, t))
         return 1;
+    char *inner = NULL;
+    /* An `own` box is malloc'd, but what it HOLDS may be live heap
+     * (a str, a list in an `own Rec`): without this, an own-typed
+     * local gets no LiveVar at all and is invisible to liveness, so
+     * no safepoint ever roots it. Only value structs can sit in an
+     * own box (type_is_boxable refuses the rest). */
+    if (type_wrap(t, &inner) == TW_OWN) {
+        StructDef *sd = struct_find_canon(cg, inner);
+        return sd && !sd->is_gc && struct_has_gc_fields(cg, sd);
+    }
     StructDef *sd = struct_find_canon(cg, t);
     if (!sd || sd->is_gc)
         return 0;
@@ -767,6 +777,32 @@ void append_named_gc_roots(CG *cg, StrBuf *sb, const char *name, int *wrote) {
             stack_box_roots(cg, sb, c_name, boxed, wrote, &count);
         return;
     }
+    /* An `own` box is malloc'd, so rooting the box pointer roots
+     * nothing -- the collector ignores addresses it never allocated.
+     * But the box's FIELDS may hold live heap objects (a str, a list
+     * in an `own Rec`), which a collection between uses would free
+     * while the box is still live. Root the fields through the box
+     * instead, the same way a stack box roots its pointee's. Only
+     * value structs can sit in an own box (type_is_boxable refuses
+     * everything else), so `->field` is always the right shape. */
+    if (t) {
+        char *inner = NULL;
+        if (type_wrap(t, &inner) == TW_OWN) {
+            StructDef *sd = struct_find_canon(cg, inner);
+            if (sd && !sd->is_gc && struct_has_gc_fields(cg, sd)) {
+                for (int j = 0; j < sd->nfields; j++) {
+                    if (!type_has_gc_roots(cg, sd->ftypes[j]))
+                        continue;
+                    append_gc_root_expr(cg, sb,
+                                        xasprintf("%s->%s", c_name,
+                                                  sanitize_ident(
+                                                      sd->fields[j])),
+                                        sd->ftypes[j], wrote);
+                }
+                return;
+            }
+        }
+    }
     if (t && type_has_gc_roots(cg, t) && !type_is_gc_ptr(cg, t))
         append_gc_root_expr(cg, sb, c_name, t, wrote);
     else {
@@ -785,6 +821,20 @@ int count_named_gc_roots(CG *cg, const char *name) {
             stack_box_roots(cg, NULL, sanitize_ident(name), boxed, NULL,
                             &count);
         return count;
+    }
+    /* Mirror of the own-box branch above: count exactly what it
+     * emits, or the root array overruns. */
+    if (v) {
+        char *inner = NULL;
+        if (type_wrap(v->slang, &inner) == TW_OWN) {
+            StructDef *sd = struct_find_canon(cg, inner);
+            if (sd && !sd->is_gc && struct_has_gc_fields(cg, sd)) {
+                int n = 0;
+                for (int j = 0; j < sd->nfields; j++)
+                    n += count_gc_root_exprs(cg, sd->ftypes[j]);
+                return n;
+            }
+        }
     }
     if (v && type_has_gc_roots(cg, v->slang) && !type_is_gc_ptr(cg, v->slang))
         return count_gc_root_exprs(cg, v->slang);
