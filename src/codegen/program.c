@@ -1090,6 +1090,9 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     emit_json_runtime(cg);
     emit_json_codecs(cg);
 
+    emit_inspect_runtime(cg);
+    emit_inspect_codecs(cg);
+
     emit_globals(cg, pkgs, npkgs, main_index);
 
     gen_prototypes(cg, pkgs, npkgs);

@@ -351,7 +351,7 @@ SLANG_TYPES = {
     "trip", "mutex", "void", "ptr",
 }
 SLANG_BUILTINS = {
-    "println", "print", "len", "push", "pop", "to_str", "to_bytes",
+    "println", "print", "len", "push", "pop", "to_str", "inspect", "to_bytes",
     "some", "none", "ok", "err", "err_of", "exit", "make_chan",
     "chan_send", "chan_recv", "chan_close", "make_mutex", "mutex_lock",
     "mutex_unlock", "mutex_trylock", "join_wait", "spawn", "nullptr",

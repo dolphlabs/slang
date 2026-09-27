@@ -427,6 +427,24 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *inner = conv_to_str(cg, t, a);
         return wrap_safepoint(cg, e, ctype_of(cg, "str"), NULL, inner);
     }
+    if (!strcmp(name, "inspect")) {
+        const char *t = infer_type(cg, e->as.call.args[0]);
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        /* The builder lives in a C local inside a GNU statement
+         * expression; sl_inspect_sb_finish hands its buffer back as
+         * the str result with no copy. Depth starts at 0: the top
+         * level is never capped, only nesting past
+         * SL_INSPECT_MAX_DEPTH is. */
+        int id = cg->tmp_id++;
+        char *stmt =
+            inspect_append_stmt(cg, t, a, xasprintf("&_sl_sb%d", id), "0");
+        char *inner =
+            xasprintf("({ sl_inspect_sb _sl_sb%d; sl_inspect_sb_init(&_sl_sb%d);"
+                      " %s sl_inspect_sb_finish(&_sl_sb%d); })",
+                      id, id, stmt, id);
+        free(stmt);
+        return wrap_safepoint(cg, e, ctype_of(cg, "str"), NULL, inner);
+    }
     if (!strcmp(name, "to_bytes")) {
         char *a = gen_expr(cg, e->as.call.args[0]);
         /* A wire (arena memory, not GC-owned) is copied into bytes in one

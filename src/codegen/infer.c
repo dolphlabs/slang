@@ -213,6 +213,18 @@ const char *infer_call(CG *cg, Expr *e) {
             cg_error(e->line, "cannot convert opt/result to str; unwrap first");
         return "str";
     }
+    if (!strcmp(name, "inspect")) {
+        if (n != 1)
+            cg_error(e->line, "inspect() takes exactly one argument");
+        cg->want_inspect = 1;
+        const char *t = infer_type(cg, e->as.call.args[0]);
+        inspect_fn(cg, t, e->line); /* registers the printer now, so a
+            compile error for an uninspectable type points at this call
+            during inference, and the codec table is complete before
+            emission -- the same populate-now/read-back-later pattern
+            json's own dispatch uses. */
+        return "str";
+    }
     if (!strcmp(name, "to_bytes")) {
         if (n != 1)
             cg_error(e->line, "to_bytes() takes exactly one argument");

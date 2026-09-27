@@ -111,6 +111,12 @@ no escaping).
 - `has(m, k)` — does map `m` contain key `k`?
 - `del(m, k)` — remove key `k` (and its value) from map `m`
 - `to_str(x)` — convert any scalar or bytes value to `str`
+- `inspect(x)` — render any value as a `str` in JavaScript-console
+  style: strings double-quoted, lists `[1, 2]`, maps and structs
+  `{k: v}`, `opt` as `none` / `some(v)`, `result` as `ok(v)` / `err(e)`,
+  enums as bare variant names. Nesting past eight levels prints `...`,
+  so cyclic values terminate. Channels, mutexes, functions, and raw
+  pointers have no readable form and are a compile error
 - `to_bytes(x)` — copy a `str` or a `wire` into new `bytes`
 - `to_int(s)` / `to_float(s)` — parse a `str`, returning
   `result[int, str]` / `result[float, str]` (see below)
@@ -356,6 +362,23 @@ Keys may be any integer type, `str`, `bool`, or `enum`; values may be any type,
 including structs and lists. Backed by an open-addressing hash table
 (FNV-1a) that keeps entries in insertion order and grows automatically
 at 75% load.
+
+`println` only prints scalars — a list or map passed to it is a compile
+error. `inspect(x)` renders any value as a `str` in the style of a
+JavaScript console, so composite data can be logged, asserted on, or
+embedded in messages:
+
+```slang
+println(inspect([1, 2, 3]));              // [1, 2, 3]
+println(inspect({"name": "ada"}));        // {"name": "ada"}
+println(inspect(Point { x: 1, y: 2 }));   // {x: 1, y: 2}
+println(inspect(some(7)));                // some(7), none for the empty case
+println(inspect(Color.Red));              // Red — enums print bare
+```
+
+Strings render double-quoted with escapes (`"a\"b"`), so text never
+reads as a number and emptiness is visible (`""`). `bytes` render as
+quoted base64, and faults name themselves (`fault("timeout")`).
 
 #### Structs
 
@@ -823,6 +846,12 @@ no escaping).
 - `has(m, k)` — does map `m` contain key `k`?
 - `del(m, k)` — remove key `k` (and its value) from map `m`
 - `to_str(x)` — convert any scalar or bytes value to `str`
+- `inspect(x)` — render any value as a `str` in JavaScript-console
+  style: strings double-quoted, lists `[1, 2]`, maps and structs
+  `{k: v}`, `opt` as `none` / `some(v)`, `result` as `ok(v)` / `err(e)`,
+  enums as bare variant names. Nesting past eight levels prints `...`,
+  so cyclic values terminate. Channels, mutexes, functions, and raw
+  pointers have no readable form and are a compile error
 - `to_bytes(x)` — copy a `str` or a `wire` into new `bytes`
 - `to_int(s)` / `to_float(s)` — parse a `str`, returning
   `result[int, str]` / `result[float, str]` (see below)
@@ -1068,6 +1097,23 @@ Keys may be any integer type, `str`, `bool`, or `enum`; values may be any type,
 including structs and lists. Backed by an open-addressing hash table
 (FNV-1a) that keeps entries in insertion order and grows automatically
 at 75% load.
+
+`println` only prints scalars — a list or map passed to it is a compile
+error. `inspect(x)` renders any value as a `str` in the style of a
+JavaScript console, so composite data can be logged, asserted on, or
+embedded in messages:
+
+```slang
+println(inspect([1, 2, 3]));              // [1, 2, 3]
+println(inspect({"name": "ada"}));        // {"name": "ada"}
+println(inspect(Point { x: 1, y: 2 }));   // {x: 1, y: 2}
+println(inspect(some(7)));                // some(7), none for the empty case
+println(inspect(Color.Red));              // Red — enums print bare
+```
+
+Strings render double-quoted with escapes (`"a\"b"`), so text never
+reads as a number and emptiness is visible (`""`). `bytes` render as
+quoted base64, and faults name themselves (`fault("timeout")`).
 
 #### Structs
 
