@@ -2706,8 +2706,9 @@ fn fast_conn(r: Response) -> str {
 // maintenance -- a future field added to one and not the other is
 // exactly the bug two implementations would eventually grow. Must
 // stay byte-identical to serialize(): same order, same
-// "Connection"-capitalised quirk in the skip filter below (kept
-// deliberately -- see serialize()'s own history).
+// case-insensitive Connection skip (a capitalised user header is
+// filtered and its value rides the single trailing Connection line
+// via response_conn, never emitted twice).
 //
 // EMIT-INTO-CONTRACT (fixed fast-path layout): status line, one
 // content-type, content-length, connection, blank line, body --

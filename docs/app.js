@@ -119,8 +119,15 @@
   var input = document.getElementById("search");
   var results = document.getElementById("results");
   var index = null;
-  var rootPath = (document.querySelector('link[rel=stylesheet]')
-    .getAttribute("href") || "").replace(/style\.css$/, "");
+  /* The page carries two stylesheets (Google Fonts first, the local
+   * one second), so an unqualified selector lands on the fonts URL
+   * and every fetch goes to googleapis.com instead of search.json --
+   * which is exactly how search silently broke. Match the local file
+   * by suffix instead. */
+  var styleLink = document.querySelector('link[rel=stylesheet][href$="style.css"]');
+  var rootPath = styleLink
+    ? (styleLink.getAttribute("href") || "").replace(/style\.css$/, "")
+    : "";
 
   function load() {
     if (index) return Promise.resolve(index);
