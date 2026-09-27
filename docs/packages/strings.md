@@ -94,9 +94,15 @@ Three behaviours worth knowing:
 
 ### `strings.join_bytes(NA_ARR_BYTES, bytes) -> bytes`
 
+### `strings.bytes_zero(int) -> bytes`
+
 ### `strings.from_bytes(bytes, int, int) -> str`
 
 ### `strings.from_bytes_lower(bytes, int, int) -> str`
+
+### `strings.from_wire(NA_WIRE, int, int) -> str`
+
+### `strings.from_wire_lower(NA_WIRE, int, int) -> str`
 
 ### `strings.find_field(bytes, str) -> int`
 

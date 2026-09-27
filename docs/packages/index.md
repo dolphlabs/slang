@@ -964,16 +964,22 @@ blocking a worker thread. Errors keep the server's own text through
 the same `result[_, str]` story as every other package.
 
 The protocol core is usable now; pooling, cluster
-routing and pub/sub arrive in later phases. Connections are here:
-`connect` dials with a deadline, runs `AUTH` and `SELECT`, and hands
-back a `Conn` that any task may share -- one round trip at a time,
-serialized by an internal lock. `do` runs one command; a reply that
-violates the protocol breaks the connection for good, while a
-server-side command error only fails that call.
+routing and pub/sub are all here too. `connect` dials with a
+deadline, runs `AUTH` and `SELECT`, and hands back a `Conn` that any
+task may share -- one round trip at a time, serialized by an
+internal lock. `do` runs one command; a reply that violates the
+protocol breaks the connection for good, while a server-side command
+error only fails that call. Heavier use goes through `Pool`
+(shared connections with idle probing), `Cluster` (slot routing
+with MOVED/ASK handling and same-slot checks), explicit `MULTI`
+transactions on direct Conns, and pull-model pub/sub where the
+caller drives `sub_next` (a 4-line pump feeds a `chan` when push
+suits better).
 
 ```slang
 import "redis";
 import "time";
+import "log";
 
 let dl = until_of(time.mono() + 5000000000);
 let cr = redis.connect("redis://:secret@cache.internal:6380/2", dl);
@@ -996,8 +1002,11 @@ let dr: result[opt[redis.Decoded], str] = redis.decode(wire);
 // cluster hash slot of a key (0..16383), honouring {...} hash tags
 let s: int = redis.slot("{user1000}.following");
 
-// connection strings for the coming phases
+// connection strings parse into Configs for pooling and clusters
 let ur = redis.parse_url("redis://alice:secret@cache.internal:6380/2");
+
+// pooled and clustered use underneath (see the table)
+let pr = redis.new_pool("redis://cache.internal:6380", 8);
 
 redis.close(c);
 ```
@@ -1966,13 +1975,13 @@ signal-handling program.
 ## All packages
 
 - [builder](packages/builder.md) -- source package, 20 public items
-- [byteutil](packages/byteutil.md) -- source package, 5 public items
+- [byteutil](packages/byteutil.md) -- source package, 6 public items
 - [compress](packages/compress.md) -- compiler-provided, 7 public items
 - [crypto](packages/crypto.md) -- compiler-provided, 6 public items
 - [encoding](packages/encoding.md) -- compiler-provided, 12 public items
 - [flags](packages/flags.md) -- source package, 23 public items
 - [fs](packages/fs.md) -- compiler-provided, 7 public items
-- [http](packages/http.md) -- source package, 22 public items
+- [http](packages/http.md) -- source package, 55 public items
 - [http2](packages/http2.md) -- source package, 122 public items
 - [httpc](packages/httpc.md) -- source package, 35 public items
 - [io](packages/io.md) -- compiler-provided, 12 public items
@@ -1985,7 +1994,7 @@ signal-handling program.
 - [redis](packages/redis.md) -- source package, 161 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [sql](packages/sql.md) -- compiler-provided, 20 public items
-- [strings](packages/strings.md) -- compiler-provided, 21 public items
+- [strings](packages/strings.md) -- compiler-provided, 24 public items
 - [time](packages/time.md) -- compiler-provided, 3 public items
 
 ---
