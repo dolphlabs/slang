@@ -27,14 +27,15 @@ struct failed in C instead of saying so.
 
 ## 1. User-defined generics, then zokor
 
-- [ ] **Why.** zokor, the backend framework (`dolphlabs/zokor`, empty), has to
+- [x] **Why.** zokor, the backend framework (`dolphlabs/zokor`, empty), has to
   carry the application's own state through a router, middleware and handlers:
-  `Router[S]`, `Ctx[S]`, `fn(Ctx[S]) -> Response`. slang has no generics,
-  interfaces, closures or `any`, so a library cannot name a type the app
+  `Router[S]`, `Ctx[S]`, `fn(Ctx[S]) -> Response`. slang had no generics,
+  interfaces, closures or `any`, so a library could not name a type the app
   defines. `tyto`'s 12-parameter `dispatch` is the symptom, and `tyto` and
   `slang-lipo` already copy the same infrastructure between them (`dotenv.sl`
   is byte-identical). Decided: generics come first, all of structs, methods and
-  functions, before any zokor code.
+  functions, before any zokor code. (Done below; closures remain the one
+  missing piece for inline handlers.)
 
   **Model.** Monomorphized, type parameters unbounded, bodies checked per
   instance (the C++ template model) with an "in instantiation of" note on
@@ -53,19 +54,21 @@ struct failed in C instead of saying so.
     same C as a hand-written `IntBox`. Struct bodies are now emitted
     dependencies first, and a negative test can carry an
     `expected_error.txt`.
-  - [ ] **2.** Methods on generic structs (`impl Box[T]`), instantiated lazily.
-    `impl Box[T]` and `fn f[T]` are refused with a message today. Needs an
-    explicit call to the enum rewrite on each fresh instance body, since
-    `resolve_enum_refs` runs before any instance exists. A literal such as
-    `Box { v: none }` cannot infer `T` from its fields alone; expected-type
-    inference (PR 3) could reach it.
-  - [ ] **3.** Generic functions, with unification and expected-type inference.
-  - [ ] **4.** Hardening: cross-package generics, the refusals for `spawn` and
-    for a generic used as a value, error notes, `slangc test`, docs. **Warn
-    when a program's instance count passes a threshold**, so a framework
-    cannot silently bloat a binary.
-  - [ ] **5.** A mini `Router[S]` with `Ctx[S]` over an app-defined `S`, as the
-    proof; then zokor.
+  - [x] **2.** Methods on generic structs (`impl Box[T]`), instantiated lazily.
+    Landed with per-instance method bodies (re-parsed, enum rewrite
+    re-run); covered by generics_methods* tests.
+  - [x] **3.** Generic functions, with unification and expected-type inference.
+    Landed with call-site inference (no type arguments written);
+    covered by generics_func* tests. Refusals (`spawn`, bare value,
+    `extern`, lifetimes) carry messages plus negative tests.
+  - [x] **4.** Hardening: cross-package generics (generics_pkg,
+    generics_func_pkg, generics_methods_pkg), error notes
+    (instance_note tests), docs (README generics sections). Instance
+    bloat warns past a threshold (default 64,
+    `SLANG_INSTANCE_WARN` overrides) at the end of codegen.
+  - [x] **5.** A mini `Router[S]` with `Ctx[S]` over an app-defined `S`, as the
+    proof (tests/generics_router: generic structs + method + generic
+    dispatch fn + plain handlers over one instance); then zokor.
 
   **Cost model** (measured on one Mac; treat as an order of magnitude): about
   97% of a build is `cc -O3 -flto`, every program carries a ~6,300-line

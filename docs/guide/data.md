@@ -67,6 +67,23 @@ including structs and lists. Backed by an open-addressing hash table
 (FNV-1a) that keeps entries in insertion order and grows automatically
 at 75% load.
 
+`println` only prints scalars — a list or map passed to it is a compile
+error. `inspect(x)` renders any value as a `str` in the style of a
+JavaScript console, so composite data can be logged, asserted on, or
+embedded in messages:
+
+```slang
+println(inspect([1, 2, 3]));              // [1, 2, 3]
+println(inspect({"name": "ada"}));        // {"name": "ada"}
+println(inspect(Point { x: 1, y: 2 }));   // {x: 1, y: 2}
+println(inspect(some(7)));                // some(7), none for the empty case
+println(inspect(Color.Red));              // Red — enums print bare
+```
+
+Strings render double-quoted with escapes (`"a\"b"`), so text never
+reads as a number and emptiness is visible (`""`). `bytes` render as
+quoted base64, and faults name themselves (`fault("timeout")`).
+
 ## Structs
 
 ```slang

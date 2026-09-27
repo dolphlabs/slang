@@ -1,0 +1,26 @@
+42
+-7
+true
+1.5
+"hi"
+""
+"a\"b\\c\nd"
+[1, 2, 3]
+["a", "b"]
+[[1, 2], [3]]
+[]
+{"name": "ada", "city": "lagos"}
+{1: "a", 2: "b"}
+{true: 1}
+some(7)
+none
+ok(5)
+err("bad")
+{x: 1, y: 2}
+{v: 1, next: some({v: 2, next: none})}
+[{x: 1, y: 2}, {x: 3, y: 4}]
+Red
+"aGk="
+fault("timeout")
+[[[[[[[[[...]]]]]]]]]
+val=[1, 2]

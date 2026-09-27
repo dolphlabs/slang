@@ -1144,10 +1144,14 @@ void gen_stmt(CG *cg, Stmt *s) {
          * with !strcmp. A single ladder keeps one obviously-correct
          * path instead of two; clang builds the jump table itself at
          * -O2 for dense integer arms. The scrutinee runs once into a
-         * temp; the str temp is ambient-rooted across the arms like
-         * ??'s own _sl_qN. No fallthrough: every arm ends its own
-         * block. `break` in an arm jumps to the end label (see
-         * ST_BREAK); `continue` still targets the enclosing loop. */
+         * temp. Deliberately NOT ambient-rooted (unlike ??'s _sl_qN):
+         * every read of it sits in the if-ladder conditions, which
+         * are pure comparisons with no calls, and the last one runs
+         * before any arm body does -- by the time an allocating call
+         * executes, the temp is dead. No fallthrough: every arm ends
+         * its own block. `break` in an arm jumps to the end label
+         * (see ST_BREAK); `continue` still targets the enclosing
+         * loop. */
         const char *st = infer_type(cg, s->as.switch_stmt.scrut);
         int ncases = s->as.switch_stmt.ncases;
         Expr ***groups = ncases ? (Expr ***)xmalloc(sizeof(Expr **) *
@@ -1171,9 +1175,6 @@ void gen_stmt(CG *cg, Stmt *s) {
         emit_line(cg, "{");
         cg->indent++;
         emit_line(cg, "%s %s = %s;", ctype_of(cg, st), svname, sv);
-        int ambient_mark = cg->ambient_count;
-        if (type_is_gc_ptr(cg, st))
-            ambient_root_push(cg, svname);
         break_push(cg, 1, endname);
         cg->switch_depth++;
         for (int i = 0; i < ncases; i++) {
@@ -1209,7 +1210,6 @@ void gen_stmt(CG *cg, Stmt *s) {
         int used = cg->break_used[cg->break_len - 1];
         break_pop(cg);
         cg->switch_depth--;
-        cg->ambient_count = ambient_mark;
         if (used)
             emit_line(cg, "%s: (void)0;", endname);
         cg->indent--;

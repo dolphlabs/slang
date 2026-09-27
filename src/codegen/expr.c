@@ -427,6 +427,24 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *inner = conv_to_str(cg, t, a);
         return wrap_safepoint(cg, e, ctype_of(cg, "str"), NULL, inner);
     }
+    if (!strcmp(name, "inspect")) {
+        const char *t = infer_type(cg, e->as.call.args[0]);
+        char *a = gen_expr(cg, e->as.call.args[0]);
+        /* The builder lives in a C local inside a GNU statement
+         * expression; sl_inspect_sb_finish hands its buffer back as
+         * the str result with no copy. Depth starts at 0: the top
+         * level is never capped, only nesting past
+         * SL_INSPECT_MAX_DEPTH is. */
+        int id = cg->tmp_id++;
+        char *stmt =
+            inspect_append_stmt(cg, t, a, xasprintf("&_sl_sb%d", id), "0");
+        char *inner =
+            xasprintf("({ sl_inspect_sb _sl_sb%d; sl_inspect_sb_init(&_sl_sb%d);"
+                      " %s sl_inspect_sb_finish(&_sl_sb%d); })",
+                      id, id, stmt, id);
+        free(stmt);
+        return wrap_safepoint(cg, e, ctype_of(cg, "str"), NULL, inner);
+    }
     if (!strcmp(name, "to_bytes")) {
         char *a = gen_expr(cg, e->as.call.args[0]);
         /* A wire (arena memory, not GC-owned) is copied into bytes in one
@@ -2032,9 +2050,14 @@ char *gen_expr(CG *cg, Expr *e) {
         /* A ({ ... }) statement-expression: the scrutinee runs once
          * into a temp; an if-ladder over the arms assigns the result
          * temp. Labels are validated literals (see infer_type), so
-         * int/bool/enum compare with == and str with !strcmp. The
-         * str temp is ambient-rooted across the arms, the same way
-         * ?? roots its own _sl_qN temp. */
+         * int/bool/enum compare with == and str with !strcmp.
+         *
+         * Deliberately NO ambient root for the scrutinee temp (unlike
+         * ??'s _sl_qN): every read of it sits in the if-ladder
+         * conditions, which are pure comparisons with no calls, and
+         * the last one runs before any arm body does. By the time an
+         * allocating call executes, the temp is dead -- rooting it
+         * would only fatten every enclosing bracket for nothing. */
         const char *st = infer_type(cg, e->as.switch_expr.scrut);
         const char *t = e->as.switch_expr.resolved
                             ? e->as.switch_expr.resolved
@@ -2046,7 +2069,6 @@ char *gen_expr(CG *cg, Expr *e) {
                      "enum (got %s)",
                      st);
         int id = cg->tmp_id++;
-        int ambient_mark = cg->ambient_count;
         char *sv = gen_expr(cg, e->as.switch_expr.scrut);
         char *svname = xasprintf("_sl_sv%d", id);
         char *tname = xasprintf("_sl_sw%d", id);
@@ -2062,8 +2084,6 @@ char *gen_expr(CG *cg, Expr *e) {
         sb_append(&b, xasprintf("({ %s %s = %s; %s %s = {0}; ",
                                 ctype_of(cg, st), svname, sv,
                                 ctype_of(cg, t), tname));
-        if (type_is_gc_ptr(cg, st))
-            ambient_root_push(cg, svname);
         for (int i = 0; i < e->as.switch_expr.ncases; i++) {
             sb_append(&b, i ? "else " : "");
             sb_append(&b, "if (");
@@ -2100,7 +2120,6 @@ char *gen_expr(CG *cg, Expr *e) {
             sb_append(&b, xasprintf("{ %s = %s; } ", tname, d));
         }
         sb_append(&b, xasprintf("%s; })", tname));
-        cg->ambient_count = ambient_mark;
         return b.data;
     }
     }

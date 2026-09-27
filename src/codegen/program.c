@@ -429,21 +429,52 @@ void emit_struct_types(CG *cg) {
  * struct_has_gc_fields, core.c). Must run after emit_struct_types so
  * every struct body (and therefore every field's real name) already
  * exists; field access is emitted directly (o->fieldname), not via
- * offsetof, since the real names are already known here. */
+ * offsetof, since the real names are already known here.
+ *
+ * Value structs are emitted too, not just gc ones: a `gc` conversion
+ * box (`let g: gc Rec = Rec {...}`) is a heap object holding a value
+ * struct, and without a tracer the collector keeps the box but never
+ * walks into it. Fields that are themselves value structs with GC
+ * fields recurse inline with dotted paths -- a nested Inner.str is
+ * marked as o->inner.s, exactly like the root-array builders do.
+ * Value-struct tracers carry __attribute__((unused)): unlike a gc
+ * struct, whose allocation sites always name theirs, a value struct
+ * only needs one when some conversion actually boxes it, and an
+ * unreferenced static would trip the warning sweep. */
+static void emit_struct_tracer_fields(CG *cg, StructDef *sd,
+                                      const char *prefix) {
+    for (int j = 0; j < sd->nfields; j++) {
+        const char *ft = sd->ftypes[j];
+        char *path;
+        if (prefix[0])
+            path = xasprintf("%s.%s", prefix, sanitize_ident(sd->fields[j]));
+        else
+            path = xstrdup(sanitize_ident(sd->fields[j]));
+        if (type_is_gc_ptr(cg, ft)) {
+            emit_line(cg, "mark((void *)o->%s);", path);
+            continue;
+        }
+        StructDef *sub = struct_find_canon(cg, ft);
+        if (sub && !sub->is_gc && struct_has_gc_fields(cg, sub))
+            emit_struct_tracer_fields(cg, sub, path);
+    }
+}
+
 void emit_struct_tracers(CG *cg) {
     for (int i = 0; i < cg->structs.count; i++) {
         StructDef *sd = cg->structs.items[i];
-        if (!sd->is_gc || !struct_has_gc_fields(cg, sd))
+        if (!struct_has_gc_fields(cg, sd))
             continue;
         char *m = mangle_struct(sd->canonical);
-        emit_line(cg, "static void sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
-                  m);
+        if (sd->is_gc)
+            emit_line(cg, "static void sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
+                      m);
+        else
+            emit_line(cg, "static void __attribute__((unused)) sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
+                      m);
         cg->indent++;
         emit_line(cg, "%s *o = (%s *)p;", m, m);
-        for (int j = 0; j < sd->nfields; j++)
-            if (type_is_gc_ptr(cg, sd->ftypes[j]))
-                emit_line(cg, "mark((void *)o->%s);",
-                          sanitize_ident(sd->fields[j]));
+        emit_struct_tracer_fields(cg, sd, "");
         cg->indent--;
         emit_line(cg, "}");
         emit_line(cg, "");
@@ -1059,6 +1090,9 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     emit_json_runtime(cg);
     emit_json_codecs(cg);
 
+    emit_inspect_runtime(cg);
+    emit_inspect_codecs(cg);
+
     emit_globals(cg, pkgs, npkgs, main_index);
 
     gen_prototypes(cg, pkgs, npkgs);
@@ -1314,4 +1348,33 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
     *out_want_crypto = want_pkg(&cg, "crypto");
     *out_want_sql = want_pkg(&cg, "sql");
     *out_want_compress = want_pkg(&cg, "compress");
+
+    /* Generics hardening: every used instance is a separate copy in
+     * the binary, so a program that instantiates without bound (a
+     * framework used at dozens of types) bloats silently. Warn past
+     * a threshold instead. SLANG_INSTANCE_WARN overrides it (tests
+     * set a tiny one); a warning, not an error, since big is
+     * sometimes exactly what was asked for. Counted after the dry
+     * run reached its fixpoint, so late instances are included. */
+    {
+        int ninst = 0;
+        for (int i = 0; i < cg.structs.count; i++)
+            if (cg.structs.items[i]->inst)
+                ninst++;
+        ninst += cg.finsts.count;
+        int threshold = 64;
+        const char *env = getenv("SLANG_INSTANCE_WARN");
+        if (env && env[0]) {
+            char *end = NULL;
+            long v = strtol(env, &end, 10);
+            if (end != env && v > 0 && v < 1000000)
+                threshold = (int)v;
+        }
+        if (ninst > threshold)
+            fprintf(stderr,
+                    "slang: warning: program instantiates %d generic "
+                    "types/functions (threshold %d); each emits its own "
+                    "copy in the binary\n",
+                    ninst, threshold);
+    }
 }

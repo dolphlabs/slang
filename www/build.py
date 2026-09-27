@@ -342,7 +342,7 @@ SLANG_KEYWORDS = {
     "let", "fn", "if", "else", "while", "return", "true", "false", "pub",
     "import", "guard", "for", "in", "as", "struct", "gc", "own", "mut",
     "impl", "extern", "link", "spawn", "break", "continue", "unsafe",
-    "select", "case", "default",
+    "select", "switch", "case", "default",
 }
 SLANG_TYPES = {
     "int", "float", "str", "bool", "bytes", "i8", "i16", "i32", "i64",
@@ -351,7 +351,7 @@ SLANG_TYPES = {
     "trip", "mutex", "void", "ptr",
 }
 SLANG_BUILTINS = {
-    "println", "print", "len", "push", "pop", "to_str", "to_bytes",
+    "println", "print", "len", "push", "pop", "to_str", "inspect", "to_bytes",
     "some", "none", "ok", "err", "err_of", "exit", "make_chan",
     "chan_send", "chan_recv", "chan_close", "make_mutex", "mutex_lock",
     "mutex_unlock", "mutex_trylock", "join_wait", "spawn", "nullptr",
@@ -858,6 +858,24 @@ ROUTER_JS = """
 # Page fragments
 # --------------------------------------------------------------------
 
+# The hero shows the planned zokor middleware shape, not code that
+# compiles today (zokor itself does not exist yet): it is a literal
+# here precisely so nothing claims it was read from a working file.
+HERO_CODE = """import "http";
+import "zokor";
+
+gc struct App {
+    name: str,
+    requests: int,
+    token: str,
+}
+
+fn count(c: zokor.Ctx[App], r: http.Response) -> http.Response {
+    c.state.requests = c.state.requests + 1;
+    r.headers["x-request-count"] = to_str(c.state.requests);
+    return r;
+}"""
+
 HERO = """
 <div class="hero">
   <div class="hero-copy">
@@ -881,16 +899,13 @@ HERO = """
     <div class="demo-head">
       <span class="dot r"></span><span class="dot y"></span>
       <span class="dot g"></span>
-      <span class="demo-title">six 300ms requests, one connection</span>
+      <span class="demo-title">middleware.sl &mdash; zokor preview</span>
     </div>
-    <div class="lanes" id="lanes"></div>
-    <div class="demo-foot">
-      <button class="btn small" id="run-demo" type="button">Run</button>
-      <span class="readout" id="readout">idle</span>
-    </div>
+    <div class="code hero-code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>""" + highlight(HERO_CODE, "slang") + """</code></pre></div>
   </div>
 </div>
 """
+
 
 
 BENCH_LEAD_MD = """slang is measured against C, Go, Rust, C#, Java, Python, Bun and

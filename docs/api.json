@@ -1063,7 +1063,7 @@
           "sig": "gc struct StaticBody",
           "doc": "serialize()'s GC allocations (~40 of them for a typical response, see serialize()'s own comment) replaced with two passes over the caller's own arena: size, then fill. If the response is larger than what's left of the arena, falls back to serialize() + send_bytes rather than letting a.wire(need) past capacity kill the task -- a slow response stays a slow response instead of becoming a dropped connection.  Responses with exactly the `text_response` shape (one content-type, nothing else) take the fixed fast path above: no map iteration, no integer str, no intermediate bytes. Anything else uses the general `emit` below, unchanged. A static route's answer: status, content type, and body -- no Response struct, no extra list, nothing to shape-check. serve_conn gets one from serve_static and hands it straight to write_static, which sends the PREBUILT keep-alive rendering (assembled once at registration -- see static_render below) with one wire alloc and one memcpy. The static snapshot lives on the Route (see router.sl); this is just the per-request view of it.",
           "file": "stdlib/http/http.sl",
-          "line": 2783
+          "line": 2784
         },
         {
           "name": "write_static",
@@ -1071,7 +1071,7 @@
           "sig": "fn write_static(c: &mut link, b: StaticBody, a: &mut arena,",
           "doc": "The static emit: the keep-alive rendering is prebuilt, not emitted. Hot path (HTTP/1.1 keep-alive, which is every wrk/ab request): one wire, one memcpy, one send -- no probe pass, no Response struct, no map, no integer str, no per-piece puts. The close variant (HTTP/1.0, Connection: close) is rare and pays the emit cost below; it never touches the hot path.",
           "file": "stdlib/http/http.sl",
-          "line": 2796
+          "line": 2797
         },
         {
           "name": "static_render",
@@ -1079,7 +1079,7 @@
           "sig": "fn static_render(status: i32, content_type: str, body: bytes) -> bytes",
           "doc": "The keep-alive rendering, assembled ONCE at registration: status line, one content-type, content-length, connection, blank line, body -- the exact bytes write_static memcpys per request. status_text_of covers the statuses static routes return; the fallback (\"OK\") matches write_static's own close variant above, so the two can never disagree on a reason phrase.",
           "file": "stdlib/http/http.sl",
-          "line": 2828
+          "line": 2829
         },
         {
           "name": "write",
@@ -1087,7 +1087,7 @@
           "sig": "fn write(c: &mut link, r: Response, a: &mut arena, deadline: until) -> result[int, fault]",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2864
+          "line": 2865
         },
         {
           "name": "text_response_bytes",
@@ -1095,7 +1095,7 @@
           "sig": "fn text_response_bytes(status: i32, status_text: str, content_type: str,",
           "doc": "`text_response` with a BYTES body: same shape, no `to_bytes` copy. The hot path (zokor's JSON renderers, static bodies) already holds bytes; forcing them through str and back cost a full copy plus the literal's own allocation on every response.",
           "file": "stdlib/http/http.sl",
-          "line": 2893
+          "line": 2894
         },
         {
           "name": "text_response",
@@ -1103,7 +1103,7 @@
           "sig": "fn text_response(status: i32, status_text: str, content_type: str,",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2906
+          "line": 2907
         },
         {
           "name": "ok_html",
@@ -1111,7 +1111,7 @@
           "sig": "fn ok_html(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2912
+          "line": 2913
         },
         {
           "name": "ok_css",
@@ -1119,7 +1119,7 @@
           "sig": "fn ok_css(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2916
+          "line": 2917
         },
         {
           "name": "ok_js",
@@ -1127,7 +1127,7 @@
           "sig": "fn ok_js(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2920
+          "line": 2921
         },
         {
           "name": "ok_json",
@@ -1135,7 +1135,7 @@
           "sig": "fn ok_json(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2925
+          "line": 2926
         },
         {
           "name": "ok_text",
@@ -1143,7 +1143,7 @@
           "sig": "fn ok_text(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2929
+          "line": 2930
         },
         {
           "name": "created_json",
@@ -1151,7 +1151,7 @@
           "sig": "fn created_json(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2933
+          "line": 2934
         },
         {
           "name": "bad_request",
@@ -1159,7 +1159,7 @@
           "sig": "fn bad_request(msg: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2938
+          "line": 2939
         },
         {
           "name": "bad_request_bytes",
@@ -1167,7 +1167,7 @@
           "sig": "fn bad_request_bytes(msg: bytes) -> Response",
           "doc": "`bad_request` with a BYTES message: same envelope, no `to_bytes` round-trip. The message still rides inside a JSON string, so it is escaped the same way -- see `escape_json_into` below.",
           "file": "stdlib/http/http.sl",
-          "line": 2945
+          "line": 2946
         },
         {
           "name": "not_found",
@@ -1175,7 +1175,7 @@
           "sig": "fn not_found() -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2954
+          "line": 2955
         },
         {
           "name": "method_not_allowed",
@@ -1183,7 +1183,7 @@
           "sig": "fn method_not_allowed() -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2959
+          "line": 2960
         }
       ]
     },

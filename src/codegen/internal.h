@@ -343,6 +343,21 @@ typedef struct {
     int cap;
 } JsonTable;
 
+/* One inspect(x) printer per distinct composite slang type reached
+ * from an inspect call site. Scalar leaf types go through fixed
+ * runtime helpers instead (see inspect_fn in inspect.c) so they
+ * never need an entry here. */
+typedef struct {
+    char *slang_type; /* canonical slang type this printer is for */
+    char *fn_name;    /* C printer function name */
+} InspectInst;
+
+typedef struct {
+    InspectInst *items;
+    int count;
+    int cap;
+} InspectTable;
+
 struct CG {
     StrBuf *out;
     int indent;
@@ -390,6 +405,7 @@ struct CG {
     FnTable fns;
     SpawnTable spawns;
     JsonTable json;
+    InspectTable inspect;
     const char *expect; /* expected type while inferring none/ok/err */
     const char *cur_ret;  /* slang return type of enclosing function */
     const char *cur_pkg;
@@ -446,6 +462,7 @@ struct CG {
     int nnat;
     int want_tls; /* set once a net.tls_* function is type-checked */
     int want_json; /* set once a json.decode/json.encode is type-checked */
+    int want_inspect; /* set once inspect() is type-checked */
     int want_link; /* set once link_* / link methods are type-checked */
     int stack_box;
     MirTable mirs;
@@ -838,5 +855,40 @@ const char *json_call_infer(CG *cg, const char *fname, Expr *e);
  * native_gen. Must run after json_call_infer has been called on the
  * same Expr (via infer_type), same convention as native_gen. */
 char *json_call_gen(CG *cg, const char *fname, Expr *e);
+
+/* ------------------------------------------------------------------ */
+/* inspect(x) (src/codegen/inspect.c)                                  */
+/* ------------------------------------------------------------------ */
+
+/* 1 if `t` renders through a fixed runtime helper (no table entry);
+ * 0 if it needs a monomorphized printer. */
+int inspect_is_scalar(const char *t);
+
+/* Returns the C function printing slang type `t`: a fixed
+ * runtime helper for scalars, otherwise a monomorphized printer
+ * registered (and recursively discovered) here and emitted later by
+ * emit_inspect_codecs. cg_error()s if `t` has no readable form
+ * (channels, mutexes, functions, raw pointers). */
+const char *inspect_fn(CG *cg, const char *t, int line);
+
+/* Wraps `val` (a C expression of slang type `t`) with whatever cast
+ * its fixed-width scalar helper needs (e.g. i32 -> '(long long)');
+ * everything else passes through unchanged. */
+char *inspect_call_arg(const char *t, const char *val);
+
+/* One C statement appending the rendering of `val` (slang type `t`)
+ * to `sb` at nesting `depth` (both C expressions). */
+char *inspect_append_stmt(CG *cg, const char *t, const char *val,
+                          const char *sb, const char *depth);
+
+/* Emits runtime/sl_inspect.c if cg->want_inspect. */
+void emit_inspect_runtime(CG *cg);
+
+/* Emits every composite printer registered in cg->inspect
+ * (prototypes first, then bodies, so mutually-recursive struct
+ * printers don't need emission-order tracking). Must run after
+ * emit_struct_types and emit_opt_res_types, since printer
+ * signatures reference both. */
+void emit_inspect_codecs(CG *cg);
 
 #endif /* SLANG_CODEGEN_INTERNAL_H */

@@ -591,15 +591,28 @@ static const char *wrap_prefix(TypeWrap w, const char *inner) {
     }
 }
 
-static char *box_expr(const char *ic, TypeWrap w, char *expr) {
+static char *box_expr(CG *cg, const char *inner_slang, const char *ic,
+                       TypeWrap w, char *expr) {
     /* The value first, then the box: see gen_ctor for why an
      * allocation must never be held in an unregistered C local while
      * an expression that can reach a safepoint runs. */
-    if (w == TW_GC)
+    if (w == TW_GC) {
+        /* A box with GC-pointer fields must name its tracer, exactly
+         * like a struct literal does: with NULL the collector keeps
+         * the box but never walks into it, freeing live fields out
+         * from under it (found via a `let g: gc Rec` conversion whose
+         * list field came back wrong). Value structs have tracers too
+         * (emitted with __attribute__((unused))); anything else keeps
+         * NULL. */
+        const char *trace = "NULL";
+        StructDef *sd = struct_find_canon(cg, inner_slang);
+        if (sd && struct_has_gc_fields(cg, sd))
+            trace = xasprintf("sl_gc_trace_%s", mangle_struct(sd->canonical));
         return xasprintf(
-            "({ %s _sl_bv = (%s); %s *_sl_b = (%s *)sl_gc_alloc(sizeof(%s), NULL); "
+            "({ %s _sl_bv = (%s); %s *_sl_b = (%s *)sl_gc_alloc(sizeof(%s), %s); "
             "*_sl_b = _sl_bv; _sl_b; })",
-            ic, expr, ic, ic, ic);
+            ic, expr, ic, ic, ic, trace);
+    }
     return xasprintf(
         "({ %s *_sl_b = (%s *)malloc(sizeof(%s)); "
         "if (!_sl_b) abort(); *_sl_b = (%s); _sl_b; })",
@@ -665,6 +678,16 @@ StructDef *struct_of_type(CG *cg, const char *t) {
 int type_has_gc_roots(CG *cg, const char *t) {
     if (type_is_gc_ptr(cg, t))
         return 1;
+    char *inner = NULL;
+    /* An `own` box is malloc'd, but what it HOLDS may be live heap
+     * (a str, a list in an `own Rec`): without this, an own-typed
+     * local gets no LiveVar at all and is invisible to liveness, so
+     * no safepoint ever roots it. Only value structs can sit in an
+     * own box (type_is_boxable refuses the rest). */
+    if (type_wrap(t, &inner) == TW_OWN) {
+        StructDef *sd = struct_find_canon(cg, inner);
+        return sd && !sd->is_gc && struct_has_gc_fields(cg, sd);
+    }
     StructDef *sd = struct_find_canon(cg, t);
     if (!sd || sd->is_gc)
         return 0;
@@ -760,6 +783,34 @@ void append_named_gc_roots(CG *cg, StrBuf *sb, const char *name, int *wrote) {
     VarSym *v = var_find(cg, name);
     const char *t = v ? v->slang : NULL;
     char *c_name = sanitize_ident(name);
+    /* An `own` box is malloc'd, so rooting the box pointer roots
+     * nothing -- the collector ignores addresses it never allocated.
+     * But the box's FIELDS may hold live heap objects (a str, a list
+     * in an `own Rec`), which a collection between uses would free
+     * while the box is still live. Root the fields through the box
+     * instead, the same way a stack box roots its pointee's. Only
+     * value structs can sit in an own box (type_is_boxable refuses
+     * everything else), so `->field` is always the right shape.
+     * Checked before the stack-box case below on purpose: a box is a
+     * box no matter what flag escape analysis left on the binding. */
+    if (t) {
+        char *inner = NULL;
+        if (type_wrap(t, &inner) == TW_OWN) {
+            StructDef *sd = struct_find_canon(cg, inner);
+            if (sd && !sd->is_gc && struct_has_gc_fields(cg, sd)) {
+                for (int j = 0; j < sd->nfields; j++) {
+                    if (!type_has_gc_roots(cg, sd->ftypes[j]))
+                        continue;
+                    append_gc_root_expr(cg, sb,
+                                        xasprintf("%s->%s", c_name,
+                                                  sanitize_ident(
+                                                      sd->fields[j])),
+                                        sd->ftypes[j], wrote);
+                }
+                return;
+            }
+        }
+    }
     if (v && v->stack) {
         const char *boxed = stack_box_pointee(cg, v);
         int count = 0;
@@ -778,6 +829,21 @@ void append_named_gc_roots(CG *cg, StrBuf *sb, const char *name, int *wrote) {
 
 int count_named_gc_roots(CG *cg, const char *name) {
     VarSym *v = var_find(cg, name);
+    /* Own-box first, for the same reason as above: a box is a box no
+     * matter the flag. Mirror of the emit branch: count exactly what
+     * it emits, or the root array overruns. */
+    if (v) {
+        char *inner = NULL;
+        if (type_wrap(v->slang, &inner) == TW_OWN) {
+            StructDef *sd = struct_find_canon(cg, inner);
+            if (sd && !sd->is_gc && struct_has_gc_fields(cg, sd)) {
+                int n = 0;
+                for (int j = 0; j < sd->nfields; j++)
+                    n += count_gc_root_exprs(cg, sd->ftypes[j]);
+                return n;
+            }
+        }
+    }
     if (v && v->stack) {
         const char *boxed = stack_box_pointee(cg, v);
         int count = 0;
@@ -973,7 +1039,7 @@ char *maybe_cast(CG *cg, const char *dst, const char *src,
     TypeWrap sw = type_wrap(src, &si);
     if (dw == TW_OWN || dw == TW_GC) {
         char *inner_expr = maybe_cast(cg, di, src, expr);
-        return box_expr(ctype_of(cg, di), dw, inner_expr);
+        return box_expr(cg, di, ctype_of(cg, di), dw, inner_expr);
     }
     if (sw != TW_NONE && (can_assign(dst, si) || !strcmp(dst, si)))
         return xasprintf("(*(%s))", expr);
@@ -2042,6 +2108,7 @@ int is_builtin_name(const char *name) {
     return !strcmp(name, "print") || !strcmp(name, "println") ||
            !strcmp(name, "len") || !strcmp(name, "push") ||
            !strcmp(name, "pop") || !strcmp(name, "to_str") ||
+           !strcmp(name, "inspect") ||
            !strcmp(name, "to_bytes") || !strcmp(name, "to_int") ||
            !strcmp(name, "to_float") || !strcmp(name, "to_le") ||
            !strcmp(name, "to_be") || !strcmp(name, "from_le") ||

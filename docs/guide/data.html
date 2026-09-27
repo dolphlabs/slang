@@ -95,6 +95,13 @@ scores[<span class="s">&quot;carol&quot;</span>] = <span class="n">78</span>;   
     <span class="b">println</span>(k + <span class="s">&quot;: &quot;</span> + <span class="b">to_str</span>(v));
 }</code></pre></div>
 <p>Keys may be any integer type, <code>str</code>, <code>bool</code>, or <code>enum</code>; values may be any type, including structs and lists. Backed by an open-addressing hash table (FNV-1a) that keeps entries in insertion order and grows automatically at 75% load.</p>
+<p><code>println</code> only prints scalars — a list or map passed to it is a compile error. <code>inspect(x)</code> renders any value as a <code>str</code> in the style of a JavaScript console, so composite data can be logged, asserted on, or embedded in messages:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="b">println</span>(<span class="b">inspect</span>([<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]));              <span class="c">// [1, 2, 3]</span>
+<span class="b">println</span>(<span class="b">inspect</span>({<span class="s">&quot;name&quot;</span>: <span class="s">&quot;ada&quot;</span>}));        <span class="c">// {&quot;name&quot;: &quot;ada&quot;}</span>
+<span class="b">println</span>(<span class="b">inspect</span>(Point { x: <span class="n">1</span>, y: <span class="n">2</span> }));   <span class="c">// {x: 1, y: 2}</span>
+<span class="b">println</span>(<span class="b">inspect</span>(<span class="b">some</span>(<span class="n">7</span>)));                <span class="c">// some(7), none for the empty case</span>
+<span class="b">println</span>(<span class="b">inspect</span>(Color.Red));              <span class="c">// Red — enums print bare</span></code></pre></div>
+<p>Strings render double-quoted with escapes (<code>&quot;a\&quot;b&quot;</code>), so text never reads as a number and emptiness is visible (<code>&quot;&quot;</code>). <code>bytes</code> render as quoted base64, and faults name themselves (<code>fault(&quot;timeout&quot;)</code>).</p>
 <h2 id="structs">Structs</h2>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">struct</span> Point {
     x: <span class="t">int</span>,

@@ -69,13 +69,22 @@
     <div class="demo-head">
       <span class="dot r"></span><span class="dot y"></span>
       <span class="dot g"></span>
-      <span class="demo-title">six 300ms requests, one connection</span>
+      <span class="demo-title">middleware.sl &mdash; zokor preview</span>
     </div>
-    <div class="lanes" id="lanes"></div>
-    <div class="demo-foot">
-      <button class="btn small" id="run-demo" type="button">Run</button>
-      <span class="readout" id="readout">idle</span>
-    </div>
+    <div class="code hero-code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;http&quot;</span>;
+<span class="k">import</span> <span class="s">&quot;zokor&quot;</span>;
+
+<span class="k">gc</span> <span class="k">struct</span> App {
+    name: <span class="t">str</span>,
+    requests: <span class="t">int</span>,
+    token: <span class="t">str</span>,
+}
+
+<span class="k">fn</span> <span class="f">count</span>(c: zokor.Ctx[App], r: http.Response) -&gt; http.Response {
+    c.state.requests = c.state.requests + <span class="n">1</span>;
+    r.headers[<span class="s">&quot;x-request-count&quot;</span>] = <span class="b">to_str</span>(c.state.requests);
+    <span class="k">return</span> r;
+}</code></pre></div>
   </div>
 </div>
 
