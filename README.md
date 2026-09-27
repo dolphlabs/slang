@@ -1870,6 +1870,81 @@ building or parsing binary COPY data, Kerberos/GSSAPI, SCRAM channel
 binding (`SCRAM-SHA-256-PLUS`), multiple hosts in one url, and SASLprep
 normalisation of non-ASCII passwords (an ASCII password is unaffected).
 
+#### `redis`
+
+A **Redis** client, written in slang over `net` like `pg`: commands
+waiting on the server park the task on the reactor instead of
+blocking a worker thread. Errors keep the server's own text through
+the same `result[_, str]` story as every other package.
+
+The protocol core is usable now; pooling, cluster
+routing and pub/sub arrive in later phases. Connections are here:
+`connect` dials with a deadline, runs `AUTH` and `SELECT`, and hands
+back a `Conn` that any task may share -- one round trip at a time,
+serialized by an internal lock. `do` runs one command; a reply that
+violates the protocol breaks the connection for good, while a
+server-side command error only fails that call.
+
+```slang
+import "redis";
+import "time";
+
+let dl = until_of(time.mono() + 5000000000);
+let cr = redis.connect("redis://:secret@cache.internal:6380/2", dl);
+guard let c = cr else let e = err_of(cr) {
+    log.error("connect: " + e);
+    exit(1);
+}
+
+// encode a command to wire bytes (binary-safe values pass through)
+let wire: bytes = redis.encode([to_bytes("SET"), to_bytes("k"),
+                                to_bytes("v")]);
+
+// run it; at most one command is ever in flight per Conn
+let r = redis.do(c, [to_bytes("PING")], dl);
+
+// decode one reply; ok(none) means feed more bytes and retry,
+// err means the bytes violate the protocol
+let dr: result[opt[redis.Decoded], str] = redis.decode(wire);
+
+// cluster hash slot of a key (0..16383), honouring {...} hash tags
+let s: int = redis.slot("{user1000}.following");
+
+// connection strings for the coming phases
+let ur = redis.parse_url("redis://alice:secret@cache.internal:6380/2");
+
+redis.close(c);
+```
+
+| Function | Signature |
+|---|---|
+| `redis.encode(args)` | `bytes` — one command as a RESP2 array of bulk strings |
+| `redis.decode(buf)` / `redis.decode_at(buf, pos)` | `result[opt[Decoded], str]` — one reply plus bytes consumed |
+| `redis.slot(key)` | `int` — cluster hash slot with `{...}` tag support |
+| `redis.parse_url(url)` | `result[Config, str]` — `redis://` / `rediss://` |
+| `redis.connect(url, deadline)` / `redis.connect_config(cfg, deadline)` | `result[Conn, str]` — dial, `AUTH`, `SELECT` |
+| `redis.do(c, args, deadline)` | `result[Reply, str]` — one command round trip |
+| `redis.close(c)` / `redis.usable(c)` | — shutdown / may commands still be attempted |
+| strings | `ping`, `echo`, `get`, `set`, `set_ex`, `set_nx`, `del_keys`, `exists`, `expire`, `pexpire`, `ttl`, `pttl`, `persist`, `incr`, `decr`, `incr_by`, `decr_by`, `append`, `strlen`, `mget`, `mset` |
+| hashes | `hset`, `hget`, `hgetall`, `hdel`, `hexists`, `hkeys`, `hvals`, `hlen`, `hincr_by` |
+| lists | `lpush`, `rpush`, `lpop`, `rpop`, `llen`, `lrange`, `ltrim`, `lindex`, `lrem` |
+| sets | `sadd`, `smembers`, `srem`, `scard`, `sismember`, `spop` |
+| sorted sets | `zadd`, `zrange`, `zrange_scores`, `zrank`, `zscore`, `zrem`, `zcard`, `zincr_by` |
+| keys | `key_type`, `rename`, `rename_nx`, `scan` (`KEYS` omitted on purpose) |
+| pool | `new_pool`, `new_pool_config`, `acquire`, `release`, `pool_do`, `pool_close` |
+| cluster | `new_cluster`, `cluster_do`, `cluster_refresh`, `cluster_close`, `c*` typed wrappers, same-slot multi-key checks |
+| transactions | `multi`, `queue`, `exec`, `discard`, `watch`, `unwatch` (direct Conns; pool and cluster routing stay out) |
+| scripting | `eval`, `evalsha` with NOSCRIPT fallback |
+| pub/sub | `subscribe`, `sub_add`, `sub_next`, `sub_remove`, `sub_close` (pull model; pump pattern in docs) |
+| streams | `xadd`, `xadd_maxlen`, `xrange`, `xrevrange`, `xlen`, `xtrim`, `xdel`, `xread`, cluster `cxadd`/`cxlen`/`cxread` (groups deferred) |
+
+A reply is a `redis.Reply`: `kind` is one of `REPLY_SIMPLE`,
+`REPLY_ERROR`, `REPLY_INT`, `REPLY_BULK` or `REPLY_ARRAY`, with the
+payload in `text`, `num`, `bulk` (`none` for nil) or `items` (empty
+with `is_nil` for a nil array).
+
+**Not supported yet:** consumer groups, RESP3, replica reads.
+
 #### `regex`
 
 Regular expressions on `str` or `bytes`, matched by slang's own

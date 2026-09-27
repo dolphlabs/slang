@@ -2822,3 +2822,33 @@ Rule for anything measured here in future: **alternate the order within
 each pair**, report medians with the raw values, and treat a delta
 smaller than the observed spread as noise. This machine is rarely idle,
 which makes single-order comparisons especially untrustworthy.
+
+## Fixed along the way: liveness fixpoint rejected loop-carried GC defs
+
+Found via the Redis cluster client (Sep 2026), pre-existing and
+unrelated to it: any loop that assigned a GC-tracked local also live
+after the loop (`why = ...` inside, `why` used later) died in
+`solve_loop_fixpoint` with "failed to converge". Root cause: the
+convergence check demanded `live_in == cur_out` (equality), but a body
+that kills an after-live variable can never produce a live_in
+containing it -- the check could never fire on exactly those loops.
+No existing test assigned a GC local in a loop and used it after, so
+nothing had ever hit it (integer-only accumulators are invisible to
+liveness: scalars get no LiveVar). Fixed by checking the actual
+iteration property instead -- `live_out ∪ live_in == cur_out`, i.e.
+live_in already a subset -- which is also what the loop already
+computed one line below. Verified with 10-line repros for
+while/for-in × str/int accumulators, the full suite green.
+
+## Not fixed (pre-existing, out of scope): ASan dies on errno paths
+
+A 10-line program whose only interesting act is a refused
+`net.dial_until` passes natively and aborts under
+`-fsanitize=address` (even with `-mllvm -asan-stack=0`): the fault is
+inside ASan's own `wrap_strerror` interceptor, faulting the green
+task stack. Same class as the documented hand-rolled-switch
+incompatibility -- green 16KB stacks plus ASan frame bloat -- not a
+slang bug, and unfixable from slang code without bigger task stacks.
+Redis memory-safety verification therefore rests on UBSan (clean),
+default/low-threshold runs (clean), and the collector's own stress
+paths, not ASan.

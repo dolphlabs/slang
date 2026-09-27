@@ -743,17 +743,25 @@ static LiveSet *solve_loop_fixpoint(CG *cg, Block *body, LiveSet *live_out,
     cg->cur_break_live_set = live_out;
     LiveSet *cur_out = ls_clone(live_out);
     LiveSet *live_in = NULL;
+    // Chaotic iteration over live_out(body): cur_out only ever grows
+    // (each pass unions the body's live-in back in), over a finite
+    // variable universe, so it stabilizes. Converged once folding the
+    // latest live_in back in changes nothing -- i.e. live_in is
+    // already a subset of cur_out. Note SUBSET, not equality: a body
+    // that kills a variable live after the loop (why = ... with why
+    // used later) can never produce a live_in containing it, so an
+    // equality check spins 10 times and dies on exactly those loops.
     for (int iter = 0; iter < 10; iter++) {
         cg->cur_continue_live_set = cur_out;
         live_in = live_block(cg, body, cur_out);
-        if (iter > 0 && ls_named_equal(live_in, cur_out)) {
+        LiveSet *next_out = ls_clone(live_out);
+        ls_union_named_into(next_out, live_in);
+        if (iter > 0 && ls_named_equal(next_out, cur_out)) {
             *out_backedge = live_in;
             cg->cur_break_live_set = saved_break;
             cg->cur_continue_live_set = saved_continue;
             return live_in;
         }
-        LiveSet *next_out = ls_clone(live_out);
-        ls_union_named_into(next_out, live_in);
         cur_out = next_out;
     }
     cg_error(0,
