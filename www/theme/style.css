@@ -202,7 +202,7 @@ a:hover { color: var(--fg); }
   max-width: 78rem; margin: 0 auto;
 }
 @media (min-width: 64rem) {
-  .hero { grid-template-columns: 1.05fr 1fr; }
+  .hero { grid-template-columns: 0.9fr 1.1fr; }
 }
 .hero h1 {
   font: 800 clamp(2.8rem, 7vw, 4.4rem)/0.95 var(--display);
@@ -237,6 +237,7 @@ a:hover { color: var(--fg); }
     linear-gradient(135deg, var(--line-2), var(--accent) 55%, var(--trace)) border-box;
   border-radius: 12px; overflow: hidden;
   box-shadow: var(--shadow), 0 12px 44px -18px var(--accent);
+  min-width: 0;
 }
 .hero-demo .demo-head {
   border-bottom: 1px solid var(--line);
@@ -245,12 +246,15 @@ a:hover { color: var(--fg); }
     var(--panel);
 }
 .hero-demo .dot.g { box-shadow: 0 0 8px var(--trace); }
-.code.hero-code { margin: 0; }
+.code.hero-code { margin: 0; min-width: 0; }
 .code.hero-code pre {
   border: none; border-radius: 0;
-  font-size: .75rem; line-height: 1.55;
+  font-size: .72rem; line-height: 1.55;
+  padding: .85rem .95rem;
   max-height: 26rem; overflow: auto;
+  white-space: pre;
 }
+.hero-demo { min-width: 0; }
 .demo-head {
   display: flex; align-items: center; gap: .35rem;
   padding: .55rem .8rem; border-bottom: 1px solid var(--line);
