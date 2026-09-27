@@ -858,19 +858,23 @@ ROUTER_JS = """
 # Page fragments
 # --------------------------------------------------------------------
 
-def hero_code():
-    """The landing-page sample, read from the real file it names.
-    examples/router/main.sl compiles and self-tests under `make
-    test`, so the hero cannot drift from code that no longer builds
-    -- only the lines between the hero markers are shown."""
-    text = (ROOT / "examples" / "router" / "main.sl").read_text()
-    start = text.index("// hero:start")
-    end = text.index("// hero:end")
-    return highlight(
-        text[start + len("// hero:start"):end].strip("\n"), "slang")
+# The hero shows the planned zokor middleware shape, not code that
+# compiles today (zokor itself does not exist yet): it is a literal
+# here precisely so nothing claims it was read from a working file.
+HERO_CODE = """import "http";
+import "zokor";
 
+gc struct App {
+    name: str,
+    requests: int,
+    token: str,
+}
 
-HERO_CODE = hero_code()
+fn count(c: zokor.Ctx[App], r: http.Response) -> http.Response {
+    c.state.requests = c.state.requests + 1;
+    r.headers["x-request-count"] = to_str(c.state.requests);
+    return r;
+}"""
 
 HERO = """
 <div class="hero">
@@ -895,9 +899,9 @@ HERO = """
     <div class="demo-head">
       <span class="dot r"></span><span class="dot y"></span>
       <span class="dot g"></span>
-      <span class="demo-title">main.sl &mdash; a tiny JSON router</span>
+      <span class="demo-title">middleware.sl &mdash; zokor preview</span>
     </div>
-    <div class="code hero-code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>""" + HERO_CODE + """</code></pre></div>
+    <div class="code hero-code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>""" + highlight(HERO_CODE, "slang") + """</code></pre></div>
   </div>
 </div>
 """

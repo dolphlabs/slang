@@ -230,10 +230,21 @@ a:hover { color: var(--fg); }
 
 /* ---- the hero sample ---- */
 .hero-demo {
-  background: var(--surface); border: 1px solid var(--line-2);
-  border-radius: var(--radius); overflow: hidden;
+  background: var(--surface);
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--surface), var(--surface)) padding-box,
+    linear-gradient(135deg, var(--line-2), var(--accent) 55%, var(--trace)) border-box;
+  border-radius: 12px; overflow: hidden;
+  box-shadow: var(--shadow), 0 12px 44px -18px var(--accent);
 }
-.hero-demo .demo-head { border-bottom: 1px solid var(--line); }
+.hero-demo .demo-head {
+  border-bottom: 1px solid var(--line);
+  background:
+    radial-gradient(120% 90% at 8% 0%, var(--accent-soft), transparent 60%),
+    var(--panel);
+}
+.hero-demo .dot.g { box-shadow: 0 0 8px var(--trace); }
 .code.hero-code { margin: 0; }
 .code.hero-code pre {
   border: none; border-radius: 0;
