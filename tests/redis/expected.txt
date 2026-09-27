@@ -23,3 +23,8 @@ ok cluster-ask
 ok cluster-crossslot
 ok cluster-seeds-down
 ok cluster-wrappers
+ok multi-exec
+ok multi-refusals
+ok multi-outside
+ok watch-abort
+ok evalsha

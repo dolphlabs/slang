@@ -1463,3 +1463,182 @@ test_cluster_ask();
 test_cluster_crossslot();
 test_cluster_seeds_down();
 test_cluster_wrappers();
+
+// ---- transactions + scripting (phase 6) --------------------------------
+
+fn test_multi_exec() {
+    let steps: [Step] = [
+        Step { want: "MULTI", reply: b"+OK\r\n" },
+        Step { want: "INCR", reply: b"+QUEUED\r\n" },
+        Step { want: "INCR", reply: b"+QUEUED\r\n" },
+        Step { want: "EXEC", reply: b"*2\r\n:11\r\n:12\r\n" }
+    ];
+    let c = scripted(steps);
+    let m = redis.multi(c, soon());
+    guard let mok = m else let e = err_of(m) {
+        die("multi: " + e);
+        panic("unreachable");
+    }
+    let q1 = redis.queue(c, [to_bytes("INCR"), to_bytes("n")], soon());
+    guard let qok1 = q1 else let e = err_of(q1) {
+        die("queue1: " + e);
+        panic("unreachable");
+    }
+    let q2 = redis.queue(c, [to_bytes("INCR"), to_bytes("n")], soon());
+    guard let qok2 = q2 else let e = err_of(q2) {
+        die("queue2: " + e);
+        panic("unreachable");
+    }
+    let er = redis.exec(c, soon());
+    guard let out = er else let e = err_of(er) {
+        die("exec: " + e);
+        panic("unreachable");
+    }
+    if len(out) != 2 || out[0].num != 11 || out[1].num != 12 {
+        die("exec results");
+    }
+    // back outside: plain commands work again
+    redis.close(c);
+    println("ok multi-exec");
+}
+
+fn test_multi_refusals() {
+    let steps: [Step] = [
+        Step { want: "MULTI", reply: b"+OK\r\n" },
+        Step { want: "PING", reply: b"+QUEUED\r\n" },
+        Step { want: "DISCARD", reply: b"+OK\r\n" },
+        Step { want: "PING", reply: b"+PONG\r\n" }
+    ];
+    let c = scripted(steps);
+    let m = redis.multi(c, soon());
+    guard let mok = m else let e = err_of(m) {
+        die("multi: " + e);
+        panic("unreachable");
+    }
+    // do() refuses inside MULTI with zero traffic
+    let d = redis.do(c, [to_bytes("PING")], soon());
+    guard let dr = d else let e = err_of(d) {
+        if !strings.contains(e, "MULTI") {
+            die("wrong do-in-multi error: " + e);
+        }
+        // queue works here; discard; plain commands work again
+        let q = redis.queue(c, [to_bytes("PING")], soon());
+        guard let qo = q else let e = err_of(q) {
+            die("queue in multi: " + e);
+            panic("unreachable");
+        }
+        let dc = redis.discard(c, soon());
+        guard let dok = dc else let e = err_of(dc) {
+            die("discard: " + e);
+            panic("unreachable");
+        }
+        let p = redis.ping(c, soon());
+        guard let pong = p else let e = err_of(p) {
+            die("ping after discard: " + e);
+            panic("unreachable");
+        }
+        if pong != "PONG" {
+            die("bad PONG after discard");
+        }
+        redis.close(c);
+        println("ok multi-refusals");
+        return;
+    }
+    die("do inside MULTI served");
+}
+
+fn test_multi_refusals2() {
+    let steps: [Step] = [];
+    let c = scripted(steps);
+    // queue/exec with no MULTI: local refusals, zero traffic
+    let q = redis.queue(c, [to_bytes("PING")], soon());
+    guard let qo = q else let e = err_of(q) {
+        if !strings.contains(e, "MULTI") {
+            die("wrong queue error: " + e);
+        }
+        let er = redis.exec(c, soon());
+        guard let eo = er else let e = err_of(er) {
+            if !strings.contains(e, "MULTI") {
+                die("wrong exec error: " + e);
+            }
+            redis.close(c);
+            println("ok multi-outside");
+            return;
+        }
+        die("exec without multi served");
+        return;
+    }
+    die("queue without multi served");
+}
+
+fn test_watch_abort() {
+    let steps: [Step] = [
+        Step { want: "WATCH", reply: b"+OK\r\n" },
+        Step { want: "MULTI", reply: b"+OK\r\n" },
+        Step { want: "INCR", reply: b"+QUEUED\r\n" },
+        Step { want: "EXEC", reply: b"*-1\r\n" },
+        Step { want: "UNWATCH", reply: b"+OK\r\n" }
+    ];
+    let c = scripted(steps);
+    let w = redis.watch(c, ["k"], soon());
+    guard let wok = w else let e = err_of(w) {
+        die("watch: " + e);
+        panic("unreachable");
+    }
+    let m = redis.multi(c, soon());
+    guard let mok = m else let e = err_of(m) {
+        die("multi: " + e);
+        panic("unreachable");
+    }
+    let q = redis.queue(c, [to_bytes("INCR"), to_bytes("k")], soon());
+    guard let qok = q else let e = err_of(q) {
+        die("queue: " + e);
+        panic("unreachable");
+    }
+    let er = redis.exec(c, soon());
+    guard let out = er else let e = err_of(er) {
+        let u = redis.unwatch(c, soon());
+        guard let uok = u else let e = err_of(u) {
+            die("unwatch: " + e);
+            panic("unreachable");
+        }
+        redis.close(c);
+        println("ok watch-abort");
+        return;
+    }
+    die("aborted exec returned results");
+}
+
+fn test_evalsha_fallback() {
+    let steps: [Step] = [
+        Step { want: "EVALSHA",
+               reply: b"-NOSCRIPT No matching script\r\n" },
+        Step { want: "EVAL", reply: b"$2\r\nhi\r\n" },
+        Step { want: "EVALSHA", reply: b":3\r\n" }
+    ];
+    let c = scripted(steps);
+    let r = redis.evalsha(c, "return 'hi'", ["k"], [b"a"], soon());
+    guard let reply = r else let e = err_of(r) {
+        die("evalsha: " + e);
+        panic("unreachable");
+    }
+    if reply.kind != redis.REPLY_BULK {
+        die("evalsha shape");
+    }
+    let r2 = redis.evalsha(c, "return 3", [], [], soon());
+    guard let reply2 = r2 else let e = err_of(r2) {
+        die("evalsha hit: " + e);
+        panic("unreachable");
+    }
+    if reply2.kind != redis.REPLY_INT || reply2.num != 3 {
+        die("evalsha hit shape");
+    }
+    redis.close(c);
+    println("ok evalsha");
+}
+
+test_multi_exec();
+test_multi_refusals();
+test_multi_refusals2();
+test_watch_abort();
+test_evalsha_fallback();

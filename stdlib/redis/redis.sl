@@ -24,6 +24,7 @@ import "strings";
 import "encoding";
 import "net";
 import "time";
+import "crypto";
 
 // ---- limits ----------------------------------------------------------
 
@@ -821,8 +822,14 @@ pub fn connect(url: str, deadline: until) -> result[Conn, str] {
 // Run one command: args[0] is the command name. Exactly one reply is
 // consumed, so at most one command is ever in flight per Conn; hold
 // no lock of your own -- this takes c.lock for the round trip.
+// Refused inside MULTI: queued commands answer +QUEUED, which no
+// typed shape could read -- use queue there.
 pub fn do(c: Conn, args: [bytes], deadline: until) -> result[Reply, str] {
     mutex_lock(c.lock);
+    if c.mode == 1 {
+        mutex_unlock(c.lock);
+        return err("inside MULTI: queue commands with queue");
+    }
     let r = exchange(c, args, deadline);
     mutex_unlock(c.lock);
     return r;
@@ -2814,4 +2821,190 @@ fn cscan_run(cl: Cluster, args: [bytes],
         push(keys, to_str(b));
     }
     return ok(ScanOut { cursor: cursor, keys: keys });
+}
+
+// ---- transactions ----------------------------------------------------
+// MULTI/EXEC over one Conn: every queued call must reach the same
+// connection, so transactions run on direct Conns, never through the
+// pool (release closes a MULTI conn instead of reusing it) and never
+// through cluster_do (which may route each call elsewhere). For one
+// node of a cluster, connect to its address directly.
+//
+// While mode is 1, do and every typed command refuse: the server
+// answers +QUEUED, which no reply shape could read. queue takes the
+// raw +QUEUED reply; exec returns the per-command replies verbatim,
+// errors included -- an element may be REPLY_ERROR while its
+// neighbours succeeded.
+
+// MULTI: true on +OK. The connection leaves the pool from here
+// until EXEC or DISCARD.
+pub fn multi(c: Conn, deadline: until) -> result[bool, str] {
+    mutex_lock(c.lock);
+    if c.mode == 1 {
+        mutex_unlock(c.lock);
+        return err("already inside MULTI");
+    }
+    let r = exchange(c, [to_bytes("MULTI")], deadline);
+    guard let reply = r else let e = err_of(r) {
+        mutex_unlock(c.lock);
+        return err(e);
+    }
+    if reply.kind != REPLY_SIMPLE {
+        mutex_unlock(c.lock);
+        return err("MULTI: expected a status reply");
+    }
+    c.mode = 1;
+    mutex_unlock(c.lock);
+    return ok(true);
+}
+
+// Queue one command inside MULTI. Anything but +QUEUED aborts the
+// whole transaction server-side; that surfaces here as an err, and a
+// later EXEC answers EXECABORT.
+pub fn queue(c: Conn, args: [bytes],
+             deadline: until) -> result[bool, str] {
+    mutex_lock(c.lock);
+    if c.mode != 1 {
+        mutex_unlock(c.lock);
+        return err("queue needs MULTI first");
+    }
+    let r = exchange(c, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        mutex_unlock(c.lock);
+        return err(e);
+    }
+    if reply.kind != REPLY_SIMPLE || reply.text != "QUEUED" {
+        mutex_unlock(c.lock);
+        return err("queue: expected +QUEUED");
+    }
+    mutex_unlock(c.lock);
+    return ok(true);
+}
+
+// EXEC: the queued replies in order, error elements included. A nil
+// array means nothing ran (watched keys changed): an err, since no
+// caller could use an empty success. Always leaves MULTI, even on
+// EXECABORT -- the server does too.
+pub fn exec(c: Conn, deadline: until) -> result[[Reply], str] {
+    mutex_lock(c.lock);
+    if c.mode != 1 {
+        mutex_unlock(c.lock);
+        return err("exec needs MULTI first");
+    }
+    let r = exchange(c, [to_bytes("EXEC")], deadline);
+    c.mode = 0;
+    guard let reply = r else let e = err_of(r) {
+        mutex_unlock(c.lock);
+        return err(e);
+    }
+    if reply.kind == REPLY_ERROR {
+        mutex_unlock(c.lock);
+        return err(reply.text);
+    }
+    if reply.kind != REPLY_ARRAY || reply.is_nil {
+        mutex_unlock(c.lock);
+        return err("EXEC aborted: watched keys changed or empty transaction");
+    }
+    let out = reply.items;
+    mutex_unlock(c.lock);
+    return ok(out);
+}
+
+// DISCARD: true on +OK, back outside MULTI either way the server
+// answers.
+pub fn discard(c: Conn, deadline: until) -> result[bool, str] {
+    mutex_lock(c.lock);
+    let r = exchange(c, [to_bytes("DISCARD")], deadline);
+    c.mode = 0;
+    guard let reply = r else let e = err_of(r) {
+        mutex_unlock(c.lock);
+        return err(e);
+    }
+    if reply.kind != REPLY_SIMPLE {
+        mutex_unlock(c.lock);
+        return err("DISCARD: expected a status reply");
+    }
+    mutex_unlock(c.lock);
+    return ok(true);
+}
+
+// WATCH/UNWATCH for optimistic locking: watch, read, MULTI, queue,
+// EXEC; a nil EXEC (err here) means someone else wrote first, so
+// retry the whole sequence.
+pub fn watch(c: Conn, keys: [str],
+             deadline: until) -> result[bool, str] {
+    let args: [bytes] = [to_bytes("WATCH")];
+    for k in keys {
+        push(args, to_bytes(k));
+    }
+    mutex_lock(c.lock);
+    if c.mode == 1 {
+        mutex_unlock(c.lock);
+        return err("WATCH inside MULTI is not allowed");
+    }
+    let r = exchange(c, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        mutex_unlock(c.lock);
+        return err(e);
+    }
+    if reply.kind != REPLY_SIMPLE {
+        mutex_unlock(c.lock);
+        return err("WATCH: expected a status reply");
+    }
+    mutex_unlock(c.lock);
+    return ok(true);
+}
+
+pub fn unwatch(c: Conn, deadline: until) -> result[bool, str] {
+    mutex_lock(c.lock);
+    let r = exchange(c, [to_bytes("UNWATCH")], deadline);
+    guard let reply = r else let e = err_of(r) {
+        mutex_unlock(c.lock);
+        return err(e);
+    }
+    if reply.kind != REPLY_SIMPLE {
+        mutex_unlock(c.lock);
+        return err("UNWATCH: expected a status reply");
+    }
+    mutex_unlock(c.lock);
+    return ok(true);
+}
+
+// ---- scripting -------------------------------------------------------
+
+fn script_args(cmd: str, sha_or_src: bytes, keys: [str], args: [bytes]) -> [bytes] {
+    let out: [bytes] = [to_bytes(cmd), sha_or_src,
+                        to_bytes(to_str(len(keys)))];
+    for k in keys {
+        push(out, to_bytes(k));
+    }
+    for a in args {
+        push(out, a);
+    }
+    return out;
+}
+
+// EVAL: the script's raw reply, whose shape depends on what it
+// returns -- bulk, int, array, or error, decoded verbatim.
+pub fn eval(c: Conn, script: str, keys: [str], args: [bytes],
+            deadline: until) -> result[Reply, str] {
+    return do(c, script_args("EVAL", to_bytes(script), keys, args),
+              deadline);
+}
+
+// EVALSHA with automatic EVAL fallback: the common path sends only
+// 40 hex characters; a server that never saw the script answers
+// NOSCRIPT and the call transparently re-sends the source.
+pub fn evalsha(c: Conn, script: str, keys: [str], args: [bytes],
+               deadline: until) -> result[Reply, str] {
+    let sha = encoding.hex_encode(crypto.sha1(to_bytes(script)));
+    let r = do(c, script_args("EVALSHA", to_bytes(sha), keys, args),
+               deadline);
+    guard let reply = r else let e = err_of(r) {
+        if strings.contains(e, "NOSCRIPT") {
+            return eval(c, script, keys, args, deadline);
+        }
+        return err(e);
+    }
+    return ok(reply);
 }

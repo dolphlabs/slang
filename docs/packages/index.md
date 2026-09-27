@@ -1019,6 +1019,8 @@ redis.close(c);
 | keys | `key_type`, `rename`, `rename_nx`, `scan` (`KEYS` omitted on purpose) |
 | pool | `new_pool`, `new_pool_config`, `acquire`, `release`, `pool_do`, `pool_close` |
 | cluster | `new_cluster`, `cluster_do`, `cluster_refresh`, `cluster_close`, `c*` typed wrappers, same-slot multi-key checks |
+| transactions | `multi`, `queue`, `exec`, `discard`, `watch`, `unwatch` (direct Conns; pool and cluster routing stay out) |
+| scripting | `eval`, `evalsha` with NOSCRIPT fallback |
 
 A reply is a `redis.Reply`: `kind` is one of `REPLY_SIMPLE`,
 `REPLY_ERROR`, `REPLY_INT`, `REPLY_BULK` or `REPLY_ARRAY`, with the
@@ -1979,7 +1981,7 @@ signal-handling program.
 - [os](packages/os.md) -- compiler-provided, 14 public items
 - [pg](packages/pg.md) -- source package, 52 public items
 - [proc](packages/proc.md) -- compiler-provided, 6 public items
-- [redis](packages/redis.md) -- source package, 133 public items
+- [redis](packages/redis.md) -- source package, 141 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [sql](packages/sql.md) -- compiler-provided, 20 public items
 - [strings](packages/strings.md) -- compiler-provided, 21 public items

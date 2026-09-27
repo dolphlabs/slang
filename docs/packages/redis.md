@@ -63,6 +63,8 @@ redis.close(c);
 | keys | `key_type`, `rename`, `rename_nx`, `scan` (`KEYS` omitted on purpose) |
 | pool | `new_pool`, `new_pool_config`, `acquire`, `release`, `pool_do`, `pool_close` |
 | cluster | `new_cluster`, `cluster_do`, `cluster_refresh`, `cluster_close`, `c*` typed wrappers, same-slot multi-key checks |
+| transactions | `multi`, `queue`, `exec`, `discard`, `watch`, `unwatch` (direct Conns; pool and cluster routing stay out) |
+| scripting | `eval`, `evalsha` with NOSCRIPT fallback |
 
 A reply is a `redis.Reply`: `kind` is one of `REPLY_SIMPLE`,
 `REPLY_ERROR`, `REPLY_INT`, `REPLY_BULK` or `REPLY_ARRAY`, with the
@@ -128,7 +130,7 @@ Open a connection from a URL. See parse_url for the shape.
 
 ### `fn do(c: Conn, args: [bytes], deadline: until) -> result[Reply, str]`
 
-Run one command: args[0] is the command name. Exactly one reply is consumed, so at most one command is ever in flight per Conn; hold no lock of your own -- this takes c.lock for the round trip.
+Run one command: args[0] is the command name. Exactly one reply is consumed, so at most one command is ever in flight per Conn; hold no lock of your own -- this takes c.lock for the round trip. Refused inside MULTI: queued commands answer +QUEUED, which no typed shape could read -- use queue there.
 
 ### `fn close(c: Conn)`
 
@@ -459,6 +461,36 @@ Run args against the node owning key, following MOVED (map update plus retry, up
 ### `fn cscan(cl: Cluster, cursor: int, match: opt[str], count: opt[int],`
 
 SCAN steps one node only (slot 0's owner): cluster-wide iteration fans out per node with cluster_refresh's map in hand.
+
+### `fn multi(c: Conn, deadline: until) -> result[bool, str]`
+
+MULTI: true on +OK. The connection leaves the pool from here until EXEC or DISCARD.
+
+### `fn queue(c: Conn, args: [bytes],`
+
+Queue one command inside MULTI. Anything but +QUEUED aborts the whole transaction server-side; that surfaces here as an err, and a later EXEC answers EXECABORT.
+
+### `fn exec(c: Conn, deadline: until) -> result[[Reply], str]`
+
+EXEC: the queued replies in order, error elements included. A nil array means nothing ran (watched keys changed): an err, since no caller could use an empty success. Always leaves MULTI, even on EXECABORT -- the server does too.
+
+### `fn discard(c: Conn, deadline: until) -> result[bool, str]`
+
+DISCARD: true on +OK, back outside MULTI either way the server answers.
+
+### `fn watch(c: Conn, keys: [str],`
+
+WATCH/UNWATCH for optimistic locking: watch, read, MULTI, queue, EXEC; a nil EXEC (err here) means someone else wrote first, so retry the whole sequence.
+
+### `fn unwatch(c: Conn, deadline: until) -> result[bool, str]`
+
+### `fn eval(c: Conn, script: str, keys: [str], args: [bytes],`
+
+EVAL: the script's raw reply, whose shape depends on what it returns -- bulk, int, array, or error, decoded verbatim.
+
+### `fn evalsha(c: Conn, script: str, keys: [str], args: [bytes],`
+
+EVALSHA with automatic EVAL fallback: the common path sends only 40 hex characters; a server that never saw the script answers NOSCRIPT and the call transparently re-sends the source.
 
 ---
 
