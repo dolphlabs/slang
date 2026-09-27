@@ -1087,6 +1087,7 @@ const char *res_cname(CG *cg, const char *tv, const char *te) {
     r->te = xstrdup(te);
     r->cname =
         xasprintf("sl_res_%s_%s", sanitize_pkg(tv), sanitize_pkg(te));
+    r->body_state = 0;
     return r->cname;
 }
 

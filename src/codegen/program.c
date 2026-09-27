@@ -375,30 +375,92 @@ void emit_struct_fwd_decls(CG *cg) {
  * the case that needs it: `Pair[Point,Point]` is entered in the table
  * after every declared struct, but a struct declared BEFORE the use can
  * hold it by value. */
+static void emit_struct_body(CG *cg, StructDef *sd, unsigned char *state);
+
+/* A result instantiation both of whose payloads are non-GC holds v/e
+ * by value (see ctype_of), so its body needs their types complete;
+ * anything else holds pointers. */
+static int res_inst_is_value(CG *cg, ResInst *r);
+
+/* Find the registered instantiation for canonical type `t`
+ * ("result[T,E]"), or NULL if `t` is not a result type or was never
+ * registered (field/decoder types always are: canonicalization
+ * registers them on first sight). */
+static ResInst *res_find(CG *cg, const char *t) {
+    char *tv, *te;
+    if (!is_result(t))
+        return NULL;
+    result_te(t, &tv, &te);
+    for (int i = 0; i < cg->res.count; i++) {
+        if (!strcmp(cg->res.items[i].tv, tv) &&
+            !strcmp(cg->res.items[i].te, te))
+            return &cg->res.items[i];
+    }
+    return NULL;
+}
+
+/* Emit the body of a VALUE-type result instantiation (both payloads
+ * are non-GC, so v/e are held by value and the body needs their
+ * types complete). Dependencies first: a payload that is itself a
+ * value-type result is emitted recursively; a plain-struct payload
+ * pulls its struct body through the same state array the struct
+ * phase uses, so cross-kind cycles are caught, not infinitely
+ * recursed. Anything else (scalars, pointers, containers) needs
+ * nothing. Re-entry while in progress is a by-value cycle --
+ * result[S, E] where S (transitively) holds the same result --
+ * which would need an infinitely large value: a compile error with
+ * a fix, mirroring emit_struct_body's own self-containment error. */
+static void emit_res_value_body(CG *cg, ResInst *r, unsigned char *sstate,
+                                int line);
+
 static void emit_struct_body(CG *cg, StructDef *sd, unsigned char *state) {
     int self = -1;
     for (int i = 0; i < cg->structs.count; i++) {
         if (cg->structs.items[i] == sd)
             self = i;
     }
-    if (state[self])
+    if (state[self] == 2)
         return;
+    if (state[self] == 1)
+        /* Re-entered while in progress. A direct struct-through-
+         * struct loop never gets here (the field loop below errors
+         * first), so the path back runs through a result body: the
+         * struct holds a result that (transitively) holds it back,
+         * all by value -- infinitely large by construction. */
+        cg_error(sd->line,
+                 "cannot lay out struct '%s': it contains itself by value "
+                 "through a result payload, which would need an infinitely "
+                 "large value; hold one side in an opt[...], or make it a "
+                 "gc struct",
+                 sd->canonical);
     state[self] = 1; /* in progress */
     for (int j = 0; j < sd->nfields; j++) {
         StructDef *dep = struct_find_canon(cg, sd->ftypes[j]);
-        if (!dep || dep->is_gc)
-            continue; /* not a struct, or held by pointer */
-        int di = -1;
-        for (int i = 0; i < cg->structs.count; i++) {
-            if (cg->structs.items[i] == dep)
-                di = i;
+        if (dep && !dep->is_gc) {
+            int di = -1;
+            for (int i = 0; i < cg->structs.count; i++) {
+                if (cg->structs.items[i] == dep)
+                    di = i;
+            }
+            if (state[di] == 1)
+                cg_error(sd->line,
+                         "struct '%s' contains itself by value through field "
+                         "'%s'; hold it in an opt[...], or make it a gc struct",
+                         sd->canonical, sd->fields[j]);
+            emit_struct_body(cg, dep, state);
+            continue;
         }
-        if (state[di] == 1)
-            cg_error(sd->line,
-                     "struct '%s' contains itself by value through field "
-                     "'%s'; hold it in an opt[...], or make it a gc struct",
-                     sd->canonical, sd->fields[j]);
-        emit_struct_body(cg, dep, state);
+        /* A field of value-result type is held by value too (see
+         * ctype_of), so its body must precede this struct's -- the
+         * mirror image of a result holding a plain struct. Pointer-
+         * type results (any GC payload) need only the forward
+         * declaration above; anything else is not a type that can
+         * appear here by value. */
+        if (!dep) {
+            ResInst *ri = res_find(cg, sd->ftypes[j]);
+            if (ri && res_inst_is_value(cg, ri))
+                emit_res_value_body(cg, ri, state, sd->line);
+        }
     }
     char *m = mangle_struct(sd->canonical);
     emit_line(cg, "struct %s {", m);
@@ -412,13 +474,39 @@ static void emit_struct_body(CG *cg, StructDef *sd, unsigned char *state) {
     state[self] = 2;
 }
 
-void emit_struct_types(CG *cg) {
-    if (!cg->structs.count)
-        return;
-    unsigned char *state = (unsigned char *)xmalloc((size_t)cg->structs.count);
-    memset(state, 0, (size_t)cg->structs.count);
-    for (int i = 0; i < cg->structs.count; i++)
-        emit_struct_body(cg, cg->structs.items[i], state);
+/* Struct bodies and value-type result bodies share one dependency
+ * ordering because each can hold the other by value: a struct field
+ * of result[PlainT, E] type needs that result's body complete, and a
+ * result[PlainT, E] body needs PlainT's body complete. Pointer-held
+ * members (gc structs, containers, opts, pointer-type results) need
+ * only the forward declarations, never ordering. Bodies pull their
+ * dependencies recursively through the two state markings (struct
+ * `state`, result `body_state`), so a genuine by-value cycle --
+ * infinitely large by construction -- is a compile error naming the
+ * loop, not a silent miscompile or a stack overflow in the
+ * compiler. Anything no struct pulled in (a value-result no field
+ * needs) is swept at the end, so every instantiation still gets
+ * exactly one body. */
+void emit_struct_and_value_res_types(CG *cg) {
+    /* Emission runs more than once per CG (a dry run precedes the real
+     * one, sharing every table): body_state must start fresh each
+     * time, exactly like the struct `state` array below, or the real
+     * run would see the dry run's marks and emit nothing. */
+    for (int i = 0; i < cg->res.count; i++)
+        cg->res.items[i].body_state = 0;
+    unsigned char *sstate = NULL;
+    if (cg->structs.count) {
+        sstate = (unsigned char *)xmalloc((size_t)cg->structs.count);
+        memset(sstate, 0, (size_t)cg->structs.count);
+        for (int i = 0; i < cg->structs.count; i++)
+            emit_struct_body(cg, cg->structs.items[i], sstate);
+    }
+    for (int i = 0; i < cg->res.count; i++) {
+        ResInst *r = &cg->res.items[i];
+        if (res_inst_is_value(cg, r) && r->body_state != 2)
+            emit_res_value_body(cg, r, sstate, 0);
+    }
+    free(sstate);
 }
 
 /* Tier 10: emit a trace function for every struct type that has at
@@ -426,7 +514,8 @@ void emit_struct_types(CG *cg) {
  * through a heap object's own header. A struct with no GC-pointer
  * fields gets no tracer at all -- its allocation call sites pass NULL
  * directly rather than reference a no-op function (see
- * struct_has_gc_fields, core.c). Must run after emit_struct_types so
+ * struct_has_gc_fields, core.c). Must run after
+ * emit_struct_and_value_res_types so
  * every struct body (and therefore every field's real name) already
  * exists; field access is emitted directly (o->fieldname), not via
  * offsetof, since the real names are already known here.
@@ -482,15 +571,19 @@ void emit_struct_tracers(CG *cg) {
 }
 
 /* Emit C definitions for every monomorphized opt/result instantiation
- * discovered during generation. Emitted after struct types so inner
- * struct types are complete. */
+ * discovered during generation. Runs after struct bodies, so an opt
+ * body holding a plain struct by value sees a complete type.
+ * Value-type result bodies are NOT emitted here: they share struct
+ * bodies' dependency ordering (each can hold the other by value)
+ * and were already emitted by emit_struct_and_value_res_types, so
+ * they are skipped. */
 
 /* Forward-declares every opt/result instantiation discovered so far
- * (as an incomplete named-struct typedef) so struct bodies emitted
- * afterward can hold an opt[T]/result[T,E]-typed field -- those
- * fields are always pointers (see ctype_of), so an incomplete type
- * is all a struct body needs; the full definition follows later via
- * emit_opt_res_types. Must run before emit_struct_types. */
+ * (as an incomplete named-struct typedef) so later bodies can name
+ * them. Bodies follow in dependency order via
+ * emit_struct_and_value_res_types (structs and value-type results
+ * can hold each other by value) and emit_opt_res_types (everything
+ * else only holds pointers). Must run before either. */
 static int res_inst_is_value(CG *cg, ResInst *r) {
     return !type_is_gc_ptr(cg, r->tv) && !type_is_gc_ptr(cg, r->te);
 }
@@ -504,6 +597,43 @@ static void emit_res_struct_body(CG *cg, ResInst *r) {
     cg->indent--;
     emit_line(cg, "};");
     emit_line(cg, "");
+}
+
+/* One payload of a value-type result body: pull in whatever its
+ * by-value field needs. A plain-struct payload goes through the
+ * struct phase's own state array; a nested value-type result
+ * recurses here (its own body_state catches cycles). Pointer-held
+ * payloads (GC structs, containers, opts) and scalars need
+ * nothing: an incomplete typedef or the prelude already covers
+ * them. */
+static void emit_res_value_dep(CG *cg, const char *t, unsigned char *sstate,
+                               int line) {
+    StructDef *sd = struct_find_canon(cg, t);
+    if (sd) {
+        if (!sd->is_gc)
+            emit_struct_body(cg, sd, sstate);
+        return;
+    }
+    ResInst *inner = res_find(cg, t);
+    if (inner && res_inst_is_value(cg, inner))
+        emit_res_value_body(cg, inner, sstate, line);
+}
+
+static void emit_res_value_body(CG *cg, ResInst *r, unsigned char *sstate,
+                                int line) {
+    if (r->body_state == 2)
+        return;
+    if (r->body_state == 1)
+        cg_error(line,
+                 "cannot lay out result[%s, %s]: it contains itself by "
+                 "value, which would need an infinitely large value; hold "
+                 "one side in an opt[...], or make it a gc struct",
+                 r->tv, r->te);
+    r->body_state = 1;
+    emit_res_value_dep(cg, r->tv, sstate, line);
+    emit_res_value_dep(cg, r->te, sstate, line);
+    emit_res_struct_body(cg, r);
+    r->body_state = 2;
 }
 
 /* The slang fn type a declared function would have as a VALUE.
@@ -580,10 +710,6 @@ void emit_opt_res_forward_decls(CG *cg) {
     for (int i = 0; i < cg->res.count; i++)
         emit_line(cg, "typedef struct %s %s;", cg->res.items[i].cname,
                   cg->res.items[i].cname);
-    for (int i = 0; i < cg->res.count; i++) {
-        if (res_inst_is_value(cg, &cg->res.items[i]))
-            emit_res_struct_body(cg, &cg->res.items[i]);
-    }
 }
 
 void emit_opt_res_types(CG *cg) {
@@ -1078,7 +1204,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     emit_opt_res_forward_decls(cg);
     emit_struct_fwd_decls(cg);
     emit_fn_types(cg); /* between the struct names and the struct bodies */
-    emit_struct_types(cg);
+    emit_struct_and_value_res_types(cg);
     emit_struct_tracers(cg);
     emit_enum_tables(cg);
 
