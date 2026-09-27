@@ -3921,9 +3921,393 @@
           "name": "pool_close",
           "decl": "fn",
           "sig": "fn pool_close(p: Pool)",
-          "doc": "Closes every idle connection. Connections checked out are closed as they are released; acquire fails from now on.",
+          "doc": "Closes every idle connection. Connections checked out are closed as they are released; acquire fails from now on. Closes every idle connection. Connections checked out are closed as they are released; acquire fails from now on.",
           "file": "stdlib/redis/redis.sl",
-          "line": 1869
+          "line": 1871
+        },
+        {
+          "name": "Cluster",
+          "decl": "struct",
+          "sig": "gc struct Cluster",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1948
+        },
+        {
+          "name": "new_cluster",
+          "decl": "fn",
+          "sig": "fn new_cluster(cfg: Config, seeds: [str],",
+          "doc": "Connect to a cluster: try each seed until one serves CLUSTER SLOTS. Only database 0 exists in cluster mode. The deadline covers the whole bootstrap.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2042
+        },
+        {
+          "name": "cluster_refresh",
+          "decl": "fn",
+          "sig": "fn cluster_refresh(cl: Cluster, deadline: until) -> result[bool, str]",
+          "doc": "Re-learn the whole slot map from a known node (any current pool will do; the first one wins) or a bootstrap seed. Manual recovery for outages the MOVED path cannot see.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2071
+        },
+        {
+          "name": "cluster_do",
+          "decl": "fn",
+          "sig": "fn cluster_do(cl: Cluster, key: str, args: [bytes],",
+          "doc": "Run args against the node owning key, following MOVED (map update plus retry, up to MAX_REDIRECTS) and ASK (one directed ASKING hop, returned directly). Every other error returns verbatim.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2129
+        },
+        {
+          "name": "cluster_close",
+          "decl": "fn",
+          "sig": "fn cluster_close(cl: Cluster)",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2219
+        },
+        {
+          "name": "cping",
+          "decl": "fn",
+          "sig": "fn cping(cl: Cluster, deadline: until) -> result[str, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2247
+        },
+        {
+          "name": "cecho",
+          "decl": "fn",
+          "sig": "fn cecho(cl: Cluster, v: bytes, deadline: until) -> result[bytes, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2255
+        },
+        {
+          "name": "cget",
+          "decl": "fn",
+          "sig": "fn cget(cl: Cluster, key: str, deadline: until) -> result[opt[bytes], str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2263
+        },
+        {
+          "name": "cset",
+          "decl": "fn",
+          "sig": "fn cset(cl: Cluster, key: str, val: bytes,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2275
+        },
+        {
+          "name": "cset_ex",
+          "decl": "fn",
+          "sig": "fn cset_ex(cl: Cluster, key: str, seconds: int, val: bytes,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2288
+        },
+        {
+          "name": "cset_nx",
+          "decl": "fn",
+          "sig": "fn cset_nx(cl: Cluster, key: str, val: bytes,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2302
+        },
+        {
+          "name": "cdel_keys",
+          "decl": "fn",
+          "sig": "fn cdel_keys(cl: Cluster, keys: [str],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2312
+        },
+        {
+          "name": "cexists",
+          "decl": "fn",
+          "sig": "fn cexists(cl: Cluster, keys: [str],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2328
+        },
+        {
+          "name": "cexpire",
+          "decl": "fn",
+          "sig": "fn cexpire(cl: Cluster, key: str, seconds: int,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2344
+        },
+        {
+          "name": "cpexpire",
+          "decl": "fn",
+          "sig": "fn cpexpire(cl: Cluster, key: str, ms: int,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2354
+        },
+        {
+          "name": "cttl",
+          "decl": "fn",
+          "sig": "fn cttl(cl: Cluster, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2364
+        },
+        {
+          "name": "cpttl",
+          "decl": "fn",
+          "sig": "fn cpttl(cl: Cluster, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2373
+        },
+        {
+          "name": "cpersist",
+          "decl": "fn",
+          "sig": "fn cpersist(cl: Cluster, key: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2382
+        },
+        {
+          "name": "cincr",
+          "decl": "fn",
+          "sig": "fn cincr(cl: Cluster, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2392
+        },
+        {
+          "name": "cdecr",
+          "decl": "fn",
+          "sig": "fn cdecr(cl: Cluster, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2401
+        },
+        {
+          "name": "cincr_by",
+          "decl": "fn",
+          "sig": "fn cincr_by(cl: Cluster, key: str, n: int,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2410
+        },
+        {
+          "name": "cdecr_by",
+          "decl": "fn",
+          "sig": "fn cdecr_by(cl: Cluster, key: str, n: int,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2420
+        },
+        {
+          "name": "cappend",
+          "decl": "fn",
+          "sig": "fn cappend(cl: Cluster, key: str, val: bytes,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2430
+        },
+        {
+          "name": "cstrlen",
+          "decl": "fn",
+          "sig": "fn cstrlen(cl: Cluster, key: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2440
+        },
+        {
+          "name": "cmget",
+          "decl": "fn",
+          "sig": "fn cmget(cl: Cluster, keys: [str],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2450
+        },
+        {
+          "name": "cmset",
+          "decl": "fn",
+          "sig": "fn cmset(cl: Cluster, kv: map[str]bytes,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2476
+        },
+        {
+          "name": "chset",
+          "decl": "fn",
+          "sig": "fn chset(cl: Cluster, key: str, field: str, val: bytes,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2503
+        },
+        {
+          "name": "chget",
+          "decl": "fn",
+          "sig": "fn chget(cl: Cluster, key: str, field: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2513
+        },
+        {
+          "name": "chdel",
+          "decl": "fn",
+          "sig": "fn chdel(cl: Cluster, key: str, fields: [str],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2526
+        },
+        {
+          "name": "chexists",
+          "decl": "fn",
+          "sig": "fn chexists(cl: Cluster, key: str, field: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2539
+        },
+        {
+          "name": "chlen",
+          "decl": "fn",
+          "sig": "fn chlen(cl: Cluster, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2549
+        },
+        {
+          "name": "chincr_by",
+          "decl": "fn",
+          "sig": "fn chincr_by(cl: Cluster, key: str, field: str, n: int,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2558
+        },
+        {
+          "name": "clpush",
+          "decl": "fn",
+          "sig": "fn clpush(cl: Cluster, key: str, vals: [bytes],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2569
+        },
+        {
+          "name": "crpush",
+          "decl": "fn",
+          "sig": "fn crpush(cl: Cluster, key: str, vals: [bytes],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2582
+        },
+        {
+          "name": "clpop",
+          "decl": "fn",
+          "sig": "fn clpop(cl: Cluster, key: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2595
+        },
+        {
+          "name": "crpop",
+          "decl": "fn",
+          "sig": "fn crpop(cl: Cluster, key: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2608
+        },
+        {
+          "name": "cllen",
+          "decl": "fn",
+          "sig": "fn cllen(cl: Cluster, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2621
+        },
+        {
+          "name": "csadd",
+          "decl": "fn",
+          "sig": "fn csadd(cl: Cluster, key: str, members: [bytes],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2630
+        },
+        {
+          "name": "csrem",
+          "decl": "fn",
+          "sig": "fn csrem(cl: Cluster, key: str, members: [bytes],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2643
+        },
+        {
+          "name": "cscard",
+          "decl": "fn",
+          "sig": "fn cscard(cl: Cluster, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2656
+        },
+        {
+          "name": "csismember",
+          "decl": "fn",
+          "sig": "fn csismember(cl: Cluster, key: str, member: bytes,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2665
+        },
+        {
+          "name": "czadd",
+          "decl": "fn",
+          "sig": "fn czadd(cl: Cluster, key: str, members: map[str]float,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2675
+        },
+        {
+          "name": "czrem",
+          "decl": "fn",
+          "sig": "fn czrem(cl: Cluster, key: str, members: [bytes],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2689
+        },
+        {
+          "name": "czcard",
+          "decl": "fn",
+          "sig": "fn czcard(cl: Cluster, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2702
+        },
+        {
+          "name": "czscore",
+          "decl": "fn",
+          "sig": "fn czscore(cl: Cluster, key: str, member: bytes,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2711
+        },
+        {
+          "name": "ckey_type",
+          "decl": "fn",
+          "sig": "fn ckey_type(cl: Cluster, key: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2731
+        },
+        {
+          "name": "crename",
+          "decl": "fn",
+          "sig": "fn crename(cl: Cluster, key: str, newkey: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2741
+        },
+        {
+          "name": "cscan",
+          "decl": "fn",
+          "sig": "fn cscan(cl: Cluster, cursor: int, match: opt[str], count: opt[int],",
+          "doc": "SCAN steps one node only (slot 0's owner): cluster-wide iteration fans out per node with cluster_refresh's map in hand.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2760
         }
       ]
     },

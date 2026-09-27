@@ -1866,6 +1866,8 @@ pub fn pool_do(p: Pool, args: [bytes],
 
 // Closes every idle connection. Connections checked out are closed
 // as they are released; acquire fails from now on.
+// Closes every idle connection. Connections checked out are closed
+// as they are released; acquire fails from now on.
 pub fn pool_close(p: Pool) {
     mutex_lock(p.lock);
     p.closed = true;
@@ -1875,4 +1877,941 @@ pub fn pool_close(p: Pool) {
     let empty: [Conn] = [];
     p.idle = empty;
     mutex_unlock(p.lock);
+}
+
+// ---- cluster ---------------------------------------------------------
+// Routing over many primaries by hash slot. Each known node address
+// ("host:port") owns a small Pool; a mu-guarded map says which slots
+// live where. A MOVED reply refreshes one slot and retries; an ASK
+// reply makes one directed hop (ASKING first) without touching the
+// map. Anything else -- CROSSSLOT, CLUSTERDOWN, TRYAGAIN -- is the
+// caller's to read, exactly as the server wrote it.
+//
+// Multi-key commands must fit one slot: the cluster wrappers check
+// every key up front and refuse CROSSSLOT locally, before any byte
+// is sent. Replicas are not read: primaries only in this phase.
+
+let MAX_REDIRECTS = 5;
+
+gc struct Addr {
+    host: str,
+    port: int,
+}
+
+fn split_addr(addr: str) -> result[Addr, str] {
+    let host = addr;
+    let port = 6379;
+    if strings.has_prefix(host, "[") {
+        let close = strings.find(host, "]");
+        if close < 0 {
+            return err("bad address");
+        }
+        let after = strings.slice(host, close + 1, len(host));
+        host = strings.slice(host, 1, close);
+        if len(after) > 0 {
+            if !strings.has_prefix(after, ":") {
+                return err("bad address");
+            }
+            let pr = to_int(strings.slice(after, 1, len(after)));
+            guard let p = pr else {
+                return err("bad port in address");
+            }
+            port = p;
+        }
+    } else {
+        let colon = strings.rfind(host, ":");
+        if colon < 0 {
+            return err("address must be host:port");
+        }
+        let pr = to_int(strings.slice(host, colon + 1, len(host)));
+        guard let p = pr else {
+            return err("bad port in address");
+        }
+        port = p;
+        host = strings.slice(host, 0, colon);
+    }
+    if len(host) == 0 || port <= 0 || port > 65535 {
+        return err("bad address");
+    }
+    return ok(Addr { host: host, port: port });
+}
+
+fn node_config(base: Config, host: str, port: int) -> Config {
+    return Config { host: host, port: port, username: base.username,
+                    password: base.password, db: 0, sslmode: base.sslmode,
+                    ca_path: base.ca_path, tls_ctx: base.tls_ctx,
+                    pool_size: base.pool_size,
+                    connect_timeout: base.connect_timeout,
+                    io_timeout: base.io_timeout };
+}
+
+pub gc struct Cluster {
+    cfg: Config,
+    mu: mutex,
+    // Slot -> "host:port". Only assigned slots are present; absent
+    // means unknown (refresh and retry).
+    slots: map[int]str,
+    // Node address -> its pool.
+    pools: map[str]Pool,
+    // Bootstrap seeds, kept for refresh when no pool exists yet.
+    seeds: [str],
+    closed: bool,
+}
+
+fn cluster_pool_locked(cl: Cluster, addr: str) -> result[Pool, str] {
+    if has(cl.pools, addr) {
+        return ok(cl.pools[addr]);
+    }
+    // The caller holds cl.mu; pools serialize themselves.
+    let ar = split_addr(addr);
+    guard let a = ar else let e = err_of(ar) {
+        return err(e);
+    }
+    let qr = new_pool_config(node_config(cl.cfg, a.host, a.port),
+                             cl.cfg.pool_size);
+    guard let pool = qr else let e = err_of(qr) {
+        return err(e);
+    }
+    cl.pools[addr] = pool;
+    return ok(pool);
+}
+
+// Learn the slot map from one node. Returns "" or the error.
+fn bootstrap_from(cl: Cluster, addr: str, deadline: until) -> str {
+    let ar = split_addr(addr);
+    guard let a = ar else let e = err_of(ar) {
+        return e;
+    }
+    let cr = connect_config(node_config(cl.cfg, a.host, a.port),
+                            deadline);
+    guard let c = cr else let e = err_of(cr) {
+        return e;
+    }
+    let sr = do(c, [to_bytes("CLUSTER"), to_bytes("SLOTS")], deadline);
+    close(c);
+    guard let reply = sr else let e = err_of(sr) {
+        return e;
+    }
+    if reply.kind != REPLY_ARRAY || reply.is_nil {
+        return "CLUSTER SLOTS: expected an array";
+    }
+    let count = 0;
+    for entry in reply.items {
+        if entry.kind != REPLY_ARRAY || entry.is_nil ||
+           len(entry.items) < 3 {
+            return "CLUSTER SLOTS: bad entry";
+        }
+        if entry.items[0].kind != REPLY_INT ||
+           entry.items[1].kind != REPLY_INT {
+            return "CLUSTER SLOTS: bad range";
+        }
+        let start = entry.items[0].num;
+        let end = entry.items[1].num;
+        if start < 0 || end > 16383 || start > end {
+            return "CLUSTER SLOTS: range out of bounds";
+        }
+        let master = entry.items[2];
+        if master.kind != REPLY_ARRAY || master.is_nil ||
+           len(master.items) < 2 {
+            return "CLUSTER SLOTS: bad node";
+        }
+        if master.items[0].kind != REPLY_BULK ||
+           master.items[1].kind != REPLY_INT {
+            return "CLUSTER SLOTS: bad endpoint";
+        }
+        guard let ip = master.items[0].bulk else {
+            return "CLUSTER SLOTS: nil endpoint";
+        }
+        let node = to_str(ip) + ":" + to_str(master.items[1].num);
+        let s = start;
+        while s <= end {
+            cl.slots[s] = node;
+            s = s + 1;
+        }
+        count = count + 1;
+    }
+    if count == 0 {
+        return "CLUSTER SLOTS: no slots assigned";
+    }
+    return "";
+}
+
+// Connect to a cluster: try each seed until one serves CLUSTER
+// SLOTS. Only database 0 exists in cluster mode. The deadline
+// covers the whole bootstrap.
+pub fn new_cluster(cfg: Config, seeds: [str],
+                   deadline: until) -> result[Cluster, str] {
+    if cfg.db != 0 {
+        return err("cluster mode only supports database 0");
+    }
+    if cfg.pool_size < 1 {
+        return err("pool_size must be at least 1");
+    }
+    if len(seeds) == 0 {
+        return err("at least one seed is required");
+    }
+    let slots: map[int]str = {};
+    let pools: map[str]Pool = {};
+    let cl = Cluster { cfg: cfg, mu: make_mutex(), slots: slots,
+                       pools: pools, seeds: seeds, closed: false };
+    let why = "";
+    for seed in seeds {
+        let e = bootstrap_from(cl, seed, deadline);
+        if e == "" {
+            return ok(cl);
+        }
+        why = e;
+    }
+    return err(why);
+}
+
+// Re-learn the whole slot map from a known node (any current pool
+// will do; the first one wins) or a bootstrap seed. Manual recovery
+// for outages the MOVED path cannot see.
+pub fn cluster_refresh(cl: Cluster, deadline: until) -> result[bool, str] {
+    mutex_lock(cl.mu);
+    if cl.closed {
+        mutex_unlock(cl.mu);
+        return err("cluster is closed");
+    }
+    let addrs: [str] = [];
+    for addr, pool in cl.pools {
+        push(addrs, addr);
+    }
+    for seed in cl.seeds {
+        push(addrs, seed);
+    }
+    mutex_unlock(cl.mu);
+    let why = "no known nodes";
+    for addr in addrs {
+        let e = bootstrap_from(cl, addr, deadline);
+        if e == "" {
+            return ok(true);
+        }
+        why = e;
+    }
+    return err(why);
+}
+
+// "MOVED 12182 127.0.0.1:6381" -> slot 12182 at that address.
+// "ASK 5 ..." parses the same; only the caller decides whether the
+// map learns it.
+fn parse_redirect(text: str) -> result[Addr, str] {
+    let parts = strings.split(text, " ");
+    if len(parts) != 3 {
+        return err("bad redirect");
+    }
+    let sr = to_int(parts[1]);
+    guard let n = sr else {
+        return err("bad redirect slot");
+    }
+    if n < 0 || n > 16383 {
+        return err("bad redirect slot");
+    }
+    let ar = split_addr(parts[2]);
+    guard let a = ar else let e = err_of(ar) {
+        return err(e);
+    }
+    return ok(a);
+}
+
+fn redirect_addr(text: str) -> str {
+    let parts = strings.split(text, " ");
+    if len(parts) != 3 {
+        return "";
+    }
+    return parts[2];
+}
+
+// Run args against the node owning key, following MOVED (map update
+// plus retry, up to MAX_REDIRECTS) and ASK (one directed ASKING hop,
+// returned directly). Every other error returns verbatim.
+pub fn cluster_do(cl: Cluster, key: str, args: [bytes],
+                  deadline: until) -> result[Reply, str] {
+    let tries = 0;
+    while tries < 1 + MAX_REDIRECTS {
+        tries = tries + 1;
+        mutex_lock(cl.mu);
+        if cl.closed {
+            mutex_unlock(cl.mu);
+            return err("cluster is closed");
+        }
+        let s = slot(key);
+        if !has(cl.slots, s) {
+            mutex_unlock(cl.mu);
+            let fr = cluster_refresh(cl, deadline);
+            guard let okv = fr else let e = err_of(fr) {
+                return err(e);
+            }
+            continue;
+        }
+        let addr = cl.slots[s];
+        let pr = cluster_pool_locked(cl, addr);
+        mutex_unlock(cl.mu);
+        guard let pool = pr else let e = err_of(pr) {
+            return err(e);
+        }
+        let ar = acquire(pool, deadline);
+        guard let c = ar else let e = err_of(ar) {
+            return err(e);
+        }
+        let r = do(c, args, deadline);
+        release(pool, c);
+        guard let reply = r else let e = err_of(r) {
+            if strings.has_prefix(e, "MOVED ") {
+                let mr = parse_redirect(e);
+                guard let a = mr else {
+                    return err(e);
+                }
+                mutex_lock(cl.mu);
+                cl.slots[s] = a.host + ":" + to_str(a.port);
+                mutex_unlock(cl.mu);
+                continue;
+            }
+            if strings.has_prefix(e, "ASK ") {
+                let dst = redirect_addr(e);
+                if dst == "" {
+                    return err(e);
+                }
+                return cluster_ask(cl, dst, args, deadline);
+            }
+            return err(e);
+        }
+        return ok(reply);
+    }
+    return err("cluster: too many redirects");
+}
+
+// One ASK hop: a fresh connection, ASKING first, then the command.
+// The map learns nothing -- the slot is only visiting.
+fn cluster_ask(cl: Cluster, dst: str, args: [bytes],
+               deadline: until) -> result[Reply, str] {
+    let ar = split_addr(dst);
+    guard let a = ar else let e = err_of(ar) {
+        return err(e);
+    }
+    let cr = connect_config(node_config(cl.cfg, a.host, a.port),
+                            deadline);
+    guard let c = cr else let e = err_of(cr) {
+        return err(e);
+    }
+    mutex_lock(c.lock);
+    let r = exchange(c, [to_bytes("ASKING")], deadline);
+    guard let reply = r else let e = err_of(r) {
+        mutex_unlock(c.lock);
+        close(c);
+        return err(e);
+    }
+    if reply.kind != REPLY_SIMPLE {
+        mutex_unlock(c.lock);
+        close(c);
+        return err("ASKING: expected a status reply");
+    }
+    let q = exchange(c, args, deadline);
+    mutex_unlock(c.lock);
+    close(c);
+    guard let final = q else let e = err_of(q) {
+        return err(e);
+    }
+    return ok(final);
+}
+
+pub fn cluster_close(cl: Cluster) {
+    mutex_lock(cl.mu);
+    cl.closed = true;
+    for addr, pool in cl.pools {
+        pool_close(pool);
+    }
+    mutex_unlock(cl.mu);
+}
+
+// ---- cluster commands ------------------------------------------------
+// One thin wrapper per single-key command, routed by that key. Shapes
+// and errors match the standalone twins exactly; only the routing
+// differs. Multi-key commands check every key first and refuse
+// CROSSSLOT locally, with the server's own text.
+
+fn check_same_slot(keys: [str]) -> result[int, str] {
+    if len(keys) == 0 {
+        return err("at least one key is required");
+    }
+    let s = slot(keys[0]);
+    for k in keys {
+        if slot(k) != s {
+            return err("CROSSSLOT Keys in request don't hash to the same slot");
+        }
+    }
+    return ok(s);
+}
+
+pub fn cping(cl: Cluster, deadline: until) -> result[str, str] {
+    let r = cluster_do(cl, "", [to_bytes("PING")], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_simple(reply, "PING");
+}
+
+pub fn cecho(cl: Cluster, v: bytes, deadline: until) -> result[bytes, str] {
+    let r = cluster_do(cl, "", [to_bytes("ECHO"), v], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_bulk(reply, "ECHO");
+}
+
+pub fn cget(cl: Cluster, key: str, deadline: until) -> result[opt[bytes], str] {
+    let r = cluster_do(cl, key, [to_bytes("GET"), to_bytes(key)],
+                       deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind != REPLY_BULK {
+        return err("GET: expected a bulk reply");
+    }
+    return ok(reply.bulk);
+}
+
+pub fn cset(cl: Cluster, key: str, val: bytes,
+            deadline: until) -> result[bool, str] {
+    let r = cluster_do(cl, key, [to_bytes("SET"), to_bytes(key), val],
+                       deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind != REPLY_SIMPLE {
+        return err("SET: expected a status reply");
+    }
+    return ok(true);
+}
+
+pub fn cset_ex(cl: Cluster, key: str, seconds: int, val: bytes,
+               deadline: until) -> result[bool, str] {
+    let r = cluster_do(cl, key, [to_bytes("SET"), to_bytes(key), val,
+                                 to_bytes("EX"),
+                                 to_bytes(to_str(seconds))], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind != REPLY_SIMPLE {
+        return err("SET: expected a status reply");
+    }
+    return ok(true);
+}
+
+pub fn cset_nx(cl: Cluster, key: str, val: bytes,
+               deadline: until) -> result[bool, str] {
+    let r = cluster_do(cl, key, [to_bytes("SETNX"), to_bytes(key), val],
+                       deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int_bool(reply, "SETNX");
+}
+
+pub fn cdel_keys(cl: Cluster, keys: [str],
+                 deadline: until) -> result[int, str] {
+    guard let s = check_same_slot(keys) else let e = err_of(check_same_slot(keys)) {
+        return err(e);
+    }
+    let args: [bytes] = [to_bytes("DEL")];
+    for k in keys {
+        push(args, to_bytes(k));
+    }
+    let r = cluster_do(cl, keys[0], args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "DEL");
+}
+
+pub fn cexists(cl: Cluster, keys: [str],
+               deadline: until) -> result[int, str] {
+    guard let s = check_same_slot(keys) else let e = err_of(check_same_slot(keys)) {
+        return err(e);
+    }
+    let args: [bytes] = [to_bytes("EXISTS")];
+    for k in keys {
+        push(args, to_bytes(k));
+    }
+    let r = cluster_do(cl, keys[0], args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "EXISTS");
+}
+
+pub fn cexpire(cl: Cluster, key: str, seconds: int,
+               deadline: until) -> result[bool, str] {
+    let r = cluster_do(cl, key, [to_bytes("EXPIRE"), to_bytes(key),
+                                 to_bytes(to_str(seconds))], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int_bool(reply, "EXPIRE");
+}
+
+pub fn cpexpire(cl: Cluster, key: str, ms: int,
+                deadline: until) -> result[bool, str] {
+    let r = cluster_do(cl, key, [to_bytes("PEXPIRE"), to_bytes(key),
+                                 to_bytes(to_str(ms))], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int_bool(reply, "PEXPIRE");
+}
+
+pub fn cttl(cl: Cluster, key: str, deadline: until) -> result[int, str] {
+    let r = cluster_do(cl, key, [to_bytes("TTL"), to_bytes(key)],
+                       deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "TTL");
+}
+
+pub fn cpttl(cl: Cluster, key: str, deadline: until) -> result[int, str] {
+    let r = cluster_do(cl, key, [to_bytes("PTTL"), to_bytes(key)],
+                       deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "PTTL");
+}
+
+pub fn cpersist(cl: Cluster, key: str,
+                deadline: until) -> result[bool, str] {
+    let r = cluster_do(cl, key, [to_bytes("PERSIST"), to_bytes(key)],
+                       deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int_bool(reply, "PERSIST");
+}
+
+pub fn cincr(cl: Cluster, key: str, deadline: until) -> result[int, str] {
+    let r = cluster_do(cl, key, [to_bytes("INCR"), to_bytes(key)],
+                       deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "INCR");
+}
+
+pub fn cdecr(cl: Cluster, key: str, deadline: until) -> result[int, str] {
+    let r = cluster_do(cl, key, [to_bytes("DECR"), to_bytes(key)],
+                       deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "DECR");
+}
+
+pub fn cincr_by(cl: Cluster, key: str, n: int,
+                deadline: until) -> result[int, str] {
+    let r = cluster_do(cl, key, [to_bytes("INCRBY"), to_bytes(key),
+                                 to_bytes(to_str(n))], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "INCRBY");
+}
+
+pub fn cdecr_by(cl: Cluster, key: str, n: int,
+                deadline: until) -> result[int, str] {
+    let r = cluster_do(cl, key, [to_bytes("DECRBY"), to_bytes(key),
+                                 to_bytes(to_str(n))], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "DECRBY");
+}
+
+pub fn cappend(cl: Cluster, key: str, val: bytes,
+               deadline: until) -> result[int, str] {
+    let r = cluster_do(cl, key, [to_bytes("APPEND"), to_bytes(key), val],
+                       deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "APPEND");
+}
+
+pub fn cstrlen(cl: Cluster, key: str,
+               deadline: until) -> result[int, str] {
+    let r = cluster_do(cl, key, [to_bytes("STRLEN"), to_bytes(key)],
+                       deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "STRLEN");
+}
+
+pub fn cmget(cl: Cluster, keys: [str],
+             deadline: until) -> result[[opt[bytes]], str] {
+    guard let s = check_same_slot(keys) else let e = err_of(check_same_slot(keys)) {
+        return err(e);
+    }
+    let args: [bytes] = [to_bytes("MGET")];
+    for k in keys {
+        push(args, to_bytes(k));
+    }
+    let r = cluster_do(cl, keys[0], args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    guard let items = as_array(reply, "MGET") else let e = err_of(as_array(reply, "MGET")) {
+        return err(e);
+    }
+    let out: [opt[bytes]] = [];
+    for it in items {
+        if it.kind != REPLY_BULK {
+            return err("MGET: expected bulk elements");
+        }
+        push(out, it.bulk);
+    }
+    return ok(out);
+}
+
+pub fn cmset(cl: Cluster, kv: map[str]bytes,
+             deadline: until) -> result[bool, str] {
+    let args: [bytes] = [to_bytes("MSET")];
+    let first = "";
+    for k, v in kv {
+        if first == "" {
+            first = k;
+        }
+        if slot(k) != slot(first) {
+            return err("CROSSSLOT Keys in request don't hash to the same slot");
+        }
+        push(args, to_bytes(k));
+        push(args, v);
+    }
+    if first == "" {
+        return err("at least one key is required");
+    }
+    let r = cluster_do(cl, first, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind != REPLY_SIMPLE {
+        return err("MSET: expected a status reply");
+    }
+    return ok(true);
+}
+
+pub fn chset(cl: Cluster, key: str, field: str, val: bytes,
+             deadline: until) -> result[int, str] {
+    let r = cluster_do(cl, key, [to_bytes("HSET"), to_bytes(key),
+                                 to_bytes(field), val], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "HSET");
+}
+
+pub fn chget(cl: Cluster, key: str, field: str,
+             deadline: until) -> result[opt[bytes], str] {
+    let r = cluster_do(cl, key, [to_bytes("HGET"), to_bytes(key),
+                                 to_bytes(field)], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind != REPLY_BULK {
+        return err("HGET: expected a bulk reply");
+    }
+    return ok(reply.bulk);
+}
+
+pub fn chdel(cl: Cluster, key: str, fields: [str],
+             deadline: until) -> result[int, str] {
+    let args: [bytes] = [to_bytes("HDEL"), to_bytes(key)];
+    for f in fields {
+        push(args, to_bytes(f));
+    }
+    let r = cluster_do(cl, key, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "HDEL");
+}
+
+pub fn chexists(cl: Cluster, key: str, field: str,
+                deadline: until) -> result[bool, str] {
+    let r = cluster_do(cl, key, [to_bytes("HEXISTS"), to_bytes(key),
+                                 to_bytes(field)], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int_bool(reply, "HEXISTS");
+}
+
+pub fn chlen(cl: Cluster, key: str, deadline: until) -> result[int, str] {
+    let r = cluster_do(cl, key, [to_bytes("HLEN"), to_bytes(key)],
+                       deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "HLEN");
+}
+
+pub fn chincr_by(cl: Cluster, key: str, field: str, n: int,
+                 deadline: until) -> result[int, str] {
+    let r = cluster_do(cl, key, [to_bytes("HINCRBY"), to_bytes(key),
+                                 to_bytes(field),
+                                 to_bytes(to_str(n))], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "HINCRBY");
+}
+
+pub fn clpush(cl: Cluster, key: str, vals: [bytes],
+              deadline: until) -> result[int, str] {
+    let args: [bytes] = [to_bytes("LPUSH"), to_bytes(key)];
+    for v in vals {
+        push(args, v);
+    }
+    let r = cluster_do(cl, key, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "LPUSH");
+}
+
+pub fn crpush(cl: Cluster, key: str, vals: [bytes],
+              deadline: until) -> result[int, str] {
+    let args: [bytes] = [to_bytes("RPUSH"), to_bytes(key)];
+    for v in vals {
+        push(args, v);
+    }
+    let r = cluster_do(cl, key, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "RPUSH");
+}
+
+pub fn clpop(cl: Cluster, key: str,
+             deadline: until) -> result[opt[bytes], str] {
+    let r = cluster_do(cl, key, [to_bytes("LPOP"), to_bytes(key)],
+                       deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind != REPLY_BULK {
+        return err("LPOP: expected a bulk reply");
+    }
+    return ok(reply.bulk);
+}
+
+pub fn crpop(cl: Cluster, key: str,
+             deadline: until) -> result[opt[bytes], str] {
+    let r = cluster_do(cl, key, [to_bytes("RPOP"), to_bytes(key)],
+                       deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind != REPLY_BULK {
+        return err("RPOP: expected a bulk reply");
+    }
+    return ok(reply.bulk);
+}
+
+pub fn cllen(cl: Cluster, key: str, deadline: until) -> result[int, str] {
+    let r = cluster_do(cl, key, [to_bytes("LLEN"), to_bytes(key)],
+                       deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "LLEN");
+}
+
+pub fn csadd(cl: Cluster, key: str, members: [bytes],
+             deadline: until) -> result[int, str] {
+    let args: [bytes] = [to_bytes("SADD"), to_bytes(key)];
+    for v in members {
+        push(args, v);
+    }
+    let r = cluster_do(cl, key, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "SADD");
+}
+
+pub fn csrem(cl: Cluster, key: str, members: [bytes],
+             deadline: until) -> result[int, str] {
+    let args: [bytes] = [to_bytes("SREM"), to_bytes(key)];
+    for v in members {
+        push(args, v);
+    }
+    let r = cluster_do(cl, key, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "SREM");
+}
+
+pub fn cscard(cl: Cluster, key: str, deadline: until) -> result[int, str] {
+    let r = cluster_do(cl, key, [to_bytes("SCARD"), to_bytes(key)],
+                       deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "SCARD");
+}
+
+pub fn csismember(cl: Cluster, key: str, member: bytes,
+                  deadline: until) -> result[bool, str] {
+    let r = cluster_do(cl, key, [to_bytes("SISMEMBER"), to_bytes(key),
+                                 member], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int_bool(reply, "SISMEMBER");
+}
+
+pub fn czadd(cl: Cluster, key: str, members: map[str]float,
+             deadline: until) -> result[int, str] {
+    let args: [bytes] = [to_bytes("ZADD"), to_bytes(key)];
+    for m, s in members {
+        push(args, to_bytes(strings.from_float(s)));
+        push(args, to_bytes(m));
+    }
+    let r = cluster_do(cl, key, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "ZADD");
+}
+
+pub fn czrem(cl: Cluster, key: str, members: [bytes],
+             deadline: until) -> result[int, str] {
+    let args: [bytes] = [to_bytes("ZREM"), to_bytes(key)];
+    for v in members {
+        push(args, v);
+    }
+    let r = cluster_do(cl, key, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "ZREM");
+}
+
+pub fn czcard(cl: Cluster, key: str, deadline: until) -> result[int, str] {
+    let r = cluster_do(cl, key, [to_bytes("ZCARD"), to_bytes(key)],
+                       deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "ZCARD");
+}
+
+pub fn czscore(cl: Cluster, key: str, member: bytes,
+               deadline: until) -> result[opt[float], str] {
+    let r = cluster_do(cl, key, [to_bytes("ZSCORE"), to_bytes(key),
+                                 member], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind == REPLY_BULK {
+        guard let b = reply.bulk else {
+            return ok(none);
+        }
+        let fr = to_float(to_str(b));
+        guard let f = fr else {
+            return err("ZSCORE: bad score");
+        }
+        return ok(some(f));
+    }
+    return err("ZSCORE: expected a bulk reply");
+}
+
+pub fn ckey_type(cl: Cluster, key: str,
+                 deadline: until) -> result[str, str] {
+    let r = cluster_do(cl, key, [to_bytes("TYPE"), to_bytes(key)],
+                       deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_simple(reply, "TYPE");
+}
+
+pub fn crename(cl: Cluster, key: str, newkey: str,
+               deadline: until) -> result[bool, str] {
+    let keys = [key, newkey];
+    guard let s = check_same_slot(keys) else let e = err_of(check_same_slot(keys)) {
+        return err(e);
+    }
+    let r = cluster_do(cl, key, [to_bytes("RENAME"), to_bytes(key),
+                                 to_bytes(newkey)], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind != REPLY_SIMPLE {
+        return err("RENAME: expected a status reply");
+    }
+    return ok(true);
+}
+
+// SCAN steps one node only (slot 0's owner): cluster-wide iteration
+// fans out per node with cluster_refresh's map in hand.
+pub fn cscan(cl: Cluster, cursor: int, match: opt[str], count: opt[int],
+             deadline: until) -> result[ScanOut, str] {
+    let args: [bytes] = [to_bytes("SCAN"), to_bytes(to_str(cursor))];
+    guard let m = match else {
+        return cscan_count(cl, args, count, deadline);
+    }
+    push(args, to_bytes("MATCH"));
+    push(args, to_bytes(m));
+    return cscan_count(cl, args, count, deadline);
+}
+
+fn cscan_count(cl: Cluster, args: [bytes], count: opt[int],
+               deadline: until) -> result[ScanOut, str] {
+    guard let n = count else {
+        return cscan_run(cl, args, deadline);
+    }
+    push(args, to_bytes("COUNT"));
+    push(args, to_bytes(to_str(n)));
+    return cscan_run(cl, args, deadline);
+}
+
+fn cscan_run(cl: Cluster, args: [bytes],
+             deadline: until) -> result[ScanOut, str] {
+    let r = cluster_do(cl, "", args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    guard let items = as_array(reply, "SCAN") else let e = err_of(as_array(reply, "SCAN")) {
+        return err(e);
+    }
+    if len(items) != 2 {
+        return err("SCAN: expected two elements");
+    }
+    if items[0].kind != REPLY_BULK {
+        return err("SCAN: bad cursor");
+    }
+    guard let cb = items[0].bulk else {
+        return err("SCAN: nil cursor");
+    }
+    let cr = to_int(to_str(cb));
+    guard let cursor = cr else {
+        return err("SCAN: bad cursor");
+    }
+    if items[1].kind != REPLY_ARRAY || items[1].is_nil {
+        return err("SCAN: bad key list");
+    }
+    let keys: [str] = [];
+    for it in items[1].items {
+        if it.kind != REPLY_BULK {
+            return err("SCAN: expected bulk keys");
+        }
+        guard let b = it.bulk else {
+            return err("SCAN: nil key");
+        }
+        push(keys, to_str(b));
+    }
+    return ok(ScanOut { cursor: cursor, keys: keys });
 }

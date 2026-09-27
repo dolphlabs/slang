@@ -17,3 +17,9 @@ ok pool-reuse
 ok pool-exhaust
 ok pool-discard
 ok pool-close
+ok cluster-route
+ok cluster-moved
+ok cluster-ask
+ok cluster-crossslot
+ok cluster-seeds-down
+ok cluster-wrappers

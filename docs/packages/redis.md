@@ -62,14 +62,15 @@ redis.close(c);
 | sorted sets | `zadd`, `zrange`, `zrange_scores`, `zrank`, `zscore`, `zrem`, `zcard`, `zincr_by` |
 | keys | `key_type`, `rename`, `rename_nx`, `scan` (`KEYS` omitted on purpose) |
 | pool | `new_pool`, `new_pool_config`, `acquire`, `release`, `pool_do`, `pool_close` |
+| cluster | `new_cluster`, `cluster_do`, `cluster_refresh`, `cluster_close`, `c*` typed wrappers, same-slot multi-key checks |
 
 A reply is a `redis.Reply`: `kind` is one of `REPLY_SIMPLE`,
 `REPLY_ERROR`, `REPLY_INT`, `REPLY_BULK` or `REPLY_ARRAY`, with the
 payload in `text`, `num`, `bulk` (`none` for nil) or `items` (empty
 with `is_nil` for a nil array).
 
-**Not supported yet:** cluster routing and pub/sub (phases 5-7), RESP3,
-server-side sharding beyond standalone.
+**Not supported yet:** pub/sub and streams (phases 7-8), RESP3,
+replica reads.
 
 ## API
 
@@ -353,7 +354,111 @@ One command on a pooled connection: acquire, run, release. The connection goes b
 
 ### `fn pool_close(p: Pool)`
 
-Closes every idle connection. Connections checked out are closed as they are released; acquire fails from now on.
+Closes every idle connection. Connections checked out are closed as they are released; acquire fails from now on. Closes every idle connection. Connections checked out are closed as they are released; acquire fails from now on.
+
+### `gc struct Cluster`
+
+### `fn new_cluster(cfg: Config, seeds: [str],`
+
+Connect to a cluster: try each seed until one serves CLUSTER SLOTS. Only database 0 exists in cluster mode. The deadline covers the whole bootstrap.
+
+### `fn cluster_refresh(cl: Cluster, deadline: until) -> result[bool, str]`
+
+Re-learn the whole slot map from a known node (any current pool will do; the first one wins) or a bootstrap seed. Manual recovery for outages the MOVED path cannot see.
+
+### `fn cluster_do(cl: Cluster, key: str, args: [bytes],`
+
+Run args against the node owning key, following MOVED (map update plus retry, up to MAX_REDIRECTS) and ASK (one directed ASKING hop, returned directly). Every other error returns verbatim.
+
+### `fn cluster_close(cl: Cluster)`
+
+### `fn cping(cl: Cluster, deadline: until) -> result[str, str]`
+
+### `fn cecho(cl: Cluster, v: bytes, deadline: until) -> result[bytes, str]`
+
+### `fn cget(cl: Cluster, key: str, deadline: until) -> result[opt[bytes], str]`
+
+### `fn cset(cl: Cluster, key: str, val: bytes,`
+
+### `fn cset_ex(cl: Cluster, key: str, seconds: int, val: bytes,`
+
+### `fn cset_nx(cl: Cluster, key: str, val: bytes,`
+
+### `fn cdel_keys(cl: Cluster, keys: [str],`
+
+### `fn cexists(cl: Cluster, keys: [str],`
+
+### `fn cexpire(cl: Cluster, key: str, seconds: int,`
+
+### `fn cpexpire(cl: Cluster, key: str, ms: int,`
+
+### `fn cttl(cl: Cluster, key: str, deadline: until) -> result[int, str]`
+
+### `fn cpttl(cl: Cluster, key: str, deadline: until) -> result[int, str]`
+
+### `fn cpersist(cl: Cluster, key: str,`
+
+### `fn cincr(cl: Cluster, key: str, deadline: until) -> result[int, str]`
+
+### `fn cdecr(cl: Cluster, key: str, deadline: until) -> result[int, str]`
+
+### `fn cincr_by(cl: Cluster, key: str, n: int,`
+
+### `fn cdecr_by(cl: Cluster, key: str, n: int,`
+
+### `fn cappend(cl: Cluster, key: str, val: bytes,`
+
+### `fn cstrlen(cl: Cluster, key: str,`
+
+### `fn cmget(cl: Cluster, keys: [str],`
+
+### `fn cmset(cl: Cluster, kv: map[str]bytes,`
+
+### `fn chset(cl: Cluster, key: str, field: str, val: bytes,`
+
+### `fn chget(cl: Cluster, key: str, field: str,`
+
+### `fn chdel(cl: Cluster, key: str, fields: [str],`
+
+### `fn chexists(cl: Cluster, key: str, field: str,`
+
+### `fn chlen(cl: Cluster, key: str, deadline: until) -> result[int, str]`
+
+### `fn chincr_by(cl: Cluster, key: str, field: str, n: int,`
+
+### `fn clpush(cl: Cluster, key: str, vals: [bytes],`
+
+### `fn crpush(cl: Cluster, key: str, vals: [bytes],`
+
+### `fn clpop(cl: Cluster, key: str,`
+
+### `fn crpop(cl: Cluster, key: str,`
+
+### `fn cllen(cl: Cluster, key: str, deadline: until) -> result[int, str]`
+
+### `fn csadd(cl: Cluster, key: str, members: [bytes],`
+
+### `fn csrem(cl: Cluster, key: str, members: [bytes],`
+
+### `fn cscard(cl: Cluster, key: str, deadline: until) -> result[int, str]`
+
+### `fn csismember(cl: Cluster, key: str, member: bytes,`
+
+### `fn czadd(cl: Cluster, key: str, members: map[str]float,`
+
+### `fn czrem(cl: Cluster, key: str, members: [bytes],`
+
+### `fn czcard(cl: Cluster, key: str, deadline: until) -> result[int, str]`
+
+### `fn czscore(cl: Cluster, key: str, member: bytes,`
+
+### `fn ckey_type(cl: Cluster, key: str,`
+
+### `fn crename(cl: Cluster, key: str, newkey: str,`
+
+### `fn cscan(cl: Cluster, cursor: int, match: opt[str], count: opt[int],`
+
+SCAN steps one node only (slot 0's owner): cluster-wide iteration fans out per node with cluster_refresh's map in hand.
 
 ---
 

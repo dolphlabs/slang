@@ -1072,3 +1072,394 @@ test_pool_reuse();
 test_pool_exhaust();
 test_pool_discard();
 test_pool_close();
+
+// ---- cluster (phase 5) -------------------------------------------------
+// Two scripted nodes: A owns slots 0..8191, B owns 8192..16383.
+// "hello" hashes to 866 (A), "foo" to 12182 (B), "axh" to 5 (A).
+
+fn slots_reply(port_a: int, port_b: int) -> bytes {
+    let id = b"0123456789abcdef0123456789abcdef01234567";
+    return b"*2\r\n*3\r\n:0\r\n:8191\r\n*3\r\n$9\r\n127.0.0.1\r\n:" +
+           to_bytes(to_str(port_a)) + b"\r\n$40\r\n" + id + b"\r\n" +
+           b"*3\r\n:8192\r\n:16383\r\n*3\r\n$9\r\n127.0.0.1\r\n:" +
+           to_bytes(to_str(port_b)) + b"\r\n$40\r\n" + id + b"\r\n";
+}
+
+fn cluster_script(lfd: i32, pc: chan[int], scripts: [[Step]]) {
+    chan_send(pc, port_of(lfd));
+    for script in scripts {
+        let fd = accept_one(lfd);
+        for st in script {
+            let cmd = read_cmd(fd);
+            if cmd_name(cmd) != st.want {
+                die("want " + st.want + ", got " + cmd_name(cmd));
+            }
+            send_all(fd, st.reply);
+        }
+        net.close(fd);
+    }
+    net.close(lfd);
+}
+
+fn cluster_cfg() -> redis.Config {
+    return redis.Config { host: "127.0.0.1", port: 1, username: "",
+                          password: "", db: 0, sslmode: "disable",
+                          ca_path: "", tls_ctx: nullptr, pool_size: 2,
+                          connect_timeout: 5000000000,
+                          io_timeout: 5000000000 };
+}
+
+fn open_addrs() -> [int] {
+    let la = listen();
+    let lb = listen();
+    let pa = port_of(la);
+    let pb = port_of(lb);
+    net.close(la);
+    net.close(lb);
+    return [pa, pb];
+}
+
+fn test_cluster_route() {
+    let la = listen();
+    let lb = listen();
+    let pa = port_of(la);
+    let pb = port_of(lb);
+    let conn_a1: [Step] = [
+        Step { want: "CLUSTER", reply: slots_reply(pa, pb) }
+    ];
+    let conn_a2: [Step] = [
+        Step { want: "GET", reply: b"$2\r\nhi\r\n" },
+        Step { want: "SET", reply: b"+OK\r\n" }
+    ];
+    let conn_b1: [Step] = [
+        Step { want: "GET", reply: b"$5\r\nthere\r\n" }
+    ];
+    let scripts_a: [[Step]] = [conn_a1, conn_a2];
+    let scripts_b: [[Step]] = [conn_b1];
+    let pca: chan[int] = make_chan(1);
+    let pcb: chan[int] = make_chan(1);
+    spawn cluster_script(la, pca, scripts_a);
+    spawn cluster_script(lb, pcb, scripts_b);
+    guard let xa = chan_recv(pca) else {
+        die("no port a");
+        panic("unreachable");
+    }
+    guard let xb = chan_recv(pcb) else {
+        die("no port b");
+        panic("unreachable");
+    }
+    let cfg = cluster_cfg();
+    let cr = redis.new_cluster(cfg, ["127.0.0.1:" + to_str(pa)], soon());
+    guard let cl = cr else let e = err_of(cr) {
+        die("new_cluster: " + e);
+        panic("unreachable");
+    }
+    let ha = redis.cget(cl, "hello", soon());
+    guard let va = ha else let e = err_of(ha) {
+        die("cget hello: " + e);
+        panic("unreachable");
+    }
+    guard let ba = va else {
+        die("hello nil");
+        panic("unreachable");
+    }
+    if ba != b"hi" {
+        die("hello value");
+    }
+    let hb = redis.cget(cl, "foo", soon());
+    guard let vb = hb else let e = err_of(hb) {
+        die("cget foo: " + e);
+        panic("unreachable");
+    }
+    guard let bb = vb else {
+        die("foo nil");
+        panic("unreachable");
+    }
+    if bb != b"there" {
+        die("foo value");
+    }
+    let sr = redis.cset(cl, "hello", b"w", soon());
+    guard let okv = sr else let e = err_of(sr) {
+        die("cset: " + e);
+        panic("unreachable");
+    }
+    redis.cluster_close(cl);
+    println("ok cluster-route");
+}
+
+fn test_cluster_moved() {
+    let la = listen();
+    let lb = listen();
+    let pa = port_of(la);
+    let pb = port_of(lb);
+    // A claims foo's slot (12182) then MOVEDs it to B, the
+    // migration-finished shape: the client asks the known owner,
+    // follows the MOVED, and reuses the updated slot after.
+    let id40 = b"$40\r\n0123456789abcdef0123456789abcdef01234567\r\n";
+    let node_a = b"*3\r\n$9\r\n127.0.0.1\r\n:" + to_bytes(to_str(pa)) +
+                 b"\r\n" + id40;
+    let half = b"*2\r\n*3\r\n:0\r\n:8191\r\n" + node_a +
+               b"*3\r\n:12182\r\n:12182\r\n" + node_a;
+    let moved_to_b = b"-MOVED 12182 127.0.0.1:" + to_bytes(to_str(pb)) +
+                     b"\r\n";
+    let conn_a1: [Step] = [
+        Step { want: "CLUSTER", reply: half }
+    ];
+    let conn_a2: [Step] = [
+        Step { want: "GET", reply: moved_to_b }
+    ];
+    let conn_b1: [Step] = [
+        Step { want: "GET", reply: b"$5\r\nthere\r\n" },
+        Step { want: "GET", reply: b"$5\r\nthere\r\n" }
+    ];
+    let scripts_a: [[Step]] = [conn_a1, conn_a2];
+    let scripts_b: [[Step]] = [conn_b1];
+    let pca: chan[int] = make_chan(1);
+    let pcb: chan[int] = make_chan(1);
+    spawn cluster_script(la, pca, scripts_a);
+    spawn cluster_script(lb, pcb, scripts_b);
+    guard let xa = chan_recv(pca) else {
+        die("no port a");
+        panic("unreachable");
+    }
+    guard let xb = chan_recv(pcb) else {
+        die("no port b");
+        panic("unreachable");
+    }
+    let cfg = cluster_cfg();
+    let cr = redis.new_cluster(cfg, ["127.0.0.1:" + to_str(pa)], soon());
+    guard let cl = cr else let e = err_of(cr) {
+        die("new_cluster: " + e);
+        panic("unreachable");
+    }
+    // First GET follows the MOVED to B; the second must reuse the
+    // updated slot (same B connection, no new dial).
+    let h1 = redis.cget(cl, "foo", soon());
+    guard let v1 = h1 else let e = err_of(h1) {
+        die("moved get 1: " + e);
+        panic("unreachable");
+    }
+    guard let b1 = v1 else {
+        die("moved get 1 nil");
+        panic("unreachable");
+    }
+    if b1 != b"there" {
+        die("moved value 1");
+    }
+    let h2 = redis.cget(cl, "foo", soon());
+    guard let v2 = h2 else let e = err_of(h2) {
+        die("moved get 2: " + e);
+        panic("unreachable");
+    }
+    guard let b2 = v2 else {
+        die("moved get 2 nil");
+        panic("unreachable");
+    }
+    if b2 != b"there" {
+        die("moved value 2");
+    }
+    redis.cluster_close(cl);
+    println("ok cluster-moved");
+}
+
+fn test_cluster_ask() {
+    let la = listen();
+    let lb = listen();
+    let pa = port_of(la);
+    let pb = port_of(lb);
+    let ask_to_b = b"-ASK 5 127.0.0.1:" + to_bytes(to_str(pb)) + b"\r\n";
+    let conn_a1: [Step] = [
+        Step { want: "CLUSTER", reply: slots_reply(pa, pb) }
+    ];
+    let conn_a2: [Step] = [
+        Step { want: "GET", reply: ask_to_b }
+    ];
+    let conn_b1: [Step] = [
+        Step { want: "ASKING", reply: b"+OK\r\n" },
+        Step { want: "GET", reply: b"$1\r\nv\r\n" }
+    ];
+    let scripts_a: [[Step]] = [conn_a1, conn_a2];
+    let scripts_b: [[Step]] = [conn_b1];
+    let pca: chan[int] = make_chan(1);
+    let pcb: chan[int] = make_chan(1);
+    spawn cluster_script(la, pca, scripts_a);
+    spawn cluster_script(lb, pcb, scripts_b);
+    guard let xa = chan_recv(pca) else {
+        die("no port a");
+        panic("unreachable");
+    }
+    guard let xb = chan_recv(pcb) else {
+        die("no port b");
+        panic("unreachable");
+    }
+    let cfg = cluster_cfg();
+    let cr = redis.new_cluster(cfg, ["127.0.0.1:" + to_str(pa)], soon());
+    guard let cl = cr else let e = err_of(cr) {
+        die("new_cluster: " + e);
+        panic("unreachable");
+    }
+    let h = redis.cget(cl, "axh", soon());
+    guard let v = h else let e = err_of(h) {
+        die("ask get: " + e);
+        panic("unreachable");
+    }
+    guard let b = v else {
+        die("ask nil");
+        panic("unreachable");
+    }
+    if b != b"v" {
+        die("ask value");
+    }
+    redis.cluster_close(cl);
+    println("ok cluster-ask");
+}
+
+fn test_cluster_crossslot() {
+    let la = listen();
+    let pa = port_of(la);
+    let conn_a1: [Step] = [
+        Step { want: "CLUSTER", reply: slots_reply(pa, pa + 1) }
+    ];
+    let scripts_a: [[Step]] = [conn_a1];
+    let pca: chan[int] = make_chan(1);
+    spawn cluster_script(la, pca, scripts_a);
+    guard let xa = chan_recv(pca) else {
+        die("no port a");
+        panic("unreachable");
+    }
+    let cfg = cluster_cfg();
+    let cr = redis.new_cluster(cfg, ["127.0.0.1:" + to_str(pa)], soon());
+    guard let cl = cr else let e = err_of(cr) {
+        die("new_cluster: " + e);
+        panic("unreachable");
+    }
+    // hello (866) and foo (12182) hash apart: refused with no traffic.
+    let mr = redis.cmget(cl, ["hello", "foo"], soon());
+    guard let vs = mr else let e = err_of(mr) {
+        if !strings.contains(e, "CROSSSLOT") {
+            die("wrong crossslot error: " + e);
+        }
+        redis.cluster_close(cl);
+        println("ok cluster-crossslot");
+        return;
+    }
+    redis.cluster_close(cl);
+    die("crossslot mget served");
+}
+
+fn test_cluster_seeds_down() {
+    let cfg = cluster_cfg();
+    let cr = redis.new_cluster(cfg, ["127.0.0.1:1"], soon());
+    guard let cl = cr else {
+        println("ok cluster-seeds-down");
+        return;
+    }
+    redis.cluster_close(cl);
+    die("cluster on dead seeds connected");
+}
+
+fn test_cluster_wrappers() {
+    let la = listen();
+    let lb = listen();
+    let pa = port_of(la);
+    let pb = port_of(lb);
+    let conn_a1: [Step] = [
+        Step { want: "CLUSTER", reply: slots_reply(pa, pb) }
+    ];
+    let conn_a2: [Step] = [
+        Step { want: "PING", reply: b"+PONG\r\n" },
+        Step { want: "SET", reply: b"+OK\r\n" },
+        Step { want: "INCR", reply: b":2\r\n" },
+        Step { want: "HSET", reply: b":1\r\n" },
+        Step { want: "DEL", reply: b":1\r\n" },
+        Step { want: "SCAN",
+               reply: b"*2\r\n$1\r\n0\r\n*1\r\n$1\r\nk\r\n" }
+    ];
+    let conn_b1: [Step] = [
+        Step { want: "ZSCORE", reply: b"$3\r\n1.5\r\n" }
+    ];
+    let scripts_a: [[Step]] = [conn_a1, conn_a2];
+    let scripts_b: [[Step]] = [conn_b1];
+    let pca: chan[int] = make_chan(1);
+    let pcb: chan[int] = make_chan(1);
+    spawn cluster_script(la, pca, scripts_a);
+    spawn cluster_script(lb, pcb, scripts_b);
+    guard let xa = chan_recv(pca) else {
+        die("no port a");
+        panic("unreachable");
+    }
+    guard let xb = chan_recv(pcb) else {
+        die("no port b");
+        panic("unreachable");
+    }
+    let cfg = cluster_cfg();
+    let cr = redis.new_cluster(cfg, ["127.0.0.1:" + to_str(pa)], soon());
+    guard let cl = cr else let e = err_of(cr) {
+        die("new_cluster: " + e);
+        panic("unreachable");
+    }
+    // hello -> 866 (A), foo -> 12182 (B).
+    let pr = redis.cping(cl, soon());
+    guard let pong = pr else let e = err_of(pr) {
+        die("cping: " + e);
+        panic("unreachable");
+    }
+    if pong != "PONG" {
+        die("cping value");
+    }
+    let sr = redis.cset(cl, "hello", b"w", soon());
+    guard let sok = sr else let e = err_of(sr) {
+        die("cset: " + e);
+        panic("unreachable");
+    }
+    let ir = redis.cincr(cl, "hello", soon());
+    guard let iv = ir else let e = err_of(ir) {
+        die("cincr: " + e);
+        panic("unreachable");
+    }
+    if iv != 2 {
+        die("cincr value");
+    }
+    let hr = redis.chset(cl, "hello", "f", b"v", soon());
+    guard let hv = hr else let e = err_of(hr) {
+        die("chset: " + e);
+        panic("unreachable");
+    }
+    if hv != 1 {
+        die("chset value");
+    }
+    let dr = redis.cdel_keys(cl, ["hello"], soon());
+    guard let dv = dr else let e = err_of(dr) {
+        die("cdel: " + e);
+        panic("unreachable");
+    }
+    let zr = redis.czscore(cl, "foo", b"m", soon());
+    guard let zo = zr else let e = err_of(zr) {
+        die("czscore: " + e);
+        panic("unreachable");
+    }
+    guard let zv = zo else {
+        die("czscore nil");
+        panic("unreachable");
+    }
+    if zv != 1.5 {
+        die("czscore value");
+    }
+    let scr = redis.cscan(cl, 0, none, none, soon());
+    guard let sout = scr else let e = err_of(scr) {
+        die("cscan: " + e);
+        panic("unreachable");
+    }
+    if len(sout.keys) != 1 {
+        die("cscan shape");
+    }
+    redis.cluster_close(cl);
+    println("ok cluster-wrappers");
+}
+
+test_cluster_route();
+test_cluster_moved();
+test_cluster_ask();
+test_cluster_crossslot();
+test_cluster_seeds_down();
+test_cluster_wrappers();
