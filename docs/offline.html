@@ -542,35 +542,26 @@ td.lose { color: var(--amber); }
       <span class="dot g"></span>
       <span class="demo-title">main.sl &mdash; a tiny JSON router</span>
     </div>
-    <div class="code hero-code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="c">// A tiny JSON router. Adding a route is one table line -- handlers</span>
-<span class="c">// are fn values, so dispatch needs no framework.</span>
+    <div class="code hero-code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="c">// Handlers take a Ctx: the request plus the app&#x27;s own state,</span>
+<span class="c">// typed together so nothing arrives untyped.</span>
+<span class="k">gc</span> <span class="k">struct</span> Config {
+    greeting: <span class="t">str</span>,
+}
+<span class="k">gc</span> <span class="k">struct</span> Ctx[S] {
+    req: http.Request,
+    state: S,
+}
+<span class="k">fn</span> <span class="f">hello</span>(ctx: Ctx[Config]) -&gt; http.Response {
+    <span class="k">return</span> http.<span class="f">ok_json</span>(<span class="s">&quot;{\&quot;hello\&quot;:\&quot;&quot;</span> + ctx.state.greeting + <span class="s">&quot;\&quot;}&quot;</span>);
+}
 <span class="k">gc</span> <span class="k">struct</span> Route {
     method: <span class="t">str</span>,
     path: <span class="t">str</span>,
-    handler: <span class="k">fn</span>(http.Request) -&gt; http.Response,
+    handler: <span class="k">fn</span>(Ctx[Config]) -&gt; http.Response,
 }
-
-<span class="k">fn</span> <span class="f">hello</span>(req: http.Request) -&gt; http.Response {
-    <span class="k">return</span> http.<span class="f">ok_json</span>(<span class="s">&quot;{\&quot;hello\&quot;:\&quot;world\&quot;}&quot;</span>);
-}
-
-<span class="k">fn</span> <span class="f">echo</span>(req: http.Request) -&gt; http.Response {
-    <span class="k">return</span> http.<span class="f">ok_json</span>(json.<span class="f">encode</span>(<span class="b">to_str</span>(req.body)));
-}
-
 <span class="k">let</span> routes: [Route] = [
-    Route { method: <span class="s">&quot;GET&quot;</span>, path: <span class="s">&quot;/hi&quot;</span>, handler: hello },
-    Route { method: <span class="s">&quot;POST&quot;</span>, path: <span class="s">&quot;/echo&quot;</span>, handler: echo }
-];
-
-<span class="k">fn</span> <span class="f">route</span>(routes: [Route], req: http.Request) -&gt; http.Response {
-    <span class="k">for</span> r <span class="k">in</span> routes {
-        <span class="k">if</span> r.method == req.method &amp;&amp; r.path == req.path {
-            <span class="k">return</span> r.<span class="f">handler</span>(req);
-        }
-    }
-    <span class="k">return</span> http.<span class="f">not_found</span>();
-}</code></pre></div>
+    Route { method: <span class="s">&quot;GET&quot;</span>, path: <span class="s">&quot;/hi&quot;</span>, handler: hello }
+];</code></pre></div>
   </div>
 </div>
 

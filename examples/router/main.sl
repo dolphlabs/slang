@@ -1,59 +1,50 @@
 import "http";
 import "httpc";
-import "json";
 import "log";
 import "proc";
 import "time";
 
 // hero:start
-// A tiny JSON router. Adding a route is one table line -- handlers
-// are fn values, so dispatch needs no framework.
+// Handlers take a Ctx: the request plus the app's own state,
+// typed together so nothing arrives untyped.
+gc struct Config {
+    greeting: str,
+}
+gc struct Ctx[S] {
+    req: http.Request,
+    state: S,
+}
+fn hello(ctx: Ctx[Config]) -> http.Response {
+    return http.ok_json("{\"hello\":\"" + ctx.state.greeting + "\"}");
+}
 gc struct Route {
     method: str,
     path: str,
-    handler: fn(http.Request) -> http.Response,
+    handler: fn(Ctx[Config]) -> http.Response,
 }
-
-fn hello(req: http.Request) -> http.Response {
-    return http.ok_json("{\"hello\":\"world\"}");
-}
-
-fn echo(req: http.Request) -> http.Response {
-    return http.ok_json(json.encode(to_str(req.body)));
-}
-
 let routes: [Route] = [
-    Route { method: "GET", path: "/hi", handler: hello },
-    Route { method: "POST", path: "/echo", handler: echo }
+    Route { method: "GET", path: "/hi", handler: hello }
 ];
+// hero:end
 
-fn route(routes: [Route], req: http.Request) -> http.Response {
+fn route(routes: [Route], ctx: Ctx[Config]) -> http.Response {
     for r in routes {
-        if r.method == req.method && r.path == req.path {
-            return r.handler(req);
+        if r.method == ctx.req.method && r.path == ctx.req.path {
+            return r.handler(ctx);
         }
     }
     return http.not_found();
 }
-// hero:end
 
-fn serve(ln: link, routes: [Route]) {
-    while !proc.shutdown_requested() {
-        let ar = ln.accept(until_never());
-        guard let c = ar else { return; }
-        spawn handle(c, routes);
-    }
-}
-// hero:end
-
-fn handle(c: link, routes: [Route]) {
+fn handle(c: link, routes: [Route], cfg: Config) {
     let ra = arena_new(65536);
     let sa = arena_new(65536);
     let buf = ra.wire(65536);
     while true {
         let rr = http.read(&mut c, buf, 0, until_never());
         guard let got = rr else { return; }
-        let wr = http.write(&mut c, route(routes, got.req), &mut sa,
+        let ctx = Ctx[Config] { req: got.req, state: cfg };
+        let wr = http.write(&mut c, route(routes, ctx), &mut sa,
                             until_never());
         guard let n = wr else { return; }
         sa.reset();
@@ -61,13 +52,22 @@ fn handle(c: link, routes: [Route]) {
     }
 }
 
+fn serve(ln: link, routes: [Route], cfg: Config) {
+    while !proc.shutdown_requested() {
+        let ar = ln.accept(until_never());
+        guard let c = ar else { return; }
+        spawn handle(c, routes, cfg);
+    }
+}
+
+let cfg = Config { greeting: "world" };
 let lr = link_listen(0);
 guard let ln = lr else let e = err_of(lr) {
     log.error("listen: " + to_str(e));
     exit(1);
 }
 let port = ln.port();
-spawn serve(ln, routes);
+spawn serve(ln, routes, cfg);
 
 fn soon() -> until {
     return until_of(time.mono() + 5000000000);
@@ -80,13 +80,6 @@ guard let hello_resp = h else let e = err_of(h) {
     exit(1);
 }
 assert(hello_resp.status == 200, "hi status");
-
-let p = httpc.post(base + "/echo", "text/plain", b"hey", soon());
-guard let echo_resp = p else let e = err_of(p) {
-    log.error("self-hit: " + e);
-    exit(1);
-}
-assert(to_str(echo_resp.body) == "\"hey\"", "echo body");
 
 let m = httpc.get(base + "/missing", soon());
 guard let missing = m else let e = err_of(m) {
