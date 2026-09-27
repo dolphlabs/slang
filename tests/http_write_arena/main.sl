@@ -80,10 +80,12 @@ check("many headers", http.with_headers(http.text_response(200, "OK", "text/plai
 let long_body = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 check(">64-byte body", http.text_response(200, "OK", "text/plain", long_body), 512);
 
-// the "Connection" (capitalised) quirk: escapes the lowercase-only skip
-// filter and is emitted both as the user header AND the trailing
-// Connection: line -- must reproduce identically, not silently fixed
-check("capitalized Connection quirk", http.with_headers(http.text_response(200, "OK", "", "x"), ["Connection: close"]), 512);
+// the "Connection" (capitalised) dedup: the lowercase-only skip
+// filter used to miss it, emitting the user header AND the trailing
+// Connection: line. The filter is case-insensitive now, so the user
+// header is skipped and its value rides the single trailing line --
+// this pins the deduped shape, not the old double emission.
+check("capitalized Connection dedup", http.with_headers(http.text_response(200, "OK", "", "x"), ["Connection: close"]), 512);
 
 // arena too small to hold the response: write() must fall back to
 // serialize()+send_bytes, not kill the connection

@@ -21,6 +21,10 @@ byteutil.split(b"a,b", 44);          // [b"a", b"b"]
 
 Index of the first `target` byte in `b` at or after `from`, or -1 if it does not occur. `target` is a byte value, not a substring: 44 is a comma.
 
+### `fn find_wire(b: wire, from: int, target: int) -> int`
+
+Same directly on an arena buffer: the http head scan walks the socket wire and needs the colon position without copying the line into GC bytes first.
+
 ### `fn has_prefix(b: bytes, prefix: bytes) -> bool`
 
 Does `b` begin with `prefix`? A prefix longer than `b` is false rather than an error.
