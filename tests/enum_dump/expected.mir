@@ -1,0 +1,53 @@
+fn enum_dump.main
+  local s: enum_dump.Status
+  local _t0: bool
+  local r: result[enum_dump.Status,str]
+  local v: enum_dump.Status
+  local _t1: bool
+  local r2: result[enum_dump.Status,str]
+  local v2: enum_dump.Status
+  local _t2: bool
+  bb0:
+    s = 1
+    _t0 = (==)
+    if _t0 -> bb1 bb2
+  bb1:
+    eval call println
+    goto bb3
+  bb2:
+    eval call println
+    goto bb3
+  bb3:
+    r = call __enum_from_int
+    if r -> bb4 bb5
+  bb4:
+    v = r
+    _t1 = (==)
+    if _t1 -> bb6 bb7
+  bb5:
+    eval call println
+    unreachable
+  bb6:
+    eval call println
+    goto bb8
+  bb7:
+    eval call println
+    goto bb8
+  bb8:
+    r2 = call __enum_from_str
+    if r2 -> bb9 bb10
+  bb9:
+    v2 = r2
+    _t2 = (==)
+    if _t2 -> bb11 bb12
+  bb10:
+    eval call println
+    unreachable
+  bb11:
+    eval call println
+    goto bb13
+  bb12:
+    eval call println
+    goto bb13
+  bb13:
+    return

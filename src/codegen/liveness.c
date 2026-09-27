@@ -1445,6 +1445,12 @@ void dump_liveness(Package *pkgs, int npkgs, int main_index, FILE *out) {
     }
 
     collect_decls(&cg, pkgs, npkgs);
+    /* Same rewrite codegen_program runs before anything walks the
+     * tree: Type.Variant / Type.from_int / Type.from_str only ever
+     * resolve here, so without this every enum reference dies later
+     * as "undefined variable". Was the reason --dump-liveness
+     * rejected all enum code (even tests/enum). */
+    resolve_enum_refs(&cg, pkgs, npkgs);
     compute_liveness(&cg, pkgs, npkgs, main_index);
 
     /* second walk: printing only, reusing the same source-order

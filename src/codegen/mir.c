@@ -883,6 +883,10 @@ void dump_mir(Package *pkgs, int npkgs, int main_index, FILE *out) {
         cg.nat_pkgs[cg.nnat++] = pkgs[i].name;
     }
     collect_decls(&cg, pkgs, npkgs);
+    /* Same rewrite codegen_program runs before anything walks the
+     * tree (see dump_liveness): without it every enum reference
+     * dies as "undefined variable". */
+    resolve_enum_refs(&cg, pkgs, npkgs);
     StrBuf scratch;
     sb_init(&scratch);
     cg.out = &scratch;
