@@ -3396,6 +3396,478 @@
           "doc": "True while commands may still be attempted: not closed, not broken. A server-side idle close is discovered on use, which marks the connection broken then.",
           "file": "stdlib/redis/redis.sl",
           "line": 839
+        },
+        {
+          "name": "ping",
+          "decl": "fn",
+          "sig": "fn ping(c: Conn, deadline: until) -> result[str, str]",
+          "doc": "PING, expecting PONG back.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 902
+        },
+        {
+          "name": "echo",
+          "decl": "fn",
+          "sig": "fn echo(c: Conn, v: bytes, deadline: until) -> result[bytes, str]",
+          "doc": "ECHO, expecting the value back byte-identical.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 911
+        },
+        {
+          "name": "get",
+          "decl": "fn",
+          "sig": "fn get(c: Conn, key: str, deadline: until) -> result[opt[bytes], str]",
+          "doc": "GET: the value, or none when the key is absent. A missing key is absent data (opt), not an error.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 921
+        },
+        {
+          "name": "set",
+          "decl": "fn",
+          "sig": "fn set(c: Conn, key: str, val: bytes,",
+          "doc": "SET: true when the server answers +OK.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 933
+        },
+        {
+          "name": "set_ex",
+          "decl": "fn",
+          "sig": "fn set_ex(c: Conn, key: str, seconds: int, val: bytes,",
+          "doc": "SET with a TTL in seconds. True on +OK.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 946
+        },
+        {
+          "name": "set_nx",
+          "decl": "fn",
+          "sig": "fn set_nx(c: Conn, key: str, val: bytes,",
+          "doc": "SETNX: true when the key was absent and is now set.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 960
+        },
+        {
+          "name": "del_keys",
+          "decl": "fn",
+          "sig": "fn del_keys(c: Conn, keys: [str], deadline: until) -> result[int, str]",
+          "doc": "DEL_KEYS: how many of the keys existed. Named with a suffix because `del` itself removes map entries -- it is a builtin.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 971
+        },
+        {
+          "name": "exists",
+          "decl": "fn",
+          "sig": "fn exists(c: Conn, keys: [str], deadline: until) -> result[int, str]",
+          "doc": "EXISTS: how many of the keys exist.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 984
+        },
+        {
+          "name": "expire",
+          "decl": "fn",
+          "sig": "fn expire(c: Conn, key: str, seconds: int,",
+          "doc": "EXPIRE: true when the timeout was set (false: missing key).",
+          "file": "stdlib/redis/redis.sl",
+          "line": 997
+        },
+        {
+          "name": "pexpire",
+          "decl": "fn",
+          "sig": "fn pexpire(c: Conn, key: str, ms: int,",
+          "doc": "PEXPIRE: like EXPIRE with a millisecond TTL.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1008
+        },
+        {
+          "name": "ttl",
+          "decl": "fn",
+          "sig": "fn ttl(c: Conn, key: str, deadline: until) -> result[int, str]",
+          "doc": "TTL in seconds: -2 missing key, -1 no TTL, else seconds left.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1019
+        },
+        {
+          "name": "pttl",
+          "decl": "fn",
+          "sig": "fn pttl(c: Conn, key: str, deadline: until) -> result[int, str]",
+          "doc": "PTTL: like TTL in milliseconds.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1028
+        },
+        {
+          "name": "persist",
+          "decl": "fn",
+          "sig": "fn persist(c: Conn, key: str, deadline: until) -> result[bool, str]",
+          "doc": "PERSIST: true when a TTL was removed (false: missing key or none).",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1037
+        },
+        {
+          "name": "incr",
+          "decl": "fn",
+          "sig": "fn incr(c: Conn, key: str, deadline: until) -> result[int, str]",
+          "doc": "INCR/DECR: the value after the change.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1046
+        },
+        {
+          "name": "decr",
+          "decl": "fn",
+          "sig": "fn decr(c: Conn, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1054
+        },
+        {
+          "name": "incr_by",
+          "decl": "fn",
+          "sig": "fn incr_by(c: Conn, key: str, n: int,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1062
+        },
+        {
+          "name": "decr_by",
+          "decl": "fn",
+          "sig": "fn decr_by(c: Conn, key: str, n: int,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1072
+        },
+        {
+          "name": "append",
+          "decl": "fn",
+          "sig": "fn append(c: Conn, key: str, val: bytes,",
+          "doc": "APPEND: the length after appending. STRLEN: the current length.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1083
+        },
+        {
+          "name": "strlen",
+          "decl": "fn",
+          "sig": "fn strlen(c: Conn, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1092
+        },
+        {
+          "name": "mget",
+          "decl": "fn",
+          "sig": "fn mget(c: Conn, keys: [str],",
+          "doc": "MGET: one slot per key, none for the missing ones.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1101
+        },
+        {
+          "name": "mset",
+          "decl": "fn",
+          "sig": "fn mset(c: Conn, kv: map[str]bytes,",
+          "doc": "MSET: field iteration order is insertion order, so the wire order is deterministic for a literally-built map.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1126
+        },
+        {
+          "name": "hset",
+          "decl": "fn",
+          "sig": "fn hset(c: Conn, key: str, field: str, val: bytes,",
+          "doc": "HSET: how many fields were newly added.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1146
+        },
+        {
+          "name": "hget",
+          "decl": "fn",
+          "sig": "fn hget(c: Conn, key: str, field: str,",
+          "doc": "HGET: the value, or none when key or field is absent.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1157
+        },
+        {
+          "name": "hgetall",
+          "decl": "fn",
+          "sig": "fn hgetall(c: Conn, key: str,",
+          "doc": "HGETALL: the whole hash. Field names decode to str; binary field names a program did not put there itself come back lossy.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1172
+        },
+        {
+          "name": "hdel",
+          "decl": "fn",
+          "sig": "fn hdel(c: Conn, key: str, fields: [str],",
+          "doc": "HDEL: how many fields were removed.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1203
+        },
+        {
+          "name": "hexists",
+          "decl": "fn",
+          "sig": "fn hexists(c: Conn, key: str, field: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1216
+        },
+        {
+          "name": "hkeys",
+          "decl": "fn",
+          "sig": "fn hkeys(c: Conn, key: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1226
+        },
+        {
+          "name": "hvals",
+          "decl": "fn",
+          "sig": "fn hvals(c: Conn, key: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1248
+        },
+        {
+          "name": "hlen",
+          "decl": "fn",
+          "sig": "fn hlen(c: Conn, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1270
+        },
+        {
+          "name": "hincr_by",
+          "decl": "fn",
+          "sig": "fn hincr_by(c: Conn, key: str, field: str, n: int,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1278
+        },
+        {
+          "name": "lpush",
+          "decl": "fn",
+          "sig": "fn lpush(c: Conn, key: str, vals: [bytes],",
+          "doc": "LPUSH/RPUSH: the length after pushing.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1304
+        },
+        {
+          "name": "rpush",
+          "decl": "fn",
+          "sig": "fn rpush(c: Conn, key: str, vals: [bytes],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1309
+        },
+        {
+          "name": "lpop",
+          "decl": "fn",
+          "sig": "fn lpop(c: Conn, key: str, deadline: until) -> result[opt[bytes], str]",
+          "doc": "LPOP/RPOP: the element, or none when the list is absent or drained.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1315
+        },
+        {
+          "name": "rpop",
+          "decl": "fn",
+          "sig": "fn rpop(c: Conn, key: str, deadline: until) -> result[opt[bytes], str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1326
+        },
+        {
+          "name": "llen",
+          "decl": "fn",
+          "sig": "fn llen(c: Conn, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1337
+        },
+        {
+          "name": "lrange",
+          "decl": "fn",
+          "sig": "fn lrange(c: Conn, key: str, start: int, stop: int,",
+          "doc": "LRANGE: elements from start to stop inclusive; negative indexes count from the tail, exactly as Redis documents.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1347
+        },
+        {
+          "name": "ltrim",
+          "decl": "fn",
+          "sig": "fn ltrim(c: Conn, key: str, start: int, stop: int,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1371
+        },
+        {
+          "name": "lindex",
+          "decl": "fn",
+          "sig": "fn lindex(c: Conn, key: str, i: int,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1385
+        },
+        {
+          "name": "lrem",
+          "decl": "fn",
+          "sig": "fn lrem(c: Conn, key: str, count: int, val: bytes,",
+          "doc": "LREM: removes count occurrences of val, returns how many went.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1399
+        },
+        {
+          "name": "sadd",
+          "decl": "fn",
+          "sig": "fn sadd(c: Conn, key: str, members: [bytes],",
+          "doc": "SADD: how many members were newly added.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1412
+        },
+        {
+          "name": "smembers",
+          "decl": "fn",
+          "sig": "fn smembers(c: Conn, key: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1417
+        },
+        {
+          "name": "srem",
+          "decl": "fn",
+          "sig": "fn srem(c: Conn, key: str, members: [bytes],",
+          "doc": "SREM: how many members were removed.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1440
+        },
+        {
+          "name": "scard",
+          "decl": "fn",
+          "sig": "fn scard(c: Conn, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1445
+        },
+        {
+          "name": "sismember",
+          "decl": "fn",
+          "sig": "fn sismember(c: Conn, key: str, member: bytes,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1453
+        },
+        {
+          "name": "spop",
+          "decl": "fn",
+          "sig": "fn spop(c: Conn, key: str, deadline: until) -> result[opt[bytes], str]",
+          "doc": "SPOP: a removed member, or none when the set is absent or drained.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1464
+        },
+        {
+          "name": "ZMember",
+          "decl": "struct",
+          "sig": "gc struct ZMember",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1477
+        },
+        {
+          "name": "zadd",
+          "decl": "fn",
+          "sig": "fn zadd(c: Conn, key: str, members: map[str]float,",
+          "doc": "ZADD: how many members were newly added.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1483
+        },
+        {
+          "name": "zrange",
+          "decl": "fn",
+          "sig": "fn zrange(c: Conn, key: str, start: int, stop: int,",
+          "doc": "ZRANGE/ZREVRANGE without scores.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1512
+        },
+        {
+          "name": "zrange_scores",
+          "decl": "fn",
+          "sig": "fn zrange_scores(c: Conn, key: str, start: int, stop: int,",
+          "doc": "ZRANGE WITHSCORES: member/score pairs in range order.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1537
+        },
+        {
+          "name": "zrank",
+          "decl": "fn",
+          "sig": "fn zrank(c: Conn, key: str, member: bytes,",
+          "doc": "ZRANK: the rank, or none when key or member is absent.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1571
+        },
+        {
+          "name": "zscore",
+          "decl": "fn",
+          "sig": "fn zscore(c: Conn, key: str, member: bytes,",
+          "doc": "ZSCORE: the score, or none when key or member is absent.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1587
+        },
+        {
+          "name": "zrem",
+          "decl": "fn",
+          "sig": "fn zrem(c: Conn, key: str, members: [bytes],",
+          "doc": "ZREM: how many members were removed.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1607
+        },
+        {
+          "name": "zcard",
+          "decl": "fn",
+          "sig": "fn zcard(c: Conn, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1612
+        },
+        {
+          "name": "zincr_by",
+          "decl": "fn",
+          "sig": "fn zincr_by(c: Conn, key: str, n: float, member: bytes,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1620
+        },
+        {
+          "name": "key_type",
+          "decl": "fn",
+          "sig": "fn key_type(c: Conn, key: str, deadline: until) -> result[str, str]",
+          "doc": "TYPE: the key's type name (\"none\" when absent).",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1633
+        },
+        {
+          "name": "rename",
+          "decl": "fn",
+          "sig": "fn rename(c: Conn, key: str, newkey: str,",
+          "doc": "RENAME: true on +OK. RENAMENX: true only when newkey was absent.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1642
+        },
+        {
+          "name": "rename_nx",
+          "decl": "fn",
+          "sig": "fn rename_nx(c: Conn, key: str, newkey: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1655
+        },
+        {
+          "name": "ScanOut",
+          "decl": "struct",
+          "sig": "gc struct ScanOut",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1665
+        },
+        {
+          "name": "scan",
+          "decl": "fn",
+          "sig": "fn scan(c: Conn, cursor: int, match: opt[str], count: opt[int],",
+          "doc": "SCAN: one cursor step. Thread cursor back in until it returns 0; match and count are server hints, both optional. KEYS is deliberately absent: it blocks the server for the whole keyspace.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1673
         }
       ]
     },

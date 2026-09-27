@@ -3509,6 +3509,12 @@ redis.close(c);
 | `redis.connect(url, deadline)` / `redis.connect_config(cfg, deadline)` | `result[Conn, str]` — dial, `AUTH`, `SELECT` |
 | `redis.do(c, args, deadline)` | `result[Reply, str]` — one command round trip |
 | `redis.close(c)` / `redis.usable(c)` | — shutdown / may commands still be attempted |
+| strings | `ping`, `echo`, `get`, `set`, `set_ex`, `set_nx`, `del_keys`, `exists`, `expire`, `pexpire`, `ttl`, `pttl`, `persist`, `incr`, `decr`, `incr_by`, `decr_by`, `append`, `strlen`, `mget`, `mset` |
+| hashes | `hset`, `hget`, `hgetall`, `hdel`, `hexists`, `hkeys`, `hvals`, `hlen`, `hincr_by` |
+| lists | `lpush`, `rpush`, `lpop`, `rpop`, `llen`, `lrange`, `ltrim`, `lindex`, `lrem` |
+| sets | `sadd`, `smembers`, `srem`, `scard`, `sismember`, `spop` |
+| sorted sets | `zadd`, `zrange`, `zrange_scores`, `zrank`, `zscore`, `zrem`, `zcard`, `zincr_by` |
+| keys | `key_type`, `rename`, `rename_nx`, `scan` (`KEYS` omitted on purpose) |
 
 A reply is a `redis.Reply`: `kind` is one of `REPLY_SIMPLE`,
 `REPLY_ERROR`, `REPLY_INT`, `REPLY_BULK` or `REPLY_ARRAY`, with the
@@ -4469,7 +4475,7 @@ signal-handling program.
 - [os](packages/os.md) -- compiler-provided, 14 public items
 - [pg](packages/pg.md) -- source package, 52 public items
 - [proc](packages/proc.md) -- compiler-provided, 6 public items
-- [redis](packages/redis.md) -- source package, 19 public items
+- [redis](packages/redis.md) -- source package, 78 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [sql](packages/sql.md) -- compiler-provided, 20 public items
 - [strings](packages/strings.md) -- compiler-provided, 21 public items
@@ -7691,6 +7697,12 @@ redis.close(c);
 | `redis.connect(url, deadline)` / `redis.connect_config(cfg, deadline)` | `result[Conn, str]` — dial, `AUTH`, `SELECT` |
 | `redis.do(c, args, deadline)` | `result[Reply, str]` — one command round trip |
 | `redis.close(c)` / `redis.usable(c)` | — shutdown / may commands still be attempted |
+| strings | `ping`, `echo`, `get`, `set`, `set_ex`, `set_nx`, `del_keys`, `exists`, `expire`, `pexpire`, `ttl`, `pttl`, `persist`, `incr`, `decr`, `incr_by`, `decr_by`, `append`, `strlen`, `mget`, `mset` |
+| hashes | `hset`, `hget`, `hgetall`, `hdel`, `hexists`, `hkeys`, `hvals`, `hlen`, `hincr_by` |
+| lists | `lpush`, `rpush`, `lpop`, `rpop`, `llen`, `lrange`, `ltrim`, `lindex`, `lrem` |
+| sets | `sadd`, `smembers`, `srem`, `scard`, `sismember`, `spop` |
+| sorted sets | `zadd`, `zrange`, `zrange_scores`, `zrank`, `zscore`, `zrem`, `zcard`, `zincr_by` |
+| keys | `key_type`, `rename`, `rename_nx`, `scan` (`KEYS` omitted on purpose) |
 
 A reply is a `redis.Reply`: `kind` is one of `REPLY_SIMPLE`,
 `REPLY_ERROR`, `REPLY_INT`, `REPLY_BULK` or `REPLY_ARRAY`, with the
@@ -7765,6 +7777,198 @@ Shut the connection down. In-flight calls on other tasks finish (or hit their ow
 ### `fn usable(c: Conn) -> bool`
 
 True while commands may still be attempted: not closed, not broken. A server-side idle close is discovered on use, which marks the connection broken then.
+
+### `fn ping(c: Conn, deadline: until) -> result[str, str]`
+
+PING, expecting PONG back.
+
+### `fn echo(c: Conn, v: bytes, deadline: until) -> result[bytes, str]`
+
+ECHO, expecting the value back byte-identical.
+
+### `fn get(c: Conn, key: str, deadline: until) -> result[opt[bytes], str]`
+
+GET: the value, or none when the key is absent. A missing key is absent data (opt), not an error.
+
+### `fn set(c: Conn, key: str, val: bytes,`
+
+SET: true when the server answers +OK.
+
+### `fn set_ex(c: Conn, key: str, seconds: int, val: bytes,`
+
+SET with a TTL in seconds. True on +OK.
+
+### `fn set_nx(c: Conn, key: str, val: bytes,`
+
+SETNX: true when the key was absent and is now set.
+
+### `fn del_keys(c: Conn, keys: [str], deadline: until) -> result[int, str]`
+
+DEL_KEYS: how many of the keys existed. Named with a suffix because `del` itself removes map entries -- it is a builtin.
+
+### `fn exists(c: Conn, keys: [str], deadline: until) -> result[int, str]`
+
+EXISTS: how many of the keys exist.
+
+### `fn expire(c: Conn, key: str, seconds: int,`
+
+EXPIRE: true when the timeout was set (false: missing key).
+
+### `fn pexpire(c: Conn, key: str, ms: int,`
+
+PEXPIRE: like EXPIRE with a millisecond TTL.
+
+### `fn ttl(c: Conn, key: str, deadline: until) -> result[int, str]`
+
+TTL in seconds: -2 missing key, -1 no TTL, else seconds left.
+
+### `fn pttl(c: Conn, key: str, deadline: until) -> result[int, str]`
+
+PTTL: like TTL in milliseconds.
+
+### `fn persist(c: Conn, key: str, deadline: until) -> result[bool, str]`
+
+PERSIST: true when a TTL was removed (false: missing key or none).
+
+### `fn incr(c: Conn, key: str, deadline: until) -> result[int, str]`
+
+INCR/DECR: the value after the change.
+
+### `fn decr(c: Conn, key: str, deadline: until) -> result[int, str]`
+
+### `fn incr_by(c: Conn, key: str, n: int,`
+
+### `fn decr_by(c: Conn, key: str, n: int,`
+
+### `fn append(c: Conn, key: str, val: bytes,`
+
+APPEND: the length after appending. STRLEN: the current length.
+
+### `fn strlen(c: Conn, key: str, deadline: until) -> result[int, str]`
+
+### `fn mget(c: Conn, keys: [str],`
+
+MGET: one slot per key, none for the missing ones.
+
+### `fn mset(c: Conn, kv: map[str]bytes,`
+
+MSET: field iteration order is insertion order, so the wire order is deterministic for a literally-built map.
+
+### `fn hset(c: Conn, key: str, field: str, val: bytes,`
+
+HSET: how many fields were newly added.
+
+### `fn hget(c: Conn, key: str, field: str,`
+
+HGET: the value, or none when key or field is absent.
+
+### `fn hgetall(c: Conn, key: str,`
+
+HGETALL: the whole hash. Field names decode to str; binary field names a program did not put there itself come back lossy.
+
+### `fn hdel(c: Conn, key: str, fields: [str],`
+
+HDEL: how many fields were removed.
+
+### `fn hexists(c: Conn, key: str, field: str,`
+
+### `fn hkeys(c: Conn, key: str,`
+
+### `fn hvals(c: Conn, key: str,`
+
+### `fn hlen(c: Conn, key: str, deadline: until) -> result[int, str]`
+
+### `fn hincr_by(c: Conn, key: str, field: str, n: int,`
+
+### `fn lpush(c: Conn, key: str, vals: [bytes],`
+
+LPUSH/RPUSH: the length after pushing.
+
+### `fn rpush(c: Conn, key: str, vals: [bytes],`
+
+### `fn lpop(c: Conn, key: str, deadline: until) -> result[opt[bytes], str]`
+
+LPOP/RPOP: the element, or none when the list is absent or drained.
+
+### `fn rpop(c: Conn, key: str, deadline: until) -> result[opt[bytes], str]`
+
+### `fn llen(c: Conn, key: str, deadline: until) -> result[int, str]`
+
+### `fn lrange(c: Conn, key: str, start: int, stop: int,`
+
+LRANGE: elements from start to stop inclusive; negative indexes count from the tail, exactly as Redis documents.
+
+### `fn ltrim(c: Conn, key: str, start: int, stop: int,`
+
+### `fn lindex(c: Conn, key: str, i: int,`
+
+### `fn lrem(c: Conn, key: str, count: int, val: bytes,`
+
+LREM: removes count occurrences of val, returns how many went.
+
+### `fn sadd(c: Conn, key: str, members: [bytes],`
+
+SADD: how many members were newly added.
+
+### `fn smembers(c: Conn, key: str,`
+
+### `fn srem(c: Conn, key: str, members: [bytes],`
+
+SREM: how many members were removed.
+
+### `fn scard(c: Conn, key: str, deadline: until) -> result[int, str]`
+
+### `fn sismember(c: Conn, key: str, member: bytes,`
+
+### `fn spop(c: Conn, key: str, deadline: until) -> result[opt[bytes], str]`
+
+SPOP: a removed member, or none when the set is absent or drained.
+
+### `gc struct ZMember`
+
+### `fn zadd(c: Conn, key: str, members: map[str]float,`
+
+ZADD: how many members were newly added.
+
+### `fn zrange(c: Conn, key: str, start: int, stop: int,`
+
+ZRANGE/ZREVRANGE without scores.
+
+### `fn zrange_scores(c: Conn, key: str, start: int, stop: int,`
+
+ZRANGE WITHSCORES: member/score pairs in range order.
+
+### `fn zrank(c: Conn, key: str, member: bytes,`
+
+ZRANK: the rank, or none when key or member is absent.
+
+### `fn zscore(c: Conn, key: str, member: bytes,`
+
+ZSCORE: the score, or none when key or member is absent.
+
+### `fn zrem(c: Conn, key: str, members: [bytes],`
+
+ZREM: how many members were removed.
+
+### `fn zcard(c: Conn, key: str, deadline: until) -> result[int, str]`
+
+### `fn zincr_by(c: Conn, key: str, n: float, member: bytes,`
+
+### `fn key_type(c: Conn, key: str, deadline: until) -> result[str, str]`
+
+TYPE: the key's type name ("none" when absent).
+
+### `fn rename(c: Conn, key: str, newkey: str,`
+
+RENAME: true on +OK. RENAMENX: true only when newkey was absent.
+
+### `fn rename_nx(c: Conn, key: str, newkey: str,`
+
+### `gc struct ScanOut`
+
+### `fn scan(c: Conn, cursor: int, match: opt[str], count: opt[int],`
+
+SCAN: one cursor step. Thread cursor back in until it returns 0; match and count are server hints, both optional. KEYS is deliberately absent: it blocks the server for the whole keyspace.
 
 ---
 

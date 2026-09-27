@@ -7,3 +7,9 @@ ok corrupt
 ok drop
 ok timeout
 ok server-error
+ok mget-nil
+ok strings
+ok hash-list
+ok zrank-nil
+ok zscore-nil
+ok set-zset

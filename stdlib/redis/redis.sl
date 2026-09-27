@@ -839,3 +839,892 @@ pub fn close(c: Conn) {
 pub fn usable(c: Conn) -> bool {
     return !c.closed && !c.broken;
 }
+
+// ---- reply shaping ---------------------------------------------------
+// Typed commands are all one round trip plus one of these extractors:
+// a reply of the wrong shape is a client-side error naming the
+// command, never a silent misread.
+
+fn as_int(r: Reply, what: str) -> result[int, str] {
+    if r.kind != REPLY_INT {
+        return err(what + ": expected an integer reply");
+    }
+    return ok(r.num);
+}
+
+fn as_int_bool(r: Reply, what: str) -> result[bool, str] {
+    if r.kind != REPLY_INT {
+        return err(what + ": expected an integer reply");
+    }
+    if r.num == 1 {
+        return ok(true);
+    }
+    if r.num == 0 {
+        return ok(false);
+    }
+    return err(what + ": expected 0 or 1");
+}
+
+fn as_simple(r: Reply, what: str) -> result[str, str] {
+    if r.kind != REPLY_SIMPLE {
+        return err(what + ": expected a status reply");
+    }
+    return ok(r.text);
+}
+
+fn as_bulk(r: Reply, what: str) -> result[bytes, str] {
+    if r.kind != REPLY_BULK {
+        return err(what + ": expected a bulk reply");
+    }
+    guard let b = r.bulk else {
+        return err(what + ": unexpected nil");
+    }
+    return ok(b);
+}
+
+fn as_array(r: Reply, what: str) -> result[[Reply], str] {
+    if r.kind != REPLY_ARRAY {
+        return err(what + ": expected an array reply");
+    }
+    if r.is_nil {
+        return err(what + ": unexpected nil");
+    }
+    return ok(r.items);
+}
+
+fn cmd2(c: Conn, name: str, a: bytes, deadline: until) -> result[Reply, str] {
+    return do(c, [to_bytes(name), a], deadline);
+}
+
+// ---- strings ---------------------------------------------------------
+
+// PING, expecting PONG back.
+pub fn ping(c: Conn, deadline: until) -> result[str, str] {
+    let r = do(c, [to_bytes("PING")], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_simple(reply, "PING");
+}
+
+// ECHO, expecting the value back byte-identical.
+pub fn echo(c: Conn, v: bytes, deadline: until) -> result[bytes, str] {
+    let r = cmd2(c, "ECHO", v, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_bulk(reply, "ECHO");
+}
+
+// GET: the value, or none when the key is absent. A missing key is
+// absent data (opt), not an error.
+pub fn get(c: Conn, key: str, deadline: until) -> result[opt[bytes], str] {
+    let r = cmd2(c, "GET", to_bytes(key), deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind != REPLY_BULK {
+        return err("GET: expected a bulk reply");
+    }
+    return ok(reply.bulk);
+}
+
+// SET: true when the server answers +OK.
+pub fn set(c: Conn, key: str, val: bytes,
+           deadline: until) -> result[bool, str] {
+    let r = do(c, [to_bytes("SET"), to_bytes(key), val], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind != REPLY_SIMPLE {
+        return err("SET: expected a status reply");
+    }
+    return ok(true);
+}
+
+// SET with a TTL in seconds. True on +OK.
+pub fn set_ex(c: Conn, key: str, seconds: int, val: bytes,
+              deadline: until) -> result[bool, str] {
+    let r = do(c, [to_bytes("SET"), to_bytes(key), val, to_bytes("EX"),
+                   to_bytes(to_str(seconds))], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind != REPLY_SIMPLE {
+        return err("SET: expected a status reply");
+    }
+    return ok(true);
+}
+
+// SETNX: true when the key was absent and is now set.
+pub fn set_nx(c: Conn, key: str, val: bytes,
+              deadline: until) -> result[bool, str] {
+    let r = do(c, [to_bytes("SETNX"), to_bytes(key), val], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int_bool(reply, "SETNX");
+}
+
+// DEL_KEYS: how many of the keys existed. Named with a suffix
+// because `del` itself removes map entries -- it is a builtin.
+pub fn del_keys(c: Conn, keys: [str], deadline: until) -> result[int, str] {
+    let args: [bytes] = [to_bytes("DEL")];
+    for k in keys {
+        push(args, to_bytes(k));
+    }
+    let r = do(c, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "DEL");
+}
+
+// EXISTS: how many of the keys exist.
+pub fn exists(c: Conn, keys: [str], deadline: until) -> result[int, str] {
+    let args: [bytes] = [to_bytes("EXISTS")];
+    for k in keys {
+        push(args, to_bytes(k));
+    }
+    let r = do(c, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "EXISTS");
+}
+
+// EXPIRE: true when the timeout was set (false: missing key).
+pub fn expire(c: Conn, key: str, seconds: int,
+              deadline: until) -> result[bool, str] {
+    let r = do(c, [to_bytes("EXPIRE"), to_bytes(key),
+                   to_bytes(to_str(seconds))], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int_bool(reply, "EXPIRE");
+}
+
+// PEXPIRE: like EXPIRE with a millisecond TTL.
+pub fn pexpire(c: Conn, key: str, ms: int,
+               deadline: until) -> result[bool, str] {
+    let r = do(c, [to_bytes("PEXPIRE"), to_bytes(key),
+                   to_bytes(to_str(ms))], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int_bool(reply, "PEXPIRE");
+}
+
+// TTL in seconds: -2 missing key, -1 no TTL, else seconds left.
+pub fn ttl(c: Conn, key: str, deadline: until) -> result[int, str] {
+    let r = cmd2(c, "TTL", to_bytes(key), deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "TTL");
+}
+
+// PTTL: like TTL in milliseconds.
+pub fn pttl(c: Conn, key: str, deadline: until) -> result[int, str] {
+    let r = cmd2(c, "PTTL", to_bytes(key), deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "PTTL");
+}
+
+// PERSIST: true when a TTL was removed (false: missing key or none).
+pub fn persist(c: Conn, key: str, deadline: until) -> result[bool, str] {
+    let r = cmd2(c, "PERSIST", to_bytes(key), deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int_bool(reply, "PERSIST");
+}
+
+// INCR/DECR: the value after the change.
+pub fn incr(c: Conn, key: str, deadline: until) -> result[int, str] {
+    let r = cmd2(c, "INCR", to_bytes(key), deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "INCR");
+}
+
+pub fn decr(c: Conn, key: str, deadline: until) -> result[int, str] {
+    let r = cmd2(c, "DECR", to_bytes(key), deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "DECR");
+}
+
+pub fn incr_by(c: Conn, key: str, n: int,
+               deadline: until) -> result[int, str] {
+    let r = do(c, [to_bytes("INCRBY"), to_bytes(key),
+                   to_bytes(to_str(n))], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "INCRBY");
+}
+
+pub fn decr_by(c: Conn, key: str, n: int,
+               deadline: until) -> result[int, str] {
+    let r = do(c, [to_bytes("DECRBY"), to_bytes(key),
+                   to_bytes(to_str(n))], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "DECRBY");
+}
+
+// APPEND: the length after appending. STRLEN: the current length.
+pub fn append(c: Conn, key: str, val: bytes,
+              deadline: until) -> result[int, str] {
+    let r = do(c, [to_bytes("APPEND"), to_bytes(key), val], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "APPEND");
+}
+
+pub fn strlen(c: Conn, key: str, deadline: until) -> result[int, str] {
+    let r = cmd2(c, "STRLEN", to_bytes(key), deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "STRLEN");
+}
+
+// MGET: one slot per key, none for the missing ones.
+pub fn mget(c: Conn, keys: [str],
+            deadline: until) -> result[[opt[bytes]], str] {
+    let args: [bytes] = [to_bytes("MGET")];
+    for k in keys {
+        push(args, to_bytes(k));
+    }
+    let r = do(c, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    guard let items = as_array(reply, "MGET") else let e = err_of(as_array(reply, "MGET")) {
+        return err(e);
+    }
+    let out: [opt[bytes]] = [];
+    for it in items {
+        if it.kind != REPLY_BULK {
+            return err("MGET: expected bulk elements");
+        }
+        push(out, it.bulk);
+    }
+    return ok(out);
+}
+
+// MSET: field iteration order is insertion order, so the wire order
+// is deterministic for a literally-built map.
+pub fn mset(c: Conn, kv: map[str]bytes,
+            deadline: until) -> result[bool, str] {
+    let args: [bytes] = [to_bytes("MSET")];
+    for k, v in kv {
+        push(args, to_bytes(k));
+        push(args, v);
+    }
+    let r = do(c, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind != REPLY_SIMPLE {
+        return err("MSET: expected a status reply");
+    }
+    return ok(true);
+}
+
+// ---- hashes ----------------------------------------------------------
+
+// HSET: how many fields were newly added.
+pub fn hset(c: Conn, key: str, field: str, val: bytes,
+            deadline: until) -> result[int, str] {
+    let r = do(c, [to_bytes("HSET"), to_bytes(key), to_bytes(field), val],
+               deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "HSET");
+}
+
+// HGET: the value, or none when key or field is absent.
+pub fn hget(c: Conn, key: str, field: str,
+            deadline: until) -> result[opt[bytes], str] {
+    let r = do(c, [to_bytes("HGET"), to_bytes(key), to_bytes(field)],
+               deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind != REPLY_BULK {
+        return err("HGET: expected a bulk reply");
+    }
+    return ok(reply.bulk);
+}
+
+// HGETALL: the whole hash. Field names decode to str; binary field
+// names a program did not put there itself come back lossy.
+pub fn hgetall(c: Conn, key: str,
+               deadline: until) -> result[map[str]bytes, str] {
+    let r = cmd2(c, "HGETALL", to_bytes(key), deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    guard let items = as_array(reply, "HGETALL") else let e = err_of(as_array(reply, "HGETALL")) {
+        return err(e);
+    }
+    if len(items) % 2 != 0 {
+        return err("HGETALL: odd element count");
+    }
+    let out: map[str]bytes = {};
+    let i = 0;
+    while i < len(items) {
+        if items[i].kind != REPLY_BULK || items[i + 1].kind != REPLY_BULK {
+            return err("HGETALL: expected bulk elements");
+        }
+        guard let f = items[i].bulk else {
+            return err("HGETALL: nil field");
+        }
+        guard let v = items[i + 1].bulk else {
+            return err("HGETALL: nil value");
+        }
+        out[to_str(f)] = v;
+        i = i + 2;
+    }
+    return ok(out);
+}
+
+// HDEL: how many fields were removed.
+pub fn hdel(c: Conn, key: str, fields: [str],
+            deadline: until) -> result[int, str] {
+    let args: [bytes] = [to_bytes("HDEL"), to_bytes(key)];
+    for f in fields {
+        push(args, to_bytes(f));
+    }
+    let r = do(c, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "HDEL");
+}
+
+pub fn hexists(c: Conn, key: str, field: str,
+               deadline: until) -> result[bool, str] {
+    let r = do(c, [to_bytes("HEXISTS"), to_bytes(key), to_bytes(field)],
+               deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int_bool(reply, "HEXISTS");
+}
+
+pub fn hkeys(c: Conn, key: str,
+             deadline: until) -> result[[str], str] {
+    let r = cmd2(c, "HKEYS", to_bytes(key), deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    guard let items = as_array(reply, "HKEYS") else let e = err_of(as_array(reply, "HKEYS")) {
+        return err(e);
+    }
+    let out: [str] = [];
+    for it in items {
+        if it.kind != REPLY_BULK {
+            return err("HKEYS: expected bulk elements");
+        }
+        guard let b = it.bulk else {
+            return err("HKEYS: nil element");
+        }
+        push(out, to_str(b));
+    }
+    return ok(out);
+}
+
+pub fn hvals(c: Conn, key: str,
+             deadline: until) -> result[[bytes], str] {
+    let r = cmd2(c, "HVALS", to_bytes(key), deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    guard let items = as_array(reply, "HVALS") else let e = err_of(as_array(reply, "HVALS")) {
+        return err(e);
+    }
+    let out: [bytes] = [];
+    for it in items {
+        if it.kind != REPLY_BULK {
+            return err("HVALS: expected bulk elements");
+        }
+        guard let b = it.bulk else {
+            return err("HVALS: nil element");
+        }
+        push(out, b);
+    }
+    return ok(out);
+}
+
+pub fn hlen(c: Conn, key: str, deadline: until) -> result[int, str] {
+    let r = cmd2(c, "HLEN", to_bytes(key), deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "HLEN");
+}
+
+pub fn hincr_by(c: Conn, key: str, field: str, n: int,
+                deadline: until) -> result[int, str] {
+    let r = do(c, [to_bytes("HINCRBY"), to_bytes(key), to_bytes(field),
+                   to_bytes(to_str(n))], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "HINCRBY");
+}
+
+// ---- lists -----------------------------------------------------------
+
+fn push_int_cmd(c: Conn, name: str, key: str, vals: [bytes],
+                deadline: until) -> result[int, str] {
+    let args: [bytes] = [to_bytes(name), to_bytes(key)];
+    for v in vals {
+        push(args, v);
+    }
+    let r = do(c, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, name);
+}
+
+// LPUSH/RPUSH: the length after pushing.
+pub fn lpush(c: Conn, key: str, vals: [bytes],
+             deadline: until) -> result[int, str] {
+    return push_int_cmd(c, "LPUSH", key, vals, deadline);
+}
+
+pub fn rpush(c: Conn, key: str, vals: [bytes],
+             deadline: until) -> result[int, str] {
+    return push_int_cmd(c, "RPUSH", key, vals, deadline);
+}
+
+// LPOP/RPOP: the element, or none when the list is absent or drained.
+pub fn lpop(c: Conn, key: str, deadline: until) -> result[opt[bytes], str] {
+    let r = cmd2(c, "LPOP", to_bytes(key), deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind != REPLY_BULK {
+        return err("LPOP: expected a bulk reply");
+    }
+    return ok(reply.bulk);
+}
+
+pub fn rpop(c: Conn, key: str, deadline: until) -> result[opt[bytes], str] {
+    let r = cmd2(c, "RPOP", to_bytes(key), deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind != REPLY_BULK {
+        return err("RPOP: expected a bulk reply");
+    }
+    return ok(reply.bulk);
+}
+
+pub fn llen(c: Conn, key: str, deadline: until) -> result[int, str] {
+    let r = cmd2(c, "LLEN", to_bytes(key), deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "LLEN");
+}
+
+// LRANGE: elements from start to stop inclusive; negative indexes
+// count from the tail, exactly as Redis documents.
+pub fn lrange(c: Conn, key: str, start: int, stop: int,
+              deadline: until) -> result[[bytes], str] {
+    let r = do(c, [to_bytes("LRANGE"), to_bytes(key),
+                   to_bytes(to_str(start)), to_bytes(to_str(stop))],
+               deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    guard let items = as_array(reply, "LRANGE") else let e = err_of(as_array(reply, "LRANGE")) {
+        return err(e);
+    }
+    let out: [bytes] = [];
+    for it in items {
+        if it.kind != REPLY_BULK {
+            return err("LRANGE: expected bulk elements");
+        }
+        guard let b = it.bulk else {
+            return err("LRANGE: nil element");
+        }
+        push(out, b);
+    }
+    return ok(out);
+}
+
+pub fn ltrim(c: Conn, key: str, start: int, stop: int,
+             deadline: until) -> result[bool, str] {
+    let r = do(c, [to_bytes("LTRIM"), to_bytes(key),
+                   to_bytes(to_str(start)), to_bytes(to_str(stop))],
+               deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind != REPLY_SIMPLE {
+        return err("LTRIM: expected a status reply");
+    }
+    return ok(true);
+}
+
+pub fn lindex(c: Conn, key: str, i: int,
+              deadline: until) -> result[opt[bytes], str] {
+    let r = do(c, [to_bytes("LINDEX"), to_bytes(key),
+                   to_bytes(to_str(i))], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind != REPLY_BULK {
+        return err("LINDEX: expected a bulk reply");
+    }
+    return ok(reply.bulk);
+}
+
+// LREM: removes count occurrences of val, returns how many went.
+pub fn lrem(c: Conn, key: str, count: int, val: bytes,
+            deadline: until) -> result[int, str] {
+    let r = do(c, [to_bytes("LREM"), to_bytes(key),
+                   to_bytes(to_str(count)), val], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "LREM");
+}
+
+// ---- sets ------------------------------------------------------------
+
+// SADD: how many members were newly added.
+pub fn sadd(c: Conn, key: str, members: [bytes],
+            deadline: until) -> result[int, str] {
+    return push_int_cmd(c, "SADD", key, members, deadline);
+}
+
+pub fn smembers(c: Conn, key: str,
+                deadline: until) -> result[[bytes], str] {
+    let r = cmd2(c, "SMEMBERS", to_bytes(key), deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    guard let items = as_array(reply, "SMEMBERS") else let e = err_of(as_array(reply, "SMEMBERS")) {
+        return err(e);
+    }
+    let out: [bytes] = [];
+    for it in items {
+        if it.kind != REPLY_BULK {
+            return err("SMEMBERS: expected bulk elements");
+        }
+        guard let b = it.bulk else {
+            return err("SMEMBERS: nil element");
+        }
+        push(out, b);
+    }
+    return ok(out);
+}
+
+// SREM: how many members were removed.
+pub fn srem(c: Conn, key: str, members: [bytes],
+            deadline: until) -> result[int, str] {
+    return push_int_cmd(c, "SREM", key, members, deadline);
+}
+
+pub fn scard(c: Conn, key: str, deadline: until) -> result[int, str] {
+    let r = cmd2(c, "SCARD", to_bytes(key), deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "SCARD");
+}
+
+pub fn sismember(c: Conn, key: str, member: bytes,
+                 deadline: until) -> result[bool, str] {
+    let r = do(c, [to_bytes("SISMEMBER"), to_bytes(key), member],
+               deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int_bool(reply, "SISMEMBER");
+}
+
+// SPOP: a removed member, or none when the set is absent or drained.
+pub fn spop(c: Conn, key: str, deadline: until) -> result[opt[bytes], str] {
+    let r = cmd2(c, "SPOP", to_bytes(key), deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind != REPLY_BULK {
+        return err("SPOP: expected a bulk reply");
+    }
+    return ok(reply.bulk);
+}
+
+// ---- sorted sets -----------------------------------------------------
+
+pub gc struct ZMember {
+    member: bytes,
+    score: float,
+}
+
+// ZADD: how many members were newly added.
+pub fn zadd(c: Conn, key: str, members: map[str]float,
+            deadline: until) -> result[int, str] {
+    let args: [bytes] = [to_bytes("ZADD"), to_bytes(key)];
+    for m, s in members {
+        push(args, to_bytes(strings.from_float(s)));
+        push(args, to_bytes(m));
+    }
+    let r = do(c, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "ZADD");
+}
+
+fn bulk_float(r: Reply, what: str) -> result[float, str] {
+    if r.kind != REPLY_BULK {
+        return err(what + ": expected a bulk reply");
+    }
+    guard let b = r.bulk else {
+        return err(what + ": unexpected nil");
+    }
+    let fr = to_float(to_str(b));
+    guard let f = fr else {
+        return err(what + ": bad score");
+    }
+    return ok(f);
+}
+
+// ZRANGE/ZREVRANGE without scores.
+pub fn zrange(c: Conn, key: str, start: int, stop: int,
+              deadline: until) -> result[[bytes], str] {
+    let r = do(c, [to_bytes("ZRANGE"), to_bytes(key),
+                   to_bytes(to_str(start)), to_bytes(to_str(stop))],
+               deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    guard let items = as_array(reply, "ZRANGE") else let e = err_of(as_array(reply, "ZRANGE")) {
+        return err(e);
+    }
+    let out: [bytes] = [];
+    for it in items {
+        if it.kind != REPLY_BULK {
+            return err("ZRANGE: expected bulk elements");
+        }
+        guard let b = it.bulk else {
+            return err("ZRANGE: nil element");
+        }
+        push(out, b);
+    }
+    return ok(out);
+}
+
+// ZRANGE WITHSCORES: member/score pairs in range order.
+pub fn zrange_scores(c: Conn, key: str, start: int, stop: int,
+                     deadline: until) -> result[[ZMember], str] {
+    let r = do(c, [to_bytes("ZRANGE"), to_bytes(key),
+                   to_bytes(to_str(start)), to_bytes(to_str(stop)),
+                   to_bytes("WITHSCORES")], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    guard let items = as_array(reply, "ZRANGE") else let e = err_of(as_array(reply, "ZRANGE")) {
+        return err(e);
+    }
+    if len(items) % 2 != 0 {
+        return err("ZRANGE: odd element count");
+    }
+    let out: [ZMember] = [];
+    let i = 0;
+    while i < len(items) {
+        if items[i].kind != REPLY_BULK || items[i + 1].kind != REPLY_BULK {
+            return err("ZRANGE: expected bulk elements");
+        }
+        guard let m = items[i].bulk else {
+            return err("ZRANGE: nil member");
+        }
+        let fr = bulk_float(items[i + 1], "ZRANGE");
+        guard let f = fr else let e = err_of(fr) {
+            return err(e);
+        }
+        push(out, ZMember { member: m, score: f });
+        i = i + 2;
+    }
+    return ok(out);
+}
+
+// ZRANK: the rank, or none when key or member is absent.
+pub fn zrank(c: Conn, key: str, member: bytes,
+             deadline: until) -> result[opt[int], str] {
+    let r = do(c, [to_bytes("ZRANK"), to_bytes(key), member], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind == REPLY_BULK {
+        return ok(none);
+    }
+    if reply.kind != REPLY_INT {
+        return err("ZRANK: expected an integer reply");
+    }
+    return ok(some(reply.num));
+}
+
+// ZSCORE: the score, or none when key or member is absent.
+pub fn zscore(c: Conn, key: str, member: bytes,
+              deadline: until) -> result[opt[float], str] {
+    let r = do(c, [to_bytes("ZSCORE"), to_bytes(key), member], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind == REPLY_BULK {
+        guard let b = reply.bulk else {
+            return ok(none);
+        }
+        let fr = to_float(to_str(b));
+        guard let f = fr else {
+            return err("ZSCORE: bad score");
+        }
+        return ok(some(f));
+    }
+    return err("ZSCORE: expected a bulk reply");
+}
+
+// ZREM: how many members were removed.
+pub fn zrem(c: Conn, key: str, members: [bytes],
+            deadline: until) -> result[int, str] {
+    return push_int_cmd(c, "ZREM", key, members, deadline);
+}
+
+pub fn zcard(c: Conn, key: str, deadline: until) -> result[int, str] {
+    let r = cmd2(c, "ZCARD", to_bytes(key), deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "ZCARD");
+}
+
+pub fn zincr_by(c: Conn, key: str, n: float, member: bytes,
+                deadline: until) -> result[float, str] {
+    let r = do(c, [to_bytes("ZINCRBY"), to_bytes(key),
+                   to_bytes(strings.from_float(n)), member], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return bulk_float(reply, "ZINCRBY");
+}
+
+// ---- keys ------------------------------------------------------------
+
+// TYPE: the key's type name ("none" when absent).
+pub fn key_type(c: Conn, key: str, deadline: until) -> result[str, str] {
+    let r = cmd2(c, "TYPE", to_bytes(key), deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_simple(reply, "TYPE");
+}
+
+// RENAME: true on +OK. RENAMENX: true only when newkey was absent.
+pub fn rename(c: Conn, key: str, newkey: str,
+              deadline: until) -> result[bool, str] {
+    let r = do(c, [to_bytes("RENAME"), to_bytes(key), to_bytes(newkey)],
+               deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind != REPLY_SIMPLE {
+        return err("RENAME: expected a status reply");
+    }
+    return ok(true);
+}
+
+pub fn rename_nx(c: Conn, key: str, newkey: str,
+                 deadline: until) -> result[bool, str] {
+    let r = do(c, [to_bytes("RENAMENX"), to_bytes(key),
+                   to_bytes(newkey)], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int_bool(reply, "RENAMENX");
+}
+
+pub gc struct ScanOut {
+    cursor: int,
+    keys: [str],
+}
+
+// SCAN: one cursor step. Thread cursor back in until it returns 0;
+// match and count are server hints, both optional. KEYS is
+// deliberately absent: it blocks the server for the whole keyspace.
+pub fn scan(c: Conn, cursor: int, match: opt[str], count: opt[int],
+            deadline: until) -> result[ScanOut, str] {
+    let args: [bytes] = [to_bytes("SCAN"), to_bytes(to_str(cursor))];
+    guard let m = match else {
+        return scan_count(c, args, count, deadline);
+    }
+    push(args, to_bytes("MATCH"));
+    push(args, to_bytes(m));
+    return scan_count(c, args, count, deadline);
+}
+
+fn scan_count(c: Conn, args: [bytes], count: opt[int],
+              deadline: until) -> result[ScanOut, str] {
+    guard let n = count else {
+        return scan_run(c, args, deadline);
+    }
+    push(args, to_bytes("COUNT"));
+    push(args, to_bytes(to_str(n)));
+    return scan_run(c, args, deadline);
+}
+
+fn scan_run(c: Conn, args: [bytes],
+            deadline: until) -> result[ScanOut, str] {
+    let r = do(c, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    guard let items = as_array(reply, "SCAN") else let e = err_of(as_array(reply, "SCAN")) {
+        return err(e);
+    }
+    if len(items) != 2 {
+        return err("SCAN: expected two elements");
+    }
+    if items[0].kind != REPLY_BULK {
+        return err("SCAN: bad cursor");
+    }
+    guard let cb = items[0].bulk else {
+        return err("SCAN: nil cursor");
+    }
+    let cr = to_int(to_str(cb));
+    guard let cursor = cr else {
+        return err("SCAN: bad cursor");
+    }
+    if items[1].kind != REPLY_ARRAY || items[1].is_nil {
+        return err("SCAN: bad key list");
+    }
+    let keys: [str] = [];
+    for it in items[1].items {
+        if it.kind != REPLY_BULK {
+            return err("SCAN: expected bulk keys");
+        }
+        guard let b = it.bulk else {
+            return err("SCAN: nil key");
+        }
+        push(keys, to_str(b));
+    }
+    return ok(ScanOut { cursor: cursor, keys: keys });
+}

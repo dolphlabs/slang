@@ -1903,6 +1903,12 @@ redis.close(c);
 | `redis.connect(url, deadline)` / `redis.connect_config(cfg, deadline)` | `result[Conn, str]` — dial, `AUTH`, `SELECT` |
 | `redis.do(c, args, deadline)` | `result[Reply, str]` — one command round trip |
 | `redis.close(c)` / `redis.usable(c)` | — shutdown / may commands still be attempted |
+| strings | `ping`, `echo`, `get`, `set`, `set_ex`, `set_nx`, `del_keys`, `exists`, `expire`, `pexpire`, `ttl`, `pttl`, `persist`, `incr`, `decr`, `incr_by`, `decr_by`, `append`, `strlen`, `mget`, `mset` |
+| hashes | `hset`, `hget`, `hgetall`, `hdel`, `hexists`, `hkeys`, `hvals`, `hlen`, `hincr_by` |
+| lists | `lpush`, `rpush`, `lpop`, `rpop`, `llen`, `lrange`, `ltrim`, `lindex`, `lrem` |
+| sets | `sadd`, `smembers`, `srem`, `scard`, `sismember`, `spop` |
+| sorted sets | `zadd`, `zrange`, `zrange_scores`, `zrank`, `zscore`, `zrem`, `zcard`, `zincr_by` |
+| keys | `key_type`, `rename`, `rename_nx`, `scan` (`KEYS` omitted on purpose) |
 
 A reply is a `redis.Reply`: `kind` is one of `REPLY_SIMPLE`,
 `REPLY_ERROR`, `REPLY_INT`, `REPLY_BULK` or `REPLY_ARRAY`, with the
