@@ -3241,6 +3241,1300 @@
         }
       ]
     },
+    "redis": {
+      "name": "redis",
+      "kind": "source",
+      "items": [
+        {
+          "name": "REPLY_SIMPLE",
+          "decl": "let",
+          "sig": "let REPLY_SIMPLE = 0;   // +str           (text holds the text)",
+          "doc": "The five RESP2 reply types. A reply is always one of exactly one.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 40
+        },
+        {
+          "name": "REPLY_ERROR",
+          "decl": "let",
+          "sig": "let REPLY_ERROR = 1;    // -err           (text holds the text)",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 41
+        },
+        {
+          "name": "REPLY_INT",
+          "decl": "let",
+          "sig": "let REPLY_INT = 2;      // :num           (num holds the value)",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 42
+        },
+        {
+          "name": "REPLY_BULK",
+          "decl": "let",
+          "sig": "let REPLY_BULK = 3;     // $len\\r\\n<bytes> (bulk holds it, none when nil)",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 43
+        },
+        {
+          "name": "REPLY_ARRAY",
+          "decl": "let",
+          "sig": "let REPLY_ARRAY = 4;    // *n\\r\\n...      (items holds them)",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 44
+        },
+        {
+          "name": "Reply",
+          "decl": "struct",
+          "sig": "gc struct Reply",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 46
+        },
+        {
+          "name": "Decoded",
+          "decl": "struct",
+          "sig": "gc struct Decoded",
+          "doc": "A decoded reply plus how many bytes of the input it consumed, so a connection holding a read buffer knows what to keep.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 57
+        },
+        {
+          "name": "encode",
+          "decl": "fn",
+          "sig": "fn encode(args: [bytes]) -> bytes",
+          "doc": "Encode one command invocation as a RESP2 array of bulk strings: SET key value  ->  *3\\r\\n$3\\r\\nSET\\r\\n$3\\r\\nkey\\r\\n$5\\r\\nvalue\\r\\n Takes already-encoded argument bytes, so binary-safe values pass through untouched. Pure: no I/O, no allocation beyond the result.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 102
+        },
+        {
+          "name": "decode",
+          "decl": "fn",
+          "sig": "fn decode(buf: bytes) -> result[opt[Decoded], str]",
+          "doc": "Decode one RESP2 reply from the front of `buf`. ok(none) means the buffer ends mid-message -- feed more bytes and retry. ok(some(d)) consumed d.consumed bytes; anything after them is the next message. err means the bytes violate the protocol: never retry on the same connection.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 353
+        },
+        {
+          "name": "decode_at",
+          "decl": "fn",
+          "sig": "fn decode_at(buf: bytes, pos: int) -> result[opt[Decoded], str]",
+          "doc": "Decode one reply starting at `pos` instead of 0, for readers that keep one long-lived buffer and an offset into it (see Conn): no slicing, so no per-recv copy of everything already buffered. consumed counts from `pos`.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 361
+        },
+        {
+          "name": "slot",
+          "decl": "fn",
+          "sig": "fn slot(key: str) -> int",
+          "doc": "The hash slot of a key, 0..16383. `{...}` hash tags force colocation: only what sits between the first `{` and the next `}` is hashed. Empty tags hash the whole key, and a `{` with no `}` is literal.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 401
+        },
+        {
+          "name": "Config",
+          "decl": "struct",
+          "sig": "gc struct Config",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 429
+        },
+        {
+          "name": "parse_url",
+          "decl": "fn",
+          "sig": "fn parse_url(url: str) -> result[Config, str]",
+          "doc": "Parse redis://[[username:]password@]host[:port][/db][?sslmode=...]. rediss:// forces sslmode=require. Percent-escapes in credentials and database decode the same way pg's URLs do.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 489
+        },
+        {
+          "name": "Conn",
+          "decl": "struct",
+          "sig": "gc struct Conn",
+          "doc": "One server connection: exactly one round trip in flight at a time, serialized by lock. A Conn is safe to share between tasks; every public call below takes the lock for its whole exchange.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 612
+        },
+        {
+          "name": "connect_config",
+          "decl": "fn",
+          "sig": "fn connect_config(cfg: Config, deadline: until) -> result[Conn, str]",
+          "doc": "Open a connection from a parsed Config and run the handshake (AUTH when a password is set, SELECT when db is not 0). The deadline covers everything: DNS, TCP connect, TLS upgrade, login.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 761
+        },
+        {
+          "name": "connect",
+          "decl": "fn",
+          "sig": "fn connect(url: str, deadline: until) -> result[Conn, str]",
+          "doc": "Open a connection from a URL. See parse_url for the shape.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 823
+        },
+        {
+          "name": "do",
+          "decl": "fn",
+          "sig": "fn do(c: Conn, args: [bytes], deadline: until) -> result[Reply, str]",
+          "doc": "Run one command: args[0] is the command name. Exactly one reply is consumed, so at most one command is ever in flight per Conn; hold no lock of your own -- this takes c.lock for the round trip. Refused inside MULTI: queued commands answer +QUEUED, which no typed shape could read -- use queue there.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 836
+        },
+        {
+          "name": "close",
+          "decl": "fn",
+          "sig": "fn close(c: Conn)",
+          "doc": "Shut the connection down. In-flight calls on other tasks finish (or hit their own deadlines) first; close waits for the lock.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 849
+        },
+        {
+          "name": "usable",
+          "decl": "fn",
+          "sig": "fn usable(c: Conn) -> bool",
+          "doc": "True while commands may still be attempted: not closed, not broken. A server-side idle close is discovered on use, which marks the connection broken then.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 861
+        },
+        {
+          "name": "ping",
+          "decl": "fn",
+          "sig": "fn ping(c: Conn, deadline: until) -> result[str, str]",
+          "doc": "PING, expecting PONG back.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 924
+        },
+        {
+          "name": "echo",
+          "decl": "fn",
+          "sig": "fn echo(c: Conn, v: bytes, deadline: until) -> result[bytes, str]",
+          "doc": "ECHO, expecting the value back byte-identical.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 933
+        },
+        {
+          "name": "get",
+          "decl": "fn",
+          "sig": "fn get(c: Conn, key: str, deadline: until) -> result[opt[bytes], str]",
+          "doc": "GET: the value, or none when the key is absent. A missing key is absent data (opt), not an error.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 943
+        },
+        {
+          "name": "set",
+          "decl": "fn",
+          "sig": "fn set(c: Conn, key: str, val: bytes,",
+          "doc": "SET: true when the server answers +OK.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 955
+        },
+        {
+          "name": "set_ex",
+          "decl": "fn",
+          "sig": "fn set_ex(c: Conn, key: str, seconds: int, val: bytes,",
+          "doc": "SET with a TTL in seconds. True on +OK.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 968
+        },
+        {
+          "name": "set_nx",
+          "decl": "fn",
+          "sig": "fn set_nx(c: Conn, key: str, val: bytes,",
+          "doc": "SETNX: true when the key was absent and is now set.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 982
+        },
+        {
+          "name": "del_keys",
+          "decl": "fn",
+          "sig": "fn del_keys(c: Conn, keys: [str], deadline: until) -> result[int, str]",
+          "doc": "DEL_KEYS: how many of the keys existed. Named with a suffix because `del` itself removes map entries -- it is a builtin.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 993
+        },
+        {
+          "name": "exists",
+          "decl": "fn",
+          "sig": "fn exists(c: Conn, keys: [str], deadline: until) -> result[int, str]",
+          "doc": "EXISTS: how many of the keys exist.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1006
+        },
+        {
+          "name": "expire",
+          "decl": "fn",
+          "sig": "fn expire(c: Conn, key: str, seconds: int,",
+          "doc": "EXPIRE: true when the timeout was set (false: missing key).",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1019
+        },
+        {
+          "name": "pexpire",
+          "decl": "fn",
+          "sig": "fn pexpire(c: Conn, key: str, ms: int,",
+          "doc": "PEXPIRE: like EXPIRE with a millisecond TTL.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1030
+        },
+        {
+          "name": "ttl",
+          "decl": "fn",
+          "sig": "fn ttl(c: Conn, key: str, deadline: until) -> result[int, str]",
+          "doc": "TTL in seconds: -2 missing key, -1 no TTL, else seconds left.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1041
+        },
+        {
+          "name": "pttl",
+          "decl": "fn",
+          "sig": "fn pttl(c: Conn, key: str, deadline: until) -> result[int, str]",
+          "doc": "PTTL: like TTL in milliseconds.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1050
+        },
+        {
+          "name": "persist",
+          "decl": "fn",
+          "sig": "fn persist(c: Conn, key: str, deadline: until) -> result[bool, str]",
+          "doc": "PERSIST: true when a TTL was removed (false: missing key or none).",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1059
+        },
+        {
+          "name": "incr",
+          "decl": "fn",
+          "sig": "fn incr(c: Conn, key: str, deadline: until) -> result[int, str]",
+          "doc": "INCR/DECR: the value after the change.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1068
+        },
+        {
+          "name": "decr",
+          "decl": "fn",
+          "sig": "fn decr(c: Conn, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1076
+        },
+        {
+          "name": "incr_by",
+          "decl": "fn",
+          "sig": "fn incr_by(c: Conn, key: str, n: int,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1084
+        },
+        {
+          "name": "decr_by",
+          "decl": "fn",
+          "sig": "fn decr_by(c: Conn, key: str, n: int,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1094
+        },
+        {
+          "name": "append",
+          "decl": "fn",
+          "sig": "fn append(c: Conn, key: str, val: bytes,",
+          "doc": "APPEND: the length after appending. STRLEN: the current length.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1105
+        },
+        {
+          "name": "strlen",
+          "decl": "fn",
+          "sig": "fn strlen(c: Conn, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1114
+        },
+        {
+          "name": "mget",
+          "decl": "fn",
+          "sig": "fn mget(c: Conn, keys: [str],",
+          "doc": "MGET: one slot per key, none for the missing ones.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1123
+        },
+        {
+          "name": "mset",
+          "decl": "fn",
+          "sig": "fn mset(c: Conn, kv: map[str]bytes,",
+          "doc": "MSET: field iteration order is insertion order, so the wire order is deterministic for a literally-built map.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1148
+        },
+        {
+          "name": "hset",
+          "decl": "fn",
+          "sig": "fn hset(c: Conn, key: str, field: str, val: bytes,",
+          "doc": "HSET: how many fields were newly added.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1168
+        },
+        {
+          "name": "hget",
+          "decl": "fn",
+          "sig": "fn hget(c: Conn, key: str, field: str,",
+          "doc": "HGET: the value, or none when key or field is absent.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1179
+        },
+        {
+          "name": "hgetall",
+          "decl": "fn",
+          "sig": "fn hgetall(c: Conn, key: str,",
+          "doc": "HGETALL: the whole hash. Field names decode to str; binary field names a program did not put there itself come back lossy.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1194
+        },
+        {
+          "name": "hdel",
+          "decl": "fn",
+          "sig": "fn hdel(c: Conn, key: str, fields: [str],",
+          "doc": "HDEL: how many fields were removed.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1225
+        },
+        {
+          "name": "hexists",
+          "decl": "fn",
+          "sig": "fn hexists(c: Conn, key: str, field: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1238
+        },
+        {
+          "name": "hkeys",
+          "decl": "fn",
+          "sig": "fn hkeys(c: Conn, key: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1248
+        },
+        {
+          "name": "hvals",
+          "decl": "fn",
+          "sig": "fn hvals(c: Conn, key: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1270
+        },
+        {
+          "name": "hlen",
+          "decl": "fn",
+          "sig": "fn hlen(c: Conn, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1292
+        },
+        {
+          "name": "hincr_by",
+          "decl": "fn",
+          "sig": "fn hincr_by(c: Conn, key: str, field: str, n: int,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1300
+        },
+        {
+          "name": "lpush",
+          "decl": "fn",
+          "sig": "fn lpush(c: Conn, key: str, vals: [bytes],",
+          "doc": "LPUSH/RPUSH: the length after pushing.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1326
+        },
+        {
+          "name": "rpush",
+          "decl": "fn",
+          "sig": "fn rpush(c: Conn, key: str, vals: [bytes],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1331
+        },
+        {
+          "name": "lpop",
+          "decl": "fn",
+          "sig": "fn lpop(c: Conn, key: str, deadline: until) -> result[opt[bytes], str]",
+          "doc": "LPOP/RPOP: the element, or none when the list is absent or drained.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1337
+        },
+        {
+          "name": "rpop",
+          "decl": "fn",
+          "sig": "fn rpop(c: Conn, key: str, deadline: until) -> result[opt[bytes], str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1348
+        },
+        {
+          "name": "llen",
+          "decl": "fn",
+          "sig": "fn llen(c: Conn, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1359
+        },
+        {
+          "name": "lrange",
+          "decl": "fn",
+          "sig": "fn lrange(c: Conn, key: str, start: int, stop: int,",
+          "doc": "LRANGE: elements from start to stop inclusive; negative indexes count from the tail, exactly as Redis documents.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1369
+        },
+        {
+          "name": "ltrim",
+          "decl": "fn",
+          "sig": "fn ltrim(c: Conn, key: str, start: int, stop: int,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1393
+        },
+        {
+          "name": "lindex",
+          "decl": "fn",
+          "sig": "fn lindex(c: Conn, key: str, i: int,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1407
+        },
+        {
+          "name": "lrem",
+          "decl": "fn",
+          "sig": "fn lrem(c: Conn, key: str, count: int, val: bytes,",
+          "doc": "LREM: removes count occurrences of val, returns how many went.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1421
+        },
+        {
+          "name": "sadd",
+          "decl": "fn",
+          "sig": "fn sadd(c: Conn, key: str, members: [bytes],",
+          "doc": "SADD: how many members were newly added.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1434
+        },
+        {
+          "name": "smembers",
+          "decl": "fn",
+          "sig": "fn smembers(c: Conn, key: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1439
+        },
+        {
+          "name": "srem",
+          "decl": "fn",
+          "sig": "fn srem(c: Conn, key: str, members: [bytes],",
+          "doc": "SREM: how many members were removed.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1462
+        },
+        {
+          "name": "scard",
+          "decl": "fn",
+          "sig": "fn scard(c: Conn, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1467
+        },
+        {
+          "name": "sismember",
+          "decl": "fn",
+          "sig": "fn sismember(c: Conn, key: str, member: bytes,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1475
+        },
+        {
+          "name": "spop",
+          "decl": "fn",
+          "sig": "fn spop(c: Conn, key: str, deadline: until) -> result[opt[bytes], str]",
+          "doc": "SPOP: a removed member, or none when the set is absent or drained.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1486
+        },
+        {
+          "name": "ZMember",
+          "decl": "struct",
+          "sig": "gc struct ZMember",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1499
+        },
+        {
+          "name": "zadd",
+          "decl": "fn",
+          "sig": "fn zadd(c: Conn, key: str, members: map[str]float,",
+          "doc": "ZADD: how many members were newly added.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1505
+        },
+        {
+          "name": "zrange",
+          "decl": "fn",
+          "sig": "fn zrange(c: Conn, key: str, start: int, stop: int,",
+          "doc": "ZRANGE/ZREVRANGE without scores.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1534
+        },
+        {
+          "name": "zrange_scores",
+          "decl": "fn",
+          "sig": "fn zrange_scores(c: Conn, key: str, start: int, stop: int,",
+          "doc": "ZRANGE WITHSCORES: member/score pairs in range order.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1559
+        },
+        {
+          "name": "zrank",
+          "decl": "fn",
+          "sig": "fn zrank(c: Conn, key: str, member: bytes,",
+          "doc": "ZRANK: the rank, or none when key or member is absent.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1593
+        },
+        {
+          "name": "zscore",
+          "decl": "fn",
+          "sig": "fn zscore(c: Conn, key: str, member: bytes,",
+          "doc": "ZSCORE: the score, or none when key or member is absent.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1609
+        },
+        {
+          "name": "zrem",
+          "decl": "fn",
+          "sig": "fn zrem(c: Conn, key: str, members: [bytes],",
+          "doc": "ZREM: how many members were removed.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1629
+        },
+        {
+          "name": "zcard",
+          "decl": "fn",
+          "sig": "fn zcard(c: Conn, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1634
+        },
+        {
+          "name": "zincr_by",
+          "decl": "fn",
+          "sig": "fn zincr_by(c: Conn, key: str, n: float, member: bytes,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1642
+        },
+        {
+          "name": "key_type",
+          "decl": "fn",
+          "sig": "fn key_type(c: Conn, key: str, deadline: until) -> result[str, str]",
+          "doc": "TYPE: the key's type name (\"none\" when absent).",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1655
+        },
+        {
+          "name": "rename",
+          "decl": "fn",
+          "sig": "fn rename(c: Conn, key: str, newkey: str,",
+          "doc": "RENAME: true on +OK. RENAMENX: true only when newkey was absent.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1664
+        },
+        {
+          "name": "rename_nx",
+          "decl": "fn",
+          "sig": "fn rename_nx(c: Conn, key: str, newkey: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1677
+        },
+        {
+          "name": "ScanOut",
+          "decl": "struct",
+          "sig": "gc struct ScanOut",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1687
+        },
+        {
+          "name": "scan",
+          "decl": "fn",
+          "sig": "fn scan(c: Conn, cursor: int, match: opt[str], count: opt[int],",
+          "doc": "SCAN: one cursor step. Thread cursor back in until it returns 0; match and count are server hints, both optional. KEYS is deliberately absent: it blocks the server for the whole keyspace.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1695
+        },
+        {
+          "name": "Pool",
+          "decl": "struct",
+          "sig": "gc struct Pool",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1761
+        },
+        {
+          "name": "new_pool",
+          "decl": "fn",
+          "sig": "fn new_pool(url: str, max_open: int) -> result[Pool, str]",
+          "doc": "Parses the url; connects nothing until the first acquire.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1773
+        },
+        {
+          "name": "new_pool_config",
+          "decl": "fn",
+          "sig": "fn new_pool_config(cfg: Config, max_open: int) -> result[Pool, str]",
+          "doc": "Same, from a Config built by hand (pool_size is ignored: max_open says it here, once, where the pool is made).",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1783
+        },
+        {
+          "name": "acquire",
+          "decl": "fn",
+          "sig": "fn acquire(p: Pool, deadline: until) -> result[Conn, str]",
+          "doc": "A connection for the caller's exclusive use, until release().",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1800
+        },
+        {
+          "name": "release",
+          "decl": "fn",
+          "sig": "fn release(p: Pool, c: Conn)",
+          "doc": "Returns a connection to the pool. One that is broken, closed, or inside MULTI is closed instead: handing those to the next caller would fail its first command, or run it inside someone else's uncommitted transaction.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1853
+        },
+        {
+          "name": "pool_do",
+          "decl": "fn",
+          "sig": "fn pool_do(p: Pool, args: [bytes],",
+          "doc": "One command on a pooled connection: acquire, run, release. The connection goes back even when the command fails.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1872
+        },
+        {
+          "name": "pool_close",
+          "decl": "fn",
+          "sig": "fn pool_close(p: Pool)",
+          "doc": "Closes every idle connection. Connections checked out are closed as they are released; acquire fails from now on. Closes every idle connection. Connections checked out are closed as they are released; acquire fails from now on.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1887
+        },
+        {
+          "name": "Cluster",
+          "decl": "struct",
+          "sig": "gc struct Cluster",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 1964
+        },
+        {
+          "name": "new_cluster",
+          "decl": "fn",
+          "sig": "fn new_cluster(cfg: Config, seeds: [str],",
+          "doc": "Connect to a cluster: try each seed until one serves CLUSTER SLOTS. Only database 0 exists in cluster mode. The deadline covers the whole bootstrap.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2069
+        },
+        {
+          "name": "cluster_refresh",
+          "decl": "fn",
+          "sig": "fn cluster_refresh(cl: Cluster, deadline: until) -> result[bool, str]",
+          "doc": "Re-learn the whole slot map from a known node (any current pool will do; the first one wins) or a bootstrap seed. Manual recovery for outages the MOVED path cannot see.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2098
+        },
+        {
+          "name": "cluster_do",
+          "decl": "fn",
+          "sig": "fn cluster_do(cl: Cluster, key: str, args: [bytes],",
+          "doc": "Run args against the node owning key, following MOVED (map update plus retry, up to MAX_REDIRECTS) and ASK (one directed ASKING hop, returned directly). Every other error returns verbatim.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2156
+        },
+        {
+          "name": "cluster_close",
+          "decl": "fn",
+          "sig": "fn cluster_close(cl: Cluster)",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2246
+        },
+        {
+          "name": "cping",
+          "decl": "fn",
+          "sig": "fn cping(cl: Cluster, deadline: until) -> result[str, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2274
+        },
+        {
+          "name": "cecho",
+          "decl": "fn",
+          "sig": "fn cecho(cl: Cluster, v: bytes, deadline: until) -> result[bytes, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2282
+        },
+        {
+          "name": "cget",
+          "decl": "fn",
+          "sig": "fn cget(cl: Cluster, key: str, deadline: until) -> result[opt[bytes], str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2290
+        },
+        {
+          "name": "cset",
+          "decl": "fn",
+          "sig": "fn cset(cl: Cluster, key: str, val: bytes,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2302
+        },
+        {
+          "name": "cset_ex",
+          "decl": "fn",
+          "sig": "fn cset_ex(cl: Cluster, key: str, seconds: int, val: bytes,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2315
+        },
+        {
+          "name": "cset_nx",
+          "decl": "fn",
+          "sig": "fn cset_nx(cl: Cluster, key: str, val: bytes,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2329
+        },
+        {
+          "name": "cdel_keys",
+          "decl": "fn",
+          "sig": "fn cdel_keys(cl: Cluster, keys: [str],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2339
+        },
+        {
+          "name": "cexists",
+          "decl": "fn",
+          "sig": "fn cexists(cl: Cluster, keys: [str],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2355
+        },
+        {
+          "name": "cexpire",
+          "decl": "fn",
+          "sig": "fn cexpire(cl: Cluster, key: str, seconds: int,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2371
+        },
+        {
+          "name": "cpexpire",
+          "decl": "fn",
+          "sig": "fn cpexpire(cl: Cluster, key: str, ms: int,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2381
+        },
+        {
+          "name": "cttl",
+          "decl": "fn",
+          "sig": "fn cttl(cl: Cluster, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2391
+        },
+        {
+          "name": "cpttl",
+          "decl": "fn",
+          "sig": "fn cpttl(cl: Cluster, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2400
+        },
+        {
+          "name": "cpersist",
+          "decl": "fn",
+          "sig": "fn cpersist(cl: Cluster, key: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2409
+        },
+        {
+          "name": "cincr",
+          "decl": "fn",
+          "sig": "fn cincr(cl: Cluster, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2419
+        },
+        {
+          "name": "cdecr",
+          "decl": "fn",
+          "sig": "fn cdecr(cl: Cluster, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2428
+        },
+        {
+          "name": "cincr_by",
+          "decl": "fn",
+          "sig": "fn cincr_by(cl: Cluster, key: str, n: int,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2437
+        },
+        {
+          "name": "cdecr_by",
+          "decl": "fn",
+          "sig": "fn cdecr_by(cl: Cluster, key: str, n: int,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2447
+        },
+        {
+          "name": "cappend",
+          "decl": "fn",
+          "sig": "fn cappend(cl: Cluster, key: str, val: bytes,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2457
+        },
+        {
+          "name": "cstrlen",
+          "decl": "fn",
+          "sig": "fn cstrlen(cl: Cluster, key: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2467
+        },
+        {
+          "name": "cmget",
+          "decl": "fn",
+          "sig": "fn cmget(cl: Cluster, keys: [str],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2477
+        },
+        {
+          "name": "cmset",
+          "decl": "fn",
+          "sig": "fn cmset(cl: Cluster, kv: map[str]bytes,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2503
+        },
+        {
+          "name": "chset",
+          "decl": "fn",
+          "sig": "fn chset(cl: Cluster, key: str, field: str, val: bytes,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2530
+        },
+        {
+          "name": "chget",
+          "decl": "fn",
+          "sig": "fn chget(cl: Cluster, key: str, field: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2540
+        },
+        {
+          "name": "chdel",
+          "decl": "fn",
+          "sig": "fn chdel(cl: Cluster, key: str, fields: [str],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2553
+        },
+        {
+          "name": "chexists",
+          "decl": "fn",
+          "sig": "fn chexists(cl: Cluster, key: str, field: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2566
+        },
+        {
+          "name": "chlen",
+          "decl": "fn",
+          "sig": "fn chlen(cl: Cluster, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2576
+        },
+        {
+          "name": "chincr_by",
+          "decl": "fn",
+          "sig": "fn chincr_by(cl: Cluster, key: str, field: str, n: int,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2585
+        },
+        {
+          "name": "clpush",
+          "decl": "fn",
+          "sig": "fn clpush(cl: Cluster, key: str, vals: [bytes],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2596
+        },
+        {
+          "name": "crpush",
+          "decl": "fn",
+          "sig": "fn crpush(cl: Cluster, key: str, vals: [bytes],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2609
+        },
+        {
+          "name": "clpop",
+          "decl": "fn",
+          "sig": "fn clpop(cl: Cluster, key: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2622
+        },
+        {
+          "name": "crpop",
+          "decl": "fn",
+          "sig": "fn crpop(cl: Cluster, key: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2635
+        },
+        {
+          "name": "cllen",
+          "decl": "fn",
+          "sig": "fn cllen(cl: Cluster, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2648
+        },
+        {
+          "name": "csadd",
+          "decl": "fn",
+          "sig": "fn csadd(cl: Cluster, key: str, members: [bytes],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2657
+        },
+        {
+          "name": "csrem",
+          "decl": "fn",
+          "sig": "fn csrem(cl: Cluster, key: str, members: [bytes],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2670
+        },
+        {
+          "name": "cscard",
+          "decl": "fn",
+          "sig": "fn cscard(cl: Cluster, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2683
+        },
+        {
+          "name": "csismember",
+          "decl": "fn",
+          "sig": "fn csismember(cl: Cluster, key: str, member: bytes,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2692
+        },
+        {
+          "name": "czadd",
+          "decl": "fn",
+          "sig": "fn czadd(cl: Cluster, key: str, members: map[str]float,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2702
+        },
+        {
+          "name": "czrem",
+          "decl": "fn",
+          "sig": "fn czrem(cl: Cluster, key: str, members: [bytes],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2716
+        },
+        {
+          "name": "czcard",
+          "decl": "fn",
+          "sig": "fn czcard(cl: Cluster, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2729
+        },
+        {
+          "name": "czscore",
+          "decl": "fn",
+          "sig": "fn czscore(cl: Cluster, key: str, member: bytes,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2738
+        },
+        {
+          "name": "ckey_type",
+          "decl": "fn",
+          "sig": "fn ckey_type(cl: Cluster, key: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2758
+        },
+        {
+          "name": "crename",
+          "decl": "fn",
+          "sig": "fn crename(cl: Cluster, key: str, newkey: str,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2768
+        },
+        {
+          "name": "cscan",
+          "decl": "fn",
+          "sig": "fn cscan(cl: Cluster, cursor: int, match: opt[str], count: opt[int],",
+          "doc": "SCAN steps one node only (slot 0's owner): cluster-wide iteration fans out per node with cluster_refresh's map in hand.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2787
+        },
+        {
+          "name": "multi",
+          "decl": "fn",
+          "sig": "fn multi(c: Conn, deadline: until) -> result[bool, str]",
+          "doc": "MULTI: true on +OK. The connection leaves the pool from here until EXEC or DISCARD.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2861
+        },
+        {
+          "name": "queue",
+          "decl": "fn",
+          "sig": "fn queue(c: Conn, args: [bytes],",
+          "doc": "Queue one command inside MULTI. Anything but +QUEUED aborts the whole transaction server-side; that surfaces here as an err, and a later EXEC answers EXECABORT.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2884
+        },
+        {
+          "name": "exec",
+          "decl": "fn",
+          "sig": "fn exec(c: Conn, deadline: until) -> result[[Reply], str]",
+          "doc": "EXEC: the queued replies in order, error elements included. A nil array means nothing ran (watched keys changed): an err, since no caller could use an empty success. Always leaves MULTI, even on EXECABORT -- the server does too.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2908
+        },
+        {
+          "name": "discard",
+          "decl": "fn",
+          "sig": "fn discard(c: Conn, deadline: until) -> result[bool, str]",
+          "doc": "DISCARD: true on +OK, back outside MULTI either way the server answers.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2935
+        },
+        {
+          "name": "watch",
+          "decl": "fn",
+          "sig": "fn watch(c: Conn, keys: [str],",
+          "doc": "WATCH/UNWATCH for optimistic locking: watch, read, MULTI, queue, EXEC; a nil EXEC (err here) means someone else wrote first, so retry the whole sequence.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2954
+        },
+        {
+          "name": "unwatch",
+          "decl": "fn",
+          "sig": "fn unwatch(c: Conn, deadline: until) -> result[bool, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 2978
+        },
+        {
+          "name": "eval",
+          "decl": "fn",
+          "sig": "fn eval(c: Conn, script: str, keys: [str], args: [bytes],",
+          "doc": "EVAL: the script's raw reply, whose shape depends on what it returns -- bulk, int, array, or error, decoded verbatim.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3009
+        },
+        {
+          "name": "evalsha",
+          "decl": "fn",
+          "sig": "fn evalsha(c: Conn, script: str, keys: [str], args: [bytes],",
+          "doc": "EVALSHA with automatic EVAL fallback: the common path sends only 40 hex characters; a server that never saw the script answers NOSCRIPT and the call transparently re-sends the source.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3018
+        },
+        {
+          "name": "Message",
+          "decl": "struct",
+          "sig": "gc struct Message",
+          "doc": "A published message. kind is \"message\" or \"pmessage\"; pattern is set only for the latter (the glob that matched).",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3050
+        },
+        {
+          "name": "Sub",
+          "decl": "struct",
+          "sig": "gc struct Sub",
+          "doc": "A live subscription: a dedicated subscriber-mode connection plus messages that arrived while someone else held the lock. Never use sub.c directly (do, close, anything): concurrent socket readers would split the stream mid-reply. Everything here serializes on the Sub lock instead.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3062
+        },
+        {
+          "name": "subscribe",
+          "decl": "fn",
+          "sig": "fn subscribe(url: str, channels: [str], patterns: [str],",
+          "doc": "Subscribe, returning a live Sub. channels and patterns are the SUBSCRIBE and PSUBSCRIBE lists; at least one of them is nonempty.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3146
+        },
+        {
+          "name": "sub_add",
+          "decl": "fn",
+          "sig": "fn sub_add(sub: Sub, channels: [str], patterns: [str],",
+          "doc": "Add subscriptions to a live Sub.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3165
+        },
+        {
+          "name": "sub_next",
+          "decl": "fn",
+          "sig": "fn sub_next(sub: Sub, deadline: until) -> result[opt[Message], str]",
+          "doc": "Next message, or none when the deadline passes first. Confirms and pongs the server interleaves are skipped, never surfaced; a malformed reply is an error, since valid RESP has only the shapes as_message knows.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3211
+        },
+        {
+          "name": "sub_remove",
+          "decl": "fn",
+          "sig": "fn sub_remove(sub: Sub, channels: [str], patterns: [str],",
+          "doc": "Remove subscriptions. Fully unsubscribing returns the connection to plain unicast mode; close it or subscribe again after.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3246
+        },
+        {
+          "name": "sub_close",
+          "decl": "fn",
+          "sig": "fn sub_close(sub: Sub)",
+          "doc": "Shut a subscription down. A task blocked in sub_next wakes with an error from the closed socket.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3287
+        },
+        {
+          "name": "StreamEntry",
+          "decl": "struct",
+          "sig": "gc struct StreamEntry",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3297
+        },
+        {
+          "name": "StreamRead",
+          "decl": "struct",
+          "sig": "gc struct StreamRead",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3302
+        },
+        {
+          "name": "xadd",
+          "decl": "fn",
+          "sig": "fn xadd(c: Conn, key: str, id: str, fields: map[str]bytes,",
+          "doc": "XADD: the new entry's ID.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3350
+        },
+        {
+          "name": "xadd_maxlen",
+          "decl": "fn",
+          "sig": "fn xadd_maxlen(c: Conn, key: str, maxlen: int, approx: bool, id: str,",
+          "doc": "XADD with MAXLEN trimming: approx picks ~ (cheap) over exact.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3371
+        },
+        {
+          "name": "xrange",
+          "decl": "fn",
+          "sig": "fn xrange(c: Conn, key: str, start: str, end: str, count: opt[int],",
+          "doc": "XRANGE/XREVRANGE: entries between two IDs (\"-\" and \"+\" are the ends), oldest first (XREVRANGE newest first). count caps the reply, none for no cap.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3438
+        },
+        {
+          "name": "xrevrange",
+          "decl": "fn",
+          "sig": "fn xrevrange(c: Conn, key: str, end: str, start: str, count: opt[int],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3443
+        },
+        {
+          "name": "xlen",
+          "decl": "fn",
+          "sig": "fn xlen(c: Conn, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3448
+        },
+        {
+          "name": "xtrim",
+          "decl": "fn",
+          "sig": "fn xtrim(c: Conn, key: str, maxlen: int, approx: bool,",
+          "doc": "XTRIM MAXLEN: how many entries were removed.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3457
+        },
+        {
+          "name": "xdel",
+          "decl": "fn",
+          "sig": "fn xdel(c: Conn, key: str, ids: [str],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3472
+        },
+        {
+          "name": "xread",
+          "decl": "fn",
+          "sig": "fn xread(c: Conn, keys: [str], ids: [str], block_ms: opt[int],",
+          "doc": "XREAD: new entries per key since each id (\"$\" means \"everything after now\" on first call, then the last seen id after). block_ms waits that long for data (none => return at once); a wait that finds nothing is ok(none), not an error. count caps per call.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3489
+        },
+        {
+          "name": "cxadd",
+          "decl": "fn",
+          "sig": "fn cxadd(cl: Cluster, key: str, id: str, fields: map[str]bytes,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3566
+        },
+        {
+          "name": "cxlen",
+          "decl": "fn",
+          "sig": "fn cxlen(cl: Cluster, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3586
+        },
+        {
+          "name": "cxread",
+          "decl": "fn",
+          "sig": "fn cxread(cl: Cluster, keys: [str], ids: [str], block_ms: opt[int],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3595
+        }
+      ]
+    },
     "regex": {
       "name": "regex",
       "kind": "native",
