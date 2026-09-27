@@ -13,3 +13,7 @@ ok hash-list
 ok zrank-nil
 ok zscore-nil
 ok set-zset
+ok pool-reuse
+ok pool-exhaust
+ok pool-discard
+ok pool-close

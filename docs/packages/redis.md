@@ -61,14 +61,15 @@ redis.close(c);
 | sets | `sadd`, `smembers`, `srem`, `scard`, `sismember`, `spop` |
 | sorted sets | `zadd`, `zrange`, `zrange_scores`, `zrank`, `zscore`, `zrem`, `zcard`, `zincr_by` |
 | keys | `key_type`, `rename`, `rename_nx`, `scan` (`KEYS` omitted on purpose) |
+| pool | `new_pool`, `new_pool_config`, `acquire`, `release`, `pool_do`, `pool_close` |
 
 A reply is a `redis.Reply`: `kind` is one of `REPLY_SIMPLE`,
 `REPLY_ERROR`, `REPLY_INT`, `REPLY_BULK` or `REPLY_ARRAY`, with the
 payload in `text`, `num`, `bulk` (`none` for nil) or `items` (empty
 with `is_nil` for a nil array).
 
-**Not supported yet:** pooling and commands (phases 3-4), RESP3,
-server-side sharding.
+**Not supported yet:** cluster routing and pub/sub (phases 5-7), RESP3,
+server-side sharding beyond standalone.
 
 ## API
 
@@ -327,6 +328,32 @@ RENAME: true on +OK. RENAMENX: true only when newkey was absent.
 ### `fn scan(c: Conn, cursor: int, match: opt[str], count: opt[int],`
 
 SCAN: one cursor step. Thread cursor back in until it returns 0; match and count are server hints, both optional. KEYS is deliberately absent: it blocks the server for the whole keyspace.
+
+### `gc struct Pool`
+
+### `fn new_pool(url: str, max_open: int) -> result[Pool, str]`
+
+Parses the url; connects nothing until the first acquire.
+
+### `fn new_pool_config(cfg: Config, max_open: int) -> result[Pool, str]`
+
+Same, from a Config built by hand (pool_size is ignored: max_open says it here, once, where the pool is made).
+
+### `fn acquire(p: Pool, deadline: until) -> result[Conn, str]`
+
+A connection for the caller's exclusive use, until release().
+
+### `fn release(p: Pool, c: Conn)`
+
+Returns a connection to the pool. One that is broken, closed, or inside MULTI is closed instead: handing those to the next caller would fail its first command, or run it inside someone else's uncommitted transaction.
+
+### `fn pool_do(p: Pool, args: [bytes],`
+
+One command on a pooled connection: acquire, run, release. The connection goes back even when the command fails.
+
+### `fn pool_close(p: Pool)`
+
+Closes every idle connection. Connections checked out are closed as they are released; acquire fails from now on.
 
 ---
 

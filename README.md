@@ -1909,14 +1909,15 @@ redis.close(c);
 | sets | `sadd`, `smembers`, `srem`, `scard`, `sismember`, `spop` |
 | sorted sets | `zadd`, `zrange`, `zrange_scores`, `zrank`, `zscore`, `zrem`, `zcard`, `zincr_by` |
 | keys | `key_type`, `rename`, `rename_nx`, `scan` (`KEYS` omitted on purpose) |
+| pool | `new_pool`, `new_pool_config`, `acquire`, `release`, `pool_do`, `pool_close` |
 
 A reply is a `redis.Reply`: `kind` is one of `REPLY_SIMPLE`,
 `REPLY_ERROR`, `REPLY_INT`, `REPLY_BULK` or `REPLY_ARRAY`, with the
 payload in `text`, `num`, `bulk` (`none` for nil) or `items` (empty
 with `is_nil` for a nil array).
 
-**Not supported yet:** pooling and commands (phases 3-4), RESP3,
-server-side sharding.
+**Not supported yet:** cluster routing and pub/sub (phases 5-7), RESP3,
+server-side sharding beyond standalone.
 
 #### `regex`
 

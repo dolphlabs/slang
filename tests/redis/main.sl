@@ -895,3 +895,180 @@ fn test_set_zset() {
 test_strings();
 test_hash_list();
 test_set_zset();
+
+// ---- pool (phase 4) --------------------------------------------------------
+
+fn test_pool_reuse() {
+    let steps: [Step] = [
+        Step { want: "PING", reply: b"+PONG\r\n" },
+        Step { want: "PING", reply: b"+PONG\r\n" }
+    ];
+    let lfd = listen();
+    let pc: chan[int] = make_chan(1);
+    spawn srv_script(lfd, pc, steps);
+    guard let port = chan_recv(pc) else {
+        die("no port");
+        panic("unreachable");
+    }
+    let pr = redis.new_pool(url_for(port), 2);
+    guard let p = pr else let e = err_of(pr) {
+        die("new_pool: " + e);
+        panic("unreachable");
+    }
+    let a = redis.acquire(p, soon());
+    guard let c1 = a else let e = err_of(a) {
+        die("acquire: " + e);
+        panic("unreachable");
+    }
+    let r = redis.do(c1, [to_bytes("PING")], soon());
+    guard let reply = r else let e = err_of(r) {
+        die("ping: " + e);
+        panic("unreachable");
+    }
+    redis.release(p, c1);
+    let b = redis.acquire(p, soon());
+    guard let c2 = b else let e = err_of(b) {
+        die("reacquire: " + e);
+        panic("unreachable");
+    }
+    let r2 = redis.do(c2, [to_bytes("PING")], soon());
+    guard let reply2 = r2 else let e = err_of(r2) {
+        die("ping2: " + e);
+        panic("unreachable");
+    }
+    redis.release(p, c2);
+    redis.pool_close(p);
+    println("ok pool-reuse");
+}
+
+fn test_pool_exhaust() {
+    let steps: [Step] = [
+        Step { want: "PING", reply: b"+PONG\r\n" }
+    ];
+    let lfd = listen();
+    let pc: chan[int] = make_chan(1);
+    spawn srv_script(lfd, pc, steps);
+    guard let port = chan_recv(pc) else {
+        die("no port");
+        panic("unreachable");
+    }
+    let pr = redis.new_pool(url_for(port), 1);
+    guard let p = pr else let e = err_of(pr) {
+        die("new_pool: " + e);
+        panic("unreachable");
+    }
+    let a = redis.acquire(p, soon());
+    guard let c1 = a else let e = err_of(a) {
+        die("acquire: " + e);
+        panic("unreachable");
+    }
+    let dl = until_of(time.mono() + 300000000);
+    let b = redis.acquire(p, dl);
+    guard let c2 = b else let e = err_of(b) {
+        if !strings.contains(e, "timeout") {
+            die("wrong exhaust error: " + e);
+        }
+        redis.release(p, c1);
+        let c = redis.acquire(p, soon());
+        guard let c3 = c else let e = err_of(c) {
+            die("reacquire: " + e);
+            panic("unreachable");
+        }
+        let r = redis.do(c3, [to_bytes("PING")], soon());
+        guard let reply = r else let e = err_of(r) {
+            die("ping: " + e);
+            panic("unreachable");
+        }
+        redis.release(p, c3);
+        redis.pool_close(p);
+        println("ok pool-exhaust");
+        return;
+    }
+    redis.release(p, c1);
+    redis.release(p, c2);
+    redis.pool_close(p);
+    die("second acquire on size-1 pool succeeded");
+}
+
+fn srv_redial(lfd: i32, pc: chan[int]) {
+    chan_send(pc, port_of(lfd));
+    let fd1 = accept_one(lfd);
+    let a = read_cmd(fd1);
+    check_cmd(a, "PING");
+    send_all(fd1, b"%garbage\r\n");
+    net.close(fd1);
+    let fd2 = accept_one(lfd);
+    let b = read_cmd(fd2);
+    check_cmd(b, "PING");
+    send_all(fd2, b"+PONG\r\n");
+    net.close(fd2);
+    net.close(lfd);
+}
+
+fn test_pool_discard() {
+    let lfd = listen();
+    let pc: chan[int] = make_chan(1);
+    spawn srv_redial(lfd, pc);
+    guard let port = chan_recv(pc) else {
+        die("no port");
+        panic("unreachable");
+    }
+    let pr = redis.new_pool(url_for(port), 2);
+    guard let p = pr else let e = err_of(pr) {
+        die("new_pool: " + e);
+        panic("unreachable");
+    }
+    let a = redis.acquire(p, soon());
+    guard let c1 = a else let e = err_of(a) {
+        die("acquire: " + e);
+        panic("unreachable");
+    }
+    let r = redis.do(c1, [to_bytes("PING")], soon());
+    guard let reply = r else {
+        redis.release(p, c1);
+        let b = redis.acquire(p, soon());
+        guard let c2 = b else let e = err_of(b) {
+            die("reacquire: " + e);
+            panic("unreachable");
+        }
+        let r2 = redis.do(c2, [to_bytes("PING")], soon());
+        guard let reply2 = r2 else let e = err_of(r2) {
+            die("ping after redial: " + e);
+            panic("unreachable");
+        }
+        if reply2.text != "PONG" {
+            die("bad PONG after redial");
+        }
+        redis.release(p, c2);
+        redis.pool_close(p);
+        println("ok pool-discard");
+        return;
+    }
+    redis.release(p, c1);
+    redis.pool_close(p);
+    die("garbage reply decoded");
+}
+
+fn test_pool_close() {
+    let pr = redis.new_pool("redis://127.0.0.1:1", 1);
+    guard let p = pr else let e = err_of(pr) {
+        die("new_pool: " + e);
+        panic("unreachable");
+    }
+    redis.pool_close(p);
+    let a = redis.acquire(p, soon());
+    guard let c2 = a else let e = err_of(a) {
+        if !strings.contains(e, "closed") {
+            die("wrong closed error: " + e);
+        }
+        println("ok pool-close");
+        return;
+    }
+    redis.release(p, c2);
+    die("acquire on closed pool succeeded");
+}
+
+test_pool_reuse();
+test_pool_exhaust();
+test_pool_discard();
+test_pool_close();

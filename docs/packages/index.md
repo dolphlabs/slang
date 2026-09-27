@@ -1017,14 +1017,15 @@ redis.close(c);
 | sets | `sadd`, `smembers`, `srem`, `scard`, `sismember`, `spop` |
 | sorted sets | `zadd`, `zrange`, `zrange_scores`, `zrank`, `zscore`, `zrem`, `zcard`, `zincr_by` |
 | keys | `key_type`, `rename`, `rename_nx`, `scan` (`KEYS` omitted on purpose) |
+| pool | `new_pool`, `new_pool_config`, `acquire`, `release`, `pool_do`, `pool_close` |
 
 A reply is a `redis.Reply`: `kind` is one of `REPLY_SIMPLE`,
 `REPLY_ERROR`, `REPLY_INT`, `REPLY_BULK` or `REPLY_ARRAY`, with the
 payload in `text`, `num`, `bulk` (`none` for nil) or `items` (empty
 with `is_nil` for a nil array).
 
-**Not supported yet:** pooling and commands (phases 3-4), RESP3,
-server-side sharding.
+**Not supported yet:** cluster routing and pub/sub (phases 5-7), RESP3,
+server-side sharding beyond standalone.
 
 #### `regex`
 
@@ -1977,7 +1978,7 @@ signal-handling program.
 - [os](packages/os.md) -- compiler-provided, 14 public items
 - [pg](packages/pg.md) -- source package, 52 public items
 - [proc](packages/proc.md) -- compiler-provided, 6 public items
-- [redis](packages/redis.md) -- source package, 78 public items
+- [redis](packages/redis.md) -- source package, 85 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [sql](packages/sql.md) -- compiler-provided, 20 public items
 - [strings](packages/strings.md) -- compiler-provided, 21 public items

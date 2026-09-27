@@ -23,6 +23,7 @@
 import "strings";
 import "encoding";
 import "net";
+import "time";
 
 // ---- limits ----------------------------------------------------------
 
@@ -622,6 +623,11 @@ pub gc struct Conn {
     broken: bool,
     why: str,
     closed: bool,
+    // Pool bookkeeping: true while checked out of a Pool (double
+    // release panics), and what the connection is in the middle of --
+    // 0 nothing, 1 MULTI (transactions never return to the pool).
+    in_pool: bool,
+    mode: int,
 }
 
 fn tr_send(c: Conn, b: bytes, u: until) -> result[i32, str] {
@@ -771,7 +777,7 @@ pub fn connect_config(cfg: Config, deadline: until) -> result[Conn, str] {
     }
     let c = Conn { cfg: cfg, fd: fd, ssl: ssl, buf: b"", pos: 0,
                    lock: make_mutex(), broken: false, why: "",
-                   closed: false };
+                   closed: false, in_pool: false, mode: 0 };
     if len(cfg.password) > 0 {
         let args: [bytes] = [to_bytes("AUTH"), to_bytes(cfg.password)];
         if len(cfg.username) > 0 {
@@ -1727,4 +1733,146 @@ fn scan_run(c: Conn, args: [bytes],
         push(keys, to_str(b));
     }
     return ok(ScanOut { cursor: cursor, keys: keys });
+}
+
+// ---- pool ------------------------------------------------------------
+// A fixed number of connections shared by every task. Checking one
+// out is exclusive until release, exactly like holding a Conn; the
+// pool only owns the idle ones. Prefer pool_do, which cannot forget
+// to release; acquire is for call sequences that must share one
+// connection.
+
+pub gc struct Pool {
+    cfg: Config,
+    // Connections open at once, idle and checked out together. A task
+    // that needs one when all are out waits for a release.
+    max_open: int,
+    idle: [Conn],
+    open: int,
+    lock: mutex,
+    closed: bool,
+}
+
+// Parses the url; connects nothing until the first acquire.
+pub fn new_pool(url: str, max_open: int) -> result[Pool, str] {
+    let cr = parse_url(url);
+    guard let cfg = cr else let e = err_of(cr) {
+        return err(e);
+    }
+    return new_pool_config(cfg, max_open);
+}
+
+// Same, from a Config built by hand (pool_size is ignored: max_open
+// says it here, once, where the pool is made).
+pub fn new_pool_config(cfg: Config, max_open: int) -> result[Pool, str] {
+    if max_open < 1 {
+        return err("max_open must be at least 1");
+    }
+    let idle: [Conn] = [];
+    return ok(Pool { cfg: cfg, max_open: max_open, idle: idle, open: 0,
+                     lock: make_mutex(), closed: false });
+}
+
+fn close_locked(c: Conn) {
+    if !c.closed {
+        c.closed = true;
+        tr_close(c);
+    }
+}
+
+// A connection for the caller's exclusive use, until release().
+pub fn acquire(p: Pool, deadline: until) -> result[Conn, str] {
+    while true {
+        mutex_lock(p.lock);
+        if p.closed {
+            mutex_unlock(p.lock);
+            return err("pool is closed");
+        }
+        while len(p.idle) > 0 {
+            let c = p.idle[len(p.idle) - 1];
+            p.idle = p.idle[..len(p.idle) - 1];
+            // Probed before reuse: the server closes idle sessions
+            // on timers of its own, and a command written onto a
+            // closed connection fails in a way that cannot be told
+            // from the command itself failing. Leftover bytes mean a
+            // previous exchange desynced: never reuse that either.
+            let alive = net.idle_alive(c.fd);
+            if c.ssl != nullptr {
+                alive = net.tls_idle_alive(c.ssl);
+            }
+            if !usable(c) || !alive || len(c.buf) > c.pos {
+                p.open = p.open - 1;
+                close_locked(c);
+                continue;
+            }
+            c.in_pool = true;
+            mutex_unlock(p.lock);
+            return ok(c);
+        }
+        if p.open < p.max_open {
+            p.open = p.open + 1;
+            mutex_unlock(p.lock);
+            let cr = connect_config(p.cfg, deadline);
+            guard let c = cr else let e = err_of(cr) {
+                mutex_lock(p.lock);
+                p.open = p.open - 1;
+                mutex_unlock(p.lock);
+                return err(e);
+            }
+            c.in_pool = true;
+            return ok(c);
+        }
+        mutex_unlock(p.lock);
+        if until_hit(deadline) {
+            return err("pool: timeout waiting for a connection");
+        }
+        time.sleep(2000000);
+    }
+}
+
+// Returns a connection to the pool. One that is broken, closed, or
+// inside MULTI is closed instead: handing those to the next caller
+// would fail its first command, or run it inside someone else's
+// uncommitted transaction.
+pub fn release(p: Pool, c: Conn) {
+    if !c.in_pool {
+        panic("redis.release: connection released twice");
+    }
+    let reusable = usable(c) && c.mode == 0;
+    mutex_lock(p.lock);
+    c.in_pool = false;
+    if p.closed || !reusable {
+        p.open = p.open - 1;
+        mutex_unlock(p.lock);
+        close_locked(c);
+        return;
+    }
+    push(p.idle, c);
+    mutex_unlock(p.lock);
+}
+
+// One command on a pooled connection: acquire, run, release. The
+// connection goes back even when the command fails.
+pub fn pool_do(p: Pool, args: [bytes],
+               deadline: until) -> result[Reply, str] {
+    let ar = acquire(p, deadline);
+    guard let c = ar else let e = err_of(ar) {
+        return err(e);
+    }
+    let r = do(c, args, deadline);
+    release(p, c);
+    return r;
+}
+
+// Closes every idle connection. Connections checked out are closed
+// as they are released; acquire fails from now on.
+pub fn pool_close(p: Pool) {
+    mutex_lock(p.lock);
+    p.closed = true;
+    for c in p.idle {
+        close_locked(c);
+    }
+    let empty: [Conn] = [];
+    p.idle = empty;
+    mutex_unlock(p.lock);
 }
