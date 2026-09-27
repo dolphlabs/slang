@@ -71,9 +71,8 @@
       <span class="dot g"></span>
       <span class="demo-title">main.sl &mdash; a tiny JSON router</span>
     </div>
-    <div class="code hero-code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="c">// A tiny JSON router. Adding a route is one line in the table --</span>
-<span class="c">// handlers are values of type fn, so dispatch needs no chain of</span>
-<span class="c">// string comparisons and no framework.</span>
+    <div class="code hero-code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="c">// A tiny JSON router. Adding a route is one table line -- handlers</span>
+<span class="c">// are fn values, so dispatch needs no framework.</span>
 <span class="k">gc</span> <span class="k">struct</span> Route {
     method: <span class="t">str</span>,
     path: <span class="t">str</span>,
@@ -100,14 +99,6 @@
         }
     }
     <span class="k">return</span> http.<span class="f">not_found</span>();
-}
-
-<span class="k">fn</span> <span class="f">serve</span>(ln: <span class="k">link</span>, routes: [Route]) {
-    <span class="k">while</span> !proc.<span class="f">shutdown_requested</span>() {
-        <span class="k">let</span> ar = ln.<span class="f">accept</span>(<span class="b">until_never</span>());
-        <span class="k">guard</span> <span class="k">let</span> c = ar <span class="k">else</span> { <span class="k">return</span>; }
-        <span class="k">spawn</span> <span class="f">handle</span>(c, routes);
-    }
 }</code></pre></div>
   </div>
 </div>

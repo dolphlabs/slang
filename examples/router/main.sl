@@ -6,9 +6,8 @@ import "proc";
 import "time";
 
 // hero:start
-// A tiny JSON router. Adding a route is one line in the table --
-// handlers are values of type fn, so dispatch needs no chain of
-// string comparisons and no framework.
+// A tiny JSON router. Adding a route is one table line -- handlers
+// are fn values, so dispatch needs no framework.
 gc struct Route {
     method: str,
     path: str,
@@ -36,6 +35,7 @@ fn route(routes: [Route], req: http.Request) -> http.Response {
     }
     return http.not_found();
 }
+// hero:end
 
 fn serve(ln: link, routes: [Route]) {
     while !proc.shutdown_requested() {

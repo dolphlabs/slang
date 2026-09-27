@@ -237,8 +237,8 @@ a:hover { color: var(--fg); }
 .code.hero-code { margin: 0; }
 .code.hero-code pre {
   border: none; border-radius: 0;
-  font-size: .78rem; line-height: 1.58;
-  max-height: 30rem; overflow: auto;
+  font-size: .75rem; line-height: 1.55;
+  max-height: 26rem; overflow: auto;
 }
 .demo-head {
   display: flex; align-items: center; gap: .35rem;
