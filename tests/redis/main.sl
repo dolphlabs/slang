@@ -501,7 +501,6 @@ test_split_reply();
 test_binary();
 test_corrupt();
 test_drop();
-test_timeout();
 test_server_error();
 
 // ---- scripted command coverage (phase 3) ------------------------------
@@ -2038,3 +2037,49 @@ fn test_cluster_streams() {
 }
 
 test_cluster_streams();
+
+fn test_cluster_empty_ip() {
+    // A node announcing an empty IP (NAT, sandboxes): fall back to
+    // the seed host instead of failing.
+    let la = listen();
+    let pa = port_of(la);
+    let id40 = b"$40\r\n0123456789abcdef0123456789abcdef01234567\r\n";
+    let slots = b"*1\r\n*3\r\n:0\r\n:16383\r\n*3\r\n$0\r\n\r\n:" +
+                to_bytes(to_str(pa)) + b"\r\n" + id40;
+    let conn1: [Step] = [
+        Step { want: "CLUSTER", reply: slots }
+    ];
+    let conn2: [Step] = [
+        Step { want: "GET", reply: b"$1\r\nv\r\n" }
+    ];
+    let scripts: [[Step]] = [conn1, conn2];
+    let pc: chan[int] = make_chan(1);
+    spawn cluster_script(la, pc, scripts);
+    guard let port = chan_recv(pc) else {
+        die("no port");
+        panic("unreachable");
+    }
+    let cfg = cluster_cfg();
+    let cr = redis.new_cluster(cfg, ["127.0.0.1:" + to_str(pa)], soon());
+    guard let cl = cr else let e = err_of(cr) {
+        die("new_cluster: " + e);
+        panic("unreachable");
+    }
+    let h = redis.cget(cl, "hello", soon());
+    guard let v = h else let e = err_of(h) {
+        die("cget: " + e);
+        panic("unreachable");
+    }
+    guard let b = v else {
+        die("nil");
+        panic("unreachable");
+    }
+    if b != b"v" {
+        die("value");
+    }
+    redis.cluster_close(cl);
+    println("ok cluster-empty-ip");
+}
+
+test_cluster_empty_ip();
+test_timeout();

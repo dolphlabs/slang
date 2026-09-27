@@ -2038,7 +2038,18 @@ fn bootstrap_from(cl: Cluster, addr: str, deadline: until) -> str {
         guard let ip = master.items[0].bulk else {
             return "CLUSTER SLOTS: nil endpoint";
         }
-        let node = to_str(ip) + ":" + to_str(master.items[1].num);
+        // An empty announced IP is common behind NAT and in sandboxes
+        // (this exact shape): there is nothing to dial, so fall back
+        // to the host we reached this node on rather than failing.
+        let host = to_str(ip);
+        if host == "" {
+            let sr = split_addr(addr);
+            guard let s = sr else let e = err_of(sr) {
+                return e;
+            }
+            host = s.host;
+        }
+        let node = host + ":" + to_str(master.items[1].num);
         let s = start;
         while s <= end {
             cl.slots[s] = node;

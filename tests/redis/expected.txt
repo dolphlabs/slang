@@ -5,7 +5,6 @@ ok split
 ok binary
 ok corrupt
 ok drop
-ok timeout
 ok server-error
 ok mget-nil
 ok strings
@@ -36,3 +35,5 @@ ok sub-pump
 ok xread-nil
 ok streams
 ok cluster-streams
+ok cluster-empty-ip
+ok timeout
