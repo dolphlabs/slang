@@ -44,7 +44,7 @@ fn accept_one(lfd: i32) -> i32 {
     return fd;
 }
 
-fn send_all(fd: i32, b: bytes) {
+fn srv_send(fd: i32, b: bytes) {
     let sr = net.send_until(fd, b, soon());
     guard let n = sr else let e = err_of(sr) {
         die("server send: " + e);
@@ -120,7 +120,7 @@ fn srv_ping(lfd: i32) {
     let fd = accept_one(lfd);
     let cmd = read_cmd(fd);
     check_cmd(cmd, "PING");
-    send_all(fd, b"+PONG\r\n");
+    srv_send(fd, b"+PONG\r\n");
     net.close(fd);
     net.close(lfd);
 }
@@ -162,16 +162,16 @@ fn srv_auth(lfd: i32) {
     if to_str(cmd_arg(a, 1)) != "secret" {
         die("bad AUTH password");
     }
-    send_all(fd, b"+OK\r\n");
+    srv_send(fd, b"+OK\r\n");
     let s = read_cmd(fd);
     check_cmd(s, "SELECT");
     if to_str(cmd_arg(s, 1)) != "2" {
         die("bad SELECT db");
     }
-    send_all(fd, b"+OK\r\n");
+    srv_send(fd, b"+OK\r\n");
     let p = read_cmd(fd);
     check_cmd(p, "PING");
-    send_all(fd, b"+PONG\r\n");
+    srv_send(fd, b"+PONG\r\n");
     net.close(fd);
     net.close(lfd);
 }
@@ -204,7 +204,7 @@ fn srv_badauth(lfd: i32) {
     let fd = accept_one(lfd);
     let a = read_cmd(fd);
     check_cmd(a, "AUTH");
-    send_all(fd, b"-WRONGPASS invalid username-password pair\r\n");
+    srv_send(fd, b"-WRONGPASS invalid username-password pair\r\n");
     net.close(fd);
     net.close(lfd);
 }
@@ -244,7 +244,7 @@ fn srv_split(lfd: i32) {
     let reply = b"$11\r\nhello world\r\n";
     let i = 0;
     while i < len(reply) {
-        send_all(fd, reply[i..i + 1]);
+        srv_send(fd, reply[i..i + 1]);
         i = i + 1;
     }
     net.close(fd);
@@ -288,7 +288,7 @@ fn srv_binary(lfd: i32) {
     check_cmd(cmd, "ECHO");
     let v = cmd_arg(cmd, 1);
     let hdr = to_bytes("$" + to_str(len(v)) + "\r\n");
-    send_all(fd, hdr + v + b"\r\n");
+    srv_send(fd, hdr + v + b"\r\n");
     net.close(fd);
     net.close(lfd);
 }
@@ -326,7 +326,7 @@ fn srv_garbage(lfd: i32) {
     let fd = accept_one(lfd);
     let cmd = read_cmd(fd);
     check_cmd(cmd, "PING");
-    send_all(fd, b"%not-resp\r\n");
+    srv_send(fd, b"%not-resp\r\n");
     net.close(fd);
     net.close(lfd);
 }
@@ -375,7 +375,7 @@ fn srv_drop(lfd: i32) {
     let fd = accept_one(lfd);
     let cmd = read_cmd(fd);
     check_cmd(cmd, "GET");
-    send_all(fd, b"$10\r\nabc");
+    srv_send(fd, b"$10\r\nabc");
     net.close(fd);
     net.close(lfd);
 }
@@ -455,10 +455,10 @@ fn srv_err(lfd: i32) {
     let fd = accept_one(lfd);
     let a = read_cmd(fd);
     check_cmd(a, "INCR");
-    send_all(fd, b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n");
+    srv_send(fd, b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n");
     let b = read_cmd(fd);
     check_cmd(b, "PING");
-    send_all(fd, b"+PONG\r\n");
+    srv_send(fd, b"+PONG\r\n");
     net.close(fd);
     net.close(lfd);
 }
@@ -519,7 +519,7 @@ fn srv_script(lfd: i32, pc: chan[int], steps: [Step]) {
         if cmd_name(cmd) != st.want {
             die("want " + st.want + ", got " + cmd_name(cmd));
         }
-        send_all(fd, st.reply);
+        srv_send(fd, st.reply);
     }
     net.close(fd);
     net.close(lfd);
@@ -995,12 +995,12 @@ fn srv_redial(lfd: i32, pc: chan[int]) {
     let fd1 = accept_one(lfd);
     let a = read_cmd(fd1);
     check_cmd(a, "PING");
-    send_all(fd1, b"%garbage\r\n");
+    srv_send(fd1, b"%garbage\r\n");
     net.close(fd1);
     let fd2 = accept_one(lfd);
     let b = read_cmd(fd2);
     check_cmd(b, "PING");
-    send_all(fd2, b"+PONG\r\n");
+    srv_send(fd2, b"+PONG\r\n");
     net.close(fd2);
     net.close(lfd);
 }
@@ -1094,7 +1094,7 @@ fn cluster_script(lfd: i32, pc: chan[int], scripts: [[Step]]) {
             if cmd_name(cmd) != st.want {
                 die("want " + st.want + ", got " + cmd_name(cmd));
             }
-            send_all(fd, st.reply);
+            srv_send(fd, st.reply);
         }
         net.close(fd);
     }
@@ -1642,3 +1642,234 @@ test_multi_refusals();
 test_multi_refusals2();
 test_watch_abort();
 test_evalsha_fallback();
+
+// ---- pub/sub (phase 7) ---------------------------------------------------
+
+fn sub_msg(sub: redis.Sub, what: str) -> redis.Message {
+    let r = redis.sub_next(sub, soon());
+    guard let o = r else let e = err_of(r) {
+        die(what + ": " + e);
+        panic("unreachable");
+    }
+    guard let m = o else {
+        die(what + ": got none");
+        panic("unreachable");
+    }
+    return m;
+}
+
+fn sub_conn(lfd: i32, pc: chan[int], steps: [Step]) {
+    chan_send(pc, port_of(lfd));
+    let fd = accept_one(lfd);
+    for st in steps {
+        if st.want == "PUSH" {
+            srv_send(fd, st.reply);
+            continue;
+        }
+        let cmd = read_cmd(fd);
+        if cmd_name(cmd) != st.want {
+            die("want " + st.want + ", got " + cmd_name(cmd));
+        }
+        srv_send(fd, st.reply);
+    }
+    let rr = net.recv_until(fd, 65536, soon());
+    net.close(fd);
+    net.close(lfd);
+}
+
+fn test_sub_basic() {
+    let steps: [Step] = [
+        Step { want: "SUBSCRIBE",
+               reply: b"*3\r\n$9\r\nsubscribe\r\n$1\r\na\r\n:1\r\n" },
+        Step { want: "PSUBSCRIBE",
+               reply: b"*3\r\n$10\r\npsubscribe\r\n$2\r\nb*\r\n:2\r\n" },
+        Step { want: "PUSH",
+               reply: b"*3\r\n$7\r\nmessage\r\n$1\r\na\r\n$5\r\nhello\r\n" },
+        Step { want: "PUSH",
+               reply: b"*4\r\n$8\r\npmessage\r\n$2\r\nb*\r\n$3\r\nbzz\r\n$5\r\nworld\r\n" }
+    ];
+    let lfd = listen();
+    let pc: chan[int] = make_chan(1);
+    spawn sub_conn(lfd, pc, steps);
+    guard let port = chan_recv(pc) else {
+        die("no port");
+        panic("unreachable");
+    }
+    let sr = redis.subscribe(url_for(port), ["a"], ["b*"], soon());
+    guard let sub = sr else let e = err_of(sr) {
+        die("subscribe: " + e);
+        panic("unreachable");
+    }
+    let m1 = sub_msg(sub, "msg1");
+    if m1.kind != "message" || m1.channel != "a" || m1.payload != b"hello" {
+        die("msg1 shape");
+    }
+    if m1.pattern != "" {
+        die("msg1 pattern");
+    }
+    let m2 = sub_msg(sub, "msg2");
+    if m2.kind != "pmessage" || m2.channel != "bzz" ||
+       m2.pattern != "b*" || m2.payload != b"world" {
+        die("msg2 shape");
+    }
+    redis.sub_close(sub);
+    println("ok sub-basic");
+}
+
+fn test_sub_add_pending() {
+    let steps: [Step] = [
+        Step { want: "SUBSCRIBE",
+               reply: b"*3\r\n$9\r\nsubscribe\r\n$1\r\na\r\n:1\r\n" },
+        Step { want: "PUSH",
+               reply: b"*3\r\n$7\r\nmessage\r\n$1\r\na\r\n$4\r\nrace\r\n" },
+        Step { want: "SUBSCRIBE",
+               reply: b"*3\r\n$9\r\nsubscribe\r\n$1\r\nb\r\n:2\r\n" }
+    ];
+    let lfd = listen();
+    let pc: chan[int] = make_chan(1);
+    spawn sub_conn(lfd, pc, steps);
+    guard let port = chan_recv(pc) else {
+        die("no port");
+        panic("unreachable");
+    }
+    let sr = redis.subscribe(url_for(port), ["a"], [], soon());
+    guard let sub = sr else let e = err_of(sr) {
+        die("subscribe: " + e);
+        panic("unreachable");
+    }
+    let ar = redis.sub_add(sub, ["b"], [], soon());
+    guard let aok = ar else let e = err_of(ar) {
+        die("sub_add: " + e);
+        panic("unreachable");
+    }
+    let m = sub_msg(sub, "pending");
+    if m.payload != b"race" {
+        die("pending value");
+    }
+    redis.sub_close(sub);
+    println("ok sub-add-pending");
+}
+
+fn test_sub_timeout() {
+    let steps: [Step] = [
+        Step { want: "SUBSCRIBE",
+               reply: b"*3\r\n$9\r\nsubscribe\r\n$1\r\na\r\n:1\r\n" }
+    ];
+    let lfd = listen();
+    let pc: chan[int] = make_chan(1);
+    spawn sub_conn(lfd, pc, steps);
+    guard let port = chan_recv(pc) else {
+        die("no port");
+        panic("unreachable");
+    }
+    let sr = redis.subscribe(url_for(port), ["a"], [], soon());
+    guard let sub = sr else let e = err_of(sr) {
+        die("subscribe: " + e);
+        panic("unreachable");
+    }
+    let dl = until_of(time.mono() + 200000000);
+    let r = redis.sub_next(sub, dl);
+    guard let o = r else let e = err_of(r) {
+        die("sub_next: " + e);
+        panic("unreachable");
+    }
+    guard let m = o else {
+        redis.sub_close(sub);
+        println("ok sub-timeout");
+        return;
+    }
+    redis.sub_close(sub);
+    die("message from silence");
+}
+
+fn test_sub_remove() {
+    let steps: [Step] = [
+        Step { want: "SUBSCRIBE",
+               reply: b"*3\r\n$9\r\nsubscribe\r\n$1\r\na\r\n:1\r\n" },
+        Step { want: "PUSH",
+               reply: b"*3\r\n$9\r\nsubscribe\r\n$1\r\nb\r\n:2\r\n" },
+        Step { want: "UNSUBSCRIBE",
+               reply: b"*3\r\n$11\r\nunsubscribe\r\n$1\r\na\r\n:1\r\n" }
+    ];
+    let lfd = listen();
+    let pc: chan[int] = make_chan(1);
+    spawn sub_conn(lfd, pc, steps);
+    guard let port = chan_recv(pc) else {
+        die("no port");
+        panic("unreachable");
+    }
+    let sr = redis.subscribe(url_for(port), ["a", "b"], [], soon());
+    guard let sub = sr else let e = err_of(sr) {
+        die("subscribe: " + e);
+        panic("unreachable");
+    }
+    let rr = redis.sub_remove(sub, ["a"], [], soon());
+    guard let rok = rr else let e = err_of(rr) {
+        die("sub_remove: " + e);
+        panic("unreachable");
+    }
+    redis.sub_close(sub);
+    println("ok sub-remove");
+}
+
+fn pump(sub: redis.Sub, out: chan[redis.Message]) {
+    while true {
+        let dl = until_of(time.mono() + 5000000000);
+        let r = redis.sub_next(sub, dl);
+        guard let o = r else {
+            return;
+        }
+        guard let m = o else {
+            continue;
+        }
+        chan_send(out, m);
+    }
+}
+
+fn test_sub_pump() {
+    let steps: [Step] = [
+        Step { want: "SUBSCRIBE",
+               reply: b"*3\r\n$9\r\nsubscribe\r\n$1\r\na\r\n:1\r\n" },
+        Step { want: "PUSH",
+               reply: b"*3\r\n$7\r\nmessage\r\n$1\r\na\r\n$1\r\n1\r\n" },
+        Step { want: "PUSH",
+               reply: b"*3\r\n$7\r\nmessage\r\n$1\r\na\r\n$1\r\n2\r\n" },
+        Step { want: "PUSH",
+               reply: b"*3\r\n$7\r\nmessage\r\n$1\r\na\r\n$1\r\n3\r\n" }
+    ];
+    let lfd = listen();
+    let pc: chan[int] = make_chan(1);
+    spawn sub_conn(lfd, pc, steps);
+    guard let port = chan_recv(pc) else {
+        die("no port");
+        panic("unreachable");
+    }
+    let sr = redis.subscribe(url_for(port), ["a"], [], soon());
+    guard let sub = sr else let e = err_of(sr) {
+        die("subscribe: " + e);
+        panic("unreachable");
+    }
+    let out: chan[redis.Message] = make_chan(8);
+    spawn pump(sub, out);
+    let got = b"";
+    let i = 0;
+    while i < 3 {
+        guard let m = chan_recv(out) else {
+            die("pump closed early");
+            panic("unreachable");
+        }
+        got = got + m.payload;
+        i = i + 1;
+    }
+    if got != b"123" {
+        die("pump values");
+    }
+    redis.sub_close(sub);
+    println("ok sub-pump");
+}
+
+test_sub_basic();
+test_sub_add_pending();
+test_sub_timeout();
+test_sub_remove();
+test_sub_pump();

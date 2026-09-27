@@ -28,3 +28,8 @@ ok multi-refusals
 ok multi-outside
 ok watch-abort
 ok evalsha
+ok sub-basic
+ok sub-add-pending
+ok sub-timeout
+ok sub-remove
+ok sub-pump

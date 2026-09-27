@@ -2839,3 +2839,16 @@ iteration property instead -- `live_out ∪ live_in == cur_out`, i.e.
 live_in already a subset -- which is also what the loop already
 computed one line below. Verified with 10-line repros for
 while/for-in × str/int accumulators, the full suite green.
+
+## Not fixed (pre-existing, out of scope): ASan dies on errno paths
+
+A 10-line program whose only interesting act is a refused
+`net.dial_until` passes natively and aborts under
+`-fsanitize=address` (even with `-mllvm -asan-stack=0`): the fault is
+inside ASan's own `wrap_strerror` interceptor, faulting the green
+task stack. Same class as the documented hand-rolled-switch
+incompatibility -- green 16KB stacks plus ASan frame bloat -- not a
+slang bug, and unfixable from slang code without bigger task stacks.
+Redis memory-safety verification therefore rests on UBSan (clean),
+default/low-threshold runs (clean), and the collector's own stress
+paths, not ASan.

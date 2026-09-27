@@ -65,13 +65,14 @@ redis.close(c);
 | cluster | `new_cluster`, `cluster_do`, `cluster_refresh`, `cluster_close`, `c*` typed wrappers, same-slot multi-key checks |
 | transactions | `multi`, `queue`, `exec`, `discard`, `watch`, `unwatch` (direct Conns; pool and cluster routing stay out) |
 | scripting | `eval`, `evalsha` with NOSCRIPT fallback |
+| pub/sub | `subscribe`, `sub_add`, `sub_next`, `sub_remove`, `sub_close` (pull model; pump pattern in docs) |
 
 A reply is a `redis.Reply`: `kind` is one of `REPLY_SIMPLE`,
 `REPLY_ERROR`, `REPLY_INT`, `REPLY_BULK` or `REPLY_ARRAY`, with the
 payload in `text`, `num`, `bulk` (`none` for nil) or `items` (empty
 with `is_nil` for a nil array).
 
-**Not supported yet:** pub/sub and streams (phases 7-8), RESP3,
+**Not supported yet:** streams (phase 8), RESP3,
 replica reads.
 
 ## API
@@ -491,6 +492,34 @@ EVAL: the script's raw reply, whose shape depends on what it returns -- bulk, in
 ### `fn evalsha(c: Conn, script: str, keys: [str], args: [bytes],`
 
 EVALSHA with automatic EVAL fallback: the common path sends only 40 hex characters; a server that never saw the script answers NOSCRIPT and the call transparently re-sends the source.
+
+### `gc struct Message`
+
+A published message. kind is "message" or "pmessage"; pattern is set only for the latter (the glob that matched).
+
+### `gc struct Sub`
+
+A live subscription: a dedicated subscriber-mode connection plus messages that arrived while someone else held the lock. Never use sub.c directly (do, close, anything): concurrent socket readers would split the stream mid-reply. Everything here serializes on the Sub lock instead.
+
+### `fn subscribe(url: str, channels: [str], patterns: [str],`
+
+Subscribe, returning a live Sub. channels and patterns are the SUBSCRIBE and PSUBSCRIBE lists; at least one of them is nonempty.
+
+### `fn sub_add(sub: Sub, channels: [str], patterns: [str],`
+
+Add subscriptions to a live Sub.
+
+### `fn sub_next(sub: Sub, deadline: until) -> result[opt[Message], str]`
+
+Next message, or none when the deadline passes first. Confirms and pongs the server interleaves are skipped, never surfaced; a malformed reply is an error, since valid RESP has only the shapes as_message knows.
+
+### `fn sub_remove(sub: Sub, channels: [str], patterns: [str],`
+
+Remove subscriptions. Fully unsubscribing returns the connection to plain unicast mode; close it or subscribe again after.
+
+### `fn sub_close(sub: Sub)`
+
+Shut a subscription down. A task blocked in sub_next wakes with an error from the closed socket.
 
 ---
 

@@ -658,6 +658,22 @@ fn mark_broken(c: Conn, why: str) {
     c.why = why;
 }
 
+// Send everything: a short write retries with what is left, exactly
+// like exchange. A timeout mid-write desyncs the stream, so any
+// failure breaks the connection.
+fn send_all(c: Conn, b: bytes, deadline: until) -> result[bool, str] {
+    let off = 0;
+    while off < len(b) {
+        let sr = tr_send(c, b[off..], deadline);
+        guard let n = sr else let e = err_of(sr) {
+            mark_broken(c, "send: " + e);
+            return err("send: " + e);
+        }
+        off = off + n;
+    }
+    return ok(true);
+}
+
 // Drop consumed bytes once they dominate the buffer, so a long-lived
 // connection does not grow without bound. Amortized: each byte is
 // copied at most twice per megabyte consumed.
@@ -706,16 +722,9 @@ fn exchange(c: Conn, args: [bytes], deadline: until) -> result[Reply, str] {
         return err("connection is broken: " + c.why);
     }
     let wire = encode(args);
-    let off = 0;
-    while off < len(wire) {
-        let sr = tr_send(c, wire[off..], deadline);
-        guard let n = sr else let e = err_of(sr) {
-            // A send that times out mid-write leaves the stream at an
-            // unknown offset: the connection must go, not retry.
-            mark_broken(c, "send: " + e);
-            return err("send: " + e);
-        }
-        off = off + n;
+    let wr = send_all(c, wire, deadline);
+    guard let sent = wr else let e = err_of(wr) {
+        return err(e);
     }
     let rr = read_reply(c, deadline);
     guard let r = rr else let e = err_of(rr) {
@@ -3007,4 +3016,263 @@ pub fn evalsha(c: Conn, script: str, keys: [str], args: [bytes],
         return err(e);
     }
     return ok(reply);
+}
+
+// ---- pub/sub ---------------------------------------------------------
+// Subscriber mode is a different protocol state: every read is an
+// array (message, pmessage, or a subscribe/unsubscribe/pong
+// confirm), so a subscriber connection is dedicated -- it runs no
+// other commands. The pull model fits that best: sub_next blocks
+// with a deadline and the caller decides buffering and fan-out (a
+// 4-line pump feeds a chan when push suits better), instead of the
+// library hiding a reader task, a timer, and a loss policy. No
+// polling, no background wakeups, flow control by construction: an
+// app that stops calling stops receiving, and TCP backpressure does
+// the rest.
+//
+// All socket I/O goes under one lock, so one task may pump while
+// another (un)subscribes: confirms are consumed by whoever asked,
+// anything else lands in pending for the next sub_next.
+
+// A published message. kind is "message" or "pmessage"; pattern is
+// set only for the latter (the glob that matched).
+pub gc struct Message {
+    kind: str,
+    channel: str,
+    pattern: str,
+    payload: bytes,
+}
+
+// A live subscription: a dedicated subscriber-mode connection plus
+// messages that arrived while someone else held the lock. Never use
+// sub.c directly (do, close, anything): concurrent socket readers
+// would split the stream mid-reply. Everything here serializes on
+// the Sub lock instead.
+pub gc struct Sub {
+    c: Conn,
+    pending: [Message],
+    lock: mutex,
+}
+
+fn as_message(r: Reply) -> result[opt[Message], str] {
+    if r.kind != REPLY_ARRAY || r.is_nil || len(r.items) < 3 {
+        return err("not a message");
+    }
+    if r.items[0].kind != REPLY_BULK {
+        return err("not a message");
+    }
+    guard let tag = r.items[0].bulk else {
+        return err("not a message");
+    }
+    let kind = to_str(tag);
+    if kind == "message" {
+        if len(r.items) != 3 {
+            return err("bad message shape");
+        }
+        if r.items[1].kind != REPLY_BULK || r.items[2].kind != REPLY_BULK {
+            return err("bad message shape");
+        }
+        guard let ch = r.items[1].bulk else {
+            return err("bad message shape");
+        }
+        guard let pl = r.items[2].bulk else {
+            return err("bad message shape");
+        }
+        return ok(some(Message { kind: kind, channel: to_str(ch),
+                                 pattern: "", payload: pl }));
+    }
+    if kind == "pmessage" {
+        if len(r.items) != 4 {
+            return err("bad message shape");
+        }
+        if r.items[1].kind != REPLY_BULK ||
+           r.items[2].kind != REPLY_BULK ||
+           r.items[3].kind != REPLY_BULK {
+            return err("bad message shape");
+        }
+        guard let pat = r.items[1].bulk else {
+            return err("bad message shape");
+        }
+        guard let ch = r.items[2].bulk else {
+            return err("bad message shape");
+        }
+        guard let pl = r.items[3].bulk else {
+            return err("bad message shape");
+        }
+        return ok(some(Message { kind: kind, channel: to_str(ch),
+                                 pattern: to_str(pat), payload: pl }));
+    }
+    return ok(none);
+}
+
+// Read confirms until n subscribe/unsubscribe acks arrive, buffering
+// any messages that interleave into pending. Confirms are counted
+// positionally: the server answers our command with exactly n of
+// them, in order, so anything else on the wire meanwhile is a live
+// message. The caller holds sub.lock.
+fn sub_confirms(sub: Sub, n: int, deadline: until) -> result[bool, str] {
+    let got = 0;
+    while got < n {
+        let r = read_reply(sub.c, deadline);
+        guard let reply = r else let e = err_of(r) {
+            return err(e);
+        }
+        let m = as_message(reply);
+        guard let msg = m else let e = err_of(m) {
+            return err(e);
+        }
+        guard let mm = msg else {
+            got = got + 1;
+            continue;
+        }
+        push(sub.pending, mm);
+    }
+    return ok(true);
+}
+
+// Subscribe, returning a live Sub. channels and patterns are the
+// SUBSCRIBE and PSUBSCRIBE lists; at least one of them is nonempty.
+pub fn subscribe(url: str, channels: [str], patterns: [str],
+                 deadline: until) -> result[Sub, str] {
+    if len(channels) == 0 && len(patterns) == 0 {
+        return err("subscribe needs a channel or pattern");
+    }
+    let cr = connect(url, deadline);
+    guard let c = cr else let e = err_of(cr) {
+        return err(e);
+    }
+    let sub = Sub { c: c, pending: [], lock: make_mutex() };
+    let ar = sub_add(sub, channels, patterns, deadline);
+    guard let okv = ar else let e = err_of(ar) {
+        close(c);
+        return err(e);
+    }
+    return ok(sub);
+}
+
+// Add subscriptions to a live Sub.
+pub fn sub_add(sub: Sub, channels: [str], patterns: [str],
+               deadline: until) -> result[bool, str] {
+    if len(channels) == 0 && len(patterns) == 0 {
+        return err("subscribe needs a channel or pattern");
+    }
+    mutex_lock(sub.lock);
+    if len(channels) > 0 {
+        let args: [bytes] = [to_bytes("SUBSCRIBE")];
+        for ch in channels {
+            push(args, to_bytes(ch));
+        }
+        let sr = send_all(sub.c, encode(args), deadline);
+        guard let sent = sr else let e = err_of(sr) {
+            mutex_unlock(sub.lock);
+            return err(e);
+        }
+        let cr = sub_confirms(sub, len(channels), deadline);
+        guard let okv = cr else let e = err_of(cr) {
+            mutex_unlock(sub.lock);
+            return err(e);
+        }
+    }
+    if len(patterns) > 0 {
+        let args: [bytes] = [to_bytes("PSUBSCRIBE")];
+        for p in patterns {
+            push(args, to_bytes(p));
+        }
+        let sr = send_all(sub.c, encode(args), deadline);
+        guard let sent = sr else let e = err_of(sr) {
+            mutex_unlock(sub.lock);
+            return err(e);
+        }
+        let cr = sub_confirms(sub, len(patterns), deadline);
+        guard let okv = cr else let e = err_of(cr) {
+            mutex_unlock(sub.lock);
+            return err(e);
+        }
+    }
+    mutex_unlock(sub.lock);
+    return ok(true);
+}
+
+// Next message, or none when the deadline passes first. Confirms
+// and pongs the server interleaves are skipped, never surfaced; a
+// malformed reply is an error, since valid RESP has only the shapes
+// as_message knows.
+pub fn sub_next(sub: Sub, deadline: until) -> result[opt[Message], str] {
+    mutex_lock(sub.lock);
+    if len(sub.pending) > 0 {
+        let m = sub.pending[0];
+        sub.pending = sub.pending[1..];
+        mutex_unlock(sub.lock);
+        return ok(some(m));
+    }
+    while true {
+        let r = read_reply(sub.c, deadline);
+        guard let reply = r else let e = err_of(r) {
+            mutex_unlock(sub.lock);
+            // The reserved timeout string, not a failure: the caller
+            // asked how long to wait, and nothing arrived.
+            if e == "recv: timeout" {
+                let nothing: opt[Message] = none;
+                return ok(nothing);
+            }
+            return err(e);
+        }
+        let m = as_message(reply);
+        guard let msg = m else let e = err_of(m) {
+            mutex_unlock(sub.lock);
+            return err(e);
+        }
+        guard let mm = msg else {
+            continue;
+        }
+        mutex_unlock(sub.lock);
+        return ok(some(mm));
+    }
+}
+
+// Remove subscriptions. Fully unsubscribing returns the connection
+// to plain unicast mode; close it or subscribe again after.
+pub fn sub_remove(sub: Sub, channels: [str], patterns: [str],
+                  deadline: until) -> result[bool, str] {
+    mutex_lock(sub.lock);
+    if len(channels) > 0 {
+        let args: [bytes] = [to_bytes("UNSUBSCRIBE")];
+        for ch in channels {
+            push(args, to_bytes(ch));
+        }
+        let sr = send_all(sub.c, encode(args), deadline);
+        guard let sent = sr else let e = err_of(sr) {
+            mutex_unlock(sub.lock);
+            return err(e);
+        }
+        let cr = sub_confirms(sub, len(channels), deadline);
+        guard let okv = cr else let e = err_of(cr) {
+            mutex_unlock(sub.lock);
+            return err(e);
+        }
+    }
+    if len(patterns) > 0 {
+        let args: [bytes] = [to_bytes("PUNSUBSCRIBE")];
+        for p in patterns {
+            push(args, to_bytes(p));
+        }
+        let sr = send_all(sub.c, encode(args), deadline);
+        guard let sent = sr else let e = err_of(sr) {
+            mutex_unlock(sub.lock);
+            return err(e);
+        }
+        let cr = sub_confirms(sub, len(patterns), deadline);
+        guard let okv = cr else let e = err_of(cr) {
+            mutex_unlock(sub.lock);
+            return err(e);
+        }
+    }
+    mutex_unlock(sub.lock);
+    return ok(true);
+}
+
+// Shut a subscription down. A task blocked in sub_next wakes with an
+// error from the closed socket.
+pub fn sub_close(sub: Sub) {
+    close(sub.c);
 }

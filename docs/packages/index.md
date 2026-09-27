@@ -1021,13 +1021,14 @@ redis.close(c);
 | cluster | `new_cluster`, `cluster_do`, `cluster_refresh`, `cluster_close`, `c*` typed wrappers, same-slot multi-key checks |
 | transactions | `multi`, `queue`, `exec`, `discard`, `watch`, `unwatch` (direct Conns; pool and cluster routing stay out) |
 | scripting | `eval`, `evalsha` with NOSCRIPT fallback |
+| pub/sub | `subscribe`, `sub_add`, `sub_next`, `sub_remove`, `sub_close` (pull model; pump pattern in docs) |
 
 A reply is a `redis.Reply`: `kind` is one of `REPLY_SIMPLE`,
 `REPLY_ERROR`, `REPLY_INT`, `REPLY_BULK` or `REPLY_ARRAY`, with the
 payload in `text`, `num`, `bulk` (`none` for nil) or `items` (empty
 with `is_nil` for a nil array).
 
-**Not supported yet:** pub/sub and streams (phases 7-8), RESP3,
+**Not supported yet:** streams (phase 8), RESP3,
 replica reads.
 
 #### `regex`
@@ -1981,7 +1982,7 @@ signal-handling program.
 - [os](packages/os.md) -- compiler-provided, 14 public items
 - [pg](packages/pg.md) -- source package, 52 public items
 - [proc](packages/proc.md) -- compiler-provided, 6 public items
-- [redis](packages/redis.md) -- source package, 141 public items
+- [redis](packages/redis.md) -- source package, 148 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [sql](packages/sql.md) -- compiler-provided, 20 public items
 - [strings](packages/strings.md) -- compiler-provided, 21 public items

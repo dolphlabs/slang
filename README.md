@@ -1913,13 +1913,14 @@ redis.close(c);
 | cluster | `new_cluster`, `cluster_do`, `cluster_refresh`, `cluster_close`, `c*` typed wrappers, same-slot multi-key checks |
 | transactions | `multi`, `queue`, `exec`, `discard`, `watch`, `unwatch` (direct Conns; pool and cluster routing stay out) |
 | scripting | `eval`, `evalsha` with NOSCRIPT fallback |
+| pub/sub | `subscribe`, `sub_add`, `sub_next`, `sub_remove`, `sub_close` (pull model; pump pattern in docs) |
 
 A reply is a `redis.Reply`: `kind` is one of `REPLY_SIMPLE`,
 `REPLY_ERROR`, `REPLY_INT`, `REPLY_BULK` or `REPLY_ARRAY`, with the
 payload in `text`, `num`, `bulk` (`none` for nil) or `items` (empty
 with `is_nil` for a nil array).
 
-**Not supported yet:** pub/sub and streams (phases 7-8), RESP3,
+**Not supported yet:** streams (phase 8), RESP3,
 replica reads.
 
 #### `regex`
