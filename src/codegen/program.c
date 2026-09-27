@@ -429,21 +429,52 @@ void emit_struct_types(CG *cg) {
  * struct_has_gc_fields, core.c). Must run after emit_struct_types so
  * every struct body (and therefore every field's real name) already
  * exists; field access is emitted directly (o->fieldname), not via
- * offsetof, since the real names are already known here. */
+ * offsetof, since the real names are already known here.
+ *
+ * Value structs are emitted too, not just gc ones: a `gc` conversion
+ * box (`let g: gc Rec = Rec {...}`) is a heap object holding a value
+ * struct, and without a tracer the collector keeps the box but never
+ * walks into it. Fields that are themselves value structs with GC
+ * fields recurse inline with dotted paths -- a nested Inner.str is
+ * marked as o->inner.s, exactly like the root-array builders do.
+ * Value-struct tracers carry __attribute__((unused)): unlike a gc
+ * struct, whose allocation sites always name theirs, a value struct
+ * only needs one when some conversion actually boxes it, and an
+ * unreferenced static would trip the warning sweep. */
+static void emit_struct_tracer_fields(CG *cg, StructDef *sd,
+                                      const char *prefix) {
+    for (int j = 0; j < sd->nfields; j++) {
+        const char *ft = sd->ftypes[j];
+        char *path;
+        if (prefix[0])
+            path = xasprintf("%s.%s", prefix, sanitize_ident(sd->fields[j]));
+        else
+            path = xstrdup(sanitize_ident(sd->fields[j]));
+        if (type_is_gc_ptr(cg, ft)) {
+            emit_line(cg, "mark((void *)o->%s);", path);
+            continue;
+        }
+        StructDef *sub = struct_find_canon(cg, ft);
+        if (sub && !sub->is_gc && struct_has_gc_fields(cg, sub))
+            emit_struct_tracer_fields(cg, sub, path);
+    }
+}
+
 void emit_struct_tracers(CG *cg) {
     for (int i = 0; i < cg->structs.count; i++) {
         StructDef *sd = cg->structs.items[i];
-        if (!sd->is_gc || !struct_has_gc_fields(cg, sd))
+        if (!struct_has_gc_fields(cg, sd))
             continue;
         char *m = mangle_struct(sd->canonical);
-        emit_line(cg, "static void sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
-                  m);
+        if (sd->is_gc)
+            emit_line(cg, "static void sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
+                      m);
+        else
+            emit_line(cg, "static void __attribute__((unused)) sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
+                      m);
         cg->indent++;
         emit_line(cg, "%s *o = (%s *)p;", m, m);
-        for (int j = 0; j < sd->nfields; j++)
-            if (type_is_gc_ptr(cg, sd->ftypes[j]))
-                emit_line(cg, "mark((void *)o->%s);",
-                          sanitize_ident(sd->fields[j]));
+        emit_struct_tracer_fields(cg, sd, "");
         cg->indent--;
         emit_line(cg, "}");
         emit_line(cg, "");

@@ -591,15 +591,28 @@ static const char *wrap_prefix(TypeWrap w, const char *inner) {
     }
 }
 
-static char *box_expr(const char *ic, TypeWrap w, char *expr) {
+static char *box_expr(CG *cg, const char *inner_slang, const char *ic,
+                       TypeWrap w, char *expr) {
     /* The value first, then the box: see gen_ctor for why an
      * allocation must never be held in an unregistered C local while
      * an expression that can reach a safepoint runs. */
-    if (w == TW_GC)
+    if (w == TW_GC) {
+        /* A box with GC-pointer fields must name its tracer, exactly
+         * like a struct literal does: with NULL the collector keeps
+         * the box but never walks into it, freeing live fields out
+         * from under it (found via a `let g: gc Rec` conversion whose
+         * list field came back wrong). Value structs have tracers too
+         * (emitted with __attribute__((unused))); anything else keeps
+         * NULL. */
+        const char *trace = "NULL";
+        StructDef *sd = struct_find_canon(cg, inner_slang);
+        if (sd && struct_has_gc_fields(cg, sd))
+            trace = xasprintf("sl_gc_trace_%s", mangle_struct(sd->canonical));
         return xasprintf(
-            "({ %s _sl_bv = (%s); %s *_sl_b = (%s *)sl_gc_alloc(sizeof(%s), NULL); "
+            "({ %s _sl_bv = (%s); %s *_sl_b = (%s *)sl_gc_alloc(sizeof(%s), %s); "
             "*_sl_b = _sl_bv; _sl_b; })",
-            ic, expr, ic, ic, ic);
+            ic, expr, ic, ic, ic, trace);
+    }
     return xasprintf(
         "({ %s *_sl_b = (%s *)malloc(sizeof(%s)); "
         "if (!_sl_b) abort(); *_sl_b = (%s); _sl_b; })",
@@ -1026,7 +1039,7 @@ char *maybe_cast(CG *cg, const char *dst, const char *src,
     TypeWrap sw = type_wrap(src, &si);
     if (dw == TW_OWN || dw == TW_GC) {
         char *inner_expr = maybe_cast(cg, di, src, expr);
-        return box_expr(ctype_of(cg, di), dw, inner_expr);
+        return box_expr(cg, di, ctype_of(cg, di), dw, inner_expr);
     }
     if (sw != TW_NONE && (can_assign(dst, si) || !strcmp(dst, si)))
         return xasprintf("(*(%s))", expr);
