@@ -1022,14 +1022,14 @@ redis.close(c);
 | transactions | `multi`, `queue`, `exec`, `discard`, `watch`, `unwatch` (direct Conns; pool and cluster routing stay out) |
 | scripting | `eval`, `evalsha` with NOSCRIPT fallback |
 | pub/sub | `subscribe`, `sub_add`, `sub_next`, `sub_remove`, `sub_close` (pull model; pump pattern in docs) |
+| streams | `xadd`, `xadd_maxlen`, `xrange`, `xrevrange`, `xlen`, `xtrim`, `xdel`, `xread`, cluster `cxadd`/`cxlen`/`cxread` (groups deferred) |
 
 A reply is a `redis.Reply`: `kind` is one of `REPLY_SIMPLE`,
 `REPLY_ERROR`, `REPLY_INT`, `REPLY_BULK` or `REPLY_ARRAY`, with the
 payload in `text`, `num`, `bulk` (`none` for nil) or `items` (empty
 with `is_nil` for a nil array).
 
-**Not supported yet:** streams (phase 8), RESP3,
-replica reads.
+**Not supported yet:** consumer groups, RESP3, replica reads.
 
 #### `regex`
 
@@ -1982,7 +1982,7 @@ signal-handling program.
 - [os](packages/os.md) -- compiler-provided, 14 public items
 - [pg](packages/pg.md) -- source package, 52 public items
 - [proc](packages/proc.md) -- compiler-provided, 6 public items
-- [redis](packages/redis.md) -- source package, 148 public items
+- [redis](packages/redis.md) -- source package, 161 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [sql](packages/sql.md) -- compiler-provided, 20 public items
 - [strings](packages/strings.md) -- compiler-provided, 21 public items

@@ -4428,6 +4428,110 @@
           "doc": "Shut a subscription down. A task blocked in sub_next wakes with an error from the closed socket.",
           "file": "stdlib/redis/redis.sl",
           "line": 3276
+        },
+        {
+          "name": "StreamEntry",
+          "decl": "struct",
+          "sig": "gc struct StreamEntry",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3286
+        },
+        {
+          "name": "StreamRead",
+          "decl": "struct",
+          "sig": "gc struct StreamRead",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3291
+        },
+        {
+          "name": "xadd",
+          "decl": "fn",
+          "sig": "fn xadd(c: Conn, key: str, id: str, fields: map[str]bytes,",
+          "doc": "XADD: the new entry's ID.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3339
+        },
+        {
+          "name": "xadd_maxlen",
+          "decl": "fn",
+          "sig": "fn xadd_maxlen(c: Conn, key: str, maxlen: int, approx: bool, id: str,",
+          "doc": "XADD with MAXLEN trimming: approx picks ~ (cheap) over exact.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3360
+        },
+        {
+          "name": "xrange",
+          "decl": "fn",
+          "sig": "fn xrange(c: Conn, key: str, start: str, end: str, count: opt[int],",
+          "doc": "XRANGE/XREVRANGE: entries between two IDs (\"-\" and \"+\" are the ends), oldest first (XREVRANGE newest first). count caps the reply, none for no cap.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3427
+        },
+        {
+          "name": "xrevrange",
+          "decl": "fn",
+          "sig": "fn xrevrange(c: Conn, key: str, end: str, start: str, count: opt[int],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3432
+        },
+        {
+          "name": "xlen",
+          "decl": "fn",
+          "sig": "fn xlen(c: Conn, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3437
+        },
+        {
+          "name": "xtrim",
+          "decl": "fn",
+          "sig": "fn xtrim(c: Conn, key: str, maxlen: int, approx: bool,",
+          "doc": "XTRIM MAXLEN: how many entries were removed.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3446
+        },
+        {
+          "name": "xdel",
+          "decl": "fn",
+          "sig": "fn xdel(c: Conn, key: str, ids: [str],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3461
+        },
+        {
+          "name": "xread",
+          "decl": "fn",
+          "sig": "fn xread(c: Conn, keys: [str], ids: [str], block_ms: opt[int],",
+          "doc": "XREAD: new entries per key since each id (\"$\" means \"everything after now\" on first call, then the last seen id after). block_ms waits that long for data (none => return at once); a wait that finds nothing is ok(none), not an error. count caps per call.",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3478
+        },
+        {
+          "name": "cxadd",
+          "decl": "fn",
+          "sig": "fn cxadd(cl: Cluster, key: str, id: str, fields: map[str]bytes,",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3555
+        },
+        {
+          "name": "cxlen",
+          "decl": "fn",
+          "sig": "fn cxlen(cl: Cluster, key: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3575
+        },
+        {
+          "name": "cxread",
+          "decl": "fn",
+          "sig": "fn cxread(cl: Cluster, keys: [str], ids: [str], block_ms: opt[int],",
+          "doc": "",
+          "file": "stdlib/redis/redis.sl",
+          "line": 3584
         }
       ]
     },

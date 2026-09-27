@@ -1873,3 +1873,168 @@ test_sub_add_pending();
 test_sub_timeout();
 test_sub_remove();
 test_sub_pump();
+
+fn test_streams() {
+    let entry = b"*2\r\n$15\r\n1712345678901-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n";
+    let steps: [Step] = [
+        Step { want: "XADD", reply: b"$15\r\n1712345678901-0\r\n" },
+        Step { want: "XADD", reply: b"$15\r\n1712345678901-0\r\n" },
+        Step { want: "XRANGE", reply: b"*2\r\n" + entry + entry },
+        Step { want: "XREVRANGE", reply: b"*1\r\n" + entry },
+        Step { want: "XLEN", reply: b":2\r\n" },
+        Step { want: "XTRIM", reply: b":1\r\n" },
+        Step { want: "XDEL", reply: b":1\r\n" },
+        Step { want: "XREAD",
+               reply: b"*1\r\n*2\r\n$2\r\nmk\r\n*1\r\n" + entry },
+        Step { want: "XREAD", reply: b"*-1\r\n" }
+    ];
+    let c = scripted(steps);
+    let fields: map[str]bytes = {"f": b"v"};
+    let ar = redis.xadd(c, "mk", "*", fields, soon());
+    guard let id = ar else let e = err_of(ar) {
+        die("xadd: " + e);
+        panic("unreachable");
+    }
+    if id != "1712345678901-0" {
+        die("xadd id");
+    }
+    let ar2 = redis.xadd_maxlen(c, "mk", 1000, true, "*", fields, soon());
+    guard let id2 = ar2 else let e = err_of(ar2) {
+        die("xadd_maxlen: " + e);
+        panic("unreachable");
+    }
+    if id2 != "1712345678901-0" {
+        die("xadd_maxlen id");
+    }
+    let xr = redis.xrange(c, "mk", "-", "+", none, soon());
+    guard let entries = xr else let e = err_of(xr) {
+        die("xrange: " + e);
+        panic("unreachable");
+    }
+    if len(entries) != 2 || entries[0].id != "1712345678901-0" {
+        die("xrange shape");
+    }
+    if !has(entries[0].fields, "f") {
+        die("xrange fields");
+    }
+    let rr = redis.xrevrange(c, "mk", "+", "-", none, soon());
+    guard let rentries = rr else let e = err_of(rr) {
+        die("xrevrange: " + e);
+        panic("unreachable");
+    }
+    if len(rentries) != 1 {
+        die("xrevrange shape");
+    }
+    let lr = redis.xlen(c, "mk", soon());
+    guard let ln = lr else let e = err_of(lr) {
+        die("xlen: " + e);
+        panic("unreachable");
+    }
+    if ln != 2 {
+        die("xlen value");
+    }
+    let tr = redis.xtrim(c, "mk", 1000, true, soon());
+    guard let tn = tr else let e = err_of(tr) {
+        die("xtrim: " + e);
+        panic("unreachable");
+    }
+    if tn != 1 {
+        die("xtrim value");
+    }
+    let dr = redis.xdel(c, "mk", ["1712345678901-0"], soon());
+    guard let dn = dr else let e = err_of(dr) {
+        die("xdel: " + e);
+        panic("unreachable");
+    }
+    if dn != 1 {
+        die("xdel value");
+    }
+    let rd = redis.xread(c, ["mk"], ["0"], none, none, soon());
+    guard let ro = rd else let e = err_of(rd) {
+        die("xread: " + e);
+        panic("unreachable");
+    }
+    guard let reads = ro else {
+        die("xread none");
+        panic("unreachable");
+    }
+    if len(reads) != 1 || reads[0].key != "mk" ||
+       len(reads[0].entries) != 1 {
+        die("xread shape");
+    }
+    let rd2 = redis.xread(c, ["mk"], ["$"], some(200), none, soon());
+    guard let ro2 = rd2 else let e = err_of(rd2) {
+        die("xread nil: " + e);
+        panic("unreachable");
+    }
+    guard let reads2 = ro2 else {
+        redis.close(c);
+        println("ok xread-nil");
+        println("ok streams");
+        return;
+    }
+    die("xread data on empty");
+}
+
+test_streams();
+
+fn test_cluster_streams() {
+    let la = listen();
+    let pa = port_of(la);
+    let conn1: [Step] = [
+        Step { want: "CLUSTER", reply: slots_reply(pa, pa) }
+    ];
+    let entry = b"*2\r\n$15\r\n1712345678901-0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n";
+    let conn2: [Step] = [
+        Step { want: "XADD", reply: b"$15\r\n1712345678901-0\r\n" },
+        Step { want: "XLEN", reply: b":1\r\n" },
+        Step { want: "XREAD",
+               reply: b"*1\r\n*2\r\n$2\r\nmk\r\n*1\r\n" + entry }
+    ];
+    let scripts: [[Step]] = [conn1, conn2];
+    let pc: chan[int] = make_chan(1);
+    spawn cluster_script(la, pc, scripts);
+    guard let port = chan_recv(pc) else {
+        die("no port");
+        panic("unreachable");
+    }
+    let cfg = cluster_cfg();
+    let cr = redis.new_cluster(cfg, ["127.0.0.1:" + to_str(pa)], soon());
+    guard let cl = cr else let e = err_of(cr) {
+        die("new_cluster: " + e);
+        panic("unreachable");
+    }
+    let fields: map[str]bytes = {"f": b"v"};
+    let ar = redis.cxadd(cl, "mk", "*", fields, soon());
+    guard let id = ar else let e = err_of(ar) {
+        die("cxadd: " + e);
+        panic("unreachable");
+    }
+    if id != "1712345678901-0" {
+        die("cxadd id");
+    }
+    let lr = redis.cxlen(cl, "mk", soon());
+    guard let ln = lr else let e = err_of(lr) {
+        die("cxlen: " + e);
+        panic("unreachable");
+    }
+    if ln != 1 {
+        die("cxlen value");
+    }
+    let rr = redis.cxread(cl, ["mk"], ["0"], none, none, soon());
+    guard let ro = rr else let e = err_of(rr) {
+        die("cxread: " + e);
+        panic("unreachable");
+    }
+    guard let reads = ro else {
+        die("cxread none");
+        panic("unreachable");
+    }
+    if len(reads) != 1 || len(reads[0].entries) != 1 {
+        die("cxread shape");
+    }
+    redis.cluster_close(cl);
+    println("ok cluster-streams");
+}
+
+test_cluster_streams();

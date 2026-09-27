@@ -3520,14 +3520,14 @@ redis.close(c);
 | transactions | `multi`, `queue`, `exec`, `discard`, `watch`, `unwatch` (direct Conns; pool and cluster routing stay out) |
 | scripting | `eval`, `evalsha` with NOSCRIPT fallback |
 | pub/sub | `subscribe`, `sub_add`, `sub_next`, `sub_remove`, `sub_close` (pull model; pump pattern in docs) |
+| streams | `xadd`, `xadd_maxlen`, `xrange`, `xrevrange`, `xlen`, `xtrim`, `xdel`, `xread`, cluster `cxadd`/`cxlen`/`cxread` (groups deferred) |
 
 A reply is a `redis.Reply`: `kind` is one of `REPLY_SIMPLE`,
 `REPLY_ERROR`, `REPLY_INT`, `REPLY_BULK` or `REPLY_ARRAY`, with the
 payload in `text`, `num`, `bulk` (`none` for nil) or `items` (empty
 with `is_nil` for a nil array).
 
-**Not supported yet:** streams (phase 8), RESP3,
-replica reads.
+**Not supported yet:** consumer groups, RESP3, replica reads.
 
 #### `regex`
 
@@ -4480,7 +4480,7 @@ signal-handling program.
 - [os](packages/os.md) -- compiler-provided, 14 public items
 - [pg](packages/pg.md) -- source package, 52 public items
 - [proc](packages/proc.md) -- compiler-provided, 6 public items
-- [redis](packages/redis.md) -- source package, 148 public items
+- [redis](packages/redis.md) -- source package, 161 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [sql](packages/sql.md) -- compiler-provided, 20 public items
 - [strings](packages/strings.md) -- compiler-provided, 21 public items
@@ -7713,14 +7713,14 @@ redis.close(c);
 | transactions | `multi`, `queue`, `exec`, `discard`, `watch`, `unwatch` (direct Conns; pool and cluster routing stay out) |
 | scripting | `eval`, `evalsha` with NOSCRIPT fallback |
 | pub/sub | `subscribe`, `sub_add`, `sub_next`, `sub_remove`, `sub_close` (pull model; pump pattern in docs) |
+| streams | `xadd`, `xadd_maxlen`, `xrange`, `xrevrange`, `xlen`, `xtrim`, `xdel`, `xread`, cluster `cxadd`/`cxlen`/`cxread` (groups deferred) |
 
 A reply is a `redis.Reply`: `kind` is one of `REPLY_SIMPLE`,
 `REPLY_ERROR`, `REPLY_INT`, `REPLY_BULK` or `REPLY_ARRAY`, with the
 payload in `text`, `num`, `bulk` (`none` for nil) or `items` (empty
 with `is_nil` for a nil array).
 
-**Not supported yet:** streams (phase 8), RESP3,
-replica reads.
+**Not supported yet:** consumer groups, RESP3, replica reads.
 
 ## API
 
@@ -8167,6 +8167,42 @@ Remove subscriptions. Fully unsubscribing returns the connection to plain unicas
 ### `fn sub_close(sub: Sub)`
 
 Shut a subscription down. A task blocked in sub_next wakes with an error from the closed socket.
+
+### `gc struct StreamEntry`
+
+### `gc struct StreamRead`
+
+### `fn xadd(c: Conn, key: str, id: str, fields: map[str]bytes,`
+
+XADD: the new entry's ID.
+
+### `fn xadd_maxlen(c: Conn, key: str, maxlen: int, approx: bool, id: str,`
+
+XADD with MAXLEN trimming: approx picks ~ (cheap) over exact.
+
+### `fn xrange(c: Conn, key: str, start: str, end: str, count: opt[int],`
+
+XRANGE/XREVRANGE: entries between two IDs ("-" and "+" are the ends), oldest first (XREVRANGE newest first). count caps the reply, none for no cap.
+
+### `fn xrevrange(c: Conn, key: str, end: str, start: str, count: opt[int],`
+
+### `fn xlen(c: Conn, key: str, deadline: until) -> result[int, str]`
+
+### `fn xtrim(c: Conn, key: str, maxlen: int, approx: bool,`
+
+XTRIM MAXLEN: how many entries were removed.
+
+### `fn xdel(c: Conn, key: str, ids: [str],`
+
+### `fn xread(c: Conn, keys: [str], ids: [str], block_ms: opt[int],`
+
+XREAD: new entries per key since each id ("$" means "everything after now" on first call, then the last seen id after). block_ms waits that long for data (none => return at once); a wait that finds nothing is ok(none), not an error. count caps per call.
+
+### `fn cxadd(cl: Cluster, key: str, id: str, fields: map[str]bytes,`
+
+### `fn cxlen(cl: Cluster, key: str, deadline: until) -> result[int, str]`
+
+### `fn cxread(cl: Cluster, keys: [str], ids: [str], block_ms: opt[int],`
 
 ---
 

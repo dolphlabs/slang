@@ -3276,3 +3276,386 @@ pub fn sub_remove(sub: Sub, channels: [str], patterns: [str],
 pub fn sub_close(sub: Sub) {
     close(sub.c);
 }
+
+// ---- streams ---------------------------------------------------------
+// Append-only logs: XADD/XRANGE/XREAD/XLEN/XTRIM/XDEL. Consumer
+// groups (XREADGROUP/XACK/XPENDING/XCLAIM) are a later phase: they
+// are a second protocol for the same log, not needed to read and
+// write it. Entry IDs are "ms-seq" strings; "*" asks the server.
+
+pub gc struct StreamEntry {
+    id: str,
+    fields: map[str]bytes,
+}
+
+pub gc struct StreamRead {
+    key: str,
+    entries: [StreamEntry],
+}
+
+fn parse_fields(items: [Reply], what: str) -> result[map[str]bytes, str] {
+    if len(items) % 2 != 0 {
+        return err(what + ": odd field count");
+    }
+    let out: map[str]bytes = {};
+    let i = 0;
+    while i < len(items) {
+        if items[i].kind != REPLY_BULK || items[i + 1].kind != REPLY_BULK {
+            return err(what + ": expected bulk fields");
+        }
+        guard let f = items[i].bulk else {
+            return err(what + ": nil field");
+        }
+        guard let v = items[i + 1].bulk else {
+            return err(what + ": nil value");
+        }
+        out[to_str(f)] = v;
+        i = i + 2;
+    }
+    return ok(out);
+}
+
+fn parse_entry(r: Reply, what: str) -> result[StreamEntry, str] {
+    if r.kind != REPLY_ARRAY || r.is_nil || len(r.items) != 2 {
+        return err(what + ": bad entry");
+    }
+    if r.items[0].kind != REPLY_BULK {
+        return err(what + ": bad entry id");
+    }
+    guard let idb = r.items[0].bulk else {
+        return err(what + ": nil entry id");
+    }
+    if r.items[1].kind != REPLY_ARRAY || r.items[1].is_nil {
+        return err(what + ": bad entry fields");
+    }
+    let fr = parse_fields(r.items[1].items, what);
+    guard let fields = fr else let e = err_of(fr) {
+        return err(e);
+    }
+    return ok(StreamEntry { id: to_str(idb), fields: fields });
+}
+
+// XADD: the new entry's ID.
+pub fn xadd(c: Conn, key: str, id: str, fields: map[str]bytes,
+            deadline: until) -> result[str, str] {
+    let args: [bytes] = [to_bytes("XADD"), to_bytes(key), to_bytes(id)];
+    for f, v in fields {
+        push(args, to_bytes(f));
+        push(args, v);
+    }
+    let r = do(c, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind != REPLY_BULK {
+        return err("XADD: expected a bulk reply");
+    }
+    guard let b = reply.bulk else {
+        return err("XADD: nil id");
+    }
+    return ok(to_str(b));
+}
+
+// XADD with MAXLEN trimming: approx picks ~ (cheap) over exact.
+pub fn xadd_maxlen(c: Conn, key: str, maxlen: int, approx: bool, id: str,
+                   fields: map[str]bytes,
+                   deadline: until) -> result[str, str] {
+    let args: [bytes] = [to_bytes("XADD"), to_bytes(key),
+                         to_bytes("MAXLEN")];
+    if approx {
+        push(args, to_bytes("~"));
+    }
+    push(args, to_bytes(to_str(maxlen)));
+    push(args, to_bytes(id));
+    for f, v in fields {
+        push(args, to_bytes(f));
+        push(args, v);
+    }
+    let r = do(c, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind != REPLY_BULK {
+        return err("XADD: expected a bulk reply");
+    }
+    guard let b = reply.bulk else {
+        return err("XADD: nil id");
+    }
+    return ok(to_str(b));
+}
+
+fn xrange_run(c: Conn, rev: bool, key: str, start: str, end: str,
+              count: opt[int],
+              deadline: until) -> result[[StreamEntry], str] {
+    let name = "XRANGE";
+    if rev {
+        name = "XREVRANGE";
+    }
+    let args: [bytes] = [to_bytes(name), to_bytes(key), to_bytes(start),
+                         to_bytes(end)];
+    guard let n = count else {
+        return xrange_call(c, args, name, deadline);
+    }
+    push(args, to_bytes("COUNT"));
+    push(args, to_bytes(to_str(n)));
+    return xrange_call(c, args, name, deadline);
+}
+
+fn xrange_call(c: Conn, args: [bytes], name: str,
+               deadline: until) -> result[[StreamEntry], str] {
+    let r = do(c, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    guard let items = as_array(reply, name) else let e = err_of(as_array(reply, name)) {
+        return err(e);
+    }
+    let out: [StreamEntry] = [];
+    for it in items {
+        let er = parse_entry(it, name);
+        guard let e = er else let e = err_of(er) {
+            return err(e);
+        }
+        push(out, e);
+    }
+    return ok(out);
+}
+
+// XRANGE/XREVRANGE: entries between two IDs ("-" and "+" are the
+// ends), oldest first (XREVRANGE newest first). count caps the
+// reply, none for no cap.
+pub fn xrange(c: Conn, key: str, start: str, end: str, count: opt[int],
+              deadline: until) -> result[[StreamEntry], str] {
+    return xrange_run(c, false, key, start, end, count, deadline);
+}
+
+pub fn xrevrange(c: Conn, key: str, end: str, start: str, count: opt[int],
+                 deadline: until) -> result[[StreamEntry], str] {
+    return xrange_run(c, true, key, end, start, count, deadline);
+}
+
+pub fn xlen(c: Conn, key: str, deadline: until) -> result[int, str] {
+    let r = do(c, [to_bytes("XLEN"), to_bytes(key)], deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "XLEN");
+}
+
+// XTRIM MAXLEN: how many entries were removed.
+pub fn xtrim(c: Conn, key: str, maxlen: int, approx: bool,
+             deadline: until) -> result[int, str] {
+    let args: [bytes] = [to_bytes("XTRIM"), to_bytes(key),
+                         to_bytes("MAXLEN")];
+    if approx {
+        push(args, to_bytes("~"));
+    }
+    push(args, to_bytes(to_str(maxlen)));
+    let r = do(c, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "XTRIM");
+}
+
+pub fn xdel(c: Conn, key: str, ids: [str],
+            deadline: until) -> result[int, str] {
+    let args: [bytes] = [to_bytes("XDEL"), to_bytes(key)];
+    for id in ids {
+        push(args, to_bytes(id));
+    }
+    let r = do(c, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "XDEL");
+}
+
+// XREAD: new entries per key since each id ("$" means "everything
+// after now" on first call, then the last seen id after). block_ms
+// waits that long for data (none => return at once); a wait that
+// finds nothing is ok(none), not an error. count caps per call.
+pub fn xread(c: Conn, keys: [str], ids: [str], block_ms: opt[int],
+             count: opt[int],
+             deadline: until) -> result[opt[[StreamRead]], str] {
+    if len(keys) == 0 || len(keys) != len(ids) {
+        return err("XREAD needs one id per key");
+    }
+    let args: [bytes] = [to_bytes("XREAD")];
+    guard let n = count else {
+        return xread_block(c, args, keys, ids, block_ms, deadline);
+    }
+    push(args, to_bytes("COUNT"));
+    push(args, to_bytes(to_str(n)));
+    return xread_block(c, args, keys, ids, block_ms, deadline);
+}
+
+fn xread_block(c: Conn, args: [bytes], keys: [str], ids: [str],
+               block_ms: opt[int],
+               deadline: until) -> result[opt[[StreamRead]], str] {
+    guard let ms = block_ms else {
+        return xread_run(c, args, keys, ids, deadline);
+    }
+    push(args, to_bytes("BLOCK"));
+    push(args, to_bytes(to_str(ms)));
+    return xread_run(c, args, keys, ids, deadline);
+}
+
+fn xread_run(c: Conn, args: [bytes], keys: [str], ids: [str],
+             deadline: until) -> result[opt[[StreamRead]], str] {
+    push(args, to_bytes("STREAMS"));
+    for k in keys {
+        push(args, to_bytes(k));
+    }
+    for id in ids {
+        push(args, to_bytes(id));
+    }
+    let r = do(c, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind == REPLY_ARRAY && reply.is_nil {
+        let nothing: opt[[StreamRead]] = none;
+        return ok(nothing);
+    }
+    guard let items = as_array(reply, "XREAD") else let e = err_of(as_array(reply, "XREAD")) {
+        return err(e);
+    }
+    let out: [StreamRead] = [];
+    for it in items {
+        if it.kind != REPLY_ARRAY || it.is_nil || len(it.items) != 2 {
+            return err("XREAD: bad key block");
+        }
+        if it.items[0].kind != REPLY_BULK {
+            return err("XREAD: bad key name");
+        }
+        guard let kb = it.items[0].bulk else {
+            return err("XREAD: nil key");
+        }
+        if it.items[1].kind != REPLY_ARRAY || it.items[1].is_nil {
+            return err("XREAD: bad entry list");
+        }
+        let entries: [StreamEntry] = [];
+        for e in it.items[1].items {
+            let er = parse_entry(e, "XREAD");
+            guard let entry = er else let e = err_of(er) {
+                return err(e);
+            }
+            push(entries, entry);
+        }
+        push(out, StreamRead { key: to_str(kb), entries: entries });
+    }
+    return ok(some(out));
+}
+
+// ---- cluster streams -------------------------------------------------
+// Same shapes as above, routed by key. XREAD across keys requires
+// one slot (checked up front, like MGET).
+
+pub fn cxadd(cl: Cluster, key: str, id: str, fields: map[str]bytes,
+             deadline: until) -> result[str, str] {
+    let args: [bytes] = [to_bytes("XADD"), to_bytes(key), to_bytes(id)];
+    for f, v in fields {
+        push(args, to_bytes(f));
+        push(args, v);
+    }
+    let r = cluster_do(cl, key, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind != REPLY_BULK {
+        return err("XADD: expected a bulk reply");
+    }
+    guard let b = reply.bulk else {
+        return err("XADD: nil id");
+    }
+    return ok(to_str(b));
+}
+
+pub fn cxlen(cl: Cluster, key: str, deadline: until) -> result[int, str] {
+    let r = cluster_do(cl, key, [to_bytes("XLEN"), to_bytes(key)],
+                       deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    return as_int(reply, "XLEN");
+}
+
+pub fn cxread(cl: Cluster, keys: [str], ids: [str], block_ms: opt[int],
+              count: opt[int],
+              deadline: until) -> result[opt[[StreamRead]], str] {
+    if len(keys) == 0 || len(keys) != len(ids) {
+        return err("XREAD needs one id per key");
+    }
+    guard let s = check_same_slot(keys) else let e = err_of(check_same_slot(keys)) {
+        return err(e);
+    }
+    let args: [bytes] = [to_bytes("XREAD")];
+    guard let n = count else {
+        return cxread_block(cl, keys[0], args, keys, ids, block_ms,
+                            deadline);
+    }
+    push(args, to_bytes("COUNT"));
+    push(args, to_bytes(to_str(n)));
+    return cxread_block(cl, keys[0], args, keys, ids, block_ms,
+                        deadline);
+}
+
+fn cxread_block(cl: Cluster, key: str, args: [bytes], keys: [str],
+                ids: [str], block_ms: opt[int],
+                deadline: until) -> result[opt[[StreamRead]], str] {
+    guard let ms = block_ms else {
+        return cxread_run(cl, key, args, keys, ids, deadline);
+    }
+    push(args, to_bytes("BLOCK"));
+    push(args, to_bytes(to_str(ms)));
+    return cxread_run(cl, key, args, keys, ids, deadline);
+}
+
+fn cxread_run(cl: Cluster, key: str, args: [bytes], keys: [str],
+              ids: [str],
+              deadline: until) -> result[opt[[StreamRead]], str] {
+    push(args, to_bytes("STREAMS"));
+    for k in keys {
+        push(args, to_bytes(k));
+    }
+    for id in ids {
+        push(args, to_bytes(id));
+    }
+    let r = cluster_do(cl, key, args, deadline);
+    guard let reply = r else let e = err_of(r) {
+        return err(e);
+    }
+    if reply.kind == REPLY_ARRAY && reply.is_nil {
+        let nothing: opt[[StreamRead]] = none;
+        return ok(nothing);
+    }
+    guard let items = as_array(reply, "XREAD") else let e = err_of(as_array(reply, "XREAD")) {
+        return err(e);
+    }
+    let out: [StreamRead] = [];
+    for it in items {
+        if it.kind != REPLY_ARRAY || it.is_nil || len(it.items) != 2 {
+            return err("XREAD: bad key block");
+        }
+        if it.items[0].kind != REPLY_BULK {
+            return err("XREAD: bad key name");
+        }
+        guard let kb = it.items[0].bulk else {
+            return err("XREAD: nil key");
+        }
+        if it.items[1].kind != REPLY_ARRAY || it.items[1].is_nil {
+            return err("XREAD: bad entry list");
+        }
+        let entries: [StreamEntry] = [];
+        for e in it.items[1].items {
+            let er = parse_entry(e, "XREAD");
+            guard let entry = er else let e = err_of(er) {
+                return err(e);
+            }
+            push(entries, entry);
+        }
+        push(out, StreamRead { key: to_str(kb), entries: entries });
+    }
+    return ok(some(out));
+}

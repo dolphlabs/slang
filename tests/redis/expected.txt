@@ -33,3 +33,6 @@ ok sub-add-pending
 ok sub-timeout
 ok sub-remove
 ok sub-pump
+ok xread-nil
+ok streams
+ok cluster-streams
