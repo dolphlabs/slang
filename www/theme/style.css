@@ -228,10 +228,17 @@ a:hover { color: var(--fg); }
   font-family: var(--mono); font-size: .82rem; color: var(--fg-2); }
 .btn.small { padding: .3rem .75rem; font-size: .8rem; }
 
-/* ---- the timing diagram ---- */
+/* ---- the hero sample ---- */
 .hero-demo {
   background: var(--surface); border: 1px solid var(--line-2);
   border-radius: var(--radius); overflow: hidden;
+}
+.hero-demo .demo-head { border-bottom: 1px solid var(--line); }
+.code.hero-code { margin: 0; }
+.code.hero-code pre {
+  border: none; border-radius: 0;
+  font-size: .78rem; line-height: 1.58;
+  max-height: 30rem; overflow: auto;
 }
 .demo-head {
   display: flex; align-items: center; gap: .35rem;
@@ -243,30 +250,6 @@ a:hover { color: var(--fg); }
 .dot.g { background: var(--trace); }
 .demo-title { margin-left: .5rem; font: .74rem/1 var(--mono);
   color: var(--fg-2); letter-spacing: .01em; }
-.lanes { padding: .85rem .8rem .5rem; display: grid; gap: .38rem;
-  position: relative; }
-.lane { display: grid; grid-template-columns: 4.2rem 1fr;
-  align-items: center; gap: .6rem; }
-.lane-label { font: .7rem/1 var(--mono); color: var(--fg-3);
-  letter-spacing: .02em; }
-.track {
-  height: .58rem; background: var(--panel); border-radius: 2px;
-  overflow: hidden; position: relative;
-  background-image: repeating-linear-gradient(
-    to right, var(--line) 0 1px, transparent 1px 25%);
-}
-.fill {
-  height: 100%; width: 0; border-radius: 2px; background: var(--trace);
-  transition: width .06s linear;
-}
-.fill.waiting { background: var(--amber); }
-.demo-foot {
-  display: flex; align-items: center; gap: .8rem;
-  padding: .55rem .8rem .8rem; border-top: 1px solid var(--line);
-}
-.readout { font: .78rem/1 var(--mono); color: var(--fg-2);
-  font-variant-numeric: tabular-nums; }
-.readout.done { color: var(--trace); }
 
 /* ---- layout ---- */
 .page {

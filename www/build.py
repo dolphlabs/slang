@@ -342,7 +342,7 @@ SLANG_KEYWORDS = {
     "let", "fn", "if", "else", "while", "return", "true", "false", "pub",
     "import", "guard", "for", "in", "as", "struct", "gc", "own", "mut",
     "impl", "extern", "link", "spawn", "break", "continue", "unsafe",
-    "select", "case", "default",
+    "select", "switch", "case", "default",
 }
 SLANG_TYPES = {
     "int", "float", "str", "bool", "bytes", "i8", "i16", "i32", "i64",
@@ -858,6 +858,20 @@ ROUTER_JS = """
 # Page fragments
 # --------------------------------------------------------------------
 
+def hero_code():
+    """The landing-page sample, read from the real file it names.
+    examples/router/main.sl compiles and self-tests under `make
+    test`, so the hero cannot drift from code that no longer builds
+    -- only the lines between the hero markers are shown."""
+    text = (ROOT / "examples" / "router" / "main.sl").read_text()
+    start = text.index("// hero:start")
+    end = text.index("// hero:end")
+    return highlight(
+        text[start + len("// hero:start"):end].strip("\n"), "slang")
+
+
+HERO_CODE = hero_code()
+
 HERO = """
 <div class="hero">
   <div class="hero-copy">
@@ -881,16 +895,13 @@ HERO = """
     <div class="demo-head">
       <span class="dot r"></span><span class="dot y"></span>
       <span class="dot g"></span>
-      <span class="demo-title">six 300ms requests, one connection</span>
+      <span class="demo-title">main.sl &mdash; a tiny JSON router</span>
     </div>
-    <div class="lanes" id="lanes"></div>
-    <div class="demo-foot">
-      <button class="btn small" id="run-demo" type="button">Run</button>
-      <span class="readout" id="readout">idle</span>
-    </div>
+    <div class="code hero-code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>""" + HERO_CODE + """</code></pre></div>
   </div>
 </div>
 """
+
 
 
 BENCH_LEAD_MD = """slang is measured against C, Go, Rust, C#, Java, Python, Bun and

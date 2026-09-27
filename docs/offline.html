@@ -249,10 +249,17 @@ a:hover { color: var(--fg); }
   font-family: var(--mono); font-size: .82rem; color: var(--fg-2); }
 .btn.small { padding: .3rem .75rem; font-size: .8rem; }
 
-/* ---- the timing diagram ---- */
+/* ---- the hero sample ---- */
 .hero-demo {
   background: var(--surface); border: 1px solid var(--line-2);
   border-radius: var(--radius); overflow: hidden;
+}
+.hero-demo .demo-head { border-bottom: 1px solid var(--line); }
+.code.hero-code { margin: 0; }
+.code.hero-code pre {
+  border: none; border-radius: 0;
+  font-size: .78rem; line-height: 1.58;
+  max-height: 30rem; overflow: auto;
 }
 .demo-head {
   display: flex; align-items: center; gap: .35rem;
@@ -264,30 +271,6 @@ a:hover { color: var(--fg); }
 .dot.g { background: var(--trace); }
 .demo-title { margin-left: .5rem; font: .74rem/1 var(--mono);
   color: var(--fg-2); letter-spacing: .01em; }
-.lanes { padding: .85rem .8rem .5rem; display: grid; gap: .38rem;
-  position: relative; }
-.lane { display: grid; grid-template-columns: 4.2rem 1fr;
-  align-items: center; gap: .6rem; }
-.lane-label { font: .7rem/1 var(--mono); color: var(--fg-3);
-  letter-spacing: .02em; }
-.track {
-  height: .58rem; background: var(--panel); border-radius: 2px;
-  overflow: hidden; position: relative;
-  background-image: repeating-linear-gradient(
-    to right, var(--line) 0 1px, transparent 1px 25%);
-}
-.fill {
-  height: 100%; width: 0; border-radius: 2px; background: var(--trace);
-  transition: width .06s linear;
-}
-.fill.waiting { background: var(--amber); }
-.demo-foot {
-  display: flex; align-items: center; gap: .8rem;
-  padding: .55rem .8rem .8rem; border-top: 1px solid var(--line);
-}
-.readout { font: .78rem/1 var(--mono); color: var(--fg-2);
-  font-variant-numeric: tabular-nums; }
-.readout.done { color: var(--trace); }
 
 /* ---- layout ---- */
 .page {
@@ -557,13 +540,46 @@ td.lose { color: var(--amber); }
     <div class="demo-head">
       <span class="dot r"></span><span class="dot y"></span>
       <span class="dot g"></span>
-      <span class="demo-title">six 300ms requests, one connection</span>
+      <span class="demo-title">main.sl &mdash; a tiny JSON router</span>
     </div>
-    <div class="lanes" id="lanes"></div>
-    <div class="demo-foot">
-      <button class="btn small" id="run-demo" type="button">Run</button>
-      <span class="readout" id="readout">idle</span>
-    </div>
+    <div class="code hero-code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="c">// A tiny JSON router. Adding a route is one line in the table --</span>
+<span class="c">// handlers are values of type fn, so dispatch needs no chain of</span>
+<span class="c">// string comparisons and no framework.</span>
+<span class="k">gc</span> <span class="k">struct</span> Route {
+    method: <span class="t">str</span>,
+    path: <span class="t">str</span>,
+    handler: <span class="k">fn</span>(http.Request) -&gt; http.Response,
+}
+
+<span class="k">fn</span> <span class="f">hello</span>(req: http.Request) -&gt; http.Response {
+    <span class="k">return</span> http.<span class="f">ok_json</span>(<span class="s">&quot;{\&quot;hello\&quot;:\&quot;world\&quot;}&quot;</span>);
+}
+
+<span class="k">fn</span> <span class="f">echo</span>(req: http.Request) -&gt; http.Response {
+    <span class="k">return</span> http.<span class="f">ok_json</span>(json.<span class="f">encode</span>(<span class="b">to_str</span>(req.body)));
+}
+
+<span class="k">let</span> routes: [Route] = [
+    Route { method: <span class="s">&quot;GET&quot;</span>, path: <span class="s">&quot;/hi&quot;</span>, handler: hello },
+    Route { method: <span class="s">&quot;POST&quot;</span>, path: <span class="s">&quot;/echo&quot;</span>, handler: echo }
+];
+
+<span class="k">fn</span> <span class="f">route</span>(routes: [Route], req: http.Request) -&gt; http.Response {
+    <span class="k">for</span> r <span class="k">in</span> routes {
+        <span class="k">if</span> r.method == req.method &amp;&amp; r.path == req.path {
+            <span class="k">return</span> r.<span class="f">handler</span>(req);
+        }
+    }
+    <span class="k">return</span> http.<span class="f">not_found</span>();
+}
+
+<span class="k">fn</span> <span class="f">serve</span>(ln: <span class="k">link</span>, routes: [Route]) {
+    <span class="k">while</span> !proc.<span class="f">shutdown_requested</span>() {
+        <span class="k">let</span> ar = ln.<span class="f">accept</span>(<span class="b">until_never</span>());
+        <span class="k">guard</span> <span class="k">let</span> c = ar <span class="k">else</span> { <span class="k">return</span>; }
+        <span class="k">spawn</span> <span class="f">handle</span>(c, routes);
+    }
+}</code></pre></div>
   </div>
 </div>
 
@@ -687,7 +703,7 @@ p.count += <span class="n">1</span>;
 <span class="c">// may share an arm with commas. No fallthrough: arms never run into</span>
 <span class="c">// each other. `break` exits the switch, `continue` still targets an</span>
 <span class="c">// enclosing loop.</span>
-switch code {
+<span class="k">switch</span> code {
   <span class="k">case</span> <span class="n">200</span>, <span class="n">201</span> { <span class="b">println</span>(<span class="s">&quot;ok&quot;</span>); }
   <span class="k">case</span> <span class="n">404</span> { <span class="b">println</span>(<span class="s">&quot;missing&quot;</span>); }
   <span class="k">default</span> { <span class="b">println</span>(<span class="s">&quot;other&quot;</span>); }   <span class="c">// optional, except that an enum</span>
@@ -698,7 +714,7 @@ switch code {
 <span class="c">// switch is also an expression: every arm yields one value, all of</span>
 <span class="c">// the same type, and `default` is required unless an enum scrutinee</span>
 <span class="c">// covers every variant</span>
-<span class="k">let</span> label: <span class="t">str</span> = switch code {
+<span class="k">let</span> label: <span class="t">str</span> = <span class="k">switch</span> code {
   <span class="k">case</span> <span class="n">200</span> { <span class="s">&quot;ok&quot;</span> }
   <span class="k">default</span> { <span class="s">&quot;other&quot;</span> }
 };
@@ -3422,68 +3438,6 @@ time.<span class="f">sleep</span>(<span class="n">20000000</span>);     <span cl
       t.classList.add("reveal");
       ro.observe(t);
     });
-  }
-
-  /* ---- the hero demo ------------------------------------------------
-   * Six 300ms requests on one connection. Run them multiplexed and they
-   * finish together in a bit over 300ms; run them one after another and
-   * it is 1.8s. That contrast is the whole argument for the scheduler,
-   * so the landing page shows it rather than asserting it. The numbers
-   * are a real measurement from tests/http2_flow, not invented. */
-  var lanes = document.getElementById("lanes");
-  var runBtn = document.getElementById("run-demo");
-  var readout = document.getElementById("readout");
-  if (lanes && runBtn && readout) {
-    var N = 6, TASK_MS = 300, fills = [];
-    for (var i = 0; i < N; i++) {
-      var lane = document.createElement("div");
-      lane.className = "lane";
-      lane.innerHTML = '<span class="lane-label">stream ' + (i + 1)
-        + '</span><span class="track"><span class="fill"></span></span>';
-      lanes.appendChild(lane);
-      fills.push(lane.querySelector(".fill"));
-    }
-
-    var running = false;
-    function reset() { fills.forEach(function (f) { f.style.width = "0%"; }); }
-
-    function run(concurrent) {
-      if (running) return;
-      running = true;
-      reset();
-      readout.classList.remove("done");
-      var start = performance.now();
-      var scale = 6;                       /* wall-clock speed-up */
-      var total = concurrent ? TASK_MS : TASK_MS * N;
-
-      function frame(now) {
-        var t = (now - start) * scale;
-        for (var k = 0; k < N; k++) {
-          var began = concurrent ? 0 : k * TASK_MS;
-          var p = Math.max(0, Math.min(1, (t - began) / TASK_MS));
-          fills[k].style.width = (p * 100).toFixed(1) + "%";
-          fills[k].classList.toggle("waiting", !concurrent && p > 0 && p < 1);
-        }
-        readout.textContent = Math.min(total, Math.round(t)) + "ms";
-        if (t < total) {
-          requestAnimationFrame(frame);
-        } else {
-          readout.textContent = total + "ms "
-            + (concurrent ? "— multiplexed" : "— serialised");
-          readout.classList.add("done");
-          running = false;
-          runBtn.textContent = concurrent ? "Run serialised" : "Run multiplexed";
-          runBtn.dataset.next = concurrent ? "serial" : "concurrent";
-        }
-      }
-      requestAnimationFrame(frame);
-    }
-
-    runBtn.dataset.next = "concurrent";
-    runBtn.addEventListener("click", function () {
-      run(runBtn.dataset.next !== "serial");
-    });
-    if (!reduce) setTimeout(function () { run(true); }, 600);
   }
 })();
 </script><script>

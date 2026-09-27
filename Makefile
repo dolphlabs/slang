@@ -75,6 +75,7 @@ test: slangc tests/runtime/test_gc
 	./slangc examples/hello/main.sl --run
 	./slangc examples/fib/main.sl --run
 	./slangc examples/pkgdemo/main.sl --run
+	./slangc examples/router/main.sl --run
 	sh tests/run_tests.sh
 
 clean:

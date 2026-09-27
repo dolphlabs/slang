@@ -1966,13 +1966,13 @@ signal-handling program.
 ## All packages
 
 - [builder](packages/builder.md) -- source package, 20 public items
-- [byteutil](packages/byteutil.md) -- source package, 5 public items
+- [byteutil](packages/byteutil.md) -- source package, 6 public items
 - [compress](packages/compress.md) -- compiler-provided, 7 public items
 - [crypto](packages/crypto.md) -- compiler-provided, 6 public items
 - [encoding](packages/encoding.md) -- compiler-provided, 12 public items
 - [flags](packages/flags.md) -- source package, 23 public items
 - [fs](packages/fs.md) -- compiler-provided, 7 public items
-- [http](packages/http.md) -- source package, 22 public items
+- [http](packages/http.md) -- source package, 55 public items
 - [http2](packages/http2.md) -- source package, 122 public items
 - [httpc](packages/httpc.md) -- source package, 35 public items
 - [io](packages/io.md) -- compiler-provided, 12 public items
@@ -1985,7 +1985,7 @@ signal-handling program.
 - [redis](packages/redis.md) -- source package, 161 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [sql](packages/sql.md) -- compiler-provided, 20 public items
-- [strings](packages/strings.md) -- compiler-provided, 21 public items
+- [strings](packages/strings.md) -- compiler-provided, 24 public items
 - [time](packages/time.md) -- compiler-provided, 3 public items
 
 ---
