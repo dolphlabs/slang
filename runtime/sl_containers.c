@@ -1060,6 +1060,17 @@ static void sl_gc_trace_map(void *p, void (*mark)(void *)) {
                         "slang: GC-VALIDATE slot target=%p known=%d "
                         "size=%zu\n",
                         target, known, hsize);
+                /* Read small targets as strings (bounded by header
+                 * size, capped): key strings ("42") mean keys data
+                 * reached order[]; anything else means foreign data. */
+                if (known && hsize > 0 && hsize <= 32) {
+                    char sbuf[33];
+                    size_t sn = hsize < 32 ? hsize : 32;
+                    memcpy(sbuf, target, sn);
+                    sbuf[sn] = 0;
+                    fprintf(stderr, "slang: GC-VALIDATE target bytes=\"%s\"\n",
+                            sbuf);
+                }
                 /* Is the bad value one of this map's own keys? A yes
                  * means order content reads like keys content (swapped
                  * buffers or a keys dump over order). */
@@ -1259,8 +1270,7 @@ static void sl_map_grow(sl_map *m) {
     m->state = (unsigned char *)sl_gc_alloc((size_t)m->cap, NULL);
     m->order = (long long *)sl_gc_alloc((size_t)m->cap * sizeof(long long), NULL);
     sl_shadow_record(m);
-    (void)ost;
-    /* reinsert in insertion order so iteration stays deterministic */
+    (void)ost;    /* reinsert in insertion order so iteration stays deterministic */
     for (long long i = 0; i < ocount; i++) {
         long long slot = oorder[i];
         void *k = ok + (size_t)slot * m->ksz;
