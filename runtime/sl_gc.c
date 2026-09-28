@@ -1331,6 +1331,29 @@ static sl_gc_obj *sl_audit_bad_at = NULL;
 static void sl_audit_note(sl_gc_obj *o) {
     if (!o || sl_audit_bad)
         return;
+    /* Header sanity (SIGBUS hunt): a corrupt size/next here poisons
+     * every list walk (sweep unlinks, freelist links land mid-object
+     * as 8-byte heap-pointer writes -- the exact shape behind
+     * order[]-with-pointers). next must be NULL or a live object;
+     * total size must be sane. Gated on the node itself being live:
+     * freelist/retired nodes are legitimately outside the set (their
+     * duplicate detection below still runs). */
+    if (sl_gc_set_contains((void *)(o + 1))) {
+        if (o->size > (size_t)(1 << 30)) {
+            fprintf(stderr, "slang: GC-AUDIT wild size %p (%zu)\n",
+                    (void *)o, o->size);
+            sl_audit_bad = 1;
+            sl_audit_bad_at = o;
+            return;
+        }
+        if (o->next && !sl_gc_set_contains((void *)(o->next + 1))) {
+            fprintf(stderr, "slang: GC-AUDIT wild next %p -> %p\n",
+                    (void *)o, (void *)o->next);
+            sl_audit_bad = 1;
+            sl_audit_bad_at = o;
+            return;
+        }
+    }
     if (!sl_audit_seen) {
         sl_audit_cap = 4096;
         sl_audit_seen =
