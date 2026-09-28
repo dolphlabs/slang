@@ -1016,6 +1016,25 @@ static void sl_gc_trace_map(void *p, void (*mark)(void *)) {
                         "slang: GC-VALIDATE slot target=%p known=%d "
                         "size=%zu\n",
                         target, known, hsize);
+                /* Is the bad value one of this map's own keys? A yes
+                 * means order content reads like keys content (swapped
+                 * buffers or a keys dump over order). */
+                int inkeys = 0;
+                if (m->keys && m->kstr) {
+                    for (long long ki = 0; ki < m->count; ki++) {
+                        long long kslot = m->order[ki];
+                        if (kslot < 0 || kslot >= m->cap)
+                            continue;
+                        const char *kk =
+                            *(const char **)(m->keys +
+                                             (size_t)kslot * m->ksz);
+                        if (kk == (const char *)target) {
+                            inkeys = 1;
+                            break;
+                        }
+                    }
+                }
+                fprintf(stderr, "slang: GC-VALIDATE inkeys=%d\n", inkeys);
                 /* The map itself: in-set means a live map with dead
                  * buffers (barrier/harvest miss); not-in-set means a
                  * stale trace of swept garbage (stale root). */
