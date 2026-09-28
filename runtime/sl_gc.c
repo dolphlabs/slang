@@ -272,9 +272,7 @@ static _Thread_local _Atomic unsigned long sl_rt_gc_acked_cycle = 0;
 
 static void sl_gc_collect(void);
 static void sl_gc_collect_minor_real(void);
-static void sl_gc_collect_minor(void) {
-    sl_gc_collect_minor_real();
-}
+static void sl_gc_collect_minor(void);
 /* Map barrier auditor, defined in sl_containers.c (needs the complete
  * sl_map layout, defined there); called from the minor sweep below. */
 static void sl_gc_audit_maps(void);
@@ -1219,7 +1217,21 @@ static void sl_gc_mark_roots(sl_gc_thread **snap, int nsnap,
 static void sl_gc_collect_minor(void);
 static void sl_gc_collect_minor_fullmark(void);
 static void sl_gc_collect_minor_real(void);
-static void sl_gc_collect_minor(void);
+static void sl_gc_collect_minor(void) {
+    /* Bisector (SIGBUS hunt): route minors through the full-mark
+     * variant, which marks everything with sl_gc_mark (no
+     * mark_minor old-marked-not-traced split) while keeping the
+     * same nursery-only sweep. Env-gated (SLANG_GC_FULLMARK=1).
+     * Clean runs implicate the minor-mark split; crashes implicate
+     * the sweep/promotion/roots instead. */
+    static int full = -1;
+    if (full < 0)
+        full = getenv("SLANG_GC_FULLMARK") ? 1 : 0;
+    if (full)
+        sl_gc_collect_minor_fullmark();
+    else
+        sl_gc_collect_minor_real();
+}
 /* Phase-2 bisect helper: FULL-mark minor (kept for diagnosis; not on
  * the collection path). Same nursery-only sweep + promote as the real
  * minor, but marks everything with sl_gc_mark. */

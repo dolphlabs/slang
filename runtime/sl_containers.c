@@ -1008,6 +1008,20 @@ static void sl_gc_trace_map(void *p, void (*mark)(void *)) {
                         "slang: GC-VALIDATE slot target=%p known=%d "
                         "size=%zu\n",
                         target, known, hsize);
+                /* The map itself: in-set means a live map with dead
+                 * buffers (barrier/harvest miss); not-in-set means a
+                 * stale trace of swept garbage (stale root). */
+                int mknown = sl_gc_set_contains((void *)m);
+                int mmarked = 0;
+                int mgen = -1;
+                if (mknown) {
+                    sl_gc_obj *mh = (sl_gc_obj *)m - 1;
+                    mmarked = mh->marked;
+                    mgen = mh->gen;
+                }
+                fprintf(stderr,
+                        "slang: GC-VALIDATE mapknown=%d marked=%d gen=%d\n",
+                        mknown, mmarked, mgen);
                 /* Header of the order buffer itself: is it marked,
                  * what traces it, how big is it? A dead-but-mapped
                  * chunk (unmarked) means use-after-sweep; a live
