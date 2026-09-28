@@ -902,6 +902,24 @@ typedef struct {
     long long *order;    /* occupied slot indices, insertion order */
 } sl_map;
 
+/* Put-ring storage (SIGBUS hunt): file scope (the recorder lives
+ * in sl_map_put below, the dumper is called from the barrier
+ * auditor). */
+#define SL_PUTRING_N 64
+static sl_map *sl_putring_m[SL_PUTRING_N];
+static int sl_putring_g[SL_PUTRING_N];
+static int sl_putring_r[SL_PUTRING_N];
+static unsigned sl_putring_i = 0;
+
+static void sl_putring_dump(sl_map *m) {
+    fprintf(stderr, "slang: GC-AUDIT putring for map %p:\n", (void *)m);
+    for (unsigned k = 0; k < SL_PUTRING_N; k++) {
+        if (sl_putring_m[k] == m)
+            fprintf(stderr, "slang: GC-AUDIT   gen=%d rem=%d\n",
+                    sl_putring_g[k], sl_putring_r[k]);
+    }
+}
+
 /* Expected-order shadow table (SIGBUS hunt): records the order
  * buffer each map installs, so the validator can tell a redirected
  * field (order != recorded) from overwritten content (order ==
@@ -989,6 +1007,10 @@ static void sl_gc_audit_maps(void) {
                         "slang: GC-AUDIT old unremembered map %p "
                         "holds young unmarked buffer %p (slot %d)\n",
                         (void *)m, bufs[bi], bi);
+                /* Dump recent old-map puts: was this map put-to
+                 * (and barrier-skipped), or did its buffers arrive
+                 * without any put? */
+                sl_putring_dump(m);
                 abort();
             }
         }
@@ -1333,6 +1355,22 @@ static void sl_map_put(sl_map *m, const void *k, const void *v) {
     memcpy(m->vals + (size_t)s * m->vsz, v, m->vsz);
     m->state[s] = 1;
     m->order[m->count++] = s;
+    /* Put-ring (SIGBUS hunt): log installs into OLD maps (map, gen,
+     * remembered-before) so an audit-fire can check whether the
+     * barrier recorded. Ring of 64, debug-only, env-gated with the
+     * auditor (SLANG_GC_AUDIT=1). */
+    static int audit2 = -2;
+    if (audit2 == -2)
+        audit2 = getenv("SLANG_GC_AUDIT") ? 1 : 0;
+    if (audit2) {
+        sl_gc_obj *mh = (sl_gc_obj *)m - 1;
+        if (mh->gen == 1) {
+            unsigned w = sl_putring_i++ % SL_PUTRING_N;
+            sl_putring_m[w] = m;
+            sl_putring_g[w] = mh->gen;
+            sl_putring_r[w] = mh->remembered;
+        }
+    }
     /* Forced dense collections (SIGBUS hunt): every 512th put trips
      * a collection at the next checkin, so the tracer validator
      * observes every map within ~512 puts of each write. Corruption
