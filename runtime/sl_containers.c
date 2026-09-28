@@ -1236,6 +1236,34 @@ static void sl_map_put(sl_map *m, const void *k, const void *v) {
     memcpy(m->vals + (size_t)s * m->vsz, v, m->vsz);
     m->state[s] = 1;
     m->order[m->count++] = s;
+    /* Order-content check (SIGBUS hunt): verify what was just
+     * written, plus a periodic full scan. Corruption appearing
+     * here (during build, single-threaded puts) means the writer
+     * is active amid puts (signal-time, wild pointer); corruption
+     * appearing only later (tracer validator) means post-build.
+     * Env-gated via the same SLANG_GC_VALIDATE flag. */
+    static int vchk = -1;
+    if (vchk < 0)
+        vchk = getenv("SLANG_GC_VALIDATE") ? 1 : 0;
+    if (vchk) {
+        if (m->order[m->count - 1] != s ||
+            (m->count & 63) == 0) {
+            long long bad = -1;
+            for (long long ci = 0; ci < m->count; ci++) {
+                if (m->order[ci] < 0 || m->order[ci] >= m->cap) {
+                    bad = ci;
+                    break;
+                }
+            }
+            if (bad >= 0 || m->order[m->count - 1] != s) {
+                fprintf(stderr,
+                        "slang: GC-VALIDATE put-corrupt map=%p "
+                        "count=%lld cap=%lld bad=%lld\n",
+                        (void *)m, m->count, m->cap, bad);
+                abort();
+            }
+        }
+    }
     sl_rt_preempt_enable();
 }
 
