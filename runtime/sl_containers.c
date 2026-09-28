@@ -1050,6 +1050,17 @@ static void sl_gc_trace_map(void *p, void (*mark)(void *)) {
                     (void *)m, m->count, m->cap);
             abort();
         }
+        /* Cap sanity (SIGBUS hunt): grow doubles from 8, so cap is
+         * always a power of two. A wild cap defeats every bound
+         * below it (slots < huge-cap always pass). */
+        if (m->cap < 8 || m->cap > (1 << 20) ||
+            (m->cap & (m->cap - 1)) != 0) {
+            fprintf(stderr,
+                    "slang: GC-VALIDATE wild cap map=%p count=%lld "
+                    "cap=%lld\n",
+                    (void *)m, m->count, m->cap);
+            abort();
+        }
         for (long long vi = 0; vi < m->count; vi++) {
             long long slot = m->order ? m->order[vi] : 0;
             if (m->count > 0 && (slot < 0 || slot >= m->cap)) {
@@ -1124,14 +1135,11 @@ static void sl_gc_trace_map(void *p, void (*mark)(void *)) {
                  * means order content reads like keys content (swapped
                  * buffers or a keys dump over order). */
                 int inkeys = 0;
-                if (m->keys && m->kstr) {
-                    for (long long ki = 0; ki < m->count; ki++) {
-                        long long kslot = m->order[ki];
-                        if (kslot < 0 || kslot >= m->cap)
-                            continue;
+                if (m->keys && m->kstr && m->cap > 0 && m->cap < (1 << 20)) {
+                    for (long long ki = 0; ki < m->cap; ki++) {
                         const char *kk =
                             *(const char **)(m->keys +
-                                             (size_t)kslot * m->ksz);
+                                             (size_t)ki * m->ksz);
                         if (kk == (const char *)target) {
                             inkeys = 1;
                             break;
