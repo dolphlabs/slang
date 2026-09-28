@@ -902,6 +902,43 @@ typedef struct {
     long long *order;    /* occupied slot indices, insertion order */
 } sl_map;
 
+/* Expected-order shadow table (SIGBUS hunt): records the order
+ * buffer each map installs, so the validator can tell a redirected
+ * field (order != recorded) from overwritten content (order ==
+ * recorded, content bad). Open-addressed, debug-only, env-gated with
+ * the validator (shares its static flag via sl_map_validate_on). */
+#define SL_SHADOW_CAP 8192
+static sl_map *sl_shadow_map[SL_SHADOW_CAP];
+static void *sl_shadow_order[SL_SHADOW_CAP];
+
+static int sl_map_validate_on(void) {
+    static int validate = -1;
+    if (validate < 0)
+        validate = getenv("SLANG_GC_VALIDATE") ? 1 : 0;
+    return validate;
+}
+
+static void sl_shadow_record(sl_map *m) {
+    if (!sl_map_validate_on())
+        return;
+    size_t j = ((uintptr_t)m >> 3) & (SL_SHADOW_CAP - 1);
+    while (sl_shadow_map[j] && sl_shadow_map[j] != m)
+        j = (j + 1) & (SL_SHADOW_CAP - 1);
+    sl_shadow_map[j] = m;
+    sl_shadow_order[j] = m->order;
+}
+
+static void *sl_shadow_lookup(sl_map *m) {
+    size_t j = ((uintptr_t)m >> 3) & (SL_SHADOW_CAP - 1);
+    while (sl_shadow_map[j]) {
+        if (sl_shadow_map[j] == m)
+            return sl_shadow_order[j];
+        j = (j + 1) & (SL_SHADOW_CAP - 1);
+    }
+    return NULL;
+}
+
+
 static void sl_gc_trace_map(void *p, void (*mark)(void *));
 
 /* Barrier auditor (SIGBUS hunt): called before every minor sweep
@@ -956,9 +993,7 @@ static void sl_gc_trace_map(void *p, void (*mark)(void *)) {
      * with the full header instead of faulting three lines down.
      * Env-gated (SLANG_GC_VALIDATE=1); the check is a few integer
      * compares per traced map. */
-    static int validate = -1;
-    if (validate < 0)
-        validate = getenv("SLANG_GC_VALIDATE") ? 1 : 0;
+    int validate = sl_map_validate_on();
     if (validate && m->count > 0 &&
         (!m->keys || !m->vals || !m->state || !m->order)) {
         fprintf(stderr,
@@ -994,6 +1029,15 @@ static void sl_gc_trace_map(void *p, void (*mark)(void *)) {
                         "slot=%lld count=%lld cap=%lld order=%p\n",
                         (void *)m, vi, slot, m->count, m->cap,
                         (void *)m->order);
+                /* Field redirect vs content overwrite: compare
+                 * against the buffer recorded at install time, and
+                 * sanity-check the key/value sizes (a confused
+                 * struct reads wild here). */
+                void *expected = sl_shadow_lookup(m);
+                fprintf(stderr,
+                        "slang: GC-VALIDATE shadow order=%p ksz=%zu "
+                        "vsz=%zu kstr=%d\n",
+                        expected, m->ksz, m->vsz, m->kstr);
                 /* Alias check: is order the same chunk as a sibling
                  * buffer (install-time double-alloc), or does its
                  * content match the keys buffer (confused arrays)? */
@@ -1152,6 +1196,7 @@ static sl_map *sl_map_new(size_t ksz, size_t vsz, int kstr,
     m->vals = (unsigned char *)sl_gc_alloc(8 * vsz, NULL);
     m->state = (unsigned char *)sl_gc_alloc(8, NULL);
     m->order = (long long *)sl_gc_alloc(8 * sizeof(long long), NULL);
+    sl_shadow_record(m);
     return m;
 }
 
@@ -1213,6 +1258,7 @@ static void sl_map_grow(sl_map *m) {
     m->vals = (unsigned char *)sl_gc_alloc((size_t)m->cap * m->vsz, NULL);
     m->state = (unsigned char *)sl_gc_alloc((size_t)m->cap, NULL);
     m->order = (long long *)sl_gc_alloc((size_t)m->cap * sizeof(long long), NULL);
+    sl_shadow_record(m);
     (void)ost;
     /* reinsert in insertion order so iteration stays deterministic */
     for (long long i = 0; i < ocount; i++) {
