@@ -904,6 +904,103 @@ typedef struct {
 
 static void sl_gc_trace_map(void *p, void (*mark)(void *)) {
     sl_map *m = (sl_map *)p;
+    /* Invariant validation (SIGBUS hunt): a live map with entries
+     * must have all four buffers. A count>0 map with NULL buffers is
+     * the exact torn state behind the tracer faults -- abort here
+     * with the full header instead of faulting three lines down.
+     * Env-gated (SLANG_GC_VALIDATE=1); the check is a few integer
+     * compares per traced map. */
+    static int validate = -1;
+    if (validate < 0)
+        validate = getenv("SLANG_GC_VALIDATE") ? 1 : 0;
+    if (validate && m->count > 0 &&
+        (!m->keys || !m->vals || !m->state || !m->order)) {
+        fprintf(stderr,
+                "slang: GC-VALIDATE torn map %p "
+                "(count=%lld cap=%lld ksz=%zu vsz=%zu kstr=%d "
+                "keys=%p vals=%p state=%p order=%p)\n",
+                (void *)m, m->count, m->cap, m->ksz, m->vsz, m->kstr,
+                (void *)m->keys, (void *)m->vals, (void *)m->state,
+                (void *)m->order);
+        abort();
+    }
+    /* Slot validation (SIGBUS hunt): every order entry must name a
+     * real slot. A pointer-valued entry means the order buffer's
+     * content was corrupted (or the buffer is not the order array at
+     * all) -- abort with the index and value instead of faulting on
+     * keys+slot*ksz three lines down. Same gate. */
+    if (validate) {
+        if (m->count < 0 || m->count > m->cap) {
+            fprintf(stderr,
+                    "slang: GC-VALIDATE torn count map=%p count=%lld "
+                    "cap=%lld\n",
+                    (void *)m, m->count, m->cap);
+            abort();
+        }
+        for (long long vi = 0; vi < m->count; vi++) {
+            long long slot = m->order ? m->order[vi] : 0;
+            if (m->count > 0 && (slot < 0 || slot >= m->cap)) {
+                /* Dump the neighborhood: all-pointers means the
+                 * buffer was swapped/reused as something else;
+                 * scattered bad values mean partial overwrite. */
+                fprintf(stderr,
+                        "slang: GC-VALIDATE bad slot map=%p i=%lld "
+                        "slot=%lld count=%lld cap=%lld order=%p\n",
+                        (void *)m, vi, slot, m->count, m->cap,
+                        (void *)m->order);
+                /* Identify the target: a known heap object (with its
+                 * size) points at buffer reuse/aliasing; an unknown
+                 * address points at a wild index. sl_gc_set_contains
+                 * and sl_gc_obj live in sl_gc.c, spliced earlier in
+                 * the same translation unit. */
+                void *target = (void *)(uintptr_t)slot;
+                int known = sl_gc_set_contains(target);
+                size_t hsize = 0;
+                if (known)
+                    hsize = ((sl_gc_obj *)target - 1)->size;
+                fprintf(stderr,
+                        "slang: GC-VALIDATE slot target=%p known=%d "
+                        "size=%zu\n",
+                        target, known, hsize);
+                /* Header of the order buffer itself: is it marked,
+                 * what traces it, how big is it? A dead-but-mapped
+                 * chunk (unmarked) means use-after-sweep; a live
+                 * chunk with the wrong size/trace means aliasing. */
+                if (m->order && sl_gc_set_contains(m->order)) {
+                    sl_gc_obj *oh =
+                        (sl_gc_obj *)m->order - 1;
+                    fprintf(stderr,
+                            "slang: GC-VALIDATE orderbuf marked=%d "
+                            "gen=%d size=%zu trace=%p "
+                            "(trace_map=%p trace_arr=%p)\n",
+                            oh->marked, oh->gen, oh->size,
+                            (void *)oh->trace,
+                            (void *)sl_gc_trace_map,
+                            (void *)sl_gc_trace_arr);
+                } else if (m->order) {
+                    fprintf(stderr,
+                            "slang: GC-VALIDATE orderbuf not in gc set\n");
+                }
+                if (m->order) {
+                    fprintf(stderr, "slang: GC-VALIDATE order head:");
+                    for (long long dj = 0; dj < 8 && dj < m->count;
+                         dj++)
+                        fprintf(stderr, " [%lld]=%lld", dj,
+                                m->order[dj]);
+                    fprintf(stderr, "\nslang: GC-VALIDATE order around "
+                                    "%lld:", vi);
+                    for (long long dj = vi - 3; dj <= vi + 3; dj++) {
+                        if (dj < 0 || dj >= m->count)
+                            continue;
+                        fprintf(stderr, " [%lld]=%lld", dj,
+                                m->order[dj]);
+                    }
+                    fprintf(stderr, "\n");
+                }
+                abort();
+            }
+        }
+    }
     if (m->keys) mark(m->keys);
     if (m->vals) mark(m->vals);
     if (m->state) mark(m->state);

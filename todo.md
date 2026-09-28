@@ -2876,3 +2876,51 @@ Checked clean (no finding): select arms, guard-let `err_expr`
 struct/map literals, spawn args, slice optionals, `??`
 (conservative is the safe direction), indirect callees, methods,
 ST_IMPL via the function cursor.
+
+## SIGBUS hunt, second round (Sep 27-28 2026, branch fix/sigbus-amp, UNMERGED)
+
+Signature unchanged: ~5-20% crashes under amplified preemption
+(150us quantum / 100us tick), EXC_BAD_ACCESS / KERN_PROTECTION_FAILURE
+with PC == fault address (jump through corrupted resume target), plus
+GPFLTs in gc_trace_map and a spawn-entry re-entry abort. Minimal repro:
+6000 tasks x chan rendezvous (no primes/maps), ~7% crash rate.
+
+Eliminated (do not re-chase):
+1. Resume-target slot corruption -- trampoline slot-vs-async_orig_pc
+   probe, env-gated, 0 fires across crashes.
+2. Signal-frame placement (overflow + red-zone) -- x86_64 alt-stack +
+   SA_ONSTACK experiment: 8/40 crashes vs 4/20 baseline. No effect.
+3. Double-queue (task pushed while queued) -- queued-bit trap in the
+   single push funnel: silent across crashes.
+4. Resume-miss (resume pushing a non-parked task) -- parked-list
+   unlink assertion: silent across crashes.
+5. Release-while-queued/parked -- trylock membership walk at release:
+   silent across crashes.
+6. Stale queue entry across lifecycles -- push-ID vs acquire-ID check
+   at pop: silent across crashes.
+7. TLS-straddle in task grab -- whole-body bracket: acquire-fires
+   persisted unchanged (7/40), so not the (only) mechanism.
+
+Established (the one hard fact): acquire-fires -- grab returning structs
+in QUEUED/RUNNING state, from thread-local cache AND global freelist,
+with every transition assertion silent. Structs get recycled while live;
+ combination with the spawn-entry re-entry abort means tasks run twice.
+
+Confounding lesson, learned the hard way: a botched edit left an
+unbalanced preempt bracket (extra enable, missing outer disable) in
+one experiment build. Every malloc-grab then leaked depth -1 on the
+submitting (main) task, vetoing ITS preemption specifically -- worker
+preemptions (and nonzero async_preempt counts) continued, so a
+"nonzero stat" gate would NOT have caught it. Rule: every experiment
+build gets a static bracket-balance audit (count disable/enable per
+function, all paths) before its campaign counts. The 0/30 "clean"
+no-cache run is UNRESOLVED for this reason (the leak vetoed only the main task, which is never a ticker target anyway -- but strict honesty demands a balanced rerun before claiming anything); cache-dependence is UNRESOLVED
+(timing artifact via fl_mu serialization still open).
+
+Open: which event first duplicates a task's execution. All queue and
+resume transitions are asserted silent; the duplication enters below
+the lifecycle level (stale rsp dispatch, struct aliasing at acquire,
+or context-switch save/restore). Next instruments queued: dispatch
+seal (acq>comp at run-loop pop -- built, awaiting crash coincidence),
+crash-dump handler (task flags/chain/stack at fault -- landed one
+NULL-chan deref: running task, live chain).

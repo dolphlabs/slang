@@ -232,6 +232,33 @@ struct failed in C instead of saying so.
   a prompt that redraws. Not scoped. Candidate only; worth deciding whether
   it belongs in `stdlib` or in a program that wants it before writing it.
 
+## 9. Tail latency under concurrent load (server workloads)
+
+- [ ] Isolation ( Sep 2026, measured on a clean machine, c=100->200):
+  raw echo 105k req/s p99 216ms; stdlib `http.read_frame`+write 74k p99
+  1.18s; full zokor static route 32k p99 800ms-1.3s. Parsing/allocating
+  is the trigger. Bigger GC threshold halved the tail (1.18s->553ms);
+  preemption tuning barely moved it (853ms). Mechanism unproven --
+  working theory is STW pause plus "everyone just woke up" queueing
+  against ~8 workers, but pause-length, scheduler contention (global
+  doorbell broadcast per push), and worker-count starvation are all
+  live hypotheses. This is a slang runtime characteristic, not a zokor
+  bug. No algorithm switch without measurement proof (see below).
+- [ ] Phase 0 -- prove the mechanism: (a) correlate GC pauses with p99s,
+  (b) SLANG_WORKERS=32/64 sensitivity, (c) runq max/avg depth sampled
+  at 1ms, (d) minor vs major breakdown. Kills all but one hypothesis.
+- [ ] Phase 1 -- cheap mitigations, no algo switch: server-appropriate
+  GC pacing (automatic, not env), parallel marking, worker scaling for
+  IO-bound loads, doorbell signal-one + steal check, read_frame
+  allocation diet. Same 3-row bench as scoreboard throughout.
+- [ ] Phase 2 -- shrink STW scope if Phase 1 plateaus: mostly-concurrent
+  marking on the existing generational write barrier; per-worker
+  nurseries.
+- [ ] Phase 3 -- switch algorithm only with measurement proof that 1+2
+  failed. Touches every Tier-10/11 root site; highest cost, last resort.
+- [ ] Sequencing: lands AFTER the SIGBUS fix (correctness outranks
+  latency); latency experiments stay env-gated on a separate branch.
+
 ## Notes
 
 - Do not change `bench/http/main.sl` for perf experiments. Raw-best slang is `bench/http_opt/main.sl`; remasure with `./bench/run_http_opt.sh`.
