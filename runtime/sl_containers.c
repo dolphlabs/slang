@@ -994,6 +994,14 @@ static void sl_gc_trace_map(void *p, void (*mark)(void *)) {
                         "slot=%lld count=%lld cap=%lld order=%p\n",
                         (void *)m, vi, slot, m->count, m->cap,
                         (void *)m->order);
+                /* Alias check: is order the same chunk as a sibling
+                 * buffer (install-time double-alloc), or does its
+                 * content match the keys buffer (confused arrays)? */
+                fprintf(stderr,
+                        "slang: GC-VALIDATE bufs keys=%p vals=%p "
+                        "state=%p order=%p\n",
+                        (void *)m->keys, (void *)m->vals,
+                        (void *)m->state, (void *)m->order);
                 /* Identify the target: a known heap object (with its
                  * size) points at buffer reuse/aliasing; an unknown
                  * address points at a wild index. sl_gc_set_contains
