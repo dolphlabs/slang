@@ -1309,6 +1309,38 @@ static sl_task *sl_task_grab(void) {
     sl_task *t = NULL;
     if (sl_task_cache_n > 0) {
         t = sl_task_cache[--sl_task_cache_n];
+        /* Double-add check (SIGBUS hunt): the popped struct must not
+         * appear anywhere else (own cache slots, global freelist).
+         * A duplicate means double-release (stale completion), which
+         * aliases one struct+stack across two logical tasks --
+         * shared safepoint chains then lose roots and young buffers
+         * die in minors. Env-gated (SLANG_GC_AUDIT=1), debug-only. */
+        static int dupck = -1;
+        if (dupck < 0)
+            dupck = getenv("SLANG_GC_AUDIT") ? 1 : 0;
+        if (dupck) {
+            for (int di = 0; di < sl_task_cache_n; di++) {
+                if (sl_task_cache[di] == t) {
+                    fprintf(stderr,
+                            "slang: GC-AUDIT double-add cache: %p\n",
+                            (void *)t);
+                    abort();
+                }
+            }
+            if (pthread_mutex_trylock(&sl_stack_fl_mu) == 0) {
+                for (sl_task *e = sl_stack_fl; e; e = e->next) {
+                    if (e == t) {
+                        fprintf(stderr,
+                                "slang: GC-AUDIT double-add cache+freelist: "
+                                "%p\n",
+                                (void *)t);
+                        pthread_mutex_unlock(&sl_stack_fl_mu);
+                        abort();
+                    }
+                }
+                pthread_mutex_unlock(&sl_stack_fl_mu);
+            }
+        }
         void *raw = t->raw_base;
         void *base = t->stack_base;
         size_t sz = t->stack_size;
@@ -1332,6 +1364,24 @@ static sl_task *sl_task_grab(void) {
     pthread_mutex_unlock(&sl_stack_fl_mu);
     sl_rt_preempt_enable();
     if (t) {
+        static int dupck2 = -1;
+        if (dupck2 < 0)
+            dupck2 = getenv("SLANG_GC_AUDIT") ? 1 : 0;
+        if (dupck2) {
+            if (pthread_mutex_trylock(&sl_stack_fl_mu) == 0) {
+                for (sl_task *e = sl_stack_fl; e; e = e->next) {
+                    if (e == t) {
+                        fprintf(stderr,
+                                "slang: GC-AUDIT double-add freelist: "
+                                "%p\n",
+                                (void *)t);
+                        pthread_mutex_unlock(&sl_stack_fl_mu);
+                        abort();
+                    }
+                }
+                pthread_mutex_unlock(&sl_stack_fl_mu);
+            }
+        }
         void *raw = t->raw_base;
         void *base = t->stack_base;
         size_t sz = t->stack_size;
