@@ -1067,6 +1067,18 @@ static void sl_gc_trace_map(void *p, void (*mark)(void *)) {
                 } else if (m->order) {
                     fprintf(stderr,
                             "slang: GC-VALIDATE orderbuf not in gc set\n");
+                    /* Raw header words anyway: the chunk is mapped
+                     * (its content just read fine), so these are the
+                     * current owner's header as left by sweep/reuse.
+                     * Not interpreted -- just dumped. */
+                    sl_gc_obj *oh =
+                        (sl_gc_obj *)m->order - 1;
+                    fprintf(stderr,
+                            "slang: GC-VALIDATE orderbuf raw "
+                            "marked=%d gen=%d remembered=%d size=%zu "
+                            "trace=%p\n",
+                            oh->marked, oh->gen, oh->remembered,
+                            oh->size, (void *)oh->trace);
                 }
                 if (m->order) {
                     fprintf(stderr, "slang: GC-VALIDATE order head:");
