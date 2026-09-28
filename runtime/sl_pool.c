@@ -576,6 +576,21 @@ static void sl_worker_run_loop(long slot_idx) {
          * on seeing it could land. */
         if (slot_idx >= 0)
             atomic_store_explicit(&sl_pool_slots[slot_idx].cur, t, memory_order_release);
+        /* Concurrent-execution detector (SIGBUS hunt): exactly one
+         * worker may run a task at a time. A second concurrent
+         * dispatch (stale entry, aliased struct) observes nonzero
+         * here and aborts with the struct. Env-gated, debug-only. */
+        static int rcck = -1;
+        if (rcck < 0)
+            rcck = getenv("SLANG_GC_AUDIT") ? 1 : 0;
+        if (rcck &&
+            atomic_fetch_add_explicit(&t->dbg_running, 1,
+                                      memory_order_relaxed) != 0) {
+            fprintf(stderr,
+                    "slang: GC-AUDIT concurrent run of task %p\n",
+                    (void *)t);
+            abort();
+        }
         sl_ctx_switch(&sl_rt_native_rsp, t->rsp);
         /* resumes here once t either finishes or parks */
         /* Tier 11 eighth slice: .cur cleared BEFORE sl_worker_after_switch,
@@ -600,6 +615,11 @@ static void sl_worker_run_loop(long slot_idx) {
         } else {
             sl_worker_after_switch(t);
         }
+        /* Paired with the pre-switch increment above (run-loop
+         * dispatches only; main's one-off dispatch never took it). */
+        if (rcck)
+            atomic_fetch_sub_explicit(&t->dbg_running, 1,
+                                      memory_order_relaxed);
     }
 }
 

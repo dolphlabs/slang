@@ -279,6 +279,11 @@ typedef struct sl_task {
     size_t gc_rem_n;
     size_t gc_rem_cap;
     void *join;
+    _Atomic int dbg_running; /* concurrent-execution detector (SIGBUS
+        hunt): incremented on dispatch, decremented after the switch
+        returns. Legal flow never has two concurrent owners, so a
+        fetch_add observing anything but 0 aborts with the struct.
+        Env-gated (SLANG_GC_AUDIT=1), debug-only. */
 } sl_task;
 
 static void sl_join_fail(void *j, const char *msg);
