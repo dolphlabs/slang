@@ -468,6 +468,63 @@ static _Thread_local sl_task *sl_rt_current_task = NULL;
  * thread-affine address anywhere in it. */
 static _Atomic unsigned long sl_rt_async_epoch = 0;
 
+/* Below-rsp clobber probe (SIGBUS hunt): two magic words written
+ * below the current rsp, then a bounded spin awaiting an async
+ * suspension (epoch change), then verification. A kernel signal
+ * frame (no altstack on x86_64) spans roughly [R0-2500, R0) and kills
+ * both magics; the trampoline's own helper frames reach only
+ * ~[R0-1000, R0-784), killing just the shallow one. So a dead deep
+ * magic proves kernel-frame clobbering of live task-stack content;
+ * a dead shallow magic alone proves helper-band clobbering; both
+ * alive across a caught suspension proves neither writer reaches
+ * that deep. Normal execution cannot touch either word (straight-line
+ * spin, no calls, compiler spills stay within the red zone above).
+ * Sampled 1/4096 safepoint enters, bounded spin, env-gated
+ * (SLANG_CANARY=1); debug-only, never ships. */
+static int sl_canary_on(void) {
+    static int on = -1;
+    if (on < 0)
+        on = getenv("SLANG_CANARY") ? 1 : 0;
+    return on;
+}
+
+static void sl_canary_probe(void) {
+    char marker;
+    volatile unsigned long long *deep =
+        (volatile unsigned long long *)(&marker - 1500);
+    volatile unsigned long long *shallow =
+        (volatile unsigned long long *)(&marker - 900);
+    sl_task *t = sl_rt_current_task;
+    if (!t || !t->stack_base)
+        return;
+    /* Stay clear of the guard page: bail if either magic would land
+     * outside the task buffer. */
+    if ((void *)deep < t->stack_base ||
+        (void *)shallow < (void *)((char *)t->stack_base + 4096))
+        return;
+    unsigned long e0 = atomic_load_explicit(&sl_rt_async_epoch,
+                                            memory_order_relaxed);
+    *deep = 0xC0FFEE11C0FFEE11ULL;
+    *shallow = 0xBEEFCA5EBEEFCA5EULL;
+    for (unsigned long i = 0; i < 500000; i++) {
+        if (atomic_load_explicit(&sl_rt_async_epoch,
+                                 memory_order_relaxed) != e0)
+            break;
+    }
+    unsigned long e1 = atomic_load_explicit(&sl_rt_async_epoch,
+                                            memory_order_relaxed);
+    if (e1 == e0)
+        return; /* no suspension caught; nothing to conclude */
+    int deep_dead = (*deep != 0xC0FFEE11C0FFEE11ULL);
+    int shallow_dead = (*shallow != 0xBEEFCA5EBEEFCA5EULL);
+    if (deep_dead || shallow_dead) {
+        fprintf(stderr,
+                "slang: CANARY deep=%d shallow=%d (task=%p)\n",
+                deep_dead, shallow_dead, (void *)t);
+        abort();
+    }
+}
+
 /* The one safe way to ask 'which task am I' from code that can be
  * async-preempted (i.e. anywhere preempt_disable_depth may be 0).
  * Returns NULL on threads that never registered a task (the timer,
@@ -1052,6 +1109,11 @@ static void sl_rt_maybe_yield(void) {
  * directly before wiring this in. */
 static inline void sl_rt_safepoint_enter(sl_safepoint *sp, void **roots,
                                          int nroots) {
+    /* Canary sampling (SIGBUS hunt): counter lives here (hot path,
+     * one predictable env-cached branch + increment when on). */
+    static unsigned long canary_ctr = 0;
+    if (sl_canary_on() && ((++canary_ctr & 4095) == 0))
+        sl_canary_probe();
     sl_task *t = sl_rt_cur(); /* see sl_rt_safepoint_exit just below --
         same reason, same hazard, and reading once here also removes the
         second TLS round-trip this function used to make. */
