@@ -1267,6 +1267,19 @@ static void sl_map_put(sl_map *m, const void *k, const void *v) {
     memcpy(m->vals + (size_t)s * m->vsz, v, m->vsz);
     m->state[s] = 1;
     m->order[m->count++] = s;
+    /* Forced dense collections (SIGBUS hunt): every 512th put trips
+     * a collection at the next checkin, so the tracer validator
+     * observes every map within ~512 puts of each write. Corruption
+     * showing up here is build-phase (writer active amid puts);
+     * corruption showing up only in untimed collections is
+     * post-build. Env-gated (SLANG_GC_FORCE=1), debug-only. */
+    static unsigned long force_ctr = 0;
+    static int force_on = -1;
+    if (force_on < 0)
+        force_on = getenv("SLANG_GC_FORCE") ? 1 : 0;
+    if (force_on && ((++force_ctr & 511) == 0))
+        atomic_store_explicit(&sl_gc_collect_pending, 1,
+                              memory_order_release);
     /* Order-content check (SIGBUS hunt): verify what was just
      * written, plus a periodic full scan. Corruption appearing
      * here (during build, single-threaded puts) means the writer
