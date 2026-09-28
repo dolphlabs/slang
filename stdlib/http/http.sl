@@ -2520,7 +2520,17 @@ pub fn read_frame(c: &mut link, buf: wire, filled: int,
             }
         }
         if n >= len(buf) {
-            return err("request too large for buffer");
+            // Reachable only when the request line + headers
+            // themselves never completed (the blank line was never
+            // found) before the buffer filled -- the body-too-large
+            // case above already returns separately, and it's the
+            // only other way "not complete" can reach this point, so
+            // by elimination a distinct message is safe here: a
+            // caller wanting a 431 vs 413 distinction (RFC 9110
+            // 10.5.11 vs 6.5.11) can tell these apart by text, same
+            // as it already tells "connection closed" apart from
+            // "truncated request" below.
+            return err("request headers too large for buffer");
         }
         let dl = idle_deadline;
         if n > 0 {
