@@ -969,10 +969,20 @@ static void sl_gc_audit_maps(void) {
         for (int bi = 0; bi < 4; bi++) {
             if (!bufs[bi])
                 continue;
-            /* Header gate: only trust gen/marked of objects in
-             * the set (a dangling buffer may point anywhere). */
-            if (!sl_gc_set_contains(bufs[bi]))
-                continue;
+            /* No set-membership gate here on purpose: a buffer that
+             * is not in the set at audit time is already dead
+             * (swept in an earlier cycle) while its old-unremembered
+             * map lives on -- that IS the violation (use-after-sweep
+             * across cycles), not a reason to skip. Freed chunks stay
+             * mapped (freelist/free reuse), so the header read below
+             * is safe. */
+            if (!sl_gc_set_contains(bufs[bi])) {
+                fprintf(stderr,
+                        "slang: GC-AUDIT old unremembered map %p "
+                        "holds dead buffer %p (slot %d)\n",
+                        (void *)m, bufs[bi], bi);
+                abort();
+            }
             sl_gc_obj *bh = (sl_gc_obj *)bufs[bi] - 1;
             if (bh->gen == 0 && !bh->marked) {
                 fprintf(stderr,
