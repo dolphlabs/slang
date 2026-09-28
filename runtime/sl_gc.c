@@ -271,7 +271,13 @@ static _Thread_local _Atomic int sl_rt_gc_blocked = 0;
 static _Thread_local _Atomic unsigned long sl_rt_gc_acked_cycle = 0;
 
 static void sl_gc_collect(void);
-static void sl_gc_collect_minor(void);
+static void sl_gc_collect_minor_real(void);
+static void sl_gc_collect_minor(void) {
+    sl_gc_collect_minor_real();
+}
+/* Map barrier auditor, defined in sl_containers.c (needs the complete
+ * sl_map layout, defined there); called from the minor sweep below. */
+static void sl_gc_audit_maps(void);
 static void sl_gc_mark(void *ptr);
 static void sl_gc_mark_minor(void *ptr);
 typedef void (*sl_gc_markfn_t)(void *ptr);
@@ -1213,9 +1219,7 @@ static void sl_gc_mark_roots(sl_gc_thread **snap, int nsnap,
 static void sl_gc_collect_minor(void);
 static void sl_gc_collect_minor_fullmark(void);
 static void sl_gc_collect_minor_real(void);
-static void sl_gc_collect_minor(void) {
-    sl_gc_collect_minor_real();
-}
+static void sl_gc_collect_minor(void);
 /* Phase-2 bisect helper: FULL-mark minor (kept for diagnosis; not on
  * the collection path). Same nursery-only sweep + promote as the real
  * minor, but marks everything with sl_gc_mark. */
@@ -1368,6 +1372,10 @@ static void sl_gc_collect_minor_real(void) {
 
     sl_gc_obj **mpp = &sl_gc_young;
     size_t swept = 0, promoted = 0;
+    /* Barrier auditor (SIGBUS hunt): implemented in sl_containers.c
+     * (needs the complete sl_map layout, defined there). See it for
+     * the full reasoning. */
+    sl_gc_audit_maps();
     while (*mpp) {
         sl_gc_obj *h = *mpp;
         if (!h->marked) {

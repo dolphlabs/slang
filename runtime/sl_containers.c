@@ -902,6 +902,52 @@ typedef struct {
     long long *order;    /* occupied slot indices, insertion order */
 } sl_map;
 
+static void sl_gc_trace_map(void *p, void (*mark)(void *));
+
+/* Barrier auditor (SIGBUS hunt): called before every minor sweep
+ * (see sl_gc_collect_minor_real). Every OLD map that is NOT
+ * remembered must have no YOUNG-UNMARKED buffers -- a young buffer
+ * under an unremembered old map is swept while its map survives, the
+ * exact dangling-buffer shape behind the tracer faults. Finding one
+ * names a missed write barrier (or a lost harvest entry). Walks all
+ * of old per minor: expensive, so env-gated (SLANG_GC_AUDIT=1) and
+ * debug-only. Minor-only by call site: majors sweep old too, where
+ * unmarked-young under unmarked-old is ordinary garbage. */
+static void sl_gc_audit_maps(void) {
+    static int audit = -1;
+    if (audit < 0)
+        audit = getenv("SLANG_GC_AUDIT") ? 1 : 0;
+    if (!audit)
+        return;
+    for (sl_gc_obj *o = sl_gc_old; o; o = o->next) {
+        if (o->trace != (void (*)(void *, void (*)(void *)))sl_gc_trace_map ||
+            o->remembered)
+            continue;
+        sl_map *m = (sl_map *)(o + 1);
+        void *bufs[4];
+        bufs[0] = m->keys;
+        bufs[1] = m->vals;
+        bufs[2] = m->state;
+        bufs[3] = m->order;
+        for (int bi = 0; bi < 4; bi++) {
+            if (!bufs[bi])
+                continue;
+            /* Header gate: only trust gen/marked of objects in
+             * the set (a dangling buffer may point anywhere). */
+            if (!sl_gc_set_contains(bufs[bi]))
+                continue;
+            sl_gc_obj *bh = (sl_gc_obj *)bufs[bi] - 1;
+            if (bh->gen == 0 && !bh->marked) {
+                fprintf(stderr,
+                        "slang: GC-AUDIT old unremembered map %p "
+                        "holds young unmarked buffer %p (slot %d)\n",
+                        (void *)m, bufs[bi], bi);
+                abort();
+            }
+        }
+    }
+}
+
 static void sl_gc_trace_map(void *p, void (*mark)(void *)) {
     sl_map *m = (sl_map *)p;
     /* Invariant validation (SIGBUS hunt): a live map with entries
