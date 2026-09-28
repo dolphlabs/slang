@@ -1280,6 +1280,20 @@ static void sl_gc_collect_minor_fullmark(void) {
             sl_gc_class_push(h);
             swept++;
         } else {
+            /* No-promote bisector (SIGBUS hunt): with
+             * SLANG_GC_NOPROMOTE=1 survivors stay young (nothing ever
+             * tenures, so old/young divergence cannot develop). */
+            static int nopromote = -2;
+            if (nopromote == -2)
+                nopromote =
+                    getenv("SLANG_GC_NOPROMOTE") ? 1 : 0;
+            if (nopromote) {
+                h->marked = 0;
+                h->remembered = 0;
+                mpp = &h->next;
+                promoted++;
+                continue;
+            }
             *mpp = h->next;
             h->marked = 0;
             h->remembered = 0;
@@ -1560,6 +1574,20 @@ static void sl_gc_collect_minor_real(void) {
             sl_gc_class_push(h);
             swept++;
         } else {
+            /* No-promote bisector (SIGBUS hunt): with
+             * SLANG_GC_NOPROMOTE=1 survivors stay young (nothing ever
+             * tenures, so old/young divergence cannot develop). */
+            static int nopromote = -2;
+            if (nopromote == -2)
+                nopromote =
+                    getenv("SLANG_GC_NOPROMOTE") ? 1 : 0;
+            if (nopromote) {
+                h->marked = 0;
+                h->remembered = 0;
+                mpp = &h->next;
+                promoted++;
+                continue;
+            }
             *mpp = h->next;
             h->marked = 0;
             h->remembered = 0;
