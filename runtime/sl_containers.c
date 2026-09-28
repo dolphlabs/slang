@@ -1092,6 +1092,23 @@ static void sl_gc_trace_map(void *p, void (*mark)(void *)) {
                         "slang: GC-VALIDATE slot target=%p known=%d "
                         "size=%zu\n",
                         target, known, hsize);
+                /* Whole-map check: are keys/vals/state also dangling?
+                 * Sample a few of each (bounded, read-only). Dangling
+                 * siblings mean whole-map UAF (root miss), not
+                 * order-specific corruption. */
+                const char *bnames[3] = {"keys", "vals", "state"};
+                void *bbufs[3];
+                bbufs[0] = m->keys;
+                bbufs[1] = m->vals;
+                bbufs[2] = m->state;
+                for (int bxi = 0; bxi < 3; bxi++) {
+                    int bknown =
+                        bbufs[bxi]
+                            ? sl_gc_set_contains(bbufs[bxi])
+                            : -1;
+                    fprintf(stderr, "slang: GC-VALIDATE %s=%p known=%d\n",
+                            bnames[bxi], bbufs[bxi], bknown);
+                }
                 /* Read small targets as strings (bounded by header
                  * size, capped): key strings ("42") mean keys data
                  * reached order[]; anything else means foreign data. */
