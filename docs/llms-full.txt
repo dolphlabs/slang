@@ -4666,7 +4666,10 @@ from a slang program exercising `extern fn`, `link`, `rawptr`,
 A **package is a directory**: every `.sl` file inside it is compiled
 together into one shared namespace, as if concatenated. Import paths
 resolve to a directory next to the importer, then a native package,
-then `stdlib/<path>`, then a pin in `slang.project`.
+then `stdlib/<path>`, then a pin in `slang.project`. Only the exact
+path names a native package (`"json"` is the built-in; `"lib/json"` is
+a directory), and a directory shadows a native package only if it
+holds `.sl` files, so a `json/` folder of fixtures does not.
 
 ```slang
 import "geometry";   // binds the name "geometry" in this file's scope
@@ -4706,9 +4709,14 @@ Rules:
 - A package's name is its directory's name made an identifier: any
   character other than a letter, digit or `_` becomes `_`, and a
   leading digit gets a `p_` prefix (`app.v2` → `app_v2`, `9lib` →
-  `p_9lib`). That is the name diagnostics use. The import *binding*
-  is still the path's last element, so a directory whose name is not
-  an identifier needs an alias: `import "lib.v2" as lib;`.
+  `p_9lib`). The import *binding* is still the path's last element,
+  so a directory whose name is not an identifier needs an alias:
+  `import "lib.v2" as lib;`.
+- Different directories are always different packages, even with the
+  same name: `import "a/util";` and `import "b/util" as butil;` are two
+  packages, and two libraries can each have their own `util`. When
+  names clash, diagnostics show the later one with a suffix
+  (`util_2`); native packages and the entry package keep theirs.
 
 See `examples/pkgdemo/` for a complete multi-package project.
 
