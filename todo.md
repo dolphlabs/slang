@@ -2491,6 +2491,40 @@ prerequisite, not a different plan).
       from arenas, so it barely exercises the collector; a GC-heavy server
       benchmark on Linux is still owed before any Phase E claim.
 
+- [x] **Minor GCs freed buffers out from under dead old containers.**
+      The nursery-dependent crash (SIGSEGV, a general-protection fault
+      in `sl_gc_trace_map`) chased on `fix/gc-minor-sweep`. Separate
+      from the ~5% SIGBUS below, which predates the generational GC.
+
+      A map promoted to old, then grown, got YOUNG keys/vals/state/order
+      buffers. Once the map died, the next minor freed those buffers but
+      kept the map itself on `sl_gc_old` (minors never sweep old) -- and
+      in `sl_gc_set`. A stale word naming the map in an async-preempted
+      task's conservatively scanned stack then made a later collection
+      trace it, and `sl_gc_trace_map` read a recycled `order` buffer as
+      slot indices. Lists (`data`) and json values (`items`/`keys`/
+      `vals`) had the same shape; they only failed less loudly.
+
+      Measured with a throwaway counter: 449 and 1,716 traces of such a
+      map in two surviving runs, most reached through the conservative
+      scan. Every crash, pristine or instrumented, faulted in
+      `sl_gc_trace_map`.
+
+      Fix: `sl_gc_alloc_owned` / `sl_gc_realloc_owned` give a buffer its
+      owner's generation, and the minor sweep moves a born-old buffer to
+      `sl_gc_old` instead of freeing it, so a buffer never dies before
+      its owner. Every buffer a tracer reads through now uses them.
+      Rule recorded in `runtime/GENERATIONAL_GC_HANDOFF.md`.
+
+      `concurrent_compute`, 6000 tasks, 16KB nursery, amplified
+      preemption (150us quantum / 100us tick): **10/12 crashing runs on
+      `dev`, 0/20 with the fix.** Stock settings, alternated against
+      `dev`: wall time and peak RSS inside each other's range (2000-task
+      compute 3.30-3.46s / 106-116MB both; a 2M-push list + 500k-entry
+      map 6.9-8.9s / 106-111MB both). Guarded deterministically by
+      `sl_gc_test_owned_buffers` (tests/runtime/test_gc.c), which fails
+      against either half of the fix reverted.
+
 - [ ] **`tests/http2_tls` exited 132 (SIGILL) once in 125 runs** during the
       GC stress campaign on `fix/gc-garbage-rss` (16KB threshold, 1ms
       preemption). Not reproduced in 120 further runs on the branch or 40
