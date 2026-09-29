@@ -271,7 +271,11 @@ static _Thread_local _Atomic int sl_rt_gc_blocked = 0;
 static _Thread_local _Atomic unsigned long sl_rt_gc_acked_cycle = 0;
 
 static void sl_gc_collect(void);
+static void sl_gc_collect_minor_real(void);
 static void sl_gc_collect_minor(void);
+/* Map barrier auditor, defined in sl_containers.c (needs the complete
+ * sl_map layout, defined there); called from the minor sweep below. */
+static void sl_gc_audit_maps(void);
 static void sl_gc_mark(void *ptr);
 static void sl_gc_mark_minor(void *ptr);
 typedef void (*sl_gc_markfn_t)(void *ptr);
@@ -1213,8 +1217,23 @@ static void sl_gc_mark_roots(sl_gc_thread **snap, int nsnap,
 static void sl_gc_collect_minor(void);
 static void sl_gc_collect_minor_fullmark(void);
 static void sl_gc_collect_minor_real(void);
+/* List-integrity auditor (SIGBUS hunt), defined below; called
+ * pre-sweep in the real minor. */
+static void sl_gc_audit_lists(sl_gc_thread **snap, int nsnap);
 static void sl_gc_collect_minor(void) {
-    sl_gc_collect_minor_real();
+    /* Bisector (SIGBUS hunt): route minors through the full-mark
+     * variant, which marks everything with sl_gc_mark (no
+     * mark_minor old-marked-not-traced split) while keeping the
+     * same nursery-only sweep. Env-gated (SLANG_GC_FULLMARK=1).
+     * Clean runs implicate the minor-mark split; crashes implicate
+     * the sweep/promotion/roots instead. */
+    static int full = -1;
+    if (full < 0)
+        full = getenv("SLANG_GC_FULLMARK") ? 1 : 0;
+    if (full)
+        sl_gc_collect_minor_fullmark();
+    else
+        sl_gc_collect_minor_real();
 }
 /* Phase-2 bisect helper: FULL-mark minor (kept for diagnosis; not on
  * the collection path). Same nursery-only sweep + promote as the real
@@ -1251,6 +1270,7 @@ static void sl_gc_collect_minor_fullmark(void) {
 
     sl_gc_obj **mpp = &sl_gc_young;
     size_t swept = 0, promoted = 0;
+    sl_gc_audit_lists(snap, nsnap);
     while (*mpp) {
         sl_gc_obj *h = *mpp;
         if (!h->marked) {
@@ -1260,6 +1280,20 @@ static void sl_gc_collect_minor_fullmark(void) {
             sl_gc_class_push(h);
             swept++;
         } else {
+            /* No-promote bisector (SIGBUS hunt): with
+             * SLANG_GC_NOPROMOTE=1 survivors stay young (nothing ever
+             * tenures, so old/young divergence cannot develop). */
+            static int nopromote = -2;
+            if (nopromote == -2)
+                nopromote =
+                    getenv("SLANG_GC_NOPROMOTE") ? 1 : 0;
+            if (nopromote) {
+                h->marked = 0;
+                h->remembered = 0;
+                mpp = &h->next;
+                promoted++;
+                continue;
+            }
             *mpp = h->next;
             h->marked = 0;
             h->remembered = 0;
@@ -1292,6 +1326,164 @@ static void sl_gc_collect_minor_fullmark(void) {
     if (atomic_load_explicit(&sl_gc_collect_pending, memory_order_acquire)) {
         if (!atomic_exchange_explicit(&sl_gc_collecting, 1, memory_order_acq_rel))
             sl_gc_collect();
+    }
+}
+
+/* List-integrity auditor (SIGBUS hunt): every live GC object must
+ * sit in exactly one list (young, old, some task's pending, retired,
+ * or a class freelist). An object in two lists gets swept/freed
+ * twice -- the second free hands a live chunk to a new owner while
+ * stale references (like a map's order pointer) still name it. Runs
+ * pre-sweep in minors (majors legitimately rearrange old). Env-gated
+ * (SLANG_GC_AUDIT=1), debug-only. */
+static sl_gc_obj **sl_audit_seen = NULL;
+static size_t sl_audit_cap = 0;
+static size_t sl_audit_n = 0;
+static int sl_audit_bad = 0;
+static sl_gc_obj *sl_audit_bad_at = NULL;
+
+static void sl_audit_note(sl_gc_obj *o) {
+    if (!o || sl_audit_bad)
+        return;
+    /* Header sanity (SIGBUS hunt): a corrupt size/next here poisons
+     * every list walk (sweep unlinks, freelist links land mid-object
+     * as 8-byte heap-pointer writes -- the exact shape behind
+     * order[]-with-pointers). next must be NULL or a live object;
+     * total size must be sane. Gated on the node itself being live:
+     * freelist/retired nodes are legitimately outside the set (their
+     * duplicate detection below still runs). */
+    if (sl_gc_set_contains((void *)(o + 1))) {
+        if (o->size > (size_t)(1 << 30)) {
+            fprintf(stderr, "slang: GC-AUDIT wild size %p (%zu)\n",
+                    (void *)o, o->size);
+            sl_audit_bad = 1;
+            sl_audit_bad_at = o;
+            return;
+        }
+        if (o->next && !sl_gc_set_contains((void *)(o->next + 1))) {
+            fprintf(stderr, "slang: GC-AUDIT wild next %p -> %p\n",
+                    (void *)o, (void *)o->next);
+            sl_audit_bad = 1;
+            sl_audit_bad_at = o;
+            return;
+        }
+    }
+    if (!sl_audit_seen) {
+        sl_audit_cap = 4096;
+        sl_audit_seen =
+            (sl_gc_obj **)calloc(sl_audit_cap, sizeof(*sl_audit_seen));
+        if (!sl_audit_seen)
+            return;
+        sl_audit_n = 0;
+    }
+    if (sl_audit_n * 2 >= sl_audit_cap) {
+        size_t ncap = sl_audit_cap * 2;
+        sl_gc_obj **nt =
+            (sl_gc_obj **)calloc(ncap, sizeof(*sl_audit_seen));
+        if (!nt)
+            return;
+        for (size_t k = 0; k < sl_audit_cap; k++) {
+            if (!sl_audit_seen[k])
+                continue;
+            size_t j = sl_gc_ptrhash(sl_audit_seen[k]) & (ncap - 1);
+            while (nt[j])
+                j = (j + 1) & (ncap - 1);
+            nt[j] = sl_audit_seen[k];
+        }
+        free(sl_audit_seen);
+        sl_audit_seen = nt;
+        sl_audit_cap = ncap;
+    }
+    size_t j = sl_gc_ptrhash(o) & (sl_audit_cap - 1);
+    while (sl_audit_seen[j] && sl_audit_seen[j] != o)
+        j = (j + 1) & (sl_audit_cap - 1);
+    if (sl_audit_seen[j]) {
+        sl_audit_bad = 1;
+        sl_audit_bad_at = o;
+        return;
+    }
+    sl_audit_seen[j] = o;
+    sl_audit_n++;
+}
+
+static void sl_audit_task_pending(sl_task *t) {
+    if (!t)
+        return;
+    long guard = 0;
+    for (sl_gc_obj *o = t->gc_pend_head; o; o = o->next) {
+        sl_audit_note(o);
+        if (++guard > 1000000)
+            break;
+    }
+}
+
+static void sl_gc_audit_lists(sl_gc_thread **snap, int nsnap) {
+    static int audit = -1;
+    if (audit < 0)
+        audit = getenv("SLANG_GC_AUDIT") ? 1 : 0;
+    if (!audit)
+        return;
+    sl_audit_bad = 0;
+    sl_audit_bad_at = NULL;
+    long guard = 0;
+    for (sl_gc_obj *o = sl_gc_young; o && !sl_audit_bad; o = o->next) {
+        sl_audit_note(o);
+        if (++guard > 10000000)
+            break;
+    }
+    guard = 0;
+    for (sl_gc_obj *o = sl_gc_old; o && !sl_audit_bad; o = o->next) {
+        sl_audit_note(o);
+        if (++guard > 10000000)
+            break;
+    }
+    sl_gc_obj *ret = atomic_load_explicit(&sl_gc_retired,
+                                          memory_order_acquire);
+    guard = 0;
+    for (sl_gc_obj *o = ret; o && !sl_audit_bad; o = o->next) {
+        sl_audit_note(o);
+        if (++guard > 10000000)
+            break;
+    }
+    for (int i = 0; i < nsnap && !sl_audit_bad; i++)
+        sl_audit_task_pending(*snap[i]->task_slot);
+    pthread_mutex_lock(&sl_global_runq.mu);
+    for (sl_task *t = sl_global_runq.head; t && !sl_audit_bad;
+         t = t->next)
+        sl_audit_task_pending(t);
+    pthread_mutex_unlock(&sl_global_runq.mu);
+    for (unsigned s = 0; s < (unsigned)SL_RUNQ_STRIPES && !sl_audit_bad;
+         s++) {
+        /* See sl_gc_for_pending_tasks: short critical sections. */
+        pthread_mutex_lock(&sl_runq_stripes[s].mu);
+        for (sl_task *t = sl_runq_stripes[s].head; t && !sl_audit_bad;
+             t = t->runq_link)
+            sl_audit_task_pending(t);
+        pthread_mutex_unlock(&sl_runq_stripes[s].mu);
+    }
+    for (sl_task *t = sl_parked_tasks; t && !sl_audit_bad;
+         t = t->parked_next)
+        sl_audit_task_pending(t);
+    for (int c = 0; c < SL_GC_CLASS_N && !sl_audit_bad; c++) {
+        if (pthread_mutex_trylock(&sl_gc_class_mu) != 0)
+            continue;
+        guard = 0;
+        for (sl_gc_obj *o = sl_gc_class_fl[c]; o && !sl_audit_bad;
+             o = o->next) {
+            sl_audit_note(o);
+            if (++guard > 1000000)
+                break;
+        }
+        pthread_mutex_unlock(&sl_gc_class_mu);
+    }
+    free(sl_audit_seen);
+    sl_audit_seen = NULL;
+    sl_audit_cap = 0;
+    sl_audit_n = 0;
+    if (sl_audit_bad) {
+        fprintf(stderr, "slang: GC-AUDIT object in two lists: %p\n",
+                (void *)sl_audit_bad_at);
+        abort();
     }
 }
 
@@ -1368,6 +1560,11 @@ static void sl_gc_collect_minor_real(void) {
 
     sl_gc_obj **mpp = &sl_gc_young;
     size_t swept = 0, promoted = 0;
+    sl_gc_audit_lists(snap, nsnap);
+    /* Barrier auditor (SIGBUS hunt): implemented in sl_containers.c
+     * (needs the complete sl_map layout, defined there). See it for
+     * the full reasoning. */
+    sl_gc_audit_maps();
     while (*mpp) {
         sl_gc_obj *h = *mpp;
         if (!h->marked) {
@@ -1377,6 +1574,20 @@ static void sl_gc_collect_minor_real(void) {
             sl_gc_class_push(h);
             swept++;
         } else {
+            /* No-promote bisector (SIGBUS hunt): with
+             * SLANG_GC_NOPROMOTE=1 survivors stay young (nothing ever
+             * tenures, so old/young divergence cannot develop). */
+            static int nopromote = -2;
+            if (nopromote == -2)
+                nopromote =
+                    getenv("SLANG_GC_NOPROMOTE") ? 1 : 0;
+            if (nopromote) {
+                h->marked = 0;
+                h->remembered = 0;
+                mpp = &h->next;
+                promoted++;
+                continue;
+            }
             *mpp = h->next;
             h->marked = 0;
             h->remembered = 0;

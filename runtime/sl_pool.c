@@ -576,6 +576,21 @@ static void sl_worker_run_loop(long slot_idx) {
          * on seeing it could land. */
         if (slot_idx >= 0)
             atomic_store_explicit(&sl_pool_slots[slot_idx].cur, t, memory_order_release);
+        /* Concurrent-execution detector (SIGBUS hunt): exactly one
+         * worker may run a task at a time. A second concurrent
+         * dispatch (stale entry, aliased struct) observes nonzero
+         * here and aborts with the struct. Env-gated, debug-only. */
+        static int rcck = -1;
+        if (rcck < 0)
+            rcck = getenv("SLANG_GC_AUDIT") ? 1 : 0;
+        if (rcck &&
+            atomic_fetch_add_explicit(&t->dbg_running, 1,
+                                      memory_order_relaxed) != 0) {
+            fprintf(stderr,
+                    "slang: GC-AUDIT concurrent run of task %p\n",
+                    (void *)t);
+            abort();
+        }
         sl_ctx_switch(&sl_rt_native_rsp, t->rsp);
         /* resumes here once t either finishes or parks */
         /* Tier 11 eighth slice: .cur cleared BEFORE sl_worker_after_switch,
@@ -600,9 +615,15 @@ static void sl_worker_run_loop(long slot_idx) {
         } else {
             sl_worker_after_switch(t);
         }
+        /* Paired with the pre-switch increment above (run-loop
+         * dispatches only; main's one-off dispatch never took it). */
+        if (rcck)
+            atomic_fetch_sub_explicit(&t->dbg_running, 1,
+                                      memory_order_relaxed);
     }
 }
 
+static void sl_crash_dump_start(void);
 static void sl_rt_install_altstack(void); /* defined below, before the preempt handler */
 
 static void *sl_worker_loop(void *arg) {
@@ -1028,5 +1049,52 @@ static void sl_pool_start(void) {
         }
     }
     sl_preempt_ticker_start();
+    sl_crash_dump_start();
+}
+
+/* Crash-state dump (SIGBUS hunt): a SIGSEGV/SIGBUS handler, active
+ * only with SLANG_CRASH_DUMP=1, printing fault address, registers,
+ * and the faulting thread's task (if any), then re-raising so the
+ * exit signal is unchanged. fprintf from a dying handler is not
+ * strictly signal-safe; the process aborts immediately after. */
+static void sl_crash_dump_handler(int sig, siginfo_t *si, void *uctx_raw) {
+    unsigned long long rip = 0, rsp = 0;
+    unsigned long long rax = 0, rcx = 0, r12 = 0, r14 = 0, rdi = 0;
+#if defined(__APPLE__) && defined(__x86_64__)
+    ucontext_t *uctx = (ucontext_t *)uctx_raw;
+    if (uctx) {
+        rip = (unsigned long long)uctx->uc_mcontext->__ss.__rip;
+        rsp = (unsigned long long)uctx->uc_mcontext->__ss.__rsp;
+        rax = (unsigned long long)uctx->uc_mcontext->__ss.__rax;
+        rcx = (unsigned long long)uctx->uc_mcontext->__ss.__rcx;
+        r12 = (unsigned long long)uctx->uc_mcontext->__ss.__r12;
+        r14 = (unsigned long long)uctx->uc_mcontext->__ss.__r14;
+        rdi = (unsigned long long)uctx->uc_mcontext->__ss.__rdi;
+    }
+#endif
+    sl_task *t = sl_rt_current_task;
+    fprintf(stderr,
+            "slang: CRASH-DUMP sig=%d addr=%p rip=%llx rsp=%llx "
+            "rax=%llx rcx=%llx r12=%llx r14=%llx rdi=%llx task=%p\n",
+            sig, si ? si->si_addr : NULL, rip, rsp, rax, rcx, r12,
+            r14, rdi, (void *)t);
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+static void sl_crash_dump_start(void) {
+    static int started = 0;
+    if (started)
+        return;
+    started = 1;
+    if (!getenv("SLANG_CRASH_DUMP"))
+        return;
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = sl_crash_dump_handler;
+    sa.sa_flags = SA_SIGINFO | SA_RESETHAND;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGBUS, &sa, NULL);
 }
 

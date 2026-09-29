@@ -52,3 +52,4 @@ bench/suite/**/*.pyc
 # Python bytecode from tests/*/check.py
 __pycache__/
 *.pyc
+.huntmp/

@@ -902,8 +902,316 @@ typedef struct {
     long long *order;    /* occupied slot indices, insertion order */
 } sl_map;
 
+/* Put-ring storage (SIGBUS hunt): file scope (the recorder lives
+ * in sl_map_put below, the dumper is called from the barrier
+ * auditor). */
+#define SL_PUTRING_N 64
+static sl_map *sl_putring_m[SL_PUTRING_N];
+static int sl_putring_g[SL_PUTRING_N];
+static int sl_putring_r[SL_PUTRING_N];
+static unsigned sl_putring_i = 0;
+
+static void sl_putring_dump(sl_map *m) {
+    fprintf(stderr, "slang: GC-AUDIT putring for map %p:\n", (void *)m);
+    for (unsigned k = 0; k < SL_PUTRING_N; k++) {
+        if (sl_putring_m[k] == m)
+            fprintf(stderr, "slang: GC-AUDIT   gen=%d rem=%d\n",
+                    sl_putring_g[k], sl_putring_r[k]);
+    }
+}
+
+/* Expected-order shadow table (SIGBUS hunt): records the order
+ * buffer each map installs, so the validator can tell a redirected
+ * field (order != recorded) from overwritten content (order ==
+ * recorded, content bad). Open-addressed, debug-only, env-gated with
+ * the validator (shares its static flag via sl_map_validate_on). */
+#define SL_SHADOW_CAP 8192
+static sl_map *sl_shadow_map[SL_SHADOW_CAP];
+static void *sl_shadow_order[SL_SHADOW_CAP];
+
+static int sl_map_validate_on(void) {
+    static int validate = -1;
+    if (validate < 0)
+        validate = getenv("SLANG_GC_VALIDATE") ? 1 : 0;
+    return validate;
+}
+
+static void sl_shadow_record(sl_map *m) {
+    if (!sl_map_validate_on())
+        return;
+    size_t j = ((uintptr_t)m >> 3) & (SL_SHADOW_CAP - 1);
+    while (sl_shadow_map[j] && sl_shadow_map[j] != m)
+        j = (j + 1) & (SL_SHADOW_CAP - 1);
+    sl_shadow_map[j] = m;
+    sl_shadow_order[j] = m->order;
+}
+
+static void *sl_shadow_lookup(sl_map *m) {
+    size_t j = ((uintptr_t)m >> 3) & (SL_SHADOW_CAP - 1);
+    while (sl_shadow_map[j]) {
+        if (sl_shadow_map[j] == m)
+            return sl_shadow_order[j];
+        j = (j + 1) & (SL_SHADOW_CAP - 1);
+    }
+    return NULL;
+}
+
+
+static void sl_gc_trace_map(void *p, void (*mark)(void *));
+
+/* Barrier auditor (SIGBUS hunt): called before every minor sweep
+ * (see sl_gc_collect_minor_real). Every OLD map that is NOT
+ * remembered must have no YOUNG-UNMARKED buffers -- a young buffer
+ * under an unremembered old map is swept while its map survives, the
+ * exact dangling-buffer shape behind the tracer faults. Finding one
+ * names a missed write barrier (or a lost harvest entry). Walks all
+ * of old per minor: expensive, so env-gated (SLANG_GC_AUDIT=1) and
+ * debug-only. Minor-only by call site: majors sweep old too, where
+ * unmarked-young under unmarked-old is ordinary garbage. */
+static void sl_gc_audit_maps(void) {
+    static int audit = -1;
+    if (audit < 0)
+        audit = getenv("SLANG_GC_AUDIT") ? 1 : 0;
+    if (!audit)
+        return;
+    for (sl_gc_obj *o = sl_gc_old; o; o = o->next) {
+        if (o->trace != (void (*)(void *, void (*)(void *)))sl_gc_trace_map ||
+            o->remembered)
+            continue;
+        sl_map *m = (sl_map *)(o + 1);
+        void *bufs[4];
+        bufs[0] = m->keys;
+        bufs[1] = m->vals;
+        bufs[2] = m->state;
+        bufs[3] = m->order;
+        for (int bi = 0; bi < 4; bi++) {
+            if (!bufs[bi])
+                continue;
+            /* No set-membership gate here on purpose: a buffer that
+             * is not in the set at audit time is already dead
+             * (swept in an earlier cycle) while its old-unremembered
+             * map lives on -- that IS the violation (use-after-sweep
+             * across cycles), not a reason to skip. Freed chunks stay
+             * mapped (freelist/free reuse), so the header read below
+             * is safe. */
+            if (!sl_gc_set_contains(bufs[bi])) {
+                fprintf(stderr,
+                        "slang: GC-AUDIT old unremembered map %p "
+                        "holds dead buffer %p (slot %d)\n",
+                        (void *)m, bufs[bi], bi);
+                abort();
+            }
+            sl_gc_obj *bh = (sl_gc_obj *)bufs[bi] - 1;
+            if (bh->gen == 0 && !bh->marked) {
+                fprintf(stderr,
+                        "slang: GC-AUDIT old unremembered map %p "
+                        "holds young unmarked buffer %p (slot %d)\n",
+                        (void *)m, bufs[bi], bi);
+                /* Dump recent old-map puts: was this map put-to
+                 * (and barrier-skipped), or did its buffers arrive
+                 * without any put? */
+                sl_putring_dump(m);
+                abort();
+            }
+        }
+    }
+}
+
 static void sl_gc_trace_map(void *p, void (*mark)(void *)) {
     sl_map *m = (sl_map *)p;
+    /* Invariant validation (SIGBUS hunt): a live map with entries
+     * must have all four buffers. A count>0 map with NULL buffers is
+     * the exact torn state behind the tracer faults -- abort here
+     * with the full header instead of faulting three lines down.
+     * Env-gated (SLANG_GC_VALIDATE=1); the check is a few integer
+     * compares per traced map. */
+    int validate = sl_map_validate_on();
+    if (validate && m->count > 0 &&
+        (!m->keys || !m->vals || !m->state || !m->order)) {
+        fprintf(stderr,
+                "slang: GC-VALIDATE torn map %p "
+                "(count=%lld cap=%lld ksz=%zu vsz=%zu kstr=%d "
+                "keys=%p vals=%p state=%p order=%p)\n",
+                (void *)m, m->count, m->cap, m->ksz, m->vsz, m->kstr,
+                (void *)m->keys, (void *)m->vals, (void *)m->state,
+                (void *)m->order);
+        abort();
+    }
+    /* Slot validation (SIGBUS hunt): every order entry must name a
+     * real slot. A pointer-valued entry means the order buffer's
+     * content was corrupted (or the buffer is not the order array at
+     * all) -- abort with the index and value instead of faulting on
+     * keys+slot*ksz three lines down. Same gate. */
+    if (validate) {
+        if (m->count < 0 || m->count > m->cap) {
+            fprintf(stderr,
+                    "slang: GC-VALIDATE torn count map=%p count=%lld "
+                    "cap=%lld\n",
+                    (void *)m, m->count, m->cap);
+            abort();
+        }
+        /* Cap sanity (SIGBUS hunt): grow doubles from 8, so cap is
+         * always a power of two. A wild cap defeats every bound
+         * below it (slots < huge-cap always pass). */
+        if (m->cap < 8 || m->cap > (1 << 20) ||
+            (m->cap & (m->cap - 1)) != 0) {
+            fprintf(stderr,
+                    "slang: GC-VALIDATE wild cap map=%p count=%lld "
+                    "cap=%lld\n",
+                    (void *)m, m->count, m->cap);
+            abort();
+        }
+        for (long long vi = 0; vi < m->count; vi++) {
+            long long slot = m->order ? m->order[vi] : 0;
+            if (m->count > 0 && (slot < 0 || slot >= m->cap)) {
+                /* Dump the neighborhood: all-pointers means the
+                 * buffer was swapped/reused as something else;
+                 * scattered bad values mean partial overwrite. */
+                fprintf(stderr,
+                        "slang: GC-VALIDATE bad slot map=%p i=%lld "
+                        "slot=%lld count=%lld cap=%lld order=%p\n",
+                        (void *)m, vi, slot, m->count, m->cap,
+                        (void *)m->order);
+                /* Field redirect vs content overwrite: compare
+                 * against the buffer recorded at install time, and
+                 * sanity-check the key/value sizes (a confused
+                 * struct reads wild here). */
+                void *expected = sl_shadow_lookup(m);
+                fprintf(stderr,
+                        "slang: GC-VALIDATE shadow order=%p ksz=%zu "
+                        "vsz=%zu kstr=%d\n",
+                        expected, m->ksz, m->vsz, m->kstr);
+                /* Alias check: is order the same chunk as a sibling
+                 * buffer (install-time double-alloc), or does its
+                 * content match the keys buffer (confused arrays)? */
+                fprintf(stderr,
+                        "slang: GC-VALIDATE bufs keys=%p vals=%p "
+                        "state=%p order=%p\n",
+                        (void *)m->keys, (void *)m->vals,
+                        (void *)m->state, (void *)m->order);
+                /* Identify the target: a known heap object (with its
+                 * size) points at buffer reuse/aliasing; an unknown
+                 * address points at a wild index. sl_gc_set_contains
+                 * and sl_gc_obj live in sl_gc.c, spliced earlier in
+                 * the same translation unit. */
+                void *target = (void *)(uintptr_t)slot;
+                int known = sl_gc_set_contains(target);
+                size_t hsize = 0;
+                if (known)
+                    hsize = ((sl_gc_obj *)target - 1)->size;
+                fprintf(stderr,
+                        "slang: GC-VALIDATE slot target=%p known=%d "
+                        "size=%zu\n",
+                        target, known, hsize);
+                /* Whole-map check: are keys/vals/state also dangling?
+                 * Sample a few of each (bounded, read-only). Dangling
+                 * siblings mean whole-map UAF (root miss), not
+                 * order-specific corruption. */
+                const char *bnames[3] = {"keys", "vals", "state"};
+                void *bbufs[3];
+                bbufs[0] = m->keys;
+                bbufs[1] = m->vals;
+                bbufs[2] = m->state;
+                for (int bxi = 0; bxi < 3; bxi++) {
+                    int bknown =
+                        bbufs[bxi]
+                            ? sl_gc_set_contains(bbufs[bxi])
+                            : -1;
+                    fprintf(stderr, "slang: GC-VALIDATE %s=%p known=%d\n",
+                            bnames[bxi], bbufs[bxi], bknown);
+                }
+                /* Read small targets as strings (bounded by header
+                 * size, capped): key strings ("42") mean keys data
+                 * reached order[]; anything else means foreign data. */
+                if (known && hsize > 0 && hsize <= 32) {
+                    char sbuf[33];
+                    size_t sn = hsize < 32 ? hsize : 32;
+                    memcpy(sbuf, target, sn);
+                    sbuf[sn] = 0;
+                    fprintf(stderr, "slang: GC-VALIDATE target bytes=\"%s\"\n",
+                            sbuf);
+                }
+                /* Is the bad value one of this map's own keys? A yes
+                 * means order content reads like keys content (swapped
+                 * buffers or a keys dump over order). */
+                int inkeys = 0;
+                if (m->keys && m->kstr && m->cap > 0 && m->cap < (1 << 20)) {
+                    for (long long ki = 0; ki < m->cap; ki++) {
+                        const char *kk =
+                            *(const char **)(m->keys +
+                                             (size_t)ki * m->ksz);
+                        if (kk == (const char *)target) {
+                            inkeys = 1;
+                            break;
+                        }
+                    }
+                }
+                fprintf(stderr, "slang: GC-VALIDATE inkeys=%d\n", inkeys);
+                /* The map itself: in-set means a live map with dead
+                 * buffers (barrier/harvest miss); not-in-set means a
+                 * stale trace of swept garbage (stale root). */
+                int mknown = sl_gc_set_contains((void *)m);
+                int mmarked = 0;
+                int mgen = -1;
+                if (mknown) {
+                    sl_gc_obj *mh = (sl_gc_obj *)m - 1;
+                    mmarked = mh->marked;
+                    mgen = mh->gen;
+                }
+                fprintf(stderr,
+                        "slang: GC-VALIDATE mapknown=%d marked=%d gen=%d\n",
+                        mknown, mmarked, mgen);
+                /* Header of the order buffer itself: is it marked,
+                 * what traces it, how big is it? A dead-but-mapped
+                 * chunk (unmarked) means use-after-sweep; a live
+                 * chunk with the wrong size/trace means aliasing. */
+                if (m->order && sl_gc_set_contains(m->order)) {
+                    sl_gc_obj *oh =
+                        (sl_gc_obj *)m->order - 1;
+                    fprintf(stderr,
+                            "slang: GC-VALIDATE orderbuf marked=%d "
+                            "gen=%d size=%zu trace=%p "
+                            "(trace_map=%p trace_arr=%p)\n",
+                            oh->marked, oh->gen, oh->size,
+                            (void *)oh->trace,
+                            (void *)sl_gc_trace_map,
+                            (void *)sl_gc_trace_arr);
+                } else if (m->order) {
+                    fprintf(stderr,
+                            "slang: GC-VALIDATE orderbuf not in gc set\n");
+                    /* Raw header words anyway: the chunk is mapped
+                     * (its content just read fine), so these are the
+                     * current owner's header as left by sweep/reuse.
+                     * Not interpreted -- just dumped. */
+                    sl_gc_obj *oh =
+                        (sl_gc_obj *)m->order - 1;
+                    fprintf(stderr,
+                            "slang: GC-VALIDATE orderbuf raw "
+                            "marked=%d gen=%d remembered=%d size=%zu "
+                            "trace=%p\n",
+                            oh->marked, oh->gen, oh->remembered,
+                            oh->size, (void *)oh->trace);
+                }
+                if (m->order) {
+                    fprintf(stderr, "slang: GC-VALIDATE order head:");
+                    for (long long dj = 0; dj < 8 && dj < m->count;
+                         dj++)
+                        fprintf(stderr, " [%lld]=%lld", dj,
+                                m->order[dj]);
+                    fprintf(stderr, "\nslang: GC-VALIDATE order around "
+                                    "%lld:", vi);
+                    for (long long dj = vi - 3; dj <= vi + 3; dj++) {
+                        if (dj < 0 || dj >= m->count)
+                            continue;
+                        fprintf(stderr, " [%lld]=%lld", dj,
+                                m->order[dj]);
+                    }
+                    fprintf(stderr, "\n");
+                }
+                abort();
+            }
+        }
+    }
     if (m->keys) mark(m->keys);
     if (m->vals) mark(m->vals);
     if (m->state) mark(m->state);
@@ -956,6 +1264,7 @@ static sl_map *sl_map_new(size_t ksz, size_t vsz, int kstr,
     m->vals = (unsigned char *)sl_gc_alloc(8 * vsz, NULL);
     m->state = (unsigned char *)sl_gc_alloc(8, NULL);
     m->order = (long long *)sl_gc_alloc(8 * sizeof(long long), NULL);
+    sl_shadow_record(m);
     return m;
 }
 
@@ -1017,8 +1326,8 @@ static void sl_map_grow(sl_map *m) {
     m->vals = (unsigned char *)sl_gc_alloc((size_t)m->cap * m->vsz, NULL);
     m->state = (unsigned char *)sl_gc_alloc((size_t)m->cap, NULL);
     m->order = (long long *)sl_gc_alloc((size_t)m->cap * sizeof(long long), NULL);
-    (void)ost;
-    /* reinsert in insertion order so iteration stays deterministic */
+    sl_shadow_record(m);
+    (void)ost;    /* reinsert in insertion order so iteration stays deterministic */
     for (long long i = 0; i < ocount; i++) {
         long long slot = oorder[i];
         void *k = ok + (size_t)slot * m->ksz;
@@ -1071,6 +1380,63 @@ static void sl_map_put(sl_map *m, const void *k, const void *v) {
     memcpy(m->vals + (size_t)s * m->vsz, v, m->vsz);
     m->state[s] = 1;
     m->order[m->count++] = s;
+    /* Put-ring (SIGBUS hunt): log installs into OLD maps (map, gen,
+     * remembered-before) so an audit-fire can check whether the
+     * barrier recorded. Ring of 64, debug-only, env-gated with the
+     * auditor (SLANG_GC_AUDIT=1). */
+    static int audit2 = -2;
+    if (audit2 == -2)
+        audit2 = getenv("SLANG_GC_AUDIT") ? 1 : 0;
+    if (audit2) {
+        sl_gc_obj *mh = (sl_gc_obj *)m - 1;
+        if (mh->gen == 1) {
+            unsigned w = sl_putring_i++ % SL_PUTRING_N;
+            sl_putring_m[w] = m;
+            sl_putring_g[w] = mh->gen;
+            sl_putring_r[w] = mh->remembered;
+        }
+    }
+    /* Forced dense collections (SIGBUS hunt): every 512th put trips
+     * a collection at the next checkin, so the tracer validator
+     * observes every map within ~512 puts of each write. Corruption
+     * showing up here is build-phase (writer active amid puts);
+     * corruption showing up only in untimed collections is
+     * post-build. Env-gated (SLANG_GC_FORCE=1), debug-only. */
+    static unsigned long force_ctr = 0;
+    static int force_on = -1;
+    if (force_on < 0)
+        force_on = getenv("SLANG_GC_FORCE") ? 1 : 0;
+    if (force_on && ((++force_ctr & 511) == 0))
+        atomic_store_explicit(&sl_gc_collect_pending, 1,
+                              memory_order_release);
+    /* Order-content check (SIGBUS hunt): verify what was just
+     * written, plus a periodic full scan. Corruption appearing
+     * here (during build, single-threaded puts) means the writer
+     * is active amid puts (signal-time, wild pointer); corruption
+     * appearing only later (tracer validator) means post-build.
+     * Env-gated via the same SLANG_GC_VALIDATE flag. */
+    static int vchk = -1;
+    if (vchk < 0)
+        vchk = getenv("SLANG_GC_VALIDATE") ? 1 : 0;
+    if (vchk) {
+        if (m->order[m->count - 1] != s ||
+            (m->count & 63) == 0) {
+            long long bad = -1;
+            for (long long ci = 0; ci < m->count; ci++) {
+                if (m->order[ci] < 0 || m->order[ci] >= m->cap) {
+                    bad = ci;
+                    break;
+                }
+            }
+            if (bad >= 0 || m->order[m->count - 1] != s) {
+                fprintf(stderr,
+                        "slang: GC-VALIDATE put-corrupt map=%p "
+                        "count=%lld cap=%lld bad=%lld\n",
+                        (void *)m, m->count, m->cap, bad);
+                abort();
+            }
+        }
+    }
     sl_rt_preempt_enable();
 }
 
