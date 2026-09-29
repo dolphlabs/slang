@@ -67,24 +67,24 @@ fn frame_parity() {
     let ci = 0;
     while ci < len(cases) {
         let raw = to_bytes(cases[ci]);
-        let pr = parse(raw);
+        let pr = http.parse(raw);
         guard let want = pr else let e = err_of(pr) {
             die("parity parse case " + to_str(ci) + ": " + e);
         }
-        let fr = parse_frame(raw);
+        let fr = http.parse_frame(raw);
         guard let got = fr else let e = err_of(fr) {
             die("parity frame case " + to_str(ci) + ": " + e);
         }
-        if !method_is(raw, got, want.method) {
+        if !http.method_is(raw, got, want.method) {
             die("parity method case " + to_str(ci));
         }
-        if !path_is(raw, got, want.path) {
+        if !http.path_is(raw, got, want.path) {
             die("parity path case " + to_str(ci));
         }
-        if frame_version(got) != version_flag(want.version) {
+        if http.frame_version(got) != version_flag(want.version) {
             die("parity version case " + to_str(ci));
         }
-        if frame_body(raw, got) != want.body {
+        if http.frame_body(raw, got) != want.body {
             die("parity body case " + to_str(ci));
         }
         ci = ci + 1;
@@ -98,7 +98,7 @@ fn frame_parity() {
     ];
     let bi = 0;
     while bi < len(bad) {
-        let fr = parse_frame(bad[bi]);
+        let fr = http.parse_frame(bad[bi]);
         guard let _g = fr else {
             bi = bi + 1;
             continue;
