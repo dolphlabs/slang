@@ -2559,16 +2559,6 @@ prerequisite, not a different plan).
       bench/, stress_test/ and the zokor repo compiles as before. Tests:
       `pkg_same_basename`, `pkg_native_resolution`.
 
-- [x] **Striped run queues starved the stripes no worker owned.** Fixed
-      2026-09-29. Workers popped from a fixed "own" stripe (hashed from
-      pthread_self) first and only looked elsewhere when it was empty; with
-      16 stripes and fewer workers most stripes had no owner, and a task is
-      always hashed to the same stripe (by its address). Under load those
-      tasks waited seconds: 43-50 of 64 CPU-bound tasks never ran in 1.5 s,
-      and an HTTP server's p99.9 was ~300 ms with a 5 s max and timeouts.
-      Now each worker's scan starts one stripe further on every pop. See
-      next-steps.md #4 for the measurements; test `tests/sched_fairness`.
-
 - [x] **`bench/http`'s server does not exit on SIGTERM.** Fixed
       2026-09-29. Not the accept loop: importing `proc` for anything made
       SIGINT/SIGTERM a flag in every program, and a program that never
@@ -2578,6 +2568,16 @@ prerequisite, not a different plan).
       use (only a program that calls `shutdown_requested` takes the
       signals over) and a second signal always ends the process. Tested
       by the "signals" section of `tests/run_tests.sh`.
+
+- [x] **Striped run queues starved the stripes no worker owned.** Fixed
+      2026-09-29. Workers popped from a fixed "own" stripe (hashed from
+      pthread_self) first and only looked elsewhere when it was empty; with
+      16 stripes and fewer workers most stripes had no owner, and a task is
+      always hashed to the same stripe (by its address). Under load those
+      tasks waited seconds: 43-50 of 64 CPU-bound tasks never ran in 1.5 s,
+      and an HTTP server's p99.9 was ~300 ms with a 5 s max and timeouts.
+      Now each worker's scan starts one stripe further on every pop. See
+      next-steps.md #4 for the measurements; test `tests/sched_fairness`.
 
 - [ ] **Intermittent: `tests/sigpipe` on GitHub's macOS runner.** Failed
       twice in about 255 runs, both inside the full suite; never alone
