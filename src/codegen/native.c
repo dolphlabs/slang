@@ -67,6 +67,8 @@ const char *native_check(CG *cg, const char *pkg, const char *fname,
                  fname, ns->nargs, n);
     if (ns->is_tls)
         cg->want_tls = 1;
+    if (!strcmp(pkg, "proc") && !strcmp(fname, "shutdown_requested"))
+        cg->want_shutdown = 1;
 
     for (int i = 0; i < n; i++) {
         const char *at = infer_type(cg, e->as.call.args[i]);

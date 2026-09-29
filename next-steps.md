@@ -1,6 +1,7 @@
 # next steps
 
-Work top to bottom, one item at a time; tick items as they land.
+Work top to bottom, one item at a time; tick items as they land. Items 2
+and 3 are being worked now.
 
 Everything finished is cleared from this file to keep it short. The full
 write-ups — why each design was chosen, what was measured, which controls
@@ -24,6 +25,13 @@ SIGBUS on clang), generic structs (generics PR 1), and three fixes found while
 testing them: a `gc` struct literal nested in another did not compile, a
 stack-boxed `gc` value's heap fields were never rooted, and `json` of a plain
 struct failed in C instead of saying so.
+
+Landed since (Sep 2026): `own T` box fields rooted and the first pass audit
+(`tests/own_roots`, `tests/audit_roots`, `tests/escape_roots`); the ~5% SIGBUS
+under amplified preemption (#233: the kernel's signal frame overwrote the
+trampoline's resume slot) and the GC-minor crash found beside it (#232:
+container buffers freed out from under a dead old owner); package names from
+dotted directories (#235). Write-ups in `todo.md`.
 
 ## 1. User-defined generics, then zokor
 
@@ -85,14 +93,94 @@ struct failed in C instead of saying so.
   only the DB adapter imports `pg`, every package has tests, routes private by
   default, tenant id an explicit parameter.
 
-## 2. CI on `dev`, not only `main`
+## 2. Servers cannot be stopped by SIGINT or SIGTERM
+
+- [ ] **Found by the 4-way HTTP benchmark (2026-09-29).** Importing `proc`
+  for anything (the bench server only called `proc.getenv`) blocks SIGINT and
+  SIGTERM in every thread and turns them into a flag,
+  `proc.shutdown_requested()`, that the program has to poll. A program that
+  never polls cannot be stopped by Ctrl-C or `kill` at all, only by
+  SIGKILL. Worse, the shutdown hook makes a blocked `accept` return an
+  error, and the usual `guard ... else { continue; }` accept loop retries it
+  forever: measured, the bench server went to 98% of a core after SIGTERM
+  and kept answering requests. So a server cannot do a rolling deploy
+  unless its author knew to poll. zokor's
+  `listen_and_serve` polls and does exit; a plain stdlib `http` server does
+  not. Without `proc` the signals keep their default action and end the
+  process.
+
+  Needs a decision on the contract before code (the README's own description
+  of the mechanism is also stale: it describes a handler on the main thread,
+  and it is a dedicated `sigwait` thread now). The `todo.md` item
+  "`bench/http`'s server does not exit on SIGTERM" is this.
+
+## 3. zokor: dynamic routes and body decoding cost 2-4x plain slang
+
+- [ ] Same benchmark: zokor matches a plain stdlib `http` server on its static
+  route (~70k req/s), but `/users/:id` runs at half the plain server's rate
+  (33.7k vs 66.7k) and `POST /echo` at a quarter (14.6k vs 56.0k), with
+  more wrk timeouts at 50 connections. CPU per request: zokor 131us, plain
+  slang 67us. The extra cost is in zokor's router param path, `Ctx`, and the
+  `dto` decode path, not in slang's `http` or `json` (the plain server uses
+  both). Tracked in detail in zokor's `todo.md`; recorded here because zokor
+  is where slang's HTTP performance gets judged.
+
+## 4. Tail latency under concurrent load
+
+- [ ] **Measured 2026-09-29** (4-way bench, one laptop, wrk -t4, 3 rounds):
+  plain slang's p50 beats Go's (0.3 ms vs 1.1-1.4 ms at 200 connections), but
+  its p99 is 700-860 ms, with 25-155 requests per 10 s run hitting wrk's 2 s
+  timeout; Go net/http's p99 is ~10 ms, Fiber's ~3 ms. The distribution is
+  bimodal: most requests are fast, some stall for up to two seconds.
+
+  **Not the GC.** Under the same load `SLANG_GC_STAT` showed a longest major
+  pause of 1.8 ms and a longest minor of 5.1 ms. `SLANG_SCHED_STAT` showed one
+  park and one resume per request and essentially no preemption. The stalls
+  are between a connection's wakeup and its task running again.
+
+  **First step:** measure, per resume, the time from the reactor seeing the
+  fd ready to the task being dispatched, as a histogram, to split "the
+  reactor delivers late" from "the run queue waits". Live hypotheses: the
+  global doorbell (one broadcast per push), per-worker queue unfairness, and
+  lost wakeups rescued by a later event. No algorithm change without a
+  measurement that names the stage.
+
+## 5. Per-request allocation in stdlib `http`
+
+- [ ] A static `GET /` answered by a plain stdlib `http` server costs about
+  24 GC allocations and ~1.5 KB per request (`SLANG_GC_STAT`, 750k requests).
+  Throughput is 55-70k req/s against Go net/http's 87-108k and Fiber's
+  110-125k; CPU per request 67 us against 45 us and 31 us. Peak memory is
+  already the lowest of the four (9.2 MB against 13.5-17.9 MB), so this is a
+  CPU item. Start from where those 24 allocations come from.
+
+## 6. x86_64 trampoline calls C with a possibly misaligned stack
+
+- [ ] The async-preemption trampoline preserves the interrupted `%rsp`'s
+  alignment and calls `sl_preempt_yield` with it, so C code can run with
+  `%rsp` 8 bytes off the System V 16-byte requirement (an interrupt can land
+  anywhere, including between a `call` and its callee's `push`). No failure
+  observed -- the callees happen not to use aligned SSE spills -- but it is
+  an ABI violation waiting for a compiler to exploit it.
+
+## 7. Minor GCs trace every roots-reachable old object
+
+- [ ] The minor's root phase uses the full mark (a phase-2 band-aid for
+  intra-expression C locals), so every minor walks the whole live old heap
+  reachable from roots. That undercuts the nursery's point. A CPU item now
+  that #4 has ruled the GC out of the tail. See
+  `runtime/GENERATIONAL_GC_HANDOFF.md` before touching it.
+
+## 8. CI on `dev`, not only `main`
 
 - [ ] `.github/workflows/ci.yml` runs on a push to `main`, on manual
   dispatch and on a published release. **Nothing runs on a pull request to
   `dev` or a push to `dev`**, so a change reaches `dev` verified only by
   whoever opened it.
 
-  That has been true of every PR since the last clear-out. Each of #157,
+  `dev` → `main` merges do run it (green on 2026-09-29), so problems
+  surface, but only after merging. That has been true of every PR since the
+  last clear-out. Each of #157,
   #159–#162, #164 and #165 was checked by hand, on macOS and in an Ubuntu
   24.04 container, never on arm64 and never on GitHub's runners. The tree of
   `dev` at `f9680d1` did pass the full suite that way (243 on macOS and on
@@ -109,79 +197,7 @@ struct failed in C instead of saying so.
   fast legs; the arm64 legs and the live Postgres job are slower, and the
   file's own constraint stands (nothing in it may reach the internet).
 
-## 3. `own T` boxes are not rooted
-
-- [ ] **A memory-safety bug on `dev`, found while fixing #174.** `own T` is a
-  malloc'd box, and `type_has_gc_roots(own Rec)` is false, so a variable of
-  that type never enters a live set and the heap objects its fields hold (a
-  `str`, a list) are not roots at a safepoint. Whatever they point at can be
-  freed while the box is in use:
-
-  ```slang
-  struct Rec { name: str, items: [int] }
-  fn take(r: own Rec) -> int {
-      churn();                       // allocates
-      return len(r.name) + len(r.items);   // 0, not 8, under
-  }                                        // SLANG_GC_THRESHOLD_KB=16
-  ```
-
-  It is not limited to the stack: the box in `take` came from `main`'s heap
-  path. The fix is in how `own` is traced: either root the box's fields the way
-  #174 does for a stack-boxed `gc` value, or make an `own` box with GC fields a
-  tracked object. Restrict what `own` may hold instead if that is simpler and
-  the README says so. Any fix needs a test that fails under the 16 KB
-  threshold first.
-
-## 4. Audit: values a compiler pass cannot see
-
-- [ ] Two memory-safety bugs of one shape, found in a row (#164, #165): a
-  compiler pass walks an expression's children by hand, and a child it never
-  visits is invisible to it. Liveness then thinks the value died at its last
-  *visible* use and does not root it, so a collection frees it; the move pass
-  leaves a drop flag set, so something is freed twice.
-
-  #165 was the worse one: a list of functions used only as a callee
-  (`handlers[name](req)`) crashed at the **default** GC threshold, 3 runs in
-  3, and `spawn handlers[i](job);`, which the README documents, did too.
-
-  **The `-Wswitch-enum` audit run for #164 does not cover this.** It finds
-  expression *kinds* a switch lacks a case for. #165 was a missing *child* of
-  a kind that was handled: `EX_CALL` had a case, and the case ignored
-  `call.callee`. Every pass has a `default:` that ignores an unhandled kind
-  silently, so neither failure is a compile error.
-
-  **Approach:** for every pass that walks the tree by hand (liveness, move,
-  borrow, escape, mir, the enum rewrite), list every child of every `Expr`
-  and `Stmt` kind (`select` arms, `guard let`, `for … in` iterables, struct
-  and map literals, `spawn`, slices, `??`) and, for each, write a program
-  whose value is used *only* there, with an allocating call before it, run
-  under `SLANG_GC_THRESHOLD_KB=16`. A crash or a wrong result is the finding.
-  A test that passes on the broken compiler proves nothing, so each new test
-  must be shown to fail on the code before its fix.
-
-  **A lead, not a finding:** a local used only inside a callee that also
-  contains a call taking a GC argument is protected today by the *outer*
-  call's safepoint bracket. No failure was found, but it was not proved that
-  the entry checkin cannot collect it under several workers.
-
-  **Adjacent, low priority, no failure found — do not fix without one:** the
-  runtime does not save or restore `errno` across a task switch, and about 64
-  reads of it (`sl_net.c` 33, `sl_os.c` 11, `sl_fs.c` 9, `sl_tls.c` 7) sit
-  between a syscall and the check of its result. The `Bad file descriptor`
-  flake that first pointed here was not this (#159): async preemptions were
-  zero in that test.
-
-## 5. The ~5% SIGBUS under amplified preemption
-
-- [ ] Find and fix it.
-
-  Open the longest. `todo.md` records the signature, three explanations
-  already tested and eliminated (do not re-chase them), and a concrete next
-  step: poison the trampoline's resume-target slot on entry and validate
-  it before the final `jmp`, turning corruption into a detection at the
-  moment it happens.
-
-## 6. Remote benchmarks
+## 9. Remote benchmarks
 
 - [ ] Run the cross-language suite on a Linux host and record it in
   `bench/RESULTS.md` as its own run.
@@ -199,7 +215,7 @@ struct failed in C instead of saying so.
   - the Java `api` heavy tier should now build (a `.gitignore` pattern had
     been hiding its `Main.java`); check that it does.
 
-## 7. Language gaps found and left alone
+## 10. Language gaps found and left alone
 
 - [ ] **`spawn fns[i](x)` as an expression** (`let t = spawn fns[i](x);`) is a
   parse error: `spawn` in expression position takes only a named call. The
@@ -226,7 +242,18 @@ struct failed in C instead of saying so.
   `term_height` are polled; there is no event, and a mouse report decodes to
   `"unknown"`.
 
-## 8. Command-line programs: what is still missing
+## 11. Pass audit: leads with no failure found
+
+- [ ] Closed as an audit (see `todo.md`, "Pass audit, first findings"). Left
+  open, neither with a failure to show for it -- do not fix without one:
+  - a local used only inside a callee that also contains a call taking a GC
+    argument is protected today by the *outer* call's safepoint bracket; it
+    was not proved that the entry checkin cannot collect it under several
+    workers;
+  - the runtime does not save or restore `errno` across a task switch, and
+    about 64 reads of it sit between a syscall and the check of its result.
+
+## 12. Command-line programs: what is still missing
 
 - [ ] A line-editing helper built on `io.read_key`: cursor movement, history,
   a prompt that redraws. Not scoped. Candidate only; worth deciding whether
