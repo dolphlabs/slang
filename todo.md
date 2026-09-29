@@ -2924,3 +2924,20 @@ or context-switch save/restore). Next instruments queued: dispatch
 seal (acq>comp at run-loop pop -- built, awaiting crash coincidence),
 crash-dump handler (task flags/chain/stack at fault -- landed one
 NULL-chan deref: running task, live chain).
+
+## SIGBUS hunt: GC-minor line (Sep 28 2026, branch fix/gc-minor-sweep)
+
+Redirected from scheduler (all lifecycle traps silent) to GC minors:
+- Nursery monotone: 16KB ~45%, 512KB ~40%, 1GB 0/20. Minors required.
+- Non-amplified tiny-threshold (majors only): clean. Minors, not majors.
+- Pristine dev crashes 4/12 at tiny nursery: bug is in shipped code.
+- Fullmark-bisector minors (no mark_minor splits) still crash: the
+  old-marked-not-traced split is NOT required.
+- Map tracer faults on order[] holding heap pointers with intact
+  headers (count=200 cap=512, distinct adjacent buffers). orderbuf
+  not in GC set; raw headers incoherent (not a swept GC chunk).
+  Pre-sweep old-map auditor stays silent.
+- Forced dense collections: 0/15 clean. Put-time verification:
+  0/15 clean (likely Heisenbug slowdown, not mechanism).
+- Next: workload bisection (maps vs no-maps first), then the
+  remaining writer candidates for order[] content.
