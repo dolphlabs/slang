@@ -108,7 +108,7 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
             char *alias = p->prog->import_aliases && p->prog->import_aliases[j]
                               ? p->prog->import_aliases[j]
                               : path_base(ipath);
-            import_push(cg, p->name, alias, pkg_name_of_path(ipath));
+            import_push(cg, p->name, alias, pkgs[p->import_pkg[j]].name);
         }
     }
 
