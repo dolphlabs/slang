@@ -1218,6 +1218,15 @@ a number`. Malformed input is a decode error, never a crash — the
 parser caps nesting depth at 512 so adversarial input can't blow the
 C stack.
 
+Integers decode exactly, from the number as written: a 64-bit id such
+as `9007199254740993` arrives intact (it is not routed through a
+`double`, which is exact only up to 2^53), and every value an integer
+type can hold is accepted, its limits included. A whole number written
+with a fraction or exponent is still an integer (`1e3` is 1000, `5.0`
+is 5); `1.5` or `1e-1` is `expected an integer`, and a value outside
+the target type's range is `value … out of range for i8` (or `int`,
+`u64`, …). Floats decode through a `double`, as before.
+
 #### `proc`
 
 Graceful shutdown and environment variables. `proc.shutdown_requested()`
@@ -2956,7 +2965,9 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
 - **`spawn f(args...);`** evaluates every argument in the spawning
   context (no closures — nothing is captured implicitly) and submits
   `f` as a growable-stack task on the striped run queues (16 hashed
-  stripes with work-stealing, plus a global doorbell for sleepers).
+  stripes, plus a global doorbell for sleepers). Every worker scans the
+  stripes from a starting point that moves on each pop, so every stripe
+  is served at the same rate and no runnable task waits indefinitely.
   `f` may be a plain top-level function, an `extern fn`, or a
   **function value** (`spawn w(1, out);`, `spawn job.run(x);`) — not a
   method and not a builtin. There is no `spawn` on `net.*`/`time.*`

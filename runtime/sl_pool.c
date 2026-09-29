@@ -104,15 +104,37 @@ static void sl_runq_stripe_push(sl_task *t) {
     pthread_mutex_unlock(&sl_global_runq.mu);
 }
 
-/* Own stripe first (thread-hash), then steal siblings round-robin with
-    trylock only: never blocks holding one stripe while waiting on
-    another. NULL when every stripe is empty or contended. */
+/* Where this worker's next scan of the stripes starts. It moves one
+    stripe on every pop, so each worker visits every stripe first equally
+    often; the per-thread offset keeps workers from all starting at the
+    same stripe (and contending on its lock).
+
+    This is what keeps the stripes fair. The scan used to start at a
+    fixed "own" stripe, hashed from pthread_self: with 16 stripes and 8
+    workers at least 8 stripes had no owner, and a task hashed into one
+    of those (by its address, so the same connection every time) waited
+    until every owner found its own stripe empty -- which under load is
+    rarely. Measured with every request's latency recorded (200 keep-alive
+    connections, GET /): a p99.9 of ~300 ms, a max of ~5 s, and requests
+    timing out, all from the same few connections; a single global FIFO
+    had a p99.9 of 6-12 ms at the same throughput.
+
+    Only ever called from a worker's own run loop, on its native stack
+    (never async-preempted), so the thread-local needs no care. */
+static _Thread_local unsigned sl_runq_scan_cursor;
+
+static unsigned sl_runq_scan_start(void) {
+    unsigned offset = (unsigned)(uintptr_t)(void *)pthread_self() * 0x9e3779b1u;
+    return (offset + sl_runq_scan_cursor++) % (unsigned)SL_RUNQ_STRIPES;
+}
+
+/* Every stripe from this pop's rotating start, with trylock only: never
+    blocks holding one stripe while waiting on another. NULL when every
+    stripe is empty or contended. */
 static sl_task *sl_runq_stripe_try_pop(void) {
-    unsigned mine =
-        ((unsigned)(uintptr_t)(void *)pthread_self() * 0x9e3779b1u) %
-        (unsigned)SL_RUNQ_STRIPES;
+    unsigned start = sl_runq_scan_start();
     for (int k = 0; k < SL_RUNQ_STRIPES; k++) {
-        unsigned i = (mine + (unsigned)k) % (unsigned)SL_RUNQ_STRIPES;
+        unsigned i = (start + (unsigned)k) % (unsigned)SL_RUNQ_STRIPES;
         sl_runq_stripe *q = &sl_runq_stripes[i];
         if (pthread_mutex_trylock(&q->mu) != 0)
             continue;
@@ -133,15 +155,13 @@ static sl_task *sl_runq_stripe_try_pop(void) {
 }
 
 /* Striped pop for use while already holding the global doorbell mutex:
-    same steal order as try_pop but with blocking locks, since the
+    same rotating order as try_pop but with blocking locks, since the
     caller already owns sl_global_runq.mu and short critical sections
     cannot deadlock here. */
 static sl_task *sl_runq_stripe_pop_locked(void) {
-    unsigned mine =
-        ((unsigned)(uintptr_t)(void *)pthread_self() * 0x9e3779b1u) %
-        (unsigned)SL_RUNQ_STRIPES;
+    unsigned start = sl_runq_scan_start();
     for (int k = 0; k < SL_RUNQ_STRIPES; k++) {
-        unsigned i = (mine + (unsigned)k) % (unsigned)SL_RUNQ_STRIPES;
+        unsigned i = (start + (unsigned)k) % (unsigned)SL_RUNQ_STRIPES;
         sl_runq_stripe *q = &sl_runq_stripes[i];
         pthread_mutex_lock(&q->mu);
         sl_task *t = q->head;

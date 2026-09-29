@@ -8,7 +8,10 @@ struct sl_json_val {
     sl_jv_kind kind;
     union {
         bool b;
-        double num;
+        /* The literal as written, next to its double: the double is
+         * exact only up to 2^53, so integers decode from the text (see
+         * sl_json_num_int). Fits the union without growing it. */
+        struct { double d; char *text; } num;
         char *str;
         struct { sl_json_val **items; long long len; } arr;
         struct { char **keys; sl_json_val **vals; long long len; } obj;
@@ -26,6 +29,9 @@ struct sl_json_val {
 static void sl_gc_trace_json_val(void *p, void (*mark)(void *)) {
     sl_json_val *v = (sl_json_val *)p;
     switch (v->kind) {
+    case SL_JV_NUM:
+        mark(v->as.num.text);
+        break;
     case SL_JV_STR:
         mark(v->as.str);
         break;
@@ -249,7 +255,8 @@ static sl_json_val *sl_jparse_number(sl_jparser *p) {
     memcpy(tmp, p->s + start, (size_t)n);
     tmp[n] = 0;
     sl_json_val *v = sl_jv_new(SL_JV_NUM);
-    v->as.num = strtod(tmp, NULL);
+    v->as.num.d = strtod(tmp, NULL);
+    v->as.num.text = tmp;
     return v;
 }
 
@@ -440,7 +447,7 @@ static bool sl_json_dec_num(sl_json_val *v, double *out, char **err) {
         *err = sl_json_errf("expected a number, got %s", sl_json_kind_name(v));
         return false;
     }
-    *out = v->as.num;
+    *out = v->as.num.d;
     return true;
 }
 
@@ -515,52 +522,164 @@ static bool sl_json_dec_bytes(sl_json_val *v, sl_bytes **out, char **err) {
     return true;
 }
 
-/* Casting an out-of-range double to long long is undefined behavior,
- * so the magnitude check must come BEFORE any cast -- never after,
- * and never combined into the same expression as one. */
-#define SL_JSON_INT_DEC(NAME, T, LO, HI)                                    \
+/* ---- json: exact integer decoding ----
+ *
+ * Integers decode from the number's text, never from its double. The
+ * double is exact only up to 2^53, so 9007199254740993 -- an ordinary
+ * 64-bit id -- used to come back as 9007199254740992, silently: the
+ * rounded value is itself an integer, so no check could notice. The
+ * text is exact, and it is still the JSON grammar's number (the parser
+ * validated it), so exponent and fraction forms keep working exactly:
+ * 1e3 is 1000 and 5.0 is 5, while 1.5 and 1e-1 are not integers.
+ */
+enum { SL_JSON_INT_OK, SL_JSON_INT_FRACTION, SL_JSON_INT_TOO_BIG };
+
+/* Magnitude and sign of `s`, a validated JSON number, when it is an
+ * integer: SL_JSON_INT_OK, else _FRACTION (not a whole number) or
+ * _TOO_BIG (magnitude above UINT64_MAX). No allocation. */
+static int sl_json_num_int(const char *s, bool *neg,
+                           unsigned long long *mag) {
+    *neg = false;
+    *mag = 0;
+    if (*s == '-') {
+        *neg = true;
+        s++;
+    }
+    const char *ip = s;
+    while (*s >= '0' && *s <= '9') s++;
+    size_t ilen = (size_t)(s - ip);
+    const char *fp = s;
+    size_t flen = 0;
+    if (*s == '.') {
+        fp = ++s;
+        while (*s >= '0' && *s <= '9') s++;
+        flen = (size_t)(s - fp);
+    }
+    /* An exponent past this many digits cannot leave a nonzero value
+     * inside 64 bits, nor a whole number out of a fraction -- clamping
+     * keeps the arithmetic below from overflowing on "1e99999999". */
+    long long exp = 0;
+    if (*s == 'e' || *s == 'E') {
+        s++;
+        bool eneg = false;
+        if (*s == '+' || *s == '-') eneg = (*s++ == '-');
+        while (*s >= '0' && *s <= '9') {
+            if (exp < 1000000) exp = exp * 10 + (*s - '0');
+            s++;
+        }
+        if (eneg) exp = -exp;
+    }
+    /* The value is D * 10^scale, D being every digit written (integer
+     * part then fraction) and scale the exponent less the fraction's
+     * length. */
+    size_t n = ilen + flen;
+    long long scale = exp - (long long)flen;
+    size_t keep = n; /* digits of D that land left of the decimal point */
+    if (scale < 0) {
+        unsigned long long drop = (unsigned long long)(-scale);
+        keep = drop >= n ? 0 : n - (size_t)drop;
+        for (size_t i = keep; i < n; i++) {
+            char c = i < ilen ? ip[i] : fp[i - ilen];
+            if (c != '0') return SL_JSON_INT_FRACTION;
+        }
+    }
+    unsigned long long acc = 0;
+    for (size_t i = 0; i < keep; i++) {
+        char c = i < ilen ? ip[i] : fp[i - ilen];
+        if (__builtin_mul_overflow(acc, 10ULL, &acc) ||
+            __builtin_add_overflow(acc, (unsigned long long)(c - '0'), &acc))
+            return SL_JSON_INT_TOO_BIG;
+    }
+    if (acc != 0) {
+        for (long long k = 0; k < scale; k++) {
+            if (__builtin_mul_overflow(acc, 10ULL, &acc))
+                return SL_JSON_INT_TOO_BIG;
+        }
+    }
+    *mag = acc;
+    return SL_JSON_INT_OK;
+}
+
+/* Decode into a signed type whose range is [lo, hi]. */
+static bool sl_json_dec_signed(sl_json_val *v, long long lo, long long hi,
+                               const char *tname, long long *out,
+                               char **err) {
+    double unused;
+    if (!sl_json_dec_num(v, &unused, err)) return false;
+    const char *text = v->as.num.text;
+    bool neg;
+    unsigned long long mag;
+    int st = sl_json_num_int(text, &neg, &mag);
+    if (st == SL_JSON_INT_FRACTION) {
+        *err = sl_json_errf("expected an integer, got %s", text);
+        return false;
+    }
+    /* |lo| as unsigned, without negating LLONG_MIN in signed arithmetic */
+    unsigned long long neg_lim = lo < 0 ? (unsigned long long)(-(lo + 1)) + 1 : 0;
+    if (st == SL_JSON_INT_TOO_BIG ||
+        (!neg && mag > (unsigned long long)hi) || (neg && mag > neg_lim)) {
+        *err = sl_json_errf("value %s out of range for %s", text, tname);
+        return false;
+    }
+    if (!neg || mag == 0)
+        *out = (long long)mag;
+    else
+        *out = -(long long)(mag - 1) - 1;
+    return true;
+}
+
+/* Decode into an unsigned type whose range is [0, hi]. */
+static bool sl_json_dec_unsigned(sl_json_val *v, unsigned long long hi,
+                                 const char *tname, unsigned long long *out,
+                                 char **err) {
+    double unused;
+    if (!sl_json_dec_num(v, &unused, err)) return false;
+    const char *text = v->as.num.text;
+    bool neg;
+    unsigned long long mag;
+    int st = sl_json_num_int(text, &neg, &mag);
+    if (st == SL_JSON_INT_FRACTION) {
+        *err = sl_json_errf("expected an integer, got %s", text);
+        return false;
+    }
+    if (neg && mag != 0) {
+        *err = sl_json_errf("expected a non-negative integer, got %s", text);
+        return false;
+    }
+    if (st == SL_JSON_INT_TOO_BIG || mag > hi) {
+        *err = sl_json_errf("value %s out of range for %s", text, tname);
+        return false;
+    }
+    *out = mag;
+    return true;
+}
+
+#define SL_JSON_SIGNED_DEC(NAME, T, LO, HI, TNAME)                          \
     static bool NAME(sl_json_val *v, T *out, char **err) {                  \
-        double d;                                                           \
-        if (!sl_json_dec_num(v, &d, err)) return false;                     \
-        if (d < -9223372036854775808.0 || d >= 9223372036854775808.0) {     \
-            *err = sl_json_errf("value %g out of range", d);                \
-            return false;                                                  \
-        }                                                                   \
-        long long ll = (long long)d;                                        \
-        if ((double)ll != d) {                                              \
-            *err = sl_json_errf("expected an integer, got %g", d);          \
-            return false;                                                  \
-        }                                                                   \
-        if (ll < (long long)(LO) || ll > (long long)(HI)) {                 \
-            *err = sl_json_errf("value %lld out of range", ll);             \
-            return false;                                                  \
-        }                                                                   \
-        *out = (T)ll;                                                       \
+        long long x;                                                        \
+        if (!sl_json_dec_signed(v, (LO), (HI), TNAME, &x, err))             \
+            return false;                                                   \
+        *out = (T)x;                                                        \
         return true;                                                        \
     }
 
-SL_JSON_INT_DEC(sl_json_dec_i8, int8_t, INT8_MIN, INT8_MAX)
-SL_JSON_INT_DEC(sl_json_dec_i16, int16_t, INT16_MIN, INT16_MAX)
-SL_JSON_INT_DEC(sl_json_dec_i32, int32_t, INT32_MIN, INT32_MAX)
-SL_JSON_INT_DEC(sl_json_dec_u8, uint8_t, 0, UINT8_MAX)
-SL_JSON_INT_DEC(sl_json_dec_u16, uint16_t, 0, UINT16_MAX)
-SL_JSON_INT_DEC(sl_json_dec_u32, uint32_t, 0, UINT32_MAX)
+#define SL_JSON_UNSIGNED_DEC(NAME, T, HI, TNAME)                            \
+    static bool NAME(sl_json_val *v, T *out, char **err) {                  \
+        unsigned long long x;                                               \
+        if (!sl_json_dec_unsigned(v, (HI), TNAME, &x, err))                 \
+            return false;                                                   \
+        *out = (T)x;                                                        \
+        return true;                                                        \
+    }
 
-static bool sl_json_dec_i64(sl_json_val *v, int64_t *out, char **err) {
-    double d;
-    if (!sl_json_dec_num(v, &d, err)) return false;
-    if (d < -9223372036854775808.0 || d >= 9223372036854775808.0) {
-        *err = sl_json_errf("value %g out of range for i64", d);
-        return false;
-    }
-    long long ll = (long long)d;
-    if ((double)ll != d) {
-        *err = sl_json_errf("expected an integer, got %g", d);
-        return false;
-    }
-    *out = (int64_t)ll;
-    return true;
-}
+SL_JSON_SIGNED_DEC(sl_json_dec_i8, int8_t, INT8_MIN, INT8_MAX, "i8")
+SL_JSON_SIGNED_DEC(sl_json_dec_i16, int16_t, INT16_MIN, INT16_MAX, "i16")
+SL_JSON_SIGNED_DEC(sl_json_dec_i32, int32_t, INT32_MIN, INT32_MAX, "i32")
+SL_JSON_UNSIGNED_DEC(sl_json_dec_u8, uint8_t, UINT8_MAX, "u8")
+SL_JSON_UNSIGNED_DEC(sl_json_dec_u16, uint16_t, UINT16_MAX, "u16")
+SL_JSON_UNSIGNED_DEC(sl_json_dec_u32, uint32_t, UINT32_MAX, "u32")
+SL_JSON_SIGNED_DEC(sl_json_dec_i64, int64_t, INT64_MIN, INT64_MAX, "i64")
+SL_JSON_UNSIGNED_DEC(sl_json_dec_u64, uint64_t, UINT64_MAX, "u64")
 
 /* slang's `int` is C `long long`, while `i64` and `duration` are
  * `int64_t`. On macOS those are the same type; on Linux glibc int64_t is
@@ -568,32 +687,9 @@ static bool sl_json_dec_i64(sl_json_val *v, int64_t *out, char **err) {
  * int64_t* was passed a long long* and GCC rejected it as an incompatible
  * pointer. One decoder per C type, sharing the range and integrality
  * checks, keeps both exact on every platform. */
-static bool sl_json_dec_int(sl_json_val *v, long long *out, char **err) {
-    int64_t tmp;
-    if (!sl_json_dec_i64(v, &tmp, err)) return false;
-    *out = (long long)tmp;
-    return true;
-}
-
-static bool sl_json_dec_u64(sl_json_val *v, uint64_t *out, char **err) {
-    double d;
-    if (!sl_json_dec_num(v, &d, err)) return false;
-    if (d < 0) {
-        *err = sl_json_errf("expected a non-negative integer, got %g", d);
-        return false;
-    }
-    if (d >= 18446744073709551616.0) {
-        *err = sl_json_errf("value %g out of range for u64", d);
-        return false;
-    }
-    unsigned long long ull = (unsigned long long)d;
-    if ((double)ull != d) {
-        *err = sl_json_errf("expected an integer, got %g", d);
-        return false;
-    }
-    *out = (uint64_t)ull;
-    return true;
-}
+/* long long is 64 bits on every platform slang supports, so int's range
+ * is i64's; stdint.h's limits avoid adding limits.h to every program. */
+SL_JSON_SIGNED_DEC(sl_json_dec_int, long long, INT64_MIN, INT64_MAX, "int")
 
 static bool sl_json_dec_f32(sl_json_val *v, float *out, char **err) {
     double d;
