@@ -2663,6 +2663,16 @@ prerequisite, not a different plan).
       thread): without SA_ONSTACK it reads back as a stack pointer on the
       first delivery.
 
+- [x] **The x86_64 async trampoline called C on a misaligned stack.**
+      Fixed 2026-09-29. Its save block is 784 bytes, a multiple of 16, so
+      `sl_preempt_yield` and the two helpers after it ran with whatever
+      alignment the interrupted %rsp had: 8 off in 17-21% of async
+      preemptions, measured. Nothing crashed only because no callee
+      happened to spill SSE with an aligned store. The trampoline now
+      rounds %rsp down for its calls (the unaligned value kept in %rbx).
+      `SLANG_SCHED_STAT` reports `misaligned_preempts`, and the suite
+      requires it to be 0 (next-steps.md #6).
+
       `concurrent_compute`, 6000 tasks, default nursery, amplified
       preemption, with the GC-minor fix present in both arms: **6/70
       SIGBUS without the altstack, 0/70 with it** (30 + 40 runs per arm,
