@@ -421,6 +421,10 @@ for byte in b { ... }      // iterate byte values
 `bytes` values carry an explicit length and may contain NULs — safe for
 network buffers and binary formats.
 
+A non-empty literal is a fresh copy each time it is evaluated, since it can
+be written through `b[i] = v`. An empty `b""` allocates nothing: every
+evaluation is the same shared empty value, which no operation can change.
+
 #### Lists `[T]`
 
 ```slang
@@ -2871,11 +2875,20 @@ from `bytes`, or `read` from a connection into a caller-sized `wire`
 (the max request size). `read` takes the unconsumed prefix length and
 returns `Incoming` with leftover compacted to the front of the wire,
 so one connection can carry many requests. `write` serializes a
-`Response` through an arena. Headers are stored lowercased;
-`header(req, name)` looks up case-insensitively. A body is framed by
+`Response` through an arena. A request keeps its header block as it
+arrived; `header(req, name)` looks it up case-insensitively. A body is framed by
 `Content-Length` or by `Transfer-Encoding: chunked` (chunk extensions
 ignored, trailers read and discarded). `wants_close` follows HTTP/1.1
-keep-alive (and HTTP/1.0 close-by-default).
+keep-alive (and HTTP/1.0 close-by-default). A request with no header
+lines at all (`GET / HTTP/1.0` and a blank line) is accepted.
+
+`read` is the hot path, so it allocates only what the request it returns
+holds: the path, one copy of the header block, the body when there is
+one, and the `Request`/`Incoming` around them. The common methods (`GET`,
+`HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`) and both versions come
+back as literals, and `wants_close` decides from the header block in
+place. A plain `GET` costs 7 GC allocations; `tests/run_tests.sh` holds it
+to that.
 
 Framing decides where a request ENDS, so it is a security boundary: if a
 proxy in front and this server frame the same bytes differently, the

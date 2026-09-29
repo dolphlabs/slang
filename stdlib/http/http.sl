@@ -418,7 +418,10 @@ fn conn_value_wire(raw: wire, vlo: int, vhi: int) -> int {
     return 3;
 }
 
-fn scan_headers_wire(raw: wire, start: int, sep: int) -> result[HeaderScan, str] {
+// HeaderScan's pass over the socket buffer, its verdicts written into
+// `hd` (see WireHead) rather than returned as a HeaderScan inside a
+// result: "" when the block scanned clean, else the error.
+fn scan_headers_wire(raw: wire, start: int, sep: int, hd: WireHead) -> str {
     let i = start;
     let has_cl = false;
     let cl_lo = 0;
@@ -429,17 +432,17 @@ fn scan_headers_wire(raw: wire, start: int, sep: int) -> result[HeaderScan, str]
     while i < sep {
         let eol = find_crlf_wire(raw, i);
         if eol < 0 || eol > sep {
-            return err("malformed header");
+            return "malformed header";
         }
         if eol == i {
             break;
         }
         if is_ows(raw[i]) {
-            return err("folded header");
+            return "folded header";
         }
         let colon = byteutil.find_wire(raw, i, 58);
         if colon < 0 || colon >= eol || colon == i {
-            return err("malformed header");
+            return "malformed header";
         }
         let vlo = colon + 1;
         let vhi = eol;
@@ -451,14 +454,14 @@ fn scan_headers_wire(raw: wire, start: int, sep: int) -> result[HeaderScan, str]
         }
         if is_content_length_wire(raw, i, colon) {
             if has_cl {
-                return err("repeated content-length header");
+                return "repeated content-length header";
             }
             has_cl = true;
             cl_lo = vlo;
             cl_hi = vhi;
         } else if is_transfer_encoding_wire(raw, i, colon) {
             if has_te {
-                return err("repeated transfer-encoding header");
+                return "repeated transfer-encoding header";
             }
             has_te = true;
             te_chunked = value_is_chunked_wire(raw, vlo, vhi);
@@ -469,13 +472,14 @@ fn scan_headers_wire(raw: wire, start: int, sep: int) -> result[HeaderScan, str]
         }
         i = eol + 2;
     }
-    return ok(HeaderScan {
-        raw_headers: b"",
-        has_content_length: has_cl, cl_lo: cl_lo, cl_hi: cl_hi,
-        has_transfer_encoding: has_te, te_is_chunked: te_chunked,
-        conn: conn,
-        end: i
-    });
+    hd.has_content_length = has_cl;
+    hd.cl_lo = cl_lo;
+    hd.cl_hi = cl_hi;
+    hd.has_transfer_encoding = has_te;
+    hd.te_is_chunked = te_chunked;
+    hd.conn = conn;
+    hd.headers_end = i;
+    return "";
 }
 
 fn is_content_length(raw: bytes, lo: int, hi: int) -> bool {
@@ -829,10 +833,6 @@ fn incomplete(need: int) -> Framing {
     return Framing { complete: false, end: 0, need: need, body: b"", body_lo: 0 };
 }
 
-fn need_more(need: int) -> Framing {
-    return Framing { complete: false, end: 0, need: need, body: b"", body_lo: 0 };
-}
-
 fn hex_val(b: int) -> int {
     if b >= 48 && b <= 57 { return b - 48; }
     if b >= 97 && b <= 102 { return b - 87; }
@@ -1064,16 +1064,15 @@ fn scan_chunked(raw: bytes, start: int) -> result[Framing, str] {
     return err("unreachable");
 }
 
-fn frame_head_wire(buf: wire, n: int) -> result[Head, str] {
+// Frames and parses the head in buf[0..n] into `hd`: "" once the head
+// is complete and valid, "need more" while its blank line has not
+// arrived, else the request's error.
+fn frame_head_wire(buf: wire, n: int, hd: WireHead) -> str {
     let sep = find_blank_line_wire(buf, n);
     if sep < 0 {
-        return err("need more");
+        return "need more";
     }
-    let hd = parse_head_wire(buf, sep, n);
-    guard let h = hd else {
-        return err(err_of(hd));
-    }
-    return ok(h);
+    return parse_head_wire(buf, sep, n, hd);
 }
 
 fn frame(raw: bytes, hs: HeaderScan, sep: int,
@@ -1122,17 +1121,123 @@ gc struct Head {
     sep: int,
 }
 
-fn parse_head_wire(raw: wire, sep: int, n: int) -> result[Head, str] {
+// The socket path's parse of one request, in ONE object. `read` and
+// `read_frame` used to thread it through four results -- Head,
+// HeaderScan, Framing, and frame_head_wire's re-wrap of the first --
+// and in slang every ok()/err() is an allocation, as is each struct
+// inside one: seven per request, on top of the fields themselves.
+// Now each parse attempt allocates one WireHead (after its bytes have
+// arrived -- see `read` on why that placement matters), and the helpers
+// below fill it and return their error as a str ("" = none). Private to
+// this file:
+// every field is meaningful only after the helper that writes it
+// returned "", and `parse` (the bytes path) keeps Head/HeaderScan.
+gc struct WireHead {
+    // parse_head_wire
+    method: str,
+    path: str,
+    version: str,
+    headers: bytes,
+    sep: int,
+    // scan_headers_wire: HeaderScan's verdicts, same meanings
+    has_content_length: bool,
+    cl_lo: int,
+    cl_hi: int,
+    has_transfer_encoding: bool,
+    te_is_chunked: bool,
+    conn: int,
+    headers_end: int,
+    // frame_body_wire: Framing's verdict, same meanings
+    complete: bool,
+    end: int,
+    need: int,
+    body: bytes,
+}
+
+fn new_wire_head() -> WireHead {
+    return WireHead {
+        method: "", path: "", version: "", headers: b"", sep: 0,
+        has_content_length: false, cl_lo: 0, cl_hi: 0,
+        has_transfer_encoding: false, te_is_chunked: false, conn: 0,
+        headers_end: 0,
+        complete: false, end: 0, need: 0, body: b""
+    };
+}
+
+// The method in raw[0..hi] as a str. The common methods come back as
+// literals -- static, never allocated, and indistinguishable to a
+// caller since str == compares content -- so a GET costs nothing
+// here. Methods are case-sensitive (RFC 9110 9.1), so anything else,
+// "get" included, is copied out exactly as it arrived.
+fn method_from_wire(raw: wire, hi: int) -> str {
+    if hi == 3 {
+        if raw[0] == 71 && raw[1] == 69 && raw[2] == 84 {
+            return "GET";
+        }
+        if raw[0] == 80 && raw[1] == 85 && raw[2] == 84 {
+            return "PUT";
+        }
+    } else if hi == 4 {
+        if raw[0] == 80 && raw[1] == 79 && raw[2] == 83 && raw[3] == 84 {
+            return "POST";
+        }
+        if raw[0] == 72 && raw[1] == 69 && raw[2] == 65 && raw[3] == 68 {
+            return "HEAD";
+        }
+    } else if hi == 5 {
+        if raw[0] == 80 && raw[1] == 65 && raw[2] == 84 && raw[3] == 67 &&
+           raw[4] == 72 {
+            return "PATCH";
+        }
+    } else if hi == 6 {
+        if raw[0] == 68 && raw[1] == 69 && raw[2] == 76 && raw[3] == 69 &&
+           raw[4] == 84 && raw[5] == 69 {
+            return "DELETE";
+        }
+    } else if hi == 7 {
+        if raw[0] == 79 && raw[1] == 80 && raw[2] == 84 && raw[3] == 73 &&
+           raw[4] == 79 && raw[5] == 78 && raw[6] == 83 {
+            return "OPTIONS";
+        }
+    }
+    return strings.from_wire(raw, 0, hi);
+}
+
+// "HTTP/1.1" or "HTTP/1.0" as a literal when raw[lo..hi] is exactly
+// that, else "": the only two versions `read` accepts, matched in
+// place rather than copied out and then compared.
+fn version_from_wire(raw: wire, lo: int, hi: int) -> str {
+    if hi - lo != 8 {
+        return "";
+    }
+    if raw[lo] != 72 || raw[lo + 1] != 84 || raw[lo + 2] != 84 ||
+       raw[lo + 3] != 80 || raw[lo + 4] != 47 || raw[lo + 5] != 49 ||
+       raw[lo + 6] != 46 {
+        return "";
+    }
+    if raw[lo + 7] == 49 {
+        return "HTTP/1.1";
+    }
+    if raw[lo + 7] == 48 {
+        return "HTTP/1.0";
+    }
+    return "";
+}
+
+fn parse_head_wire(raw: wire, sep: int, n: int, hd: WireHead) -> str {
     let cap = len(raw);
     if n > cap {
         n = cap;
     }
     if sep > n {
-        return err("need more");
+        return "need more";
     }
+    // eol == sep is a request with no header lines: the request line's
+    // own CRLF begins the blank line. Valid (the bytes path, parse_head,
+    // takes it too); the header scan below then covers nothing.
     let eol = find_crlf_wire(raw, 0);
-    if eol < 0 || eol >= sep {
-        return err("malformed request line");
+    if eol < 0 || eol > sep {
+        return "malformed request line";
     }
     let sp1 = -1;
     let i = 0;
@@ -1144,7 +1249,7 @@ fn parse_head_wire(raw: wire, sep: int, n: int) -> result[Head, str] {
         i = i + 1;
     }
     if sp1 <= 0 {
-        return err("malformed request line");
+        return "malformed request line";
     }
     let sp2 = -1;
     let j = eol - 1;
@@ -1156,40 +1261,36 @@ fn parse_head_wire(raw: wire, sep: int, n: int) -> result[Head, str] {
         j = j - 1;
     }
     if sp2 <= sp1 + 1 || sp2 + 1 >= eol {
-        return err("malformed request line");
+        return "malformed request line";
     }
-    if eol + 2 > sep {
-        return err("malformed request line");
-    }
-    // One allocation per field, sized once and copied straight out of
-    // the socket buffer -- no intermediate bytes slice per field.
     // `n` bounds every read: bytes past it haven't arrived yet even
-    // when the wire is larger.
-    let method = strings.from_wire(raw, 0, sp1);
-    let path = strings.from_wire(raw, sp1 + 1, sp2);
-    let version = strings.from_wire(raw, sp2 + 1, eol);
-    if version != "HTTP/1.1" && version != "HTTP/1.0" {
-        return err("unsupported version");
+    // when the wire is larger. The path is the one field always copied
+    // out (one allocation, straight from the socket buffer); method and
+    // version are usually literals, see their helpers.
+    let version = version_from_wire(raw, sp2 + 1, eol);
+    if version == "" {
+        return "unsupported version";
     }
-    if len(path) == 0 {
-        return err("empty path");
+    if sp2 == sp1 + 1 {
+        return "empty path";
     }
-    let scan = scan_headers_wire(raw, eol + 2, sep);
-    guard let hs = scan else {
-        return err(err_of(scan));
+    let se = scan_headers_wire(raw, eol + 2, sep, hd);
+    if se != "" {
+        return se;
     }
     // The header block is one bytes copy for the block `header()`
-    // searches, not one per field. Consumed length is hs.end - start
-    // (the blank line's own CRLF excluded, same as the bytes path).
-    // NOTE: read_frame (serve path) does NOT pay this -- it leaves
-    // headers empty and materialises on first handler read. `read`
-    // is the eager path (tests, handshakes), so it copies here.
+    // searches, not one per field. Consumed length is headers_end -
+    // start (the blank line's own CRLF excluded, same as the bytes
+    // path). Both `read` and `read_frame` pay it: the socket buffer is
+    // compacted before they return, so nothing can be left pointing
+    // into it.
     let start = eol + 2;
-    let hb = to_bytes(raw[start..hs.end]);
-    return ok(Head {
-        method: method, path: path, version: version, hs: hs, headers: hb,
-        sep: sep
-    });
+    hd.method = method_from_wire(raw, sp1);
+    hd.path = strings.from_wire(raw, sp1 + 1, sp2);
+    hd.version = version;
+    hd.headers = to_bytes(raw[start..hd.headers_end]);
+    hd.sep = sep;
+    return "";
 }
 
 fn parse_head(raw: bytes, sep: int) -> result[Head, str] {
@@ -2225,31 +2326,79 @@ pub fn without_header(r: Response, name: str) -> Response {
     return r;
 }
 
-pub fn wants_close(r: Request) -> bool {
-    let c = header(r, "connection");
-    if r.version == "HTTP/1.0" {
-        guard let v = c else {
-            return true;
+// conn_value_wire over bytes: the same verdict (1 = "close", 2 =
+// "keep-alive", 3 = anything else) for a header block already copied
+// out of the wire, compared in place.
+fn conn_value(raw: bytes, vlo: int, vhi: int) -> int {
+    let n = vhi - vlo;
+    if n == 5 {
+        if lower_byte(raw[vlo]) == 99 && lower_byte(raw[vlo + 1]) == 108 &&
+           lower_byte(raw[vlo + 2]) == 111 && lower_byte(raw[vlo + 3]) == 115 &&
+           lower_byte(raw[vlo + 4]) == 101 {
+            return 1;
         }
-        return lower_ascii(v) != "keep-alive";
+        return 3;
     }
-    guard let v = c else {
-        return false;
+    if n == 10 {
+        if lower_byte(raw[vlo]) == 107 && lower_byte(raw[vlo + 1]) == 101 &&
+           lower_byte(raw[vlo + 2]) == 101 && lower_byte(raw[vlo + 3]) == 112 &&
+           lower_byte(raw[vlo + 4]) == 45 && lower_byte(raw[vlo + 5]) == 97 &&
+           lower_byte(raw[vlo + 6]) == 108 && lower_byte(raw[vlo + 7]) == 105 &&
+           lower_byte(raw[vlo + 8]) == 118 && lower_byte(raw[vlo + 9]) == 101 {
+            return 2;
+        }
+        return 3;
     }
-    return lower_ascii(v) == "close";
+    return 3;
+}
+
+// A header block's Connection verdict: 0 = absent, else conn_value's.
+// The line is the one header(r, "connection") would pick, its value
+// OWS-trimmed the way value_at trims it -- same answer as lowercasing
+// header()'s str, without the opt, the str, or the lowercased copy.
+fn conn_of(raw: bytes) -> int {
+    let at = strings.find_field(raw, "connection");
+    if at < 0 {
+        return 0;
+    }
+    let vhi = find_crlf(raw, at);
+    if vhi < 0 {
+        vhi = len(raw);
+    }
+    let vlo = at;
+    while vlo < vhi && is_ows(raw[vlo]) {
+        vlo = vlo + 1;
+    }
+    while vhi > vlo && is_ows(raw[vhi - 1]) {
+        vhi = vhi - 1;
+    }
+    return conn_value(raw, vlo, vhi);
+}
+
+// Whether the connection should close after answering `r`: HTTP/1.1
+// stays open unless the client sent `Connection: close`, HTTP/1.0 closes
+// unless it sent `Connection: keep-alive` (either case-insensitive, OWS
+// trimmed; with the header repeated, the one `header()` returns decides).
+// Allocates nothing.
+pub fn wants_close(r: Request) -> bool {
+    let conn = conn_of(r.raw_headers);
+    if r.version == "HTTP/1.0" {
+        // 1.0 closes unless keep-alive was asked for.
+        return conn != 2;
+    }
+    // 1.1 stays unless close was asked for.
+    return conn == 1;
 }
 
 // The close decision off the ALREADY-PARSED head: same rules as
 // wants_close, but decided from the scan's own conn verdict --
-// zero allocations, not even the find_field slice. conn: 0 =
-// absent, 1 = "close", 2 = "keep-alive", 3 = other.
-fn wants_close_head(hd: Head) -> bool {
+// not even the find_field pass. conn: 0 = absent, 1 = "close",
+// 2 = "keep-alive", 3 = other.
+fn wants_close_head(hd: WireHead) -> bool {
     if hd.version == "HTTP/1.0" {
-        // 1.0 closes unless keep-alive was seen.
-        return hd.hs.conn != 2;
+        return hd.conn != 2;
     }
-    // 1.1 stays unless close was seen.
-    return hd.hs.conn == 1;
+    return hd.conn == 1;
 }
 
 // The int-flag twin, for callers holding a version str rather than
@@ -2316,37 +2465,38 @@ fn content_length_wire(raw: wire, lo: int, hi: int) -> int {
 // `read` frames the body directly on the socket buffer: same rules as
 // `frame` (chunked-only-TE, no TE+CL, no TE-on-1.0, CL length, empty),
 // but the offsets are into `buf[0..n]` and the body is one copy out,
-// never via an intermediate head-bytes.
-fn frame_body_wire(buf: wire, n: int, version: str, hs: HeaderScan,
-                   sep: int) -> result[Framing, str] {
+// never via an intermediate head-bytes. Reads the head parse_head_wire
+// left in `hd` and writes Framing's verdict back into it (see
+// WireHead): "" or the error.
+fn frame_body_wire(buf: wire, n: int, hd: WireHead) -> str {
     let cap = len(buf);
     if n > cap {
         n = cap;
     }
-    let body_start = sep + 4;
+    let body_start = hd.sep + 4;
     if body_start > n {
-        return ok(need_more(body_start));
+        return wire_need(hd, body_start);
     }
-    if hs.has_transfer_encoding {
-        if !hs.te_is_chunked {
-            return err("unsupported transfer coding");
+    if hd.has_transfer_encoding {
+        if !hd.te_is_chunked {
+            return "unsupported transfer coding";
         }
-        if hs.has_content_length {
-            return err("Transfer-Encoding and Content-Length together");
+        if hd.has_content_length {
+            return "Transfer-Encoding and Content-Length together";
         }
-        if version == "HTTP/1.0" {
-            return err("transfer-encoding on HTTP/1.0");
+        if hd.version == "HTTP/1.0" {
+            return "transfer-encoding on HTTP/1.0";
         }
         let cr = scan_chunked_wire(buf, n, body_start);
         guard let fr = cr else {
-            return err(err_of(cr));
+            return err_of(cr);
         }
         if !fr.complete {
             if fr.need > 0 {
                 if fr.need > len(buf) {
-                    return err("request too large for buffer");
+                    return "request too large for buffer";
                 }
-                return ok(need_more(fr.need));
+                return wire_need(hd, fr.need);
             }
             // Incomplete, size unknown: read more unless the buffer is
             // already full, in which case this request cannot fit.
@@ -2355,9 +2505,9 @@ fn frame_body_wire(buf: wire, n: int, version: str, hs: HeaderScan,
             // here with a full buffer means the body genuinely needs
             // more room than exists.
             if n >= len(buf) {
-                return err("request too large for buffer");
+                return "request too large for buffer";
             }
-            return ok(incomplete(-1));
+            return wire_need(hd, -1);
         }
         // Chunked bodies arrive discontiguous (size lines, CRLFs between
         // chunks), so unlike the CL path there is no single range to copy:
@@ -2388,49 +2538,53 @@ fn frame_body_wire(buf: wire, n: int, version: str, hs: HeaderScan,
             push(parts, to_bytes(buf[ci..ci + size]));
             ci = ci + size + 2;
         }
-        return ok(Framing { complete: true, end: fr.end, need: fr.end,
-                            body: concat_parts(parts),
-                            body_lo: body_start });
+        return wire_framed(hd, fr.end, concat_parts(parts));
     }
-    if hs.has_content_length {
-        let cl = content_length_wire(buf, hs.cl_lo, hs.cl_hi);
+    if hd.has_content_length {
+        let cl = content_length_wire(buf, hd.cl_lo, hd.cl_hi);
         if cl < 0 {
-            return err("bad Content-Length");
+            return "bad Content-Length";
         }
         // A declared body larger than the buffer is refused, not waited
         // on: read() would otherwise recv forever into a wire that cannot
         // hold it. Same rule the old path enforced via read_more.
         if body_start + cl > len(buf) {
-            return err("request too large for buffer");
+            return "request too large for buffer";
         }
         let end = body_start + cl;
         if n < end {
-            return ok(need_more(end));
+            return wire_need(hd, end);
         }
-        // The copy here is earned: a real body the handler will
-        // read. GETs never take this branch (no Content-Length --
-        // the empty return below). A `Content-Length: 0` still
-        // copies zero bytes via to_bytes of an empty range -- one
-        // header + 1 byte, same as the b"" below; not worth a
-        // branch to save nothing.
-        return ok(Framing { complete: true, end: end, need: end,
-                            body: to_bytes(buf[body_start..end]),
-                            body_lo: body_start });
+        // The copy here is earned: a real body the handler will read.
+        // GETs never take this branch (no Content-Length -- the empty
+        // return below). `Content-Length: 0` shares that empty body:
+        // b"" is a static, where to_bytes of an empty range is still
+        // two allocations.
+        if cl == 0 {
+            return wire_framed(hd, end, b"");
+        }
+        return wire_framed(hd, end, to_bytes(buf[body_start..end]));
     }
-    return ok(Framing { complete: true, end: body_start, need: body_start,
-                        body: b"", body_lo: body_start });
+    return wire_framed(hd, body_start, b"");
 }
 
-// `read`'s loop re-tests the head result after the guard above: the
-// guard returns every real error and falls through only on
-// "need more", so reaching here with an error means need-more and
-// reaching here with a value means framed. A helper rather than
-// inlining because slang has no `is_ok()` method on results.
-fn hr_ok(r: result[Head, str]) -> bool {
-    guard let _v = r else {
-        return false;
-    }
-    return true;
+// frame_body_wire's two outcomes, the Framing values it used to return:
+// more bytes wanted (`need` in all, or -1 while the size is unknown), or
+// the body framed, the message ending at `end`.
+fn wire_need(hd: WireHead, need: int) -> str {
+    hd.complete = false;
+    hd.end = 0;
+    hd.need = need;
+    hd.body = b"";
+    return "";
+}
+
+fn wire_framed(hd: WireHead, end: int, body: bytes) -> str {
+    hd.complete = true;
+    hd.end = end;
+    hd.need = end;
+    hd.body = body;
+    return "";
 }
 
 // read_frame: read's framing, plus the parsed head the router matches
@@ -2443,8 +2597,8 @@ fn hr_ok(r: result[Head, str]) -> bool {
 //
 // What differs from read: on a complete frame the method/path strs
 // and the header block + body are COPIED OUT of the wire ONCE --
-// the same strs + copies read already pays (hd2.method/path,
-// hd2.headers, fm.body) -- and NO separate message copy is made.
+// the same strs + copies read already pays (hd.method/path,
+// hd.headers, hd.body) -- and NO separate message copy is made.
 // The old shape did to_bytes(buf[0..end]) PLUS parse_frame over the
 // copy PLUS wants_close_scan over the copy: a full second framing
 // pass and a whole-message copy per request. Now the WireFrame
@@ -2453,7 +2607,7 @@ fn hr_ok(r: result[Head, str]) -> bool {
 // matches on strs (==), never on raw bytes -- no path_is_at rescan,
 // no per-route to_bytes. The message copy is gone entirely.
 //
-// Chunked bodies: fm.body IS the reassembled copy (one alloc the
+// Chunked bodies: hd.body IS the reassembled copy (one alloc the
 // old path also spent); the WireFrame body is that copy directly.
 // Three deadlines, not one, because "how long should this wait" has
 // three different honest answers depending on what the connection is
@@ -2480,41 +2634,39 @@ pub fn read_frame(c: &mut link, buf: wire, filled: int,
     while true {
         let header_ok = false;
         if n > 0 {
-            let hr = frame_head_wire(buf, n);
-            guard let hd = hr else let he = err_of(hr) {
-                if he != "need more" {
-                    return err(he);
-                }
+            // A fresh WireHead per attempt, made after the bytes arrived:
+            // see read's comment on why it must never wait out a recv.
+            let hd = new_wire_head();
+            let he = frame_head_wire(buf, n, hd);
+            if he != "" && he != "need more" {
+                return err(he);
             }
-            if hr_ok(hr) {
+            if he == "" {
                 header_ok = true;
-                guard let hd2 = hr else {
-                    return err("unreachable");
-                }
-                let fr = frame_body_wire(buf, n, hd2.version, hd2.hs, hd2.sep);
-                guard let fm = fr else let fe = err_of(fr) {
+                let fe = frame_body_wire(buf, n, hd);
+                if fe != "" {
                     return err(fe);
                 }
-                if !fm.complete {
-                    if fm.need > 0 && fm.need > len(buf) {
+                if !hd.complete {
+                    if hd.need > 0 && hd.need > len(buf) {
                         return err("request too large for buffer");
                     }
                 } else {
-                    let close = wants_close_head(hd2);
-                    let rest = compact_wire(buf, fm.end, n);
+                    let close = wants_close_head(hd);
+                    let rest = compact_wire(buf, hd.end, n);
                     return ok(WireFrame {
                         line_end: 0,
-                        head_end: hd2.sep,
+                        head_end: hd.sep,
                         body_start: 0,
                         body_end: 0,
-                        end: fm.end,
-                        version: version_flag_of(hd2.version),
+                        end: hd.end,
+                        version: version_flag_of(hd.version),
                         close: close,
                         filled: rest,
-                        method: hd2.method,
-                        path: hd2.path,
-                        headers: hd2.headers,
-                        body: fm.body
+                        method: hd.method,
+                        path: hd.path,
+                        headers: hd.headers,
+                        body: hd.body
                     });
                 }
             }
@@ -2561,40 +2713,48 @@ pub fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Inc
     while true {
         if n > 0 {
             // Hot path: frame head + body directly on the socket buffer.
-            // No head-bytes copy, no per-field slices: method/path/version
-            // materialize straight out of the wire (one alloc each), the
-            // header block is the single block copy `header()` searches,
-            // and the body is one copy out. `parse` keeps the bytes path;
-            // this is the socket path.
-            let hr = frame_head_wire(buf, n);
-            guard let hd = hr else let he = err_of(hr) {
-                if he != "need more" {
-                    return err(he);
-                }
-                // else: head not fully arrived yet -- read more below.
+            // No head-bytes copy, no per-field slices: the path
+            // materializes straight out of the wire (method and version
+            // are usually literals), the header block is the single block
+            // copy `header()` searches, and the body is one copy out.
+            // `parse` keeps the bytes path; this is the socket path.
+            //
+            // The WireHead is made here, once bytes are in, and dies
+            // before the next recv -- never hoisted above the loop. A
+            // kept-alive connection spends most of its life parked in
+            // recv; an object live across that park is there when a
+            // minor collection runs, gets promoted, and every young str
+            // and bytes the parse then stores into it is promoted with
+            // it (the store is an old->young edge). Hoisted, it promoted
+            // 25x more objects under 200 connections of POSTs and cost
+            // /echo 11% of its throughput. A partial request pays one
+            // WireHead per attempt instead, as the results it replaced
+            // did.
+            let hd = new_wire_head();
+            let he = frame_head_wire(buf, n, hd);
+            if he != "" && he != "need more" {
+                return err(he);
             }
-            if hr_ok(hr) {
-                guard let hd2 = hr else {
-                    return err("unreachable");
-                }
-                let fr = frame_body_wire(buf, n, hd2.version, hd2.hs, hd2.sep);
-                guard let fm = fr else let fe = err_of(fr) {
+            // "need more": head not fully arrived yet -- read more below.
+            if he == "" {
+                let fe = frame_body_wire(buf, n, hd);
+                if fe != "" {
                     return err(fe);
                 }
-                if !fm.complete {
-                    if fm.need > 0 && fm.need > len(buf) {
+                if !hd.complete {
+                    if hd.need > 0 && hd.need > len(buf) {
                         return err("request too large for buffer");
                     }
                     // else: body not fully arrived yet -- read more below.
                 } else {
                     let req = Request {
-                        method: hd2.method,
-                        path: hd2.path,
-                        version: hd2.version,
-                        raw_headers: hd2.headers,
-                        body: fm.body
+                        method: hd.method,
+                        path: hd.path,
+                        version: hd.version,
+                        raw_headers: hd.headers,
+                        body: hd.body
                     };
-                    let rest = compact_wire(buf, fm.end, n);
+                    let rest = compact_wire(buf, hd.end, n);
                     return ok(Incoming { req: req, filled: rest });
                 }
             }
