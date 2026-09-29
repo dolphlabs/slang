@@ -53,17 +53,14 @@ fn serve(c: link) {
 
 See `examples/httpd/` for a listener loop on this package.
 
-This works because every `spawn`ed thread has `SIGTERM`/`SIGINT`
-blocked in its own signal mask from birth (inherited at creation,
-restored in the spawning thread right after) — so the OS can only
-ever pick the main thread to run the handler, which is what lets the
-main thread's blocked `accept()` call reliably observe the
-interruption instead of the signal silently landing on some unrelated
-connection's worker thread mid-request. There's a narrow startup race
-inherent to this: a signal that arrives in the brief window before
-`main()` installs the handler gets the OS's default disposition
-(immediate termination) instead of graceful handling, same as any
-signal-handling program.
+In a program that asks `proc.shutdown_requested()`, every thread starts
+with `SIGTERM`/`SIGINT` blocked, and one dedicated thread receives them
+with `sigwait` — so no signal lands on a worker thread mid-request, and
+whichever thread a blocked `accept()` is parked on, the runtime wakes it.
+There's a narrow startup race inherent to this: a signal that arrives in
+the brief window before `main()` blocks the signals gets the OS's default
+disposition (immediate termination) instead of graceful handling, same as
+any signal-handling program.
 
 ## API
 

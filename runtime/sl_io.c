@@ -388,10 +388,12 @@ static bool sl_io_is_tty(int32_t fd) {
  *     and falling off the end of main;
  *   - SIGINT, SIGTERM, SIGHUP, SIGQUIT and SIGABRT restore it and then
  *     die of the same signal. This is only hooked where the signal still
- *     has its default action. With `proc` imported those signals are
- *     taken by proc's own thread -- the process survives Ctrl-C, reads
- *     return "interrupted", and the program leaves through exit(), so
- *     atexit does the work.
+ *     has its default action. In a program that calls
+ *     proc.shutdown_requested() those signals are taken by proc's own
+ *     thread -- the process survives the first Ctrl-C, reads return
+ *     "interrupted", and the program leaves through exit(), so atexit
+ *     does the work. A second one is raised on that thread and reaches
+ *     this hook, so the terminal is restored then too.
  * SIGKILL and a crash cannot be caught. Ctrl-Z is not handled: the
  * process stops with the terminal still in the mode it set.
  *

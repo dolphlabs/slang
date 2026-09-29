@@ -1295,7 +1295,17 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
         emit_line(cg, "    (void)argc;");
         emit_line(cg, "    (void)argv;");
     }
-    if (want_pkg(cg, "proc")) {
+    /* Opt in by use: only a program that asks proc.shutdown_requested()
+     * anywhere (its own code or a package it imports, e.g. a framework's
+     * serve loop) takes over SIGINT/SIGTERM. Keying this on importing
+     * `proc` made the signals a flag in every program that imported it
+     * for anything -- proc.getenv, say -- and a program that never
+     * polled the flag could not be stopped: Ctrl-C and `kill` did
+     * nothing, and a server's accept loop spun on the interrupted accept.
+     * Everything else keeps the default action, as a Go program does
+     * without signal.Notify. main() is emitted after every function
+     * body, so want_shutdown is final here. */
+    if (cg->want_shutdown) {
         /* Tier 11 sixth slice: block SIGTERM/SIGINT exactly ONCE, here,
          * before any other thread is ever created -- every subsequently-
          * created thread (pool workers, the timer thread, the reactor
@@ -1339,7 +1349,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
      * ever consume a signal and try to call through it. */
     if (needs_reactor(cg))
         emit_line(cg, "    sl_reactor_start();");
-    if (want_pkg(cg, "proc"))
+    if (cg->want_shutdown)
         emit_line(cg, "    sl_proc_install_signal_handlers();");
     /* Tier 11 fourth slice: main's own task is heap-allocated exactly
      * the way sl_task_submit already allocates every spawned task's
