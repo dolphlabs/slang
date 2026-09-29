@@ -200,6 +200,7 @@ b[<span class="n">0</span>] = <span class="n">65</span>;                 <span c
 <span class="k">if</span> b == other { ... }      <span class="c">// content equality via ==</span>
 <span class="k">for</span> byte <span class="k">in</span> b { ... }      <span class="c">// iterate byte values</span></code></pre></div>
 <p><code>bytes</code> values carry an explicit length and may contain NULs — safe for network buffers and binary formats.</p>
+<p>A non-empty literal is a fresh copy each time it is evaluated, since it can be written through <code>b[i] = v</code>. An empty <code>b&quot;&quot;</code> allocates nothing: every evaluation is the same shared empty value, which no operation can change.</p>
 <h4 id="lists-t">Lists <code>[T]</code><a class="anchor" href="#lists-t" aria-label="Link to this section">#</a></h4>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> xs = [<span class="n">10</span>, <span class="n">20</span>, <span class="n">30</span>];         <span class="c">// inferred [int]</span>
 <span class="k">let</span> empty: [<span class="t">str</span>] = [];         <span class="c">// an empty list needs a type from context</span>
@@ -543,6 +544,7 @@ b[<span class="n">0</span>] = <span class="n">65</span>;                 <span c
 <span class="k">if</span> b == other { ... }      <span class="c">// content equality via ==</span>
 <span class="k">for</span> byte <span class="k">in</span> b { ... }      <span class="c">// iterate byte values</span></code></pre></div>
 <p><code>bytes</code> values carry an explicit length and may contain NULs — safe for network buffers and binary formats.</p>
+<p>A non-empty literal is a fresh copy each time it is evaluated, since it can be written through <code>b[i] = v</code>. An empty <code>b&quot;&quot;</code> allocates nothing: every evaluation is the same shared empty value, which no operation can change.</p>
 <h3 id="lists-t-2">Lists <code>[T]</code><a class="anchor" href="#lists-t-2" aria-label="Link to this section">#</a></h3>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> xs = [<span class="n">10</span>, <span class="n">20</span>, <span class="n">30</span>];         <span class="c">// inferred [int]</span>
 <span class="k">let</span> empty: [<span class="t">str</span>] = [];         <span class="c">// an empty list needs a type from context</span>
