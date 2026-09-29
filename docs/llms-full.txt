@@ -2869,11 +2869,20 @@ C stack.
 
 Graceful shutdown and environment variables. `proc.shutdown_requested()`
 turns true once the process receives `SIGTERM` or `SIGINT`; a blocked
-`net.accept()`/`net.recv()`/`net.dial()` on the main thread is
-interrupted the instant the signal arrives (an `err` result, not a
-hang), so a listener loop notices without needing `select` or a
-timeout. `proc.active_tasks()` counts currently-running `spawn`ed
-tasks. `proc.wait_idle()` parks until that count is zero, so a
+`net.accept()`/`net.recv()`/`net.dial()` is interrupted the instant the
+signal arrives (an `err` result, not a hang), so a listener loop notices
+without needing `select` or a timeout.
+
+Handling the signals is opt-in by use. A program that calls
+`proc.shutdown_requested()` anywhere — in its own code or in a package it
+imports — takes them over: the first `SIGTERM` or `SIGINT` only sets the
+flag, and a **second** one ends the process the way the signal would
+have, so a drain that never finishes cannot make it unkillable. A program
+that never asks keeps the default action: the signal ends it, whether or
+not it imports `proc` for anything else (`proc.getenv`, say).
+
+`proc.active_tasks()` counts currently-running `spawn`ed tasks.
+`proc.wait_idle()` parks until that count is zero, so a
 shutting-down program can drain in-flight work without polling.
 
 ```slang
@@ -3045,9 +3054,10 @@ stalls the entire program.) A regular file or `/dev/null` never blocks and
 is read directly. Before it waits, `io` flushes stdout, so a prompt written
 with `print` is on screen before the user types.
 
-**Ctrl-C.** With `proc` imported the shutdown signal is not fatal:
+**Ctrl-C.** In a program that handles shutdown — one that calls
+`proc.shutdown_requested()` (see [`proc`](#proc)) — the signal is not fatal:
 a waiting `read_line` returns `err("interrupted")` and the program can
-clean up (without `proc`, Ctrl-C ends the process as usual).
+clean up. Otherwise Ctrl-C ends the process as usual.
 
 **Limits.** Input is buffered in memory, so one line — or `read_all`'s
 whole input — is capped at 256 MiB; past that the call returns an `err`
@@ -3130,9 +3140,10 @@ restored when the last of `raw_off` and `read_secret` ends, and also:
 - when SIGINT, SIGTERM, SIGHUP, SIGQUIT or SIGABRT ends the process
   (only where the program has not installed its own handling for them).
 
-Raw mode leaves signals on, so **Ctrl-C still works**: with `proc` imported it
-makes the next `read_key` return `err("interrupted")`; without it, it ends
-the process, and the terminal is restored first. It also leaves output
+Raw mode leaves signals on, so **Ctrl-C still works**: in a program that calls
+`proc.shutdown_requested()` it makes the next `read_key` return
+`err("interrupted")`; otherwise it ends the process, and the terminal is
+restored first. It also leaves output
 processing on, so `"\n"` still starts a new line. Not covered: `SIGKILL`
 and crashes cannot be caught, and Ctrl-Z stops the process with the terminal
 still raw.
@@ -4544,17 +4555,14 @@ fn serve(c: link) {
 
 See `examples/httpd/` for a listener loop on this package.
 
-This works because every `spawn`ed thread has `SIGTERM`/`SIGINT`
-blocked in its own signal mask from birth (inherited at creation,
-restored in the spawning thread right after) — so the OS can only
-ever pick the main thread to run the handler, which is what lets the
-main thread's blocked `accept()` call reliably observe the
-interruption instead of the signal silently landing on some unrelated
-connection's worker thread mid-request. There's a narrow startup race
-inherent to this: a signal that arrives in the brief window before
-`main()` installs the handler gets the OS's default disposition
-(immediate termination) instead of graceful handling, same as any
-signal-handling program.
+In a program that asks `proc.shutdown_requested()`, every thread starts
+with `SIGTERM`/`SIGINT` blocked, and one dedicated thread receives them
+with `sigwait` — so no signal lands on a worker thread mid-request, and
+whichever thread a blocked `accept()` is parked on, the runtime wakes it.
+There's a narrow startup race inherent to this: a signal that arrives in
+the brief window before `main()` blocks the signals gets the OS's default
+disposition (immediate termination) instead of graceful handling, same as
+any signal-handling program.
 
 ## All packages
 
@@ -4914,9 +4922,10 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
   (no camelCase/snake_case conversion). `bytes` fields are base64
   strings (RFC 4648).
 - `proc`: only `SIGTERM`/`SIGINT` are handled (there's no general
-  signal-registration API); a signal that arrives in the narrow
-  window before `main()` installs the handler gets the OS's default
-  disposition (immediate termination) rather than graceful handling.
+  signal-registration API), and only in a program that calls
+  `proc.shutdown_requested()`; a second signal always ends it. A
+  signal that arrives in the narrow window before `main()` takes them
+  over gets the OS's default disposition (immediate termination).
   `proc.wait_idle()` parks until `proc.active_tasks()` is zero.
 
 ---
@@ -5635,17 +5644,14 @@ fn serve(c: link) {
 
 See `examples/httpd/` for a listener loop on this package.
 
-This works because every `spawn`ed thread has `SIGTERM`/`SIGINT`
-blocked in its own signal mask from birth (inherited at creation,
-restored in the spawning thread right after) — so the OS can only
-ever pick the main thread to run the handler, which is what lets the
-main thread's blocked `accept()` call reliably observe the
-interruption instead of the signal silently landing on some unrelated
-connection's worker thread mid-request. There's a narrow startup race
-inherent to this: a signal that arrives in the brief window before
-`main()` installs the handler gets the OS's default disposition
-(immediate termination) instead of graceful handling, same as any
-signal-handling program.
+In a program that asks `proc.shutdown_requested()`, every thread starts
+with `SIGTERM`/`SIGINT` blocked, and one dedicated thread receives them
+with `sigwait` — so no signal lands on a worker thread mid-request, and
+whichever thread a blocked `accept()` is parked on, the runtime wakes it.
+There's a narrow startup race inherent to this: a signal that arrives in
+the brief window before `main()` blocks the signals gets the OS's default
+disposition (immediate termination) instead of graceful handling, same as
+any signal-handling program.
 
 ## API
 
@@ -6761,9 +6767,10 @@ stalls the entire program.) A regular file or `/dev/null` never blocks and
 is read directly. Before it waits, `io` flushes stdout, so a prompt written
 with `print` is on screen before the user types.
 
-**Ctrl-C.** With `proc` imported the shutdown signal is not fatal:
+**Ctrl-C.** In a program that handles shutdown — one that calls
+`proc.shutdown_requested()` (see [`proc`](#proc)) — the signal is not fatal:
 a waiting `read_line` returns `err("interrupted")` and the program can
-clean up (without `proc`, Ctrl-C ends the process as usual).
+clean up. Otherwise Ctrl-C ends the process as usual.
 
 **Limits.** Input is buffered in memory, so one line — or `read_all`'s
 whole input — is capped at 256 MiB; past that the call returns an `err`
@@ -6846,9 +6853,10 @@ restored when the last of `raw_off` and `read_secret` ends, and also:
 - when SIGINT, SIGTERM, SIGHUP, SIGQUIT or SIGABRT ends the process
   (only where the program has not installed its own handling for them).
 
-Raw mode leaves signals on, so **Ctrl-C still works**: with `proc` imported it
-makes the next `read_key` return `err("interrupted")`; without it, it ends
-the process, and the terminal is restored first. It also leaves output
+Raw mode leaves signals on, so **Ctrl-C still works**: in a program that calls
+`proc.shutdown_requested()` it makes the next `read_key` return
+`err("interrupted")`; otherwise it ends the process, and the terminal is
+restored first. It also leaves output
 processing on, so `"\n"` still starts a new line. Not covered: `SIGKILL`
 and crashes cannot be caught, and Ctrl-Z stops the process with the terminal
 still raw.
@@ -7794,11 +7802,20 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 
 Graceful shutdown and environment variables. `proc.shutdown_requested()`
 turns true once the process receives `SIGTERM` or `SIGINT`; a blocked
-`net.accept()`/`net.recv()`/`net.dial()` on the main thread is
-interrupted the instant the signal arrives (an `err` result, not a
-hang), so a listener loop notices without needing `select` or a
-timeout. `proc.active_tasks()` counts currently-running `spawn`ed
-tasks. `proc.wait_idle()` parks until that count is zero, so a
+`net.accept()`/`net.recv()`/`net.dial()` is interrupted the instant the
+signal arrives (an `err` result, not a hang), so a listener loop notices
+without needing `select` or a timeout.
+
+Handling the signals is opt-in by use. A program that calls
+`proc.shutdown_requested()` anywhere — in its own code or in a package it
+imports — takes them over: the first `SIGTERM` or `SIGINT` only sets the
+flag, and a **second** one ends the process the way the signal would
+have, so a drain that never finishes cannot make it unkillable. A program
+that never asks keeps the default action: the signal ends it, whether or
+not it imports `proc` for anything else (`proc.getenv`, say).
+
+`proc.active_tasks()` counts currently-running `spawn`ed tasks.
+`proc.wait_idle()` parks until that count is zero, so a
 shutting-down program can drain in-flight work without polling.
 
 ```slang

@@ -65,9 +65,10 @@ stalls the entire program.) A regular file or `/dev/null` never blocks and
 is read directly. Before it waits, `io` flushes stdout, so a prompt written
 with `print` is on screen before the user types.
 
-**Ctrl-C.** With `proc` imported the shutdown signal is not fatal:
+**Ctrl-C.** In a program that handles shutdown — one that calls
+`proc.shutdown_requested()` (see [`proc`](#proc)) — the signal is not fatal:
 a waiting `read_line` returns `err("interrupted")` and the program can
-clean up (without `proc`, Ctrl-C ends the process as usual).
+clean up. Otherwise Ctrl-C ends the process as usual.
 
 **Limits.** Input is buffered in memory, so one line — or `read_all`'s
 whole input — is capped at 256 MiB; past that the call returns an `err`
@@ -150,9 +151,10 @@ restored when the last of `raw_off` and `read_secret` ends, and also:
 - when SIGINT, SIGTERM, SIGHUP, SIGQUIT or SIGABRT ends the process
   (only where the program has not installed its own handling for them).
 
-Raw mode leaves signals on, so **Ctrl-C still works**: with `proc` imported it
-makes the next `read_key` return `err("interrupted")`; without it, it ends
-the process, and the terminal is restored first. It also leaves output
+Raw mode leaves signals on, so **Ctrl-C still works**: in a program that calls
+`proc.shutdown_requested()` it makes the next `read_key` return
+`err("interrupted")`; otherwise it ends the process, and the terminal is
+restored first. It also leaves output
 processing on, so `"\n"` still starts a new line. Not covered: `SIGKILL`
 and crashes cannot be caught, and Ctrl-Z stops the process with the terminal
 still raw.

@@ -44,9 +44,10 @@
   (no camelCase/snake_case conversion). `bytes` fields are base64
   strings (RFC 4648).
 - `proc`: only `SIGTERM`/`SIGINT` are handled (there's no general
-  signal-registration API); a signal that arrives in the narrow
-  window before `main()` installs the handler gets the OS's default
-  disposition (immediate termination) rather than graceful handling.
+  signal-registration API), and only in a program that calls
+  `proc.shutdown_requested()`; a second signal always ends it. A
+  signal that arrives in the narrow window before `main()` takes them
+  over gets the OS's default disposition (immediate termination).
   `proc.wait_idle()` parks until `proc.active_tasks()` is zero.
 
 ---
