@@ -2559,6 +2559,18 @@ prerequisite, not a different plan).
       bench/, stress_test/ and the zokor repo compiles as before. Tests:
       `pkg_same_basename`, `pkg_native_resolution`.
 
+- [x] **`json.decode` into an integer went through a double.** Fixed
+      2026-09-29 (found by zokor's `dto`). Every JSON number was `strtod`'d at
+      parse time and the text dropped, so an id past 2^53 decoded rounded
+      (`9007199254740993` -> `...992`) with no error -- the rounded value is
+      itself an integer, so no check could see it. The same path rejected
+      `int`'s and `u64`'s own maximums as out of range, accepted
+      `-9223372036854775809` as `INT64_MIN`, and took
+      `1.0000000000000000001` as 1. The parse node now keeps the literal
+      (inside the existing union), and integers decode from it exactly
+      (`sl_json_num_int`: overflow-checked, exponent and fraction forms
+      included). Test: `tests/json_int_exact`.
+
 - [x] **`bench/http`'s server does not exit on SIGTERM.** Fixed
       2026-09-29. Not the accept loop: importing `proc` for anything made
       SIGINT/SIGTERM a flag in every program, and a program that never

@@ -1218,6 +1218,15 @@ a number`. Malformed input is a decode error, never a crash — the
 parser caps nesting depth at 512 so adversarial input can't blow the
 C stack.
 
+Integers decode exactly, from the number as written: a 64-bit id such
+as `9007199254740993` arrives intact (it is not routed through a
+`double`, which is exact only up to 2^53), and every value an integer
+type can hold is accepted, its limits included. A whole number written
+with a fraction or exponent is still an integer (`1e3` is 1000, `5.0`
+is 5); `1.5` or `1e-1` is `expected an integer`, and a value outside
+the target type's range is `value … out of range for i8` (or `int`,
+`u64`, …). Floats decode through a `double`, as before.
+
 #### `proc`
 
 Graceful shutdown and environment variables. `proc.shutdown_requested()`
