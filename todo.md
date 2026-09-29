@@ -2515,10 +2515,41 @@ prerequisite, not a different plan).
       finishing before a slow VM processes the peer's RST, but that is
       unconfirmed.
 
-- [ ] **STILL OPEN: ~5% SIGBUS under amplified preemption.** Guard
-      pages did NOT fix it. Recorded here in full because three
-      plausible explanations were tested and eliminated, and the next
-      person should not re-run them.
+- [x] **~5% SIGBUS under amplified preemption: the kernel's signal
+      frame overwrote the trampoline's resume slot.** Fixed 2026-09-29.
+
+      The x86_64 async trampoline ends `lea 144(%rsp), %rsp; jmp
+      *-136(%rsp)`. For that one instruction boundary the resume target
+      is 8 bytes BELOW the 128-byte red zone the kernel skips when it
+      builds a signal frame on the current stack, and on Darwin the first
+      word it writes there is `&uc->uc_mcontext` -- at exactly sp - 136,
+      pointing at sp - 0x528 (measured with a standalone probe, for every
+      rsp alignment). A SIGUSR1 landing on that boundary was vetoed by
+      `sl_preempt_handler` (pc inside the trampoline), but the frame was
+      already written, so the jmp went to the mcontext on the task's own
+      stack. Every crash report since carries it: pc == fault address ==
+      rsp - 0x528 (six of six checked). The slot probe below never fired
+      because it validated the slot BEFORE the final `lea`; the
+      corruption happens after it.
+
+      Fix: x86_64 now does what arm64 already did -- a per-thread
+      alternate signal stack (`sl_rt_install_altstack`) and SA_ONSTACK on
+      the preemption handler, so no signal frame ever lands on a task
+      stack. `tests/runtime/test_preempt` reproduces the overwrite
+      deterministically (a sentinel at -136(%rsp) under a spinning
+      thread): without SA_ONSTACK it reads back as a stack pointer on the
+      first delivery.
+
+      `concurrent_compute`, 6000 tasks, default nursery, amplified
+      preemption, with the GC-minor fix present in both arms: **6/70
+      SIGBUS without the altstack, 0/70 with it** (30 + 40 runs per arm,
+      the 40 alternated run by run; one-sided Fisher p = 0.014). The
+      "unverified lead" below named the right remedy for the wrong
+      reason -- the frame never needed to overflow anything.
+
+      History, kept because every elimination in it is still valid:
+      guard pages did NOT fix it, and three plausible explanations were
+      tested and eliminated before this was found.
 
       Signature, unchanged throughout: `EXC_BAD_ACCESS /
       KERN_PROTECTION_FAILURE` where the faulting address IS the
