@@ -157,6 +157,82 @@ else
 fi
 rm -rf "$NEWDIR"
 
+# ---- signals ------------------------------------------------------------
+# SIGINT/SIGTERM are the program's to handle only if it asks
+# proc.shutdown_requested(); otherwise they end it. And a second signal
+# always ends it, so a drain that never finishes cannot make a server
+# unkillable. Exit status 143 = killed by SIGTERM. Programs live in
+# tests/signals/ (no main.sl at the top, so the loop above skips them).
+# SIGINT is not driven here: a background job of a non-interactive shell
+# starts with SIGINT ignored, and inheriting that is correct.
+echo "--- signals ---"
+sig_bad=0
+sig_fail() { echo "FAIL signals ($1)"; fail=1; sig_bad=1; }
+# Waits (up to 5s) for $2 to appear in file $1; 0 when it does.
+sig_wait_line() {
+    i=0
+    while [ $i -lt 100 ]; do
+        grep -q "$2" "$1" 2>/dev/null && return 0
+        sleep 0.05
+        i=$((i + 1))
+    done
+    return 1
+}
+# Waits (up to 5s) for pid $1 to exit; 0 when it has.
+sig_wait_exit() {
+    i=0
+    while [ $i -lt 100 ]; do
+        kill -0 "$1" 2>/dev/null || return 0
+        sleep 0.05
+        i=$((i + 1))
+    done
+    return 1
+}
+for prog in no_poll second; do
+    if ! ./slangc "tests/signals/$prog/main.sl" -o "/tmp/sl_sig_$prog" \
+            >/dev/null 2>"/tmp/sl_sig_$prog.err"; then
+        sig_fail "$prog: build"
+        cat "/tmp/sl_sig_$prog.err"
+    fi
+done
+if [ "$sig_bad" -eq 0 ]; then
+    out=/tmp/sl_sig_no_poll.out
+    /tmp/sl_sig_no_poll >"$out" 2>&1 &
+    pid=$!
+    if ! sig_wait_line "$out" "ready"; then
+        sig_fail "no_poll: never ready"; kill -9 "$pid" 2>/dev/null
+    else
+        kill -TERM "$pid"
+        if ! sig_wait_exit "$pid"; then
+            sig_fail "no_poll: SIGTERM did not end a program that never polls"
+            kill -9 "$pid" 2>/dev/null
+        fi
+        wait "$pid" 2>/dev/null; code=$?
+        [ "$code" -eq 143 ] || sig_fail "no_poll: exit $code, want 143"
+    fi
+
+    out=/tmp/sl_sig_second.out
+    /tmp/sl_sig_second >"$out" 2>&1 &
+    pid=$!
+    if ! sig_wait_line "$out" "ready"; then
+        sig_fail "second: never ready"; kill -9 "$pid" 2>/dev/null
+    else
+        kill -TERM "$pid"
+        if ! sig_wait_line "$out" "shutdown requested"; then
+            sig_fail "second: first SIGTERM was not a graceful request"
+        fi
+        kill -0 "$pid" 2>/dev/null || sig_fail "second: first SIGTERM ended it"
+        kill -TERM "$pid"
+        if ! sig_wait_exit "$pid"; then
+            sig_fail "second: second SIGTERM did not end it"
+            kill -9 "$pid" 2>/dev/null
+        fi
+        wait "$pid" 2>/dev/null; code=$?
+        [ "$code" -eq 143 ] || sig_fail "second: exit $code, want 143"
+    fi
+fi 2>/dev/null # the shell's own "Terminated" job notices; failures go to stdout
+[ "$sig_bad" -eq 0 ] && echo "PASS signals"
+
 # ---- slangc test ------------------------------------------------------
 # End to end against fixture packages in tests/testcmd/ (they have no
 # main.sl at the top level of tests/, so the loop above never runs them as

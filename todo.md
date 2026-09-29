@@ -2542,11 +2542,15 @@ prerequisite, not a different plan).
       disambiguating suffix on collision) threaded through codegen's import
       table, not just the name.
 
-- [ ] **`bench/http`'s server does not exit on SIGTERM** once it has served
-      requests -- a benchmark script that `kill`s it and `wait`s hangs
-      (found with the `dev` build, so not new). Probably the graceful
-      shutdown waiting on the accept loop's task. Check against
-      `proc.shutdown_requested`'s intended contract.
+- [x] **`bench/http`'s server does not exit on SIGTERM.** Fixed
+      2026-09-29. Not the accept loop: importing `proc` for anything made
+      SIGINT/SIGTERM a flag in every program, and a program that never
+      polled `proc.shutdown_requested()` could not be stopped (the bench
+      server imported `proc` for `getenv`); its accept loop then spun at
+      98% of a core on the interrupted `accept`. Handling is now opt-in by
+      use (only a program that calls `shutdown_requested` takes the
+      signals over) and a second signal always ends the process. Tested
+      by the "signals" section of `tests/run_tests.sh`.
 
 - [ ] **Intermittent: `tests/sigpipe` on GitHub's macOS runner.** Failed
       twice in about 255 runs, both inside the full suite; never alone

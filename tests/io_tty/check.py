@@ -4,8 +4,9 @@
     python3 tests/io_tty/check.py [path/to/slangc]
 
 1. prompt   print("name? ") is visible BEFORE anything is typed.
-2. repl     Ctrl-D ends one read but is not sticky; Ctrl-C (with proc
-            imported) is an "interrupted" error, not a kill.
+2. repl     Ctrl-D ends one read but is not sticky; Ctrl-C (in a program
+            that calls proc.shutdown_requested) is an "interrupted"
+            error, not a kill.
 3. tasks    two busy tasks finish while main waits on stdin, with one
             worker (SLANG_WORKERS=1).
 4. term_size  io.term_width/height follow the window, and are none without
@@ -13,8 +14,8 @@
 5. secret    io.read_secret: no echo while it reads, echo back after.
 6. raw_*     io.raw_on/read_key: keys arrive unechoed, and the terminal is
             put back by raw_off, by exit(), and when Ctrl-C ends the
-            process -- with proc imported (an "interrupted" error) or
-            without (a kill). A terminal left raw ruins the person's shell,
+            process -- handled through proc (an "interrupted" error, and a
+            second Ctrl-C still ends it) or not (a kill). A terminal left raw ruins the person's shell,
             so every way out is checked.
 
 Waits are "until this text appears", with a generous timeout, never a
@@ -279,6 +280,20 @@ def main():
             back = cooked(t)
             report("io_tty Ctrl-C in raw mode with proc is an error; terminal restored",
                    ok and in_raw and back and code == 3,
+                   "raw=%s restored=%s exit=%s output=%s" % (in_raw, back, code, t.text()))
+
+        exe = build("raw_twice", tmp)
+        if exe:
+            t = Term(exe)
+            ok = t.expect("raw")
+            in_raw = raw(t)
+            t.send(b"\x03")
+            ok = ok and t.expect("interrupted once")
+            t.send(b"\x03")  # a second shutdown signal always ends it
+            code = t.finish()
+            back = cooked(t)
+            report("io_tty a second Ctrl-C ends a program that handles shutdown; terminal restored",
+                   ok and in_raw and back and code == -signal.SIGINT,
                    "raw=%s restored=%s exit=%s output=%s" % (in_raw, back, code, t.text()))
     return 1 if failed else 0
 
