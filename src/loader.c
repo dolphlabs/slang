@@ -41,6 +41,17 @@ static char *path_base(const char *path) {
     return xstrdup(slash ? slash + 1 : path);
 }
 
+char *pkg_name_of_path(const char *path) {
+    char *base = path_base(path);
+    for (char *p = base; *p; p++) {
+        if (!(isalnum((unsigned char)*p) || *p == '_'))
+            *p = '_';
+    }
+    if (isdigit((unsigned char)base[0]))
+        return xasprintf("p_%s", base);
+    return base;
+}
+
 /* Directory portion of a path: "a/b/c.sl" -> "a/b", "x.sl" -> "." */
 static char *path_dir(const char *path) {
     const char *slash = strrchr(path, '/');
@@ -361,7 +372,7 @@ static int load_package_dir(Loader *ld, const char *real, const char *name) {
     qsort(names, nnames, sizeof(char *), cmp_str);
 
     Package p;
-    p.name = name ? xstrdup(name) : path_base(real);
+    p.name = name ? xstrdup(name) : pkg_name_of_path(real);
     p.path = xstrdup(real);
     p.prog = new_program();
     p.native = 0;
