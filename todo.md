@@ -2532,15 +2532,32 @@ prerequisite, not a different plan).
       amplified-preemption crash (next-steps item 7); not attributed to
       either side without a reproduction.
 
-- [ ] **Two packages with the same directory basename collide.** Package
-      identity for naming is the directory's base name (`pkg_name_of_path`,
-      loader.c), and codegen resolves an import's target by that name, so
-      `import "a/util";` plus `import "b/util" as butil;` merges both into
-      package `util` and fails with a misleading "redefinition of function
-      'make' in package 'util'". Found 2026-09-29 while fixing dotted
-      directory names. Needs a unique per-path package identity (e.g. a
-      disambiguating suffix on collision) threaded through codegen's import
-      table, not just the name.
+- [x] **Two packages with the same directory basename collide.** Fixed
+      2026-09-29. Package names were the only package identity: codegen
+      keyed types, symbols, native-ness and import targets on them, so
+      `import "a/util";` plus `import "b/util" as butil;` merged into one
+      package and failed with "redefinition of function 'make'". The
+      loader now records each import's resolved package by index
+      (`Package.import_pkg`), codegen resolves through that, and
+      `assign_package_names` makes names unique after loading (natives,
+      then the entry package, keep theirs; a clash gets `_2`, `_3`...).
+
+      Import resolution had the same base-name confusion: `"lib/json"`
+      resolved to the BUILT-IN json, and a local directory shadowed a
+      native only if it existed relative to the process's working
+      directory. It now follows the documented order, native packages
+      match the exact path only, and a directory shadows a native only
+      if it holds .sl files.
+
+      Exposed one latent bug: `tests/http` (an entry package named
+      `http`) called stdlib http's `parse`, `parse_frame`, `method_is`,
+      `path_is`, `frame_version` and `frame_body` unqualified, which
+      compiled only because the two packages were merged. Now qualified.
+      Generated C for the other tests/examples is byte-identical to
+      `dev` or differs only by that suffix (15 tests whose directory is
+      named after a package they import); every program under demo/,
+      bench/, stress_test/ and the zokor repo compiles as before. Tests:
+      `pkg_same_basename`, `pkg_native_resolution`.
 
 - [x] **`bench/http`'s server does not exit on SIGTERM.** Fixed
       2026-09-29. Not the accept loop: importing `proc` for anything made

@@ -6,12 +6,19 @@
 /* A package: every .sl file in one directory, merged into a single
  * Program (one shared namespace, Go/Odin style). */
 typedef struct {
-    char *name;    /* package name: pkg_name_of_path(its directory), or
-                    * the slang.project pin name */
+    char *name;    /* package name, unique in the program: preferably
+                    * pkg_name_of_path(its directory) or the slang.project
+                    * pin name, suffixed "_2", "_3"... on a clash (see
+                    * assign_package_names, loader.c) */
     char *path;    /* canonical (realpath) directory of the package */
     Program *prog; /* merged AST of all files in the directory */
     int native;    /* 1 = built-in package implemented by codegen
                     * ("time", "net"); prog is empty */
+    int *import_pkg; /* index in the PkgList of the package each
+                      * prog->import_paths[j] resolved to. Codegen must
+                      * use this, not the path: two import paths can
+                      * share a base name and still be different
+                      * packages. NULL when there are no imports. */
 } Package;
 
 typedef struct {
@@ -37,9 +44,8 @@ void loader_set_test_target(const char *real_dir);
 
 /* The package name for a directory or import path: its base name, made
  * an identifier -- every byte outside [A-Za-z0-9_] becomes '_', and a
- * leading digit gets a "p_" prefix. The loader names a package with it
- * and codegen resolves an import's target with it, so the two always
- * agree. Canonical type names are "<pkg>.<Name>" and are split at the
+ * leading digit gets a "p_" prefix. It is a package's PREFERRED name;
+ * the final one is made unique across the program. Canonical type names are "<pkg>.<Name>" and are split at the
  * first '.', so a directory like "app.v2" used verbatim produced
  * "sl_st_app_v2.Point" -- invalid C. The rule matches codegen's
  * sanitize_pkg, so every C symbol an already-valid name produced is

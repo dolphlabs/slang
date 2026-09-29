@@ -225,35 +225,32 @@ static const char *NATIVE_PKGS[] = {PKG_TIME_NAME, PKG_NET_NAME,
                                     PKG_ENCODING_NAME,
                                     PKG_COMPRESS_NAME, NULL};
 
-/* If the import path refers to a built-in native package (and there is
- * no local directory of the same name), synthesize it. */
-static int try_load_native(Loader *ld, const char *ipath,
-                           const char *from_pkg) {
-    char *base = path_base(ipath);
-    int is_native = 0;
+/* Does the import path name a built-in native package? Only the exact
+ * name does: "lib/json" is a directory that happens to end in "json",
+ * never the built-in json. Matching on the base name made it one, and
+ * codegen then resolved lib/json's functions against the built-in. */
+static int is_native_name(const char *ipath) {
     for (int i = 0; NATIVE_PKGS[i]; i++) {
-        if (!strcmp(base, NATIVE_PKGS[i]))
-            is_native = 1;
+        if (!strcmp(ipath, NATIVE_PKGS[i]))
+            return 1;
     }
-    if (!is_native)
-        return -1;
+    return 0;
+}
 
-    /* a user directory with this name takes precedence */
-    struct stat st;
-    if (stat(base, &st) == 0 && S_ISDIR(st.st_mode))
-        return -1;
-
+/* Returns the built-in package `name`, synthesizing it on first use. */
+static int load_native(Loader *ld, const char *name) {
     for (int i = 0; i < ld->pkgs->count; i++) {
         if (ld->pkgs->items[i].native &&
-            !strcmp(ld->pkgs->items[i].name, base))
+            !strcmp(ld->pkgs->items[i].name, name))
             return i; /* already synthesized */
     }
 
     Package p;
-    p.name = base;
-    p.path = xasprintf("<builtin:%s>", base);
+    p.name = xstrdup(name);
+    p.path = xasprintf("<builtin:%s>", name);
     p.prog = new_program();
     p.native = 1;
+    p.import_pkg = NULL;
 
     if (ld->pkgs->count == ld->pkgs->cap) {
         ld->pkgs->cap = ld->pkgs->cap ? ld->pkgs->cap * 2 : 8;
@@ -270,25 +267,46 @@ static int is_pkg_dir(const char *path) {
     return path && stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-static void load_import(Loader *ld, const char *from_dir,
-                        const char *from_pkg, const char *ipath) {
-    int nat = try_load_native(ld, ipath, from_pkg);
-    if (nat >= 0)
-        return;
+static int dir_has_sl_files(const char *path) {
+    DIR *dir = opendir(path);
+    if (!dir)
+        return 0;
+    int found = 0;
+    struct dirent *ent;
+    while (!found && (ent = readdir(dir)) != NULL) {
+        size_t len = strlen(ent->d_name);
+        found = len > 3 && !strcmp(ent->d_name + len - 3, ".sl");
+    }
+    closedir(dir);
+    return found;
+}
 
+/* Resolves and loads one import; returns the imported package's index.
+ * Order, as README's Packages section documents it: a directory next to
+ * the importer, then a native package, then stdlib/<path>, then a
+ * slang.project pin. A local directory shadows a native package only if
+ * it holds .sl files, so a data directory that happens to be called
+ * "json" does not break `import "json"`. (This used to stat the base
+ * name against the PROCESS's working directory, so whether a native
+ * import worked depended on where slangc was run from.) */
+static int load_import(Loader *ld, const char *from_dir,
+                       const char *from_pkg, const char *ipath) {
     char target[PATH_MAX];
     snprintf(target, sizeof(target), "%s/%s", from_dir, ipath);
 
     char treal[PATH_MAX];
-    if (realpath(target, treal) && is_pkg_dir(treal)) {
-        load_package_dir(ld, treal, NULL);
-        return;
+    int native = is_native_name(ipath);
+    if (realpath(target, treal) && is_pkg_dir(treal) &&
+        (!native || dir_has_sl_files(treal))) {
+        return load_package_dir(ld, treal, NULL);
     }
+
+    if (native)
+        return load_native(ld, ipath);
 
     char *std = slang_stdlib_pkg(ipath);
     if (std) {
-        load_package_dir(ld, std, NULL);
-        return;
+        return load_package_dir(ld, std, NULL);
     }
 
     SlPkgPin *pin = project_find_pin(ld->project, ipath);
@@ -308,12 +326,35 @@ static void load_import(Loader *ld, const char *from_dir,
         char *pkgdir = project_pkg_dir(pin);
         if (!project_is_dir(pkgdir))
             load_error("package '%s' has no directory '%s'", ipath, pin->dir);
-        load_package_dir(ld, pkgdir, pin->name);
-        return;
+        return load_package_dir(ld, pkgdir, pin->name);
     }
 
     load_error("cannot resolve import '%s' (imported by package '%s')",
                ipath, from_pkg);
+    return -1; /* load_error exits */
+}
+
+/* Records that p's import of `ipath` resolved to package `target`.
+ * merge_program keeps one entry per distinct path, and every file of a
+ * package resolves a given path from the same directory, so the entry is
+ * found by path. *nrec is how many import_pkg slots exist so far. */
+static void record_import(Package *p, int *nrec, const char *ipath,
+                          int target) {
+    if (*nrec < p->prog->nimports) {
+        p->import_pkg = (int *)xrealloc(
+            p->import_pkg, (size_t)p->prog->nimports * sizeof(int));
+        for (int j = *nrec; j < p->prog->nimports; j++)
+            p->import_pkg[j] = -1;
+        *nrec = p->prog->nimports;
+    }
+    for (int j = 0; j < p->prog->nimports; j++) {
+        if (!strcmp(p->prog->import_paths[j], ipath)) {
+            p->import_pkg[j] = target;
+            return;
+        }
+    }
+    load_error("internal: import '%s' of package '%s' was not merged", ipath,
+               p->name);
 }
 
 static const char *loader_test_target = NULL;
@@ -372,10 +413,14 @@ static int load_package_dir(Loader *ld, const char *real, const char *name) {
     qsort(names, nnames, sizeof(char *), cmp_str);
 
     Package p;
+    /* Provisional: assign_package_names makes it unique once every
+       package is loaded. Until then it only appears in diagnostics. */
     p.name = name ? xstrdup(name) : pkg_name_of_path(real);
     p.path = xstrdup(real);
     p.prog = new_program();
     p.native = 0;
+    p.import_pkg = NULL;
+    int nrec = 0;
 
     for (int i = 0; i < nnames; i++) {
         char fpath[PATH_MAX];
@@ -410,8 +455,10 @@ static int load_package_dir(Loader *ld, const char *real, const char *name) {
         merge_program(&p, fprog, names[i]);
 
         /* imports are resolved relative to this package's directory */
-        for (int k = 0; k < fprog->nimports; k++)
-            load_import(ld, real, p.name, fprog->import_paths[k]);
+        for (int k = 0; k < fprog->nimports; k++) {
+            int target = load_import(ld, real, p.name, fprog->import_paths[k]);
+            record_import(&p, &nrec, fprog->import_paths[k], target);
+        }
     }
 
     stack_pop(ld);
@@ -452,6 +499,50 @@ static int load_package_dir(Loader *ld, const char *real, const char *name) {
     return ld->pkgs->count - 1;
 }
 
+/* Is `name` already the final name of some package? */
+static int name_taken(char **final, int n, const char *name) {
+    for (int i = 0; i < n; i++)
+        if (final[i] && !strcmp(final[i], name))
+            return 1;
+    return 0;
+}
+
+static char *claim_name(char **final, int n, const char *want) {
+    if (!name_taken(final, n, want))
+        return xstrdup(want);
+    for (int k = 2;; k++) {
+        char *cand = xasprintf("%s_%d", want, k);
+        if (!name_taken(final, n, cand))
+            return cand;
+    }
+}
+
+/* Final package names, unique across the whole program. Codegen keys
+ * everything on a package's name -- canonical types "<pkg>.<Name>", C
+ * symbols sl_<pkg>_<name>, which packages are native -- so two packages
+ * sharing a name were merged into one namespace: "a/util" plus "b/util"
+ * failed with a bogus "redefinition of function". A directory's name is
+ * only a preference. Natives keep theirs (codegen dispatches on them),
+ * then the entry package keeps its own, then the rest in load order; a
+ * taken name gets "_2", "_3", ... The suffix cannot collide with another
+ * package's symbols: "sl_util_2_f" would need a function named "2_f".
+ * Import targets were recorded by index, so they follow automatically. */
+static void assign_package_names(PkgList *pkgs, int main_index) {
+    int n = pkgs->count;
+    char **final = (char **)xmalloc((size_t)n * sizeof(char *));
+    for (int i = 0; i < n; i++)
+        final[i] = pkgs->items[i].native ? pkgs->items[i].name : NULL;
+    if (!pkgs->items[main_index].native)
+        final[main_index] = claim_name(final, n, pkgs->items[main_index].name);
+    for (int i = 0; i < n; i++) {
+        if (!final[i])
+            final[i] = claim_name(final, n, pkgs->items[i].name);
+    }
+    for (int i = 0; i < n; i++)
+        pkgs->items[i].name = final[i];
+    free(final);
+}
+
 int load_packages(const char *main_file, PkgList *out) {
     out->items = NULL;
     out->count = 0;
@@ -477,7 +568,9 @@ int load_packages(const char *main_file, PkgList *out) {
     if (proot)
         ld.project = project_load(proot);
 
-    return load_package_dir(&ld, dir_real, NULL);
+    int main_index = load_package_dir(&ld, dir_real, NULL);
+    assign_package_names(out, main_index);
+    return main_index;
 }
 
 char **collect_link_libs(PkgList *pkgs, int *out_count) {
