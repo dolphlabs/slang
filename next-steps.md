@@ -175,7 +175,23 @@ dotted directories (#235). Write-ups in `todo.md`.
 
 ## 4b. Hand-off locality: a `runnext` slot
 
-- [ ] With the run queues fair (#4), a task woken or spawned by the running
+- [x] **Done (2026-09-29).** Per-worker `runnext` slots (`sl_runq_ready`,
+  `sl_runnext`): a task woken (`sl_task_resume`) or spawned by a running
+  task runs next on that worker; a runnext chain inherits the chain's
+  start as its `run_start_ns`, and past a quantum the slot's task goes to
+  the fair stripes instead; a displaced occupant goes to the stripes; an
+  idle worker steals slots before sleeping (sequentially consistent
+  sleeper count, so a put never strands a task); the slots are a GC root
+  source. zokor at 200 connections under wrk, alternated against the
+  fairness fix alone: `/users/:id` 40.1k -> 55.1k (1.37x), `/echo`
+  29.1k -> 43.4k (1.49x) -- above even the pre-fairness numbers -- with
+  zero timeouts and a better tail (latgen, `/users/:id` p99 12.3 -> 7.3
+  ms). Plain slang, which hands nothing off, is unchanged within noise
+  (-2% or less). Test: `tests/sched_runnext` (128 ping-pong pairs plus
+  spinners; a runnext giving each hand-off a fresh slice fails it).
+
+  The motivation, as recorded before:
+  With the run queues fair (#4), a task woken or spawned by the running
   task waits its turn behind every other runnable task, on whichever
   worker gets to it. Go avoids that with `runnext`: the task the current
   one just readied runs next on the same worker (cache-hot), and inherits

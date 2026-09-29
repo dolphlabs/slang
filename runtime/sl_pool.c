@@ -180,6 +180,67 @@ static sl_task *sl_runq_stripe_pop_locked(void) {
     return NULL;
 }
 
+/* Workers asleep on the doorbell. A runnext put wakes one only when
+    someone is asleep -- the steady state under load is nobody, and every
+    push broadcasting is what the stripes already pay for. Sequentially
+    consistent on both sides so a put and a worker going to sleep cannot
+    miss each other: the sleeper increments this and THEN scans the slots;
+    the putter fills its slot and THEN reads this. Whichever runs second
+    sees the other. */
+static _Atomic int sl_runq_sleepers = 0;
+
+/* Makes t runnable, preferring this thread's runnext slot (see
+    sl_runnext's comment, sl_core.c). The caller holds a preempt bracket:
+    it may be running on a task's own stack, and the slot index is a
+    thread-local. A thread with no slot (reactor, timer) uses the stripes.
+    A task already in the slot is displaced onto the stripes, so a burst
+    of wakeups keeps only the latest one local. */
+static void sl_runq_ready(sl_task *t) {
+    int idx = sl_rt_runnext_idx;
+    if (idx < 0) {
+        sl_runq_stripe_push(t);
+        return;
+    }
+    sl_task *old = atomic_exchange_explicit(&sl_runnext[idx], t,
+                                            memory_order_seq_cst);
+    if (old) {
+        /* the slot stays counted once (now for t); old is counted again
+           by its stripe push, which also wakes a sleeper */
+        sl_runq_stripe_push(old);
+        return;
+    }
+    atomic_fetch_add_explicit(&sl_global_runq_count, 1, memory_order_relaxed);
+    if (atomic_load_explicit(&sl_runq_sleepers, memory_order_seq_cst) > 0) {
+        pthread_mutex_lock(&sl_global_runq.mu);
+        pthread_cond_broadcast(&sl_global_runq.not_empty);
+        pthread_mutex_unlock(&sl_global_runq.mu);
+    }
+}
+
+static sl_task *sl_runnext_take(int idx) {
+    if (idx < 0 ||
+        !atomic_load_explicit(&sl_runnext[idx], memory_order_relaxed))
+        return NULL;
+    sl_task *t = atomic_exchange_explicit(&sl_runnext[idx], NULL,
+                                          memory_order_seq_cst);
+    if (t)
+        atomic_fetch_sub_explicit(&sl_global_runq_count, 1,
+                                  memory_order_relaxed);
+    return t;
+}
+
+/* An idle worker takes another worker's runnext task rather than sleep
+    while that worker is busy with something else. Main's slot is the
+    last one. */
+static sl_task *sl_runnext_steal(void) {
+    for (long i = 0; i < sl_pool_nworkers; i++) {
+        sl_task *t = sl_runnext_take((int)i);
+        if (t)
+            return t;
+    }
+    return sl_runnext_take(SL_RUNNEXT_SLOTS - 1);
+}
+
 static void sl_runq_push(sl_runq *q, sl_task *t) {
     sl_rt_preempt_disable();
     sl_runq_push_raw(q, t);
@@ -212,9 +273,25 @@ static sl_task *sl_runq_pop_blocking(sl_runq *q) {
          * runtime_core.c), or a collection landing while the pool is
          * idle hangs forever (sl_gc_collect's quiescence wait requires
          * every registered thread to be either blocked or acked). */
+        /* Announce the sleep, THEN look at the runnext slots one last
+         * time -- the order sl_runq_ready's check relies on (see
+         * sl_runq_sleepers). A slot filled before the announcement is
+         * found here; one filled after it sees the announcement and
+         * broadcasts, which waits for q->mu until this thread is inside
+         * cond_wait. */
+        atomic_fetch_add_explicit(&sl_runq_sleepers, 1, memory_order_seq_cst);
+        t = sl_runnext_steal();
+        if (t) {
+            atomic_fetch_sub_explicit(&sl_runq_sleepers, 1,
+                                      memory_order_seq_cst);
+            pthread_mutex_unlock(&q->mu);
+            sl_rt_preempt_enable();
+            return t;
+        }
         atomic_store_explicit(&sl_rt_gc_blocked, 1, memory_order_release);
         pthread_cond_wait(&q->not_empty, &q->mu);
         atomic_store_explicit(&sl_rt_gc_blocked, 0, memory_order_release);
+        atomic_fetch_sub_explicit(&sl_runq_sleepers, 1, memory_order_seq_cst);
         /* Waking here (something was pushed, or shutdown) does NOT mean
          * it's safe to act on q->head yet. This thread's OWN quiescence
          * requirement was satisfied while it sat blocked=1, but a
@@ -265,7 +342,7 @@ static void sl_task_submit(void (*entry)(void *), void *arg) {
     sl_task *t = sl_task_acquire(entry, arg);
     t->entry_arg = arg;
     sl_rt_preempt_disable();
-    sl_runq_stripe_push(t);
+    sl_runq_ready(t);
     sl_rt_preempt_enable();
     if (sl_sched_stat_enabled())
         atomic_fetch_add_explicit(&sl_sched_stat_submit, 1,
@@ -292,7 +369,7 @@ static void sl_task_submit_copy(void (*entry)(void *), const void *src,
     t->entry_arg_trace = trace;
     sl_task_stack_init(t, entry, t->entry_arg);
     sl_rt_preempt_disable();
-    sl_runq_stripe_push(t);
+    sl_runq_ready(t);
     sl_rt_preempt_enable();
     if (sl_sched_stat_enabled())
         atomic_fetch_add_explicit(&sl_sched_stat_submit, 1,
@@ -390,7 +467,7 @@ static void sl_task_resume(sl_task *t) {
         if (*pp == t) { *pp = t->parked_next; break; }
         pp = &(*pp)->parked_next;
     }
-    sl_runq_stripe_push(t);
+    sl_runq_ready(t);
     pthread_mutex_unlock(&sl_gc_mu);
     sl_rt_preempt_enable();
     if (sl_sched_stat_enabled())
@@ -494,6 +571,8 @@ static void sl_worker_after_switch(sl_task *t) {
  * definition site, same ordering reason as every other forward-
  * declaration in this codebase. */
 #define SL_POOL_MAX_WORKERS 256
+_Static_assert(SL_RUNNEXT_SLOTS == SL_POOL_MAX_WORKERS + 1,
+               "one runnext slot per pool worker, plus main's");
 static pthread_t sl_pool_workers[SL_POOL_MAX_WORKERS];
 
 /* Tier 11 eighth slice (async preemption): the 'current occupant'
@@ -561,6 +640,10 @@ static pthread_mutex_t sl_pool_slots_mu = PTHREAD_MUTEX_INITIALIZER;
  * meaningless value, the direct expression of that same scope
  * decision in code, not a workaround for it. */
 static void sl_worker_run_loop(long slot_idx) {
+    /* When the running chain of runnext tasks began: a runnext task
+     * inherits it as its own run_start_ns, so the chain as a whole gets
+     * one quantum (as Go's inheritTime does). */
+    long long chain_start = 0;
     for (;;) {
         /* checkin BEFORE touching the queue at all -- as long as
          * nothing between two checkin calls itself yields a checkin/ack
@@ -572,9 +655,25 @@ static void sl_worker_run_loop(long slot_idx) {
          * sl_runq_pop_blocking's own comment for the empirically-found
          * race this closes (Tier 11 plan). */
         sl_rt_gc_checkin();
-        sl_task *t = sl_runq_stripe_try_pop();
+        long long now = sl_rt_monotonic_ns();
+        int inherited = 0;
+        sl_task *t = sl_runnext_take(sl_rt_runnext_idx);
+        if (t) {
+            if (now - chain_start < SL_PREEMPT_QUANTUM_NS) {
+                inherited = 1;
+            } else {
+                /* the chain has had its quantum: t goes to the back of
+                   the fair queue like anything else */
+                sl_runq_stripe_push(t);
+                t = NULL;
+            }
+        }
         if (!t)
+            t = sl_runq_stripe_try_pop();
+        if (!t) {
             t = sl_runq_pop_blocking(&sl_global_runq);
+            now = sl_rt_monotonic_ns(); /* it may have slept */
+        }
         if (t) sl_rt_current_task = t;
         if (!t) break; /* shutdown */
         if (sl_sched_stat_enabled())
@@ -585,7 +684,9 @@ static void sl_worker_run_loop(long slot_idx) {
          * preemption-yield all funnel through this one line, so
          * sl_rt_maybe_yield's run_start_ns comparison always measures
          * this stint, never a stale one from before the last switch-out. */
-        t->run_start_ns = sl_rt_monotonic_ns();
+        if (!inherited)
+            chain_start = now;
+        t->run_start_ns = chain_start;
         /* Tier 11 eighth slice: publish t as this slot's occupant right
          * where run_start_ns is already reset -- a fresh submit, a
          * resume-from-park, and a resume-from-preemption-yield all
@@ -631,6 +732,7 @@ static void *sl_worker_loop(void *arg) {
      * sl_gc_register_thread or anything else -- see sl_pool_slots' own
      * comment for the startup race this ordering closes. */
     atomic_store_explicit(&sl_pool_slots[slot_idx].tid, pthread_self(), memory_order_release);
+    sl_rt_runnext_idx = (int)slot_idx;
     sl_rt_install_altstack();
     sl_gc_register_thread();
     sl_worker_run_loop(slot_idx);
@@ -1050,6 +1152,12 @@ static void sl_pool_start(void) {
     }
     if (n < 1) n = 1;
     if (n > SL_POOL_MAX_WORKERS) n = SL_POOL_MAX_WORKERS;
+
+    /* Before any worker starts: thieves scan slots [0, n) and main's. */
+    sl_pool_nworkers = n;
+    /* This is main's own thread, which runs main's task and later joins
+     * the pool (sl_worker_run_loop(-1)); its runnext slot is the last. */
+    sl_rt_runnext_idx = SL_RUNNEXT_SLOTS - 1;
 
     for (long i = 0; i < n; i++) {
         if (sl_rt_thread_spawn(&sl_pool_workers[i], sl_worker_loop,

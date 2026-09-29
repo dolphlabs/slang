@@ -661,6 +661,14 @@ static void sl_gc_for_pending_tasks(void (*fn)(sl_task *),
             fn(t);
         pthread_mutex_unlock(&sl_runq_stripes[s].mu);
     }
+    /* runnext slots: runnable like a stripe's tasks, but on neither list
+       (sl_runnext's comment, sl_core.c, on why no worker can be changing
+       one while this runs) */
+    for (int i = 0; i < SL_RUNNEXT_SLOTS; i++) {
+        sl_task *t = atomic_load_explicit(&sl_runnext[i], memory_order_acquire);
+        if (t)
+            fn(t);
+    }
     for (sl_task *t = sl_parked_tasks; t; t = t->parked_next)
         fn(t);
 }
@@ -1231,6 +1239,25 @@ static void sl_gc_mark_roots(sl_gc_thread **snap, int nsnap,
             }
         }
         pthread_mutex_unlock(&sl_runq_stripes[s].mu);
+    }
+    /* runnext slots hold runnable tasks too, rooted exactly like a
+       stripe's (see sl_gc_for_pending_tasks for the same walk) */
+    for (int i = 0; i < SL_RUNNEXT_SLOTS; i++) {
+        sl_task *sl_gc_qt = atomic_load_explicit(&sl_runnext[i],
+                                                 memory_order_acquire);
+        if (!sl_gc_qt)
+            continue;
+        mark(sl_gc_qt->join);
+        sl_gc_mark_entry_arg_fn(sl_gc_qt, mark);
+        for (sl_safepoint *sp = sl_gc_qt->safepoint_top; sp; sp = sp->prev)
+            for (int j = 0; j < sp->nroots; j++)
+                mark(sp->roots[j]);
+        if (sl_gc_qt->async_preempted) {
+            sl_gc_scan_conservative(
+                (uintptr_t)sl_gc_qt->rsp,
+                (uintptr_t)sl_gc_qt->stack_base +
+                    (uintptr_t)sl_gc_qt->stack_size);
+        }
     }
     /* Tier 11 fourth slice: a PARKED task (chan_send/recv, this slice)
      * is reachable from neither a registered thread's task_slot (the
