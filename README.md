@@ -2956,7 +2956,9 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
 - **`spawn f(args...);`** evaluates every argument in the spawning
   context (no closures — nothing is captured implicitly) and submits
   `f` as a growable-stack task on the striped run queues (16 hashed
-  stripes with work-stealing, plus a global doorbell for sleepers).
+  stripes, plus a global doorbell for sleepers). Every worker scans the
+  stripes from a starting point that moves on each pop, so every stripe
+  is served at the same rate and no runnable task waits indefinitely.
   `f` may be a plain top-level function, an `extern fn`, or a
   **function value** (`spawn w(1, out);`, `spawn job.run(x);`) — not a
   method and not a builtin. There is no `spawn` on `net.*`/`time.*`

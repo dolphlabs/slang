@@ -127,7 +127,35 @@ dotted directories (#235). Write-ups in `todo.md`.
 
 ## 4. Tail latency under concurrent load
 
-- [ ] **Measured 2026-09-29** (4-way bench, one laptop, wrk -t4, 3 rounds):
+- [x] **Found and fixed (2026-09-29): run-queue starvation, not wakeup
+  delay.** A load generator that records every request's latency (wrk's
+  own tail was inflated: its reported average broke Little's law by 10x)
+  put plain slang at 200 connections at p50 0.34 ms, p99 17 ms, but p99.9
+  313 ms and a max of 4.7 s, with the slow requests concentrated on the
+  same connections. Rebuilding with a single global FIFO removed the tail
+  entirely (p99.9 6-12 ms, max 14-23 ms, no timeouts) at the same
+  throughput, which named the stage: workers scanned the 16 stripes from a
+  fixed "own" stripe, so the stripes no worker owned starved. A CPU-bound
+  test showed it plainly: 43-50 of 64 tasks never ran at all in 1.5 s.
+  Fix: each worker's scan starts one stripe further on every pop
+  (`sl_runq_scan_start`). Result: p99 5.6-6.6 ms, p99.9 11-16 ms, max
+  20-52 ms, zero timeouts, throughput unchanged. Go net/http on the same
+  harness: p99 12.6 ms, p99.9 22 ms. The fast 0.3 ms median was a product
+  of the unfairness (the owned stripes cycled quickly while others
+  starved); fairly scheduled, the median is ~3 ms, the Little's-law mean
+  at this throughput, so the median now moves with throughput (#5).
+  Test: `tests/sched_fairness`.
+
+  **Cost, measured:** plain slang throughput -2 to -3%. zokor under wrk at
+  200 connections -14 to -20% on its dynamic routes (`/users/:id`
+  44.7-52.0k -> 37.9-41.9k, `/echo` 37.4-40.1k -> 26.6-30.9k), because
+  zokor's panic recovery (#20 there) spawns a child task per request and
+  parks on it: the old scheduler kept that hand-off hot on one worker
+  while starving half the connections (782 wrk timeouts); fairly
+  scheduled, both hand-offs queue behind everyone. See #4b.
+
+  The original measurement, kept for the record:
+  **Measured 2026-09-29** (4-way bench, one laptop, wrk -t4, 3 rounds):
   plain slang's p50 beats Go's (0.3 ms vs 1.1-1.4 ms at 200 connections), but
   its p99 is 700-860 ms, with 25-155 requests per 10 s run hitting wrk's 2 s
   timeout; Go net/http's p99 is ~10 ms, Fiber's ~3 ms. The distribution is
@@ -144,6 +172,19 @@ dotted directories (#235). Write-ups in `todo.md`.
   global doorbell (one broadcast per push), per-worker queue unfairness, and
   lost wakeups rescued by a later event. No algorithm change without a
   measurement that names the stage.
+
+## 4b. Hand-off locality: a `runnext` slot
+
+- [ ] With the run queues fair (#4), a task woken or spawned by the running
+  task waits its turn behind every other runnable task, on whichever
+  worker gets to it. Go avoids that with `runnext`: the task the current
+  one just readied runs next on the same worker (cache-hot), and inherits
+  the rest of the time slice so a ping-ponging pair cannot starve anyone.
+  Here it would keep request/response pipelines and spawn-then-join
+  (zokor's per-request panic recovery) on one worker, and should win back
+  the zokor throughput #4 cost and more. The slot must be one of the GC's
+  root sources (like the stripes) and must not reintroduce starvation:
+  measure with `bench/latgen` and `tests/sched_fairness`, not wrk alone.
 
 ## 5. Per-request allocation in stdlib `http`
 
