@@ -3222,6 +3222,12 @@ Rules:
   import cycles are all compile errors.
 - Symbols are mangled per package (`sl_<pkg>_<name>`), so different
   packages can safely use the same names.
+- A package's name is its directory's name made an identifier: any
+  character other than a letter, digit or `_` becomes `_`, and a
+  leading digit gets a `p_` prefix (`app.v2` → `app_v2`, `9lib` →
+  `p_9lib`). That is the name diagnostics use. The import *binding*
+  is still the path's last element, so a directory whose name is not
+  an identifier needs an alias: `import "lib.v2" as lib;`.
 
 See `examples/pkgdemo/` for a complete multi-package project.
 

@@ -2532,6 +2532,16 @@ prerequisite, not a different plan).
       amplified-preemption crash (next-steps item 7); not attributed to
       either side without a reproduction.
 
+- [ ] **Two packages with the same directory basename collide.** Package
+      identity for naming is the directory's base name (`pkg_name_of_path`,
+      loader.c), and codegen resolves an import's target by that name, so
+      `import "a/util";` plus `import "b/util" as butil;` merges both into
+      package `util` and fails with a misleading "redefinition of function
+      'make' in package 'util'". Found 2026-09-29 while fixing dotted
+      directory names. Needs a unique per-path package identity (e.g. a
+      disambiguating suffix on collision) threaded through codegen's import
+      table, not just the name.
+
 - [ ] **`bench/http`'s server does not exit on SIGTERM** once it has served
       requests -- a benchmark script that `kill`s it and `wait`s hangs
       (found with the `dev` build, so not new). Probably the graceful
