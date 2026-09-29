@@ -413,6 +413,10 @@ for byte in b { ... }      // iterate byte values
 `bytes` values carry an explicit length and may contain NULs — safe for
 network buffers and binary formats.
 
+A non-empty literal is a fresh copy each time it is evaluated, since it can
+be written through `b[i] = v`. An empty `b""` allocates nothing: every
+evaluation is the same shared empty value, which no operation can change.
+
 #### Lists `[T]`
 
 ```slang
@@ -1148,6 +1152,10 @@ for byte in b { ... }      // iterate byte values
 `bytes` values carry an explicit length and may contain NULs — safe for
 network buffers and binary formats.
 
+A non-empty literal is a fresh copy each time it is evaluated, since it can
+be written through `b[i] = v`. An empty `b""` allocates nothing: every
+evaluation is the same shared empty value, which no operation can change.
+
 #### Lists `[T]`
 
 ```slang
@@ -1716,6 +1724,10 @@ for byte in b { ... }      // iterate byte values
 `bytes` values carry an explicit length and may contain NULs — safe for
 network buffers and binary formats.
 
+A non-empty literal is a fresh copy each time it is evaluated, since it can
+be written through `b[i] = v`. An empty `b""` allocates nothing: every
+evaluation is the same shared empty value, which no operation can change.
+
 ## Lists [T]
 
 ```slang
@@ -2238,6 +2250,13 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
   (a request handed to a child task and back, a channel's two ends); a
   chain of such hand-offs shares one time slice, and an idle worker
   steals a slot rather than sleep.
+  A task that runs past its time slice without reaching a yield point is
+  preempted asynchronously: a signal redirects it into a trampoline that
+  saves every register, parks it, and restores them all when it resumes.
+  `SLANG_SCHED_STAT=1` prints scheduler counts at exit, among them
+  `async_preempts` and `misaligned_preempts`, the preemptions whose
+  trampoline called C on a stack off the ABI's 16-byte alignment (always
+  0; `tests/run_tests.sh` checks it).
   `f` may be a plain top-level function, an `extern fn`, or a
   **function value** (`spawn w(1, out);`, `spawn job.run(x);`) — not a
   method and not a builtin. There is no `spawn` on `net.*`/`time.*`
@@ -4525,11 +4544,20 @@ from `bytes`, or `read` from a connection into a caller-sized `wire`
 (the max request size). `read` takes the unconsumed prefix length and
 returns `Incoming` with leftover compacted to the front of the wire,
 so one connection can carry many requests. `write` serializes a
-`Response` through an arena. Headers are stored lowercased;
-`header(req, name)` looks up case-insensitively. A body is framed by
+`Response` through an arena. A request keeps its header block as it
+arrived; `header(req, name)` looks it up case-insensitively. A body is framed by
 `Content-Length` or by `Transfer-Encoding: chunked` (chunk extensions
 ignored, trailers read and discarded). `wants_close` follows HTTP/1.1
-keep-alive (and HTTP/1.0 close-by-default).
+keep-alive (and HTTP/1.0 close-by-default). A request with no header
+lines at all (`GET / HTTP/1.0` and a blank line) is accepted.
+
+`read` is the hot path, so it allocates only what the request it returns
+holds: the path, one copy of the header block, the body when there is
+one, and the `Request`/`Incoming` around them. The common methods (`GET`,
+`HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`) and both versions come
+back as literals, and `wants_close` decides from the header block in
+place. A plain `GET` costs 7 GC allocations; `tests/run_tests.sh` holds it
+to that.
 
 Framing decides where a request ENDS, so it is a security boundary: if a
 proxy in front and this server frame the same bytes differently, the
@@ -5622,11 +5650,20 @@ from `bytes`, or `read` from a connection into a caller-sized `wire`
 (the max request size). `read` takes the unconsumed prefix length and
 returns `Incoming` with leftover compacted to the front of the wire,
 so one connection can carry many requests. `write` serializes a
-`Response` through an arena. Headers are stored lowercased;
-`header(req, name)` looks up case-insensitively. A body is framed by
+`Response` through an arena. A request keeps its header block as it
+arrived; `header(req, name)` looks it up case-insensitively. A body is framed by
 `Content-Length` or by `Transfer-Encoding: chunked` (chunk extensions
 ignored, trailers read and discarded). `wants_close` follows HTTP/1.1
-keep-alive (and HTTP/1.0 close-by-default).
+keep-alive (and HTTP/1.0 close-by-default). A request with no header
+lines at all (`GET / HTTP/1.0` and a blank line) is accepted.
+
+`read` is the hot path, so it allocates only what the request it returns
+holds: the path, one copy of the header block, the body when there is
+one, and the `Request`/`Incoming` around them. The common methods (`GET`,
+`HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`) and both versions come
+back as literals, and `wants_close` decides from the header block in
+place. A plain `GET` costs 7 GC allocations; `tests/run_tests.sh` holds it
+to that.
 
 Framing decides where a request ENDS, so it is a security boundary: if a
 proxy in front and this server frame the same bytes differently, the
@@ -5783,13 +5820,15 @@ The escaped form of `msg` as bytes, for a caller that already holds bytes and wa
 
 ### `fn wants_close(r: Request) -> bool`
 
+Whether the connection should close after answering `r`: HTTP/1.1 stays open unless the client sent `Connection: close`, HTTP/1.0 closes unless it sent `Connection: keep-alive` (either case-insensitive, OWS trimmed; with the header repeated, the one `header()` returns decides). Allocates nothing.
+
 ### `fn version_flag_of(v: str) -> int`
 
 The int-flag twin, for callers holding a version str rather than a Head (read_frame's WireFrame.version). Same rules; the block is passed explicitly because there is no Head in scope.
 
 ### `fn read_frame(c: &mut link, buf: wire, filled: int,`
 
-read_frame: read's framing, plus the parsed head the router matches on. Implemented INSIDE read's loop shape (not as read-plus-copy): read compacts the buffer before returning, so after read there is no head left to copy -- buf[0..filled] is the NEXT request. This duplicates read's loop deliberately (same scans, same errors, same close rules), and the duplication is the contract: any change to read's framing must land here too.  What differs from read: on a complete frame the method/path strs and the header block + body are COPIED OUT of the wire ONCE -- the same strs + copies read already pays (hd2.method/path, hd2.headers, fm.body) -- and NO separate message copy is made. The old shape did to_bytes(buf[0..end]) PLUS parse_frame over the copy PLUS wants_close_scan over the copy: a full second framing pass and a whole-message copy per request. Now the WireFrame carries what the router needs directly: method/path strs for the enum + Request build, headers/body slices for the Ctx. Routing matches on strs (==), never on raw bytes -- no path_is_at rescan, no per-route to_bytes. The message copy is gone entirely.  Chunked bodies: fm.body IS the reassembled copy (one alloc the old path also spent); the WireFrame body is that copy directly. Three deadlines, not one, because "how long should this wait" has three different honest answers depending on what the connection is doing: idle_deadline while nothing has arrived at all yet (a kept- alive connection between requests, or a fresh one that never sends anything -- this is the one that should be generous, since a real client legitimately sits idle between requests); header_deadline once bytes have started arriving but the request line and headers aren't complete yet; body_deadline once the headers are in but a declared body hasn't fully arrived. header_deadline and body_deadline are both the tight, slow-loris-shaped ones -- a client that has started a request and then trickles it in a byte at a time is not the same risk as one that hasn't sent anything yet, and idle_deadline being long must not become an amplifier for that. Recomputed fresh every loop iteration rather than tracked as a separate flag: frame_head_wire's own re-parse of the same (only ever growing) buffer already answers "is the header complete yet" idempotently, so re-deriving which phase this recv is in from that costs nothing extra and can't drift out of sync with it.
+read_frame: read's framing, plus the parsed head the router matches on. Implemented INSIDE read's loop shape (not as read-plus-copy): read compacts the buffer before returning, so after read there is no head left to copy -- buf[0..filled] is the NEXT request. This duplicates read's loop deliberately (same scans, same errors, same close rules), and the duplication is the contract: any change to read's framing must land here too.  What differs from read: on a complete frame the method/path strs and the header block + body are COPIED OUT of the wire ONCE -- the same strs + copies read already pays (hd.method/path, hd.headers, hd.body) -- and NO separate message copy is made. The old shape did to_bytes(buf[0..end]) PLUS parse_frame over the copy PLUS wants_close_scan over the copy: a full second framing pass and a whole-message copy per request. Now the WireFrame carries what the router needs directly: method/path strs for the enum + Request build, headers/body slices for the Ctx. Routing matches on strs (==), never on raw bytes -- no path_is_at rescan, no per-route to_bytes. The message copy is gone entirely.  Chunked bodies: hd.body IS the reassembled copy (one alloc the old path also spent); the WireFrame body is that copy directly. Three deadlines, not one, because "how long should this wait" has three different honest answers depending on what the connection is doing: idle_deadline while nothing has arrived at all yet (a kept- alive connection between requests, or a fresh one that never sends anything -- this is the one that should be generous, since a real client legitimately sits idle between requests); header_deadline once bytes have started arriving but the request line and headers aren't complete yet; body_deadline once the headers are in but a declared body hasn't fully arrived. header_deadline and body_deadline are both the tight, slow-loris-shaped ones -- a client that has started a request and then trickles it in a byte at a time is not the same risk as one that hasn't sent anything yet, and idle_deadline being long must not become an amplifier for that. Recomputed fresh every loop iteration rather than tracked as a separate flag: frame_head_wire's own re-parse of the same (only ever growing) buffer already answers "is the header complete yet" idempotently, so re-deriving which phase this recv is in from that costs nothing extra and can't drift out of sync with it.
 
 ### `fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Incoming, str]`
 

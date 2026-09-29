@@ -18,6 +18,10 @@ for byte in b { ... }      // iterate byte values
 `bytes` values carry an explicit length and may contain NULs — safe for
 network buffers and binary formats.
 
+A non-empty literal is a fresh copy each time it is evaluated, since it can
+be written through `b[i] = v`. An empty `b""` allocates nothing: every
+evaluation is the same shared empty value, which no operation can change.
+
 ## Lists [T]
 
 ```slang

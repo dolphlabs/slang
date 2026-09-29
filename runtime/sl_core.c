@@ -369,6 +369,9 @@ static _Atomic unsigned long long sl_sched_stat_resume = 0;
 static _Atomic unsigned long long sl_sched_stat_dispatch = 0;
 static _Atomic unsigned long long sl_sched_stat_preempt_yield = 0;
 static _Atomic unsigned long long sl_sched_stat_preempt_async = 0;
+/* Async preemptions whose trampoline called into C with a stack off the
+   ABI's 16-byte alignment (sl_preempt_yield's probe). Must stay 0. */
+static _Atomic unsigned long long sl_sched_stat_preempt_misaligned = 0;
 
 static int sl_sched_stat_enabled(void) {
     static int cached = -1;
@@ -390,8 +393,10 @@ static void sl_sched_stat_dump(void) {
         &sl_sched_stat_preempt_yield, memory_order_relaxed);
     unsigned long long async = atomic_load_explicit(
         &sl_sched_stat_preempt_async, memory_order_relaxed);
-    fprintf(stderr, "slang-sched-stat submits=%llu resumes=%llu dispatches=%llu preempt_yields=%llu async_preempts=%llu\n",
-            submit, resume, dispatch, pyield, async);
+    unsigned long long misaligned = atomic_load_explicit(
+        &sl_sched_stat_preempt_misaligned, memory_order_relaxed);
+    fprintf(stderr, "slang-sched-stat submits=%llu resumes=%llu dispatches=%llu preempt_yields=%llu async_preempts=%llu misaligned_preempts=%llu\n",
+            submit, resume, dispatch, pyield, async, misaligned);
 }
 
 __attribute__((destructor))

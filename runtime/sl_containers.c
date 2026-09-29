@@ -634,6 +634,17 @@ static sl_bytes *sl_bytes_new(const unsigned char *p, long long n) {
     return b;
 }
 
+/* What every `b""` literal evaluates to (codegen, EX_BYTES), instead of
+ * two fresh allocations per evaluation. Sharing one object is sound only
+ * because no operation changes a bytes' length or pointer after it is
+ * built: the one in-place write, `b[i] = v`, is bounds-checked and so
+ * can never land in a zero-length value. Not a GC object: sl_gc_mark
+ * skips it (sl_gc_set_contains) as it skips string literals, and no
+ * barrier ever takes a bytes as its container, since a bytes holds no
+ * pointers. */
+static unsigned char sl_bytes_empty_data[1];
+static sl_bytes sl_bytes_empty = { 0, sl_bytes_empty_data };
+
 static sl_bytes sl_bytes_static(const unsigned char *p, long long n) {
     sl_bytes b;
     b.len = n;

@@ -302,7 +302,8 @@ for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood \
             spawn_isolation gc_stress maps json json_int_exact flags method_recv \
             method_recv_gc indirect_callee generics_structs generics_json generics_infer \
             generics_pkg gc_nested_literal generics_methods \
-            generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry own_roots switch escape_roots; do
+            generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry own_roots switch escape_roots \
+            http_read_wire bytes_empty_literal; do
     out="/tmp/sl_gcstress_${name}.out"
     if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -329,7 +330,8 @@ echo "--- nursery stress (SLANG_GC_NURSERY_KB=16) ---"
 nur_bad=0
 for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put \
             gc_nested_literal gc_stress gc_stat spawn_isolation maps json \
-            json_int_exact flags method_recv method_recv_gc indirect_callee; do
+            json_int_exact flags method_recv method_recv_gc indirect_callee \
+            http_read_wire bytes_empty_literal; do
     out="/tmp/sl_nursery_${name}.out"
     if ! SLANG_GC_NURSERY_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -342,6 +344,93 @@ for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put \
     fi
 done
 [ "$nur_bad" -eq 0 ] && echo "PASS nursery stress"
+
+# ---- allocation budgets ----------------------------------------------------
+# GC allocations per operation, pinned for paths where the count is the
+# point. Each program below has an ALLOC_BUDGET_N mode that repeats one
+# operation N times and nothing else, so its SLANG_GC_STAT count at N minus
+# its count at 0 is N operations' worth, which must not exceed N * per +
+# slack. Going over is a regression to explain, not a number to re-pin;
+# coming in under means the budget should come down with it.
+#   http_read_wire       http.read + wants_close on a pipelined GET. Was
+#                        20 (every ok()/err() and struct the parse threaded
+#                        through, an opt per close check); 7 now: the
+#                        WireHead, the path, the header block (a bytes is
+#                        two), and the Request, Incoming and result. The
+#                        slack is for requests cut off at the end of the
+#                        buffer: each such parse attempt makes a WireHead
+#                        too (about 13 in 2000 here), and how often that
+#                        happens depends on how the kernel splits the recvs.
+#   bytes_empty_literal  b"" stored into a gc struct field. Was 2; a shared
+#                        static now.
+echo "--- allocation budgets (SLANG_GC_STAT) ---"
+budget_bad=0
+for spec in http_read_wire:2000:7:40 bytes_empty_literal:100000:0:0; do
+    IFS=: read -r name n per slack <<EOF_SPEC
+$spec
+EOF_SPEC
+    bin="/tmp/sl_budget_${name}"
+    if ! ./slangc "tests/$name/main.sl" -o "$bin" >/dev/null 2>&1; then
+        echo "FAIL allocation budget $name (compile)"
+        budget_bad=1; fail=1
+        continue
+    fi
+    a0=$(SLANG_GC_STAT=1 ALLOC_BUDGET_N=0 "$bin" 2>&1 >/dev/null |
+         sed -n 's/.* allocs=\([0-9]*\).*/\1/p' | head -1)
+    an=$(SLANG_GC_STAT=1 ALLOC_BUDGET_N=$n "$bin" 2>&1 >/dev/null |
+         sed -n 's/.* allocs=\([0-9]*\).*/\1/p' | head -1)
+    rm -f "$bin"
+    if [ -z "$a0" ] || [ -z "$an" ]; then
+        echo "FAIL allocation budget $name (no slang-gc-stat line)"
+        budget_bad=1; fail=1
+    elif [ $((an - a0)) -gt $((n * per + slack)) ]; then
+        echo "FAIL allocation budget $name: $((an - a0)) allocations for" \
+             "$n operations, budget $per per operation + $slack"
+        budget_bad=1; fail=1
+    fi
+done
+[ "$budget_bad" -eq 0 ] && echo "PASS allocation budgets"
+
+# ---- async preemption: C called on an aligned stack ------------------------
+# The async-preemption trampoline calls into C (sl_preempt_yield and two
+# helpers), and System V requires %rsp 16-byte aligned at every call. An
+# interrupt can land with %rsp 8 off, and the trampoline once passed that
+# straight through: 17-21% of these preemptions called C misaligned. No
+# callee happened to use an aligned SSE spill, so nothing crashed, but any
+# compiler is entitled to emit one there. SLANG_SCHED_STAT counts calls
+# that arrive misaligned (a probe inside sl_preempt_yield); CPU-bound
+# tasks under a 1ms tick and quantum get hundreds of async preemptions,
+# and the count must be zero. arm64 keeps sp aligned in hardware, so
+# there it checks only that the preemptions happen.
+echo "--- async preemption alignment (SLANG_SCHED_STAT) ---"
+pa_bin=/tmp/sl_preempt_align
+if ! ./slangc tests/sched_fairness/main.sl -o "$pa_bin" >/dev/null 2>&1; then
+    echo "FAIL async preemption alignment (compile)"
+    fail=1
+else
+    pa_stat=$(SLANG_SCHED_STAT=1 SLANG_PREEMPT_TICK_MS=1 \
+              SLANG_PREEMPT_QUANTUM_MS=1 "$pa_bin" 2>&1 >/dev/null |
+              grep '^slang-sched-stat')
+    pa_async=$(printf '%s\n' "$pa_stat" |
+               sed -n 's/.* async_preempts=\([0-9]*\).*/\1/p')
+    pa_mis=$(printf '%s\n' "$pa_stat" |
+             sed -n 's/.* misaligned_preempts=\([0-9]*\).*/\1/p')
+    if [ -z "$pa_async" ] || [ -z "$pa_mis" ]; then
+        echo "FAIL async preemption alignment (no slang-sched-stat line)"
+        fail=1
+    elif [ "$pa_async" -lt 20 ]; then
+        echo "FAIL async preemption alignment: only $pa_async async" \
+             "preemptions, too few to test"
+        fail=1
+    elif [ "$pa_mis" -ne 0 ]; then
+        echo "FAIL async preemption alignment: $pa_mis of $pa_async" \
+             "called C with a misaligned stack"
+        fail=1
+    else
+        echo "PASS async preemption alignment ($pa_async async preemptions)"
+    fi
+fi
+rm -f "$pa_bin"
 
 # ---- frame guards --------------------------------------------------------
 # A function whose C frame is large is compiled behind an entry guard that
