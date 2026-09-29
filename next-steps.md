@@ -252,12 +252,19 @@ dotted directories (#235). Write-ups in `todo.md`.
 
 ## 6. x86_64 trampoline calls C with a possibly misaligned stack
 
-- [ ] The async-preemption trampoline preserves the interrupted `%rsp`'s
-  alignment and calls `sl_preempt_yield` with it, so C code can run with
-  `%rsp` 8 bytes off the System V 16-byte requirement (an interrupt can land
-  anywhere, including between a `call` and its callee's `push`). No failure
-  observed -- the callees happen not to use aligned SSE spills -- but it is
-  an ABI violation waiting for a compiler to exploit it.
+- [x] **Done (2026-09-29).** The async-preemption trampoline (both x86_64
+  copies, Darwin and Linux) now keeps the unaligned `%rsp` in `%rbx`,
+  rounds `%rsp` down to 16 bytes for its three C calls, and addresses the
+  save block's two slots through `%rbx`. Measured before the fix with a
+  probe inside `sl_preempt_yield` (`sl_rt_call_misalign`, reported as
+  `misaligned_preempts` by `SLANG_SCHED_STAT`): 17-21% of async
+  preemptions called C misaligned (133-191 of 770-911 per run of
+  `tests/sched_fairness` under a 1ms tick and quantum); after, 0. The
+  suite now checks that count. arm64 needed nothing: its trampoline's
+  816-byte block is a multiple of 16 and sp is kept aligned by the
+  hardware. Task start (`sl_ctx_trampoline`) and stack growth
+  (`sl_grower_trampoline`) were checked and were already aligned: both
+  enter on the 16-aligned stack top `sl_ctx_make` builds.
 
 ## 7. Minor GCs trace every roots-reachable old object
 

@@ -77,7 +77,19 @@ __asm__(
  * signal frame built on this stack there overwrites it (Darwin writes
  * &uc->uc_mcontext exactly there). Sound only because SIGUSR1 runs
  * SA_ONSTACK on a per-thread alternate stack; see
- * sl_rt_install_altstack (sl_pool.c). */
+ * sl_rt_install_altstack (sl_pool.c).
+ *
+ * The three C calls run on a 16-byte-aligned %rsp, as System V requires
+ * at every call. The save block is 784 bytes, a multiple of 16, so
+ * without the `and` the calls inherit the interrupted %rsp's alignment,
+ * and an interrupt lands anywhere -- including between a `call` and its
+ * callee's first push -- leaving %rsp 8 off about half the time. The
+ * unaligned %rsp is kept in %rbx, which every callee preserves (and
+ * sl_ctx_switch saves across the park inside sl_preempt_yield); its own
+ * value is already in the save block, and the block's two slots are
+ * addressed through it. `and` writes the flags, which pushfq has
+ * already saved. The alignment costs at most 8 more bytes of the
+ * task's stack, well inside SL_TASK_GUARD_MARGIN. */
 __asm__(
 ".text\n"
 ".globl _sl_preempt_trampoline_entry\n"
@@ -138,11 +150,14 @@ __asm__(
 "    movdqu %xmm14, 448(%rsp)\n"
 "    movdqu %xmm15, 480(%rsp)\n"
 "LVEC_SAVED:\n"
+"    mov  %rsp, %rbx\n"
+"    and  $-16, %rsp\n"
 "    call _sl_preempt_yield\n"
 "    call _sl_preempt_get_orig_pc\n"
-"    movq %rax, 648(%rsp)\n"
+"    movq %rax, 648(%rbx)\n"
 "    call _sl_preempt_get_disable_depth_ptr\n"
-"    movq %rax, 640(%rsp)\n"
+"    movq %rax, 640(%rbx)\n"
+"    mov  %rbx, %rsp\n"
 "    cmpb $0, _sl_cpu_avx_ok(%rip)\n"
 "    je   LSSE_REST\n"
 "    vmovdqu 0(%rsp), %ymm0\n"
@@ -276,7 +291,19 @@ __asm__(
  * signal frame built on this stack there overwrites it (Darwin writes
  * &uc->uc_mcontext exactly there). Sound only because SIGUSR1 runs
  * SA_ONSTACK on a per-thread alternate stack; see
- * sl_rt_install_altstack (sl_pool.c). */
+ * sl_rt_install_altstack (sl_pool.c).
+ *
+ * The three C calls run on a 16-byte-aligned %rsp, as System V requires
+ * at every call. The save block is 784 bytes, a multiple of 16, so
+ * without the `and` the calls inherit the interrupted %rsp's alignment,
+ * and an interrupt lands anywhere -- including between a `call` and its
+ * callee's first push -- leaving %rsp 8 off about half the time. The
+ * unaligned %rsp is kept in %rbx, which every callee preserves (and
+ * sl_ctx_switch saves across the park inside sl_preempt_yield); its own
+ * value is already in the save block, and the block's two slots are
+ * addressed through it. `and` writes the flags, which pushfq has
+ * already saved. The alignment costs at most 8 more bytes of the
+ * task's stack, well inside SL_TASK_GUARD_MARGIN. */
 __asm__(
 ".text\n"
 ".globl sl_preempt_trampoline_entry\n"
@@ -337,11 +364,14 @@ __asm__(
 "    movdqu %xmm14, 448(%rsp)\n"
 "    movdqu %xmm15, 480(%rsp)\n"
 ".LVEC_SAVED:\n"
+"    mov  %rsp, %rbx\n"
+"    and  $-16, %rsp\n"
 "    call sl_preempt_yield\n"
 "    call sl_preempt_get_orig_pc\n"
-"    movq %rax, 648(%rsp)\n"
+"    movq %rax, 648(%rbx)\n"
 "    call sl_preempt_get_disable_depth_ptr\n"
-"    movq %rax, 640(%rsp)\n"
+"    movq %rax, 640(%rbx)\n"
+"    mov  %rbx, %rsp\n"
 "    cmpb $0, sl_cpu_avx_ok(%rip)\n"
 "    je   .LSSE_REST\n"
 "    vmovdqu 0(%rsp), %ymm0\n"
@@ -706,6 +736,36 @@ __asm__(
 #error "sl_ctx_switch: unsupported architecture (only x86_64 and aarch64 have a runtime_sched.c backend)"
 #endif
 
+/* How far the CALLER's stack pointer was from 16-byte alignment at its
+ * `call` (x86_64) or right now (arm64, where the hardware keeps sp
+ * aligned): 0 when the ABI holds. Leaf asm, so no compiler-chosen frame
+ * sits between the call and the read. Only the SLANG_SCHED_STAT check in
+ * sl_preempt_yield calls it: a C function entered misaligned passes the
+ * same misalignment to everything it calls, so one probe from inside
+ * sl_preempt_yield tells whether the async trampoline called it
+ * aligned. */
+__asm__(
+".text\n"
+#if defined(__APPLE__)
+".globl _sl_rt_call_misalign\n"
+".p2align 4\n"
+"_sl_rt_call_misalign:\n"
+#else
+".globl sl_rt_call_misalign\n"
+".p2align 4\n"
+"sl_rt_call_misalign:\n"
+#endif
+#if defined(__x86_64__)
+"    lea  8(%rsp), %rax\n"
+"    and  $15, %eax\n"
+"    ret\n"
+#else
+"    mov  x0, sp\n"
+"    and  x0, x0, #15\n"
+"    ret\n"
+#endif
+);
+
 void sl_ctx_switch(void **old_rsp_slot, void *new_rsp);
 void sl_ctx_trampoline(void);
 void sl_grower_trampoline(void); /* Tier 11 eighth slice -- see its own
@@ -741,6 +801,7 @@ void sl_preempt_trampoline_end(void); /* address-range marker only,
     own derivation (standalone spike, Bug 1/the release-to-jmp tail)
     for why a counter-based bracket alone provably cannot close this
     gap and a PC-range check can. */
+long sl_rt_call_misalign(void);
 void sl_preempt_yield(void); /* called from the trampoline asm above,
     defined below, near sl_preempt_release_initial_disable */
 void *sl_preempt_get_orig_pc(void);
@@ -1427,6 +1488,9 @@ __attribute__((used)) void sl_preempt_release_initial_disable(void) {
 __attribute__((used)) void sl_preempt_yield(void) {
     sl_task *t = sl_rt_current_task;
     t->async_preempted = 1;
+    if (sl_sched_stat_enabled() && sl_rt_call_misalign() != 0)
+        atomic_fetch_add_explicit(&sl_sched_stat_preempt_misaligned, 1,
+                                  memory_order_relaxed);
     sl_task_yield_now(); /* existing, unmodified -- sets t->preempted=1,
         calls sl_ctx_switch(&t->rsp, sl_rt_native_rsp). Resuming this
         call is exactly what makes the trampoline fall through to its

@@ -391,6 +391,47 @@ EOF_SPEC
 done
 [ "$budget_bad" -eq 0 ] && echo "PASS allocation budgets"
 
+# ---- async preemption: C called on an aligned stack ------------------------
+# The async-preemption trampoline calls into C (sl_preempt_yield and two
+# helpers), and System V requires %rsp 16-byte aligned at every call. An
+# interrupt can land with %rsp 8 off, and the trampoline once passed that
+# straight through: 17-21% of these preemptions called C misaligned. No
+# callee happened to use an aligned SSE spill, so nothing crashed, but any
+# compiler is entitled to emit one there. SLANG_SCHED_STAT counts calls
+# that arrive misaligned (a probe inside sl_preempt_yield); CPU-bound
+# tasks under a 1ms tick and quantum get hundreds of async preemptions,
+# and the count must be zero. arm64 keeps sp aligned in hardware, so
+# there it checks only that the preemptions happen.
+echo "--- async preemption alignment (SLANG_SCHED_STAT) ---"
+pa_bin=/tmp/sl_preempt_align
+if ! ./slangc tests/sched_fairness/main.sl -o "$pa_bin" >/dev/null 2>&1; then
+    echo "FAIL async preemption alignment (compile)"
+    fail=1
+else
+    pa_stat=$(SLANG_SCHED_STAT=1 SLANG_PREEMPT_TICK_MS=1 \
+              SLANG_PREEMPT_QUANTUM_MS=1 "$pa_bin" 2>&1 >/dev/null |
+              grep '^slang-sched-stat')
+    pa_async=$(printf '%s\n' "$pa_stat" |
+               sed -n 's/.* async_preempts=\([0-9]*\).*/\1/p')
+    pa_mis=$(printf '%s\n' "$pa_stat" |
+             sed -n 's/.* misaligned_preempts=\([0-9]*\).*/\1/p')
+    if [ -z "$pa_async" ] || [ -z "$pa_mis" ]; then
+        echo "FAIL async preemption alignment (no slang-sched-stat line)"
+        fail=1
+    elif [ "$pa_async" -lt 20 ]; then
+        echo "FAIL async preemption alignment: only $pa_async async" \
+             "preemptions, too few to test"
+        fail=1
+    elif [ "$pa_mis" -ne 0 ]; then
+        echo "FAIL async preemption alignment: $pa_mis of $pa_async" \
+             "called C with a misaligned stack"
+        fail=1
+    else
+        echo "PASS async preemption alignment ($pa_async async preemptions)"
+    fi
+fi
+rm -f "$pa_bin"
+
 # ---- frame guards --------------------------------------------------------
 # A function whose C frame is large is compiled behind an entry guard that
 # grows the stack first (see the frame loop in src/main.c). Real programs
