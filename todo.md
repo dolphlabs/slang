@@ -2591,6 +2591,13 @@ prerequisite, not a different plan).
       Now each worker's scan starts one stripe further on every pop. See
       next-steps.md #4 for the measurements; test `tests/sched_fairness`.
 
+- [x] **A woken task queued behind everything else.** Done 2026-09-29
+      as a `runnext` slot per worker (next-steps.md #4b). Keep in mind when
+      touching the scheduler: a task can now be runnable while on NO
+      stripe -- in a `sl_runnext` slot -- so anything that enumerates
+      runnable tasks (the collector's two walks do) must include the
+      slots, and `sl_global_runq_count` counts them.
+
 - [ ] **Intermittent: `tests/sigpipe` on GitHub's macOS runner.** Failed
       twice in about 255 runs, both inside the full suite; never alone
       (40/40) and never under 8x parallel load (200/200). The failures
