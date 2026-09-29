@@ -2233,6 +2233,11 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
   stripes, plus a global doorbell for sleepers). Every worker scans the
   stripes from a starting point that moves on each pop, so every stripe
   is served at the same rate and no runnable task waits indefinitely.
+  A task woken or spawned by a running task goes to that worker's
+  `runnext` slot instead and runs there next, while the caches are warm
+  (a request handed to a child task and back, a channel's two ends); a
+  chain of such hand-offs shares one time slice, and an idle worker
+  steals a slot rather than sleep.
   `f` may be a plain top-level function, an `extern fn`, or a
   **function value** (`spawn w(1, out);`, `spawn job.run(x);`) — not a
   method and not a builtin. There is no `spawn` on `net.*`/`time.*`
