@@ -331,6 +331,39 @@ static inline unsigned sl_runq_stripe_for(const sl_task *t) {
     return (unsigned)(h % (uintptr_t)SL_RUNQ_STRIPES);
 }
 
+/* runnext: one slot per worker holding the task the task running there
+    just made runnable (woke or spawned). The worker runs it next, while
+    its caches still hold what the two share -- a request handed to a
+    child and back, a channel's sender and receiver -- instead of it
+    queueing fairly behind every other runnable task and landing on
+    whichever worker comes by. Go's scheduler does the same.
+
+    Fairness is kept three ways (see sl_pool.c): a runnext task inherits
+    the time slice of the chain it continues, so a pair waking each other
+    cannot hold a worker past one quantum; a task already in a slot is
+    displaced onto the fair stripes when another takes its place; and an
+    idle worker steals slots, so a task never waits on a busy worker while
+    another sits idle. A slot's task counts in sl_global_runq_count, so
+    cooperative yield and async preemption still see it waiting.
+
+    Index = the worker's pool slot; the last entry is main's own OS
+    thread, which runs tasks too. A slot is one of the collector's root
+    sources, walked wherever the stripes are (sl_gc.c). Written only by
+    running workers (a task waking or spawning, a worker taking its own)
+    and by idle workers stealing before they sleep -- none of which can
+    overlap a collection's mark, which waits for every worker to ack or
+    block. */
+#define SL_RUNNEXT_SLOTS (256 + 1)
+static _Atomic(sl_task *) sl_runnext[SL_RUNNEXT_SLOTS];
+/* How many pool workers exist (set once by sl_pool_start); slots past it
+    are unused except main's, the last. */
+static long sl_pool_nworkers = 0;
+/* This thread's runnext slot, or -1 on a thread that runs no tasks (the
+    reactor, timer, signal and DNS threads -- their wakeups go to the
+    stripes). Read from task context only inside a preempt bracket (see
+    sl_rt_cur's comment on thread-locals under async preemption). */
+static _Thread_local int sl_rt_runnext_idx = -1;
+
 static _Atomic unsigned long long sl_sched_stat_submit = 0;
 static _Atomic unsigned long long sl_sched_stat_resume = 0;
 static _Atomic unsigned long long sl_sched_stat_dispatch = 0;
