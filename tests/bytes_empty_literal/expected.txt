@@ -1,0 +1,3 @@
+semantics
+fresh_non_empty
+survives_gc
