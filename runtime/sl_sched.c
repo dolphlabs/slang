@@ -72,7 +72,12 @@ __asm__(
  * C helper calls, then the mirror-image restore ending in a jmp
  * through a memory operand (never a register) computed relative to
  * the already-restored %rsp -- the second review's own confirmed-sound
- * finding: no GPR is ever clobbered to hold the jump target. */
+ * finding: no GPR is ever clobbered to hold the jump target. That slot
+ * is at -136, OUTSIDE the red zone, for the final instruction: any
+ * signal frame built on this stack there overwrites it (Darwin writes
+ * &uc->uc_mcontext exactly there). Sound only because SIGUSR1 runs
+ * SA_ONSTACK on a per-thread alternate stack; see
+ * sl_rt_install_altstack (sl_pool.c). */
 __asm__(
 ".text\n"
 ".globl _sl_preempt_trampoline_entry\n"
@@ -266,7 +271,12 @@ __asm__(
  * C helper calls, then the mirror-image restore ending in a jmp
  * through a memory operand (never a register) computed relative to
  * the already-restored %rsp -- the second review's own confirmed-sound
- * finding: no GPR is ever clobbered to hold the jump target. */
+ * finding: no GPR is ever clobbered to hold the jump target. That slot
+ * is at -136, OUTSIDE the red zone, for the final instruction: any
+ * signal frame built on this stack there overwrites it (Darwin writes
+ * &uc->uc_mcontext exactly there). Sound only because SIGUSR1 runs
+ * SA_ONSTACK on a per-thread alternate stack; see
+ * sl_rt_install_altstack (sl_pool.c). */
 __asm__(
 ".text\n"
 ".globl sl_preempt_trampoline_entry\n"
@@ -466,8 +476,10 @@ __asm__(
  * WHY THIS IS NOT A TRANSLATION OF THE x86_64 VERSION
  *
  * The x86_64 trampoline restores every register and then jumps back
- * through a slot BELOW %rsp -- sound only because x86_64 has a 128-byte
- * red zone that signal frames skip. arm64 has neither a red zone nor a
+ * through a slot BELOW %rsp, at -136 -- just past the 128-byte red zone
+ * that signal frames skip, so it is sound only because the preemption
+ * handler runs on an alternate stack (sl_rt_install_altstack, sl_pool.c
+ * has the SIGBUS it took to learn that). arm64 has neither a red zone nor a
  * memory-indirect branch: branching back needs a register, and at an
  * arbitrary interrupted instruction in C code any register may be live
  * (x16/x17 included, inside PLT stubs and veneers).

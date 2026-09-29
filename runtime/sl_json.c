@@ -270,7 +270,11 @@ static sl_json_val *sl_jparse_array(sl_jparser *p) {
         if (!item) { p->depth--; return NULL; }
         if (v->as.arr.len >= cap) {
             cap = cap ? cap * 2 : 4;
-            v->as.arr.items = (sl_json_val **)sl_gc_realloc(v->as.arr.items, (size_t)cap * sizeof(sl_json_val *));
+            /* Bracketed so v's generation cannot change between the
+             * owned realloc reading it and the store (sl_arr_reserve). */
+            sl_rt_preempt_disable();
+            v->as.arr.items = (sl_json_val **)sl_gc_realloc_owned(v->as.arr.items, (size_t)cap * sizeof(sl_json_val *), v);
+            sl_rt_preempt_enable();
         }
         v->as.arr.items[v->as.arr.len++] = item;
         sl_jskip_ws(p);
@@ -318,8 +322,10 @@ static sl_json_val *sl_jparse_object(sl_jparser *p) {
         if (!val) { p->depth--; return NULL; }
         if (v->as.obj.len >= cap) {
             cap = cap ? cap * 2 : 4;
-            v->as.obj.keys = (char **)sl_gc_realloc(v->as.obj.keys, (size_t)cap * sizeof(char *));
-            v->as.obj.vals = (sl_json_val **)sl_gc_realloc(v->as.obj.vals, (size_t)cap * sizeof(sl_json_val *));
+            sl_rt_preempt_disable(); /* see sl_jparse_array */
+            v->as.obj.keys = (char **)sl_gc_realloc_owned(v->as.obj.keys, (size_t)cap * sizeof(char *), v);
+            v->as.obj.vals = (sl_json_val **)sl_gc_realloc_owned(v->as.obj.vals, (size_t)cap * sizeof(sl_json_val *), v);
+            sl_rt_preempt_enable();
         }
         v->as.obj.keys[v->as.obj.len] = key;
         v->as.obj.vals[v->as.obj.len] = val;

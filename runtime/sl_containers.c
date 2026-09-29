@@ -79,7 +79,7 @@ static void sl_gc_trace_chan(void *p, void (*mark)(void *)) {
 static sl_chan *sl_chan_new(size_t elemsz, int cap, int elem_is_ptr) {
     if (cap < 1) cap = 1;
     sl_chan *c = (sl_chan *)sl_gc_alloc(sizeof(sl_chan), sl_gc_trace_chan);
-    c->buf = (unsigned char *)sl_gc_alloc(elemsz * (size_t)cap, NULL);
+    c->buf = (unsigned char *)sl_gc_alloc_owned(elemsz * (size_t)cap, c);
     c->elemsz = elemsz;
     c->cap = cap;
     c->head = 0;
@@ -802,16 +802,21 @@ static void sl_arr_reserve(sl_arr *a, long long need) {
     if (need <= a->cap) return;
     long long cap = a->cap ? a->cap : 8;
     while (cap < need) cap *= 2;
-    a->data = (unsigned char *)sl_gc_realloc(a->data, (size_t)cap * a->esz);
-    a->cap = cap;
-    /* Post-swap barrier: `a` itself may be old, and the swap above
-     * overwrote its a->data field (which sl_gc_trace_arr follows).
-     * Registers `a` for the NEXT minor, no matter how many cycles
-     * intervene since the last store. (A pre-swap barrier is useless:
-     * realloc never collects synchronously, so no collection can land
-     * between a pre-barrier and the swap; dedup would make it free
-     * anyway. Post-only.) */
+    /* One bracket over the realloc, the swap and the barrier: the new
+     * buffer takes a's generation (sl_gc_realloc_owned), and that read
+     * must still be true when the buffer lands in a->data -- no
+     * collection may promote `a` in between.
+     *
+     * Post-swap barrier: `a` itself may be old, and the swap overwrote
+     * its a->data field (which sl_gc_trace_arr follows). Registers `a`
+     * for the NEXT minor, no matter how many cycles intervene since the
+     * last store. (A pre-swap barrier is useless: realloc never collects
+     * synchronously, so no collection can land between a pre-barrier
+     * and the swap; dedup would make it free anyway. Post-only.) */
     sl_rt_preempt_disable();
+    a->data = (unsigned char *)sl_gc_realloc_owned(a->data,
+                                                   (size_t)cap * a->esz, a);
+    a->cap = cap;
     sl_gc_remember(a);
     sl_rt_preempt_enable();
 }
@@ -952,10 +957,10 @@ static sl_map *sl_map_new(size_t ksz, size_t vsz, int kstr,
     m->kstr = kstr;
     m->key_is_ptr = key_is_ptr;
     m->val_is_ptr = val_is_ptr;
-    m->keys = (unsigned char *)sl_gc_alloc(8 * ksz, NULL);
-    m->vals = (unsigned char *)sl_gc_alloc(8 * vsz, NULL);
-    m->state = (unsigned char *)sl_gc_alloc(8, NULL);
-    m->order = (long long *)sl_gc_alloc(8 * sizeof(long long), NULL);
+    m->keys = (unsigned char *)sl_gc_alloc_owned(8 * ksz, m);
+    m->vals = (unsigned char *)sl_gc_alloc_owned(8 * vsz, m);
+    m->state = (unsigned char *)sl_gc_alloc_owned(8, m);
+    m->order = (long long *)sl_gc_alloc_owned(8 * sizeof(long long), m);
     return m;
 }
 
@@ -1013,10 +1018,11 @@ static void sl_map_grow(sl_map *m) {
     long long *oorder = m->order;
     m->cap = old_cap * 2;
     m->count = 0;
-    m->keys = (unsigned char *)sl_gc_alloc((size_t)m->cap * m->ksz, NULL);
-    m->vals = (unsigned char *)sl_gc_alloc((size_t)m->cap * m->vsz, NULL);
-    m->state = (unsigned char *)sl_gc_alloc((size_t)m->cap, NULL);
-    m->order = (long long *)sl_gc_alloc((size_t)m->cap * sizeof(long long), NULL);
+    /* Owned: m may already be old (see sl_gc_alloc_owned). */
+    m->keys = (unsigned char *)sl_gc_alloc_owned((size_t)m->cap * m->ksz, m);
+    m->vals = (unsigned char *)sl_gc_alloc_owned((size_t)m->cap * m->vsz, m);
+    m->state = (unsigned char *)sl_gc_alloc_owned((size_t)m->cap, m);
+    m->order = (long long *)sl_gc_alloc_owned((size_t)m->cap * sizeof(long long), m);
     (void)ost;
     /* reinsert in insertion order so iteration stays deterministic */
     for (long long i = 0; i < ocount; i++) {
@@ -1348,7 +1354,7 @@ static sl_join *sl_join_new(size_t valsz, int val_is_ptr) {
     sl_join *j = (sl_join *)sl_gc_alloc(sizeof(sl_join), sl_gc_trace_join);
     j->valsz = valsz;
     j->val_is_ptr = val_is_ptr;
-    j->val = (unsigned char *)sl_gc_alloc(valsz > 0 ? valsz : 1, NULL);
+    j->val = (unsigned char *)sl_gc_alloc_owned(valsz > 0 ? valsz : 1, j);
     pthread_mutex_init(&j->mu, NULL);
     return j;
 }

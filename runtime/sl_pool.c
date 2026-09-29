@@ -706,20 +706,29 @@ static void sl_preempt_resume_handler(int sig, siginfo_t *si, void *uctx_raw) {
 }
 #endif
 
-/* An alternate signal stack for the calling thread, on arm64.
+/* An alternate signal stack for the calling thread. The preemption
+ * handlers run on it (SA_ONSTACK), so the kernel never writes a signal
+ * frame onto a task stack. Every thread that runs tasks needs one: the
+ * workers and the main thread, since a task preempted on one thread can
+ * resume on another.
  *
- * An arm64 signal frame is at least ~4.6KB and larger with SVE state,
- * against an 8KB initial task stack. Delivered on the task's own stack,
- * the preemption signal could overflow it -- and the resume signal lands
- * below the trampoline's 816-byte block on top of that. With SA_ONSTACK
- * and a per-thread alternate stack, no handler frame ever touches a task
- * stack. Every thread that runs tasks needs one: the workers and the main
- * thread, since a task preempted on one thread can resume on another.
+ * arm64: a signal frame is at least ~4.6KB and larger with SVE state,
+ * against an 8KB initial task stack, and the resume signal lands below
+ * the trampoline's 816-byte block on top of that.
  *
- * x86_64 is left as it was, where the handler has always run on the task
- * stack; see todo.md for why that may deserve the same treatment. */
+ * x86_64: the frame goes below the interrupted sp minus the 128-byte red
+ * zone, and on Darwin the first word it writes, &uc->uc_mcontext at
+ * sp - 136, is exactly the async trampoline's resume-target slot. For
+ * the one instruction between the trampoline's final `lea 144(%rsp),
+ * %rsp` and its `jmp *-136(%rsp)`, that slot is below the red zone. A
+ * SIGUSR1 landing there was vetoed by the handler (pc inside the
+ * trampoline) -- but only after the kernel had overwritten the slot
+ * with the uc_mcontext pointer, so the jmp went to sp - 0x528 on the
+ * task's own stack: the ~5% SIGBUS under amplified preemption, with
+ * pc == fault address. Measured on Darwin. Linux lays its frame out
+ * differently and was not measured; whether it reaches sp - 136 depends
+ * on where the xsave area aligns. The alternate stack makes that moot. */
 static void sl_rt_install_altstack(void) {
-#if defined(__aarch64__)
     size_t sz = 65536;
     void *mem = mmap(NULL, sz, PROT_READ | PROT_WRITE,
                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -735,7 +744,6 @@ static void sl_rt_install_altstack(void) {
         fprintf(stderr, "slang: sigaltstack failed\n");
         exit(1);
     }
-#endif
 }
 
 /* Tier 11 eighth slice, rollout step 3: the real signal handler --
@@ -913,26 +921,25 @@ static void *sl_preempt_ticker_thread(void *arg) {
     return NULL;
 }
 
-static void sl_preempt_ticker_start(void) {
+/* Split from sl_preempt_ticker_start so tests/runtime/test_preempt.c can
+ * install the real disposition without starting the ticker. */
+static void sl_preempt_install_handlers(void) {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
-    /* Tier 11 eighth slice, rollout step 3: the real handler now, not
-       step 2's placeholder -- SA_SIGINFO for the ucontext_t access it
-       needs to read/rewrite an interrupted task's saved PC. No
-       SA_ONSTACK: the handler itself never runs on an alternate stack
-       (confirmed sound by the second review) -- it inspects/rewrites
-       the interrupted context and returns immediately; the trampoline
-       that does the real work runs later, as ordinary code, after a
-       genuine sigreturn, on the task's own real stack. */
+    /* SA_SIGINFO for the ucontext_t access the handler needs to read/
+       rewrite an interrupted task's saved PC. SA_ONSTACK on every
+       architecture: the handler itself is short, but the kernel's frame
+       for it must never land on a task stack -- see
+       sl_rt_install_altstack for the SIGBUS that did. The trampoline
+       that does the real work still runs later, as ordinary code, after
+       a genuine sigreturn, on the task's own stack. */
     sa.sa_sigaction = sl_preempt_handler;
-    sa.sa_flags = SA_SIGINFO;
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
     sigemptyset(&sa.sa_mask);
 #if defined(__aarch64__)
-    /* arm64 runs both handlers on the per-thread alternate stack, and
-       each masks the other: the resume handler's release of
-       preempt_disable_depth must not be interleaved with a new
+    /* Each arm64 handler masks the other: the resume handler's release
+       of preempt_disable_depth must not be interleaved with a new
        preemption before sigreturn completes. */
-    sa.sa_flags |= SA_ONSTACK;
     sigaddset(&sa.sa_mask, SIGUSR2);
 #endif
     if (sigaction(SIGUSR1, &sa, NULL) != 0) {
@@ -951,6 +958,10 @@ static void sl_preempt_ticker_start(void) {
         exit(1);
     }
 #endif
+}
+
+static void sl_preempt_ticker_start(void) {
+    sl_preempt_install_handlers();
     pthread_t th;
     if (sl_rt_thread_spawn(&th, sl_preempt_ticker_thread, NULL) != 0) {
         fprintf(stderr, "slang: failed to start preempt ticker\n");

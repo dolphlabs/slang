@@ -776,9 +776,9 @@ static void sl_gc_class_push(sl_gc_obj *h) {
     free(h);
 }
 
-static void *sl_gc_alloc_fin(size_t n,
+static void *sl_gc_alloc_gen(size_t n,
                              void (*trace)(void *, void (*)(void *)),
-                             void (*fini)(void *)) {
+                             void (*fini)(void *), unsigned char gen) {
     sl_rt_preempt_disable();
     sl_task *t = sl_rt_cur();
     sl_gc_obj *h = sl_gc_class_pop(sizeof(sl_gc_obj) + n);
@@ -791,7 +791,7 @@ static void *sl_gc_alloc_fin(size_t n,
     h->trace = trace;
     h->fini = fini;
     h->marked = 0;
-    h->gen = 0;
+    h->gen = gen;
     h->remembered = 0;
     h->next = t->gc_pend_head;
     if (!t->gc_pend_head) t->gc_pend_tail = h;
@@ -809,9 +809,53 @@ static void *sl_gc_alloc_fin(size_t n,
     return (void *)(h + 1);
 }
 
+static void *sl_gc_alloc_fin(size_t n,
+                             void (*trace)(void *, void (*)(void *)),
+                             void (*fini)(void *)) {
+    return sl_gc_alloc_gen(n, trace, fini, 0);
+}
+
 static void *sl_gc_alloc(size_t n,
                           void (*trace)(void *, void (*)(void *))) {
     return sl_gc_alloc_fin(n, trace, NULL);
+}
+
+/* An out-of-line buffer whose CONTENTS its owner's tracer reads
+ * directly: sl_map's keys/vals/state/order, sl_arr's data, sl_chan's
+ * ring, sl_join's value slot, sl_json_val's item/key/value arrays.
+ * Every such buffer MUST come from here, never from sl_gc_alloc.
+ *
+ * The buffer is born in its owner's generation, so it can never be
+ * freed before its owner. A minor sweeps only young objects and never
+ * sweeps old ones, dead or alive -- so a young buffer hanging off an
+ * OLD owner was freed by the first minor after the owner died, while
+ * the owner itself stayed on sl_gc_old until the next major. Nothing
+ * reaches a dead owner precisely, but a stale word in an async-
+ * preempted task's conservatively scanned stack (or an uninitialized
+ * root slot) can, and sl_gc_mark accepts it: the owner is still a
+ * member of sl_gc_set. Its tracer then read the freed buffer --
+ * sl_gc_trace_map indexes m->keys by values read from m->order, so a
+ * recycled order buffer became a wild load. That was the GC-minor
+ * crash (concurrent_compute, 16KB nursery: 10/12 runs, every one a
+ * GPF in sl_gc_trace_map).
+ *
+ * A child the tracer only MARKS needs none of this: sl_gc_mark
+ * validates a stale pointer against sl_gc_set before touching it.
+ *
+ * The owner's generation changes only during a collection. A caller
+ * whose owner may already be old (any grow/replace path) holds one
+ * preempt bracket from this call to the store into the owner, so no
+ * collection can promote the owner in between. A freshly allocated
+ * owner needs no bracket: if a collection promotes it in that window,
+ * the buffer -- still in a register, saved by the async-preempt
+ * trampoline -- is found by the conservative scan and promoted with
+ * it, like any other fresh pointer. A gen-1 buffer still starts on the
+ * task's pending list and is harvested onto sl_gc_young; the minor
+ * sweep moves it to sl_gc_old instead of freeing it (see
+ * sl_gc_collect_minor_real). */
+static void *sl_gc_alloc_owned(size_t n, const void *owner) {
+    const sl_gc_obj *oh = (const sl_gc_obj *)owner - 1;
+    return sl_gc_alloc_gen(n, NULL, NULL, oh->gen);
 }
 
 /* true drop-in for GC_realloc(p, n): old size/trace read from p's
@@ -831,9 +875,22 @@ static void *sl_gc_realloc(void *old, size_t newn) {
     /* The old buffer stays linked (young or old list) until the next
      * collection of its generation reclaims it -- same as before. Its
      * header keeps whatever gen it had; the NEW buffer is young (set
-     * by sl_gc_alloc_fin). No barrier here: the caller (sl_arr_reserve
-     * / sl_map_grow) rewrites the container's buffer field and issues
-     * the barrier on the container itself. */
+     * by sl_gc_alloc_fin). A buffer whose contents an owner's tracer
+     * reads must use sl_gc_realloc_owned instead. */
+    return nw;
+}
+
+/* sl_gc_realloc for an owned buffer: the new block is born in the
+ * owner's generation (see sl_gc_alloc_owned for why that matters).
+ * No barrier here: the caller stores the result into the owner and
+ * issues the barrier on the owner itself, before its next checkin. */
+static void *sl_gc_realloc_owned(void *old, size_t newn,
+                                 const void *owner) {
+    void *nw = sl_gc_alloc_owned(newn, owner);
+    if (old) {
+        const sl_gc_obj *oh = (const sl_gc_obj *)old - 1;
+        memcpy(nw, old, oh->size < newn ? oh->size : newn);
+    }
     return nw;
 }
 
@@ -1249,11 +1306,12 @@ static void sl_gc_collect_minor_fullmark(void) {
     sl_gc_wl = NULL;
     sl_gc_wl_cap = 0;
 
+    /* Same owned-buffer rule as sl_gc_collect_minor_real's sweep. */
     sl_gc_obj **mpp = &sl_gc_young;
     size_t swept = 0, promoted = 0;
     while (*mpp) {
         sl_gc_obj *h = *mpp;
-        if (!h->marked) {
+        if (!h->marked && h->gen == 0) {
             *mpp = h->next;
             if (h->fini)
                 h->fini((void *)(h + 1));
@@ -1366,11 +1424,15 @@ static void sl_gc_collect_minor_real(void) {
     sl_gc_wl = NULL;
     sl_gc_wl_cap = 0;
 
+    /* gen 1 on the young list is an owned buffer born old (see
+     * sl_gc_alloc_owned). It moves to sl_gc_old whether or not it was
+     * marked: its owner is old, a minor never frees old objects, and
+     * the buffer must outlive its owner. A major reclaims both. */
     sl_gc_obj **mpp = &sl_gc_young;
     size_t swept = 0, promoted = 0;
     while (*mpp) {
         sl_gc_obj *h = *mpp;
-        if (!h->marked) {
+        if (!h->marked && h->gen == 0) {
             *mpp = h->next;
             if (h->fini)
                 h->fini((void *)(h + 1));
@@ -1440,7 +1502,9 @@ static void sl_gc_collect(void) {
     sl_gc_drain_retired();
     /* Every live task's pending allocations join sl_gc_young BEFORE
      * the mark, so this cycle can free the ones nothing reaches.
-     * Fresh allocations always land young (see sl_gc_alloc_fin). */
+     * Fresh allocations land on sl_gc_young; an owned buffer born old
+     * (sl_gc_alloc_owned) stays there, gen 1, until the next minor
+     * moves it. A major frees it like anything else unmarked. */
     sl_gc_for_pending_tasks(sl_gc_harvest_task, snap, nsnap);
     sl_gc_rem_harvest_n = 0;
     sl_gc_for_pending_tasks(sl_gc_harvest_rem_task, snap, nsnap);

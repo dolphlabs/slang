@@ -274,6 +274,11 @@ typedef struct {
     char *tv;    /* canonical slang value type T of result[T,E] */
     char *te;    /* canonical slang error type E */
     char *cname; /* C typedef name, e.g. sl_res_int_str */
+    /* Value-type body emission state (pointer-type bodies need no
+     * ordering: they only hold pointers). 0 = body not yet emitted,
+     * 1 = emission in progress (re-entry is a by-value cycle),
+     * 2 = emitted. See emit_struct_and_value_res_types in program.c. */
+    int body_state;
 } ResInst;
 
 typedef struct {
@@ -796,7 +801,7 @@ const char *literal_type(CG *cg, Expr *e, int line);
 char *gen_const_init(Expr *e);
 void emit_globals(CG *cg, Package *pkgs, int npkgs, int main_index);
 void emit_struct_fwd_decls(CG *cg);
-void emit_struct_types(CG *cg);
+void emit_struct_and_value_res_types(CG *cg);
 void emit_struct_tracers(CG *cg);
 void emit_opt_res_forward_decls(CG *cg);
 void emit_opt_res_types(CG *cg);
@@ -840,7 +845,7 @@ void emit_json_runtime(CG *cg);
 
 /* Emits every composite codec registered in cg->json (prototypes
  * first, then bodies, so mutually-recursive struct codecs don't need
- * emission-order tracking). Must run after emit_struct_types and
+ * emission-order tracking). Must run after emit_struct_and_value_res_types and
  * emit_opt_res_types, since codec signatures reference both. */
 void emit_json_codecs(CG *cg);
 
@@ -887,7 +892,7 @@ void emit_inspect_runtime(CG *cg);
 /* Emits every composite printer registered in cg->inspect
  * (prototypes first, then bodies, so mutually-recursive struct
  * printers don't need emission-order tracking). Must run after
- * emit_struct_types and emit_opt_res_types, since printer
+ * emit_struct_and_value_res_types and emit_opt_res_types, since printer
  * signatures reference both. */
 void emit_inspect_codecs(CG *cg);
 

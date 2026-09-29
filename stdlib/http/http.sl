@@ -2455,10 +2455,30 @@ fn hr_ok(r: result[Head, str]) -> bool {
 //
 // Chunked bodies: fm.body IS the reassembled copy (one alloc the
 // old path also spent); the WireFrame body is that copy directly.
+// Three deadlines, not one, because "how long should this wait" has
+// three different honest answers depending on what the connection is
+// doing: idle_deadline while nothing has arrived at all yet (a kept-
+// alive connection between requests, or a fresh one that never sends
+// anything -- this is the one that should be generous, since a real
+// client legitimately sits idle between requests); header_deadline
+// once bytes have started arriving but the request line and headers
+// aren't complete yet; body_deadline once the headers are in but a
+// declared body hasn't fully arrived. header_deadline and
+// body_deadline are both the tight, slow-loris-shaped ones -- a
+// client that has started a request and then trickles it in a byte at
+// a time is not the same risk as one that hasn't sent anything yet,
+// and idle_deadline being long must not become an amplifier for that.
+// Recomputed fresh every loop iteration rather than tracked as a
+// separate flag: frame_head_wire's own re-parse of the same (only
+// ever growing) buffer already answers "is the header complete yet"
+// idempotently, so re-deriving which phase this recv is in from that
+// costs nothing extra and can't drift out of sync with it.
 pub fn read_frame(c: &mut link, buf: wire, filled: int,
-                  deadline: until) -> result[WireFrame, str] {
+                  idle_deadline: until, header_deadline: until,
+                  body_deadline: until) -> result[WireFrame, str] {
     let n = filled;
     while true {
+        let header_ok = false;
         if n > 0 {
             let hr = frame_head_wire(buf, n);
             guard let hd = hr else let he = err_of(hr) {
@@ -2467,6 +2487,7 @@ pub fn read_frame(c: &mut link, buf: wire, filled: int,
                 }
             }
             if hr_ok(hr) {
+                header_ok = true;
                 guard let hd2 = hr else {
                     return err("unreachable");
                 }
@@ -2499,10 +2520,27 @@ pub fn read_frame(c: &mut link, buf: wire, filled: int,
             }
         }
         if n >= len(buf) {
-            return err("request too large for buffer");
+            // Reachable only when the request line + headers
+            // themselves never completed (the blank line was never
+            // found) before the buffer filled -- the body-too-large
+            // case above already returns separately, and it's the
+            // only other way "not complete" can reach this point, so
+            // by elimination a distinct message is safe here: a
+            // caller wanting a 431 vs 413 distinction (RFC 9110
+            // 10.5.11 vs 6.5.11) can tell these apart by text, same
+            // as it already tells "connection closed" apart from
+            // "truncated request" below.
+            return err("request headers too large for buffer");
+        }
+        let dl = idle_deadline;
+        if n > 0 {
+            dl = header_deadline;
+        }
+        if header_ok {
+            dl = body_deadline;
         }
         let tail = buf[n..];
-        let rr = c.recv(tail, deadline);
+        let rr = c.recv(tail, dl);
         guard let m = rr else let e = err_of(rr) {
             return err("recv: " + to_str(e));
         }

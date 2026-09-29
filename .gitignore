@@ -29,9 +29,10 @@ arr
 cc
 hb
 
-# built by `make test` from tests/runtime/test_gc.c; a committed copy is
+# built by `make test` from tests/runtime/*.c; a committed copy is
 # a macOS binary that a Linux checkout would try to execute
 tests/runtime/test_gc
+tests/runtime/test_preempt
 
 # bench/suite: build output, generated datasets and language toolchain
 # artifacts. bench/results/<run id>/ IS committed (that's the deliverable).

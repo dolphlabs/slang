@@ -1,0 +1,8 @@
+normal_request
+keepalive_two_requests
+idle_times_out: recv: recv timeout
+header_times_out: recv: recv timeout
+body_times_out: recv: recv timeout
+headers_too_large: request headers too large for buffer
+body_too_large: request too large for buffer
+http_read_frame_deadlines ok

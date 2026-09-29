@@ -533,13 +533,35 @@ char *json_call_gen(CG *cg, const char *fname, Expr *e) {
         const char *fct = ctype_of(cg, tv);
         const char *at = infer_type(cg, e->as.call.args[0]);
         char *argexpr = gen_expr(cg, e->as.call.args[0]);
+        /* Bind the argument's VALUE once, via the same sequence_one/
+         * ambient-root mechanism gen_call's own arguments use, rather
+         * than embedding argexpr's text twice (once as-is, once inside
+         * strlen(...) for the str case). A non-trivial argument --
+         * json.decode(snake_keys(body)), not a pre-bound local -- is
+         * an allocating expression with its OWN nested safepoint
+         * bracket; embedding it twice ran that bracket twice, and the
+         * FIRST call's result was unrooted (its own bracket had
+         * already exited) by the time the SECOND call's bracket did
+         * its own safepoint check-in -- a GC landing there could sweep
+         * the first result before sl_json_parse below ever read it.
+         * Reproduced directly: concurrent load against a route
+         * decoding a generic-typed body intermittently answered a
+         * validation error, "unexpected character '?' (at byte 0)" --
+         * a stale/reused byte where the real first character of a
+         * once-valid, already-freed string used to be. */
+        StrBuf prelude;
+        sb_init(&prelude);
+        int ambient_mark = cg->ambient_count;
+        int seq_id = cg->tmp_id++;
+        char *name = sequence_one(cg, seq_id, 0, ctype_of(cg, at), at,
+                                  argexpr, e->as.call.args[0], &prelude);
         char *data, *len;
         if (is_bytes(at)) {
-            data = xasprintf("(const char *)(%s)->ptr", argexpr);
-            len = xasprintf("(%s)->len", argexpr);
+            data = xasprintf("(const char *)(%s)->ptr", name);
+            len = xasprintf("(%s)->len", name);
         } else {
-            data = xasprintf("(%s)", argexpr);
-            len = xasprintf("(long long)strlen(%s)", argexpr);
+            data = xasprintf("(%s)", name);
+            len = xasprintf("(long long)strlen(%s)", name);
         }
         char *inner = xasprintf(
             "({ char *_sl_jerr = NULL; sl_json_val *_sl_jv = "
@@ -554,8 +576,17 @@ char *json_call_gen(CG *cg, const char *fname, Expr *e) {
          * plus whatever the monomorphized decoder itself
          * allocates) -- a real safepoint, same as any other call
          * liveness.c computes e->live_set for. Single argument, no
-         * sibling to protect against. */
-        return wrap_safepoint(cg, e, xasprintf("%s *", resname), NULL, inner);
+         * sibling to protect against (the sequence_one binding above
+         * is about protecting THIS argument's own value across the
+         * call, not about ordering against a second argument). */
+        char *result = wrap_safepoint(cg, e, xasprintf("%s *", resname),
+                                      prelude.data, inner);
+        /* Pop the ambient root sequence_one may have pushed: it must
+         * not leak into whatever safepoint-wrapped code gets emitted
+         * next, which does not declare (and would not find in scope)
+         * this call's own C temp. */
+        cg->ambient_count = ambient_mark;
+        return result;
     }
     /* encode */
     const char *at = infer_type(cg, e->as.call.args[0]);

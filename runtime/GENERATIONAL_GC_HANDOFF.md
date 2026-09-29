@@ -184,6 +184,36 @@ It can't, given two things this design must guarantee together:
   the only other way an old→young edge can appear: a fresh write
   *after* promotion.
 
+### The same argument does NOT cover dead old objects: owned buffers
+
+Everything above is about *live* old objects. A *dead* old object is
+still on `sl_gc_old` — and still in `sl_gc_set` — until the next
+major, while a minor frees its young children. Nothing reaches it
+precisely, but a stale word in an async-preempted task's
+conservatively scanned stack can, and `sl_gc_mark` accepts it. A
+tracer that only *marks* children is safe (mark validates a stale
+pointer against `sl_gc_set` first). A tracer that *reads through* a
+child — `sl_gc_trace_map` indexing `keys` by values from `order`,
+`sl_gc_trace_arr` walking `data` — reads freed memory.
+
+Fixed (2026-09-29) by making those buffers follow their owner's
+lifetime: every out-of-line buffer an owner's tracer reads is
+allocated with `sl_gc_alloc_owned` / `sl_gc_realloc_owned`, which
+gives it the owner's generation. A buffer born old sits on
+`sl_gc_young` only until the next minor, which moves it to
+`sl_gc_old` marked or not; only a major frees it, together with its
+owner. Before the fix, `stress_test/programs/concurrent_compute` at a
+16KB nursery with amplified preemption crashed 10/12 runs, every one a
+general-protection fault in `sl_gc_trace_map`. Guarded by
+`sl_gc_test_owned_buffers` in `tests/runtime/test_gc.c`.
+
+**Rule for new runtime containers:** if the tracer dereferences a
+buffer rather than just marking it, allocate that buffer with the
+`_owned` calls. Where the owner may already be old (any grow or
+replace path), hold one preempt bracket from the allocation to the
+store into the owner, so no minor can promote the owner in between —
+as `sl_map_grow`, `sl_arr_reserve` and the json parser do.
+
 ### Write barrier
 
 **This is the risky, invasive part — the only part touching codegen,
