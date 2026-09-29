@@ -1707,6 +1707,10 @@ char *gen_expr(CG *cg, Expr *e) {
     case EX_STRING:
         return c_string_literal(e->as.str_lit.value);
     case EX_BYTES:
+        /* An empty literal is one shared static, not two allocations per
+           evaluation; runtime sl_bytes_empty says why sharing is safe. */
+        if (e->as.bytes_lit.len == 0)
+            return xstrdup("(&sl_bytes_empty)");
         return xasprintf("sl_bytes_new((const unsigned char *)%s, %lld)",
                          c_bytes_literal(e->as.bytes_lit.data,
                                          e->as.bytes_lit.len),

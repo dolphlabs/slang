@@ -2598,6 +2598,35 @@ prerequisite, not a different plan).
       runnable tasks (the collector's two walks do) must include the
       slots, and `sl_global_runq_count` counts them.
 
+- [x] **`http.read` refused a request with no header lines.** Fixed
+      2026-09-29. `GET / HTTP/1.0` followed by a blank line -- a bare
+      health check, `nc`, an old client -- got "malformed request line"
+      from `read` and `read_frame` (so from zokor too), while `parse`
+      accepted the same bytes: the socket path's request-line check
+      required a header line after the request line. Found by
+      `tests/http_read_wire`, written for the allocation work
+      (next-steps.md #5).
+
+- [ ] **A package-level `bytes` global cannot be used.** Found
+      2026-09-29, not fixed. `pub let G = b"ab";` in a package, then any
+      use of `G` (`G[0] = 65`, `to_str(G)`) from inside or outside it, is
+      a C compilation failure: the global is emitted as a static
+      `sl_bytes` value but used where an `sl_bytes *` is expected
+      (`src/codegen/program.c`, the `is_bytes` global case). Its data is
+      also a `static const` array cast to non-const, so once it compiles,
+      `G[0] = 65` would write to read-only memory -- the fix has to decide
+      whether such a global is mutable (copy the data out) or not (reject
+      the write).
+
+- [x] **`http.read`'s allocations are pinned.** 2026-09-29. The socket
+      parser allocates per request only what the returned `Request` holds
+      (next-steps.md #5 has the breakdown), and the "allocation budgets"
+      section of `tests/run_tests.sh` fails the suite if a plain GET through
+      `read` + `wants_close` goes over 7 (plus a small slack for requests
+      split across recvs), or `b""` over 0. A change that needs more should
+      say why rather than raise the number. Also: allocate per-request
+      objects after `recv`, not before -- see `read`'s comment.
+
 - [ ] **Intermittent: `tests/sigpipe` on GitHub's macOS runner.** Failed
       twice in about 255 runs, both inside the full suite; never alone
       (40/40) and never under 8x parallel load (200/200). The failures

@@ -204,12 +204,51 @@ dotted directories (#235). Write-ups in `todo.md`.
 
 ## 5. Per-request allocation in stdlib `http`
 
-- [ ] A static `GET /` answered by a plain stdlib `http` server costs about
-  24 GC allocations and ~1.5 KB per request (`SLANG_GC_STAT`, 750k requests).
-  Throughput is 55-70k req/s against Go net/http's 87-108k and Fiber's
-  110-125k; CPU per request 67 us against 45 us and 31 us. Peak memory is
-  already the lowest of the four (9.2 MB against 13.5-17.9 MB), so this is a
-  CPU item. Start from where those 24 allocations come from.
+- [x] **Done (2026-09-29).** A static `GET /` through a plain stdlib `http`
+  server: 24 GC allocations and 1501 bytes per request -> 11 and 798.
+  `/users/:id` 28 -> 15, `/echo` 36 -> 25. Every one of the 24 was
+  attributed to its call site first (allocator instrumented with a
+  frame-pointer walk, symbolized with atos). Where they went:
+  - 7 were `result` wrappers and structs threaded through `read`'s private
+    parse (Head, HeaderScan, Framing, each in a result, plus a re-wrap).
+    The socket path now parses into one `WireHead` per attempt and
+    returns errors as a str.
+  - 4 were two `b""` literals: an empty `bytes` was two allocations every
+    evaluation. The compiler now emits one shared static empty
+    (`sl_bytes_empty`) -- language-wide.
+  - 2 were the method and version strs: the common methods and both
+    versions are literals now.
+  - 1 was the `opt` inside `wants_close`, which now decides in place.
+
+  wrk, alternated order, plain slang server against `dev`: `/` +12%
+  (c=50) and +15% (c=200), `/users/:id` +18% and +12%; `/echo` at c=200
+  +17% (71.2k vs 61.0k, ABBA order, 6 runs each). Zero timeouts.
+  Pinned by the "allocation budgets" section of `tests/run_tests.sh`
+  (`tests/http_read_wire`, `tests/bytes_empty_literal`).
+
+  One trap found on the way, now in `read`'s comment: the first version
+  allocated the WireHead before `recv`. On a kept-alive connection that
+  object sat through the park, a minor GC promoted it, and every young
+  str and bytes the parse then stored into it was promoted with it --
+  25x the promotions and 3x the pause time under 200 connections of
+  POSTs, and `/echo` 11% slower despite fewer allocations. Anything
+  allocated before a park and written after it has this cost.
+
+## 5b. What is left of the per-request cost is the language's
+
+- [ ] Of the 11 allocations a `GET /` still makes, 5 are representation
+  rather than work: every `bytes` is two objects (a `{len, ptr}` header
+  and its data; the header block and `ok_text`'s body), and every
+  `ok()`/`err()`/`some()`/`none` is a heap object (`read`'s result).
+  Both are compiler/runtime changes that would cut allocations in all
+  slang code, not just `http`:
+  - `bytes` with its data inline in one allocation. Blocked on the
+    collector: conservative scanning recognizes only object starts, so a
+    stack holding just `b->ptr` (an interior pointer) would not keep `b`
+    alive. Needs interior-pointer lookup in the conservative scan first.
+  - `result`/`opt` as values instead of pointers: codegen, rooting of the
+    pointer inside, storage in containers and generics.
+  Decide which (if either) is worth it with a design note before code.
 
 ## 6. x86_64 trampoline calls C with a possibly misaligned stack
 
