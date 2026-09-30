@@ -36,6 +36,16 @@ int native_sigs_of(const char *pkg, const NatSig **out, int max) {
     return n;
 }
 
+/* A native package's function names that fname could have meant. */
+static const char *suggest_native(const char *pkg, const char *fname) {
+    const NatSig *sigs[512];
+    const char *names[512];
+    int n = native_sigs_of(pkg, sigs, 512);
+    for (int i = 0; i < n; i++)
+        names[i] = sigs[i]->name;
+    return did_you_mean(fname, names, n);
+}
+
 static const NatSig *find_any_sig(const char *pkg, const char *fname) {
     const NatSig *ns = find_sig(TIME_SIGS, TIME_SIGS_LEN, pkg, fname);
     if (!ns)

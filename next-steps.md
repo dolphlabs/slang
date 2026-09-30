@@ -447,10 +447,12 @@ training data, so it wins on those three. The zokor half (agent guide,
 - [x] `llms-small.txt`: the language on one page, about 3k tokens, plus a
   package index generated from `api.json`'s data. Hand-written in
   `www/llms-small.md`; `tests/run_tests.sh` compiles and runs every example.
-- [ ] **Compiler errors built for agents.** Today slangc stops at the first
-  error and names neither the file nor the column (`slang: error at line 2:
-  ...`), so three mistakes cost three compile rounds. Report every error,
-  with `file:line:col`, a fix hint where one is known, and `--json`.
+- [x] **Compiler errors built for agents.** `file.sl:12: error: ...` (the
+  file was never named, and a package spans files), the first error of
+  every function in one compile, "did you mean" for names, fields, methods
+  and functions, and `--json`. Not done: columns (the AST carries lines
+  only), and more than one error per function (a function's later errors
+  are too often follow-on noise to be worth the risk).
 - [x] **`slangc doc <pkg>[.<name>]`**: signatures and doc comments for the
   standard library, native, pinned and local packages, resolved as `import`
   resolves them. Reads source the way `www/build.py` does (fixed alongside:
