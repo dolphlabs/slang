@@ -90,9 +90,9 @@ Three behaviours worth knowing:
 
 ### `strings.split(str, str) -> [str]`
 
-### `strings.join(NA_ARR_STR, str) -> str`
+### `strings.join([str], str) -> str`
 
-### `strings.join_bytes(NA_ARR_BYTES, bytes) -> bytes`
+### `strings.join_bytes([bytes], bytes) -> bytes`
 
 ### `strings.bytes_zero(int) -> bytes`
 
@@ -100,9 +100,9 @@ Three behaviours worth knowing:
 
 ### `strings.from_bytes_lower(bytes, int, int) -> str`
 
-### `strings.from_wire(NA_WIRE, int, int) -> str`
+### `strings.from_wire(wire, int, int) -> str`
 
-### `strings.from_wire_lower(NA_WIRE, int, int) -> str`
+### `strings.from_wire_lower(wire, int, int) -> str`
 
 ### `strings.find_field(bytes, str) -> int`
 

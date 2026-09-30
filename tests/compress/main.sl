@@ -58,7 +58,7 @@ expect(to_str(b0), text, "level 0 round trip");
 println("levels 0 and 9 both round-trip");
 
 let bad_level = compress.gzip_level(src, 10);
-guard let _bl = bad_level else let e = err_of(bad_level) { println(e); }
+if let _bl = bad_level { } else let e = err_of(bad_level) { println(e); }
 
 // ---- zlib and raw ----------------------------------------------------
 
@@ -85,11 +85,11 @@ println("raw < zlib < gzip, as their headers imply");
 // The containers are NOT interchangeable, and each decoder says so
 // rather than producing garbage.
 let wrong1 = compress.gunzip(zl, 1000000);
-guard let _w1 = wrong1 else { println("gunzip rejects zlib data"); }
+if let _w1 = wrong1 { } else { println("gunzip rejects zlib data"); }
 let wrong2 = compress.inflate(gz, 1000000);
-guard let _w2 = wrong2 else { println("inflate rejects gzip data"); }
+if let _w2 = wrong2 { } else { println("inflate rejects gzip data"); }
 let wrong3 = compress.inflate(raw, 1000000);
-guard let _w3 = wrong3 else { println("inflate rejects raw data"); }
+if let _w3 = wrong3 { } else { println("inflate rejects raw data"); }
 
 // ---- edges -----------------------------------------------------------
 
@@ -104,13 +104,13 @@ expect(to_str(len(eb)), "0", "empty round trip");
 // Decompressing nothing is an error, not an empty result: a zero-byte
 // body where a gzip stream was expected means the transfer failed.
 let zr = compress.gunzip(b"", 1000);
-guard let _z = zr else let e = err_of(zr) { println(e); }
+if let _z = zr { } else let e = err_of(zr) { println(e); }
 
 // Corrupt and truncated input are refused.
 let corrupt = compress.gunzip(b"not a gzip stream at all", 1000);
-guard let _c = corrupt else { println("corrupt input rejected"); }
+if let _c = corrupt { } else { println("corrupt input rejected"); }
 let trunc = compress.gunzip(gz[0..12], 1000000);
-guard let _t = trunc else { println("truncated input rejected"); }
+if let _t = trunc { } else { println("truncated input rejected"); }
 
 // The boundary: max_out exactly equal to the output size must SUCCEED.
 // Off by one here would reject every response whose length the caller
@@ -121,7 +121,7 @@ expect(to_str(len(ex)), to_str(len(src)), "max_out exactly equal to output");
 
 // One byte under, and it is refused.
 let tight = compress.gunzip(gz, len(src) - 1);
-guard let _tt = tight else { println("max_out one byte short is refused"); }
+if let _tt = tight { } else { println("max_out one byte short is refused"); }
 
 // ---- the bomb --------------------------------------------------------
 //
@@ -139,7 +139,7 @@ if len(bgz) > 1000 {
     die("expected a repeated byte to compress hard, got " + to_str(len(bgz)));
 }
 let bomb = compress.gunzip(bgz, 1024);
-guard let _b = bomb else let e = err_of(bomb) {
+if let _b = bomb { } else let e = err_of(bomb) {
     if !strings.contains(e, "bomb") {
         die("the limit error should name the hazard: " + e);
     }

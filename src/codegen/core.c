@@ -3,7 +3,9 @@
 
 #include "internal.h"
 #include "liveness.h"
+#include "../diag.h"
 
+#include <setjmp.h>
 #include <string.h>
 
 
@@ -11,22 +13,153 @@
 /* Diagnostics                                                         */
 /* ------------------------------------------------------------------ */
 
+/* Where cg_error resumes when one error should not end the compile: the
+ * dry run arms it around each function (cg_recover_arm), so a program with
+ * mistakes in three functions hears about all three in one compile. NULL
+ * everywhere else, where an error ends the compile as it always has. */
+static jmp_buf *cg_recover;
+
+/* Past this many, the rest are more likely follow-on noise than news. */
+#define CG_MAX_ERRORS 20
+
+void cg_recover_arm(void *jb) { cg_recover = (jmp_buf *)jb; }
+
 void cg_error(int line, const char *fmt, ...) {
     va_list ap;
     const char *inst;
     int req_line;
-    fputs("slang: error at line ", stderr);
-    fprintf(stderr, "%d", line);
-    fputs(": ", stderr);
-    va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
-    va_end(ap);
+    char note[160] = "";
     generic_error_note(&inst, &req_line);
     if (inst)
-        fprintf(stderr, " (in %.72s%s, requested at line %d)", inst,
-                strlen(inst) > 72 ? "..." : "", req_line);
-    fputc(10, stderr);
+        snprintf(note, sizeof(note), " (in %.72s%s, requested at line %d)",
+                 inst, strlen(inst) > 72 ? "..." : "", req_line);
+    va_start(ap, fmt);
+    diag_vreport(diag_file, line, fmt, ap, note);
+    va_end(ap);
+    /* Not from inside a generic instance: building one has state of its
+     * own (the instance tables, the type environment) that unwinding
+     * mid-way could leave half-made. */
+    if (cg_recover && !inst && diag_count() < CG_MAX_ERRORS) {
+        jmp_buf *jb = cg_recover;
+        cg_recover = NULL;
+        longjmp(*jb, 1);
+    }
     exit(1);
+}
+
+/* Levenshtein distance, or a large number when either name is too long to
+ * be worth comparing. */
+static int name_distance(const char *a, const char *b) {
+    int la = (int)strlen(a), lb = (int)strlen(b);
+    if (la > 63 || lb > 63)
+        return 1000;
+    int prev[64], cur[64];
+    for (int j = 0; j <= lb; j++)
+        prev[j] = j;
+    for (int i = 1; i <= la; i++) {
+        cur[0] = i;
+        for (int j = 1; j <= lb; j++) {
+            int sub = prev[j - 1] + (a[i - 1] != b[j - 1]);
+            int del = prev[j] + 1, ins = cur[j - 1] + 1;
+            cur[j] = sub < del ? (sub < ins ? sub : ins) : (del < ins ? del : ins);
+        }
+        memcpy(prev, cur, sizeof(int) * (size_t)(lb + 1));
+    }
+    return prev[lb];
+}
+
+/* The candidate that name is most plausibly a typo of: within one edit for
+ * names under six characters, two from six on. NULL if none is that close
+ * (a far guess is worse than no guess: it sends the reader the wrong way). */
+const char *closest_name(const char *name, const char *const *cands, int n) {
+    int limit = strlen(name) < 6 ? 1 : 2;
+    const char *best = NULL;
+    int best_d = limit + 1;
+    for (int i = 0; i < n; i++) {
+        if (!cands[i] || !strcmp(cands[i], name))
+            continue;
+        int d = name_distance(name, cands[i]);
+        if (d < best_d) {
+            best_d = d;
+            best = cands[i];
+        }
+    }
+    return best;
+}
+
+/* " (did you mean 'x'?)" for the closest of cands, or "". */
+const char *did_you_mean(const char *name, const char *const *cands, int n) {
+    const char *c = closest_name(name, cands, n);
+    return c ? xasprintf(" (did you mean '%s'?)", c) : "";
+}
+
+/* Names a bare identifier could have meant here: locals in scope, the
+ * package's globals and its functions. */
+const char *suggest_value_name(CG *cg, const char *name) {
+    int cap = cg->vars.count + cg->globs.count + cg->sigs.count + 1;
+    const char **c = (const char **)xmalloc((size_t)cap * sizeof(char *));
+    int n = 0;
+    for (int i = 0; i < cg->vars.count; i++)
+        c[n++] = cg->vars.items[i].name;
+    for (int i = 0; i < cg->globs.count; i++)
+        if (!strcmp(cg->globs.items[i].pkg, cg->cur_pkg))
+            c[n++] = cg->globs.items[i].name;
+    for (int i = 0; i < cg->sigs.count; i++)
+        if (!cg->sigs.items[i]->method_of && !cg->sigs.items[i]->inst_key &&
+            !strcmp(cg->sigs.items[i]->pkg, cg->cur_pkg))
+            c[n++] = cg->sigs.items[i]->name;
+    return did_you_mean(name, c, n);
+}
+
+static const char *const BUILTIN_NAMES[] = {
+    "print", "println", "len", "push", "pop", "to_str", "inspect",
+    "to_bytes", "to_int", "to_float", "to_le", "to_be", "from_le",
+    "from_be", "has", "del", "exit", "panic", "assert", "some", "none",
+    "ok", "err", "err_of", "nullptr", "bytes_ptr", "wire_put",
+    "wire_put_bytes", "make_chan", "chan_send", "chan_recv", "chan_close",
+    "make_mutex", "mutex_lock", "mutex_unlock", "mutex_trylock",
+    "join_wait", "arena_new", "until_of", "until_never", "until_hit",
+    "fault_timeout", "fault_reset", "fault_closed", "fault_io",
+    "fault_refused", "fault_kind", "fault_code", "fault_op", "peer_v4",
+    "peer_port", "trip_new", "link_listen", "link_dial", "__enum_from_int",
+    "__enum_from_str",
+};
+#define N_BUILTINS ((int)(sizeof(BUILTIN_NAMES) / sizeof(BUILTIN_NAMES[0])))
+
+/* Functions a call to pkg.name (pkg NULL: the current package, builtins
+ * included) could have meant. */
+const char *suggest_function(CG *cg, const char *pkg, const char *name) {
+    const char *in = pkg ? pkg : cg->cur_pkg;
+    int cap = cg->sigs.count + N_BUILTINS + 1;
+    const char **c = (const char **)xmalloc((size_t)cap * sizeof(char *));
+    int n = 0;
+    for (int i = 0; i < cg->sigs.count; i++)
+        if (!cg->sigs.items[i]->method_of && !cg->sigs.items[i]->inst_key &&
+            !strcmp(cg->sigs.items[i]->pkg, in) &&
+            (!pkg || cg->sigs.items[i]->is_pub))
+            c[n++] = cg->sigs.items[i]->name;
+    if (!pkg)
+        for (int i = 0; i < N_BUILTINS; i++)
+            if (BUILTIN_NAMES[i][0] != '_')
+                c[n++] = BUILTIN_NAMES[i];
+    return did_you_mean(name, c, n);
+}
+
+/* Methods of sd that `name` could have meant. */
+const char *suggest_method(CG *cg, StructDef *sd, const char *name) {
+    const char **c = (const char **)xmalloc(
+        (size_t)(cg->sigs.count + 1) * sizeof(char *));
+    int n = 0;
+    for (int i = 0; i < cg->sigs.count; i++)
+        if (cg->sigs.items[i]->method_of &&
+            !strcmp(cg->sigs.items[i]->method_of, sd->canonical))
+            c[n++] = cg->sigs.items[i]->name;
+    return did_you_mean(name, c, n);
+}
+
+/* Fields of sd that `name` could have meant. */
+const char *suggest_field(StructDef *sd, const char *name) {
+    return did_you_mean(name, (const char *const *)sd->fields, sd->nfields);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1244,7 +1377,8 @@ FuncSig *spawn_target(CG *cg, Expr *call, int line) {
         if (!sig)
             sig = generic_call_sig(cg, pkg, right, call);
         if (!sig)
-            cg_error(line, "package '%s' has no function '%s'", pkg, right);
+            cg_error(line, "package '%s' has no function '%s'%s", pkg, right,
+                     suggest_function(cg, pkg, right));
         if (!sig->is_pub)
             cg_error(line,
                      "function '%s' is not exported from package "
@@ -1255,7 +1389,8 @@ FuncSig *spawn_target(CG *cg, Expr *call, int line) {
         if (!sig)
             sig = generic_call_sig(cg, cg->cur_pkg, name, call);
         if (!sig)
-            cg_error(line, "call to undefined function '%s'", name);
+            cg_error(line, "call to undefined function '%s'%s", name,
+                     suggest_function(cg, NULL, name));
     }
     if (call->as.call.nargs != sig->nparams)
         cg_error(line, "function '%s' expects %d argument(s), got %d",
@@ -2106,38 +2241,10 @@ void emit_line(CG *cg, const char *fmt, ...) {
 /* ------------------------------------------------------------------ */
 
 int is_builtin_name(const char *name) {
-    return !strcmp(name, "print") || !strcmp(name, "println") ||
-           !strcmp(name, "len") || !strcmp(name, "push") ||
-           !strcmp(name, "pop") || !strcmp(name, "to_str") ||
-           !strcmp(name, "inspect") ||
-           !strcmp(name, "to_bytes") || !strcmp(name, "to_int") ||
-           !strcmp(name, "to_float") || !strcmp(name, "to_le") ||
-           !strcmp(name, "to_be") || !strcmp(name, "from_le") ||
-           !strcmp(name, "from_be") || !strcmp(name, "has") ||
-           !strcmp(name, "del") || !strcmp(name, "exit") ||
-           !strcmp(name, "panic") || !strcmp(name, "assert") ||
-           !strcmp(name, "some") || !strcmp(name, "none") ||
-           !strcmp(name, "ok") || !strcmp(name, "err") ||
-           !strcmp(name, "err_of") ||
-           !strcmp(name, "nullptr") || !strcmp(name, "bytes_ptr") ||
-           !strcmp(name, "wire_put") || !strcmp(name, "wire_put_bytes") ||
-           !strcmp(name, "make_chan") || !strcmp(name, "chan_send") ||
-           !strcmp(name, "chan_recv") || !strcmp(name, "chan_close") ||
-           !strcmp(name, "make_mutex") || !strcmp(name, "mutex_lock") ||
-           !strcmp(name, "mutex_unlock") ||
-           !strcmp(name, "mutex_trylock") ||
-           !strcmp(name, "join_wait") ||
-           !strcmp(name, "arena_new") || !strcmp(name, "until_of") ||
-           !strcmp(name, "until_never") || !strcmp(name, "until_hit") ||
-           !strcmp(name, "fault_timeout") || !strcmp(name, "fault_reset") ||
-           !strcmp(name, "fault_closed") || !strcmp(name, "fault_io") ||
-           !strcmp(name, "fault_refused") || !strcmp(name, "fault_kind") ||
-           !strcmp(name, "fault_code") || !strcmp(name, "fault_op") ||
-           !strcmp(name, "peer_v4") || !strcmp(name, "peer_port") ||
-           !strcmp(name, "trip_new") || !strcmp(name, "link_listen") ||
-           !strcmp(name, "link_dial") ||
-           !strcmp(name, "__enum_from_int") ||
-           !strcmp(name, "__enum_from_str");
+    for (int i = 0; i < N_BUILTINS; i++)
+        if (!strcmp(name, BUILTIN_NAMES[i]))
+            return 1;
+    return 0;
 }
 
 /* Find a method `name` declared (via impl) for struct `sd`. `line` is

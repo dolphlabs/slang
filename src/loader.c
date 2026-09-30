@@ -1,4 +1,5 @@
 #include "common.h"
+#include "diag.h"
 #include "lexer.h"
 #include "parser.h"
 #include "loader.h"
@@ -334,6 +335,47 @@ static int load_import(Loader *ld, const char *from_dir,
     return -1; /* load_error exits */
 }
 
+/* Where `import "ipath"` written in from_dir would find a source package:
+ * load_import's order (a local directory, a native package, the standard
+ * library, a slang.project pin), loading nothing. Sets *native and returns
+ * NULL for a compiler-provided package; NULL alone when nothing matches.
+ * For slangc doc, which only reads the files: a pin's hash is not checked
+ * here, since nothing from it is compiled. */
+char *loader_resolve_dir(const char *from_dir, const char *ipath,
+                         int *native) {
+    *native = 0;
+    char target[PATH_MAX], treal[PATH_MAX];
+    snprintf(target, sizeof(target), "%s/%s", from_dir, ipath);
+    int nat = is_native_name(ipath);
+    if (realpath(target, treal) && is_pkg_dir(treal) &&
+        (!nat || dir_has_sl_files(treal)))
+        return xstrdup(treal);
+    if (nat) {
+        *native = 1;
+        return NULL;
+    }
+    char *std = slang_stdlib_pkg(ipath);
+    if (std)
+        return std;
+    char *proot = project_find_root(from_dir);
+    if (proot) {
+        SlPkgPin *pin = project_find_pin(project_load(proot), ipath);
+        if (pin) {
+            char *pkgdir = project_pkg_dir(pin);
+            if (project_is_dir(pkgdir))
+                return pkgdir;
+        }
+    }
+    return NULL;
+}
+
+const char *const *native_package_list(void) {
+    static const char *list[sizeof(NATIVE_PKGS) / sizeof(NATIVE_PKGS[0]) + 1];
+    for (size_t i = 0; i < sizeof(NATIVE_PKGS) / sizeof(NATIVE_PKGS[0]); i++)
+        list[i] = NATIVE_PKGS[i];
+    return list;
+}
+
 /* Records that p's import of `ipath` resolved to package `target`.
  * merge_program keeps one entry per distinct path, and every file of a
  * package resolves a given path from the same directory, so the entry is
@@ -426,6 +468,7 @@ static int load_package_dir(Loader *ld, const char *real, const char *name) {
         char fpath[PATH_MAX];
         snprintf(fpath, sizeof(fpath), "%s/%s", real, names[i]);
         char *src = read_entire_file(fpath);
+        diag_file = xstrdup(fpath); /* lexer and parser errors name it */
 
         Lexer lx;
         lexer_init(&lx, src);

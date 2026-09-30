@@ -295,6 +295,31 @@ for pkg in stdlib/pg; do
     fi
 done
 
+# ---- slangc doc ---------------------------------------------------------
+# An agent asks for the one API it needs. Packages resolve as `import` does
+# from the current directory; source items come with the comment above them.
+echo "--- slangc doc ---"
+dc_bad=0
+dc_fail() { echo "FAIL slangc doc ($1)"; fail=1; dc_bad=1; }
+out=$(./slangc doc 2>&1) || dc_fail "listing exited nonzero"
+printf '%s\n' "$out" | grep -q ' strings' || dc_fail "native packages not listed"
+printf '%s\n' "$out" | grep -q ' http ' || dc_fail "standard library not listed"
+out=$(./slangc doc builder 2>&1)
+printf '%s\n' "$out" | grep -qx 'fn Str.write(self: Str, s: str) -> Str' || dc_fail "method line"
+printf '%s\n' "$out" | grep -qx '    // Appends, and returns the builder so writes chain.' || dc_fail "doc comment"
+out=$(./slangc doc builder.Str 2>&1)
+printf '%s\n' "$out" | grep -qx 'methods:' || dc_fail "struct shows its methods"
+out=$(./slangc doc httpc.client_post 2>&1)
+[ "$out" = "fn client_post(c: Client, url: str, content_type: str, body: bytes, deadline: until) -> result[Response, str]" ] \
+    || dc_fail "multi-line signature joined: $out"
+./slangc doc strings | grep -qx 'fn join(\[str\], str) -> str' || dc_fail "native list parameter"
+(cd examples/pkgdemo && "$OLDPWD/slangc" doc geometry.area) | grep -qx 'fn area(w: float, h: float) -> float' \
+    || dc_fail "local package"
+./slangc doc json | grep -q '^fn decode(text: str) -> result\[T, str\]' || dc_fail "json note"
+./slangc doc http no_such_item >/dev/null 2>&1 && dc_fail "missing item must exit nonzero"
+./slangc doc no_such_pkg >/dev/null 2>&1 && dc_fail "missing package must exit nonzero"
+[ "$dc_bad" -eq 0 ] && echo "PASS slangc doc"
+
 # ---- GC at a tiny threshold ------------------------------------------
 # A rooting bug -- a live object held only where no safepoint knows about
 # it -- surfaces only when a collection lands at that exact safepoint. At
@@ -309,7 +334,7 @@ for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood \
             method_recv_gc indirect_callee generics_structs generics_json generics_infer \
             generics_pkg gc_nested_literal generics_methods \
             generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry own_roots switch escape_roots \
-            http_read_wire bytes_empty_literal gc_minor_barriers map_delete \
+            http_read_wire bytes_empty_literal gc_minor_barriers map_delete if_let \
             gc_container_frontier; do
     out="/tmp/sl_gcstress_${name}.out"
     if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
@@ -338,7 +363,7 @@ nur_bad=0
 for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put \
             gc_nested_literal gc_stress gc_stat spawn_isolation maps json \
             json_int_exact flags method_recv method_recv_gc indirect_callee \
-            http_read_wire bytes_empty_literal gc_minor_barriers map_delete \
+            http_read_wire bytes_empty_literal gc_minor_barriers map_delete if_let \
             gc_container_frontier; do
     out="/tmp/sl_nursery_${name}.out"
     if ! SLANG_GC_NURSERY_KB=16 ./slangc "tests/$name/main.sl" --run \
@@ -365,7 +390,7 @@ done
 # and task/channel/network tests. The count must be zero.
 echo "--- minor collections verified (SLANG_GC_VERIFY_MINOR, 16KB nursery) ---"
 vm_bad=0
-for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc_map_put \
+for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc_map_put if_let \
             gc_nested_literal gc_nursery_barrier gc_nursery_promotion \
             spawn_isolation select maps json http_read_wire http_client_pool \
             http2_flood; do
@@ -536,6 +561,41 @@ if [ "$ls_n" -eq 0 ]; then
 fi
 rm -rf "$ls_dir"
 [ "$ls_bad" -eq 0 ] && echo "PASS llms-small.txt examples ($ls_n)"
+
+# ---- compiler diagnostics --------------------------------------------------
+# An agent or editor acts on the compiler's errors, so their shape is an
+# interface: file:line: error: message, the first error of EVERY function in
+# one compile (not only the program's first), a "did you mean" where one is
+# likely, and with --json one object per error that carries the same facts.
+# tests/fail_diagnostics has errors in two files; its whole stderr is pinned.
+echo "--- compiler diagnostics ---"
+dg_bad=0
+dg=tests/fail_diagnostics
+if ./slangc "$dg/main.sl" >/dev/null 2>/tmp/sl_diag.err </dev/null; then
+    echo "FAIL diagnostics: the fixture compiled"
+    dg_bad=1; fail=1
+elif ! diff -u "$dg/expected_stderr.txt" /tmp/sl_diag.err >/tmp/sl_diag.diff; then
+    echo "FAIL diagnostics: stderr differs"
+    cat /tmp/sl_diag.diff
+    dg_bad=1; fail=1
+fi
+./slangc "$dg/main.sl" --json >/dev/null 2>/tmp/sl_diag.json </dev/null
+if ! python3 - /tmp/sl_diag.json "$dg/expected_stderr.txt" <<'PY'
+import json, sys
+got = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+want = [l.rstrip("\n") for l in open(sys.argv[2]) if l.strip()]
+assert len(got) == len(want), "%d JSON errors, %d text ones" % (len(got), len(want))
+for g, w in zip(got, want):
+    assert set(g) == {"file", "line", "severity", "message"}, g
+    assert g["severity"] == "error", g
+    text = "%s:%d: error: %s" % (g["file"], g["line"], g["message"])
+    assert text == w, (text, w)
+PY
+then
+    echo "FAIL diagnostics: --json output"
+    dg_bad=1; fail=1
+fi
+[ "$dg_bad" -eq 0 ] && echo "PASS compiler diagnostics"
 
 # Generated C must compile clean under the warnings a C compiler turns
 # on by ITSELF. slangc passes no -W flags, so anything default-on lands

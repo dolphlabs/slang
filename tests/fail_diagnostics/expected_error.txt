@@ -1,0 +1,1 @@
+tests/fail_diagnostics/helper.sl:4: error: return type mismatch: cannot return str where int expected

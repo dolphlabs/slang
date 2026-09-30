@@ -14,7 +14,7 @@ let path = base + ".bin";
 let dir = base + "_dir";
 
 let missing = fs.open(path + ".nope");
-guard let _m = missing else {
+if let _m = missing { } else {
     println("open missing");
 }
 
@@ -43,7 +43,7 @@ let past = fs.pread(rfd, 1000, 4) ?? b"x";
 if len(pa) != 2 || len(pb) != 2 || len(past) != 0 { die("pread lengths"); }
 guard let full = fs.pread(rfd, 0, 1000000) else { die("pread whole"); }
 if pb + pa != full || full != payload { die("pread contents"); }
-guard let bad = fs.pread(rfd, -1, 4) else { println("pread refuses a negative offset"); }
+if let bad = fs.pread(rfd, -1, 4) { } else { println("pread refuses a negative offset"); }
 let cr2 = fs.close(rfd);
 guard let _c2 = cr2 else { die("close read"); }
 println("roundtrip");
@@ -51,7 +51,7 @@ println("roundtrip");
 let mr = fs.mkdir(dir);
 guard let _d = mr else { die("mkdir"); }
 let again = fs.mkdir(dir);
-guard let _d2 = again else {
+if let _d2 = again { } else {
     println("mkdir exists");
 }
 

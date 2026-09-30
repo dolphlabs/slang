@@ -253,17 +253,17 @@ client, but a real browser is different evidence.
 
 ## API
 
-### `let W_RAW = 0;       // pre-built frames, not flow controlled`
+### `let W_RAW = 0; // pre-built frames, not flow controlled`
 
 ---- writer messages -------------------------------------------------  Everything the writer task needs arrives on ONE channel, tagged.  When this was written slang had no `select`, so a writer watching both "here is a response" and "the peer granted more window" on two channels could only ever block on one of them. `select` exists now and would compile -- but the single tagged stream is still the better design here, and stays. Two channels would make the ORDER between a grant and a body a race the writer has to reason about; one channel makes it the order they were sent, for free, and leaves the writer an ordinary state machine with a single blocking point.
 
-### `let W_BODY = 1;      // a response: HEADERS now, DATA as window allows`
+### `let W_BODY = 1; // a response: HEADERS now, DATA as window allows`
 
-### `let W_GRANT = 2;     // peer's WINDOW_UPDATE: `n` octets to `stream``
+### `let W_GRANT = 2; // peer's WINDOW_UPDATE: `n` octets to `stream``
 
-### `let W_INITIAL = 3;   // peer's SETTINGS_INITIAL_WINDOW_SIZE is now `n``
+### `let W_INITIAL = 3; // peer's SETTINGS_INITIAL_WINDOW_SIZE is now `n``
 
-### `let W_MAXFRAME = 4;  // peer's SETTINGS_MAX_FRAME_SIZE is now `n``
+### `let W_MAXFRAME = 4; // peer's SETTINGS_MAX_FRAME_SIZE is now `n``
 
 ### `gc struct WMsg`
 
@@ -271,7 +271,7 @@ client, but a real browser is different evidence.
 
 ### `fn grant_msg(stream: int, n: int) -> WMsg`
 
-### `fn response_msg(stream: int, status: str, extra: [Header],`
+### `fn response_msg(stream: int, status: str, extra: [Header], body: bytes) -> WMsg`
 
 Build a response. The body is handed over UNFRAMED: the writer owns the peer's window and its max frame size, so it -- not the handler -- decides how the body is cut into DATA frames and when each may go.
 
@@ -343,15 +343,15 @@ RFC 7301 §3.1: the peer either selected "h2" or it did not. A server that adver
 
 ### `fn reader_new() -> Reader`
 
-### `fn read_frame(r: Reader, t: Transport, max_frame: int, u: until)`
+### `fn read_frame(r: Reader, t: Transport, max_frame: int, u: until) -> result[Frame, str]`
 
 Pull bytes until at least one complete frame is buffered, then return it and keep the remainder. Note the `&mut *c` at every site below that forwards this borrow: passing `c` directly MOVES it, so the second call would fail with "use of moved value". Reborrowing keeps the caller's borrow usable.  `u` bounds the WHOLE call, not each recv: a peer that sends one octet every second must still finish the frame inside the budget, which is what makes this a slowloris defence rather than a keepalive check. Pass until_never() only where blocking forever is genuinely intended.
 
-### `fn accept_preface(r: Reader, t: Transport, wch: chan[WMsg], u: until)`
+### `fn accept_preface(r: Reader, t: Transport, wch: chan[WMsg], u: until) -> result[bool, str]`
 
 Verify the 24-byte client connection preface and send ours.
 
-### `fn read_request(cn: Conn, r: Reader, t: Transport, wch: chan[WMsg],`
+### `fn read_request(cn: Conn, r: Reader, t: Transport, wch: chan[WMsg], lim: Limits) -> result[Req, str]`
 
 Read frames until one complete request has arrived.  Two clocks, switched at the first HEADERS. Before it the connection is idle and gets the generous `idle` budget, refreshed by each control frame that arrives -- a client PINGing a kept-alive connection is behaving correctly and must not be disconnected. After it the strict `request` budget applies to the request as a WHOLE and is never refreshed, so no amount of dribbled DATA or CONTINUATION can extend it.
 
@@ -359,7 +359,7 @@ Read frames until one complete request has arrived.  Two clocks, switched at the
 
 Owns the write side, and with it the peer's send windows.  Flow control has to live here rather than in the handlers. The window is a property of the CONNECTION, shared by every concurrent stream, so no handler can decide on its own whether it may send -- and the WINDOW_UPDATE that grants credit arrives on the read side, in a different task entirely. Routing both into this one task is what lets the accounting be correct without a lock at all. slang does have a mutex now, but reaching for one here would be the worse design: it would serialise the writers without making the window arithmetic any less shared.  A blocked stream parks its BODY here, not its task: the handler hands the response over and moves on, so a peer with a tiny window costs a queue entry rather than a live task.
 
-### `fn respond(cn: Conn, wch: chan[WMsg], stream: int, status: str,`
+### `fn respond(cn: Conn, wch: chan[WMsg], stream: int, status: str, extra: [Header], body: bytes)`
 
 Enqueue a response for `stream`. Every write on the connection goes through the writer task, so there is deliberately no direct-write variant: one would be able to interleave with a handler mid-frame.
 
@@ -501,7 +501,7 @@ One SETTINGS entry is a 16-bit identifier and a 32-bit value.
 
 ### `fn decoder_new(cap: int) -> Decoder`
 
-### `fn decode_block(d: Decoder, b: bytes, max_headers: int)`
+### `fn decode_block(d: Decoder, b: bytes, max_headers: int) -> result[[Header], str]`
 
 Decode one complete header block. `max_headers` caps how many fields a peer may send: without it a small compressed block can expand into an unbounded list, which is the HPACK bomb.
 

@@ -14,6 +14,7 @@
  */
 
 #include "common.h"
+#include "diag.h"
 #include "loader.h"
 #include "lexer.h"
 #include "parser.h"
@@ -34,12 +35,16 @@
 #define SLANG_VERSION "0.2.0"
 #endif
 
+int cmd_doc(int argc, char **argv); /* doc.c */
+
 static void print_usage(void) {
     fputs("usage: slangc <file.sl> [-o <name>] [--emit-c] [--keep-c] [--run] "
-          "[--dump-liveness] [--dump-mir]\n"
+          "[--json] [--dump-liveness] [--dump-mir]\n"
+          "       --json: compile errors as JSON lines on stderr, one per error\n"
           "       slangc new <name>|.        scaffold a project here or in <name>\n"
           "       slangc get [file.sl|dir]   resolve deps, write slang.lock\n"
           "       slangc test [dir] [--run substr] [-v] [--keep]   run test_* functions in *_test.sl\n"
+          "       slangc doc [<pkg>[.<name>]]   a package's API: signatures and doc comments\n"
           "       slangc --version",
           stderr);
     fputc(10, stderr);
@@ -1016,6 +1021,10 @@ int main(int argc, char **argv) {
         sl_compiler_argv0 = argv[0];
         return cmd_new(argc >= 3 ? argv[2] : NULL);
     }
+    if (argc >= 2 && !strcmp(argv[1], "doc")) {
+        sl_compiler_argv0 = argv[0];
+        return cmd_doc(argc, argv);
+    }
     if (argc >= 2 && (!strcmp(argv[1], "--version") ||
                       !strcmp(argv[1], "-V"))) {
         fputs("slangc " SLANG_VERSION "\n", stdout);
@@ -1036,6 +1045,8 @@ int main(int argc, char **argv) {
             keep_c = 1;
         } else if (!strcmp(argv[i], "--run")) {
             run = 1;
+        } else if (!strcmp(argv[i], "--json")) {
+            diag_json = 1;
         } else if (!strcmp(argv[i], "--dump-liveness")) {
             want_liveness_dump = 1;
         } else if (!strcmp(argv[i], "--dump-mir")) {

@@ -340,7 +340,7 @@ expect(to_str(p14.body), "GET:", "same-origin redirect still reaches /echo");
 
 // a connection refused is an error with the host in it, not a panic
 let r15 = httpc.get("http://127.0.0.1:1/nope", dl);
-guard let _p15 = r15 else let e = err_of(r15) {
+if let _p15 = r15 { } else let e = err_of(r15) {
     if !strings.contains(e, "127.0.0.1") {
         die("dial error should name the host: " + e);
     }

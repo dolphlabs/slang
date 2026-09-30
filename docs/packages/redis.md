@@ -86,17 +86,17 @@ with `is_nil` for a nil array).
 
 ## API
 
-### `let REPLY_SIMPLE = 0;   // +str           (text holds the text)`
+### `let REPLY_SIMPLE = 0; // +str (text holds the text)`
 
 The five RESP2 reply types. A reply is always one of exactly one.
 
-### `let REPLY_ERROR = 1;    // -err           (text holds the text)`
+### `let REPLY_ERROR = 1; // -err (text holds the text)`
 
-### `let REPLY_INT = 2;      // :num           (num holds the value)`
+### `let REPLY_INT = 2; // :num (num holds the value)`
 
-### `let REPLY_BULK = 3;     // $len\r\n<bytes> (bulk holds it, none when nil)`
+### `let REPLY_BULK = 3; // $len\r\n<bytes> (bulk holds it, none when nil)`
 
-### `let REPLY_ARRAY = 4;    // *n\r\n...      (items holds them)`
+### `let REPLY_ARRAY = 4; // *n\r\n... (items holds them)`
 
 ### `gc struct Reply`
 
@@ -162,15 +162,15 @@ ECHO, expecting the value back byte-identical.
 
 GET: the value, or none when the key is absent. A missing key is absent data (opt), not an error.
 
-### `fn set(c: Conn, key: str, val: bytes,`
+### `fn set(c: Conn, key: str, val: bytes, deadline: until) -> result[bool, str]`
 
 SET: true when the server answers +OK.
 
-### `fn set_ex(c: Conn, key: str, seconds: int, val: bytes,`
+### `fn set_ex(c: Conn, key: str, seconds: int, val: bytes, deadline: until) -> result[bool, str]`
 
 SET with a TTL in seconds. True on +OK.
 
-### `fn set_nx(c: Conn, key: str, val: bytes,`
+### `fn set_nx(c: Conn, key: str, val: bytes, deadline: until) -> result[bool, str]`
 
 SETNX: true when the key was absent and is now set.
 
@@ -182,11 +182,11 @@ DEL_KEYS: how many of the keys existed. Named with a suffix because `del` itself
 
 EXISTS: how many of the keys exist.
 
-### `fn expire(c: Conn, key: str, seconds: int,`
+### `fn expire(c: Conn, key: str, seconds: int, deadline: until) -> result[bool, str]`
 
 EXPIRE: true when the timeout was set (false: missing key).
 
-### `fn pexpire(c: Conn, key: str, ms: int,`
+### `fn pexpire(c: Conn, key: str, ms: int, deadline: until) -> result[bool, str]`
 
 PEXPIRE: like EXPIRE with a millisecond TTL.
 
@@ -208,55 +208,55 @@ INCR/DECR: the value after the change.
 
 ### `fn decr(c: Conn, key: str, deadline: until) -> result[int, str]`
 
-### `fn incr_by(c: Conn, key: str, n: int,`
+### `fn incr_by(c: Conn, key: str, n: int, deadline: until) -> result[int, str]`
 
-### `fn decr_by(c: Conn, key: str, n: int,`
+### `fn decr_by(c: Conn, key: str, n: int, deadline: until) -> result[int, str]`
 
-### `fn append(c: Conn, key: str, val: bytes,`
+### `fn append(c: Conn, key: str, val: bytes, deadline: until) -> result[int, str]`
 
 APPEND: the length after appending. STRLEN: the current length.
 
 ### `fn strlen(c: Conn, key: str, deadline: until) -> result[int, str]`
 
-### `fn mget(c: Conn, keys: [str],`
+### `fn mget(c: Conn, keys: [str], deadline: until) -> result[[opt[bytes]], str]`
 
 MGET: one slot per key, none for the missing ones.
 
-### `fn mset(c: Conn, kv: map[str]bytes,`
+### `fn mset(c: Conn, kv: map[str]bytes, deadline: until) -> result[bool, str]`
 
 MSET: field iteration order is insertion order, so the wire order is deterministic for a literally-built map.
 
-### `fn hset(c: Conn, key: str, field: str, val: bytes,`
+### `fn hset(c: Conn, key: str, field: str, val: bytes, deadline: until) -> result[int, str]`
 
 HSET: how many fields were newly added.
 
-### `fn hget(c: Conn, key: str, field: str,`
+### `fn hget(c: Conn, key: str, field: str, deadline: until) -> result[opt[bytes], str]`
 
 HGET: the value, or none when key or field is absent.
 
-### `fn hgetall(c: Conn, key: str,`
+### `fn hgetall(c: Conn, key: str, deadline: until) -> result[map[str]bytes, str]`
 
 HGETALL: the whole hash. Field names decode to str; binary field names a program did not put there itself come back lossy.
 
-### `fn hdel(c: Conn, key: str, fields: [str],`
+### `fn hdel(c: Conn, key: str, fields: [str], deadline: until) -> result[int, str]`
 
 HDEL: how many fields were removed.
 
-### `fn hexists(c: Conn, key: str, field: str,`
+### `fn hexists(c: Conn, key: str, field: str, deadline: until) -> result[bool, str]`
 
-### `fn hkeys(c: Conn, key: str,`
+### `fn hkeys(c: Conn, key: str, deadline: until) -> result[[str], str]`
 
-### `fn hvals(c: Conn, key: str,`
+### `fn hvals(c: Conn, key: str, deadline: until) -> result[[bytes], str]`
 
 ### `fn hlen(c: Conn, key: str, deadline: until) -> result[int, str]`
 
-### `fn hincr_by(c: Conn, key: str, field: str, n: int,`
+### `fn hincr_by(c: Conn, key: str, field: str, n: int, deadline: until) -> result[int, str]`
 
-### `fn lpush(c: Conn, key: str, vals: [bytes],`
+### `fn lpush(c: Conn, key: str, vals: [bytes], deadline: until) -> result[int, str]`
 
 LPUSH/RPUSH: the length after pushing.
 
-### `fn rpush(c: Conn, key: str, vals: [bytes],`
+### `fn rpush(c: Conn, key: str, vals: [bytes], deadline: until) -> result[int, str]`
 
 ### `fn lpop(c: Conn, key: str, deadline: until) -> result[opt[bytes], str]`
 
@@ -266,31 +266,31 @@ LPOP/RPOP: the element, or none when the list is absent or drained.
 
 ### `fn llen(c: Conn, key: str, deadline: until) -> result[int, str]`
 
-### `fn lrange(c: Conn, key: str, start: int, stop: int,`
+### `fn lrange(c: Conn, key: str, start: int, stop: int, deadline: until) -> result[[bytes], str]`
 
 LRANGE: elements from start to stop inclusive; negative indexes count from the tail, exactly as Redis documents.
 
-### `fn ltrim(c: Conn, key: str, start: int, stop: int,`
+### `fn ltrim(c: Conn, key: str, start: int, stop: int, deadline: until) -> result[bool, str]`
 
-### `fn lindex(c: Conn, key: str, i: int,`
+### `fn lindex(c: Conn, key: str, i: int, deadline: until) -> result[opt[bytes], str]`
 
-### `fn lrem(c: Conn, key: str, count: int, val: bytes,`
+### `fn lrem(c: Conn, key: str, count: int, val: bytes, deadline: until) -> result[int, str]`
 
 LREM: removes count occurrences of val, returns how many went.
 
-### `fn sadd(c: Conn, key: str, members: [bytes],`
+### `fn sadd(c: Conn, key: str, members: [bytes], deadline: until) -> result[int, str]`
 
 SADD: how many members were newly added.
 
-### `fn smembers(c: Conn, key: str,`
+### `fn smembers(c: Conn, key: str, deadline: until) -> result[[bytes], str]`
 
-### `fn srem(c: Conn, key: str, members: [bytes],`
+### `fn srem(c: Conn, key: str, members: [bytes], deadline: until) -> result[int, str]`
 
 SREM: how many members were removed.
 
 ### `fn scard(c: Conn, key: str, deadline: until) -> result[int, str]`
 
-### `fn sismember(c: Conn, key: str, member: bytes,`
+### `fn sismember(c: Conn, key: str, member: bytes, deadline: until) -> result[bool, str]`
 
 ### `fn spop(c: Conn, key: str, deadline: until) -> result[opt[bytes], str]`
 
@@ -298,47 +298,47 @@ SPOP: a removed member, or none when the set is absent or drained.
 
 ### `gc struct ZMember`
 
-### `fn zadd(c: Conn, key: str, members: map[str]float,`
+### `fn zadd(c: Conn, key: str, members: map[str]float, deadline: until) -> result[int, str]`
 
 ZADD: how many members were newly added.
 
-### `fn zrange(c: Conn, key: str, start: int, stop: int,`
+### `fn zrange(c: Conn, key: str, start: int, stop: int, deadline: until) -> result[[bytes], str]`
 
 ZRANGE/ZREVRANGE without scores.
 
-### `fn zrange_scores(c: Conn, key: str, start: int, stop: int,`
+### `fn zrange_scores(c: Conn, key: str, start: int, stop: int, deadline: until) -> result[[ZMember], str]`
 
 ZRANGE WITHSCORES: member/score pairs in range order.
 
-### `fn zrank(c: Conn, key: str, member: bytes,`
+### `fn zrank(c: Conn, key: str, member: bytes, deadline: until) -> result[opt[int], str]`
 
 ZRANK: the rank, or none when key or member is absent.
 
-### `fn zscore(c: Conn, key: str, member: bytes,`
+### `fn zscore(c: Conn, key: str, member: bytes, deadline: until) -> result[opt[float], str]`
 
 ZSCORE: the score, or none when key or member is absent.
 
-### `fn zrem(c: Conn, key: str, members: [bytes],`
+### `fn zrem(c: Conn, key: str, members: [bytes], deadline: until) -> result[int, str]`
 
 ZREM: how many members were removed.
 
 ### `fn zcard(c: Conn, key: str, deadline: until) -> result[int, str]`
 
-### `fn zincr_by(c: Conn, key: str, n: float, member: bytes,`
+### `fn zincr_by(c: Conn, key: str, n: float, member: bytes, deadline: until) -> result[float, str]`
 
 ### `fn key_type(c: Conn, key: str, deadline: until) -> result[str, str]`
 
 TYPE: the key's type name ("none" when absent).
 
-### `fn rename(c: Conn, key: str, newkey: str,`
+### `fn rename(c: Conn, key: str, newkey: str, deadline: until) -> result[bool, str]`
 
 RENAME: true on +OK. RENAMENX: true only when newkey was absent.
 
-### `fn rename_nx(c: Conn, key: str, newkey: str,`
+### `fn rename_nx(c: Conn, key: str, newkey: str, deadline: until) -> result[bool, str]`
 
 ### `gc struct ScanOut`
 
-### `fn scan(c: Conn, cursor: int, match: opt[str], count: opt[int],`
+### `fn scan(c: Conn, cursor: int, match: opt[str], count: opt[int], deadline: until) -> result[ScanOut, str]`
 
 SCAN: one cursor step. Thread cursor back in until it returns 0; match and count are server hints, both optional. KEYS is deliberately absent: it blocks the server for the whole keyspace.
 
@@ -360,7 +360,7 @@ A connection for the caller's exclusive use, until release().
 
 Returns a connection to the pool. One that is broken, closed, or inside MULTI is closed instead: handing those to the next caller would fail its first command, or run it inside someone else's uncommitted transaction.
 
-### `fn pool_do(p: Pool, args: [bytes],`
+### `fn pool_do(p: Pool, args: [bytes], deadline: until) -> result[Reply, str]`
 
 One command on a pooled connection: acquire, run, release. The connection goes back even when the command fails.
 
@@ -370,7 +370,7 @@ Closes every idle connection. Connections checked out are closed as they are rel
 
 ### `gc struct Cluster`
 
-### `fn new_cluster(cfg: Config, seeds: [str],`
+### `fn new_cluster(cfg: Config, seeds: [str], deadline: until) -> result[Cluster, str]`
 
 Connect to a cluster: try each seed until one serves CLUSTER SLOTS. Only database 0 exists in cluster mode. The deadline covers the whole bootstrap.
 
@@ -378,7 +378,7 @@ Connect to a cluster: try each seed until one serves CLUSTER SLOTS. Only databas
 
 Re-learn the whole slot map from a known node (any current pool will do; the first one wins) or a bootstrap seed. Manual recovery for outages the MOVED path cannot see.
 
-### `fn cluster_do(cl: Cluster, key: str, args: [bytes],`
+### `fn cluster_do(cl: Cluster, key: str, args: [bytes], deadline: until) -> result[Reply, str]`
 
 Run args against the node owning key, following MOVED (map update plus retry, up to MAX_REDIRECTS) and ASK (one directed ASKING hop, returned directly). Every other error returns verbatim.
 
@@ -390,85 +390,85 @@ Run args against the node owning key, following MOVED (map update plus retry, up
 
 ### `fn cget(cl: Cluster, key: str, deadline: until) -> result[opt[bytes], str]`
 
-### `fn cset(cl: Cluster, key: str, val: bytes,`
+### `fn cset(cl: Cluster, key: str, val: bytes, deadline: until) -> result[bool, str]`
 
-### `fn cset_ex(cl: Cluster, key: str, seconds: int, val: bytes,`
+### `fn cset_ex(cl: Cluster, key: str, seconds: int, val: bytes, deadline: until) -> result[bool, str]`
 
-### `fn cset_nx(cl: Cluster, key: str, val: bytes,`
+### `fn cset_nx(cl: Cluster, key: str, val: bytes, deadline: until) -> result[bool, str]`
 
-### `fn cdel_keys(cl: Cluster, keys: [str],`
+### `fn cdel_keys(cl: Cluster, keys: [str], deadline: until) -> result[int, str]`
 
-### `fn cexists(cl: Cluster, keys: [str],`
+### `fn cexists(cl: Cluster, keys: [str], deadline: until) -> result[int, str]`
 
-### `fn cexpire(cl: Cluster, key: str, seconds: int,`
+### `fn cexpire(cl: Cluster, key: str, seconds: int, deadline: until) -> result[bool, str]`
 
-### `fn cpexpire(cl: Cluster, key: str, ms: int,`
+### `fn cpexpire(cl: Cluster, key: str, ms: int, deadline: until) -> result[bool, str]`
 
 ### `fn cttl(cl: Cluster, key: str, deadline: until) -> result[int, str]`
 
 ### `fn cpttl(cl: Cluster, key: str, deadline: until) -> result[int, str]`
 
-### `fn cpersist(cl: Cluster, key: str,`
+### `fn cpersist(cl: Cluster, key: str, deadline: until) -> result[bool, str]`
 
 ### `fn cincr(cl: Cluster, key: str, deadline: until) -> result[int, str]`
 
 ### `fn cdecr(cl: Cluster, key: str, deadline: until) -> result[int, str]`
 
-### `fn cincr_by(cl: Cluster, key: str, n: int,`
+### `fn cincr_by(cl: Cluster, key: str, n: int, deadline: until) -> result[int, str]`
 
-### `fn cdecr_by(cl: Cluster, key: str, n: int,`
+### `fn cdecr_by(cl: Cluster, key: str, n: int, deadline: until) -> result[int, str]`
 
-### `fn cappend(cl: Cluster, key: str, val: bytes,`
+### `fn cappend(cl: Cluster, key: str, val: bytes, deadline: until) -> result[int, str]`
 
-### `fn cstrlen(cl: Cluster, key: str,`
+### `fn cstrlen(cl: Cluster, key: str, deadline: until) -> result[int, str]`
 
-### `fn cmget(cl: Cluster, keys: [str],`
+### `fn cmget(cl: Cluster, keys: [str], deadline: until) -> result[[opt[bytes]], str]`
 
-### `fn cmset(cl: Cluster, kv: map[str]bytes,`
+### `fn cmset(cl: Cluster, kv: map[str]bytes, deadline: until) -> result[bool, str]`
 
-### `fn chset(cl: Cluster, key: str, field: str, val: bytes,`
+### `fn chset(cl: Cluster, key: str, field: str, val: bytes, deadline: until) -> result[int, str]`
 
-### `fn chget(cl: Cluster, key: str, field: str,`
+### `fn chget(cl: Cluster, key: str, field: str, deadline: until) -> result[opt[bytes], str]`
 
-### `fn chdel(cl: Cluster, key: str, fields: [str],`
+### `fn chdel(cl: Cluster, key: str, fields: [str], deadline: until) -> result[int, str]`
 
-### `fn chexists(cl: Cluster, key: str, field: str,`
+### `fn chexists(cl: Cluster, key: str, field: str, deadline: until) -> result[bool, str]`
 
 ### `fn chlen(cl: Cluster, key: str, deadline: until) -> result[int, str]`
 
-### `fn chincr_by(cl: Cluster, key: str, field: str, n: int,`
+### `fn chincr_by(cl: Cluster, key: str, field: str, n: int, deadline: until) -> result[int, str]`
 
-### `fn clpush(cl: Cluster, key: str, vals: [bytes],`
+### `fn clpush(cl: Cluster, key: str, vals: [bytes], deadline: until) -> result[int, str]`
 
-### `fn crpush(cl: Cluster, key: str, vals: [bytes],`
+### `fn crpush(cl: Cluster, key: str, vals: [bytes], deadline: until) -> result[int, str]`
 
-### `fn clpop(cl: Cluster, key: str,`
+### `fn clpop(cl: Cluster, key: str, deadline: until) -> result[opt[bytes], str]`
 
-### `fn crpop(cl: Cluster, key: str,`
+### `fn crpop(cl: Cluster, key: str, deadline: until) -> result[opt[bytes], str]`
 
 ### `fn cllen(cl: Cluster, key: str, deadline: until) -> result[int, str]`
 
-### `fn csadd(cl: Cluster, key: str, members: [bytes],`
+### `fn csadd(cl: Cluster, key: str, members: [bytes], deadline: until) -> result[int, str]`
 
-### `fn csrem(cl: Cluster, key: str, members: [bytes],`
+### `fn csrem(cl: Cluster, key: str, members: [bytes], deadline: until) -> result[int, str]`
 
 ### `fn cscard(cl: Cluster, key: str, deadline: until) -> result[int, str]`
 
-### `fn csismember(cl: Cluster, key: str, member: bytes,`
+### `fn csismember(cl: Cluster, key: str, member: bytes, deadline: until) -> result[bool, str]`
 
-### `fn czadd(cl: Cluster, key: str, members: map[str]float,`
+### `fn czadd(cl: Cluster, key: str, members: map[str]float, deadline: until) -> result[int, str]`
 
-### `fn czrem(cl: Cluster, key: str, members: [bytes],`
+### `fn czrem(cl: Cluster, key: str, members: [bytes], deadline: until) -> result[int, str]`
 
 ### `fn czcard(cl: Cluster, key: str, deadline: until) -> result[int, str]`
 
-### `fn czscore(cl: Cluster, key: str, member: bytes,`
+### `fn czscore(cl: Cluster, key: str, member: bytes, deadline: until) -> result[opt[float], str]`
 
-### `fn ckey_type(cl: Cluster, key: str,`
+### `fn ckey_type(cl: Cluster, key: str, deadline: until) -> result[str, str]`
 
-### `fn crename(cl: Cluster, key: str, newkey: str,`
+### `fn crename(cl: Cluster, key: str, newkey: str, deadline: until) -> result[bool, str]`
 
-### `fn cscan(cl: Cluster, cursor: int, match: opt[str], count: opt[int],`
+### `fn cscan(cl: Cluster, cursor: int, match: opt[str], count: opt[int], deadline: until) -> result[ScanOut, str]`
 
 SCAN steps one node only (slot 0's owner): cluster-wide iteration fans out per node with cluster_refresh's map in hand.
 
@@ -476,7 +476,7 @@ SCAN steps one node only (slot 0's owner): cluster-wide iteration fans out per n
 
 MULTI: true on +OK. The connection leaves the pool from here until EXEC or DISCARD.
 
-### `fn queue(c: Conn, args: [bytes],`
+### `fn queue(c: Conn, args: [bytes], deadline: until) -> result[bool, str]`
 
 Queue one command inside MULTI. Anything but +QUEUED aborts the whole transaction server-side; that surfaces here as an err, and a later EXEC answers EXECABORT.
 
@@ -488,17 +488,17 @@ EXEC: the queued replies in order, error elements included. A nil array means no
 
 DISCARD: true on +OK, back outside MULTI either way the server answers.
 
-### `fn watch(c: Conn, keys: [str],`
+### `fn watch(c: Conn, keys: [str], deadline: until) -> result[bool, str]`
 
 WATCH/UNWATCH for optimistic locking: watch, read, MULTI, queue, EXEC; a nil EXEC (err here) means someone else wrote first, so retry the whole sequence.
 
 ### `fn unwatch(c: Conn, deadline: until) -> result[bool, str]`
 
-### `fn eval(c: Conn, script: str, keys: [str], args: [bytes],`
+### `fn eval(c: Conn, script: str, keys: [str], args: [bytes], deadline: until) -> result[Reply, str]`
 
 EVAL: the script's raw reply, whose shape depends on what it returns -- bulk, int, array, or error, decoded verbatim.
 
-### `fn evalsha(c: Conn, script: str, keys: [str], args: [bytes],`
+### `fn evalsha(c: Conn, script: str, keys: [str], args: [bytes], deadline: until) -> result[Reply, str]`
 
 EVALSHA with automatic EVAL fallback: the common path sends only 40 hex characters; a server that never saw the script answers NOSCRIPT and the call transparently re-sends the source.
 
@@ -510,11 +510,11 @@ A published message. kind is "message" or "pmessage"; pattern is set only for th
 
 A live subscription: a dedicated subscriber-mode connection plus messages that arrived while someone else held the lock. Never use sub.c directly (do, close, anything): concurrent socket readers would split the stream mid-reply. Everything here serializes on the Sub lock instead.
 
-### `fn subscribe(url: str, channels: [str], patterns: [str],`
+### `fn subscribe(url: str, channels: [str], patterns: [str], deadline: until) -> result[Sub, str]`
 
 Subscribe, returning a live Sub. channels and patterns are the SUBSCRIBE and PSUBSCRIBE lists; at least one of them is nonempty.
 
-### `fn sub_add(sub: Sub, channels: [str], patterns: [str],`
+### `fn sub_add(sub: Sub, channels: [str], patterns: [str], deadline: until) -> result[bool, str]`
 
 Add subscriptions to a live Sub.
 
@@ -522,7 +522,7 @@ Add subscriptions to a live Sub.
 
 Next message, or none when the deadline passes first. Confirms and pongs the server interleaves are skipped, never surfaced; a malformed reply is an error, since valid RESP has only the shapes as_message knows.
 
-### `fn sub_remove(sub: Sub, channels: [str], patterns: [str],`
+### `fn sub_remove(sub: Sub, channels: [str], patterns: [str], deadline: until) -> result[bool, str]`
 
 Remove subscriptions. Fully unsubscribing returns the connection to plain unicast mode; close it or subscribe again after.
 
@@ -534,37 +534,37 @@ Shut a subscription down. A task blocked in sub_next wakes with an error from th
 
 ### `gc struct StreamRead`
 
-### `fn xadd(c: Conn, key: str, id: str, fields: map[str]bytes,`
+### `fn xadd(c: Conn, key: str, id: str, fields: map[str]bytes, deadline: until) -> result[str, str]`
 
 XADD: the new entry's ID.
 
-### `fn xadd_maxlen(c: Conn, key: str, maxlen: int, approx: bool, id: str,`
+### `fn xadd_maxlen(c: Conn, key: str, maxlen: int, approx: bool, id: str, fields: map[str]bytes, deadline: until) -> result[str, str]`
 
 XADD with MAXLEN trimming: approx picks ~ (cheap) over exact.
 
-### `fn xrange(c: Conn, key: str, start: str, end: str, count: opt[int],`
+### `fn xrange(c: Conn, key: str, start: str, end: str, count: opt[int], deadline: until) -> result[[StreamEntry], str]`
 
 XRANGE/XREVRANGE: entries between two IDs ("-" and "+" are the ends), oldest first (XREVRANGE newest first). count caps the reply, none for no cap.
 
-### `fn xrevrange(c: Conn, key: str, end: str, start: str, count: opt[int],`
+### `fn xrevrange(c: Conn, key: str, end: str, start: str, count: opt[int], deadline: until) -> result[[StreamEntry], str]`
 
 ### `fn xlen(c: Conn, key: str, deadline: until) -> result[int, str]`
 
-### `fn xtrim(c: Conn, key: str, maxlen: int, approx: bool,`
+### `fn xtrim(c: Conn, key: str, maxlen: int, approx: bool, deadline: until) -> result[int, str]`
 
 XTRIM MAXLEN: how many entries were removed.
 
-### `fn xdel(c: Conn, key: str, ids: [str],`
+### `fn xdel(c: Conn, key: str, ids: [str], deadline: until) -> result[int, str]`
 
-### `fn xread(c: Conn, keys: [str], ids: [str], block_ms: opt[int],`
+### `fn xread(c: Conn, keys: [str], ids: [str], block_ms: opt[int], count: opt[int], deadline: until) -> result[opt[[StreamRead]], str]`
 
 XREAD: new entries per key since each id ("$" means "everything after now" on first call, then the last seen id after). block_ms waits that long for data (none => return at once); a wait that finds nothing is ok(none), not an error. count caps per call.
 
-### `fn cxadd(cl: Cluster, key: str, id: str, fields: map[str]bytes,`
+### `fn cxadd(cl: Cluster, key: str, id: str, fields: map[str]bytes, deadline: until) -> result[str, str]`
 
 ### `fn cxlen(cl: Cluster, key: str, deadline: until) -> result[int, str]`
 
-### `fn cxread(cl: Cluster, keys: [str], ids: [str], block_ms: opt[int],`
+### `fn cxread(cl: Cluster, keys: [str], ids: [str], block_ms: opt[int], count: opt[int], deadline: until) -> result[opt[[StreamRead]], str]`
 
 ---
 
