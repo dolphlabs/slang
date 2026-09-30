@@ -14,7 +14,8 @@
 #
 # Runs on merge to main, and on manual dispatch (which runs the workflow as
 # it exists on the chosen branch -- how a change to this file is tried
-# before it merges). Nothing here may reach the internet: a test that needs
+# before it merges). Releases are release.yml's: a version tag is tested
+# again there, on the machine that builds its tarball. Nothing here may reach the internet: a test that needs
 # the network fails for reasons unrelated to the code, which is why the
 # https client checks are verified by hand instead.
 
@@ -24,8 +25,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-  release:
-    types: [published]
 
 permissions:
   contents: read
@@ -222,49 +221,3 @@ jobs:
           PG_TLS_URL: postgres://slang:secret@localhost:55433/slang?sslmode=require&sslrootcert=/tmp/pgtls/ca.crt
           PG_SOCKET_URL: postgres://slang:secret@%2Ftmp%2Fpgsock/slang
         run: ./slangc tests/live/postgres/main.sl --run
-
-  # Attach a tarball per platform to a published release.
-  release-tarballs:
-    if: github.event_name == 'release'
-    needs: test
-    strategy:
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-          - runner: ubuntu-24.04-arm
-          - runner: macos-14
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install build dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config libssl-dev libsqlite3-dev zlib1g-dev
-
-      - name: Build tarball
-        run: make dist
-
-      # Verify the tarball the way a user gets it: unpacked somewhere
-      # unrelated, compiling and running a program with the installed layout
-      # rather than the source tree.
-      - name: Verify tarball
-        run: |
-          mkdir -p /tmp/verify && tar -xzf dist/*.tar.gz -C /tmp/verify
-          bin=$(echo /tmp/verify/*/bin)
-          mkdir -p /tmp/verify/proj && cd /tmp/verify/proj
-          "$bin/slangc" --version
-          "$bin/slangc" new demo >/dev/null
-          cd demo && "$bin/slangc" main.sl --run
-
-      - name: Attach to release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release upload "${{ github.event.release.tag_name }}" \
-            dist/*.tar.gz --clobber
