@@ -71,10 +71,12 @@ A test that fails on its own can be run directly:
   it by hand.
 
 Changes to the runtime, the scheduler, `net` or the collector should be run on
-Linux as well as macOS. Continuous integration currently runs only on `main`,
-so please do this yourself, for instance in an Ubuntu 24.04 container built
-from `git ls-files` (a macOS-built `slangc` or `tests/runtime/test_gc` copied
-into it will not run).
+Linux as well as macOS. Continuous integration runs on merges to `main` and on
+manual dispatch, which runs the workflow on any branch, native linux-arm64
+included: `gh workflow run ci.yml --ref <branch>` (on a fork, in your own
+Actions). Without that, run the suite yourself, for instance in an Ubuntu
+24.04 container built from `git ls-files` (a macOS-built `slangc` or
+`tests/runtime/test_gc` copied into it will not run).
 
 ## Workflow
 
@@ -103,7 +105,16 @@ is rare and hard to reproduce.
   deadlock.
 - The runtime files are joined into **one translation unit**, so their order
   matters (`sl_net.c` comes before `sl_io.c`, which uses its reactor).
-- On macOS read the current task with `sl_rt_cur()`, not the bare
-  `sl_rt_current_task`, outside a preemption bracket.
+- **Never read a `_Thread_local` bare from code that can run on a task.** A
+  task moves between OS threads at every park, yield and preemption, and the
+  C compiler keeps a thread-local's address across those calls (GCC on
+  aarch64 caches the thread pointer; clang on Darwin, the TLV address), so a
+  bare read uses another worker's state. That holds even inside a preemption
+  bracket: the bracket stops the task moving, not the compiler reusing an
+  address computed before it. Read the current task with `SL_RT_TLS_CUR()`
+  inside a bracket or `sl_rt_cur()` outside one, and any other thread-local
+  through its `SL_RT_TLS_ADDR_FN` accessor inside a bracket (see that macro in
+  `runtime/sl_core.c`). Bare reads are for code that only runs on a thread's
+  own stack: the worker loop, `sl_worker_after_switch`, signal handlers.
 
 The README's *How it works* and *Memory management* sections explain why.
