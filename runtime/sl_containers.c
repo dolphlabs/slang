@@ -465,6 +465,10 @@ static int sl_sel_try_locked(sl_sel_case *sc) {
         int tail = (c->head + c->count) % c->cap;
         memcpy(c->buf + (size_t)tail * c->elemsz, sc->val, c->elemsz);
         c->count++;
+        /* The same barrier sl_chan_send issues: a select's send arm is a
+         * store into a possibly-old channel's buffer too. The caller,
+         * sl_select_run, holds the preempt bracket. */
+        sl_gc_remember(c);
         sl_wl_wake_one(&c->recv_waiters, &c->recv_waiters_tail);
         return 1;
     }
