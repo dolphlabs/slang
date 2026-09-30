@@ -434,6 +434,44 @@ static void walk_stmt(CG *cg, Esc *esc, Stmt *s) {
         }
         return;
     }
+    case ST_IF_LET: {
+        scan_expr_any(cg, esc, s->as.if_let.expr);
+        if (s->as.if_let.err_expr)
+            scan_expr_any(cg, esc, s->as.if_let.err_expr);
+        const char *et = infer_type(cg, s->as.if_let.expr);
+        char *inner = NULL;
+        char *tev = NULL;
+        if (is_opt(et))
+            inner = opt_inner(et);
+        else if (is_result(et)) {
+            char *tv;
+            result_te(et, &tv, &tev);
+            inner = tv;
+        }
+        /* each binding is visible in its own branch only */
+        int mark = esc->ncand;
+        var_scope_push(cg);
+        if (inner) {
+            esc_push(esc, s->as.if_let.name, NULL);
+            var_redecl_check(cg, s->as.if_let.name, s->line);
+            var_push(cg, s->as.if_let.name, inner);
+        }
+        walk_block(cg, esc, s->as.if_let.then_blk);
+        var_scope_pop(cg);
+        esc->ncand = mark;
+        if (s->as.if_let.else_blk) {
+            var_scope_push(cg);
+            if (s->as.if_let.err_name && tev) {
+                esc_push(esc, s->as.if_let.err_name, NULL);
+                var_redecl_check(cg, s->as.if_let.err_name, s->line);
+                var_push(cg, s->as.if_let.err_name, tev);
+            }
+            walk_block(cg, esc, s->as.if_let.else_blk);
+            var_scope_pop(cg);
+            esc->ncand = mark;
+        }
+        return;
+    }
     case ST_UNSAFE:
         walk_block(cg, esc, s->as.unsafe_blk.body);
         return;

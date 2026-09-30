@@ -414,6 +414,13 @@ struct CG {
     const char *expect; /* expected type while inferring none/ok/err */
     const char *cur_ret;  /* slang return type of enclosing function */
     const char *cur_pkg;
+    /* Package functions that never return (compute_noreturn): every path
+     * ends in exit, panic or another such call. noret_fn is the function
+     * being analysed while the table is built, NULL afterwards. */
+    const char **noret_pkg;
+    const char **noret_name;
+    int nnoret;
+    FuncDecl *noret_fn;
     const char *cur_func;
     int in_function;
     int tmp_id;
@@ -793,6 +800,8 @@ char *gen_expr(CG *cg, Expr *e);
 void gen_print(CG *cg, Expr *call, int newline);
 void gen_stmt(CG *cg, Stmt *s);
 void gen_stmts(CG *cg, Stmt **stmts, int count);
+int block_leaves_scope(CG *cg, Block *b);
+void compute_noreturn(CG *cg, Package *pkgs, int npkgs);
 void gen_block(CG *cg, Block *b);
 void emit_runtime_file(CG *cg, const char *name);
 void emit_prelude(CG *cg);

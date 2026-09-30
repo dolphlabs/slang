@@ -243,32 +243,11 @@ static const char *guard_let_inner_type(CG *cg, Stmt *s) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Termination (Risk 2): a conservative "does this block definitely
- * exit without falling through" check, used only to decide whether a
- * guard-let else block's live_out needs to (defensively) merge
- * forward into the tail, since the compiler itself never enforces the
- * "else must exit" contract (stmt.c:542's comment is not code). Never
- * wrong to under-approximate here (returning 0 when it does in fact
- * always terminate just means a safe, wider live set gets computed;
- * returning 1 when it doesn't would be the only real hazard, so this
- * stays deliberately conservative in the "does it terminate" answer,
- * requiring an unconditional return or exit() on every path). */
-static int expr_is_exit_call(Expr *e) {
-    return e->kind == EX_CALL && (!strcmp(e->as.call.name, "exit") ||
-                                  !strcmp(e->as.call.name, "panic"));
-}
-
-static int block_always_terminates(Block *b) {
-    if (b->count == 0) return 0;
-    Stmt *last = b->stmts[b->count - 1];
-    if (last->kind == ST_RETURN) return 1;
-    if (last->kind == ST_EXPR && expr_is_exit_call(last->as.expr_stmt.expr))
-        return 1;
-    if (last->kind == ST_IF && last->as.if_stmt.else_blk)
-        return block_always_terminates(last->as.if_stmt.then_blk) &&
-               block_always_terminates(last->as.if_stmt.else_blk);
-    return 0;
-}
+/* Termination (Risk 2): whether a guard-let else block's live_out needs
+ * to merge forward into the tail. Codegen rejects an else that can fall
+ * through (block_leaves_scope, stmt.c), so for a program that compiles
+ * this is always "no"; the merge stays for the analysis's own sake, since
+ * liveness may run before that check reports. */
 
 /* ------------------------------------------------------------------ */
 /* Expression walker                                                    */
@@ -1047,6 +1026,47 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
         cg_error(s->line, "internal: ST_GUARD_LET reached live_stmt directly");
         return NULL;
 
+    case ST_IF_LET: {
+        /* ST_IF's two-branch union, with each branch's own binding
+         * declared around it (and removed from what flows out, since it
+         * does not exist before this statement) -- the same scoping
+         * gen_stmt's ST_IF_LET gives it. */
+        const char *et = infer_type(cg, s->as.if_let.expr);
+        const char *inner = NULL;
+        char *tev = NULL;
+        if (is_opt(et))
+            inner = opt_inner(et);
+        else if (is_result(et)) {
+            char *tv;
+            result_te(et, &tv, &tev);
+            inner = tv;
+        } else {
+            cg_error(s->line, "if let requires an opt or result value (got %s)",
+                     et);
+        }
+        var_scope_push(cg);
+        LiveVar *gv = declare_var(cg, s->as.if_let.name, inner);
+        LiveSet *live_in_then = live_block(cg, s->as.if_let.then_blk, live_out);
+        ls_remove_named(live_in_then, gv);
+        var_scope_pop(cg);
+        LiveSet *live_in_else;
+        if (s->as.if_let.else_blk) {
+            var_scope_push(cg);
+            LiveVar *ev = (s->as.if_let.err_name && tev)
+                              ? declare_var(cg, s->as.if_let.err_name, tev)
+                              : NULL;
+            live_in_else = live_block(cg, s->as.if_let.else_blk, live_out);
+            if (ev)
+                ls_remove_named(live_in_else, ev);
+            var_scope_pop(cg);
+        } else {
+            live_in_else = ls_clone(live_out);
+        }
+        LiveSet *joined = ls_clone(live_in_then);
+        ls_union_named_into(joined, live_in_else);
+        return live_expr(cg, s->as.if_let.expr, joined);
+    }
+
     case ST_SPAWN: {
         Expr *call = s->as.spawn.call;
         int nargs = call->as.call.nargs;
@@ -1101,7 +1121,7 @@ static LiveSet *live_stmts(CG *cg, Stmt **stmts, int count, LiveSet *live_out) {
                             * (stmt.c:566/572-574 run before the real
                             * var_push at 575) */
 
-        int else_falls_through = !block_always_terminates(s->as.guard_let.body);
+        int else_falls_through = !block_leaves_scope(cg, s->as.guard_let.body);
         LiveSet *live_out_else =
             else_falls_through ? ls_clone(tail_without_gv) : ls_new();
         LiveVar *ev = NULL;
@@ -1377,6 +1397,11 @@ static void print_stmts(FILE *out, Stmt **stmts, int count) {
         case ST_GUARD_LET:
             print_expr(out, s->as.guard_let.expr);
             print_block(out, s->as.guard_let.body);
+            break;
+        case ST_IF_LET:
+            print_expr(out, s->as.if_let.expr);
+            print_block(out, s->as.if_let.then_blk);
+            if (s->as.if_let.else_blk) print_block(out, s->as.if_let.else_blk);
             break;
         case ST_SPAWN:
             /* print the ARGUMENTS' own sub-safepoints (if any), but

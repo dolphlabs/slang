@@ -1712,8 +1712,10 @@ fn copy_start(c: Conn, sql: str, want: int, deadline: until)
         }
         return err(wrong);
     }
+    // Drain to ReadyForQuery. Only a connection that broke doing so
+    // reports that failure; otherwise the answer is still `wrong`.
     let rr = to_ready(c, rows, false, deadline);
-    guard let r = rr else let e = err_of(rr) {
+    if let _r = rr { } else let e = err_of(rr) {
         if c.status == 0 {
             let fe = fail(c, e, before);
             mutex_unlock(c.lock);

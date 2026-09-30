@@ -1078,6 +1078,32 @@ static Stmt *parse_let_stmt(Parser *p) {
 
 static Stmt *parse_if_stmt(Parser *p) {
     Token *kw = advance(p); /* 'if' */
+    if (match(p, T_KW_LET)) {
+        Token *name = expect(p, T_IDENT, "a variable name");
+        expect(p, T_ASSIGN, "'='");
+        Expr *expr = parse_expression(p);
+        Block *then_blk = parse_block(p, 0);
+        Stmt *s = new_stmt(ST_IF_LET, kw->line);
+        s->as.if_let.name = name->text;
+        s->as.if_let.expr = expr;
+        s->as.if_let.then_blk = then_blk;
+        if (match(p, T_KW_ELSE)) {
+            if (match(p, T_KW_LET)) {
+                Token *ename = expect(p, T_IDENT, "a variable name");
+                expect(p, T_ASSIGN, "'='");
+                s->as.if_let.err_expr = parse_expression(p);
+                s->as.if_let.err_name = ename->text;
+                s->as.if_let.else_blk = parse_block(p, 0);
+            } else if (check(p, T_KW_IF)) {
+                Block *else_blk = new_block();
+                block_push(else_blk, parse_if_stmt(p));
+                s->as.if_let.else_blk = else_blk;
+            } else {
+                s->as.if_let.else_blk = parse_block(p, 0);
+            }
+        }
+        return s;
+    }
     Expr *cond = parse_expression(p);
     Block *then_blk = parse_block(p, 0);
 
@@ -1152,6 +1178,7 @@ static Stmt *parse_guard_stmt(Parser *p) {
     s->as.if_stmt.cond = neg;
     s->as.if_stmt.then_blk = body;
     s->as.if_stmt.else_blk = NULL;
+    s->as.if_stmt.from_guard = 1;
     return s;
 }
 

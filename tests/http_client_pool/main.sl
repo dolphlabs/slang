@@ -320,7 +320,7 @@ expect(to_str(cf.dials) + "/" + to_str(cf.reuses), "2/1", "F: one reuse, one ret
 let cg = httpc.new_client();
 expect(get_body(cg, base + "/ka", "G1"), "ka", "G warmup");
 let g_post = httpc.client_post(cg, base + "/drop2", "text/plain", b"charge", dl());
-guard let _gp = g_post else let e = err_of(g_post) {
+if let _gp = g_post { } else let e = err_of(g_post) {
     expect(to_str(cg.dials), "1", "G: POST was not retried");
     println("a dropped GET is retried; a dropped POST is reported, never resent");
 }
@@ -342,7 +342,7 @@ expect(get_body(ci, base + "/ae", "I ae"), "gzip, deflate", "I: advertised encod
 let gzr = httpc.client_get(ci, base + "/gz", dl());
 guard let gzresp = gzr else let e = err_of(gzr) { die("I gz: " + e); }
 expect(to_str(gzresp.body), "hello gzip", "I: gzip decoded");
-guard let _ceh = httpc.header(gzresp, "content-encoding") else {
+if let _ceh = httpc.header(gzresp, "content-encoding") { } else {
     println("gzip response decoded, and its Content-Encoding removed");
 }
 expect(get_body(ci, base + "/zlibdeflate", "I zlib"), "hello zlib", "I: deflate as zlib");
@@ -366,7 +366,7 @@ println("a caller who sets Accept-Encoding gets the compressed bytes untouched")
 // ---- J: a decompression bomb in a response ----------------------------
 
 let bombr = httpc.client_get(ci, base + "/bomb", dl());
-guard let _br = bombr else let e = err_of(bombr) {
+if let _br = bombr { } else let e = err_of(bombr) {
     if !strings.contains(e, "limit") {
         die("J: the error should name the limit: " + e);
     }
@@ -476,7 +476,7 @@ guard let l1r = l1 else let e = err_of(l1) { die("L1 trusted: " + e); }
 expect(to_str(l1r.body), "secure", "L1 body");
 
 let l2 = tls_get(cl, turl, "tests/tls/other.pem");
-guard let _l2r = l2 else let e = err_of(l2) {
+if let _l2r = l2 { } else let e = err_of(l2) {
     if !strings.contains(e, "verify") {
         die("L2: expected a verification failure, got: " + e);
     }

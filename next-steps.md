@@ -465,10 +465,12 @@ training data, so it wins on those three. The zokor half (agent guide,
   tests pass, several runs each, medians reported. Before and after the items
   above, so each claim has a number.
 - Found while checking the guide's claims:
-  - [ ] **A `guard` whose `else` falls through compiles** (README: "the else
-    branch must exit"). The bound name is then used uninitialized: `guard let
-    v = o else { println("x"); } return v;` returns 0 for `none`, and for an
-    `opt[str]` the program segfaults. Memory safety, so first.
+  - [x] **A `guard` whose `else` falls through compiles** -- now rejected,
+    with the fix in the message. Functions that never return (`die(..)`
+    helpers) are inferred, so ending an else with one still works, and
+    `if let v = x { } else let e = err_of(x) { }` is the form for handling a
+    failure and carrying on, which the guard had been misused for (about 30
+    test sites and one in `stdlib/pg`).
   - [ ] `let xs: [opt[int]] = [some(1), none];` fails with "cannot infer the
     type of 'none'": list elements do not take the annotation's type.
   - [ ] A missing map key reports `map key not found at main:2 (index 0,
