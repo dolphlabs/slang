@@ -1,0 +1,38 @@
+{
+  "recorded_with": "slangc 0.2.0",
+  "programs": [
+    {
+      "name": "hello",
+      "exit": 0,
+      "note": "Functions, ranges and string interpolation."
+    },
+    {
+      "name": "tasks",
+      "exit": 0,
+      "note": "Ten thousand green tasks. Sleeping parks the task, so they all sleep at once.",
+      "recorded": {
+        "ms": "604"
+      }
+    },
+    {
+      "name": "errors",
+      "exit": 0,
+      "note": "A bad number is an error you have to look at, not a zero."
+    },
+    {
+      "name": "json",
+      "exit": 1,
+      "note": "Typed decoding. The error names the exact field path."
+    },
+    {
+      "name": "generics",
+      "exit": 0,
+      "note": "A method is checked for the types it is called with, and only those."
+    },
+    {
+      "name": "regex",
+      "exit": 0,
+      "note": "Linear-time matching. No pattern can make it backtrack."
+    }
+  ]
+}
