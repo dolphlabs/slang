@@ -2,9 +2,11 @@
  * internal.h for the shared CG state and cross-file API. */
 
 #include "internal.h"
+#include "../diag.h"
 #include "liveness.h"
 #include "../rtpath.h"
 
+#include <setjmp.h>
 #include <string.h>
 
 static void check_declared_lts(char **ok, int n, const char *ty, int line) {
@@ -51,6 +53,8 @@ void emit_prelude(CG *cg) {
 /* Register a raw (not yet canonicalized) function signature. */
 void sig_register_raw(CG *cg, Package *p, FuncDecl *f,
                              const char *method_of) {
+    if (f->file)
+        diag_file = f->file;
     if (is_builtin_name(f->name))
         cg_error(f->line, "cannot redefine builtin '%s'", f->name);
     if (method_of) {
@@ -78,6 +82,7 @@ void sig_register_raw(CG *cg, Package *p, FuncDecl *f,
     sig.lts = f->lts;
     sig.nlts = f->nlts;
     sig.line = f->line;
+    sig.file = f->file;
     sig.param_slang =
         (const char **)xmalloc(sizeof(char *) *
                                (f->nparams ? f->nparams : 1));
@@ -117,6 +122,8 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
         Package *p = &pkgs[i];
         for (j = 0; j < p->prog->nfuncs; j++) {
             FuncDecl *f = p->prog->funcs[j];
+            if (f->file)
+                diag_file = f->file;
             if (f->ntparams) {
                 func_tmpl_register(cg, p, f);
                 continue;
@@ -126,6 +133,8 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
         Block *body = p->prog->main_body;
         for (j = 0; j < body->count; j++) {
             Stmt *s = body->stmts[j];
+            if (s->file)
+                diag_file = s->file;
             if (s->kind != ST_STRUCT)
                 continue;
             if (s->as.struct_decl.ntparams) {
@@ -158,6 +167,7 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
             sd->lts = s->as.struct_decl.lts;
             sd->nlts = s->as.struct_decl.nlts;
             sd->line = s->line;
+            sd->file = s->file;
         }
     }
 
@@ -172,6 +182,8 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
         if (sd->inst)
             continue; /* made, and canonicalized, by generic_canon */
         cg->cur_pkg = sd->pkg;
+        if (sd->file)
+            diag_file = sd->file;
         for (j = 0; j < sd->nfields; j++) {
             for (int q = 0; q < j; q++) {
                 if (!strcmp(sd->fields[q], sd->fields[j]))
@@ -190,6 +202,8 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
         Block *body = p->prog->main_body;
         for (j = 0; j < body->count; j++) {
             Stmt *s = body->stmts[j];
+            if (s->file)
+                diag_file = s->file;
             if (s->kind != ST_IMPL)
                 continue;
             StructDef *sd =
@@ -223,6 +237,8 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
         for (i = 0; i < cg->sigs.count; i++) {
             FuncSig *a = cg->sigs.items[i];
             syms[i] = mangle_sig(a);
+            if (a->file)
+                diag_file = a->file;
             if (a->is_extern)
                 continue;
             for (j = 0; j < i; j++) {
@@ -240,6 +256,8 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
     for (i = 0; i < cg->sigs.count; i++) {
         FuncSig *sig = cg->sigs.items[i];
         cg->cur_pkg = sig->pkg;
+        if (sig->file)
+            diag_file = sig->file;
         for (j = 0; j < sig->nparams; j++) {
             ((char **)sig->param_slang)[j] =
                 (char *)canon_type(cg, sig->param_slang[j], sig->line);
@@ -1201,6 +1219,58 @@ void gen_function(CG *cg, Package *p, FuncDecl *f) {
 }
 
 /* Generate the complete translation unit into cg->out. */
+/* What a function being generated leaves behind when cg_error unwinds out
+ * of it: put back what the next function expects to start from. */
+static void cg_reset_after_error(CG *cg, int indent) {
+    cg->indent = indent;
+    cg->expect = NULL;
+    cg->in_function = 0;
+    cg->open_backedge_brackets = 0;
+    cg->loop_depth = 0;
+    cg->cur_loop_has_bp = 0;
+    cg->break_len = 0;
+    cg->switch_depth = 0;
+    cg->cur_break_live_set = NULL;
+    cg->cur_continue_live_set = NULL;
+    var_scope_reset(cg);
+}
+
+/* In the dry run, a mistake in one function is reported and the next one
+ * is still checked (cg_error longjmps back here), so one compile lists
+ * every function's first error rather than only the program's first. The
+ * real run only happens once the dry run found nothing. */
+static void gen_function_checked(CG *cg, Package *p, FuncDecl *f) {
+    if (!cg->collect_errors) {
+        gen_function(cg, p, f);
+        return;
+    }
+    jmp_buf jb;
+    int indent = cg->indent;
+    if (setjmp(jb) == 0) {
+        cg_recover_arm(&jb);
+        gen_function(cg, p, f);
+        cg_recover_arm(NULL);
+    } else {
+        cg_reset_after_error(cg, indent);
+    }
+}
+
+static void gen_main_body_checked(CG *cg, Block *body) {
+    if (!cg->collect_errors) {
+        gen_block(cg, body);
+        return;
+    }
+    jmp_buf jb;
+    int indent = cg->indent;
+    if (setjmp(jb) == 0) {
+        cg_recover_arm(&jb);
+        gen_block(cg, body);
+        cg_recover_arm(NULL);
+    } else {
+        cg_reset_after_error(cg, indent);
+    }
+}
+
 void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
                               int main_index) {
     emit_prelude(cg);
@@ -1234,7 +1304,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
         FuncCursor fc;
         func_cursor_init(&fc);
         while (func_cursor_next(cg, pkgs, npkgs, &fc, 0))
-            gen_function(cg, fc.pkg, fc.fn);
+            gen_function_checked(cg, fc.pkg, fc.fn);
     }
 
     /* top-level statements of the main package become sl_main_task_entry,
@@ -1256,7 +1326,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
                         "sl_main_task_entry__body(void *_sl_unused_arg) {"
                       : "static void sl_main_task_entry(void *_sl_unused_arg) {");
     emit_line(cg, "    (void)_sl_unused_arg;");
-    gen_block(cg, pkgs[main_index].prog->main_body);
+    gen_main_body_checked(cg, pkgs[main_index].prog->main_body);
     emit_scope_drops(cg, 0);
     emit_line(cg, "    exit(0); /* main()'s own sl_ctx_switch never returns */");
     emit_line(cg, "}");
@@ -1281,7 +1351,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
         fc.i_pkg = npkgs; /* skip declared functions: instances only */
         fc.i_inst = insts_before_main;
         while (func_cursor_next(cg, pkgs, npkgs, &fc, 0))
-            gen_function(cg, fc.pkg, fc.fn);
+            gen_function_checked(cg, fc.pkg, fc.fn);
     }
     if (main_guard) {
         /* The main task starts on the initial 8KB stack, so a large
@@ -1443,8 +1513,12 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
     StrBuf scratch;
     sb_init(&scratch);
     cg.out = &scratch;
+    cg.collect_errors = 1;
     gen_whole_program(&cg, pkgs, npkgs, main_index);
+    cg.collect_errors = 0;
     free(scratch.data);
+    if (diag_count())
+        exit(1); /* every error found was reported by cg_error */
 
     /* Tier 10: populate Expr.live_set (used by gen_call's call-site
      * safepoint brackets) once, before the real gen_whole_program pass

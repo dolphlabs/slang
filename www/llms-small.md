@@ -8,7 +8,9 @@
 
 Commands: `slangc main.sl --run` (compile and run), `slangc main.sl -o app`
 (build), `slangc new app` (new project), `slangc test` (run `*_test.sl`),
-`slangc get` (fetch pinned packages). Package APIs: `/packages/<name>.md` and
+`slangc get` (fetch pinned packages). Errors read `file.sl:12: error: ...`,
+list the first error of every function in one compile, and often end with
+`(did you mean 'x'?)`; `--json` gives one JSON object per error. Package APIs: `/packages/<name>.md` and
 `/api.json` on the docs site. HTTP services: use the zokor framework and its
 own `llms-small.txt`.
 

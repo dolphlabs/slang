@@ -49,6 +49,7 @@ typedef struct {
     char **lts;
     int nlts;
     int line;
+    const char *file; /* source file of the declaration */
     int inst;            /* an instance of a generic struct: its fields were
                             canonicalized when it was made, not in pass 2 */
     struct StructTmpl *tmpl; /* the template it came from, for its methods */
@@ -175,6 +176,7 @@ typedef struct {
     char **lts;
     int nlts;
     int line;
+    const char *file;         /* source file of the declaration */
     /* An instance of a generic FUNCTION: "pkg.first[int]", the same kind
      * of key a generic struct's canonical name is. Never set together
      * with method_of, which a generic struct's own method instances use
@@ -416,6 +418,8 @@ struct CG {
     const char *cur_pkg;
     const char *cur_func;
     int in_function;
+    int collect_errors; /* dry run: an error in one function is reported and
+                           the next is still checked (gen_function_checked) */
     int tmp_id;
     /* Tier 10: how many loop back-edge safepoint brackets (stmt.c's
      * emit_backedge_enter) are currently open in the C block ST_RETURN
@@ -570,6 +574,13 @@ extern const int COMPRESS_SIGS_LEN;
 /* ------------------------------------------------------------------ */
 
 void cg_error(int line, const char *fmt, ...);
+void cg_recover_arm(void *jb);
+const char *closest_name(const char *name, const char *const *cands, int n);
+const char *did_you_mean(const char *name, const char *const *cands, int n);
+const char *suggest_value_name(CG *cg, const char *name);
+const char *suggest_function(CG *cg, const char *pkg, const char *name);
+const char *suggest_field(StructDef *sd, const char *name);
+const char *suggest_method(CG *cg, StructDef *sd, const char *name);
 void sb_putc(StrBuf *sb, char c);
 void sb_nl(StrBuf *sb);
 char *c_string_literal(const char *s);

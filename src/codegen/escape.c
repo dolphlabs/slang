@@ -1,4 +1,5 @@
 #include "internal.h"
+#include "../diag.h"
 
 #include <string.h>
 
@@ -260,6 +261,8 @@ static const char *escape_let_type(CG *cg, Stmt *s) {
 static void walk_block(CG *cg, Esc *esc, Block *b);
 
 static void walk_stmt(CG *cg, Esc *esc, Stmt *s) {
+    if (s->file)
+        diag_file = s->file;
     switch (s->kind) {
     case ST_LET: {
         scan_expr_any(cg, esc, s->as.let.init);

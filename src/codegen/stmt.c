@@ -2,6 +2,7 @@
  * internal.h for the shared CG state and cross-file API. */
 
 #include "internal.h"
+#include "../diag.h"
 #include "liveness.h"
 
 #include <string.h>
@@ -127,6 +128,8 @@ static void break_push(CG *cg, int kind, const char *end) {
 static void break_pop(CG *cg) { cg->break_len--; }
 
 void gen_stmt(CG *cg, Stmt *s) {
+    if (s->file)
+        diag_file = s->file;
     switch (s->kind) {
     case ST_LET: {
         const char *ann = s->as.let.type_ann;

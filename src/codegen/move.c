@@ -1,4 +1,5 @@
 #include "internal.h"
+#include "../diag.h"
 
 #include <string.h>
 
@@ -293,6 +294,8 @@ static void check_block(CG *cg, Block *b);
 static void check_stmts(CG *cg, Stmt **stmts, int count);
 
 static void check_stmt(CG *cg, Stmt *s) {
+    if (s->file)
+        diag_file = s->file;
     switch (s->kind) {
     case ST_LET: {
         Expr *init = s->as.let.init;

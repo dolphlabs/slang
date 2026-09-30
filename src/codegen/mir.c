@@ -1,4 +1,5 @@
 #include "internal.h"
+#include "../diag.h"
 
 #include <string.h>
 
@@ -296,6 +297,8 @@ static void lower_stmts(Lower *L, Stmt **stmts, int count);
 static void lower_block(Lower *L, Block *b);
 
 static void lower_stmt(Lower *L, Stmt *s) {
+    if (s->file)
+        diag_file = s->file;
     if (sealed(L))
         return;
     switch (s->kind) {

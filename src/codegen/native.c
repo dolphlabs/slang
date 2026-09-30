@@ -17,6 +17,26 @@ static const NatSig *find_sig(const NatSig *sigs, int len, const char *pkg,
     return NULL;
 }
 
+/* A native package's function names that fname could have meant. */
+static const char *suggest_native(const char *pkg, const char *fname) {
+    const struct { const NatSig *sigs; int len; } tabs[] = {
+        {TIME_SIGS, TIME_SIGS_LEN},       {NET_SIGS, NET_SIGS_LEN},
+        {PROC_SIGS, PROC_SIGS_LEN},       {FS_SIGS, FS_SIGS_LEN},
+        {LOG_SIGS, LOG_SIGS_LEN},         {CRYPTO_SIGS, CRYPTO_SIGS_LEN},
+        {SQL_SIGS, SQL_SIGS_LEN},         {REGEX_SIGS, REGEX_SIGS_LEN},
+        {OS_SIGS, OS_SIGS_LEN},           {STRINGS_SIGS, STRINGS_SIGS_LEN},
+        {ENCODING_SIGS, ENCODING_SIGS_LEN}, {COMPRESS_SIGS, COMPRESS_SIGS_LEN},
+        {IO_SIGS, IO_SIGS_LEN},
+    };
+    const char *names[512];
+    int n = 0;
+    for (size_t t = 0; t < sizeof(tabs) / sizeof(tabs[0]); t++)
+        for (int i = 0; i < tabs[t].len && n < 512; i++)
+            if (!strcmp(tabs[t].sigs[i].pkg, pkg))
+                names[n++] = tabs[t].sigs[i].name;
+    return did_you_mean(fname, names, n);
+}
+
 static const NatSig *find_any_sig(const char *pkg, const char *fname) {
     const NatSig *ns = find_sig(TIME_SIGS, TIME_SIGS_LEN, pkg, fname);
     if (!ns)
@@ -59,7 +79,8 @@ const char *native_check(CG *cg, const char *pkg, const char *fname,
                                 Expr *e) {
     const NatSig *ns = find_any_sig(pkg, fname);
     if (!ns)
-        cg_error(e->line, "package '%s' has no function '%s'", pkg, fname);
+        cg_error(e->line, "package '%s' has no function '%s'%s", pkg, fname,
+                 suggest_native(pkg, fname));
     int n = e->as.call.nargs;
     if (n != ns->nargs)
         cg_error(e->line,
