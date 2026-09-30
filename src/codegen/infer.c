@@ -53,8 +53,8 @@ const char *infer_ident_name(CG *cg, const char *name, int line) {
             if (!strcmp(sd->fields[i], right))
                 return sd->ftypes[i];
         }
-        cg_error(line, "struct '%s' has no field '%s'", sd->canonical,
-                 right);
+        cg_error(line, "struct '%s' has no field '%s'%s", sd->canonical,
+                 right, suggest_field(sd, right));
     }
     GlobSym *g = glob_find(cg, cg->cur_pkg, name);
     if (g)
@@ -80,7 +80,8 @@ const char *infer_ident_name(CG *cg, const char *name, int line) {
                      "it with a concrete type, and use that instead)",
                      name);
     }
-    cg_error(line, "undefined variable '%s'", name);
+    cg_error(line, "undefined variable '%s'%s", name,
+             suggest_value_name(cg, name));
     return NULL; /* unreachable */
 }
 
@@ -590,8 +591,8 @@ const char *infer_call(CG *cg, Expr *e) {
             if (!sig)
                 sig = generic_call_sig(cg, pkg, right, e);
             if (!sig)
-                cg_error(e->line, "package '%s' has no function '%s'", pkg,
-                         right);
+                cg_error(e->line, "package '%s' has no function '%s'%s", pkg,
+                         right, suggest_function(cg, pkg, right));
             if (!sig->is_pub)
                 cg_error(e->line,
                          "function '%s' is not exported from package '%s' "
@@ -736,8 +737,8 @@ const char *infer_call(CG *cg, Expr *e) {
             }
             sig = method_find(cg, sd, right, e->line);
             if (!sig)
-                cg_error(e->line, "type '%s' has no method '%s'",
-                         sd->canonical, right);
+                cg_error(e->line, "type '%s' has no method '%s'%s",
+                         sd->canonical, right, suggest_method(cg, sd, right));
             if (!sig->is_pub && strcmp(sd->pkg, cg->cur_pkg))
                 cg_error(e->line,
                          "method '%s' is not exported from package '%s' "
@@ -759,7 +760,8 @@ const char *infer_call(CG *cg, Expr *e) {
             if (!sig)
                 sig = generic_call_sig(cg, cg->cur_pkg, name, e);
             if (!sig)
-                cg_error(e->line, "call to undefined function '%s'", name);
+                cg_error(e->line, "call to undefined function '%s'%s", name,
+                         suggest_function(cg, NULL, name));
         }
     }
 have_sig:;
@@ -809,7 +811,8 @@ FuncSig *method_target(CG *cg, const char *recv_t, const char *name,
     }
     FuncSig *sig = method_find(cg, sd, name, line);
     if (!sig)
-        cg_error(line, "type '%s' has no method '%s'", sd->canonical, name);
+        cg_error(line, "type '%s' has no method '%s'%s", sd->canonical, name,
+                 suggest_method(cg, sd, name));
     if (!sig->is_pub && strcmp(sd->pkg, cg->cur_pkg))
         cg_error(line,
                  "method '%s' is not exported from package '%s' (add 'pub' "
@@ -1238,8 +1241,8 @@ const char *infer_type(CG *cg, Expr *e) {
             if (!strcmp(sd->fields[i], e->as.field.name))
                 return sd->ftypes[i];
         }
-        cg_error(e->line, "struct '%s' has no field '%s'", sd->canonical,
-                 e->as.field.name);
+        cg_error(e->line, "struct '%s' has no field '%s'%s", sd->canonical,
+                 e->as.field.name, suggest_field(sd, e->as.field.name));
     }
     case EX_STRUCTLIT: {
         const char *canon = structlit_type(cg, e);
@@ -1270,8 +1273,9 @@ const char *infer_type(CG *cg, Expr *e) {
             }
             if (!known)
                 cg_error(e->line,
-                         "struct '%s' has no field '%s'", sd->canonical,
-                         e->as.structlit.fields[j]);
+                         "struct '%s' has no field '%s'%s", sd->canonical,
+                         e->as.structlit.fields[j],
+                         suggest_field(sd, e->as.structlit.fields[j]));
         }
         return canon;
     }

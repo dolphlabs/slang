@@ -530,8 +530,7 @@ unbounded type parameters usable without interfaces, and it is why an error
 in a method body names the instance and the line that asked for it:
 
 ```
-error at line 5: unsupported operand types for '*': str and int
-  (in main.Box[str].doubled, requested at line 9)
+main.sl:5: error: unsupported operand types for '*': str and int (in main.Box[str].doubled, requested at line 9)
 ```
 
 Not yet supported, and each says so when used: lifetime parameters on a
@@ -1296,8 +1295,7 @@ unbounded type parameters usable without interfaces, and it is why an error
 in a method body names the instance and the line that asked for it:
 
 ```
-error at line 5: unsupported operand types for '*': str and int
-  (in main.Box[str].doubled, requested at line 9)
+main.sl:5: error: unsupported operand types for '*': str and int (in main.Box[str].doubled, requested at line 9)
 ```
 
 Not yet supported, and each says so when used: lifetime parameters on a

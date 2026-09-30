@@ -22,6 +22,7 @@
  * much larger, easier-to-get-wrong change). */
 
 #include "internal.h"
+#include "../diag.h"
 
 #include <string.h>
 
@@ -362,6 +363,8 @@ static void resolve_expr(CG *cg, const char *pkg, Expr *e) {
 static void resolve_block(CG *cg, const char *pkg, Block *b);
 
 static void resolve_stmt(CG *cg, const char *pkg, Stmt *s) {
+    if (s->file)
+        diag_file = s->file;
     switch (s->kind) {
     case ST_LET:
         resolve_expr(cg, pkg, s->as.let.init);

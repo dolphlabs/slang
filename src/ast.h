@@ -237,6 +237,7 @@ typedef struct Stmt Stmt;
 struct Stmt {
     StmtKind kind;
     int line;
+    const char *file; /* source file it was parsed from, for diagnostics */
     void *backedge_live_set; /* LiveSet*, filled by the Tier 10 liveness
                                * pass; non-NULL only for ST_WHILE/
                                * ST_FOR/ST_FOR_IN -- the live set at the
@@ -351,6 +352,7 @@ struct FuncDecl {
     int nlts;
     char *ret_type;     /* slang type name, or NULL for void */
     Block *body;        /* NULL for 'extern fn' declarations */
+    const char *file;   /* source file it was parsed from, for diagnostics */
     int is_pub;         /* exported from its package */
     int is_extern;       /* 'extern fn': no body, calls the bare C symbol */
     int line;

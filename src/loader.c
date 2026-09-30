@@ -1,4 +1,5 @@
 #include "common.h"
+#include "diag.h"
 #include "lexer.h"
 #include "parser.h"
 #include "loader.h"
@@ -426,6 +427,7 @@ static int load_package_dir(Loader *ld, const char *real, const char *name) {
         char fpath[PATH_MAX];
         snprintf(fpath, sizeof(fpath), "%s/%s", real, names[i]);
         char *src = read_entire_file(fpath);
+        diag_file = xstrdup(fpath); /* lexer and parser errors name it */
 
         Lexer lx;
         lexer_init(&lx, src);

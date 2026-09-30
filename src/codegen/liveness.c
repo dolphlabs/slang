@@ -17,6 +17,7 @@
  * foo(bar(), baz()) in the plan). */
 
 #include "internal.h"
+#include "../diag.h"
 #include "liveness.h"
 
 #include <string.h>
@@ -1107,6 +1108,8 @@ static LiveSet *live_stmt(CG *cg, Stmt *s, LiveSet *live_out) {
  * gen_stmt/gen_stmts's own var_push placement exactly (stmt.c:100,
  * 575). */
 static LiveSet *live_stmts(CG *cg, Stmt **stmts, int count, LiveSet *live_out) {
+    if (count > 0 && stmts[0]->file)
+        diag_file = stmts[0]->file;
     if (count == 0) return live_out;
     Stmt *s = stmts[0];
 

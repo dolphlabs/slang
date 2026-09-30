@@ -14,6 +14,7 @@
  */
 
 #include "common.h"
+#include "diag.h"
 #include "loader.h"
 #include "lexer.h"
 #include "parser.h"
@@ -36,7 +37,8 @@
 
 static void print_usage(void) {
     fputs("usage: slangc <file.sl> [-o <name>] [--emit-c] [--keep-c] [--run] "
-          "[--dump-liveness] [--dump-mir]\n"
+          "[--json] [--dump-liveness] [--dump-mir]\n"
+          "       --json: compile errors as JSON lines on stderr, one per error\n"
           "       slangc new <name>|.        scaffold a project here or in <name>\n"
           "       slangc get [file.sl|dir]   resolve deps, write slang.lock\n"
           "       slangc test [dir] [--run substr] [--keep]   run test_* functions in *_test.sl\n"
@@ -1027,6 +1029,8 @@ int main(int argc, char **argv) {
             keep_c = 1;
         } else if (!strcmp(argv[i], "--run")) {
             run = 1;
+        } else if (!strcmp(argv[i], "--json")) {
+            diag_json = 1;
         } else if (!strcmp(argv[i], "--dump-liveness")) {
             want_liveness_dump = 1;
         } else if (!strcmp(argv[i], "--dump-mir")) {

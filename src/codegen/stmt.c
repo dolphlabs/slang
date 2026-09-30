@@ -2,6 +2,7 @@
  * internal.h for the shared CG state and cross-file API. */
 
 #include "internal.h"
+#include "../diag.h"
 #include "liveness.h"
 
 #include <string.h>
@@ -130,6 +131,8 @@ static void check_guard_else_leaves(CG *cg, Block *body, int line);
 static void gen_if_let(CG *cg, Stmt *s);
 
 void gen_stmt(CG *cg, Stmt *s) {
+    if (s->file)
+        diag_file = s->file;
     switch (s->kind) {
     case ST_LET: {
         const char *ann = s->as.let.type_ann;

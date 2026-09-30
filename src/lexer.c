@@ -1,4 +1,5 @@
 #include "common.h"
+#include "diag.h"
 #include "lexer.h"
 #include <errno.h>
 #include <string.h>
@@ -12,11 +13,7 @@ void lexer_init(Lexer *lx, const char *src) {
 }
 
 static void lex_error(int line, const char *msg) {
-    fputs("slang: lex error at line ", stderr);
-    fprintf(stderr, "%d", line);
-    fputs(": ", stderr);
-    fputs(msg, stderr);
-    fputc(10, stderr);
+    diag_report(diag_file, line, "%s", msg);
     exit(1);
 }
 
