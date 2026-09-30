@@ -1223,6 +1223,45 @@ static void sl_rt_error_at(const char *msg, long long a, long long b,
     sl_rt_fail(msg, at, detail);
 }
 
+/* m[k] with k not in m. Names the key when it is text or a number (a
+ * long one cut short: the message is for a person, not a copy of the
+ * data) and says how to avoid the panic. The bounds-check wording this
+ * replaced ended every such message with "(index 0, length 0)". */
+__attribute__((noreturn))
+static void sl_rt_map_miss_detail(const char *key, const char *at) {
+    char detail[200];
+    if (key)
+        snprintf(detail, sizeof(detail),
+                 "(key %s; check with has(m, k) first)", key);
+    else
+        snprintf(detail, sizeof(detail), "(check with has(m, k) first)");
+    sl_rt_fail("map key not found", at, detail);
+}
+
+__attribute__((noreturn, unused))
+static void sl_rt_map_miss_str(const char *k, const char *at) {
+    char key[64];
+    size_t n = k ? strlen(k) : 0;
+    if (n > 40)
+        snprintf(key, sizeof(key), "\"%.40s...\"", k);
+    else
+        snprintf(key, sizeof(key), "\"%s\"", k ? k : "");
+    sl_rt_map_miss_detail(key, at);
+}
+
+__attribute__((noreturn, unused))
+static void sl_rt_map_miss_int(long long k, int is_unsigned, const char *at) {
+    char key[32];
+    if (is_unsigned)
+        snprintf(key, sizeof(key), "%llu", (unsigned long long)k);
+    else
+        snprintf(key, sizeof(key), "%lld", k);
+    sl_rt_map_miss_detail(key, at);
+}
+
+__attribute__((noreturn, unused))
+static void sl_rt_map_miss(const char *at) { sl_rt_map_miss_detail(NULL, at); }
+
 /* panic("...") and a failed assert(cond, "..."). Noreturn: liveness treats
  * a panic call like exit(), so `guard let x = r else { panic("..."); }`
  * leaves scope the way the guard requires. */

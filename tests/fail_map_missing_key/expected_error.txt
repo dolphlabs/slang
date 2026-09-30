@@ -1,0 +1,1 @@
+(key "bob"; check with has(m, k) first)
