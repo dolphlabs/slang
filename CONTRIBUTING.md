@@ -118,3 +118,30 @@ is rare and hard to reproduce.
   own stack: the worker loop, `sl_worker_after_switch`, signal handlers.
 
 The README's *How it works* and *Memory management* sections explain why.
+
+## If you change the language
+
+slang is meant to be cheap to learn and to write, for a person and for an
+LLM agent alike, and the second is measurable (the agent benchmark in
+next-steps §13). An agent has never seen slang in training, so every
+construct it cannot guess costs it tokens: a failed compile, an error to
+read, another attempt. Four rules follow, and a change that breaks one
+needs a discussion before code.
+
+- **Familiar syntax.** slang reads like Go and Swift (`fn`, `let`,
+  `guard let`, `chan`, `??`, `switch` with `case`) because models and
+  people already know those forms. A new construct takes the form the
+  nearest mainstream language gives it. Novel syntax needs evidence that
+  the familiar form cannot work here, such as the retries it causes
+  agents, not a preference.
+- **Errors say the fix.** A new diagnostic names the construct and what to
+  write instead (`annotate it, e.g. let xs: [int] = []`), and goes
+  through `cg_error`, the one place that decides how an error looks. A
+  compiler error must never reach the user as the C compiler's own output.
+- **Deliberately absent.** No closures, exceptions, null, interfaces or
+  reflection. Each was left out for a reason the README gives (function
+  values name code, never the heap; errors are values; absence is `opt`).
+  Do not add them or emulate them.
+- **The one-page guide stays true.** A change to what a program can write
+  updates `www/llms-small.md`, whose examples the suite compiles and runs,
+  and the README section it belongs to.

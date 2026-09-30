@@ -460,8 +460,8 @@ training data, so it wins on those three. The zokor half (agent guide,
   native parameter kinds raw).
 - [x] **One line when everything passes.** `slangc test` prints only
   failures and the count; `-v` brings back a line per passing test.
-- [ ] **Write the syntax rule down** (CONTRIBUTING): no novel syntax without
-  evidence. The benchmark below measures retries per construct.
+- [x] **Write the syntax rule down**: CONTRIBUTING, "If you change the
+  language". The benchmark below measures retries per construct.
 - [ ] **Measure it.** Five tasks (CRUD on Postgres, auth middleware, a
   background worker, a rate-limited endpoint, uploads) in slang + zokor, Go +
   fiber and TypeScript + Nest; input and output tokens and turns until the
