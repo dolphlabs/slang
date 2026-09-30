@@ -350,8 +350,10 @@ dotted directories (#235). Write-ups in `todo.md`.
 
 ## 8. CI on `dev`, not only `main`
 
-- [ ] `.github/workflows/ci.yml` runs on a push to `main`, on manual
-  dispatch and on a published release. **Nothing runs on a pull request to
+- [ ] `.github/workflows/ci.yml` runs on a push to `main` and on manual
+  dispatch (releases moved to `release.yml`: a pushed `vX.Y.Z` tag is
+  tested on every platform and published with its tarballs, see
+  CONTRIBUTING, "Releasing"). **Nothing runs on a pull request to
   `dev` or a push to `dev`**, so a change reaches `dev` verified only by
   whoever opened it.
 
@@ -492,6 +494,17 @@ training data, so it wins on those three. The zokor half (agent guide,
     and `[none, some(1)]` would need one either way.
   - [x] A missing map key reported `(index 0, length 0)`; it now names the
     key and says to check with `has(m, k)` first.
+- Found by the benchmark's first setup attempt (an agent following zokor's
+  README exactly):
+  - [x] A `slang.project` holding only zokor's `pkg` line failed with
+    "missing name or version". The error now shows the lines to add, and
+    zokor's README shows the whole file.
+  - [x] zokor's guide used `import "../../src" as zokor;` in every block,
+    which works only inside the zokor repo. The blocks now use
+    `import "zokor";`, and zokor's snippet check maps that to the checkout.
+  - [ ] `slangc get` passes through git's `refs/tags/v0.1.0 ... is not a
+    commit!` for an annotated tag: harmless (the clone succeeds) but it
+    reads like a failure.
 
 ## Notes
 

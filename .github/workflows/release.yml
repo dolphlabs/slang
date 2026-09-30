@@ -1,0 +1,233 @@
+# Release: a version tag becomes a published GitHub release.
+#
+# To release: bump VERSION in the Makefile and SLANG_VERSION in
+# src/main.c, merge to main, then push an annotated tag on main whose
+# message is the release notes:
+#
+#     git tag -a v0.2.2 -m "slang v0.2.2" -m "<what changed>" origin/main
+#     git push origin v0.2.2
+#
+# This builds and tests the tagged commit on every platform, builds a
+# tarball on each, unpacks it outside the source tree and builds and runs
+# a new project with it, and only then publishes the release: the tag's
+# message as notes, the tarballs, and their SHA-256 sums. If any platform
+# fails, nothing is published.
+#
+# Run by hand (Actions > Release > Run workflow, or
+# `gh workflow run release.yml -f tag=v0.2.1 -f draft=false`) to release
+# a tag that already exists, or to retry one. `draft` (the default for a
+# manual run) makes a release only maintainers can see: the way to try a
+# change to this file without publishing anything. Re-running is safe:
+# an existing release gets its tarballs and notes replaced, and a
+# published release is never turned back into a draft.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to release, e.g. v0.2.1
+        required: true
+        type: string
+      draft:
+        description: Make a draft (only maintainers can see it)
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# Two runs for the same tag must not race to create one release.
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: check the tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      # The tag reaches the shell through env, never through ${{ }} inside
+      # the script: a crafted tag name must not become shell code.
+      - name: Resolve the tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          tag="${INPUT_TAG:-$REF_NAME}"
+          if ! printf '%s\n' "$tag" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::'$tag' is not a release tag (vMAJOR.MINOR.PATCH)"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ steps.tag.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Annotated, on main, and the version it says
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          # checkout can leave a tag lightweight; fetch the tag object itself
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          if [ "$(git cat-file -t "refs/tags/$TAG")" != tag ]; then
+            echo "::error::$TAG is a lightweight tag; its message is the release notes, so make it with git tag -a"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::$TAG is not on main; releases are cut from main"
+            exit 1
+          fi
+          mk=$(sed -n 's/^VERSION = //p' Makefile)
+          if [ "$mk" != "$VERSION" ]; then
+            echo "::error::$TAG, but the Makefile says VERSION = $mk"
+            exit 1
+          fi
+          if ! grep -qx "#define SLANG_VERSION \"$VERSION\"" src/main.c; then
+            echo "::error::$TAG, but src/main.c's SLANG_VERSION is not \"$VERSION\""
+            exit 1
+          fi
+
+  build:
+    name: build (${{ matrix.name }})
+    needs: check
+    strategy:
+      fail-fast: true         # one failing platform already stops the release
+      matrix:
+        include:
+          - name: linux-x86_64
+            runner: ubuntu-24.04
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+          - name: macos-arm64
+            runner: macos-14
+          - name: macos-x86_64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ needs.check.outputs.tag }}
+
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev libsqlite3-dev \
+            zlib1g-dev git python3
+
+      - name: Install build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install pkg-config openssl@3
+
+      - name: Build slangc
+        run: make slangc
+
+      # The same suite CI runs on main: a release is the tagged commit
+      # proven again on the machine that builds its tarball.
+      - name: Test suite
+        run: make test
+
+      - name: Build tarball
+        run: make dist
+
+      # The tarball the way a user gets it: unpacked somewhere unrelated,
+      # reporting this version, and building and running a new project
+      # with the installed layout rather than the source tree.
+      - name: Verify tarball
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -eu
+          set -- dist/*.tar.gz
+          if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+            echo "::error::expected one tarball in dist/, found: $*"
+            exit 1
+          fi
+          echo "$1"
+          rm -rf /tmp/verify && mkdir -p /tmp/verify
+          tar -xzf "$1" -C /tmp/verify
+          bin=$(echo /tmp/verify/*/bin)
+          "$bin/slangc" --version
+          "$bin/slangc" --version | grep -qx "slangc $VERSION"
+          mkdir -p /tmp/verify/proj && cd /tmp/verify/proj
+          "$bin/slangc" new demo >/dev/null
+          cd demo && "$bin/slangc" main.sl --run
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball-${{ matrix.name }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: publish
+    needs: [check, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write         # create the release and upload its files
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ needs.check.outputs.tag }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tarball-*
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums and notes
+        env:
+          TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          set -eu
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          (cd dist && sha256sum -- ./*.tar.gz | sed 's#  \./#  #' > SHA256SUMS)
+          cat dist/SHA256SUMS
+          .github/release-notes.sh "$TAG" dist/SHA256SUMS > notes.md
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.check.outputs.tag }}
+          # a tag push always publishes; a manual run follows its input
+          DRAFT: ${{ github.event_name == 'workflow_dispatch' && inputs.draft }}
+        run: |
+          set -eu
+          title=$(git tag -l --format='%(contents:subject)' "$TAG")
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            was_draft=$(gh release view "$TAG" --json isDraft -q .isDraft)
+            if [ "$was_draft" = false ] && [ "$DRAFT" = true ]; then
+              echo "::error::$TAG is already published; a draft run would unpublish it"
+              exit 1
+            fi
+            gh release upload "$TAG" dist/*.tar.gz dist/SHA256SUMS --clobber
+            gh release edit "$TAG" --title "$title" --notes-file notes.md \
+              --draft="$DRAFT"
+          elif [ "$DRAFT" = true ]; then
+            gh release create "$TAG" --verify-tag --draft --title "$title" \
+              --notes-file notes.md dist/*.tar.gz dist/SHA256SUMS
+          else
+            gh release create "$TAG" --verify-tag --title "$title" \
+              --notes-file notes.md dist/*.tar.gz dist/SHA256SUMS
+          fi
+          gh release view "$TAG" --json url,isDraft,assets \
+            -q '"\(.url) draft=\(.isDraft)", (.assets[].name)'

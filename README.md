@@ -45,7 +45,9 @@ slangc main.sl --run         # hello from hello
 standard library in `$(PREFIX)/lib/slang` — both are needed, because
 `slangc` splices its runtime C into every program it compiles. Remove it
 all with `make uninstall`. `make dist` builds a relocatable tarball with
-the same layout, which can be unpacked anywhere and run in place.
+the same layout, which can be unpacked anywhere and run in place. Every
+[release](https://github.com/dolphlabs/slang/releases) has one for Linux
+x86_64 and arm64 and macOS arm64 and x86_64, with their SHA-256 sums.
 
 **Platforms.** CI builds and runs the full test suite on every merge to
 `main` on Linux x86_64 (GCC), Linux arm64 (GCC) and macOS on Apple Silicon
@@ -3363,7 +3365,8 @@ See `examples/pkgdemo/` for a complete multi-package project.
 
 External packages are pinned in `slang.project` (walked up from the
 entry file). Imports stay short. `slang.lock` holds content hashes
-and is written by `slangc get`, never by hand.
+and is written by `slangc get`, never by hand. The file needs a `name` and
+a `version` line as well as its pins; `slangc new` writes both.
 
 ```
 name myserver

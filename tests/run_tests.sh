@@ -155,6 +155,23 @@ else
     echo "FAIL slangc new (scaffold did not build and run)"
     fail=1
 fi
+# A package README may show only the `pkg` line. The error for a project
+# file without name/version must show the lines to add, not just refuse.
+mkdir "$NEWDIR/pinonly"
+echo 'pkg zokor git https://github.com/dolphlabs/zokor tag v0.1.0 dir src' \
+    >"$NEWDIR/pinonly/slang.project"
+if (cd "$NEWDIR/pinonly" && "$OLDPWD/slangc" get >out.txt 2>&1); then
+    echo "FAIL slangc get (accepted a project file with no name/version)"
+    fail=1
+elif grep -q "missing the name and version lines" "$NEWDIR/pinonly/out.txt" &&
+     grep -q "^  name app$" "$NEWDIR/pinonly/out.txt" &&
+     grep -q "^  version 0.1.0$" "$NEWDIR/pinonly/out.txt"; then
+    echo "PASS slangc get (missing name/version says the fix)"
+else
+    echo "FAIL slangc get (missing name/version error does not say the fix)"
+    sed 's/^/  /' "$NEWDIR/pinonly/out.txt"
+    fail=1
+fi
 rm -rf "$NEWDIR"
 
 # ---- signals ------------------------------------------------------------
