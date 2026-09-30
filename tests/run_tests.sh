@@ -303,7 +303,7 @@ for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood \
             method_recv_gc indirect_callee generics_structs generics_json generics_infer \
             generics_pkg gc_nested_literal generics_methods \
             generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry own_roots switch escape_roots \
-            http_read_wire bytes_empty_literal gc_minor_barriers; do
+            http_read_wire bytes_empty_literal gc_minor_barriers map_delete; do
     out="/tmp/sl_gcstress_${name}.out"
     if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -331,7 +331,7 @@ nur_bad=0
 for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put \
             gc_nested_literal gc_stress gc_stat spawn_isolation maps json \
             json_int_exact flags method_recv method_recv_gc indirect_callee \
-            http_read_wire bytes_empty_literal gc_minor_barriers; do
+            http_read_wire bytes_empty_literal gc_minor_barriers map_delete; do
     out="/tmp/sl_nursery_${name}.out"
     if ! SLANG_GC_NURSERY_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then

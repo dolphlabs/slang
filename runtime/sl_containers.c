@@ -1110,6 +1110,37 @@ static int sl_map_has(sl_map *m, const void *k) {
     return sl_map_get(m, k) != NULL;
 }
 
+/* The slot a key hashes to before any probing. */
+static long long sl_map_home(sl_map *m, const void *k) {
+    unsigned long long h = m->kstr
+                              ? sl_hash_str(*(const char *const *)k)
+                              : sl_hash_bytes((const unsigned char *)k,
+                                              m->ksz);
+    return (long long)(h & (unsigned long long)(m->cap - 1));
+}
+
+/* The order entry naming `slot` now names `to`. */
+static void sl_map_order_move(sl_map *m, long long slot, long long to) {
+    for (long long i = 0; i < m->count; i++) {
+        if (m->order[i] == slot) {
+            m->order[i] = to;
+            return;
+        }
+    }
+}
+
+/* Deletion from a linear-probing table cannot just empty the slot: every
+ * key stored past it in the same probe run was placed there because this
+ * slot was taken, and sl_map_probe stops at the first empty slot, so an
+ * emptied slot hid them -- has() said no, a delete of them did nothing,
+ * and m[k] = v stored k a second time. Deleting 300 of 3000 keys lost
+ * 240 of the rest (tests/map_delete). This is the backward shift (Knuth,
+ * TAOCP 6.4, Algorithm R): walk the run after the hole, and move back
+ * into it every entry whose home slot does not lie cyclically between the
+ * hole and where the entry sits, so that every key stays reachable from
+ * its home without tombstones. A moved entry keeps its position in the
+ * order array (only the slot it names changes), so iteration order is
+ * untouched. */
 static void sl_map_del(sl_map *m, const void *k) {
     /* Tier 11 eighth slice: bracketed entry-to-every-return -- same
      * reasoning as sl_map_put's own bracket just above. */
@@ -1123,7 +1154,6 @@ static void sl_map_del(sl_map *m, const void *k) {
         sl_rt_preempt_enable();
         return;
     }
-    m->state[s] = 0;
     for (long long i = 0; i < m->count; i++) {
         if (m->order[i] == s) {
             memmove(m->order + i, m->order + i + 1,
@@ -1132,6 +1162,29 @@ static void sl_map_del(sl_map *m, const void *k) {
         }
     }
     m->count--;
+    long long mask = m->cap - 1;
+    long long hole = s;
+    long long j = s;
+    for (;;) {
+        j = (j + 1) & mask;
+        if (!m->state[j])
+            break;
+        long long home = sl_map_home(m, m->keys + (size_t)j * m->ksz);
+        /* Stays if its home is in (hole, j], cyclically: probing from
+         * there reaches j without crossing the hole. */
+        int stays = hole <= j ? (hole < home && home <= j)
+                              : (hole < home || home <= j);
+        if (stays)
+            continue;
+        memcpy(m->keys + (size_t)hole * m->ksz,
+               m->keys + (size_t)j * m->ksz, m->ksz);
+        memcpy(m->vals + (size_t)hole * m->vsz,
+               m->vals + (size_t)j * m->vsz, m->vsz);
+        m->state[hole] = 1;
+        sl_map_order_move(m, j, hole);
+        hole = j;
+    }
+    m->state[hole] = 0;
     sl_rt_preempt_enable();
 }
 
