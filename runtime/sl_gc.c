@@ -274,6 +274,10 @@ static _Atomic int sl_gc_collecting = 0;
 static _Thread_local sl_gc_thread sl_rt_gc_reg;
 static _Thread_local _Atomic int sl_rt_gc_blocked = 0;
 static _Thread_local _Atomic unsigned long sl_rt_gc_acked_cycle = 0;
+/* sl_gc_ack_and_wait runs on a task's stack too (via the checkin slow
+   path), so it writes the ack through this (SL_RT_TLS_ADDR_FN). */
+SL_RT_TLS_ADDR_FN(sl_rt_tls_gc_acked_cycle, _Atomic unsigned long,
+                  sl_rt_gc_acked_cycle)
 
 static void sl_gc_collect(void);
 static void sl_gc_collect_minor(void);
@@ -350,10 +354,10 @@ static void sl_gc_register_thread(void) {
  * below), so there's nothing lost by no longer waiting for a clean
  * 0 observation on the shared flag. */
 static inline void sl_gc_ack_and_wait(void) {
+    _Atomic unsigned long *acked = sl_rt_tls_gc_acked_cycle();
     unsigned long cyc = atomic_load_explicit(&sl_gc_cycle,
                                               memory_order_acquire);
-    atomic_store_explicit(&sl_rt_gc_acked_cycle, cyc,
-                           memory_order_release);
+    atomic_store_explicit(acked, cyc, memory_order_release);
     while (atomic_load_explicit(&sl_gc_stop_requested,
                                  memory_order_acquire)) {
         sched_yield();
@@ -361,8 +365,7 @@ static inline void sl_gc_ack_and_wait(void) {
                                                   memory_order_acquire);
         if (now != cyc) {
             cyc = now;
-            atomic_store_explicit(&sl_rt_gc_acked_cycle, cyc,
-                                   memory_order_release);
+            atomic_store_explicit(acked, cyc, memory_order_release);
         }
     }
 }
