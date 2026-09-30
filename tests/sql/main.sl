@@ -116,7 +116,7 @@ for i in 0..400 {
     deep = deep + " UNION ALL SELECT 1";
 }
 let dp = sql.prepare(db, deep);
-guard let _dd = dp else let e = err_of(dp) {
+if let _dd = dp { } else let e = err_of(dp) {
     println("compound cap: " + e);
 }
 
@@ -125,7 +125,7 @@ for i in 0..900 {
     wide_expr = wide_expr + " AND 1=1";
 }
 let ep = sql.prepare(db, wide_expr);
-guard let _ee = ep else let e = err_of(ep) {
+if let _ee = ep { } else let e = err_of(ep) {
     println("expr cap: " + e);
 }
 
@@ -143,17 +143,17 @@ println("in-bounds compound ok");
 
 // ---- error path: bad SQL stays visible through err_of ---------
 let br = sql.prepare(db, "SELCT 1");
-guard let _bad = br else let e = err_of(br) {
+if let _bad = br { } else let e = err_of(br) {
     println("syntax err: " + e);
 }
 
 let mr = sql.prepare(db, "SELECT * FROM nope");
-guard let _bad2 = mr else let e = err_of(mr) {
+if let _bad2 = mr { } else let e = err_of(mr) {
     println("missing table: " + e);
 }
 
 let xr = sql.exec(db, "INSERT INTO users (id, name) VALUES (1, 'dup')");
-guard let _x = xr else let e = err_of(xr) {
+if let _x = xr { } else let e = err_of(xr) {
     println("exec err: " + e);
 }
 

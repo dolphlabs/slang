@@ -1,0 +1,12 @@
+-1
+1
+2
+10
+20
+7
+-2
+8
+9
+2
+4
+bail: missing, as expected

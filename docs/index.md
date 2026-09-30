@@ -108,7 +108,21 @@ Useful flags:
 | `--emit-c`  | Only write the generated C file (no compilation)    |
 | `--keep-c`  | Keep the generated C file after compiling           |
 | `--run`     | Compile, then run it; exit with the program's own status |
+| `--json`    | Compile errors as JSON lines on stderr (see below)  |
 | `get`       | Fetch `slang.project` pins and write `slang.lock`   |
+
+**Compiler errors** name the file and line, the way gcc, Go and rustc do,
+and say what to write instead where the compiler can tell:
+
+```
+geometry/shapes.sl:4: error: struct 'geometry.Point' has no field 'yy' (did you mean 'y'?)
+main.sl:14: error: undefined variable 'summ' (did you mean 'sum'?)
+```
+
+One compile reports the first error in every function, not just the
+program's first, so three mistakes cost one round rather than three. With
+`--json`, each error is one line of JSON on stderr for an editor or an
+agent: `{"file":"main.sl","line":14,"severity":"error","message":"..."}`.
 
 Want to see everything at once instead of one feature at a time? See
 **[`demo/`](demo/)** — a full server (dice game, guestbook wall, live

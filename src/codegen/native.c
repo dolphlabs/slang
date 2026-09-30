@@ -78,7 +78,8 @@ const char *native_check(CG *cg, const char *pkg, const char *fname,
                                 Expr *e) {
     const NatSig *ns = find_any_sig(pkg, fname);
     if (!ns)
-        cg_error(e->line, "package '%s' has no function '%s'", pkg, fname);
+        cg_error(e->line, "package '%s' has no function '%s'%s", pkg, fname,
+                 suggest_native(pkg, fname));
     int n = e->as.call.nargs;
     if (n != ns->nargs)
         cg_error(e->line,

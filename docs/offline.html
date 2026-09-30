@@ -653,7 +653,11 @@ methods:
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>./slangc examples/hello/main.sl     # produces ./main
 ./main                              # run it</code></pre></div>
 <p>Useful flags:</p>
-<div class="tablewrap"><table><thead><tr><th>Flag</th><th>Effect</th></tr></thead><tbody><tr><td><code>-o &lt;name&gt;</code></td><td>Choose the output binary name</td></tr><tr><td><code>--emit-c</code></td><td>Only write the generated C file (no compilation)</td></tr><tr><td><code>--keep-c</code></td><td>Keep the generated C file after compiling</td></tr><tr><td><code>--run</code></td><td>Compile, then run it; exit with the program&#x27;s own status</td></tr><tr><td><code>get</code></td><td>Fetch <code>slang.project</code> pins and write <code>slang.lock</code></td></tr></tbody></table></div>
+<div class="tablewrap"><table><thead><tr><th>Flag</th><th>Effect</th></tr></thead><tbody><tr><td><code>-o &lt;name&gt;</code></td><td>Choose the output binary name</td></tr><tr><td><code>--emit-c</code></td><td>Only write the generated C file (no compilation)</td></tr><tr><td><code>--keep-c</code></td><td>Keep the generated C file after compiling</td></tr><tr><td><code>--run</code></td><td>Compile, then run it; exit with the program&#x27;s own status</td></tr><tr><td><code>--json</code></td><td>Compile errors as JSON lines on stderr (see below)</td></tr><tr><td><code>get</code></td><td>Fetch <code>slang.project</code> pins and write <code>slang.lock</code></td></tr></tbody></table></div>
+<p><strong>Compiler errors</strong> name the file and line, the way gcc, Go and rustc do, and say what to write instead where the compiler can tell:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>geometry/shapes.sl:<span class="n">4</span>: error: <span class="k">struct</span> &#x27;geometry.Point&#x27; <span class="b">has</span> no field &#x27;yy&#x27; (did you mean &#x27;y&#x27;?)
+main.sl:<span class="n">14</span>: error: undefined variable &#x27;summ&#x27; (did you mean &#x27;sum&#x27;?)</code></pre></div>
+<p>One compile reports the first error in every function, not just the program&#x27;s first, so three mistakes cost one round rather than three. With <code>--json</code>, each error is one line of JSON on stderr for an editor or an agent: <code>{&quot;file&quot;:&quot;main.sl&quot;,&quot;line&quot;:14,&quot;severity&quot;:&quot;error&quot;,&quot;message&quot;:&quot;...&quot;}</code>.</p>
 <p>Want to see everything at once instead of one feature at a time? See <strong><a href="demo/"><code>demo/</code></a></strong> — a full server (dice game, guestbook wall, live dashboard) exercising every tier: <code>http</code>/<code>link</code>, <code>net.tls_*</code>, <code>json</code>, <code>spawn</code>/<code>chan[T]</code>, <code>proc</code> graceful shutdown, local package imports, and C interop, with a real HTML/CSS/JS frontend. <code>cd demo &amp;&amp; ./run.sh</code>.</p></section><section class="view" id="guide" hidden><header class="page-head"><h1>Language guide</h1><p class="tagline">Values, types, and the shape of a slang program.</p></header><h2 id="language-tour">Language tour</h2>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="c">// variables with inferred types</span>
 <span class="k">let</span> x = <span class="n">10</span>;              <span class="c">// int  (64-bit)</span>
@@ -908,8 +912,7 @@ r.br.x = <span class="n">6</span>;
 <span class="b">println</span>(Box { v: <span class="s">&quot;hi&quot;</span> }.<span class="f">get</span>());          <span class="c">// &quot;hi&quot; -- doubled is never checked here</span></code></pre></div>
 <p>The <code>impl</code> block may name its parameters whatever it likes (<code>impl Pair[A, B]</code> for <code>struct Pair[K, V]</code>); they match by position. <code>pub fn</code> exports a method, as it does elsewhere.</p>
 <p><strong>A method is checked when an instance asks for it</strong>, not when it is declared. <code>doubled</code> above multiplies, which <code>Box[str]</code> cannot do — and that is fine, because nothing calls <code>doubled</code> on a <code>Box[str]</code>. This is what makes unbounded type parameters usable without interfaces, and it is why an error in a method body names the instance and the line that asked for it:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>error at line <span class="n">5</span>: unsupported operand types <span class="k">for</span> &#x27;*&#x27;: <span class="t">str</span> and <span class="t">int</span>
-  (<span class="k">in</span> main.Box[<span class="t">str</span>].doubled, requested at line <span class="n">9</span>)</code></pre></div>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>main.sl:<span class="n">5</span>: error: unsupported operand types <span class="k">for</span> &#x27;*&#x27;: <span class="t">str</span> and <span class="t">int</span> (<span class="k">in</span> main.Box[<span class="t">str</span>].doubled, requested at line <span class="n">9</span>)</code></pre></div>
 <p>Not yet supported, and each says so when used: lifetime parameters on a generic struct or on one of its methods, and a generic method&#x27;s own extra parameters (<code>fn map[U](self: Box[T]) -&gt; Box[U]</code>).</p>
 <h4 id="generic-functions">Generic functions<a class="anchor" href="#generic-functions" aria-label="Link to this section">#</a></h4>
 <p>A plain function can take type parameters too. There is no <code>first[int](xs)</code> at a call site — a type argument is only ever written in a type position — so every one is inferred, by unifying each parameter&#x27;s declared type against the argument&#x27;s actual type:</p>
@@ -1016,8 +1019,10 @@ counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
 }
 
 <span class="c">// guard let unwraps the happy path and binds it for the rest of the</span>
-<span class="c">// block; the else branch must exit (return, or exit()) since the</span>
-<span class="c">// bound name has no value to fall back to. `else let e = err_of(r)`</span>
+<span class="c">// block. The else branch must leave the scope -- return, break,</span>
+<span class="c">// continue, exit(..), panic(..), or a call to a function that never</span>
+<span class="c">// returns -- since the bound name has no value to fall back to; the</span>
+<span class="c">// compiler rejects one that can fall through. `else let e = err_of(r)`</span>
 <span class="c">// binds the error value for `result[T, E]` so failures stay visible.</span>
 <span class="k">fn</span> <span class="f">safe_div</span>(n: <span class="t">int</span>) -&gt; <span class="t">int</span> {
     <span class="k">guard</span> <span class="k">let</span> v = <span class="f">div10</span>(n) <span class="k">else</span> {
@@ -1033,6 +1038,20 @@ counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
         <span class="k">return</span> <span class="s">&quot;&quot;</span>;
     }
     <span class="k">return</span> body;
+}
+
+<span class="c">// if let handles both outcomes and carries on: each binding lives only</span>
+<span class="c">// in its own branch, and either branch may fall through</span>
+<span class="k">if</span> <span class="k">let</span> v = <span class="f">div10</span>(<span class="n">40</span>) {
+    <span class="b">println</span>(v);                        <span class="c">// 4</span>
+} <span class="k">else</span> {
+    <span class="b">println</span>(<span class="s">&quot;not a multiple of ten&quot;</span>);
+}
+<span class="k">let</span> pr = <span class="f">parse_small</span>(<span class="s">&quot;big&quot;</span>);
+<span class="k">if</span> <span class="k">let</span> n = pr {
+    <span class="b">println</span>(n);
+} <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(pr) {
+    <span class="b">println</span>(<span class="s">&quot;rejected: &quot;</span> + e);         <span class="c">// rejected: value too large</span>
 }
 
 <span class="c">// ?? recovers from none / err with a fallback value</span>
@@ -1054,6 +1073,7 @@ counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
 <span class="c">// other type parameter</span>
 <span class="k">let</span> nothing: <span class="t">opt</span>[<span class="t">str</span>] = <span class="b">none</span>;
 <span class="k">let</span> bad: <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>] = <span class="b">err</span>(<span class="s">&quot;boom&quot;</span>);</code></pre></div>
+<p>A guard&#x27;s else may end in a helper of your own, such as a <code>die(msg)</code> that prints and calls <code>exit</code>: the compiler works out that a function never returns when it has no <code>return</code> and every path ends in <code>exit</code>, <code>panic</code>, or another such function, across packages. It only counts a plain call by name, so a function value or method is never assumed to diverge; end that else with an explicit <code>return</code> instead.</p>
 <p>Panics (out-of-bounds index, division by zero, <code>err_of</code> on ok, missing map key) carry <code>pkg.func:line</code>: <code>list index out of bounds at main.foo:12</code>. A panicking <code>spawn</code>ed task reports through stderr and its <code>join_wait</code> surfaces the same string as <code>err</code>, so failures stay visible across task boundaries.</p>
 <p><code>opt[T]</code> and <code>result[T, E]</code> are monomorphized per distinct type argument (one C struct per instantiation actually used). Constructing <code>none</code>/<code>err(...)</code> without enough context to infer the missing type parameter is a compile error.</p>
 <h4 id="error-model-opt-vs-result-vs-fault">Error model: <code>opt</code> vs <code>result</code> vs <code>fault</code><a class="anchor" href="#error-model-opt-vs-result-vs-fault" aria-label="Link to this section">#</a></h4>
@@ -1252,8 +1272,7 @@ r.br.x = <span class="n">6</span>;
 <span class="b">println</span>(Box { v: <span class="s">&quot;hi&quot;</span> }.<span class="f">get</span>());          <span class="c">// &quot;hi&quot; -- doubled is never checked here</span></code></pre></div>
 <p>The <code>impl</code> block may name its parameters whatever it likes (<code>impl Pair[A, B]</code> for <code>struct Pair[K, V]</code>); they match by position. <code>pub fn</code> exports a method, as it does elsewhere.</p>
 <p><strong>A method is checked when an instance asks for it</strong>, not when it is declared. <code>doubled</code> above multiplies, which <code>Box[str]</code> cannot do — and that is fine, because nothing calls <code>doubled</code> on a <code>Box[str]</code>. This is what makes unbounded type parameters usable without interfaces, and it is why an error in a method body names the instance and the line that asked for it:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>error at line <span class="n">5</span>: unsupported operand types <span class="k">for</span> &#x27;*&#x27;: <span class="t">str</span> and <span class="t">int</span>
-  (<span class="k">in</span> main.Box[<span class="t">str</span>].doubled, requested at line <span class="n">9</span>)</code></pre></div>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>main.sl:<span class="n">5</span>: error: unsupported operand types <span class="k">for</span> &#x27;*&#x27;: <span class="t">str</span> and <span class="t">int</span> (<span class="k">in</span> main.Box[<span class="t">str</span>].doubled, requested at line <span class="n">9</span>)</code></pre></div>
 <p>Not yet supported, and each says so when used: lifetime parameters on a generic struct or on one of its methods, and a generic method&#x27;s own extra parameters (<code>fn map[U](self: Box[T]) -&gt; Box[U]</code>).</p>
 <h3 id="generic-functions-2">Generic functions<a class="anchor" href="#generic-functions-2" aria-label="Link to this section">#</a></h3>
 <p>A plain function can take type parameters too. There is no <code>first[int](xs)</code> at a call site — a type argument is only ever written in a type position — so every one is inferred, by unifying each parameter&#x27;s declared type against the argument&#x27;s actual type:</p>
@@ -1360,8 +1379,10 @@ counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
 }
 
 <span class="c">// guard let unwraps the happy path and binds it for the rest of the</span>
-<span class="c">// block; the else branch must exit (return, or exit()) since the</span>
-<span class="c">// bound name has no value to fall back to. `else let e = err_of(r)`</span>
+<span class="c">// block. The else branch must leave the scope -- return, break,</span>
+<span class="c">// continue, exit(..), panic(..), or a call to a function that never</span>
+<span class="c">// returns -- since the bound name has no value to fall back to; the</span>
+<span class="c">// compiler rejects one that can fall through. `else let e = err_of(r)`</span>
 <span class="c">// binds the error value for `result[T, E]` so failures stay visible.</span>
 <span class="k">fn</span> <span class="f">safe_div</span>(n: <span class="t">int</span>) -&gt; <span class="t">int</span> {
     <span class="k">guard</span> <span class="k">let</span> v = <span class="f">div10</span>(n) <span class="k">else</span> {
@@ -1377,6 +1398,20 @@ counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
         <span class="k">return</span> <span class="s">&quot;&quot;</span>;
     }
     <span class="k">return</span> body;
+}
+
+<span class="c">// if let handles both outcomes and carries on: each binding lives only</span>
+<span class="c">// in its own branch, and either branch may fall through</span>
+<span class="k">if</span> <span class="k">let</span> v = <span class="f">div10</span>(<span class="n">40</span>) {
+    <span class="b">println</span>(v);                        <span class="c">// 4</span>
+} <span class="k">else</span> {
+    <span class="b">println</span>(<span class="s">&quot;not a multiple of ten&quot;</span>);
+}
+<span class="k">let</span> pr = <span class="f">parse_small</span>(<span class="s">&quot;big&quot;</span>);
+<span class="k">if</span> <span class="k">let</span> n = pr {
+    <span class="b">println</span>(n);
+} <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(pr) {
+    <span class="b">println</span>(<span class="s">&quot;rejected: &quot;</span> + e);         <span class="c">// rejected: value too large</span>
 }
 
 <span class="c">// ?? recovers from none / err with a fallback value</span>
@@ -1398,6 +1433,7 @@ counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
 <span class="c">// other type parameter</span>
 <span class="k">let</span> nothing: <span class="t">opt</span>[<span class="t">str</span>] = <span class="b">none</span>;
 <span class="k">let</span> bad: <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>] = <span class="b">err</span>(<span class="s">&quot;boom&quot;</span>);</code></pre></div>
+<p>A guard&#x27;s else may end in a helper of your own, such as a <code>die(msg)</code> that prints and calls <code>exit</code>: the compiler works out that a function never returns when it has no <code>return</code> and every path ends in <code>exit</code>, <code>panic</code>, or another such function, across packages. It only counts a plain call by name, so a function value or method is never assumed to diverge; end that else with an explicit <code>return</code> instead.</p>
 <p>Panics (out-of-bounds index, division by zero, <code>err_of</code> on ok, missing map key) carry <code>pkg.func:line</code>: <code>list index out of bounds at main.foo:12</code>. A panicking <code>spawn</code>ed task reports through stderr and its <code>join_wait</code> surfaces the same string as <code>err</code>, so failures stay visible across task boundaries.</p>
 <p><code>opt[T]</code> and <code>result[T, E]</code> are monomorphized per distinct type argument (one C struct per instantiation actually used). Constructing <code>none</code>/<code>err(...)</code> without enough context to infer the missing type parameter is a compile error.</p>
 <h3 id="error-model-opt-vs-result-vs-fault-2">Error model: <code>opt</code> vs <code>result</code> vs <code>fault</code><a class="anchor" href="#error-model-opt-vs-result-vs-fault-2" aria-label="Link to this section">#</a></h3>
@@ -1543,8 +1579,7 @@ r.br.x = <span class="n">6</span>;
 <span class="b">println</span>(Box { v: <span class="s">&quot;hi&quot;</span> }.<span class="f">get</span>());          <span class="c">// &quot;hi&quot; -- doubled is never checked here</span></code></pre></div>
 <p>The <code>impl</code> block may name its parameters whatever it likes (<code>impl Pair[A, B]</code> for <code>struct Pair[K, V]</code>); they match by position. <code>pub fn</code> exports a method, as it does elsewhere.</p>
 <p><strong>A method is checked when an instance asks for it</strong>, not when it is declared. <code>doubled</code> above multiplies, which <code>Box[str]</code> cannot do — and that is fine, because nothing calls <code>doubled</code> on a <code>Box[str]</code>. This is what makes unbounded type parameters usable without interfaces, and it is why an error in a method body names the instance and the line that asked for it:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>error at line <span class="n">5</span>: unsupported operand types <span class="k">for</span> &#x27;*&#x27;: <span class="t">str</span> and <span class="t">int</span>
-  (<span class="k">in</span> main.Box[<span class="t">str</span>].doubled, requested at line <span class="n">9</span>)</code></pre></div>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>main.sl:<span class="n">5</span>: error: unsupported operand types <span class="k">for</span> &#x27;*&#x27;: <span class="t">str</span> and <span class="t">int</span> (<span class="k">in</span> main.Box[<span class="t">str</span>].doubled, requested at line <span class="n">9</span>)</code></pre></div>
 <p>Not yet supported, and each says so when used: lifetime parameters on a generic struct or on one of its methods, and a generic method&#x27;s own extra parameters (<code>fn map[U](self: Box[T]) -&gt; Box[U]</code>).</p>
 <h2 id="generic-functions">Generic functions</h2>
 <p>A plain function can take type parameters too. There is no <code>first[int](xs)</code> at a call site — a type argument is only ever written in a type position — so every one is inferred, by unifying each parameter&#x27;s declared type against the argument&#x27;s actual type:</p>
@@ -1593,8 +1628,10 @@ r.br.x = <span class="n">6</span>;
 }
 
 <span class="c">// guard let unwraps the happy path and binds it for the rest of the</span>
-<span class="c">// block; the else branch must exit (return, or exit()) since the</span>
-<span class="c">// bound name has no value to fall back to. `else let e = err_of(r)`</span>
+<span class="c">// block. The else branch must leave the scope -- return, break,</span>
+<span class="c">// continue, exit(..), panic(..), or a call to a function that never</span>
+<span class="c">// returns -- since the bound name has no value to fall back to; the</span>
+<span class="c">// compiler rejects one that can fall through. `else let e = err_of(r)`</span>
 <span class="c">// binds the error value for `result[T, E]` so failures stay visible.</span>
 <span class="k">fn</span> <span class="f">safe_div</span>(n: <span class="t">int</span>) -&gt; <span class="t">int</span> {
     <span class="k">guard</span> <span class="k">let</span> v = <span class="f">div10</span>(n) <span class="k">else</span> {
@@ -1610,6 +1647,20 @@ r.br.x = <span class="n">6</span>;
         <span class="k">return</span> <span class="s">&quot;&quot;</span>;
     }
     <span class="k">return</span> body;
+}
+
+<span class="c">// if let handles both outcomes and carries on: each binding lives only</span>
+<span class="c">// in its own branch, and either branch may fall through</span>
+<span class="k">if</span> <span class="k">let</span> v = <span class="f">div10</span>(<span class="n">40</span>) {
+    <span class="b">println</span>(v);                        <span class="c">// 4</span>
+} <span class="k">else</span> {
+    <span class="b">println</span>(<span class="s">&quot;not a multiple of ten&quot;</span>);
+}
+<span class="k">let</span> pr = <span class="f">parse_small</span>(<span class="s">&quot;big&quot;</span>);
+<span class="k">if</span> <span class="k">let</span> n = pr {
+    <span class="b">println</span>(n);
+} <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(pr) {
+    <span class="b">println</span>(<span class="s">&quot;rejected: &quot;</span> + e);         <span class="c">// rejected: value too large</span>
 }
 
 <span class="c">// ?? recovers from none / err with a fallback value</span>
@@ -1631,6 +1682,7 @@ r.br.x = <span class="n">6</span>;
 <span class="c">// other type parameter</span>
 <span class="k">let</span> nothing: <span class="t">opt</span>[<span class="t">str</span>] = <span class="b">none</span>;
 <span class="k">let</span> bad: <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>] = <span class="b">err</span>(<span class="s">&quot;boom&quot;</span>);</code></pre></div>
+<p>A guard&#x27;s else may end in a helper of your own, such as a <code>die(msg)</code> that prints and calls <code>exit</code>: the compiler works out that a function never returns when it has no <code>return</code> and every path ends in <code>exit</code>, <code>panic</code>, or another such function, across packages. It only counts a plain call by name, so a function value or method is never assumed to diverge; end that else with an explicit <code>return</code> instead.</p>
 <p>Panics (out-of-bounds index, division by zero, <code>err_of</code> on ok, missing map key) carry <code>pkg.func:line</code>: <code>list index out of bounds at main.foo:12</code>. A panicking <code>spawn</code>ed task reports through stderr and its <code>join_wait</code> surfaces the same string as <code>err</code>, so failures stay visible across task boundaries.</p>
 <p><code>opt[T]</code> and <code>result[T, E]</code> are monomorphized per distinct type argument (one C struct per instantiation actually used). Constructing <code>none</code>/<code>err(...)</code> without enough context to infer the missing type parameter is a compile error.</p>
 <h2 id="error-model-opt-vs-result-vs-fault">Error model: <code>opt</code> vs <code>result</code> vs <code>fault</code></h2>
