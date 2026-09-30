@@ -193,7 +193,11 @@ void gen_stmt(CG *cg, Stmt *s) {
             char *elem = arr_elem(ann);
             for (int i = 0; i < s->as.let.init->as.list.nelems; i++) {
                 Expr *ei = s->as.let.init->as.list.elems[i];
+                /* an element expects the element type, as in
+                   infer_type: `none` in [some(1), none] */
+                cg->expect = elem;
                 const char *ti = infer_type(cg, ei);
+                cg->expect = ann;
                 if (!value_assignable(elem, ei, ti))
                     cg_error(s->line,
                              "list element %d: cannot use %s where %s "
@@ -205,8 +209,11 @@ void gen_stmt(CG *cg, Stmt *s) {
             for (int i = 0; i < s->as.let.init->as.maplit.npairs; i++) {
                 Expr *ki = s->as.let.init->as.maplit.keys[i];
                 Expr *vi = s->as.let.init->as.maplit.vals[i];
+                cg->expect = ak;
                 const char *kty = infer_type(cg, ki);
+                cg->expect = av;
                 const char *vty = infer_type(cg, vi);
+                cg->expect = ann;
                 if (!value_assignable(ak, ki, kty))
                     cg_error(s->line,
                              "map key %d: cannot use %s where %s expected",

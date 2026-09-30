@@ -1451,7 +1451,7 @@ VarSym *var_find(CG *cg, const char *name) {
     return NULL;
 }
 
-void expr_tmp_register(CG *cg, Expr *e, const char *name) {
+void expr_tmp_register(CG *cg, Expr *e, const char *name, const char *type) {
     if (cg->expr_tmps.count == cg->expr_tmps.cap) {
         cg->expr_tmps.cap = cg->expr_tmps.cap ? cg->expr_tmps.cap * 2 : 16;
         cg->expr_tmps.items = (ExprTmp *)xrealloc(
@@ -1459,15 +1459,30 @@ void expr_tmp_register(CG *cg, Expr *e, const char *name) {
     }
     cg->expr_tmps.items[cg->expr_tmps.count].key = e;
     cg->expr_tmps.items[cg->expr_tmps.count].name = (char *)name;
+    cg->expr_tmps.items[cg->expr_tmps.count].type = type;
     cg->expr_tmps.count++;
 }
 
-const char *expr_tmp_find(CG *cg, Expr *e) {
+static const ExprTmp *expr_tmp_entry(CG *cg, Expr *e) {
     for (int i = cg->expr_tmps.count - 1; i >= 0; i--) {
         if (cg->expr_tmps.items[i].key == e)
-            return cg->expr_tmps.items[i].name;
+            return &cg->expr_tmps.items[i];
     }
     return NULL;
+}
+
+const char *expr_tmp_find(CG *cg, Expr *e) {
+    const ExprTmp *t = expr_tmp_entry(cg, e);
+    return t ? t->name : NULL;
+}
+
+/* A pending sibling's type: the one it was sequenced with, else (never
+ * registered, which the root-list loop reports) its inferred one. In
+ * Row{cells: [some(7)], label: some(f())}, f()'s safepoint runs under
+ * label's opt[str]; re-inferring cells there typed some(7) as opt[str]. */
+static const char *pending_type(CG *cg, Expr *p) {
+    const ExprTmp *t = expr_tmp_entry(cg, p);
+    return t ? t->type : infer_type(cg, p);
 }
 
 /* Evaluates one already-generated C expression (`text`, of C type
@@ -1527,7 +1542,7 @@ char *sequence_one(CG *cg, int seq_id, int idx, const char *ctype,
     char *name = xasprintf("_sl_seq%d_%d", seq_id, idx);
     sb_append(prelude, xasprintf("%s %s = %s; ", ctype, name, text));
     if (expr_node && type_has_gc_roots(cg, slang_type)) {
-        expr_tmp_register(cg, expr_node, name);
+        expr_tmp_register(cg, expr_node, name, slang_type);
         if (type_is_gc_ptr(cg, slang_type))
             ambient_root_push(cg, name);
         else {
@@ -1715,7 +1730,7 @@ char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
         nroots += count_named_gc_roots(cg, live_set_named(e->live_set, i));
     for (int i = 0; i < nlive_pending; i++)
         nroots += count_gc_root_exprs(
-            cg, infer_type(cg, live_set_pending(e->live_set, i)));
+            cg, pending_type(cg, live_set_pending(e->live_set, i)));
     if (nroots == 0) {
         if (!has_prelude)
             return inner;
@@ -1738,7 +1753,7 @@ char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
                      "internal error: liveness-pending value has no "
                      "registered temp at line %d",
                      p->line);
-        const char *pt = infer_type(cg, p);
+        const char *pt = pending_type(cg, p);
         if (type_is_gc_ptr(cg, pt)) {
             if (wrote++)
                 sb_append(&sp, ", ");
@@ -1890,9 +1905,11 @@ const char *expect_push(CG *cg, const char *t) {
      * none/[] can already infer theirs from the same expected type --
      * which is the mechanism the generics plan named. A scalar/struct
      * return-only parameter is refused with a clear message instead of
-     * risking that leak. */
+     * risking that leak. A map is a container like an array: its
+     * literal's keys and values read their types from it
+     * ({"a": none} against map[str]opt[int]). */
     if (t && (is_opt(t) || is_result(t) || is_chan(t) || is_join(t) ||
-              is_arr(t)))
+              is_arr(t) || is_map(t)))
         cg->expect = t;
     return saved;
 }

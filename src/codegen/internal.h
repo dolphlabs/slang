@@ -156,6 +156,10 @@ typedef struct {
 typedef struct {
     Expr *key;
     char *name;
+    /* the value's slang type as sequenced: a safepoint reads it rather
+     * than re-inferring `key`, whose type can depend on the cg->expect
+     * it was generated under, not the one current at the safepoint */
+    const char *type;
 } ExprTmp;
 
 typedef struct {
@@ -688,7 +692,7 @@ void var_scope_push(CG *cg);
 void var_scope_pop(CG *cg);
 void var_redecl_check(CG *cg, const char *name, int line);
 VarSym *var_find(CG *cg, const char *name);
-void expr_tmp_register(CG *cg, Expr *e, const char *name);
+void expr_tmp_register(CG *cg, Expr *e, const char *name, const char *type);
 const char *expr_tmp_find(CG *cg, Expr *e);
 void ambient_root_push(CG *cg, const char *name);
 char *sequence_one(CG *cg, int seq_id, int idx, const char *ctype,

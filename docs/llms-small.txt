@@ -173,7 +173,9 @@ closed, refused, io). There are no exceptions. `assert(cond, msg)` and
 `else` must leave the scope (`return`, `break`, `continue`, `exit`, `panic`,
 or a function of yours that always exits); `if let` is for when both
 outcomes carry on, and each of its bindings lives only in its branch. A bare
-`none` or `err(..)` needs an annotated binding or return type to infer from.
+`none`, `err(..)`, `[]` or `{}` takes its type from where it goes: an
+annotated binding, a parameter, a return type, a field, or the list or map
+it sits in (`let xs: [opt[int]] = [some(1), none];`).
 
 ## Concurrency
 

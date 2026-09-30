@@ -356,7 +356,7 @@ println(len(scores));          // entry count
 if has(scores, "dave") { ... } // membership test (no error)
 del(scores, "bob");            // removal
 
-let empty: map[int]str = {};   // empty maps need an annotation
+let empty: map[int]str = {};   // an empty map needs a type from context
 for k, v in scores {           // iteration in insertion order
     println(k + ": " + to_str(v));
 }
@@ -1121,7 +1121,7 @@ println(len(scores));          // entry count
 if has(scores, "dave") { ... } // membership test (no error)
 del(scores, "bob");            // removal
 
-let empty: map[int]str = {};   // empty maps need an annotation
+let empty: map[int]str = {};   // an empty map needs a type from context
 for k, v in scores {           // iteration in insertion order
     println(k + ": " + to_str(v));
 }

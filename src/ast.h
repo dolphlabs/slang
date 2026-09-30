@@ -182,6 +182,8 @@ struct Expr {
             Expr **keys;
             Expr **vals;
             int npairs;
+            /* an EMPTY literal's type, as list.resolved */
+            const char *resolved;
         } maplit;
         struct { Expr *base; char *name; } field;
         /* `recv` is evaluated exactly once, before the arguments. */
