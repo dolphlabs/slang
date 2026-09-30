@@ -302,16 +302,36 @@ dotted directories (#235). Write-ups in `todo.md`.
   under the verifier when reverted; the suite runs 14 GC-heavy tests under
   it and requires `missed=0`.
 
-## 7b. Bulk-filling a very large container re-traces it on every minor
+## 7b. Bulk-filling a very large container re-traced it on every minor
 
-- [ ] The write barrier remembers a whole object, so while a program fills
-  one very large list or map, every minor traces all of it again: loading
-  1M entries costs about 32 ms per minor (19 s of minors to build it,
-  against 0.8 ms per minor once it is built). Card marking -- remembering
-  the range of a container that changed, not the container -- would make
-  a minor pay for the new entries only. Needs a per-container dirty range
-  and a tracer that can walk just that range; lists first (push appends),
-  maps after.
+- [x] **Done (2026-09-30).** Lists and maps carry a frontier (`gc_clean`,
+  in padding the structs already had, so no memory): a minor traces a
+  remembered container only from the first position written since the
+  previous minor. Appends, `a[i] = v`, new map keys and deletes lower it
+  to the position; stores whose position is unknown reset it to 0, the
+  old whole-container trace. A long-lived cache of 1M `Entry` structs in a
+  map and a list:
+
+  | | before | after |
+  |---|---:|---:|
+  | building it | 20.5 s, 29.8 ms/minor (max 102) | 3.4 s, 0.77 ms/minor (max 6) |
+  | building + 3M iterations | 24.0 s, 17.3 s of minors | 7.9 s, 1.2 s of minors |
+
+  Same footprint. Test: `tests/gc_container_frontier` (appends, pop then
+  push, `a[i] = v` below the frontier, map inserts, updates and deletes),
+  run under `SLANG_GC_VERIFY_MINOR`. Testing it found the map `del` bug
+  (#252).
+
+## 7d. Updating existing map keys re-traces the whole map each minor
+
+- [ ] A map update's position in the order array is not recorded, so it
+  resets the map's frontier to 0: a 200k-entry map whose existing keys are
+  rewritten with fresh values costs about 10 ms per minor (no worse than
+  before #7b, but not the nursery's worth). One way: record the young
+  value itself in the task's remembered set instead of the map (validated
+  at the minor against the young table, promoted there), with a per-cycle
+  cap that falls back to the whole map. Measure against a cache-refresh
+  workload before choosing.
 
 ## 7c. macOS keeps freed heap pages that Linux gives back
 

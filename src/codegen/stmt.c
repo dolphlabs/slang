@@ -572,11 +572,13 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "%s(*(%s *)(void *)sl_arr_get(%s, %s, sizeof(%s), %s)) = "
                       "(%s)(%s);",
                       prelude.data, ec, b, i, ec, at, ec, val);
-            /* Generational barrier: unconditional remember when the
-             * element has GC roots. Own preempt bracket (inline store;
-             * map stores are covered inside sl_map_put). */
+            /* Generational barrier when the element has GC roots, naming
+             * the position so a minor traces the list only from there
+             * (sl_arr's gc_clean). Own preempt bracket (inline store; map
+             * stores are covered inside sl_map_put). `i` is the index's
+             * sequenced temp, so naming it again evaluates nothing twice. */
             if (type_has_gc_roots(cg, elem))
-                emit_line(cg, "{ sl_rt_preempt_disable(); sl_gc_remember((void *)(%s)); sl_rt_preempt_enable(); }", b);
+                emit_line(cg, "{ sl_rt_preempt_disable(); sl_arr_remember_at(%s, %s); sl_rt_preempt_enable(); }", b, i);
             break;
         }
         cg->ambient_count = ambient_mark;

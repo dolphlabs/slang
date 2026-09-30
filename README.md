@@ -3474,9 +3474,11 @@ What this means in practice:
   the nursery, not the heap: about 0.8ms per minor whether a program
   keeps 20k or a million long-lived objects. Majors sweep everything and
   promote what they keep.
-- Filling one very large list or map while allocating is the exception:
-  every write to it remembers the whole container, so each minor during
-  the fill traces all of it again.
+- A list or map written since the last minor is traced from the first
+  position written, not from the start, so filling a million-entry list
+  or map costs each minor only what was added since the previous one.
+  Updating an existing map key is the exception: its position is not
+  recorded, so the next minor traces that whole map.
 - `SLANG_GC_STAT=1` prints collection counts and pause times at exit
   (`minor_pause_ns_total` for the minors).
   `SLANG_GC_THRESHOLD_KB=n` collects every n KB instead, with no pacing:
