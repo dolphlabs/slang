@@ -60,6 +60,7 @@ Anything a person can read here, a program can read more cheaply:
 
 | Path | What it is |
 |---|---|
+| `/llms-small.txt` | The language on one page (about 3k tokens) plus a generated package index. Written by hand in `www/llms-small.md`; `tests/run_tests.sh` compiles and runs every example in it |
 | `/llms.txt` | Site index in the [llmstxt.org](https://llmstxt.org) shape |
 | `/llms-full.txt` | The entire site as one plain-text document |
 | `/api.json` | Every package and every function, machine-readable |

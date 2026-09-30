@@ -763,12 +763,53 @@ static unsigned long long sl_from_be(sl_bytes *b) {
 
 /* ---- growable arrays over GC memory ---- */
 
+/* gc_clean (lists and maps): positions below it hold no pointer written
+ * since the last minor collection that traced this container, so a minor
+ * tracing it through the remembered set starts there instead of at 0
+ * (sl_gc_trace_arr_dirty / sl_gc_trace_map_dirty). Every store that can
+ * put a young pointer into the container lowers it to the position
+ * written (an append, a[i] = v, a new map key) or to 0 when the position
+ * is not known (a generic sl_gc_remember, a map update); a delete lowers
+ * it to where the order array shifted from. Filling a large container
+ * then costs each minor only what was added since the previous one,
+ * where it cost the whole container: 1M appends made every minor during
+ * the fill re-trace everything already in. Zero -- what allocation
+ * leaves -- means "trace it all", so a container that has never been
+ * traced by a minor is always safe. An int, in padding the struct
+ * already had (the size asserts below): positions past INT32_MAX are
+ * always traced. */
 typedef struct {
     long long len, cap;
     unsigned char *data; /* elements stored inline */
     size_t esz;          /* element size in bytes */
     int elem_is_ptr;
+    int gc_clean;        /* see above */
 } sl_arr;
+
+_Static_assert(sizeof(sl_arr) == 5 * sizeof(long long),
+               "sl_arr: gc_clean must fit in the existing padding");
+
+static int sl_gc_clean_at(long long n) {
+    return n > INT32_MAX ? INT32_MAX : (int)n;
+}
+
+/* Elements [from, len): each element pointer, or every word of each
+ * element when the elements are value structs. */
+static void sl_gc_trace_arr_range(sl_arr *a, long long from,
+                                  void (*mark)(void *)) {
+    if (!a->elem_is_ptr) {
+        if (a->esz < (long long)sizeof(void *)) return;
+        for (long long i = from; i < a->len; i++) {
+            unsigned char *el = a->data + (size_t)i * a->esz;
+            for (size_t off = 0; off + sizeof(void *) <= (size_t)a->esz;
+                 off += sizeof(void *))
+                mark(*(void **)(el + off));
+        }
+        return;
+    }
+    for (long long i = from; i < a->len; i++)
+        mark(*(void **)(a->data + (size_t)i * a->esz));
+}
 
 static void sl_gc_trace_arr(void *p, void (*mark)(void *)) {
     sl_arr *a = (sl_arr *)p;
@@ -789,18 +830,25 @@ static void sl_gc_trace_arr(void *p, void (*mark)(void *)) {
      * visits it, so it marks nothing, so it frees nothing THROUGH
      * itself. The orphan's own storage is reclaimed unmarked. Its
      * stale words are never READ as roots. Sound. */
-    if (!a->elem_is_ptr) {
-        if (a->esz < (long long)sizeof(void *)) return;
-        for (long long i = 0; i < a->len; i++) {
-            unsigned char *el = a->data + (size_t)i * a->esz;
-            for (size_t off = 0; off + sizeof(void *) <= (size_t)a->esz;
-                 off += sizeof(void *))
-                mark(*(void **)(el + off));
-        }
-        return;
+    sl_gc_trace_arr_range(a, 0, mark);
+}
+
+/* A minor's trace of a remembered list: only from gc_clean on. */
+static void sl_gc_trace_arr_dirty(void *p, void (*mark)(void *)) {
+    sl_arr *a = (sl_arr *)p;
+    if (a->data) {
+        mark(a->data);
+        sl_gc_trace_arr_range(a, a->gc_clean, mark);
     }
-    for (long long i = 0; i < a->len; i++)
-        mark(*(void **)(a->data + (size_t)i * a->esz));
+    a->gc_clean = sl_gc_clean_at(a->len);
+}
+
+/* The barrier for a store into element i. Caller holds the preempt
+ * bracket (sl_gc_remember_obj's own requirement). */
+static void sl_arr_remember_at(sl_arr *a, long long i) {
+    if (i < a->gc_clean)
+        a->gc_clean = (int)i;
+    sl_gc_remember_obj((sl_gc_obj *)a - 1);
 }
 
 static sl_arr *sl_arr_new(size_t esz, int elem_is_ptr) {
@@ -832,7 +880,9 @@ static void sl_arr_reserve(sl_arr *a, long long need) {
     a->data = (unsigned char *)sl_gc_realloc_owned(a->data,
                                                    (size_t)cap * a->esz, a);
     a->cap = cap;
-    sl_gc_remember(a);
+    /* The elements kept their positions, so gc_clean still describes
+     * them: remembered without lowering it. */
+    sl_gc_remember_obj((sl_gc_obj *)a - 1);
     sl_rt_preempt_enable();
 }
 
@@ -856,11 +906,12 @@ static void sl_arr_push(sl_arr *a, void *val, size_t esz) {
     sl_arr_reserve(a, a->len + 1);
     memcpy(a->data + (size_t)a->len * esz, val, esz);
     a->len++;
-    /* Element store into a potentially-old container. sl_gc_remember
-     * no-ops for young containers; the remembered flag dedups repeats. */
+    /* Element store into a potentially-old container: only this
+     * position is new (gc_clean). sl_gc_remember_obj no-ops for young
+     * containers; the remembered flag dedups repeats. */
     {
         sl_rt_preempt_disable();
-        sl_gc_remember(a);
+        sl_arr_remember_at(a, a->len - 1);
         sl_rt_preempt_enable();
     }
 }
@@ -916,22 +967,23 @@ typedef struct {
     size_t ksz, vsz;
     int kstr;            /* keys are NUL-terminated strings */
     int key_is_ptr, val_is_ptr;
+    int gc_clean;        /* order positions; see sl_arr's gc_clean */
     unsigned char *keys; /* cap slots */
     unsigned char *vals; /* cap slots */
     unsigned char *state;/* 1 = occupied */
     long long *order;    /* occupied slot indices, insertion order */
 } sl_map;
 
-static void sl_gc_trace_map(void *p, void (*mark)(void *)) {
-    sl_map *m = (sl_map *)p;
-    if (m->keys) mark(m->keys);
-    if (m->vals) mark(m->vals);
-    if (m->state) mark(m->state);
-    if (m->order) mark(m->order);
-    /* Value-struct interiors (same as sl_gc_trace_arr): scan every word
-     * of every occupied slot when the precise flag is unset. mark()
-     * validates, so non-pointer words are harmless. */
-    for (long long i = 0; i < m->count; i++) {
+_Static_assert(sizeof(sl_map) == 10 * sizeof(long long),
+               "sl_map: gc_clean must fit in the existing padding");
+
+/* Entries at order positions [from, count), keys and values. Value-struct
+ * interiors (same as sl_gc_trace_arr): every word of every occupied slot
+ * when the precise flag is unset. mark() validates, so non-pointer words
+ * are harmless. */
+static void sl_gc_trace_map_range(sl_map *m, long long from,
+                                  void (*mark)(void *)) {
+    for (long long i = from; i < m->count; i++) {
         long long slot = m->order[i];
         if (m->key_is_ptr)
             mark(*(void **)(m->keys + (size_t)slot * m->ksz));
@@ -948,6 +1000,37 @@ static void sl_gc_trace_map(void *p, void (*mark)(void *)) {
                 mark(*(void **)(m->vals + (size_t)slot * m->vsz + off));
         }
     }
+}
+
+static void sl_gc_trace_map_bufs(sl_map *m, void (*mark)(void *)) {
+    if (m->keys) mark(m->keys);
+    if (m->vals) mark(m->vals);
+    if (m->state) mark(m->state);
+    if (m->order) mark(m->order);
+}
+
+static void sl_gc_trace_map(void *p, void (*mark)(void *)) {
+    sl_map *m = (sl_map *)p;
+    sl_gc_trace_map_bufs(m, mark);
+    sl_gc_trace_map_range(m, 0, mark);
+}
+
+/* A minor's trace of a remembered map: only from gc_clean on. */
+static void sl_gc_trace_map_dirty(void *p, void (*mark)(void *)) {
+    sl_map *m = (sl_map *)p;
+    sl_gc_trace_map_bufs(m, mark);
+    sl_gc_trace_map_range(m, m->gc_clean, mark);
+    m->gc_clean = sl_gc_clean_at(m->count);
+}
+
+/* What sl_gc_remember does to a list or a map before remembering it: the
+ * position of the store is not known, so all of it is dirty. */
+static void sl_gc_dirty_all(void *obj) {
+    sl_gc_obj *h = (sl_gc_obj *)obj - 1;
+    if (h->trace == sl_gc_trace_arr)
+        ((sl_arr *)obj)->gc_clean = 0;
+    else if (h->trace == sl_gc_trace_map)
+        ((sl_map *)obj)->gc_clean = 0;
 }
 
 static unsigned long long sl_hash_bytes(const unsigned char *p, size_t n) {
@@ -1025,7 +1108,9 @@ static void sl_map_grow(sl_map *m) {
      * meaning a PREVIOUSLY-inserted key had already been swept by the
      * time this grow tried to rehash it. */
     sl_rt_preempt_disable();
-    sl_gc_remember(m);
+    /* The order array is rebuilt in the same order, so every entry keeps
+     * its position and gc_clean still describes them. */
+    sl_gc_remember_obj((sl_gc_obj *)m - 1);
     long long old_cap = m->cap;
     unsigned char *ok = m->keys, *ov = m->vals;
     unsigned char *ost = m->state;
@@ -1073,8 +1158,6 @@ static void sl_map_put(sl_map *m, const void *k, const void *v) {
      * is the same discipline sl_gc_alloc/sl_task_park/every other
      * fully-bracketed function in this codebase already follows. */
     sl_rt_preempt_disable();
-    /* Generational barrier (inside the existing bracket). */
-    sl_gc_remember(m);
     unsigned long long h = m->kstr
                               ? sl_hash_str(*(const char *const *)k)
                               : sl_hash_bytes((const unsigned char *)k,
@@ -1084,6 +1167,11 @@ static void sl_map_put(sl_map *m, const void *k, const void *v) {
     long long s = sl_map_probe(m, k, h);
     if (s >= 0) {
         memcpy(m->vals + (size_t)s * m->vsz, v, m->vsz);
+        /* Generational barrier, inside the existing bracket. An update's
+         * order position is not recorded anywhere, so the whole map is
+         * dirty (gc_clean). */
+        m->gc_clean = 0;
+        sl_gc_remember_obj((sl_gc_obj *)m - 1);
         sl_rt_preempt_enable();
         return;
     }
@@ -1091,7 +1179,11 @@ static void sl_map_put(sl_map *m, const void *k, const void *v) {
     memcpy(m->keys + (size_t)s * m->ksz, k, m->ksz);
     memcpy(m->vals + (size_t)s * m->vsz, v, m->vsz);
     m->state[s] = 1;
+    /* A new key lands at the end of the order array: only it is new. */
+    if (m->count < m->gc_clean)
+        m->gc_clean = (int)m->count;
     m->order[m->count++] = s;
+    sl_gc_remember_obj((sl_gc_obj *)m - 1);
     sl_rt_preempt_enable();
 }
 
@@ -1110,6 +1202,37 @@ static int sl_map_has(sl_map *m, const void *k) {
     return sl_map_get(m, k) != NULL;
 }
 
+/* The slot a key hashes to before any probing. */
+static long long sl_map_home(sl_map *m, const void *k) {
+    unsigned long long h = m->kstr
+                              ? sl_hash_str(*(const char *const *)k)
+                              : sl_hash_bytes((const unsigned char *)k,
+                                              m->ksz);
+    return (long long)(h & (unsigned long long)(m->cap - 1));
+}
+
+/* The order entry naming `slot` now names `to`. */
+static void sl_map_order_move(sl_map *m, long long slot, long long to) {
+    for (long long i = 0; i < m->count; i++) {
+        if (m->order[i] == slot) {
+            m->order[i] = to;
+            return;
+        }
+    }
+}
+
+/* Deletion from a linear-probing table cannot just empty the slot: every
+ * key stored past it in the same probe run was placed there because this
+ * slot was taken, and sl_map_probe stops at the first empty slot, so an
+ * emptied slot hid them -- has() said no, a delete of them did nothing,
+ * and m[k] = v stored k a second time. Deleting 300 of 3000 keys lost
+ * 240 of the rest (tests/map_delete). This is the backward shift (Knuth,
+ * TAOCP 6.4, Algorithm R): walk the run after the hole, and move back
+ * into it every entry whose home slot does not lie cyclically between the
+ * hole and where the entry sits, so that every key stays reachable from
+ * its home without tombstones. A moved entry keeps its position in the
+ * order array (only the slot it names changes), so iteration order is
+ * untouched. */
 static void sl_map_del(sl_map *m, const void *k) {
     /* Tier 11 eighth slice: bracketed entry-to-every-return -- same
      * reasoning as sl_map_put's own bracket just above. */
@@ -1123,15 +1246,41 @@ static void sl_map_del(sl_map *m, const void *k) {
         sl_rt_preempt_enable();
         return;
     }
-    m->state[s] = 0;
     for (long long i = 0; i < m->count; i++) {
         if (m->order[i] == s) {
             memmove(m->order + i, m->order + i + 1,
                     (size_t)(m->count - i - 1) * sizeof(long long));
+            /* Every entry after i moved down one position, a dirty one
+             * possibly below gc_clean. */
+            if (i < m->gc_clean)
+                m->gc_clean = (int)i;
             break;
         }
     }
     m->count--;
+    long long mask = m->cap - 1;
+    long long hole = s;
+    long long j = s;
+    for (;;) {
+        j = (j + 1) & mask;
+        if (!m->state[j])
+            break;
+        long long home = sl_map_home(m, m->keys + (size_t)j * m->ksz);
+        /* Stays if its home is in (hole, j], cyclically: probing from
+         * there reaches j without crossing the hole. */
+        int stays = hole <= j ? (hole < home && home <= j)
+                              : (hole < home || home <= j);
+        if (stays)
+            continue;
+        memcpy(m->keys + (size_t)hole * m->ksz,
+               m->keys + (size_t)j * m->ksz, m->ksz);
+        memcpy(m->vals + (size_t)hole * m->vsz,
+               m->vals + (size_t)j * m->vsz, m->vsz);
+        m->state[hole] = 1;
+        sl_map_order_move(m, j, hole);
+        hole = j;
+    }
+    m->state[hole] = 0;
     sl_rt_preempt_enable();
 }
 

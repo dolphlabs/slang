@@ -1,0 +1,5 @@
+appends
+pop_then_push
+index_stores
+maps
+done

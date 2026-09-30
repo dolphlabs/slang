@@ -227,6 +227,15 @@ young object the minor missed; `tests/run_tests.sh` runs the GC-heavy
 tests under it and requires `missed=0`. Run it before trusting any change
 to the barrier, promotion or a runtime container.
 
+Lists and maps carry a frontier, `gc_clean` (see `sl_arr` in
+`runtime/sl_containers.c`): a minor traces a remembered one only from the
+first position written since the last minor, so an append costs the
+entries appended, not the container. A store that knows its position
+lowers the frontier to it (`sl_arr_remember_at`, a new map key, a map
+delete); a store that does not -- a generic `sl_gc_remember`, a map
+update, a `&mut` into a list element -- sets it to 0, which is the old
+whole-container trace. A new container store must do one or the other.
+
 What the holes it found teach, as rules:
 
 - **No safepoint between allocating an object and storing into it**

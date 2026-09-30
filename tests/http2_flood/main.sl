@@ -170,7 +170,7 @@ fn continuation_flood(port: int, out: chan[str]) {
     while j < 200 {
         let sr = net.send(fd, http2.header_bytes(http2.T_CONTINUATION, 0, 1,
                                                  len(pad)) + pad);
-        guard let _q = sr else { j = 200; }   // hung up on us: expected
+        if let _q = sr { } else { j = 200; }   // hung up on us: expected
         j = j + 1;
     }
     net.close(fd);

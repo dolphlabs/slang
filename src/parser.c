@@ -1,5 +1,6 @@
 #include "common.h"
 #include "ast.h"
+#include "diag.h"
 #include "parser.h"
 
 #include <ctype.h>
@@ -20,15 +21,17 @@ typedef struct {
     Stmt *pending;
 } Parser;
 
+/* The file every node parsed now came from: set by parse_program (the
+ * loader points diag_file at the file it is reading) and by
+ * parse_fn_decl_again (the template's file). */
+static const char *parse_file;
+
 static void parse_error(Token *tk, const char *fmt, ...) {
     va_list ap;
-    fputs("slang: parse error at line ", stderr);
-    fprintf(stderr, "%d", tk->line);
-    fputs(": ", stderr);
     va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
+    diag_vreport(parse_file ? parse_file : diag_file, tk->line, fmt, ap,
+                 NULL);
     va_end(ap);
-    fputc(10, stderr);
     exit(1);
 }
 
@@ -73,6 +76,7 @@ static Stmt *new_stmt(StmtKind kind, int line) {
     memset(s, 0, sizeof(Stmt));
     s->kind = kind;
     s->line = line;
+    s->file = parse_file;
     return s;
 }
 
@@ -1078,6 +1082,32 @@ static Stmt *parse_let_stmt(Parser *p) {
 
 static Stmt *parse_if_stmt(Parser *p) {
     Token *kw = advance(p); /* 'if' */
+    if (match(p, T_KW_LET)) {
+        Token *name = expect(p, T_IDENT, "a variable name");
+        expect(p, T_ASSIGN, "'='");
+        Expr *expr = parse_expression(p);
+        Block *then_blk = parse_block(p, 0);
+        Stmt *s = new_stmt(ST_IF_LET, kw->line);
+        s->as.if_let.name = name->text;
+        s->as.if_let.expr = expr;
+        s->as.if_let.then_blk = then_blk;
+        if (match(p, T_KW_ELSE)) {
+            if (match(p, T_KW_LET)) {
+                Token *ename = expect(p, T_IDENT, "a variable name");
+                expect(p, T_ASSIGN, "'='");
+                s->as.if_let.err_expr = parse_expression(p);
+                s->as.if_let.err_name = ename->text;
+                s->as.if_let.else_blk = parse_block(p, 0);
+            } else if (check(p, T_KW_IF)) {
+                Block *else_blk = new_block();
+                block_push(else_blk, parse_if_stmt(p));
+                s->as.if_let.else_blk = else_blk;
+            } else {
+                s->as.if_let.else_blk = parse_block(p, 0);
+            }
+        }
+        return s;
+    }
     Expr *cond = parse_expression(p);
     Block *then_blk = parse_block(p, 0);
 
@@ -1152,6 +1182,7 @@ static Stmt *parse_guard_stmt(Parser *p) {
     s->as.if_stmt.cond = neg;
     s->as.if_stmt.then_blk = body;
     s->as.if_stmt.else_blk = NULL;
+    s->as.if_stmt.from_guard = 1;
     return s;
 }
 
@@ -1951,6 +1982,7 @@ static FuncDecl *parse_fn_decl(Parser *p, int is_extern) {
 
     FuncDecl *f = (FuncDecl *)xmalloc(sizeof(FuncDecl));
     memset(f, 0, sizeof(FuncDecl));
+    f->file = parse_file;
     f->name = name->text;
     f->lts = lts;
     f->nlts = nlts;
@@ -2004,10 +2036,13 @@ FuncDecl *parse_fn_decl_again(const FuncDecl *from) {
     p.toks = (Token *)from->toks;
     p.count = from->ntoks;
     p.pos = from->tok_pos;
+    const char *saved_file = parse_file;
+    parse_file = from->file;
     int is_pub = match(&p, T_KW_PUB) ? 1 : 0;
     FuncDecl *f = parse_fn_decl(&p, 0);
     f->is_pub = is_pub;
     f->tok_pos = from->tok_pos; /* the span it came from, pub included */
+    parse_file = saved_file;
     return f;
 }
 
@@ -2082,6 +2117,7 @@ Program *parse_program(Token *tokens, int ntokens) {
     memset(&p, 0, sizeof(p));
     p.toks = tokens;
     p.count = ntokens;
+    parse_file = diag_file;
 
     Program *prog = (Program *)xmalloc(sizeof(Program));
     memset(prog, 0, sizeof(Program));

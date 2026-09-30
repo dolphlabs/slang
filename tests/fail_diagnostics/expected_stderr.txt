@@ -1,0 +1,4 @@
+tests/fail_diagnostics/helper.sl:4: error: return type mismatch: cannot return str where int expected
+tests/fail_diagnostics/main.sl:7: error: struct 'fail_diagnostics.Point' has no field 'yy' (did you mean 'y'?)
+tests/fail_diagnostics/main.sl:11: error: call to undefined function 'printn' (did you mean 'print'?)
+tests/fail_diagnostics/main.sl:17: error: undefined variable 'summ' (did you mean 'sum'?)

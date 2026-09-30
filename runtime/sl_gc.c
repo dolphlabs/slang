@@ -274,6 +274,10 @@ static _Atomic int sl_gc_collecting = 0;
 static _Thread_local sl_gc_thread sl_rt_gc_reg;
 static _Thread_local _Atomic int sl_rt_gc_blocked = 0;
 static _Thread_local _Atomic unsigned long sl_rt_gc_acked_cycle = 0;
+/* sl_gc_ack_and_wait runs on a task's stack too (via the checkin slow
+   path), so it writes the ack through this (SL_RT_TLS_ADDR_FN). */
+SL_RT_TLS_ADDR_FN(sl_rt_tls_gc_acked_cycle, _Atomic unsigned long,
+                  sl_rt_gc_acked_cycle)
 
 static void sl_gc_collect(void);
 static void sl_gc_collect_minor(void);
@@ -350,10 +354,10 @@ static void sl_gc_register_thread(void) {
  * below), so there's nothing lost by no longer waiting for a clean
  * 0 observation on the shared flag. */
 static inline void sl_gc_ack_and_wait(void) {
+    _Atomic unsigned long *acked = sl_rt_tls_gc_acked_cycle();
     unsigned long cyc = atomic_load_explicit(&sl_gc_cycle,
                                               memory_order_acquire);
-    atomic_store_explicit(&sl_rt_gc_acked_cycle, cyc,
-                           memory_order_release);
+    atomic_store_explicit(acked, cyc, memory_order_release);
     while (atomic_load_explicit(&sl_gc_stop_requested,
                                  memory_order_acquire)) {
         sched_yield();
@@ -361,8 +365,7 @@ static inline void sl_gc_ack_and_wait(void) {
                                                   memory_order_acquire);
         if (now != cyc) {
             cyc = now;
-            atomic_store_explicit(&sl_rt_gc_acked_cycle, cyc,
-                                   memory_order_release);
+            atomic_store_explicit(acked, cyc, memory_order_release);
         }
     }
 }
@@ -722,8 +725,16 @@ static void sl_gc_remember_obj(sl_gc_obj *h) {
     h->remembered = 1;
 }
 
+/* sl_containers.c: marks a whole list or map dirty (their gc_clean). */
+static void sl_gc_dirty_all(void *obj);
+
+/* The barrier for a store whose position in the container is not known:
+ * a list or a map is dirty all over (see sl_arr's gc_clean). Stores that
+ * know where they wrote use sl_arr_remember_at, or lower gc_clean
+ * themselves and call sl_gc_remember_obj. */
 static void sl_gc_remember(void *obj) {
     if (!obj) return;
+    sl_gc_dirty_all(obj);
     sl_gc_remember_obj((sl_gc_obj *)obj - 1);
 }
 
@@ -1384,6 +1395,18 @@ static void sl_gc_collect_minor(void) {
     sl_gc_collect_minor_real();
 }
 
+/* Defined in sl_containers.c, which every program includes right after
+ * this file: the minor traces a remembered list or map only past its
+ * gc_clean (the _dirty tracers), and the verifier names what held a
+ * missed object. */
+static void sl_gc_trace_chan(void *p, void (*mark)(void *));
+static void sl_gc_trace_bytes(void *p, void (*mark)(void *));
+static void sl_gc_trace_arr(void *p, void (*mark)(void *));
+static void sl_gc_trace_map(void *p, void (*mark)(void *));
+static void sl_gc_trace_join(void *p, void (*mark)(void *));
+static void sl_gc_trace_arr_dirty(void *p, void (*mark)(void *));
+static void sl_gc_trace_map_dirty(void *p, void (*mark)(void *));
+
 /* The minor's whole mark phase: roots, then the remembered set, every
  * drain. `root_mark` is the mark the root phase traces with: always
  * sl_gc_mark_minor on the collection path; sl_gc_verify_minor_marks
@@ -1402,7 +1425,13 @@ static void sl_gc_minor_mark(sl_gc_thread **snap, int nsnap, size_t rem_n,
         sl_gc_obj *rh = sl_gc_rem_harvest_buf[i];
         void *payload = (void *)(rh + 1);
         sl_gc_mark_minor(payload);
-        if (rh->trace) rh->trace(payload, sl_gc_mark_minor);
+        /* A list or map is traced only past what is still clean. */
+        if (rh->trace == sl_gc_trace_arr)
+            sl_gc_trace_arr_dirty(payload, sl_gc_mark_minor);
+        else if (rh->trace == sl_gc_trace_map)
+            sl_gc_trace_map_dirty(payload, sl_gc_mark_minor);
+        else if (rh->trace)
+            rh->trace(payload, sl_gc_mark_minor);
         while (sl_gc_wl_n > 0) {
             void *p = sl_gc_wl[--sl_gc_wl_n];
             sl_gc_obj *wh = (sl_gc_obj *)p - 1;
@@ -1454,14 +1483,6 @@ static void sl_gc_verify_atexit(void) {
     fprintf(stderr, "slang-gc-verify minors=%llu missed=%llu\n",
             sl_gc_verify_minors, sl_gc_verify_missed);
 }
-
-/* Defined in sl_containers.c, which every program includes right after
- * this file; named here only so a report can say what held the object. */
-static void sl_gc_trace_chan(void *p, void (*mark)(void *));
-static void sl_gc_trace_bytes(void *p, void (*mark)(void *));
-static void sl_gc_trace_arr(void *p, void (*mark)(void *));
-static void sl_gc_trace_map(void *p, void (*mark)(void *));
-static void sl_gc_trace_join(void *p, void (*mark)(void *));
 
 static const char *sl_gc_verify_kind(const sl_gc_obj *h) {
     if (!h->trace) return "leaf";

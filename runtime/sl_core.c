@@ -525,16 +525,16 @@ static _Atomic unsigned long sl_rt_async_epoch = 0;
  * The rule this establishes, for anyone adding runtime code later:
  * ANY read of sl_rt_current_task (or of any other _Thread_local in
  * this runtime) that can execute with preempt_disable_depth == 0 must
- * go through sl_rt_cur(). Reads already inside a preempt bracket are
- * safe as they stand -- sl_preempt_handler cannot redirect a task with
- * a non-zero depth, so no migration can occur mid-read there -- which
- * is why sl_rt_error, sl_chan_send/recv, sl_task_park and friends keep
- * their direct reads: each one is already downstream of its own
- * sl_rt_preempt_disable(). The genuinely thread-affine values
- * (sl_rt_native_rsp, sl_grower_stack/sl_grower_rsp, sl_rt_gc_blocked,
- * sl_rt_gc_acked_cycle) are all read under a bracket for that same
- * reason, and unlike a sl_task* they would still be wrong after a
- * migration even if the address were resolved correctly.
+ * go through sl_rt_cur(). Inside a preempt bracket no migration can
+ * occur mid-read, but that alone does NOT make a bare read safe from
+ * code that runs on a task stack: the bracket stops the task moving,
+ * not the compiler reusing a thread pointer it loaded before the
+ * bracket began -- see SL_RT_TLS_ADDR_FN below. So task-stack code
+ * reads sl_rt_current_task through SL_RT_TLS_CUR() (inside a bracket)
+ * or sl_rt_cur() (outside one), and every other thread-local through
+ * its SL_RT_TLS_ADDR_FN accessor, inside a bracket. Bare reads are for
+ * code that only ever runs on a thread's own native stack: the worker
+ * loop, sl_worker_after_switch, thread registration.
  * sl_preempt_handler itself is a deliberate exception in the other
  * direction: it runs synchronously on the interrupted thread with the
  * interrupted code stopped, so no migration can occur underneath it
@@ -609,6 +609,44 @@ static sl_task *sl_rt_tls_read_current_task(void) {
  * what it was before this accessor existed. */
 #define SL_RT_TLS_CUR() (sl_rt_current_task)
 #endif
+
+/* Defines fn() returning the calling OS thread's address of the
+ * thread-local var, for task-stack code, which calls it inside a
+ * preempt bracket and uses the result before the bracket ends.
+ *
+ * On aarch64 a thread-local's address is the thread pointer (read from
+ * tpidr_el0 into an ordinary register) plus an offset, and GCC treats
+ * the thread pointer as constant for the whole function: at -O3 it
+ * reads it once and keeps it in a callee-saved register across every
+ * call, including the calls that switch the task to another worker.
+ * An inlined spawn entry read it on the first worker, before the loop
+ * that parks, and used it at the final switch-out after the task had
+ * moved: the task saved its finished context into the first worker's
+ * current task, which later resumed into it ("spawn task entry resumed
+ * after switching back", tests/sched_runnext on linux-arm64 CI). Clang
+ * on Darwin does the same with a thread-local's TLV address: a spawn
+ * loop resolved the task cache's address once, above the loop, and
+ * popped the first worker's cache after moving (tests/spawn_churn).
+ * Only Linux x86_64 is immune, addressing thread-locals through %fs on
+ * each access. A preempt bracket does not help, since the address was
+ * computed before the bracket. A noinline call reads it afresh on
+ * whichever thread makes the call, and the asm keeps the call from
+ * being treated as pure and merged with an earlier one. At -O0 every
+ * access re-reads it anyway, so the plain address is enough there. */
+#ifdef __OPTIMIZE__
+#define SL_RT_TLS_ADDR_FN(fn, type, var)                     \
+    __attribute__((noinline)) static type *fn(void) {        \
+        __asm__ __volatile__("" ::: "memory");               \
+        type *p = &(var);                                    \
+        __asm__ __volatile__("" : "+r"(p) :: "memory");      \
+        return p;                                            \
+    }
+#else
+#define SL_RT_TLS_ADDR_FN(fn, type, var) \
+    static inline type *fn(void) { return &(var); }
+#endif
+
+SL_RT_TLS_ADDR_FN(sl_rt_tls_runnext_idx, int, sl_rt_runnext_idx)
 
 static inline sl_task *sl_rt_cur(void) {
     for (;;) {
@@ -1152,7 +1190,9 @@ static void sl_rt_fail(const char *msg, const char *at, const char *detail) {
     if (!detail)
         detail = "";
     sl_rt_preempt_disable();
-    if (!sl_rt_current_task->is_main) {
+    sl_task *t = SL_RT_TLS_CUR(); /* not a bare read: snprintf ran
+        above at depth 0 (SL_RT_TLS_ADDR_FN's comment) */
+    if (!t->is_main) {
         /* Under `slangc test` a joined task's panic is the test's failure
            report, and the runner prints it; saying it here too would print
            every failure twice. Only when something is joining: a
@@ -1160,12 +1200,12 @@ static void sl_rt_fail(const char *msg, const char *at, const char *detail) {
         static int quiet = -1;
         if (quiet < 0)
             quiet = getenv("SLANG_TEST_RUNNER") ? 1 : 0;
-        if (!(quiet && sl_rt_current_task->join))
+        if (!(quiet && t->join))
             fprintf(stderr, "slang: task panicked: %s%s%s\n", loc, sep, detail);
-        if (sl_rt_current_task->join)
-            sl_join_fail(sl_rt_current_task->join, loc);
+        if (t->join)
+            sl_join_fail(t->join, loc);
         sl_rt_active_spawns_dec();
-        sl_ctx_switch(&sl_rt_current_task->rsp, SL_RT_TLS_NATIVE_RSP());
+        sl_ctx_switch(&t->rsp, SL_RT_TLS_NATIVE_RSP());
         fprintf(stderr,
                 "slang: internal error: task resumed after panic "
                 "switch-back\n");
@@ -1182,6 +1222,45 @@ static void sl_rt_error_at(const char *msg, long long a, long long b,
     snprintf(detail, sizeof(detail), "(index %lld, length %lld)", a, b);
     sl_rt_fail(msg, at, detail);
 }
+
+/* m[k] with k not in m. Names the key when it is text or a number (a
+ * long one cut short: the message is for a person, not a copy of the
+ * data) and says how to avoid the panic. The bounds-check wording this
+ * replaced ended every such message with "(index 0, length 0)". */
+__attribute__((noreturn))
+static void sl_rt_map_miss_detail(const char *key, const char *at) {
+    char detail[200];
+    if (key)
+        snprintf(detail, sizeof(detail),
+                 "(key %s; check with has(m, k) first)", key);
+    else
+        snprintf(detail, sizeof(detail), "(check with has(m, k) first)");
+    sl_rt_fail("map key not found", at, detail);
+}
+
+__attribute__((noreturn, unused))
+static void sl_rt_map_miss_str(const char *k, const char *at) {
+    char key[64];
+    size_t n = k ? strlen(k) : 0;
+    if (n > 40)
+        snprintf(key, sizeof(key), "\"%.40s...\"", k);
+    else
+        snprintf(key, sizeof(key), "\"%s\"", k ? k : "");
+    sl_rt_map_miss_detail(key, at);
+}
+
+__attribute__((noreturn, unused))
+static void sl_rt_map_miss_int(long long k, int is_unsigned, const char *at) {
+    char key[32];
+    if (is_unsigned)
+        snprintf(key, sizeof(key), "%llu", (unsigned long long)k);
+    else
+        snprintf(key, sizeof(key), "%lld", k);
+    sl_rt_map_miss_detail(key, at);
+}
+
+__attribute__((noreturn, unused))
+static void sl_rt_map_miss(const char *at) { sl_rt_map_miss_detail(NULL, at); }
 
 /* panic("...") and a failed assert(cond, "..."). Noreturn: liveness treats
  * a panic call like exit(), so `guard let x = r else { panic("..."); }`

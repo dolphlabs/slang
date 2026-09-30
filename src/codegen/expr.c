@@ -1031,8 +1031,8 @@ char *gen_call(CG *cg, Expr *e) {
             if (!sig)
                 sig = generic_call_sig(cg, pkg, right, e);
             if (!sig)
-                cg_error(e->line, "package '%s' has no function '%s'", pkg,
-                         right);
+                cg_error(e->line, "package '%s' has no function '%s'%s", pkg,
+                         right, suggest_function(cg, pkg, right));
             if (!sig->is_pub)
                 cg_error(e->line,
                          "function '%s' is not exported from package '%s'",
@@ -1221,8 +1221,8 @@ char *gen_call(CG *cg, Expr *e) {
             }
             sig = method_find(cg, sd, right, e->line);
             if (!sig)
-                cg_error(e->line, "type '%s' has no method '%s'",
-                         sd->canonical, right);
+                cg_error(e->line, "type '%s' has no method '%s'%s",
+                         sd->canonical, right, suggest_method(cg, sd, right));
             if (!sig->is_pub && strcmp(sd->pkg, cg->cur_pkg))
                 cg_error(e->line,
                          "method '%s' is not exported from package '%s'",
@@ -1252,7 +1252,8 @@ char *gen_call(CG *cg, Expr *e) {
             if (!sig)
                 sig = generic_call_sig(cg, cg->cur_pkg, name, e);
             if (!sig)
-                cg_error(e->line, "call to undefined function '%s'", name);
+                cg_error(e->line, "call to undefined function '%s'%s", name,
+                         suggest_function(cg, NULL, name));
         }
     }
 have_sig:;
@@ -1587,11 +1588,19 @@ char *gen_index(CG *cg, Expr *e) {
         cg->ambient_count = ambient_mark;
         int id = cg->tmp_id++;
         char *at = panic_at(cg, e->line);
+        /* the miss names the key when it is text or an integer */
+        char *miss;
+        if (!strcmp(k, "str"))
+            miss = xasprintf("sl_rt_map_miss_str(_sl_k%d, %s)", id, at);
+        else if (is_int(k))
+            miss = xasprintf("sl_rt_map_miss_int((long long)_sl_k%d, %d, %s)",
+                             id, !is_signed_int(k), at);
+        else
+            miss = xasprintf("sl_rt_map_miss(%s)", at);
         return xasprintf(
             "({ %s%s _sl_k%d = %s; void *_sl_p%d = sl_map_get(%s, "
-            "&_sl_k%d); if (!_sl_p%d) sl_rt_error_at(\"map key not found\", "
-            "0, 0, %s); *(%s *)(void *)_sl_p%d; })",
-            prelude.data, kc, id, ix, id, b, id, id, at, vc, id);
+            "&_sl_k%d); if (!_sl_p%d) %s; *(%s *)(void *)_sl_p%d; })",
+            prelude.data, kc, id, ix, id, b, id, id, miss, vc, id);
     }
     char *i = gen_expr(cg, e->as.index.index);
     i = sequence_one(cg, seq_id, 1, map_type("int"), "int", i,

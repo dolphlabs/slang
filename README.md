@@ -22,9 +22,11 @@ these README sections, the compiler's own signature tables, and the
 See [`www/README.md`](www/README.md) for the documentation convention
 every slang package follows.
 
-Reading with an agent? Every page has a Markdown twin at the same path,
-`/llms.txt` indexes the site, `/llms-full.txt` is the whole thing as one
-document, and `/api.json` is the machine-readable API index.
+Reading with an agent? Start with `/llms-small.txt`: the whole language
+on one page, about 3k tokens, with every example compiled by the test
+suite. Every page has a Markdown twin at the same path, `/llms.txt`
+indexes the site, `/llms-full.txt` is the whole thing as one document,
+and `/api.json` is the machine-readable API index.
 
 ## Quick start
 
@@ -86,6 +88,35 @@ compiler already owns both formats: it parses `slang.project` and writes
 `slang.lock`. A separate tool would have to reimplement a grammar it
 does not control.
 
+Look up an API without leaving the terminal:
+
+```sh
+slangc doc                     # every package this directory can import
+slangc doc http                # its exported items, one line each
+slangc doc builder.Str         # one item: its comment, and a struct's fields and methods
+slangc doc httpc client_post   # the same, as two words
+```
+
+```
+$ slangc doc builder.Str
+gc struct Str {
+    parts: [str],
+    size: int,
+}
+
+methods:
+  fn write(self: Str, s: str) -> Str
+      // Appends, and returns the builder so writes chain.
+  ...
+```
+
+Packages resolve exactly as `import` does from the current directory: a
+local directory, a compiler-provided package, the standard library, then a
+`slang.project` pin. An item's documentation is the run of `//` comments
+directly above its `pub` declaration, which is also what the documentation
+site shows. It exists so an agent can ask for the one signature it needs
+instead of reading a page or the package's source.
+
 Compile a slang program:
 
 ```sh
@@ -101,7 +132,21 @@ Useful flags:
 | `--emit-c`  | Only write the generated C file (no compilation)    |
 | `--keep-c`  | Keep the generated C file after compiling           |
 | `--run`     | Compile, then run it; exit with the program's own status |
+| `--json`    | Compile errors as JSON lines on stderr (see below)  |
 | `get`       | Fetch `slang.project` pins and write `slang.lock`   |
+
+**Compiler errors** name the file and line, the way gcc, Go and rustc do,
+and say what to write instead where the compiler can tell:
+
+```
+geometry/shapes.sl:4: error: struct 'geometry.Point' has no field 'yy' (did you mean 'y'?)
+main.sl:14: error: undefined variable 'summ' (did you mean 'sum'?)
+```
+
+One compile reports the first error in every function, not just the
+program's first, so three mistakes cost one round rather than three. With
+`--json`, each error is one line of JSON on stderr for an editor or an
+agent: `{"file":"main.sl","line":14,"severity":"error","message":"..."}`.
 
 Want to see everything at once instead of one feature at a time? See
 **[`demo/`](demo/)** — a full server (dice game, guestbook wall, live
@@ -472,7 +517,11 @@ for k, v in scores {           // iteration in insertion order
 Keys may be any integer type, `str`, `bool`, or `enum`; values may be any type,
 including structs and lists. Backed by an open-addressing hash table
 (FNV-1a) that keeps entries in insertion order and grows automatically
-at 75% load.
+at 75% load. `del` moves the entries after the removed one back along
+their probe run (backward-shift deletion, no tombstones), so every other
+key stays reachable and the table never fills with dead slots. A key
+deleted and inserted again goes to the end of the iteration order. `del`
+takes time linear in the map's size, since it keeps that order.
 
 `println` only prints scalars — a list or map passed to it is a compile
 error. `inspect(x)` renders any value as a `str` in the style of a
@@ -633,8 +682,7 @@ unbounded type parameters usable without interfaces, and it is why an error
 in a method body names the instance and the line that asked for it:
 
 ```
-error at line 5: unsupported operand types for '*': str and int
-  (in main.Box[str].doubled, requested at line 9)
+main.sl:5: error: unsupported operand types for '*': str and int (in main.Box[str].doubled, requested at line 9)
 ```
 
 Not yet supported, and each says so when used: lifetime parameters on a
@@ -813,8 +861,10 @@ fn parse_small(s: str) -> result[i32, str] {
 }
 
 // guard let unwraps the happy path and binds it for the rest of the
-// block; the else branch must exit (return, or exit()) since the
-// bound name has no value to fall back to. `else let e = err_of(r)`
+// block. The else branch must leave the scope -- return, break,
+// continue, exit(..), panic(..), or a call to a function that never
+// returns -- since the bound name has no value to fall back to; the
+// compiler rejects one that can fall through. `else let e = err_of(r)`
 // binds the error value for `result[T, E]` so failures stay visible.
 fn safe_div(n: int) -> int {
     guard let v = div10(n) else {
@@ -830,6 +880,20 @@ fn load_config(path: str) -> str {
         return "";
     }
     return body;
+}
+
+// if let handles both outcomes and carries on: each binding lives only
+// in its own branch, and either branch may fall through
+if let v = div10(40) {
+    println(v);                        // 4
+} else {
+    println("not a multiple of ten");
+}
+let pr = parse_small("big");
+if let n = pr {
+    println(n);
+} else let e = err_of(pr) {
+    println("rejected: " + e);         // rejected: value too large
 }
 
 // ?? recovers from none / err with a fallback value
@@ -852,6 +916,13 @@ println(fault_code(f));                // 0
 let nothing: opt[str] = none;
 let bad: result[str, str] = err("boom");
 ```
+
+A guard's else may end in a helper of your own, such as a `die(msg)` that
+prints and calls `exit`: the compiler works out that a function never
+returns when it has no `return` and every path ends in `exit`, `panic`, or
+another such function, across packages. It only counts a plain call by
+name, so a function value or method is never assumed to diverge; end
+that else with an explicit `return` instead.
 
 Panics (out-of-bounds index, division by zero, `err_of` on ok, missing
 map key) carry `pkg.func:line`: `list index out of bounds at
@@ -3134,13 +3205,20 @@ fn test_clamp() {
 slangc test                 # the package in the current directory
 slangc test path/to/pkg     # another one
 slangc test --run clamp     # only tests whose name contains "clamp"
+slangc test -v              # a line for every passing test too
 ```
 
+A passing test prints nothing; a failure prints its message and location;
+the last line counts them. A run where everything passes is one line:
+
 ```
-ok   test_add (52us)
 FAIL test_clamp (30us)
      got 15 at calc.test_clamp:7
 FAIL: 1 of 2 failed (190us)
+```
+
+```
+ok: 2 passed (190us)
 ```
 
 - **Each test runs in its own task**, so a failing test is reported with
@@ -3470,9 +3548,11 @@ What this means in practice:
   the nursery, not the heap: about 0.8ms per minor whether a program
   keeps 20k or a million long-lived objects. Majors sweep everything and
   promote what they keep.
-- Filling one very large list or map while allocating is the exception:
-  every write to it remembers the whole container, so each minor during
-  the fill traces all of it again.
+- A list or map written since the last minor is traced from the first
+  position written, not from the start, so filling a million-entry list
+  or map costs each minor only what was added since the previous one.
+  Updating an existing map key is the exception: its position is not
+  recorded, so the next minor traces that whole map.
 - `SLANG_GC_STAT=1` prints collection counts and pause times at exit
   (`minor_pause_ns_total` for the minors).
   `SLANG_GC_THRESHOLD_KB=n` collects every n KB instead, with no pacing:

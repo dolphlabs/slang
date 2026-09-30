@@ -69,7 +69,11 @@ for k, v in scores {           // iteration in insertion order
 Keys may be any integer type, `str`, `bool`, or `enum`; values may be any type,
 including structs and lists. Backed by an open-addressing hash table
 (FNV-1a) that keeps entries in insertion order and grows automatically
-at 75% load.
+at 75% load. `del` moves the entries after the removed one back along
+their probe run (backward-shift deletion, no tombstones), so every other
+key stays reachable and the table never fills with dead slots. A key
+deleted and inserted again goes to the end of the iteration order. `del`
+takes time linear in the map's size, since it keeps that order.
 
 `println` only prints scalars — a list or map passed to it is a compile
 error. `inspect(x)` renders any value as a `str` in the style of a
@@ -230,8 +234,7 @@ unbounded type parameters usable without interfaces, and it is why an error
 in a method body names the instance and the line that asked for it:
 
 ```
-error at line 5: unsupported operand types for '*': str and int
-  (in main.Box[str].doubled, requested at line 9)
+main.sl:5: error: unsupported operand types for '*': str and int (in main.Box[str].doubled, requested at line 9)
 ```
 
 Not yet supported, and each says so when used: lifetime parameters on a

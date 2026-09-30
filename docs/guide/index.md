@@ -365,7 +365,11 @@ for k, v in scores {           // iteration in insertion order
 Keys may be any integer type, `str`, `bool`, or `enum`; values may be any type,
 including structs and lists. Backed by an open-addressing hash table
 (FNV-1a) that keeps entries in insertion order and grows automatically
-at 75% load.
+at 75% load. `del` moves the entries after the removed one back along
+their probe run (backward-shift deletion, no tombstones), so every other
+key stays reachable and the table never fills with dead slots. A key
+deleted and inserted again goes to the end of the iteration order. `del`
+takes time linear in the map's size, since it keeps that order.
 
 `println` only prints scalars — a list or map passed to it is a compile
 error. `inspect(x)` renders any value as a `str` in the style of a
@@ -526,8 +530,7 @@ unbounded type parameters usable without interfaces, and it is why an error
 in a method body names the instance and the line that asked for it:
 
 ```
-error at line 5: unsupported operand types for '*': str and int
-  (in main.Box[str].doubled, requested at line 9)
+main.sl:5: error: unsupported operand types for '*': str and int (in main.Box[str].doubled, requested at line 9)
 ```
 
 Not yet supported, and each says so when used: lifetime parameters on a
@@ -706,8 +709,10 @@ fn parse_small(s: str) -> result[i32, str] {
 }
 
 // guard let unwraps the happy path and binds it for the rest of the
-// block; the else branch must exit (return, or exit()) since the
-// bound name has no value to fall back to. `else let e = err_of(r)`
+// block. The else branch must leave the scope -- return, break,
+// continue, exit(..), panic(..), or a call to a function that never
+// returns -- since the bound name has no value to fall back to; the
+// compiler rejects one that can fall through. `else let e = err_of(r)`
 // binds the error value for `result[T, E]` so failures stay visible.
 fn safe_div(n: int) -> int {
     guard let v = div10(n) else {
@@ -723,6 +728,20 @@ fn load_config(path: str) -> str {
         return "";
     }
     return body;
+}
+
+// if let handles both outcomes and carries on: each binding lives only
+// in its own branch, and either branch may fall through
+if let v = div10(40) {
+    println(v);                        // 4
+} else {
+    println("not a multiple of ten");
+}
+let pr = parse_small("big");
+if let n = pr {
+    println(n);
+} else let e = err_of(pr) {
+    println("rejected: " + e);         // rejected: value too large
 }
 
 // ?? recovers from none / err with a fallback value
@@ -745,6 +764,13 @@ println(fault_code(f));                // 0
 let nothing: opt[str] = none;
 let bad: result[str, str] = err("boom");
 ```
+
+A guard's else may end in a helper of your own, such as a `die(msg)` that
+prints and calls `exit`: the compiler works out that a function never
+returns when it has no `return` and every path ends in `exit`, `panic`, or
+another such function, across packages. It only counts a plain call by
+name, so a function value or method is never assumed to diverge; end
+that else with an explicit `return` instead.
 
 Panics (out-of-bounds index, division by zero, `err_of` on ok, missing
 map key) carry `pkg.func:line`: `list index out of bounds at
@@ -1104,7 +1130,11 @@ for k, v in scores {           // iteration in insertion order
 Keys may be any integer type, `str`, `bool`, or `enum`; values may be any type,
 including structs and lists. Backed by an open-addressing hash table
 (FNV-1a) that keeps entries in insertion order and grows automatically
-at 75% load.
+at 75% load. `del` moves the entries after the removed one back along
+their probe run (backward-shift deletion, no tombstones), so every other
+key stays reachable and the table never fills with dead slots. A key
+deleted and inserted again goes to the end of the iteration order. `del`
+takes time linear in the map's size, since it keeps that order.
 
 `println` only prints scalars — a list or map passed to it is a compile
 error. `inspect(x)` renders any value as a `str` in the style of a
@@ -1265,8 +1295,7 @@ unbounded type parameters usable without interfaces, and it is why an error
 in a method body names the instance and the line that asked for it:
 
 ```
-error at line 5: unsupported operand types for '*': str and int
-  (in main.Box[str].doubled, requested at line 9)
+main.sl:5: error: unsupported operand types for '*': str and int (in main.Box[str].doubled, requested at line 9)
 ```
 
 Not yet supported, and each says so when used: lifetime parameters on a
@@ -1445,8 +1474,10 @@ fn parse_small(s: str) -> result[i32, str] {
 }
 
 // guard let unwraps the happy path and binds it for the rest of the
-// block; the else branch must exit (return, or exit()) since the
-// bound name has no value to fall back to. `else let e = err_of(r)`
+// block. The else branch must leave the scope -- return, break,
+// continue, exit(..), panic(..), or a call to a function that never
+// returns -- since the bound name has no value to fall back to; the
+// compiler rejects one that can fall through. `else let e = err_of(r)`
 // binds the error value for `result[T, E]` so failures stay visible.
 fn safe_div(n: int) -> int {
     guard let v = div10(n) else {
@@ -1462,6 +1493,20 @@ fn load_config(path: str) -> str {
         return "";
     }
     return body;
+}
+
+// if let handles both outcomes and carries on: each binding lives only
+// in its own branch, and either branch may fall through
+if let v = div10(40) {
+    println(v);                        // 4
+} else {
+    println("not a multiple of ten");
+}
+let pr = parse_small("big");
+if let n = pr {
+    println(n);
+} else let e = err_of(pr) {
+    println("rejected: " + e);         // rejected: value too large
 }
 
 // ?? recovers from none / err with a fallback value
@@ -1484,6 +1529,13 @@ println(fault_code(f));                // 0
 let nothing: opt[str] = none;
 let bad: result[str, str] = err("boom");
 ```
+
+A guard's else may end in a helper of your own, such as a `die(msg)` that
+prints and calls `exit`: the compiler works out that a function never
+returns when it has no `return` and every path ends in `exit`, `panic`, or
+another such function, across packages. It only counts a plain call by
+name, so a function value or method is never assumed to diverge; end
+that else with an explicit `return` instead.
 
 Panics (out-of-bounds index, division by zero, `err_of` on ok, missing
 map key) carry `pkg.func:line`: `list index out of bounds at

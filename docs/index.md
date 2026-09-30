@@ -64,6 +64,35 @@ compiler already owns both formats: it parses `slang.project` and writes
 `slang.lock`. A separate tool would have to reimplement a grammar it
 does not control.
 
+Look up an API without leaving the terminal:
+
+```sh
+slangc doc                     # every package this directory can import
+slangc doc http                # its exported items, one line each
+slangc doc builder.Str         # one item: its comment, and a struct's fields and methods
+slangc doc httpc client_post   # the same, as two words
+```
+
+```
+$ slangc doc builder.Str
+gc struct Str {
+    parts: [str],
+    size: int,
+}
+
+methods:
+  fn write(self: Str, s: str) -> Str
+      // Appends, and returns the builder so writes chain.
+  ...
+```
+
+Packages resolve exactly as `import` does from the current directory: a
+local directory, a compiler-provided package, the standard library, then a
+`slang.project` pin. An item's documentation is the run of `//` comments
+directly above its `pub` declaration, which is also what the documentation
+site shows. It exists so an agent can ask for the one signature it needs
+instead of reading a page or the package's source.
+
 Compile a slang program:
 
 ```sh
@@ -79,7 +108,21 @@ Useful flags:
 | `--emit-c`  | Only write the generated C file (no compilation)    |
 | `--keep-c`  | Keep the generated C file after compiling           |
 | `--run`     | Compile, then run it; exit with the program's own status |
+| `--json`    | Compile errors as JSON lines on stderr (see below)  |
 | `get`       | Fetch `slang.project` pins and write `slang.lock`   |
+
+**Compiler errors** name the file and line, the way gcc, Go and rustc do,
+and say what to write instead where the compiler can tell:
+
+```
+geometry/shapes.sl:4: error: struct 'geometry.Point' has no field 'yy' (did you mean 'y'?)
+main.sl:14: error: undefined variable 'summ' (did you mean 'sum'?)
+```
+
+One compile reports the first error in every function, not just the
+program's first, so three mistakes cost one round rather than three. With
+`--json`, each error is one line of JSON on stderr for an editor or an
+agent: `{"file":"main.sl","line":14,"severity":"error","message":"..."}`.
 
 Want to see everything at once instead of one feature at a time? See
 **[`demo/`](demo/)** — a full server (dice game, guestbook wall, live

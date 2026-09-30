@@ -38,9 +38,9 @@ println(hub[1]);                                   // 0
 
 // errors name the offset
 let hbad = encoding.hex_decode("00zz");
-guard let _h1 = hbad else let e = err_of(hbad) { println(e); }
+if let _h1 = hbad { } else let e = err_of(hbad) { println(e); }
 let hodd = encoding.hex_decode("abc");
-guard let _h2 = hodd else let e = err_of(hodd) { println(e); }
+if let _h2 = hodd { } else let e = err_of(hodd) { println(e); }
 
 // The gap this package closes: a digest can now be PRINTED.
 // tests/crypto asserts on decimal byte values because it had to.
@@ -74,7 +74,7 @@ println(encoding.base64_encode(b"aladdin:opensesame"));
 
 // truncated input fails loudly rather than comparing unequal later
 let btrunc = encoding.base64_decode("Zm9vYmF");
-guard let _b3 = btrunc else let e = err_of(btrunc) { println(e); }
+if let _b3 = btrunc { } else let e = err_of(btrunc) { println(e); }
 
 // ---- base64url -------------------------------------------------------
 // -_ alphabet, padding omitted. This is what a JWT segment is.
@@ -96,7 +96,7 @@ println(encoding.hex_encode(ubpb));                // fbff
 
 // the alphabets are NOT interchangeable, and the error says so
 let xa = encoding.base64_decode("-_8=");
-guard let _x1 = xa else let e = err_of(xa) { println(e); }
+if let _x1 = xa { } else let e = err_of(xa) { println(e); }
 
 // ---- percent-encoding ------------------------------------------------
 println(encoding.url_encode("hello world"));       // hello%20world
@@ -125,13 +125,13 @@ println(rs);
 
 // malformed escapes are refused, with the offset
 let ubad = encoding.url_decode("a%zz");
-guard let _u1 = ubad else let e = err_of(ubad) { println(e); }
+if let _u1 = ubad { } else let e = err_of(ubad) { println(e); }
 let utrunc = encoding.url_decode("a%4");
-guard let _u2 = utrunc else let e = err_of(utrunc) { println(e); }
+if let _u2 = utrunc { } else let e = err_of(utrunc) { println(e); }
 
 // %00 cannot live in a str, so it is an error rather than a truncation
 let unul = encoding.url_decode("a%00b");
-guard let _u3 = unul else let e = err_of(unul) { println(e); }
+if let _u3 = unul { } else let e = err_of(unul) { println(e); }
 
 // ---- query strings ---------------------------------------------------
 let q = "/search?q=hello+world&page=2&tag=a%26b&debug";
@@ -153,7 +153,7 @@ println("[" + dv + "]");                           // []
 // absent is none -- opt, not result, because a missing parameter is
 // absent data rather than bad data
 let miss: opt[str] = encoding.query_get(q, "nope");
-guard let _m = miss else {
+if let _m = miss { } else {
     println("absent key is none");
 }
 
@@ -182,7 +182,7 @@ println(ek);
 
 // a fragment is not part of the query
 let frag: opt[str] = encoding.query_get("a=1#b=2", "b");
-guard let _f = frag else {
+if let _f = frag { } else {
     println("fragment excluded");
 }
 

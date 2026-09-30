@@ -14,6 +14,7 @@
  */
 
 #include "common.h"
+#include "diag.h"
 #include "loader.h"
 #include "lexer.h"
 #include "parser.h"
@@ -34,12 +35,16 @@
 #define SLANG_VERSION "0.2.0"
 #endif
 
+int cmd_doc(int argc, char **argv); /* doc.c */
+
 static void print_usage(void) {
     fputs("usage: slangc <file.sl> [-o <name>] [--emit-c] [--keep-c] [--run] "
-          "[--dump-liveness] [--dump-mir]\n"
+          "[--json] [--dump-liveness] [--dump-mir]\n"
+          "       --json: compile errors as JSON lines on stderr, one per error\n"
           "       slangc new <name>|.        scaffold a project here or in <name>\n"
           "       slangc get [file.sl|dir]   resolve deps, write slang.lock\n"
-          "       slangc test [dir] [--run substr] [--keep]   run test_* functions in *_test.sl\n"
+          "       slangc test [dir] [--run substr] [-v] [--keep]   run test_* functions in *_test.sl\n"
+          "       slangc doc [<pkg>[.<name>]]   a package's API: signatures and doc comments\n"
           "       slangc --version",
           stderr);
     fputc(10, stderr);
@@ -404,9 +409,12 @@ static int cmd_test(int argc, char **argv) {
     const char *target = ".";
     const char *filter = NULL;
     int keep = 0;
+    int verbose = 0;
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--keep")) {
             keep = 1;   /* keep the generated runner, and say where */
+        } else if (!strcmp(argv[i], "-v")) {
+            verbose = 1; /* a line for every passing test, too */
         } else if (!strcmp(argv[i], "--run")) {
             if (i + 1 >= argc) {
                 fputs("slang: --run needs a substring of the test names to run\n",
@@ -542,13 +550,19 @@ static int cmd_test(int argc, char **argv) {
         "    }\n"
         "    return to_str(us / 1000) + \"ms\";\n"
         "}\n\n"
-        "fn sltest_report(name: str, r: result[bool, str], d: duration) -> int {\n"
+        /* A passing test is silent unless -v: a run of 300 tests that all
+           pass is one line, not 301, which is what a person skims and what
+           an agent pays for in tokens. A failure always prints in full. */
+        "fn sltest_report(name: str, r: result[bool, str], d: duration,\n"
+        "                 verbose: bool) -> int {\n"
         "    guard let _passed = r else let e = err_of(r) {\n"
         "        println(\"FAIL \" + name + \" (\" + sltest_ms(d) + \")\");\n"
         "        println(\"     \" + e);\n"
         "        return 1;\n"
         "    }\n"
-        "    println(\"ok   \" + name + \" (\" + sltest_ms(d) + \")\");\n"
+        "    if verbose {\n"
+        "        println(\"ok   \" + name + \" (\" + sltest_ms(d) + \")\");\n"
+        "    }\n"
         "    return 0;\n"
         "}\n\n");
     for (int i = 0; i < ntests; i++)
@@ -561,8 +575,8 @@ static int cmd_test(int argc, char **argv) {
         sb_append(&r, xasprintf(
             "let sltest_t%d = time.mono();\n"
             "sltest_failed = sltest_failed + sltest_report(\"%s\", "
-            "join_wait(spawn sltest_run_%d()), time.mono() - sltest_t%d);\n",
-            i, tests[i], i, i));
+            "join_wait(spawn sltest_run_%d()), time.mono() - sltest_t%d, %s);\n",
+            i, tests[i], i, i, verbose ? "true" : "false"));
     sb_append(&r, xasprintf(
         "let sltest_took = sltest_ms(time.mono() - sltest_all);\n"
         "if sltest_failed > 0 {\n"
@@ -1007,6 +1021,10 @@ int main(int argc, char **argv) {
         sl_compiler_argv0 = argv[0];
         return cmd_new(argc >= 3 ? argv[2] : NULL);
     }
+    if (argc >= 2 && !strcmp(argv[1], "doc")) {
+        sl_compiler_argv0 = argv[0];
+        return cmd_doc(argc, argv);
+    }
     if (argc >= 2 && (!strcmp(argv[1], "--version") ||
                       !strcmp(argv[1], "-V"))) {
         fputs("slangc " SLANG_VERSION "\n", stdout);
@@ -1027,6 +1045,8 @@ int main(int argc, char **argv) {
             keep_c = 1;
         } else if (!strcmp(argv[i], "--run")) {
             run = 1;
+        } else if (!strcmp(argv[i], "--json")) {
+            diag_json = 1;
         } else if (!strcmp(argv[i], "--dump-liveness")) {
             want_liveness_dump = 1;
         } else if (!strcmp(argv[i], "--dump-mir")) {

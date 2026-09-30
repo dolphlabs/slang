@@ -302,16 +302,36 @@ dotted directories (#235). Write-ups in `todo.md`.
   under the verifier when reverted; the suite runs 14 GC-heavy tests under
   it and requires `missed=0`.
 
-## 7b. Bulk-filling a very large container re-traces it on every minor
+## 7b. Bulk-filling a very large container re-traced it on every minor
 
-- [ ] The write barrier remembers a whole object, so while a program fills
-  one very large list or map, every minor traces all of it again: loading
-  1M entries costs about 32 ms per minor (19 s of minors to build it,
-  against 0.8 ms per minor once it is built). Card marking -- remembering
-  the range of a container that changed, not the container -- would make
-  a minor pay for the new entries only. Needs a per-container dirty range
-  and a tracer that can walk just that range; lists first (push appends),
-  maps after.
+- [x] **Done (2026-09-30).** Lists and maps carry a frontier (`gc_clean`,
+  in padding the structs already had, so no memory): a minor traces a
+  remembered container only from the first position written since the
+  previous minor. Appends, `a[i] = v`, new map keys and deletes lower it
+  to the position; stores whose position is unknown reset it to 0, the
+  old whole-container trace. A long-lived cache of 1M `Entry` structs in a
+  map and a list:
+
+  | | before | after |
+  |---|---:|---:|
+  | building it | 20.5 s, 29.8 ms/minor (max 102) | 3.4 s, 0.77 ms/minor (max 6) |
+  | building + 3M iterations | 24.0 s, 17.3 s of minors | 7.9 s, 1.2 s of minors |
+
+  Same footprint. Test: `tests/gc_container_frontier` (appends, pop then
+  push, `a[i] = v` below the frontier, map inserts, updates and deletes),
+  run under `SLANG_GC_VERIFY_MINOR`. Testing it found the map `del` bug
+  (#252).
+
+## 7d. Updating existing map keys re-traces the whole map each minor
+
+- [ ] A map update's position in the order array is not recorded, so it
+  resets the map's frontier to 0: a 200k-entry map whose existing keys are
+  rewritten with fresh values costs about 10 ms per minor (no worse than
+  before #7b, but not the nursery's worth). One way: record the young
+  value itself in the task's remembered set instead of the map (validated
+  at the minor against the young table, promoted there), with a per-cycle
+  cap that falls back to the whole map. Measure against a cache-refresh
+  workload before choosing.
 
 ## 7c. macOS keeps freed heap pages that Linux gives back
 
@@ -415,6 +435,52 @@ dotted directories (#235). Write-ups in `todo.md`.
 - [ ] A line-editing helper built on `io.read_key`: cursor movement, history,
   a prompt that redraws. Not scoped. Candidate only; worth deciding whether
   it belongs in `stdlib` or in a program that wants it before writing it.
+
+## 13. The cheapest language for an agent to build with
+
+An agent's token bill is mostly not the code it writes. It is reading
+(learning an unfamiliar language every session), retries (each failed
+compile or test is another round), and tool output. slang cannot win on
+training data, so it wins on those three. The zokor half (agent guide,
+`zokor new`, `zokor gen resource`, OpenAPI) is in zokor's `todo.md`.
+
+- [x] `llms-small.txt`: the language on one page, about 3k tokens, plus a
+  package index generated from `api.json`'s data. Hand-written in
+  `www/llms-small.md`; `tests/run_tests.sh` compiles and runs every example.
+- [x] **Compiler errors built for agents.** `file.sl:12: error: ...` (the
+  file was never named, and a package spans files), the first error of
+  every function in one compile, "did you mean" for names, fields, methods
+  and functions, and `--json`. Not done: columns (the AST carries lines
+  only), and more than one error per function (a function's later errors
+  are too often follow-on noise to be worth the risk).
+- [x] **`slangc doc <pkg>[.<name>]`**: signatures and doc comments for the
+  standard library, native, pinned and local packages, resolved as `import`
+  resolves them. Reads source the way `www/build.py` does (fixed alongside:
+  the site cut multi-line signatures at their first line and printed three
+  native parameter kinds raw).
+- [x] **One line when everything passes.** `slangc test` prints only
+  failures and the count; `-v` brings back a line per passing test.
+- [x] **Write the syntax rule down**: CONTRIBUTING, "If you change the
+  language". The benchmark below measures retries per construct.
+- [ ] **Measure it.** The harness is `bench/agent`: five tasks (CRUD, auth
+  middleware, a background worker, rate limiting, uploads) as stack-neutral
+  HTTP specs with hidden black-box acceptance tests, run in slang + zokor,
+  Go + Fiber and TypeScript + NestJS, reporting tokens, turns and cost per
+  run with medians. Its tests are checked against reference servers
+  (`run.py selftest`). Not run yet: needs a budget, the agent and model to
+  use, and zokor's own guide (`docs/llms-small.txt` in zokor). CRUD is
+  in-memory, not Postgres, so the harness needs no database.
+- Found while checking the guide's claims:
+  - [x] **A `guard` whose `else` falls through compiles** -- now rejected,
+    with the fix in the message. Functions that never return (`die(..)`
+    helpers) are inferred, so ending an else with one still works, and
+    `if let v = x { } else let e = err_of(x) { }` is the form for handling a
+    failure and carrying on, which the guard had been misused for (about 30
+    test sites and one in `stdlib/pg`).
+  - [ ] `let xs: [opt[int]] = [some(1), none];` fails with "cannot infer the
+    type of 'none'": list elements do not take the annotation's type.
+  - [x] A missing map key reported `(index 0, length 0)`; it now names the
+    key and says to check with `has(m, k)` first.
 
 ## Notes
 

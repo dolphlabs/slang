@@ -99,7 +99,7 @@ header()'s two real call sites (Ctx.header in zokor, the WebSocket handshake) ar
 
 Every header a request carries, as a map -- built fresh on each call by scanning raw_headers once. Nothing in either repo iterates a request's headers today (confirmed by grep), which is what makes "built on demand" the right default over a cached field: a cache nothing reads is pure cost. Walks the same line shape scan_headers does, for a different reason (that one validates and extracts two offsets; this one assumes an already-valid block and extracts every name and value) -- kept as two functions rather than one parameterized by what to do with each line, which would obscure both to save repeating six lines.
 
-### `fn request(method: str, path: str, version: str,`
+### `fn request(method: str, path: str, version: str, headers: map[str]str, body: bytes) -> result[Request, str]`
 
 Builds a Request from a map the way the eager parser builds one off the wire: a header name or value may not contain CR or LF (an application- or test-constructed header gets no such check for free the way one read off the wire does -- this is where that rule lives for this path), and a name may not contain the colon that separates it from its value on the wire. Both are a real hazard, not a theoretical one, now that raw_headers is what a request's headers actually are: a value containing "\r\n" would be concatenated straight into the block below as a SECOND header line -- injection -- if it weren't rejected first.
 
@@ -135,7 +135,7 @@ The method bytes as a str: the ONE framing str frame dispatch needs (to map to t
 
 The full Request for a frame, built ONCE for the route that runs: method/path/version strs, raw_headers slice, body slice. serve() callers already hold one; serve_frame builds one -- never both. Takes explicit offsets so Frame and WireFrame share it.
 
-### `fn frame_request_at(raw: bytes, line_end: int, head_end: int,`
+### `fn frame_request_at(raw: bytes, line_end: int, head_end: int, body: bytes) -> Request`
 
 ### `fn frame_version(f: Frame) -> int`
 
@@ -183,7 +183,7 @@ Whether the connection should close after answering `r`: HTTP/1.1 stays open unl
 
 The int-flag twin, for callers holding a version str rather than a Head (read_frame's WireFrame.version). Same rules; the block is passed explicitly because there is no Head in scope.
 
-### `fn read_frame(c: &mut link, buf: wire, filled: int,`
+### `fn read_frame(c: &mut link, buf: wire, filled: int, idle_deadline: until, header_deadline: until, body_deadline: until) -> result[WireFrame, str]`
 
 read_frame: read's framing, plus the parsed head the router matches on. Implemented INSIDE read's loop shape (not as read-plus-copy): read compacts the buffer before returning, so after read there is no head left to copy -- buf[0..filled] is the NEXT request. This duplicates read's loop deliberately (same scans, same errors, same close rules), and the duplication is the contract: any change to read's framing must land here too.  What differs from read: on a complete frame the method/path strs and the header block + body are COPIED OUT of the wire ONCE -- the same strs + copies read already pays (hd.method/path, hd.headers, hd.body) -- and NO separate message copy is made. The old shape did to_bytes(buf[0..end]) PLUS parse_frame over the copy PLUS wants_close_scan over the copy: a full second framing pass and a whole-message copy per request. Now the WireFrame carries what the router needs directly: method/path strs for the enum + Request build, headers/body slices for the Ctx. Routing matches on strs (==), never on raw bytes -- no path_is_at rescan, no per-route to_bytes. The message copy is gone entirely.  Chunked bodies: hd.body IS the reassembled copy (one alloc the old path also spent); the WireFrame body is that copy directly. Three deadlines, not one, because "how long should this wait" has three different honest answers depending on what the connection is doing: idle_deadline while nothing has arrived at all yet (a kept- alive connection between requests, or a fresh one that never sends anything -- this is the one that should be generous, since a real client legitimately sits idle between requests); header_deadline once bytes have started arriving but the request line and headers aren't complete yet; body_deadline once the headers are in but a declared body hasn't fully arrived. header_deadline and body_deadline are both the tight, slow-loris-shaped ones -- a client that has started a request and then trickles it in a byte at a time is not the same risk as one that hasn't sent anything yet, and idle_deadline being long must not become an amplifier for that. Recomputed fresh every loop iteration rather than tracked as a separate flag: frame_head_wire's own re-parse of the same (only ever growing) buffer already answers "is the header complete yet" idempotently, so re-deriving which phase this recv is in from that costs nothing extra and can't drift out of sync with it.
 
@@ -193,7 +193,7 @@ read_frame: read's framing, plus the parsed head the router matches on. Implemen
 
 serialize()'s GC allocations (~40 of them for a typical response, see serialize()'s own comment) replaced with two passes over the caller's own arena: size, then fill. If the response is larger than what's left of the arena, falls back to serialize() + send_bytes rather than letting a.wire(need) past capacity kill the task -- a slow response stays a slow response instead of becoming a dropped connection.  Responses with exactly the `text_response` shape (one content-type, nothing else) take the fixed fast path above: no map iteration, no integer str, no intermediate bytes. Anything else uses the general `emit` below, unchanged. A static route's answer: status, content type, and body -- no Response struct, no extra list, nothing to shape-check. serve_conn gets one from serve_static and hands it straight to write_static, which sends the PREBUILT keep-alive rendering (assembled once at registration -- see static_render below) with one wire alloc and one memcpy. The static snapshot lives on the Route (see router.sl); this is just the per-request view of it.
 
-### `fn write_static(c: &mut link, b: StaticBody, a: &mut arena,`
+### `fn write_static(c: &mut link, b: StaticBody, a: &mut arena, close: bool, deadline: until) -> result[int, fault]`
 
 The static emit: the keep-alive rendering is prebuilt, not emitted. Hot path (HTTP/1.1 keep-alive, which is every wrk/ab request): one wire, one memcpy, one send -- no probe pass, no Response struct, no map, no integer str, no per-piece puts. The close variant (HTTP/1.0, Connection: close) is rare and pays the emit cost below; it never touches the hot path.
 
@@ -203,11 +203,11 @@ The keep-alive rendering, assembled ONCE at registration: status line, one conte
 
 ### `fn write(c: &mut link, r: Response, a: &mut arena, deadline: until) -> result[int, fault]`
 
-### `fn text_response_bytes(status: i32, status_text: str, content_type: str,`
+### `fn text_response_bytes(status: i32, status_text: str, content_type: str, body: bytes) -> Response`
 
 `text_response` with a BYTES body: same shape, no `to_bytes` copy. The hot path (zokor's JSON renderers, static bodies) already holds bytes; forcing them through str and back cost a full copy plus the literal's own allocation on every response.
 
-### `fn text_response(status: i32, status_text: str, content_type: str,`
+### `fn text_response(status: i32, status_text: str, content_type: str, body: str) -> Response`
 
 ### `fn ok_html(body: str) -> Response`
 

@@ -71,10 +71,12 @@ A test that fails on its own can be run directly:
   it by hand.
 
 Changes to the runtime, the scheduler, `net` or the collector should be run on
-Linux as well as macOS. Continuous integration currently runs only on `main`,
-so please do this yourself, for instance in an Ubuntu 24.04 container built
-from `git ls-files` (a macOS-built `slangc` or `tests/runtime/test_gc` copied
-into it will not run).
+Linux as well as macOS. Continuous integration runs on merges to `main` and on
+manual dispatch, which runs the workflow on any branch, native linux-arm64
+included: `gh workflow run ci.yml --ref <branch>` (on a fork, in your own
+Actions). Without that, run the suite yourself, for instance in an Ubuntu
+24.04 container built from `git ls-files` (a macOS-built `slangc` or
+`tests/runtime/test_gc` copied into it will not run).
 
 ## Workflow
 
@@ -103,7 +105,43 @@ is rare and hard to reproduce.
   deadlock.
 - The runtime files are joined into **one translation unit**, so their order
   matters (`sl_net.c` comes before `sl_io.c`, which uses its reactor).
-- On macOS read the current task with `sl_rt_cur()`, not the bare
-  `sl_rt_current_task`, outside a preemption bracket.
+- **Never read a `_Thread_local` bare from code that can run on a task.** A
+  task moves between OS threads at every park, yield and preemption, and the
+  C compiler keeps a thread-local's address across those calls (GCC on
+  aarch64 caches the thread pointer; clang on Darwin, the TLV address), so a
+  bare read uses another worker's state. That holds even inside a preemption
+  bracket: the bracket stops the task moving, not the compiler reusing an
+  address computed before it. Read the current task with `SL_RT_TLS_CUR()`
+  inside a bracket or `sl_rt_cur()` outside one, and any other thread-local
+  through its `SL_RT_TLS_ADDR_FN` accessor inside a bracket (see that macro in
+  `runtime/sl_core.c`). Bare reads are for code that only runs on a thread's
+  own stack: the worker loop, `sl_worker_after_switch`, signal handlers.
 
 The README's *How it works* and *Memory management* sections explain why.
+
+## If you change the language
+
+slang is meant to be cheap to learn and to write, for a person and for an
+LLM agent alike, and the second is measurable (the agent benchmark in
+next-steps §13). An agent has never seen slang in training, so every
+construct it cannot guess costs it tokens: a failed compile, an error to
+read, another attempt. Four rules follow, and a change that breaks one
+needs a discussion before code.
+
+- **Familiar syntax.** slang reads like Go and Swift (`fn`, `let`,
+  `guard let`, `chan`, `??`, `switch` with `case`) because models and
+  people already know those forms. A new construct takes the form the
+  nearest mainstream language gives it. Novel syntax needs evidence that
+  the familiar form cannot work here, such as the retries it causes
+  agents, not a preference.
+- **Errors say the fix.** A new diagnostic names the construct and what to
+  write instead (`annotate it, e.g. let xs: [int] = []`), and goes
+  through `cg_error`, the one place that decides how an error looks. A
+  compiler error must never reach the user as the C compiler's own output.
+- **Deliberately absent.** No closures, exceptions, null, interfaces or
+  reflection. Each was left out for a reason the README gives (function
+  values name code, never the heap; errors are values; absence is `opt`).
+  Do not add them or emulate them.
+- **The one-page guide stays true.** A change to what a program can write
+  updates `www/llms-small.md`, whose examples the suite compiles and runs,
+  and the README section it belongs to.

@@ -2663,6 +2663,22 @@ prerequisite, not a different plan).
       thread): without SA_ONSTACK it reads back as a stack pointer on the
       first delivery.
 
+- [x] **`del` on a map made other keys unreachable.** Fixed 2026-09-30.
+      It emptied the key's slot in a linear-probing table, and probing
+      stops at the first empty slot, so every key stored further along the
+      same run was lost: deleting 300 of 3000 keys left 240 of the rest
+      unfindable, their own deletes did nothing, and updating them stored
+      duplicates. Now a backward shift (Knuth, Algorithm R); test
+      `tests/map_delete`. Found while testing the GC's container frontier
+      (next-steps.md #7b).
+
+- [ ] **`xs[i].field = v` on a list of value structs does not compile.**
+      Found 2026-09-30, not fixed. The generated C assigns to a member of a
+      statement expression ("expression is not assignable") instead of
+      either writing through the element or reporting a slang error. When
+      it is fixed, the store needs the list's barrier with the index
+      (`sl_arr_remember_at`), since it writes into the list's buffer.
+
 - [x] **Five stores left young objects held only by old ones, with no
       write barrier.** Fixed 2026-09-30, found by the minor-collection
       verifier (`SLANG_GC_VERIFY_MINOR`) while removing the full-mark root
@@ -3053,3 +3069,42 @@ Checked clean (no finding): select arms, guard-let `err_expr`
 struct/map literals, spawn args, slice optionals, `??`
 (conservative is the safe direction), indirect callees, methods,
 ST_IMPL via the function cursor.
+
+## Fixed along the way: aarch64 GCC reused a thread pointer across task switches
+
+`tests/sched_runnext` failed intermittently on linux-arm64 CI only
+(two of four merges to main) with "spawn task entry resumed after
+switching back". Reproduced 10/10 under arm64 emulation with the CI
+toolchain (GCC 13.3, `-O3 -flto`); the disassembly showed the cause.
+A thread-local's address on aarch64 is the thread pointer (`mrs
+tpidr_el0`) plus an offset, and GCC treats the thread pointer as
+constant for a whole function. With the user function inlined into
+its spawn entry, GCC read it once at entry into x27 and used it at the
+final switch-out, `sl_ctx_switch(&sl_rt_current_task->rsp, ...)`,
+after the task had moved workers: the finished context was saved into
+the first worker's current task, which later resumed into it. The
+inlined `sl_task_stack_grow` picked the thread-local grower stack
+through the same stale register. x86_64 is immune (thread-locals are
+addressed through `%fs` on every access), and a preempt bracket does
+not help, since the pointer was loaded before the bracket began --
+which retires the old rule that bare reads inside a bracket are safe.
+
+Fixed with `SL_RT_TLS_ADDR_FN` (sl_core.c): a noinline accessor per
+thread-local that task-stack code reads, inside a bracket, like
+`SL_RT_TLS_CUR`. Used for the spawn epilogue (codegen), stack growth,
+the runnext slot index, the task cache, the GC ack, `sl_task_park`,
+`sl_task_yield_now` and `sl_rt_fail`. After the fix no task-stack
+function in the test binary reads tpidr_el0 outside an accessor.
+
+Not arm64-only. Clang on Darwin x86_64 does the same with a
+thread-local's TLV address: in a spawn loop it resolved the task
+cache's address once, above the loop, and kept it across the parks,
+so the spawner popped the first worker's cache while that worker
+pushed to it and two spawns shared one `sl_task`. A 1M-spawn program
+aborted 10/10 on this Intel Mac; `tests/spawn_churn` (200k spawns,
+parking every batch of 1024) fails 10/10 before the fix and passes
+10/10 after, on x86_64 and under arm64 emulation. `sl_task_grab` also
+popped the cache with no preempt bracket at all, a race even without
+the cached address; now bracketed. Cost: none measurable -- 64
+channel ping-pong pairs, ABBA x5, median 7,603ms before vs 7,613ms
+after.
