@@ -24,13 +24,20 @@ fn test_clamp() {
 slangc test                 # the package in the current directory
 slangc test path/to/pkg     # another one
 slangc test --run clamp     # only tests whose name contains "clamp"
+slangc test -v              # a line for every passing test too
 ```
 
+A passing test prints nothing; a failure prints its message and location;
+the last line counts them. A run where everything passes is one line:
+
 ```
-ok   test_add (52us)
 FAIL test_clamp (30us)
      got 15 at calc.test_clamp:7
 FAIL: 1 of 2 failed (190us)
+```
+
+```
+ok: 2 passed (190us)
 ```
 
 - **Each test runs in its own task**, so a failing test is reported with
