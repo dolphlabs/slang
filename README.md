@@ -22,9 +22,11 @@ these README sections, the compiler's own signature tables, and the
 See [`www/README.md`](www/README.md) for the documentation convention
 every slang package follows.
 
-Reading with an agent? Every page has a Markdown twin at the same path,
-`/llms.txt` indexes the site, `/llms-full.txt` is the whole thing as one
-document, and `/api.json` is the machine-readable API index.
+Reading with an agent? Start with `/llms-small.txt`: the whole language
+on one page, about 3k tokens, with every example compiled by the test
+suite. Every page has a Markdown twin at the same path, `/llms.txt`
+indexes the site, `/llms-full.txt` is the whole thing as one document,
+and `/api.json` is the machine-readable API index.
 
 ## Quick start
 
