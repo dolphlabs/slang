@@ -462,11 +462,14 @@ training data, so it wins on those three. The zokor half (agent guide,
   failures and the count; `-v` brings back a line per passing test.
 - [x] **Write the syntax rule down**: CONTRIBUTING, "If you change the
   language". The benchmark below measures retries per construct.
-- [ ] **Measure it.** Five tasks (CRUD on Postgres, auth middleware, a
-  background worker, a rate-limited endpoint, uploads) in slang + zokor, Go +
-  fiber and TypeScript + Nest; input and output tokens and turns until the
-  tests pass, several runs each, medians reported. Before and after the items
-  above, so each claim has a number.
+- [ ] **Measure it.** The harness is `bench/agent`: five tasks (CRUD, auth
+  middleware, a background worker, rate limiting, uploads) as stack-neutral
+  HTTP specs with hidden black-box acceptance tests, run in slang + zokor,
+  Go + Fiber and TypeScript + NestJS, reporting tokens, turns and cost per
+  run with medians. Its tests are checked against reference servers
+  (`run.py selftest`). Not run yet: needs a budget, the agent and model to
+  use, and zokor's own guide (`docs/llms-small.txt` in zokor). CRUD is
+  in-memory, not Postgres, so the harness needs no database.
 - Found while checking the guide's claims:
   - [x] **A `guard` whose `else` falls through compiles** -- now rejected,
     with the fix in the message. Functions that never return (`die(..)`
