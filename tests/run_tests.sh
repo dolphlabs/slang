@@ -244,6 +244,12 @@ tc_tmp_before=$(ls -d "${TMPDIR:-/tmp}"/slangtest_* 2>/dev/null | wc -l)
 
 out=$(./slangc test tests/testcmd/lib 2>&1); code=$?
 [ "$code" -eq 1 ] || tc_fail "a failing test must exit 1, got $code"
+# Quiet by default: only failures and the summary.
+printf '%s\n' "$out" | grep -q '^ok   ' && tc_fail "a passing test printed a line without -v"
+printf '%s\n' "$out" | grep -q '^FAIL test_fails_on_purpose ' || tc_fail "failure not reported without -v"
+printf '%s\n' "$out" | grep -q '^FAIL: 1 of 4 failed' || tc_fail "summary line wrong without -v"
+out=$(./slangc test tests/testcmd/lib -v 2>&1); code=$?
+[ "$code" -eq 1 ] || tc_fail "-v: a failing test must exit 1, got $code"
 printf '%s\n' "$out" | grep -q '^ok   test_scaled ' || tc_fail "passing test not reported"
 printf '%s\n' "$out" | grep -q '^ok   test_clamp_private ' || tc_fail "private function or global unreachable from a test"
 printf '%s\n' "$out" | grep -q 'expected 99, got 20 at lib.test_fails_on_purpose:13' || tc_fail "failure message or location missing"
