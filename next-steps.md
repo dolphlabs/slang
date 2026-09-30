@@ -471,8 +471,8 @@ training data, so it wins on those three. The zokor half (agent guide,
     `opt[str]` the program segfaults. Memory safety, so first.
   - [ ] `let xs: [opt[int]] = [some(1), none];` fails with "cannot infer the
     type of 'none'": list elements do not take the annotation's type.
-  - [ ] A missing map key reports `map key not found at main:2 (index 0,
-    length 0)`: the index/length detail is meaningless for a map.
+  - [x] A missing map key reported `(index 0, length 0)`; it now names the
+    key and says to check with `has(m, k)` first.
 
 ## Notes
 
