@@ -2663,6 +2663,19 @@ prerequisite, not a different plan).
       thread): without SA_ONSTACK it reads back as a stack pointer on the
       first delivery.
 
+- [x] **Five stores left young objects held only by old ones, with no
+      write barrier.** Fixed 2026-09-30, found by the minor-collection
+      verifier (`SLANG_GC_VERIFY_MINOR`) while removing the full-mark root
+      phase that had hidden them (next-steps.md #7): struct literals
+      allocated before their fields were evaluated, `select`'s send arm,
+      `recv` filling a bytes header allocated before its park, a finished
+      task's remembered entries (dropped, and their buffer leaked), and a
+      major's young survivors. None could crash while minors traced old
+      objects from the roots; each would have freed live objects once they
+      stopped. Rules in `runtime/GENERATIONAL_GC_HANDOFF.md`; tests
+      `tests/gc_minor_barriers` and the suite's "minor collections
+      verified" section.
+
 - [x] **The x86_64 async trampoline called C on a misaligned stack.**
       Fixed 2026-09-29. Its save block is 784 bytes, a multiple of 16, so
       `sl_preempt_yield` and the two helpers after it ran with whatever
