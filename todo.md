@@ -2672,6 +2672,13 @@ prerequisite, not a different plan).
       `tests/map_delete`. Found while testing the GC's container frontier
       (next-steps.md #7b).
 
+- [ ] **`xs[i].field = v` on a list of value structs does not compile.**
+      Found 2026-09-30, not fixed. The generated C assigns to a member of a
+      statement expression ("expression is not assignable") instead of
+      either writing through the element or reporting a slang error. When
+      it is fixed, the store needs the list's barrier with the index
+      (`sl_arr_remember_at`), since it writes into the list's buffer.
+
 - [x] **Five stores left young objects held only by old ones, with no
       write barrier.** Fixed 2026-09-30, found by the minor-collection
       verifier (`SLANG_GC_VERIFY_MINOR`) while removing the full-mark root
