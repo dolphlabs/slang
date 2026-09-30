@@ -88,6 +88,35 @@ Actions). Without that, run the suite yourself, for instance in an Ubuntu
   conversation: what changed and why, the evidence (what failed before, what
   passes now), where you ran the suite, and anything you did not do.
 
+## Releasing
+
+A pushed version tag is the release; `.github/workflows/release.yml` does
+the rest.
+
+1. On a branch from `dev`, bump `VERSION` in the `Makefile` and
+   `SLANG_VERSION` in `src/main.c`; merge it, then `dev` into `main`.
+2. Tag `main` with an annotated tag. Its first line is the release title
+   and the rest is the release notes: what changed, for a user.
+
+   ```sh
+   git tag -a v0.2.2 -m "slang v0.2.2" -m "<what changed>" origin/main
+   git push origin v0.2.2
+   ```
+
+The workflow refuses a lightweight tag, a tag not on `main`, or a version
+that does not match the tag. It runs the full suite on Linux x86_64 and
+arm64 and on macOS arm64 and x86_64, builds a tarball on each, installs it
+outside the source tree and builds a new project with it, and only then
+publishes the release with the tarballs and a `SHA256SUMS`. If any
+platform fails, nothing is published: fix it, delete and re-push the tag,
+or re-run the workflow.
+
+`gh workflow run release.yml -f tag=vX.Y.Z` releases a tag that already
+exists. It makes a draft by default, which only maintainers can see, so a
+change to the workflow can be tried without publishing; `-f draft=false`
+publishes. Re-running for the same tag replaces the tarballs and notes,
+and never turns a published release back into a draft.
+
 ## If you touch `runtime/`
 
 The runtime is C that `slangc` splices into every program it compiles, and it

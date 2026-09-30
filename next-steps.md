@@ -350,8 +350,10 @@ dotted directories (#235). Write-ups in `todo.md`.
 
 ## 8. CI on `dev`, not only `main`
 
-- [ ] `.github/workflows/ci.yml` runs on a push to `main`, on manual
-  dispatch and on a published release. **Nothing runs on a pull request to
+- [ ] `.github/workflows/ci.yml` runs on a push to `main` and on manual
+  dispatch (releases moved to `release.yml`: a pushed `vX.Y.Z` tag is
+  tested on every platform and published with its tarballs, see
+  CONTRIBUTING, "Releasing"). **Nothing runs on a pull request to
   `dev` or a push to `dev`**, so a change reaches `dev` verified only by
   whoever opened it.
 
