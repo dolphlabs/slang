@@ -157,6 +157,16 @@ static void sl_utf8_append(char **buf, long long *len, long long *cap, long cp) 
     }
 }
 
+/* One input byte, as it is. Input is UTF-8 already: widening a byte past
+ * 0x7F as if it were a code point turned "é" into "Ã©". */
+static void sl_jbuf_byte(char **buf, long long *len, long long *cap, int c) {
+    if (*len + 1 > *cap) {
+        *cap = (*cap ? *cap * 2 : 64);
+        *buf = (char *)sl_gc_realloc(*buf, (size_t)*cap);
+    }
+    (*buf)[(*len)++] = (char)c;
+}
+
 static char *sl_jparse_string_raw(sl_jparser *p) {
     char *buf = NULL;
     long long len = 0, cap = 0;
@@ -207,10 +217,10 @@ static char *sl_jparse_string_raw(sl_jparser *p) {
             sl_jerr(p, "control character in string");
             return NULL;
         } else {
-            sl_utf8_append(&buf, &len, &cap, c);
+            sl_jbuf_byte(&buf, &len, &cap, c);
         }
     }
-    sl_utf8_append(&buf, &len, &cap, 0);
+    sl_jbuf_byte(&buf, &len, &cap, 0);
     return buf ? buf : sl_strdup("");
 }
 
