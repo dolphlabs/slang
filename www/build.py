@@ -10,9 +10,16 @@ Design rules, in order of importance:
    stdlib/**/*.sl. A site that duplicates its own repo drifts from it
    within a month, and stale docs are worse than none.
 
+   One deliberate exception: www/llms-small.md, the language on one
+   page for a model's context window. A digest cannot be pulled from
+   README sections, so it is written by hand, and kept honest instead:
+   every code block in it is compiled and run by tests/run_tests.sh, and
+   its package index is generated here from the same data as api.json.
+
 2. AGENTS ARE FIRST-CLASS READERS. Every page ships a Markdown twin at
    the same path, linked from the HTML head. /llms.txt indexes the site
-   for a model, /llms-full.txt is the whole thing as one plain-text
+   for a model, /llms-small.txt is the language on one page (about 3k
+   tokens), /llms-full.txt is the whole thing as one plain-text
    document, and /api.json is the machine-readable API index. Content is
    in the HTML itself -- JavaScript only adds theme, search and motion,
    so a fetch with no JS engine still gets everything.
@@ -714,10 +721,12 @@ def build(out_dir):
             "mark-sweep collector, and native packages. Built and "
             "maintained by %s (%s), %s." % (ORG, ORG_ENTITY, ORG_URL),
             "",
-            "Every page on this site has a Markdown twin at the same path "
-            "with a .md extension. /api.json is the machine-readable index "
-            "of every package and function. /llms-full.txt is this entire "
-            "site as one plain-text document.",
+            "Start with /llms-small.txt: the whole language on one page, "
+            "about 3k tokens, enough to write correct slang. Every page on "
+            "this site has a Markdown twin at the same path with a .md "
+            "extension. /api.json is the machine-readable index of every "
+            "package and function. /llms-full.txt is this entire site as "
+            "one plain-text document.",
             "",
             "## Pages", ""]
     for p in pages:
@@ -726,6 +735,8 @@ def build(out_dir):
     (out / "llms.txt").write_text("\n".join(llms) + "\n", encoding="utf-8")
     (out / "llms-full.txt").write_text("\n\n".join(llms_parts),
                                        encoding="utf-8")
+    (out / "llms-small.txt").write_text(llms_small(all_pkgs),
+                                        encoding="utf-8")
 
     for asset in ("style.css", "app.js"):
         shutil.copy(WWW / "theme" / asset, out / asset)
@@ -767,6 +778,33 @@ def build(out_dir):
     n_items = sum(len(p["items"]) for p in all_pkgs.values())
     print("built %d pages, %d packages, %d API items -> %s"
           % (len(pages), len(all_pkgs), n_items, out))
+
+
+# How many function names each package shows in llms-small.txt's index.
+# Enough to tell a model what exists; the package page has the rest, and
+# listing redis's 144 in full would cost more than the language itself.
+LLMS_SMALL_NAMES = 12
+
+
+def llms_small(pkgs):
+    """www/llms-small.md plus an index of every package's functions,
+    generated from the same data as api.json so it cannot drift."""
+    body = (WWW / "llms-small.md").read_text(encoding="utf-8").rstrip()
+    lines = ["", "", "## Package index", "",
+             "Each package's functions, first %d at most. Signatures: "
+             "`/packages/<name>.md`." % LLMS_SMALL_NAMES, ""]
+    for name, pkg in pkgs.items():
+        fns = list(dict.fromkeys(
+            i["name"] for i in pkg["items"] if i.get("decl", "fn") == "fn"))
+        if not fns:
+            lines.append("- %s: see /packages/%s.md" % (name, name))
+            continue
+        shown = ", ".join(fns[:LLMS_SMALL_NAMES])
+        more = len(fns) - LLMS_SMALL_NAMES
+        if more > 0:
+            shown += " (+%d more)" % more
+        lines.append("- %s: %s" % (name, shown))
+    return body + "\n".join(lines) + "\n"
 
 
 def write_single_file(out, tpl, pages):

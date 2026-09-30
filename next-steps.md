@@ -436,6 +436,44 @@ dotted directories (#235). Write-ups in `todo.md`.
   a prompt that redraws. Not scoped. Candidate only; worth deciding whether
   it belongs in `stdlib` or in a program that wants it before writing it.
 
+## 13. The cheapest language for an agent to build with
+
+An agent's token bill is mostly not the code it writes. It is reading
+(learning an unfamiliar language every session), retries (each failed
+compile or test is another round), and tool output. slang cannot win on
+training data, so it wins on those three. The zokor half (agent guide,
+`zokor new`, `zokor gen resource`, OpenAPI) is in zokor's `todo.md`.
+
+- [x] `llms-small.txt`: the language on one page, about 3k tokens, plus a
+  package index generated from `api.json`'s data. Hand-written in
+  `www/llms-small.md`; `tests/run_tests.sh` compiles and runs every example.
+- [ ] **Compiler errors built for agents.** Today slangc stops at the first
+  error and names neither the file nor the column (`slang: error at line 2:
+  ...`), so three mistakes cost three compile rounds. Report every error,
+  with `file:line:col`, a fix hint where one is known, and `--json`.
+- [ ] **`slangc doc <pkg>[.<name>]`**: signatures and doc comments from the
+  real parser, for the standard library, pinned packages and local ones, so
+  an agent asks for one API instead of reading a page or the source.
+- [ ] **One line when everything passes.** `slangc test` prints a line per
+  test; print `ok: N passed (time)` alone on success and detail only for
+  failures (`-v` for the current output).
+- [ ] **Write the syntax rule down** (CONTRIBUTING): no novel syntax without
+  evidence. The benchmark below measures retries per construct.
+- [ ] **Measure it.** Five tasks (CRUD on Postgres, auth middleware, a
+  background worker, a rate-limited endpoint, uploads) in slang + zokor, Go +
+  fiber and TypeScript + Nest; input and output tokens and turns until the
+  tests pass, several runs each, medians reported. Before and after the items
+  above, so each claim has a number.
+- Found while checking the guide's claims:
+  - [ ] **A `guard` whose `else` falls through compiles** (README: "the else
+    branch must exit"). The bound name is then used uninitialized: `guard let
+    v = o else { println("x"); } return v;` returns 0 for `none`, and for an
+    `opt[str]` the program segfaults. Memory safety, so first.
+  - [ ] `let xs: [opt[int]] = [some(1), none];` fails with "cannot infer the
+    type of 'none'": list elements do not take the annotation's type.
+  - [ ] A missing map key reports `map key not found at main:2 (index 0,
+    length 0)`: the index/length detail is meaningless for a map.
+
 ## Notes
 
 - Do not change `bench/http/main.sl` for perf experiments. Raw-best slang is `bench/http_opt/main.sl`; remasure with `./bench/run_http_opt.sh`.

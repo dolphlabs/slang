@@ -499,6 +499,38 @@ for name in fn_values spawn_isolation gc_stress maps json flags method_recv \
 done
 [ "$fg_bad" -eq 0 ] && echo "PASS frame guards"
 
+# ---- llms-small.txt ------------------------------------------------------
+# www/llms-small.md is the one hand-written digest on the docs site: the
+# language on one page for a model's context window (www/build.py says why
+# it is the exception). A model copies its examples as written, so a block
+# that no longer compiles teaches every agent that reads it the wrong thing.
+# Each ```slang block is a whole program and must compile and exit 0.
+echo "--- llms-small.txt examples ---"
+ls_dir=$(mktemp -d /tmp/sl_llms.XXXXXX)
+awk -v dir="$ls_dir" '
+    /^```slang$/ { n++; f = sprintf("%s/b%02d", dir, n);
+                   system("mkdir -p " f); out = f "/main.sl"; inb = 1; next }
+    /^```$/      { if (inb) { close(out); inb = 0 } next }
+    inb          { print > out }
+' www/llms-small.md
+ls_bad=0
+ls_n=0
+for b in "$ls_dir"/b*; do
+    [ -f "$b/main.sl" ] || continue
+    ls_n=$((ls_n + 1))
+    if ! ./slangc "$b/main.sl" --run >"$b/out" 2>&1 </dev/null; then
+        echo "FAIL llms-small.txt example $(basename "$b")"
+        tail -3 "$b/out"
+        ls_bad=1; fail=1
+    fi
+done
+if [ "$ls_n" -eq 0 ]; then
+    echo "FAIL llms-small.txt: no \`\`\`slang examples found"
+    ls_bad=1; fail=1
+fi
+rm -rf "$ls_dir"
+[ "$ls_bad" -eq 0 ] && echo "PASS llms-small.txt examples ($ls_n)"
+
 # Generated C must compile clean under the warnings a C compiler turns
 # on by ITSELF. slangc passes no -W flags, so anything default-on lands
 # in the user's terminal on every single build -- 79 of them across this
