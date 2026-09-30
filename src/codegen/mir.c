@@ -1,4 +1,5 @@
 #include "internal.h"
+#include "../diag.h"
 
 #include <string.h>
 
@@ -296,6 +297,8 @@ static void lower_stmts(Lower *L, Stmt **stmts, int count);
 static void lower_block(Lower *L, Block *b);
 
 static void lower_stmt(Lower *L, Stmt *s) {
+    if (s->file)
+        diag_file = s->file;
     if (sealed(L))
         return;
     switch (s->kind) {
@@ -524,6 +527,48 @@ static void lower_stmt(Lower *L, Stmt *s) {
             emit_assign(L, pl_local(s->as.guard_let.name),
                         lower_rvalue(L, s->as.guard_let.expr), s->line);
         }
+        return;
+    }
+    case ST_IF_LET: {
+        const char *et = infer_type(L->cg, s->as.if_let.expr);
+        char *inner = NULL;
+        char *tev = NULL;
+        if (is_opt(et))
+            inner = opt_inner(et);
+        else if (is_result(et)) {
+            char *tv;
+            result_te(et, &tv, &tev);
+            inner = tv;
+        }
+        MirPlace *cond = lower_cond(L, s->as.if_let.expr);
+        int then_bb = new_bb(L);
+        int else_bb = new_bb(L);
+        int join = new_bb(L);
+        emit_if(L, cond, then_bb, else_bb, s->line);
+        L->cur = then_bb;
+        var_scope_push(L->cg);
+        if (inner) {
+            add_local(L, s->as.if_let.name, inner);
+            var_redecl_check(L->cg, s->as.if_let.name, s->line);
+            var_push(L->cg, s->as.if_let.name, inner);
+            emit_assign(L, pl_local(s->as.if_let.name),
+                        lower_rvalue(L, s->as.if_let.expr), s->line);
+        }
+        lower_block(L, s->as.if_let.then_blk);
+        var_scope_pop(L->cg);
+        emit_goto(L, join, s->line);
+        L->cur = else_bb;
+        if (s->as.if_let.else_blk) {
+            var_scope_push(L->cg);
+            if (s->as.if_let.err_name && tev) {
+                var_redecl_check(L->cg, s->as.if_let.err_name, s->line);
+                var_push(L->cg, s->as.if_let.err_name, tev);
+            }
+            lower_block(L, s->as.if_let.else_blk);
+            var_scope_pop(L->cg);
+        }
+        emit_goto(L, join, s->line);
+        L->cur = join;
         return;
     }
     case ST_UNSAFE:

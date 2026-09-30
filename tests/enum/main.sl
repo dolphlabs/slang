@@ -54,7 +54,7 @@ guard let s1 = r1 else let e1 = err_of(r1) { die("from_int hit: " + e1); }
 if s1 != Status.Shipped { die("from_int wrong variant"); }
 
 let r2: result[Status, str] = Status.from_int(99);
-guard let s2 = r2 else let e2 = err_of(r2) {
+if let s2 = r2 { } else let e2 = err_of(r2) {
     if e2 != "not a valid Status variant" { die("from_int miss message: " + e2); }
 }
 
@@ -63,7 +63,7 @@ guard let s3 = r3 else let e3 = err_of(r3) { die("from_str hit: " + e3); }
 if s3 != Status.Cancelled { die("from_str wrong variant"); }
 
 let r4: result[Status, str] = Status.from_str("nope");
-guard let s4 = r4 else let e4 = err_of(r4) {
+if let s4 = r4 { } else let e4 = err_of(r4) {
     if e4 != "not a valid Status variant" { die("from_str miss message: " + e4); }
 }
 println("from_int/from_str ok");
@@ -103,7 +103,7 @@ if o2.id != 7 { die("json decode id"); }
 if o2.status != Status.Delivered { die("json decode status"); }
 
 let r6: result[Order, str] = json.decode("{\"id\":1,\"status\":\"NotReal\"}");
-guard let o3 = r6 else let e6 = err_of(r6) {
+if let o3 = r6 { } else let e6 = err_of(r6) {
     if e6 != "field 'status': not a valid Status: NotReal" {
         die("json decode bad variant message: " + e6);
     }

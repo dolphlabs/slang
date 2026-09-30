@@ -206,6 +206,9 @@ ARGKIND = {
     "NA_RAWPTR": "rawptr",
     "NA_UNTIL": "until",
     "NA_STR_FAULT": "str",
+    "NA_ARR_STR": "[str]",
+    "NA_ARR_BYTES": "[bytes]",
+    "NA_WIRE": "wire",
     "0": "",
 }
 
@@ -299,7 +302,16 @@ def extract_source_packages():
             # a banner of dashes is a section divider, not documentation
             while doc and set(doc[0]) <= set("- "):
                 doc.pop(0)
-            sig = line.rstrip().rstrip("{").strip()
+            # a fn signature may span lines: join them up to the `{` that
+            # opens the body (slangc doc reads it the same way)
+            sig = line
+            if kind == "fn":
+                k = i
+                while "{" not in lines[k] and k + 1 < len(lines) and k < i + 20:
+                    k += 1
+                    sig += " " + lines[k]
+                sig = sig.split("{", 1)[0]
+            sig = re.sub(r"\s+", " ", sig.rstrip().rstrip("{").strip())
             sig = re.sub(r"^pub\s+", "", sig)
             pkgs.setdefault(pkg, {"name": pkg, "kind": "source",
                                   "items": []})

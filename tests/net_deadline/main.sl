@@ -29,7 +29,7 @@ fn run() {
 
     // 1. A deadline already in the past never touches the socket.
     let r1 = net.recv_until(sfd, 64, until_of(time.mono()));
-    guard let _d1 = r1 else let e1 = err_of(r1) {
+    if let _d1 = r1 { } else let e1 = err_of(r1) {
         if e1 != "timeout" { die("expired deadline gave: " + e1); }
         println("expired deadline: timeout");
     }
@@ -40,7 +40,7 @@ fn run() {
     let t0 = time.mono();
     let r2 = net.recv_until(sfd, 64, until_of(time.mono() + ms(150)));
     let waited = time.mono() - t0;
-    guard let _d2 = r2 else let e2 = err_of(r2) {
+    if let _d2 = r2 { } else let e2 = err_of(r2) {
         if e2 != "timeout" { die("silent peer gave: " + e2); }
         if waited < ms(100) { die("returned too early"); }
         if waited > ms(3000) { die("waited far too long"); }
@@ -67,7 +67,7 @@ fn run() {
 
     // 5. An expired deadline refuses to write a non-empty buffer.
     let r6 = net.send_until(sfd, b"NOPE", until_of(time.mono()));
-    guard let _n6 = r6 else let e6 = err_of(r6) {
+    if let _n6 = r6 { } else let e6 = err_of(r6) {
         if e6 != "timeout" { die("expired send gave: " + e6); }
         println("expired send: timeout");
     }

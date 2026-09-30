@@ -228,7 +228,8 @@ typedef enum {
     ST_IMPL,   /* impl Name { fn ... } blocks (top level only) */
     ST_UNSAFE, /* unsafe { ... } */
     ST_SELECT,  /* select { case ... { } ... default { } } */
-    ST_SWITCH  /* switch scrut { case v, ... { } ... default { } } */
+    ST_SWITCH,  /* switch scrut { case v, ... { } ... default { } } */
+    ST_IF_LET   /* if let x = opt_or_result { } [else [let e = err_of(..)] { }] */
 } StmtKind;
 
 typedef struct Stmt Stmt;
@@ -236,6 +237,7 @@ typedef struct Stmt Stmt;
 struct Stmt {
     StmtKind kind;
     int line;
+    const char *file; /* source file it was parsed from, for diagnostics */
     void *backedge_live_set; /* LiveSet*, filled by the Tier 10 liveness
                                * pass; non-NULL only for ST_WHILE/
                                * ST_FOR/ST_FOR_IN -- the live set at the
@@ -254,7 +256,13 @@ struct Stmt {
             Expr *target; /* EX_IDENT or EX_INDEX */
             Expr *value;
         } assign;
-        struct { Expr *cond; Block *then_blk; Block *else_blk; } if_stmt;
+        struct {
+            Expr *cond;
+            Block *then_blk;
+            Block *else_blk;
+            int from_guard; /* parsed from `guard <cond> else { }`: then_blk
+                               is the else body and must leave the scope */
+        } if_stmt;
         struct { Expr *cond; Block *body; } while_stmt;
         struct {
             char *name;
@@ -280,6 +288,18 @@ struct Stmt {
         } guard_let;
         struct { Expr *call; } spawn; /* EX_CALL to a plain/extern fn */
         struct { Block *body; } unsafe_blk;
+        /* `if let name = expr { then } else let err_name = err_expr { else }`:
+           name is bound in then_blk only, err_name (result only) in
+           else_blk only. else_blk may be NULL; unlike a guard's, it may
+           fall through. */
+        struct {
+            char *name;
+            Expr *expr;
+            Block *then_blk;
+            char *err_name;
+            Expr *err_expr;
+            Block *else_blk;
+        } if_let;
         struct {
             SelectCase *cases;
             int ncases;
@@ -332,6 +352,7 @@ struct FuncDecl {
     int nlts;
     char *ret_type;     /* slang type name, or NULL for void */
     Block *body;        /* NULL for 'extern fn' declarations */
+    const char *file;   /* source file it was parsed from, for diagnostics */
     int is_pub;         /* exported from its package */
     int is_extern;       /* 'extern fn': no body, calls the bare C symbol */
     int line;

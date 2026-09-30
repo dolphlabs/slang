@@ -25,6 +25,7 @@
  * call clears them. A pass therefore cannot forget to set it. */
 
 #include "internal.h"
+#include "../diag.h"
 
 static int func_cursor_next_inst(CG *cg, FuncCursor *c);
 
@@ -35,8 +36,21 @@ void func_cursor_init(FuncCursor *c) {
 /* Advance to the next function. `with_extern` also yields `extern fn`
  * declarations (which have no body): prototype emission needs them, the
  * passes that walk bodies do not. Returns 0 when there are no more. */
+static int func_cursor_step(CG *cg, Package *pkgs, int npkgs, FuncCursor *c,
+                            int with_extern);
+
+/* Every pass walks the program's functions through here, so this is where
+ * an error learns which file it is in. */
 int func_cursor_next(CG *cg, Package *pkgs, int npkgs, FuncCursor *c,
                      int with_extern) {
+    int r = func_cursor_step(cg, pkgs, npkgs, c, with_extern);
+    if (r && c->fn && c->fn->file)
+        diag_file = c->fn->file;
+    return r;
+}
+
+static int func_cursor_step(CG *cg, Package *pkgs, int npkgs, FuncCursor *c,
+                            int with_extern) {
     for (;;) {
         if (c->i_pkg >= npkgs)
             return func_cursor_next_inst(cg, c);

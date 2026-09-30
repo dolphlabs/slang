@@ -447,18 +447,21 @@ training data, so it wins on those three. The zokor half (agent guide,
 - [x] `llms-small.txt`: the language on one page, about 3k tokens, plus a
   package index generated from `api.json`'s data. Hand-written in
   `www/llms-small.md`; `tests/run_tests.sh` compiles and runs every example.
-- [ ] **Compiler errors built for agents.** Today slangc stops at the first
-  error and names neither the file nor the column (`slang: error at line 2:
-  ...`), so three mistakes cost three compile rounds. Report every error,
-  with `file:line:col`, a fix hint where one is known, and `--json`.
-- [ ] **`slangc doc <pkg>[.<name>]`**: signatures and doc comments from the
-  real parser, for the standard library, pinned packages and local ones, so
-  an agent asks for one API instead of reading a page or the source.
-- [ ] **One line when everything passes.** `slangc test` prints a line per
-  test; print `ok: N passed (time)` alone on success and detail only for
-  failures (`-v` for the current output).
-- [ ] **Write the syntax rule down** (CONTRIBUTING): no novel syntax without
-  evidence. The benchmark below measures retries per construct.
+- [x] **Compiler errors built for agents.** `file.sl:12: error: ...` (the
+  file was never named, and a package spans files), the first error of
+  every function in one compile, "did you mean" for names, fields, methods
+  and functions, and `--json`. Not done: columns (the AST carries lines
+  only), and more than one error per function (a function's later errors
+  are too often follow-on noise to be worth the risk).
+- [x] **`slangc doc <pkg>[.<name>]`**: signatures and doc comments for the
+  standard library, native, pinned and local packages, resolved as `import`
+  resolves them. Reads source the way `www/build.py` does (fixed alongside:
+  the site cut multi-line signatures at their first line and printed three
+  native parameter kinds raw).
+- [x] **One line when everything passes.** `slangc test` prints only
+  failures and the count; `-v` brings back a line per passing test.
+- [x] **Write the syntax rule down**: CONTRIBUTING, "If you change the
+  language". The benchmark below measures retries per construct.
 - [ ] **Measure it.** The harness is `bench/agent`: five tasks (CRUD, auth
   middleware, a background worker, rate limiting, uploads) as stack-neutral
   HTTP specs with hidden black-box acceptance tests, run in slang + zokor,
@@ -468,10 +471,12 @@ training data, so it wins on those three. The zokor half (agent guide,
   use, and zokor's own guide (`docs/llms-small.txt` in zokor). CRUD is
   in-memory, not Postgres, so the harness needs no database.
 - Found while checking the guide's claims:
-  - [ ] **A `guard` whose `else` falls through compiles** (README: "the else
-    branch must exit"). The bound name is then used uninitialized: `guard let
-    v = o else { println("x"); } return v;` returns 0 for `none`, and for an
-    `opt[str]` the program segfaults. Memory safety, so first.
+  - [x] **A `guard` whose `else` falls through compiles** -- now rejected,
+    with the fix in the message. Functions that never return (`die(..)`
+    helpers) are inferred, so ending an else with one still works, and
+    `if let v = x { } else let e = err_of(x) { }` is the form for handling a
+    failure and carrying on, which the guard had been misused for (about 30
+    test sites and one in `stdlib/pg`).
   - [ ] `let xs: [opt[int]] = [some(1), none];` fails with "cannot infer the
     type of 'none'": list elements do not take the annotation's type.
   - [ ] A missing map key reports `map key not found at main:2 (index 0,
