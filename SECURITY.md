@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-slang is pre-1.0. Only the latest release (currently **v0.2.0**) and `main`
+slang is pre-1.0. Only the latest release (currently **v0.2.1**) and `main`
 get security fixes. Fixes land on `dev` first and reach a release from
 `main`.
 
