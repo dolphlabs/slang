@@ -1642,7 +1642,7 @@ char *gen_slice(CG *cg, Expr *e) {
     sb_append(&prelude,
               xasprintf("%s %s = %s; ", bc, base_name,
                         gen_expr(cg, e->as.slice.base)));
-    expr_tmp_register(cg, e->as.slice.base, base_name);
+    expr_tmp_register(cg, e->as.slice.base, base_name, bt);
     ambient_root_push(cg, base_name);
 
     char *start = e->as.slice.start ? gen_expr(cg, e->as.slice.start)
@@ -1907,7 +1907,7 @@ char *gen_expr(CG *cg, Expr *e) {
             int ambient_mark = cg->ambient_count;
             char *qname = xasprintf("_sl_q%d", id);
             if (type_is_gc_ptr(cg, lt)) {
-                expr_tmp_register(cg, e->as.binary.lhs, qname);
+                expr_tmp_register(cg, e->as.binary.lhs, qname, lt);
                 ambient_root_push(cg, qname);
             }
             if (is_opt(lt)) {
