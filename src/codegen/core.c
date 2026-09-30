@@ -1905,9 +1905,11 @@ const char *expect_push(CG *cg, const char *t) {
      * none/[] can already infer theirs from the same expected type --
      * which is the mechanism the generics plan named. A scalar/struct
      * return-only parameter is refused with a clear message instead of
-     * risking that leak. */
+     * risking that leak. A map is a container like an array: its
+     * literal's keys and values read their types from it
+     * ({"a": none} against map[str]opt[int]). */
     if (t && (is_opt(t) || is_result(t) || is_chan(t) || is_join(t) ||
-              is_arr(t)))
+              is_arr(t) || is_map(t)))
         cg->expect = t;
     return saved;
 }

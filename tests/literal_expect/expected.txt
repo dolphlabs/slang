@@ -1,0 +1,17 @@
+[some(1), none, some(3)]
+[none, some(2)]
+[[none], [some(1), none], []]
+{"a": none, "b": some(3)}
+[{"x": none}, {"y": some(1)}, {}]
+[none, none]
+9
+3
+[none, some("b")]
+{1: [none], 2: [some(2), none]}
+[none, some(7)]
+{"k": none}
+{"a": {}, "b": {"x": 1}}
+[[], [1]]
+0
+4498500
+33783

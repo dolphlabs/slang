@@ -507,14 +507,19 @@ static LiveSet *live_expr(CG *cg, Expr *e, LiveSet *live_out) {
         return live_expr(cg, e->as.field.base, live_out);
 
     case EX_LIST: {
-        /* gen_list/gen_stmt's own ann_list handling never pushes
-         * cg->expect per element (confirmed by direct reading) -- so
-         * neither does this, matching real behavior exactly rather
-         * than "fixing" a per-element expectation the real compiler
-         * doesn't actually support either. */
+        /* each element expects the element type when a list type is
+         * expected, as gen_list gives it (`none` in [some(1), none]) */
+        const char **ex = NULL;
+        if (cg->expect && is_arr(cg->expect) && e->as.list.nelems) {
+            const char *el = arr_elem(cg->expect);
+            ex = (const char **)xmalloc(sizeof(char *) *
+                                        (size_t)e->as.list.nelems);
+            for (int i = 0; i < e->as.list.nelems; i++)
+                ex[i] = el;
+        }
         LiveSet *cur =
             process_children_reverse(cg, e->as.list.elems,
-                                     e->as.list.nelems, live_out, NULL);
+                                     e->as.list.nelems, live_out, ex);
         e->live_set = ls_clone(cur);
         return cur;
     }
@@ -522,16 +527,26 @@ static LiveSet *live_expr(CG *cg, Expr *e, LiveSet *live_out) {
     case EX_MAPLIT: {
         /* interleave key/value pairs in reverse pair order, value
          * before key within each pair (matching gen_maplit's own
-         * per-pair k-then-v generation order, reversed). Same note as
-         * EX_LIST: gen_maplit never pushes cg->expect per pair. */
+         * per-pair k-then-v generation order, reversed). Keys and values
+         * expect the map's key and value types, as in gen_maplit. */
         int npairs = e->as.maplit.npairs;
         Expr **kids = (Expr **)xmalloc(sizeof(Expr *) * (size_t)npairs * 2);
+        const char **ex = NULL;
+        char *mk = NULL, *mv = NULL;
+        if (cg->expect && is_map(cg->expect) && npairs) {
+            map_kv(cg->expect, &mk, &mv);
+            ex = (const char **)xmalloc(sizeof(char *) * (size_t)npairs * 2);
+        }
         for (int i = 0; i < npairs; i++) {
             kids[i * 2] = e->as.maplit.keys[i];
             kids[i * 2 + 1] = e->as.maplit.vals[i];
+            if (ex) {
+                ex[i * 2] = mk;
+                ex[i * 2 + 1] = mv;
+            }
         }
         LiveSet *cur =
-            process_children_reverse(cg, kids, npairs * 2, live_out, NULL);
+            process_children_reverse(cg, kids, npairs * 2, live_out, ex);
         e->live_set = ls_clone(cur);
         return cur;
     }
