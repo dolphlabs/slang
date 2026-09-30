@@ -16,8 +16,10 @@ fn parse_small(s: str) -> result[i32, str] {
 }
 
 // guard let unwraps the happy path and binds it for the rest of the
-// block; the else branch must exit (return, or exit()) since the
-// bound name has no value to fall back to. `else let e = err_of(r)`
+// block. The else branch must leave the scope -- return, break,
+// continue, exit(..), panic(..), or a call to a function that never
+// returns -- since the bound name has no value to fall back to; the
+// compiler rejects one that can fall through. `else let e = err_of(r)`
 // binds the error value for `result[T, E]` so failures stay visible.
 fn safe_div(n: int) -> int {
     guard let v = div10(n) else {
@@ -33,6 +35,20 @@ fn load_config(path: str) -> str {
         return "";
     }
     return body;
+}
+
+// if let handles both outcomes and carries on: each binding lives only
+// in its own branch, and either branch may fall through
+if let v = div10(40) {
+    println(v);                        // 4
+} else {
+    println("not a multiple of ten");
+}
+let pr = parse_small("big");
+if let n = pr {
+    println(n);
+} else let e = err_of(pr) {
+    println("rejected: " + e);         // rejected: value too large
 }
 
 // ?? recovers from none / err with a fallback value
@@ -55,6 +71,13 @@ println(fault_code(f));                // 0
 let nothing: opt[str] = none;
 let bad: result[str, str] = err("boom");
 ```
+
+A guard's else may end in a helper of your own, such as a `die(msg)` that
+prints and calls `exit`: the compiler works out that a function never
+returns when it has no `return` and every path ends in `exit`, `panic`, or
+another such function, across packages. It only counts a plain call by
+name, so a function value or method is never assumed to diverge; end
+that else with an explicit `return` instead.
 
 Panics (out-of-bounds index, division by zero, `err_of` on ok, missing
 map key) carry `pkg.func:line`: `list index out of bounds at

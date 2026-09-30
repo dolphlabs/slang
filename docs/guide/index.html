@@ -419,8 +419,10 @@ counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
 }
 
 <span class="c">// guard let unwraps the happy path and binds it for the rest of the</span>
-<span class="c">// block; the else branch must exit (return, or exit()) since the</span>
-<span class="c">// bound name has no value to fall back to. `else let e = err_of(r)`</span>
+<span class="c">// block. The else branch must leave the scope -- return, break,</span>
+<span class="c">// continue, exit(..), panic(..), or a call to a function that never</span>
+<span class="c">// returns -- since the bound name has no value to fall back to; the</span>
+<span class="c">// compiler rejects one that can fall through. `else let e = err_of(r)`</span>
 <span class="c">// binds the error value for `result[T, E]` so failures stay visible.</span>
 <span class="k">fn</span> <span class="f">safe_div</span>(n: <span class="t">int</span>) -&gt; <span class="t">int</span> {
     <span class="k">guard</span> <span class="k">let</span> v = <span class="f">div10</span>(n) <span class="k">else</span> {
@@ -436,6 +438,20 @@ counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
         <span class="k">return</span> <span class="s">&quot;&quot;</span>;
     }
     <span class="k">return</span> body;
+}
+
+<span class="c">// if let handles both outcomes and carries on: each binding lives only</span>
+<span class="c">// in its own branch, and either branch may fall through</span>
+<span class="k">if</span> <span class="k">let</span> v = <span class="f">div10</span>(<span class="n">40</span>) {
+    <span class="b">println</span>(v);                        <span class="c">// 4</span>
+} <span class="k">else</span> {
+    <span class="b">println</span>(<span class="s">&quot;not a multiple of ten&quot;</span>);
+}
+<span class="k">let</span> pr = <span class="f">parse_small</span>(<span class="s">&quot;big&quot;</span>);
+<span class="k">if</span> <span class="k">let</span> n = pr {
+    <span class="b">println</span>(n);
+} <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(pr) {
+    <span class="b">println</span>(<span class="s">&quot;rejected: &quot;</span> + e);         <span class="c">// rejected: value too large</span>
 }
 
 <span class="c">// ?? recovers from none / err with a fallback value</span>
@@ -457,6 +473,7 @@ counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
 <span class="c">// other type parameter</span>
 <span class="k">let</span> nothing: <span class="t">opt</span>[<span class="t">str</span>] = <span class="b">none</span>;
 <span class="k">let</span> bad: <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>] = <span class="b">err</span>(<span class="s">&quot;boom&quot;</span>);</code></pre></div>
+<p>A guard&#x27;s else may end in a helper of your own, such as a <code>die(msg)</code> that prints and calls <code>exit</code>: the compiler works out that a function never returns when it has no <code>return</code> and every path ends in <code>exit</code>, <code>panic</code>, or another such function, across packages. It only counts a plain call by name, so a function value or method is never assumed to diverge; end that else with an explicit <code>return</code> instead.</p>
 <p>Panics (out-of-bounds index, division by zero, <code>err_of</code> on ok, missing map key) carry <code>pkg.func:line</code>: <code>list index out of bounds at main.foo:12</code>. A panicking <code>spawn</code>ed task reports through stderr and its <code>join_wait</code> surfaces the same string as <code>err</code>, so failures stay visible across task boundaries.</p>
 <p><code>opt[T]</code> and <code>result[T, E]</code> are monomorphized per distinct type argument (one C struct per instantiation actually used). Constructing <code>none</code>/<code>err(...)</code> without enough context to infer the missing type parameter is a compile error.</p>
 <h4 id="error-model-opt-vs-result-vs-fault">Error model: <code>opt</code> vs <code>result</code> vs <code>fault</code><a class="anchor" href="#error-model-opt-vs-result-vs-fault" aria-label="Link to this section">#</a></h4>
@@ -762,8 +779,10 @@ counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
 }
 
 <span class="c">// guard let unwraps the happy path and binds it for the rest of the</span>
-<span class="c">// block; the else branch must exit (return, or exit()) since the</span>
-<span class="c">// bound name has no value to fall back to. `else let e = err_of(r)`</span>
+<span class="c">// block. The else branch must leave the scope -- return, break,</span>
+<span class="c">// continue, exit(..), panic(..), or a call to a function that never</span>
+<span class="c">// returns -- since the bound name has no value to fall back to; the</span>
+<span class="c">// compiler rejects one that can fall through. `else let e = err_of(r)`</span>
 <span class="c">// binds the error value for `result[T, E]` so failures stay visible.</span>
 <span class="k">fn</span> <span class="f">safe_div</span>(n: <span class="t">int</span>) -&gt; <span class="t">int</span> {
     <span class="k">guard</span> <span class="k">let</span> v = <span class="f">div10</span>(n) <span class="k">else</span> {
@@ -779,6 +798,20 @@ counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
         <span class="k">return</span> <span class="s">&quot;&quot;</span>;
     }
     <span class="k">return</span> body;
+}
+
+<span class="c">// if let handles both outcomes and carries on: each binding lives only</span>
+<span class="c">// in its own branch, and either branch may fall through</span>
+<span class="k">if</span> <span class="k">let</span> v = <span class="f">div10</span>(<span class="n">40</span>) {
+    <span class="b">println</span>(v);                        <span class="c">// 4</span>
+} <span class="k">else</span> {
+    <span class="b">println</span>(<span class="s">&quot;not a multiple of ten&quot;</span>);
+}
+<span class="k">let</span> pr = <span class="f">parse_small</span>(<span class="s">&quot;big&quot;</span>);
+<span class="k">if</span> <span class="k">let</span> n = pr {
+    <span class="b">println</span>(n);
+} <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(pr) {
+    <span class="b">println</span>(<span class="s">&quot;rejected: &quot;</span> + e);         <span class="c">// rejected: value too large</span>
 }
 
 <span class="c">// ?? recovers from none / err with a fallback value</span>
@@ -800,6 +833,7 @@ counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
 <span class="c">// other type parameter</span>
 <span class="k">let</span> nothing: <span class="t">opt</span>[<span class="t">str</span>] = <span class="b">none</span>;
 <span class="k">let</span> bad: <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>] = <span class="b">err</span>(<span class="s">&quot;boom&quot;</span>);</code></pre></div>
+<p>A guard&#x27;s else may end in a helper of your own, such as a <code>die(msg)</code> that prints and calls <code>exit</code>: the compiler works out that a function never returns when it has no <code>return</code> and every path ends in <code>exit</code>, <code>panic</code>, or another such function, across packages. It only counts a plain call by name, so a function value or method is never assumed to diverge; end that else with an explicit <code>return</code> instead.</p>
 <p>Panics (out-of-bounds index, division by zero, <code>err_of</code> on ok, missing map key) carry <code>pkg.func:line</code>: <code>list index out of bounds at main.foo:12</code>. A panicking <code>spawn</code>ed task reports through stderr and its <code>join_wait</code> surfaces the same string as <code>err</code>, so failures stay visible across task boundaries.</p>
 <p><code>opt[T]</code> and <code>result[T, E]</code> are monomorphized per distinct type argument (one C struct per instantiation actually used). Constructing <code>none</code>/<code>err(...)</code> without enough context to infer the missing type parameter is a compile error.</p>
 <h3 id="error-model-opt-vs-result-vs-fault-2">Error model: <code>opt</code> vs <code>result</code> vs <code>fault</code><a class="anchor" href="#error-model-opt-vs-result-vs-fault-2" aria-label="Link to this section">#</a></h3>

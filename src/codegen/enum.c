@@ -405,6 +405,12 @@ static void resolve_stmt(CG *cg, const char *pkg, Stmt *s) {
         resolve_expr(cg, pkg, s->as.guard_let.err_expr);
         resolve_block(cg, pkg, s->as.guard_let.body);
         return;
+    case ST_IF_LET:
+        resolve_expr(cg, pkg, s->as.if_let.expr);
+        resolve_expr(cg, pkg, s->as.if_let.err_expr);
+        resolve_block(cg, pkg, s->as.if_let.then_blk);
+        resolve_block(cg, pkg, s->as.if_let.else_blk);
+        return;
     case ST_SPAWN:
         resolve_expr(cg, pkg, s->as.spawn.call);
         return;
