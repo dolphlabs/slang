@@ -262,10 +262,11 @@ function initHero(): void {
           canvas,
           reducedMotion,
           horizon: () => {
-            const ctas = $('.hero .hero-ctas');
+            // The lowest piece of hero copy is marked data-horizon.
+            const last = $('.hero [data-horizon]');
             const r = canvas.getBoundingClientRect();
-            if (!ctas || !r.height) return 0.66;
-            return (ctas.getBoundingClientRect().bottom - r.top + 16) / r.height;
+            if (!last || !r.height) return 0.66;
+            return (last.getBoundingClientRect().bottom - r.top + 16) / r.height;
           },
           onCount: (n) => { if (countEl) countEl.textContent = n.toLocaleString('en'); },
         }),

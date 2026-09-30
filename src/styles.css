@@ -252,13 +252,16 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 24px;
+  gap: 20px;
   width: 100%;
   max-width: 1100px;
   margin: 0 auto;
-  padding: 136px var(--gutter) 40px;
+  /* The bottom padding is the field's own band: the copy never pushes the
+     rabbits out of the hero. */
+  padding: 116px var(--gutter) 250px;
   text-align: center;
 }
+.token-race-short { display: none; }
 .pill {
   display: inline-flex;
   align-items: center;
@@ -282,10 +285,43 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
   font-size: 12.5px;
 }
 .hero h1 {
-  font-size: clamp(48px, 8.4vw, 112px);
+  font-size: clamp(48px, 7.4vw, 100px);
   line-height: .96;
   letter-spacing: -.05em;
   text-wrap: balance;
+}
+.hero-sub {
+  margin: -6px 0 0;
+  font-size: clamp(22px, 2.6vw, 32px);
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: -.02em;
+  color: var(--ink);
+  text-wrap: balance;
+}
+.token-race {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 4px 16px 4px 6px;
+  border: 1px solid rgba(214, 245, 49, .28);
+  border-radius: 999px;
+  background: rgba(10, 11, 13, .78);
+  font-size: 14px;
+  color: var(--muted);
+  transition: border-color .2s, color .2s;
+}
+.token-race:hover { border-color: var(--lime); color: var(--ink); }
+.token-race b { font-weight: 500; color: var(--ink); }
+.token-race-tag {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--lime);
+  color: var(--lime-ink);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-weight: 500;
 }
 .lede {
   max-width: 680px;
@@ -386,6 +422,8 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
   .hero-inner { padding-top: 112px; padding-bottom: 250px; gap: 20px; }
   .pill-long { display: none; }
   .pill-short { display: inline; }
+  .token-race-long { display: none; }
+  .token-race-short { display: inline; }
   .stats { grid-template-columns: minmax(0, 1fr); }
   .stat { padding: 16px 20px; }
   .stat + .stat { border-left: 0; border-top: 1px solid var(--line); }
