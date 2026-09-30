@@ -1,5 +1,5 @@
 {
-  "recorded_with": "slangc 0.2.0",
+  "recorded_with": "slangc 0.2.1",
   "programs": [
     {
       "name": "hello",
@@ -11,7 +11,7 @@
       "exit": 0,
       "note": "Ten thousand green tasks. Sleeping parks the task, so they all sleep at once.",
       "recorded": {
-        "ms": "604"
+        "ms": "630"
       }
     },
     {
