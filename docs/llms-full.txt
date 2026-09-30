@@ -4904,7 +4904,8 @@ See `examples/pkgdemo/` for a complete multi-package project.
 
 External packages are pinned in `slang.project` (walked up from the
 entry file). Imports stay short. `slang.lock` holds content hashes
-and is written by `slangc get`, never by hand.
+and is written by `slangc get`, never by hand. The file needs a `name` and
+a `version` line as well as its pins; `slangc new` writes both.
 
 ```
 name myserver

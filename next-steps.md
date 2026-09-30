@@ -494,6 +494,17 @@ training data, so it wins on those three. The zokor half (agent guide,
     and `[none, some(1)]` would need one either way.
   - [x] A missing map key reported `(index 0, length 0)`; it now names the
     key and says to check with `has(m, k)` first.
+- Found by the benchmark's first setup attempt (an agent following zokor's
+  README exactly):
+  - [x] A `slang.project` holding only zokor's `pkg` line failed with
+    "missing name or version". The error now shows the lines to add, and
+    zokor's README shows the whole file.
+  - [x] zokor's guide used `import "../../src" as zokor;` in every block,
+    which works only inside the zokor repo. The blocks now use
+    `import "zokor";`, and zokor's snippet check maps that to the checkout.
+  - [ ] `slangc get` passes through git's `refs/tags/v0.1.0 ... is not a
+    commit!` for an annotated tag: harmless (the clone succeeds) but it
+    reads like a failure.
 
 ## Notes
 
