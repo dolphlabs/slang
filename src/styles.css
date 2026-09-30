@@ -386,40 +386,46 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .stats-note a { color: var(--muted); border-bottom: 1px solid var(--line-2); }
 .stats-note a:hover { color: var(--ink); }
 
-.spawn-card {
+/* A readout in the corner, like a debug overlay: what is being drawn and
+   how fast. */
+.hero-hud {
   position: absolute;
-  left: clamp(16px, 3.4vw, 48px);
-  bottom: 32px;
-  width: 330px;
-  padding: 14px 14px 12px 16px;
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: rgba(10, 11, 13, .8);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
+  right: clamp(16px, 3.4vw, 48px);
+  bottom: 24px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--faint);
 }
-.spawn-card[hidden] { display: none; }
-.spawn-card pre {
-  margin: 0 0 10px;
-  font-size: 13px;
-  white-space: pre-wrap;
-  color: var(--ink-2);
-}
-.spawn-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.spawn-count { font-size: 13px; color: var(--faint); }
-.spawn-count b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.hero-hud[hidden] { display: none; }
+.hud-stat { font-variant-numeric: tabular-nums; }
 
 .pill-short { display: none; }
 
-/* Below desktop width the spawn card cannot sit beside the copy, so the
-   hero grows a band of field under the copy and the card floats in it. */
-@media (max-width: 1180px) {
+/* Wide screens: the copy on the left, the rabbit standing to its right. */
+@media (min-width: 1100px) {
+  .hero-inner {
+    align-items: flex-start;
+    max-width: calc(1240px + 2 * var(--gutter));
+    padding-bottom: 110px;
+    text-align: left;
+  }
+  .hero-inner > * { max-width: 620px; }
+  .hero-ctas { justify-content: flex-start; }
+  .hero-shade {
+    background:
+      radial-gradient(55% 70% at 22% 45%, rgba(7, 8, 10, .8) 0%, rgba(7, 8, 10, 0) 100%),
+      linear-gradient(180deg, rgba(7, 8, 10, 0) 80%, var(--bg) 100%);
+  }
+}
+
+/* Narrower: the copy is centred and the rabbit gets its own band below it. */
+@media (max-width: 1099px) {
   .hero { min-height: 0; }
-  .hero-inner { padding-bottom: 300px; }
-  .spawn-card { left: 50%; bottom: 20px; transform: translateX(-50%); width: min(330px, calc(100% - 32px)); }
+  .hero-inner { padding-bottom: 380px; }
+  .hero-hud { left: 50%; right: auto; transform: translateX(-50%); }
 }
 @media (max-width: 760px) {
-  .hero-inner { padding-top: 112px; padding-bottom: 250px; gap: 20px; }
+  .hero-inner { padding-top: 112px; padding-bottom: 330px; gap: 20px; }
   .pill-long { display: none; }
   .pill-short { display: inline; }
   .token-race-long { display: none; }

@@ -251,29 +251,35 @@ function initHero(): void {
   // asked to save data or the browser cannot draw it.
   if (conn?.saveData || !webglOk()) return;
 
-  const card = $('[data-spawn]');
-  const countEl = $('[data-spawn-count]');
-  const button = $('[data-spawn-run]') as HTMLButtonElement | null;
+  const hud = $('[data-hud]');
+  const stat = $('[data-hud-stat]');
+  // Each page load draws one of the two rabbits at random; neither is the
+  // default. ?hero=points or ?hero=ascii pins one, for testing.
+  const asked = new URLSearchParams(location.search).get('hero');
+  const mode = asked === 'points' || asked === 'ascii' ? asked : Math.random() < 0.5 ? 'points' : 'ascii';
+
+  // Wide screens: the rabbit stands to the right of the copy. Narrow ones:
+  // in the band the hero leaves under its lowest line (data-horizon).
+  const place = (w: number, h: number) => {
+    if (w >= 1100) return { x: w * 0.74, y: h * 0.5, height: h * 0.74 };
+    const last = $('.hero [data-horizon]');
+    const top = last ? last.getBoundingClientRect().bottom - canvas.getBoundingClientRect().top + 24 : h * 0.6;
+    const band = Math.max(160, h - top);
+    return { x: w / 2, y: top + band / 2, height: band * 0.86 };
+  };
 
   const start = () => {
-    import('./hero/scene')
-      .then(({ createHero }) =>
-        createHero({
-          canvas,
-          reducedMotion,
-          horizon: () => {
-            // The lowest piece of hero copy is marked data-horizon.
-            const last = $('.hero [data-horizon]');
-            const r = canvas.getBoundingClientRect();
-            if (!last || !r.height) return 0.66;
-            return (last.getBoundingClientRect().bottom - r.top + 16) / r.height;
-          },
-          onCount: (n) => { if (countEl) countEl.textContent = n.toLocaleString('en'); },
-        }),
-      )
+    import('./hero/index')
+      .then(({ createHero }) => createHero({ canvas, reducedMotion, mode, place }))
       .then((hero) => {
-        if (card) card.hidden = false;
-        button?.addEventListener('click', () => hero.spawn(100));
+        if (!hud || !stat) return;
+        hud.hidden = false;
+        const show = () => {
+          const fps = hero.fps();
+          stat.textContent = `${hero.label()}${fps ? ` · ${fps} fps` : ''}`;
+        };
+        show();
+        window.setInterval(show, 1000);
       })
       .catch((err: unknown) => {
         // The static hero is already on screen; log and leave it be.
