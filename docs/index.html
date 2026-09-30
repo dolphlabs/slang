@@ -150,6 +150,22 @@ make docs            # rebuild the documentation site</code></pre></div>
 slangc new .         # same, in the directory you are already in</code></pre></div>
 <p><code>slangc new</code> writes <code>slang.project</code> but <strong>not</strong> <code>slang.lock</code>. The lock is derived: <code>slangc get</code> generates it from the <code>pkg</code> lines in <code>slang.project</code>, and a lock file for a project with no dependencies records nothing. Cargo and Go draw the same line — <code>cargo new</code> writes <code>Cargo.toml</code> and not <code>Cargo.lock</code>.</p>
 <p>Scaffolding lives in <code>slangc</code> rather than a companion tool because the compiler already owns both formats: it parses <code>slang.project</code> and writes <code>slang.lock</code>. A separate tool would have to reimplement a grammar it does not control.</p>
+<p>Look up an API without leaving the terminal:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>slangc doc                     # every package this directory can import
+slangc doc http                # its exported items, one line each
+slangc doc builder.Str         # one item: its comment, and a struct&#x27;s fields and methods
+slangc doc httpc client_post   # the same, as two words</code></pre></div>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>$ slangc doc builder.Str
+<span class="k">gc</span> <span class="k">struct</span> Str {
+    parts: [<span class="t">str</span>],
+    size: <span class="t">int</span>,
+}
+
+methods:
+  <span class="k">fn</span> <span class="f">write</span>(self: Str, s: <span class="t">str</span>) -&gt; Str
+      <span class="c">// Appends, and returns the builder so writes chain.</span>
+  ...</code></pre></div>
+<p>Packages resolve exactly as <code>import</code> does from the current directory: a local directory, a compiler-provided package, the standard library, then a <code>slang.project</code> pin. An item&#x27;s documentation is the run of <code>//</code> comments directly above its <code>pub</code> declaration, which is also what the documentation site shows. It exists so an agent can ask for the one signature it needs instead of reading a page or the package&#x27;s source.</p>
 <p>Compile a slang program:</p>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>./slangc examples/hello/main.sl     # produces ./main
 ./main                              # run it</code></pre></div>

@@ -35,6 +35,8 @@
 #define SLANG_VERSION "0.2.0"
 #endif
 
+int cmd_doc(int argc, char **argv); /* doc.c */
+
 static void print_usage(void) {
     fputs("usage: slangc <file.sl> [-o <name>] [--emit-c] [--keep-c] [--run] "
           "[--json] [--dump-liveness] [--dump-mir]\n"
@@ -42,6 +44,7 @@ static void print_usage(void) {
           "       slangc new <name>|.        scaffold a project here or in <name>\n"
           "       slangc get [file.sl|dir]   resolve deps, write slang.lock\n"
           "       slangc test [dir] [--run substr] [--keep]   run test_* functions in *_test.sl\n"
+          "       slangc doc [<pkg>[.<name>]]   a package's API: signatures and doc comments\n"
           "       slangc --version",
           stderr);
     fputc(10, stderr);
@@ -1008,6 +1011,10 @@ int main(int argc, char **argv) {
     if (argc >= 2 && !strcmp(argv[1], "new")) {
         sl_compiler_argv0 = argv[0];
         return cmd_new(argc >= 3 ? argv[2] : NULL);
+    }
+    if (argc >= 2 && !strcmp(argv[1], "doc")) {
+        sl_compiler_argv0 = argv[0];
+        return cmd_doc(argc, argv);
     }
     if (argc >= 2 && (!strcmp(argv[1], "--version") ||
                       !strcmp(argv[1], "-V"))) {

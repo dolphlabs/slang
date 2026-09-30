@@ -40,7 +40,7 @@ PKG_SRCS = src/codegen/pkg_time/sigs.c \
           src/codegen/pkg_compress/sigs.c
 
 SRCS = src/main.c src/loader.c src/lexer.c src/parser.c src/rtpath.c \
-      src/project.c src/diag.c \
+      src/project.c src/doc.c \
       $(CODEGEN_SRCS) $(PKG_SRCS)
 HDRS = src/common.h src/lexer.h src/ast.h src/parser.h src/codegen.h \
       src/rtpath.h src/project.h src/diag.h \
