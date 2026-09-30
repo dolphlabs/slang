@@ -2663,6 +2663,15 @@ prerequisite, not a different plan).
       thread): without SA_ONSTACK it reads back as a stack pointer on the
       first delivery.
 
+- [x] **`del` on a map made other keys unreachable.** Fixed 2026-09-30.
+      It emptied the key's slot in a linear-probing table, and probing
+      stops at the first empty slot, so every key stored further along the
+      same run was lost: deleting 300 of 3000 keys left 240 of the rest
+      unfindable, their own deletes did nothing, and updating them stored
+      duplicates. Now a backward shift (Knuth, Algorithm R); test
+      `tests/map_delete`. Found while testing the GC's container frontier
+      (next-steps.md #7b).
+
 - [x] **Five stores left young objects held only by old ones, with no
       write barrier.** Fixed 2026-09-30, found by the minor-collection
       verifier (`SLANG_GC_VERIFY_MINOR`) while removing the full-mark root
