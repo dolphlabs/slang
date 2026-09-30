@@ -1,6 +1,6 @@
 # Running the benchmark suite (for the Cursor remote-host session)
 
-You are picking up work already done in this repo, on branch `bench/suite`.
+You are picking up work already done in this repo, on branch `dev`.
 This file is the handoff: what exists, what to run, and exactly how to give
 the result back so it can be folded into the README and docs. Read
 `bench/SPEC.md` first — it is the contract every implementation satisfies.
@@ -53,7 +53,7 @@ network-attached storage with variable latency).
 
 ```sh
 git clone <this repo> && cd slang
-git checkout bench/suite
+git checkout dev
 sudo bench/suite/setup_host.sh
 ```
 
