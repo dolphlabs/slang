@@ -1,0 +1,55 @@
+# The homepage shows recorded runs of real programs and numbers from the
+# language's benchmarks. This keeps the programs honest: it builds slangc
+# from main and fails if any of them no longer compiles or prints what the
+# page says it prints. Then it builds the deployable site the way the host
+# does, so a broken assemble shows up here and not in production.
+name: website
+
+on:
+  push:
+    branches: [website]
+  pull_request:
+    branches: [website]
+  workflow_dispatch:
+    inputs:
+      slang_ref:
+        description: slang branch or tag to check the programs against
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out slang
+        uses: actions/checkout@v4
+        with:
+          repository: dolphlabs/slang
+          ref: ${{ inputs.slang_ref || 'main' }}
+          path: .slang
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev libsqlite3-dev zlib1g-dev
+
+      - name: Build slangc
+        run: make -C .slang
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Example programs match the compiler
+        run: SLANGC="$PWD/.slang/slangc" npm run check
+
+      - name: Assemble the site
+        run: npm run assemble

@@ -1,0 +1,10 @@
+
+# ---- appended by the website branch (scripts/assemble.sh) ----
+# Vite names every built asset by its content hash, so it never changes
+# under the same URL.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/
+  Cache-Control: public, max-age=0, must-revalidate
+  X-Frame-Options: DENY
