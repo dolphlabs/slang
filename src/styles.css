@@ -1076,6 +1076,12 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
   font-size: 13px;
   color: var(--faint);
 }
+.footer-base a {
+  color: var(--muted);
+  border-bottom: 1px solid var(--line-2);
+  transition: color .2s, border-color .2s;
+}
+.footer-base a:hover { color: var(--ink); border-color: var(--lime); }
 
 /* ---- reveal on scroll ---------------------------------------------------- */
 
