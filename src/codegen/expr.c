@@ -1031,8 +1031,8 @@ char *gen_call(CG *cg, Expr *e) {
             if (!sig)
                 sig = generic_call_sig(cg, pkg, right, e);
             if (!sig)
-                cg_error(e->line, "package '%s' has no function '%s'", pkg,
-                         right);
+                cg_error(e->line, "package '%s' has no function '%s'%s", pkg,
+                         right, suggest_function(cg, pkg, right));
             if (!sig->is_pub)
                 cg_error(e->line,
                          "function '%s' is not exported from package '%s'",
@@ -1221,8 +1221,8 @@ char *gen_call(CG *cg, Expr *e) {
             }
             sig = method_find(cg, sd, right, e->line);
             if (!sig)
-                cg_error(e->line, "type '%s' has no method '%s'",
-                         sd->canonical, right);
+                cg_error(e->line, "type '%s' has no method '%s'%s",
+                         sd->canonical, right, suggest_method(cg, sd, right));
             if (!sig->is_pub && strcmp(sd->pkg, cg->cur_pkg))
                 cg_error(e->line,
                          "method '%s' is not exported from package '%s'",
@@ -1252,7 +1252,8 @@ char *gen_call(CG *cg, Expr *e) {
             if (!sig)
                 sig = generic_call_sig(cg, cg->cur_pkg, name, e);
             if (!sig)
-                cg_error(e->line, "call to undefined function '%s'", name);
+                cg_error(e->line, "call to undefined function '%s'%s", name,
+                         suggest_function(cg, NULL, name));
         }
     }
 have_sig:;

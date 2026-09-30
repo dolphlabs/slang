@@ -1152,7 +1152,7 @@ fn scenario_stream() {
         return;
     }
     let busy = pg.exec(c, "SELECT 1", soon());
-    guard let b = busy else let e = err_of(busy) {
+    if let b = busy { } else let e = err_of(busy) {
         if !strings.contains(e, "a streamed result is still open") {
             die("busy during stream: " + e);
         }
