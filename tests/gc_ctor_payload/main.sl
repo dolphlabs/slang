@@ -44,7 +44,7 @@ while i < 1000000 {
         exit(1);
     }
     let er = make_err(i);
-    guard let x = er else let e = err_of(er) {
+    if let x = er { } else let e = err_of(er) {
         if e != label(i) {
             println("FAIL err() payload corrupted at " + to_str(i));
             exit(1);

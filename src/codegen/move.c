@@ -568,6 +568,50 @@ static void check_stmt(CG *cg, Stmt *s) {
         }
         return;
     }
+    case ST_IF_LET: {
+        check_rvalue(cg, s->as.if_let.expr);
+        if (s->as.if_let.err_expr)
+            check_rvalue(cg, s->as.if_let.err_expr);
+        const char *et = infer_type(cg, s->as.if_let.expr);
+        char *inner = NULL;
+        int is_res = 0;
+        char *tev = NULL;
+        if (is_opt(et))
+            inner = opt_inner(et);
+        else if (is_result(et)) {
+            char *tv;
+            result_te(et, &tv, &tev);
+            inner = tv;
+            is_res = 1;
+        }
+        if (s->as.if_let.err_name && !is_res)
+            cg_error(s->line, "else let error binding requires a result value");
+        /* Same exclusivity as ST_IF: both branches start from the state
+         * before the `if let`, and what either moved is moved after it. */
+        int n = cg->vars.count;
+        int *before = snap_moved(cg, n);
+        var_scope_push(cg);
+        if (inner) {
+            var_redecl_check(cg, s->as.if_let.name, s->line);
+            var_push(cg, s->as.if_let.name, inner);
+        }
+        check_block(cg, s->as.if_let.then_blk);
+        var_scope_pop(cg);
+        int *then_m = snap_moved(cg, n);
+        restore_moved(cg, before, n);
+        if (s->as.if_let.else_blk) {
+            var_scope_push(cg);
+            if (s->as.if_let.err_name) {
+                var_redecl_check(cg, s->as.if_let.err_name, s->line);
+                var_push(cg, s->as.if_let.err_name, tev);
+            }
+            check_block(cg, s->as.if_let.else_blk);
+            var_scope_pop(cg);
+        }
+        int *else_m = snap_moved(cg, n);
+        join_moved(cg, then_m, else_m, n);
+        return;
+    }
     case ST_UNSAFE:
         check_block(cg, s->as.unsafe_blk.body);
         return;

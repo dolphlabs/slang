@@ -152,15 +152,15 @@ regex.free(dre);
 
 // ---- compile errors stay visible through err_of -----------------
 let e1 = regex.compile("(unclosed");
-guard let _a = e1 else let e = err_of(e1) { println("err: " + e); }
+if let _a = e1 { } else let e = err_of(e1) { println("err: " + e); }
 let e2 = regex.compile("a{2,1}");
-guard let _b = e2 else let e = err_of(e2) { println("err: " + e); }
+if let _b = e2 { } else let e = err_of(e2) { println("err: " + e); }
 let e3 = regex.compile("*x");
-guard let _c = e3 else let e = err_of(e3) { println("err: " + e); }
+if let _c = e3 { } else let e = err_of(e3) { println("err: " + e); }
 let e4 = regex.compile("(?=lookahead)");
-guard let _d = e4 else let e = err_of(e4) { println("err: " + e); }
+if let _d = e4 { } else let e = err_of(e4) { println("err: " + e); }
 let e5 = regex.compile("[z-a]");
-guard let _e = e5 else let e = err_of(e5) { println("err: " + e); }
+if let _e = e5 { } else let e = err_of(e5) { println("err: " + e); }
 
 // nesting past the cap is an error, not a crash
 let deep = "";
@@ -168,7 +168,7 @@ for i in 0..200 { deep = deep + "(?:"; }
 deep = deep + "a";
 for i in 0..200 { deep = deep + ")"; }
 let e6 = regex.compile(deep);
-guard let _f = e6 else let e = err_of(e6) { println("err: " + e); }
+if let _f = e6 { } else let e = err_of(e6) { println("err: " + e); }
 
 if fails == 0 {
     println("all regex checks passed");

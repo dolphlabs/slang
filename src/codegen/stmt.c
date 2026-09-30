@@ -126,6 +126,9 @@ static void break_push(CG *cg, int kind, const char *end) {
 
 static void break_pop(CG *cg) { cg->break_len--; }
 
+static void check_guard_else_leaves(CG *cg, Block *body, int line);
+static void gen_if_let(CG *cg, Stmt *s);
+
 void gen_stmt(CG *cg, Stmt *s) {
     switch (s->kind) {
     case ST_LET: {
@@ -586,6 +589,8 @@ void gen_stmt(CG *cg, Stmt *s) {
         break;
     }
     case ST_IF: {
+        if (s->as.if_stmt.from_guard)
+            check_guard_else_leaves(cg, s->as.if_stmt.then_blk, s->line);
         const char *ct = infer_type(cg, s->as.if_stmt.cond);
         if (strcmp(ct, "bool"))
             cg_error(s->line, "if condition must be bool (got %s)", ct);
@@ -991,6 +996,9 @@ void gen_stmt(CG *cg, Stmt *s) {
         /* handled by gen_stmts, which needs to see the statements that
          * follow it in the same block */
         break;
+    case ST_IF_LET:
+        gen_if_let(cg, s);
+        break;
     case ST_SELECT: {
         /* Every arm's channel -- and a send arm's value -- is evaluated
          * ONCE here, before anything can block. Evaluating them lazily
@@ -1276,11 +1284,269 @@ void gen_stmt(CG *cg, Stmt *s) {
     }
 }
 
+/* ---- functions that never return ------------------------------------ */
+
+static int noret_has(CG *cg, const char *pkg, const char *name) {
+    for (int i = 0; i < cg->nnoret; i++)
+        if (!strcmp(cg->noret_pkg[i], pkg) && !strcmp(cg->noret_name[i], name))
+            return 1;
+    return 0;
+}
+
+static void noret_add(CG *cg, const char *pkg, const char *name) {
+    cg->noret_pkg = (const char **)xrealloc(
+        cg->noret_pkg, (size_t)(cg->nnoret + 1) * sizeof(char *));
+    cg->noret_name = (const char **)xrealloc(
+        cg->noret_name, (size_t)(cg->nnoret + 1) * sizeof(char *));
+    cg->noret_pkg[cg->nnoret] = pkg;
+    cg->noret_name[cg->nnoret] = name;
+    cg->nnoret++;
+}
+
+/* Is `name` bound anywhere in b (a let, a loop variable, a guard, if let
+ * or select binding)? A binding shadows a function of the same name, so
+ * a call through it is a function value, not the function. */
+static int block_binds(Block *b, const char *name);
+
+static int stmt_binds(Stmt *s, const char *name) {
+    switch (s->kind) {
+    case ST_LET:
+        return !strcmp(s->as.let.name, name);
+    case ST_IF:
+        return block_binds(s->as.if_stmt.then_blk, name) ||
+               block_binds(s->as.if_stmt.else_blk, name);
+    case ST_WHILE:
+        return block_binds(s->as.while_stmt.body, name);
+    case ST_FOR:
+        return !strcmp(s->as.for_stmt.name, name) ||
+               block_binds(s->as.for_stmt.body, name);
+    case ST_FOR_IN:
+        return !strcmp(s->as.for_in.name, name) ||
+               (s->as.for_in.name2 && !strcmp(s->as.for_in.name2, name)) ||
+               block_binds(s->as.for_in.body, name);
+    case ST_GUARD_LET:
+        return !strcmp(s->as.guard_let.name, name) ||
+               (s->as.guard_let.err_name &&
+                !strcmp(s->as.guard_let.err_name, name)) ||
+               block_binds(s->as.guard_let.body, name);
+    case ST_IF_LET:
+        return !strcmp(s->as.if_let.name, name) ||
+               (s->as.if_let.err_name && !strcmp(s->as.if_let.err_name, name)) ||
+               block_binds(s->as.if_let.then_blk, name) ||
+               block_binds(s->as.if_let.else_blk, name);
+    case ST_UNSAFE:
+        return block_binds(s->as.unsafe_blk.body, name);
+    case ST_SELECT:
+        for (int i = 0; i < s->as.select_stmt.ncases; i++) {
+            SelectCase *c = &s->as.select_stmt.cases[i];
+            if ((c->bind && !strcmp(c->bind, name)) ||
+                block_binds(c->body, name))
+                return 1;
+        }
+        return block_binds(s->as.select_stmt.def, name);
+    case ST_SWITCH:
+        for (int i = 0; i < s->as.switch_stmt.ncases; i++)
+            if (block_binds(s->as.switch_stmt.cases[i].body, name))
+                return 1;
+        return block_binds(s->as.switch_stmt.def, name);
+    default:
+        return 0;
+    }
+}
+
+static int block_binds(Block *b, const char *name) {
+    if (!b)
+        return 0;
+    for (int i = 0; i < b->count; i++)
+        if (stmt_binds(b->stmts[i], name))
+            return 1;
+    return 0;
+}
+
+/* Does b contain a return anywhere, at any depth? A function with one can
+ * return however its last statement ends. */
+static int block_has_return(Block *b);
+
+static int stmt_has_return(Stmt *s) {
+    switch (s->kind) {
+    case ST_RETURN:
+        return 1;
+    case ST_IF:
+        return block_has_return(s->as.if_stmt.then_blk) ||
+               block_has_return(s->as.if_stmt.else_blk);
+    case ST_WHILE:
+        return block_has_return(s->as.while_stmt.body);
+    case ST_FOR:
+        return block_has_return(s->as.for_stmt.body);
+    case ST_FOR_IN:
+        return block_has_return(s->as.for_in.body);
+    case ST_GUARD_LET:
+        return block_has_return(s->as.guard_let.body);
+    case ST_IF_LET:
+        return block_has_return(s->as.if_let.then_blk) ||
+               block_has_return(s->as.if_let.else_blk);
+    case ST_UNSAFE:
+        return block_has_return(s->as.unsafe_blk.body);
+    case ST_SELECT:
+        for (int i = 0; i < s->as.select_stmt.ncases; i++)
+            if (block_has_return(s->as.select_stmt.cases[i].body))
+                return 1;
+        return block_has_return(s->as.select_stmt.def);
+    case ST_SWITCH:
+        for (int i = 0; i < s->as.switch_stmt.ncases; i++)
+            if (block_has_return(s->as.switch_stmt.cases[i].body))
+                return 1;
+        return block_has_return(s->as.switch_stmt.def);
+    default:
+        return 0;
+    }
+}
+
+static int block_has_return(Block *b) {
+    if (!b)
+        return 0;
+    for (int i = 0; i < b->count; i++)
+        if (stmt_has_return(b->stmts[i]))
+            return 1;
+    return 0;
+}
+
+/* Is e a call to a package function known never to return? Only a plain
+ * call by name counts: a function value, a method or a generic function
+ * is never assumed to diverge, so this can only under-claim. */
+static int call_never_returns(CG *cg, Expr *e) {
+    if (e->kind != EX_CALL || e->as.call.callee || !e->as.call.name)
+        return 0;
+    const char *n = e->as.call.name;
+    if (!strcmp(n, "exit") || !strcmp(n, "panic"))
+        return 1;
+    const char *dot = strchr(n, '.');
+    if (!dot) {
+        /* a local binding of the same name shadows the function */
+        if (cg->noret_fn) {
+            for (int i = 0; i < cg->noret_fn->nparams; i++)
+                if (!strcmp(cg->noret_fn->params[i], n))
+                    return 0;
+            if (block_binds(cg->noret_fn->body, n))
+                return 0;
+        } else if (var_find(cg, n)) {
+            return 0;
+        }
+        return noret_has(cg, cg->cur_pkg, n);
+    }
+    size_t alen = (size_t)(dot - n);
+    char alias[256];
+    if (alen >= sizeof(alias) || strchr(dot + 1, '.'))
+        return 0;
+    memcpy(alias, n, alen);
+    alias[alen] = '\0';
+    const char *pkg = import_try(cg, alias);
+    return pkg && noret_has(cg, pkg, dot + 1);
+}
+
+#define LEAVE_BREAK 1      /* a break leaves (it is not inside a switch) */
+#define LEAVE_EXITS_ONLY 2 /* only a call that never returns counts */
+
+/* Does control never reach the end of b? True when its last statement is
+ * return, continue, break (with LEAVE_BREAK), a call that never returns
+ * (exit, panic, or a function compute_noreturn found), or an if/else, if
+ * let/else, or switch with a default whose every branch is itself such a
+ * block. With LEAVE_EXITS_ONLY, return/break/continue do not count: the
+ * question is then whether the enclosing FUNCTION can return at all.
+ * Conservative: a loop, a select, or an enum switch exhaustive without a
+ * default answer no, so a guard's else built from one is rejected even
+ * when it does leave -- end it with an explicit return instead. A break
+ * inside a switch leaves only the switch, so it does not count there;
+ * continue still reaches the enclosing loop. */
+static int block_leaves(CG *cg, Block *b, int flags) {
+    if (!b || b->count == 0)
+        return 0;
+    Stmt *last = b->stmts[b->count - 1];
+    int exits_only = flags & LEAVE_EXITS_ONLY;
+    switch (last->kind) {
+    case ST_RETURN:
+    case ST_CONTINUE:
+        return !exits_only;
+    case ST_BREAK:
+        return !exits_only && (flags & LEAVE_BREAK);
+    case ST_EXPR:
+        return call_never_returns(cg, last->as.expr_stmt.expr);
+    case ST_IF:
+        return last->as.if_stmt.else_blk &&
+               block_leaves(cg, last->as.if_stmt.then_blk, flags) &&
+               block_leaves(cg, last->as.if_stmt.else_blk, flags);
+    case ST_IF_LET:
+        return last->as.if_let.else_blk &&
+               block_leaves(cg, last->as.if_let.then_blk, flags) &&
+               block_leaves(cg, last->as.if_let.else_blk, flags);
+    case ST_SWITCH: {
+        int arm = flags & ~LEAVE_BREAK;
+        if (!last->as.switch_stmt.def ||
+            !block_leaves(cg, last->as.switch_stmt.def, arm))
+            return 0;
+        for (int i = 0; i < last->as.switch_stmt.ncases; i++)
+            if (!block_leaves(cg, last->as.switch_stmt.cases[i].body, arm))
+                return 0;
+        return 1;
+    }
+    case ST_UNSAFE:
+        return block_leaves(cg, last->as.unsafe_blk.body, flags);
+    default:
+        return 0;
+    }
+}
+
+int block_leaves_scope(CG *cg, Block *b) {
+    return block_leaves(cg, b, LEAVE_BREAK);
+}
+
+/* Finds every package function that never returns, to a fixed point (a
+ * die() calling a fatal() calling exit()): no return anywhere in its body,
+ * and a last statement that cannot complete. Generic functions, externs and
+ * methods are left out: the table only ever under-claims, and over-
+ * claiming would let a guard's else fall through into an unset binding. */
+void compute_noreturn(CG *cg, Package *pkgs, int npkgs) {
+    const char *saved = cg->cur_pkg;
+    int changed = 1;
+    while (changed) {
+        changed = 0;
+        for (int i = 0; i < npkgs; i++) {
+            if (pkgs[i].native)
+                continue;
+            cg->cur_pkg = pkgs[i].name;
+            Program *prog = pkgs[i].prog;
+            for (int j = 0; j < prog->nfuncs; j++) {
+                FuncDecl *f = prog->funcs[j];
+                if (f->ntparams || f->is_extern || !f->body ||
+                    noret_has(cg, pkgs[i].name, f->name))
+                    continue;
+                cg->noret_fn = f;
+                if (!block_has_return(f->body) &&
+                    block_leaves(cg, f->body, LEAVE_EXITS_ONLY)) {
+                    noret_add(cg, pkgs[i].name, f->name);
+                    changed = 1;
+                }
+            }
+        }
+    }
+    cg->noret_fn = NULL;
+    cg->cur_pkg = saved;
+}
+
+/* A guard's else runs exactly when the guard failed, so falling out of it
+ * would run the rest of the block anyway -- and for `guard let`, with the
+ * bound name holding no value (a zeroed str is NULL: it segfaulted). */
+static void check_guard_else_leaves(CG *cg, Block *body, int line) {
+    if (!block_leaves_scope(cg, body))
+        cg_error(line, "guard's else must leave the scope: end it with "
+                       "return, break, continue, exit(..) or panic(..)");
+}
+
 /* Generate a run of statements. A 'guard let x = <opt/result> else'
  * binds x for the remainder of the enclosing block, so it is handled
  * here rather than per-statement: everything after it is emitted
  * inside a C block that first checks the option and runs the else
- * body (which must exit via return/break/continue/exit). */
+ * body, which must leave the scope (check_guard_else_leaves). */
 static int expr_same(Expr *a, Expr *b) {
     if (!a || !b || a->kind != b->kind)
         return 0;
@@ -1360,20 +1626,24 @@ static int expr_same(Expr *a, Expr *b) {
     }
 }
 
+/* `else let e = err_of(<expr>)`, on a guard or an if let: only for a
+ * result, and only err_of of the very expression being unwrapped. */
+static void check_err_binding(Expr *ee, Expr *expr, int is_res, int line,
+                              const char *what) {
+    if (!is_res)
+        cg_error(line, "else let error binding requires a result value");
+    if (!ee || ee->kind != EX_CALL || ee->as.call.nargs != 1 ||
+        !ee->as.call.name || strcmp(ee->as.call.name, "err_of"))
+        cg_error(line, "else let binding must be err_of(<same expression>)");
+    if (!expr_same(ee->as.call.args[0], expr))
+        cg_error(line, "err_of argument must match the %s expression", what);
+}
+
 static void gen_guard_else_body(CG *cg, Stmt *s, int gid, const char *acc,
                                 int is_res) {
     if (s->as.guard_let.err_name) {
-        if (!is_res)
-            cg_error(s->line,
-                     "else let error binding requires a result value");
-        Expr *ee = s->as.guard_let.err_expr;
-        if (!ee || ee->kind != EX_CALL || ee->as.call.nargs != 1 ||
-            strcmp(ee->as.call.name, "err_of"))
-            cg_error(s->line,
-                     "else let binding must be err_of(<same expression>)");
-        if (!expr_same(ee->as.call.args[0], s->as.guard_let.expr))
-            cg_error(s->line,
-                     "err_of argument must match the guard expression");
+        check_err_binding(s->as.guard_let.err_expr, s->as.guard_let.expr,
+                          is_res, s->line, "guard");
         char *tv, *tev;
         result_te(infer_type(cg, s->as.guard_let.expr), &tv, &tev);
         const char *ec = ctype_of(cg, tev);
@@ -1386,6 +1656,70 @@ static void gen_guard_else_body(CG *cg, Stmt *s, int gid, const char *acc,
     int from = cg->vars.count;
     gen_stmts(cg, s->as.guard_let.body->stmts, s->as.guard_let.body->count);
     emit_scope_drops(cg, from);
+}
+
+/* if let x = <opt/result> { then } else let e = err_of(..) { else }:
+ * the guard's shape, but each binding lives only in its own branch and
+ * either branch may fall through, so it is an ordinary statement. */
+static void gen_if_let(CG *cg, Stmt *s) {
+    const char *et = infer_type(cg, s->as.if_let.expr);
+    char *inner = NULL;
+    char *tev = NULL;
+    int is_res = 0;
+    if (is_opt(et)) {
+        inner = opt_inner(et);
+    } else if (is_result(et)) {
+        char *tv;
+        result_te(et, &tv, &tev);
+        inner = tv;
+        is_res = 1;
+    } else {
+        cg_error(s->line, "if let requires an opt or result value (got %s)",
+                 et);
+    }
+    if (s->as.if_let.err_name)
+        check_err_binding(s->as.if_let.err_expr, s->as.if_let.expr, is_res,
+                          s->line, "if let");
+    int id = cg->tmp_id++;
+    char *e = gen_expr(cg, s->as.if_let.expr);
+    const char *acc = type_is_gc_ptr(cg, et) ? "->" : ".";
+    emit_line(cg, "{");
+    cg->indent++;
+    emit_line(cg, "%s _sl_g%d = %s;", ctype_of(cg, et), id, e);
+    emit_line(cg, "if (_sl_g%d%s%s) {", id, acc, is_res ? "ok" : "has");
+    cg->indent++;
+    var_scope_push(cg);
+    int from = cg->vars.count;
+    var_redecl_check(cg, s->as.if_let.name, s->line);
+    var_push(cg, s->as.if_let.name, inner);
+    emit_drop_flag(cg, s->as.if_let.name);
+    emit_line(cg, "%s %s = _sl_g%d%sv;", ctype_of(cg, inner),
+              sanitize_ident(s->as.if_let.name), id, acc);
+    gen_stmts(cg, s->as.if_let.then_blk->stmts, s->as.if_let.then_blk->count);
+    emit_scope_drops(cg, from);
+    var_scope_pop(cg);
+    cg->indent--;
+    if (s->as.if_let.else_blk) {
+        emit_line(cg, "} else {");
+        cg->indent++;
+        var_scope_push(cg);
+        if (s->as.if_let.err_name) {
+            var_redecl_check(cg, s->as.if_let.err_name, s->line);
+            var_push(cg, s->as.if_let.err_name, tev);
+            emit_drop_flag(cg, s->as.if_let.err_name);
+            emit_line(cg, "%s %s = _sl_g%d%se;", ctype_of(cg, tev),
+                      sanitize_ident(s->as.if_let.err_name), id, acc);
+        }
+        int efrom = cg->vars.count;
+        gen_stmts(cg, s->as.if_let.else_blk->stmts,
+                  s->as.if_let.else_blk->count);
+        emit_scope_drops(cg, efrom);
+        var_scope_pop(cg);
+        cg->indent--;
+    }
+    emit_line(cg, "}");
+    cg->indent--;
+    emit_line(cg, "}");
 }
 
 void gen_stmts(CG *cg, Stmt **stmts, int count) {
@@ -1410,6 +1744,7 @@ void gen_stmts(CG *cg, Stmt **stmts, int count) {
                      "guard let requires an opt or result value (got %s)",
                      et);
         }
+        check_guard_else_leaves(cg, s->as.guard_let.body, s->line);
         int id = cg->tmp_id++;
         char *e = gen_expr(cg, s->as.guard_let.expr);
         const char *oc = ctype_of(cg, et);

@@ -5,6 +5,6 @@ fn boom() -> int {
 
 let h = spawn boom();
 let r = join_wait(h);
-guard let v = r else let e = err_of(r) {
+if let v = r { } else let e = err_of(r) {
     println("joined panic: " + e);
 }

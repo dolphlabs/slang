@@ -19,6 +19,7 @@ if s == Status.Paid {
 let r: result[Status, str] = Status.from_int(2);
 guard let v = r else let e = err_of(r) {
     println("bad " + e);
+    exit(1);
 }
 if v == Status.Shipped {
     println("two");
@@ -29,6 +30,7 @@ if v == Status.Shipped {
 let r2: result[Status, str] = Status.from_str("Pending");
 guard let v2 = r2 else let e2 = err_of(r2) {
     println("bad " + e2);
+    exit(1);
 }
 if v2 == Status.Pending {
     println("named");

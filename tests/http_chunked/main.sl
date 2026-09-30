@@ -66,7 +66,7 @@ println("chunked bodies decode, with extensions ignored and hex in either case")
 let tr = http.parse(to_bytes(H + "2\r\nhi\r\n0\r\nX-Late: evil\r\nX-Other: 1\r\n\r\n"));
 guard let treq = tr else let e = err_of(tr) { die("trailers: " + e); }
 if to_str(treq.body) != "hi" { die("body before trailers"); }
-guard let _late = http.header(treq, "x-late") else {
+if let _late = http.header(treq, "x-late") { } else {
     println("trailers are consumed and discarded, never merged into headers");
 }
 
@@ -168,7 +168,7 @@ println("a chunked request followed by another in one send: both framed exactly"
 let s3 = connect_pair([to_bytes(H + "400\r\n" + strings.repeat("z", 1024) + "\r\n0\r\n\r\n")]);
 let b3 = a1.wire(256);
 let r3 = http.read(&mut s3, b3, 0, until_of(time.mono() + 5000000000));
-guard let _big = r3 else let e = err_of(r3) {
+if let _big = r3 { } else let e = err_of(r3) {
     if !strings.contains(e, "too large") { die("oversized: " + e); }
     println("a chunked body larger than the buffer is refused");
 }

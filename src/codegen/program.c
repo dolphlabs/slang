@@ -256,6 +256,9 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
         if (sig->is_extern && sig->ret_slang)
             check_extern_type(sig->ret_slang, sig->line, "return");
     }
+    /* After the imports are known, before any body is checked: a guard
+     * whose else ends in die(..) must already know die never returns. */
+    compute_noreturn(cg, pkgs, npkgs);
 }
 
 /* Type of a constant-literal initializer, or error. */

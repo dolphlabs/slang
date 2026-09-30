@@ -155,16 +155,20 @@ guard let port = parse_port("8080") else {
 }
 println(port);
 let bad = parse_port("x");
-guard let _p = bad else let e = err_of(bad) {
-    println(e);
-    exit(0);
+if let p = bad {                         // if let: handle both, carry on
+    println(p);
+} else let e = err_of(bad) {
+    println(e);                          // PORT: not a base-10 integer
 }
 ```
 
 Absent data is `opt[T]`; bad data is `result[T, str]` with a reason; a
 failing network or file operation is `result[T, fault]` (timeout, reset,
 closed, refused, io). There are no exceptions. `assert(cond, msg)` and
-`panic(msg)` end the current task with the message and location. A bare
+`panic(msg)` end the current task with the message and location. A guard's
+`else` must leave the scope (`return`, `break`, `continue`, `exit`, `panic`,
+or a function of yours that always exits); `if let` is for when both
+outcomes carry on, and each of its bindings lives only in its branch. A bare
 `none` or `err(..)` needs an annotated binding or return type to infer from.
 
 ## Concurrency
@@ -282,8 +286,8 @@ println("ok");
 - `m[k]` on a missing key panics: check `has(m, k)`.
 - A closure or lambda: write a top-level function and pass its state in.
 - `return` between `mutex_lock` and `mutex_unlock`: unlock first.
-- A `guard` whose `else` falls through: it must `return`, `exit`, `break`,
-  `continue` or `panic`.
+- A `guard` whose `else` falls through is rejected: leave the scope, or use
+  `if let v = x { .. } else { .. }` when both paths continue.
 - `let v = chan_recv(c);` is `opt[T]`: unwrap with `guard let` or `??`.
 - Mixing `i32` and `int`: widening is implicit; narrowing needs `as`.
 

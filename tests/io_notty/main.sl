@@ -21,7 +21,7 @@ println("line: " + (maybe2 ?? "<none>"));
 
 // raw mode needs a terminal to be raw
 let raw = io.raw_on();
-guard let ok = raw else let e3 = err_of(raw) {
+if let ok = raw { } else let e3 = err_of(raw) {
     println("raw_on: " + e3);
     // raw_off is harmless when raw mode was never on
     let off = io.raw_off();

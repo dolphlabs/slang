@@ -9,7 +9,7 @@ gc struct Wrapper {
 }
 
 let w1 = Wrapper{ maybe: none, outcome: ok(5) };
-guard let m1 = w1.maybe else {
+if let m1 = w1.maybe { } else {
     println("w1.maybe correctly none");
 }
 guard let v1 = w1.outcome else {
