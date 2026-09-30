@@ -268,11 +268,65 @@ dotted directories (#235). Write-ups in `todo.md`.
 
 ## 7. Minor GCs trace every roots-reachable old object
 
-- [ ] The minor's root phase uses the full mark (a phase-2 band-aid for
-  intra-expression C locals), so every minor walks the whole live old heap
-  reachable from roots. That undercuts the nursery's point. A CPU item now
-  that #4 has ruled the GC out of the tail. See
-  `runtime/GENERATIONAL_GC_HANDOFF.md` before touching it.
+- [x] **Done (2026-09-30).** A minor now traces no old object at all, and
+  looks up pointers in a table of the young list only, where it used to
+  trace every old object reachable from the roots and rebuild a table of
+  the whole heap. Per-minor cost against a long-lived cache
+  (`Entry` structs in a map and a list, 3M iterations making garbage):
+
+  | cache | before | after |
+  |---|---:|---:|
+  | 20k entries | 5.6 ms/minor, 8.0 s run | 0.8 ms, 3.1 s |
+  | 200k entries | 104 ms/minor, 111 s run | 1.4 ms, 5.4 s |
+  | 1M entries | 350 ms/minor (roots fixed, table not yet), 501 s | 14 ms, 26.6 s |
+
+  Steady state (the cache built, the loop running) is 0.8-0.9 ms per
+  minor at every size; what remains at 1M is the build, see #7b.
+
+  The full-mark root phase had been hiding five places where a young
+  object became reachable only through an old one with no write
+  barrier. A new verifier (`SLANG_GC_VERIFY_MINOR`: every minor checked
+  against a full mark from the same roots) found them all:
+  - struct literals allocated the struct before evaluating its fields,
+    so a minor inside a field expression promoted it before its young
+    fields were stored (codegen now allocates after the last field);
+  - `select`'s send arm skipped the barrier `chan_send` has;
+  - `recv` allocated its result's bytes header before parking and filled
+    it after (it is now built once the data is in);
+  - a finished task's remembered entries were dropped with it, and its
+    shard buffer leaked (now handed to the next collection);
+  - a major collection kept its young survivors young while discarding
+    the remembered set that pointed at them (majors now promote what they
+    keep).
+  Each is reproduced by `tests/gc_minor_barriers` or `tests/gc_ctor_payload`
+  under the verifier when reverted; the suite runs 14 GC-heavy tests under
+  it and requires `missed=0`.
+
+## 7b. Bulk-filling a very large container re-traces it on every minor
+
+- [ ] The write barrier remembers a whole object, so while a program fills
+  one very large list or map, every minor traces all of it again: loading
+  1M entries costs about 32 ms per minor (19 s of minors to build it,
+  against 0.8 ms per minor once it is built). Card marking -- remembering
+  the range of a container that changed, not the container -- would make
+  a minor pay for the new entries only. Needs a per-container dirty range
+  and a tracer that can walk just that range; lists first (push appends),
+  maps after.
+
+## 7c. macOS keeps freed heap pages that Linux gives back
+
+- [ ] After a major, the collector calls `malloc_trim(0)` on glibc and
+  nothing on macOS, so pages the sweep freed stay in the process's
+  footprint until malloc reuses them. #7 made it visible: building a
+  200k-entry cache peaks at a 77MB physical footprint against dev's 65MB,
+  with the same peak RSS (89MB) and identical collector counts -- dev's
+  per-minor full table happened to flush those pages. Measured with
+  `malloc_zone_pressure_relief(NULL, 0)` after each major: RSS 89 ->
+  72MB, footprint 77 -> 72MB at 200k and 13.6 -> 9.7MB at 20k (dev
+  13.9), but each major about 12ms (21%) longer on that heap (worst 155
+  -> 185ms). Decide the trade across workloads -- a small-heap server, a
+  CLI, a large cache -- before choosing: always, never, or only after a
+  major that freed a lot.
 
 ## 8. CI on `dev`, not only `main`
 

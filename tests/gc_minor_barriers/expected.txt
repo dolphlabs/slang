@@ -1,0 +1,5 @@
+literals
+exiting_tasks
+selects
+recvs
+done

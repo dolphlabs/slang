@@ -1033,12 +1033,22 @@ static void sl_recv_buf_put(void *p) {
     free(c);
 }
 
-static void sl_net_recv_copy(sl_bytes *b, unsigned char *scratch, long long n) {
+/* What a recv returns: the n received bytes as a new value, built only
+ * after the data is in. Never allocate it before the wait: a bytes
+ * header made before the park and filled after it sat through the park,
+ * where a minor collection promoted it, and the data then stored into
+ * it was an old->young edge no barrier saw -- freed by the next minor
+ * while the program still held it. Header and data are allocated back to
+ * back with no safepoint between, so both are young; n == 0 leaves ptr
+ * NULL, as before. */
+static sl_bytes *sl_net_recv_bytes(const unsigned char *scratch, long long n) {
+    sl_bytes *b = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
     if (n > 0) {
         b->ptr = (unsigned char *)sl_gc_alloc((size_t)n, NULL);
         memcpy(b->ptr, scratch, (size_t)n);
     }
     b->len = n;
+    return b;
 }
 
 /* `u` of 0 means "no deadline" and reproduces the original blocking
@@ -1054,39 +1064,25 @@ static sl_res_bytes_str *sl_net_recv_u(int fd, int max, sl_until u) {
         return sl_net_err_bytes("timeout");
     if (max <= 0) max = 4096;
     unsigned char *scratch = (unsigned char *)sl_recv_buf_get((size_t)max);
-    sl_bytes *b = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
-    void *_sl_rcv_roots[] = { (void *)b };
-    sl_safepoint _sl_rcv_sp;
-    sl_rt_safepoint_enter(&_sl_rcv_sp, _sl_rcv_roots, 1); /* stays
-        entered across any parking below -- composes correctly with
-        a park+resume for the same reason it already composes with
-        stack growth: it resolves through
-        sl_rt_current_task->safepoint_top, not anything thread-local.
-        See the Tier 10 comment this replaces for why b needs its own
-        bracket at all (a hand-written runtime function, not codegen
-        output, so the caller's own bracket was built before b even
-        existed). */
+    /* Nothing GC-held lives across the wait below: the result is built
+     * once the bytes are in (sl_net_recv_bytes says why). */
     for (;;) {
         ssize_t n = recv(fd, scratch, (size_t)max, 0);
         if (n >= 0) {
-            sl_net_recv_copy(b, scratch, (long long)n);
-            sl_rt_safepoint_exit();
+            sl_bytes *b = sl_net_recv_bytes(scratch, (long long)n);
             sl_recv_buf_put(scratch);
             return sl_net_ok_bytes(b);
         }
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-            sl_rt_safepoint_exit();
             sl_recv_buf_put(scratch);
             return sl_net_err_bytes(strerror(errno));
         }
         if (sl_net_user_nonblock_contains((void *)(intptr_t)fd)) {
-            sl_rt_safepoint_exit();
             sl_recv_buf_put(scratch);
             return sl_net_err_bytes("would block");
         }
         int wr = sl_reactor_wait_until(fd, SL_REACTOR_READ, 1, u);
         if (wr < 0) {
-            sl_rt_safepoint_exit();
             sl_recv_buf_put(scratch);
             return sl_net_err_bytes(wr == -2 ? "timeout" : "interrupted");
         }
