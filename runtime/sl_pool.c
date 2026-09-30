@@ -194,9 +194,11 @@ static _Atomic int sl_runq_sleepers = 0;
     it may be running on a task's own stack, and the slot index is a
     thread-local. A thread with no slot (reactor, timer) uses the stripes.
     A task already in the slot is displaced onto the stripes, so a burst
-    of wakeups keeps only the latest one local. */
+    of wakeups keeps only the latest one local. Through the accessor, not
+    a bare read: inlined into a task's code, a bare read used the thread
+    pointer from before the task last moved (SL_RT_TLS_ADDR_FN). */
 static void sl_runq_ready(sl_task *t) {
-    int idx = sl_rt_runnext_idx;
+    int idx = *sl_rt_tls_runnext_idx();
     if (idx < 0) {
         sl_runq_stripe_push(t);
         return;
@@ -405,13 +407,14 @@ static void sl_task_park(pthread_mutex_t *held_mu) {
      * shape sl_task_yield_now/the async trampoline itself use for the
      * identical class of mid-transition hazard. */
     sl_rt_preempt_disable();
+    sl_task *t = SL_RT_TLS_CUR(); /* not bare: SL_RT_TLS_ADDR_FN */
     pthread_mutex_lock(&sl_gc_mu);
-    sl_rt_current_task->parked_next = sl_parked_tasks;
-    sl_parked_tasks = sl_rt_current_task;
+    t->parked_next = sl_parked_tasks;
+    sl_parked_tasks = t;
     pthread_mutex_unlock(&sl_gc_mu);
-    sl_rt_current_task->park_mu = held_mu;
-    sl_rt_current_task->parked = 1;
-    sl_ctx_switch(&sl_rt_current_task->rsp, SL_RT_TLS_NATIVE_RSP());
+    t->park_mu = held_mu;
+    t->parked = 1;
+    sl_ctx_switch(&t->rsp, SL_RT_TLS_NATIVE_RSP());
     /* resumes here once re-submitted (sl_task_resume) and re-switched-
        into by some worker */
     sl_rt_preempt_enable();
@@ -499,7 +502,7 @@ static void sl_task_resume(sl_task *t) {
 __attribute__((noinline))
 static void sl_task_yield_now(void) {
     sl_rt_preempt_disable();
-    sl_task *t = sl_rt_current_task;
+    sl_task *t = SL_RT_TLS_CUR(); /* not bare: SL_RT_TLS_ADDR_FN */
     t->preempted = 1;
     if (sl_sched_stat_enabled())
         atomic_fetch_add_explicit(&sl_sched_stat_preempt_yield, 1,

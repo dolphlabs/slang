@@ -1019,9 +1019,14 @@ void emit_spawn_trampolines(CG *cg) {
          * unbracketed switch in a task-heavy workload -- root-caused via
          * concurrent_compute's own crashes (map/chan/array corruption in
          * completely unrelated code, the signature of a hijacked native
-         * stack, not a clean fault at the bug's own site). */
+         * stack, not a clean fault at the bug's own site).
+         *
+         * SL_RT_TLS_CUR, not a bare sl_rt_current_task: with the user
+         * function inlined, GCC on aarch64 read the thread pointer once
+         * at entry and used it here, after the task had moved workers
+         * (SL_RT_TLS_ADDR_FN's comment, runtime/sl_core.c). */
         emit_line(cg, "sl_rt_preempt_disable();");
-        emit_line(cg, "sl_ctx_switch(&sl_rt_current_task->rsp, SL_RT_TLS_NATIVE_RSP());");
+        emit_line(cg, "sl_ctx_switch(&SL_RT_TLS_CUR()->rsp, SL_RT_TLS_NATIVE_RSP());");
         emit_line(cg, "fprintf(stderr, \"slang: internal error: spawn task entry \"");
         emit_line(cg, "                \"resumed after switching back -- unreachable\\n\");");
         emit_line(cg, "abort(); /* genuinely unreachable -- a can't-happen guard, never");

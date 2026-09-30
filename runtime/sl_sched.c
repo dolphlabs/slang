@@ -975,6 +975,10 @@ static _Thread_local unsigned char sl_grower_stack[65536]; /* MUST stay
     reliable (30/30) crash in the spike's own negative control.
     */
 static _Thread_local void *sl_grower_rsp;
+/* sl_task_stack_grow runs on the task's stack and is inlined into task
+   code, so it reaches both through these (SL_RT_TLS_ADDR_FN). */
+SL_RT_TLS_ADDR_FN(sl_rt_tls_grower_stack, unsigned char, sl_grower_stack[0])
+SL_RT_TLS_ADDR_FN(sl_rt_tls_grower_rsp, void *, sl_grower_rsp)
 
 /* sl_rt_native_rsp is defined earlier, in RUNTIME[] (runtime_core.c) --
  * sl_rt_error needs it at its own definition site, well before this
@@ -1235,8 +1239,9 @@ static void sl_task_stack_grow(sl_task *t) {
      * unchanged) made concurrent_compute's crashes disappear entirely
      * across repeated runs; re-enabling it reproduced them again. */
     sl_rt_preempt_disable();
-    uintptr_t top = ((uintptr_t)sl_grower_stack + sizeof(sl_grower_stack)) &
-                    ~(uintptr_t)15;
+    void **grower_rsp = sl_rt_tls_grower_rsp();
+    uintptr_t top = ((uintptr_t)sl_rt_tls_grower_stack() +
+                     sizeof(sl_grower_stack)) & ~(uintptr_t)15;
 #if defined(__x86_64__)
     void **sp = (void **)(top - SL_CTX_BLOCK_SIZE);
     sp[0] = NULL;
@@ -1249,7 +1254,7 @@ static void sl_task_stack_grow(sl_task *t) {
         sl_ctx_trampoline -- see sl_grower_trampoline's own comment for
         why reusing the fresh-task-start trampoline here was a real,
         found-under-load counter-corruption bug. */
-    sl_grower_rsp = sp;
+    *grower_rsp = sp;
 #elif defined(__aarch64__)
     unsigned char *base = (unsigned char *)(top - SL_CTX_BLOCK_SIZE);
     void **slot = (void **)base;
@@ -1259,9 +1264,9 @@ static void sl_task_stack_grow(sl_task *t) {
     for (int i = 2; i < 18; i++) slot[i] = NULL;
     slot[18] = (void *)sl_task_grower_entry;
     slot[19] = t;
-    sl_grower_rsp = base;
+    *grower_rsp = base;
 #endif
-    sl_ctx_switch(&t->rsp, sl_grower_rsp);
+    sl_ctx_switch(&t->rsp, *grower_rsp);
     /* resumes here once the grower switches back, i.e. after the
      * grow has fully completed and t->rsp/stack_base/stack_size are
      * already updated */
@@ -1286,6 +1291,10 @@ static void sl_task_stack_grow(sl_task *t) {
 #define SL_TASK_CACHE_N 4
 static _Thread_local sl_task *sl_task_cache[SL_TASK_CACHE_N];
 static _Thread_local int sl_task_cache_n;
+/* sl_task_grab runs on the spawning task's stack; sl_task_release only
+   on a worker's own (sl_worker_after_switch), so it reads them bare. */
+SL_RT_TLS_ADDR_FN(sl_rt_tls_task_cache, sl_task *, sl_task_cache[0])
+SL_RT_TLS_ADDR_FN(sl_rt_tls_task_cache_n, int, sl_task_cache_n)
 static _Atomic unsigned long long sl_task_cache_hits = 0;
 static _Atomic unsigned long long sl_task_cache_miss = 0;
 
@@ -1380,8 +1389,16 @@ static void sl_task_stack_init(sl_task *t, void (*entry)(void *), void *arg) {
 
 static sl_task *sl_task_grab(void) {
     sl_task *t = NULL;
-    if (sl_task_cache_n > 0) {
-        t = sl_task_cache[--sl_task_cache_n];
+    /* Bracketed: the cache is this worker's, and its worker pushes to it
+       in sl_task_release. A spawner preempted mid-pop and resumed on
+       another worker would finish the pop on a cache that worker is
+       pushing to, and two spawns could share one sl_task. */
+    sl_rt_preempt_disable();
+    int *cache_n = sl_rt_tls_task_cache_n();
+    if (*cache_n > 0)
+        t = sl_rt_tls_task_cache()[--*cache_n];
+    sl_rt_preempt_enable();
+    if (t) {
         void *raw = t->raw_base;
         void *base = t->stack_base;
         size_t sz = t->stack_size;
