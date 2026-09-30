@@ -458,9 +458,8 @@ training data, so it wins on those three. The zokor half (agent guide,
   resolves them. Reads source the way `www/build.py` does (fixed alongside:
   the site cut multi-line signatures at their first line and printed three
   native parameter kinds raw).
-- [ ] **One line when everything passes.** `slangc test` prints a line per
-  test; print `ok: N passed (time)` alone on success and detail only for
-  failures (`-v` for the current output).
+- [x] **One line when everything passes.** `slangc test` prints only
+  failures and the count; `-v` brings back a line per passing test.
 - [ ] **Write the syntax rule down** (CONTRIBUTING): no novel syntax without
   evidence. The benchmark below measures retries per construct.
 - [ ] **Measure it.** Five tasks (CRUD on Postgres, auth middleware, a

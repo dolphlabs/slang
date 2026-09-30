@@ -264,7 +264,8 @@ strings encoding compress builder byteutil flags http http2 httpc`.
 
 Tests live next to the code in `*_test.sl`, as `fn test_*()` that fail
 through `assert` or `panic`. They can reach private functions. `slangc test`
-runs them; `--run name` filters.
+runs them and prints only failures and a count (`-v` lists every test);
+`--run name` filters.
 
 ```slang
 fn clamp(v: int, lo: int, hi: int) -> int {
