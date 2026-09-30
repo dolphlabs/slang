@@ -301,8 +301,16 @@ SlProject *project_load(const char *root) {
     p->root = xstrdup(root);
     char *proj = join2(root, "slang.project");
     parse_project_file(p, read_entire_file(proj), proj);
+    /* A package's README often shows only its `pkg` line; say what else
+     * the file needs rather than just that something is missing. */
     if (!p->name || !p->version)
-        project_error("%s: missing name or version", proj);
+        project_error("%s: missing the %s; a project file needs both, "
+                      "e.g.\n  name app\n  version 0.1.0\n"
+                      "(slangc new <dir> writes them)",
+                      proj,
+                      !p->name && !p->version ? "name and version lines"
+                      : !p->name              ? "name line"
+                                              : "version line");
     char *lock = join2(root, "slang.lock");
     if (access(lock, R_OK) == 0)
         parse_lock_file(p, read_entire_file(lock), lock);
