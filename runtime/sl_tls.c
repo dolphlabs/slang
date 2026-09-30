@@ -355,15 +355,12 @@ static sl_res_bytes_str *sl_net_tls_recv_u(void *sslv, int max, sl_until u) {
     if (max <= 0) max = 4096;
     SSL *ssl = (SSL *)sslv;
     unsigned char *scratch = (unsigned char *)sl_recv_buf_get((size_t)max);
-    sl_bytes *b = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
-    void *_sl_rcv_roots[] = { (void *)b };
-    sl_safepoint _sl_rcv_sp;
-    sl_rt_safepoint_enter(&_sl_rcv_sp, _sl_rcv_roots, 1);
+    /* As in sl_net_recv_u: the result is built after the data is in,
+     * never held across the park (sl_net_recv_bytes says why). */
     for (;;) {
         int n = SSL_read(ssl, scratch, max);
         if (n > 0) {
-            sl_net_recv_copy(b, scratch, n);
-            sl_rt_safepoint_exit();
+            sl_bytes *b = sl_net_recv_bytes(scratch, n);
             sl_recv_buf_put(scratch);
             return sl_net_ok_bytes(b);
         }
@@ -371,14 +368,12 @@ static sl_res_bytes_str *sl_net_tls_recv_u(void *sslv, int max, sl_until u) {
         if (sl_tls_clean_eof(err)) {
             /* Zero bytes is how this API already spells end-of-stream on
                the plain path, so callers need no new case. */
-            sl_net_recv_copy(b, scratch, 0);
-            sl_rt_safepoint_exit();
+            sl_bytes *b = sl_net_recv_bytes(scratch, 0);
             sl_recv_buf_put(scratch);
             return sl_net_ok_bytes(b);
         }
         int w = sl_tls_park_until(ssl, err, 1, u);
         if (w == 0) continue;
-        sl_rt_safepoint_exit();
         sl_recv_buf_put(scratch);
         if (w == -1) return sl_net_err_bytes("interrupted");
         if (w == -3) return sl_net_err_bytes("timeout");

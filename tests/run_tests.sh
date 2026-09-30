@@ -303,7 +303,7 @@ for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood \
             method_recv_gc indirect_callee generics_structs generics_json generics_infer \
             generics_pkg gc_nested_literal generics_methods \
             generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry own_roots switch escape_roots \
-            http_read_wire bytes_empty_literal; do
+            http_read_wire bytes_empty_literal gc_minor_barriers; do
     out="/tmp/sl_gcstress_${name}.out"
     if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -331,7 +331,7 @@ nur_bad=0
 for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put \
             gc_nested_literal gc_stress gc_stat spawn_isolation maps json \
             json_int_exact flags method_recv method_recv_gc indirect_callee \
-            http_read_wire bytes_empty_literal; do
+            http_read_wire bytes_empty_literal gc_minor_barriers; do
     out="/tmp/sl_nursery_${name}.out"
     if ! SLANG_GC_NURSERY_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -344,6 +344,45 @@ for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put \
     fi
 done
 [ "$nur_bad" -eq 0 ] && echo "PASS nursery stress"
+
+# ---- minor collections checked against a full mark --------------------------
+# A minor collection traces only young objects and the remembered set, so
+# it is sound only if every store that leaves a young object held by an
+# old one went through the write barrier. A missed barrier frees a live
+# object, and nothing else in the suite would notice until it crashed.
+# SLANG_GC_VERIFY_MINOR runs a full mark after every minor and counts the
+# young objects the minor missed; with a 16KB nursery a minor lands on
+# nearly every allocation. tests/gc_minor_barriers exercises each path
+# that once had no barrier (see its header); the rest are the GC-heavy
+# and task/channel/network tests. The count must be zero.
+echo "--- minor collections verified (SLANG_GC_VERIFY_MINOR, 16KB nursery) ---"
+vm_bad=0
+for name in gc_minor_barriers gc_stress gc_ctor_payload gc_map_put \
+            gc_nested_literal gc_nursery_barrier gc_nursery_promotion \
+            spawn_isolation select maps json http_read_wire http_client_pool \
+            http2_flood; do
+    [ -f "tests/$name/main.sl" ] || continue
+    out="/tmp/sl_verify_minor_${name}.out"
+    err="/tmp/sl_verify_minor_${name}.err"
+    if ! SLANG_GC_VERIFY_MINOR=1 SLANG_GC_NURSERY_KB=16 \
+            ./slangc "tests/$name/main.sl" --run >"$out" 2>"$err"; then
+        echo "FAIL minor verify $name (exit $?)"
+        tail -5 "$err" | sed 's/^/  /'
+        vm_bad=1; fail=1
+        continue
+    fi
+    missed=$(sed -n 's/^slang-gc-verify minors=[0-9]* missed=\([0-9]*\)$/\1/p' \
+             "$err" | awk '{s += $1} END {print s + 0}')
+    if [ "$missed" -ne 0 ]; then
+        echo "FAIL minor verify $name: $missed live young object(s) missed"
+        grep '^slang-gc-verify: ' "$err" | head -3 | sed 's/^/  /'
+        vm_bad=1; fail=1
+    elif ! diff -q "tests/$name/expected.txt" "$out" >/dev/null; then
+        echo "FAIL minor verify $name (output mismatch)"
+        vm_bad=1; fail=1
+    fi
+done
+[ "$vm_bad" -eq 0 ] && echo "PASS minor collections verified"
 
 # ---- allocation budgets ----------------------------------------------------
 # GC allocations per operation, pinned for paths where the count is the

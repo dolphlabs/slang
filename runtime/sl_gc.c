@@ -60,6 +60,7 @@ static _Atomic unsigned long long sl_gc_stat_alloc_bytes = 0;
 static _Atomic unsigned long long sl_gc_stat_pause_ns_total = 0;
 static _Atomic unsigned long long sl_gc_stat_pause_ns_max = 0;
 static _Atomic unsigned long long sl_gc_stat_minor_pause_ns_max = 0;
+static _Atomic unsigned long long sl_gc_stat_minor_pause_ns_total = 0;
 static _Atomic unsigned long long sl_gc_stat_swept = 0;
 static _Atomic unsigned long long sl_gc_stat_minor_swept = 0;
 static _Atomic unsigned long long sl_gc_stat_marked = 0;
@@ -102,6 +103,9 @@ static void sl_gc_stat_minor_pause(long long ns, size_t swept, size_t promoted) 
     if (!sl_gc_stat_enabled())
         return;
     atomic_fetch_add_explicit(&sl_gc_stat_minor_collects, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&sl_gc_stat_minor_pause_ns_total,
+                              (unsigned long long)(ns > 0 ? ns : 0),
+                              memory_order_relaxed);
     unsigned long long prev = atomic_load_explicit(&sl_gc_stat_minor_pause_ns_max, memory_order_relaxed);
     while ((unsigned long long)(ns > 0 ? ns : 0) > prev &&
            !atomic_compare_exchange_weak_explicit(&sl_gc_stat_minor_pause_ns_max, &prev,
@@ -122,14 +126,15 @@ static void sl_gc_stat_dump(void) {
     unsigned long long total = atomic_load_explicit(&sl_gc_stat_pause_ns_total, memory_order_relaxed);
     unsigned long long max = atomic_load_explicit(&sl_gc_stat_pause_ns_max, memory_order_relaxed);
     unsigned long long minor_max = atomic_load_explicit(&sl_gc_stat_minor_pause_ns_max, memory_order_relaxed);
+    unsigned long long minor_total = atomic_load_explicit(&sl_gc_stat_minor_pause_ns_total, memory_order_relaxed);
     unsigned long long minor_swept = atomic_load_explicit(&sl_gc_stat_minor_swept, memory_order_relaxed);
     unsigned long long promoted = atomic_load_explicit(&sl_gc_stat_promoted, memory_order_relaxed);
     unsigned long long marked = atomic_load_explicit(&sl_gc_stat_marked, memory_order_relaxed);
     unsigned long long swept = atomic_load_explicit(&sl_gc_stat_swept, memory_order_relaxed);
     unsigned long long surv = atomic_load_explicit(&sl_gc_stat_survived, memory_order_relaxed);
     unsigned long long cyc = atomic_load_explicit(&sl_gc_stat_allocated_cycle, memory_order_relaxed);
-    fprintf(stderr, "slang-gc-stat collects=%llu minor_collects=%llu allocs=%llu alloc_bytes=%llu pause_ns_total=%llu pause_ns_max=%llu marked=%llu swept=%llu survived=%llu cycle_allocs=%llu threshold=%zu minor_pause_ns_max=%llu minor_swept=%llu promoted=%llu nursery_threshold=%zu\n",
-            collects, minor_collects, allocs, bytes, total, max, marked, swept, surv, cyc, sl_gc_threshold, minor_max, minor_swept, promoted, sl_gc_nursery_threshold);
+    fprintf(stderr, "slang-gc-stat collects=%llu minor_collects=%llu allocs=%llu alloc_bytes=%llu pause_ns_total=%llu pause_ns_max=%llu marked=%llu swept=%llu survived=%llu cycle_allocs=%llu threshold=%zu minor_pause_ns_max=%llu minor_swept=%llu promoted=%llu nursery_threshold=%zu minor_pause_ns_total=%llu\n",
+            collects, minor_collects, allocs, bytes, total, max, marked, swept, surv, cyc, sl_gc_threshold, minor_max, minor_swept, promoted, sl_gc_nursery_threshold, minor_total);
     fprintf(stderr, "slang-gc-stat pause_buckets_ns=[");
     long long bound = 100000;
     for (int b = 0; b < SL_GC_STAT_BUCKETS; b++) {
@@ -538,8 +543,54 @@ static void sl_gc_retire_list(sl_gc_obj *head, sl_gc_obj *tail) {
                  memory_order_release, memory_order_relaxed));
 }
 
+static pthread_mutex_t sl_gc_rem_orphan_mu = PTHREAD_MUTEX_INITIALIZER;
+static sl_gc_obj **sl_gc_rem_orphans = NULL;
+static size_t sl_gc_rem_orphan_n = 0;
+static size_t sl_gc_rem_orphan_cap = 0;
+
+/* Remembered-set entries of tasks that finished before a collection
+ * harvested them. A task's shard (gc_rem_*) is otherwise reached only
+ * through the task, and a finished task is on no list a collection
+ * walks: its entries were lost while the objects kept remembered = 1,
+ * which made every later barrier on them a no-op -- an old object
+ * written by a task that then exited could gain young children no minor
+ * ever looked for. The shard's buffer leaked with it, since
+ * sl_task_grab zeroes a recycled task. Workers finish tasks
+ * concurrently, hence the lock; the next collection's harvest
+ * (sl_gc_harvest_rem_all) drains it. */
+static void sl_gc_orphan_rem(sl_task *t) {
+    if (!t->gc_rem_buf)
+        return;
+    if (t->gc_rem_n) {
+        pthread_mutex_lock(&sl_gc_rem_orphan_mu);
+        size_t need = sl_gc_rem_orphan_n + t->gc_rem_n;
+        if (need > sl_gc_rem_orphan_cap) {
+            size_t ncap = sl_gc_rem_orphan_cap ? sl_gc_rem_orphan_cap : 64;
+            while (ncap < need) ncap *= 2;
+            sl_gc_obj **nb = (sl_gc_obj **)realloc(
+                sl_gc_rem_orphans, ncap * sizeof(sl_gc_obj *));
+            if (!nb) { fprintf(stderr, "slang: out of memory\n"); exit(1); }
+            sl_gc_rem_orphans = nb;
+            sl_gc_rem_orphan_cap = ncap;
+        }
+        memcpy(sl_gc_rem_orphans + sl_gc_rem_orphan_n, t->gc_rem_buf,
+               t->gc_rem_n * sizeof(sl_gc_obj *));
+        sl_gc_rem_orphan_n = need;
+        pthread_mutex_unlock(&sl_gc_rem_orphan_mu);
+    }
+    free(t->gc_rem_buf);
+    t->gc_rem_buf = NULL;
+    t->gc_rem_n = 0;
+    t->gc_rem_cap = 0;
+}
+
+/* A finished task's GC state, handed over before the task is released:
+ * its pending allocations to sl_gc_retired, its remembered entries to
+ * sl_gc_rem_orphans. */
 static void sl_gc_flush_task(sl_task *t) {
-    if (!t || !t->gc_pend_head) return;
+    if (!t) return;
+    sl_gc_orphan_rem(t);
+    if (!t->gc_pend_head) return;
     sl_gc_publish_bytes(t);
     sl_gc_obj *head = t->gc_pend_head;
     sl_gc_obj *tail = t->gc_pend_tail;
@@ -596,6 +647,35 @@ static void sl_gc_harvest_rem_task(sl_task *t) {
            t->gc_rem_n * sizeof(*sl_gc_rem_harvest_buf));
     sl_gc_rem_harvest_n += t->gc_rem_n;
     t->gc_rem_n = 0;
+}
+
+static void sl_gc_for_pending_tasks(void (*fn)(sl_task *),
+                                    sl_gc_thread **snap, int nsnap);
+
+/* This collection's whole remembered set into sl_gc_rem_harvest_buf:
+ * every live task's shard, then the entries finished tasks left behind
+ * (sl_gc_orphan_rem). */
+static void sl_gc_harvest_rem_all(sl_gc_thread **snap, int nsnap) {
+    sl_gc_rem_harvest_n = 0;
+    sl_gc_for_pending_tasks(sl_gc_harvest_rem_task, snap, nsnap);
+    pthread_mutex_lock(&sl_gc_rem_orphan_mu);
+    if (sl_gc_rem_orphan_n) {
+        size_t need = sl_gc_rem_harvest_n + sl_gc_rem_orphan_n;
+        if (need > sl_gc_rem_harvest_cap) {
+            size_t ncap = sl_gc_rem_harvest_cap ? sl_gc_rem_harvest_cap : 32;
+            while (ncap < need) ncap *= 2;
+            sl_gc_obj **nb = (sl_gc_obj **)realloc(sl_gc_rem_harvest_buf,
+                                                   ncap * sizeof(*nb));
+            if (!nb) { fprintf(stderr, "slang: out of memory\n"); exit(1); }
+            sl_gc_rem_harvest_buf = nb;
+            sl_gc_rem_harvest_cap = ncap;
+        }
+        memcpy(sl_gc_rem_harvest_buf + sl_gc_rem_harvest_n, sl_gc_rem_orphans,
+               sl_gc_rem_orphan_n * sizeof(*sl_gc_rem_harvest_buf));
+        sl_gc_rem_harvest_n = need;
+        sl_gc_rem_orphan_n = 0;
+    }
+    pthread_mutex_unlock(&sl_gc_rem_orphan_mu);
 }
 
 /* Generational write barrier (coarse v1): record an OLD-generation
@@ -927,12 +1007,13 @@ static void sl_gc_mark(void *ptr) {
     sl_gc_wl[sl_gc_wl_n++] = ptr;
 }
 
-/* Minor-GC mark: like sl_gc_mark, but an OLD-generation object is NOT
- * traced through -- it is implicitly alive for the minor cycle (a
- * major collection reclaims old garbage). Its header is still marked
- * so the minor sweep's shared bookkeeping stays simple, but it is
- * never pushed onto the worklist, so its children are never visited.
- * YOUNG objects mark and recurse exactly like a major cycle.
+/* Minor-GC mark: like sl_gc_mark, but only for objects on the young
+ * list. An OLD object is implicitly alive for the minor cycle (a major
+ * collection reclaims old garbage), is not in a minor's sl_gc_set (see
+ * sl_gc_set_build), and so is neither marked nor traced here -- nor is
+ * its mark bit left to clear afterwards. YOUNG objects mark and recurse
+ * exactly like a major cycle; an owned buffer born old (gen 1, still on
+ * the young list) is marked, not traced.
  *
  * CORRECTNESS INVARIANT (the whole design hinges on this): at the END
  * of every minor cycle, no live OLD object points at a YOUNG object
@@ -1010,27 +1091,32 @@ static void sl_gc_scan_conservative(uintptr_t lo, uintptr_t hi) {
 }
 
 /* Build the 'is this pointer one of mine' table for one collection,
- * from sl_gc_young AND sl_gc_old -- which by now also hold every
- * task's pending allocations, spliced on just before this runs. Both
- * generations are required even for a MINOR collection: mark still
- * needs to validate any candidate pointer (precise or conservative)
- * against the whole live population, and a minor cycle that did not
- * know about old objects would treat every valid old pointer as "not
- * one of mine". See sl_gc_set's own comment. Sized for the whole
- * population up front at a 0.5 load factor, so sl_gc_set_raw_insert
- * needs no grow path. */
-static void sl_gc_set_build(void) {
+ * from sl_gc_young -- which by now also holds every task's pending
+ * allocations, spliced on just before this runs -- and, with `with_old`,
+ * sl_gc_old. A major needs both. A minor needs only the young list: it
+ * frees nothing old and traces nothing old, so to sl_gc_mark_minor a
+ * pointer to an old object is exactly as uninteresting as a string
+ * literal, and "not in the table" is the right answer for both. The old
+ * objects a minor must look inside reach it through the remembered set,
+ * which holds headers, not candidates to validate. Building from both
+ * lists made every minor walk and hash the whole old heap: at a
+ * 200k-entry cache that was most of a 50ms minor. See sl_gc_set's own
+ * comment. Sized for the population up front at a 0.5 load factor, so
+ * sl_gc_set_raw_insert needs no grow path. */
+static void sl_gc_set_build(int with_old) {
     size_t n = 0;
     for (sl_gc_obj *o = sl_gc_young; o; o = o->next) n++;
-    for (sl_gc_obj *o = sl_gc_old; o; o = o->next) n++;
+    if (with_old)
+        for (sl_gc_obj *o = sl_gc_old; o; o = o->next) n++;
     size_t cap = 1024;
     while (cap < (n + 1) * 2) cap *= 2;
     void **tbl = (void **)calloc(cap, sizeof(void *));
     if (!tbl) { fprintf(stderr, "slang: out of memory\n"); exit(1); }
     for (sl_gc_obj *o = sl_gc_young; o; o = o->next)
         sl_gc_set_raw_insert(tbl, cap, (void *)(o + 1));
-    for (sl_gc_obj *o = sl_gc_old; o; o = o->next)
-        sl_gc_set_raw_insert(tbl, cap, (void *)(o + 1));
+    if (with_old)
+        for (sl_gc_obj *o = sl_gc_old; o; o = o->next)
+            sl_gc_set_raw_insert(tbl, cap, (void *)(o + 1));
     sl_gc_set = tbl;
     sl_gc_set_cap = cap;
     sl_gc_set_count = n;
@@ -1288,147 +1374,30 @@ static void sl_gc_mark_roots(sl_gc_thread **snap, int nsnap,
 }
 
 /* Minor (nursery) STW collection: sweeps ONLY sl_gc_young. Roots are
- * the full Tier-11 set (full mark through old objects reachable from
- * roots -- see sl_gc_collect_minor_real's comment for why the root
- * phase traces old) plus every harvested remembered-set object (minor
- * mark: old entries marked, not traced). Survivors on sl_gc_young
- * promote to sl_gc_old. sl_gc_old itself is never swept here -- that
- * is what makes this fast. */
+ * the full Tier-11 set plus every harvested remembered-set object; see
+ * sl_gc_minor_mark for which of them are traced. Survivors on
+ * sl_gc_young promote to sl_gc_old. sl_gc_old itself is never swept
+ * here -- that is what makes this fast. */
 static void sl_gc_collect_minor(void);
-static void sl_gc_collect_minor_fullmark(void);
 static void sl_gc_collect_minor_real(void);
 static void sl_gc_collect_minor(void) {
     sl_gc_collect_minor_real();
 }
-/* Phase-2 bisect helper: FULL-mark minor (kept for diagnosis; not on
- * the collection path). Same nursery-only sweep + promote as the real
- * minor, but marks everything with sl_gc_mark. */
-static void sl_gc_collect_minor_fullmark(void) {
-    long long t0 = 0;
-    int stat_on = sl_gc_stat_enabled();
-    if (stat_on)
-        t0 = sl_rt_monotonic_ns();
-    sl_gc_thread **snap = NULL;
-    int nsnap = 0;
-    sl_gc_stw_sync(&snap, &nsnap);
 
-    pthread_mutex_lock(&sl_gc_mu);
-    sl_gc_drain_retired();
-    sl_gc_for_pending_tasks(sl_gc_harvest_task, snap, nsnap);
-    sl_gc_rem_harvest_n = 0;
-    sl_gc_for_pending_tasks(sl_gc_harvest_rem_task, snap, nsnap);
-    for (size_t i = 0; i < sl_gc_rem_harvest_n; i++)
-        sl_gc_rem_harvest_buf[i]->remembered = 0;
-    sl_gc_rem_harvest_n = 0;
-    sl_gc_set_build();
+/* The minor's whole mark phase: roots, then the remembered set, every
+ * drain. `root_mark` is the mark the root phase traces with: always
+ * sl_gc_mark_minor on the collection path; sl_gc_verify_minor_marks
+ * runs sl_gc_mark from the same roots as its ground truth. */
+static void sl_gc_minor_mark(sl_gc_thread **snap, int nsnap, size_t rem_n,
+                             sl_gc_markfn_t root_mark) {
     sl_gc_wl_n = 0;
-    sl_gc_cur_mark = sl_gc_mark;
-    sl_gc_mark_roots(snap, nsnap, sl_gc_mark);
-    while (sl_gc_wl_n > 0) {
-        void *p = sl_gc_wl[--sl_gc_wl_n];
-        sl_gc_obj *h = (sl_gc_obj *)p - 1;
-        if (h->trace) h->trace(p, sl_gc_mark);
-    }
-    free(sl_gc_wl);
-    sl_gc_wl = NULL;
-    sl_gc_wl_cap = 0;
-
-    /* Same owned-buffer rule as sl_gc_collect_minor_real's sweep. */
-    sl_gc_obj **mpp = &sl_gc_young;
-    size_t swept = 0, promoted = 0;
-    while (*mpp) {
-        sl_gc_obj *h = *mpp;
-        if (!h->marked && h->gen == 0) {
-            *mpp = h->next;
-            if (h->fini)
-                h->fini((void *)(h + 1));
-            sl_gc_class_push(h);
-            swept++;
-        } else {
-            *mpp = h->next;
-            h->marked = 0;
-            h->remembered = 0;
-            h->gen = 1;
-            h->next = sl_gc_old;
-            sl_gc_old = h;
-            promoted++;
-        }
-    }
-    for (sl_gc_obj *o = sl_gc_old; o; o = o->next)
-        o->marked = 0;
-    sl_gc_drain_retired();
-    free(sl_gc_set);
-    sl_gc_set = NULL;
-    sl_gc_set_cap = 0;
-    sl_gc_set_count = 0;
-    free(snap);
-
-    atomic_store_explicit(&sl_gc_bytes_since_minor, 0, memory_order_relaxed);
-    if (stat_on)
-        sl_gc_stat_minor_pause(sl_rt_monotonic_ns() - t0, swept, promoted);
-    atomic_store_explicit(&sl_gc_collect_minor_pending, 0, memory_order_release);
-    if (!atomic_load_explicit(&sl_gc_collect_pending, memory_order_acquire)) {
-        atomic_store_explicit(&sl_gc_stop_requested, 0, memory_order_release);
-        atomic_store_explicit(&sl_gc_collecting, 0, memory_order_release);
-    } else {
-        atomic_store_explicit(&sl_gc_collecting, 0, memory_order_release);
-    }
-    pthread_mutex_unlock(&sl_gc_mu);
-    if (atomic_load_explicit(&sl_gc_collect_pending, memory_order_acquire)) {
-        if (!atomic_exchange_explicit(&sl_gc_collecting, 1, memory_order_acq_rel))
-            sl_gc_collect();
-    }
-}
-
-/* Real minor (nursery) STW collection: nursery-only sweep + promotion.
- *
- * Root phase uses the FULL mark (traces through old objects reachable
- * from roots); the remembered phase + drains use the minor mark (old
- * entries marked, not traced). Rationale: fatal minors have EMPTY
- * remembered sets (no old store since the last minor), yet young
- * victims reachable via an OLD buffer die -- the edge was created by
- * memcpy (push/realloc copies), and intra-expression C-locals are
- * missed via roots by both marks; the full mark is saved by tracing
- * old buffers, the minor mark has no backstop. Tracing
- * roots-reachable old subgraphs per minor closes the hole; old garbage
- * NOT under roots is still skipped (the nursery win). Cost per minor
- * grows by exactly the roots-reachable old subgraph -- small. */
-static void sl_gc_collect_minor_real(void) {
-    long long t0 = 0;
-    int stat_on = sl_gc_stat_enabled();
-    if (stat_on)
-        t0 = sl_rt_monotonic_ns();
-    sl_gc_thread **snap = NULL;
-    int nsnap = 0;
-    sl_gc_stw_sync(&snap, &nsnap);
-
-    pthread_mutex_lock(&sl_gc_mu);
-    sl_gc_drain_retired();
-    sl_gc_for_pending_tasks(sl_gc_harvest_task, snap, nsnap);
-    sl_gc_rem_harvest_n = 0;
-    sl_gc_for_pending_tasks(sl_gc_harvest_rem_task, snap, nsnap);
-    size_t rem_n = sl_gc_rem_harvest_n;
-    sl_gc_set_build();
-    /* Root phase with FULL mark: trace through old objects reachable
-     * from roots (see the function comment). Remembered phase + drains
-     * stay minor (old reached only via remembered entries is marked,
-     * not traced). Minor promotion is single-generation: a young
-     * object that survives one minor promotes to old (no aging
-     * counter -- matches the handoff's design). */
-    sl_gc_wl_n = 0;
-    sl_gc_cur_mark = sl_gc_mark;
-    sl_gc_mark_roots(snap, nsnap, sl_gc_mark);
-    while (sl_gc_wl_n > 0) {
-        void *p = sl_gc_wl[--sl_gc_wl_n];
-        sl_gc_obj *h = (sl_gc_obj *)p - 1;
-        if (h->trace) h->trace(p, sl_gc_mark);
-    }
+    sl_gc_cur_mark = root_mark;
+    sl_gc_mark_roots(snap, nsnap, root_mark); /* drains with root_mark */
     /* Remembered phase: trace each harvested OLD object as a root with
      * the MINOR mark (marks it, then marks-but-does-not-trace its old
      * children while queueing young ones). Drain per entry. Young
      * objects reachable ONLY through old-remembered memory are found
-     * here; young objects reachable through roots-reachable old memory
-     * were already found above. */
+     * here. */
     for (size_t i = 0; i < rem_n; i++) {
         sl_gc_obj *rh = sl_gc_rem_harvest_buf[i];
         void *payload = (void *)(rh + 1);
@@ -1447,6 +1416,186 @@ static void sl_gc_collect_minor_real(void) {
         sl_gc_obj *h = (sl_gc_obj *)p - 1;
         if (h->trace) h->trace(p, sl_gc_mark_minor);
     }
+}
+
+/* ---- SLANG_GC_VERIFY_MINOR: check the write barrier against the truth
+ *
+ * A minor collection is only sound if every young object reachable from
+ * the roots is reachable WITHOUT tracing an old object, other than the
+ * old objects in the remembered set -- that is, if every store that put
+ * a young pointer into an old object went through the barrier. A missed
+ * barrier frees a live object, silently, on the next minor. With this
+ * set, every minor marks the way a true minor does (old objects marked,
+ * never traced), then clears the marks and runs a full mark from the
+ * same roots as ground truth, and reports every young object the full
+ * mark reached and the minor did not, with the kind of old container
+ * holding it. The sweep then keeps the union, so a verified run frees
+ * nothing live even when it finds a hole. The exit line counts minors
+ * and missed objects; the suite runs the GC-bearing tests under it and
+ * requires missed=0. Diagnostic only: it roughly doubles minor cost. */
+static int sl_gc_verify_minor_enabled(void) {
+    static int cached = -1;
+    if (cached < 0)
+        cached = getenv("SLANG_GC_VERIFY_MINOR") ? 1 : 0;
+    return cached;
+}
+
+/* All four under sl_gc_mu: only a collection touches them. */
+static unsigned long long sl_gc_verify_minors = 0;
+static unsigned long long sl_gc_verify_missed = 0;
+static unsigned sl_gc_verify_reports = 0;
+static sl_gc_obj *sl_gc_verify_parent = NULL;
+static size_t sl_gc_verify_rem_n = 0; /* this minor's harvest length */
+
+__attribute__((destructor))
+static void sl_gc_verify_atexit(void) {
+    if (!sl_gc_verify_minor_enabled())
+        return;
+    fprintf(stderr, "slang-gc-verify minors=%llu missed=%llu\n",
+            sl_gc_verify_minors, sl_gc_verify_missed);
+}
+
+/* Defined in sl_containers.c, which every program includes right after
+ * this file; named here only so a report can say what held the object. */
+static void sl_gc_trace_chan(void *p, void (*mark)(void *));
+static void sl_gc_trace_bytes(void *p, void (*mark)(void *));
+static void sl_gc_trace_arr(void *p, void (*mark)(void *));
+static void sl_gc_trace_map(void *p, void (*mark)(void *));
+static void sl_gc_trace_join(void *p, void (*mark)(void *));
+
+static const char *sl_gc_verify_kind(const sl_gc_obj *h) {
+    if (!h->trace) return "leaf";
+    if (h->trace == sl_gc_trace_arr) return "list";
+    if (h->trace == sl_gc_trace_map) return "map";
+    if (h->trace == sl_gc_trace_chan) return "channel";
+    if (h->trace == sl_gc_trace_join) return "join";
+    if (h->trace == sl_gc_trace_bytes) return "bytes";
+    return "struct or other container";
+}
+
+/* Missed young objects carry remembered == 2 while the verifier runs (a
+ * young object never has the flag set otherwise); an old object whose
+ * tracer reaches one gained that pointer without a barrier. */
+static void sl_gc_verify_child(void *c) {
+    if (!c || !sl_gc_set_contains(c))
+        return;
+    sl_gc_obj *h = (sl_gc_obj *)c - 1;
+    if (h->gen != 0 || h->remembered != 2)
+        return;
+    if (sl_gc_verify_reports++ >= 20)
+        return;
+    /* Remembered or not tells the two failure kinds apart: not in this
+     * minor's remembered set means a store skipped the barrier; in it
+     * means the barrier ran and tracing through the container missed
+     * the child. The harvest buffer still holds this minor's entries. */
+    int remembered = 0;
+    for (size_t i = 0; i < sl_gc_verify_rem_n; i++)
+        if (sl_gc_rem_harvest_buf[i] == sl_gc_verify_parent)
+            remembered = 1;
+    fprintf(stderr,
+            "slang-gc-verify: minor missed a live young %s (%zu bytes) "
+            "held by an old %s (%zu bytes, trace=%p, %s)\n",
+            sl_gc_verify_kind(h), h->size,
+            sl_gc_verify_kind(sl_gc_verify_parent),
+            sl_gc_verify_parent->size,
+            (void *)sl_gc_verify_parent->trace,
+            remembered ? "in the remembered set" : "not remembered");
+}
+
+static void sl_gc_verify_parents(sl_gc_obj *list) {
+    for (sl_gc_obj *o = list; o; o = o->next) {
+        if (o->gen != 1 || !o->marked || !o->trace)
+            continue;
+        sl_gc_verify_parent = o;
+        o->trace((void *)(o + 1), sl_gc_verify_child);
+    }
+}
+
+/* Runs after sl_gc_minor_mark(..., sl_gc_mark_minor); leaves on every
+ * young object the union of the two marks. */
+static void sl_gc_verify_minor_marks(sl_gc_thread **snap, int nsnap,
+                                     size_t rem_n) {
+    sl_gc_verify_rem_n = rem_n;
+    size_t n = 0;
+    for (sl_gc_obj *h = sl_gc_young; h; h = h->next)
+        n++;
+    unsigned char *minor = (unsigned char *)malloc(n ? n : 1);
+    if (!minor) { fprintf(stderr, "slang: out of memory\n"); exit(1); }
+    size_t i = 0;
+    for (sl_gc_obj *h = sl_gc_young; h; h = h->next)
+        minor[i++] = h->marked;
+    for (sl_gc_obj *h = sl_gc_young; h; h = h->next)
+        h->marked = 0;
+    for (sl_gc_obj *h = sl_gc_old; h; h = h->next)
+        h->marked = 0;
+
+    /* The minor ran against its own young-only table; the truth needs
+     * every object. */
+    free(sl_gc_set);
+    sl_gc_set_build(1);
+    sl_gc_wl_n = 0;
+    sl_gc_cur_mark = sl_gc_mark;
+    sl_gc_mark_roots(snap, nsnap, sl_gc_mark); /* drains */
+
+    size_t missed = 0;
+    i = 0;
+    for (sl_gc_obj *h = sl_gc_young; h; h = h->next, i++) {
+        if (h->gen == 0 && h->marked && !minor[i]) {
+            h->remembered = 2;
+            missed++;
+        }
+    }
+    if (missed) {
+        sl_gc_verify_parents(sl_gc_old);
+        sl_gc_verify_parents(sl_gc_young); /* owned buffers born old */
+    }
+    i = 0;
+    for (sl_gc_obj *h = sl_gc_young; h; h = h->next, i++) {
+        if (minor[i])
+            h->marked = 1;
+        if (h->remembered == 2)
+            h->remembered = 0;
+    }
+    free(minor);
+    sl_gc_verify_minors++;
+    sl_gc_verify_missed += missed;
+}
+
+/* Real minor (nursery) STW collection: nursery-only sweep + promotion.
+ *
+ * Old objects are marked, never traced -- from the roots as much as from
+ * the remembered set -- so a minor costs the nursery plus the remembered
+ * set, whatever the size of the old heap. That is sound only while every
+ * old->young edge is in the remembered set, and SLANG_GC_VERIFY_MINOR
+ * checks exactly that against a full mark (tests/run_tests.sh runs the
+ * GC-heavy tests under it). The root phase used to trace old objects
+ * too, which hid the edges that had no barrier -- a struct literal
+ * promoted between its allocation and its field stores, a select send,
+ * a recv buffer filled after its park, a finished task's remembered
+ * entries, a major's young survivors -- and made every minor as
+ * expensive as marking the whole reachable old heap: 104ms per minor
+ * against a 200k-entry cache, where it now costs the nursery's worth. */
+static void sl_gc_collect_minor_real(void) {
+    long long t0 = 0;
+    int stat_on = sl_gc_stat_enabled();
+    if (stat_on)
+        t0 = sl_rt_monotonic_ns();
+    sl_gc_thread **snap = NULL;
+    int nsnap = 0;
+    sl_gc_stw_sync(&snap, &nsnap);
+
+    pthread_mutex_lock(&sl_gc_mu);
+    sl_gc_drain_retired();
+    sl_gc_for_pending_tasks(sl_gc_harvest_task, snap, nsnap);
+    sl_gc_harvest_rem_all(snap, nsnap);
+    size_t rem_n = sl_gc_rem_harvest_n;
+    sl_gc_set_build(0);
+    /* Minor promotion is single-generation: a young object that
+     * survives one minor promotes to old (no aging counter -- matches
+     * the handoff's design). */
+    sl_gc_minor_mark(snap, nsnap, rem_n, sl_gc_mark_minor);
+    if (sl_gc_verify_minor_enabled())
+        sl_gc_verify_minor_marks(snap, nsnap, rem_n);
     free(sl_gc_wl);
     sl_gc_wl = NULL;
     sl_gc_wl_cap = 0;
@@ -1475,8 +1624,10 @@ static void sl_gc_collect_minor_real(void) {
             promoted++;
         }
     }
-    for (sl_gc_obj *o = sl_gc_old; o; o = o->next)
-        o->marked = 0;
+    /* Only the verifier's full mark marks old objects in a minor. */
+    if (sl_gc_verify_minor_enabled())
+        for (sl_gc_obj *o = sl_gc_old; o; o = o->next)
+            o->marked = 0;
     sl_gc_drain_retired();
     /* The table's only reader is mark, which runs only inside a
      * collection -- so it is dead weight between collections and is
@@ -1533,15 +1684,14 @@ static void sl_gc_collect(void) {
      * (sl_gc_alloc_owned) stays there, gen 1, until the next minor
      * moves it. A major frees it like anything else unmarked. */
     sl_gc_for_pending_tasks(sl_gc_harvest_task, snap, nsnap);
-    sl_gc_rem_harvest_n = 0;
-    sl_gc_for_pending_tasks(sl_gc_harvest_rem_task, snap, nsnap);
+    sl_gc_harvest_rem_all(snap, nsnap);
     for (size_t i = 0; i < sl_gc_rem_harvest_n; i++)
         sl_gc_rem_harvest_buf[i]->remembered = 0;
     sl_gc_rem_harvest_n = 0;
 
     /* Must run before the first sl_gc_mark of the cycle: mark's very
      * first act is to reject any pointer this table does not hold. */
-    sl_gc_set_build();
+    sl_gc_set_build(1);
 
     sl_gc_wl_n = 0;
     sl_gc_cur_mark = sl_gc_mark;
@@ -1555,7 +1705,19 @@ static void sl_gc_collect(void) {
     sl_gc_wl = NULL;
     sl_gc_wl_cap = 0;
 
+    /* Every young survivor is promoted. The remembered set was just
+     * emptied (above) and no old object is re-remembered, which is sound
+     * only if no old->young edge outlives this cycle -- and that holds
+     * exactly when nothing live is left young. A survivor kept young
+     * here, held by an old container whose barrier entry this cycle had
+     * just discarded, was invisible to the next minor: live, and only
+     * the old full-mark root phase (sl_gc_minor_mark) kept it from
+     * being freed. The cost is tenuring whatever happens to be live at
+     * a major a minor early; majors are rare, so it is at most one
+     * nursery's worth until the next one. Spliced onto sl_gc_old after
+     * that list's own sweep below, which would otherwise free them. */
     size_t marked = 0, swept = 0, live_bytes = 0;
+    sl_gc_obj *promoted_head = NULL, *promoted_tail = NULL;
     sl_gc_obj **pp = &sl_gc_young;
     while (*pp) {
         sl_gc_obj *h = *pp;
@@ -1563,7 +1725,14 @@ static void sl_gc_collect(void) {
             live_bytes += sizeof(sl_gc_obj) + h->size;
             h->marked = 0;
             h->remembered = 0;
-            pp = &h->next;
+            h->gen = 1;
+            *pp = h->next;
+            h->next = NULL;
+            if (promoted_tail)
+                promoted_tail->next = h;
+            else
+                promoted_head = h;
+            promoted_tail = h;
             marked++;
         } else {
             *pp = h->next;
@@ -1589,6 +1758,10 @@ static void sl_gc_collect(void) {
             sl_gc_class_push(h);
             swept++;
         }
+    }
+    if (promoted_tail) {
+        promoted_tail->next = sl_gc_old;
+        sl_gc_old = promoted_head;
     }
     sl_gc_drain_retired();
     /* The table's only reader is mark, which runs only inside a

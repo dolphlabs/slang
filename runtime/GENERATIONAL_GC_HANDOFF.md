@@ -214,6 +214,35 @@ replace path), hold one preempt bracket from the allocation to the
 store into the owner, so no minor can promote the owner in between —
 as `sl_map_grow`, `sl_arr_reserve` and the json parser do.
 
+### Minors trace no old object (2026-09-30)
+
+A minor marks from the roots and the remembered set, sweeps the nursery,
+and never traces an old object -- not even one the roots reach -- and its
+pointer table holds the young list only. For some months the root phase
+traced old objects too, which covered for barrier holes and made every
+minor cost as much as marking the reachable old heap (104 ms per minor at
+a 200k-entry cache, against 1.4 ms now). `SLANG_GC_VERIFY_MINOR=1` checks
+each minor against a full mark and names the old container holding any
+young object the minor missed; `tests/run_tests.sh` runs the GC-heavy
+tests under it and requires `missed=0`. Run it before trusting any change
+to the barrier, promotion or a runtime container.
+
+What the holes it found teach, as rules:
+
+- **No safepoint between allocating an object and storing into it**
+  unless every store goes through the barrier. A struct literal used to
+  allocate the struct, then evaluate its fields (each a possible
+  collection): codegen now evaluates the fields first.
+- **Never allocate before a park and fill after.** A park is a
+  collection point; the object comes back old. `recv` built its bytes
+  header before waiting: it now builds the result once the data is in.
+- **Every store path into a container needs the barrier,** not just the
+  common one: `select`'s send arm had none while `chan_send` did.
+- **A remembered entry must outlive its task.** A finished task's shard
+  is now handed to the next collection (`sl_gc_orphan_rem`).
+- **Nothing live may stay young across a discarded remembered set.** A
+  major empties the set, so it promotes everything it keeps.
+
 ### Write barrier
 
 **This is the risky, invasive part — the only part touching codegen,

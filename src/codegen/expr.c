@@ -1499,21 +1499,22 @@ char *gen_structlit(CG *cg, Expr *e) {
     cg->stack_box = 0;
     int is_gc = sd->is_gc && !boxed_here;
     const char *dot = is_gc ? "->" : ".";
+    /* Every field value is evaluated into its own temp first, and the
+     * struct is allocated only after the last one, immediately before
+     * the stores. The other order -- allocate, then evaluate each field
+     * -- put the evaluations' safepoints between the allocation and the
+     * stores: a minor collection there promoted the half-built struct
+     * (it was rooted), and the young field values then stored into it
+     * were old->young edges no write barrier saw, freed by the next
+     * minor. Nothing can collect between sl_gc_alloc and the stores
+     * below, so the struct is still young when its fields are set. The
+     * temps are rooted for each other's safepoints by sequence_one. */
     StrBuf sb;
     sb_init(&sb);
-    if (is_gc) {
-        const char *trace = struct_has_gc_fields(cg, sd)
-                                 ? xasprintf("sl_gc_trace_%s", sc)
-                                 : "NULL";
-        sb_append(&sb,
-                  xasprintf("({ %s *_sl_s = (%s *)sl_gc_alloc(sizeof(%s), %s); ",
-                            sc, sc, sc, trace));
-    } else {
-        sb_append(&sb, xasprintf("({ %s _sl_s; ", sc));
-    }
+    StrBuf stores;
+    sb_init(&stores);
+    sb_append(&sb, "({ ");
     int ambient_mark = cg->ambient_count;
-    if (is_gc)
-        ambient_root_push(cg, "_sl_s");
     int seq_id = cg->tmp_id++;
     for (int j = 0; j < e->as.structlit.nfields; j++) {
         int fi = -1;
@@ -1529,11 +1530,23 @@ char *gen_structlit(CG *cg, Expr *e) {
         const char *fc = ctype_of(cg, sd->ftypes[fi]);
         char *vname = sequence_one(cg, seq_id, j, fc, sd->ftypes[fi], v,
                                    e->as.structlit.vals[j], &sb);
-        sb_append(&sb,
+        sb_append(&stores,
                   xasprintf("_sl_s%s%s = %s; ",
                             dot, sanitize_ident(sd->fields[fi]), vname));
     }
     cg->ambient_count = ambient_mark;
+    if (is_gc) {
+        const char *trace = struct_has_gc_fields(cg, sd)
+                                 ? xasprintf("sl_gc_trace_%s", sc)
+                                 : "NULL";
+        sb_append(&sb,
+                  xasprintf("%s *_sl_s = (%s *)sl_gc_alloc(sizeof(%s), %s); ",
+                            sc, sc, sc, trace));
+    } else {
+        sb_append(&sb, xasprintf("%s _sl_s; ", sc));
+    }
+    if (stores.data)
+        sb_append(&sb, stores.data);
     sb_append(&sb, "_sl_s; })");
     return sb.data;
 }
