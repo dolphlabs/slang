@@ -477,8 +477,19 @@ training data, so it wins on those three. The zokor half (agent guide,
     `if let v = x { } else let e = err_of(x) { }` is the form for handling a
     failure and carrying on, which the guard had been misused for (about 30
     test sites and one in `stdlib/pg`).
-  - [ ] `let xs: [opt[int]] = [some(1), none];` fails with "cannot infer the
-    type of 'none'": list elements do not take the annotation's type.
+  - [x] `let xs: [opt[int]] = [some(1), none];` failed with "cannot infer
+    the type of 'none'": list elements did not take the annotation's type.
+    List and map literals now give each element, key and value the type
+    expected of it, wherever one is expected (a binding, an argument, a
+    return, a field, an enclosing literal), and an empty `{}` takes its
+    type from context as `[]` already did. Found with it: `[[], [1]]`
+    against `[[int]]` was rejected, and a struct literal or call whose
+    earlier field held `[some(7)]` was rejected when a later one made a
+    call (the safepoint re-inferred the earlier value under the later
+    field's type). Both fixed.
+  - [ ] Open question: should an unannotated `[some(1), none]` infer
+    `[opt[int]]` from its first element? It still needs an annotation,
+    and `[none, some(1)]` would need one either way.
   - [x] A missing map key reported `(index 0, length 0)`; it now names the
     key and says to check with `has(m, k)` first.
 

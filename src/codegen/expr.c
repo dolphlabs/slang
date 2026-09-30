@@ -1428,12 +1428,25 @@ char *gen_method(CG *cg, Expr *e) {
 char *gen_maplit(CG *cg, Expr *e, const char *expect_k,
                         const char *expect_v) {
     char *kt, *vt;
+    /* keys and values expect the map's key and value types, exactly as
+     * infer_type's EX_MAPLIT gives them: {"a": none} against
+     * map[str]opt[int] */
+    const char *outer = cg->expect, *ek = outer, *ev = outer;
+    if (outer && is_map(outer)) {
+        char *mk, *mv;
+        map_kv(outer, &mk, &mv);
+        ek = mk;
+        ev = mv;
+    }
     if (expect_k) {
         kt = xstrdup(expect_k);
         vt = xstrdup(expect_v);
     } else {
+        cg->expect = ek;
         kt = xstrdup(infer_type(cg, e->as.maplit.keys[0]));
+        cg->expect = ev;
         vt = xstrdup(infer_type(cg, e->as.maplit.vals[0]));
+        cg->expect = outer;
     }
     const char *kc = ctype_of(cg, kt);
     const char *vc = ctype_of(cg, vt);
@@ -1472,10 +1485,12 @@ char *gen_maplit(CG *cg, Expr *e, const char *expect_k,
     ambient_root_push(cg, "_sl_m");
     int seq_id = cg->tmp_id++;
     for (int i = 0; i < e->as.maplit.npairs; i++) {
+        cg->expect = ek;
         const char *kit = infer_type(cg, e->as.maplit.keys[i]);
         char *k = maybe_cast(cg, kt, kit, gen_expr(cg, e->as.maplit.keys[i]));
         char *kname = sequence_one(cg, seq_id, i * 2, kc, kt, k,
                                    e->as.maplit.keys[i], &sb);
+        cg->expect = ev;
         const char *vit = infer_type(cg, e->as.maplit.vals[i]);
         char *v = maybe_cast(cg, vt, vit, gen_expr(cg, e->as.maplit.vals[i]));
         char *vname = sequence_one(cg, seq_id, i * 2 + 1, vc, vt, v,
@@ -1484,6 +1499,7 @@ char *gen_maplit(CG *cg, Expr *e, const char *expect_k,
                   xasprintf("sl_map_put(_sl_m, &%s, &%s); ", kname, vname));
     }
     cg->ambient_count = ambient_mark;
+    cg->expect = outer;
     sb_append(&sb, "_sl_m; })");
     return sb.data;
 }
@@ -1642,7 +1658,7 @@ char *gen_slice(CG *cg, Expr *e) {
     sb_append(&prelude,
               xasprintf("%s %s = %s; ", bc, base_name,
                         gen_expr(cg, e->as.slice.base)));
-    expr_tmp_register(cg, e->as.slice.base, base_name);
+    expr_tmp_register(cg, e->as.slice.base, base_name, bt);
     ambient_root_push(cg, base_name);
 
     char *start = e->as.slice.start ? gen_expr(cg, e->as.slice.start)
@@ -1667,6 +1683,11 @@ char *gen_slice(CG *cg, Expr *e) {
 }
 
 char *gen_list(CG *cg, Expr *e, const char *expect_elem) {
+    /* elements expect the ELEMENT type, exactly as infer_type's EX_LIST
+     * gives it them: `none` in [some(1), none] against [opt[int]] */
+    const char *outer = cg->expect;
+    if (outer && is_arr(outer))
+        cg->expect = arr_elem(outer);
     const char *t0 =
         expect_elem ? expect_elem : infer_type(cg, e->as.list.elems[0]);
     const char *ec = ctype_of(cg, t0);
@@ -1693,6 +1714,7 @@ char *gen_list(CG *cg, Expr *e, const char *expect_elem) {
                                 &prelude);
     }
     cg->ambient_count = ambient_mark;
+    cg->expect = outer;
 
     StrBuf sb;
     sb_init(&sb);
@@ -1876,6 +1898,16 @@ char *gen_expr(CG *cg, Expr *e) {
         }
         return gen_list(cg, e, NULL);
     case EX_MAPLIT:
+        if (e->as.maplit.npairs == 0) {
+            /* typed like an empty list, from the expected type; same
+             * flags as the annotated `let m: map[k]v = {}` */
+            char *k, *v;
+            map_kv(infer_type(cg, e), &k, &v);
+            return xasprintf("sl_map_new(sizeof(%s), sizeof(%s), %d, %d, %d)",
+                             ctype_of(cg, k), ctype_of(cg, v), is_str(k),
+                             type_has_gc_roots(cg, k),
+                             type_has_gc_roots(cg, v));
+        }
         return gen_maplit(cg, e, NULL, NULL);
     case EX_FIELD: {
         char *b = gen_expr(cg, e->as.field.base);
@@ -1907,7 +1939,7 @@ char *gen_expr(CG *cg, Expr *e) {
             int ambient_mark = cg->ambient_count;
             char *qname = xasprintf("_sl_q%d", id);
             if (type_is_gc_ptr(cg, lt)) {
-                expr_tmp_register(cg, e->as.binary.lhs, qname);
+                expr_tmp_register(cg, e->as.binary.lhs, qname, lt);
                 ambient_root_push(cg, qname);
             }
             if (is_opt(lt)) {

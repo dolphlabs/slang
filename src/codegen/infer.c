@@ -1205,19 +1205,38 @@ const char *infer_type(CG *cg, Expr *e) {
         return xasprintf("[%s]", t0);
     }
     case EX_MAPLIT: {
+        if (e->as.maplit.npairs == 0 && cg->expect && is_map(cg->expect)) {
+            e->as.maplit.resolved = cg->expect;
+            return cg->expect;
+        }
+        if (e->as.maplit.npairs == 0 && e->as.maplit.resolved)
+            return e->as.maplit.resolved;
         if (e->as.maplit.npairs == 0)
             cg_error(e->line,
                      "cannot infer the key/value types of an empty map; "
                      "annotate the variable, e.g. let m: map[str]int = {}");
+        /* keys and values expect the map's key and value types, as a
+         * list's elements do: {"a": none} against map[str]opt[int] */
+        const char *outer = cg->expect, *ek = outer, *ev = outer;
+        if (outer && is_map(outer)) {
+            char *mk, *mv;
+            map_kv(outer, &mk, &mv);
+            ek = mk;
+            ev = mv;
+        }
+        cg->expect = ek;
         const char *kt = infer_type(cg, e->as.maplit.keys[0]);
         if (!is_map_key(cg, kt))
             cg_error(e->line,
                      "map keys must be an integer type, str, bool, or "
                      "enum (got %s)",
                      kt);
+        cg->expect = ev;
         const char *vt = infer_type(cg, e->as.maplit.vals[0]);
         for (int i = 1; i < e->as.maplit.npairs; i++) {
+            cg->expect = ek;
             const char *ki = infer_type(cg, e->as.maplit.keys[i]);
+            cg->expect = ev;
             const char *vi = infer_type(cg, e->as.maplit.vals[i]);
             if (!value_assignable(kt, e->as.maplit.keys[i], ki))
                 cg_error(e->line,
@@ -1230,6 +1249,7 @@ const char *infer_type(CG *cg, Expr *e) {
                          "%s where %s was established by the first value",
                          vi, vt);
         }
+        cg->expect = outer;
         return xasprintf("map[%s]%s", kt, vt);
     }
     case EX_FIELD: {

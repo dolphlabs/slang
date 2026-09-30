@@ -335,6 +335,7 @@ for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood \
             generics_pkg gc_nested_literal generics_methods \
             generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry own_roots switch escape_roots \
             http_read_wire bytes_empty_literal gc_minor_barriers map_delete if_let \
+            literal_expect pending_sibling_type \
             gc_container_frontier; do
     out="/tmp/sl_gcstress_${name}.out"
     if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
@@ -364,6 +365,7 @@ for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put \
             gc_nested_literal gc_stress gc_stat spawn_isolation maps json \
             json_int_exact flags method_recv method_recv_gc indirect_callee \
             http_read_wire bytes_empty_literal gc_minor_barriers map_delete if_let \
+            literal_expect pending_sibling_type \
             gc_container_frontier; do
     out="/tmp/sl_nursery_${name}.out"
     if ! SLANG_GC_NURSERY_KB=16 ./slangc "tests/$name/main.sl" --run \
@@ -391,6 +393,7 @@ done
 echo "--- minor collections verified (SLANG_GC_VERIFY_MINOR, 16KB nursery) ---"
 vm_bad=0
 for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc_map_put if_let \
+            literal_expect pending_sibling_type \
             gc_nested_literal gc_nursery_barrier gc_nursery_promotion \
             spawn_isolation select maps json http_read_wire http_client_pool \
             http2_flood; do

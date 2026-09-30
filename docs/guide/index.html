@@ -223,7 +223,7 @@ scores[<span class="s">&quot;carol&quot;</span>] = <span class="n">78</span>;   
 <span class="k">if</span> <span class="b">has</span>(scores, <span class="s">&quot;dave&quot;</span>) { ... } <span class="c">// membership test (no error)</span>
 <span class="b">del</span>(scores, <span class="s">&quot;bob&quot;</span>);            <span class="c">// removal</span>
 
-<span class="k">let</span> empty: <span class="t">map</span>[<span class="t">int</span>]<span class="t">str</span> = {};   <span class="c">// empty maps need an annotation</span>
+<span class="k">let</span> empty: <span class="t">map</span>[<span class="t">int</span>]<span class="t">str</span> = {};   <span class="c">// an empty map needs a type from context</span>
 <span class="k">for</span> k, v <span class="k">in</span> scores {           <span class="c">// iteration in insertion order</span>
     <span class="b">println</span>(k + <span class="s">&quot;: &quot;</span> + <span class="b">to_str</span>(v));
 }</code></pre></div>
@@ -583,7 +583,7 @@ scores[<span class="s">&quot;carol&quot;</span>] = <span class="n">78</span>;   
 <span class="k">if</span> <span class="b">has</span>(scores, <span class="s">&quot;dave&quot;</span>) { ... } <span class="c">// membership test (no error)</span>
 <span class="b">del</span>(scores, <span class="s">&quot;bob&quot;</span>);            <span class="c">// removal</span>
 
-<span class="k">let</span> empty: <span class="t">map</span>[<span class="t">int</span>]<span class="t">str</span> = {};   <span class="c">// empty maps need an annotation</span>
+<span class="k">let</span> empty: <span class="t">map</span>[<span class="t">int</span>]<span class="t">str</span> = {};   <span class="c">// an empty map needs a type from context</span>
 <span class="k">for</span> k, v <span class="k">in</span> scores {           <span class="c">// iteration in insertion order</span>
     <span class="b">println</span>(k + <span class="s">&quot;: &quot;</span> + <span class="b">to_str</span>(v));
 }</code></pre></div>
