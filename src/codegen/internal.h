@@ -521,6 +521,8 @@ typedef struct {
     int is_tls; /* needs OpenSSL: gates TLS_RUNTIME + -lssl -lcrypto */
 } NatSig;
 
+int native_sigs_of(const char *pkg, const NatSig **out, int max);
+
 /* ------------------------------------------------------------------ */
 /* Per-package signatures and embedded runtime C source. Each native
  * package lives entirely under src/codegen/pkg_<name>/: its NatSig

@@ -159,6 +159,10 @@ static char *stdlib_join(const char *root, const char *ipath) {
     return xstrdup(treal);
 }
 
+/* The standard library directory itself: "." resolves against each root
+ * in the order imports search them, and the first that exists wins. */
+char *slang_stdlib_root(void) { return slang_stdlib_pkg("."); }
+
 char *slang_stdlib_pkg(const char *ipath) {
     char *p;
     if (!stdlib_ipath_ok(ipath))

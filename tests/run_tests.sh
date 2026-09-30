@@ -289,6 +289,31 @@ for pkg in stdlib/pg; do
     fi
 done
 
+# ---- slangc doc ---------------------------------------------------------
+# An agent asks for the one API it needs. Packages resolve as `import` does
+# from the current directory; source items come with the comment above them.
+echo "--- slangc doc ---"
+dc_bad=0
+dc_fail() { echo "FAIL slangc doc ($1)"; fail=1; dc_bad=1; }
+out=$(./slangc doc 2>&1) || dc_fail "listing exited nonzero"
+printf '%s\n' "$out" | grep -q ' strings' || dc_fail "native packages not listed"
+printf '%s\n' "$out" | grep -q ' http ' || dc_fail "standard library not listed"
+out=$(./slangc doc builder 2>&1)
+printf '%s\n' "$out" | grep -qx 'fn Str.write(self: Str, s: str) -> Str' || dc_fail "method line"
+printf '%s\n' "$out" | grep -qx '    // Appends, and returns the builder so writes chain.' || dc_fail "doc comment"
+out=$(./slangc doc builder.Str 2>&1)
+printf '%s\n' "$out" | grep -qx 'methods:' || dc_fail "struct shows its methods"
+out=$(./slangc doc httpc.client_post 2>&1)
+[ "$out" = "fn client_post(c: Client, url: str, content_type: str, body: bytes, deadline: until) -> result[Response, str]" ] \
+    || dc_fail "multi-line signature joined: $out"
+./slangc doc strings | grep -qx 'fn join(\[str\], str) -> str' || dc_fail "native list parameter"
+(cd examples/pkgdemo && "$OLDPWD/slangc" doc geometry.area) | grep -qx 'fn area(w: float, h: float) -> float' \
+    || dc_fail "local package"
+./slangc doc json | grep -q '^fn decode(text: str) -> result\[T, str\]' || dc_fail "json note"
+./slangc doc http no_such_item >/dev/null 2>&1 && dc_fail "missing item must exit nonzero"
+./slangc doc no_such_pkg >/dev/null 2>&1 && dc_fail "missing package must exit nonzero"
+[ "$dc_bad" -eq 0 ] && echo "PASS slangc doc"
+
 # ---- GC at a tiny threshold ------------------------------------------
 # A rooting bug -- a live object held only where no safepoint knows about
 # it -- surfaces only when a collection lands at that exact safepoint. At

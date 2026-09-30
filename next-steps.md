@@ -451,9 +451,11 @@ training data, so it wins on those three. The zokor half (agent guide,
   error and names neither the file nor the column (`slang: error at line 2:
   ...`), so three mistakes cost three compile rounds. Report every error,
   with `file:line:col`, a fix hint where one is known, and `--json`.
-- [ ] **`slangc doc <pkg>[.<name>]`**: signatures and doc comments from the
-  real parser, for the standard library, pinned packages and local ones, so
-  an agent asks for one API instead of reading a page or the source.
+- [x] **`slangc doc <pkg>[.<name>]`**: signatures and doc comments for the
+  standard library, native, pinned and local packages, resolved as `import`
+  resolves them. Reads source the way `www/build.py` does (fixed alongside:
+  the site cut multi-line signatures at their first line and printed three
+  native parameter kinds raw).
 - [ ] **One line when everything passes.** `slangc test` prints a line per
   test; print `ok: N passed (time)` alone on success and detail only for
   failures (`-v` for the current output).
