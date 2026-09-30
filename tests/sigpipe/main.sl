@@ -66,7 +66,7 @@ fn run() {
     let i = 0;
     while i < 200 {
         let sr = net.send(cfd, b"hello there, are you still listening?");
-        guard let _n = sr else {
+        if let _n = sr { } else {
             failed = true;
             i = 200;
         }

@@ -150,11 +150,31 @@ make docs            # rebuild the documentation site</code></pre></div>
 slangc new .         # same, in the directory you are already in</code></pre></div>
 <p><code>slangc new</code> writes <code>slang.project</code> but <strong>not</strong> <code>slang.lock</code>. The lock is derived: <code>slangc get</code> generates it from the <code>pkg</code> lines in <code>slang.project</code>, and a lock file for a project with no dependencies records nothing. Cargo and Go draw the same line — <code>cargo new</code> writes <code>Cargo.toml</code> and not <code>Cargo.lock</code>.</p>
 <p>Scaffolding lives in <code>slangc</code> rather than a companion tool because the compiler already owns both formats: it parses <code>slang.project</code> and writes <code>slang.lock</code>. A separate tool would have to reimplement a grammar it does not control.</p>
+<p>Look up an API without leaving the terminal:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>slangc doc                     # every package this directory can import
+slangc doc http                # its exported items, one line each
+slangc doc builder.Str         # one item: its comment, and a struct&#x27;s fields and methods
+slangc doc httpc client_post   # the same, as two words</code></pre></div>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>$ slangc doc builder.Str
+<span class="k">gc</span> <span class="k">struct</span> Str {
+    parts: [<span class="t">str</span>],
+    size: <span class="t">int</span>,
+}
+
+methods:
+  <span class="k">fn</span> <span class="f">write</span>(self: Str, s: <span class="t">str</span>) -&gt; Str
+      <span class="c">// Appends, and returns the builder so writes chain.</span>
+  ...</code></pre></div>
+<p>Packages resolve exactly as <code>import</code> does from the current directory: a local directory, a compiler-provided package, the standard library, then a <code>slang.project</code> pin. An item&#x27;s documentation is the run of <code>//</code> comments directly above its <code>pub</code> declaration, which is also what the documentation site shows. It exists so an agent can ask for the one signature it needs instead of reading a page or the package&#x27;s source.</p>
 <p>Compile a slang program:</p>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>./slangc examples/hello/main.sl     # produces ./main
 ./main                              # run it</code></pre></div>
 <p>Useful flags:</p>
-<div class="tablewrap"><table><thead><tr><th>Flag</th><th>Effect</th></tr></thead><tbody><tr><td><code>-o &lt;name&gt;</code></td><td>Choose the output binary name</td></tr><tr><td><code>--emit-c</code></td><td>Only write the generated C file (no compilation)</td></tr><tr><td><code>--keep-c</code></td><td>Keep the generated C file after compiling</td></tr><tr><td><code>--run</code></td><td>Compile, then run it; exit with the program&#x27;s own status</td></tr><tr><td><code>get</code></td><td>Fetch <code>slang.project</code> pins and write <code>slang.lock</code></td></tr></tbody></table></div>
+<div class="tablewrap"><table><thead><tr><th>Flag</th><th>Effect</th></tr></thead><tbody><tr><td><code>-o &lt;name&gt;</code></td><td>Choose the output binary name</td></tr><tr><td><code>--emit-c</code></td><td>Only write the generated C file (no compilation)</td></tr><tr><td><code>--keep-c</code></td><td>Keep the generated C file after compiling</td></tr><tr><td><code>--run</code></td><td>Compile, then run it; exit with the program&#x27;s own status</td></tr><tr><td><code>--json</code></td><td>Compile errors as JSON lines on stderr (see below)</td></tr><tr><td><code>get</code></td><td>Fetch <code>slang.project</code> pins and write <code>slang.lock</code></td></tr></tbody></table></div>
+<p><strong>Compiler errors</strong> name the file and line, the way gcc, Go and rustc do, and say what to write instead where the compiler can tell:</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>geometry/shapes.sl:<span class="n">4</span>: error: <span class="k">struct</span> &#x27;geometry.Point&#x27; <span class="b">has</span> no field &#x27;yy&#x27; (did you mean &#x27;y&#x27;?)
+main.sl:<span class="n">14</span>: error: undefined variable &#x27;summ&#x27; (did you mean &#x27;sum&#x27;?)</code></pre></div>
+<p>One compile reports the first error in every function, not just the program&#x27;s first, so three mistakes cost one round rather than three. With <code>--json</code>, each error is one line of JSON on stderr for an editor or an agent: <code>{&quot;file&quot;:&quot;main.sl&quot;,&quot;line&quot;:14,&quot;severity&quot;:&quot;error&quot;,&quot;message&quot;:&quot;...&quot;}</code>.</p>
 <p>Want to see everything at once instead of one feature at a time? See <strong><a href="demo/"><code>demo/</code></a></strong> — a full server (dice game, guestbook wall, live dashboard) exercising every tier: <code>http</code>/<code>link</code>, <code>net.tls_*</code>, <code>json</code>, <code>spawn</code>/<code>chan[T]</code>, <code>proc</code> graceful shutdown, local package imports, and C interop, with a real HTML/CSS/JS frontend. <code>cd demo &amp;&amp; ./run.sh</code>.</p>
   </article>
   <aside class="toc">

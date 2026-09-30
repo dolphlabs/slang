@@ -91,7 +91,7 @@ if pbkdf2_hex(b"passwd", b"salt", 1, 64) !=
     die("pbkdf2 rfc7914");
 }
 let many = crypto.pbkdf2_sha256(b"p", b"s", 10000001, 32);
-guard let unused = many else let e = err_of(many) {
+if let unused = many { } else let e = err_of(many) {
     if e != "invalid iterations: must be between 1 and 10000000" {
         die("pbkdf2 cap msg: " + e);
     }
@@ -99,7 +99,7 @@ guard let unused = many else let e = err_of(many) {
 }
 
 let bad = crypto.rand(-1);
-guard let x = bad else let e = err_of(bad) {
+if let x = bad { } else let e = err_of(bad) {
     if e != "invalid size: must be between 0 and 1MB" {
         die("rand neg msg");
     }

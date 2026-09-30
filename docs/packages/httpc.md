@@ -244,13 +244,13 @@ What the jar would send to `url` right now. For inspection and tests; a request 
 
 ### `fn new_request(method: str, url: str) -> Request`
 
-### `fn client_send(c: Client, req: Request, deadline: until)`
+### `fn client_send(c: Client, req: Request, deadline: until) -> result[Response, str]`
 
-### `fn client_get(c: Client, url: str, deadline: until)`
+### `fn client_get(c: Client, url: str, deadline: until) -> result[Response, str]`
 
-### `fn client_head(c: Client, url: str, deadline: until)`
+### `fn client_head(c: Client, url: str, deadline: until) -> result[Response, str]`
 
-### `fn client_post(c: Client, url: str, content_type: str, body: bytes,`
+### `fn client_post(c: Client, url: str, content_type: str, body: bytes, deadline: until) -> result[Response, str]`
 
 ### `fn idle_count(c: Client) -> int`
 
@@ -266,15 +266,15 @@ Close every idle connection now. A long-lived service does not need this -- idle
 
 ### `fn head(url: str, deadline: until) -> result[Response, str]`
 
-### `fn post(url: str, content_type: str, body: bytes,`
+### `fn post(url: str, content_type: str, body: bytes, deadline: until) -> result[Response, str]`
 
-### `fn send(self: Client, req: Request, deadline: until)`
+### `fn send(self: Client, req: Request, deadline: until) -> result[Response, str]`
 
-### `fn get(self: Client, url: str, deadline: until)`
+### `fn get(self: Client, url: str, deadline: until) -> result[Response, str]`
 
-### `fn head(self: Client, url: str, deadline: until)`
+### `fn head(self: Client, url: str, deadline: until) -> result[Response, str]`
 
-### `fn post(self: Client, url: str, content_type: str, body: bytes,`
+### `fn post(self: Client, url: str, content_type: str, body: bytes, deadline: until) -> result[Response, str]`
 
 ### `fn idle_count(self: Client) -> int`
 

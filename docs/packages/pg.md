@@ -308,7 +308,7 @@ The SQLSTATE of an error returned by this package, or "" when the error did not 
 
 One SCRAM-SHA-256 exchange (RFC 5802, RFC 7677), as pure functions of its inputs, so the published test vector can check it.
 
-### `fn scram_client_final(password: str, client_first_bare: str,`
+### `fn scram_client_final(password: str, client_first_bare: str, server_first: str, client_nonce: str) -> result[Scram, str]`
 
 ### `fn connect(url: str, deadline: until) -> result[Conn, str]`
 
@@ -348,7 +348,7 @@ Sent in binary, so any byte values -- NULs included -- arrive intact. For a byte
 
 ### `fn arg_null() -> Arg`
 
-### `fn query(c: Conn, sql: str, args: [Arg], deadline: until)`
+### `fn query(c: Conn, sql: str, args: [Arg], deadline: until) -> result[Rows, str]`
 
 Runs one query with parameters ($1, $2, ...) through the extended protocol: the values travel separately from the SQL text, so they can never be parsed as SQL. Returns every row, buffered; for a result too big to hold at once, use stream().
 
@@ -356,7 +356,7 @@ Runs one query with parameters ($1, $2, ...) through the extended protocol: the 
 
 Runs SQL with no parameters through the simple protocol, which accepts several statements separated by semicolons -- a migration, a schema. Returns the rows affected by the last statement. Rows a statement returns are read and discarded.  Never build `sql` from untrusted input: use query() and parameters.
 
-### `fn stream(c: Conn, sql: str, args: [Arg], deadline: until)`
+### `fn stream(c: Conn, sql: str, args: [Arg], deadline: until) -> result[Rows, str]`
 
 ### `fn next_row(c: Conn, rows: Rows, deadline: until) -> result[bool, str]`
 
@@ -382,7 +382,7 @@ Ends the COPY. Returns the number of rows loaded, or the server's error about th
 
 Abandons the COPY: the server discards everything sent. Ok once the server has confirmed; its "COPY from stdin failed" is the expected answer, not an error.
 
-### `fn copy_from(c: Conn, sql: str, data: bytes, deadline: until)`
+### `fn copy_from(c: Conn, sql: str, data: bytes, deadline: until) -> result[int, str]`
 
 COPY ... FROM STDIN in one call. Returns the rows loaded.  pg.copy_from(c, "COPY users (id, email) FROM STDIN (FORMAT csv)", to_bytes("1,a@example.com\n2,b@example.com\n"), dl)
 
@@ -404,9 +404,9 @@ COPY ... TO STDOUT in one call, buffered (up to the 256 MiB result limit; stream
 
 "*" stops listening on every channel.
 
-### `fn notify(c: Conn, channel: str, payload: str, deadline: until)`
+### `fn notify(c: Conn, channel: str, payload: str, deadline: until) -> result[bool, str]`
 
-### `fn wait_notification(c: Conn, deadline: until)`
+### `fn wait_notification(c: Conn, deadline: until) -> result[opt[Notification], str]`
 
 The oldest queued notification, or waits for one until the deadline: none then. Unlike every other call, reaching the deadline here is not an error and does not break the connection -- waiting is the point.
 
@@ -450,7 +450,7 @@ A connection for the caller's exclusive use, until release(). Prefer pool_query 
 
 Returns a connection to the pool. One that is broken, closed, or still inside a transaction is closed instead: handing an open transaction to the next caller would run its statements inside someone else's uncommitted work.
 
-### `fn pool_query(p: Pool, sql: str, args: [Arg], deadline: until)`
+### `fn pool_query(p: Pool, sql: str, args: [Arg], deadline: until) -> result[Rows, str]`
 
 ### `fn pool_exec(p: Pool, sql: str, deadline: until) -> result[int, str]`
 

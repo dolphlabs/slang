@@ -57,4 +57,10 @@ char *pkg_name_of_path(const char *path);
  * number of names returned (0 if none). */
 char **collect_link_libs(PkgList *pkgs, int *out_count);
 
+/* slangc doc: where an import of ipath from from_dir resolves, without
+ * loading it (see loader.c), and the compiler-provided package names,
+ * NULL-terminated. */
+char *loader_resolve_dir(const char *from_dir, const char *ipath, int *native);
+const char *const *native_package_list(void);
+
 #endif /* SLANG_LOADER_H */

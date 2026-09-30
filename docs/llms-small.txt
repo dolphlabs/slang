@@ -8,9 +8,13 @@
 
 Commands: `slangc main.sl --run` (compile and run), `slangc main.sl -o app`
 (build), `slangc new app` (new project), `slangc test` (run `*_test.sl`),
-`slangc get` (fetch pinned packages). Package APIs: `/packages/<name>.md` and
-`/api.json` on the docs site. HTTP services: use the zokor framework and its
-own `llms-small.txt`.
+`slangc get` (fetch pinned packages). Errors read `file.sl:12: error: ...`,
+list the first error of every function in one compile, and often end with
+`(did you mean 'x'?)`; `--json` gives one JSON object per error. Package
+APIs: `slangc doc http` lists a package's signatures with their comments,
+`slangc doc builder.Str` shows one item in full (also `/packages/<name>.md`
+and `/api.json` on the docs site). HTTP services: use the zokor framework
+and its own `llms-small.txt`.
 
 ## Basics
 
@@ -155,16 +159,20 @@ guard let port = parse_port("8080") else {
 }
 println(port);
 let bad = parse_port("x");
-guard let _p = bad else let e = err_of(bad) {
-    println(e);
-    exit(0);
+if let p = bad {                         // if let: handle both, carry on
+    println(p);
+} else let e = err_of(bad) {
+    println(e);                          // PORT: not a base-10 integer
 }
 ```
 
 Absent data is `opt[T]`; bad data is `result[T, str]` with a reason; a
 failing network or file operation is `result[T, fault]` (timeout, reset,
 closed, refused, io). There are no exceptions. `assert(cond, msg)` and
-`panic(msg)` end the current task with the message and location. A bare
+`panic(msg)` end the current task with the message and location. A guard's
+`else` must leave the scope (`return`, `break`, `continue`, `exit`, `panic`,
+or a function of yours that always exits); `if let` is for when both
+outcomes carry on, and each of its bindings lives only in its branch. A bare
 `none` or `err(..)` needs an annotated binding or return type to infer from.
 
 ## Concurrency
@@ -256,7 +264,8 @@ strings encoding compress builder byteutil flags http http2 httpc`.
 
 Tests live next to the code in `*_test.sl`, as `fn test_*()` that fail
 through `assert` or `panic`. They can reach private functions. `slangc test`
-runs them; `--run name` filters.
+runs them and prints only failures and a count (`-v` lists every test);
+`--run name` filters.
 
 ```slang
 fn clamp(v: int, lo: int, hi: int) -> int {
@@ -282,8 +291,8 @@ println("ok");
 - `m[k]` on a missing key panics: check `has(m, k)`.
 - A closure or lambda: write a top-level function and pass its state in.
 - `return` between `mutex_lock` and `mutex_unlock`: unlock first.
-- A `guard` whose `else` falls through: it must `return`, `exit`, `break`,
-  `continue` or `panic`.
+- A `guard` whose `else` falls through is rejected: leave the scope, or use
+  `if let v = x { .. } else { .. }` when both paths continue.
 - `let v = chan_recv(c);` is `opt[T]`: unwrap with `guard let` or `??`.
 - Mixing `i32` and `int`: widening is implicit; narrowing needs `as`.
 
