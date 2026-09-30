@@ -812,7 +812,7 @@
         {
           "name": "request",
           "decl": "fn",
-          "sig": "fn request(method: str, path: str, version: str,",
+          "sig": "fn request(method: str, path: str, version: str, headers: map[str]str, body: bytes) -> result[Request, str]",
           "doc": "Builds a Request from a map the way the eager parser builds one off the wire: a header name or value may not contain CR or LF (an application- or test-constructed header gets no such check for free the way one read off the wire does -- this is where that rule lives for this path), and a name may not contain the colon that separates it from its value on the wire. Both are a real hazard, not a theoretical one, now that raw_headers is what a request's headers actually are: a value containing \"\\r\\n\" would be concatenated straight into the block below as a SECOND header line -- injection -- if it weren't rejected first.",
           "file": "stdlib/http/http.sl",
           "line": 1425
@@ -900,7 +900,7 @@
         {
           "name": "frame_request_at",
           "decl": "fn",
-          "sig": "fn frame_request_at(raw: bytes, line_end: int, head_end: int,",
+          "sig": "fn frame_request_at(raw: bytes, line_end: int, head_end: int, body: bytes) -> Request",
           "doc": "",
           "file": "stdlib/http/http.sl",
           "line": 1743
@@ -1044,7 +1044,7 @@
         {
           "name": "read_frame",
           "decl": "fn",
-          "sig": "fn read_frame(c: &mut link, buf: wire, filled: int,",
+          "sig": "fn read_frame(c: &mut link, buf: wire, filled: int, idle_deadline: until, header_deadline: until, body_deadline: until) -> result[WireFrame, str]",
           "doc": "read_frame: read's framing, plus the parsed head the router matches on. Implemented INSIDE read's loop shape (not as read-plus-copy): read compacts the buffer before returning, so after read there is no head left to copy -- buf[0..filled] is the NEXT request. This duplicates read's loop deliberately (same scans, same errors, same close rules), and the duplication is the contract: any change to read's framing must land here too.  What differs from read: on a complete frame the method/path strs and the header block + body are COPIED OUT of the wire ONCE -- the same strs + copies read already pays (hd.method/path, hd.headers, hd.body) -- and NO separate message copy is made. The old shape did to_bytes(buf[0..end]) PLUS parse_frame over the copy PLUS wants_close_scan over the copy: a full second framing pass and a whole-message copy per request. Now the WireFrame carries what the router needs directly: method/path strs for the enum + Request build, headers/body slices for the Ctx. Routing matches on strs (==), never on raw bytes -- no path_is_at rescan, no per-route to_bytes. The message copy is gone entirely.  Chunked bodies: hd.body IS the reassembled copy (one alloc the old path also spent); the WireFrame body is that copy directly. Three deadlines, not one, because \"how long should this wait\" has three different honest answers depending on what the connection is doing: idle_deadline while nothing has arrived at all yet (a kept- alive connection between requests, or a fresh one that never sends anything -- this is the one that should be generous, since a real client legitimately sits idle between requests); header_deadline once bytes have started arriving but the request line and headers aren't complete yet; body_deadline once the headers are in but a declared body hasn't fully arrived. header_deadline and body_deadline are both the tight, slow-loris-shaped ones -- a client that has started a request and then trickles it in a byte at a time is not the same risk as one that hasn't sent anything yet, and idle_deadline being long must not become an amplifier for that. Recomputed fresh every loop iteration rather than tracked as a separate flag: frame_head_wire's own re-parse of the same (only ever growing) buffer already answers \"is the header complete yet\" idempotently, so re-deriving which phase this recv is in from that costs nothing extra and can't drift out of sync with it.",
           "file": "stdlib/http/http.sl",
           "line": 2630
@@ -1068,7 +1068,7 @@
         {
           "name": "write_static",
           "decl": "fn",
-          "sig": "fn write_static(c: &mut link, b: StaticBody, a: &mut arena,",
+          "sig": "fn write_static(c: &mut link, b: StaticBody, a: &mut arena, close: bool, deadline: until) -> result[int, fault]",
           "doc": "The static emit: the keep-alive rendering is prebuilt, not emitted. Hot path (HTTP/1.1 keep-alive, which is every wrk/ab request): one wire, one memcpy, one send -- no probe pass, no Response struct, no map, no integer str, no per-piece puts. The close variant (HTTP/1.0, Connection: close) is rare and pays the emit cost below; it never touches the hot path.",
           "file": "stdlib/http/http.sl",
           "line": 2995
@@ -1092,7 +1092,7 @@
         {
           "name": "text_response_bytes",
           "decl": "fn",
-          "sig": "fn text_response_bytes(status: i32, status_text: str, content_type: str,",
+          "sig": "fn text_response_bytes(status: i32, status_text: str, content_type: str, body: bytes) -> Response",
           "doc": "`text_response` with a BYTES body: same shape, no `to_bytes` copy. The hot path (zokor's JSON renderers, static bodies) already holds bytes; forcing them through str and back cost a full copy plus the literal's own allocation on every response.",
           "file": "stdlib/http/http.sl",
           "line": 3092
@@ -1100,7 +1100,7 @@
         {
           "name": "text_response",
           "decl": "fn",
-          "sig": "fn text_response(status: i32, status_text: str, content_type: str,",
+          "sig": "fn text_response(status: i32, status_text: str, content_type: str, body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
           "line": 3105
@@ -1194,7 +1194,7 @@
         {
           "name": "W_RAW",
           "decl": "let",
-          "sig": "let W_RAW = 0;       // pre-built frames, not flow controlled",
+          "sig": "let W_RAW = 0; // pre-built frames, not flow controlled",
           "doc": "---- writer messages -------------------------------------------------  Everything the writer task needs arrives on ONE channel, tagged.  When this was written slang had no `select`, so a writer watching both \"here is a response\" and \"the peer granted more window\" on two channels could only ever block on one of them. `select` exists now and would compile -- but the single tagged stream is still the better design here, and stays. Two channels would make the ORDER between a grant and a body a race the writer has to reason about; one channel makes it the order they were sent, for free, and leaves the writer an ordinary state machine with a single blocking point.",
           "file": "stdlib/http2/conn.sl",
           "line": 64
@@ -1202,7 +1202,7 @@
         {
           "name": "W_BODY",
           "decl": "let",
-          "sig": "let W_BODY = 1;      // a response: HEADERS now, DATA as window allows",
+          "sig": "let W_BODY = 1; // a response: HEADERS now, DATA as window allows",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
           "line": 65
@@ -1210,7 +1210,7 @@
         {
           "name": "W_GRANT",
           "decl": "let",
-          "sig": "let W_GRANT = 2;     // peer's WINDOW_UPDATE: `n` octets to `stream`",
+          "sig": "let W_GRANT = 2; // peer's WINDOW_UPDATE: `n` octets to `stream`",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
           "line": 66
@@ -1218,7 +1218,7 @@
         {
           "name": "W_INITIAL",
           "decl": "let",
-          "sig": "let W_INITIAL = 3;   // peer's SETTINGS_INITIAL_WINDOW_SIZE is now `n`",
+          "sig": "let W_INITIAL = 3; // peer's SETTINGS_INITIAL_WINDOW_SIZE is now `n`",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
           "line": 67
@@ -1226,7 +1226,7 @@
         {
           "name": "W_MAXFRAME",
           "decl": "let",
-          "sig": "let W_MAXFRAME = 4;  // peer's SETTINGS_MAX_FRAME_SIZE is now `n`",
+          "sig": "let W_MAXFRAME = 4; // peer's SETTINGS_MAX_FRAME_SIZE is now `n`",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
           "line": 68
@@ -1258,7 +1258,7 @@
         {
           "name": "response_msg",
           "decl": "fn",
-          "sig": "fn response_msg(stream: int, status: str, extra: [Header],",
+          "sig": "fn response_msg(stream: int, status: str, extra: [Header], body: bytes) -> WMsg",
           "doc": "Build a response. The body is handed over UNFRAMED: the writer owns the peer's window and its max frame size, so it -- not the handler -- decides how the body is cut into DATA frames and when each may go.",
           "file": "stdlib/http2/conn.sl",
           "line": 93
@@ -1450,7 +1450,7 @@
         {
           "name": "read_frame",
           "decl": "fn",
-          "sig": "fn read_frame(r: Reader, t: Transport, max_frame: int, u: until)",
+          "sig": "fn read_frame(r: Reader, t: Transport, max_frame: int, u: until) -> result[Frame, str]",
           "doc": "Pull bytes until at least one complete frame is buffered, then return it and keep the remainder. Note the `&mut *c` at every site below that forwards this borrow: passing `c` directly MOVES it, so the second call would fail with \"use of moved value\". Reborrowing keeps the caller's borrow usable.  `u` bounds the WHOLE call, not each recv: a peer that sends one octet every second must still finish the frame inside the budget, which is what makes this a slowloris defence rather than a keepalive check. Pass until_never() only where blocking forever is genuinely intended.",
           "file": "stdlib/http2/conn.sl",
           "line": 374
@@ -1458,7 +1458,7 @@
         {
           "name": "accept_preface",
           "decl": "fn",
-          "sig": "fn accept_preface(r: Reader, t: Transport, wch: chan[WMsg], u: until)",
+          "sig": "fn accept_preface(r: Reader, t: Transport, wch: chan[WMsg], u: until) -> result[bool, str]",
           "doc": "Verify the 24-byte client connection preface and send ours.",
           "file": "stdlib/http2/conn.sl",
           "line": 411
@@ -1466,7 +1466,7 @@
         {
           "name": "read_request",
           "decl": "fn",
-          "sig": "fn read_request(cn: Conn, r: Reader, t: Transport, wch: chan[WMsg],",
+          "sig": "fn read_request(cn: Conn, r: Reader, t: Transport, wch: chan[WMsg], lim: Limits) -> result[Req, str]",
           "doc": "Read frames until one complete request has arrived.  Two clocks, switched at the first HEADERS. Before it the connection is idle and gets the generous `idle` budget, refreshed by each control frame that arrives -- a client PINGing a kept-alive connection is behaving correctly and must not be disconnected. After it the strict `request` budget applies to the request as a WHOLE and is never refreshed, so no amount of dribbled DATA or CONTINUATION can extend it.",
           "file": "stdlib/http2/conn.sl",
           "line": 583
@@ -1482,7 +1482,7 @@
         {
           "name": "respond",
           "decl": "fn",
-          "sig": "fn respond(cn: Conn, wch: chan[WMsg], stream: int, status: str,",
+          "sig": "fn respond(cn: Conn, wch: chan[WMsg], stream: int, status: str, extra: [Header], body: bytes)",
           "doc": "Enqueue a response for `stream`. Every write on the connection goes through the writer task, so there is deliberately no direct-write variant: one would be able to interleave with a handler mid-frame.",
           "file": "stdlib/http2/conn.sl",
           "line": 1024
@@ -1962,7 +1962,7 @@
         {
           "name": "decode_block",
           "decl": "fn",
-          "sig": "fn decode_block(d: Decoder, b: bytes, max_headers: int)",
+          "sig": "fn decode_block(d: Decoder, b: bytes, max_headers: int) -> result[[Header], str]",
           "doc": "Decode one complete header block. `max_headers` caps how many fields a peer may send: without it a small compressed block can expand into an unbounded list, which is the HPACK bomb.",
           "file": "stdlib/http2/header_block.sl",
           "line": 50
@@ -2288,7 +2288,7 @@
         {
           "name": "client_send",
           "decl": "fn",
-          "sig": "fn client_send(c: Client, req: Request, deadline: until)",
+          "sig": "fn client_send(c: Client, req: Request, deadline: until) -> result[Response, str]",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
           "line": 1704
@@ -2296,7 +2296,7 @@
         {
           "name": "client_get",
           "decl": "fn",
-          "sig": "fn client_get(c: Client, url: str, deadline: until)",
+          "sig": "fn client_get(c: Client, url: str, deadline: until) -> result[Response, str]",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
           "line": 1709
@@ -2304,7 +2304,7 @@
         {
           "name": "client_head",
           "decl": "fn",
-          "sig": "fn client_head(c: Client, url: str, deadline: until)",
+          "sig": "fn client_head(c: Client, url: str, deadline: until) -> result[Response, str]",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
           "line": 1714
@@ -2312,7 +2312,7 @@
         {
           "name": "client_post",
           "decl": "fn",
-          "sig": "fn client_post(c: Client, url: str, content_type: str, body: bytes,",
+          "sig": "fn client_post(c: Client, url: str, content_type: str, body: bytes, deadline: until) -> result[Response, str]",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
           "line": 1719
@@ -2360,7 +2360,7 @@
         {
           "name": "post",
           "decl": "fn",
-          "sig": "fn post(url: str, content_type: str, body: bytes,",
+          "sig": "fn post(url: str, content_type: str, body: bytes, deadline: until) -> result[Response, str]",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
           "line": 1774
@@ -2368,7 +2368,7 @@
         {
           "name": "Client.send",
           "decl": "fn",
-          "sig": "fn send(self: Client, req: Request, deadline: until)",
+          "sig": "fn send(self: Client, req: Request, deadline: until) -> result[Response, str]",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
           "line": 1791
@@ -2376,7 +2376,7 @@
         {
           "name": "Client.get",
           "decl": "fn",
-          "sig": "fn get(self: Client, url: str, deadline: until)",
+          "sig": "fn get(self: Client, url: str, deadline: until) -> result[Response, str]",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
           "line": 1796
@@ -2384,7 +2384,7 @@
         {
           "name": "Client.head",
           "decl": "fn",
-          "sig": "fn head(self: Client, url: str, deadline: until)",
+          "sig": "fn head(self: Client, url: str, deadline: until) -> result[Response, str]",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
           "line": 1801
@@ -2392,7 +2392,7 @@
         {
           "name": "Client.post",
           "decl": "fn",
-          "sig": "fn post(self: Client, url: str, content_type: str, body: bytes,",
+          "sig": "fn post(self: Client, url: str, content_type: str, body: bytes, deadline: until) -> result[Response, str]",
           "doc": "",
           "file": "stdlib/httpc/httpc.sl",
           "line": 1806
@@ -3112,7 +3112,7 @@
         {
           "name": "scram_client_final",
           "decl": "fn",
-          "sig": "fn scram_client_final(password: str, client_first_bare: str,",
+          "sig": "fn scram_client_final(password: str, client_first_bare: str, server_first: str, client_nonce: str) -> result[Scram, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
           "line": 788
@@ -3216,7 +3216,7 @@
         {
           "name": "query",
           "decl": "fn",
-          "sig": "fn query(c: Conn, sql: str, args: [Arg], deadline: until)",
+          "sig": "fn query(c: Conn, sql: str, args: [Arg], deadline: until) -> result[Rows, str]",
           "doc": "Runs one query with parameters ($1, $2, ...) through the extended protocol: the values travel separately from the SQL text, so they can never be parsed as SQL. Returns every row, buffered; for a result too big to hold at once, use stream().",
           "file": "stdlib/pg/pg.sl",
           "line": 1462
@@ -3232,7 +3232,7 @@
         {
           "name": "stream",
           "decl": "fn",
-          "sig": "fn stream(c: Conn, sql: str, args: [Arg], deadline: until)",
+          "sig": "fn stream(c: Conn, sql: str, args: [Arg], deadline: until) -> result[Rows, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
           "line": 1542
@@ -3288,7 +3288,7 @@
         {
           "name": "copy_from",
           "decl": "fn",
-          "sig": "fn copy_from(c: Conn, sql: str, data: bytes, deadline: until)",
+          "sig": "fn copy_from(c: Conn, sql: str, data: bytes, deadline: until) -> result[int, str]",
           "doc": "COPY ... FROM STDIN in one call. Returns the rows loaded.  pg.copy_from(c, \"COPY users (id, email) FROM STDIN (FORMAT csv)\", to_bytes(\"1,a@example.com\\n2,b@example.com\\n\"), dl)",
           "file": "stdlib/pg/pg.sl",
           "line": 1807
@@ -3336,7 +3336,7 @@
         {
           "name": "notify",
           "decl": "fn",
-          "sig": "fn notify(c: Conn, channel: str, payload: str, deadline: until)",
+          "sig": "fn notify(c: Conn, channel: str, payload: str, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
           "line": 1923
@@ -3344,7 +3344,7 @@
         {
           "name": "wait_notification",
           "decl": "fn",
-          "sig": "fn wait_notification(c: Conn, deadline: until)",
+          "sig": "fn wait_notification(c: Conn, deadline: until) -> result[opt[Notification], str]",
           "doc": "The oldest queued notification, or waits for one until the deadline: none then. Unlike every other call, reaching the deadline here is not an error and does not break the connection -- waiting is the point.",
           "file": "stdlib/pg/pg.sl",
           "line": 1936
@@ -3440,7 +3440,7 @@
         {
           "name": "pool_query",
           "decl": "fn",
-          "sig": "fn pool_query(p: Pool, sql: str, args: [Arg], deadline: until)",
+          "sig": "fn pool_query(p: Pool, sql: str, args: [Arg], deadline: until) -> result[Rows, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
           "line": 2266
@@ -3520,7 +3520,7 @@
         {
           "name": "REPLY_SIMPLE",
           "decl": "let",
-          "sig": "let REPLY_SIMPLE = 0;   // +str           (text holds the text)",
+          "sig": "let REPLY_SIMPLE = 0; // +str (text holds the text)",
           "doc": "The five RESP2 reply types. A reply is always one of exactly one.",
           "file": "stdlib/redis/redis.sl",
           "line": 40
@@ -3528,7 +3528,7 @@
         {
           "name": "REPLY_ERROR",
           "decl": "let",
-          "sig": "let REPLY_ERROR = 1;    // -err           (text holds the text)",
+          "sig": "let REPLY_ERROR = 1; // -err (text holds the text)",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 41
@@ -3536,7 +3536,7 @@
         {
           "name": "REPLY_INT",
           "decl": "let",
-          "sig": "let REPLY_INT = 2;      // :num           (num holds the value)",
+          "sig": "let REPLY_INT = 2; // :num (num holds the value)",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 42
@@ -3544,7 +3544,7 @@
         {
           "name": "REPLY_BULK",
           "decl": "let",
-          "sig": "let REPLY_BULK = 3;     // $len\\r\\n<bytes> (bulk holds it, none when nil)",
+          "sig": "let REPLY_BULK = 3; // $len\\r\\n<bytes> (bulk holds it, none when nil)",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 43
@@ -3552,7 +3552,7 @@
         {
           "name": "REPLY_ARRAY",
           "decl": "let",
-          "sig": "let REPLY_ARRAY = 4;    // *n\\r\\n...      (items holds them)",
+          "sig": "let REPLY_ARRAY = 4; // *n\\r\\n... (items holds them)",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 44
@@ -3696,7 +3696,7 @@
         {
           "name": "set",
           "decl": "fn",
-          "sig": "fn set(c: Conn, key: str, val: bytes,",
+          "sig": "fn set(c: Conn, key: str, val: bytes, deadline: until) -> result[bool, str]",
           "doc": "SET: true when the server answers +OK.",
           "file": "stdlib/redis/redis.sl",
           "line": 955
@@ -3704,7 +3704,7 @@
         {
           "name": "set_ex",
           "decl": "fn",
-          "sig": "fn set_ex(c: Conn, key: str, seconds: int, val: bytes,",
+          "sig": "fn set_ex(c: Conn, key: str, seconds: int, val: bytes, deadline: until) -> result[bool, str]",
           "doc": "SET with a TTL in seconds. True on +OK.",
           "file": "stdlib/redis/redis.sl",
           "line": 968
@@ -3712,7 +3712,7 @@
         {
           "name": "set_nx",
           "decl": "fn",
-          "sig": "fn set_nx(c: Conn, key: str, val: bytes,",
+          "sig": "fn set_nx(c: Conn, key: str, val: bytes, deadline: until) -> result[bool, str]",
           "doc": "SETNX: true when the key was absent and is now set.",
           "file": "stdlib/redis/redis.sl",
           "line": 982
@@ -3736,7 +3736,7 @@
         {
           "name": "expire",
           "decl": "fn",
-          "sig": "fn expire(c: Conn, key: str, seconds: int,",
+          "sig": "fn expire(c: Conn, key: str, seconds: int, deadline: until) -> result[bool, str]",
           "doc": "EXPIRE: true when the timeout was set (false: missing key).",
           "file": "stdlib/redis/redis.sl",
           "line": 1019
@@ -3744,7 +3744,7 @@
         {
           "name": "pexpire",
           "decl": "fn",
-          "sig": "fn pexpire(c: Conn, key: str, ms: int,",
+          "sig": "fn pexpire(c: Conn, key: str, ms: int, deadline: until) -> result[bool, str]",
           "doc": "PEXPIRE: like EXPIRE with a millisecond TTL.",
           "file": "stdlib/redis/redis.sl",
           "line": 1030
@@ -3792,7 +3792,7 @@
         {
           "name": "incr_by",
           "decl": "fn",
-          "sig": "fn incr_by(c: Conn, key: str, n: int,",
+          "sig": "fn incr_by(c: Conn, key: str, n: int, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 1084
@@ -3800,7 +3800,7 @@
         {
           "name": "decr_by",
           "decl": "fn",
-          "sig": "fn decr_by(c: Conn, key: str, n: int,",
+          "sig": "fn decr_by(c: Conn, key: str, n: int, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 1094
@@ -3808,7 +3808,7 @@
         {
           "name": "append",
           "decl": "fn",
-          "sig": "fn append(c: Conn, key: str, val: bytes,",
+          "sig": "fn append(c: Conn, key: str, val: bytes, deadline: until) -> result[int, str]",
           "doc": "APPEND: the length after appending. STRLEN: the current length.",
           "file": "stdlib/redis/redis.sl",
           "line": 1105
@@ -3824,7 +3824,7 @@
         {
           "name": "mget",
           "decl": "fn",
-          "sig": "fn mget(c: Conn, keys: [str],",
+          "sig": "fn mget(c: Conn, keys: [str], deadline: until) -> result[[opt[bytes]], str]",
           "doc": "MGET: one slot per key, none for the missing ones.",
           "file": "stdlib/redis/redis.sl",
           "line": 1123
@@ -3832,7 +3832,7 @@
         {
           "name": "mset",
           "decl": "fn",
-          "sig": "fn mset(c: Conn, kv: map[str]bytes,",
+          "sig": "fn mset(c: Conn, kv: map[str]bytes, deadline: until) -> result[bool, str]",
           "doc": "MSET: field iteration order is insertion order, so the wire order is deterministic for a literally-built map.",
           "file": "stdlib/redis/redis.sl",
           "line": 1148
@@ -3840,7 +3840,7 @@
         {
           "name": "hset",
           "decl": "fn",
-          "sig": "fn hset(c: Conn, key: str, field: str, val: bytes,",
+          "sig": "fn hset(c: Conn, key: str, field: str, val: bytes, deadline: until) -> result[int, str]",
           "doc": "HSET: how many fields were newly added.",
           "file": "stdlib/redis/redis.sl",
           "line": 1168
@@ -3848,7 +3848,7 @@
         {
           "name": "hget",
           "decl": "fn",
-          "sig": "fn hget(c: Conn, key: str, field: str,",
+          "sig": "fn hget(c: Conn, key: str, field: str, deadline: until) -> result[opt[bytes], str]",
           "doc": "HGET: the value, or none when key or field is absent.",
           "file": "stdlib/redis/redis.sl",
           "line": 1179
@@ -3856,7 +3856,7 @@
         {
           "name": "hgetall",
           "decl": "fn",
-          "sig": "fn hgetall(c: Conn, key: str,",
+          "sig": "fn hgetall(c: Conn, key: str, deadline: until) -> result[map[str]bytes, str]",
           "doc": "HGETALL: the whole hash. Field names decode to str; binary field names a program did not put there itself come back lossy.",
           "file": "stdlib/redis/redis.sl",
           "line": 1194
@@ -3864,7 +3864,7 @@
         {
           "name": "hdel",
           "decl": "fn",
-          "sig": "fn hdel(c: Conn, key: str, fields: [str],",
+          "sig": "fn hdel(c: Conn, key: str, fields: [str], deadline: until) -> result[int, str]",
           "doc": "HDEL: how many fields were removed.",
           "file": "stdlib/redis/redis.sl",
           "line": 1225
@@ -3872,7 +3872,7 @@
         {
           "name": "hexists",
           "decl": "fn",
-          "sig": "fn hexists(c: Conn, key: str, field: str,",
+          "sig": "fn hexists(c: Conn, key: str, field: str, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 1238
@@ -3880,7 +3880,7 @@
         {
           "name": "hkeys",
           "decl": "fn",
-          "sig": "fn hkeys(c: Conn, key: str,",
+          "sig": "fn hkeys(c: Conn, key: str, deadline: until) -> result[[str], str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 1248
@@ -3888,7 +3888,7 @@
         {
           "name": "hvals",
           "decl": "fn",
-          "sig": "fn hvals(c: Conn, key: str,",
+          "sig": "fn hvals(c: Conn, key: str, deadline: until) -> result[[bytes], str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 1270
@@ -3904,7 +3904,7 @@
         {
           "name": "hincr_by",
           "decl": "fn",
-          "sig": "fn hincr_by(c: Conn, key: str, field: str, n: int,",
+          "sig": "fn hincr_by(c: Conn, key: str, field: str, n: int, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 1300
@@ -3912,7 +3912,7 @@
         {
           "name": "lpush",
           "decl": "fn",
-          "sig": "fn lpush(c: Conn, key: str, vals: [bytes],",
+          "sig": "fn lpush(c: Conn, key: str, vals: [bytes], deadline: until) -> result[int, str]",
           "doc": "LPUSH/RPUSH: the length after pushing.",
           "file": "stdlib/redis/redis.sl",
           "line": 1326
@@ -3920,7 +3920,7 @@
         {
           "name": "rpush",
           "decl": "fn",
-          "sig": "fn rpush(c: Conn, key: str, vals: [bytes],",
+          "sig": "fn rpush(c: Conn, key: str, vals: [bytes], deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 1331
@@ -3952,7 +3952,7 @@
         {
           "name": "lrange",
           "decl": "fn",
-          "sig": "fn lrange(c: Conn, key: str, start: int, stop: int,",
+          "sig": "fn lrange(c: Conn, key: str, start: int, stop: int, deadline: until) -> result[[bytes], str]",
           "doc": "LRANGE: elements from start to stop inclusive; negative indexes count from the tail, exactly as Redis documents.",
           "file": "stdlib/redis/redis.sl",
           "line": 1369
@@ -3960,7 +3960,7 @@
         {
           "name": "ltrim",
           "decl": "fn",
-          "sig": "fn ltrim(c: Conn, key: str, start: int, stop: int,",
+          "sig": "fn ltrim(c: Conn, key: str, start: int, stop: int, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 1393
@@ -3968,7 +3968,7 @@
         {
           "name": "lindex",
           "decl": "fn",
-          "sig": "fn lindex(c: Conn, key: str, i: int,",
+          "sig": "fn lindex(c: Conn, key: str, i: int, deadline: until) -> result[opt[bytes], str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 1407
@@ -3976,7 +3976,7 @@
         {
           "name": "lrem",
           "decl": "fn",
-          "sig": "fn lrem(c: Conn, key: str, count: int, val: bytes,",
+          "sig": "fn lrem(c: Conn, key: str, count: int, val: bytes, deadline: until) -> result[int, str]",
           "doc": "LREM: removes count occurrences of val, returns how many went.",
           "file": "stdlib/redis/redis.sl",
           "line": 1421
@@ -3984,7 +3984,7 @@
         {
           "name": "sadd",
           "decl": "fn",
-          "sig": "fn sadd(c: Conn, key: str, members: [bytes],",
+          "sig": "fn sadd(c: Conn, key: str, members: [bytes], deadline: until) -> result[int, str]",
           "doc": "SADD: how many members were newly added.",
           "file": "stdlib/redis/redis.sl",
           "line": 1434
@@ -3992,7 +3992,7 @@
         {
           "name": "smembers",
           "decl": "fn",
-          "sig": "fn smembers(c: Conn, key: str,",
+          "sig": "fn smembers(c: Conn, key: str, deadline: until) -> result[[bytes], str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 1439
@@ -4000,7 +4000,7 @@
         {
           "name": "srem",
           "decl": "fn",
-          "sig": "fn srem(c: Conn, key: str, members: [bytes],",
+          "sig": "fn srem(c: Conn, key: str, members: [bytes], deadline: until) -> result[int, str]",
           "doc": "SREM: how many members were removed.",
           "file": "stdlib/redis/redis.sl",
           "line": 1462
@@ -4016,7 +4016,7 @@
         {
           "name": "sismember",
           "decl": "fn",
-          "sig": "fn sismember(c: Conn, key: str, member: bytes,",
+          "sig": "fn sismember(c: Conn, key: str, member: bytes, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 1475
@@ -4040,7 +4040,7 @@
         {
           "name": "zadd",
           "decl": "fn",
-          "sig": "fn zadd(c: Conn, key: str, members: map[str]float,",
+          "sig": "fn zadd(c: Conn, key: str, members: map[str]float, deadline: until) -> result[int, str]",
           "doc": "ZADD: how many members were newly added.",
           "file": "stdlib/redis/redis.sl",
           "line": 1505
@@ -4048,7 +4048,7 @@
         {
           "name": "zrange",
           "decl": "fn",
-          "sig": "fn zrange(c: Conn, key: str, start: int, stop: int,",
+          "sig": "fn zrange(c: Conn, key: str, start: int, stop: int, deadline: until) -> result[[bytes], str]",
           "doc": "ZRANGE/ZREVRANGE without scores.",
           "file": "stdlib/redis/redis.sl",
           "line": 1534
@@ -4056,7 +4056,7 @@
         {
           "name": "zrange_scores",
           "decl": "fn",
-          "sig": "fn zrange_scores(c: Conn, key: str, start: int, stop: int,",
+          "sig": "fn zrange_scores(c: Conn, key: str, start: int, stop: int, deadline: until) -> result[[ZMember], str]",
           "doc": "ZRANGE WITHSCORES: member/score pairs in range order.",
           "file": "stdlib/redis/redis.sl",
           "line": 1559
@@ -4064,7 +4064,7 @@
         {
           "name": "zrank",
           "decl": "fn",
-          "sig": "fn zrank(c: Conn, key: str, member: bytes,",
+          "sig": "fn zrank(c: Conn, key: str, member: bytes, deadline: until) -> result[opt[int], str]",
           "doc": "ZRANK: the rank, or none when key or member is absent.",
           "file": "stdlib/redis/redis.sl",
           "line": 1593
@@ -4072,7 +4072,7 @@
         {
           "name": "zscore",
           "decl": "fn",
-          "sig": "fn zscore(c: Conn, key: str, member: bytes,",
+          "sig": "fn zscore(c: Conn, key: str, member: bytes, deadline: until) -> result[opt[float], str]",
           "doc": "ZSCORE: the score, or none when key or member is absent.",
           "file": "stdlib/redis/redis.sl",
           "line": 1609
@@ -4080,7 +4080,7 @@
         {
           "name": "zrem",
           "decl": "fn",
-          "sig": "fn zrem(c: Conn, key: str, members: [bytes],",
+          "sig": "fn zrem(c: Conn, key: str, members: [bytes], deadline: until) -> result[int, str]",
           "doc": "ZREM: how many members were removed.",
           "file": "stdlib/redis/redis.sl",
           "line": 1629
@@ -4096,7 +4096,7 @@
         {
           "name": "zincr_by",
           "decl": "fn",
-          "sig": "fn zincr_by(c: Conn, key: str, n: float, member: bytes,",
+          "sig": "fn zincr_by(c: Conn, key: str, n: float, member: bytes, deadline: until) -> result[float, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 1642
@@ -4112,7 +4112,7 @@
         {
           "name": "rename",
           "decl": "fn",
-          "sig": "fn rename(c: Conn, key: str, newkey: str,",
+          "sig": "fn rename(c: Conn, key: str, newkey: str, deadline: until) -> result[bool, str]",
           "doc": "RENAME: true on +OK. RENAMENX: true only when newkey was absent.",
           "file": "stdlib/redis/redis.sl",
           "line": 1664
@@ -4120,7 +4120,7 @@
         {
           "name": "rename_nx",
           "decl": "fn",
-          "sig": "fn rename_nx(c: Conn, key: str, newkey: str,",
+          "sig": "fn rename_nx(c: Conn, key: str, newkey: str, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 1677
@@ -4136,7 +4136,7 @@
         {
           "name": "scan",
           "decl": "fn",
-          "sig": "fn scan(c: Conn, cursor: int, match: opt[str], count: opt[int],",
+          "sig": "fn scan(c: Conn, cursor: int, match: opt[str], count: opt[int], deadline: until) -> result[ScanOut, str]",
           "doc": "SCAN: one cursor step. Thread cursor back in until it returns 0; match and count are server hints, both optional. KEYS is deliberately absent: it blocks the server for the whole keyspace.",
           "file": "stdlib/redis/redis.sl",
           "line": 1695
@@ -4184,7 +4184,7 @@
         {
           "name": "pool_do",
           "decl": "fn",
-          "sig": "fn pool_do(p: Pool, args: [bytes],",
+          "sig": "fn pool_do(p: Pool, args: [bytes], deadline: until) -> result[Reply, str]",
           "doc": "One command on a pooled connection: acquire, run, release. The connection goes back even when the command fails.",
           "file": "stdlib/redis/redis.sl",
           "line": 1872
@@ -4208,7 +4208,7 @@
         {
           "name": "new_cluster",
           "decl": "fn",
-          "sig": "fn new_cluster(cfg: Config, seeds: [str],",
+          "sig": "fn new_cluster(cfg: Config, seeds: [str], deadline: until) -> result[Cluster, str]",
           "doc": "Connect to a cluster: try each seed until one serves CLUSTER SLOTS. Only database 0 exists in cluster mode. The deadline covers the whole bootstrap.",
           "file": "stdlib/redis/redis.sl",
           "line": 2077
@@ -4224,7 +4224,7 @@
         {
           "name": "cluster_do",
           "decl": "fn",
-          "sig": "fn cluster_do(cl: Cluster, key: str, args: [bytes],",
+          "sig": "fn cluster_do(cl: Cluster, key: str, args: [bytes], deadline: until) -> result[Reply, str]",
           "doc": "Run args against the node owning key, following MOVED (map update plus retry, up to MAX_REDIRECTS) and ASK (one directed ASKING hop, returned directly). Every other error returns verbatim.",
           "file": "stdlib/redis/redis.sl",
           "line": 2164
@@ -4264,7 +4264,7 @@
         {
           "name": "cset",
           "decl": "fn",
-          "sig": "fn cset(cl: Cluster, key: str, val: bytes,",
+          "sig": "fn cset(cl: Cluster, key: str, val: bytes, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2310
@@ -4272,7 +4272,7 @@
         {
           "name": "cset_ex",
           "decl": "fn",
-          "sig": "fn cset_ex(cl: Cluster, key: str, seconds: int, val: bytes,",
+          "sig": "fn cset_ex(cl: Cluster, key: str, seconds: int, val: bytes, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2323
@@ -4280,7 +4280,7 @@
         {
           "name": "cset_nx",
           "decl": "fn",
-          "sig": "fn cset_nx(cl: Cluster, key: str, val: bytes,",
+          "sig": "fn cset_nx(cl: Cluster, key: str, val: bytes, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2337
@@ -4288,7 +4288,7 @@
         {
           "name": "cdel_keys",
           "decl": "fn",
-          "sig": "fn cdel_keys(cl: Cluster, keys: [str],",
+          "sig": "fn cdel_keys(cl: Cluster, keys: [str], deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2347
@@ -4296,7 +4296,7 @@
         {
           "name": "cexists",
           "decl": "fn",
-          "sig": "fn cexists(cl: Cluster, keys: [str],",
+          "sig": "fn cexists(cl: Cluster, keys: [str], deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2363
@@ -4304,7 +4304,7 @@
         {
           "name": "cexpire",
           "decl": "fn",
-          "sig": "fn cexpire(cl: Cluster, key: str, seconds: int,",
+          "sig": "fn cexpire(cl: Cluster, key: str, seconds: int, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2379
@@ -4312,7 +4312,7 @@
         {
           "name": "cpexpire",
           "decl": "fn",
-          "sig": "fn cpexpire(cl: Cluster, key: str, ms: int,",
+          "sig": "fn cpexpire(cl: Cluster, key: str, ms: int, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2389
@@ -4336,7 +4336,7 @@
         {
           "name": "cpersist",
           "decl": "fn",
-          "sig": "fn cpersist(cl: Cluster, key: str,",
+          "sig": "fn cpersist(cl: Cluster, key: str, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2417
@@ -4360,7 +4360,7 @@
         {
           "name": "cincr_by",
           "decl": "fn",
-          "sig": "fn cincr_by(cl: Cluster, key: str, n: int,",
+          "sig": "fn cincr_by(cl: Cluster, key: str, n: int, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2445
@@ -4368,7 +4368,7 @@
         {
           "name": "cdecr_by",
           "decl": "fn",
-          "sig": "fn cdecr_by(cl: Cluster, key: str, n: int,",
+          "sig": "fn cdecr_by(cl: Cluster, key: str, n: int, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2455
@@ -4376,7 +4376,7 @@
         {
           "name": "cappend",
           "decl": "fn",
-          "sig": "fn cappend(cl: Cluster, key: str, val: bytes,",
+          "sig": "fn cappend(cl: Cluster, key: str, val: bytes, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2465
@@ -4384,7 +4384,7 @@
         {
           "name": "cstrlen",
           "decl": "fn",
-          "sig": "fn cstrlen(cl: Cluster, key: str,",
+          "sig": "fn cstrlen(cl: Cluster, key: str, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2475
@@ -4392,7 +4392,7 @@
         {
           "name": "cmget",
           "decl": "fn",
-          "sig": "fn cmget(cl: Cluster, keys: [str],",
+          "sig": "fn cmget(cl: Cluster, keys: [str], deadline: until) -> result[[opt[bytes]], str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2485
@@ -4400,7 +4400,7 @@
         {
           "name": "cmset",
           "decl": "fn",
-          "sig": "fn cmset(cl: Cluster, kv: map[str]bytes,",
+          "sig": "fn cmset(cl: Cluster, kv: map[str]bytes, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2511
@@ -4408,7 +4408,7 @@
         {
           "name": "chset",
           "decl": "fn",
-          "sig": "fn chset(cl: Cluster, key: str, field: str, val: bytes,",
+          "sig": "fn chset(cl: Cluster, key: str, field: str, val: bytes, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2538
@@ -4416,7 +4416,7 @@
         {
           "name": "chget",
           "decl": "fn",
-          "sig": "fn chget(cl: Cluster, key: str, field: str,",
+          "sig": "fn chget(cl: Cluster, key: str, field: str, deadline: until) -> result[opt[bytes], str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2548
@@ -4424,7 +4424,7 @@
         {
           "name": "chdel",
           "decl": "fn",
-          "sig": "fn chdel(cl: Cluster, key: str, fields: [str],",
+          "sig": "fn chdel(cl: Cluster, key: str, fields: [str], deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2561
@@ -4432,7 +4432,7 @@
         {
           "name": "chexists",
           "decl": "fn",
-          "sig": "fn chexists(cl: Cluster, key: str, field: str,",
+          "sig": "fn chexists(cl: Cluster, key: str, field: str, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2574
@@ -4448,7 +4448,7 @@
         {
           "name": "chincr_by",
           "decl": "fn",
-          "sig": "fn chincr_by(cl: Cluster, key: str, field: str, n: int,",
+          "sig": "fn chincr_by(cl: Cluster, key: str, field: str, n: int, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2593
@@ -4456,7 +4456,7 @@
         {
           "name": "clpush",
           "decl": "fn",
-          "sig": "fn clpush(cl: Cluster, key: str, vals: [bytes],",
+          "sig": "fn clpush(cl: Cluster, key: str, vals: [bytes], deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2604
@@ -4464,7 +4464,7 @@
         {
           "name": "crpush",
           "decl": "fn",
-          "sig": "fn crpush(cl: Cluster, key: str, vals: [bytes],",
+          "sig": "fn crpush(cl: Cluster, key: str, vals: [bytes], deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2617
@@ -4472,7 +4472,7 @@
         {
           "name": "clpop",
           "decl": "fn",
-          "sig": "fn clpop(cl: Cluster, key: str,",
+          "sig": "fn clpop(cl: Cluster, key: str, deadline: until) -> result[opt[bytes], str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2630
@@ -4480,7 +4480,7 @@
         {
           "name": "crpop",
           "decl": "fn",
-          "sig": "fn crpop(cl: Cluster, key: str,",
+          "sig": "fn crpop(cl: Cluster, key: str, deadline: until) -> result[opt[bytes], str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2643
@@ -4496,7 +4496,7 @@
         {
           "name": "csadd",
           "decl": "fn",
-          "sig": "fn csadd(cl: Cluster, key: str, members: [bytes],",
+          "sig": "fn csadd(cl: Cluster, key: str, members: [bytes], deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2665
@@ -4504,7 +4504,7 @@
         {
           "name": "csrem",
           "decl": "fn",
-          "sig": "fn csrem(cl: Cluster, key: str, members: [bytes],",
+          "sig": "fn csrem(cl: Cluster, key: str, members: [bytes], deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2678
@@ -4520,7 +4520,7 @@
         {
           "name": "csismember",
           "decl": "fn",
-          "sig": "fn csismember(cl: Cluster, key: str, member: bytes,",
+          "sig": "fn csismember(cl: Cluster, key: str, member: bytes, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2700
@@ -4528,7 +4528,7 @@
         {
           "name": "czadd",
           "decl": "fn",
-          "sig": "fn czadd(cl: Cluster, key: str, members: map[str]float,",
+          "sig": "fn czadd(cl: Cluster, key: str, members: map[str]float, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2710
@@ -4536,7 +4536,7 @@
         {
           "name": "czrem",
           "decl": "fn",
-          "sig": "fn czrem(cl: Cluster, key: str, members: [bytes],",
+          "sig": "fn czrem(cl: Cluster, key: str, members: [bytes], deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2724
@@ -4552,7 +4552,7 @@
         {
           "name": "czscore",
           "decl": "fn",
-          "sig": "fn czscore(cl: Cluster, key: str, member: bytes,",
+          "sig": "fn czscore(cl: Cluster, key: str, member: bytes, deadline: until) -> result[opt[float], str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2746
@@ -4560,7 +4560,7 @@
         {
           "name": "ckey_type",
           "decl": "fn",
-          "sig": "fn ckey_type(cl: Cluster, key: str,",
+          "sig": "fn ckey_type(cl: Cluster, key: str, deadline: until) -> result[str, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2766
@@ -4568,7 +4568,7 @@
         {
           "name": "crename",
           "decl": "fn",
-          "sig": "fn crename(cl: Cluster, key: str, newkey: str,",
+          "sig": "fn crename(cl: Cluster, key: str, newkey: str, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 2776
@@ -4576,7 +4576,7 @@
         {
           "name": "cscan",
           "decl": "fn",
-          "sig": "fn cscan(cl: Cluster, cursor: int, match: opt[str], count: opt[int],",
+          "sig": "fn cscan(cl: Cluster, cursor: int, match: opt[str], count: opt[int], deadline: until) -> result[ScanOut, str]",
           "doc": "SCAN steps one node only (slot 0's owner): cluster-wide iteration fans out per node with cluster_refresh's map in hand.",
           "file": "stdlib/redis/redis.sl",
           "line": 2795
@@ -4592,7 +4592,7 @@
         {
           "name": "queue",
           "decl": "fn",
-          "sig": "fn queue(c: Conn, args: [bytes],",
+          "sig": "fn queue(c: Conn, args: [bytes], deadline: until) -> result[bool, str]",
           "doc": "Queue one command inside MULTI. Anything but +QUEUED aborts the whole transaction server-side; that surfaces here as an err, and a later EXEC answers EXECABORT.",
           "file": "stdlib/redis/redis.sl",
           "line": 2892
@@ -4616,7 +4616,7 @@
         {
           "name": "watch",
           "decl": "fn",
-          "sig": "fn watch(c: Conn, keys: [str],",
+          "sig": "fn watch(c: Conn, keys: [str], deadline: until) -> result[bool, str]",
           "doc": "WATCH/UNWATCH for optimistic locking: watch, read, MULTI, queue, EXEC; a nil EXEC (err here) means someone else wrote first, so retry the whole sequence.",
           "file": "stdlib/redis/redis.sl",
           "line": 2962
@@ -4632,7 +4632,7 @@
         {
           "name": "eval",
           "decl": "fn",
-          "sig": "fn eval(c: Conn, script: str, keys: [str], args: [bytes],",
+          "sig": "fn eval(c: Conn, script: str, keys: [str], args: [bytes], deadline: until) -> result[Reply, str]",
           "doc": "EVAL: the script's raw reply, whose shape depends on what it returns -- bulk, int, array, or error, decoded verbatim.",
           "file": "stdlib/redis/redis.sl",
           "line": 3017
@@ -4640,7 +4640,7 @@
         {
           "name": "evalsha",
           "decl": "fn",
-          "sig": "fn evalsha(c: Conn, script: str, keys: [str], args: [bytes],",
+          "sig": "fn evalsha(c: Conn, script: str, keys: [str], args: [bytes], deadline: until) -> result[Reply, str]",
           "doc": "EVALSHA with automatic EVAL fallback: the common path sends only 40 hex characters; a server that never saw the script answers NOSCRIPT and the call transparently re-sends the source.",
           "file": "stdlib/redis/redis.sl",
           "line": 3026
@@ -4664,7 +4664,7 @@
         {
           "name": "subscribe",
           "decl": "fn",
-          "sig": "fn subscribe(url: str, channels: [str], patterns: [str],",
+          "sig": "fn subscribe(url: str, channels: [str], patterns: [str], deadline: until) -> result[Sub, str]",
           "doc": "Subscribe, returning a live Sub. channels and patterns are the SUBSCRIBE and PSUBSCRIBE lists; at least one of them is nonempty.",
           "file": "stdlib/redis/redis.sl",
           "line": 3154
@@ -4672,7 +4672,7 @@
         {
           "name": "sub_add",
           "decl": "fn",
-          "sig": "fn sub_add(sub: Sub, channels: [str], patterns: [str],",
+          "sig": "fn sub_add(sub: Sub, channels: [str], patterns: [str], deadline: until) -> result[bool, str]",
           "doc": "Add subscriptions to a live Sub.",
           "file": "stdlib/redis/redis.sl",
           "line": 3173
@@ -4688,7 +4688,7 @@
         {
           "name": "sub_remove",
           "decl": "fn",
-          "sig": "fn sub_remove(sub: Sub, channels: [str], patterns: [str],",
+          "sig": "fn sub_remove(sub: Sub, channels: [str], patterns: [str], deadline: until) -> result[bool, str]",
           "doc": "Remove subscriptions. Fully unsubscribing returns the connection to plain unicast mode; close it or subscribe again after.",
           "file": "stdlib/redis/redis.sl",
           "line": 3254
@@ -4720,7 +4720,7 @@
         {
           "name": "xadd",
           "decl": "fn",
-          "sig": "fn xadd(c: Conn, key: str, id: str, fields: map[str]bytes,",
+          "sig": "fn xadd(c: Conn, key: str, id: str, fields: map[str]bytes, deadline: until) -> result[str, str]",
           "doc": "XADD: the new entry's ID.",
           "file": "stdlib/redis/redis.sl",
           "line": 3358
@@ -4728,7 +4728,7 @@
         {
           "name": "xadd_maxlen",
           "decl": "fn",
-          "sig": "fn xadd_maxlen(c: Conn, key: str, maxlen: int, approx: bool, id: str,",
+          "sig": "fn xadd_maxlen(c: Conn, key: str, maxlen: int, approx: bool, id: str, fields: map[str]bytes, deadline: until) -> result[str, str]",
           "doc": "XADD with MAXLEN trimming: approx picks ~ (cheap) over exact.",
           "file": "stdlib/redis/redis.sl",
           "line": 3379
@@ -4736,7 +4736,7 @@
         {
           "name": "xrange",
           "decl": "fn",
-          "sig": "fn xrange(c: Conn, key: str, start: str, end: str, count: opt[int],",
+          "sig": "fn xrange(c: Conn, key: str, start: str, end: str, count: opt[int], deadline: until) -> result[[StreamEntry], str]",
           "doc": "XRANGE/XREVRANGE: entries between two IDs (\"-\" and \"+\" are the ends), oldest first (XREVRANGE newest first). count caps the reply, none for no cap.",
           "file": "stdlib/redis/redis.sl",
           "line": 3446
@@ -4744,7 +4744,7 @@
         {
           "name": "xrevrange",
           "decl": "fn",
-          "sig": "fn xrevrange(c: Conn, key: str, end: str, start: str, count: opt[int],",
+          "sig": "fn xrevrange(c: Conn, key: str, end: str, start: str, count: opt[int], deadline: until) -> result[[StreamEntry], str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 3451
@@ -4760,7 +4760,7 @@
         {
           "name": "xtrim",
           "decl": "fn",
-          "sig": "fn xtrim(c: Conn, key: str, maxlen: int, approx: bool,",
+          "sig": "fn xtrim(c: Conn, key: str, maxlen: int, approx: bool, deadline: until) -> result[int, str]",
           "doc": "XTRIM MAXLEN: how many entries were removed.",
           "file": "stdlib/redis/redis.sl",
           "line": 3465
@@ -4768,7 +4768,7 @@
         {
           "name": "xdel",
           "decl": "fn",
-          "sig": "fn xdel(c: Conn, key: str, ids: [str],",
+          "sig": "fn xdel(c: Conn, key: str, ids: [str], deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 3480
@@ -4776,7 +4776,7 @@
         {
           "name": "xread",
           "decl": "fn",
-          "sig": "fn xread(c: Conn, keys: [str], ids: [str], block_ms: opt[int],",
+          "sig": "fn xread(c: Conn, keys: [str], ids: [str], block_ms: opt[int], count: opt[int], deadline: until) -> result[opt[[StreamRead]], str]",
           "doc": "XREAD: new entries per key since each id (\"$\" means \"everything after now\" on first call, then the last seen id after). block_ms waits that long for data (none => return at once); a wait that finds nothing is ok(none), not an error. count caps per call.",
           "file": "stdlib/redis/redis.sl",
           "line": 3497
@@ -4784,7 +4784,7 @@
         {
           "name": "cxadd",
           "decl": "fn",
-          "sig": "fn cxadd(cl: Cluster, key: str, id: str, fields: map[str]bytes,",
+          "sig": "fn cxadd(cl: Cluster, key: str, id: str, fields: map[str]bytes, deadline: until) -> result[str, str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 3574
@@ -4800,7 +4800,7 @@
         {
           "name": "cxread",
           "decl": "fn",
-          "sig": "fn cxread(cl: Cluster, keys: [str], ids: [str], block_ms: opt[int],",
+          "sig": "fn cxread(cl: Cluster, keys: [str], ids: [str], block_ms: opt[int], count: opt[int], deadline: until) -> result[opt[[StreamRead]], str]",
           "doc": "",
           "file": "stdlib/redis/redis.sl",
           "line": 3603
@@ -5259,22 +5259,22 @@
         {
           "name": "join",
           "params": [
-            "NA_ARR_STR",
+            "[str]",
             "str"
           ],
           "ret": "str",
           "tls": false,
-          "sig": "strings.join(NA_ARR_STR, str) -> str"
+          "sig": "strings.join([str], str) -> str"
         },
         {
           "name": "join_bytes",
           "params": [
-            "NA_ARR_BYTES",
+            "[bytes]",
             "bytes"
           ],
           "ret": "bytes",
           "tls": false,
-          "sig": "strings.join_bytes(NA_ARR_BYTES, bytes) -> bytes"
+          "sig": "strings.join_bytes([bytes], bytes) -> bytes"
         },
         {
           "name": "bytes_zero",
@@ -5310,24 +5310,24 @@
         {
           "name": "from_wire",
           "params": [
-            "NA_WIRE",
+            "wire",
             "int",
             "int"
           ],
           "ret": "str",
           "tls": false,
-          "sig": "strings.from_wire(NA_WIRE, int, int) -> str"
+          "sig": "strings.from_wire(wire, int, int) -> str"
         },
         {
           "name": "from_wire_lower",
           "params": [
-            "NA_WIRE",
+            "wire",
             "int",
             "int"
           ],
           "ret": "str",
           "tls": false,
-          "sig": "strings.from_wire_lower(NA_WIRE, int, int) -> str"
+          "sig": "strings.from_wire_lower(wire, int, int) -> str"
         },
         {
           "name": "find_field",

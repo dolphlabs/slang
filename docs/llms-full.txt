@@ -66,6 +66,35 @@ compiler already owns both formats: it parses `slang.project` and writes
 `slang.lock`. A separate tool would have to reimplement a grammar it
 does not control.
 
+Look up an API without leaving the terminal:
+
+```sh
+slangc doc                     # every package this directory can import
+slangc doc http                # its exported items, one line each
+slangc doc builder.Str         # one item: its comment, and a struct's fields and methods
+slangc doc httpc client_post   # the same, as two words
+```
+
+```
+$ slangc doc builder.Str
+gc struct Str {
+    parts: [str],
+    size: int,
+}
+
+methods:
+  fn write(self: Str, s: str) -> Str
+      // Appends, and returns the builder so writes chain.
+  ...
+```
+
+Packages resolve exactly as `import` does from the current directory: a
+local directory, a compiler-provided package, the standard library, then a
+`slang.project` pin. An item's documentation is the run of `//` comments
+directly above its `pub` declaration, which is also what the documentation
+site shows. It exists so an agent can ask for the one signature it needs
+instead of reading a page or the package's source.
+
 Compile a slang program:
 
 ```sh
@@ -5773,7 +5802,7 @@ header()'s two real call sites (Ctx.header in zokor, the WebSocket handshake) ar
 
 Every header a request carries, as a map -- built fresh on each call by scanning raw_headers once. Nothing in either repo iterates a request's headers today (confirmed by grep), which is what makes "built on demand" the right default over a cached field: a cache nothing reads is pure cost. Walks the same line shape scan_headers does, for a different reason (that one validates and extracts two offsets; this one assumes an already-valid block and extracts every name and value) -- kept as two functions rather than one parameterized by what to do with each line, which would obscure both to save repeating six lines.
 
-### `fn request(method: str, path: str, version: str,`
+### `fn request(method: str, path: str, version: str, headers: map[str]str, body: bytes) -> result[Request, str]`
 
 Builds a Request from a map the way the eager parser builds one off the wire: a header name or value may not contain CR or LF (an application- or test-constructed header gets no such check for free the way one read off the wire does -- this is where that rule lives for this path), and a name may not contain the colon that separates it from its value on the wire. Both are a real hazard, not a theoretical one, now that raw_headers is what a request's headers actually are: a value containing "\r\n" would be concatenated straight into the block below as a SECOND header line -- injection -- if it weren't rejected first.
 
@@ -5809,7 +5838,7 @@ The method bytes as a str: the ONE framing str frame dispatch needs (to map to t
 
 The full Request for a frame, built ONCE for the route that runs: method/path/version strs, raw_headers slice, body slice. serve() callers already hold one; serve_frame builds one -- never both. Takes explicit offsets so Frame and WireFrame share it.
 
-### `fn frame_request_at(raw: bytes, line_end: int, head_end: int,`
+### `fn frame_request_at(raw: bytes, line_end: int, head_end: int, body: bytes) -> Request`
 
 ### `fn frame_version(f: Frame) -> int`
 
@@ -5857,7 +5886,7 @@ Whether the connection should close after answering `r`: HTTP/1.1 stays open unl
 
 The int-flag twin, for callers holding a version str rather than a Head (read_frame's WireFrame.version). Same rules; the block is passed explicitly because there is no Head in scope.
 
-### `fn read_frame(c: &mut link, buf: wire, filled: int,`
+### `fn read_frame(c: &mut link, buf: wire, filled: int, idle_deadline: until, header_deadline: until, body_deadline: until) -> result[WireFrame, str]`
 
 read_frame: read's framing, plus the parsed head the router matches on. Implemented INSIDE read's loop shape (not as read-plus-copy): read compacts the buffer before returning, so after read there is no head left to copy -- buf[0..filled] is the NEXT request. This duplicates read's loop deliberately (same scans, same errors, same close rules), and the duplication is the contract: any change to read's framing must land here too.  What differs from read: on a complete frame the method/path strs and the header block + body are COPIED OUT of the wire ONCE -- the same strs + copies read already pays (hd.method/path, hd.headers, hd.body) -- and NO separate message copy is made. The old shape did to_bytes(buf[0..end]) PLUS parse_frame over the copy PLUS wants_close_scan over the copy: a full second framing pass and a whole-message copy per request. Now the WireFrame carries what the router needs directly: method/path strs for the enum + Request build, headers/body slices for the Ctx. Routing matches on strs (==), never on raw bytes -- no path_is_at rescan, no per-route to_bytes. The message copy is gone entirely.  Chunked bodies: hd.body IS the reassembled copy (one alloc the old path also spent); the WireFrame body is that copy directly. Three deadlines, not one, because "how long should this wait" has three different honest answers depending on what the connection is doing: idle_deadline while nothing has arrived at all yet (a kept- alive connection between requests, or a fresh one that never sends anything -- this is the one that should be generous, since a real client legitimately sits idle between requests); header_deadline once bytes have started arriving but the request line and headers aren't complete yet; body_deadline once the headers are in but a declared body hasn't fully arrived. header_deadline and body_deadline are both the tight, slow-loris-shaped ones -- a client that has started a request and then trickles it in a byte at a time is not the same risk as one that hasn't sent anything yet, and idle_deadline being long must not become an amplifier for that. Recomputed fresh every loop iteration rather than tracked as a separate flag: frame_head_wire's own re-parse of the same (only ever growing) buffer already answers "is the header complete yet" idempotently, so re-deriving which phase this recv is in from that costs nothing extra and can't drift out of sync with it.
 
@@ -5867,7 +5896,7 @@ read_frame: read's framing, plus the parsed head the router matches on. Implemen
 
 serialize()'s GC allocations (~40 of them for a typical response, see serialize()'s own comment) replaced with two passes over the caller's own arena: size, then fill. If the response is larger than what's left of the arena, falls back to serialize() + send_bytes rather than letting a.wire(need) past capacity kill the task -- a slow response stays a slow response instead of becoming a dropped connection.  Responses with exactly the `text_response` shape (one content-type, nothing else) take the fixed fast path above: no map iteration, no integer str, no intermediate bytes. Anything else uses the general `emit` below, unchanged. A static route's answer: status, content type, and body -- no Response struct, no extra list, nothing to shape-check. serve_conn gets one from serve_static and hands it straight to write_static, which sends the PREBUILT keep-alive rendering (assembled once at registration -- see static_render below) with one wire alloc and one memcpy. The static snapshot lives on the Route (see router.sl); this is just the per-request view of it.
 
-### `fn write_static(c: &mut link, b: StaticBody, a: &mut arena,`
+### `fn write_static(c: &mut link, b: StaticBody, a: &mut arena, close: bool, deadline: until) -> result[int, fault]`
 
 The static emit: the keep-alive rendering is prebuilt, not emitted. Hot path (HTTP/1.1 keep-alive, which is every wrk/ab request): one wire, one memcpy, one send -- no probe pass, no Response struct, no map, no integer str, no per-piece puts. The close variant (HTTP/1.0, Connection: close) is rare and pays the emit cost below; it never touches the hot path.
 
@@ -5877,11 +5906,11 @@ The keep-alive rendering, assembled ONCE at registration: status line, one conte
 
 ### `fn write(c: &mut link, r: Response, a: &mut arena, deadline: until) -> result[int, fault]`
 
-### `fn text_response_bytes(status: i32, status_text: str, content_type: str,`
+### `fn text_response_bytes(status: i32, status_text: str, content_type: str, body: bytes) -> Response`
 
 `text_response` with a BYTES body: same shape, no `to_bytes` copy. The hot path (zokor's JSON renderers, static bodies) already holds bytes; forcing them through str and back cost a full copy plus the literal's own allocation on every response.
 
-### `fn text_response(status: i32, status_text: str, content_type: str,`
+### `fn text_response(status: i32, status_text: str, content_type: str, body: str) -> Response`
 
 ### `fn ok_html(body: str) -> Response`
 
@@ -6168,17 +6197,17 @@ client, but a real browser is different evidence.
 
 ## API
 
-### `let W_RAW = 0;       // pre-built frames, not flow controlled`
+### `let W_RAW = 0; // pre-built frames, not flow controlled`
 
 ---- writer messages -------------------------------------------------  Everything the writer task needs arrives on ONE channel, tagged.  When this was written slang had no `select`, so a writer watching both "here is a response" and "the peer granted more window" on two channels could only ever block on one of them. `select` exists now and would compile -- but the single tagged stream is still the better design here, and stays. Two channels would make the ORDER between a grant and a body a race the writer has to reason about; one channel makes it the order they were sent, for free, and leaves the writer an ordinary state machine with a single blocking point.
 
-### `let W_BODY = 1;      // a response: HEADERS now, DATA as window allows`
+### `let W_BODY = 1; // a response: HEADERS now, DATA as window allows`
 
-### `let W_GRANT = 2;     // peer's WINDOW_UPDATE: `n` octets to `stream``
+### `let W_GRANT = 2; // peer's WINDOW_UPDATE: `n` octets to `stream``
 
-### `let W_INITIAL = 3;   // peer's SETTINGS_INITIAL_WINDOW_SIZE is now `n``
+### `let W_INITIAL = 3; // peer's SETTINGS_INITIAL_WINDOW_SIZE is now `n``
 
-### `let W_MAXFRAME = 4;  // peer's SETTINGS_MAX_FRAME_SIZE is now `n``
+### `let W_MAXFRAME = 4; // peer's SETTINGS_MAX_FRAME_SIZE is now `n``
 
 ### `gc struct WMsg`
 
@@ -6186,7 +6215,7 @@ client, but a real browser is different evidence.
 
 ### `fn grant_msg(stream: int, n: int) -> WMsg`
 
-### `fn response_msg(stream: int, status: str, extra: [Header],`
+### `fn response_msg(stream: int, status: str, extra: [Header], body: bytes) -> WMsg`
 
 Build a response. The body is handed over UNFRAMED: the writer owns the peer's window and its max frame size, so it -- not the handler -- decides how the body is cut into DATA frames and when each may go.
 
@@ -6258,15 +6287,15 @@ RFC 7301 §3.1: the peer either selected "h2" or it did not. A server that adver
 
 ### `fn reader_new() -> Reader`
 
-### `fn read_frame(r: Reader, t: Transport, max_frame: int, u: until)`
+### `fn read_frame(r: Reader, t: Transport, max_frame: int, u: until) -> result[Frame, str]`
 
 Pull bytes until at least one complete frame is buffered, then return it and keep the remainder. Note the `&mut *c` at every site below that forwards this borrow: passing `c` directly MOVES it, so the second call would fail with "use of moved value". Reborrowing keeps the caller's borrow usable.  `u` bounds the WHOLE call, not each recv: a peer that sends one octet every second must still finish the frame inside the budget, which is what makes this a slowloris defence rather than a keepalive check. Pass until_never() only where blocking forever is genuinely intended.
 
-### `fn accept_preface(r: Reader, t: Transport, wch: chan[WMsg], u: until)`
+### `fn accept_preface(r: Reader, t: Transport, wch: chan[WMsg], u: until) -> result[bool, str]`
 
 Verify the 24-byte client connection preface and send ours.
 
-### `fn read_request(cn: Conn, r: Reader, t: Transport, wch: chan[WMsg],`
+### `fn read_request(cn: Conn, r: Reader, t: Transport, wch: chan[WMsg], lim: Limits) -> result[Req, str]`
 
 Read frames until one complete request has arrived.  Two clocks, switched at the first HEADERS. Before it the connection is idle and gets the generous `idle` budget, refreshed by each control frame that arrives -- a client PINGing a kept-alive connection is behaving correctly and must not be disconnected. After it the strict `request` budget applies to the request as a WHOLE and is never refreshed, so no amount of dribbled DATA or CONTINUATION can extend it.
 
@@ -6274,7 +6303,7 @@ Read frames until one complete request has arrived.  Two clocks, switched at the
 
 Owns the write side, and with it the peer's send windows.  Flow control has to live here rather than in the handlers. The window is a property of the CONNECTION, shared by every concurrent stream, so no handler can decide on its own whether it may send -- and the WINDOW_UPDATE that grants credit arrives on the read side, in a different task entirely. Routing both into this one task is what lets the accounting be correct without a lock at all. slang does have a mutex now, but reaching for one here would be the worse design: it would serialise the writers without making the window arithmetic any less shared.  A blocked stream parks its BODY here, not its task: the handler hands the response over and moves on, so a peer with a tiny window costs a queue entry rather than a live task.
 
-### `fn respond(cn: Conn, wch: chan[WMsg], stream: int, status: str,`
+### `fn respond(cn: Conn, wch: chan[WMsg], stream: int, status: str, extra: [Header], body: bytes)`
 
 Enqueue a response for `stream`. Every write on the connection goes through the writer task, so there is deliberately no direct-write variant: one would be able to interleave with a handler mid-frame.
 
@@ -6416,7 +6445,7 @@ One SETTINGS entry is a 16-bit identifier and a 32-bit value.
 
 ### `fn decoder_new(cap: int) -> Decoder`
 
-### `fn decode_block(d: Decoder, b: bytes, max_headers: int)`
+### `fn decode_block(d: Decoder, b: bytes, max_headers: int) -> result[[Header], str]`
 
 Decode one complete header block. `max_headers` caps how many fields a peer may send: without it a small compressed block can expand into an unbounded list, which is the HPACK bomb.
 
@@ -6740,13 +6769,13 @@ What the jar would send to `url` right now. For inspection and tests; a request 
 
 ### `fn new_request(method: str, url: str) -> Request`
 
-### `fn client_send(c: Client, req: Request, deadline: until)`
+### `fn client_send(c: Client, req: Request, deadline: until) -> result[Response, str]`
 
-### `fn client_get(c: Client, url: str, deadline: until)`
+### `fn client_get(c: Client, url: str, deadline: until) -> result[Response, str]`
 
-### `fn client_head(c: Client, url: str, deadline: until)`
+### `fn client_head(c: Client, url: str, deadline: until) -> result[Response, str]`
 
-### `fn client_post(c: Client, url: str, content_type: str, body: bytes,`
+### `fn client_post(c: Client, url: str, content_type: str, body: bytes, deadline: until) -> result[Response, str]`
 
 ### `fn idle_count(c: Client) -> int`
 
@@ -6762,15 +6791,15 @@ Close every idle connection now. A long-lived service does not need this -- idle
 
 ### `fn head(url: str, deadline: until) -> result[Response, str]`
 
-### `fn post(url: str, content_type: str, body: bytes,`
+### `fn post(url: str, content_type: str, body: bytes, deadline: until) -> result[Response, str]`
 
-### `fn send(self: Client, req: Request, deadline: until)`
+### `fn send(self: Client, req: Request, deadline: until) -> result[Response, str]`
 
-### `fn get(self: Client, url: str, deadline: until)`
+### `fn get(self: Client, url: str, deadline: until) -> result[Response, str]`
 
-### `fn head(self: Client, url: str, deadline: until)`
+### `fn head(self: Client, url: str, deadline: until) -> result[Response, str]`
 
-### `fn post(self: Client, url: str, content_type: str, body: bytes,`
+### `fn post(self: Client, url: str, content_type: str, body: bytes, deadline: until) -> result[Response, str]`
 
 ### `fn idle_count(self: Client) -> int`
 
@@ -7741,7 +7770,7 @@ The SQLSTATE of an error returned by this package, or "" when the error did not 
 
 One SCRAM-SHA-256 exchange (RFC 5802, RFC 7677), as pure functions of its inputs, so the published test vector can check it.
 
-### `fn scram_client_final(password: str, client_first_bare: str,`
+### `fn scram_client_final(password: str, client_first_bare: str, server_first: str, client_nonce: str) -> result[Scram, str]`
 
 ### `fn connect(url: str, deadline: until) -> result[Conn, str]`
 
@@ -7781,7 +7810,7 @@ Sent in binary, so any byte values -- NULs included -- arrive intact. For a byte
 
 ### `fn arg_null() -> Arg`
 
-### `fn query(c: Conn, sql: str, args: [Arg], deadline: until)`
+### `fn query(c: Conn, sql: str, args: [Arg], deadline: until) -> result[Rows, str]`
 
 Runs one query with parameters ($1, $2, ...) through the extended protocol: the values travel separately from the SQL text, so they can never be parsed as SQL. Returns every row, buffered; for a result too big to hold at once, use stream().
 
@@ -7789,7 +7818,7 @@ Runs one query with parameters ($1, $2, ...) through the extended protocol: the 
 
 Runs SQL with no parameters through the simple protocol, which accepts several statements separated by semicolons -- a migration, a schema. Returns the rows affected by the last statement. Rows a statement returns are read and discarded.  Never build `sql` from untrusted input: use query() and parameters.
 
-### `fn stream(c: Conn, sql: str, args: [Arg], deadline: until)`
+### `fn stream(c: Conn, sql: str, args: [Arg], deadline: until) -> result[Rows, str]`
 
 ### `fn next_row(c: Conn, rows: Rows, deadline: until) -> result[bool, str]`
 
@@ -7815,7 +7844,7 @@ Ends the COPY. Returns the number of rows loaded, or the server's error about th
 
 Abandons the COPY: the server discards everything sent. Ok once the server has confirmed; its "COPY from stdin failed" is the expected answer, not an error.
 
-### `fn copy_from(c: Conn, sql: str, data: bytes, deadline: until)`
+### `fn copy_from(c: Conn, sql: str, data: bytes, deadline: until) -> result[int, str]`
 
 COPY ... FROM STDIN in one call. Returns the rows loaded.  pg.copy_from(c, "COPY users (id, email) FROM STDIN (FORMAT csv)", to_bytes("1,a@example.com\n2,b@example.com\n"), dl)
 
@@ -7837,9 +7866,9 @@ COPY ... TO STDOUT in one call, buffered (up to the 256 MiB result limit; stream
 
 "*" stops listening on every channel.
 
-### `fn notify(c: Conn, channel: str, payload: str, deadline: until)`
+### `fn notify(c: Conn, channel: str, payload: str, deadline: until) -> result[bool, str]`
 
-### `fn wait_notification(c: Conn, deadline: until)`
+### `fn wait_notification(c: Conn, deadline: until) -> result[opt[Notification], str]`
 
 The oldest queued notification, or waits for one until the deadline: none then. Unlike every other call, reaching the deadline here is not an error and does not break the connection -- waiting is the point.
 
@@ -7883,7 +7912,7 @@ A connection for the caller's exclusive use, until release(). Prefer pool_query 
 
 Returns a connection to the pool. One that is broken, closed, or still inside a transaction is closed instead: handing an open transaction to the next caller would run its statements inside someone else's uncommitted work.
 
-### `fn pool_query(p: Pool, sql: str, args: [Arg], deadline: until)`
+### `fn pool_query(p: Pool, sql: str, args: [Arg], deadline: until) -> result[Rows, str]`
 
 ### `fn pool_exec(p: Pool, sql: str, deadline: until) -> result[int, str]`
 
@@ -8058,17 +8087,17 @@ with `is_nil` for a nil array).
 
 ## API
 
-### `let REPLY_SIMPLE = 0;   // +str           (text holds the text)`
+### `let REPLY_SIMPLE = 0; // +str (text holds the text)`
 
 The five RESP2 reply types. A reply is always one of exactly one.
 
-### `let REPLY_ERROR = 1;    // -err           (text holds the text)`
+### `let REPLY_ERROR = 1; // -err (text holds the text)`
 
-### `let REPLY_INT = 2;      // :num           (num holds the value)`
+### `let REPLY_INT = 2; // :num (num holds the value)`
 
-### `let REPLY_BULK = 3;     // $len\r\n<bytes> (bulk holds it, none when nil)`
+### `let REPLY_BULK = 3; // $len\r\n<bytes> (bulk holds it, none when nil)`
 
-### `let REPLY_ARRAY = 4;    // *n\r\n...      (items holds them)`
+### `let REPLY_ARRAY = 4; // *n\r\n... (items holds them)`
 
 ### `gc struct Reply`
 
@@ -8134,15 +8163,15 @@ ECHO, expecting the value back byte-identical.
 
 GET: the value, or none when the key is absent. A missing key is absent data (opt), not an error.
 
-### `fn set(c: Conn, key: str, val: bytes,`
+### `fn set(c: Conn, key: str, val: bytes, deadline: until) -> result[bool, str]`
 
 SET: true when the server answers +OK.
 
-### `fn set_ex(c: Conn, key: str, seconds: int, val: bytes,`
+### `fn set_ex(c: Conn, key: str, seconds: int, val: bytes, deadline: until) -> result[bool, str]`
 
 SET with a TTL in seconds. True on +OK.
 
-### `fn set_nx(c: Conn, key: str, val: bytes,`
+### `fn set_nx(c: Conn, key: str, val: bytes, deadline: until) -> result[bool, str]`
 
 SETNX: true when the key was absent and is now set.
 
@@ -8154,11 +8183,11 @@ DEL_KEYS: how many of the keys existed. Named with a suffix because `del` itself
 
 EXISTS: how many of the keys exist.
 
-### `fn expire(c: Conn, key: str, seconds: int,`
+### `fn expire(c: Conn, key: str, seconds: int, deadline: until) -> result[bool, str]`
 
 EXPIRE: true when the timeout was set (false: missing key).
 
-### `fn pexpire(c: Conn, key: str, ms: int,`
+### `fn pexpire(c: Conn, key: str, ms: int, deadline: until) -> result[bool, str]`
 
 PEXPIRE: like EXPIRE with a millisecond TTL.
 
@@ -8180,55 +8209,55 @@ INCR/DECR: the value after the change.
 
 ### `fn decr(c: Conn, key: str, deadline: until) -> result[int, str]`
 
-### `fn incr_by(c: Conn, key: str, n: int,`
+### `fn incr_by(c: Conn, key: str, n: int, deadline: until) -> result[int, str]`
 
-### `fn decr_by(c: Conn, key: str, n: int,`
+### `fn decr_by(c: Conn, key: str, n: int, deadline: until) -> result[int, str]`
 
-### `fn append(c: Conn, key: str, val: bytes,`
+### `fn append(c: Conn, key: str, val: bytes, deadline: until) -> result[int, str]`
 
 APPEND: the length after appending. STRLEN: the current length.
 
 ### `fn strlen(c: Conn, key: str, deadline: until) -> result[int, str]`
 
-### `fn mget(c: Conn, keys: [str],`
+### `fn mget(c: Conn, keys: [str], deadline: until) -> result[[opt[bytes]], str]`
 
 MGET: one slot per key, none for the missing ones.
 
-### `fn mset(c: Conn, kv: map[str]bytes,`
+### `fn mset(c: Conn, kv: map[str]bytes, deadline: until) -> result[bool, str]`
 
 MSET: field iteration order is insertion order, so the wire order is deterministic for a literally-built map.
 
-### `fn hset(c: Conn, key: str, field: str, val: bytes,`
+### `fn hset(c: Conn, key: str, field: str, val: bytes, deadline: until) -> result[int, str]`
 
 HSET: how many fields were newly added.
 
-### `fn hget(c: Conn, key: str, field: str,`
+### `fn hget(c: Conn, key: str, field: str, deadline: until) -> result[opt[bytes], str]`
 
 HGET: the value, or none when key or field is absent.
 
-### `fn hgetall(c: Conn, key: str,`
+### `fn hgetall(c: Conn, key: str, deadline: until) -> result[map[str]bytes, str]`
 
 HGETALL: the whole hash. Field names decode to str; binary field names a program did not put there itself come back lossy.
 
-### `fn hdel(c: Conn, key: str, fields: [str],`
+### `fn hdel(c: Conn, key: str, fields: [str], deadline: until) -> result[int, str]`
 
 HDEL: how many fields were removed.
 
-### `fn hexists(c: Conn, key: str, field: str,`
+### `fn hexists(c: Conn, key: str, field: str, deadline: until) -> result[bool, str]`
 
-### `fn hkeys(c: Conn, key: str,`
+### `fn hkeys(c: Conn, key: str, deadline: until) -> result[[str], str]`
 
-### `fn hvals(c: Conn, key: str,`
+### `fn hvals(c: Conn, key: str, deadline: until) -> result[[bytes], str]`
 
 ### `fn hlen(c: Conn, key: str, deadline: until) -> result[int, str]`
 
-### `fn hincr_by(c: Conn, key: str, field: str, n: int,`
+### `fn hincr_by(c: Conn, key: str, field: str, n: int, deadline: until) -> result[int, str]`
 
-### `fn lpush(c: Conn, key: str, vals: [bytes],`
+### `fn lpush(c: Conn, key: str, vals: [bytes], deadline: until) -> result[int, str]`
 
 LPUSH/RPUSH: the length after pushing.
 
-### `fn rpush(c: Conn, key: str, vals: [bytes],`
+### `fn rpush(c: Conn, key: str, vals: [bytes], deadline: until) -> result[int, str]`
 
 ### `fn lpop(c: Conn, key: str, deadline: until) -> result[opt[bytes], str]`
 
@@ -8238,31 +8267,31 @@ LPOP/RPOP: the element, or none when the list is absent or drained.
 
 ### `fn llen(c: Conn, key: str, deadline: until) -> result[int, str]`
 
-### `fn lrange(c: Conn, key: str, start: int, stop: int,`
+### `fn lrange(c: Conn, key: str, start: int, stop: int, deadline: until) -> result[[bytes], str]`
 
 LRANGE: elements from start to stop inclusive; negative indexes count from the tail, exactly as Redis documents.
 
-### `fn ltrim(c: Conn, key: str, start: int, stop: int,`
+### `fn ltrim(c: Conn, key: str, start: int, stop: int, deadline: until) -> result[bool, str]`
 
-### `fn lindex(c: Conn, key: str, i: int,`
+### `fn lindex(c: Conn, key: str, i: int, deadline: until) -> result[opt[bytes], str]`
 
-### `fn lrem(c: Conn, key: str, count: int, val: bytes,`
+### `fn lrem(c: Conn, key: str, count: int, val: bytes, deadline: until) -> result[int, str]`
 
 LREM: removes count occurrences of val, returns how many went.
 
-### `fn sadd(c: Conn, key: str, members: [bytes],`
+### `fn sadd(c: Conn, key: str, members: [bytes], deadline: until) -> result[int, str]`
 
 SADD: how many members were newly added.
 
-### `fn smembers(c: Conn, key: str,`
+### `fn smembers(c: Conn, key: str, deadline: until) -> result[[bytes], str]`
 
-### `fn srem(c: Conn, key: str, members: [bytes],`
+### `fn srem(c: Conn, key: str, members: [bytes], deadline: until) -> result[int, str]`
 
 SREM: how many members were removed.
 
 ### `fn scard(c: Conn, key: str, deadline: until) -> result[int, str]`
 
-### `fn sismember(c: Conn, key: str, member: bytes,`
+### `fn sismember(c: Conn, key: str, member: bytes, deadline: until) -> result[bool, str]`
 
 ### `fn spop(c: Conn, key: str, deadline: until) -> result[opt[bytes], str]`
 
@@ -8270,47 +8299,47 @@ SPOP: a removed member, or none when the set is absent or drained.
 
 ### `gc struct ZMember`
 
-### `fn zadd(c: Conn, key: str, members: map[str]float,`
+### `fn zadd(c: Conn, key: str, members: map[str]float, deadline: until) -> result[int, str]`
 
 ZADD: how many members were newly added.
 
-### `fn zrange(c: Conn, key: str, start: int, stop: int,`
+### `fn zrange(c: Conn, key: str, start: int, stop: int, deadline: until) -> result[[bytes], str]`
 
 ZRANGE/ZREVRANGE without scores.
 
-### `fn zrange_scores(c: Conn, key: str, start: int, stop: int,`
+### `fn zrange_scores(c: Conn, key: str, start: int, stop: int, deadline: until) -> result[[ZMember], str]`
 
 ZRANGE WITHSCORES: member/score pairs in range order.
 
-### `fn zrank(c: Conn, key: str, member: bytes,`
+### `fn zrank(c: Conn, key: str, member: bytes, deadline: until) -> result[opt[int], str]`
 
 ZRANK: the rank, or none when key or member is absent.
 
-### `fn zscore(c: Conn, key: str, member: bytes,`
+### `fn zscore(c: Conn, key: str, member: bytes, deadline: until) -> result[opt[float], str]`
 
 ZSCORE: the score, or none when key or member is absent.
 
-### `fn zrem(c: Conn, key: str, members: [bytes],`
+### `fn zrem(c: Conn, key: str, members: [bytes], deadline: until) -> result[int, str]`
 
 ZREM: how many members were removed.
 
 ### `fn zcard(c: Conn, key: str, deadline: until) -> result[int, str]`
 
-### `fn zincr_by(c: Conn, key: str, n: float, member: bytes,`
+### `fn zincr_by(c: Conn, key: str, n: float, member: bytes, deadline: until) -> result[float, str]`
 
 ### `fn key_type(c: Conn, key: str, deadline: until) -> result[str, str]`
 
 TYPE: the key's type name ("none" when absent).
 
-### `fn rename(c: Conn, key: str, newkey: str,`
+### `fn rename(c: Conn, key: str, newkey: str, deadline: until) -> result[bool, str]`
 
 RENAME: true on +OK. RENAMENX: true only when newkey was absent.
 
-### `fn rename_nx(c: Conn, key: str, newkey: str,`
+### `fn rename_nx(c: Conn, key: str, newkey: str, deadline: until) -> result[bool, str]`
 
 ### `gc struct ScanOut`
 
-### `fn scan(c: Conn, cursor: int, match: opt[str], count: opt[int],`
+### `fn scan(c: Conn, cursor: int, match: opt[str], count: opt[int], deadline: until) -> result[ScanOut, str]`
 
 SCAN: one cursor step. Thread cursor back in until it returns 0; match and count are server hints, both optional. KEYS is deliberately absent: it blocks the server for the whole keyspace.
 
@@ -8332,7 +8361,7 @@ A connection for the caller's exclusive use, until release().
 
 Returns a connection to the pool. One that is broken, closed, or inside MULTI is closed instead: handing those to the next caller would fail its first command, or run it inside someone else's uncommitted transaction.
 
-### `fn pool_do(p: Pool, args: [bytes],`
+### `fn pool_do(p: Pool, args: [bytes], deadline: until) -> result[Reply, str]`
 
 One command on a pooled connection: acquire, run, release. The connection goes back even when the command fails.
 
@@ -8342,7 +8371,7 @@ Closes every idle connection. Connections checked out are closed as they are rel
 
 ### `gc struct Cluster`
 
-### `fn new_cluster(cfg: Config, seeds: [str],`
+### `fn new_cluster(cfg: Config, seeds: [str], deadline: until) -> result[Cluster, str]`
 
 Connect to a cluster: try each seed until one serves CLUSTER SLOTS. Only database 0 exists in cluster mode. The deadline covers the whole bootstrap.
 
@@ -8350,7 +8379,7 @@ Connect to a cluster: try each seed until one serves CLUSTER SLOTS. Only databas
 
 Re-learn the whole slot map from a known node (any current pool will do; the first one wins) or a bootstrap seed. Manual recovery for outages the MOVED path cannot see.
 
-### `fn cluster_do(cl: Cluster, key: str, args: [bytes],`
+### `fn cluster_do(cl: Cluster, key: str, args: [bytes], deadline: until) -> result[Reply, str]`
 
 Run args against the node owning key, following MOVED (map update plus retry, up to MAX_REDIRECTS) and ASK (one directed ASKING hop, returned directly). Every other error returns verbatim.
 
@@ -8362,85 +8391,85 @@ Run args against the node owning key, following MOVED (map update plus retry, up
 
 ### `fn cget(cl: Cluster, key: str, deadline: until) -> result[opt[bytes], str]`
 
-### `fn cset(cl: Cluster, key: str, val: bytes,`
+### `fn cset(cl: Cluster, key: str, val: bytes, deadline: until) -> result[bool, str]`
 
-### `fn cset_ex(cl: Cluster, key: str, seconds: int, val: bytes,`
+### `fn cset_ex(cl: Cluster, key: str, seconds: int, val: bytes, deadline: until) -> result[bool, str]`
 
-### `fn cset_nx(cl: Cluster, key: str, val: bytes,`
+### `fn cset_nx(cl: Cluster, key: str, val: bytes, deadline: until) -> result[bool, str]`
 
-### `fn cdel_keys(cl: Cluster, keys: [str],`
+### `fn cdel_keys(cl: Cluster, keys: [str], deadline: until) -> result[int, str]`
 
-### `fn cexists(cl: Cluster, keys: [str],`
+### `fn cexists(cl: Cluster, keys: [str], deadline: until) -> result[int, str]`
 
-### `fn cexpire(cl: Cluster, key: str, seconds: int,`
+### `fn cexpire(cl: Cluster, key: str, seconds: int, deadline: until) -> result[bool, str]`
 
-### `fn cpexpire(cl: Cluster, key: str, ms: int,`
+### `fn cpexpire(cl: Cluster, key: str, ms: int, deadline: until) -> result[bool, str]`
 
 ### `fn cttl(cl: Cluster, key: str, deadline: until) -> result[int, str]`
 
 ### `fn cpttl(cl: Cluster, key: str, deadline: until) -> result[int, str]`
 
-### `fn cpersist(cl: Cluster, key: str,`
+### `fn cpersist(cl: Cluster, key: str, deadline: until) -> result[bool, str]`
 
 ### `fn cincr(cl: Cluster, key: str, deadline: until) -> result[int, str]`
 
 ### `fn cdecr(cl: Cluster, key: str, deadline: until) -> result[int, str]`
 
-### `fn cincr_by(cl: Cluster, key: str, n: int,`
+### `fn cincr_by(cl: Cluster, key: str, n: int, deadline: until) -> result[int, str]`
 
-### `fn cdecr_by(cl: Cluster, key: str, n: int,`
+### `fn cdecr_by(cl: Cluster, key: str, n: int, deadline: until) -> result[int, str]`
 
-### `fn cappend(cl: Cluster, key: str, val: bytes,`
+### `fn cappend(cl: Cluster, key: str, val: bytes, deadline: until) -> result[int, str]`
 
-### `fn cstrlen(cl: Cluster, key: str,`
+### `fn cstrlen(cl: Cluster, key: str, deadline: until) -> result[int, str]`
 
-### `fn cmget(cl: Cluster, keys: [str],`
+### `fn cmget(cl: Cluster, keys: [str], deadline: until) -> result[[opt[bytes]], str]`
 
-### `fn cmset(cl: Cluster, kv: map[str]bytes,`
+### `fn cmset(cl: Cluster, kv: map[str]bytes, deadline: until) -> result[bool, str]`
 
-### `fn chset(cl: Cluster, key: str, field: str, val: bytes,`
+### `fn chset(cl: Cluster, key: str, field: str, val: bytes, deadline: until) -> result[int, str]`
 
-### `fn chget(cl: Cluster, key: str, field: str,`
+### `fn chget(cl: Cluster, key: str, field: str, deadline: until) -> result[opt[bytes], str]`
 
-### `fn chdel(cl: Cluster, key: str, fields: [str],`
+### `fn chdel(cl: Cluster, key: str, fields: [str], deadline: until) -> result[int, str]`
 
-### `fn chexists(cl: Cluster, key: str, field: str,`
+### `fn chexists(cl: Cluster, key: str, field: str, deadline: until) -> result[bool, str]`
 
 ### `fn chlen(cl: Cluster, key: str, deadline: until) -> result[int, str]`
 
-### `fn chincr_by(cl: Cluster, key: str, field: str, n: int,`
+### `fn chincr_by(cl: Cluster, key: str, field: str, n: int, deadline: until) -> result[int, str]`
 
-### `fn clpush(cl: Cluster, key: str, vals: [bytes],`
+### `fn clpush(cl: Cluster, key: str, vals: [bytes], deadline: until) -> result[int, str]`
 
-### `fn crpush(cl: Cluster, key: str, vals: [bytes],`
+### `fn crpush(cl: Cluster, key: str, vals: [bytes], deadline: until) -> result[int, str]`
 
-### `fn clpop(cl: Cluster, key: str,`
+### `fn clpop(cl: Cluster, key: str, deadline: until) -> result[opt[bytes], str]`
 
-### `fn crpop(cl: Cluster, key: str,`
+### `fn crpop(cl: Cluster, key: str, deadline: until) -> result[opt[bytes], str]`
 
 ### `fn cllen(cl: Cluster, key: str, deadline: until) -> result[int, str]`
 
-### `fn csadd(cl: Cluster, key: str, members: [bytes],`
+### `fn csadd(cl: Cluster, key: str, members: [bytes], deadline: until) -> result[int, str]`
 
-### `fn csrem(cl: Cluster, key: str, members: [bytes],`
+### `fn csrem(cl: Cluster, key: str, members: [bytes], deadline: until) -> result[int, str]`
 
 ### `fn cscard(cl: Cluster, key: str, deadline: until) -> result[int, str]`
 
-### `fn csismember(cl: Cluster, key: str, member: bytes,`
+### `fn csismember(cl: Cluster, key: str, member: bytes, deadline: until) -> result[bool, str]`
 
-### `fn czadd(cl: Cluster, key: str, members: map[str]float,`
+### `fn czadd(cl: Cluster, key: str, members: map[str]float, deadline: until) -> result[int, str]`
 
-### `fn czrem(cl: Cluster, key: str, members: [bytes],`
+### `fn czrem(cl: Cluster, key: str, members: [bytes], deadline: until) -> result[int, str]`
 
 ### `fn czcard(cl: Cluster, key: str, deadline: until) -> result[int, str]`
 
-### `fn czscore(cl: Cluster, key: str, member: bytes,`
+### `fn czscore(cl: Cluster, key: str, member: bytes, deadline: until) -> result[opt[float], str]`
 
-### `fn ckey_type(cl: Cluster, key: str,`
+### `fn ckey_type(cl: Cluster, key: str, deadline: until) -> result[str, str]`
 
-### `fn crename(cl: Cluster, key: str, newkey: str,`
+### `fn crename(cl: Cluster, key: str, newkey: str, deadline: until) -> result[bool, str]`
 
-### `fn cscan(cl: Cluster, cursor: int, match: opt[str], count: opt[int],`
+### `fn cscan(cl: Cluster, cursor: int, match: opt[str], count: opt[int], deadline: until) -> result[ScanOut, str]`
 
 SCAN steps one node only (slot 0's owner): cluster-wide iteration fans out per node with cluster_refresh's map in hand.
 
@@ -8448,7 +8477,7 @@ SCAN steps one node only (slot 0's owner): cluster-wide iteration fans out per n
 
 MULTI: true on +OK. The connection leaves the pool from here until EXEC or DISCARD.
 
-### `fn queue(c: Conn, args: [bytes],`
+### `fn queue(c: Conn, args: [bytes], deadline: until) -> result[bool, str]`
 
 Queue one command inside MULTI. Anything but +QUEUED aborts the whole transaction server-side; that surfaces here as an err, and a later EXEC answers EXECABORT.
 
@@ -8460,17 +8489,17 @@ EXEC: the queued replies in order, error elements included. A nil array means no
 
 DISCARD: true on +OK, back outside MULTI either way the server answers.
 
-### `fn watch(c: Conn, keys: [str],`
+### `fn watch(c: Conn, keys: [str], deadline: until) -> result[bool, str]`
 
 WATCH/UNWATCH for optimistic locking: watch, read, MULTI, queue, EXEC; a nil EXEC (err here) means someone else wrote first, so retry the whole sequence.
 
 ### `fn unwatch(c: Conn, deadline: until) -> result[bool, str]`
 
-### `fn eval(c: Conn, script: str, keys: [str], args: [bytes],`
+### `fn eval(c: Conn, script: str, keys: [str], args: [bytes], deadline: until) -> result[Reply, str]`
 
 EVAL: the script's raw reply, whose shape depends on what it returns -- bulk, int, array, or error, decoded verbatim.
 
-### `fn evalsha(c: Conn, script: str, keys: [str], args: [bytes],`
+### `fn evalsha(c: Conn, script: str, keys: [str], args: [bytes], deadline: until) -> result[Reply, str]`
 
 EVALSHA with automatic EVAL fallback: the common path sends only 40 hex characters; a server that never saw the script answers NOSCRIPT and the call transparently re-sends the source.
 
@@ -8482,11 +8511,11 @@ A published message. kind is "message" or "pmessage"; pattern is set only for th
 
 A live subscription: a dedicated subscriber-mode connection plus messages that arrived while someone else held the lock. Never use sub.c directly (do, close, anything): concurrent socket readers would split the stream mid-reply. Everything here serializes on the Sub lock instead.
 
-### `fn subscribe(url: str, channels: [str], patterns: [str],`
+### `fn subscribe(url: str, channels: [str], patterns: [str], deadline: until) -> result[Sub, str]`
 
 Subscribe, returning a live Sub. channels and patterns are the SUBSCRIBE and PSUBSCRIBE lists; at least one of them is nonempty.
 
-### `fn sub_add(sub: Sub, channels: [str], patterns: [str],`
+### `fn sub_add(sub: Sub, channels: [str], patterns: [str], deadline: until) -> result[bool, str]`
 
 Add subscriptions to a live Sub.
 
@@ -8494,7 +8523,7 @@ Add subscriptions to a live Sub.
 
 Next message, or none when the deadline passes first. Confirms and pongs the server interleaves are skipped, never surfaced; a malformed reply is an error, since valid RESP has only the shapes as_message knows.
 
-### `fn sub_remove(sub: Sub, channels: [str], patterns: [str],`
+### `fn sub_remove(sub: Sub, channels: [str], patterns: [str], deadline: until) -> result[bool, str]`
 
 Remove subscriptions. Fully unsubscribing returns the connection to plain unicast mode; close it or subscribe again after.
 
@@ -8506,37 +8535,37 @@ Shut a subscription down. A task blocked in sub_next wakes with an error from th
 
 ### `gc struct StreamRead`
 
-### `fn xadd(c: Conn, key: str, id: str, fields: map[str]bytes,`
+### `fn xadd(c: Conn, key: str, id: str, fields: map[str]bytes, deadline: until) -> result[str, str]`
 
 XADD: the new entry's ID.
 
-### `fn xadd_maxlen(c: Conn, key: str, maxlen: int, approx: bool, id: str,`
+### `fn xadd_maxlen(c: Conn, key: str, maxlen: int, approx: bool, id: str, fields: map[str]bytes, deadline: until) -> result[str, str]`
 
 XADD with MAXLEN trimming: approx picks ~ (cheap) over exact.
 
-### `fn xrange(c: Conn, key: str, start: str, end: str, count: opt[int],`
+### `fn xrange(c: Conn, key: str, start: str, end: str, count: opt[int], deadline: until) -> result[[StreamEntry], str]`
 
 XRANGE/XREVRANGE: entries between two IDs ("-" and "+" are the ends), oldest first (XREVRANGE newest first). count caps the reply, none for no cap.
 
-### `fn xrevrange(c: Conn, key: str, end: str, start: str, count: opt[int],`
+### `fn xrevrange(c: Conn, key: str, end: str, start: str, count: opt[int], deadline: until) -> result[[StreamEntry], str]`
 
 ### `fn xlen(c: Conn, key: str, deadline: until) -> result[int, str]`
 
-### `fn xtrim(c: Conn, key: str, maxlen: int, approx: bool,`
+### `fn xtrim(c: Conn, key: str, maxlen: int, approx: bool, deadline: until) -> result[int, str]`
 
 XTRIM MAXLEN: how many entries were removed.
 
-### `fn xdel(c: Conn, key: str, ids: [str],`
+### `fn xdel(c: Conn, key: str, ids: [str], deadline: until) -> result[int, str]`
 
-### `fn xread(c: Conn, keys: [str], ids: [str], block_ms: opt[int],`
+### `fn xread(c: Conn, keys: [str], ids: [str], block_ms: opt[int], count: opt[int], deadline: until) -> result[opt[[StreamRead]], str]`
 
 XREAD: new entries per key since each id ("$" means "everything after now" on first call, then the last seen id after). block_ms waits that long for data (none => return at once); a wait that finds nothing is ok(none), not an error. count caps per call.
 
-### `fn cxadd(cl: Cluster, key: str, id: str, fields: map[str]bytes,`
+### `fn cxadd(cl: Cluster, key: str, id: str, fields: map[str]bytes, deadline: until) -> result[str, str]`
 
 ### `fn cxlen(cl: Cluster, key: str, deadline: until) -> result[int, str]`
 
-### `fn cxread(cl: Cluster, keys: [str], ids: [str], block_ms: opt[int],`
+### `fn cxread(cl: Cluster, keys: [str], ids: [str], block_ms: opt[int], count: opt[int], deadline: until) -> result[opt[[StreamRead]], str]`
 
 ---
 
@@ -8891,9 +8920,9 @@ Three behaviours worth knowing:
 
 ### `strings.split(str, str) -> [str]`
 
-### `strings.join(NA_ARR_STR, str) -> str`
+### `strings.join([str], str) -> str`
 
-### `strings.join_bytes(NA_ARR_BYTES, bytes) -> bytes`
+### `strings.join_bytes([bytes], bytes) -> bytes`
 
 ### `strings.bytes_zero(int) -> bytes`
 
@@ -8901,9 +8930,9 @@ Three behaviours worth knowing:
 
 ### `strings.from_bytes_lower(bytes, int, int) -> str`
 
-### `strings.from_wire(NA_WIRE, int, int) -> str`
+### `strings.from_wire(wire, int, int) -> str`
 
-### `strings.from_wire_lower(NA_WIRE, int, int) -> str`
+### `strings.from_wire_lower(wire, int, int) -> str`
 
 ### `strings.find_field(bytes, str) -> int`
 
