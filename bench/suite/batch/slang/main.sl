@@ -127,8 +127,10 @@ fn add_user(t: UserTable, id: int, h: int, rev: int) {
             t.kv[j * 2] = id;
             t.kv[j * 2 + 1] = rev;
             t.count = t.count + 1;
-            // at most half full, so a probe stays short
-            if t.count * 2 > t.mask { user_grow(t); }
+            // at most three quarters full: probes stay short (open
+            // addressing degrades past ~80%), while a table holds a third
+            // fewer empty slots than at half full
+            if t.count * 4 > t.mask * 3 { user_grow(t); }
             return;
         }
         j = (j + 1) & t.mask;
@@ -202,7 +204,7 @@ fn add_sku(t: SkuTable, b: bytes, s: int, end: int, rev: int) {
             t.kv[o + 4] = len(t.name);
             push(t.name, strings.from_bytes(b, s, end));
             t.count = t.count + 1;
-            if t.count * 2 > t.mask { sku_grow(t); }
+            if t.count * 4 > t.mask * 3 { sku_grow(t); }
             return;
         }
         j = (j + 1) & t.mask;

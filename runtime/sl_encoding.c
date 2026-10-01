@@ -112,13 +112,9 @@ static char *sl_enc_msg(char *buf, size_t bufn, const char *what,
 /* sl_bytes_new COPIES from its argument, so it cannot allocate a buffer
  * to be filled in place -- passing NULL with a nonzero length memcpys
  * from NULL. The decoders below know the exact output size up front and
- * write every byte of it, so they allocate the same shape directly.
- * Same two-allocation order sl_bytes_new itself uses. */
+ * write every byte of it, so they allocate the same shape directly. */
 static sl_bytes *sl_enc_bytes_raw(long long n) {
-    sl_bytes *b = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
-    b->len = n;
-    b->ptr = (unsigned char *)sl_gc_alloc((size_t)(n > 0 ? n : 1), NULL);
-    return b;
+    return sl_bytes_alloc(n);
 }
 
 /* ---- hex ------------------------------------------------------------ */

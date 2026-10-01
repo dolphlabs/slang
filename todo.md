@@ -3110,6 +3110,30 @@ the cached address; now bracketed. Cost: none measurable -- 64
 channel ping-pong pairs, ABBA x5, median 7,603ms before vs 7,613ms
 after.
 
+## Fixed along the way: the redis client copied its whole buffer per reply
+
+Found measuring allocation shares for `next-steps.md` §5b. `read_reply`
+appended every recv with `c.buf = c.buf + b` and dropped the consumed
+prefix only once it passed 1MB, so each reply copied everything received
+since the last drop: 20,000 rounds of SET+GET+INCR against a local Redis
+allocated 28GB, about 470KB per command. Now only the unconsumed tail is
+copied, and between replies there is none, so the received bytes become
+the buffer as they are (`take`). Same loop: 333MB allocated, 11.1-11.6s
+(was 14.4-14.6s, ABBA). `tests/redis_read_budget` pins a PING round trip
+at 49 allocations (was 70 at #276's merge, 72 before it, with the bytes per
+reply growing; one-object bytes (#277) removed the rest).
+
+Not fixed, both measured on the same loop:
+
+- A reply larger than one recv still grows by concatenation, copying the
+  partial reply once per chunk: quadratic in the number of chunks for a
+  multi-megabyte bulk value. The decoder reads to `len(buf)`, so a buffer
+  with spare capacity needs an end bound threaded through `parse_value`.
+- The ~185us left per command is the runtime, not the client: 8.4s of the
+  10.6s is system time in condvar, mutex and kevent waits, the park/wake
+  round trip for one request on one connection. Probably also why
+  database point reads trailed Go in #150 (11.6-14.2k vs 34k req/s).
+
 ## Fixed along the way: JSON nesting depth cost C stack
 
 `json.decode` recursed in C once per level of nesting: the tree parser

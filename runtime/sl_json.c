@@ -606,13 +606,7 @@ static bool sl_json_b64(const char *s, sl_bytes **out) {
     if (n >= 1 && s[n - 1] == '=') pad++;
     if (n >= 2 && s[n - 2] == '=') pad++;
     size_t outn = (n / 4) * 3 - pad;
-    /* The buffer before its header: a collection between the two could
-     * otherwise promote the header and leave it holding a young buffer
-     * with no barrier. */
-    unsigned char *ptr = (unsigned char *)sl_gc_alloc(outn > 0 ? outn : 1, NULL);
-    sl_bytes *b = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
-    b->len = (long long)outn;
-    b->ptr = ptr;
+    sl_bytes *b = sl_bytes_alloc((long long)outn);
     size_t oi = 0;
     for (size_t i = 0; i < n; i += 4) {
         int a = sl_b64_digit((unsigned char)s[i]);
