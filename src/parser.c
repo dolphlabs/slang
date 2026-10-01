@@ -53,10 +53,33 @@ static int match(Parser *p, TokenType t) {
     return 0;
 }
 
+/* What to add to "expected X but found Y" for the two mistakes that cost
+ * benchmark agents the most compile rounds (bench/agent): a trailing comma
+ * (four struct literals, three rounds in one run) and a reserved word
+ * used as a name (`result` as a field). */
+static const char *found_hint(Parser *p, Token *tk, int want_name) {
+    long idx = tk - p->toks;
+    TokenType t = tk->type;
+    if (idx > 0 && p->toks[idx - 1].type == T_COMMA &&
+        (t == T_RBRACE || t == T_RBRACKET || t == T_RPAREN))
+        return xasprintf(" (slang has no trailing commas: remove the ',' "
+                         "before %s on line %d)",
+                         token_type_name(t), p->toks[idx - 1].line);
+    if (want_name) {
+        const char *n = token_type_name(t);
+        if (n[0] == '\'' && isalpha((unsigned char)n[1]))
+            return xasprintf(" (%s is a reserved word and cannot be used as "
+                             "a name; pick another, e.g. %.*s_')",
+                             n, (int)strlen(n) - 1, n);
+    }
+    return "";
+}
+
 static Token *expect(Parser *p, TokenType t, const char *what) {
     if (!check(p, t))
-        parse_error(peek(p), "expected %s but found %s", what,
-                    token_type_name(peek(p)->type));
+        parse_error(peek(p), "expected %s but found %s%s", what,
+                    token_type_name(peek(p)->type),
+                    found_hint(p, peek(p), t == T_IDENT));
     return advance(p);
 }
 
@@ -435,8 +458,8 @@ static Expr *parse_primary(Parser *p) {
         return e;
     }
     default:
-        parse_error(tk, "expected an expression but found %s",
-                    token_type_name(tk->type));
+        parse_error(tk, "expected an expression but found %s%s",
+                    token_type_name(tk->type), found_hint(p, tk, 0));
     }
     return NULL; /* unreachable */
 }

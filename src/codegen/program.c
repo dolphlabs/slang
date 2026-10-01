@@ -1486,6 +1486,9 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
     memset(&cg, 0, sizeof(CG));
     cg.out = out;
     cg.cur_pkg = pkgs[main_index].name;
+    cg.main_pkg = pkgs[main_index].name;
+    cg.main_body = pkgs[main_index].prog ? pkgs[main_index].prog->main_body
+                                         : NULL;
 
     /* record which packages are compiler-provided natives */
     for (int i = 0; i < npkgs; i++) {

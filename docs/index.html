@@ -154,7 +154,9 @@ slangc new .         # same, in the directory you are already in</code></pre></d
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>slangc doc                     # every package this directory can import
 slangc doc http                # its exported items, one line each
 slangc doc builder.Str         # one item: its comment, and a struct&#x27;s fields and methods
-slangc doc httpc client_post   # the same, as two words</code></pre></div>
+slangc doc httpc client_post   # the same, as two words
+slangc doc http header         # no such item: every item whose name contains
+                               # &quot;header&quot; (any case), else whose signature or doc does</code></pre></div>
 <div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>$ slangc doc builder.Str
 <span class="k">gc</span> <span class="k">struct</span> Str {
     parts: [<span class="t">str</span>],
@@ -162,8 +164,8 @@ slangc doc httpc client_post   # the same, as two words</code></pre></div>
 }
 
 methods:
+  <span class="c">// Appends, and returns the builder so writes chain.</span>
   <span class="k">fn</span> <span class="f">write</span>(self: Str, s: <span class="t">str</span>) -&gt; Str
-      <span class="c">// Appends, and returns the builder so writes chain.</span>
   ...</code></pre></div>
 <p>Packages resolve exactly as <code>import</code> does from the current directory: a local directory, a compiler-provided package, the standard library, then a <code>slang.project</code> pin. An item&#x27;s documentation is the run of <code>//</code> comments directly above its <code>pub</code> declaration, which is also what the documentation site shows. It exists so an agent can ask for the one signature it needs instead of reading a page or the package&#x27;s source.</p>
 <p>Compile a slang program:</p>

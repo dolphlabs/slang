@@ -5,6 +5,9 @@
  *   slangc doc <pkg>.<name>      one item in full: its doc comment and
  *   slangc doc <pkg> <name>      signature (a struct with its fields and
  *                                methods)
+ *   slangc doc <pkg> <text>      no item by that name: every item whose
+ *                                name contains <text> (any case), else
+ *                                whose signature or doc does
  *
  * An agent asks for the one API it needs instead of reading a page or the
  * package source. Packages resolve exactly as `import` does from the
@@ -21,6 +24,7 @@
 #include "rtpath.h"
 #include "codegen/internal.h"
 
+#include <ctype.h>
 #include <dirent.h>
 #include <limits.h>
 #include <sys/stat.h>
@@ -407,20 +411,26 @@ static void print_doc_lines(const char *doc, const char *indent) {
         printf("%s// %s\n", indent, lines[i]);
 }
 
+/* One item of a listing. Its summary goes ABOVE the signature, where a
+ * doc comment sits in source: printed below, indented, it read as the
+ * comment of the item on the next line, so a listing looked like it gave
+ * each function its neighbour's documentation. */
+static void print_summary_item(DocItem *it) {
+    const char *sig = strcmp(it->kind, "struct") && strcmp(it->kind, "enum")
+                          ? it->sig
+                          : one_line(it->sig);
+    if (*it->doc)
+        printf("// %s\n", first_sentence(it->doc));
+    if (it->owner && !strncmp(sig, "fn ", 3))
+        printf("fn %s.%s\n", it->owner, sig + 3); /* fn Str.write(...) */
+    else
+        printf("%s\n", sig);
+}
+
 static void print_summary(const char *pkg, const char *where, DocList *l) {
     printf("package %s (%s)\n\n", pkg, where);
-    for (int i = 0; i < l->count; i++) {
-        DocItem *it = &l->items[i];
-        const char *sig = strcmp(it->kind, "struct") && strcmp(it->kind, "enum")
-                              ? it->sig
-                              : one_line(it->sig);
-        if (it->owner && !strncmp(sig, "fn ", 3))
-            printf("fn %s.%s\n", it->owner, sig + 3); /* fn Str.write(...) */
-        else
-            printf("%s\n", sig);
-        if (*it->doc)
-            printf("    // %s\n", first_sentence(it->doc));
-    }
+    for (int i = 0; i < l->count; i++)
+        print_summary_item(&l->items[i]);
     if (!l->count && !strcmp(pkg, "json"))
         /* no NatSig table: its calls are generic over the target type */
         printf("fn encode(value: <a gc struct, list, map or scalar>) -> str\n"
@@ -444,10 +454,26 @@ static void print_item(DocList *l, DocItem *it) {
         if (!any)
             printf("\nmethods:\n");
         any = 1;
-        printf("  %s\n", m->sig);
         if (*m->doc)
-            printf("      // %s\n", first_sentence(m->doc));
+            printf("  // %s\n", first_sentence(m->doc));
+        printf("  %s\n", m->sig);
     }
+}
+
+/* Case-insensitive substring test. */
+static int icontains(const char *hay, const char *needle) {
+    if (!hay || !needle || !*needle)
+        return 0;
+    size_t n = strlen(needle);
+    for (const char *h = hay; *h; h++) {
+        size_t k = 0;
+        while (k < n && h[k] &&
+               tolower((unsigned char)h[k]) == tolower((unsigned char)needle[k]))
+            k++;
+        if (k == n)
+            return 1;
+    }
+    return 0;
 }
 
 /* ---- package listing ----------------------------------------------------- */
@@ -489,7 +515,8 @@ static void list_packages(void) {
         }
     }
     printf("\nslangc doc <pkg> lists a package; slangc doc <pkg>.<name> shows "
-           "one item.\n");
+           "one item;\nslangc doc <pkg> <text> lists the items whose name (or, "
+           "failing that, signature\nor doc) contains <text>.\n");
 }
 
 int cmd_doc(int argc, char **argv) {
@@ -551,7 +578,32 @@ int cmd_doc(int argc, char **argv) {
             return 0;
         }
     }
-    fprintf(stderr, "slang: package '%s' has no exported '%s' (slangc doc %s "
-                    "lists what it has)\n", pkg, item, pkg);
+    /* Not a name: search. Paging a whole package listing to find the one
+     * call that sets a header is what an agent otherwise does, and every
+     * page of it is re-sent on every later turn. Names first; only when no
+     * name matches, signatures and doc text. */
+    int found = 0;
+    for (int pass = 0; pass < 2 && !found; pass++) {
+        for (int i = 0; i < l.count; i++) {
+            DocItem *it = &l.items[i];
+            int hit = pass == 0 ? icontains(it->name, item)
+                                : icontains(it->sig, item) ||
+                                      icontains(it->doc, item);
+            if (!hit)
+                continue;
+            if (!found)
+                printf("package %s: %s matching '%s'\n\n", pkg,
+                       pass == 0 ? "names" : "signatures and docs", item);
+            found++;
+            print_summary_item(it);
+        }
+    }
+    if (found) {
+        printf("\nslangc doc %s.<name> shows one in full.\n", pkg);
+        return 0;
+    }
+    fprintf(stderr, "slang: package '%s' has no exported '%s', and nothing in "
+                    "it mentions it (slangc doc %s lists what it has)\n",
+            pkg, item, pkg);
     return 1;
 }

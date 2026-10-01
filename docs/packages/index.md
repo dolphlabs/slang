@@ -309,6 +309,10 @@ not it imports `proc` for anything else (`proc.getenv`, say).
 `proc.active_tasks()` counts currently-running `spawn`ed tasks.
 `proc.wait_idle()` parks until that count is zero, so a
 shutting-down program can drain in-flight work without polling.
+Called from a spawned task, neither counts the caller (nor, for
+`wait_idle`, other tasks also waiting in it), so a task can drain the
+rest without waiting for itself; every test under `slangc test` is such
+a task.
 
 ```slang
 import "net";
