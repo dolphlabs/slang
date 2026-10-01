@@ -188,6 +188,24 @@ static int shift_count_in_range_lit(Expr *rhs, int width) {
     return v >= 0 && v < (long long)width;
 }
 
+/* An integer literal operand, possibly negated. */
+static int expr_is_int_lit(Expr *e) {
+    if (e->kind == EX_UNARY && !strcmp(e->as.unary.op, "-"))
+        e = e->as.unary.operand;
+    return e->kind == EX_INT;
+}
+
+/* C gives a literal that fits in 32 bits the type `int`, so
+ * `60 * 1000000000` -- two slang ints -- was multiplied in 32 bits and
+ * wrapped before the outer cast to long long could help. Casting a
+ * literal operand to the result's C type makes the arithmetic happen at
+ * the width slang says it has. */
+static char *lit_at_width(CG *cg, Expr *operand, const char *t, char *code) {
+    if (!expr_is_int_lit(operand) || !is_int(t))
+        return code;
+    return xasprintf("((%s)%s)", map_type(t), code);
+}
+
 char *gen_numeric_binary(CG *cg, Expr *e, const char *result_t) {
     const char *op = e->as.binary.op;
     const char *lt = infer_type(cg, e->as.binary.lhs);
@@ -206,14 +224,18 @@ char *gen_numeric_binary(CG *cg, Expr *e, const char *result_t) {
     int ambient_mark = cg->ambient_count;
     if (flat) {
         a = maybe_cast(cg, result_t, lt, gen_expr(cg, e->as.binary.lhs));
+        a = lit_at_width(cg, e->as.binary.lhs, result_t, a);
         b = maybe_cast(cg, bcast_t, rt, gen_expr(cg, e->as.binary.rhs));
+        b = lit_at_width(cg, e->as.binary.rhs, bcast_t, b);
     } else {
         const char *rc = ctype_of(cg, result_t);
         int seq_id = cg->tmp_id++;
         a = maybe_cast(cg, result_t, lt, gen_expr(cg, e->as.binary.lhs));
+        a = lit_at_width(cg, e->as.binary.lhs, result_t, a);
         a = sequence_one(cg, seq_id, 0, rc, result_t, a, e->as.binary.lhs,
                          &prelude);
         b = maybe_cast(cg, bcast_t, rt, gen_expr(cg, e->as.binary.rhs));
+        b = lit_at_width(cg, e->as.binary.rhs, bcast_t, b);
         b = sequence_one(cg, seq_id, 1, ctype_of(cg, bcast_t), bcast_t, b,
                          e->as.binary.rhs, &prelude);
     }
