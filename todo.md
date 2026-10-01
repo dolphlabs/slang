@@ -3119,7 +3119,8 @@ allocated 28GB, about 470KB per command. Now only the unconsumed tail is
 copied, and between replies there is none, so the received bytes become
 the buffer as they are (`take`). Same loop: 333MB allocated, 11.1-11.6s
 (was 14.4-14.6s, ABBA). `tests/redis_read_budget` pins a PING round trip
-at 70 allocations (was 72, with the bytes per reply growing).
+at 49 allocations (was 70 at #276's merge, 72 before it, with the bytes per
+reply growing; one-object bytes (#277) removed the rest).
 
 Not fixed, both measured on the same loop:
 

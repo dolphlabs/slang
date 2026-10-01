@@ -469,7 +469,7 @@ done
 echo "--- allocation budgets (SLANG_GC_STAT) ---"
 budget_bad=0
 for spec in http_read_wire:2000:6:40 bytes_empty_literal:100000:0:0 \
-            json_decode_budget:1000:47:0; do
+            json_decode_budget:1000:47:0 redis_read_budget:1000:49:20; do
     IFS=: read -r name n per slack <<EOF_SPEC
 $spec
 EOF_SPEC
