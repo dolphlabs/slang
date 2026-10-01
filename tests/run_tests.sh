@@ -172,6 +172,30 @@ else
     sed 's/^/  /' "$NEWDIR/pinonly/out.txt"
     fail=1
 fi
+# `slangc get` says where each package landed, under a path that can be
+# typed: <cache>/pkg/<name>/<tag> links to the sha256:<64 hex> directory.
+mkdir -p "$NEWDIR/getrepo/src" "$NEWDIR/getproj"
+echo 'pub fn hi() -> str { return "hi"; }' >"$NEWDIR/getrepo/src/lib.sl"
+(cd "$NEWDIR/getrepo" && git init -q && git add . &&
+    git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit -q -m t &&
+    git tag v1 && git branch rel/one)
+printf 'name getproj\nversion 0.1.0\npkg demo git %s tag v1 dir src\npkg other git %s tag rel/one\n' \
+    "$NEWDIR/getrepo" "$NEWDIR/getrepo" >"$NEWDIR/getproj/slang.project"
+get_ok=1
+for round in fetch cached; do
+    out=$(cd "$NEWDIR/getproj" && SLANG_CACHE="$NEWDIR/cache" "$OLDPWD/slangc" get 2>&1) || get_ok=0
+    printf '%s\n' "$out" | grep -qx "demo v1: $NEWDIR/cache/pkg/demo/v1/src" || get_ok=0
+    printf '%s\n' "$out" | grep -qx "other rel/one: $NEWDIR/cache/pkg/other/rel_one" || get_ok=0
+done
+[ -f "$NEWDIR/cache/pkg/demo/v1/src/lib.sl" ] || get_ok=0
+case "$(readlink "$NEWDIR/cache/pkg/demo/v1")" in sha256:*) ;; *) get_ok=0 ;; esac
+if [ "$get_ok" -eq 1 ]; then
+    echo "PASS slangc get (prints a typeable path per package)"
+else
+    echo "FAIL slangc get (typeable package path)"
+    printf '%s\n' "$out" | sed 's/^/  /'
+    fail=1
+fi
 rm -rf "$NEWDIR"
 
 # ---- signals ------------------------------------------------------------
