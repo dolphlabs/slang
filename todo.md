@@ -3132,3 +3132,30 @@ Not fixed, both measured on the same loop:
   10.6s is system time in condvar, mutex and kevent waits, the park/wake
   round trip for one request on one connection. Probably also why
   database point reads trailed Go in #150 (11.6-14.2k vs 34k req/s).
+
+## Old api/quote failures were the pre-#274 json decoder's missing barriers
+
+2026-10-01, Intel i5-8279U macOS. The build before #274 (1cc5813) returned
+1-9 non-2xx per 10 s run of `POST /api/quote` under `wrk -t2 -c16`
+(WORKERS=4 SLANG_WORKERS=4, DATABASE_URL unreachable so no DB is touched):
+785 req/4, 664/3, 542/9, 610/4 across four runs. A wrk Lua `response()`
+hook writing per-thread files (each wrk thread is its own Lua state)
+captured every failure as `400 :: {"error":"bad request"}`: the quote
+handler's decode-failure path, not a framing error.
+
+Under `SLANG_GC_VERIFY_MINOR=1 SLANG_GC_NURSERY_KB=16` with forced async
+preemption (1/1 ms) the old build printed 20x `minor missed a live young
+struct (32 B) held by an old struct, not remembered` in a 181-request run.
+Current dev (6d0f66e) the same way: zero non-2xx over 1594-1776 req/10 s,
+an empty fail file, no `missed` lines (the atexit `minors=/missed=`
+summary never prints for the api server since it never exits cleanly, so
+the count is of `missed a live` lines: 20 vs 0).
+
+Cause: the old decoder allocated the struct/opt holder first
+(`src/codegen/pkg_json/dispatch.c`: struct holder, opt wrapper), then
+decoded nested values with further allocations and stored them in with no
+write barrier (`tmp->field = ftmp`). A minor between the holder's
+promotion and those stores freed the young values, the decode failed, and
+the handler returned 400. #274 decodes values before allocating the
+holder, removing the window. No live bug remains: no code change, no new
+test (a regression test would pass on both builds).
