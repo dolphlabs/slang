@@ -353,7 +353,7 @@ for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood \
             generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry own_roots switch escape_roots \
             http_read_wire bytes_empty_literal gc_minor_barriers map_delete if_let \
             literal_expect pending_sibling_type json_parity json_utf8 json_decode_budget \
-            gc_container_frontier; do
+            bytes gc_container_frontier; do
     out="/tmp/sl_gcstress_${name}.out"
     if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -383,7 +383,7 @@ for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put \
             json_int_exact flags method_recv method_recv_gc indirect_callee \
             http_read_wire bytes_empty_literal gc_minor_barriers map_delete if_let \
             literal_expect pending_sibling_type json_parity json_utf8 json_decode_budget \
-            gc_container_frontier; do
+            bytes gc_container_frontier; do
     out="/tmp/sl_nursery_${name}.out"
     if ! SLANG_GC_NURSERY_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -413,7 +413,7 @@ for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc
             literal_expect pending_sibling_type \
             gc_nested_literal gc_nursery_barrier gc_nursery_promotion \
             spawn_isolation select maps json json_parity json_utf8 json_decode_budget \
-            http_read_wire http_client_pool http2_flood; do
+            bytes http_read_wire http_client_pool http2_flood; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_verify_minor_${name}.out"
     err="/tmp/sl_verify_minor_${name}.err"
@@ -446,9 +446,10 @@ done
 # coming in under means the budget should come down with it.
 #   http_read_wire       http.read + wants_close on a pipelined GET. Was
 #                        20 (every ok()/err() and struct the parse threaded
-#                        through, an opt per close check); 7 now: the
-#                        WireHead, the path, the header block (a bytes is
-#                        two), and the Request, Incoming and result. The
+#                        through, an opt per close check), then 7 with a
+#                        bytes still two objects; 6 now: the WireHead, the
+#                        path, the header block, and the Request, Incoming
+#                        and result. The
 #                        slack is for requests cut off at the end of the
 #                        buffer: each such parse attempt makes a WireHead
 #                        too (about 13 in 2000 here), and how often that
@@ -467,8 +468,8 @@ done
 #                        slack covers a reply split across two recvs.
 echo "--- allocation budgets (SLANG_GC_STAT) ---"
 budget_bad=0
-for spec in http_read_wire:2000:7:40 bytes_empty_literal:100000:0:0 \
-            json_decode_budget:1000:47:0 redis_read_budget:1000:70:20; do
+for spec in http_read_wire:2000:6:40 bytes_empty_literal:100000:0:0 \
+            json_decode_budget:1000:47:0; do
     IFS=: read -r name n per slack <<EOF_SPEC
 $spec
 EOF_SPEC

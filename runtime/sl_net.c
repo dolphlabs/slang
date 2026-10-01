@@ -1038,16 +1038,11 @@ static void sl_recv_buf_put(void *p) {
  * header made before the park and filled after it sat through the park,
  * where a minor collection promoted it, and the data then stored into
  * it was an old->young edge no barrier saw -- freed by the next minor
- * while the program still held it. Header and data are allocated back to
- * back with no safepoint between, so both are young; n == 0 leaves ptr
- * NULL, as before. */
+ * while the program still held it. Header and data are one allocation
+ * (sl_bytes_alloc), made once the data is in. */
 static sl_bytes *sl_net_recv_bytes(const unsigned char *scratch, long long n) {
-    sl_bytes *b = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
-    if (n > 0) {
-        b->ptr = (unsigned char *)sl_gc_alloc((size_t)n, NULL);
-        memcpy(b->ptr, scratch, (size_t)n);
-    }
-    b->len = n;
+    sl_bytes *b = sl_bytes_alloc(n);
+    if (n > 0) memcpy(b->ptr, scratch, (size_t)n);
     return b;
 }
 

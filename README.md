@@ -2960,7 +2960,7 @@ holds: the path, one copy of the header block, the body when there is
 one, and the `Request`/`Incoming` around them. The common methods (`GET`,
 `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`) and both versions come
 back as literals, and `wants_close` decides from the header block in
-place. A plain `GET` costs 7 GC allocations; `tests/run_tests.sh` holds it
+place. A plain `GET` costs 6 GC allocations; `tests/run_tests.sh` holds it
 to that.
 
 Framing decides where a request ENDS, so it is a security boundary: if a

@@ -2559,7 +2559,7 @@ fn frame_body_wire(buf: wire, n: int, hd: WireHead) -> str {
         // GETs never take this branch (no Content-Length -- the empty
         // return below). `Content-Length: 0` shares that empty body:
         // b"" is a static, where to_bytes of an empty range is still
-        // two allocations.
+        // an allocation.
         if cl == 0 {
             return wire_framed(hd, end, b"");
         }

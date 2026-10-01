@@ -236,19 +236,23 @@ dotted directories (#235). Write-ups in `todo.md`.
 
 ## 5b. What is left of the per-request cost is the language's
 
-- [ ] Of the 11 allocations a `GET /` still makes, 5 are representation
-  rather than work: every `bytes` is two objects (a `{len, ptr}` header
-  and its data; the header block and `ok_text`'s body), and every
-  `ok()`/`err()`/`some()`/`none` is a heap object (`read`'s result).
-  Both are compiler/runtime changes that would cut allocations in all
-  slang code, not just `http`:
-  - `bytes` with its data inline in one allocation. Blocked on the
-    collector: conservative scanning recognizes only object starts, so a
-    stack holding just `b->ptr` (an interior pointer) would not keep `b`
-    alive. Needs interior-pointer lookup in the conservative scan first.
-  - `result`/`opt` as values instead of pointers: codegen, rooting of the
-    pointer inside, storage in containers and generics.
-  Decide which (if either) is worth it with a design note before code.
+- [x] **One-object `bytes`, done (2026-10-01); value `result`/`opt`
+  deferred.** Design note with measurements: `runtime/VALUE_REPRESENTATION.md`.
+  Across seven workloads, `bytes` headers were 18–35% of allocations in
+  network and file code, and `result`/`opt` 5–13%. A `bytes` is now one
+  object (`sl_bytes_alloc`, every runtime constructor). The blocker, that
+  conservative scanning sees only object starts, reduced to one fixed-offset
+  check (`sl_gc_mark_inline_bytes`): parked tasks are rooted precisely, and
+  only a word equal to `b->ptr` needed recognizing. `http.read` 7 -> 6
+  allocations, and stdlib `http` `GET /` +4% and `POST /echo` +3% (ABBA,
+  medians; the POST spread is wider than the delta). The 12 two-object
+  sites also each had a header-then-data ordering window, which a single
+  allocation removes.
+- [ ] Value `result`/`opt`: deferred. The runtime builds them in ~220
+  places across 11 files, and they reach most codegen passes, for 5–13% of
+  allocations. Revisit after the young-object allocator work, with a
+  measurement showing the count, not the cost per allocation, still
+  matters.
 
 ## 6. x86_64 trampoline calls C with a possibly misaligned stack
 
