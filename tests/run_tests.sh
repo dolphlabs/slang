@@ -344,7 +344,27 @@ printf '%s\n' "$out" | grep -q ' strings' || dc_fail "native packages not listed
 printf '%s\n' "$out" | grep -q ' http ' || dc_fail "standard library not listed"
 out=$(./slangc doc builder 2>&1)
 printf '%s\n' "$out" | grep -qx 'fn Str.write(self: Str, s: str) -> Str' || dc_fail "method line"
-printf '%s\n' "$out" | grep -qx '    // Appends, and returns the builder so writes chain.' || dc_fail "doc comment"
+# A summary sits directly ABOVE its item, as in source; printed below,
+# it read as the next item's comment.
+printf '%s\n' "$out" | grep -B1 -x 'fn Str.write(self: Str, s: str) -> Str' |
+    head -1 | grep -qx '// Appends, and returns the builder so writes chain.' || dc_fail "doc comment above its item"
+out=$(cd tests/doccmd && "$OLDPWD/slangc" doc docpkg 2>&1)
+printf '%s\n' "$out" | grep -B1 -x 'fn set_header(name: str, value: str) -> str' | head -1 |
+    grep -qx '// Sets one header.' || dc_fail "listing: summary not above its own item"
+printf '%s\n' "$out" | grep -B1 -x 'fn after_helper() -> int' | head -1 | grep -q '^//' &&
+    dc_fail "listing: a private helper's comment reached the next item"
+# Search: a name fragment, any case; then signatures and docs.
+out=$(cd tests/doccmd && "$OLDPWD/slangc" doc docpkg HEADER 2>&1) || dc_fail "search by name exited nonzero"
+printf '%s\n' "$out" | grep -qx 'fn set_header(name: str, value: str) -> str' || dc_fail "search: function by name"
+printf '%s\n' "$out" | grep -qx 'fn Req.header(self: Req, name: str) -> str' || dc_fail "search: method by name"
+printf '%s\n' "$out" | grep -q 'fn plain' && dc_fail "search: listed a non-match"
+out=$(cd tests/doccmd && "$OLDPWD/slangc" doc docpkg.retry-after 2>&1) || dc_fail "search by doc exited nonzero"
+printf '%s\n' "$out" | grep -qx 'fn set_header(name: str, value: str) -> str' || dc_fail "search: by doc text"
+out=$(cd tests/doccmd && "$OLDPWD/slangc" doc docpkg.Req.header 2>&1)
+[ "$out" = "$(printf '%s\n' '// The value of one request header.' 'fn header(self: Req, name: str) -> str')" ] ||
+    dc_fail "exact item still shown in full: $out"
+(cd tests/doccmd && "$OLDPWD/slangc" doc docpkg nothing_mentions_this >/dev/null 2>&1) &&
+    dc_fail "search with no match must exit nonzero"
 out=$(./slangc doc builder.Str 2>&1)
 printf '%s\n' "$out" | grep -qx 'methods:' || dc_fail "struct shows its methods"
 out=$(./slangc doc httpc.client_post 2>&1)

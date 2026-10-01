@@ -97,6 +97,8 @@ slangc doc                     # every package this directory can import
 slangc doc http                # its exported items, one line each
 slangc doc builder.Str         # one item: its comment, and a struct's fields and methods
 slangc doc httpc client_post   # the same, as two words
+slangc doc http header         # no such item: every item whose name contains
+                               # "header" (any case), else whose signature or doc does
 ```
 
 ```
@@ -107,8 +109,8 @@ gc struct Str {
 }
 
 methods:
+  // Appends, and returns the builder so writes chain.
   fn write(self: Str, s: str) -> Str
-      // Appends, and returns the builder so writes chain.
   ...
 ```
 
