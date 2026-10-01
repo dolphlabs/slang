@@ -1,0 +1,48 @@
+full: ok {"id":1,"name":"n","tags":["a","b"],"inner":{"city":"c","zip":null},"score":null,"small":1,"flag":true,"raw":"aGk=","counts":{"x":1},"kind":"Small"}
+spaces: ok {"id":1,"name":"n","tags":[],"inner":{"city":"c","zip":null},"score":2.5,"small":-128,"flag":false,"raw":"","counts":{},"kind":"Large"}
+reordered: ok {"id":9,"name":"n","tags":[],"inner":{"city":"c","zip":"z"},"score":null,"small":0,"flag":false,"raw":"","counts":{},"kind":"Large"}
+dup first wins: ok {"id":1,"name":"n","tags":["a","b"],"inner":{"city":"c","zip":null},"score":null,"small":1,"flag":true,"raw":"aGk=","counts":{"x":1},"kind":"Small"}
+dup bad second: ok {"id":1,"name":"n","tags":["a","b"],"inner":{"city":"c","zip":null},"score":null,"small":1,"flag":true,"raw":"aGk=","counts":{"x":1},"kind":"Small"}
+dup bad syntax second: err unexpected character '}' (at byte 132)
+unknown keys: ok {"id":1,"name":"n","tags":["a","b"],"inner":{"city":"c","zip":null},"score":null,"small":1,"flag":true,"raw":"aGk=","counts":{"x":1},"kind":"Small"}
+escaped key: ok {"id":1,"name":"n","tags":[],"inner":{"city":"c","zip":null},"score":null,"small":1,"flag":true,"raw":"","counts":{},"kind":"Small"}
+nul in key: ok {"id":7,"name":"n","tags":[],"inner":{"city":"c","zip":null},"score":null,"small":1,"flag":true,"raw":"","counts":{},"kind":"Small"}
+map dup last wins: ok {"id":1,"name":"n","tags":["a","b"],"inner":{"city":"c","zip":null},"score":null,"small":1,"flag":true,"raw":"aGk=","counts":{"a":2,"b":3},"kind":"Small"}
+missing required: err missing required field 'id'
+missing before type: err missing required field 'id'
+type error field order: err field 'id': expected a number, got a string
+type then syntax: err unexpected end of input (at byte 17)
+null required: err field 'id': expected a number, got null
+int as float: err field 'id': expected an integer, got 1.5
+int exponent: ok {"id":1000,"name":"n","tags":["a","b"],"inner":{"city":"c","zip":null},"score":null,"small":1,"flag":true,"raw":"aGk=","counts":{"x":1},"kind":"Small"}
+int point zero: ok {"id":5,"name":"n","tags":["a","b"],"inner":{"city":"c","zip":null},"score":null,"small":1,"flag":true,"raw":"aGk=","counts":{"x":1},"kind":"Small"}
+i8 range: err field 'small': value 128 out of range for i8
+leading zero: err expected ',' or '}' in object (at byte 8)
+minus alone: err invalid number (at byte 7)
+bad base64: err field 'raw': invalid base64
+bad variant: err field 'kind': not a valid Kind: Medium
+object for list: err field 'tags': expected an array, got an object
+nested error: err field 'inner': field 'city': expected a string, got a number
+list item error: err field 'tags': index 1: expected a string, got a number
+trailing comma obj: err expected string key in object (at byte 124)
+trailing comma list: err unexpected character ']' (at byte 31)
+trailing garbage: err trailing garbage after JSON value (at byte 125)
+two values: err trailing garbage after JSON value (at byte 124)
+unterminated: err unterminated string (at byte 17)
+empty: err unexpected end of input (at byte 0)
+blank: err unexpected end of input (at byte 3)
+bad escape: err invalid escape '\q' (at byte 18)
+lone low surrogate: err unpaired UTF-16 surrogate (at byte 22)
+unpaired high surrogate: err unpaired UTF-16 surrogate (at byte 23)
+control char: err control character in string (at byte 18)
+literal typo: err invalid literal (at byte 74)
+not an object: err expected an object, got an array
+nested lists: ok [[1,2],[],[3]]
+nested bad: err index 1: expected an array, got a number
+top int: ok 42
+top int junk: err trailing garbage after JSON value (at byte 2)
+top neg zero: ok 0
+surrogate pair: ok len=4 "😀"
+utf8 raw: ok len=9 "café ☕"
+escaped nul: ok len=1 "a"
+escapes: ok len=8 "\"\\/\b\f\n\r\t"

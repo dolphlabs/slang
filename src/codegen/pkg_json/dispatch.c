@@ -37,6 +37,28 @@ static const char *json_scalar_dec_name(const char *t) {
     return NULL;
 }
 
+/* The direct decoders (sl_jd_*, runtime/sl_json.c) for the same scalars. */
+static const char *json_scalar_fast_name(const char *t) {
+    const char *dec = json_scalar_dec_name(t);
+    if (!dec)
+        return NULL;
+    /* sl_json_dec_<x> -> sl_jd_<x>; f64 keeps its name on both sides */
+    return xasprintf("sl_jd_%s", dec + strlen("sl_json_dec_"));
+}
+
+/* Every type json_dec_fn registers has a direct decoder too:
+ *   bool NAME(sl_jparser *p, <ctype_of T> *out);
+ * which reads the input straight into T and returns false, with no error
+ * built, on anything it does not accept; the call site then decodes again
+ * through the tree decoder for the error. */
+static const char *json_fast_fn(CG *cg, const char *t) {
+    const char *scalar = json_scalar_fast_name(t);
+    if (scalar)
+        return scalar;
+    (void)cg;
+    return xasprintf("sl_jdf_%s", sanitize_pkg(t));
+}
+
 static const char *json_scalar_enc_name(const char *t) {
     if (!strcmp(t, "bool")) return "sl_json_enc_bool";
     if (is_str(t)) return "sl_json_enc_str";
@@ -368,6 +390,179 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
     emit_line(cg, "");
 }
 
+/* The direct decoder for a composite type. Values are decoded before the
+ * object that holds them is allocated, and the object is filled at once:
+ * a collection in between could otherwise promote the holder and leave it
+ * pointing at young values with no barrier. Lists and maps are the
+ * exception, filled through sl_arr_push/sl_map_put, which barrier. */
+static void emit_json_fast_body(CG *cg, JsonInst *it) {
+    const char *t = it->slang_type;
+    const char *ct = ctype_of(cg, t);
+    emit_line(cg, "static bool %s(sl_jparser *p, %s *out) {",
+              json_fast_fn(cg, t), ct);
+    cg->indent++;
+
+    if (is_opt(t)) {
+        char *inner = opt_inner(t);
+        const char *oname = opt_cname(cg, inner);
+        const char *ict = ctype_of(cg, inner);
+        const char *otrace = type_is_gc_ptr(cg, inner)
+                                  ? xasprintf("sl_gc_trace_%s", oname)
+                                  : "NULL";
+        emit_line(cg, "%s *o;", oname);
+        emit_line(cg, "if (sl_jd_peek(p) == 'n') {");
+        cg->indent++;
+        emit_line(cg, "if (!sl_jd_null(p)) return false;");
+        emit_line(cg, "o = (%s *)sl_gc_alloc(sizeof(%s), %s);", oname, oname,
+                  otrace);
+        emit_line(cg, "o->has = false;");
+        cg->indent--;
+        emit_line(cg, "} else {");
+        cg->indent++;
+        emit_line(cg, "%s v;", ict);
+        emit_line(cg, "if (!%s(p, &v)) return false;", json_fast_fn(cg, inner));
+        emit_line(cg, "o = (%s *)sl_gc_alloc(sizeof(%s), %s);", oname, oname,
+                  otrace);
+        emit_line(cg, "o->has = true;");
+        emit_line(cg, "o->v = v;");
+        cg->indent--;
+        emit_line(cg, "}");
+        emit_line(cg, "*out = o;");
+        emit_line(cg, "return true;");
+    } else if (is_arr(t) || is_map(t)) {
+        int arr = is_arr(t);
+        const char *et;
+        if (arr) {
+            et = arr_elem(t);
+        } else {
+            char *k, *v;
+            map_kv(t, &k, &v);
+            et = v;
+        }
+        const char *ect = ctype_of(cg, et);
+        const char *close = arr ? "']'" : "'}'";
+        emit_line(cg, "if (!sl_jd_open(p, %s)) return false;", arr ? "'['" : "'{'");
+        if (arr)
+            emit_line(cg, "sl_arr *c = sl_arr_new(sizeof(%s), %d);", ect,
+                      type_has_gc_roots(cg, et));
+        else
+            emit_line(cg, "sl_map *c = sl_map_new(sizeof(const char *), "
+                           "sizeof(%s), 1, 1, %d);",
+                      ect, type_has_gc_roots(cg, et));
+        emit_line(cg, "if (!sl_jd_empty(p, %s)) {", close);
+        cg->indent++;
+        emit_line(cg, "for (;;) {");
+        cg->indent++;
+        if (!arr) {
+            /* a map keeps its keys, so each is its own string */
+            emit_line(cg, "if (!sl_jd_eat(p, '\"')) return false;");
+            emit_line(cg, "const char *k = sl_jparse_string_raw(p);");
+            emit_line(cg, "if (!k || !sl_jd_eat(p, ':')) return false;");
+        }
+        emit_line(cg, "%s tmp;", ect);
+        emit_line(cg, "if (!%s(p, &tmp)) return false;", json_fast_fn(cg, et));
+        if (arr)
+            emit_line(cg, "sl_arr_push(c, &tmp, sizeof(%s));", ect);
+        else
+            emit_line(cg, "sl_map_put(c, &k, &tmp);");
+        emit_line(cg, "bool done;");
+        emit_line(cg, "if (sl_jd_more(p, %s, &done)) continue;", close);
+        emit_line(cg, "if (!done) return false;");
+        emit_line(cg, "break;");
+        cg->indent--;
+        emit_line(cg, "}");
+        cg->indent--;
+        emit_line(cg, "}");
+        emit_line(cg, "*out = c;");
+        emit_line(cg, "return true;");
+    } else if (is_enum(cg, t)) {
+        char *m = mangle_enum(t);
+        EnumDef *ed = enum_find_canon(cg, t);
+        emit_line(cg, "const char *s;");
+        emit_line(cg, "int32_t idx;");
+        emit_line(cg, "if (!sl_jd_str(p, &s) || "
+                       "!sl_enum_from_str(s, %s_names, %d, &idx)) return false;",
+                  m, ed->nvariants);
+        emit_line(cg, "*out = (int32_t)%s_values[idx];", m);
+        emit_line(cg, "return true;");
+    } else {
+        StructDef *sd = struct_find_canon(cg, t);
+        const char *sname = mangle_struct(t);
+        const char *strace = struct_has_gc_fields(cg, sd)
+                                  ? xasprintf("sl_gc_trace_%s", sname)
+                                  : "NULL";
+        emit_line(cg, "if (!sl_jd_open(p, '{')) return false;");
+        for (int i = 0; i < sd->nfields; i++) {
+            emit_line(cg, "%s f%d = 0;", ctype_of(cg, sd->ftypes[i]), i);
+            emit_line(cg, "bool seen%d = false;", i);
+        }
+        emit_line(cg, "if (!sl_jd_empty(p, '}')) {");
+        cg->indent++;
+        emit_line(cg, "for (;;) {");
+        cg->indent++;
+        emit_line(cg, "const char *k;");
+        emit_line(cg, "long long kn;");
+        emit_line(cg, "if (!sl_jd_key(p, &k, &kn)) return false;");
+        /* The first occurrence of a key counts and a repeat is skipped,
+         * as the tree decoder's field lookup finds the first. */
+        for (int i = 0; i < sd->nfields; i++) {
+            const char *fn = sd->fields[i];
+            emit_line(cg,
+                      "%sif (!seen%d && kn == %d && !memcmp(k, \"%s\", %d)) {",
+                      i ? "} else " : "", i, (int)strlen(fn), fn,
+                      (int)strlen(fn));
+            cg->indent++;
+            emit_line(cg, "if (!%s(p, &f%d)) return false;",
+                      json_fast_fn(cg, sd->ftypes[i]), i);
+            emit_line(cg, "seen%d = true;", i);
+            cg->indent--;
+        }
+        if (sd->nfields) {
+            emit_line(cg, "} else if (!sl_jd_skip(p)) {");
+            cg->indent++;
+            emit_line(cg, "return false;");
+            cg->indent--;
+            emit_line(cg, "}");
+        } else {
+            emit_line(cg, "(void)kn;");
+            emit_line(cg, "if (!sl_jd_skip(p)) return false;");
+        }
+        emit_line(cg, "bool done;");
+        emit_line(cg, "if (sl_jd_more(p, '}', &done)) continue;");
+        emit_line(cg, "if (!done) return false;");
+        emit_line(cg, "break;");
+        cg->indent--;
+        emit_line(cg, "}");
+        cg->indent--;
+        emit_line(cg, "}");
+        for (int i = 0; i < sd->nfields; i++) {
+            const char *ft = sd->ftypes[i];
+            if (is_opt(ft)) {
+                /* absent: none, like the tree decoder */
+                const char *inner_t = opt_inner(ft);
+                const char *oname = opt_cname(cg, inner_t);
+                const char *otrace = type_is_gc_ptr(cg, inner_t)
+                                          ? xasprintf("sl_gc_trace_%s", oname)
+                                          : "NULL";
+                emit_line(cg, "if (!seen%d) f%d = (%s *)sl_gc_alloc(sizeof(%s), %s);",
+                          i, i, oname, oname, otrace);
+            } else {
+                emit_line(cg, "if (!seen%d) return false;", i);
+            }
+        }
+        emit_line(cg, "%s *s = (%s *)sl_gc_alloc(sizeof(%s), %s);", sname,
+                  sname, sname, strace);
+        for (int i = 0; i < sd->nfields; i++)
+            emit_line(cg, "s->%s = f%d;", sanitize_ident(sd->fields[i]), i);
+        emit_line(cg, "*out = s;");
+        emit_line(cg, "return true;");
+    }
+
+    cg->indent--;
+    emit_line(cg, "}");
+    emit_line(cg, "");
+}
+
 static void emit_json_enc_body(CG *cg, JsonInst *it) {
     const char *t = it->slang_type;
     const char *ct = ctype_of(cg, t);
@@ -456,9 +651,12 @@ void emit_json_codecs(CG *cg) {
     for (int i = 0; i < cg->json.count; i++) {
         JsonInst *it = &cg->json.items[i];
         const char *ct = ctype_of(cg, it->slang_type);
-        if (it->dec_name)
+        if (it->dec_name) {
             emit_line(cg, "static bool %s(sl_json_val *v, %s *out, char **err);",
                       it->dec_name, ct);
+            emit_line(cg, "static bool %s(sl_jparser *p, %s *out);",
+                      json_fast_fn(cg, it->slang_type), ct);
+        }
         if (it->enc_name)
             emit_line(cg, "static void %s(%s v, sl_json_sb *out);",
                       it->enc_name, ct);
@@ -466,8 +664,10 @@ void emit_json_codecs(CG *cg) {
     emit_line(cg, "");
     for (int i = 0; i < cg->json.count; i++) {
         JsonInst *it = &cg->json.items[i];
-        if (it->dec_name)
+        if (it->dec_name) {
             emit_json_dec_body(cg, it);
+            emit_json_fast_body(cg, it);
+        }
         if (it->enc_name)
             emit_json_enc_body(cg, it);
     }
@@ -563,15 +763,23 @@ char *json_call_gen(CG *cg, const char *fname, Expr *e) {
             data = xasprintf("(%s)", name);
             len = xasprintf("(long long)strlen(%s)", name);
         }
+        /* The direct decoder first. Only when it declines does the input
+         * go through the tree, whose decoder then names the error (or, if
+         * the direct one was merely stricter, decodes it). The result is
+         * allocated last, after the value it holds. */
         char *inner = xasprintf(
-            "({ char *_sl_jerr = NULL; sl_json_val *_sl_jv = "
-            "sl_json_parse(%s, %s, &_sl_jerr); %s *_sl_jr = (%s "
-            "*)sl_gc_alloc(sizeof(%s), %s); if (!_sl_jv) { _sl_jr->ok = false; "
-            "_sl_jr->e = _sl_jerr; } else { %s _sl_jout; char *_sl_jderr = "
-            "NULL; if (%s(_sl_jv, &_sl_jout, &_sl_jderr)) { _sl_jr->ok = "
-            "true; _sl_jr->v = _sl_jout; } else { _sl_jr->ok = false; "
-            "_sl_jr->e = _sl_jderr; } } _sl_jr; })",
-            data, len, resname, resname, resname, restrace, fct, decfn);
+            "({ const char *_sl_js = %s; long long _sl_jn = %s; "
+            "sl_jparser _sl_jp = { _sl_js, _sl_jn, 0, 0, NULL }; "
+            "%s _sl_jout = 0; char *_sl_jerr = NULL; "
+            "bool _sl_jok = %s(&_sl_jp, &_sl_jout) && sl_jd_end(&_sl_jp); "
+            "if (!_sl_jok) { sl_json_val *_sl_jv = sl_json_parse(_sl_js, "
+            "_sl_jn, &_sl_jerr); if (_sl_jv) _sl_jok = %s(_sl_jv, &_sl_jout, "
+            "&_sl_jerr); } "
+            "%s *_sl_jr = (%s *)sl_gc_alloc(sizeof(%s), %s); "
+            "if (_sl_jok) { _sl_jr->ok = true; _sl_jr->v = _sl_jout; } "
+            "else { _sl_jr->ok = false; _sl_jr->e = _sl_jerr; } _sl_jr; })",
+            data, len, fct, json_fast_fn(cg, tv), decfn, resname, resname,
+            resname, restrace);
         /* Tier 10: json.decode allocates (the result[T,E] wrapper,
          * plus whatever the monomorphized decoder itself
          * allocates) -- a real safepoint, same as any other call

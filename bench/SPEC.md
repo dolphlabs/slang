@@ -259,7 +259,7 @@ time.
 
 | Language | api stack | batch approach |
 |---|---|---|
-| slang | `stdlib/http` + `stdlib/pg` pool + `json`; `spawn` per connection | `fs.pread` chunks across tasks, merged maps |
+| slang | `stdlib/http` + `stdlib/pg` pool + `json`; `spawn` per connection | `fs.pread` chunks across tasks, open-addressing tables over flat int lists, user shards merged in parallel |
 | Go | `fasthttp`, `pgx/v5` pool, `goccy/go-json` | `mmap`, goroutine per chunk, custom parser |
 | Rust | `axum` 0.8 on `tokio`, `deadpool-postgres`/`tokio-postgres`, `serde_json`, `mimalloc` | `memmap2`, `std::thread::scope`, `ahash` maps |
 | C | epoll worker threads, `libpq` connection per worker, hand-written HTTP/JSON | `mmap`, `pthread` per core, open-addressing tables |

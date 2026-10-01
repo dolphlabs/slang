@@ -394,6 +394,28 @@ dotted directories (#235). Write-ups in `todo.md`.
   - the Java `api` heavy tier should now build (a `.gitignore` pattern had
     been hiding its `Main.java`); check that it does.
 
+- [ ] **Found reviewing slang's suite programs (2026-09-30), before the full
+  run.** Measured on the Intel laptop; the batch program was rewritten, the
+  rest are runtime and compiler costs the programs cannot avoid:
+  - `json.decode` of the 97 KB quote body takes 14.8 ms, ~26,000
+    allocations and 2 MB allocated: it parses into a GC'd `sl_json_val` tree,
+    then walks it, finding each field with a linear `strcmp`. `api/quote`
+    served 41–81 req/s on 4 workers here (#150: 128–203 against Go's
+    6–7k). Decoding straight into the target type is the fix, and the
+    largest gap in the heavy tier.
+  - Every `while` iteration emits a full `sl_rt_safepoint_enter`/`exit`
+    (roots array and a TLS read), even a byte-scan loop with no call or
+    allocation. Single-threaded, batch parses 5M rows in 5.8–6.8 s against
+    Go's 2.0 s, with GC only ~0.45 s of that.
+  - The collector scans `[int]` lists and int maps word by word as possible
+    pointers (`sl_gc_trace_arr_range`, `sl_gc_trace_map_range`): a large int
+    table costs a set lookup per word on every major.
+  - `m[k] = v` on an existing key sets `gc_clean = 0`, so the next minor
+    retraces the whole map. The old batch program did that per row and had
+    not finished 20M rows after 11 minutes (Go: 3.3 s).
+  - Go's batch truncates skus longer than 16 bytes (`skuKey`). The generated
+    data has none; real data would be misreported.
+
 ## 10. Language gaps found and left alone
 
 - [ ] **`spawn fns[i](x)` as an expression** (`let t = spawn fns[i](x);`) is a
