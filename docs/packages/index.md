@@ -277,9 +277,14 @@ field type it's a decode error. Unknown JSON keys are ignored. Every
 decode error names where it happened, composed through nesting —
 `json.decode` on `{"addr":{"city":5}}` against the `Person` shape
 above fails with `field 'addr': field 'city': expected a string, got
-a number`. Malformed input is a decode error, never a crash — the
-parser caps nesting depth at 512 so adversarial input can't blow the
-C stack.
+a number`. Malformed input is a decode error, never a crash. Nesting
+is capped at 512 levels (deeper input is the error `maximum nesting
+depth (512) exceeded`), and depth costs heap, not stack: the parser
+keeps its own stack of open arrays and objects rather than recursing.
+Decoding into a type that contains itself (`opt[Self]`, `[Self]`,
+`map[str]Self`) does recurse once per level, so for those types alone
+`json.decode` first measures the input's depth and, only when the input
+is deep, grows the task's stack to fit before decoding.
 
 Integers decode exactly, from the number as written: a 64-bit id such
 as `9007199254740993` arrives intact (it is not routed through a
