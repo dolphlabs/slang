@@ -327,7 +327,8 @@ void gen_stmt(CG *cg, Stmt *s) {
                 break;
             }
             if (!v)
-                cg_error(s->line, "undefined variable '%s'", name);
+                cg_error(s->line, "undefined variable '%s'%s", name,
+                         hint_top_level_let(cg, name));
             const char *se3 = expect_push(cg, v->slang);
             const char *vt = infer_type(cg, s->as.assign.value);
             cg->expect = se3;
