@@ -156,7 +156,11 @@ and the lock still hashes the whole clone, so what was verified is what
 was fetched.
 
 `slangc get` clones each `pkg` line into `$SLANG_CACHE/pkg/<name>/<hash>`
-(`~/.cache/slang` if unset). If a fetched package has its own
+(`~/.cache/slang` if unset), links `$SLANG_CACHE/pkg/<name>/<tag>` to it
+(a `/` in the tag becomes `_`), and prints one line per package with
+that typeable path — `zokor v0.1.0: /home/you/.cache/slang/pkg/zokor/v0.1.0/src`
+— for reading a package's source or docs. Builds never go through the
+link; they use the lock's hash. If a fetched package has its own
 `slang.project`, those pins are fetched too and recorded only in
 `slang.lock`. Compile does not hit the network. A missing lock, missing
 cache, or hash mismatch is an error. Same short name at two git/tag
