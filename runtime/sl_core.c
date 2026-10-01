@@ -1105,6 +1105,19 @@ static void sl_rt_maybe_yield(void) {
     sl_rt_preempt_if_due(t);
 }
 
+/* Tier 12 (leaf-loop poll): sampled-yield half of the per-iteration
+ * poll. The generated poll calls this on the 1-in-1024 sample when no
+ * collection is requested: it runs only the stack-probe + check-in +
+ * preemption sample (via sl_rt_maybe_yield_t), NOT a nested
+ * enter/exit. Takes the task the hoisted bracket already resolved, so
+ * no second TLS read. */
+static inline void sl_rt_poll_yield(sl_task *t) {
+    sl_rt_stack_and_gc(t);
+    if ((++t->yield_check_counter & SL_PREEMPT_SAMPLE_MASK) != 0)
+        return;
+    sl_rt_preempt_if_due(t);
+}
+
 /* sl_rt_gc_checkin() (now reached via sl_rt_maybe_yield) runs *after*
  * this frame is linked into the chain, not before: every call-site
  * bracket builds its complete roots array -- already-evaluated temps
