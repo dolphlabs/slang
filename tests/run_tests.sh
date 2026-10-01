@@ -289,6 +289,27 @@ if grep -q test_only_symbol_marker tests/testcmd/prog/main.gen.c 2>/dev/null; th
 fi
 rm -f tests/testcmd/prog/main.gen.c
 
+# A test that waits for the tasks it spawned (proc.wait_idle) must
+# finish: the runner's own task is not one of them. It used to hang, so
+# it is run with a 60 s watchdog rather than trusted to return.
+./slangc test tests/testcmd/idle >/tmp/sl_testcmd_idle.out 2>&1 &
+idle_pid=$!
+idle_i=0
+while kill -0 "$idle_pid" 2>/dev/null && [ "$idle_i" -lt 120 ]; do
+    sleep 0.5
+    idle_i=$((idle_i + 1))
+done
+if kill -0 "$idle_pid" 2>/dev/null; then
+    pkill -P "$idle_pid" 2>/dev/null
+    kill "$idle_pid" 2>/dev/null
+    wait "$idle_pid" 2>/dev/null
+    tc_fail "proc.wait_idle() inside a test hung"
+else
+    wait "$idle_pid"; code=$?
+    [ "$code" -eq 0 ] && grep -q '^ok: 2 passed' /tmp/sl_testcmd_idle.out ||
+        tc_fail "wait_idle/active_tasks inside a test (exit $code)"
+fi
+
 ./slangc test tests/testcmd/badsig >/dev/null 2>&1; code=$?
 [ "$code" -eq 2 ] || tc_fail "a test with parameters must be rejected (exit 2), got $code"
 

@@ -26,6 +26,14 @@
  * 'spawn' is used, whether or not the program imports 'proc'. */
 static atomic_llong sl_rt_active_spawns = 0;
 
+/* Spawned tasks parked in proc.wait_idle(). A spawned task is itself in
+ * sl_rt_active_spawns, so "idle" for it means "nothing running but the
+ * tasks that are waiting for idle" -- otherwise a task that waits (every
+ * test under `slangc test`, which runs each test in a spawned task)
+ * waits for itself forever. The main task is never counted, so a main
+ * program sees exactly the old behaviour. */
+static atomic_llong sl_rt_idle_spawned_waiters = 0;
+
 static pthread_mutex_t sl_rt_idle_mu = PTHREAD_MUTEX_INITIALIZER;
 static void sl_rt_idle_notify(void);
 
@@ -34,7 +42,8 @@ static void sl_rt_active_spawns_inc(void) {
 }
 
 static void sl_rt_active_spawns_dec(void) {
-    if (atomic_fetch_sub(&sl_rt_active_spawns, 1) == 1)
+    long long left = atomic_fetch_sub(&sl_rt_active_spawns, 1) - 1;
+    if (left <= atomic_load(&sl_rt_idle_spawned_waiters))
         sl_rt_idle_notify();
 }
 
@@ -774,14 +783,40 @@ static void sl_rt_idle_notify(void) {
     sl_rt_preempt_enable();
 }
 
+/* The calling task is a spawned one (counted in sl_rt_active_spawns):
+ * every task but main is -- sl_rt_error's panic path decrements for
+ * exactly the same set. */
+static int sl_rt_cur_is_spawned(void) {
+    sl_task *t = sl_rt_cur();
+    return t && !t->is_main;
+}
+
+/* proc.active_tasks(): spawned tasks still running, not counting the
+ * caller. From main that is every spawned task, as it always was. */
+static long long sl_rt_active_others(void) {
+    long long n = atomic_load(&sl_rt_active_spawns);
+    if (n > 0 && sl_rt_cur_is_spawned())
+        n--;
+    return n;
+}
+
 static void sl_rt_wait_idle(void) {
+    int self = sl_rt_cur_is_spawned();
     sl_rt_preempt_disable();
     pthread_mutex_lock(&sl_rt_idle_mu);
-    while (atomic_load(&sl_rt_active_spawns) > 0) {
+    /* Incremented under the lock, before the check: a decrement that
+     * lands after the check sees this waiter and notifies, and the
+     * notify takes the same lock, so it cannot run before the park. */
+    if (self)
+        atomic_fetch_add(&sl_rt_idle_spawned_waiters, 1);
+    while (atomic_load(&sl_rt_active_spawns) >
+           atomic_load(&sl_rt_idle_spawned_waiters)) {
         sl_rt_idle_wl_push(sl_rt_cur());
         sl_task_park(&sl_rt_idle_mu);
         pthread_mutex_lock(&sl_rt_idle_mu);
     }
+    if (self)
+        atomic_fetch_sub(&sl_rt_idle_spawned_waiters, 1);
     pthread_mutex_unlock(&sl_rt_idle_mu);
     sl_rt_preempt_enable();
 }
