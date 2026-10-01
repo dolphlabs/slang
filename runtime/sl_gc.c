@@ -283,6 +283,21 @@ static void sl_gc_collect(void);
 static void sl_gc_collect_minor(void);
 static void sl_gc_mark(void *ptr);
 static void sl_gc_mark_minor(void *ptr);
+/* Tier 12 (leaf-loop poll): the fast-path condition of sl_rt_gc_checkin
+ * as a callable predicate for generated leaf-loop polls: nonzero when
+ * a collection has been requested and the next safepoint must check
+ * in. Reads only process-global atomics (acquire), never TLS — safe
+ * to call every iteration, including on arm64 where the compiler
+ * caches thread pointers. Generated code calls this rather than
+ * inlining three atomic loads, so the flag set stays in one place. */
+static inline int sl_gc_poll_needed(void) {
+    return atomic_load_explicit(&sl_gc_stop_requested,
+                                memory_order_acquire) ||
+           atomic_load_explicit(&sl_gc_collect_pending,
+                                memory_order_acquire) ||
+           atomic_load_explicit(&sl_gc_collect_minor_pending,
+                                memory_order_acquire);
+}
 typedef void (*sl_gc_markfn_t)(void *ptr);
 /* The mark function the CURRENT collection's root scan should use
  * (forward-declared here because sl_gc_scan_conservative is defined
@@ -483,12 +498,7 @@ static void sl_rt_gc_checkin_slow(void) {
  * Ordering: acquire on both, so a thread that observes neither flag
  * genuinely has nothing to acknowledge. */
 static inline void sl_rt_gc_checkin(void) {
-    if (atomic_load_explicit(&sl_gc_stop_requested,
-                             memory_order_acquire) ||
-        atomic_load_explicit(&sl_gc_collect_pending,
-                             memory_order_acquire) ||
-        atomic_load_explicit(&sl_gc_collect_minor_pending,
-                             memory_order_acquire))
+    if (sl_gc_poll_needed())
         sl_rt_gc_checkin_slow();
 }
 
