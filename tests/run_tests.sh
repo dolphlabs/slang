@@ -352,7 +352,7 @@ for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood \
             generics_pkg gc_nested_literal generics_methods \
             generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry own_roots switch escape_roots \
             http_read_wire bytes_empty_literal gc_minor_barriers map_delete if_let \
-            literal_expect pending_sibling_type \
+            literal_expect pending_sibling_type json_parity json_utf8 json_decode_budget \
             gc_container_frontier; do
     out="/tmp/sl_gcstress_${name}.out"
     if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
@@ -382,7 +382,7 @@ for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put \
             gc_nested_literal gc_stress gc_stat spawn_isolation maps json \
             json_int_exact flags method_recv method_recv_gc indirect_callee \
             http_read_wire bytes_empty_literal gc_minor_barriers map_delete if_let \
-            literal_expect pending_sibling_type \
+            literal_expect pending_sibling_type json_parity json_utf8 json_decode_budget \
             gc_container_frontier; do
     out="/tmp/sl_nursery_${name}.out"
     if ! SLANG_GC_NURSERY_KB=16 ./slangc "tests/$name/main.sl" --run \
@@ -412,8 +412,8 @@ vm_bad=0
 for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc_map_put if_let \
             literal_expect pending_sibling_type \
             gc_nested_literal gc_nursery_barrier gc_nursery_promotion \
-            spawn_isolation select maps json http_read_wire http_client_pool \
-            http2_flood; do
+            spawn_isolation select maps json json_parity json_utf8 json_decode_budget \
+            http_read_wire http_client_pool http2_flood; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_verify_minor_${name}.out"
     err="/tmp/sl_verify_minor_${name}.err"
@@ -455,9 +455,15 @@ done
 #                        happens depends on how the kernel splits the recvs.
 #   bytes_empty_literal  b"" stored into a gc struct field. Was 2; a shared
 #                        static now.
+#   json_decode_budget   json.decode of a 20-item body into structs. Was 278
+#                        (a parse-tree node per value, a copy of every
+#                        number, a string per key); 47 now, the values the
+#                        decode returns: 20 items and their skus, the Quote,
+#                        its region, the list and its growth, and the result.
 echo "--- allocation budgets (SLANG_GC_STAT) ---"
 budget_bad=0
-for spec in http_read_wire:2000:7:40 bytes_empty_literal:100000:0:0; do
+for spec in http_read_wire:2000:7:40 bytes_empty_literal:100000:0:0 \
+            json_decode_budget:1000:47:0; do
     IFS=: read -r name n per slack <<EOF_SPEC
 $spec
 EOF_SPEC

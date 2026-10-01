@@ -157,7 +157,35 @@ static void sl_utf8_append(char **buf, long long *len, long long *cap, long cp) 
     }
 }
 
+/* One input byte, as it is. Input is UTF-8 already: widening a byte past
+ * 0x7F as if it were a code point turned "é" into "Ã©". */
+static void sl_jbuf_byte(char **buf, long long *len, long long *cap, int c) {
+    if (*len + 1 > *cap) {
+        *cap = (*cap ? *cap * 2 : 64);
+        *buf = (char *)sl_gc_realloc(*buf, (size_t)*cap);
+    }
+    (*buf)[(*len)++] = (char)c;
+}
+
 static char *sl_jparse_string_raw(sl_jparser *p) {
+    /* Most strings have no escapes: find the closing quote first and copy
+     * them in one allocation of the right size. Anything else (an escape,
+     * a control character, no closing quote) takes the loop below from
+     * the same position, which reports it. */
+    long long end = p->pos;
+    while (end < p->len) {
+        unsigned char c = (unsigned char)p->s[end];
+        if (c == '"' || c == '\\' || c < 0x20) break;
+        end++;
+    }
+    if (end < p->len && p->s[end] == '"') {
+        long long n = end - p->pos;
+        char *s = (char *)sl_gc_alloc((size_t)n + 1, NULL);
+        memcpy(s, p->s + p->pos, (size_t)n);
+        s[n] = 0;
+        p->pos = end + 1;
+        return s;
+    }
     char *buf = NULL;
     long long len = 0, cap = 0;
     for (;;) {
@@ -207,10 +235,10 @@ static char *sl_jparse_string_raw(sl_jparser *p) {
             sl_jerr(p, "control character in string");
             return NULL;
         } else {
-            sl_utf8_append(&buf, &len, &cap, c);
+            sl_jbuf_byte(&buf, &len, &cap, c);
         }
     }
-    sl_utf8_append(&buf, &len, &cap, 0);
+    sl_jbuf_byte(&buf, &len, &cap, 0);
     return buf ? buf : sl_strdup("");
 }
 
@@ -481,25 +509,22 @@ static int sl_b64_digit(int c) {
     return -1;
 }
 
-static bool sl_json_dec_bytes(sl_json_val *v, sl_bytes **out, char **err) {
-    if (v->kind != SL_JV_STR) {
-        *err = sl_json_errf("expected a base64 string, got %s",
-                            sl_json_kind_name(v));
-        return false;
-    }
-    const char *s = v->as.str;
+/* RFC 4648 base64 in `s` to bytes; false if it is not valid base64. */
+static bool sl_json_b64(const char *s, sl_bytes **out) {
     size_t n = strlen(s);
-    if (n % 4 != 0) {
-        *err = sl_json_errf("invalid base64");
+    if (n % 4 != 0)
         return false;
-    }
     size_t pad = 0;
     if (n >= 1 && s[n - 1] == '=') pad++;
     if (n >= 2 && s[n - 2] == '=') pad++;
     size_t outn = (n / 4) * 3 - pad;
+    /* The buffer before its header: a collection between the two could
+     * otherwise promote the header and leave it holding a young buffer
+     * with no barrier. */
+    unsigned char *ptr = (unsigned char *)sl_gc_alloc(outn > 0 ? outn : 1, NULL);
     sl_bytes *b = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
     b->len = (long long)outn;
-    b->ptr = (unsigned char *)sl_gc_alloc(outn > 0 ? outn : 1, NULL);
+    b->ptr = ptr;
     size_t oi = 0;
     for (size_t i = 0; i < n; i += 4) {
         int a = sl_b64_digit((unsigned char)s[i]);
@@ -508,10 +533,8 @@ static bool sl_json_dec_bytes(sl_json_val *v, sl_bytes **out, char **err) {
         int d = s[i + 3] == '=' ? 0 : sl_b64_digit((unsigned char)s[i + 3]);
         if (a < 0 || b1 < 0 ||
             (s[i + 2] != '=' && c < 0) || (s[i + 3] != '=' && d < 0) ||
-            (s[i + 2] == '=' && s[i + 3] != '=')) {
-            *err = sl_json_errf("invalid base64");
+            (s[i + 2] == '=' && s[i + 3] != '='))
             return false;
-        }
         unsigned v24 = ((unsigned)a << 18) | ((unsigned)b1 << 12) |
                        ((unsigned)c << 6) | (unsigned)d;
         if (oi < outn) b->ptr[oi++] = (unsigned char)(v24 >> 16);
@@ -519,6 +542,19 @@ static bool sl_json_dec_bytes(sl_json_val *v, sl_bytes **out, char **err) {
         if (oi < outn) b->ptr[oi++] = (unsigned char)v24;
     }
     *out = b;
+    return true;
+}
+
+static bool sl_json_dec_bytes(sl_json_val *v, sl_bytes **out, char **err) {
+    if (v->kind != SL_JV_STR) {
+        *err = sl_json_errf("expected a base64 string, got %s",
+                            sl_json_kind_name(v));
+        return false;
+    }
+    if (!sl_json_b64(v->as.str, out)) {
+        *err = sl_json_errf("invalid base64");
+        return false;
+    }
     return true;
 }
 
@@ -534,41 +570,44 @@ static bool sl_json_dec_bytes(sl_json_val *v, sl_bytes **out, char **err) {
  */
 enum { SL_JSON_INT_OK, SL_JSON_INT_FRACTION, SL_JSON_INT_TOO_BIG };
 
-/* Magnitude and sign of `s`, a validated JSON number, when it is an
- * integer: SL_JSON_INT_OK, else _FRACTION (not a whole number) or
- * _TOO_BIG (magnitude above UINT64_MAX). No allocation. */
-static int sl_json_num_int(const char *s, bool *neg,
-                           unsigned long long *mag) {
+/* Magnitude and sign of s[0..end), a validated JSON number, when it is
+ * an integer: SL_JSON_INT_OK, else _FRACTION (not a whole number) or
+ * _TOO_BIG (magnitude above UINT64_MAX). No allocation. Bounded by `end`
+ * so the direct decoder can read a number in place, unterminated. */
+static int sl_json_num_int_n(const char *s, const char *end, bool *neg,
+                             unsigned long long *mag) {
+#define SL_JDIGIT(q) ((q) < end && *(q) >= '0' && *(q) <= '9')
     *neg = false;
     *mag = 0;
-    if (*s == '-') {
+    if (s < end && *s == '-') {
         *neg = true;
         s++;
     }
     const char *ip = s;
-    while (*s >= '0' && *s <= '9') s++;
+    while (SL_JDIGIT(s)) s++;
     size_t ilen = (size_t)(s - ip);
     const char *fp = s;
     size_t flen = 0;
-    if (*s == '.') {
+    if (s < end && *s == '.') {
         fp = ++s;
-        while (*s >= '0' && *s <= '9') s++;
+        while (SL_JDIGIT(s)) s++;
         flen = (size_t)(s - fp);
     }
     /* An exponent past this many digits cannot leave a nonzero value
      * inside 64 bits, nor a whole number out of a fraction -- clamping
      * keeps the arithmetic below from overflowing on "1e99999999". */
     long long exp = 0;
-    if (*s == 'e' || *s == 'E') {
+    if (s < end && (*s == 'e' || *s == 'E')) {
         s++;
         bool eneg = false;
-        if (*s == '+' || *s == '-') eneg = (*s++ == '-');
-        while (*s >= '0' && *s <= '9') {
+        if (s < end && (*s == '+' || *s == '-')) eneg = (*s++ == '-');
+        while (SL_JDIGIT(s)) {
             if (exp < 1000000) exp = exp * 10 + (*s - '0');
             s++;
         }
         if (eneg) exp = -exp;
     }
+#undef SL_JDIGIT
     /* The value is D * 10^scale, D being every digit written (integer
      * part then fraction) and scale the exponent less the fraction's
      * length. */
@@ -598,6 +637,11 @@ static int sl_json_num_int(const char *s, bool *neg,
     }
     *mag = acc;
     return SL_JSON_INT_OK;
+}
+
+static int sl_json_num_int(const char *s, bool *neg,
+                           unsigned long long *mag) {
+    return sl_json_num_int_n(s, s + strlen(s), neg, mag);
 }
 
 /* Decode into a signed type whose range is [lo, hi]. */
@@ -700,6 +744,301 @@ static bool sl_json_dec_f32(sl_json_val *v, float *out, char **err) {
 
 static bool sl_json_dec_f64(sl_json_val *v, double *out, char **err) {
     return sl_json_dec_num(v, out, err);
+}
+
+/* ---- json: direct decode ----
+ *
+ * json.decode reads the input straight into the target type first: the
+ * per-type sl_jdf_* functions codegen emits call the readers below, and a
+ * decode allocates only the values it returns. The tree above made a node
+ * per value, a copy of every number's text and a key per member, then
+ * looked each field up by strcmp: 14.8ms and ~26,000 allocations for a
+ * 97KB body of 2,000 objects.
+ *
+ * These readers never build an error. Any failure returns false and the
+ * caller decodes again through the tree, which names the error: which
+ * error wins (a syntax error anywhere before a type error, fields in
+ * declared order) and every message stay exactly what they were. So the
+ * one rule here: never accept what the tree rejects. Every check below
+ * mirrors the tree parser's; rejecting more only costs a fallback. */
+
+/* Skip whitespace and return the next byte (-1 at the end), unread. */
+static int sl_jd_peek(sl_jparser *p) {
+    sl_jskip_ws(p);
+    return sl_jpeek(p);
+}
+
+/* Consume `c` after any whitespace. */
+static bool sl_jd_eat(sl_jparser *p, int c) {
+    if (sl_jd_peek(p) != c) return false;
+    p->pos++;
+    return true;
+}
+
+/* Open an array or object: the bracket and one level of the tree's depth
+ * limit, which bounds the C stack for recursive types too. */
+static bool sl_jd_open(sl_jparser *p, int c) {
+    if (!sl_jd_eat(p, c)) return false;
+    return ++p->depth <= SL_JSON_MAX_DEPTH;
+}
+
+/* The closing bracket right after an opening one: an empty container. */
+static bool sl_jd_empty(sl_jparser *p, int close) {
+    if (sl_jd_peek(p) != close) return false;
+    p->pos++;
+    p->depth--;
+    return true;
+}
+
+/* After an element or member: true on `,` (another follows), false with
+ * *done set on the closing bracket, false with *done clear otherwise. */
+static bool sl_jd_more(sl_jparser *p, int close, bool *done) {
+    sl_jskip_ws(p);
+    int c = sl_jnext(p);
+    *done = c == close;
+    if (*done) p->depth--;
+    return c == ',';
+}
+
+/* The number at p->pos, validated against sl_jparse_number's grammar; its
+ * text is p->s[*start .. p->pos). */
+static bool sl_jd_number(sl_jparser *p, long long *start) {
+    sl_jskip_ws(p);
+    *start = p->pos;
+    if (sl_jpeek(p) == '-') p->pos++;
+    int c = sl_jpeek(p);
+    if (c == '0') {
+        p->pos++;
+    } else if (c >= '1' && c <= '9') {
+        while (sl_jpeek(p) >= '0' && sl_jpeek(p) <= '9') p->pos++;
+    } else {
+        return false;
+    }
+    if (sl_jpeek(p) == '.') {
+        p->pos++;
+        if (!(sl_jpeek(p) >= '0' && sl_jpeek(p) <= '9')) return false;
+        while (sl_jpeek(p) >= '0' && sl_jpeek(p) <= '9') p->pos++;
+    }
+    if (sl_jpeek(p) == 'e' || sl_jpeek(p) == 'E') {
+        p->pos++;
+        if (sl_jpeek(p) == '+' || sl_jpeek(p) == '-') p->pos++;
+        if (!(sl_jpeek(p) >= '0' && sl_jpeek(p) <= '9')) return false;
+        while (sl_jpeek(p) >= '0' && sl_jpeek(p) <= '9') p->pos++;
+    }
+    return true;
+}
+
+static bool sl_jd_hex4(sl_jparser *p, int *out) {
+    int v = 0;
+    for (int i = 0; i < 4; i++) {
+        int h = sl_hexval(sl_jnext(p));
+        if (h < 0) return false;
+        v = (v << 4) | h;
+    }
+    *out = v;
+    return true;
+}
+
+/* Past a string whose opening quote is consumed, checking what
+ * sl_jparse_string_raw checks, without copying it. */
+static bool sl_jd_skip_string(sl_jparser *p) {
+    for (;;) {
+        if (p->pos >= p->len) return false;
+        int c = sl_jnext(p);
+        if (c == '"') return true;
+        if (c < 0x20) return false;
+        if (c != '\\') continue;
+        int cp;
+        switch (sl_jnext(p)) {
+        case '"': case '\\': case '/': case 'b':
+        case 'f': case 'n': case 'r': case 't':
+            break;
+        case 'u':
+            if (!sl_jd_hex4(p, &cp)) return false;
+            if (cp >= 0xD800 && cp <= 0xDBFF) {
+                int lo;
+                if (sl_jnext(p) != '\\' || sl_jnext(p) != 'u') return false;
+                if (!sl_jd_hex4(p, &lo)) return false;
+                if (lo < 0xDC00 || lo > 0xDFFF) return false;
+            } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
+                return false;
+            }
+            break;
+        default:
+            return false;
+        }
+    }
+}
+
+/* Past any one value, checked as sl_jparse_value checks it: an unknown
+ * key's value, or a repeated key's (the first one counts, as in the
+ * tree's field lookup). */
+static bool sl_jd_skip(sl_jparser *p) {
+    int c = sl_jd_peek(p);
+    if (c == '"') {
+        p->pos++;
+        return sl_jd_skip_string(p);
+    }
+    if (c == '-' || (c >= '0' && c <= '9')) {
+        long long start;
+        return sl_jd_number(p, &start);
+    }
+    if (c == 't') return sl_jmatch_lit(p, "true");
+    if (c == 'f') return sl_jmatch_lit(p, "false");
+    if (c == 'n') return sl_jmatch_lit(p, "null");
+    if (c != '[' && c != '{') return false;
+    int close = c == '[' ? ']' : '}';
+    if (!sl_jd_open(p, c)) return false;
+    if (sl_jd_empty(p, close)) return true;
+    for (;;) {
+        if (close == '}') {
+            if (!sl_jd_eat(p, '"') || !sl_jd_skip_string(p)) return false;
+            if (!sl_jd_eat(p, ':')) return false;
+        }
+        if (!sl_jd_skip(p)) return false;
+        bool done;
+        if (sl_jd_more(p, close, &done)) continue;
+        return done;
+    }
+}
+
+/* The key of the next member and its colon. A key without escapes is read
+ * in place (*k points into the input, *klen bytes); one with escapes is
+ * decoded, and like the tree's key it ends at its first NUL. */
+static bool sl_jd_key(sl_jparser *p, const char **k, long long *klen) {
+    if (!sl_jd_eat(p, '"')) return false;
+    long long start = p->pos;
+    long long end = start;
+    while (end < p->len) {
+        unsigned char c = (unsigned char)p->s[end];
+        if (c == '"' || c == '\\' || c < 0x20) break;
+        end++;
+    }
+    if (end < p->len && p->s[end] == '"') {
+        *k = p->s + start;
+        *klen = end - start;
+        p->pos = end + 1;
+    } else {
+        char *s = sl_jparse_string_raw(p);
+        if (!s) return false;
+        *k = s;
+        *klen = (long long)strlen(s);
+    }
+    return sl_jd_eat(p, ':');
+}
+
+/* The end of the whole input: only whitespace may follow the value. */
+static bool sl_jd_end(sl_jparser *p) {
+    sl_jskip_ws(p);
+    return p->pos == p->len;
+}
+
+static bool sl_jd_null(sl_jparser *p) {
+    return sl_jd_peek(p) == 'n' && sl_jmatch_lit(p, "null");
+}
+
+static bool sl_jd_bool(sl_jparser *p, bool *out) {
+    int c = sl_jd_peek(p);
+    if (c == 't' && sl_jmatch_lit(p, "true")) { *out = true; return true; }
+    if (c == 'f' && sl_jmatch_lit(p, "false")) { *out = false; return true; }
+    return false;
+}
+
+static bool sl_jd_str(sl_jparser *p, const char **out) {
+    if (!sl_jd_eat(p, '"')) return false;
+    char *s = sl_jparse_string_raw(p);
+    if (!s) return false;
+    *out = s;
+    return true;
+}
+
+static bool sl_jd_bytes(sl_jparser *p, sl_bytes **out) {
+    const char *s;
+    return sl_jd_str(p, &s) && sl_json_b64(s, out);
+}
+
+/* The next number as an integer in [lo, hi], or false. */
+static bool sl_jd_signed(sl_jparser *p, long long lo, long long hi,
+                         long long *out) {
+    long long start;
+    if (!sl_jd_number(p, &start)) return false;
+    bool neg;
+    unsigned long long mag;
+    if (sl_json_num_int_n(p->s + start, p->s + p->pos, &neg, &mag) !=
+        SL_JSON_INT_OK)
+        return false;
+    unsigned long long neg_lim = lo < 0 ? (unsigned long long)(-(lo + 1)) + 1 : 0;
+    if ((!neg && mag > (unsigned long long)hi) || (neg && mag > neg_lim))
+        return false;
+    *out = (!neg || mag == 0) ? (long long)mag : -(long long)(mag - 1) - 1;
+    return true;
+}
+
+static bool sl_jd_unsigned(sl_jparser *p, unsigned long long hi,
+                           unsigned long long *out) {
+    long long start;
+    if (!sl_jd_number(p, &start)) return false;
+    bool neg;
+    unsigned long long mag;
+    if (sl_json_num_int_n(p->s + start, p->s + p->pos, &neg, &mag) !=
+        SL_JSON_INT_OK)
+        return false;
+    if ((neg && mag != 0) || mag > hi) return false;
+    *out = mag;
+    return true;
+}
+
+#define SL_JD_SIGNED(NAME, T, LO, HI)                                       \
+    static bool NAME(sl_jparser *p, T *out) {                               \
+        long long x;                                                        \
+        if (!sl_jd_signed(p, (LO), (HI), &x)) return false;                 \
+        *out = (T)x;                                                        \
+        return true;                                                        \
+    }
+
+#define SL_JD_UNSIGNED(NAME, T, HI)                                         \
+    static bool NAME(sl_jparser *p, T *out) {                               \
+        unsigned long long x;                                               \
+        if (!sl_jd_unsigned(p, (HI), &x)) return false;                     \
+        *out = (T)x;                                                        \
+        return true;                                                        \
+    }
+
+SL_JD_SIGNED(sl_jd_i8, int8_t, INT8_MIN, INT8_MAX)
+SL_JD_SIGNED(sl_jd_i16, int16_t, INT16_MIN, INT16_MAX)
+SL_JD_SIGNED(sl_jd_i32, int32_t, INT32_MIN, INT32_MAX)
+SL_JD_UNSIGNED(sl_jd_u8, uint8_t, UINT8_MAX)
+SL_JD_UNSIGNED(sl_jd_u16, uint16_t, UINT16_MAX)
+SL_JD_UNSIGNED(sl_jd_u32, uint32_t, UINT32_MAX)
+SL_JD_SIGNED(sl_jd_i64, int64_t, INT64_MIN, INT64_MAX)
+SL_JD_UNSIGNED(sl_jd_u64, uint64_t, UINT64_MAX)
+/* int is long long, i64 int64_t: see sl_json_dec_int. */
+SL_JD_SIGNED(sl_jd_int, long long, INT64_MIN, INT64_MAX)
+
+/* strtod reads a terminated copy of the text, the same text the tree
+ * parser hands it, so the double is the same one. */
+static bool sl_jd_f64(sl_jparser *p, double *out) {
+    long long start;
+    if (!sl_jd_number(p, &start)) return false;
+    long long n = p->pos - start;
+    char buf[64];
+    char *tmp = buf;
+    if (n >= (long long)sizeof(buf))
+        tmp = (char *)sl_gc_alloc((size_t)n + 1, NULL);
+    memcpy(tmp, p->s + start, (size_t)n);
+    tmp[n] = 0;
+    /* strtod reads the locale, behind libc's own lock */
+    sl_rt_preempt_disable();
+    *out = strtod(tmp, NULL);
+    sl_rt_preempt_enable();
+    return true;
+}
+
+static bool sl_jd_f32(sl_jparser *p, float *out) {
+    double d;
+    if (!sl_jd_f64(p, &d)) return false;
+    *out = (float)d;
+    return true;
 }
 
 /* ---- json: output string builder ---- */
