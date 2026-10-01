@@ -460,10 +460,15 @@ done
 #                        number, a string per key); 47 now, the values the
 #                        decode returns: 20 items and their skus, the Quote,
 #                        its region, the list and its growth, and the result.
+#   redis_read_budget    one redis PING round trip, client and in-process
+#                        server together. Was 72, with the bytes copied per
+#                        reply growing toward 1MB (the client appended every
+#                        recv to its whole buffer); 70 now and flat. The
+#                        slack covers a reply split across two recvs.
 echo "--- allocation budgets (SLANG_GC_STAT) ---"
 budget_bad=0
 for spec in http_read_wire:2000:7:40 bytes_empty_literal:100000:0:0 \
-            json_decode_budget:1000:47:0; do
+            json_decode_budget:1000:47:0 redis_read_budget:1000:70:20; do
     IFS=: read -r name n per slack <<EOF_SPEC
 $spec
 EOF_SPEC
