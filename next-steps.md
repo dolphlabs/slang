@@ -494,10 +494,13 @@ budgets — the win must come from cost-per-allocation and minor cost.
   a machine serving anything.
 
   **Waiting on a full run.** PR #150 holds interim results from a scaled-down
-  run. When the full suite has run:
+  run. The planned run (2026-10-01, `bench/CURSOR.md`): a Hetzner CCX33
+  (8 dedicated vCPU, 32 GB) at full data scale, measuring slang, Go, Rust,
+  Java and Node only, `ROUNDS=3` with 20 s api and 15 s http windows, about
+  2h 15m. When it has run:
   - update `bench/RESULTS.md` and the website with the heavy-tier numbers;
-  - the site shows only C#, Java, Go, Rust, Bun, Node and slang (Python and C
-    are left out of it);
+  - the site shows the five measured languages, with the date and host;
+    C#, Bun, Python and C keep only the claims earlier runs support;
   - the Java `api` heavy tier should now build (a `.gitignore` pattern had
     been hiding its `Main.java`); check that it does.
 
