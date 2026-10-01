@@ -33,6 +33,10 @@ trampoline's resume slot) and the GC-minor crash found beside it (#232:
 container buffers freed out from under a dead old owner); package names from
 dotted directories (#235). Write-ups in `todo.md`.
 
+Landed since (Oct 2026): `json.decode` nesting depth costs heap, not C
+stack, up to the 512-level cap, for recursive target types too
+(`tests/json_deep_nesting`). Write-up in `todo.md`.
+
 ## 1. User-defined generics, then zokor
 
 - [x] **Why.** zokor, the backend framework (`dolphlabs/zokor`, empty), has to

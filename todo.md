@@ -285,10 +285,11 @@ wouldn't need to change the language surface below.
   - [x] Decode: parses into a generic internal tree first (`sl_json_val`
         — never exposed to slang), then a generated function walks it
         field-by-field against the target type. Nesting depth capped
-        at 512 (recursive-descent parser + untrusted network input is
-        exactly a stack-overflow DoS vector; empirically confirmed
-        unbounded nesting crashes at depth ~100k on an 8MB stack,
-        confirmed the cap rejects cleanly instead)
+        at 512. (That cap was checked against an 8MB stack, where
+        unbounded nesting crashed at depth ~100k; task stacks are 8KB
+        and do not grow inside C, so the recursive parser ran out of
+        stack near depth 80 first. The parser is now iterative: see
+        "Fixed along the way: JSON nesting depth cost C stack" below.)
   - [x] Encode: struct/opt[T]/[T]/map[str,V]/scalar -> JSON `str`,
         recursively monomorphized the same way decode is
   - [x] Missing key on an `opt[T]` field defaults to `none`; on any
@@ -3108,3 +3109,38 @@ popped the cache with no preempt bracket at all, a race even without
 the cached address; now bracketed. Cost: none measurable -- 64
 channel ping-pong pairs, ABBA x5, median 7,603ms before vs 7,613ms
 after.
+
+## Fixed along the way: JSON nesting depth cost C stack
+
+`json.decode` recursed in C once per level of nesting: the tree parser
+(`sl_jparse_value` -> array/object), the direct decoders' skip of an
+unknown key's value (`sl_jd_skip`), and, for a target type that
+contains itself, its decoders (`sl_jdf_*`, `sl_json_dec_*`). Task
+stacks start at 8KB and grow only at slang safepoints, which C
+recursion never reaches, so the 512-level cap was never the limit. On
+this Intel Mac (Apple clang, dev at 8b61b6d): a body nested 125 deep
+under an unknown key, or 79 deep on the tree path, ran out of stack;
+inside a spawned task, 123 and 78.
+
+Now:
+- The tree parser is a loop over a malloc'd stack of open containers.
+  Each container is linked into its parent when it opens (an object
+  reserves the member slot when its key is read), so every node is
+  reachable from `root` if a preempted parse meets a collection, and
+  every store after that is barriered. Error messages, byte positions
+  and allocations are unchanged (`tests/json_parity`, plus 32,000
+  random and mutated bodies decoded by old and new builds with
+  byte-identical output).
+- `sl_jd_skip` is a loop with one bit per open level (64 bytes).
+- For a recursive target type only, the generated call site measures
+  the input's depth (`sl_json_depth`, a linear scan, skipped when the
+  input is too short to need it) and grows the stack before decoding
+  when it is deep (`sl_json_stack_for`). Per-level cost is
+  `640 + 32 * max fields` bytes, from the frames measured with
+  `--keep-c` and `objdump -d` (table in `json_level_bytes`,
+  `src/codegen/pkg_json/dispatch.c`). Other types pay nothing.
+
+Test: `tests/json_deep_nesting` (depths 100/511/512/513 on the main
+task and a spawned one; `Node`/`Tree`/`Trie` chains to the cap); the
+old build dies with SIGBUS on its first case. GC-stress listed.
+

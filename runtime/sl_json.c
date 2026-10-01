@@ -110,8 +110,6 @@ static sl_json_val *sl_jv_new(sl_jv_kind k) {
     return v;
 }
 
-static sl_json_val *sl_jparse_value(sl_jparser *p);
-
 static int sl_hexval(int c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -288,95 +286,6 @@ static sl_json_val *sl_jparse_number(sl_jparser *p) {
     return v;
 }
 
-static sl_json_val *sl_jparse_array(sl_jparser *p) {
-    if (++p->depth > SL_JSON_MAX_DEPTH) {
-        sl_jerr(p, "maximum nesting depth (%d) exceeded", SL_JSON_MAX_DEPTH);
-        return NULL;
-    }
-    sl_json_val *v = sl_jv_new(SL_JV_ARR);
-    v->as.arr.items = NULL;
-    v->as.arr.len = 0;
-    long long cap = 0;
-    sl_jskip_ws(p);
-    if (sl_jpeek(p) == ']') { sl_jnext(p); p->depth--; return v; }
-    for (;;) {
-        sl_jskip_ws(p);
-        sl_json_val *item = sl_jparse_value(p);
-        if (!item) { p->depth--; return NULL; }
-        if (v->as.arr.len >= cap) {
-            cap = cap ? cap * 2 : 4;
-            /* Bracketed so v's generation cannot change between the
-             * owned realloc reading it and the store (sl_arr_reserve). */
-            sl_rt_preempt_disable();
-            v->as.arr.items = (sl_json_val **)sl_gc_realloc_owned(v->as.arr.items, (size_t)cap * sizeof(sl_json_val *), v);
-            sl_rt_preempt_enable();
-        }
-        v->as.arr.items[v->as.arr.len++] = item;
-        sl_jskip_ws(p);
-        int c = sl_jnext(p);
-        if (c == ',') continue;
-        if (c == ']') break;
-        sl_jerr(p, "expected ',' or ']' in array");
-        p->depth--;
-        return NULL;
-    }
-    p->depth--;
-    return v;
-}
-
-static sl_json_val *sl_jparse_object(sl_jparser *p) {
-    if (++p->depth > SL_JSON_MAX_DEPTH) {
-        sl_jerr(p, "maximum nesting depth (%d) exceeded", SL_JSON_MAX_DEPTH);
-        return NULL;
-    }
-    sl_json_val *v = sl_jv_new(SL_JV_OBJ);
-    v->as.obj.keys = NULL;
-    v->as.obj.vals = NULL;
-    v->as.obj.len = 0;
-    long long cap = 0;
-    sl_jskip_ws(p);
-    if (sl_jpeek(p) == '}') { sl_jnext(p); p->depth--; return v; }
-    for (;;) {
-        sl_jskip_ws(p);
-        if (sl_jpeek(p) != '"') {
-            sl_jerr(p, "expected string key in object");
-            p->depth--;
-            return NULL;
-        }
-        sl_jnext(p);
-        char *key = sl_jparse_string_raw(p);
-        if (!key) { p->depth--; return NULL; }
-        sl_jskip_ws(p);
-        if (sl_jnext(p) != ':') {
-            sl_jerr(p, "expected ':' after object key");
-            p->depth--;
-            return NULL;
-        }
-        sl_jskip_ws(p);
-        sl_json_val *val = sl_jparse_value(p);
-        if (!val) { p->depth--; return NULL; }
-        if (v->as.obj.len >= cap) {
-            cap = cap ? cap * 2 : 4;
-            sl_rt_preempt_disable(); /* see sl_jparse_array */
-            v->as.obj.keys = (char **)sl_gc_realloc_owned(v->as.obj.keys, (size_t)cap * sizeof(char *), v);
-            v->as.obj.vals = (sl_json_val **)sl_gc_realloc_owned(v->as.obj.vals, (size_t)cap * sizeof(sl_json_val *), v);
-            sl_rt_preempt_enable();
-        }
-        v->as.obj.keys[v->as.obj.len] = key;
-        v->as.obj.vals[v->as.obj.len] = val;
-        v->as.obj.len++;
-        sl_jskip_ws(p);
-        int c = sl_jnext(p);
-        if (c == ',') continue;
-        if (c == '}') break;
-        sl_jerr(p, "expected ',' or '}' in object");
-        p->depth--;
-        return NULL;
-    }
-    p->depth--;
-    return v;
-}
-
 static int sl_jmatch_lit(sl_jparser *p, const char *lit) {
     long long n = (long long)strlen(lit);
     if (p->pos + n > p->len) return 0;
@@ -385,28 +294,207 @@ static int sl_jmatch_lit(sl_jparser *p, const char *lit) {
     return 1;
 }
 
+/* ---- json: iterative tree parse ----
+ *
+ * The parse descends into arrays and objects with an explicit heap
+ * stack, never C recursion, so nesting depth costs heap, not the
+ * calling task's stack. Task stacks start at 8KB and grow only at slang
+ * safepoints, which a C recursion never reaches, so a recursive descent
+ * here ran out of stack at a nesting of about 80, far below
+ * SL_JSON_MAX_DEPTH.
+ *
+ * Every byte is peeked, skipped and consumed in the order the recursive
+ * parser did, so every error message and byte position is unchanged
+ * (tests/json_parity pins them), and a successful parse makes the same
+ * allocations.
+ *
+ * GC. A collection cannot start inside this function on its own --
+ * there is no safepoint in it, and sl_gc_alloc only arms a pending flag
+ * -- but an async preemption can suspend the task here while another
+ * thread collects. That collection finds this task's live values only
+ * by scanning its stack conservatively. So the frame stack below, which
+ * is malloc'd and never scanned, must never be the only thing holding a
+ * node: every container is linked into its parent the moment it opens
+ * (an object reserves its member's slot, value NULL, when the key is
+ * read), so everything parsed so far is reachable from `root`, a local.
+ * A container can therefore be promoted mid-parse, and each later store
+ * into it is followed by the write barrier (sl_jstore). */
+typedef struct {
+    sl_json_val *v;   /* the array or object being filled */
+    long long cap;    /* its items, or keys/vals, capacity */
+} sl_jframe;
+
+/* The barrier after a store into container v. Store first, then check:
+ * if a collection promoted v before the store, gen reads 1 here and v is
+ * remembered; if one ran after the store, v was still young then and
+ * that collection traced the stored child itself. The remember call is
+ * bracketed for its shard malloc and its task lookup. */
+static inline void sl_jstore_barrier(sl_json_val *v) {
+    sl_gc_obj *h = (sl_gc_obj *)v - 1;
+    if (h->gen == 1 && !h->remembered) {
+        sl_rt_preempt_disable();
+        sl_gc_remember_obj(h);
+        sl_rt_preempt_enable();
+    }
+}
+
+/* Make room for one more element or member of f->v. The owned buffers
+ * take v's generation, and the bracket keeps that generation fixed from
+ * the allocation to the store into v (sl_arr_reserve). */
+static void sl_jreserve(sl_jframe *f) {
+    sl_json_val *v = f->v;
+    long long len = v->kind == SL_JV_OBJ ? v->as.obj.len : v->as.arr.len;
+    if (len < f->cap) return;
+    f->cap = f->cap ? f->cap * 2 : 4;
+    sl_rt_preempt_disable();
+    if (v->kind == SL_JV_OBJ) {
+        v->as.obj.keys = (char **)sl_gc_realloc_owned(
+            v->as.obj.keys, (size_t)f->cap * sizeof(char *), v);
+        v->as.obj.vals = (sl_json_val **)sl_gc_realloc_owned(
+            v->as.obj.vals, (size_t)f->cap * sizeof(sl_json_val *), v);
+    } else {
+        v->as.arr.items = (sl_json_val **)sl_gc_realloc_owned(
+            v->as.arr.items, (size_t)f->cap * sizeof(sl_json_val *), v);
+    }
+    sl_rt_preempt_enable();
+}
+
+/* `val` is the next element of an array, or the value of the member
+ * whose slot sl_jparse_value reserved when it read the key. */
+static void sl_jplace(sl_jframe *f, sl_json_val *val) {
+    sl_json_val *v = f->v;
+    if (v->kind == SL_JV_OBJ) {
+        v->as.obj.vals[v->as.obj.len - 1] = val;
+    } else {
+        sl_jreserve(f);
+        v->as.arr.items[v->as.arr.len++] = val;
+    }
+    sl_jstore_barrier(v);
+}
+
 static sl_json_val *sl_jparse_value(sl_jparser *p) {
-    sl_jskip_ws(p);
-    int c = sl_jpeek(p);
-    if (c < 0) { sl_jerr(p, "unexpected end of input"); return NULL; }
-    if (c == '"') { sl_jnext(p); return sl_jparse_string(p); }
-    if (c == '{') { sl_jnext(p); return sl_jparse_object(p); }
-    if (c == '[') { sl_jnext(p); return sl_jparse_array(p); }
-    if (c == '-' || (c >= '0' && c <= '9')) return sl_jparse_number(p);
-    if (c == 't') {
-        if (!sl_jmatch_lit(p, "true")) { sl_jerr(p, "invalid literal"); return NULL; }
-        sl_json_val *v = sl_jv_new(SL_JV_BOOL); v->as.b = true; return v;
+    sl_jframe *st = NULL;     /* open containers, innermost last */
+    long long n = 0, cap = 0; /* its depth and capacity */
+    sl_json_val *root = NULL;
+    for (;;) {
+        /* ---- one value ---- */
+        sl_json_val *val;
+        sl_jskip_ws(p);
+        int c = sl_jpeek(p);
+        if (c < 0) { sl_jerr(p, "unexpected end of input"); goto fail; }
+        if (c == '"') {
+            sl_jnext(p);
+            if (!(val = sl_jparse_string(p))) goto fail;
+        } else if (c == '{' || c == '[') {
+            sl_jnext(p);
+            if (++p->depth > SL_JSON_MAX_DEPTH) {
+                sl_jerr(p, "maximum nesting depth (%d) exceeded",
+                        SL_JSON_MAX_DEPTH);
+                goto fail;
+            }
+            val = sl_jv_new(c == '{' ? SL_JV_OBJ : SL_JV_ARR);
+            /* sl_gc_alloc zero-fills: items/keys/vals NULL, len 0 */
+        } else if (c == '-' || (c >= '0' && c <= '9')) {
+            if (!(val = sl_jparse_number(p))) goto fail;
+        } else if (c == 't') {
+            if (!sl_jmatch_lit(p, "true")) { sl_jerr(p, "invalid literal"); goto fail; }
+            val = sl_jv_new(SL_JV_BOOL); val->as.b = true;
+        } else if (c == 'f') {
+            if (!sl_jmatch_lit(p, "false")) { sl_jerr(p, "invalid literal"); goto fail; }
+            val = sl_jv_new(SL_JV_BOOL); val->as.b = false;
+        } else if (c == 'n') {
+            if (!sl_jmatch_lit(p, "null")) { sl_jerr(p, "invalid literal"); goto fail; }
+            val = sl_jv_new(SL_JV_NULL);
+        } else {
+            sl_jerr(p, "unexpected character '%c'", c >= 32 && c < 127 ? c : '?');
+            goto fail;
+        }
+        if (n == 0) root = val;
+        else sl_jplace(&st[n - 1], val);
+
+        if (val->kind == SL_JV_ARR || val->kind == SL_JV_OBJ) {
+            if (n == cap) {
+                long long ncap = cap ? cap * 2 : 16;
+                sl_rt_preempt_disable();
+                sl_jframe *ns = (sl_jframe *)realloc(st, (size_t)ncap * sizeof(*st));
+                sl_rt_preempt_enable();
+                if (!ns) { sl_jerr(p, "out of memory"); goto fail; }
+                st = ns;
+                cap = ncap;
+            }
+            st[n].v = val;
+            st[n].cap = 0;
+            n++;
+            int close = val->kind == SL_JV_OBJ ? '}' : ']';
+            sl_jskip_ws(p);
+            if (sl_jpeek(p) == close) {
+                sl_jnext(p);
+                p->depth--;
+                n--;
+            } else if (val->kind == SL_JV_ARR) {
+                continue; /* its first element */
+            } else {
+                goto key; /* its first member */
+            }
+        }
+
+        /* ---- after a value: close containers until one continues ---- */
+        for (;;) {
+            if (n == 0) goto done;
+            sl_jframe *f = &st[n - 1];
+            int obj = f->v->kind == SL_JV_OBJ;
+            sl_jskip_ws(p);
+            int d = sl_jnext(p);
+            if (d == ',') break;
+            if (d == (obj ? '}' : ']')) {
+                p->depth--;
+                n--;
+                continue;
+            }
+            sl_jerr(p, obj ? "expected ',' or '}' in object"
+                           : "expected ',' or ']' in array");
+            goto fail;
+        }
+        if (st[n - 1].v->kind == SL_JV_ARR) continue; /* next element */
+
+    key: {
+        /* ---- an object member's key and colon; reserves its slot ---- */
+        sl_jframe *f = &st[n - 1];
+        sl_jskip_ws(p);
+        if (sl_jpeek(p) != '"') {
+            sl_jerr(p, "expected string key in object");
+            goto fail;
+        }
+        sl_jnext(p);
+        char *k = sl_jparse_string_raw(p);
+        if (!k) goto fail;
+        sl_jskip_ws(p);
+        if (sl_jnext(p) != ':') {
+            sl_jerr(p, "expected ':' after object key");
+            goto fail;
+        }
+        sl_jreserve(f);
+        sl_json_val *o = f->v;
+        o->as.obj.keys[o->as.obj.len] = k;
+        o->as.obj.vals[o->as.obj.len] = NULL;
+        o->as.obj.len++;
+        sl_jstore_barrier(o);
     }
-    if (c == 'f') {
-        if (!sl_jmatch_lit(p, "false")) { sl_jerr(p, "invalid literal"); return NULL; }
-        sl_json_val *v = sl_jv_new(SL_JV_BOOL); v->as.b = false; return v;
     }
-    if (c == 'n') {
-        if (!sl_jmatch_lit(p, "null")) { sl_jerr(p, "invalid literal"); return NULL; }
-        return sl_jv_new(SL_JV_NULL);
+
+done:
+    if (st) {
+        sl_rt_preempt_disable();
+        free(st);
+        sl_rt_preempt_enable();
     }
-    sl_jerr(p, "unexpected character '%c'", c >= 32 && c < 127 ? c : '?');
-    return NULL;
+    return root;
+
+fail:
+    /* the recursive parser undid each open level's depth on its way out */
+    p->depth -= n;
+    root = NULL;
+    goto done;
 }
 
 static sl_json_val *sl_json_parse(const char *s, long long len, char **errmsg) {
@@ -872,33 +960,71 @@ static bool sl_jd_skip_string(sl_jparser *p) {
 
 /* Past any one value, checked as sl_jparse_value checks it: an unknown
  * key's value, or a repeated key's (the first one counts, as in the
- * tree's field lookup). */
+ * tree's field lookup). It accepts and rejects exactly what the tree
+ * parser does; on a reject the caller falls back to the tree, which
+ * names the error.
+ *
+ * A loop with a bit per open level (object or array), not recursion:
+ * this runs on the task's stack, which starts at 8KB and does not grow
+ * inside C, so recursing once per level of the input ran out of it long
+ * before SL_JSON_MAX_DEPTH. sl_jd_open enforces that cap, so its bits
+ * (64 bytes) are all the levels one call can open. noinline keeps those
+ * 64 bytes out of the frames of the recursive sl_jdf_* decoders that
+ * call this. Containers are tested after the scalars because most
+ * values are scalars; in that order this is a little faster than the
+ * recursive version was on a 97KB body. */
+__attribute__((noinline))
 static bool sl_jd_skip(sl_jparser *p) {
-    int c = sl_jd_peek(p);
-    if (c == '"') {
-        p->pos++;
-        return sl_jd_skip_string(p);
-    }
-    if (c == '-' || (c >= '0' && c <= '9')) {
-        long long start;
-        return sl_jd_number(p, &start);
-    }
-    if (c == 't') return sl_jmatch_lit(p, "true");
-    if (c == 'f') return sl_jmatch_lit(p, "false");
-    if (c == 'n') return sl_jmatch_lit(p, "null");
-    if (c != '[' && c != '{') return false;
-    int close = c == '[' ? ']' : '}';
-    if (!sl_jd_open(p, c)) return false;
-    if (sl_jd_empty(p, close)) return true;
+    unsigned char obj_stack[(SL_JSON_MAX_DEPTH + 7) / 8];
+    int depth = 0;  /* levels this call has opened and not yet closed */
+    int in_obj = 0; /* whether the innermost of them is an object */
     for (;;) {
-        if (close == '}') {
-            if (!sl_jd_eat(p, '"') || !sl_jd_skip_string(p)) return false;
-            if (!sl_jd_eat(p, ':')) return false;
+        int c = sl_jd_peek(p);
+        if (c == '"') {
+            p->pos++;
+            if (!sl_jd_skip_string(p)) return false;
+        } else if (c == '-' || (c >= '0' && c <= '9')) {
+            long long start;
+            if (!sl_jd_number(p, &start)) return false;
+        } else if (c == 't') {
+            if (!sl_jmatch_lit(p, "true")) return false;
+        } else if (c == 'f') {
+            if (!sl_jmatch_lit(p, "false")) return false;
+        } else if (c == 'n') {
+            if (!sl_jmatch_lit(p, "null")) return false;
+        } else if (c == '[' || c == '{') {
+            int is_obj = c == '{';
+            if (!sl_jd_open(p, c)) return false; /* caps the nesting */
+            if (!sl_jd_empty(p, is_obj ? '}' : ']')) {
+                if (is_obj)
+                    obj_stack[depth >> 3] |= (unsigned char)(1u << (depth & 7));
+                else
+                    obj_stack[depth >> 3] &= (unsigned char)~(1u << (depth & 7));
+                depth++;
+                in_obj = is_obj;
+                if (is_obj && (!sl_jd_eat(p, '"') || !sl_jd_skip_string(p) ||
+                               !sl_jd_eat(p, ':')))
+                    return false;
+                continue; /* the first element or member's value */
+            }
+        } else {
+            return false;
         }
-        if (!sl_jd_skip(p)) return false;
-        bool done;
-        if (sl_jd_more(p, close, &done)) continue;
-        return done;
+        /* A value is done: past its separator, closing what ends here. */
+        for (;;) {
+            if (depth == 0) return true;
+            bool closed;
+            if (sl_jd_more(p, in_obj ? '}' : ']', &closed)) {
+                if (in_obj && (!sl_jd_eat(p, '"') || !sl_jd_skip_string(p) ||
+                               !sl_jd_eat(p, ':')))
+                    return false;
+                break; /* the next element or member's value */
+            }
+            if (!closed) return false;
+            depth--;
+            if (depth)
+                in_obj = (obj_stack[(depth - 1) >> 3] >> ((depth - 1) & 7)) & 1;
+        }
     }
 }
 
@@ -931,6 +1057,64 @@ static bool sl_jd_key(sl_jparser *p, const char **k, long long *klen) {
 static bool sl_jd_end(sl_jparser *p) {
     sl_jskip_ws(p);
     return p->pos == p->len;
+}
+
+/* ---- json: stack for recursive target types ----
+ *
+ * A target type that contains itself (a struct holding opt[Self], [Self]
+ * or map[str]Self, directly or through other types) is decoded by C
+ * functions that recurse once per level of the data -- that is what
+ * decoding a tree means -- and C recursion never reaches a safepoint, so
+ * it never grows the task's stack. For those types only, codegen measures
+ * the input's nesting with sl_json_depth before decoding and passes it
+ * here with `per_level`, the stack one level can cost (its derivation is
+ * at json_level_bytes, src/codegen/pkg_json/dispatch.c). The stack grows
+ * only when this input needs more than the task has left, so a shallow
+ * decode costs one scan of its input and no memory. */
+
+/* The deepest nesting of brackets in s[0..n), outside strings. Not a
+ * validator, and never an underestimate of how deep a decoder can get:
+ * on the prefix a decoder accepts, this agrees with it about where
+ * strings start and end, and a decoder stops at the first byte it
+ * rejects. Stops counting past SL_JSON_MAX_DEPTH, where they all stop. */
+static long long sl_json_depth(const char *s, long long n) {
+    long long d = 0, max = 0;
+    for (long long i = 0; i < n; i++) {
+        char c = s[i];
+        if (c == '"') {
+            for (i++; i < n && s[i] != '"'; i++)
+                if (s[i] == '\\') i++;
+        } else if (c == '[' || c == '{') {
+            if (++d > max) {
+                max = d;
+                if (max > SL_JSON_MAX_DEPTH) break;
+            }
+        } else if ((c == ']' || c == '}') && d > 0) {
+            d--;
+        }
+    }
+    return max;
+}
+
+/* Before decoding s[0..n) into a recursive type: grow the task's stack if
+ * the input's nesting, at `per_level` bytes a level, needs more than it
+ * has left. Nesting cannot exceed the length, so a body too short to
+ * matter is not even scanned. Called from generated code at the
+ * json.decode call site, where moving the stack is safe (see
+ * sl_rt_stack_reserve). */
+static void sl_json_stack_for(const char *s, long long n, size_t per_level) {
+    sl_task *t = sl_rt_cur();
+    if (!t || !t->stack_base) return;
+    char probe;
+    size_t room = (size_t)((uintptr_t)&probe - (uintptr_t)t->stack_base);
+    if (room < SL_TASK_GUARD_MARGIN) room = 0;
+    else room -= SL_TASK_GUARD_MARGIN;
+    long long levels = n < SL_JSON_MAX_DEPTH ? n : SL_JSON_MAX_DEPTH;
+    if ((size_t)levels * per_level <= room) return;
+    levels = sl_json_depth(s, n);
+    if (levels > SL_JSON_MAX_DEPTH) levels = SL_JSON_MAX_DEPTH;
+    if ((size_t)levels * per_level <= room) return;
+    sl_rt_stack_reserve((size_t)levels * per_level);
 }
 
 static bool sl_jd_null(sl_jparser *p) {
