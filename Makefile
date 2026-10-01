@@ -4,7 +4,11 @@ PREFIX ?= /usr/local
 DESTDIR ?=
 RUNTIME_DIR = $(abspath runtime)
 STDLIB_DIR = $(abspath stdlib)
-CFLAGS = -std=c11 -O2 -Wall -Wextra -D_GNU_SOURCE \
+# -Werror=incompatible-pointer-types is GCC 14's default; making it an
+# error everywhere means a mismatch breaks CI's GCC 13 and clang builds
+# too, not only a user's newer compiler.
+CFLAGS = -std=c11 -O2 -Wall -Wextra -Werror=incompatible-pointer-types \
+	-D_GNU_SOURCE \
 	-DSLANG_RUNTIME_DIR=\"$(RUNTIME_DIR)\" \
 	-DSLANG_STDLIB_DIR=\"$(STDLIB_DIR)\" \
 	-DSLANG_VERSION=\"$(VERSION)\"

@@ -62,7 +62,7 @@ typedef struct {
  * sees only real, fully-typed structs. Its field types stay as written
  * (mentioning the parameters); each instance canonicalizes them afresh with
  * the parameters bound. */
-typedef struct {
+typedef struct StructTmpl {
     char *pkg;
     char *name;
     int is_pub;
