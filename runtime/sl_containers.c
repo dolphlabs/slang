@@ -627,13 +627,31 @@ static int sl_select_run(sl_sel_case *cs, sl_waiter *nodes, int n,
 typedef struct { long long len; unsigned char *ptr; } sl_bytes;
 
 static void sl_gc_trace_bytes(void *p, void (*mark)(void *)) {
-    mark(((sl_bytes *)p)->ptr);
+    sl_bytes *b = (sl_bytes *)p;
+    /* inline data is part of this object; only a separate buffer (or a
+     * static one, which mark ignores) is its own */
+    if (b->ptr != (unsigned char *)(b + 1))
+        mark(b->ptr);
+}
+
+/* A bytes and its data in one allocation, ptr pointing just past the
+ * header: one object instead of two (runtime/VALUE_REPRESENTATION.md).
+ * Every runtime constructor goes through here. One allocation also
+ * leaves no window between allocating a header and storing a younger
+ * buffer into it, which a collection could promote the header across. */
+_Static_assert(sizeof(sl_bytes) == 2 * sizeof(void *) &&
+               offsetof(sl_bytes, ptr) == sizeof(void *),
+               "sl_gc_mark_inline_bytes reads ptr at this offset");
+static sl_bytes *sl_bytes_alloc(long long n) {
+    sl_bytes *b = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes) + (size_t)(n > 0 ? n : 1),
+                                          sl_gc_trace_bytes);
+    b->len = n;
+    b->ptr = (unsigned char *)(b + 1);
+    return b;
 }
 
 static sl_bytes *sl_bytes_new(const unsigned char *p, long long n) {
-    sl_bytes *b = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
-    b->len = n;
-    b->ptr = (unsigned char *)sl_gc_alloc((size_t)(n > 0 ? n : 1), NULL);
+    sl_bytes *b = sl_bytes_alloc(n);
     if (n > 0) memcpy(b->ptr, p, (size_t)n);
     return b;
 }
@@ -669,9 +687,7 @@ static void sl_bytes_set(sl_bytes *b, long long i, unsigned char v) {
 }
 
 static sl_bytes *sl_bytes_concat(sl_bytes *a, sl_bytes *b) {
-    sl_bytes *r = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
-    r->len = a->len + b->len;
-    r->ptr = (unsigned char *)sl_gc_alloc((size_t)(r->len > 0 ? r->len : 1), NULL);
+    sl_bytes *r = sl_bytes_alloc(a->len + b->len);
     if (a->len) memcpy(r->ptr, a->ptr, (size_t)a->len);
     if (b->len) memcpy(r->ptr + a->len, b->ptr, (size_t)b->len);
     return r;
@@ -681,9 +697,7 @@ static sl_bytes *sl_bytes_slice(sl_bytes *b, long long s, long long e) {
     if (s < 0) s = 0;
     if (e > b->len) e = b->len;
     if (e < s) e = s;
-    sl_bytes *r = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
-    r->len = e - s;
-    r->ptr = (unsigned char *)sl_gc_alloc((size_t)(r->len > 0 ? r->len : 1), NULL);
+    sl_bytes *r = sl_bytes_alloc(e - s);
     if (r->len) memcpy(r->ptr, b->ptr + s, (size_t)r->len);
     return r;
 }

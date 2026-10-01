@@ -112,11 +112,7 @@ static sl_res_bytes_str *sl_z_compress(sl_bytes *in, int level,
     if (why)
         return sl_z_err(why);
 
-    sl_bytes *b = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes),
-                                          sl_gc_trace_bytes);
-    b->len = (long long)produced;
-    b->ptr = (unsigned char *)sl_gc_alloc(
-        (size_t)(produced > 0 ? produced : 1), NULL);
+    sl_bytes *b = sl_bytes_alloc((long long)produced);
     if (produced) memcpy(b->ptr, out, (size_t)produced);
     return sl_z_ok(b);
 }
@@ -263,10 +259,7 @@ static sl_res_bytes_str *sl_z_decompress(sl_bytes *in, long long max_out,
         return sl_z_err(m);
     }
 
-    sl_bytes *b = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes),
-                                          sl_gc_trace_bytes);
-    b->len = (long long)have;
-    b->ptr = (unsigned char *)sl_gc_alloc(have > 0 ? have : 1, NULL);
+    sl_bytes *b = sl_bytes_alloc((long long)have);
     if (have) memcpy(b->ptr, out, have);
     return sl_z_ok(b);
 }
