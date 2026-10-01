@@ -3108,3 +3108,54 @@ popped the cache with no preempt bracket at all, a race even without
 the cached address; now bracketed. Cost: none measurable -- 64
 channel ping-pong pairs, ABBA x5, median 7,603ms before vs 7,613ms
 after.
+
+## Fixed along the way: the redis client copied its whole buffer per reply
+
+Found measuring allocation shares for `next-steps.md` §5b. `read_reply`
+appended every recv with `c.buf = c.buf + b` and dropped the consumed
+prefix only once it passed 1MB, so each reply copied everything received
+since the last drop: 20,000 rounds of SET+GET+INCR against a local Redis
+allocated 28GB, about 470KB per command. Now only the unconsumed tail is
+copied, and between replies there is none, so the received bytes become
+the buffer as they are (`take`). Same loop: 333MB allocated, 11.1-11.6s
+(was 14.4-14.6s, ABBA). `tests/redis_read_budget` pins a PING round trip
+at 49 allocations (was 70 at #276's merge, 72 before it, with the bytes per
+reply growing; one-object bytes (#277) removed the rest).
+
+Not fixed, both measured on the same loop:
+
+- A reply larger than one recv still grows by concatenation, copying the
+  partial reply once per chunk: quadratic in the number of chunks for a
+  multi-megabyte bulk value. The decoder reads to `len(buf)`, so a buffer
+  with spare capacity needs an end bound threaded through `parse_value`.
+- The ~185us left per command is the runtime, not the client: 8.4s of the
+  10.6s is system time in condvar, mutex and kevent waits, the park/wake
+  round trip for one request on one connection. Probably also why
+  database point reads trailed Go in #150 (11.6-14.2k vs 34k req/s).
+
+## Old api/quote failures were the pre-#274 json decoder's missing barriers
+
+2026-10-01, Intel i5-8279U macOS. The build before #274 (1cc5813) returned
+1-9 non-2xx per 10 s run of `POST /api/quote` under `wrk -t2 -c16`
+(WORKERS=4 SLANG_WORKERS=4, DATABASE_URL unreachable so no DB is touched):
+785 req/4, 664/3, 542/9, 610/4 across four runs. A wrk Lua `response()`
+hook writing per-thread files (each wrk thread is its own Lua state)
+captured every failure as `400 :: {"error":"bad request"}`: the quote
+handler's decode-failure path, not a framing error.
+
+Under `SLANG_GC_VERIFY_MINOR=1 SLANG_GC_NURSERY_KB=16` with forced async
+preemption (1/1 ms) the old build printed 20x `minor missed a live young
+struct (32 B) held by an old struct, not remembered` in a 181-request run.
+Current dev (6d0f66e) the same way: zero non-2xx over 1594-1776 req/10 s,
+an empty fail file, no `missed` lines (the atexit `minors=/missed=`
+summary never prints for the api server since it never exits cleanly, so
+the count is of `missed a live` lines: 20 vs 0).
+
+Cause: the old decoder allocated the struct/opt holder first
+(`src/codegen/pkg_json/dispatch.c`: struct holder, opt wrapper), then
+decoded nested values with further allocations and stored them in with no
+write barrier (`tmp->field = ftmp`). A minor between the holder's
+promotion and those stores freed the young values, the decode failed, and
+the handler returned 400. #274 decodes values before allocating the
+holder, removing the window. No live bug remains: no code change, no new
+test (a regression test would pass on both builds).

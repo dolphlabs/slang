@@ -62,7 +62,7 @@ typedef struct {
  * sees only real, fully-typed structs. Its field types stay as written
  * (mentioning the parameters); each instance canonicalizes them afresh with
  * the parameters bound. */
-typedef struct {
+typedef struct StructTmpl {
     char *pkg;
     char *name;
     int is_pub;
@@ -420,6 +420,10 @@ struct CG {
     const char *expect; /* expected type while inferring none/ok/err */
     const char *cur_ret;  /* slang return type of enclosing function */
     const char *cur_pkg;
+    /* The main package and its top-level statements, for the hint when a
+     * function names one of the program's top-level `let`s. */
+    const char *main_pkg;
+    Block *main_body;
     /* Package functions that never return (compute_noreturn): every path
      * ends in exit, panic or another such call. noret_fn is the function
      * being analysed while the table is built, NULL afterwards. */
@@ -591,6 +595,7 @@ void cg_recover_arm(void *jb);
 const char *closest_name(const char *name, const char *const *cands, int n);
 const char *did_you_mean(const char *name, const char *const *cands, int n);
 const char *suggest_value_name(CG *cg, const char *name);
+const char *hint_top_level_let(CG *cg, const char *name);
 const char *suggest_function(CG *cg, const char *pkg, const char *name);
 const char *suggest_field(StructDef *sd, const char *name);
 const char *suggest_method(CG *cg, StructDef *sd, const char *name);

@@ -309,6 +309,10 @@ not it imports `proc` for anything else (`proc.getenv`, say).
 `proc.active_tasks()` counts currently-running `spawn`ed tasks.
 `proc.wait_idle()` parks until that count is zero, so a
 shutting-down program can drain in-flight work without polling.
+Called from a spawned task, neither counts the caller (nor, for
+`wait_idle`, other tasks also waiting in it), so a task can drain the
+rest without waiting for itself; every test under `slangc test` is such
+a task.
 
 ```slang
 import "net";
@@ -1946,7 +1950,7 @@ holds: the path, one copy of the header block, the body when there is
 one, and the `Request`/`Incoming` around them. The common methods (`GET`,
 `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`) and both versions come
 back as literals, and `wants_close` decides from the header block in
-place. A plain `GET` costs 7 GC allocations; `tests/run_tests.sh` holds it
+place. A plain `GET` costs 6 GC allocations; `tests/run_tests.sh` holds it
 to that.
 
 Framing decides where a request ENDS, so it is a security boundary: if a

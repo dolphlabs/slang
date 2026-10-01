@@ -10,6 +10,7 @@ static int sl_runtime_test_main(void);
 
 static void sl_gc_test_trace_pair(void *p, void (*mark)(void *));
 static int sl_gc_test_owned_buffers(void);
+static int sl_gc_test_inline_bytes(void);
 
 static int sl_runtime_test_main(void) {
     sl_gc_register_thread();
@@ -232,6 +233,45 @@ static int sl_gc_test_owned_buffers(void) {
     return 0;
 }
 
+/* A bytes keeps its data in the same object (sl_bytes_alloc), so the
+ * conservative scan must take a word equal to b->ptr as a reference to b:
+ * an async-preempted task can be left holding nothing else. Only that
+ * exact word: a pointer further into the data, or 16 bytes into an object
+ * that is not a bytes, must not count. */
+static int sl_gc_test_inline_bytes(void) {
+    sl_bytes *b = sl_bytes_new((const unsigned char *)"inline", 6);
+    if (b->ptr != (unsigned char *)(b + 1) || memcmp(b->ptr, "inline", 6))
+        return 1;
+    void *other = sl_gc_alloc(64, NULL);
+    sl_gc_harvest_task(sl_rt_cur());
+    sl_gc_set_build(0);
+    void (*saved)(void *) = sl_gc_cur_mark;
+    sl_gc_cur_mark = sl_gc_mark;
+    sl_gc_obj *bh = (sl_gc_obj *)b - 1;
+    sl_gc_obj *oh = (sl_gc_obj *)other - 1;
+    int bad = 0;
+
+    void *only_ptr[2] = { NULL, b->ptr };
+    sl_gc_scan_conservative((uintptr_t)only_ptr, (uintptr_t)(only_ptr + 2));
+    if (!bh->marked) bad = 1;
+    bh->marked = 0;
+
+    void *past[2] = { b->ptr + 1, (char *)other + 2 * sizeof(void *) };
+    sl_gc_scan_conservative((uintptr_t)past, (uintptr_t)(past + 2));
+    if (bh->marked || oh->marked) bad = 1;
+
+    bh->marked = 0;
+    oh->marked = 0;
+    sl_gc_wl_n = 0;
+    free(sl_gc_set);
+    sl_gc_set = NULL;
+    sl_gc_set_cap = 0;
+    sl_gc_set_count = 0;
+    sl_gc_cur_mark = saved;
+    return bad;
+}
+
 int main(void) {
-    return sl_runtime_test_main();
+    if (sl_runtime_test_main()) return 1;
+    return sl_gc_test_inline_bytes();
 }

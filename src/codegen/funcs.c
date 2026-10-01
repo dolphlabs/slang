@@ -129,7 +129,7 @@ static int func_cursor_next_inst(CG *cg, FuncCursor *c) {
     c->sig = fi->sig;
     c->impl_struct = fi->recv;
     c->tenv = &fi->env;
-    cg->tenv = c->tenv;
+    cg->tenv = &fi->env;
     generic_note_body(fi->note, fi->line);
     return 1;
 }

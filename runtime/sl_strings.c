@@ -373,10 +373,7 @@ static sl_bytes *sl_strings_join_bytes(sl_arr *parts, sl_bytes *sep) {
     for (long long i = 0; i < n; i++)
         total += items[i] ? items[i]->len : 0;
     if (n > 1) total += sepl * (n - 1);
-    sl_bytes *r = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
-    r->len = total;
-    r->ptr = NULL;
-    r->ptr = (unsigned char *)sl_gc_alloc((size_t)(total > 0 ? total : 1), NULL);
+    sl_bytes *r = sl_bytes_alloc(total);
     unsigned char *w = r->ptr;
     for (long long i = 0; i < n; i++) {
         if (i && sepl) {
@@ -400,10 +397,7 @@ static sl_bytes *sl_strings_join_bytes(sl_arr *parts, sl_bytes *sep) {
  * strings.repeat's own clamp. */
 static sl_bytes *sl_strings_bytes_zero(long long n) {
     if (n < 0) n = 0;
-    sl_bytes *r = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
-    r->len = n;
-    r->ptr = (unsigned char *)sl_gc_alloc((size_t)(n > 0 ? n : 1), NULL);
-    if (n > 0) memset(r->ptr, 0, (size_t)n);
+    sl_bytes *r = sl_bytes_alloc(n); /* allocation is zeroed */
     return r;
 }
 

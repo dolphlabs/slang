@@ -111,6 +111,29 @@ const char *suggest_value_name(CG *cg, const char *name) {
     return did_you_mean(name, c, n);
 }
 
+/* A function in the main package names a variable that only exists as
+ * a top-level `let` of the program. Those are locals of the program's
+ * body, not globals, so a function cannot see them; agents in the
+ * benchmark (bench/agent, ratelimit) hit "undefined variable 'LIMIT'"
+ * four times and probed with scratch programs to find out why. */
+const char *hint_top_level_let(CG *cg, const char *name) {
+    if (!cg->in_function || !cg->main_body || !cg->main_pkg ||
+        !cg->cur_pkg || strcmp(cg->cur_pkg, cg->main_pkg))
+        return "";
+    for (int i = 0; i < cg->main_body->count; i++) {
+        Stmt *s = cg->main_body->stmts[i];
+        if (s && s->kind == ST_LET && s->as.let.name &&
+            !strcmp(s->as.let.name, name))
+            return xasprintf(
+                " (the top-level 'let %s' on line %d belongs to the "
+                "program's own statements, which functions cannot see; "
+                "pass it in as a parameter, keep it in a struct you pass, "
+                "or return it from a function)",
+                name, s->line);
+    }
+    return "";
+}
+
 static const char *const BUILTIN_NAMES[] = {
     "print", "println", "len", "push", "pop", "to_str", "inspect",
     "to_bytes", "to_int", "to_float", "to_le", "to_be", "from_le",

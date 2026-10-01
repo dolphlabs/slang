@@ -283,6 +283,21 @@ static void sl_gc_collect(void);
 static void sl_gc_collect_minor(void);
 static void sl_gc_mark(void *ptr);
 static void sl_gc_mark_minor(void *ptr);
+/* Tier 12 (leaf-loop poll): the fast-path condition of sl_rt_gc_checkin
+ * as a callable predicate for generated leaf-loop polls: nonzero when
+ * a collection has been requested and the next safepoint must check
+ * in. Reads only process-global atomics (acquire), never TLS — safe
+ * to call every iteration, including on arm64 where the compiler
+ * caches thread pointers. Generated code calls this rather than
+ * inlining three atomic loads, so the flag set stays in one place. */
+static inline int sl_gc_poll_needed(void) {
+    return atomic_load_explicit(&sl_gc_stop_requested,
+                                memory_order_acquire) ||
+           atomic_load_explicit(&sl_gc_collect_pending,
+                                memory_order_acquire) ||
+           atomic_load_explicit(&sl_gc_collect_minor_pending,
+                                memory_order_acquire);
+}
 typedef void (*sl_gc_markfn_t)(void *ptr);
 /* The mark function the CURRENT collection's root scan should use
  * (forward-declared here because sl_gc_scan_conservative is defined
@@ -483,12 +498,7 @@ static void sl_rt_gc_checkin_slow(void) {
  * Ordering: acquire on both, so a thread that observes neither flag
  * genuinely has nothing to acknowledge. */
 static inline void sl_rt_gc_checkin(void) {
-    if (atomic_load_explicit(&sl_gc_stop_requested,
-                             memory_order_acquire) ||
-        atomic_load_explicit(&sl_gc_collect_pending,
-                             memory_order_acquire) ||
-        atomic_load_explicit(&sl_gc_collect_minor_pending,
-                             memory_order_acquire))
+    if (sl_gc_poll_needed())
         sl_rt_gc_checkin_slow();
 }
 
@@ -1092,13 +1102,32 @@ static void sl_gc_mark_minor(void *ptr) {
  * (Declared near the top; defined here next to its only reader.) */
 static void (*sl_gc_cur_mark)(void *ptr);
 
+/* A bytes keeps its data inline (sl_bytes_alloc), so code holding only
+ * b->ptr holds an address 16 bytes into the object, which sl_gc_set does
+ * not list. Recognize exactly that word, so a register or stack slot left
+ * with only the data pointer keeps the bytes alive -- what it did when
+ * the data was its own object. */
+static void sl_gc_trace_bytes(void *p, void (*mark)(void *));
+SL_GC_NO_ASAN
+static void sl_gc_mark_inline_bytes(void *w) {
+    if ((uintptr_t)w < 2 * sizeof(void *)) return;
+    void *o = (char *)w - 2 * sizeof(void *);
+    if (!sl_gc_set_contains(o)) return;
+    sl_gc_obj *h = (sl_gc_obj *)o - 1;
+    if (h->trace == sl_gc_trace_bytes && ((void **)o)[1] == w)
+        sl_gc_cur_mark(o);
+}
+
 SL_GC_NO_ASAN
 static void sl_gc_scan_conservative(uintptr_t lo, uintptr_t hi) {
     lo &= ~(uintptr_t)7; /* align down -- rsp itself is always 16-byte
         aligned in practice, but this makes the loop below correct
         even if that ever changes */
-    for (uintptr_t a = lo; a + sizeof(void *) <= hi; a += sizeof(void *))
-        sl_gc_cur_mark(*(void **)a);
+    for (uintptr_t a = lo; a + sizeof(void *) <= hi; a += sizeof(void *)) {
+        void *w = *(void **)a;
+        sl_gc_cur_mark(w);
+        sl_gc_mark_inline_bytes(w);
+    }
 }
 
 /* Build the 'is this pointer one of mine' table for one collection,

@@ -50,7 +50,7 @@ static bool sl_proc_shutdown_requested(void) {
 }
 
 static long long sl_proc_active_tasks(void) {
-    return (long long)atomic_load(&sl_rt_active_spawns);
+    return sl_rt_active_others();
 }
 
 static void sl_proc_wait_idle(void) {

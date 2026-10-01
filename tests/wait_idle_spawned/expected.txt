@@ -1,0 +1,5 @@
+coordinator saw 3 done
+two waiters returned: true
+main sees 2 active
+main after wait_idle: 0 active
+total done 5

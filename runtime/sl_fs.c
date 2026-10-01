@@ -77,9 +77,8 @@ static sl_res_bytes_str *sl_fs_read(int fd, int max) {
         return sl_fs_err_bytes("invalid length");
     if (max == 0)
         return sl_fs_ok_bytes(sl_bytes_new(NULL, 0));
-    sl_bytes *b = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
+    sl_bytes *b = sl_bytes_alloc(max);
     b->len = 0;
-    b->ptr = (unsigned char *)sl_gc_alloc((size_t)max, NULL);
     ssize_t n = read(fd, b->ptr, (size_t)max);
     if (n < 0)
         return sl_fs_err_bytes(strerror(errno));
@@ -99,9 +98,8 @@ static sl_res_bytes_str *sl_fs_pread(int fd, long long offset, long long len) {
         return sl_fs_err_bytes("length over 2GB; read in pieces");
     if (len == 0)
         return sl_fs_ok_bytes(sl_bytes_new(NULL, 0));
-    sl_bytes *b = (sl_bytes *)sl_gc_alloc(sizeof(sl_bytes), sl_gc_trace_bytes);
+    sl_bytes *b = sl_bytes_alloc(len);
     b->len = 0;
-    b->ptr = (unsigned char *)sl_gc_alloc((size_t)len, NULL);
     long long got = 0;
     while (got < len) {
         ssize_t n = pread(fd, b->ptr + got, (size_t)(len - got), (off_t)(offset + got));

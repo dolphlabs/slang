@@ -613,6 +613,39 @@ static void write_lock(SlProject *p) {
     fclose(f);
 }
 
+/* <cache>/pkg/<name>/<tag> -> sha256:<hex>, and the path a person (or
+ * an agent) can actually type. The content-addressed directory name is 71
+ * characters of hex; in the agent benchmark (bench/agent) a model spent
+ * ten turns retyping it, dropping characters and blaming the colon. The
+ * link is a convenience only: builds still resolve through slang.lock's
+ * hash, so a moved tag can never change what compiles. */
+static char *link_by_tag(const char *root, const SlPkgPin *pin) {
+    if (!pin->tag || !pin->tag[0] || pin->tag[0] == '.' ||
+        !strncmp(pin->tag, "sha256:", 7))
+        return NULL;
+    char *tag = xstrdup(pin->tag);
+    for (char *c = tag; *c; c++)
+        if (*c == '/' || *c == '\\')
+            *c = '_';
+    char *link = xasprintf("%s/pkg/%s/%s", root, pin->name, tag);
+    struct stat st;
+    if (lstat(link, &st) == 0) {
+        if (!S_ISLNK(st.st_mode))
+            return NULL; /* something real is there; leave it alone */
+        unlink(link);
+    }
+    if (symlink(pin->hash, link) != 0)
+        return NULL;
+    return pin->dir ? join2(link, pin->dir) : link;
+}
+
+static void say_where(const char *root, const SlPkgPin *pin) {
+    char *at = link_by_tag(root, pin);
+    if (!at)
+        at = project_pkg_dir(pin);
+    printf("%s %s: %s\n", pin->name, pin->tag ? pin->tag : "", at);
+}
+
 void project_get(SlProject *p) {
     char *root = cache_root();
     for (int i = 0; i < p->npins; i++) {
@@ -621,6 +654,7 @@ void project_get(SlProject *p) {
         if (have && project_is_dir(have) &&
             !strcmp(project_tree_hash(have), pin->hash)) {
             ingest_dep_project(p, have);
+            say_where(root, pin);
             continue;
         }
         char *tmp = xasprintf("%s/pkg/%s/.tmp", root, pin->name);
@@ -637,6 +671,7 @@ void project_get(SlProject *p) {
         else if (rename(tmp, final) != 0)
             project_error("cannot store package '%s' in cache", pin->name);
         ingest_dep_project(p, final);
+        say_where(root, pin);
     }
     write_lock(p);
 }

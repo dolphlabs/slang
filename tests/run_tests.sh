@@ -172,6 +172,30 @@ else
     sed 's/^/  /' "$NEWDIR/pinonly/out.txt"
     fail=1
 fi
+# `slangc get` says where each package landed, under a path that can be
+# typed: <cache>/pkg/<name>/<tag> links to the sha256:<64 hex> directory.
+mkdir -p "$NEWDIR/getrepo/src" "$NEWDIR/getproj"
+echo 'pub fn hi() -> str { return "hi"; }' >"$NEWDIR/getrepo/src/lib.sl"
+(cd "$NEWDIR/getrepo" && git init -q && git add . &&
+    git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit -q -m t &&
+    git tag v1 && git branch rel/one)
+printf 'name getproj\nversion 0.1.0\npkg demo git %s tag v1 dir src\npkg other git %s tag rel/one\n' \
+    "$NEWDIR/getrepo" "$NEWDIR/getrepo" >"$NEWDIR/getproj/slang.project"
+get_ok=1
+for round in fetch cached; do
+    out=$(cd "$NEWDIR/getproj" && SLANG_CACHE="$NEWDIR/cache" "$OLDPWD/slangc" get 2>&1) || get_ok=0
+    printf '%s\n' "$out" | grep -qx "demo v1: $NEWDIR/cache/pkg/demo/v1/src" || get_ok=0
+    printf '%s\n' "$out" | grep -qx "other rel/one: $NEWDIR/cache/pkg/other/rel_one" || get_ok=0
+done
+[ -f "$NEWDIR/cache/pkg/demo/v1/src/lib.sl" ] || get_ok=0
+case "$(readlink "$NEWDIR/cache/pkg/demo/v1")" in sha256:*) ;; *) get_ok=0 ;; esac
+if [ "$get_ok" -eq 1 ]; then
+    echo "PASS slangc get (prints a typeable path per package)"
+else
+    echo "FAIL slangc get (typeable package path)"
+    printf '%s\n' "$out" | sed 's/^/  /'
+    fail=1
+fi
 rm -rf "$NEWDIR"
 
 # ---- signals ------------------------------------------------------------
@@ -289,6 +313,27 @@ if grep -q test_only_symbol_marker tests/testcmd/prog/main.gen.c 2>/dev/null; th
 fi
 rm -f tests/testcmd/prog/main.gen.c
 
+# A test that waits for the tasks it spawned (proc.wait_idle) must
+# finish: the runner's own task is not one of them. It used to hang, so
+# it is run with a 60 s watchdog rather than trusted to return.
+./slangc test tests/testcmd/idle >/tmp/sl_testcmd_idle.out 2>&1 &
+idle_pid=$!
+idle_i=0
+while kill -0 "$idle_pid" 2>/dev/null && [ "$idle_i" -lt 120 ]; do
+    sleep 0.5
+    idle_i=$((idle_i + 1))
+done
+if kill -0 "$idle_pid" 2>/dev/null; then
+    pkill -P "$idle_pid" 2>/dev/null
+    kill "$idle_pid" 2>/dev/null
+    wait "$idle_pid" 2>/dev/null
+    tc_fail "proc.wait_idle() inside a test hung"
+else
+    wait "$idle_pid"; code=$?
+    [ "$code" -eq 0 ] && grep -q '^ok: 2 passed' /tmp/sl_testcmd_idle.out ||
+        tc_fail "wait_idle/active_tasks inside a test (exit $code)"
+fi
+
 ./slangc test tests/testcmd/badsig >/dev/null 2>&1; code=$?
 [ "$code" -eq 2 ] || tc_fail "a test with parameters must be rejected (exit 2), got $code"
 
@@ -323,7 +368,27 @@ printf '%s\n' "$out" | grep -q ' strings' || dc_fail "native packages not listed
 printf '%s\n' "$out" | grep -q ' http ' || dc_fail "standard library not listed"
 out=$(./slangc doc builder 2>&1)
 printf '%s\n' "$out" | grep -qx 'fn Str.write(self: Str, s: str) -> Str' || dc_fail "method line"
-printf '%s\n' "$out" | grep -qx '    // Appends, and returns the builder so writes chain.' || dc_fail "doc comment"
+# A summary sits directly ABOVE its item, as in source; printed below,
+# it read as the next item's comment.
+printf '%s\n' "$out" | grep -B1 -x 'fn Str.write(self: Str, s: str) -> Str' |
+    head -1 | grep -qx '// Appends, and returns the builder so writes chain.' || dc_fail "doc comment above its item"
+out=$(cd tests/doccmd && "$OLDPWD/slangc" doc docpkg 2>&1)
+printf '%s\n' "$out" | grep -B1 -x 'fn set_header(name: str, value: str) -> str' | head -1 |
+    grep -qx '// Sets one header.' || dc_fail "listing: summary not above its own item"
+printf '%s\n' "$out" | grep -B1 -x 'fn after_helper() -> int' | head -1 | grep -q '^//' &&
+    dc_fail "listing: a private helper's comment reached the next item"
+# Search: a name fragment, any case; then signatures and docs.
+out=$(cd tests/doccmd && "$OLDPWD/slangc" doc docpkg HEADER 2>&1) || dc_fail "search by name exited nonzero"
+printf '%s\n' "$out" | grep -qx 'fn set_header(name: str, value: str) -> str' || dc_fail "search: function by name"
+printf '%s\n' "$out" | grep -qx 'fn Req.header(self: Req, name: str) -> str' || dc_fail "search: method by name"
+printf '%s\n' "$out" | grep -q 'fn plain' && dc_fail "search: listed a non-match"
+out=$(cd tests/doccmd && "$OLDPWD/slangc" doc docpkg.retry-after 2>&1) || dc_fail "search by doc exited nonzero"
+printf '%s\n' "$out" | grep -qx 'fn set_header(name: str, value: str) -> str' || dc_fail "search: by doc text"
+out=$(cd tests/doccmd && "$OLDPWD/slangc" doc docpkg.Req.header 2>&1)
+[ "$out" = "$(printf '%s\n' '// The value of one request header.' 'fn header(self: Req, name: str) -> str')" ] ||
+    dc_fail "exact item still shown in full: $out"
+(cd tests/doccmd && "$OLDPWD/slangc" doc docpkg nothing_mentions_this >/dev/null 2>&1) &&
+    dc_fail "search with no match must exit nonzero"
 out=$(./slangc doc builder.Str 2>&1)
 printf '%s\n' "$out" | grep -qx 'methods:' || dc_fail "struct shows its methods"
 out=$(./slangc doc httpc.client_post 2>&1)
@@ -350,10 +415,10 @@ for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood \
             spawn_isolation gc_stress maps json json_int_exact flags method_recv \
             method_recv_gc indirect_callee generics_structs generics_json generics_infer \
             generics_pkg gc_nested_literal generics_methods \
-            generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry own_roots switch escape_roots \
+            generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry loop_leaf_poll own_roots switch escape_roots \
             http_read_wire bytes_empty_literal gc_minor_barriers map_delete if_let \
             literal_expect pending_sibling_type json_parity json_utf8 json_decode_budget \
-            gc_container_frontier; do
+            bytes gc_container_frontier; do
     out="/tmp/sl_gcstress_${name}.out"
     if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -383,7 +448,7 @@ for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put \
             json_int_exact flags method_recv method_recv_gc indirect_callee \
             http_read_wire bytes_empty_literal gc_minor_barriers map_delete if_let \
             literal_expect pending_sibling_type json_parity json_utf8 json_decode_budget \
-            gc_container_frontier; do
+            loop_leaf_poll bytes gc_container_frontier; do
     out="/tmp/sl_nursery_${name}.out"
     if ! SLANG_GC_NURSERY_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -413,7 +478,7 @@ for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc
             literal_expect pending_sibling_type \
             gc_nested_literal gc_nursery_barrier gc_nursery_promotion \
             spawn_isolation select maps json json_parity json_utf8 json_decode_budget \
-            http_read_wire http_client_pool http2_flood; do
+            loop_leaf_poll bytes http_read_wire http_client_pool http2_flood; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_verify_minor_${name}.out"
     err="/tmp/sl_verify_minor_${name}.err"
@@ -446,9 +511,10 @@ done
 # coming in under means the budget should come down with it.
 #   http_read_wire       http.read + wants_close on a pipelined GET. Was
 #                        20 (every ok()/err() and struct the parse threaded
-#                        through, an opt per close check); 7 now: the
-#                        WireHead, the path, the header block (a bytes is
-#                        two), and the Request, Incoming and result. The
+#                        through, an opt per close check), then 7 with a
+#                        bytes still two objects; 6 now: the WireHead, the
+#                        path, the header block, and the Request, Incoming
+#                        and result. The
 #                        slack is for requests cut off at the end of the
 #                        buffer: each such parse attempt makes a WireHead
 #                        too (about 13 in 2000 here), and how often that
@@ -460,10 +526,15 @@ done
 #                        number, a string per key); 47 now, the values the
 #                        decode returns: 20 items and their skus, the Quote,
 #                        its region, the list and its growth, and the result.
+#   redis_read_budget    one redis PING round trip, client and in-process
+#                        server together. Was 72, with the bytes copied per
+#                        reply growing toward 1MB (the client appended every
+#                        recv to its whole buffer); 70 now and flat. The
+#                        slack covers a reply split across two recvs.
 echo "--- allocation budgets (SLANG_GC_STAT) ---"
 budget_bad=0
-for spec in http_read_wire:2000:7:40 bytes_empty_literal:100000:0:0 \
-            json_decode_budget:1000:47:0; do
+for spec in http_read_wire:2000:6:40 bytes_empty_literal:100000:0:0 \
+            json_decode_budget:1000:47:0 redis_read_budget:1000:49:20; do
     IFS=: read -r name n per slack <<EOF_SPEC
 $spec
 EOF_SPEC
