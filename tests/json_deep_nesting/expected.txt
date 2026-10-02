@@ -1,0 +1,44 @@
+main depth 100 skipped: ok 1
+main depth 100 tree: err field 'id': expected a number, got a string
+main depth 100 mixed: ok 1
+main depth 511 skipped: ok 1
+main depth 511 tree: err field 'id': expected a number, got a string
+main depth 511 mixed: ok 1
+main depth 512 skipped: ok 1
+main depth 512 tree: err field 'id': expected a number, got a string
+main depth 512 mixed: ok 1
+main depth 513 skipped: err maximum nesting depth (512) exceeded (at byte 517)
+main depth 513 tree: err maximum nesting depth (512) exceeded (at byte 517)
+main depth 513 mixed: err maximum nesting depth (512) exceeded (at byte 1541)
+main node chain 511: ok len=511
+main node chain 512: ok len=512
+main node chain 513: err maximum nesting depth (512) exceeded (at byte 8085)
+main node bad chain 511: err of 7182 bytes, ending eld 'v': expected a number, got a string
+main tree chain 256: ok depth=256
+main tree chain 257: err maximum nesting depth (512) exceeded (at byte 4245)
+main trie chain 255: ok depth=256
+main trie chain 256: err maximum nesting depth (512) exceeded (at byte 5013)
+main unclosed: err unexpected end of input (at byte 405)
+main node unclosed: err unexpected end of input (at byte 5600)
+task depth 100 skipped: ok 1
+task depth 100 tree: err field 'id': expected a number, got a string
+task depth 100 mixed: ok 1
+task depth 511 skipped: ok 1
+task depth 511 tree: err field 'id': expected a number, got a string
+task depth 511 mixed: ok 1
+task depth 512 skipped: ok 1
+task depth 512 tree: err field 'id': expected a number, got a string
+task depth 512 mixed: ok 1
+task depth 513 skipped: err maximum nesting depth (512) exceeded (at byte 517)
+task depth 513 tree: err maximum nesting depth (512) exceeded (at byte 517)
+task depth 513 mixed: err maximum nesting depth (512) exceeded (at byte 1541)
+task node chain 511: ok len=511
+task node chain 512: ok len=512
+task node chain 513: err maximum nesting depth (512) exceeded (at byte 8085)
+task node bad chain 511: err of 7182 bytes, ending eld 'v': expected a number, got a string
+task tree chain 256: ok depth=256
+task tree chain 257: err maximum nesting depth (512) exceeded (at byte 4245)
+task trie chain 255: ok depth=256
+task trie chain 256: err maximum nesting depth (512) exceeded (at byte 5013)
+task unclosed: err unexpected end of input (at byte 405)
+task node unclosed: err unexpected end of input (at byte 5600)
