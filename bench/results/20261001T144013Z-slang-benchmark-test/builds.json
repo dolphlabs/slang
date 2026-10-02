@@ -1,0 +1,27 @@
+{
+  "slang": {
+    "ok": true,
+    "seconds": 20.2,
+    "log": "raw/build-slang.log"
+  },
+  "go": {
+    "ok": true,
+    "seconds": 0.5,
+    "log": "raw/build-go.log"
+  },
+  "rust": {
+    "ok": true,
+    "seconds": 0.6,
+    "log": "raw/build-rust.log"
+  },
+  "java": {
+    "ok": true,
+    "seconds": 3.3,
+    "log": "raw/build-java.log"
+  },
+  "node": {
+    "ok": true,
+    "seconds": 0.5,
+    "log": "raw/build-node.log"
+  }
+}
