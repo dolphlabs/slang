@@ -22,7 +22,20 @@ typedef struct sl_gc_obj {
      * scans it. A hot object stored to repeatedly costs one shard
      * append per minor cycle. */
     unsigned char remembered;
+    /* Phase 1 (§7f) page flag: 1 when this header lives in a per-worker
+     * young page (recycled through the page, never class_push/free).
+     * Uses the header's tail padding: sizeof stays 40 (asserted below). */
+    unsigned char paged;
+    /* The slot's full extent, header included, 8-aligned: what the
+     * allocator reserved (a split remainder or absorbed waste makes
+     * it larger than sizeof + size). The sweep-end hole walk strides
+     * by cap, never by size, so it can never land mid-slot and file
+     * a fragment another claim then overwrites. Fits the last pad
+     * word: sizeof stays 40. */
+    uint32_t cap;
 } sl_gc_obj;
+_Static_assert(sizeof(sl_gc_obj) == 40,
+              "sl_gc_obj grew; retune the young-page slot math");
 
 static sl_gc_obj *sl_gc_young = NULL;
 static sl_gc_obj *sl_gc_old = NULL;
@@ -225,6 +238,16 @@ static int sl_gc_set_contains(void *p) {
  * registration time (a standard, portable technique: the address of
  * a _Thread_local variable is stable for the lifetime of the owning
  * thread). Guarded by sl_gc_mu. */
+/* Defined with the young pages below; named here for the registry. */
+typedef struct sl_gc_page sl_gc_page;
+typedef struct sl_gc_worker_state sl_gc_worker_state;
+
+/* Late page functions the registry entry/exit needs. */
+static void sl_gc_pages_publish(void);
+static void sl_gc_pages_orphan_all(void);
+static void sl_gc_page_stat_dump(void);
+static int sl_gc_page_debug_enabled(void);
+
 typedef struct sl_gc_thread {
     struct sl_gc_thread *next;
     sl_task **task_slot; /* &sl_rt_current_task for this OS thread --
@@ -243,6 +266,10 @@ typedef struct sl_gc_thread {
         on whichever task is current at SCAN time. */
     _Atomic int *blocked_ptr;
     _Atomic unsigned long *acked_cycle_ptr;
+    sl_gc_worker_state *state_ptr; /* &sl_gc_wstate for this OS
+        thread -- published at registration like task_slot, so the
+        sweep-end page prune can reach a stopped thread's page list
+        (same pattern). */
 } sl_gc_thread;
 static sl_gc_thread *sl_gc_threads = NULL;
 
@@ -333,6 +360,7 @@ static void sl_gc_register_thread(void) {
     sl_rt_gc_reg.task_slot = &sl_rt_current_task;
     sl_rt_gc_reg.blocked_ptr = &sl_rt_gc_blocked;
     sl_rt_gc_reg.acked_cycle_ptr = &sl_rt_gc_acked_cycle;
+    sl_gc_pages_publish();
     pthread_mutex_lock(&sl_gc_mu);
     sl_rt_gc_reg.next = sl_gc_threads;
     sl_gc_threads = &sl_rt_gc_reg;
@@ -413,6 +441,10 @@ static void sl_gc_unregister_thread(void) {
             if (*pp == &sl_rt_gc_reg) { *pp = sl_rt_gc_reg.next; break; }
             pp = &(*pp)->next;
         }
+        /* Hand off this worker's young pages (own-thread teardown):
+         * empty ones freed now, the rest orphaned under this same lock
+         * for the next sweep. Live headers keep that memory valid. */
+        sl_gc_pages_orphan_all();
         pthread_mutex_unlock(&sl_gc_mu);
         return;
     }
@@ -816,7 +848,10 @@ static void sl_gc_class_stat_dump(void) {
 }
 
 __attribute__((destructor))
-static void sl_gc_class_stat_atexit(void) { sl_gc_class_stat_dump(); }
+static void sl_gc_class_stat_atexit(void) {
+    sl_gc_class_stat_dump();
+    sl_gc_page_stat_dump();
+}
 
 static int sl_gc_class_for(size_t total) {
     for (int i = 0; i < SL_GC_CLASS_N; i++) {
@@ -885,15 +920,479 @@ static void sl_gc_class_push(sl_gc_obj *h) {
     free(h);
 }
 
+/* ---- Phase 1 (§7f): per-worker young pages ----
+ *
+ * Every object used to be its own malloc, onto a per-task pending list,
+ * then into the young/old linked lists, with a small exact-size
+ * freelist (c40..c320) on the side. The freelist hits ~0% on real
+ * paths (199 of 802,624 allocs on the quote decode bench: variable
+ * string sizes never match an exact class), so each allocation paid a
+ * malloc and each death a free, plus a mutex for the rare hit.
+ *
+ * A page is 16KB, 16KB-aligned, so its struct is one mask away from
+ * any object in it. Small objects (header+payload <= 1024, 8-aligned)
+ * bump-allocate from the owning worker's pages; a death clears its
+ * start bit and drops a live count, and once per surviving page per
+ * sweep the holes are filed into the page's free list by one linear
+ * bitmap walk (already coalesced, in walk order), which the next
+ * claim searches first-fit, splitting only when the remainder still
+ * holds a node; a smaller remainder is absorbed into the taken slot
+ * and covered by its cap, so the walk never sees it. Deaths
+ * outnumber surviving pages a thousand to one, so filing once per
+ * page beats once per death. A page whose live counters both reach
+ * zero is reset at the end of the sweep that emptied it and retained up to the
+ * per-worker cap, so the next cycle bump-allocates over it with no
+ * fragmentation to walk; past the cap, or orphaned with no worker
+ * left to reuse it, it is freed. Larger totals stay on malloc
+ * and keep today's class_push/free path, which this section otherwise
+ * leaves alone.
+ *
+ * Lifetime is exact, not traced: every claim bumps young_live or
+ * old_live by the object's birth gen; every sweep death decrements
+ * one of them; every promotion moves one count across. A page is
+ * empty exactly when both are zero. Headers stay on the same
+ * young/old/pending lists either way, so mark, the remembered set,
+ * the gc_clean frontier and sl_gc_set's build walk nothing new.
+ *
+ * Threading: a worker touches only its own pages (its _Thread_local
+ * list, inside the allocation bracket that pins the task to this
+ * thread), so claims take no lock. The sweep runs stopped-the-world
+ * and may empty another worker's page; it never frees one mid-sweep
+ * (that would strand the owner's list and bump pointer). Instead the
+ * sweep-end prune -- still stopped, still under sl_gc_mu -- unlinks
+ * and frees every empty page from every registered thread's list
+ * (addresses published at registration, the task_slot pattern) and
+ * from the orphan list, and repairs bump pointers. A thread going
+ * away NULLs its own list and orphans what's left; live headers keep
+ * that memory valid until a sweep empties and frees it.
+ *
+ * The per-page start bitmap (one bit per 8-byte slot) records, for
+ * Phase 2's page-table validation, what sl_gc_set knows today. Phase
+ * 1 only maintains it: set on claim, cleared on recycle. */
+
+#define SL_GC_PAGE_SIZE 16384
+#define SL_GC_PAGE_ALIGN 16384
+#define SL_GC_PAGE_MAX_TOTAL 1024
+/* Retained pages per worker, worst case: 64 x 16KB = 1MB. Only
+ * pages holding live objects are retained; empty ones are freed at
+ * the sweep that emptied them, so idle workers hold nothing. Past
+ * the cap, claims fall back to malloc. Size the cap past one nursery
+ * worth of small objects plus survivors: the quote decode bench
+ * allocates ~850KB per minor cycle against a 512KB nursery. */
+#define SL_GC_PAGE_MAX_PAGES 64
+/* A split remainder must still hold a 16-byte free node; anything
+ * smaller is absorbed into the taken slot (and covered by its cap). */
+#define SL_GC_PAGE_MIN_SPLIT 16
+#define SL_GC_PAGE_MAGIC 0x534c4743504147ULL
+#define SL_GC_PAGE_SLOT 8
+#define SL_GC_PAGE_SLOTS (SL_GC_PAGE_SIZE / SL_GC_PAGE_SLOT)
+#define SL_GC_PAGE_BITMAP_WORDS (SL_GC_PAGE_SLOTS / 64)
+
+struct sl_gc_page {
+    unsigned long long magic;
+    sl_gc_page *next; /* owning worker's list (or the orphan list) */
+    size_t bump; /* next fresh offset from the payload start */
+    size_t free_head; /* offset+1 of first free slot, 0 = none */
+    long young_live; /* resident slots born young and not yet swept */
+    long old_live; /* resident slots born old, or promoted */
+    /* full: claimed against and missed this cycle. No death happens
+     * outside a sweep, so a miss stays a miss until the next prune
+     * clears it -- the fallback path skips full pages instead of
+     * re-walking their free lists on every allocation. */
+    unsigned char full;
+    unsigned long long bitmap[SL_GC_PAGE_BITMAP_WORDS];
+    /* payload follows, 8-aligned */
+};
+#define SL_GC_PAGE_PAYLOAD_OFF (((sizeof(sl_gc_page)) + 7) & ~(size_t)7)
+#define SL_GC_PAGE_PAYLOAD_CAP (SL_GC_PAGE_SIZE - SL_GC_PAGE_PAYLOAD_OFF)
+
+/* One TLS word for the allocator: a single accessor read per
+ * allocation instead of one per field. */
+struct sl_gc_worker_state {
+    sl_gc_page *pages;
+    sl_gc_page *cur;
+    int npages;
+};
+static _Thread_local sl_gc_worker_state sl_gc_wstate;
+SL_RT_TLS_ADDR_FN(sl_gc_tls_state, sl_gc_worker_state, sl_gc_wstate)
+
+/* Orphaned pages: non-empty pages of threads that went away, under
+ * sl_gc_mu (unregister and both sweeps already hold it). */
+static sl_gc_page *sl_gc_orphans = NULL;
+
+static _Atomic unsigned long long sl_gc_page_stat_claims = 0;
+static _Atomic unsigned long long sl_gc_page_stat_reuse = 0;
+static _Atomic unsigned long long sl_gc_page_stat_pages = 0;
+static _Atomic unsigned long long sl_gc_page_stat_freed = 0;
+static _Atomic unsigned long long sl_gc_page_stat_fallback = 0;
+static _Atomic unsigned long long sl_gc_page_stat_deaths = 0;
+
+/* Diagnostic counters only: gated on the class-stat env, so the
+ * production path pays one predictable branch, never an atomic. */
+#define SL_GC_PAGE_COUNT(counter) do { \
+    if (sl_gc_class_stat_enabled()) \
+        atomic_fetch_add_explicit(&(counter), 1, memory_order_relaxed); \
+} while (0)
+
+static void sl_gc_page_stat_dump(void) {
+    if (!sl_gc_class_stat_enabled())
+        return;
+    fprintf(stderr, "slang-gc-page-stat claims=%llu reuse=%llu pages=%llu "
+            "freed=%llu fallback=%llu deaths=%llu\n",
+            atomic_load_explicit(&sl_gc_page_stat_claims,
+                                 memory_order_relaxed),
+            atomic_load_explicit(&sl_gc_page_stat_reuse,
+                                 memory_order_relaxed),
+            atomic_load_explicit(&sl_gc_page_stat_pages,
+                                 memory_order_relaxed),
+            atomic_load_explicit(&sl_gc_page_stat_freed,
+                                 memory_order_relaxed),
+            atomic_load_explicit(&sl_gc_page_stat_fallback,
+                                 memory_order_relaxed),
+            atomic_load_explicit(&sl_gc_page_stat_deaths,
+                                 memory_order_relaxed));
+}
+
+static inline sl_gc_page *sl_gc_page_of(const sl_gc_obj *h) {
+    return (sl_gc_page *)((uintptr_t)h & ~(uintptr_t)(SL_GC_PAGE_ALIGN - 1));
+}
+
+static inline void sl_gc_page_mark(sl_gc_page *pg, size_t off) {
+    size_t slot = off / SL_GC_PAGE_SLOT;
+    pg->bitmap[slot / 64] |= 1ULL << (slot % 64);
+}
+
+static inline void sl_gc_page_unmark(sl_gc_page *pg, size_t off) {
+    size_t slot = off / SL_GC_PAGE_SLOT;
+    pg->bitmap[slot / 64] &= ~(1ULL << (slot % 64));
+}
+
+/* Claim `total` bytes from pg: first-fit over the free list (splitting
+ * only when the remainder still holds a node), else the bump pointer.
+ * Returns offset+1, or 0 when neither fits; *reused reports a
+ * free-list hit and *taken the slot's full extent for the header's
+ * cap (bigger than total when a small remainder was absorbed). */
+static size_t sl_gc_page_claim(sl_gc_page *pg, size_t total, int *reused,
+                               size_t *taken) {
+    char *base = (char *)pg + SL_GC_PAGE_PAYLOAD_OFF;
+    size_t *link = &pg->free_head;
+    while (*link) {
+        size_t off = *link - 1;
+        size_t *node = (size_t *)(base + off);
+        if (node[1] >= total) {
+            size_t rem = node[1] - total;
+            if (rem >= SL_GC_PAGE_MIN_SPLIT) {
+                size_t *rn = (size_t *)(base + off + total);
+                rn[0] = node[0];
+                rn[1] = rem;
+                *link = off + total + 1;
+                *taken = total;
+            } else {
+                *link = node[0];
+                *taken = node[1];
+            }
+            *reused = 1;
+            return off + 1;
+        }
+        link = node;
+    }
+    if (pg->bump + total <= SL_GC_PAGE_PAYLOAD_CAP) {
+        size_t off = pg->bump;
+        pg->bump += total;
+        *reused = 0;
+        *taken = total;
+        return off + 1;
+    }
+    return 0;
+}
+
+/* A fresh page for this worker: caller holds the allocation bracket
+ * (aligned_alloc can take a libc lock). Linked onto the worker's
+ * list; NULL past the per-worker cap or on OOM (the caller then falls
+ * back to malloc, so a failed page never fails the allocation). */
+static sl_gc_page *sl_gc_page_new(sl_gc_worker_state *st) {
+    if (st->npages >= SL_GC_PAGE_MAX_PAGES)
+        return NULL;
+    void *mem = aligned_alloc(SL_GC_PAGE_ALIGN, SL_GC_PAGE_SIZE);
+    if (!mem)
+        return NULL;
+    sl_gc_page *pg = (sl_gc_page *)mem;
+    pg->magic = SL_GC_PAGE_MAGIC;
+    pg->next = st->pages;
+    st->pages = pg;
+    pg->bump = 0;
+    pg->free_head = 0;
+    pg->young_live = 0;
+    pg->old_live = 0;
+    pg->full = 0;
+    memset(pg->bitmap, 0, sizeof(pg->bitmap));
+    st->npages++;
+    SL_GC_PAGE_COUNT(sl_gc_page_stat_pages);
+    return pg;
+}
+
+/* Book a claimed slot: start bit, birth-gen count, header flag and
+ * slot extent. `taken` is the slot's full extent (bigger than total
+ * when a small remainder was absorbed); the hole walk strides by it.
+ * With page debugging on, claiming a bit-set slot aborts. */
+static inline sl_gc_obj *sl_gc_page_book(sl_gc_page *pg, size_t got,
+                                         size_t taken, unsigned char gen,
+                                         int reused) {
+    size_t off = got - 1;
+    if (sl_gc_page_debug_enabled()) {
+        size_t slot = off / SL_GC_PAGE_SLOT;
+        if (pg->bitmap[slot / 64] & (1ULL << (slot % 64))) {
+            fprintf(stderr, "slang-gc-page-debug: double claim off %zu\n",
+                    off);
+            abort();
+        }
+    }
+    sl_gc_page_mark(pg, off);
+    if (gen == 0)
+        pg->young_live++;
+    else
+        pg->old_live++;
+    SL_GC_PAGE_COUNT(sl_gc_page_stat_claims);
+    if (reused)
+        SL_GC_PAGE_COUNT(sl_gc_page_stat_reuse);
+    sl_gc_obj *h = (sl_gc_obj *)((char *)pg + SL_GC_PAGE_PAYLOAD_OFF +
+                                 got - 1);
+    h->paged = 1;
+    h->cap = (uint32_t)taken;
+    return h;
+}
+
+/* Reserve `total` (8-aligned, header included) for an object born with
+ * `gen`. NULL when total is over the page limit, the worker is at its
+ * page cap, or a page allocation failed: the caller falls back. One
+ * TLS read per call; pages that missed this cycle are skipped (no
+ * death happens outside a sweep, so a miss stays a miss). */
+static sl_gc_obj *sl_gc_page_alloc(size_t total, unsigned char gen) {
+    if (total > SL_GC_PAGE_MAX_TOTAL)
+        return NULL;
+    sl_gc_worker_state *st = sl_gc_tls_state();
+    /* The bump pointer's page first: the common case stays one page. */
+    sl_gc_page *cur = st->cur;
+    if (cur && !cur->full) {
+        int reused = 0;
+        size_t taken = 0;
+        size_t got = sl_gc_page_claim(cur, total, &reused, &taken);
+        if (got)
+            return sl_gc_page_book(cur, got, taken, gen, reused);
+        cur->full = 1;
+    }
+    for (sl_gc_page *pg = st->pages; pg; pg = pg->next) {
+        if (pg == cur || pg->full)
+            continue;
+        int reused = 0;
+        size_t taken = 0;
+        size_t got = sl_gc_page_claim(pg, total, &reused, &taken);
+        if (got) {
+            st->cur = pg;
+            return sl_gc_page_book(pg, got, taken, gen, reused);
+        }
+        pg->full = 1;
+    }
+    sl_gc_page *pg = sl_gc_page_new(st);
+    if (!pg)
+        return NULL;
+    int reused = 0;
+    size_t taken = 0;
+    size_t got = sl_gc_page_claim(pg, total, &reused, &taken);
+    /* A fresh page always fits a page-sized total, from its bump. */
+    st->cur = pg;
+    return sl_gc_page_book(pg, got, taken, gen, reused);
+}
+
+/* Return a dead paged object to its page: clear its start bit and
+ * drop a live count. O(1): the hole itself is filed later, once per
+ * surviving page per sweep (below), instead of once per death --
+ * deaths outnumber surviving pages a thousand to one. Runs
+ * stopped-the-world, like the sweep that calls it. */
+static void sl_gc_page_free_obj(sl_gc_obj *h) {
+    sl_gc_page *pg = sl_gc_page_of(h);
+    SL_GC_PAGE_COUNT(sl_gc_page_stat_deaths);
+    size_t off = (size_t)((char *)h - ((char *)pg + SL_GC_PAGE_PAYLOAD_OFF));
+    if (sl_gc_page_debug_enabled()) {
+        size_t slot = off / SL_GC_PAGE_SLOT;
+        if (!(pg->bitmap[slot / 64] & (1ULL << (slot % 64)))) {
+            fprintf(stderr, "slang-gc-page-debug: double free off %zu\n",
+                    off);
+            abort();
+        }
+    }
+    sl_gc_page_unmark(pg, off);
+    if (h->gen == 0)
+        pg->young_live--;
+    else
+        pg->old_live--;
+}
+
+/* File one surviving page's holes after a sweep: a linear walk over
+ * the bitmap, live objects skipped by their slot extents, dead runs
+ * filed as free slots. Runs are maximal by construction (every dead
+ * byte belonged to a dead slot of at least node size), already
+ * coalesced, in walk order. Striding by cap, not size, is what keeps
+ * absorbed waste inside its owner's stride instead of filing it as a
+ * fragment the next claim overwrites a live header with. */
+static void sl_gc_page_rebuild_free(sl_gc_page *pg) {
+    char *base = (char *)pg + SL_GC_PAGE_PAYLOAD_OFF;
+    pg->free_head = 0;
+    size_t off = 0;
+    while (off < pg->bump) {
+        size_t slot = off / SL_GC_PAGE_SLOT;
+        if (pg->bitmap[slot / 64] & (1ULL << (slot % 64))) {
+            sl_gc_obj *h = (sl_gc_obj *)(base + off);
+            if (h->cap < 40 || (h->cap % SL_GC_PAGE_SLOT) != 0 ||
+                off + h->cap > pg->bump) {
+                fprintf(stderr, "slang: corrupt page slot cap %u at %zu\n",
+                        h->cap, off);
+                abort();
+            }
+            off += h->cap;
+        } else {
+            size_t start = off;
+            do {
+                off += SL_GC_PAGE_SLOT;
+                slot = off / SL_GC_PAGE_SLOT;
+            } while (off < pg->bump &&
+                     !(pg->bitmap[slot / 64] & (1ULL << (slot % 64))));
+            size_t *node = (size_t *)(base + start);
+            node[0] = pg->free_head;
+            node[1] = off - start;
+            pg->free_head = start + 1;
+        }
+    }
+}
+
+/* A young paged object survived: still resident, now old's. */
+static inline void sl_gc_page_promoted(sl_gc_obj *h) {
+    sl_gc_page *pg = sl_gc_page_of(h);
+    pg->young_live--;
+    pg->old_live++;
+}
+
+/* Drop every empty page from one worker's list (headp/curp/npp are
+ * that worker's published TLS addresses, or a local orphan-list pair
+ * with NULLs) and repair its bump pointer. Empty worker pages are
+ * reset and retained up to the per-worker cap -- everything in them
+ * just died, so the next cycle bump-allocates over them with no
+ * fragmentation to walk -- and freed past it; orphan empties (no
+ * worker left to reuse them) are always freed. Pages that survived
+ * keep their holes for cross-cycle reuse. The survivor count goes
+ * back into the worker's page cap, so freed pages reopen room for new
+ * ones. Stopped-the-world; frees under sl_gc_mu, the sweep's own
+ * standing practice. */
+static void sl_gc_pages_prune_list(sl_gc_page **headp, sl_gc_page **curp,
+                                   int *npp, int retain) {
+    int nlive = 0;
+    for (sl_gc_page *pg = *headp; pg; pg = pg->next)
+        if (pg->young_live != 0 || pg->old_live != 0)
+            nlive++;
+    int keep = retain && nlive < SL_GC_PAGE_MAX_PAGES
+                   ? SL_GC_PAGE_MAX_PAGES - nlive
+                   : 0;
+    sl_gc_page *cur = curp ? *curp : NULL;
+    int cur_dead = 0;
+    int n = nlive;
+    sl_gc_page **link = headp;
+    while (*link) {
+        sl_gc_page *pg = *link;
+        if (pg->young_live == 0 && pg->old_live == 0) {
+            if (keep > 0) {
+                /* Everything in it died: start the page over. */
+                pg->bump = 0;
+                pg->free_head = 0;
+                pg->full = 0;
+                memset(pg->bitmap, 0, sizeof(pg->bitmap));
+                keep--;
+                n++;
+                link = &pg->next;
+                continue;
+            }
+            if (pg == cur)
+                cur_dead = 1;
+            *link = pg->next;
+            free(pg);
+            SL_GC_PAGE_COUNT(sl_gc_page_stat_freed);
+            continue;
+        }
+        /* Survived with new holes from this sweep: misses expire. */
+        pg->full = 0;
+        sl_gc_page_rebuild_free(pg);
+        n++;
+        link = &pg->next;
+    }
+    if (curp && cur_dead)
+        *curp = *headp;
+    if (npp)
+        *npp = n;
+}
+
+/* The sweep-end prune reaches these through the registry. */
+static void sl_gc_pages_publish(void) {
+    sl_rt_gc_reg.state_ptr = &sl_gc_wstate;
+}
+
+/* Exiting thread's handoff: free what's empty, orphan the rest under
+ * the caller's sl_gc_mu. Bare TLS: own-thread teardown. */
+static void sl_gc_pages_orphan_all(void) {
+    sl_gc_page *pg = sl_gc_wstate.pages;
+    sl_gc_wstate.pages = NULL;
+    sl_gc_wstate.cur = NULL;
+    sl_gc_wstate.npages = 0;
+    while (pg) {
+        sl_gc_page *nx = pg->next;
+        if (pg->young_live == 0 && pg->old_live == 0) {
+            free(pg);
+            SL_GC_PAGE_COUNT(sl_gc_page_stat_freed);
+        } else {
+            pg->next = sl_gc_orphans;
+            sl_gc_orphans = pg;
+        }
+        pg = nx;
+    }
+}
+
+/* End of either sweep: free what emptied, everywhere. */
+static void sl_gc_pages_sweep_end(void) {
+    for (sl_gc_thread *gt = sl_gc_threads; gt; gt = gt->next) {
+        sl_gc_worker_state *st = gt->state_ptr;
+        sl_gc_pages_prune_list(&st->pages, &st->cur, &st->npages, 1);
+    }
+    sl_gc_pages_prune_list(&sl_gc_orphans, NULL, NULL, 0);
+}
+
+/* The sweep's way to let go of a dead object: paged ones return to
+ * their page, everything else keeps the class freelist path. */
+static inline void sl_gc_recycle(sl_gc_obj *h) {
+    if (h->paged)
+        sl_gc_page_free_obj(h);
+    else
+        sl_gc_class_push(h);
+}
+
 static void *sl_gc_alloc_gen(size_t n,
                              void (*trace)(void *, void (*)(void *)),
                              void (*fini)(void *), unsigned char gen) {
     sl_rt_preempt_disable();
     sl_task *t = sl_rt_cur();
-    sl_gc_obj *h = sl_gc_class_pop(sizeof(sl_gc_obj) + n);
+    /* Pages first (no lock, this worker's own), then the exact-size
+     * class freelist, then malloc: every path below zeroes and links
+     * the header the same way. */
+    size_t total = sizeof(sl_gc_obj) + n;
+    sl_gc_obj *h = NULL;
+    if (total <= SL_GC_PAGE_MAX_TOTAL) {
+        h = sl_gc_page_alloc((total + 7) & ~(size_t)7, gen);
+        if (!h)
+            SL_GC_PAGE_COUNT(sl_gc_page_stat_fallback);
+    } else {
+        h = sl_gc_class_pop(total);
+    }
     if (!h) {
-        h = (sl_gc_obj *)malloc(sizeof(sl_gc_obj) + n);
+        h = (sl_gc_obj *)malloc(total);
         if (!h) { fprintf(stderr, "slang: out of memory\n"); exit(1); }
+        h->paged = 0;
     }
     memset(h + 1, 0, n);
     h->size = n;
@@ -1130,6 +1629,191 @@ static void sl_gc_scan_conservative(uintptr_t lo, uintptr_t hi) {
     }
 }
 
+/* Page invariant checker (SLANG_GC_PAGE_DEBUG): validates the whole
+ * young-page accounting at the start of every set build -- listed
+ * headers have bits set and vice versa, free chains stay in-bounds,
+ * per-page counters match their listed headers. Slow (quadratic in
+ * places), like SLANG_GC_VERIFY_MINOR, and off unless asked. */
+static int sl_gc_page_debug_enabled(void) {
+    static int cached = -1;
+    if (cached < 0)
+        cached = getenv("SLANG_GC_PAGE_DEBUG") ? 1 : 0;
+    return cached;
+}
+
+static void sl_gc_page_check_list(const char *what, sl_gc_obj *head) {
+    for (sl_gc_obj *h = head; h; h = h->next) {
+        if (!h->paged)
+            continue;
+        sl_gc_page *pg = sl_gc_page_of(h);
+        if (pg->magic != SL_GC_PAGE_MAGIC) {
+            fprintf(stderr, "slang-gc-page-debug: %s header %p paged but "
+                    "page magic %llx\n", what, (void *)h, pg->magic);
+            abort();
+        }
+        size_t off = (size_t)((char *)h - ((char *)pg +
+                                           SL_GC_PAGE_PAYLOAD_OFF));
+        size_t slot = off / SL_GC_PAGE_SLOT;
+        if (!(pg->bitmap[slot / 64] & (1ULL << (slot % 64)))) {
+            fprintf(stderr, "slang-gc-page-debug: %s header %p paged but "
+                    "bit clear (off %zu)\n", what, (void *)h, off);
+            abort();
+        }
+    }
+}
+
+static void sl_gc_page_check_free(sl_gc_page *pg) {
+    char *base = (char *)pg + SL_GC_PAGE_PAYLOAD_OFF;
+    size_t link = pg->free_head;
+    /* More steps than slots means a cycle: a slot filed twice. */
+    for (size_t steps = 0; steps <= SL_GC_PAGE_SLOTS + 1; steps++) {
+        if (!link)
+            return;
+        if (steps > SL_GC_PAGE_SLOTS) {
+            fprintf(stderr, "slang-gc-page-debug: free list cycle\n");
+            abort();
+        }
+        size_t off = link - 1;
+        size_t *node = (size_t *)(base + off);
+        size_t slot = off / SL_GC_PAGE_SLOT;
+        if (pg->bitmap[slot / 64] & (1ULL << (slot % 64))) {
+            fprintf(stderr, "slang-gc-page-debug: free slot off %zu bit "
+                    "set (live?)\n", off);
+            abort();
+        }
+        link = node[0];
+    }
+}
+
+static int sl_gc_page_listed(sl_gc_obj *h) {
+    for (sl_gc_obj *o = sl_gc_young; o; o = o->next)
+        if (o == h)
+            return 1;
+    for (sl_gc_obj *o = sl_gc_old; o; o = o->next)
+        if (o == h)
+            return 1;
+    return 0;
+}
+
+static void sl_gc_page_debug_check(void) {
+    if (!sl_gc_page_debug_enabled())
+        return;
+    static int once = 0;
+    if (!once) {
+        once = 1;
+        fprintf(stderr, "slang-gc-page-debug: validator alive\n");
+    }
+    sl_gc_page_check_list("young", sl_gc_young);
+    sl_gc_page_check_list("old", sl_gc_old);
+    /* Pending and retired headers pin their slots too: a clear bit on
+     * any of them means the page can be reset under a live object. */
+    sl_gc_obj *ret = atomic_load_explicit(&sl_gc_retired,
+                                          memory_order_relaxed);
+    sl_gc_page_check_list("retired", ret);
+    /* Reverse: every set bit must be a listed header. A set bit with
+     * no owner is a stale mark the rebuild walk would read as a live
+     * header and skip by, filing the bytes after it as free. */
+    for (sl_gc_thread *gt = sl_gc_threads; gt; gt = gt->next) {
+        sl_gc_worker_state *st = gt->state_ptr;
+        if (!st)
+            continue;
+        for (sl_gc_page *pg = st->pages; pg; pg = pg->next) {
+            char *base = (char *)pg + SL_GC_PAGE_PAYLOAD_OFF;
+            for (size_t off = 0; off < pg->bump; off += SL_GC_PAGE_SLOT) {
+                size_t slot = off / SL_GC_PAGE_SLOT;
+                if (!(pg->bitmap[slot / 64] & (1ULL << (slot % 64))))
+                    continue;
+                if (!sl_gc_page_listed((sl_gc_obj *)(base + off))) {
+                    fprintf(stderr, "slang-gc-page-debug: stale bit off "
+                            "%zu\n", off);
+                    abort();
+                }
+            }
+        }
+    }
+    for (sl_gc_thread *gt = sl_gc_threads; gt; gt = gt->next) {
+        sl_gc_worker_state *st = gt->state_ptr;
+        if (!st)
+            continue;
+        for (sl_gc_page *pg = st->pages; pg; pg = pg->next) {
+            if (pg->magic != SL_GC_PAGE_MAGIC) {
+                fprintf(stderr, "slang-gc-page-debug: worker page magic "
+                        "%llx\n", pg->magic);
+                abort();
+            }
+            sl_gc_page_check_free(pg);
+        }
+    }
+    for (sl_gc_page *pg = sl_gc_orphans; pg; pg = pg->next)
+        sl_gc_page_check_free(pg);
+    /* Counter sums: every page's young_live + old_live must equal its
+     * listed headers. A shortfall frees the page under live objects;
+     * an excess pins it. Either corrupts. */
+    for (sl_gc_thread *gt = sl_gc_threads; gt; gt = gt->next) {
+        sl_gc_worker_state *st = gt->state_ptr;
+        if (!st)
+            continue;
+        for (sl_gc_page *pg = st->pages; pg; pg = pg->next) {
+            long young = 0, old = 0;
+            for (sl_gc_obj *o = sl_gc_young; o; o = o->next) {
+                if (!o->paged)
+                    continue;
+                if (sl_gc_page_of(o) == pg) {
+                    if (o->gen == 0)
+                        young++;
+                    else
+                        old++;
+                }
+            }
+            for (sl_gc_obj *o = sl_gc_old; o; o = o->next) {
+                if (!o->paged)
+                    continue;
+                if (sl_gc_page_of(o) == pg) {
+                    if (o->gen == 0)
+                        young++;
+                    else
+                        old++;
+                }
+            }
+            if (young != pg->young_live || old != pg->old_live) {
+                fprintf(stderr, "slang-gc-page-debug: page %p counts "
+                        "(%ld,%ld) vs listed (%ld,%ld)\n", (void *)pg,
+                        pg->young_live, pg->old_live, young, old);
+                abort();
+            }
+        }
+    }
+    /* Free chains must stay inside their page: bounded links, no
+     * cycles, sane sizes. A wild chain makes the next claim write a
+     * header into live memory. */
+    for (sl_gc_thread *gt = sl_gc_threads; gt; gt = gt->next) {
+        sl_gc_worker_state *st = gt->state_ptr;
+        if (!st)
+            continue;
+        for (sl_gc_page *pg = st->pages; pg; pg = pg->next) {
+            char *base = (char *)pg + SL_GC_PAGE_PAYLOAD_OFF;
+            size_t link = pg->free_head;
+            for (size_t steps = 0; link; steps++) {
+                if (steps > SL_GC_PAGE_SLOTS ||
+                    link - 1 >= SL_GC_PAGE_PAYLOAD_CAP ||
+                    (link - 1) % SL_GC_PAGE_SLOT != 0) {
+                    fprintf(stderr, "slang-gc-page-debug: bad free chain "
+                            "link %zu\n", link);
+                    abort();
+                }
+                size_t *node = (size_t *)(base + link - 1);
+                if (node[1] < 16 ||
+                    link - 1 + node[1] > SL_GC_PAGE_PAYLOAD_CAP) {
+                    fprintf(stderr, "slang-gc-page-debug: bad free node "
+                            "size %zu\n", node[1]);
+                    abort();
+                }
+                link = node[0];
+            }
+        }
+    }
+}
+
 /* Build the 'is this pointer one of mine' table for one collection,
  * from sl_gc_young -- which by now also holds every task's pending
  * allocations, spliced on just before this runs -- and, with `with_old`,
@@ -1144,6 +1828,7 @@ static void sl_gc_scan_conservative(uintptr_t lo, uintptr_t hi) {
  * comment. Sized for the population up front at a 0.5 load factor, so
  * sl_gc_set_raw_insert needs no grow path. */
 static void sl_gc_set_build(int with_old) {
+    sl_gc_page_debug_check();
     size_t n = 0;
     for (sl_gc_obj *o = sl_gc_young; o; o = o->next) n++;
     if (with_old)
@@ -1662,10 +2347,12 @@ static void sl_gc_collect_minor_real(void) {
             *mpp = h->next;
             if (h->fini)
                 h->fini((void *)(h + 1));
-            sl_gc_class_push(h);
+            sl_gc_recycle(h);
             swept++;
         } else {
             *mpp = h->next;
+            if (h->paged && h->gen == 0)
+                sl_gc_page_promoted(h);
             h->marked = 0;
             h->remembered = 0;
             h->gen = 1;
@@ -1679,6 +2366,7 @@ static void sl_gc_collect_minor_real(void) {
         for (sl_gc_obj *o = sl_gc_old; o; o = o->next)
             o->marked = 0;
     sl_gc_drain_retired();
+    sl_gc_pages_sweep_end();
     /* The table's only reader is mark, which runs only inside a
      * collection -- so it is dead weight between collections and is
      * released rather than carried. See sl_gc_set's own comment. */
@@ -1775,6 +2463,8 @@ static void sl_gc_collect(void) {
             live_bytes += sizeof(sl_gc_obj) + h->size;
             h->marked = 0;
             h->remembered = 0;
+            if (h->paged && h->gen == 0)
+                sl_gc_page_promoted(h);
             h->gen = 1;
             *pp = h->next;
             h->next = NULL;
@@ -1788,7 +2478,7 @@ static void sl_gc_collect(void) {
             *pp = h->next;
             if (h->fini)
                 h->fini((void *)(h + 1));
-            sl_gc_class_push(h);
+            sl_gc_recycle(h);
             swept++;
         }
     }
@@ -1805,7 +2495,7 @@ static void sl_gc_collect(void) {
             *pp = h->next;
             if (h->fini)
                 h->fini((void *)(h + 1));
-            sl_gc_class_push(h);
+            sl_gc_recycle(h);
             swept++;
         }
     }
@@ -1814,6 +2504,7 @@ static void sl_gc_collect(void) {
         sl_gc_old = promoted_head;
     }
     sl_gc_drain_retired();
+    sl_gc_pages_sweep_end();
     /* The table's only reader is mark, which runs only inside a
      * collection -- so it is dead weight between collections and is
      * released rather than carried. See sl_gc_set's own comment. */
