@@ -1229,13 +1229,17 @@ static void sl_json_sb_init(sl_json_sb *sb) {
     sb->cap = 0;
 }
 
-static void sl_json_sb_append_n(sl_json_sb *sb, const char *s, long long n) {
-    if (sb->len + n + 1 > sb->cap) {
+static void sl_json_sb_grow(sl_json_sb *sb, long long need) {
+    if (sb->len + need + 1 > sb->cap) {
         long long cap = sb->cap ? sb->cap * 2 : 64;
-        while (cap < sb->len + n + 1) cap *= 2;
+        while (cap < sb->len + need + 1) cap *= 2;
         sb->data = (char *)sl_gc_realloc(sb->data, (size_t)cap);
         sb->cap = cap;
     }
+}
+
+static void sl_json_sb_append_n(sl_json_sb *sb, const char *s, long long n) {
+    sl_json_sb_grow(sb, n);
     memcpy(sb->data + sb->len, s, (size_t)n);
     sb->len += n;
     sb->data[sb->len] = 0;
@@ -1243,6 +1247,22 @@ static void sl_json_sb_append_n(sl_json_sb *sb, const char *s, long long n) {
 
 static void sl_json_sb_append(sl_json_sb *sb, const char *s) {
     sl_json_sb_append_n(sb, s, (long long)strlen(s));
+}
+
+/* Escaping tail of the string encoder below, predeclared: the clean fast
+ * path calls it, so it must be declared before it. */
+static void sl_json_enc_str_esc(const char *s, long long n, long long i,
+                                sl_json_sb *out);
+
+/* No byte needing an escape: quotes and bytes in one grow check. */
+static void sl_json_enc_str_clean(const char *s, long long n, sl_json_sb *out) {
+    sl_json_sb_grow(out, n + 2);
+    char *w = out->data + out->len;
+    w[0] = '"';
+    memcpy(w + 1, s, (size_t)n);
+    w[n + 1] = '"';
+    w[n + 2] = 0;
+    out->len += n + 2;
 }
 
 /* ---- json: scalar encode helpers ---- */
@@ -1276,50 +1296,105 @@ static void sl_json_enc_bytes(sl_bytes *b, sl_json_sb *out) {
 }
 
 static void sl_json_enc_str(const char *s, sl_json_sb *out) {
-    sl_json_sb_append_n(out, "\"", 1);
-    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+    long long n = (long long)strlen(s);
+    long long i = 0;
+    /* Strings with no escape (every SKU and region on the quote path)
+     * take the memcpy path. Only the first dirty byte diverts to the
+     * reserving tail. */
+    while (i < n) {
+        unsigned char c = (unsigned char)s[i];
+        if (c == '"' || c == '\\' || c < 0x20) break;
+        i++;
+    }
+    if (i == n) {
+        sl_json_enc_str_clean(s, n, out);
+        return;
+    }
+    sl_json_enc_str_esc(s, n, i, out);
+}
+
+static void sl_json_enc_str_esc(const char *s, long long n, long long i,
+                                sl_json_sb *out) {
+    /* Worst case: every byte becomes \u00XX (6 bytes), plus the quotes.
+     * The clean prefix s[0..i) copies first, so the loop starts at the
+     * first dirty byte instead of re-walking it. */
+    sl_json_sb_grow(out, n * 6 + 2);
+    char *w = out->data + out->len;
+    char *dst = w;
+    *w++ = '"';
+    if (i > 0) {
+        memcpy(w, s, (size_t)i);
+        w += i;
+    }
+    for (const unsigned char *p = (const unsigned char *)s + i; *p; p++) {
         switch (*p) {
-        case '"':  sl_json_sb_append(out, "\\\""); break;
-        case '\\': sl_json_sb_append(out, "\\\\"); break;
-        case '\n': sl_json_sb_append(out, "\\n"); break;
-        case '\r': sl_json_sb_append(out, "\\r"); break;
-        case '\t': sl_json_sb_append(out, "\\t"); break;
-        case '\b': sl_json_sb_append(out, "\\b"); break;
-        case '\f': sl_json_sb_append(out, "\\f"); break;
+        case '"':  *w++ = '\\'; *w++ = '"'; break;
+        case '\\': *w++ = '\\'; *w++ = '\\'; break;
+        case '\n': *w++ = '\\'; *w++ = 'n'; break;
+        case '\r': *w++ = '\\'; *w++ = 'r'; break;
+        case '\t': *w++ = '\\'; *w++ = 't'; break;
+        case '\b': *w++ = '\\'; *w++ = 'b'; break;
+        case '\f': *w++ = '\\'; *w++ = 'f'; break;
         default:
             if (*p < 0x20) {
-                char buf[8];
-                sl_rt_preempt_disable(); /* Tier 11 eighth slice --
-                    snprintf's internal locale locking, see sl_jerr's
-                    own comment above */
-                snprintf(buf, sizeof(buf), "\\u%04x", *p);
-                sl_rt_preempt_enable();
-                sl_json_sb_append(out, buf);
+                /* No libc: the old tail below snprintf'd "\\u%04x" here
+                 * behind a preempt bracket (see sl_jerr). A control byte
+                 * is one hex digit short of 0x10, zero-padded to four. */
+                static const char hexd[16] = "0123456789abcdef";
+                *w++ = '\\'; *w++ = 'u'; *w++ = '0'; *w++ = '0';
+                *w++ = hexd[(*p >> 4) & 15]; *w++ = hexd[*p & 15];
             } else {
-                char c = (char)*p;
-                sl_json_sb_append_n(out, &c, 1);
+                *w++ = (char)*p;
             }
         }
     }
-    sl_json_sb_append_n(out, "\"", 1);
+    *w++ = '"';
+    *w = 0;
+    out->len += w - dst;
 }
 
 /* Tier 11 eighth slice: bracketed -- see sl_jerr's own comment
- * above for why (snprintf's internal locale locking). */
+ * above for why (snprintf's internal locale locking). i64/u64 bypass it
+ * entirely below with a digit loop: snprintf's locale lock is the reason
+ * the bracket existed at all, and %lld pays a full format parse per
+ * value. A quote body carries 4000 of them. */
 static void sl_json_enc_i64(long long v, sl_json_sb *out) {
-    sl_rt_preempt_disable();
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%lld", v);
-    sl_rt_preempt_enable();
-    sl_json_sb_append(out, buf);
+    /* 20 bytes covers sign + 19 digits. */
+    sl_json_sb_grow(out, 20);
+    char *w = out->data + out->len;
+    char *dst = w;
+    char tmp[20];
+    int n = 0;
+    unsigned long long mag;
+    if (v < 0) {
+        /* INT64_MIN has no positive long long; negate in unsigned. */
+        mag = (unsigned long long)(-(v + 1)) + 1;
+    } else {
+        mag = (unsigned long long)v;
+    }
+    do {
+        tmp[n++] = (char)('0' + mag % 10);
+        mag /= 10;
+    } while (mag);
+    if (v < 0) tmp[n++] = '-';
+    for (int i = n - 1; i >= 0; i--) *w++ = tmp[i];
+    *w = 0;
+    out->len += w - dst;
 }
 
 static void sl_json_enc_u64(unsigned long long v, sl_json_sb *out) {
-    sl_rt_preempt_disable();
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%llu", v);
-    sl_rt_preempt_enable();
-    sl_json_sb_append(out, buf);
+    sl_json_sb_grow(out, 20);
+    char *w = out->data + out->len;
+    char *dst = w;
+    char tmp[20];
+    int n = 0;
+    do {
+        tmp[n++] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v);
+    for (int i = n - 1; i >= 0; i--) *w++ = tmp[i];
+    *w = 0;
+    out->len += w - dst;
 }
 
 static void sl_json_enc_f64(double v, sl_json_sb *out) {
@@ -1331,12 +1406,21 @@ static void sl_json_enc_f64(double v, sl_json_sb *out) {
 }
 
 static void sl_json_enc_bool(bool v, sl_json_sb *out) {
-    sl_json_sb_append(out, v ? "true" : "false");
+    if (v) {
+        sl_json_sb_append_n(out, "true", 4);
+    } else {
+        sl_json_sb_append_n(out, "false", 5);
+    }
 }
 
 static void sl_json_enc_null(sl_json_sb *out) {
-    sl_json_sb_append(out, "null");
+    sl_json_sb_append_n(out, "null", 4);
 }
+
+/* Old byte-at-a-time encoder, kept declared but undefined: documents what
+ * the two paths above replace (a strlen per escape, an append per byte,
+ * snprintf per integer). Any accidental call fails at link time. */
+static void sl_json_enc_str_old(const char *s, sl_json_sb *out);
 
 /* ---- json: map iteration helpers (sl_map is defined earlier in
  * RUNTIME; these read its fields directly, in insertion order) ---- */
