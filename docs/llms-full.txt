@@ -75,6 +75,8 @@ slangc doc                     # every package this directory can import
 slangc doc http                # its exported items, one line each
 slangc doc builder.Str         # one item: its comment, and a struct's fields and methods
 slangc doc httpc client_post   # the same, as two words
+slangc doc http header         # no such item: every item whose name contains
+                               # "header" (any case), else whose signature or doc does
 ```
 
 ```
@@ -85,8 +87,8 @@ gc struct Str {
 }
 
 methods:
+  // Appends, and returns the builder so writes chain.
   fn write(self: Str, s: str) -> Str
-      // Appends, and returns the builder so writes chain.
   ...
 ```
 
@@ -3054,6 +3056,10 @@ not it imports `proc` for anything else (`proc.getenv`, say).
 `proc.active_tasks()` counts currently-running `spawn`ed tasks.
 `proc.wait_idle()` parks until that count is zero, so a
 shutting-down program can drain in-flight work without polling.
+Called from a spawned task, neither counts the caller (nor, for
+`wait_idle`, other tasks also waiting in it), so a task can drain the
+rest without waiting for itself; every test under `slangc test` is such
+a task.
 
 ```slang
 import "net";
@@ -4934,7 +4940,11 @@ and the lock still hashes the whole clone, so what was verified is what
 was fetched.
 
 `slangc get` clones each `pkg` line into `$SLANG_CACHE/pkg/<name>/<hash>`
-(`~/.cache/slang` if unset). If a fetched package has its own
+(`~/.cache/slang` if unset), links `$SLANG_CACHE/pkg/<name>/<tag>` to it
+(a `/` in the tag becomes `_`), and prints one line per package with
+that typeable path — `zokor v0.1.0: /home/you/.cache/slang/pkg/zokor/v0.1.0/src`
+— for reading a package's source or docs. Builds never go through the
+link; they use the lock's hash. If a fetched package has its own
 `slang.project`, those pins are fetched too and recorded only in
 `slang.lock`. Compile does not hit the network. A missing lock, missing
 cache, or hash mismatch is an error. Same short name at two git/tag
@@ -8049,6 +8059,10 @@ not it imports `proc` for anything else (`proc.getenv`, say).
 `proc.active_tasks()` counts currently-running `spawn`ed tasks.
 `proc.wait_idle()` parks until that count is zero, so a
 shutting-down program can drain in-flight work without polling.
+Called from a spawned task, neither counts the caller (nor, for
+`wait_idle`, other tasks also waiting in it), so a task can drain the
+rest without waiting for itself; every test under `slangc test` is such
+a task.
 
 ```slang
 import "net";

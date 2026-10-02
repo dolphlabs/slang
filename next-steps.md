@@ -330,6 +330,109 @@ stack, up to the 512-level cap, for recursive target types too
   run under `SLANG_GC_VERIFY_MINOR`. Testing it found the map `del` bug
   (#252).
 
+## 7e. Leaf-loop safepoints (design note, approved 2026-10-01; implements §5)
+
+**Problem.** Every `while`/`for` iteration emits a full safepoint
+enter/exit: a roots array, a `sl_safepoint`, `sl_rt_safepoint_enter` (TLS
+read — a TLV call through dyld on Darwin), stack-growth probe, GC
+check-in, preemption sample, and exit (another TLS read). Byte-scan loops
+with no call and no allocation (`while b[i] != 44 { i = i + 1; }`) pay
+all of it. Batch's parser runs ~30 such iterations per CSV row.
+
+**Guarantees a safepoint provides, and what a leaf loop needs of each:**
+
+- **GC stop-the-world.** `sl_gc_stw_sync` waits for every thread to ack or
+  block; a thread spinning in a no-check-in loop still acks because the
+  async-preemption path (SIGUSR1 → trampoline → queued with
+  `async_preempted=1`) lands it at an ack point. Bound: ticker tick (2 ms
+  default) + quantum (10 ms default). The collector then roots that task
+  through its safepoint chain *plus* a conservative scan of the
+  interrupted stack (queued/running-task scan), so a hoisted bracket plus
+  the conservative fallback keep it sound. Must still be measured (STW
+  latency under a spinning leaf loop), not assumed.
+- **Rooting.** Roots arrays snapshot pointer values at enter. A leaf loop
+  may reassign pointer variables (`p = p.next`); if the frame is hoisted
+  out of the loop the snapshot goes stale and only the conservative scan
+  of an async-preempted task would see the new value. So: hoist the
+  bracket (roots stay linked and correct — the chain always points at the
+  live frame), but do NOT drop the per-iteration check down to nothing
+  for loops that reassign pointers. Leaf loops whose pointer variables
+  are all loop-invariant may skip the per-iteration check entirely (async
+  preemption covers STW + fairness); all other leaf loops get the cheap
+  poll below.
+- **Stack growth.** Only happens at safepoints; a leaf loop creates no new
+  frames, so no growth check is needed inside it. (The hoisted enter
+  still probes once.)
+- **Preemption fairness.** A task in a long leaf loop must still yield.
+  The poll below checks the same condition `sl_rt_maybe_yield` checks;
+  async preemption covers the rest. Proven by `tests/sched_fairness` and
+  `SLANG_SCHED_STAT=1` with forced preemption.
+
+**Design (Option B, chosen): cheap poll per iteration, full safepoint
+only when set.** Codegen detects a *leaf body*: no call (including
+method calls, spawn, and anything that lowers to a call), no allocation
+(list/map literals, struct literals, string concat, `none`/`ok`/`err`
+wrappers that allocate), no park (channel ops, `select`, blocking net/io).
+For a leaf `while`/`for` with live GC roots, emit the bracket hoisted
+around the loop plus, per iteration, one relaxed load of the existing
+GC-request flag (`sl_gc_stop_requested` / collect-pending, the same
+condition `sl_rt_gc_checkin` tests) and the run-queue-nonempty preemption
+gate: if either is set, take the full `sl_rt_safepoint_enter` path
+(re-link + check-in + sampled yield); else continue with zero TLS reads.
+Scalar leaf loops keep today's 1-in-1024 sampled `sl_rt_maybe_yield`
+(already cheap). Fallback if the per-iteration load still shows in
+profiles: counted poll every N iterations (Option C).
+
+**Correctness rules:** the poll reads only atomics, never TLS (arm64
+thread-pointer caching is unaffected); no allocation exists in a leaf
+body so the no-safepoint-between-alloc-and-init rule is vacuous; the
+hoisted bracket keeps every loop-carried root linked for the whole loop;
+generated C stays warning-free under gcc and clang.
+
+**Evidence required before merge:** single-threaded batch 5M rows ABBA
+(medians + raw); `tests/sched_fairness` + the preemption-alignment
+section of `make test`; a new test where a tight leaf loop in one task
+must not stall another task's GC beyond a stated bound (fails if leaf
+loops neither poll nor get preempted); full GC verifier matrix
+(`SLANG_GC_VERIFY_MINOR=1 SLANG_GC_NURSERY_KB=16`, incl. forced async
+preemption, `missed=0`); linux-arm64 CI dispatch.
+
+## 7f. Cheaper young-object allocation (design note, approved 2026-10-01)
+
+**Problem.** Every object is its own `malloc` with an `sl_gc_obj` header,
+onto a per-task pending list, then into young/old linked lists, with a
+small size-class freelist (`c40..c320`). Every collection rebuilds
+`sl_gc_set`, a hash set of *every* object start. One 97 KB 2,000-item
+decode: ~905 µs, ~4,000 allocations (the minimum: one struct + one string
+per item); GC ~30%, per-object malloc most of the rest. Lower the cost
+*per allocation* and *per minor*, not the count.
+
+**Direction (phased so each PR verifies alone):**
+
+- **Phase 1 — size-class pages + bump allocation.** Per-worker young
+  allocation from size-class pages: bump-allocate within a page, keep a
+  per-page object-start bitmap. Large objects still use malloc. Cuts the
+  malloc/free pair per object; the bitmap records starts for validation.
+- **Phase 2 — page-table validation.** A page table + bitmap lookup
+  replaces building `sl_gc_set` on every minor (the per-minor O(heap)
+  rebuild). Also makes interior-pointer lookup cheap, which the
+  value-result/opt option in `VALUE_REPRESENTATION.md` would need.
+- **Phase 3 — page sweep.** Free whole pages, or bitmap-clear on sweep,
+  instead of walking linked lists.
+
+**Non-negotiables:** non-moving (the conservative fallback cannot rewrite
+pointers — not relitigated); every candidate-pointer check keeps working
+(object starts + #277's inline-bytes rule); remembered set and
+`gc_clean` frontier semantics unchanged; thread-locals through accessors,
+preempt brackets around libc, no GC allocation under a mutex.
+
+**Measure before/after each phase:** the json decode microbenchmark
+(decode `quote_0.json` 200×; generate with `python3
+bench/suite/lib/gen_quote.py <dir> 1 2000`); `POST /api/quote` vs Go
+(p99 via `bench/latgen` + RSS); `tests/run_tests.sh` allocation budgets
+(must not change); RSS on api + batch. Allocation count is pinned by the
+budgets — the win must come from cost-per-allocation and minor cost.
+
 ## 7d. Updating existing map keys re-traces the whole map each minor
 
 - [ ] A map update's position in the order array is not recorded, so it
@@ -395,10 +498,13 @@ stack, up to the 512-level cap, for recursive target types too
   a machine serving anything.
 
   **Waiting on a full run.** PR #150 holds interim results from a scaled-down
-  run. When the full suite has run:
+  run. The planned run (2026-10-01, `bench/CURSOR.md`): a Hetzner CCX33
+  (8 dedicated vCPU, 32 GB) at full data scale, measuring slang, Go, Rust,
+  Java and Node only, `ROUNDS=3` with 20 s api and 15 s http windows, about
+  2h 15m. When it has run:
   - update `bench/RESULTS.md` and the website with the heavy-tier numbers;
-  - the site shows only C#, Java, Go, Rust, Bun, Node and slang (Python and C
-    are left out of it);
+  - the site shows the five measured languages, with the date and host;
+    C#, Bun, Python and C keep only the claims earlier runs support;
   - the Java `api` heavy tier should now build (a `.gitignore` pattern had
     been hiding its `Main.java`); check that it does.
 

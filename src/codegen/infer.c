@@ -80,8 +80,9 @@ const char *infer_ident_name(CG *cg, const char *name, int line) {
                      "it with a concrete type, and use that instead)",
                      name);
     }
+    const char *tl = hint_top_level_let(cg, name);
     cg_error(line, "undefined variable '%s'%s", name,
-             suggest_value_name(cg, name));
+             *tl ? tl : suggest_value_name(cg, name));
     return NULL; /* unreachable */
 }
 

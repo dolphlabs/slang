@@ -1,0 +1,1 @@
+slang has no trailing commas: remove the ',' before ')' on line 5

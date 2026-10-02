@@ -15,6 +15,20 @@
 
 #include "internal.h"
 #include "../parser.h"
+#include "../diag.h"
+
+/* An instance is made on demand, in the middle of checking whatever
+ * first used it -- often a function in ANOTHER file. The enum rewrite of
+ * the new body sets diag_file to the template's file statement by
+ * statement; left there, the user's next error was reported in the
+ * template's file at the user's line (a return-type mistake in main.sl:81
+ * printed as zokor's router.sl:81). Put it back. */
+static void resolve_enum_in_body_keep_file(CG *cg, const char *pkg,
+                                           FuncDecl *fn) {
+    const char *saved = diag_file;
+    resolve_enum_in_body(cg, pkg, fn);
+    diag_file = saved;
+}
 
 /* `struct Bad[T] { x: Bad[[T]] }` names a new type every time it is
  * instantiated. Legitimate nesting -- Box[Box[Box[int]]] -- is a handful of
@@ -415,7 +429,7 @@ FuncSig *method_instantiate(CG *cg, StructDef *sd, const char *name,
     fi->fn = parse_fn_decl_again(decl);
     /* This body has never been through the enum rewrite: it did not
      * exist when that pass ran over the program. */
-    resolve_enum_in_body(cg, tm->pkg, fi->fn);
+    resolve_enum_in_body_keep_file(cg, tm->pkg, fi->fn);
     fi->recv = sd->canonical;
     fi->line = line;
     fi->note = xasprintf("%s.%s", sd->canonical, name);
@@ -758,7 +772,7 @@ FuncSig *generic_call_sig(CG *cg, const char *pkg, const char *name, Expr *e) {
     fi->fn = parse_fn_decl_again(decl);
     /* This body has never been through the enum rewrite: it did not
      * exist (as this AST) when that pass walked the program. */
-    resolve_enum_in_body(cg, tm->pkg, fi->fn);
+    resolve_enum_in_body_keep_file(cg, tm->pkg, fi->fn);
     fi->recv = NULL;
     fi->note = key;
     fi->line = e->line;

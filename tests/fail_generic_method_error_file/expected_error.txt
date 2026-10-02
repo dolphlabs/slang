@@ -1,0 +1,1 @@
+main.sl:7: error: return type mismatch: cannot return result[int,str] where opt[int] expected

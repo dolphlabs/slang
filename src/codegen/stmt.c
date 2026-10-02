@@ -96,6 +96,110 @@ static int emit_backedge_enter(CG *cg, void *backedge_live_set,
     return 1;
 }
 
+/* Tier 12 (leaf-loop poll): hoisted bracket + per-iteration cheap poll.
+ * Emits the roots array + sl_safepoint + enter ONCE plus the task
+ * variable (one TLS read for the whole loop), then returns the bracket
+ * id for the per-iteration poll (emit_leaf_poll) and the loop-end
+ * exit. The bracket stays open across all iterations, so loop-carried
+ * roots are linked for the loop's whole duration; the per-iteration
+ * poll re-snapshots reassigned pointers (see emit_leaf_poll).
+ * Balanced by construction: one enter before the loop, one exit after.
+ *
+ * SCOPE WARNING: the emitted declarations live in the caller's C block
+ * and must be visible at BOTH the loop head (enter) and after the loop
+ * (exit). Every slang block that generates braces (if arms, loop
+ * bodies via gen_scoped_block, switch arms) opens a NEW C block — a
+ * leaf loop nested inside one is fine (enter and exit are both inside
+ * that same block), because the exit is emitted right after the loop
+ * within the same generation of the same block. The declarations use
+ * unique tmp_id suffixes, so nesting never collides. */
+static int emit_leaf_bracket(CG *cg, void *backedge_live_set) {
+    int nnames = live_set_nnamed(backedge_live_set);
+    int n = 0;
+    for (int i = 0; i < nnames; i++)
+        n += count_named_gc_roots(cg, live_set_named(backedge_live_set, i));
+    int id = cg->tmp_id++;
+    StrBuf roots;
+    sb_init(&roots);
+    sb_append(&roots, xasprintf("void *_sl_lb%d_roots[] = { ", id));
+    int wrote = 0;
+    for (int i = 0; i < nnames; i++)
+        append_named_gc_roots(cg, &roots, live_set_named(backedge_live_set, i),
+                              &wrote);
+    sb_append(&roots, "};");
+    emit_line(cg, "%s", roots.data);
+    emit_line(cg, "sl_safepoint _sl_lb%d;", id);
+    emit_line(cg, "sl_rt_safepoint_enter(&_sl_lb%d, _sl_lb%d_roots, %d);", id,
+              id, n);
+    /* Resolve the task once for the per-iteration sampled yield
+     * (sl_rt_poll_yield takes it as a parameter): one TLS read for the
+     * whole loop instead of one per sample. sl_task* is
+     * migration-stable (only the TLS slot address is thread-affine),
+     * so holding it across iterations is sound — same reasoning as
+     * sl_rt_maybe_yield_t's own parameter. */
+    emit_line(cg, "sl_task *_sl_lb_task%d = sl_rt_cur();", id);
+    cg->open_backedge_brackets++;
+    return id;
+}
+
+/* Tier 12 per-iteration poll for a leaf loop whose bracket (emit_leaf_
+ * bracket) is hoisted around the loop. Rebuilds the roots array from
+ * the CURRENT variable values (plain pointer stores into a fresh stack
+ * array, no TLS, no call) so reassigned pointer variables stay current,
+ * then: if a collection is requested, take the full enter/exit path
+ * (link + check-in, which also runs the sampled preemption check);
+ * else only the 1-in-1024 preemption sample fires, calling the sampled
+ * yield directly. Fast path per iteration: one small stack array + one
+ * relaxed-load call + one counter increment — no TLS read, no stack
+ * probe.
+ *
+ * The slow path's nested enter/exit pair balances within the iteration
+ * (enter pushes, exit pops the same level); the hoisted bracket stays
+ * open beneath it. bid selects the hoisted task variable for the
+ * sampled yield; eid suffixes the nested safepoint and the roots
+ * array. The sample counter (_sl_lp_ec) is declared ONCE per loop by
+ * the loop's own code below (not here), so it persists across
+ * iterations — declaring it inside this per-iteration block would
+ * reset it to 0 every iteration and sample every time. Emits nothing
+ * if there are no roots (scalar loops keep their sampled maybe_yield
+ * instead). */
+static void emit_leaf_poll(CG *cg, void *backedge_live_set, int bid,
+                           int eid) {
+    int nnames = live_set_nnamed(backedge_live_set);
+    int n = 0;
+    for (int i = 0; i < nnames; i++)
+        n += count_named_gc_roots(cg, live_set_named(backedge_live_set, i));
+    if (n == 0)
+        return;
+    /* NOTE: flat inside the loop body — no wrapping brace. An earlier
+     * draft opened a { here and closed it in the loop-end code; the
+     * extra close landed after the loop and closed the FUNCTION early
+     * (lt6: "use of undeclared identifier 'sum'"). This function opens
+     * NOTHING it doesn't close: roots array + if/else balance inline. */
+    StrBuf roots;
+    sb_init(&roots);
+    sb_append(&roots, xasprintf("void *_sl_lp%d_roots[] = { ", eid));
+    int wrote = 0;
+    for (int i = 0; i < nnames; i++)
+        append_named_gc_roots(cg, &roots, live_set_named(backedge_live_set, i),
+                              &wrote);
+    sb_append(&roots, "};");
+    emit_line(cg, "%s", roots.data);
+    emit_line(cg, "if (sl_gc_poll_needed()) {");
+    cg->indent++;
+    emit_line(cg, "sl_safepoint _sl_lp%d;", eid);
+    emit_line(cg, "sl_rt_safepoint_enter(&_sl_lp%d, _sl_lp%d_roots, %d);",
+              eid, eid, n);
+    emit_line(cg, "sl_rt_safepoint_exit();");
+    cg->indent--;
+    emit_line(cg, "} else if ((++_sl_lp_ec%d & SL_PREEMPT_SAMPLE_MASK) == 0) {",
+              eid);
+    cg->indent++;
+    emit_line(cg, "sl_rt_poll_yield(_sl_lb_task%d);", bid);
+    cg->indent--;
+    emit_line(cg, "}");
+}
+
 static void gen_scoped_block(CG *cg, Block *b) {
     var_scope_push(cg);
     int from = cg->vars.count;
@@ -129,6 +233,224 @@ static void break_pop(CG *cg) { cg->break_len--; }
 
 static void check_guard_else_leaves(CG *cg, Block *body, int line);
 static void gen_if_let(CG *cg, Stmt *s);
+
+/* Tier 12 (leaf-loop poll): whether an expression can run without any
+ * call, allocation, or park. Conservative: anything unrecognized
+ * returns 0 (full safepoint, today's behavior). Every EX_CALL returns
+ * 0 — even len(), which lowers to a bracketed expression. */
+static int expr_is_leaf(CG *cg, Expr *e);
+static int block_is_leaf(CG *cg, Block *b);
+static int stmt_is_leaf(CG *cg, Stmt *s);
+
+static int expr_is_leaf(CG *cg, Expr *e) {
+    if (!e)
+        return 1;
+    switch (e->kind) {
+    case EX_INT:
+    case EX_FLOAT:
+    case EX_STRING:
+    case EX_BYTES:
+    case EX_BOOL:
+    case EX_IDENT:
+        return 1;
+    case EX_BINARY: {
+        const char *op = e->as.binary.op;
+        if (!strcmp(op, "??"))
+            return expr_is_leaf(cg, e->as.binary.lhs) &&
+                   expr_is_leaf(cg, e->as.binary.rhs);
+        /* Concat (str/bytes/list) allocates — not a leaf. NOTE: no
+         * infer_type call here. expr_is_leaf runs DURING codegen's
+         * statement walk, where the variable scope at the loop head
+         * does not include bindings declared INSIDE the loop body
+         * (e.g. `let id = old[i]` in batch's user_grow): inferring
+         * the operand type would resolve those names against the
+         * wrong scope and fail the compile ("undefined variable").
+         * Instead match only on the operator: every non-+ binary op
+         * is pure (comparison, arithmetic, logic); + is assumed to
+         * allocate (string/bytes/list concat) and disqualifies.
+         * Numeric + pays the price of a missed optimization — rare
+         * in scan loops, and soundness beats coverage. */
+        if (!strcmp(op, "+"))
+            return 0;
+        return expr_is_leaf(cg, e->as.binary.lhs) &&
+               expr_is_leaf(cg, e->as.binary.rhs);
+    }
+    case EX_UNARY:
+        return expr_is_leaf(cg, e->as.unary.operand);
+    case EX_CAST:
+        return expr_is_leaf(cg, e->as.cast.operand);
+    case EX_FIELD:
+        return expr_is_leaf(cg, e->as.field.base);
+    case EX_INDEX: {
+        /* Bounds-checked but non-allocating, non-parking: the check
+         * panics (never returns) on failure, so no safepoint is needed
+         * on that path. FIELD-INDEXING (hd.cl_lo etc. — the parser
+         * folds `p.x` into EX_IDENT, resolved via var_find) is NOT
+         * covered here; this is only container indexing.
+         * NOTE: no infer_type here (scope reason — see EX_BINARY):
+         * every index form codegen lowers without a call (bytes,
+         * list, str, wire) is leaf-eligible; map indexing contains a
+         * call to the miss reporter on the failure path — but that
+         * path never returns, so it needs no safepoint; treat ALL
+         * indexing as leaf iff base and index are. */
+        return expr_is_leaf(cg, e->as.index.base) &&
+               expr_is_leaf(cg, e->as.index.index);
+    }
+    case EX_SLICE:
+        return expr_is_leaf(cg, e->as.slice.base) &&
+               expr_is_leaf(cg, e->as.slice.start) &&
+               expr_is_leaf(cg, e->as.slice.end);
+    case EX_CALL:
+    case EX_METHOD:
+    case EX_SPAWN: {
+        /* Every call lowers to code with its own bracket or a park —
+         * never a leaf. One exception: len(x) is a pure read of an
+         * already-live value (a field load: ->len), bracketed only
+         * because every builtin is uniformly wrapped. Treating it as
+         * a leaf is sound: it allocates nothing, parks nothing, and
+         * its argument was already evaluated. All other calls —
+         * user, native, method, ctor, print — return 0. */
+        if (e->kind == EX_CALL && e->as.call.name &&
+            !strcmp(e->as.call.name, "len") && e->as.call.nargs == 1 &&
+            !e->as.call.callee)
+            return expr_is_leaf(cg, e->as.call.args[0]);
+        return 0;
+    }
+    case EX_LIST:
+    case EX_MAPLIT:
+    case EX_STRUCTLIT:
+        /* Allocations. Never leaves. */
+        return 0;
+    case EX_SWITCH: {
+        if (!expr_is_leaf(cg, e->as.switch_expr.scrut))
+            return 0;
+        for (int i = 0; i < e->as.switch_expr.ncases; i++) {
+            for (int j = 0; j < e->as.switch_expr.cases[i].nvals; j++) {
+                if (!expr_is_leaf(cg, e->as.switch_expr.cases[i].vals[j]))
+                    return 0;
+            }
+            if (!expr_is_leaf(cg, e->as.switch_expr.cases[i].value))
+                return 0;
+        }
+        return expr_is_leaf(cg, e->as.switch_expr.def);
+    }
+    }
+    return 0;
+}
+
+/* A statement is a leaf iff it generates no call, allocation, or park.
+ * ST_SPAWN/ST_SELECT are never leaves (spawn submits work; select
+ * parks); decls never appear in bodies. print/println are calls.
+ * Everything else recurses. */
+static int stmt_is_leaf(CG *cg, Stmt *s) {
+    if (!s)
+        return 1;
+    switch (s->kind) {
+    case ST_LET:
+        return expr_is_leaf(cg, s->as.let.init);
+    case ST_ASSIGN:
+        return expr_is_leaf(cg, s->as.assign.target) &&
+               expr_is_leaf(cg, s->as.assign.value);
+    case ST_IF:
+        return expr_is_leaf(cg, s->as.if_stmt.cond) &&
+               block_is_leaf(cg, s->as.if_stmt.then_blk) &&
+               block_is_leaf(cg, s->as.if_stmt.else_blk);
+    case ST_WHILE:
+    case ST_FOR:
+    case ST_FOR_IN:
+        /* Nested loops contain an inner back-edge safepoint (their own
+         * bracket or poll): the outer loop is NOT a leaf. Without this
+         * the outer would hoist its bracket across the inner loop's
+         * own enter/exit — sound but the inner's per-iteration
+         * enter/exit already pays the full cost, so the outer poll
+         * saves nothing and doubles bracket traffic. More importantly
+         * the inner loop's own bracket management (has_bp,
+         * open_backedge_brackets) composes correctly only when the
+         * outer uses the standard path. Revisit if profiles show
+         * doubly-nested scan loops matter. (ST_FOR_IN as an OUTER
+         * loop keeps the standard hoisted-iterable bracket below —
+         * this only governs the leaf-poll path.) */
+        return 0;
+    case ST_RETURN:
+        return s->as.ret.value ? expr_is_leaf(cg, s->as.ret.value) : 1;
+    case ST_BREAK:
+    case ST_CONTINUE:
+        /* break/continue THEMSELVES emit no call/alloc/park — but inside
+         * a leaf loop they close the HOISTED bracket (cur_loop_has_bp
+         * is set, ST_BREAK emits sl_rt_safepoint_exit). A leaf loop
+         * whose body can break/continue would then double-exit: once
+         * at the break/continue, once at the loop-end exit. The
+         * per-iteration bracket has the same shape (break closes that
+         * iteration's bracket, loop-end exit closes... no — for the
+         * per-iteration bracket the loop-end exit is INSIDE the loop,
+         * so break's exit + loop-end exit are DIFFERENT brackets).
+         * For the hoisted bracket they are the SAME bracket → a body
+         * containing break/continue disqualifies the loop. The common
+         * scan loops (batch parser, http header scan... except the
+         * router's sp2 loop, which breaks) don't break; the router
+         * loop correctly falls back (verified below). */
+        return 0;
+    case ST_EXPR: {
+        Expr *e = s->as.expr_stmt.expr;
+        if (e->kind == EX_CALL)
+            return 0;
+        return expr_is_leaf(cg, e);
+    }
+    case ST_GUARD_LET:
+        /* Any guard-let disqualifies the loop from the leaf path.
+         * Reason: guard-let codegen (gen_stmts) SPLITS the enclosing
+         * block at the guard — the statements after the guard generate
+         * inside a NEW nested C scope (see gen_stmts: the guard emits
+         * `{ ... guard handling ... gen_stmts(rest) ... }`). A leaf
+         * poll emitted before such a guard would be separated from
+         * the loop-end close by that scope boundary, and more
+         * importantly the poll's own position (before the guard's
+         * split) vs the loop body's actual generation (inside the
+         * split) disagree about block structure. The common byte-scan
+         * loops don't use guard-let; the lt2 linked-list walk does,
+         * and it correctly falls back to the per-iteration bracket
+         * (verified: lt2 prints 6 under verifier + forced preemption).
+         * NOTE: this is about codegen SHAPE, not soundness — a guard
+         * whose else body is break/continue/return would unwind the
+         * hoisted bracket exactly like the per-iteration one. */
+        return 0;
+    case ST_IF_LET:
+        return expr_is_leaf(cg, s->as.if_let.expr) &&
+               block_is_leaf(cg, s->as.if_let.then_blk) &&
+               block_is_leaf(cg, s->as.if_let.else_blk);
+    case ST_SWITCH: {
+        if (!expr_is_leaf(cg, s->as.switch_stmt.scrut))
+            return 0;
+        for (int i = 0; i < s->as.switch_stmt.ncases; i++) {
+            for (int j = 0; j < s->as.switch_stmt.cases[i].nvals; j++) {
+                if (!expr_is_leaf(cg, s->as.switch_stmt.cases[i].vals[j]))
+                    return 0;
+            }
+            if (!block_is_leaf(cg, s->as.switch_stmt.cases[i].body))
+                return 0;
+        }
+        return block_is_leaf(cg, s->as.switch_stmt.def);
+    }
+    case ST_SPAWN:
+    case ST_SELECT:
+    case ST_STRUCT:
+    case ST_ENUM:
+    case ST_IMPL:
+    case ST_UNSAFE:
+        return 0;
+    }
+    return 0;
+}
+
+static int block_is_leaf(CG *cg, Block *b) {
+    if (!b)
+        return 1;
+    for (int i = 0; i < b->count; i++) {
+        if (!stmt_is_leaf(cg, b->stmts[i]))
+            return 0;
+    }
+    return 1;
+}
 
 void gen_stmt(CG *cg, Stmt *s) {
     if (s->file)
@@ -327,7 +649,8 @@ void gen_stmt(CG *cg, Stmt *s) {
                 break;
             }
             if (!v)
-                cg_error(s->line, "undefined variable '%s'", name);
+                cg_error(s->line, "undefined variable '%s'%s", name,
+                         hint_top_level_let(cg, name));
             const char *se3 = expect_push(cg, v->slang);
             const char *vt = infer_type(cg, s->as.assign.value);
             cg->expect = se3;
@@ -626,10 +949,36 @@ void gen_stmt(CG *cg, Stmt *s) {
             eid = cg->tmp_id++;
             emit_line(cg, "unsigned long _sl_ec%d = 0;", eid);
         }
+        /* Tier 12: leaf body with live roots — hoisted bracket plus a
+         * per-iteration poll instead of a full safepoint. The hoisted
+         * enter/exit wrap the while with NO extra scope (the function
+         * body already scopes locals): counter, roots, safepoint, and
+         * task variable are plain declarations before the loop.
+         * has_bp tracks the hoisted bracket for break/continue/return
+         * unwinding exactly like the per-iteration one did. */
+        int leaf = !scalar && expr_is_leaf(cg, s->as.while_stmt.cond) &&
+                   block_is_leaf(cg, s->as.while_stmt.body);
+        int bid = 0, le_eid = 0;
+        if (leaf) {
+            le_eid = cg->tmp_id++;
+            emit_line(cg, "unsigned long _sl_lp_ec%d = 0;", le_eid);
+            bid = emit_leaf_bracket(cg, s->backedge_live_set);
+        }
         emit_line(cg, "while (%s) {", strip_outer_parens(cond));
         cg->indent++;
-        int has_bp = emit_backedge_enter(cg, s->backedge_live_set, poll, eid,
-                                        NULL);
+        int has_bp;
+        if (leaf) {
+            /* The poll is flat inside the loop (balanced inline), so
+             * break/continue/return must unwind exactly ONE level: the
+             * hoisted bracket. Do NOT count anything extra — the
+             * hoisted bracket is the one open_backedge_brackets tracks,
+             * and has_bp = 1 keeps the loop-end close correct. */
+            emit_leaf_poll(cg, s->backedge_live_set, bid, le_eid);
+            has_bp = 1;
+        } else {
+            has_bp = emit_backedge_enter(cg, s->backedge_live_set, poll,
+                                         eid, NULL);
+        }
         cg->loop_depth++;
         break_push(cg, 0, NULL);
         int saved_loop_bp = cg->cur_loop_has_bp;
@@ -645,12 +994,37 @@ void gen_stmt(CG *cg, Stmt *s) {
         cg->loop_depth--;
         break_pop(cg);
         cg->cur_loop_has_bp = saved_loop_bp;
-        if (has_bp) {
-            cg->open_backedge_brackets--;
+        if (leaf) {
+            /* Poll is flat inside the loop (balanced inline): close the
+             * loop, THEN exit the hoisted bracket after it. Only the
+             * loop's own brace closes here (indent back to function
+             * level); the exit follows at that level. has_bp is NOT
+             * cleared — the shared code below is SKIPPED for leaf
+             * (else branch), so the exit+decrement here are the one
+             * and only close. Indent: one -- for the while's matching
+             * close (the ++ after the while line).
+             *
+             * BREAK/CONTINUE: bodies containing break/continue never
+             * reach the leaf path (stmt_is_leaf returns 0 for them),
+             * so no double-exit: break's own exit closes the
+             * per-iteration bracket (non-leaf path), and the loop-end
+             * exit below closes that same iteration bracket... the
+             * standard balanced shape, unchanged. continue likewise
+             * closes the current iteration's bracket before jumping.
+             * The hoisted bracket has no such path to balance, which
+             * is exactly why break/continue disqualify. */
+            cg->indent--;
+            emit_line(cg, "}");
             emit_line(cg, "sl_rt_safepoint_exit();");
+            cg->open_backedge_brackets--;
+        } else {
+            if (has_bp) {
+                cg->open_backedge_brackets--;
+                emit_line(cg, "sl_rt_safepoint_exit();");
+            }
+            cg->indent--;
+            emit_line(cg, "}");
         }
-        cg->indent--;
-        emit_line(cg, "}");
         break;
     }
     case ST_FOR: {
@@ -671,16 +1045,41 @@ void gen_stmt(CG *cg, Stmt *s) {
         emit_line(cg, "{");
         cg->indent++;
         emit_line(cg, "long long %s = %s;", endvar, end);
-        int eid = 0;
-        if (live_set_nnamed(s->backedge_live_set) == 0) {
+        int scalar = live_set_nnamed(s->backedge_live_set) == 0;
+        /* ST_FOR bounds are evaluated once into C locals (sl_end_N)
+         * BEFORE the loop — under the caller's bracket, not the
+         * hoisted one. A call in bounds runs before the hoisted enter
+         * and nests its own bracket fine, so bounds calls are SOUND
+         * either way; but the range-loop shape that matters (len(t),
+         * plain ints) is always leaf. Conservative: bounds must be
+         * leaf (rules out calls in bounds; rare and not worth the
+         * audit). The per-iteration condition reads sl_end_N (an
+         * int, needs no root) plus the induction var (an int). */
+        int leaf = !scalar && expr_is_leaf(cg, s->as.for_stmt.start) &&
+                   expr_is_leaf(cg, s->as.for_stmt.end) &&
+                   block_is_leaf(cg, s->as.for_stmt.body);
+        int eid = 0, bid = 0, le_eid = 0;
+        if (scalar) {
             eid = cg->tmp_id++;
             emit_line(cg, "unsigned long _sl_ec%d = 0;", eid);
+        } else if (leaf) {
+            le_eid = cg->tmp_id++;
+            emit_line(cg, "unsigned long _sl_lp_ec%d = 0;", le_eid);
+            bid = emit_leaf_bracket(cg, s->backedge_live_set);
         }
         emit_line(cg, "for (long long %s = %s; %s %s %s; %s++) {", vname,
                   start, vname, op, endvar, vname);
         cg->indent++;
-        int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 1, eid,
-                                        NULL);
+        int has_bp;
+        if (leaf) {
+            /* Same as ST_WHILE: poll scope balances itself; only the
+             * hoisted bracket counts for unwinding. */
+            emit_leaf_poll(cg, s->backedge_live_set, bid, le_eid);
+            has_bp = 1;
+        } else {
+            has_bp = emit_backedge_enter(cg, s->backedge_live_set, 1, eid,
+                                         NULL);
+        }
         cg->loop_depth++;
         break_push(cg, 0, NULL);
         int saved_loop_bp = cg->cur_loop_has_bp;
@@ -696,12 +1095,23 @@ void gen_stmt(CG *cg, Stmt *s) {
         cg->loop_depth--;
         break_pop(cg);
         cg->cur_loop_has_bp = saved_loop_bp;
-        if (has_bp) {
-            cg->open_backedge_brackets--;
+        if (leaf) {
+            /* Same as ST_WHILE: poll flat inside; close the for, then
+             * exit the hoisted bracket after it. The shared code is
+             * skipped (else branch) so this is the one and only
+             * exit+decrement. */
+            cg->indent--;
+            emit_line(cg, "}");
             emit_line(cg, "sl_rt_safepoint_exit();");
+            cg->open_backedge_brackets--;
+        } else {
+            if (has_bp) {
+                cg->open_backedge_brackets--;
+                emit_line(cg, "sl_rt_safepoint_exit();");
+            }
+            cg->indent--;
+            emit_line(cg, "}");
         }
-        cg->indent--;
-        emit_line(cg, "}");
         cg->indent--;
         emit_line(cg, "}");
         var_scope_pop(cg);
