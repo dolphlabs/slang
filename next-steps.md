@@ -409,10 +409,23 @@ per item); GC ~30%, per-object malloc most of the rest. Lower the cost
 
 **Direction (phased so each PR verifies alone):**
 
-- **Phase 1 — size-class pages + bump allocation.** Per-worker young
-  allocation from size-class pages: bump-allocate within a page, keep a
-  per-page object-start bitmap. Large objects still use malloc. Cuts the
-  malloc/free pair per object; the bitmap records starts for validation.
+- **Phase 1 — young pages + bump allocation: done (2026-10-02).**
+  Per-worker 16KB pages (16KB-aligned, mask lookup, 1MB cap per
+  worker): bump-allocate within a page, first-fit free lists refilled
+  once per surviving page per sweep by a linear bitmap walk, slot
+  extents in a header `cap` word the walk strides by. As designed,
+  large objects still use malloc and the bitmap records starts for
+  validation (Phase 2's input). One deviation from the note: variable
+  bump, not fixed size classes — the decode path's strings never match
+  an exact class (the old freelist hit 199 of 802,624 allocs), so
+  classes would have left the workload on malloc. Found building it:
+  absorbed split waste untracked by a size-striding walk files
+  fragments the next claim overwrites a live header with (a
+  deterministic segfault in `gc_map_put`); the cap word is the fix.
+  Quote decode 200x2000: 153.8 ms -> 81.9 ms ABBA medians (1.88x),
+  minor pauses 47.3 ms -> 14.9 ms, RSS 6.26 MB -> 3.34 MB, identical
+  802,624 allocs (budgets untouched). Full suite green incl. verifier
+  matrix; `SLANG_GC_PAGE_DEBUG` checker landed beside it.
 - **Phase 2 — page-table validation.** A page table + bitmap lookup
   replaces building `sl_gc_set` on every minor (the per-minor O(heap)
   rebuild). Also makes interior-pointer lookup cheap, which the
@@ -517,6 +530,14 @@ budgets — the win must come from cost-per-allocation and minor cost.
     served 41–81 req/s on 4 workers here (#150: 128–203 against Go's
     6–7k). Decoding straight into the target type is the fix, and the
     largest gap in the heavy tier.
+  - [x] **Encode sizing, done (2026-10-02).** `json.encode` pre-sizes its
+    builder from the static type's skeleton (field names and punctuation
+    plus fixed-width scalar slots; `json_enc_hint` in
+    `src/codegen/pkg_json/dispatch.c`, `sl_json_sb_reserve` in
+    `runtime/sl_json.c`). A ~200-byte quote response went from 3
+    allocations (64->128->256) to 1 and 20.2 ms to 11.5 ms per 20k
+    encodes (ABBA medians; the request is still decode-bound at ~800 us,
+    so this is not the api gap — the per-object allocator in §7f is).
   - Every `while` iteration emits a full `sl_rt_safepoint_enter`/`exit`
     (roots array and a TLS read), even a byte-scan loop with no call or
     allocation. Single-threaded, batch parses 5M rows in 5.8–6.8 s against

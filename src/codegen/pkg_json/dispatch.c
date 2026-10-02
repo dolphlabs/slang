@@ -207,6 +207,42 @@ static int json_level_bytes(CG *cg, const char *t) {
     return w.cyclic ? 640 + 32 * w.max_fields : 0;
 }
 
+/* Bytes json.encode of `t` always writes, whatever the values: field
+ * names and punctuation (the skeleton) plus fixed-width scalar slots
+ * (an i64 is at most 20 bytes, and sl_json_enc_i64 reserves that; a
+ * float's %g rarely passes 24). Variable-length contents (str bodies,
+ * list/map elements) count 0, and a recursive type stops at the cycle
+ * with its brackets counted: an underestimate only grows as before, so
+ * the hint changes allocation, never output. The encode call site
+ * reserves it up front, turning a ~200-byte quote response's 64->128
+ * ->256 climb into one allocation. */
+static long long json_enc_hint_w(CG *cg, const char *t, int depth) {
+    if (!strcmp(t, "bool")) return 5;
+    if (is_str(t) || is_bytes(t)) return 2;
+    if (is_int(t)) return 20;
+    if (is_flt(t)) return 24;
+    if (is_opt(t)) {
+        char *inner = opt_inner(t);
+        long long h = json_enc_hint_w(cg, inner, depth + 1);
+        return h > 4 ? h : 4;
+    }
+    if (is_arr(t) || is_map(t)) return 2;
+    if (is_enum(cg, t)) return 16;
+    if (depth > 8) return 2;
+    StructDef *sd = struct_find_canon(cg, t);
+    if (!sd) return 0;
+    long long h = 2; /* the braces */
+    for (int i = 0; i < sd->nfields; i++) {
+        h += (long long)strlen(sd->fields[i]) + 2 + 1 + 1; /* "name":, */
+        h += json_enc_hint_w(cg, sd->ftypes[i], depth + 1);
+    }
+    return h;
+}
+
+static long long json_enc_hint(CG *cg, const char *t) {
+    return json_enc_hint_w(cg, t, 0);
+}
+
 const char *json_dec_fn(CG *cg, const char *t, int line) {
     const char *scalar = json_scalar_dec_name(t);
     if (scalar)
@@ -897,9 +933,14 @@ char *json_call_gen(CG *cg, const char *fname, Expr *e) {
     const char *encfn = json_enc_fn(cg, at, e->line);
     char *argexpr = gen_expr(cg, e->as.call.args[0]);
     char *arg = json_enc_arg(at, argexpr);
+    /* Pre-size the builder past its 64-byte first climb when the static
+     * type already names one (a QuoteResp skeleton is ~200 bytes). */
+    long long hint = json_enc_hint(cg, at);
+    char *pre = hint > 64 ? xasprintf("sl_json_sb_reserve(&_sl_jsb, %lld); ", hint)
+                           : xstrdup("");
     char *inner = xasprintf(
-        "({ sl_json_sb _sl_jsb; sl_json_sb_init(&_sl_jsb); %s(%s, "
+        "({ sl_json_sb _sl_jsb; sl_json_sb_init(&_sl_jsb); %s%s(%s, "
         "&_sl_jsb); (const char *)(_sl_jsb.data ? _sl_jsb.data : \"\"); })",
-        encfn, arg);
+        pre, encfn, arg);
     return wrap_safepoint(cg, e, ctype_of(cg, "str"), NULL, inner);
 }
