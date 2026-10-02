@@ -530,6 +530,16 @@ budgets — the win must come from cost-per-allocation and minor cost.
     served 41–81 req/s on 4 workers here (#150: 128–203 against Go's
     6–7k). Decoding straight into the target type is the fix, and the
     largest gap in the heavy tier.
+  - [x] **Decode leftovers closed without code (2026-10-02).**
+    `sl_jd_key` clean keys are already in-place (0 allocs); escaped
+    keys cost exactly 1 alloc each, measured 4013 -> 8013 per 2000-item
+    decode with all keys escaped, but real bodies never escape keys
+    (and map keys must materialize anyway — they are stored). List
+    growth is ~10 owned buffers per 2000-item decode, 0.25% of its
+    4013 allocs, and no hint exists without pre-scanning the input.
+    Neither moves the needle; the needle is Phase 2 (minors still
+    ~15 ms of ~82 ms per 200 decodes, most of it the per-minor set
+    rebuild).
   - [x] **Encode sizing, done (2026-10-02).** `json.encode` pre-sizes its
     builder from the static type's skeleton (field names and punctuation
     plus fixed-width scalar slots; `json_enc_hint` in
