@@ -517,6 +517,14 @@ budgets — the win must come from cost-per-allocation and minor cost.
     served 41–81 req/s on 4 workers here (#150: 128–203 against Go's
     6–7k). Decoding straight into the target type is the fix, and the
     largest gap in the heavy tier.
+  - [x] **Encode sizing, done (2026-10-02).** `json.encode` pre-sizes its
+    builder from the static type's skeleton (field names and punctuation
+    plus fixed-width scalar slots; `json_enc_hint` in
+    `src/codegen/pkg_json/dispatch.c`, `sl_json_sb_reserve` in
+    `runtime/sl_json.c`). A ~200-byte quote response went from 3
+    allocations (64->128->256) to 1 and 20.2 ms to 11.5 ms per 20k
+    encodes (ABBA medians; the request is still decode-bound at ~800 us,
+    so this is not the api gap — the per-object allocator in §7f is).
   - Every `while` iteration emits a full `sl_rt_safepoint_enter`/`exit`
     (roots array and a TLS read), even a byte-scan loop with no call or
     allocation. Single-threaded, batch parses 5M rows in 5.8–6.8 s against

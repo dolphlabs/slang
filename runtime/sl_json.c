@@ -1238,6 +1238,17 @@ static void sl_json_sb_grow(sl_json_sb *sb, long long need) {
     }
 }
 
+/* One allocation for what the caller knows it will write (json.encode's
+ * call site passes a skeleton estimate from the static type): a ~200-byte
+ * quote response fits its first buffer instead of climbing 64->128->256.
+ * An underestimate just grows as before, so this never changes output. */
+static void sl_json_sb_reserve(sl_json_sb *sb, long long need) {
+    if (need > 0 && sb->len + need + 1 > sb->cap) {
+        sb->data = (char *)sl_gc_realloc(sb->data, (size_t)(sb->len + need + 1));
+        sb->cap = sb->len + need + 1;
+    }
+}
+
 static void sl_json_sb_append_n(sl_json_sb *sb, const char *s, long long n) {
     sl_json_sb_grow(sb, n);
     memcpy(sb->data + sb->len, s, (size_t)n);
