@@ -14,6 +14,7 @@
 
 #include "../internal.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 static const char *json_scalar_dec_name(const char *t) {
@@ -118,6 +119,92 @@ static void json_require_gc_struct(StructDef *sd, const char *what, int line) {
              "cannot json.%s '%s': json supports only gc structs (declare "
              "it 'gc struct %s')",
              what, sd->canonical, sd->name);
+}
+
+/* The walk behind json_level_bytes: a depth-first search over the struct
+ * types reachable from the target, each struct visited once. A struct
+ * reached again while it is still on the path (gray) closes a cycle,
+ * which is what makes a decoder recurse on the data rather than on the
+ * type; one already finished (black) has nothing new to find. Also
+ * records the most fields of any struct reached. */
+typedef struct {
+    const char **name;
+    char *gray; /* 1 while on the current path, 0 once finished */
+    int n, cap;
+    int cyclic, max_fields;
+} JsonWalk;
+
+static void json_type_walk(CG *cg, const char *t, JsonWalk *w) {
+    while (is_opt(t) || is_arr(t) || is_map(t)) {
+        if (is_opt(t)) {
+            t = opt_inner(t);
+        } else if (is_arr(t)) {
+            t = arr_elem(t);
+        } else {
+            char *k, *v;
+            map_kv(t, &k, &v);
+            t = v;
+        }
+    }
+    if (json_scalar_dec_name(t) || is_enum(cg, t))
+        return;
+    StructDef *sd = struct_find_canon(cg, t);
+    if (!sd)
+        return;
+    for (int i = 0; i < w->n; i++)
+        if (!strcmp(w->name[i], sd->canonical)) {
+            if (w->gray[i])
+                w->cyclic = 1;
+            return;
+        }
+    if (w->n == w->cap) {
+        w->cap = w->cap ? w->cap * 2 : 16;
+        w->name = (const char **)xrealloc(w->name, sizeof(char *) * (size_t)w->cap);
+        w->gray = (char *)xrealloc(w->gray, (size_t)w->cap);
+    }
+    int me = w->n++;
+    w->name[me] = sd->canonical;
+    w->gray[me] = 1;
+    if (sd->nfields > w->max_fields)
+        w->max_fields = sd->nfields;
+    for (int i = 0; i < sd->nfields; i++)
+        json_type_walk(cg, sd->ftypes[i], w);
+    w->gray[me] = 0;
+}
+
+/* Stack bytes one level of nesting can cost when decoding into `t`, or 0
+ * when `t` is not recursive. Only a type that contains itself -- a struct
+ * holding opt[Self], [Self] or map[str]Self, directly or through other
+ * types -- has decoders (sl_jdf_*, sl_json_dec_*) that call themselves
+ * once per level of the input, so only its json.decode call sites pay
+ * for a depth check (sl_json_stack_for, runtime/sl_json.c).
+ *
+ * The number comes from real frames: slangc --keep-c, then objdump -d,
+ * reading the stack adjustment (push/sub on x86_64, stp/sub on arm64) of
+ * every function in the recursion cycle, for structs of 1, 4, 16 and 48
+ * int fields reached through opt, list and map:
+ *
+ *   struct decoder sl_jdf_*   1 field   4      16     48
+ *     gcc-13 -O3 x86_64        128-144  176-192 272-304 560-592
+ *     gcc-13 -O3 arm64         144-160  176-192 368-384 880-896
+ *     Apple clang -O3 -flto    128-144  176-192 368     880
+ *   tree decoder sl_json_dec_*: 64-160, any field count
+ *   wrappers in the cycle (opt / list / map): 32-48 / 48-112 / 56-80
+ *
+ * The struct decoder grows 16 bytes a field (each field's value and its
+ * `seen` flag are locals) on top of about 160; one level of nesting is at
+ * most that frame plus an opt and a list or map wrapper, about 160 more.
+ * The direct and tree decoders run one after the other, never nested, so
+ * the larger counts, not the sum. Doubled for compilers and flags not
+ * measured: 640 + 32 per field. Anything a decoder calls at the bottom
+ * (sl_jd_skip, string and number readers, snprintf for an error) is
+ * covered by sl_rt_stack_reserve's own probe and guard margins. */
+static int json_level_bytes(CG *cg, const char *t) {
+    JsonWalk w = {0};
+    json_type_walk(cg, t, &w);
+    free(w.name);
+    free(w.gray);
+    return w.cyclic ? 640 + 32 * w.max_fields : 0;
 }
 
 const char *json_dec_fn(CG *cg, const char *t, int line) {
@@ -767,8 +854,17 @@ char *json_call_gen(CG *cg, const char *fname, Expr *e) {
          * go through the tree, whose decoder then names the error (or, if
          * the direct one was merely stricter, decodes it). The result is
          * allocated last, after the value it holds. */
+        /* A recursive target type's decoders recurse once per level of
+         * the input, in C, which never grows the stack: reserve for the
+         * input's depth first, here at the call site where growth is
+         * safe. Every other type decodes in constant stack and pays
+         * nothing (json_level_bytes). */
+        int level_bytes = json_level_bytes(cg, tv);
+        char *reserve = level_bytes
+            ? xasprintf("sl_json_stack_for(_sl_js, _sl_jn, %d); ", level_bytes)
+            : "";
         char *inner = xasprintf(
-            "({ const char *_sl_js = %s; long long _sl_jn = %s; "
+            "({ const char *_sl_js = %s; long long _sl_jn = %s; %s"
             "sl_jparser _sl_jp = { _sl_js, _sl_jn, 0, 0, NULL }; "
             "%s _sl_jout = 0; char *_sl_jerr = NULL; "
             "bool _sl_jok = %s(&_sl_jp, &_sl_jout) && sl_jd_end(&_sl_jp); "
@@ -778,8 +874,8 @@ char *json_call_gen(CG *cg, const char *fname, Expr *e) {
             "%s *_sl_jr = (%s *)sl_gc_alloc(sizeof(%s), %s); "
             "if (_sl_jok) { _sl_jr->ok = true; _sl_jr->v = _sl_jout; } "
             "else { _sl_jr->ok = false; _sl_jr->e = _sl_jerr; } _sl_jr; })",
-            data, len, fct, json_fast_fn(cg, tv), decfn, resname, resname,
-            resname, restrace);
+            data, len, reserve, fct, json_fast_fn(cg, tv), decfn, resname,
+            resname, resname, restrace);
         /* Tier 10: json.decode allocates (the result[T,E] wrapper,
          * plus whatever the monomorphized decoder itself
          * allocates) -- a real safepoint, same as any other call
