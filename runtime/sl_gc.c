@@ -1089,13 +1089,25 @@ static void sl_gc_class_push(sl_gc_obj *h) {
 #define SL_GC_PAGE_SIZE 16384
 #define SL_GC_PAGE_ALIGN 16384
 #define SL_GC_PAGE_MAX_TOTAL 1024
-/* Retained pages per worker, worst case: 64 x 16KB = 1MB. Only
- * pages holding live objects are retained; empty ones are freed at
- * the sweep that emptied them, so idle workers hold nothing. Past
- * the cap, claims fall back to malloc. Size the cap past one nursery
- * worth of small objects plus survivors: the quote decode bench
- * allocates ~850KB per minor cycle against a 512KB nursery. */
-#define SL_GC_PAGE_MAX_PAGES 64
+/* Pages one worker may hold: 512 x 16KB = 8MB, the largest nursery
+ * (sl_gc_nursery_set_max). The nursery trigger is global, so one busy
+ * worker can allocate a whole cycle's budget by itself, and page slack
+ * (holes, survivors) takes more than the budget's bytes. Past the cap,
+ * claims fall back to malloc, and every fallback is a libc malloc now
+ * and a libc free at the sweep: at the old cap of 64, sized for the
+ * fixed 512KB nursery, a third of the decode probe's allocations on
+ * one worker fell back once the adaptive nursery reached 1MB. Young
+ * bytes are bounded by the nursery trigger, not by this cap. */
+#define SL_GC_PAGE_MAX_PAGES 512
+/* Empty pages a worker keeps across a sweep, to bump-allocate over in
+ * the next cycle: 128 x 16KB = 2MB, twice one worker's share of the
+ * largest nursery. A 1MB cycle with its survivors spread over pages
+ * peaks near 106 pages on the decode probe; keeping fewer than a cycle
+ * needs frees and re-allocates the difference every sweep, and on
+ * macOS those aligned 16KB blocks were not reused: peak RSS doubled.
+ * Empties past it are freed, so a worker that burst to the full cap
+ * returns to this after one sweep. */
+#define SL_GC_PAGE_KEEP_PAGES 128
 /* A split remainder must still hold a 16-byte free node; anything
  * smaller is absorbed into the taken slot (and covered by its cap). */
 #define SL_GC_PAGE_MIN_SPLIT 16
@@ -1551,7 +1563,7 @@ static inline void sl_gc_page_promoted(sl_gc_obj *h) {
 /* Drop every empty page from one worker's list (headp/curp/npp are
  * that worker's published TLS addresses, or a local orphan-list pair
  * with NULLs) and repair its bump pointer. Empty worker pages are
- * reset and retained up to the per-worker cap -- everything in them
+ * reset and retained up to SL_GC_PAGE_KEEP_PAGES -- everything in them
  * just died, so the next cycle bump-allocates over them with no
  * fragmentation to walk -- and freed past it; orphan empties (no
  * worker left to reuse them) are always freed. Pages that survived
@@ -1565,8 +1577,8 @@ static void sl_gc_pages_prune_list(sl_gc_page **headp, sl_gc_page **curp,
     for (sl_gc_page *pg = *headp; pg; pg = pg->next)
         if (pg->young_live != 0 || pg->old_live != 0)
             nlive++;
-    int keep = retain && nlive < SL_GC_PAGE_MAX_PAGES
-                   ? SL_GC_PAGE_MAX_PAGES - nlive
+    int keep = retain && nlive < SL_GC_PAGE_KEEP_PAGES
+                   ? SL_GC_PAGE_KEEP_PAGES - nlive
                    : 0;
     sl_gc_page *cur = curp ? *curp : NULL;
     int cur_dead = 0;
