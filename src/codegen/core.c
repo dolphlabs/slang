@@ -878,6 +878,15 @@ static void append_gc_root_expr(CG *cg, StrBuf *sb, const char *c_expr,
     }
 }
 
+/* The roots a C expression of slang type `slang_t` holds, appended to a
+ * root array: itself if it is a GC pointer, each GC pointer inside it if
+ * it is a value struct (recursively), nothing otherwise. Pairs with
+ * count_gc_root_exprs, which counts exactly what this appends. */
+void append_gc_roots_of(CG *cg, StrBuf *sb, const char *c_expr,
+                        const char *slang_t, int *wrote) {
+    append_gc_root_expr(cg, sb, c_expr, slang_t, wrote);
+}
+
 int count_gc_root_exprs(CG *cg, const char *slang_t) {
     if (type_is_gc_ptr(cg, slang_t))
         return 1;
