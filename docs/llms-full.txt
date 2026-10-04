@@ -3558,7 +3558,9 @@ pg.release(pool, c);
 ```
 
 At most `max_open` connections exist at once; a task that needs one while
-all are in use waits, up to its deadline. Idle connections are probed
+all are in use waits, up to its deadline. Waiters are served in arrival
+order: a release hands its connection straight to the oldest one, and
+`pool_close` fails every acquire still waiting. Idle connections are probed
 before reuse and closed after `pool.idle_timeout` (5 minutes). A
 connection released while broken, closed or **still inside a
 transaction** is closed rather than handed on — the next caller would
@@ -7695,7 +7697,9 @@ pg.release(pool, c);
 ```
 
 At most `max_open` connections exist at once; a task that needs one while
-all are in use waits, up to its deadline. Idle connections are probed
+all are in use waits, up to its deadline. Waiters are served in arrival
+order: a release hands its connection straight to the oldest one, and
+`pool_close` fails every acquire still waiting. Idle connections are probed
 before reuse and closed after `pool.idle_timeout` (5 minutes). A
 connection released while broken, closed or **still inside a
 transaction** is closed rather than handed on — the next caller would
@@ -8042,7 +8046,7 @@ A connection for the caller's exclusive use, until release(). Prefer pool_query 
 
 ### `fn release(p: Pool, c: Conn)`
 
-Returns a connection to the pool. One that is broken, closed, or still inside a transaction is closed instead: handing an open transaction to the next caller would run its statements inside someone else's uncommitted work.
+Returns a connection to the pool: to the oldest waiting task if there is one, else to the idle list. One that is broken, closed, or still inside a transaction is closed instead, and its slot passed on: handing an open transaction to the next caller would run its statements inside someone else's uncommitted work.
 
 ### `fn pool_query(p: Pool, sql: str, args: [Arg], deadline: until) -> result[Rows, str]`
 
@@ -8050,7 +8054,7 @@ Returns a connection to the pool. One that is broken, closed, or still inside a 
 
 ### `fn pool_close(p: Pool)`
 
-Closes every idle connection. Connections in use are closed as they are released; acquire fails from now on.
+Closes every idle connection and fails every waiting acquire. Connections in use are closed as they are released; acquire fails from now on.
 
 ---
 
