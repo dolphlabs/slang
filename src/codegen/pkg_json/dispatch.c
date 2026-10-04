@@ -106,19 +106,20 @@ static JsonInst *json_reserve(CG *cg, const char *t) {
     return it;
 }
 
-/* The generated codecs read and build a struct through a pointer (a
- * decoded struct is a heap object; an encoded one is walked with `->`), so
- * they only exist for `gc struct`. Without this a plain struct got as far
- * as the C compiler, which said `member reference type is not a pointer`
- * about generated code. Checked at every struct the walk reaches, so a
- * plain struct nested inside a gc one is named too. */
-static void json_require_gc_struct(StructDef *sd, const char *what, int line) {
-    if (sd->is_gc)
-        return;
-    cg_error(line,
-             "cannot json.%s '%s': json supports only gc structs (declare "
-             "it 'gc struct %s')",
-             what, sd->canonical, sd->name);
+/* Both struct kinds have codecs (fix-gc.md 2.1). A gc struct is decoded
+ * into a fresh heap object and encoded through `->`; a value struct is
+ * decoded straight into the caller's storage -- a local, or a list's or
+ * map's slot -- and encoded through `.`, so `[Item]` of a value struct is
+ * one buffer, not one object per item. */
+static const char *json_field_sel(StructDef *sd) {
+    return sd->is_gc ? "->" : ".";
+}
+
+/* A zero initializer for a decode target held in a C local: a value
+ * struct needs braces. */
+static const char *json_zero_init(CG *cg, const char *t) {
+    StructDef *sd = struct_find_canon(cg, t);
+    return sd && !sd->is_gc ? "{0}" : "0";
 }
 
 /* The walk behind json_level_bytes: a depth-first search over the struct
@@ -280,7 +281,6 @@ const char *json_dec_fn(CG *cg, const char *t, int line) {
                      "cannot json.decode into type '%s': not representable "
                      "in JSON (rawptr, chan, and result aren't supported)",
                      t);
-        json_require_gc_struct(sd, "decode into", line);
         for (int i = 0; i < sd->nfields; i++)
             json_dec_fn(cg, sd->ftypes[i], line);
     }
@@ -320,7 +320,6 @@ const char *json_enc_fn(CG *cg, const char *t, int line) {
                      "cannot json.encode type '%s': not representable in "
                      "JSON (rawptr, chan, and result aren't supported)",
                      t);
-        json_require_gc_struct(sd, "encode", line);
         for (int i = 0; i < sd->nfields; i++)
             json_enc_fn(cg, sd->ftypes[i], line);
     }
@@ -461,8 +460,12 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
         emit_line(cg, "return false;");
         cg->indent--;
         emit_line(cg, "}");
-        emit_line(cg, "%s *tmp = (%s *)sl_gc_alloc(sizeof(%s), %s);", sname,
-                  sname, sname, strace);
+        if (sd->is_gc)
+            emit_line(cg, "%s *tmp = (%s *)sl_gc_alloc(sizeof(%s), %s);",
+                      sname, sname, sname, strace);
+        else
+            emit_line(cg, "%s *tmp = out; /* a value struct: the caller's "
+                           "storage */", sname);
         emit_line(cg, "sl_json_val *fv;");
         for (int i = 0; i < sd->nfields; i++) {
             const char *ft = sd->ftypes[i];
@@ -504,7 +507,8 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
             cg->indent--;
             emit_line(cg, "}");
         }
-        emit_line(cg, "*out = tmp;");
+        if (sd->is_gc)
+            emit_line(cg, "*out = tmp;");
         emit_line(cg, "return true;");
     }
 
@@ -616,7 +620,8 @@ static void emit_json_fast_body(CG *cg, JsonInst *it) {
                                   : "NULL";
         emit_line(cg, "if (!sl_jd_open(p, '{')) return false;");
         for (int i = 0; i < sd->nfields; i++) {
-            emit_line(cg, "%s f%d = 0;", ctype_of(cg, sd->ftypes[i]), i);
+            emit_line(cg, "%s f%d = %s;", ctype_of(cg, sd->ftypes[i]), i,
+                      json_zero_init(cg, sd->ftypes[i]));
             emit_line(cg, "bool seen%d = false;", i);
         }
         emit_line(cg, "if (!sl_jd_empty(p, '}')) {");
@@ -673,11 +678,19 @@ static void emit_json_fast_body(CG *cg, JsonInst *it) {
                 emit_line(cg, "if (!seen%d) return false;", i);
             }
         }
-        emit_line(cg, "%s *s = (%s *)sl_gc_alloc(sizeof(%s), %s);", sname,
-                  sname, sname, strace);
-        for (int i = 0; i < sd->nfields; i++)
-            emit_line(cg, "s->%s = f%d;", sanitize_ident(sd->fields[i]), i);
-        emit_line(cg, "*out = s;");
+        if (sd->is_gc) {
+            emit_line(cg, "%s *s = (%s *)sl_gc_alloc(sizeof(%s), %s);",
+                      sname, sname, sname, strace);
+            for (int i = 0; i < sd->nfields; i++)
+                emit_line(cg, "s->%s = f%d;", sanitize_ident(sd->fields[i]),
+                          i);
+            emit_line(cg, "*out = s;");
+        } else {
+            /* A value struct is filled in place: no allocation. */
+            for (int i = 0; i < sd->nfields; i++)
+                emit_line(cg, "out->%s = f%d;", sanitize_ident(sd->fields[i]),
+                          i);
+        }
         emit_line(cg, "return true;");
     }
 
@@ -748,7 +761,7 @@ static void emit_json_enc_body(CG *cg, JsonInst *it) {
             const char *ft = sd->ftypes[i];
             const char *fname = sanitize_ident(sd->fields[i]);
             const char *ffn = json_enc_fn(cg, ft, 0);
-            char *val = xasprintf("v->%s", fname);
+            char *val = xasprintf("v%s%s", json_field_sel(sd), fname);
             char *arg = json_enc_arg(ft, val);
             emit_line(cg, "sl_json_enc_str(\"%s\", out);", sd->fields[i]);
             emit_line(cg, "sl_json_sb_append(out, \":\");");
@@ -902,7 +915,7 @@ char *json_call_gen(CG *cg, const char *fname, Expr *e) {
         char *inner = xasprintf(
             "({ const char *_sl_js = %s; long long _sl_jn = %s; %s"
             "sl_jparser _sl_jp = { _sl_js, _sl_jn, 0, 0, NULL }; "
-            "%s _sl_jout = 0; char *_sl_jerr = NULL; "
+            "%s _sl_jout = %s; char *_sl_jerr = NULL; "
             "bool _sl_jok = %s(&_sl_jp, &_sl_jout) && sl_jd_end(&_sl_jp); "
             "if (!_sl_jok) { sl_json_val *_sl_jv = sl_json_parse(_sl_js, "
             "_sl_jn, &_sl_jerr); if (_sl_jv) _sl_jok = %s(_sl_jv, &_sl_jout, "
@@ -910,8 +923,8 @@ char *json_call_gen(CG *cg, const char *fname, Expr *e) {
             "%s *_sl_jr = (%s *)sl_gc_alloc(sizeof(%s), %s); "
             "if (_sl_jok) { _sl_jr->ok = true; _sl_jr->v = _sl_jout; } "
             "else { _sl_jr->ok = false; _sl_jr->e = _sl_jerr; } _sl_jr; })",
-            data, len, reserve, fct, json_fast_fn(cg, tv), decfn, resname,
-            resname, resname, restrace);
+            data, len, reserve, fct, json_zero_init(cg, tv),
+            json_fast_fn(cg, tv), decfn, resname, resname, resname, restrace);
         /* Tier 10: json.decode allocates (the result[T,E] wrapper,
          * plus whatever the monomorphized decoder itself
          * allocates) -- a real safepoint, same as any other call
