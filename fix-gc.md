@@ -272,6 +272,12 @@ the point reads in flight with it.
   included. Found on the way and landed separately (`fix/preempt-libc-
   deadlock`): an allocator deadlock reachable from `dev` (todo.md), and
   the owner-generation read in `sl_gc_alloc_owned`.
+
+  **Update (2026-10-04): not needed for now.** After 1.10, 1.2 and 1.3
+  the minors are fewer and their walk shorter, and minor time-to-safepoint
+  on the quote server is about 0.6 ms per collection, 1 ms at worst,
+  without any kick. Reopen only if the CCX33 re-run (Phase 9) shows the
+  rendezvous in the tail.
 - [x] **1.2 Stop promoting in-flight request data: promotion after two
   survivals.** Chose (b): it fixes the one-worker case too (30% promoted
   there), where (a) would only have moved the boundary. A first survival
@@ -410,6 +416,12 @@ of its 1-worker number.
 - [ ] **2.3 A runtime-internal allocation that skips zeroing**, for
   callers that overwrite every byte: the body copy, `to_bytes`, list and
   string growth.
+
+  **Dropped (2026-10-04): measured neutral twice.** Skipping the zeroing
+  for the body copy and string growth, quote ABBA against `dev`: CPU per
+  request 2,375 vs 2,376 µs, 2,062 vs 2,056 req/s, RSS 28.5 vs 28.9 MB.
+  The difference is inside the run-to-run spread. Not investigated
+  further: the profile's `bzero` share was not attributed to callers.
 - [ ] **2.4 Attribute what is left by call site**, using the
   instrumented-allocator method from `next-steps.md` §5, and fix by count.
 - [ ] **2.5 New JSON APIs** (in scope as of 2026-10-04; `note.txt` had them
@@ -422,6 +434,15 @@ of its 1-worker number.
     decode straight out of the read buffer, with no body copy.
     `http.read` would expose the body's range, and the copy then happens
     only for a handler that keeps the bytes.
+
+- [x] **2.6 Integers decode in one pass** (found by profiling the quote
+  handler). `json.decode` into an integer field validated the number,
+  then parsed its text again. A plain integer token of up to 18 digits
+  is now scanned and converted in one pass; fractions, exponents and
+  longer numbers keep the exact two-pass path, and
+  `tests/json_int_exact` checks that both agree, error offsets included.
+  Single-task decode probe, ABBA, 5 rounds of 20,000 decodes: 11,812 ->
+  11,011 ms (-6.8%), with no overlap between the two sets of runs.
 
 **Exit gate:** single-thread CPU per quote request at or below Go's
 (about 0.56 ms on the CCX33), measured on the same host as Go.
