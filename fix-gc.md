@@ -1,0 +1,414 @@
+# fix-gc: beat Go on the API workloads, stay in Rust's memory league
+
+The plan that follows the CCX33 cross-language run (PR #287, commit
+`f42f2b5`, 2026-10-01). Work it top to bottom, one PR per numbered item,
+branched from `dev`, never stacked. Tick items as they land and record the
+before/after numbers next to them, as `next-steps.md` does.
+
+Agreed with the owner on 2026-10-04. Decisions taken that day are in
+[Decisions](#decisions); items that override standing rules in `AGENTS.md`
+are marked **(overrides AGENTS.md)**.
+
+## Goal
+
+Two pass conditions, both checked on a CCX33 re-run with the same
+configuration as #287 (4 server cores, 2 load-generator, 2 Postgres):
+
+1. **Beat Go** on every `api` row, at 64 and 512 connections and at both
+   fixed rates, on throughput **and** p99 (p99.9 at the fixed rates), and
+   on `batch` wall time. `compute` already wins (1,837 ms vs 1,896, all
+   three rounds) and must keep winning. `http/static` is capped by the
+   load generator for every language, so there the measure is server CPU
+   per request (slang 72-74 µs, Go 62).
+2. **Memory in Rust's league:** on every row, slang's peak RSS is at most
+   1.10x Rust's, aiming for at or below Rust. Rust is below Go everywhere,
+   so this also keeps slang below Go.
+
+Go's numbers to beat (#287 medians):
+
+| row | Go req/s | Go p99 ms |
+|---|---:|---:|
+| quote c64 / c512 | 6,967 / 7,896 | 35.05 / 151.26 |
+| mix c64 / c512 | 26,198 / 29,394 | 7.07 / 26.92 |
+| point c64 / c512 | 34,005 / 34,980 | 2.70 / 16.31 |
+| mix fixed 2000/s | — | 12.68 (p99.9 18.50) |
+| mix fixed 10000/s | — | 13.72 (p99.9 17.58) |
+| batch | 11.90 s wall | — |
+
+Rows where slang's memory is outside Rust's league today:
+
+| row | slang MB | Rust MB | ratio |
+|---|---:|---:|---:|
+| mix fixed 2000/s | 118.9 | 84.3 | 1.41 |
+| mix fixed 10000/s | 83.9 | 65.3 | 1.28 |
+| http static c200 | 4.4 | 3.6 | 1.22 |
+| quote c512 | 142.0 | 125.4 | 1.13 |
+| mix c512 | 103.5 | 97.7 | 1.06 |
+| point c512 | 39.0 | 37.4 | 1.04 |
+
+Everywhere else slang is already at or below Rust (batch: 1,369 MB vs
+4,575).
+
+## Evidence
+
+**CCX33, server CPU per request** (cores / req/s, medians):
+
+| scenario | slang | Go | Rust | slang / Go |
+|---|---:|---:|---:|---:|
+| quote c64 | 4,044 µs | 561 | 402 | 7.2x |
+| quote c512 | 5,146 µs | 498 | 407 | 10.3x |
+| mix c64 | 751 µs | 126 | 97 | 5.9x |
+| point c64 | 145 µs | 70 | 45 | 2.1x |
+| point c512 | 187 µs | 72 | 46 | 2.6x |
+| http static c200 | 74 µs | 62 | 51 | 1.2x |
+
+Quote is 15% of the mix and accounts for about 0.61 ms of the mix's
+0.75 ms. Postgres CPU per point read: slang about 103 µs, Go 57, Rust 41.
+Postgres is pinned to 2 cores, so slang reaches the database's ceiling at
+half Go's throughput. slang's per-round numbers agree within about 3%.
+
+**Local decode probe** (`dev` at `4bf2a02`, i5-8279U, 800 decodes of the
+97 KB `quote_0.json` from `bench/suite/lib/gen_quote.py`, ABBA, two runs
+each):
+
+| | 1 worker, 1 task | 4 workers, 4 tasks |
+|---|---:|---:|
+| wall | 1,166-1,224 ms | 1,229-1,309 ms |
+| user CPU | 1.15-1.18 s | 2.54-2.65 s |
+| promoted / allocated | 973k / 3.21M (30%) | 2.63M / 3.21M (82%) |
+| STW pause, minor + major | 0.18-0.21 s | 0.77-0.86 s |
+| minors / majors | 244 / 24 | 187-195 / 23 |
+
+**Four workers do no more work than one.** The world is stopped for about
+two thirds of the run, and CPU per decode more than doubles: about 3.3 ms of
+CPU per decode, the same order as the server's 4 ms per quote.
+
+Open discrepancy: the probe decodes 200 bodies in 250-277 ms on one
+worker; `next-steps.md` §7f records 81.9 ms for #290. Item 0.4 settles it.
+
+## Causes, ranked by what they are expected to explain
+
+### The collector (affects everything, quote most)
+1. **Premature promotion.** The minor-GC trigger is one 512 KB budget for
+   the whole process (`sl_gc_nursery_threshold`, `runtime/sl_gc.c`), a
+   quote decode allocates about 262 KB, and any object that survives one
+   minor is promoted. With four workers part-way through decodes, nearly
+   everything they hold is promoted (82%). That garbage then needs majors,
+   and a major marks the whole heap on one thread.
+2. **One thread collects while the others spin.** Stopped workers loop on
+   `sched_yield` (`sl_gc_ack_and_wait`, `sl_gc_stw_sync`). Mark and sweep
+   run on one thread, so three of four cores burn doing nothing. That is
+   why the server showed 3.95 cores busy.
+3. **Waiting for every worker to reach a safepoint can last a whole
+   decode.** `json.decode` has no safepoint (its comment in
+   `runtime/sl_json.c` says so), and a GC request never triggers
+   preemption. The ticker only preempts tasks past their 10 ms quantum.
+4. **Two shared atomics per allocation.** `sl_gc_publish_bytes` does two
+   `fetch_add`s on process-wide counters on every allocation. The comment
+   above `SL_GC_PENDING_BATCH` says publishing is batched every 32
+   allocations; the code publishes every one.
+5. **Every collection does per-object and per-task work.** Each minor
+   rebuilds a hash set of all young objects, sweeps a linked list of them,
+   and walks every parked task three times (512+ at 512 connections).
+6. **`malloc_trim(0)` runs inside every major's stop on Linux**,
+   unmeasured.
+7. **Lists of `int` and of value structs are traced word by word as
+   possible pointers** (`sl_gc_trace_arr_range`, `runtime/sl_containers.c`;
+   maps likewise). Batch's multi-million-entry `[int]` tables pay a set
+   lookup per word on every major, and value-struct lists (item 2.1) would
+   too.
+
+### The `pg` driver (point, and the mix's database rows)
+8. **Pool waiters poll every 2 ms** (`POOL_POLL`, `acquire` in
+   `stdlib/pg/pg.sl`): no wait queue, no wakeup on release. At 512
+   connections against a 64-connection pool, about 450 tasks poll in a
+   lottery. That fits point-512's p99 of 143 ms against Go's 16 ms.
+9. **A probe syscall on every acquire, under the pool lock**
+   (`net.idle_alive`, a `recv(MSG_PEEK)`). pgx probes only connections
+   idle for more than 1 s.
+10. **No prepared statements and text results.** Postgres re-parses and
+    re-plans every query. pgx caches statements and reads binary results.
+11. **Query messages built from about 12 concatenations** (`extended`).
+
+### HTTP and JSON, per request
+12. **`http.read` re-parses the head on every partial `recv`.** A 110 KB
+    body arrives in several reads, and each one allocates a `WireHead` and
+    copies the header block.
+13. **The body is zeroed, then copied.** `sl_gc_alloc` zeroes everything.
+14. **2,000 heap objects where Go has one array.** `[QuoteItem]` is 2,000
+    separate `gc struct`s; Go decodes into one contiguous `[]QuoteItem`.
+    slang's value structs already live inline in lists, but `json.decode`
+    accepts only `gc struct`.
+15. **Encode builds a `str`, then copies it into the response.**
+
+### Memory
+16. **Per-connection buffers sized for the largest body.** The api program
+    gives every connection a 300 KB read arena and a 64 KB response arena
+    (`bench/suite/api/slang/main.sl`, `serve`), because `http.read` refuses
+    a body larger than its buffer. That's where quote-512's RSS goes.
+
+1-6 also explain the mix's latency at a light load (p50 54 ms at 2,000
+req/s with half the cores idle): every stop triggered by a quote freezes
+the point reads in flight with it.
+
+## Rules for every item
+
+- **Memory gate:** peak RSS for quote, mix and point at 64 and 512
+  connections and at both fixed rates, before and after. No item moves a
+  row out of Rust's league (1.10x), and no item makes a row worse by more
+  than the run-to-run spread unless the gain it buys is recorded beside
+  it.
+- **Speed gate:** ABBA order, medians with raw values. Throughput, p99
+  from `bench/latgen` (not wrk), CPU per request, on 4 workers. A delta
+  smaller than the spread is noise.
+- **Correctness:** a test that fails on the old code. Full `make test`.
+  `SLANG_GC_VERIFY_MINOR=1 SLANG_GC_NURSERY_KB=16` with 0 missed, also
+  under forced async preemption (`SLANG_PREEMPT_QUANTUM_MS=1
+  SLANG_PREEMPT_TICK_MS=1`). A linux-arm64 CI dispatch for every
+  `runtime/` or codegen change.
+- **Runtime rules stand:** thread-locals only through accessors, libc
+  bracketed, no GC allocation under a mutex, no safepoint between an
+  allocation and the stores that initialize it.
+- **Allocation budgets** in `tests/run_tests.sh` only go down.
+
+## Phase 0: measure (no behaviour change)
+
+- [ ] **0.1 Split each pause into its parts.** Under `SLANG_GC_STAT`:
+  time-to-safepoint, harvest, set build, mark, sweep, page prune and trim,
+  each with a histogram.
+- [ ] **0.2 Count work per minor:** promotion rate, tasks walked, and the
+  remembered-set size, per minor.
+- [ ] **0.3 Local harnesses, checked in under `bench/`:**
+  - the decode probe above;
+  - a quote-only server under `latgen` (no Postgres);
+  - point and mix against a local Postgres.
+
+  Record a baseline for each.
+- [ ] **0.4 Settle the 81.9 ms vs 250-277 ms discrepancy** (the probe
+  against §7f's recorded number) before any baseline is trusted.
+
+## Phase 1: make four workers worth four
+
+- [ ] **1.1 Bound time-to-safepoint.** If the world has not stopped within
+  about 50 µs, send the existing async-preempt signal to every worker that
+  has not acknowledged. Stopped workers spin briefly, then block on a
+  futex or condition variable instead of `sched_yield`. Target: the
+  safepoint wait drops from up to a decode to the signal's latency.
+- [ ] **1.2 Stop promoting in-flight request data.** Measure two options
+  against each other and keep the better:
+  - (a) nursery budget scaled with the workers (512 KB each, capped);
+  - (b) promote after surviving two minors. The age fits in the `gen`
+    byte, so the header stays 40 bytes; audit every `gen == 0` and
+    `gen == 1` test, the write barrier's included.
+
+  Target: under 10% promoted on the 4-worker probe (82% today), majors
+  down several times, RSS within the gate.
+- [ ] **1.3 Count allocated bytes per worker**, published every 32
+  allocations or 16 KB as the existing comment intends, so the trigger
+  overshoots by at most one batch per worker.
+- [ ] **1.4 Stopped workers help collect.** Parallel sweep first: each
+  worker already owns its pages, so the split is natural. Then parallel
+  mark, with per-worker work lists and an atomic mark claim.
+- [ ] **1.5 Track young objects by page, not by list.** This is §7f Phase
+  3 together with the Phase 2 retry, which the Phase 2 negative result says
+  needs the list walk removed as well. Young objects in pages are found and
+  freed through the pages' bitmaps: no list walk, no set rebuild. A small
+  separate list covers young objects too large for a page.
+- [ ] **1.6 Minors skip tasks with nothing young.** A task that has not
+  run since the last minor holds only old values, because that minor
+  promoted everything it held. Audit every place that hands a value to a
+  parked task first: channel receive, `join`, `select`.
+- [ ] **1.7 `malloc_trim` outside the stop**, and only after a major that
+  freed a lot. Decide it with §7c (macOS keeping freed pages).
+- [ ] **1.8 Precise tracing for lists and maps of non-pointers.** The
+  compiler knows the element type, so it tells the runtime: `[int]` and
+  `[f64]` are not traced at all, and a value struct gets a pointer-offset
+  map. This removes cause 7 and is needed before 2.1 can land without a
+  tracing regression.
+
+**Exit gate:** the 4-worker probe runs at least 3x faster than 1 worker
+(1.0x today), and the local quote server's CPU per request is within 1.3x
+of its 1-worker number.
+
+## Phase 2: cheaper per-request work
+
+- [ ] **2.1 `json.decode` and `json.encode` of value structs**, and of
+  lists and maps of them, decoded inline (decided 2026-10-04). Switch
+  `bench/suite/api/slang` to `struct QuoteItem`: the layout Go uses.
+  About 4,013 allocations per quote become about 2,013. Update the README
+  `json` section and `www/llms-small.md`.
+- [ ] **2.2 Frame the head once per request.** Keep the parsed head across
+  partial `recv`s of one request, without keeping a `WireHead` alive across
+  the park (the promotion trap `http.read`'s comment describes).
+- [ ] **2.3 A runtime-internal allocation that skips zeroing**, for
+  callers that overwrite every byte: the body copy, `to_bytes`, list and
+  string growth.
+- [ ] **2.4 Attribute what is left by call site**, using the
+  instrumented-allocator method from `next-steps.md` §5, and fix by count.
+- [ ] **2.5 New JSON APIs** (in scope as of 2026-10-04; `note.txt` had them
+  out). Proposed, signatures to be confirmed with the owner before code:
+  - `json.encode_into(w: &mut wire, off: int, v: T) -> int`: encode
+    straight into the response wire, with no intermediate `str` (cause
+    15). It returns the true length, so it can size its own wire the way
+    `http`'s `emit` does.
+  - `json.decode_view(buf: wire, lo: int, hi: int) -> result[T, str]`:
+    decode straight out of the read buffer, with no body copy.
+    `http.read` would expose the body's range, and the copy then happens
+    only for a handler that keeps the bytes.
+
+**Exit gate:** single-thread CPU per quote request at or below Go's
+(about 0.56 ms on the CCX33), measured on the same host as Go.
+
+## Phase 3: the `pg` driver
+
+- [ ] **3.1 FIFO wait queue in the pool.** Waiters park and are woken on
+  release, so the 2 ms poll goes away. Include a fairness test. Measure on
+  point-512 p99.
+- [ ] **3.2 Probe only connections idle for more than 1 s, outside the
+  lock**, as pgx does.
+- [ ] **3.3 Build each query message with one builder.**
+- [ ] **3.4 Per-connection prepared-statement cache** (decided 2026-10-04:
+  reverses the driver's "deliberately no named prepared statements"; update
+  that comment). Bounded LRU per connection. On error `0A000` ("cached plan
+  must not change result type"), drop the statement and retry once.
+  Statements are closed when a connection is closed or evicted.
+- [ ] **3.5 Binary result format** for the types the driver decodes
+  (`int2/4/8`, `bool`, `float4/8`, `bytea`; text stays text). In scope as
+  of 2026-10-04 (`note.txt` had it out). Every width and length from the
+  server is bounds-checked, as the driver's limits section requires.
+
+Target: Postgres CPU per point read at or below Go's 57 µs (Rust shows 41
+is possible). Point throughput past Go's needs less database CPU per
+query than pgx, because at 2 Postgres cores the database is the ceiling.
+
+## Phase 4: memory
+
+- [ ] **4.1 Read buffers that grow for a large body**, instead of each
+  connection holding the largest body's worth. `http.read` takes a body
+  beyond its wire into a separate allocation capped by a size limit (a
+  security boundary: cap it, refuse past it, never guess). The api program
+  drops to a small per-connection wire. Target: quote-512 and mix-512
+  inside Rust's league.
+- [ ] **4.2 The fixed-rate mix rows** (1.41x and 1.28x Rust): attribute
+  their RSS (heap, page retention, arenas, malloc) after Phases 1-3, then
+  fix what the attribution names.
+- [ ] **4.3 http static c200** (4.4 MB vs Rust 3.6): attribute and fix.
+
+## Phase 5: collector redesign track
+
+In scope as of 2026-10-04. Each item starts with a design note in
+`runtime/` and a measurement saying what Phases 1-4 left on the table. It
+must answer the objection `runtime/GENERATIONAL_GC_HANDOFF.md` recorded
+against it, and land only if the result clears both gates.
+
+- [ ] **5.1 Moving (mostly-copying) nursery.** The handoff's objection: a
+  conservative candidate word cannot be rewritten. The answer to evaluate
+  is Bartlett-style mostly-copying. Any young object a conservative root
+  (an async-preempted stack, a C runtime frame) may reference is pinned in
+  place and promoted where it stands; everything reached only precisely is
+  evacuated. Also to resolve:
+  - interior pointers (`sl_bytes`' inline `ptr`);
+  - pointers handed to C (`extern`, `rawptr`), which must pin;
+  - the page bitmaps of 1.5.
+
+  The win to measure: bump allocation into contiguous space, minor cost
+  proportional to survivors rather than deaths, and no young
+  fragmentation (RSS).
+- [ ] **5.2 Parallel minors with per-worker nurseries.** Each worker
+  marks and sweeps (or evacuates, with 5.1) its own nursery during a
+  shared stop, like OCaml 5. Then the further step to evaluate: minors
+  local to one worker, with no global stop, which need
+  - every young object promoted the moment it escapes (stored into an old
+    or shared object, sent on a channel, passed to `spawn`, or `join`ed);
+  - an answer for a task moving between workers while holding young
+    pointers.
+- [ ] **5.3 Concurrent marking for majors.** Minors stay stop-the-world.
+  The handoff's objections: a barrier on every pointer store, and extra
+  heap headroom, which threatens the memory goal. Entry condition: after
+  Phases 1-4, majors still show in p99 or p99.9. Measure the cost of a
+  snapshot-at-the-beginning barrier on every store, and the RSS headroom,
+  against the memory gate.
+
+## Phase 6: batch
+
+- [ ] **6.1 Profile on Linux** (`perf`). §7e's leaf-loop polls had
+  already landed (#283) before the measured commit, so the 28.3 s (Go
+  11.9, Rust 7.1, slang CPU 110.8 s vs Go 39.4) already includes them.
+- [ ] **6.2 Precise tracing of the `[int]` tables** (1.8) and §7d's
+  whole-map retrace when an existing map key is updated.
+- [ ] **6.3 What the profile names next:** parsing, hashing, the merge.
+  Keep the lead on memory: 1,369 MB against 4.5-6.0 GB for everyone else.
+
+## Phase 7: LLVM backend evaluation (overrides AGENTS.md)
+
+`AGENTS.md` §6 and `next-steps.md`'s notes say "Do not start an LLVM
+backend". The owner put it in scope on 2026-10-04. The case to test is
+not speed of generated code, since `cc -O3 -flto` already provides that.
+It is **precise stack maps** (`gc.statepoint`). Those would replace the
+safepoint roots arrays and the conservative scan, which removes
+- the per-call root bookkeeping, and
+- 5.1's pinning problem.
+
+- [ ] **7.1 Measure first:** the share of CPU spent on safepoint
+  enter/exit and roots arrays in the api and batch programs (`perf` on
+  Linux, disassembly with `--keep-c`). No backend code unless that share,
+  plus what 5.1 cannot do with pinning, is worth the build-time and
+  maintenance cost, which must be recorded alongside it.
+- [ ] **7.2 If it is worth it:** a design note covering build time
+  (today about 97% of a build is `cc`), the frame guards, both
+  architectures, and keeping the C backend as the reference.
+
+## Phase 8: `bench/http` (overrides AGENTS.md)
+
+`AGENTS.md` §6 says never edit `bench/http/main.sl` for an experiment: it
+is the frozen ruler other bench scripts compare against
+(`bench/http/README.md`). The CCX33 suite measures `bench/http_opt`, not
+this file. In scope as of 2026-10-04.
+
+- [ ] **8.1** Any edit is a deliberate re-baseline, not an experiment:
+  measure the old ruler and the new one on the same host in the same
+  session, record both in `bench/http/README.md`, and keep the old
+  numbers labelled as the old ruler.
+
+## Phase 9: prove it
+
+- [ ] Re-run the full suite on a CCX33 with #287's configuration. Pass:
+  both goals above, every row. Record it in `bench/RESULTS.md`.
+- [ ] Before #287 merges, correct its description:
+  - the "lowest peak RSS among all languages" claim (Rust is lower at
+    c200);
+  - the attribution of quote and mix to "JSON allocation and GC overhead",
+    which that run did not measure;
+  - say which of its two result directories is the smoke run.
+
+## Decisions
+
+Taken 2026-10-04:
+
+- **Prepared statements in `pg`:** yes, reversing the documented choice
+  (3.4).
+- **`json` of value structs:** yes, including the benchmark program's
+  switch to `struct QuoteItem` (2.1).
+- **Memory bar:** no fixed MB cap. Every row stays in Rust's league
+  (≤ 1.10x Rust, aiming for ≤ Rust), which also keeps slang below Go.
+- **Scope widened:**
+  - the collector redesign track (Phase 5);
+  - pg binary format (3.5);
+  - new JSON APIs (2.5);
+  - the LLVM evaluation (Phase 7);
+  - `bench/http` edits (Phase 8);
+  - batch (Phase 6).
+
+- **Rules updated to match Phases 7 and 8:** `next-steps.md`'s notes
+  (here) and `AGENTS.md` §6 (local to each checkout; the file is
+  gitignored) now allow both, under this plan's gates.
+- **Working mode (2026-10-04):** items are worked autonomously, one PR
+  each against `dev`, merged once the definition of done holds. Every
+  decision taken along the way is written into its PR and beside its
+  ticked item here. Laptop runs are the comparison used to move on; the
+  CCX33 re-run (Phase 9) is the verdict.
+
+Still to confirm before their code starts:
+
+- the exact JSON API signatures in 2.5. If no answer is available when
+  2.5 is reached, build the proposed signatures and record that choice.

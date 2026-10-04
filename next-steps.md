@@ -3,6 +3,9 @@
 Work top to bottom, one item at a time; tick items as they land. Items 2
 and 3 are being worked now.
 
+The API performance and memory work after the CCX33 run (#287) has its own
+plan: [`fix-gc.md`](fix-gc.md). It is worked ahead of this queue.
+
 Everything finished is cleared from this file to keep it short. The full
 write-ups — why each design was chosen, what was measured, which controls
 caught what — are in git history and the PR descriptions:
@@ -675,6 +678,6 @@ training data, so it wins on those three. The zokor half (agent guide,
 
 ## Notes
 
-- Do not change `bench/http/main.sl` for perf experiments. Raw-best slang is `bench/http_opt/main.sl`; remasure with `./bench/run_http_opt.sh`.
-- Do not start LLVM.
+- Do not change `bench/http/main.sl` for perf experiments. Raw-best slang is `bench/http_opt/main.sl`; remasure with `./bench/run_http_opt.sh`. A recorded re-baseline under `fix-gc.md` Phase 8 is the one exception.
+- No LLVM backend code without `fix-gc.md` 7.1's measurement.
 - Phase E claim requires p99 **and** RSS vs Go; RPS alone is not a win.
