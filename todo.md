@@ -3257,3 +3257,18 @@ tracers.
 `tests/value_struct_containers` (list, map values, channel, join) fails
 on the old code (19,917 / 20,000 / 1,936 wrong) and is in the three GC
 stress lists.
+
+## Fixed: sched_runnext failed with a correct scheduler when workers were few
+
+Found 2026-10-04 when CI's macOS arm64 leg failed it twice ("a task made
+no progress"). Not a scheduler bug: every spawn goes to the runnext slot
+and pushes the previous occupant to the stripes, so the 32 spinners,
+spawned last, queued behind 128 ping-pong pairs, and a round of the run
+queue costs about one 10 ms quantum per pair and spinner over the
+threads running tasks. With one worker (plus main's thread) a round was
+longer than the test's 1.5 s, and late spinners never got a first turn:
+5 to 9 of 12 runs passed on one worker, identically on every build back
+to before 2026-10-04. Now 48 pairs and 16 spinners: 12 of 12 on one and
+two workers, and a simulated fresh-slice runnext (each hand-off a new
+quantum, what the test exists to catch) still fails every run on 1, 2
+and 4 workers.
