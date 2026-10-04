@@ -1555,30 +1555,49 @@ static void sl_join_wake(sl_join *j) {
     }
 }
 
+/* The join may already be old when its task finishes -- a long task,
+ * or one spawned before a minor -- and the value or error it stores can
+ * hold young pointers (a str, a value struct's fields). Those stores
+ * need the write barrier like any other store into a heap object: without
+ * it a minor freed them while the join still held them (the verifier,
+ * on macOS arm64: young strs held by old joins, not remembered). The
+ * barrier runs after the unlock -- remembering can malloc -- and inside
+ * the same preempt bracket, so no collection comes between. */
 static void sl_join_finish(sl_join *j, const void *val) {
     sl_rt_preempt_disable();
     pthread_mutex_lock(&j->mu);
+    int stored = 0;
     if (!j->done) {
-        if (val && j->valsz)
+        if (val && j->valsz) {
             memcpy(j->val, val, j->valsz);
+            stored = 1;
+        }
         j->done = 1;
         sl_join_wake(j);
     }
     pthread_mutex_unlock(&j->mu);
+    if (stored)
+        sl_gc_remember_obj((sl_gc_obj *)j - 1);
     sl_rt_preempt_enable();
 }
 
 static void sl_join_fail(void *jp, const char *msg) {
     sl_join *j = (sl_join *)jp;
     sl_rt_preempt_disable();
+    /* Allocated before the lock: never allocate GC memory holding one. */
+    char *err = sl_strdup(msg);
     pthread_mutex_lock(&j->mu);
+    int stored = 0;
     if (!j->done) {
         j->panicked = 1;
-        j->err = sl_strdup(msg);
+        j->err = err;
+        stored = 1;
         j->done = 1;
         sl_join_wake(j);
     }
     pthread_mutex_unlock(&j->mu);
+    if (stored)
+        sl_gc_remember_obj((sl_gc_obj *)j - 1); /* see sl_join_finish */
     sl_rt_preempt_enable();
 }
 

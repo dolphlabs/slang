@@ -3243,7 +3243,17 @@ Two causes:
   there freed its str and the map stored a dangling pointer. Keys and
   values are now rooted by type (`append_gc_roots_of`).
 
-The verifier could not see either: it marks with the same tracers.
+- **Join results** (found by this PR's own test on CI's macOS arm64
+  leg): `sl_join_finish` copied a task's result into its join, and
+  `sl_join_fail` its error, with no write barrier. A join promoted while
+  its task ran then held young pointers no minor saw (the verifier: young
+  strs held by old joins, not remembered). Both now remember the join;
+  `sl_join_fail` also allocated its error string under the join's mutex,
+  and now allocates it before taking the lock. Reachable before for any
+  `join[T]` whose T holds a pointer.
+
+The verifier could not see the first two: it marks with the same
+tracers.
 `tests/value_struct_containers` (list, map values, channel, join) fails
 on the old code (19,917 / 20,000 / 1,936 wrong) and is in the three GC
 stress lists.
