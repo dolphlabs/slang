@@ -481,7 +481,7 @@ does: the same layout, the same C, no boxing and no runtime type
 information. Two instances of one template are two different types
 (`Box[int]` is not `Box[str]`), and instances work anywhere a type does,
 including inside `[T]`, `map`, `opt`, `result`, `chan`, `fn` types,
-`json.encode` / `json.decode` (of a `gc struct`), and across packages
+`json.encode` / `json.decode` (of a `struct` or `gc struct`), and across packages
 (`stash.Stack[Thing]`, where `Thing` is the importing package's own type).
 
 A literal infers its arguments from its fields, so it needs at least one
@@ -1246,7 +1246,7 @@ does: the same layout, the same C, no boxing and no runtime type
 information. Two instances of one template are two different types
 (`Box[int]` is not `Box[str]`), and instances work anywhere a type does,
 including inside `[T]`, `map`, `opt`, `result`, `chan`, `fn` types,
-`json.encode` / `json.decode` (of a `gc struct`), and across packages
+`json.encode` / `json.decode` (of a `struct` or `gc struct`), and across packages
 (`stash.Stack[Thing]`, where `Thing` is the importing package's own type).
 
 A literal infers its arguments from its fields, so it needs at least one
