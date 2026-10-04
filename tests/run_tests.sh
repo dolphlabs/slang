@@ -631,6 +631,34 @@ for spec in gc_promotion_budget:1; do
 done
 [ "$promo_bad" -eq 0 ] && echo "PASS promotion budgets"
 
+# ---- nursery adaptation ------------------------------------------------------
+# The nursery grows while minors cost more than an eighth of the time
+# between them and stays at its 512 KB base while they are cheap
+# (fix-gc.md 1.2a). nursery_threshold= is its size at exit.
+#   gc_promotion_budget  decode-heavy: must have grown past the base (was
+#                        fixed at 512 KB; minors 49 -> 5 here).
+#   gc_nursery_small     short strings, nothing live: must stay at most
+#                        1 MB.
+echo "--- nursery adaptation (SLANG_GC_STAT) ---"
+nur_ad_bad=0
+for spec in gc_promotion_budget:grow gc_nursery_small:small; do
+    name=${spec%%:*}
+    want=${spec#*:}
+    size=$(SLANG_GC_STAT=1 ./slangc "tests/$name/main.sl" --run 2>&1 >/dev/null |
+           sed -n 's/^slang-gc-stat collects=.* nursery_threshold=\([0-9]*\).*/\1/p')
+    if [ -z "$size" ]; then
+        echo "FAIL nursery adaptation $name (no slang-gc-stat line)"
+        nur_ad_bad=1; fail=1
+    elif [ "$want" = grow ] && [ "$size" -le 524288 ]; then
+        echo "FAIL nursery adaptation $name: still $size bytes, expected growth"
+        nur_ad_bad=1; fail=1
+    elif [ "$want" = small ] && [ "$size" -gt 1048576 ]; then
+        echo "FAIL nursery adaptation $name: grew to $size bytes for cheap minors"
+        nur_ad_bad=1; fail=1
+    fi
+done
+[ "$nur_ad_bad" -eq 0 ] && echo "PASS nursery adaptation"
+
 # ---- async preemption: C called on an aligned stack ------------------------
 # The async-preemption trampoline calls into C (sl_preempt_yield and two
 # helpers), and System V requires %rsp 16-byte aligned at every call. An

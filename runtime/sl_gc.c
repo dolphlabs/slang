@@ -52,7 +52,21 @@ static size_t sl_gc_threshold = 8 * 1024 * 1024;
  * (sl_gc_threshold, paced to the live set as before) sweeps both
  * generations. Default 512KB (phase-3 tuning; see the tuning log). */
 static _Atomic size_t sl_gc_bytes_since_minor = 0;
-static size_t sl_gc_nursery_threshold = 512 * 1024;
+/* Adaptive (fix-gc.md 1.2a): starts at SL_GC_NURSERY_BASE and doubles,
+ * up to sl_gc_nursery_max, while minors cost more than an eighth of the
+ * time between them and find more than an eighth of it live; halves back
+ * otherwise (sl_gc_nursery_adapt). A minor's cost follows what is live, not the
+ * nursery's size: on the quote server each minor re-marked about four
+ * requests' worth of young data once per request, so a 4 MB nursery
+ * served 25% more req/s with a lower p99 and no more RSS. A program
+ * whose minors are cheap -- most of them -- keeps the small nursery and
+ * its footprint (the compute benchmark: 2.7% of time in minors, 7 MB
+ * RSS at 512 KB against 12 MB at 4 MB for no speed). Read by every
+ * allocating thread, written by the collector: atomic, relaxed. */
+#define SL_GC_NURSERY_BASE (512 * 1024)
+static _Atomic size_t sl_gc_nursery_threshold = SL_GC_NURSERY_BASE;
+static size_t sl_gc_nursery_max = SL_GC_NURSERY_BASE;
+static long long sl_gc_minor_last_end_ns = 0;
 static int sl_gc_nursery_fixed = 0;
 static _Atomic int sl_gc_collect_minor_pending = 0;
 /* SLANG_GC_THRESHOLD_KB: collect every that-many KB allocated, and never
@@ -200,7 +214,9 @@ static void sl_gc_stat_dump(void) {
     unsigned long long surv = atomic_load_explicit(&sl_gc_stat_survived, memory_order_relaxed);
     unsigned long long cyc = atomic_load_explicit(&sl_gc_stat_allocated_cycle, memory_order_relaxed);
     fprintf(stderr, "slang-gc-stat collects=%llu minor_collects=%llu allocs=%llu alloc_bytes=%llu pause_ns_total=%llu pause_ns_max=%llu marked=%llu swept=%llu survived=%llu cycle_allocs=%llu threshold=%zu minor_pause_ns_max=%llu minor_swept=%llu promoted=%llu nursery_threshold=%zu minor_pause_ns_total=%llu\n",
-            collects, minor_collects, allocs, bytes, total, max, marked, swept, surv, cyc, sl_gc_threshold, minor_max, minor_swept, promoted, sl_gc_nursery_threshold, minor_total);
+            collects, minor_collects, allocs, bytes, total, max, marked, swept, surv, cyc, sl_gc_threshold, minor_max, minor_swept, promoted,
+            atomic_load_explicit(&sl_gc_nursery_threshold, memory_order_relaxed),
+            minor_total);
     fprintf(stderr, "slang-gc-stat pause_buckets_ns=[");
     long long bound = 100000;
     for (int b = 0; b < SL_GC_STAT_BUCKETS; b++) {
@@ -448,7 +464,8 @@ static void sl_gc_register_thread(void) {
         const char *nkb = getenv("SLANG_GC_NURSERY_KB");
         long nv = nkb ? strtol(nkb, NULL, 10) : 0;
         if (nv > 0) {
-            sl_gc_nursery_threshold = (size_t)nv * 1024;
+            atomic_store_explicit(&sl_gc_nursery_threshold,
+                                  (size_t)nv * 1024, memory_order_relaxed);
             sl_gc_nursery_fixed = 1;
         }
     }
@@ -646,7 +663,8 @@ static void sl_gc_publish_bytes(sl_task *t) {
                                memory_order_release);
     size_t mprev = atomic_fetch_add_explicit(&sl_gc_bytes_since_minor, delta,
                                              memory_order_relaxed);
-    if (mprev + delta >= sl_gc_nursery_threshold)
+    if (mprev + delta >= atomic_load_explicit(&sl_gc_nursery_threshold,
+                                              memory_order_relaxed))
         atomic_store_explicit(&sl_gc_collect_minor_pending, 1,
                                memory_order_release);
 }
@@ -2461,11 +2479,54 @@ static void sl_gc_verify_minor_marks(sl_gc_thread **snap, int nsnap,
  * entries, a major's young survivors -- and made every minor as
  * expensive as marking the whole reachable old heap: 104ms per minor
  * against a 200k-entry cache, where it now costs the nursery's worth. */
+/* The nursery's ceiling: 1 MB per worker, at most 8 MB, never below the
+ * base. Set once by sl_pool_start, before any task runs. */
+static void sl_gc_nursery_set_max(long workers) {
+    size_t mx = (size_t)(workers > 0 ? workers : 1) * 1024 * 1024;
+    if (mx > (size_t)8 * 1024 * 1024)
+        mx = (size_t)8 * 1024 * 1024;
+    if (mx < SL_GC_NURSERY_BASE)
+        mx = SL_GC_NURSERY_BASE;
+    sl_gc_nursery_max = mx;
+}
+
+/* After each minor (collector, under sl_gc_mu): resize the nursery from
+ * this minor's pause against the time since the previous minor ended,
+ * and from how much of the nursery it found live. Growing pays only when
+ * minors keep re-marking live young data (the quote server: a handful of
+ * in-flight requests, every minor); when almost nothing survives, the
+ * cost is the fixed per-minor overhead, and a bigger nursery would buy
+ * little for its footprint (a tight loop of short strings grew to 8 MB on
+ * pause share alone). So it grows only if both are high, and shrinks if
+ * either is low. The gaps between the thresholds keep it from flapping.
+ * Untouched under SLANG_GC_NURSERY_KB. */
+static void sl_gc_nursery_adapt(long long start_ns, long long end_ns,
+                                size_t live_young) {
+    if (sl_gc_nursery_fixed)
+        return;
+    long long prev = sl_gc_minor_last_end_ns;
+    sl_gc_minor_last_end_ns = end_ns;
+    if (!prev)
+        return;
+    long long pause = end_ns - start_ns;
+    long long interval = end_ns - prev;
+    size_t cur = atomic_load_explicit(&sl_gc_nursery_threshold,
+                                      memory_order_relaxed);
+    size_t next = cur;
+    if (pause * 8 > interval && live_young * 8 > cur &&
+        cur < sl_gc_nursery_max)
+        next = cur * 2 > sl_gc_nursery_max ? sl_gc_nursery_max : cur * 2;
+    else if ((pause * 64 < interval || live_young * 32 < cur) &&
+             cur > SL_GC_NURSERY_BASE)
+        next = cur / 2 < SL_GC_NURSERY_BASE ? SL_GC_NURSERY_BASE : cur / 2;
+    if (next != cur)
+        atomic_store_explicit(&sl_gc_nursery_threshold, next,
+                              memory_order_relaxed);
+}
+
 static void sl_gc_collect_minor_real(void) {
-    long long t0 = 0;
     int stat_on = sl_gc_stat_enabled();
-    if (stat_on)
-        t0 = sl_rt_monotonic_ns();
+    long long t0 = sl_rt_monotonic_ns();
     sl_gc_thread **snap = NULL;
     int nsnap = 0;
     sl_gc_phase_clock pc = {.on = stat_on, .t0 = t0};
@@ -2513,7 +2574,7 @@ static void sl_gc_collect_minor_real(void) {
      * is one more trace per promoted object, and promotion is what this
      * makes rare. */
     sl_gc_obj **mpp = &sl_gc_young;
-    size_t swept = 0, promoted = 0;
+    size_t swept = 0, promoted = 0, live_young = 0;
     while (*mpp) {
         sl_gc_obj *h = *mpp;
         if (h->gen == 1) {
@@ -2531,10 +2592,12 @@ static void sl_gc_collect_minor_real(void) {
             sl_gc_recycle(h);
             swept++;
         } else if (h->gen == 0) {
+            live_young += sizeof(sl_gc_obj) + h->size;
             h->marked = 0;
             h->gen = 2;
             mpp = &h->next;
         } else {
+            live_young += sizeof(sl_gc_obj) + h->size;
             *mpp = h->next;
             if (h->paged)
                 sl_gc_page_promoted(h);
@@ -2569,6 +2632,7 @@ static void sl_gc_collect_minor_real(void) {
     free(snap);
 
     atomic_store_explicit(&sl_gc_bytes_since_minor, 0, memory_order_relaxed);
+    sl_gc_nursery_adapt(t0, sl_rt_monotonic_ns(), live_young);
     if (stat_on) {
         sl_gc_ph_mark(&pc, SL_GC_PH_TAIL);
         sl_gc_stat_phases(&pc, 0);
