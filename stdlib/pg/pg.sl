@@ -39,6 +39,7 @@ let MAX_SCRAM_ITERATIONS = 1000000;
 let READ_CHUNK = 65536;
 let MAX_READ = 4194304;
 let POOL_REAP = 2000000;          // 2ms between deadline checks of waiters
+let POOL_PROBE_AFTER = 1000000000; // probe connections idle longer than 1s
 // What a waiting pool acquire was granted. Each waiter gets exactly one,
 // under the pool lock, followed by exactly one send on its wake channel.
 let GOT_NONE = 0;
@@ -2336,26 +2337,48 @@ pub fn acquire(p: Pool, deadline: until) -> result[Conn, str] {
         mutex_unlock(p.lock);
         return err("pool is closed");
     }
-    let now = time.mono();
     while len(p.idle) > 0 {
         let it = pop(p.idle);
-        // Probed before reuse: the server closes idle sessions on
-        // timers of its own (idle_session_timeout, a proxy's), and a
-        // query written onto a closed connection fails in a way that
-        // cannot be told from the query itself failing.
-        let alive = net.idle_alive(it.c.t.fd);
-        if it.c.t.ssl != nullptr {
-            alive = net.tls_idle_alive(it.c.t.ssl);
-        }
-        if now - it.since > p.idle_timeout || !alive || !usable(it.c) {
+        let idle_for = time.mono() - it.since;
+        let ok_so_far = idle_for <= p.idle_timeout && usable(it.c);
+        if ok_so_far {
+            p.reuses = p.reuses + 1;
+            it.c.in_pool = false;
+        } else {
             p.open = p.open - 1;
-            close(it.c);
-            continue;
         }
-        p.reuses = p.reuses + 1;
-        it.c.in_pool = false;
         mutex_unlock(p.lock);
-        return ok(it.c);
+        // Probed before reuse when it has been idle a while: the server
+        // closes idle sessions on timers of its own
+        // (idle_session_timeout, a proxy's), and a query written onto a
+        // closed connection fails in a way that cannot be told from the
+        // query itself failing. One idle under a second was in use a
+        // moment ago -- the idle list is LIFO, so under load that is
+        // nearly every reuse -- and probing it was a syscall on every
+        // acquire, inside the pool lock. pgx draws the line at 1s too.
+        // Probe and close run outside the lock: both touch the socket.
+        if ok_so_far && idle_for > POOL_PROBE_AFTER {
+            let alive = net.idle_alive(it.c.t.fd);
+            if it.c.t.ssl != nullptr {
+                alive = net.tls_idle_alive(it.c.t.ssl);
+            }
+            if !alive {
+                ok_so_far = false;
+                mutex_lock(p.lock);
+                p.reuses = p.reuses - 1;
+                p.open = p.open - 1;
+                mutex_unlock(p.lock);
+            }
+        }
+        if ok_so_far {
+            return ok(it.c);
+        }
+        close(it.c);
+        mutex_lock(p.lock);
+        if p.closed {
+            mutex_unlock(p.lock);
+            return err("pool is closed");
+        }
     }
     if p.open < p.max_open {
         p.open = p.open + 1;

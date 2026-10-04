@@ -377,6 +377,30 @@ fn pool_waiters() {
     println("ok pool waiters");
 }
 
+// A connection the server closed while it sat idle past the probe line
+// (a second) is noticed and replaced, not handed out to fail its query.
+fn pool_dead_idle() {
+    let p = pool_of(2);
+    let c = take(p);
+    let pid = pg.get_int(q(c, "SELECT pg_backend_pid()", []), 0, 0);
+    pg.release(p, c);
+    let killer = conn();
+    q(killer, "SELECT pg_terminate_backend($1)", [pg.arg_int(pid)]);
+    pg.close(killer);
+    time.sleep(1100000000);
+    let r = pg.pool_query(p, "SELECT 1", [], soon());
+    guard let _rows = r else let e = err_of(r) {
+        die("pool dead idle: " + e);
+        return;
+    }
+    if p.dials != 2 || p.open != 1 {
+        die("pool dead idle: dials " + to_str(p.dials) + " open " +
+            to_str(p.open));
+    }
+    pg.pool_close(p);
+    println("ok pool dead idle");
+}
+
 // ---- large results ----------------------------------------------------
 
 fn large() {
@@ -606,6 +630,7 @@ errors();
 cancel();
 pool();
 pool_waiters();
+pool_dead_idle();
 large();
 tls();
 copy();
