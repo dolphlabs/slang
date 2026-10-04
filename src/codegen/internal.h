@@ -661,6 +661,8 @@ int type_is_gc_ptr(CG *cg, const char *t);
 int type_has_gc_roots(CG *cg, const char *t);
 int struct_has_gc_fields(CG *cg, StructDef *sd);
 int count_gc_root_exprs(CG *cg, const char *slang_t);
+void append_gc_roots_of(CG *cg, StrBuf *sb, const char *c_expr,
+                        const char *slang_t, int *wrote);
 int count_named_gc_roots(CG *cg, const char *name);
 void append_named_gc_roots(CG *cg, StrBuf *sb, const char *name, int *wrote);
 int struct_type_is_gc(CG *cg, const char *t);

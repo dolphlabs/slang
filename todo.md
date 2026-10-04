@@ -3218,3 +3218,32 @@ register before the enable (checked with `objdump -d`), so there is no
 failure to show; nothing in the C guarantees that order. Closing it means
 computing the payload pointer before the enable behind a compiler
 barrier, or keeping the enable as the last instruction before return.
+
+## Fixed: value structs in containers lost their pointers to the collector
+
+Found on 2026-10-04 while preparing fix-gc.md 2.1 (json of value
+structs), on `dev` and on `dev` as of 2026-10-02 alike. A value struct
+whose GC pointer is not its first word, held in a container, had that
+pointer freed while still in use:
+
+    struct P { n: int, s: str }
+    let ps: [P] = [];   // 20,000 pushes, then read back: 17,221 wrong
+
+Two causes:
+- **Slot tracing.** Codegen creates lists, maps, channels and joins with a
+  "may hold pointers" flag from `type_has_gc_roots`, which is true for a
+  value struct with a pointer field. The runtime tracers read the flag as
+  "each slot is exactly one pointer" and marked only a slot's first word
+  (here the int). `sl_gc_mark_slot` now treats a slot as one pointer only
+  when it is pointer-sized and scans wider slots word by word, as the
+  runtime already did for the flag's false case.
+- **Map stores.** `m[k] = v` builds `v` in a C local and enters a
+  safepoint before `sl_map_put`, rooting `v` only when `v` was itself a
+  GC pointer. A value struct's fields were not rooted, so a collection
+  there freed its str and the map stored a dangling pointer. Keys and
+  values are now rooted by type (`append_gc_roots_of`).
+
+The verifier could not see either: it marks with the same tracers.
+`tests/value_struct_containers` (list, map values, channel, join) fails
+on the old code (19,917 / 20,000 / 1,936 wrong) and is in the three GC
+stress lists.

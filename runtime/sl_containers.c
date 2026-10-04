@@ -57,23 +57,33 @@ typedef struct {
         parked waiting for data */
 } sl_chan;
 
+/* Mark what one container slot (an element, a key, a value) holds.
+ * `is_ptr` is the container's "may hold pointers" flag. Codegen sets it
+ * from type_has_gc_roots, so it is true for a value struct with a pointer
+ * field as well as for a plain pointer -- and a slot was read as a single
+ * pointer whenever it was set, so only a value struct's FIRST word was
+ * marked. A struct { n: int, s: str } in a list, map, channel or join
+ * lost its str to the next collection (tests/value_struct_containers:
+ * 19,917 of 20,000 list elements read back wrong). A slot is one pointer
+ * only when it is exactly pointer-sized; anything wider is scanned word by
+ * word, each word validated by mark() before it is trusted. */
+static inline void sl_gc_mark_slot(const unsigned char *el, size_t sz,
+                                   int is_ptr, void (*mark)(void *)) {
+    if (is_ptr && sz == sizeof(void *)) {
+        mark(*(void *const *)el);
+        return;
+    }
+    for (size_t off = 0; off + sizeof(void *) <= sz; off += sizeof(void *))
+        mark(*(void *const *)(el + off));
+}
+
 static void sl_gc_trace_chan(void *p, void (*mark)(void *)) {
     sl_chan *c = (sl_chan *)p;
     if (!c->buf) return;
     mark(c->buf);
-    /* Value-struct interiors (same as sl_gc_trace_arr). */
-    if (!c->elem_is_ptr) {
-        if (c->elemsz < (long long)sizeof(void *)) return;
-        for (int i = 0; i < c->cap; i++) {
-            unsigned char *el = c->buf + (size_t)i * (size_t)c->elemsz;
-            for (size_t off = 0; off + sizeof(void *) <= (size_t)c->elemsz;
-                 off += sizeof(void *))
-                mark(*(void **)(el + off));
-        }
-        return;
-    }
     for (int i = 0; i < c->cap; i++)
-        mark(*(void **)(c->buf + (size_t)i * c->elemsz));
+        sl_gc_mark_slot(c->buf + (size_t)i * (size_t)c->elemsz,
+                        (size_t)c->elemsz, c->elem_is_ptr, mark);
 }
 
 static sl_chan *sl_chan_new(size_t elemsz, int cap, int elem_is_ptr) {
@@ -812,18 +822,10 @@ static int sl_gc_clean_at(long long n) {
  * element when the elements are value structs. */
 static void sl_gc_trace_arr_range(sl_arr *a, long long from,
                                   void (*mark)(void *)) {
-    if (!a->elem_is_ptr) {
-        if (a->esz < (long long)sizeof(void *)) return;
-        for (long long i = from; i < a->len; i++) {
-            unsigned char *el = a->data + (size_t)i * a->esz;
-            for (size_t off = 0; off + sizeof(void *) <= (size_t)a->esz;
-                 off += sizeof(void *))
-                mark(*(void **)(el + off));
-        }
-        return;
-    }
+    if (!a->elem_is_ptr && a->esz < (long long)sizeof(void *)) return;
     for (long long i = from; i < a->len; i++)
-        mark(*(void **)(a->data + (size_t)i * a->esz));
+        sl_gc_mark_slot(a->data + (size_t)i * a->esz, (size_t)a->esz,
+                        a->elem_is_ptr, mark);
 }
 
 static void sl_gc_trace_arr(void *p, void (*mark)(void *)) {
@@ -861,14 +863,8 @@ static int sl_gc_trace_arr_minor(void *p, void (*mark)(void *)) {
         mark(a->data);
         for (long long i = a->gc_clean; i < a->len; i++) {
             unsigned long long s0 = sl_gc_minor_gen0_seen;
-            unsigned char *el = a->data + (size_t)i * a->esz;
-            if (a->elem_is_ptr) {
-                mark(*(void **)el);
-            } else if (a->esz >= (long long)sizeof(void *)) {
-                for (size_t off = 0; off + sizeof(void *) <= (size_t)a->esz;
-                     off += sizeof(void *))
-                    mark(*(void **)(el + off));
-            }
+            sl_gc_mark_slot(a->data + (size_t)i * a->esz, (size_t)a->esz,
+                            a->elem_is_ptr, mark);
             if (first < 0 && sl_gc_minor_gen0_seen != s0)
                 first = i;
         }
@@ -1019,20 +1015,10 @@ static void sl_gc_trace_map_range(sl_map *m, long long from,
                                   void (*mark)(void *)) {
     for (long long i = from; i < m->count; i++) {
         long long slot = m->order[i];
-        if (m->key_is_ptr)
-            mark(*(void **)(m->keys + (size_t)slot * m->ksz));
-        else if (m->ksz >= sizeof(void *)) {
-            for (size_t off = 0; off + sizeof(void *) <= m->ksz;
-                 off += sizeof(void *))
-                mark(*(void **)(m->keys + (size_t)slot * m->ksz + off));
-        }
-        if (m->val_is_ptr)
-            mark(*(void **)(m->vals + (size_t)slot * m->vsz));
-        else if (m->vsz >= sizeof(void *)) {
-            for (size_t off = 0; off + sizeof(void *) <= m->vsz;
-                 off += sizeof(void *))
-                mark(*(void **)(m->vals + (size_t)slot * m->vsz + off));
-        }
+        sl_gc_mark_slot(m->keys + (size_t)slot * m->ksz, m->ksz,
+                        m->key_is_ptr, mark);
+        sl_gc_mark_slot(m->vals + (size_t)slot * m->vsz, m->vsz,
+                        m->val_is_ptr, mark);
     }
 }
 
@@ -1057,20 +1043,10 @@ static int sl_gc_trace_map_minor(void *p, void (*mark)(void *)) {
     for (long long i = m->gc_clean; i < m->count; i++) {
         unsigned long long s0 = sl_gc_minor_gen0_seen;
         long long slot = m->order[i];
-        if (m->key_is_ptr)
-            mark(*(void **)(m->keys + (size_t)slot * m->ksz));
-        else if (m->ksz >= sizeof(void *)) {
-            for (size_t off = 0; off + sizeof(void *) <= m->ksz;
-                 off += sizeof(void *))
-                mark(*(void **)(m->keys + (size_t)slot * m->ksz + off));
-        }
-        if (m->val_is_ptr)
-            mark(*(void **)(m->vals + (size_t)slot * m->vsz));
-        else if (m->vsz >= sizeof(void *)) {
-            for (size_t off = 0; off + sizeof(void *) <= m->vsz;
-                 off += sizeof(void *))
-                mark(*(void **)(m->vals + (size_t)slot * m->vsz + off));
-        }
+        sl_gc_mark_slot(m->keys + (size_t)slot * m->ksz, m->ksz,
+                        m->key_is_ptr, mark);
+        sl_gc_mark_slot(m->vals + (size_t)slot * m->vsz, m->vsz,
+                        m->val_is_ptr, mark);
         if (first < 0 && sl_gc_minor_gen0_seen != s0)
             first = i;
     }
@@ -1559,14 +1535,7 @@ static void sl_gc_trace_join(void *p, void (*mark)(void *)) {
     mark(j->err);
     mark(j->val);
     if (!j->done || j->panicked) return;
-    /* Value-struct interiors (same as sl_gc_trace_arr). */
-    if (j->val_is_ptr) {
-        mark(*(void **)j->val);
-        return;
-    }
-    for (size_t off = 0; off + sizeof(void *) <= j->valsz;
-         off += sizeof(void *))
-        mark(*(void **)(j->val + off));
+    sl_gc_mark_slot(j->val, j->valsz, j->val_is_ptr, mark);
 }
 
 static sl_join *sl_join_new(size_t valsz, int val_is_ptr) {
