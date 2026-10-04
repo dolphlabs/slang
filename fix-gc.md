@@ -393,11 +393,17 @@ of its 1-worker number.
 
 ## Phase 2: cheaper per-request work
 
-- [ ] **2.1 `json.decode` and `json.encode` of value structs**, and of
-  lists and maps of them, decoded inline (decided 2026-10-04). Switch
-  `bench/suite/api/slang` to `struct QuoteItem`: the layout Go uses.
-  About 4,013 allocations per quote become about 2,013. Update the README
-  `json` section and `www/llms-small.md`.
+- [x] **2.1 `json.decode` and `json.encode` of value structs**, and of
+  lists and maps of them, decoded inline (decided 2026-10-04). Done: a
+  plain struct is decoded straight into the caller's storage (a binding,
+  a list's or map's slot) and encoded through `.`; `bench/suite/api/slang`
+  uses `struct QuoteItem`. The three `fail_json_plain_struct_*` tests
+  became positive `json_plain_struct_*` tests. Needed the value-struct
+  tracing and rooting fix first (todo.md: lists of value structs lost
+  their strs). Quote server, ABBA, `dev` with `gc struct QuoteItem`
+  against this with `struct QuoteItem`, responses byte-identical: 2,019
+  -> 2,829 req/s, p99 78 -> 54 ms, p99.9 106 -> 76 ms, CPU per request
+  2.39 -> 1.70 ms, RSS ~30 -> ~25 MB.
 - [ ] **2.2 Frame the head once per request.** Keep the parsed head across
   partial `recv`s of one request, without keeping a `WireHead` alive across
   the park (the promotion trap `http.read`'s comment describes).

@@ -637,7 +637,7 @@ does: the same layout, the same C, no boxing and no runtime type
 information. Two instances of one template are two different types
 (`Box[int]` is not `Box[str]`), and instances work anywhere a type does,
 including inside `[T]`, `map`, `opt`, `result`, `chan`, `fn` types,
-`json.encode` / `json.decode` (of a `gc struct`), and across packages
+`json.encode` / `json.decode` (of a `struct` or `gc struct`), and across packages
 (`stash.Stack[Thing]`, where `Thing` is the importing package's own type).
 
 A literal infers its arguments from its fields, so it needs at least one
@@ -1280,6 +1280,14 @@ let s: str = json.encode(p);
 let r: result[Person, str] = json.decode(s);
 guard let p2 = r else { exit(1); }
 ```
+
+Plain `struct`s work as well as `gc struct`s, and are cheaper to decode:
+a plain struct is filled in place -- in the binding, or in a list's or
+map's own slot -- so a `[Item]` of a plain `Item` is one buffer, where a
+`gc struct Item` is one heap object per element. For a large array of
+small records (a request body with thousands of line items) that halves
+the allocations. Use `gc struct` when the record must be shared by
+reference.
 
 Supported: `gc struct` (a plain `struct` is a compile error naming it, since
 the codecs read and build structs through a pointer), `opt[T]`, `[T]`,

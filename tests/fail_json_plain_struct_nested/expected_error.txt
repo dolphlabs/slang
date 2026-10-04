@@ -1,1 +1,0 @@
-cannot json.encode 'fail_json_plain_struct_nested.Inner'

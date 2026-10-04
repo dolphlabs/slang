@@ -1,1 +1,0 @@
-json supports only gc structs (declare it 'gc struct Plain')

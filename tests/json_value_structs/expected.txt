@@ -1,0 +1,10 @@
+7 2 B 5
+crate 1,-2
+fragile
+none
+{"id":7,"items":[{"sku":"A","qty":2,"tags":["x","y"],"note":null},{"sku":"B","qty":5,"tags":[],"note":"fragile"}],"box":{"corner":{"x":1,"y":-2},"label":"crate"},"by_sku":{"A":{"sku":"A","qty":2,"tags":[],"note":null}}}
+7
+{"x":3,"y":4}
+2 4
+[{"x":1,"y":2},{"x":3,"y":4}]
+missing required field 'y'
