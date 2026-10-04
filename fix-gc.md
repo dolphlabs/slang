@@ -122,6 +122,16 @@ worker; `next-steps.md` §7f records 81.9 ms for #290. Item 0.4 settles it.
    maps likewise). Batch's multi-million-entry `[int]` tables pay a set
    lookup per word on every major, and value-struct lists (item 2.1) would
    too.
+18. **Resuming a parked task is O(parked tasks) under the global GC
+    mutex.** `sl_task_resume` unlinks the task from `sl_parked_tasks`, a
+    singly linked list, by walking it while holding `sl_gc_mu`. At 512
+    connections every wakeup walks up to 512 entries under the lock
+    every collection also needs. (Found during 1.1; not yet measured.)
+19. **`SLANG_WORKERS=N` runs tasks on N+1 threads.** main's own thread
+    joins the pool after main's task first switches out, on top of the N
+    workers. The CCX33 runs set `SLANG_WORKERS=4` on 4 pinned cores, so 5
+    threads competed for them, and every stop waits for 5. (Found during
+    1.1; to be decided with 1.4.)
 
 ### The `pg` driver (point, and the mix's database rows)
 8. **Pool waiters poll every 2 ms** (`POOL_POLL`, `acquire` in
@@ -233,6 +243,35 @@ the point reads in flight with it.
   has not acknowledged. Stopped workers spin briefly, then block on a
   futex or condition variable instead of `sched_yield`. Target: the
   safepoint wait drops from up to a decode to the signal's latency.
+
+  **Status (2026-10-04): built and measured, not landed.** Branch
+  `perf/gc-ttsp` holds five parts: a kick (async-preempt every running
+  task after 50 µs at the rendezvous), a preemption slot for main's
+  thread (it had none), an allocation-entry yield (85% of kicks were
+  declined inside the allocator's bracket), a CPU pause instead of
+  `sched_yield` (Darwin's depresses the collector's priority for a
+  quantum), and stopped workers sleeping on a condition variable. Minor
+  time-to-safepoint on the 4-worker decode probe fell from 67 ms total
+  (10 ms worst) to 1.5-1.9 ms (0.05-0.2 ms worst), and quote CPU per
+  request from 6.0 to 3.3 ms. But on this laptop, ABBA against `dev`:
+
+  | variant | quote req/s | quote RSS | CPU/req |
+  |---|---:|---:|---:|
+  | all five parts | -9% | +42% | -46% |
+  | kick + pause-spin | -22% | +16% | +29% |
+  | kick + sleep | -17% | +13% | -42% |
+  | kick + yield + spin | -17% | +42% | +21% |
+
+  Throughput and RSS gates fail, so none of it lands yet. The yield is
+  what costs RSS (more half-built requests live at each minor, more
+  promoted). The load generator shares this laptop's cores, and macOS
+  treats spinning, sleeping and `sched_yield` very differently from the
+  CCX33's pinned Linux cores, so the waiting strategy is re-measured in a
+  Linux container with pinned CPUs before it is decided. 1.9 and 1.2 go
+  first: fewer collections shrink every per-collection cost, this one
+  included. Found on the way and landed separately (`fix/preempt-libc-
+  deadlock`): an allocator deadlock reachable from `dev` (todo.md), and
+  the owner-generation read in `sl_gc_alloc_owned`.
 - [ ] **1.2 Stop promoting in-flight request data.** Measure two options
   against each other and keep the better:
   - (a) nursery budget scaled with the workers (512 KB each, capped);

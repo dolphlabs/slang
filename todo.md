@@ -3168,3 +3168,53 @@ Test: `tests/json_deep_nesting` (depths 100/511/512/513 on the main
 task and a spawned one; `Node`/`Tree`/`Trie` chains to the cap); the
 old build dies with SIGBUS on its first case. GC-stress listed.
 
+
+## Fixed along the way: a task preempted inside free() deadlocked the allocator
+
+Found by fix-gc.md 1.1 (2026-10-04). A benchmark server built with an
+experimental GC kick (frequent async preemption) stopped answering
+mid-run: every worker asleep at the GC rendezvous, the collector (main's
+thread) blocked in `calloc` from `sl_gc_set_build`, inside
+`large_malloc` waiting on its `os_unfair_lock`. The lock's owner was a
+task that was queued, not running: it had been async-preempted inside
+`free()`.
+
+The `free` was `sl_arena_chunk_put`'s, for an arena too large for the
+chunk free list (it keeps 1 MB): the api server's 300 KB and 64 KB
+per-connection arenas, released when a load generator's connections
+close. It sat after the bracket's `sl_rt_preempt_enable()`. When such a
+task resumes on another thread and unlocks, `os_unfair_lock` traps on the
+foreign owner: the same bug's other face is a SIGILL.
+
+Plain `dev` has it at the ticker's rate: `tests/deadlock/arena_churn`
+under `SLANG_PREEMPT_QUANTUM_MS=1 SLANG_PREEMPT_TICK_MS=1` hung in 6 of
+10 runs (none at default settings in 20).
+
+Fixed twice over: the `free` is inside the bracket, and the preempt
+handler declines any PC outside the executable's own `__text`
+(`sl_preempt_text_lo`/`hi`; Go applies the same rule), so an unbracketed
+call into libc, libsystem_malloc or OpenSSL can no longer be preempted.
+`tests/deadlock/arena_churn` runs in a new watchdog section of
+`tests/run_tests.sh`, once plain and twice with forced preemption.
+
+Same PR, same root: `sl_gc_alloc_owned` read the owner's generation
+before calling the allocator, so an async preemption in between could
+let a collection promote the owner first and the buffer was born young
+under an old owner. An allocation-entry yield (tried for 1.1) made that
+likely and the verifier caught it (1-7 young leaves held by old maps in
+`http_client_pool` and `http2_flood`). The generation is now read inside
+the allocator's bracket. `fs.read`/`fs.write` retry on EINTR, which the
+ticker's SIGUSR1 (no SA_RESTART) can cause on a pipe or terminal.
+
+## Not fixed: a header pointer is invisible to the conservative scan
+
+Found reading the scan for 1.1. `sl_gc_scan_conservative` and
+`sl_gc_mark` recognize a payload start (and `#277`'s inline-bytes
+pointer), never a header. If a preemption landed in `sl_gc_alloc_gen`
+after its `sl_rt_preempt_enable()` but before `h + 1` was computed, the
+fresh object would be reachable only through `h` and could be swept.
+The current clang x86_64 build computes `h + 1` into a callee-saved
+register before the enable (checked with `objdump -d`), so there is no
+failure to show; nothing in the C guarantees that order. Closing it means
+computing the payload pointer before the enable behind a compiler
+barrier, or keeping the enable as the last instruction before return.
