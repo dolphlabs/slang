@@ -37,8 +37,9 @@ static int sl_runtime_test_main(void) {
         return 1;
     sl_gc_collect();
 
-    /* Generational: a rooted young object survives minors and a major,
-     * and the first minor promotes it. */
+    /* Generational: a rooted young object survives minors and a major;
+     * the first minor ages it (gen 2, still young) and the second
+     * promotes it (fix-gc.md 1.2). */
     {
         void *promo = sl_gc_alloc(64, NULL);
         if (!promo) return 1;
@@ -47,8 +48,9 @@ static int sl_runtime_test_main(void) {
         void *roots[] = { promo };
         sl_rt_safepoint_enter(&sp, roots, 1);
         sl_gc_collect_minor();
-        if (((sl_gc_obj *)promo - 1)->gen != 1) { sl_rt_safepoint_exit(); return 1; }
+        if (((sl_gc_obj *)promo - 1)->gen != 2) { sl_rt_safepoint_exit(); return 1; }
         sl_gc_collect_minor();
+        if (((sl_gc_obj *)promo - 1)->gen != 1) { sl_rt_safepoint_exit(); return 1; }
         if (((unsigned char *)promo)[0] != 0x5a) { sl_rt_safepoint_exit(); return 1; }
         sl_gc_collect();
         if (((unsigned char *)promo)[0] != 0x5a) { sl_rt_safepoint_exit(); return 1; }
@@ -137,6 +139,7 @@ static int sl_gc_test_owned_buffers(void) {
         void *roots[] = { owner };
         sl_rt_safepoint_enter(&sp, roots, 1);
         sl_gc_collect_minor();
+        sl_gc_collect_minor();
         if (sl_gc_test_gen(owner) != 1) { sl_rt_safepoint_exit(); return 1; }
         unsigned char *old_buf = (unsigned char *)sl_gc_alloc_owned(64, owner);
         if (sl_gc_test_gen(old_buf) != 1) { sl_rt_safepoint_exit(); return 1; }
@@ -169,6 +172,7 @@ static int sl_gc_test_owned_buffers(void) {
             char *k = sl_gc_test_key((int)i);
             sl_map_put(m, &k, &i);
         }
+        sl_gc_collect_minor();
         sl_gc_collect_minor();
         if (sl_gc_test_gen(m) != 1) { sl_rt_safepoint_exit(); return 1; }
         long long old_cap = m->cap;
@@ -216,6 +220,7 @@ static int sl_gc_test_owned_buffers(void) {
         sl_rt_safepoint_enter(&sp, roots, 1);
         void *el = sl_gc_alloc(16, NULL);
         sl_arr_push(a, &el, sizeof(void *));
+        sl_gc_collect_minor();
         sl_gc_collect_minor();
         if (sl_gc_test_gen(a) != 1) { sl_rt_safepoint_exit(); return 1; }
         long long old_cap = a->cap;

@@ -3562,10 +3562,12 @@ What this means in practice:
   minor collection runs after every 512KB of allocation. It marks from
   the roots and the remembered set (old objects a write barrier saw gain
   a pointer to a young one), sweeps only the nursery, and promotes what
-  survives. Old objects are never traced by a minor, so its cost follows
-  the nursery, not the heap: about 0.8ms per minor whether a program
-  keeps 20k or a million long-lived objects. Majors sweep everything and
-  promote what they keep.
+  survives two minors: data that is merely in use when a minor lands,
+  like a request half way through, stays young and dies young instead of
+  being left for a major. Old objects are never traced by a minor, so its
+  cost follows the nursery, not the heap: about 0.8ms per minor whether a
+  program keeps 20k or a million long-lived objects. Majors sweep
+  everything and promote what they keep.
 - A list or map written since the last minor is traced from the first
   position written, not from the start, so filling a million-entry list
   or map costs each minor only what was added since the previous one.

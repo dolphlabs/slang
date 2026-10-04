@@ -777,10 +777,11 @@ static unsigned long long sl_from_be(sl_bytes *b) {
 
 /* ---- growable arrays over GC memory ---- */
 
-/* gc_clean (lists and maps): positions below it hold no pointer written
- * since the last minor collection that traced this container, so a minor
+/* gc_clean (lists and maps): positions below it hold no pointer that can
+ * be young -- nothing written since the last minor that traced this
+ * container, and nothing that minor found still young -- so a minor
  * tracing it through the remembered set starts there instead of at 0
- * (sl_gc_trace_arr_dirty / sl_gc_trace_map_dirty). Every store that can
+ * (sl_gc_trace_arr_minor / sl_gc_trace_map_minor). Every store that can
  * put a young pointer into the container lowers it to the position
  * written (an append, a[i] = v, a new map key) or to 0 when the position
  * is not known (a generic sl_gc_remember, a map update); a delete lowers
@@ -847,14 +848,33 @@ static void sl_gc_trace_arr(void *p, void (*mark)(void *)) {
     sl_gc_trace_arr_range(a, 0, mark);
 }
 
-/* A minor's trace of a remembered list: only from gc_clean on. */
-static void sl_gc_trace_arr_dirty(void *p, void (*mark)(void *)) {
+/* The minor's remembered-phase trace of a list (sl_gc_minor_mark): from
+ * gc_clean on only, and gc_clean is left at the first
+ * position whose element met a first-survival young object
+ * (sl_gc_minor_gen0_seen moved while marking it): that object is still
+ * young after this minor, so the next minor must reach it again. Returns
+ * nonzero when there is such a position (the list stays remembered). */
+static int sl_gc_trace_arr_minor(void *p, void (*mark)(void *)) {
     sl_arr *a = (sl_arr *)p;
+    long long first = -1;
     if (a->data) {
         mark(a->data);
-        sl_gc_trace_arr_range(a, a->gc_clean, mark);
+        for (long long i = a->gc_clean; i < a->len; i++) {
+            unsigned long long s0 = sl_gc_minor_gen0_seen;
+            unsigned char *el = a->data + (size_t)i * a->esz;
+            if (a->elem_is_ptr) {
+                mark(*(void **)el);
+            } else if (a->esz >= (long long)sizeof(void *)) {
+                for (size_t off = 0; off + sizeof(void *) <= (size_t)a->esz;
+                     off += sizeof(void *))
+                    mark(*(void **)(el + off));
+            }
+            if (first < 0 && sl_gc_minor_gen0_seen != s0)
+                first = i;
+        }
     }
-    a->gc_clean = sl_gc_clean_at(a->len);
+    a->gc_clean = sl_gc_clean_at(first >= 0 ? first : a->len);
+    return first >= 0;
 }
 
 /* The barrier for a store into element i. Caller holds the preempt
@@ -1029,12 +1049,33 @@ static void sl_gc_trace_map(void *p, void (*mark)(void *)) {
     sl_gc_trace_map_range(m, 0, mark);
 }
 
-/* A minor's trace of a remembered map: only from gc_clean on. */
-static void sl_gc_trace_map_dirty(void *p, void (*mark)(void *)) {
+/* sl_gc_trace_arr_minor for a map: positions are its order array's. */
+static int sl_gc_trace_map_minor(void *p, void (*mark)(void *)) {
     sl_map *m = (sl_map *)p;
+    long long first = -1;
     sl_gc_trace_map_bufs(m, mark);
-    sl_gc_trace_map_range(m, m->gc_clean, mark);
-    m->gc_clean = sl_gc_clean_at(m->count);
+    for (long long i = m->gc_clean; i < m->count; i++) {
+        unsigned long long s0 = sl_gc_minor_gen0_seen;
+        long long slot = m->order[i];
+        if (m->key_is_ptr)
+            mark(*(void **)(m->keys + (size_t)slot * m->ksz));
+        else if (m->ksz >= sizeof(void *)) {
+            for (size_t off = 0; off + sizeof(void *) <= m->ksz;
+                 off += sizeof(void *))
+                mark(*(void **)(m->keys + (size_t)slot * m->ksz + off));
+        }
+        if (m->val_is_ptr)
+            mark(*(void **)(m->vals + (size_t)slot * m->vsz));
+        else if (m->vsz >= sizeof(void *)) {
+            for (size_t off = 0; off + sizeof(void *) <= m->vsz;
+                 off += sizeof(void *))
+                mark(*(void **)(m->vals + (size_t)slot * m->vsz + off));
+        }
+        if (first < 0 && sl_gc_minor_gen0_seen != s0)
+            first = i;
+    }
+    m->gc_clean = sl_gc_clean_at(first >= 0 ? first : m->count);
+    return first >= 0;
 }
 
 /* What sl_gc_remember does to a list or a map before remembering it: the
