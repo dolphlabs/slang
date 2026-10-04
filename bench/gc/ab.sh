@@ -12,7 +12,14 @@
 #            4 workers. No database: the pool dials lazily and quote never
 #            queries.
 # Env: ROUNDS (2), DECODES (400), CONNS (64), DUR (10s), WARM (2s),
-#      PORT (18090), OUT (a fresh temp dir), STAGES ("decode1 decode4 quote").
+#      PORT (18090), OUT (a fresh temp dir), STAGES ("decode1 decode4 quote"),
+#      STAGE_TIMEOUT (seconds a decode run or a latgen run may take, 120).
+#
+# Every run is bounded: one that overruns STAGE_TIMEOUT is killed, the
+# harness prints "TIMEOUT <variant> <stage>" with the log path, kills the
+# server, and exits 3 -- a wedged build must fail the comparison, not
+# hang it. A "progress:" line goes to stdout after every run, so a watcher
+# sees a stall within one stage.
 set -euo pipefail
 
 if [ $# -ne 2 ]; then
@@ -29,6 +36,7 @@ DUR=${DUR:-10s}
 WARM=${WARM:-2s}
 PORT=${PORT:-18090}
 STAGES=${STAGES:-"decode1 decode4 quote"}
+STAGE_TIMEOUT=${STAGE_TIMEOUT:-120}
 OUT=${OUT:-$(mktemp -d "${TMPDIR:-/tmp}/slang-gc-ab.XXXXXX")}
 mkdir -p "$OUT"
 RES="$OUT/runs.txt"
@@ -53,12 +61,39 @@ build() { # variant slangc
 build A "$A"
 build B "$B"
 
+# Run "$@" for at most STAGE_TIMEOUT seconds. On overrun: kill it, report,
+# and stop the whole comparison (exit 3). $1 names the run for the report.
+SERVER_PID=""
+bounded() { # what log cmd...
+    local what=$1 log=$2
+    shift 2
+    "$@" &
+    local pid=$!
+    local fired="$OUT/.timeout.$pid"
+    ( sleep "$STAGE_TIMEOUT"; touch "$fired"; kill -9 $pid 2>/dev/null ) &
+    local dog=$!
+    local rc=0
+    wait $pid || rc=$?
+    kill $dog 2>/dev/null || true
+    wait $dog 2>/dev/null || true
+    if [ -e "$fired" ]; then
+        echo "TIMEOUT $what after ${STAGE_TIMEOUT}s (log: $log)" >&2
+        [ -n "$SERVER_PID" ] && kill -9 "$SERVER_PID" 2>/dev/null
+        exit 3
+    fi
+    return $rc
+}
+
 # key=value pairs from SLANG_GC_STAT and /usr/bin/time -l, one line per run.
 decode_run() { # variant stage workers tasks
     local v=$1 st=$2 w=$3 t=$4 log="$OUT/$1-$2.log"
-    env SLANG_WORKERS="$w" TASKS="$t" ITERS=$((DECODES / t)) USE=1 \
+    bounded "$v $st" "$log" sh -c 'exec "$@" > "$0" 2>&1' "$log" \
+        env SLANG_WORKERS="$w" TASKS="$t" ITERS=$((DECODES / t)) USE=1 \
         SLANG_GC_STAT=1 QUOTE="$QUOTE" \
-        /usr/bin/time -l "$OUT/$v/decode/bin" > "$log" 2>&1
+        /usr/bin/time -l "$OUT/$v/decode/bin" || {
+        echo "FAILED $v $st (log: $log)" >&2
+        exit 3
+    }
     python3 - "$v" "$st" "$log" >> "$RES" <<'EOF'
 import re, sys
 v, st, log = sys.argv[1:4]
@@ -97,13 +132,15 @@ quote_run() { # variant
         DATABASE_URL="postgres://bench@127.0.0.1:1/bench" \
         "$OUT/$v/api/bin" > "$OUT/$v-server.log" 2>&1 &
     local pid=$!
+    SERVER_PID=$pid
     local i=0
     until curl -sf "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; do
         i=$((i + 1))
         if [ $i -gt 100 ]; then echo "server $v did not start" >&2; kill -9 $pid; exit 1; fi
         sleep 0.1
     done
-    "$LATGEN" -addr "127.0.0.1:$PORT" -path /api/quote -body-file "$QUOTE" \
+    bounded "$v quote warm-up" "$OUT/$v-server.log" \
+        "$LATGEN" -addr "127.0.0.1:$PORT" -path /api/quote -body-file "$QUOTE" \
         -c "$CONNS" -d "$WARM" > /dev/null
     local c0
     c0=$(cpu_s $pid)
@@ -112,12 +149,14 @@ quote_run() { # variant
         [ "$r" -gt "$peak" ] && peak=$r && echo $peak > "$OUT/$v-peak"
         sleep 0.2; done ) &
     local sampler=$!
-    "$LATGEN" -addr "127.0.0.1:$PORT" -path /api/quote -body-file "$QUOTE" \
+    bounded "$v quote" "$log" \
+        "$LATGEN" -addr "127.0.0.1:$PORT" -path /api/quote -body-file "$QUOTE" \
         -c "$CONNS" -d "$DUR" > "$log"
     local c1
     c1=$(cpu_s $pid)
     kill -9 $pid 2>/dev/null || true
     wait $pid 2>/dev/null || true
+    SERVER_PID=""
     kill $sampler 2>/dev/null || true
     wait $sampler 2>/dev/null || true
     python3 - "$v" "$log" "$c0" "$c1" "$(cat "$OUT/$v-peak" 2>/dev/null || echo 0)" >> "$RES" <<'EOF'
@@ -147,6 +186,7 @@ one() { # variant
 for r in $(seq 1 "$ROUNDS"); do
     for v in A B B A; do
         one "$v"
+        echo "progress: round $r variant $v done ($(wc -l < "$RES" | tr -d ' ') runs)"
     done
 done
 
