@@ -816,7 +816,9 @@ pg.release(pool, c);
 ```
 
 At most `max_open` connections exist at once; a task that needs one while
-all are in use waits, up to its deadline. Idle connections are probed
+all are in use waits, up to its deadline. Waiters are served in arrival
+order: a release hands its connection straight to the oldest one, and
+`pool_close` fails every acquire still waiting. Idle connections are probed
 before reuse and closed after `pool.idle_timeout` (5 minutes). A
 connection released while broken, closed or **still inside a
 transaction** is closed rather than handed on — the next caller would

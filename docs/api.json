@@ -3051,7 +3051,7 @@
           "sig": "gc struct Config",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 47
+          "line": 54
         },
         {
           "name": "Conn",
@@ -3059,7 +3059,7 @@
           "sig": "gc struct Conn",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 73
+          "line": 80
         },
         {
           "name": "Notification",
@@ -3067,7 +3067,7 @@
           "sig": "gc struct Notification",
           "doc": "A NOTIFY delivered to a connection that LISTENs on its channel.",
           "file": "stdlib/pg/pg.sl",
-          "line": 117
+          "line": 124
         },
         {
           "name": "Arg",
@@ -3075,7 +3075,7 @@
           "sig": "gc struct Arg",
           "doc": "A query parameter. Build one with arg_text, arg_int, arg_float, arg_bool, arg_bytes or arg_null.",
           "file": "stdlib/pg/pg.sl",
-          "line": 125
+          "line": 132
         },
         {
           "name": "Rows",
@@ -3083,7 +3083,7 @@
           "sig": "gc struct Rows",
           "doc": "A buffered result. Read cells with get_text / get_int / get_float / get_bool / get_bytes, by row and column index; col() finds an index by name.",
           "file": "stdlib/pg/pg.sl",
-          "line": 134
+          "line": 141
         },
         {
           "name": "parse_url",
@@ -3091,7 +3091,7 @@
           "sig": "fn parse_url(url: str) -> result[Config, str]",
           "doc": "postgres://user:password@host:port/database?sslmode=require  Recognised parameters: sslmode, sslrootcert, application_name, host and port. Any other parameter is an error rather than ignored: a misspelt \"sslmdoe=require\" that was silently dropped would connect in the clear, and nothing would ever say so.  sslmode: disable      cleartext. require      TLS, certificate and hostname verified. verify-full  the same as require (the libpq spelling of it). prefer, allow, verify-ca are refused. The first two fall back to cleartext when TLS fails, which is exactly what an attacker in the middle would arrange; verify-ca checks the chain but not the host.  With no sslmode the default is \"require\" -- except for a loopback host, where it is \"disable\", because traffic that never leaves the machine gains nothing from TLS and a local development server almost never has it configured.  A Unix-domain socket is named by its DIRECTORY, as libpq does: either percent-encoded as the host (postgres://app@%2Fvar%2Frun%2Fpostgresql/db) or as ?host=/var/run/postgresql. The socket file is <dir>/.s.PGSQL.<port>. Postgres does not use TLS over one, so sslmode defaults to disable and asking for require is an error.",
           "file": "stdlib/pg/pg.sl",
-          "line": 314
+          "line": 321
         },
         {
           "name": "sqlstate",
@@ -3099,7 +3099,7 @@
           "sig": "fn sqlstate(e: str) -> str",
           "doc": "The SQLSTATE of an error returned by this package, or \"\" when the error did not come from the server (a dial failure, a timeout).  if pg.sqlstate(e) == \"23505\" { /* unique_violation */ }",
           "file": "stdlib/pg/pg.sl",
-          "line": 708
+          "line": 715
         },
         {
           "name": "Scram",
@@ -3107,7 +3107,7 @@
           "sig": "gc struct Scram",
           "doc": "One SCRAM-SHA-256 exchange (RFC 5802, RFC 7677), as pure functions of its inputs, so the published test vector can check it.",
           "file": "stdlib/pg/pg.sl",
-          "line": 783
+          "line": 790
         },
         {
           "name": "scram_client_final",
@@ -3115,7 +3115,7 @@
           "sig": "fn scram_client_final(password: str, client_first_bare: str, server_first: str, client_nonce: str) -> result[Scram, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 788
+          "line": 795
         },
         {
           "name": "connect",
@@ -3123,7 +3123,7 @@
           "sig": "fn connect(url: str, deadline: until) -> result[Conn, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 1016
+          "line": 1023
         },
         {
           "name": "connect_config",
@@ -3131,7 +3131,7 @@
           "sig": "fn connect_config(cfg: Config, deadline: until) -> result[Conn, str]",
           "doc": "The deadline bounds the whole connection: the lookup, the TCP connect, the TLS handshake and the startup and authentication exchange.",
           "file": "stdlib/pg/pg.sl",
-          "line": 1026
+          "line": 1033
         },
         {
           "name": "close",
@@ -3139,7 +3139,7 @@
           "sig": "fn close(c: Conn)",
           "doc": "Ends the session politely (Terminate) and closes the socket. Safe to call on a broken or already-closed connection.",
           "file": "stdlib/pg/pg.sl",
-          "line": 1049
+          "line": 1056
         },
         {
           "name": "usable",
@@ -3147,7 +3147,7 @@
           "sig": "fn usable(c: Conn) -> bool",
           "doc": "Is the connection still usable? False once it has been closed or has broken; a false Conn only ever returns errors.",
           "file": "stdlib/pg/pg.sl",
-          "line": 1061
+          "line": 1068
         },
         {
           "name": "in_transaction",
@@ -3155,7 +3155,7 @@
           "sig": "fn in_transaction(c: Conn) -> bool",
           "doc": "Inside a transaction block (including a failed one that still needs ROLLBACK)?",
           "file": "stdlib/pg/pg.sl",
-          "line": 1067
+          "line": 1074
         },
         {
           "name": "server_param",
@@ -3163,7 +3163,7 @@
           "sig": "fn server_param(c: Conn, name: str) -> opt[str]",
           "doc": "A server setting reported at startup or after SET: \"server_version\", \"TimeZone\", \"standard_conforming_strings\", ...",
           "file": "stdlib/pg/pg.sl",
-          "line": 1073
+          "line": 1080
         },
         {
           "name": "arg_text",
@@ -3171,7 +3171,7 @@
           "sig": "fn arg_text(s: str) -> Arg",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 1109
+          "line": 1116
         },
         {
           "name": "arg_int",
@@ -3179,7 +3179,7 @@
           "sig": "fn arg_int(n: int) -> Arg",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 1113
+          "line": 1120
         },
         {
           "name": "arg_float",
@@ -3187,7 +3187,7 @@
           "sig": "fn arg_float(x: float) -> Arg",
           "doc": "Sent as the shortest text that reads back as exactly this float: to_str's six significant digits would round it.",
           "file": "stdlib/pg/pg.sl",
-          "line": 1119
+          "line": 1126
         },
         {
           "name": "arg_bool",
@@ -3195,7 +3195,7 @@
           "sig": "fn arg_bool(b: bool) -> Arg",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 1124
+          "line": 1131
         },
         {
           "name": "arg_bytes",
@@ -3203,7 +3203,7 @@
           "sig": "fn arg_bytes(b: bytes) -> Arg",
           "doc": "Sent in binary, so any byte values -- NULs included -- arrive intact. For a bytea column.",
           "file": "stdlib/pg/pg.sl",
-          "line": 1134
+          "line": 1141
         },
         {
           "name": "arg_null",
@@ -3211,7 +3211,7 @@
           "sig": "fn arg_null() -> Arg",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 1138
+          "line": 1145
         },
         {
           "name": "query",
@@ -3219,7 +3219,7 @@
           "sig": "fn query(c: Conn, sql: str, args: [Arg], deadline: until) -> result[Rows, str]",
           "doc": "Runs one query with parameters ($1, $2, ...) through the extended protocol: the values travel separately from the SQL text, so they can never be parsed as SQL. Returns every row, buffered; for a result too big to hold at once, use stream().",
           "file": "stdlib/pg/pg.sl",
-          "line": 1462
+          "line": 1469
         },
         {
           "name": "exec",
@@ -3227,7 +3227,7 @@
           "sig": "fn exec(c: Conn, sql: str, deadline: until) -> result[int, str]",
           "doc": "Runs SQL with no parameters through the simple protocol, which accepts several statements separated by semicolons -- a migration, a schema. Returns the rows affected by the last statement. Rows a statement returns are read and discarded.  Never build `sql` from untrusted input: use query() and parameters.",
           "file": "stdlib/pg/pg.sl",
-          "line": 1499
+          "line": 1506
         },
         {
           "name": "stream",
@@ -3235,7 +3235,7 @@
           "sig": "fn stream(c: Conn, sql: str, args: [Arg], deadline: until) -> result[Rows, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 1542
+          "line": 1549
         },
         {
           "name": "next_row",
@@ -3243,7 +3243,7 @@
           "sig": "fn next_row(c: Conn, rows: Rows, deadline: until) -> result[bool, str]",
           "doc": "Reads the next row of a stream into `rows` (at index 0). Returns false once there are no more; rows.affected and rows.tag are set then.",
           "file": "stdlib/pg/pg.sl",
-          "line": 1594
+          "line": 1601
         },
         {
           "name": "stream_close",
@@ -3251,7 +3251,7 @@
           "sig": "fn stream_close(c: Conn, rows: Rows, deadline: until) -> result[bool, str]",
           "doc": "Ends a stream early. The server is asked to cancel the query first -- and that request is seen through before the rest is drained, so it can never land on a LATER query on this connection -- then whatever it had already sent is read and dropped. The connection is then free.",
           "file": "stdlib/pg/pg.sl",
-          "line": 1629
+          "line": 1636
         },
         {
           "name": "copy_in_start",
@@ -3259,7 +3259,7 @@
           "sig": "fn copy_in_start(c: Conn, sql: str, deadline: until) -> result[bool, str]",
           "doc": "Starts COPY ... FROM STDIN. Send data with copy_in_send, then finish with copy_in_end -- or copy_in_abort, which rolls the COPY back.",
           "file": "stdlib/pg/pg.sl",
-          "line": 1731
+          "line": 1738
         },
         {
           "name": "copy_in_send",
@@ -3267,7 +3267,7 @@
           "sig": "fn copy_in_send(c: Conn, data: bytes, deadline: until) -> result[bool, str]",
           "doc": "Sends COPY data. It need not end on a row boundary; the server reassembles it. An error in the data is reported by copy_in_end.",
           "file": "stdlib/pg/pg.sl",
-          "line": 1737
+          "line": 1744
         },
         {
           "name": "copy_in_end",
@@ -3275,7 +3275,7 @@
           "sig": "fn copy_in_end(c: Conn, deadline: until) -> result[int, str]",
           "doc": "Ends the COPY. Returns the number of rows loaded, or the server's error about the data -- in which case nothing was loaded.",
           "file": "stdlib/pg/pg.sl",
-          "line": 1787
+          "line": 1794
         },
         {
           "name": "copy_in_abort",
@@ -3283,7 +3283,7 @@
           "sig": "fn copy_in_abort(c: Conn, reason: str, deadline: until) -> result[bool, str]",
           "doc": "Abandons the COPY: the server discards everything sent. Ok once the server has confirmed; its \"COPY from stdin failed\" is the expected answer, not an error.",
           "file": "stdlib/pg/pg.sl",
-          "line": 1794
+          "line": 1801
         },
         {
           "name": "copy_from",
@@ -3291,7 +3291,7 @@
           "sig": "fn copy_from(c: Conn, sql: str, data: bytes, deadline: until) -> result[int, str]",
           "doc": "COPY ... FROM STDIN in one call. Returns the rows loaded.  pg.copy_from(c, \"COPY users (id, email) FROM STDIN (FORMAT csv)\", to_bytes(\"1,a@example.com\\n2,b@example.com\\n\"), dl)",
           "file": "stdlib/pg/pg.sl",
-          "line": 1809
+          "line": 1816
         },
         {
           "name": "copy_out_start",
@@ -3299,7 +3299,7 @@
           "sig": "fn copy_out_start(c: Conn, sql: str, deadline: until) -> result[bool, str]",
           "doc": "Starts COPY ... TO STDOUT. Read it with copy_out_next.",
           "file": "stdlib/pg/pg.sl",
-          "line": 1823
+          "line": 1830
         },
         {
           "name": "copy_out_next",
@@ -3307,7 +3307,7 @@
           "sig": "fn copy_out_next(c: Conn, deadline: until) -> result[opt[bytes], str]",
           "doc": "The next piece of COPY output -- in text and CSV formats, one row -- or none when it is complete.",
           "file": "stdlib/pg/pg.sl",
-          "line": 1829
+          "line": 1836
         },
         {
           "name": "copy_to",
@@ -3315,7 +3315,7 @@
           "sig": "fn copy_to(c: Conn, sql: str, deadline: until) -> result[bytes, str]",
           "doc": "COPY ... TO STDOUT in one call, buffered (up to the 256 MiB result limit; stream a larger one with copy_out_start / copy_out_next).",
           "file": "stdlib/pg/pg.sl",
-          "line": 1863
+          "line": 1870
         },
         {
           "name": "listen",
@@ -3323,7 +3323,7 @@
           "sig": "fn listen(c: Conn, channel: str, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 1904
+          "line": 1911
         },
         {
           "name": "unlisten",
@@ -3331,7 +3331,7 @@
           "sig": "fn unlisten(c: Conn, channel: str, deadline: until) -> result[bool, str]",
           "doc": "\"*\" stops listening on every channel.",
           "file": "stdlib/pg/pg.sl",
-          "line": 1913
+          "line": 1920
         },
         {
           "name": "notify",
@@ -3339,7 +3339,7 @@
           "sig": "fn notify(c: Conn, channel: str, payload: str, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 1925
+          "line": 1932
         },
         {
           "name": "wait_notification",
@@ -3347,7 +3347,7 @@
           "sig": "fn wait_notification(c: Conn, deadline: until) -> result[opt[Notification], str]",
           "doc": "The oldest queued notification, or waits for one until the deadline: none then. Unlike every other call, reaching the deadline here is not an error and does not break the connection -- waiting is the point.",
           "file": "stdlib/pg/pg.sl",
-          "line": 1938
+          "line": 1945
         },
         {
           "name": "col",
@@ -3355,7 +3355,7 @@
           "sig": "fn col(rows: Rows, name: str) -> int",
           "doc": "The index of the column called `name`. Panics if there is none: the query and the code reading it disagree, which is a bug, not a condition to handle.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2027
+          "line": 2034
         },
         {
           "name": "is_null",
@@ -3363,7 +3363,7 @@
           "sig": "fn is_null(rows: Rows, r: int, c: int) -> bool",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2052
+          "line": 2059
         },
         {
           "name": "get_text",
@@ -3371,7 +3371,7 @@
           "sig": "fn get_text(rows: Rows, r: int, c: int) -> str",
           "doc": "Any column, in Postgres's text form: numbers, dates, uuid and json all arrive this way.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2078
+          "line": 2085
         },
         {
           "name": "get_int",
@@ -3379,7 +3379,7 @@
           "sig": "fn get_int(rows: Rows, r: int, c: int) -> int",
           "doc": "int2, int4, int8 and oid.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2083
+          "line": 2090
         },
         {
           "name": "get_float",
@@ -3387,7 +3387,7 @@
           "sig": "fn get_float(rows: Rows, r: int, c: int) -> float",
           "doc": "float4, float8, numeric, and the integer types. A numeric too precise for a double is rounded; read it with get_text to keep every digit.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2107
+          "line": 2114
         },
         {
           "name": "get_bool",
@@ -3395,7 +3395,7 @@
           "sig": "fn get_bool(rows: Rows, r: int, c: int) -> bool",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2126
+          "line": 2133
         },
         {
           "name": "get_bytes",
@@ -3403,7 +3403,7 @@
           "sig": "fn get_bytes(rows: Rows, r: int, c: int) -> bytes",
           "doc": "bytea, decoded from the server's hex output format.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2135
+          "line": 2142
         },
         {
           "name": "Pool",
@@ -3411,7 +3411,7 @@
           "sig": "gc struct Pool",
           "doc": "A bounded set of connections to one database, shared by any number of tasks.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2161
+          "line": 2176
         },
         {
           "name": "new_pool",
@@ -3419,7 +3419,7 @@
           "sig": "fn new_pool(url: str, max_open: int) -> result[Pool, str]",
           "doc": "Parses the url; connects nothing until the first acquire.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2179
+          "line": 2210
         },
         {
           "name": "acquire",
@@ -3427,15 +3427,15 @@
           "sig": "fn acquire(p: Pool, deadline: until) -> result[Conn, str]",
           "doc": "A connection for the caller's exclusive use, until release(). Prefer pool_query / pool_exec, which cannot forget to release; acquire is for a transaction, which needs several statements on one connection.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2196
+          "line": 2333
         },
         {
           "name": "release",
           "decl": "fn",
           "sig": "fn release(p: Pool, c: Conn)",
-          "doc": "Returns a connection to the pool. One that is broken, closed, or still inside a transaction is closed instead: handing an open transaction to the next caller would run its statements inside someone else's uncommitted work.",
+          "doc": "Returns a connection to the pool: to the oldest waiting task if there is one, else to the idle list. One that is broken, closed, or still inside a transaction is closed instead, and its slot passed on: handing an open transaction to the next caller would run its statements inside someone else's uncommitted work.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2251
+          "line": 2407
         },
         {
           "name": "pool_query",
@@ -3443,7 +3443,7 @@
           "sig": "fn pool_query(p: Pool, sql: str, args: [Arg], deadline: until) -> result[Rows, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2268
+          "line": 2435
         },
         {
           "name": "pool_exec",
@@ -3451,15 +3451,15 @@
           "sig": "fn pool_exec(p: Pool, sql: str, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2279
+          "line": 2446
         },
         {
           "name": "pool_close",
           "decl": "fn",
           "sig": "fn pool_close(p: Pool)",
-          "doc": "Closes every idle connection. Connections in use are closed as they are released; acquire fails from now on.",
+          "doc": "Closes every idle connection and fails every waiting acquire. Connections in use are closed as they are released; acquire fails from now on.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2291
+          "line": 2459
         }
       ]
     },

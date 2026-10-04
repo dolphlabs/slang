@@ -478,9 +478,19 @@ of its 1-worker number.
 
 ## Phase 3: the `pg` driver
 
-- [ ] **3.1 FIFO wait queue in the pool.** Waiters park and are woken on
+- [x] **3.1 FIFO wait queue in the pool.** Waiters park and are woken on
   release, so the 2 ms poll goes away. Include a fairness test. Measure on
   point-512 p99.
+  Landed: a release hands its connection to the oldest waiter, a freed
+  slot goes to the oldest waiter to dial, and one reaper task per pool
+  (alive only while tasks wait) times waiters out; `select` has no
+  timeout arm. Local point, 512 clients on a 64-connection pool, Postgres
+  in Docker, ABBA x3: p99 369 -> 116 ms, p99.9 563 -> 154 ms, 6,187 ->
+  7,099 req/s, CPU per request 288 -> 229 us; p50 57 -> 70 ms (everyone
+  waits about equally now). Peak RSS 19.3 -> 24.7 MB, all of it the
+  adaptive nursery (1.2a) growing with the higher allocation rate: with
+  `SLANG_GC_NURSERY_KB=512` RSS is 15.9 vs 16.1 MB and p99 still 420 ->
+  216 ms. Revisit with 1.9 if the CCX33 run shows the memory matters.
 - [ ] **3.2 Probe only connections idle for more than 1 s, outside the
   lock**, as pgx does.
 - [ ] **3.3 Build each query message with one builder.**
