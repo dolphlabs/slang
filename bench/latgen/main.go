@@ -24,11 +24,20 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:18084", "host:port")
 	path := flag.String("path", "/", "request path")
 	body := flag.String("body", "", "POST body (empty = GET)")
+	bodyFile := flag.String("body-file", "", "POST body read from this file (overrides -body)")
 	c := flag.Int("c", 200, "connections")
 	d := flag.Duration("d", 10*time.Second, "duration")
 	timeout := flag.Duration("timeout", 5*time.Second, "per-request timeout")
 	dump := flag.String("dump", "", "write start_ns,lat_ns per request to this file")
 	flag.Parse()
+	if *bodyFile != "" {
+		b, err := os.ReadFile(*bodyFile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "latgen:", err)
+			os.Exit(1)
+		}
+		*body = string(b)
+	}
 
 	var req string
 	if *body == "" {
