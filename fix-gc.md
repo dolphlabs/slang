@@ -178,11 +178,26 @@ the point reads in flight with it.
 
 ## Phase 0: measure (no behaviour change)
 
-- [ ] **0.1 Split each pause into its parts.** Under `SLANG_GC_STAT`:
-  time-to-safepoint, harvest, set build, mark, sweep, page prune and trim,
-  each with a histogram.
-- [ ] **0.2 Count work per minor:** promotion rate, tasks walked, and the
-  remembered-set size, per minor.
+- [x] **0.1 Split each pause into its parts.** `SLANG_GC_STAT` now prints,
+  per kind, totals for time-to-safepoint, harvest, set build, mark, sweep
+  and tail (page prune, trim), plus the longest time-to-safepoint. First
+  reading, decode probe, 200 decodes, `dev`:
+
+  | part | 1 worker | 4 workers |
+  |---|---:|---:|
+  | minor: time-to-safepoint | 0.08 ms | **67 ms (longest 10 ms)** |
+  | minor: set build | 12.4 ms | 12.8 ms |
+  | minor: mark | 2.9 ms | 9.7 ms |
+  | minor: sweep | 6.0 ms | 4.5 ms |
+  | minor: tail | 2.2 ms | 9.5 ms |
+  | major: sweep | **24.4 ms** | **42.8 ms** |
+  | major: set build | 7.2 ms | 17.3 ms |
+
+  Order of attack: time-to-safepoint (1.1), then the major sweep (which
+  walks every promoted-then-dead object: 1.2, 1.9), then set build (1.5).
+- [x] **0.2 Count work per minor:** tasks walked by the harvest and
+  remembered entries traced, in the same output. (Promotion was already
+  counted.)
 - [x] **0.3 Local harnesses, checked in under `bench/`** (point and mix
   against Postgres are deferred to Phase 3, which is their only user):
   - `bench/gc/decode`: the decode probe;

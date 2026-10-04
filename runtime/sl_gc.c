@@ -129,6 +129,57 @@ static void sl_gc_stat_minor_pause(long long ns, size_t swept, size_t promoted) 
     atomic_fetch_add_explicit(&sl_gc_stat_promoted, (unsigned long long)promoted, memory_order_relaxed);
 }
 
+/* Where a pause goes, per kind (SLANG_GC_STAT): time-to-safepoint (the
+ * rendezvous, until every thread has acked or is blocked), harvest of
+ * pending lists and remembered shards, the sl_gc_set build, mark, sweep,
+ * and the tail (page prune, trim, release). Totals in ns; ttsp also keeps
+ * its max. tasks is every task the harvest walks, rem the remembered
+ * entries a minor traces. All gated, so the collector pays one branch. */
+enum { SL_GC_PH_TTSP, SL_GC_PH_HARVEST, SL_GC_PH_SET, SL_GC_PH_MARK,
+       SL_GC_PH_SWEEP, SL_GC_PH_TAIL, SL_GC_PH_N };
+static const char *const sl_gc_ph_name[SL_GC_PH_N] = {
+    "ttsp", "harvest", "setbuild", "mark", "sweep", "tail"};
+static _Atomic unsigned long long sl_gc_stat_ph[2][SL_GC_PH_N];
+static _Atomic unsigned long long sl_gc_stat_ttsp_max[2];
+static _Atomic unsigned long long sl_gc_stat_tasks_walked[2];
+static _Atomic unsigned long long sl_gc_stat_rem_entries;
+
+/* Phase marks for one collection: t[i] is when phase i ended, t0 the
+ * start. Only read when stat is on. */
+typedef struct {
+    int on;
+    long long t0;
+    long long t[SL_GC_PH_N];
+} sl_gc_phase_clock;
+
+static inline void sl_gc_ph_mark(sl_gc_phase_clock *c, int ph) {
+    if (c->on)
+        c->t[ph] = sl_rt_monotonic_ns();
+}
+
+static void sl_gc_stat_phases(const sl_gc_phase_clock *c, int major) {
+    if (!c->on)
+        return;
+    long long prev = c->t0;
+    for (int i = 0; i < SL_GC_PH_N; i++) {
+        long long d = c->t[i] - prev;
+        if (d < 0)
+            d = 0;
+        atomic_fetch_add_explicit(&sl_gc_stat_ph[major][i],
+                                  (unsigned long long)d, memory_order_relaxed);
+        if (i == SL_GC_PH_TTSP) {
+            unsigned long long m = atomic_load_explicit(
+                &sl_gc_stat_ttsp_max[major], memory_order_relaxed);
+            while ((unsigned long long)d > m &&
+                   !atomic_compare_exchange_weak_explicit(
+                       &sl_gc_stat_ttsp_max[major], &m, (unsigned long long)d,
+                       memory_order_relaxed, memory_order_relaxed)) {
+            }
+        }
+        prev = c->t[i];
+    }
+}
+
 static void sl_gc_stat_dump(void) {
     if (!sl_gc_stat_enabled())
         return;
@@ -156,6 +207,25 @@ static void sl_gc_stat_dump(void) {
         bound *= 2;
     }
     fprintf(stderr, "]\n");
+    for (int k = 0; k < 2; k++) {
+        const char *kind = k ? "major" : "minor";
+        fprintf(stderr, "slang-gc-stat %s_phases", kind);
+        for (int i = 0; i < SL_GC_PH_N; i++)
+            fprintf(stderr, " %s_%s_ns=%llu", kind, sl_gc_ph_name[i],
+                    atomic_load_explicit(&sl_gc_stat_ph[k][i],
+                                         memory_order_relaxed));
+        fprintf(stderr, " %s_ttsp_ns_max=%llu %s_tasks_walked=%llu", kind,
+                atomic_load_explicit(&sl_gc_stat_ttsp_max[k],
+                                     memory_order_relaxed),
+                kind,
+                atomic_load_explicit(&sl_gc_stat_tasks_walked[k],
+                                     memory_order_relaxed));
+        if (!k)
+            fprintf(stderr, " minor_rem_entries=%llu",
+                    atomic_load_explicit(&sl_gc_stat_rem_entries,
+                                         memory_order_relaxed));
+        fprintf(stderr, "\n");
+    }
 }
 
 __attribute__((destructor))
@@ -780,17 +850,22 @@ static void sl_gc_remember(void *obj) {
     sl_gc_remember_obj((sl_gc_obj *)obj - 1);
 }
 
+/* Tasks the harvest walks visit, for SLANG_GC_STAT (collector-only:
+ * written under sl_gc_mu, stopped-the-world). */
+static unsigned long long sl_gc_walk_count = 0;
+
 static void sl_gc_for_pending_tasks(void (*fn)(sl_task *),
                                     sl_gc_thread **snap, int nsnap) {
+    unsigned long long n = (unsigned long long)nsnap;
     for (int i = 0; i < nsnap; i++)
         fn(*snap[i]->task_slot);
     pthread_mutex_lock(&sl_global_runq.mu);
-    for (sl_task *t = sl_global_runq.head; t; t = t->next)
+    for (sl_task *t = sl_global_runq.head; t; t = t->next, n++)
         fn(t);
     pthread_mutex_unlock(&sl_global_runq.mu);
     for (unsigned s = 0; s < (unsigned)SL_RUNQ_STRIPES; s++) {
         pthread_mutex_lock(&sl_runq_stripes[s].mu);
-        for (sl_task *t = sl_runq_stripes[s].head; t; t = t->runq_link)
+        for (sl_task *t = sl_runq_stripes[s].head; t; t = t->runq_link, n++)
             fn(t);
         pthread_mutex_unlock(&sl_runq_stripes[s].mu);
     }
@@ -799,11 +874,14 @@ static void sl_gc_for_pending_tasks(void (*fn)(sl_task *),
        one while this runs) */
     for (int i = 0; i < SL_RUNNEXT_SLOTS; i++) {
         sl_task *t = atomic_load_explicit(&sl_runnext[i], memory_order_acquire);
-        if (t)
+        if (t) {
             fn(t);
+            n++;
+        }
     }
-    for (sl_task *t = sl_parked_tasks; t; t = t->parked_next)
+    for (sl_task *t = sl_parked_tasks; t; t = t->parked_next, n++)
         fn(t);
+    sl_gc_walk_count += n;
 }
 
 /* Size-class freelist for fixed-size GC headers + tiny payloads.
@@ -2317,14 +2395,19 @@ static void sl_gc_collect_minor_real(void) {
         t0 = sl_rt_monotonic_ns();
     sl_gc_thread **snap = NULL;
     int nsnap = 0;
+    sl_gc_phase_clock pc = {.on = stat_on, .t0 = t0};
     sl_gc_stw_sync(&snap, &nsnap);
+    sl_gc_ph_mark(&pc, SL_GC_PH_TTSP);
 
     pthread_mutex_lock(&sl_gc_mu);
+    unsigned long long walked0 = sl_gc_walk_count;
     sl_gc_drain_retired();
     sl_gc_for_pending_tasks(sl_gc_harvest_task, snap, nsnap);
     sl_gc_harvest_rem_all(snap, nsnap);
     size_t rem_n = sl_gc_rem_harvest_n;
+    sl_gc_ph_mark(&pc, SL_GC_PH_HARVEST);
     sl_gc_set_build(0);
+    sl_gc_ph_mark(&pc, SL_GC_PH_SET);
     /* Minor promotion is single-generation: a young object that
      * survives one minor promotes to old (no aging counter -- matches
      * the handoff's design). */
@@ -2334,6 +2417,7 @@ static void sl_gc_collect_minor_real(void) {
     free(sl_gc_wl);
     sl_gc_wl = NULL;
     sl_gc_wl_cap = 0;
+    sl_gc_ph_mark(&pc, SL_GC_PH_MARK);
 
     /* gen 1 on the young list is an owned buffer born old (see
      * sl_gc_alloc_owned). It moves to sl_gc_old whether or not it was
@@ -2365,6 +2449,7 @@ static void sl_gc_collect_minor_real(void) {
     if (sl_gc_verify_minor_enabled())
         for (sl_gc_obj *o = sl_gc_old; o; o = o->next)
             o->marked = 0;
+    sl_gc_ph_mark(&pc, SL_GC_PH_SWEEP);
     sl_gc_drain_retired();
     sl_gc_pages_sweep_end();
     /* The table's only reader is mark, which runs only inside a
@@ -2377,8 +2462,17 @@ static void sl_gc_collect_minor_real(void) {
     free(snap);
 
     atomic_store_explicit(&sl_gc_bytes_since_minor, 0, memory_order_relaxed);
-    if (stat_on)
+    if (stat_on) {
+        sl_gc_ph_mark(&pc, SL_GC_PH_TAIL);
+        sl_gc_stat_phases(&pc, 0);
+        atomic_fetch_add_explicit(&sl_gc_stat_tasks_walked[0],
+                                  sl_gc_walk_count - walked0,
+                                  memory_order_relaxed);
+        atomic_fetch_add_explicit(&sl_gc_stat_rem_entries,
+                                  (unsigned long long)rem_n,
+                                  memory_order_relaxed);
         sl_gc_stat_minor_pause(sl_rt_monotonic_ns() - t0, swept, promoted);
+    }
     atomic_store_explicit(&sl_gc_collect_minor_pending, 0, memory_order_release);
     /* A major may ALSO be pending (both thresholds tripped on the same
      * allocation burst). Leave sl_gc_collect_pending and
@@ -2412,9 +2506,12 @@ static void sl_gc_collect(void) {
         t0 = sl_rt_monotonic_ns();
     sl_gc_thread **snap = NULL;
     int nsnap = 0;
+    sl_gc_phase_clock pc = {.on = stat_on, .t0 = t0};
     sl_gc_stw_sync(&snap, &nsnap);
+    sl_gc_ph_mark(&pc, SL_GC_PH_TTSP);
 
     pthread_mutex_lock(&sl_gc_mu);
+    unsigned long long walked0 = sl_gc_walk_count;
     sl_gc_drain_retired();
     /* Every live task's pending allocations join sl_gc_young BEFORE
      * the mark, so this cycle can free the ones nothing reaches.
@@ -2426,10 +2523,12 @@ static void sl_gc_collect(void) {
     for (size_t i = 0; i < sl_gc_rem_harvest_n; i++)
         sl_gc_rem_harvest_buf[i]->remembered = 0;
     sl_gc_rem_harvest_n = 0;
+    sl_gc_ph_mark(&pc, SL_GC_PH_HARVEST);
 
     /* Must run before the first sl_gc_mark of the cycle: mark's very
      * first act is to reject any pointer this table does not hold. */
     sl_gc_set_build(1);
+    sl_gc_ph_mark(&pc, SL_GC_PH_SET);
 
     sl_gc_wl_n = 0;
     sl_gc_cur_mark = sl_gc_mark;
@@ -2442,6 +2541,7 @@ static void sl_gc_collect(void) {
     free(sl_gc_wl);
     sl_gc_wl = NULL;
     sl_gc_wl_cap = 0;
+    sl_gc_ph_mark(&pc, SL_GC_PH_MARK);
 
     /* Every young survivor is promoted. The remembered set was just
      * emptied (above) and no old object is re-remembered, which is sound
@@ -2503,6 +2603,7 @@ static void sl_gc_collect(void) {
         promoted_tail->next = sl_gc_old;
         sl_gc_old = promoted_head;
     }
+    sl_gc_ph_mark(&pc, SL_GC_PH_SWEEP);
     sl_gc_drain_retired();
     sl_gc_pages_sweep_end();
     /* The table's only reader is mark, which runs only inside a
@@ -2536,8 +2637,14 @@ static void sl_gc_collect(void) {
         size_t floor = 8 * 1024 * 1024;
         sl_gc_threshold = live_bytes > floor ? live_bytes : floor;
     }
-    if (stat_on)
+    if (stat_on) {
+        sl_gc_ph_mark(&pc, SL_GC_PH_TAIL);
+        sl_gc_stat_phases(&pc, 1);
+        atomic_fetch_add_explicit(&sl_gc_stat_tasks_walked[1],
+                                  sl_gc_walk_count - walked0,
+                                  memory_order_relaxed);
         sl_gc_stat_pause(sl_rt_monotonic_ns() - t0, marked, swept);
+    }
     atomic_store_explicit(&sl_gc_collect_pending, 0, memory_order_release);
     atomic_store_explicit(&sl_gc_collect_minor_pending, 0, memory_order_release);
     atomic_store_explicit(&sl_gc_stop_requested, 0, memory_order_release);
