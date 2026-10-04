@@ -272,8 +272,36 @@ the point reads in flight with it.
   included. Found on the way and landed separately (`fix/preempt-libc-
   deadlock`): an allocator deadlock reachable from `dev` (todo.md), and
   the owner-generation read in `sl_gc_alloc_owned`.
-- [ ] **1.2 Stop promoting in-flight request data.** Measure two options
-  against each other and keep the better:
+- [x] **1.2 Stop promoting in-flight request data: promotion after two
+  survivals.** Chose (b): it fixes the one-worker case too (30% promoted
+  there), where (a) would only have moved the boundary. A first survival
+  ages an object (`gen` 2, still young, still on the young list); a
+  second promotes it. Two consequences made it sound, both caught by the
+  verifier: (1) a promoted object can point at one that is only aging,
+  so every promoted object with a tracer is remembered for the next
+  minor; (2) a remembered object whose trace meets a first-survival
+  child stays remembered, and a list or map leaves its frontier at the
+  first such position (`sl_gc_trace_arr_minor`/`_map_minor`), not at
+  the end -- restoring it to where the trace started instead made a
+  growing container retrace from there every minor (1M-entry build 2.7
+  s -> 11.9 s). Decode probe, 400 decodes:
+
+  | | promoted | peak RSS | major pause | wall |
+  |---|---:|---:|---:|---:|
+  | 1 worker, `dev` | 484,490 | 12.9 MB | 44 ms | 498 ms |
+  | 1 worker, aging | 6 | 6.7 MB | 9 ms | 427 ms |
+  | 4 workers, `dev` | 1,425,436 | 24.3 MB | 130 ms | 380 ms |
+  | 4 workers, aging | 12 | 9.5 MB | 26 ms | 293 ms |
+
+  Minor pauses rise (aged objects are marked twice: 39 -> 69 ms, 80 ->
+  144 ms) and the 1M-entry cache build costs 12% more (2.75 -> 3.09 s,
+  each new position traced about twice). Majors are still paced by all
+  allocation, so their count is unchanged; 1.9 removes them now that
+  almost nothing is promoted. Test: `gc_promotion_budget` (30.7% ->
+  0.28% promoted, pinned at 1% in "promotion budgets"; stress- and
+  verifier-listed).
+
+  The options considered:
   - (a) nursery budget scaled with the workers (512 KB each, capped);
   - (b) promote after surviving two minors. The age fits in the `gen`
     byte, so the header stays 40 bytes; audit every `gen == 0` and

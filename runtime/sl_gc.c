@@ -12,8 +12,10 @@ typedef struct sl_gc_obj {
     void (*fini)(void *payload);
     unsigned char marked;
     /* Generational (young/old, non-moving, STW nursery) GC. gen 0 =
-     * young (nursery, swept by every minor collection), 1 = old
-     * (swept only by a major/full collection). Objects never move, so
+     * young (nursery, swept by every minor collection), 2 = young that
+     * has survived one minor (still swept by minors; promoted if it
+     * survives the next), 1 = old (swept only by a major/full
+     * collection). "Young" is therefore gen != 1 everywhere. Objects never move, so
      * a conservative candidate word can never be a stale address --
      * required by sl_gc_scan_conservative (see its comment). */
     unsigned char gen;
@@ -699,6 +701,24 @@ static void sl_gc_orphan_rem(sl_task *t) {
     t->gc_rem_cap = 0;
 }
 
+/* Collector-side remembered entry (stopped-the-world): an object the
+ * minor just promoted that may hold young pointers, for the next minor's
+ * harvest (sl_gc_harvest_rem_all drains this list with the tasks'
+ * shards). */
+static void sl_gc_rem_orphan_push(sl_gc_obj *h) {
+    pthread_mutex_lock(&sl_gc_rem_orphan_mu);
+    if (sl_gc_rem_orphan_n == sl_gc_rem_orphan_cap) {
+        size_t ncap = sl_gc_rem_orphan_cap ? sl_gc_rem_orphan_cap * 2 : 64;
+        sl_gc_obj **nb = (sl_gc_obj **)realloc(
+            sl_gc_rem_orphans, ncap * sizeof(sl_gc_obj *));
+        if (!nb) { fprintf(stderr, "slang: out of memory\n"); exit(1); }
+        sl_gc_rem_orphans = nb;
+        sl_gc_rem_orphan_cap = ncap;
+    }
+    sl_gc_rem_orphans[sl_gc_rem_orphan_n++] = h;
+    pthread_mutex_unlock(&sl_gc_rem_orphan_mu);
+}
+
 /* A finished task's GC state, handed over before the task is released:
  * its pending allocations to sl_gc_retired, its remembered entries to
  * sl_gc_rem_orphans. */
@@ -839,6 +859,10 @@ static void sl_gc_remember_obj(sl_gc_obj *h) {
 
 /* sl_containers.c: marks a whole list or map dirty (their gc_clean). */
 static void sl_gc_dirty_all(void *obj);
+/* sl_containers.c: a remembered list's or map's trace for the minor's
+ * remembered phase (see sl_gc_minor_mark). */
+static int sl_gc_trace_arr_minor(void *p, void (*mark)(void *));
+static int sl_gc_trace_map_minor(void *p, void (*mark)(void *));
 
 /* The barrier for a store whose position in the container is not known:
  * a list or a map is dirty all over (see sl_arr's gc_clean). Stores that
@@ -1226,7 +1250,7 @@ static inline sl_gc_obj *sl_gc_page_book(sl_gc_page *pg, size_t got,
         }
     }
     sl_gc_page_mark(pg, off);
-    if (gen == 0)
+    if (gen != 1)
         pg->young_live++;
     else
         pg->old_live++;
@@ -1300,7 +1324,7 @@ static void sl_gc_page_free_obj(sl_gc_obj *h) {
         }
     }
     sl_gc_page_unmark(pg, off);
-    if (h->gen == 0)
+    if (h->gen != 1)
         pg->young_live--;
     else
         pg->old_live--;
@@ -1633,13 +1657,22 @@ static void sl_gc_mark(void *ptr) {
  * object still referenced by an old one -- silent heap corruption,
  * exactly the failure mode to suspect first if promotion ever loses
  * objects. */
+/* First-survival young objects (gen 0) a minor's mark has met, marked
+ * already or not: the remembered phase reads it around each entry's
+ * trace to learn whether that old object still holds a pointer that
+ * will be young after this minor. Collector-only (STW, under
+ * sl_gc_mu). */
+static unsigned long long sl_gc_minor_gen0_seen = 0;
+
 static void sl_gc_mark_minor(void *ptr) {
     if (!ptr) return;
     if (!sl_gc_set_contains(ptr)) return;
     sl_gc_obj *h = (sl_gc_obj *)ptr - 1;
+    if (h->gen == 0)
+        sl_gc_minor_gen0_seen++;
     if (h->marked) return;
     h->marked = 1;
-    if (h->gen != 0) return;
+    if (h->gen == 1) return;
     if (sl_gc_wl_n == sl_gc_wl_cap) {
         sl_gc_wl_cap = sl_gc_wl_cap ? sl_gc_wl_cap * 2 : 256;
         sl_gc_wl = (void **)realloc(sl_gc_wl,
@@ -1846,7 +1879,7 @@ static void sl_gc_page_debug_check(void) {
                 if (!o->paged)
                     continue;
                 if (sl_gc_page_of(o) == pg) {
-                    if (o->gen == 0)
+                    if (o->gen != 1)
                         young++;
                     else
                         old++;
@@ -1856,7 +1889,7 @@ static void sl_gc_page_debug_check(void) {
                 if (!o->paged)
                     continue;
                 if (sl_gc_page_of(o) == pg) {
-                    if (o->gen == 0)
+                    if (o->gen != 1)
                         young++;
                     else
                         old++;
@@ -2205,8 +2238,6 @@ static void sl_gc_trace_bytes(void *p, void (*mark)(void *));
 static void sl_gc_trace_arr(void *p, void (*mark)(void *));
 static void sl_gc_trace_map(void *p, void (*mark)(void *));
 static void sl_gc_trace_join(void *p, void (*mark)(void *));
-static void sl_gc_trace_arr_dirty(void *p, void (*mark)(void *));
-static void sl_gc_trace_map_dirty(void *p, void (*mark)(void *));
 
 /* The minor's whole mark phase: roots, then the remembered set, every
  * drain. `root_mark` is the mark the root phase traces with: always
@@ -2222,23 +2253,41 @@ static void sl_gc_minor_mark(sl_gc_thread **snap, int nsnap, size_t rem_n,
      * children while queueing young ones). Drain per entry. Young
      * objects reachable ONLY through old-remembered memory are found
      * here. */
+    /* With promotion after two survivals (fix-gc.md 1.2), a child this
+     * trace marks for the first time (gen 0) is still young after this
+     * minor: it only ages. So an entry whose trace met one stays
+     * remembered for the next minor, which reaches that child again --
+     * by then gen 2, marked, promoted. A list or map moves its frontier
+     * (gc_clean) only up to the first position whose element met such a
+     * child, so the next minor retraces from there and no further back:
+     * a container growing every minor (a cache being built) is traced
+     * about twice per position, not from the start each time. Dropped
+     * once its trace meets no gen-0 child. */
     for (size_t i = 0; i < rem_n; i++) {
         sl_gc_obj *rh = sl_gc_rem_harvest_buf[i];
         void *payload = (void *)(rh + 1);
         sl_gc_mark_minor(payload);
+        int keep = 0;
         /* A list or map is traced only past what is still clean. */
-        if (rh->trace == sl_gc_trace_arr)
-            sl_gc_trace_arr_dirty(payload, sl_gc_mark_minor);
-        else if (rh->trace == sl_gc_trace_map)
-            sl_gc_trace_map_dirty(payload, sl_gc_mark_minor);
-        else if (rh->trace)
+        if (rh->trace == sl_gc_trace_arr) {
+            keep = sl_gc_trace_arr_minor(payload, sl_gc_mark_minor);
+        } else if (rh->trace == sl_gc_trace_map) {
+            keep = sl_gc_trace_map_minor(payload, sl_gc_mark_minor);
+        } else if (rh->trace) {
+            unsigned long long seen0 = sl_gc_minor_gen0_seen;
             rh->trace(payload, sl_gc_mark_minor);
+            keep = sl_gc_minor_gen0_seen != seen0;
+        }
         while (sl_gc_wl_n > 0) {
             void *p = sl_gc_wl[--sl_gc_wl_n];
             sl_gc_obj *wh = (sl_gc_obj *)p - 1;
             if (wh->trace) wh->trace(p, sl_gc_mark_minor);
         }
-        rh->remembered = 0;
+        if (keep) {
+            sl_gc_rem_orphan_push(rh); /* stays remembered = 1 */
+        } else {
+            rh->remembered = 0;
+        }
     }
     sl_gc_rem_harvest_n = 0;
     while (sl_gc_wl_n > 0) {
@@ -2302,7 +2351,7 @@ static void sl_gc_verify_child(void *c) {
     if (!c || !sl_gc_set_contains(c))
         return;
     sl_gc_obj *h = (sl_gc_obj *)c - 1;
-    if (h->gen != 0 || h->remembered != 2)
+    if (h->gen == 1 || h->remembered != 2)
         return;
     if (sl_gc_verify_reports++ >= 20)
         return;
@@ -2362,7 +2411,7 @@ static void sl_gc_verify_minor_marks(sl_gc_thread **snap, int nsnap,
     size_t missed = 0;
     i = 0;
     for (sl_gc_obj *h = sl_gc_young; h; h = h->next, i++) {
-        if (h->gen == 0 && h->marked && !minor[i]) {
+        if (h->gen != 1 && h->marked && !minor[i]) {
             h->remembered = 2;
             missed++;
         }
@@ -2432,26 +2481,60 @@ static void sl_gc_collect_minor_real(void) {
      * sl_gc_alloc_owned). It moves to sl_gc_old whether or not it was
      * marked: its owner is old, a minor never frees old objects, and
      * the buffer must outlive its owner. A major reclaims both. */
+    /* Promotion after two survivals (fix-gc.md 1.2). With a single
+     * survival, any minor that landed while a request was half built --
+     * four workers mid-decode, or one task walking a decoded tree --
+     * promoted the whole of it, and it died old: 30-82% of allocations
+     * promoted on the quote decode probe, all left for majors. A first
+     * survival now only ages an object (gen 2, still young, still on
+     * this list); a second promotes it.
+     *
+     * An object promoted here may point at one that survived this minor
+     * for the first time and stays young: an old->young edge no barrier
+     * recorded. So every promoted object that can hold pointers is
+     * remembered for the next minor, which traces it once (a list or map
+     * from position 0) and marks those children; they are promoted at
+     * their own second survival, remembered in turn, and so on. The cost
+     * is one more trace per promoted object, and promotion is what this
+     * makes rare. */
     sl_gc_obj **mpp = &sl_gc_young;
     size_t swept = 0, promoted = 0;
     while (*mpp) {
         sl_gc_obj *h = *mpp;
-        if (!h->marked && h->gen == 0) {
+        if (h->gen == 1) {
+            /* an owned buffer born old: moved, marked or not (above) */
+            *mpp = h->next;
+            h->marked = 0;
+            h->remembered = 0;
+            h->next = sl_gc_old;
+            sl_gc_old = h;
+            promoted++;
+        } else if (!h->marked) {
             *mpp = h->next;
             if (h->fini)
                 h->fini((void *)(h + 1));
             sl_gc_recycle(h);
             swept++;
+        } else if (h->gen == 0) {
+            h->marked = 0;
+            h->gen = 2;
+            mpp = &h->next;
         } else {
             *mpp = h->next;
-            if (h->paged && h->gen == 0)
+            if (h->paged)
                 sl_gc_page_promoted(h);
             h->marked = 0;
-            h->remembered = 0;
             h->gen = 1;
             h->next = sl_gc_old;
             sl_gc_old = h;
             promoted++;
+            if (h->trace) {
+                sl_gc_dirty_all((void *)(h + 1));
+                h->remembered = 1;
+                sl_gc_rem_orphan_push(h);
+            } else {
+                h->remembered = 0;
+            }
         }
     }
     /* Only the verifier's full mark marks old objects in a minor. */
@@ -2572,7 +2655,7 @@ static void sl_gc_collect(void) {
             live_bytes += sizeof(sl_gc_obj) + h->size;
             h->marked = 0;
             h->remembered = 0;
-            if (h->paged && h->gen == 0)
+            if (h->paged && h->gen != 1)
                 sl_gc_page_promoted(h);
             h->gen = 1;
             *pp = h->next;

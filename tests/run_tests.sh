@@ -461,7 +461,7 @@ for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood \
             generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry loop_leaf_poll own_roots switch escape_roots \
             http_read_wire bytes_empty_literal gc_minor_barriers map_delete if_let \
             literal_expect pending_sibling_type json_parity json_utf8 json_decode_budget \
-            bytes json_deep_nesting gc_container_frontier; do
+            bytes json_deep_nesting gc_container_frontier gc_promotion_budget; do
     out="/tmp/sl_gcstress_${name}.out"
     if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -491,7 +491,7 @@ for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put \
             json_int_exact flags method_recv method_recv_gc indirect_callee \
             http_read_wire bytes_empty_literal gc_minor_barriers map_delete if_let \
             literal_expect pending_sibling_type json_parity json_utf8 json_decode_budget \
-            bytes json_deep_nesting gc_container_frontier; do
+            bytes json_deep_nesting gc_container_frontier gc_promotion_budget; do
     out="/tmp/sl_nursery_${name}.out"
     if ! SLANG_GC_NURSERY_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -521,7 +521,8 @@ for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc
             literal_expect pending_sibling_type \
             gc_nested_literal gc_nursery_barrier gc_nursery_promotion \
             spawn_isolation select maps json json_parity json_utf8 json_decode_budget \
-            bytes json_deep_nesting http_read_wire http_client_pool http2_flood; do
+            bytes json_deep_nesting http_read_wire http_client_pool http2_flood \
+            gc_promotion_budget; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_verify_minor_${name}.out"
     err="/tmp/sl_verify_minor_${name}.err"
@@ -602,6 +603,33 @@ EOF_SPEC
     fi
 done
 [ "$budget_bad" -eq 0 ] && echo "PASS allocation budgets"
+
+# ---- promotion budgets ------------------------------------------------------
+# Objects promoted to the old generation, as a share of all allocations,
+# for request-shaped workloads whose garbage must die young.
+#   gc_promotion_budget  decode a 2,000-item body and walk it, 150 times.
+#                        Was 30.7% promoted (one survival promoted, so a
+#                        minor mid-walk promoted the whole tree); 0.28% with
+#                        promotion after two survivals (fix-gc.md 1.2).
+echo "--- promotion budgets (SLANG_GC_STAT) ---"
+promo_bad=0
+for spec in gc_promotion_budget:1; do
+    name=${spec%%:*}
+    pct=${spec#*:}
+    stat=$(SLANG_GC_STAT=1 ./slangc "tests/$name/main.sl" --run 2>&1 >/dev/null |
+           grep '^slang-gc-stat collects=')
+    allocs=$(echo "$stat" | sed -n 's/.* allocs=\([0-9]*\).*/\1/p')
+    promoted=$(echo "$stat" | sed -n 's/.* promoted=\([0-9]*\).*/\1/p')
+    if [ -z "$allocs" ] || [ -z "$promoted" ]; then
+        echo "FAIL promotion budget $name (no slang-gc-stat line)"
+        promo_bad=1; fail=1
+    elif [ $((promoted * 100)) -gt $((allocs * pct)) ]; then
+        echo "FAIL promotion budget $name: $promoted of $allocs allocations" \
+             "promoted, budget $pct%"
+        promo_bad=1; fail=1
+    fi
+done
+[ "$promo_bad" -eq 0 ] && echo "PASS promotion budgets"
 
 # ---- async preemption: C called on an aligned stack ------------------------
 # The async-preemption trampoline calls into C (sl_preempt_yield and two
