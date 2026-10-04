@@ -3,6 +3,9 @@
 Work top to bottom, one item at a time; tick items as they land. Items 2
 and 3 are being worked now.
 
+The API performance and memory work after the CCX33 run (#287) has its own
+plan: [`fix-gc.md`](fix-gc.md). It is worked ahead of this queue.
+
 Everything finished is cleared from this file to keep it short. The full
 write-ups — why each design was chosen, what was measured, which controls
 caught what — are in git history and the PR descriptions:
@@ -530,6 +533,16 @@ budgets — the win must come from cost-per-allocation and minor cost.
     served 41–81 req/s on 4 workers here (#150: 128–203 against Go's
     6–7k). Decoding straight into the target type is the fix, and the
     largest gap in the heavy tier.
+  - [x] **Decode leftovers closed without code (2026-10-02).**
+    `sl_jd_key` clean keys are already in-place (0 allocs); escaped
+    keys cost exactly 1 alloc each, measured 4013 -> 8013 per 2000-item
+    decode with all keys escaped, but real bodies never escape keys
+    (and map keys must materialize anyway — they are stored). List
+    growth is ~10 owned buffers per 2000-item decode, 0.25% of its
+    4013 allocs, and no hint exists without pre-scanning the input.
+    Neither moves the needle; the needle is Phase 2 (minors still
+    ~15 ms of ~82 ms per 200 decodes, most of it the per-minor set
+    rebuild).
   - [x] **Encode sizing, done (2026-10-02).** `json.encode` pre-sizes its
     builder from the static type's skeleton (field names and punctuation
     plus fixed-width scalar slots; `json_enc_hint` in
@@ -665,6 +678,6 @@ training data, so it wins on those three. The zokor half (agent guide,
 
 ## Notes
 
-- Do not change `bench/http/main.sl` for perf experiments. Raw-best slang is `bench/http_opt/main.sl`; remasure with `./bench/run_http_opt.sh`.
-- Do not start LLVM.
+- Do not change `bench/http/main.sl` for perf experiments. Raw-best slang is `bench/http_opt/main.sl`; remasure with `./bench/run_http_opt.sh`. A recorded re-baseline under `fix-gc.md` Phase 8 is the one exception.
+- No LLVM backend code without `fix-gc.md` 7.1's measurement.
 - Phase E claim requires p99 **and** RSS vs Go; RPS alone is not a win.

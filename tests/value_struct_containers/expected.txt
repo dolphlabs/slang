@@ -1,0 +1,5 @@
+burn: true
+list: 0 bad
+map: 0 bad
+chan: 0 bad
+join: 0 bad

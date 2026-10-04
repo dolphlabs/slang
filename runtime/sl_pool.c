@@ -1,6 +1,10 @@
 #if defined(__linux__)
 #include <sched.h>
 #endif
+#if defined(__APPLE__)
+#include <mach-o/getsect.h> /* getsectiondata: sl_preempt_text_range_init */
+#include <mach-o/ldsyms.h>  /* _mh_execute_header */
+#endif
 /* Tier 11: run queue + worker pool. The registry fix (top_ptr ->
  * task_slot double indirection) this design depends on for
  * correctness under worker reuse is a separate change to
@@ -891,6 +895,38 @@ static void sl_rt_install_altstack(void) {
  * risky work (pushing onto the run queue) happens later, in
  * sl_preempt_yield, from ordinary post-sigreturn code, not from
  * signal-handler context at all. */
+/* The program's own machine code: generated code and the spliced
+ * runtime, everything slangc compiled. The handler preempts only a PC
+ * inside it. Shared libraries -- libc, libsystem_malloc, OpenSSL -- take
+ * locks the runtime cannot see, and a task suspended inside one leaves
+ * the lock held while it sits queued: the next thread to need it blocks
+ * for good, and on Darwin the task's eventual unlock from another thread
+ * traps (os_unfair_lock checks its owner). Every such call is meant to be
+ * bracketed with sl_rt_preempt_disable, but one unbracketed call is
+ * enough: sl_arena_chunk_put's free() was one (todo.md, "a task
+ * preempted inside free() deadlocked the allocator"). Declining here
+ * makes that impossible whatever is bracketed; the ticker just tries
+ * again. Go applies the same rule (async preemption only at Go code
+ * PCs). Set once by sl_preempt_install_handlers, before the handler can
+ * run. */
+static uintptr_t sl_preempt_text_lo = 0;
+static uintptr_t sl_preempt_text_hi = 0;
+
+static void sl_preempt_text_range_init(void) {
+#if defined(__APPLE__)
+    unsigned long size = 0;
+    uint8_t *p = getsectiondata(&_mh_execute_header, "__TEXT", "__text",
+                                &size);
+    sl_preempt_text_lo = (uintptr_t)p;
+    sl_preempt_text_hi = p ? (uintptr_t)p + size : 0;
+#elif defined(__linux__)
+    extern char __executable_start[];
+    extern char etext[];
+    sl_preempt_text_lo = (uintptr_t)__executable_start;
+    sl_preempt_text_hi = (uintptr_t)etext;
+#endif
+}
+
 static void sl_preempt_handler(int sig, siginfo_t *si, void *uctx_raw) {
     (void)sig; (void)si;
     sl_task *t = sl_rt_current_task;
@@ -926,6 +962,9 @@ static void sl_preempt_handler(int sig, siginfo_t *si, void *uctx_raw) {
             see the spike's own Bug 2 (main comment above) for the
             concrete failure this closes */
     }
+    if (pc0 < sl_preempt_text_lo || pc0 >= sl_preempt_text_hi)
+        return; /* inside a shared library, or the range is unknown --
+            see sl_preempt_text_lo */
     if (pc0 >= (uintptr_t)sl_preempt_trampoline_entry &&
         pc0 < (uintptr_t)sl_preempt_trampoline_end) {
         return; /* never re-preempt the trampoline's own code */
@@ -1049,6 +1088,7 @@ static void *sl_preempt_ticker_thread(void *arg) {
 /* Split from sl_preempt_ticker_start so tests/runtime/test_preempt.c can
  * install the real disposition without starting the ticker. */
 static void sl_preempt_install_handlers(void) {
+    sl_preempt_text_range_init();
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     /* SA_SIGINFO for the ucontext_t access the handler needs to read/
@@ -1158,6 +1198,7 @@ static void sl_pool_start(void) {
 
     /* Before any worker starts: thieves scan slots [0, n) and main's. */
     sl_pool_nworkers = n;
+    sl_gc_nursery_set_max(n);
     /* This is main's own thread, which runs main's task and later joins
      * the pool (sl_worker_run_loop(-1)); its runnext slot is the last. */
     sl_rt_runnext_idx = SL_RUNNEXT_SLOTS - 1;

@@ -57,23 +57,33 @@ typedef struct {
         parked waiting for data */
 } sl_chan;
 
+/* Mark what one container slot (an element, a key, a value) holds.
+ * `is_ptr` is the container's "may hold pointers" flag. Codegen sets it
+ * from type_has_gc_roots, so it is true for a value struct with a pointer
+ * field as well as for a plain pointer -- and a slot was read as a single
+ * pointer whenever it was set, so only a value struct's FIRST word was
+ * marked. A struct { n: int, s: str } in a list, map, channel or join
+ * lost its str to the next collection (tests/value_struct_containers:
+ * 19,917 of 20,000 list elements read back wrong). A slot is one pointer
+ * only when it is exactly pointer-sized; anything wider is scanned word by
+ * word, each word validated by mark() before it is trusted. */
+static inline void sl_gc_mark_slot(const unsigned char *el, size_t sz,
+                                   int is_ptr, void (*mark)(void *)) {
+    if (is_ptr && sz == sizeof(void *)) {
+        mark(*(void *const *)el);
+        return;
+    }
+    for (size_t off = 0; off + sizeof(void *) <= sz; off += sizeof(void *))
+        mark(*(void *const *)(el + off));
+}
+
 static void sl_gc_trace_chan(void *p, void (*mark)(void *)) {
     sl_chan *c = (sl_chan *)p;
     if (!c->buf) return;
     mark(c->buf);
-    /* Value-struct interiors (same as sl_gc_trace_arr). */
-    if (!c->elem_is_ptr) {
-        if (c->elemsz < (long long)sizeof(void *)) return;
-        for (int i = 0; i < c->cap; i++) {
-            unsigned char *el = c->buf + (size_t)i * (size_t)c->elemsz;
-            for (size_t off = 0; off + sizeof(void *) <= (size_t)c->elemsz;
-                 off += sizeof(void *))
-                mark(*(void **)(el + off));
-        }
-        return;
-    }
     for (int i = 0; i < c->cap; i++)
-        mark(*(void **)(c->buf + (size_t)i * c->elemsz));
+        sl_gc_mark_slot(c->buf + (size_t)i * (size_t)c->elemsz,
+                        (size_t)c->elemsz, c->elem_is_ptr, mark);
 }
 
 static sl_chan *sl_chan_new(size_t elemsz, int cap, int elem_is_ptr) {
@@ -777,10 +787,11 @@ static unsigned long long sl_from_be(sl_bytes *b) {
 
 /* ---- growable arrays over GC memory ---- */
 
-/* gc_clean (lists and maps): positions below it hold no pointer written
- * since the last minor collection that traced this container, so a minor
+/* gc_clean (lists and maps): positions below it hold no pointer that can
+ * be young -- nothing written since the last minor that traced this
+ * container, and nothing that minor found still young -- so a minor
  * tracing it through the remembered set starts there instead of at 0
- * (sl_gc_trace_arr_dirty / sl_gc_trace_map_dirty). Every store that can
+ * (sl_gc_trace_arr_minor / sl_gc_trace_map_minor). Every store that can
  * put a young pointer into the container lowers it to the position
  * written (an append, a[i] = v, a new map key) or to 0 when the position
  * is not known (a generic sl_gc_remember, a map update); a delete lowers
@@ -811,18 +822,10 @@ static int sl_gc_clean_at(long long n) {
  * element when the elements are value structs. */
 static void sl_gc_trace_arr_range(sl_arr *a, long long from,
                                   void (*mark)(void *)) {
-    if (!a->elem_is_ptr) {
-        if (a->esz < (long long)sizeof(void *)) return;
-        for (long long i = from; i < a->len; i++) {
-            unsigned char *el = a->data + (size_t)i * a->esz;
-            for (size_t off = 0; off + sizeof(void *) <= (size_t)a->esz;
-                 off += sizeof(void *))
-                mark(*(void **)(el + off));
-        }
-        return;
-    }
+    if (!a->elem_is_ptr && a->esz < (long long)sizeof(void *)) return;
     for (long long i = from; i < a->len; i++)
-        mark(*(void **)(a->data + (size_t)i * a->esz));
+        sl_gc_mark_slot(a->data + (size_t)i * a->esz, (size_t)a->esz,
+                        a->elem_is_ptr, mark);
 }
 
 static void sl_gc_trace_arr(void *p, void (*mark)(void *)) {
@@ -847,14 +850,27 @@ static void sl_gc_trace_arr(void *p, void (*mark)(void *)) {
     sl_gc_trace_arr_range(a, 0, mark);
 }
 
-/* A minor's trace of a remembered list: only from gc_clean on. */
-static void sl_gc_trace_arr_dirty(void *p, void (*mark)(void *)) {
+/* The minor's remembered-phase trace of a list (sl_gc_minor_mark): from
+ * gc_clean on only, and gc_clean is left at the first
+ * position whose element met a first-survival young object
+ * (sl_gc_minor_gen0_seen moved while marking it): that object is still
+ * young after this minor, so the next minor must reach it again. Returns
+ * nonzero when there is such a position (the list stays remembered). */
+static int sl_gc_trace_arr_minor(void *p, void (*mark)(void *)) {
     sl_arr *a = (sl_arr *)p;
+    long long first = -1;
     if (a->data) {
         mark(a->data);
-        sl_gc_trace_arr_range(a, a->gc_clean, mark);
+        for (long long i = a->gc_clean; i < a->len; i++) {
+            unsigned long long s0 = sl_gc_minor_gen0_seen;
+            sl_gc_mark_slot(a->data + (size_t)i * a->esz, (size_t)a->esz,
+                            a->elem_is_ptr, mark);
+            if (first < 0 && sl_gc_minor_gen0_seen != s0)
+                first = i;
+        }
     }
-    a->gc_clean = sl_gc_clean_at(a->len);
+    a->gc_clean = sl_gc_clean_at(first >= 0 ? first : a->len);
+    return first >= 0;
 }
 
 /* The barrier for a store into element i. Caller holds the preempt
@@ -999,20 +1015,10 @@ static void sl_gc_trace_map_range(sl_map *m, long long from,
                                   void (*mark)(void *)) {
     for (long long i = from; i < m->count; i++) {
         long long slot = m->order[i];
-        if (m->key_is_ptr)
-            mark(*(void **)(m->keys + (size_t)slot * m->ksz));
-        else if (m->ksz >= sizeof(void *)) {
-            for (size_t off = 0; off + sizeof(void *) <= m->ksz;
-                 off += sizeof(void *))
-                mark(*(void **)(m->keys + (size_t)slot * m->ksz + off));
-        }
-        if (m->val_is_ptr)
-            mark(*(void **)(m->vals + (size_t)slot * m->vsz));
-        else if (m->vsz >= sizeof(void *)) {
-            for (size_t off = 0; off + sizeof(void *) <= m->vsz;
-                 off += sizeof(void *))
-                mark(*(void **)(m->vals + (size_t)slot * m->vsz + off));
-        }
+        sl_gc_mark_slot(m->keys + (size_t)slot * m->ksz, m->ksz,
+                        m->key_is_ptr, mark);
+        sl_gc_mark_slot(m->vals + (size_t)slot * m->vsz, m->vsz,
+                        m->val_is_ptr, mark);
     }
 }
 
@@ -1029,12 +1035,23 @@ static void sl_gc_trace_map(void *p, void (*mark)(void *)) {
     sl_gc_trace_map_range(m, 0, mark);
 }
 
-/* A minor's trace of a remembered map: only from gc_clean on. */
-static void sl_gc_trace_map_dirty(void *p, void (*mark)(void *)) {
+/* sl_gc_trace_arr_minor for a map: positions are its order array's. */
+static int sl_gc_trace_map_minor(void *p, void (*mark)(void *)) {
     sl_map *m = (sl_map *)p;
+    long long first = -1;
     sl_gc_trace_map_bufs(m, mark);
-    sl_gc_trace_map_range(m, m->gc_clean, mark);
-    m->gc_clean = sl_gc_clean_at(m->count);
+    for (long long i = m->gc_clean; i < m->count; i++) {
+        unsigned long long s0 = sl_gc_minor_gen0_seen;
+        long long slot = m->order[i];
+        sl_gc_mark_slot(m->keys + (size_t)slot * m->ksz, m->ksz,
+                        m->key_is_ptr, mark);
+        sl_gc_mark_slot(m->vals + (size_t)slot * m->vsz, m->vsz,
+                        m->val_is_ptr, mark);
+        if (first < 0 && sl_gc_minor_gen0_seen != s0)
+            first = i;
+    }
+    m->gc_clean = sl_gc_clean_at(first >= 0 ? first : m->count);
+    return first >= 0;
 }
 
 /* What sl_gc_remember does to a list or a map before remembering it: the
@@ -1518,14 +1535,7 @@ static void sl_gc_trace_join(void *p, void (*mark)(void *)) {
     mark(j->err);
     mark(j->val);
     if (!j->done || j->panicked) return;
-    /* Value-struct interiors (same as sl_gc_trace_arr). */
-    if (j->val_is_ptr) {
-        mark(*(void **)j->val);
-        return;
-    }
-    for (size_t off = 0; off + sizeof(void *) <= j->valsz;
-         off += sizeof(void *))
-        mark(*(void **)(j->val + off));
+    sl_gc_mark_slot(j->val, j->valsz, j->val_is_ptr, mark);
 }
 
 static sl_join *sl_join_new(size_t valsz, int val_is_ptr) {
@@ -1545,30 +1555,49 @@ static void sl_join_wake(sl_join *j) {
     }
 }
 
+/* The join may already be old when its task finishes -- a long task,
+ * or one spawned before a minor -- and the value or error it stores can
+ * hold young pointers (a str, a value struct's fields). Those stores
+ * need the write barrier like any other store into a heap object: without
+ * it a minor freed them while the join still held them (the verifier,
+ * on macOS arm64: young strs held by old joins, not remembered). The
+ * barrier runs after the unlock -- remembering can malloc -- and inside
+ * the same preempt bracket, so no collection comes between. */
 static void sl_join_finish(sl_join *j, const void *val) {
     sl_rt_preempt_disable();
     pthread_mutex_lock(&j->mu);
+    int stored = 0;
     if (!j->done) {
-        if (val && j->valsz)
+        if (val && j->valsz) {
             memcpy(j->val, val, j->valsz);
+            stored = 1;
+        }
         j->done = 1;
         sl_join_wake(j);
     }
     pthread_mutex_unlock(&j->mu);
+    if (stored)
+        sl_gc_remember_obj((sl_gc_obj *)j - 1);
     sl_rt_preempt_enable();
 }
 
 static void sl_join_fail(void *jp, const char *msg) {
     sl_join *j = (sl_join *)jp;
     sl_rt_preempt_disable();
+    /* Allocated before the lock: never allocate GC memory holding one. */
+    char *err = sl_strdup(msg);
     pthread_mutex_lock(&j->mu);
+    int stored = 0;
     if (!j->done) {
         j->panicked = 1;
-        j->err = sl_strdup(msg);
+        j->err = err;
+        stored = 1;
         j->done = 1;
         sl_join_wake(j);
     }
     pthread_mutex_unlock(&j->mu);
+    if (stored)
+        sl_gc_remember_obj((sl_gc_obj *)j - 1); /* see sl_join_finish */
     sl_rt_preempt_enable();
 }
 

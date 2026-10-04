@@ -11,6 +11,7 @@ mean as a self-check.
 
     go run bench/latgen/main.go -addr 127.0.0.1:8080 -c 200 -d 10s
     go run bench/latgen/main.go -addr 127.0.0.1:8080 -path /echo -body '{"message":"hi"}'
+    go run bench/latgen/main.go -addr 127.0.0.1:8080 -path /api/quote -body-file quote_0.json
     go run bench/latgen/main.go ... -dump samples.csv   # conn,start_ns,latency_ns per request
 
 It also reports what share of requests, and of total waiting time, sits

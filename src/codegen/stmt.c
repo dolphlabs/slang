@@ -832,21 +832,23 @@ void gen_stmt(CG *cg, Stmt *s) {
              * another, was swept between two of them. Hidden while the
              * collector treated each task's recent allocations as
              * roots. */
-            int k_is_ptr = type_is_gc_ptr(cg, k);
-            int v_is_ptr = type_is_gc_ptr(cg, v);
+            /* _sl_k/_sl_v are rooted by their type, not only when they
+             * are themselves GC pointers: a value struct holding a str
+             * (map[str]P) was not rooted at all, so a collection at this
+             * bracket's enter freed the str and sl_map_put stored a
+             * dangling pointer (tests/value_struct_containers). */
+            int k_roots = count_gc_root_exprs(cg, k);
+            int v_roots = count_gc_root_exprs(cg, v);
             void *after = tgt->live_set;
-            int nroots = 1 + k_is_ptr + v_is_ptr + cg->ambient_count;
+            int nroots = 1 + k_roots + v_roots + cg->ambient_count;
             for (int li = 0; li < live_set_nnamed(after); li++)
                 nroots += count_named_gc_roots(cg, live_set_named(after, li));
             StrBuf roots;
             sb_init(&roots);
             sb_append(&roots, "(void *)_sl_mpm");
             int wrote = 1;
-            if (k_is_ptr)
-                sb_append(&roots, ", (void *)_sl_k");
-            if (v_is_ptr)
-                sb_append(&roots, ", (void *)_sl_v");
-            wrote += k_is_ptr + v_is_ptr;
+            append_gc_roots_of(cg, &roots, "_sl_k", k, &wrote);
+            append_gc_roots_of(cg, &roots, "_sl_v", v, &wrote);
             for (int li = 0; li < live_set_nnamed(after); li++)
                 append_named_gc_roots(cg, &roots, live_set_named(after, li),
                                       &wrote);

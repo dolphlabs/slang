@@ -265,6 +265,14 @@ let r: result[Person, str] = json.decode(s);
 guard let p2 = r else { exit(1); }
 ```
 
+Plain `struct`s work as well as `gc struct`s, and are cheaper to decode:
+a plain struct is filled in place -- in the binding, or in a list's or
+map's own slot -- so a `[Item]` of a plain `Item` is one buffer, where a
+`gc struct Item` is one heap object per element. For a large array of
+small records (a request body with thousands of line items) that halves
+the allocations. Use `gc struct` when the record must be shared by
+reference.
+
 Supported: `gc struct` (a plain `struct` is a compile error naming it, since
 the codecs read and build structs through a pointer), `opt[T]`, `[T]`,
 `map[str, V]` (JSON object keys

@@ -79,7 +79,13 @@ static sl_res_bytes_str *sl_fs_read(int fd, int max) {
         return sl_fs_ok_bytes(sl_bytes_new(NULL, 0));
     sl_bytes *b = sl_bytes_alloc(max);
     b->len = 0;
-    ssize_t n = read(fd, b->ptr, (size_t)max);
+    /* EINTR: SIGUSR1 (async preemption) is installed without
+       SA_RESTART, so a read from a pipe or terminal that the ticker
+       interrupts fails instead of resuming. Retry. */
+    ssize_t n;
+    do {
+        n = read(fd, b->ptr, (size_t)max);
+    } while (n < 0 && errno == EINTR);
     if (n < 0)
         return sl_fs_err_bytes(strerror(errno));
     b->len = (long long)n;
@@ -124,8 +130,11 @@ static sl_res_i32_str *sl_fs_write(int fd, sl_bytes *data) {
     long long off = 0;
     while (off < data->len) {
         ssize_t n = write(fd, data->ptr + off, (size_t)(data->len - off));
-        if (n < 0)
+        if (n < 0) {
+            if (errno == EINTR)
+                continue; /* see sl_fs_read */
             return sl_fs_err_i32(strerror(errno));
+        }
         if (n == 0)
             return sl_fs_err_i32("short write");
         off += n;

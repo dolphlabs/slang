@@ -259,7 +259,8 @@ println(len(home) > 0);
 A package is a directory: its `.sl` files share one namespace. `import
 "geometry";` finds `./geometry/`, then a standard package, then a `pkg` pin in
 `slang.project` (`pkg name git <url> tag v1.2.0`, then `slangc get`). JSON
-works on `gc struct` types only; the decode target comes from the annotation.
+works on `struct` and `gc struct`; the decode target comes from the annotation,
+and a `[T]` of a plain `struct` decodes into one buffer, not an object per item.
 Standard packages: `time net json proc fs os io log crypto sql pg redis regex
 strings encoding compress builder byteutil flags http http2 httpc`.
 
@@ -290,7 +291,6 @@ println("ok");
 
 - `println(list)`: use `println(inspect(list))`.
 - `let xs = [];` or `let m = {};`: annotate, `let xs: [int] = [];`.
-- `json.encode` on a plain `struct`: declare it `gc struct`.
 - `m[k]` on a missing key panics: check `has(m, k)`.
 - A closure or lambda: write a top-level function and pass its state in.
 - `return` between `mutex_lock` and `mutex_unlock`: unlock first.

@@ -10,10 +10,17 @@
 // of hundreds of milliseconds and requests timing out.
 import "time";
 
+// The work between clock reads keeps the time in slang code: async
+// preemption declines a PC inside libc or the vDSO (clock_gettime), and
+// the suite's preemption-alignment check needs these tasks preemptible.
 fn spin(until_ns: int, out: chan[int]) {
     let n = 0;
     while (time.mono() as int) < until_ns {
-        n = n + 1;
+        let k = 0;
+        while k < 256 {
+            n = n + (k % 3) + 1;
+            k = k + 1;
+        }
     }
     chan_send(out, n);
 }

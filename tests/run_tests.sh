@@ -402,6 +402,49 @@ out=$(./slangc doc httpc.client_post 2>&1)
 ./slangc doc no_such_pkg >/dev/null 2>&1 && dc_fail "missing package must exit nonzero"
 [ "$dc_bad" -eq 0 ] && echo "PASS slangc doc"
 
+# ---- deadlock guards -------------------------------------------------
+# Programs that once deadlocked, under a 60 s watchdog each, since a hang
+# in the main loop above would stall the whole suite. They live under
+# tests/deadlock/ so that loop skips them. arena_churn: a task preempted
+# inside an unbracketed free() held the allocator's large-block lock;
+# run twice more with preemption forced to every millisecond (the old
+# code hung in 6 of 10 forced runs).
+echo "--- deadlock guards (60 s watchdog) ---"
+dl_bad=0
+for spec in "arena_churn" \
+            "arena_churn:SLANG_PREEMPT_QUANTUM_MS=1 SLANG_PREEMPT_TICK_MS=1" \
+            "arena_churn:SLANG_PREEMPT_QUANTUM_MS=1 SLANG_PREEMPT_TICK_MS=1"; do
+    name=${spec%%:*}
+    envs=""
+    [ "$spec" != "$name" ] && envs=${spec#*:}
+    out="/tmp/sl_deadlock_${name}.out"
+    bin="/tmp/sl_deadlock_${name}.bin"
+    if ! ./slangc "tests/deadlock/$name/main.sl" -o "$bin" >/dev/null 2>&1; then
+        echo "FAIL deadlock guard $name (does not compile)"
+        dl_bad=1; fail=1
+        continue
+    fi
+    # shellcheck disable=SC2086
+    env $envs "$bin" >"$out" 2>&1 &
+    dl_pid=$!
+    dl_i=0
+    while kill -0 "$dl_pid" 2>/dev/null && [ "$dl_i" -lt 120 ]; do
+        sleep 0.5
+        dl_i=$((dl_i + 1))
+    done
+    if kill -0 "$dl_pid" 2>/dev/null; then
+        kill -9 "$dl_pid" 2>/dev/null
+        wait "$dl_pid" 2>/dev/null
+        echo "FAIL deadlock guard $name ${envs:+($envs) }hung for 60 s"
+        dl_bad=1; fail=1
+    elif ! wait "$dl_pid" || ! diff -q "tests/deadlock/$name/expected.txt" "$out" >/dev/null; then
+        echo "FAIL deadlock guard $name ${envs:+($envs) }(exit or output)"
+        dl_bad=1; fail=1
+    fi
+    rm -f "$bin"
+done
+[ "$dl_bad" -eq 0 ] && echo "PASS deadlock guards"
+
 # ---- GC at a tiny threshold ------------------------------------------
 # A rooting bug -- a live object held only where no safepoint knows about
 # it -- surfaces only when a collection lands at that exact safepoint. At
@@ -418,7 +461,7 @@ for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood \
             generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry loop_leaf_poll own_roots switch escape_roots \
             http_read_wire bytes_empty_literal gc_minor_barriers map_delete if_let \
             literal_expect pending_sibling_type json_parity json_utf8 json_decode_budget \
-            bytes json_deep_nesting gc_container_frontier; do
+            bytes json_deep_nesting gc_container_frontier gc_promotion_budget value_struct_containers json_value_structs; do
     out="/tmp/sl_gcstress_${name}.out"
     if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -448,7 +491,7 @@ for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put \
             json_int_exact flags method_recv method_recv_gc indirect_callee \
             http_read_wire bytes_empty_literal gc_minor_barriers map_delete if_let \
             literal_expect pending_sibling_type json_parity json_utf8 json_decode_budget \
-            bytes json_deep_nesting gc_container_frontier; do
+            bytes json_deep_nesting gc_container_frontier gc_promotion_budget value_struct_containers json_value_structs; do
     out="/tmp/sl_nursery_${name}.out"
     if ! SLANG_GC_NURSERY_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -478,7 +521,9 @@ for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc
             literal_expect pending_sibling_type \
             gc_nested_literal gc_nursery_barrier gc_nursery_promotion \
             spawn_isolation select maps json json_parity json_utf8 json_decode_budget \
-            bytes json_deep_nesting http_read_wire http_client_pool http2_flood; do
+            bytes json_deep_nesting http_read_wire http_client_pool http2_flood \
+            gc_promotion_budget \
+            value_struct_containers json_value_structs; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_verify_minor_${name}.out"
     err="/tmp/sl_verify_minor_${name}.err"
@@ -559,6 +604,61 @@ EOF_SPEC
     fi
 done
 [ "$budget_bad" -eq 0 ] && echo "PASS allocation budgets"
+
+# ---- promotion budgets ------------------------------------------------------
+# Objects promoted to the old generation, as a share of all allocations,
+# for request-shaped workloads whose garbage must die young.
+#   gc_promotion_budget  decode a 2,000-item body and walk it, 150 times.
+#                        Was 30.7% promoted (one survival promoted, so a
+#                        minor mid-walk promoted the whole tree); 0.28% with
+#                        promotion after two survivals (fix-gc.md 1.2).
+echo "--- promotion budgets (SLANG_GC_STAT) ---"
+promo_bad=0
+for spec in gc_promotion_budget:1; do
+    name=${spec%%:*}
+    pct=${spec#*:}
+    stat=$(SLANG_GC_STAT=1 ./slangc "tests/$name/main.sl" --run 2>&1 >/dev/null |
+           grep '^slang-gc-stat collects=')
+    allocs=$(echo "$stat" | sed -n 's/.* allocs=\([0-9]*\).*/\1/p')
+    promoted=$(echo "$stat" | sed -n 's/.* promoted=\([0-9]*\).*/\1/p')
+    if [ -z "$allocs" ] || [ -z "$promoted" ]; then
+        echo "FAIL promotion budget $name (no slang-gc-stat line)"
+        promo_bad=1; fail=1
+    elif [ $((promoted * 100)) -gt $((allocs * pct)) ]; then
+        echo "FAIL promotion budget $name: $promoted of $allocs allocations" \
+             "promoted, budget $pct%"
+        promo_bad=1; fail=1
+    fi
+done
+[ "$promo_bad" -eq 0 ] && echo "PASS promotion budgets"
+
+# ---- nursery adaptation ------------------------------------------------------
+# The nursery grows while minors cost more than an eighth of the time
+# between them and stays at its 512 KB base while they are cheap
+# (fix-gc.md 1.2a). nursery_threshold= is its size at exit.
+#   gc_promotion_budget  decode-heavy: must have grown past the base (was
+#                        fixed at 512 KB; minors 49 -> 5 here).
+#   gc_nursery_small     short strings, nothing live: must stay at most
+#                        1 MB.
+echo "--- nursery adaptation (SLANG_GC_STAT) ---"
+nur_ad_bad=0
+for spec in gc_promotion_budget:grow gc_nursery_small:small; do
+    name=${spec%%:*}
+    want=${spec#*:}
+    size=$(SLANG_GC_STAT=1 ./slangc "tests/$name/main.sl" --run 2>&1 >/dev/null |
+           sed -n 's/^slang-gc-stat collects=.* nursery_threshold=\([0-9]*\).*/\1/p')
+    if [ -z "$size" ]; then
+        echo "FAIL nursery adaptation $name (no slang-gc-stat line)"
+        nur_ad_bad=1; fail=1
+    elif [ "$want" = grow ] && [ "$size" -le 524288 ]; then
+        echo "FAIL nursery adaptation $name: still $size bytes, expected growth"
+        nur_ad_bad=1; fail=1
+    elif [ "$want" = small ] && [ "$size" -gt 1048576 ]; then
+        echo "FAIL nursery adaptation $name: grew to $size bytes for cheap minors"
+        nur_ad_bad=1; fail=1
+    fi
+done
+[ "$nur_ad_bad" -eq 0 ] && echo "PASS nursery adaptation"
 
 # ---- async preemption: C called on an aligned stack ------------------------
 # The async-preemption trampoline calls into C (sl_preempt_yield and two

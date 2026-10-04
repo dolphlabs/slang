@@ -54,7 +54,9 @@ gc struct Created {
     status: str,
 }
 
-gc struct QuoteItem {
+// A plain struct: json.decode fills each item in the list's own buffer,
+// one allocation for the 2,000 items instead of one object per item.
+struct QuoteItem {
     sku: str,
     qty: int,
     price_cents: int,
