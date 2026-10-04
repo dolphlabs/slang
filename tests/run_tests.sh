@@ -660,6 +660,27 @@ for spec in gc_promotion_budget:grow gc_nursery_small:small; do
 done
 [ "$nur_ad_bad" -eq 0 ] && echo "PASS nursery adaptation"
 
+# ---- young pages hold a whole cycle -----------------------------------------
+# A small object that finds no room on its worker's pages falls back to
+# a libc malloc, freed one by one at the sweep. The page cap was sized
+# for the fixed 512 KB nursery; once the nursery grew (above), a
+# decode-heavy cycle overflowed it and gc_promotion_budget took 465,912
+# fallbacks, a third of the decode probe's allocations. The cap now
+# covers the largest nursery (sl_gc.c, SL_GC_PAGE_MAX_PAGES), and the
+# count must be zero. SLANG_GC_CLASS_STAT prints it at exit.
+echo "--- young page fallback (SLANG_GC_CLASS_STAT) ---"
+fb=$(SLANG_GC_CLASS_STAT=1 ./slangc tests/gc_promotion_budget/main.sl --run 2>&1 >/dev/null |
+     sed -n 's/^slang-gc-page-stat .* fallback=\([0-9]*\).*/\1/p')
+if [ -z "$fb" ]; then
+    echo "FAIL young page fallback (no slang-gc-page-stat line)"
+    fail=1
+elif [ "$fb" -ne 0 ]; then
+    echo "FAIL young page fallback: $fb small objects fell back to malloc"
+    fail=1
+else
+    echo "PASS young page fallback"
+fi
+
 # ---- async preemption: C called on an aligned stack ------------------------
 # The async-preemption trampoline calls into C (sl_preempt_yield and two
 # helpers), and System V requires %rsp 16-byte aligned at every call. An

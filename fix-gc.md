@@ -409,6 +409,18 @@ the point reads in flight with it.
   3.20 ms, RSS 40.8 -> 33.9 MB; decode probe 548 -> 348 ms (1 worker),
   351 -> 317 ms (4). Checked under `SLANG_GC_PAGE_DEBUG` with the path
   exercised (12,936 fallbacks, no violations).
+- [x] **1.11 Young pages hold a whole cycle** (found profiling the probe
+  after 2.6). 1.10 made the fallback cheap; this removes it. The 64-page
+  cap was sized for the fixed 512 KB nursery, and 1.2a's adaptive nursery
+  reaches 1 MB a worker, so a third of the 1-worker probe's allocations
+  still went to malloc and were freed one by one in the minor sweep. A
+  worker may now hold 512 pages (the 8 MB largest nursery: the trigger is
+  global) and keeps 128 empty ones across a sweep; keeping 64 re-allocated
+  ~40 aligned pages a cycle and doubled peak RSS on macOS. ABBA x4,
+  4,000 decodes: 1 worker 2,356 -> 1,753 ms, peak RSS 10.3 -> 5.7 MB; 4
+  workers 4,983 -> 4,170 ms, 19.2 -> 16.8 MB. The quote server is
+  unchanged: it falls back only while warming up and holds ~50 pages a
+  worker after, under both caps.
 
 **Exit gate:** the 4-worker probe runs at least 3x faster than 1 worker
 (1.0x today), and the local quote server's CPU per request is within 1.3x
