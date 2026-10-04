@@ -327,9 +327,17 @@ the point reads in flight with it.
 
   Target: under 10% promoted on the 4-worker probe (82% today), majors
   down several times, RSS within the gate.
-- [ ] **1.3 Count allocated bytes per worker**, published every 32
-  allocations or 16 KB as the existing comment intends, so the trigger
-  overshoots by at most one batch per worker.
+- [x] **1.3 Count allocated bytes per worker.** Each worker adds its
+  allocations to an accumulator in its own state and publishes to the
+  shared trigger counters every 16 KB (`SL_GC_PUBLISH_BATCH`); a trigger
+  is late by at most a batch per worker. Per worker, not per task:
+  hundreds of parked connections each holding back a batch would delay
+  a minor without bound. The fixed-threshold test modes still publish
+  every allocation. The per-task byte counters went with it. ABBA
+  against `dev`: quote 1,817 -> 2,092 req/s, CPU per request 2.68 ->
+  2.34 ms, p50 36 -> 29 ms (p99 76 -> 82 ms and RSS 29.0 -> 29.9 MB,
+  both inside the run-to-run spread); decode probe 9% (4 workers) and 6%
+  (1) faster.
 - [ ] **1.4 Stopped workers help collect.** Parallel sweep first: each
   worker already owns its pages, so the split is natural. Then parallel
   mark, with per-worker work lists and an atomic mark claim.
