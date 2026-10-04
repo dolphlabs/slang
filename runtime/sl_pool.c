@@ -1198,6 +1198,7 @@ static void sl_pool_start(void) {
 
     /* Before any worker starts: thieves scan slots [0, n) and main's. */
     sl_pool_nworkers = n;
+    sl_gc_nursery_set_max(n);
     /* This is main's own thread, which runs main's task and later joins
      * the pool (sl_worker_run_loop(-1)); its runnext slot is the last. */
     sl_rt_runnext_idx = SL_RUNNEXT_SLOTS - 1;

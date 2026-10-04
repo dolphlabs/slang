@@ -301,6 +301,24 @@ the point reads in flight with it.
   0.28% promoted, pinned at 1% in "promotion budgets"; stress- and
   verifier-listed).
 
+  **1.2a, adaptive nursery: done (2026-10-04).** The nursery doubles,
+  up to 1 MB per worker (8 MB cap), after a minor that cost more than an
+  eighth of the time since the previous one *and* found more than an
+  eighth of the nursery live; it halves when either falls under a
+  sixty-fourth / thirty-second, never below 512 KB.
+  `SLANG_GC_NURSERY_KB` still fixes it. Measured first with a fixed
+  nursery on the quote server (4 workers): 512 KB 1,480/1,451 req/s, p99
+  100/117 ms, 32/34 MB; 4 MB 1,851/1,801 req/s, p99 80/76 ms, 29/28 MB;
+  8 and 16 MB no better. A fixed 4 MB costs the compute benchmark 7 ->
+  12 MB for no speed, and pause share alone grew a tight loop of short
+  strings to 8 MB; the survival condition keeps both at 512 KB. Test:
+  "nursery adaptation" in `tests/run_tests.sh` (`gc_promotion_budget`
+  must grow, `gc_nursery_small` must not). ABBA against `dev`, quote
+  server: 1,453 -> 1,848 req/s, p99 101 -> 78 ms, p99.9 146 -> 85 ms,
+  CPU per request 3.36 -> 2.66 ms, RSS 37.5 -> 28.7 MB. Decode probe: 4
+  workers 21% faster but 9 -> 15.5 MB (its nursery grows to 4 MB); 1
+  worker 6% slower, 6.1 -> 8.1 MB.
+
   The options considered:
   - (a) nursery budget scaled with the workers (512 KB each, capped);
   - (b) promote after surviving two minors. The age fits in the `gen`
@@ -331,7 +349,18 @@ the point reads in flight with it.
   `[f64]` are not traced at all, and a value struct gets a pointer-offset
   map. This removes cause 7 and is needed before 2.1 can land without a
   tracing regression.
-- [ ] **1.9 Pace majors by old-generation growth** (cause 17). Count
+- [ ] **1.9 Pace majors by old-generation growth** (cause 17).
+  **Built and measured, parked (2026-10-04, branch
+  `perf/gc-major-pacing`).** It removes every major on the decode probe
+  (11 -> 0; 4-worker wall -17%, RSS 9.2 -> 6.0 MB), but on the quote
+  server, the target, it does nothing for throughput or CPU and the tail
+  and RSS lean the wrong way. Old-generation targets tried, quote server
+  ABBA against `dev`: live (8 MB floor) -3% req/s, RSS +35%; live/2 (2 MB
+  floor) req/s even, p99 -12%, RSS +6%; live/4 (1 MB floor), 3 x 15 s
+  rounds, req/s even, p99 +15%, p99.9 +41%, RSS +6%. The server's majors
+  are cheap (small old heap) and frequent ones keep dead old objects
+  from pinning young pages, so pacing by promotion gives nothing there.
+  Revisit if majors show up in a profile again. Count
   promoted bytes, plus objects born old, toward the major threshold, not
   every allocation. The live-heap pacing (next major after as many bytes
   as survived) keeps the same form, measured on what actually reaches the
