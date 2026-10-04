@@ -3272,3 +3272,18 @@ to before 2026-10-04. Now 48 pairs and 16 spinners: 12 of 12 on one and
 two workers, and a simulated fresh-slice runnext (each hand-off a new
 quantum, what the test exists to catch) still fails every run on 1, 2
 and 4 workers.
+
+## Open: the 4-worker gc-struct decode probe is slower with page recognition
+
+fix-gc.md 1.5 (recognizing paged objects by page and bitmap instead of a
+per-collection hash of every young object) cut minor pauses by a third
+and made the quote server 26% faster, and the decode probe faster on one
+worker (7%) and with plain-struct items on four (14%). One shape got
+slower: `bench/gc/decode` with its `gc struct` items on four workers,
+12-15% more wall and CPU (ABBA, and 6,000-decode runs: user CPU 8.3-9.4 s
+-> 10.1-11.0 s). Page-fallback rates and collection counts are the same;
+a flat-profile diff shows the JSON parser's own functions taking more
+samples, nothing new. Suspects not yet ruled out: cache effects of the
+bitmap reads during marking on a ~1M-object, page-exhausted heap, and
+scheduling (idle-wait samples rose). Not fixed: measure with hardware
+counters on Linux before guessing.
