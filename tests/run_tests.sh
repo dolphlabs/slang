@@ -402,6 +402,49 @@ out=$(./slangc doc httpc.client_post 2>&1)
 ./slangc doc no_such_pkg >/dev/null 2>&1 && dc_fail "missing package must exit nonzero"
 [ "$dc_bad" -eq 0 ] && echo "PASS slangc doc"
 
+# ---- deadlock guards -------------------------------------------------
+# Programs that once deadlocked, under a 60 s watchdog each, since a hang
+# in the main loop above would stall the whole suite. They live under
+# tests/deadlock/ so that loop skips them. arena_churn: a task preempted
+# inside an unbracketed free() held the allocator's large-block lock;
+# run twice more with preemption forced to every millisecond (the old
+# code hung in 6 of 10 forced runs).
+echo "--- deadlock guards (60 s watchdog) ---"
+dl_bad=0
+for spec in "arena_churn" \
+            "arena_churn:SLANG_PREEMPT_QUANTUM_MS=1 SLANG_PREEMPT_TICK_MS=1" \
+            "arena_churn:SLANG_PREEMPT_QUANTUM_MS=1 SLANG_PREEMPT_TICK_MS=1"; do
+    name=${spec%%:*}
+    envs=""
+    [ "$spec" != "$name" ] && envs=${spec#*:}
+    out="/tmp/sl_deadlock_${name}.out"
+    bin="/tmp/sl_deadlock_${name}.bin"
+    if ! ./slangc "tests/deadlock/$name/main.sl" -o "$bin" >/dev/null 2>&1; then
+        echo "FAIL deadlock guard $name (does not compile)"
+        dl_bad=1; fail=1
+        continue
+    fi
+    # shellcheck disable=SC2086
+    env $envs "$bin" >"$out" 2>&1 &
+    dl_pid=$!
+    dl_i=0
+    while kill -0 "$dl_pid" 2>/dev/null && [ "$dl_i" -lt 120 ]; do
+        sleep 0.5
+        dl_i=$((dl_i + 1))
+    done
+    if kill -0 "$dl_pid" 2>/dev/null; then
+        kill -9 "$dl_pid" 2>/dev/null
+        wait "$dl_pid" 2>/dev/null
+        echo "FAIL deadlock guard $name ${envs:+($envs) }hung for 60 s"
+        dl_bad=1; fail=1
+    elif ! wait "$dl_pid" || ! diff -q "tests/deadlock/$name/expected.txt" "$out" >/dev/null; then
+        echo "FAIL deadlock guard $name ${envs:+($envs) }(exit or output)"
+        dl_bad=1; fail=1
+    fi
+    rm -f "$bin"
+done
+[ "$dl_bad" -eq 0 ] && echo "PASS deadlock guards"
+
 # ---- GC at a tiny threshold ------------------------------------------
 # A rooting bug -- a live object held only where no safepoint knows about
 # it -- surfaces only when a collection lands at that exact safepoint. At

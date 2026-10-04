@@ -1450,10 +1450,20 @@ static inline void sl_gc_recycle(sl_gc_obj *h) {
         sl_gc_class_push(h);
 }
 
+/* `owner`, when not NULL, is the object whose tracer will read this
+ * buffer (sl_gc_alloc_owned): the buffer takes the owner's generation,
+ * read here, inside the bracket. Read by the caller before the call
+ * instead, an async preemption landing in between could let a collection
+ * promote the owner after its gen was taken, and the buffer would be born
+ * young under an old owner no barrier remembered -- a young object a
+ * minor frees while the owner still uses it. Making collections likely
+ * at that point (an allocation-entry yield tried for fix-gc.md 1.1) made
+ * the verifier catch exactly that: young leaves held by old maps. */
 static void *sl_gc_alloc_gen(size_t n,
                              void (*trace)(void *, void (*)(void *)),
-                             void (*fini)(void *), unsigned char gen) {
+                             void (*fini)(void *), const void *owner) {
     sl_rt_preempt_disable();
+    unsigned char gen = owner ? ((const sl_gc_obj *)owner - 1)->gen : 0;
     sl_task *t = sl_rt_cur();
     /* Pages first (no lock, this worker's own), then the exact-size
      * class freelist, then malloc: every path below zeroes and links
@@ -1498,7 +1508,7 @@ static void *sl_gc_alloc_gen(size_t n,
 static void *sl_gc_alloc_fin(size_t n,
                              void (*trace)(void *, void (*)(void *)),
                              void (*fini)(void *)) {
-    return sl_gc_alloc_gen(n, trace, fini, 0);
+    return sl_gc_alloc_gen(n, trace, fini, NULL);
 }
 
 static void *sl_gc_alloc(size_t n,
@@ -1540,8 +1550,7 @@ static void *sl_gc_alloc(size_t n,
  * sweep moves it to sl_gc_old instead of freeing it (see
  * sl_gc_collect_minor_real). */
 static void *sl_gc_alloc_owned(size_t n, const void *owner) {
-    const sl_gc_obj *oh = (const sl_gc_obj *)owner - 1;
-    return sl_gc_alloc_gen(n, NULL, NULL, oh->gen);
+    return sl_gc_alloc_gen(n, NULL, NULL, owner);
 }
 
 /* true drop-in for GC_realloc(p, n): old size/trace read from p's

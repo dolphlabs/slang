@@ -1389,8 +1389,12 @@ static void sl_arena_chunk_put(sl_arena_chunk *c) {
         return;
     }
     pthread_mutex_unlock(&sl_arena_fl_mu);
-    sl_rt_preempt_enable();
+    /* free stays inside the bracket: a large chunk takes the allocator's
+     * large-block lock, and a task preempted holding it deadlocked the
+     * next thread to allocate (todo.md, "a task preempted inside free()
+     * deadlocked the allocator"). */
     free(c);
+    sl_rt_preempt_enable();
 }
 
 static sl_arena sl_arena_new(long long cap) {
