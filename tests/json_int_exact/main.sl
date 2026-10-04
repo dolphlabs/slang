@@ -98,6 +98,31 @@ int_case("1e19");
 int_case("1e999999999");
 u64_case("-1");
 
+// the edges of the one-pass integer path (at most 18 digits, no '.',
+// 'e' or 'E' after them): each must decode exactly as the two-pass path
+// that handles everything else does
+int_case("999999999999999999");
+int_case("-999999999999999999");
+int_case("1000000000000000000");
+int_case("-1000000000000000000");
+u64_case("999999999999999999");
+u64_case("9999999999999999999");
+int_case("0");
+int_case("7");
+int_case(" \t\n 42");
+int_case("00");
+int_case("01");
+int_case("-01");
+int_case("-");
+int_case("--1");
+int_case("+1");
+int_case("1E2");
+int_case("0e0");
+int_case("0.");
+int_case("1x");
+i8_case("-0");
+u8_case("-0");
+
 // floats are unchanged: they still go through the double
 let fr: result[F64V, str] = json.decode("{\"v\":1.5}");
 guard let f = fr else { println("BUG: float decode"); exit(1); }
