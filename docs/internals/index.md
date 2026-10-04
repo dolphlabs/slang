@@ -79,7 +79,11 @@ What this means in practice:
   much garbage a program makes — streaming three million database rows
   runs in under 20MB.
 - Generational and non-moving: new objects start in a nursery, and a
-  minor collection runs after every 512KB of allocation. It marks from
+  minor collection runs after every 512KB of allocation. The nursery
+  grows, up to 1MB per worker (8MB at most), while minors take a large
+  share of the time and keep finding much of it live -- a busy server
+  re-marking its in-flight requests -- and shrinks back when they do not,
+  so a program whose garbage dies young keeps the small footprint. It marks from
   the roots and the remembered set (old objects a write barrier saw gain
   a pointer to a young one), sweeps only the nursery, and promotes what
   survives two minors: data that is merely in use when a minor lands,
