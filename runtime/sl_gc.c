@@ -1145,10 +1145,147 @@ struct sl_gc_worker_state {
      * trigger is late by at most a batch per worker; per worker, not per
      * task, so hundreds of parked tasks cannot each hold back a batch. */
     size_t unpub;
+    /* Objects this worker allocated outside its pages (over 1 KB, or with
+     * its pages exhausted) since the last collection. A minor recognizes
+     * a paged object by its page (sl_gc_known); these, plus the ones that
+     * survived the last minor still young (sl_gc_young_m), are the only
+     * young objects its table has to list (fix-gc.md 1.5). */
+    sl_gc_obj **mbuf;
+    size_t mbuf_n, mbuf_cap;
 };
 #define SL_GC_PUBLISH_BATCH (16 * 1024)
 static _Thread_local sl_gc_worker_state sl_gc_wstate;
 SL_RT_TLS_ADDR_FN(sl_gc_tls_state, sl_gc_worker_state, sl_gc_wstate)
+
+/* ---- 1.5: recognizing an object without listing it ----
+ *
+ * Every collection used to build a hash set of every object it could
+ * mark (all young ones for a minor), so that a candidate pointer -- a
+ * root slot, a field, a conservatively scanned stack word -- could be
+ * checked before its header was read. Building it walked the young list
+ * and hashed every object into a fresh table: about half of each minor
+ * on the quote decode probe (20-26 ms of 49-53 ms over 15 minors), the
+ * inserts more than the walk.
+ *
+ * A paged object needs no entry: its page is 16 KB-aligned, and the
+ * page's start bitmap already records every object start (set on claim,
+ * cleared on free). So a pointer is a paged object iff its 16 KB base is
+ * a live page and the bit for "pointer minus one header" is set. The
+ * base must be checked against a registry first: a conservative word can
+ * be any address, and reading a page header at one that is not a page
+ * could fault. The registry is a small open-addressing set of page
+ * bases, written when a page is created (a mutator, under the
+ * allocator's bracket, so under its own mutex) or freed (stopped the
+ * world, or a thread's teardown under sl_gc_mu), and read only while the
+ * world is stopped.
+ *
+ * Only objects outside pages still go in the hash set, and a minor's
+ * set lists only the young ones -- each worker's mbuf plus
+ * sl_gc_young_m -- without walking the young list. Majors and the
+ * verifier walk both lists as before and insert only the unpaged. */
+#define SL_GC_PAGEREG_TOMB ((uintptr_t)1)
+static uintptr_t *sl_gc_pagereg = NULL;
+static size_t sl_gc_pagereg_cap = 0;
+static size_t sl_gc_pagereg_live = 0;
+static size_t sl_gc_pagereg_used = 0; /* live + tombstones */
+static pthread_mutex_t sl_gc_pagereg_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static void sl_gc_pagereg_put(uintptr_t *tbl, size_t cap, uintptr_t b) {
+    size_t i = sl_gc_ptrhash((void *)b) & (cap - 1);
+    while (tbl[i] > SL_GC_PAGEREG_TOMB) i = (i + 1) & (cap - 1);
+    tbl[i] = b;
+}
+
+/* Caller holds sl_gc_pagereg_mu. */
+static void sl_gc_pagereg_resize(void) {
+    size_t cap = 256;
+    while (cap < (sl_gc_pagereg_live + 1) * 4) cap *= 2;
+    uintptr_t *tbl = (uintptr_t *)calloc(cap, sizeof(uintptr_t));
+    if (!tbl) { fprintf(stderr, "slang: out of memory\n"); exit(1); }
+    for (size_t i = 0; i < sl_gc_pagereg_cap; i++)
+        if (sl_gc_pagereg[i] > SL_GC_PAGEREG_TOMB)
+            sl_gc_pagereg_put(tbl, cap, sl_gc_pagereg[i]);
+    free(sl_gc_pagereg);
+    sl_gc_pagereg = tbl;
+    sl_gc_pagereg_cap = cap;
+    sl_gc_pagereg_used = sl_gc_pagereg_live;
+}
+
+static void sl_gc_pagereg_add(uintptr_t b) {
+    pthread_mutex_lock(&sl_gc_pagereg_mu);
+    if ((sl_gc_pagereg_used + 1) * 2 > sl_gc_pagereg_cap)
+        sl_gc_pagereg_resize();
+    sl_gc_pagereg_put(sl_gc_pagereg, sl_gc_pagereg_cap, b);
+    sl_gc_pagereg_live++;
+    sl_gc_pagereg_used++;
+    pthread_mutex_unlock(&sl_gc_pagereg_mu);
+}
+
+static void sl_gc_pagereg_del(uintptr_t b) {
+    pthread_mutex_lock(&sl_gc_pagereg_mu);
+    if (sl_gc_pagereg_cap) {
+        size_t i = sl_gc_ptrhash((void *)b) & (sl_gc_pagereg_cap - 1);
+        while (sl_gc_pagereg[i]) {
+            if (sl_gc_pagereg[i] == b) {
+                sl_gc_pagereg[i] = SL_GC_PAGEREG_TOMB;
+                sl_gc_pagereg_live--;
+                break;
+            }
+            i = (i + 1) & (sl_gc_pagereg_cap - 1);
+        }
+    }
+    pthread_mutex_unlock(&sl_gc_pagereg_mu);
+}
+
+/* Stopped-the-world only (see above): no lock. */
+static int sl_gc_pagereg_has(uintptr_t b) {
+    if (!sl_gc_pagereg_cap) return 0;
+    size_t i = sl_gc_ptrhash((void *)b) & (sl_gc_pagereg_cap - 1);
+    for (;;) {
+        uintptr_t v = sl_gc_pagereg[i];
+        if (!v) return 0;
+        if (v == b) return 1;
+        i = (i + 1) & (sl_gc_pagereg_cap - 1);
+    }
+}
+
+/* Is p the payload of a live object this collection can mark? A paged
+ * object answers from its page's bitmap; anything else from sl_gc_set
+ * (the unpaged objects of this collection). Stopped-the-world only. */
+static int sl_gc_known(void *p) {
+    uintptr_t a = (uintptr_t)p;
+    uintptr_t base = a & ~(uintptr_t)(SL_GC_PAGE_ALIGN - 1);
+    if (sl_gc_pagereg_has(base)) {
+        uintptr_t payload = base + SL_GC_PAGE_PAYLOAD_OFF;
+        if (a < payload + sizeof(sl_gc_obj))
+            return 0;
+        uintptr_t off = a - sizeof(sl_gc_obj) - payload;
+        if (off % SL_GC_PAGE_SLOT || off >= SL_GC_PAGE_PAYLOAD_CAP)
+            return 0;
+        size_t slot = off / SL_GC_PAGE_SLOT;
+        const sl_gc_page *pg = (const sl_gc_page *)base;
+        return (int)((pg->bitmap[slot / 64] >> (slot % 64)) & 1);
+    }
+    return sl_gc_set_contains(p);
+}
+
+/* Non-paged young objects that survived the last minor still young
+ * (aged); rebuilt by every minor sweep, emptied by a major (which
+ * promotes everything it keeps). Collector-only. */
+static sl_gc_obj **sl_gc_young_m = NULL;
+static size_t sl_gc_young_m_n = 0, sl_gc_young_m_cap = 0;
+
+static void sl_gc_objs_push(sl_gc_obj ***buf, size_t *n, size_t *cap,
+                            sl_gc_obj *h) {
+    if (*n == *cap) {
+        size_t nc = *cap ? *cap * 2 : 64;
+        sl_gc_obj **nb = (sl_gc_obj **)realloc(*buf, nc * sizeof(*nb));
+        if (!nb) { fprintf(stderr, "slang: out of memory\n"); exit(1); }
+        *buf = nb;
+        *cap = nc;
+    }
+    (*buf)[(*n)++] = h;
+}
 
 /* Orphaned pages: non-empty pages of threads that went away, under
  * sl_gc_mu (unregister and both sweeps already hold it). */
@@ -1262,6 +1399,7 @@ static sl_gc_page *sl_gc_page_new(sl_gc_worker_state *st) {
     memset(pg->bitmap, 0, sizeof(pg->bitmap));
     st->npages++;
     SL_GC_PAGE_COUNT(sl_gc_page_stat_pages);
+    sl_gc_pagereg_add((uintptr_t)pg);
     return pg;
 }
 
@@ -1451,6 +1589,7 @@ static void sl_gc_pages_prune_list(sl_gc_page **headp, sl_gc_page **curp,
             if (pg == cur)
                 cur_dead = 1;
             *link = pg->next;
+            sl_gc_pagereg_del((uintptr_t)pg);
             free(pg);
             SL_GC_PAGE_COUNT(sl_gc_page_stat_freed);
             continue;
@@ -1480,9 +1619,18 @@ static void sl_gc_pages_orphan_all(void) {
     sl_gc_wstate.cur = NULL;
     sl_gc_wstate.npages = 0;
     sl_gc_wstate.exhausted = 0;
+    /* This thread's unpaged young objects outlive it (on the young
+     * list): the next minor finds them through sl_gc_young_m instead. */
+    for (size_t i = 0; i < sl_gc_wstate.mbuf_n; i++)
+        sl_gc_objs_push(&sl_gc_young_m, &sl_gc_young_m_n, &sl_gc_young_m_cap,
+                        sl_gc_wstate.mbuf[i]);
+    free(sl_gc_wstate.mbuf);
+    sl_gc_wstate.mbuf = NULL;
+    sl_gc_wstate.mbuf_n = sl_gc_wstate.mbuf_cap = 0;
     while (pg) {
         sl_gc_page *nx = pg->next;
         if (pg->young_live == 0 && pg->old_live == 0) {
+            sl_gc_pagereg_del((uintptr_t)pg);
             free(pg);
             SL_GC_PAGE_COUNT(sl_gc_page_stat_freed);
         } else {
@@ -1552,6 +1700,8 @@ static void *sl_gc_alloc_gen(size_t n,
     h->marked = 0;
     h->gen = gen;
     h->remembered = 0;
+    if (!h->paged)
+        sl_gc_objs_push(&st->mbuf, &st->mbuf_n, &st->mbuf_cap, h);
     h->next = t->gc_pend_head;
     if (!t->gc_pend_head) t->gc_pend_tail = h;
     t->gc_pend_head = h;
@@ -1668,7 +1818,7 @@ static size_t sl_gc_wl_n = 0;
 
 static void sl_gc_mark(void *ptr) {
     if (!ptr) return;
-    if (!sl_gc_set_contains(ptr)) return; /* not one of ours -- e.g. a
+    if (!sl_gc_known(ptr)) return; /* not one of ours -- e.g. a
         string literal (.rodata, never sl_gc_alloc'd); unsafe to
         treat ptr - 1 as a header, see sl_gc_set's own comment */
     sl_gc_obj *h = (sl_gc_obj *)ptr - 1;
@@ -1711,13 +1861,18 @@ static unsigned long long sl_gc_minor_gen0_seen = 0;
 
 static void sl_gc_mark_minor(void *ptr) {
     if (!ptr) return;
-    if (!sl_gc_set_contains(ptr)) return;
+    if (!sl_gc_known(ptr)) return;
     sl_gc_obj *h = (sl_gc_obj *)ptr - 1;
+    /* Old: alive for this minor, neither marked nor traced -- and never
+     * marked, since nothing would clear the bit before a major read it.
+     * sl_gc_known recognizes old paged objects too, so the generation is
+     * checked here (an owned buffer born old, still on the young list,
+     * is moved to the old list by the sweep whether marked or not). */
+    if (h->gen == 1) return;
     if (h->gen == 0)
         sl_gc_minor_gen0_seen++;
     if (h->marked) return;
     h->marked = 1;
-    if (h->gen == 1) return;
     if (sl_gc_wl_n == sl_gc_wl_cap) {
         sl_gc_wl_cap = sl_gc_wl_cap ? sl_gc_wl_cap * 2 : 256;
         sl_gc_wl = (void **)realloc(sl_gc_wl,
@@ -1776,7 +1931,7 @@ SL_GC_NO_ASAN
 static void sl_gc_mark_inline_bytes(void *w) {
     if ((uintptr_t)w < 2 * sizeof(void *)) return;
     void *o = (char *)w - 2 * sizeof(void *);
-    if (!sl_gc_set_contains(o)) return;
+    if (!sl_gc_known(o)) return;
     sl_gc_obj *h = (sl_gc_obj *)o - 1;
     if (h->trace == sl_gc_trace_bytes && ((void **)o)[1] == w)
         sl_gc_cur_mark(o);
@@ -1992,21 +2147,41 @@ static void sl_gc_page_debug_check(void) {
  * 200k-entry cache that was most of a 50ms minor. See sl_gc_set's own
  * comment. Sized for the population up front at a 0.5 load factor, so
  * sl_gc_set_raw_insert needs no grow path. */
+/* The unpaged objects this collection can mark (paged ones answer from
+ * their pages, sl_gc_known). A minor's are the young ones: each worker's
+ * mbuf and sl_gc_young_m, with no walk of the young list. A major's, and
+ * the verifier's full mark, are every unpaged object on either list. */
 static void sl_gc_set_build(int with_old) {
     sl_gc_page_debug_check();
     size_t n = 0;
-    for (sl_gc_obj *o = sl_gc_young; o; o = o->next) n++;
-    if (with_old)
-        for (sl_gc_obj *o = sl_gc_old; o; o = o->next) n++;
+    if (with_old) {
+        for (sl_gc_obj *o = sl_gc_young; o; o = o->next) n += !o->paged;
+        for (sl_gc_obj *o = sl_gc_old; o; o = o->next) n += !o->paged;
+    } else {
+        n = sl_gc_young_m_n;
+        for (sl_gc_thread *gt = sl_gc_threads; gt; gt = gt->next)
+            n += gt->state_ptr->mbuf_n;
+    }
     size_t cap = 1024;
     while (cap < (n + 1) * 2) cap *= 2;
     void **tbl = (void **)calloc(cap, sizeof(void *));
     if (!tbl) { fprintf(stderr, "slang: out of memory\n"); exit(1); }
-    for (sl_gc_obj *o = sl_gc_young; o; o = o->next)
-        sl_gc_set_raw_insert(tbl, cap, (void *)(o + 1));
-    if (with_old)
+    if (with_old) {
+        for (sl_gc_obj *o = sl_gc_young; o; o = o->next)
+            if (!o->paged)
+                sl_gc_set_raw_insert(tbl, cap, (void *)(o + 1));
         for (sl_gc_obj *o = sl_gc_old; o; o = o->next)
-            sl_gc_set_raw_insert(tbl, cap, (void *)(o + 1));
+            if (!o->paged)
+                sl_gc_set_raw_insert(tbl, cap, (void *)(o + 1));
+    } else {
+        for (size_t i = 0; i < sl_gc_young_m_n; i++)
+            sl_gc_set_raw_insert(tbl, cap, (void *)(sl_gc_young_m[i] + 1));
+        for (sl_gc_thread *gt = sl_gc_threads; gt; gt = gt->next) {
+            sl_gc_worker_state *st = gt->state_ptr;
+            for (size_t i = 0; i < st->mbuf_n; i++)
+                sl_gc_set_raw_insert(tbl, cap, (void *)(st->mbuf[i] + 1));
+        }
+    }
     sl_gc_set = tbl;
     sl_gc_set_cap = cap;
     sl_gc_set_count = n;
@@ -2393,7 +2568,7 @@ static const char *sl_gc_verify_kind(const sl_gc_obj *h) {
  * young object never has the flag set otherwise); an old object whose
  * tracer reaches one gained that pointer without a barrier. */
 static void sl_gc_verify_child(void *c) {
-    if (!c || !sl_gc_set_contains(c))
+    if (!c || !sl_gc_known(c))
         return;
     sl_gc_obj *h = (sl_gc_obj *)c - 1;
     if (h->gen == 1 || h->remembered != 2)
@@ -2587,6 +2762,8 @@ static void sl_gc_collect_minor_real(void) {
      * makes rare. */
     sl_gc_obj **mpp = &sl_gc_young;
     size_t swept = 0, promoted = 0, live_young = 0;
+    /* Rebuilt below from the unpaged objects that stay young (1.5). */
+    sl_gc_young_m_n = 0;
     while (*mpp) {
         sl_gc_obj *h = *mpp;
         if (h->gen == 1) {
@@ -2607,6 +2784,9 @@ static void sl_gc_collect_minor_real(void) {
             live_young += sizeof(sl_gc_obj) + h->size;
             h->marked = 0;
             h->gen = 2;
+            if (!h->paged)
+                sl_gc_objs_push(&sl_gc_young_m, &sl_gc_young_m_n,
+                                &sl_gc_young_m_cap, h);
             mpp = &h->next;
         } else {
             live_young += sizeof(sl_gc_obj) + h->size;
@@ -2631,6 +2811,11 @@ static void sl_gc_collect_minor_real(void) {
     if (sl_gc_verify_minor_enabled())
         for (sl_gc_obj *o = sl_gc_old; o; o = o->next)
             o->marked = 0;
+    /* Every worker's unpaged allocations were on the young list and the
+     * sweep just dealt with each: freed, promoted, or kept in
+     * sl_gc_young_m. */
+    for (sl_gc_thread *gt = sl_gc_threads; gt; gt = gt->next)
+        gt->state_ptr->mbuf_n = 0;
     sl_gc_ph_mark(&pc, SL_GC_PH_SWEEP);
     sl_gc_drain_retired();
     sl_gc_pages_sweep_end();
@@ -2786,6 +2971,10 @@ static void sl_gc_collect(void) {
         promoted_tail->next = sl_gc_old;
         sl_gc_old = promoted_head;
     }
+    /* A major leaves nothing young: no unpaged young object to track. */
+    sl_gc_young_m_n = 0;
+    for (sl_gc_thread *gt = sl_gc_threads; gt; gt = gt->next)
+        gt->state_ptr->mbuf_n = 0;
     sl_gc_ph_mark(&pc, SL_GC_PH_SWEEP);
     sl_gc_drain_retired();
     sl_gc_pages_sweep_end();

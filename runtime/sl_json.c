@@ -1135,16 +1135,58 @@ static bool sl_jd_bytes(sl_jparser *p, sl_bytes **out) {
     return sl_jd_str(p, &s) && sl_json_b64(s, out);
 }
 
+/* One pass over a plain integer token: an optional '-', then "0" or up
+ * to 18 digits without a leading zero, not followed by '.', 'e' or 'E'.
+ * That is every integer field of an ordinary body (ids, counts, cents),
+ * and 18 digits cannot overflow 64 bits. Anything else -- a fraction, an
+ * exponent, a longer number -- returns false with the position untouched,
+ * and the caller takes the exact two-pass path (sl_jd_number, then
+ * sl_json_num_int_n), whose results this matches wherever it answers.
+ * The two passes were a tenth of a quote decode's time. */
+static bool sl_jd_int_fast(sl_jparser *p, bool *neg,
+                           unsigned long long *mag) {
+    const char *s = p->s;
+    long long i = p->pos, len = p->len;
+    bool ng = false;
+    if (i < len && s[i] == '-') {
+        ng = true;
+        i++;
+    }
+    if (i >= len) return false;
+    unsigned long long v = 0;
+    if (s[i] == '0') {
+        i++;
+    } else if (s[i] >= '1' && s[i] <= '9') {
+        int nd = 0;
+        while (i < len && s[i] >= '0' && s[i] <= '9') {
+            if (++nd > 18) return false;
+            v = v * 10 + (unsigned long long)(s[i] - '0');
+            i++;
+        }
+    } else {
+        return false;
+    }
+    if (i < len && (s[i] == '.' || s[i] == 'e' || s[i] == 'E'))
+        return false;
+    p->pos = i;
+    *neg = ng;
+    *mag = v;
+    return true;
+}
+
 /* The next number as an integer in [lo, hi], or false. */
 static bool sl_jd_signed(sl_jparser *p, long long lo, long long hi,
                          long long *out) {
-    long long start;
-    if (!sl_jd_number(p, &start)) return false;
     bool neg;
     unsigned long long mag;
-    if (sl_json_num_int_n(p->s + start, p->s + p->pos, &neg, &mag) !=
-        SL_JSON_INT_OK)
-        return false;
+    sl_jskip_ws(p);
+    if (!sl_jd_int_fast(p, &neg, &mag)) {
+        long long start;
+        if (!sl_jd_number(p, &start)) return false;
+        if (sl_json_num_int_n(p->s + start, p->s + p->pos, &neg, &mag) !=
+            SL_JSON_INT_OK)
+            return false;
+    }
     unsigned long long neg_lim = lo < 0 ? (unsigned long long)(-(lo + 1)) + 1 : 0;
     if ((!neg && mag > (unsigned long long)hi) || (neg && mag > neg_lim))
         return false;
@@ -1154,13 +1196,16 @@ static bool sl_jd_signed(sl_jparser *p, long long lo, long long hi,
 
 static bool sl_jd_unsigned(sl_jparser *p, unsigned long long hi,
                            unsigned long long *out) {
-    long long start;
-    if (!sl_jd_number(p, &start)) return false;
     bool neg;
     unsigned long long mag;
-    if (sl_json_num_int_n(p->s + start, p->s + p->pos, &neg, &mag) !=
-        SL_JSON_INT_OK)
-        return false;
+    sl_jskip_ws(p);
+    if (!sl_jd_int_fast(p, &neg, &mag)) {
+        long long start;
+        if (!sl_jd_number(p, &start)) return false;
+        if (sl_json_num_int_n(p->s + start, p->s + p->pos, &neg, &mag) !=
+            SL_JSON_INT_OK)
+            return false;
+    }
     if ((neg && mag != 0) || mag > hi) return false;
     *out = mag;
     return true;

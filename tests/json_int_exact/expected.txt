@@ -29,6 +29,28 @@ int 1.0000000000000000001 -> err: field 'v': expected an integer, got 1.00000000
 int 1e19 -> err: field 'v': value 1e19 out of range for int
 int 1e999999999 -> err: field 'v': value 1e999999999 out of range for int
 u64 -1 -> err: field 'v': expected a non-negative integer, got -1
+int 999999999999999999 -> 999999999999999999
+int -999999999999999999 -> -999999999999999999
+int 1000000000000000000 -> 1000000000000000000
+int -1000000000000000000 -> -1000000000000000000
+u64 999999999999999999 -> 999999999999999999
+u64 9999999999999999999 -> 9999999999999999999
+int 0 -> 0
+int 7 -> 7
+int  	
+ 42 -> 42
+int 00 -> err: expected ',' or '}' in object (at byte 7)
+int 01 -> err: expected ',' or '}' in object (at byte 7)
+int -01 -> err: expected ',' or '}' in object (at byte 8)
+int - -> err: invalid number (at byte 6)
+int --1 -> err: invalid number (at byte 6)
+int +1 -> err: unexpected character '+' (at byte 5)
+int 1E2 -> 100
+int 0e0 -> 0
+int 0. -> err: invalid number: expected digit after '.' (at byte 7)
+int 1x -> err: expected ',' or '}' in object (at byte 7)
+i8 -0 -> 0
+u8 -0 -> 0
 f64 1.5 -> 1.5
 {"id":9007199254740993,"parent":-9223372036854775807}
 9007199254740993 -9223372036854775807

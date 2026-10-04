@@ -272,6 +272,12 @@ the point reads in flight with it.
   included. Found on the way and landed separately (`fix/preempt-libc-
   deadlock`): an allocator deadlock reachable from `dev` (todo.md), and
   the owner-generation read in `sl_gc_alloc_owned`.
+
+  **Update (2026-10-04): not needed for now.** After 1.10, 1.2 and 1.3
+  the minors are fewer and their walk shorter, and minor time-to-safepoint
+  on the quote server is about 0.6 ms per collection, 1 ms at worst,
+  without any kick. Reopen only if the CCX33 re-run (Phase 9) shows the
+  rendezvous in the tail.
 - [x] **1.2 Stop promoting in-flight request data: promotion after two
   survivals.** Chose (b): it fixes the one-worker case too (30% promoted
   there), where (a) would only have moved the boundary. A first survival
@@ -341,11 +347,28 @@ the point reads in flight with it.
 - [ ] **1.4 Stopped workers help collect.** Parallel sweep first: each
   worker already owns its pages, so the split is natural. Then parallel
   mark, with per-worker work lists and an atomic mark claim.
-- [ ] **1.5 Track young objects by page, not by list.** This is §7f Phase
-  3 together with the Phase 2 retry, which the Phase 2 negative result says
-  needs the list walk removed as well. Young objects in pages are found and
-  freed through the pages' bitmaps: no list walk, no set rebuild. A small
-  separate list covers young objects too large for a page.
+- [x] **1.5 Recognize paged objects by their page; list only the
+  rest.** A minor's object table (`sl_gc_set`) listed every young
+  object: a walk of the young list and a hash insert each, about half of
+  every minor (20-26 ms of 49-53 ms on the 4-worker decode probe, the
+  inserts more than the walk). A paged object needs no entry: its 16 KB
+  page is found from the pointer, checked against a small registry of
+  live page bases (a conservative word can be any address, so the page
+  header is read only for a registered base), and the page's start
+  bitmap says whether an object begins there (`sl_gc_known`). Only
+  unpaged objects stay in the table; a minor's are each worker's
+  allocations since the last collection (`mbuf`) plus the unpaged ones
+  that stayed young (`sl_gc_young_m`), with no walk. Majors and the
+  verifier still walk both lists, inserting only the unpaged. The
+  minor mark now drops old objects before marking them (they are
+  recognizable through their pages now). Minor set build 19-20 ms ->
+  1.5-1.8 ms. Quote server, ABBA: 3,077 -> 3,864 req/s, p99 47 -> 39 ms,
+  CPU per request 1.60 -> 1.27 ms, RSS 24.7 -> 20.7 MB. Probe with plain
+  struct items, 4 workers: 14% faster; `gc struct` items, 1 worker: 7%
+  faster; **`gc struct` items, 4 workers: 12-15% slower**, not explained
+  (same fallback rate, same collection counts, no new hotspot in a
+  profile; recorded in `todo.md`). The young list is still walked by the
+  sweep: that is 1.5's other half, the page sweep.
 - [ ] **1.6 Minors skip tasks with nothing young.** A task that has not
   run since the last minor holds only old values, because that minor
   promoted everything it held. Audit every place that hands a value to a
@@ -410,6 +433,12 @@ of its 1-worker number.
 - [ ] **2.3 A runtime-internal allocation that skips zeroing**, for
   callers that overwrite every byte: the body copy, `to_bytes`, list and
   string growth.
+
+  **Dropped (2026-10-04): measured neutral twice.** Skipping the zeroing
+  for the body copy and string growth, quote ABBA against `dev`: CPU per
+  request 2,375 vs 2,376 µs, 2,062 vs 2,056 req/s, RSS 28.5 vs 28.9 MB.
+  The difference is inside the run-to-run spread. Not investigated
+  further: the profile's `bzero` share was not attributed to callers.
 - [ ] **2.4 Attribute what is left by call site**, using the
   instrumented-allocator method from `next-steps.md` §5, and fix by count.
 - [ ] **2.5 New JSON APIs** (in scope as of 2026-10-04; `note.txt` had them
@@ -422,6 +451,15 @@ of its 1-worker number.
     decode straight out of the read buffer, with no body copy.
     `http.read` would expose the body's range, and the copy then happens
     only for a handler that keeps the bytes.
+
+- [x] **2.6 Integers decode in one pass** (found by profiling the quote
+  handler). `json.decode` into an integer field validated the number,
+  then parsed its text again. A plain integer token of up to 18 digits
+  is now scanned and converted in one pass; fractions, exponents and
+  longer numbers keep the exact two-pass path, and
+  `tests/json_int_exact` checks that both agree, error offsets included.
+  Single-task decode probe, ABBA, 5 rounds of 20,000 decodes: 11,812 ->
+  11,011 ms (-6.8%), with no overlap between the two sets of runs.
 
 **Exit gate:** single-thread CPU per quote request at or below Go's
 (about 0.56 ms on the CCX33), measured on the same host as Go.
