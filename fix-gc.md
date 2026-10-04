@@ -337,6 +337,19 @@ the point reads in flight with it.
   as survived) keeps the same form, measured on what actually reaches the
   old generation.
 
+- [x] **1.10 Allocation stops walking full pages** (found by profiling
+  the quote server after 1.2). Once every young page of a worker was
+  full and its 64-page cap reached, each allocation still walked all of
+  them, inside the allocator's preempt bracket, before falling back to
+  malloc: on `dev` 74% of the 4-worker decode probe's allocations fell
+  back, each after that walk. A per-worker `exhausted` flag, cleared by
+  the sweep-end prune (no claim can succeed before it), sends them
+  straight to malloc. ABBA against `dev` (with 1.2): quote 1017 -> 1291
+  req/s, p99 195 -> 115 ms, p99.9 306 -> 133 ms, CPU per request 4.06 ->
+  3.20 ms, RSS 40.8 -> 33.9 MB; decode probe 548 -> 348 ms (1 worker),
+  351 -> 317 ms (4). Checked under `SLANG_GC_PAGE_DEBUG` with the path
+  exercised (12,936 fallbacks, no violations).
+
 **Exit gate:** the 4-worker probe runs at least 3x faster than 1 worker
 (1.0x today), and the local quote server's CPU per request is within 1.3x
 of its 1-worker number.

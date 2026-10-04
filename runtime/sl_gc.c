@@ -1114,6 +1114,15 @@ struct sl_gc_worker_state {
     sl_gc_page *pages;
     sl_gc_page *cur;
     int npages;
+    /* Every page full and the cap reached: no claim can succeed before
+     * the next sweep (no death happens outside one -- the same rule as a
+     * page's `full`), so allocation goes straight to malloc instead of
+     * walking every page first. Walking up to 64 full pages on every
+     * allocation, inside the allocator's preempt bracket, was most of
+     * the allocator's time once promoted objects pinned the pages: 74%
+     * of the quote decode probe's allocations fell back. Cleared by the
+     * sweep-end prune. */
+    int exhausted;
 };
 static _Thread_local sl_gc_worker_state sl_gc_wstate;
 SL_RT_TLS_ADDR_FN(sl_gc_tls_state, sl_gc_worker_state, sl_gc_wstate)
@@ -1273,6 +1282,8 @@ static sl_gc_obj *sl_gc_page_alloc(size_t total, unsigned char gen) {
     if (total > SL_GC_PAGE_MAX_TOTAL)
         return NULL;
     sl_gc_worker_state *st = sl_gc_tls_state();
+    if (st->exhausted)
+        return NULL;
     /* The bump pointer's page first: the common case stays one page. */
     sl_gc_page *cur = st->cur;
     if (cur && !cur->full) {
@@ -1296,8 +1307,10 @@ static sl_gc_obj *sl_gc_page_alloc(size_t total, unsigned char gen) {
         pg->full = 1;
     }
     sl_gc_page *pg = sl_gc_page_new(st);
-    if (!pg)
+    if (!pg) {
+        st->exhausted = 1;
         return NULL;
+    }
     int reused = 0;
     size_t taken = 0;
     size_t got = sl_gc_page_claim(pg, total, &reused, &taken);
@@ -1443,6 +1456,7 @@ static void sl_gc_pages_orphan_all(void) {
     sl_gc_wstate.pages = NULL;
     sl_gc_wstate.cur = NULL;
     sl_gc_wstate.npages = 0;
+    sl_gc_wstate.exhausted = 0;
     while (pg) {
         sl_gc_page *nx = pg->next;
         if (pg->young_live == 0 && pg->old_live == 0) {
@@ -1460,6 +1474,7 @@ static void sl_gc_pages_orphan_all(void) {
 static void sl_gc_pages_sweep_end(void) {
     for (sl_gc_thread *gt = sl_gc_threads; gt; gt = gt->next) {
         sl_gc_worker_state *st = gt->state_ptr;
+        st->exhausted = 0;
         sl_gc_pages_prune_list(&st->pages, &st->cur, &st->npages, 1);
     }
     sl_gc_pages_prune_list(&sl_gc_orphans, NULL, NULL, 0);
