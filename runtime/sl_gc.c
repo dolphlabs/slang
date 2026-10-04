@@ -652,10 +652,11 @@ static inline void sl_rt_gc_checkin(void) {
  * at 2,000 tasks went from ~1.4s (1,000 tasks) to still not done
  * after 2 minutes, sample showing 74% of all samples in swtch_pri
  * (the collector's own spin-wait), before this bracket was added. */
-static void sl_gc_publish_bytes(sl_task *t) {
-    size_t delta = t->gc_pend_bytes - t->gc_pend_pub;
+/* Add `delta` allocated bytes to the collection triggers. Two atomic RMWs
+ * on lines every worker writes: called per worker every
+ * SL_GC_PUBLISH_BATCH bytes (sl_gc_alloc_gen), not per allocation. */
+static void sl_gc_publish_delta(size_t delta) {
     if (!delta) return;
-    t->gc_pend_pub = t->gc_pend_bytes;
     size_t prev = atomic_fetch_add_explicit(&sl_gc_bytes_since_collect, delta,
                                             memory_order_relaxed);
     if (prev + delta >= sl_gc_threshold)
@@ -744,14 +745,11 @@ static void sl_gc_flush_task(sl_task *t) {
     if (!t) return;
     sl_gc_orphan_rem(t);
     if (!t->gc_pend_head) return;
-    sl_gc_publish_bytes(t);
     sl_gc_obj *head = t->gc_pend_head;
     sl_gc_obj *tail = t->gc_pend_tail;
     t->gc_pend_head = NULL;
     t->gc_pend_tail = NULL;
     t->gc_pend_n = 0;
-    t->gc_pend_bytes = 0;
-    t->gc_pend_pub = 0;
     sl_gc_retire_list(head, tail);
 }
 
@@ -772,8 +770,6 @@ static void sl_gc_harvest_task(sl_task *t) {
     t->gc_pend_head = NULL;
     t->gc_pend_tail = NULL;
     t->gc_pend_n = 0;
-    t->gc_pend_bytes = 0;
-    t->gc_pend_pub = 0;
 }
 
 /* Remembered-set harvest helper for sl_gc_for_pending_tasks: appends
@@ -1141,7 +1137,16 @@ struct sl_gc_worker_state {
      * of the quote decode probe's allocations fell back. Cleared by the
      * sweep-end prune. */
     int exhausted;
+    /* Bytes this worker allocated and has not yet added to the triggers
+     * (sl_gc_publish_delta). Published every SL_GC_PUBLISH_BATCH, so the
+     * shared counters take one pair of atomic adds per 16 KB instead of
+     * per allocation: with four workers those adds on two shared lines
+     * were a measurable part of every allocation (fix-gc.md 1.3). A
+     * trigger is late by at most a batch per worker; per worker, not per
+     * task, so hundreds of parked tasks cannot each hold back a batch. */
+    size_t unpub;
 };
+#define SL_GC_PUBLISH_BATCH (16 * 1024)
 static _Thread_local sl_gc_worker_state sl_gc_wstate;
 SL_RT_TLS_ADDR_FN(sl_gc_tls_state, sl_gc_worker_state, sl_gc_wstate)
 
@@ -1296,10 +1301,10 @@ static inline sl_gc_obj *sl_gc_page_book(sl_gc_page *pg, size_t got,
  * page cap, or a page allocation failed: the caller falls back. One
  * TLS read per call; pages that missed this cycle are skipped (no
  * death happens outside a sweep, so a miss stays a miss). */
-static sl_gc_obj *sl_gc_page_alloc(size_t total, unsigned char gen) {
+static sl_gc_obj *sl_gc_page_alloc(sl_gc_worker_state *st, size_t total,
+                                   unsigned char gen) {
     if (total > SL_GC_PAGE_MAX_TOTAL)
         return NULL;
-    sl_gc_worker_state *st = sl_gc_tls_state();
     if (st->exhausted)
         return NULL;
     /* The bump pointer's page first: the common case stays one page. */
@@ -1522,13 +1527,14 @@ static void *sl_gc_alloc_gen(size_t n,
     sl_rt_preempt_disable();
     unsigned char gen = owner ? ((const sl_gc_obj *)owner - 1)->gen : 0;
     sl_task *t = sl_rt_cur();
+    sl_gc_worker_state *st = sl_gc_tls_state();
     /* Pages first (no lock, this worker's own), then the exact-size
      * class freelist, then malloc: every path below zeroes and links
      * the header the same way. */
     size_t total = sizeof(sl_gc_obj) + n;
     sl_gc_obj *h = NULL;
     if (total <= SL_GC_PAGE_MAX_TOTAL) {
-        h = sl_gc_page_alloc((total + 7) & ~(size_t)7, gen);
+        h = sl_gc_page_alloc(st, (total + 7) & ~(size_t)7, gen);
         if (!h)
             SL_GC_PAGE_COUNT(sl_gc_page_stat_fallback);
     } else {
@@ -1550,14 +1556,20 @@ static void *sl_gc_alloc_gen(size_t n,
     if (!t->gc_pend_head) t->gc_pend_tail = h;
     t->gc_pend_head = h;
     t->gc_pend_n++;
-    t->gc_pend_bytes += sizeof(sl_gc_obj) + n;
     if (sl_gc_stat_enabled()) {
         atomic_fetch_add_explicit(&sl_gc_stat_allocs, 1, memory_order_relaxed);
         atomic_fetch_add_explicit(&sl_gc_stat_alloc_bytes,
                                   (unsigned long long)(sizeof(sl_gc_obj) + n),
                                   memory_order_relaxed);
     }
-    sl_gc_publish_bytes(t);
+    /* The fixed-threshold test modes publish every allocation: they exist
+     * to land collections at as many safepoints as possible. */
+    st->unpub += sizeof(sl_gc_obj) + n;
+    if (st->unpub >= SL_GC_PUBLISH_BATCH || sl_gc_threshold_fixed ||
+        sl_gc_nursery_fixed) {
+        sl_gc_publish_delta(st->unpub);
+        st->unpub = 0;
+    }
     sl_rt_preempt_enable();
     return (void *)(h + 1);
 }
