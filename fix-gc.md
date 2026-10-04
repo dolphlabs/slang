@@ -112,6 +112,11 @@ worker; `next-steps.md` §7f records 81.9 ms for #290. Item 0.4 settles it.
    and walks every parked task three times (512+ at 512 connections).
 6. **`malloc_trim(0)` runs inside every major's stop on Linux**,
    unmeasured.
+17. **Majors are paced by all allocation, not by old-generation growth.**
+    `sl_gc_bytes_since_collect` counts every byte allocated, so a major
+    (a full-heap mark on one thread) runs every 8 MB even when nothing is
+    promoted. Found in 0.4: 200 decodes, 6 objects promoted, 6 majors. On
+    the server that is a full stop every ~30 quote requests.
 7. **Lists of `int` and of value structs are traced word by word as
    possible pointers** (`sl_gc_trace_arr_range`, `runtime/sl_containers.c`;
    maps likewise). Batch's multi-million-entry `[int]` tables pay a set
@@ -178,14 +183,33 @@ the point reads in flight with it.
   each with a histogram.
 - [ ] **0.2 Count work per minor:** promotion rate, tasks walked, and the
   remembered-set size, per minor.
-- [ ] **0.3 Local harnesses, checked in under `bench/`:**
-  - the decode probe above;
-  - a quote-only server under `latgen` (no Postgres);
-  - point and mix against a local Postgres.
+- [x] **0.3 Local harnesses, checked in under `bench/`** (point and mix
+  against Postgres are deferred to Phase 3, which is their only user):
+  - `bench/gc/decode`: the decode probe;
+  - `bench/gc/ab.sh <slangc-A> <slangc-B>`: two builds in ABBA order. It
+    runs the probe at 1 and 4 workers, then the real api server's
+    `POST /api/quote` under `latgen` (new `-body-file` flag) with no
+    database. It reports medians and raw values.
 
-  Record a baseline for each.
-- [ ] **0.4 Settle the 81.9 ms vs 250-277 ms discrepancy** (the probe
-  against §7f's recorded number) before any baseline is trusted.
+  Laptop noise, measured by A/B with two identical builds: single rounds
+  differ by up to 1.6x (decode1 282 vs 465 ms). Decisions use
+  `ROUNDS=3` and need an effect clearly larger than that spread.
+  Baseline (`dev` at `4bf2a02`, 4 workers, 64 connections): about
+  370-550 quote req/s, 6.5-10 ms of CPU per request, 41-47 MB RSS.
+- [x] **0.4 The 81.9 ms vs 250-277 ms discrepancy: settled.** #290's
+  harness dropped each decode result straight away. The probe walks the
+  items, as the api handler does, so a pending minor runs while the whole
+  tree is live and promotes it. Same build, one worker, 200 decodes:
+
+  | | promoted | peak RSS | instructions | wall |
+  |---|---:|---:|---:|---:|
+  | result walked (`USE=1`) | 244,250 | 11.5 MB | 1.19 B | 304 ms |
+  | result dropped (`USE=0`) | 6 | 3.3-3.8 MB | 0.83 B | 136 ms |
+
+  #290's 758 M instructions match the dropped case. A real handler pays
+  2.2x the time and 3x the RSS on one worker. #290's number was the best
+  case, not a regression since. The same runs show cause 17: 6 majors
+  with 6 objects promoted.
 
 ## Phase 1: make four workers worth four
 
@@ -225,6 +249,11 @@ the point reads in flight with it.
   `[f64]` are not traced at all, and a value struct gets a pointer-offset
   map. This removes cause 7 and is needed before 2.1 can land without a
   tracing regression.
+- [ ] **1.9 Pace majors by old-generation growth** (cause 17). Count
+  promoted bytes, plus objects born old, toward the major threshold, not
+  every allocation. The live-heap pacing (next major after as many bytes
+  as survived) keeps the same form, measured on what actually reaches the
+  old generation.
 
 **Exit gate:** the 4-worker probe runs at least 3x faster than 1 worker
 (1.0x today), and the local quote server's CPU per request is within 1.3x
