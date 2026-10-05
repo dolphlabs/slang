@@ -688,7 +688,7 @@ fi
 # SLANG_GC_STAT's stw line must show waits, and sleeps among them.
 echo "--- stopped threads sleep (SLANG_GC_STAT) ---"
 stw=$(SLANG_WORKERS=4 SLANG_GC_STAT=1 ./slangc tests/gc_stw_sleep/main.sl --run 2>&1 >/dev/null |
-      sed -n 's/^slang-gc-stat stw_waits=\([0-9]*\) stw_sleeps=\([0-9]*\)$/\1 \2/p')
+      sed -n 's/^slang-gc-stat stw_waits=\([0-9]*\) stw_sleeps=\([0-9]*\).*$/\1 \2/p')
 if [ -z "$stw" ]; then
     echo "FAIL stopped threads sleep (no slang-gc-stat stw line)"
     fail=1

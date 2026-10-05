@@ -217,6 +217,8 @@ static void sl_gc_stat_phases(const sl_gc_phase_clock *c, int major) {
  * only the first few microseconds. */
 static _Atomic unsigned long long sl_gc_stat_stw_waits = 0;
 static _Atomic unsigned long long sl_gc_stat_stw_sleeps = 0;
+/* Collections a task stopped for in place inside runtime C. */
+static _Atomic unsigned long long sl_gc_stat_inplace = 0;
 
 static void sl_gc_stat_dump(void) {
     if (!sl_gc_stat_enabled())
@@ -266,9 +268,10 @@ static void sl_gc_stat_dump(void) {
                                          memory_order_relaxed));
         fprintf(stderr, "\n");
     }
-    fprintf(stderr, "slang-gc-stat stw_waits=%llu stw_sleeps=%llu\n",
+    fprintf(stderr, "slang-gc-stat stw_waits=%llu stw_sleeps=%llu inplace=%llu\n",
             atomic_load_explicit(&sl_gc_stat_stw_waits, memory_order_relaxed),
-            atomic_load_explicit(&sl_gc_stat_stw_sleeps, memory_order_relaxed));
+            atomic_load_explicit(&sl_gc_stat_stw_sleeps, memory_order_relaxed),
+            atomic_load_explicit(&sl_gc_stat_inplace, memory_order_relaxed));
 }
 
 __attribute__((destructor))
@@ -693,6 +696,69 @@ static void sl_rt_gc_checkin_slow(void) {
 static inline void sl_rt_gc_checkin(void) {
     if (sl_gc_poll_needed())
         sl_rt_gc_checkin_slow();
+}
+
+/* A safepoint for long stretches of runtime C that hold GC pointers in
+ * C locals no safepoint chain names -- a json.decode of a large array.
+ * Such code used to hold every other thread at a collection's
+ * rendezvous until it returned: ~0.5 ms a collection on the quote
+ * server. It calls this between elements when sl_gc_poll_needed(): the
+ * task records how far down its stack the live frames reach, forcing
+ * callee-saved registers into this frame first, and checks in where it
+ * is -- keeping its worker, unlike an async preemption, which requeues
+ * it. The root scan then covers scan_lo..stack top conservatively, as
+ * for an async-preempted task. The caller must hold no GC pointer only
+ * in a form the scan cannot see (an interior pointer into an object
+ * nothing else reaches) and must not sit between an allocation and the
+ * unbarriered stores that initialize it. */
+__attribute__((noinline)) static void sl_rt_gc_poll_in_place_at(sl_task *t) {
+    volatile uintptr_t here = 0;
+    t->scan_lo = (uintptr_t)&here & ~(uintptr_t)7;
+    if (sl_gc_stat_enabled())
+        atomic_fetch_add_explicit(&sl_gc_stat_inplace, 1,
+                                  memory_order_relaxed);
+    sl_rt_gc_checkin_slow();
+    t->scan_lo = 0;
+}
+
+__attribute__((noinline)) static void sl_rt_gc_poll_in_place(void) {
+#if defined(__x86_64__) || defined(__aarch64__)
+    sl_task *t = sl_rt_cur();
+    if (!t->stack_base) {
+        /* A thread's own placeholder task: no task stack to bound the
+         * scan. Wait for the next safepoint instead. */
+        return;
+    }
+    /* The caller's GC pointers may live in callee-saved registers, which
+     * the functions below save only in their own frames -- under the
+     * scan's low bound. Store every callee-saved register into this
+     * frame, inside the scanned range. Not __builtin_unwind_init: Apple
+     * clang emitted no spill for it, and the list being decoded was
+     * swept (caught by the decode probe at a 16 KB nursery). */
+    void *regs[12];
+#if defined(__x86_64__)
+    __asm__ __volatile__(
+        "movq %%rbx, 0(%0)\n\t"
+        "movq %%rbp, 8(%0)\n\t"
+        "movq %%r12, 16(%0)\n\t"
+        "movq %%r13, 24(%0)\n\t"
+        "movq %%r14, 32(%0)\n\t"
+        "movq %%r15, 40(%0)\n\t"
+        : : "r"(regs) : "memory");
+#else
+    __asm__ __volatile__(
+        "stp x19, x20, [%0, #0]\n\t"
+        "stp x21, x22, [%0, #16]\n\t"
+        "stp x23, x24, [%0, #32]\n\t"
+        "stp x25, x26, [%0, #48]\n\t"
+        "stp x27, x28, [%0, #64]\n\t"
+        "str x29, [%0, #80]\n\t"
+        : : "r"(regs) : "memory");
+#endif
+    sl_rt_gc_poll_in_place_at(t);
+    /* Keep regs live (and in this frame) until the stop is over. */
+    __asm__ __volatile__("" : : "r"(regs) : "memory");
+#endif
 }
 
 /* zero-filled, like GC_malloc's documented guarantee -- no existing
@@ -2376,6 +2442,14 @@ static void sl_gc_mark_roots(sl_gc_thread **snap, int nsnap,
              sp = sp->prev)
             for (int j = 0; j < sp->nroots; j++)
                 mark(sp->roots[j]);
+        /* Stopped in place inside runtime C (sl_rt_gc_poll_in_place):
+         * its frames below the last safepoint, registers spilled, are
+         * scanned like an async-preempted task's. */
+        if (sl_gc_scan_task->scan_lo && sl_gc_scan_task->stack_base)
+            sl_gc_scan_conservative(
+                sl_gc_scan_task->scan_lo,
+                (uintptr_t)sl_gc_scan_task->stack_base +
+                    (uintptr_t)sl_gc_scan_task->stack_size);
     }
     /* A queued task's entry_arg is a live root that nothing else
      * reaches: a not-yet-started task has an EMPTY safepoint chain,

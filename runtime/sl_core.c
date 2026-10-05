@@ -259,6 +259,12 @@ typedef struct sl_task {
                                 not just the precise safepoint-chain
                                 walk a cooperative yield/park already
                                 gets. */
+    /* Nonzero while this task, still running, has stopped for a
+       collection in place from inside runtime C (sl_rt_gc_poll_in_place):
+       the lowest address of its live stack, from which the root scan
+       covers the rest of the stack conservatively -- the C frames below
+       its last safepoint hold GC pointers no safepoint chain names. */
+    uintptr_t scan_lo;
     void *async_orig_pc;      /* stashed by sl_preempt_handler before
                                 rewriting the interrupted PC; read back
                                 by the trampoline on resume, via a

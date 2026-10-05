@@ -578,8 +578,14 @@ static void emit_json_fast_body(CG *cg, JsonInst *it) {
                       ect, type_has_gc_roots(cg, et));
         emit_line(cg, "if (!sl_jd_empty(p, %s)) {", close);
         cg->indent++;
+        /* A large list or map is a long stretch of C without a
+         * safepoint; every 64 elements it stops in place for a pending
+         * collection (sl_rt_gc_poll_in_place). Between elements every
+         * partial value is a C local or reachable from c. */
+        emit_line(cg, "unsigned polls = 0;");
         emit_line(cg, "for (;;) {");
         cg->indent++;
+        emit_line(cg, "if ((++polls & 63u) == 0 && sl_gc_poll_needed()) sl_rt_gc_poll_in_place();");
         if (!arr) {
             /* a map keeps its keys, so each is its own string */
             emit_line(cg, "if (!sl_jd_eat(p, '\"')) return false;");
