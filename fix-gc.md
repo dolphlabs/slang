@@ -402,7 +402,18 @@ the point reads in flight with it.
   `[f64]` are not traced at all, and a value struct gets a pointer-offset
   map. This removes cause 7 and is needed before 2.1 can land without a
   tracing regression.
-- [ ] **1.9 Pace majors by old-generation growth** (cause 17).
+- [x] **1.9 Pace majors by old-generation growth** (cause 17).
+  **Landed (2026-10-05), measured on Linux.** A major now comes after
+  the live-paced threshold of promoted bytes, or every 16 minors. The
+  minor bound is what the earlier attempt lacked: with promotion alone,
+  dead promoted objects pin young pages (the collector does not move)
+  and peak RSS grew 7 MB. Linux quote ABBA (K = minors per major): 8
+  +4% at equal RSS, 16 +9% for +0.8 MB, 32 +10% for +1.6 MB; against
+  `dev` after 1.7 landed, 5 rounds, +2.6% req/s (4 of 5 rounds ahead),
+  CPU even, RSS 25.3 -> 26.3 MB. 4-worker decode probe, Linux: majors
+  94 -> 11, wall ~1,185 -> ~1,067 ms, faster in every round. macOS quote:
+  +1.6% req/s, p99 33.6 -> 31.7 ms, RSS +0.7 MB.
+  Earlier note, kept for the record:
   **Built and measured, parked (2026-10-04, branch
   `perf/gc-major-pacing`).** It removes every major on the decode probe
   (11 -> 0; 4-worker wall -17%, RSS 9.2 -> 6.0 MB), but on the quote

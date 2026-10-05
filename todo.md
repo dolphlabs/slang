@@ -3287,3 +3287,15 @@ samples, nothing new. Suspects not yet ruled out: cache effects of the
 bitmap reads during marking on a ~1M-object, page-exhausted heap, and
 scheduling (idle-wait samples rose). Not fixed: measure with hardware
 counters on Linux before guessing.
+
+## Open: proc_shutdown failed once on CI macOS arm64 ("FAIL client recv")
+
+Seen 2026-10-05 on run 37257101681 (branch perf/gc-trim-outside, whose
+change is a no-op on macOS); the rerun of the same commit passed, and
+30 local runs on dev (Intel macOS) passed. The test had handled the
+connection and drained every task (so the handler had sent "OK" and
+closed) when the client's net.recv returned an error. A likely
+mechanism, not confirmed: after the shutdown flag is set, a net call
+that has to park is interrupted (sl_rt_shutdown_hook), so a client recv
+that parks even briefly fails. Not fixed; reproduce on arm64 before
+changing the test or the net layer.

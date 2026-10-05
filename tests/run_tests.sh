@@ -660,6 +660,25 @@ for spec in gc_promotion_budget:grow gc_nursery_small:small; do
 done
 [ "$nur_ad_bad" -eq 0 ] && echo "PASS nursery adaptation"
 
+# ---- majors paced by promotion -----------------------------------------------
+# A major comes after the live-paced threshold of PROMOTED bytes, or every
+# 16 minors (sl_gc.c, SL_GC_MAJOR_EVERY). It used to come after 8 MB of
+# any allocation: gc_promotion_budget decodes and drops large bodies,
+# promotes almost nothing, and still ran 4 majors in 8 minors. Majors
+# must stay at most minors/16 + 1.
+echo "--- major pacing (SLANG_GC_STAT) ---"
+mp=$(SLANG_GC_STAT=1 ./slangc tests/gc_promotion_budget/main.sl --run 2>&1 >/dev/null |
+     sed -n 's/^slang-gc-stat collects=\([0-9]*\) minor_collects=\([0-9]*\) .*/\1 \2/p')
+if [ -z "$mp" ]; then
+    echo "FAIL major pacing (no slang-gc-stat line)"
+    fail=1
+elif [ "${mp% *}" -gt $(( ${mp#* } / 16 + 1 )) ]; then
+    echo "FAIL major pacing: $mp (majors minors)"
+    fail=1
+else
+    echo "PASS major pacing ($mp majors minors)"
+fi
+
 # ---- stopped threads sleep through a pause ------------------------------------
 # A thread stopped for a collection spins a few microseconds, then sleeps
 # until the pause ends (sl_gc_ack_and_wait). It used to call sched_yield
