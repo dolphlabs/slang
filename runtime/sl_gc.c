@@ -2947,6 +2947,32 @@ static void sl_gc_collect_minor_real(void) {
     }
 }
 
+/* Give the C heap's free memory back to the OS after a major: glibc
+ * keeps what free() returned, and the sweep's frees are most of it.
+ * After the pause, not inside it, and at most every 100 ms: it walks
+ * every arena under its locks, and inside the pause it ran after every
+ * major -- on the quote server in a Linux container a major came after
+ * every minor, so this was most of the 0.75 ms major tail, 800 times in
+ * 8 s, with every worker stopped. Measured there (ABBA): every major but
+ * outside the pause, -14% req/s (it still ran 100 times a second); every
+ * 100 ms, +8.5% req/s, p99 -15%, peak RSS +3.7 MB; every second, about
+ * the same speed for +4.6 MB. Memory still goes back within 100 ms of
+ * the major that freed it. Called by the collecting thread once the
+ * world runs again (its caller's preempt bracket still open); a
+ * collection starting meanwhile waits for it like for any thread not
+ * yet at a safepoint, which the interval keeps rare. */
+static void sl_gc_trim_heap(void) {
+#if defined(__GLIBC__)
+    static _Atomic long long last_ns = 0;
+    long long now = sl_rt_monotonic_ns();
+    long long last = atomic_load_explicit(&last_ns, memory_order_relaxed);
+    if (now - last < 100000000LL)
+        return;
+    atomic_store_explicit(&last_ns, now, memory_order_relaxed);
+    malloc_trim(0);
+#endif
+}
+
 /* Major (full-heap) STW collection: today's sl_gc_collect retargeted
  * at both generations. Sweeps sl_gc_young AND sl_gc_old; re-paces
  * sl_gc_threshold by live bytes. Harvests the remembered set so its
@@ -3074,9 +3100,6 @@ static void sl_gc_collect(void) {
 
     atomic_store_explicit(&sl_gc_bytes_since_collect, 0, memory_order_relaxed);
     atomic_store_explicit(&sl_gc_bytes_since_minor, 0, memory_order_relaxed);
-#if defined(__GLIBC__)
-    malloc_trim(0);
-#endif
     /* Pace by the live heap, as Go's GOGC=100 does: the next collection
      * comes after allocating as much as survived this one, and never
      * before 8MB. The heap then peaks near twice what is live, however
@@ -3107,5 +3130,6 @@ static void sl_gc_collect(void) {
     sl_gc_stw_release();
     atomic_store_explicit(&sl_gc_collecting, 0, memory_order_release);
     pthread_mutex_unlock(&sl_gc_mu);
+    sl_gc_trim_heap();
 }
 
