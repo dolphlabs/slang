@@ -1166,7 +1166,7 @@ static void sl_gc_class_push(sl_gc_obj *h) {
 #define SL_GC_PAGE_SIZE 16384
 #define SL_GC_PAGE_ALIGN 16384
 #define SL_GC_PAGE_MAX_TOTAL 1024
-/* Pages one worker may hold: 512 x 16KB = 8MB, the largest nursery
+/* Pages one worker may hold: 1024 x 16KB = 16MB, the largest nursery
  * (sl_gc_nursery_set_max). The nursery trigger is global, so one busy
  * worker can allocate a whole cycle's budget by itself, and page slack
  * (holes, survivors) takes more than the budget's bytes. Past the cap,
@@ -1175,13 +1175,13 @@ static void sl_gc_class_push(sl_gc_obj *h) {
  * fixed 512KB nursery, a third of the decode probe's allocations on
  * one worker fell back once the adaptive nursery reached 1MB. Young
  * bytes are bounded by the nursery trigger, not by this cap. */
-#define SL_GC_PAGE_MAX_PAGES 512
+#define SL_GC_PAGE_MAX_PAGES 1024
 /* Empty pages a worker keeps across a sweep, to bump-allocate over in
- * the next cycle: 128 x 16KB = 2MB, twice one worker's share of the
- * largest nursery. A 1MB cycle with its survivors spread over pages
- * peaks near 106 pages on the decode probe; keeping fewer than a cycle
- * needs frees and re-allocates the difference every sweep, and on
- * macOS those aligned 16KB blocks were not reused: peak RSS doubled.
+ * the next cycle: 128 x 16KB = 2MB, one worker's share of the largest
+ * nursery. Keeping fewer than a cycle needs frees and re-allocates the
+ * difference every sweep, and on macOS those aligned 16KB blocks were
+ * not reused: peak RSS doubled. Keeping 256 measured no faster (Linux
+ * quote, +311 req/s against +421 for 128) for more retained memory.
  * Empties past it are freed, so a worker that burst to the full cap
  * returns to this after one sweep. */
 #define SL_GC_PAGE_KEEP_PAGES 128
@@ -2772,12 +2772,18 @@ static void sl_gc_verify_minor_marks(sl_gc_thread **snap, int nsnap,
  * entries, a major's young survivors -- and made every minor as
  * expensive as marking the whole reachable old heap: 104ms per minor
  * against a 200k-entry cache, where it now costs the nursery's worth. */
-/* The nursery's ceiling: 1 MB per worker, at most 8 MB, never below the
- * base. Set once by sl_pool_start, before any task runs. */
+/* The nursery's ceiling: 2 MB per worker, at most 16 MB, never below the
+ * base. Set once by sl_pool_start, before any task runs. Every
+ * collection pays a fixed cost (the rendezvous, ~0.5 ms on a busy
+ * server), so a busy server collects less often with a larger nursery;
+ * an idle or light one never grows to it (sl_gc_nursery_adapt).
+ * Raised from 1 MB a worker (owner decision, 2026-10-05): quote server
+ * in a Linux container, 4 workers, ABBA x4: 3,616 -> 4,037 req/s, p99
+ * 43 -> 38 ms, CPU per request 973 -> 957 us, peak RSS 31.2 -> 36.6 MB. */
 static void sl_gc_nursery_set_max(long workers) {
-    size_t mx = (size_t)(workers > 0 ? workers : 1) * 1024 * 1024;
-    if (mx > (size_t)8 * 1024 * 1024)
-        mx = (size_t)8 * 1024 * 1024;
+    size_t mx = (size_t)(workers > 0 ? workers : 1) * 2 * 1024 * 1024;
+    if (mx > (size_t)16 * 1024 * 1024)
+        mx = (size_t)16 * 1024 * 1024;
     if (mx < SL_GC_NURSERY_BASE)
         mx = SL_GC_NURSERY_BASE;
     sl_gc_nursery_max = mx;

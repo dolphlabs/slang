@@ -285,7 +285,26 @@ the point reads in flight with it.
   collection; the next try is a poll inside the generated decoders that
   acks without giving up the worker, not a signal.
 
-  **Owner decision pending: nursery size.** Each collection pays that
+  **Nursery ceiling raised (2026-10-05, owner's decision): 2 MB a
+  worker, at most 16 MB.** Linux quote ABBA x4 against `dev`: 3,616 ->
+  4,037 req/s, p99 43 -> 38 ms, CPU per request 973 -> 957 us, peak RSS
+  31.2 -> 36.6 MB. Against Go in the same container, ABBA x4: Go 3,775
+  req/s, slang 3,667 (last three rounds within 1%), p99 101 vs 43 ms,
+  CPU per request 1,442 vs 1,058 us, RSS 80 vs 33 MB. macOS quote: +2%
+  req/s, p99 even, CPU +4.7%, RSS 22.4 -> 27.6 MB.
+
+  **In-place decoder stops (parked, branch `perf/json-decode-poll`).**
+  Generated list decoders checked every 64 elements for a pending
+  collection and stopped where they were, the task's stack below its
+  last safepoint scanned conservatively (callee-saved registers spilled
+  by inline asm: `__builtin_unwind_init` spilled nothing under Apple
+  clang, and the verifier caught the list being decoded swept). Linux:
+  time-to-safepoint -90%, quote p99 61 -> 49 ms, +4% req/s; but a
+  collection mid-decode finds the partial result alive, and two of them
+  promote it: the decode probe promoted 104,352 objects instead of 12
+  and ran 14% slower. Not landed.
+
+  **Owner decision (taken above): nursery size.** Each collection pays that
   fixed ~0.5 ms, so fewer collections help. Quote ABBA x3, Linux, fixed
   nursery against the adaptive one (which tops out at 1 MB a worker, 4
   MB here): 8 MB +7% req/s for peak RSS +7 MB (28.9 -> 35.9); 16 MB
