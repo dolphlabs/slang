@@ -28,7 +28,13 @@ import "encoding";
 // the url, default 256; 0 turns it off), so Postgres parses and plans it
 // once instead of on every call.
 //
-// WHAT THIS DOES NOT DO, deliberately: no binary result format, no Kerberos/GSSAPI, no SCRAM channel binding
+// A cached statement's later runs ask for int2/int4/int8, bool and
+// bytea columns in binary, which the server sends without formatting
+// them and the getters read without parsing; every other type, floats
+// included, stays text.
+//
+// WHAT THIS DOES NOT DO, deliberately: no binary floats or other binary
+// types, no Kerberos/GSSAPI, no SCRAM channel binding
 // (SCRAM-SHA-256-PLUS), no COPY in binary format.
 
 // ---- limits ----------------------------------------------------------
@@ -143,6 +149,10 @@ gc struct Stmt {
     n: int,
     name: str,
     used: int,
+    // The Bind message's result-format section for this statement:
+    // empty until its first run has described the columns, then a
+    // format code per column, binary (1) for the types binary_ok names.
+    fmts: bytes,
 }
 
 pub gc struct Notification {
@@ -165,6 +175,8 @@ pub gc struct Arg {
 pub gc struct Rows {
     columns: [str],
     types: [int],     // type OIDs, one per column
+    // Per column: the cells arrive in binary (see binary_ok), not text.
+    binary: [bool],
     count: int,       // number of rows
     // Rows affected, from the command tag: INSERT/UPDATE/DELETE/MERGE
     // report the rows they touched, SELECT the rows it returned.
@@ -1201,10 +1213,12 @@ fn tag_count(tag: str) -> int {
 fn empty_rows() -> Rows {
     let cols: [str] = [];
     let types: [int] = [];
+    let binary: [bool] = [];
     let chunks: [bytes] = [];
     let locs: [int] = [];
     let lens: [int] = [];
-    return Rows { columns: cols, types: types, count: 0, affected: 0,
+    return Rows { columns: cols, types: types, binary: binary, count: 0,
+                  affected: 0,
                   tag: "", chunks: chunks, locs: locs, lens: lens,
                   chunk_gen: -1, stream: 0, done: true };
 }
@@ -1350,15 +1364,25 @@ fn step(c: Conn, rows: Rows, stop: int, synced: bool, deadline: until)
             let n = get16(cur);
             let cols: [str] = [];
             let types: [int] = [];
+            let binary: [bool] = [];
             let k = 0;
             while k < n && !cur.bad {
                 push(cols, get_cstr(cur));
                 get32(cur);         // table OID
                 get16(cur);         // column attribute number
-                push(types, get32(cur));
+                let oid = get32(cur);
+                push(types, oid);
                 get16(cur);         // type size
                 get32(cur);         // type modifier
-                get16(cur);         // format code
+                let fmt = get16(cur);
+                // binary only where it was asked for: a server must not
+                // send another type that way, and a reader would misread it
+                if fmt != 0 && (fmt != 1 || !binary_ok(oid)) {
+                    return err("protocol error: unexpected format " +
+                               to_str(fmt) + " for a " + type_name(oid) +
+                               " column");
+                }
+                push(binary, fmt == 1);
                 k = k + 1;
             }
             if cur.bad {
@@ -1368,6 +1392,7 @@ fn step(c: Conn, rows: Rows, stop: int, synced: bool, deadline: until)
             // last; only the final one is kept.
             rows.columns = cols;
             rows.types = types;
+            rows.binary = binary;
             clear_cells(rows);
             if (stop & STOP_DESC) != 0 {
                 return ok(EV_DESC);
@@ -1475,12 +1500,13 @@ fn fail(c: Conn, e: str, status_before: int) -> str {
 }
 
 fn extended(sql: str, args: [Arg]) -> bytes {
-    return extended_named("", true, sql, args);
+    return extended_named("", true, sql, args, be16(0));
 }
 
 // Parse (unless the named statement is already prepared), Bind, Describe,
 // Execute, Sync. "" is the unnamed statement, parsed every time.
-fn extended_named(name: str, parse: bool, sql: str, args: [Arg]) -> bytes {
+fn extended_named(name: str, parse: bool, sql: str, args: [Arg],
+                  fmts: bytes) -> bytes {
     let formats = be16(len(args));
     let values = be16(len(args));
     for a in args {
@@ -1501,7 +1527,7 @@ fn extended_named(name: str, parse: bool, sql: str, args: [Arg]) -> bytes {
     }
     return out +
            msg(66, cstr("") + cstr(name) + formats + values +   // Bind
-               be16(0)) +                                       //   text results
+               fmts) +                                          //   result formats
            msg(68, b"P" + cstr("")) +                           // Describe portal
            msg(69, cstr("") + be32(0)) +                        // Execute, all rows
            msg(83, b"");                                        // Sync
@@ -1562,7 +1588,7 @@ fn query_once(c: Conn, sql: str, args: [Arg], before: int, deadline: until)
     let fresh = false;
     if c.cfg.statement_cache > 0 {
         c.stmt_tick = c.stmt_tick + 1;
-        let st = Stmt { n: 0, name: "", used: 0 };
+        let st = Stmt { n: 0, name: "", used: 0, fmts: b"" };
         if has(c.stmts, sql) {
             st = c.stmts[sql];
             cached = true;
@@ -1579,13 +1605,18 @@ fn query_once(c: Conn, sql: str, args: [Arg], before: int, deadline: until)
                 drop_stmt(c, oldest);
                 out = take_closes(c) + out;
             }
-            st = Stmt { n: c.stmt_next, name: stmt_name(c.stmt_next), used: 0 };
+            st = Stmt { n: c.stmt_next, name: stmt_name(c.stmt_next), used: 0,
+                        fmts: b"" };
             c.stmt_next = c.stmt_next + 1;
             c.stmts[sql] = st;
             fresh = true;
         }
         st.used = c.stmt_tick;
-        out = out + extended_named(st.name, fresh, sql, args);
+        let fmts = st.fmts;
+        if len(fmts) == 0 {
+            fmts = be16(0);         // first run: text, and learn the columns
+        }
+        out = out + extended_named(st.name, fresh, sql, args, fmts);
     } else {
         out = out + extended(sql, args);
     }
@@ -1603,7 +1634,43 @@ fn query_once(c: Conn, sql: str, args: [Arg], before: int, deadline: until)
         }
         return err(fail(c, e, before));
     }
+    if c.cfg.statement_cache > 0 && len(rows.types) > 0 && has(c.stmts, sql) {
+        let st = c.stmts[sql];
+        if len(st.fmts) == 0 {
+            st.fmts = result_formats(rows.types);
+        }
+    }
     return ok(rows);
+}
+
+// The types read in binary: their binary form converts back to exactly
+// the text Postgres sends (so get_text is unchanged), and parsing their
+// text was a cost per cell. int8, int2, int4, bool, bytea.
+fn binary_ok(oid: int) -> bool {
+    return oid == 20 || oid == 21 || oid == 23 || oid == 16 || oid == 17;
+}
+
+// A statement's result-format section once its column types are known:
+// one code per column when any column can be binary, else text for all.
+fn result_formats(types: [int]) -> bytes {
+    let any = false;
+    for t in types {
+        if binary_ok(t) {
+            any = true;
+        }
+    }
+    if !any {
+        return be16(0);
+    }
+    let out = be16(len(types));
+    for t in types {
+        if binary_ok(t) {
+            out = out + be16(1);
+        } else {
+            out = out + be16(0);
+        }
+    }
+    return out;
 }
 
 fn check_args(args: [Arg]) -> str {
@@ -2235,7 +2302,58 @@ fn wrong_type(rows: Rows, c: int, want: str) {
 // Any column, in Postgres's text form: numbers, dates, uuid and json
 // all arrive this way.
 pub fn get_text(rows: Rows, r: int, c: int) -> str {
-    return to_str(cell(rows, r, c, "text"));
+    let raw = cell(rows, r, c, "text");
+    if !rows.binary[c] {
+        return to_str(raw);
+    }
+    // the text Postgres would have sent for the same value
+    let oid = rows.types[c];
+    if oid == 16 {
+        if bin_bool(rows, c, raw) {
+            return "t";
+        }
+        return "f";
+    }
+    if oid == 17 {
+        return "\\x" + encoding.hex_encode(raw);
+    }
+    return to_str(bin_int(rows, c, raw));
+}
+
+// A binary integer cell: big-endian two's complement, exactly as wide as
+// its type. Any other length is the server breaking the protocol.
+fn bin_int(rows: Rows, c: int, raw: bytes) -> int {
+    let oid = rows.types[c];
+    let w = 8;
+    if oid == 21 {
+        w = 2;
+    } else if oid == 23 {
+        w = 4;
+    }
+    if len(raw) != w {
+        panic("column '" + rows.columns[c] + "': binary " + type_name(oid) +
+              " cell of " + to_str(len(raw)) + " bytes");
+    }
+    if w == 2 {
+        return rd16(raw, 0);
+    }
+    if w == 4 {
+        return rd32(raw, 0);
+    }
+    let v = 0;
+    let i = 0;
+    while i < 8 {
+        v = (v << 8) | raw[i];
+        i = i + 1;
+    }
+    return v;
+}
+
+fn bin_bool(rows: Rows, c: int, raw: bytes) -> bool {
+    if len(raw) != 1 || raw[0] > 1 {
+        panic("column '" + rows.columns[c] + "': malformed binary bool");
+    }
+    return raw[0] == 1;
 }
 
 // int2, int4, int8 and oid.
@@ -2248,6 +2366,9 @@ pub fn get_int(rows: Rows, r: int, c: int) -> int {
     // still panics, naming the column.
     if oid != 20 && oid != 21 && oid != 23 && oid != 26 && oid != 1700 {
         wrong_type(rows, c, "int");
+    }
+    if rows.binary[c] {
+        return bin_int(rows, c, cell(rows, r, c, "int"));
     }
     let s = to_str(cell(rows, r, c, "int"));
     let ir = to_int(s);
@@ -2270,6 +2391,9 @@ pub fn get_float(rows: Rows, r: int, c: int) -> float {
        oid != 23 {
         wrong_type(rows, c, "float");
     }
+    if rows.binary[c] {
+        return bin_int(rows, c, cell(rows, r, c, "float")) as float;
+    }
     let s = to_str(cell(rows, r, c, "float"));
     if s == "NaN" || s == "Infinity" || s == "-Infinity" {
         panic("column '" + rows.columns[c] + "' is " + s +
@@ -2287,6 +2411,9 @@ pub fn get_bool(rows: Rows, r: int, c: int) -> bool {
     if rows.types[c] != 16 {
         wrong_type(rows, c, "bool");
     }
+    if rows.binary[c] {
+        return bin_bool(rows, c, cell(rows, r, c, "bool"));
+    }
     return to_str(cell(rows, r, c, "bool")) == "t";
 }
 
@@ -2297,6 +2424,9 @@ pub fn get_bytes(rows: Rows, r: int, c: int) -> bytes {
         wrong_type(rows, c, "bytes");
     }
     let raw = cell(rows, r, c, "bytes");
+    if rows.binary[c] {
+        return raw;
+    }
     if len(raw) < 2 || raw[0] != 92 || raw[1] != 120 {     // "\x"
         panic("column '" + rows.columns[c] + "': bytea is not in hex " +
               "format; set bytea_output = 'hex'");

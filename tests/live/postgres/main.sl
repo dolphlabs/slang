@@ -505,6 +505,70 @@ fn sep() -> str {
     return "?";
 }
 
+// ---- binary results ---------------------------------------------------
+
+// Every getter's view of one row, as text, for comparing two runs.
+fn row_view(rows: pg.Rows) -> str {
+    let out = "";
+    let c = 0;
+    while c < len(rows.columns) {
+        if pg.is_null(rows, 0, c) {
+            out = out + "NULL|";
+        } else {
+            let t = rows.types[c];
+            out = out + pg.get_text(rows, 0, c);
+            if t == 20 || t == 21 || t == 23 {
+                out = out + "/" + to_str(pg.get_int(rows, 0, c)) + "/" +
+                      to_str(pg.get_float(rows, 0, c));
+            } else if t == 16 {
+                out = out + "/" + to_str(pg.get_bool(rows, 0, c));
+            } else if t == 17 {
+                out = out + "/" + to_str(len(pg.get_bytes(rows, 0, c)));
+            }
+            out = out + "|";
+        }
+        c = c + 1;
+    }
+    return out;
+}
+
+// A cached statement's second run reads int, bool and bytea columns in
+// binary; every getter must see exactly what the first, text run saw,
+// at the edges of each type.
+fn binary_results() {
+    let c = conn();
+    let sql = "SELECT (-32768)::int2, 32767::int2, (-2147483648)::int4, " +
+              "2147483647::int4, (-9223372036854775808)::int8, " +
+              "9223372036854775807::int8, 0::int8, true, false, " +
+              "'\\x00ff'::bytea, ''::bytea, NULL::int8, NULL::bool, " +
+              "1.5::float8, 'x'::text, $1::int8";
+    let first = q(c, sql, [pg.arg_int(-7)]);
+    let second = q(c, sql, [pg.arg_int(-7)]);
+    if first.binary[0] || !second.binary[0] || second.binary[13] ||
+       second.binary[14] {
+        die("binary results: formats " + to_str(first.binary[0]) + " " +
+            to_str(second.binary[0]));
+    }
+    let a = row_view(first);
+    let b = row_view(second);
+    if a != b {
+        die("binary results differ:\n text   " + a + "\n binary " + b);
+    }
+    if !strings.contains(b, "-9223372036854775808/-9223372036854775808") ||
+       !strings.contains(b, "\\x00ff/2|") {
+        die("binary results: " + b);
+    }
+    // off: never binary
+    let off = conn_url(url() + sep() + "statement_cache_capacity=0");
+    q(off, sql, [pg.arg_int(1)]);
+    if q(off, sql, [pg.arg_int(1)]).binary[0] {
+        die("binary results with the cache off");
+    }
+    pg.close(off);
+    pg.close(c);
+    println("ok binary results");
+}
+
 // ---- large results ----------------------------------------------------
 
 fn large() {
@@ -735,6 +799,7 @@ cancel();
 pool();
 pool_waiters();
 statements();
+binary_results();
 large();
 tls();
 copy();
