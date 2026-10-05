@@ -1758,9 +1758,12 @@ static inline void sl_gc_recycle(sl_gc_obj *h) {
  * minor frees while the owner still uses it. Making collections likely
  * at that point (an allocation-entry yield tried for fix-gc.md 1.1) made
  * the verifier catch exactly that: young leaves held by old maps. */
-static void *sl_gc_alloc_gen(size_t n,
-                             void (*trace)(void *, void (*)(void *)),
-                             void (*fini)(void *), const void *owner) {
+/* zero: clear the payload. Every caller but sl_gc_alloc_leaf_uninit's. */
+__attribute__((always_inline))
+static inline void *sl_gc_alloc_impl(size_t n,
+                                     void (*trace)(void *, void (*)(void *)),
+                                     void (*fini)(void *), const void *owner,
+                                     int zero) {
     sl_rt_preempt_disable();
     unsigned char gen = owner ? ((const sl_gc_obj *)owner - 1)->gen : 0;
     sl_task *t = sl_rt_cur();
@@ -1782,7 +1785,8 @@ static void *sl_gc_alloc_gen(size_t n,
         if (!h) { fprintf(stderr, "slang: out of memory\n"); exit(1); }
         h->paged = 0;
     }
-    memset(h + 1, 0, n);
+    if (zero)
+        memset(h + 1, 0, n);
     h->size = n;
     h->trace = trace;
     h->fini = fini;
@@ -1811,6 +1815,25 @@ static void *sl_gc_alloc_gen(size_t n,
     }
     sl_rt_preempt_enable();
     return (void *)(h + 1);
+}
+
+static void *sl_gc_alloc_gen(size_t n,
+                             void (*trace)(void *, void (*)(void *)),
+                             void (*fini)(void *), const void *owner) {
+    return sl_gc_alloc_impl(n, trace, fini, owner, 1);
+}
+
+/* A young object whose payload is NOT cleared, for leaf data the caller
+ * overwrites in full before anything can read it -- a string or bytes
+ * filled by one memcpy. The clear was a libc memset per allocation:
+ * 2.7% of the quote server's CPU on Linux, for the 2,000 decoded skus of
+ * each request alone, every byte of which the copy then overwrote. Only
+ * for objects nothing traces into (trace NULL, or a bytes, whose tracer
+ * reads only the header the caller sets first); never where a pointer
+ * could be read before it is written. */
+static void *sl_gc_alloc_leaf_uninit(size_t n,
+                                     void (*trace)(void *, void (*)(void *))) {
+    return sl_gc_alloc_impl(n, trace, NULL, NULL, 0);
 }
 
 static void *sl_gc_alloc_fin(size_t n,

@@ -178,7 +178,7 @@ static char *sl_jparse_string_raw(sl_jparser *p) {
     }
     if (end < p->len && p->s[end] == '"') {
         long long n = end - p->pos;
-        char *s = (char *)sl_gc_alloc((size_t)n + 1, NULL);
+        char *s = (char *)sl_gc_alloc_leaf_uninit((size_t)n + 1, NULL);
         memcpy(s, p->s + p->pos, (size_t)n);
         s[n] = 0;
         p->pos = end + 1;
@@ -1054,9 +1054,22 @@ static bool sl_jd_key(sl_jparser *p, const char **k, long long *klen) {
  * declaration order -- before scanning the key with sl_jd_key and
  * comparing it against every field. A key written with escapes never
  * matches the literal and takes that general path, which decodes it. */
+/* Equal bytes, for the decoders' key tests. Not memcmp: under GCC the
+ * call was not inlined even for a 5-byte constant key, and libc's
+ * memcmp was 11% of the quote server's CPU on Linux. A plain loop with
+ * a constant n (every call site's) is unrolled into a few compares. */
+__attribute__((always_inline))
+static inline int sl_jbytes_eq(const char *a, const char *b, long long n) {
+    for (long long i = 0; i < n; i++)
+        if (a[i] != b[i])
+            return 0;
+    return 1;
+}
+
+__attribute__((always_inline))
 static inline int sl_jd_key_is(sl_jparser *p, const char *q, long long qn) {
     sl_jskip_ws(p);
-    if (p->len - p->pos < qn || memcmp(p->s + p->pos, q, (size_t)qn) != 0)
+    if (p->len - p->pos < qn || !sl_jbytes_eq(p->s + p->pos, q, qn))
         return 0;
     p->pos += qn;
     return sl_jd_eat(p, ':') ? 1 : -1;

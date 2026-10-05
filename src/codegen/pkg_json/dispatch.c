@@ -658,7 +658,7 @@ static void emit_json_fast_body(CG *cg, JsonInst *it) {
             emit_line(cg, "if (!sl_jd_key(p, &k, &kn)) return false;");
             for (int i = 0; i < sd->nfields; i++) {
                 const char *fn = sd->fields[i];
-                emit_line(cg, "%sif (kn == %d && !memcmp(k, \"%s\", %d)) hit = %d;",
+                emit_line(cg, "%sif (kn == %d && sl_jbytes_eq(k, \"%s\", %d)) hit = %d;",
                           i ? "else " : "", (int)strlen(fn), fn,
                           (int)strlen(fn), i);
             }

@@ -303,6 +303,15 @@ the point reads in flight with it.
   collection mid-decode finds the partial result alive, and two of them
   promote it: the decode probe promoted 104,352 objects instead of 12
   and ran 14% slower. Not landed.
+  Followed up (2026-10-05): bounding the conservative scan to the
+  decoder's own frames (excluding stale slots in the slang caller's)
+  left promotions at 52-62k, so the partial results are genuinely live,
+  and precise decoder roots would not help. Not aging young survivors
+  in a minor that stopped a decode in place cut promotions to 25-39,
+  but the decode probe was still 20% slower (ABBA x3, 247 -> 296 ms):
+  a collection that stops a decode finds its partial result alive and
+  marks it, which costs more than the ~0.4 ms of waiting it saves.
+  Parked for good unless decodes get much longer than a collection.
 
   **Owner decision (taken above): nursery size.** Each collection pays that
   fixed ~0.5 ms, so fewer collections help. Quote ABBA x3, Linux, fixed
@@ -515,7 +524,12 @@ of its 1-worker number.
 - [ ] **2.2 Frame the head once per request.** Keep the parsed head across
   partial `recv`s of one request, without keeping a `WireHead` alive across
   the park (the promotion trap `http.read`'s comment describes).
-- [ ] **2.3 A runtime-internal allocation that skips zeroing**, for
+- [x] **2.3 A runtime-internal allocation that skips zeroing** --
+  landed narrowly (2026-10-05): `sl_gc_alloc_leaf_uninit` /
+  `sl_bytes_alloc_uninit` for pointer-free leaves one memcpy fills (the
+  JSON string fast path, strings' copies, `sl_bytes_new`, the network
+  receive copy). Linux single-task decode probe ABBA x3: 896 -> 864 ms;
+  quote server even (4,828 vs 4,843 req/s). Earlier note:, for
   callers that overwrite every byte: the body copy, `to_bytes`, list and
   string growth.
 
@@ -526,7 +540,14 @@ of its 1-worker number.
   further: the profile's `bzero` share was not attributed to callers.
 - [ ] **2.4 Attribute what is left by call site**, using the
   instrumented-allocator method from `next-steps.md` §5, and fix by count.
-- [ ] **2.5 New JSON APIs** (in scope as of 2026-10-04; `note.txt` had them
+- [ ] **2.5 New JSON APIs** -- dropped (2026-10-05, owner's decision on
+  measurement). DWARF call graphs of the quote server in a Linux
+  container: the request body copy `decode_view` would remove was ~1% of
+  CPU (0.6% zeroing it, the copy itself less), and the response encode
+  `encode_into` would remove under 0.1%. Not worth permanent API. The
+  same profile found 11% in libc memcmp from the decoders' key test
+  (fixed, #321) and 2.7% clearing string allocations (2.3 below).
+  Original proposal: (in scope as of 2026-10-04; `note.txt` had them
   out). Proposed, signatures to be confirmed with the owner before code:
   - `json.encode_into(w: &mut wire, off: int, v: T) -> int`: encode
     straight into the response wire, with no intermediate `str` (cause
@@ -595,7 +616,14 @@ of its 1-worker number.
   64 clients, ABBA x3: Postgres CPU per request 502 -> 206 us, 7,556 ->
   9,249 req/s, p99 22.9 -> 14.3 ms; slang CPU 157 -> 155 us. At 512
   clients Postgres CPU 472 -> 223 us.
-- [ ] **3.5 Binary result format** for the types the driver decodes
+- [ ] **3.5 Binary result format** -- built and parked (2026-10-05,
+  branch `perf/pg-binary-results`): a cached statement's later runs read
+  int2/int4/int8, bool and bytea columns in binary (floats stay text:
+  get_text must not change). On a 100-row orders query, slang CPU per
+  request -6.6% and +7% req/s locally (slang-bound), but Postgres CPU per
+  request rose 7% (644 -> 690 us, repeated, no overlap). Postgres is the
+  ceiling on the CCX33's database workloads, so it would lower
+  throughput there. Original item: for the types the driver decodes
   (`int2/4/8`, `bool`, `float4/8`, `bytea`; text stays text). In scope as
   of 2026-10-04 (`note.txt` had it out). Every width and length from the
   server is bounds-checked, as the driver's limits section requires.
