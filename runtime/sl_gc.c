@@ -45,6 +45,22 @@ static _Atomic(sl_gc_obj *) sl_gc_retired = NULL;
 static pthread_mutex_t sl_gc_mu = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic size_t sl_gc_bytes_since_collect = 0;
 static size_t sl_gc_threshold = 8 * 1024 * 1024;
+/* Majors come after sl_gc_threshold bytes are PROMOTED (each minor adds
+ * what it moved to the old generation, owned buffers born old included),
+ * or after SL_GC_MAJOR_EVERY minors, whichever is first. Allocation used
+ * to count: with a 1 MB-per-worker nursery a full-heap major followed
+ * nearly every minor, re-marking an old heap that had barely grown --
+ * on the quote server in a Linux container, 801 majors to 801 minors in
+ * 8 s, 27% of wall time stopped. The minor bound remains because the
+ * collector does not move objects: a promoted object that dies pins its
+ * young page until a major frees it, and pacing by promotion alone grew
+ * the quote server's peak RSS by 7 MB. Quote ABBA, Linux: every 8
+ * minors +4% req/s at equal RSS, every 16 +9% for +0.8 MB, every 32 +10%
+ * for +1.6 MB, promotion alone +6% for +7 MB. Under
+ * SLANG_GC_THRESHOLD_KB every allocation still counts, so that mode
+ * lands majors as often as possible. */
+#define SL_GC_MAJOR_EVERY 16
+static long sl_gc_minors_since_major = 0; /* under sl_gc_mu */
 /* Generational nursery: bytes allocated since the last MINOR
  * collection, and the nursery threshold that triggers one. A minor
  * collection sweeps only sl_gc_young (plus tracing roots-reachable old
@@ -196,6 +212,12 @@ static void sl_gc_stat_phases(const sl_gc_phase_clock *c, int major) {
     }
 }
 
+/* Stopped threads' waits for a pause to end (sl_gc_ack_and_wait), and
+ * how many of them slept rather than spun to the end: the spin covers
+ * only the first few microseconds. */
+static _Atomic unsigned long long sl_gc_stat_stw_waits = 0;
+static _Atomic unsigned long long sl_gc_stat_stw_sleeps = 0;
+
 static void sl_gc_stat_dump(void) {
     if (!sl_gc_stat_enabled())
         return;
@@ -244,6 +266,9 @@ static void sl_gc_stat_dump(void) {
                                          memory_order_relaxed));
         fprintf(stderr, "\n");
     }
+    fprintf(stderr, "slang-gc-stat stw_waits=%llu stw_sleeps=%llu\n",
+            atomic_load_explicit(&sl_gc_stat_stw_waits, memory_order_relaxed),
+            atomic_load_explicit(&sl_gc_stat_stw_sleeps, memory_order_relaxed));
 }
 
 __attribute__((destructor))
@@ -383,6 +408,22 @@ static sl_gc_thread *sl_gc_threads = NULL;
 #define SL_GC_PENDING_BATCH 32
 static _Atomic int sl_gc_stop_requested = 0;
 static _Atomic unsigned long sl_gc_cycle = 0;
+/* Stopped threads sleep here for the rest of a pause (sl_gc_ack_and_wait)
+ * instead of calling sched_yield in a loop. On Linux that loop was a
+ * syscall per turn that returned at once -- every CPU but the
+ * collector's is idle during a pause -- and under a VM each turn cost
+ * reschedule IPIs too: profiled on the quote server in a Linux
+ * container, the stopped threads' yielding was 60% of all CPU. The
+ * collector raises and clears sl_gc_stop_requested, and bumps
+ * sl_gc_cycle, under sl_gc_stw_mu, and broadcasts when anyone sleeps,
+ * so a sleeper never misses the end of a pause or the start of a
+ * chained one it must ack. Lock order: sl_gc_mu before sl_gc_stw_mu. */
+static pthread_mutex_t sl_gc_stw_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t sl_gc_stw_cv = PTHREAD_COND_INITIALIZER;
+static int sl_gc_stw_sleepers = 0; /* under sl_gc_stw_mu */
+/* Pause-instruction turns a stopped thread spins before sleeping: a few
+ * microseconds, so a pause that ends that fast costs no wakeup. */
+#define SL_GC_STW_SPIN 256
 static _Atomic int sl_gc_collect_pending = 0;
 static _Atomic int sl_gc_collecting = 0;
 
@@ -485,20 +526,51 @@ static void sl_gc_register_thread(void) {
  * collection is ever in flight, via the sl_gc_collecting exchange
  * below), so there's nothing lost by no longer waiting for a clean
  * 0 observation on the shared flag. */
+static inline void sl_gc_cpu_relax(void) {
+#if defined(__x86_64__) || defined(__i386__)
+    __builtin_ia32_pause();
+#elif defined(__aarch64__)
+    __asm__ __volatile__("yield");
+#endif
+}
+
 static inline void sl_gc_ack_and_wait(void) {
     _Atomic unsigned long *acked = sl_rt_tls_gc_acked_cycle();
     unsigned long cyc = atomic_load_explicit(&sl_gc_cycle,
                                               memory_order_acquire);
     atomic_store_explicit(acked, cyc, memory_order_release);
+    int spins = 0;
+    int slept = 0;
     while (atomic_load_explicit(&sl_gc_stop_requested,
                                  memory_order_acquire)) {
-        sched_yield();
+        if (spins < SL_GC_STW_SPIN) {
+            spins++;
+            sl_gc_cpu_relax();
+        } else {
+            slept = 1;
+            pthread_mutex_lock(&sl_gc_stw_mu);
+            sl_gc_stw_sleepers++;
+            while (atomic_load_explicit(&sl_gc_stop_requested,
+                                         memory_order_acquire) &&
+                   atomic_load_explicit(&sl_gc_cycle,
+                                         memory_order_acquire) == cyc)
+                pthread_cond_wait(&sl_gc_stw_cv, &sl_gc_stw_mu);
+            sl_gc_stw_sleepers--;
+            pthread_mutex_unlock(&sl_gc_stw_mu);
+        }
         unsigned long now = atomic_load_explicit(&sl_gc_cycle,
                                                   memory_order_acquire);
         if (now != cyc) {
             cyc = now;
             atomic_store_explicit(acked, cyc, memory_order_release);
         }
+    }
+    if ((spins || slept) && sl_gc_stat_enabled()) {
+        atomic_fetch_add_explicit(&sl_gc_stat_stw_waits, 1,
+                                  memory_order_relaxed);
+        if (slept)
+            atomic_fetch_add_explicit(&sl_gc_stat_stw_sleeps, 1,
+                                      memory_order_relaxed);
     }
 }
 
@@ -657,11 +729,16 @@ static inline void sl_rt_gc_checkin(void) {
  * SL_GC_PUBLISH_BATCH bytes (sl_gc_alloc_gen), not per allocation. */
 static void sl_gc_publish_delta(size_t delta) {
     if (!delta) return;
-    size_t prev = atomic_fetch_add_explicit(&sl_gc_bytes_since_collect, delta,
-                                            memory_order_relaxed);
-    if (prev + delta >= sl_gc_threshold)
-        atomic_store_explicit(&sl_gc_collect_pending, 1,
-                               memory_order_release);
+    /* Majors are paced by promotion (sl_gc_collect_minor_real), except
+     * in the fixed-threshold test mode, which lands them as often as
+     * possible. */
+    if (sl_gc_threshold_fixed) {
+        size_t prev = atomic_fetch_add_explicit(&sl_gc_bytes_since_collect,
+                                                delta, memory_order_relaxed);
+        if (prev + delta >= sl_gc_threshold)
+            atomic_store_explicit(&sl_gc_collect_pending, 1,
+                                   memory_order_release);
+    }
     size_t mprev = atomic_fetch_add_explicit(&sl_gc_bytes_since_minor, delta,
                                              memory_order_relaxed);
     if (mprev + delta >= atomic_load_explicit(&sl_gc_nursery_threshold,
@@ -1089,13 +1166,25 @@ static void sl_gc_class_push(sl_gc_obj *h) {
 #define SL_GC_PAGE_SIZE 16384
 #define SL_GC_PAGE_ALIGN 16384
 #define SL_GC_PAGE_MAX_TOTAL 1024
-/* Retained pages per worker, worst case: 64 x 16KB = 1MB. Only
- * pages holding live objects are retained; empty ones are freed at
- * the sweep that emptied them, so idle workers hold nothing. Past
- * the cap, claims fall back to malloc. Size the cap past one nursery
- * worth of small objects plus survivors: the quote decode bench
- * allocates ~850KB per minor cycle against a 512KB nursery. */
-#define SL_GC_PAGE_MAX_PAGES 64
+/* Pages one worker may hold: 1024 x 16KB = 16MB, the largest nursery
+ * (sl_gc_nursery_set_max). The nursery trigger is global, so one busy
+ * worker can allocate a whole cycle's budget by itself, and page slack
+ * (holes, survivors) takes more than the budget's bytes. Past the cap,
+ * claims fall back to malloc, and every fallback is a libc malloc now
+ * and a libc free at the sweep: at the old cap of 64, sized for the
+ * fixed 512KB nursery, a third of the decode probe's allocations on
+ * one worker fell back once the adaptive nursery reached 1MB. Young
+ * bytes are bounded by the nursery trigger, not by this cap. */
+#define SL_GC_PAGE_MAX_PAGES 1024
+/* Empty pages a worker keeps across a sweep, to bump-allocate over in
+ * the next cycle: 128 x 16KB = 2MB, one worker's share of the largest
+ * nursery. Keeping fewer than a cycle needs frees and re-allocates the
+ * difference every sweep, and on macOS those aligned 16KB blocks were
+ * not reused: peak RSS doubled. Keeping 256 measured no faster (Linux
+ * quote, +311 req/s against +421 for 128) for more retained memory.
+ * Empties past it are freed, so a worker that burst to the full cap
+ * returns to this after one sweep. */
+#define SL_GC_PAGE_KEEP_PAGES 128
 /* A split remainder must still hold a 16-byte free node; anything
  * smaller is absorbed into the taken slot (and covered by its cap). */
 #define SL_GC_PAGE_MIN_SPLIT 16
@@ -1551,7 +1640,7 @@ static inline void sl_gc_page_promoted(sl_gc_obj *h) {
 /* Drop every empty page from one worker's list (headp/curp/npp are
  * that worker's published TLS addresses, or a local orphan-list pair
  * with NULLs) and repair its bump pointer. Empty worker pages are
- * reset and retained up to the per-worker cap -- everything in them
+ * reset and retained up to SL_GC_PAGE_KEEP_PAGES -- everything in them
  * just died, so the next cycle bump-allocates over them with no
  * fragmentation to walk -- and freed past it; orphan empties (no
  * worker left to reuse them) are always freed. Pages that survived
@@ -1565,8 +1654,8 @@ static void sl_gc_pages_prune_list(sl_gc_page **headp, sl_gc_page **curp,
     for (sl_gc_page *pg = *headp; pg; pg = pg->next)
         if (pg->young_live != 0 || pg->old_live != 0)
             nlive++;
-    int keep = retain && nlive < SL_GC_PAGE_MAX_PAGES
-                   ? SL_GC_PAGE_MAX_PAGES - nlive
+    int keep = retain && nlive < SL_GC_PAGE_KEEP_PAGES
+                   ? SL_GC_PAGE_KEEP_PAGES - nlive
                    : 0;
     sl_gc_page *cur = curp ? *curp : NULL;
     int cur_dead = 0;
@@ -2187,6 +2276,16 @@ static void sl_gc_set_build(int with_old) {
     sl_gc_set_count = n;
 }
 
+/* End a pause: lower the stop and wake the stopped threads asleep in
+ * sl_gc_ack_and_wait. Called with sl_gc_mu held. */
+static void sl_gc_stw_release(void) {
+    pthread_mutex_lock(&sl_gc_stw_mu);
+    atomic_store_explicit(&sl_gc_stop_requested, 0, memory_order_release);
+    if (sl_gc_stw_sleepers)
+        pthread_cond_broadcast(&sl_gc_stw_cv);
+    pthread_mutex_unlock(&sl_gc_stw_mu);
+}
+
 /* STW rendezvous shared by minor and major collections: raise
  * sl_gc_stop_requested, bump the cycle, snapshot the thread registry,
  * and spin until every other thread has acked or is blocked. The
@@ -2194,9 +2293,16 @@ static void sl_gc_set_build(int with_old) {
  * per-kind variant. Caller must hold NO locks; returns with a
  * caller-owned snapshot that must be free()d. */
 static void sl_gc_stw_sync(sl_gc_thread ***out_snap, int *out_nsnap) {
+    /* Under sl_gc_stw_mu: a thread still asleep from the previous pause
+     * (a minor chaining into a major keeps the stop raised) must wake to
+     * ack this cycle. */
+    pthread_mutex_lock(&sl_gc_stw_mu);
     atomic_store_explicit(&sl_gc_stop_requested, 1, memory_order_release);
     unsigned long cyc = atomic_fetch_add_explicit(&sl_gc_cycle, 1,
                                     memory_order_release) + 1;
+    if (sl_gc_stw_sleepers)
+        pthread_cond_broadcast(&sl_gc_stw_cv);
+    pthread_mutex_unlock(&sl_gc_stw_mu);
 
     sl_gc_thread **snap = NULL;
     int nsnap = 0, snap_cap = 0;
@@ -2666,12 +2772,18 @@ static void sl_gc_verify_minor_marks(sl_gc_thread **snap, int nsnap,
  * entries, a major's young survivors -- and made every minor as
  * expensive as marking the whole reachable old heap: 104ms per minor
  * against a 200k-entry cache, where it now costs the nursery's worth. */
-/* The nursery's ceiling: 1 MB per worker, at most 8 MB, never below the
- * base. Set once by sl_pool_start, before any task runs. */
+/* The nursery's ceiling: 2 MB per worker, at most 16 MB, never below the
+ * base. Set once by sl_pool_start, before any task runs. Every
+ * collection pays a fixed cost (the rendezvous, ~0.5 ms on a busy
+ * server), so a busy server collects less often with a larger nursery;
+ * an idle or light one never grows to it (sl_gc_nursery_adapt).
+ * Raised from 1 MB a worker (owner decision, 2026-10-05): quote server
+ * in a Linux container, 4 workers, ABBA x4: 3,616 -> 4,037 req/s, p99
+ * 43 -> 38 ms, CPU per request 973 -> 957 us, peak RSS 31.2 -> 36.6 MB. */
 static void sl_gc_nursery_set_max(long workers) {
-    size_t mx = (size_t)(workers > 0 ? workers : 1) * 1024 * 1024;
-    if (mx > (size_t)8 * 1024 * 1024)
-        mx = (size_t)8 * 1024 * 1024;
+    size_t mx = (size_t)(workers > 0 ? workers : 1) * 2 * 1024 * 1024;
+    if (mx > (size_t)16 * 1024 * 1024)
+        mx = (size_t)16 * 1024 * 1024;
     if (mx < SL_GC_NURSERY_BASE)
         mx = SL_GC_NURSERY_BASE;
     sl_gc_nursery_max = mx;
@@ -2761,7 +2873,7 @@ static void sl_gc_collect_minor_real(void) {
      * is one more trace per promoted object, and promotion is what this
      * makes rare. */
     sl_gc_obj **mpp = &sl_gc_young;
-    size_t swept = 0, promoted = 0, live_young = 0;
+    size_t swept = 0, promoted = 0, live_young = 0, promoted_bytes = 0;
     /* Rebuilt below from the unpaged objects that stay young (1.5). */
     sl_gc_young_m_n = 0;
     while (*mpp) {
@@ -2774,6 +2886,7 @@ static void sl_gc_collect_minor_real(void) {
             h->next = sl_gc_old;
             sl_gc_old = h;
             promoted++;
+            promoted_bytes += sizeof(sl_gc_obj) + h->size;
         } else if (!h->marked) {
             *mpp = h->next;
             if (h->fini)
@@ -2798,6 +2911,7 @@ static void sl_gc_collect_minor_real(void) {
             h->next = sl_gc_old;
             sl_gc_old = h;
             promoted++;
+            promoted_bytes += sizeof(sl_gc_obj) + h->size;
             if (h->trace) {
                 sl_gc_dirty_all((void *)(h + 1));
                 h->remembered = 1;
@@ -2828,6 +2942,18 @@ static void sl_gc_collect_minor_real(void) {
     sl_gc_set_count = 0;
     free(snap);
 
+    /* Majors are paced by promotion: what reached the old generation
+     * since the last one, against the live-paced threshold -- or every
+     * SL_GC_MAJOR_EVERY minors, whichever comes first (fix-gc.md 1.9). */
+    if (!sl_gc_threshold_fixed) {
+        size_t prev = atomic_fetch_add_explicit(&sl_gc_bytes_since_collect,
+                                                promoted_bytes,
+                                                memory_order_relaxed);
+        if (prev + promoted_bytes >= sl_gc_threshold ||
+            ++sl_gc_minors_since_major >= SL_GC_MAJOR_EVERY)
+            atomic_store_explicit(&sl_gc_collect_pending, 1,
+                                   memory_order_release);
+    }
     atomic_store_explicit(&sl_gc_bytes_since_minor, 0, memory_order_relaxed);
     sl_gc_nursery_adapt(t0, sl_rt_monotonic_ns(), live_young);
     if (stat_on) {
@@ -2847,7 +2973,7 @@ static void sl_gc_collect_minor_real(void) {
      * sl_gc_stop_requested set in that case so the next checkin runs
      * the major cycle; only fully release when no major is due. */
     if (!atomic_load_explicit(&sl_gc_collect_pending, memory_order_acquire)) {
-        atomic_store_explicit(&sl_gc_stop_requested, 0, memory_order_release);
+        sl_gc_stw_release();
         atomic_store_explicit(&sl_gc_collecting, 0, memory_order_release);
     } else {
         atomic_store_explicit(&sl_gc_collecting, 0, memory_order_release);
@@ -2860,6 +2986,32 @@ static void sl_gc_collect_minor_real(void) {
         if (!atomic_exchange_explicit(&sl_gc_collecting, 1, memory_order_acq_rel))
             sl_gc_collect();
     }
+}
+
+/* Give the C heap's free memory back to the OS after a major: glibc
+ * keeps what free() returned, and the sweep's frees are most of it.
+ * After the pause, not inside it, and at most every 100 ms: it walks
+ * every arena under its locks, and inside the pause it ran after every
+ * major -- on the quote server in a Linux container a major came after
+ * every minor, so this was most of the 0.75 ms major tail, 800 times in
+ * 8 s, with every worker stopped. Measured there (ABBA): every major but
+ * outside the pause, -14% req/s (it still ran 100 times a second); every
+ * 100 ms, +8.5% req/s, p99 -15%, peak RSS +3.7 MB; every second, about
+ * the same speed for +4.6 MB. Memory still goes back within 100 ms of
+ * the major that freed it. Called by the collecting thread once the
+ * world runs again (its caller's preempt bracket still open); a
+ * collection starting meanwhile waits for it like for any thread not
+ * yet at a safepoint, which the interval keeps rare. */
+static void sl_gc_trim_heap(void) {
+#if defined(__GLIBC__)
+    static _Atomic long long last_ns = 0;
+    long long now = sl_rt_monotonic_ns();
+    long long last = atomic_load_explicit(&last_ns, memory_order_relaxed);
+    if (now - last < 100000000LL)
+        return;
+    atomic_store_explicit(&last_ns, now, memory_order_relaxed);
+    malloc_trim(0);
+#endif
 }
 
 /* Major (full-heap) STW collection: today's sl_gc_collect retargeted
@@ -2989,9 +3141,6 @@ static void sl_gc_collect(void) {
 
     atomic_store_explicit(&sl_gc_bytes_since_collect, 0, memory_order_relaxed);
     atomic_store_explicit(&sl_gc_bytes_since_minor, 0, memory_order_relaxed);
-#if defined(__GLIBC__)
-    malloc_trim(0);
-#endif
     /* Pace by the live heap, as Go's GOGC=100 does: the next collection
      * comes after allocating as much as survived this one, and never
      * before 8MB. The heap then peaks near twice what is live, however
@@ -3005,6 +3154,7 @@ static void sl_gc_collect(void) {
      * the ratchet, 19MB and 3.0s collecting every 8MB. It also never
      * followed a heap that GROWS: 8MB forever re-marked an ever-larger
      * live set, which pacing by live bytes avoids. */
+    sl_gc_minors_since_major = 0;
     if (!sl_gc_threshold_fixed) {
         size_t floor = 8 * 1024 * 1024;
         sl_gc_threshold = live_bytes > floor ? live_bytes : floor;
@@ -3019,8 +3169,9 @@ static void sl_gc_collect(void) {
     }
     atomic_store_explicit(&sl_gc_collect_pending, 0, memory_order_release);
     atomic_store_explicit(&sl_gc_collect_minor_pending, 0, memory_order_release);
-    atomic_store_explicit(&sl_gc_stop_requested, 0, memory_order_release);
+    sl_gc_stw_release();
     atomic_store_explicit(&sl_gc_collecting, 0, memory_order_release);
     pthread_mutex_unlock(&sl_gc_mu);
+    sl_gc_trim_heap();
 }
 

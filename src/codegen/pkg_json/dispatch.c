@@ -626,32 +626,76 @@ static void emit_json_fast_body(CG *cg, JsonInst *it) {
         }
         emit_line(cg, "if (!sl_jd_empty(p, '}')) {");
         cg->indent++;
-        emit_line(cg, "for (;;) {");
-        cg->indent++;
-        emit_line(cg, "const char *k;");
-        emit_line(cg, "long long kn;");
-        emit_line(cg, "if (!sl_jd_key(p, &k, &kn)) return false;");
-        /* The first occurrence of a key counts and a repeat is skipped,
-         * as the tree decoder's field lookup finds the first. */
-        for (int i = 0; i < sd->nfields; i++) {
-            const char *fn = sd->fields[i];
-            emit_line(cg,
-                      "%sif (!seen%d && kn == %d && !memcmp(k, \"%s\", %d)) {",
-                      i ? "} else " : "", i, (int)strlen(fn), fn,
-                      (int)strlen(fn));
-            cg->indent++;
-            emit_line(cg, "if (!%s(p, &f%d)) return false;",
-                      json_fast_fn(cg, sd->ftypes[i]), i);
-            emit_line(cg, "seen%d = true;", i);
-            cg->indent--;
-        }
         if (sd->nfields) {
-            emit_line(cg, "} else if (!sl_jd_skip(p)) {");
+            /* nx: the field expected next. Keys nearly always arrive in
+             * declaration order, so that one is tried first as a literal
+             * (sl_jd_key_is); anything else is scanned and compared
+             * against every field. The first occurrence of a key counts
+             * and a repeat is skipped, as the tree decoder's field lookup
+             * finds the first. */
+            emit_line(cg, "int nx = 0;");
+            emit_line(cg, "for (;;) {");
             cg->indent++;
-            emit_line(cg, "return false;");
+            emit_line(cg, "int hit = -1;");
+            emit_line(cg, "int r = 0;");
+            emit_line(cg, "switch (nx) {");
+            for (int i = 0; i < sd->nfields; i++) {
+                const char *fn = sd->fields[i];
+                emit_line(cg, "case %d: r = sl_jd_key_is(p, \"\\\"%s\\\"\", %d); break;",
+                          i, fn, (int)strlen(fn) + 2);
+            }
+            emit_line(cg, "default: break;");
+            emit_line(cg, "}");
+            emit_line(cg, "if (r < 0) return false;");
+            emit_line(cg, "if (r > 0) {");
+            cg->indent++;
+            emit_line(cg, "hit = nx;");
+            cg->indent--;
+            emit_line(cg, "} else {");
+            cg->indent++;
+            emit_line(cg, "const char *k;");
+            emit_line(cg, "long long kn;");
+            emit_line(cg, "if (!sl_jd_key(p, &k, &kn)) return false;");
+            for (int i = 0; i < sd->nfields; i++) {
+                const char *fn = sd->fields[i];
+                emit_line(cg, "%sif (kn == %d && !memcmp(k, \"%s\", %d)) hit = %d;",
+                          i ? "else " : "", (int)strlen(fn), fn,
+                          (int)strlen(fn), i);
+            }
+            cg->indent--;
+            emit_line(cg, "}");
+            emit_line(cg, "switch (hit) {");
+            for (int i = 0; i < sd->nfields; i++) {
+                emit_line(cg, "case %d:", i);
+                cg->indent++;
+                emit_line(cg, "if (seen%d) {", i);
+                cg->indent++;
+                emit_line(cg, "if (!sl_jd_skip(p)) return false;");
+                cg->indent--;
+                emit_line(cg, "} else {");
+                cg->indent++;
+                emit_line(cg, "if (!%s(p, &f%d)) return false;",
+                          json_fast_fn(cg, sd->ftypes[i]), i);
+                emit_line(cg, "seen%d = true;", i);
+                cg->indent--;
+                emit_line(cg, "}");
+                emit_line(cg, "nx = %d;", i + 1);
+                emit_line(cg, "break;");
+                cg->indent--;
+            }
+            emit_line(cg, "default:");
+            cg->indent++;
+            emit_line(cg, "if (!sl_jd_skip(p)) return false;");
+            emit_line(cg, "break;");
             cg->indent--;
             emit_line(cg, "}");
         } else {
+            emit_line(cg, "for (;;) {");
+            cg->indent++;
+            emit_line(cg, "const char *k;");
+            emit_line(cg, "long long kn;");
+            emit_line(cg, "if (!sl_jd_key(p, &k, &kn)) return false;");
+            emit_line(cg, "(void)k;");
             emit_line(cg, "(void)kn;");
             emit_line(cg, "if (!sl_jd_skip(p)) return false;");
         }

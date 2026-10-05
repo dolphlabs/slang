@@ -275,6 +275,236 @@ fn pool() {
     println("ok pool");
 }
 
+// ---- the pool's waiters: order, deadlines, close ----------------------
+
+fn pool_of(n: int) -> pg.Pool {
+    let pr = pg.new_pool(url(), n);
+    guard let p = pr else let e = err_of(pr) {
+        die("new_pool: " + e);
+        panic("unreachable");
+    }
+    return p;
+}
+
+fn take(p: pg.Pool) -> pg.Conn {
+    let ar = pg.acquire(p, soon());
+    guard let c = ar else let e = err_of(ar) {
+        die("acquire: " + e);
+        panic("unreachable");
+    }
+    return c;
+}
+
+fn in_line(p: pg.Pool, id: int, order: chan[int]) -> int {
+    let c = take(p);
+    chan_send(order, id);
+    time.sleep(5000000);
+    pg.release(p, c);
+    return id;
+}
+
+fn short_wait(p: pg.Pool) -> str {
+    let ar = pg.acquire(p, until_of(time.mono() + 100000000));
+    guard let c = ar else let e = err_of(ar) {
+        return e;
+    }
+    pg.release(p, c);
+    return "got a connection";
+}
+
+// Waiters are served in arrival order, a release wakes the next one at
+// once, a deadline ends a wait, and closing the pool ends every wait.
+// The pool used to poll every 2ms: whichever waiter polled first after
+// a release won, so with eight waiters the order was a lottery.
+fn pool_waiters() {
+    let p = pool_of(1);
+    let held = take(p);
+    let order: chan[int] = make_chan(16);
+    let hs: [join[int]] = [];
+    let i = 0;
+    while i < 8 {
+        push(hs, spawn in_line(p, i, order));
+        time.sleep(20000000);   // each is parked before the next arrives
+        i = i + 1;
+    }
+    pg.release(p, held);
+    let got = "";
+    i = 0;
+    while i < 8 {
+        got = got + to_str(chan_recv(order) ?? -1) + " ";
+        i = i + 1;
+    }
+    for h in hs {
+        let r = join_wait(h);
+        guard let _v = r else let e = err_of(r) {
+            die(e);
+            return;
+        }
+    }
+    if got != "0 1 2 3 4 5 6 7 " {
+        die("pool waiters: served in order " + got);
+    }
+
+    // a deadline ends the wait, and the pool is still whole after it
+    held = take(p);
+    let t0 = time.mono();
+    let e = short_wait(p);
+    let took = time.mono() - t0;
+    if e != "timeout" || took < 100000000 || took > 1000000000 {
+        die("pool waiters: deadline gave '" + e + "' after " +
+            to_str(took / 1000000) + "ms");
+    }
+    pg.release(p, held);
+    held = take(p);
+    if p.open != 1 || p.dials != 1 {
+        die("pool waiters: open " + to_str(p.open) + " dials " +
+            to_str(p.dials) + " after a timeout");
+    }
+
+    // closing the pool fails a waiting acquire
+    let w = spawn short_wait(p);
+    time.sleep(20000000);
+    pg.pool_close(p);
+    let wr = join_wait(w);
+    guard let we = wr else let je = err_of(wr) {
+        die(je);
+        return;
+    }
+    if we != "pool is closed" {
+        die("pool waiters: after close, '" + we + "'");
+    }
+    pg.release(p, held);
+    println("ok pool waiters");
+}
+
+// ---- prepared statements ----------------------------------------------
+
+fn conn_url(u: str) -> pg.Conn {
+    let cr = pg.connect(u, soon());
+    guard let c = cr else let e = err_of(cr) {
+        die("connect: " + e);
+        panic("unreachable");
+    }
+    return c;
+}
+
+// How many named statements the server holds for this session, and how
+// many of them are `sql`. The counting query is itself one of them.
+fn prepared(c: pg.Conn, sql: str) -> str {
+    let rows = q(c, "SELECT count(*), count(*) FILTER (WHERE statement = $1) " +
+                    "FROM pg_prepared_statements", [pg.arg_text(sql)]);
+    return to_str(pg.get_int(rows, 0, 0)) + "/" + to_str(pg.get_int(rows, 0, 1));
+}
+
+// query() prepares each SQL text once per connection and reuses it; the
+// cache is bounded, survives the server dropping or invalidating a
+// statement, and a failed first use leaves nothing behind. Before the
+// cache, every query was parsed and planned again: no named statement
+// ever existed.
+fn statements() {
+    let c = conn();
+    let sql = "SELECT $1::int8 + 1";
+    let i = 0;
+    while i < 5 {
+        if pg.get_int(q(c, sql, [pg.arg_int(i)]), 0, 0) != i + 1 {
+            die("statements: wrong result");
+        }
+        i = i + 1;
+    }
+    let got = prepared(c, sql);
+    if got != "2/1" {
+        die("statements: prepared " + got + ", want 2/1 (the query and " +
+            "the counting query, once each)");
+    }
+
+    // a schema change that alters the result type: re-prepared, retried
+    ex(c, "DROP TABLE IF EXISTS stmt_shape");
+    ex(c, "CREATE TABLE stmt_shape (a int)");
+    ex(c, "INSERT INTO stmt_shape VALUES (1)");
+    let shape = "SELECT * FROM stmt_shape";
+    q(c, shape, []);
+    ex(c, "ALTER TABLE stmt_shape ADD COLUMN b int");
+    let wide = q(c, shape, []);
+    if len(wide.columns) != 2 {
+        die("statements: after ALTER, " + to_str(len(wide.columns)) +
+            " columns");
+    }
+
+    // DEALLOCATE ALL drops every statement: the driver forgets them too,
+    // so a transaction's first query does not fail on a missing one
+    ex(c, "DEALLOCATE ALL");
+    ex(c, "BEGIN");
+    if pg.get_int(q(c, sql, [pg.arg_int(41)]), 0, 0) != 42 {
+        die("statements: after DEALLOCATE ALL");
+    }
+    ex(c, "COMMIT");
+
+    // dropped behind the driver's back (another statement's DEALLOCATE):
+    // outside a transaction, re-prepared and retried
+    let held = q(c, "SELECT name FROM pg_prepared_statements WHERE statement = $1",
+                 [pg.arg_text(sql)]);
+    ex(c, "DEALLOCATE " + pg.get_text(held, 0, 0));
+    if pg.get_int(q(c, sql, [pg.arg_int(1)]), 0, 0) != 2 {
+        die("statements: after DEALLOCATE of one");
+    }
+
+    // inside a transaction the stale statement's error is returned, not
+    // retried (the transaction is already aborted); after ROLLBACK the
+    // statement is prepared afresh
+    ex(c, "BEGIN");
+    q(c, shape, []);
+    ex(c, "ALTER TABLE stmt_shape ADD COLUMN c int");
+    ex(c, "SAVEPOINT s");
+    let e = query_error(c, shape, []);
+    if pg.sqlstate(e) != "0A000" {
+        die("statements: in a transaction, '" + e + "'");
+    }
+    ex(c, "ROLLBACK");
+    if len(q(c, shape, []).columns) != 2 {
+        die("statements: after ROLLBACK");
+    }
+
+    // a failed first use is not kept
+    let bad = "SELEC 1";
+    query_error(c, bad, []);
+    got = prepared(c, bad);
+    if !strings.has_suffix(got, "/0") {
+        die("statements: a failed parse left " + got);
+    }
+    ex(c, "DROP TABLE stmt_shape");
+    pg.close(c);
+
+    // bounded: capacity 2 never holds more than 2
+    let small = conn_url(url() + sep() + "statement_cache_capacity=2");
+    i = 0;
+    while i < 6 {
+        q(small, "SELECT " + to_str(i), []);
+        i = i + 1;
+    }
+    got = prepared(small, "");
+    if !strings.has_prefix(got, "2/") {
+        die("statements: capacity 2 holds " + got);
+    }
+    pg.close(small);
+
+    // capacity 0: nothing is prepared
+    let off = conn_url(url() + sep() + "statement_cache_capacity=0");
+    q(off, sql, [pg.arg_int(1)]);
+    got = prepared(off, sql);
+    if got != "0/0" {
+        die("statements: capacity 0 holds " + got);
+    }
+    pg.close(off);
+    println("ok statements");
+}
+
+fn sep() -> str {
+    if strings.contains(url(), "?") {
+        return "&";
+    }
+    return "?";
+}
+
 // ---- large results ----------------------------------------------------
 
 fn large() {
@@ -503,6 +733,8 @@ values();
 errors();
 cancel();
 pool();
+pool_waiters();
+statements();
 large();
 tls();
 copy();

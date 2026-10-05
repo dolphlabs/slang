@@ -273,6 +273,58 @@ the point reads in flight with it.
   deadlock`): an allocator deadlock reachable from `dev` (todo.md), and
   the owner-generation read in `sl_gc_alloc_owned`.
 
+  **Update (2026-10-05): the kick, measured alone on Linux, still
+  loses.** With stopped threads asleep (#314), trim outside the pause
+  (#315) and major pacing (#316), the kick alone (async-preempt every
+  running task after 50 us at the rendezvous, quantum test skipped while
+  a stop is requested) against `dev`, quote ABBA x3 in the Linux
+  container: 3,414 -> 3,317 req/s, p99 51 -> 73 ms, CPU even. Kicked
+  tasks are requeued behind others, so the requests they carried wait
+  longer. Time-to-safepoint (~0.5 ms a collection, mostly a worker
+  inside a whole json.decode) stays the largest fixed cost per
+  collection; the next try is a poll inside the generated decoders that
+  acks without giving up the worker, not a signal.
+
+  **Nursery ceiling raised (2026-10-05, owner's decision): 2 MB a
+  worker, at most 16 MB.** Linux quote ABBA x4 against `dev`: 3,616 ->
+  4,037 req/s, p99 43 -> 38 ms, CPU per request 973 -> 957 us, peak RSS
+  31.2 -> 36.6 MB. Against Go in the same container, ABBA x4: Go 3,775
+  req/s, slang 3,667 (last three rounds within 1%), p99 101 vs 43 ms,
+  CPU per request 1,442 vs 1,058 us, RSS 80 vs 33 MB. macOS quote: +2%
+  req/s, p99 even, CPU +4.7%, RSS 22.4 -> 27.6 MB.
+
+  **In-place decoder stops (parked, branch `perf/json-decode-poll`).**
+  Generated list decoders checked every 64 elements for a pending
+  collection and stopped where they were, the task's stack below its
+  last safepoint scanned conservatively (callee-saved registers spilled
+  by inline asm: `__builtin_unwind_init` spilled nothing under Apple
+  clang, and the verifier caught the list being decoded swept). Linux:
+  time-to-safepoint -90%, quote p99 61 -> 49 ms, +4% req/s; but a
+  collection mid-decode finds the partial result alive, and two of them
+  promote it: the decode probe promoted 104,352 objects instead of 12
+  and ran 14% slower. Not landed.
+
+  **Owner decision (taken above): nursery size.** Each collection pays that
+  fixed ~0.5 ms, so fewer collections help. Quote ABBA x3, Linux, fixed
+  nursery against the adaptive one (which tops out at 1 MB a worker, 4
+  MB here): 8 MB +7% req/s for peak RSS +7 MB (28.9 -> 35.9); 16 MB
+  +12.7% for +18.5 MB (25.3 -> 43.8). Go's RSS on the same run is ~80
+  MB. Not taken without the owner: memory is the product, and raising
+  the adaptive ceiling (sl_gc_nursery_set_max) to 2 MB a worker would
+  be the 8 MB row.
+
+  **Update (2026-10-05): the waiting half landed, after a Linux
+  measurement.** In a Linux container (x86_64, Docker on the dev Mac,
+  `perf`), the quote server spent 60% of its CPU in the stopped
+  threads' `sched_yield` loop and the kernel scheduling around it
+  (reschedule IPIs in a VM); macOS hid it. Stopped threads now spin ~256
+  pause instructions, then sleep on a condition variable that the
+  collector broadcasts when it lowers the stop or starts a chained
+  cycle. Quote ABBA x3, Linux: 1,086 -> 2,870 req/s, CPU per request
+  4,619 -> 1,166 us, p99 199 -> 54 ms, RSS 29.2 -> 27.3 MB. macOS:
+  3,528 -> 3,585 req/s, CPU per request 1,305 -> 863 us, p99 48.6 vs
+  49.5 ms. The kick and the allocation-entry yield stay unbuilt.
+
   **Update (2026-10-04): not needed for now.** After 1.10, 1.2 and 1.3
   the minors are fewer and their walk shorter, and minor time-to-safepoint
   on the quote server is about 0.6 ms per collection, 1 ms at worst,
@@ -373,14 +425,35 @@ the point reads in flight with it.
   run since the last minor holds only old values, because that minor
   promoted everything it held. Audit every place that hands a value to a
   parked task first: channel receive, `join`, `select`.
-- [ ] **1.7 `malloc_trim` outside the stop**, and only after a major that
+- [x] **1.7 `malloc_trim` outside the stop**, and only after a major that
   freed a lot. Decide it with §7c (macOS keeping freed pages).
+  Landed (2026-10-05), after a Linux profile: the major's tail was
+  0.75 ms, most of it this, and on the quote server a major came after
+  every minor. The trim now runs after the pause, at most every 100 ms.
+  Quote ABBA x3 in a Linux container: 2,619 -> 2,976 req/s, CPU per
+  request 1,261 -> 1,144 us, p99 63 -> 57 ms, peak RSS 21.8 -> 25.8 MB
+  (glibc keeps freed memory up to 100 ms longer; taken: the owner
+  accepted RSS for throughput here, and Go's is 75 MB). Trimming after
+  every major outside the pause was -14% req/s; every second, about the
+  same speed for +4.6 MB.
+
 - [ ] **1.8 Precise tracing for lists and maps of non-pointers.** The
   compiler knows the element type, so it tells the runtime: `[int]` and
   `[f64]` are not traced at all, and a value struct gets a pointer-offset
   map. This removes cause 7 and is needed before 2.1 can land without a
   tracing regression.
-- [ ] **1.9 Pace majors by old-generation growth** (cause 17).
+- [x] **1.9 Pace majors by old-generation growth** (cause 17).
+  **Landed (2026-10-05), measured on Linux.** A major now comes after
+  the live-paced threshold of promoted bytes, or every 16 minors. The
+  minor bound is what the earlier attempt lacked: with promotion alone,
+  dead promoted objects pin young pages (the collector does not move)
+  and peak RSS grew 7 MB. Linux quote ABBA (K = minors per major): 8
+  +4% at equal RSS, 16 +9% for +0.8 MB, 32 +10% for +1.6 MB; against
+  `dev` after 1.7 landed, 5 rounds, +2.6% req/s (4 of 5 rounds ahead),
+  CPU even, RSS 25.3 -> 26.3 MB. 4-worker decode probe, Linux: majors
+  94 -> 11, wall ~1,185 -> ~1,067 ms, faster in every round. macOS quote:
+  +1.6% req/s, p99 33.6 -> 31.7 ms, RSS +0.7 MB.
+  Earlier note, kept for the record:
   **Built and measured, parked (2026-10-04, branch
   `perf/gc-major-pacing`).** It removes every major on the decode probe
   (11 -> 0; 4-worker wall -17%, RSS 9.2 -> 6.0 MB), but on the quote
@@ -409,6 +482,18 @@ the point reads in flight with it.
   3.20 ms, RSS 40.8 -> 33.9 MB; decode probe 548 -> 348 ms (1 worker),
   351 -> 317 ms (4). Checked under `SLANG_GC_PAGE_DEBUG` with the path
   exercised (12,936 fallbacks, no violations).
+- [x] **1.11 Young pages hold a whole cycle** (found profiling the probe
+  after 2.6). 1.10 made the fallback cheap; this removes it. The 64-page
+  cap was sized for the fixed 512 KB nursery, and 1.2a's adaptive nursery
+  reaches 1 MB a worker, so a third of the 1-worker probe's allocations
+  still went to malloc and were freed one by one in the minor sweep. A
+  worker may now hold 512 pages (the 8 MB largest nursery: the trigger is
+  global) and keeps 128 empty ones across a sweep; keeping 64 re-allocated
+  ~40 aligned pages a cycle and doubled peak RSS on macOS. ABBA x4,
+  4,000 decodes: 1 worker 2,356 -> 1,753 ms, peak RSS 10.3 -> 5.7 MB; 4
+  workers 4,983 -> 4,170 ms, 19.2 -> 16.8 MB. The quote server is
+  unchanged: it falls back only while warming up and holds ~50 pages a
+  worker after, under both caps.
 
 **Exit gate:** the 4-worker probe runs at least 3x faster than 1 worker
 (1.0x today), and the local quote server's CPU per request is within 1.3x
@@ -461,22 +546,55 @@ of its 1-worker number.
   Single-task decode probe, ABBA, 5 rounds of 20,000 decodes: 11,812 ->
   11,011 ms (-6.8%), with no overlap between the two sets of runs.
 
+- [x] **2.7 Struct decoders try the expected key first** (found
+  profiling the quote server after 1.11: `sl_jd_key` was the hottest
+  runtime function). Keys nearly always arrive in declaration order, so
+  the generated decoder tries the next field as a literal (`"sku"` and
+  its colon, one memcmp) and only on a miss scans the key and compares
+  it with every field. `tests/json_key_order` pins out-of-order,
+  duplicate, escaped and prefix keys; old and new print the same.
+  Decode probe ABBA x5: 4,035 -> 3,312 ms (faster in every round); quote
+  server ABBA x3: 3,904 -> 4,237 req/s, CPU per request 1,219 -> 1,155
+  us, p99 and RSS unchanged.
+
 **Exit gate:** single-thread CPU per quote request at or below Go's
 (about 0.56 ms on the CCX33), measured on the same host as Go.
 
 ## Phase 3: the `pg` driver
 
-- [ ] **3.1 FIFO wait queue in the pool.** Waiters park and are woken on
+- [x] **3.1 FIFO wait queue in the pool.** Waiters park and are woken on
   release, so the 2 ms poll goes away. Include a fairness test. Measure on
   point-512 p99.
+  Landed: a release hands its connection to the oldest waiter, a freed
+  slot goes to the oldest waiter to dial, and one reaper task per pool
+  (alive only while tasks wait) times waiters out; `select` has no
+  timeout arm. Local point, 512 clients on a 64-connection pool, Postgres
+  in Docker, ABBA x3: p99 369 -> 116 ms, p99.9 563 -> 154 ms, 6,187 ->
+  7,099 req/s, CPU per request 288 -> 229 us; p50 57 -> 70 ms (everyone
+  waits about equally now). Peak RSS 19.3 -> 24.7 MB, all of it the
+  adaptive nursery (1.2a) growing with the higher allocation rate: with
+  `SLANG_GC_NURSERY_KB=512` RSS is 15.9 vs 16.1 MB and p99 still 420 ->
+  216 ms. Revisit with 1.9 if the CCX33 run shows the memory matters.
 - [ ] **3.2 Probe only connections idle for more than 1 s, outside the
   lock**, as pgx does.
+  Built, parked on branch `perf/pg-probe-idle`: neutral on the laptop
+  (CPU per request 153.5 vs 153.3 us at 64 clients, 226 vs 226 at 512;
+  one saved ~1 us syscall). Re-measure on the CCX33 before landing.
 - [ ] **3.3 Build each query message with one builder.**
 - [ ] **3.4 Per-connection prepared-statement cache** (decided 2026-10-04:
   reverses the driver's "deliberately no named prepared statements"; update
   that comment). Bounded LRU per connection. On error `0A000` ("cached plan
   must not change result type"), drop the statement and retry once.
   Statements are closed when a connection is closed or evicted.
+  Landed: `query` keeps the 256 most recent statements per connection
+  (`statement_cache_capacity` in the url, 0 off); a first use sends a
+  named Parse in the same round trip; evicted statements and failed
+  first uses are closed by a Close sent ahead of the next query.
+  `0A000` and `26000` re-prepare and retry once, outside a transaction
+  only; `DEALLOCATE ALL` / `DISCARD ALL` empty the cache. Local point,
+  64 clients, ABBA x3: Postgres CPU per request 502 -> 206 us, 7,556 ->
+  9,249 req/s, p99 22.9 -> 14.3 ms; slang CPU 157 -> 155 us. At 512
+  clients Postgres CPU 472 -> 223 us.
 - [ ] **3.5 Binary result format** for the types the driver decodes
   (`int2/4/8`, `bool`, `float4/8`, `bytea`; text stays text). In scope as
   of 2026-10-04 (`note.txt` had it out). Every width and length from the

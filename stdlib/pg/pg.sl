@@ -23,8 +23,12 @@ import "encoding";
 // rather than methods, for the reason httpc gives: a method cannot yet
 // share a name with a package function.
 //
-// WHAT THIS DOES NOT DO, deliberately: no named prepared statements, no
-// binary result format, no Kerberos/GSSAPI, no SCRAM channel binding
+// Statements are prepared once per connection: query() keeps each SQL
+// text's named statement in a bounded cache (statement_cache_capacity in
+// the url, default 256; 0 turns it off), so Postgres parses and plans it
+// once instead of on every call.
+//
+// WHAT THIS DOES NOT DO, deliberately: no binary result format, no Kerberos/GSSAPI, no SCRAM channel binding
 // (SCRAM-SHA-256-PLUS), no COPY in binary format.
 
 // ---- limits ----------------------------------------------------------
@@ -38,7 +42,16 @@ let MAX_RESULT = 268435456;       // all cells of one result, 256 MiB
 let MAX_SCRAM_ITERATIONS = 1000000;
 let READ_CHUNK = 65536;
 let MAX_READ = 4194304;
-let POOL_POLL = 2000000;          // 2ms between checks for a free conn
+let POOL_REAP = 2000000;          // 2ms between deadline checks of waiters
+let STMT_CACHE = 256;             // prepared statements kept per connection
+let MAX_STMT_CACHE = 65536;
+// What a waiting pool acquire was granted. Each waiter gets exactly one,
+// under the pool lock, followed by exactly one send on its wake channel.
+let GOT_NONE = 0;
+let GOT_CONN = 1;       // a released connection, in Waiter.c
+let GOT_DIAL = 2;       // a free slot, already counted in Pool.open: dial it
+let GOT_TIMEOUT = 3;
+let GOT_CLOSED = 4;
 let MAX_NOTIFICATIONS = 10000;    // queued, unread, per connection
 let COPY_CHUNK = 1048576;         // CopyData message size when sending
 
@@ -59,6 +72,9 @@ pub gc struct Config {
     // usually signed by the provider's own CA.
     ca_path: str,
     application_name: str,
+    // Named statements each connection keeps prepared; 0 prepares none
+    // (for a pooler that cannot carry them across server connections).
+    statement_cache: int,
     // The TLS context, created on first use and shared by every
     // connection made from this Config -- loading a trust store per
     // connection costs milliseconds.
@@ -111,9 +127,24 @@ pub gc struct Conn {
     // dropped because MAX_NOTIFICATIONS went unread.
     notes: [Notification],
     notes_dropped: int,
+    // Prepared statements by SQL text.
+    stmts: map[str]Stmt,
+    stmt_next: int,
+    stmt_tick: int,
+    // Statements to close, sent ahead of the next query's messages:
+    // evicted ones, and ones whose first use failed.
+    stmt_close: [int],
 }
 
 // A NOTIFY delivered to a connection that LISTENs on its channel.
+// A statement prepared on one connection: named "s<n>", and when it was
+// last used, for evicting the least recent.
+gc struct Stmt {
+    n: int,
+    name: str,
+    used: int,
+}
+
 pub gc struct Notification {
     pid: int,           // the backend that sent it
     channel: str,
@@ -413,6 +444,7 @@ pub fn parse_url(url: str) -> result[Config, str] {
     let sslmode = "";
     let ca_path = "";
     let app = "";
+    let stmt_cache = STMT_CACHE;
     let qurl = "?" + query;
     for k in encoding.query_keys(qurl) {
         let v = encoding.query_get(qurl, k) ?? "";
@@ -444,6 +476,16 @@ pub fn parse_url(url: str) -> result[Config, str] {
             ca_path = v;
         } else if k == "application_name" {
             app = v;
+        } else if k == "statement_cache_capacity" {
+            let sr = to_int(v);
+            guard let n = sr else let e = err_of(sr) {
+                return err("bad statement_cache_capacity in url: " + e);
+            }
+            if n < 0 || n > MAX_STMT_CACHE {
+                return err("statement_cache_capacity out of range: " + v +
+                           " (0 to " + to_str(MAX_STMT_CACHE) + ")");
+            }
+            stmt_cache = n;
         } else {
             return err("unsupported url parameter: " + k);
         }
@@ -473,7 +515,8 @@ pub fn parse_url(url: str) -> result[Config, str] {
     return ok(Config { host: host, port: port, user: user,
                        password: password, database: database,
                        sslmode: sslmode, ca_path: ca_path,
-                       application_name: app, tls_ctx: nullptr });
+                       application_name: app, statement_cache: stmt_cache,
+                       tls_ctx: nullptr });
 }
 
 // ---- transport -------------------------------------------------------
@@ -1030,12 +1073,15 @@ pub fn connect_config(cfg: Config, deadline: until) -> result[Conn, str] {
     }
     let params: map[str]str = {};
     let no_notes: [Notification] = [];
+    let stmts: map[str]Stmt = {};
+    let stmt_close: [int] = [];
     let c = Conn { cfg: cfg, t: t, buf: b"", pos: 0, gen: 0, mtyp: 0,
                    mstart: 0, mlen: 0, lock: make_mutex(),
                    broken: false, why: "", closed: false, pid: 0, secret: 0,
                    status: 0, params: params, in_pool: false, mode: 0,
                    stream_id: 0, server_err: "", result_size: 0,
-                   notes: no_notes, notes_dropped: 0 };
+                   notes: no_notes, notes_dropped: 0, stmts: stmts,
+                   stmt_next: 0, stmt_tick: 0, stmt_close: stmt_close };
     let hr = handshake(c, deadline);
     guard let h = hr else let e = err_of(hr) {
         tr_close(t);
@@ -1334,6 +1380,9 @@ fn step(c: Conn, rows: Rows, stop: int, synced: bool, deadline: until)
             let cur = cur_of(body);
             rows.tag = get_cstr(cur);
             rows.affected = tag_count(rows.tag);
+            if rows.tag == "DEALLOCATE ALL" || rows.tag == "DISCARD ALL" {
+                forget_stmts(c);
+            }
         } else if t == 69 {         // 'E' ErrorResponse
             keep_err(c, format_error(body));
         } else if t == 90 {         // 'Z' ReadyForQuery
@@ -1370,10 +1419,11 @@ fn step(c: Conn, rows: Rows, stop: int, synced: bool, deadline: until)
             let k = get_cstr(cur);
             let v = get_cstr(cur);
             c.params[k] = v;
-        } else if t == 49 || t == 50 || t == 73 || t == 78 || t == 99 ||
-                  t == 116 {
-            // '1' ParseComplete, '2' BindComplete, 'I' EmptyQueryResponse,
-            // 'N' notice, 'c' CopyDone, 't' ParameterDescription.
+        } else if t == 49 || t == 50 || t == 51 || t == 73 || t == 78 ||
+                  t == 99 || t == 116 {
+            // '1' ParseComplete, '2' BindComplete, '3' CloseComplete,
+            // 'I' EmptyQueryResponse, 'N' notice, 'c' CopyDone,
+            // 't' ParameterDescription.
         } else {
             return err("protocol error: unexpected message " + to_str(t));
         }
@@ -1425,6 +1475,12 @@ fn fail(c: Conn, e: str, status_before: int) -> str {
 }
 
 fn extended(sql: str, args: [Arg]) -> bytes {
+    return extended_named("", true, sql, args);
+}
+
+// Parse (unless the named statement is already prepared), Bind, Describe,
+// Execute, Sync. "" is the unnamed statement, parsed every time.
+fn extended_named(name: str, parse: bool, sql: str, args: [Arg]) -> bytes {
     let formats = be16(len(args));
     let values = be16(len(args));
     for a in args {
@@ -1439,12 +1495,115 @@ fn extended(sql: str, args: [Arg]) -> bytes {
             values = values + be32(len(a.data)) + a.data;
         }
     }
-    return msg(80, cstr("") + cstr(sql) + be16(0)) +            // Parse
-           msg(66, cstr("") + cstr("") + formats + values +     // Bind
+    let out = b"";
+    if parse {
+        out = msg(80, cstr(name) + cstr(sql) + be16(0));        // Parse
+    }
+    return out +
+           msg(66, cstr("") + cstr(name) + formats + values +   // Bind
                be16(0)) +                                       //   text results
            msg(68, b"P" + cstr("")) +                           // Describe portal
            msg(69, cstr("") + be32(0)) +                        // Execute, all rows
            msg(83, b"");                                        // Sync
+}
+
+// The server dropped every prepared statement of this session: forget
+// them, so none is used and fails -- inside a transaction that failure
+// would abort it, where no retry can help.
+fn forget_stmts(c: Conn) {
+    let no_stmts: map[str]Stmt = {};
+    let none_closing: [int] = [];
+    c.stmts = no_stmts;
+    c.stmt_close = none_closing;
+}
+
+fn stmt_name(n: int) -> str {
+    return "s" + to_str(n);
+}
+
+// Close messages for the statements queued to go. Closing one the server
+// never created is not an error, so a failed first use can queue its
+// name without knowing whether Parse got that far.
+fn take_closes(c: Conn) -> bytes {
+    let out = b"";
+    for n in c.stmt_close {
+        out = out + msg(67, b"S" + cstr(stmt_name(n)));         // Close
+    }
+    if len(c.stmt_close) > 0 {
+        let none_left: [int] = [];
+        c.stmt_close = none_left;
+    }
+    return out;
+}
+
+// Forgets sql's statement and queues it to be closed.
+fn drop_stmt(c: Conn, sql: str) {
+    if has(c.stmts, sql) {
+        push(c.stmt_close, c.stmts[sql].n);
+        del(c.stmts, sql);
+    }
+}
+
+// Whether a cached statement's failure means the statement, not the
+// query, went bad: the server dropped it (DISCARD ALL, DEALLOCATE), or a
+// schema change altered what it returns.
+fn stale_stmt(e: str) -> bool {
+    let st = sqlstate(e);
+    return st == "26000" || st == "0A000";
+}
+
+// One extended-protocol exchange for query(). With the cache on, sql runs
+// as a named statement, prepared in the same round trip on first use.
+fn query_once(c: Conn, sql: str, args: [Arg], before: int, deadline: until)
+              -> result[Rows, str] {
+    let rows = empty_rows();
+    let out = take_closes(c);
+    let cached = false;
+    let fresh = false;
+    if c.cfg.statement_cache > 0 {
+        c.stmt_tick = c.stmt_tick + 1;
+        let st = Stmt { n: 0, name: "", used: 0 };
+        if has(c.stmts, sql) {
+            st = c.stmts[sql];
+            cached = true;
+        } else {
+            if len(c.stmts) >= c.cfg.statement_cache {
+                let oldest = "";
+                let at = -1;
+                for k, v in c.stmts {
+                    if at < 0 || v.used < at {
+                        at = v.used;
+                        oldest = k;
+                    }
+                }
+                drop_stmt(c, oldest);
+                out = take_closes(c) + out;
+            }
+            st = Stmt { n: c.stmt_next, name: stmt_name(c.stmt_next), used: 0 };
+            c.stmt_next = c.stmt_next + 1;
+            c.stmts[sql] = st;
+            fresh = true;
+        }
+        st.used = c.stmt_tick;
+        out = out + extended_named(st.name, fresh, sql, args);
+    } else {
+        out = out + extended(sql, args);
+    }
+    let br = begin(c, out, deadline);
+    guard let b = br else let e = err_of(br) {
+        if fresh {
+            drop_stmt(c, sql);
+        }
+        return err(fail(c, e, before));
+    }
+    let rr = to_ready(c, rows, true, deadline);
+    guard let r = rr else let e = err_of(rr) {
+        if fresh || (cached && stale_stmt(e)) {
+            drop_stmt(c, sql);
+        }
+        return err(fail(c, e, before));
+    }
+    return ok(rows);
 }
 
 fn check_args(args: [Arg]) -> str {
@@ -1473,18 +1632,18 @@ pub fn query(c: Conn, sql: str, args: [Arg], deadline: until)
         return err(ae);
     }
     let before = c.status;
-    let rows = empty_rows();
-    let br = begin(c, extended(sql, args), deadline);
-    guard let b = br else let e = err_of(br) {
-        let fe = fail(c, e, before);
+    let r = query_once(c, sql, args, before, deadline);
+    // A cached statement the server no longer has, or whose result type
+    // changed, is re-prepared and the query run once more -- but only
+    // outside a transaction: inside one, the error has already aborted
+    // it, and a retry would only fail with 25P02.
+    guard let rows = r else let e = err_of(r) {
+        if before == 73 && usable(c) && c.status == 73 && stale_stmt(e) &&
+           c.cfg.statement_cache > 0 {
+            r = query_once(c, sql, args, before, deadline);
+        }
         mutex_unlock(c.lock);
-        return err(fe);
-    }
-    let rr = to_ready(c, rows, true, deadline);
-    guard let r = rr else let e = err_of(rr) {
-        let fe = fail(c, e, before);
-        mutex_unlock(c.lock);
-        return err(fe);
+        return r;
     }
     mutex_unlock(c.lock);
     return ok(rows);
@@ -2156,6 +2315,14 @@ gc struct Idle {
     since: duration,
 }
 
+// A task parked in acquire, in arrival order in Pool.waiters.
+gc struct Waiter {
+    wake: chan[int],
+    deadline: until,
+    got: int,
+    c: opt[Conn],
+}
+
 // A bounded set of connections to one database, shared by any number of
 // tasks.
 pub gc struct Pool {
@@ -2170,6 +2337,22 @@ pub gc struct Pool {
     open: int,
     lock: mutex,
     closed: bool,
+    // Tasks waiting for a connection, oldest first from waiters[whead].
+    // A release hands its connection straight to the oldest, so a
+    // waiter is served in order and wakes once, instead of every waiter
+    // polling and the luckiest winning: at 512 tasks on 64 connections
+    // the poll was a lottery, and the losers' wait was the p99.
+    waiters: [Waiter],
+    whead: int,
+    // Waiters done with, for the next wait to reuse. A wait lasts as
+    // long as the queue ahead of it -- long enough for its Waiter and
+    // channel to be promoted -- so a fresh pair per wait was old garbage
+    // at the release rate: 3.8 MB more RSS at 512 tasks on 64
+    // connections. Never more than the most tasks that waited at once.
+    spare: [Waiter],
+    // A reaper task is running: it times waiters out at their deadlines
+    // and exits when none are left.
+    reaping: bool,
     // Connections dialled, and acquisitions served by an idle one.
     dials: int,
     reuses: int,
@@ -2185,69 +2368,194 @@ pub fn new_pool(url: str, max_open: int) -> result[Pool, str] {
         return err("max_open must be at least 1");
     }
     let idle: [Idle] = [];
+    let waiters: [Waiter] = [];
+    let spare: [Waiter] = [];
     return ok(Pool { cfg: cfg, max_open: max_open, idle_timeout: 300000000000,
                      idle: idle, open: 0, lock: make_mutex(), closed: false,
+                     waiters: waiters, whead: 0, spare: spare, reaping: false,
                      dials: 0, reuses: 0 });
+}
+
+// A waiter for this wait: a spare one if any, its channel empty (its one
+// send was received before it was put back). Caller holds p.lock.
+fn waiter(p: Pool, deadline: until) -> Waiter {
+    if len(p.spare) > 0 {
+        let w = pop(p.spare);
+        w.deadline = deadline;
+        w.got = GOT_NONE;
+        return w;
+    }
+    let nothing: opt[Conn] = none;
+    return Waiter { wake: make_chan(1), deadline: deadline, got: GOT_NONE,
+                    c: nothing };
+}
+
+// The oldest waiter, removed from the queue. Caller holds p.lock and has
+// checked p.whead < len(p.waiters).
+fn pop_waiter(p: Pool) -> Waiter {
+    let w = p.waiters[p.whead];
+    p.whead = p.whead + 1;
+    if p.whead == len(p.waiters) {
+        let none_waiting: [Waiter] = [];
+        p.waiters = none_waiting;
+        p.whead = 0;
+    } else if p.whead >= 64 && p.whead * 2 >= len(p.waiters) {
+        // Under steady contention the queue may never empty: drop the
+        // served prefix once it is half the list, so it stays bounded
+        // by the waiters actually waiting.
+        p.waiters = p.waiters[p.whead..];
+        p.whead = 0;
+    }
+    return w;
+}
+
+// Grants w its outcome and wakes it. Caller holds p.lock; the wake
+// channel has room for this one send, so it never parks.
+fn grant(w: Waiter, got: int) {
+    w.got = got;
+    chan_send(w.wake, 1);
+}
+
+// A slot was freed (a connection closed, or a dial failed): if a task is
+// waiting, the slot is its to dial. Caller holds p.lock.
+fn pass_slot(p: Pool) {
+    if p.whead < len(p.waiters) && p.open < p.max_open {
+        p.open = p.open + 1;
+        p.dials = p.dials + 1;
+        grant(pop_waiter(p), GOT_DIAL);
+    }
+}
+
+// Dials the slot the caller has already counted in p.open.
+fn dial(p: Pool, deadline: until) -> result[Conn, str] {
+    let cr = connect_config(p.cfg, deadline);
+    guard let c = cr else let e = err_of(cr) {
+        mutex_lock(p.lock);
+        p.open = p.open - 1;
+        pass_slot(p);
+        mutex_unlock(p.lock);
+        return err(e);
+    }
+    return ok(c);
+}
+
+// Times waiters out at their deadlines while any are waiting. One task
+// per pool, started by the first waiter and gone once the queue empties:
+// select has no timeout arm, and a timer task per waiter would leave one
+// sleeping until every served waiter's deadline.
+fn reap(p: Pool) {
+    while true {
+        time.sleep(POOL_REAP);
+        mutex_lock(p.lock);
+        let expired = 0;
+        let i = p.whead;
+        while i < len(p.waiters) {
+            if until_hit(p.waiters[i].deadline) {
+                expired = expired + 1;
+            }
+            i = i + 1;
+        }
+        if expired > 0 {
+            let keep: [Waiter] = [];
+            i = p.whead;
+            while i < len(p.waiters) {
+                let w = p.waiters[i];
+                if until_hit(w.deadline) {
+                    grant(w, GOT_TIMEOUT);
+                } else {
+                    push(keep, w);
+                }
+                i = i + 1;
+            }
+            p.waiters = keep;
+            p.whead = 0;
+        }
+        if p.whead == len(p.waiters) {
+            p.reaping = false;
+            mutex_unlock(p.lock);
+            return;
+        }
+        mutex_unlock(p.lock);
+    }
 }
 
 // A connection for the caller's exclusive use, until release(). Prefer
 // pool_query / pool_exec, which cannot forget to release; acquire is for
 // a transaction, which needs several statements on one connection.
 pub fn acquire(p: Pool, deadline: until) -> result[Conn, str] {
-    while true {
-        mutex_lock(p.lock);
-        if p.closed {
-            mutex_unlock(p.lock);
-            return err("pool is closed");
-        }
-        let now = time.mono();
-        while len(p.idle) > 0 {
-            let it = p.idle[len(p.idle) - 1];
-            p.idle = p.idle[..len(p.idle) - 1];
-            // Probed before reuse: the server closes idle sessions on
-            // timers of its own (idle_session_timeout, a proxy's), and a
-            // query written onto a closed connection fails in a way that
-            // cannot be told from the query itself failing.
-            let alive = net.idle_alive(it.c.t.fd);
-            if it.c.t.ssl != nullptr {
-                alive = net.tls_idle_alive(it.c.t.ssl);
-            }
-            if now - it.since > p.idle_timeout || !alive || !usable(it.c) {
-                p.open = p.open - 1;
-                close(it.c);
-                continue;
-            }
-            p.reuses = p.reuses + 1;
-            it.c.in_pool = false;
-            mutex_unlock(p.lock);
-            return ok(it.c);
-        }
-        if p.open < p.max_open {
-            p.open = p.open + 1;
-            p.dials = p.dials + 1;
-            mutex_unlock(p.lock);
-            let cr = connect_config(p.cfg, deadline);
-            guard let c = cr else let e = err_of(cr) {
-                mutex_lock(p.lock);
-                p.open = p.open - 1;
-                mutex_unlock(p.lock);
-                return err(e);
-            }
-            return ok(c);
-        }
+    mutex_lock(p.lock);
+    if p.closed {
         mutex_unlock(p.lock);
-        if until_hit(deadline) {
-            return err("timeout");
-        }
-        time.sleep(POOL_POLL);
+        return err("pool is closed");
     }
-    return err("unreachable");
+    let now = time.mono();
+    while len(p.idle) > 0 {
+        let it = pop(p.idle);
+        // Probed before reuse: the server closes idle sessions on
+        // timers of its own (idle_session_timeout, a proxy's), and a
+        // query written onto a closed connection fails in a way that
+        // cannot be told from the query itself failing.
+        let alive = net.idle_alive(it.c.t.fd);
+        if it.c.t.ssl != nullptr {
+            alive = net.tls_idle_alive(it.c.t.ssl);
+        }
+        if now - it.since > p.idle_timeout || !alive || !usable(it.c) {
+            p.open = p.open - 1;
+            close(it.c);
+            continue;
+        }
+        p.reuses = p.reuses + 1;
+        it.c.in_pool = false;
+        mutex_unlock(p.lock);
+        return ok(it.c);
+    }
+    if p.open < p.max_open {
+        p.open = p.open + 1;
+        p.dials = p.dials + 1;
+        mutex_unlock(p.lock);
+        return dial(p, deadline);
+    }
+    if until_hit(deadline) {
+        mutex_unlock(p.lock);
+        return err("timeout");
+    }
+    let w = waiter(p, deadline);
+    push(p.waiters, w);
+    if !p.reaping {
+        p.reaping = true;
+        spawn reap(p);
+    }
+    mutex_unlock(p.lock);
+    // Exactly one grant is sent; it was made under the lock before the
+    // send, so w is settled once this returns.
+    chan_recv(w.wake);
+    let got = w.got;
+    let granted = w.c;
+    let nothing: opt[Conn] = none;
+    w.c = nothing;
+    mutex_lock(p.lock);
+    push(p.spare, w);
+    mutex_unlock(p.lock);
+    if got == GOT_CONN {
+        guard let c = granted else {
+            return err("pool: granted no connection");
+        }
+        return ok(c);
+    }
+    if got == GOT_DIAL {
+        return dial(p, deadline);
+    }
+    if got == GOT_CLOSED {
+        return err("pool is closed");
+    }
+    return err("timeout");
 }
 
-// Returns a connection to the pool. One that is broken, closed, or still
-// inside a transaction is closed instead: handing an open transaction to
-// the next caller would run its statements inside someone else's
-// uncommitted work.
+// Returns a connection to the pool: to the oldest waiting task if there
+// is one, else to the idle list. One that is broken, closed, or still
+// inside a transaction is closed instead, and its slot passed on:
+// handing an open transaction to the next caller would run its
+// statements inside someone else's uncommitted work.
 pub fn release(p: Pool, c: Conn) {
     if c.in_pool {
         panic("pg.release: connection released twice");
@@ -2256,8 +2564,19 @@ pub fn release(p: Pool, c: Conn) {
     mutex_lock(p.lock);
     if p.closed || !reusable {
         p.open = p.open - 1;
+        if !p.closed {
+            pass_slot(p);
+        }
         mutex_unlock(p.lock);
         close(c);
+        return;
+    }
+    if p.whead < len(p.waiters) {
+        let w = pop_waiter(p);
+        w.c = some(c);
+        p.reuses = p.reuses + 1;
+        grant(w, GOT_CONN);
+        mutex_unlock(p.lock);
         return;
     }
     c.in_pool = true;
@@ -2286,8 +2605,9 @@ pub fn pool_exec(p: Pool, sql: str, deadline: until) -> result[int, str] {
     return r;
 }
 
-// Closes every idle connection. Connections in use are closed as they
-// are released; acquire fails from now on.
+// Closes every idle connection and fails every waiting acquire.
+// Connections in use are closed as they are released; acquire fails from
+// now on.
 pub fn pool_close(p: Pool) {
     mutex_lock(p.lock);
     p.closed = true;
@@ -2297,5 +2617,8 @@ pub fn pool_close(p: Pool) {
     }
     let none_idle: [Idle] = [];
     p.idle = none_idle;
+    while p.whead < len(p.waiters) {
+        grant(pop_waiter(p), GOT_CLOSED);
+    }
     mutex_unlock(p.lock);
 }

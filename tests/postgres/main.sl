@@ -235,10 +235,10 @@ fn scenario_query() {
         die("query: " + e);
         return;
     }
-    // Bind: portal "", statement "", 3 format codes (0 text, 0 text,
-    // 1 binary), 3 values: "5", NULL (-1), two raw bytes. Then 0 result
-    // format codes.
-    let want = b"\x00\x00" + be16(3) + be16(0) + be16(0) + be16(1) + be16(3) +
+    // Bind: portal "", statement "s0" (the connection's first prepared
+    // statement), 3 format codes (0 text, 0 text, 1 binary), 3 values:
+    // "5", NULL (-1), two raw bytes. Then 0 result format codes.
+    let want = b"\x00s0\x00" + be16(3) + be16(0) + be16(0) + be16(1) + be16(3) +
                be32(1) + b"5" + be32(-1) + be32(2) + b"\x00\x01" + be16(0);
     let bind = chan_recv(seen) ?? b"";
     if bind != want {
