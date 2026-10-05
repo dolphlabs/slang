@@ -147,3 +147,17 @@ fn test_quote_ident() {
     assert(quote_ident("jobs") == "\"jobs\"");
     assert(quote_ident("a\"; DROP TABLE t; --") == "\"a\"\"; DROP TABLE t; --\"");
 }
+
+fn test_statement_cache_capacity() {
+    assert(cfg_of("postgres://u@h/d").statement_cache == 256, "default");
+    assert(cfg_of("postgres://u@h/d?statement_cache_capacity=0").statement_cache == 0,
+           "0 turns it off");
+    assert(cfg_of("postgres://u@h/d?statement_cache_capacity=65536").statement_cache == 65536,
+           "the maximum");
+    let e = url_error("postgres://u@h/d?statement_cache_capacity=-1");
+    assert(e == "statement_cache_capacity out of range: -1 (0 to 65536)", e);
+    e = url_error("postgres://u@h/d?statement_cache_capacity=65537");
+    assert(e == "statement_cache_capacity out of range: 65537 (0 to 65536)", e);
+    e = url_error("postgres://u@h/d?statement_cache_capacity=lots");
+    assert(strings.has_prefix(e, "bad statement_cache_capacity in url: "), e);
+}

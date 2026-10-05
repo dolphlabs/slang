@@ -23,8 +23,12 @@ import "encoding";
 // rather than methods, for the reason httpc gives: a method cannot yet
 // share a name with a package function.
 //
-// WHAT THIS DOES NOT DO, deliberately: no named prepared statements, no
-// binary result format, no Kerberos/GSSAPI, no SCRAM channel binding
+// Statements are prepared once per connection: query() keeps each SQL
+// text's named statement in a bounded cache (statement_cache_capacity in
+// the url, default 256; 0 turns it off), so Postgres parses and plans it
+// once instead of on every call.
+//
+// WHAT THIS DOES NOT DO, deliberately: no binary result format, no Kerberos/GSSAPI, no SCRAM channel binding
 // (SCRAM-SHA-256-PLUS), no COPY in binary format.
 
 // ---- limits ----------------------------------------------------------
@@ -39,6 +43,8 @@ let MAX_SCRAM_ITERATIONS = 1000000;
 let READ_CHUNK = 65536;
 let MAX_READ = 4194304;
 let POOL_REAP = 2000000;          // 2ms between deadline checks of waiters
+let STMT_CACHE = 256;             // prepared statements kept per connection
+let MAX_STMT_CACHE = 65536;
 // What a waiting pool acquire was granted. Each waiter gets exactly one,
 // under the pool lock, followed by exactly one send on its wake channel.
 let GOT_NONE = 0;
@@ -66,6 +72,9 @@ pub gc struct Config {
     // usually signed by the provider's own CA.
     ca_path: str,
     application_name: str,
+    // Named statements each connection keeps prepared; 0 prepares none
+    // (for a pooler that cannot carry them across server connections).
+    statement_cache: int,
     // The TLS context, created on first use and shared by every
     // connection made from this Config -- loading a trust store per
     // connection costs milliseconds.
@@ -118,9 +127,24 @@ pub gc struct Conn {
     // dropped because MAX_NOTIFICATIONS went unread.
     notes: [Notification],
     notes_dropped: int,
+    // Prepared statements by SQL text.
+    stmts: map[str]Stmt,
+    stmt_next: int,
+    stmt_tick: int,
+    // Statements to close, sent ahead of the next query's messages:
+    // evicted ones, and ones whose first use failed.
+    stmt_close: [int],
 }
 
 // A NOTIFY delivered to a connection that LISTENs on its channel.
+// A statement prepared on one connection: named "s<n>", and when it was
+// last used, for evicting the least recent.
+gc struct Stmt {
+    n: int,
+    name: str,
+    used: int,
+}
+
 pub gc struct Notification {
     pid: int,           // the backend that sent it
     channel: str,
@@ -420,6 +444,7 @@ pub fn parse_url(url: str) -> result[Config, str] {
     let sslmode = "";
     let ca_path = "";
     let app = "";
+    let stmt_cache = STMT_CACHE;
     let qurl = "?" + query;
     for k in encoding.query_keys(qurl) {
         let v = encoding.query_get(qurl, k) ?? "";
@@ -451,6 +476,16 @@ pub fn parse_url(url: str) -> result[Config, str] {
             ca_path = v;
         } else if k == "application_name" {
             app = v;
+        } else if k == "statement_cache_capacity" {
+            let sr = to_int(v);
+            guard let n = sr else let e = err_of(sr) {
+                return err("bad statement_cache_capacity in url: " + e);
+            }
+            if n < 0 || n > MAX_STMT_CACHE {
+                return err("statement_cache_capacity out of range: " + v +
+                           " (0 to " + to_str(MAX_STMT_CACHE) + ")");
+            }
+            stmt_cache = n;
         } else {
             return err("unsupported url parameter: " + k);
         }
@@ -480,7 +515,8 @@ pub fn parse_url(url: str) -> result[Config, str] {
     return ok(Config { host: host, port: port, user: user,
                        password: password, database: database,
                        sslmode: sslmode, ca_path: ca_path,
-                       application_name: app, tls_ctx: nullptr });
+                       application_name: app, statement_cache: stmt_cache,
+                       tls_ctx: nullptr });
 }
 
 // ---- transport -------------------------------------------------------
@@ -1037,12 +1073,15 @@ pub fn connect_config(cfg: Config, deadline: until) -> result[Conn, str] {
     }
     let params: map[str]str = {};
     let no_notes: [Notification] = [];
+    let stmts: map[str]Stmt = {};
+    let stmt_close: [int] = [];
     let c = Conn { cfg: cfg, t: t, buf: b"", pos: 0, gen: 0, mtyp: 0,
                    mstart: 0, mlen: 0, lock: make_mutex(),
                    broken: false, why: "", closed: false, pid: 0, secret: 0,
                    status: 0, params: params, in_pool: false, mode: 0,
                    stream_id: 0, server_err: "", result_size: 0,
-                   notes: no_notes, notes_dropped: 0 };
+                   notes: no_notes, notes_dropped: 0, stmts: stmts,
+                   stmt_next: 0, stmt_tick: 0, stmt_close: stmt_close };
     let hr = handshake(c, deadline);
     guard let h = hr else let e = err_of(hr) {
         tr_close(t);
@@ -1341,6 +1380,9 @@ fn step(c: Conn, rows: Rows, stop: int, synced: bool, deadline: until)
             let cur = cur_of(body);
             rows.tag = get_cstr(cur);
             rows.affected = tag_count(rows.tag);
+            if rows.tag == "DEALLOCATE ALL" || rows.tag == "DISCARD ALL" {
+                forget_stmts(c);
+            }
         } else if t == 69 {         // 'E' ErrorResponse
             keep_err(c, format_error(body));
         } else if t == 90 {         // 'Z' ReadyForQuery
@@ -1377,10 +1419,11 @@ fn step(c: Conn, rows: Rows, stop: int, synced: bool, deadline: until)
             let k = get_cstr(cur);
             let v = get_cstr(cur);
             c.params[k] = v;
-        } else if t == 49 || t == 50 || t == 73 || t == 78 || t == 99 ||
-                  t == 116 {
-            // '1' ParseComplete, '2' BindComplete, 'I' EmptyQueryResponse,
-            // 'N' notice, 'c' CopyDone, 't' ParameterDescription.
+        } else if t == 49 || t == 50 || t == 51 || t == 73 || t == 78 ||
+                  t == 99 || t == 116 {
+            // '1' ParseComplete, '2' BindComplete, '3' CloseComplete,
+            // 'I' EmptyQueryResponse, 'N' notice, 'c' CopyDone,
+            // 't' ParameterDescription.
         } else {
             return err("protocol error: unexpected message " + to_str(t));
         }
@@ -1432,6 +1475,12 @@ fn fail(c: Conn, e: str, status_before: int) -> str {
 }
 
 fn extended(sql: str, args: [Arg]) -> bytes {
+    return extended_named("", true, sql, args);
+}
+
+// Parse (unless the named statement is already prepared), Bind, Describe,
+// Execute, Sync. "" is the unnamed statement, parsed every time.
+fn extended_named(name: str, parse: bool, sql: str, args: [Arg]) -> bytes {
     let formats = be16(len(args));
     let values = be16(len(args));
     for a in args {
@@ -1446,12 +1495,115 @@ fn extended(sql: str, args: [Arg]) -> bytes {
             values = values + be32(len(a.data)) + a.data;
         }
     }
-    return msg(80, cstr("") + cstr(sql) + be16(0)) +            // Parse
-           msg(66, cstr("") + cstr("") + formats + values +     // Bind
+    let out = b"";
+    if parse {
+        out = msg(80, cstr(name) + cstr(sql) + be16(0));        // Parse
+    }
+    return out +
+           msg(66, cstr("") + cstr(name) + formats + values +   // Bind
                be16(0)) +                                       //   text results
            msg(68, b"P" + cstr("")) +                           // Describe portal
            msg(69, cstr("") + be32(0)) +                        // Execute, all rows
            msg(83, b"");                                        // Sync
+}
+
+// The server dropped every prepared statement of this session: forget
+// them, so none is used and fails -- inside a transaction that failure
+// would abort it, where no retry can help.
+fn forget_stmts(c: Conn) {
+    let no_stmts: map[str]Stmt = {};
+    let none_closing: [int] = [];
+    c.stmts = no_stmts;
+    c.stmt_close = none_closing;
+}
+
+fn stmt_name(n: int) -> str {
+    return "s" + to_str(n);
+}
+
+// Close messages for the statements queued to go. Closing one the server
+// never created is not an error, so a failed first use can queue its
+// name without knowing whether Parse got that far.
+fn take_closes(c: Conn) -> bytes {
+    let out = b"";
+    for n in c.stmt_close {
+        out = out + msg(67, b"S" + cstr(stmt_name(n)));         // Close
+    }
+    if len(c.stmt_close) > 0 {
+        let none_left: [int] = [];
+        c.stmt_close = none_left;
+    }
+    return out;
+}
+
+// Forgets sql's statement and queues it to be closed.
+fn drop_stmt(c: Conn, sql: str) {
+    if has(c.stmts, sql) {
+        push(c.stmt_close, c.stmts[sql].n);
+        del(c.stmts, sql);
+    }
+}
+
+// Whether a cached statement's failure means the statement, not the
+// query, went bad: the server dropped it (DISCARD ALL, DEALLOCATE), or a
+// schema change altered what it returns.
+fn stale_stmt(e: str) -> bool {
+    let st = sqlstate(e);
+    return st == "26000" || st == "0A000";
+}
+
+// One extended-protocol exchange for query(). With the cache on, sql runs
+// as a named statement, prepared in the same round trip on first use.
+fn query_once(c: Conn, sql: str, args: [Arg], before: int, deadline: until)
+              -> result[Rows, str] {
+    let rows = empty_rows();
+    let out = take_closes(c);
+    let cached = false;
+    let fresh = false;
+    if c.cfg.statement_cache > 0 {
+        c.stmt_tick = c.stmt_tick + 1;
+        let st = Stmt { n: 0, name: "", used: 0 };
+        if has(c.stmts, sql) {
+            st = c.stmts[sql];
+            cached = true;
+        } else {
+            if len(c.stmts) >= c.cfg.statement_cache {
+                let oldest = "";
+                let at = -1;
+                for k, v in c.stmts {
+                    if at < 0 || v.used < at {
+                        at = v.used;
+                        oldest = k;
+                    }
+                }
+                drop_stmt(c, oldest);
+                out = take_closes(c) + out;
+            }
+            st = Stmt { n: c.stmt_next, name: stmt_name(c.stmt_next), used: 0 };
+            c.stmt_next = c.stmt_next + 1;
+            c.stmts[sql] = st;
+            fresh = true;
+        }
+        st.used = c.stmt_tick;
+        out = out + extended_named(st.name, fresh, sql, args);
+    } else {
+        out = out + extended(sql, args);
+    }
+    let br = begin(c, out, deadline);
+    guard let b = br else let e = err_of(br) {
+        if fresh {
+            drop_stmt(c, sql);
+        }
+        return err(fail(c, e, before));
+    }
+    let rr = to_ready(c, rows, true, deadline);
+    guard let r = rr else let e = err_of(rr) {
+        if fresh || (cached && stale_stmt(e)) {
+            drop_stmt(c, sql);
+        }
+        return err(fail(c, e, before));
+    }
+    return ok(rows);
 }
 
 fn check_args(args: [Arg]) -> str {
@@ -1480,18 +1632,18 @@ pub fn query(c: Conn, sql: str, args: [Arg], deadline: until)
         return err(ae);
     }
     let before = c.status;
-    let rows = empty_rows();
-    let br = begin(c, extended(sql, args), deadline);
-    guard let b = br else let e = err_of(br) {
-        let fe = fail(c, e, before);
+    let r = query_once(c, sql, args, before, deadline);
+    // A cached statement the server no longer has, or whose result type
+    // changed, is re-prepared and the query run once more -- but only
+    // outside a transaction: inside one, the error has already aborted
+    // it, and a retry would only fail with 25P02.
+    guard let rows = r else let e = err_of(r) {
+        if before == 73 && usable(c) && c.status == 73 && stale_stmt(e) &&
+           c.cfg.statement_cache > 0 {
+            r = query_once(c, sql, args, before, deadline);
+        }
         mutex_unlock(c.lock);
-        return err(fe);
-    }
-    let rr = to_ready(c, rows, true, deadline);
-    guard let r = rr else let e = err_of(rr) {
-        let fe = fail(c, e, before);
-        mutex_unlock(c.lock);
-        return err(fe);
+        return r;
     }
     mutex_unlock(c.lock);
     return ok(rows);
