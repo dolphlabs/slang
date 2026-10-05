@@ -1041,7 +1041,7 @@ static void sl_recv_buf_put(void *p) {
  * while the program still held it. Header and data are one allocation
  * (sl_bytes_alloc), made once the data is in. */
 static sl_bytes *sl_net_recv_bytes(const unsigned char *scratch, long long n) {
-    sl_bytes *b = sl_bytes_alloc(n);
+    sl_bytes *b = sl_bytes_alloc_uninit(n);
     if (n > 0) memcpy(b->ptr, scratch, (size_t)n);
     return b;
 }

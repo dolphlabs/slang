@@ -660,8 +660,18 @@ static sl_bytes *sl_bytes_alloc(long long n) {
     return b;
 }
 
+/* sl_bytes_alloc for data the caller fills in full at once: the data is
+ * not cleared (sl_gc_alloc_leaf_uninit), only the header is set. */
+static sl_bytes *sl_bytes_alloc_uninit(long long n) {
+    sl_bytes *b = (sl_bytes *)sl_gc_alloc_leaf_uninit(
+        sizeof(sl_bytes) + (size_t)(n > 0 ? n : 1), sl_gc_trace_bytes);
+    b->len = n;
+    b->ptr = (unsigned char *)(b + 1);
+    return b;
+}
+
 static sl_bytes *sl_bytes_new(const unsigned char *p, long long n) {
-    sl_bytes *b = sl_bytes_alloc(n);
+    sl_bytes *b = sl_bytes_alloc_uninit(n);
     if (n > 0) memcpy(b->ptr, p, (size_t)n);
     return b;
 }
