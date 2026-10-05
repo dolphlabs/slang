@@ -385,8 +385,18 @@ the point reads in flight with it.
   run since the last minor holds only old values, because that minor
   promoted everything it held. Audit every place that hands a value to a
   parked task first: channel receive, `join`, `select`.
-- [ ] **1.7 `malloc_trim` outside the stop**, and only after a major that
+- [x] **1.7 `malloc_trim` outside the stop**, and only after a major that
   freed a lot. Decide it with §7c (macOS keeping freed pages).
+  Landed (2026-10-05), after a Linux profile: the major's tail was
+  0.75 ms, most of it this, and on the quote server a major came after
+  every minor. The trim now runs after the pause, at most every 100 ms.
+  Quote ABBA x3 in a Linux container: 2,619 -> 2,976 req/s, CPU per
+  request 1,261 -> 1,144 us, p99 63 -> 57 ms, peak RSS 21.8 -> 25.8 MB
+  (glibc keeps freed memory up to 100 ms longer; taken: the owner
+  accepted RSS for throughput here, and Go's is 75 MB). Trimming after
+  every major outside the pause was -14% req/s; every second, about the
+  same speed for +4.6 MB.
+
 - [ ] **1.8 Precise tracing for lists and maps of non-pointers.** The
   compiler knows the element type, so it tells the runtime: `[int]` and
   `[f64]` are not traced at all, and a value struct gets a pointer-offset
