@@ -493,12 +493,24 @@ of its 1-worker number.
   216 ms. Revisit with 1.9 if the CCX33 run shows the memory matters.
 - [ ] **3.2 Probe only connections idle for more than 1 s, outside the
   lock**, as pgx does.
+  Built, parked on branch `perf/pg-probe-idle`: neutral on the laptop
+  (CPU per request 153.5 vs 153.3 us at 64 clients, 226 vs 226 at 512;
+  one saved ~1 us syscall). Re-measure on the CCX33 before landing.
 - [ ] **3.3 Build each query message with one builder.**
 - [ ] **3.4 Per-connection prepared-statement cache** (decided 2026-10-04:
   reverses the driver's "deliberately no named prepared statements"; update
   that comment). Bounded LRU per connection. On error `0A000` ("cached plan
   must not change result type"), drop the statement and retry once.
   Statements are closed when a connection is closed or evicted.
+  Landed: `query` keeps the 256 most recent statements per connection
+  (`statement_cache_capacity` in the url, 0 off); a first use sends a
+  named Parse in the same round trip; evicted statements and failed
+  first uses are closed by a Close sent ahead of the next query.
+  `0A000` and `26000` re-prepare and retry once, outside a transaction
+  only; `DEALLOCATE ALL` / `DISCARD ALL` empty the cache. Local point,
+  64 clients, ABBA x3: Postgres CPU per request 502 -> 206 us, 7,556 ->
+  9,249 req/s, p99 22.9 -> 14.3 ms; slang CPU 157 -> 155 us. At 512
+  clients Postgres CPU 472 -> 223 us.
 - [ ] **3.5 Binary result format** for the types the driver decodes
   (`int2/4/8`, `bool`, `float4/8`, `bytea`; text stays text). In scope as
   of 2026-10-04 (`note.txt` had it out). Every width and length from the

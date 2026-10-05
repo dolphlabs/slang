@@ -377,6 +377,134 @@ fn pool_waiters() {
     println("ok pool waiters");
 }
 
+// ---- prepared statements ----------------------------------------------
+
+fn conn_url(u: str) -> pg.Conn {
+    let cr = pg.connect(u, soon());
+    guard let c = cr else let e = err_of(cr) {
+        die("connect: " + e);
+        panic("unreachable");
+    }
+    return c;
+}
+
+// How many named statements the server holds for this session, and how
+// many of them are `sql`. The counting query is itself one of them.
+fn prepared(c: pg.Conn, sql: str) -> str {
+    let rows = q(c, "SELECT count(*), count(*) FILTER (WHERE statement = $1) " +
+                    "FROM pg_prepared_statements", [pg.arg_text(sql)]);
+    return to_str(pg.get_int(rows, 0, 0)) + "/" + to_str(pg.get_int(rows, 0, 1));
+}
+
+// query() prepares each SQL text once per connection and reuses it; the
+// cache is bounded, survives the server dropping or invalidating a
+// statement, and a failed first use leaves nothing behind. Before the
+// cache, every query was parsed and planned again: no named statement
+// ever existed.
+fn statements() {
+    let c = conn();
+    let sql = "SELECT $1::int8 + 1";
+    let i = 0;
+    while i < 5 {
+        if pg.get_int(q(c, sql, [pg.arg_int(i)]), 0, 0) != i + 1 {
+            die("statements: wrong result");
+        }
+        i = i + 1;
+    }
+    let got = prepared(c, sql);
+    if got != "2/1" {
+        die("statements: prepared " + got + ", want 2/1 (the query and " +
+            "the counting query, once each)");
+    }
+
+    // a schema change that alters the result type: re-prepared, retried
+    ex(c, "DROP TABLE IF EXISTS stmt_shape");
+    ex(c, "CREATE TABLE stmt_shape (a int)");
+    ex(c, "INSERT INTO stmt_shape VALUES (1)");
+    let shape = "SELECT * FROM stmt_shape";
+    q(c, shape, []);
+    ex(c, "ALTER TABLE stmt_shape ADD COLUMN b int");
+    let wide = q(c, shape, []);
+    if len(wide.columns) != 2 {
+        die("statements: after ALTER, " + to_str(len(wide.columns)) +
+            " columns");
+    }
+
+    // DEALLOCATE ALL drops every statement: the driver forgets them too,
+    // so a transaction's first query does not fail on a missing one
+    ex(c, "DEALLOCATE ALL");
+    ex(c, "BEGIN");
+    if pg.get_int(q(c, sql, [pg.arg_int(41)]), 0, 0) != 42 {
+        die("statements: after DEALLOCATE ALL");
+    }
+    ex(c, "COMMIT");
+
+    // dropped behind the driver's back (another statement's DEALLOCATE):
+    // outside a transaction, re-prepared and retried
+    let held = q(c, "SELECT name FROM pg_prepared_statements WHERE statement = $1",
+                 [pg.arg_text(sql)]);
+    ex(c, "DEALLOCATE " + pg.get_text(held, 0, 0));
+    if pg.get_int(q(c, sql, [pg.arg_int(1)]), 0, 0) != 2 {
+        die("statements: after DEALLOCATE of one");
+    }
+
+    // inside a transaction the stale statement's error is returned, not
+    // retried (the transaction is already aborted); after ROLLBACK the
+    // statement is prepared afresh
+    ex(c, "BEGIN");
+    q(c, shape, []);
+    ex(c, "ALTER TABLE stmt_shape ADD COLUMN c int");
+    ex(c, "SAVEPOINT s");
+    let e = query_error(c, shape, []);
+    if pg.sqlstate(e) != "0A000" {
+        die("statements: in a transaction, '" + e + "'");
+    }
+    ex(c, "ROLLBACK");
+    if len(q(c, shape, []).columns) != 2 {
+        die("statements: after ROLLBACK");
+    }
+
+    // a failed first use is not kept
+    let bad = "SELEC 1";
+    query_error(c, bad, []);
+    got = prepared(c, bad);
+    if !strings.has_suffix(got, "/0") {
+        die("statements: a failed parse left " + got);
+    }
+    ex(c, "DROP TABLE stmt_shape");
+    pg.close(c);
+
+    // bounded: capacity 2 never holds more than 2
+    let small = conn_url(url() + sep() + "statement_cache_capacity=2");
+    i = 0;
+    while i < 6 {
+        q(small, "SELECT " + to_str(i), []);
+        i = i + 1;
+    }
+    got = prepared(small, "");
+    if !strings.has_prefix(got, "2/") {
+        die("statements: capacity 2 holds " + got);
+    }
+    pg.close(small);
+
+    // capacity 0: nothing is prepared
+    let off = conn_url(url() + sep() + "statement_cache_capacity=0");
+    q(off, sql, [pg.arg_int(1)]);
+    got = prepared(off, sql);
+    if got != "0/0" {
+        die("statements: capacity 0 holds " + got);
+    }
+    pg.close(off);
+    println("ok statements");
+}
+
+fn sep() -> str {
+    if strings.contains(url(), "?") {
+        return "&";
+    }
+    return "?";
+}
+
 // ---- large results ----------------------------------------------------
 
 fn large() {
@@ -606,6 +734,7 @@ errors();
 cancel();
 pool();
 pool_waiters();
+statements();
 large();
 tls();
 copy();
