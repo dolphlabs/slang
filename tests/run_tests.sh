@@ -461,7 +461,7 @@ for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood \
             generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry loop_leaf_poll own_roots switch escape_roots \
             http_read_wire bytes_empty_literal gc_minor_barriers map_delete if_let \
             literal_expect pending_sibling_type json_parity json_utf8 json_decode_budget \
-            bytes json_deep_nesting gc_container_frontier gc_promotion_budget value_struct_containers json_value_structs; do
+            bytes json_deep_nesting gc_container_frontier gc_promotion_budget value_struct_containers json_value_structs gc_stw_sleep; do
     out="/tmp/sl_gcstress_${name}.out"
     if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -491,7 +491,7 @@ for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put \
             json_int_exact flags method_recv method_recv_gc indirect_callee \
             http_read_wire bytes_empty_literal gc_minor_barriers map_delete if_let \
             literal_expect pending_sibling_type json_parity json_utf8 json_decode_budget \
-            bytes json_deep_nesting gc_container_frontier gc_promotion_budget value_struct_containers json_value_structs; do
+            bytes json_deep_nesting gc_container_frontier gc_promotion_budget value_struct_containers json_value_structs gc_stw_sleep; do
     out="/tmp/sl_nursery_${name}.out"
     if ! SLANG_GC_NURSERY_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -523,7 +523,7 @@ for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc
             spawn_isolation select maps json json_parity json_utf8 json_decode_budget \
             bytes json_deep_nesting http_read_wire http_client_pool http2_flood \
             gc_promotion_budget \
-            value_struct_containers json_value_structs; do
+            value_struct_containers json_value_structs gc_stw_sleep; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_verify_minor_${name}.out"
     err="/tmp/sl_verify_minor_${name}.err"
@@ -659,6 +659,26 @@ for spec in gc_promotion_budget:grow gc_nursery_small:small; do
     fi
 done
 [ "$nur_ad_bad" -eq 0 ] && echo "PASS nursery adaptation"
+
+# ---- stopped threads sleep through a pause ------------------------------------
+# A thread stopped for a collection spins a few microseconds, then sleeps
+# until the pause ends (sl_gc_ack_and_wait). It used to call sched_yield
+# in a loop for the whole pause: on Linux a syscall per turn that returned
+# at once, 60% of the quote server's CPU in a Linux container. Four
+# allocating tasks on four workers stop each other at every minor;
+# SLANG_GC_STAT's stw line must show waits, and sleeps among them.
+echo "--- stopped threads sleep (SLANG_GC_STAT) ---"
+stw=$(SLANG_WORKERS=4 SLANG_GC_STAT=1 ./slangc tests/gc_stw_sleep/main.sl --run 2>&1 >/dev/null |
+      sed -n 's/^slang-gc-stat stw_waits=\([0-9]*\) stw_sleeps=\([0-9]*\)$/\1 \2/p')
+if [ -z "$stw" ]; then
+    echo "FAIL stopped threads sleep (no slang-gc-stat stw line)"
+    fail=1
+elif [ "${stw#* }" -eq 0 ]; then
+    echo "FAIL stopped threads sleep: waits/sleeps $stw"
+    fail=1
+else
+    echo "PASS stopped threads sleep (waits/sleeps $stw)"
+fi
 
 # ---- young pages hold a whole cycle -----------------------------------------
 # A small object that finds no room on its worker's pages falls back to

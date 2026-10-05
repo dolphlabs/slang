@@ -273,6 +273,18 @@ the point reads in flight with it.
   deadlock`): an allocator deadlock reachable from `dev` (todo.md), and
   the owner-generation read in `sl_gc_alloc_owned`.
 
+  **Update (2026-10-05): the waiting half landed, after a Linux
+  measurement.** In a Linux container (x86_64, Docker on the dev Mac,
+  `perf`), the quote server spent 60% of its CPU in the stopped
+  threads' `sched_yield` loop and the kernel scheduling around it
+  (reschedule IPIs in a VM); macOS hid it. Stopped threads now spin ~256
+  pause instructions, then sleep on a condition variable that the
+  collector broadcasts when it lowers the stop or starts a chained
+  cycle. Quote ABBA x3, Linux: 1,086 -> 2,870 req/s, CPU per request
+  4,619 -> 1,166 us, p99 199 -> 54 ms, RSS 29.2 -> 27.3 MB. macOS:
+  3,528 -> 3,585 req/s, CPU per request 1,305 -> 863 us, p99 48.6 vs
+  49.5 ms. The kick and the allocation-entry yield stay unbuilt.
+
   **Update (2026-10-04): not needed for now.** After 1.10, 1.2 and 1.3
   the minors are fewer and their walk shorter, and minor time-to-safepoint
   on the quote server is about 0.6 ms per collection, 1 ms at worst,

@@ -196,6 +196,12 @@ static void sl_gc_stat_phases(const sl_gc_phase_clock *c, int major) {
     }
 }
 
+/* Stopped threads' waits for a pause to end (sl_gc_ack_and_wait), and
+ * how many of them slept rather than spun to the end: the spin covers
+ * only the first few microseconds. */
+static _Atomic unsigned long long sl_gc_stat_stw_waits = 0;
+static _Atomic unsigned long long sl_gc_stat_stw_sleeps = 0;
+
 static void sl_gc_stat_dump(void) {
     if (!sl_gc_stat_enabled())
         return;
@@ -244,6 +250,9 @@ static void sl_gc_stat_dump(void) {
                                          memory_order_relaxed));
         fprintf(stderr, "\n");
     }
+    fprintf(stderr, "slang-gc-stat stw_waits=%llu stw_sleeps=%llu\n",
+            atomic_load_explicit(&sl_gc_stat_stw_waits, memory_order_relaxed),
+            atomic_load_explicit(&sl_gc_stat_stw_sleeps, memory_order_relaxed));
 }
 
 __attribute__((destructor))
@@ -383,6 +392,22 @@ static sl_gc_thread *sl_gc_threads = NULL;
 #define SL_GC_PENDING_BATCH 32
 static _Atomic int sl_gc_stop_requested = 0;
 static _Atomic unsigned long sl_gc_cycle = 0;
+/* Stopped threads sleep here for the rest of a pause (sl_gc_ack_and_wait)
+ * instead of calling sched_yield in a loop. On Linux that loop was a
+ * syscall per turn that returned at once -- every CPU but the
+ * collector's is idle during a pause -- and under a VM each turn cost
+ * reschedule IPIs too: profiled on the quote server in a Linux
+ * container, the stopped threads' yielding was 60% of all CPU. The
+ * collector raises and clears sl_gc_stop_requested, and bumps
+ * sl_gc_cycle, under sl_gc_stw_mu, and broadcasts when anyone sleeps,
+ * so a sleeper never misses the end of a pause or the start of a
+ * chained one it must ack. Lock order: sl_gc_mu before sl_gc_stw_mu. */
+static pthread_mutex_t sl_gc_stw_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t sl_gc_stw_cv = PTHREAD_COND_INITIALIZER;
+static int sl_gc_stw_sleepers = 0; /* under sl_gc_stw_mu */
+/* Pause-instruction turns a stopped thread spins before sleeping: a few
+ * microseconds, so a pause that ends that fast costs no wakeup. */
+#define SL_GC_STW_SPIN 256
 static _Atomic int sl_gc_collect_pending = 0;
 static _Atomic int sl_gc_collecting = 0;
 
@@ -485,20 +510,51 @@ static void sl_gc_register_thread(void) {
  * collection is ever in flight, via the sl_gc_collecting exchange
  * below), so there's nothing lost by no longer waiting for a clean
  * 0 observation on the shared flag. */
+static inline void sl_gc_cpu_relax(void) {
+#if defined(__x86_64__) || defined(__i386__)
+    __builtin_ia32_pause();
+#elif defined(__aarch64__)
+    __asm__ __volatile__("yield");
+#endif
+}
+
 static inline void sl_gc_ack_and_wait(void) {
     _Atomic unsigned long *acked = sl_rt_tls_gc_acked_cycle();
     unsigned long cyc = atomic_load_explicit(&sl_gc_cycle,
                                               memory_order_acquire);
     atomic_store_explicit(acked, cyc, memory_order_release);
+    int spins = 0;
+    int slept = 0;
     while (atomic_load_explicit(&sl_gc_stop_requested,
                                  memory_order_acquire)) {
-        sched_yield();
+        if (spins < SL_GC_STW_SPIN) {
+            spins++;
+            sl_gc_cpu_relax();
+        } else {
+            slept = 1;
+            pthread_mutex_lock(&sl_gc_stw_mu);
+            sl_gc_stw_sleepers++;
+            while (atomic_load_explicit(&sl_gc_stop_requested,
+                                         memory_order_acquire) &&
+                   atomic_load_explicit(&sl_gc_cycle,
+                                         memory_order_acquire) == cyc)
+                pthread_cond_wait(&sl_gc_stw_cv, &sl_gc_stw_mu);
+            sl_gc_stw_sleepers--;
+            pthread_mutex_unlock(&sl_gc_stw_mu);
+        }
         unsigned long now = atomic_load_explicit(&sl_gc_cycle,
                                                   memory_order_acquire);
         if (now != cyc) {
             cyc = now;
             atomic_store_explicit(acked, cyc, memory_order_release);
         }
+    }
+    if ((spins || slept) && sl_gc_stat_enabled()) {
+        atomic_fetch_add_explicit(&sl_gc_stat_stw_waits, 1,
+                                  memory_order_relaxed);
+        if (slept)
+            atomic_fetch_add_explicit(&sl_gc_stat_stw_sleeps, 1,
+                                      memory_order_relaxed);
     }
 }
 
@@ -2199,6 +2255,16 @@ static void sl_gc_set_build(int with_old) {
     sl_gc_set_count = n;
 }
 
+/* End a pause: lower the stop and wake the stopped threads asleep in
+ * sl_gc_ack_and_wait. Called with sl_gc_mu held. */
+static void sl_gc_stw_release(void) {
+    pthread_mutex_lock(&sl_gc_stw_mu);
+    atomic_store_explicit(&sl_gc_stop_requested, 0, memory_order_release);
+    if (sl_gc_stw_sleepers)
+        pthread_cond_broadcast(&sl_gc_stw_cv);
+    pthread_mutex_unlock(&sl_gc_stw_mu);
+}
+
 /* STW rendezvous shared by minor and major collections: raise
  * sl_gc_stop_requested, bump the cycle, snapshot the thread registry,
  * and spin until every other thread has acked or is blocked. The
@@ -2206,9 +2272,16 @@ static void sl_gc_set_build(int with_old) {
  * per-kind variant. Caller must hold NO locks; returns with a
  * caller-owned snapshot that must be free()d. */
 static void sl_gc_stw_sync(sl_gc_thread ***out_snap, int *out_nsnap) {
+    /* Under sl_gc_stw_mu: a thread still asleep from the previous pause
+     * (a minor chaining into a major keeps the stop raised) must wake to
+     * ack this cycle. */
+    pthread_mutex_lock(&sl_gc_stw_mu);
     atomic_store_explicit(&sl_gc_stop_requested, 1, memory_order_release);
     unsigned long cyc = atomic_fetch_add_explicit(&sl_gc_cycle, 1,
                                     memory_order_release) + 1;
+    if (sl_gc_stw_sleepers)
+        pthread_cond_broadcast(&sl_gc_stw_cv);
+    pthread_mutex_unlock(&sl_gc_stw_mu);
 
     sl_gc_thread **snap = NULL;
     int nsnap = 0, snap_cap = 0;
@@ -2859,7 +2932,7 @@ static void sl_gc_collect_minor_real(void) {
      * sl_gc_stop_requested set in that case so the next checkin runs
      * the major cycle; only fully release when no major is due. */
     if (!atomic_load_explicit(&sl_gc_collect_pending, memory_order_acquire)) {
-        atomic_store_explicit(&sl_gc_stop_requested, 0, memory_order_release);
+        sl_gc_stw_release();
         atomic_store_explicit(&sl_gc_collecting, 0, memory_order_release);
     } else {
         atomic_store_explicit(&sl_gc_collecting, 0, memory_order_release);
@@ -3031,7 +3104,7 @@ static void sl_gc_collect(void) {
     }
     atomic_store_explicit(&sl_gc_collect_pending, 0, memory_order_release);
     atomic_store_explicit(&sl_gc_collect_minor_pending, 0, memory_order_release);
-    atomic_store_explicit(&sl_gc_stop_requested, 0, memory_order_release);
+    sl_gc_stw_release();
     atomic_store_explicit(&sl_gc_collecting, 0, memory_order_release);
     pthread_mutex_unlock(&sl_gc_mu);
 }
