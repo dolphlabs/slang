@@ -1,0 +1,100 @@
+19:09:11 run 20261005T190911Z-slang-benchmark -> /root/slang/bench/results/20261005T190911Z-slang-benchmark
+19:09:11 cpus: server=0-3 (4) loadgen=4-5 (2) db=6-7
+19:09:13 building: slang go rust java node
+19:17:29 built: slang go rust java node
+19:17:29 seeding database: users=20000 orders=400000 (this takes a while at full scale)
+psql:bench/suite/db/schema.sql:2: NOTICE:  table "orders" does not exist, skipping
+psql:bench/suite/db/schema.sql:3: NOTICE:  table "users" does not exist, skipping
+Time: 212.824 ms
+Time: 4231.866 ms (00:04.232)
+ setval 
+--------
+ 400000
+(1 row)
+
+Time: 2.417 ms
+Time: 1154.632 ms (00:01.155)
+Time: 386.050 ms
+Time: 531.489 ms
+Time: 7.571 ms
+Time: 1.957 ms
+19:17:37 generating /root/slang/bench/.data/batch_2000000_100000.csv
+19:17:46 conformance api/slang
+19:17:52 correctness batch/slang
+19:17:58 conformance api/go
+19:18:04 correctness batch/go
+19:18:06 conformance api/rust
+19:18:12 correctness batch/rust
+19:18:12 conformance api/java
+19:18:22 correctness batch/java
+19:18:24 conformance api/node
+19:18:32 correctness batch/node
+19:18:37 light http go round 1 c=50
+19:18:42 light http go round 1 c=200
+19:18:49 light http rust round 1 c=50
+19:18:54 light http rust round 1 c=200
+19:19:01 light http java round 1 c=50
+19:19:06 light http java round 1 c=200
+19:19:14 light http node round 1 c=50
+19:19:19 light http node round 1 c=200
+19:19:26 light http slang round 1 c=50
+19:19:31 light http slang round 1 c=200
+19:19:38 light compute go round 1
+19:19:39 light compute rust round 1
+19:19:39 light compute java round 1
+19:19:41 light compute node round 1
+19:19:42 light compute slang round 1
+19:19:44 heavy api go round 1 warm-up 3s
+19:19:47 heavy api go round 1 mix c=64
+19:19:58 heavy api go round 1 mix c=512
+19:20:09 heavy api go round 1 point c=64
+19:20:20 heavy api go round 1 point c=512
+19:20:31 heavy api go round 1 quote c=64
+19:20:41 heavy api go round 1 quote c=512
+19:20:52 heavy api go round 1 mix fixed rate 2000/s
+19:21:02 heavy api go round 1 mix fixed rate 10000/s
+19:21:15 heavy api rust round 1 warm-up 3s
+19:21:18 heavy api rust round 1 mix c=64
+19:21:29 heavy api rust round 1 mix c=512
+19:21:40 heavy api rust round 1 point c=64
+19:21:50 heavy api rust round 1 point c=512
+19:22:01 heavy api rust round 1 quote c=64
+19:22:12 heavy api rust round 1 quote c=512
+19:22:23 heavy api rust round 1 mix fixed rate 2000/s
+19:22:33 heavy api rust round 1 mix fixed rate 10000/s
+19:22:48 heavy api java round 1 warm-up 3s
+19:22:51 heavy api java round 1 mix c=64
+19:23:02 heavy api java round 1 mix c=512
+19:23:12 heavy api java round 1 point c=64
+19:23:23 heavy api java round 1 point c=512
+19:23:34 heavy api java round 1 quote c=64
+19:23:44 heavy api java round 1 quote c=512
+19:23:55 heavy api java round 1 mix fixed rate 2000/s
+19:24:06 heavy api java round 1 mix fixed rate 10000/s
+19:24:20 heavy api node round 1 warm-up 3s
+19:24:23 heavy api node round 1 mix c=64
+19:24:33 heavy api node round 1 mix c=512
+19:24:44 heavy api node round 1 point c=64
+19:24:54 heavy api node round 1 point c=512
+19:25:05 heavy api node round 1 quote c=64
+19:25:16 heavy api node round 1 quote c=512
+19:25:27 heavy api node round 1 mix fixed rate 2000/s
+19:25:37 heavy api node round 1 mix fixed rate 10000/s
+19:25:50 heavy api slang round 1 warm-up 3s
+19:25:53 heavy api slang round 1 mix c=64
+19:26:03 heavy api slang round 1 mix c=512
+19:26:14 heavy api slang round 1 point c=64
+19:26:25 heavy api slang round 1 point c=512
+19:26:36 heavy api slang round 1 quote c=64
+19:26:46 heavy api slang round 1 quote c=512
+19:26:57 heavy api slang round 1 mix fixed rate 2000/s
+19:27:07 heavy api slang round 1 mix fixed rate 10000/s
+19:27:19 warming the page cache with /root/slang/bench/.data/batch_2000000_100000.csv
+19:27:19 heavy batch go round 1
+19:27:21 heavy batch rust round 1
+19:27:22 heavy batch java round 1
+19:27:24 heavy batch node round 1
+19:27:30 heavy batch slang round 1
+19:27:37 measurements done; writing results.json and summary.md
+wrote /root/slang/bench/results/20261005T190911Z-slang-benchmark/results.json and summary.md (60 measurements)
+19:27:37 done: /root/slang/bench/results/20261005T190911Z-slang-benchmark

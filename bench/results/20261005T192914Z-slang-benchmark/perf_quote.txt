@@ -1,0 +1,86 @@
+# perf report --no-children --sort dso,symbol --stdio (top 40 lines):
+================================================================================
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 52K of event 'cycles:P'
+# Event count (approx.): 24264542971
+#
+# Overhead  Shared Object      Symbol                                                IPC   [IPC Coverage]
+# ........  .................  ....................................................  ....................
+#
+    10.70%  api                [.] sl_slang_quote                                    -      -            
+     6.91%  api                [.] sl_gc_alloc_leaf_uninit.lto_priv.0                -      -            
+     6.88%  api                [.] sl_gc_pages_prune_list                            -      -            
+     6.57%  api                [.] sl_arr_push.lto_priv.0                            -      -            
+     5.06%  api                [.] sl_jd_signed.constprop.0                          -      -            
+     4.83%  api                [.] sl_gc_page_alloc.lto_priv.0                       -      -            
+     4.80%  api                [.] sl_jskip_ws.lto_priv.0                            -      -            
+     4.64%  api                [.] sl_gc_known.lto_priv.0                            -      -            
+     3.51%  api                [.] sl_jparse_string_raw.lto_priv.0                   -      -            
+     2.96%  [kernel.kallsyms]  [k] asm_sysvec_apic_timer_interrupt                   -      -            
+     2.53%  [kernel.kallsyms]  [k] srso_alias_safe_ret                               -      -            
+     2.11%  api                [.] sl_rt_gc_checkin_slow.lto_priv.0                  -      -            
+     1.42%  api                [.] sl_arr_get.constprop.0                            -      -            
+     1.38%  api                [.] sl_rt_tls_read_current_task.lto_priv.0            -      -            
+     1.17%  [kernel.kallsyms]  [k] asm_sysvec_call_function                          -      -            
+     1.15%  api                [.] sl_gc_page_free_obj                               -      -            
+     0.94%  api                [.] sl_rt_maybe_yield_t.lto_priv.0                    -      -            
+     0.91%  api                [.] sl_jd_more.lto_priv.0                             -      -            
+     0.87%  libc.so.6          [.] 0x0000000000188e05                                -      -            
+     0.85%  api                [.] sl_arr_reserve.lto_priv.0                         -      -            
+     0.82%  api                [.] sl_gc_set_build                                   -      -            
+     0.77%  api                [.] sl_gc_page_book                                   -      -            
+     0.68%  [kernel.kallsyms]  [k] smp_call_function_many_cond                       -      -            
+     0.63%  [kernel.kallsyms]  [k] asm_sysvec_reschedule_ipi                         -      -            
+     0.59%  [kernel.kallsyms]  [k] asm_exc_page_fault                                -      -            
+     0.50%  api                [.] sl_gc_mark_minor                                  -      -            
+     0.47%  [kernel.kallsyms]  [k] _copy_to_iter                                     -      -            
+     0.46%  api                [.] sl_gc_trace_arr.lto_priv.0                        -      -            
+     0.42%  [kernel.kallsyms]  [k] update_curr                                       -      -            
+
+================================================================================
+# perf report --no-children --sort symbol -G --stdio (top 40 lines):
+================================================================================
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 52K of event 'cycles:P'
+# Event count (approx.): 24264542971
+#
+# Overhead  Symbol                                                IPC   [IPC Coverage]
+# ........  ....................................................  ....................
+#
+    10.70%  [.] sl_slang_quote                                    -      -            
+            |          
+            |--7.06%--0xffffffffffffffff
+            |          sl_spawn_tramp_slang_serve_entry.lto_priv.0
+            |          sl_slang_serve.lto_priv.0
+            |          sl_slang_route.lto_priv.0
+            |          sl_slang_quote
+            |          
+             --3.64%--sl_ctx_trampoline
+                       sl_spawn_tramp_slang_serve_entry.lto_priv.0
+                       sl_slang_serve.lto_priv.0
+                       sl_slang_route.lto_priv.0
+                       sl_slang_quote
+
+     6.91%  [.] sl_gc_alloc_leaf_uninit.lto_priv.0                -      -            
+            |          
+            |--4.50%--0xffffffffffffffff
+            |          sl_spawn_tramp_slang_serve_entry.lto_priv.0
+            |          sl_slang_serve.lto_priv.0
+            |          |          
+            |           --4.48%--sl_slang_route.lto_priv.0
+            |                     sl_slang_quote
+            |                     |          
+            |                      --4.47%--sl_jparse_string_raw.lto_priv.0
+            |                                sl_gc_alloc_leaf_uninit.lto_priv.0
+            |          
+             --2.41%--sl_ctx_trampoline
+                       sl_spawn_tramp_slang_serve_entry.lto_priv.0
+                       sl_slang_serve.lto_priv.0
