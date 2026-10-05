@@ -273,6 +273,27 @@ the point reads in flight with it.
   deadlock`): an allocator deadlock reachable from `dev` (todo.md), and
   the owner-generation read in `sl_gc_alloc_owned`.
 
+  **Update (2026-10-05): the kick, measured alone on Linux, still
+  loses.** With stopped threads asleep (#314), trim outside the pause
+  (#315) and major pacing (#316), the kick alone (async-preempt every
+  running task after 50 us at the rendezvous, quantum test skipped while
+  a stop is requested) against `dev`, quote ABBA x3 in the Linux
+  container: 3,414 -> 3,317 req/s, p99 51 -> 73 ms, CPU even. Kicked
+  tasks are requeued behind others, so the requests they carried wait
+  longer. Time-to-safepoint (~0.5 ms a collection, mostly a worker
+  inside a whole json.decode) stays the largest fixed cost per
+  collection; the next try is a poll inside the generated decoders that
+  acks without giving up the worker, not a signal.
+
+  **Owner decision pending: nursery size.** Each collection pays that
+  fixed ~0.5 ms, so fewer collections help. Quote ABBA x3, Linux, fixed
+  nursery against the adaptive one (which tops out at 1 MB a worker, 4
+  MB here): 8 MB +7% req/s for peak RSS +7 MB (28.9 -> 35.9); 16 MB
+  +12.7% for +18.5 MB (25.3 -> 43.8). Go's RSS on the same run is ~80
+  MB. Not taken without the owner: memory is the product, and raising
+  the adaptive ceiling (sl_gc_nursery_set_max) to 2 MB a worker would
+  be the 8 MB row.
+
   **Update (2026-10-05): the waiting half landed, after a Linux
   measurement.** In a Linux container (x86_64, Docker on the dev Mac,
   `perf`), the quote server spent 60% of its CPU in the stopped
