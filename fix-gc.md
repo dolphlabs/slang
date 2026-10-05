@@ -473,6 +473,17 @@ of its 1-worker number.
   Single-task decode probe, ABBA, 5 rounds of 20,000 decodes: 11,812 ->
   11,011 ms (-6.8%), with no overlap between the two sets of runs.
 
+- [x] **2.7 Struct decoders try the expected key first** (found
+  profiling the quote server after 1.11: `sl_jd_key` was the hottest
+  runtime function). Keys nearly always arrive in declaration order, so
+  the generated decoder tries the next field as a literal (`"sku"` and
+  its colon, one memcmp) and only on a miss scans the key and compares
+  it with every field. `tests/json_key_order` pins out-of-order,
+  duplicate, escaped and prefix keys; old and new print the same.
+  Decode probe ABBA x5: 4,035 -> 3,312 ms (faster in every round); quote
+  server ABBA x3: 3,904 -> 4,237 req/s, CPU per request 1,219 -> 1,155
+  us, p99 and RSS unchanged.
+
 **Exit gate:** single-thread CPU per quote request at or below Go's
 (about 0.56 ms on the CCX33), measured on the same host as Go.
 

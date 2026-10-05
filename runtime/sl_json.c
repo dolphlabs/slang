@@ -1047,6 +1047,21 @@ static bool sl_jd_key(sl_jparser *p, const char **k, long long *klen) {
     return sl_jd_eat(p, ':');
 }
 
+/* The next key, if it is exactly the literal q (the key in quotes, qn
+ * bytes, no escapes): 1 with it and its colon consumed, 0 with nothing
+ * consumed but whitespace, -1 on a missing colon. A struct decoder tries
+ * the field it expects next this way -- keys nearly always arrive in
+ * declaration order -- before scanning the key with sl_jd_key and
+ * comparing it against every field. A key written with escapes never
+ * matches the literal and takes that general path, which decodes it. */
+static inline int sl_jd_key_is(sl_jparser *p, const char *q, long long qn) {
+    sl_jskip_ws(p);
+    if (p->len - p->pos < qn || memcmp(p->s + p->pos, q, (size_t)qn) != 0)
+        return 0;
+    p->pos += qn;
+    return sl_jd_eat(p, ':') ? 1 : -1;
+}
+
 /* The end of the whole input: only whitespace may follow the value. */
 static bool sl_jd_end(sl_jparser *p) {
     sl_jskip_ws(p);
