@@ -178,7 +178,7 @@ static char *sl_jparse_string_raw(sl_jparser *p) {
     }
     if (end < p->len && p->s[end] == '"') {
         long long n = end - p->pos;
-        char *s = (char *)sl_gc_alloc((size_t)n + 1, NULL);
+        char *s = (char *)sl_gc_alloc_leaf_uninit((size_t)n + 1, NULL);
         memcpy(s, p->s + p->pos, (size_t)n);
         s[n] = 0;
         p->pos = end + 1;

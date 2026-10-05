@@ -19,7 +19,7 @@
  * allocates through the array helpers. */
 
 static char *sl_strings_dupn(const char *p, size_t n) {
-    char *out = (char *)sl_gc_alloc(n + 1, NULL);
+    char *out = (char *)sl_gc_alloc_leaf_uninit(n + 1, NULL);
     if (n) memcpy(out, p, n);
     out[n] = 0;
     return out;
