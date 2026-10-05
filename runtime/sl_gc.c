@@ -45,6 +45,22 @@ static _Atomic(sl_gc_obj *) sl_gc_retired = NULL;
 static pthread_mutex_t sl_gc_mu = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic size_t sl_gc_bytes_since_collect = 0;
 static size_t sl_gc_threshold = 8 * 1024 * 1024;
+/* Majors come after sl_gc_threshold bytes are PROMOTED (each minor adds
+ * what it moved to the old generation, owned buffers born old included),
+ * or after SL_GC_MAJOR_EVERY minors, whichever is first. Allocation used
+ * to count: with a 1 MB-per-worker nursery a full-heap major followed
+ * nearly every minor, re-marking an old heap that had barely grown --
+ * on the quote server in a Linux container, 801 majors to 801 minors in
+ * 8 s, 27% of wall time stopped. The minor bound remains because the
+ * collector does not move objects: a promoted object that dies pins its
+ * young page until a major frees it, and pacing by promotion alone grew
+ * the quote server's peak RSS by 7 MB. Quote ABBA, Linux: every 8
+ * minors +4% req/s at equal RSS, every 16 +9% for +0.8 MB, every 32 +10%
+ * for +1.6 MB, promotion alone +6% for +7 MB. Under
+ * SLANG_GC_THRESHOLD_KB every allocation still counts, so that mode
+ * lands majors as often as possible. */
+#define SL_GC_MAJOR_EVERY 16
+static long sl_gc_minors_since_major = 0; /* under sl_gc_mu */
 /* Generational nursery: bytes allocated since the last MINOR
  * collection, and the nursery threshold that triggers one. A minor
  * collection sweeps only sl_gc_young (plus tracing roots-reachable old
@@ -713,11 +729,16 @@ static inline void sl_rt_gc_checkin(void) {
  * SL_GC_PUBLISH_BATCH bytes (sl_gc_alloc_gen), not per allocation. */
 static void sl_gc_publish_delta(size_t delta) {
     if (!delta) return;
-    size_t prev = atomic_fetch_add_explicit(&sl_gc_bytes_since_collect, delta,
-                                            memory_order_relaxed);
-    if (prev + delta >= sl_gc_threshold)
-        atomic_store_explicit(&sl_gc_collect_pending, 1,
-                               memory_order_release);
+    /* Majors are paced by promotion (sl_gc_collect_minor_real), except
+     * in the fixed-threshold test mode, which lands them as often as
+     * possible. */
+    if (sl_gc_threshold_fixed) {
+        size_t prev = atomic_fetch_add_explicit(&sl_gc_bytes_since_collect,
+                                                delta, memory_order_relaxed);
+        if (prev + delta >= sl_gc_threshold)
+            atomic_store_explicit(&sl_gc_collect_pending, 1,
+                                   memory_order_release);
+    }
     size_t mprev = atomic_fetch_add_explicit(&sl_gc_bytes_since_minor, delta,
                                              memory_order_relaxed);
     if (mprev + delta >= atomic_load_explicit(&sl_gc_nursery_threshold,
@@ -2846,7 +2867,7 @@ static void sl_gc_collect_minor_real(void) {
      * is one more trace per promoted object, and promotion is what this
      * makes rare. */
     sl_gc_obj **mpp = &sl_gc_young;
-    size_t swept = 0, promoted = 0, live_young = 0;
+    size_t swept = 0, promoted = 0, live_young = 0, promoted_bytes = 0;
     /* Rebuilt below from the unpaged objects that stay young (1.5). */
     sl_gc_young_m_n = 0;
     while (*mpp) {
@@ -2859,6 +2880,7 @@ static void sl_gc_collect_minor_real(void) {
             h->next = sl_gc_old;
             sl_gc_old = h;
             promoted++;
+            promoted_bytes += sizeof(sl_gc_obj) + h->size;
         } else if (!h->marked) {
             *mpp = h->next;
             if (h->fini)
@@ -2883,6 +2905,7 @@ static void sl_gc_collect_minor_real(void) {
             h->next = sl_gc_old;
             sl_gc_old = h;
             promoted++;
+            promoted_bytes += sizeof(sl_gc_obj) + h->size;
             if (h->trace) {
                 sl_gc_dirty_all((void *)(h + 1));
                 h->remembered = 1;
@@ -2913,6 +2936,18 @@ static void sl_gc_collect_minor_real(void) {
     sl_gc_set_count = 0;
     free(snap);
 
+    /* Majors are paced by promotion: what reached the old generation
+     * since the last one, against the live-paced threshold -- or every
+     * SL_GC_MAJOR_EVERY minors, whichever comes first (fix-gc.md 1.9). */
+    if (!sl_gc_threshold_fixed) {
+        size_t prev = atomic_fetch_add_explicit(&sl_gc_bytes_since_collect,
+                                                promoted_bytes,
+                                                memory_order_relaxed);
+        if (prev + promoted_bytes >= sl_gc_threshold ||
+            ++sl_gc_minors_since_major >= SL_GC_MAJOR_EVERY)
+            atomic_store_explicit(&sl_gc_collect_pending, 1,
+                                   memory_order_release);
+    }
     atomic_store_explicit(&sl_gc_bytes_since_minor, 0, memory_order_relaxed);
     sl_gc_nursery_adapt(t0, sl_rt_monotonic_ns(), live_young);
     if (stat_on) {
@@ -3113,6 +3148,7 @@ static void sl_gc_collect(void) {
      * the ratchet, 19MB and 3.0s collecting every 8MB. It also never
      * followed a heap that GROWS: 8MB forever re-marked an ever-larger
      * live set, which pacing by live bytes avoids. */
+    sl_gc_minors_since_major = 0;
     if (!sl_gc_threshold_fixed) {
         size_t floor = 8 * 1024 * 1024;
         sl_gc_threshold = live_bytes > floor ? live_bytes : floor;
