@@ -3299,3 +3299,12 @@ mechanism, not confirmed: after the shutdown flag is set, a net call
 that has to park is interrupted (sl_rt_shutdown_hook), so a client recv
 that parks even briefly fails. Not fixed; reproduce on arm64 before
 changing the test or the net layer.
+
+## Open: redis failed once on CI linux-x86_64 ("FAIL xadd: recv: timeout")
+
+Seen 2026-10-05 on run 37349085611 (branch perf/gc-alloc-nozero); the
+rerun of the same commit passed, and 15 runs of the branch's build in a
+Linux x86_64 container passed. The test's client hit its recv deadline
+waiting for the scripted server's XADD reply: timing on a loaded
+runner, most likely. Not fixed; if it recurs, raise the test's deadline
+or find what delays the scripted reply.
