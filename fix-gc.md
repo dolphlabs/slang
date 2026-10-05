@@ -524,7 +524,12 @@ of its 1-worker number.
 - [ ] **2.2 Frame the head once per request.** Keep the parsed head across
   partial `recv`s of one request, without keeping a `WireHead` alive across
   the park (the promotion trap `http.read`'s comment describes).
-- [ ] **2.3 A runtime-internal allocation that skips zeroing**, for
+- [x] **2.3 A runtime-internal allocation that skips zeroing** --
+  landed narrowly (2026-10-05): `sl_gc_alloc_leaf_uninit` /
+  `sl_bytes_alloc_uninit` for pointer-free leaves one memcpy fills (the
+  JSON string fast path, strings' copies, `sl_bytes_new`, the network
+  receive copy). Linux single-task decode probe ABBA x3: 896 -> 864 ms;
+  quote server even (4,828 vs 4,843 req/s). Earlier note:, for
   callers that overwrite every byte: the body copy, `to_bytes`, list and
   string growth.
 
@@ -535,7 +540,14 @@ of its 1-worker number.
   further: the profile's `bzero` share was not attributed to callers.
 - [ ] **2.4 Attribute what is left by call site**, using the
   instrumented-allocator method from `next-steps.md` §5, and fix by count.
-- [ ] **2.5 New JSON APIs** (in scope as of 2026-10-04; `note.txt` had them
+- [ ] **2.5 New JSON APIs** -- dropped (2026-10-05, owner's decision on
+  measurement). DWARF call graphs of the quote server in a Linux
+  container: the request body copy `decode_view` would remove was ~1% of
+  CPU (0.6% zeroing it, the copy itself less), and the response encode
+  `encode_into` would remove under 0.1%. Not worth permanent API. The
+  same profile found 11% in libc memcmp from the decoders' key test
+  (fixed, #321) and 2.7% clearing string allocations (2.3 below).
+  Original proposal: (in scope as of 2026-10-04; `note.txt` had them
   out). Proposed, signatures to be confirmed with the owner before code:
   - `json.encode_into(w: &mut wire, off: int, v: T) -> int`: encode
     straight into the response wire, with no intermediate `str` (cause
