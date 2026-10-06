@@ -92,7 +92,7 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
   invalid in `summary.md`) when it is outside ±20% of the recorded
   CCX33 baseline (1,577 ms, #287). Record steal time (`/proc/stat`) for
   the run. #325 would have been stopped at this check.
-- [ ] **S3. Correct #325's description** before it merges: absolute
+- [x] **S3. Correct #325's description** before it merges. Done 2026-10-06: a correction note heads the description (cross-host numbers, the static row capped by the load generator, where round 1 really crashed and #327, #329's check); the original text is kept below it. Original item: absolute
   numbers are not comparable with #287 (host ~6x slower on `compute`),
   `http/static` was capped by the load generator, and the table of
   differences against #287 is removed or labelled as cross-host.
