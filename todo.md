@@ -54,7 +54,15 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
 
 ## S. Safety and measurement first
 
-- [ ] **S1. The round-1 segfault.** #325, round 1 of the heavy tier: the
+- [x] **S1. The round-1 segfault.** Landed in #327 (2026-10-06). It was
+  not the reactor: an object held only by its header word, invisible to
+  the conservative scan of an async-preempted task (log entry "Fixed: a
+  new object held by its header..."). `tests/gc_preempt_derived` failed
+  9 of 10 forced-preemption runs on dev, 0 of 10 after; the api soak went
+  from 16 of 20 servers crashing to 0 of 10. Quote and decode unchanged
+  (ABBA x3). The suite now records a dead server, keeps its log, core and
+  binary, restarts it, and leaves the row out of the medians. Original
+  item: #325, round 1 of the heavy tier: the
   slang api server died between `mix c=512` and `point c=64`. Rounds 2-3
   were clean. No core and no server stderr were kept, so there is nothing
   to read. This is a memory-safety bug and outranks everything below.
@@ -73,7 +81,13 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
     and connection teardown in `stdlib/http` and `stdlib/pg`.
   - Done: a reproducer that crashes on `dev` and passes on the fix, in
     the GC stress lists.
-- [ ] **S2. A host check before a suite run trusts its numbers.** Run
+- [x] **S2. A host check before a suite run trusts its numbers.** Built
+  as written: `HOST_CHECK` (1 stops with exit 4, `warn` continues and
+  marks `summary.md`, 0 skips), `HOST_BASELINE_MS`/`HOST_TOLERANCE_PCT`,
+  `host_check.json` with steal over the run; skipped with a reason at
+  `QUICK=1`, other compute parameters, or no Rust. Tested by stubbing the
+  compute command: 1,600 ms passes, #325's 9,984 ms stops. Not yet run on
+  a real host. Original item: Run
   `compute` for Rust first and refuse to continue (or mark the run
   invalid in `summary.md`) when it is outside ±20% of the recorded
   CCX33 baseline (1,577 ms, #287). Record steal time (`/proc/stat`) for
