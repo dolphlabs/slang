@@ -413,8 +413,12 @@ static void sl_task_park(pthread_mutex_t *held_mu) {
     sl_rt_preempt_disable();
     sl_task *t = SL_RT_TLS_CUR(); /* not bare: SL_RT_TLS_ADDR_FN */
     pthread_mutex_lock(&sl_gc_mu);
+    t->parked_prev = NULL;
     t->parked_next = sl_parked_tasks;
+    if (sl_parked_tasks)
+        sl_parked_tasks->parked_prev = t;
     sl_parked_tasks = t;
+    t->on_parked = 1;
     pthread_mutex_unlock(&sl_gc_mu);
     t->park_mu = held_mu;
     t->parked = 1;
@@ -469,10 +473,16 @@ static void sl_task_resume(sl_task *t) {
      * takes its own nested bracket too (harmless, composes). */
     sl_rt_preempt_disable();
     pthread_mutex_lock(&sl_gc_mu);
-    sl_task **pp = &sl_parked_tasks;
-    while (*pp) {
-        if (*pp == t) { *pp = t->parked_next; break; }
-        pp = &(*pp)->parked_next;
+    if (t->on_parked) {
+        if (t->parked_prev)
+            t->parked_prev->parked_next = t->parked_next;
+        else
+            sl_parked_tasks = t->parked_next;
+        if (t->parked_next)
+            t->parked_next->parked_prev = t->parked_prev;
+        t->parked_next = NULL;
+        t->parked_prev = NULL;
+        t->on_parked = 0;
     }
     sl_runq_ready(t);
     pthread_mutex_unlock(&sl_gc_mu);

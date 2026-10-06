@@ -180,6 +180,13 @@ typedef struct sl_task {
                                 a channel's own send/recv_waiters) AND
                                 this global GC registry (via this
                                 field) at the same time. */
+    struct sl_task *parked_prev; /* the other half of parked_next, so a
+                                resume unlinks in O(1): the walk it
+                                replaced ran under sl_gc_mu, the lock
+                                every park takes, once per resume over
+                                every parked task -- at 512 connections
+                                that walk halved point's throughput. */
+    int on_parked;              /* on sl_parked_tasks now */
     long long sleep_deadline_ns; /* Tier 11 fifth slice: monotonic-ns
                                 absolute wake time -- meaningful only
                                 while this task is linked into
