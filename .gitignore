@@ -37,6 +37,10 @@ tests/runtime/test_preempt
 # bench/suite: build output, generated datasets and language toolchain
 # artifacts. bench/results/<run id>/ IS committed (that's the deliverable).
 bench/.build/
+# a crashed server's core and binary (bench/suite/run.sh reap_server):
+# hundreds of MB, kept on the host for debugging, never committed
+bench/results/**/core.died-*
+bench/results/**/server.died-*.bin
 bench/.data/
 bench/suite/**/target/
 bench/suite/**/target-*/
