@@ -445,6 +445,28 @@ for spec in "arena_churn" \
 done
 [ "$dl_bad" -eq 0 ] && echo "PASS deadlock guards"
 
+# ---- preemption guards -----------------------------------------------
+# Bugs that need an async preemption at one exact instruction, forced
+# here to every millisecond on 4 workers with a 16KB nursery so a minor
+# lands while the task is suspended. Three runs each. gc_preempt_derived:
+# a new object held only by its header was invisible to the conservative
+# scan (plain dev failed 9 of 10 runs).
+echo "--- preemption guards (forced 1 ms preemption, 16KB nursery) ---"
+pg_bad=0
+for name in gc_preempt_derived gc_preempt_derived gc_preempt_derived; do
+    out="/tmp/sl_preempt_${name}.out"
+    if ! SLANG_WORKERS=4 SLANG_GC_NURSERY_KB=16 SLANG_PREEMPT_QUANTUM_MS=1 \
+            SLANG_PREEMPT_TICK_MS=1 ./slangc "tests/$name/main.sl" --run \
+            >"$out" 2>/dev/null; then
+        echo "FAIL preemption guard $name (exit $?)"
+        pg_bad=1; fail=1
+    elif ! diff -q "tests/$name/expected.txt" "$out" >/dev/null; then
+        echo "FAIL preemption guard $name: $(head -1 "$out")"
+        pg_bad=1; fail=1
+    fi
+done
+[ "$pg_bad" -eq 0 ] && echo "PASS preemption guards"
+
 # ---- GC at a tiny threshold ------------------------------------------
 # A rooting bug -- a live object held only where no safepoint knows about
 # it -- surfaces only when a collection lands at that exact safepoint. At
@@ -461,7 +483,7 @@ for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood \
             generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry loop_leaf_poll own_roots switch escape_roots \
             http_read_wire bytes_empty_literal gc_minor_barriers map_delete if_let \
             literal_expect pending_sibling_type json_parity json_utf8 json_decode_budget \
-            bytes json_deep_nesting gc_container_frontier gc_promotion_budget value_struct_containers json_value_structs gc_stw_sleep; do
+            bytes json_deep_nesting gc_container_frontier gc_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived; do
     out="/tmp/sl_gcstress_${name}.out"
     if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -523,7 +545,7 @@ for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc
             spawn_isolation select maps json json_parity json_utf8 json_decode_budget \
             bytes json_deep_nesting http_read_wire http_client_pool http2_flood \
             gc_promotion_budget \
-            value_struct_containers json_value_structs gc_stw_sleep; do
+            value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_verify_minor_${name}.out"
     err="/tmp/sl_verify_minor_${name}.err"
