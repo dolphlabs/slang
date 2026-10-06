@@ -124,7 +124,14 @@ net.ipv4.tcp_fin_timeout = 10
 net.core.netdev_max_backlog = 65535
 fs.file-max = 4194304
 vm.swappiness = 1
+kernel.core_pattern = /var/tmp/slang-bench-cores/core.%e.%p
 EOF
+# Cores of a crashed server (run.sh's reap_server moves them into the
+# run). Ubuntu's default pattern pipes them to apport, which drops cores
+# of binaries no package owns; apport also rewrites the pattern when its
+# service starts, so it is stopped for the session.
+mkdir -p /var/tmp/slang-bench-cores && chmod 1777 /var/tmp/slang-bench-cores
+systemctl stop apport.service >/dev/null 2>&1 || true
 sysctl -q --system
 cat >/etc/security/limits.d/90-slang-bench.conf <<'EOF'
 * soft nofile 1048576

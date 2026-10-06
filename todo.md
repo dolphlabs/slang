@@ -3483,3 +3483,61 @@ Linux x86_64 container passed. The test's client hit its recv deadline
 waiting for the scripted server's XADD reply: timing on a loaded
 runner, most likely. Not fixed; if it recurs, raise the test's deadline
 or find what delays the scripted reply.
+
+## Fixed: a new object held by its header was invisible to the conservative scan
+
+The api server's crash in round 1 of the CCX33 run in #325 (todo plan item
+S1, 2026-10-06). Reproduced in a Linux x86_64 container against Postgres in
+Docker: under the mix with `SLANG_GC_VERIFY_MINOR=1 SLANG_GC_NURSERY_KB=16`
+about 1 server in 6 died within 30 s, and 16 of 20 with preemption forced to
+every millisecond. Every core was the same: `http.wants_close(got.req)` in
+the api's `serve`, reading an `http.Incoming` whose payload held an sku
+string (`SKU-89537\0`), or in one case a pointer to one.
+
+Cause. `sl_gc_alloc_impl` is always inlined, and GCC keeps only the header
+`h` until the final `h + 1`, which it forms after `sl_rt_preempt_enable`.
+An async preemption in those few instructions left the new object held by
+a word equal to its header, and `sl_gc_scan_conservative` recognized
+payload pointers (and a bytes' inline data) only. A minor on another
+worker freed the object; the task resumed and filled a slot another task
+had been given since. Here: `sl_jparse_string_raw` copying a quote item's
+sku over a live `Incoming`. Found by the verifier (its misses were always
+the decoded `[QuoteItem]` element at the index equal to the list's length
+when a minor promoted it, so the item being decoded at that minor), then a
+dump of the preempted decoder's stack at that minor: the lost object's only
+reference was the word 40 bytes below it.
+
+Fix: the conservative scan also takes a word equal to an object's header
+(`sl_gc_mark_header_word`); interior words still do not count
+(`tests/runtime/test_gc.c` pins both). `tests/gc_preempt_derived`, under the
+new preemption guards in `tests/run_tests.sh`: plain dev failed 9 of 10
+runs (mismatched elements or SIGSEGV), the fix 0 of 10; the api soak
+above, 0 of 10 servers and 0 verifier misses.
+
+Ruled out on the way, each with a tripwire or a dump: two threads in one
+worker's allocator state, a claim on a page another worker owns, a mutator
+allocating during a collection, the list barrier and its `gc_clean`
+frontier, stack relocation, the red zone, and `sl_arr_push`'s store before
+`len++` (the pushed value stays in the caller's memory: `push` is not
+inlined).
+
+Found and not fixed:
+- The idle-worker handshake is a store-then-load pair on two variables
+  under release/acquire only: the collector stores `sl_gc_stop_requested`
+  then loads each worker's `blocked`; a waking worker stores `blocked = 0`
+  then loads the stop flag. C11 allows both loads to see old values. It
+  holds on x86 because an unrelated locked RMW (`sl_gc_cycle`,
+  `sl_runq_sleepers`) sits in each window; make the pair seq_cst or fence
+  it, and check arm64.
+- A fatal signal prints nothing: #325's server.log was empty. A
+  SIGSEGV/SIGBUS handler that writes the signal, fault address and pc
+  (async-signal-safe) would have named the crash site.
+- `sl_arr_from`, `sl_arr_slice` and `sl_arr_concat` write elements before
+  setting `len`. Safe today: their sources still hold every element.
+- Generated C is not warning-free on Ubuntu's GCC: `(void)write(...)` and
+  `(void)read(...)` in the runtime (reactor nudges, the DNS wake) warn
+  `-Wunused-result` under the distro's default `_FORTIFY_SOURCE`, where a
+  void cast does not silence it. CI's postgres jobs print the warnings
+  (run 37528531877); the warning sweep compiles without fortify, so it
+  passes. Fix the call sites (check the result) and run the sweep with
+  `-D_FORTIFY_SOURCE=2`.
