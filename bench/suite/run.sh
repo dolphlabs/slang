@@ -253,6 +253,58 @@ done
 LANGS=$(echo $BUILT)
 log "built: $LANGS"
 
+# ---- host check ----------------------------------------------------------------
+# One Rust compute run on the server cores, against the CCX33's recorded
+# time, before any tier. #325's host ran it in 9,984 ms against #287's
+# 1,577 and every number of its 90-minute run was 3-6x off; this stops such
+# a run in seconds. HOST_CHECK=1 (default) stops outside the tolerance,
+# =warn marks the run invalid and continues, =0 skips. Only meaningful at
+# full scale with the default compute parameters, which the baseline was
+# measured with; otherwise it is skipped and says why. Steal time (a VM's
+# CPU taken by its host) is sampled here and at the end of the run.
+HOST_CHECK=${HOST_CHECK:-1}
+HOST_BASELINE_MS=${HOST_BASELINE_MS:-1577}   # CCX33, #287, rust compute
+HOST_TOLERANCE_PCT=${HOST_TOLERANCE_PCT:-20}
+steal_ticks() { awk '/^cpu /{print $9 + 0; exit}' /proc/stat 2>/dev/null || echo 0; }
+total_ticks() { awk '/^cpu /{s = 0; for (i = 2; i <= NF; i++) s += $i; print s; exit}' /proc/stat 2>/dev/null || echo 0; }
+STEAL0=$(steal_ticks); TOTAL0=$(total_ticks)
+host_check_record() { # <status> <measured ms or ""> <note>
+    python3 -c "import json,sys; json.dump({'status': sys.argv[1], 'measured_ms': int(sys.argv[2]) if sys.argv[2] else None, 'baseline_ms': $HOST_BASELINE_MS, 'tolerance_pct': $HOST_TOLERANCE_PCT, 'note': sys.argv[3]}, open('$OUT/host_check.json', 'w'), indent=2)" "$1" "$2" "$3"
+}
+hc_skip=""
+[ "$HOST_CHECK" = 0 ] && hc_skip="HOST_CHECK=0"
+[ -z "$hc_skip" ] && [ "$QUICK" = 1 ] && hc_skip="QUICK=1 changes the compute parameters"
+[ -z "$hc_skip" ] && { [ "$CC_TASKS" != 1000 ] || [ "$CC_WORK" != 20000 ] || [ "$CC_ALLOC" != 200 ]; } &&
+    hc_skip="compute parameters differ from the baseline's"
+[ -z "$hc_skip" ] && [[ " $LANGS " != *" rust "* ]] && hc_skip="rust is not built"
+if [ -n "$hc_skip" ]; then
+    log "host check skipped: $hc_skip"
+    host_check_record skipped "" "$hc_skip"
+else
+    hc_out="$OUT/raw/host-check.txt"
+    taskset -c "$SERVER_CPUS" bash -c "exec $(cmd compute rust)" >"$hc_out" 2>&1
+    hc_ms=$(python3 -c "import sys; sys.path.insert(0, '$ROOT/bench/suite/lib'); import report; print(report.parse_compute(open('$hc_out').read()).get('wall_ms', ''))")
+    if [ -z "$hc_ms" ]; then
+        log "host check: rust compute printed no result (see $hc_out)"
+        host_check_record failed "" "no result"
+        [ "$HOST_CHECK" = warn ] || exit 4
+    else
+        lo=$((HOST_BASELINE_MS * (100 - HOST_TOLERANCE_PCT) / 100))
+        hi=$((HOST_BASELINE_MS * (100 + HOST_TOLERANCE_PCT) / 100))
+        if [ "$hc_ms" -lt "$lo" ] || [ "$hc_ms" -gt "$hi" ]; then
+            log "host check FAILED: rust compute ${hc_ms} ms, expected ${lo}-${hi} (baseline ${HOST_BASELINE_MS})"
+            host_check_record failed "$hc_ms" "outside ${lo}-${hi} ms"
+            if [ "$HOST_CHECK" != warn ]; then
+                log "stopping: this host's numbers would not compare (HOST_CHECK=warn to run anyway)"
+                exit 4
+            fi
+        else
+            log "host check: rust compute ${hc_ms} ms (baseline ${HOST_BASELINE_MS}, within ${HOST_TOLERANCE_PCT}%)"
+            host_check_record pass "$hc_ms" ""
+        fi
+    fi
+fi
+
 # ---- data --------------------------------------------------------------------
 
 QUOTE_DIR="$DATA/quotes"
@@ -427,6 +479,17 @@ if has_tier heavy; then
     done
 fi
 
+# steal over the whole run, into host_check.json next to the check itself
+python3 - "$OUT/host_check.json" "$STEAL0" "$TOTAL0" "$(steal_ticks)" "$(total_ticks)" <<'EOF'
+import json, sys
+path, s0, t0, s1, t1 = sys.argv[1], *map(int, sys.argv[2:])
+try:
+    d = json.load(open(path))
+except (OSError, ValueError):
+    d = {"status": "missing"}
+d["steal_pct"] = round(100 * (s1 - s0) / (t1 - t0), 2) if t1 > t0 else None
+json.dump(d, open(path, "w"), indent=2)
+EOF
 log "measurements done; writing results.json and summary.md"
 python3 bench/suite/lib/report.py "$OUT" | tee -a "$LOG"
 log "done: $OUT"
