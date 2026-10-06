@@ -99,7 +99,30 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
 
 ## R. REST: make four workers and 512 connections worth what they cost
 
-- [ ] **R1. IO wakeups in O(1), not O(waiters).** All IO readiness goes
+- [ ] **R1. IO wakeups in O(1), not O(waiters).**
+  **Measured 2026-10-07, before any change** (Linux x86_64 container on
+  the dev Mac, Postgres in Docker, server pinned to 4 cores, wrk on 2;
+  *the URL needs `?sslmode=disable`: without it every pg query failed
+  TLS and the numbers were of 500s*). dev: point 13.5-14k req/s at c64,
+  6.3-6.9k at c512; Go 30-31k and 26k. What it showed:
+  - The reactor's scans are short (33-160 nodes a loop); collecting
+    resumes and resuming outside `sl_reactor_mu` cut its hold from 27 to
+    1.5 us a loop and changed no throughput.
+  - **The c512 halving was the parked-list walk** (fix-gc cause 18):
+    every resume walked `sl_parked_tasks` under `sl_gc_mu`. Doubly
+    linked: point c512 6,553 -> 13,332, mix c512 6,107 -> 8,604, c64
+    unchanged (ABBA x3). **Landed from perf/parked-list-o1**: the "parked list
+    doubly linked" bullet below.
+  - Still open: at c64 workers wait 50-100 us a time for
+    `sl_reactor_mu` (about 1.9 threads blocked), tasks woken onto a
+    stripe wait 1.3-2 ms to run, and 2 workers beat 4 (16.3k vs 13.5k
+    at c64). Measured neutral: one `epoll_ctl` instead of two
+    (MOD before ADD), spinning before blocking on `sl_reactor_mu`,
+    signalling one sleeper instead of broadcasting on every push, and
+    main's thread not running tasks. Next: per-fd waiter state so an
+    IO wait does not take a global lock (owner chose the incremental
+    path on 2026-10-07).
+  Original item: all IO readiness goes
   through one reactor thread (`sl_reactor_thread`, `runtime/sl_net.c`),
   under one global mutex (`sl_reactor_mu`). Each loop scans every waiting
   task for the soonest deadline, and again in
@@ -115,7 +138,7 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
     removal is O(1); deadlines in a min-heap with each task's heap index
     stored on the task, so the soonest deadline is O(1) and expiry is
     O(log n) per expired task; only tasks with a deadline enter the heap.
-  - `sl_parked_tasks` doubly linked, so resume is O(1) under `sl_gc_mu`.
+  - [x] `sl_parked_tasks` doubly linked, so resume is O(1) under `sl_gc_mu`.
   - Keep the existing guarantees: one resume per wake (the double-resume
     guard), the shutdown drain, the nudge-skipping protocol around
     `sl_reactor_wake_at`, and the bracket and thread-local rules in
@@ -140,10 +163,13 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
 - [ ] **R3. Probe only connections idle for more than 1 s, outside the
   pool lock** *(fix-gc 3.2)*. Today every `acquire` does a
   `recv(MSG_PEEK)` syscall while holding `p.lock` (`stdlib/pg/pg.sl`,
-  `acquire`).
+  `acquire`). Measured 2026-10-07 (the parked branch, cherry-picked
+  onto dev): neutral at c64 and c512, point and mix; the pool's lock
+  waits were the scheduling delay above, not the probe. Kept unmerged.
 - [ ] **R4. Stopped workers help collect** *(fix-gc 1.4)*. Parallel sweep
   first. This is the main remaining cause of quote's idle cores.
-- [ ] **R5. Per-connection prepared-statement cache** *(fix-gc 3.4)*, then
+- [ ] **R5. Per-connection prepared-statement cache** *(fix-gc 3.4)*
+  (landed in #312, never ticked), then
   one builder per query message *(fix-gc 3.3)*.
 - [ ] **R6. Frame the request head once** *(fix-gc 2.2)*.
 - [ ] **R7. Precise tracing for lists and maps of non-pointers**
@@ -3555,3 +3581,11 @@ Found and not fixed:
   (run 37528531877); the warning sweep compiles without fortify, so it
   passes. Fix the call sites (check the result) and run the sweep with
   `-D_FORTIFY_SOURCE=2`.
+
+## Open: `duration` used as an `int` gives an error that does not say the fix
+
+Found 2026-10-07 while instrumenting the pg pool: `let n: int = b;` with
+`b` a `duration` reports "cannot initialize int 'n' with a value of type
+duration" and stops there. The fix is `b as int` (`time.mono() as int`
+for a nanosecond count); the diagnostic should say so, as AGENTS.md §6
+requires of every error.
