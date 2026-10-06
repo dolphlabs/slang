@@ -85,6 +85,21 @@ Where the time goes, from the harness's loops:
 | light http + compute | ~11 min |
 | batch, 100M rows, 5 languages × 3 rounds | ~15 min |
 
+**The host check runs first.** Before any tier, `run.sh` times one Rust
+`compute` run on the server cores against the CCX33's 1,577 ms (#287) and
+stops with exit 4 if it is more than 20% off: #325's host took 9,984 ms and
+every number of that run was 3-6x off, which no later reading could undo.
+If it stops, provision another host rather than overriding it;
+`HOST_CHECK=warn` runs anyway and marks `summary.md` as not comparable,
+`HOST_CHECK=0` skips it. The check needs Rust in `LANGS` and full scale
+(`QUICK=1` skips it). `summary.md` also reports the CPU steal over the run.
+
+**A server that dies mid-run** is recorded, not hidden: its row carries
+the exit status, its log, core and binary are kept beside that round in
+`raw/` (cores are not committed), the server is restarted for the rest of
+the round, and `summary.md` lists the row and leaves it out of the medians.
+Say so in the report and keep the core on the host.
+
 Progress goes to `bench/results/<run id>/run.log` and stdout. Other
 overrides are listed at the top of `run.sh` (`TIERS`, `SERVER_CPUS` /
 `LOADGEN_CPUS` / `DB_CPUS`).

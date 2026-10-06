@@ -130,7 +130,9 @@ worker; `next-steps.md` §7f records 81.9 ms for #290. Item 0.4 settles it.
     mutex.** `sl_task_resume` unlinks the task from `sl_parked_tasks`, a
     singly linked list, by walking it while holding `sl_gc_mu`. At 512
     connections every wakeup walks up to 512 entries under the lock
-    every collection also needs. (Found during 1.1; not yet measured.)
+    every collection also needs. (Found during 1.1. Measured and fixed
+    2026-10-07: it was what halved point and mix at 512 connections;
+    doubly linked, point c512 6,553 -> 13,332 req/s, mix 6,107 -> 8,604.)
 19. **`SLANG_WORKERS=N` runs tasks on N+1 threads.** main's own thread
     joins the pool after main's task first switches out, on top of the N
     workers. The CCX33 runs set `SLANG_WORKERS=4` on 4 pinned cores, so 5
@@ -606,7 +608,7 @@ of its 1-worker number.
   (CPU per request 153.5 vs 153.3 us at 64 clients, 226 vs 226 at 512;
   one saved ~1 us syscall). Re-measure on the CCX33 before landing.
 - [ ] **3.3 Build each query message with one builder.**
-- [ ] **3.4 Per-connection prepared-statement cache** (decided 2026-10-04:
+- [x] **3.4 Per-connection prepared-statement cache** (landed in #312) (decided 2026-10-04:
   reverses the driver's "deliberately no named prepared statements"; update
   that comment). Bounded LRU per connection. On error `0A000` ("cached plan
   must not change result type"), drop the statement and retry once.

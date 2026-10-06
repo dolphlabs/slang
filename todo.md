@@ -54,7 +54,15 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
 
 ## S. Safety and measurement first
 
-- [ ] **S1. The round-1 segfault.** #325, round 1 of the heavy tier: the
+- [x] **S1. The round-1 segfault.** Landed in #327 (2026-10-06). It was
+  not the reactor: an object held only by its header word, invisible to
+  the conservative scan of an async-preempted task (log entry "Fixed: a
+  new object held by its header..."). `tests/gc_preempt_derived` failed
+  9 of 10 forced-preemption runs on dev, 0 of 10 after; the api soak went
+  from 16 of 20 servers crashing to 0 of 10. Quote and decode unchanged
+  (ABBA x3). The suite now records a dead server, keeps its log, core and
+  binary, restarts it, and leaves the row out of the medians. Original
+  item: #325, round 1 of the heavy tier: the
   slang api server died between `mix c=512` and `point c=64`. Rounds 2-3
   were clean. No core and no server stderr were kept, so there is nothing
   to read. This is a memory-safety bug and outranks everything below.
@@ -73,19 +81,48 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
     and connection teardown in `stdlib/http` and `stdlib/pg`.
   - Done: a reproducer that crashes on `dev` and passes on the fix, in
     the GC stress lists.
-- [ ] **S2. A host check before a suite run trusts its numbers.** Run
+- [x] **S2. A host check before a suite run trusts its numbers.** Built
+  as written: `HOST_CHECK` (1 stops with exit 4, `warn` continues and
+  marks `summary.md`, 0 skips), `HOST_BASELINE_MS`/`HOST_TOLERANCE_PCT`,
+  `host_check.json` with steal over the run; skipped with a reason at
+  `QUICK=1`, other compute parameters, or no Rust. Tested by stubbing the
+  compute command: 1,600 ms passes, #325's 9,984 ms stops. Not yet run on
+  a real host. Original item: Run
   `compute` for Rust first and refuse to continue (or mark the run
   invalid in `summary.md`) when it is outside ±20% of the recorded
   CCX33 baseline (1,577 ms, #287). Record steal time (`/proc/stat`) for
   the run. #325 would have been stopped at this check.
-- [ ] **S3. Correct #325's description** before it merges: absolute
+- [x] **S3. Correct #325's description** before it merges. Done 2026-10-06: a correction note heads the description (cross-host numbers, the static row capped by the load generator, where round 1 really crashed and #327, #329's check); the original text is kept below it. Original item: absolute
   numbers are not comparable with #287 (host ~6x slower on `compute`),
   `http/static` was capped by the load generator, and the table of
   differences against #287 is removed or labelled as cross-host.
 
 ## R. REST: make four workers and 512 connections worth what they cost
 
-- [ ] **R1. IO wakeups in O(1), not O(waiters).** All IO readiness goes
+- [ ] **R1. IO wakeups in O(1), not O(waiters).**
+  **Measured 2026-10-07, before any change** (Linux x86_64 container on
+  the dev Mac, Postgres in Docker, server pinned to 4 cores, wrk on 2;
+  *the URL needs `?sslmode=disable`: without it every pg query failed
+  TLS and the numbers were of 500s*). dev: point 13.5-14k req/s at c64,
+  6.3-6.9k at c512; Go 30-31k and 26k. What it showed:
+  - The reactor's scans are short (33-160 nodes a loop); collecting
+    resumes and resuming outside `sl_reactor_mu` cut its hold from 27 to
+    1.5 us a loop and changed no throughput.
+  - **The c512 halving was the parked-list walk** (fix-gc cause 18):
+    every resume walked `sl_parked_tasks` under `sl_gc_mu`. Doubly
+    linked: point c512 6,553 -> 13,332, mix c512 6,107 -> 8,604, c64
+    unchanged (ABBA x3). **Landed from perf/parked-list-o1**: the "parked list
+    doubly linked" bullet below.
+  - Still open: at c64 workers wait 50-100 us a time for
+    `sl_reactor_mu` (about 1.9 threads blocked), tasks woken onto a
+    stripe wait 1.3-2 ms to run, and 2 workers beat 4 (16.3k vs 13.5k
+    at c64). Measured neutral: one `epoll_ctl` instead of two
+    (MOD before ADD), spinning before blocking on `sl_reactor_mu`,
+    signalling one sleeper instead of broadcasting on every push, and
+    main's thread not running tasks. Next: per-fd waiter state so an
+    IO wait does not take a global lock (owner chose the incremental
+    path on 2026-10-07).
+  Original item: all IO readiness goes
   through one reactor thread (`sl_reactor_thread`, `runtime/sl_net.c`),
   under one global mutex (`sl_reactor_mu`). Each loop scans every waiting
   task for the soonest deadline, and again in
@@ -101,7 +138,7 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
     removal is O(1); deadlines in a min-heap with each task's heap index
     stored on the task, so the soonest deadline is O(1) and expiry is
     O(log n) per expired task; only tasks with a deadline enter the heap.
-  - `sl_parked_tasks` doubly linked, so resume is O(1) under `sl_gc_mu`.
+  - [x] `sl_parked_tasks` doubly linked, so resume is O(1) under `sl_gc_mu`.
   - Keep the existing guarantees: one resume per wake (the double-resume
     guard), the shutdown drain, the nudge-skipping protocol around
     `sl_reactor_wake_at`, and the bracket and thread-local rules in
@@ -126,10 +163,13 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
 - [ ] **R3. Probe only connections idle for more than 1 s, outside the
   pool lock** *(fix-gc 3.2)*. Today every `acquire` does a
   `recv(MSG_PEEK)` syscall while holding `p.lock` (`stdlib/pg/pg.sl`,
-  `acquire`).
+  `acquire`). Measured 2026-10-07 (the parked branch, cherry-picked
+  onto dev): neutral at c64 and c512, point and mix; the pool's lock
+  waits were the scheduling delay above, not the probe. Kept unmerged.
 - [ ] **R4. Stopped workers help collect** *(fix-gc 1.4)*. Parallel sweep
   first. This is the main remaining cause of quote's idle cores.
-- [ ] **R5. Per-connection prepared-statement cache** *(fix-gc 3.4)*, then
+- [ ] **R5. Per-connection prepared-statement cache** *(fix-gc 3.4)*
+  (landed in #312, never ticked), then
   one builder per query message *(fix-gc 3.3)*.
 - [ ] **R6. Frame the request head once** *(fix-gc 2.2)*.
 - [ ] **R7. Precise tracing for lists and maps of non-pointers**
@@ -3541,3 +3581,11 @@ Found and not fixed:
   (run 37528531877); the warning sweep compiles without fortify, so it
   passes. Fix the call sites (check the result) and run the sweep with
   `-D_FORTIFY_SOURCE=2`.
+
+## Open: `duration` used as an `int` gives an error that does not say the fix
+
+Found 2026-10-07 while instrumenting the pg pool: `let n: int = b;` with
+`b` a `duration` reports "cannot initialize int 'n' with a value of type
+duration" and stops there. The fix is `b as int` (`time.mono() as int`
+for a nanosecond count); the diagnostic should say so, as AGENTS.md §6
+requires of every error.
