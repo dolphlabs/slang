@@ -1,6 +1,181 @@
-# slang roadmap — data types for server-side & network programming
+# todo
 
-Track progress top to bottom; tick items off as they land.
+The active plan is first; the investigations log follows it
+([Investigations log](#investigations-log)). Work the plan top to bottom,
+one branch and one PR to `dev` per numbered item, never stacked. Tick items
+as they land and record the before/after numbers next to them.
+
+# Plan: beat Go on REST, then gRPC and GraphQL
+
+Written 2026-10-06 from the CCX33 re-run in PR #325 (commit `06e6de4`),
+read against PR #287 (`f42f2b5`). It continues `fix-gc.md`: items marked
+*(fix-gc N.N)* are described there in full, and are ticked in both files
+when they land. The pass condition is fix-gc's Goal, unchanged: beat Go on
+every `api` row at 64 and 512 connections and at both fixed rates, on
+throughput **and** p99, with peak RSS within 1.10x of Rust's.
+
+## What #325 shows
+
+**Its absolute numbers cannot be compared with #287's.** The host was about
+6x slower on pure CPU (Rust `compute` 1,577 -> 9,984 ms; it touches no
+network or database), and `http/static` sat at ~5k req/s for every
+language, which is the load generator's ceiling, not the servers'. Only
+ratios within one run carry information. The #325 description's "quote gap
+narrowed from 10.3x to 1.8x" compares across the two hosts and should not be
+quoted.
+
+Ratios within each run, slang / Go req/s:
+
+| row | #287 | #325 |
+|---|---:|---:|
+| quote c64 / c512 | 0.14 / 0.10 | 0.83 / 0.55 |
+| mix c64 / c512 | 0.20 / 0.16 | 0.86 / 0.52 |
+| point c64 / c512 | 0.53 / 0.48 | 0.65 / 0.42 |
+| batch (Go wall / slang wall) | 0.42 | 0.35 |
+
+Server CPU per request in #325 (cores / req/s): quote c512 slang 3.17 ms,
+Go 2.75 ms (1.15x; #287 had 10.3x); point c512 slang 666 us, Go 348 us
+(1.9x). Mix c64 p99: slang 36.05 ms, Go 38.82 ms.
+
+**What is left is not CPU per request but idle time.** Two signs:
+
+1. **slang alone gets slower as connections rise.** From c64 to c512, slang
+   point -35% (5,819 -> 3,797), mix -34% (4,160 -> 2,755), quote -24%. Go:
+   point flat, mix +10%, quote +15%. Rust: flat.
+2. **slang leaves both the server and the database idle.** Point c512:
+   2.53 of 4 server cores, 0.72 of 2 Postgres cores; every other language
+   keeps Postgres at ~1.93. Quote c512 (no database) uses 2.47 cores where
+   every other language uses 3.93-3.95. At its current CPU per request,
+   quote on four busy cores would be ~1,240 req/s, ~87% of Go.
+
+Something serializes, and its cost grows with the number of connections.
+The reactor (R1) fits both signs; the collector's single-threaded sweep
+(R4) explains the rest of quote's idle cores.
+
+## S. Safety and measurement first
+
+- [ ] **S1. The round-1 segfault.** #325, round 1 of the heavy tier: the
+  slang api server died between `mix c=512` and `point c=64`. Rounds 2-3
+  were clean. No core and no server stderr were kept, so there is nothing
+  to read. This is a memory-safety bug and outranks everything below.
+  - Make the suite keep evidence: server stderr per scenario under
+    `raw/heavy/`, `ulimit -c unlimited` and a `core_pattern` into the
+    results directory in `setup_host.sh`, and the server binary kept
+    beside the core.
+  - Reproduce locally: the api server against Postgres in Docker,
+    `mix c=512` then `point c=64` in a loop, with `SLANG_GC_VERIFY_MINOR=1
+    SLANG_GC_NURSERY_KB=16`, then under forced async preemption
+    (`SLANG_PREEMPT_QUANTUM_MS=1 SLANG_PREEMPT_TICK_MS=1`), then in the
+    linux-arm64 container. The transition closes 512 connections at
+    once while 64 open: suspect the reactor's shutdown and expire paths
+    (`sl_reactor_expire_waiters`, the double-resume guard at
+    `runtime/sl_net.c` "only resume if the removal actually found t")
+    and connection teardown in `stdlib/http` and `stdlib/pg`.
+  - Done: a reproducer that crashes on `dev` and passes on the fix, in
+    the GC stress lists.
+- [ ] **S2. A host check before a suite run trusts its numbers.** Run
+  `compute` for Rust first and refuse to continue (or mark the run
+  invalid in `summary.md`) when it is outside ±20% of the recorded
+  CCX33 baseline (1,577 ms, #287). Record steal time (`/proc/stat`) for
+  the run. #325 would have been stopped at this check.
+- [ ] **S3. Correct #325's description** before it merges: absolute
+  numbers are not comparable with #287 (host ~6x slower on `compute`),
+  `http/static` was capped by the load generator, and the table of
+  differences against #287 is removed or labelled as cross-host.
+
+## R. REST: make four workers and 512 connections worth what they cost
+
+- [ ] **R1. IO wakeups in O(1), not O(waiters).** All IO readiness goes
+  through one reactor thread (`sl_reactor_thread`, `runtime/sl_net.c`),
+  under one global mutex (`sl_reactor_mu`). Each loop scans every waiting
+  task for the soonest deadline, and again in
+  `sl_reactor_expire_waiters`; each ready fd is unlinked from the
+  singly linked `sl_reactor_waiting` by a walk; each resume
+  (`sl_task_resume`, `runtime/sl_pool.c`) walks `sl_parked_tasks` under
+  `sl_gc_mu`, the collector's global lock (fix-gc cause 18). Workers
+  registering a wait take `sl_reactor_mu` too. At c512 about 576 tasks
+  wait (512 HTTP + 64 Postgres), so one wake costs hundreds of pointer
+  chases on one thread, while holding the locks every park and every
+  collection need.
+  - Waiting tasks on a doubly linked list (or an intrusive prev link) so
+    removal is O(1); deadlines in a min-heap with each task's heap index
+    stored on the task, so the soonest deadline is O(1) and expiry is
+    O(log n) per expired task; only tasks with a deadline enter the heap.
+  - `sl_parked_tasks` doubly linked, so resume is O(1) under `sl_gc_mu`.
+  - Keep the existing guarantees: one resume per wake (the double-resume
+    guard), the shutdown drain, the nudge-skipping protocol around
+    `sl_reactor_wake_at`, and the bracket and thread-local rules in
+    AGENTS.md §6.
+  - Measure first (Phase 0 style): reactor-thread CPU and time spent
+    under `sl_reactor_mu` and `sl_gc_mu` at c64 and c512 (`perf` in the
+    Linux container), so the change has a before.
+  - Pass: point and mix at c512 within the run-to-run spread of c64
+    (local, Postgres in Docker, `bench/latgen`, ABBA x3), and point's
+    Postgres CPU rising with throughput. Test: a many-waiter stress
+    program (thousands of tasks parked on sockets with and without
+    deadlines, random wakes, expiries and a shutdown) that runs under the
+    GC verifier and forced preemption.
+- [ ] **R2. Threads on the server's cores.** With `SLANG_WORKERS=4` on 4
+  pinned cores, the 4 workers, main's thread (fix-gc cause 19), the
+  reactor, the ticker and the timer thread all compete for them, and
+  every IO wake is a hand-off from the reactor to a worker. After R1,
+  measure two changes separately: main's thread not joining as a fifth
+  worker, and idle workers polling the epoll fd themselves (Go's netpoll
+  model) with the reactor thread kept only for sleeping. The second is a
+  scheduler design change: write it up and ask before building it.
+- [ ] **R3. Probe only connections idle for more than 1 s, outside the
+  pool lock** *(fix-gc 3.2)*. Today every `acquire` does a
+  `recv(MSG_PEEK)` syscall while holding `p.lock` (`stdlib/pg/pg.sl`,
+  `acquire`).
+- [ ] **R4. Stopped workers help collect** *(fix-gc 1.4)*. Parallel sweep
+  first. This is the main remaining cause of quote's idle cores.
+- [ ] **R5. Per-connection prepared-statement cache** *(fix-gc 3.4)*, then
+  one builder per query message *(fix-gc 3.3)*.
+- [ ] **R6. Frame the request head once** *(fix-gc 2.2)*.
+- [ ] **R7. Precise tracing for lists and maps of non-pointers**
+  *(fix-gc 1.8)*, then batch *(fix-gc Phase 6)*: batch is the one row
+  whose ratio got worse (0.42 -> 0.35).
+- [ ] **R8. Prove it** *(fix-gc Phase 9)*: a CCX33 re-run with #287's
+  configuration that passes S2's host check, p99 from `bench/latgen`.
+
+## G. gRPC and GraphQL
+
+Both are new public APIs, so each starts with a design note approved by
+the owner (AGENTS.md §2) before any code. Both come after R1-R4, so they
+are built on a server path that already scales. slang has no reflection,
+interfaces or closures, so both are code-generated from a schema, the way
+`json.decode` is generated from a struct today.
+
+- [ ] **G1. gRPC design note.** Builds on `stdlib/http2` (frames, HPACK,
+  concurrent streams, one writer task per connection). Missing: protobuf
+  wire encode/decode for value and `gc` structs, length-prefixed message
+  framing, trailers (`grpc-status`, `grpc-message`), deadlines from
+  `grpc-timeout` mapped to `until`, and a `.proto` -> slang generator
+  (unary first; then server streaming; client and bidi streaming after).
+  Decisions for the owner: where the generator lives (`slangc` subcommand
+  or a separate tool), and whether TLS/ALPN h2 is in v1 or h2c only.
+  The note also adds a gRPC row to `bench/SPEC.md` (the same quote and
+  point work over unary RPC), which is also the first load test of
+  `stdlib/http2`.
+- [ ] **G2. gRPC implementation**, item by item as the approved note
+  lists them, each with fuzzing of the protobuf decoder and the framing
+  (hostile input: caps on message size, nesting depth and field count).
+- [ ] **G3. GraphQL design note.** A query parser and validator, and an
+  executor generated from a schema, in the style of gqlgen. Decisions
+  for the owner: schema-first (SDL -> slang) or code-first (slang types
+  -> schema); resolvers as plain function values; the v1 subset (queries
+  and mutations, variables, fragments; no subscriptions); and limits
+  against hostile queries (depth, breadth, alias count, cost). The note
+  also adds a GraphQL row to `bench/SPEC.md` with the N+1 case (users
+  with their orders) and states whether a batching loader is in v1.
+- [ ] **G4. GraphQL implementation**, item by item as the approved note
+  lists them.
+
+# Investigations log
+
+The roadmap tiers and investigations recorded before 2026-10-06. Runtime
+and codegen comments cite sections here by name ("todo.md Tier 11");
+search it before debugging anything in `runtime/`.
 
 ## Tier 1 — foundations
 
