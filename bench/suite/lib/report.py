@@ -71,6 +71,7 @@ def median(values):
 def main(run_dir):
     env = load_json(os.path.join(run_dir, "env.json")) or {}
     builds = load_json(os.path.join(run_dir, "builds.json")) or {}
+    host = load_json(os.path.join(run_dir, "host_check.json")) or {}
     correctness = load_json(os.path.join(run_dir, "correctness.json")) or {}
     rows = []
     runs_path = os.path.join(run_dir, "runs.jsonl")
@@ -165,7 +166,7 @@ def main(run_dir):
             s["all_rounds_agree"] = all(m.get("agrees_with_majority") for m in ms)
         summary.append(s)
 
-    result = {"schema": "slang-bench/1", "env": env, "builds": builds, "correctness": correctness,
+    result = {"schema": "slang-bench/1", "env": env, "host_check": host, "builds": builds, "correctness": correctness,
               "summary": summary, "measurements": measurements}
     with open(os.path.join(run_dir, "results.json"), "w") as f:
         json.dump(result, f, indent=2)
@@ -176,7 +177,20 @@ def main(run_dir):
     lines += [f"- commit `{env.get('git_sha', '?')}`{' (dirty tree)' if env.get('git_dirty') else ''}",
               f"- {env.get('os', '?')}, kernel {env.get('kernel', '?')}, {env.get('nproc', '?')} cpus, {env.get('memory', '?')} RAM",
               f"- cpu split: server `{cfg.get('server_cpus')}` ({cfg.get('workers')} workers), load generator `{cfg.get('loadgen_cpus')}`, database `{cfg.get('db_cpus') or 'unpinned'}`",
-              f"- rounds: {cfg.get('rounds')}; medians shown", ""]
+              f"- rounds: {cfg.get('rounds')}; medians shown"]
+    if host:
+        st = host.get("status")
+        if st == "pass":
+            hc = f"pass (rust compute {host.get('measured_ms')} ms, baseline {host.get('baseline_ms')} ±{host.get('tolerance_pct')}%)"
+        elif st == "failed":
+            hc = (f"**FAILED, numbers not comparable with other hosts** (rust compute "
+                  f"{host.get('measured_ms')} ms, baseline {host.get('baseline_ms')} ±{host.get('tolerance_pct')}%)")
+        else:
+            hc = f"{st}: {host.get('note', '')}"
+        if host.get("steal_pct") is not None:
+            hc += f"; steal {host['steal_pct']}% of CPU time over the run"
+        lines.append(f"- host check: {hc}")
+    lines.append("")
     failed = [f"{l} (build)" for l, b in builds.items() if not b.get("ok")]
     for wl, langs in correctness.items():
         failed += [f"{l} ({wl})" for l, c in langs.items() if c.get("status") != "pass"]
