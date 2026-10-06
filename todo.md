@@ -3359,3 +3359,10 @@ Found and not fixed:
   (async-signal-safe) would have named the crash site.
 - `sl_arr_from`, `sl_arr_slice` and `sl_arr_concat` write elements before
   setting `len`. Safe today: their sources still hold every element.
+- Generated C is not warning-free on Ubuntu's GCC: `(void)write(...)` and
+  `(void)read(...)` in the runtime (reactor nudges, the DNS wake) warn
+  `-Wunused-result` under the distro's default `_FORTIFY_SOURCE`, where a
+  void cast does not silence it. CI's postgres jobs print the warnings
+  (run 37528531877); the warning sweep compiles without fortify, so it
+  passes. Fix the call sites (check the result) and run the sweep with
+  `-D_FORTIFY_SOURCE=2`.
