@@ -113,6 +113,8 @@ def main(run_dir):
         if db:
             m["db_avg_cpu_cores"] = db["avg_cpu_cores"]
         m["raw_log"] = r.get("log")
+        if r.get("server_exit") is not None:
+            m["server_exit"] = r["server_exit"]
         measurements.append(m)
 
     # compute: every language must agree with Go's totals
@@ -135,6 +137,8 @@ def main(run_dir):
 
     groups = {}
     for m in measurements:
+        if "server_exit" in m:
+            continue  # a dead server's numbers are a closed port's, not its own
         key = (m["tier"], m["workload"], m["scenario"], m.get("tool", ""), m.get("connections"), m.get("rate"), m["lang"])
         groups.setdefault(key, []).append(m)
     summary = []
@@ -178,6 +182,15 @@ def main(run_dir):
         failed += [f"{l} ({wl})" for l, c in langs.items() if c.get("status") != "pass"]
     lines.append("**Failed and not measured:** " + (", ".join(failed) if failed else "none"))
     lines.append("")
+    crashed = [m for m in measurements if "server_exit" in m]
+    if crashed:
+        def what(m):
+            load = f"fixed {m['rate']}/s" if m.get("rate") else f"c={m.get('connections')}"
+            code = m["server_exit"]
+            how = f"signal {code - 128}" if code > 128 else ("not running" if code < 0 else f"exit {code}")
+            return f"{m['lang']} {m['workload']}/{m['scenario']} {load} round {m.get('round')} ({how})"
+        lines.append("**Server died, excluded from the medians:** " + "; ".join(what(m) for m in crashed))
+        lines.append("")
 
     def table(title, rows_, cols):
         if not rows_:

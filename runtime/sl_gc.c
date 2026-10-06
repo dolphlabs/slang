@@ -2049,6 +2049,22 @@ static void sl_gc_mark_inline_bytes(void *w) {
         sl_gc_cur_mark(o);
 }
 
+/* A word equal to an object's HEADER, the form a fresh object has inside
+ * the allocator: sl_gc_alloc_impl is inlined and keeps only `h` until
+ * its final `h + 1`, after the preempt bracket has closed. A task
+ * async-preempted in that window held its new object by nothing the
+ * scan recognized, a minor on another worker freed it, and the caller
+ * then filled a slot another allocation had been given -- the CCX33 api
+ * crash: a quote item's sku string copied over a live http.Incoming.
+ * Exactly the header address; interior words still do not count. */
+SL_GC_NO_ASAN
+static void sl_gc_mark_header_word(void *w) {
+    if ((uintptr_t)w > UINTPTR_MAX - sizeof(sl_gc_obj)) return;
+    void *p = (char *)w + sizeof(sl_gc_obj);
+    if (sl_gc_known(p))
+        sl_gc_cur_mark(p);
+}
+
 SL_GC_NO_ASAN
 static void sl_gc_scan_conservative(uintptr_t lo, uintptr_t hi) {
     lo &= ~(uintptr_t)7; /* align down -- rsp itself is always 16-byte
@@ -2057,6 +2073,7 @@ static void sl_gc_scan_conservative(uintptr_t lo, uintptr_t hi) {
     for (uintptr_t a = lo; a + sizeof(void *) <= hi; a += sizeof(void *)) {
         void *w = *(void **)a;
         sl_gc_cur_mark(w);
+        sl_gc_mark_header_word(w);
         sl_gc_mark_inline_bytes(w);
     }
 }

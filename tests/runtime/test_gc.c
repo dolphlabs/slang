@@ -276,7 +276,46 @@ static int sl_gc_test_inline_bytes(void) {
     return bad;
 }
 
+/* A fresh object is held by its header inside the inlined allocator
+ * (`h`, before `h + 1` is formed), so a conservatively scanned word equal
+ * to a header must keep the object -- paged (small) and unpaged (past
+ * SL_GC_PAGE_MAX_TOTAL) alike. One byte past the header is an interior
+ * word and must not. */
+static int sl_gc_test_header_word(void) {
+    void *small = sl_gc_alloc(10, NULL);
+    void *big = sl_gc_alloc(4096, NULL);
+    sl_gc_harvest_task(sl_rt_cur());
+    sl_gc_set_build(0);
+    void (*saved)(void *) = sl_gc_cur_mark;
+    sl_gc_cur_mark = sl_gc_mark;
+    sl_gc_obj *sh = (sl_gc_obj *)small - 1;
+    sl_gc_obj *bh = (sl_gc_obj *)big - 1;
+    int bad = 0;
+    if (!sh->paged || bh->paged) bad = 1;
+
+    void *headers[2] = { sh, bh };
+    sl_gc_scan_conservative((uintptr_t)headers, (uintptr_t)(headers + 2));
+    if (!sh->marked || !bh->marked) bad = 1;
+    sh->marked = 0;
+    bh->marked = 0;
+
+    void *inside[2] = { (char *)sh + 1, (char *)bh + 1 };
+    sl_gc_scan_conservative((uintptr_t)inside, (uintptr_t)(inside + 2));
+    if (sh->marked || bh->marked) bad = 1;
+
+    sh->marked = 0;
+    bh->marked = 0;
+    sl_gc_wl_n = 0;
+    free(sl_gc_set);
+    sl_gc_set = NULL;
+    sl_gc_set_cap = 0;
+    sl_gc_set_count = 0;
+    sl_gc_cur_mark = saved;
+    return bad;
+}
+
 int main(void) {
     if (sl_runtime_test_main()) return 1;
-    return sl_gc_test_inline_bytes();
+    if (sl_gc_test_inline_bytes()) return 1;
+    return sl_gc_test_header_word();
 }

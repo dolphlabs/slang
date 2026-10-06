@@ -1,9 +1,13 @@
 # fix-gc: beat Go on the API workloads, stay in Rust's memory league
 
 The plan that follows the CCX33 cross-language run (PR #287, commit
-`f42f2b5`, 2026-10-01). Work it top to bottom, one PR per numbered item,
-branched from `dev`, never stacked. Tick items as they land and record the
-before/after numbers next to them, as `next-steps.md` does.
+`f42f2b5`, 2026-10-01). One PR per numbered item, branched from `dev`,
+never stacked. Tick items as they land and record the before/after numbers
+next to them, as `next-steps.md` does.
+
+**Order (2026-10-06, owner's decision):** the queue is the plan at the top
+of `todo.md`, written from the #325 re-run. It cites the items here that are
+still open as *(fix-gc N.N)*; this file keeps their detail and evidence.
 
 Agreed with the owner on 2026-10-04. Decisions taken that day are in
 [Decisions](#decisions); items that override standing rules in `AGENTS.md`

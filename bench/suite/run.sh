@@ -71,6 +71,10 @@ export WORKERS
 
 # thousands of connections per run: raise the descriptor limit if allowed
 ulimit -n 1048576 2>/dev/null || ulimit -n 65535 2>/dev/null || true
+# a server that crashes leaves a core where setup_host.sh's core_pattern
+# points; reap_server moves it into the run's raw/ directory
+ulimit -c unlimited 2>/dev/null || true
+CORE_DIR=${CORE_DIR:-/var/tmp/slang-bench-cores}
 
 mkdir -p "$OUT/raw" "$DATA" "$BIN"
 LOG="$OUT/run.log"
@@ -121,6 +125,42 @@ wait_port() { # <port> <seconds>
         sleep 0.2
     done
     return 1
+}
+
+# Did the server under test die during the measurement just taken? If so,
+# SERVER_DIED is its exit status (128+N: killed by signal N, -1: it was
+# not running at all), its log is kept as server.died-<n>.log beside any
+# core it dumped and a copy of its binary, and a fresh server is started
+# so the round's remaining scenarios are still measured. If it is alive,
+# SERVER_DIED is empty. #325's round-1 api crash went unnoticed: every
+# later scenario of that round was recorded against a closed port.
+SERVER_DIED=""
+DEATHS=0
+reap_server() { # <dir> <command> <wait function> <wait target>
+    SERVER_DIED=""
+    if [ -z "$SERVER_PID" ]; then
+        SERVER_DIED=-1
+        return
+    fi
+    kill -0 "$SERVER_PID" 2>/dev/null && return
+    local pid=$SERVER_PID code=0 core w bin=""
+    wait "$pid" 2>/dev/null
+    code=$?
+    SERVER_PID=""
+    SERVER_DIED=$code
+    DEATHS=$((DEATHS + 1))
+    mv "$1/server.log" "$1/server.died-$DEATHS.log" 2>/dev/null
+    for w in $2; do [ -f "$w" ] && bin=$w; done
+    for core in "$CORE_DIR"/core.*."$pid"; do
+        [ -e "$core" ] || continue
+        mv "$core" "$1/core.died-$DEATHS" &&
+            [ -n "$bin" ] && cp "$bin" "$1/server.died-$DEATHS.bin"
+    done
+    local sig=""
+    [ "$code" -gt 128 ] && sig=", signal $((code - 128))"
+    log "server died (exit $code$sig), log $1/server.died-$DEATHS.log; restarting"
+    start_server "$SERVER_CPUS" "$1/server.log" "$2"
+    "$3" "$4" 60 || { log "server did not restart"; stop_server; }
 }
 
 SAMPLER_PID=""
@@ -290,9 +330,10 @@ if has_tier light; then
                 taskset -c "$LOADGEN_CPUS" wrk -t"$LOADGEN_THREADS" -c"$conns" -d"$HTTP_DUR" --latency \
                     "http://127.0.0.1:$HTTP_PORT/" >"$dir/c$conns.wrk.txt" 2>&1
                 sample_stop
+                reap_server "$dir" "$(cmd http "$lang")" wait_port "$HTTP_PORT"
                 record tier=light workload=http scenario=static lang="$lang" round="$round" \
                        connections="$conns" tool=wrk log="${dir#$OUT/}/c$conns.wrk.txt" \
-                       sample="${dir#$OUT/}/c$conns.sample.json"
+                       sample="${dir#$OUT/}/c$conns.sample.json" ${SERVER_DIED:+server_exit=$SERVER_DIED}
             done
             stop_server
         done
@@ -341,9 +382,11 @@ if has_tier heavy; then
                         -s "bench/suite/lib/$scenario.lua" "http://127.0.0.1:$PORT" >"$dir/$scenario-c$conns.wrk.txt" 2>&1
                     sample_stop
                     [ -n "$PG_PID" ] && { kill -TERM "$DB_SAMPLER" 2>/dev/null; wait "$DB_SAMPLER" 2>/dev/null; }
+                    reap_server "$dir" "$(cmd api "$lang")" wait_http "http://127.0.0.1:$PORT/health"
                     record tier=heavy workload=api scenario="$scenario" lang="$lang" round="$round" \
                            connections="$conns" tool=wrk log="${dir#$OUT/}/$scenario-c$conns.wrk.txt" \
-                           sample="${dir#$OUT/}/$scenario-c$conns.sample.json" db_sample="${dir#$OUT/}/$scenario-c$conns.db.json"
+                           sample="${dir#$OUT/}/$scenario-c$conns.sample.json" db_sample="${dir#$OUT/}/$scenario-c$conns.db.json" \
+                           ${SERVER_DIED:+server_exit=$SERVER_DIED}
                 done
             done
             for rate in $API_RATES; do
@@ -352,9 +395,10 @@ if has_tier heavy; then
                 taskset -c "$LOADGEN_CPUS" wrk2 -t"$LOADGEN_THREADS" -c256 -d"$API_DUR" -R"$rate" --latency --timeout 10s \
                     -s bench/suite/lib/mix.lua "http://127.0.0.1:$PORT" >"$dir/mix-r$rate.wrk2.txt" 2>&1
                 sample_stop
+                reap_server "$dir" "$(cmd api "$lang")" wait_http "http://127.0.0.1:$PORT/health"
                 record tier=heavy workload=api scenario=mix lang="$lang" round="$round" rate="$rate" \
                        connections=256 tool=wrk2 log="${dir#$OUT/}/mix-r$rate.wrk2.txt" \
-                       sample="${dir#$OUT/}/mix-r$rate.sample.json"
+                       sample="${dir#$OUT/}/mix-r$rate.sample.json" ${SERVER_DIED:+server_exit=$SERVER_DIED}
             done
             stop_server
         done
