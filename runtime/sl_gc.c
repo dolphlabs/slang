@@ -1205,6 +1205,14 @@ struct sl_gc_page {
      * clears it -- the fallback path skips full pages instead of
      * re-walking their free lists on every allocation. */
     unsigned char full;
+    /* dirty: an object in it was freed since the last sweep-end prune.
+     * Only a dirty page can have new holes, so only a dirty page's free
+     * list is rebuilt there; the others' lists are still what the
+     * allocator's claims left them. Rebuilding every page every minor
+     * walked the bitmap of every page holding promoted objects, the whole
+     * old generation's pages: 0.34 ms a minor at 64 connections, as much
+     * as the sweep. */
+    unsigned char dirty;
     unsigned long long bitmap[SL_GC_PAGE_BITMAP_WORDS];
     /* payload follows, 8-aligned */
 };
@@ -1485,6 +1493,7 @@ static sl_gc_page *sl_gc_page_new(sl_gc_worker_state *st) {
     pg->young_live = 0;
     pg->old_live = 0;
     pg->full = 0;
+    pg->dirty = 0;
     memset(pg->bitmap, 0, sizeof(pg->bitmap));
     st->npages++;
     SL_GC_PAGE_COUNT(sl_gc_page_stat_pages);
@@ -1587,6 +1596,7 @@ static void sl_gc_page_free_obj(sl_gc_obj *h) {
         }
     }
     sl_gc_page_unmark(pg, off);
+    pg->dirty = 1;
     if (h->gen != 1)
         pg->young_live--;
     else
@@ -1669,6 +1679,7 @@ static void sl_gc_pages_prune_list(sl_gc_page **headp, sl_gc_page **curp,
                 pg->bump = 0;
                 pg->free_head = 0;
                 pg->full = 0;
+                pg->dirty = 0;
                 memset(pg->bitmap, 0, sizeof(pg->bitmap));
                 keep--;
                 n++;
@@ -1683,9 +1694,14 @@ static void sl_gc_pages_prune_list(sl_gc_page **headp, sl_gc_page **curp,
             SL_GC_PAGE_COUNT(sl_gc_page_stat_freed);
             continue;
         }
-        /* Survived with new holes from this sweep: misses expire. */
-        pg->full = 0;
-        sl_gc_page_rebuild_free(pg);
+        /* Survived with new holes from this sweep: misses expire. A page
+           nothing died in has no new holes: its list and its misses
+           stand. */
+        if (pg->dirty) {
+            pg->full = 0;
+            sl_gc_page_rebuild_free(pg);
+            pg->dirty = 0;
+        }
         n++;
         link = &pg->next;
     }
