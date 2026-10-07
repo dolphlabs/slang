@@ -129,6 +129,10 @@ pub gc struct Conn {
     notes_dropped: int,
     // Prepared statements by SQL text.
     stmts: map[str]Stmt,
+    // Outgoing messages for the exchange being built, w[0..wn]; reused
+    // by every query on the connection (see w_reset).
+    w: bytes,
+    wn: int,
     stmt_next: int,
     stmt_tick: int,
     // Statements to close, sent ahead of the next query's messages:
@@ -143,6 +147,13 @@ gc struct Stmt {
     n: int,
     name: str,
     used: int,
+    name_b: bytes,      // name as bytes, written into every Bind
+    // The result's columns, from the RowDescription of the run that
+    // prepared it: a cached statement's later runs skip Describe and
+    // take a copy of these. described: they are known.
+    cols: [str],
+    types: [int],
+    described: bool,
 }
 
 pub gc struct Notification {
@@ -1081,6 +1092,7 @@ pub fn connect_config(cfg: Config, deadline: until) -> result[Conn, str] {
                    status: 0, params: params, in_pool: false, mode: 0,
                    stream_id: 0, server_err: "", result_size: 0,
                    notes: no_notes, notes_dropped: 0, stmts: stmts,
+                   w: b"", wn: 0,
                    stmt_next: 0, stmt_tick: 0, stmt_close: stmt_close };
     let hr = handshake(c, deadline);
     guard let h = hr else let e = err_of(hr) {
@@ -1344,9 +1356,11 @@ fn step(c: Conn, rows: Rows, stop: int, synced: bool, deadline: until)
             }
             continue;
         }
-        let body = msg_body(c);
+        // A body is copied out of c.buf only for the messages read
+        // below; BindComplete, ParseComplete and the like have none
+        // worth a copy, and ReadyForQuery's one byte is read in place.
         if t == 84 {                // 'T' RowDescription
-            let cur = cur_of(body);
+            let cur = cur_of(msg_body(c));
             let n = get16(cur);
             let cols: [str] = [];
             let types: [int] = [];
@@ -1377,19 +1391,19 @@ fn step(c: Conn, rows: Rows, stop: int, synced: bool, deadline: until)
                 return ok(EV_NODATA);
             }
         } else if t == 67 {         // 'C' CommandComplete
-            let cur = cur_of(body);
+            let cur = cur_of(msg_body(c));
             rows.tag = get_cstr(cur);
             rows.affected = tag_count(rows.tag);
             if rows.tag == "DEALLOCATE ALL" || rows.tag == "DISCARD ALL" {
                 forget_stmts(c);
             }
         } else if t == 69 {         // 'E' ErrorResponse
-            keep_err(c, format_error(body));
+            keep_err(c, format_error(msg_body(c)));
         } else if t == 90 {         // 'Z' ReadyForQuery
-            if len(body) < 1 {
+            if c.mlen < 1 {
                 return err("protocol error: empty ReadyForQuery");
             }
-            c.status = body[0];
+            c.status = c.buf[c.mstart];
             return ok(EV_READY);
         } else if t == 71 {         // 'G' CopyInResponse
             if (stop & STOP_COPY) != 0 {
@@ -1415,7 +1429,7 @@ fn step(c: Conn, rows: Rows, stop: int, synced: bool, deadline: until)
         } else if t == 65 {         // 'A' NotificationResponse
             parse_notification(c);
         } else if t == 83 {         // 'S' ParameterStatus, after SET
-            let cur = cur_of(body);
+            let cur = cur_of(msg_body(c));
             let k = get_cstr(cur);
             let v = get_cstr(cur);
             c.params[k] = v;
@@ -1524,17 +1538,6 @@ fn stmt_name(n: int) -> str {
 // Close messages for the statements queued to go. Closing one the server
 // never created is not an error, so a failed first use can queue its
 // name without knowing whether Parse got that far.
-fn take_closes(c: Conn) -> bytes {
-    let out = b"";
-    for n in c.stmt_close {
-        out = out + msg(67, b"S" + cstr(stmt_name(n)));         // Close
-    }
-    if len(c.stmt_close) > 0 {
-        let none_left: [int] = [];
-        c.stmt_close = none_left;
-    }
-    return out;
-}
 
 // Forgets sql's statement and queues it to be closed.
 fn drop_stmt(c: Conn, sql: str) {
@@ -1552,17 +1555,189 @@ fn stale_stmt(e: str) -> bool {
     return st == "26000" || st == "0A000";
 }
 
+// ---- a query's messages, written into the connection's buffer ----
+//
+// The extended-protocol messages of a query (Parse, Bind, Describe,
+// Execute, Sync) used to be built by concatenation: every field a fresh
+// bytes (to_be, then a slice of it), every message two more. That was
+// about sixty of the ~115 allocations one cached pool_query made. They
+// are written into c.w instead, a buffer the connection keeps and grows,
+// and leave as one slice.
+
+fn w_reset(c: Conn) {
+    c.wn = 0;
+}
+
+fn w_need(c: Conn, n: int) {
+    if c.wn + n <= len(c.w) {
+        return;
+    }
+    let cap = len(c.w) * 2;
+    if cap < 512 {
+        cap = 512;
+    }
+    while cap < c.wn + n {
+        cap = cap * 2;
+    }
+    let nb = to_bytes(strings.repeat(" ", cap));
+    let i = 0;
+    while i < c.wn {
+        nb[i] = c.w[i];
+        i = i + 1;
+    }
+    c.w = nb;
+}
+
+fn w_u8(c: Conn, v: int) {
+    w_need(c, 1);
+    c.w[c.wn] = v & 255;
+    c.wn = c.wn + 1;
+}
+
+fn w_be16(c: Conn, v: int) {
+    w_need(c, 2);
+    c.w[c.wn] = (v >> 8) & 255;
+    c.w[c.wn + 1] = v & 255;
+    c.wn = c.wn + 2;
+}
+
+fn w_put32(c: Conn, at: int, v: int) {
+    c.w[at] = (v >> 24) & 255;
+    c.w[at + 1] = (v >> 16) & 255;
+    c.w[at + 2] = (v >> 8) & 255;
+    c.w[at + 3] = v & 255;
+}
+
+fn w_be32(c: Conn, v: int) {
+    w_need(c, 4);
+    w_put32(c, c.wn, v);
+    c.wn = c.wn + 4;
+}
+
+fn w_bytes(c: Conn, b: bytes) {
+    let n = len(b);
+    w_need(c, n);
+    let i = 0;
+    while i < n {
+        c.w[c.wn + i] = b[i];
+        i = i + 1;
+    }
+    c.wn = c.wn + n;
+}
+
+fn w_cstr(c: Conn, s: str) {
+    if len(s) > 0 {
+        w_bytes(c, to_bytes(s));
+    }
+    w_u8(c, 0);
+}
+
+// Opens a message of type typ; w_close fills in its length.
+fn w_open(c: Conn, typ: int) -> int {
+    let at = c.wn;
+    w_u8(c, typ);
+    w_be32(c, 0);
+    return at;
+}
+
+fn w_close(c: Conn, at: int) {
+    w_put32(c, at + 1, c.wn - at - 1);
+}
+
+// Close messages for the statements drop_stmt queued.
+fn w_closes(c: Conn) {
+    for n in c.stmt_close {
+        let at = w_open(c, 67);                 // Close
+        w_u8(c, 83);                            //   a statement ('S')
+        w_cstr(c, stmt_name(n));
+        w_close(c, at);
+    }
+    if len(c.stmt_close) > 0 {
+        let none_left: [int] = [];
+        c.stmt_close = none_left;
+    }
+}
+
+// The same messages extended_named builds, into c.w. describe: ask for
+// the RowDescription (a cached statement already has its columns).
+fn w_query(c: Conn, name_b: bytes, parse: bool, describe: bool, sql: str,
+           args: [Arg]) {
+    if parse {
+        let pa = w_open(c, 80);                 // Parse
+        w_bytes(c, name_b);
+        w_u8(c, 0);
+        w_cstr(c, sql);
+        w_be16(c, 0);
+        w_close(c, pa);
+    }
+    let at = w_open(c, 66);                     // Bind
+    w_u8(c, 0);                                 //   unnamed portal
+    w_bytes(c, name_b);
+    w_u8(c, 0);
+    w_be16(c, len(args));
+    for a in args {
+        if a.binary {
+            w_be16(c, 1);
+        } else {
+            w_be16(c, 0);
+        }
+    }
+    w_be16(c, len(args));
+    for a in args {
+        if a.is_null {
+            w_be32(c, -1);
+        } else {
+            w_be32(c, len(a.data));
+            w_bytes(c, a.data);
+        }
+    }
+    w_be16(c, 0);                               //   text results
+    w_close(c, at);
+    if describe {
+        let d = w_open(c, 68);                  // Describe portal
+        w_u8(c, 80);
+        w_u8(c, 0);
+        w_close(c, d);
+    }
+    let e = w_open(c, 69);                      // Execute, all rows
+    w_u8(c, 0);
+    w_be32(c, 0);
+    w_close(c, e);
+    let y = w_open(c, 83);                      // Sync
+    w_close(c, y);
+}
+
+fn copy_strs(xs: [str]) -> [str] {
+    let out: [str] = [];
+    for x in xs {
+        push(out, x);
+    }
+    return out;
+}
+
+fn copy_ints(xs: [int]) -> [int] {
+    let out: [int] = [];
+    for x in xs {
+        push(out, x);
+    }
+    return out;
+}
+
 // One extended-protocol exchange for query(). With the cache on, sql runs
 // as a named statement, prepared in the same round trip on first use.
 fn query_once(c: Conn, sql: str, args: [Arg], before: int, deadline: until)
               -> result[Rows, str] {
     let rows = empty_rows();
-    let out = take_closes(c);
+    w_reset(c);
+    w_closes(c);
     let cached = false;
     let fresh = false;
     if c.cfg.statement_cache > 0 {
         c.stmt_tick = c.stmt_tick + 1;
-        let st = Stmt { n: 0, name: "", used: 0 };
+        let no_cols: [str] = [];
+        let no_types: [int] = [];
+        let st = Stmt { n: 0, name: "", used: 0, name_b: b"", cols: no_cols,
+                        types: no_types, described: false };
         if has(c.stmts, sql) {
             st = c.stmts[sql];
             cached = true;
@@ -1577,30 +1752,53 @@ fn query_once(c: Conn, sql: str, args: [Arg], before: int, deadline: until)
                     }
                 }
                 drop_stmt(c, oldest);
-                out = take_closes(c) + out;
+                w_closes(c);
             }
-            st = Stmt { n: c.stmt_next, name: stmt_name(c.stmt_next), used: 0 };
+            let name = stmt_name(c.stmt_next);
+            st = Stmt { n: c.stmt_next, name: name, used: 0, name_b: to_bytes(name),
+                        cols: no_cols, types: no_types, described: false };
             c.stmt_next = c.stmt_next + 1;
             c.stmts[sql] = st;
             fresh = true;
         }
         st.used = c.stmt_tick;
-        out = out + extended_named(st.name, fresh, sql, args);
-    } else {
-        out = out + extended(sql, args);
-    }
-    let br = begin(c, out, deadline);
-    guard let b = br else let e = err_of(br) {
-        if fresh {
-            drop_stmt(c, sql);
+        let describe = !st.described;
+        if !describe {
+            // The columns cannot change under a prepared statement: a
+            // schema change that alters them fails the run with 0A000,
+            // which drops the statement and retries (query).
+            rows.columns = copy_strs(st.cols);
+            rows.types = copy_ints(st.types);
         }
+        w_query(c, st.name_b, fresh, describe, sql, args);
+        let br = begin(c, c.w[0..c.wn], deadline);
+        guard let b = br else let e = err_of(br) {
+            if fresh {
+                drop_stmt(c, sql);
+            }
+            return err(fail(c, e, before));
+        }
+        let rr = to_ready(c, rows, true, deadline);
+        guard let r = rr else let e = err_of(rr) {
+            if fresh || (cached && stale_stmt(e)) {
+                drop_stmt(c, sql);
+            }
+            return err(fail(c, e, before));
+        }
+        if describe {
+            st.cols = copy_strs(rows.columns);
+            st.types = copy_ints(rows.types);
+            st.described = true;
+        }
+        return ok(rows);
+    }
+    w_query(c, b"", true, true, sql, args);
+    let br = begin(c, c.w[0..c.wn], deadline);
+    guard let b = br else let e = err_of(br) {
         return err(fail(c, e, before));
     }
     let rr = to_ready(c, rows, true, deadline);
     guard let r = rr else let e = err_of(rr) {
-        if fresh || (cached && stale_stmt(e)) {
-            drop_stmt(c, sql);
-        }
         return err(fail(c, e, before));
     }
     return ok(rows);
