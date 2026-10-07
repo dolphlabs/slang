@@ -436,6 +436,11 @@ the point reads in flight with it.
   (same fallback rate, same collection counts, no new hotspot in a
   profile; recorded in `todo.md`). The young list is still walked by the
   sweep: that is 1.5's other half, the page sweep.
+  **Page sweep landed 2026-10-07** (todo.md R4): the young, pending and
+  retired lists are gone, pages are swept by their start bitmaps, and a
+  major's set build no longer walks promoted paged objects. Minor sweep
+  at 512 connections -40% (mix) to -60% (point); major set build 2.3 ->
+  0.02 ms.
 - [ ] **1.6 Minors skip tasks with nothing young.** A task that has not
   run since the last minor holds only old values, because that minor
   promoted everything it held. Audit every place that hands a value to a

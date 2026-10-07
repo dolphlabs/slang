@@ -186,8 +186,25 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
   mark 0.9, tail 0.55 (after #335/#336), time-to-safepoint 0.5. The
   sweep visits ~64k young objects a minor at ~21 ns each, one pointer
   chase through the young list per object, so it is miss-bound.
-  Two designs, not built:
-  - **Page-ordered sweep, single-threaded.** Paged objects leave the
+  Two designs; the owner chose the first (2026-10-07):
+  - [x] **Page-ordered sweep, single-threaded.** Built on
+    perf/gc-page-ordered-sweep. No object list or pending list is left: a
+    paged object is found by its page's start bit, an unpaged young one
+    in its worker's mbuf or `sl_gc_young_m`, and `sl_gc_old` holds only
+    unpaged old objects. Container, server on 4 pinned cores, per
+    minor sweep: point c512 1.48-1.62 -> 0.58-0.66 ms, mix c512 1.40 ->
+    1.05-1.15 ms; per major, set build 2.3 -> 0.02 ms (it walked every
+    promoted paged object) and sweep 1.2 -> 0.7 ms. ABBA x6 req/s:
+    mix c512 10,906 -> 10,908, point c512 19,891 -> 20,349, mix c64
+    12,425 -> 12,908, point c64 21,261 -> 21,151 (noise). latgen ABBA
+    x4: point c512 19,495 -> 19,868 req/s, p99 36.1 -> 34.1 ms; quote
+    c64 5,341 -> 5,728 req/s, p50 11.4 -> 10.4 ms, p99 29.3 -> 30.0
+    (inside the spread). Peak RSS: no consistent change (latgen quote
+    +4 MB median, wrk quote -1.9 MB). On mix c512 a minor is now sweep
+    1.1 ms, mark 0.95, rendezvous 0.6 and tail 0.55: the sweep is no
+    longer far ahead of mark, and the parallel sweep below is what is
+    left of R4's sweep share.
+    The design as approved: paged objects leave the
     young and pending lists; a minor sweeps each worker's pages (and
     the orphans) by bitmap, skipping pages whose `young_live` is 0,
     and unpaged young objects from the mbuf/young_m arrays that already
