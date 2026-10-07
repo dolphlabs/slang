@@ -315,8 +315,9 @@ static int sl_gc_test_header_word(void) {
 }
 
 /* A worker's page count must be its list's length after a sweep: the
- * page cap is checked against it. Pages kept alive across a minor are
- * what the prune used to count twice. */
+ * page cap is checked against it, and the parallel sweep splits that
+ * many pages (pagev) between threads. Pages kept alive across a minor
+ * are what the prune used to count twice. */
 static int sl_gc_test_npages(void) {
     enum { N = 2000 };
     static void *keep[N];
