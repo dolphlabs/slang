@@ -314,6 +314,31 @@ static int sl_gc_test_header_word(void) {
     return bad;
 }
 
+/* A worker's page count must be its list's length after a sweep: the
+ * page cap is checked against it. Pages kept alive across a minor are
+ * what the prune used to count twice. */
+static int sl_gc_test_npages(void) {
+    enum { N = 2000 };
+    static void *keep[N];
+    sl_safepoint sp;
+    sl_rt_safepoint_enter(&sp, keep, N);
+    for (int i = 0; i < N; i++)
+        keep[i] = sl_gc_alloc(200, NULL);
+    sl_gc_collect_minor();
+    sl_gc_worker_state *st = sl_gc_tls_state();
+    int n = 0;
+    for (sl_gc_page *pg = st->pages; pg; pg = pg->next)
+        n++;
+    int bad = n < 2 || st->npages != n;
+    if (bad)
+        fprintf(stderr, "npages %d, list holds %d\n", st->npages, n);
+    for (int i = 0; i < N; i++)
+        keep[i] = NULL;
+    sl_rt_safepoint_exit();
+    sl_gc_collect();
+    return bad;
+}
+
 static int sl_gc_test_finis = 0;
 static void sl_gc_test_fini(void *p) {
     (void)p;
@@ -358,7 +383,8 @@ static int sl_gc_test_page_sweep(void) {
     }
     sl_gc_collect();
     sl_rt_safepoint_exit();
-    return sl_gc_test_finis != 2 || sl_gc_test_on_heap(keep);
+    if (sl_gc_test_finis != 2 || sl_gc_test_on_heap(keep)) return 1;
+    return sl_gc_test_npages();
 }
 
 int main(void) {

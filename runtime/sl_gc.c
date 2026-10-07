@@ -1659,7 +1659,11 @@ static void sl_gc_pages_prune_list(sl_gc_page **headp, sl_gc_page **curp,
                    : 0;
     sl_gc_page *cur = curp ? *curp : NULL;
     int cur_dead = 0;
-    int n = nlive;
+    /* Counted as the walk keeps each page. It used to start at nlive and
+       count the survivors again, so npages ran at twice the live pages:
+       a worker holding many hit SL_GC_PAGE_MAX_PAGES at half of them and
+       fell back to malloc. */
+    int n = 0;
     sl_gc_page **link = headp;
     while (*link) {
         sl_gc_page *pg = *link;
