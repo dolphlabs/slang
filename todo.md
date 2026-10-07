@@ -122,6 +122,13 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
     main's thread not running tasks. Next: per-fd waiter state so an
     IO wait does not take a global lock (owner chose the incremental
     path on 2026-10-07).
+  - **Waiting lists sharded 16 ways by fd** (perf/reactor-shards): each
+    with its own lock, the list tag carried in the registration's low
+    pointer bits, resumes outside every lock, `sl_reactor_wake_at` an
+    atomic with a store-0-then-scan protocol. 8 alternating runs,
+    medians: point c64 11,422 -> 16,509, c512 12,045 -> 15,440; mix c64
+    9,356 -> 9,720 (noise), c512 7,682 -> 8,740; quote unchanged. Go in
+    the same container: 30-31k / 26k point, 12k mix: still the gap.
   Original item: all IO readiness goes
   through one reactor thread (`sl_reactor_thread`, `runtime/sl_net.c`),
   under one global mutex (`sl_reactor_mu`). Each loop scans every waiting

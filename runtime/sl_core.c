@@ -454,7 +454,7 @@ static sl_task *sl_parked_tasks = NULL;
  * was: every OS thread (main, the worker pool, any spawn
  * trampoline) gets its own independent, correctly zero-initialized
  * copy for free. */
-static _Thread_local sl_task sl_rt_task_storage;
+static _Thread_local _Alignas(16) sl_task sl_rt_task_storage;
 static _Thread_local sl_task *sl_rt_current_task = NULL;
 
 /* Tier 11 eighth slice: the async-preemption generation counter, and

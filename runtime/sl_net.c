@@ -111,15 +111,49 @@ static char sl_reactor_shutdown_token;
 static int sl_reactor_timer_efd = -1;
 static char sl_reactor_timer_token;
 #endif
-static pthread_mutex_t sl_reactor_mu = PTHREAD_MUTEX_INITIALIZER;
-static sl_task *sl_reactor_waiting = NULL; /* linked via sl_task.next,
-    guarded by sl_reactor_mu -- same reuse-`next`-for-one-wait-list-
-    at-a-time pattern chan/time already establish */
-static long long sl_reactor_wake_at = 0; /* absolute mono-ns the
-    reactor's CURRENT sleep is due to end, or 0 for an indefinite
-    sleep. Guarded by sl_reactor_mu. Lets a registering waiter skip
-    the timer nudge when the reactor is already going to wake soon
-    enough to see it -- see sl_reactor_timer_nudge. */
+/* The tasks parked on the reactor, in SL_REACTOR_WQS lists hashed by
+ * fd, each under its own lock (linked via sl_task.next -- the same
+ * reuse-`next`-for-one-wait-list-at-a-time pattern chan/time use). One
+ * global list and lock made every IO wait of every worker, and every
+ * event the reactor handled, contend for one mutex held across
+ * epoll_ctl and the park's context switch: at 64 connections about two
+ * of five threads sat blocked on it, and two workers outran four.
+ *
+ * The list a waiter is on travels with its registration, in the low
+ * bits of the task pointer handed to epoll/kqueue (task structs are
+ * 16-byte aligned), so the reactor never dereferences a task to find
+ * its list: a registration can outlive its task, and the reactor only
+ * ever compares that pointer against the list's own entries. */
+#define SL_REACTOR_WQS 16
+#define SL_REACTOR_WQ_MASK ((uintptr_t)(SL_REACTOR_WQS - 1))
+typedef struct sl_reactor_wq {
+    pthread_mutex_t mu;
+    sl_task *waiting;
+} sl_reactor_wq;
+static sl_reactor_wq sl_reactor_wqs[SL_REACTOR_WQS] = {
+    [0 ... SL_REACTOR_WQS - 1] = { .mu = PTHREAD_MUTEX_INITIALIZER },
+};
+static inline unsigned sl_reactor_wq_for(int fd) {
+    unsigned u = (unsigned)(fd >= 0 ? fd : 0);
+    u ^= u >> 16;
+    u *= 2654435761u;
+    u ^= u >> 13;
+    return u & (unsigned)SL_REACTOR_WQ_MASK;
+}
+/* Absolute mono-ns the reactor's CURRENT sleep is due to end, or 0 for
+ * an indefinite sleep -- and 0 while the reactor is computing it. Lets a
+ * registering waiter skip the timer nudge when the reactor is already
+ * going to wake soon enough to see it (sl_reactor_timer_nudge). No lock
+ * covers every list, so the protocol is ordering: the reactor stores 0
+ * BEFORE scanning the lists and the result after; a waiter links itself
+ * into its list BEFORE reading this, and nudges on 0 or on a later
+ * time. If the waiter's read comes before the reactor's store of 0,
+ * its link came before the scan, which takes that list's lock and sees
+ * it. If it reads a time the scan computed without it, either that time
+ * is later than its deadline (it nudges) or the reactor wakes first and
+ * its next scan includes the waiter. Sequentially consistent on both
+ * sides. */
+static _Atomic long long sl_reactor_wake_at = 0;
 
 #define SL_REACTOR_READ  0
 #define SL_REACTOR_WRITE 1
@@ -127,7 +161,7 @@ static long long sl_reactor_wake_at = 0; /* absolute mono-ns the
 #define SL_REACTOR_TIMER_IDENT    0xDEADBEEE
 
 /* The reactor computes how long to sleep from the deadlines already on
- * sl_reactor_waiting, and only then blocks. A task that registers a
+ * the waiting lists, and only then blocks. A task that registers a
  * deadline AFTER that computation -- the overwhelmingly common case,
  * since the reactor is asleep almost all the time -- would otherwise
  * be invisible until some unrelated event happened to wake the loop,
@@ -177,31 +211,59 @@ static void sl_reactor_timer_nudge(void) {
  * concurrently waiting on the same fd for the same direction (see
  * demo/main.sl's own single-acceptor design, which this constraint
  * requires). */
-static void sl_reactor_expire_waiters(void) {
+/* Moves every waiter whose deadline has passed from its list onto
+ * *ready (via next), for the caller to resume once no list lock is held:
+ * a resume takes sl_gc_mu and a run-queue lock and may wake a worker,
+ * none of which the lists' lock holders should wait behind. */
+static void sl_reactor_expire_waiters(sl_task **ready) {
     long long now = sl_now_ns();
-    sl_task **pp = &sl_reactor_waiting;
-    while (*pp) {
-        sl_task *t = *pp;
-        if (t->io_deadline_ns && t->io_deadline_ns <= now) {
-            *pp = t->next;
-            t->next = NULL;
-            sl_task_resume(t);
-            continue;
+    for (int i = 0; i < SL_REACTOR_WQS; i++) {
+        sl_reactor_wq *q = &sl_reactor_wqs[i];
+        pthread_mutex_lock(&q->mu);
+        sl_task **pp = &q->waiting;
+        while (*pp) {
+            sl_task *t = *pp;
+            if (t->io_deadline_ns && t->io_deadline_ns <= now) {
+                *pp = t->next;
+                t->next = *ready;
+                *ready = t;
+                continue;
+            }
+            pp = &t->next;
         }
-        pp = &t->next;
+        pthread_mutex_unlock(&q->mu);
+    }
+}
+
+/* Every waiter on every list onto *ready (the shutdown drain). */
+static void sl_reactor_take_all(sl_task **ready) {
+    for (int i = 0; i < SL_REACTOR_WQS; i++) {
+        sl_reactor_wq *q = &sl_reactor_wqs[i];
+        pthread_mutex_lock(&q->mu);
+        sl_task *w;
+        while ((w = q->waiting)) {
+            q->waiting = w->next;
+            w->next = *ready;
+            *ready = w;
+        }
+        pthread_mutex_unlock(&q->mu);
+    }
+}
+
+static void sl_reactor_resume_all(sl_task *ready) {
+    while (ready) {
+        sl_task *t = ready;
+        ready = t->next;
+        t->next = NULL;
+        sl_task_resume(t);
     }
 }
 
 static void sl_reactor_kick(void) {
     sl_rt_preempt_disable();
-    pthread_mutex_lock(&sl_reactor_mu);
-    sl_task *w;
-    while ((w = sl_reactor_waiting)) {
-        sl_reactor_waiting = w->next;
-        w->next = NULL;
-        sl_task_resume(w);
-    }
-    pthread_mutex_unlock(&sl_reactor_mu);
+    sl_task *ready = NULL;
+    sl_reactor_take_all(&ready);
+    sl_reactor_resume_all(ready);
     sl_rt_preempt_enable();
 }
 
@@ -210,42 +272,55 @@ static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
     if (deadline && sl_until_hit(deadline))
         return -2;
     sl_rt_preempt_disable();
-    pthread_mutex_lock(&sl_reactor_mu);
+    unsigned wqi = sl_reactor_wq_for(fd);
+    sl_reactor_wq *wq = &sl_reactor_wqs[wqi];
+    pthread_mutex_lock(&wq->mu);
     if (abort_on_shutdown &&
         atomic_load_explicit(&sl_rt_shutdown_flag, memory_order_acquire)) {
-        pthread_mutex_unlock(&sl_reactor_mu);
+        pthread_mutex_unlock(&wq->mu);
         sl_rt_preempt_enable();
         return -1;
     }
     sl_task *sl_reactor_self = sl_rt_cur();
+    if ((uintptr_t)sl_reactor_self & SL_REACTOR_WQ_MASK) {
+        fprintf(stderr, "slang: internal error: task %p is not 16-byte "
+                        "aligned; the reactor tags its low bits\n",
+                (void *)sl_reactor_self);
+        abort();
+    }
+    void *tag = (void *)((uintptr_t)sl_reactor_self | wqi);
     sl_reactor_self->io_deadline_ns = deadline;
-    sl_reactor_self->next = sl_reactor_waiting;
-    sl_reactor_waiting = sl_reactor_self;
+    sl_reactor_self->next = wq->waiting;
+    wq->waiting = sl_reactor_self;
     sl_reactor_shard_count(sl_reactor_shard_for(fd), 0);
 #if defined(SL_REACTOR_KQUEUE)
     struct kevent kev;
     EV_SET(&kev, fd, rw == SL_REACTOR_READ ? EVFILT_READ : EVFILT_WRITE,
-           EV_ADD | EV_ONESHOT, 0, 0, (void *)sl_reactor_self);
+           EV_ADD | EV_ONESHOT, 0, 0, tag);
     kevent(sl_reactor_fd, &kev, 1, NULL, 0, NULL);
 #else
     struct epoll_event ev;
     ev.events = (rw == SL_REACTOR_READ ? EPOLLIN : EPOLLOUT) | EPOLLONESHOT;
-    ev.data.ptr = sl_reactor_self;
+    ev.data.ptr = tag;
     if (epoll_ctl(sl_reactor_fd, EPOLL_CTL_ADD, fd, &ev) != 0 &&
         errno == EEXIST)
         epoll_ctl(sl_reactor_fd, EPOLL_CTL_MOD, fd, &ev);
 #endif
-    /* After EV_ADD, before parking, and still under sl_reactor_mu: the
-       reactor must recompute its sleep with this waiter included --
+    /* After EV_ADD, before parking, and after this waiter is on its
+       list (see sl_reactor_wake_at for the ordering): the reactor must
+       recompute its sleep with this waiter included --
        see sl_reactor_timer_nudge for why nothing else would ever wake
        it. Skipped when the reactor is already due to wake at or before
        this deadline, which is the common case once a server has more
        than one deadline-bearing connection, and saves a syscall on
        every park. */
-    if (deadline && (sl_reactor_wake_at == 0 ||
-                     sl_reactor_wake_at > deadline))
-        sl_reactor_timer_nudge();
-    sl_task_park(&sl_reactor_mu);
+    if (deadline) {
+        long long at = atomic_load_explicit(&sl_reactor_wake_at,
+                                            memory_order_seq_cst);
+        if (at == 0 || at > deadline)
+            sl_reactor_timer_nudge();
+    }
+    sl_task_park(&wq->mu);
     sl_reactor_self->io_deadline_ns = 0;
     int sl_reactor_wait_shutdown =
         atomic_load_explicit(&sl_rt_shutdown_flag, memory_order_acquire);
@@ -270,11 +345,14 @@ static void *sl_reactor_thread(void *arg) {
 #endif
     for (;;) {
         long long soonest = -1;
-        pthread_mutex_lock(&sl_reactor_mu);
-        {
-            sl_task *w;
-            long long now = sl_now_ns();
-            for (w = sl_reactor_waiting; w; w = w->next) {
+        /* 0 first, then the scan, then the result: see
+           sl_reactor_wake_at for why a waiter cannot be missed. */
+        atomic_store_explicit(&sl_reactor_wake_at, 0, memory_order_seq_cst);
+        long long now = sl_now_ns();
+        for (int qi = 0; qi < SL_REACTOR_WQS; qi++) {
+            sl_reactor_wq *q = &sl_reactor_wqs[qi];
+            pthread_mutex_lock(&q->mu);
+            for (sl_task *w = q->waiting; w; w = w->next) {
                 if (!w->io_deadline_ns)
                     continue;
                 long long rem = w->io_deadline_ns - now;
@@ -283,19 +361,11 @@ static void *sl_reactor_thread(void *arg) {
                 if (soonest < 0 || rem < soonest)
                     soonest = rem;
             }
-            /* Published to would-be nudgers while still holding the
-               lock, and read by them under the same lock -- that
-               ordering is what makes the nudge skippable. If a
-               registration wins the lock first, this computation
-               already includes it; if it loses, it reads a value that
-               provably does NOT account for it and decides from that.
-               Publishing after the unlock would leave the window where
-               a registration reads the PREVIOUS round's wake time,
-               concludes "the reactor will wake in time", and is then
-               overwritten by an indefinite sleep. */
-            sl_reactor_wake_at = soonest < 0 ? 0 : now + soonest;
+            pthread_mutex_unlock(&q->mu);
         }
-        pthread_mutex_unlock(&sl_reactor_mu);
+        atomic_store_explicit(&sl_reactor_wake_at,
+                              soonest < 0 ? 0 : now + soonest,
+                              memory_order_seq_cst);
 #if defined(SL_REACTOR_KQUEUE)
         struct timespec ts, *tsp = NULL;
         if (soonest >= 0) {
@@ -309,7 +379,10 @@ static void *sl_reactor_thread(void *arg) {
         int n = epoll_wait(sl_reactor_fd, events, 64, timeout);
 #endif
         if (n < 0) { if (errno == EINTR) continue; continue; }
-        pthread_mutex_lock(&sl_reactor_mu);
+        /* Tasks to resume, collected under their lists' locks and
+           resumed after: a resume takes sl_gc_mu and a run-queue lock
+           and may wake a worker, which no waiter should queue behind. */
+        sl_task *ready = NULL;
         for (int i = 0; i < n; i++) {
             /* A timer nudge carries no task and means nothing beyond
                "go round again" -- the sl_reactor_expire_waiters() call
@@ -321,7 +394,7 @@ static void *sl_reactor_thread(void *arg) {
                 events[i].ident == SL_REACTOR_TIMER_IDENT)
                 continue;
             int is_shutdown = events[i].filter == EVFILT_USER;
-            sl_task *t = is_shutdown ? NULL : (sl_task *)events[i].udata;
+            void *tag = is_shutdown ? NULL : events[i].udata;
 #else
             if (events[i].data.ptr == &sl_reactor_timer_token) {
                 uint64_t tx;
@@ -329,19 +402,14 @@ static void *sl_reactor_thread(void *arg) {
                 continue;
             }
             int is_shutdown = events[i].data.ptr == &sl_reactor_shutdown_token;
-            sl_task *t = is_shutdown ? NULL : (sl_task *)events[i].data.ptr;
+            void *tag = is_shutdown ? NULL : events[i].data.ptr;
             if (is_shutdown) {
                 uint64_t x;
                 (void)read(sl_reactor_efd, &x, sizeof(x));
             }
 #endif
             if (is_shutdown) {
-                sl_task *w;
-                while ((w = sl_reactor_waiting)) {
-                    sl_reactor_waiting = w->next;
-                    w->next = NULL;
-                    sl_task_resume(w);
-                }
+                sl_reactor_take_all(&ready);
                 continue;
             }
             /* only resume if the removal actually found t on the
@@ -352,16 +420,20 @@ static void *sl_reactor_thread(void *arg) {
                unconditionally here would double-push t onto
                sl_global_runq -- found and fixed during this slice's
                own design review. */
-            sl_task **pp = &sl_reactor_waiting;
+            sl_task *t = (sl_task *)((uintptr_t)tag & ~SL_REACTOR_WQ_MASK);
+            sl_reactor_wq *q = &sl_reactor_wqs[(uintptr_t)tag & SL_REACTOR_WQ_MASK];
+            pthread_mutex_lock(&q->mu);
+            sl_task **pp = &q->waiting;
             int found = 0;
             while (*pp) { if (*pp == t) { *pp = t->next; found = 1; break; } pp = &(*pp)->next; }
+            pthread_mutex_unlock(&q->mu);
             if (found) {
-                t->next = NULL;
-                sl_task_resume(t);
+                t->next = ready;
+                ready = t;
             }
         }
-        sl_reactor_expire_waiters();
-        pthread_mutex_unlock(&sl_reactor_mu);
+        sl_reactor_expire_waiters(&ready);
+        sl_reactor_resume_all(ready);
     }
     return NULL; /* unreachable -- runs until process exit */
 }
