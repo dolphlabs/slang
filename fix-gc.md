@@ -457,11 +457,15 @@ the point reads in flight with it.
   every major outside the pause was -14% req/s; every second, about the
   same speed for +4.6 MB.
 
-- [ ] **1.8 Precise tracing for lists and maps of non-pointers.** The
+- [x] **1.8 Precise tracing for lists and maps of non-pointers.** The
   compiler knows the element type, so it tells the runtime: `[int]` and
   `[f64]` are not traced at all, and a value struct gets a pointer-offset
   map. This removes cause 7 and is needed before 2.1 can land without a
-  tracing regression.
+  tracing regression. **Landed 2026-10-07 (todo.md R7)** for the
+  pointer-free half: lists, maps, chans and joins of numbers, bool,
+  enums and value structs of those are not scanned; batch 7.69 -> 5.33 s
+  in the container. Value structs WITH pointers still scan every word;
+  the pointer-offset map is still to do.
 - [x] **1.9 Pace majors by old-generation growth** (cause 17).
   **Landed (2026-10-05), measured on Linux.** A major now comes after
   the live-paced threshold of promoted bytes, or every 16 minors. The
