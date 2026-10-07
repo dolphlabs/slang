@@ -266,6 +266,21 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
 - [ ] **R7. Precise tracing for lists and maps of non-pointers**
   *(fix-gc 1.8)*, then batch *(fix-gc Phase 6)*: batch is the one row
   whose ratio got worse (0.42 -> 0.35).
+  **1.8 done on perf/gc-pointer-free-containers (2026-10-07).** The
+  compiler passes SL_ELEM_NOPTR (2) for elements it proves hold no GC
+  pointer (`type_is_pointer_free`: numbers, bool, enums, value structs
+  of those) and the runtime skips them; it already passed 0 for `[int]`,
+  but 0 meant "scan every word". Batch, 20M rows / 1M users, container,
+  4 workers, ABBA x4 warm: wall 7.69 -> 5.33 s median, major mark per
+  run 1.56-2.20 s -> 0.05-0.07 s, peak RSS unchanged (585-633 vs
+  567-629 MB), output identical. Batch still needs 6.1's profile (no Go
+  in the container: the suite's go.mod wants 1.23, it has 1.22).
+  **Found, not fixed:** `type_has_gc_roots` answers 0 for a `result`
+  whose ok side is a value struct holding a pointer (`result[Rec,
+  fault]`, Rec with a str field), because `type_is_gc_ptr` looks only at
+  bare pointers on each side and a result is no struct definition. A
+  container of one is safe here (flag 0 keeps the word scan), but a local
+  of that type may not be rooted across a safepoint; needs a test.
 - [ ] **R8. Prove it** *(fix-gc Phase 9)*: a CCX33 re-run with #287's
   configuration that passes S2's host check, p99 from `bench/latgen`.
 
