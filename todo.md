@@ -175,8 +175,45 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
   waits were the scheduling delay above, not the probe. Kept unmerged.
 - [ ] **R4. Stopped workers help collect** *(fix-gc 1.4)*. Parallel sweep
   first. This is the main remaining cause of quote's idle cores.
+  **Measured 2026-10-07, needs an owner decision before building.**
+  Linux container, server on 4 pinned cores, Postgres on 2, with #332,
+  #334 (pg allocations), #335 and #336 (sweep-end prune) combined;
+  slang vs Go, medians of 6 alternating runs: point c64 20,124 vs
+  20,847 (0.97), c512 18,902 vs 21,304 (0.89), mix c64 12,043 vs 13,208
+  (0.91), **mix c512 10,542 vs 14,505 (0.73)**. The gap left is the
+  collector: on mix c512 the world is stopped 24-28% of wall time,
+  ~65 minors/s at ~3.4 ms and ~4 majors/s. Per minor: sweep 1.35 ms,
+  mark 0.9, tail 0.55 (after #335/#336), time-to-safepoint 0.5. The
+  sweep visits ~64k young objects a minor at ~21 ns each, one pointer
+  chase through the young list per object, so it is miss-bound.
+  Two designs, not built:
+  - **Page-ordered sweep, single-threaded.** Paged objects leave the
+    young and pending lists; a minor sweeps each worker's pages (and
+    the orphans) by bitmap, skipping pages whose `young_live` is 0,
+    and unpaged young objects from the mbuf/young_m arrays that already
+    exist. Sequential memory instead of a pointer chase; also removes
+    the per-allocation pending-list link. Touches the verifier, the
+    page validator, set build for majors and the major sweep, which all
+    walk those lists today.
+  - **Parallel sweep by page.** With pages as the unit, stopped workers
+    (asleep in `sl_gc_ack_and_wait`) each take a disjoint set of pages,
+    so no page is shared and nothing in it needs atomics; old-list and
+    young_m output are per-thread and spliced after. Builds on the
+    first; the first alone is the smaller, safer step.
+  Measured neutral on the way and dropped: promoting after three
+  survivals instead of two (promotions at c512 -9%, pause and req/s
+  unchanged: in-flight requests at 512 connections live ~50 ms, three
+  or more minors).
 - [ ] **R5. Per-connection prepared-statement cache** *(fix-gc 3.4)*
   (landed in #312, never ticked), then
+  **one builder per query message** *(fix-gc 3.3)*: done on
+  perf/pg-alloc (2026-10-07). A cached `pool_query` made 115 GC
+  allocations (7.9 KB); its messages are now written into a buffer the
+  connection keeps, a reply's body is copied only for the messages that
+  read one, and a cached statement skips Describe and reuses the columns
+  its first run read: 41 (3.2 KB). `tests/live/pg_alloc_budget` pins it
+  in CI's postgres job (dev: 115, fails). Container, ABBA x6: point c64
+  16,144 -> 17,361 req/s, c512 14,057 -> 15,908; mix +4-5%. Originally:
   one builder per query message *(fix-gc 3.3)*.
 - [ ] **R6. Frame the request head once** *(fix-gc 2.2)*.
 - [ ] **R7. Precise tracing for lists and maps of non-pointers**
@@ -3581,13 +3618,14 @@ Found and not fixed:
   (async-signal-safe) would have named the crash site.
 - `sl_arr_from`, `sl_arr_slice` and `sl_arr_concat` write elements before
   setting `len`. Safe today: their sources still hold every element.
-- Generated C is not warning-free on Ubuntu's GCC: `(void)write(...)` and
-  `(void)read(...)` in the runtime (reactor nudges, the DNS wake) warn
-  `-Wunused-result` under the distro's default `_FORTIFY_SOURCE`, where a
-  void cast does not silence it. CI's postgres jobs print the warnings
-  (run 37528531877); the warning sweep compiles without fortify, so it
-  passes. Fix the call sites (check the result) and run the sweep with
-  `-D_FORTIFY_SOURCE=2`.
+- Fixed 2026-10-07 (fix/fortify-unused-result): generated C was not
+  warning-free on Ubuntu's GCC: `(void)write(...)` and `(void)read(...)`
+  in the runtime (reactor nudges, the DNS wake) warned `-Wunused-result`
+  under the distro's default `_FORTIFY_SOURCE`, where a void cast does
+  not silence it. The calls go through `sl_net_nudge` / `sl_net_drain`
+  (retry on EINTR, result used), and the warning sweep adds one full
+  `-O2 -D_FORTIFY_SOURCE=2` compile of a program using the reactor:
+  the warnings come from the optimizer, which `-fsyntax-only` never ran.
 
 ## Open: `duration` used as an `int` gives an error that does not say the fix
 

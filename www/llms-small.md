@@ -29,6 +29,7 @@ n = n + 1;
 n += 1;                      // compound assignment
 let half = n / 2;            // int / int is integer division
 let small = n as i32;        // narrowing needs `as`
+// time.mono() is a `duration` (ns), never an int: `d as int` for a count
 println("${name} has ${n} and ${half}");   // interpolation: any expression
 println("also " + name + " " + n);         // + converts scalars to str
 

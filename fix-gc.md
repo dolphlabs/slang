@@ -607,7 +607,7 @@ of its 1-worker number.
   Built, parked on branch `perf/pg-probe-idle`: neutral on the laptop
   (CPU per request 153.5 vs 153.3 us at 64 clients, 226 vs 226 at 512;
   one saved ~1 us syscall). Re-measure on the CCX33 before landing.
-- [ ] **3.3 Build each query message with one builder.**
+- [x] **3.3 Build each query message with one builder.** Done 2026-10-07 (perf/pg-alloc): 115 -> 41 allocations a cached query; see todo.md R5.
 - [x] **3.4 Per-connection prepared-statement cache** (landed in #312) (decided 2026-10-04:
   reverses the driver's "deliberately no named prepared statements"; update
   that comment). Bounded LRU per connection. On error `0A000` ("cached plan

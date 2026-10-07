@@ -383,6 +383,18 @@ int is_flt(const char *t) {
 }
 
 int is_num(const char *t) { return is_int(t) || is_flt(t); }
+
+/* The fix for a value of one numeric type where another is wanted: they
+ * never convert implicitly (a duration is not an int, an i32 not an i64),
+ * but `as` converts any numeric type to any other. "" when the types are
+ * not both numeric, so a caller can append it to any mismatch message. */
+const char *num_cast_hint(const char *from, const char *to) {
+    static char buf[128];
+    if (!from || !to || !is_num(from) || !is_num(to) || !strcmp(from, to))
+        return "";
+    snprintf(buf, sizeof(buf), " (convert explicitly: `... as %s`)", to);
+    return buf;
+}
 int is_str(const char *t) { return !strcmp(t, "str"); }
 int is_bytes(const char *t) { return !strcmp(t, "bytes"); }
 int is_rawptr(const char *t) { return !strcmp(t, "rawptr"); }

@@ -221,3 +221,8 @@ jobs:
           PG_TLS_URL: postgres://slang:secret@localhost:55433/slang?sslmode=require&sslrootcert=/tmp/pgtls/ca.crt
           PG_SOCKET_URL: postgres://slang:secret@%2Ftmp%2Fpgsock/slang
         run: ./slangc tests/live/postgres/main.sl --run
+
+      - name: Allocation budget (pg.pool_query)
+        env:
+          PG_URL: postgres://slang:secret@127.0.0.1:55432/slang
+        run: tests/live/pg_alloc_budget/run.sh
