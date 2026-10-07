@@ -212,7 +212,26 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
     the per-allocation pending-list link. Touches the verifier, the
     page validator, set build for majors and the major sweep, which all
     walk those lists today.
-  - **Parallel sweep by page.** With pages as the unit, stopped workers
+  - [x] **Parallel sweep by page.** Built on perf/gc-parallel-sweep
+    (2026-10-07). Stopped threads join a sweep job from
+    `sl_gc_ack_and_wait` and take 8-page chunks of every worker's page
+    array; each counts into its own slot, merged after; a page that
+    survives with new holes gets its free list rebuilt in the same step,
+    so the prune is left only the empties. Container, server on 4 pinned
+    cores, per minor sweep + tail: mix c512 1.74 -> 0.74 ms, point c512
+    1.07 -> 0.56 ms; per major on mix, sweep 0.74 -> 0.54 ms and tail
+    0.38 -> 0.09 ms; share of wall time stopped on mix c512 ~20.5% ->
+    ~15%. Req/s on this host was not resolvable (load average 5-10 from
+    other apps): ABBA x10 mix c512 11,637 -> 12,068, x6 point c512
+    17,568 -> 16,894, both inside a +-15% spread; R8's CCX33 run is the
+    check. Two cheaper splits measured worse and were dropped: the
+    collector listing every page first (0.23 ms of pointer chasing
+    before anyone starts; with listing overlapped, helpers spun waiting
+    for it), and whole worker lists as the unit (5 lists for 4 threads,
+    young pages per list 49-102). Found on the way and fixed:
+    `sl_gc_pages_prune_list` counted surviving pages twice, so `npages`
+    ran at 2x and a worker hit the page cap at half its real pages.
+    The original design: with pages as the unit, stopped workers
     (asleep in `sl_gc_ack_and_wait`) each take a disjoint set of pages,
     so no page is shared and nothing in it needs atomics; old-list and
     young_m output are per-thread and spliced after. Builds on the
