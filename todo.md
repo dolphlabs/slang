@@ -212,7 +212,28 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
     the per-allocation pending-list link. Touches the verifier, the
     page validator, set build for majors and the major sweep, which all
     walk those lists today.
-  - **Parallel sweep by page.** With pages as the unit, stopped workers
+  - [x] **Parallel sweep by page.** Built on perf/gc-parallel-sweep
+    (2026-10-07). Stopped threads join a sweep job from
+    `sl_gc_ack_and_wait` and take 8-page chunks of every worker's page
+    array; each counts into its own slot, merged after; a page that
+    survives with new holes gets its free list rebuilt in the same step,
+    so the prune is left only the empties. Container, server on 4 pinned
+    cores, per minor sweep + tail: mix c512 1.74 -> 0.74 ms, point c512
+    1.07 -> 0.56 ms; per major on mix, sweep 0.74 -> 0.54 ms and tail
+    0.38 -> 0.09 ms; share of wall time stopped on mix c512 ~20.5% ->
+    ~15%. Req/s (rerun 2026-10-07 after a stale server sharing the port
+    via SO_REUSEPORT invalidated the first A/B; host load 6-10, medians):
+    wrk ABBA x6 mix c512 7,491 -> 8,082, point c512 11,429 -> 12,369;
+    latgen x4 point c512 10,494 -> 14,503 req/s, p99 119 -> 59 ms; quote
+    c64 3,556 -> 3,665, p99 46 -> 52 (inside the spread). R8's CCX33 run
+    is the check. Two cheaper splits measured worse and were dropped: the
+    collector listing every page first (0.23 ms of pointer chasing
+    before anyone starts; with listing overlapped, helpers spun waiting
+    for it), and whole worker lists as the unit (5 lists for 4 threads,
+    young pages per list 49-102). Found on the way and fixed:
+    `sl_gc_pages_prune_list` counted surviving pages twice, so `npages`
+    ran at 2x and a worker hit the page cap at half its real pages.
+    The original design: with pages as the unit, stopped workers
     (asleep in `sl_gc_ack_and_wait`) each take a disjoint set of pages,
     so no page is shared and nothing in it needs atomics; old-list and
     young_m output are per-thread and spliced after. Builds on the
@@ -233,6 +254,15 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
   16,144 -> 17,361 req/s, c512 14,057 -> 15,908; mix +4-5%. Originally:
   one builder per query message *(fix-gc 3.3)*.
 - [ ] **R6. Frame the request head once** *(fix-gc 2.2)*.
+  **Measured 2026-10-07, not built: no benchmark parses a head twice.**
+  `http.read` re-frames the head on every attempt after a partial recv,
+  so this only pays when a request spans recvs. Counted in the bench api
+  (container, counters on `sl_http_read` and `sl_http_frame_head_wire`):
+  point c64 131,059 heads for 131,072 reads, mix c64 65,584 / 65,536,
+  quote c64 36,879 / 36,864, quote c512 32,644 / 32,768. On loopback
+  even the ~110 KB quote body arrives whole, and the CCX33 runs put wrk
+  on the server's host too. Still worth doing for real clients whose
+  requests arrive in segments, but it will not move a benchmark row.
 - [ ] **R7. Precise tracing for lists and maps of non-pointers**
   *(fix-gc 1.8)*, then batch *(fix-gc Phase 6)*: batch is the one row
   whose ratio got worse (0.42 -> 0.35).

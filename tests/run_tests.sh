@@ -711,9 +711,10 @@ fi
 # allocating tasks on four workers stop each other at every minor;
 # SLANG_GC_STAT's stw line must show waits, and sleeps among them.
 echo "--- stopped threads sleep (SLANG_GC_STAT) ---"
-stw=$(SLANG_WORKERS=4 SLANG_GC_STAT=1 ./slangc tests/gc_stw_sleep/main.sl --run 2>&1 >/dev/null |
-      sed -n 's/^slang-gc-stat stw_waits=\([0-9]*\) stw_sleeps=\([0-9]*\)$/\1 \2/p')
-if [ -z "$stw" ]; then
+stwline=$(SLANG_WORKERS=4 SLANG_GC_STAT=1 ./slangc tests/gc_stw_sleep/main.sl --run 2>&1 >/dev/null |
+      sed -n 's/^slang-gc-stat stw_waits=\([0-9]*\) stw_sleeps=\([0-9]*\) sweep_helps=\([0-9]*\)$/\1 \2 \3/p')
+stw=${stwline% *}
+if [ -z "$stwline" ]; then
     echo "FAIL stopped threads sleep (no slang-gc-stat stw line)"
     fail=1
 elif [ "${stw#* }" -eq 0 ]; then
@@ -721,6 +722,22 @@ elif [ "${stw#* }" -eq 0 ]; then
     fail=1
 else
     echo "PASS stopped threads sleep (waits/sleeps $stw)"
+fi
+
+# ---- stopped threads help sweep ----------------------------------------------
+# The same pauses: a stopped thread joins the collector's sweep job
+# (sl_gc_job_help) and sweeps pages alongside it, instead of waiting for
+# it to sweep every worker's pages alone (todo.md R4).
+echo "--- stopped threads help sweep (SLANG_GC_STAT) ---"
+helps=${stwline##* }
+if [ -z "$stwline" ]; then
+    echo "FAIL stopped threads help sweep (no sweep_helps in the stw line)"
+    fail=1
+elif [ "$helps" -eq 0 ]; then
+    echo "FAIL stopped threads help sweep: sweep_helps=0"
+    fail=1
+else
+    echo "PASS stopped threads help sweep (sweep_helps=$helps)"
 fi
 
 # ---- pointer-free containers are not scanned ---------------------------------
