@@ -233,6 +233,15 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
   16,144 -> 17,361 req/s, c512 14,057 -> 15,908; mix +4-5%. Originally:
   one builder per query message *(fix-gc 3.3)*.
 - [ ] **R6. Frame the request head once** *(fix-gc 2.2)*.
+  **Measured 2026-10-07, not built: no benchmark parses a head twice.**
+  `http.read` re-frames the head on every attempt after a partial recv,
+  so this only pays when a request spans recvs. Counted in the bench api
+  (container, counters on `sl_http_read` and `sl_http_frame_head_wire`):
+  point c64 131,059 heads for 131,072 reads, mix c64 65,584 / 65,536,
+  quote c64 36,879 / 36,864, quote c512 32,644 / 32,768. On loopback
+  even the ~110 KB quote body arrives whole, and the CCX33 runs put wrk
+  on the server's host too. Still worth doing for real clients whose
+  requests arrive in segments, but it will not move a benchmark row.
 - [ ] **R7. Precise tracing for lists and maps of non-pointers**
   *(fix-gc 1.8)*, then batch *(fix-gc Phase 6)*: batch is the one row
   whose ratio got worse (0.42 -> 0.35).
