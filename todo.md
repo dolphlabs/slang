@@ -175,6 +175,35 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
   waits were the scheduling delay above, not the probe. Kept unmerged.
 - [ ] **R4. Stopped workers help collect** *(fix-gc 1.4)*. Parallel sweep
   first. This is the main remaining cause of quote's idle cores.
+  **Measured 2026-10-07, needs an owner decision before building.**
+  Linux container, server on 4 pinned cores, Postgres on 2, with #332,
+  #334 (pg allocations), #335 and #336 (sweep-end prune) combined;
+  slang vs Go, medians of 6 alternating runs: point c64 20,124 vs
+  20,847 (0.97), c512 18,902 vs 21,304 (0.89), mix c64 12,043 vs 13,208
+  (0.91), **mix c512 10,542 vs 14,505 (0.73)**. The gap left is the
+  collector: on mix c512 the world is stopped 24-28% of wall time,
+  ~65 minors/s at ~3.4 ms and ~4 majors/s. Per minor: sweep 1.35 ms,
+  mark 0.9, tail 0.55 (after #335/#336), time-to-safepoint 0.5. The
+  sweep visits ~64k young objects a minor at ~21 ns each, one pointer
+  chase through the young list per object, so it is miss-bound.
+  Two designs, not built:
+  - **Page-ordered sweep, single-threaded.** Paged objects leave the
+    young and pending lists; a minor sweeps each worker's pages (and
+    the orphans) by bitmap, skipping pages whose `young_live` is 0,
+    and unpaged young objects from the mbuf/young_m arrays that already
+    exist. Sequential memory instead of a pointer chase; also removes
+    the per-allocation pending-list link. Touches the verifier, the
+    page validator, set build for majors and the major sweep, which all
+    walk those lists today.
+  - **Parallel sweep by page.** With pages as the unit, stopped workers
+    (asleep in `sl_gc_ack_and_wait`) each take a disjoint set of pages,
+    so no page is shared and nothing in it needs atomics; old-list and
+    young_m output are per-thread and spliced after. Builds on the
+    first; the first alone is the smaller, safer step.
+  Measured neutral on the way and dropped: promoting after three
+  survivals instead of two (promotions at c512 -9%, pause and req/s
+  unchanged: in-flight requests at 512 connections live ~50 ms, three
+  or more minors).
 - [ ] **R5. Per-connection prepared-statement cache** *(fix-gc 3.4)*
   (landed in #312, never ticked), then
   **one builder per query message** *(fix-gc 3.3)*: done on
