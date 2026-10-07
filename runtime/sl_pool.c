@@ -885,6 +885,106 @@ static void sl_rt_install_altstack(void) {
     }
 }
 
+/* What a crash leaves behind. A segfault or bus error used to end the
+ * process with nothing on stderr -- the api server's log in #325 was
+ * empty -- so these write the signal, the fault address, the pc and, when
+ * the address is in the running task's guard page, that a task overflowed
+ * its stack; then they restore the default action and return, so the
+ * process dies of it exactly as before: same exit status, same core.
+ * Only async-signal-safe calls
+ * (write, sigaction, raise), on the thread's alternate stack, since a
+ * stack overflow leaves no room on the task's own. Not installed under
+ * AddressSanitizer, whose handler reports more than this one can. */
+static size_t sl_fatal_put(char *buf, size_t n, size_t cap, const char *s) {
+    while (*s && n + 1 < cap)
+        buf[n++] = *s++;
+    return n;
+}
+
+static size_t sl_fatal_hex(char *buf, size_t n, size_t cap, uintptr_t v) {
+    char d[2 + 2 * sizeof(uintptr_t)];
+    int k = 0;
+    d[k++] = '0';
+    d[k++] = 'x';
+    for (int i = (int)(2 * sizeof(uintptr_t)) - 1; i >= 0; i--)
+        d[k++] = "0123456789abcdef"[(v >> (4 * i)) & 15];
+    for (int i = 0; i < k && n + 1 < cap; i++)
+        buf[n++] = d[i];
+    return n;
+}
+
+static void sl_fatal_handler(int sig, siginfo_t *si, void *uctx_raw) {
+    char buf[320];
+    size_t n = 0, cap = sizeof(buf);
+    uintptr_t addr = (uintptr_t)si->si_addr;
+    uintptr_t pc = 0;
+    ucontext_t *uctx = (ucontext_t *)uctx_raw;
+#if defined(__APPLE__) && defined(__x86_64__)
+    pc = (uintptr_t)uctx->uc_mcontext->__ss.__rip;
+#elif defined(__APPLE__) && defined(__aarch64__)
+    pc = (uintptr_t)__darwin_arm_thread_state64_get_pc(uctx->uc_mcontext->__ss);
+#elif defined(__linux__) && defined(__x86_64__)
+    pc = (uintptr_t)uctx->uc_mcontext.gregs[REG_RIP];
+#elif defined(__linux__) && defined(__aarch64__)
+    pc = (uintptr_t)uctx->uc_mcontext.pc;
+#else
+    (void)uctx;
+#endif
+    const char *name = sig == SIGSEGV ? "SIGSEGV" : sig == SIGBUS ? "SIGBUS"
+                     : sig == SIGILL ? "SIGILL" : sig == SIGFPE ? "SIGFPE"
+                     : "signal";
+    n = sl_fatal_put(buf, n, cap, "slang: fatal ");
+    n = sl_fatal_put(buf, n, cap, name);
+    n = sl_fatal_put(buf, n, cap, " at address ");
+    n = sl_fatal_hex(buf, n, cap, addr);
+    n = sl_fatal_put(buf, n, cap, ", pc ");
+    n = sl_fatal_hex(buf, n, cap, pc);
+    /* Bare TLS read: a signal handler runs on the faulting thread, on its
+       native alternate stack, not as a task that could migrate. */
+    sl_task *t = sl_rt_current_task;
+    if (t && t->raw_base && t->stack_base && addr >= (uintptr_t)t->raw_base &&
+        addr < (uintptr_t)t->stack_base)
+        n = sl_fatal_put(buf, n, cap,
+                         " -- a task overflowed its stack (the fault is in "
+                         "its guard page)");
+    buf[n++] = '\n';
+    size_t off = 0;
+    while (off < n) {
+        ssize_t w = write(2, buf + off, n - off);
+        if (w <= 0)
+            break;
+        off += (size_t)w;
+    }
+    struct sigaction dfl;
+    memset(&dfl, 0, sizeof(dfl));
+    dfl.sa_handler = SIG_DFL;
+    sigemptyset(&dfl.sa_mask);
+    sigaction(sig, &dfl, NULL);
+    /* Pending until this returns (the signal is masked in its own
+       handler), then delivered with the default action: the process dies
+       of it whether the fault would repeat or the signal came from kill().
+       Testing si_code for SI_USER is not portable: Darwin's is positive. */
+    raise(sig);
+}
+
+static void sl_rt_install_fatal_handlers(void) {
+#if defined(__SANITIZE_ADDRESS__)
+    return;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+    return;
+#endif
+#endif
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = sl_fatal_handler;
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sigemptyset(&sa.sa_mask);
+    const int sigs[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE };
+    for (size_t i = 0; i < sizeof(sigs) / sizeof(sigs[0]); i++)
+        sigaction(sigs[i], &sa, NULL);
+}
+
 /* Tier 11 eighth slice, rollout step 3: the real signal handler --
  * replaces step 2's temporary do-nothing placeholder. Transplanted
  * from the validated standalone spike (Tier 11 plan, 'Spike findings'),
@@ -1182,6 +1282,7 @@ static void sl_pool_start(void) {
     sl_cpu_detect();
 
     signal(SIGPIPE, SIG_IGN);
+    sl_rt_install_fatal_handlers();
     /* the main thread runs tasks too (sl_worker_run_loop(-1)) */
     sl_rt_install_altstack();
 
