@@ -251,29 +251,26 @@ static int sl_gc_test_inline_bytes(void) {
         return 1;
     void *other = sl_gc_alloc(64, NULL);
     sl_gc_set_build(0);
-    void (*saved)(void *) = sl_gc_cur_mark;
-    sl_gc_cur_mark = sl_gc_mark;
     sl_gc_obj *bh = (sl_gc_obj *)b - 1;
     sl_gc_obj *oh = (sl_gc_obj *)other - 1;
     int bad = 0;
 
     void *only_ptr[2] = { NULL, b->ptr };
-    sl_gc_scan_conservative((uintptr_t)only_ptr, (uintptr_t)(only_ptr + 2));
+    sl_gc_scan_conservative((uintptr_t)only_ptr, (uintptr_t)(only_ptr + 2), sl_gc_mark);
     if (!bh->marked) bad = 1;
     bh->marked = 0;
 
     void *past[2] = { b->ptr + 1, (char *)other + 2 * sizeof(void *) };
-    sl_gc_scan_conservative((uintptr_t)past, (uintptr_t)(past + 2));
+    sl_gc_scan_conservative((uintptr_t)past, (uintptr_t)(past + 2), sl_gc_mark);
     if (bh->marked || oh->marked) bad = 1;
 
     bh->marked = 0;
     oh->marked = 0;
-    sl_gc_wl_n = 0;
+    sl_gc_mslots[0].wl_n = 0;
     free(sl_gc_set);
     sl_gc_set = NULL;
     sl_gc_set_cap = 0;
     sl_gc_set_count = 0;
-    sl_gc_cur_mark = saved;
     return bad;
 }
 
@@ -286,31 +283,28 @@ static int sl_gc_test_header_word(void) {
     void *small = sl_gc_alloc(10, NULL);
     void *big = sl_gc_alloc(4096, NULL);
     sl_gc_set_build(0);
-    void (*saved)(void *) = sl_gc_cur_mark;
-    sl_gc_cur_mark = sl_gc_mark;
     sl_gc_obj *sh = (sl_gc_obj *)small - 1;
     sl_gc_obj *bh = (sl_gc_obj *)big - 1;
     int bad = 0;
     if (!sh->paged || bh->paged) bad = 1;
 
     void *headers[2] = { sh, bh };
-    sl_gc_scan_conservative((uintptr_t)headers, (uintptr_t)(headers + 2));
+    sl_gc_scan_conservative((uintptr_t)headers, (uintptr_t)(headers + 2), sl_gc_mark);
     if (!sh->marked || !bh->marked) bad = 1;
     sh->marked = 0;
     bh->marked = 0;
 
     void *inside[2] = { (char *)sh + 1, (char *)bh + 1 };
-    sl_gc_scan_conservative((uintptr_t)inside, (uintptr_t)(inside + 2));
+    sl_gc_scan_conservative((uintptr_t)inside, (uintptr_t)(inside + 2), sl_gc_mark);
     if (sh->marked || bh->marked) bad = 1;
 
     sh->marked = 0;
     bh->marked = 0;
-    sl_gc_wl_n = 0;
+    sl_gc_mslots[0].wl_n = 0;
     free(sl_gc_set);
     sl_gc_set = NULL;
     sl_gc_set_cap = 0;
     sl_gc_set_count = 0;
-    sl_gc_cur_mark = saved;
     return bad;
 }
 
@@ -413,10 +407,38 @@ static int sl_gc_test_pointer_free(void) {
     return bad;
 }
 
+/* Each mark slot's functions use that slot alone -- its work list, its
+ * gen-0 count -- so threads marking through different slots share none
+ * of it (todo.md R4, parallel mark). Slot 3 marks a young object; slot 0
+ * must not see it. */
+static int sl_gc_test_mark_slots(void) {
+    void *young = sl_gc_alloc(24, NULL);
+    sl_gc_set_build(0);
+    sl_gc_marker *s0 = &sl_gc_mslots[0], *s3 = &sl_gc_mslots[3];
+    size_t n0 = s0->wl_n, n3 = s3->wl_n;
+    unsigned long long g0 = s0->gen0_seen, g3 = s3->gen0_seen;
+    sl_gc_mark_minor_fns[3](young);
+    int bad = s3->wl_n != n3 + 1 || s3->wl[s3->wl_n - 1] != young ||
+              s3->gen0_seen != g3 + 1 || s0->wl_n != n0 ||
+              s0->gen0_seen != g0;
+    /* Marked once is marked for every slot: a second claim pushes
+       nothing, through any slot. */
+    sl_gc_mark_minor_fns[5](young);
+    if (sl_gc_mslots[5].wl_n != 0) bad = 1;
+    ((sl_gc_obj *)young - 1)->marked = 0;
+    s3->wl_n = n3;
+    free(sl_gc_set);
+    sl_gc_set = NULL;
+    sl_gc_set_cap = 0;
+    sl_gc_set_count = 0;
+    return bad;
+}
+
 int main(void) {
     if (sl_runtime_test_main()) return 1;
     if (sl_gc_test_inline_bytes()) return 1;
     if (sl_gc_test_pointer_free()) { fprintf(stderr, "pointer_free test FAILED\n"); return 1; }
+    if (sl_gc_test_mark_slots()) { fprintf(stderr, "mark_slots test FAILED\n"); return 1; }
     if (sl_gc_test_page_sweep()) return 1;
     return sl_gc_test_header_word();
 }

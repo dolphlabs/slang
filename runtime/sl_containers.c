@@ -875,20 +875,21 @@ static void sl_gc_trace_arr(void *p, void (*mark)(void *)) {
 /* The minor's remembered-phase trace of a list (sl_gc_minor_mark): from
  * gc_clean on only, and gc_clean is left at the first
  * position whose element met a first-survival young object
- * (sl_gc_minor_gen0_seen moved while marking it): that object is still
+ * (the slot's gen0_seen moved while marking it): that object is still
  * young after this minor, so the next minor must reach it again. Returns
  * nonzero when there is such a position (the list stays remembered). */
-static int sl_gc_trace_arr_minor(void *p, void (*mark)(void *)) {
+static int sl_gc_trace_arr_minor(void *p, void (*mark)(void *),
+                                 const unsigned long long *gen0_seen) {
     sl_arr *a = (sl_arr *)p;
     long long first = -1;
     if (a->data) {
         mark(a->data);
         long long from = a->elem_is_ptr == SL_ELEM_NOPTR ? a->len : a->gc_clean;
         for (long long i = from; i < a->len; i++) {
-            unsigned long long s0 = sl_gc_minor_gen0_seen;
+            unsigned long long s0 = *gen0_seen;
             sl_gc_mark_slot(a->data + (size_t)i * a->esz, (size_t)a->esz,
                             a->elem_is_ptr, mark);
-            if (first < 0 && sl_gc_minor_gen0_seen != s0)
+            if (first < 0 && *gen0_seen != s0)
                 first = i;
         }
     }
@@ -1061,7 +1062,8 @@ static void sl_gc_trace_map(void *p, void (*mark)(void *)) {
 }
 
 /* sl_gc_trace_arr_minor for a map: positions are its order array's. */
-static int sl_gc_trace_map_minor(void *p, void (*mark)(void *)) {
+static int sl_gc_trace_map_minor(void *p, void (*mark)(void *),
+                                 const unsigned long long *gen0_seen) {
     sl_map *m = (sl_map *)p;
     long long first = -1;
     sl_gc_trace_map_bufs(m, mark);
@@ -1070,13 +1072,13 @@ static int sl_gc_trace_map_minor(void *p, void (*mark)(void *)) {
                          ? m->count
                          : m->gc_clean;
     for (long long i = from; i < m->count; i++) {
-        unsigned long long s0 = sl_gc_minor_gen0_seen;
+        unsigned long long s0 = *gen0_seen;
         long long slot = m->order[i];
         sl_gc_mark_slot(m->keys + (size_t)slot * m->ksz, m->ksz,
                         m->key_is_ptr, mark);
         sl_gc_mark_slot(m->vals + (size_t)slot * m->vsz, m->vsz,
                         m->val_is_ptr, mark);
-        if (first < 0 && sl_gc_minor_gen0_seen != s0)
+        if (first < 0 && *gen0_seen != s0)
             first = i;
     }
     m->gc_clean = sl_gc_clean_at(first >= 0 ? first : m->count);
