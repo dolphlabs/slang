@@ -546,7 +546,7 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         int id = cg->tmp_id++;
         const char *ec = ctype_of(cg, elem);
         const char *oc = opt_cname(cg, elem);
-        const char *otrace = type_is_gc_ptr(cg, elem)
+        const char *otrace = type_has_gc_roots(cg, elem)
                                   ? xasprintf("sl_gc_trace_%s", oc)
                                   : "NULL";
         /* Tier 10: _sl_co%d is allocated, then sl_chan_recv (which can
@@ -592,7 +592,7 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         const char *rc = res_cname(cg, elem, "str");
         const char *rct = ctype_of(cg, rt);
         const char *trace =
-            (type_is_gc_ptr(cg, elem) || type_is_gc_ptr(cg, "str"))
+            (type_has_gc_roots(cg, elem) || type_has_gc_roots(cg, "str"))
                 ? xasprintf("sl_gc_trace_%s", rc)
                 : "NULL";
         int id = cg->tmp_id++;
@@ -969,7 +969,7 @@ char *gen_ctor(CG *cg, Expr *e) {
      * edges by construction. */
     if (!strcmp(name, "some")) {
         const char *oc = opt_cname(cg, target);
-        const char *trace = type_is_gc_ptr(cg, target)
+        const char *trace = type_has_gc_roots(cg, target)
                                  ? xasprintf("sl_gc_trace_%s", oc)
                                  : "NULL";
         inner = xasprintf(
@@ -981,7 +981,7 @@ char *gen_ctor(CG *cg, Expr *e) {
         result_te(ty, &tv, &tev);
         const char *rc = res_cname(cg, tv, tev);
         const char *trace =
-            (type_is_gc_ptr(cg, tv) || type_is_gc_ptr(cg, tev))
+            (type_has_gc_roots(cg, tv) || type_has_gc_roots(cg, tev))
                 ? xasprintf("sl_gc_trace_%s", rc)
                 : "NULL";
         if (!type_is_gc_ptr(cg, ty)) {
@@ -1790,7 +1790,7 @@ char *gen_expr(CG *cg, Expr *e) {
             const char *cn = ctype_of(cg, cg->expect);
             const char *inner_t = opt_inner(cg->expect);
             const char *oc = opt_cname(cg, inner_t);
-            const char *trace = type_is_gc_ptr(cg, inner_t)
+            const char *trace = type_has_gc_roots(cg, inner_t)
                                      ? xasprintf("sl_gc_trace_%s", oc)
                                      : "NULL";
             char *inner = xasprintf(
