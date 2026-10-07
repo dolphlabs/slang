@@ -1600,6 +1600,22 @@ static void sl_gc_page_free_obj(sl_gc_obj *h) {
  * coalesced, in walk order. Striding by cap, not size, is what keeps
  * absorbed waste inside its owner's stride instead of filing it as a
  * fragment the next claim overwrites a live header with. */
+/* The first object start at or after slot s, or `end` if none is below
+ * it: a word of the bitmap at a time, so a free run costs one step per 64
+ * slots rather than one per slot. */
+static inline size_t sl_gc_page_next_start(const sl_gc_page *pg, size_t s,
+                                           size_t end) {
+    while (s < end) {
+        unsigned long long w = pg->bitmap[s / 64] >> (s % 64);
+        if (w) {
+            size_t n = s + (size_t)__builtin_ctzll(w);
+            return n < end ? n : end;
+        }
+        s = (s / 64 + 1) * 64;
+    }
+    return end;
+}
+
 static void sl_gc_page_rebuild_free(sl_gc_page *pg) {
     char *base = (char *)pg + SL_GC_PAGE_PAYLOAD_OFF;
     pg->free_head = 0;
@@ -1616,12 +1632,13 @@ static void sl_gc_page_rebuild_free(sl_gc_page *pg) {
             }
             off += h->cap;
         } else {
+            /* A free run, to the next object or the bump pointer. Walked
+               a slot at a time it was most of a sweep-end prune's cost at
+               512 connections: a mostly empty 16KB page is 2,048 slots. */
             size_t start = off;
-            do {
-                off += SL_GC_PAGE_SLOT;
-                slot = off / SL_GC_PAGE_SLOT;
-            } while (off < pg->bump &&
-                     !(pg->bitmap[slot / 64] & (1ULL << (slot % 64))));
+            off = sl_gc_page_next_start(pg, slot + 1,
+                                        pg->bump / SL_GC_PAGE_SLOT) *
+                  SL_GC_PAGE_SLOT;
             size_t *node = (size_t *)(base + start);
             node[0] = pg->free_head;
             node[1] = off - start;
