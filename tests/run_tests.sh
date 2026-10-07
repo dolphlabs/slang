@@ -908,6 +908,23 @@ for t in tests/*/main.sl examples/*/main.sl; do
     fi
 done
 rm -f main.gen.c
+# One full compile with optimization and _FORTIFY_SOURCE, as slangc's own
+# -O3 build is on Ubuntu, where glibc then marks read/write
+# warn_unused_result. Those warnings come from the optimizer, which
+# -fsyntax-only never runs, and from runtime code every program shares,
+# so one program that uses the reactor and the resolver covers them.
+if ./slangc tests/net_deadline_many/main.sl --emit-c >/dev/null 2>&1; then
+    diag=$(cc -c -O2 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2 -o /dev/null \
+           main.gen.c 2>&1 | grep 'warning:')
+    if [ -n "$diag" ]; then
+        w=$(printf '%s\n' "$diag" | wc -l | tr -d ' ')
+        echo "FAIL net_deadline_many ($w warning(s) with -O2 -D_FORTIFY_SOURCE=2)"
+        printf '%s\n' "$diag" | head -3
+        warned=$((warned + w))
+        fail=1
+    fi
+fi
+rm -f main.gen.c
 if [ "$warned" -eq 0 ]; then
     echo "PASS generated C is warning-free"
 fi

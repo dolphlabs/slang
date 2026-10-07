@@ -38,6 +38,28 @@ static void sl_net_set_nonblocking(int fd) {
 /* TLS parks on the same reactor (WANT_READ/WANT_WRITE). FDs stay
  * non-blocking; sl_net_tls_* retries through sl_reactor_wait. */
 
+/* A wakeup byte or eventfd count written, or one drained, whose only
+ * failure that matters is EINTR: a full eventfd counter, an empty one,
+ * or a full pipe is already the state the caller wants. The result is
+ * used, not cast away -- glibc marks read/write warn_unused_result under
+ * _FORTIFY_SOURCE, which Ubuntu's GCC turns on at -O, and a (void) cast
+ * does not silence that: generated C warned there. */
+static void sl_net_nudge(int fd, const void *p, size_t n) {
+    for (;;) {
+        ssize_t r = write(fd, p, n);
+        if (r >= 0 || errno != EINTR)
+            return;
+    }
+}
+
+static void sl_net_drain(int fd, void *p, size_t n) {
+    for (;;) {
+        ssize_t r = read(fd, p, n);
+        if (r >= 0 || errno != EINTR)
+            return;
+    }
+}
+
 /* ---- the reactor ---- */
 
 /* Contention instrumentation first: 16 fd-hashed shard mutexes that
@@ -185,7 +207,7 @@ static void sl_reactor_timer_nudge(void) {
     kevent(sl_reactor_fd, &kev, 1, NULL, 0, NULL);
 #else
     uint64_t one = 1;
-    (void)write(sl_reactor_timer_efd, &one, sizeof(one));
+    sl_net_nudge(sl_reactor_timer_efd, &one, sizeof(one));
 #endif
 }
 
@@ -398,14 +420,14 @@ static void *sl_reactor_thread(void *arg) {
 #else
             if (events[i].data.ptr == &sl_reactor_timer_token) {
                 uint64_t tx;
-                (void)read(sl_reactor_timer_efd, &tx, sizeof(tx));
+                sl_net_drain(sl_reactor_timer_efd, &tx, sizeof(tx));
                 continue;
             }
             int is_shutdown = events[i].data.ptr == &sl_reactor_shutdown_token;
             void *tag = is_shutdown ? NULL : events[i].data.ptr;
             if (is_shutdown) {
                 uint64_t x;
-                (void)read(sl_reactor_efd, &x, sizeof(x));
+                sl_net_drain(sl_reactor_efd, &x, sizeof(x));
             }
 #endif
             if (is_shutdown) {
@@ -445,7 +467,7 @@ static void sl_net_shutdown_nudge(void) {
     kevent(sl_reactor_fd, &kev, 1, NULL, 0, NULL);
 #else
     uint64_t one = 1;
-    (void)write(sl_reactor_efd, &one, sizeof(one));
+    sl_net_nudge(sl_reactor_efd, &one, sizeof(one));
 #endif
 }
 
@@ -496,7 +518,7 @@ static void *sl_dns_thread(void *arg) {
                 &j->state, &expect, 1, memory_order_acq_rel,
                 memory_order_acquire)) {
             char x = 1;
-            (void)write(wake_wr, &x, 1);
+            sl_net_nudge(wake_wr, &x, 1);
             close(wake_wr);
         } else {
             /* the caller gave up; nobody else will ever look at this */
