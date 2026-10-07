@@ -221,10 +221,12 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
     cores, per minor sweep + tail: mix c512 1.74 -> 0.74 ms, point c512
     1.07 -> 0.56 ms; per major on mix, sweep 0.74 -> 0.54 ms and tail
     0.38 -> 0.09 ms; share of wall time stopped on mix c512 ~20.5% ->
-    ~15%. Req/s on this host was not resolvable (load average 5-10 from
-    other apps): ABBA x10 mix c512 11,637 -> 12,068, x6 point c512
-    17,568 -> 16,894, both inside a +-15% spread; R8's CCX33 run is the
-    check. Two cheaper splits measured worse and were dropped: the
+    ~15%. Req/s (rerun 2026-10-07 after a stale server sharing the port
+    via SO_REUSEPORT invalidated the first A/B; host load 6-10, medians):
+    wrk ABBA x6 mix c512 7,491 -> 8,082, point c512 11,429 -> 12,369;
+    latgen x4 point c512 10,494 -> 14,503 req/s, p99 119 -> 59 ms; quote
+    c64 3,556 -> 3,665, p99 46 -> 52 (inside the spread). R8's CCX33 run
+    is the check. Two cheaper splits measured worse and were dropped: the
     collector listing every page first (0.23 ms of pointer chasing
     before anyone starts; with listing overlapped, helpers spun waiting
     for it), and whole worker lists as the unit (5 lists for 4 threads,
