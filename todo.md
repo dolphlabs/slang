@@ -275,12 +275,13 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
   run 1.56-2.20 s -> 0.05-0.07 s, peak RSS unchanged (585-633 vs
   567-629 MB), output identical. Batch still needs 6.1's profile (no Go
   in the container: the suite's go.mod wants 1.23, it has 1.22).
-  **Found, not fixed:** `type_has_gc_roots` answers 0 for a `result`
-  whose ok side is a value struct holding a pointer (`result[Rec,
-  fault]`, Rec with a str field), because `type_is_gc_ptr` looks only at
-  bare pointers on each side and a result is no struct definition. A
-  container of one is safe here (flag 0 keeps the word scan), but a local
-  of that type may not be rooted across a safepoint; needs a test.
+  **Found and fixed (#348, GHSA-x43f-qxff-cphp):** a value struct holding
+  a GC pointer was not traced through an `opt` or `result` that carried
+  it (`opt[Rec]` had no tracer, `result[Rec, str]` traced only its error
+  side, `result[Rec, fault]` was held by value with no root). Wider than
+  first noted here; `tests/gc_payload_trace` covers each shape (dev: 193
+  of 300 values wrong). The minor verifier could not see it: its full
+  mark uses the same tracers.
 - [ ] **R8. Prove it** *(fix-gc Phase 9)*: a CCX33 re-run with #287's
   configuration that passes S2's host check, p99 from `bench/latgen`.
 

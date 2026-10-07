@@ -606,7 +606,7 @@ void emit_struct_tracers(CG *cg) {
  * can hold each other by value) and emit_opt_res_types (everything
  * else only holds pointers). Must run before either. */
 static int res_inst_is_value(CG *cg, ResInst *r) {
-    return !type_is_gc_ptr(cg, r->tv) && !type_is_gc_ptr(cg, r->te);
+    return !type_has_gc_roots(cg, r->tv) && !type_has_gc_roots(cg, r->te);
 }
 
 static void emit_res_struct_body(CG *cg, ResInst *r) {
@@ -759,34 +759,55 @@ void emit_opt_res_types(CG *cg) {
  * the mark: an unset payload pointer is zero-filled by sl_gc_alloc, and
  * the collector's mark is NULL-safe, so marking unconditionally is
  * simpler and exactly as correct as branching on the flag first. */
+/* Mark what one opt/result payload field (`o->v`, `o->e`) holds: the
+ * pointer itself, or, for a value struct, each GC field inside it. Every
+ * allocation site picks the tracer by type_has_gc_roots, so a payload
+ * that needs one always gets one: a value struct holding a str used to
+ * get NULL, and the str was freed under the opt or result holding it. */
+static void emit_payload_marks(CG *cg, const char *field, const char *t) {
+    if (type_is_gc_ptr(cg, t)) {
+        emit_line(cg, "mark((void *)o->%s);", field);
+        return;
+    }
+    StructDef *sd = struct_find_canon(cg, t);
+    if (sd && !sd->is_gc && struct_has_gc_fields(cg, sd)) {
+        emit_struct_tracer_fields(cg, sd, field);
+        return;
+    }
+    if (type_has_gc_roots(cg, t)) {
+        /* Not a pointer or a plain struct, yet holding one: every word
+           is a candidate, the conservative way a container slot is
+           scanned when its layout is not known. mark() validates. */
+        emit_line(cg, "for (size_t _i = 0; _i < sizeof(o->%s) / sizeof(void *); _i++)",
+                  field);
+        emit_line(cg, "    mark(((void **)&o->%s)[_i]);", field);
+    }
+}
+
 void emit_opt_res_tracers(CG *cg) {
     for (int i = 0; i < cg->opts.count; i++) {
         OptInst *o = &cg->opts.items[i];
-        if (!type_is_gc_ptr(cg, o->inner))
+        if (!type_has_gc_roots(cg, o->inner))
             continue;
         emit_line(cg, "static void sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
                   o->cname);
         cg->indent++;
         emit_line(cg, "%s *o = (%s *)p;", o->cname, o->cname);
-        emit_line(cg, "mark((void *)o->v);");
+        emit_payload_marks(cg, "v", o->inner);
         cg->indent--;
         emit_line(cg, "}");
         emit_line(cg, "");
     }
     for (int i = 0; i < cg->res.count; i++) {
         ResInst *r = &cg->res.items[i];
-        int vptr = type_is_gc_ptr(cg, r->tv);
-        int eptr = type_is_gc_ptr(cg, r->te);
-        if (!vptr && !eptr)
+        if (!type_has_gc_roots(cg, r->tv) && !type_has_gc_roots(cg, r->te))
             continue;
         emit_line(cg, "static void sl_gc_trace_%s(void *p, void (*mark)(void *)) {",
                   r->cname);
         cg->indent++;
         emit_line(cg, "%s *o = (%s *)p;", r->cname, r->cname);
-        if (vptr)
-            emit_line(cg, "mark((void *)o->v);");
-        if (eptr)
-            emit_line(cg, "mark((void *)o->e);");
+        emit_payload_marks(cg, "v", r->tv);
+        emit_payload_marks(cg, "e", r->te);
         cg->indent--;
         emit_line(cg, "}");
         emit_line(cg, "");

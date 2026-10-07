@@ -805,10 +805,16 @@ int type_is_gc_ptr(CG *cg, const char *t) {
         return 0;
     if (is_fn(t))
         return 0; /* names code, never the heap -- nothing to trace */
+    /* A result is a heap object -- found, traced and rooted like one --
+     * when either side holds a GC pointer anywhere, a value struct's
+     * fields included; only a result of plain values is held by value.
+     * Asking whether each side IS a pointer made result[Rec, fault] (Rec
+     * a value struct with a str) a by-value C struct no liveness pass
+     * rooted, so a collection freed the str while the result held it. */
     if (is_result(t)) {
         char *tv, *te;
         result_te(t, &tv, &te);
-        return type_is_gc_ptr(cg, tv) || type_is_gc_ptr(cg, te);
+        return type_has_gc_roots(cg, tv) || type_has_gc_roots(cg, te);
     }
     if (is_arr(t) || is_map(t) || is_opt(t) ||
         is_chan(t) || is_join(t) || is_mutex(t) || is_str(t) || is_bytes(t))
@@ -890,10 +896,29 @@ int elem_trace_flag(CG *cg, const char *t) {
 }
 
 int struct_has_gc_fields(CG *cg, StructDef *sd) {
-    for (int j = 0; j < sd->nfields; j++)
-        if (type_has_gc_roots(cg, sd->ftypes[j]))
-            return 1;
-    return 0;
+    /* A struct reached again while its own fields are being asked about
+     * holds itself by value through a result (struct S { r: result[S,
+     * int] }): a layout error emit_struct_body reports later. Answering
+     * 0 for the inner visit lets the question finish so that diagnostic
+     * is reached; since a result's classification asks about its sides'
+     * fields, the walk would otherwise recurse until the compiler's own
+     * stack overflowed. */
+    enum { SL_GC_ROOTS_DEPTH = 64 };
+    static StructDef *visiting[SL_GC_ROOTS_DEPTH];
+    static int nvisiting = 0;
+    for (int i = 0; i < nvisiting; i++)
+        if (visiting[i] == sd)
+            return 0;
+    /* Deeper than any real program nests value structs: answer yes,
+       the safe direction (traced, never freed early). */
+    if (nvisiting == SL_GC_ROOTS_DEPTH)
+        return 1;
+    visiting[nvisiting++] = sd;
+    int found = 0;
+    for (int j = 0; j < sd->nfields && !found; j++)
+        found = type_has_gc_roots(cg, sd->ftypes[j]);
+    nvisiting--;
+    return found;
 }
 
 static void append_gc_root_expr(CG *cg, StrBuf *sb, const char *c_expr,

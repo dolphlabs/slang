@@ -341,7 +341,7 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
         char *inner = opt_inner(t);
         const char *oname = opt_cname(cg, inner);
         const char *innerfn = json_dec_fn(cg, inner, 0);
-        const char *otrace = type_is_gc_ptr(cg, inner)
+        const char *otrace = type_has_gc_roots(cg, inner)
                                   ? xasprintf("sl_gc_trace_%s", oname)
                                   : "NULL";
         emit_line(cg, "%s *o = (%s *)sl_gc_alloc(sizeof(%s), %s);", oname,
@@ -476,7 +476,7 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
             if (is_opt(ft)) {
                 const char *inner_t = opt_inner(ft);
                 const char *oname = opt_cname(cg, inner_t);
-                const char *otrace = type_is_gc_ptr(cg, inner_t)
+                const char *otrace = type_has_gc_roots(cg, inner_t)
                                           ? xasprintf("sl_gc_trace_%s", oname)
                                           : "NULL";
                 emit_line(cg,
@@ -533,7 +533,7 @@ static void emit_json_fast_body(CG *cg, JsonInst *it) {
         char *inner = opt_inner(t);
         const char *oname = opt_cname(cg, inner);
         const char *ict = ctype_of(cg, inner);
-        const char *otrace = type_is_gc_ptr(cg, inner)
+        const char *otrace = type_has_gc_roots(cg, inner)
                                   ? xasprintf("sl_gc_trace_%s", oname)
                                   : "NULL";
         emit_line(cg, "%s *o;", oname);
@@ -713,7 +713,7 @@ static void emit_json_fast_body(CG *cg, JsonInst *it) {
                 /* absent: none, like the tree decoder */
                 const char *inner_t = opt_inner(ft);
                 const char *oname = opt_cname(cg, inner_t);
-                const char *otrace = type_is_gc_ptr(cg, inner_t)
+                const char *otrace = type_has_gc_roots(cg, inner_t)
                                           ? xasprintf("sl_gc_trace_%s", oname)
                                           : "NULL";
                 emit_line(cg, "if (!seen%d) f%d = (%s *)sl_gc_alloc(sizeof(%s), %s);",
@@ -906,7 +906,7 @@ char *json_call_gen(CG *cg, const char *fname, Expr *e) {
         result_te(cg->expect, &tv, &tev);
         const char *resname = res_cname(cg, tv, tev);
         const char *restrace =
-            (type_is_gc_ptr(cg, tv) || type_is_gc_ptr(cg, tev))
+            (type_has_gc_roots(cg, tv) || type_has_gc_roots(cg, tev))
                 ? xasprintf("sl_gc_trace_%s", resname)
                 : "NULL";
         const char *decfn = json_dec_fn(cg, tv, e->line);
