@@ -414,6 +414,10 @@ the point reads in flight with it.
 - [ ] **1.4 Stopped workers help collect.** Parallel sweep first: each
   worker already owns its pages, so the split is natural. Then parallel
   mark, with per-worker work lists and an atomic mark claim.
+  **Parallel sweep landed 2026-10-07** (todo.md R4): minor sweep + tail
+  at mix c512 1.74 -> 0.74 ms. Mark (0.9-1.0 ms) and the rendezvous
+  (0.5-0.7 ms) are now the largest phases; parallel mark is what is
+  left of 1.4.
 - [x] **1.5 Recognize paged objects by their page; list only the
   rest.** A minor's object table (`sl_gc_set`) listed every young
   object: a walk of the young list and a hash insert each, about half of
@@ -436,6 +440,11 @@ the point reads in flight with it.
   (same fallback rate, same collection counts, no new hotspot in a
   profile; recorded in `todo.md`). The young list is still walked by the
   sweep: that is 1.5's other half, the page sweep.
+  **Page sweep landed 2026-10-07** (todo.md R4): the young, pending and
+  retired lists are gone, pages are swept by their start bitmaps, and a
+  major's set build no longer walks promoted paged objects. Minor sweep
+  at 512 connections -40% (mix) to -60% (point); major set build 2.3 ->
+  0.02 ms.
 - [ ] **1.6 Minors skip tasks with nothing young.** A task that has not
   run since the last minor holds only old values, because that minor
   promoted everything it held. Audit every place that hands a value to a

@@ -103,17 +103,19 @@ static unsigned char sl_gc_test_gen(const void *payload) {
     return ((const sl_gc_obj *)payload - 1)->gen;
 }
 
-/* Is payload still a heap object (on either generation's list, or this
- * task's not-yet-harvested pending list)? A freed block is on none. */
+typedef struct { const sl_gc_obj *want; int found; } sl_gc_test_find;
+
+static void sl_gc_test_find_fn(sl_gc_obj *h, void *ctx) {
+    sl_gc_test_find *f = (sl_gc_test_find *)ctx;
+    if (h == f->want) f->found = 1;
+}
+
+/* Is payload still a heap object (a start bit in a page, or listed in an
+ * mbuf, sl_gc_young_m or sl_gc_old)? A freed block is in none. */
 static int sl_gc_test_on_heap(const void *payload) {
-    const sl_gc_obj *h = (const sl_gc_obj *)payload - 1;
-    for (sl_gc_obj *o = sl_gc_young; o; o = o->next)
-        if (o == h) return 1;
-    for (sl_gc_obj *o = sl_gc_old; o; o = o->next)
-        if (o == h) return 1;
-    for (sl_gc_obj *o = sl_rt_current_task->gc_pend_head; o; o = o->next)
-        if (o == h) return 1;
-    return 0;
+    sl_gc_test_find f = { (const sl_gc_obj *)payload - 1, 0 };
+    sl_gc_for_each_obj(sl_gc_test_find_fn, &f);
+    return f.found;
 }
 
 static char *sl_gc_test_key(int i) {
@@ -248,7 +250,6 @@ static int sl_gc_test_inline_bytes(void) {
     if (b->ptr != (unsigned char *)(b + 1) || memcmp(b->ptr, "inline", 6))
         return 1;
     void *other = sl_gc_alloc(64, NULL);
-    sl_gc_harvest_task(sl_rt_cur());
     sl_gc_set_build(0);
     void (*saved)(void *) = sl_gc_cur_mark;
     sl_gc_cur_mark = sl_gc_mark;
@@ -284,7 +285,6 @@ static int sl_gc_test_inline_bytes(void) {
 static int sl_gc_test_header_word(void) {
     void *small = sl_gc_alloc(10, NULL);
     void *big = sl_gc_alloc(4096, NULL);
-    sl_gc_harvest_task(sl_rt_cur());
     sl_gc_set_build(0);
     void (*saved)(void *) = sl_gc_cur_mark;
     sl_gc_cur_mark = sl_gc_mark;
@@ -314,8 +314,83 @@ static int sl_gc_test_header_word(void) {
     return bad;
 }
 
+/* A worker's page count must be its list's length after a sweep: the
+ * page cap is checked against it, and the parallel sweep splits that
+ * many pages (pagev) between threads. Pages kept alive across a minor
+ * are what the prune used to count twice. */
+static int sl_gc_test_npages(void) {
+    enum { N = 2000 };
+    static void *keep[N];
+    sl_safepoint sp;
+    sl_rt_safepoint_enter(&sp, keep, N);
+    for (int i = 0; i < N; i++)
+        keep[i] = sl_gc_alloc(200, NULL);
+    sl_gc_collect_minor();
+    sl_gc_worker_state *st = sl_gc_tls_state();
+    int n = 0;
+    for (sl_gc_page *pg = st->pages; pg; pg = pg->next)
+        n++;
+    int bad = n < 2 || st->npages != n;
+    if (bad)
+        fprintf(stderr, "npages %d, list holds %d\n", st->npages, n);
+    for (int i = 0; i < N; i++)
+        keep[i] = NULL;
+    sl_rt_safepoint_exit();
+    sl_gc_collect();
+    return bad;
+}
+
+static int sl_gc_test_finis = 0;
+static void sl_gc_test_fini(void *p) {
+    (void)p;
+    sl_gc_test_finis++;
+}
+
+/* Paged objects are swept from their pages, not from a list: a promoted
+ * one must stay off sl_gc_old (which a major's set build walks whole),
+ * the sweeps must still run a dead paged object's finalizer and free its
+ * slot, and an old paged object must survive minors and die at a major. */
+static int sl_gc_test_page_sweep(void) {
+    void *keep = sl_gc_alloc_fin(24, NULL, sl_gc_test_fini);
+    void *dead = sl_gc_alloc_fin(24, NULL, sl_gc_test_fini);
+    sl_gc_obj *kh = (sl_gc_obj *)keep - 1;
+    if (!kh->paged || !((sl_gc_obj *)dead - 1)->paged) return 1;
+    sl_safepoint sp;
+    void *roots[] = { keep };
+    sl_rt_safepoint_enter(&sp, roots, 1);
+    sl_gc_test_finis = 0;
+    sl_gc_collect_minor();
+    if (sl_gc_test_finis != 1 || sl_gc_test_on_heap(dead)) {
+        sl_rt_safepoint_exit();
+        return 1;
+    }
+    sl_gc_collect_minor();
+    if (kh->gen != 1 || !sl_gc_test_on_heap(keep)) {
+        sl_rt_safepoint_exit();
+        return 1;
+    }
+    for (sl_gc_obj *o = sl_gc_old; o; o = o->next)
+        if (o->paged) { sl_rt_safepoint_exit(); return 1; }
+    sl_gc_collect_minor();
+    if (sl_gc_test_finis != 1 || !sl_gc_test_on_heap(keep)) {
+        sl_rt_safepoint_exit();
+        return 1;
+    }
+    roots[0] = NULL;
+    sl_gc_collect_minor(); /* old: a minor never frees it */
+    if (sl_gc_test_finis != 1 || !sl_gc_test_on_heap(keep)) {
+        sl_rt_safepoint_exit();
+        return 1;
+    }
+    sl_gc_collect();
+    sl_rt_safepoint_exit();
+    if (sl_gc_test_finis != 2 || sl_gc_test_on_heap(keep)) return 1;
+    return sl_gc_test_npages();
+}
+
 int main(void) {
     if (sl_runtime_test_main()) return 1;
     if (sl_gc_test_inline_bytes()) return 1;
+    if (sl_gc_test_page_sweep()) return 1;
     return sl_gc_test_header_word();
 }

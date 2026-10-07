@@ -186,8 +186,25 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
   mark 0.9, tail 0.55 (after #335/#336), time-to-safepoint 0.5. The
   sweep visits ~64k young objects a minor at ~21 ns each, one pointer
   chase through the young list per object, so it is miss-bound.
-  Two designs, not built:
-  - **Page-ordered sweep, single-threaded.** Paged objects leave the
+  Two designs; the owner chose the first (2026-10-07):
+  - [x] **Page-ordered sweep, single-threaded.** Built on
+    perf/gc-page-ordered-sweep. No object list or pending list is left: a
+    paged object is found by its page's start bit, an unpaged young one
+    in its worker's mbuf or `sl_gc_young_m`, and `sl_gc_old` holds only
+    unpaged old objects. Container, server on 4 pinned cores, per
+    minor sweep: point c512 1.48-1.62 -> 0.58-0.66 ms, mix c512 1.40 ->
+    1.05-1.15 ms; per major, set build 2.3 -> 0.02 ms (it walked every
+    promoted paged object) and sweep 1.2 -> 0.7 ms. ABBA x6 req/s:
+    mix c512 10,906 -> 10,908, point c512 19,891 -> 20,349, mix c64
+    12,425 -> 12,908, point c64 21,261 -> 21,151 (noise). latgen ABBA
+    x4: point c512 19,495 -> 19,868 req/s, p99 36.1 -> 34.1 ms; quote
+    c64 5,341 -> 5,728 req/s, p50 11.4 -> 10.4 ms, p99 29.3 -> 30.0
+    (inside the spread). Peak RSS: no consistent change (latgen quote
+    +4 MB median, wrk quote -1.9 MB). On mix c512 a minor is now sweep
+    1.1 ms, mark 0.95, rendezvous 0.6 and tail 0.55: the sweep is no
+    longer far ahead of mark, and the parallel sweep below is what is
+    left of R4's sweep share.
+    The design as approved: paged objects leave the
     young and pending lists; a minor sweeps each worker's pages (and
     the orphans) by bitmap, skipping pages whose `young_live` is 0,
     and unpaged young objects from the mbuf/young_m arrays that already
@@ -195,7 +212,28 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
     the per-allocation pending-list link. Touches the verifier, the
     page validator, set build for majors and the major sweep, which all
     walk those lists today.
-  - **Parallel sweep by page.** With pages as the unit, stopped workers
+  - [x] **Parallel sweep by page.** Built on perf/gc-parallel-sweep
+    (2026-10-07). Stopped threads join a sweep job from
+    `sl_gc_ack_and_wait` and take 8-page chunks of every worker's page
+    array; each counts into its own slot, merged after; a page that
+    survives with new holes gets its free list rebuilt in the same step,
+    so the prune is left only the empties. Container, server on 4 pinned
+    cores, per minor sweep + tail: mix c512 1.74 -> 0.74 ms, point c512
+    1.07 -> 0.56 ms; per major on mix, sweep 0.74 -> 0.54 ms and tail
+    0.38 -> 0.09 ms; share of wall time stopped on mix c512 ~20.5% ->
+    ~15%. Req/s (rerun 2026-10-07 after a stale server sharing the port
+    via SO_REUSEPORT invalidated the first A/B; host load 6-10, medians):
+    wrk ABBA x6 mix c512 7,491 -> 8,082, point c512 11,429 -> 12,369;
+    latgen x4 point c512 10,494 -> 14,503 req/s, p99 119 -> 59 ms; quote
+    c64 3,556 -> 3,665, p99 46 -> 52 (inside the spread). R8's CCX33 run
+    is the check. Two cheaper splits measured worse and were dropped: the
+    collector listing every page first (0.23 ms of pointer chasing
+    before anyone starts; with listing overlapped, helpers spun waiting
+    for it), and whole worker lists as the unit (5 lists for 4 threads,
+    young pages per list 49-102). Found on the way and fixed:
+    `sl_gc_pages_prune_list` counted surviving pages twice, so `npages`
+    ran at 2x and a worker hit the page cap at half its real pages.
+    The original design: with pages as the unit, stopped workers
     (asleep in `sl_gc_ack_and_wait`) each take a disjoint set of pages,
     so no page is shared and nothing in it needs atomics; old-list and
     young_m output are per-thread and spliced after. Builds on the
@@ -216,6 +254,15 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
   16,144 -> 17,361 req/s, c512 14,057 -> 15,908; mix +4-5%. Originally:
   one builder per query message *(fix-gc 3.3)*.
 - [ ] **R6. Frame the request head once** *(fix-gc 2.2)*.
+  **Measured 2026-10-07, not built: no benchmark parses a head twice.**
+  `http.read` re-frames the head on every attempt after a partial recv,
+  so this only pays when a request spans recvs. Counted in the bench api
+  (container, counters on `sl_http_read` and `sl_http_frame_head_wire`):
+  point c64 131,059 heads for 131,072 reads, mix c64 65,584 / 65,536,
+  quote c64 36,879 / 36,864, quote c512 32,644 / 32,768. On loopback
+  even the ~110 KB quote body arrives whole, and the CCX33 runs put wrk
+  on the server's host too. Still worth doing for real clients whose
+  requests arrive in segments, but it will not move a benchmark row.
 - [ ] **R7. Precise tracing for lists and maps of non-pointers**
   *(fix-gc 1.8)*, then batch *(fix-gc Phase 6)*: batch is the one row
   whose ratio got worse (0.42 -> 0.35).

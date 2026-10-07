@@ -80,7 +80,7 @@ What this means in practice:
   runs in under 20MB.
 - Generational and non-moving: new objects start in a nursery, and a
   minor collection runs after every 512KB of allocation. The nursery
-  grows, up to 1MB per worker (8MB at most), while minors take a large
+  grows, up to 2MB per worker (16MB at most), while minors take a large
   share of the time and keep finding much of it live -- a busy server
   re-marking its in-flight requests -- and shrinks back when they do not,
   so a program whose garbage dies young keeps the small footprint. It marks from
@@ -92,6 +92,9 @@ What this means in practice:
   cost follows the nursery, not the heap: about 0.8ms per minor whether a
   program keeps 20k or a million long-lived objects. Majors sweep
   everything and promote what they keep.
+- Both kinds sweep in parallel: the threads stopped for a collection take
+  a share of the heap's pages each, instead of waiting while one thread
+  sweeps them all. `SLANG_GC_STAT` counts the joins (`sweep_helps`).
 - A list or map written since the last minor is traced from the first
   position written, not from the start, so filling a million-entry list
   or map costs each minor only what was added since the previous one.
