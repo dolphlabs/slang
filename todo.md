@@ -3581,13 +3581,14 @@ Found and not fixed:
   (async-signal-safe) would have named the crash site.
 - `sl_arr_from`, `sl_arr_slice` and `sl_arr_concat` write elements before
   setting `len`. Safe today: their sources still hold every element.
-- Generated C is not warning-free on Ubuntu's GCC: `(void)write(...)` and
-  `(void)read(...)` in the runtime (reactor nudges, the DNS wake) warn
-  `-Wunused-result` under the distro's default `_FORTIFY_SOURCE`, where a
-  void cast does not silence it. CI's postgres jobs print the warnings
-  (run 37528531877); the warning sweep compiles without fortify, so it
-  passes. Fix the call sites (check the result) and run the sweep with
-  `-D_FORTIFY_SOURCE=2`.
+- Fixed 2026-10-07 (fix/fortify-unused-result): generated C was not
+  warning-free on Ubuntu's GCC: `(void)write(...)` and `(void)read(...)`
+  in the runtime (reactor nudges, the DNS wake) warned `-Wunused-result`
+  under the distro's default `_FORTIFY_SOURCE`, where a void cast does
+  not silence it. The calls go through `sl_net_nudge` / `sl_net_drain`
+  (retry on EINTR, result used), and the warning sweep adds one full
+  `-O2 -D_FORTIFY_SOURCE=2` compile of a program using the reactor:
+  the warnings come from the optimizer, which `-fsyntax-only` never ran.
 
 ## Open: `duration` used as an `int` gives an error that does not say the fix
 
