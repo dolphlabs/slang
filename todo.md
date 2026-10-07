@@ -177,6 +177,14 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
   first. This is the main remaining cause of quote's idle cores.
 - [ ] **R5. Per-connection prepared-statement cache** *(fix-gc 3.4)*
   (landed in #312, never ticked), then
+  **one builder per query message** *(fix-gc 3.3)*: done on
+  perf/pg-alloc (2026-10-07). A cached `pool_query` made 115 GC
+  allocations (7.9 KB); its messages are now written into a buffer the
+  connection keeps, a reply's body is copied only for the messages that
+  read one, and a cached statement skips Describe and reuses the columns
+  its first run read: 41 (3.2 KB). `tests/live/pg_alloc_budget` pins it
+  in CI's postgres job (dev: 115, fails). Container, ABBA x6: point c64
+  16,144 -> 17,361 req/s, c512 14,057 -> 15,908; mix +4-5%. Originally:
   one builder per query message *(fix-gc 3.3)*.
 - [ ] **R6. Frame the request head once** *(fix-gc 2.2)*.
 - [ ] **R7. Precise tracing for lists and maps of non-pointers**
