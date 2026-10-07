@@ -862,6 +862,33 @@ int type_has_gc_roots(CG *cg, const char *t) {
     return struct_has_gc_fields(cg, sd);
 }
 
+/* Can a value of this type hold no GC pointer, by construction? Numbers,
+ * bool, enums (an int32 ordinal) and value structs made only of those.
+ * A positive list on purpose: anything not named here, including types
+ * type_has_gc_roots answers 0 for without proving it (a result of a value
+ * struct, a runtime handle), keeps the word-by-word scan. */
+int type_is_pointer_free(CG *cg, const char *t) {
+    if (is_num(t) || !strcmp(t, "bool") || is_enum(cg, t))
+        return 1;
+    StructDef *sd = struct_find_canon(cg, t);
+    if (!sd || sd->is_gc)
+        return 0;
+    for (int j = 0; j < sd->nfields; j++)
+        if (!type_is_pointer_free(cg, sd->ftypes[j]))
+            return 0;
+    return 1;
+}
+
+/* The flag a list, map, chan or join is built with for its elements
+ * (runtime/sl_containers.c, sl_gc_mark_slot): 1 when they hold GC
+ * pointers, SL_ELEM_NOPTR (2) when they provably hold none and are never
+ * scanned, 0 when neither is known and every word is a candidate. */
+int elem_trace_flag(CG *cg, const char *t) {
+    if (type_has_gc_roots(cg, t))
+        return 1;
+    return type_is_pointer_free(cg, t) ? 2 : 0;
+}
+
 int struct_has_gc_fields(CG *cg, StructDef *sd) {
     for (int j = 0; j < sd->nfields; j++)
         if (type_has_gc_roots(cg, sd->ftypes[j]))

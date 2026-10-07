@@ -361,9 +361,35 @@ static int sl_gc_test_page_sweep(void) {
     return sl_gc_test_finis != 2 || sl_gc_test_on_heap(keep);
 }
 
+/* A list the compiler proved pointer-free ([int], SL_ELEM_NOPTR) is never
+ * scanned: an int that happens to equal a young object's address must not
+ * keep it alive, and the ints themselves must survive the collection. A
+ * list flagged 0 (unknown) still scans every word, so it does keep it. */
+static int sl_gc_test_pointer_free(void) {
+    sl_arr *ints = sl_arr_new(sizeof(long long), 2);
+    sl_arr *unknown = sl_arr_new(sizeof(long long), 0);
+    sl_safepoint sp;
+    void *roots[] = { ints, unknown };
+    sl_rt_safepoint_enter(&sp, roots, 2);
+    void *victim = sl_gc_alloc(48, NULL);
+    void *kept = sl_gc_alloc(48, NULL);
+    long long v = (long long)(intptr_t)victim, k = (long long)(intptr_t)kept;
+    sl_arr_push(ints, &v, sizeof v);
+    sl_arr_push(unknown, &k, sizeof k);
+    victim = kept = NULL;
+    sl_gc_collect_minor();
+    int bad = sl_gc_test_on_heap((void *)(intptr_t)v) ||
+              !sl_gc_test_on_heap((void *)(intptr_t)k) ||
+              ((long long *)ints->data)[0] != v;
+    sl_rt_safepoint_exit();
+    sl_gc_collect();
+    return bad;
+}
+
 int main(void) {
     if (sl_runtime_test_main()) return 1;
     if (sl_gc_test_inline_bytes()) return 1;
+    if (sl_gc_test_pointer_free()) { fprintf(stderr, "pointer_free test FAILED\n"); return 1; }
     if (sl_gc_test_page_sweep()) return 1;
     return sl_gc_test_header_word();
 }

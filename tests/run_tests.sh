@@ -485,7 +485,7 @@ for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood \
             generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry loop_leaf_poll own_roots switch escape_roots \
             http_read_wire bytes_empty_literal gc_minor_barriers map_delete if_let \
             literal_expect pending_sibling_type json_parity json_utf8 json_decode_budget \
-            bytes json_deep_nesting gc_container_frontier gc_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived; do
+            bytes json_deep_nesting gc_container_frontier gc_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free; do
     out="/tmp/sl_gcstress_${name}.out"
     if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -515,7 +515,7 @@ for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put \
             json_int_exact flags method_recv method_recv_gc indirect_callee \
             http_read_wire bytes_empty_literal gc_minor_barriers map_delete if_let \
             literal_expect pending_sibling_type json_parity json_utf8 json_decode_budget \
-            bytes json_deep_nesting gc_container_frontier gc_promotion_budget value_struct_containers json_value_structs gc_stw_sleep; do
+            bytes json_deep_nesting gc_container_frontier gc_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_pointer_free; do
     out="/tmp/sl_nursery_${name}.out"
     if ! SLANG_GC_NURSERY_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -547,7 +547,7 @@ for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc
             spawn_isolation select maps json json_parity json_utf8 json_decode_budget \
             bytes json_deep_nesting http_read_wire http_client_pool http2_flood \
             gc_promotion_budget \
-            value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived; do
+            value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_verify_minor_${name}.out"
     err="/tmp/sl_verify_minor_${name}.err"
@@ -722,6 +722,35 @@ elif [ "${stw#* }" -eq 0 ]; then
 else
     echo "PASS stopped threads sleep (waits/sleeps $stw)"
 fi
+
+# ---- pointer-free containers are not scanned ---------------------------------
+# A list or map whose elements provably hold no GC pointer ([int], [float],
+# enums, value structs of those) is built with SL_ELEM_NOPTR, and the
+# collector skips its elements; it used to offer every word to mark, a
+# lookup each, which batch's million-entry [int] tables paid on every
+# major (fix-gc.md 1.8). The flag is the compiler's, so check its output.
+echo "--- pointer-free containers (generated C) ---"
+pfdir=$(mktemp -d)
+cp tests/gc_pointer_free/main.sl "$pfdir/main.sl"
+if ! ./slangc "$pfdir/main.sl" -o "$pfdir/prog" --keep-c >/dev/null 2>&1; then
+    echo "FAIL pointer-free containers (did not compile)"
+    fail=1
+else
+    pfc="$pfdir/prog.gen.c"
+    missing=""
+    for want in 'sl_arr_new(sizeof(long long), 2)' 'sl_arr_new(sizeof(double), 2)' \
+                'sl_arr_new(sizeof(int32_t), 2)' 'sl_arr_new(sizeof(const char *), 1)' \
+                'sizeof(long long), sizeof(long long), 0, 2, 2)'; do
+        grep -qF "$want" "$pfc" || missing="$missing [$want]"
+    done
+    if [ -n "$missing" ]; then
+        echo "FAIL pointer-free containers: generated C lacks$missing"
+        fail=1
+    else
+        echo "PASS pointer-free containers"
+    fi
+fi
+rm -rf "$pfdir"
 
 # ---- young pages hold a whole cycle -----------------------------------------
 # A small object that finds no room on its worker's pages falls back to

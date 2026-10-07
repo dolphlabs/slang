@@ -477,7 +477,7 @@ void gen_stmt(CG *cg, Stmt *s) {
              * pointers on minor collections. */
             emit_line(cg, "%s %s = sl_arr_new(sizeof(%s), %d);",
                       ctype_of(cg, ann), sanitize_ident(s->as.let.name),
-                      ctype_of(cg, elem), type_has_gc_roots(cg, elem));
+                      ctype_of(cg, elem), elem_trace_flag(cg, elem));
             break;
         }
 
@@ -497,7 +497,7 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "%s %s = sl_map_new(sizeof(%s), sizeof(%s), %d, %d, %d);",
                       ctype_of(cg, ann), sanitize_ident(s->as.let.name),
                       ctype_of(cg, k), ctype_of(cg, v), is_str(k),
-                      type_has_gc_roots(cg, k), type_has_gc_roots(cg, v));
+                      elem_trace_flag(cg, k), elem_trace_flag(cg, v));
             break;
         }
 

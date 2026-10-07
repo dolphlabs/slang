@@ -57,6 +57,14 @@ typedef struct {
         parked waiting for data */
 } sl_chan;
 
+/* A container's flag for its slots (elem_is_ptr, key_is_ptr, val_is_ptr),
+ * set by the compiler (elem_trace_flag): 1 when they hold GC pointers,
+ * SL_ELEM_NOPTR when it proved they hold none (numbers, bool, enums and
+ * value structs of those), 0 when neither is known. A NOPTR slot is never
+ * scanned: an [int] of a million entries used to offer every word to
+ * mark, a page-registry lookup each, on every major (fix-gc.md 1.8). */
+#define SL_ELEM_NOPTR 2
+
 /* Mark what one container slot (an element, a key, a value) holds.
  * `is_ptr` is the container's "may hold pointers" flag. Codegen sets it
  * from type_has_gc_roots, so it is true for a value struct with a pointer
@@ -69,6 +77,8 @@ typedef struct {
  * word, each word validated by mark() before it is trusted. */
 static inline void sl_gc_mark_slot(const unsigned char *el, size_t sz,
                                    int is_ptr, void (*mark)(void *)) {
+    if (is_ptr == SL_ELEM_NOPTR)
+        return;
     if (is_ptr && sz == sizeof(void *)) {
         mark(*(void *const *)el);
         return;
@@ -832,7 +842,9 @@ static int sl_gc_clean_at(long long n) {
  * element when the elements are value structs. */
 static void sl_gc_trace_arr_range(sl_arr *a, long long from,
                                   void (*mark)(void *)) {
-    if (!a->elem_is_ptr && a->esz < (long long)sizeof(void *)) return;
+    if (a->elem_is_ptr == SL_ELEM_NOPTR ||
+        (!a->elem_is_ptr && a->esz < (long long)sizeof(void *)))
+        return;
     for (long long i = from; i < a->len; i++)
         sl_gc_mark_slot(a->data + (size_t)i * a->esz, (size_t)a->esz,
                         a->elem_is_ptr, mark);
@@ -871,7 +883,8 @@ static int sl_gc_trace_arr_minor(void *p, void (*mark)(void *)) {
     long long first = -1;
     if (a->data) {
         mark(a->data);
-        for (long long i = a->gc_clean; i < a->len; i++) {
+        long long from = a->elem_is_ptr == SL_ELEM_NOPTR ? a->len : a->gc_clean;
+        for (long long i = from; i < a->len; i++) {
             unsigned long long s0 = sl_gc_minor_gen0_seen;
             sl_gc_mark_slot(a->data + (size_t)i * a->esz, (size_t)a->esz,
                             a->elem_is_ptr, mark);
@@ -1023,6 +1036,8 @@ _Static_assert(sizeof(sl_map) == 10 * sizeof(long long),
  * are harmless. */
 static void sl_gc_trace_map_range(sl_map *m, long long from,
                                   void (*mark)(void *)) {
+    if (m->key_is_ptr == SL_ELEM_NOPTR && m->val_is_ptr == SL_ELEM_NOPTR)
+        return;
     for (long long i = from; i < m->count; i++) {
         long long slot = m->order[i];
         sl_gc_mark_slot(m->keys + (size_t)slot * m->ksz, m->ksz,
@@ -1050,7 +1065,11 @@ static int sl_gc_trace_map_minor(void *p, void (*mark)(void *)) {
     sl_map *m = (sl_map *)p;
     long long first = -1;
     sl_gc_trace_map_bufs(m, mark);
-    for (long long i = m->gc_clean; i < m->count; i++) {
+    long long from = m->key_is_ptr == SL_ELEM_NOPTR &&
+                             m->val_is_ptr == SL_ELEM_NOPTR
+                         ? m->count
+                         : m->gc_clean;
+    for (long long i = from; i < m->count; i++) {
         unsigned long long s0 = sl_gc_minor_gen0_seen;
         long long slot = m->order[i];
         sl_gc_mark_slot(m->keys + (size_t)slot * m->ksz, m->ksz,

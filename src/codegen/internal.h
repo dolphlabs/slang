@@ -660,6 +660,8 @@ int type_is_boxable(CG *cg, const char *t);
 int expr_addressable(Expr *e);
 int type_is_gc_ptr(CG *cg, const char *t);
 int type_has_gc_roots(CG *cg, const char *t);
+int type_is_pointer_free(CG *cg, const char *t);
+int elem_trace_flag(CG *cg, const char *t);
 int struct_has_gc_fields(CG *cg, StructDef *sd);
 int count_gc_root_exprs(CG *cg, const char *slang_t);
 void append_gc_roots_of(CG *cg, StrBuf *sb, const char *c_expr,

@@ -3602,6 +3602,9 @@ What this means in practice:
   cost follows the nursery, not the heap: about 0.8ms per minor whether a
   program keeps 20k or a million long-lived objects. Majors sweep
   everything and promote what they keep.
+- A list or map whose elements hold no pointer -- numbers, `bool`, enums,
+  and value structs made only of those -- is never traced at all: a
+  table of a million ints costs a collection nothing to keep.
 - A list or map written since the last minor is traced from the first
   position written, not from the start, so filling a million-entry list
   or map costs each minor only what was added since the previous one.
