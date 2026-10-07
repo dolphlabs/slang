@@ -1527,7 +1527,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "if (_sl_seli%d == %d) _sl_selo%d_%d = (%s *)"
                       "sl_gc_alloc(sizeof(*_sl_selo%d_%d), %s);",
                       id, i, id, i, oc, id, i,
-                      type_is_gc_ptr(cg, elems[i])
+                      type_has_gc_roots(cg, elems[i])
                           ? xasprintf("sl_gc_trace_%s", oc)
                           : "NULL");
         }
