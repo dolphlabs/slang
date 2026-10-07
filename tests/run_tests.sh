@@ -450,10 +450,12 @@ done
 # here to every millisecond on 4 workers with a 16KB nursery so a minor
 # lands while the task is suspended. Three runs each. gc_preempt_derived:
 # a new object held only by its header was invisible to the conservative
-# scan (plain dev failed 9 of 10 runs).
+# scan (plain dev failed 9 of 10 runs). net_reactor_shards: waiters on
+# every per-fd reactor list, woken by data and by deadlines, each once.
 echo "--- preemption guards (forced 1 ms preemption, 16KB nursery) ---"
 pg_bad=0
-for name in gc_preempt_derived gc_preempt_derived gc_preempt_derived; do
+for name in gc_preempt_derived gc_preempt_derived gc_preempt_derived \
+            net_reactor_shards net_reactor_shards net_reactor_shards; do
     out="/tmp/sl_preempt_${name}.out"
     if ! SLANG_WORKERS=4 SLANG_GC_NURSERY_KB=16 SLANG_PREEMPT_QUANTUM_MS=1 \
             SLANG_PREEMPT_TICK_MS=1 ./slangc "tests/$name/main.sl" --run \
