@@ -33,6 +33,7 @@ hb
 # a macOS binary that a Linux checkout would try to execute
 tests/runtime/test_gc
 tests/runtime/test_preempt
+tests/runtime/test_fatal
 
 # bench/suite: build output, generated datasets and language toolchain
 # artifacts. bench/results/<run id>/ IS committed (that's the deliverable).

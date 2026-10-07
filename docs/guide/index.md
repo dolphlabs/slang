@@ -776,7 +776,11 @@ Panics (out-of-bounds index, division by zero, `err_of` on ok, missing
 map key) carry `pkg.func:line`: `list index out of bounds at
 main.foo:12`. A panicking `spawn`ed task reports through stderr and its
 `join_wait` surfaces the same string as `err`, so failures stay visible
-across task boundaries.
+across task boundaries. A crash below the language (a segfault or bus
+error in C interop, or a task overflowing its stack) prints one line,
+`slang: fatal SIGSEGV at address 0x..., pc 0x...`, naming a stack
+overflow when that is what it was, and the process then dies of the
+same signal: the exit status and any core dump are unchanged.
 
 `opt[T]` and `result[T, E]` are monomorphized per distinct type
 argument (one C struct per instantiation actually used). Constructing
@@ -1541,7 +1545,11 @@ Panics (out-of-bounds index, division by zero, `err_of` on ok, missing
 map key) carry `pkg.func:line`: `list index out of bounds at
 main.foo:12`. A panicking `spawn`ed task reports through stderr and its
 `join_wait` surfaces the same string as `err`, so failures stay visible
-across task boundaries.
+across task boundaries. A crash below the language (a segfault or bus
+error in C interop, or a task overflowing its stack) prints one line,
+`slang: fatal SIGSEGV at address 0x..., pc 0x...`, naming a stack
+overflow when that is what it was, and the process then dies of the
+same signal: the exit status and any core dump are unchanged.
 
 `opt[T]` and `result[T, E]` are monomorphized per distinct type
 argument (one C struct per instantiation actually used). Constructing

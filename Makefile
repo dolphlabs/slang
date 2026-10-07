@@ -77,11 +77,16 @@ tests/runtime/test_preempt: tests/runtime/test_preempt.c $(RT_SRCS)
 	$(CC) -std=c11 -O2 -Wall -Wno-unused-function -I runtime \
 		tests/runtime/test_preempt.c -lpthread -o tests/runtime/test_preempt
 
+tests/runtime/test_fatal: tests/runtime/test_fatal.c $(RT_SRCS)
+	$(CC) -std=c11 -O2 -Wall -Wno-unused-function -I runtime \
+		tests/runtime/test_fatal.c -lpthread -o tests/runtime/test_fatal
+
 .PHONY: test clean docs docs-serve install uninstall dist slangc-dist
 
-test: slangc tests/runtime/test_gc tests/runtime/test_preempt
+test: slangc tests/runtime/test_gc tests/runtime/test_preempt tests/runtime/test_fatal
 	./tests/runtime/test_gc
 	./tests/runtime/test_preempt
+	./tests/runtime/test_fatal
 	./slangc examples/hello/main.sl --run
 	./slangc examples/fib/main.sl --run
 	./slangc examples/pkgdemo/main.sl --run
@@ -90,7 +95,7 @@ test: slangc tests/runtime/test_gc tests/runtime/test_preempt
 
 clean:
 	rm -f slangc hello main fib bytes ints lists fail_narrow fail_index \
-		tests/runtime/test_gc tests/runtime/test_preempt
+		tests/runtime/test_gc tests/runtime/test_preempt tests/runtime/test_fatal
 
 # Documentation site. Generated from this repository -- README.md
 # sections, the compiler's own signature tables, and the `pub`
