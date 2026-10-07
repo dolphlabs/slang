@@ -5093,6 +5093,9 @@ What this means in practice:
 - Both kinds sweep in parallel: the threads stopped for a collection take
   a share of the heap's pages each, instead of waiting while one thread
   sweeps them all. `SLANG_GC_STAT` counts the joins (`sweep_helps`).
+- A list or map whose elements hold no pointer -- numbers, `bool`, enums,
+  and value structs made only of those -- is never traced at all: a
+  table of a million ints costs a collection nothing to keep.
 - A list or map written since the last minor is traced from the first
   position written, not from the start, so filling a million-entry list
   or map costs each minor only what was added since the previous one.

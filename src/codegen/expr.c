@@ -507,7 +507,7 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *elem = chan_elem(ct);
         char *a = gen_expr(cg, e->as.call.args[0]);
         char *inner = xasprintf("sl_chan_new(sizeof(%s), (int)(%s), %d)",
-                                ctype_of(cg, elem), a, type_has_gc_roots(cg, elem));
+                                ctype_of(cg, elem), a, elem_trace_flag(cg, elem));
         return wrap_safepoint(cg, e, ctype_of(cg, ct), NULL, inner);
     }
     if (!strcmp(name, "chan_send")) {
@@ -1482,7 +1482,7 @@ char *gen_maplit(CG *cg, Expr *e, const char *expect_k,
     sb_append(&sb, xasprintf("), %d, %d, %d); ", kstr,
                              /* Same flag fix: interior pointers in value-
                               * struct keys/values must trace. */
-                             type_has_gc_roots(cg, kt), type_has_gc_roots(cg, vt)));
+                             elem_trace_flag(cg, kt), elem_trace_flag(cg, vt)));
     /* Each key/value is sequenced into its own temp, declared directly
      * in this outer ({ ... }) scope (not the old per-pair { ... }
      * block, which closed immediately after its own sl_map_put --
@@ -1755,7 +1755,7 @@ char *gen_list(CG *cg, Expr *e, const char *expect_elem) {
     sb_append(&sb, ec);
     /* elem flag must cover value structs with interior GC pointers
      * (type_has_gc_roots), not just bare GC pointers. */
-    sb_append(&sb, xasprintf("), %d); })", type_has_gc_roots(cg, t0)));
+    sb_append(&sb, xasprintf("), %d); })", elem_trace_flag(cg, t0)));
     return sb.data;
 }
 
@@ -1916,7 +1916,7 @@ char *gen_expr(CG *cg, Expr *e) {
             const char *lt = infer_type(cg, e);
             char *elem = arr_elem(lt);
             return xasprintf("sl_arr_new(sizeof(%s), %d)", ctype_of(cg, elem),
-                             type_has_gc_roots(cg, elem));
+                             elem_trace_flag(cg, elem));
         }
         return gen_list(cg, e, NULL);
     case EX_MAPLIT:
@@ -1927,8 +1927,8 @@ char *gen_expr(CG *cg, Expr *e) {
             map_kv(infer_type(cg, e), &k, &v);
             return xasprintf("sl_map_new(sizeof(%s), sizeof(%s), %d, %d, %d)",
                              ctype_of(cg, k), ctype_of(cg, v), is_str(k),
-                             type_has_gc_roots(cg, k),
-                             type_has_gc_roots(cg, v));
+                             elem_trace_flag(cg, k),
+                             elem_trace_flag(cg, v));
         }
         return gen_maplit(cg, e, NULL, NULL);
     case EX_FIELD: {
@@ -2092,7 +2092,7 @@ char *gen_expr(CG *cg, Expr *e) {
             "_sl_sa%d.join = sl_join_new(sizeof(%s), %d); ",
             shape->sname, id, id, ctype_of(cg, sig->ret_slang),
             /* Same flag fix: join[ValueStruct] interior pointers. */
-            type_has_gc_roots(cg, sig->ret_slang)));
+            elem_trace_flag(cg, sig->ret_slang)));
         if (sft)
             sb_append(&prelude,
                       xasprintf("_sl_sa%d.fn = %s; ", id,
