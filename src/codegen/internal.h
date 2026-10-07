@@ -610,6 +610,7 @@ int is_signed_int(const char *t);
 int int_rank(const char *t);
 int is_flt(const char *t);
 int is_num(const char *t);
+const char *num_cast_hint(const char *from, const char *to);
 int is_str(const char *t);
 int is_bytes(const char *t);
 int is_rawptr(const char *t);

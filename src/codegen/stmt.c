@@ -550,8 +550,9 @@ void gen_stmt(CG *cg, Stmt *s) {
             cg_error(s->line,
                      "cannot initialize %s '%s' with a value of type %s%s",
                      t, s->as.let.name, it,
-                     ann ? "" : " (annotate the variable to force a "
-                                "conversion)");
+                     num_cast_hint(it, t)[0] ? num_cast_hint(it, t)
+                     : ann ? "" : " (annotate the variable to force a "
+                                  "conversion)");
         }
         char *init;
         if (ann_list)
@@ -629,8 +630,9 @@ void gen_stmt(CG *cg, Stmt *s) {
                                       vt))
                     cg_error(s->line,
                              "field '%s': cannot assign a value of type %s "
-                             "where %s expected",
-                             sd->fields[fi], vt, sd->ftypes[fi]);
+                             "where %s expected%s",
+                             sd->fields[fi], vt, sd->ftypes[fi],
+                             num_cast_hint(vt, sd->ftypes[fi]));
                 char *b = gen_ident_name(cg, left, s->line);
                 const char *se2 = expect_push(cg, sd->ftypes[fi]);
                 char *val = maybe_cast(cg, sd->ftypes[fi], vt,
@@ -657,8 +659,8 @@ void gen_stmt(CG *cg, Stmt *s) {
             if (!value_assignable(v->slang, s->as.assign.value, vt))
                 cg_error(s->line,
                          "cannot assign a value of type %s to variable "
-                         "'%s' of type %s",
-                         vt, name, v->slang);
+                         "'%s' of type %s%s",
+                         vt, name, v->slang, num_cast_hint(vt, v->slang));
             const char *se4 = expect_push(cg, v->slang);
             char *val =
                 maybe_cast(cg, v->slang, vt,
@@ -1328,8 +1330,8 @@ void gen_stmt(CG *cg, Stmt *s) {
             if (!value_assignable(cg->cur_ret, s->as.ret.value, vt))
                 cg_error(s->line,
                          "return type mismatch: cannot return %s where %s "
-                         "expected",
-                         vt, cg->cur_ret);
+                         "expected%s",
+                         vt, cg->cur_ret, num_cast_hint(vt, cg->cur_ret));
             const char *se8 = expect_push(cg, cg->cur_ret);
             char *val = maybe_cast(cg, cg->cur_ret, vt,
                                    gen_expr(cg, s->as.ret.value));

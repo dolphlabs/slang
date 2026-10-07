@@ -779,8 +779,9 @@ have_sig:;
         if (!value_assignable(sig->param_slang[i + self_off],
                               e->as.call.args[i], at))
             cg_error(e->line,
-                     "argument %d of '%s': cannot pass %s where %s expected",
-                     i + 1, name, at, sig->param_slang[i + self_off]);
+                     "argument %d of '%s': cannot pass %s where %s expected%s",
+                     i + 1, name, at, sig->param_slang[i + self_off],
+                     num_cast_hint(at, sig->param_slang[i + self_off]));
     }
     return sig->ret_slang ? sig->ret_slang : "void";
 }
@@ -841,8 +842,9 @@ const char *infer_method(CG *cg, Expr *e) {
         if (!value_assignable(sig->param_slang[i + self_off],
                               e->as.method.args[i], at))
             cg_error(e->line,
-                     "argument %d of '%s': cannot pass %s where %s expected",
-                     i + 1, name, at, sig->param_slang[i + self_off]);
+                     "argument %d of '%s': cannot pass %s where %s expected%s",
+                     i + 1, name, at, sig->param_slang[i + self_off],
+                     num_cast_hint(at, sig->param_slang[i + self_off]));
     }
     return sig->ret_slang ? sig->ret_slang : "void";
 }
