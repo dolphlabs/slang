@@ -312,16 +312,29 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
     is drain-bound (0.24–0.36 ms) and gains less.
 
     *Steps, one PR each, each measured:*
-    1. Mark state into slots, serial. No behaviour change; the 8 mark
-       functions exist; ABBA to show nothing slowed.
-    2. Parallel task and remembered units, each thread draining only
-       its own list. Probably most of the win, since units are small.
+    1. [x] Mark state into slots, serial (#352). No behaviour change;
+       callgrind: gc_stress 461.3M -> 452.4M instructions,
+       gc_promotion_budget 452.7M -> 445.3M.
+    2. [x] Parallel task and remembered units, each thread draining only
+       its own list (#353). Local parked-tasks benchmark (500 parked
+       tasks, 4 workers): mark per minor 0.036 -> 0.023 ms. Not yet
+       measured on the api server at c512: the container setup was
+       removed.
     3. Donation pool, if step 2 leaves one thread finishing late: a
        large container reached from one root.
     4. Majors, the same way, if their mark (0.8–1.0 ms on mix c512, 4/s)
        is still worth it.
 
-    *Related (fix-gc 1.6), revised.* A parked task that has not run
+    *Related (fix-gc 1.6), revised -- built 2026-10-08 on
+    perf/gc-skip-idle-tasks.* Handoff audit: chan send and select write
+    the channel's buffer (barriered), join finish writes the join
+    (barriered), a receiver copies its value out itself after it runs,
+    and reactor, timer and mutex wakes write nothing; so a parked task's
+    roots change only when it runs. gc_idle_tasks: correct with the
+    two-minor rule; with a one-minor rule it died without printing, and
+    under the verifier reported missed=11351. Local parked-tasks
+    benchmark on top of #353: mark per minor 0.025 -> 0.011 ms, pause
+    0.060 -> 0.047 ms. The design as written: a parked task that has not run
     since the last minor can still hold a gen-2 object, since promotion
     moved to the second survival (1.2). It is safe to skip only after
     **two** minors have scanned it since it last ran:

@@ -561,6 +561,12 @@ static void sl_worker_after_switch(sl_task *t) {
     }
     if (t->parked) {
         t->parked = 0;
+        /* Stamped while t is still ours: once mu is unlocked another
+           thread may resume it. A minor already waiting on this thread
+           has not marked yet, so it will still scan t (the stamp says it
+           has not been scanned since). */
+        t->gc_minor_stamp = atomic_load_explicit(&sl_gc_minors_done,
+                                                 memory_order_relaxed);
         pthread_mutex_t *mu = t->park_mu;
         t->park_mu = NULL;
         sl_rt_current_task = &sl_rt_task_storage; /* MUST happen before
