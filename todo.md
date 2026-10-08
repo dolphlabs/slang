@@ -322,8 +322,16 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
        removed.
     3. Donation pool, if step 2 leaves one thread finishing late: a
        large container reached from one root.
-    4. Majors, the same way, if their mark (0.8–1.0 ms on mix c512, 4/s)
-       is still worth it.
+    4. [x] Majors, the same way (#356), with each slot's full mark. The
+       same PR gates both kinds on SL_GC_MARK_PARALLEL_MIN (64 units):
+       #353 opened a job on every minor, and waking and waiting (~10 us)
+       cost a small program more than its 2-3 us mark (minor pause 0.037
+       -> 0.051 ms, gc_stw_sleep, 4 workers); gated, its mark is back to
+       0.002-0.003 ms while 300- and 500-task programs still split.
+    3. Donation pool: not built. Only if an api-server measurement shows
+       one thread finishing a mark late. Steps 2-4 and the idle-task skip
+       (#355) still need that measurement: the container setup was
+       removed before it ran.
 
     *Related (fix-gc 1.6), revised -- built 2026-10-08 on
     perf/gc-skip-idle-tasks.* Handoff audit: chan send and select write
