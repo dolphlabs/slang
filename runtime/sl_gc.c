@@ -220,8 +220,9 @@ static void sl_gc_stat_phases(const sl_gc_phase_clock *c, int major) {
  * only the first few microseconds. */
 static _Atomic unsigned long long sl_gc_stat_stw_waits = 0;
 static _Atomic unsigned long long sl_gc_stat_stw_sleeps = 0;
-/* Sweep jobs a stopped thread joined (sl_gc_job_help). */
+/* Sweep and mark jobs a stopped thread joined (sl_gc_job_help). */
 static _Atomic unsigned long long sl_gc_stat_sweep_helps = 0;
+static _Atomic unsigned long long sl_gc_stat_mark_helps = 0;
 
 static void sl_gc_stat_dump(void) {
     if (!sl_gc_stat_enabled())
@@ -272,10 +273,12 @@ static void sl_gc_stat_dump(void) {
         fprintf(stderr, "\n");
     }
     fprintf(stderr, "slang-gc-stat stw_waits=%llu stw_sleeps=%llu "
-            "sweep_helps=%llu\n",
+            "sweep_helps=%llu mark_helps=%llu\n",
             atomic_load_explicit(&sl_gc_stat_stw_waits, memory_order_relaxed),
             atomic_load_explicit(&sl_gc_stat_stw_sleeps, memory_order_relaxed),
             atomic_load_explicit(&sl_gc_stat_sweep_helps,
+                                 memory_order_relaxed),
+            atomic_load_explicit(&sl_gc_stat_mark_helps,
                                  memory_order_relaxed));
 }
 
@@ -539,6 +542,7 @@ static inline void sl_gc_cpu_relax(void) {
  * (sl_gc_job_start): a stopped thread polls it without the lock. */
 static _Atomic unsigned long sl_gc_job_gen = 0;
 static void sl_gc_job_help(unsigned long *seen);
+static void sl_gc_mark_job_run(int slot);
 
 /* While stopped, a thread also helps sweep: whenever the collector opens
  * a sweep job, it joins (sl_gc_job_help) and comes back here after. */
@@ -2017,9 +2021,33 @@ static _Atomic size_t sl_gc_job_next = 0;
 static sl_gc_sweep_count *sl_gc_job_slots = NULL;
 static size_t sl_gc_job_nslots = 0;
 static int sl_gc_job_open = 0;    /* under sl_gc_stw_mu */
+/* What the open job is: a sweep (the slots above) or a minor's mark
+ * (one mark slot per participant, sl_gc_mslots: at most
+ * SL_GC_MARK_SLOTS join). Set with the job, under sl_gc_stw_mu. */
+enum { SL_GC_JOB_SWEEP, SL_GC_JOB_MARK };
+static int sl_gc_job_kind = SL_GC_JOB_SWEEP;
+static size_t sl_gc_job_limit = 0; /* participants, the collector's included */
 static int sl_gc_job_joined = 0;  /* slots taken, under sl_gc_stw_mu */
 static int sl_gc_job_active = 0;  /* helpers inside, under sl_gc_stw_mu */
 static pthread_cond_t sl_gc_job_cv = PTHREAD_COND_INITIALIZER;
+
+/* Collector: open a job of `kind` for up to `limit` participants, the
+ * collector (slot 0) included, and wake the stopped threads to join it.
+ * Everything the job reads is set up before this: the mutex publishes it
+ * to every helper that joins. */
+static void sl_gc_job_open_as(int kind, size_t limit) {
+    atomic_store_explicit(&sl_gc_job_next, 0, memory_order_relaxed);
+    pthread_mutex_lock(&sl_gc_stw_mu);
+    sl_gc_job_kind = kind;
+    sl_gc_job_limit = limit;
+    sl_gc_job_open = 1;
+    sl_gc_job_joined = 1;
+    sl_gc_job_active = 0;
+    atomic_fetch_add_explicit(&sl_gc_job_gen, 1, memory_order_release);
+    if (sl_gc_stw_sleepers)
+        pthread_cond_broadcast(&sl_gc_stw_cv);
+    pthread_mutex_unlock(&sl_gc_stw_mu);
+}
 
 static void sl_gc_job_page(sl_gc_page *pg, sl_gc_sweep_count *c) {
     if (sl_gc_job_major)
@@ -2069,17 +2097,23 @@ static void sl_gc_job_help(unsigned long *seen) {
     pthread_mutex_lock(&sl_gc_stw_mu);
     if (!sl_gc_job_open ||
         atomic_load_explicit(&sl_gc_job_gen, memory_order_relaxed) != g ||
-        (size_t)sl_gc_job_joined >= sl_gc_job_nslots) {
+        (size_t)sl_gc_job_joined >= sl_gc_job_limit) {
         pthread_mutex_unlock(&sl_gc_stw_mu);
         return;
     }
-    sl_gc_sweep_count *c = &sl_gc_job_slots[sl_gc_job_joined++];
+    int slot = sl_gc_job_joined++;
+    int kind = sl_gc_job_kind;
     sl_gc_job_active++;
     pthread_mutex_unlock(&sl_gc_stw_mu);
     if (sl_gc_stat_enabled())
-        atomic_fetch_add_explicit(&sl_gc_stat_sweep_helps, 1,
-                                  memory_order_relaxed);
-    sl_gc_job_run(c);
+        atomic_fetch_add_explicit(kind == SL_GC_JOB_MARK
+                                      ? &sl_gc_stat_mark_helps
+                                      : &sl_gc_stat_sweep_helps,
+                                  1, memory_order_relaxed);
+    if (kind == SL_GC_JOB_MARK)
+        sl_gc_mark_job_run(slot);
+    else
+        sl_gc_job_run(&sl_gc_job_slots[slot]);
     pthread_mutex_lock(&sl_gc_stw_mu);
     if (--sl_gc_job_active == 0)
         pthread_cond_signal(&sl_gc_job_cv);
@@ -2136,15 +2170,7 @@ static void sl_gc_job_start(int major) {
         c->rem_cap = rem_cap;
     }
     sl_gc_job_major = major;
-    atomic_store_explicit(&sl_gc_job_next, 0, memory_order_relaxed);
-    pthread_mutex_lock(&sl_gc_stw_mu);
-    sl_gc_job_open = 1;
-    sl_gc_job_joined = 1;
-    sl_gc_job_active = 0;
-    atomic_fetch_add_explicit(&sl_gc_job_gen, 1, memory_order_release);
-    if (sl_gc_stw_sleepers)
-        pthread_cond_broadcast(&sl_gc_stw_cv);
-    pthread_mutex_unlock(&sl_gc_stw_mu);
+    sl_gc_job_open_as(SL_GC_JOB_SWEEP, sl_gc_job_nslots);
     for (sl_gc_page *pg = sl_gc_orphans; pg; pg = pg->next)
         if (pg->young_live || (major && pg->old_live))
             sl_gc_job_page(pg, &sl_gc_job_slots[0]);
@@ -2153,13 +2179,21 @@ static void sl_gc_job_start(int major) {
 /* Collector: close the job, wait for the helpers still in it, and fold
  * every slot into *out (its remembered entries into sl_gc_rem_orphans,
  * for the next minor). */
-static void sl_gc_job_finish(sl_gc_sweep_count *out) {
+/* Collector: close the open job (no more joins) and wait out the helpers
+ * still in it. Returns how many slots were taken, the collector's
+ * included. */
+static int sl_gc_job_close(void) {
     pthread_mutex_lock(&sl_gc_stw_mu);
     sl_gc_job_open = 0;
     while (sl_gc_job_active)
         pthread_cond_wait(&sl_gc_job_cv, &sl_gc_stw_mu);
     int joined = sl_gc_job_joined;
     pthread_mutex_unlock(&sl_gc_stw_mu);
+    return joined;
+}
+
+static void sl_gc_job_finish(sl_gc_sweep_count *out) {
+    int joined = sl_gc_job_close();
     for (int i = 0; i < joined; i++) {
         sl_gc_sweep_count *c = &sl_gc_job_slots[i];
         out->swept += c->swept;
@@ -2478,6 +2512,19 @@ typedef struct {
 } sl_gc_marker;
 static sl_gc_marker sl_gc_mslots[SL_GC_MARK_SLOTS];
 
+/* Claim h for this slot's work list: exactly one thread wins, however
+ * many reach h at once (todo.md R4, parallel mark). Most objects a mark
+ * meets are already marked, so a plain (relaxed) read first keeps the
+ * locked exchange to the first visit. Relaxed is enough: the object's
+ * fields were written before the mutators stopped, which the rendezvous
+ * orders, and nothing is published through the bit itself. */
+static inline int sl_gc_claim(sl_gc_obj *h) {
+    if (__atomic_load_n(&h->marked, __ATOMIC_RELAXED))
+        return 0;
+    return !__atomic_exchange_n(&h->marked, (unsigned char)1,
+                                __ATOMIC_RELAXED);
+}
+
 static inline void sl_gc_wl_push(sl_gc_marker *ms, void *ptr) {
     if (ms->wl_n == ms->wl_cap) {
         ms->wl_cap = ms->wl_cap ? ms->wl_cap * 2 : 256;
@@ -2493,9 +2540,8 @@ static inline void sl_gc_mark_into(sl_gc_marker *ms, void *ptr) {
         string literal (.rodata, never sl_gc_alloc'd); unsafe to
         treat ptr - 1 as a header, see sl_gc_set's own comment */
     sl_gc_obj *h = (sl_gc_obj *)ptr - 1;
-    if (h->marked) return;
-    h->marked = 1;
-    sl_gc_wl_push(ms, ptr);
+    if (sl_gc_claim(h))
+        sl_gc_wl_push(ms, ptr);
 }
 
 /* Minor-GC mark: like sl_gc_mark, but only for objects on the young
@@ -2529,9 +2575,8 @@ static inline void sl_gc_mark_minor_into(sl_gc_marker *ms, void *ptr) {
     if (h->gen == 1) return;
     if (h->gen == 0)
         ms->gen0_seen++;
-    if (h->marked) return;
-    h->marked = 1;
-    sl_gc_wl_push(ms, ptr);
+    if (sl_gc_claim(h))
+        sl_gc_wl_push(ms, ptr);
 }
 
 /* The collector's own mark functions: slot 0. */
@@ -2555,8 +2600,7 @@ static void (*const sl_gc_mark_fns[SL_GC_MARK_SLOTS])(void *)
     __attribute__((unused)) = {
     sl_gc_mark, sl_gc_mark_s1, sl_gc_mark_s2, sl_gc_mark_s3,
     sl_gc_mark_s4, sl_gc_mark_s5, sl_gc_mark_s6, sl_gc_mark_s7};
-static void (*const sl_gc_mark_minor_fns[SL_GC_MARK_SLOTS])(void *)
-    __attribute__((unused)) = {
+static void (*const sl_gc_mark_minor_fns[SL_GC_MARK_SLOTS])(void *) = {
     sl_gc_mark_minor, sl_gc_mark_minor_s1, sl_gc_mark_minor_s2,
     sl_gc_mark_minor_s3, sl_gc_mark_minor_s4, sl_gc_mark_minor_s5,
     sl_gc_mark_minor_s6, sl_gc_mark_minor_s7};
@@ -2931,10 +2975,34 @@ static void sl_gc_mark_task(sl_task *t, sl_gc_markfn_t mark,
                                 mark);
 }
 
-/* `ms` is the slot `mark` belongs to; its work list is drained at the
- * end. */
-static void sl_gc_mark_roots(sl_gc_thread **snap, int nsnap,
-                             sl_gc_marker *ms, sl_gc_markfn_t mark) {
+/* Every root-bearing task, as units for sl_gc_mark_task: copied into
+ * sl_gc_root_units under the locks each list needs, so the marking
+ * itself -- serial or split between threads -- runs without them. Safe
+ * to mark after letting go: nothing can dequeue, resume or create a task
+ * until the pause ends (a woken worker checks in before it dequeues, and
+ * resuming a parked task takes sl_gc_mu, held for the whole pause). */
+typedef struct {
+    sl_task *t;
+    int conservative; /* scan its stack if it was async-preempted */
+} sl_gc_root_unit;
+static sl_gc_root_unit *sl_gc_root_units = NULL;
+static size_t sl_gc_root_units_n = 0, sl_gc_root_units_cap = 0;
+
+static void sl_gc_root_unit_add(sl_task *t, int conservative) {
+    if (sl_gc_root_units_n == sl_gc_root_units_cap) {
+        size_t nc = sl_gc_root_units_cap ? sl_gc_root_units_cap * 2 : 256;
+        sl_gc_root_unit *nu = (sl_gc_root_unit *)realloc(
+            sl_gc_root_units, nc * sizeof(*nu));
+        if (!nu) { fprintf(stderr, "slang: out of memory\n"); exit(1); }
+        sl_gc_root_units = nu;
+        sl_gc_root_units_cap = nc;
+    }
+    sl_gc_root_units[sl_gc_root_units_n].t = t;
+    sl_gc_root_units[sl_gc_root_units_n++].conservative = conservative;
+}
+
+static void sl_gc_root_units_build(sl_gc_thread **snap, int nsnap) {
+    sl_gc_root_units_n = 0;
     for (int i = 0; i < nsnap; i++) {
         sl_task *sl_gc_scan_task = *snap[i]->task_slot; /* see
             task_slot's own field comment above: this reads whichever
@@ -2948,7 +3016,7 @@ static void sl_gc_mark_roots(sl_gc_thread **snap, int nsnap,
             running -- confirmed by a dedicated dequeue-window stress spike
             (see the Tier 11 plan) that reproduced entry_arg corruption
             without it. */
-        sl_gc_mark_task(sl_gc_scan_task, mark, 0);
+        sl_gc_root_unit_add(sl_gc_scan_task, 0);
     }
     /* A queued task's entry_arg is a live root that nothing else
      * reaches: a not-yet-started task has an EMPTY safepoint chain,
@@ -2997,7 +3065,7 @@ static void sl_gc_mark_roots(sl_gc_thread **snap, int nsnap,
     pthread_mutex_lock(&sl_global_runq.mu);
     for (sl_task *sl_gc_qt = sl_global_runq.head; sl_gc_qt;
          sl_gc_qt = sl_gc_qt->next) {
-        sl_gc_mark_task(sl_gc_qt, mark, 1);
+        sl_gc_root_unit_add(sl_gc_qt, 1);
         /* Tier 11 eighth slice: a task with async_preempted set was
          * suspended by a real, arbitrary-instruction-boundary signal,
          * not a cooperative checkpoint -- its safepoint chain, walked
@@ -3046,7 +3114,7 @@ static void sl_gc_mark_roots(sl_gc_thread **snap, int nsnap,
         pthread_mutex_lock(&sl_runq_stripes[s].mu);
         for (sl_task *sl_gc_qt = sl_runq_stripes[s].head; sl_gc_qt;
              sl_gc_qt = sl_gc_qt->runq_link)
-            sl_gc_mark_task(sl_gc_qt, mark, 1);
+            sl_gc_root_unit_add(sl_gc_qt, 1);
         pthread_mutex_unlock(&sl_runq_stripes[s].mu);
     }
     /* runnext slots hold runnable tasks too, rooted exactly like a
@@ -3055,7 +3123,7 @@ static void sl_gc_mark_roots(sl_gc_thread **snap, int nsnap,
         sl_task *sl_gc_qt = atomic_load_explicit(&sl_runnext[i],
                                                  memory_order_acquire);
         if (sl_gc_qt)
-            sl_gc_mark_task(sl_gc_qt, mark, 1);
+            sl_gc_root_unit_add(sl_gc_qt, 1);
     }
     /* Tier 11 fourth slice: a PARKED task (chan_send/recv, this slice)
      * is reachable from neither a registered thread's task_slot (the
@@ -3072,7 +3140,19 @@ static void sl_gc_mark_roots(sl_gc_thread **snap, int nsnap,
      * by the same lock, so no extra locking needed to walk it. */
     for (sl_task *sl_gc_pt = sl_parked_tasks; sl_gc_pt;
          sl_gc_pt = sl_gc_pt->parked_next)
-        sl_gc_mark_task(sl_gc_pt, mark, 0);
+        sl_gc_root_unit_add(sl_gc_pt, 0);
+}
+
+/* The whole root phase on one thread: `ms` is the slot `mark` belongs
+ * to; its work list is drained at the end. Majors and the verifier's
+ * ground-truth mark use this; a minor splits the same units between
+ * threads (sl_gc_minor_mark). */
+static void sl_gc_mark_roots(sl_gc_thread **snap, int nsnap,
+                             sl_gc_marker *ms, sl_gc_markfn_t mark) {
+    sl_gc_root_units_build(snap, nsnap);
+    for (size_t i = 0; i < sl_gc_root_units_n; i++)
+        sl_gc_mark_task(sl_gc_root_units[i].t, mark,
+                        sl_gc_root_units[i].conservative);
     sl_gc_drain(ms, mark);
 }
 
@@ -3097,10 +3177,6 @@ static void sl_gc_trace_arr(void *p, void (*mark)(void *));
 static void sl_gc_trace_map(void *p, void (*mark)(void *));
 static void sl_gc_trace_join(void *p, void (*mark)(void *));
 
-/* The minor's whole mark phase: roots, then the remembered set, every
- * drain. `root_mark` is the mark the root phase traces with: always
- * sl_gc_mark_minor on the collection path; sl_gc_verify_minor_marks
- * runs sl_gc_mark from the same roots as its ground truth. */
 /* One remembered entry, for a minor: an OLD object traced as a root with
  * slot ms's minor mark (marked, then its old children marked-but-not-
  * traced while young ones are queued), drained, and kept for the next
@@ -3141,18 +3217,57 @@ static void sl_gc_mark_rem_entry(sl_gc_obj *rh, sl_gc_marker *ms,
         rh->remembered = 0;
 }
 
-/* The minor's whole mark phase: roots, then the remembered set, every
- * drain. `root_mark` is the mark the root phase traces with: always
- * sl_gc_mark_minor on the collection path; sl_gc_verify_minor_marks
- * runs sl_gc_mark from the same roots as its ground truth. Runs on slot
- * 0 alone for now. */
-static void sl_gc_minor_mark(sl_gc_thread **snap, int nsnap, size_t rem_n,
-                             sl_gc_markfn_t root_mark) {
-    sl_gc_marker *ms = &sl_gc_mslots[0];
-    ms->wl_n = 0;
-    sl_gc_mark_roots(snap, nsnap, ms, root_mark); /* drains */
-    for (size_t i = 0; i < rem_n; i++)
-        sl_gc_mark_rem_entry(sl_gc_rem_harvest_buf[i], ms, sl_gc_mark_minor);
+/* ---- A minor's mark, split between stopped threads ----
+ *
+ * The units are every root-bearing task (sl_gc_root_units) and every
+ * harvested remembered entry, one index space: tasks first, then
+ * entries. The collector and each stopped thread that joins take
+ * SL_GC_MARK_CHUNK of them at a time, mark each with their own slot's
+ * minor mark, and drain their own work list after each chunk. Nothing is
+ * shared but the index and the mark bits (sl_gc_claim): a task's roots
+ * are read-only here, and an entry is one object, so its frontier and its
+ * keep decision belong to whoever took it. At 512 connections half of a
+ * minor's mark was walking ~450 parked tasks' root chains on one thread
+ * (todo.md R4, parallel mark), so the units, not the drain, are what this
+ * splits; a thread that finds a large structure drains it alone. */
+#define SL_GC_MARK_CHUNK 8
+static size_t sl_gc_mark_nrem = 0;
+
+static void sl_gc_mark_job_run(int slot) {
+    sl_gc_marker *ms = &sl_gc_mslots[slot];
+    sl_gc_markfn_t mark = sl_gc_mark_minor_fns[slot];
+    size_t ntask = sl_gc_root_units_n;
+    size_t total = ntask + sl_gc_mark_nrem;
+    for (;;) {
+        size_t i = atomic_fetch_add_explicit(&sl_gc_job_next, SL_GC_MARK_CHUNK,
+                                             memory_order_relaxed);
+        if (i >= total)
+            return;
+        size_t e = i + SL_GC_MARK_CHUNK < total ? i + SL_GC_MARK_CHUNK : total;
+        for (; i < e; i++) {
+            if (i < ntask)
+                sl_gc_mark_task(sl_gc_root_units[i].t, mark,
+                                sl_gc_root_units[i].conservative);
+            else
+                sl_gc_mark_rem_entry(sl_gc_rem_harvest_buf[i - ntask], ms,
+                                     mark);
+        }
+        sl_gc_drain(ms, mark);
+    }
+}
+
+/* The minor's whole mark phase: the roots and the remembered set, split
+ * between the collector and the stopped threads. sl_gc_verify_minor_marks
+ * then runs a serial full mark (sl_gc_mark_roots) from the same roots as
+ * its ground truth. */
+static void sl_gc_minor_mark(sl_gc_thread **snap, int nsnap, size_t rem_n) {
+    for (int i = 0; i < SL_GC_MARK_SLOTS; i++)
+        sl_gc_mslots[i].wl_n = 0;
+    sl_gc_root_units_build(snap, nsnap);
+    sl_gc_mark_nrem = rem_n;
+    sl_gc_job_open_as(SL_GC_JOB_MARK, SL_GC_MARK_SLOTS);
+    sl_gc_mark_job_run(0);
+    sl_gc_job_close();
     sl_gc_rem_harvest_n = 0;
     for (int i = 0; i < SL_GC_MARK_SLOTS; i++) {
         sl_gc_rem_orphan_append(sl_gc_mslots[i].keep, sl_gc_mslots[i].keep_n);
@@ -3281,7 +3396,7 @@ static void sl_gc_verify_trace_parent(sl_gc_obj *o, void *ctx) {
     o->trace((void *)(o + 1), sl_gc_verify_child);
 }
 
-/* Runs after sl_gc_minor_mark(..., sl_gc_mark_minor); leaves on every
+/* Runs after sl_gc_minor_mark; leaves on every
  * young object the union of the two marks, and no old object marked. */
 static void sl_gc_verify_minor_marks(sl_gc_thread **snap, int nsnap,
                                      size_t rem_n) {
@@ -3404,7 +3519,7 @@ static void sl_gc_collect_minor_real(void) {
     sl_gc_ph_mark(&pc, SL_GC_PH_HARVEST);
     sl_gc_set_build(0);
     sl_gc_ph_mark(&pc, SL_GC_PH_SET);
-    sl_gc_minor_mark(snap, nsnap, rem_n, sl_gc_mark_minor);
+    sl_gc_minor_mark(snap, nsnap, rem_n);
     if (sl_gc_verify_minor_enabled())
         sl_gc_verify_minor_marks(snap, nsnap, rem_n);
     sl_gc_mark_slots_release();
