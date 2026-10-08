@@ -445,10 +445,13 @@ the point reads in flight with it.
   major's set build no longer walks promoted paged objects. Minor sweep
   at 512 connections -40% (mix) to -60% (point); major set build 2.3 ->
   0.02 ms.
-- [ ] **1.6 Minors skip tasks with nothing young.** A task that has not
+- [x] **1.6 Minors skip tasks with nothing young.** A task that has not
   run since the last minor holds only old values, because that minor
   promoted everything it held. Audit every place that hands a value to a
   parked task first: channel receive, `join`, `select`.
+  **Revised and landed 2026-10-08 (todo.md R4):** since promotion moved
+  to the second survival (1.2), one idle minor is not enough; a parked
+  task is skipped once two minors have scanned it since it last ran.
 - [x] **1.7 `malloc_trim` outside the stop**, and only after a major that
   freed a lot. Decide it with §7c (macOS keeping freed pages).
   Landed (2026-10-05), after a Linux profile: the major's tail was

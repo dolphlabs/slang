@@ -485,7 +485,7 @@ for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood \
             generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry loop_leaf_poll own_roots switch escape_roots \
             http_read_wire bytes_empty_literal gc_minor_barriers map_delete if_let \
             literal_expect pending_sibling_type json_parity json_utf8 json_decode_budget \
-            bytes json_deep_nesting gc_container_frontier gc_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks; do
+            bytes json_deep_nesting gc_container_frontier gc_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks; do
     out="/tmp/sl_gcstress_${name}.out"
     if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -515,7 +515,7 @@ for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put \
             json_int_exact flags method_recv method_recv_gc indirect_callee \
             http_read_wire bytes_empty_literal gc_minor_barriers map_delete if_let \
             literal_expect pending_sibling_type json_parity json_utf8 json_decode_budget \
-            bytes json_deep_nesting gc_container_frontier gc_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_pointer_free gc_payload_trace gc_many_tasks; do
+            bytes json_deep_nesting gc_container_frontier gc_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks; do
     out="/tmp/sl_nursery_${name}.out"
     if ! SLANG_GC_NURSERY_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -547,7 +547,7 @@ for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc
             spawn_isolation select maps json json_parity json_utf8 json_decode_budget \
             bytes json_deep_nesting http_read_wire http_client_pool http2_flood \
             gc_promotion_budget \
-            value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks; do
+            value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_verify_minor_${name}.out"
     err="/tmp/sl_verify_minor_${name}.err"
@@ -776,6 +776,24 @@ elif [ "$mjhelps" -eq 0 ]; then
     fail=1
 else
     echo "PASS stopped threads help a major's mark (major_mark_helps=$mjhelps)"
+fi
+
+# ---- minors skip long-idle parked tasks ---------------------------------------
+# A parked task that two minors have scanned since it last ran holds only
+# old objects, so later minors leave its roots out (sl_gc_root_units_build;
+# fix-gc.md 1.6). gc_idle_tasks parks 200 tasks across many minors and
+# checks what they hold when woken; SLANG_GC_STAT must show skips.
+echo "--- minors skip idle parked tasks (SLANG_GC_STAT) ---"
+skipped=$(SLANG_WORKERS=4 SLANG_GC_STAT=1 ./slangc tests/gc_idle_tasks/main.sl --run 2>&1 >/dev/null |
+          sed -n 's/.* minor_tasks_skipped=\([0-9]*\).*/\1/p')
+if [ -z "$skipped" ]; then
+    echo "FAIL minors skip idle parked tasks (no minor_tasks_skipped)"
+    fail=1
+elif [ "$skipped" -eq 0 ]; then
+    echo "FAIL minors skip idle parked tasks: none skipped"
+    fail=1
+else
+    echo "PASS minors skip idle parked tasks ($skipped skipped)"
 fi
 
 # ---- pointer-free containers are not scanned ---------------------------------
