@@ -712,7 +712,9 @@ fi
 # SLANG_GC_STAT's stw line must show waits, and sleeps among them.
 echo "--- stopped threads sleep (SLANG_GC_STAT) ---"
 stwline=$(SLANG_WORKERS=4 SLANG_GC_STAT=1 ./slangc tests/gc_stw_sleep/main.sl --run 2>&1 >/dev/null |
-      sed -n 's/^slang-gc-stat stw_waits=\([0-9]*\) stw_sleeps=\([0-9]*\) sweep_helps=\([0-9]*\)$/\1 \2 \3/p')
+      sed -n 's/^slang-gc-stat stw_waits=\([0-9]*\) stw_sleeps=\([0-9]*\) sweep_helps=\([0-9]*\) mark_helps=\([0-9]*\)$/\1 \2 \3 \4/p')
+markhelps=${stwline##* }
+stwline=${stwline% *}
 stw=${stwline% *}
 if [ -z "$stwline" ]; then
     echo "FAIL stopped threads sleep (no slang-gc-stat stw line)"
@@ -738,6 +740,21 @@ elif [ "$helps" -eq 0 ]; then
     fail=1
 else
     echo "PASS stopped threads help sweep (sweep_helps=$helps)"
+fi
+
+# ---- stopped threads help mark ------------------------------------------------
+# The same pauses: a stopped thread joins the minor's mark job and marks
+# root-bearing tasks and remembered entries alongside the collector, each
+# into its own slot (todo.md R4, parallel mark).
+echo "--- stopped threads help mark (SLANG_GC_STAT) ---"
+if [ -z "$stwline" ]; then
+    echo "FAIL stopped threads help mark (no mark_helps in the stw line)"
+    fail=1
+elif [ "$markhelps" -eq 0 ]; then
+    echo "FAIL stopped threads help mark: mark_helps=0"
+    fail=1
+else
+    echo "PASS stopped threads help mark (mark_helps=$markhelps)"
 fi
 
 # ---- pointer-free containers are not scanned ---------------------------------
