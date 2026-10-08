@@ -64,6 +64,12 @@ static size_t sl_gc_threshold = 8 * 1024 * 1024;
  * lands majors as often as possible. */
 #define SL_GC_MAJOR_EVERY 16
 static long sl_gc_minors_since_major = 0; /* under sl_gc_mu */
+/* Minors completed since the start, for a parked task's gc_minor_stamp:
+ * written by the collector at the end of each minor, read by a worker as
+ * a task parks. */
+static _Atomic unsigned long sl_gc_minors_done = 0;
+/* Parked tasks minors skipped (SLANG_GC_STAT), under sl_gc_mu. */
+static unsigned long long sl_gc_stat_tasks_skipped = 0;
 /* Generational nursery: bytes allocated since the last MINOR
  * collection, and the nursery threshold that triggers one. A minor
  * collection sweeps only young objects (plus tracing roots-reachable old
@@ -223,6 +229,8 @@ static _Atomic unsigned long long sl_gc_stat_stw_sleeps = 0;
 /* Sweep and mark jobs a stopped thread joined (sl_gc_job_help). */
 static _Atomic unsigned long long sl_gc_stat_sweep_helps = 0;
 static _Atomic unsigned long long sl_gc_stat_mark_helps = 0;
+/* Of those, threads that joined a major's mark. */
+static _Atomic unsigned long long sl_gc_stat_major_mark_helps = 0;
 
 static void sl_gc_stat_dump(void) {
     if (!sl_gc_stat_enabled())
@@ -267,8 +275,13 @@ static void sl_gc_stat_dump(void) {
                 atomic_load_explicit(&sl_gc_stat_tasks_walked[k],
                                      memory_order_relaxed));
         if (!k)
-            fprintf(stderr, " minor_rem_entries=%llu",
+            fprintf(stderr, " minor_rem_entries=%llu minor_tasks_skipped=%llu",
                     atomic_load_explicit(&sl_gc_stat_rem_entries,
+                                         memory_order_relaxed),
+                    sl_gc_stat_tasks_skipped);
+        else
+            fprintf(stderr, " major_mark_helps=%llu",
+                    atomic_load_explicit(&sl_gc_stat_major_mark_helps,
                                          memory_order_relaxed));
         fprintf(stderr, "\n");
     }
@@ -2596,8 +2609,7 @@ SL_GC_MARK_SLOT_FNS(1) SL_GC_MARK_SLOT_FNS(2) SL_GC_MARK_SLOT_FNS(3)
 SL_GC_MARK_SLOT_FNS(4) SL_GC_MARK_SLOT_FNS(5) SL_GC_MARK_SLOT_FNS(6)
 SL_GC_MARK_SLOT_FNS(7)
 #undef SL_GC_MARK_SLOT_FNS
-static void (*const sl_gc_mark_fns[SL_GC_MARK_SLOTS])(void *)
-    __attribute__((unused)) = {
+static void (*const sl_gc_mark_fns[SL_GC_MARK_SLOTS])(void *) = {
     sl_gc_mark, sl_gc_mark_s1, sl_gc_mark_s2, sl_gc_mark_s3,
     sl_gc_mark_s4, sl_gc_mark_s5, sl_gc_mark_s6, sl_gc_mark_s7};
 static void (*const sl_gc_mark_minor_fns[SL_GC_MARK_SLOTS])(void *) = {
@@ -3001,7 +3013,22 @@ static void sl_gc_root_unit_add(sl_task *t, int conservative) {
     sl_gc_root_units[sl_gc_root_units_n++].conservative = conservative;
 }
 
-static void sl_gc_root_units_build(sl_gc_thread **snap, int nsnap) {
+/* `skip_idle`: a minor's build. A parked task whose last run ended at
+ * least two completed minors ago is left out: each of those minors
+ * scanned it (it was parked and not yet two minors old), marking what it
+ * held twice -- promoted, since promotion comes at the second survival
+ * (fix-gc.md 1.2). Its roots have not changed since: only a running task
+ * writes its own stack. Anything another task hands it goes into a
+ * channel's buffer or a join, both barriered and so in the remembered set
+ * (audited 2026-10-08: chan send, select, join finish; the receiver copies
+ * its value out itself, after it resumes and runs). A major and the
+ * verifier's ground-truth mark never skip. One minor is not enough: a
+ * task one minor idle can still hold an object that survived only that
+ * one, still young (fix-gc.md 1.6, revised). */
+static void sl_gc_root_units_build(sl_gc_thread **snap, int nsnap,
+                                   int skip_idle) {
+    unsigned long done = atomic_load_explicit(&sl_gc_minors_done,
+                                              memory_order_relaxed);
     sl_gc_root_units_n = 0;
     for (int i = 0; i < nsnap; i++) {
         sl_task *sl_gc_scan_task = *snap[i]->task_slot; /* see
@@ -3139,8 +3166,13 @@ static void sl_gc_root_units_build(sl_gc_thread **snap, int nsnap) {
      * above. Already holding sl_gc_mu -- sl_parked_tasks is guarded
      * by the same lock, so no extra locking needed to walk it. */
     for (sl_task *sl_gc_pt = sl_parked_tasks; sl_gc_pt;
-         sl_gc_pt = sl_gc_pt->parked_next)
+         sl_gc_pt = sl_gc_pt->parked_next) {
+        if (skip_idle && done - sl_gc_pt->gc_minor_stamp >= 2) {
+            sl_gc_stat_tasks_skipped++;
+            continue;
+        }
         sl_gc_root_unit_add(sl_gc_pt, 0);
+    }
 }
 
 /* The whole root phase on one thread: `ms` is the slot `mark` belongs
@@ -3149,7 +3181,7 @@ static void sl_gc_root_units_build(sl_gc_thread **snap, int nsnap) {
  * threads (sl_gc_minor_mark). */
 static void sl_gc_mark_roots(sl_gc_thread **snap, int nsnap,
                              sl_gc_marker *ms, sl_gc_markfn_t mark) {
-    sl_gc_root_units_build(snap, nsnap);
+    sl_gc_root_units_build(snap, nsnap, 0);
     for (size_t i = 0; i < sl_gc_root_units_n; i++)
         sl_gc_mark_task(sl_gc_root_units[i].t, mark,
                         sl_gc_root_units[i].conservative);
@@ -3232,10 +3264,39 @@ static void sl_gc_mark_rem_entry(sl_gc_obj *rh, sl_gc_marker *ms,
  * splits; a thread that finds a large structure drains it alone. */
 #define SL_GC_MARK_CHUNK 8
 static size_t sl_gc_mark_nrem = 0;
+/* A major's mark: every slot traces with its full mark (sl_gc_mark_fns)
+ * and there are no remembered entries, since a major traces everything.
+ * Set before the job opens. */
+static int sl_gc_mark_job_full = 0;
+/* Fewer units than this and the collector marks alone, opening no job.
+ * Opening one wakes the stopped threads and closing it waits for any
+ * that joined: ~10 us on a laptop. A small program's whole minor mark is
+ * 2-3 us, and splitting it made every minor ~35% longer (0.037 -> 0.051
+ * ms pause, 4 workers, a few tasks). At 512 connections a minor has ~450
+ * parked tasks at ~1.3 us each, far past this. */
+#define SL_GC_MARK_PARALLEL_MIN 64
+
+/* Run the open mark job's units: split between threads when there are
+ * enough of them, else on the collector alone. */
+static void sl_gc_mark_units(void) {
+    if (sl_gc_root_units_n + sl_gc_mark_nrem < SL_GC_MARK_PARALLEL_MIN) {
+        atomic_store_explicit(&sl_gc_job_next, 0, memory_order_relaxed);
+        sl_gc_mark_job_run(0);
+        return;
+    }
+    sl_gc_job_open_as(SL_GC_JOB_MARK, SL_GC_MARK_SLOTS);
+    sl_gc_mark_job_run(0);
+    int joined = sl_gc_job_close();
+    if (sl_gc_mark_job_full && joined > 1 && sl_gc_stat_enabled())
+        atomic_fetch_add_explicit(&sl_gc_stat_major_mark_helps,
+                                  (unsigned long long)(joined - 1),
+                                  memory_order_relaxed);
+}
 
 static void sl_gc_mark_job_run(int slot) {
     sl_gc_marker *ms = &sl_gc_mslots[slot];
-    sl_gc_markfn_t mark = sl_gc_mark_minor_fns[slot];
+    sl_gc_markfn_t mark = sl_gc_mark_job_full ? sl_gc_mark_fns[slot]
+                                              : sl_gc_mark_minor_fns[slot];
     size_t ntask = sl_gc_root_units_n;
     size_t total = ntask + sl_gc_mark_nrem;
     for (;;) {
@@ -3263,16 +3324,30 @@ static void sl_gc_mark_job_run(int slot) {
 static void sl_gc_minor_mark(sl_gc_thread **snap, int nsnap, size_t rem_n) {
     for (int i = 0; i < SL_GC_MARK_SLOTS; i++)
         sl_gc_mslots[i].wl_n = 0;
-    sl_gc_root_units_build(snap, nsnap);
+    sl_gc_root_units_build(snap, nsnap, 1);
     sl_gc_mark_nrem = rem_n;
-    sl_gc_job_open_as(SL_GC_JOB_MARK, SL_GC_MARK_SLOTS);
-    sl_gc_mark_job_run(0);
-    sl_gc_job_close();
+    sl_gc_mark_units();
     sl_gc_rem_harvest_n = 0;
     for (int i = 0; i < SL_GC_MARK_SLOTS; i++) {
         sl_gc_rem_orphan_append(sl_gc_mslots[i].keep, sl_gc_mslots[i].keep_n);
         sl_gc_mslots[i].keep_n = 0;
     }
+}
+
+/* A major's mark: the same root units, with each participant's full
+ * mark, split the same way (todo.md R4, parallel mark step 4). A major
+ * traces the whole live heap, often from a few roots, so a thread that
+ * reaches a large structure drains it alone: no slower than marking it
+ * serially. Majors that a stopped thread joined count in
+ * sl_gc_stat_major_mark_helps. */
+static void sl_gc_major_mark(sl_gc_thread **snap, int nsnap) {
+    for (int i = 0; i < SL_GC_MARK_SLOTS; i++)
+        sl_gc_mslots[i].wl_n = 0;
+    sl_gc_root_units_build(snap, nsnap, 0); /* a major never skips */
+    sl_gc_mark_nrem = 0;
+    sl_gc_mark_job_full = 1;
+    sl_gc_mark_units();
+    sl_gc_mark_job_full = 0;
 }
 
 /* ---- SLANG_GC_VERIFY_MINOR: check the write barrier against the truth
@@ -3584,6 +3659,9 @@ static void sl_gc_collect_minor_real(void) {
                                   memory_order_relaxed);
         sl_gc_stat_minor_pause(sl_rt_monotonic_ns() - t0, swept, promoted);
     }
+    /* Still stopped and under sl_gc_mu: every task this minor scanned
+     * now counts it (sl_gc_root_units_build's skip). */
+    atomic_fetch_add_explicit(&sl_gc_minors_done, 1, memory_order_relaxed);
     atomic_store_explicit(&sl_gc_collect_minor_pending, 0, memory_order_release);
     /* A major may ALSO be pending (both thresholds tripped on the same
      * allocation burst). Leave sl_gc_collect_pending and
@@ -3660,8 +3738,7 @@ static void sl_gc_collect(void) {
     sl_gc_set_build(1);
     sl_gc_ph_mark(&pc, SL_GC_PH_SET);
 
-    sl_gc_mslots[0].wl_n = 0;
-    sl_gc_mark_roots(snap, nsnap, &sl_gc_mslots[0], sl_gc_mark); /* drains */
+    sl_gc_major_mark(snap, nsnap);
     sl_gc_mark_slots_release();
     sl_gc_ph_mark(&pc, SL_GC_PH_MARK);
 

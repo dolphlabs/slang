@@ -242,6 +242,120 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
   survivals instead of two (promotions at c512 -9%, pause and req/s
   unchanged: in-flight requests at 512 connections live ~50 ms, three
   or more minors).
+  - [ ] **Parallel mark** (the rest of fix-gc 1.4). **Design, awaiting
+    the owner's approval (2026-10-07).**
+    *Where a minor's mark goes.* Container, dev at ba59e14, per minor:
+
+    | scenario | root enumeration | root drain | remembered | objects marked | remembered entries | parked tasks |
+    |---|---:|---:|---:|---:|---:|---:|
+    | mix c512 | 0.59 ms | 0.37 ms | 0.19 ms | 7,282 | 1,430 | 438 |
+    | point c512 | 0.53 ms | 0.22 ms | 0.20 ms | 5,283 | 1,180 | 477 |
+    | mix c64 | 0.11 ms | 0.24 ms | 0.04 ms | 4,193 | 124 | 33 |
+    | quote c64 | 0.02 ms | 0.36 ms | 0.01 ms | 7,932 | 1 | 4 |
+
+    At 512 connections, half of the mark is enumerating the parked tasks'
+    root chains: about 1.3 µs a task, cache misses on the task, its stack
+    frames, the page registry and each header, most of them for old
+    objects. So the design splits work by **task** and by **remembered
+    entry** first, and shares the drain second.
+
+    *Work units.* The collector lists them into arrays before opening
+    the job: every root-bearing task (registered threads' current
+    tasks, the run queues, the runnext slots, sl_parked_tasks), and
+    every harvested remembered entry. Stopped threads join from
+    sl_gc_ack_and_wait, as for the sweep job, and claim units in chunks
+    from an atomic index. A task unit is: its join, its entry_arg, its
+    safepoint chain, and the conservative scan if it was async-preempted.
+    A remembered unit is the existing per-entry trace, with its keep
+    decision and gc_clean frontier. An entry is one container, so one
+    thread owns its frontier.
+
+    *Per-thread state.* Today's globals become per-participant slots:
+    the work list (sl_gc_wl), the gen-0 counter behind the keep decision
+    (sl_gc_minor_gen0_seen), the keep output (pushed to
+    sl_gc_rem_orphans after, as the sweep's slots are), and the mark
+    function the conservative scan calls (sl_gc_cur_mark). Generated
+    tracers take a `void (*mark)(void *)` with no context argument. So
+    rather than a thread-local read per mark call (a dyld call on Darwin,
+    and AGENTS.md's TLS rules on task stacks), there are 8 static mark
+    functions, one per slot, each bound at compile time to its slot. At
+    most 8 threads mark; more would not pay at these sizes.
+
+    *Claiming an object.* The mark bit becomes an atomic exchange,
+    after a plain read that already finds most objects marked. Exactly
+    one thread pushes each object. Object contents need no new ordering:
+    mutators stopped (release on their ack, acquire in the collector's
+    rendezvous) before anyone marks.
+
+    *Balancing the drain.* A thread drains its own list. When the list
+    passes 256 entries and the shared pool holds fewer than 2 chunks per
+    thread, it donates half as a chunk to a mutex-guarded pool; a thread
+    with nothing left takes a chunk. Termination: a thread with no local
+    work and an empty pool decrements an active count under the pool
+    mutex and waits. The phase ends when the count reaches zero with the
+    pool empty. A deque per thread (Chase-Lev) would steal at lower cost
+    but is far more code; the pool is enough for ~7k objects per minor.
+
+    *Unchanged:*
+    - The verifier's ground-truth full mark stays serial.
+      `SLANG_GC_VERIFY_MINOR` therefore checks the parallel minor against
+      a serial truth, and the suite's verified runs (missed=0) are the
+      race check. TSan cannot follow green threads.
+    - Majors stay serial in the first step.
+    - With one registered thread nothing changes: the collector runs every
+      unit itself.
+
+    *Expected.* At c512 the mark is about 1.15 ms a minor. Four threads,
+    after a wake-up of about 50 µs and some imbalance, should bring it to
+    0.35–0.45 ms. On mix c512 that is roughly 0.7 ms of a ~2.4 ms pause,
+    taking the stopped share from about 15% to about 11%. At c64 the mark
+    is drain-bound (0.24–0.36 ms) and gains less.
+
+    *Steps, one PR each, each measured:*
+    1. [x] Mark state into slots, serial (#352). No behaviour change;
+       callgrind: gc_stress 461.3M -> 452.4M instructions,
+       gc_promotion_budget 452.7M -> 445.3M.
+    2. [x] Parallel task and remembered units, each thread draining only
+       its own list (#353). Local parked-tasks benchmark (500 parked
+       tasks, 4 workers): mark per minor 0.036 -> 0.023 ms. Not yet
+       measured on the api server at c512: the container setup was
+       removed.
+    3. Donation pool, if step 2 leaves one thread finishing late: a
+       large container reached from one root.
+    4. [x] Majors, the same way (#356), with each slot's full mark. The
+       same PR gates both kinds on SL_GC_MARK_PARALLEL_MIN (64 units):
+       #353 opened a job on every minor, and waking and waiting (~10 us)
+       cost a small program more than its 2-3 us mark (minor pause 0.037
+       -> 0.051 ms, gc_stw_sleep, 4 workers); gated, its mark is back to
+       0.002-0.003 ms while 300- and 500-task programs still split.
+    3. Donation pool: not built. Only if an api-server measurement shows
+       one thread finishing a mark late. Steps 2-4 and the idle-task skip
+       (#355) still need that measurement: the container setup was
+       removed before it ran.
+
+    *Related (fix-gc 1.6), revised -- built 2026-10-08 on
+    perf/gc-skip-idle-tasks.* Handoff audit: chan send and select write
+    the channel's buffer (barriered), join finish writes the join
+    (barriered), a receiver copies its value out itself after it runs,
+    and reactor, timer and mutex wakes write nothing; so a parked task's
+    roots change only when it runs. gc_idle_tasks: correct with the
+    two-minor rule; with a one-minor rule it died without printing, and
+    under the verifier reported missed=11351. Local parked-tasks
+    benchmark on top of #353: mark per minor 0.025 -> 0.011 ms, pause
+    0.060 -> 0.047 ms. The design as written: a parked task that has not run
+    since the last minor can still hold a gen-2 object, since promotion
+    moved to the second survival (1.2). It is safe to skip only after
+    **two** minors have scanned it since it last ran:
+    - Stamp the task with the completed-minor count when it stops running,
+      in sl_worker_after_switch, after its context is saved.
+    - Skip it while that stamp is at least two minors behind.
+    - Every write into memory a parked task can reach (chan handoff, join,
+      select) already goes through the barrier, so anything young it
+      gains is in the remembered set.
+
+    The benchmarks gain little from this: at 512 connections a task runs
+    about every 40-50 ms, every 1-3 minors. A server with many idle
+    keep-alive connections gains most. It comes after parallel mark.
 - [ ] **R5. Per-connection prepared-statement cache** *(fix-gc 3.4)*
   (landed in #312, never ticked), then
   **one builder per query message** *(fix-gc 3.3)*: done on
