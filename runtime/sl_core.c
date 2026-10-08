@@ -290,6 +290,11 @@ typedef struct sl_task {
     size_t gc_rem_n;
     size_t gc_rem_cap;
     void *join;
+    /* Minors completed when this task last stopped running (set as it
+     * parks, in sl_worker_after_switch). Once two more have completed, both
+     * scanned it, so everything it holds is old and a minor may skip it
+     * (sl_gc_root_units_build). Only the collector reads it, stopped. */
+    unsigned long gc_minor_stamp;
 } sl_task;
 
 static void sl_join_fail(void *j, const char *msg);
