@@ -4,7 +4,10 @@ main2
 .claude/
 tools/
 bench/results/
-*.DS_store
+# macOS Finder metadata, in any directory. Exact case: git matches this
+# case-insensitively on a macOS checkout but not on Linux, where the old
+# `*.DS_store` spelling let stress_test/ and tests/ copies be committed.
+.DS_Store
 note.txt
 
 # `main`/`main2` above are unanchored on purpose, to catch the
