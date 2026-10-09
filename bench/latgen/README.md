@@ -25,6 +25,12 @@ This mode records the timing distribution. Compare the client query timings
 with PostgreSQL's `pg_stat_statements` execution-time and call-count deltas to
 separate server work from protocol, network, driver, and scheduler time.
 
+Use `-expect-status` when a route has a known success code. Latgen reports
+`bad_statuses` separately, so an HTTP 500 cannot inflate the completed-request
+count while appearing to be a successful sample:
+
+    go run bench/latgen/main.go ... -expect-status 201
+
 It also reports what share of requests, and of total waiting time, sits
 above 1 / 10 / 100 / 1000 ms: a tail that is 0.3% of requests but 60% of
 waiting time is a scheduling problem, not a throughput one.
