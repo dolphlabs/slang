@@ -760,6 +760,9 @@ static void emit_json_enc_body(CG *cg, JsonInst *it) {
         char *elem = arr_elem(t);
         const char *ect = ctype_of(cg, elem);
         const char *elemfn = json_enc_fn(cg, elem, 0);
+        long long item_hint = json_enc_hint_w(cg, elem, 0) + 8;
+        emit_line(cg, "sl_json_sb_reserve_items(out, v->len, %lld);",
+                  item_hint);
         emit_line(cg, "sl_json_sb_append(out, \"[\");");
         emit_line(cg, "for (long long i = 0; i < v->len; i++) {");
         cg->indent++;
@@ -777,6 +780,9 @@ static void emit_json_enc_body(CG *cg, JsonInst *it) {
         (void)k;
         const char *vct = ctype_of(cg, v);
         const char *valfn = json_enc_fn(cg, v, 0);
+        long long item_hint = json_enc_hint_w(cg, v, 0) + 8;
+        emit_line(cg, "sl_json_sb_reserve_items(out, v->count, %lld);",
+                  item_hint);
         emit_line(cg, "sl_json_sb_append(out, \"{\");");
         emit_line(cg, "for (long long i = 0; i < v->count; i++) {");
         cg->indent++;
