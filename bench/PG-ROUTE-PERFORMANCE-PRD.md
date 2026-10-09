@@ -114,6 +114,21 @@ route/concurrency pair:
 | Insert | 64 | 10,409 | 11,228 | 92.7% |
 | Insert | 512 | 10,214 | 11,365 | 89.9% |
 
+The remaining clean-seed sample medians are shown as Slang / Go pairs. RSS is
+the sampled process peak, converted from KiB to MiB. PostgreSQL time is the
+mean server execution time per SQL call:
+
+| Route | Clients | p99 ms | CPU µs/request | Peak RSS MiB | PostgreSQL ms/query |
+|---|---:|---:|---:|---:|---:|
+| Point user | 64 | 9.47 / 8.68 | 121.57 / 109.16 | 13.0 / 27.6 | 0.0190 / 0.0198 |
+| Point user | 512 | 49.35 / 38.12 | 133.09 / 104.69 | 29.4 / 49.3 | 0.0199 / 0.0198 |
+| Orders | 64 | 16.16 / 22.32 | 244.53 / 219.84 | 20.0 / 31.2 | 0.1222 / 0.1782 |
+| Orders | 512 | 127.79 / 65.25 | 268.86 / 194.34 | 32.1 / 52.9 | 0.1432 / 0.1278 |
+| Summary | 64 | 12.23 / 16.40 | 165.37 / 157.67 | 13.0 / 27.9 | 0.0728 / 0.1004 |
+| Summary | 512 | 66.71 / 79.35 | 176.17 / 149.90 | 30.2 / 48.5 | 0.0761 / 0.1056 |
+| Insert | 64 | 13.76 / 13.97 | 178.77 / 139.55 | 18.6 / 31.5 | 0.2245 / 0.2041 |
+| Insert | 512 | 67.49 / 58.51 | 197.85 / 144.94 | 28.0 / 51.0 | 0.2605 / 0.2065 |
+
 PostgreSQL reports one execution of one prepared SQL statement per successful
 request. The Slang client combines Parse/Bind/Describe/Execute/Sync in one
 extended-protocol exchange on a fresh statement and skips Parse/Describe on a
