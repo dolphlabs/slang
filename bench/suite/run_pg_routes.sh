@@ -118,6 +118,21 @@ raise SystemExit(0 if u.scheme in ("postgres", "postgresql") and u.username == "
                  u.hostname in ("localhost", "127.0.0.1", "::1") and u.path == "/bench" and
                  u.query in ("", "sslmode=disable") and not u.fragment else 1)
 PY
+# The Slang PG driver reads credentials from the URL; PostgreSQL CLI and Go
+# use PGPASSWORD. Add the same password only to the Slang process environment.
+SLANG_DATABASE_URL=$(python3 - "$DATABASE_URL" <<'PY'
+import os, sys
+from urllib.parse import quote, urlsplit, urlunsplit
+u = urlsplit(sys.argv[1])
+password = os.environ.get("PGPASSWORD", "")
+if not password or len(password) > 1024: raise SystemExit(1)
+host = u.hostname or ""
+if ":" in host: host = f"[{host}]"
+if u.port: host += f":{u.port}"
+netloc = f"{quote(u.username or '', safe='')}:{quote(password, safe='')}@{host}"
+print(urlunsplit((u.scheme, netloc, u.path, u.query, "")))
+PY
+) || fail "PGPASSWORD must contain 1-1024 characters for the Slang database URL"
 
 exec 9>"/tmp/slang-pg-routes-$(id -u).lock"
 flock -n 9 || fail "another targeted benchmark is running"
@@ -238,7 +253,7 @@ trap 'cleanup; exit 130' INT TERM
 start_api() {
     local lang=$1 logfile=$2
     if [ "$lang" = slang ]; then
-        setsid taskset -c "$SERVER_CPUS" env DATABASE_URL="$DATABASE_URL" DB_POOL_TOTAL=64 PG_PROFILE=1 PORT="$PORT" WORKERS=3 SLANG_WORKERS=3 "$BIN/slang-api" >"$logfile" 2>&1 &
+        setsid taskset -c "$SERVER_CPUS" env DATABASE_URL="$SLANG_DATABASE_URL" DB_POOL_TOTAL=64 PG_PROFILE=1 PORT="$PORT" WORKERS=3 SLANG_WORKERS=3 "$BIN/slang-api" >"$logfile" 2>&1 &
     else
         setsid taskset -c "$SERVER_CPUS" env DATABASE_URL="$DATABASE_URL" DB_POOL_TOTAL=64 PG_PROFILE=1 PORT="$PORT" WORKERS=3 GOMAXPROCS=3 "$BIN/go-api" >"$logfile" 2>&1 &
     fi
