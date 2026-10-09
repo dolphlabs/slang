@@ -3811,3 +3811,15 @@ Found 2026-10-07 while instrumenting the pg pool: `let n: int = b;` with
 duration" and stops there. The fix is `b as int` (`time.mono() as int`
 for a nanosecond count); the diagnostic should say so, as AGENTS.md §6
 requires of every error.
+
+## Investigated: remaining `json.decode` cost (2026-10-09)
+
+On the prepared local Linux profiler container, the 97 KB quote probe spent
+material time in generated typed decoding, raw string parsing, integer
+conversion, and allocation/GC. The byte-by-byte scan in the unescaped-string
+path looked like a possible target, so a bounded word-at-a-time scan was
+measured against `dev`. It changed 200-decode callgrind work by only -0.0036%
+and its 2,000-decode ABBA timing overlapped the noisy run spread; the prototype
+was discarded. Hardware perf counters were unavailable in the LinuxKit
+kernel. No source change or API speed claim is warranted. Full profile and
+raw values: `JSON_DECODE_PERF_PRD.md`; plan entry: `fix-gc.md` §2.8.

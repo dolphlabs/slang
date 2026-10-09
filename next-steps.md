@@ -40,6 +40,12 @@ Landed since (Oct 2026): `json.decode` nesting depth costs heap, not C
 stack, up to the 512-level cap, for recursive target types too
 (`tests/json_deep_nesting`). Write-up in `todo.md`.
 
+Remaining typed JSON decode costs were profiled on the prepared local Linux
+benchmark container. A bounded word-at-a-time string scanner showed no
+instruction or timing win and was discarded; profile and measurements are in
+`fix-gc.md` §2.8 and `JSON_DECODE_PERF_PRD.md`. No speculative parser change
+is queued until another profile supports a candidate.
+
 ## 1. User-defined generics, then zokor
 
 - [x] **Why.** zokor, the backend framework (`dolphlabs/zokor`, empty), has to
