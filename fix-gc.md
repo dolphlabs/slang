@@ -600,6 +600,23 @@ of its 1-worker number.
   server ABBA x3: 3,904 -> 4,237 req/s, CPU per request 1,219 -> 1,155
   us, p99 and RSS unchanged.
 
+- [x] **2.8 Profile the remaining typed decode cost** (2026-10-09). The
+  prepared local Linux `slperf` container (i5-8279U, LinuxKit 6.12.5) profiled
+  `quote_0.json` (97,098 bytes), 2,000 decodes. Samples put 25.04% in the
+  generated decode work, 14.72% self in `sl_jparse_string_raw`, 12.59% in
+  `sl_jd_signed`, and about 30% across allocation, GC page allocation, and
+  list pushes. Callgrind attributed 22.88% inclusive to raw string parsing,
+  including 5.75% to the byte scan. Hardware counters were unavailable in
+  the container kernel. A bounded word-at-a-time string scan was tested and
+  discarded: 200-decode callgrind counts were 543,767,103 Ir on `dev` and
+  543,747,693 Ir with the experiment (-0.0036%); native 2,000-decode ABBA
+  medians were 682 and 671 ms, within a wide run spread (635–1,311 ms).
+  No code change or API-server speed claim is justified by this evidence.
+  The profile, raw samples, and limits are recorded in
+  `JSON_DECODE_PERF_PRD.md`. Revisit only with a candidate whose decoder-level
+  gain clears the run spread and whose API result is measured on the guarded
+  server port.
+
 **Exit gate:** single-thread CPU per quote request at or below Go's
 (about 0.56 ms on the CCX33), measured on the same host as Go.
 
