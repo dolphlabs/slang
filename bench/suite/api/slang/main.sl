@@ -4,6 +4,7 @@ import "pg";
 import "json";
 import "proc";
 import "strings";
+import "time";
 
 gc struct User {
     id: int,
@@ -54,6 +55,15 @@ gc struct Created {
     status: str,
 }
 
+struct PGQueryProfile {
+    rows: pg.Rows,
+    pool_acquire_ns: int,
+    client_query_ns: int,
+    query_start_ns: int
+}
+
+let pg_profile = (proc.getenv("PG_PROFILE") ?? "") == "1";
+
 // A plain struct: json.decode fills each item in the list's own buffer,
 // one allocation for the 2,000 items instead of one object per item.
 struct QuoteItem {
@@ -93,6 +103,46 @@ fn internal(e: str) -> http.Response {
     return respond(500, "Internal Server Error", "{\"error\":\"internal\"}");
 }
 
+// The profile mode is for route diagnostics only. With it off, this keeps
+// the benchmark's normal pool_query path and response bytes unchanged.
+fn query_profile(p: pg.Pool, sql: str, args: [pg.Arg], deadline: until,
+                  profile: bool)
+                  -> result[PGQueryProfile, str] {
+    if !profile {
+        let r = pg.pool_query(p, sql, args, deadline);
+        guard let rows = r else let e = err_of(r) { return err(e); }
+        return ok(PGQueryProfile { rows: rows, pool_acquire_ns: 0,
+                                  client_query_ns: 0, query_start_ns: 0 });
+    }
+    let acquire_start = time.mono() as int;
+    let ar = pg.acquire(p, deadline);
+    let acquire_ns = (time.mono() as int) - acquire_start;
+    guard let c = ar else let e = err_of(ar) { return err(e); }
+    let query_start_ns = time.mono() as int;
+    let r = pg.query(c, sql, args, deadline);
+    pg.release(p, c);
+    guard let rows = r else let e = err_of(r) { return err(e); }
+    return ok(PGQueryProfile { rows: rows, pool_acquire_ns: acquire_ns,
+                              client_query_ns: 0,
+                              query_start_ns: query_start_ns });
+}
+
+fn finish_pg_query(q: PGQueryProfile, profile: bool) -> PGQueryProfile {
+    if profile {
+        q.client_query_ns = (time.mono() as int) - q.query_start_ns;
+    }
+    return q;
+}
+
+fn with_pg_profile(r: http.Response, q: PGQueryProfile,
+                   profile: bool) -> http.Response {
+    if !profile { return r; }
+    return http.with_headers(r, [
+        "X-Bench-PG-Pool-Acquire-Ns: " + to_str(q.pool_acquire_ns),
+        "X-Bench-PG-Client-Query-Ns: " + to_str(q.client_query_ns)
+    ]);
+}
+
 // A positive integer of digits only, or -1.
 fn parse_id(s: str) -> int {
     let b = to_bytes(s);
@@ -112,14 +162,16 @@ fn parse_id(s: str) -> int {
     return n;
 }
 
-fn get_user(p: pg.Pool, id: int) -> http.Response {
-    let r = pg.pool_query(p, "SELECT id, email, name, country, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') FROM users WHERE id = $1",
-                          [pg.arg_int(id)], until_of(0));
-    guard let rows = r else let e = err_of(r) {
+fn get_user(p: pg.Pool, id: int, profile: bool) -> http.Response {
+    let r = query_profile(p, "SELECT id, email, name, country, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') FROM users WHERE id = $1",
+                          [pg.arg_int(id)], until_of(0), profile);
+    guard let q = r else let e = err_of(r) {
         return internal(e);
     }
+    let rows = q.rows;
     if rows.count == 0 {
-        return not_found();
+        let done = finish_pg_query(q, profile);
+        return with_pg_profile(not_found(), done, profile);
     }
     let u = User {
         id: pg.get_int(rows, 0, 0),
@@ -128,15 +180,17 @@ fn get_user(p: pg.Pool, id: int) -> http.Response {
         country: pg.get_text(rows, 0, 3),
         created_at: pg.get_text(rows, 0, 4)
     };
-    return respond(200, "OK", json.encode(u));
+    let done = finish_pg_query(q, profile);
+    return with_pg_profile(respond(200, "OK", json.encode(u)), done, profile);
 }
 
-fn get_orders(p: pg.Pool, id: int, limit: int) -> http.Response {
-    let r = pg.pool_query(p, "SELECT id, sku, qty, price_cents, status, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') FROM orders WHERE user_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2",
-                          [pg.arg_int(id), pg.arg_int(limit)], until_of(0));
-    guard let rows = r else let e = err_of(r) {
+fn get_orders(p: pg.Pool, id: int, limit: int, profile: bool) -> http.Response {
+    let r = query_profile(p, "SELECT id, sku, qty, price_cents, status, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') FROM orders WHERE user_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2",
+                          [pg.arg_int(id), pg.arg_int(limit)], until_of(0), profile);
+    guard let q = r else let e = err_of(r) {
         return internal(e);
     }
+    let rows = q.rows;
     let out = OrderList { user_id: id, orders: [] };
     let i = 0;
     while i < rows.count {
@@ -150,15 +204,17 @@ fn get_orders(p: pg.Pool, id: int, limit: int) -> http.Response {
         });
         i = i + 1;
     }
-    return respond(200, "OK", json.encode(out));
+    let done = finish_pg_query(q, profile);
+    return with_pg_profile(respond(200, "OK", json.encode(out)), done, profile);
 }
 
-fn get_summary(p: pg.Pool, id: int) -> http.Response {
-    let r = pg.pool_query(p, "SELECT status, count(*), coalesce(sum(qty * price_cents), 0) FROM orders WHERE user_id = $1 GROUP BY status",
-                          [pg.arg_int(id)], until_of(0));
-    guard let rows = r else let e = err_of(r) {
+fn get_summary(p: pg.Pool, id: int, profile: bool) -> http.Response {
+    let r = query_profile(p, "SELECT status, count(*), coalesce(sum(qty * price_cents), 0) FROM orders WHERE user_id = $1 GROUP BY status",
+                          [pg.arg_int(id)], until_of(0), profile);
+    guard let q = r else let e = err_of(r) {
         return internal(e);
     }
+    let rows = q.rows;
     let by = ByStatus { cancelled: 0, delivered: 0, paid: 0, pending: 0, shipped: 0 };
     let s = Summary { user_id: id, order_count: 0, total_cents: 0, by_status: by };
     let i = 0;
@@ -174,10 +230,11 @@ fn get_summary(p: pg.Pool, id: int) -> http.Response {
         s.total_cents = s.total_cents + pg.get_int(rows, i, 2);
         i = i + 1;
     }
-    return respond(200, "OK", json.encode(s));
+    let done = finish_pg_query(q, profile);
+    return with_pg_profile(respond(200, "OK", json.encode(s)), done, profile);
 }
 
-fn create_order(p: pg.Pool, body: bytes) -> http.Response {
+fn create_order(p: pg.Pool, body: bytes, profile: bool) -> http.Response {
     let dr: result[NewOrder, str] = json.decode(body);
     guard let o = dr else {
         return bad_request();
@@ -190,13 +247,15 @@ fn create_order(p: pg.Pool, body: bytes) -> http.Response {
        len(sku) < 1 || len(sku) > 32 {
         return bad_request();
     }
-    let r = pg.pool_query(p, "INSERT INTO orders (user_id, sku, qty, price_cents, status, created_at) VALUES ($1, $2, $3, $4, 'pending', now()) RETURNING id",
+    let r = query_profile(p, "INSERT INTO orders (user_id, sku, qty, price_cents, status, created_at) VALUES ($1, $2, $3, $4, 'pending', now()) RETURNING id",
                           [pg.arg_int(user_id), pg.arg_text(sku), pg.arg_int(qty), pg.arg_int(price)],
-                          until_of(0));
-    guard let rows = r else let e = err_of(r) {
+                          until_of(0), profile);
+    guard let q = r else let e = err_of(r) {
         return internal(e);
     }
-    return respond(201, "Created", json.encode(Created { id: pg.get_int(rows, 0, 0), status: "pending" }));
+    let id = pg.get_int(q.rows, 0, 0);
+    let done = finish_pg_query(q, profile);
+    return with_pg_profile(respond(201, "Created", json.encode(Created { id: id, status: "pending" })), done, profile);
 }
 
 fn rate_for(region: str) -> int {
@@ -302,7 +361,7 @@ fn quote(body: bytes) -> http.Response {
     return respond(200, "OK", json.encode(resp));
 }
 
-fn route(p: pg.Pool, req: http.Request) -> http.Response {
+fn route(p: pg.Pool, req: http.Request, profile: bool) -> http.Response {
     let target = req.path;
     let query = "";
     let qi = strings.find(target, "?");
@@ -314,7 +373,7 @@ fn route(p: pg.Pool, req: http.Request) -> http.Response {
         return respond(200, "OK", "{\"ok\":true}");
     }
     if req.method == "POST" && target == "/api/orders" {
-        return create_order(p, req.body);
+        return create_order(p, req.body, profile);
     }
     if req.method == "POST" && target == "/api/quote" {
         return quote(req.body);
@@ -332,7 +391,7 @@ fn route(p: pg.Pool, req: http.Request) -> http.Response {
     let id = parse_id(rest);
     if tail == "" {
         if id < 0 { return bad_request(); }
-        return get_user(p, id);
+        return get_user(p, id, profile);
     }
     if tail == "/orders" {
         let limit = 20;
@@ -343,16 +402,16 @@ fn route(p: pg.Pool, req: http.Request) -> http.Response {
             }
         }
         if id < 0 || limit < 0 { return bad_request(); }
-        return get_orders(p, id, limit);
+        return get_orders(p, id, limit, profile);
     }
     if tail == "/summary" {
         if id < 0 { return bad_request(); }
-        return get_summary(p, id);
+        return get_summary(p, id, profile);
     }
     return not_found();
 }
 
-fn serve(p: pg.Pool, c: link) {
+fn serve(p: pg.Pool, c: link, profile: bool) {
     let ra = arena_new(300000);
     let sa = arena_new(65536);
     // quote bodies are ~110KB; 256KB leaves room for headers and slack
@@ -361,7 +420,7 @@ fn serve(p: pg.Pool, c: link) {
     while true {
         let rr = http.read(&mut c, buf, filled, until_never());
         guard let got = rr else { return; }
-        let wr = http.write(&mut c, route(p, got.req), &mut sa, until_never());
+        let wr = http.write(&mut c, route(p, got.req, profile), &mut sa, until_never());
         guard let _n = wr else { return; }
         sa.reset();
         if http.wants_close(got.req) {
@@ -371,11 +430,11 @@ fn serve(p: pg.Pool, c: link) {
     }
 }
 
-fn accept_loop(p: pg.Pool, ln: link) {
+fn accept_loop(p: pg.Pool, ln: link, profile: bool) {
     while true {
         let ar = ln.accept(until_never());
         guard let c = ar else { continue; }
-        spawn serve(p, c);
+        spawn serve(p, c, profile);
     }
 }
 
@@ -396,9 +455,9 @@ while i < acceptors {
     }
     if i == acceptors - 1 {
         println("listening on " + to_str(port));
-        accept_loop(pool, ln);
+        accept_loop(pool, ln, pg_profile);
     } else {
-        spawn accept_loop(pool, ln);
+        spawn accept_loop(pool, ln, pg_profile);
     }
     i = i + 1;
 }

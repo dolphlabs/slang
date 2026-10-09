@@ -153,3 +153,74 @@ The acceptance target remains open. Current evidence points to driver decode,
 allocation, task scheduling, and response construction as the next areas to
 separate with route-specific pool-wait instrumentation and longer matched
 ABBA runs. Do not present this patch as Go parity.
+
+## New VPS results and profiling plan (2026-10-09)
+
+The run `20261009T190756Z-benchmark-slang` is committed under
+`bench/results/20261009T190756Z-benchmark-slang/`. It used 16 application
+workers, 8 load-generator CPUs, 8 database CPUs, a 64-connection pool, and
+the full 1M-user / 20M-order data set. The same-run ratios are severe and
+repeatable across three rounds:
+
+| Route | Clients | Slang / Go req/s | Slang / Go | Slang / Go p50 ms | App CPU cores | PostgreSQL CPU cores |
+|---|---:|---:|---:|---:|---:|---:|
+| Point | 64 | 5,127 / 153,254 | 3.3% | 11.94 / 0.40 | 3.53 / 11.60 | 0.52 / 7.68 |
+| Point | 512 | 3,643 / 149,952 | 2.4% | 133.52 / 3.33 | 3.95 / 12.08 | 0.38 / 7.63 |
+| Mix | 64 | 6,108 / 82,669 | 7.4% | 10.41 / 0.61 | 4.37 / 13.98 | 0.98 / 5.09 |
+| Mix | 512 | 4,021 / 100,904 | 4.0% | 136.95 / 4.77 | 4.25 / 14.97 | 0.65 / 6.07 |
+
+These measurements show that Slang feeds PostgreSQL far less work than Go and
+has much higher end-to-end latency. They do **not** establish mutex contention:
+the sampler records aggregate CPU time, not lock waits, pool wait, or SQL
+execution time. The run's host check failed (Rust compute was 449 ms against a
+1,577 ms baseline), so it must not be compared directly with the earlier
+CCX33/local run. Its within-run language comparison remains useful. The
+recorded `git_dirty` flag is true, and the run did not retain the corresponding
+worktree diff, so the exact measured source tree cannot be reconstructed from
+the run directory. The fixed 10k/s row also delivered only 4,306 Slang requests
+per second; its zero error count does not mean it met the target rate.
+
+The route source still shows one `pool_query`/`pgxpool` query call per database
+request. In Slang, a normal prepared query sends one extended-protocol batch
+and reads through one `ReadyForQuery`; the source does not point to extra
+round trips as the cause. This is a source-level exchange count, not a packet
+capture. The exact split between acquisition, client protocol and row
+decoding, and PostgreSQL execution has not been measured on this VPS.
+
+An opt-in `PG_PROFILE=1` mode now emits per-response pool-acquire and
+client-query-plus-row-decode nanoseconds on the four database routes. The
+`bench/latgen` `-pg-profile` option captures their distributions. With the
+server warmed before sampling, acquire duration measures pool acquisition
+latency in the steady state; the client duration includes the driver exchange
+result decoding and connection release, but excludes JSON encoding. Run each
+route separately at 64 and 512 HTTP connections for Slang and Go. For this
+diagnostic run only, enable `pg_stat_statements`, snapshot/reset it after
+warmup and before each sample, and compare its per-query `mean_exec_time` and
+`calls` deltas with the client measurements. Use its call deltas to compare SQL
+executions with HTTP response counts; expect one execution per successful
+database request. The logical
+protocol exchange count is one per query by both clients' source paths after
+warmup; count SQL executions separately from TCP send/receive syscalls.
+
+For the diagnostic database only, enable `pg_stat_statements` in
+`shared_preload_libraries`, restart PostgreSQL, and run
+`CREATE EXTENSION IF NOT EXISTS pg_stat_statements` in the benchmark database.
+After warming the API and before each route sample, reset the extension as a
+PostgreSQL superuser. Save CSV snapshots from
+`bench/suite/api/pg_profile_stats.sql` immediately before and after the sample;
+subtract `calls`, `rows`, and `total_exec_time` by `queryid`. Keep this
+extension out of ordinary benchmark runs so its shared statistics overhead
+does not alter the published baseline.
+
+Launch each API with `PG_PROFILE=1`, warm the chosen route, reset and snapshot
+the database statistics, then run for 20 seconds with
+`go run bench/latgen/main.go -addr 127.0.0.1:PORT -path ROUTE -c CLIENTS -d 20s -pg-profile`.
+Use the same path, client count, seeded database state, and timing for both
+languages; sample Slang/Go/Go/Slang (then reverse order for the next route) at
+64 and 512 clients. Profile the four routes separately, reset the seeded
+database before the insert comparison, and retain the tool output plus both
+SQL snapshots.
+
+Do not select a driver or scheduler optimization until these phase timings and
+a matched `perf` profile identify the cost. The 98%-of-Go acceptance target
+still applies per route and concurrency level.

@@ -20,6 +20,12 @@ type sample struct {
 	lat   int64 // ns
 }
 
+type pgProfileSample struct {
+	poolAcquireNS int64
+	clientQueryNS int64
+	valid         bool
+}
+
 func main() {
 	addr := flag.String("addr", "127.0.0.1:18084", "host:port")
 	path := flag.String("path", "/", "request path")
@@ -29,6 +35,7 @@ func main() {
 	d := flag.Duration("d", 10*time.Second, "duration")
 	timeout := flag.Duration("timeout", 5*time.Second, "per-request timeout")
 	dump := flag.String("dump", "", "write start_ns,lat_ns per request to this file")
+	pgProfile := flag.Bool("pg-profile", false, "collect X-Bench-PG-* response headers")
 	flag.Parse()
 	if *bodyFile != "" {
 		b, err := os.ReadFile(*bodyFile)
@@ -48,6 +55,10 @@ func main() {
 	reqb := []byte(req)
 
 	per := make([][]sample, *c)
+	var perPGProfile [][]pgProfileSample
+	if *pgProfile {
+		perPGProfile = make([][]pgProfileSample, *c)
+	}
 	var timeouts, errs int
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -58,6 +69,10 @@ func main() {
 		go func(i int) {
 			defer wg.Done()
 			s := make([]sample, 0, 1<<16)
+			var pgSamples []pgProfileSample
+			if *pgProfile {
+				pgSamples = make([]pgProfileSample, 0, 1024)
+			}
 			var conn net.Conn
 			var rd *bufio.Reader
 			for time.Now().Before(stop) {
@@ -82,7 +97,8 @@ func main() {
 					mu.Unlock()
 					continue
 				}
-				if err := readResponse(rd); err != nil {
+				profile, err := readResponse(rd, *pgProfile)
+				if err != nil {
 					conn.Close()
 					conn = nil
 					mu.Lock()
@@ -96,11 +112,17 @@ func main() {
 				}
 				now := time.Now()
 				s = append(s, sample{st.Sub(t0).Nanoseconds(), now.Sub(st).Nanoseconds()})
+				if *pgProfile {
+					pgSamples = append(pgSamples, profile)
+				}
 			}
 			if conn != nil {
 				conn.Close()
 			}
 			per[i] = s
+			if *pgProfile {
+				perPGProfile[i] = pgSamples
+			}
 		}(i)
 	}
 	wg.Wait()
@@ -140,6 +162,13 @@ func main() {
 		}
 		fmt.Printf("  >%gms: %.3f%% of requests, %.1f%% of all waiting time\n", th, 100*float64(cnt)/float64(n), 100*float64(tsum)/float64(sum))
 	}
+	if *pgProfile {
+		var profiles []pgProfileSample
+		for _, s := range perPGProfile {
+			profiles = append(profiles, s...)
+		}
+		printPGProfile(profiles)
+	}
 	if *dump != "" {
 		f, _ := os.Create(*dump)
 		w := bufio.NewWriter(f)
@@ -153,12 +182,14 @@ func main() {
 	}
 }
 
-func readResponse(rd *bufio.Reader) error {
+func readResponse(rd *bufio.Reader, wantPGProfile bool) (pgProfileSample, error) {
+	var profile pgProfileSample
+	seen := 0
 	cl := -1
 	for {
 		line, err := rd.ReadString('\n')
 		if err != nil {
-			return err
+			return profile, err
 		}
 		if line == "\r\n" {
 			break
@@ -166,14 +197,74 @@ func readResponse(rd *bufio.Reader) error {
 		if len(line) > 15 && strings.EqualFold(line[:15], "content-length:") {
 			v, err := strconv.Atoi(strings.TrimSpace(line[15:]))
 			if err != nil {
-				return err
+				return profile, err
 			}
 			cl = v
+		} else if wantPGProfile {
+			name, value, ok := strings.Cut(strings.TrimSpace(line), ":")
+			if ok {
+				value = strings.TrimSpace(value)
+				switch {
+				case strings.EqualFold(name, "X-Bench-PG-Pool-Acquire-Ns"):
+					if seen&1 != 0 {
+						return profile, fmt.Errorf("duplicate %s header", name)
+					}
+					profile.poolAcquireNS, err = strconv.ParseInt(value, 10, 64)
+					seen |= 1
+				case strings.EqualFold(name, "X-Bench-PG-Client-Query-Ns"):
+					if seen&2 != 0 {
+						return profile, fmt.Errorf("duplicate %s header", name)
+					}
+					profile.clientQueryNS, err = strconv.ParseInt(value, 10, 64)
+					seen |= 2
+				}
+				if err != nil {
+					return profile, fmt.Errorf("invalid %s header: %w", name, err)
+				}
+				if (seen&1 != 0 && profile.poolAcquireNS < 0) ||
+					(seen&2 != 0 && profile.clientQueryNS < 0) {
+					return profile, fmt.Errorf("negative %s header", name)
+				}
+			}
 		}
 	}
 	if cl < 0 {
-		return fmt.Errorf("no content-length")
+		return profile, fmt.Errorf("no content-length")
 	}
 	_, err := rd.Discard(cl)
-	return err
+	profile.valid = seen == 3
+	return profile, err
+}
+
+func printPGProfile(profiles []pgProfileSample) {
+	pool, query := make([]int64, 0, len(profiles)), make([]int64, 0, len(profiles))
+	missing := 0
+	for _, p := range profiles {
+		if !p.valid {
+			missing++
+			continue
+		}
+		pool = append(pool, p.poolAcquireNS)
+		query = append(query, p.clientQueryNS)
+	}
+	fmt.Printf("PG_PROFILE responses=%d missing=%d\n", len(profiles), missing)
+	printPGDuration("pool_acquire", pool)
+	printPGDuration("client_query_row_decode_and_release", query)
+}
+
+func printPGDuration(name string, values []int64) {
+	if len(values) == 0 {
+		fmt.Printf("  %s: no samples\n", name)
+		return
+	}
+	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+	var total int64
+	for _, v := range values {
+		total += v
+	}
+	percentile := func(p float64) float64 {
+		return float64(values[int(p*float64(len(values)-1))]) / 1000
+	}
+	fmt.Printf("  %s us: mean=%.2f p50=%.2f p90=%.2f p99=%.2f max=%.2f\n",
+		name, float64(total)/float64(len(values))/1000, percentile(.50), percentile(.90), percentile(.99), float64(values[len(values)-1])/1000)
 }
