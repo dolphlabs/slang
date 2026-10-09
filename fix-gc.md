@@ -340,6 +340,29 @@ the point reads in flight with it.
   3,528 -> 3,585 req/s, CPU per request 1,305 -> 863 us, p99 48.6 vs
   49.5 ms. The kick and the allocation-entry yield stay unbuilt.
 
+  **Update (2026-10-09): kick into runnext, measured, not landed.** The
+  kick lost on 2026-10-05 because a kicked task was requeued behind the
+  stripe. Tried: the same kick (50 us at the rendezvous, every running
+  task), with the kicked task put in its worker's runnext slot so it
+  resumes first after the pause (branch `exp/gc-kick-runnext`, local).
+  Linux container, quote c64, same binary with and without
+  SLANG_GC_KICK_US=50:
+  - minor time-to-safepoint 0.61-0.71 -> 0.71-0.76 ms: **no drop**;
+  - 13,076 kicks over 1,194 collections, ~11 per rendezvous: the signal
+    lands and is refused, inside the allocator's preempt bracket or in
+    libc (memcpy, number parsing), where the handler does not redirect;
+  - promotions per minor 113-165 -> 201-222 (half-built decodes), peak
+    RSS +4 MB;
+  - throughput contradictory (wrk -10%, latgen +10%, p99 45 -> 33 ms),
+    mix flat.
+
+  What the kick needs, a yield at allocation entry, cost 40% RSS on
+  2026-10-04, and stopping decoders in place promoted their partial
+  results (above). The rendezvous is a worker finishing a decode of a
+  ~110 KB body, so the remaining lever is the decode's own speed: a
+  faster json.decode shortens time-to-safepoint by the same amount, and
+  serves every request too.
+
   **Update (2026-10-04): not needed for now.** After 1.10, 1.2 and 1.3
   the minors are fewer and their walk shorter, and minor time-to-safepoint
   on the quote server is about 0.6 ms per collection, 1 ms at worst,
