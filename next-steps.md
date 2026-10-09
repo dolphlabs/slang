@@ -15,6 +15,13 @@ caught what — are in git history and the PR descriptions:
   request bodies, methods sharing a name with a package function, and the
   Postgres driver: `git show f9680d1:next-steps.md`
 
+API speed audit (2026-10-09): current quote/mix baselines, a Linux server
+profile, point-read/Postgres measurements, the decoder experiment and c512
+memory results are recorded in [`SERVER_SPEED_AUDIT_PRD.md`](SERVER_SPEED_AUDIT_PRD.md).
+The decoder experiment did not pass the performance gate. Next profile the
+PostgreSQL query/protocol path under point reads; do not change arena sizes
+without evidence, since slang RSS was already below Go at c512.
+
 Runtime bugs and their investigations live in `todo.md`.
 
 Landed since that clear-out (PRs #157, #159–#162, #164, #165, #168, #169,
@@ -39,6 +46,12 @@ dotted directories (#235). Write-ups in `todo.md`.
 Landed since (Oct 2026): `json.decode` nesting depth costs heap, not C
 stack, up to the 512-level cap, for recursive target types too
 (`tests/json_deep_nesting`). Write-up in `todo.md`.
+
+Remaining typed JSON decode costs were profiled on the prepared local Linux
+benchmark container. A bounded word-at-a-time string scanner showed no
+instruction or timing win and was discarded; profile and measurements are in
+`fix-gc.md` §2.8 and `JSON_DECODE_PERF_PRD.md`. No speculative parser change
+is queued until another profile supports a candidate.
 
 ## 1. User-defined generics, then zokor
 

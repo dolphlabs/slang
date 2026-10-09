@@ -242,6 +242,18 @@ the point reads in flight with it.
   case, not a regression since. The same runs show cause 17: 6 majors
   with 6 objects promoted.
 
+- [x] **0.5 Server-speed audit, areas 1-5 (2026-10-09).** The detailed
+  PRD, measurements and limits are in
+  [`SERVER_SPEED_AUDIT_PRD.md`](SERVER_SPEED_AUDIT_PRD.md). Current `dev`
+  was compared with Go on quote/mix, profiled on mix c512, and checked for
+  Postgres CPU and c512 arena reservations. A whitespace fast path reduced
+  callgrind's median instruction count slightly, but its native 2,000-decode
+  median was slower (639 vs 631.5 ms), it did not improve quote c512, and
+  raw ranges overlap. The code was removed. A point-read sample put Postgres
+  near two cores and Go delivered more throughput at similar DB CPU; profile
+  the database query/protocol path next. slang's RSS remained below Go on
+  quote and mix c512, so arena-size changes are not justified.
+
 ## Phase 1: make four workers worth four
 
 - [ ] **1.1 Bound time-to-safepoint.** If the world has not stopped within
@@ -339,6 +351,29 @@ the point reads in flight with it.
   4,619 -> 1,166 us, p99 199 -> 54 ms, RSS 29.2 -> 27.3 MB. macOS:
   3,528 -> 3,585 req/s, CPU per request 1,305 -> 863 us, p99 48.6 vs
   49.5 ms. The kick and the allocation-entry yield stay unbuilt.
+
+  **Update (2026-10-09): kick into runnext, measured, not landed.** The
+  kick lost on 2026-10-05 because a kicked task was requeued behind the
+  stripe. Tried: the same kick (50 us at the rendezvous, every running
+  task), with the kicked task put in its worker's runnext slot so it
+  resumes first after the pause (branch `exp/gc-kick-runnext`, local).
+  Linux container, quote c64, same binary with and without
+  SLANG_GC_KICK_US=50:
+  - minor time-to-safepoint 0.61-0.71 -> 0.71-0.76 ms: **no drop**;
+  - 13,076 kicks over 1,194 collections, ~11 per rendezvous: the signal
+    lands and is refused, inside the allocator's preempt bracket or in
+    libc (memcpy, number parsing), where the handler does not redirect;
+  - promotions per minor 113-165 -> 201-222 (half-built decodes), peak
+    RSS +4 MB;
+  - throughput contradictory (wrk -10%, latgen +10%, p99 45 -> 33 ms),
+    mix flat.
+
+  What the kick needs, a yield at allocation entry, cost 40% RSS on
+  2026-10-04, and stopping decoders in place promoted their partial
+  results (above). The rendezvous is a worker finishing a decode of a
+  ~110 KB body, so the remaining lever is the decode's own speed: a
+  faster json.decode shortens time-to-safepoint by the same amount, and
+  serves every request too.
 
   **Update (2026-10-04): not needed for now.** After 1.10, 1.2 and 1.3
   the minors are fewer and their walk shorter, and minor time-to-safepoint
@@ -599,6 +634,23 @@ of its 1-worker number.
   Decode probe ABBA x5: 4,035 -> 3,312 ms (faster in every round); quote
   server ABBA x3: 3,904 -> 4,237 req/s, CPU per request 1,219 -> 1,155
   us, p99 and RSS unchanged.
+
+- [x] **2.8 Profile the remaining typed decode cost** (2026-10-09). The
+  prepared local Linux `slperf` container (i5-8279U, LinuxKit 6.12.5) profiled
+  `quote_0.json` (97,098 bytes), 2,000 decodes. Samples put 25.04% in the
+  generated decode work, 14.72% self in `sl_jparse_string_raw`, 12.59% in
+  `sl_jd_signed`, and about 30% across allocation, GC page allocation, and
+  list pushes. Callgrind attributed 22.88% inclusive to raw string parsing,
+  including 5.75% to the byte scan. Hardware counters were unavailable in
+  the container kernel. A bounded word-at-a-time string scan was tested and
+  discarded: 200-decode callgrind counts were 543,767,103 Ir on `dev` and
+  543,747,693 Ir with the experiment (-0.0036%); native 2,000-decode ABBA
+  medians were 682 and 671 ms, within a wide run spread (635–1,311 ms).
+  No code change or API-server speed claim is justified by this evidence.
+  The profile, raw samples, and limits are recorded in
+  `JSON_DECODE_PERF_PRD.md`. Revisit only with a candidate whose decoder-level
+  gain clears the run spread and whose API result is measured on the guarded
+  server port.
 
 **Exit gate:** single-thread CPU per quote request at or below Go's
 (about 0.56 ms on the CCX33), measured on the same host as Go.

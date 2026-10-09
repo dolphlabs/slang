@@ -5,6 +5,16 @@ The active plan is first; the investigations log follows it
 one branch and one PR to `dev` per numbered item, never stacked. Tick items
 as they land and record the before/after numbers next to them.
 
+**Server-speed audit (2026-10-09):** see
+[`SERVER_SPEED_AUDIT_PRD.md`](SERVER_SPEED_AUDIT_PRD.md). The current Linux
+quote/mix ABBA baseline and profile show JSON/GC work on quote and a material
+Postgres/network path on mix. The tested whitespace-skip change did not
+improve decode time or c512 quote service and was removed. Point reads
+measured Postgres near its two-core allocation; Go had higher throughput at
+similar DB CPU. Next evidence-led server task: profile Postgres query CPU and
+driver round trips under the isolated point workload. No buffer-size change
+is supported by the current RSS measurements.
+
 # Plan: beat Go on REST, then gRPC and GraphQL
 
 Written 2026-10-06 from the CCX33 re-run in PR #325 (commit `06e6de4`),
@@ -3811,3 +3821,15 @@ Found 2026-10-07 while instrumenting the pg pool: `let n: int = b;` with
 duration" and stops there. The fix is `b as int` (`time.mono() as int`
 for a nanosecond count); the diagnostic should say so, as AGENTS.md §6
 requires of every error.
+
+## Investigated: remaining `json.decode` cost (2026-10-09)
+
+On the prepared local Linux profiler container, the 97 KB quote probe spent
+material time in generated typed decoding, raw string parsing, integer
+conversion, and allocation/GC. The byte-by-byte scan in the unescaped-string
+path looked like a possible target, so a bounded word-at-a-time scan was
+measured against `dev`. It changed 200-decode callgrind work by only -0.0036%
+and its 2,000-decode ABBA timing overlapped the noisy run spread; the prototype
+was discarded. Hardware perf counters were unavailable in the LinuxKit
+kernel. No source change or API speed claim is warranted. Full profile and
+raw values: `JSON_DECODE_PERF_PRD.md`; plan entry: `fix-gc.md` §2.8.
