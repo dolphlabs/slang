@@ -3597,11 +3597,11 @@ On the same local host, ABBA old/new/new/old, each probe process handled four
 8 MiB fragmented replies. Raw per-reply times in ms:
 
 - old: 896.214, 868.405, 871.841, 819.976; 929.521, 879.678, 844.455,
-  718.426 (median 856.430)
+  718.426 (median 870.123)
 - new: 26.798, 24.170, 28.982, 29.750; 38.469, 27.296, 34.270, 32.537
   (median 29.366)
 
-That is about 29.2x faster for this 8 MiB fragmented reply. This is a local
+That is about 29.6x faster for this 8 MiB fragmented reply. This is a local
 microbenchmark, not an API-server result. For small replies, three ABBA rounds
 of 20,000 loopback PINGs gave old 1.63, 1.61, 1.60, 1.58, 1.56, 1.69 s
 (median 1.605) and new 1.61, 1.50, 1.76, 1.52, 1.64, 1.63 s (median 1.620).
