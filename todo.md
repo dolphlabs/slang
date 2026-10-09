@@ -9,11 +9,15 @@ as they land and record the before/after numbers next to them.
 [`SERVER_SPEED_AUDIT_PRD.md`](SERVER_SPEED_AUDIT_PRD.md). The current Linux
 quote/mix ABBA baseline and profile show JSON/GC work on quote and a material
 Postgres/network path on mix. The tested whitespace-skip change did not
-improve decode time or c512 quote service and was removed. Point reads
-measured Postgres near its two-core allocation; Go had higher throughput at
-similar DB CPU. Next evidence-led server task: profile Postgres query CPU and
-driver round trips under the isolated point workload. No buffer-size change
-is supported by the current RSS measurements.
+improve decode time or c512 quote service and was removed. A later 32-vCPU
+VPS run shows Slang point/mix at 2.4-7.4% of Go while PostgreSQL uses under
+one core for Slang and 5-8 for Go. The run failed its cross-host compute check
+and records a dirty tree, so use its same-run ratios only and do not treat it
+as a clean before/after baseline. Opt-in route timing headers and a `latgen`
+collector are now in the PG route PRD; next run them with per-query
+`pg_stat_statements` deltas and a matching CPU profile. The report's mutex
+contention explanation is not yet measured. No buffer-size change is
+supported by the current RSS measurements.
 
 # Plan: beat Go on REST, then gRPC and GraphQL
 

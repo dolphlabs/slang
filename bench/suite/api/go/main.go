@@ -8,9 +8,11 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"time"
 	"unicode/utf8"
 
 	json "github.com/goccy/go-json"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/valyala/fasthttp"
 )
@@ -31,7 +33,74 @@ var (
 	healthBody  = []byte(`{"ok":true}`)
 	jsonType    = []byte("application/json")
 	prefixUsers = []byte("/api/users/")
+	pgProfile   bool
 )
+
+type pgQueryProfile struct {
+	poolAcquireNS int64
+	clientQueryNS int64
+}
+
+func runPGProfile(ctx context.Context, run func(*pgxpool.Conn) error) (profile pgQueryProfile, err error) {
+	start := time.Now()
+	conn, err := pool.Acquire(ctx)
+	profile.poolAcquireNS = time.Since(start).Nanoseconds()
+	if err != nil {
+		return profile, err
+	}
+	start = time.Now()
+	defer func() { profile.clientQueryNS = time.Since(start).Nanoseconds() }()
+	defer conn.Release()
+	err = run(conn)
+	return profile, err
+}
+
+func setPGProfile(ctx *fasthttp.RequestCtx, profile pgQueryProfile) {
+	if !pgProfile {
+		return
+	}
+	h := &ctx.Response.Header
+	h.Set("X-Bench-PG-Pool-Acquire-Ns", strconv.FormatInt(profile.poolAcquireNS, 10))
+	h.Set("X-Bench-PG-Client-Query-Ns", strconv.FormatInt(profile.clientQueryNS, 10))
+}
+
+func scanOrders(rows pgx.Rows, out *orderList) error {
+	defer rows.Close()
+	for rows.Next() {
+		var o order
+		if err := rows.Scan(&o.ID, &o.SKU, &o.Qty, &o.PriceCents, &o.Status, &o.CreatedAt); err != nil {
+			return err
+		}
+		out.Orders = append(out.Orders, o)
+	}
+	return rows.Err()
+}
+
+func scanSummary(rows pgx.Rows, s *summary) error {
+	defer rows.Close()
+	for rows.Next() {
+		var status string
+		var n, total int64
+		if err := rows.Scan(&status, &n, &total); err != nil {
+			return err
+		}
+		switch status {
+		case "cancelled":
+			s.ByStatus.Cancelled = n
+		case "delivered":
+			s.ByStatus.Delivered = n
+		case "paid":
+			s.ByStatus.Paid = n
+		case "pending":
+			s.ByStatus.Pending = n
+		case "shipped":
+			s.ByStatus.Shipped = n
+		}
+		s.OrderCount += n
+		s.TotalCents += total
+	}
+	return rows.Err()
+}
 
 var rates = map[string]int64{"US": 725, "CA": 1300, "UK": 2000, "EU": 2000, "DE": 1900,
 	"FR": 2000, "JP": 1000, "IN": 1800, "BR": 1700, "NG": 750, "AU": 1000}
@@ -192,73 +261,130 @@ func handler(ctx *fasthttp.RequestCtx) {
 
 func getUser(ctx *fasthttp.RequestCtx, id int64) {
 	var u user
-	err := pool.QueryRow(context.Background(), sqlUser, id).
-		Scan(&u.ID, &u.Email, &u.Name, &u.Country, &u.CreatedAt)
+	var profile pgQueryProfile
+	var err error
+	if pgProfile {
+		profile, err = runPGProfile(context.Background(), func(conn *pgxpool.Conn) error {
+			return conn.QueryRow(context.Background(), sqlUser, id).
+				Scan(&u.ID, &u.Email, &u.Name, &u.Country, &u.CreatedAt)
+		})
+	} else {
+		err = pool.QueryRow(context.Background(), sqlUser, id).
+			Scan(&u.ID, &u.Email, &u.Name, &u.Country, &u.CreatedAt)
+	}
 	if err != nil {
 		if err.Error() == "no rows in result set" {
 			reply(ctx, 404, notFound)
+			if pgProfile {
+				setPGProfile(ctx, profile)
+			}
 			return
 		}
 		reply(ctx, 500, []byte(`{"error":"internal"}`))
 		return
 	}
 	replyJSON(ctx, 200, &u)
+	if pgProfile {
+		setPGProfile(ctx, profile)
+	}
 }
 
 func getOrders(ctx *fasthttp.RequestCtx, id, limit int64) {
-	rows, err := pool.Query(context.Background(), sqlOrders, id, limit)
-	if err != nil {
-		reply(ctx, 500, []byte(`{"error":"internal"}`))
-		return
-	}
-	defer rows.Close()
 	out := orderList{UserID: id, Orders: make([]order, 0, limit)}
-	for rows.Next() {
-		var o order
-		if err := rows.Scan(&o.ID, &o.SKU, &o.Qty, &o.PriceCents, &o.Status, &o.CreatedAt); err != nil {
+	var profile pgQueryProfile
+	var err error
+	if pgProfile {
+		profile, err = runPGProfile(context.Background(), func(conn *pgxpool.Conn) error {
+			rows, err := conn.Query(context.Background(), sqlOrders, id, limit)
+			if err != nil {
+				return err
+			}
+			return scanOrders(rows, &out)
+		})
+		if err != nil {
 			reply(ctx, 500, []byte(`{"error":"internal"}`))
 			return
 		}
-		out.Orders = append(out.Orders, o)
-	}
-	if rows.Err() != nil {
-		reply(ctx, 500, []byte(`{"error":"internal"}`))
-		return
+	} else {
+		rows, err := pool.Query(context.Background(), sqlOrders, id, limit)
+		if err != nil {
+			reply(ctx, 500, []byte(`{"error":"internal"}`))
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var o order
+			if err := rows.Scan(&o.ID, &o.SKU, &o.Qty, &o.PriceCents, &o.Status, &o.CreatedAt); err != nil {
+				reply(ctx, 500, []byte(`{"error":"internal"}`))
+				return
+			}
+			out.Orders = append(out.Orders, o)
+		}
+		if rows.Err() != nil {
+			reply(ctx, 500, []byte(`{"error":"internal"}`))
+			return
+		}
 	}
 	replyJSON(ctx, 200, &out)
+	if pgProfile {
+		setPGProfile(ctx, profile)
+	}
 }
 
 func getSummary(ctx *fasthttp.RequestCtx, id int64) {
-	rows, err := pool.Query(context.Background(), sqlSummary, id)
-	if err != nil {
-		reply(ctx, 500, []byte(`{"error":"internal"}`))
-		return
-	}
-	defer rows.Close()
 	s := summary{UserID: id}
-	for rows.Next() {
-		var status string
-		var n, total int64
-		if err := rows.Scan(&status, &n, &total); err != nil {
+	var profile pgQueryProfile
+	var err error
+	if pgProfile {
+		profile, err = runPGProfile(context.Background(), func(conn *pgxpool.Conn) error {
+			rows, err := conn.Query(context.Background(), sqlSummary, id)
+			if err != nil {
+				return err
+			}
+			return scanSummary(rows, &s)
+		})
+		if err != nil {
 			reply(ctx, 500, []byte(`{"error":"internal"}`))
 			return
 		}
-		switch status {
-		case "cancelled":
-			s.ByStatus.Cancelled = n
-		case "delivered":
-			s.ByStatus.Delivered = n
-		case "paid":
-			s.ByStatus.Paid = n
-		case "pending":
-			s.ByStatus.Pending = n
-		case "shipped":
-			s.ByStatus.Shipped = n
+	} else {
+		rows, err := pool.Query(context.Background(), sqlSummary, id)
+		if err != nil {
+			reply(ctx, 500, []byte(`{"error":"internal"}`))
+			return
 		}
-		s.OrderCount += n
-		s.TotalCents += total
+		defer rows.Close()
+		for rows.Next() {
+			var status string
+			var n, total int64
+			if err := rows.Scan(&status, &n, &total); err != nil {
+				reply(ctx, 500, []byte(`{"error":"internal"}`))
+				return
+			}
+			switch status {
+			case "cancelled":
+				s.ByStatus.Cancelled = n
+			case "delivered":
+				s.ByStatus.Delivered = n
+			case "paid":
+				s.ByStatus.Paid = n
+			case "pending":
+				s.ByStatus.Pending = n
+			case "shipped":
+				s.ByStatus.Shipped = n
+			}
+			s.OrderCount += n
+			s.TotalCents += total
+		}
+		if rows.Err() != nil {
+			reply(ctx, 500, []byte(`{"error":"internal"}`))
+			return
+		}
 	}
 	replyJSON(ctx, 200, &s)
+	if pgProfile {
+		setPGProfile(ctx, profile)
+	}
 }
 
 func createOrder(ctx *fasthttp.RequestCtx) {
@@ -275,13 +401,25 @@ func createOrder(ctx *fasthttp.RequestCtx) {
 		return
 	}
 	var id int64
-	err := pool.QueryRow(context.Background(), sqlInsert,
-		*in.UserID, *in.SKU, int32(*in.Qty), *in.PriceCents).Scan(&id)
+	var profile pgQueryProfile
+	var err error
+	if pgProfile {
+		profile, err = runPGProfile(context.Background(), func(conn *pgxpool.Conn) error {
+			return conn.QueryRow(context.Background(), sqlInsert,
+				*in.UserID, *in.SKU, int32(*in.Qty), *in.PriceCents).Scan(&id)
+		})
+	} else {
+		err = pool.QueryRow(context.Background(), sqlInsert,
+			*in.UserID, *in.SKU, int32(*in.Qty), *in.PriceCents).Scan(&id)
+	}
 	if err != nil {
 		reply(ctx, 500, []byte(`{"error":"internal"}`))
 		return
 	}
 	replyJSON(ctx, 201, &created{ID: id, Status: "pending"})
+	if pgProfile {
+		setPGProfile(ctx, profile)
+	}
 }
 
 type ranked struct {
@@ -359,6 +497,7 @@ func envInt(name string, def int) int {
 func main() {
 	workers := envInt("WORKERS", runtime.NumCPU())
 	runtime.GOMAXPROCS(workers)
+	pgProfile = os.Getenv("PG_PROFILE") == "1"
 	cfg, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
 	if err != nil {
 		log.Fatal(err)
