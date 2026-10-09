@@ -242,6 +242,18 @@ the point reads in flight with it.
   case, not a regression since. The same runs show cause 17: 6 majors
   with 6 objects promoted.
 
+- [x] **0.5 Server-speed audit, areas 1-5 (2026-10-09).** The detailed
+  PRD, measurements and limits are in
+  [`SERVER_SPEED_AUDIT_PRD.md`](SERVER_SPEED_AUDIT_PRD.md). Current `dev`
+  was compared with Go on quote/mix, profiled on mix c512, and checked for
+  Postgres CPU and c512 arena reservations. A whitespace fast path reduced
+  callgrind's median instruction count slightly, but its native 2,000-decode
+  median was slower (639 vs 631.5 ms), it did not improve quote c512, and
+  raw ranges overlap. The code was removed. A point-read sample put Postgres
+  near two cores and Go delivered more throughput at similar DB CPU; profile
+  the database query/protocol path next. slang's RSS remained below Go on
+  quote and mix c512, so arena-size changes are not justified.
+
 ## Phase 1: make four workers worth four
 
 - [ ] **1.1 Bound time-to-safepoint.** If the world has not stopped within
