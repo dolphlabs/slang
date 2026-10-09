@@ -78,9 +78,10 @@ shortfall precisely.
 
 - The Mac-hosted Linux container is noisy; ABBA ordering and multiple rounds
   are required, and changes smaller than the spread are inconclusive.
-- The current container only has Go 1.22.2 while the benchmark declares Go
-  1.23. Comparisons using 1.22 must be labeled and should be rerun with 1.23
-  before making a final Go-parity claim.
+- The installed Go command in the benchmark container is Go 1.22.2, but the
+  exact comparison binary was verified with `go version -m` as Go 1.23.4 and
+  its source matches the current suite API. Preserve this distinction when
+  rebuilding or repeating the comparison.
 - The benchmark database uses a small deterministic dataset, so any measured
   gain must be checked for changes to query plans and must not be generalized
   to the 1M-user production-scale dataset without a larger run.
