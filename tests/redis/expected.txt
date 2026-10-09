@@ -6,6 +6,8 @@ ok binary
 ok corrupt
 ok drop
 ok server-error
+ok reply-byte-limit
+ok large-fragmented-reply
 ok mget-nil
 ok strings
 ok hash-list
@@ -16,6 +18,8 @@ ok pool-reuse
 ok pool-exhaust
 ok pool-discard
 ok pool-close
+ok pool-wait-fifo
+ok pool-close-waiter
 ok cluster-route
 ok cluster-moved
 ok cluster-ask

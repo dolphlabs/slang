@@ -45,10 +45,17 @@ fn accept_one(lfd: i32) -> i32 {
 }
 
 fn srv_send(fd: i32, b: bytes) {
-    let sr = net.send_until(fd, b, soon());
-    guard let n = sr else let e = err_of(sr) {
-        die("server send: " + e);
-        panic("unreachable");
+    let off = 0;
+    while off < len(b) {
+        let sr = net.send_until(fd, b[off..], soon());
+        guard let n = sr else let e = err_of(sr) {
+            die("server send: " + e);
+            panic("unreachable");
+        }
+        if n <= 0 {
+            die("server send made no progress");
+        }
+        off = off + n;
     }
 }
 
@@ -346,7 +353,7 @@ fn test_corrupt() {
     }
     let c = dial(url_for(port));
     let r = redis.do(c, [to_bytes("PING")], soon());
-    guard let reply = r else let e = err_of(r) {
+    guard let _reply = r else let e = err_of(r) {
         if !strings.contains(e, "unknown reply type") {
             die("wrong corrupt error: " + e);
         }
@@ -494,6 +501,95 @@ fn test_server_error() {
     die("WRONGTYPE accepted");
 }
 
+fn srv_custom_reply(lfd: i32, pc: chan[int], reply: bytes) {
+    chan_send(pc, port_of(lfd));
+    let fd = accept_one(lfd);
+    let cmd = read_cmd(fd);
+    check_cmd(cmd, "PING");
+    srv_send(fd, reply);
+    net.close(fd);
+    net.close(lfd);
+}
+
+fn test_reply_limits() {
+    let lfd = listen();
+    let pc: chan[int] = make_chan(1);
+    spawn srv_custom_reply(lfd, pc, b"+123456\r\n");
+    guard let port = chan_recv(pc) else {
+        die("no limit-test port");
+        panic("unreachable");
+    }
+    let cr = redis.parse_url(url_for(port));
+    guard let cfg = cr else let e = err_of(cr) {
+        die("parse limit config: " + e);
+        panic("unreachable");
+    }
+    cfg.max_reply_bytes = 8;
+    let cc = redis.connect_config(cfg, soon());
+    guard let c = cc else let e = err_of(cc) {
+        die("connect with reply limit: " + e);
+        panic("unreachable");
+    }
+    let r = redis.do(c, [to_bytes("PING")], soon());
+    guard let _reply = r else let e = err_of(r) {
+        if !strings.contains(e, "byte limit") || redis.usable(c) {
+            die("wrong byte-limit behavior: " + e);
+        }
+        redis.close(c);
+        println("ok reply-byte-limit");
+        return;
+    }
+    redis.close(c);
+    die("reply byte limit was not enforced");
+}
+
+fn srv_large_reply(lfd: i32, pc: chan[int]) {
+    chan_send(pc, port_of(lfd));
+    let fd = accept_one(lfd);
+    let cmd = read_cmd(fd);
+    check_cmd(cmd, "GET");
+    let size = 1048576;
+    srv_send(fd, b"$1048576\r\n");
+    let block = to_bytes(strings.repeat("x", 8192));
+    let sent = 0;
+    while sent < size {
+        srv_send(fd, block);
+        sent = sent + len(block);
+    }
+    srv_send(fd, b"\r\n");
+    net.close(fd);
+    net.close(lfd);
+}
+
+fn test_large_fragmented_reply() {
+    let lfd = listen();
+    let pc: chan[int] = make_chan(1);
+    spawn srv_large_reply(lfd, pc);
+    guard let port = chan_recv(pc) else {
+        die("no large-reply port");
+        panic("unreachable");
+    }
+    let c = dial(url_for(port));
+    let r = redis.do(c, [to_bytes("GET"), to_bytes("large")], soon());
+    guard let reply = r else let e = err_of(r) {
+        redis.close(c);
+        die("large fragmented reply: " + e);
+        panic("unreachable");
+    }
+    guard let body = reply.bulk else {
+        redis.close(c);
+        die("large fragmented reply missing body");
+        panic("unreachable");
+    }
+    if len(body) != 1048576 || body[0] != 120 ||
+       body[len(body) - 1] != 120 {
+        redis.close(c);
+        die("large fragmented reply contents incorrect");
+    }
+    redis.close(c);
+    println("ok large-fragmented-reply");
+}
+
 test_ping();
 test_auth_select();
 test_auth_refused();
@@ -502,6 +598,8 @@ test_binary();
 test_corrupt();
 test_drop();
 test_server_error();
+test_reply_limits();
+test_large_fragmented_reply();
 
 // ---- scripted command coverage (phase 3) ------------------------------
 
@@ -897,6 +995,89 @@ test_set_zset();
 
 // ---- pool (phase 4) --------------------------------------------------------
 
+fn srv_pool_idle(lfd: i32, pc: chan[int]) {
+    chan_send(pc, port_of(lfd));
+    let fd = accept_one(lfd);
+    while true {
+        let r = net.recv_until(fd, 1,
+                               until_of(time.mono() + 100000000));
+        guard let b = r else let e = err_of(r) {
+            if strings.contains(e, "timeout") {
+                continue;
+            }
+            net.close(fd);
+            net.close(lfd);
+            return;
+        }
+        if len(b) == 0 {
+            break;
+        }
+        die("unexpected command on idle pool connection");
+    }
+    net.close(fd);
+    net.close(lfd);
+}
+
+fn pool_waiter(p: redis.Pool, id: int, started: chan[int],
+               results: chan[int]) {
+    chan_send(started, id);
+    let r = redis.acquire(p, soon());
+    guard let c = r else {
+        chan_send(results, 0 - id);
+        return;
+    }
+    chan_send(results, id);
+    redis.release(p, c);
+}
+
+fn test_pool_wait_fifo() {
+    let lfd = listen();
+    let pc: chan[int] = make_chan(1);
+    spawn srv_pool_idle(lfd, pc);
+    guard let port = chan_recv(pc) else {
+        die("no pool-wait port");
+        panic("unreachable");
+    }
+    let pr = redis.new_pool(url_for(port), 1);
+    guard let p = pr else let e = err_of(pr) {
+        die("new pool: " + e);
+        panic("unreachable");
+    }
+    let ar = redis.acquire(p, soon());
+    guard let held = ar else let e = err_of(ar) {
+        die("initial pool acquire: " + e);
+        panic("unreachable");
+    }
+    let started: chan[int] = make_chan(2);
+    let results: chan[int] = make_chan(2);
+    spawn pool_waiter(p, 1, started, results);
+    guard let s1 = chan_recv(started) else {
+        die("first pool waiter did not start");
+        panic("unreachable");
+    }
+    time.sleep(20000000);
+    spawn pool_waiter(p, 2, started, results);
+    guard let s2 = chan_recv(started) else {
+        die("second pool waiter did not start");
+        panic("unreachable");
+    }
+    time.sleep(20000000);
+    redis.release(p, held);
+    guard let first = chan_recv(results) else {
+        die("first pool waiter did not wake");
+        panic("unreachable");
+    }
+    guard let second = chan_recv(results) else {
+        die("second pool waiter did not wake");
+        panic("unreachable");
+    }
+    if s1 != 1 || s2 != 2 || first != 1 || second != 2 {
+        die("pool waiters were not served FIFO");
+    }
+    redis.pool_close(p);
+    println("ok pool-wait-fifo");
+}
+
 fn test_pool_reuse() {
     let steps: [Step] = [
         Step { want: "PING", reply: b"+PONG\r\n" },
@@ -1060,17 +1241,57 @@ fn test_pool_close() {
         if !strings.contains(e, "closed") {
             die("wrong closed error: " + e);
         }
-        println("ok pool-close");
+    println("ok pool-close");
         return;
     }
     redis.release(p, c2);
     die("acquire on closed pool succeeded");
 }
 
+fn test_pool_close_waiter() {
+    let lfd = listen();
+    let pc: chan[int] = make_chan(1);
+    spawn srv_pool_idle(lfd, pc);
+    guard let port = chan_recv(pc) else {
+        die("no pool-close port");
+        panic("unreachable");
+    }
+    let pr = redis.new_pool(url_for(port), 1);
+    guard let p = pr else let e = err_of(pr) {
+        die("new pool: " + e);
+        panic("unreachable");
+    }
+    let ar = redis.acquire(p, soon());
+    guard let held = ar else let e = err_of(ar) {
+        die("initial pool acquire: " + e);
+        panic("unreachable");
+    }
+    let started: chan[int] = make_chan(1);
+    let results: chan[int] = make_chan(1);
+    spawn pool_waiter(p, 3, started, results);
+    guard let id = chan_recv(started) else {
+        die("pool waiter did not start");
+        panic("unreachable");
+    }
+    time.sleep(20000000);
+    redis.pool_close(p);
+    guard let outcome = chan_recv(results) else {
+        die("pool close did not wake waiter");
+        panic("unreachable");
+    }
+    if id != 3 || outcome != 0 - 3 {
+        die("pool close granted a connection instead of closing waiter");
+    }
+    redis.release(p, held);
+    println("ok pool-close-waiter");
+}
+
 test_pool_reuse();
 test_pool_exhaust();
 test_pool_discard();
 test_pool_close();
+test_pool_wait_fifo();
+test_pool_close_waiter();
 
 // ---- cluster (phase 5) -------------------------------------------------
 // Two scripted nodes: A owns slots 0..8191, B owns 8192..16383.
@@ -1105,7 +1326,9 @@ fn cluster_cfg() -> redis.Config {
                           password: "", db: 0, sslmode: "disable",
                           ca_path: "", tls_ctx: nullptr, pool_size: 2,
                           connect_timeout: 5000000000,
-                          io_timeout: 5000000000 };
+                          io_timeout: 5000000000,
+                          max_reply_bytes: 268435456,
+                          max_reply_values: 1000000 };
 }
 
 fn open_addrs() -> [int] {

@@ -53,6 +53,13 @@ instruction or timing win and was discarded; profile and measurements are in
 `fix-gc.md` §2.8 and `JSON_DECODE_PERF_PRD.md`. No speculative parser change
 is queued until another profile supports a candidate.
 
+Redis driver hardening (2026-10-09): configurable per-reply byte and
+aggregate-element limits, linear fragmented-reply accumulation, and FIFO
+pool wakeups are implemented and measured locally; raw values are in
+`todo.md`. The 8 MiB fragmented-reply probe improved about 29x, while 20,000
+small PINGs showed no measurable change. The API-server Redis path still
+needs a route-level measurement before making a production throughput claim.
+
 ## 1. User-defined generics, then zokor
 
 - [x] **Why.** zokor, the backend framework (`dolphlabs/zokor`, empty), has to
