@@ -377,6 +377,18 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
   in CI's postgres job (dev: 115, fails). Container, ABBA x6: point c64
   16,144 -> 17,361 req/s, c512 14,057 -> 15,908; mix +4-5%. Originally:
   one builder per query message *(fix-gc 3.3)*.
+  **PostgreSQL API route follow-up (2026-10-09):** cached statements now
+  request binary results for int2/int4/int8, bool and bytea, and text getters
+  convert directly from the retained row buffer. The JSON encoder reserves
+  dynamic list/map output space from item counts. Clean-seed ABBA samples
+  show lower server CPU per request in the fixed-rate orders workload (about
+  2% at 64 clients and 4% at 512), but the candidate remains 16% behind Go
+  on orders at 512 clients and misses the 98% target on point and insert
+  routes. Full per-route values and profile notes are in
+  `bench/PG-ROUTE-PERFORMANCE-PRD.md`; do not claim parity. The endpoint did
+  not expose pool-wait counters, and current perf samples do not isolate the
+  remaining high-concurrency gap. Continue by instrumenting pool wait in the
+  benchmark and repeating ABBA before considering a scheduler redesign.
 - [ ] **R6. Frame the request head once** *(fix-gc 2.2)*.
   **Measured 2026-10-07, not built: no benchmark parses a head twice.**
   `http.read` re-frames the head on every attempt after a partial recv,

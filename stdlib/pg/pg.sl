@@ -28,8 +28,11 @@ import "encoding";
 // the url, default 256; 0 turns it off), so Postgres parses and plans it
 // once instead of on every call.
 //
-// WHAT THIS DOES NOT DO, deliberately: no binary result format, no Kerberos/GSSAPI, no SCRAM channel binding
-// (SCRAM-SHA-256-PLUS), no COPY in binary format.
+// A cached statement's later runs request binary results for int2/int4/int8,
+// bool and bytea; getters preserve the same values and text representation.
+//
+// WHAT THIS DOES NOT DO, deliberately: no binary floats or binary COPY,
+// no Kerberos/GSSAPI, no SCRAM channel binding (SCRAM-SHA-256-PLUS).
 
 // ---- limits ----------------------------------------------------------
 //
@@ -148,6 +151,9 @@ gc struct Stmt {
     name: str,
     used: int,
     name_b: bytes,      // name as bytes, written into every Bind
+    // Result formats to request after the first run has learned the
+    // column types. Empty means the first run still uses text.
+    fmts: bytes,
     // The result's columns, from the RowDescription of the run that
     // prepared it: a cached statement's later runs skip Describe and
     // take a copy of these. described: they are known.
@@ -176,6 +182,7 @@ pub gc struct Arg {
 pub gc struct Rows {
     columns: [str],
     types: [int],     // type OIDs, one per column
+    binary_results: bool, // RowDescription says a column is binary
     count: int,       // number of rows
     // Rows affected, from the command tag: INSERT/UPDATE/DELETE/MERGE
     // report the rows they touched, SELECT the rows it returned.
@@ -1216,7 +1223,8 @@ fn empty_rows() -> Rows {
     let chunks: [bytes] = [];
     let locs: [int] = [];
     let lens: [int] = [];
-    return Rows { columns: cols, types: types, count: 0, affected: 0,
+    return Rows { columns: cols, types: types, binary_results: false, count: 0,
+                  affected: 0,
                   tag: "", chunks: chunks, locs: locs, lens: lens,
                   chunk_gen: -1, stream: 0, done: true };
 }
@@ -1364,15 +1372,25 @@ fn step(c: Conn, rows: Rows, stop: int, synced: bool, deadline: until)
             let n = get16(cur);
             let cols: [str] = [];
             let types: [int] = [];
+            let has_binary = false;
             let k = 0;
             while k < n && !cur.bad {
                 push(cols, get_cstr(cur));
                 get32(cur);         // table OID
                 get16(cur);         // column attribute number
-                push(types, get32(cur));
+                let oid = get32(cur);
+                push(types, oid);
                 get16(cur);         // type size
                 get32(cur);         // type modifier
-                get16(cur);         // format code
+                let fmt = get16(cur);
+                if fmt != 0 && (fmt != 1 || !binary_ok(oid)) {
+                    return err("protocol error: unexpected format " +
+                               to_str(fmt) + " for a " + type_name(oid) +
+                               " column");
+                }
+                if fmt == 1 {
+                    has_binary = true;
+                }
                 k = k + 1;
             }
             if cur.bad {
@@ -1382,6 +1400,7 @@ fn step(c: Conn, rows: Rows, stop: int, synced: bool, deadline: until)
             // last; only the final one is kept.
             rows.columns = cols;
             rows.types = types;
+            rows.binary_results = has_binary;
             clear_cells(rows);
             if (stop & STOP_DESC) != 0 {
                 return ok(EV_DESC);
@@ -1661,7 +1680,7 @@ fn w_closes(c: Conn) {
 // The same messages extended_named builds, into c.w. describe: ask for
 // the RowDescription (a cached statement already has its columns).
 fn w_query(c: Conn, name_b: bytes, parse: bool, describe: bool, sql: str,
-           args: [Arg]) {
+           args: [Arg], fmts: bytes) {
     if parse {
         let pa = w_open(c, 80);                 // Parse
         w_bytes(c, name_b);
@@ -1691,7 +1710,7 @@ fn w_query(c: Conn, name_b: bytes, parse: bool, describe: bool, sql: str,
             w_bytes(c, a.data);
         }
     }
-    w_be16(c, 0);                               //   text results
+    w_bytes(c, fmts);                           //   result formats
     w_close(c, at);
     if describe {
         let d = w_open(c, 68);                  // Describe portal
@@ -1723,6 +1742,36 @@ fn copy_ints(xs: [int]) -> [int] {
     return out;
 }
 
+// These types have a compact binary representation that can be read
+// without allocating and parsing their text form. Keep other types in
+// text so getters retain their existing behavior.
+fn binary_ok(oid: int) -> bool {
+    return oid == 20 || oid == 21 || oid == 23 || oid == 16 || oid == 17;
+}
+
+// One format code per result column when at least one supported type can
+// be sent in binary; otherwise an empty format list means all text.
+fn result_formats(types: [int]) -> bytes {
+    let any = false;
+    for t in types {
+        if binary_ok(t) {
+            any = true;
+        }
+    }
+    if !any {
+        return be16(0);
+    }
+    let out = be16(len(types));
+    for t in types {
+        if binary_ok(t) {
+            out = out + be16(1);
+        } else {
+            out = out + be16(0);
+        }
+    }
+    return out;
+}
+
 // One extended-protocol exchange for query(). With the cache on, sql runs
 // as a named statement, prepared in the same round trip on first use.
 fn query_once(c: Conn, sql: str, args: [Arg], before: int, deadline: until)
@@ -1736,7 +1785,8 @@ fn query_once(c: Conn, sql: str, args: [Arg], before: int, deadline: until)
         c.stmt_tick = c.stmt_tick + 1;
         let no_cols: [str] = [];
         let no_types: [int] = [];
-        let st = Stmt { n: 0, name: "", used: 0, name_b: b"", cols: no_cols,
+        let st = Stmt { n: 0, name: "", used: 0, name_b: b"", fmts: b"",
+                        cols: no_cols,
                         types: no_types, described: false };
         if has(c.stmts, sql) {
             st = c.stmts[sql];
@@ -1756,6 +1806,7 @@ fn query_once(c: Conn, sql: str, args: [Arg], before: int, deadline: until)
             }
             let name = stmt_name(c.stmt_next);
             st = Stmt { n: c.stmt_next, name: name, used: 0, name_b: to_bytes(name),
+                        fmts: b"",
                         cols: no_cols, types: no_types, described: false };
             c.stmt_next = c.stmt_next + 1;
             c.stmts[sql] = st;
@@ -1769,8 +1820,13 @@ fn query_once(c: Conn, sql: str, args: [Arg], before: int, deadline: until)
             // which drops the statement and retries (query).
             rows.columns = copy_strs(st.cols);
             rows.types = copy_ints(st.types);
+            rows.binary_results = len(st.fmts) > 2;
         }
-        w_query(c, st.name_b, fresh, describe, sql, args);
+        let fmts = st.fmts;
+        if len(fmts) == 0 {
+            fmts = be16(0);                     // first run: text results
+        }
+        w_query(c, st.name_b, fresh, describe, sql, args, fmts);
         let br = begin(c, c.w[0..c.wn], deadline);
         guard let b = br else let e = err_of(br) {
             if fresh {
@@ -1790,9 +1846,12 @@ fn query_once(c: Conn, sql: str, args: [Arg], before: int, deadline: until)
             st.types = copy_ints(rows.types);
             st.described = true;
         }
+        if len(st.fmts) == 0 && len(rows.types) > 0 {
+            st.fmts = result_formats(rows.types);
+        }
         return ok(rows);
     }
-    w_query(c, b"", true, true, sql, args);
+    w_query(c, b"", true, true, sql, args, be16(0));
     let br = begin(c, c.w[0..c.wn], deadline);
     guard let b = br else let e = err_of(br) {
         return err(fail(c, e, before));
@@ -2414,15 +2473,34 @@ pub fn is_null(rows: Rows, r: int, c: int) -> bool {
 // than inventing a 0 or "": a NULL the code did not expect is a bug to
 // see, and a nullable column is checked with is_null first.
 fn cell(rows: Rows, r: int, c: int, want: str) -> bytes {
-    let i = cell_index(rows, r, c);
-    let n = rows.lens[i];
+    let ci = cell_index(rows, r, c);
+    let n = rows.lens[ci];
     if n == -1 {
         panic("column '" + rows.columns[c] + "' is NULL in row " + to_str(r) +
               "; check pg.is_null before pg.get_" + want);
     }
-    let loc = rows.locs[i];
+    let loc = rows.locs[ci];
     let off = loc & 4294967295;
     return rows.chunks[loc >> 32][off..off + n];
+}
+
+// A text value needs one owned str, but does not need a temporary bytes
+// slice first. Keep the same row/column/NULL checks as cell().
+fn cell_text(rows: Rows, r: int, c: int) -> str {
+    let ci = cell_index(rows, r, c);
+    let n = rows.lens[ci];
+    if n == -1 {
+        panic("column '" + rows.columns[c] + "' is NULL in row " + to_str(r) +
+              "; check pg.is_null before pg.get_text");
+    }
+    let loc = rows.locs[ci];
+    let off = loc & 4294967295;
+    let chunk_index = loc >> 32;
+    let chunk = rows.chunks[chunk_index];
+    if off < 0 || off > len(chunk) || n < 0 || n > len(chunk) - off {
+        panic("column '" + rows.columns[c] + "': invalid text cell bounds");
+    }
+    return strings.from_bytes(chunk, off, off + n);
 }
 
 fn wrong_type(rows: Rows, c: int, want: str) {
@@ -2433,7 +2511,77 @@ fn wrong_type(rows: Rows, c: int, want: str) {
 // Any column, in Postgres's text form: numbers, dates, uuid and json
 // all arrive this way.
 pub fn get_text(rows: Rows, r: int, c: int) -> str {
-    return to_str(cell(rows, r, c, "text"));
+    cell_index(rows, r, c);
+    let oid = rows.types[c];
+    if !rows.binary_results || !binary_ok(oid) {
+        return cell_text(rows, r, c);
+    }
+    if oid == 16 {
+        if bin_bool(rows, r, c) {
+            return "t";
+        }
+        return "f";
+    }
+    if oid == 17 {
+        return "\\x" + encoding.hex_encode(cell(rows, r, c, "text"));
+    }
+    return to_str(bin_int(rows, r, c));
+}
+
+// PostgreSQL binary integers are big-endian two's-complement values of
+// the width declared by their OID. Refuse malformed widths before reading.
+fn bin_int(rows: Rows, r: int, c: int) -> int {
+    let oid = rows.types[c];
+    let width = 8;
+    if oid == 21 {
+        width = 2;
+    } else if oid == 23 {
+        width = 4;
+    }
+    let ci = cell_index(rows, r, c);
+    let n = rows.lens[ci];
+    if n == -1 {
+        cell(rows, r, c, "int");
+    }
+    if n != width {
+        panic("column '" + rows.columns[c] + "': binary " + type_name(oid) +
+              " cell of " + to_str(n) + " bytes");
+    }
+    let loc = rows.locs[ci];
+    let off = loc & 4294967295;
+    let chunk = rows.chunks[loc >> 32];
+    if off < 0 || off > len(chunk) || n < 0 || n > len(chunk) - off {
+        panic("column '" + rows.columns[c] + "': invalid binary cell bounds");
+    }
+    if width == 2 {
+        return rd16(chunk, off);
+    }
+    if width == 4 {
+        return rd32(chunk, off);
+    }
+    let value = 0;
+    let j = 0;
+    while j < 8 {
+        value = (value << 8) | chunk[off + j];
+        j = j + 1;
+    }
+    return value;
+}
+
+fn bin_bool(rows: Rows, r: int, c: int) -> bool {
+    let i = cell_index(rows, r, c);
+    let n = rows.lens[i];
+    if n == -1 {
+        cell(rows, r, c, "bool");
+    }
+    let loc = rows.locs[i];
+    let off = loc & 4294967295;
+    let chunk = rows.chunks[loc >> 32];
+    if off < 0 || off > len(chunk) || n < 0 || n > len(chunk) - off ||
+       n != 1 || chunk[off] > 1 {
+        panic("column '" + rows.columns[c] + "': malformed binary bool");
+    }
+    return chunk[off] == 1;
 }
 
 // int2, int4, int8 and oid.
@@ -2446,6 +2594,9 @@ pub fn get_int(rows: Rows, r: int, c: int) -> int {
     // still panics, naming the column.
     if oid != 20 && oid != 21 && oid != 23 && oid != 26 && oid != 1700 {
         wrong_type(rows, c, "int");
+    }
+    if rows.binary_results && binary_ok(oid) {
+        return bin_int(rows, r, c);
     }
     let s = to_str(cell(rows, r, c, "int"));
     let ir = to_int(s);
@@ -2468,6 +2619,9 @@ pub fn get_float(rows: Rows, r: int, c: int) -> float {
        oid != 23 {
         wrong_type(rows, c, "float");
     }
+    if rows.binary_results && binary_ok(oid) && oid != 16 && oid != 17 {
+        return bin_int(rows, r, c) as float;
+    }
     let s = to_str(cell(rows, r, c, "float"));
     if s == "NaN" || s == "Infinity" || s == "-Infinity" {
         panic("column '" + rows.columns[c] + "' is " + s +
@@ -2485,6 +2639,9 @@ pub fn get_bool(rows: Rows, r: int, c: int) -> bool {
     if rows.types[c] != 16 {
         wrong_type(rows, c, "bool");
     }
+    if rows.binary_results {
+        return bin_bool(rows, r, c);
+    }
     return to_str(cell(rows, r, c, "bool")) == "t";
 }
 
@@ -2495,6 +2652,9 @@ pub fn get_bytes(rows: Rows, r: int, c: int) -> bytes {
         wrong_type(rows, c, "bytes");
     }
     let raw = cell(rows, r, c, "bytes");
+    if rows.binary_results {
+        return raw;
+    }
     if len(raw) < 2 || raw[0] != 92 || raw[1] != 120 {     // "\x"
         panic("column '" + rows.columns[c] + "': bytea is not in hex " +
               "format; set bytea_output = 'hex'");
