@@ -135,6 +135,34 @@ fn test_decode_bad_shapes() {
     must_be_corrupt(deep, "nesting");
 }
 
+fn must_be_limited(buf: bytes, max_bytes: int, max_values: int,
+                   want: str) {
+    let r = decode_at_limited(buf, 0, max_bytes, max_values);
+    guard let o = r else let e = err_of(r) {
+        if strings.contains(e, want) {
+            return;
+        }
+        panic("wrong reply-limit error: " + e);
+    }
+    guard let _ = o else {
+        panic("over-limit reply was incomplete");
+    }
+    panic("over-limit reply decoded");
+}
+
+fn test_decode_aggregate_limits() {
+    must_be_limited(b"*1\r\n*1\r\n:1\r\n", 64, 1, "value limit");
+    must_be_limited(b"$5\r\nhello\r\n", 8, 10, "byte limit");
+    let exact = decode_at_limited(b"+OK\r\n", 0, 5, 1);
+    guard let o = exact else let e = err_of(exact) {
+        panic("reply at exact byte limit rejected: " + e);
+    }
+    guard let d = o else {
+        panic("reply at exact byte limit incomplete");
+    }
+    assert(d.reply.text == "OK", "exact byte limit accepted");
+}
+
 fn test_int_edges() {
     let mx = must_decode(b":9223372036854775807\r\n");
     assert(mx.num == 9223372036854775807, "int max");
@@ -205,6 +233,8 @@ fn test_parse_url_full() {
     assert(c.port == 6380, "port");
     assert(c.db == 2, "db");
     assert(c.sslmode == "disable", "sslmode");
+    assert(c.max_reply_bytes == 268435456, "default reply byte limit");
+    assert(c.max_reply_values == 1000000, "default reply value limit");
 }
 
 fn test_parse_url_defaults() {
@@ -213,6 +243,12 @@ fn test_parse_url_defaults() {
     assert(c.port == 6379, "default port");
     assert(c.db == 0, "default db");
     assert(c.password == "", "no password");
+    c.max_reply_bytes = 536870912;
+    c.max_reply_values = 2000000;
+    let p = new_pool_config(c, 1);
+    guard let _pool = p else let e = err_of(p) {
+        panic("larger explicit reply limits rejected: " + e);
+    }
     let t = cfg_of("rediss://db.example.com");
     assert(t.sslmode == "require", "rediss forces tls");
     assert(t.port == 6379, "tls default port");

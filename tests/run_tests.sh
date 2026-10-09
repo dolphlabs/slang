@@ -545,7 +545,7 @@ for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc
             literal_expect pending_sibling_type \
             gc_nested_literal gc_nursery_barrier gc_nursery_promotion \
             spawn_isolation select maps json json_parity json_utf8 json_decode_budget \
-            bytes json_deep_nesting http_read_wire http_client_pool http2_flood \
+            bytes json_deep_nesting redis http_read_wire http_client_pool http2_flood \
             gc_promotion_budget \
             value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks; do
     [ -f "tests/$name/main.sl" ] || continue
