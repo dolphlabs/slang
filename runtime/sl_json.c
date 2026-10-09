@@ -1,4 +1,5 @@
 #include <stdarg.h>
+#include <limits.h>
 
 /* ---- json: generic parse tree ---- */
 
@@ -1320,6 +1321,19 @@ static void sl_json_sb_reserve(sl_json_sb *sb, long long need) {
         sb->data = (char *)sl_gc_realloc(sb->data, (size_t)(sb->len + need + 1));
         sb->cap = sb->len + need + 1;
     }
+}
+
+/* Lists and maps have a dynamic length that the static encode hint cannot
+ * see. Reserve an item skeleton up front; variable-length strings can still
+ * grow the builder normally. Refuse the estimate if its arithmetic would
+ * overflow, leaving the existing growth path to handle the output. */
+static void sl_json_sb_reserve_items(sl_json_sb *sb, long long count,
+                                    long long per_item) {
+    if (count <= 0 || per_item <= 0 || sb->len < 0 || sb->len >= LLONG_MAX)
+        return;
+    if (count > (LLONG_MAX - sb->len - 1) / per_item)
+        return;
+    sl_json_sb_reserve(sb, count * per_item);
 }
 
 static void sl_json_sb_append_n(sl_json_sb *sb, const char *s, long long n) {

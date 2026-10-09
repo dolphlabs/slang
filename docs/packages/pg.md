@@ -284,15 +284,18 @@ first use costs no extra round trip (the Parse travels with the
 query). Each connection keeps its 256 most recently used statements;
 `statement_cache_capacity=N` in the url changes that, and `0` turns it
 off, which a pooler that cannot carry named statements between server
-connections needs (PgBouncer before 1.21 in transaction mode). If the
-server drops a statement or a schema change alters what it returns,
+connections needs (PgBouncer before 1.21 in transaction mode). On cached
+runs, `int2`, `int4`, `int8`, `bool`, and `bytea` results use PostgreSQL's
+binary format; the `pg.get_*` functions preserve their existing values and
+text representation. Other result types stay in text format. If the server
+drops a statement or a schema change alters what it returns,
 the driver prepares it again and retries the query once, outside a
 transaction; inside one, the error is returned, because the
 transaction is already aborted. `DEALLOCATE ALL` and `DISCARD ALL` are
 noticed and empty the cache. `exec` and `stream` are not prepared.
 
-**Not supported:** binary result format,
-building or parsing binary COPY data, Kerberos/GSSAPI, SCRAM channel
+**Not supported:** binary floats, building or parsing binary COPY data,
+Kerberos/GSSAPI, SCRAM channel
 binding (`SCRAM-SHA-256-PLUS`), multiple hosts in one url, and SASLprep
 normalisation of non-ASCII passwords (an ASCII password is unaffected).
 
