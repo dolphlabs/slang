@@ -23,6 +23,11 @@ run it on a host that passes the benchmark host check before selecting a
 driver or scheduler change. Do not change arena sizes without evidence, since
 Slang RSS was already below Go at c512.
 
+A focused Go/Slang runner for the four PostgreSQL routes is prepared in
+[`bench/PG-TARGETED-BENCHMARK-PRD.md`](bench/PG-TARGETED-BENCHMARK-PRD.md).
+It uses the requested 4-vCPU/16-GB host, a 1M-user/20M-order seed, and ABBA
+sampling. It is ready for the new VPS; no measurements have been taken there.
+
 Runtime bugs and their investigations live in `todo.md`.
 
 Landed since that clear-out (PRs #157, #159–#162, #164, #165, #168, #169,

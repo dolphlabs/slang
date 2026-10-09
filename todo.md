@@ -17,7 +17,9 @@ as a clean before/after baseline. Opt-in route timing headers and a `latgen`
 collector are now in the PG route PRD; next run them with per-query
 `pg_stat_statements` deltas and a matching CPU profile. The report's mutex
 contention explanation is not yet measured. No buffer-size change is
-supported by the current RSS measurements.
+supported by the current RSS measurements. A focused two-language, four-route
+runner is prepared in `bench/PG-TARGETED-BENCHMARK-PRD.md`; it still needs its
+first run on the new 4-vCPU VPS, so there are no new measurements yet.
 
 # Plan: beat Go on REST, then gRPC and GraphQL
 
