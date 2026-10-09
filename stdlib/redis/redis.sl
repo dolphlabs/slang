@@ -25,6 +25,7 @@ import "encoding";
 import "net";
 import "time";
 import "crypto";
+import "builder";
 
 // ---- limits ----------------------------------------------------------
 
@@ -33,6 +34,12 @@ let MAX_BULK = 268435456;    // one bulk string, 256 MiB (server max is 512)
 let MAX_ARRAY = 1000000;     // elements of one array reply
 let MAX_DEPTH = 32;          // nested arrays (decode recurses)
 let MAX_SLOTS = 16384;       // cluster hash slots, 0..16383
+let POOL_REAP = 2000000;     // deadline checks for blocked acquires
+
+let GOT_CONN = 1;
+let GOT_DIAL = 2;
+let GOT_TIMEOUT = 3;
+let GOT_CLOSED = 4;
 
 // ---- reply model -----------------------------------------------------
 
@@ -122,6 +129,316 @@ gc struct parse_res {
     reply: Reply,
     next: int,
     err: str,
+}
+
+// Incremental frame scanner. It validates reply framing without building a
+// flat copy of an incomplete response. `parse_value` still constructs the
+// public Reply tree once the whole frame has arrived.
+gc struct RespScan {
+    mode: int,             // prefix, line, bulk body, CR, LF
+    typ: int,
+    depth: int,
+    remaining: [int],
+    elements: int,
+    bytes_seen: int,
+    max_bytes: int,
+    max_values: int,
+    line_len: int,
+    line_cr: bool,
+    number: int,           // accumulated negatively to represent INT64_MIN
+    number_neg: bool,
+    number_digits: bool,
+    number_error: int,
+    body_left: int,
+    done: bool,
+    err: str,
+}
+
+fn new_resp_scan(max_bytes: int, max_values: int) -> RespScan {
+    let stack: [int] = [];
+    let i = 0;
+    while i <= MAX_DEPTH {
+        push(stack, 0);
+        i = i + 1;
+    }
+    return RespScan { mode: 0, typ: 0, depth: 0, remaining: stack,
+                      elements: 0, bytes_seen: 0, max_bytes: max_bytes,
+                      max_values: max_values, line_len: 0, line_cr: false,
+                      number: 0, number_neg: false, number_digits: false,
+                      number_error: 0, body_left: 0, done: false, err: "" };
+}
+
+fn reset_resp_scan(s: RespScan, max_bytes: int, max_values: int) {
+    s.mode = 0;
+    s.typ = 0;
+    s.depth = 0;
+    s.elements = 0;
+    s.bytes_seen = 0;
+    s.max_bytes = max_bytes;
+    s.max_values = max_values;
+    s.line_len = 0;
+    s.line_cr = false;
+    s.number = 0;
+    s.number_neg = false;
+    s.number_digits = false;
+    s.number_error = 0;
+    s.body_left = 0;
+    s.done = false;
+    s.err = "";
+}
+
+fn scan_fail(s: RespScan, msg: str) -> int {
+    s.err = msg;
+    return -1;
+}
+
+fn scan_number_reason(s: RespScan) -> str {
+    if s.number_error == 2 {
+        return "integer out of range";
+    }
+    if s.number_error == 1 {
+        return "not a base-10 integer";
+    }
+    if !s.number_digits && s.number_neg {
+        return "bare minus sign";
+    }
+    return "empty integer";
+}
+
+fn scan_bad_number(s: RespScan) -> int {
+    let reason = scan_number_reason(s);
+    if s.typ == 58 {
+        return scan_fail(s, "bad integer: " + reason);
+    }
+    if s.typ == 36 {
+        return scan_fail(s, "bad bulk length: " + reason);
+    }
+    return scan_fail(s, "bad array length: " + reason);
+}
+
+// Called when one value's prefix arrives. A parent's slot is reserved here,
+// but the array cannot finish until the child itself is complete.
+fn scan_value_start(s: RespScan) -> bool {
+    if s.depth > MAX_DEPTH {
+        scan_fail(s, "array nesting exceeds limit");
+        return false;
+    }
+    if s.depth > 0 {
+        let top = s.depth - 1;
+        if s.remaining[top] <= 0 {
+            scan_fail(s, "array has more values than declared");
+            return false;
+        }
+        s.remaining[top] = s.remaining[top] - 1;
+    }
+    return true;
+}
+
+fn scan_value_done(s: RespScan) -> int {
+    while s.depth > 0 && s.remaining[s.depth - 1] == 0 {
+        s.depth = s.depth - 1;
+    }
+    if s.depth == 0 {
+        s.done = true;
+        return 1;
+    }
+    return 0;
+}
+
+fn scan_line_complete(s: RespScan) -> int {
+    if s.typ == 43 || s.typ == 45 {
+        s.mode = 0;
+        return scan_value_done(s);
+    }
+    if !s.number_digits {
+        return scan_bad_number(s);
+    }
+    if s.number_error != 0 {
+        return scan_bad_number(s);
+    }
+    let n = s.number;
+    if s.typ == 58 {
+        s.mode = 0;
+        return scan_value_done(s);
+    }
+    if s.typ == 36 {
+        if n == -1 {
+            s.mode = 0;
+            return scan_value_done(s);
+        }
+        if n < -1 {
+            return scan_fail(s, "negative bulk length");
+        }
+        if n > MAX_BULK {
+            return scan_fail(s, "bulk string exceeds limit");
+        }
+        if n + 2 > s.max_bytes - s.bytes_seen {
+            return scan_fail(s, "Redis reply exceeds configured byte limit");
+        }
+        s.body_left = n;
+        if n == 0 {
+            s.mode = 3;
+        } else {
+            s.mode = 2;
+        }
+        return 0;
+    }
+    if n == -1 {
+        s.mode = 0;
+        return scan_value_done(s);
+    }
+    if n < -1 {
+        return scan_fail(s, "negative array length");
+    }
+    if n > MAX_ARRAY {
+        return scan_fail(s, "array exceeds element limit");
+    }
+    if n > s.max_values - s.elements {
+        return scan_fail(s, "Redis reply exceeds configured value limit");
+    }
+    s.elements = s.elements + n;
+    if n == 0 {
+        s.mode = 0;
+        return scan_value_done(s);
+    }
+    if s.depth >= len(s.remaining) {
+        return scan_fail(s, "array nesting exceeds limit");
+    }
+    s.remaining[s.depth] = n;
+    s.depth = s.depth + 1;
+    s.mode = 0;
+    return 0;
+}
+
+fn scan_number_byte(s: RespScan, b: int) {
+    if s.line_len == 0 && b == 45 {
+        s.number_neg = true;
+        return;
+    }
+    if b < 48 || b > 57 {
+        s.number_error = 1;
+        return;
+    }
+    s.number_digits = true;
+    let d = b - 48;
+    if s.number_neg {
+        if s.number < -922337203685477580 ||
+           (s.number == -922337203685477580 && d > 8) {
+            s.number_error = 2;
+        } else if s.number_error == 0 {
+            s.number = s.number * 10 - d;
+        }
+    } else {
+        if s.number > 922337203685477580 ||
+           (s.number == 922337203685477580 && d > 7) {
+            s.number_error = 2;
+        } else if s.number_error == 0 {
+            s.number = s.number * 10 + d;
+        }
+    }
+}
+
+// Feeds a byte span and returns -1 for corrupt/over-limit, 0 incomplete,
+// or 1 once exactly one complete frame has been recognized.
+fn scan_resp(s: RespScan, b: bytes, from: int, end: int) -> int {
+    let i = from;
+    while i < end && !s.done {
+        if s.mode == 2 {
+            let take = s.body_left;
+            let available = end - i;
+            if take > available {
+                take = available;
+            }
+            if take > s.max_bytes - s.bytes_seen {
+                return scan_fail(s, "Redis reply exceeds configured byte limit");
+            }
+            s.body_left = s.body_left - take;
+            s.bytes_seen = s.bytes_seen + take;
+            i = i + take;
+            if s.body_left == 0 {
+                s.mode = 3;
+            }
+            continue;
+        }
+        if s.bytes_seen >= s.max_bytes {
+            return scan_fail(s, "Redis reply exceeds configured byte limit");
+        }
+        let ch = b[i];
+        s.bytes_seen = s.bytes_seen + 1;
+        if s.mode == 3 {
+            if ch != 13 {
+                return scan_fail(s, "bulk string missing trailing CRLF");
+            }
+            s.mode = 4;
+            i = i + 1;
+            continue;
+        }
+        if s.mode == 4 {
+            if ch != 10 {
+                return scan_fail(s, "bulk string missing trailing CRLF");
+            }
+            s.mode = 0;
+            let done = scan_value_done(s);
+            if done != 0 {
+                return done;
+            }
+            i = i + 1;
+            continue;
+        }
+        if s.mode == 1 {
+            if s.line_cr {
+                if ch != 10 {
+                    return scan_fail(s, "bad control line");
+                }
+                s.line_cr = false;
+                let done = scan_line_complete(s);
+                if done != 0 {
+                    return done;
+                }
+                i = i + 1;
+                continue;
+            }
+            if ch == 13 {
+                s.line_cr = true;
+                i = i + 1;
+                continue;
+            }
+            if ch == 10 {
+                return scan_fail(s, "bad control line");
+            }
+            if s.line_len >= MAX_LINE {
+                return scan_fail(s, "bad control line");
+            }
+            if s.typ == 58 || s.typ == 36 || s.typ == 42 {
+                scan_number_byte(s, ch);
+            }
+            s.line_len = s.line_len + 1;
+            i = i + 1;
+            continue;
+        }
+        if s.depth > MAX_DEPTH {
+            return scan_fail(s, "array nesting exceeds limit");
+        }
+        if ch != 43 && ch != 45 && ch != 58 && ch != 36 && ch != 42 {
+            return scan_fail(s, "unknown reply type");
+        }
+        if !scan_value_start(s) {
+            return -1;
+        }
+        s.typ = ch;
+        s.line_len = 0;
+        s.line_cr = false;
+        s.number = 0;
+        s.number_neg = false;
+        s.number_digits = false;
+        s.number_error = 0;
+        s.mode = 1;
+        i = i + 1;
+    }
+    if s.done {
+        return 1;
+    }
+    return 0;
 }
 
 fn blank_reply() -> Reply {
@@ -359,8 +676,25 @@ pub fn decode(buf: bytes) -> result[opt[Decoded], str] {
 // slicing, so no per-recv copy of everything already buffered.
 // consumed counts from `pos`.
 pub fn decode_at(buf: bytes, pos: int) -> result[opt[Decoded], str] {
+    return decode_at_limited(buf, pos, 268435456, 1000000);
+}
+
+fn decode_at_limited(buf: bytes, pos: int, max_bytes: int,
+                     max_values: int) -> result[opt[Decoded], str] {
     if pos < 0 || pos > len(buf) {
         return err("decode position out of range");
+    }
+    if max_bytes < 1 || max_values < 1 {
+        return err("Redis reply limits must be positive");
+    }
+    let scan = new_resp_scan(max_bytes, max_values);
+    let framed = scan_resp(scan, buf, pos, len(buf));
+    if framed < 0 {
+        return err(scan.err);
+    }
+    if framed == 0 {
+        let nothing: opt[Decoded] = none;
+        return ok(nothing);
     }
     let r = parse_value(buf, pos, 0);
     if !r.done {
@@ -451,12 +785,19 @@ pub gc struct Config {
     // breaks the connection rather than stalling the task forever.
     connect_timeout: int,
     io_timeout: int,
+    // Maximum wire bytes and aggregate array elements per reply. Defaults:
+    // 256 MiB and 1,000,000 elements; explicit larger positive limits allow
+    // larger reads but increase per-connection memory exposure.
+    max_reply_bytes: int,
+    max_reply_values: int,
 }
 
 fn default_config(host: str, port: int) -> Config {
     return Config { host: host, port: port, username: "", password: "",
                     db: 0, sslmode: "disable", ca_path: "", pool_size: 8,
                     connect_timeout: 5000000000, io_timeout: 30000000,
+                    max_reply_bytes: 268435456,
+                    max_reply_values: 1000000,
                     tls_ctx: nullptr };
 }
 
@@ -629,6 +970,8 @@ pub gc struct Conn {
     // 0 nothing, 1 MULTI (transactions never return to the pool).
     in_pool: bool,
     mode: int,
+    scan: RespScan,
+    reader: builder.Bytes,
 }
 
 fn tr_send(c: Conn, b: bytes, u: until) -> result[i32, str] {
@@ -674,43 +1017,70 @@ fn send_all(c: Conn, b: bytes, deadline: until) -> result[bool, str] {
     return ok(true);
 }
 
-// Add what a recv brought to what is not yet consumed. Only the
-// unconsumed tail is copied, and replies are consumed as they complete,
-// so between replies there is none and the new bytes become the buffer
-// as they are. Appending to the whole buffer and dropping the consumed
-// part only past 1MB copied up to a megabyte per reply: ~470KB per
-// command on loopback.
-fn take(c: Conn, b: bytes) {
-    if c.pos >= len(c.buf) {
-        c.buf = b;
-    } else {
-        c.buf = c.buf[c.pos..] + b;
-    }
-    c.pos = 0;
-}
-
 fn read_reply(c: Conn, deadline: until) -> result[Reply, str] {
+    reset_resp_scan(c.scan, c.cfg.max_reply_bytes,
+                    c.cfg.max_reply_values);
+    c.reader.reset();
+    let buffering = false;
+    if c.pos < len(c.buf) {
+        let framed = scan_resp(c.scan, c.buf, c.pos, len(c.buf));
+        if framed < 0 {
+            mark_broken(c, c.scan.err);
+            return err(c.scan.err);
+        }
+        if framed == 1 {
+            let parsed = parse_value(c.buf, c.pos, 0);
+            if !parsed.done || parsed.err != "" {
+                mark_broken(c, "invalid RESP frame after validation");
+                return err("invalid RESP frame after validation");
+            }
+            c.pos = parsed.next;
+            return ok(parsed.reply);
+        }
+        c.reader.write(c.buf[c.pos..]);
+        buffering = true;
+    } else {
+        c.buf = b"";
+        c.pos = 0;
+    }
     while true {
-        let r = decode_at(c.buf, c.pos);
-        guard let o = r else let e = err_of(r) {
-            mark_broken(c, e);
-            return err(e);
+        let rr = tr_recv(c, 65536, deadline);
+        guard let b = rr else let e = err_of(rr) {
+            mark_broken(c, "recv: " + e);
+            c.reader.reset();
+            return err("recv: " + e);
         }
-        guard let d = o else {
-            let rr = tr_recv(c, 65536, deadline);
-            guard let b = rr else let e = err_of(rr) {
-                mark_broken(c, "recv: " + e);
-                return err("recv: " + e);
-            }
-            if len(b) == 0 {
-                mark_broken(c, "server closed the connection");
-                return err("server closed the connection");
-            }
-            take(c, b);
-            continue;
+        if len(b) == 0 {
+            mark_broken(c, "server closed the connection");
+            c.reader.reset();
+            return err("server closed the connection");
         }
-        c.pos = c.pos + d.consumed;
-        return ok(d.reply);
+        let framed = scan_resp(c.scan, b, 0, len(b));
+        if framed < 0 {
+            mark_broken(c, c.scan.err);
+            c.reader.reset();
+            return err(c.scan.err);
+        }
+        if framed == 1 {
+            if buffering {
+                c.reader.write(b);
+                c.buf = c.reader.finish();
+                c.reader.reset();
+                c.pos = 0;
+            } else {
+                c.buf = b;
+                c.pos = 0;
+            }
+            let parsed = parse_value(c.buf, c.pos, 0);
+            if !parsed.done || parsed.err != "" {
+                mark_broken(c, "invalid RESP frame after validation");
+                return err("invalid RESP frame after validation");
+            }
+            c.pos = parsed.next;
+            return ok(parsed.reply);
+        }
+        c.reader.write(b);
+        buffering = true;
     }
 }
 
@@ -769,6 +1139,9 @@ pub fn connect_config(cfg: Config, deadline: until) -> result[Conn, str] {
     if cfg.port <= 0 || cfg.port > 65535 {
         return err("port out of range");
     }
+    if cfg.max_reply_bytes < 1 || cfg.max_reply_values < 1 {
+        return err("Redis reply limits must be positive");
+    }
     let dr = net.dial_until(cfg.host, cfg.port, deadline);
     guard let fd = dr else let e = err_of(dr) {
         return err("dial: " + e);
@@ -791,7 +1164,10 @@ pub fn connect_config(cfg: Config, deadline: until) -> result[Conn, str] {
     }
     let c = Conn { cfg: cfg, fd: fd, ssl: ssl, buf: b"", pos: 0,
                    lock: make_mutex(), broken: false, why: "",
-                   closed: false, in_pool: false, mode: 0 };
+                   closed: false, in_pool: false, mode: 0,
+                   scan: new_resp_scan(cfg.max_reply_bytes,
+                                       cfg.max_reply_values),
+                   reader: builder.new_bytes() };
     if len(cfg.password) > 0 {
         let args: [bytes] = [to_bytes("AUTH"), to_bytes(cfg.password)];
         if len(cfg.username) > 0 {
@@ -1762,15 +2138,31 @@ fn scan_run(c: Conn, args: [bytes],
 // to release; acquire is for call sequences that must share one
 // connection.
 
+gc struct Idle {
+    c: Conn,
+    next: opt[Idle],
+}
+
+gc struct Waiter {
+    wake: chan[int],
+    deadline: until,
+    got: int,
+    c: opt[Conn],
+    next: opt[Waiter],
+}
+
 pub gc struct Pool {
     cfg: Config,
     // Connections open at once, idle and checked out together. A task
     // that needs one when all are out waits for a release.
     max_open: int,
-    idle: [Conn],
+    idle: opt[Idle],
     open: int,
     lock: mutex,
     closed: bool,
+    wait_head: opt[Waiter],
+    wait_tail: opt[Waiter],
+    reaping: bool,
 }
 
 // Parses the url; connects nothing until the first acquire.
@@ -1788,15 +2180,182 @@ pub fn new_pool_config(cfg: Config, max_open: int) -> result[Pool, str] {
     if max_open < 1 {
         return err("max_open must be at least 1");
     }
-    let idle: [Conn] = [];
+    if cfg.max_reply_bytes < 1 || cfg.max_reply_values < 1 {
+        return err("Redis reply limits must be positive");
+    }
+    let idle: opt[Idle] = none;
+    let no_waiter: opt[Waiter] = none;
     return ok(Pool { cfg: cfg, max_open: max_open, idle: idle, open: 0,
-                     lock: make_mutex(), closed: false });
+                     lock: make_mutex(), closed: false,
+                     wait_head: no_waiter, wait_tail: no_waiter,
+                     reaping: false });
 }
 
 fn close_locked(c: Conn) {
     if !c.closed {
         c.closed = true;
         tr_close(c);
+    }
+}
+
+// Queue nodes and their channels are allocated outside p.lock. Each
+// waiter receives one grant, so its one-slot channel cannot block a grantor.
+fn new_waiter(deadline: until) -> Waiter {
+    let no_conn: opt[Conn] = none;
+    let no_next: opt[Waiter] = none;
+    return Waiter { wake: make_chan(1), deadline: deadline, got: 0,
+                    c: no_conn, next: no_next };
+}
+
+fn queue_waiter(p: Pool, w: Waiter) {
+    let no_next: opt[Waiter] = none;
+    w.next = no_next;
+    guard let tail = p.wait_tail else {
+        p.wait_head = some(w);
+        p.wait_tail = some(w);
+        return;
+    }
+    tail.next = some(w);
+    p.wait_tail = some(w);
+}
+
+fn has_waiter(w: opt[Waiter]) -> bool {
+    guard let _w = w else {
+        return false;
+    }
+    return true;
+}
+
+fn pop_waiter(p: Pool) -> opt[Waiter] {
+    guard let w = p.wait_head else {
+        return none;
+    }
+    let next = w.next;
+    p.wait_head = next;
+    let no_next: opt[Waiter] = none;
+    w.next = no_next;
+    if !has_waiter(next) {
+        p.wait_tail = no_next;
+    }
+    return some(w);
+}
+
+fn grant(w: Waiter, got: int) {
+    w.got = got;
+    chan_send(w.wake, 1);
+}
+
+fn pop_live_waiter(p: Pool) -> opt[Waiter] {
+    while true {
+        guard let w = pop_waiter(p) else {
+            return none;
+        }
+        if until_hit(w.deadline) {
+            grant(w, GOT_TIMEOUT);
+            continue;
+        }
+        return some(w);
+    }
+}
+
+fn pass_slot(p: Pool) {
+    if p.closed || p.open >= p.max_open {
+        return;
+    }
+    guard let w = pop_live_waiter(p) else {
+        return;
+    }
+    p.open = p.open + 1;
+    grant(w, GOT_DIAL);
+}
+
+// Called with p.lock held. Idle nodes are linked so taking one does not
+// grow or slice a GC array while the mutex is held.
+fn take_idle_locked(p: Pool) -> opt[Conn] {
+    while true {
+        guard let it = p.idle else {
+            return none;
+        }
+        p.idle = it.next;
+        let c = it.c;
+        let alive = net.idle_alive(c.fd);
+        if c.ssl != nullptr {
+            alive = net.tls_idle_alive(c.ssl);
+        }
+        if !usable(c) || !alive || len(c.buf) > c.pos {
+            p.open = p.open - 1;
+            close_locked(c);
+            continue;
+        }
+        c.in_pool = true;
+        return some(c);
+    }
+}
+
+// A slot already counted in p.open is being dialled by this caller.
+fn pool_dial(p: Pool, deadline: until) -> result[Conn, str] {
+    let cr = connect_config(p.cfg, deadline);
+    guard let c = cr else let e = err_of(cr) {
+        mutex_lock(p.lock);
+        p.open = p.open - 1;
+        pass_slot(p);
+        mutex_unlock(p.lock);
+        return err(e);
+    }
+    c.in_pool = true;
+    mutex_lock(p.lock);
+    if p.closed {
+        p.open = p.open - 1;
+        mutex_unlock(p.lock);
+        close(c);
+        return err("pool is closed");
+    }
+    mutex_unlock(p.lock);
+    return ok(c);
+}
+
+// One reaper checks queued deadlines. Acquires park until granted, closed,
+// or timed out rather than polling for a release.
+fn reap_waiters(p: Pool) {
+    while true {
+        time.sleep(POOL_REAP);
+        mutex_lock(p.lock);
+        let prev: opt[Waiter] = none;
+        let cur = p.wait_head;
+        while true {
+            guard let w = cur else {
+                break;
+            }
+            let next = w.next;
+            if until_hit(w.deadline) {
+                guard let before = prev else {
+                    p.wait_head = next;
+                    if !has_waiter(next) {
+                        p.wait_tail = none;
+                    }
+                    w.next = none;
+                    grant(w, GOT_TIMEOUT);
+                    cur = next;
+                    continue;
+                }
+                before.next = next;
+                if !has_waiter(next) {
+                    p.wait_tail = some(before);
+                }
+                w.next = none;
+                grant(w, GOT_TIMEOUT);
+                cur = next;
+                continue;
+            }
+            prev = some(w);
+            cur = next;
+        }
+        if !has_waiter(p.wait_head) {
+            p.reaping = false;
+            mutex_unlock(p.lock);
+            return;
+        }
+        mutex_unlock(p.lock);
     }
 }
 
@@ -1808,45 +2367,66 @@ pub fn acquire(p: Pool, deadline: until) -> result[Conn, str] {
             mutex_unlock(p.lock);
             return err("pool is closed");
         }
-        while len(p.idle) > 0 {
-            let c = p.idle[len(p.idle) - 1];
-            p.idle = p.idle[..len(p.idle) - 1];
-            // Probed before reuse: the server closes idle sessions
-            // on timers of its own, and a command written onto a
-            // closed connection fails in a way that cannot be told
-            // from the command itself failing. Leftover bytes mean a
-            // previous exchange desynced: never reuse that either.
-            let alive = net.idle_alive(c.fd);
-            if c.ssl != nullptr {
-                alive = net.tls_idle_alive(c.ssl);
-            }
-            if !usable(c) || !alive || len(c.buf) > c.pos {
-                p.open = p.open - 1;
-                close_locked(c);
-                continue;
-            }
-            c.in_pool = true;
-            mutex_unlock(p.lock);
-            return ok(c);
-        }
-        if p.open < p.max_open {
-            p.open = p.open + 1;
-            mutex_unlock(p.lock);
-            let cr = connect_config(p.cfg, deadline);
-            guard let c = cr else let e = err_of(cr) {
-                mutex_lock(p.lock);
-                p.open = p.open - 1;
+        let ir = take_idle_locked(p);
+        guard let c = ir else {
+            if p.open < p.max_open {
+                p.open = p.open + 1;
                 mutex_unlock(p.lock);
-                return err(e);
+                return pool_dial(p, deadline);
             }
-            c.in_pool = true;
-            return ok(c);
+            mutex_unlock(p.lock);
+            if until_hit(deadline) {
+                return err("pool: timeout waiting for a connection");
+            }
+
+            // Allocate away from the lock, then recheck state before adding
+            // the waiter so a concurrent release cannot be lost.
+            let w = new_waiter(deadline);
+            mutex_lock(p.lock);
+            if p.closed {
+                mutex_unlock(p.lock);
+                return err("pool is closed");
+            }
+            let ir2 = take_idle_locked(p);
+            guard let c2 = ir2 else {
+                if p.open < p.max_open {
+                    p.open = p.open + 1;
+                    mutex_unlock(p.lock);
+                    return pool_dial(p, deadline);
+                }
+                queue_waiter(p, w);
+                let start_reaper = !p.reaping;
+                if start_reaper {
+                    p.reaping = true;
+                }
+                mutex_unlock(p.lock);
+                if start_reaper {
+                    spawn reap_waiters(p);
+                }
+                chan_recv(w.wake);
+                let got = w.got;
+                let copt = w.c;
+                let no_conn: opt[Conn] = none;
+                w.c = no_conn;
+                if got == GOT_CONN {
+                    guard let granted = copt else {
+                        return err("pool: granted no connection");
+                    }
+                    return ok(granted);
+                }
+                if got == GOT_DIAL {
+                    return pool_dial(p, deadline);
+                }
+                if got == GOT_CLOSED {
+                    return err("pool is closed");
+                }
+                return err("pool: timeout waiting for a connection");
+            }
+            mutex_unlock(p.lock);
+            return ok(c2);
         }
         mutex_unlock(p.lock);
-        if until_hit(deadline) {
-            return err("pool: timeout waiting for a connection");
-        }
-        time.sleep(2000000);
+        return ok(c);
     }
 }
 
@@ -1863,11 +2443,39 @@ pub fn release(p: Pool, c: Conn) {
     c.in_pool = false;
     if p.closed || !reusable {
         p.open = p.open - 1;
+        if !p.closed {
+            pass_slot(p);
+        }
         mutex_unlock(p.lock);
         close_locked(c);
         return;
     }
-    push(p.idle, c);
+    guard let w = pop_live_waiter(p) else {
+        mutex_unlock(p.lock);
+        let no_next: opt[Idle] = none;
+        let node = Idle { c: c, next: no_next };
+        mutex_lock(p.lock);
+        if p.closed {
+            p.open = p.open - 1;
+            mutex_unlock(p.lock);
+            close(c);
+            return;
+        }
+        guard let waiting = pop_live_waiter(p) else {
+            node.next = p.idle;
+            p.idle = some(node);
+            mutex_unlock(p.lock);
+            return;
+        }
+        c.in_pool = true;
+        waiting.c = some(c);
+        grant(waiting, GOT_CONN);
+        mutex_unlock(p.lock);
+        return;
+    }
+    c.in_pool = true;
+    w.c = some(c);
+    grant(w, GOT_CONN);
     mutex_unlock(p.lock);
 }
 
@@ -1891,11 +2499,20 @@ pub fn pool_do(p: Pool, args: [bytes],
 pub fn pool_close(p: Pool) {
     mutex_lock(p.lock);
     p.closed = true;
-    for c in p.idle {
-        close_locked(c);
+    while true {
+        guard let it = p.idle else {
+            break;
+        }
+        p.idle = it.next;
+        p.open = p.open - 1;
+        close_locked(it.c);
     }
-    let empty: [Conn] = [];
-    p.idle = empty;
+    while true {
+        guard let w = pop_waiter(p) else {
+            break;
+        }
+        grant(w, GOT_CLOSED);
+    }
     mutex_unlock(p.lock);
 }
 
@@ -1962,7 +2579,9 @@ fn node_config(base: Config, host: str, port: int) -> Config {
                     ca_path: base.ca_path, tls_ctx: base.tls_ctx,
                     pool_size: base.pool_size,
                     connect_timeout: base.connect_timeout,
-                    io_timeout: base.io_timeout };
+                    io_timeout: base.io_timeout,
+                    max_reply_bytes: base.max_reply_bytes,
+                    max_reply_values: base.max_reply_values };
 }
 
 pub gc struct Cluster {

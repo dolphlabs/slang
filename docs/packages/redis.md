@@ -82,6 +82,13 @@ A reply is a `redis.Reply`: `kind` is one of `REPLY_SIMPLE`,
 payload in `text`, `num`, `bulk` (`none` for nil) or `items` (empty
 with `is_nil` for a nil array).
 
+Replies default to a 256 MiB wire-byte limit and 1,000,000 aggregate array
+elements, including nested arrays. `Config.max_reply_bytes` and
+`Config.max_reply_values` can be raised for larger legitimate reads; each must
+remain positive, and the existing per-bulk, per-array, line, and nesting
+limits still apply. An over-limit reply fails and makes its connection
+unusable.
+
 **Not supported yet:** consumer groups, RESP3, replica reads.
 
 ## API
