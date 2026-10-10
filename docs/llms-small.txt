@@ -308,7 +308,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - byteutil: find, find_wire, has_prefix, has_suffix, trim, split
 - compress: gzip, gzip_level, deflate, deflate_raw, gunzip, inflate, inflate_raw
 - crypto: sha256, hmac_sha256, rand, sha1, md5, pbkdf2_sha256
-- encoding: hex_encode, hex_decode, base64_encode, base64_decode, base64url_encode, base64url_decode, url_encode, url_decode, form_encode, form_decode, query_get, query_keys
+- encoding: hex_encode, hex_decode, base64_encode, base64_decode, base64url_encode, base64url_decode, url_encode, url_decode, form_encode, form_decode, query_get, query_keys (+2 more)
 - flags: new, Set.add_str, Set.add_int, Set.add_float, Set.add_bool, Set.add_list, Set.require, Set.set_takes, Set.stop_at_first_arg, Set.parse, Set.parse_or_exit, Set.usage (+8 more)
 - fs: open, create, read, pread, write, close, mkdir
 - http: header, header_or, headers, request, parse_frame, method_is, method_is_at, path_is, path_is_at, path_param, path_param_at, frame_method (+37 more)

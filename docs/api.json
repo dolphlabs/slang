@@ -475,6 +475,24 @@
           "ret": "[str]",
           "tls": false,
           "sig": "encoding.query_keys(str) -> [str]"
+        },
+        {
+          "name": "float64_to_le",
+          "params": [
+            "float"
+          ],
+          "ret": "bytes",
+          "tls": false,
+          "sig": "encoding.float64_to_le(float) -> bytes"
+        },
+        {
+          "name": "float64_from_le",
+          "params": [
+            "bytes"
+          ],
+          "ret": "result[float,str]",
+          "tls": false,
+          "sig": "encoding.float64_from_le(bytes) -> result[float,str]"
         }
       ]
     },

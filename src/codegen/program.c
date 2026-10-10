@@ -874,6 +874,7 @@ void force_native_result_types(CG *cg) {
            opt-vs-result rule. */
         res_cname(cg, "bytes", "str");
         res_cname(cg, "str", "str");
+        res_cname(cg, "float", "str");
         opt_cname(cg, "str");
     }
     if (want_pkg(cg, "compress")) {

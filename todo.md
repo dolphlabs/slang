@@ -3884,3 +3884,15 @@ and its 2,000-decode ABBA timing overlapped the noisy run spread; the prototype
 was discarded. Hardware perf counters were unavailable in the LinuxKit
 kernel. No source change or API speed claim is warranted. Full profile and
 raw values: `JSON_DECODE_PERF_PRD.md`; plan entry: `fix-gc.md` §2.8.
+
+## Implemented: lossless binary64 little-endian encoding helpers
+
+Added `encoding.float64_to_le` and `encoding.float64_from_le` for the
+standalone `mongo` package's BSON Double codec. The helpers preserve exact
+IEEE-754 bits using `memcpy` and byte shifts, are host-endian independent, and
+reject input lengths other than eight bytes. Tests cover representative
+finite values, signed zero, infinity, NaN payload preservation, and malformed
+lengths. The full `make test` suite passed on 2026-10-10, including the
+16-KB-nursery minor verifier (0 misses), and the generated-C warning sweep
+reported zero warnings. The BSON driver is in a separate repository; its
+package tests and codec benchmark are tracked there.
