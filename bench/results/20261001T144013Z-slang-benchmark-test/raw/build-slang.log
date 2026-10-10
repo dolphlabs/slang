@@ -1,0 +1,149 @@
+src/main.c: In function ‘cmd_new’:
+src/main.c:106:45: warning: ‘%s’ directive output may be truncated writing up to 4095 bytes into a region of size 256 [-Wformat-truncation=]
+  106 |         snprintf(namebuf, sizeof(namebuf), "%s", slash ? slash + 1 : dir);
+      |                                             ^~
+In file included from /usr/include/stdio.h:980,
+                 from src/common.h:5,
+                 from src/main.c:16:
+In function ‘snprintf’,
+    inlined from ‘cmd_new’ at src/main.c:106:9:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:54:10: note: ‘__builtin_snprintf’ output between 1 and 4096 bytes into a destination of size 256
+   54 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   55 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   56 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+src/main.c: In function ‘cmd_test’:
+src/main.c:476:46: warning: ‘__builtin___snprintf_chk’ output may be truncated before the last format character [-Wformat-truncation=]
+  476 |         snprintf(fpath, sizeof(fpath), "%s/%s", treal, files[i]);
+      |                                              ^
+In function ‘snprintf’,
+    inlined from ‘cmd_test’ at src/main.c:476:9:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:54:10: note: ‘__builtin___snprintf_chk’ output 2 or more bytes (assuming 4097) into a destination of size 4096
+   54 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   55 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   56 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+src/main.c: In function ‘cmd_test’:
+src/main.c:590:49: warning: ‘/main.sl’ directive output may be truncated writing 8 bytes into a region of size between 1 and 4096 [-Wformat-truncation=]
+  590 |     snprintf(runner_src, sizeof(runner_src), "%s/main.sl", tmpreal);
+      |                                                 ^~~~~~~~
+In function ‘snprintf’,
+    inlined from ‘cmd_test’ at src/main.c:590:5:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:54:10: note: ‘__builtin___snprintf_chk’ output between 9 and 4104 bytes into a destination of size 4096
+   54 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   55 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   56 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+src/main.c: In function ‘cmd_test’:
+src/main.c:591:49: warning: ‘/runner’ directive output may be truncated writing 7 bytes into a region of size between 1 and 4096 [-Wformat-truncation=]
+  591 |     snprintf(runner_bin, sizeof(runner_bin), "%s/runner", tmpreal);
+      |                                                 ^~~~~~~
+In function ‘snprintf’,
+    inlined from ‘cmd_test’ at src/main.c:591:5:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:54:10: note: ‘__builtin___snprintf_chk’ output between 8 and 4103 bytes into a destination of size 4096
+   54 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   55 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   56 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+src/main.c: In function ‘cmd_test’:
+src/main.c:599:35: warning: ‘.gen.c’ directive output may be truncated writing 6 bytes into a region of size between 1 and 4096 [-Wformat-truncation=]
+  599 |     snprintf(gen, sizeof(gen), "%s.gen.c", runner_bin);
+      |                                   ^~~~~~
+In function ‘snprintf’,
+    inlined from ‘cmd_test’ at src/main.c:599:5:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:54:10: note: ‘__builtin___snprintf_chk’ output between 7 and 4102 bytes into a destination of size 4096
+   54 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   55 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   56 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+src/lexer.c: In function ‘token_type_name’:
+src/lexer.c:574:31: warning: trigraph ??' converted to ^ [-Wtrigraphs]
+  574 |     case T_QQ:       return "'??'";
+      |                                
+src/codegen/infer.c: In function ‘infer_type’:
+src/codegen/infer.c:1071:9: warning: this statement may fall through [-Wimplicit-fallthrough=]
+ 1071 |         cg_error(e->line, "unknown unary operator '%s'", op);
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/codegen/infer.c:1073:5: note: here
+ 1073 |     case EX_BINARY:
+      |     ^~~~
+src/codegen/infer.c:1153:9: warning: this statement may fall through [-Wimplicit-fallthrough=]
+ 1153 |         cg_error(e->line, "cannot index a value of type %s", bt);
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/codegen/infer.c:1155:5: note: here
+ 1155 |     case EX_SLICE: {
+      |     ^~~~
+src/codegen/infer.c:1175:9: warning: this statement may fall through [-Wimplicit-fallthrough=]
+ 1175 |         cg_error(e->line, "cannot slice a value of type %s", bt);
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/codegen/infer.c:1177:5: note: here
+ 1177 |     case EX_LIST: {
+      |     ^~~~
+src/codegen/infer.c:1265:9: warning: this statement may fall through [-Wimplicit-fallthrough=]
+ 1265 |         cg_error(e->line, "struct '%s' has no field '%s'%s", sd->canonical,
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 1266 |                  e->as.field.name, suggest_field(sd, e->as.field.name));
+      |                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/codegen/infer.c:1268:5: note: here
+ 1268 |     case EX_STRUCTLIT: {
+      |     ^~~~
+src/codegen/expr.c: In function ‘lit_at_width’:
+src/codegen/expr.c:203:31: warning: unused parameter ‘cg’ [-Wunused-parameter]
+  203 | static char *lit_at_width(CG *cg, Expr *operand, const char *t, char *code) {
+      |                           ~~~~^~
+/root/slang/bench/.build/slang/http.gen.c: In function 'sl_reactor_timer_nudge':
+/root/slang/bench/.build/slang/http.gen.c:8081:11: warning: ignoring return value of 'write' declared with attribute 'warn_unused_result' [-Wunused-result]
+ 8081 |     (void)write(sl_reactor_timer_efd, &one, sizeof(one));
+      |           ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/root/slang/bench/.build/slang/http.gen.c: In function 'sl_dns_thread':
+/root/slang/bench/.build/slang/http.gen.c:8354:19: warning: ignoring return value of 'write' declared with attribute 'warn_unused_result' [-Wunused-result]
+ 8354 |             (void)write(wake_wr, &x, 1);
+      |                   ^~~~~~~~~~~~~~~~~~~~~
+/root/slang/bench/.build/slang/http.gen.c: In function 'sl_reactor_thread':
+/root/slang/bench/.build/slang/http.gen.c:8255:23: warning: ignoring return value of 'read' declared with attribute 'warn_unused_result' [-Wunused-result]
+ 8255 |                 (void)read(sl_reactor_timer_efd, &tx, sizeof(tx));
+      |                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/root/slang/bench/.build/slang/http.gen.c:8262:23: warning: ignoring return value of 'read' declared with attribute 'warn_unused_result' [-Wunused-result]
+ 8262 |                 (void)read(sl_reactor_efd, &x, sizeof(x));
+      |                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/root/slang/bench/.build/slang/http.gen.c: In function 'sl_net_shutdown_nudge':
+/root/slang/bench/.build/slang/http.gen.c:8303:11: warning: ignoring return value of 'write' declared with attribute 'warn_unused_result' [-Wunused-result]
+ 8303 |     (void)write(sl_reactor_efd, &one, sizeof(one));
+      |           ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+compiled /root/slang/bench/http_opt/main.sl -> /root/slang/bench/.build/slang/http
+compiled /root/slang/stress_test/programs/concurrent_compute/main.sl -> /root/slang/bench/.build/slang/compute
+/root/slang/bench/.build/slang/api.gen.c: In function 'sl_reactor_timer_nudge':
+/root/slang/bench/.build/slang/api.gen.c:9242:11: warning: ignoring return value of 'write' declared with attribute 'warn_unused_result' [-Wunused-result]
+ 9242 |     (void)write(sl_reactor_timer_efd, &one, sizeof(one));
+      |           ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/root/slang/bench/.build/slang/api.gen.c: In function 'sl_dns_thread':
+/root/slang/bench/.build/slang/api.gen.c:9515:19: warning: ignoring return value of 'write' declared with attribute 'warn_unused_result' [-Wunused-result]
+ 9515 |             (void)write(wake_wr, &x, 1);
+      |                   ^~~~~~~~~~~~~~~~~~~~~
+/root/slang/bench/.build/slang/api.gen.c: In function 'sl_reactor_thread':
+/root/slang/bench/.build/slang/api.gen.c:9416:23: warning: ignoring return value of 'read' declared with attribute 'warn_unused_result' [-Wunused-result]
+ 9416 |                 (void)read(sl_reactor_timer_efd, &tx, sizeof(tx));
+      |                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/root/slang/bench/.build/slang/api.gen.c:9423:23: warning: ignoring return value of 'read' declared with attribute 'warn_unused_result' [-Wunused-result]
+ 9423 |                 (void)read(sl_reactor_efd, &x, sizeof(x));
+      |                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/root/slang/bench/.build/slang/api.gen.c: In function 'sl_net_shutdown_nudge':
+/root/slang/bench/.build/slang/api.gen.c:9464:11: warning: ignoring return value of 'write' declared with attribute 'warn_unused_result' [-Wunused-result]
+ 9464 |     (void)write(sl_reactor_efd, &one, sizeof(one));
+      |           ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+lto-wrapper: warning: using serial compilation of 6 LTRANS jobs
+lto-wrapper: note: see the '-flto' option documentation for more information
+compiled /root/slang/bench/suite/api/slang/main.sl -> /root/slang/bench/.build/slang/api
+lto-wrapper: warning: using serial compilation of 2 LTRANS jobs
+lto-wrapper: note: see the '-flto' option documentation for more information
+compiled /root/slang/bench/suite/batch/slang/main.sl -> /root/slang/bench/.build/slang/batch
