@@ -1513,8 +1513,10 @@ Three behaviours worth knowing:
 
 #### `encoding`
 
-Hex, base64, base64url, percent-encoding and query strings — the four
-ways arbitrary bytes travel through a channel that only carries text.
+Hex, base64, base64url, percent-encoding and query strings — the ways
+arbitrary bytes travel through a channel that only carries text. The
+package also converts binary64 floats to and from little-endian bytes for
+binary protocols such as BSON.
 
 ```slang
 import "encoding";
@@ -1524,6 +1526,7 @@ encoding.base64_encode(b"aladdin:opensesame");// HTTP Basic credentials
 encoding.base64url_encode(sig);               // a JWT segment: -_ alphabet, no padding
 encoding.url_encode("a b&c");                 // "a%20b%26c"
 encoding.form_encode("a b&c");                // "a+b%26c"
+encoding.float64_to_le(1.5);                   // exact IEEE-754 bytes, low byte first
 
 let q = "/search?q=hello+world&page=2";
 guard let term = encoding.query_get(q, "q") else { return; }   // "hello world"
@@ -1544,11 +1547,13 @@ encoding.query_keys(q);                                        // ["q", "page"]
 | `encoding.form_decode` | `(s: str) -> result[str, str]` |
 | `encoding.query_get` | `(url: str, key: str) -> opt[str]` |
 | `encoding.query_keys` | `(url: str) -> [str]` |
+| `encoding.float64_to_le` | `(value: float) -> bytes` |
+| `encoding.float64_from_le` | `(bytes: bytes) -> result[float, str]` |
 
 Like `regex`, `strings` and `os` — and unlike `crypto` and `sql` — this
 is pure computation, so importing it adds no link flag.
 
-Four things worth knowing:
+Five things worth knowing:
 
 - **Encoders are infallible; decoders are not.** Any byte string has a
   hex form, so `hex_encode` returns a bare `str`. Decoding takes input
@@ -1570,6 +1575,11 @@ Four things worth knowing:
   `hex_decode` and `base64_decode` return `bytes`, which carries an
   explicit length, so a zero byte there is ordinary data and round-trips
   exactly.
+
+- **Float bytes are exact and little-endian.** `float64_to_le` and
+  `float64_from_le` preserve the IEEE-754 binary64 bit pattern, including
+  signed zero and NaN payload bits. `float64_from_le` accepts exactly
+  eight bytes and returns an error for any other length.
 
 - **`query_get` is `opt`, and `query_keys` is a list.** A missing
   parameter is absent data, not bad data, so it is `opt[str]` — the
@@ -2049,7 +2059,7 @@ any signal-handling program.
 - [byteutil](packages/byteutil.md) -- source package, 6 public items
 - [compress](packages/compress.md) -- compiler-provided, 7 public items
 - [crypto](packages/crypto.md) -- compiler-provided, 6 public items
-- [encoding](packages/encoding.md) -- compiler-provided, 12 public items
+- [encoding](packages/encoding.md) -- compiler-provided, 14 public items
 - [flags](packages/flags.md) -- source package, 23 public items
 - [fs](packages/fs.md) -- compiler-provided, 7 public items
 - [http](packages/http.md) -- source package, 55 public items
