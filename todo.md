@@ -17,9 +17,20 @@ as a clean before/after baseline. Opt-in route timing headers and a `latgen`
 collector are now in the PG route PRD; next run them with per-query
 `pg_stat_statements` deltas and a matching CPU profile. The report's mutex
 contention explanation is not yet measured. No buffer-size change is
-supported by the current RSS measurements. A focused two-language, four-route
-runner is prepared in `bench/PG-TARGETED-BENCHMARK-PRD.md`; it still needs its
-first run on the new 4-vCPU VPS, so there are no new measurements yet.
+supported by the current RSS measurements. The focused four-route benchmark
+ran on a dedicated 4-vCPU/16-GB VPS with 1M users and 20M orders: 96 valid
+samples, 0 invalid. Median Slang throughput reached 70.9-85.8% of Go across
+all eight route/concurrency pairs; every pair misses the 98% goal. Median p99
+was worse for Slang in five pairs (up to 20.2% on insert c512) and better in
+three (up to 24.7% on orders c64). PostgreSQL execution medians were close to
+or below Go: 0.008 ms for point, 0.025-0.044 ms for reads in Slang vs
+0.028-0.046 ms in Go, and 0.084-0.086 ms for insert in Slang vs 0.130-0.273
+ms in Go. Slang used more API CPU (1.43-1.74 vs 1.20-1.53 cores) and had
+higher pool-acquisition p99 in all eight pairs; client query/decode/release
+p99 was generally comparable or lower. This points to pool waiting and Slang
+per-request CPU cost, not PostgreSQL execution alone. Next, profile pool
+acquisition and per-request CPU. Packet-level round trips and mutex contention
+remain unmeasured. Raw benchmark samples stay local.
 
 # Plan: beat Go on REST, then gRPC and GraphQL
 

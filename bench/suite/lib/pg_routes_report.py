@@ -149,7 +149,9 @@ def language_median(samples, section, key):
         if not sample.get("metrics", {}).get("valid"):
             continue
         data = sample.get("metrics", {}).get(section, {})
-        value = data.get(key)
+        value = data
+        for part in key.split("."):
+            value = value.get(part) if isinstance(value, dict) else None
         if value is not None:
             values.append(value)
     return median(values)
@@ -201,8 +203,9 @@ def report(run_dir, busy_limit, steal_limit):
             rss_s = median([x["metrics"]["api"]["peak_rss_kb"] / 1024 for x in s if x.get("metrics", {}).get("valid") and x.get("metrics", {}).get("api")])
             rss_g = median([x["metrics"]["api"]["peak_rss_kb"] / 1024 for x in g if x.get("metrics", {}).get("valid") and x.get("metrics", {}).get("api")])
             lines.append(f"| {route} | {clients} | {fmt(srps, 0)} / {fmt(grps, 0)} | {fmt(ratio, 1)}% | "
-                         f"{pairfmt('latgen', 'p99_ms')} | {pairfmt('pool_acquire', 'p99_us')} | "
-                         f"{pairfmt('client_query_row_decode_and_release', 'p99_us')} | {pairfmt('postgres', 'mean_exec_ms', 4)} | "
+                         f"{pairfmt('latgen', 'p99_ms')} | {pairfmt('latgen', 'pool_acquire.p99_us')} | "
+                         f"{pairfmt('latgen', 'client_query_row_decode_and_release.p99_us')} | "
+                         f"{pairfmt('postgres', 'mean_exec_ms', 4)} | "
                          f"{pairfmt('api', 'avg_cpu_cores')} | {fmt(rss_s, 1)} / {fmt(rss_g, 1)} | "
                          f"{valid_s}/{expected_per_language} / {valid_g}/{expected_per_language} | {gate} |")
     lines += ["", "## Raw samples", "", "Each sample directory retains the request latencies, server log, sampler outputs, "
