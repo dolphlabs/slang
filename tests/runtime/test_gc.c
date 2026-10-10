@@ -434,7 +434,78 @@ static int sl_gc_test_mark_slots(void) {
     return bad;
 }
 
+/* The adaptive nursery's policy is driven by measured time between minors.
+ * Test each branch with controlled samples here; end-to-end timing varies
+ * across machines and must not decide whether this policy test passes. */
+static int sl_gc_test_nursery_adapt(void) {
+    size_t base = SL_GC_NURSERY_BASE;
+    struct nursery_case {
+        const char *name;
+        size_t current;
+        size_t maximum;
+        int fixed;
+        long long previous_end;
+        long long start;
+        long long end;
+        size_t live;
+        size_t want;
+    } cases[] = {
+        {"growth", base, 4 * base, 0, 1000, 1150, 1200,
+         base / 4 + 1, 2 * base},
+        {"growth cap", 3 * base, 7 * base / 2, 0, 1000, 1150, 1200,
+         3 * base / 4 + 1, 7 * base / 2},
+        {"pause boundary", base, 4 * base, 0, 1000, 1140, 1160,
+         base / 4, base},
+        {"live boundary", base, 4 * base, 0, 1000, 1150, 1200,
+         base / 8, base},
+        {"hysteresis", 2 * base, 4 * base, 0, 1000, 1980, 2000,
+         base / 8, 2 * base},
+        {"shrink by pause", 4 * base, 4 * base, 0, 1000, 1990, 2000,
+         4 * base, 2 * base},
+        {"shrink by survival", 4 * base, 4 * base, 0, 1000, 1150, 1200,
+         base / 16, 2 * base},
+        {"base floor", base, 4 * base, 0, 1000, 1999, 2000,
+         0, base},
+        {"fixed nursery", 2 * base, 4 * base, 1, 1000, 1150, 1200,
+         base, 2 * base},
+        {"first sample", base, 4 * base, 0, 0, 1000, 1200,
+         base, base},
+    };
+    size_t saved_threshold = atomic_load_explicit(
+        &sl_gc_nursery_threshold, memory_order_relaxed);
+    size_t saved_maximum = sl_gc_nursery_max;
+    int saved_fixed = sl_gc_nursery_fixed;
+    long long saved_previous_end = sl_gc_minor_last_end_ns;
+    int bad = 0;
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        atomic_store_explicit(&sl_gc_nursery_threshold, cases[i].current,
+                              memory_order_relaxed);
+        sl_gc_nursery_max = cases[i].maximum;
+        sl_gc_nursery_fixed = cases[i].fixed;
+        sl_gc_minor_last_end_ns = cases[i].previous_end;
+        sl_gc_nursery_adapt(cases[i].start, cases[i].end, cases[i].live);
+        size_t got = atomic_load_explicit(&sl_gc_nursery_threshold,
+                                          memory_order_relaxed);
+        if (got != cases[i].want) {
+            fprintf(stderr,
+                    "nursery adaptation %s: got %zu bytes, expected %zu\n",
+                    cases[i].name, got, cases[i].want);
+            bad = 1;
+        }
+    }
+
+    atomic_store_explicit(&sl_gc_nursery_threshold, saved_threshold,
+                          memory_order_relaxed);
+    sl_gc_nursery_max = saved_maximum;
+    sl_gc_nursery_fixed = saved_fixed;
+    sl_gc_minor_last_end_ns = saved_previous_end;
+    return bad;
+}
+
 int main(void) {
+    if (sl_gc_test_nursery_adapt()) return 1;
+    puts("PASS nursery adaptation policy");
     if (sl_runtime_test_main()) return 1;
     if (sl_gc_test_inline_bytes()) return 1;
     if (sl_gc_test_pointer_free()) { fprintf(stderr, "pointer_free test FAILED\n"); return 1; }

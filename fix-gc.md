@@ -419,9 +419,13 @@ the point reads in flight with it.
   100/117 ms, 32/34 MB; 4 MB 1,851/1,801 req/s, p99 80/76 ms, 29/28 MB;
   8 and 16 MB no better. A fixed 4 MB costs the compute benchmark 7 ->
   12 MB for no speed, and pause share alone grew a tight loop of short
-  strings to 8 MB; the survival condition keeps both at 512 KB. Test:
-  "nursery adaptation" in `tests/run_tests.sh` (`gc_promotion_budget`
-  must grow, `gc_nursery_small` must not). ABBA against `dev`, quote
+  strings to 8 MB; the survival condition keeps both at 512 KB. The runtime
+  policy test in `tests/runtime/test_gc.c` exercises growth, hysteresis,
+  shrinking, the cap, and the base floor with controlled timing samples.
+  The end-to-end check in `tests/run_tests.sh` bounds the decode workload's
+  nursery and verifies that cheap minors stay small; the decode workload's
+  final size is not a portable assertion because growth depends on measured
+  pause share. ABBA against `dev`, quote
   server: 1,453 -> 1,848 req/s, p99 101 -> 78 ms, p99.9 146 -> 85 ms,
   CPU per request 3.36 -> 2.66 ms, RSS 37.5 -> 28.7 MB. Decode probe: 4
   workers 21% faster but 9 -> 15.5 MB (its nursery grows to 4 MB); 1
