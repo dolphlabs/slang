@@ -3907,3 +3907,14 @@ tests cover valid SRV/TXT packets, TXT chunks, root targets, malformed and
 truncated messages, and question/owner mismatches. `make test` passed on macOS
 including DNS preemption, GC stress, minor verification (0 missed), and the
 generated-C warning sweep (0 warnings). Native linux-arm64 CI remains pending.
+
+## 2026-10-10: release gate nursery-growth assertion
+
+The macOS x86_64 v0.2.2 release run failed because `gc_promotion_budget`
+finished at the 512 KB nursery base. That test required a decode-heavy
+micro-workload to grow even though growth depends on a host-measured minor
+pause share. The collector policy is unchanged; its growth, hysteresis,
+shrink, cap, and floor decisions are now tested with controlled samples in
+`tests/runtime/test_gc.c`. The end-to-end check keeps the nursery bounds and
+the cheap-workload limit without assuming one timing outcome for the decode
+workload.
