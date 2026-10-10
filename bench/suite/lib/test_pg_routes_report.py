@@ -77,9 +77,9 @@ class PGRouteReportTests(unittest.TestCase):
                     (directory / "meta.json").write_text(json.dumps({
                         "route": "point", "concurrency": 64, "round": 1, "position": position,
                         "language": lang, "metrics": {"valid": True, "invalid_reasons": [],
-                            "latgen": {"rps": rps, "p99_ms": 2.0},
-                            "pool_acquire": {"p99_us": 3.0},
-                            "client_query_row_decode_and_release": {"p99_us": 4.0},
+                            "latgen": {"rps": rps, "p99_ms": 2.0,
+                                "pool_acquire": {"p99_us": 3.0},
+                                "client_query_row_decode_and_release": {"p99_us": 4.0}},
                             "postgres": {"mean_exec_ms": 0.1},
                             "api": {"avg_cpu_cores": 0.5, "peak_rss_kb": 1024},
                             "loadgen": {"avg_cpu_cores": 0.4},
@@ -88,6 +88,7 @@ class PGRouteReportTests(unittest.TestCase):
             self.assertEqual(report.report(root, 0.95, 2.0), 0)
             summary = (root / "summary.md").read_text()
             self.assertIn("| point | 64 | 98 / 100 | 98.0% |", summary)
+            self.assertIn("| 2.00 / 2.00 | 3.00 / 3.00 | 4.00 / 4.00 |", summary)
             self.assertIn("| PASS |", summary)
 
 
