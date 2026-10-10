@@ -61,7 +61,7 @@ HDRS = src/common.h src/lexer.h src/ast.h src/parser.h src/codegen.h \
       src/codegen/pkg_compress/pkg_compress.h
 RT_SRCS = runtime/sl_core.c runtime/sl_gc.c runtime/sl_containers.c \
          runtime/sl_sched.c runtime/sl_pool.c runtime/sl_time.c \
-         runtime/sl_net.c runtime/sl_tls.c runtime/sl_json.c \
+         runtime/sl_dns.c runtime/sl_net.c runtime/sl_tls.c runtime/sl_json.c \
          runtime/sl_proc.c runtime/sl_fs.c runtime/sl_log.c \
          runtime/sl_crypto.c runtime/sl_sql.c runtime/sl_regex.c runtime/sl_os.c runtime/sl_io.c runtime/sl_strings.c \
          runtime/sl_encoding.c runtime/sl_compress.c
@@ -81,12 +81,17 @@ tests/runtime/test_fatal: tests/runtime/test_fatal.c $(RT_SRCS)
 	$(CC) -std=c11 -O2 -Wall -Wno-unused-function -I runtime \
 		tests/runtime/test_fatal.c -lpthread -o tests/runtime/test_fatal
 
+tests/runtime/test_dns_records: tests/runtime/test_dns_records.c runtime/sl_dns.c
+	$(CC) -std=c11 -O2 -Wall -Wno-unused-function \
+		tests/runtime/test_dns_records.c -lresolv -o tests/runtime/test_dns_records
+
 .PHONY: test clean docs docs-serve install uninstall dist slangc-dist
 
-test: slangc tests/runtime/test_gc tests/runtime/test_preempt tests/runtime/test_fatal
+test: slangc tests/runtime/test_gc tests/runtime/test_preempt tests/runtime/test_fatal tests/runtime/test_dns_records
 	./tests/runtime/test_gc
 	./tests/runtime/test_preempt
 	./tests/runtime/test_fatal
+	./tests/runtime/test_dns_records
 	./slangc examples/hello/main.sl --run
 	./slangc examples/fib/main.sl --run
 	./slangc examples/pkgdemo/main.sl --run
@@ -95,7 +100,8 @@ test: slangc tests/runtime/test_gc tests/runtime/test_preempt tests/runtime/test
 
 clean:
 	rm -f slangc hello main fib bytes ints lists fail_narrow fail_index \
-		tests/runtime/test_gc tests/runtime/test_preempt tests/runtime/test_fatal
+		tests/runtime/test_gc tests/runtime/test_preempt tests/runtime/test_fatal \
+		tests/runtime/test_dns_records
 
 # Documentation site. Generated from this repository -- README.md
 # sections, the compiler's own signature tables, and the `pub`

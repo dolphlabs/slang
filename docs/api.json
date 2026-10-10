@@ -2669,6 +2669,26 @@
           "sig": "net.dial_until(str, int, until) -> result[i32,str]"
         },
         {
+          "name": "lookup_srv_until",
+          "params": [
+            "str",
+            "until"
+          ],
+          "ret": "result[[str],str]",
+          "tls": false,
+          "sig": "net.lookup_srv_until(str, until) -> result[[str],str]"
+        },
+        {
+          "name": "lookup_txt_until",
+          "params": [
+            "str",
+            "until"
+          ],
+          "ret": "result[[str],str]",
+          "tls": false,
+          "sig": "net.lookup_txt_until(str, until) -> result[[str],str]"
+        },
+        {
           "name": "dial_unix",
           "params": [
             "str",

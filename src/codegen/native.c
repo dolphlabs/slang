@@ -97,6 +97,10 @@ const char *native_check(CG *cg, const char *pkg, const char *fname,
                  fname, ns->nargs, n);
     if (ns->is_tls)
         cg->want_tls = 1;
+    if (!strcmp(pkg, "net") &&
+        (!strcmp(fname, "lookup_srv_until") ||
+         !strcmp(fname, "lookup_txt_until")))
+        cg->want_dns = 1;
     if (!strcmp(pkg, "proc") && !strcmp(fname, "shutdown_requested"))
         cg->want_shutdown = 1;
 
