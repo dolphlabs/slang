@@ -317,7 +317,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - io: read_line, read_all, eprint, eprintln, flush, is_tty, term_width, term_height, read_secret, raw_on, raw_off, read_key
 - json: see /packages/json.md
 - log: debug, info, warn, error
-- net: listen, port, accept, dial, dial_until, dial_unix, listen_unix, send, recv, recv_until, send_until, close (+19 more)
+- net: listen, port, accept, dial, dial_until, lookup_srv_until, lookup_txt_until, dial_unix, listen_unix, send, recv, recv_until (+21 more)
 - os: setenv, unsetenv, environ, pid, hostname, tmpdir, exists, is_dir, is_file, size, mtime, read_dir (+2 more)
 - pg: parse_url, sqlstate, scram_client_final, connect, connect_config, close, usable, in_transaction, server_param, arg_text, arg_int, arg_float (+33 more)
 - proc: shutdown_requested, active_tasks, wait_idle, getenv, args, cwd
