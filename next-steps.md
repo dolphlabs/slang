@@ -455,10 +455,18 @@ per item); GC ~30%, per-object malloc most of the rest. Lower the cost
   minor pauses 47.3 ms -> 14.9 ms, RSS 6.26 MB -> 3.34 MB, identical
   802,624 allocs (budgets untouched). Full suite green incl. verifier
   matrix; `SLANG_GC_PAGE_DEBUG` checker landed beside it.
-- **Phase 2 — page-table validation.** A page table + bitmap lookup
-  replaces building `sl_gc_set` on every minor (the per-minor O(heap)
-  rebuild). Also makes interior-pointer lookup cheap, which the
-  value-result/opt option in `VALUE_REPRESENTATION.md` would need.
+- **Phase 2 — page-table validation: tried and reverted (2026-10-02).**
+  Built on a branch (live sorted page table + binary search, malloc
+  residual set, young-only gate moved into `mark_minor`): correct
+  (full suite incl. verifier matrix green) but time-, RSS- and
+  instruction-neutral on the quote bench (ABBA 89.2 ms vs 92.0 ms,
+  within spread). The premise was wrong: the residual list walk
+  dominates the old rebuild, not the hashing (fresh-table inserts are
+  cache-hot). Do not retry without also removing the walk — e.g. a
+  separate young-malloc list — and re-measuring. Found along the way:
+  freeing the residual table inside its own build double-frees on the
+  verifier path (frees belong with the owners: sweep ends + verifier
+  pre-build).
 - **Phase 3 — page sweep.** Free whole pages, or bitmap-clear on sweep,
   instead of walking linked lists.
 
