@@ -1,5 +1,5 @@
-/* The 'encoding' package: hex, base64, base64url, percent-encoding and
- * query strings.
+/* The 'encoding' package: hex, base64, base64url, percent-encoding,
+ * query strings, and binary float conversion.
  *
  * All of it is pure computation over memory slang already owns -- no
  * syscalls, no libc call that allocates or takes a lock -- so like
@@ -38,6 +38,12 @@
  * Every error message names the byte OFFSET where it gave up, because
  * "invalid base64" about a 400-character token is not a diagnosis. */
 
+#include <float.h>
+
+_Static_assert(sizeof(double) == 8 && DBL_MANT_DIG == 53 &&
+                   DBL_MAX_EXP == 1024,
+               "encoding.float64_* requires IEEE-754 binary64 double");
+
 /* hex_encode emits lowercase, percent-escapes emit uppercase. Not an
  * inconsistency -- each follows its own norm. RFC 3986 section 2.1 says
  * URI producers SHOULD use uppercase for percent-encodings, and every
@@ -71,6 +77,22 @@ static sl_res_bytes_str *sl_enc_ok_bytes(sl_bytes *b) {
 static sl_res_bytes_str *sl_enc_err_bytes(const char *msg) {
     sl_res_bytes_str *r = (sl_res_bytes_str *)sl_gc_alloc(
         sizeof(sl_res_bytes_str), sl_gc_trace_sl_res_bytes_str);
+    r->ok = false;
+    r->e = sl_strdup(msg);
+    return r;
+}
+
+static sl_res_float_str *sl_enc_ok_float(double value) {
+    sl_res_float_str *r = (sl_res_float_str *)sl_gc_alloc(
+        sizeof(sl_res_float_str), sl_gc_trace_sl_res_float_str);
+    r->ok = true;
+    r->v = value;
+    return r;
+}
+
+static sl_res_float_str *sl_enc_err_float(const char *msg) {
+    sl_res_float_str *r = (sl_res_float_str *)sl_gc_alloc(
+        sizeof(sl_res_float_str), sl_gc_trace_sl_res_float_str);
     r->ok = false;
     r->e = sl_strdup(msg);
     return r;
@@ -115,6 +137,32 @@ static char *sl_enc_msg(char *buf, size_t bufn, const char *what,
  * write every byte of it, so they allocate the same shape directly. */
 static sl_bytes *sl_enc_bytes_raw(long long n) {
     return sl_bytes_alloc(n);
+}
+
+/* Float byte conversion goes through the IEEE-754 bit pattern and then
+ * shifts bytes explicitly. memcpy avoids aliasing violations, and the
+ * shifts make the result independent of host endianness. */
+static sl_bytes *sl_encoding_float64_to_le(double value) {
+    uint64_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    sl_bytes *out = sl_enc_bytes_raw(8);
+    for (int i = 0; i < 8; i++) {
+        out->ptr[i] = (unsigned char)(bits & UINT64_C(0xff));
+        bits >>= 8;
+    }
+    return out;
+}
+
+static sl_res_float_str *sl_encoding_float64_from_le(sl_bytes *bytes) {
+    if (!bytes || bytes->len != 8)
+        return sl_enc_err_float(
+            "encoding.float64_from_le: expected exactly 8 bytes");
+    uint64_t bits = 0;
+    for (int i = 0; i < 8; i++)
+        bits |= (uint64_t)bytes->ptr[i] << (8 * i);
+    double value;
+    memcpy(&value, &bits, sizeof(value));
+    return sl_enc_ok_float(value);
 }
 
 /* ---- hex ------------------------------------------------------------ */
