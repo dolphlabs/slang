@@ -841,6 +841,8 @@ void force_native_result_types(CG *cg) {
         if (cg->want_tls)
             res_cname(cg, "rawptr", "str");
     }
+    if (cg->want_dns)
+        res_cname(cg, "[str]", "str");
     if (want_pkg(cg, "proc")) {
         opt_cname(cg, "str");
         res_cname(cg, "str", "str");
@@ -919,6 +921,10 @@ void emit_native_runtime(CG *cg) {
         return;
     if (want_time)
         emit_runtime_file(cg, "sl_time.c");
+    if (want_net && cg->want_dns)
+        emit_line(cg, "#define SLANG_NET_DNS 1");
+    if (want_net && cg->want_dns)
+        emit_runtime_file(cg, "sl_dns.c");
     if (want_net)
         emit_runtime_file(cg, "sl_net.c");
     if (cg->want_tls)
@@ -1502,7 +1508,8 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
 }
 
 void codegen_program(Package *pkgs, int npkgs, int main_index,
-                     StrBuf *out, int *out_want_tls, int *out_want_crypto,
+                     StrBuf *out, int *out_want_tls, int *out_want_dns,
+                     int *out_want_crypto,
                      int *out_want_sql, int *out_want_compress) {
     CG cg;
     memset(&cg, 0, sizeof(CG));
@@ -1588,6 +1595,7 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
     cg.out = out;
     gen_whole_program(&cg, pkgs, npkgs, main_index);
     *out_want_tls = cg.want_tls;
+    *out_want_dns = cg.want_dns;
     *out_want_crypto = want_pkg(&cg, "crypto");
     *out_want_sql = want_pkg(&cg, "sql");
     *out_want_compress = want_pkg(&cg, "compress");

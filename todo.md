@@ -3896,3 +3896,14 @@ lengths. The full `make test` suite passed on 2026-10-10, including the
 16-KB-nursery minor verifier (0 misses), and the generated-C warning sweep
 reported zero warnings. The BSON driver is in a separate repository; its
 package tests and codec benchmark are tracked there.
+
+## Implemented: bounded DNS SRV/TXT lookup for seed-list clients
+
+Added deadline-bounded `net.lookup_srv_until` and `net.lookup_txt_until` over
+the resolver thread. DNS responses validate the query question and matching
+answer owner, with packet, record, text, and 64-outstanding-request caps; the
+resolver thread owns abandoned requests after caller timeouts. Offline wire
+tests cover valid SRV/TXT packets, TXT chunks, root targets, malformed and
+truncated messages, and question/owner mismatches. `make test` passed on macOS
+including DNS preemption, GC stress, minor verification (0 missed), and the
+generated-C warning sweep (0 warnings). Native linux-arm64 CI remains pending.

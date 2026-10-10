@@ -825,11 +825,12 @@ static int build(const char *input, const char *outname, int emit_c,
     StrBuf out;
     sb_init(&out);
     int want_tls = 0;
+    int want_dns = 0;
     int want_crypto = 0;
     int want_sql = 0;
     int want_compress = 0;
     codegen_program(pkgs.items, pkgs.count, main_index, &out, &want_tls,
-                    &want_crypto, &want_sql, &want_compress);
+                    &want_dns, &want_crypto, &want_sql, &want_compress);
 
     /* ---- output ---- */
     char *stem = derive_stem(input);
@@ -880,6 +881,8 @@ static int build(const char *input, const char *outname, int emit_c,
         sb_append(&cmd, " ");
         sb_append(&cmd, tlsflags);
     }
+    if (want_dns)
+        sb_append(&cmd, " -lresolv");
     if (want_sql)
         sb_append(&cmd, " -lsqlite3"); /* the 'sql' native package;
                                           resolves on default cc paths */
@@ -935,9 +938,9 @@ static int build(const char *input, const char *outname, int emit_c,
         codegen_set_frame_guards(guard_syms, guard_frames, nguard);
         StrBuf out2;
         sb_init(&out2);
-        int t2 = 0, c2 = 0, s2 = 0, z2 = 0;
-        codegen_program(pkgs2.items, pkgs2.count, main2, &out2, &t2, &c2, &s2,
-                        &z2);
+        int t2 = 0, d2 = 0, c2 = 0, s2 = 0, z2 = 0;
+        codegen_program(pkgs2.items, pkgs2.count, main2, &out2, &t2, &d2,
+                        &c2, &s2, &z2);
         write_file(gen_path, out2.data, out2.len);
     }
     if (status == 0) {

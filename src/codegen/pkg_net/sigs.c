@@ -13,6 +13,8 @@ const NatSig NET_SIGS[] = {
     {"net", "dial", 2, {NA_STR, NA_INT}, "result[i32,str]", 0},
     /* dial bounded by a deadline: the lookup and the connect together */
     {"net", "dial_until", 3, {NA_STR, NA_INT, NA_UNTIL}, "result[i32,str]", 0},
+    {"net", "lookup_srv_until", 2, {NA_STR, NA_UNTIL}, "result[[str],str]", 0},
+    {"net", "lookup_txt_until", 2, {NA_STR, NA_UNTIL}, "result[[str],str]", 0},
     /* Unix-domain stream sockets; the fds work with every fd-based call */
     {"net", "dial_unix", 2, {NA_STR, NA_UNTIL}, "result[i32,str]", 0},
     {"net", "listen_unix", 1, {NA_STR}, "result[i32,str]", 0},

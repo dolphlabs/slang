@@ -107,6 +107,35 @@ interrupted), so the caller gets `"timeout"` on time. Every address the
 name resolves to is tried in turn — `net.dial` does the same, without a
 deadline.
 
+##### DNS SRV and TXT lookups
+
+Atlas connection strings use DNS SRV and TXT records. `net.lookup_srv_until`
+and `net.lookup_txt_until` expose those records without blocking a slang
+worker; each lookup takes an absolute `until` deadline:
+
+```slang
+import "net";
+import "time";
+let deadline = until_of(time.mono() + 5000000000);
+let seeds = net.lookup_srv_until("_mongodb._tcp.cluster.example", deadline);
+guard let records = seeds else let e = err_of(seeds) { println(e); exit(1); }
+// Each SRV item is "priority:weight:port:target".
+
+let defaults = net.lookup_txt_until("cluster.example", deadline);
+guard let options = defaults else let e = err_of(defaults) { println(e); exit(1); }
+// Each TXT item is one record with its DNS character-strings concatenated.
+```
+
+An empty TXT list means the domain has no TXT defaults. SRV targets retain
+priority and weight so a client can apply its own ordering policy. The
+resolver checks the response question and each returned record owner, rejects
+malformed names and oversized or truncated answers, and returns `"timeout"`
+when the deadline expires. At most 64 SRV/TXT lookups may be outstanding per
+process, bounding their answer buffers to about 4 MiB; excess calls return
+`"DNS resolver request limit reached"`. The C resolver library is
+linked only by programs that call either record lookup; ordinary `net`
+programs keep their existing link dependencies.
+
 ##### Unix-domain sockets
 
 `net.dial_unix(path, deadline)` connects to a Unix-domain stream socket
@@ -2068,7 +2097,7 @@ any signal-handling program.
 - [io](packages/io.md) -- compiler-provided, 12 public items
 - [json](packages/json.md) -- compiler-provided, 0 public items
 - [log](packages/log.md) -- compiler-provided, 4 public items
-- [net](packages/net.md) -- compiler-provided, 31 public items
+- [net](packages/net.md) -- compiler-provided, 33 public items
 - [os](packages/os.md) -- compiler-provided, 14 public items
 - [pg](packages/pg.md) -- source package, 52 public items
 - [proc](packages/proc.md) -- compiler-provided, 6 public items

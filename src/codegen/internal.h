@@ -485,6 +485,7 @@ struct CG {
     char **nat_pkgs; /* names of natively-implemented imported packages */
     int nnat;
     int want_tls; /* set once a net.tls_* function is type-checked */
+    int want_dns; /* set once a net DNS-record lookup is type-checked */
     int want_shutdown; /* set once proc.shutdown_requested is type-checked:
         the program handles SIGINT/SIGTERM itself (see program.c's main) */
     int want_json; /* set once a json.decode/json.encode is type-checked */

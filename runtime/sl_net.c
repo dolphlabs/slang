@@ -17,6 +17,10 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <sys/un.h>
+#ifdef SLANG_NET_DNS
+#include <arpa/nameser.h>
+#include <resolv.h>
+#endif
 
 /* ---- net: TCP over bytes + fixed ints, parked (not blocked) on a
  * kqueue reactor -- Tier 11 sixth slice. See the design plan for the
@@ -479,19 +483,55 @@ static void sl_net_shutdown_nudge(void) {
  * (the caller frees), 2 abandoned (the resolver frees). */
 typedef struct sl_dns_job {
     struct sl_dns_job *next;
+    int kind;
     char *host;
     char portstr[16];
     struct addrinfo hints;
     int rc;
     struct addrinfo *res;
+    int qtype;
+    int dns_error;
+    unsigned char *packet;
+    size_t packet_cap;
+    size_t packet_len;
     int wake_wr;
     _Atomic int state;
 } sl_dns_job;
+
+enum { SL_DNS_JOB_ADDR = 0, SL_DNS_JOB_RECORD = 1 };
 
 static pthread_mutex_t sl_dns_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t sl_dns_cv = PTHREAD_COND_INITIALIZER;
 static sl_dns_job *sl_dns_head;
 static sl_dns_job *sl_dns_tail;
+#ifdef SLANG_NET_DNS
+#define SL_DNS_MAX_OUTSTANDING_RECORDS 64
+static size_t sl_dns_record_slots;
+
+static int sl_dns_record_reserve(void) {
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&sl_dns_mu);
+    int reserved = sl_dns_record_slots < SL_DNS_MAX_OUTSTANDING_RECORDS;
+    if (reserved) sl_dns_record_slots++;
+    pthread_mutex_unlock(&sl_dns_mu);
+    sl_rt_preempt_enable();
+    return reserved;
+}
+
+static void sl_dns_record_release_task(void) {
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&sl_dns_mu);
+    if (sl_dns_record_slots) sl_dns_record_slots--;
+    pthread_mutex_unlock(&sl_dns_mu);
+    sl_rt_preempt_enable();
+}
+
+static void sl_dns_record_release_thread(void) {
+    pthread_mutex_lock(&sl_dns_mu);
+    if (sl_dns_record_slots) sl_dns_record_slots--;
+    pthread_mutex_unlock(&sl_dns_mu);
+}
+#endif
 
 static void *sl_dns_thread(void *arg) {
     (void)arg;
@@ -505,7 +545,22 @@ static void *sl_dns_thread(void *arg) {
             sl_dns_tail = NULL;
         j->next = NULL;
         pthread_mutex_unlock(&sl_dns_mu);
-        j->rc = getaddrinfo(j->host, j->portstr, &j->hints, &j->res);
+#ifdef SLANG_NET_DNS
+        if (j->kind == SL_DNS_JOB_RECORD) {
+            j->rc = res_query(j->host, ns_c_in, j->qtype,
+                              (unsigned char *)j->packet,
+                              (int)j->packet_cap);
+            j->dns_error = h_errno;
+            if (j->rc >= 0 && (size_t)j->rc <= j->packet_cap)
+                j->packet_len = (size_t)j->rc;
+            else
+                j->rc = -1;
+        } else {
+#endif
+            j->rc = getaddrinfo(j->host, j->portstr, &j->hints, &j->res);
+#ifdef SLANG_NET_DNS
+        }
+#endif
         /* Read before the exchange: once it succeeds the caller owns the
            job and frees it the moment the wake byte lands, so nothing
            after the handoff may touch `j`. Re-reading j->wake_wr for the
@@ -522,10 +577,15 @@ static void *sl_dns_thread(void *arg) {
             close(wake_wr);
         } else {
             /* the caller gave up; nobody else will ever look at this */
-            if (j->rc == 0 && j->res)
+            if (j->kind == SL_DNS_JOB_ADDR && j->rc == 0 && j->res)
                 freeaddrinfo(j->res);
+#ifdef SLANG_NET_DNS
+            if (j->kind == SL_DNS_JOB_RECORD)
+                sl_dns_record_release_thread();
+#endif
             close(j->wake_wr);
             free(j->host);
+            free(j->packet);
             free(j);
         }
     }
@@ -556,6 +616,7 @@ static int sl_dns_lookup_until(const char *host, const char *portstr,
     }
     memcpy(hcopy, host, n);
     job->host = hcopy;
+    job->kind = SL_DNS_JOB_ADDR;
     sl_rt_preempt_disable();
     snprintf(job->portstr, sizeof(job->portstr), "%s", portstr);
     sl_rt_preempt_enable();
@@ -615,6 +676,302 @@ static int sl_dns_lookup_until(const char *host, const char *portstr,
     free(job);
     return rc;
 }
+
+#ifdef SLANG_NET_DNS
+/* DNS record requests share the resolver thread with getaddrinfo, so a
+ * slow nameserver never blocks a slang worker. The caller owns packet on
+ * success; an expired caller transfers ownership of the entire job to the
+ * resolver thread, which frees it after the uncancellable libc query. */
+static int sl_dns_query_until(const char *name, int qtype,
+                              unsigned char **packet, size_t *packet_len,
+                              sl_until u, int *dns_error, int *timed_out) {
+    *packet = NULL;
+    *packet_len = 0;
+    *dns_error = 0;
+    *timed_out = 0;
+    if (!name || !sl_dns_name_valid(name, 1))
+        return -2;
+    if (qtype != ns_t_srv && qtype != ns_t_txt)
+        return -2;
+    if (u && sl_until_hit(u)) {
+        *timed_out = 1;
+        return -1;
+    }
+    if (!sl_dns_record_reserve())
+        return -4;
+
+    size_t n = strlen(name);
+    int absolute = name[n - 1] == '.';
+    size_t qlen = n + (absolute ? 1 : 2);
+    sl_rt_preempt_disable();
+    sl_dns_job *job = (sl_dns_job *)calloc(1, sizeof(sl_dns_job));
+    char *qname = job ? (char *)malloc(qlen) : NULL;
+    unsigned char *answer = job
+        ? (unsigned char *)malloc(SL_DNS_MAX_PACKET) : NULL;
+    sl_rt_preempt_enable();
+    if (!job || !qname || !answer) {
+        sl_rt_preempt_disable();
+        free(job);
+        free(qname);
+        free(answer);
+        sl_rt_preempt_enable();
+        sl_dns_record_release_task();
+        return -3;
+    }
+    memcpy(qname, name, n);
+    if (absolute) {
+        qname[n] = '\0';
+    } else {
+        qname[n] = '.';
+        qname[n + 1] = '\0';
+    }
+    job->kind = SL_DNS_JOB_RECORD;
+    job->host = qname;
+    job->qtype = qtype;
+    job->packet = answer;
+    job->packet_cap = SL_DNS_MAX_PACKET;
+    atomic_store_explicit(&job->state, 0, memory_order_relaxed);
+    int pfd[2];
+    if (pipe(pfd) != 0) {
+        sl_rt_preempt_disable();
+        free(job->host);
+        free(job->packet);
+        free(job);
+        sl_rt_preempt_enable();
+        sl_dns_record_release_task();
+        return -3;
+    }
+    fcntl(pfd[0], F_SETFD, FD_CLOEXEC);
+    fcntl(pfd[1], F_SETFD, FD_CLOEXEC);
+    sl_net_set_nonblocking(pfd[0]);
+    job->wake_wr = pfd[1];
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&sl_dns_mu);
+    job->next = NULL;
+    if (sl_dns_tail)
+        sl_dns_tail->next = job;
+    else
+        sl_dns_head = job;
+    sl_dns_tail = job;
+    pthread_cond_signal(&sl_dns_cv);
+    pthread_mutex_unlock(&sl_dns_mu);
+    sl_rt_preempt_enable();
+    for (;;) {
+        int w = sl_reactor_wait_until(pfd[0], SL_REACTOR_READ, 0, u);
+        if (w < 0) {
+            int expect = 0;
+            if (atomic_compare_exchange_strong_explicit(
+                    &job->state, &expect, 2, memory_order_acq_rel,
+                    memory_order_acquire)) {
+                close(pfd[0]);
+                if (w == -2) {
+                    *timed_out = 1;
+                    return -1; /* resolver thread owns and frees the job */
+                }
+                return -3; /* resolver thread owns and frees the job */
+            }
+            if (expect == 1)
+                break; /* resolver completed as the wait ended */
+            u = 0;
+        }
+        char x;
+        ssize_t nr = read(pfd[0], &x, 1);
+        if (nr == 1)
+            break;
+        if (nr < 0 && (errno == EINTR || errno == EAGAIN ||
+                       errno == EWOULDBLOCK))
+            continue;
+        int expect = 0;
+        if (atomic_compare_exchange_strong_explicit(
+                &job->state, &expect, 2, memory_order_acq_rel,
+                memory_order_acquire)) {
+            close(pfd[0]);
+            return -3; /* resolver thread owns and frees the job */
+        }
+        if (expect == 1)
+            break;
+        u = 0;
+    }
+    close(pfd[0]);
+    int rc = atomic_load_explicit(&job->state, memory_order_acquire) == 1
+                 ? job->rc : -1;
+    *dns_error = job->dns_error;
+    if (rc >= 0) {
+        *packet = job->packet;
+        *packet_len = job->packet_len;
+    } else {
+        sl_rt_preempt_disable();
+        free(job->packet);
+        sl_rt_preempt_enable();
+    }
+    sl_rt_preempt_disable();
+    free(job->host);
+    free(job);
+    sl_rt_preempt_enable();
+    sl_dns_record_release_task();
+    return rc;
+}
+
+static void *sl_dns_malloc(size_t n) {
+    sl_rt_preempt_disable();
+    void *p = malloc(n);
+    sl_rt_preempt_enable();
+    return p;
+}
+
+static void sl_dns_free(void *p) {
+    sl_rt_preempt_disable();
+    free(p);
+    sl_rt_preempt_enable();
+}
+
+static sl_res__str__str *sl_net_dns_ok(sl_arr *values) {
+    void *roots[1] = {values};
+    sl_safepoint sp;
+    sl_rt_safepoint_enter(&sp, roots, 1);
+    sl_res__str__str *r = (sl_res__str__str *)sl_gc_alloc(
+        sizeof(sl_res__str__str), sl_gc_trace_sl_res__str__str);
+    r->ok = true;
+    r->v = values;
+    sl_rt_safepoint_exit();
+    return r;
+}
+
+static sl_res__str__str *sl_net_dns_err(const char *message) {
+    void *roots[1] = {NULL};
+    sl_safepoint sp;
+    sl_rt_safepoint_enter(&sp, roots, 1);
+    sl_res__str__str *r = (sl_res__str__str *)sl_gc_alloc(
+        sizeof(sl_res__str__str), sl_gc_trace_sl_res__str__str);
+    roots[0] = r;
+    r->ok = false;
+    char *text = sl_strdup(message);
+    sl_rt_preempt_disable();
+    r->e = text;
+    sl_gc_remember(r);
+    sl_rt_preempt_enable();
+    sl_rt_safepoint_exit();
+    return r;
+}
+
+static sl_res__str__str *sl_net_dns_query(const char *name, int qtype,
+                                          sl_until u) {
+    unsigned char *packet = NULL;
+    size_t packet_len = 0;
+    int dns_error = 0, timed_out = 0;
+    int rc = sl_dns_query_until(name, qtype, &packet, &packet_len,
+                                u, &dns_error, &timed_out);
+    if (timed_out)
+        return sl_net_dns_err("timeout");
+    if (rc == -2)
+        return sl_net_dns_err("invalid DNS query name");
+    if (rc == -3)
+        return sl_net_dns_err("DNS resolver allocation or pipe failure");
+    if (rc == -4)
+        return sl_net_dns_err("DNS resolver request limit reached");
+    if (rc < 0) {
+        if (qtype == ns_t_txt &&
+            (dns_error == NO_DATA || dns_error == HOST_NOT_FOUND))
+            return sl_net_dns_ok(sl_arr_new(sizeof(char *), 1));
+        if (dns_error == TRY_AGAIN)
+            return sl_net_dns_err("DNS resolver temporary failure");
+        if (dns_error == NO_RECOVERY)
+            return sl_net_dns_err("DNS resolver failure");
+        return sl_net_dns_err("DNS record lookup returned no answer");
+    }
+
+    const char *parse_error = NULL;
+    sl_arr *values = sl_arr_new(sizeof(char *), 1);
+    void *roots[2] = {values, NULL};
+    sl_safepoint sp;
+    sl_rt_safepoint_enter(&sp, roots, 2);
+    if (qtype == ns_t_srv) {
+        sl_dns_srv_record *records = (sl_dns_srv_record *)
+            sl_dns_malloc(sizeof(sl_dns_srv_record) * SL_DNS_MAX_SRV_RECORDS);
+        if (!records) {
+            sl_rt_safepoint_exit();
+            sl_dns_free(packet);
+            return sl_net_dns_err("DNS resolver allocation failure");
+        }
+        size_t count = 0;
+        int valid = sl_dns_parse_srv_packet(packet, packet_len, name, records,
+                                             SL_DNS_MAX_SRV_RECORDS, &count,
+                                             &parse_error);
+        if (valid) {
+            for (size_t i = 0; i < count; i++) {
+                char text[SL_DNS_MAX_NAME + 32];
+                size_t n = strlen(records[i].target);
+                if (strcmp(records[i].target, ".") != 0 && n &&
+                    records[i].target[n - 1] == '.')
+                    n--;
+                int written = snprintf(text, sizeof(text), "%u:%u:%u:%.*s",
+                                       (unsigned)records[i].priority,
+                                       (unsigned)records[i].weight,
+                                       (unsigned)records[i].port, (int)n,
+                                       records[i].target);
+                if (written < 0 || (size_t)written >= sizeof(text)) {
+                    valid = 0;
+                    parse_error = "DNS SRV target exceeds the size limit";
+                    break;
+                }
+                char *value = sl_strdup(text);
+                roots[1] = value;
+                sl_arr_push(values, &value, sizeof(value));
+            }
+            if (count == 0) {
+                valid = 0;
+                parse_error = "DNS SRV lookup returned no records";
+            }
+        }
+        sl_dns_free(records);
+        sl_rt_safepoint_exit();
+        sl_dns_free(packet);
+        if (!valid) return sl_net_dns_err(parse_error);
+        return sl_net_dns_ok(values);
+    }
+
+    sl_dns_txt_record *records = (sl_dns_txt_record *)
+        sl_dns_malloc(sizeof(sl_dns_txt_record) * SL_DNS_MAX_TXT_RECORDS);
+    char *storage = (char *)sl_dns_malloc(SL_DNS_MAX_TXT_BYTES +
+                                           SL_DNS_MAX_TXT_RECORDS);
+    if (!records || !storage) {
+        sl_dns_free(records);
+        sl_dns_free(storage);
+        sl_rt_safepoint_exit();
+        sl_dns_free(packet);
+        return sl_net_dns_err("DNS resolver allocation failure");
+    }
+    size_t count = 0;
+    int valid = sl_dns_parse_txt_packet(packet, packet_len, name, records,
+                                         SL_DNS_MAX_TXT_RECORDS, storage,
+                                         SL_DNS_MAX_TXT_BYTES +
+                                             SL_DNS_MAX_TXT_RECORDS,
+                                         &count, &parse_error);
+    if (valid) {
+        for (size_t i = 0; i < count; i++) {
+            char *value = sl_strdup(records[i].value);
+            roots[1] = value;
+            sl_arr_push(values, &value, sizeof(value));
+        }
+    }
+    sl_dns_free(records);
+    sl_dns_free(storage);
+    sl_rt_safepoint_exit();
+    sl_dns_free(packet);
+    if (!valid) return sl_net_dns_err(parse_error);
+    return sl_net_dns_ok(values);
+}
+
+static sl_res__str__str *sl_net_lookup_srv_until(const char *name,
+                                                  sl_until u) {
+    return sl_net_dns_query(name, ns_t_srv, u);
+}
+
+static sl_res__str__str *sl_net_lookup_txt_until(const char *name,
+                                                  sl_until u) {
+    return sl_net_dns_query(name, ns_t_txt, u);
+}
+#endif /* SLANG_NET_DNS */
 
 static int sl_dns_lookup(const char *host, const char *portstr,
                          struct addrinfo **res) {
@@ -1422,4 +1779,3 @@ static sl_peer sl_link_peer(sl_link *l) {
     p.port = ntohs(addr.sin_port);
     return p;
 }
-
