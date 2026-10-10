@@ -15,12 +15,18 @@ caught what — are in git history and the PR descriptions:
   request bodies, methods sharing a name with a package function, and the
   Postgres driver: `git show f9680d1:next-steps.md`
 
-API speed audit (2026-10-09): current quote/mix baselines, a Linux server
-profile, point-read/Postgres measurements, the decoder experiment and c512
-memory results are recorded in [`SERVER_SPEED_AUDIT_PRD.md`](SERVER_SPEED_AUDIT_PRD.md).
-The decoder experiment did not pass the performance gate. Next profile the
-PostgreSQL query/protocol path under point reads; do not change arena sizes
-without evidence, since slang RSS was already below Go at c512.
+API speed audit (2026-10-09): quote/mix baselines, the Linux profile, and the
+decoder experiment are recorded in [`SERVER_SPEED_AUDIT_PRD.md`](SERVER_SPEED_AUDIT_PRD.md).
+The decoder experiment did not pass the performance gate. Route-level PG
+timing support is in [`bench/PG-ROUTE-PERFORMANCE-PRD.md`](bench/PG-ROUTE-PERFORMANCE-PRD.md);
+run it on a host that passes the benchmark host check before selecting a
+driver or scheduler change. Do not change arena sizes without evidence, since
+Slang RSS was already below Go at c512.
+
+A focused Go/Slang runner for the four PostgreSQL routes is prepared in
+[`bench/PG-TARGETED-BENCHMARK-PRD.md`](bench/PG-TARGETED-BENCHMARK-PRD.md).
+It uses the requested 4-vCPU/16-GB host, a 1M-user/20M-order seed, and ABBA
+sampling. It is ready for the new VPS; no measurements have been taken there.
 
 Runtime bugs and their investigations live in `todo.md`.
 

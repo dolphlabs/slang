@@ -72,6 +72,12 @@ const NatSig ENCODING_SIGS[] = {
        bare query string, with or without a leading '?'. */
     {"encoding", "query_get", 2, {NA_STR, NA_STR}, "opt[str]", 0},
     {"encoding", "query_keys", 1, {NA_STR}, "[str]", 0},
+
+    /* BSON and other binary formats need the IEEE-754 representation,
+       not a decimal string. These return/accept little-endian bytes so
+       the host's byte order never leaks into a wire format. */
+    {"encoding", "float64_to_le", 1, {NA_F64}, "bytes", 0},
+    {"encoding", "float64_from_le", 1, {NA_BYTES}, "result[float,str]", 0},
 };
 
 const int ENCODING_SIGS_LEN =

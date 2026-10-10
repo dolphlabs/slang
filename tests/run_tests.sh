@@ -478,7 +478,7 @@ done
 # collector treating every task's recent allocations as roots.
 echo "--- GC stress (SLANG_GC_THRESHOLD_KB=16) ---"
 gc_bad=0
-for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood \
+for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood encoding_f64 \
             spawn_isolation gc_stress maps json json_int_exact flags method_recv \
             method_recv_gc indirect_callee generics_structs generics_json generics_infer \
             generics_pkg gc_nested_literal generics_methods \
@@ -510,7 +510,7 @@ done
 # allocation.
 echo "--- nursery stress (SLANG_GC_NURSERY_KB=16) ---"
 nur_bad=0
-for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put \
+for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put encoding_f64 \
             gc_nested_literal gc_stress gc_stat spawn_isolation maps json \
             json_int_exact flags method_recv method_recv_gc indirect_callee \
             http_read_wire bytes_empty_literal gc_minor_barriers map_delete if_let \
@@ -541,7 +541,7 @@ done
 # and task/channel/network tests. The count must be zero.
 echo "--- minor collections verified (SLANG_GC_VERIFY_MINOR, 16KB nursery) ---"
 vm_bad=0
-for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc_map_put if_let \
+for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc_map_put encoding_f64 if_let \
             literal_expect pending_sibling_type \
             gc_nested_literal gc_nursery_barrier gc_nursery_promotion \
             spawn_isolation select maps json json_parity json_utf8 json_decode_budget \
