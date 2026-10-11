@@ -5032,8 +5032,29 @@ for a library that also ships examples, docs and its own tests: only
 that directory is compiled into your program, and nothing else in the
 repository can affect your build. The subdirectory is a relative path
 within the clone — `..`, absolute paths and empty segments are refused —
-and the lock still hashes the whole clone, so what was verified is what
-was fetched.
+and the lock hashes the package's complete included tree, not just the
+selected source directory.
+
+A package author can keep non-runtime directories out of every consumer's
+cache by listing them in that package repository's own `slang.project`:
+
+```
+name foo
+version 1.2.0
+exclude bench
+exclude examples
+exclude tests
+```
+
+Each `exclude` is one literal repository-relative directory; paths with
+`..`, absolute paths, empty segments, or glob syntax are rejected. Do not
+exclude the package directory selected by a consumer's `dir`. `slangc get`
+uses a shallow partial clone and sparse checkout so a Git server that supports
+partial clones need not send excluded file contents. If it does not, slang
+still omits those directories and Git metadata from the local cache, but the
+first transfer may include them. The lock hash covers every retained file, so
+editing included source is detected before compilation. Projects without
+`exclude` keep the existing full-tree behavior.
 
 `slangc get` clones each `pkg` line into `$SLANG_CACHE/pkg/<name>/<hash>`
 (`~/.cache/slang` if unset), links `$SLANG_CACHE/pkg/<name>/<tag>` to it

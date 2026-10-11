@@ -440,34 +440,40 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
 
 ## G. gRPC and GraphQL
 
-Both are new public APIs, so each starts with a design note approved by
-the owner (AGENTS.md §2) before any code. Both come after R1-R4, so they
-are built on a server path that already scales. slang has no reflection,
-interfaces or closures, so both are code-generated from a schema, the way
-`json.decode` is generated from a struct today.
+The owner approved the architecture in
+[`PROTOCOLS_AND_PACKAGE_DISTRIBUTION_PRD.md`](PROTOCOLS_AND_PACKAGE_DISTRIBUTION_PRD.md)
+on 2026-10-11. Keep protocol implementations and generators in standalone
+packages/tools; do not add protocol syntax or reflection to slang. The gRPC
+v1 uses a standalone package and `protoc-gen-slang`, unary calls over TLS with
+ALPN h2 plus h2c tests, and a dedicated HTTP/2 listener before any optional
+Zokor adapter. GraphQL is schema-first SDL with generated ordinary slang types
+and named resolver functions; v1 has queries, mutations, variables, named
+operations, fragments, explicit batching, and query-cost limits, with no
+subscriptions or runtime introspection. Both still need their benchmark SPEC
+rows and the HTTP/2 API work shown necessary by interoperability. The original
+R1-R4 scaling prerequisite remains a sequencing consideration; the owner has
+authorized this design work now.
 
-- [ ] **G1. gRPC design note.** Builds on `stdlib/http2` (frames, HPACK,
+- [ ] **G1. gRPC design note.** Approved direction is captured above and in
+  the PRD; add the gRPC benchmark row and finalize the test workload. Builds
+  on `stdlib/http2` (frames, HPACK,
   concurrent streams, one writer task per connection). Missing: protobuf
   wire encode/decode for value and `gc` structs, length-prefixed message
   framing, trailers (`grpc-status`, `grpc-message`), deadlines from
-  `grpc-timeout` mapped to `until`, and a `.proto` -> slang generator
-  (unary first; then server streaming; client and bidi streaming after).
-  Decisions for the owner: where the generator lives (`slangc` subcommand
-  or a separate tool), and whether TLS/ALPN h2 is in v1 or h2c only.
+  `grpc-timeout` mapped to `until`, and `.proto` generation of ordinary
+  slang source (unary first; streaming follows interoperability).
   The note also adds a gRPC row to `bench/SPEC.md` (the same quote and
   point work over unary RPC), which is also the first load test of
   `stdlib/http2`.
 - [ ] **G2. gRPC implementation**, item by item as the approved note
   lists them, each with fuzzing of the protobuf decoder and the framing
   (hostile input: caps on message size, nesting depth and field count).
-- [ ] **G3. GraphQL design note.** A query parser and validator, and an
-  executor generated from a schema, in the style of gqlgen. Decisions
-  for the owner: schema-first (SDL -> slang) or code-first (slang types
-  -> schema); resolvers as plain function values; the v1 subset (queries
-  and mutations, variables, fragments; no subscriptions); and limits
-  against hostile queries (depth, breadth, alias count, cost). The note
-  also adds a GraphQL row to `bench/SPEC.md` with the N+1 case (users
-  with their orders) and states whether a batching loader is in v1.
+- [ ] **G3. GraphQL design note.** Approved direction is schema-first SDL,
+  generated ordinary slang types and named resolver signatures; v1 includes
+  queries and mutations, variables, named operations, fragments, explicit
+  batching, and limits against hostile queries (depth, breadth, alias count,
+  cost), with no subscriptions or runtime introspection. Add a GraphQL row to
+  `bench/SPEC.md` with the N+1 case (users with their orders).
 - [ ] **G4. GraphQL implementation**, item by item as the approved note
   lists them.
 

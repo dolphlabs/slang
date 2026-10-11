@@ -74,6 +74,13 @@ ABBA measurements are local single-process microbenchmarks only; Go's raw
 KDF batch throughput is about 19% higher at the tested profile, while slang's measured peak
 RSS is lower. Results and limits are recorded in the package README.
 
+Package-owned `exclude <dir>` metadata and sparse package fetching are
+implemented on `feat/package-download-excludes`; `make test` passes, including
+a forced partial-clone rejection fallback. A synthetic 8 MiB excluded blob
+reduced the checked-out/cache footprint from 16,500 KiB to 8 KiB when the Git
+remote honors blob filtering. See
+[`PROTOCOLS_AND_PACKAGE_DISTRIBUTION_PRD.md`](PROTOCOLS_AND_PACKAGE_DISTRIBUTION_PRD.md).
+
 ## 1. User-defined generics, then zokor
 
 - [x] **Why.** zokor, the backend framework (`dolphlabs/zokor`, empty), has to
