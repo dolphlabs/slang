@@ -19,6 +19,8 @@ typedef struct {
     char *version;
     SlPkgPin *pins;
     int npins;
+    char **excludes;
+    int nexcludes;
 } SlProject;
 
 char *project_find_root(const char *start_dir);
