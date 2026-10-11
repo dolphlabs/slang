@@ -263,7 +263,8 @@ A package is a directory: its `.sl` files share one namespace. `import
 works on `struct` and `gc struct`; the decode target comes from the annotation,
 and a `[T]` of a plain `struct` decodes into one buffer, not an object per item.
 Package authors can add repeatable `exclude <dir>` lines to their own
-`slang.project` to omit non-runtime directories from consumers' package caches.
+`slang.project` to omit non-runtime directories from consumers' package caches;
+a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg redis regex
 strings encoding compress builder byteutil flags http http2 httpc`.
 The standalone `argon` package provides bounded Argon2id password hashing

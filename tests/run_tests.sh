@@ -374,6 +374,84 @@ if (cd "$NEWDIR/exclude_bad_app" && SLANG_CACHE="$NEWDIR/cache" \
 else
     echo "PASS package exclusions (rejects symlink manifest)"
 fi
+
+# Git treats a path as local unless it has a scheme or a colon before its
+# first slash. A local path containing ':' must not get --depth/--filter,
+# which Git ignores for local clones with a warning on every fetch.
+mkdir -p "$NEWDIR/colon:repo/src" "$NEWDIR/colon_app"
+printf 'pub fn hi() -> str { return "colon"; }\n' \
+    >"$NEWDIR/colon:repo/src/lib.sl"
+(cd "$NEWDIR/colon:repo" && git init -q && git add . &&
+    git -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
+        commit -q -m t && git tag v1)
+cat >"$NEWDIR/colon_app/slang.project" <<EOF
+name colonapp
+version 0.1.0
+pkg colon git $NEWDIR/colon:repo tag v1 dir src
+EOF
+if ! (cd "$NEWDIR/colon_app" && SLANG_CACHE="$NEWDIR/cache" \
+        "$OLDPWD/slangc" get >out.txt 2>&1) ||
+   grep -q "ignored in local clones" "$NEWDIR/colon_app/out.txt"; then
+    echo "FAIL package exclusions (local path with ':' cloned as remote)"
+    sed 's/^/  /' "$NEWDIR/colon_app/out.txt"
+    fail=1
+else
+    echo "PASS package exclusions (local path with ':' cloned as local)"
+fi
+
+# An exclude inside the package's own directory is allowed while nothing
+# imports it. Once the package imports it, the import must be refused:
+# the directory was never fetched, and `import "json"` would otherwise
+# fall through to the native json package and run code nobody wrote.
+mkdir -p "$NEWDIR/exclude_nested/src/json" \
+    "$NEWDIR/exclude_nested/src/testdata" "$NEWDIR/exclude_nested_app"
+printf 'name nested\nversion 0.1.0\nexclude src/testdata\nexclude src/json\n' \
+    >"$NEWDIR/exclude_nested/slang.project"
+printf 'pub fn hi() -> str { return "own"; }\n' \
+    >"$NEWDIR/exclude_nested/src/lib.sl"
+printf 'pub fn encode(x: int) -> str { return "own-json"; }\n' \
+    >"$NEWDIR/exclude_nested/src/json/json.sl"
+printf 'fixture\n' >"$NEWDIR/exclude_nested/src/testdata/data.txt"
+(cd "$NEWDIR/exclude_nested" && git init -q && git add . &&
+    git -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
+        commit -q -m t && git tag v1)
+printf 'import "json";\npub fn hi() -> str { return json.encode(1); }\n' \
+    >"$NEWDIR/exclude_nested/src/lib.sl"
+(cd "$NEWDIR/exclude_nested" && git add . &&
+    git -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
+        commit -q -m imports && git tag v2)
+printf 'import "nested";\nprintln(nested.hi());\n' \
+    >"$NEWDIR/exclude_nested_app/main.sl"
+nested_run() { # tag -> run.txt
+    printf 'name nestedapp\nversion 0.1.0\npkg nested git %s/exclude_nested tag %s dir src\n' \
+        "$NEWDIR" "$1" >"$NEWDIR/exclude_nested_app/slang.project"
+    rm -f "$NEWDIR/exclude_nested_app/slang.lock"
+    (cd "$NEWDIR/exclude_nested_app" && SLANG_CACHE="$NEWDIR/cache" \
+        "$OLDPWD/slangc" get >run.txt 2>&1 &&
+        SLANG_CACHE="$NEWDIR/cache" "$OLDPWD/slangc" main.sl --run \
+            >run.txt 2>&1)
+}
+nested_hash=
+if nested_run v1 && grep -qx own "$NEWDIR/exclude_nested_app/run.txt"; then
+    nested_hash=$(readlink "$NEWDIR/cache/pkg/nested/v1")
+fi
+if [ -z "$nested_hash" ] ||
+   [ -e "$NEWDIR/cache/pkg/nested/$nested_hash/src/testdata" ]; then
+    echo "FAIL package exclusions (unimported exclude inside dir)"
+    sed 's/^/  /' "$NEWDIR/exclude_nested_app/run.txt"
+    fail=1
+else
+    echo "PASS package exclusions (unimported exclude inside dir)"
+fi
+if nested_run v2 ||
+   ! grep -q "package 'nested' imports 'json', but its slang.project has 'exclude src/json'" \
+       "$NEWDIR/exclude_nested_app/run.txt"; then
+    echo "FAIL package exclusions (refuses import of excluded dir)"
+    sed 's/^/  /' "$NEWDIR/exclude_nested_app/run.txt"
+    fail=1
+else
+    echo "PASS package exclusions (refuses import of excluded dir)"
+fi
 rm -rf "$NEWDIR"
 
 # ---- signals ------------------------------------------------------------

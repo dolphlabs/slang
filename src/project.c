@@ -259,6 +259,17 @@ static SlProject *read_package_manifest(const char *dir) {
     return parse_project_path(path);
 }
 
+/* The `exclude` of `m` that holds repository-relative `rel`, or NULL. */
+static const char *excluding(const SlProject *m, const char *rel) {
+    for (int i = 0; i < m->nexcludes; i++) {
+        size_t n = strlen(m->excludes[i]);
+        if (!strncmp(rel, m->excludes[i], n) &&
+            (rel[n] == '/' || rel[n] == '\0'))
+            return m->excludes[i];
+    }
+    return NULL;
+}
+
 static void ingest_dep_project(SlProject *p, const char *dir) {
     SlProject *dep = read_package_manifest(dir);
     if (!dep)
@@ -359,6 +370,79 @@ static char *cache_root(void) {
     if (!home || !home[0])
         project_error("HOME is unset; set SLANG_CACHE");
     return join2(home, ".cache/slang");
+}
+
+/* The real path of the cache's pkg directory, or NULL when there is none.
+ * Unlike cache_root this is never an error: the loader asks it about
+ * imports that have nothing to do with a fetched package. */
+static char *cache_pkg_real(void) {
+    const char *env = getenv("SLANG_CACHE");
+    char *dir;
+    if (env && env[0]) {
+        dir = join2(env, "pkg");
+    } else {
+        const char *home = getenv("HOME");
+        if (!home || !home[0])
+            return NULL;
+        dir = join2(home, ".cache/slang/pkg");
+    }
+    char real[PATH_MAX];
+    return realpath(dir, real) ? xstrdup(real) : NULL;
+}
+
+const char *project_excluded_import(const char *from_dir, const char *ipath,
+                                    const char **pkg_name) {
+    char *entry = project_find_root(from_dir);
+    char *pkgs = entry ? cache_pkg_real() : NULL;
+    if (!pkgs)
+        return NULL;
+    /* Only a fetched package's own manifest, at pkg/<name>/<hash>/. */
+    size_t n = strlen(pkgs);
+    if (strncmp(entry, pkgs, n) || entry[n] != '/')
+        return NULL;
+    const char *slash = strchr(entry + n + 1, '/');
+    if (!slash || slash == entry + n + 1 || !slash[1] ||
+        strchr(slash + 1, '/'))
+        return NULL;
+    SlProject *m = read_package_manifest(entry);
+    if (!m || m->nexcludes == 0)
+        return NULL;
+
+    /* The excluded directory is absent, so realpath cannot resolve the
+     * import; normalise it lexically against the entry instead. `from`
+     * starts with `entry`, which project_find_root found by walking up
+     * from it. */
+    char from[PATH_MAX];
+    if (!realpath(from_dir, from))
+        return NULL;
+    char *path = xasprintf("%s/%s", from + strlen(entry), ipath);
+    char *rel = (char *)xmalloc(strlen(path) + 1);
+    size_t len = 0;
+    char *save = NULL;
+    for (char *seg = strtok_r(path, "/", &save); seg;
+         seg = strtok_r(NULL, "/", &save)) {
+        if (!strcmp(seg, "."))
+            continue;
+        if (!strcmp(seg, "..")) {
+            if (len == 0)
+                return NULL; /* leaves the package: not its exclude */
+            while (len > 0 && rel[len - 1] != '/')
+                len--;
+            if (len > 0)
+                len--;
+            continue;
+        }
+        if (len > 0)
+            rel[len++] = '/';
+        size_t sl = strlen(seg);
+        memcpy(rel + len, seg, sl);
+        len += sl;
+    }
+    rel[len] = '\0';
+    const char *ex = excluding(m, rel);
+    if (ex && pkg_name)
+        *pkg_name = m->name ? m->name : entry;
+    return ex;
 }
 
 static void mkdir_p(const char *path) {
@@ -583,8 +667,15 @@ char *project_tree_hash(const char *dir) {
     return sha_hex(dig);
 }
 
+/* Git's own rule (url_is_local_not_ssh): a URL has a scheme, or is
+ * scp-like `host:path` with the colon before any slash. `/srv/repo:v1`
+ * and `./a:b` are local paths, which ignore --depth and --filter. */
 static int is_git_remote_url(const char *url) {
-    return strstr(url, "://") != NULL || strchr(url, ':') != NULL;
+    if (strstr(url, "://"))
+        return 1;
+    const char *colon = strchr(url, ':');
+    const char *slash = strchr(url, '/');
+    return colon && (!slash || colon < slash);
 }
 
 static void rm_rf(const char *path);
@@ -766,16 +857,10 @@ void project_get(SlProject *p) {
             project_error("git clone failed for '%s' (%s @ %s)", pin->name,
                           pin->git, pin->tag);
         SlProject *meta = read_package_manifest(tmp);
-        if (meta && pin->dir) {
-            for (int j = 0; j < meta->nexcludes; j++) {
-                size_t n = strlen(meta->excludes[j]);
-                if (!strncmp(pin->dir, meta->excludes[j], n) &&
-                    (pin->dir[n] == '/' || pin->dir[n] == '\0'))
-                    project_error("package '%s' selects dir '%s', but its "
-                                  "manifest excludes that directory",
-                                  pin->name, pin->dir);
-            }
-        }
+        if (meta && pin->dir && excluding(meta, pin->dir))
+            project_error("package '%s' selects dir '%s', but its "
+                          "manifest excludes that directory",
+                          pin->name, pin->dir);
         if (run_git_sparse_checkout(tmp, meta) != 0)
             project_error("git sparse checkout failed for '%s' (%s @ %s)",
                           pin->name, pin->git, pin->tag);
