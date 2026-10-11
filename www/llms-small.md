@@ -264,6 +264,8 @@ works on `struct` and `gc struct`; the decode target comes from the annotation,
 and a `[T]` of a plain `struct` decodes into one buffer, not an object per item.
 Standard packages: `time net json proc fs os io log crypto sql pg redis regex
 strings encoding compress builder byteutil flags http http2 httpc`.
+The standalone `argon` package provides bounded Argon2id password hashing
+with standard PHC strings; its native crypto calls require OpenSSL 3.2+.
 
 ## Tests
 
