@@ -3918,3 +3918,23 @@ shrink, cap, and floor decisions are now tested with controlled samples in
 `tests/runtime/test_gc.c`. The end-to-end check keeps the nursery bounds and
 the cheap-workload limit without assuming one timing outcome for the decode
 workload.
+
+## Implemented: standalone Argon2id package
+
+The separate `dolphlabs/argon` repository provides bounded Argon2id v19
+hashing and PHC verification. slang's `crypto` package exposes native raw
+KDF and verify primitives through OpenSSL's Argon2id provider (OpenSSL 3.2+);
+the source package handles random salts, canonical unpadded Base64, strict PHC
+parsing, cost caps and rehash checks. A fixed PHC vector from Go's
+`golang.org/x/crypto` verifies through the slang package; the benchmark also
+checks matching raw tags. Consumer tests cover invalid variants, versions,
+parameters, Base64, and PHC size, and the core crypto test is in the GC stress
+and minor-verification lists.
+
+Final four-round local ABBA microbenchmark (Intel macOS, OpenSSL 3.6.4;
+Go 1.24.1 and x/crypto v0.31.0; 19,456 KiB, t=2, p=1; 160 samples/op):
+slang raw/hash/verify p50 37.45/36.97/37.57 ms; Go 31.78/32.08/31.96 ms.
+Batch throughput was 26.1/26.8/26.7 vs 31.1/31.0/31.0 ops/s. Peak process
+RSS was 23,308 vs 61,876 KiB. p99 is in the package README and is single-host
+microbenchmark evidence, not cloud or server latency. Compare the implementations
+again on the deployment host before making service-level claims.

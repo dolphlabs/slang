@@ -854,6 +854,7 @@ void force_native_result_types(CG *cg) {
     }
     if (want_pkg(cg, "crypto")) {
         res_cname(cg, "bytes", "str");
+        res_cname(cg, "bool", "str");
     }
     if (want_pkg(cg, "sql")) {
         res_cname(cg, "rawptr", "str");

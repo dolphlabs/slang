@@ -2,6 +2,10 @@
 #include <openssl/hmac.h>
 #include <openssl/rand.h>
 #include <openssl/evp.h>
+#include <openssl/core_names.h>
+#include <openssl/kdf.h>
+#include <openssl/params.h>
+#include <openssl/crypto.h>
 
 /* OpenSSL loads providers lazily, and on this platform that reaches
  * DSO_load -> dlopen -> dyld, which needs far more stack than a green
@@ -162,4 +166,175 @@ static sl_res_bytes_str *sl_crypto_pbkdf2_sha256(sl_bytes *password,
     if (!ok)
         return sl_crypto_err_bytes("PKCS5_PBKDF2_HMAC failed");
     return sl_crypto_ok_bytes(sl_bytes_new(out, keylen));
+}
+
+/* Argon2id's memory and time inputs may come from a stored PHC string.
+ * Validate them before entering OpenSSL so an untrusted hash cannot ask
+ * one verification to allocate unbounded memory or run unbounded passes. */
+#define SL_ARGON2ID_MAX_PASSWORD (1024LL * 1024)
+#define SL_ARGON2ID_MAX_MEMORY_KIB 262144LL
+#define SL_ARGON2ID_MAX_ITERATIONS 10LL
+#define SL_ARGON2ID_MAX_PARALLELISM 4LL
+#define SL_ARGON2ID_MIN_SALT 8LL
+#define SL_ARGON2ID_MAX_SALT 64LL
+#define SL_ARGON2ID_MIN_TAG 16LL
+#define SL_ARGON2ID_MAX_TAG 64LL
+
+static sl_res_bool_str *sl_crypto_ok_bool(bool value) {
+    sl_res_bool_str *r = (sl_res_bool_str *)sl_gc_alloc(
+        sizeof(sl_res_bool_str), sl_gc_trace_sl_res_bool_str);
+    r->ok = true;
+    r->v = value;
+    return r;
+}
+
+static sl_res_bool_str *sl_crypto_err_bool(const char *msg) {
+    sl_res_bool_str *r = (sl_res_bool_str *)sl_gc_alloc(
+        sizeof(sl_res_bool_str), sl_gc_trace_sl_res_bool_str);
+    r->ok = false;
+    r->e = sl_strdup(msg);
+    return r;
+}
+
+static const char *sl_crypto_argon2id_validate(sl_bytes *password,
+                                               sl_bytes *salt,
+                                               long long iterations,
+                                               long long memory_kib,
+                                               long long parallelism,
+                                               long long tag_len) {
+    if (password->len > SL_ARGON2ID_MAX_PASSWORD)
+        return "Argon2id password exceeds the 1 MiB limit";
+    if (salt->len < SL_ARGON2ID_MIN_SALT ||
+        salt->len > SL_ARGON2ID_MAX_SALT)
+        return "Argon2id salt must contain 8 to 64 bytes";
+    if (parallelism < 1 || parallelism > SL_ARGON2ID_MAX_PARALLELISM)
+        return "Argon2id parallelism must be between 1 and 4";
+    if (iterations < 1 || iterations > SL_ARGON2ID_MAX_ITERATIONS)
+        return "Argon2id iterations must be between 1 and 10";
+    if (memory_kib < 8 * parallelism ||
+        memory_kib > SL_ARGON2ID_MAX_MEMORY_KIB)
+        return "Argon2id memory must be between 8 * parallelism and 262144 KiB";
+    if (tag_len < SL_ARGON2ID_MIN_TAG || tag_len > SL_ARGON2ID_MAX_TAG)
+        return "Argon2id tag must contain 16 to 64 bytes";
+    return NULL;
+}
+
+static EVP_KDF *sl_crypto_argon2id_kdf;
+static pthread_once_t sl_crypto_argon2id_once = PTHREAD_ONCE_INIT;
+
+static void sl_crypto_argon2id_load(void) {
+    sl_crypto_argon2id_kdf = EVP_KDF_fetch(NULL, "ARGON2ID", NULL);
+}
+
+/* OpenSSL added this provider in 3.2. The generic EVP_KDF API is present in
+ * OpenSSL 3.0, so older builds still compile and return a useful error when
+ * the algorithm fetch is unavailable. One KDF descriptor is shared; each
+ * concurrent call owns its context and its bounded work memory. */
+static int sl_crypto_argon2id_derive(const unsigned char *password,
+                                     size_t password_len,
+                                     const unsigned char *salt,
+                                     size_t salt_len,
+                                     uint32_t iterations,
+                                     uint32_t memory_kib,
+                                     uint32_t parallelism,
+                                     unsigned char *out,
+                                     size_t out_len) {
+    static const unsigned char empty = 0;
+    if (!password)
+        password = &empty;
+
+    uint32_t version = 0x13;
+    /* Clear password and secret context data as soon as OpenSSL consumes it. */
+    uint32_t early_clean = 1;
+    OSSL_PARAM params[] = {
+        OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_PASSWORD,
+                                          (void *)password, password_len),
+        OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_SALT, (void *)salt,
+                                          salt_len),
+        OSSL_PARAM_construct_uint32(OSSL_KDF_PARAM_ITER, &iterations),
+        OSSL_PARAM_construct_uint32("lanes", &parallelism),
+        OSSL_PARAM_construct_uint32("memcost", &memory_kib),
+        OSSL_PARAM_construct_uint32("version", &version),
+        OSSL_PARAM_construct_uint32("early_clean", &early_clean),
+        OSSL_PARAM_construct_end(),
+    };
+
+    sl_rt_preempt_disable();
+    int once_rc = pthread_once(&sl_crypto_argon2id_once,
+                               sl_crypto_argon2id_load);
+    if (once_rc != 0 || !sl_crypto_argon2id_kdf) {
+        sl_rt_preempt_enable();
+        return -2;
+    }
+    EVP_KDF_CTX *ctx = EVP_KDF_CTX_new(sl_crypto_argon2id_kdf);
+    if (!ctx) {
+        sl_rt_preempt_enable();
+        return -1;
+    }
+    int ok = EVP_KDF_derive(ctx, out, out_len, params) == 1;
+    EVP_KDF_CTX_free(ctx);
+    sl_rt_preempt_enable();
+    return ok ? 1 : 0;
+}
+
+static sl_res_bytes_str *sl_crypto_argon2id_raw(sl_bytes *password,
+                                                sl_bytes *salt,
+                                                long long iterations,
+                                                long long memory_kib,
+                                                long long parallelism,
+                                                long long tag_len) {
+    SL_CRYPTO_STACK();
+    const char *invalid = sl_crypto_argon2id_validate(
+        password, salt, iterations, memory_kib, parallelism, tag_len);
+    if (invalid)
+        return sl_crypto_err_bytes(invalid);
+
+    unsigned char tag[SL_ARGON2ID_MAX_TAG];
+    int rc = sl_crypto_argon2id_derive(
+        password->ptr, (size_t)password->len, salt->ptr, (size_t)salt->len,
+        (uint32_t)iterations, (uint32_t)memory_kib, (uint32_t)parallelism,
+        tag, (size_t)tag_len);
+    if (rc != 1) {
+        OPENSSL_cleanse(tag, sizeof(tag));
+        if (rc == -2)
+            return sl_crypto_err_bytes(
+                "Argon2id requires OpenSSL 3.2 or newer with Argon2 support");
+        if (rc == -1)
+            return sl_crypto_err_bytes("could not allocate Argon2id context");
+        return sl_crypto_err_bytes("OpenSSL Argon2id derivation failed");
+    }
+    sl_bytes *derived = sl_bytes_new(tag, tag_len);
+    OPENSSL_cleanse(tag, sizeof(tag));
+    return sl_crypto_ok_bytes(derived);
+}
+
+static sl_res_bool_str *sl_crypto_argon2id_verify(sl_bytes *password,
+                                                  sl_bytes *salt,
+                                                  sl_bytes *expected,
+                                                  long long iterations,
+                                                  long long memory_kib,
+                                                  long long parallelism) {
+    SL_CRYPTO_STACK();
+    const char *invalid = sl_crypto_argon2id_validate(
+        password, salt, iterations, memory_kib, parallelism, expected->len);
+    if (invalid)
+        return sl_crypto_err_bool(invalid);
+
+    unsigned char tag[SL_ARGON2ID_MAX_TAG];
+    int rc = sl_crypto_argon2id_derive(
+        password->ptr, (size_t)password->len, salt->ptr, (size_t)salt->len,
+        (uint32_t)iterations, (uint32_t)memory_kib, (uint32_t)parallelism,
+        tag, (size_t)expected->len);
+    if (rc != 1) {
+        OPENSSL_cleanse(tag, sizeof(tag));
+        if (rc == -2)
+            return sl_crypto_err_bool(
+                "Argon2id requires OpenSSL 3.2 or newer with Argon2 support");
+        if (rc == -1)
+            return sl_crypto_err_bool("could not allocate Argon2id context");
+        return sl_crypto_err_bool("OpenSSL Argon2id verification failed");
+    }
+    int equal = CRYPTO_memcmp(tag, expected->ptr, (size_t)expected->len) == 0;
+    OPENSSL_cleanse(tag, sizeof(tag));
+    return sl_crypto_ok_bool(equal != 0);
 }
