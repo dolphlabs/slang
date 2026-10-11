@@ -50,6 +50,22 @@ fn handle(stream: i32, path: str, body: bytes, wch: chan[http2.WMsg], g: chan[bo
     if len(body) > 0 {
         out = out + to_bytes(" echo=") + body;
     }
+    if path == "/trailers" || path == "/trailers-empty" ||
+       path == "/trailers-big" {
+        if path == "/trailers-empty" {
+            out = b"";
+        }
+        if path == "/trailers-big" {
+            out = body_for("/big");
+        }
+        let trailers: [http2.Header] = [
+            http2.Header { name: "x-finish", value: "complete" }
+        ];
+        chan_send(wch, http2.response_trailers_msg(stream as int, "200", extra,
+                                                   out, trailers));
+        http2.gate_leave(g);
+        return;
+    }
     chan_send(wch, http2.response_msg(stream as int, "200", extra, out));
     http2.gate_leave(g);
 }

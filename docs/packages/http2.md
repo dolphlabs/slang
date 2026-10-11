@@ -265,6 +265,8 @@ client, but a real browser is different evidence.
 
 ### `let W_MAXFRAME = 4; // peer's SETTINGS_MAX_FRAME_SIZE is now `n``
 
+### `let W_TRAILERS = 5; // response HEADERS + body + final HEADERS`
+
 ### `gc struct WMsg`
 
 ### `fn raw_msg(b: bytes) -> WMsg`
@@ -274,6 +276,10 @@ client, but a real browser is different evidence.
 ### `fn response_msg(stream: int, status: str, extra: [Header], body: bytes) -> WMsg`
 
 Build a response. The body is handed over UNFRAMED: the writer owns the peer's window and its max frame size, so it -- not the handler -- decides how the body is cut into DATA frames and when each may go.
+
+### `fn response_trailers_msg(stream: int, status: str, extra: [Header], body: bytes, trailers: [Header]) -> WMsg`
+
+Build a response whose final headers carry trailers. The initial header frame and final trailer frame share `head`; `n` marks their boundary so the writer can keep both writes ordered around flow-controlled DATA frames. An empty trailer list keeps the ordinary response path and wire format.
 
 ### `gc struct Limits`
 
@@ -362,6 +368,8 @@ Owns the write side, and with it the peer's send windows.  Flow control has to l
 ### `fn respond(cn: Conn, wch: chan[WMsg], stream: int, status: str, extra: [Header], body: bytes)`
 
 Enqueue a response for `stream`. Every write on the connection goes through the writer task, so there is deliberately no direct-write variant: one would be able to interleave with a handler mid-frame.
+
+### `fn respond_trailers(cn: Conn, wch: chan[WMsg], stream: int, status: str, extra: [Header], body: bytes, trailers: [Header])`
 
 ### `fn send_reset(wch: chan[WMsg], stream: int, code: int)`
 

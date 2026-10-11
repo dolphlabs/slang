@@ -74,6 +74,14 @@ ABBA measurements are local single-process microbenchmarks only; Go's raw
 KDF batch throughput is about 19% higher at the tested profile, while slang's measured peak
 RSS is lower. Results and limits are recorded in the package README.
 
+`stdlib/http2` has a general response-trailer API on `feat/http2-trailers`:
+`response_trailers_msg` and `respond_trailers` queue initial headers, a
+flow-controlled body, and final headers without copying the response body.
+The Slang fixture and independent Go h2c probe pass for ordinary, empty, and
+200 KB flow-controlled bodies. This adds transport capability only; gRPC
+status handling remains in the standalone package. See
+[`HTTP2_TRAILERS_PRD.md`](HTTP2_TRAILERS_PRD.md).
+
 ## 1. User-defined generics, then zokor
 
 - [x] **Why.** zokor, the backend framework (`dolphlabs/zokor`, empty), has to

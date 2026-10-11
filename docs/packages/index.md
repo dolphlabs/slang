@@ -2101,7 +2101,7 @@ any signal-handling program.
 - [flags](packages/flags.md) -- source package, 23 public items
 - [fs](packages/fs.md) -- compiler-provided, 7 public items
 - [http](packages/http.md) -- source package, 55 public items
-- [http2](packages/http2.md) -- source package, 122 public items
+- [http2](packages/http2.md) -- source package, 125 public items
 - [httpc](packages/httpc.md) -- source package, 35 public items
 - [io](packages/io.md) -- compiler-provided, 12 public items
 - [json](packages/json.md) -- compiler-provided, 0 public items

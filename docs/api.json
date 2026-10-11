@@ -1278,12 +1278,20 @@
           "line": 68
         },
         {
+          "name": "W_TRAILERS",
+          "decl": "let",
+          "sig": "let W_TRAILERS = 5; // response HEADERS + body + final HEADERS",
+          "doc": "",
+          "file": "stdlib/http2/conn.sl",
+          "line": 69
+        },
+        {
           "name": "WMsg",
           "decl": "struct",
           "sig": "gc struct WMsg",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 70
+          "line": 71
         },
         {
           "name": "raw_msg",
@@ -1291,7 +1299,7 @@
           "sig": "fn raw_msg(b: bytes) -> WMsg",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 78
+          "line": 79
         },
         {
           "name": "grant_msg",
@@ -1299,7 +1307,7 @@
           "sig": "fn grant_msg(stream: int, n: int) -> WMsg",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 82
+          "line": 83
         },
         {
           "name": "response_msg",
@@ -1307,7 +1315,15 @@
           "sig": "fn response_msg(stream: int, status: str, extra: [Header], body: bytes) -> WMsg",
           "doc": "Build a response. The body is handed over UNFRAMED: the writer owns the peer's window and its max frame size, so it -- not the handler -- decides how the body is cut into DATA frames and when each may go.",
           "file": "stdlib/http2/conn.sl",
-          "line": 93
+          "line": 94
+        },
+        {
+          "name": "response_trailers_msg",
+          "decl": "fn",
+          "sig": "fn response_trailers_msg(stream: int, status: str, extra: [Header], body: bytes, trailers: [Header]) -> WMsg",
+          "doc": "Build a response whose final headers carry trailers. The initial header frame and final trailer frame share `head`; `n` marks their boundary so the writer can keep both writes ordered around flow-controlled DATA frames. An empty trailer list keeps the ordinary response path and wire format.",
+          "file": "stdlib/http2/conn.sl",
+          "line": 117
         },
         {
           "name": "Limits",
@@ -1315,7 +1331,7 @@
           "sig": "gc struct Limits",
           "doc": "---- deadlines -------------------------------------------------------  Four separate budgets, in nanoseconds, because they defend against four different peers and want wildly different numbers.  `idle` is the generous one on purpose: an HTTP/2 connection sitting open with no streams is completely normal -- that is the whole point of connection reuse -- so timing it out aggressively breaks correct clients. `request` is the strict one: once a client has started a request it must finish it, and dribbling DATA forever is exactly the slowloris shape.",
           "file": "stdlib/http2/conn.sl",
-          "line": 123
+          "line": 150
         },
         {
           "name": "default_limits",
@@ -1323,7 +1339,7 @@
           "sig": "fn default_limits() -> Limits",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 135
+          "line": 162
         },
         {
           "name": "is_timeout",
@@ -1331,7 +1347,7 @@
           "sig": "fn is_timeout(e: str) -> bool",
           "doc": "The reserved error string net.recv_until / net.send_until return when a deadline passes. Exposed as a predicate so callers can react to a slow peer (GOAWAY with ENHANCE_YOUR_CALM) differently from a broken one, without hardcoding the text.",
           "file": "stdlib/http2/conn.sl",
-          "line": 152
+          "line": 179
         },
         {
           "name": "DEFAULT_MAX_FRAME",
@@ -1339,7 +1355,7 @@
           "sig": "let DEFAULT_MAX_FRAME = 16384;",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 156
+          "line": 183
         },
         {
           "name": "DEFAULT_WINDOW",
@@ -1347,7 +1363,7 @@
           "sig": "let DEFAULT_WINDOW = 65535;",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 157
+          "line": 184
         },
         {
           "name": "MAX_HEADER_FIELDS",
@@ -1355,7 +1371,7 @@
           "sig": "let MAX_HEADER_FIELDS = 128;",
           "doc": "Our own limits, advertised in SETTINGS and enforced on receipt.",
           "file": "stdlib/http2/conn.sl",
-          "line": 159
+          "line": 186
         },
         {
           "name": "MAX_BODY",
@@ -1363,7 +1379,7 @@
           "sig": "let MAX_BODY = 1048576;",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 160
+          "line": 187
         },
         {
           "name": "RESET_BURST",
@@ -1371,7 +1387,7 @@
           "sig": "let RESET_BURST = 100;",
           "doc": "---- Rapid Reset (CVE-2023-44487) ------------------------------------  A peer opens a stream and immediately RST_STREAMs it. From its side the stream is closed the instant it opens, so a concurrency limit never sees it -- while the server has already done the HPACK decode and, in most designs, started the work. Repeat and the server is driven at whatever rate the attacker can write frames.  Cancelling a request IS legitimate: a browser navigating away resets its in-flight streams, and a client that gives up on a slow endpoint should. So a flat \"no resets\" rule would break correct clients. What is not legitimate is resetting nearly everything you open, forever.  Hence a burst plus a ratio: RESET_BURST cancellations are free, and after that a peer whose resets outnumber half of what it opened is ending the connection. A browser that abandons a page load trips neither; a Rapid Reset flood resets every stream it opens, so it trips both the moment the burst is spent.",
           "file": "stdlib/http2/conn.sl",
-          "line": 180
+          "line": 207
         },
         {
           "name": "Conn",
@@ -1379,7 +1395,7 @@
           "sig": "gc struct Conn",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 182
+          "line": 209
         },
         {
           "name": "Req",
@@ -1387,7 +1403,7 @@
           "sig": "gc struct Req",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 196
+          "line": 223
         },
         {
           "name": "conn_new",
@@ -1395,7 +1411,7 @@
           "sig": "fn conn_new() -> Conn",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 206
+          "line": 233
         },
         {
           "name": "our_settings",
@@ -1403,7 +1419,7 @@
           "sig": "fn our_settings() -> bytes",
           "doc": "Our SETTINGS: a modest frame size, and push disabled because server push is deprecated and no current client wants it.",
           "file": "stdlib/http2/conn.sl",
-          "line": 220
+          "line": 247
         },
         {
           "name": "gate",
@@ -1411,7 +1427,7 @@
           "sig": "fn gate(n: int) -> chan[bool]",
           "doc": "---- the stream gate -------------------------------------------------  The connection layer cannot cap concurrency on its own: it does not spawn the handlers, the CALLER does. (slang has function values now, so handing it a callback would compile -- but that only moves the same question inside, and the answer would still be this.) So the bound lives in a token channel the caller holds, and this is the mechanism plus the vocabulary for it.  A gate is a chan[bool] holding `n` tokens. gate_enter takes one and blocks when none are left; gate_leave puts one back. That blocking IS the backpressure -- the reader stops pulling frames while every slot is busy, which is the correct answer to \"more work than I can do\", and far better than the alternative measured before this existed: 3002 concurrent handler tasks from a peer we had told our limit was 100.  It also solves shutdown. Closing the writer channel while handlers are still in flight panics them with \"send on closed channel\", and nothing else could tell whether any were left. gate_drain waits for every token to come home, so the close is safe by construction.  The one rule: gate_leave must run on EVERY path out of a handler, including error returns. A lost token permanently shrinks the connection's capacity, and losing all of them wedges that connection (only that one -- the failure is bounded and visible, not a crash).",
           "file": "stdlib/http2/conn.sl",
-          "line": 253
+          "line": 280
         },
         {
           "name": "gate_enter",
@@ -1419,7 +1435,7 @@
           "sig": "fn gate_enter(g: chan[bool])",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 267
+          "line": 294
         },
         {
           "name": "gate_leave",
@@ -1427,7 +1443,7 @@
           "sig": "fn gate_leave(g: chan[bool])",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 274
+          "line": 301
         },
         {
           "name": "gate_drain",
@@ -1435,7 +1451,7 @@
           "sig": "fn gate_drain(g: chan[bool], n: int)",
           "doc": "Wait until every handler has finished, by collecting all `n` tokens. Call before chan_close on the writer channel.",
           "file": "stdlib/http2/conn.sl",
-          "line": 280
+          "line": 307
         },
         {
           "name": "Transport",
@@ -1443,7 +1459,7 @@
           "sig": "gc struct Transport",
           "doc": "---- transport -------------------------------------------------------  h2 runs over cleartext TCP (h2c, prior knowledge) or over TLS, and the two are reached through different runtime calls: net.recv_until on an fd, net.tls_recv_until on an SSL handle. Everything above this point is identical either way, so the difference is confined to one struct and two functions rather than duplicated through the whole layer.  This matters beyond tidiness: browsers speak HTTP/2 ONLY over TLS with ALPN, so a connection layer that can only do fds cannot serve a browser at all, however conformant the rest of it is.",
           "file": "stdlib/http2/conn.sl",
-          "line": 302
+          "line": 329
         },
         {
           "name": "transport_fd",
@@ -1451,7 +1467,7 @@
           "sig": "fn transport_fd(fd: i32) -> Transport",
           "doc": "h2c: cleartext, prior knowledge. curl --http2-prior-knowledge, and Go's http2.Transport with AllowHTTP.",
           "file": "stdlib/http2/conn.sl",
-          "line": 309
+          "line": 336
         },
         {
           "name": "transport_tls",
@@ -1459,7 +1475,7 @@
           "sig": "fn transport_tls(ssl: rawptr) -> Transport",
           "doc": "h2 over TLS. The handle comes from net.tls_accept, and the caller is responsible for having negotiated \"h2\" via ALPN first -- see alpn_is_h2 below.",
           "file": "stdlib/http2/conn.sl",
-          "line": 316
+          "line": 343
         },
         {
           "name": "tr_close",
@@ -1467,7 +1483,7 @@
           "sig": "fn tr_close(t: Transport)",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 334
+          "line": 361
         },
         {
           "name": "alpn_is_h2",
@@ -1475,7 +1491,7 @@
           "sig": "fn alpn_is_h2(proto: str) -> bool",
           "doc": "RFC 7301 \u00a73.1: the peer either selected \"h2\" or it did not. A server that advertised h2 and http/1.1 must look, because a browser offered both and may well have picked http/1.1 -- feeding an HTTP/1.1 client into this layer produces \"bad connection preface\", which is true but unhelpful.",
           "file": "stdlib/http2/conn.sl",
-          "line": 347
+          "line": 374
         },
         {
           "name": "Reader",
@@ -1483,7 +1499,7 @@
           "sig": "gc struct Reader",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 356
+          "line": 383
         },
         {
           "name": "reader_new",
@@ -1491,7 +1507,7 @@
           "sig": "fn reader_new() -> Reader",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 360
+          "line": 387
         },
         {
           "name": "read_frame",
@@ -1499,7 +1515,7 @@
           "sig": "fn read_frame(r: Reader, t: Transport, max_frame: int, u: until) -> result[Frame, str]",
           "doc": "Pull bytes until at least one complete frame is buffered, then return it and keep the remainder. Note the `&mut *c` at every site below that forwards this borrow: passing `c` directly MOVES it, so the second call would fail with \"use of moved value\". Reborrowing keeps the caller's borrow usable.  `u` bounds the WHOLE call, not each recv: a peer that sends one octet every second must still finish the frame inside the budget, which is what makes this a slowloris defence rather than a keepalive check. Pass until_never() only where blocking forever is genuinely intended.",
           "file": "stdlib/http2/conn.sl",
-          "line": 374
+          "line": 401
         },
         {
           "name": "accept_preface",
@@ -1507,7 +1523,7 @@
           "sig": "fn accept_preface(r: Reader, t: Transport, wch: chan[WMsg], u: until) -> result[bool, str]",
           "doc": "Verify the 24-byte client connection preface and send ours.",
           "file": "stdlib/http2/conn.sl",
-          "line": 411
+          "line": 438
         },
         {
           "name": "read_request",
@@ -1515,7 +1531,7 @@
           "sig": "fn read_request(cn: Conn, r: Reader, t: Transport, wch: chan[WMsg], lim: Limits) -> result[Req, str]",
           "doc": "Read frames until one complete request has arrived.  Two clocks, switched at the first HEADERS. Before it the connection is idle and gets the generous `idle` budget, refreshed by each control frame that arrives -- a client PINGing a kept-alive connection is behaving correctly and must not be disconnected. After it the strict `request` budget applies to the request as a WHOLE and is never refreshed, so no amount of dribbled DATA or CONTINUATION can extend it.",
           "file": "stdlib/http2/conn.sl",
-          "line": 583
+          "line": 610
         },
         {
           "name": "writer_task",
@@ -1523,7 +1539,7 @@
           "sig": "fn writer_task(t: Transport, wch: chan[WMsg], write_ns: int)",
           "doc": "Owns the write side, and with it the peer's send windows.  Flow control has to live here rather than in the handlers. The window is a property of the CONNECTION, shared by every concurrent stream, so no handler can decide on its own whether it may send -- and the WINDOW_UPDATE that grants credit arrives on the read side, in a different task entirely. Routing both into this one task is what lets the accounting be correct without a lock at all. slang does have a mutex now, but reaching for one here would be the worse design: it would serialise the writers without making the window arithmetic any less shared.  A blocked stream parks its BODY here, not its task: the handler hands the response over and moves on, so a peer with a tiny window costs a queue entry rather than a live task.",
           "file": "stdlib/http2/conn.sl",
-          "line": 919
+          "line": 955
         },
         {
           "name": "respond",
@@ -1531,7 +1547,15 @@
           "sig": "fn respond(cn: Conn, wch: chan[WMsg], stream: int, status: str, extra: [Header], body: bytes)",
           "doc": "Enqueue a response for `stream`. Every write on the connection goes through the writer task, so there is deliberately no direct-write variant: one would be able to interleave with a handler mid-frame.",
           "file": "stdlib/http2/conn.sl",
-          "line": 1024
+          "line": 1073
+        },
+        {
+          "name": "respond_trailers",
+          "decl": "fn",
+          "sig": "fn respond_trailers(cn: Conn, wch: chan[WMsg], stream: int, status: str, extra: [Header], body: bytes, trailers: [Header])",
+          "doc": "",
+          "file": "stdlib/http2/conn.sl",
+          "line": 1078
         },
         {
           "name": "send_reset",
@@ -1539,7 +1563,7 @@
           "sig": "fn send_reset(wch: chan[WMsg], stream: int, code: int)",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 1029
+          "line": 1084
         },
         {
           "name": "send_goaway",
@@ -1547,7 +1571,7 @@
           "sig": "fn send_goaway(wch: chan[WMsg], last_stream: int, code: int, msg: str)",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 1033
+          "line": 1088
         },
         {
           "name": "FRAME_HEADER_LEN",

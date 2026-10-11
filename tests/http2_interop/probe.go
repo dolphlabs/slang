@@ -69,7 +69,52 @@ func main() {
 	check("GET content-type", resp.Header.Get("Content-Type") == "text/plain",
 		resp.Header.Get("Content-Type"))
 
-	// 2. POST with a body: exercises DATA frames INTO the server and the
+	// 2. Trailers terminate the response independently of DATA flow control.
+	resp, err = c.Get(base + "/trailers")
+	if err != nil {
+		fmt.Printf("FAIL  GET /trailers: %v\n", err)
+		os.Exit(1)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	check("response body before trailers", string(body) == "path=/trailers",
+		fmt.Sprintf("got %q", string(body)))
+	check("response trailer", resp.Trailer.Get("X-Finish") == "complete",
+		resp.Trailer.Get("X-Finish"))
+
+	resp, err = c.Get(base + "/trailers-empty")
+	if err != nil {
+		fmt.Printf("FAIL  GET /trailers-empty: %v\n", err)
+		os.Exit(1)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	check("empty body with trailers", len(body) == 0,
+		fmt.Sprintf("got %d bytes", len(body)))
+	check("empty response trailer", resp.Trailer.Get("X-Finish") == "complete",
+		resp.Trailer.Get("X-Finish"))
+
+	resp, err = c.Get(base + "/trailers-big")
+	if err != nil {
+		fmt.Printf("FAIL  GET /trailers-big: %v\n", err)
+		os.Exit(1)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	patternOK := len(body) == 200000
+	for i, b := range body {
+		if b != byte('0'+(i%10)) {
+			patternOK = false
+			break
+		}
+	}
+	check("flow-controlled body before trailers", patternOK,
+		fmt.Sprintf("got %d bytes", len(body)))
+	check("flow-controlled response trailer",
+		resp.Trailer.Get("X-Finish") == "complete",
+		resp.Trailer.Get("X-Finish"))
+
+	// 3. POST with a body: exercises DATA frames INTO the server and the
 	//    receive-side WINDOW_UPDATE that has to come back out.
 	payload := strings.Repeat("abcdefghij", 5000) // 50000 octets
 	resp, err = c.Post(base+"/echo", "text/plain", strings.NewReader(payload))
@@ -83,7 +128,7 @@ func main() {
 	check("POST 50KB round-trip", string(body) == want,
 		fmt.Sprintf("got %d bytes, wanted %d", len(body), len(want)))
 
-	// 3. A large response, which is what makes the server's send-side
+	// 4. A large response, which is what makes the server's send-side
 	//    flow control run for real: Go advertises its own windows and
 	//    will treat an overrun as a connection error.
 	resp, err = c.Get(base + "/big")
@@ -104,7 +149,7 @@ func main() {
 	}
 	check("200KB payload intact", okPattern, "byte pattern diverged")
 
-	// 4. Concurrent streams on ONE connection. Go multiplexes these over
+	// 5. Concurrent streams on ONE connection. Go multiplexes these over
 	//    a single TCP conn, so this is the real multiplexing check --
 	//    and the slow request is issued first, so finishing in about the
 	//    slow one's own time proves they overlapped.

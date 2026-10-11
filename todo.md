@@ -440,34 +440,34 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
 
 ## G. gRPC and GraphQL
 
-Both are new public APIs, so each starts with a design note approved by
-the owner (AGENTS.md §2) before any code. Both come after R1-R4, so they
-are built on a server path that already scales. slang has no reflection,
-interfaces or closures, so both are code-generated from a schema, the way
-`json.decode` is generated from a struct today.
+Both are new public APIs. The owner approved standalone protocol packages
+and generators, with no protocol-specific compiler/runtime support; the
+approved scope is recorded in `HTTP2_TRAILERS_PRD.md`.
+slang has no reflection or closures, so schema generation emits ordinary
+types and named resolver functions. R1-R4 remain sequencing considerations.
 
-- [ ] **G1. gRPC design note.** Builds on `stdlib/http2` (frames, HPACK,
-  concurrent streams, one writer task per connection). Missing: protobuf
+- [ ] **G1. gRPC design note.** The owner approved unary over TLS+ALPN h2
+  with h2c tests and a separate `protoc-gen-slang` tool. Builds on
+  `stdlib/http2` (frames, HPACK, concurrent streams, one writer task per
+  connection). General response trailers (`response_trailers_msg` /
+  `respond_trailers`) are now available and verified against Go's independent
+  HTTP/2 client. Missing: protobuf
   wire encode/decode for value and `gc` structs, length-prefixed message
-  framing, trailers (`grpc-status`, `grpc-message`), deadlines from
+  framing, gRPC `grpc-status`/`grpc-message`, deadlines from
   `grpc-timeout` mapped to `until`, and a `.proto` -> slang generator
   (unary first; then server streaming; client and bidi streaming after).
-  Decisions for the owner: where the generator lives (`slangc` subcommand
-  or a separate tool), and whether TLS/ALPN h2 is in v1 or h2c only.
   The note also adds a gRPC row to `bench/SPEC.md` (the same quote and
   point work over unary RPC), which is also the first load test of
   `stdlib/http2`.
 - [ ] **G2. gRPC implementation**, item by item as the approved note
   lists them, each with fuzzing of the protobuf decoder and the framing
   (hostile input: caps on message size, nesting depth and field count).
-- [ ] **G3. GraphQL design note.** A query parser and validator, and an
-  executor generated from a schema, in the style of gqlgen. Decisions
-  for the owner: schema-first (SDL -> slang) or code-first (slang types
-  -> schema); resolvers as plain function values; the v1 subset (queries
-  and mutations, variables, fragments; no subscriptions); and limits
-  against hostile queries (depth, breadth, alias count, cost). The note
-  also adds a GraphQL row to `bench/SPEC.md` with the N+1 case (users
-  with their orders) and states whether a batching loader is in v1.
+- [ ] **G3. GraphQL design note.** The owner approved schema-first SDL with
+  generated ordinary slang types and named resolver functions. V1 includes
+  queries, mutations, variables, named operations, fragments, explicit
+  batching, and configurable depth/breadth/alias/cost limits; no subscriptions
+  or runtime introspection. Add the N+1 users-with-orders workload to
+  `bench/SPEC.md` before measuring the implementation.
 - [ ] **G4. GraphQL implementation**, item by item as the approved note
   lists them.
 

@@ -66,6 +66,7 @@ pub let W_BODY = 1;      // a response: HEADERS now, DATA as window allows
 pub let W_GRANT = 2;     // peer's WINDOW_UPDATE: `n` octets to `stream`
 pub let W_INITIAL = 3;   // peer's SETTINGS_INITIAL_WINDOW_SIZE is now `n`
 pub let W_MAXFRAME = 4;  // peer's SETTINGS_MAX_FRAME_SIZE is now `n`
+pub let W_TRAILERS = 5;  // response HEADERS + body + final HEADERS
 
 pub gc struct WMsg {
     kind: int,
@@ -105,6 +106,32 @@ pub fn response_msg(stream: int, status: str, extra: [Header],
         stream: stream,
         n: 0,
         head: header_bytes(T_HEADERS, hflags, stream, len(blk)) + blk,
+        body: body
+    };
+}
+
+// Build a response whose final headers carry trailers. The initial header
+// frame and final trailer frame share `head`; `n` marks their boundary so the
+// writer can keep both writes ordered around flow-controlled DATA frames.
+// An empty trailer list keeps the ordinary response path and wire format.
+pub fn response_trailers_msg(stream: int, status: str, extra: [Header],
+                             body: bytes, trailers: [Header]) -> WMsg {
+    if len(trailers) == 0 {
+        return response_msg(stream, status, extra, body);
+    }
+    let hs: [Header] = [Header { name: ":status", value: status }];
+    hs = hs + extra;
+    hs = hs + [Header { name: "content-length", value: to_str(len(body)) }];
+    let blk = encode_block(hs);
+    let head = header_bytes(T_HEADERS, FLAG_END_HEADERS, stream, len(blk)) + blk;
+    let tblock = encode_block(trailers);
+    let tail = header_bytes(T_HEADERS, FLAG_END_HEADERS | FLAG_END_STREAM,
+                            stream, len(tblock)) + tblock;
+    return WMsg {
+        kind: W_TRAILERS,
+        stream: stream,
+        n: len(head),
+        head: head + tail,
         body: body
     };
 }
@@ -805,6 +832,7 @@ gc struct Out {
     body: bytes,
     off: int,
     window: int,
+    trailers: bytes,
     done: bool,
 }
 
@@ -843,15 +871,20 @@ fn flush_out(t: Transport, q: [Out], conn_window: int, max_frame: int,
             sending = false;
             let left = len(o.body) - o.off;
             if left <= 0 {
-                // Body fully sent, but the last DATA frame did not carry
-                // END_STREAM (the window ran out exactly at the end).
-                // A zero-length DATA with END_STREAM is explicitly
-                // exempt from flow control (§6.9.1), so it goes out even
-                // at a zero window -- otherwise such a response could
-                // never be closed.
-                if !wsend(t, header_bytes(T_DATA, FLAG_END_STREAM,
-                                           o.stream, 0), write_ns) {
-                    return err("peer gone");
+                if len(o.trailers) > 0 {
+                    if !wsend(t, o.trailers, write_ns) {
+                        return err("peer gone");
+                    }
+                } else {
+                    // Body fully sent, but the last DATA frame did not
+                    // carry END_STREAM (the window ran out exactly at the
+                    // end). A zero-length DATA with END_STREAM is exempt
+                    // from flow control (§6.9.1), so it closes even at a
+                    // zero window.
+                    if !wsend(t, header_bytes(T_DATA, FLAG_END_STREAM,
+                                              o.stream, 0), write_ns) {
+                        return err("peer gone");
+                    }
                 }
                 o.done = true;
                 break;
@@ -865,7 +898,7 @@ fn flush_out(t: Transport, q: [Out], conn_window: int, max_frame: int,
             }
             let last = (o.off + n) >= len(o.body);
             let dflags = 0;
-            if last {
+            if last && len(o.trailers) == 0 {
                 dflags = FLAG_END_STREAM;
             }
             if !wsend(t, header_bytes(T_DATA, dflags, o.stream, n)
@@ -876,6 +909,9 @@ fn flush_out(t: Transport, q: [Out], conn_window: int, max_frame: int,
             o.window = o.window - n;
             cw = cw - n;
             if last {
+                if len(o.trailers) > 0 && !wsend(t, o.trailers, write_ns) {
+                    return err("peer gone");
+                }
                 o.done = true;
                 break;
             }
@@ -993,18 +1029,31 @@ pub fn writer_task(t: Transport, wch: chan[WMsg], write_ns: int) {
                 }
             }
         }
-        if msg.kind == W_BODY {
-            if !wsend(t, msg.head, write_ns) {
+        if msg.kind == W_BODY || msg.kind == W_TRAILERS {
+            let head = msg.head;
+            let trailers = b"";
+            if msg.kind == W_TRAILERS {
+                if msg.n < 9 || msg.n + 9 > len(msg.head) ||
+                   msg.n + peek_length(msg.head, msg.n) + 9 != len(msg.head) {
+                    wsend(t, goaway(0, E_INTERNAL_ERROR,
+                                    "invalid trailer response"), write_ns);
+                    return;
+                }
+                head = msg.head[0..msg.n];
+                trailers = msg.head[msg.n..];
+            }
+            if !wsend(t, head, write_ns) {
                 return;
             }
-            if len(msg.body) > 0 {
+            if len(msg.body) > 0 || len(trailers) > 0 {
                 let w = initial;
                 if has(early, msg.stream) {
                     w = w + early[msg.stream];
                     del(early, msg.stream);
                 }
                 push(q, Out { stream: msg.stream, body: msg.body,
-                              off: 0, window: w, done: false });
+                              off: 0, window: w, trailers: trailers,
+                              done: false });
             }
         }
 
@@ -1024,6 +1073,12 @@ pub fn writer_task(t: Transport, wch: chan[WMsg], write_ns: int) {
 pub fn respond(cn: Conn, wch: chan[WMsg], stream: int, status: str,
                extra: [Header], body: bytes) {
     chan_send(wch, response_msg(stream, status, extra, body));
+}
+
+pub fn respond_trailers(cn: Conn, wch: chan[WMsg], stream: int, status: str,
+                        extra: [Header], body: bytes, trailers: [Header]) {
+    chan_send(wch, response_trailers_msg(stream, status, extra, body,
+                                         trailers));
 }
 
 pub fn send_reset(wch: chan[WMsg], stream: int, code: int) {
