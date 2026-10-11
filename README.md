@@ -3501,7 +3501,12 @@ exclude tests
 
 Each `exclude` is one literal repository-relative directory; paths with
 `..`, absolute paths, empty segments, or glob syntax are rejected. Do not
-exclude the package directory selected by a consumer's `dir`. `slangc get`
+exclude the package directory selected by a consumer's `dir`; `slangc get`
+refuses that pin. A directory inside it may be excluded (test fixtures, say)
+as long as the package never imports it: an import that lands in an excluded
+directory is a compile error naming the `exclude` line, because otherwise
+`import "json"` from a package whose own `json/` was excluded would quietly
+compile the standard `json` instead. `slangc get`
 uses a shallow partial clone and sparse checkout so a Git server that supports
 partial clones need not send excluded file contents. If it does not, slang
 still omits those directories and Git metadata from the local cache, but the

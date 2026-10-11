@@ -56,7 +56,7 @@ stack, up to the 512-level cap, for recursive target types too
 Remaining typed JSON decode costs were profiled on the prepared local Linux
 benchmark container. A bounded word-at-a-time string scanner showed no
 instruction or timing win and was discarded; profile and measurements are in
-`fix-gc.md` §2.8 and `JSON_DECODE_PERF_PRD.md`. No speculative parser change
+`fix-gc.md` §2.8 and `git show 037a9af:JSON_DECODE_PERF_PRD.md`. No speculative parser change
 is queued until another profile supports a candidate.
 
 Redis driver hardening (2026-10-09): configurable per-reply byte and
@@ -74,11 +74,16 @@ ABBA measurements are local single-process microbenchmarks only; Go's raw
 KDF batch throughput is about 19% higher at the tested profile, while slang's measured peak
 RSS is lower. Results and limits are recorded in the package README.
 
-Package-owned `exclude <dir>` metadata and sparse package fetching are
-implemented on `feat/package-download-excludes`; `make test` passes, including
-a forced partial-clone rejection fallback. A synthetic 8 MiB excluded blob
-reduced the checked-out/cache footprint from 16,500 KiB to 8 KiB when the Git
-remote honors blob filtering. See
+Package-owned `exclude <dir>` metadata and sparse package fetching landed in
+#382, including a forced partial-clone rejection fallback. Follow-up fixes: a
+local package path containing ':' is classified by Git's own rule (it was
+cloned as a remote, with Git warning on every fetch), and an import that lands
+in a directory the package excludes is a compile error (it fell through to a
+native, stdlib or pinned package of the same name: `import "json"` from a
+package whose own `src/json` was excluded ran the native `json`).
+A synthetic 8 MiB excluded blob reduced the
+checked-out/cache footprint from 16,500 KiB to 8 KiB when the Git remote
+honors blob filtering. See
 [`PROTOCOLS_AND_PACKAGE_DISTRIBUTION_PRD.md`](PROTOCOLS_AND_PACKAGE_DISTRIBUTION_PRD.md).
 
 ## 1. User-defined generics, then zokor

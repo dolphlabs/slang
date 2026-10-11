@@ -290,8 +290,25 @@ static int dir_has_sl_files(const char *path) {
  * "json" does not break `import "json"`. (This used to stat the base
  * name against the PROCESS's working directory, so whether a native
  * import worked depended on where slangc was run from.) */
+/* An import from a fetched package into a directory its own manifest
+ * excludes. That directory was never fetched, so resolution would fall
+ * through to a native, stdlib or pinned package of the same name and
+ * compile code the author did not write. Whether it held source cannot be
+ * told from the cache, so the import is refused rather than guessed. */
+static void refuse_excluded_import(const char *from_dir, const char *ipath) {
+    const char *pkg = NULL;
+    const char *ex = project_excluded_import(from_dir, ipath, &pkg);
+    if (ex)
+        load_error("package '%s' imports '%s', but its slang.project has "
+                   "'exclude %s', so that directory is not fetched; the "
+                   "package must drop that exclude or move what it imports "
+                   "out of '%s'",
+                   pkg, ipath, ex, ex);
+}
+
 static int load_import(Loader *ld, const char *from_dir,
                        const char *from_pkg, const char *ipath) {
+    refuse_excluded_import(from_dir, ipath);
     char target[PATH_MAX];
     snprintf(target, sizeof(target), "%s/%s", from_dir, ipath);
 
@@ -343,6 +360,7 @@ static int load_import(Loader *ld, const char *from_dir,
 char *loader_resolve_dir(const char *from_dir, const char *ipath,
                          int *native) {
     *native = 0;
+    refuse_excluded_import(from_dir, ipath);
     char target[PATH_MAX], treal[PATH_MAX];
     snprintf(target, sizeof(target), "%s/%s", from_dir, ipath);
     int nat = is_native_name(ipath);
