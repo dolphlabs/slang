@@ -536,7 +536,7 @@ typedef enum {
 typedef struct {
     const char *pkg, *name;
     int nargs;
-    NatArgKind argkinds[4];
+    NatArgKind argkinds[6];
     const char *ret;
     int is_tls; /* needs OpenSSL: gates TLS_RUNTIME + -lssl -lcrypto */
 } NatSig;

@@ -105,3 +105,47 @@ if let x = bad { } else let e = err_of(bad) {
     }
     println("rand neg ok");
 }
+
+fn test_argon2id() {
+    // A fixed vector is checked when the linked OpenSSL has the provider
+    // (3.2+). Older builds fail closed while leaving the rest of crypto usable.
+    let argon_result = crypto.argon2id_raw(
+        b"password", b"1234567890abcdef", 2, 19456, 1, 32);
+    if let argon_tag = argon_result {
+        if encoding.hex_encode(argon_tag) !=
+           "65eeb6d97a29f68d1c93c9e4e20049cacb7a5df8985b1db60c5772d48cc65ac6" {
+            die("argon2id known answer");
+        }
+        let same = crypto.argon2id_verify(
+            b"password", b"1234567890abcdef", argon_tag, 2, 19456, 1);
+        guard let same_password = same else let message = err_of(same) {
+            die("argon2id verify: " + message);
+            return;
+        }
+        if !same_password { die("argon2id verify match"); }
+        let different = crypto.argon2id_verify(
+            b"wrong", b"1234567890abcdef", argon_tag, 2, 19456, 1);
+        guard let different_password = different else let message = err_of(different) {
+            die("argon2id mismatch: " + message);
+            return;
+        }
+        if different_password { die("argon2id mismatch accepted"); }
+    } else let message = err_of(argon_result) {
+        if message != "Argon2id requires OpenSSL 3.2 or newer with Argon2 support" {
+            die("argon2id unavailable: " + message);
+        }
+    }
+
+    let invalid_argon = crypto.argon2id_raw(
+        b"password", b"1234567890abcdef", 2, 7, 1, 32);
+    if let invalid = invalid_argon {
+        die("argon2id accepted below-minimum memory");
+    } else let message = err_of(invalid_argon) {
+        if message != "Argon2id memory must be between 8 * parallelism and 262144 KiB" {
+            die("argon2id memory bound: " + message);
+        }
+    }
+    println("argon2id ok");
+}
+
+test_argon2id();

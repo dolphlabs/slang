@@ -1690,6 +1690,15 @@ handshake (RFC 6455) hashes the client's key with a fixed GUID, Git
 object ids, Postgres md5 authentication, `Content-MD5`,
 legacy ETags -- and must not protect anything new.
 
+The low-level `argon2id_raw` and `argon2id_verify` primitives support the
+standalone [`argon` package](https://github.com/dolphlabs/argon), which emits
+standard PHC password hashes. They accept byte passwords and salts and
+validated cost parameters; verification returns `ok(false)` for a mismatch
+and compares tags in constant time. Calls require OpenSSL 3.2 or newer with
+Argon2id support; on older OpenSSL builds they return an error while the
+other `crypto` functions remain available. Use the package's bounded PHC
+parser rather than parsing stored hashes in application code.
+
 #### `sql`
 
 A SQLite driver (linked automatically, only when a program imports
