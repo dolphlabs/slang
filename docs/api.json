@@ -360,6 +360,34 @@
           "ret": "result[bytes,str]",
           "tls": false,
           "sig": "crypto.pbkdf2_sha256(bytes, bytes, int, int) -> result[bytes,str]"
+        },
+        {
+          "name": "argon2id_raw",
+          "params": [
+            "bytes",
+            "bytes",
+            "int",
+            "int",
+            "int",
+            "int"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.argon2id_raw(bytes, bytes, int, int, int, int) -> result[bytes,str]"
+        },
+        {
+          "name": "argon2id_verify",
+          "params": [
+            "bytes",
+            "bytes",
+            "bytes",
+            "int",
+            "int",
+            "int"
+          ],
+          "ret": "result[bool,str]",
+          "tls": false,
+          "sig": "crypto.argon2id_verify(bytes, bytes, bytes, int, int, int) -> result[bool,str]"
         }
       ]
     },

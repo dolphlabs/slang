@@ -264,6 +264,8 @@ works on `struct` and `gc struct`; the decode target comes from the annotation,
 and a `[T]` of a plain `struct` decodes into one buffer, not an object per item.
 Standard packages: `time net json proc fs os io log crypto sql pg redis regex
 strings encoding compress builder byteutil flags http http2 httpc`.
+The standalone `argon` package provides bounded Argon2id password hashing
+with standard PHC strings; its native crypto calls require OpenSSL 3.2+.
 
 ## Tests
 
@@ -307,7 +309,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - builder: new_str, Str.write, Str.write_int, Str.write_line, Str.size, Str.is_empty, Str.finish, Str.take, Str.reset, new_bytes, Bytes.write_byte, Bytes.write (+6 more)
 - byteutil: find, find_wire, has_prefix, has_suffix, trim, split
 - compress: gzip, gzip_level, deflate, deflate_raw, gunzip, inflate, inflate_raw
-- crypto: sha256, hmac_sha256, rand, sha1, md5, pbkdf2_sha256
+- crypto: sha256, hmac_sha256, rand, sha1, md5, pbkdf2_sha256, argon2id_raw, argon2id_verify
 - encoding: hex_encode, hex_decode, base64_encode, base64_decode, base64url_encode, base64url_decode, url_encode, url_decode, form_encode, form_decode, query_get, query_keys (+2 more)
 - flags: new, Set.add_str, Set.add_int, Set.add_float, Set.add_bool, Set.add_list, Set.require, Set.set_takes, Set.stop_at_first_arg, Set.parse, Set.parse_or_exit, Set.usage (+8 more)
 - fs: open, create, read, pread, write, close, mkdir

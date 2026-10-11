@@ -5,3 +5,4 @@ sha1 ok
 md5 ok
 pbkdf2 ok
 rand neg ok
+argon2id ok

@@ -66,6 +66,14 @@ pool wakeups are implemented and measured locally; raw values are in
 small PINGs showed no measurable change. The API-server Redis path still
 needs a route-level measurement before making a production throughput claim.
 
+The standalone `argon` package implements Argon2id v19 hashing and strict,
+bounded PHC verification for slang; standard PHC strings interoperate with
+Go's `x/crypto` and Zokor. Its native crypto primitives need OpenSSL 3.2+.
+Consumer, malformed-input, cost-bound, and GC-verifier tests pass. Initial
+ABBA measurements are local single-process microbenchmarks only; Go's raw
+KDF batch throughput is about 19% higher at the tested profile, while slang's measured peak
+RSS is lower. Results and limits are recorded in the package README.
+
 ## 1. User-defined generics, then zokor
 
 - [x] **Why.** zokor, the backend framework (`dolphlabs/zokor`, empty), has to

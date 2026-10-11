@@ -8,6 +8,12 @@ const NatSig CRYPTO_SIGS[] = {
     {"crypto", "md5", 1, {NA_BYTES}, "bytes", 0},
     {"crypto", "pbkdf2_sha256", 4, {NA_BYTES, NA_BYTES, NA_I64, NA_I64},
      "result[bytes,str]", 0},
+    {"crypto", "argon2id_raw", 6,
+     {NA_BYTES, NA_BYTES, NA_I64, NA_I64, NA_I64, NA_I64},
+     "result[bytes,str]", 0},
+    {"crypto", "argon2id_verify", 6,
+     {NA_BYTES, NA_BYTES, NA_BYTES, NA_I64, NA_I64, NA_I64},
+     "result[bool,str]", 0},
 };
 
 const int CRYPTO_SIGS_LEN = sizeof(CRYPTO_SIGS) / sizeof(CRYPTO_SIGS[0]);
