@@ -3883,7 +3883,7 @@ measured against `dev`. It changed 200-decode callgrind work by only -0.0036%
 and its 2,000-decode ABBA timing overlapped the noisy run spread; the prototype
 was discarded. Hardware perf counters were unavailable in the LinuxKit
 kernel. No source change or API speed claim is warranted. Full profile and
-raw values: `JSON_DECODE_PERF_PRD.md`; plan entry: `fix-gc.md` §2.8.
+raw values: `git show 037a9af:JSON_DECODE_PERF_PRD.md`; plan entry: `fix-gc.md` §2.8.
 
 ## Implemented: lossless binary64 little-endian encoding helpers
 

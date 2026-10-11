@@ -652,7 +652,7 @@ of its 1-worker number.
   medians were 682 and 671 ms, within a wide run spread (635–1,311 ms).
   No code change or API-server speed claim is justified by this evidence.
   The profile, raw samples, and limits are recorded in
-  `JSON_DECODE_PERF_PRD.md`. Revisit only with a candidate whose decoder-level
+  `git show 037a9af:JSON_DECODE_PERF_PRD.md`. Revisit only with a candidate whose decoder-level
   gain clears the run spread and whose API result is measured on the guarded
   server port.
 
