@@ -31,6 +31,11 @@ char *project_cache_dir(const SlPkgPin *pin);
  * pin's `dir` when it has one. */
 char *project_pkg_dir(const SlPkgPin *pin);
 char *project_tree_hash(const char *dir);
+/* When `import "ipath"` written in `from_dir`, inside a fetched package,
+ * names a directory that package's own manifest excludes: that exclude,
+ * with the package's name in *pkg_name. NULL otherwise. */
+const char *project_excluded_import(const char *from_dir, const char *ipath,
+                                    const char **pkg_name);
 void project_get(SlProject *p);
 int project_is_dir(const char *path);
 
