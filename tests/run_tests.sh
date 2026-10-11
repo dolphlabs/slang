@@ -196,6 +196,184 @@ else
     printf '%s\n' "$out" | sed 's/^/  /'
     fail=1
 fi
+
+# A package may omit non-runtime directories from its distributable checkout.
+# The root manifest remains available for transitive dependency resolution,
+# included source still compiles, and included source remains hash-verified.
+echo "--- package exclusions ---"
+mkdir -p "$NEWDIR/exclude_demo/src" "$NEWDIR/exclude_demo/bench" \
+    "$NEWDIR/exclude_demo/examples" "$NEWDIR/exclude_helper/src" \
+    "$NEWDIR/exclude_helper/bench" "$NEWDIR/exclude_app"
+printf 'name demo\nversion 0.1.0\nexclude bench\nexclude examples\npkg helper git file://%s/exclude_helper tag v1\n' \
+    "$NEWDIR" >"$NEWDIR/exclude_demo/slang.project"
+printf 'import "helper";\npub fn hi() -> str { return helper.value(); }\n' \
+    >"$NEWDIR/exclude_demo/src/lib.sl"
+printf 'benchmark fixture\n' >"$NEWDIR/exclude_demo/bench/data.txt"
+printf 'example fixture\n' >"$NEWDIR/exclude_demo/examples/main.sl"
+printf 'name helper\nversion 0.1.0\nexclude bench\n' \
+    >"$NEWDIR/exclude_helper/slang.project"
+printf 'pub fn value() -> str { return "kept"; }\n' \
+    >"$NEWDIR/exclude_helper/src/lib.sl"
+printf 'helper benchmark fixture\n' \
+    >"$NEWDIR/exclude_helper/bench/data.txt"
+for repo in "$NEWDIR/exclude_demo" "$NEWDIR/exclude_helper"; do
+    (cd "$repo" && git init -q && git add . &&
+        git -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
+            commit -q -m t && git tag v1 &&
+        git config uploadpack.allowFilter true)
+done
+cat >"$NEWDIR/exclude_app/slang.project" <<EOF
+name excludeapp
+version 0.1.0
+pkg demo git file://$NEWDIR/exclude_demo tag v1 dir src
+EOF
+cat >"$NEWDIR/exclude_app/main.sl" <<'EOF'
+import "demo";
+println(demo.hi());
+EOF
+exclude_ok=1
+if ! (cd "$NEWDIR/exclude_app" && SLANG_CACHE="$NEWDIR/cache" \
+        "$OLDPWD/slangc" get >get.txt 2>&1); then
+    exclude_ok=0
+fi
+demo_hash=$(readlink "$NEWDIR/cache/pkg/demo/v1" 2>/dev/null || true)
+helper_hash=$(readlink "$NEWDIR/cache/pkg/helper/v1" 2>/dev/null || true)
+demo_cache="$NEWDIR/cache/pkg/demo/$demo_hash"
+helper_cache="$NEWDIR/cache/pkg/helper/$helper_hash"
+[ -f "$demo_cache/src/lib.sl" ] || exclude_ok=0
+[ -f "$helper_cache/src/lib.sl" ] || exclude_ok=0
+[ ! -e "$demo_cache/bench" ] || exclude_ok=0
+[ ! -e "$demo_cache/examples" ] || exclude_ok=0
+[ ! -e "$helper_cache/bench" ] || exclude_ok=0
+[ ! -e "$demo_cache/.git" ] || exclude_ok=0
+[ ! -e "$helper_cache/.git" ] || exclude_ok=0
+if [ "$exclude_ok" -eq 1 ] &&
+   (cd "$NEWDIR/exclude_app" && SLANG_CACHE="$NEWDIR/cache" \
+       "$OLDPWD/slangc" main.sl --run >run.txt 2>run.err) &&
+   grep -qx kept "$NEWDIR/exclude_app/run.txt"; then
+    printf 'changed included source\n' >"$demo_cache/src/lib.sl"
+    if (cd "$NEWDIR/exclude_app" && SLANG_CACHE="$NEWDIR/cache" \
+            "$OLDPWD/slangc" main.sl --run >bad.txt 2>&1) ||
+       ! grep -q "package 'demo' hash mismatch" "$NEWDIR/exclude_app/bad.txt"; then
+        exclude_ok=0
+    fi
+fi
+if [ "$exclude_ok" -eq 1 ]; then
+    echo "PASS package exclusions (transitive fetch, source, and lock hash)"
+else
+    echo "FAIL package exclusions"
+    [ ! -f "$NEWDIR/exclude_app/get.txt" ] ||
+        sed 's/^/  /' "$NEWDIR/exclude_app/get.txt"
+    [ ! -f "$NEWDIR/exclude_app/run.err" ] ||
+        sed 's/^/  /' "$NEWDIR/exclude_app/run.err"
+    [ ! -f "$NEWDIR/exclude_app/bad.txt" ] ||
+        sed 's/^/  /' "$NEWDIR/exclude_app/bad.txt"
+    fail=1
+fi
+
+# A remote may reject the partial-clone filter rather than ignore it. Ensure
+# `slangc get` retries as a shallow clone and still prunes excluded paths.
+mkdir -p "$NEWDIR/reject-filter-bin"
+REAL_GIT=$(command -v git)
+cat >"$NEWDIR/reject-filter-bin/git" <<EOF
+#!/bin/sh
+for arg do
+    [ "\$arg" = "--filter=blob:none" ] && exit 1
+done
+exec "$REAL_GIT" "\$@"
+EOF
+chmod +x "$NEWDIR/reject-filter-bin/git"
+fallback_ok=1
+if ! (cd "$NEWDIR/exclude_app" && \
+      PATH="$NEWDIR/reject-filter-bin:$PATH" \
+      SLANG_CACHE="$NEWDIR/fallback_cache" \
+      "$OLDPWD/slangc" get >fallback.txt 2>&1); then
+    fallback_ok=0
+fi
+fallback_hash=$(readlink "$NEWDIR/fallback_cache/pkg/demo/v1" 2>/dev/null || true)
+fallback_cache="$NEWDIR/fallback_cache/pkg/demo/$fallback_hash"
+[ -f "$fallback_cache/src/lib.sl" ] || fallback_ok=0
+[ ! -e "$fallback_cache/bench" ] || fallback_ok=0
+[ ! -e "$fallback_cache/examples" ] || fallback_ok=0
+[ ! -e "$fallback_cache/.git" ] || fallback_ok=0
+if [ "$fallback_ok" -eq 1 ]; then
+    echo "PASS package exclusions (retries when partial clone is rejected)"
+else
+    echo "FAIL package exclusions (partial-clone fallback)"
+    [ ! -f "$NEWDIR/exclude_app/fallback.txt" ] ||
+        sed 's/^/  /' "$NEWDIR/exclude_app/fallback.txt"
+    fail=1
+fi
+
+# Exclusion paths are literal relative directories. Reject traversal before
+# using any manifest value to shape a Git sparse-checkout pattern.
+mkdir -p "$NEWDIR/exclude_bad/src" "$NEWDIR/exclude_bad_app"
+printf 'name bad\nversion 0.1.0\nexclude ../outside\n' \
+    >"$NEWDIR/exclude_bad/slang.project"
+printf 'pub fn hi() -> str { return "bad"; }\n' \
+    >"$NEWDIR/exclude_bad/src/lib.sl"
+(cd "$NEWDIR/exclude_bad" && git init -q && git add . &&
+    git -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
+        commit -q -m t && git tag v1)
+cat >"$NEWDIR/exclude_bad_app/slang.project" <<EOF
+name excludebad
+version 0.1.0
+pkg bad git $NEWDIR/exclude_bad tag v1 dir src
+EOF
+if (cd "$NEWDIR/exclude_bad_app" && SLANG_CACHE="$NEWDIR/cache" \
+        "$OLDPWD/slangc" get >out.txt 2>&1) ||
+   ! grep -q "expected 'exclude <subdir>'" "$NEWDIR/exclude_bad_app/out.txt"; then
+    echo "FAIL package exclusions (rejects traversal path)"
+    [ ! -f "$NEWDIR/exclude_bad_app/out.txt" ] ||
+        sed 's/^/  /' "$NEWDIR/exclude_bad_app/out.txt"
+    fail=1
+else
+    echo "PASS package exclusions (rejects traversal path)"
+fi
+printf 'name bad\nversion 0.1.0\nexclude src\n' \
+    >"$NEWDIR/exclude_bad/slang.project"
+(cd "$NEWDIR/exclude_bad" && git add slang.project &&
+    git -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
+        commit -q -m conflict && git tag v2)
+cat >"$NEWDIR/exclude_bad_app/slang.project" <<EOF
+name excludebad
+version 0.1.0
+pkg bad git $NEWDIR/exclude_bad tag v2 dir src
+EOF
+if (cd "$NEWDIR/exclude_bad_app" && SLANG_CACHE="$NEWDIR/cache" \
+        "$OLDPWD/slangc" get >out.txt 2>&1) ||
+   ! grep -q "package 'bad' selects dir 'src', but its manifest excludes" \
+       "$NEWDIR/exclude_bad_app/out.txt"; then
+    echo "FAIL package exclusions (rejects excluded package dir)"
+    [ ! -f "$NEWDIR/exclude_bad_app/out.txt" ] ||
+        sed 's/^/  /' "$NEWDIR/exclude_bad_app/out.txt"
+    fail=1
+else
+    echo "PASS package exclusions (rejects excluded package dir)"
+fi
+rm "$NEWDIR/exclude_bad/slang.project"
+printf 'name bad\nversion 0.1.0\nexclude ../outside\n' \
+    >"$NEWDIR/exclude_bad/metadata.txt"
+ln -s metadata.txt "$NEWDIR/exclude_bad/slang.project"
+(cd "$NEWDIR/exclude_bad" && git add slang.project metadata.txt &&
+    git -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
+        commit -q -m symlink && git tag v3)
+cat >"$NEWDIR/exclude_bad_app/slang.project" <<EOF
+name excludebad
+version 0.1.0
+pkg bad git $NEWDIR/exclude_bad tag v3 dir src
+EOF
+if (cd "$NEWDIR/exclude_bad_app" && SLANG_CACHE="$NEWDIR/cache" \
+        "$OLDPWD/slangc" get >out.txt 2>&1) ||
+   ! grep -q "package manifest .* must be a regular file" \
+       "$NEWDIR/exclude_bad_app/out.txt"; then
+    echo "FAIL package exclusions (rejects symlink manifest)"
+    [ ! -f "$NEWDIR/exclude_bad_app/out.txt" ] ||
+        sed 's/^/  /' "$NEWDIR/exclude_bad_app/out.txt"
+    fail=1
+else
+    echo "PASS package exclusions (rejects symlink manifest)"
+fi
 rm -rf "$NEWDIR"
 
 # ---- signals ------------------------------------------------------------

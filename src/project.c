@@ -10,6 +10,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#define MAX_PACKAGE_EXCLUDES 64
+
 static void project_error(const char *fmt, ...) {
     va_list ap;
     fputs("slang: ", stderr);
@@ -25,10 +27,9 @@ int project_is_dir(const char *path) {
     return path && stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-/* A pin's `dir`: a relative path inside the repository, one or more
- * path segments of ordinary characters. Anything that could climb out
- * of the clone ("..", a leading "/") is refused here rather than
- * discovered as a mysterious read outside the cache. */
+/* Package paths are relative paths inside a repository. Anything that
+ * could climb out of the checkout ("..", a leading "/") is refused
+ * before it reaches either the loader or Git's sparse-checkout patterns. */
 static int is_pkg_subdir(const char *s) {
     if (!s || !*s || *s == '/')
         return 0;
@@ -157,6 +158,21 @@ static SlPkgPin *add_pin(SlProject *p, const char *name, const char *git,
     return pin;
 }
 
+static void add_exclude(SlProject *p, const char *dir, const char *path,
+                        int lineno) {
+    if (!dir || !is_pkg_subdir(dir) || p->nexcludes >= MAX_PACKAGE_EXCLUDES)
+        project_error("%s:%d: expected 'exclude <subdir>' (up to %d paths)",
+                      path, lineno, MAX_PACKAGE_EXCLUDES);
+    for (int i = 0; i < p->nexcludes; i++) {
+        if (!strcmp(p->excludes[i], dir))
+            project_error("%s:%d: duplicate exclude '%s'", path, lineno,
+                          dir);
+    }
+    p->excludes = (char **)xrealloc(
+        p->excludes, (size_t)(p->nexcludes + 1) * sizeof(char *));
+    p->excludes[p->nexcludes++] = xstrdup(dir);
+}
+
 static void parse_project_file(SlProject *p, char *src, const char *path) {
     int lineno = 0;
     char *save = NULL;
@@ -189,6 +205,12 @@ static void parse_project_file(SlProject *p, char *src, const char *path) {
             if (p->version)
                 project_error("%s:%d: duplicate version", path, lineno);
             p->version = xstrdup(v);
+        } else if (!strcmp(kw, "exclude")) {
+            char *dir = cut_word(&cur);
+            if (cut_word(&cur))
+                project_error("%s:%d: expected 'exclude <subdir>'", path,
+                              lineno);
+            add_exclude(p, dir, path, lineno);
         } else if (!strcmp(kw, "pkg")) {
             char *name = cut_word(&cur);
             char *gkw = cut_word(&cur);
@@ -224,11 +246,23 @@ static SlProject *parse_project_path(const char *path) {
     return p;
 }
 
+static SlProject *read_package_manifest(const char *dir) {
+    char *path = join2(dir, "slang.project");
+    struct stat st;
+    if (lstat(path, &st) != 0) {
+        if (errno == ENOENT)
+            return NULL;
+        project_error("cannot inspect package manifest '%s'", path);
+    }
+    if (!S_ISREG(st.st_mode))
+        project_error("package manifest '%s' must be a regular file", path);
+    return parse_project_path(path);
+}
+
 static void ingest_dep_project(SlProject *p, const char *dir) {
-    char *proj = join2(dir, "slang.project");
-    if (access(proj, R_OK) != 0)
+    SlProject *dep = read_package_manifest(dir);
+    if (!dep)
         return;
-    SlProject *dep = parse_project_path(proj);
     for (int i = 0; i < dep->npins; i++)
         add_pin(p, dep->pins[i].name, dep->pins[i].git, dep->pins[i].tag,
                 dep->pins[i].dir);
@@ -549,14 +583,82 @@ char *project_tree_hash(const char *dir) {
     return sha_hex(dig);
 }
 
-static int run_git_clone(const char *url, const char *tag, const char *dest) {
+static int is_git_remote_url(const char *url) {
+    return strstr(url, "://") != NULL || strchr(url, ':') != NULL;
+}
+
+static void rm_rf(const char *path);
+
+static int run_git_clone_once(const char *url, const char *tag,
+                              const char *dest, int partial) {
     pid_t pid = fork();
     if (pid < 0)
         return -1;
     if (pid == 0) {
-        execlp("git", "git", "-c", "advice.detachedHead=false", "clone",
-               "--quiet", "--depth", "1", "--branch", tag, "--", url, dest,
-               (char *)NULL);
+        if (is_git_remote_url(url) && partial) {
+            execlp("git", "git", "-c", "advice.detachedHead=false", "clone",
+                   "--quiet", "--depth", "1", "--filter=blob:none", "--sparse",
+                   "--branch", tag, "--", url, dest, (char *)NULL);
+        } else if (is_git_remote_url(url)) {
+            execlp("git", "git", "-c", "advice.detachedHead=false", "clone",
+                   "--quiet", "--depth", "1", "--sparse", "--branch", tag,
+                   "--", url, dest, (char *)NULL);
+        } else {
+            /* Local-path clones ignore --depth and --filter. Sparse checkout
+             * still keeps the cached tree small, and skipping those flags
+             * avoids Git's warning for every local test fixture. */
+            execlp("git", "git", "-c", "advice.detachedHead=false", "clone",
+                   "--quiet", "--sparse", "--branch", tag, "--", url, dest,
+                   (char *)NULL);
+        }
+        _exit(127);
+    }
+    int st = 0;
+    if (waitpid(pid, &st, 0) < 0)
+        return -1;
+    if (WIFEXITED(st) && WEXITSTATUS(st) == 0)
+        return 0;
+    return -1;
+}
+
+static int run_git_clone(const char *url, const char *tag, const char *dest) {
+    int remote = is_git_remote_url(url);
+    if (run_git_clone_once(url, tag, dest, remote) == 0)
+        return 0;
+    if (!remote)
+        return -1;
+    /* Some servers reject the partial-clone filter instead of ignoring it.
+     * Remove any incomplete worktree and retry as a shallow sparse clone; the
+     * caller still applies the package's exclusions before hashing it. */
+    rm_rf(dest);
+    return run_git_clone_once(url, tag, dest, 0);
+}
+
+static int run_git_sparse_checkout(const char *dest, const SlProject *meta) {
+    pid_t pid = fork();
+    if (pid < 0)
+        return -1;
+    if (pid == 0) {
+        if (!meta || meta->nexcludes == 0) {
+            execlp("git", "git", "-C", dest, "sparse-checkout", "disable",
+                   (char *)NULL);
+            _exit(127);
+        }
+        size_t argc = (size_t)8 + (size_t)meta->nexcludes;
+        char **argv = (char **)calloc(argc, sizeof(char *));
+        if (!argv)
+            _exit(127);
+        argv[0] = (char *)"git";
+        argv[1] = (char *)"-C";
+        argv[2] = (char *)dest;
+        argv[3] = (char *)"sparse-checkout";
+        argv[4] = (char *)"set";
+        argv[5] = (char *)"--no-cone";
+        argv[6] = (char *)"/*";
+        for (int i = 0; i < meta->nexcludes; i++)
+            argv[7 + i] = xasprintf("!/%s/", meta->excludes[i]);
+        argv[7 + meta->nexcludes] = NULL;
+        execvp("git", argv);
         _exit(127);
     }
     int st = 0;
@@ -663,6 +765,24 @@ void project_get(SlProject *p) {
         if (run_git_clone(pin->git, pin->tag, tmp) != 0)
             project_error("git clone failed for '%s' (%s @ %s)", pin->name,
                           pin->git, pin->tag);
+        SlProject *meta = read_package_manifest(tmp);
+        if (meta && pin->dir) {
+            for (int j = 0; j < meta->nexcludes; j++) {
+                size_t n = strlen(meta->excludes[j]);
+                if (!strncmp(pin->dir, meta->excludes[j], n) &&
+                    (pin->dir[n] == '/' || pin->dir[n] == '\0'))
+                    project_error("package '%s' selects dir '%s', but its "
+                                  "manifest excludes that directory",
+                                  pin->name, pin->dir);
+            }
+        }
+        if (run_git_sparse_checkout(tmp, meta) != 0)
+            project_error("git sparse checkout failed for '%s' (%s @ %s)",
+                          pin->name, pin->git, pin->tag);
+        /* The cache is an immutable source snapshot, not a Git worktree. Its
+         * lock hash already covers source files only, and retaining .git would
+         * keep excluded blobs on disk when a remote ignores partial-clone. */
+        rm_rf(join2(tmp, ".git"));
         char *h = project_tree_hash(tmp);
         pin->hash = h;
         char *final = project_cache_dir(pin);

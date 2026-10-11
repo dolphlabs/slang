@@ -318,9 +318,8 @@ static int load_import(Loader *ld, const char *from_dir,
         if (!project_is_dir(cached))
             load_error("package '%s' is not in the cache; run slangc get",
                        ipath);
-        /* The hash covers the WHOLE clone, `dir` or not: what was
-           verified must be what was fetched, not the part of it this
-           project happens to compile. */
+        /* The hash covers the package's complete included tree, including
+           files outside `dir`; excluded directories are absent by design. */
         char *got = project_tree_hash(cached);
         if (strcmp(got, pin->hash))
             load_error("package '%s' hash mismatch; run slangc get", ipath);
