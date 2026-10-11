@@ -56,7 +56,7 @@ stack, up to the 512-level cap, for recursive target types too
 Remaining typed JSON decode costs were profiled on the prepared local Linux
 benchmark container. A bounded word-at-a-time string scanner showed no
 instruction or timing win and was discarded; profile and measurements are in
-`fix-gc.md` §2.8 and `JSON_DECODE_PERF_PRD.md`. No speculative parser change
+`fix-gc.md` §2.8 and `git show 037a9af:JSON_DECODE_PERF_PRD.md`. No speculative parser change
 is queued until another profile supports a candidate.
 
 Redis driver hardening (2026-10-09): configurable per-reply byte and
