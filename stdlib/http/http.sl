@@ -2019,7 +2019,8 @@ pub fn serialize(r: Response) -> bytes {
 
 // The old builder path, kept for the differential test: must stay
 // byte-identical to serialize_sized() above for every shape.
-pub fn serialize_builder(r: Response) -> bytes {
+pub fn serialize_builder(r0: Response) -> bytes {
+    let r = clean_response(r0);
     let sb2 = builder.new_bytes();
     sb2.write_str("HTTP/1.1 ");
     sb2.write_str(to_str(r.status));
@@ -2069,7 +2070,8 @@ fn push_int(sb: builder.Bytes, v: int) -> int {
 // fill_str piece (the str->bytes copy the compiler cannot fuse), one
 // filtered-extra list, and the response_conn scan's own line strs.
 // Counting them is what keeps this honest -- see the probe notes.
-pub fn serialize_sized(r: Response) -> bytes {
+pub fn serialize_sized(r0: Response) -> bytes {
+    let r = clean_response(r0);
     let need = emit_len(r);
     let out = strings.bytes_zero(need);
     let off = 0;
@@ -3068,7 +3070,7 @@ pub fn write_static(c: &mut link, b: StaticBody, a: &mut arena,
     sb.write_str(" ");
     sb.write_str(status_text_of(b.status));
     sb.write_str("\r\ncontent-type: ");
-    sb.write_str(b.content_type);
+    sb.write_str(clean_field(b.content_type));
     sb.write_str("\r\nContent-Length: ");
     sb.write_str(to_str(len(b.body)));
     sb.write_str("\r\nConnection: close\r\n\r\n");
@@ -3089,7 +3091,7 @@ pub fn static_render(status: i32, content_type: str, body: bytes) -> bytes {
     sb.write_str(" ");
     sb.write_str(status_text_of(status));
     sb.write_str("\r\ncontent-type: ");
-    sb.write_str(content_type);
+    sb.write_str(clean_field(content_type));
     sb.write_str("\r\nContent-Length: ");
     sb.write_str(to_str(len(body)));
     sb.write_str("\r\nConnection: keep-alive\r\n\r\n");
@@ -3118,7 +3120,54 @@ fn status_text_of(status: i32) -> str {
     return "OK";
 }
 
-pub fn write(c: &mut link, r: Response, a: &mut arena, deadline: until) -> result[int, fault] {
+// A header field as it may be written: CR and LF become spaces. A CR or
+// LF inside a field would end the header line early and let whatever
+// follows become a header of its own or the start of the body (response
+// splitting), and a handler that echoes request data into a header --
+// a redirect target, a filename, an id -- would hand that to the client.
+// Go's net/http applies the same rule. A clean field is returned as it
+// is: two scans, no allocation.
+fn field_clean(s: str) -> bool {
+    return !strings.contains(s, "\r") && !strings.contains(s, "\n");
+}
+
+pub fn clean_field(s: str) -> str {
+    if field_clean(s) {
+        return s;
+    }
+    return strings.replace(strings.replace(s, "\r", " "), "\n", " ");
+}
+
+// `r`, or when any field it will write holds a CR or LF, a copy with
+// those fields cleaned. The caller's Response is never changed: it may
+// be shared between requests.
+fn clean_response(r: Response) -> Response {
+    let dirty = !field_clean(r.status_text) || !field_clean(r.content_type) ||
+                !field_clean(r.location);
+    for line in r.extra {
+        if !field_clean(line) {
+            dirty = true;
+        }
+    }
+    if !dirty {
+        return r;
+    }
+    let extra: [str] = [];
+    for line in r.extra {
+        push(extra, clean_field(line));
+    }
+    return Response {
+        status: r.status,
+        status_text: clean_field(r.status_text),
+        content_type: clean_field(r.content_type),
+        location: clean_field(r.location),
+        extra: extra,
+        body: r.body
+    };
+}
+
+pub fn write(c: &mut link, r0: Response, a: &mut arena, deadline: until) -> result[int, fault] {
+    let r = clean_response(r0);
     if is_fast_response(r) {
         let ct = fast_content_type(r);
         let conn = fast_conn(r);
