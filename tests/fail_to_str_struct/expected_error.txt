@@ -1,0 +1,1 @@
+fail_to_str_struct/main.sl:6: error: to_str() cannot convert a

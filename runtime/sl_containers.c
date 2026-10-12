@@ -755,6 +755,28 @@ static char *sl_str_from_wire(sl_wire w) {
     return p;
 }
 
+/* to_str(peer): "1.2.3.4:5678", as println and inspect render a peer.
+ * snprintf inside a preempt bracket (it can take libc's locale lock); the
+ * one GC allocation after it. */
+static char *sl_str_from_peer(sl_peer p) {
+    char buf[32];
+    sl_rt_preempt_disable();
+    int n = snprintf(buf, sizeof(buf), "%u.%u.%u.%u:%u",
+                     (unsigned)((p.addr >> 24) & 255u),
+                     (unsigned)((p.addr >> 16) & 255u),
+                     (unsigned)((p.addr >> 8) & 255u),
+                     (unsigned)(p.addr & 255u), (unsigned)p.port);
+    sl_rt_preempt_enable();
+    if (n < 0)
+        n = 0;
+    if (n >= (int)sizeof(buf))
+        n = (int)sizeof(buf) - 1;
+    char *out = (char *)sl_gc_alloc((size_t)n + 1, NULL);
+    memcpy(out, buf, (size_t)n);
+    out[n] = 0;
+    return out;
+}
+
 /* wire_put_bytes: the sl_bytes counterpart of sl_wire_put (sl_core.c) --
  * split across the two files because sl_bytes isn't defined yet where
  * sl_wire is. Same contract: writes only what fits, returns the count. */

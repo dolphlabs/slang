@@ -213,6 +213,11 @@ const char *infer_call(CG *cg, Expr *e) {
             cg_error(e->line, "cannot convert a list to str");
         if (is_result(t) || is_opt(t))
             cg_error(e->line, "cannot convert opt/result to str; unwrap first");
+        if (!str_convertible(cg, t))
+            cg_error(e->line,
+                     "to_str() cannot convert a %s; use inspect(x) for a "
+                     "readable rendering of any value",
+                     t);
         return "str";
     }
     if (!strcmp(name, "inspect")) {

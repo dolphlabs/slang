@@ -804,6 +804,7 @@ char *gen_ident_name(CG *cg, const char *name, int line);
 char *gen_float_literal(double v);
 char *panic_at(CG *cg, int line);
 char *conv_to_str(CG *cg, const char *t, char *expr);
+int str_convertible(CG *cg, const char *t);
 
 /* Drop one redundant outer parenthesis pair from a generated expression
  * so `if ((a == b))` comes out as `if (a == b)` -- see core.c. */
