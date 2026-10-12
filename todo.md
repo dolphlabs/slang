@@ -532,6 +532,12 @@ Found building zokor's logger (2026-10-12), not fixed:
   parameter is known** (`r.get(path, live)` inside a generic method over
   `S`), and there is no explicit instantiation syntax (`f[int]()` is a
   parse error), so a library cannot register its own generic handler.
+- [ ] **The move check is not path-sensitive**: in
+  `if !ok { refuse(c); return ""; } spawn serve(c);` the second use of `c`
+  is "use of moved value", though the branch that moved it returns. The
+  workaround is an `if`/`else` with one move per arm (zokor's
+  `accept_one`). A move on a path that cannot reach the use should not
+  count.
 
 ## G. gRPC and GraphQL
 
