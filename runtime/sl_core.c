@@ -381,6 +381,14 @@ static long sl_pool_nworkers = 0;
 static _Thread_local int sl_rt_runnext_idx = -1;
 
 static _Atomic unsigned long long sl_sched_stat_submit = 0;
+/* Sleeping workers woken because a task went into a runnext slot
+ * (sl_runq_ready_to): a joined spawn or a join's completion should cause
+ * none, since its own worker runs the task next. */
+static _Atomic unsigned long long sl_sched_stat_runnext_wakes = 0;
+/* Reactor waits that carried a deadline, and those that had to nudge the
+ * reactor to recompute its sleep (sl_net.c, sl_reactor_wake_at). */
+static _Atomic unsigned long long sl_sched_stat_deadline_waits = 0;
+static _Atomic unsigned long long sl_sched_stat_reactor_nudges = 0;
 static _Atomic unsigned long long sl_sched_stat_resume = 0;
 static _Atomic unsigned long long sl_sched_stat_dispatch = 0;
 static _Atomic unsigned long long sl_sched_stat_preempt_yield = 0;
@@ -411,8 +419,15 @@ static void sl_sched_stat_dump(void) {
         &sl_sched_stat_preempt_async, memory_order_relaxed);
     unsigned long long misaligned = atomic_load_explicit(
         &sl_sched_stat_preempt_misaligned, memory_order_relaxed);
-    fprintf(stderr, "slang-sched-stat submits=%llu resumes=%llu dispatches=%llu preempt_yields=%llu async_preempts=%llu misaligned_preempts=%llu\n",
-            submit, resume, dispatch, pyield, async, misaligned);
+    unsigned long long dwaits = atomic_load_explicit(
+        &sl_sched_stat_deadline_waits, memory_order_relaxed);
+    unsigned long long nudges = atomic_load_explicit(
+        &sl_sched_stat_reactor_nudges, memory_order_relaxed);
+    unsigned long long rn_wakes = atomic_load_explicit(
+        &sl_sched_stat_runnext_wakes, memory_order_relaxed);
+    fprintf(stderr, "slang-sched-stat submits=%llu resumes=%llu dispatches=%llu preempt_yields=%llu async_preempts=%llu misaligned_preempts=%llu deadline_waits=%llu reactor_nudges=%llu runnext_wakes=%llu\n",
+            submit, resume, dispatch, pyield, async, misaligned, dwaits,
+            nudges, rn_wakes);
 }
 
 __attribute__((destructor))
@@ -759,6 +774,7 @@ static void sl_task_park(pthread_mutex_t *held_mu); /* runtime_pool.c,
     real in RUNTIME_POOL, emitted last. */
 static void sl_task_resume(sl_task *t); /* runtime_pool.c, forward here,
     same reason. */
+static void sl_task_resume_local(sl_task *t); /* runtime_pool.c, the same */
 static sl_task *sl_rt_idle_waiters, *sl_rt_idle_waiters_tail;
 
 static void sl_rt_idle_wl_push(sl_task *t) {

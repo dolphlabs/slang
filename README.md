@@ -3157,14 +3157,21 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
   `runnext` slot instead and runs there next, while the caches are warm
   (a request handed to a child task and back, a channel's two ends); a
   chain of such hand-offs shares one time slice, and an idle worker
-  steals a slot rather than sleep.
+  steals a slot rather than sleep. A spawn whose task's very next step
+  is `join_wait` on it (`let h = spawn f(); let r = join_wait(h);`, or
+  `join_wait(spawn f())`) wakes no idle worker at all: the spawner parks
+  at once and its own worker runs the child, then the spawner again.
   A task that runs past its time slice without reaching a yield point is
   preempted asynchronously: a signal redirects it into a trampoline that
   saves every register, parks it, and restores them all when it resumes.
   `SLANG_SCHED_STAT=1` prints scheduler counts at exit, among them
   `async_preempts` and `misaligned_preempts`, the preemptions whose
   trampoline called C on a stack off the ABI's 16-byte alignment (always
-  0; `tests/run_tests.sh` checks it).
+  0; `tests/run_tests.sh` checks it), and `deadline_waits` and
+  `reactor_nudges`: IO waits that carried a deadline, and those that had
+  to wake the reactor to recompute its sleep, and `runnext_wakes`, the
+  sleeping workers woken for a task put in a runnext slot. The reactor never sleeps
+  more than a second, so only a deadline closer than that nudges it.
   `f` may be a plain top-level function, an `extern fn`, or a
   **function value** (`spawn w(1, out);`, `spawn job.run(x);`) — not a
   method and not a builtin. There is no `spawn` on `net.*`/`time.*`

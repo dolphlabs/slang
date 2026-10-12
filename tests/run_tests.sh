@@ -708,10 +708,15 @@ done
 # a new object held only by its header was invisible to the conservative
 # scan (plain dev failed 9 of 10 runs). net_reactor_shards: waiters on
 # every per-fd reactor list, woken by data and by deadlines, each once.
+# reactor_nudges: deadline waits racing the reactor's scans, which the
+# registration count (sl_reactor_wake_at) must never let it sleep past.
+# spawn_join_local: joined spawns that wake no worker, preempted between
+# the spawn and the join, must still run (sl_task_submit_copy_joined).
 echo "--- preemption guards (forced 1 ms preemption, 16KB nursery) ---"
 pg_bad=0
 for name in gc_preempt_derived gc_preempt_derived gc_preempt_derived \
             net_reactor_shards net_reactor_shards net_reactor_shards \
+            reactor_nudges reactor_nudges spawn_join_local spawn_join_local \
             net_dns_records; do
     out="/tmp/sl_preempt_${name}.out"
     if ! SLANG_WORKERS=4 SLANG_GC_NURSERY_KB=16 SLANG_PREEMPT_QUANTUM_MS=1 \
@@ -804,7 +809,8 @@ for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc
             spawn_isolation select maps json json_parity json_utf8 json_decode_budget \
             bytes json_deep_nesting redis http_read_wire http_client_pool http2_flood \
             gc_promotion_budget \
-            value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks; do
+            value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks \
+            spawn_join_local; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_verify_minor_${name}.out"
     err="/tmp/sl_verify_minor_${name}.err"
@@ -885,6 +891,72 @@ EOF_SPEC
     fi
 done
 [ "$budget_bad" -eq 0 ] && echo "PASS allocation budgets"
+
+# ---- reactor nudge budget ---------------------------------------------------
+# reactor_nudges: keep-alive round trips where every recv carries a
+# deadline. A deadline wait nudges the reactor (a write(2) and an extra
+# reactor wakeup) only when the reactor would otherwise sleep past it.
+# Before the registration-count protocol and the 1 s sleep cap
+# (runtime/sl_net.c, sl_reactor_wake_at) 41-56% of these waits nudged,
+# because a reactor mid-scan read as "nudge me"; none do now. Budget: 1%.
+echo "--- reactor nudge budget (SLANG_SCHED_STAT) ---"
+nudge_line=$(SLANG_SCHED_STAT=1 ./slangc tests/reactor_nudges/main.sl --run \
+             2>&1 >/dev/null | grep -o 'deadline_waits=[0-9]* reactor_nudges=[0-9]*')
+nudge_waits=$(echo "$nudge_line" | sed -n 's/deadline_waits=\([0-9]*\).*/\1/p')
+nudge_n=$(echo "$nudge_line" | sed -n 's/.*reactor_nudges=\([0-9]*\)/\1/p')
+if [ -z "$nudge_waits" ] || [ -z "$nudge_n" ] || [ "$nudge_waits" -lt 1000 ]; then
+    echo "FAIL reactor nudge budget (no slang-sched-stat line: $nudge_line)"
+    fail=1
+elif [ $((nudge_n * 100)) -gt "$nudge_waits" ]; then
+    echo "FAIL reactor nudge budget: $nudge_n nudges for $nudge_waits" \
+         "deadline waits, budget 1%"
+    fail=1
+else
+    echo "PASS reactor nudge budget ($nudge_n nudges, $nudge_waits deadline waits)"
+fi
+
+# ---- runnext wake budget ----------------------------------------------------
+# spawn_join_local: spawn directly followed by join_wait, from 4 tasks on
+# 8 workers. The child goes to this worker's runnext slot and the join's
+# completion puts the spawner back there; this worker runs both next, so
+# waking a sleeper for either is waste. Before the joined spawn
+# (sl_task_submit_copy_joined, sl_task_resume_local) these 12,000 spawns
+# woke sleeping workers about 17,500 times; 4 now. Budget: 1% of submits.
+echo "--- runnext wake budget (SLANG_SCHED_STAT) ---"
+rw_line=$(SLANG_WORKERS=8 SLANG_SCHED_STAT=1 ./slangc tests/spawn_join_local/main.sl \
+          --run 2>&1 >/dev/null | grep -o 'submits=[0-9]*.*runnext_wakes=[0-9]*')
+rw_submits=$(echo "$rw_line" | sed -n 's/^submits=\([0-9]*\).*/\1/p')
+rw_wakes=$(echo "$rw_line" | sed -n 's/.*runnext_wakes=\([0-9]*\)$/\1/p')
+if [ -z "$rw_submits" ] || [ -z "$rw_wakes" ] || [ "$rw_submits" -lt 1000 ]; then
+    echo "FAIL runnext wake budget (no slang-sched-stat line: $rw_line)"
+    fail=1
+elif [ $((rw_wakes * 100)) -gt "$rw_submits" ]; then
+    echo "FAIL runnext wake budget: $rw_wakes wakes for $rw_submits submits," \
+         "budget 1%"
+    fail=1
+else
+    echo "PASS runnext wake budget ($rw_wakes wakes, $rw_submits submits)"
+fi
+
+# Which spawns codegen submits as joined: only one whose task does nothing
+# before join_wait on it, since a joined child waits unwoken in this
+# worker's slot. tests/spawn_join_marking has three such forms and four
+# that must stay plain.
+sjm_c="/tmp/sl_spawn_join_marking"
+if ./slangc tests/spawn_join_marking/main.sl --keep-c -o "$sjm_c" >/dev/null 2>&1; then
+    sjm_j=$(grep -o 'sl_task_submit_copy_joined(sl_spawn' "$sjm_c.gen.c" | wc -l | tr -d ' ')
+    sjm_p=$(grep -o 'sl_task_submit_copy(sl_spawn' "$sjm_c.gen.c" | wc -l | tr -d ' ')
+    if [ "$sjm_j" = 3 ] && [ "$sjm_p" = 4 ]; then
+        echo "PASS joined spawn marking (3 joined, 4 plain)"
+    else
+        echo "FAIL joined spawn marking: $sjm_j joined, $sjm_p plain (want 3 and 4)"
+        fail=1
+    fi
+else
+    echo "FAIL joined spawn marking (compile)"
+    fail=1
+fi
+rm -f "$sjm_c" "$sjm_c.gen.c"
 
 # ---- promotion budgets ------------------------------------------------------
 # Objects promoted to the old generation, as a share of all allocations,
