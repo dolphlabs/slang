@@ -3113,8 +3113,12 @@ any signal-handling program.
 
 ## Concurrency
 
-`spawn` submits a function as an `sl_task` on the M:N worker pool
-(sized `ncpu`); `chan[T]` is a bounded, park-aware queue.
+`spawn` submits a function as an `sl_task` on the M:N worker pool;
+`chan[T]` is a bounded, park-aware queue. The pool has one worker per
+CPU the process may run on: the online CPUs, narrowed on Linux by the
+affinity mask (`taskset`, a container cpuset) and by a cgroup CPU quota
+(`docker --cpus`, a Kubernetes CPU limit), rounded up and at least 2.
+`SLANG_WORKERS=N` overrides it.
 Blocking-looking code stays blocking-looking — `net.accept`,
 `net.recv`, `time.sleep`, `io.read_line`, and `chan_send`/`chan_recv` park the task
 and return the OS thread to the pool. There is no colored-function

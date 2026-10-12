@@ -563,6 +563,19 @@ The roadmap tiers and investigations recorded before 2026-10-06. Runtime
 and codegen comments cite sections here by name ("todo.md Tier 11");
 search it before debugging anything in `runtime/`.
 
+## W. Worker count
+
+- [x] **The pool respects a cgroup CPU quota** (2026-10-12,
+  feat/workers-cgroup-quota). It was sized from the affinity mask only,
+  so `docker --cpus 6` on an 8-CPU host started 8 workers (11 threads)
+  where the quota allowed 6 (9 threads now). cgroup v2 `cpu.max` and v1
+  `cpu.cfs_quota_us`/`cpu.cfs_period_us`, the tightest of the process's
+  cgroup and its ancestors, rounded up, at least 2, read once at start.
+  `SLANG_SCHED_STAT` prints `workers=`; tests/run_tests.sh checks nine
+  fake cgroup trees on Linux. Not done: re-reading the quota while
+  running (Go 1.25 does, every few seconds), and a throughput number
+  for a throttled container, which needs a quiet Linux host.
+
 ## Tier 1 — foundations
 
 - [x] `bytes` type: length-prefixed, binary-safe byte sequences
