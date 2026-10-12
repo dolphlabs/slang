@@ -2971,6 +2971,14 @@ fn emit_into(w: wire, status: i32, status_text: str, content_type: str,
 // content-length or connection are dropped (the trailer writes those),
 // as are content-type and location when the struct field already
 // carries one; the last connection line's value is the Connection.
+// Whether `line` could name content-length, connection, content-type or
+// location: they all start with c or l, in any case. A prefix compare,
+// so ruling a line out allocates nothing.
+fn maybe_special_line(line: str) -> bool {
+    return strings.has_prefix(line, "c") || strings.has_prefix(line, "C") ||
+           strings.has_prefix(line, "l") || strings.has_prefix(line, "L");
+}
+
 fn emit(r: Response, w: wire) -> int {
     let off = 0;
     off = put_str(w, off, "HTTP/1.1 ");
@@ -2992,6 +3000,15 @@ fn emit(r: Response, w: wire) -> int {
     }
     let conn = "keep-alive";
     for line in r.extra {
+        // The four names this loop filters all start with c or l. Any
+        // other line (x-request-id, the security headers, CORS) is
+        // written as it is, without the bytes copy the name match needs:
+        // that copy was 2 allocations per line per response.
+        if !maybe_special_line(line) {
+            off = put_str(w, off, line);
+            off = put_str(w, off, "\r\n");
+            continue;
+        }
         let lb = to_bytes(line);
         if strings.find_field(lb, content_len_name()) >= 0 {
             continue;
