@@ -858,6 +858,11 @@ done
 #                        number, a string per key); 47 now, the values the
 #                        decode returns: 20 items and their skus, the Quote,
 #                        its region, the list and its growth, and the result.
+#   http_write_extra_budget  http.write of a JSON response with one extra
+#                        header (a request id). Was 52: the general emit
+#                        rebuilt and lowercased every header name per line
+#                        in each of its two passes; 2 now: the line's
+#                        bytes, once per pass.
 #   builder_bytes_lazy   builder.new_bytes, one long write, take. Was 8 (a
 #                        512-byte chunk built as a str then copied to
 #                        bytes before any write, and take always joining);
@@ -872,6 +877,7 @@ echo "--- allocation budgets (SLANG_GC_STAT) ---"
 budget_bad=0
 for spec in http_read_wire:2000:6:40 bytes_empty_literal:100000:0:0 \
             json_decode_budget:1000:47:0 redis_read_budget:1000:49:20 \
+            http_write_extra_budget:10000:2:0; do
             builder_bytes_lazy:10000:5:0; do
     IFS=: read -r name n per slack <<EOF_SPEC
 $spec

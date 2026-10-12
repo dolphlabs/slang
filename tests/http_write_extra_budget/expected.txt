@@ -1,0 +1,5 @@
+HTTP/1.1 200 OK | content-type: application/json | x-request-id: abc | Content-Length: 11 | Connection: keep-alive |  | {"ok":true}
+HTTP/1.1 200 OK | content-type: application/json | x-request-id: abc | Content-Length: 11 | Connection: close |  | {"ok":true}
+HTTP/1.1 201 Created | content-type: text/plain | X-Trace: 1 | Cache-Control: no-store | Content-Length: 1 | Connection: keep-alive |  | x
+HTTP/1.1 302 Found | location: /next | Content-Length: 0 | Connection: keep-alive |  | 
+HTTP/1.1 200 OK | content-type: text/plain | Content-Length: 1 | Connection: close |  | y
