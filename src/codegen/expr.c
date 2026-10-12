@@ -72,6 +72,15 @@ char *panic_at(CG *cg, int line) {
     return xasprintf("\"main:%d\"", line);
 }
 
+/* Whether conv_to_str below has a conversion for `t`: what to_str's type
+ * check asks, so an unconvertible argument is a located error naming the
+ * fix rather than conv_to_str's internal one. Keep the two in step. */
+int str_convertible(CG *cg, const char *t) {
+    return is_str(t) || is_int(t) || is_flt(t) || !strcmp(t, "bool") ||
+           is_bytes(t) || is_wire(t) || is_fault(t) || is_peer(t) ||
+           is_enum(cg, t);
+}
+
 /* Convert any scalar/bytes value to a slang str (C string). */
 char *conv_to_str(CG *cg, const char *t, char *expr) {
     if (is_str(t))
@@ -90,6 +99,8 @@ char *conv_to_str(CG *cg, const char *t, char *expr) {
         return xasprintf("sl_str_from_wire(%s)", expr);
     if (is_fault(t))
         return xasprintf("sl_str_from_fault(%s)", expr);
+    if (is_peer(t))
+        return xasprintf("sl_str_from_peer(%s)", expr);
     if (is_enum(cg, t)) {
         char *m = mangle_enum(t);
         EnumDef *ed = enum_find_canon(cg, t);

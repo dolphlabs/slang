@@ -747,7 +747,7 @@ for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood enc
             generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry loop_leaf_poll own_roots switch escape_roots \
             http_read_wire bytes_empty_literal gc_minor_barriers net_dns_records map_delete if_let \
             literal_expect pending_sibling_type json_parity json_utf8 json_decode_budget \
-            bytes json_deep_nesting gc_container_frontier gc_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks; do
+            bytes json_deep_nesting gc_container_frontier gc_promotion_budget gc_chan_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks; do
     out="/tmp/sl_gcstress_${name}.out"
     if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -777,7 +777,7 @@ for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put e
             json_int_exact flags method_recv method_recv_gc indirect_callee \
             http_read_wire bytes_empty_literal gc_minor_barriers net_dns_records map_delete if_let \
             literal_expect pending_sibling_type json_parity json_utf8 json_decode_budget \
-            bytes json_deep_nesting gc_container_frontier gc_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks; do
+            bytes json_deep_nesting gc_container_frontier gc_promotion_budget gc_chan_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks; do
     out="/tmp/sl_nursery_${name}.out"
     if ! SLANG_GC_NURSERY_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -808,7 +808,7 @@ for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc
             gc_nested_literal gc_nursery_barrier gc_nursery_promotion net_dns_records \
             spawn_isolation select maps json json_parity json_utf8 json_decode_budget \
             bytes json_deep_nesting redis http_read_wire http_client_pool http2_flood \
-            gc_promotion_budget \
+            gc_promotion_budget gc_chan_promotion_budget \
             value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks \
             spawn_join_local spawn_call_args; do
     [ -f "tests/$name/main.sl" ] || continue
@@ -858,6 +858,11 @@ done
 #                        number, a string per key); 47 now, the values the
 #                        decode returns: 20 items and their skus, the Quote,
 #                        its region, the list and its growth, and the result.
+#   http_write_extra_budget  http.write of a JSON response with one extra
+#                        header (a request id). Was 52: the general emit
+#                        rebuilt and lowercased every header name per line
+#                        in each of its two passes; 2 now: the line's
+#                        bytes, once per pass.
 #   builder_bytes_lazy   builder.new_bytes, one long write, take. Was 8 (a
 #                        512-byte chunk built as a str then copied to
 #                        bytes before any write, and take always joining);
@@ -872,6 +877,7 @@ echo "--- allocation budgets (SLANG_GC_STAT) ---"
 budget_bad=0
 for spec in http_read_wire:2000:6:40 bytes_empty_literal:100000:0:0 \
             json_decode_budget:1000:47:0 redis_read_budget:1000:49:20 \
+            http_write_extra_budget:10000:2:0 \
             builder_bytes_lazy:10000:5:0; do
     IFS=: read -r name n per slack <<EOF_SPEC
 $spec
@@ -1026,9 +1032,14 @@ fi
 #                        Was 30.7% promoted (one survival promoted, so a
 #                        minor mid-walk promoted the whole tree); 0.28% with
 #                        promotion after two survivals (fix-gc.md 1.2).
+#   gc_chan_promotion_budget  100,000 short-lived values through an old
+#                        channel. Was 3.7% of all allocations (93% of the
+#                        values): a received value's slot kept its pointer and
+#                        every slot was traced; ~0 now (slots cleared on
+#                        receive, only queued values traced).
 echo "--- promotion budgets (SLANG_GC_STAT) ---"
 promo_bad=0
-for spec in gc_promotion_budget:1; do
+for spec in gc_promotion_budget:1 gc_chan_promotion_budget:1; do
     name=${spec%%:*}
     pct=${spec#*:}
     stat=$(SLANG_GC_STAT=1 ./slangc "tests/$name/main.sl" --run 2>&1 >/dev/null |
