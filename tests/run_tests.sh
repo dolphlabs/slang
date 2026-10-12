@@ -810,7 +810,7 @@ for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc
             bytes json_deep_nesting redis http_read_wire http_client_pool http2_flood \
             gc_promotion_budget \
             value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks \
-            spawn_join_local; do
+            spawn_join_local spawn_call_args; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_verify_minor_${name}.out"
     err="/tmp/sl_verify_minor_${name}.err"

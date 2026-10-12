@@ -494,29 +494,17 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
 
 ## C. Compiler bugs found while doing something else
 
-- [ ] **`spawn` with a moved `link` before a GC-returning call argument
-  is an internal error.** Found 2026-10-12 writing a zokor test. Minimal
-  reproduction (no generics needed):
-
-  ```slang
-  gc struct St { n: int }
-  fn mk() -> St { return St { n: 1 }; }
-  fn use(b: St, l: link, c: St) { println(to_str(c.n)); }
-  fn f() {
-      let lr = link_listen(0);
-      guard let ln = lr else { return; }
-      let dr = link_dial("127.0.0.1", ln.port(), until_never());
-      guard let c = dr else { return; }
-      spawn use(mk(), c, mk());
-  }
-  f();
-  ```
-
-  `slangc` prints `internal error: liveness-pending value has no
-  registered temp at line 9`. `spawn use(mk(), c)` (no call after the
-  link) compiles. Workaround: bind the call results to `let`s first. A
-  compiler error must never surface as an internal error, so this needs
-  a fix and a test in tests/ that fails today.
+- [x] **`spawn` with two GC-returning call arguments was an internal
+  error** (found 2026-10-12 writing a zokor test; fixed in
+  fix/spawn-arg-liveness). `spawn f(mk(), mk())` -- any spawn where a
+  later argument's call keeps an earlier GC argument live -- died with
+  `internal error: liveness-pending value has no registered temp`: the
+  liveness pass pended the earlier argument, but spawn codegen stored it
+  in its spawn-args field without registering that field as its temp.
+  (First recorded as needing a `link` between the calls; the link was
+  incidental.) Both spawn forms now register it, which also roots a
+  value-struct argument's GC fields across the later call.
+  tests/spawn_call_args runs under the minor verifier.
 
 ## G. gRPC and GraphQL
 
