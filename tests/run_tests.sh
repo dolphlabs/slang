@@ -958,6 +958,61 @@ else
 fi
 rm -f "$sjm_c" "$sjm_c.gen.c"
 
+# ---- worker count from a cgroup CPU quota (Linux) ---------------------------
+# The pool takes one worker per CPU the affinity mask allows, lowered to
+# a cgroup CPU quota rounded up (at least 2), as Go 1.25 sizes GOMAXPROCS.
+# Fake cgroup trees through SLANG_TEST_CGROUP_PROC / SLANG_TEST_CGROUP_FS;
+# expectations are relative to this machine's own affinity count.
+if [ "$(uname -s)" = Linux ]; then
+    echo "--- worker count from a cgroup CPU quota ---"
+    cg_dir=$(mktemp -d)
+    cg_bin="$cg_dir/prog"
+    mkdir -p "$cg_dir/src"
+    printf 'println("ok");\n' >"$cg_dir/src/main.sl"
+    ./slangc "$cg_dir/src/main.sl" -o "$cg_bin" >/dev/null 2>&1
+    cg_n=$(nproc)
+    cg_min() { if [ "$1" -lt "$2" ]; then echo "$1"; else echo "$2"; fi; }
+    # case: name, /proc/self/cgroup line, files to write (path=content ...)
+    cg_case() {
+        name=$1; want=$2; proc=$3; shift 3
+        root="$cg_dir/$name"
+        mkdir -p "$root/fs"
+        printf '%s\n' "$proc" >"$root/cgroup"
+        for kv in "$@"; do
+            f=${kv%%=*}; v=${kv#*=}
+            mkdir -p "$(dirname "$root/fs/$f")"
+            printf '%s\n' "$v" >"$root/fs/$f"
+        done
+        got=$(env SLANG_TEST_CGROUP_PROC="$root/cgroup" \
+              SLANG_TEST_CGROUP_FS="$root/fs" SLANG_SCHED_STAT=1 \
+              ${CG_WORKERS:+SLANG_WORKERS=$CG_WORKERS} "$cg_bin" 2>&1 >/dev/null |
+              sed -n 's/.*workers=\([0-9]*\).*/\1/p')
+        if [ "$got" = "$want" ]; then
+            echo "PASS cgroup workers $name ($got)"
+        else
+            echo "FAIL cgroup workers $name: got '$got', want $want"
+            fail=1
+        fi
+    }
+    cg_case v2_leaf "$(cg_min 2 "$cg_n")" "0::/a/b" \
+        "a/b/cpu.max=150000 100000" "a/cpu.max=max 100000"
+    cg_case v2_parent_tighter "$(cg_min 3 "$cg_n")" "0::/a/b" \
+        "a/b/cpu.max=max 100000" "a/cpu.max=300000 100000"
+    cg_case v2_unlimited "$cg_n" "0::/a" "a/cpu.max=max 100000"
+    cg_case v2_half_cpu "$(cg_min 2 "$cg_n")" "0::/a" "a/cpu.max=50000 100000"
+    cg_case v1_container_root "$(cg_min 3 "$cg_n")" \
+        "4:cpu,cpuacct:/docker/abc" \
+        "cpu,cpuacct/cpu.cfs_quota_us=300000" \
+        "cpu,cpuacct/cpu.cfs_period_us=100000"
+    cg_case v1_unlimited "$cg_n" "4:cpu,cpuacct:/" \
+        "cpu,cpuacct/cpu.cfs_quota_us=-1" \
+        "cpu,cpuacct/cpu.cfs_period_us=100000"
+    cg_case v2_garbage "$cg_n" "0::/a" "a/cpu.max=lots 100000"
+    cg_case v2_dotdot "$cg_n" "0::/a/../b" "b/cpu.max=100000 100000"
+    CG_WORKERS=5 cg_case override 5 "0::/a" "a/cpu.max=100000 100000"
+    rm -rf "$cg_dir"
+fi
+
 # ---- promotion budgets ------------------------------------------------------
 # Objects promoted to the old generation, as a share of all allocations,
 # for request-shaped workloads whose garbage must die young.
