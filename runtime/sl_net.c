@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <limits.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <time.h>
@@ -166,20 +167,39 @@ static inline unsigned sl_reactor_wq_for(int fd) {
     u ^= u >> 13;
     return u & (unsigned)SL_REACTOR_WQ_MASK;
 }
-/* Absolute mono-ns the reactor's CURRENT sleep is due to end, or 0 for
- * an indefinite sleep -- and 0 while the reactor is computing it. Lets a
- * registering waiter skip the timer nudge when the reactor is already
- * going to wake soon enough to see it (sl_reactor_timer_nudge). No lock
- * covers every list, so the protocol is ordering: the reactor stores 0
- * BEFORE scanning the lists and the result after; a waiter links itself
- * into its list BEFORE reading this, and nudges on 0 or on a later
- * time. If the waiter's read comes before the reactor's store of 0,
- * its link came before the scan, which takes that list's lock and sees
- * it. If it reads a time the scan computed without it, either that time
- * is later than its deadline (it nudges) or the reactor wakes first and
- * its next scan includes the waiter. Sequentially consistent on both
- * sides. */
-static _Atomic long long sl_reactor_wake_at = 0;
+/* The longest the reactor sleeps, deadlines or not. A waiter whose
+ * deadline is at least this far off finds the reactor already due to
+ * wake in time and never has to nudge it, so a server's idle and read
+ * timeouts (seconds) cost no syscall per wait. Without the cap a reactor
+ * that found no deadline waiter slept indefinitely and the next
+ * registration had to nudge: 28% of all deadline waits under keep-alive
+ * load. The price is one reactor wakeup a second in an idle process. */
+#define SL_REACTOR_MAX_SLEEP_NS 1000000000LL
+
+/* Absolute mono-ns the reactor's next sleep is due to end: never more
+ * than SL_REACTOR_MAX_SLEEP_NS away once it has scanned, LLONG_MAX
+ * before that. Lets a registering waiter skip the timer nudge when the
+ * reactor is already going to wake soon enough to see it
+ * (sl_reactor_timer_nudge).
+ *
+ * No lock covers every list, so the protocol is ordering, with
+ * sl_reactor_reg_gen counting deadline registrations. The reactor reads
+ * the count, scans, publishes wake_at, and reads the count again; if it
+ * moved, it scans again instead of sleeping. A waiter links itself into
+ * its list, bumps the count, and only then reads wake_at, nudging if it
+ * is later than its deadline. If the bump precedes the reactor's second
+ * read, the reactor rescans, and the rescan takes the waiter's list lock
+ * and sees the link. If it follows, the waiter's read follows the
+ * publish, so it sees that scan's time or a later one: either later than
+ * its deadline (it nudges) or the reactor wakes first and its next scan
+ * includes the waiter. Sequentially consistent on both sides.
+ *
+ * This replaced storing 0 ("computing") for the length of every scan,
+ * which made waiters nudge whenever they caught the reactor mid-scan:
+ * half of all deadline waits under keep-alive load, each a write(2) and
+ * an extra reactor wakeup that itself scanned again. */
+static _Atomic long long sl_reactor_wake_at = LLONG_MAX;
+static _Atomic unsigned long long sl_reactor_reg_gen = 0;
 
 #define SL_REACTOR_READ  0
 #define SL_REACTOR_WRITE 1
@@ -341,10 +361,20 @@ static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
        than one deadline-bearing connection, and saves a syscall on
        every park. */
     if (deadline) {
+        atomic_fetch_add_explicit(&sl_reactor_reg_gen, 1,
+                                  memory_order_seq_cst);
         long long at = atomic_load_explicit(&sl_reactor_wake_at,
                                             memory_order_seq_cst);
-        if (at == 0 || at > deadline)
+        int nudge = at > deadline;
+        if (nudge)
             sl_reactor_timer_nudge();
+        if (sl_sched_stat_enabled()) {
+            atomic_fetch_add_explicit(&sl_sched_stat_deadline_waits, 1,
+                                      memory_order_relaxed);
+            if (nudge)
+                atomic_fetch_add_explicit(&sl_sched_stat_reactor_nudges, 1,
+                                          memory_order_relaxed);
+        }
     }
     sl_task_park(&wq->mu);
     sl_reactor_self->io_deadline_ns = 0;
@@ -370,39 +400,44 @@ static void *sl_reactor_thread(void *arg) {
     struct epoll_event events[64];
 #endif
     for (;;) {
-        long long soonest = -1;
-        /* 0 first, then the scan, then the result: see
-           sl_reactor_wake_at for why a waiter cannot be missed. */
-        atomic_store_explicit(&sl_reactor_wake_at, 0, memory_order_seq_cst);
-        long long now = sl_now_ns();
-        for (int qi = 0; qi < SL_REACTOR_WQS; qi++) {
-            sl_reactor_wq *q = &sl_reactor_wqs[qi];
-            pthread_mutex_lock(&q->mu);
-            for (sl_task *w = q->waiting; w; w = w->next) {
-                if (!w->io_deadline_ns)
-                    continue;
-                long long rem = w->io_deadline_ns - now;
-                if (rem < 0)
-                    rem = 0;
-                if (soonest < 0 || rem < soonest)
-                    soonest = rem;
+        long long soonest;
+        long long now;
+        unsigned long long gen;
+        /* Count, scan, publish, count again: see sl_reactor_wake_at for
+           why a waiter cannot be missed. */
+        do {
+            soonest = -1;
+            gen = atomic_load_explicit(&sl_reactor_reg_gen, memory_order_seq_cst);
+            now = sl_now_ns();
+            for (int qi = 0; qi < SL_REACTOR_WQS; qi++) {
+                sl_reactor_wq *q = &sl_reactor_wqs[qi];
+                pthread_mutex_lock(&q->mu);
+                for (sl_task *w = q->waiting; w; w = w->next) {
+                    if (!w->io_deadline_ns)
+                        continue;
+                    long long rem = w->io_deadline_ns - now;
+                    if (rem < 0)
+                        rem = 0;
+                    if (soonest < 0 || rem < soonest)
+                        soonest = rem;
+                }
+                pthread_mutex_unlock(&q->mu);
             }
-            pthread_mutex_unlock(&q->mu);
-        }
-        atomic_store_explicit(&sl_reactor_wake_at,
-                              soonest < 0 ? 0 : now + soonest,
-                              memory_order_seq_cst);
+            if (soonest < 0 || soonest > SL_REACTOR_MAX_SLEEP_NS)
+                soonest = SL_REACTOR_MAX_SLEEP_NS;
+            atomic_store_explicit(&sl_reactor_wake_at, now + soonest,
+                                  memory_order_seq_cst);
+        } while (atomic_load_explicit(&sl_reactor_reg_gen,
+                                      memory_order_seq_cst) != gen);
+        /* soonest is in [0, SL_REACTOR_MAX_SLEEP_NS]: never forever. */
 #if defined(SL_REACTOR_KQUEUE)
-        struct timespec ts, *tsp = NULL;
-        if (soonest >= 0) {
-            ts.tv_sec = (time_t)(soonest / 1000000000LL);
-            ts.tv_nsec = (long)(soonest % 1000000000LL);
-            tsp = &ts;
-        }
-        int n = kevent(sl_reactor_fd, NULL, 0, events, 64, tsp);
+        struct timespec ts;
+        ts.tv_sec = (time_t)(soonest / 1000000000LL);
+        ts.tv_nsec = (long)(soonest % 1000000000LL);
+        int n = kevent(sl_reactor_fd, NULL, 0, events, 64, &ts);
 #else
-        int timeout = soonest < 0 ? -1 : (int)(soonest / 1000000LL);
-        int n = epoll_wait(sl_reactor_fd, events, 64, timeout);
+        int n = epoll_wait(sl_reactor_fd, events, 64,
+                           (int)(soonest / 1000000LL));
 #endif
         if (n < 0) { if (errno == EINTR) continue; continue; }
         /* Tasks to resume, collected under their lists' locks and

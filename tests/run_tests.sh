@@ -708,11 +708,13 @@ done
 # a new object held only by its header was invisible to the conservative
 # scan (plain dev failed 9 of 10 runs). net_reactor_shards: waiters on
 # every per-fd reactor list, woken by data and by deadlines, each once.
+# reactor_nudges: deadline waits racing the reactor's scans, which the
+# registration count (sl_reactor_wake_at) must never let it sleep past.
 echo "--- preemption guards (forced 1 ms preemption, 16KB nursery) ---"
 pg_bad=0
 for name in gc_preempt_derived gc_preempt_derived gc_preempt_derived \
             net_reactor_shards net_reactor_shards net_reactor_shards \
-            net_dns_records; do
+            reactor_nudges reactor_nudges net_dns_records; do
     out="/tmp/sl_preempt_${name}.out"
     if ! SLANG_WORKERS=4 SLANG_GC_NURSERY_KB=16 SLANG_PREEMPT_QUANTUM_MS=1 \
             SLANG_PREEMPT_TICK_MS=1 ./slangc "tests/$name/main.sl" --run \
@@ -885,6 +887,29 @@ EOF_SPEC
     fi
 done
 [ "$budget_bad" -eq 0 ] && echo "PASS allocation budgets"
+
+# ---- reactor nudge budget ---------------------------------------------------
+# reactor_nudges: keep-alive round trips where every recv carries a
+# deadline. A deadline wait nudges the reactor (a write(2) and an extra
+# reactor wakeup) only when the reactor would otherwise sleep past it.
+# Before the registration-count protocol and the 1 s sleep cap
+# (runtime/sl_net.c, sl_reactor_wake_at) 41-56% of these waits nudged,
+# because a reactor mid-scan read as "nudge me"; none do now. Budget: 1%.
+echo "--- reactor nudge budget (SLANG_SCHED_STAT) ---"
+nudge_line=$(SLANG_SCHED_STAT=1 ./slangc tests/reactor_nudges/main.sl --run \
+             2>&1 >/dev/null | grep -o 'deadline_waits=[0-9]* reactor_nudges=[0-9]*')
+nudge_waits=$(echo "$nudge_line" | sed -n 's/deadline_waits=\([0-9]*\).*/\1/p')
+nudge_n=$(echo "$nudge_line" | sed -n 's/.*reactor_nudges=\([0-9]*\)/\1/p')
+if [ -z "$nudge_waits" ] || [ -z "$nudge_n" ] || [ "$nudge_waits" -lt 1000 ]; then
+    echo "FAIL reactor nudge budget (no slang-sched-stat line: $nudge_line)"
+    fail=1
+elif [ $((nudge_n * 100)) -gt "$nudge_waits" ]; then
+    echo "FAIL reactor nudge budget: $nudge_n nudges for $nudge_waits" \
+         "deadline waits, budget 1%"
+    fail=1
+else
+    echo "PASS reactor nudge budget ($nudge_n nudges, $nudge_waits deadline waits)"
+fi
 
 # ---- promotion budgets ------------------------------------------------------
 # Objects promoted to the old generation, as a share of all allocations,
