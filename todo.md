@@ -182,15 +182,34 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
     33-58 us -> 0.8 us of CPU; zokor `/users/:id` CPU per request -14% at
     c=1 and -17% at c=4, unchanged at c=50 (no worker sleeps there).
     Counter: `runnext_wakes`; budget and codegen-marking check in
-    tests/run_tests.sh. **Found, not fixed:** at c=1 a zokor request costs
-    ~480 us of CPU for ~30 us of work -- every resume from the reactor
-    goes through the stripes, whose push broadcasts to every sleeping
-    worker, and they wake to find nothing. Waking one sleeper (or
-    none when the pushing worker is about to go idle) is the lever for
-    lightly loaded servers; it was measured neutral for throughput
-    under load (2026-10-07), never for CPU at low load. Also: 50 tasks
-    doing spawn + join on 8 workers still spend most of their time in
-    the kernel, likely `sl_gc_mu` contention in park/resume.
+    tests/run_tests.sh. Also found: 50 tasks doing spawn + join on 8
+    workers still spend most of their time in the kernel, likely
+    `sl_gc_mu` contention in park/resume.
+  - **Waking one sleeper instead of broadcasting: measured, rejected**
+    (2026-10-12; experiment kept on local branch perf/wake-one-sleeper,
+    d1652c0). Every stripe push broadcasts to all sleeping workers, and
+    in Docker Desktop's Linux VM on a Mac that cost ~400-600 us of CPU per
+    zokor request at c=1 (each idle-vCPU wake is a VM exit). Variants
+    tried: wake one (announce-before-scan so no push is missed), wake
+    two, and each with Go-style bounded spinning (spinners take a
+    runnext slot only after a 3 us grace). On the laptop they cut c=1 CPU
+    60-70%, but moderate loads swung +-30% run to run. On a quiet 4-vCPU
+    KVM host (3 workers on 3 pinned cores, latgen on the fourth, 0%
+    steal, ABBA x3, samples within ~1%) the broadcast was as good or
+    better everywhere: c=1 dev 17.1k rps p99 0.083 ms, 55.6 us CPU per
+    request; wake-one 0.61x, wake-two 0.44x, wake-one+spin 0.96x (p99
+    0.127 ms, CPU 42 us), wake-two+spin 0.61x; at c=4, 50 and 512 every
+    variant within 0.95-1.02x. On real hardware an idle wake costs about
+    a tenth of the VM's, and the extra woken workers catch the next
+    request without a sleep. Do not reopen without a host where idle
+    wakes are expensive and a measurement there. tests/idle_wakes (local
+    branch) counts worker and futile wakes per round trip if needed.
+  - **Worker count ignores a cgroup CPU quota.** `sl_pool_init` sizes the
+    pool from `sched_getaffinity` (taskset, cpusets) but not from
+    `cpu.max`, so `docker --cpus 2` or a Kubernetes CPU limit on a
+    32-core node starts 32 workers sharing 2 CPUs of quota, and every
+    one of them can be throttled mid-request. Go 1.25 made GOMAXPROCS
+    respect the quota for the same reason. Next item after this one.
   Original item: all IO readiness goes
   through one reactor thread (`sl_reactor_thread`, `runtime/sl_net.c`),
   under one global mutex (`sl_reactor_mu`). Each loop scans every waiting
@@ -472,6 +491,32 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
   mark uses the same tracers.
 - [ ] **R8. Prove it** *(fix-gc Phase 9)*: a CCX33 re-run with #287's
   configuration that passes S2's host check, p99 from `bench/latgen`.
+
+## C. Compiler bugs found while doing something else
+
+- [ ] **`spawn` with a moved `link` before a GC-returning call argument
+  is an internal error.** Found 2026-10-12 writing a zokor test. Minimal
+  reproduction (no generics needed):
+
+  ```slang
+  gc struct St { n: int }
+  fn mk() -> St { return St { n: 1 }; }
+  fn use(b: St, l: link, c: St) { println(to_str(c.n)); }
+  fn f() {
+      let lr = link_listen(0);
+      guard let ln = lr else { return; }
+      let dr = link_dial("127.0.0.1", ln.port(), until_never());
+      guard let c = dr else { return; }
+      spawn use(mk(), c, mk());
+  }
+  f();
+  ```
+
+  `slangc` prints `internal error: liveness-pending value has no
+  registered temp at line 9`. `spawn use(mk(), c)` (no call after the
+  link) compiles. Workaround: bind the call results to `let`s first. A
+  compiler error must never surface as an internal error, so this needs
+  a fix and a test in tests/ that fails today.
 
 ## G. gRPC and GraphQL
 
