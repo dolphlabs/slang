@@ -1309,6 +1309,208 @@ static void sl_preempt_ticker_start(void) {
  * ever has these signals unblocked, via its own sigwait() call --
  * replaces the old 'exactly one thread stays unblocked' scheme
  * entirely, see that file's own comments. */
+#if defined(__linux__)
+#include <fcntl.h>
+#include <limits.h>
+
+/* Reads at most cap - 1 bytes of path into buf, NUL-terminated; the
+    count, or -1 when it cannot be read. No allocation: this runs before
+    the pool exists. */
+static long sl_read_small(const char *path, char *buf, size_t cap) {
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return -1;
+    size_t n = 0;
+    while (n + 1 < cap) {
+        ssize_t r = read(fd, buf + n, cap - 1 - n);
+        if (r < 0) {
+            if (errno == EINTR)
+                continue;
+            close(fd);
+            return -1;
+        }
+        if (r == 0)
+            break;
+        n += (size_t)r;
+    }
+    close(fd);
+    buf[n] = '\0';
+    return (long)n;
+}
+
+/* A run of decimal digits at *p, advancing past it; -1 if there is none
+    or it would overflow. */
+static long long sl_parse_digits(const char **p) {
+    const char *s = *p;
+    if (*s < '0' || *s > '9')
+        return -1;
+    long long v = 0;
+    while (*s >= '0' && *s <= '9') {
+        if (v > (LLONG_MAX - 9) / 10)
+            return -1;
+        v = v * 10 + (*s - '0');
+        s++;
+    }
+    *p = s;
+    return v;
+}
+
+/* Whole CPUs, rounded up, that a quota of `quota` per `period` allows;
+    0 for no limit. */
+static long sl_cpus_of(long long quota, long long period) {
+    if (quota <= 0 || period <= 0)
+        return 0;
+    long long c = quota / period + (quota % period != 0);
+    return c > LONG_MAX ? 0 : (long)c;
+}
+
+/* The smaller of two limits where 0 means none. */
+static long sl_min_limit(long a, long b) {
+    if (a == 0)
+        return b;
+    if (b == 0)
+        return a;
+    return a < b ? a : b;
+}
+
+/* The tightest CPU limit on dir and each ancestor up to root, read by
+    `level` from each: a container's own cgroup and the pod or slice
+    around it can each carry one. */
+static long sl_cgroup_walk(const char *root, const char *path,
+                           long (*level)(const char *dir)) {
+    char dir[4096];
+    size_t rl = strlen(root);
+    if (strstr(path, "/..") || path[0] != '/')
+        return 0;
+    if (snprintf(dir, sizeof(dir), "%s%s", root, path) >= (int)sizeof(dir))
+        return 0;
+    size_t len = strlen(dir);
+    while (len > rl && dir[len - 1] == '/')
+        dir[--len] = '\0';
+    long best = 0;
+    for (;;) {
+        best = sl_min_limit(best, level(dir));
+        if (len <= rl)
+            break;
+        while (len > rl && dir[len - 1] != '/')
+            len--;
+        if (len > rl)
+            len--; /* the slash */
+        dir[len] = '\0';
+    }
+    return best;
+}
+
+/* cgroup v2: "max <period>" or "<quota> <period>" in cpu.max. */
+static long sl_cgroup2_level(const char *dir) {
+    char path[4200], buf[128];
+    if (snprintf(path, sizeof(path), "%s/cpu.max", dir) >= (int)sizeof(path))
+        return 0;
+    if (sl_read_small(path, buf, sizeof(buf)) <= 0)
+        return 0;
+    const char *p = buf;
+    long long quota = sl_parse_digits(&p);
+    if (quota < 0 || *p != ' ')
+        return 0; /* "max", or not a number */
+    p++;
+    return sl_cpus_of(quota, sl_parse_digits(&p));
+}
+
+/* cgroup v1: cpu.cfs_quota_us (-1 when unlimited) over cpu.cfs_period_us. */
+static long sl_cgroup1_level(const char *dir) {
+    char path[4200], buf[64];
+    const char *p;
+    if (snprintf(path, sizeof(path), "%s/cpu.cfs_quota_us", dir) >=
+        (int)sizeof(path))
+        return 0;
+    if (sl_read_small(path, buf, sizeof(buf)) <= 0)
+        return 0;
+    p = buf;
+    long long quota = sl_parse_digits(&p); /* "-1" parses as none */
+    if (snprintf(path, sizeof(path), "%s/cpu.cfs_period_us", dir) >=
+        (int)sizeof(path))
+        return 0;
+    if (sl_read_small(path, buf, sizeof(buf)) <= 0)
+        return 0;
+    p = buf;
+    return sl_cpus_of(quota, sl_parse_digits(&p));
+}
+
+/* Whether a v1 controller list ("cpu,cpuacct") names the cpu controller. */
+static int sl_lists_cpu(const char *list, size_t n) {
+    size_t i = 0;
+    while (i < n) {
+        size_t j = i;
+        while (j < n && list[j] != ',')
+            j++;
+        if (j - i == 3 && memcmp(list + i, "cpu", 3) == 0)
+            return 1;
+        i = j + 1;
+    }
+    return 0;
+}
+
+/* Whole CPUs the process's cgroup CPU quota allows, rounded up; 0 for
+    none or anything unreadable. sched_getaffinity sees a cpuset but not
+    a quota, so `docker --cpus 2`, or a Kubernetes CPU limit, on a
+    32-core node otherwise starts 32 workers that share two CPUs' worth
+    of time and are throttled mid-request. Read once, at start.
+    SLANG_TEST_CGROUP_PROC and SLANG_TEST_CGROUP_FS replace
+    /proc/self/cgroup and /sys/fs/cgroup for tests/run_tests.sh. */
+static long sl_cgroup_cpu_limit(void) {
+    const char *proc = getenv("SLANG_TEST_CGROUP_PROC");
+    const char *fs = getenv("SLANG_TEST_CGROUP_FS");
+    if (!proc || !proc[0])
+        proc = "/proc/self/cgroup";
+    if (!fs || !fs[0])
+        fs = "/sys/fs/cgroup";
+    char buf[8192];
+    long n = sl_read_small(proc, buf, sizeof(buf));
+    if (n <= 0)
+        return 0;
+    if ((size_t)n == sizeof(buf) - 1) {
+        /* a truncated last line could name the wrong cgroup */
+        char *nl = strrchr(buf, '\n');
+        if (!nl)
+            return 0;
+        nl[1] = '\0';
+    }
+    const char *v2 = NULL;
+    char *line = buf;
+    while (*line) {
+        char *end = strchr(line, '\n');
+        if (end)
+            *end = '\0';
+        char *c1 = strchr(line, ':');
+        char *c2 = c1 ? strchr(c1 + 1, ':') : NULL;
+        if (c2) {
+            if (c2 == c1 + 1 && strncmp(line, "0:", 2) == 0) {
+                v2 = c2 + 1;
+            } else if (sl_lists_cpu(c1 + 1, (size_t)(c2 - c1 - 1))) {
+                /* v1 cpu controller (hybrid hosts too): its mount */
+                static const char *const mounts[] = {
+                    "/cpu,cpuacct", "/cpuacct,cpu", "/cpu"};
+                char root[4096];
+                for (size_t i = 0; i < sizeof(mounts) / sizeof(mounts[0]);
+                     i++) {
+                    if (snprintf(root, sizeof(root), "%s%s", fs,
+                                 mounts[i]) >= (int)sizeof(root))
+                        continue;
+                    if (access(root, F_OK) == 0)
+                        return sl_cgroup_walk(root, c2 + 1,
+                                              sl_cgroup1_level);
+                }
+                return 0;
+            }
+        }
+        if (!end)
+            break;
+        line = end + 1;
+    }
+    return v2 ? sl_cgroup_walk(fs, v2, sl_cgroup2_level) : 0;
+}
+#endif
+
 static void sl_pool_start(void) {
     /* Writing to a socket whose peer has hung up raises SIGPIPE, and the
      * default disposition is to KILL THE PROCESS. For a server that is
@@ -1340,7 +1542,10 @@ static void sl_pool_start(void) {
     /* One worker per core the process may actually run on. Online cores
      * are the fallback, but under taskset or a container cpuset they
      * overcount: a server pinned to 4 of 32 cores would start 32 workers
-     * contending for 4 cores. SLANG_WORKERS overrides both. */
+     * contending for 4 cores. A cgroup CPU quota lowers it further,
+     * rounded up and to no fewer than 2 (Go 1.25's GOMAXPROCS rule: a
+     * quota of half a CPU still gets a second worker, so one throttled
+     * worker cannot stall everything). SLANG_WORKERS overrides all. */
     long n = sysconf(_SC_NPROCESSORS_ONLN);
 #if defined(__linux__)
     {
@@ -1348,6 +1553,13 @@ static void sl_pool_start(void) {
         CPU_ZERO(&set);
         if (sched_getaffinity(0, sizeof(set), &set) == 0 && CPU_COUNT(&set) > 0)
             n = CPU_COUNT(&set);
+        long quota = sl_cgroup_cpu_limit();
+        if (quota > 0) {
+            if (quota < 2)
+                quota = 2;
+            if (quota < n)
+                n = quota;
+        }
     }
 #endif
     {

@@ -425,9 +425,9 @@ static void sl_sched_stat_dump(void) {
         &sl_sched_stat_reactor_nudges, memory_order_relaxed);
     unsigned long long rn_wakes = atomic_load_explicit(
         &sl_sched_stat_runnext_wakes, memory_order_relaxed);
-    fprintf(stderr, "slang-sched-stat submits=%llu resumes=%llu dispatches=%llu preempt_yields=%llu async_preempts=%llu misaligned_preempts=%llu deadline_waits=%llu reactor_nudges=%llu runnext_wakes=%llu\n",
-            submit, resume, dispatch, pyield, async, misaligned, dwaits,
-            nudges, rn_wakes);
+    fprintf(stderr, "slang-sched-stat workers=%ld submits=%llu resumes=%llu dispatches=%llu preempt_yields=%llu async_preempts=%llu misaligned_preempts=%llu deadline_waits=%llu reactor_nudges=%llu runnext_wakes=%llu\n",
+            sl_pool_nworkers, submit, resume, dispatch, pyield, async,
+            misaligned, dwaits, nudges, rn_wakes);
 }
 
 __attribute__((destructor))
