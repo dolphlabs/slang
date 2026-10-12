@@ -1169,6 +1169,39 @@ fn new_wire_head() -> WireHead {
 // caller since str == compares content -- so a GET costs nothing
 // here. Methods are case-sensitive (RFC 9110 9.1), so anything else,
 // "get" included, is copied out exactly as it arrived.
+// RFC 9110 tchar: what a method may be made of. Anything else -- a
+// quote, a backslash, a control byte such as ESC -- would reach handlers
+// and logs inside the method str, so a request line carrying one is
+// refused like any other malformed one.
+fn is_tchar(c: int) -> bool {
+    return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) ||
+           c == 33 || c == 35 || c == 36 || c == 37 || c == 38 || c == 39 ||
+           c == 42 || c == 43 || c == 45 || c == 46 || c == 94 || c == 95 ||
+           c == 96 || c == 124 || c == 126;
+}
+
+fn method_token_wire(raw: wire, hi: int) -> bool {
+    let i = 0;
+    while i < hi {
+        if !is_tchar(raw[i] as int) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return hi > 0;
+}
+
+fn method_token_bytes(raw: bytes, hi: int) -> bool {
+    let i = 0;
+    while i < hi {
+        if !is_tchar(raw[i] as int) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return hi > 0;
+}
+
 fn method_from_wire(raw: wire, hi: int) -> str {
     if hi == 3 {
         if raw[0] == 71 && raw[1] == 69 && raw[2] == 84 {
@@ -1251,6 +1284,9 @@ fn parse_head_wire(raw: wire, sep: int, n: int, hd: WireHead) -> str {
     if sp1 <= 0 {
         return "malformed request line";
     }
+    if !method_token_wire(raw, sp1) {
+        return "malformed request line: the method is not a token";
+    }
     let sp2 = -1;
     let j = eol - 1;
     while j > sp1 {
@@ -1301,6 +1337,9 @@ fn parse_head(raw: bytes, sep: int) -> result[Head, str] {
     let sp1 = byteutil.find(raw, 0, 32);
     if sp1 < 0 || sp1 >= line_end {
         return err("malformed request line: no method");
+    }
+    if !method_token_bytes(raw, sp1) {
+        return err("malformed request line: the method is not a token");
     }
     let sp2 = byteutil.find(raw, sp1 + 1, 32);
     if sp2 < 0 || sp2 >= line_end {
@@ -1479,6 +1518,9 @@ pub fn parse_frame(raw: bytes) -> result[Frame, str] {
     }
     if sp1 < 0 || sp2 < 0 {
         return err("malformed request line");
+    }
+    if !method_token_bytes(raw, sp1) {
+        return err("malformed request line: the method is not a token");
     }
     if sp2 + 1 >= line_end {
         return err("malformed request line");

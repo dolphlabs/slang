@@ -1,0 +1,9 @@
+GET: parse ok, parse_frame ok
+BREW: parse ok, parse_frame ok
+M-SEARCH: parse ok, parse_frame ok
+ESC: parse refused, parse_frame refused
+quote: parse refused, parse_frame refused
+backslash: parse refused, parse_frame refused
+DEL: parse refused, parse_frame refused
+PROPFIND: read_frame ok
+ESC: read_frame refused (malformed request line: the method is not a token)

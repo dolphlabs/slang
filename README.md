@@ -3076,6 +3076,9 @@ smuggling). `read` and `parse` therefore refuse, rather than guess at:
 - a `Content-Length` longer than 18 digits, or not all digits;
 - chunk-size lines over 1KB, sizes over 15 hex digits, bare LFs, chunk data
   not followed by CRLF, or trailers over 8KB.
+- a method that is not an RFC 9110 token, so a quote, a backslash or a
+  control byte such as ESC never reaches a handler or a log line inside
+  the method.
 
 **After `read` returns an error, close the connection** (the examples all
 `return`). The error means this server could not tell where the request
