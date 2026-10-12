@@ -39,6 +39,17 @@ smuggling). `read` and `parse` therefore refuse, rather than guess at:
 `return`). The error means this server could not tell where the request
 ended, so it cannot tell where the next one begins either.
 
+The writing side holds the same line. A CR or LF inside a header field
+would end the line early, so what follows would become a header of its
+own or the start of the body: response splitting, when a handler copies
+request data into a header. `write` and `serialize` therefore write every
+field (a `with_header` value, a raw `with_headers` line, `location`, the
+content type, the status text) with CR and LF turned into spaces, the rule
+Go's `net/http` applies. A clean field is written as it is, at no extra
+cost. `httpc` does the same for the method and the request headers it
+sends, and percent-encodes CR, LF, space and tab in the request target.
+`http2`'s header encoder does the same for HTTP/2 fields.
+
 ```slang
 import "http";
 
@@ -157,11 +168,11 @@ The Request for a WireFrame: method/path already parsed, body already sliced -- 
 
 ### `fn serialize(r: Response) -> bytes`
 
-### `fn serialize_builder(r: Response) -> bytes`
+### `fn serialize_builder(r0: Response) -> bytes`
 
 The old builder path, kept for the differential test: must stay byte-identical to serialize_sized() above for every shape.
 
-### `fn serialize_sized(r: Response) -> bytes`
+### `fn serialize_sized(r0: Response) -> bytes`
 
 Serialize with a handful of allocations, not ~40: size the response first (status line + headers + framing + body, all cheap integer arithmetic over lengths -- see emit_len below), allocate exactly that many bytes with strings.bytes_zero (one header plus one buffer -- no throwaway str), then fill by slice assignment. The old builder path stays below as serialize_builder for the differential test; this is what `serialize` and `write`'s fallback call, so an oversized response costs a few allocations instead of ~40.  The remaining handful is load-bearing, not waste: one to_bytes per fill_str piece (the str->bytes copy the compiler cannot fuse), one filtered-extra list, and the response_conn scan's own line strs. Counting them is what keeps this honest -- see the probe notes.
 
@@ -201,7 +212,9 @@ The static emit: the keep-alive rendering is prebuilt, not emitted. Hot path (HT
 
 The keep-alive rendering, assembled ONCE at registration: status line, one content-type, content-length, connection, blank line, body -- the exact bytes write_static memcpys per request. status_text_of covers the statuses static routes return; the fallback ("OK") matches write_static's own close variant above, so the two can never disagree on a reason phrase.
 
-### `fn write(c: &mut link, r: Response, a: &mut arena, deadline: until) -> result[int, fault]`
+### `fn clean_field(s: str) -> str`
+
+### `fn write(c: &mut link, r0: Response, a: &mut arena, deadline: until) -> result[int, fault]`
 
 ### `fn text_response_bytes(status: i32, status_text: str, content_type: str, body: bytes) -> Response`
 
