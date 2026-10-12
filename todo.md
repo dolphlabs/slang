@@ -505,6 +505,33 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
   incidental.) Both spawn forms now register it, which also roots a
   value-struct argument's GC fields across the later call.
   tests/spawn_call_args runs under the minor verifier.
+- [x] **An old channel promoted every value sent through it** (found
+  2026-10-12 measuring zokor's request log; fixed in fix/chan-stale-slots).
+  `sl_chan_recv` and select's receive arm copied a value out but left its
+  pointer in the slot, and `sl_gc_trace_chan` traced all `cap` slots. A
+  send remembers the channel, so every minor traced the stale slots and
+  promoted whatever they held until the ring came round again. zokor's
+  4,096-slot log queue at 46k req/s: ~1.9 objects promoted per request,
+  RSS 7 MB -> 21 MB. Receiving now clears the slot and only queued values
+  are traced. tests/gc_chan_promotion_budget: 3.7% of allocations promoted
+  before, 0.1% after (the 3,000 values it deliberately keeps queued).
+
+Found building zokor's logger (2026-10-12), not fixed:
+
+- [ ] **str literals take no `\x` or `\u` escape** ("unknown escape
+  sequence"); a terminal colour needs `to_str(b"\x1b[32m")`. JSON-style
+  `\u001b` and `\x1b` are what a model writes first.
+- [ ] **A str cannot be read byte by byte without a copy**: `s[i]` is "cannot
+  index a value of type str", so a scan of a str allocates `to_bytes(s)`.
+  A read-only `byte_at(s, i)` (or indexing) would make escape checks free.
+- [ ] **http accepts any bytes as the method**: `parse_head` takes everything
+  before the first space, with no RFC 9110 token check, so a method can
+  carry `"`, `\` or an ESC byte into a handler or a log line. Refuse a
+  non-token method with 400 at the parser.
+- [ ] **Generic functions cannot be named as values even when every type
+  parameter is known** (`r.get(path, live)` inside a generic method over
+  `S`), and there is no explicit instantiation syntax (`f[int]()` is a
+  parse error), so a library cannot register its own generic handler.
 
 ## G. gRPC and GraphQL
 

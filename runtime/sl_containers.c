@@ -87,13 +87,21 @@ static inline void sl_gc_mark_slot(const unsigned char *el, size_t sz,
         mark(*(void *const *)(el + off));
 }
 
+/* Only the queued values, [head, head + count) round the ring. A slot
+ * outside that range holds nothing live: receiving clears it
+ * (sl_chan_take). Tracing every slot used to promote whatever a
+ * received value had left behind, until the ring came round to it
+ * again, on every collection that traced the channel: a remembered old
+ * channel promoted every value sent through it. */
 static void sl_gc_trace_chan(void *p, void (*mark)(void *)) {
     sl_chan *c = (sl_chan *)p;
     if (!c->buf) return;
     mark(c->buf);
-    for (int i = 0; i < c->cap; i++)
+    for (int k = 0; k < c->count; k++) {
+        int i = (c->head + k) % c->cap;
         sl_gc_mark_slot(c->buf + (size_t)i * (size_t)c->elemsz,
                         (size_t)c->elemsz, c->elem_is_ptr, mark);
+    }
 }
 
 static sl_chan *sl_chan_new(size_t elemsz, int cap, int elem_is_ptr) {
@@ -108,6 +116,17 @@ static sl_chan *sl_chan_new(size_t elemsz, int cap, int elem_is_ptr) {
     c->elem_is_ptr = elem_is_ptr;
     pthread_mutex_init(&c->mu, NULL);
     return c;
+}
+
+/* Moves the value at head into `out` and clears its slot, so the buffer
+ * keeps nothing alive once it is received. Clearing stores no pointer,
+ * so it needs no barrier. Called with c->mu held. */
+static void sl_chan_take(sl_chan *c, void *out) {
+    unsigned char *slot = c->buf + (size_t)c->head * c->elemsz;
+    memcpy(out, slot, c->elemsz);
+    memset(slot, 0, c->elemsz);
+    c->head = (c->head + 1) % c->cap;
+    c->count--;
 }
 
 /* Wait-list helpers, shared by chan, mutex and select. All three park
@@ -299,9 +318,7 @@ static int sl_chan_recv(sl_chan *c, void *out) {
         sl_rt_preempt_enable();
         return 0;
     }
-    memcpy(out, c->buf + (size_t)c->head * c->elemsz, c->elemsz);
-    c->head = (c->head + 1) % c->cap;
-    c->count--;
+    sl_chan_take(c, out);
     sl_wl_wake_one(&c->send_waiters, &c->send_waiters_tail);
     pthread_mutex_unlock(&c->mu);
     sl_rt_preempt_enable();
@@ -493,9 +510,7 @@ static int sl_sel_try_locked(sl_sel_case *sc) {
         return 1;
     }
     if (c->count > 0) {
-        memcpy(sc->val, c->buf + (size_t)c->head * c->elemsz, c->elemsz);
-        c->head = (c->head + 1) % c->cap;
-        c->count--;
+        sl_chan_take(c, sc->val);
         sc->closed = 0;
         sl_wl_wake_one(&c->send_waiters, &c->send_waiters_tail);
         return 1;
