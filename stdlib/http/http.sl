@@ -1904,11 +1904,24 @@ fn response_extra_filtered(r: Response) -> [str] {
     return out;
 }
 
+// The value of a one-line "name: value" header whose value starts at
+// `at` (strings.find_field's result): leading OWS skipped, the rest kept
+// as written -- extra_line_value's rule, without re-finding the colon.
+fn line_value_at(lb: bytes, at: int) -> str {
+    let v = at;
+    while v < len(lb) && (lb[v] == 32 || lb[v] == 9) {
+        v = v + 1;
+    }
+    return strings.from_bytes(lb, v, len(lb));
+}
+
 fn response_conn(r: Response) -> str {
     let i = len(r.extra) - 1;
     while i >= 0 {
-        if lower_ascii(extra_line_name(r.extra[i])) == conn_name() {
-            return extra_line_value(r.extra[i]);
+        let lb = to_bytes(r.extra[i]);
+        let at = strings.find_field(lb, conn_name());
+        if at >= 0 {
+            return line_value_at(lb, at);
         }
         i = i - 1;
     }
@@ -1967,31 +1980,37 @@ pub fn resp_header(r: Response, name: str) -> opt[str] {
     if want == "location" && len(r.location) > 0 {
         return some(r.location);
     }
+    let i = extra_field_line(r, want);
+    if i < 0 {
+        return none;
+    }
+    let lb = to_bytes(r.extra[i]);
+    return some(line_value_at(lb, strings.find_field(lb, want)));
+}
+
+// The index of the last extra line named `want` (lowercase), or -1: the
+// lookup resp_header and has_resp_header share, matching each name in
+// place (strings.find_field) rather than lowercasing a copy of it.
+fn extra_field_line(r: Response, want: str) -> int {
     let i = len(r.extra) - 1;
     while i >= 0 {
-        let line = r.extra[i];
-        let b = to_bytes(line);
-        let k = 0;
-        while k < len(b) && b[k] != 58 {
-            k = k + 1;
-        }
-        if k < len(b) && lower_ascii(to_str(b[0..k])) == want {
-            let v = k + 1;
-            while v < len(b) && (b[v] == 32 || b[v] == 9) {
-                v = v + 1;
-            }
-            return some(to_str(b[v..]));
+        if strings.find_field(to_bytes(r.extra[i]), want) >= 0 {
+            return i;
         }
         i = i - 1;
     }
-    return none;
+    return -1;
 }
 
 pub fn has_resp_header(r: Response, name: str) -> bool {
-    guard let _v = resp_header(r, name) else {
-        return false;
+    let want = lower_ascii(name);
+    if want == "content-type" && len(r.content_type) > 0 && len(r.location) == 0 {
+        return true;
     }
-    return true;
+    if want == "location" && len(r.location) > 0 {
+        return true;
+    }
+    return extra_field_line(r, want) >= 0;
 }
 
 pub fn serialize(r: Response) -> bytes {
@@ -2943,17 +2962,56 @@ fn emit_into(w: wire, status: i32, status_text: str, content_type: str,
     return off;
 }
 
+// The general shape, written straight into `w` in one pass: the same
+// bytes as response_block plus the trailer, but each extra line is
+// copied to bytes once and its name matched in place
+// (strings.find_field, case-insensitive), not rebuilt as a lowercased
+// str -- that cost about 25 allocations a pass for one header, and
+// write() makes two passes (size, then fill). Lines naming
+// content-length or connection are dropped (the trailer writes those),
+// as are content-type and location when the struct field already
+// carries one; the last connection line's value is the Connection.
 fn emit(r: Response, w: wire) -> int {
     let off = 0;
     off = put_str(w, off, "HTTP/1.1 ");
-    off = put_str(w, off, to_str(r.status));
+    off = put_int(w, off, r.status);
     off = put_str(w, off, " ");
     off = put_str(w, off, r.status_text);
     off = put_str(w, off, "\r\n");
-    off = put_bytes(w, off, response_block(r));
-    let conn = response_conn(r);
+    let skip_ct = len(r.content_type) > 0;
+    let skip_loc = len(r.location) > 0;
+    if skip_loc {
+        skip_ct = false;
+        off = put_str(w, off, "location: ");
+        off = put_str(w, off, r.location);
+        off = put_str(w, off, "\r\n");
+    } else if skip_ct {
+        off = put_str(w, off, "content-type: ");
+        off = put_str(w, off, r.content_type);
+        off = put_str(w, off, "\r\n");
+    }
+    let conn = "keep-alive";
+    for line in r.extra {
+        let lb = to_bytes(line);
+        if strings.find_field(lb, content_len_name()) >= 0 {
+            continue;
+        }
+        let ca = strings.find_field(lb, conn_name());
+        if ca >= 0 {
+            conn = line_value_at(lb, ca);
+            continue;
+        }
+        if skip_ct && strings.find_field(lb, content_type_name()) >= 0 {
+            continue;
+        }
+        if skip_loc && strings.find_field(lb, location_name()) >= 0 {
+            continue;
+        }
+        off = put_str(w, off, line);
+        off = put_str(w, off, "\r\n");
+    }
     off = put_str(w, off, "Content-Length: ");
-    off = put_str(w, off, to_str(len(r.body)));
+    off = put_int(w, off, len(r.body));
     off = put_str(w, off, "\r\nConnection: ");
     off = put_str(w, off, conn);
     off = put_str(w, off, "\r\n\r\n");
