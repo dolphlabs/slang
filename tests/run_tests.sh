@@ -858,6 +858,11 @@ done
 #                        number, a string per key); 47 now, the values the
 #                        decode returns: 20 items and their skus, the Quote,
 #                        its region, the list and its growth, and the result.
+#   builder_bytes_lazy   builder.new_bytes, one long write, take. Was 8 (a
+#                        512-byte chunk built as a str then copied to
+#                        bytes before any write, and take always joining);
+#                        5 now: the builder, its piece list, the piece,
+#                        the reset's new list and its growth.
 #   redis_read_budget    one redis PING round trip, client and in-process
 #                        server together. Was 72, with the bytes copied per
 #                        reply growing toward 1MB (the client appended every
@@ -866,7 +871,8 @@ done
 echo "--- allocation budgets (SLANG_GC_STAT) ---"
 budget_bad=0
 for spec in http_read_wire:2000:6:40 bytes_empty_literal:100000:0:0 \
-            json_decode_budget:1000:47:0 redis_read_budget:1000:49:20; do
+            json_decode_budget:1000:47:0 redis_read_budget:1000:49:20 \
+            builder_bytes_lazy:10000:5:0; do
     IFS=: read -r name n per slack <<EOF_SPEC
 $spec
 EOF_SPEC

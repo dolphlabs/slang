@@ -254,7 +254,9 @@ let raw: bytes = y.finish();
 `Str` is for text and `Bytes` for binary data. Both chain, report
 `size()` in bytes without assembling anything, and offer `finish()` (which
 can be called again after more writes), `take()` (finish and start over)
-and `reset()`. `Bytes.write_byte` fills a 512-byte chunk in place, so a
+and `reset()`. The chunk is made on the first short write, so a builder
+that only takes long pieces never pays for it, and `take()` hands back a
+lone piece without copying it. `Bytes.write_byte` fills a 512-byte chunk in place, so a
 million single-byte writes make about two thousand allocations rather than a
 million: 4 million of them take 136 ms. `Bytes` keeps a **copy** of what you
 write, because bytes are mutable and a later change of yours must not

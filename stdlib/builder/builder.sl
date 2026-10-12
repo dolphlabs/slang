@@ -115,17 +115,28 @@ pub gc struct Bytes {
     size: int,
 }
 
+// The chunk starts as the shared empty b"" and is made on the first
+// short write (has_chunk): a builder that only takes long pieces, or none,
+// never pays for it. It used to be built eagerly as a 512-byte str and
+// then copied to bytes -- 1 KB and two allocations before any write.
 pub fn new_bytes() -> Bytes {
     let parts: [bytes] = [];
     return Bytes {
         parts: parts,
-        chunk: to_bytes(strings.repeat(" ", chunk_len())),
+        chunk: b"",
         fill: 0,
         size: 0
     };
 }
 
 impl Bytes {
+    fn has_chunk(self: Bytes) -> int {
+        if len(self.chunk) == 0 {
+            self.chunk = strings.bytes_zero(chunk_len());
+        }
+        return 0;
+    }
+
     // Moves the partly filled chunk into the piece list, as a copy, so
     // the chunk itself is free to be filled again.
     fn flush(self: Bytes) -> int {
@@ -137,6 +148,7 @@ impl Bytes {
     }
 
     pub fn write_byte(self: Bytes, b: int) -> Bytes {
+        self.has_chunk();
         if self.fill == chunk_len() {
             self.flush();
         }
@@ -155,6 +167,7 @@ impl Bytes {
             return self;
         }
         if n <= inline_max() {
+            self.has_chunk();
             if self.fill + n > chunk_len() {
                 self.flush();
             }
@@ -204,8 +217,16 @@ impl Bytes {
         return strings.join_bytes(self.parts, b"");
     }
 
+    // finish, then reset. With a single piece that piece is the result:
+    // the reset drops the builder's hold on it, so no copy is needed.
     pub fn take(self: Bytes) -> bytes {
-        let out = self.finish();
+        self.flush();
+        let out = b"";
+        if len(self.parts) == 1 {
+            out = self.parts[0];
+        } else {
+            out = strings.join_bytes(self.parts, b"");
+        }
         self.reset();
         return out;
     }

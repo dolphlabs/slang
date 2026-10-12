@@ -102,9 +102,9 @@
           "name": "new_bytes",
           "decl": "fn",
           "sig": "fn new_bytes() -> Bytes",
-          "doc": "",
+          "doc": "The chunk starts as the shared empty b\"\" and is made on the first short write (has_chunk): a builder that only takes long pieces, or none, never pays for it. It used to be built eagerly as a 512-byte str and then copied to bytes -- 1 KB and two allocations before any write.",
           "file": "stdlib/builder/builder.sl",
-          "line": 118
+          "line": 122
         },
         {
           "name": "Bytes.write_byte",
@@ -112,7 +112,7 @@
           "sig": "fn write_byte(self: Bytes, b: int) -> Bytes",
           "doc": "",
           "file": "stdlib/builder/builder.sl",
-          "line": 139
+          "line": 150
         },
         {
           "name": "Bytes.write",
@@ -120,7 +120,7 @@
           "sig": "fn write(self: Bytes, b: bytes) -> Bytes",
           "doc": "Appends a copy. Bytes are mutable in slang, so keeping the caller's own value would let a later change of theirs rewrite what was already written.",
           "file": "stdlib/builder/builder.sl",
-          "line": 152
+          "line": 164
         },
         {
           "name": "Bytes.write_str",
@@ -128,7 +128,7 @@
           "sig": "fn write_str(self: Bytes, s: str) -> Bytes",
           "doc": "Text goes in as its UTF-8 bytes. `to_bytes` already makes a fresh value, so a long string is kept as-is rather than copied twice.",
           "file": "stdlib/builder/builder.sl",
-          "line": 177
+          "line": 190
         },
         {
           "name": "Bytes.size",
@@ -136,7 +136,7 @@
           "sig": "fn size(self: Bytes) -> int",
           "doc": "",
           "file": "stdlib/builder/builder.sl",
-          "line": 191
+          "line": 204
         },
         {
           "name": "Bytes.is_empty",
@@ -144,7 +144,7 @@
           "sig": "fn is_empty(self: Bytes) -> bool",
           "doc": "",
           "file": "stdlib/builder/builder.sl",
-          "line": 195
+          "line": 208
         },
         {
           "name": "Bytes.finish",
@@ -152,15 +152,15 @@
           "sig": "fn finish(self: Bytes) -> bytes",
           "doc": "The whole result, in one allocation. Leaves the builder as it was, so it can be written to and finished again; call it once when you are done rather than after every write.",
           "file": "stdlib/builder/builder.sl",
-          "line": 202
+          "line": 215
         },
         {
           "name": "Bytes.take",
           "decl": "fn",
           "sig": "fn take(self: Bytes) -> bytes",
-          "doc": "",
+          "doc": "finish, then reset. With a single piece that piece is the result: the reset drops the builder's hold on it, so no copy is needed.",
           "file": "stdlib/builder/builder.sl",
-          "line": 207
+          "line": 222
         },
         {
           "name": "Bytes.reset",
@@ -168,7 +168,7 @@
           "sig": "fn reset(self: Bytes) -> int",
           "doc": "",
           "file": "stdlib/builder/builder.sl",
-          "line": 213
+          "line": 234
         }
       ]
     },
