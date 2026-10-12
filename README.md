@@ -3164,7 +3164,10 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
   `SLANG_SCHED_STAT=1` prints scheduler counts at exit, among them
   `async_preempts` and `misaligned_preempts`, the preemptions whose
   trampoline called C on a stack off the ABI's 16-byte alignment (always
-  0; `tests/run_tests.sh` checks it).
+  0; `tests/run_tests.sh` checks it), and `deadline_waits` and
+  `reactor_nudges`: IO waits that carried a deadline, and those that had
+  to wake the reactor to recompute its sleep. The reactor never sleeps
+  more than a second, so only a deadline closer than that nudges it.
   `f` may be a plain top-level function, an `extern fn`, or a
   **function value** (`spawn w(1, out);`, `spawn job.run(x);`) — not a
   method and not a builtin. There is no `spawn` on `net.*`/`time.*`

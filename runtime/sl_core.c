@@ -381,6 +381,10 @@ static long sl_pool_nworkers = 0;
 static _Thread_local int sl_rt_runnext_idx = -1;
 
 static _Atomic unsigned long long sl_sched_stat_submit = 0;
+/* Reactor waits that carried a deadline, and those that had to nudge the
+ * reactor to recompute its sleep (sl_net.c, sl_reactor_wake_at). */
+static _Atomic unsigned long long sl_sched_stat_deadline_waits = 0;
+static _Atomic unsigned long long sl_sched_stat_reactor_nudges = 0;
 static _Atomic unsigned long long sl_sched_stat_resume = 0;
 static _Atomic unsigned long long sl_sched_stat_dispatch = 0;
 static _Atomic unsigned long long sl_sched_stat_preempt_yield = 0;
@@ -411,8 +415,13 @@ static void sl_sched_stat_dump(void) {
         &sl_sched_stat_preempt_async, memory_order_relaxed);
     unsigned long long misaligned = atomic_load_explicit(
         &sl_sched_stat_preempt_misaligned, memory_order_relaxed);
-    fprintf(stderr, "slang-sched-stat submits=%llu resumes=%llu dispatches=%llu preempt_yields=%llu async_preempts=%llu misaligned_preempts=%llu\n",
-            submit, resume, dispatch, pyield, async, misaligned);
+    unsigned long long dwaits = atomic_load_explicit(
+        &sl_sched_stat_deadline_waits, memory_order_relaxed);
+    unsigned long long nudges = atomic_load_explicit(
+        &sl_sched_stat_reactor_nudges, memory_order_relaxed);
+    fprintf(stderr, "slang-sched-stat submits=%llu resumes=%llu dispatches=%llu preempt_yields=%llu async_preempts=%llu misaligned_preempts=%llu deadline_waits=%llu reactor_nudges=%llu\n",
+            submit, resume, dispatch, pyield, async, misaligned, dwaits,
+            nudges);
 }
 
 __attribute__((destructor))

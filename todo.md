@@ -156,6 +156,22 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
     medians: point c64 11,422 -> 16,509, c512 12,045 -> 15,440; mix c64
     9,356 -> 9,720 (noise), c512 7,682 -> 8,740; quote unchanged. Go in
     the same container: 30-31k / 26k point, 12k mix: still the gap.
+  - **Deadline waits nudged the reactor half the time** (2026-10-12,
+    perf/reactor-nudge). `sl_reactor_wake_at` was 0 both for "asleep
+    with no deadline" and "mid-scan", so a waiter that caught the
+    reactor scanning nudged it (an eventfd write(2) and a reactor
+    wakeup, which scanned again): 51% of deadline waits under zokor
+    keep-alive load, measured with counters on the Linux container.
+    Fixed with a registration count (the reactor rescans instead of
+    sleeping if a deadline registered during its scan) and a 1 s cap on
+    the reactor's sleep (owner's choice: one idle wakeup a second), so a
+    deadline at least 1 s off never nudges. zokor `/users/:id`, c=50,
+    ABBA x8: nudges 0.49 -> 0 per request, server CPU per request in the
+    quiet samples 34.1-34.9 -> 32.1-32.5 us, the same as the build with
+    no deadlines at all. Counters: `SLANG_SCHED_STAT` now prints
+    `deadline_waits` and `reactor_nudges`; budget in tests/run_tests.sh.
+    Not changed: an epoll timeout is whole milliseconds rounded down,
+    so a deadline under 1 ms away polls with timeout 0 until it passes.
   Original item: all IO readiness goes
   through one reactor thread (`sl_reactor_thread`, `runtime/sl_net.c`),
   under one global mutex (`sl_reactor_mu`). Each loop scans every waiting
