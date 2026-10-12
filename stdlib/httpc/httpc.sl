@@ -269,10 +269,32 @@ fn is_reserved(name: str) -> bool {
            name == "connection" || name == "transfer-encoding";
 }
 
+// A request field as it may be written: CR and LF become spaces, so a
+// value taken from user input cannot end its line and add a header of
+// its own to the request (header injection). A clean field is returned
+// as it is.
+fn clean_field(s: str) -> str {
+    if !strings.contains(s, "\r") && !strings.contains(s, "\n") {
+        return s;
+    }
+    return strings.replace(strings.replace(s, "\r", " "), "\n", " ");
+}
+
+// The request target as it may be written: CR, LF, space and tab
+// percent-encoded, so the request line stays three tokens on one line.
+fn clean_target(p: str) -> str {
+    if !strings.contains(p, "\r") && !strings.contains(p, "\n") &&
+       !strings.contains(p, " ") && !strings.contains(p, "\t") {
+        return p;
+    }
+    return strings.replace(strings.replace(strings.replace(strings.replace(p,
+        "\r", "%0D"), "\n", "%0A"), " ", "%20"), "\t", "%09");
+}
+
 fn serialize(method: str, u: Url, headers: map[str]str,
              body: bytes, keep_alive: bool) -> bytes {
-    let head = method + " " + u.path + " HTTP/1.1\r\n";
-    head = head + "Host: " + host_header(u) + "\r\n";
+    let head = clean_field(method) + " " + clean_target(u.path) + " HTTP/1.1\r\n";
+    head = head + "Host: " + clean_field(host_header(u)) + "\r\n";
     // A client that will not keep the connection says so. The server
     // can then close as soon as it has answered instead of holding an
     // idle socket open for a reuse that is never coming. Keep-alive is
@@ -284,7 +306,7 @@ fn serialize(method: str, u: Url, headers: map[str]str,
 
     for k, v in headers {
         if !is_reserved(strings.to_lower(k)) {
-            head = head + k + ": " + v + "\r\n";
+            head = head + clean_field(k) + ": " + clean_field(v) + "\r\n";
         }
     }
     head = head + "\r\n";
