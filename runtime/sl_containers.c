@@ -1578,11 +1578,15 @@ static sl_join *sl_join_new(size_t valsz, int val_is_ptr) {
     return j;
 }
 
+/* Only ever called by the joined task as it ends -- sl_join_finish from
+ * its spawn trampoline, sl_join_fail from a panic -- so this worker is
+ * about to take the waiter from its own runnext slot, and waking another
+ * worker for it would only race it there (sl_runq_ready_to). */
 static void sl_join_wake(sl_join *j) {
     if (j->waiter) {
         sl_task *w = j->waiter;
         j->waiter = NULL;
-        sl_task_resume(w);
+        sl_task_resume_local(w);
     }
 }
 

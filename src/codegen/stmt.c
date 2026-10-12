@@ -2146,9 +2146,39 @@ static void gen_if_let(CG *cg, Stmt *s) {
     emit_line(cg, "}");
 }
 
+/* The expression a statement evaluates first, or NULL: what
+ * mark_joined_spawn looks at in the statement after a spawn. */
+static Expr *stmt_head_expr(Stmt *s) {
+    switch (s->kind) {
+    case ST_LET: return s->as.let.init;
+    case ST_ASSIGN: return s->as.assign.value;
+    case ST_EXPR: return s->as.expr_stmt.expr;
+    case ST_RETURN: return s->as.ret.value;
+    case ST_GUARD_LET: return s->as.guard_let.expr;
+    default: return NULL;
+    }
+}
+
+/* `let h = spawn f(..);` directly followed by a statement that starts
+ * with `join_wait(h)`: nothing of the spawner's runs between the two, so
+ * the spawn is marked joined (EX_SPAWN's comment, ast.h). */
+static void mark_joined_spawn(Stmt *s, Stmt *next) {
+    if (s->kind != ST_LET || !s->as.let.init ||
+        s->as.let.init->kind != EX_SPAWN || !next)
+        return;
+    Expr *h = stmt_head_expr(next);
+    if (!h || h->kind != EX_CALL || !h->as.call.name ||
+        strcmp(h->as.call.name, "join_wait") || h->as.call.nargs != 1)
+        return;
+    Expr *a = h->as.call.args[0];
+    if (a->kind == EX_IDENT && !strcmp(a->as.ident.name, s->as.let.name))
+        s->as.let.init->as.spawn.joined = 1;
+}
+
 void gen_stmts(CG *cg, Stmt **stmts, int count) {
     for (int i = 0; i < count; i++) {
         Stmt *s = stmts[i];
+        mark_joined_spawn(s, i + 1 < count ? stmts[i + 1] : NULL);
         if (s->kind != ST_GUARD_LET) {
             gen_stmt(cg, s);
             continue;

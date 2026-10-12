@@ -172,6 +172,25 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
     `deadline_waits` and `reactor_nudges`; budget in tests/run_tests.sh.
     Not changed: an epoll timeout is whole milliseconds rounded down,
     so a deadline under 1 ms away polls with timeout 0 until it passes.
+  - **spawn + join_wait woke every sleeping worker twice** (2026-10-12,
+    perf/spawn-join-handoff). Putting a task in a runnext slot broadcasts
+    to all sleepers; a spawn directly followed by its join_wait, and the
+    join's completion, did that although their own worker runs the task
+    next. Codegen now marks the pair joined (`sl_task_submit_copy_joined`)
+    and a join's completion resumes without a wake
+    (`sl_task_resume_local`). spawn + join from one task on 8 workers:
+    33-58 us -> 0.8 us of CPU; zokor `/users/:id` CPU per request -14% at
+    c=1 and -17% at c=4, unchanged at c=50 (no worker sleeps there).
+    Counter: `runnext_wakes`; budget and codegen-marking check in
+    tests/run_tests.sh. **Found, not fixed:** at c=1 a zokor request costs
+    ~480 us of CPU for ~30 us of work -- every resume from the reactor
+    goes through the stripes, whose push broadcasts to every sleeping
+    worker, and they wake to find nothing. Waking one sleeper (or
+    none when the pushing worker is about to go idle) is the lever for
+    lightly loaded servers; it was measured neutral for throughput
+    under load (2026-10-07), never for CPU at low load. Also: 50 tasks
+    doing spawn + join on 8 workers still spend most of their time in
+    the kernel, likely `sl_gc_mu` contention in park/resume.
   Original item: all IO readiness goes
   through one reactor thread (`sl_reactor_thread`, `runtime/sl_net.c`),
   under one global mutex (`sl_reactor_mu`). Each loop scans every waiting

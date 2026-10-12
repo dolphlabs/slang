@@ -199,7 +199,12 @@ struct Expr {
              * instance the arguments were inferred to be. */
             const char *inst;
         } structlit;
-        struct { Expr *call; } spawn;
+        /* joined: set by codegen when the spawning task's very next
+         * step is join_wait on this task (`let h = spawn f(..);` then
+         * `join_wait(h)`, or `join_wait(spawn f(..))`), so the child is
+         * submitted without waking an idle worker: this one runs it
+         * as soon as the spawner parks (sl_task_submit_copy_joined). */
+        struct { Expr *call; int joined; } spawn;
         struct {
             Expr *scrut;
             SwitchExprCase *cases;

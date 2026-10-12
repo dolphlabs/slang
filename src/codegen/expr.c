@@ -584,6 +584,8 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         return wrap_safepoint(cg, e, xasprintf("%s *", oc), NULL, inner);
     }
     if (!strcmp(name, "join_wait")) {
+        if (e->as.call.nargs == 1 && e->as.call.args[0]->kind == EX_SPAWN)
+            e->as.call.args[0]->as.spawn.joined = 1;
         const char *jt = infer_type(cg, e->as.call.args[0]);
         char *elem = join_elem(jt);
         char *h = gen_expr(cg, e->as.call.args[0]);
@@ -2119,8 +2121,10 @@ char *gen_expr(CG *cg, Expr *e) {
         move_consume(cg, call);
         char *inner = xasprintf(
             "({ sl_rt_active_spawns_inc(); "
-            "sl_task_submit_copy(%s_entry, &_sl_sa%d, sizeof(_sl_sa%d), sl_gc_trace_%s); "
+            "%s(%s_entry, &_sl_sa%d, sizeof(_sl_sa%d), sl_gc_trace_%s); "
             "_sl_sa%d.join; })",
+            e->as.spawn.joined ? "sl_task_submit_copy_joined"
+                               : "sl_task_submit_copy",
             shape->tname, id, id, shape->sname, id);
         char *result = wrap_safepoint(cg, e, "sl_join *", prelude.data, inner);
         cg->ambient_count = ambient_mark;

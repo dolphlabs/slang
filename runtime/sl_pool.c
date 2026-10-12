@@ -201,7 +201,7 @@ static _Atomic int sl_runq_sleepers = 0;
     of wakeups keeps only the latest one local. Through the accessor, not
     a bare read: inlined into a task's code, a bare read used the thread
     pointer from before the task last moved (SL_RT_TLS_ADDR_FN). */
-static void sl_runq_ready(sl_task *t) {
+static void sl_runq_ready_to(sl_task *t, int wake) {
     int idx = *sl_rt_tls_runnext_idx();
     if (idx < 0) {
         sl_runq_stripe_push(t);
@@ -216,12 +216,30 @@ static void sl_runq_ready(sl_task *t) {
         return;
     }
     atomic_fetch_add_explicit(&sl_global_runq_count, 1, memory_order_relaxed);
-    if (atomic_load_explicit(&sl_runq_sleepers, memory_order_seq_cst) > 0) {
+    if (wake &&
+        atomic_load_explicit(&sl_runq_sleepers, memory_order_seq_cst) > 0) {
+        if (sl_sched_stat_enabled())
+            atomic_fetch_add_explicit(&sl_sched_stat_runnext_wakes, 1,
+                                      memory_order_relaxed);
         pthread_mutex_lock(&sl_global_runq.mu);
         pthread_cond_broadcast(&sl_global_runq.not_empty);
         pthread_mutex_unlock(&sl_global_runq.mu);
     }
 }
+
+static void sl_runq_ready(sl_task *t) { sl_runq_ready_to(t, 1); }
+
+/* wake = 0: no sleeping worker is woken for a task put in this
+    thread's runnext slot. For a caller whose current task is about to
+    stop running -- it parks, or it ends -- so this worker takes the slot
+    itself at the top of its run loop (or, the chain's quantum spent,
+    pushes it to the stripes, which wakes as usual). A wake there was
+    pure cost: every sleeper woke, found the slot taken or raced this
+    worker for it, and slept again; spawn + join_wait from one task on
+    an 8-worker pool spent most of its time in futex wakes. Anything
+    displaced, and any thread without a slot, still goes through the
+    stripes and wakes. Callers: sl_task_submit_copy_joined and
+    sl_task_resume_local. */
 
 static sl_task *sl_runnext_take(int idx) {
     if (idx < 0 ||
@@ -355,9 +373,10 @@ static void sl_task_submit(void (*entry)(void *), void *arg) {
                                   memory_order_relaxed);
 }
 
-static void sl_task_submit_copy(void (*entry)(void *), const void *src,
-                               size_t n,
-                               void (*trace)(void *, void (*)(void *))) {
+static void sl_task_submit_copy_to(void (*entry)(void *), const void *src,
+                                   size_t n,
+                                   void (*trace)(void *, void (*)(void *)),
+                                   int wake) {
     sl_task *t = sl_task_grab();
     if (n <= sizeof(t->entry_arg_store)) {
         memcpy(t->entry_arg_store, src, n);
@@ -375,11 +394,31 @@ static void sl_task_submit_copy(void (*entry)(void *), const void *src,
     t->entry_arg_trace = trace;
     sl_task_stack_init(t, entry, t->entry_arg);
     sl_rt_preempt_disable();
-    sl_runq_ready(t);
+    sl_runq_ready_to(t, wake);
     sl_rt_preempt_enable();
     if (sl_sched_stat_enabled())
         atomic_fetch_add_explicit(&sl_sched_stat_submit, 1,
                                   memory_order_relaxed);
+}
+
+static void sl_task_submit_copy(void (*entry)(void *), const void *src,
+                               size_t n,
+                               void (*trace)(void *, void (*)(void *))) {
+    sl_task_submit_copy_to(entry, src, n, trace, 1);
+}
+
+/* A spawn whose join_wait is the very next thing its task does
+    (codegen marks `let h = spawn f(..);` directly followed by
+    `join_wait(h)`, and `join_wait(spawn f(..))`): the spawner parks at
+    once, so this worker runs the child itself -- see
+    sl_runq_ready_to. If anything else stops the spawner first (a
+    preemption yield, a collection), the worker still reaches its run
+    loop and the slot the same way. */
+static void sl_task_submit_copy_joined(void (*entry)(void *),
+                                       const void *src, size_t n,
+                                       void (*trace)(void *,
+                                                     void (*)(void *))) {
+    sl_task_submit_copy_to(entry, src, n, trace, 0);
 }
 
 /* Tier 11 fourth slice: generic park/resume primitives -- the pieces
@@ -465,7 +504,7 @@ static void sl_task_park(pthread_mutex_t *held_mu) {
  * -- true until this slice -- assumption that a queued task hasn't
  * started running and so has no chain). Same failure signature, same
  * repro; see sl_gc_collect's run-queue walk (runtime_gc.c). */
-static void sl_task_resume(sl_task *t) {
+static void sl_task_resume_to(sl_task *t, int wake) {
     /* Tier 11 eighth slice: protects the CALLING thread's own current
      * task (sl_rt_current_task) -- t itself isn't running anywhere
      * right now, so it isn't a preemption target; whoever is executing
@@ -484,13 +523,19 @@ static void sl_task_resume(sl_task *t) {
         t->parked_prev = NULL;
         t->on_parked = 0;
     }
-    sl_runq_ready(t);
+    sl_runq_ready_to(t, wake);
     pthread_mutex_unlock(&sl_gc_mu);
     sl_rt_preempt_enable();
     if (sl_sched_stat_enabled())
         atomic_fetch_add_explicit(&sl_sched_stat_resume, 1,
                                   memory_order_relaxed);
 }
+
+static void sl_task_resume(sl_task *t) { sl_task_resume_to(t, 1); }
+
+/* sl_task_resume from a task that is ending, so its worker takes t
+    itself next: see sl_runq_ready_to. */
+static void sl_task_resume_local(sl_task *t) { sl_task_resume_to(t, 0); }
 
 /* Tier 11 seventh slice: cooperative preemption's own yield primitive --
  * called from sl_rt_maybe_yield (runtime_core.c) once a task decides
