@@ -1684,6 +1684,12 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "_sl_sa%d.a%d = %s;", id, i, a);
             if (type_is_gc_ptr(cg, sig->param_slang[i]))
                 ambient_root_push(cg, xasprintf("_sl_sa%d.a%d", id, i));
+            /* the temp a later argument's safepoint roots this one by:
+             * see the EX_SPAWN arguments in expr.c */
+            if (type_has_gc_roots(cg, sig->param_slang[i]))
+                expr_tmp_register(cg, call->as.call.args[i],
+                                  xasprintf("_sl_sa%d.a%d", id, i),
+                                  sig->param_slang[i]);
         }
         cg->ambient_count = ambient_mark;
         move_consume(cg, call);

@@ -2117,6 +2117,15 @@ char *gen_expr(CG *cg, Expr *e) {
             sb_append(&prelude, xasprintf("_sl_sa%d.a%d = %s; ", id, i, a));
             if (type_is_gc_ptr(cg, sig->param_slang[i]))
                 ambient_root_push(cg, xasprintf("_sl_sa%d.a%d", id, i));
+            /* A later argument with a call has this one live across it
+             * (liveness pends the argument expression); its value is in
+             * the spawn-args field, so that is the temp to root. Without
+             * it `spawn f(mk(), mk())` died on "liveness-pending value
+             * has no registered temp". */
+            if (type_has_gc_roots(cg, sig->param_slang[i]))
+                expr_tmp_register(cg, call->as.call.args[i],
+                                  xasprintf("_sl_sa%d.a%d", id, i),
+                                  sig->param_slang[i]);
         }
         move_consume(cg, call);
         char *inner = xasprintf(
