@@ -524,6 +524,12 @@ Found building zokor's logger (2026-10-12), not fixed:
 - [ ] **A str cannot be read byte by byte without a copy**: `s[i]` is "cannot
   index a value of type str", so a scan of a str allocates `to_bytes(s)`.
   A read-only `byte_at(s, i)` (or indexing) would make escape checks free.
+- [x] **CR/LF in a header field was written as a line break**
+  (GHSA-3j69-rqv8-pr45, fixed in fix/http-header-crlf). `http.write` and
+  `serialize`, `httpc`'s request writer and `http2`'s header encoder now
+  turn CR and LF in every header field into spaces (and `httpc`
+  percent-encodes them in the request target). A clean field costs
+  nothing. tests/http_header_crlf covers each writer.
 - [x] **http accepts any bytes as the method** (fixed in
   fix/http-method-token: `read`, `read_frame`, `parse` and `parse_frame`
   refuse a non-token method as a malformed request line;

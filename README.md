@@ -3084,6 +3084,17 @@ smuggling). `read` and `parse` therefore refuse, rather than guess at:
 `return`). The error means this server could not tell where the request
 ended, so it cannot tell where the next one begins either.
 
+The writing side holds the same line. A CR or LF inside a header field
+would end the line early, so what follows would become a header of its
+own or the start of the body: response splitting, when a handler copies
+request data into a header. `write` and `serialize` therefore write every
+field (a `with_header` value, a raw `with_headers` line, `location`, the
+content type, the status text) with CR and LF turned into spaces, the rule
+Go's `net/http` applies. A clean field is written as it is, at no extra
+cost. `httpc` does the same for the method and the request headers it
+sends, and percent-encodes CR, LF, space and tab in the request target.
+`http2`'s header encoder does the same for HTTP/2 fields.
+
 ```slang
 import "http";
 

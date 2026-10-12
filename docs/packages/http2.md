@@ -505,7 +505,7 @@ One SETTINGS entry is a 16-bit identifier and a 32-bit value.
 
 Decode one complete header block. `max_headers` caps how many fields a peer may send: without it a small compressed block can expand into an unbounded list, which is the HPACK bomb.
 
-### `fn encode_header(name: str, value: str) -> bytes`
+### `fn encode_header(name0: str, value0: str) -> bytes`
 
 ### `fn encode_block(hs: [Header]) -> bytes`
 
