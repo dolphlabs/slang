@@ -624,6 +624,10 @@ Found building zokor's logger (2026-10-12), not fixed:
   its own (`sl_x_<name>`) bound to the symbol with an assembler label, so
   a header's prototype with other C types (`strlen`'s size_t) no longer
   clashes. tests/extern_libc_names.
+- [x] **`http.write_head`** (fix/http-head-length): the head `write`
+  sends, with Content-Length the GET body's length, and no body -- a
+  HEAD answer used to go out as `Content-Length: 0` once its body was
+  dropped. tests/http_head_length.
 - [x] **`fs.realpath` and `fs.fstat`** (feat/fs-stat), for zokor's static
   files: a root check that symlinks cannot escape, and an open file's
   kind, size and mtime (Last-Modified, Range). realpath grows the task's
