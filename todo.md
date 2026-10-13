@@ -566,6 +566,18 @@ Found building zokor's logger (2026-10-12), not fixed:
   not reproduce: 0 of 255 runs on macOS and Linux (plain, 16 KB nursery
   with the minor verifier, 16 KB threshold, forced 1 ms preemption, 1
   and 4 workers, three runners on two CPUs); its rerun passed.
+- [x] **Signed `MIN / -1` and `MIN % -1` wrap** (fix/signed-division-wrap).
+  The division guard checked only for zero; the C division of a signed
+  minimum by -1 is undefined. Now `/` by -1 is computed as an unsigned
+  negation and `%` by -1 is 0, every signed width, `/=`/`%=` and
+  `duration` included. A division-heavy loop measured the same (ABBA,
+  medians 2,301 vs 2,293 ms). tests/division_wraps.
+- [ ] **Signed `+`, `-`, `*` overflow is undefined in the generated C.** The
+  README promises two's-complement wrap, but slangc does not pass
+  `-fwrapv` (or compute in unsigned), so at -O3 the C compiler may assume
+  no overflow: `x + 1 > x` can fold to true, and a user's own overflow
+  check can be optimised out. Measure `-fwrapv`'s cost before turning it
+  on.
 - [ ] **An `extern fn` named like a libc function the runtime's headers
   declare** (`strlen`, `atoi`) fails as raw C output: "conflicting types
   for 'strlen'". slangc should say the name is taken by C and how to

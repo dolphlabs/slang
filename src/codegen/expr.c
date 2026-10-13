@@ -182,6 +182,17 @@ static int expr_nonzero_int_lit(Expr *e) {
     return e->kind == EX_INT && e->as.int_lit.value != 0;
 }
 
+/* A literal -1 (possibly cast): dividing by it needs no zero check but is
+ * still the one divisor that overflows (see the division below). */
+static int expr_minus_one_lit(Expr *e) {
+    if (e->kind == EX_CAST)
+        return expr_minus_one_lit(e->as.cast.operand);
+    if (e->kind == EX_UNARY && !strcmp(e->as.unary.op, "-") &&
+        e->as.unary.operand->kind == EX_INT)
+        return e->as.unary.operand->as.int_lit.value == 1;
+    return e->kind == EX_INT && e->as.int_lit.value == -1;
+}
+
 /* Bit width of an integer type, for the shift-count range check. */
 static int int_bit_width(const char *t) {
     if (!strcmp(t, "i8") || !strcmp(t, "u8")) return 8;
@@ -277,19 +288,36 @@ char *gen_numeric_binary(CG *cg, Expr *e, const char *result_t) {
             ": ((%s)((%s) %s (%s)))); })",
             prelude.data, b, b, width, b, width, at, ty, ty, a, op, b);
     }
-    if ((!strcmp(op, "/") || !strcmp(op, "%")) && is_int(result_t) &&
-        !expr_nonzero_int_lit(e->as.binary.rhs)) {
+    /* A signed MIN / -1 overflows: undefined in C, and x86-64's idiv
+     * raises SIGFPE for it (quotient and remainder alike), killing the
+     * process. slang's integers wrap, so the answer is defined: a / -1 is
+     * the two's-complement negation (MIN stays MIN) and a % -1 is 0, as in
+     * Go. Computed in unsigned arithmetic, never by idiv. */
+    if ((!strcmp(op, "/") || !strcmp(op, "%")) && is_int(result_t)) {
         const char *ty = map_type(result_t);
-        char *at = panic_at(cg, e->line);
-        if (flat)
+        int sgn = is_signed_int(result_t);
+        char *wrapped = !strcmp(op, "/")
+                            ? xasprintf("((%s)(0ULL - (unsigned long long)(%s)))", ty, a)
+                            : xasprintf("((%s)0)", ty);
+        if (sgn && expr_minus_one_lit(e->as.binary.rhs)) {
+            if (flat)
+                return wrapped;
+            return xasprintf("({ %s%s; })", prelude.data, wrapped);
+        }
+        if (!expr_nonzero_int_lit(e->as.binary.rhs)) {
+            char *at = panic_at(cg, e->line);
+            char *minus_one = sgn ? xasprintf("(%s) == -1 ? %s : ", b, wrapped)
+                                  : xstrdup("");
+            if (flat)
+                return xasprintf(
+                    "((%s) == 0 ? (sl_rt_error_at(\"division by zero\", 0, 0, %s), "
+                    "(%s)0) : %s((%s)((%s) %s (%s))))",
+                    b, at, ty, minus_one, ty, a, op, b);
             return xasprintf(
-                "((%s) == 0 ? (sl_rt_error_at(\"division by zero\", 0, 0, %s), "
-                "(%s)0) : ((%s)((%s) %s (%s))))",
-                b, at, ty, ty, a, op, b);
-        return xasprintf(
-            "({ %s((%s) == 0 ? (sl_rt_error_at(\"division by zero\", 0, 0, %s), "
-            "(%s)0) : ((%s)((%s) %s (%s)))); })",
-            prelude.data, b, at, ty, ty, a, op, b);
+                "({ %s((%s) == 0 ? (sl_rt_error_at(\"division by zero\", 0, 0, %s), "
+                "(%s)0) : %s((%s)((%s) %s (%s)))); })",
+                prelude.data, b, at, ty, minus_one, ty, a, op, b);
+        }
     }
     if (flat)
         return xasprintf("((%s)((%s) %s (%s)))", map_type(result_t), a, op,
