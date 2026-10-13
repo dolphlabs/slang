@@ -582,6 +582,20 @@ Found building zokor's logger (2026-10-12), not fixed:
   server, `/users/42`, ABBA x3: median 65.6k -> 69.3k rps, p99 2.72 ->
   2.55 ms, RSS unchanged (noisy laptop; one round throttled both).
   tests/leaf_native_calls.
+- [x] **HTTP responses lacked Date, and 204/304 carried Content-Length**
+  (fix/http-date-and-framing). RFC 9110 6.6.1 requires Date of an origin
+  server with a clock; 8.6 forbids Content-Length on 1xx and 204, and on
+  a 304 unless it equals the 200's. Every writer path (fast, general,
+  both serializers, static renderings, HTTP/2) now sends Date and frames
+  1xx/204/304 with neither Content-Length nor body. The date is a
+  per-second cache the preemption ticker keeps current, copied with no
+  clock read. Cost, CPU only (render twice into an arena, ABBA x5): fast
+  shape 566 -> 623 ns, zokor-shaped 1,770 -> 1,932 ns, about 1% of a
+  request. tests/http_date, tests/runtime/test_http_date.
+- [ ] **A call to a slang function is always a safepoint**, even one
+  like http's `put_str` that only wraps a builtin: about 16 ns each, a
+  dozen per response write. Inferring leaf slang functions (no allocation,
+  no park, only leaf callees) would make them free.
 - [ ] **Signed `+`, `-`, `*` overflow is undefined in the generated C.** The
   README promises two's-complement wrap, but slangc does not pass
   `-fwrapv` (or compute in unsigned), so at -O3 the C compiler may assume

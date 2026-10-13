@@ -797,7 +797,7 @@
           "sig": "gc struct Request",
           "doc": "`raw_headers` is exactly the CRLF-separated \"name: value\" lines this request's header block was made of, unparsed -- not a map[str]str. Building a map costs an allocation for the map plus roughly two more per header, on every request, whether or not anything ever reads a header; most requests never do. `header`/`header_or` scan this directly (strings.find_field, no allocation for the search itself); `headers()` builds a map from it on demand for a caller that genuinely wants one. Constructed only by `parse`/`read` (off the wire) or `request` (validated, from a map) -- never assign this field directly from unvalidated bytes; a value containing \"\\r\\n\" inside a hand-built block is a second header no map ever held.",
           "file": "stdlib/http/http.sl",
-          "line": 16
+          "line": 17
         },
         {
           "name": "WireFrame",
@@ -805,7 +805,7 @@
           "sig": "gc struct WireFrame",
           "doc": "`read` couples two things that only sometimes belong together: filling the caller's buffer and framing what's in it. serve_conn needs the split for frame dispatch: read_frame frames with the same scans/errors/rules as read, but returns the parsed head (method/path strs, header block, body) instead of a Request -- so the router matches on strs with no raw copy, no rescan, no second slice. Offsets stay for Frame callers and tests; the serve path does not use them.",
           "file": "stdlib/http/http.sl",
-          "line": 32
+          "line": 33
         },
         {
           "name": "Incoming",
@@ -813,7 +813,7 @@
           "sig": "gc struct Incoming",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 47
+          "line": 48
         },
         {
           "name": "Frame",
@@ -821,7 +821,7 @@
           "sig": "gc struct Frame",
           "doc": "The request WITHOUT materialising method/path/version strs: framing offsets only. `read`/`serve` use this when they only route on the raw path bytes (see path_matches below); `parse` keeps returning strs for callers that actually need them.",
           "file": "stdlib/http/http.sl",
-          "line": 56
+          "line": 57
         },
         {
           "name": "Response",
@@ -829,7 +829,7 @@
           "sig": "gc struct Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 66
+          "line": 67
         },
         {
           "name": "header",
@@ -837,7 +837,7 @@
           "sig": "fn header(r: Request, name: str) -> opt[str]",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1394
+          "line": 1395
         },
         {
           "name": "header_or",
@@ -845,7 +845,7 @@
           "sig": "fn header_or(r: Request, name: str, fallback: str) -> str",
           "doc": "header()'s two real call sites (Ctx.header in zokor, the WebSocket handshake) are both `header(...) ?? fallback` already -- this is that, without the opt allocation `??` unwraps.",
           "file": "stdlib/http/http.sl",
-          "line": 1405
+          "line": 1406
         },
         {
           "name": "headers",
@@ -853,7 +853,7 @@
           "sig": "fn headers(r: Request) -> map[str]str",
           "doc": "Every header a request carries, as a map -- built fresh on each call by scanning raw_headers once. Nothing in either repo iterates a request's headers today (confirmed by grep), which is what makes \"built on demand\" the right default over a cached field: a cache nothing reads is pure cost. Walks the same line shape scan_headers does, for a different reason (that one validates and extracts two offsets; this one assumes an already-valid block and extracts every name and value) -- kept as two functions rather than one parameterized by what to do with each line, which would obscure both to save repeating six lines.",
           "file": "stdlib/http/http.sl",
-          "line": 1422
+          "line": 1423
         },
         {
           "name": "request",
@@ -861,7 +861,7 @@
           "sig": "fn request(method: str, path: str, version: str, headers: map[str]str, body: bytes) -> result[Request, str]",
           "doc": "Builds a Request from a map the way the eager parser builds one off the wire: a header name or value may not contain CR or LF (an application- or test-constructed header gets no such check for free the way one read off the wire does -- this is where that rule lives for this path), and a name may not contain the colon that separates it from its value on the wire. Both are a real hazard, not a theoretical one, now that raw_headers is what a request's headers actually are: a value containing \"\\r\\n\" would be concatenated straight into the block below as a SECOND header line -- injection -- if it weren't rejected first.",
           "file": "stdlib/http/http.sl",
-          "line": 1464
+          "line": 1465
         },
         {
           "name": "parse_frame",
@@ -869,7 +869,7 @@
           "sig": "fn parse_frame(raw: bytes) -> result[Frame, str]",
           "doc": "Framing offsets for one request inside `raw`, with NOTHING materialised: no method/path/version strs, no header copies. The request line is validated (two spaces, HTTP/1.x token); the header block is validated by scan_headers; the body is framed by frame(). Callers that need strs (logging, tests) use parse(); the server path matches/routes directly on these offsets -- see path_matches and method_is below -- so the ~10 framing strs per request never exist.",
           "file": "stdlib/http/http.sl",
-          "line": 1494
+          "line": 1495
         },
         {
           "name": "method_is",
@@ -877,7 +877,7 @@
           "sig": "fn method_is(raw: bytes, f: Frame, want: str) -> bool",
           "doc": "Is this frame's method exactly `want` (e.g. \"GET\"), compared in place -- no method str is ever built. Takes a line_end int (not a Frame) so both Frame and WireFrame callers share it.",
           "file": "stdlib/http/http.sl",
-          "line": 1587
+          "line": 1588
         },
         {
           "name": "method_is_at",
@@ -885,7 +885,7 @@
           "sig": "fn method_is_at(raw: bytes, line_end: int, want: str) -> bool",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1591
+          "line": 1592
         },
         {
           "name": "path_is",
@@ -893,7 +893,7 @@
           "sig": "fn path_is(raw: bytes, f: Frame, want: str) -> bool",
           "doc": "Is this frame's path exactly `want` (bytes compared in place, query string ignored -- matches path.strip_query semantics)? No path str. The two hot paths (`/` and `/users/`-prefixed) compare inline with no to_bytes at all; anything else falls through to the general compare, which still costs one to_bytes of `want`. Route fpaths could precompute that bytes once at registration -- the next step if `/users/:id` still shows hot after this.",
           "file": "stdlib/http/http.sl",
-          "line": 1637
+          "line": 1638
         },
         {
           "name": "path_is_at",
@@ -901,7 +901,7 @@
           "sig": "fn path_is_at(raw: bytes, line_end: int, want: str) -> bool",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1641
+          "line": 1642
         },
         {
           "name": "path_param",
@@ -909,7 +909,7 @@
           "sig": "fn path_param(raw: bytes, f: Frame, prefix: str) -> str",
           "doc": "The :id in \"/users/:id\" for a frame already known to match that shape -- the ONE allocation the params map used to cost per route scanned. Returns \"\" when the shape does not match.",
           "file": "stdlib/http/http.sl",
-          "line": 1696
+          "line": 1697
         },
         {
           "name": "path_param_at",
@@ -917,7 +917,7 @@
           "sig": "fn path_param_at(raw: bytes, line_end: int, prefix: str) -> str",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1700
+          "line": 1701
         },
         {
           "name": "frame_method",
@@ -925,7 +925,7 @@
           "sig": "fn frame_method(raw: bytes, f: Frame) -> str",
           "doc": "The method bytes as a str: the ONE framing str frame dispatch needs (to map to the Method enum). Everything else matches in place; this is 1 alloc where parse() spent ~10. Takes line_end so Frame and WireFrame share it.",
           "file": "stdlib/http/http.sl",
-          "line": 1765
+          "line": 1766
         },
         {
           "name": "frame_method_at",
@@ -933,7 +933,7 @@
           "sig": "fn frame_method_at(raw: bytes, line_end: int) -> str",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1769
+          "line": 1770
         },
         {
           "name": "frame_request",
@@ -941,7 +941,7 @@
           "sig": "fn frame_request(raw: bytes, f: Frame) -> Request",
           "doc": "The full Request for a frame, built ONCE for the route that runs: method/path/version strs, raw_headers slice, body slice. serve() callers already hold one; serve_frame builds one -- never both. Takes explicit offsets so Frame and WireFrame share it.",
           "file": "stdlib/http/http.sl",
-          "line": 1781
+          "line": 1782
         },
         {
           "name": "frame_request_at",
@@ -949,7 +949,7 @@
           "sig": "fn frame_request_at(raw: bytes, line_end: int, head_end: int, body: bytes) -> Request",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1785
+          "line": 1786
         },
         {
           "name": "frame_version",
@@ -957,7 +957,7 @@
           "sig": "fn frame_version(f: Frame) -> int",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1806
+          "line": 1807
         },
         {
           "name": "frame_body",
@@ -965,7 +965,7 @@
           "sig": "fn frame_body(raw: bytes, f: Frame) -> bytes",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1810
+          "line": 1811
         },
         {
           "name": "wire_request",
@@ -973,7 +973,7 @@
           "sig": "fn wire_request(f: WireFrame) -> Request",
           "doc": "The Request for a WireFrame: method/path already parsed, body already sliced -- no offsets, no raw, no second copy. headers rides along (one block copy, same as read -- the wire is compacted before return, so there is nothing to materialise from later). version comes from the flag (no version str is stored).",
           "file": "stdlib/http/http.sl",
-          "line": 1823
+          "line": 1824
         },
         {
           "name": "frame_raw_headers",
@@ -981,7 +981,7 @@
           "sig": "fn frame_raw_headers(raw: bytes, f: Frame, line_end: int) -> bytes",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1837
+          "line": 1838
         },
         {
           "name": "parse",
@@ -989,7 +989,7 @@
           "sig": "fn parse(raw: bytes) -> result[Request, str]",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1841
+          "line": 1842
         },
         {
           "name": "resp_headers",
@@ -997,7 +997,7 @@
           "sig": "fn resp_headers(r: Response) -> map[str]str",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1991
+          "line": 2023
         },
         {
           "name": "resp_header",
@@ -1005,7 +1005,7 @@
           "sig": "fn resp_header(r: Response, name: str) -> opt[str]",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2017
+          "line": 2049
         },
         {
           "name": "has_resp_header",
@@ -1013,7 +1013,7 @@
           "sig": "fn has_resp_header(r: Response, name: str) -> bool",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2047
+          "line": 2079
         },
         {
           "name": "serialize",
@@ -1021,7 +1021,7 @@
           "sig": "fn serialize(r: Response) -> bytes",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2058
+          "line": 2090
         },
         {
           "name": "serialize_builder",
@@ -1029,7 +1029,7 @@
           "sig": "fn serialize_builder(r0: Response) -> bytes",
           "doc": "The old builder path, kept for the differential test: must stay byte-identical to serialize_sized() above for every shape.",
           "file": "stdlib/http/http.sl",
-          "line": 2064
+          "line": 2096
         },
         {
           "name": "serialize_sized",
@@ -1037,7 +1037,7 @@
           "sig": "fn serialize_sized(r0: Response) -> bytes",
           "doc": "Serialize with a handful of allocations, not ~40: size the response first (status line + headers + framing + body, all cheap integer arithmetic over lengths -- see emit_len below), allocate exactly that many bytes with strings.bytes_zero (one header plus one buffer -- no throwaway str), then fill by slice assignment. The old builder path stays below as serialize_builder for the differential test; this is what `serialize` and `write`'s fallback call, so an oversized response costs a few allocations instead of ~40.  The remaining handful is load-bearing, not waste: one to_bytes per fill_str piece (the str->bytes copy the compiler cannot fuse), one filtered-extra list, and the response_conn scan's own line strs. Counting them is what keeps this honest -- see the probe notes.",
           "file": "stdlib/http/http.sl",
-          "line": 2115
+          "line": 2159
         },
         {
           "name": "escape_json_bytes",
@@ -1045,7 +1045,7 @@
           "sig": "fn escape_json_bytes(msg: bytes) -> bytes",
           "doc": "The escaped form of `msg` as bytes, for a caller that already holds bytes and wants the quoted payload without a str in between.",
           "file": "stdlib/http/http.sl",
-          "line": 2322
+          "line": 2384
         },
         {
           "name": "with_headers",
@@ -1053,7 +1053,7 @@
           "sig": "fn with_headers(r: Response, lines: [str]) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2349
+          "line": 2411
         },
         {
           "name": "with_header",
@@ -1061,7 +1061,7 @@
           "sig": "fn with_header(r: Response, name: str, value: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2356
+          "line": 2418
         },
         {
           "name": "without_header",
@@ -1069,7 +1069,7 @@
           "sig": "fn without_header(r: Response, name: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2374
+          "line": 2436
         },
         {
           "name": "wants_close",
@@ -1077,7 +1077,7 @@
           "sig": "fn wants_close(r: Request) -> bool",
           "doc": "Whether the connection should close after answering `r`: HTTP/1.1 stays open unless the client sent `Connection: close`, HTTP/1.0 closes unless it sent `Connection: keep-alive` (either case-insensitive, OWS trimmed; with the header repeated, the one `header()` returns decides). Allocates nothing.",
           "file": "stdlib/http/http.sl",
-          "line": 2446
+          "line": 2508
         },
         {
           "name": "version_flag_of",
@@ -1085,7 +1085,7 @@
           "sig": "fn version_flag_of(v: str) -> int",
           "doc": "The int-flag twin, for callers holding a version str rather than a Head (read_frame's WireFrame.version). Same rules; the block is passed explicitly because there is no Head in scope.",
           "file": "stdlib/http/http.sl",
-          "line": 2470
+          "line": 2532
         },
         {
           "name": "read_frame",
@@ -1093,7 +1093,7 @@
           "sig": "fn read_frame(c: &mut link, buf: wire, filled: int, idle_deadline: until, header_deadline: until, body_deadline: until) -> result[WireFrame, str]",
           "doc": "read_frame: read's framing, plus the parsed head the router matches on. Implemented INSIDE read's loop shape (not as read-plus-copy): read compacts the buffer before returning, so after read there is no head left to copy -- buf[0..filled] is the NEXT request. This duplicates read's loop deliberately (same scans, same errors, same close rules), and the duplication is the contract: any change to read's framing must land here too.  What differs from read: on a complete frame the method/path strs and the header block + body are COPIED OUT of the wire ONCE -- the same strs + copies read already pays (hd.method/path, hd.headers, hd.body) -- and NO separate message copy is made. The old shape did to_bytes(buf[0..end]) PLUS parse_frame over the copy PLUS wants_close_scan over the copy: a full second framing pass and a whole-message copy per request. Now the WireFrame carries what the router needs directly: method/path strs for the enum + Request build, headers/body slices for the Ctx. Routing matches on strs (==), never on raw bytes -- no path_is_at rescan, no per-route to_bytes. The message copy is gone entirely.  Chunked bodies: hd.body IS the reassembled copy (one alloc the old path also spent); the WireFrame body is that copy directly. Three deadlines, not one, because \"how long should this wait\" has three different honest answers depending on what the connection is doing: idle_deadline while nothing has arrived at all yet (a kept- alive connection between requests, or a fresh one that never sends anything -- this is the one that should be generous, since a real client legitimately sits idle between requests); header_deadline once bytes have started arriving but the request line and headers aren't complete yet; body_deadline once the headers are in but a declared body hasn't fully arrived. header_deadline and body_deadline are both the tight, slow-loris-shaped ones -- a client that has started a request and then trickles it in a byte at a time is not the same risk as one that hasn't sent anything yet, and idle_deadline being long must not become an amplifier for that. Recomputed fresh every loop iteration rather than tracked as a separate flag: frame_head_wire's own re-parse of the same (only ever growing) buffer already answers \"is the header complete yet\" idempotently, so re-deriving which phase this recv is in from that costs nothing extra and can't drift out of sync with it.",
           "file": "stdlib/http/http.sl",
-          "line": 2693
+          "line": 2755
         },
         {
           "name": "read",
@@ -1101,7 +1101,7 @@
           "sig": "fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Incoming, str]",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2774
+          "line": 2836
         },
         {
           "name": "StaticBody",
@@ -1109,7 +1109,7 @@
           "sig": "gc struct StaticBody",
           "doc": "serialize()'s GC allocations (~40 of them for a typical response, see serialize()'s own comment) replaced with two passes over the caller's own arena: size, then fill. If the response is larger than what's left of the arena, falls back to serialize() + send_bytes rather than letting a.wire(need) past capacity kill the task -- a slow response stays a slow response instead of becoming a dropped connection.  Responses with exactly the `text_response` shape (one content-type, nothing else) take the fixed fast path above: no map iteration, no integer str, no intermediate bytes. Anything else uses the general `emit` below, unchanged. A static route's answer: status, content type, and body -- no Response struct, no extra list, nothing to shape-check. serve_conn gets one from serve_static and hands it straight to write_static, which sends the PREBUILT keep-alive rendering (assembled once at registration -- see static_render below) with one wire alloc and one memcpy. The static snapshot lives on the Route (see router.sl); this is just the per-request view of it.",
           "file": "stdlib/http/http.sl",
-          "line": 3101
+          "line": 3184
         },
         {
           "name": "write_static",
@@ -1117,7 +1117,7 @@
           "sig": "fn write_static(c: &mut link, b: StaticBody, a: &mut arena, close: bool, deadline: until) -> result[int, fault]",
           "doc": "The static emit: the keep-alive rendering is prebuilt, not emitted. Hot path (HTTP/1.1 keep-alive, which is every wrk/ab request): one wire, one memcpy, one send -- no probe pass, no Response struct, no map, no integer str, no per-piece puts. The close variant (HTTP/1.0, Connection: close) is rare and pays the emit cost below; it never touches the hot path.",
           "file": "stdlib/http/http.sl",
-          "line": 3114
+          "line": 3197
         },
         {
           "name": "static_render",
@@ -1125,7 +1125,15 @@
           "sig": "fn static_render(status: i32, content_type: str, body: bytes) -> bytes",
           "doc": "The keep-alive rendering, assembled ONCE at registration: status line, one content-type, content-length, connection, blank line, body -- the exact bytes write_static memcpys per request. status_text_of covers the statuses static routes return; the fallback (\"OK\") matches write_static's own close variant above, so the two can never disagree on a reason phrase.",
           "file": "stdlib/http/http.sl",
-          "line": 3146
+          "line": 3257
+        },
+        {
+          "name": "static_date_line",
+          "decl": "fn",
+          "sig": "fn static_date_line() -> str",
+          "doc": "The last header line of a prebuilt static rendering: `date: ` and a date, refreshed in place on every send. A rendering is shared by every request, so the date cannot be part of it; a renderer outside this package (zokor's, with its security headers) ends its header block with this line to get the same. Any other rendering is sent as it is.",
+          "file": "stdlib/http/http.sl",
+          "line": 3285
         },
         {
           "name": "clean_field",
@@ -1133,7 +1141,7 @@
           "sig": "fn clean_field(s: str) -> str",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3193
+          "line": 3344
         },
         {
           "name": "write",
@@ -1141,7 +1149,7 @@
           "sig": "fn write(c: &mut link, r0: Response, a: &mut arena, deadline: until) -> result[int, fault]",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3228
+          "line": 3379
         },
         {
           "name": "text_response_bytes",
@@ -1149,7 +1157,7 @@
           "sig": "fn text_response_bytes(status: i32, status_text: str, content_type: str, body: bytes) -> Response",
           "doc": "`text_response` with a BYTES body: same shape, no `to_bytes` copy. The hot path (zokor's JSON renderers, static bodies) already holds bytes; forcing them through str and back cost a full copy plus the literal's own allocation on every response.",
           "file": "stdlib/http/http.sl",
-          "line": 3258
+          "line": 3411
         },
         {
           "name": "text_response",
@@ -1157,7 +1165,7 @@
           "sig": "fn text_response(status: i32, status_text: str, content_type: str, body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3271
+          "line": 3424
         },
         {
           "name": "ok_html",
@@ -1165,7 +1173,7 @@
           "sig": "fn ok_html(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3277
+          "line": 3430
         },
         {
           "name": "ok_css",
@@ -1173,7 +1181,7 @@
           "sig": "fn ok_css(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3281
+          "line": 3434
         },
         {
           "name": "ok_js",
@@ -1181,7 +1189,7 @@
           "sig": "fn ok_js(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3285
+          "line": 3438
         },
         {
           "name": "ok_json",
@@ -1189,7 +1197,7 @@
           "sig": "fn ok_json(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3290
+          "line": 3443
         },
         {
           "name": "ok_text",
@@ -1197,7 +1205,7 @@
           "sig": "fn ok_text(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3294
+          "line": 3447
         },
         {
           "name": "created_json",
@@ -1205,7 +1213,7 @@
           "sig": "fn created_json(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3298
+          "line": 3451
         },
         {
           "name": "bad_request",
@@ -1213,7 +1221,7 @@
           "sig": "fn bad_request(msg: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3303
+          "line": 3456
         },
         {
           "name": "bad_request_bytes",
@@ -1221,7 +1229,7 @@
           "sig": "fn bad_request_bytes(msg: bytes) -> Response",
           "doc": "`bad_request` with a BYTES message: same envelope, no `to_bytes` round-trip. The message still rides inside a JSON string, so it is escaped the same way -- see `escape_json_into` below.",
           "file": "stdlib/http/http.sl",
-          "line": 3310
+          "line": 3463
         },
         {
           "name": "not_found",
@@ -1229,7 +1237,7 @@
           "sig": "fn not_found() -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3319
+          "line": 3472
         },
         {
           "name": "method_not_allowed",
@@ -1237,7 +1245,7 @@
           "sig": "fn method_not_allowed() -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3324
+          "line": 3477
         }
       ]
     },
@@ -1251,7 +1259,7 @@
           "sig": "let W_RAW = 0; // pre-built frames, not flow controlled",
           "doc": "---- writer messages -------------------------------------------------  Everything the writer task needs arrives on ONE channel, tagged.  When this was written slang had no `select`, so a writer watching both \"here is a response\" and \"the peer granted more window\" on two channels could only ever block on one of them. `select` exists now and would compile -- but the single tagged stream is still the better design here, and stays. Two channels would make the ORDER between a grant and a body a race the writer has to reason about; one channel makes it the order they were sent, for free, and leaves the writer an ordinary state machine with a single blocking point.",
           "file": "stdlib/http2/conn.sl",
-          "line": 64
+          "line": 65
         },
         {
           "name": "W_BODY",
@@ -1259,7 +1267,7 @@
           "sig": "let W_BODY = 1; // a response: HEADERS now, DATA as window allows",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 65
+          "line": 66
         },
         {
           "name": "W_GRANT",
@@ -1267,7 +1275,7 @@
           "sig": "let W_GRANT = 2; // peer's WINDOW_UPDATE: `n` octets to `stream`",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 66
+          "line": 67
         },
         {
           "name": "W_INITIAL",
@@ -1275,7 +1283,7 @@
           "sig": "let W_INITIAL = 3; // peer's SETTINGS_INITIAL_WINDOW_SIZE is now `n`",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 67
+          "line": 68
         },
         {
           "name": "W_MAXFRAME",
@@ -1283,7 +1291,7 @@
           "sig": "let W_MAXFRAME = 4; // peer's SETTINGS_MAX_FRAME_SIZE is now `n`",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 68
+          "line": 69
         },
         {
           "name": "WMsg",
@@ -1291,7 +1299,7 @@
           "sig": "gc struct WMsg",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 70
+          "line": 71
         },
         {
           "name": "raw_msg",
@@ -1299,7 +1307,7 @@
           "sig": "fn raw_msg(b: bytes) -> WMsg",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 78
+          "line": 79
         },
         {
           "name": "grant_msg",
@@ -1307,15 +1315,15 @@
           "sig": "fn grant_msg(stream: int, n: int) -> WMsg",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 82
+          "line": 83
         },
         {
           "name": "response_msg",
           "decl": "fn",
           "sig": "fn response_msg(stream: int, status: str, extra: [Header], body: bytes) -> WMsg",
-          "doc": "Build a response. The body is handed over UNFRAMED: the writer owns the peer's window and its max frame size, so it -- not the handler -- decides how the body is cut into DATA frames and when each may go.",
+          "doc": "Build a response. The body is handed over UNFRAMED: the writer owns the peer's window and its max frame size, so it -- not the handler -- decides how the body is cut into DATA frames and when each may go.  Like HTTP/1.1's writer: a date unless the handler set one (RFC 9110 6.6.1), and for 1xx, 204 and 304 -- which have no content -- neither content-length nor body.",
           "file": "stdlib/http2/conn.sl",
-          "line": 93
+          "line": 98
         },
         {
           "name": "Limits",
@@ -1323,7 +1331,7 @@
           "sig": "gc struct Limits",
           "doc": "---- deadlines -------------------------------------------------------  Four separate budgets, in nanoseconds, because they defend against four different peers and want wildly different numbers.  `idle` is the generous one on purpose: an HTTP/2 connection sitting open with no streams is completely normal -- that is the whole point of connection reuse -- so timing it out aggressively breaks correct clients. `request` is the strict one: once a client has started a request it must finish it, and dribbling DATA forever is exactly the slowloris shape.",
           "file": "stdlib/http2/conn.sl",
-          "line": 123
+          "line": 143
         },
         {
           "name": "default_limits",
@@ -1331,7 +1339,7 @@
           "sig": "fn default_limits() -> Limits",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 135
+          "line": 155
         },
         {
           "name": "is_timeout",
@@ -1339,7 +1347,7 @@
           "sig": "fn is_timeout(e: str) -> bool",
           "doc": "The reserved error string net.recv_until / net.send_until return when a deadline passes. Exposed as a predicate so callers can react to a slow peer (GOAWAY with ENHANCE_YOUR_CALM) differently from a broken one, without hardcoding the text.",
           "file": "stdlib/http2/conn.sl",
-          "line": 152
+          "line": 172
         },
         {
           "name": "DEFAULT_MAX_FRAME",
@@ -1347,7 +1355,7 @@
           "sig": "let DEFAULT_MAX_FRAME = 16384;",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 156
+          "line": 176
         },
         {
           "name": "DEFAULT_WINDOW",
@@ -1355,7 +1363,7 @@
           "sig": "let DEFAULT_WINDOW = 65535;",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 157
+          "line": 177
         },
         {
           "name": "MAX_HEADER_FIELDS",
@@ -1363,7 +1371,7 @@
           "sig": "let MAX_HEADER_FIELDS = 128;",
           "doc": "Our own limits, advertised in SETTINGS and enforced on receipt.",
           "file": "stdlib/http2/conn.sl",
-          "line": 159
+          "line": 179
         },
         {
           "name": "MAX_BODY",
@@ -1371,7 +1379,7 @@
           "sig": "let MAX_BODY = 1048576;",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 160
+          "line": 180
         },
         {
           "name": "RESET_BURST",
@@ -1379,7 +1387,7 @@
           "sig": "let RESET_BURST = 100;",
           "doc": "---- Rapid Reset (CVE-2023-44487) ------------------------------------  A peer opens a stream and immediately RST_STREAMs it. From its side the stream is closed the instant it opens, so a concurrency limit never sees it -- while the server has already done the HPACK decode and, in most designs, started the work. Repeat and the server is driven at whatever rate the attacker can write frames.  Cancelling a request IS legitimate: a browser navigating away resets its in-flight streams, and a client that gives up on a slow endpoint should. So a flat \"no resets\" rule would break correct clients. What is not legitimate is resetting nearly everything you open, forever.  Hence a burst plus a ratio: RESET_BURST cancellations are free, and after that a peer whose resets outnumber half of what it opened is ending the connection. A browser that abandons a page load trips neither; a Rapid Reset flood resets every stream it opens, so it trips both the moment the burst is spent.",
           "file": "stdlib/http2/conn.sl",
-          "line": 180
+          "line": 200
         },
         {
           "name": "Conn",
@@ -1387,7 +1395,7 @@
           "sig": "gc struct Conn",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 182
+          "line": 202
         },
         {
           "name": "Req",
@@ -1395,7 +1403,7 @@
           "sig": "gc struct Req",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 196
+          "line": 216
         },
         {
           "name": "conn_new",
@@ -1403,7 +1411,7 @@
           "sig": "fn conn_new() -> Conn",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 206
+          "line": 226
         },
         {
           "name": "our_settings",
@@ -1411,7 +1419,7 @@
           "sig": "fn our_settings() -> bytes",
           "doc": "Our SETTINGS: a modest frame size, and push disabled because server push is deprecated and no current client wants it.",
           "file": "stdlib/http2/conn.sl",
-          "line": 220
+          "line": 240
         },
         {
           "name": "gate",
@@ -1419,7 +1427,7 @@
           "sig": "fn gate(n: int) -> chan[bool]",
           "doc": "---- the stream gate -------------------------------------------------  The connection layer cannot cap concurrency on its own: it does not spawn the handlers, the CALLER does. (slang has function values now, so handing it a callback would compile -- but that only moves the same question inside, and the answer would still be this.) So the bound lives in a token channel the caller holds, and this is the mechanism plus the vocabulary for it.  A gate is a chan[bool] holding `n` tokens. gate_enter takes one and blocks when none are left; gate_leave puts one back. That blocking IS the backpressure -- the reader stops pulling frames while every slot is busy, which is the correct answer to \"more work than I can do\", and far better than the alternative measured before this existed: 3002 concurrent handler tasks from a peer we had told our limit was 100.  It also solves shutdown. Closing the writer channel while handlers are still in flight panics them with \"send on closed channel\", and nothing else could tell whether any were left. gate_drain waits for every token to come home, so the close is safe by construction.  The one rule: gate_leave must run on EVERY path out of a handler, including error returns. A lost token permanently shrinks the connection's capacity, and losing all of them wedges that connection (only that one -- the failure is bounded and visible, not a crash).",
           "file": "stdlib/http2/conn.sl",
-          "line": 253
+          "line": 273
         },
         {
           "name": "gate_enter",
@@ -1427,7 +1435,7 @@
           "sig": "fn gate_enter(g: chan[bool])",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 267
+          "line": 287
         },
         {
           "name": "gate_leave",
@@ -1435,7 +1443,7 @@
           "sig": "fn gate_leave(g: chan[bool])",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 274
+          "line": 294
         },
         {
           "name": "gate_drain",
@@ -1443,7 +1451,7 @@
           "sig": "fn gate_drain(g: chan[bool], n: int)",
           "doc": "Wait until every handler has finished, by collecting all `n` tokens. Call before chan_close on the writer channel.",
           "file": "stdlib/http2/conn.sl",
-          "line": 280
+          "line": 300
         },
         {
           "name": "Transport",
@@ -1451,7 +1459,7 @@
           "sig": "gc struct Transport",
           "doc": "---- transport -------------------------------------------------------  h2 runs over cleartext TCP (h2c, prior knowledge) or over TLS, and the two are reached through different runtime calls: net.recv_until on an fd, net.tls_recv_until on an SSL handle. Everything above this point is identical either way, so the difference is confined to one struct and two functions rather than duplicated through the whole layer.  This matters beyond tidiness: browsers speak HTTP/2 ONLY over TLS with ALPN, so a connection layer that can only do fds cannot serve a browser at all, however conformant the rest of it is.",
           "file": "stdlib/http2/conn.sl",
-          "line": 302
+          "line": 322
         },
         {
           "name": "transport_fd",
@@ -1459,7 +1467,7 @@
           "sig": "fn transport_fd(fd: i32) -> Transport",
           "doc": "h2c: cleartext, prior knowledge. curl --http2-prior-knowledge, and Go's http2.Transport with AllowHTTP.",
           "file": "stdlib/http2/conn.sl",
-          "line": 309
+          "line": 329
         },
         {
           "name": "transport_tls",
@@ -1467,7 +1475,7 @@
           "sig": "fn transport_tls(ssl: rawptr) -> Transport",
           "doc": "h2 over TLS. The handle comes from net.tls_accept, and the caller is responsible for having negotiated \"h2\" via ALPN first -- see alpn_is_h2 below.",
           "file": "stdlib/http2/conn.sl",
-          "line": 316
+          "line": 336
         },
         {
           "name": "tr_close",
@@ -1475,7 +1483,7 @@
           "sig": "fn tr_close(t: Transport)",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 334
+          "line": 354
         },
         {
           "name": "alpn_is_h2",
@@ -1483,7 +1491,7 @@
           "sig": "fn alpn_is_h2(proto: str) -> bool",
           "doc": "RFC 7301 \u00a73.1: the peer either selected \"h2\" or it did not. A server that advertised h2 and http/1.1 must look, because a browser offered both and may well have picked http/1.1 -- feeding an HTTP/1.1 client into this layer produces \"bad connection preface\", which is true but unhelpful.",
           "file": "stdlib/http2/conn.sl",
-          "line": 347
+          "line": 367
         },
         {
           "name": "Reader",
@@ -1491,7 +1499,7 @@
           "sig": "gc struct Reader",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 356
+          "line": 376
         },
         {
           "name": "reader_new",
@@ -1499,7 +1507,7 @@
           "sig": "fn reader_new() -> Reader",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 360
+          "line": 380
         },
         {
           "name": "read_frame",
@@ -1507,7 +1515,7 @@
           "sig": "fn read_frame(r: Reader, t: Transport, max_frame: int, u: until) -> result[Frame, str]",
           "doc": "Pull bytes until at least one complete frame is buffered, then return it and keep the remainder. Note the `&mut *c` at every site below that forwards this borrow: passing `c` directly MOVES it, so the second call would fail with \"use of moved value\". Reborrowing keeps the caller's borrow usable.  `u` bounds the WHOLE call, not each recv: a peer that sends one octet every second must still finish the frame inside the budget, which is what makes this a slowloris defence rather than a keepalive check. Pass until_never() only where blocking forever is genuinely intended.",
           "file": "stdlib/http2/conn.sl",
-          "line": 374
+          "line": 394
         },
         {
           "name": "accept_preface",
@@ -1515,7 +1523,7 @@
           "sig": "fn accept_preface(r: Reader, t: Transport, wch: chan[WMsg], u: until) -> result[bool, str]",
           "doc": "Verify the 24-byte client connection preface and send ours.",
           "file": "stdlib/http2/conn.sl",
-          "line": 411
+          "line": 431
         },
         {
           "name": "read_request",
@@ -1523,7 +1531,7 @@
           "sig": "fn read_request(cn: Conn, r: Reader, t: Transport, wch: chan[WMsg], lim: Limits) -> result[Req, str]",
           "doc": "Read frames until one complete request has arrived.  Two clocks, switched at the first HEADERS. Before it the connection is idle and gets the generous `idle` budget, refreshed by each control frame that arrives -- a client PINGing a kept-alive connection is behaving correctly and must not be disconnected. After it the strict `request` budget applies to the request as a WHOLE and is never refreshed, so no amount of dribbled DATA or CONTINUATION can extend it.",
           "file": "stdlib/http2/conn.sl",
-          "line": 583
+          "line": 603
         },
         {
           "name": "writer_task",
@@ -1531,7 +1539,7 @@
           "sig": "fn writer_task(t: Transport, wch: chan[WMsg], write_ns: int)",
           "doc": "Owns the write side, and with it the peer's send windows.  Flow control has to live here rather than in the handlers. The window is a property of the CONNECTION, shared by every concurrent stream, so no handler can decide on its own whether it may send -- and the WINDOW_UPDATE that grants credit arrives on the read side, in a different task entirely. Routing both into this one task is what lets the accounting be correct without a lock at all. slang does have a mutex now, but reaching for one here would be the worse design: it would serialise the writers without making the window arithmetic any less shared.  A blocked stream parks its BODY here, not its task: the handler hands the response over and moves on, so a peer with a tiny window costs a queue entry rather than a live task.",
           "file": "stdlib/http2/conn.sl",
-          "line": 919
+          "line": 939
         },
         {
           "name": "respond",
@@ -1539,7 +1547,7 @@
           "sig": "fn respond(cn: Conn, wch: chan[WMsg], stream: int, status: str, extra: [Header], body: bytes)",
           "doc": "Enqueue a response for `stream`. Every write on the connection goes through the writer task, so there is deliberately no direct-write variant: one would be able to interleave with a handler mid-frame.",
           "file": "stdlib/http2/conn.sl",
-          "line": 1024
+          "line": 1044
         },
         {
           "name": "send_reset",
@@ -1547,7 +1555,7 @@
           "sig": "fn send_reset(wch: chan[WMsg], stream: int, code: int)",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 1029
+          "line": 1049
         },
         {
           "name": "send_goaway",
@@ -1555,7 +1563,7 @@
           "sig": "fn send_goaway(wch: chan[WMsg], last_stream: int, code: int, msg: str)",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 1033
+          "line": 1053
         },
         {
           "name": "FRAME_HEADER_LEN",
@@ -5450,6 +5458,23 @@
           "ret": null,
           "tls": false,
           "sig": "time.sleep(int)"
+        },
+        {
+          "name": "http_date",
+          "params": [],
+          "ret": "str",
+          "tls": false,
+          "sig": "time.http_date() -> str"
+        },
+        {
+          "name": "put_http_date",
+          "params": [
+            "wire",
+            "int"
+          ],
+          "ret": "int",
+          "tls": false,
+          "sig": "time.put_http_date(wire, int) -> int"
         }
       ]
     },

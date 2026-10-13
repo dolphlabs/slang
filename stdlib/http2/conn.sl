@@ -1,4 +1,5 @@
 import "net";
+import "strings";
 import "time";
 
 // HTTP/2 connection and stream layer (RFC 9113).
@@ -90,14 +91,33 @@ fn setting_msg(kind: int, n: int) -> WMsg {
 // Build a response. The body is handed over UNFRAMED: the writer owns
 // the peer's window and its max frame size, so it -- not the handler --
 // decides how the body is cut into DATA frames and when each may go.
+//
+// Like HTTP/1.1's writer: a date unless the handler set one (RFC 9110
+// 6.6.1), and for 1xx, 204 and 304 -- which have no content -- neither
+// content-length nor body.
 pub fn response_msg(stream: int, status: str, extra: [Header],
                     body: bytes) -> WMsg {
     let hs: [Header] = [Header { name: ":status", value: status }];
+    let has_date = false;
+    for h in extra {
+        if h.name == "date" {
+            has_date = true;
+        }
+    }
+    if !has_date {
+        hs = hs + [Header { name: "date", value: time.http_date() }];
+    }
     hs = hs + extra;
-    hs = hs + [Header { name: "content-length", value: to_str(len(body)) }];
+    let out = body;
+    let no_content = status == "204" || status == "304" || strings.has_prefix(status, "1");
+    if no_content {
+        out = b"";
+    } else {
+        hs = hs + [Header { name: "content-length", value: to_str(len(body)) }];
+    }
     let blk = encode_block(hs);
     let hflags = FLAG_END_HEADERS;
-    if len(body) == 0 {
+    if len(out) == 0 {
         hflags = hflags | FLAG_END_STREAM;
     }
     return WMsg {
@@ -105,7 +125,7 @@ pub fn response_msg(stream: int, status: str, extra: [Header],
         stream: stream,
         n: 0,
         head: header_bytes(T_HEADERS, hflags, stream, len(blk)) + blk,
-        body: body
+        body: out
     };
 }
 

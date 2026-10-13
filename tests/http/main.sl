@@ -1,4 +1,5 @@
 import "http";
+import "strings";
 
 fn die(msg: str) {
     println("FAIL " + msg);
@@ -115,10 +116,22 @@ fn version_flag(v: str) -> int {
     return 1;
 }
 
+// The Date value changes every second; byte comparisons replace it with
+// a fixed one of the same length (tests/http_date checks the real one).
+fn masked_date(b: bytes) -> bytes {
+    let s = to_str(b);
+    let at = strings.find(s, "\r\ndate: ");
+    if at < 0 {
+        return b;
+    }
+    return to_bytes(strings.slice(s, 0, at + 8) + "Thu, 01 Jan 1970 00:00:00 GMT" +
+                    strings.slice(s, at + 37, len(s)));
+}
+
 fn serialize_ok() {
     let r = http.ok_text("hi");
-    let out = http.serialize(r);
-    if out != to_bytes("HTTP/1.1 200 OK\r\ncontent-type: text/plain; charset=utf-8\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nhi") {
+    let out = masked_date(http.serialize(r));
+    if out != to_bytes("HTTP/1.1 200 OK\r\ndate: Thu, 01 Jan 1970 00:00:00 GMT\r\ncontent-type: text/plain; charset=utf-8\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nhi") {
         die("serialize");
     }
     println("serialize");

@@ -1050,7 +1050,12 @@ let elapsed = time.mono() - t0;   // duration arithmetic
 let deadline = time.mono() + 5000000;  // timeout math for net calls
 
 let wall = time.wall();   // unix epoch time in nanoseconds
+let d = time.http_date(); // "Tue, 13 Oct 2026 09:30:15 GMT", the current second
 ```
+
+`time.put_http_date(w, off)` writes the same 29 bytes into a `wire` and
+returns `off + 29` (with a zero-length wire it only counts): what `http`
+uses for `Date`. For dates other than now, use `timez`.
 
 #### `timez`
 
@@ -3186,6 +3191,18 @@ Go's `net/http` applies. A clean field is written as it is, at no extra
 cost. `httpc` does the same for the method and the request headers it
 sends, and percent-encodes CR, LF, space and tab in the request target.
 `http2`'s header encoder does the same for HTTP/2 fields.
+
+Every response carries `Date` (RFC 9110 6.6.1): the current second, kept
+by the runtime for all threads and copied into the response with no clock
+read and no allocation; a handler's own `Date` is the one sent. A 1xx, 204
+or 304 response is written with no `Content-Length` and no body, whatever
+the `Response` holds (8.6 forbids the header on 1xx and 204, and on a 304
+unless it equals the 200's; body bytes there would be read as the start of
+the next response). `http2` follows the same rules. A prebuilt static
+rendering (`static_render`) ends its header block with
+`static_date_line()`, whose date `write_static` refreshes on every send;
+a rendering built elsewhere gets the same by ending its headers with that
+line.
 
 ```slang
 import "http";

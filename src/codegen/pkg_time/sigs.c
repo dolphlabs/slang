@@ -8,6 +8,8 @@ const NatSig TIME_SIGS[] = {
     {"time", "mono", 0, {0}, "duration", 0},
     {"time", "wall", 0, {0}, "int", 0},
     {"time", "sleep", 1, {NA_INT}, NULL, 0},
+    {"time", "http_date", 0, {0}, "str", 0},
+    {"time", "put_http_date", 2, {NA_WIRE, NA_I64}, "int", 0},
 };
 
 const int TIME_SIGS_LEN = sizeof(TIME_SIGS) / sizeof(TIME_SIGS[0]);

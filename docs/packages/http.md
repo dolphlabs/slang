@@ -53,6 +53,18 @@ cost. `httpc` does the same for the method and the request headers it
 sends, and percent-encodes CR, LF, space and tab in the request target.
 `http2`'s header encoder does the same for HTTP/2 fields.
 
+Every response carries `Date` (RFC 9110 6.6.1): the current second, kept
+by the runtime for all threads and copied into the response with no clock
+read and no allocation; a handler's own `Date` is the one sent. A 1xx, 204
+or 304 response is written with no `Content-Length` and no body, whatever
+the `Response` holds (8.6 forbids the header on 1xx and 204, and on a 304
+unless it equals the 200's; body bytes there would be read as the start of
+the next response). `http2` follows the same rules. A prebuilt static
+rendering (`static_render`) ends its header block with
+`static_date_line()`, whose date `write_static` refreshes on every send;
+a rendering built elsewhere gets the same by ending its headers with that
+line.
+
 ```slang
 import "http";
 
@@ -214,6 +226,10 @@ The static emit: the keep-alive rendering is prebuilt, not emitted. Hot path (HT
 ### `fn static_render(status: i32, content_type: str, body: bytes) -> bytes`
 
 The keep-alive rendering, assembled ONCE at registration: status line, one content-type, content-length, connection, blank line, body -- the exact bytes write_static memcpys per request. status_text_of covers the statuses static routes return; the fallback ("OK") matches write_static's own close variant above, so the two can never disagree on a reason phrase.
+
+### `fn static_date_line() -> str`
+
+The last header line of a prebuilt static rendering: `date: ` and a date, refreshed in place on every send. A rendering is shared by every request, so the date cannot be part of it; a renderer outside this package (zokor's, with its security headers) ends its header block with this line to get the same. Any other rendering is sent as it is.
 
 ### `fn clean_field(s: str) -> str`
 

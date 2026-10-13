@@ -26,7 +26,12 @@ let elapsed = time.mono() - t0;   // duration arithmetic
 let deadline = time.mono() + 5000000;  // timeout math for net calls
 
 let wall = time.wall();   // unix epoch time in nanoseconds
+let d = time.http_date(); // "Tue, 13 Oct 2026 09:30:15 GMT", the current second
 ```
+
+`time.put_http_date(w, off)` writes the same 29 bytes into a `wire` and
+returns `off + 29` (with a zero-length wire it only counts): what `http`
+uses for `Date`. For dates other than now, use `timez`.
 
 #### `timez`
 
@@ -2163,6 +2168,18 @@ cost. `httpc` does the same for the method and the request headers it
 sends, and percent-encodes CR, LF, space and tab in the request target.
 `http2`'s header encoder does the same for HTTP/2 fields.
 
+Every response carries `Date` (RFC 9110 6.6.1): the current second, kept
+by the runtime for all threads and copied into the response with no clock
+read and no allocation; a handler's own `Date` is the one sent. A 1xx, 204
+or 304 response is written with no `Content-Length` and no body, whatever
+the `Response` holds (8.6 forbids the header on 1xx and 204, and on a 304
+unless it equals the 200's; body bytes there would be read as the start of
+the next response). `http2` follows the same rules. A prebuilt static
+rendering (`static_render`) ends its header block with
+`static_date_line()`, whose date `write_static` refreshes on every send;
+a rendering built elsewhere gets the same by ending its headers with that
+line.
+
 ```slang
 import "http";
 
@@ -2204,7 +2221,7 @@ any signal-handling program.
 - [encoding](packages/encoding.md) -- compiler-provided, 14 public items
 - [flags](packages/flags.md) -- source package, 23 public items
 - [fs](packages/fs.md) -- compiler-provided, 7 public items
-- [http](packages/http.md) -- source package, 56 public items
+- [http](packages/http.md) -- source package, 57 public items
 - [http2](packages/http2.md) -- source package, 122 public items
 - [httpc](packages/httpc.md) -- source package, 35 public items
 - [io](packages/io.md) -- compiler-provided, 12 public items
@@ -2218,7 +2235,7 @@ any signal-handling program.
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [sql](packages/sql.md) -- compiler-provided, 20 public items
 - [strings](packages/strings.md) -- compiler-provided, 24 public items
-- [time](packages/time.md) -- compiler-provided, 3 public items
+- [time](packages/time.md) -- compiler-provided, 5 public items
 - [timez](packages/timez.md) -- source package, 144 public items
 
 ---

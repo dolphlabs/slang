@@ -1,0 +1,5 @@
+date on every write path
+a handler's Date is kept
+204 and 304 carry no content
+static renderings get a fresh date
+http2 too
