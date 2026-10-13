@@ -1048,6 +1048,94 @@ let deadline = time.mono() + 5000000;  // timeout math for net calls
 let wall = time.wall();   // unix epoch time in nanoseconds
 ```
 
+#### `timez`
+
+Calendar time, written in slang on top of the native `time` clock:
+instants, dates, durations, text formats, time zones, test clocks and
+cron. Import `"timez"`.
+
+```slang
+import "timez";
+
+let t = timez.now();                               // a Time: an instant, UTC
+println(t.rfc3339());                              // 2026-10-13T09:30:15Z
+println(t.rfc3339_milli());                        // 2026-10-13T09:30:15.000Z (toISOString)
+println(t.http_date());                            // Tue, 13 Oct 2026 09:30:15 GMT
+println(t.format("%A %e %B %Y, %H:%M"));          // Tuesday 13 October 2026, 09:30
+
+let r = timez.parse_rfc3339("2026-10-13T11:30:15+02:00");   // offsets applied
+let due = t.date().add_months(1);                  // Jan 31 + 1 month = Feb 28/29
+let ttl = timez.parse_duration("1h30m") ?? 0;      // nanoseconds; "7d" works too
+println(timez.relative(t.add(-3 * timez.MINUTE), t));  // 3 minutes ago
+
+let zr = timez.load_zone("Europe/Berlin");         // the system's tz database
+guard let berlin = zr else let e = err_of(zr) { println(e); exit(1); }
+println(t.in_zone(berlin).format("%H:%M %Z"));     // 11:30 CEST
+
+let cr = timez.parse_cron("*/15 9-17 * * MON-FRI");
+guard let cron = cr else let e = err_of(cr) { println(e); exit(1); }
+let next = cron.next_after(t, berlin);             // opt[Time], DST-aware
+```
+
+**Values.**
+- **`Time`** is Unix seconds plus nanoseconds, so it spans 0001-01-01 to
+  9999-12-31 and beyond. 64-bit nanoseconds stop at 1677-2262.
+- **`Date`** is a calendar day: birthdays, due dates, report days.
+- **Durations** are `int` nanoseconds, the unit `time.sleep` and deadlines
+  take. Constants run from `NANOSECOND` to `HOUR` and `DAY` (24 hours).
+- **The calendar** is proleptic Gregorian, with no leap seconds.
+
+**Calendar.**
+- Fields: `year()` to `nanosecond()`, `weekday()`, `year_day()`,
+  `iso_week()`, `is_leap_year`, `days_in_month`.
+- Arithmetic: `add(d)`, `sub(t)`, and `add_days`, `add_months` and
+  `add_years`, which clamp to the end of the month.
+- Rounding and periods: `truncate(d)`, `round(d)`, and `start_of_*` and
+  `end_of_*` for minute, hour, day, week (Monday), month and year.
+- Comparing: `before`, `after`, `equal`, `compare`, `min`, `max`.
+- Dates: `days_until`, and `years_until`, which counts an age by whether
+  the anniversary has passed.
+
+**Text.**
+- `rfc3339`, `rfc3339_milli`, `rfc3339_nano` and `rfc3339_at(offset)`.
+- `parse_rfc3339` is strict: it refuses a timestamp with no offset,
+  because one without names no instant.
+- `parse_date`.
+- `http_date`, and `parse_http_date` for all three forms RFC 9110 has
+  recipients accept.
+- `rfc2822` and `parse_rfc2822`.
+- `format(layout)`: `strftime` directives, locale-free.
+- `parse_duration` and `format_duration`, Go's format plus `d`.
+- `relative`.
+
+**Time zones.**
+- **Loading.** `load_zone(name)` reads the IANA database, from `$ZONEINFO`
+  or `/usr/share/zoneinfo`. It follows each file's POSIX-TZ rule past its
+  last transition, and refuses names that could reach other files. A
+  missing database is an error that says how to install it, never a
+  silent UTC. `fixed_zone(name, offset)` gives a zone at a fixed offset.
+- **Reading.** `t.in_zone(z)` gives a `ZonedTime`: local fields, `abbrev`,
+  `is_dst`, `rfc3339` with the offset, and `format` with real `%z` and `%Z`.
+- **Local arithmetic.** `add_days`, `add_months` and `start_of_day` work in
+  local wall time, so a day across a DST change is 23 or 25 hours.
+- **Wall time to instant.** `zoned(z, y, m, d, h, mi, s, how)` converts a
+  local wall time to an instant. `how` decides the skipped and repeated
+  hours: `COMPATIBLE` moves forward through a gap and takes the earlier of
+  an overlap, as Temporal and java.time do. The others are `EARLIER`,
+  `LATER` and `REJECT`.
+
+**Operations.**
+- `system_clock()` / `fixed_clock(t)`: a `Clock` to pass in state, so
+  tests `advance` and `set` the time instead of sleeping.
+- `start_stopwatch()`, which measures on the monotonic clock.
+- `interval(a, b)`: half-open, with `contains`, `overlaps` and
+  `intersection`.
+- `deadline(t)` gives the `until` that socket and channel calls take.
+- **`parse_cron`:** five fields, names, steps and `@daily` macros. When
+  both day fields are set, a day matches either (Vixie). `next_after(t,
+  zone)` evaluates in the zone's wall time: a run in a skipped hour
+  happens when the clock reaches it, and a repeated hour runs once.
+
 #### `net`
 
 TCP listener/dialer built on `bytes` and fixed-width ints; every

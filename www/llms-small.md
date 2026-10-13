@@ -270,6 +270,29 @@ strings encoding compress builder byteutil flags http http2 httpc`.
 The standalone `argon` package provides bounded Argon2id password hashing
 with standard PHC strings; its native crypto calls require OpenSSL 3.2+.
 
+## Calendar time: timez
+
+```slang
+import "timez";
+
+let r = timez.utc(2026, 10, 13, 9, 30, 15, 0);    // result[Time, str]; err names the bad field
+guard let t = r else let e = err_of(r) { println(e); exit(1); }
+println(t.rfc3339());                              // 2026-10-13T09:30:15Z
+println(t.http_date());                            // Tue, 13 Oct 2026 09:30:15 GMT
+println(t.date().add_months(4).iso());             // 2027-02-13 (end-of-month clamps)
+println(t.format("%a %d %b %Y %H:%M"));            // Tue 13 Oct 2026 09:30
+println(timez.format_duration(timez.parse_duration("90m") ?? 0));   // 1h30m0s
+let p = timez.parse_rfc3339("2026-10-13T11:30:15+02:00");
+println((p ?? t).equal(t));                        // true: offsets are applied
+```
+
+`Time` is an instant (UTC); `Date` a calendar day; durations are int
+nanoseconds (`timez.MINUTE`, `"7d"` parses). Zones: `timez.load_zone("Europe/Berlin")`,
+`t.in_zone(z).format("%H:%M %Z")`, `timez.zoned(z, y, m, d, h, mi, s,
+timez.Disambiguation.COMPATIBLE)`. Tests: pass a `timez.fixed_clock(t)` and
+`advance` it. Cron: `timez.parse_cron("0 9 * * MON-FRI")` then
+`.next_after(t, zone)`.
+
 ## Tests
 
 Tests live next to the code in `*_test.sl`, as `fn test_*()` that fail
