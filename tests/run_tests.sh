@@ -620,7 +620,7 @@ tc_tmp_after=$(ls -d "${TMPDIR:-/tmp}"/slangtest_* 2>/dev/null | wc -l)
 [ "$tc_bad" -eq 0 ] && echo "PASS slangc test"
 
 # Stdlib packages that carry their own unit tests.
-for pkg in stdlib/pg; do
+for pkg in stdlib/pg stdlib/timez; do
     if out=$(./slangc test "$pkg" 2>&1); then
         echo "PASS slangc test $pkg"
     else

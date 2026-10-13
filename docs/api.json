@@ -5452,6 +5452,1164 @@
           "sig": "time.sleep(int)"
         }
       ]
+    },
+    "timez": {
+      "name": "timez",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Time.rfc3339",
+          "decl": "fn",
+          "sig": "fn rfc3339(self: Time) -> str",
+          "doc": "\"2026-10-13T09:30:15Z\": seconds, UTC.",
+          "file": "stdlib/timez/format.sl",
+          "line": 73
+        },
+        {
+          "name": "Time.rfc3339_milli",
+          "decl": "fn",
+          "sig": "fn rfc3339_milli(self: Time) -> str",
+          "doc": "\"2026-10-13T09:30:15.000Z\": always milliseconds, as JavaScript's toISOString() writes them -- what a browser client parses most happily.",
+          "file": "stdlib/timez/format.sl",
+          "line": 80
+        },
+        {
+          "name": "Time.rfc3339_nano",
+          "decl": "fn",
+          "sig": "fn rfc3339_nano(self: Time) -> str",
+          "doc": "\"2026-10-13T09:30:15.5Z\": every nanosecond the instant has, no trailing zeros -- what round-trips exactly.",
+          "file": "stdlib/timez/format.sl",
+          "line": 86
+        },
+        {
+          "name": "Time.rfc3339_at",
+          "decl": "fn",
+          "sig": "fn rfc3339_at(self: Time, offset_seconds: int) -> str",
+          "doc": "The same instant as the wall time at a fixed offset from UTC (seconds east, -64800 to 64800): \"2026-10-13T11:30:15+02:00\".",
+          "file": "stdlib/timez/format.sl",
+          "line": 92
+        },
+        {
+          "name": "Time.http_date",
+          "decl": "fn",
+          "sig": "fn http_date(self: Time) -> str",
+          "doc": "\"Tue, 13 Oct 2026 09:30:15 GMT\": the HTTP date (RFC 9110 IMF-fixdate) for Date, Last-Modified, Expires and cookie Expires.",
+          "file": "stdlib/timez/format.sl",
+          "line": 100
+        },
+        {
+          "name": "Time.rfc2822",
+          "decl": "fn",
+          "sig": "fn rfc2822(self: Time) -> str",
+          "doc": "\"Tue, 13 Oct 2026 09:30:15 +0000\": email (RFC 5322) dates.",
+          "file": "stdlib/timez/format.sl",
+          "line": 108
+        },
+        {
+          "name": "Time.format",
+          "decl": "fn",
+          "sig": "fn format(self: Time, layout: str) -> str",
+          "doc": "strftime-style formatting, locale-free (English names), UTC:  %Y year (2026)   %m month 01-12   %d day 01-31   %e day, space-padded %H hour 00-23    %I hour 01-12    %M minute      %S second    %p AM/PM %L milliseconds (000-999)   %f microseconds   %N nanoseconds (9 digits) %a Tue  %A Tuesday  %b Oct  %B October  %j day of year 001-366 %u weekday 1-7 (Monday 1)  %G ISO year  %V ISO week 01-53 %s Unix seconds   %z +0000   %Z UTC   %F %Y-%m-%d   %T %H:%M:%S   %% %  An unknown directive is written as it is, so a typo shows in the output instead of vanishing.",
+          "file": "stdlib/timez/format.sl",
+          "line": 123
+        },
+        {
+          "name": "parse_date",
+          "decl": "fn",
+          "sig": "fn parse_date(s: str) -> result[Date, str]",
+          "doc": "\"2026-10-13\" (and only that): a calendar date.",
+          "file": "stdlib/timez/format.sl",
+          "line": 212
+        },
+        {
+          "name": "parse_rfc3339",
+          "decl": "fn",
+          "sig": "fn parse_rfc3339(s: str) -> result[Time, str]",
+          "doc": "An RFC 3339 timestamp: \"2026-10-13T09:30:15Z\", with an optional fraction of up to 9 digits and a \"Z\" or \"+hh:mm\"/\"-hh:mm\" offset, which is applied: the result is the instant, in UTC. \"t\" and \"z\" and a space for \"T\" are accepted, as RFC 3339 allows. A missing offset is refused: a timestamp without one names no instant.",
+          "file": "stdlib/timez/format.sl",
+          "line": 231
+        },
+        {
+          "name": "parse_http_date",
+          "decl": "fn",
+          "sig": "fn parse_http_date(s: str) -> result[Time, str]",
+          "doc": "An HTTP date. RFC 9110 has recipients accept three forms, and so does this:  Tue, 13 Oct 2026 09:30:15 GMT       IMF-fixdate (what everything sends) Tuesday, 13-Oct-26 09:30:15 GMT     RFC 850 (two-digit year: more than 50 years ahead means last century) Tue Oct 13 09:30:15 2026            asctime",
+          "file": "stdlib/timez/format.sl",
+          "line": 333
+        },
+        {
+          "name": "parse_rfc2822",
+          "decl": "fn",
+          "sig": "fn parse_rfc2822(s: str) -> result[Time, str]",
+          "doc": "An email date (RFC 5322): an optional weekday, a 1-2 digit day, a month, a 4-digit year, hh:mm with optional :ss, and a \"+hhmm\"/\"-hhmm\" offset or UT/GMT/Z.",
+          "file": "stdlib/timez/format.sl",
+          "line": 393
+        },
+        {
+          "name": "relative",
+          "decl": "fn",
+          "sig": "fn relative(t: Time, now_t: Time) -> str",
+          "doc": "How long ago `t` was, or how far ahead, from `now_t`, the way people say it: \"just now\", \"45 seconds ago\", \"3 minutes ago\", \"in 2 hours\", \"yesterday\", \"5 days ago\", \"in 3 weeks\", \"2 months ago\", \"1 year ago\". Rounded down, so \"1 hour ago\" means at least an hour.",
+          "file": "stdlib/timez/format.sl",
+          "line": 460
+        },
+        {
+          "name": "Clock",
+          "decl": "struct",
+          "sig": "gc struct Clock",
+          "doc": "Where code gets the time, so a test can set it instead of sleeping. Pass a Clock in your state; production uses system_clock().",
+          "file": "stdlib/timez/ops.sl",
+          "line": 17
+        },
+        {
+          "name": "system_clock",
+          "decl": "fn",
+          "sig": "fn system_clock() -> Clock",
+          "doc": "",
+          "file": "stdlib/timez/ops.sl",
+          "line": 23
+        },
+        {
+          "name": "fixed_clock",
+          "decl": "fn",
+          "sig": "fn fixed_clock(t: Time) -> Clock",
+          "doc": "A clock that stays at `t` until advanced or set.",
+          "file": "stdlib/timez/ops.sl",
+          "line": 28
+        },
+        {
+          "name": "Clock.now",
+          "decl": "fn",
+          "sig": "fn now(self: Clock) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/ops.sl",
+          "line": 33
+        },
+        {
+          "name": "Clock.advance",
+          "decl": "fn",
+          "sig": "fn advance(self: Clock, d: int) -> Time",
+          "doc": "Moves a fixed clock forward by `d` (no effect on the system clock).",
+          "file": "stdlib/timez/ops.sl",
+          "line": 44
+        },
+        {
+          "name": "Clock.set",
+          "decl": "fn",
+          "sig": "fn set(self: Clock, t: Time)",
+          "doc": "",
+          "file": "stdlib/timez/ops.sl",
+          "line": 52
+        },
+        {
+          "name": "Stopwatch",
+          "decl": "struct",
+          "sig": "struct Stopwatch",
+          "doc": "Measures elapsed time on the monotonic clock: a wall-clock correction (NTP, a person setting the time) cannot make it jump or go backwards.",
+          "file": "stdlib/timez/ops.sl",
+          "line": 63
+        },
+        {
+          "name": "start_stopwatch",
+          "decl": "fn",
+          "sig": "fn start_stopwatch() -> Stopwatch",
+          "doc": "",
+          "file": "stdlib/timez/ops.sl",
+          "line": 67
+        },
+        {
+          "name": "Stopwatch.elapsed",
+          "decl": "fn",
+          "sig": "fn elapsed(self: Stopwatch) -> int",
+          "doc": "Nanoseconds since the stopwatch started.",
+          "file": "stdlib/timez/ops.sl",
+          "line": 73
+        },
+        {
+          "name": "Stopwatch.elapsed_text",
+          "decl": "fn",
+          "sig": "fn elapsed_text(self: Stopwatch) -> str",
+          "doc": "\"1.502s\".",
+          "file": "stdlib/timez/ops.sl",
+          "line": 78
+        },
+        {
+          "name": "Interval",
+          "decl": "struct",
+          "sig": "struct Interval",
+          "doc": "A half-open span [start, end): it contains its start, not its end, so back-to-back intervals (09:00-10:00, 10:00-11:00) do not overlap.",
+          "file": "stdlib/timez/ops.sl",
+          "line": 87
+        },
+        {
+          "name": "interval",
+          "decl": "fn",
+          "sig": "fn interval(start: Time, end: Time) -> result[Interval, str]",
+          "doc": "err when `end` is before `start`.",
+          "file": "stdlib/timez/ops.sl",
+          "line": 93
+        },
+        {
+          "name": "Interval.contains",
+          "decl": "fn",
+          "sig": "fn contains(self: Interval, t: Time) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/ops.sl",
+          "line": 102
+        },
+        {
+          "name": "Interval.overlaps",
+          "decl": "fn",
+          "sig": "fn overlaps(self: Interval, o: Interval) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/ops.sl",
+          "line": 106
+        },
+        {
+          "name": "Interval.intersection",
+          "decl": "fn",
+          "sig": "fn intersection(self: Interval, o: Interval) -> opt[Interval]",
+          "doc": "The span both cover, none when they do not overlap.",
+          "file": "stdlib/timez/ops.sl",
+          "line": 111
+        },
+        {
+          "name": "Interval.length",
+          "decl": "fn",
+          "sig": "fn length(self: Interval) -> int",
+          "doc": "Nanoseconds from start to end.",
+          "file": "stdlib/timez/ops.sl",
+          "line": 119
+        },
+        {
+          "name": "Interval.is_empty",
+          "decl": "fn",
+          "sig": "fn is_empty(self: Interval) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/ops.sl",
+          "line": 123
+        },
+        {
+          "name": "Cron",
+          "decl": "struct",
+          "sig": "gc struct Cron",
+          "doc": "A five-field cron schedule: minute hour day-of-month month day-of-week. Each field takes `*`, numbers, ranges (`9-17`), lists (`1,15`), steps (`*/15`, `0-30/10`), month names (JAN-DEC) and weekday names (SUN-SAT; 0 and 7 are both Sunday). Macros: @yearly @annually @monthly @weekly @daily @midnight @hourly. As in Vixie cron, when both day fields are restricted a day matches either one.",
+          "file": "stdlib/timez/ops.sl",
+          "line": 136
+        },
+        {
+          "name": "parse_cron",
+          "decl": "fn",
+          "sig": "fn parse_cron(spec: str) -> result[Cron, str]",
+          "doc": "",
+          "file": "stdlib/timez/ops.sl",
+          "line": 213
+        },
+        {
+          "name": "Cron.next_after",
+          "decl": "fn",
+          "sig": "fn next_after(self: Cron, t: Time, z: Zone) -> opt[Time]",
+          "doc": "The first run strictly after `t`, read on the clocks of `z`; none when the schedule never matches (Feb 30) within eight years. A run whose wall time a daylight-saving change skips happens when the clock reaches it (moved forward); one the change repeats runs once.",
+          "file": "stdlib/timez/ops.sl",
+          "line": 274
+        },
+        {
+          "name": "NANOSECOND",
+          "decl": "let",
+          "sig": "let NANOSECOND = 1;",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 29
+        },
+        {
+          "name": "MICROSECOND",
+          "decl": "let",
+          "sig": "let MICROSECOND = 1000;",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 30
+        },
+        {
+          "name": "MILLISECOND",
+          "decl": "let",
+          "sig": "let MILLISECOND = 1000000;",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 31
+        },
+        {
+          "name": "SECOND",
+          "decl": "let",
+          "sig": "let SECOND = 1000000000;",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 32
+        },
+        {
+          "name": "MINUTE",
+          "decl": "let",
+          "sig": "let MINUTE = 60000000000;",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 33
+        },
+        {
+          "name": "HOUR",
+          "decl": "let",
+          "sig": "let HOUR = 3600000000000;",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 34
+        },
+        {
+          "name": "DAY",
+          "decl": "let",
+          "sig": "let DAY = 86400000000000;",
+          "doc": "24 hours.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 36
+        },
+        {
+          "name": "Time",
+          "decl": "struct",
+          "sig": "struct Time",
+          "doc": "An instant, in UTC.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 49
+        },
+        {
+          "name": "Date",
+          "decl": "struct",
+          "sig": "struct Date",
+          "doc": "A calendar day, with no time and no zone: a birthday, a due date, a day of a report.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 58
+        },
+        {
+          "name": "IsoWeek",
+          "decl": "struct",
+          "sig": "struct IsoWeek",
+          "doc": "An ISO 8601 week: weeks start on Monday, and week 1 is the one with the year's first Thursday, so early January can belong to the previous year's last week.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 67
+        },
+        {
+          "name": "days_from_civil",
+          "decl": "fn",
+          "sig": "fn days_from_civil(y: int, m: int, d: int) -> int",
+          "doc": "Days since 1970-01-01 for a civil date (Howard Hinnant's algorithm: exact for every proleptic Gregorian date in range).",
+          "file": "stdlib/timez/timez.sl",
+          "line": 89
+        },
+        {
+          "name": "civil_from_days",
+          "decl": "fn",
+          "sig": "fn civil_from_days(days: int) -> Date",
+          "doc": "The civil date `days` after 1970-01-01.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 106
+        },
+        {
+          "name": "is_leap_year",
+          "decl": "fn",
+          "sig": "fn is_leap_year(y: int) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 125
+        },
+        {
+          "name": "days_in_month",
+          "decl": "fn",
+          "sig": "fn days_in_month(y: int, m: int) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 129
+        },
+        {
+          "name": "days_in_year",
+          "decl": "fn",
+          "sig": "fn days_in_year(y: int) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 142
+        },
+        {
+          "name": "weekday_index",
+          "decl": "fn",
+          "sig": "fn weekday_index(w: Weekday) -> int",
+          "doc": "Monday 0 through Sunday 6.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 160
+        },
+        {
+          "name": "weekday_name",
+          "decl": "fn",
+          "sig": "fn weekday_name(w: Weekday) -> str",
+          "doc": "\"Monday\" ... \"Sunday\".",
+          "file": "stdlib/timez/timez.sl",
+          "line": 174
+        },
+        {
+          "name": "month_name",
+          "decl": "fn",
+          "sig": "fn month_name(m: int) -> str",
+          "doc": "\"January\" ... \"December\"; \"\" outside 1-12.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 188
+        },
+        {
+          "name": "now",
+          "decl": "fn",
+          "sig": "fn now() -> Time",
+          "doc": "The current instant, from the system clock.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 205
+        },
+        {
+          "name": "unix",
+          "decl": "fn",
+          "sig": "fn unix(sec: int) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 209
+        },
+        {
+          "name": "unix_milli",
+          "decl": "fn",
+          "sig": "fn unix_milli(ms: int) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 213
+        },
+        {
+          "name": "unix_nano",
+          "decl": "fn",
+          "sig": "fn unix_nano(ns: int) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 217
+        },
+        {
+          "name": "utc",
+          "decl": "fn",
+          "sig": "fn utc(year: int, month: int, day: int, hour: int, minute: int, second: int, nanos: int) -> result[Time, str]",
+          "doc": "The instant at a UTC civil date and time; err names the first field out of range. Seconds run 0-59: there are no leap seconds.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 223
+        },
+        {
+          "name": "date",
+          "decl": "fn",
+          "sig": "fn date(year: int, month: int, day: int) -> result[Date, str]",
+          "doc": "A calendar date; err names what is out of range.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 246
+        },
+        {
+          "name": "today",
+          "decl": "fn",
+          "sig": "fn today() -> Date",
+          "doc": "Today's date, in UTC.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 262
+        },
+        {
+          "name": "min",
+          "decl": "fn",
+          "sig": "fn min(a: Time, b: Time) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 266
+        },
+        {
+          "name": "max",
+          "decl": "fn",
+          "sig": "fn max(a: Time, b: Time) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 273
+        },
+        {
+          "name": "since",
+          "decl": "fn",
+          "sig": "fn since(t: Time) -> int",
+          "doc": "Nanoseconds since `t` (negative when `t` is in the future).",
+          "file": "stdlib/timez/timez.sl",
+          "line": 281
+        },
+        {
+          "name": "until",
+          "decl": "fn",
+          "sig": "fn until(t: Time) -> int",
+          "doc": "Nanoseconds until `t` (negative when it has passed).",
+          "file": "stdlib/timez/timez.sl",
+          "line": 286
+        },
+        {
+          "name": "deadline",
+          "decl": "fn",
+          "sig": "fn deadline(t: Time) -> until",
+          "doc": "The `until` a socket or channel call takes, for the wall-clock instant `t`: deadlines run on the monotonic clock, so this measures the distance to `t` once and counts it from now.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 293
+        },
+        {
+          "name": "Time.unix",
+          "decl": "fn",
+          "sig": "fn unix(self: Time) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 321
+        },
+        {
+          "name": "Time.unix_milli",
+          "decl": "fn",
+          "sig": "fn unix_milli(self: Time) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 325
+        },
+        {
+          "name": "Time.unix_nano",
+          "decl": "fn",
+          "sig": "fn unix_nano(self: Time) -> int",
+          "doc": "Nanoseconds since the epoch; saturates outside 1677-2262.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 330
+        },
+        {
+          "name": "Time.date",
+          "decl": "fn",
+          "sig": "fn date(self: Time) -> Date",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 334
+        },
+        {
+          "name": "Time.year",
+          "decl": "fn",
+          "sig": "fn year(self: Time) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 338
+        },
+        {
+          "name": "Time.month",
+          "decl": "fn",
+          "sig": "fn month(self: Time) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 342
+        },
+        {
+          "name": "Time.day",
+          "decl": "fn",
+          "sig": "fn day(self: Time) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 346
+        },
+        {
+          "name": "Time.hour",
+          "decl": "fn",
+          "sig": "fn hour(self: Time) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 350
+        },
+        {
+          "name": "Time.minute",
+          "decl": "fn",
+          "sig": "fn minute(self: Time) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 354
+        },
+        {
+          "name": "Time.second",
+          "decl": "fn",
+          "sig": "fn second(self: Time) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 358
+        },
+        {
+          "name": "Time.nanosecond",
+          "decl": "fn",
+          "sig": "fn nanosecond(self: Time) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 362
+        },
+        {
+          "name": "Time.millisecond",
+          "decl": "fn",
+          "sig": "fn millisecond(self: Time) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 366
+        },
+        {
+          "name": "Time.weekday",
+          "decl": "fn",
+          "sig": "fn weekday(self: Time) -> Weekday",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 370
+        },
+        {
+          "name": "Time.year_day",
+          "decl": "fn",
+          "sig": "fn year_day(self: Time) -> int",
+          "doc": "1 to 366.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 375
+        },
+        {
+          "name": "Time.iso_week",
+          "decl": "fn",
+          "sig": "fn iso_week(self: Time) -> IsoWeek",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 379
+        },
+        {
+          "name": "Time.add",
+          "decl": "fn",
+          "sig": "fn add(self: Time, d: int) -> Time",
+          "doc": "`self` plus `d` nanoseconds (negative goes back).",
+          "file": "stdlib/timez/timez.sl",
+          "line": 384
+        },
+        {
+          "name": "Time.sub",
+          "decl": "fn",
+          "sig": "fn sub(self: Time, o: Time) -> int",
+          "doc": "Nanoseconds from `o` to `self`; saturates past ~292 years.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 395
+        },
+        {
+          "name": "Time.add_days",
+          "decl": "fn",
+          "sig": "fn add_days(self: Time, n: int) -> Time",
+          "doc": "Calendar days later, at the same time of day.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 406
+        },
+        {
+          "name": "Time.add_months",
+          "decl": "fn",
+          "sig": "fn add_months(self: Time, n: int) -> Time",
+          "doc": "Calendar months later, at the same time of day. A day past the end of the target month is clamped to its last day: Jan 31 + 1 month is Feb 28 (29 in a leap year), not Mar 3.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 413
+        },
+        {
+          "name": "Time.add_years",
+          "decl": "fn",
+          "sig": "fn add_years(self: Time, n: int) -> Time",
+          "doc": "Calendar years later; Feb 29 + 1 year is Feb 28.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 420
+        },
+        {
+          "name": "Time.before",
+          "decl": "fn",
+          "sig": "fn before(self: Time, o: Time) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 424
+        },
+        {
+          "name": "Time.after",
+          "decl": "fn",
+          "sig": "fn after(self: Time, o: Time) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 428
+        },
+        {
+          "name": "Time.equal",
+          "decl": "fn",
+          "sig": "fn equal(self: Time, o: Time) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 432
+        },
+        {
+          "name": "Time.compare",
+          "decl": "fn",
+          "sig": "fn compare(self: Time, o: Time) -> int",
+          "doc": "-1, 0 or 1.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 437
+        },
+        {
+          "name": "Time.truncate",
+          "decl": "fn",
+          "sig": "fn truncate(self: Time, d: int) -> Time",
+          "doc": "Rounded down to a multiple of `d` since the epoch (d <= 0 leaves it as is): truncate(MINUTE) drops seconds.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 449
+        },
+        {
+          "name": "Time.round",
+          "decl": "fn",
+          "sig": "fn round(self: Time, d: int) -> Time",
+          "doc": "Rounded to the nearest multiple of `d`, halves away from zero.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 465
+        },
+        {
+          "name": "Time.start_of_minute",
+          "decl": "fn",
+          "sig": "fn start_of_minute(self: Time) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 476
+        },
+        {
+          "name": "Time.start_of_hour",
+          "decl": "fn",
+          "sig": "fn start_of_hour(self: Time) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 480
+        },
+        {
+          "name": "Time.start_of_day",
+          "decl": "fn",
+          "sig": "fn start_of_day(self: Time) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 484
+        },
+        {
+          "name": "Time.start_of_week",
+          "decl": "fn",
+          "sig": "fn start_of_week(self: Time) -> Time",
+          "doc": "Monday 00:00 of this ISO week.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 489
+        },
+        {
+          "name": "Time.start_of_month",
+          "decl": "fn",
+          "sig": "fn start_of_month(self: Time) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 494
+        },
+        {
+          "name": "Time.start_of_year",
+          "decl": "fn",
+          "sig": "fn start_of_year(self: Time) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 499
+        },
+        {
+          "name": "Time.end_of_day",
+          "decl": "fn",
+          "sig": "fn end_of_day(self: Time) -> Time",
+          "doc": "The last nanosecond of the day, month and year: for inclusive range queries (\"created <= end of day\").",
+          "file": "stdlib/timez/timez.sl",
+          "line": 505
+        },
+        {
+          "name": "Time.end_of_month",
+          "decl": "fn",
+          "sig": "fn end_of_month(self: Time) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 509
+        },
+        {
+          "name": "Time.end_of_year",
+          "decl": "fn",
+          "sig": "fn end_of_year(self: Time) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 513
+        },
+        {
+          "name": "Date.weekday",
+          "decl": "fn",
+          "sig": "fn weekday(self: Date) -> Weekday",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 525
+        },
+        {
+          "name": "Date.year_day",
+          "decl": "fn",
+          "sig": "fn year_day(self: Date) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 529
+        },
+        {
+          "name": "Date.iso_week",
+          "decl": "fn",
+          "sig": "fn iso_week(self: Date) -> IsoWeek",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 533
+        },
+        {
+          "name": "Date.is_leap_year",
+          "decl": "fn",
+          "sig": "fn is_leap_year(self: Date) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 542
+        },
+        {
+          "name": "Date.add_days",
+          "decl": "fn",
+          "sig": "fn add_days(self: Date, n: int) -> Date",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 546
+        },
+        {
+          "name": "Date.add_months",
+          "decl": "fn",
+          "sig": "fn add_months(self: Date, n: int) -> Date",
+          "doc": "Jan 31 + 1 month is Feb 28 (29 in a leap year).",
+          "file": "stdlib/timez/timez.sl",
+          "line": 551
+        },
+        {
+          "name": "Date.add_years",
+          "decl": "fn",
+          "sig": "fn add_years(self: Date, n: int) -> Date",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 563
+        },
+        {
+          "name": "Date.days_until",
+          "decl": "fn",
+          "sig": "fn days_until(self: Date, o: Date) -> int",
+          "doc": "Days from `self` to `o`: 1 for tomorrow, negative for the past.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 568
+        },
+        {
+          "name": "Date.years_until",
+          "decl": "fn",
+          "sig": "fn years_until(self: Date, o: Date) -> int",
+          "doc": "Whole years from `self` to `o`, counting a year only once its anniversary has passed: an age, a tenure.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 574
+        },
+        {
+          "name": "Date.start",
+          "decl": "fn",
+          "sig": "fn start(self: Date) -> Time",
+          "doc": "00:00:00 UTC on this date.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 583
+        },
+        {
+          "name": "Date.at",
+          "decl": "fn",
+          "sig": "fn at(self: Date, hour: int, minute: int, second: int) -> result[Time, str]",
+          "doc": "The instant at this date and a UTC time of day.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 588
+        },
+        {
+          "name": "Date.before",
+          "decl": "fn",
+          "sig": "fn before(self: Date, o: Date) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 592
+        },
+        {
+          "name": "Date.after",
+          "decl": "fn",
+          "sig": "fn after(self: Date, o: Date) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 596
+        },
+        {
+          "name": "Date.equal",
+          "decl": "fn",
+          "sig": "fn equal(self: Date, o: Date) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 600
+        },
+        {
+          "name": "Date.compare",
+          "decl": "fn",
+          "sig": "fn compare(self: Date, o: Date) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 604
+        },
+        {
+          "name": "Date.start_of_month",
+          "decl": "fn",
+          "sig": "fn start_of_month(self: Date) -> Date",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 616
+        },
+        {
+          "name": "Date.end_of_month",
+          "decl": "fn",
+          "sig": "fn end_of_month(self: Date) -> Date",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 620
+        },
+        {
+          "name": "Date.iso",
+          "decl": "fn",
+          "sig": "fn iso(self: Date) -> str",
+          "doc": "\"2026-10-13\" (ISO 8601).",
+          "file": "stdlib/timez/timez.sl",
+          "line": 626
+        },
+        {
+          "name": "parse_duration",
+          "decl": "fn",
+          "sig": "fn parse_duration(s: str) -> result[int, str]",
+          "doc": "A duration written as Go writes them -- \"1h30m\", \"1.5s\", \"300ms\", \"-2m\", \"2us\" -- plus \"d\" for 24-hour days (\"7d\"), the unit config files reach for. \"0\" alone is zero. err names what was wrong; values past ~292 years are refused, not wrapped.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 674
+        },
+        {
+          "name": "format_duration",
+          "decl": "fn",
+          "sig": "fn format_duration(d: int) -> str",
+          "doc": "A duration the way Go prints one and parse_duration reads it back: \"1h30m0s\", \"1.5s\", \"300ms\", \"2\u00b5s\", \"0s\".",
+          "file": "stdlib/timez/timez.sl",
+          "line": 757
+        },
+        {
+          "name": "Zone",
+          "decl": "struct",
+          "sig": "gc struct Zone",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 66
+        },
+        {
+          "name": "utc_zone",
+          "decl": "fn",
+          "sig": "fn utc_zone() -> Zone",
+          "doc": "UTC, as a Zone.",
+          "file": "stdlib/timez/zone.sl",
+          "line": 91
+        },
+        {
+          "name": "fixed_zone",
+          "decl": "fn",
+          "sig": "fn fixed_zone(name: str, offset_seconds: int) -> Zone",
+          "doc": "A zone at a fixed offset (seconds east of UTC) that never changes.",
+          "file": "stdlib/timez/zone.sl",
+          "line": 96
+        },
+        {
+          "name": "load_zone",
+          "decl": "fn",
+          "sig": "fn load_zone(name: str) -> result[Zone, str]",
+          "doc": "\"UTC\" and fixed zones need no database; anything else is read from it.",
+          "file": "stdlib/timez/zone.sl",
+          "line": 159
+        },
+        {
+          "name": "parse_tzif",
+          "decl": "fn",
+          "sig": "fn parse_tzif(name: str, b: bytes) -> result[Zone, str]",
+          "doc": "RFC 8536: version 2 or later, whose 64-bit block and footer this reads (the 32-bit block before them is skipped).",
+          "file": "stdlib/timez/zone.sl",
+          "line": 203
+        },
+        {
+          "name": "parse_posix_tz",
+          "decl": "fn",
+          "sig": "fn parse_posix_tz(s: str) -> result[TzRule, str]",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 435
+        },
+        {
+          "name": "Zone.offset_at",
+          "decl": "fn",
+          "sig": "fn offset_at(self: Zone, t: Time) -> int",
+          "doc": "Seconds east of UTC at instant `t`.",
+          "file": "stdlib/timez/zone.sl",
+          "line": 588
+        },
+        {
+          "name": "Zone.is_dst_at",
+          "decl": "fn",
+          "sig": "fn is_dst_at(self: Zone, t: Time) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 592
+        },
+        {
+          "name": "Zone.abbrev_at",
+          "decl": "fn",
+          "sig": "fn abbrev_at(self: Zone, t: Time) -> str",
+          "doc": "\"CEST\", \"PST\", \"+0530\": the abbreviation in use at `t`.",
+          "file": "stdlib/timez/zone.sl",
+          "line": 597
+        },
+        {
+          "name": "ZonedTime",
+          "decl": "struct",
+          "sig": "struct ZonedTime",
+          "doc": "An instant together with the zone it is read in: what a person in that zone sees on a clock.",
+          "file": "stdlib/timez/zone.sl",
+          "line": 613
+        },
+        {
+          "name": "Time.in_zone",
+          "decl": "fn",
+          "sig": "fn in_zone(self: Time, z: Zone) -> ZonedTime",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 620
+        },
+        {
+          "name": "zoned",
+          "decl": "fn",
+          "sig": "fn zoned(z: Zone, year: int, month: int, day: int, hour: int, minute: int, second: int, how: Disambiguation) -> result[Time, str]",
+          "doc": "The instant for a wall time in `z`, by `how` when daylight saving makes it skipped or repeated.",
+          "file": "stdlib/timez/zone.sl",
+          "line": 627
+        },
+        {
+          "name": "ZonedTime.date",
+          "decl": "fn",
+          "sig": "fn date(self: ZonedTime) -> Date",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 696
+        },
+        {
+          "name": "ZonedTime.year",
+          "decl": "fn",
+          "sig": "fn year(self: ZonedTime) -> int",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 700
+        },
+        {
+          "name": "ZonedTime.month",
+          "decl": "fn",
+          "sig": "fn month(self: ZonedTime) -> int",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 701
+        },
+        {
+          "name": "ZonedTime.day",
+          "decl": "fn",
+          "sig": "fn day(self: ZonedTime) -> int",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 702
+        },
+        {
+          "name": "ZonedTime.hour",
+          "decl": "fn",
+          "sig": "fn hour(self: ZonedTime) -> int",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 703
+        },
+        {
+          "name": "ZonedTime.minute",
+          "decl": "fn",
+          "sig": "fn minute(self: ZonedTime) -> int",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 704
+        },
+        {
+          "name": "ZonedTime.second",
+          "decl": "fn",
+          "sig": "fn second(self: ZonedTime) -> int",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 705
+        },
+        {
+          "name": "ZonedTime.weekday",
+          "decl": "fn",
+          "sig": "fn weekday(self: ZonedTime) -> Weekday",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 706
+        },
+        {
+          "name": "ZonedTime.abbrev",
+          "decl": "fn",
+          "sig": "fn abbrev(self: ZonedTime) -> str",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 708
+        },
+        {
+          "name": "ZonedTime.is_dst",
+          "decl": "fn",
+          "sig": "fn is_dst(self: ZonedTime) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 712
+        },
+        {
+          "name": "ZonedTime.rfc3339",
+          "decl": "fn",
+          "sig": "fn rfc3339(self: ZonedTime) -> str",
+          "doc": "\"2026-10-13T11:30:15+02:00\".",
+          "file": "stdlib/timez/zone.sl",
+          "line": 717
+        },
+        {
+          "name": "ZonedTime.format",
+          "decl": "fn",
+          "sig": "fn format(self: ZonedTime, layout: str) -> str",
+          "doc": "As Time.format, with %z the real offset (+0200) and %Z the zone's abbreviation (CEST).",
+          "file": "stdlib/timez/zone.sl",
+          "line": 723
+        },
+        {
+          "name": "ZonedTime.add_days",
+          "decl": "fn",
+          "sig": "fn add_days(self: ZonedTime, n: int) -> ZonedTime",
+          "doc": "Calendar days later at the same wall time, across daylight-saving changes (a day is then 23 or 25 hours). A wall time that does not exist on the target day moves forward, as COMPATIBLE does.",
+          "file": "stdlib/timez/zone.sl",
+          "line": 754
+        },
+        {
+          "name": "ZonedTime.add_months",
+          "decl": "fn",
+          "sig": "fn add_months(self: ZonedTime, n: int) -> ZonedTime",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 761
+        },
+        {
+          "name": "ZonedTime.start_of_day",
+          "decl": "fn",
+          "sig": "fn start_of_day(self: ZonedTime) -> ZonedTime",
+          "doc": "Local midnight: the first instant of this date in the zone (01:00 where midnight is skipped).",
+          "file": "stdlib/timez/zone.sl",
+          "line": 770
+        }
+      ]
     }
   }
 }

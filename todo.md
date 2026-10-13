@@ -545,6 +545,18 @@ Found building zokor's logger (2026-10-12), not fixed:
   constant elements get no C temporary: 0.16 s and 90 MB; the whole
   build 26.6 s / 1.2 GB -> 13.2 s / 214 MB, the rest clang optimising
   4,000 nested allocations.
+- [x] **`timez`: calendar time in stdlib** (feat/timez). Instants and
+  dates for years 1-9999, Go-style durations, RFC 3339 / HTTP / RFC 2822
+  formats and strict parsers, strftime, IANA zones read from the system
+  tz database (TZif v2+ with the POSIX-TZ footer, DST gap/overlap
+  choice), test clocks, stopwatches, intervals and cron. Checked against
+  Python: 212 calendar instants (`datetime`) and 420 zoned ones across 7
+  zones (`zoneinfo`).
+- [ ] **`timez.Time` in JSON and `pg`.** A Time field cannot round-trip as
+  an RFC 3339 string through `json.encode`/`decode`, nor bind to or read
+  from a `timestamptz` column, without a per-type hook in the compiler's
+  JSON dispatch (no interfaces). Today: `t.rfc3339_nano()` into a str
+  field, `timez.parse_rfc3339` out. Needs a design decision first.
 - [ ] **`??` prints as `'^` in diagnostics.** src/lexer.c:574 writes
   `"'??'"`, and `??'` is a trigraph under `-std=c11` (the build warns:
   "trigraph converted to '^' character"). Write `"'?\?'"`.
