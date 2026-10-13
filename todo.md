@@ -524,6 +524,17 @@ Found building zokor's logger (2026-10-12), not fixed:
   directory, and the loader looked for `slang.project` from there, so
   every pinned import failed with "cannot resolve import". In test mode
   the project now comes from the package under test.
+- [x] **A generated C line over 16 KB was cut off** (found 2026-10-13
+  writing the timez tests; fixed in fix/emit-line-truncation). `emit_line`
+  formatted into a fixed 16 KB buffer, so a long literal or expression
+  became C that did not compile, reported as raw cc errors. It now sizes
+  the buffer from the formatted length. tests/long_literal.
+- [ ] **A large list literal overflows the task stack.** Each element of a
+  nested list literal gets its own C temporary in one statement
+  expression, all on the stack: a 600 x 3 `[[int]]` literal at top level
+  dies with SIGBUS in the 8 KB task stack's guard page. Build big literals
+  element by element into the list (or from a static table) instead of as
+  one expression with a temporary per element.
 - [ ] **str literals take no `\x` or `\u` escape** ("unknown escape
   sequence"); a terminal colour needs `to_str(b"\x1b[32m")`. JSON-style
   `\u001b` and `\x1b` are what a model writes first.
