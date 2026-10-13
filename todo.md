@@ -610,10 +610,11 @@ Found building zokor's logger (2026-10-12), not fixed:
   no overflow: `x + 1 > x` can fold to true, and a user's own overflow
   check can be optimised out. Measure `-fwrapv`'s cost before turning it
   on.
-- [ ] **An `extern fn` named like a libc function the runtime's headers
-  declare** (`strlen`, `atoi`) fails as raw C output: "conflicting types
-  for 'strlen'". slangc should say the name is taken by C and how to
-  declare it (matching C types), or rename it with a link name.
+- [x] **An `extern fn` may share a name with a libc declaration**
+  (fix/extern-name-clash). Each extern fn is declared under a C name of
+  its own (`sl_x_<name>`) bound to the symbol with an assembler label, so
+  a header's prototype with other C types (`strlen`'s size_t) no longer
+  clashes. tests/extern_libc_names.
 - [ ] **`??` prints as `'^` in diagnostics.** src/lexer.c:574 writes
   `"'??'"`, and `??'` is a trigraph under `-std=c11` (the build warns:
   "trigraph converted to '^' character"). Write `"'?\?'"`.

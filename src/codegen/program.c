@@ -1091,6 +1091,15 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
     int any = 0;
     FuncCursor fc;
     func_cursor_init(&fc);
+    /* An `extern fn` is declared under a C name of its own, bound to the
+     * real symbol with an assembler label: a header the runtime includes
+     * may already declare the same name with other C types (strlen's
+     * size_t and const char *), and a second prototype would not compile.
+     * __USER_LABEL_PREFIX__ is the platform's symbol prefix ("_" on
+     * macOS, none on Linux). */
+    emit_line(cg, "#define SL_X_STR2(x) #x");
+    emit_line(cg, "#define SL_X_STR(x) SL_X_STR2(x)");
+    emit_line(cg, "#define SL_X_SYM(n) SL_X_STR(__USER_LABEL_PREFIX__) n");
     /* plain functions (including `extern fn`) then methods, per package */
     while (func_cursor_next(cg, pkgs, npkgs, &fc, 1)) {
         FuncDecl *f = fc.fn;
@@ -1110,9 +1119,9 @@ void gen_prototypes(CG *cg, Package *pkgs, int npkgs) {
                     sb_append(&params, ctype_of(cg, sig->param_slang[m]));
                 }
             }
-            emit_line(cg, "extern %s %s(%s);",
+            emit_line(cg, "extern %s sl_x_%s(%s) __asm__(SL_X_SYM(\"%s\"));",
                       sig->ret_slang ? ctype_of(cg, sig->ret_slang) : "void",
-                      f->name, params.data);
+                      f->name, params.data, f->name);
             any = 1;
             continue;
         }

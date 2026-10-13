@@ -2080,7 +2080,7 @@ static unsigned long long fnv64(const char *s) {
 
 char *mangle_sig(FuncSig *sig) {
     if (sig->is_extern)
-        return xstrdup(sig->name);
+        return xasprintf("sl_x_%s", sig->name);
     if (sig->method_of) {
         /* An instance's canonical name carries its arguments and their
          * dots (`main.Box[main.Point]`), which neither the last-dot split
