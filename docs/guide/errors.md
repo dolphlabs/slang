@@ -85,9 +85,12 @@ main.foo:12`. A panicking `spawn`ed task reports through stderr and its
 `join_wait` surfaces the same string as `err`, so failures stay visible
 across task boundaries. A crash below the language (a segfault or bus
 error in C interop, or a task overflowing its stack) prints one line,
-`slang: fatal SIGSEGV at address 0x..., pc 0x...`, naming a stack
-overflow when that is what it was, and the process then dies of the
-same signal: the exit status and any core dump are unchanged.
+`slang: fatal SIGSEGV at address 0x..., pc 0x... (image+0x...)`, naming a
+stack overflow when that is what it was, and the process then dies of the
+same signal: the exit status and any core dump are unchanged. The image
+offset, printed when the fault is in the program's own code, names the
+function after the fact: `addr2line -fe prog 0x...` on Linux, `atos -o
+prog -l 0x100000000 <0x100000000 + offset>` on macOS.
 
 `opt[T]` and `result[T, E]` are monomorphized per distinct type
 argument (one C struct per instantiation actually used). Constructing
