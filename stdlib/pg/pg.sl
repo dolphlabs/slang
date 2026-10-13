@@ -3,6 +3,7 @@ import "time";
 import "strings";
 import "crypto";
 import "encoding";
+import "timez";
 
 // PostgreSQL client, speaking the frontend/backend protocol (version
 // 3.0) over `net`.
@@ -1202,6 +1203,12 @@ pub fn arg_bytes(b: bytes) -> Arg {
 
 pub fn arg_null() -> Arg {
     return Arg { is_null: true, binary: false, data: b"" };
+}
+
+// An instant for a timestamptz parameter, as RFC 3339 in UTC. Postgres
+// keeps microseconds: a finer fraction is rounded by the server.
+pub fn arg_time(t: timez.Time) -> Arg {
+    return Arg { is_null: false, binary: false, data: to_bytes(t.rfc3339_nano()) };
 }
 
 
@@ -2585,6 +2592,63 @@ fn bin_bool(rows: Rows, r: int, c: int) -> bool {
 }
 
 // int2, int4, int8 and oid.
+// A timestamptz or timestamp cell as RFC 3339 text: Postgres writes
+// "2026-10-13 09:30:15.123456+00" (a space, and an hour-only offset when
+// the minutes are zero); this is "2026-10-13T09:30:15.123456+00:00". A
+// timestamp without a time zone names no instant and is read as UTC, as
+// Go's drivers read it. none for infinity, -infinity and BC dates, which
+// a timez.Time cannot hold, and for text that is not a Postgres timestamp.
+pub fn timestamp_rfc3339(cell: str, has_tz: bool) -> opt[str] {
+    let b = to_bytes(cell);
+    let n = len(b);
+    if n < 19 || (b[10] != 32 && b[10] != 84) || strings.has_suffix(cell, " BC") {
+        return none;
+    }
+    let head = strings.slice(cell, 0, 10) + "T" + strings.slice(cell, 11, 19);
+    // the fraction, then the offset
+    let i = 19;
+    if i < n && b[i] == 46 {
+        i = i + 1;
+        while i < n && b[i] >= 48 && b[i] <= 57 {
+            i = i + 1;
+        }
+    }
+    let frac = strings.slice(cell, 19, i);
+    if !has_tz {
+        if i != n {
+            return none;
+        }
+        return some(head + frac + "Z");
+    }
+    if i >= n || (b[i] != 43 && b[i] != 45) {
+        return none;
+    }
+    let off = strings.slice(cell, i, n);
+    // +hh, +hh:mm, or (a historical local mean time) +hh:mm:ss
+    if len(off) == 3 {
+        return some(head + frac + off + ":00");
+    }
+    if len(off) == 6 {
+        return some(head + frac + off);
+    }
+    return none;
+}
+
+// The instant in a timestamptz (or timestamp, read as UTC) cell. err for
+// another column type, infinity, a BC date, or a seconds-level offset.
+pub fn get_time(rows: Rows, r: int, c: int) -> result[timez.Time, str] {
+    let oid = rows.types[c];
+    if oid != 1184 && oid != 1114 {
+        return err("column " + rows.columns[c] + " is not a timestamp (type " + to_str(oid) + ")");
+    }
+    let text = get_text(rows, r, c);
+    guard let iso = timestamp_rfc3339(text, oid == 1184) else {
+        return err("column " + rows.columns[c] + ": '" + text + "' cannot be a timez.Time " +
+                   "(infinity, BC and seconds-level offsets are not supported)");
+    }
+    return timez.parse_rfc3339(iso);
+}
+
 pub fn get_int(rows: Rows, r: int, c: int) -> int {
     cell_index(rows, r, c);
     let oid = rows.types[c];

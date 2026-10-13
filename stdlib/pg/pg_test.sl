@@ -2,6 +2,8 @@
 // tested in tests/postgres (a scripted fake server) and tests/live/postgres (a real
 // one).
 
+import "timez";
+
 fn cfg_of(url: str) -> Config {
     let r = parse_url(url);
     guard let c = r else let e = err_of(r) {
@@ -160,4 +162,35 @@ fn test_statement_cache_capacity() {
     assert(e == "statement_cache_capacity out of range: 65537 (0 to 65536)", e);
     e = url_error("postgres://u@h/d?statement_cache_capacity=lots");
     assert(strings.has_prefix(e, "bad statement_cache_capacity in url: "), e);
+}
+
+fn ts_text(cell: str, has_tz: bool) -> str {
+    return timestamp_rfc3339(cell, has_tz) ?? "none";
+}
+
+fn test_timestamp_text_becomes_rfc3339() {
+    assert(ts_text("2026-10-13 09:30:15+00", true) == "2026-10-13T09:30:15+00:00");
+    assert(ts_text("2026-10-13 09:30:15.123456+05:30", true) == "2026-10-13T09:30:15.123456+05:30");
+    assert(ts_text("2026-10-13 09:30:15.5-08", true) == "2026-10-13T09:30:15.5-08:00");
+    // a timestamp without a time zone is read as UTC
+    assert(ts_text("2026-10-13 09:30:15.25", false) == "2026-10-13T09:30:15.25Z");
+    // what a timez.Time cannot hold, or is not a timestamp
+    assert(ts_text("infinity", true) == "none");
+    assert(ts_text("-infinity", true) == "none");
+    assert(ts_text("0044-03-15 12:00:00+00 BC", true) == "none");
+    assert(ts_text("1880-01-01 00:00:00+00:53:28", true) == "none");
+    assert(ts_text("2026-10-13 09:30:15", true) == "none");
+    assert(ts_text("2026-10-13 09:30:15+00", false) == "none");
+    assert(ts_text("13/10/2026", true) == "none");
+    // every normalized text is an instant timez reads, offsets applied
+    let r = timez.parse_rfc3339(ts_text("2026-10-13 11:30:15.5+02", true));
+    guard let t = r else let e = err_of(r) { panic(e); }
+    assert(t.rfc3339_nano() == "2026-10-13T09:30:15.5Z");
+}
+
+fn test_arg_time_is_rfc3339_utc() {
+    let t = timez.unix_nano(1792000000123456789);
+    let a = arg_time(t);
+    assert(!a.is_null && !a.binary);
+    assert(to_str(a.data) == "2026-10-14T17:46:40.123456789Z");
 }

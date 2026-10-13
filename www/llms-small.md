@@ -286,7 +286,8 @@ let p = timez.parse_rfc3339("2026-10-13T11:30:15+02:00");
 println((p ?? t).equal(t));                        // true: offsets are applied
 ```
 
-`Time` is an instant (UTC); `Date` a calendar day; durations are int
+`Time` is an instant (UTC), an RFC 3339 string in `json.encode`/`decode`
+(`pg.arg_time(t)`, `pg.get_time(rows, r, c)` for `timestamptz`); `Date` a calendar day; durations are int
 nanoseconds (`timez.MINUTE`, `"7d"` parses). Zones: `timez.load_zone("Europe/Berlin")`,
 `t.in_zone(z).format("%H:%M %Z")`, `timez.zoned(z, y, m, d, h, mi, s,
 timez.Disambiguation.COMPATIBLE)`. Tests: pass a `timez.fixed_clock(t)` and

@@ -121,6 +121,13 @@ let next = cron.next_after(t, berlin);             // opt[Time], DST-aware
   zone)` evaluates in the zone's wall time: a run in a skipped hour
   happens when the clock reaches it, and a repeated hour runs once.
 
+
+**In JSON and Postgres.** A `timez.Time` field of a struct is written by
+`json.encode` as an RFC 3339 string and read back by `json.decode` (see
+`json`). `pg.arg_time(t)` binds one for a `timestamptz` parameter and
+`pg.get_time(rows, r, c)` reads one out; `pg.timestamp_rfc3339(cell,
+has_tz)` turns Postgres's own timestamp text into RFC 3339.
+
 #### `net`
 
 TCP listener/dialer built on `bytes` and fixed-width ints; every
@@ -401,8 +408,11 @@ Supported: `gc struct` (a plain `struct` is a compile error naming it, since
 the codecs read and build structs through a pointer), `opt[T]`, `[T]`,
 `map[str, V]` (JSON object keys
 are always strings — a map with any other key type is a compile
-error), every scalar, and `bytes` (RFC 4648 base64 strings on the
-wire). `rawptr`, `chan[T]`, and
+error), every scalar, `bytes` (RFC 4648 base64 strings on the
+wire), and `timez.Time` (an RFC 3339 string: written as `rfc3339_nano()`
+writes it, read with `parse_rfc3339()`'s rules, offsets applied; about
+115 ns to encode and 130 ns to decode, in C, so a struct without one
+compiles to exactly the codecs it did before). `rawptr`, `chan[T]`, and
 `result[T,E]` can't appear anywhere in a decode/encode target type. A
 missing JSON key defaults an `opt[T]` field to `none`; for any other
 field type it's a decode error. Unknown JSON keys are ignored. Every
@@ -901,8 +911,9 @@ whole connection: DNS lookup, TCP connect, TLS handshake and login.
 **Parameters** travel separately from the SQL text, so a value can never
 be parsed as SQL, whatever it contains. Build them with `pg.arg_text(s)`,
 `arg_int(n)`, `arg_float(x)` (sent exactly, not rounded), `arg_bool(b)`,
-`arg_bytes(b)` (binary, for `bytea`) and `arg_null()`. A query with none
-takes `[]`.
+`arg_bytes(b)` (binary, for `bytea`), `arg_time(t)` (a `timez.Time`, for
+`timestamptz`; Postgres keeps microseconds) and `arg_null()`. A query with
+none takes `[]`.
 
 **Results** from `query` are buffered whole in a `Rows` (for one too big
 for that, see [Streaming](#streaming)): `rows.count`, `rows.columns`
@@ -917,6 +928,7 @@ cells by row and column index; `pg.col(rows, "name")` finds an index.
 | `pg.get_float(rows, r, c)` | `float4`, `float8`, `numeric`, the integer types |
 | `pg.get_bool(rows, r, c)` | `bool` |
 | `pg.get_bytes(rows, r, c)` | `bytea` |
+| `pg.get_time(rows, r, c)` | `timestamptz` as a `timez.Time` (`result`: err for infinity or a BC date); a `timestamp` without a zone is read as UTC |
 | `pg.is_null(rows, r, c)` | whether the cell is NULL |
 
 The getters **panic** on NULL, on a column of a type they do not read,
@@ -2229,7 +2241,7 @@ any signal-handling program.
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [net](packages/net.md) -- compiler-provided, 33 public items
 - [os](packages/os.md) -- compiler-provided, 14 public items
-- [pg](packages/pg.md) -- source package, 52 public items
+- [pg](packages/pg.md) -- source package, 55 public items
 - [proc](packages/proc.md) -- compiler-provided, 6 public items
 - [redis](packages/redis.md) -- source package, 161 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items

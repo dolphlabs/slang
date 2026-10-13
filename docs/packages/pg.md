@@ -53,8 +53,9 @@ whole connection: DNS lookup, TCP connect, TLS handshake and login.
 **Parameters** travel separately from the SQL text, so a value can never
 be parsed as SQL, whatever it contains. Build them with `pg.arg_text(s)`,
 `arg_int(n)`, `arg_float(x)` (sent exactly, not rounded), `arg_bool(b)`,
-`arg_bytes(b)` (binary, for `bytea`) and `arg_null()`. A query with none
-takes `[]`.
+`arg_bytes(b)` (binary, for `bytea`), `arg_time(t)` (a `timez.Time`, for
+`timestamptz`; Postgres keeps microseconds) and `arg_null()`. A query with
+none takes `[]`.
 
 **Results** from `query` are buffered whole in a `Rows` (for one too big
 for that, see [Streaming](#streaming)): `rows.count`, `rows.columns`
@@ -69,6 +70,7 @@ cells by row and column index; `pg.col(rows, "name")` finds an index.
 | `pg.get_float(rows, r, c)` | `float4`, `float8`, `numeric`, the integer types |
 | `pg.get_bool(rows, r, c)` | `bool` |
 | `pg.get_bytes(rows, r, c)` | `bytea` |
+| `pg.get_time(rows, r, c)` | `timestamptz` as a `timez.Time` (`result`: err for infinity or a BC date); a `timestamp` without a zone is read as UTC |
 | `pg.is_null(rows, r, c)` | whether the cell is NULL |
 
 The getters **panic** on NULL, on a column of a type they do not read,
@@ -367,6 +369,10 @@ Sent in binary, so any byte values -- NULs included -- arrive intact. For a byte
 
 ### `fn arg_null() -> Arg`
 
+### `fn arg_time(t: timez.Time) -> Arg`
+
+An instant for a timestamptz parameter, as RFC 3339 in UTC. Postgres keeps microseconds: a finer fraction is rounded by the server.
+
 ### `fn query(c: Conn, sql: str, args: [Arg], deadline: until) -> result[Rows, str]`
 
 Runs one query with parameters ($1, $2, ...) through the extended protocol: the values travel separately from the SQL text, so they can never be parsed as SQL. Returns every row, buffered; for a result too big to hold at once, use stream().
@@ -439,9 +445,15 @@ The index of the column called `name`. Panics if there is none: the query and th
 
 Any column, in Postgres's text form: numbers, dates, uuid and json all arrive this way.
 
-### `fn get_int(rows: Rows, r: int, c: int) -> int`
+### `fn timestamp_rfc3339(cell: str, has_tz: bool) -> opt[str]`
 
-int2, int4, int8 and oid.
+int2, int4, int8 and oid. A timestamptz or timestamp cell as RFC 3339 text: Postgres writes "2026-10-13 09:30:15.123456+00" (a space, and an hour-only offset when the minutes are zero); this is "2026-10-13T09:30:15.123456+00:00". A timestamp without a time zone names no instant and is read as UTC, as Go's drivers read it. none for infinity, -infinity and BC dates, which a timez.Time cannot hold, and for text that is not a Postgres timestamp.
+
+### `fn get_time(rows: Rows, r: int, c: int) -> result[timez.Time, str]`
+
+The instant in a timestamptz (or timestamp, read as UTC) cell. err for another column type, infinity, a BC date, or a seconds-level offset.
+
+### `fn get_int(rows: Rows, r: int, c: int) -> int`
 
 ### `fn get_float(rows: Rows, r: int, c: int) -> float`
 
