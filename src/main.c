@@ -593,7 +593,7 @@ static int cmd_test(int argc, char **argv) {
 
     loader_set_test_target(treal);
     setenv("SLANG_TEST_RUNNER", "1", 1);
-    int rc = build(runner_src, runner_bin, 0, 0, 1, 0, 0);
+    int rc = build(runner_src, runner_bin, 0, keep, 1, 0, 0);
 
     char gen[PATH_MAX];
     snprintf(gen, sizeof(gen), "%s.gen.c", runner_bin);
