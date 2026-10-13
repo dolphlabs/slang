@@ -40,3 +40,4 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [sql](packages/sql.md): Package sql.
 - [strings](packages/strings.md): Package strings.
 - [time](packages/time.md): Package time.
+- [timez](packages/timez.md): Package timez.
