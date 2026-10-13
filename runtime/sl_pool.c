@@ -1242,6 +1242,8 @@ static void *sl_preempt_ticker_thread(void *arg) {
         interval.tv_sec = (time_t)(tick / 1000000000LL);
         interval.tv_nsec = (long)(tick % 1000000000LL);
         nanosleep(&interval, NULL);
+        if (sl_rt_tick_hook)
+            sl_rt_tick_hook();
         if (atomic_load_explicit(&sl_global_runq_count, memory_order_relaxed) == 0)
             continue;
         long long now = sl_rt_monotonic_ns();

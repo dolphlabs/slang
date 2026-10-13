@@ -15,6 +15,168 @@ static long long sl_time_wall(void) {
     return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
 }
 
+/* ---- the HTTP Date header (RFC 9110 6.6.1) ----
+ *
+ * An origin server with a clock sends Date on every response. It changes
+ * once a second, so one 29-byte IMF-fixdate ("Tue, 13 Oct 2026 09:30:15
+ * GMT") is kept for every thread, the way Go's net/http and fasthttp keep
+ * theirs: a seqlock over four atomic words.
+ *
+ * The preemption ticker keeps it current (sl_hd_tick, every 2 ms on its
+ * own thread), so a response reads no clock: it copies the words and
+ * checks the sequence did not move -- measured, the clock read was most of
+ * the date's cost on the fast write path. Until the ticker has published
+ * (or in a program whose ticker is not running), a reader reads the clock
+ * itself, and the first to see a new second publishes it through a CAS.
+ * A reader that finds a write in progress formats its own copy instead of
+ * waiting: no lock, no spin, no allocation, no thread-local. The words are
+ * atomics, so the copy is not a data race even when it loses. */
+#define SL_HD_LEN 29
+static _Atomic unsigned long long sl_hd_seq;      /* odd while a write is in progress */
+static _Atomic long long sl_hd_sec = -1;
+static _Atomic unsigned long long sl_hd_words[4]; /* 32 bytes; the date is the first 29 */
+
+static void sl_hd_format(long long sec, char out[32]) {
+    static const char *const wd = "ThuFriSatSunMonTueWed"; /* 1970-01-01 was a Thursday */
+    static const char *const mn = "JanFebMarAprMayJunJulAugSepOctNovDec";
+    long long days = sec >= 0 ? sec / 86400 : -((-sec + 86399) / 86400);
+    long long rem = sec - days * 86400;
+    int w = (int)(((days % 7) + 7) % 7);
+    /* civil_from_days, H. Hinnant */
+    long long z = days + 719468;
+    long long era = (z >= 0 ? z : z - 146096) / 146097;
+    long long doe = z - era * 146097;
+    long long yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    long long y = yoe + era * 400;
+    long long doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    long long mp = (5 * doy + 2) / 153;
+    int d = (int)(doy - (153 * mp + 2) / 5 + 1);
+    int m = (int)(mp < 10 ? mp + 3 : mp - 9);
+    if (m <= 2)
+        y++;
+    if (y < 0)
+        y = 0;
+    if (y > 9999)
+        y = 9999;
+    int hh = (int)(rem / 3600), mi = (int)(rem / 60 % 60), ss = (int)(rem % 60);
+    memset(out, 0, 32);
+    memcpy(out, wd + 3 * w, 3);
+    out[3] = ',';
+    out[4] = ' ';
+    out[5] = (char)('0' + d / 10);
+    out[6] = (char)('0' + d % 10);
+    out[7] = ' ';
+    memcpy(out + 8, mn + 3 * (m - 1), 3);
+    out[11] = ' ';
+    out[12] = (char)('0' + (int)(y / 1000));
+    out[13] = (char)('0' + (int)(y / 100 % 10));
+    out[14] = (char)('0' + (int)(y / 10 % 10));
+    out[15] = (char)('0' + (int)(y % 10));
+    out[16] = ' ';
+    out[17] = (char)('0' + hh / 10);
+    out[18] = (char)('0' + hh % 10);
+    out[19] = ':';
+    out[20] = (char)('0' + mi / 10);
+    out[21] = (char)('0' + mi % 10);
+    out[22] = ':';
+    out[23] = (char)('0' + ss / 10);
+    out[24] = (char)('0' + ss % 10);
+    memcpy(out + 25, " GMT", 4);
+}
+
+static _Atomic int sl_hd_ticked; /* the ticker has published at least once */
+
+static void sl_hd_publish(long long now, const char d[32], unsigned long long s1) {
+    unsigned long long w[4];
+    memcpy(w, d, 32);
+    for (int i = 0; i < 4; i++)
+        atomic_store_explicit(&sl_hd_words[i], w[i], memory_order_relaxed);
+    atomic_store_explicit(&sl_hd_sec, now, memory_order_relaxed);
+    atomic_store_explicit(&sl_hd_seq, s1 + 2, memory_order_release);
+}
+
+/* The ticker's hook: on its own native thread, never a task. */
+static void sl_hd_tick(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    long long now = (long long)ts.tv_sec;
+    unsigned long long s1 = atomic_load_explicit(&sl_hd_seq, memory_order_acquire);
+    if (atomic_load_explicit(&sl_hd_sec, memory_order_relaxed) != now && !(s1 & 1) &&
+        atomic_compare_exchange_strong_explicit(&sl_hd_seq, &s1, s1 + 1,
+                                                memory_order_acquire,
+                                                memory_order_relaxed)) {
+        char d[32];
+        sl_hd_format(now, d);
+        sl_hd_publish(now, d, s1);
+    }
+    atomic_store_explicit(&sl_hd_ticked, 1, memory_order_relaxed);
+}
+
+__attribute__((constructor)) static void sl_hd_register(void) {
+    sl_rt_tick_hook = sl_hd_tick;
+}
+
+static void sl_hd_current(char out[32]) {
+    if (atomic_load_explicit(&sl_hd_ticked, memory_order_relaxed)) {
+        unsigned long long s1 = atomic_load_explicit(&sl_hd_seq, memory_order_acquire);
+        if (!(s1 & 1)) {
+            unsigned long long w[4];
+            for (int i = 0; i < 4; i++)
+                w[i] = atomic_load_explicit(&sl_hd_words[i], memory_order_relaxed);
+            atomic_thread_fence(memory_order_acquire);
+            if (atomic_load_explicit(&sl_hd_seq, memory_order_relaxed) == s1) {
+                memcpy(out, w, 32);
+                return;
+            }
+        }
+    }
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    long long now = (long long)ts.tv_sec;
+    unsigned long long s1 = atomic_load_explicit(&sl_hd_seq, memory_order_acquire);
+    if (!(s1 & 1) && atomic_load_explicit(&sl_hd_sec, memory_order_relaxed) == now) {
+        unsigned long long w[4];
+        for (int i = 0; i < 4; i++)
+            w[i] = atomic_load_explicit(&sl_hd_words[i], memory_order_relaxed);
+        atomic_thread_fence(memory_order_acquire);
+        if (atomic_load_explicit(&sl_hd_seq, memory_order_relaxed) == s1) {
+            memcpy(out, w, 32);
+            return;
+        }
+    }
+    sl_hd_format(now, out);
+    if (!(s1 & 1) && atomic_load_explicit(&sl_hd_sec, memory_order_relaxed) < now &&
+        atomic_compare_exchange_strong_explicit(&sl_hd_seq, &s1, s1 + 1,
+                                                memory_order_acquire,
+                                                memory_order_relaxed)) {
+        sl_hd_publish(now, out, s1);
+    }
+}
+
+/* time.put_http_date(w, off): the current HTTP date into `w` at `off`.
+ * Returns off + 29 whether or not it fit, the probe/fill contract of
+ * http's put_* helpers: a zero-length probe wire counts, a real one
+ * writes. */
+static long long sl_time_put_http_date(sl_wire w, long long off) {
+    /* the probe pass sizes with a zero-length wire: no clock read */
+    if (off >= 0 && off <= w.len && w.len - off >= SL_HD_LEN) {
+        char d[32];
+        sl_hd_current(d);
+        memcpy(w.ptr + off, d, SL_HD_LEN);
+    }
+    return off + SL_HD_LEN;
+}
+
+/* time.http_date(): the same 29 bytes as a str. */
+static char *sl_time_http_date(void) {
+    char d[32];
+    sl_hd_current(d);
+    char *out = (char *)sl_gc_alloc_leaf_uninit(SL_HD_LEN + 1, NULL);
+    memcpy(out, d, SL_HD_LEN);
+    out[SL_HD_LEN] = 0;
+    return out;
+}
+
 /* Tier 11 fifth slice: time.sleep now PARKS the calling task
  * (sl_task_park/sl_task_resume, runtime_pool.c) instead of blocking
  * the OS thread in nanosleep. Unlike chan, nothing else ever

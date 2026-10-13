@@ -32,6 +32,8 @@ int native_is_leaf(const char *pkg, const char *name) {
         "strings.find", "strings.rfind", "strings.contains",
         "strings.has_prefix", "strings.has_suffix", "strings.count",
         "strings.find_field",
+        /* reads the clock and the date cache's atomics; never allocates */
+        "time.put_http_date",
     };
     size_t pl = strlen(pkg);
     for (size_t i = 0; i < sizeof(leaves) / sizeof(leaves[0]); i++) {

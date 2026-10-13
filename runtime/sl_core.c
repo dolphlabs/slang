@@ -1002,6 +1002,12 @@ static void sl_cpu_detect(void) {
  * promptly on IO. */
 #define SL_PREEMPT_QUANTUM_DEFAULT_NS 10000000LL
 #define SL_PREEMPT_TICK_DEFAULT_NS 2000000LL
+
+/* Called by the preemption ticker (sl_pool.c) on every tick, from its own
+ * native thread: periodic work that must not cost a request anything.
+ * Set at most once, by a constructor, before main and before any thread
+ * exists (sl_time.c's HTTP date). */
+static void (*sl_rt_tick_hook)(void) = NULL;
 #define SL_PREEMPT_SAMPLE_MASK 1023UL
 
 static long long sl_preempt_quantum_ns(void) {
