@@ -1106,22 +1106,32 @@ static void sl_rt_need_stack(size_t want) {
  * How much headroom is enough is not just `frame`. Two more terms:
  *   - SL_TASK_GUARD_MARGIN, so the first safepoint inside the function still
  *     finds the margin the rest of the runtime assumes;
- *   - SL_TASK_FRAME_PROBE. On macOS a frame over 4KB is allocated through
- *     ___chkstk_darwin, which probes one whole page BELOW the frame's lowest
- *     address. Measured, not inferred: a 4152-byte frame faulted at an address
- *     8248 bytes below rsp (rax = 0x1038, the frame; rcx = the probe) with
- *     8118 bytes of headroom -- frame + 4096 was needed, and asking for
- *     frame + margin passed the check and crashed anyway.
+ *   - the probe. On macOS a frame over 4KB is allocated through
+ *     ___chkstk_darwin, which probes BELOW the frame's lowest address. Off
+ *     the pthread's own stack (every task stack) its loop steps the probe
+ *     down a page per remaining page of frame, then restores the full frame
+ *     size and subtracts it again: the deepest probe is frame + 4096 per
+ *     loop step, up to about twice the frame. Measured: a 4152-byte frame
+ *     faulted 8248 bytes below rsp (one step), and a 9592-byte one -- a
+ *     600-row list literal at top level -- 17784 bytes below (two steps),
+ *     on a stack a flat frame + 4096 had grown to 16KB. So the reserve
+ *     adds the frame rounded up to whole pages (sl_rt_frame_probe), which
+ *     covers every step the loop can take.
  * Growth relocates the stack (frame pointers, the safepoint chain and every
  * live word that looks like an old-stack address are translated), and this
  * runs from the same kind of place the existing growth points do -- a call
  * site in generated code -- so it is as safe as they are. */
 #define SL_TASK_FRAME_PROBE 4096
+static size_t sl_rt_frame_probe(size_t frame) {
+    size_t pages = (frame + SL_TASK_FRAME_PROBE - 1) / SL_TASK_FRAME_PROBE;
+    return (pages ? pages : 1) * SL_TASK_FRAME_PROBE;
+}
+
 static void sl_rt_stack_reserve(size_t frame) {
     sl_task *t = SL_RT_TLS_CUR();
     if (!t || !t->stack_base)
         return;
-    size_t want = frame + SL_TASK_FRAME_PROBE + SL_TASK_GUARD_MARGIN;
+    size_t want = frame + sl_rt_frame_probe(frame) + SL_TASK_GUARD_MARGIN;
     for (;;) {
         char probe;
         if ((uintptr_t)&probe - (uintptr_t)t->stack_base >= want)

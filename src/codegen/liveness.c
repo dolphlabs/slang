@@ -360,6 +360,54 @@ static const char **call_arg_expects(CG *cg, Expr *e) {
  * have, or infer_type throws "cannot infer the type of ..." on
  * perfectly valid programs (confirmed: tests/struct_field_expect
  * failed exactly this way before this bracketing was added). */
+/* Whether `e` can contain a node whose recorded live set codegen reads --
+ * a call's safepoint bracket. Allocation itself never collects (a
+ * collection runs at a call's safepoint, or scans an async-preempted
+ * stack conservatively), so a tree of literals, names, operators and
+ * nested literals has none. Conservative: any kind not listed counts. */
+static int may_safepoint(Expr *e) {
+    if (!e) return 0;
+    switch (e->kind) {
+    case EX_INT:
+    case EX_FLOAT:
+    case EX_STRING:
+    case EX_BYTES:
+    case EX_BOOL:
+        return 0;
+    case EX_IDENT:
+        return !strcmp(e->as.ident.name, "none");
+    case EX_UNARY:
+        return may_safepoint(e->as.unary.operand);
+    case EX_CAST:
+        return may_safepoint(e->as.cast.operand);
+    case EX_FIELD:
+        return may_safepoint(e->as.field.base);
+    case EX_BINARY:
+        return may_safepoint(e->as.binary.lhs) ||
+               may_safepoint(e->as.binary.rhs);
+    case EX_LIST:
+        for (int i = 0; i < e->as.list.nelems; i++)
+            if (may_safepoint(e->as.list.elems[i])) return 1;
+        return 0;
+    case EX_STRUCTLIT:
+        for (int i = 0; i < e->as.structlit.nfields; i++)
+            if (may_safepoint(e->as.structlit.vals[i])) return 1;
+        return 0;
+    default:
+        return 1;
+    }
+}
+
+/* A literal is static data: nothing to root while a sibling runs. gen_list
+ * gives one no temp, so it must never be pending (it would have no
+ * registered temp to put in a root list). */
+static int is_const_literal(Expr *e) {
+    if (e->kind == EX_UNARY)
+        e = e->as.unary.operand;
+    return e->kind == EX_INT || e->kind == EX_FLOAT || e->kind == EX_BOOL ||
+           e->kind == EX_STRING;
+}
+
 static LiveSet *process_children_reverse(CG *cg, Expr **children, int n,
                                          LiveSet *live_out,
                                          const char **expects) {
@@ -382,15 +430,31 @@ static LiveSet *process_children_reverse(CG *cg, Expr **children, int n,
      *
      * Phase 1 (forward, left-to-right): for each child i, snapshot
      * the accumulated pending set from every STRICTLY EARLIER sibling
-     * as `before[i]`. */
+     * as `before[i]`.
+     *
+     * A marker only matters to a safepoint in a LATER sibling, so a
+     * child with no such sibling gets none. Without that, a list literal
+     * of n nested literals built n sets of up to n markers each -- 4,000
+     * rows took 6 s and 600 MB to compile -- for brackets that do not
+     * exist. */
     int *needs_pending = (int *)xmalloc(sizeof(int) * (size_t)n);
     LiveSet **before = (LiveSet **)xmalloc(sizeof(LiveSet *) * (size_t)n);
+    int *later_safepoint = (int *)xmalloc(sizeof(int) * (size_t)n);
+    int seen = 0;
+    for (int i = n - 1; i >= 0; i--) {
+        later_safepoint[i] = seen;
+        seen = seen || may_safepoint(children[i]);
+    }
     LiveSet *acc = ls_new();
     for (int i = 0; i < n; i++) {
         const char *exp_i = expects ? expects[i] : NULL;
         const char *saved = expect_push(cg, exp_i);
-        needs_pending[i] = !is_bare_ident(children[i]) &&
-                           type_has_gc_roots(cg, infer_type(cg, children[i]));
+        /* inferred whether or not a marker is wanted, as before, so a
+         * type error is reported where it always was */
+        int gc = !is_bare_ident(children[i]) &&
+                 type_has_gc_roots(cg, infer_type(cg, children[i]));
+        needs_pending[i] = gc && later_safepoint[i] &&
+                           !is_const_literal(children[i]);
         cg->expect = saved;
         before[i] = acc;
         if (needs_pending[i]) {
