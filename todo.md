@@ -608,12 +608,13 @@ Found building zokor's logger (2026-10-12), not fixed:
   like http's `put_str` that only wraps a builtin: about 16 ns each, a
   dozen per response write. Inferring leaf slang functions (no allocation,
   no park, only leaf callees) would make them free.
-- [ ] **Signed `+`, `-`, `*` overflow is undefined in the generated C.** The
-  README promises two's-complement wrap, but slangc does not pass
-  `-fwrapv` (or compute in unsigned), so at -O3 the C compiler may assume
-  no overflow: `x + 1 > x` can fold to true, and a user's own overflow
-  check can be optimised out. Measure `-fwrapv`'s cost before turning it
-  on.
+- [x] **Signed `+`, `-`, `*` overflow wraps in the generated C**
+  (fix/signed-overflow-wrap). slangc passes `-fwrapv`, so the C compiler
+  keeps the README's two's-complement promise and no longer deletes an
+  overflow check written in slang. Measured ABBA x3 after a warm-up: JSON
+  +0.9%, FNV loop -3.3%, compute arena +0.1%, division loop +0.2%,
+  concurrent_compute +0.2%, each inside its run-to-run spread.
+  tests/signed_overflow_wraps.
 - [ ] **An `extern fn` named like a libc function the runtime's headers
   declare** (`strlen`, `atoi`) fails as raw C output: "conflicting types
   for 'strlen'". slangc should say the name is taken by C and how to
