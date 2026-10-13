@@ -615,10 +615,11 @@ Found building zokor's logger (2026-10-12), not fixed:
   +0.9%, FNV loop -3.3%, compute arena +0.1%, division loop +0.2%,
   concurrent_compute +0.2%, each inside its run-to-run spread.
   tests/signed_overflow_wraps.
-- [ ] **An `extern fn` named like a libc function the runtime's headers
-  declare** (`strlen`, `atoi`) fails as raw C output: "conflicting types
-  for 'strlen'". slangc should say the name is taken by C and how to
-  declare it (matching C types), or rename it with a link name.
+- [x] **An `extern fn` may share a name with a libc declaration**
+  (fix/extern-name-clash). Each extern fn is declared under a C name of
+  its own (`sl_x_<name>`) bound to the symbol with an assembler label, so
+  a header's prototype with other C types (`strlen`'s size_t) no longer
+  clashes. tests/extern_libc_names.
 - [x] **`??` printed as `'^` in diagnostics** (fix/qq-token-name). The
   token name held the C trigraph for `^`; it is escaped now.
   tests/fail_qq_token_name.

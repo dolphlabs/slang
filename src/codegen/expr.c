@@ -18,7 +18,7 @@ char *gen_ident_name(CG *cg, const char *name, int line) {
             if (!g) {
                 FuncSig *fs = sig_find_in(cg, pkg, right);
                 if (fs && fs->is_pub && !fs->method_of)
-                    return fs->is_extern ? xstrdup(fs->name)
+                    return fs->is_extern ? xasprintf("sl_x_%s", fs->name)
                                          : mangle_func(fs->pkg, fs->name);
             }
             if (!g || !g->is_pub)
@@ -42,7 +42,7 @@ char *gen_ident_name(CG *cg, const char *name, int line) {
          * infer_ident_name: variables and globals first. */
         FuncSig *fs = sig_find_in(cg, cg->cur_pkg, name);
         if (fs && !fs->method_of)
-            return fs->is_extern ? xstrdup(fs->name)
+            return fs->is_extern ? xasprintf("sl_x_%s", fs->name)
                                  : mangle_func(fs->pkg, fs->name);
     }
     return sanitize_ident(name);
@@ -1363,7 +1363,7 @@ have_sig:;
     StrBuf sb;
     sb_init(&sb);
     char *mangled = callee ? callee
-                           : sig->is_extern ? xstrdup(sig->name)
+                           : sig->is_extern ? xasprintf("sl_x_%s", sig->name)
                                             : mangle_sig(sig);
     sb_append(&sb, mangled);
     sb_putc(&sb, '(');
@@ -1466,7 +1466,7 @@ char *gen_method(CG *cg, Expr *e) {
     StrBuf sb;
     sb_init(&sb);
     sb_append(&sb, callee ? callee
-                          : sig->is_extern ? xstrdup(sig->name)
+                          : sig->is_extern ? xasprintf("sl_x_%s", sig->name)
                                            : mangle_sig(sig));
     sb_putc(&sb, '(');
     if (selfexpr)
