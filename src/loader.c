@@ -624,7 +624,13 @@ int load_packages(const char *main_file, PkgList *out) {
     if (!realpath(dir, dir_real))
         load_error("cannot resolve directory of '%s'", main_file);
 
-    char *proot = project_find_root(dir_real);
+    /* `slangc test` compiles a generated runner that lives in a temporary
+     * directory, outside any project. The pins that matter are the ones
+     * of the package under test, so its project is the one to load;
+     * walking up from the runner found none, and a package importing a
+     * pinned dependency could not run its own tests. */
+    char *proot = project_find_root(loader_test_target ? loader_test_target
+                                                       : dir_real);
     if (proot)
         ld.project = project_load(proot);
 

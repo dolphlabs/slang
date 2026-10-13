@@ -2579,6 +2579,10 @@ ok: 2 passed (190us)
   time, so output stays in order.
 - **`*_test.sl` files never reach a normal build.** Test helpers can't leak
   into a program, and a test file's imports can't add link flags to one.
+- **Pinned dependencies work.** The runner is generated in a temporary
+  directory, but its pins come from the project of the package under test,
+  so a package that imports a `slang.project` pin runs its tests like any
+  other (after `slangc get`).
 - **Programs are testable too.** When the package is a program rather than
   a library, `slangc test` does not run its top-level statements: the test
   runner is `main`. Functions, structs and methods are all there.

@@ -197,6 +197,23 @@ else
     fail=1
 fi
 
+# `slangc test` on a package that imports a pinned dependency. The runner
+# it generates lives in a temporary directory, outside the project, so the
+# pins have to come from the package under test's project.
+mkdir -p "$NEWDIR/getproj/lib"
+printf 'import "demo";\n\npub fn greet() -> str {\n    return demo.hi();\n}\n' \
+    >"$NEWDIR/getproj/lib/lib.sl"
+printf 'fn test_greet_uses_the_pinned_package() {\n    assert(greet() == "hi");\n}\n' \
+    >"$NEWDIR/getproj/lib/lib_test.sl"
+out=$(cd "$NEWDIR/getproj" && SLANG_CACHE="$NEWDIR/cache" "$OLDPWD/slangc" test lib 2>&1)
+if printf '%s\n' "$out" | grep -q '^ok: 1 passed'; then
+    echo "PASS slangc test (a package importing a pinned dependency)"
+else
+    echo "FAIL slangc test (a package importing a pinned dependency)"
+    printf '%s\n' "$out" | sed 's/^/  /'
+    fail=1
+fi
+
 # A package may omit non-runtime directories from its distributable checkout.
 # The root manifest remains available for transitive dependency resolution,
 # included source still compiles, and included source remains hash-verified.
