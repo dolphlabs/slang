@@ -529,12 +529,25 @@ Found building zokor's logger (2026-10-12), not fixed:
   formatted into a fixed 16 KB buffer, so a long literal or expression
   became C that did not compile, reported as raw cc errors. It now sizes
   the buffer from the formatted length. tests/long_literal.
-- [ ] **A large list literal overflows the task stack.** Each element of a
-  nested list literal gets its own C temporary in one statement
-  expression, all on the stack: a 600 x 3 `[[int]]` literal at top level
-  dies with SIGBUS in the 8 KB task stack's guard page. Build big literals
-  element by element into the list (or from a static table) instead of as
-  one expression with a temporary per element.
+- [x] **A large list literal overflowed the task stack** (fixed in
+  fix/list-literal-stack). The literal was not the bug: its 9.6 KB frame
+  got an entry guard, but `sl_rt_stack_reserve` allowed frame + 4 KB for
+  macOS's `___chkstk_darwin` probe, and off the pthread stack that probe
+  reaches frame + 4 KB per loop step (up to twice the frame: 17,784 bytes
+  below rsp for 9,592). Any guarded frame over 8 KB on macOS could die in
+  a window of sizes (600 and 1,200 rows did; 700-1,000 fit their stack).
+  The reserve now adds the frame rounded up to pages. Linux has no
+  chkstk; unaffected. tests/big_list_literal.
+- [x] **Compiling a large literal was quadratic** (same branch). Every
+  sibling became a liveness "pending" marker, so n rows built n sets of up
+  to n markers: 4,000 rows took 6.2 s and 600 MB in slangc alone. Markers
+  are now made only when a later sibling can reach a call safepoint, and
+  constant elements get no C temporary: 0.16 s and 90 MB; the whole
+  build 26.6 s / 1.2 GB -> 13.2 s / 214 MB, the rest clang optimising
+  4,000 nested allocations.
+- [ ] **`??` prints as `'^` in diagnostics.** src/lexer.c:574 writes
+  `"'??'"`, and `??'` is a trigraph under `-std=c11` (the build warns:
+  "trigraph converted to '^' character"). Write `"'?\?'"`.
 - [ ] **str literals take no `\x` or `\u` escape** ("unknown escape
   sequence"); a terminal colour needs `to_str(b"\x1b[32m")`. JSON-style
   `\u001b` and `\x1b` are what a model writes first.

@@ -1717,6 +1717,14 @@ char *gen_slice(CG *cg, Expr *e) {
                      base_name, start, end);
 }
 
+/* A number, bool or string literal, or a negated number literal. */
+static int is_const_literal(Expr *e) {
+    if (e->kind == EX_UNARY)
+        e = e->as.unary.operand;
+    return e->kind == EX_INT || e->kind == EX_FLOAT || e->kind == EX_BOOL ||
+           e->kind == EX_STRING;
+}
+
 char *gen_list(CG *cg, Expr *e, const char *expect_elem) {
     /* elements expect the ELEMENT type, exactly as infer_type's EX_LIST
      * gives it them: `none` in [some(1), none] against [opt[int]] */
@@ -1745,8 +1753,11 @@ char *gen_list(CG *cg, Expr *e, const char *expect_elem) {
         const char *ti = infer_type(cg, e->as.list.elems[i]);
         char *el = gen_expr(cg, e->as.list.elems[i]);
         el = maybe_cast(cg, t0, ti, el);
-        names[i] = sequence_one(cg, seq_id, i, ec, t0, el, e->as.list.elems[i],
-                                &prelude);
+        /* A constant has no evaluation order to keep: it goes straight
+         * into the initializer, so a table of numbers is not one C
+         * temporary per cell. */
+        names[i] = sequence_one(cg, is_const_literal(e->as.list.elems[i]) ? -1 : seq_id,
+                                i, ec, t0, el, e->as.list.elems[i], &prelude);
     }
     cg->ambient_count = ambient_mark;
     cg->expect = outer;
