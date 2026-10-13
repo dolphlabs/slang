@@ -188,6 +188,10 @@ typedef struct {
      * mangle_struct hashes a struct instance's canonical name, so two
      * instantiations of one function never share a name. */
     const char *inst_key;
+    /* A leaf (compute_leaf_fns): its body cannot allocate, park, loop or
+     * call anything but builtins and leaf natives, so a call to it is no
+     * collection point and gets no safepoint bracket. */
+    int leaf;
 } FuncSig;
 
 /* One instance of a generic method: a body no package declares, which
@@ -833,6 +837,8 @@ void gen_stmt(CG *cg, Stmt *s);
 void gen_stmts(CG *cg, Stmt **stmts, int count);
 int block_leaves_scope(CG *cg, Block *b);
 void compute_noreturn(CG *cg, Package *pkgs, int npkgs);
+void compute_leaf_fns(CG *cg, Package *pkgs, int npkgs);
+int user_leaf_call(CG *cg, Expr *e);
 void gen_block(CG *cg, Block *b);
 void emit_runtime_file(CG *cg, const char *name);
 void emit_prelude(CG *cg);

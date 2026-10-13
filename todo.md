@@ -604,10 +604,14 @@ Found building zokor's logger (2026-10-12), not fixed:
   reproduced with one worker under GC pressure; the minor verifier cannot
   see a missing root. `slangc test --keep` now keeps the runner's C too.
   tests/method_receiver_root.
-- [ ] **A call to a slang function is always a safepoint**, even one
-  like http's `put_str` that only wraps a builtin: about 16 ns each, a
-  dozen per response write. Inferring leaf slang functions (no allocation,
-  no park, only leaf callees) would make them free.
+- [x] **A call to a leaf slang function is no safepoint**
+  (perf/leaf-functions). compute_leaf_fns marks a function whose body
+  cannot allocate, park, loop or call anything but builtins and leaf
+  natives (a small typing tells a numeric `+` from a str one); calls to
+  it get no bracket, like a leaf native's. http's put_str is one: the
+  write path, rendered into an arena twice (ABBA x4), went from 2,004 to
+  1,077 ns for a zokor-shaped response and from 661 to 385 ns for the
+  fast shape. tests/leaf_functions.
 - [x] **Signed `+`, `-`, `*` overflow wraps in the generated C**
   (fix/signed-overflow-wrap). slangc passes `-fwrapv`, so the C compiler
   keeps the README's two's-complement promise and no longer deletes an

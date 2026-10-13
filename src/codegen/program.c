@@ -277,6 +277,7 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
     /* After the imports are known, before any body is checked: a guard
      * whose else ends in die(..) must already know die never returns. */
     compute_noreturn(cg, pkgs, npkgs);
+    compute_leaf_fns(cg, pkgs, npkgs);
 }
 
 /* Type of a constant-literal initializer, or error. */
@@ -1639,4 +1640,209 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
                     "copy in the binary\n",
                     ninst, threshold);
     }
+}
+
+/* ---- leaf functions ------------------------------------------------
+ *
+ * A call is a safepoint bracket because the callee might collect. A
+ * function that provably cannot -- no allocation, no park, no loop (its
+ * back edge polls), and no call but to builtins and leaf natives -- is a
+ * leaf, and calls to it go unbracketed like calls to a leaf native
+ * (native_is_leaf). That is most small helpers on a hot path: http's
+ * put_str is one wire_put and one addition, and was a 16 ns bracket on
+ * every header written.
+ *
+ * Decided on the source, conservatively: a small typing of the body
+ * (parameters and lets) tells a numeric `+` from a str one, which
+ * allocates. Anything not listed -- a loop, a guard, an index, a method,
+ * a str concat, a call to another slang function (no recursion, so no
+ * stack growth the missing safepoints would have checked) -- makes the
+ * function not a leaf. A leaf's own frame is small, inside the margin
+ * every safepoint guarantees, like a leaf native's. */
+
+typedef struct {
+    const char *names[64];
+    const char *types[64];
+    int n;
+} LeafEnv;
+
+static const char *leaf_env_get(LeafEnv *env, const char *name) {
+    for (int i = env->n - 1; i >= 0; i--)
+        if (!strcmp(env->names[i], name))
+            return env->types[i];
+    return NULL;
+}
+
+static int leaf_env_put(LeafEnv *env, const char *name, const char *type) {
+    if (env->n >= 64)
+        return 0;
+    env->names[env->n] = name;
+    env->types[env->n] = type;
+    env->n++;
+    return 1;
+}
+
+static int leaf_scalar(const char *t) {
+    return t && (is_int(t) || is_flt(t) || !strcmp(t, "bool"));
+}
+
+/* The type of `e` when it is leaf-safe, else NULL. */
+static const char *leaf_expr(CG *cg, LeafEnv *env, Expr *e) {
+    if (!e)
+        return NULL;
+    switch (e->kind) {
+    case EX_INT:
+        return e->as.int_lit.enum_ty ? NULL : "int";
+    case EX_FLOAT:
+        return "float";
+    case EX_BOOL:
+        return "bool";
+    case EX_STRING:
+        return "str";
+    case EX_IDENT:
+        return leaf_env_get(env, e->as.ident.name);
+    case EX_UNARY: {
+        const char *t = leaf_expr(cg, env, e->as.unary.operand);
+        return leaf_scalar(t) ? t : NULL;
+    }
+    case EX_BINARY: {
+        const char *op = e->as.binary.op;
+        const char *a = leaf_expr(cg, env, e->as.binary.lhs);
+        const char *b = leaf_expr(cg, env, e->as.binary.rhs);
+        if (!a || !b)
+            return NULL;
+        if (!strcmp(op, "&&") || !strcmp(op, "||"))
+            return (!strcmp(a, "bool") && !strcmp(b, "bool")) ? "bool" : NULL;
+        if (!strcmp(op, "==") || !strcmp(op, "!=") || !strcmp(op, "<") ||
+            !strcmp(op, ">") || !strcmp(op, "<=") || !strcmp(op, ">=")) {
+            /* str comparison is strcmp: no allocation */
+            if (!strcmp(a, b) && (leaf_scalar(a) || is_str(a)))
+                return "bool";
+            return NULL;
+        }
+        /* arithmetic and bit operators: same scalar type only (a str `+`
+           allocates; mixed widths are left to the general path) */
+        if (!strcmp(a, b) && (is_int(a) || is_flt(a)) && strcmp(op, "??"))
+            return a;
+        return NULL;
+    }
+    case EX_FIELD: {
+        const char *bt = leaf_expr(cg, env, e->as.field.base);
+        if (!bt)
+            return NULL;
+        StructDef *sd = struct_find_canon(cg, bt);
+        if (!sd)
+            return NULL;
+        for (int i = 0; i < sd->nfields; i++)
+            if (!strcmp(sd->fields[i], e->as.field.name))
+                return sd->ftypes[i];
+        return NULL;
+    }
+    case EX_CALL: {
+        const char *name = e->as.call.name;
+        for (int i = 0; i < e->as.call.nargs; i++)
+            if (!leaf_expr(cg, env, e->as.call.args[i]))
+                return NULL;
+        if (!strcmp(name, "len") || !strcmp(name, "wire_put") ||
+            !strcmp(name, "wire_put_bytes"))
+            return "int";
+        char *left, *right;
+        if (split_dotted(name, &left, &right)) {
+            const char *pkg = import_try(cg, left);
+            if (pkg && is_native_pkg(cg, pkg) && native_is_leaf(pkg, right)) {
+                const NatSig *sigs[256];
+                int n = native_sigs_of(pkg, sigs, 256);
+                for (int i = 0; i < n; i++)
+                    if (!strcmp(sigs[i]->name, right))
+                        return sigs[i]->ret;
+            }
+        }
+        return NULL;
+    }
+    default:
+        return NULL;
+    }
+}
+
+static int leaf_block(CG *cg, LeafEnv *env, Block *b);
+
+static int leaf_stmt(CG *cg, LeafEnv *env, Stmt *s) {
+    switch (s->kind) {
+    case ST_LET: {
+        const char *t = leaf_expr(cg, env, s->as.let.init);
+        if (!t || s->as.let.stack)
+            return 0;
+        if (s->as.let.type_ann) {
+            const char *ann = canon_type(cg, s->as.let.type_ann, s->line);
+            if (strcmp(ann, t))
+                return 0;
+        }
+        return leaf_env_put(env, s->as.let.name, t);
+    }
+    case ST_ASSIGN: {
+        Expr *tg = s->as.assign.target;
+        if (tg->kind != EX_IDENT)
+            return 0;
+        const char *tt = leaf_env_get(env, tg->as.ident.name);
+        const char *vt = leaf_expr(cg, env, s->as.assign.value);
+        return tt && vt && !strcmp(tt, vt);
+    }
+    case ST_RETURN:
+        return !s->as.ret.value || leaf_expr(cg, env, s->as.ret.value) != NULL;
+    case ST_EXPR:
+        return leaf_expr(cg, env, s->as.expr_stmt.expr) != NULL;
+    case ST_IF: {
+        if (s->as.if_stmt.from_guard)
+            return 0;
+        const char *ct = leaf_expr(cg, env, s->as.if_stmt.cond);
+        if (!ct || strcmp(ct, "bool"))
+            return 0;
+        LeafEnv inner = *env;
+        if (!leaf_block(cg, &inner, s->as.if_stmt.then_blk))
+            return 0;
+        if (s->as.if_stmt.else_blk) {
+            LeafEnv inner2 = *env;
+            if (!leaf_block(cg, &inner2, s->as.if_stmt.else_blk))
+                return 0;
+        }
+        return 1;
+    }
+    default:
+        return 0;
+    }
+}
+
+static int leaf_block(CG *cg, LeafEnv *env, Block *b) {
+    if (!b)
+        return 1;
+    for (int i = 0; i < b->count; i++)
+        if (!leaf_stmt(cg, env, b->stmts[i]))
+            return 0;
+    return 1;
+}
+
+void compute_leaf_fns(CG *cg, Package *pkgs, int npkgs) {
+    const char *saved = cg->cur_pkg;
+    for (int i = 0; i < npkgs; i++) {
+        if (pkgs[i].native)
+            continue;
+        cg->cur_pkg = pkgs[i].name;
+        Program *prog = pkgs[i].prog;
+        for (int j = 0; j < prog->nfuncs; j++) {
+            FuncDecl *f = prog->funcs[j];
+            if (f->ntparams || f->is_extern || !f->body || !f->sig_idx)
+                continue;
+            FuncSig *sig = cg->sigs.items[f->sig_idx - 1];
+            if (sig->method_of)
+                continue;
+            LeafEnv env;
+            env.n = 0;
+            int ok = 1;
+            for (int k = 0; k < sig->nparams && ok; k++)
+                ok = leaf_env_put(&env, f->params[k], sig->param_slang[k]);
+            if (ok && leaf_block(cg, &env, f->body))
+                sig->leaf = 1;
+        }
+    }
+    cg->cur_pkg = saved;
 }
