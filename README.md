@@ -349,8 +349,9 @@ guard let user = find(id) else {
   `x as i8`, `n as u32`, `3.9 as i32`. Integer literals that fit the
   target width may initialize/pass without a cast.
 - **Wrap on cast/overflow**: casts and arithmetic wrap two's-complement
-  style. `(0 as u8) - (1 as u8)` is `255`; `300 as i8` is `44`. Float ->
-  int casts truncate toward zero.
+  style. `(0 as u8) - (1 as u8)` is `255`; `300 as i8` is `44`; a signed
+  type's minimum divided by `-1` is the minimum again, remainder `0`.
+  Float -> int casts truncate toward zero.
 - Mixed-width arithmetic promotes to the wider operand; same-width
   signed/unsigned mixes resolve to the unsigned type (C semantics).
 
