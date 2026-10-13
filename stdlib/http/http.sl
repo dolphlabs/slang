@@ -3051,7 +3051,7 @@ fn fast_conn(r: Response) -> str {
 // matched: any value (or none) rides along through `conn`, so it
 // never changes the shape decision.
 fn emit_into(w: wire, status: i32, status_text: str, content_type: str,
-             body: bytes, conn: str) -> int {
+             body: bytes, conn: str, send_body: bool) -> int {
     let off = 0;
     off = put_str(w, off, "HTTP/1.1 ");
     off = put_int(w, off, status);
@@ -3073,7 +3073,9 @@ fn emit_into(w: wire, status: i32, status_text: str, content_type: str,
     off = put_str(w, off, "\r\nConnection: ");
     off = put_str(w, off, conn);
     off = put_str(w, off, "\r\n\r\n");
-    off = put_bytes(w, off, body);
+    if send_body {
+        off = put_bytes(w, off, body);
+    }
     return off;
 }
 
@@ -3094,7 +3096,7 @@ fn maybe_special_line(line: str) -> bool {
            strings.has_prefix(line, "l") || strings.has_prefix(line, "L");
 }
 
-fn emit(r: Response, w: wire, add_date: bool) -> int {
+fn emit(r: Response, w: wire, add_date: bool, send_body: bool) -> int {
     let off = 0;
     off = put_str(w, off, "HTTP/1.1 ");
     off = put_int(w, off, r.status);
@@ -3159,7 +3161,9 @@ fn emit(r: Response, w: wire, add_date: bool) -> int {
     off = put_str(w, off, "\r\nConnection: ");
     off = put_str(w, off, conn);
     off = put_str(w, off, "\r\n\r\n");
-    off = put_bytes(w, off, r.body);
+    if send_body {
+        off = put_bytes(w, off, r.body);
+    }
     return off;
 }
 
@@ -3377,31 +3381,51 @@ fn clean_response(r: Response) -> Response {
 }
 
 pub fn write(c: &mut link, r0: Response, a: &mut arena, deadline: until) -> result[int, fault] {
+    return write_framed(c, r0, a, deadline, true);
+}
+
+// The answer to a HEAD request: the head `write` would send for `r0` --
+// Content-Length the length of its body -- and no body (RFC 9110 9.3.2:
+// HEAD's Content-Length is the one GET would carry). Give it the
+// response GET would produce, body and all.
+pub fn write_head(c: &mut link, r0: Response, a: &mut arena, deadline: until) -> result[int, fault] {
+    return write_framed(c, r0, a, deadline, false);
+}
+
+fn write_framed(c: &mut link, r0: Response, a: &mut arena, deadline: until,
+                send_body: bool) -> result[int, fault] {
     let r = clean_response(r0);
     if is_fast_response(r) {
         let ct = fast_content_type(r);
         let conn = fast_conn(r);
         let probe = a.wire(0);
-        let need = emit_into(probe, r.status, r.status_text, ct, r.body, conn);
+        let need = emit_into(probe, r.status, r.status_text, ct, r.body, conn, send_body);
         if need > a.left() {
-            let raw = serialize_sized(r);
-            return c.send_bytes(raw, deadline);
+            return c.send_bytes(head_or_all(serialize_sized(r), r, send_body), deadline);
         }
         let w = a.wire(need);
-        emit_into(w, r.status, r.status_text, ct, r.body, conn);
+        emit_into(w, r.status, r.status_text, ct, r.body, conn, send_body);
         return c.send(w, deadline);
     }
     // decided once for both passes: the scan is per extra line
     let add_date = !has_date_line(r);
     let probe = a.wire(0);
-    let need = emit(r, probe, add_date);
+    let need = emit(r, probe, add_date, send_body);
     if need > a.left() {
-        let raw = serialize_sized(r);
-        return c.send_bytes(raw, deadline);
+        return c.send_bytes(head_or_all(serialize_sized(r), r, send_body), deadline);
     }
     let w = a.wire(need);
-    emit(r, w, add_date);
+    emit(r, w, add_date, send_body);
     return c.send(w, deadline);
+}
+
+// A serialized response without its body, for a HEAD answer too big for
+// the arena. A status with no content was written with no body already.
+fn head_or_all(raw: bytes, r: Response, send_body: bool) -> bytes {
+    if send_body || has_no_content(r.status) || len(r.body) == 0 {
+        return raw;
+    }
+    return raw[0..len(raw) - len(r.body)];
 }
 
 // `text_response` with a BYTES body: same shape, no `to_bytes` copy.
