@@ -88,6 +88,13 @@ let next = cron.next_after(t, berlin);             // opt[Time], DST-aware
   zone)` evaluates in the zone's wall time: a run in a skipped hour
   happens when the clock reaches it, and a repeated hour runs once.
 
+
+**In JSON and Postgres.** A `timez.Time` field of a struct is written by
+`json.encode` as an RFC 3339 string and read back by `json.decode` (see
+`json`). `pg.arg_time(t)` binds one for a `timestamptz` parameter and
+`pg.get_time(rows, r, c)` reads one out; `pg.timestamp_rfc3339(cell,
+has_tz)` turns Postgres's own timestamp text into RFC 3339.
+
 ## API
 
 ### `fn rfc3339(self: Time) -> str`
