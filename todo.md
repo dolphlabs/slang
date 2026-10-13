@@ -518,6 +518,12 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
 
 Found building zokor's logger (2026-10-12), not fixed:
 
+- [x] **`slangc test` could not test a package that imports a pin**
+  (found 2026-10-13 adding dolphlabs/jwt to zokor; fixed in
+  fix/test-project-pins). The generated runner lives in a temporary
+  directory, and the loader looked for `slang.project` from there, so
+  every pinned import failed with "cannot resolve import". In test mode
+  the project now comes from the package under test.
 - [ ] **str literals take no `\x` or `\u` escape** ("unknown escape
   sequence"); a terminal colour needs `to_str(b"\x1b[32m")`. JSON-style
   `\u001b` and `\x1b` are what a model writes first.
