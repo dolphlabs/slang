@@ -592,6 +592,14 @@ Found building zokor's logger (2026-10-12), not fixed:
   clock read. Cost, CPU only (render twice into an arena, ABBA x5): fast
   shape 566 -> 623 ns, zokor-shaped 1,770 -> 1,932 ns, about 1% of a
   request. tests/http_date, tests/runtime/test_http_date.
+- [x] **A method receiver is live across its call's arguments**
+  (fix/assert-rooting). Liveness added `r` in `r.m(f(), x)` only after
+  processing the arguments, so when the call was `r`'s last use, `f()`'s
+  safepoint did not root it. It is now in the live-out the arguments are
+  processed against. Found as a rare crash in zokor's CI (2026-10-13),
+  reproduced with one worker under GC pressure; the minor verifier cannot
+  see a missing root. `slangc test --keep` now keeps the runner's C too.
+  tests/method_receiver_root.
 - [ ] **A call to a slang function is always a safepoint**, even one
   like http's `put_str` that only wraps a builtin: about 16 ns each, a
   dozen per response write. Inferring leaf slang functions (no allocation,

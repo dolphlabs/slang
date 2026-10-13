@@ -706,25 +706,35 @@ static LiveSet *live_expr(CG *cg, Expr *e, LiveSet *live_out) {
             return cur;
         }
         const char **expects = call_arg_expects(cg, e);
-        LiveSet *cur = process_children_reverse(
-            cg, e->as.call.args, e->as.call.nargs, live_out, expects);
 
         /* Method-call receiver: 'p.method(args)' resolves 'left' (=p)
          * as a plain local use, exactly mirroring gen_call's own
          * split_dotted+import_try dispatch (a dotted call name whose
          * left part is NOT a package alias is a method call on that
-         * local). Contributes only a named-use addition (receivers in
-         * this language are always simple identifiers, never a
-         * sub-expression with its own safepoints), so it's safe to
-         * fold in without ordering sensitivity. */
+         * local). The call reads the receiver AFTER its arguments are
+         * evaluated, so it is live across every safepoint inside them:
+         * it goes into the live-out the arguments are processed
+         * against, not onto the result afterwards. Added afterwards, a
+         * receiver whose last use was this call was missing from the
+         * roots of a nested call in its arguments --
+         * `r.serve_id(req(...), id)` with `r` dead after it: a
+         * collection inside req() freed the router, and serve_id ran on
+         * reused memory (zokor's tests, under GC pressure; slang
+         * tests/method_receiver_root). */
+        LiveSet *args_out = live_out;
         char *left, *right;
         if (split_dotted(e->as.call.name, &left, &right)) {
             const char *pkg = import_try(cg, left);
             if (!pkg) {
                 LiveVar *recv = resolve_local_use(cg, left);
-                if (recv) ls_add_named(cur, recv);
+                if (recv) {
+                    args_out = ls_clone(live_out);
+                    ls_add_named(args_out, recv);
+                }
             }
         }
+        LiveSet *cur = process_children_reverse(
+            cg, e->as.call.args, e->as.call.nargs, args_out, expects);
 
         /* Tier 10: e->live_set must include not just live_out (what
          * survives AFTER this call returns) but everything gathered
