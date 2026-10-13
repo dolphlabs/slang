@@ -7,7 +7,9 @@ from `bytes`, or `read` from a connection into a caller-sized `wire`
 (the max request size). `read` takes the unconsumed prefix length and
 returns `Incoming` with leftover compacted to the front of the wire,
 so one connection can carry many requests. `write` serializes a
-`Response` through an arena. A request keeps its header block as it
+`Response` through an arena; `write_head` answers a HEAD request with the
+head `write` would send -- `Content-Length` the length of the body GET
+would carry, as RFC 9110 has it -- and no body. A request keeps its header block as it
 arrived; `header(req, name)` looks it up case-insensitively. A body is framed by
 `Content-Length` or by `Transfer-Encoding: chunked` (chunk extensions
 ignored, trailers read and discarded). `wants_close` follows HTTP/1.1
@@ -234,6 +236,10 @@ The last header line of a prebuilt static rendering: `date: ` and a date, refres
 ### `fn clean_field(s: str) -> str`
 
 ### `fn write(c: &mut link, r0: Response, a: &mut arena, deadline: until) -> result[int, fault]`
+
+### `fn write_head(c: &mut link, r0: Response, a: &mut arena, deadline: until) -> result[int, fault]`
+
+The answer to a HEAD request: the head `write` would send for `r0` -- Content-Length the length of its body -- and no body (RFC 9110 9.3.2: HEAD's Content-Length is the one GET would carry). Give it the response GET would produce, body and all.
 
 ### `fn text_response_bytes(status: i32, status_text: str, content_type: str, body: bytes) -> Response`
 

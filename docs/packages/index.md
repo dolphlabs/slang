@@ -2139,7 +2139,9 @@ from `bytes`, or `read` from a connection into a caller-sized `wire`
 (the max request size). `read` takes the unconsumed prefix length and
 returns `Incoming` with leftover compacted to the front of the wire,
 so one connection can carry many requests. `write` serializes a
-`Response` through an arena. A request keeps its header block as it
+`Response` through an arena; `write_head` answers a HEAD request with the
+head `write` would send -- `Content-Length` the length of the body GET
+would carry, as RFC 9110 has it -- and no body. A request keeps its header block as it
 arrived; `header(req, name)` looks it up case-insensitively. A body is framed by
 `Content-Length` or by `Transfer-Encoding: chunked` (chunk extensions
 ignored, trailers read and discarded). `wants_close` follows HTTP/1.1
@@ -2238,7 +2240,7 @@ any signal-handling program.
 - [encoding](packages/encoding.md) -- compiler-provided, 14 public items
 - [flags](packages/flags.md) -- source package, 23 public items
 - [fs](packages/fs.md) -- compiler-provided, 9 public items
-- [http](packages/http.md) -- source package, 57 public items
+- [http](packages/http.md) -- source package, 58 public items
 - [http2](packages/http2.md) -- source package, 122 public items
 - [httpc](packages/httpc.md) -- source package, 35 public items
 - [io](packages/io.md) -- compiler-provided, 12 public items
