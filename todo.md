@@ -614,9 +614,9 @@ Found building zokor's logger (2026-10-12), not fixed:
   declare** (`strlen`, `atoi`) fails as raw C output: "conflicting types
   for 'strlen'". slangc should say the name is taken by C and how to
   declare it (matching C types), or rename it with a link name.
-- [ ] **`??` prints as `'^` in diagnostics.** src/lexer.c:574 writes
-  `"'??'"`, and `??'` is a trigraph under `-std=c11` (the build warns:
-  "trigraph converted to '^' character"). Write `"'?\?'"`.
+- [x] **`??` printed as `'^` in diagnostics** (fix/qq-token-name). The
+  token name held the C trigraph for `^`; it is escaped now.
+  tests/fail_qq_token_name.
 - [ ] **str literals take no `\x` or `\u` escape** ("unknown escape
   sequence"); a terminal colour needs `to_str(b"\x1b[32m")`. JSON-style
   `\u001b` and `\x1b` are what a model writes first.
