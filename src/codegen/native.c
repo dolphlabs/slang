@@ -18,6 +18,30 @@ static const NatSig *find_sig(const NatSig *sigs, int len, const char *pkg,
 }
 
 /* Every signature of native package pkg, in table order (slangc doc). */
+/* Whether pkg.name is a pure C leaf. A call to one is not a
+ * safepoint: nothing in it can collect, so the bracket that roots live
+ * values and checks for a stop is pure cost (about 16 ns a call on the
+ * request path, where http checks header names with strings.has_prefix).
+ * A task async-preempted inside one is scanned conservatively, like any
+ * other C code in the program's text. */
+int native_is_leaf(const char *pkg, const char *name) {
+    /* Each one only reads its arguments: checked in runtime/sl_strings.c,
+     * where none allocates or calls out. Add a native here only after
+     * reading its C the same way. */
+    static const char *const leaves[] = {
+        "strings.find", "strings.rfind", "strings.contains",
+        "strings.has_prefix", "strings.has_suffix", "strings.count",
+        "strings.find_field",
+    };
+    size_t pl = strlen(pkg);
+    for (size_t i = 0; i < sizeof(leaves) / sizeof(leaves[0]); i++) {
+        const char *l = leaves[i];
+        if (!strncmp(l, pkg, pl) && l[pl] == '.' && !strcmp(l + pl + 1, name))
+            return 1;
+    }
+    return 0;
+}
+
 int native_sigs_of(const char *pkg, const NatSig **out, int max) {
     const struct { const NatSig *sigs; int len; } tabs[] = {
         {TIME_SIGS, TIME_SIGS_LEN},       {NET_SIGS, NET_SIGS_LEN},

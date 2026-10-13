@@ -542,6 +542,8 @@ typedef struct {
 } NatSig;
 
 int native_sigs_of(const char *pkg, const NatSig **out, int max);
+int native_is_leaf(const char *pkg, const char *name);
+int native_leaf_call(CG *cg, Expr *e);
 
 /* ------------------------------------------------------------------ */
 /* Per-package signatures and embedded runtime C source. Each native

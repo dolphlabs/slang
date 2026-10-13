@@ -763,7 +763,7 @@ for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood enc
             generics_pkg gc_nested_literal generics_methods \
             generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry loop_leaf_poll own_roots switch escape_roots \
             http_read_wire bytes_empty_literal gc_minor_barriers net_dns_records map_delete if_let \
-            literal_expect pending_sibling_type big_list_literal json_parity json_utf8 json_decode_budget \
+            literal_expect pending_sibling_type big_list_literal leaf_native_calls json_parity json_utf8 json_decode_budget \
             bytes json_deep_nesting gc_container_frontier gc_promotion_budget gc_chan_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks; do
     out="/tmp/sl_gcstress_${name}.out"
     if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
@@ -793,7 +793,7 @@ for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put e
             gc_nested_literal gc_stress gc_stat spawn_isolation maps json \
             json_int_exact flags method_recv method_recv_gc indirect_callee \
             http_read_wire bytes_empty_literal gc_minor_barriers net_dns_records map_delete if_let \
-            literal_expect pending_sibling_type big_list_literal json_parity json_utf8 json_decode_budget \
+            literal_expect pending_sibling_type big_list_literal leaf_native_calls json_parity json_utf8 json_decode_budget \
             bytes json_deep_nesting gc_container_frontier gc_promotion_budget gc_chan_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks; do
     out="/tmp/sl_nursery_${name}.out"
     if ! SLANG_GC_NURSERY_KB=16 ./slangc "tests/$name/main.sl" --run \
@@ -821,7 +821,7 @@ done
 echo "--- minor collections verified (SLANG_GC_VERIFY_MINOR, 16KB nursery) ---"
 vm_bad=0
 for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc_map_put encoding_f64 crypto if_let \
-            literal_expect pending_sibling_type big_list_literal \
+            literal_expect pending_sibling_type big_list_literal leaf_native_calls \
             gc_nested_literal gc_nursery_barrier gc_nursery_promotion net_dns_records \
             spawn_isolation select maps json json_parity json_utf8 json_decode_budget \
             bytes json_deep_nesting redis http_read_wire http_client_pool http2_flood \
@@ -988,6 +988,25 @@ else
     fail=1
 fi
 rm -f "$sjm_c" "$sjm_c.gen.c"
+
+# A leaf native (strings.has_prefix and the other pure readers, see
+# native_is_leaf) is no collection point: its calls get no safepoint
+# bracket, an allocating native next to them keeps its own.
+lnc_c="/tmp/sl_leaf_native_calls"
+if ./slangc tests/leaf_native_calls/main.sl --keep-c -o "$lnc_c" >/dev/null 2>&1; then
+    lnc_leaf=$(grep -oE 'sl_rt_safepoint_enter\([^)]*\); [^;]*sl_strings_(has_prefix|has_suffix|contains|count|find|rfind|find_field)\(' "$lnc_c.gen.c" | wc -l | tr -d ' ')
+    lnc_alloc=$(grep -oE 'sl_rt_safepoint_enter\([^)]*\); [^;]*sl_strings_to_upper\(' "$lnc_c.gen.c" | wc -l | tr -d ' ')
+    if [ "$lnc_leaf" = 0 ] && [ "$lnc_alloc" = 1 ]; then
+        echo "PASS leaf native calls unbracketed (allocating one kept)"
+    else
+        echo "FAIL leaf native calls: $lnc_leaf leaf calls bracketed, $lnc_alloc to_upper (want 0 and 1)"
+        fail=1
+    fi
+else
+    echo "FAIL leaf native calls (compile)"
+    fail=1
+fi
+rm -f "$lnc_c" "$lnc_c.gen.c"
 
 # ---- worker count from a cgroup CPU quota (Linux) ---------------------------
 # The pool takes one worker per CPU the affinity mask allows, lowered to
