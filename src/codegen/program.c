@@ -851,6 +851,7 @@ void force_native_result_types(CG *cg) {
         res_cname(cg, "i32", "str");
         res_cname(cg, "bytes", "str");
         res_cname(cg, "bool", "str");
+        res_cname(cg, "str", "str"); /* realpath */
     }
     if (want_pkg(cg, "crypto")) {
         res_cname(cg, "bytes", "str");

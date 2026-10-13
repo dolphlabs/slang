@@ -9,6 +9,8 @@ const NatSig FS_SIGS[] = {
     {"fs", "write", 2, {NA_INT, NA_BYTES}, "result[i32,str]", 0},
     {"fs", "close", 1, {NA_INT}, "result[bool,str]", 0},
     {"fs", "mkdir", 1, {NA_STR}, "result[bool,str]", 0},
+    {"fs", "realpath", 1, {NA_STR}, "result[str,str]", 0},
+    {"fs", "fstat", 1, {NA_INT}, "[int]", 0},
 };
 
 const int FS_SIGS_LEN = sizeof(FS_SIGS) / sizeof(FS_SIGS[0]);

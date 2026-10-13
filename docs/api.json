@@ -784,6 +784,24 @@
           "ret": "result[bool,str]",
           "tls": false,
           "sig": "fs.mkdir(str) -> result[bool,str]"
+        },
+        {
+          "name": "realpath",
+          "params": [
+            "str"
+          ],
+          "ret": "result[str,str]",
+          "tls": false,
+          "sig": "fs.realpath(str) -> result[str,str]"
+        },
+        {
+          "name": "fstat",
+          "params": [
+            "int"
+          ],
+          "ret": "[int]",
+          "tls": false,
+          "sig": "fs.fstat(int) -> [int]"
         }
       ]
     },
