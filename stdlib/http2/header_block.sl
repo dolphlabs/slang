@@ -5,6 +5,8 @@
 // 1..61 index the static table, 62+ index the dynamic table with the
 // most recently added entry first.
 
+import "strings";
+
 pub gc struct Decoder {
     huff: Huff,
     table: Table,
@@ -149,7 +151,21 @@ pub fn decode_block(d: Decoder, b: bytes, max_headers: int)
 // connection. The cost is a few bytes per response; the benefit is that
 // a response can never desynchronise the connection.
 
-pub fn encode_header(name: str, value: str) -> bytes {
+// RFC 9113 §8.2.1: a field name or value containing CR, LF or NUL is
+// malformed. HPACK's length prefix keeps it from splitting this stream,
+// but a peer must reset it, and an intermediary that downgrades to
+// HTTP/1.1 could split on it; so CR and LF go out as spaces, the rule
+// the HTTP/1.1 writer applies too.
+fn h2_clean(s: str) -> str {
+    if !strings.contains(s, "\r") && !strings.contains(s, "\n") {
+        return s;
+    }
+    return strings.replace(strings.replace(s, "\r", " "), "\n", " ");
+}
+
+pub fn encode_header(name0: str, value0: str) -> bytes {
+    let name = h2_clean(name0);
+    let value = h2_clean(value0);
     let both = static_find(name, value);
     if both > 0 {
         // 1xxxxxxx indexed field, 7-bit prefix

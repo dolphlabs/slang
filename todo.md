@@ -518,16 +518,30 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
 
 Found building zokor's logger (2026-10-12), not fixed:
 
+- [x] **`slangc test` could not test a package that imports a pin**
+  (found 2026-10-13 adding dolphlabs/jwt to zokor; fixed in
+  fix/test-project-pins). The generated runner lives in a temporary
+  directory, and the loader looked for `slang.project` from there, so
+  every pinned import failed with "cannot resolve import". In test mode
+  the project now comes from the package under test.
 - [ ] **str literals take no `\x` or `\u` escape** ("unknown escape
   sequence"); a terminal colour needs `to_str(b"\x1b[32m")`. JSON-style
   `\u001b` and `\x1b` are what a model writes first.
 - [ ] **A str cannot be read byte by byte without a copy**: `s[i]` is "cannot
   index a value of type str", so a scan of a str allocates `to_bytes(s)`.
   A read-only `byte_at(s, i)` (or indexing) would make escape checks free.
-- [ ] **http accepts any bytes as the method**: `parse_head` takes everything
+- [x] **CR/LF in a header field was written as a line break**
+  (GHSA-3j69-rqv8-pr45, fixed in fix/http-header-crlf). `http.write` and
+  `serialize`, `httpc`'s request writer and `http2`'s header encoder now
+  turn CR and LF in every header field into spaces (and `httpc`
+  percent-encodes them in the request target). A clean field costs
+  nothing. tests/http_header_crlf covers each writer.
+- [x] **http accepts any bytes as the method** (fixed in
+  fix/http-method-token: `read`, `read_frame`, `parse` and `parse_frame`
+  refuse a non-token method as a malformed request line;
+  tests/http_method_token): `parse_head` takes everything
   before the first space, with no RFC 9110 token check, so a method can
-  carry `"`, `\` or an ESC byte into a handler or a log line. Refuse a
-  non-token method with 400 at the parser.
+  carry `"`, `\` or an ESC byte into a handler or a log line.
 - [ ] **Generic functions cannot be named as values even when every type
   parameter is known** (`r.get(path, live)` inside a generic method over
   `S`), and there is no explicit instantiation syntax (`f[int]()` is a

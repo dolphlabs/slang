@@ -1,0 +1,12 @@
+with_header, serialize: clean
+with_header, write: clean
+with_header, serialize_builder: clean
+caller's response untouched: true
+with_headers line, write: clean
+location, write: clean
+content type, write: clean
+status text, write: clean
+static_render: clean
+clean header kept as is: true
+httpc request header: clean
+http2 value without CR/LF: true
