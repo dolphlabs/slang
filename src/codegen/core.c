@@ -1664,6 +1664,24 @@ void ambient_root_push(CG *cg, const char *name) {
     }
     cg->ambient_roots[cg->ambient_count++] = (char *)name;
 }
+/* pkg.f(args) where pkg is a native package, f is a leaf
+ * (native_is_leaf), and no argument can allocate or park. */
+static int expr_can_alloc_or_park(CG *cg, Expr *e);
+int native_leaf_call(CG *cg, Expr *e) {
+    if (!e || e->kind != EX_CALL)
+        return 0;
+    char *left, *right;
+    if (!split_dotted(e->as.call.name, &left, &right))
+        return 0;
+    const char *pkg = import_try(cg, left);
+    if (!pkg || !is_native_pkg(cg, pkg) || !native_is_leaf(pkg, right))
+        return 0;
+    for (int i = 0; i < e->as.call.nargs; i++)
+        if (expr_can_alloc_or_park(cg, e->as.call.args[i]))
+            return 0;
+    return 1;
+}
+
 static int expr_can_alloc_or_park(CG *cg, Expr *e) {
     if (!e)
         return 0;
@@ -1724,7 +1742,7 @@ static int expr_can_alloc_or_park(CG *cg, Expr *e) {
         if (split_dotted(name, &left, &right)) {
             const char *pkg = import_try(cg, left);
             if (pkg && is_native_pkg(cg, pkg))
-                return 1;
+                return !native_is_leaf(pkg, right);
             const char *recv_t = NULL;
             if (!pkg)
                 recv_t = infer_ident_name(cg, left, e->line);
@@ -1754,6 +1772,13 @@ static int expr_can_alloc_or_park(CG *cg, Expr *e) {
 int safepoint_elidable(CG *cg, Expr *e) {
     if (!e || e->kind != EX_CALL)
         return 0;
+    /* A leaf native over arguments that cannot collect is no collection
+     * point, so nothing -- live, pending or ambient -- needs rooting at
+     * it (its own arguments are registered as ambient roots, which the
+     * check below would otherwise take for a reason to keep the
+     * bracket). */
+    if (native_leaf_call(cg, e))
+        return 1;
     if (cg->ambient_count != 0)
         return 0;
     if (!expr_can_alloc_or_park(cg, e))

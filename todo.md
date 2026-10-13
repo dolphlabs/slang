@@ -572,6 +572,16 @@ Found building zokor's logger (2026-10-12), not fixed:
   negation and `%` by -1 is 0, every signed width, `/=`/`%=` and
   `duration` included. A division-heavy loop measured the same (ABBA,
   medians 2,301 vs 2,293 ms). tests/division_wraps.
+- [x] **Pure string natives paid a safepoint bracket per call**
+  (perf/leaf-native-calls). Every native package call was bracketed, so
+  `strings.has_prefix` cost about 16 ns where its C costs about 2: 21 of
+  them, http's per-response header-name checks for a zokor response, took
+  330 ns, 51 ns now. strings.find/rfind/contains/has_prefix/has_suffix/
+  count/find_field are listed as leaves (native_is_leaf); a call to one
+  over arguments that cannot allocate gets no bracket. zokor's bench
+  server, `/users/42`, ABBA x3: median 65.6k -> 69.3k rps, p99 2.72 ->
+  2.55 ms, RSS unchanged (noisy laptop; one round throttled both).
+  tests/leaf_native_calls.
 - [ ] **Signed `+`, `-`, `*` overflow is undefined in the generated C.** The
   README promises two's-complement wrap, but slangc does not pass
   `-fwrapv` (or compute in unsigned), so at -O3 the C compiler may assume
