@@ -964,6 +964,17 @@ static size_t sl_fatal_hex(char *buf, size_t n, size_t cap, uintptr_t v) {
     return n;
 }
 
+/* Where the program's image starts, set once when the handler is
+ * installed. A PIE loads at a random address, so a bare pc names nothing
+ * once the process is gone; pc minus this is the same in every run and
+ * resolves against the binary: `addr2line -fe prog 0xOFF` on Linux,
+ * `atos -o prog -l 0x100000000 <0x100000000 + OFF>` on macOS. Printed
+ * only for a pc inside the program's own code [text_lo, text_hi): a fault
+ * in libc or OpenSSL has no offset in this binary. 0 when unknown. */
+static uintptr_t sl_fatal_image_base = 0;
+static uintptr_t sl_fatal_text_lo = 0;
+static uintptr_t sl_fatal_text_hi = 0;
+
 static void sl_fatal_handler(int sig, siginfo_t *si, void *uctx_raw) {
     char buf[320];
     size_t n = 0, cap = sizeof(buf);
@@ -990,6 +1001,11 @@ static void sl_fatal_handler(int sig, siginfo_t *si, void *uctx_raw) {
     n = sl_fatal_hex(buf, n, cap, addr);
     n = sl_fatal_put(buf, n, cap, ", pc ");
     n = sl_fatal_hex(buf, n, cap, pc);
+    if (sl_fatal_image_base && pc >= sl_fatal_text_lo && pc < sl_fatal_text_hi) {
+        n = sl_fatal_put(buf, n, cap, " (image+");
+        n = sl_fatal_hex(buf, n, cap, pc - sl_fatal_image_base);
+        n = sl_fatal_put(buf, n, cap, ")");
+    }
     /* Bare TLS read: a signal handler runs on the faulting thread, on its
        native alternate stack, not as a task that could migrate. */
     sl_task *t = sl_rt_current_task;
@@ -1025,6 +1041,19 @@ static void sl_rt_install_fatal_handlers(void) {
 #if __has_feature(address_sanitizer)
     return;
 #endif
+#endif
+#if defined(__APPLE__)
+    unsigned long size = 0;
+    uint8_t *text = getsectiondata(&_mh_execute_header, "__TEXT", "__text", &size);
+    sl_fatal_image_base = (uintptr_t)&_mh_execute_header;
+    sl_fatal_text_lo = (uintptr_t)text;
+    sl_fatal_text_hi = text ? (uintptr_t)text + size : 0;
+#elif defined(__linux__)
+    extern char __executable_start[];
+    extern char etext[];
+    sl_fatal_image_base = (uintptr_t)__executable_start;
+    sl_fatal_text_lo = (uintptr_t)__executable_start;
+    sl_fatal_text_hi = (uintptr_t)etext;
 #endif
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));

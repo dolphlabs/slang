@@ -557,6 +557,19 @@ Found building zokor's logger (2026-10-12), not fixed:
   from a `timestamptz` column, without a per-type hook in the compiler's
   JSON dispatch (no interfaces). Today: `t.rfc3339_nano()` into a str
   field, `timez.parse_rfc3339` out. Needs a design decision first.
+- [x] **A crash report named no function** (fix/fatal-image-offset). The
+  fatal handler printed the raw pc, which a PIE's random load address
+  makes meaningless once the process is gone: zokor's linux-x86_64 CI
+  died once (2026-10-13, run 38343686280) with `SIGSEGV at address 0x0,
+  pc 0x000056263e4ddf64` and nothing to resolve it against. It now adds
+  `(image+0x...)` for a pc inside the program's own text. That crash did
+  not reproduce: 0 of 255 runs on macOS and Linux (plain, 16 KB nursery
+  with the minor verifier, 16 KB threshold, forced 1 ms preemption, 1
+  and 4 workers, three runners on two CPUs); its rerun passed.
+- [ ] **An `extern fn` named like a libc function the runtime's headers
+  declare** (`strlen`, `atoi`) fails as raw C output: "conflicting types
+  for 'strlen'". slangc should say the name is taken by C and how to
+  declare it (matching C types), or rename it with a link name.
 - [ ] **`??` prints as `'^` in diagnostics.** src/lexer.c:574 writes
   `"'??'"`, and `??'` is a trigraph under `-std=c11` (the build warns:
   "trigraph converted to '^' character"). Write `"'?\?'"`.
