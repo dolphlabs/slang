@@ -1664,6 +1664,40 @@ void ambient_root_push(CG *cg, const char *name) {
     }
     cg->ambient_roots[cg->ambient_count++] = (char *)name;
 }
+/* The FuncSig a plain or package-qualified call names, when it is a
+ * slang function (not a method, native or extern), else NULL. */
+static FuncSig *user_fn_of_call(CG *cg, Expr *e) {
+    const char *name = e->as.call.name;
+    char *left, *right;
+    if (split_dotted(name, &left, &right)) {
+        const char *pkg = import_try(cg, left);
+        if (!pkg || is_native_pkg(cg, pkg))
+            return NULL;
+        FuncSig *fs = sig_find_in(cg, pkg, right);
+        return (fs && fs->is_pub && !fs->method_of && !fs->is_extern) ? fs : NULL;
+    }
+    if (var_find(cg, name))
+        return NULL; /* a local function value, not the declared fn */
+    FuncSig *fs = sig_find_in(cg, cg->cur_pkg, name);
+    return (fs && !fs->method_of && !fs->is_extern) ? fs : NULL;
+}
+
+static int expr_can_alloc_or_park(CG *cg, Expr *e);
+
+/* f(args) where f is a leaf slang function (compute_leaf_fns) and no
+ * argument can allocate or park: no collection point. */
+int user_leaf_call(CG *cg, Expr *e) {
+    if (!e || e->kind != EX_CALL)
+        return 0;
+    FuncSig *fs = user_fn_of_call(cg, e);
+    if (!fs || !fs->leaf)
+        return 0;
+    for (int i = 0; i < e->as.call.nargs; i++)
+        if (expr_can_alloc_or_park(cg, e->as.call.args[i]))
+            return 0;
+    return 1;
+}
+
 /* pkg.f(args) where pkg is a native package, f is a leaf
  * (native_is_leaf), and no argument can allocate or park. */
 static int expr_can_alloc_or_park(CG *cg, Expr *e);
@@ -1738,6 +1772,11 @@ static int expr_can_alloc_or_park(CG *cg, Expr *e) {
             if (expr_can_alloc_or_park(cg, e->as.call.args[i]))
                 return 1;
         }
+        {
+            FuncSig *ufs = user_fn_of_call(cg, e);
+            if (ufs && ufs->leaf)
+                return 0;
+        }
         char *left, *right;
         if (split_dotted(name, &left, &right)) {
             const char *pkg = import_try(cg, left);
@@ -1777,7 +1816,7 @@ int safepoint_elidable(CG *cg, Expr *e) {
      * it (its own arguments are registered as ambient roots, which the
      * check below would otherwise take for a reason to keep the
      * bracket). */
-    if (native_leaf_call(cg, e))
+    if (native_leaf_call(cg, e) || user_leaf_call(cg, e))
         return 1;
     if (cg->ambient_count != 0)
         return 0;
