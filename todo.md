@@ -620,6 +620,10 @@ Found building zokor's logger (2026-10-12), not fixed:
   its own (`sl_x_<name>`) bound to the symbol with an assembler label, so
   a header's prototype with other C types (`strlen`'s size_t) no longer
   clashes. tests/extern_libc_names.
+- [x] **`fs.realpath` and `fs.fstat`** (feat/fs-stat), for zokor's static
+  files: a root check that symlinks cannot escape, and an open file's
+  kind, size and mtime (Last-Modified, Range). realpath grows the task's
+  stack first (libc's buffers are PATH_MAX-sized). tests/fs_stat.
 - [x] **`??` printed as `'^` in diagnostics** (fix/qq-token-name). The
   token name held the C trigraph for `^`; it is escaped now.
   tests/fail_qq_token_name.

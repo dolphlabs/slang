@@ -157,3 +157,66 @@ static sl_res_bool_str *sl_fs_mkdir(const char *path) {
         return sl_fs_err_bool(strerror(errno));
     return sl_fs_ok_bool(true);
 }
+
+#define SL_TASK_FS_STACK_SIZE 32768
+
+static sl_res_str_str *sl_fs_ok_str(const char *v) {
+    sl_res_str_str *r = (sl_res_str_str *)sl_gc_alloc(
+        sizeof(sl_res_str_str), sl_gc_trace_sl_res_str_str);
+    r->ok = true;
+    r->v = sl_strdup(v);
+    return r;
+}
+
+static sl_res_str_str *sl_fs_err_str(const char *msg) {
+    sl_res_str_str *r = (sl_res_str_str *)sl_gc_alloc(
+        sizeof(sl_res_str_str), sl_gc_trace_sl_res_str_str);
+    r->ok = false;
+    r->e = sl_strdup(msg);
+    return r;
+}
+
+/* fs.realpath(path): the absolute path with every symlink, "." and ".."
+ * resolved -- what a server compares against its root to refuse a file
+ * that a link leads outside it. err when the path does not exist. */
+static sl_res_str_str *sl_fs_realpath(const char *path) {
+    if (!path || !path[0])
+        return sl_fs_err_str("invalid path");
+    /* libc's realpath keeps PATH_MAX-sized buffers on the stack: more
+       than a task's 8 KB, so grow it first, as for OpenSSL and SQLite. */
+    sl_rt_need_stack(SL_TASK_FS_STACK_SIZE);
+    sl_rt_preempt_disable();
+    char *r = realpath(path, NULL);
+    int e = errno;
+    sl_rt_preempt_enable();
+    if (!r)
+        return sl_fs_err_str(strerror(e));
+    sl_res_str_str *out = sl_fs_ok_str(r);
+    sl_rt_preempt_disable();
+    free(r);
+    sl_rt_preempt_enable();
+    return out;
+}
+
+/* fs.fstat(fd): [kind, size, mtime_sec, mtime_nsec] of an open file --
+ * kind 0 a regular file, 1 a directory, 2 anything else -- or [] when fd
+ * is not open. Of the file already opened, so what is served is what
+ * was checked. */
+static sl_arr *sl_fs_fstat(int fd) {
+    sl_arr *a = sl_arr_new(sizeof(long long), 4);
+    struct stat st;
+    if (fstat(fd, &st) != 0)
+        return a;
+    long long kind = S_ISREG(st.st_mode) ? 0 : S_ISDIR(st.st_mode) ? 1 : 2;
+#if defined(__APPLE__)
+    long long msec = (long long)st.st_mtimespec.tv_sec;
+    long long mnsec = (long long)st.st_mtimespec.tv_nsec;
+#else
+    long long msec = (long long)st.st_mtim.tv_sec;
+    long long mnsec = (long long)st.st_mtim.tv_nsec;
+#endif
+    long long vals[4] = {kind, (long long)st.st_size, msec, mnsec};
+    for (int i = 0; i < 4; i++)
+        sl_arr_push(a, &vals[i], sizeof(long long));
+    return a;
+}

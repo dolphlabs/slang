@@ -1515,8 +1515,13 @@ working directory as `result[str, str]`.
 #### `fs`
 
 POSIX file I/O on integer fds. `open` is read-only; `create` is
-write/trunc. `read`/`write`/`close` use the fd. `mkdir` creates one
-directory. Every call returns `result[_, str]`. These calls block the
+write/trunc. `read`/`write`/`close` use the fd; `pread(fd, off, n)` reads
+at an offset. `mkdir` creates one directory. Every call returns
+`result[_, str]`, except `fstat(fd)`, which is `[kind, size, mtime_sec,
+mtime_nsec]` of an open file (kind 0 a regular file, 1 a directory, 2
+anything else; `[]` for a closed fd). `realpath(path)` resolves `.`, `..`
+and every symlink to an absolute path: what a file server compares with
+its root, so a link cannot lead out of it. These calls block the
 worker — use them for config and small files, not the accept loop.
 To read standard input use [`io`](#io) instead: `fs.read(0, n)` works, but
 waits by blocking a whole worker thread, and a program waiting on a person
