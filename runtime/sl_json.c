@@ -586,6 +586,149 @@ static bool sl_json_dec_str(sl_json_val *v, const char **out, char **err) {
     return true;
 }
 
+/* ---- json: timez.Time as an RFC 3339 string ----
+ *
+ * A timez.Time field is written and read as the string timez's own
+ * rfc3339_nano() writes and parse_rfc3339() reads, with the same rules:
+ * "2026-10-13T09:30:15.5Z", every nanosecond the instant has and no
+ * trailing zeros; on input an optional fraction of up to 9 digits and a
+ * "Z" or "+hh:mm"/"-hh:mm" offset (applied: the instant is stored in
+ * UTC), "t"/"z"/a space accepted, a missing offset refused. In C rather
+ * than a call into timez: a decoder holds what it has built so far only
+ * in C locals, and a slang call is a safepoint where a collection would
+ * not see them. The codegen wraps these per program in the struct's own
+ * C type (pkg_json/dispatch.c), since the runtime is emitted before it. */
+
+static long long sl_jt_days_from_civil(long long y, long long m, long long d) {
+    y -= m <= 2;
+    long long era = (y >= 0 ? y : y - 399) / 400;
+    long long yoe = y - era * 400;
+    long long doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    long long doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
+
+static void sl_jt_civil_from_days(long long z, long long *y, int *m, int *d) {
+    z += 719468;
+    long long era = (z >= 0 ? z : z - 146096) / 146097;
+    long long doe = z - era * 146097;
+    long long yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    long long doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    long long mp = (5 * doy + 2) / 153;
+    *d = (int)(doy - (153 * mp + 2) / 5 + 1);
+    *m = (int)(mp < 10 ? mp + 3 : mp - 9);
+    *y = yoe + era * 400 + (*m <= 2);
+}
+
+static int sl_jt_digits(const char *s, size_t n, size_t at, int w) {
+    if (at + (size_t)w > n)
+        return -1;
+    int v = 0;
+    for (int i = 0; i < w; i++) {
+        char c = s[at + (size_t)i];
+        if (c < '0' || c > '9')
+            return -1;
+        v = v * 10 + (c - '0');
+    }
+    return v;
+}
+
+static int sl_jt_days_in_month(long long y, int m) {
+    static const int dim[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (m == 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0))
+        return 29;
+    return dim[m - 1];
+}
+
+/* 0 when `s` (n bytes) is an RFC 3339 timestamp, with the instant in
+ * *sec and *nsec; else 1 (malformed), 2 (more than 9 fraction digits),
+ * 3 (no offset) or 4 (a field out of range). */
+static int sl_jt_parse(const char *s, size_t n, long long *sec, long long *nsec) {
+    if (n < 19 || s[4] != '-' || s[7] != '-')
+        return 1;
+    int y = sl_jt_digits(s, n, 0, 4), mo = sl_jt_digits(s, n, 5, 2),
+        d = sl_jt_digits(s, n, 8, 2);
+    if (y < 0 || mo < 0 || d < 0)
+        return 1;
+    if (s[10] != 'T' && s[10] != 't' && s[10] != ' ')
+        return 1;
+    int h = sl_jt_digits(s, n, 11, 2), mi = sl_jt_digits(s, n, 14, 2),
+        se = sl_jt_digits(s, n, 17, 2);
+    if (h < 0 || mi < 0 || se < 0 || s[13] != ':' || s[16] != ':')
+        return 1;
+    size_t i = 19;
+    long long ns = 0;
+    if (i < n && s[i] == '.') {
+        i++;
+        int digits = 0;
+        while (i < n && s[i] >= '0' && s[i] <= '9') {
+            if (digits < 9)
+                ns = ns * 10 + (s[i] - '0');
+            digits++;
+            i++;
+        }
+        if (digits == 0)
+            return 1;
+        if (digits > 9)
+            return 2;
+        while (digits < 9) {
+            ns *= 10;
+            digits++;
+        }
+    }
+    if (i >= n)
+        return 3;
+    long long off = 0;
+    if (s[i] == 'Z' || s[i] == 'z') {
+        i++;
+    } else if (s[i] == '+' || s[i] == '-') {
+        int oh = sl_jt_digits(s, n, i + 1, 2), om = sl_jt_digits(s, n, i + 4, 2);
+        if (oh < 0 || om < 0 || i + 3 >= n || s[i + 3] != ':' || oh > 23 || om > 59)
+            return 1;
+        off = (long long)oh * 3600 + om * 60;
+        if (s[i] == '-')
+            off = -off;
+        i += 6;
+    } else {
+        return 1;
+    }
+    if (i != n)
+        return 1;
+    if (mo < 1 || mo > 12 || d < 1 || d > sl_jt_days_in_month(y, mo) || h > 23 ||
+        mi > 59 || se > 59)
+        return 4;
+    *sec = sl_jt_days_from_civil(y, mo, d) * 86400 + (long long)h * 3600 + mi * 60 + se - off;
+    *nsec = ns;
+    return 0;
+}
+
+static char *sl_jt_error(int why, const char *s) {
+    switch (why) {
+    case 2:
+        return sl_json_errf("timestamp '%.64s' has more than 9 fraction digits", s);
+    case 3:
+        return sl_json_errf("timestamp '%.64s' has no offset: add Z for UTC, or +hh:mm", s);
+    case 4:
+        return sl_json_errf("timestamp '%.64s' has a field out of range", s);
+    default:
+        return sl_json_errf("timestamp '%.64s' is not RFC 3339 (2026-10-13T09:30:15Z)", s);
+    }
+}
+
+static bool sl_json_dec_time(sl_json_val *v, long long *sec, long long *nsec, char **err) {
+    if (v->kind != SL_JV_STR) {
+        *err = sl_json_errf("expected an RFC 3339 timestamp string, got %s",
+                            sl_json_kind_name(v));
+        return false;
+    }
+    int why = sl_jt_parse(v->as.str, strlen(v->as.str), sec, nsec);
+    if (why) {
+        *err = sl_jt_error(why, v->as.str);
+        return false;
+    }
+    return true;
+}
+
 static const char sl_b64_alpha[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -1164,6 +1307,28 @@ static bool sl_jd_bytes(sl_jparser *p, sl_bytes **out) {
     return sl_jd_str(p, &s) && sl_json_b64(s, out);
 }
 
+/* A timestamp has no escapes, so it is read in place, with no string
+ * built; one that has any goes through the string reader first. */
+static bool sl_jd_time(sl_jparser *p, long long *sec, long long *nsec) {
+    long long save = p->pos;
+    if (!sl_jd_eat(p, '"')) return false;
+    long long start = p->pos, i = start;
+    while (i < p->len && p->s[i] != '"' && p->s[i] != '\\')
+        i++;
+    if (i < p->len && p->s[i] == '"') {
+        p->pos = i + 1;
+        if (sl_jt_parse(p->s + start, (size_t)(i - start), sec, nsec) == 0)
+            return true;
+        p->pos = save;
+        return false;
+    }
+    char *s = sl_jparse_string_raw(p);
+    if (s && sl_jt_parse(s, strlen(s), sec, nsec) == 0)
+        return true;
+    p->pos = save;
+    return false;
+}
+
 /* One pass over a plain integer token: an optional '-', then "0" or up
  * to 18 digits without a leading zero, not followed by '.', 'e' or 'E'.
  * That is every integer field of an ordinary body (ids, counts, cents),
@@ -1409,6 +1574,57 @@ static void sl_json_enc_str(const char *s, sl_json_sb *out) {
         return;
     }
     sl_json_enc_str_esc(s, n, i, out);
+}
+
+/* timez's rfc3339_nano(): "YYYY-MM-DDTHH:MM:SS[.fraction]Z", the year
+ * zero-padded to 4 digits (with a '-' before it for one before year 0),
+ * the fraction without trailing zeros, quoted. */
+static void sl_json_enc_time(long long sec, long long nsec, sl_json_sb *out) {
+    long long days = sec >= 0 ? sec / 86400 : -((-sec + 86399) / 86400);
+    long long rem = sec - days * 86400;
+    long long y;
+    int m, d;
+    sl_jt_civil_from_days(days, &y, &m, &d);
+    char buf[64];
+    int n = 0;
+    buf[n++] = '"';
+    if (y < 0) {
+        buf[n++] = '-';
+        y = -y;
+    }
+    char yd[24];
+    int yl = 0;
+    do {
+        yd[yl++] = (char)('0' + y % 10);
+        y /= 10;
+    } while (y > 0 && yl < 20);
+    while (yl < 4)
+        yd[yl++] = '0';
+    while (yl > 0)
+        buf[n++] = yd[--yl];
+    int hh = (int)(rem / 3600), mi = (int)(rem / 60 % 60), ss = (int)(rem % 60);
+    int f[] = {'-', '0' + m / 10, '0' + m % 10, '-', '0' + d / 10, '0' + d % 10, 'T',
+               '0' + hh / 10, '0' + hh % 10, ':', '0' + mi / 10, '0' + mi % 10, ':',
+               '0' + ss / 10, '0' + ss % 10};
+    for (size_t k = 0; k < sizeof(f) / sizeof(f[0]); k++)
+        buf[n++] = (char)f[k];
+    if (nsec > 0 && nsec < 1000000000) {
+        char fd[9];
+        long long v = nsec;
+        for (int k = 8; k >= 0; k--) {
+            fd[k] = (char)('0' + v % 10);
+            v /= 10;
+        }
+        int last = 8;
+        while (last > 0 && fd[last] == '0')
+            last--;
+        buf[n++] = '.';
+        for (int k = 0; k <= last; k++)
+            buf[n++] = fd[k];
+    }
+    buf[n++] = 'Z';
+    buf[n++] = '"';
+    sl_json_sb_append_n(out, buf, n);
 }
 
 static void sl_json_enc_str_esc(const char *s, long long n, long long i,

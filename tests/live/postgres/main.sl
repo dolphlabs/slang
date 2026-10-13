@@ -1,4 +1,5 @@
 import "pg";
+import "timez";
 import "proc";
 import "time";
 import "strings";
@@ -792,7 +793,44 @@ fn unix_socket() {
     println("ok unix socket");
 }
 
+// timez.Time in and out: arg_time sends RFC 3339, get_time reads the
+// server's text back to the instant, whatever the session's time zone
+// (Kathmandu, +05:45, so the offset is not "+00"). Postgres keeps
+// microseconds; a timestamp without a zone reads as UTC; infinity is an
+// error, not a made-up instant.
+fn timestamps() {
+    let c = conn();
+    ex(c, "SET TIME ZONE 'Asia/Kathmandu'");
+    ex(c, "DROP TABLE IF EXISTS slang_ts; CREATE TABLE slang_ts " +
+          "(id int, at timestamptz, plain timestamp)");
+    let t = timez.unix_nano(1792000000123456789);
+    q(c, "INSERT INTO slang_ts VALUES (1, $1, $2), (2, 'infinity', NULL)",
+      [pg.arg_time(t), pg.arg_text("2026-10-13 09:30:15.25")]);
+    let rows = q(c, "SELECT at, plain FROM slang_ts ORDER BY id", []);
+    let text = pg.get_text(rows, 0, 0);
+    if !strings.has_suffix(text, "+05:45") {
+        die("expected a +05:45 offset from the server, got " + text);
+    }
+    let gr = pg.get_time(rows, 0, 0);
+    guard let back = gr else let e = err_of(gr) { die("get_time: " + e); }
+    // rounded to the microsecond by the server
+    if back.rfc3339_nano() != "2026-10-14T17:46:40.123457Z" {
+        die("round trip: " + back.rfc3339_nano());
+    }
+    let pr = pg.get_time(rows, 0, 1);
+    guard let plain = pr else let e = err_of(pr) { die("plain: " + e); }
+    if plain.rfc3339_nano() != "2026-10-13T09:30:15.25Z" {
+        die("timestamp without a zone: " + plain.rfc3339_nano());
+    }
+    let inf = pg.get_time(rows, 1, 0);
+    if let _x = inf {
+        die("infinity read as an instant");
+    }
+    println("timestamps ok");
+}
+
 values();
+timestamps();
 errors();
 cancel();
 pool();

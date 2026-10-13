@@ -286,7 +286,8 @@ let p = timez.parse_rfc3339("2026-10-13T11:30:15+02:00");
 println((p ?? t).equal(t));                        // true: offsets are applied
 ```
 
-`Time` is an instant (UTC); `Date` a calendar day; durations are int
+`Time` is an instant (UTC), an RFC 3339 string in `json.encode`/`decode`
+(`pg.arg_time(t)`, `pg.get_time(rows, r, c)` for `timestamptz`); `Date` a calendar day; durations are int
 nanoseconds (`timez.MINUTE`, `"7d"` parses). Zones: `timez.load_zone("Europe/Berlin")`,
 `t.in_zone(z).format("%H:%M %Z")`, `timez.zoned(z, y, m, d, h, mi, s,
 timez.Disambiguation.COMPATIBLE)`. Tests: pass a `timez.fixed_clock(t)` and
@@ -347,7 +348,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - log: debug, info, warn, error
 - net: listen, port, accept, dial, dial_until, lookup_srv_until, lookup_txt_until, dial_unix, listen_unix, send, recv, recv_until (+21 more)
 - os: setenv, unsetenv, environ, pid, hostname, tmpdir, exists, is_dir, is_file, size, mtime, read_dir (+2 more)
-- pg: parse_url, sqlstate, scram_client_final, connect, connect_config, close, usable, in_transaction, server_param, arg_text, arg_int, arg_float (+33 more)
+- pg: parse_url, sqlstate, scram_client_final, connect, connect_config, close, usable, in_transaction, server_param, arg_text, arg_int, arg_float (+36 more)
 - proc: shutdown_requested, active_tasks, wait_idle, getenv, args, cwd
 - redis: encode, decode, decode_at, slot, parse_url, connect_config, connect, do, close, usable, ping, echo (+132 more)
 - regex: compile, free, groups, is_match, is_match_bytes, find, find_at, find_bytes, find_bytes_at

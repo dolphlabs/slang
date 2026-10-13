@@ -552,11 +552,15 @@ Found building zokor's logger (2026-10-12), not fixed:
   choice), test clocks, stopwatches, intervals and cron. Checked against
   Python: 212 calendar instants (`datetime`) and 420 zoned ones across 7
   zones (`zoneinfo`).
-- [ ] **`timez.Time` in JSON and `pg`.** A Time field cannot round-trip as
-  an RFC 3339 string through `json.encode`/`decode`, nor bind to or read
-  from a `timestamptz` column, without a per-type hook in the compiler's
-  JSON dispatch (no interfaces). Today: `t.rfc3339_nano()` into a str
-  field, `timez.parse_rfc3339` out. Needs a design decision first.
+- [x] **`timez.Time` in JSON and `pg`** (feat/json-time). The JSON codegen
+  special-cases `timez.Time` (no interfaces to hang a hook on): an RFC 3339
+  string, written as rfc3339_nano() writes it, read with parse_rfc3339()'s
+  rules, by C in the JSON runtime -- a decoder cannot call into slang, a
+  safepoint where its half-built values are unrooted. A struct without a
+  Time compiles to byte-identical codecs. Encode ~115 ns (vs 1,670 ns via
+  rfc3339_nano), decode ~130 ns. `pg.arg_time`, `pg.get_time` and
+  `pg.timestamp_rfc3339` (Postgres's text, any session time zone, a
+  zoneless `timestamp` as UTC). tests/json_time, tests/live/postgres.
 - [x] **A crash report named no function** (fix/fatal-image-offset). The
   fatal handler printed the raw pc, which a PIE's random load address
   makes meaningless once the process is gone: zokor's linux-x86_64 CI
@@ -604,20 +608,21 @@ Found building zokor's logger (2026-10-12), not fixed:
   like http's `put_str` that only wraps a builtin: about 16 ns each, a
   dozen per response write. Inferring leaf slang functions (no allocation,
   no park, only leaf callees) would make them free.
-- [ ] **Signed `+`, `-`, `*` overflow is undefined in the generated C.** The
-  README promises two's-complement wrap, but slangc does not pass
-  `-fwrapv` (or compute in unsigned), so at -O3 the C compiler may assume
-  no overflow: `x + 1 > x` can fold to true, and a user's own overflow
-  check can be optimised out. Measure `-fwrapv`'s cost before turning it
-  on.
+- [x] **Signed `+`, `-`, `*` overflow wraps in the generated C**
+  (fix/signed-overflow-wrap). slangc passes `-fwrapv`, so the C compiler
+  keeps the README's two's-complement promise and no longer deletes an
+  overflow check written in slang. Measured ABBA x3 after a warm-up: JSON
+  +0.9%, FNV loop -3.3%, compute arena +0.1%, division loop +0.2%,
+  concurrent_compute +0.2%, each inside its run-to-run spread.
+  tests/signed_overflow_wraps.
 - [x] **An `extern fn` may share a name with a libc declaration**
   (fix/extern-name-clash). Each extern fn is declared under a C name of
   its own (`sl_x_<name>`) bound to the symbol with an assembler label, so
   a header's prototype with other C types (`strlen`'s size_t) no longer
   clashes. tests/extern_libc_names.
-- [ ] **`??` prints as `'^` in diagnostics.** src/lexer.c:574 writes
-  `"'??'"`, and `??'` is a trigraph under `-std=c11` (the build warns:
-  "trigraph converted to '^' character"). Write `"'?\?'"`.
+- [x] **`??` printed as `'^` in diagnostics** (fix/qq-token-name). The
+  token name held the C trigraph for `^`; it is escaped now.
+  tests/fail_qq_token_name.
 - [ ] **str literals take no `\x` or `\u` escape** ("unknown escape
   sequence"); a terminal colour needs `to_str(b"\x1b[32m")`. JSON-style
   `\u001b` and `\x1b` are what a model writes first.
