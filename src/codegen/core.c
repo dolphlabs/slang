@@ -2337,15 +2337,32 @@ const char *canon_type(CG *cg, const char *t, int line) {
 /* Output helpers                                                      */
 /* ------------------------------------------------------------------ */
 
+/* Formats into a stack buffer when the line fits, and into a heap one
+ * sized by a first vsnprintf when it does not. A fixed 16 KB buffer used
+ * to cut longer lines off silently -- a large list literal or a long
+ * expression became C that did not compile, reported as raw cc errors. */
 void emit_line(CG *cg, const char *fmt, ...) {
     char buf[16384];
     va_list ap;
     for (int i = 0; i < cg->indent; i++)
         sb_append(cg->out, "    ");
     va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    sb_append(cg->out, buf);
+    if (n < 0) {
+        fprintf(stderr, "slang: internal error: cannot format generated code\n");
+        exit(1);
+    }
+    if ((size_t)n < sizeof(buf)) {
+        sb_append(cg->out, buf);
+    } else {
+        char *big = (char *)xmalloc((size_t)n + 1);
+        va_start(ap, fmt);
+        vsnprintf(big, (size_t)n + 1, fmt, ap);
+        va_end(ap);
+        sb_append(cg->out, big);
+        free(big);
+    }
     sb_nl(cg->out);
 }
 
