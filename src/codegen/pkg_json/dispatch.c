@@ -17,6 +17,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* timez.Time is read and written as an RFC 3339 string, by fixed runtime
+ * helpers over its sec/nsec fields (runtime/sl_json.c says why in C);
+ * the codecs below are one-line wrappers in the struct's own C type. */
+static int is_json_time(const char *t) {
+    return !strcmp(t, "timez.Time");
+}
+
 static const char *json_scalar_dec_name(const char *t) {
     if (!strcmp(t, "bool")) return "sl_json_dec_bool";
     if (is_str(t)) return "sl_json_dec_str";
@@ -272,7 +279,7 @@ const char *json_dec_fn(CG *cg, const char *t, int line) {
                      "must be str (got map[%s]...)",
                      k, v, k);
         json_dec_fn(cg, v, line);
-    } else if (is_enum(cg, t)) {
+    } else if (is_enum(cg, t) || is_json_time(t)) {
         /* leaf scalar: no element/field types to recurse into */
     } else {
         StructDef *sd = struct_find_canon(cg, t);
@@ -311,7 +318,7 @@ const char *json_enc_fn(CG *cg, const char *t, int line) {
                      "be str (got map[%s]...)",
                      k, v, k);
         json_enc_fn(cg, v, line);
-    } else if (is_enum(cg, t)) {
+    } else if (is_enum(cg, t) || is_json_time(t)) {
         /* leaf scalar: no element/field types to recurse into */
     } else {
         StructDef *sd = struct_find_canon(cg, t);
@@ -336,6 +343,13 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
     emit_line(cg, "static bool %s(sl_json_val *v, %s *out, char **err) {",
               it->dec_name, ct);
     cg->indent++;
+    if (is_json_time(t)) {
+        emit_line(cg, "return sl_json_dec_time(v, &out->sec, &out->nsec, err);");
+        cg->indent--;
+        emit_line(cg, "}");
+        emit_line(cg, "");
+        return;
+    }
 
     if (is_opt(t)) {
         char *inner = opt_inner(t);
@@ -528,6 +542,13 @@ static void emit_json_fast_body(CG *cg, JsonInst *it) {
     emit_line(cg, "static bool %s(sl_jparser *p, %s *out) {",
               json_fast_fn(cg, t), ct);
     cg->indent++;
+    if (is_json_time(t)) {
+        emit_line(cg, "return sl_jd_time(p, &out->sec, &out->nsec);");
+        cg->indent--;
+        emit_line(cg, "}");
+        emit_line(cg, "");
+        return;
+    }
 
     if (is_opt(t)) {
         char *inner = opt_inner(t);
@@ -749,6 +770,13 @@ static void emit_json_enc_body(CG *cg, JsonInst *it) {
     emit_line(cg, "static void %s(%s v, sl_json_sb *out) {", it->enc_name,
               ct);
     cg->indent++;
+    if (is_json_time(t)) {
+        emit_line(cg, "sl_json_enc_time(v.sec, v.nsec, out);");
+        cg->indent--;
+        emit_line(cg, "}");
+        emit_line(cg, "");
+        return;
+    }
 
     if (is_opt(t)) {
         char *inner = opt_inner(t);

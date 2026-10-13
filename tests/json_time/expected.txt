@@ -1,0 +1,9 @@
+encoded 462 instants, 0 differ
+22 of 22 inputs agree with parse_rfc3339
+2026-10-13T09:30:15Z
+{"name":"launch","at":"2026-10-13T07:30:15.5Z","ends":null,"marks":["1970-01-01T00:00:00Z","2026-10-13T07:30:15.5Z"],"by_zone":{"utc":"2026-10-13T07:30:15.5Z"}}
+true
+field 't': timestamp '2026-10-13T09:30:15' has no offset: add Z for UTC, or +hh:mm
+field 't': expected an RFC 3339 timestamp string, got a number
+field 't': timestamp '2026-10-13T09:30:15.1234567891Z' has more than 9 fraction digits
+field 't': timestamp '2026-02-30T00:00:00Z' has a field out of range
