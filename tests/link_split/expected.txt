@@ -1,0 +1,17 @@
+split: this link is already split
+send: this link was split; send through the writer split() returned
+client got: echo hello
+server: writer done
+then: eof
+recv: this link is the writer split() returned; read from the link it was split from
+plain pushed while the reader waited: tick 1;tick 2;tick 3;
+plain server read seen them
+plain after the reader ended: eof
+recv: this link is the writer split() returned; read from the link it was split from
+tls pushed while the reader waited: tick 1;tick 2;tick 3;
+tls server read seen them
+tls after the reader ended: 0 bytes
+writer dropped
+reader read still here
+tls both ways: client got 16000 bytes in order=true
+server read 16000 bytes, misaligned 0, writer done

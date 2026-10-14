@@ -1248,6 +1248,12 @@ char *gen_call(CG *cg, Expr *e) {
                     cg->ambient_count = ambient_mark;
                     return result;
                 }
+                if (!strcmp(right, "split")) {
+                    char *inner = xasprintf("sl_link_split(%s)", self);
+                    return wrap_safepoint(cg, e,
+                                          ctype_of(cg, "result[link,fault]"),
+                                          NULL, inner);
+                }
                 if (!strcmp(right, "tls_accept")) {
                     StrBuf prelude;
                     sb_init(&prelude);

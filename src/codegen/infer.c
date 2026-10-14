@@ -664,6 +664,12 @@ const char *infer_call(CG *cg, Expr *e) {
                     res_cname(cg, "int", "fault");
                     return "result[int,fault]";
                 }
+                if (!strcmp(right, "split")) {
+                    if (n != 0)
+                        cg_error(e->line, "link.split() takes no arguments");
+                    res_cname(cg, "link", "fault");
+                    return "result[link,fault]";
+                }
                 if (!strcmp(right, "tls_accept")) {
                     if (n != 2)
                         cg_error(e->line,

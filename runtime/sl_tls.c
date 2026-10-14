@@ -623,11 +623,39 @@ static const char *sl_net_tls_alpn(void *sslv) {
  * program already accepted, in the connection's own task, and from then
  * on the link's send and recv go through the session. Everything built on
  * a link -- http.read_frame, http.write, a server's whole loop -- serves
- * TLS unchanged. The session belongs to the link: it is freed with it. */
+ * TLS unchanged.
+ *
+ * After `split()` two links share one session: the reader and its writer
+ * half, on different fds (sl_net.c says why). OpenSSL does not allow two
+ * threads in one SSL at once, so every call on it holds `mu`, with
+ * preemption off so the holder cannot be descheduled with the lock; the
+ * waits for the socket happen with it released. The session's BIO keeps
+ * the reader's fd, which is therefore closed only with the session, when
+ * the last link sharing it is freed -- a writer still sending can never
+ * reach a number the kernel has given to someone else. */
+
+typedef struct sl_link_tls {
+    SSL *ssl;
+    int ssl_fd;
+    pthread_mutex_t mu;
+    int refs;
+    int down; /* the reader is gone: the session says no more */
+} sl_link_tls;
+
+static void sl_link_tls_lock(sl_link_tls *t) {
+    sl_rt_preempt_disable();
+    pthread_mutex_lock(&t->mu);
+}
+
+static void sl_link_tls_unlock(sl_link_tls *t) {
+    pthread_mutex_unlock(&t->mu);
+    sl_rt_preempt_enable();
+}
 
 /* A fault's detail is not traced by the collector, so it must be static:
- * OpenSSL's reason strings are (its own tables), and taking one drains
- * the error queue so the next failure reports its own reason. */
+ * OpenSSL's reason strings are (its own tables). Taking one drains the
+ * error queue -- thread-local, so this runs on the thread that failed,
+ * under the lock -- and the next failure then reports its own reason. */
 static sl_fault sl_link_tls_fault(int kind, const char *op,
                                   const char *detail) {
     sl_fault f = sl_fault_make(kind, detail);
@@ -636,21 +664,15 @@ static sl_fault sl_link_tls_fault(int kind, const char *op,
 }
 
 static const char *sl_link_tls_reason(void) {
-    sl_rt_preempt_disable();
     unsigned long e = ERR_get_error();
     const char *r = e ? ERR_reason_error_string(e) : NULL;
     ERR_clear_error();
-    sl_rt_preempt_enable();
     return r ? r : "handshake failed";
 }
 
-/* A park's -1/-2/-3 (see sl_tls_park_until) as the fault a link reports.
- * `err` is SSL_get_error's answer for the call that failed. */
-static sl_fault sl_link_tls_failure(int w, int err, const char *op) {
-    if (w == -3)
-        return sl_fault_op(SL_FAULT_TIMEOUT, 0, op);
-    if (w == -1)
-        return sl_fault_op(SL_FAULT_CLOSED, 0, op);
+/* The fault for an SSL call that failed with `err` and is not merely
+ * waiting for the socket. */
+static sl_fault sl_link_tls_failure(int err, const char *op) {
     if (sl_tls_clean_eof(err))
         return sl_fault_op(SL_FAULT_CLOSED, 0, op);
     if (err == SSL_ERROR_SYSCALL && errno == ECONNRESET)
@@ -660,10 +682,26 @@ static sl_fault sl_link_tls_failure(int w, int err, const char *op) {
     return sl_link_tls_fault(SL_FAULT_IO, op, sl_link_tls_reason());
 }
 
+static int sl_link_tls_waiting(int err) {
+    return err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE;
+}
+
+/* Waits on this link's own fd for what OpenSSL asked for. 0 to retry,
+ * else the fault. */
+static int sl_link_tls_park(sl_link *l, int err, int abort_on_shutdown,
+                            sl_until u, const char *op, sl_fault *out) {
+    int rw = err == SSL_ERROR_WANT_READ ? SL_REACTOR_READ : SL_REACTOR_WRITE;
+    int w = sl_reactor_wait_until(l->fd, rw, abort_on_shutdown, u);
+    if (w == 0)
+        return 0;
+    *out = sl_fault_op(w == -2 ? SL_FAULT_TIMEOUT : SL_FAULT_CLOSED, 0, op);
+    return -1;
+}
+
 static sl_res_int_fault sl_link_tls_send(sl_link *l, const unsigned char *ptr,
                                          long long len, sl_until u) {
     sl_rt_need_fat_stack();
-    SSL *ssl = (SSL *)l->tls;
+    sl_link_tls *t = (sl_link_tls *)l->tls;
     long long off = 0;
     while (off < len) {
         if (u && sl_until_hit(u))
@@ -671,16 +709,27 @@ static sl_res_int_fault sl_link_tls_send(sl_link *l, const unsigned char *ptr,
         long long chunk = len - off;
         if (chunk > 1 << 30)
             chunk = 1 << 30;
-        int n = SSL_write(ssl, ptr + off, (int)chunk);
+        sl_link_tls_lock(t);
+        if (t->down) {
+            sl_link_tls_unlock(t);
+            return sl_link_err_int(sl_fault_op(SL_FAULT_CLOSED, 0, "send"));
+        }
+        int n = SSL_write(t->ssl, ptr + off, (int)chunk);
         if (n > 0) {
+            sl_link_tls_unlock(t);
             off += n;
             continue;
         }
-        int err = SSL_get_error(ssl, n);
-        int w = sl_tls_park_until(ssl, err, 0, u);
-        if (w == 0)
-            continue;
-        return sl_link_err_int(sl_link_tls_failure(w, err, "send"));
+        int err = SSL_get_error(t->ssl, n);
+        if (!sl_link_tls_waiting(err)) {
+            sl_fault f = sl_link_tls_failure(err, "send");
+            sl_link_tls_unlock(t);
+            return sl_link_err_int(f);
+        }
+        sl_link_tls_unlock(t);
+        sl_fault f;
+        if (sl_link_tls_park(l, err, 0, u, "send", &f) != 0)
+            return sl_link_err_int(f);
     }
     return sl_link_ok_int(len);
 }
@@ -692,31 +741,69 @@ static sl_res_int_fault sl_link_tls_send(sl_link *l, const unsigned char *ptr,
  * zero-byte read, as it is on a plain link. */
 static sl_res_int_fault sl_link_tls_recv(sl_link *l, sl_wire w, sl_until u) {
     sl_rt_need_fat_stack();
-    SSL *ssl = (SSL *)l->tls;
+    sl_link_tls *t = (sl_link_tls *)l->tls;
     int max = w.len > (1 << 30) ? (1 << 30) : (int)w.len;
     for (;;) {
         if (u && sl_until_hit(u))
             return sl_link_err_int(sl_fault_op(SL_FAULT_TIMEOUT, 0, "recv"));
-        int n = SSL_read(ssl, w.ptr, max);
-        if (n > 0)
+        sl_link_tls_lock(t);
+        int n = SSL_read(t->ssl, w.ptr, max);
+        if (n > 0) {
+            sl_link_tls_unlock(t);
             return sl_link_ok_int((long long)n);
-        int err = SSL_get_error(ssl, n);
-        if (sl_tls_clean_eof(err))
+        }
+        int err = SSL_get_error(t->ssl, n);
+        if (sl_tls_clean_eof(err)) {
+            sl_link_tls_unlock(t);
             return sl_link_ok_int(0);
-        int pw = sl_tls_park_until(ssl, err, 1, u);
-        if (pw == 0)
-            continue;
-        return sl_link_err_int(sl_link_tls_failure(pw, err, "recv"));
+        }
+        if (!sl_link_tls_waiting(err)) {
+            sl_fault f = sl_link_tls_failure(err, "recv");
+            sl_link_tls_unlock(t);
+            return sl_link_err_int(f);
+        }
+        sl_link_tls_unlock(t);
+        sl_fault f;
+        if (sl_link_tls_park(l, err, 1, u, "recv", &f) != 0)
+            return sl_link_err_int(f);
     }
 }
 
-/* close_notify, best effort: the socket is non-blocking, so a peer that
- * is not reading costs nothing here. The fd is the link's to close. */
-static void sl_link_tls_free(void *tls) {
+static void sl_link_tls_share(sl_link *l, sl_link *w) {
+    sl_link_tls *t = (sl_link_tls *)l->tls;
+    sl_link_tls_lock(t);
+    t->refs++;
+    sl_link_tls_unlock(t);
+    w->tls = t;
+}
+
+/* The reader (or a link never split) ends the session: close_notify, best
+ * effort since the socket is non-blocking, then, if a writer half shares
+ * it, shutdown() so that writer's sends fail at once instead of queueing
+ * behind a peer that will never read them. The last link out frees it. */
+static void sl_link_tls_free(sl_link *l) {
     sl_rt_need_fat_stack();
-    SSL *ssl = (SSL *)tls;
-    SSL_shutdown(ssl);
-    SSL_free(ssl);
+    sl_link_tls *t = (sl_link_tls *)l->tls;
+    sl_link_tls_lock(t);
+    if (l->role != SL_LINK_WRITER && !t->down) {
+        SSL_shutdown(t->ssl);
+        ERR_clear_error();
+        t->down = 1;
+        if (l->role == SL_LINK_READER)
+            shutdown(t->ssl_fd, SHUT_RDWR);
+    }
+    int last = --t->refs == 0;
+    sl_link_tls_unlock(t);
+    if (l->fd != t->ssl_fd)
+        close(l->fd);
+    if (!last)
+        return;
+    sl_rt_preempt_disable();
+    SSL_free(t->ssl);
+    close(t->ssl_fd);
+    pthread_mutex_destroy(&t->mu);
+    free(t);
+    sl_rt_preempt_enable();
 }
 
 static sl_res_int_fault sl_link_tls_accept(sl_link *l, void *ctxv,
@@ -727,45 +814,77 @@ static sl_res_int_fault sl_link_tls_accept(sl_link *l, void *ctxv,
     if (l->tls)
         return sl_link_err_int(sl_link_tls_fault(SL_FAULT_IO, "tls",
                                                  "already started on this link"));
+    if (l->role != SL_LINK_WHOLE)
+        return sl_link_err_int(sl_link_tls_fault(SL_FAULT_IO, "tls",
+                                                 "start TLS before splitting the link"));
     if (!ctxv)
         return sl_link_err_int(sl_link_tls_fault(SL_FAULT_IO, "tls",
                                                  "no TLS context"));
     sl_link_tls_send_fn = sl_link_tls_send;
     sl_link_tls_recv_fn = sl_link_tls_recv;
+    sl_link_tls_share_fn = sl_link_tls_share;
     sl_link_tls_free_fn = sl_link_tls_free;
+    sl_rt_preempt_disable();
     ERR_clear_error();
     SSL *ssl = SSL_new((SSL_CTX *)ctxv);
+    const char *why = ssl ? NULL : sl_link_tls_reason();
+    sl_rt_preempt_enable();
     if (!ssl)
-        return sl_link_err_int(sl_link_tls_fault(SL_FAULT_IO, "tls",
-                                                 sl_link_tls_reason()));
+        return sl_link_err_int(sl_link_tls_fault(SL_FAULT_IO, "tls", why));
     SSL_set_fd(ssl, l->fd);
     SSL_set_mode(ssl, SSL_MODE_ENABLE_PARTIAL_WRITE);
     for (;;) {
+        sl_rt_preempt_disable();
         int n = SSL_accept(ssl);
+        int err = n == 1 ? SSL_ERROR_NONE : SSL_get_error(ssl, n);
+        sl_fault f;
+        int failed = 0;
+        if (n != 1 && !sl_link_tls_waiting(err)) {
+            f = sl_link_tls_failure(err, "tls");
+            failed = 1;
+        }
+        sl_rt_preempt_enable();
         if (n == 1)
             break;
-        int err = SSL_get_error(ssl, n);
-        int w = sl_tls_park_until(ssl, err, 1, u);
-        if (w == 0)
+        if (!failed && sl_link_tls_park(l, err, 1, u, "tls", &f) == 0)
             continue;
-        sl_fault f = sl_link_tls_failure(w, err, "tls");
+        sl_rt_preempt_disable();
         SSL_free(ssl);
+        sl_rt_preempt_enable();
         return sl_link_err_int(f);
     }
     if (SSL_get_verify_mode(ssl) & SSL_VERIFY_PEER) {
         X509 *peer = SSL_get_peer_certificate(ssl);
-        const char *why = NULL;
+        const char *bad = NULL;
         if (!peer)
-            why = "client certificate required";
+            bad = "client certificate required";
         else if (SSL_get_verify_result(ssl) != X509_V_OK)
-            why = X509_verify_cert_error_string(SSL_get_verify_result(ssl));
+            bad = X509_verify_cert_error_string(SSL_get_verify_result(ssl));
         if (peer)
             X509_free(peer);
-        if (why) {
+        if (bad) {
+            sl_rt_preempt_disable();
             SSL_free(ssl);
-            return sl_link_err_int(sl_link_tls_fault(SL_FAULT_IO, "tls", why));
+            sl_rt_preempt_enable();
+            return sl_link_err_int(sl_link_tls_fault(SL_FAULT_IO, "tls", bad));
         }
     }
-    l->tls = ssl;
+    sl_rt_preempt_disable();
+    sl_link_tls *t = (sl_link_tls *)malloc(sizeof(sl_link_tls));
+    if (t)
+        pthread_mutex_init(&t->mu, NULL);
+    sl_rt_preempt_enable();
+    if (!t) {
+        sl_rt_preempt_disable();
+        SSL_free(ssl);
+        sl_rt_preempt_enable();
+        return sl_link_err_int(sl_link_tls_fault(SL_FAULT_IO, "tls",
+                                                 "out of memory"));
+    }
+    t->ssl = ssl;
+    t->ssl_fd = l->fd;
+    t->refs = 1;
+    t->down = 0;
+    l->tls = t;
     return sl_link_ok_int(0);
 }

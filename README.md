@@ -1380,6 +1380,40 @@ request` is a plaintext client). Client certificates are checked as
 `tls_accept` checks them. The session is freed, with a close_notify, when
 the link is; a second `tls_accept` on the same link is an error.
 
+**Reading and writing from two tasks**: a `link` is move-only, so one task
+owns it -- and a task parked in `recv` cannot also send. `c.split()` returns
+a second link on the same connection for a writer task, which is what a
+server pushing to a client needs (a WebSocket broadcast, server-sent
+events):
+
+```slang
+fn writer(w: link, out: chan[bytes]) {
+    let mut_w = w;
+    while true {
+        let m = chan_recv(out);
+        guard let b = m else { return; }          // closed: done
+        let sr = mut_w.send_bytes(b, until_of(time.mono() + 10000000000));
+        guard let _n = sr else { return; }        // the peer is gone
+    }
+}
+
+let sr = c.split();
+guard let w = sr else { return; }
+let out: chan[bytes] = make_chan(256);
+spawn writer(w, out);
+// this task keeps reading c; anyone holding `out` can write to the client
+```
+
+From then on `c` only reads and the returned link only writes: a send on
+the reader or a recv on the writer is an `io` fault saying which to use,
+since two senders could interleave partial writes. Ending the reader (its
+binding goes out of scope) shuts the connection down for both halves, so
+a writer blocked on a client that stopped reading fails at once; ending
+the writer leaves the reader working. Each half holds its own fd, so a
+half never writes to a number the kernel has reused. Over TLS, start TLS
+first (`tls_accept` on a split link is refused): both halves then share
+the session, one OpenSSL call at a time. A link splits once.
+
 #### `builder`
 
 Assembling a result one piece at a time with `+` is **quadratic**: `a + b`
