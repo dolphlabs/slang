@@ -1523,9 +1523,13 @@ typedef struct sl_trip {
     _Atomic int down;
 } sl_trip;
 
+/* `tls` is NULL for plain TCP. Once `tls_accept` has run it is the
+ * connection's TLS session (sl_tls.c), and every send and recv on the
+ * link goes through it; the plain path pays one NULL test. */
 typedef struct sl_link {
     int fd;
     int live;
+    void *tls;
 } sl_link;
 
 static long long sl_now_ns(void) {
@@ -1672,11 +1676,20 @@ static sl_link sl_link_from_fd(int fd) {
     sl_link l;
     l.fd = fd;
     l.live = fd >= 0;
+    l.tls = NULL;
     return l;
 }
+/* Set by sl_tls.c, which is spliced in only for programs that use TLS:
+ * a link can only carry a session once that code has run, so a plain
+ * program never calls through it and never links OpenSSL. */
+static void (*sl_link_tls_free_fn)(void *tls);
 static void sl_link_free(sl_link *l) {
     if (!l || !l->live)
         return;
+    if (l->tls) {
+        sl_link_tls_free_fn(l->tls);
+        l->tls = NULL;
+    }
     close(l->fd);
     l->live = 0;
     l->fd = -1;

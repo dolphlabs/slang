@@ -1248,6 +1248,27 @@ char *gen_call(CG *cg, Expr *e) {
                     cg->ambient_count = ambient_mark;
                     return result;
                 }
+                if (!strcmp(right, "tls_accept")) {
+                    StrBuf prelude;
+                    sb_init(&prelude);
+                    int seq_id = cg->tmp_id++;
+                    int ambient_mark = cg->ambient_count;
+                    char *ctx = gen_expr(cg, e->as.call.args[0]);
+                    ctx = sequence_one(cg, seq_id, 0, ctype_of(cg, "rawptr"),
+                                       "rawptr", ctx, e->as.call.args[0],
+                                       &prelude);
+                    char *u = gen_expr(cg, e->as.call.args[1]);
+                    u = sequence_one(cg, seq_id, 1, ctype_of(cg, "until"),
+                                     "until", u, e->as.call.args[1],
+                                     &prelude);
+                    char *inner = xasprintf("sl_link_tls_accept(%s, %s, %s)",
+                                            self, ctx, u);
+                    char *result = wrap_safepoint(
+                        cg, e, ctype_of(cg, "result[int,fault]"),
+                        prelude.data, inner);
+                    cg->ambient_count = ambient_mark;
+                    return result;
+                }
                 if (!strcmp(right, "peer")) {
                     char *inner = xasprintf("sl_link_peer(%s)", self);
                     return wrap_safepoint(cg, e, ctype_of(cg, "peer"), NULL,

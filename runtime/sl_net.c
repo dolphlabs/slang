@@ -1647,11 +1647,21 @@ static sl_res_int_fault sl_link_err_int(sl_fault f) {
     return (sl_res_int_fault){ .ok = false, .e = f };
 }
 
+/* A link's TLS session, when it has one: sl_tls.c sets these the first
+ * time a link starts TLS, so they are never NULL where `l->tls` is set. */
+static sl_res_int_fault (*sl_link_tls_send_fn)(sl_link *l,
+                                               const unsigned char *ptr,
+                                               long long len, sl_until u);
+static sl_res_int_fault (*sl_link_tls_recv_fn)(sl_link *l, sl_wire w,
+                                               sl_until u);
+
 static sl_res_int_fault sl_link_send_ptr(sl_link *l, const unsigned char *ptr,
                                          long long len, sl_until u) {
     long long off = 0;
     if (!l || !l->live)
         return sl_link_err_int(sl_fault_op(SL_FAULT_CLOSED, 0, "send"));
+    if (l->tls)
+        return sl_link_tls_send_fn(l, ptr, len, u);
     while (off < len) {
         if (u && sl_until_hit(u))
             return sl_link_err_int(sl_fault_op(SL_FAULT_TIMEOUT, 0, "send"));
@@ -1774,6 +1784,8 @@ static sl_res_int_fault sl_link_recv(sl_link *l, sl_wire w, sl_until u) {
         return sl_link_err_int(sl_fault_op(SL_FAULT_CLOSED, 0, "recv"));
     if (w.len <= 0)
         return sl_link_ok_int(0);
+    if (l->tls)
+        return sl_link_tls_recv_fn(l, w, u);
     for (;;) {
         if (u && sl_until_hit(u))
             return sl_link_err_int(sl_fault_op(SL_FAULT_TIMEOUT, 0, "recv"));

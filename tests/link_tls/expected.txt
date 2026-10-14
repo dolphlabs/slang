@@ -1,0 +1,6 @@
+second tls_accept: tls already started on this link
+http over a tls link ok
+echo 100000 bytes: same=true, server ok, then read 0
+plaintext client: tls http request
+silent client: tls timeout
+client hung up mid-handshake: tls closed

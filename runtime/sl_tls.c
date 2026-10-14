@@ -180,6 +180,22 @@ static int sl_tls_handshake(SSL *ssl, int server) {
     return sl_tls_handshake_until(ssl, server, 0);
 }
 
+/* NULL when the handshake's client is acceptable, else why not. A context
+ * that requires client certificates (tls_ctx_require_client) must see one,
+ * and one that verifies: OpenSSL completes the handshake without a
+ * certificate when the verify mode lacks FAIL_IF_NO_PEER_CERT. */
+static char *sl_tls_check_client(SSL *ssl) {
+    if (!(SSL_get_verify_mode(ssl) & SSL_VERIFY_PEER))
+        return NULL;
+    X509 *peer = SSL_get_peer_certificate(ssl);
+    if (!peer)
+        return sl_strdup("client certificate required");
+    X509_free(peer);
+    if (SSL_get_verify_result(ssl) != X509_V_OK)
+        return sl_tls_last_error();
+    return NULL;
+}
+
 static sl_res_rawptr_str *sl_net_tls_accept(int lfd, void *ctxv) {
     sl_rt_need_fat_stack();
     int cfd;
@@ -202,18 +218,12 @@ static sl_res_rawptr_str *sl_net_tls_accept(int lfd, void *ctxv) {
     SSL_set_fd(ssl, cfd);
     SSL_set_mode(ssl, SSL_MODE_ENABLE_PARTIAL_WRITE);
     int hs = sl_tls_handshake(ssl, 1);
-    if (hs == 0 && (SSL_get_verify_mode(ssl) & SSL_VERIFY_PEER)) {
-        X509 *peer = SSL_get_peer_certificate(ssl);
-        if (!peer) {
+    if (hs == 0) {
+        char *why = sl_tls_check_client(ssl);
+        if (why) {
             SSL_free(ssl);
             close(cfd);
-            return sl_net_err_rawptr("client certificate required");
-        }
-        X509_free(peer);
-        if (SSL_get_verify_result(ssl) != X509_V_OK) {
-            SSL_free(ssl);
-            close(cfd);
-            return sl_net_err_rawptr(sl_tls_last_error());
+            return sl_net_err_rawptr(why);
         }
     }
     if (hs != 0) {
@@ -604,4 +614,158 @@ static const char *sl_net_tls_alpn(void *sslv) {
     memcpy(tmp, p, plen);
     tmp[plen] = '\0';
     return sl_strdup(tmp);
+}
+
+
+/* ---- TLS on a `link` ------------------------------------------------
+ *
+ * `c.tls_accept(ctx, deadline)` runs the server handshake on a link the
+ * program already accepted, in the connection's own task, and from then
+ * on the link's send and recv go through the session. Everything built on
+ * a link -- http.read_frame, http.write, a server's whole loop -- serves
+ * TLS unchanged. The session belongs to the link: it is freed with it. */
+
+/* A fault's detail is not traced by the collector, so it must be static:
+ * OpenSSL's reason strings are (its own tables), and taking one drains
+ * the error queue so the next failure reports its own reason. */
+static sl_fault sl_link_tls_fault(int kind, const char *op,
+                                  const char *detail) {
+    sl_fault f = sl_fault_make(kind, detail);
+    f.op = op;
+    return f;
+}
+
+static const char *sl_link_tls_reason(void) {
+    sl_rt_preempt_disable();
+    unsigned long e = ERR_get_error();
+    const char *r = e ? ERR_reason_error_string(e) : NULL;
+    ERR_clear_error();
+    sl_rt_preempt_enable();
+    return r ? r : "handshake failed";
+}
+
+/* A park's -1/-2/-3 (see sl_tls_park_until) as the fault a link reports.
+ * `err` is SSL_get_error's answer for the call that failed. */
+static sl_fault sl_link_tls_failure(int w, int err, const char *op) {
+    if (w == -3)
+        return sl_fault_op(SL_FAULT_TIMEOUT, 0, op);
+    if (w == -1)
+        return sl_fault_op(SL_FAULT_CLOSED, 0, op);
+    if (sl_tls_clean_eof(err))
+        return sl_fault_op(SL_FAULT_CLOSED, 0, op);
+    if (err == SSL_ERROR_SYSCALL && errno == ECONNRESET)
+        return sl_fault_op(SL_FAULT_RESET, ECONNRESET, op);
+    if (err == SSL_ERROR_SYSCALL && errno == EPIPE)
+        return sl_fault_op(SL_FAULT_CLOSED, EPIPE, op);
+    return sl_link_tls_fault(SL_FAULT_IO, op, sl_link_tls_reason());
+}
+
+static sl_res_int_fault sl_link_tls_send(sl_link *l, const unsigned char *ptr,
+                                         long long len, sl_until u) {
+    sl_rt_need_fat_stack();
+    SSL *ssl = (SSL *)l->tls;
+    long long off = 0;
+    while (off < len) {
+        if (u && sl_until_hit(u))
+            return sl_link_err_int(sl_fault_op(SL_FAULT_TIMEOUT, 0, "send"));
+        long long chunk = len - off;
+        if (chunk > 1 << 30)
+            chunk = 1 << 30;
+        int n = SSL_write(ssl, ptr + off, (int)chunk);
+        if (n > 0) {
+            off += n;
+            continue;
+        }
+        int err = SSL_get_error(ssl, n);
+        int w = sl_tls_park_until(ssl, err, 0, u);
+        if (w == 0)
+            continue;
+        return sl_link_err_int(sl_link_tls_failure(w, err, "send"));
+    }
+    return sl_link_ok_int(len);
+}
+
+/* Decrypted bytes OpenSSL already holds are returned before anything
+ * waits on the socket: a record can carry more than one read's worth,
+ * and the socket is not readable for the rest of it. End of stream --
+ * close_notify, or a peer that just hung up, which browsers do -- is a
+ * zero-byte read, as it is on a plain link. */
+static sl_res_int_fault sl_link_tls_recv(sl_link *l, sl_wire w, sl_until u) {
+    sl_rt_need_fat_stack();
+    SSL *ssl = (SSL *)l->tls;
+    int max = w.len > (1 << 30) ? (1 << 30) : (int)w.len;
+    for (;;) {
+        if (u && sl_until_hit(u))
+            return sl_link_err_int(sl_fault_op(SL_FAULT_TIMEOUT, 0, "recv"));
+        int n = SSL_read(ssl, w.ptr, max);
+        if (n > 0)
+            return sl_link_ok_int((long long)n);
+        int err = SSL_get_error(ssl, n);
+        if (sl_tls_clean_eof(err))
+            return sl_link_ok_int(0);
+        int pw = sl_tls_park_until(ssl, err, 1, u);
+        if (pw == 0)
+            continue;
+        return sl_link_err_int(sl_link_tls_failure(pw, err, "recv"));
+    }
+}
+
+/* close_notify, best effort: the socket is non-blocking, so a peer that
+ * is not reading costs nothing here. The fd is the link's to close. */
+static void sl_link_tls_free(void *tls) {
+    sl_rt_need_fat_stack();
+    SSL *ssl = (SSL *)tls;
+    SSL_shutdown(ssl);
+    SSL_free(ssl);
+}
+
+static sl_res_int_fault sl_link_tls_accept(sl_link *l, void *ctxv,
+                                           sl_until u) {
+    sl_rt_need_fat_stack();
+    if (!l || !l->live)
+        return sl_link_err_int(sl_fault_op(SL_FAULT_CLOSED, 0, "tls"));
+    if (l->tls)
+        return sl_link_err_int(sl_link_tls_fault(SL_FAULT_IO, "tls",
+                                                 "already started on this link"));
+    if (!ctxv)
+        return sl_link_err_int(sl_link_tls_fault(SL_FAULT_IO, "tls",
+                                                 "no TLS context"));
+    sl_link_tls_send_fn = sl_link_tls_send;
+    sl_link_tls_recv_fn = sl_link_tls_recv;
+    sl_link_tls_free_fn = sl_link_tls_free;
+    ERR_clear_error();
+    SSL *ssl = SSL_new((SSL_CTX *)ctxv);
+    if (!ssl)
+        return sl_link_err_int(sl_link_tls_fault(SL_FAULT_IO, "tls",
+                                                 sl_link_tls_reason()));
+    SSL_set_fd(ssl, l->fd);
+    SSL_set_mode(ssl, SSL_MODE_ENABLE_PARTIAL_WRITE);
+    for (;;) {
+        int n = SSL_accept(ssl);
+        if (n == 1)
+            break;
+        int err = SSL_get_error(ssl, n);
+        int w = sl_tls_park_until(ssl, err, 1, u);
+        if (w == 0)
+            continue;
+        sl_fault f = sl_link_tls_failure(w, err, "tls");
+        SSL_free(ssl);
+        return sl_link_err_int(f);
+    }
+    if (SSL_get_verify_mode(ssl) & SSL_VERIFY_PEER) {
+        X509 *peer = SSL_get_peer_certificate(ssl);
+        const char *why = NULL;
+        if (!peer)
+            why = "client certificate required";
+        else if (SSL_get_verify_result(ssl) != X509_V_OK)
+            why = X509_verify_cert_error_string(SSL_get_verify_result(ssl));
+        if (peer)
+            X509_free(peer);
+        if (why) {
+            SSL_free(ssl);
+            return sl_link_err_int(sl_link_tls_fault(SL_FAULT_IO, "tls", why));
+        }
+    }
+    l->tls = ssl;
+    return sl_link_ok_int(0);
 }
