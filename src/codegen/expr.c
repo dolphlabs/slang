@@ -18,7 +18,7 @@ char *gen_ident_name(CG *cg, const char *name, int line) {
             if (!g) {
                 FuncSig *fs = sig_find_in(cg, pkg, right);
                 if (fs && fs->is_pub && !fs->method_of)
-                    return fs->is_extern ? xstrdup(fs->name)
+                    return fs->is_extern ? xasprintf("sl_x_%s", fs->name)
                                          : mangle_func(fs->pkg, fs->name);
             }
             if (!g || !g->is_pub)
@@ -42,7 +42,7 @@ char *gen_ident_name(CG *cg, const char *name, int line) {
          * infer_ident_name: variables and globals first. */
         FuncSig *fs = sig_find_in(cg, cg->cur_pkg, name);
         if (fs && !fs->method_of)
-            return fs->is_extern ? xstrdup(fs->name)
+            return fs->is_extern ? xasprintf("sl_x_%s", fs->name)
                                  : mangle_func(fs->pkg, fs->name);
     }
     return sanitize_ident(name);
@@ -182,6 +182,17 @@ static int expr_nonzero_int_lit(Expr *e) {
     return e->kind == EX_INT && e->as.int_lit.value != 0;
 }
 
+/* A literal -1 (possibly cast): dividing by it needs no zero check but is
+ * still the one divisor that overflows (see the division below). */
+static int expr_minus_one_lit(Expr *e) {
+    if (e->kind == EX_CAST)
+        return expr_minus_one_lit(e->as.cast.operand);
+    if (e->kind == EX_UNARY && !strcmp(e->as.unary.op, "-") &&
+        e->as.unary.operand->kind == EX_INT)
+        return e->as.unary.operand->as.int_lit.value == 1;
+    return e->kind == EX_INT && e->as.int_lit.value == -1;
+}
+
 /* Bit width of an integer type, for the shift-count range check. */
 static int int_bit_width(const char *t) {
     if (!strcmp(t, "i8") || !strcmp(t, "u8")) return 8;
@@ -277,19 +288,36 @@ char *gen_numeric_binary(CG *cg, Expr *e, const char *result_t) {
             ": ((%s)((%s) %s (%s)))); })",
             prelude.data, b, b, width, b, width, at, ty, ty, a, op, b);
     }
-    if ((!strcmp(op, "/") || !strcmp(op, "%")) && is_int(result_t) &&
-        !expr_nonzero_int_lit(e->as.binary.rhs)) {
+    /* A signed MIN / -1 overflows: undefined in C, and x86-64's idiv
+     * raises SIGFPE for it (quotient and remainder alike), killing the
+     * process. slang's integers wrap, so the answer is defined: a / -1 is
+     * the two's-complement negation (MIN stays MIN) and a % -1 is 0, as in
+     * Go. Computed in unsigned arithmetic, never by idiv. */
+    if ((!strcmp(op, "/") || !strcmp(op, "%")) && is_int(result_t)) {
         const char *ty = map_type(result_t);
-        char *at = panic_at(cg, e->line);
-        if (flat)
+        int sgn = is_signed_int(result_t);
+        char *wrapped = !strcmp(op, "/")
+                            ? xasprintf("((%s)(0ULL - (unsigned long long)(%s)))", ty, a)
+                            : xasprintf("((%s)0)", ty);
+        if (sgn && expr_minus_one_lit(e->as.binary.rhs)) {
+            if (flat)
+                return wrapped;
+            return xasprintf("({ %s%s; })", prelude.data, wrapped);
+        }
+        if (!expr_nonzero_int_lit(e->as.binary.rhs)) {
+            char *at = panic_at(cg, e->line);
+            char *minus_one = sgn ? xasprintf("(%s) == -1 ? %s : ", b, wrapped)
+                                  : xstrdup("");
+            if (flat)
+                return xasprintf(
+                    "((%s) == 0 ? (sl_rt_error_at(\"division by zero\", 0, 0, %s), "
+                    "(%s)0) : %s((%s)((%s) %s (%s))))",
+                    b, at, ty, minus_one, ty, a, op, b);
             return xasprintf(
-                "((%s) == 0 ? (sl_rt_error_at(\"division by zero\", 0, 0, %s), "
-                "(%s)0) : ((%s)((%s) %s (%s))))",
-                b, at, ty, ty, a, op, b);
-        return xasprintf(
-            "({ %s((%s) == 0 ? (sl_rt_error_at(\"division by zero\", 0, 0, %s), "
-            "(%s)0) : ((%s)((%s) %s (%s)))); })",
-            prelude.data, b, at, ty, ty, a, op, b);
+                "({ %s((%s) == 0 ? (sl_rt_error_at(\"division by zero\", 0, 0, %s), "
+                "(%s)0) : %s((%s)((%s) %s (%s)))); })",
+                prelude.data, b, at, ty, minus_one, ty, a, op, b);
+        }
     }
     if (flat)
         return xasprintf("((%s)((%s) %s (%s)))", map_type(result_t), a, op,
@@ -1335,7 +1363,7 @@ have_sig:;
     StrBuf sb;
     sb_init(&sb);
     char *mangled = callee ? callee
-                           : sig->is_extern ? xstrdup(sig->name)
+                           : sig->is_extern ? xasprintf("sl_x_%s", sig->name)
                                             : mangle_sig(sig);
     sb_append(&sb, mangled);
     sb_putc(&sb, '(');
@@ -1438,7 +1466,7 @@ char *gen_method(CG *cg, Expr *e) {
     StrBuf sb;
     sb_init(&sb);
     sb_append(&sb, callee ? callee
-                          : sig->is_extern ? xstrdup(sig->name)
+                          : sig->is_extern ? xasprintf("sl_x_%s", sig->name)
                                            : mangle_sig(sig));
     sb_putc(&sb, '(');
     if (selfexpr)
@@ -1717,6 +1745,14 @@ char *gen_slice(CG *cg, Expr *e) {
                      base_name, start, end);
 }
 
+/* A number, bool or string literal, or a negated number literal. */
+static int is_const_literal(Expr *e) {
+    if (e->kind == EX_UNARY)
+        e = e->as.unary.operand;
+    return e->kind == EX_INT || e->kind == EX_FLOAT || e->kind == EX_BOOL ||
+           e->kind == EX_STRING;
+}
+
 char *gen_list(CG *cg, Expr *e, const char *expect_elem) {
     /* elements expect the ELEMENT type, exactly as infer_type's EX_LIST
      * gives it them: `none` in [some(1), none] against [opt[int]] */
@@ -1745,8 +1781,11 @@ char *gen_list(CG *cg, Expr *e, const char *expect_elem) {
         const char *ti = infer_type(cg, e->as.list.elems[i]);
         char *el = gen_expr(cg, e->as.list.elems[i]);
         el = maybe_cast(cg, t0, ti, el);
-        names[i] = sequence_one(cg, seq_id, i, ec, t0, el, e->as.list.elems[i],
-                                &prelude);
+        /* A constant has no evaluation order to keep: it goes straight
+         * into the initializer, so a table of numbers is not one C
+         * temporary per cell. */
+        names[i] = sequence_one(cg, is_const_literal(e->as.list.elems[i]) ? -1 : seq_id,
+                                i, ec, t0, el, e->as.list.elems[i], &prelude);
     }
     cg->ambient_count = ambient_mark;
     cg->expect = outer;

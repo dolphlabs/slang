@@ -524,6 +524,117 @@ Found building zokor's logger (2026-10-12), not fixed:
   directory, and the loader looked for `slang.project` from there, so
   every pinned import failed with "cannot resolve import". In test mode
   the project now comes from the package under test.
+- [x] **A generated C line over 16 KB was cut off** (found 2026-10-13
+  writing the timez tests; fixed in fix/emit-line-truncation). `emit_line`
+  formatted into a fixed 16 KB buffer, so a long literal or expression
+  became C that did not compile, reported as raw cc errors. It now sizes
+  the buffer from the formatted length. tests/long_literal.
+- [x] **A large list literal overflowed the task stack** (fixed in
+  fix/list-literal-stack). The literal was not the bug: its 9.6 KB frame
+  got an entry guard, but `sl_rt_stack_reserve` allowed frame + 4 KB for
+  macOS's `___chkstk_darwin` probe, and off the pthread stack that probe
+  reaches frame + 4 KB per loop step (up to twice the frame: 17,784 bytes
+  below rsp for 9,592). Any guarded frame over 8 KB on macOS could die in
+  a window of sizes (600 and 1,200 rows did; 700-1,000 fit their stack).
+  The reserve now adds the frame rounded up to pages. Linux has no
+  chkstk; unaffected. tests/big_list_literal.
+- [x] **Compiling a large literal was quadratic** (same branch). Every
+  sibling became a liveness "pending" marker, so n rows built n sets of up
+  to n markers: 4,000 rows took 6.2 s and 600 MB in slangc alone. Markers
+  are now made only when a later sibling can reach a call safepoint, and
+  constant elements get no C temporary: 0.16 s and 90 MB; the whole
+  build 26.6 s / 1.2 GB -> 13.2 s / 214 MB, the rest clang optimising
+  4,000 nested allocations.
+- [x] **`timez`: calendar time in stdlib** (feat/timez). Instants and
+  dates for years 1-9999, Go-style durations, RFC 3339 / HTTP / RFC 2822
+  formats and strict parsers, strftime, IANA zones read from the system
+  tz database (TZif v2+ with the POSIX-TZ footer, DST gap/overlap
+  choice), test clocks, stopwatches, intervals and cron. Checked against
+  Python: 212 calendar instants (`datetime`) and 420 zoned ones across 7
+  zones (`zoneinfo`).
+- [x] **`timez.Time` in JSON and `pg`** (feat/json-time). The JSON codegen
+  special-cases `timez.Time` (no interfaces to hang a hook on): an RFC 3339
+  string, written as rfc3339_nano() writes it, read with parse_rfc3339()'s
+  rules, by C in the JSON runtime -- a decoder cannot call into slang, a
+  safepoint where its half-built values are unrooted. A struct without a
+  Time compiles to byte-identical codecs. Encode ~115 ns (vs 1,670 ns via
+  rfc3339_nano), decode ~130 ns. `pg.arg_time`, `pg.get_time` and
+  `pg.timestamp_rfc3339` (Postgres's text, any session time zone, a
+  zoneless `timestamp` as UTC). tests/json_time, tests/live/postgres.
+- [x] **A crash report named no function** (fix/fatal-image-offset). The
+  fatal handler printed the raw pc, which a PIE's random load address
+  makes meaningless once the process is gone: zokor's linux-x86_64 CI
+  died once (2026-10-13, run 38343686280) with `SIGSEGV at address 0x0,
+  pc 0x000056263e4ddf64` and nothing to resolve it against. It now adds
+  `(image+0x...)` for a pc inside the program's own text. That crash did
+  not reproduce: 0 of 255 runs on macOS and Linux (plain, 16 KB nursery
+  with the minor verifier, 16 KB threshold, forced 1 ms preemption, 1
+  and 4 workers, three runners on two CPUs); its rerun passed.
+- [x] **Signed `MIN / -1` and `MIN % -1` wrap** (fix/signed-division-wrap).
+  The division guard checked only for zero; the C division of a signed
+  minimum by -1 is undefined. Now `/` by -1 is computed as an unsigned
+  negation and `%` by -1 is 0, every signed width, `/=`/`%=` and
+  `duration` included. A division-heavy loop measured the same (ABBA,
+  medians 2,301 vs 2,293 ms). tests/division_wraps.
+- [x] **Pure string natives paid a safepoint bracket per call**
+  (perf/leaf-native-calls). Every native package call was bracketed, so
+  `strings.has_prefix` cost about 16 ns where its C costs about 2: 21 of
+  them, http's per-response header-name checks for a zokor response, took
+  330 ns, 51 ns now. strings.find/rfind/contains/has_prefix/has_suffix/
+  count/find_field are listed as leaves (native_is_leaf); a call to one
+  over arguments that cannot allocate gets no bracket. zokor's bench
+  server, `/users/42`, ABBA x3: median 65.6k -> 69.3k rps, p99 2.72 ->
+  2.55 ms, RSS unchanged (noisy laptop; one round throttled both).
+  tests/leaf_native_calls.
+- [x] **HTTP responses lacked Date, and 204/304 carried Content-Length**
+  (fix/http-date-and-framing). RFC 9110 6.6.1 requires Date of an origin
+  server with a clock; 8.6 forbids Content-Length on 1xx and 204, and on
+  a 304 unless it equals the 200's. Every writer path (fast, general,
+  both serializers, static renderings, HTTP/2) now sends Date and frames
+  1xx/204/304 with neither Content-Length nor body. The date is a
+  per-second cache the preemption ticker keeps current, copied with no
+  clock read. Cost, CPU only (render twice into an arena, ABBA x5): fast
+  shape 566 -> 623 ns, zokor-shaped 1,770 -> 1,932 ns, about 1% of a
+  request. tests/http_date, tests/runtime/test_http_date.
+- [x] **A method receiver is live across its call's arguments**
+  (fix/assert-rooting). Liveness added `r` in `r.m(f(), x)` only after
+  processing the arguments, so when the call was `r`'s last use, `f()`'s
+  safepoint did not root it. It is now in the live-out the arguments are
+  processed against. Found as a rare crash in zokor's CI (2026-10-13),
+  reproduced with one worker under GC pressure; the minor verifier cannot
+  see a missing root. `slangc test --keep` now keeps the runner's C too.
+  tests/method_receiver_root.
+- [x] **A call to a leaf slang function is no safepoint**
+  (perf/leaf-functions). compute_leaf_fns marks a function whose body
+  cannot allocate, park, loop or call anything but builtins and leaf
+  natives (a small typing tells a numeric `+` from a str one); calls to
+  it get no bracket, like a leaf native's. http's put_str is one: the
+  write path, rendered into an arena twice (ABBA x4), went from 2,004 to
+  1,077 ns for a zokor-shaped response and from 661 to 385 ns for the
+  fast shape. tests/leaf_functions.
+- [x] **Signed `+`, `-`, `*` overflow wraps in the generated C**
+  (fix/signed-overflow-wrap). slangc passes `-fwrapv`, so the C compiler
+  keeps the README's two's-complement promise and no longer deletes an
+  overflow check written in slang. Measured ABBA x3 after a warm-up: JSON
+  +0.9%, FNV loop -3.3%, compute arena +0.1%, division loop +0.2%,
+  concurrent_compute +0.2%, each inside its run-to-run spread.
+  tests/signed_overflow_wraps.
+- [x] **An `extern fn` may share a name with a libc declaration**
+  (fix/extern-name-clash). Each extern fn is declared under a C name of
+  its own (`sl_x_<name>`) bound to the symbol with an assembler label, so
+  a header's prototype with other C types (`strlen`'s size_t) no longer
+  clashes. tests/extern_libc_names.
+- [x] **`http.write_head`** (fix/http-head-length): the head `write`
+  sends, with Content-Length the GET body's length, and no body -- a
+  HEAD answer used to go out as `Content-Length: 0` once its body was
+  dropped. tests/http_head_length.
+- [x] **`fs.realpath` and `fs.fstat`** (feat/fs-stat), for zokor's static
+  files: a root check that symlinks cannot escape, and an open file's
+  kind, size and mtime (Last-Modified, Range). realpath grows the task's
+  stack first (libc's buffers are PATH_MAX-sized). tests/fs_stat.
+- [x] **`??` printed as `'^` in diagnostics** (fix/qq-token-name). The
+  token name held the C trigraph for `^`; it is escaped now.
+  tests/fail_qq_token_name.
 - [ ] **str literals take no `\x` or `\u` escape** ("unknown escape
   sequence"); a terminal colour needs `to_str(b"\x1b[32m")`. JSON-style
   `\u001b` and `\x1b` are what a model writes first.

@@ -273,7 +273,7 @@ client, but a real browser is different evidence.
 
 ### `fn response_msg(stream: int, status: str, extra: [Header], body: bytes) -> WMsg`
 
-Build a response. The body is handed over UNFRAMED: the writer owns the peer's window and its max frame size, so it -- not the handler -- decides how the body is cut into DATA frames and when each may go.
+Build a response. The body is handed over UNFRAMED: the writer owns the peer's window and its max frame size, so it -- not the handler -- decides how the body is cut into DATA frames and when each may go.  Like HTTP/1.1's writer: a date unless the handler set one (RFC 9110 6.6.1), and for 1xx, 204 and 304 -- which have no content -- neither content-length nor body.
 
 ### `gc struct Limits`
 

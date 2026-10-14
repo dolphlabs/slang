@@ -784,6 +784,24 @@
           "ret": "result[bool,str]",
           "tls": false,
           "sig": "fs.mkdir(str) -> result[bool,str]"
+        },
+        {
+          "name": "realpath",
+          "params": [
+            "str"
+          ],
+          "ret": "result[str,str]",
+          "tls": false,
+          "sig": "fs.realpath(str) -> result[str,str]"
+        },
+        {
+          "name": "fstat",
+          "params": [
+            "int"
+          ],
+          "ret": "[int]",
+          "tls": false,
+          "sig": "fs.fstat(int) -> [int]"
         }
       ]
     },
@@ -797,7 +815,7 @@
           "sig": "gc struct Request",
           "doc": "`raw_headers` is exactly the CRLF-separated \"name: value\" lines this request's header block was made of, unparsed -- not a map[str]str. Building a map costs an allocation for the map plus roughly two more per header, on every request, whether or not anything ever reads a header; most requests never do. `header`/`header_or` scan this directly (strings.find_field, no allocation for the search itself); `headers()` builds a map from it on demand for a caller that genuinely wants one. Constructed only by `parse`/`read` (off the wire) or `request` (validated, from a map) -- never assign this field directly from unvalidated bytes; a value containing \"\\r\\n\" inside a hand-built block is a second header no map ever held.",
           "file": "stdlib/http/http.sl",
-          "line": 16
+          "line": 17
         },
         {
           "name": "WireFrame",
@@ -805,7 +823,7 @@
           "sig": "gc struct WireFrame",
           "doc": "`read` couples two things that only sometimes belong together: filling the caller's buffer and framing what's in it. serve_conn needs the split for frame dispatch: read_frame frames with the same scans/errors/rules as read, but returns the parsed head (method/path strs, header block, body) instead of a Request -- so the router matches on strs with no raw copy, no rescan, no second slice. Offsets stay for Frame callers and tests; the serve path does not use them.",
           "file": "stdlib/http/http.sl",
-          "line": 32
+          "line": 33
         },
         {
           "name": "Incoming",
@@ -813,7 +831,7 @@
           "sig": "gc struct Incoming",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 47
+          "line": 48
         },
         {
           "name": "Frame",
@@ -821,7 +839,7 @@
           "sig": "gc struct Frame",
           "doc": "The request WITHOUT materialising method/path/version strs: framing offsets only. `read`/`serve` use this when they only route on the raw path bytes (see path_matches below); `parse` keeps returning strs for callers that actually need them.",
           "file": "stdlib/http/http.sl",
-          "line": 56
+          "line": 57
         },
         {
           "name": "Response",
@@ -829,7 +847,7 @@
           "sig": "gc struct Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 66
+          "line": 67
         },
         {
           "name": "header",
@@ -837,7 +855,7 @@
           "sig": "fn header(r: Request, name: str) -> opt[str]",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1394
+          "line": 1395
         },
         {
           "name": "header_or",
@@ -845,7 +863,7 @@
           "sig": "fn header_or(r: Request, name: str, fallback: str) -> str",
           "doc": "header()'s two real call sites (Ctx.header in zokor, the WebSocket handshake) are both `header(...) ?? fallback` already -- this is that, without the opt allocation `??` unwraps.",
           "file": "stdlib/http/http.sl",
-          "line": 1405
+          "line": 1406
         },
         {
           "name": "headers",
@@ -853,7 +871,7 @@
           "sig": "fn headers(r: Request) -> map[str]str",
           "doc": "Every header a request carries, as a map -- built fresh on each call by scanning raw_headers once. Nothing in either repo iterates a request's headers today (confirmed by grep), which is what makes \"built on demand\" the right default over a cached field: a cache nothing reads is pure cost. Walks the same line shape scan_headers does, for a different reason (that one validates and extracts two offsets; this one assumes an already-valid block and extracts every name and value) -- kept as two functions rather than one parameterized by what to do with each line, which would obscure both to save repeating six lines.",
           "file": "stdlib/http/http.sl",
-          "line": 1422
+          "line": 1423
         },
         {
           "name": "request",
@@ -861,7 +879,7 @@
           "sig": "fn request(method: str, path: str, version: str, headers: map[str]str, body: bytes) -> result[Request, str]",
           "doc": "Builds a Request from a map the way the eager parser builds one off the wire: a header name or value may not contain CR or LF (an application- or test-constructed header gets no such check for free the way one read off the wire does -- this is where that rule lives for this path), and a name may not contain the colon that separates it from its value on the wire. Both are a real hazard, not a theoretical one, now that raw_headers is what a request's headers actually are: a value containing \"\\r\\n\" would be concatenated straight into the block below as a SECOND header line -- injection -- if it weren't rejected first.",
           "file": "stdlib/http/http.sl",
-          "line": 1464
+          "line": 1465
         },
         {
           "name": "parse_frame",
@@ -869,7 +887,7 @@
           "sig": "fn parse_frame(raw: bytes) -> result[Frame, str]",
           "doc": "Framing offsets for one request inside `raw`, with NOTHING materialised: no method/path/version strs, no header copies. The request line is validated (two spaces, HTTP/1.x token); the header block is validated by scan_headers; the body is framed by frame(). Callers that need strs (logging, tests) use parse(); the server path matches/routes directly on these offsets -- see path_matches and method_is below -- so the ~10 framing strs per request never exist.",
           "file": "stdlib/http/http.sl",
-          "line": 1494
+          "line": 1495
         },
         {
           "name": "method_is",
@@ -877,7 +895,7 @@
           "sig": "fn method_is(raw: bytes, f: Frame, want: str) -> bool",
           "doc": "Is this frame's method exactly `want` (e.g. \"GET\"), compared in place -- no method str is ever built. Takes a line_end int (not a Frame) so both Frame and WireFrame callers share it.",
           "file": "stdlib/http/http.sl",
-          "line": 1587
+          "line": 1588
         },
         {
           "name": "method_is_at",
@@ -885,7 +903,7 @@
           "sig": "fn method_is_at(raw: bytes, line_end: int, want: str) -> bool",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1591
+          "line": 1592
         },
         {
           "name": "path_is",
@@ -893,7 +911,7 @@
           "sig": "fn path_is(raw: bytes, f: Frame, want: str) -> bool",
           "doc": "Is this frame's path exactly `want` (bytes compared in place, query string ignored -- matches path.strip_query semantics)? No path str. The two hot paths (`/` and `/users/`-prefixed) compare inline with no to_bytes at all; anything else falls through to the general compare, which still costs one to_bytes of `want`. Route fpaths could precompute that bytes once at registration -- the next step if `/users/:id` still shows hot after this.",
           "file": "stdlib/http/http.sl",
-          "line": 1637
+          "line": 1638
         },
         {
           "name": "path_is_at",
@@ -901,7 +919,7 @@
           "sig": "fn path_is_at(raw: bytes, line_end: int, want: str) -> bool",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1641
+          "line": 1642
         },
         {
           "name": "path_param",
@@ -909,7 +927,7 @@
           "sig": "fn path_param(raw: bytes, f: Frame, prefix: str) -> str",
           "doc": "The :id in \"/users/:id\" for a frame already known to match that shape -- the ONE allocation the params map used to cost per route scanned. Returns \"\" when the shape does not match.",
           "file": "stdlib/http/http.sl",
-          "line": 1696
+          "line": 1697
         },
         {
           "name": "path_param_at",
@@ -917,7 +935,7 @@
           "sig": "fn path_param_at(raw: bytes, line_end: int, prefix: str) -> str",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1700
+          "line": 1701
         },
         {
           "name": "frame_method",
@@ -925,7 +943,7 @@
           "sig": "fn frame_method(raw: bytes, f: Frame) -> str",
           "doc": "The method bytes as a str: the ONE framing str frame dispatch needs (to map to the Method enum). Everything else matches in place; this is 1 alloc where parse() spent ~10. Takes line_end so Frame and WireFrame share it.",
           "file": "stdlib/http/http.sl",
-          "line": 1765
+          "line": 1766
         },
         {
           "name": "frame_method_at",
@@ -933,7 +951,7 @@
           "sig": "fn frame_method_at(raw: bytes, line_end: int) -> str",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1769
+          "line": 1770
         },
         {
           "name": "frame_request",
@@ -941,7 +959,7 @@
           "sig": "fn frame_request(raw: bytes, f: Frame) -> Request",
           "doc": "The full Request for a frame, built ONCE for the route that runs: method/path/version strs, raw_headers slice, body slice. serve() callers already hold one; serve_frame builds one -- never both. Takes explicit offsets so Frame and WireFrame share it.",
           "file": "stdlib/http/http.sl",
-          "line": 1781
+          "line": 1782
         },
         {
           "name": "frame_request_at",
@@ -949,7 +967,7 @@
           "sig": "fn frame_request_at(raw: bytes, line_end: int, head_end: int, body: bytes) -> Request",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1785
+          "line": 1786
         },
         {
           "name": "frame_version",
@@ -957,7 +975,7 @@
           "sig": "fn frame_version(f: Frame) -> int",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1806
+          "line": 1807
         },
         {
           "name": "frame_body",
@@ -965,7 +983,7 @@
           "sig": "fn frame_body(raw: bytes, f: Frame) -> bytes",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1810
+          "line": 1811
         },
         {
           "name": "wire_request",
@@ -973,7 +991,7 @@
           "sig": "fn wire_request(f: WireFrame) -> Request",
           "doc": "The Request for a WireFrame: method/path already parsed, body already sliced -- no offsets, no raw, no second copy. headers rides along (one block copy, same as read -- the wire is compacted before return, so there is nothing to materialise from later). version comes from the flag (no version str is stored).",
           "file": "stdlib/http/http.sl",
-          "line": 1823
+          "line": 1824
         },
         {
           "name": "frame_raw_headers",
@@ -981,7 +999,7 @@
           "sig": "fn frame_raw_headers(raw: bytes, f: Frame, line_end: int) -> bytes",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1837
+          "line": 1838
         },
         {
           "name": "parse",
@@ -989,7 +1007,7 @@
           "sig": "fn parse(raw: bytes) -> result[Request, str]",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1841
+          "line": 1842
         },
         {
           "name": "resp_headers",
@@ -997,7 +1015,7 @@
           "sig": "fn resp_headers(r: Response) -> map[str]str",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 1991
+          "line": 2023
         },
         {
           "name": "resp_header",
@@ -1005,7 +1023,7 @@
           "sig": "fn resp_header(r: Response, name: str) -> opt[str]",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2017
+          "line": 2049
         },
         {
           "name": "has_resp_header",
@@ -1013,7 +1031,7 @@
           "sig": "fn has_resp_header(r: Response, name: str) -> bool",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2047
+          "line": 2079
         },
         {
           "name": "serialize",
@@ -1021,7 +1039,7 @@
           "sig": "fn serialize(r: Response) -> bytes",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2058
+          "line": 2090
         },
         {
           "name": "serialize_builder",
@@ -1029,7 +1047,7 @@
           "sig": "fn serialize_builder(r0: Response) -> bytes",
           "doc": "The old builder path, kept for the differential test: must stay byte-identical to serialize_sized() above for every shape.",
           "file": "stdlib/http/http.sl",
-          "line": 2064
+          "line": 2096
         },
         {
           "name": "serialize_sized",
@@ -1037,7 +1055,7 @@
           "sig": "fn serialize_sized(r0: Response) -> bytes",
           "doc": "Serialize with a handful of allocations, not ~40: size the response first (status line + headers + framing + body, all cheap integer arithmetic over lengths -- see emit_len below), allocate exactly that many bytes with strings.bytes_zero (one header plus one buffer -- no throwaway str), then fill by slice assignment. The old builder path stays below as serialize_builder for the differential test; this is what `serialize` and `write`'s fallback call, so an oversized response costs a few allocations instead of ~40.  The remaining handful is load-bearing, not waste: one to_bytes per fill_str piece (the str->bytes copy the compiler cannot fuse), one filtered-extra list, and the response_conn scan's own line strs. Counting them is what keeps this honest -- see the probe notes.",
           "file": "stdlib/http/http.sl",
-          "line": 2115
+          "line": 2159
         },
         {
           "name": "escape_json_bytes",
@@ -1045,7 +1063,7 @@
           "sig": "fn escape_json_bytes(msg: bytes) -> bytes",
           "doc": "The escaped form of `msg` as bytes, for a caller that already holds bytes and wants the quoted payload without a str in between.",
           "file": "stdlib/http/http.sl",
-          "line": 2322
+          "line": 2384
         },
         {
           "name": "with_headers",
@@ -1053,7 +1071,7 @@
           "sig": "fn with_headers(r: Response, lines: [str]) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2349
+          "line": 2411
         },
         {
           "name": "with_header",
@@ -1061,7 +1079,7 @@
           "sig": "fn with_header(r: Response, name: str, value: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2356
+          "line": 2418
         },
         {
           "name": "without_header",
@@ -1069,7 +1087,7 @@
           "sig": "fn without_header(r: Response, name: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2374
+          "line": 2436
         },
         {
           "name": "wants_close",
@@ -1077,7 +1095,7 @@
           "sig": "fn wants_close(r: Request) -> bool",
           "doc": "Whether the connection should close after answering `r`: HTTP/1.1 stays open unless the client sent `Connection: close`, HTTP/1.0 closes unless it sent `Connection: keep-alive` (either case-insensitive, OWS trimmed; with the header repeated, the one `header()` returns decides). Allocates nothing.",
           "file": "stdlib/http/http.sl",
-          "line": 2446
+          "line": 2508
         },
         {
           "name": "version_flag_of",
@@ -1085,7 +1103,7 @@
           "sig": "fn version_flag_of(v: str) -> int",
           "doc": "The int-flag twin, for callers holding a version str rather than a Head (read_frame's WireFrame.version). Same rules; the block is passed explicitly because there is no Head in scope.",
           "file": "stdlib/http/http.sl",
-          "line": 2470
+          "line": 2532
         },
         {
           "name": "read_frame",
@@ -1093,7 +1111,7 @@
           "sig": "fn read_frame(c: &mut link, buf: wire, filled: int, idle_deadline: until, header_deadline: until, body_deadline: until) -> result[WireFrame, str]",
           "doc": "read_frame: read's framing, plus the parsed head the router matches on. Implemented INSIDE read's loop shape (not as read-plus-copy): read compacts the buffer before returning, so after read there is no head left to copy -- buf[0..filled] is the NEXT request. This duplicates read's loop deliberately (same scans, same errors, same close rules), and the duplication is the contract: any change to read's framing must land here too.  What differs from read: on a complete frame the method/path strs and the header block + body are COPIED OUT of the wire ONCE -- the same strs + copies read already pays (hd.method/path, hd.headers, hd.body) -- and NO separate message copy is made. The old shape did to_bytes(buf[0..end]) PLUS parse_frame over the copy PLUS wants_close_scan over the copy: a full second framing pass and a whole-message copy per request. Now the WireFrame carries what the router needs directly: method/path strs for the enum + Request build, headers/body slices for the Ctx. Routing matches on strs (==), never on raw bytes -- no path_is_at rescan, no per-route to_bytes. The message copy is gone entirely.  Chunked bodies: hd.body IS the reassembled copy (one alloc the old path also spent); the WireFrame body is that copy directly. Three deadlines, not one, because \"how long should this wait\" has three different honest answers depending on what the connection is doing: idle_deadline while nothing has arrived at all yet (a kept- alive connection between requests, or a fresh one that never sends anything -- this is the one that should be generous, since a real client legitimately sits idle between requests); header_deadline once bytes have started arriving but the request line and headers aren't complete yet; body_deadline once the headers are in but a declared body hasn't fully arrived. header_deadline and body_deadline are both the tight, slow-loris-shaped ones -- a client that has started a request and then trickles it in a byte at a time is not the same risk as one that hasn't sent anything yet, and idle_deadline being long must not become an amplifier for that. Recomputed fresh every loop iteration rather than tracked as a separate flag: frame_head_wire's own re-parse of the same (only ever growing) buffer already answers \"is the header complete yet\" idempotently, so re-deriving which phase this recv is in from that costs nothing extra and can't drift out of sync with it.",
           "file": "stdlib/http/http.sl",
-          "line": 2693
+          "line": 2755
         },
         {
           "name": "read",
@@ -1101,7 +1119,7 @@
           "sig": "fn read(c: &mut link, buf: wire, filled: int, deadline: until) -> result[Incoming, str]",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 2774
+          "line": 2836
         },
         {
           "name": "StaticBody",
@@ -1109,7 +1127,7 @@
           "sig": "gc struct StaticBody",
           "doc": "serialize()'s GC allocations (~40 of them for a typical response, see serialize()'s own comment) replaced with two passes over the caller's own arena: size, then fill. If the response is larger than what's left of the arena, falls back to serialize() + send_bytes rather than letting a.wire(need) past capacity kill the task -- a slow response stays a slow response instead of becoming a dropped connection.  Responses with exactly the `text_response` shape (one content-type, nothing else) take the fixed fast path above: no map iteration, no integer str, no intermediate bytes. Anything else uses the general `emit` below, unchanged. A static route's answer: status, content type, and body -- no Response struct, no extra list, nothing to shape-check. serve_conn gets one from serve_static and hands it straight to write_static, which sends the PREBUILT keep-alive rendering (assembled once at registration -- see static_render below) with one wire alloc and one memcpy. The static snapshot lives on the Route (see router.sl); this is just the per-request view of it.",
           "file": "stdlib/http/http.sl",
-          "line": 3101
+          "line": 3188
         },
         {
           "name": "write_static",
@@ -1117,7 +1135,7 @@
           "sig": "fn write_static(c: &mut link, b: StaticBody, a: &mut arena, close: bool, deadline: until) -> result[int, fault]",
           "doc": "The static emit: the keep-alive rendering is prebuilt, not emitted. Hot path (HTTP/1.1 keep-alive, which is every wrk/ab request): one wire, one memcpy, one send -- no probe pass, no Response struct, no map, no integer str, no per-piece puts. The close variant (HTTP/1.0, Connection: close) is rare and pays the emit cost below; it never touches the hot path.",
           "file": "stdlib/http/http.sl",
-          "line": 3114
+          "line": 3201
         },
         {
           "name": "static_render",
@@ -1125,7 +1143,15 @@
           "sig": "fn static_render(status: i32, content_type: str, body: bytes) -> bytes",
           "doc": "The keep-alive rendering, assembled ONCE at registration: status line, one content-type, content-length, connection, blank line, body -- the exact bytes write_static memcpys per request. status_text_of covers the statuses static routes return; the fallback (\"OK\") matches write_static's own close variant above, so the two can never disagree on a reason phrase.",
           "file": "stdlib/http/http.sl",
-          "line": 3146
+          "line": 3261
+        },
+        {
+          "name": "static_date_line",
+          "decl": "fn",
+          "sig": "fn static_date_line() -> str",
+          "doc": "The last header line of a prebuilt static rendering: `date: ` and a date, refreshed in place on every send. A rendering is shared by every request, so the date cannot be part of it; a renderer outside this package (zokor's, with its security headers) ends its header block with this line to get the same. Any other rendering is sent as it is.",
+          "file": "stdlib/http/http.sl",
+          "line": 3289
         },
         {
           "name": "clean_field",
@@ -1133,7 +1159,7 @@
           "sig": "fn clean_field(s: str) -> str",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3193
+          "line": 3348
         },
         {
           "name": "write",
@@ -1141,7 +1167,15 @@
           "sig": "fn write(c: &mut link, r0: Response, a: &mut arena, deadline: until) -> result[int, fault]",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3228
+          "line": 3383
+        },
+        {
+          "name": "write_head",
+          "decl": "fn",
+          "sig": "fn write_head(c: &mut link, r0: Response, a: &mut arena, deadline: until) -> result[int, fault]",
+          "doc": "The answer to a HEAD request: the head `write` would send for `r0` -- Content-Length the length of its body -- and no body (RFC 9110 9.3.2: HEAD's Content-Length is the one GET would carry). Give it the response GET would produce, body and all.",
+          "file": "stdlib/http/http.sl",
+          "line": 3391
         },
         {
           "name": "text_response_bytes",
@@ -1149,7 +1183,7 @@
           "sig": "fn text_response_bytes(status: i32, status_text: str, content_type: str, body: bytes) -> Response",
           "doc": "`text_response` with a BYTES body: same shape, no `to_bytes` copy. The hot path (zokor's JSON renderers, static bodies) already holds bytes; forcing them through str and back cost a full copy plus the literal's own allocation on every response.",
           "file": "stdlib/http/http.sl",
-          "line": 3258
+          "line": 3435
         },
         {
           "name": "text_response",
@@ -1157,7 +1191,7 @@
           "sig": "fn text_response(status: i32, status_text: str, content_type: str, body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3271
+          "line": 3448
         },
         {
           "name": "ok_html",
@@ -1165,7 +1199,7 @@
           "sig": "fn ok_html(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3277
+          "line": 3454
         },
         {
           "name": "ok_css",
@@ -1173,7 +1207,7 @@
           "sig": "fn ok_css(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3281
+          "line": 3458
         },
         {
           "name": "ok_js",
@@ -1181,7 +1215,7 @@
           "sig": "fn ok_js(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3285
+          "line": 3462
         },
         {
           "name": "ok_json",
@@ -1189,7 +1223,7 @@
           "sig": "fn ok_json(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3290
+          "line": 3467
         },
         {
           "name": "ok_text",
@@ -1197,7 +1231,7 @@
           "sig": "fn ok_text(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3294
+          "line": 3471
         },
         {
           "name": "created_json",
@@ -1205,7 +1239,7 @@
           "sig": "fn created_json(body: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3298
+          "line": 3475
         },
         {
           "name": "bad_request",
@@ -1213,7 +1247,7 @@
           "sig": "fn bad_request(msg: str) -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3303
+          "line": 3480
         },
         {
           "name": "bad_request_bytes",
@@ -1221,7 +1255,7 @@
           "sig": "fn bad_request_bytes(msg: bytes) -> Response",
           "doc": "`bad_request` with a BYTES message: same envelope, no `to_bytes` round-trip. The message still rides inside a JSON string, so it is escaped the same way -- see `escape_json_into` below.",
           "file": "stdlib/http/http.sl",
-          "line": 3310
+          "line": 3487
         },
         {
           "name": "not_found",
@@ -1229,7 +1263,7 @@
           "sig": "fn not_found() -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3319
+          "line": 3496
         },
         {
           "name": "method_not_allowed",
@@ -1237,7 +1271,7 @@
           "sig": "fn method_not_allowed() -> Response",
           "doc": "",
           "file": "stdlib/http/http.sl",
-          "line": 3324
+          "line": 3501
         }
       ]
     },
@@ -1251,7 +1285,7 @@
           "sig": "let W_RAW = 0; // pre-built frames, not flow controlled",
           "doc": "---- writer messages -------------------------------------------------  Everything the writer task needs arrives on ONE channel, tagged.  When this was written slang had no `select`, so a writer watching both \"here is a response\" and \"the peer granted more window\" on two channels could only ever block on one of them. `select` exists now and would compile -- but the single tagged stream is still the better design here, and stays. Two channels would make the ORDER between a grant and a body a race the writer has to reason about; one channel makes it the order they were sent, for free, and leaves the writer an ordinary state machine with a single blocking point.",
           "file": "stdlib/http2/conn.sl",
-          "line": 64
+          "line": 65
         },
         {
           "name": "W_BODY",
@@ -1259,7 +1293,7 @@
           "sig": "let W_BODY = 1; // a response: HEADERS now, DATA as window allows",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 65
+          "line": 66
         },
         {
           "name": "W_GRANT",
@@ -1267,7 +1301,7 @@
           "sig": "let W_GRANT = 2; // peer's WINDOW_UPDATE: `n` octets to `stream`",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 66
+          "line": 67
         },
         {
           "name": "W_INITIAL",
@@ -1275,7 +1309,7 @@
           "sig": "let W_INITIAL = 3; // peer's SETTINGS_INITIAL_WINDOW_SIZE is now `n`",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 67
+          "line": 68
         },
         {
           "name": "W_MAXFRAME",
@@ -1283,7 +1317,7 @@
           "sig": "let W_MAXFRAME = 4; // peer's SETTINGS_MAX_FRAME_SIZE is now `n`",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 68
+          "line": 69
         },
         {
           "name": "WMsg",
@@ -1291,7 +1325,7 @@
           "sig": "gc struct WMsg",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 70
+          "line": 71
         },
         {
           "name": "raw_msg",
@@ -1299,7 +1333,7 @@
           "sig": "fn raw_msg(b: bytes) -> WMsg",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 78
+          "line": 79
         },
         {
           "name": "grant_msg",
@@ -1307,15 +1341,15 @@
           "sig": "fn grant_msg(stream: int, n: int) -> WMsg",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 82
+          "line": 83
         },
         {
           "name": "response_msg",
           "decl": "fn",
           "sig": "fn response_msg(stream: int, status: str, extra: [Header], body: bytes) -> WMsg",
-          "doc": "Build a response. The body is handed over UNFRAMED: the writer owns the peer's window and its max frame size, so it -- not the handler -- decides how the body is cut into DATA frames and when each may go.",
+          "doc": "Build a response. The body is handed over UNFRAMED: the writer owns the peer's window and its max frame size, so it -- not the handler -- decides how the body is cut into DATA frames and when each may go.  Like HTTP/1.1's writer: a date unless the handler set one (RFC 9110 6.6.1), and for 1xx, 204 and 304 -- which have no content -- neither content-length nor body.",
           "file": "stdlib/http2/conn.sl",
-          "line": 93
+          "line": 98
         },
         {
           "name": "Limits",
@@ -1323,7 +1357,7 @@
           "sig": "gc struct Limits",
           "doc": "---- deadlines -------------------------------------------------------  Four separate budgets, in nanoseconds, because they defend against four different peers and want wildly different numbers.  `idle` is the generous one on purpose: an HTTP/2 connection sitting open with no streams is completely normal -- that is the whole point of connection reuse -- so timing it out aggressively breaks correct clients. `request` is the strict one: once a client has started a request it must finish it, and dribbling DATA forever is exactly the slowloris shape.",
           "file": "stdlib/http2/conn.sl",
-          "line": 123
+          "line": 143
         },
         {
           "name": "default_limits",
@@ -1331,7 +1365,7 @@
           "sig": "fn default_limits() -> Limits",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 135
+          "line": 155
         },
         {
           "name": "is_timeout",
@@ -1339,7 +1373,7 @@
           "sig": "fn is_timeout(e: str) -> bool",
           "doc": "The reserved error string net.recv_until / net.send_until return when a deadline passes. Exposed as a predicate so callers can react to a slow peer (GOAWAY with ENHANCE_YOUR_CALM) differently from a broken one, without hardcoding the text.",
           "file": "stdlib/http2/conn.sl",
-          "line": 152
+          "line": 172
         },
         {
           "name": "DEFAULT_MAX_FRAME",
@@ -1347,7 +1381,7 @@
           "sig": "let DEFAULT_MAX_FRAME = 16384;",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 156
+          "line": 176
         },
         {
           "name": "DEFAULT_WINDOW",
@@ -1355,7 +1389,7 @@
           "sig": "let DEFAULT_WINDOW = 65535;",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 157
+          "line": 177
         },
         {
           "name": "MAX_HEADER_FIELDS",
@@ -1363,7 +1397,7 @@
           "sig": "let MAX_HEADER_FIELDS = 128;",
           "doc": "Our own limits, advertised in SETTINGS and enforced on receipt.",
           "file": "stdlib/http2/conn.sl",
-          "line": 159
+          "line": 179
         },
         {
           "name": "MAX_BODY",
@@ -1371,7 +1405,7 @@
           "sig": "let MAX_BODY = 1048576;",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 160
+          "line": 180
         },
         {
           "name": "RESET_BURST",
@@ -1379,7 +1413,7 @@
           "sig": "let RESET_BURST = 100;",
           "doc": "---- Rapid Reset (CVE-2023-44487) ------------------------------------  A peer opens a stream and immediately RST_STREAMs it. From its side the stream is closed the instant it opens, so a concurrency limit never sees it -- while the server has already done the HPACK decode and, in most designs, started the work. Repeat and the server is driven at whatever rate the attacker can write frames.  Cancelling a request IS legitimate: a browser navigating away resets its in-flight streams, and a client that gives up on a slow endpoint should. So a flat \"no resets\" rule would break correct clients. What is not legitimate is resetting nearly everything you open, forever.  Hence a burst plus a ratio: RESET_BURST cancellations are free, and after that a peer whose resets outnumber half of what it opened is ending the connection. A browser that abandons a page load trips neither; a Rapid Reset flood resets every stream it opens, so it trips both the moment the burst is spent.",
           "file": "stdlib/http2/conn.sl",
-          "line": 180
+          "line": 200
         },
         {
           "name": "Conn",
@@ -1387,7 +1421,7 @@
           "sig": "gc struct Conn",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 182
+          "line": 202
         },
         {
           "name": "Req",
@@ -1395,7 +1429,7 @@
           "sig": "gc struct Req",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 196
+          "line": 216
         },
         {
           "name": "conn_new",
@@ -1403,7 +1437,7 @@
           "sig": "fn conn_new() -> Conn",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 206
+          "line": 226
         },
         {
           "name": "our_settings",
@@ -1411,7 +1445,7 @@
           "sig": "fn our_settings() -> bytes",
           "doc": "Our SETTINGS: a modest frame size, and push disabled because server push is deprecated and no current client wants it.",
           "file": "stdlib/http2/conn.sl",
-          "line": 220
+          "line": 240
         },
         {
           "name": "gate",
@@ -1419,7 +1453,7 @@
           "sig": "fn gate(n: int) -> chan[bool]",
           "doc": "---- the stream gate -------------------------------------------------  The connection layer cannot cap concurrency on its own: it does not spawn the handlers, the CALLER does. (slang has function values now, so handing it a callback would compile -- but that only moves the same question inside, and the answer would still be this.) So the bound lives in a token channel the caller holds, and this is the mechanism plus the vocabulary for it.  A gate is a chan[bool] holding `n` tokens. gate_enter takes one and blocks when none are left; gate_leave puts one back. That blocking IS the backpressure -- the reader stops pulling frames while every slot is busy, which is the correct answer to \"more work than I can do\", and far better than the alternative measured before this existed: 3002 concurrent handler tasks from a peer we had told our limit was 100.  It also solves shutdown. Closing the writer channel while handlers are still in flight panics them with \"send on closed channel\", and nothing else could tell whether any were left. gate_drain waits for every token to come home, so the close is safe by construction.  The one rule: gate_leave must run on EVERY path out of a handler, including error returns. A lost token permanently shrinks the connection's capacity, and losing all of them wedges that connection (only that one -- the failure is bounded and visible, not a crash).",
           "file": "stdlib/http2/conn.sl",
-          "line": 253
+          "line": 273
         },
         {
           "name": "gate_enter",
@@ -1427,7 +1461,7 @@
           "sig": "fn gate_enter(g: chan[bool])",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 267
+          "line": 287
         },
         {
           "name": "gate_leave",
@@ -1435,7 +1469,7 @@
           "sig": "fn gate_leave(g: chan[bool])",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 274
+          "line": 294
         },
         {
           "name": "gate_drain",
@@ -1443,7 +1477,7 @@
           "sig": "fn gate_drain(g: chan[bool], n: int)",
           "doc": "Wait until every handler has finished, by collecting all `n` tokens. Call before chan_close on the writer channel.",
           "file": "stdlib/http2/conn.sl",
-          "line": 280
+          "line": 300
         },
         {
           "name": "Transport",
@@ -1451,7 +1485,7 @@
           "sig": "gc struct Transport",
           "doc": "---- transport -------------------------------------------------------  h2 runs over cleartext TCP (h2c, prior knowledge) or over TLS, and the two are reached through different runtime calls: net.recv_until on an fd, net.tls_recv_until on an SSL handle. Everything above this point is identical either way, so the difference is confined to one struct and two functions rather than duplicated through the whole layer.  This matters beyond tidiness: browsers speak HTTP/2 ONLY over TLS with ALPN, so a connection layer that can only do fds cannot serve a browser at all, however conformant the rest of it is.",
           "file": "stdlib/http2/conn.sl",
-          "line": 302
+          "line": 322
         },
         {
           "name": "transport_fd",
@@ -1459,7 +1493,7 @@
           "sig": "fn transport_fd(fd: i32) -> Transport",
           "doc": "h2c: cleartext, prior knowledge. curl --http2-prior-knowledge, and Go's http2.Transport with AllowHTTP.",
           "file": "stdlib/http2/conn.sl",
-          "line": 309
+          "line": 329
         },
         {
           "name": "transport_tls",
@@ -1467,7 +1501,7 @@
           "sig": "fn transport_tls(ssl: rawptr) -> Transport",
           "doc": "h2 over TLS. The handle comes from net.tls_accept, and the caller is responsible for having negotiated \"h2\" via ALPN first -- see alpn_is_h2 below.",
           "file": "stdlib/http2/conn.sl",
-          "line": 316
+          "line": 336
         },
         {
           "name": "tr_close",
@@ -1475,7 +1509,7 @@
           "sig": "fn tr_close(t: Transport)",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 334
+          "line": 354
         },
         {
           "name": "alpn_is_h2",
@@ -1483,7 +1517,7 @@
           "sig": "fn alpn_is_h2(proto: str) -> bool",
           "doc": "RFC 7301 \u00a73.1: the peer either selected \"h2\" or it did not. A server that advertised h2 and http/1.1 must look, because a browser offered both and may well have picked http/1.1 -- feeding an HTTP/1.1 client into this layer produces \"bad connection preface\", which is true but unhelpful.",
           "file": "stdlib/http2/conn.sl",
-          "line": 347
+          "line": 367
         },
         {
           "name": "Reader",
@@ -1491,7 +1525,7 @@
           "sig": "gc struct Reader",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 356
+          "line": 376
         },
         {
           "name": "reader_new",
@@ -1499,7 +1533,7 @@
           "sig": "fn reader_new() -> Reader",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 360
+          "line": 380
         },
         {
           "name": "read_frame",
@@ -1507,7 +1541,7 @@
           "sig": "fn read_frame(r: Reader, t: Transport, max_frame: int, u: until) -> result[Frame, str]",
           "doc": "Pull bytes until at least one complete frame is buffered, then return it and keep the remainder. Note the `&mut *c` at every site below that forwards this borrow: passing `c` directly MOVES it, so the second call would fail with \"use of moved value\". Reborrowing keeps the caller's borrow usable.  `u` bounds the WHOLE call, not each recv: a peer that sends one octet every second must still finish the frame inside the budget, which is what makes this a slowloris defence rather than a keepalive check. Pass until_never() only where blocking forever is genuinely intended.",
           "file": "stdlib/http2/conn.sl",
-          "line": 374
+          "line": 394
         },
         {
           "name": "accept_preface",
@@ -1515,7 +1549,7 @@
           "sig": "fn accept_preface(r: Reader, t: Transport, wch: chan[WMsg], u: until) -> result[bool, str]",
           "doc": "Verify the 24-byte client connection preface and send ours.",
           "file": "stdlib/http2/conn.sl",
-          "line": 411
+          "line": 431
         },
         {
           "name": "read_request",
@@ -1523,7 +1557,7 @@
           "sig": "fn read_request(cn: Conn, r: Reader, t: Transport, wch: chan[WMsg], lim: Limits) -> result[Req, str]",
           "doc": "Read frames until one complete request has arrived.  Two clocks, switched at the first HEADERS. Before it the connection is idle and gets the generous `idle` budget, refreshed by each control frame that arrives -- a client PINGing a kept-alive connection is behaving correctly and must not be disconnected. After it the strict `request` budget applies to the request as a WHOLE and is never refreshed, so no amount of dribbled DATA or CONTINUATION can extend it.",
           "file": "stdlib/http2/conn.sl",
-          "line": 583
+          "line": 603
         },
         {
           "name": "writer_task",
@@ -1531,7 +1565,7 @@
           "sig": "fn writer_task(t: Transport, wch: chan[WMsg], write_ns: int)",
           "doc": "Owns the write side, and with it the peer's send windows.  Flow control has to live here rather than in the handlers. The window is a property of the CONNECTION, shared by every concurrent stream, so no handler can decide on its own whether it may send -- and the WINDOW_UPDATE that grants credit arrives on the read side, in a different task entirely. Routing both into this one task is what lets the accounting be correct without a lock at all. slang does have a mutex now, but reaching for one here would be the worse design: it would serialise the writers without making the window arithmetic any less shared.  A blocked stream parks its BODY here, not its task: the handler hands the response over and moves on, so a peer with a tiny window costs a queue entry rather than a live task.",
           "file": "stdlib/http2/conn.sl",
-          "line": 919
+          "line": 939
         },
         {
           "name": "respond",
@@ -1539,7 +1573,7 @@
           "sig": "fn respond(cn: Conn, wch: chan[WMsg], stream: int, status: str, extra: [Header], body: bytes)",
           "doc": "Enqueue a response for `stream`. Every write on the connection goes through the writer task, so there is deliberately no direct-write variant: one would be able to interleave with a handler mid-frame.",
           "file": "stdlib/http2/conn.sl",
-          "line": 1024
+          "line": 1044
         },
         {
           "name": "send_reset",
@@ -1547,7 +1581,7 @@
           "sig": "fn send_reset(wch: chan[WMsg], stream: int, code: int)",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 1029
+          "line": 1049
         },
         {
           "name": "send_goaway",
@@ -1555,7 +1589,7 @@
           "sig": "fn send_goaway(wch: chan[WMsg], last_stream: int, code: int, msg: str)",
           "doc": "",
           "file": "stdlib/http2/conn.sl",
-          "line": 1033
+          "line": 1053
         },
         {
           "name": "FRAME_HEADER_LEN",
@@ -3125,7 +3159,7 @@
           "sig": "gc struct Config",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 63
+          "line": 64
         },
         {
           "name": "Conn",
@@ -3133,7 +3167,7 @@
           "sig": "gc struct Conn",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 92
+          "line": 93
         },
         {
           "name": "Notification",
@@ -3141,7 +3175,7 @@
           "sig": "gc struct Notification",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 165
+          "line": 166
         },
         {
           "name": "Arg",
@@ -3149,7 +3183,7 @@
           "sig": "gc struct Arg",
           "doc": "A query parameter. Build one with arg_text, arg_int, arg_float, arg_bool, arg_bytes or arg_null.",
           "file": "stdlib/pg/pg.sl",
-          "line": 173
+          "line": 174
         },
         {
           "name": "Rows",
@@ -3157,7 +3191,7 @@
           "sig": "gc struct Rows",
           "doc": "A buffered result. Read cells with get_text / get_int / get_float / get_bool / get_bytes, by row and column index; col() finds an index by name.",
           "file": "stdlib/pg/pg.sl",
-          "line": 182
+          "line": 183
         },
         {
           "name": "parse_url",
@@ -3165,7 +3199,7 @@
           "sig": "fn parse_url(url: str) -> result[Config, str]",
           "doc": "postgres://user:password@host:port/database?sslmode=require  Recognised parameters: sslmode, sslrootcert, application_name, host and port. Any other parameter is an error rather than ignored: a misspelt \"sslmdoe=require\" that was silently dropped would connect in the clear, and nothing would ever say so.  sslmode: disable      cleartext. require      TLS, certificate and hostname verified. verify-full  the same as require (the libpq spelling of it). prefer, allow, verify-ca are refused. The first two fall back to cleartext when TLS fails, which is exactly what an attacker in the middle would arrange; verify-ca checks the chain but not the host.  With no sslmode the default is \"require\" -- except for a loopback host, where it is \"disable\", because traffic that never leaves the machine gains nothing from TLS and a local development server almost never has it configured.  A Unix-domain socket is named by its DIRECTORY, as libpq does: either percent-encoded as the host (postgres://app@%2Fvar%2Frun%2Fpostgresql/db) or as ?host=/var/run/postgresql. The socket file is <dir>/.s.PGSQL.<port>. Postgres does not use TLS over one, so sslmode defaults to disable and asking for require is an error.",
           "file": "stdlib/pg/pg.sl",
-          "line": 363
+          "line": 364
         },
         {
           "name": "sqlstate",
@@ -3173,7 +3207,7 @@
           "sig": "fn sqlstate(e: str) -> str",
           "doc": "The SQLSTATE of an error returned by this package, or \"\" when the error did not come from the server (a dial failure, a timeout).  if pg.sqlstate(e) == \"23505\" { /* unique_violation */ }",
           "file": "stdlib/pg/pg.sl",
-          "line": 769
+          "line": 770
         },
         {
           "name": "Scram",
@@ -3181,7 +3215,7 @@
           "sig": "gc struct Scram",
           "doc": "One SCRAM-SHA-256 exchange (RFC 5802, RFC 7677), as pure functions of its inputs, so the published test vector can check it.",
           "file": "stdlib/pg/pg.sl",
-          "line": 844
+          "line": 845
         },
         {
           "name": "scram_client_final",
@@ -3189,7 +3223,7 @@
           "sig": "fn scram_client_final(password: str, client_first_bare: str, server_first: str, client_nonce: str) -> result[Scram, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 849
+          "line": 850
         },
         {
           "name": "connect",
@@ -3197,7 +3231,7 @@
           "sig": "fn connect(url: str, deadline: until) -> result[Conn, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 1077
+          "line": 1078
         },
         {
           "name": "connect_config",
@@ -3205,7 +3239,7 @@
           "sig": "fn connect_config(cfg: Config, deadline: until) -> result[Conn, str]",
           "doc": "The deadline bounds the whole connection: the lookup, the TCP connect, the TLS handshake and the startup and authentication exchange.",
           "file": "stdlib/pg/pg.sl",
-          "line": 1087
+          "line": 1088
         },
         {
           "name": "close",
@@ -3213,7 +3247,7 @@
           "sig": "fn close(c: Conn)",
           "doc": "Ends the session politely (Terminate) and closes the socket. Safe to call on a broken or already-closed connection.",
           "file": "stdlib/pg/pg.sl",
-          "line": 1114
+          "line": 1115
         },
         {
           "name": "usable",
@@ -3221,7 +3255,7 @@
           "sig": "fn usable(c: Conn) -> bool",
           "doc": "Is the connection still usable? False once it has been closed or has broken; a false Conn only ever returns errors.",
           "file": "stdlib/pg/pg.sl",
-          "line": 1126
+          "line": 1127
         },
         {
           "name": "in_transaction",
@@ -3229,7 +3263,7 @@
           "sig": "fn in_transaction(c: Conn) -> bool",
           "doc": "Inside a transaction block (including a failed one that still needs ROLLBACK)?",
           "file": "stdlib/pg/pg.sl",
-          "line": 1132
+          "line": 1133
         },
         {
           "name": "server_param",
@@ -3237,7 +3271,7 @@
           "sig": "fn server_param(c: Conn, name: str) -> opt[str]",
           "doc": "A server setting reported at startup or after SET: \"server_version\", \"TimeZone\", \"standard_conforming_strings\", ...",
           "file": "stdlib/pg/pg.sl",
-          "line": 1138
+          "line": 1139
         },
         {
           "name": "arg_text",
@@ -3245,7 +3279,7 @@
           "sig": "fn arg_text(s: str) -> Arg",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 1174
+          "line": 1175
         },
         {
           "name": "arg_int",
@@ -3253,7 +3287,7 @@
           "sig": "fn arg_int(n: int) -> Arg",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 1178
+          "line": 1179
         },
         {
           "name": "arg_float",
@@ -3261,7 +3295,7 @@
           "sig": "fn arg_float(x: float) -> Arg",
           "doc": "Sent as the shortest text that reads back as exactly this float: to_str's six significant digits would round it.",
           "file": "stdlib/pg/pg.sl",
-          "line": 1184
+          "line": 1185
         },
         {
           "name": "arg_bool",
@@ -3269,7 +3303,7 @@
           "sig": "fn arg_bool(b: bool) -> Arg",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 1189
+          "line": 1190
         },
         {
           "name": "arg_bytes",
@@ -3277,7 +3311,7 @@
           "sig": "fn arg_bytes(b: bytes) -> Arg",
           "doc": "Sent in binary, so any byte values -- NULs included -- arrive intact. For a bytea column.",
           "file": "stdlib/pg/pg.sl",
-          "line": 1199
+          "line": 1200
         },
         {
           "name": "arg_null",
@@ -3285,7 +3319,15 @@
           "sig": "fn arg_null() -> Arg",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 1203
+          "line": 1204
+        },
+        {
+          "name": "arg_time",
+          "decl": "fn",
+          "sig": "fn arg_time(t: timez.Time) -> Arg",
+          "doc": "An instant for a timestamptz parameter, as RFC 3339 in UTC. Postgres keeps microseconds: a finer fraction is rounded by the server.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 1210
         },
         {
           "name": "query",
@@ -3293,7 +3335,7 @@
           "sig": "fn query(c: Conn, sql: str, args: [Arg], deadline: until) -> result[Rows, str]",
           "doc": "Runs one query with parameters ($1, $2, ...) through the extended protocol: the values travel separately from the SQL text, so they can never be parsed as SQL. Returns every row, buffered; for a result too big to hold at once, use stream().",
           "file": "stdlib/pg/pg.sl",
-          "line": 1878
+          "line": 1885
         },
         {
           "name": "exec",
@@ -3301,7 +3343,7 @@
           "sig": "fn exec(c: Conn, sql: str, deadline: until) -> result[int, str]",
           "doc": "Runs SQL with no parameters through the simple protocol, which accepts several statements separated by semicolons -- a migration, a schema. Returns the rows affected by the last statement. Rows a statement returns are read and discarded.  Never build `sql` from untrusted input: use query() and parameters.",
           "file": "stdlib/pg/pg.sl",
-          "line": 1915
+          "line": 1922
         },
         {
           "name": "stream",
@@ -3309,7 +3351,7 @@
           "sig": "fn stream(c: Conn, sql: str, args: [Arg], deadline: until) -> result[Rows, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 1958
+          "line": 1965
         },
         {
           "name": "next_row",
@@ -3317,7 +3359,7 @@
           "sig": "fn next_row(c: Conn, rows: Rows, deadline: until) -> result[bool, str]",
           "doc": "Reads the next row of a stream into `rows` (at index 0). Returns false once there are no more; rows.affected and rows.tag are set then.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2010
+          "line": 2017
         },
         {
           "name": "stream_close",
@@ -3325,7 +3367,7 @@
           "sig": "fn stream_close(c: Conn, rows: Rows, deadline: until) -> result[bool, str]",
           "doc": "Ends a stream early. The server is asked to cancel the query first -- and that request is seen through before the rest is drained, so it can never land on a LATER query on this connection -- then whatever it had already sent is read and dropped. The connection is then free.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2045
+          "line": 2052
         },
         {
           "name": "copy_in_start",
@@ -3333,7 +3375,7 @@
           "sig": "fn copy_in_start(c: Conn, sql: str, deadline: until) -> result[bool, str]",
           "doc": "Starts COPY ... FROM STDIN. Send data with copy_in_send, then finish with copy_in_end -- or copy_in_abort, which rolls the COPY back.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2147
+          "line": 2154
         },
         {
           "name": "copy_in_send",
@@ -3341,7 +3383,7 @@
           "sig": "fn copy_in_send(c: Conn, data: bytes, deadline: until) -> result[bool, str]",
           "doc": "Sends COPY data. It need not end on a row boundary; the server reassembles it. An error in the data is reported by copy_in_end.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2153
+          "line": 2160
         },
         {
           "name": "copy_in_end",
@@ -3349,7 +3391,7 @@
           "sig": "fn copy_in_end(c: Conn, deadline: until) -> result[int, str]",
           "doc": "Ends the COPY. Returns the number of rows loaded, or the server's error about the data -- in which case nothing was loaded.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2203
+          "line": 2210
         },
         {
           "name": "copy_in_abort",
@@ -3357,7 +3399,7 @@
           "sig": "fn copy_in_abort(c: Conn, reason: str, deadline: until) -> result[bool, str]",
           "doc": "Abandons the COPY: the server discards everything sent. Ok once the server has confirmed; its \"COPY from stdin failed\" is the expected answer, not an error.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2210
+          "line": 2217
         },
         {
           "name": "copy_from",
@@ -3365,7 +3407,7 @@
           "sig": "fn copy_from(c: Conn, sql: str, data: bytes, deadline: until) -> result[int, str]",
           "doc": "COPY ... FROM STDIN in one call. Returns the rows loaded.  pg.copy_from(c, \"COPY users (id, email) FROM STDIN (FORMAT csv)\", to_bytes(\"1,a@example.com\\n2,b@example.com\\n\"), dl)",
           "file": "stdlib/pg/pg.sl",
-          "line": 2225
+          "line": 2232
         },
         {
           "name": "copy_out_start",
@@ -3373,7 +3415,7 @@
           "sig": "fn copy_out_start(c: Conn, sql: str, deadline: until) -> result[bool, str]",
           "doc": "Starts COPY ... TO STDOUT. Read it with copy_out_next.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2239
+          "line": 2246
         },
         {
           "name": "copy_out_next",
@@ -3381,7 +3423,7 @@
           "sig": "fn copy_out_next(c: Conn, deadline: until) -> result[opt[bytes], str]",
           "doc": "The next piece of COPY output -- in text and CSV formats, one row -- or none when it is complete.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2245
+          "line": 2252
         },
         {
           "name": "copy_to",
@@ -3389,7 +3431,7 @@
           "sig": "fn copy_to(c: Conn, sql: str, deadline: until) -> result[bytes, str]",
           "doc": "COPY ... TO STDOUT in one call, buffered (up to the 256 MiB result limit; stream a larger one with copy_out_start / copy_out_next).",
           "file": "stdlib/pg/pg.sl",
-          "line": 2279
+          "line": 2286
         },
         {
           "name": "listen",
@@ -3397,7 +3439,7 @@
           "sig": "fn listen(c: Conn, channel: str, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2320
+          "line": 2327
         },
         {
           "name": "unlisten",
@@ -3405,7 +3447,7 @@
           "sig": "fn unlisten(c: Conn, channel: str, deadline: until) -> result[bool, str]",
           "doc": "\"*\" stops listening on every channel.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2329
+          "line": 2336
         },
         {
           "name": "notify",
@@ -3413,7 +3455,7 @@
           "sig": "fn notify(c: Conn, channel: str, payload: str, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2341
+          "line": 2348
         },
         {
           "name": "wait_notification",
@@ -3421,7 +3463,7 @@
           "sig": "fn wait_notification(c: Conn, deadline: until) -> result[opt[Notification], str]",
           "doc": "The oldest queued notification, or waits for one until the deadline: none then. Unlike every other call, reaching the deadline here is not an error and does not break the connection -- waiting is the point.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2354
+          "line": 2361
         },
         {
           "name": "col",
@@ -3429,7 +3471,7 @@
           "sig": "fn col(rows: Rows, name: str) -> int",
           "doc": "The index of the column called `name`. Panics if there is none: the query and the code reading it disagree, which is a bug, not a condition to handle.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2443
+          "line": 2450
         },
         {
           "name": "is_null",
@@ -3437,7 +3479,7 @@
           "sig": "fn is_null(rows: Rows, r: int, c: int) -> bool",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2468
+          "line": 2475
         },
         {
           "name": "get_text",
@@ -3445,15 +3487,31 @@
           "sig": "fn get_text(rows: Rows, r: int, c: int) -> str",
           "doc": "Any column, in Postgres's text form: numbers, dates, uuid and json all arrive this way.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2513
+          "line": 2520
+        },
+        {
+          "name": "timestamp_rfc3339",
+          "decl": "fn",
+          "sig": "fn timestamp_rfc3339(cell: str, has_tz: bool) -> opt[str]",
+          "doc": "int2, int4, int8 and oid. A timestamptz or timestamp cell as RFC 3339 text: Postgres writes \"2026-10-13 09:30:15.123456+00\" (a space, and an hour-only offset when the minutes are zero); this is \"2026-10-13T09:30:15.123456+00:00\". A timestamp without a time zone names no instant and is read as UTC, as Go's drivers read it. none for infinity, -infinity and BC dates, which a timez.Time cannot hold, and for text that is not a Postgres timestamp.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 2601
+        },
+        {
+          "name": "get_time",
+          "decl": "fn",
+          "sig": "fn get_time(rows: Rows, r: int, c: int) -> result[timez.Time, str]",
+          "doc": "The instant in a timestamptz (or timestamp, read as UTC) cell. err for another column type, infinity, a BC date, or a seconds-level offset.",
+          "file": "stdlib/pg/pg.sl",
+          "line": 2639
         },
         {
           "name": "get_int",
           "decl": "fn",
           "sig": "fn get_int(rows: Rows, r: int, c: int) -> int",
-          "doc": "int2, int4, int8 and oid.",
+          "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2588
+          "line": 2652
         },
         {
           "name": "get_float",
@@ -3461,7 +3519,7 @@
           "sig": "fn get_float(rows: Rows, r: int, c: int) -> float",
           "doc": "float4, float8, numeric, and the integer types. A numeric too precise for a double is rounded; read it with get_text to keep every digit.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2615
+          "line": 2679
         },
         {
           "name": "get_bool",
@@ -3469,7 +3527,7 @@
           "sig": "fn get_bool(rows: Rows, r: int, c: int) -> bool",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2637
+          "line": 2701
         },
         {
           "name": "get_bytes",
@@ -3477,7 +3535,7 @@
           "sig": "fn get_bytes(rows: Rows, r: int, c: int) -> bytes",
           "doc": "bytea, decoded from the server's hex output format.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2649
+          "line": 2713
         },
         {
           "name": "Pool",
@@ -3485,7 +3543,7 @@
           "sig": "gc struct Pool",
           "doc": "A bounded set of connections to one database, shared by any number of tasks.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2686
+          "line": 2750
         },
         {
           "name": "new_pool",
@@ -3493,7 +3551,7 @@
           "sig": "fn new_pool(url: str, max_open: int) -> result[Pool, str]",
           "doc": "Parses the url; connects nothing until the first acquire.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2720
+          "line": 2784
         },
         {
           "name": "acquire",
@@ -3501,7 +3559,7 @@
           "sig": "fn acquire(p: Pool, deadline: until) -> result[Conn, str]",
           "doc": "A connection for the caller's exclusive use, until release(). Prefer pool_query / pool_exec, which cannot forget to release; acquire is for a transaction, which needs several statements on one connection.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2843
+          "line": 2907
         },
         {
           "name": "release",
@@ -3509,7 +3567,7 @@
           "sig": "fn release(p: Pool, c: Conn)",
           "doc": "Returns a connection to the pool: to the oldest waiting task if there is one, else to the idle list. One that is broken, closed, or still inside a transaction is closed instead, and its slot passed on: handing an open transaction to the next caller would run its statements inside someone else's uncommitted work.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2917
+          "line": 2981
         },
         {
           "name": "pool_query",
@@ -3517,7 +3575,7 @@
           "sig": "fn pool_query(p: Pool, sql: str, args: [Arg], deadline: until) -> result[Rows, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2945
+          "line": 3009
         },
         {
           "name": "pool_exec",
@@ -3525,7 +3583,7 @@
           "sig": "fn pool_exec(p: Pool, sql: str, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 2956
+          "line": 3020
         },
         {
           "name": "pool_close",
@@ -3533,7 +3591,7 @@
           "sig": "fn pool_close(p: Pool)",
           "doc": "Closes every idle connection and fails every waiting acquire. Connections in use are closed as they are released; acquire fails from now on.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2969
+          "line": 3033
         }
       ]
     },
@@ -5450,6 +5508,1181 @@
           "ret": null,
           "tls": false,
           "sig": "time.sleep(int)"
+        },
+        {
+          "name": "http_date",
+          "params": [],
+          "ret": "str",
+          "tls": false,
+          "sig": "time.http_date() -> str"
+        },
+        {
+          "name": "put_http_date",
+          "params": [
+            "wire",
+            "int"
+          ],
+          "ret": "int",
+          "tls": false,
+          "sig": "time.put_http_date(wire, int) -> int"
+        }
+      ]
+    },
+    "timez": {
+      "name": "timez",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Time.rfc3339",
+          "decl": "fn",
+          "sig": "fn rfc3339(self: Time) -> str",
+          "doc": "\"2026-10-13T09:30:15Z\": seconds, UTC.",
+          "file": "stdlib/timez/format.sl",
+          "line": 73
+        },
+        {
+          "name": "Time.rfc3339_milli",
+          "decl": "fn",
+          "sig": "fn rfc3339_milli(self: Time) -> str",
+          "doc": "\"2026-10-13T09:30:15.000Z\": always milliseconds, as JavaScript's toISOString() writes them -- what a browser client parses most happily.",
+          "file": "stdlib/timez/format.sl",
+          "line": 80
+        },
+        {
+          "name": "Time.rfc3339_nano",
+          "decl": "fn",
+          "sig": "fn rfc3339_nano(self: Time) -> str",
+          "doc": "\"2026-10-13T09:30:15.5Z\": every nanosecond the instant has, no trailing zeros -- what round-trips exactly.",
+          "file": "stdlib/timez/format.sl",
+          "line": 86
+        },
+        {
+          "name": "Time.rfc3339_at",
+          "decl": "fn",
+          "sig": "fn rfc3339_at(self: Time, offset_seconds: int) -> str",
+          "doc": "The same instant as the wall time at a fixed offset from UTC (seconds east, -64800 to 64800): \"2026-10-13T11:30:15+02:00\".",
+          "file": "stdlib/timez/format.sl",
+          "line": 92
+        },
+        {
+          "name": "Time.http_date",
+          "decl": "fn",
+          "sig": "fn http_date(self: Time) -> str",
+          "doc": "\"Tue, 13 Oct 2026 09:30:15 GMT\": the HTTP date (RFC 9110 IMF-fixdate) for Date, Last-Modified, Expires and cookie Expires.",
+          "file": "stdlib/timez/format.sl",
+          "line": 100
+        },
+        {
+          "name": "Time.rfc2822",
+          "decl": "fn",
+          "sig": "fn rfc2822(self: Time) -> str",
+          "doc": "\"Tue, 13 Oct 2026 09:30:15 +0000\": email (RFC 5322) dates.",
+          "file": "stdlib/timez/format.sl",
+          "line": 108
+        },
+        {
+          "name": "Time.format",
+          "decl": "fn",
+          "sig": "fn format(self: Time, layout: str) -> str",
+          "doc": "strftime-style formatting, locale-free (English names), UTC:  %Y year (2026)   %m month 01-12   %d day 01-31   %e day, space-padded %H hour 00-23    %I hour 01-12    %M minute      %S second    %p AM/PM %L milliseconds (000-999)   %f microseconds   %N nanoseconds (9 digits) %a Tue  %A Tuesday  %b Oct  %B October  %j day of year 001-366 %u weekday 1-7 (Monday 1)  %G ISO year  %V ISO week 01-53 %s Unix seconds   %z +0000   %Z UTC   %F %Y-%m-%d   %T %H:%M:%S   %% %  An unknown directive is written as it is, so a typo shows in the output instead of vanishing.",
+          "file": "stdlib/timez/format.sl",
+          "line": 123
+        },
+        {
+          "name": "parse_date",
+          "decl": "fn",
+          "sig": "fn parse_date(s: str) -> result[Date, str]",
+          "doc": "\"2026-10-13\" (and only that): a calendar date.",
+          "file": "stdlib/timez/format.sl",
+          "line": 212
+        },
+        {
+          "name": "parse_rfc3339",
+          "decl": "fn",
+          "sig": "fn parse_rfc3339(s: str) -> result[Time, str]",
+          "doc": "An RFC 3339 timestamp: \"2026-10-13T09:30:15Z\", with an optional fraction of up to 9 digits and a \"Z\" or \"+hh:mm\"/\"-hh:mm\" offset, which is applied: the result is the instant, in UTC. \"t\" and \"z\" and a space for \"T\" are accepted, as RFC 3339 allows. A missing offset is refused: a timestamp without one names no instant.",
+          "file": "stdlib/timez/format.sl",
+          "line": 231
+        },
+        {
+          "name": "parse_http_date",
+          "decl": "fn",
+          "sig": "fn parse_http_date(s: str) -> result[Time, str]",
+          "doc": "An HTTP date. RFC 9110 has recipients accept three forms, and so does this:  Tue, 13 Oct 2026 09:30:15 GMT       IMF-fixdate (what everything sends) Tuesday, 13-Oct-26 09:30:15 GMT     RFC 850 (two-digit year: more than 50 years ahead means last century) Tue Oct 13 09:30:15 2026            asctime",
+          "file": "stdlib/timez/format.sl",
+          "line": 333
+        },
+        {
+          "name": "parse_rfc2822",
+          "decl": "fn",
+          "sig": "fn parse_rfc2822(s: str) -> result[Time, str]",
+          "doc": "An email date (RFC 5322): an optional weekday, a 1-2 digit day, a month, a 4-digit year, hh:mm with optional :ss, and a \"+hhmm\"/\"-hhmm\" offset or UT/GMT/Z.",
+          "file": "stdlib/timez/format.sl",
+          "line": 393
+        },
+        {
+          "name": "relative",
+          "decl": "fn",
+          "sig": "fn relative(t: Time, now_t: Time) -> str",
+          "doc": "How long ago `t` was, or how far ahead, from `now_t`, the way people say it: \"just now\", \"45 seconds ago\", \"3 minutes ago\", \"in 2 hours\", \"yesterday\", \"5 days ago\", \"in 3 weeks\", \"2 months ago\", \"1 year ago\". Rounded down, so \"1 hour ago\" means at least an hour.",
+          "file": "stdlib/timez/format.sl",
+          "line": 460
+        },
+        {
+          "name": "Clock",
+          "decl": "struct",
+          "sig": "gc struct Clock",
+          "doc": "Where code gets the time, so a test can set it instead of sleeping. Pass a Clock in your state; production uses system_clock().",
+          "file": "stdlib/timez/ops.sl",
+          "line": 17
+        },
+        {
+          "name": "system_clock",
+          "decl": "fn",
+          "sig": "fn system_clock() -> Clock",
+          "doc": "",
+          "file": "stdlib/timez/ops.sl",
+          "line": 23
+        },
+        {
+          "name": "fixed_clock",
+          "decl": "fn",
+          "sig": "fn fixed_clock(t: Time) -> Clock",
+          "doc": "A clock that stays at `t` until advanced or set.",
+          "file": "stdlib/timez/ops.sl",
+          "line": 28
+        },
+        {
+          "name": "Clock.now",
+          "decl": "fn",
+          "sig": "fn now(self: Clock) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/ops.sl",
+          "line": 33
+        },
+        {
+          "name": "Clock.advance",
+          "decl": "fn",
+          "sig": "fn advance(self: Clock, d: int) -> Time",
+          "doc": "Moves a fixed clock forward by `d` (no effect on the system clock).",
+          "file": "stdlib/timez/ops.sl",
+          "line": 44
+        },
+        {
+          "name": "Clock.set",
+          "decl": "fn",
+          "sig": "fn set(self: Clock, t: Time)",
+          "doc": "",
+          "file": "stdlib/timez/ops.sl",
+          "line": 52
+        },
+        {
+          "name": "Stopwatch",
+          "decl": "struct",
+          "sig": "struct Stopwatch",
+          "doc": "Measures elapsed time on the monotonic clock: a wall-clock correction (NTP, a person setting the time) cannot make it jump or go backwards.",
+          "file": "stdlib/timez/ops.sl",
+          "line": 63
+        },
+        {
+          "name": "start_stopwatch",
+          "decl": "fn",
+          "sig": "fn start_stopwatch() -> Stopwatch",
+          "doc": "",
+          "file": "stdlib/timez/ops.sl",
+          "line": 67
+        },
+        {
+          "name": "Stopwatch.elapsed",
+          "decl": "fn",
+          "sig": "fn elapsed(self: Stopwatch) -> int",
+          "doc": "Nanoseconds since the stopwatch started.",
+          "file": "stdlib/timez/ops.sl",
+          "line": 73
+        },
+        {
+          "name": "Stopwatch.elapsed_text",
+          "decl": "fn",
+          "sig": "fn elapsed_text(self: Stopwatch) -> str",
+          "doc": "\"1.502s\".",
+          "file": "stdlib/timez/ops.sl",
+          "line": 78
+        },
+        {
+          "name": "Interval",
+          "decl": "struct",
+          "sig": "struct Interval",
+          "doc": "A half-open span [start, end): it contains its start, not its end, so back-to-back intervals (09:00-10:00, 10:00-11:00) do not overlap.",
+          "file": "stdlib/timez/ops.sl",
+          "line": 87
+        },
+        {
+          "name": "interval",
+          "decl": "fn",
+          "sig": "fn interval(start: Time, end: Time) -> result[Interval, str]",
+          "doc": "err when `end` is before `start`.",
+          "file": "stdlib/timez/ops.sl",
+          "line": 93
+        },
+        {
+          "name": "Interval.contains",
+          "decl": "fn",
+          "sig": "fn contains(self: Interval, t: Time) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/ops.sl",
+          "line": 102
+        },
+        {
+          "name": "Interval.overlaps",
+          "decl": "fn",
+          "sig": "fn overlaps(self: Interval, o: Interval) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/ops.sl",
+          "line": 106
+        },
+        {
+          "name": "Interval.intersection",
+          "decl": "fn",
+          "sig": "fn intersection(self: Interval, o: Interval) -> opt[Interval]",
+          "doc": "The span both cover, none when they do not overlap.",
+          "file": "stdlib/timez/ops.sl",
+          "line": 111
+        },
+        {
+          "name": "Interval.length",
+          "decl": "fn",
+          "sig": "fn length(self: Interval) -> int",
+          "doc": "Nanoseconds from start to end.",
+          "file": "stdlib/timez/ops.sl",
+          "line": 119
+        },
+        {
+          "name": "Interval.is_empty",
+          "decl": "fn",
+          "sig": "fn is_empty(self: Interval) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/ops.sl",
+          "line": 123
+        },
+        {
+          "name": "Cron",
+          "decl": "struct",
+          "sig": "gc struct Cron",
+          "doc": "A five-field cron schedule: minute hour day-of-month month day-of-week. Each field takes `*`, numbers, ranges (`9-17`), lists (`1,15`), steps (`*/15`, `0-30/10`), month names (JAN-DEC) and weekday names (SUN-SAT; 0 and 7 are both Sunday). Macros: @yearly @annually @monthly @weekly @daily @midnight @hourly. As in Vixie cron, when both day fields are restricted a day matches either one.",
+          "file": "stdlib/timez/ops.sl",
+          "line": 136
+        },
+        {
+          "name": "parse_cron",
+          "decl": "fn",
+          "sig": "fn parse_cron(spec: str) -> result[Cron, str]",
+          "doc": "",
+          "file": "stdlib/timez/ops.sl",
+          "line": 213
+        },
+        {
+          "name": "Cron.next_after",
+          "decl": "fn",
+          "sig": "fn next_after(self: Cron, t: Time, z: Zone) -> opt[Time]",
+          "doc": "The first run strictly after `t`, read on the clocks of `z`; none when the schedule never matches (Feb 30) within eight years. A run whose wall time a daylight-saving change skips happens when the clock reaches it (moved forward); one the change repeats runs once.",
+          "file": "stdlib/timez/ops.sl",
+          "line": 274
+        },
+        {
+          "name": "NANOSECOND",
+          "decl": "let",
+          "sig": "let NANOSECOND = 1;",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 29
+        },
+        {
+          "name": "MICROSECOND",
+          "decl": "let",
+          "sig": "let MICROSECOND = 1000;",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 30
+        },
+        {
+          "name": "MILLISECOND",
+          "decl": "let",
+          "sig": "let MILLISECOND = 1000000;",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 31
+        },
+        {
+          "name": "SECOND",
+          "decl": "let",
+          "sig": "let SECOND = 1000000000;",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 32
+        },
+        {
+          "name": "MINUTE",
+          "decl": "let",
+          "sig": "let MINUTE = 60000000000;",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 33
+        },
+        {
+          "name": "HOUR",
+          "decl": "let",
+          "sig": "let HOUR = 3600000000000;",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 34
+        },
+        {
+          "name": "DAY",
+          "decl": "let",
+          "sig": "let DAY = 86400000000000;",
+          "doc": "24 hours.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 36
+        },
+        {
+          "name": "Time",
+          "decl": "struct",
+          "sig": "struct Time",
+          "doc": "An instant, in UTC.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 49
+        },
+        {
+          "name": "Date",
+          "decl": "struct",
+          "sig": "struct Date",
+          "doc": "A calendar day, with no time and no zone: a birthday, a due date, a day of a report.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 58
+        },
+        {
+          "name": "IsoWeek",
+          "decl": "struct",
+          "sig": "struct IsoWeek",
+          "doc": "An ISO 8601 week: weeks start on Monday, and week 1 is the one with the year's first Thursday, so early January can belong to the previous year's last week.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 67
+        },
+        {
+          "name": "days_from_civil",
+          "decl": "fn",
+          "sig": "fn days_from_civil(y: int, m: int, d: int) -> int",
+          "doc": "Days since 1970-01-01 for a civil date (Howard Hinnant's algorithm: exact for every proleptic Gregorian date in range).",
+          "file": "stdlib/timez/timez.sl",
+          "line": 89
+        },
+        {
+          "name": "civil_from_days",
+          "decl": "fn",
+          "sig": "fn civil_from_days(days: int) -> Date",
+          "doc": "The civil date `days` after 1970-01-01.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 106
+        },
+        {
+          "name": "is_leap_year",
+          "decl": "fn",
+          "sig": "fn is_leap_year(y: int) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 125
+        },
+        {
+          "name": "days_in_month",
+          "decl": "fn",
+          "sig": "fn days_in_month(y: int, m: int) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 129
+        },
+        {
+          "name": "days_in_year",
+          "decl": "fn",
+          "sig": "fn days_in_year(y: int) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 142
+        },
+        {
+          "name": "weekday_index",
+          "decl": "fn",
+          "sig": "fn weekday_index(w: Weekday) -> int",
+          "doc": "Monday 0 through Sunday 6.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 160
+        },
+        {
+          "name": "weekday_name",
+          "decl": "fn",
+          "sig": "fn weekday_name(w: Weekday) -> str",
+          "doc": "\"Monday\" ... \"Sunday\".",
+          "file": "stdlib/timez/timez.sl",
+          "line": 174
+        },
+        {
+          "name": "month_name",
+          "decl": "fn",
+          "sig": "fn month_name(m: int) -> str",
+          "doc": "\"January\" ... \"December\"; \"\" outside 1-12.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 188
+        },
+        {
+          "name": "now",
+          "decl": "fn",
+          "sig": "fn now() -> Time",
+          "doc": "The current instant, from the system clock.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 205
+        },
+        {
+          "name": "unix",
+          "decl": "fn",
+          "sig": "fn unix(sec: int) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 209
+        },
+        {
+          "name": "unix_milli",
+          "decl": "fn",
+          "sig": "fn unix_milli(ms: int) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 213
+        },
+        {
+          "name": "unix_nano",
+          "decl": "fn",
+          "sig": "fn unix_nano(ns: int) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 217
+        },
+        {
+          "name": "utc",
+          "decl": "fn",
+          "sig": "fn utc(year: int, month: int, day: int, hour: int, minute: int, second: int, nanos: int) -> result[Time, str]",
+          "doc": "The instant at a UTC civil date and time; err names the first field out of range. Seconds run 0-59: there are no leap seconds.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 223
+        },
+        {
+          "name": "date",
+          "decl": "fn",
+          "sig": "fn date(year: int, month: int, day: int) -> result[Date, str]",
+          "doc": "A calendar date; err names what is out of range.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 246
+        },
+        {
+          "name": "today",
+          "decl": "fn",
+          "sig": "fn today() -> Date",
+          "doc": "Today's date, in UTC.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 262
+        },
+        {
+          "name": "min",
+          "decl": "fn",
+          "sig": "fn min(a: Time, b: Time) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 266
+        },
+        {
+          "name": "max",
+          "decl": "fn",
+          "sig": "fn max(a: Time, b: Time) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 273
+        },
+        {
+          "name": "since",
+          "decl": "fn",
+          "sig": "fn since(t: Time) -> int",
+          "doc": "Nanoseconds since `t` (negative when `t` is in the future).",
+          "file": "stdlib/timez/timez.sl",
+          "line": 281
+        },
+        {
+          "name": "until",
+          "decl": "fn",
+          "sig": "fn until(t: Time) -> int",
+          "doc": "Nanoseconds until `t` (negative when it has passed).",
+          "file": "stdlib/timez/timez.sl",
+          "line": 286
+        },
+        {
+          "name": "deadline",
+          "decl": "fn",
+          "sig": "fn deadline(t: Time) -> until",
+          "doc": "The `until` a socket or channel call takes, for the wall-clock instant `t`: deadlines run on the monotonic clock, so this measures the distance to `t` once and counts it from now.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 293
+        },
+        {
+          "name": "Time.unix",
+          "decl": "fn",
+          "sig": "fn unix(self: Time) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 321
+        },
+        {
+          "name": "Time.unix_milli",
+          "decl": "fn",
+          "sig": "fn unix_milli(self: Time) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 325
+        },
+        {
+          "name": "Time.unix_nano",
+          "decl": "fn",
+          "sig": "fn unix_nano(self: Time) -> int",
+          "doc": "Nanoseconds since the epoch; saturates outside 1677-2262.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 330
+        },
+        {
+          "name": "Time.date",
+          "decl": "fn",
+          "sig": "fn date(self: Time) -> Date",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 334
+        },
+        {
+          "name": "Time.year",
+          "decl": "fn",
+          "sig": "fn year(self: Time) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 338
+        },
+        {
+          "name": "Time.month",
+          "decl": "fn",
+          "sig": "fn month(self: Time) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 342
+        },
+        {
+          "name": "Time.day",
+          "decl": "fn",
+          "sig": "fn day(self: Time) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 346
+        },
+        {
+          "name": "Time.hour",
+          "decl": "fn",
+          "sig": "fn hour(self: Time) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 350
+        },
+        {
+          "name": "Time.minute",
+          "decl": "fn",
+          "sig": "fn minute(self: Time) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 354
+        },
+        {
+          "name": "Time.second",
+          "decl": "fn",
+          "sig": "fn second(self: Time) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 358
+        },
+        {
+          "name": "Time.nanosecond",
+          "decl": "fn",
+          "sig": "fn nanosecond(self: Time) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 362
+        },
+        {
+          "name": "Time.millisecond",
+          "decl": "fn",
+          "sig": "fn millisecond(self: Time) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 366
+        },
+        {
+          "name": "Time.weekday",
+          "decl": "fn",
+          "sig": "fn weekday(self: Time) -> Weekday",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 370
+        },
+        {
+          "name": "Time.year_day",
+          "decl": "fn",
+          "sig": "fn year_day(self: Time) -> int",
+          "doc": "1 to 366.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 375
+        },
+        {
+          "name": "Time.iso_week",
+          "decl": "fn",
+          "sig": "fn iso_week(self: Time) -> IsoWeek",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 379
+        },
+        {
+          "name": "Time.add",
+          "decl": "fn",
+          "sig": "fn add(self: Time, d: int) -> Time",
+          "doc": "`self` plus `d` nanoseconds (negative goes back).",
+          "file": "stdlib/timez/timez.sl",
+          "line": 384
+        },
+        {
+          "name": "Time.sub",
+          "decl": "fn",
+          "sig": "fn sub(self: Time, o: Time) -> int",
+          "doc": "Nanoseconds from `o` to `self`; saturates past ~292 years.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 395
+        },
+        {
+          "name": "Time.add_days",
+          "decl": "fn",
+          "sig": "fn add_days(self: Time, n: int) -> Time",
+          "doc": "Calendar days later, at the same time of day.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 406
+        },
+        {
+          "name": "Time.add_months",
+          "decl": "fn",
+          "sig": "fn add_months(self: Time, n: int) -> Time",
+          "doc": "Calendar months later, at the same time of day. A day past the end of the target month is clamped to its last day: Jan 31 + 1 month is Feb 28 (29 in a leap year), not Mar 3.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 413
+        },
+        {
+          "name": "Time.add_years",
+          "decl": "fn",
+          "sig": "fn add_years(self: Time, n: int) -> Time",
+          "doc": "Calendar years later; Feb 29 + 1 year is Feb 28.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 420
+        },
+        {
+          "name": "Time.before",
+          "decl": "fn",
+          "sig": "fn before(self: Time, o: Time) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 424
+        },
+        {
+          "name": "Time.after",
+          "decl": "fn",
+          "sig": "fn after(self: Time, o: Time) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 428
+        },
+        {
+          "name": "Time.equal",
+          "decl": "fn",
+          "sig": "fn equal(self: Time, o: Time) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 432
+        },
+        {
+          "name": "Time.compare",
+          "decl": "fn",
+          "sig": "fn compare(self: Time, o: Time) -> int",
+          "doc": "-1, 0 or 1.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 437
+        },
+        {
+          "name": "Time.truncate",
+          "decl": "fn",
+          "sig": "fn truncate(self: Time, d: int) -> Time",
+          "doc": "Rounded down to a multiple of `d` since the epoch (d <= 0 leaves it as is): truncate(MINUTE) drops seconds.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 449
+        },
+        {
+          "name": "Time.round",
+          "decl": "fn",
+          "sig": "fn round(self: Time, d: int) -> Time",
+          "doc": "Rounded to the nearest multiple of `d`, halves away from zero.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 465
+        },
+        {
+          "name": "Time.start_of_minute",
+          "decl": "fn",
+          "sig": "fn start_of_minute(self: Time) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 476
+        },
+        {
+          "name": "Time.start_of_hour",
+          "decl": "fn",
+          "sig": "fn start_of_hour(self: Time) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 480
+        },
+        {
+          "name": "Time.start_of_day",
+          "decl": "fn",
+          "sig": "fn start_of_day(self: Time) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 484
+        },
+        {
+          "name": "Time.start_of_week",
+          "decl": "fn",
+          "sig": "fn start_of_week(self: Time) -> Time",
+          "doc": "Monday 00:00 of this ISO week.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 489
+        },
+        {
+          "name": "Time.start_of_month",
+          "decl": "fn",
+          "sig": "fn start_of_month(self: Time) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 494
+        },
+        {
+          "name": "Time.start_of_year",
+          "decl": "fn",
+          "sig": "fn start_of_year(self: Time) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 499
+        },
+        {
+          "name": "Time.end_of_day",
+          "decl": "fn",
+          "sig": "fn end_of_day(self: Time) -> Time",
+          "doc": "The last nanosecond of the day, month and year: for inclusive range queries (\"created <= end of day\").",
+          "file": "stdlib/timez/timez.sl",
+          "line": 505
+        },
+        {
+          "name": "Time.end_of_month",
+          "decl": "fn",
+          "sig": "fn end_of_month(self: Time) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 509
+        },
+        {
+          "name": "Time.end_of_year",
+          "decl": "fn",
+          "sig": "fn end_of_year(self: Time) -> Time",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 513
+        },
+        {
+          "name": "Date.weekday",
+          "decl": "fn",
+          "sig": "fn weekday(self: Date) -> Weekday",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 525
+        },
+        {
+          "name": "Date.year_day",
+          "decl": "fn",
+          "sig": "fn year_day(self: Date) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 529
+        },
+        {
+          "name": "Date.iso_week",
+          "decl": "fn",
+          "sig": "fn iso_week(self: Date) -> IsoWeek",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 533
+        },
+        {
+          "name": "Date.is_leap_year",
+          "decl": "fn",
+          "sig": "fn is_leap_year(self: Date) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 542
+        },
+        {
+          "name": "Date.add_days",
+          "decl": "fn",
+          "sig": "fn add_days(self: Date, n: int) -> Date",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 546
+        },
+        {
+          "name": "Date.add_months",
+          "decl": "fn",
+          "sig": "fn add_months(self: Date, n: int) -> Date",
+          "doc": "Jan 31 + 1 month is Feb 28 (29 in a leap year).",
+          "file": "stdlib/timez/timez.sl",
+          "line": 551
+        },
+        {
+          "name": "Date.add_years",
+          "decl": "fn",
+          "sig": "fn add_years(self: Date, n: int) -> Date",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 563
+        },
+        {
+          "name": "Date.days_until",
+          "decl": "fn",
+          "sig": "fn days_until(self: Date, o: Date) -> int",
+          "doc": "Days from `self` to `o`: 1 for tomorrow, negative for the past.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 568
+        },
+        {
+          "name": "Date.years_until",
+          "decl": "fn",
+          "sig": "fn years_until(self: Date, o: Date) -> int",
+          "doc": "Whole years from `self` to `o`, counting a year only once its anniversary has passed: an age, a tenure.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 574
+        },
+        {
+          "name": "Date.start",
+          "decl": "fn",
+          "sig": "fn start(self: Date) -> Time",
+          "doc": "00:00:00 UTC on this date.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 583
+        },
+        {
+          "name": "Date.at",
+          "decl": "fn",
+          "sig": "fn at(self: Date, hour: int, minute: int, second: int) -> result[Time, str]",
+          "doc": "The instant at this date and a UTC time of day.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 588
+        },
+        {
+          "name": "Date.before",
+          "decl": "fn",
+          "sig": "fn before(self: Date, o: Date) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 592
+        },
+        {
+          "name": "Date.after",
+          "decl": "fn",
+          "sig": "fn after(self: Date, o: Date) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 596
+        },
+        {
+          "name": "Date.equal",
+          "decl": "fn",
+          "sig": "fn equal(self: Date, o: Date) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 600
+        },
+        {
+          "name": "Date.compare",
+          "decl": "fn",
+          "sig": "fn compare(self: Date, o: Date) -> int",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 604
+        },
+        {
+          "name": "Date.start_of_month",
+          "decl": "fn",
+          "sig": "fn start_of_month(self: Date) -> Date",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 616
+        },
+        {
+          "name": "Date.end_of_month",
+          "decl": "fn",
+          "sig": "fn end_of_month(self: Date) -> Date",
+          "doc": "",
+          "file": "stdlib/timez/timez.sl",
+          "line": 620
+        },
+        {
+          "name": "Date.iso",
+          "decl": "fn",
+          "sig": "fn iso(self: Date) -> str",
+          "doc": "\"2026-10-13\" (ISO 8601).",
+          "file": "stdlib/timez/timez.sl",
+          "line": 626
+        },
+        {
+          "name": "parse_duration",
+          "decl": "fn",
+          "sig": "fn parse_duration(s: str) -> result[int, str]",
+          "doc": "A duration written as Go writes them -- \"1h30m\", \"1.5s\", \"300ms\", \"-2m\", \"2us\" -- plus \"d\" for 24-hour days (\"7d\"), the unit config files reach for. \"0\" alone is zero. err names what was wrong; values past ~292 years are refused, not wrapped.",
+          "file": "stdlib/timez/timez.sl",
+          "line": 674
+        },
+        {
+          "name": "format_duration",
+          "decl": "fn",
+          "sig": "fn format_duration(d: int) -> str",
+          "doc": "A duration the way Go prints one and parse_duration reads it back: \"1h30m0s\", \"1.5s\", \"300ms\", \"2\u00b5s\", \"0s\".",
+          "file": "stdlib/timez/timez.sl",
+          "line": 757
+        },
+        {
+          "name": "Zone",
+          "decl": "struct",
+          "sig": "gc struct Zone",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 66
+        },
+        {
+          "name": "utc_zone",
+          "decl": "fn",
+          "sig": "fn utc_zone() -> Zone",
+          "doc": "UTC, as a Zone.",
+          "file": "stdlib/timez/zone.sl",
+          "line": 91
+        },
+        {
+          "name": "fixed_zone",
+          "decl": "fn",
+          "sig": "fn fixed_zone(name: str, offset_seconds: int) -> Zone",
+          "doc": "A zone at a fixed offset (seconds east of UTC) that never changes.",
+          "file": "stdlib/timez/zone.sl",
+          "line": 96
+        },
+        {
+          "name": "load_zone",
+          "decl": "fn",
+          "sig": "fn load_zone(name: str) -> result[Zone, str]",
+          "doc": "\"UTC\" and fixed zones need no database; anything else is read from it.",
+          "file": "stdlib/timez/zone.sl",
+          "line": 159
+        },
+        {
+          "name": "parse_tzif",
+          "decl": "fn",
+          "sig": "fn parse_tzif(name: str, b: bytes) -> result[Zone, str]",
+          "doc": "RFC 8536: version 2 or later, whose 64-bit block and footer this reads (the 32-bit block before them is skipped).",
+          "file": "stdlib/timez/zone.sl",
+          "line": 203
+        },
+        {
+          "name": "parse_posix_tz",
+          "decl": "fn",
+          "sig": "fn parse_posix_tz(s: str) -> result[TzRule, str]",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 435
+        },
+        {
+          "name": "Zone.offset_at",
+          "decl": "fn",
+          "sig": "fn offset_at(self: Zone, t: Time) -> int",
+          "doc": "Seconds east of UTC at instant `t`.",
+          "file": "stdlib/timez/zone.sl",
+          "line": 588
+        },
+        {
+          "name": "Zone.is_dst_at",
+          "decl": "fn",
+          "sig": "fn is_dst_at(self: Zone, t: Time) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 592
+        },
+        {
+          "name": "Zone.abbrev_at",
+          "decl": "fn",
+          "sig": "fn abbrev_at(self: Zone, t: Time) -> str",
+          "doc": "\"CEST\", \"PST\", \"+0530\": the abbreviation in use at `t`.",
+          "file": "stdlib/timez/zone.sl",
+          "line": 597
+        },
+        {
+          "name": "ZonedTime",
+          "decl": "struct",
+          "sig": "struct ZonedTime",
+          "doc": "An instant together with the zone it is read in: what a person in that zone sees on a clock.",
+          "file": "stdlib/timez/zone.sl",
+          "line": 613
+        },
+        {
+          "name": "Time.in_zone",
+          "decl": "fn",
+          "sig": "fn in_zone(self: Time, z: Zone) -> ZonedTime",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 620
+        },
+        {
+          "name": "zoned",
+          "decl": "fn",
+          "sig": "fn zoned(z: Zone, year: int, month: int, day: int, hour: int, minute: int, second: int, how: Disambiguation) -> result[Time, str]",
+          "doc": "The instant for a wall time in `z`, by `how` when daylight saving makes it skipped or repeated.",
+          "file": "stdlib/timez/zone.sl",
+          "line": 627
+        },
+        {
+          "name": "ZonedTime.date",
+          "decl": "fn",
+          "sig": "fn date(self: ZonedTime) -> Date",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 696
+        },
+        {
+          "name": "ZonedTime.year",
+          "decl": "fn",
+          "sig": "fn year(self: ZonedTime) -> int",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 700
+        },
+        {
+          "name": "ZonedTime.month",
+          "decl": "fn",
+          "sig": "fn month(self: ZonedTime) -> int",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 701
+        },
+        {
+          "name": "ZonedTime.day",
+          "decl": "fn",
+          "sig": "fn day(self: ZonedTime) -> int",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 702
+        },
+        {
+          "name": "ZonedTime.hour",
+          "decl": "fn",
+          "sig": "fn hour(self: ZonedTime) -> int",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 703
+        },
+        {
+          "name": "ZonedTime.minute",
+          "decl": "fn",
+          "sig": "fn minute(self: ZonedTime) -> int",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 704
+        },
+        {
+          "name": "ZonedTime.second",
+          "decl": "fn",
+          "sig": "fn second(self: ZonedTime) -> int",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 705
+        },
+        {
+          "name": "ZonedTime.weekday",
+          "decl": "fn",
+          "sig": "fn weekday(self: ZonedTime) -> Weekday",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 706
+        },
+        {
+          "name": "ZonedTime.abbrev",
+          "decl": "fn",
+          "sig": "fn abbrev(self: ZonedTime) -> str",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 708
+        },
+        {
+          "name": "ZonedTime.is_dst",
+          "decl": "fn",
+          "sig": "fn is_dst(self: ZonedTime) -> bool",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 712
+        },
+        {
+          "name": "ZonedTime.rfc3339",
+          "decl": "fn",
+          "sig": "fn rfc3339(self: ZonedTime) -> str",
+          "doc": "\"2026-10-13T11:30:15+02:00\".",
+          "file": "stdlib/timez/zone.sl",
+          "line": 717
+        },
+        {
+          "name": "ZonedTime.format",
+          "decl": "fn",
+          "sig": "fn format(self: ZonedTime, layout: str) -> str",
+          "doc": "As Time.format, with %z the real offset (+0200) and %Z the zone's abbreviation (CEST).",
+          "file": "stdlib/timez/zone.sl",
+          "line": 723
+        },
+        {
+          "name": "ZonedTime.add_days",
+          "decl": "fn",
+          "sig": "fn add_days(self: ZonedTime, n: int) -> ZonedTime",
+          "doc": "Calendar days later at the same wall time, across daylight-saving changes (a day is then 23 or 25 hours). A wall time that does not exist on the target day moves forward, as COMPATIBLE does.",
+          "file": "stdlib/timez/zone.sl",
+          "line": 754
+        },
+        {
+          "name": "ZonedTime.add_months",
+          "decl": "fn",
+          "sig": "fn add_months(self: ZonedTime, n: int) -> ZonedTime",
+          "doc": "",
+          "file": "stdlib/timez/zone.sl",
+          "line": 761
+        },
+        {
+          "name": "ZonedTime.start_of_day",
+          "decl": "fn",
+          "sig": "fn start_of_day(self: ZonedTime) -> ZonedTime",
+          "doc": "Local midnight: the first instant of this date in the zone (01:00 where midnight is skipped).",
+          "file": "stdlib/timez/zone.sl",
+          "line": 770
         }
       ]
     }

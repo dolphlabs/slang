@@ -48,6 +48,18 @@ fn run_budget(c: link, s: link, n: int) {
 
 // Each shape, as it arrives on the wire, against serialize() -- the
 // reference the arena path must match byte for byte.
+// The Date value changes every second; byte comparisons replace it with
+// a fixed one of the same length (tests/http_date checks the real one).
+fn masked_date(b: bytes) -> bytes {
+    let s = to_str(b);
+    let at = strings.find(s, "\r\ndate: ");
+    if at < 0 {
+        return b;
+    }
+    return to_bytes(strings.slice(s, 0, at + 8) + "Thu, 01 Jan 1970 00:00:00 GMT" +
+                    strings.slice(s, at + 37, len(s)));
+}
+
 fn run_shapes(c: link, s: link) {
     let shapes = [
         with_id("abc"),
@@ -74,11 +86,11 @@ fn run_shapes(c: link, s: link) {
             if n == 0 { println("FAIL closed"); exit(1); }
             got = got + n;
         }
-        if got != len(want) || to_str(inb[0..got]) != to_str(want) {
+        if got != len(want) || to_str(masked_date(to_bytes(inb[0..got]))) != to_str(masked_date(want)) {
             println("FAIL wire differs from serialize: " + to_str(inb[0..got]));
             exit(1);
         }
-        println(strings.replace(to_str(want), "\r\n", " | "));
+        println(strings.replace(to_str(masked_date(want)), "\r\n", " | "));
     }
 }
 

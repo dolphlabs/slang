@@ -571,7 +571,8 @@ const char *token_type_name(TokenType t) {
     case T_GTE:      return "'>='";
     case T_ANDAND:   return "'&&'";
     case T_OROR:     return "'||'";
-    case T_QQ:       return "'??'";
+    /* escaped: two question marks then a quote is the C trigraph for ^ */
+    case T_QQ:       return "'?\?'";
     case T_BANG:     return "'!'";
     case T_ASSIGN:   return "'='";
     case T_LPAREN:   return "'('";

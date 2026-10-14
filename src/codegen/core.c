@@ -1664,6 +1664,58 @@ void ambient_root_push(CG *cg, const char *name) {
     }
     cg->ambient_roots[cg->ambient_count++] = (char *)name;
 }
+/* The FuncSig a plain or package-qualified call names, when it is a
+ * slang function (not a method, native or extern), else NULL. */
+static FuncSig *user_fn_of_call(CG *cg, Expr *e) {
+    const char *name = e->as.call.name;
+    char *left, *right;
+    if (split_dotted(name, &left, &right)) {
+        const char *pkg = import_try(cg, left);
+        if (!pkg || is_native_pkg(cg, pkg))
+            return NULL;
+        FuncSig *fs = sig_find_in(cg, pkg, right);
+        return (fs && fs->is_pub && !fs->method_of && !fs->is_extern) ? fs : NULL;
+    }
+    if (var_find(cg, name))
+        return NULL; /* a local function value, not the declared fn */
+    FuncSig *fs = sig_find_in(cg, cg->cur_pkg, name);
+    return (fs && !fs->method_of && !fs->is_extern) ? fs : NULL;
+}
+
+static int expr_can_alloc_or_park(CG *cg, Expr *e);
+
+/* f(args) where f is a leaf slang function (compute_leaf_fns) and no
+ * argument can allocate or park: no collection point. */
+int user_leaf_call(CG *cg, Expr *e) {
+    if (!e || e->kind != EX_CALL)
+        return 0;
+    FuncSig *fs = user_fn_of_call(cg, e);
+    if (!fs || !fs->leaf)
+        return 0;
+    for (int i = 0; i < e->as.call.nargs; i++)
+        if (expr_can_alloc_or_park(cg, e->as.call.args[i]))
+            return 0;
+    return 1;
+}
+
+/* pkg.f(args) where pkg is a native package, f is a leaf
+ * (native_is_leaf), and no argument can allocate or park. */
+static int expr_can_alloc_or_park(CG *cg, Expr *e);
+int native_leaf_call(CG *cg, Expr *e) {
+    if (!e || e->kind != EX_CALL)
+        return 0;
+    char *left, *right;
+    if (!split_dotted(e->as.call.name, &left, &right))
+        return 0;
+    const char *pkg = import_try(cg, left);
+    if (!pkg || !is_native_pkg(cg, pkg) || !native_is_leaf(pkg, right))
+        return 0;
+    for (int i = 0; i < e->as.call.nargs; i++)
+        if (expr_can_alloc_or_park(cg, e->as.call.args[i]))
+            return 0;
+    return 1;
+}
+
 static int expr_can_alloc_or_park(CG *cg, Expr *e) {
     if (!e)
         return 0;
@@ -1720,11 +1772,16 @@ static int expr_can_alloc_or_park(CG *cg, Expr *e) {
             if (expr_can_alloc_or_park(cg, e->as.call.args[i]))
                 return 1;
         }
+        {
+            FuncSig *ufs = user_fn_of_call(cg, e);
+            if (ufs && ufs->leaf)
+                return 0;
+        }
         char *left, *right;
         if (split_dotted(name, &left, &right)) {
             const char *pkg = import_try(cg, left);
             if (pkg && is_native_pkg(cg, pkg))
-                return 1;
+                return !native_is_leaf(pkg, right);
             const char *recv_t = NULL;
             if (!pkg)
                 recv_t = infer_ident_name(cg, left, e->line);
@@ -1754,6 +1811,13 @@ static int expr_can_alloc_or_park(CG *cg, Expr *e) {
 int safepoint_elidable(CG *cg, Expr *e) {
     if (!e || e->kind != EX_CALL)
         return 0;
+    /* A leaf native over arguments that cannot collect is no collection
+     * point, so nothing -- live, pending or ambient -- needs rooting at
+     * it (its own arguments are registered as ambient roots, which the
+     * check below would otherwise take for a reason to keep the
+     * bracket). */
+    if (native_leaf_call(cg, e) || user_leaf_call(cg, e))
+        return 1;
     if (cg->ambient_count != 0)
         return 0;
     if (!expr_can_alloc_or_park(cg, e))
@@ -2055,7 +2119,7 @@ static unsigned long long fnv64(const char *s) {
 
 char *mangle_sig(FuncSig *sig) {
     if (sig->is_extern)
-        return xstrdup(sig->name);
+        return xasprintf("sl_x_%s", sig->name);
     if (sig->method_of) {
         /* An instance's canonical name carries its arguments and their
          * dots (`main.Box[main.Point]`), which neither the last-dot split
@@ -2337,15 +2401,32 @@ const char *canon_type(CG *cg, const char *t, int line) {
 /* Output helpers                                                      */
 /* ------------------------------------------------------------------ */
 
+/* Formats into a stack buffer when the line fits, and into a heap one
+ * sized by a first vsnprintf when it does not. A fixed 16 KB buffer used
+ * to cut longer lines off silently -- a large list literal or a long
+ * expression became C that did not compile, reported as raw cc errors. */
 void emit_line(CG *cg, const char *fmt, ...) {
     char buf[16384];
     va_list ap;
     for (int i = 0; i < cg->indent; i++)
         sb_append(cg->out, "    ");
     va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    sb_append(cg->out, buf);
+    if (n < 0) {
+        fprintf(stderr, "slang: internal error: cannot format generated code\n");
+        exit(1);
+    }
+    if ((size_t)n < sizeof(buf)) {
+        sb_append(cg->out, buf);
+    } else {
+        char *big = (char *)xmalloc((size_t)n + 1);
+        va_start(ap, fmt);
+        vsnprintf(big, (size_t)n + 1, fmt, ap);
+        va_end(ap);
+        sb_append(cg->out, big);
+        free(big);
+    }
     sb_nl(cg->out);
 }
 

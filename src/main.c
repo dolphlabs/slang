@@ -593,7 +593,7 @@ static int cmd_test(int argc, char **argv) {
 
     loader_set_test_target(treal);
     setenv("SLANG_TEST_RUNNER", "1", 1);
-    int rc = build(runner_src, runner_bin, 0, 0, 1, 0, 0);
+    int rc = build(runner_src, runner_bin, 0, keep, 1, 0, 0);
 
     char gen[PATH_MAX];
     snprintf(gen, sizeof(gen), "%s.gen.c", runner_bin);
@@ -867,8 +867,11 @@ static int build(const char *input, const char *outname, int emit_c,
     /* -O3 -flto on the generated C. Green-thread TLS still forbids
        caching sl_rt_current_task (or any _Thread_local) across a park
        or preemption: the address is OS-thread affine, the task is not.
-       Reads go through SL_RT_TLS_CUR. */
-    sb_append(&cmd, "cc -O3 -flto ");
+       Reads go through SL_RT_TLS_CUR.
+       -fwrapv: slang's signed arithmetic wraps two's-complement, and C's
+       is undefined on overflow -- without it the optimiser deleted
+       overflow checks written in slang (`a + b < a` is "impossible"). */
+    sb_append(&cmd, "cc -O3 -flto -fwrapv ");
     sb_append(&cmd, xasprintf("-Wframe-larger-than=%d ", frame_limit()));
     sb_append(&cmd, gen_path);
     sb_append(&cmd, " -o ");

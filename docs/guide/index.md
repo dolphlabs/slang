@@ -193,8 +193,9 @@ guard let user = find(id) else {
   `x as i8`, `n as u32`, `3.9 as i32`. Integer literals that fit the
   target width may initialize/pass without a cast.
 - **Wrap on cast/overflow**: casts and arithmetic wrap two's-complement
-  style. `(0 as u8) - (1 as u8)` is `255`; `300 as i8` is `44`. Float ->
-  int casts truncate toward zero.
+  style. `(0 as u8) - (1 as u8)` is `255`; `300 as i8` is `44`; a signed
+  type's minimum divided by `-1` is the minimum again, remainder `0`.
+  Float -> int casts truncate toward zero.
 - Mixed-width arithmetic promotes to the wider operand; same-width
   signed/unsigned mixes resolve to the unsigned type (C semantics).
 
@@ -778,9 +779,12 @@ main.foo:12`. A panicking `spawn`ed task reports through stderr and its
 `join_wait` surfaces the same string as `err`, so failures stay visible
 across task boundaries. A crash below the language (a segfault or bus
 error in C interop, or a task overflowing its stack) prints one line,
-`slang: fatal SIGSEGV at address 0x..., pc 0x...`, naming a stack
-overflow when that is what it was, and the process then dies of the
-same signal: the exit status and any core dump are unchanged.
+`slang: fatal SIGSEGV at address 0x..., pc 0x... (image+0x...)`, naming a
+stack overflow when that is what it was, and the process then dies of the
+same signal: the exit status and any core dump are unchanged. The image
+offset, printed when the fault is in the program's own code, names the
+function after the fact: `addr2line -fe prog 0x...` on Linux, `atos -o
+prog -l 0x100000000 <0x100000000 + offset>` on macOS.
 
 `opt[T]` and `result[T, E]` are monomorphized per distinct type
 argument (one C struct per instantiation actually used). Constructing
@@ -962,8 +966,9 @@ guard let user = find(id) else {
   `x as i8`, `n as u32`, `3.9 as i32`. Integer literals that fit the
   target width may initialize/pass without a cast.
 - **Wrap on cast/overflow**: casts and arithmetic wrap two's-complement
-  style. `(0 as u8) - (1 as u8)` is `255`; `300 as i8` is `44`. Float ->
-  int casts truncate toward zero.
+  style. `(0 as u8) - (1 as u8)` is `255`; `300 as i8` is `44`; a signed
+  type's minimum divided by `-1` is the minimum again, remainder `0`.
+  Float -> int casts truncate toward zero.
 - Mixed-width arithmetic promotes to the wider operand; same-width
   signed/unsigned mixes resolve to the unsigned type (C semantics).
 
@@ -1547,9 +1552,12 @@ main.foo:12`. A panicking `spawn`ed task reports through stderr and its
 `join_wait` surfaces the same string as `err`, so failures stay visible
 across task boundaries. A crash below the language (a segfault or bus
 error in C interop, or a task overflowing its stack) prints one line,
-`slang: fatal SIGSEGV at address 0x..., pc 0x...`, naming a stack
-overflow when that is what it was, and the process then dies of the
-same signal: the exit status and any core dump are unchanged.
+`slang: fatal SIGSEGV at address 0x..., pc 0x... (image+0x...)`, naming a
+stack overflow when that is what it was, and the process then dies of the
+same signal: the exit status and any core dump are unchanged. The image
+offset, printed when the fault is in the program's own code, names the
+function after the fact: `addr2line -fe prog 0x...` on Linux, `atos -o
+prog -l 0x100000000 <0x100000000 + offset>` on macOS.
 
 `opt[T]` and `result[T, E]` are monomorphized per distinct type
 argument (one C struct per instantiation actually used). Constructing
@@ -1587,8 +1595,9 @@ debuggability goes to die (see `http.read` below).
   `x as i8`, `n as u32`, `3.9 as i32`. Integer literals that fit the
   target width may initialize/pass without a cast.
 - **Wrap on cast/overflow**: casts and arithmetic wrap two's-complement
-  style. `(0 as u8) - (1 as u8)` is `255`; `300 as i8` is `44`. Float ->
-  int casts truncate toward zero.
+  style. `(0 as u8) - (1 as u8)` is `255`; `300 as i8` is `44`; a signed
+  type's minimum divided by `-1` is the minimum again, remainder `0`.
+  Float -> int casts truncate toward zero.
 - Mixed-width arithmetic promotes to the wider operand; same-width
   signed/unsigned mixes resolve to the unsigned type (C semantics).
 

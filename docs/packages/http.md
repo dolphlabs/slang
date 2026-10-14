@@ -7,7 +7,9 @@ from `bytes`, or `read` from a connection into a caller-sized `wire`
 (the max request size). `read` takes the unconsumed prefix length and
 returns `Incoming` with leftover compacted to the front of the wire,
 so one connection can carry many requests. `write` serializes a
-`Response` through an arena. A request keeps its header block as it
+`Response` through an arena; `write_head` answers a HEAD request with the
+head `write` would send -- `Content-Length` the length of the body GET
+would carry, as RFC 9110 has it -- and no body. A request keeps its header block as it
 arrived; `header(req, name)` looks it up case-insensitively. A body is framed by
 `Content-Length` or by `Transfer-Encoding: chunked` (chunk extensions
 ignored, trailers read and discarded). `wants_close` follows HTTP/1.1
@@ -52,6 +54,18 @@ Go's `net/http` applies. A clean field is written as it is, at no extra
 cost. `httpc` does the same for the method and the request headers it
 sends, and percent-encodes CR, LF, space and tab in the request target.
 `http2`'s header encoder does the same for HTTP/2 fields.
+
+Every response carries `Date` (RFC 9110 6.6.1): the current second, kept
+by the runtime for all threads and copied into the response with no clock
+read and no allocation; a handler's own `Date` is the one sent. A 1xx, 204
+or 304 response is written with no `Content-Length` and no body, whatever
+the `Response` holds (8.6 forbids the header on 1xx and 204, and on a 304
+unless it equals the 200's; body bytes there would be read as the start of
+the next response). `http2` follows the same rules. A prebuilt static
+rendering (`static_render`) ends its header block with
+`static_date_line()`, whose date `write_static` refreshes on every send;
+a rendering built elsewhere gets the same by ending its headers with that
+line.
 
 ```slang
 import "http";
@@ -215,9 +229,17 @@ The static emit: the keep-alive rendering is prebuilt, not emitted. Hot path (HT
 
 The keep-alive rendering, assembled ONCE at registration: status line, one content-type, content-length, connection, blank line, body -- the exact bytes write_static memcpys per request. status_text_of covers the statuses static routes return; the fallback ("OK") matches write_static's own close variant above, so the two can never disagree on a reason phrase.
 
+### `fn static_date_line() -> str`
+
+The last header line of a prebuilt static rendering: `date: ` and a date, refreshed in place on every send. A rendering is shared by every request, so the date cannot be part of it; a renderer outside this package (zokor's, with its security headers) ends its header block with this line to get the same. Any other rendering is sent as it is.
+
 ### `fn clean_field(s: str) -> str`
 
 ### `fn write(c: &mut link, r0: Response, a: &mut arena, deadline: until) -> result[int, fault]`
+
+### `fn write_head(c: &mut link, r0: Response, a: &mut arena, deadline: until) -> result[int, fault]`
+
+The answer to a HEAD request: the head `write` would send for `r0` -- Content-Length the length of its body -- and no body (RFC 9110 9.3.2: HEAD's Content-Length is the one GET would carry). Give it the response GET would produce, body and all.
 
 ### `fn text_response_bytes(status: i32, status_text: str, content_type: str, body: bytes) -> Response`
 

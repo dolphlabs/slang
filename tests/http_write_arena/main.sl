@@ -8,6 +8,7 @@
 // serialize()+send_bytes rather than let a.wire(need) past capacity kill
 // the task.
 import "http";
+import "strings";
 
 fn die(msg: str) {
     println("FAIL " + msg);
@@ -45,11 +46,23 @@ fn via_write(resp: http.Response, arena_bytes: int) -> bytes {
     return to_bytes(buf[0..n]);
 }
 
+// The Date value changes every second; byte comparisons replace it with
+// a fixed one of the same length (tests/http_date checks the real one).
+fn masked_date(b: bytes) -> bytes {
+    let s = to_str(b);
+    let at = strings.find(s, "\r\ndate: ");
+    if at < 0 {
+        return b;
+    }
+    return to_bytes(strings.slice(s, 0, at + 8) + "Thu, 01 Jan 1970 00:00:00 GMT" +
+                    strings.slice(s, at + 37, len(s)));
+}
+
 fn check(label: str, resp: http.Response, arena_bytes: int) {
-    let via_arena = via_write(resp, arena_bytes);
-    let via_gc = http.serialize(resp);
-    let via_sized = http.serialize_sized(resp);
-    let via_builder = http.serialize_builder(resp);
+    let via_arena = masked_date(via_write(resp, arena_bytes));
+    let via_gc = masked_date(http.serialize(resp));
+    let via_sized = masked_date(http.serialize_sized(resp));
+    let via_builder = masked_date(http.serialize_builder(resp));
     if via_arena != via_gc {
         println("FAIL " + label + ": arena and serialize disagree");
         println("  arena: " + to_str(via_arena));

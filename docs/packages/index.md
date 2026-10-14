@@ -26,7 +26,107 @@ let elapsed = time.mono() - t0;   // duration arithmetic
 let deadline = time.mono() + 5000000;  // timeout math for net calls
 
 let wall = time.wall();   // unix epoch time in nanoseconds
+let d = time.http_date(); // "Tue, 13 Oct 2026 09:30:15 GMT", the current second
 ```
+
+`time.put_http_date(w, off)` writes the same 29 bytes into a `wire` and
+returns `off + 29` (with a zero-length wire it only counts): what `http`
+uses for `Date`. For dates other than now, use `timez`.
+
+#### `timez`
+
+Calendar time, written in slang on top of the native `time` clock:
+instants, dates, durations, text formats, time zones, test clocks and
+cron. Import `"timez"`.
+
+```slang
+import "timez";
+
+let t = timez.now();                               // a Time: an instant, UTC
+println(t.rfc3339());                              // 2026-10-13T09:30:15Z
+println(t.rfc3339_milli());                        // 2026-10-13T09:30:15.000Z (toISOString)
+println(t.http_date());                            // Tue, 13 Oct 2026 09:30:15 GMT
+println(t.format("%A %e %B %Y, %H:%M"));          // Tuesday 13 October 2026, 09:30
+
+let r = timez.parse_rfc3339("2026-10-13T11:30:15+02:00");   // offsets applied
+let due = t.date().add_months(1);                  // Jan 31 + 1 month = Feb 28/29
+let ttl = timez.parse_duration("1h30m") ?? 0;      // nanoseconds; "7d" works too
+println(timez.relative(t.add(-3 * timez.MINUTE), t));  // 3 minutes ago
+
+let zr = timez.load_zone("Europe/Berlin");         // the system's tz database
+guard let berlin = zr else let e = err_of(zr) { println(e); exit(1); }
+println(t.in_zone(berlin).format("%H:%M %Z"));     // 11:30 CEST
+
+let cr = timez.parse_cron("*/15 9-17 * * MON-FRI");
+guard let cron = cr else let e = err_of(cr) { println(e); exit(1); }
+let next = cron.next_after(t, berlin);             // opt[Time], DST-aware
+```
+
+**Values.**
+- **`Time`** is Unix seconds plus nanoseconds, so it spans 0001-01-01 to
+  9999-12-31 and beyond. 64-bit nanoseconds stop at 1677-2262.
+- **`Date`** is a calendar day: birthdays, due dates, report days.
+- **Durations** are `int` nanoseconds, the unit `time.sleep` and deadlines
+  take. Constants run from `NANOSECOND` to `HOUR` and `DAY` (24 hours).
+- **The calendar** is proleptic Gregorian, with no leap seconds.
+
+**Calendar.**
+- Fields: `year()` to `nanosecond()`, `weekday()`, `year_day()`,
+  `iso_week()`, `is_leap_year`, `days_in_month`.
+- Arithmetic: `add(d)`, `sub(t)`, and `add_days`, `add_months` and
+  `add_years`, which clamp to the end of the month.
+- Rounding and periods: `truncate(d)`, `round(d)`, and `start_of_*` and
+  `end_of_*` for minute, hour, day, week (Monday), month and year.
+- Comparing: `before`, `after`, `equal`, `compare`, `min`, `max`.
+- Dates: `days_until`, and `years_until`, which counts an age by whether
+  the anniversary has passed.
+
+**Text.**
+- `rfc3339`, `rfc3339_milli`, `rfc3339_nano` and `rfc3339_at(offset)`.
+- `parse_rfc3339` is strict: it refuses a timestamp with no offset,
+  because one without names no instant.
+- `parse_date`.
+- `http_date`, and `parse_http_date` for all three forms RFC 9110 has
+  recipients accept.
+- `rfc2822` and `parse_rfc2822`.
+- `format(layout)`: `strftime` directives, locale-free.
+- `parse_duration` and `format_duration`, Go's format plus `d`.
+- `relative`.
+
+**Time zones.**
+- **Loading.** `load_zone(name)` reads the IANA database, from `$ZONEINFO`
+  or `/usr/share/zoneinfo`. It follows each file's POSIX-TZ rule past its
+  last transition, and refuses names that could reach other files. A
+  missing database is an error that says how to install it, never a
+  silent UTC. `fixed_zone(name, offset)` gives a zone at a fixed offset.
+- **Reading.** `t.in_zone(z)` gives a `ZonedTime`: local fields, `abbrev`,
+  `is_dst`, `rfc3339` with the offset, and `format` with real `%z` and `%Z`.
+- **Local arithmetic.** `add_days`, `add_months` and `start_of_day` work in
+  local wall time, so a day across a DST change is 23 or 25 hours.
+- **Wall time to instant.** `zoned(z, y, m, d, h, mi, s, how)` converts a
+  local wall time to an instant. `how` decides the skipped and repeated
+  hours: `COMPATIBLE` moves forward through a gap and takes the earlier of
+  an overlap, as Temporal and java.time do. The others are `EARLIER`,
+  `LATER` and `REJECT`.
+
+**Operations.**
+- `system_clock()` / `fixed_clock(t)`: a `Clock` to pass in state, so
+  tests `advance` and `set` the time instead of sleeping.
+- `start_stopwatch()`, which measures on the monotonic clock.
+- `interval(a, b)`: half-open, with `contains`, `overlaps` and
+  `intersection`.
+- `deadline(t)` gives the `until` that socket and channel calls take.
+- **`parse_cron`:** five fields, names, steps and `@daily` macros. When
+  both day fields are set, a day matches either (Vixie). `next_after(t,
+  zone)` evaluates in the zone's wall time: a run in a skipped hour
+  happens when the clock reaches it, and a repeated hour runs once.
+
+
+**In JSON and Postgres.** A `timez.Time` field of a struct is written by
+`json.encode` as an RFC 3339 string and read back by `json.decode` (see
+`json`). `pg.arg_time(t)` binds one for a `timestamptz` parameter and
+`pg.get_time(rows, r, c)` reads one out; `pg.timestamp_rfc3339(cell,
+has_tz)` turns Postgres's own timestamp text into RFC 3339.
 
 #### `net`
 
@@ -308,8 +408,11 @@ Supported: `gc struct` (a plain `struct` is a compile error naming it, since
 the codecs read and build structs through a pointer), `opt[T]`, `[T]`,
 `map[str, V]` (JSON object keys
 are always strings — a map with any other key type is a compile
-error), every scalar, and `bytes` (RFC 4648 base64 strings on the
-wire). `rawptr`, `chan[T]`, and
+error), every scalar, `bytes` (RFC 4648 base64 strings on the
+wire), and `timez.Time` (an RFC 3339 string: written as `rfc3339_nano()`
+writes it, read with `parse_rfc3339()`'s rules, offsets applied; about
+115 ns to encode and 130 ns to decode, in C, so a struct without one
+compiles to exactly the codecs it did before). `rawptr`, `chan[T]`, and
 `result[T,E]` can't appear anywhere in a decode/encode target type. A
 missing JSON key defaults an `opt[T]` field to `none`; for any other
 field type it's a decode error. Unknown JSON keys are ignored. Every
@@ -388,8 +491,13 @@ working directory as `result[str, str]`.
 #### `fs`
 
 POSIX file I/O on integer fds. `open` is read-only; `create` is
-write/trunc. `read`/`write`/`close` use the fd. `mkdir` creates one
-directory. Every call returns `result[_, str]`. These calls block the
+write/trunc. `read`/`write`/`close` use the fd; `pread(fd, off, n)` reads
+at an offset. `mkdir` creates one directory. Every call returns
+`result[_, str]`, except `fstat(fd)`, which is `[kind, size, mtime_sec,
+mtime_nsec]` of an open file (kind 0 a regular file, 1 a directory, 2
+anything else; `[]` for a closed fd). `realpath(path)` resolves `.`, `..`
+and every symlink to an absolute path: what a file server compares with
+its root, so a link cannot lead out of it. These calls block the
 worker — use them for config and small files, not the accept loop.
 To read standard input use [`io`](#io) instead: `fs.read(0, n)` works, but
 waits by blocking a whole worker thread, and a program waiting on a person
@@ -808,8 +916,9 @@ whole connection: DNS lookup, TCP connect, TLS handshake and login.
 **Parameters** travel separately from the SQL text, so a value can never
 be parsed as SQL, whatever it contains. Build them with `pg.arg_text(s)`,
 `arg_int(n)`, `arg_float(x)` (sent exactly, not rounded), `arg_bool(b)`,
-`arg_bytes(b)` (binary, for `bytea`) and `arg_null()`. A query with none
-takes `[]`.
+`arg_bytes(b)` (binary, for `bytea`), `arg_time(t)` (a `timez.Time`, for
+`timestamptz`; Postgres keeps microseconds) and `arg_null()`. A query with
+none takes `[]`.
 
 **Results** from `query` are buffered whole in a `Rows` (for one too big
 for that, see [Streaming](#streaming)): `rows.count`, `rows.columns`
@@ -824,6 +933,7 @@ cells by row and column index; `pg.col(rows, "name")` finds an index.
 | `pg.get_float(rows, r, c)` | `float4`, `float8`, `numeric`, the integer types |
 | `pg.get_bool(rows, r, c)` | `bool` |
 | `pg.get_bytes(rows, r, c)` | `bytea` |
+| `pg.get_time(rows, r, c)` | `timestamptz` as a `timez.Time` (`result`: err for infinity or a BC date); a `timestamp` without a zone is read as UTC |
 | `pg.is_null(rows, r, c)` | whether the cell is NULL |
 
 The getters **panic** on NULL, on a column of a type they do not read,
@@ -2029,7 +2139,9 @@ from `bytes`, or `read` from a connection into a caller-sized `wire`
 (the max request size). `read` takes the unconsumed prefix length and
 returns `Incoming` with leftover compacted to the front of the wire,
 so one connection can carry many requests. `write` serializes a
-`Response` through an arena. A request keeps its header block as it
+`Response` through an arena; `write_head` answers a HEAD request with the
+head `write` would send -- `Content-Length` the length of the body GET
+would carry, as RFC 9110 has it -- and no body. A request keeps its header block as it
 arrived; `header(req, name)` looks it up case-insensitively. A body is framed by
 `Content-Length` or by `Transfer-Encoding: chunked` (chunk extensions
 ignored, trailers read and discarded). `wants_close` follows HTTP/1.1
@@ -2075,6 +2187,18 @@ cost. `httpc` does the same for the method and the request headers it
 sends, and percent-encodes CR, LF, space and tab in the request target.
 `http2`'s header encoder does the same for HTTP/2 fields.
 
+Every response carries `Date` (RFC 9110 6.6.1): the current second, kept
+by the runtime for all threads and copied into the response with no clock
+read and no allocation; a handler's own `Date` is the one sent. A 1xx, 204
+or 304 response is written with no `Content-Length` and no body, whatever
+the `Response` holds (8.6 forbids the header on 1xx and 204, and on a 304
+unless it equals the 200's; body bytes there would be read as the start of
+the next response). `http2` follows the same rules. A prebuilt static
+rendering (`static_render`) ends its header block with
+`static_date_line()`, whose date `write_static` refreshes on every send;
+a rendering built elsewhere gets the same by ending its headers with that
+line.
+
 ```slang
 import "http";
 
@@ -2115,8 +2239,8 @@ any signal-handling program.
 - [crypto](packages/crypto.md) -- compiler-provided, 8 public items
 - [encoding](packages/encoding.md) -- compiler-provided, 14 public items
 - [flags](packages/flags.md) -- source package, 23 public items
-- [fs](packages/fs.md) -- compiler-provided, 7 public items
-- [http](packages/http.md) -- source package, 56 public items
+- [fs](packages/fs.md) -- compiler-provided, 9 public items
+- [http](packages/http.md) -- source package, 58 public items
 - [http2](packages/http2.md) -- source package, 122 public items
 - [httpc](packages/httpc.md) -- source package, 35 public items
 - [io](packages/io.md) -- compiler-provided, 12 public items
@@ -2124,13 +2248,14 @@ any signal-handling program.
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [net](packages/net.md) -- compiler-provided, 33 public items
 - [os](packages/os.md) -- compiler-provided, 14 public items
-- [pg](packages/pg.md) -- source package, 52 public items
+- [pg](packages/pg.md) -- source package, 55 public items
 - [proc](packages/proc.md) -- compiler-provided, 6 public items
 - [redis](packages/redis.md) -- source package, 161 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [sql](packages/sql.md) -- compiler-provided, 20 public items
 - [strings](packages/strings.md) -- compiler-provided, 24 public items
-- [time](packages/time.md) -- compiler-provided, 3 public items
+- [time](packages/time.md) -- compiler-provided, 5 public items
+- [timez](packages/timez.md) -- source package, 144 public items
 
 ---
 

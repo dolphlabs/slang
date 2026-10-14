@@ -1,6 +1,7 @@
 import "builder";
 import "byteutil";
 import "strings";
+import "time";
 
 // `raw_headers` is exactly the CRLF-separated "name: value" lines this
 // request's header block was made of, unparsed -- not a map[str]str.
@@ -1957,6 +1958,37 @@ fn line_value_at(lb: bytes, at: int) -> str {
     return strings.from_bytes(lb, v, len(lb));
 }
 
+// 1xx, 204 and 304 have no content (RFC 9110 6.4.1). They are written
+// with no Content-Length -- 8.6 forbids one on 1xx and 204, and on a 304
+// unless it equals the 200's -- and with no body bytes whatever the
+// Response holds, which would otherwise be read as the start of the
+// next response on the connection.
+fn has_no_content(status: i32) -> bool {
+    return status < 200 || status == 204 || status == 304;
+}
+
+// A Date the handler set itself is the one sent; otherwise the writer
+// adds the current one (RFC 9110 6.6.1: an origin server with a clock
+// sends Date on every response). Names written through with_header are
+// lower case; the other spellings cover raw `extra` lines.
+fn has_date_line(r: Response) -> bool {
+    for line in r.extra {
+        if strings.has_prefix(line, "date:") || strings.has_prefix(line, "Date:") ||
+           strings.has_prefix(line, "DATE:") {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The Date value the bytes paths write: "" when the handler set its own.
+fn date_for(r: Response) -> str {
+    if has_date_line(r) {
+        return "";
+    }
+    return time.http_date();
+}
+
 fn response_conn(r: Response) -> str {
     let i = len(r.extra) - 1;
     while i >= 0 {
@@ -2069,7 +2101,19 @@ pub fn serialize_builder(r0: Response) -> bytes {
     sb2.write_str(" ");
     sb2.write_str(r.status_text);
     sb2.write_str("\r\n");
+    let date = date_for(r);
+    if len(date) > 0 {
+        sb2.write_str("date: ");
+        sb2.write_str(date);
+        sb2.write_str("\r\n");
+    }
     sb2.write(response_block(r));
+    if has_no_content(r.status) {
+        sb2.write_str("Connection: ");
+        sb2.write_str(response_conn(r));
+        sb2.write_str("\r\n\r\n");
+        return sb2.finish();
+    }
     sb2.write_str("Content-Length: ");
     sb2.write_str(to_str(len(r.body)));
     sb2.write_str("\r\nConnection: ");
@@ -2114,7 +2158,8 @@ fn push_int(sb: builder.Bytes, v: int) -> int {
 // Counting them is what keeps this honest -- see the probe notes.
 pub fn serialize_sized(r0: Response) -> bytes {
     let r = clean_response(r0);
-    let need = emit_len(r);
+    let date = date_for(r);
+    let need = emit_len(r, date);
     let out = strings.bytes_zero(need);
     let off = 0;
     off = fill_str(out, off, "HTTP/1.1 ");
@@ -2122,7 +2167,18 @@ pub fn serialize_sized(r0: Response) -> bytes {
     off = fill_str(out, off, " ");
     off = fill_str(out, off, r.status_text);
     off = fill_str(out, off, "\r\n");
+    if len(date) > 0 {
+        off = fill_str(out, off, "date: ");
+        off = fill_str(out, off, date);
+        off = fill_str(out, off, "\r\n");
+    }
     off = fill_block(out, off, r);
+    if has_no_content(r.status) {
+        off = fill_str(out, off, "Connection: ");
+        off = fill_str(out, off, response_conn(r));
+        off = fill_str(out, off, "\r\n\r\n");
+        return out;
+    }
     off = fill_str(out, off, "Content-Length: ");
     off = fill_int(out, off, len(r.body));
     off = fill_str(out, off, "\r\nConnection: ");
@@ -2168,8 +2224,11 @@ fn digits_len(v: int) -> int {
 // its CRLF -- see response_block), framing, body. Must stay in lock
 // step with fill_block below; the arena test's differential check pins
 // them together through serialize().
-fn emit_len(r: Response) -> int {
+fn emit_len(r: Response, date: str) -> int {
     let n = len("HTTP/1.1 ") + digits_len(r.status) + 1 + len(r.status_text) + 2;
+    if len(date) > 0 {
+        n = n + len("date: ") + len(date) + 2;
+    }
     if len(r.location) > 0 {
         n = n + len("location: ") + len(r.location) + 2;
     } else if len(r.content_type) > 0 {
@@ -2177,6 +2236,9 @@ fn emit_len(r: Response) -> int {
     }
     for line in response_extra_filtered(r) {
         n = n + len(line) + 2;
+    }
+    if has_no_content(r.status) {
+        return n + len("Connection: ") + len(response_conn(r)) + 4;
     }
     n = n + len("Content-Length: ") + digits_len(len(r.body));
     n = n + len("\r\nConnection: ") + len(response_conn(r)) + 4;
@@ -2989,20 +3051,31 @@ fn fast_conn(r: Response) -> str {
 // matched: any value (or none) rides along through `conn`, so it
 // never changes the shape decision.
 fn emit_into(w: wire, status: i32, status_text: str, content_type: str,
-             body: bytes, conn: str) -> int {
+             body: bytes, conn: str, send_body: bool) -> int {
     let off = 0;
     off = put_str(w, off, "HTTP/1.1 ");
     off = put_int(w, off, status);
     off = put_str(w, off, " ");
     off = put_str(w, off, status_text);
+    off = put_str(w, off, "\r\ndate: ");
+    off = time.put_http_date(w, off);
     off = put_str(w, off, "\r\ncontent-type: ");
     off = put_str(w, off, content_type);
+    // has_no_content, inline: a call here costs a safepoint per pass
+    if status < 200 || status == 204 || status == 304 {
+        off = put_str(w, off, "\r\nConnection: ");
+        off = put_str(w, off, conn);
+        off = put_str(w, off, "\r\n\r\n");
+        return off;
+    }
     off = put_str(w, off, "\r\nContent-Length: ");
     off = put_int(w, off, len(body));
     off = put_str(w, off, "\r\nConnection: ");
     off = put_str(w, off, conn);
     off = put_str(w, off, "\r\n\r\n");
-    off = put_bytes(w, off, body);
+    if send_body {
+        off = put_bytes(w, off, body);
+    }
     return off;
 }
 
@@ -3023,13 +3096,18 @@ fn maybe_special_line(line: str) -> bool {
            strings.has_prefix(line, "l") || strings.has_prefix(line, "L");
 }
 
-fn emit(r: Response, w: wire) -> int {
+fn emit(r: Response, w: wire, add_date: bool, send_body: bool) -> int {
     let off = 0;
     off = put_str(w, off, "HTTP/1.1 ");
     off = put_int(w, off, r.status);
     off = put_str(w, off, " ");
     off = put_str(w, off, r.status_text);
     off = put_str(w, off, "\r\n");
+    if add_date {
+        off = put_str(w, off, "date: ");
+        off = time.put_http_date(w, off);
+        off = put_str(w, off, "\r\n");
+    }
     let skip_ct = len(r.content_type) > 0;
     let skip_loc = len(r.location) > 0;
     if skip_loc {
@@ -3071,12 +3149,21 @@ fn emit(r: Response, w: wire) -> int {
         off = put_str(w, off, line);
         off = put_str(w, off, "\r\n");
     }
+    // has_no_content, inline: a call here costs a safepoint per pass
+    if r.status < 200 || r.status == 204 || r.status == 304 {
+        off = put_str(w, off, "Connection: ");
+        off = put_str(w, off, conn);
+        off = put_str(w, off, "\r\n\r\n");
+        return off;
+    }
     off = put_str(w, off, "Content-Length: ");
     off = put_int(w, off, len(r.body));
     off = put_str(w, off, "\r\nConnection: ");
     off = put_str(w, off, conn);
     off = put_str(w, off, "\r\n\r\n");
-    off = put_bytes(w, off, r.body);
+    if send_body {
+        off = put_bytes(w, off, r.body);
+    }
     return off;
 }
 
@@ -3114,11 +3201,33 @@ pub gc struct StaticBody {
 pub fn write_static(c: &mut link, b: StaticBody, a: &mut arena,
                     close: bool, deadline: until) -> result[int, fault] {
     if !close && len(b.keep_alive) > 0 {
+        let at = static_date_at(b);
         if len(b.keep_alive) > a.left() {
-            return c.send_bytes(b.keep_alive, deadline);
+            if at < 0 {
+                return c.send_bytes(b.keep_alive, deadline);
+            }
+            // Too big for the arena: the head goes through a wire (a
+            // wire_put_bytes copies only what fits it) with the date
+            // filled in, the body after it. The rendering is shared by
+            // every request and is never written to.
+            let head = len(b.keep_alive) - static_body_len(b);
+            if head > a.left() {
+                return c.send_bytes(b.keep_alive, deadline);
+            }
+            let hw = a.wire(head);
+            wire_put_bytes(hw, 0, b.keep_alive);
+            time.put_http_date(hw, at);
+            let hr = c.send(hw, deadline);
+            guard let _sent = hr else {
+                return hr;
+            }
+            return c.send_bytes(b.body, deadline);
         }
         let w = a.wire(len(b.keep_alive));
         wire_put_bytes(w, 0, b.keep_alive);
+        if at >= 0 {
+            time.put_http_date(w, at);
+        }
         return c.send(w, deadline);
     }
     // Close variant only: HTTP/1.0 or Connection: close. Rare --
@@ -3128,8 +3237,14 @@ pub fn write_static(c: &mut link, b: StaticBody, a: &mut arena,
     sb.write_str(to_str(b.status));
     sb.write_str(" ");
     sb.write_str(status_text_of(b.status));
+    sb.write_str("\r\ndate: ");
+    sb.write_str(time.http_date());
     sb.write_str("\r\ncontent-type: ");
     sb.write_str(clean_field(b.content_type));
+    if has_no_content(b.status) {
+        sb.write_str("\r\nConnection: close\r\n\r\n");
+        return c.send_bytes(sb.finish(), deadline);
+    }
     sb.write_str("\r\nContent-Length: ");
     sb.write_str(to_str(len(b.body)));
     sb.write_str("\r\nConnection: close\r\n\r\n");
@@ -3151,11 +3266,51 @@ pub fn static_render(status: i32, content_type: str, body: bytes) -> bytes {
     sb.write_str(status_text_of(status));
     sb.write_str("\r\ncontent-type: ");
     sb.write_str(clean_field(content_type));
+    if has_no_content(status) {
+        sb.write_str("\r\nConnection: keep-alive\r\n");
+        sb.write_str(static_date_line());
+        sb.write_str("\r\n");
+        return sb.finish();
+    }
     sb.write_str("\r\nContent-Length: ");
     sb.write_str(to_str(len(body)));
-    sb.write_str("\r\nConnection: keep-alive\r\n\r\n");
+    sb.write_str("\r\nConnection: keep-alive\r\n");
+    sb.write_str(static_date_line());
+    sb.write_str("\r\n");
     sb.write(body);
     return sb.finish();
+}
+
+// The last header line of a prebuilt static rendering: `date: ` and a
+// date, refreshed in place on every send. A rendering is shared by every
+// request, so the date cannot be part of it; a renderer outside this
+// package (zokor's, with its security headers) ends its header block
+// with this line to get the same. Any other rendering is sent as it is.
+pub fn static_date_line() -> str {
+    return "date: " + time.http_date() + "\r\n";
+}
+
+// The body bytes at the end of a static rendering: none for a status
+// that has no content, whatever the route holds.
+fn static_body_len(b: StaticBody) -> int {
+    if has_no_content(b.status) {
+        return 0;
+    }
+    return len(b.body);
+}
+
+// Where write_static fills the date in `b.keep_alive`: right before the
+// blank line and the body, when the header block ends with
+// static_date_line's shape; -1 when it does not.
+fn static_date_at(b: StaticBody) -> int {
+    let ka = b.keep_alive;
+    let at = len(ka) - static_body_len(b) - 4 - 29;
+    if at < 6 || ka[at - 6] != 100 || ka[at - 5] != 97 || ka[at - 4] != 116 ||
+       ka[at - 3] != 101 || ka[at - 2] != 58 || ka[at - 1] != 32 ||
+       ka[at + 29] != 13 || ka[at + 30] != 10 {
+        return -1;
+    }
+    return at;
 }
 
 // The status text for a static status without carrying the str on
@@ -3226,29 +3381,51 @@ fn clean_response(r: Response) -> Response {
 }
 
 pub fn write(c: &mut link, r0: Response, a: &mut arena, deadline: until) -> result[int, fault] {
+    return write_framed(c, r0, a, deadline, true);
+}
+
+// The answer to a HEAD request: the head `write` would send for `r0` --
+// Content-Length the length of its body -- and no body (RFC 9110 9.3.2:
+// HEAD's Content-Length is the one GET would carry). Give it the
+// response GET would produce, body and all.
+pub fn write_head(c: &mut link, r0: Response, a: &mut arena, deadline: until) -> result[int, fault] {
+    return write_framed(c, r0, a, deadline, false);
+}
+
+fn write_framed(c: &mut link, r0: Response, a: &mut arena, deadline: until,
+                send_body: bool) -> result[int, fault] {
     let r = clean_response(r0);
     if is_fast_response(r) {
         let ct = fast_content_type(r);
         let conn = fast_conn(r);
         let probe = a.wire(0);
-        let need = emit_into(probe, r.status, r.status_text, ct, r.body, conn);
+        let need = emit_into(probe, r.status, r.status_text, ct, r.body, conn, send_body);
         if need > a.left() {
-            let raw = serialize_sized(r);
-            return c.send_bytes(raw, deadline);
+            return c.send_bytes(head_or_all(serialize_sized(r), r, send_body), deadline);
         }
         let w = a.wire(need);
-        emit_into(w, r.status, r.status_text, ct, r.body, conn);
+        emit_into(w, r.status, r.status_text, ct, r.body, conn, send_body);
         return c.send(w, deadline);
     }
+    // decided once for both passes: the scan is per extra line
+    let add_date = !has_date_line(r);
     let probe = a.wire(0);
-    let need = emit(r, probe);
+    let need = emit(r, probe, add_date, send_body);
     if need > a.left() {
-        let raw = serialize_sized(r);
-        return c.send_bytes(raw, deadline);
+        return c.send_bytes(head_or_all(serialize_sized(r), r, send_body), deadline);
     }
     let w = a.wire(need);
-    emit(r, w);
+    emit(r, w, add_date, send_body);
     return c.send(w, deadline);
+}
+
+// A serialized response without its body, for a HEAD answer too big for
+// the arena. A status with no content was written with no body already.
+fn head_or_all(raw: bytes, r: Response, send_body: bool) -> bytes {
+    if send_body || has_no_content(r.status) || len(r.body) == 0 {
+        return raw;
+    }
+    return raw[0..len(raw) - len(r.body)];
 }
 
 // `text_response` with a BYTES body: same shape, no `to_bytes` copy.

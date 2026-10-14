@@ -360,6 +360,54 @@ static const char **call_arg_expects(CG *cg, Expr *e) {
  * have, or infer_type throws "cannot infer the type of ..." on
  * perfectly valid programs (confirmed: tests/struct_field_expect
  * failed exactly this way before this bracketing was added). */
+/* Whether `e` can contain a node whose recorded live set codegen reads --
+ * a call's safepoint bracket. Allocation itself never collects (a
+ * collection runs at a call's safepoint, or scans an async-preempted
+ * stack conservatively), so a tree of literals, names, operators and
+ * nested literals has none. Conservative: any kind not listed counts. */
+static int may_safepoint(Expr *e) {
+    if (!e) return 0;
+    switch (e->kind) {
+    case EX_INT:
+    case EX_FLOAT:
+    case EX_STRING:
+    case EX_BYTES:
+    case EX_BOOL:
+        return 0;
+    case EX_IDENT:
+        return !strcmp(e->as.ident.name, "none");
+    case EX_UNARY:
+        return may_safepoint(e->as.unary.operand);
+    case EX_CAST:
+        return may_safepoint(e->as.cast.operand);
+    case EX_FIELD:
+        return may_safepoint(e->as.field.base);
+    case EX_BINARY:
+        return may_safepoint(e->as.binary.lhs) ||
+               may_safepoint(e->as.binary.rhs);
+    case EX_LIST:
+        for (int i = 0; i < e->as.list.nelems; i++)
+            if (may_safepoint(e->as.list.elems[i])) return 1;
+        return 0;
+    case EX_STRUCTLIT:
+        for (int i = 0; i < e->as.structlit.nfields; i++)
+            if (may_safepoint(e->as.structlit.vals[i])) return 1;
+        return 0;
+    default:
+        return 1;
+    }
+}
+
+/* A literal is static data: nothing to root while a sibling runs. gen_list
+ * gives one no temp, so it must never be pending (it would have no
+ * registered temp to put in a root list). */
+static int is_const_literal(Expr *e) {
+    if (e->kind == EX_UNARY)
+        e = e->as.unary.operand;
+    return e->kind == EX_INT || e->kind == EX_FLOAT || e->kind == EX_BOOL ||
+           e->kind == EX_STRING;
+}
+
 static LiveSet *process_children_reverse(CG *cg, Expr **children, int n,
                                          LiveSet *live_out,
                                          const char **expects) {
@@ -382,15 +430,31 @@ static LiveSet *process_children_reverse(CG *cg, Expr **children, int n,
      *
      * Phase 1 (forward, left-to-right): for each child i, snapshot
      * the accumulated pending set from every STRICTLY EARLIER sibling
-     * as `before[i]`. */
+     * as `before[i]`.
+     *
+     * A marker only matters to a safepoint in a LATER sibling, so a
+     * child with no such sibling gets none. Without that, a list literal
+     * of n nested literals built n sets of up to n markers each -- 4,000
+     * rows took 6 s and 600 MB to compile -- for brackets that do not
+     * exist. */
     int *needs_pending = (int *)xmalloc(sizeof(int) * (size_t)n);
     LiveSet **before = (LiveSet **)xmalloc(sizeof(LiveSet *) * (size_t)n);
+    int *later_safepoint = (int *)xmalloc(sizeof(int) * (size_t)n);
+    int seen = 0;
+    for (int i = n - 1; i >= 0; i--) {
+        later_safepoint[i] = seen;
+        seen = seen || may_safepoint(children[i]);
+    }
     LiveSet *acc = ls_new();
     for (int i = 0; i < n; i++) {
         const char *exp_i = expects ? expects[i] : NULL;
         const char *saved = expect_push(cg, exp_i);
-        needs_pending[i] = !is_bare_ident(children[i]) &&
-                           type_has_gc_roots(cg, infer_type(cg, children[i]));
+        /* inferred whether or not a marker is wanted, as before, so a
+         * type error is reported where it always was */
+        int gc = !is_bare_ident(children[i]) &&
+                 type_has_gc_roots(cg, infer_type(cg, children[i]));
+        needs_pending[i] = gc && later_safepoint[i] &&
+                           !is_const_literal(children[i]);
         cg->expect = saved;
         before[i] = acc;
         if (needs_pending[i]) {
@@ -642,25 +706,35 @@ static LiveSet *live_expr(CG *cg, Expr *e, LiveSet *live_out) {
             return cur;
         }
         const char **expects = call_arg_expects(cg, e);
-        LiveSet *cur = process_children_reverse(
-            cg, e->as.call.args, e->as.call.nargs, live_out, expects);
 
         /* Method-call receiver: 'p.method(args)' resolves 'left' (=p)
          * as a plain local use, exactly mirroring gen_call's own
          * split_dotted+import_try dispatch (a dotted call name whose
          * left part is NOT a package alias is a method call on that
-         * local). Contributes only a named-use addition (receivers in
-         * this language are always simple identifiers, never a
-         * sub-expression with its own safepoints), so it's safe to
-         * fold in without ordering sensitivity. */
+         * local). The call reads the receiver AFTER its arguments are
+         * evaluated, so it is live across every safepoint inside them:
+         * it goes into the live-out the arguments are processed
+         * against, not onto the result afterwards. Added afterwards, a
+         * receiver whose last use was this call was missing from the
+         * roots of a nested call in its arguments --
+         * `r.serve_id(req(...), id)` with `r` dead after it: a
+         * collection inside req() freed the router, and serve_id ran on
+         * reused memory (zokor's tests, under GC pressure; slang
+         * tests/method_receiver_root). */
+        LiveSet *args_out = live_out;
         char *left, *right;
         if (split_dotted(e->as.call.name, &left, &right)) {
             const char *pkg = import_try(cg, left);
             if (!pkg) {
                 LiveVar *recv = resolve_local_use(cg, left);
-                if (recv) ls_add_named(cur, recv);
+                if (recv) {
+                    args_out = ls_clone(live_out);
+                    ls_add_named(args_out, recv);
+                }
             }
         }
+        LiveSet *cur = process_children_reverse(
+            cg, e->as.call.args, e->as.call.nargs, args_out, expects);
 
         /* Tier 10: e->live_set must include not just live_out (what
          * survives AFTER this call returns) but everything gathered

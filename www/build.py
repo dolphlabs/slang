@@ -169,6 +169,7 @@ DOC_ERRORS = []
 
 PACKAGE_SECTIONS = {
     "time": ["`time`"],
+    "timez": ["`timez`"],
     "net": ["`net`", "TLS"],      # TLS lives in net as net.tls_*
     "json": ["`json`"],
     "proc": ["`proc`"],

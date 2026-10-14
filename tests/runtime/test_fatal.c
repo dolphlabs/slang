@@ -8,7 +8,12 @@
  * fault (a store to address 16, which re-faults after the handler
  * restores the default action) and a signal sent with raise(), which
  * does not re-fault and must be raised again. Both children must print
- * the report and die of their signal. */
+ * the report and die of their signal.
+ *
+ * The pc of a fault in the program's own code is also printed as an
+ * offset into the image, which names the function once the process is
+ * gone (a PIE's raw pc does not); a fault inside libc gets none, since
+ * it has no offset in this binary. */
 
 static int sl_runtime_test_main(void);
 
@@ -22,7 +27,8 @@ static int sl_runtime_test_main(void);
 
 #include <sys/wait.h>
 
-static int sl_tf_case(int how, int want_sig, const char *want) {
+static int sl_tf_case(int how, int want_sig, const char *want,
+                      const char *refuse) {
     int fds[2];
     if (pipe(fds) != 0)
         return 1;
@@ -34,10 +40,16 @@ static int sl_tf_case(int how, int want_sig, const char *want) {
         close(fds[0]);
         sl_rt_install_altstack();
         sl_rt_install_fatal_handlers();
-        if (how == 0)
+        if (how == 0) {
             *(volatile int *)(uintptr_t)16 = 1;
-        else
+        } else if (how == 1) {
             raise(SIGBUS);
+        } else {
+            /* through a pointer, so the compiler cannot inline it: the
+               fault must happen inside libc */
+            size_t (*volatile len_of)(const char *) = strlen;
+            (void)len_of((const char *)(uintptr_t)16);
+        }
         _exit(0); /* reached only if the signal did not kill us */
     }
     close(fds[1]);
@@ -59,13 +71,20 @@ static int sl_tf_case(int how, int want_sig, const char *want) {
         fprintf(stderr, "test_fatal: case %d: stderr lacks \"%s\": %s\n", how, want, out);
         return 1;
     }
+    if (refuse && strstr(out, refuse)) {
+        fprintf(stderr, "test_fatal: case %d: stderr has \"%s\": %s\n", how, refuse, out);
+        return 1;
+    }
     return 0;
 }
 
 static int sl_runtime_test_main(void) {
     int bad = 0;
-    bad |= sl_tf_case(0, SIGSEGV, "slang: fatal SIGSEGV at address 0x0000000000000010, pc 0x");
-    bad |= sl_tf_case(1, SIGBUS, "slang: fatal SIGBUS at address ");
+    bad |= sl_tf_case(0, SIGSEGV, "slang: fatal SIGSEGV at address 0x0000000000000010, pc 0x", NULL);
+    bad |= sl_tf_case(0, SIGSEGV, " (image+0x", NULL);
+    bad |= sl_tf_case(1, SIGBUS, "slang: fatal SIGBUS at address ", NULL);
+    bad |= sl_tf_case(2, SIGSEGV, "slang: fatal SIGSEGV at address 0x0000000000000010, pc 0x",
+                      "image+");
     return bad;
 }
 
