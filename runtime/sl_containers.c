@@ -1693,5 +1693,44 @@ static char *sl_join_err(sl_join *j) {
     return j->err ? j->err : sl_strdup("task panicked");
 }
 
+/* A joined spawn run in place: `body` (a spawn shape's _inline entry)
+ * calls the target and finishes `join` on the CURRENT task, and a panic
+ * inside it -- sl_rt_fail, finding t->recover -- fails the join and
+ * comes back here instead of ending the task. To the join_wait that
+ * follows, which codegen guarantees is the next thing the spawner does
+ * (EX_SPAWN.joined), it is the same join either way; what it skips is a
+ * task, a stack, two context switches and the run queue.
+ *
+ * What a panic abandons is restored here: the GC safepoint chain, the
+ * preemption bracket depth, the join the task was itself reporting to.
+ * Nothing else is: as for a panicking task, no runtime lock is ever held
+ * where a user panic can fire. noinline so `rec` is a frame of its own,
+ * between the spawner's and the body's. */
+__attribute__((noinline))
+static void sl_protect_run(void (*body)(void *), void *arg, sl_join *join) {
+    sl_recover rec;
+    sl_task *t = sl_rt_cur();
+    rec.prev = t->recover;
+    rec.safepoint_top = t->safepoint_top;
+    rec.join = t->join;
+    rec.preempt_depth = atomic_load_explicit(&t->preempt_disable_depth,
+                                             memory_order_acquire);
+    if (sl_recover_save(rec.regs) == 0) {
+        t->join = join;
+        t->recover = &rec;
+        body(arg);
+        t = SL_RT_TLS_CUR();
+        t->recover = rec.prev;
+        t->join = rec.join;
+        return;
+    }
+    t = SL_RT_TLS_CUR();
+    t->recover = rec.prev;
+    t->safepoint_top = rec.safepoint_top;
+    t->join = rec.join;
+    atomic_store_explicit(&t->preempt_disable_depth, rec.preempt_depth,
+                          memory_order_release);
+}
+
 /* ---- user program ---- */
 

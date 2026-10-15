@@ -736,6 +736,91 @@ __asm__(
 #error "sl_ctx_switch: unsupported architecture (only x86_64 and aarch64 have a runtime_sched.c backend)"
 #endif
 
+/* sl_recover_save / sl_recover_jump: setjmp and longjmp for protected
+ * calls (sl_protect_run), written here rather than taken from libc
+ * because glibc's jmp_buf mangles the stack and frame pointers. A task's
+ * stack can be relocated while a protected call runs, and the relocation
+ * translates every live stack word that points into the old stack --
+ * which only works on pointers stored as they are.
+ *
+ * x86_64 (SysV and Darwin): rbx, rbp, r12-r15, the caller's rsp, the
+ * return address. arm64 (AAPCS64): x19-x28, fp, lr, sp, d8-d15. */
+#if defined(__APPLE__)
+#define SL_RECOVER_SYM(n) "_" n
+#else
+#define SL_RECOVER_SYM(n) n
+#endif
+#if defined(__x86_64__)
+__asm__(
+".text\n"
+".globl " SL_RECOVER_SYM("sl_recover_save") "\n"
+".p2align 4\n"
+SL_RECOVER_SYM("sl_recover_save") ":\n"
+"    mov  %rbx, 0(%rdi)\n"
+"    mov  %rbp, 8(%rdi)\n"
+"    mov  %r12, 16(%rdi)\n"
+"    mov  %r13, 24(%rdi)\n"
+"    mov  %r14, 32(%rdi)\n"
+"    mov  %r15, 40(%rdi)\n"
+"    lea  8(%rsp), %rdx\n"
+"    mov  %rdx, 48(%rdi)\n"
+"    mov  (%rsp), %rdx\n"
+"    mov  %rdx, 56(%rdi)\n"
+"    xor  %eax, %eax\n"
+"    ret\n"
+".globl " SL_RECOVER_SYM("sl_recover_jump") "\n"
+".p2align 4\n"
+SL_RECOVER_SYM("sl_recover_jump") ":\n"
+"    mov  0(%rdi), %rbx\n"
+"    mov  8(%rdi), %rbp\n"
+"    mov  16(%rdi), %r12\n"
+"    mov  24(%rdi), %r13\n"
+"    mov  32(%rdi), %r14\n"
+"    mov  40(%rdi), %r15\n"
+"    mov  48(%rdi), %rsp\n"
+"    mov  $1, %eax\n"
+"    jmp  *56(%rdi)\n"
+);
+#elif defined(__aarch64__)
+__asm__(
+".text\n"
+".globl " SL_RECOVER_SYM("sl_recover_save") "\n"
+".p2align 2\n"
+SL_RECOVER_SYM("sl_recover_save") ":\n"
+"    stp  x19, x20, [x0, #0]\n"
+"    stp  x21, x22, [x0, #16]\n"
+"    stp  x23, x24, [x0, #32]\n"
+"    stp  x25, x26, [x0, #48]\n"
+"    stp  x27, x28, [x0, #64]\n"
+"    stp  x29, x30, [x0, #80]\n"
+"    mov  x2, sp\n"
+"    str  x2, [x0, #96]\n"
+"    stp  d8, d9, [x0, #104]\n"
+"    stp  d10, d11, [x0, #120]\n"
+"    stp  d12, d13, [x0, #136]\n"
+"    stp  d14, d15, [x0, #152]\n"
+"    mov  w0, #0\n"
+"    ret\n"
+".globl " SL_RECOVER_SYM("sl_recover_jump") "\n"
+".p2align 2\n"
+SL_RECOVER_SYM("sl_recover_jump") ":\n"
+"    ldp  x19, x20, [x0, #0]\n"
+"    ldp  x21, x22, [x0, #16]\n"
+"    ldp  x23, x24, [x0, #32]\n"
+"    ldp  x25, x26, [x0, #48]\n"
+"    ldp  x27, x28, [x0, #64]\n"
+"    ldp  x29, x30, [x0, #80]\n"
+"    ldr  x2, [x0, #96]\n"
+"    mov  sp, x2\n"
+"    ldp  d8, d9, [x0, #104]\n"
+"    ldp  d10, d11, [x0, #120]\n"
+"    ldp  d12, d13, [x0, #136]\n"
+"    ldp  d14, d15, [x0, #152]\n"
+"    mov  w0, #1\n"
+"    ret\n"
+);
+#endif
+
 /* How far the CALLER's stack pointer was from 16-byte alignment at its
  * `call` (x86_64) or right now (arm64, where the hardware keeps sp
  * aligned): 0 when the ABI holds. Leaf asm, so no compiler-chosen frame
@@ -1090,6 +1175,10 @@ static void sl_task_grower_entry(void *arg) {
     }
     t->safepoint_top = (sl_safepoint *)sl_task_translate(
         t->safepoint_top, old_base, old_size, new_base, new_size);
+    /* The recover chain's links live on the stack and are translated by
+       the scan of live words below; the head lives here. */
+    t->recover = (sl_recover *)sl_task_translate(
+        t->recover, old_base, old_size, new_base, new_size);
 
     /* translate the frame-pointer chain -- a SECOND, independent
      * structural chain a raw memcpy alone leaves dangling: every
@@ -1364,6 +1453,7 @@ static void sl_task_stack_init(sl_task *t, void (*entry)(void *), void *arg) {
            alignment fudge is unnecessary. */
         t->stack_base = (void *)((char *)raw + sl_stack_page());
     }
+    t->recover = NULL; /* a cached task's last protected call ended */
     sl_ctx_make(t, entry, arg);
     /* Tier 11 eighth slice (async preemption): primed to 1, not 0 --
      * a task's virgin, never-yet-dispatched first stint has a real,

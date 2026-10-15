@@ -296,7 +296,31 @@ typedef struct sl_task {
      * scanned it, so everything it holds is old and a minor may skip it
      * (sl_gc_root_units_build). Only the collector reads it, stopped. */
     unsigned long gc_minor_stamp;
+    /* The innermost protected call this task is inside (sl_protect_run,
+     * runtime_containers.c), or NULL: where a panic returns to instead of
+     * ending the task. It points into this task's own stack, so
+     * sl_task_grower_entry translates it with the safepoint chain. */
+    struct sl_recover *recover;
 } sl_task;
+
+/* A protected call's way back (sl_protect_run). `regs` is what
+ * sl_recover_save stores: the callee-saved registers, the stack pointer
+ * and the return address, unmangled. It lives in sl_protect_run's own
+ * frame, so when a stack grows, the relocation's scan of every live
+ * stack word translates the saved stack and frame pointers like any
+ * other. */
+typedef struct sl_recover {
+    void *regs[24];
+    struct sl_recover *prev;
+    struct sl_safepoint *safepoint_top;
+    void *join;
+    int preempt_depth;
+} sl_recover;
+
+/* runtime_sched.c's asm: save returns 0, and returns 1 a second time
+ * when sl_recover_jump(regs) is called. */
+__attribute__((returns_twice)) int sl_recover_save(void **regs);
+__attribute__((noreturn)) void sl_recover_jump(void **regs);
 
 static void sl_join_fail(void *j, const char *msg);
 
@@ -1280,6 +1304,24 @@ static void sl_rt_fail(const char *msg, const char *at, const char *detail) {
     sl_rt_preempt_disable();
     sl_task *t = SL_RT_TLS_CUR(); /* not a bare read: snprintf ran
         above at depth 0 (SL_RT_TLS_ADDR_FN's comment) */
+    char sl_fail_here;
+    if (t && t->recover &&
+        (uintptr_t)&sl_fail_here >= (uintptr_t)t->stack_base &&
+        (uintptr_t)&sl_fail_here < (uintptr_t)t->stack_base + t->stack_size) {
+        /* Inside a protected call (a joined spawn run in place), and on
+           the task's own stack rather than the grower's or a worker's: the
+           same report and the same err a joined task's panic gives,
+           then back to where the call began. The frames in between are
+           abandoned, exactly as a panicking task's are. */
+        static int quiet_r = -1;
+        if (quiet_r < 0)
+            quiet_r = getenv("SLANG_TEST_RUNNER") ? 1 : 0;
+        if (!(quiet_r && t->join))
+            fprintf(stderr, "slang: task panicked: %s%s%s\n", loc, sep, detail);
+        if (t->join)
+            sl_join_fail(t->join, loc);
+        sl_recover_jump(t->recover->regs);
+    }
     if (!t->is_main) {
         /* Under `slangc test` a joined task's panic is the test's failure
            report, and the runner prints it; saying it here too would print

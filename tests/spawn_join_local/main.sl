@@ -1,13 +1,9 @@
-// spawn directly followed by join_wait: the child is submitted without
-// waking an idle worker (codegen marks the pair; runtime
-// sl_task_submit_copy_joined), and the join's completion resumes the
-// spawner without one either (sl_task_resume_local). Both rely on the
-// worker that put the task in its runnext slot running it next, so this
-// exercises every way that worker can stop running the spawner first:
-// children that allocate (collections), panic (sl_join_fail), and run
-// past their time slice (the chain's quantum ends and the slot goes to
-// the shared queues). A task that never runs hangs the test.
-// tests/run_tests.sh also checks SLANG_SCHED_STAT's runnext_wakes.
+// spawn directly followed by join_wait: codegen marks the pair, and the
+// child runs in place on the spawner (sl_protect_run) rather than as a
+// task of its own. This exercises what the in-place call has to survive:
+// children that allocate (collections), panic (the join fails and the
+// spawner carries on), and run past their time slice (preempted inside
+// the call). tests/run_tests.sh also checks SLANG_SCHED_STAT's submits.
 
 import "time";
 

@@ -949,36 +949,34 @@ else
     echo "PASS reactor nudge budget ($nudge_n nudges, $nudge_waits deadline waits)"
 fi
 
-# ---- runnext wake budget ----------------------------------------------------
+# ---- joined spawns run in place ---------------------------------------------
 # spawn_join_local: spawn directly followed by join_wait, from 4 tasks on
-# 8 workers. The child goes to this worker's runnext slot and the join's
-# completion puts the spawner back there; this worker runs both next, so
-# waking a sleeper for either is waste. Before the joined spawn
-# (sl_task_submit_copy_joined, sl_task_resume_local) these 12,000 spawns
-# woke sleeping workers about 17,500 times; 4 now. Budget: 1% of submits.
-echo "--- runnext wake budget (SLANG_SCHED_STAT) ---"
+# 8 workers, children that allocate, panic and run long. Those spawns used
+# to be submitted as tasks: before sl_task_submit_copy_joined they woke
+# sleeping workers about 17,500 times for 12,000 spawns, and 4 after it.
+# Now they run in place on the spawner (sl_protect_run) and are never
+# submitted: only the 4 outer tasks are. Budget: 16 submits.
+echo "--- joined spawns run in place (SLANG_SCHED_STAT) ---"
 rw_line=$(SLANG_WORKERS=8 SLANG_SCHED_STAT=1 ./slangc tests/spawn_join_local/main.sl \
           --run 2>&1 >/dev/null | grep -o 'submits=[0-9]*.*runnext_wakes=[0-9]*')
 rw_submits=$(echo "$rw_line" | sed -n 's/^submits=\([0-9]*\).*/\1/p')
-rw_wakes=$(echo "$rw_line" | sed -n 's/.*runnext_wakes=\([0-9]*\)$/\1/p')
-if [ -z "$rw_submits" ] || [ -z "$rw_wakes" ] || [ "$rw_submits" -lt 1000 ]; then
-    echo "FAIL runnext wake budget (no slang-sched-stat line: $rw_line)"
+if [ -z "$rw_submits" ]; then
+    echo "FAIL joined spawns run in place (no slang-sched-stat line: $rw_line)"
     fail=1
-elif [ $((rw_wakes * 100)) -gt "$rw_submits" ]; then
-    echo "FAIL runnext wake budget: $rw_wakes wakes for $rw_submits submits," \
-         "budget 1%"
+elif [ "$rw_submits" -gt 16 ]; then
+    echo "FAIL joined spawns run in place: $rw_submits submits, budget 16"
     fail=1
 else
-    echo "PASS runnext wake budget ($rw_wakes wakes, $rw_submits submits)"
+    echo "PASS joined spawns run in place ($rw_submits submits for 12000 joins)"
 fi
 
-# Which spawns codegen submits as joined: only one whose task does nothing
-# before join_wait on it, since a joined child waits unwoken in this
-# worker's slot. tests/spawn_join_marking has three such forms and four
-# that must stay plain.
+# Which spawns codegen runs in place (sl_protect_run): only one whose task
+# does nothing before join_wait on it, since the spawner does not run
+# again until the call is done. tests/spawn_join_marking has three such
+# forms and four that must stay plain.
 sjm_c="/tmp/sl_spawn_join_marking"
 if ./slangc tests/spawn_join_marking/main.sl --keep-c -o "$sjm_c" >/dev/null 2>&1; then
-    sjm_j=$(grep -o 'sl_task_submit_copy_joined(sl_spawn' "$sjm_c.gen.c" | wc -l | tr -d ' ')
+    sjm_j=$(grep -o 'sl_protect_run(sl_spawn' "$sjm_c.gen.c" | wc -l | tr -d ' ')
     sjm_p=$(grep -o 'sl_task_submit_copy(sl_spawn' "$sjm_c.gen.c" | wc -l | tr -d ' ')
     if [ "$sjm_j" = 3 ] && [ "$sjm_p" = 4 ]; then
         echo "PASS joined spawn marking (3 joined, 4 plain)"
