@@ -324,8 +324,18 @@ static const char **call_arg_expects(CG *cg, Expr *e) {
             sig = method_find(cg, sd, right, e->line);
         }
     } else {
-        sig = sig_find_in(cg, cg->cur_pkg, name);
-        if (!sig) sig = generic_call_sig(cg, cg->cur_pkg, name, e);
+        /* A local function value wins over a package function of the same
+         * name, exactly as gen_call resolves it: taking the package
+         * function's signature here read past its parameter list when the
+         * value took more arguments (slangc crashed compiling zokor's
+         * tests, where a test file declares `fn h`). */
+        const char *fvt = fn_var_type(cg, name);
+        if (fvt) {
+            sig = fn_sig_of_type(cg, fvt, name, e->line);
+        } else {
+            sig = sig_find_in(cg, cg->cur_pkg, name);
+            if (!sig) sig = generic_call_sig(cg, cg->cur_pkg, name, e);
+        }
     }
     if (!sig) return NULL;
 
