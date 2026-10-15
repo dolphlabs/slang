@@ -594,6 +594,10 @@ static void sl_worker_after_switch(sl_task *t) {
          * instant -- clearing first would open exactly the zero-source
          * window sl_task_resume's own comment above describes. */
         t->preempted = 0;
+        /* Stopped running, like a park below: stamped before the push,
+           after which another worker may already be running t. */
+        t->gc_minor_stamp = atomic_load_explicit(&sl_gc_minors_done,
+                                                 memory_order_relaxed);
         sl_runq_stripe_push(t); /* raw stripe push, no bracket -- same
             reason as the old sl_runq_push_raw call here: sl_rt_current_task
             is deliberately still t, and a bracket would decrement freed
