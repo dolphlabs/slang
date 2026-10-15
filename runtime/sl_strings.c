@@ -53,10 +53,12 @@ static bool sl_strings_contains(const char *hay, const char *needle) {
     return sl_strings_find(hay, needle) >= 0;
 }
 
+/* strncmp stops at the end of either string, so a long `s` is not
+ * measured to compare a short prefix: http's emit asks this of every
+ * response header line, several times per line. */
 static bool sl_strings_has_prefix(const char *s, const char *p) {
     if (!s || !p) return false;
-    size_t n = strlen(p);
-    return strlen(s) >= n && !memcmp(s, p, n);
+    return strncmp(s, p, strlen(p)) == 0;
 }
 
 static bool sl_strings_has_suffix(const char *s, const char *p) {

@@ -1719,6 +1719,10 @@ static long long sl_wire_put(sl_wire w, long long off, const char *s) {
     if (!s || off < 0 || off > w.len)
         return 0;
     room = w.len - off;
+    /* A zero-room wire is http's sizing pass: nothing to copy, so the
+     * string is not measured here (the caller adds len(s) itself). */
+    if (room == 0)
+        return 0;
     n = (long long)strlen(s);
     if (n > room)
         n = room;
