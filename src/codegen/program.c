@@ -1026,6 +1026,34 @@ void emit_spawn_trampolines(CG *cg) {
          * dequeues this task, and switched back out of once the user
          * function returns, mirroring main()/sl_main_task_entry
          * exactly. */
+        /* The same call for a joined spawn run in place (sl_protect_run,
+         * EX_SPAWN in expr.c): no task to set up or leave, so the join is
+         * all it touches. A void target finishes the join too -- nothing
+         * else would. */
+        {
+            StrBuf iargs;
+            sb_init(&iargs);
+            for (int j = 0; j < sig->nparams; j++) {
+                if (j)
+                    sb_append(&iargs, ", ");
+                sb_append(&iargs, xasprintf("_sl_a->a%d", j));
+            }
+            emit_line(cg, "__attribute__((unused)) static void %s_inline(void *_sl_raw) {",
+                      s->tname);
+            cg->indent++;
+            emit_line(cg, "%s *_sl_a = (%s *)_sl_raw;", s->sname, s->sname);
+            if (sig->ret_slang) {
+                emit_line(cg, "%s _sl_rv = %s(%s);", ctype_of(cg, sig->ret_slang),
+                          callee, iargs.data ? iargs.data : "");
+                emit_line(cg, "sl_join_finish(_sl_a->join, &_sl_rv);");
+            } else {
+                emit_line(cg, "%s(%s);", callee, iargs.data ? iargs.data : "");
+                emit_line(cg, "sl_join_finish(_sl_a->join, NULL);");
+            }
+            cg->indent--;
+            emit_line(cg, "}");
+            emit_line(cg, "");
+        }
         emit_line(cg, "static void %s_entry(void *_sl_raw) {", s->tname);
         cg->indent++;
         emit_line(cg, "%s *_sl_a = (%s *)_sl_raw;", s->sname, s->sname);

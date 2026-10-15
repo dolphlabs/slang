@@ -17,7 +17,10 @@ fn offer(ch: chan[Msg], n: int) -> bool {
     return sent;
 }
 
-// Reuses the stack where offer's frame was.
+// Reuses the stack where offer's frame was. Shallow on purpose: eight
+// frames already cover offer's, and forty overflowed the main task's
+// stack on linux-arm64 (whose frames are larger), which crashed the test
+// instead of checking anything.
 fn scribble(depth: int) -> int {
     let a = [depth, depth + 1, depth + 2, depth + 3];
     let s = "scribble " + to_str(depth);
@@ -33,7 +36,7 @@ while i < 8 {
     offer(ch, i);
     i = i + 1;
 }
-println(scribble(40));
+println(scribble(8));
 chan_close(ch);
 let bad = 0;
 let n = 0;
