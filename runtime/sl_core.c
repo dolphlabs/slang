@@ -292,9 +292,11 @@ typedef struct sl_task {
     size_t gc_rem_cap;
     void *join;
     /* Minors completed when this task last stopped running (set as it
-     * parks, in sl_worker_after_switch). Once two more have completed, both
-     * scanned it, so everything it holds is old and a minor may skip it
-     * (sl_gc_root_units_build). Only the collector reads it, stopped. */
+     * parks, yields or is preempted, in sl_worker_after_switch;
+     * SL_GC_STAMP_NEVER until it first runs). Once two more have
+     * completed, both scanned it, so everything it holds is old and a
+     * minor may skip it, parked or queued (sl_gc_task_idle). Only the
+     * collector reads it, stopped. */
     unsigned long gc_minor_stamp;
     /* The innermost protected call this task is inside (sl_protect_run,
      * runtime_containers.c), or NULL: where a panic returns to instead of
@@ -321,6 +323,9 @@ typedef struct sl_recover {
  * when sl_recover_jump(regs) is called. */
 __attribute__((returns_twice)) int sl_recover_save(void **regs);
 __attribute__((noreturn)) void sl_recover_jump(void **regs);
+
+/* gc_minor_stamp of a task that has never run (sl_task_stack_init). */
+#define SL_GC_STAMP_NEVER ((unsigned long)-1)
 
 static void sl_join_fail(void *j, const char *msg);
 

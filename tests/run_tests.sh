@@ -826,7 +826,7 @@ for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc
             spawn_isolation select maps pg_rows_as json json_parity json_utf8 json_decode_budget \
             bytes json_deep_nesting redis http_read_wire http_client_pool http2_flood \
             gc_promotion_budget gc_chan_promotion_budget \
-            value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks \
+            value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks gc_skip_queued \
             spawn_join_local spawn_call_args link_tls link_split fn_value_shadows_function select_send_escapes; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_verify_minor_${name}.out"
@@ -947,6 +947,27 @@ elif [ $((nudge_n * 100)) -gt "$nudge_waits" ]; then
     fail=1
 else
     echo "PASS reactor nudge budget ($nudge_n nudges, $nudge_waits deadline waits)"
+fi
+
+# ---- idle queued tasks skipped by minors ------------------------------------
+# gc_skip_queued: 2000 tasks woken at once wait in the run queue on one
+# worker while main allocates through hundreds of minors. Each minor may
+# leave out a queued task that has not run since two minors ago, as it
+# does a parked one. Only parked ones used to be: 7639 of 160789 task
+# visits skipped (5%); 96% now. Budget: at least half.
+echo "--- idle queued tasks skipped (SLANG_GC_STAT) ---"
+sq_err=$(SLANG_WORKERS=1 SLANG_PREEMPT_QUANTUM_MS=10000 SLANG_GC_NURSERY_KB=64 SLANG_GC_STAT=1 \
+         ./slangc tests/gc_skip_queued/main.sl --run 2>&1 >/dev/null)
+sq_walked=$(echo "$sq_err" | sed -n 's/.* minor_tasks_walked=\([0-9]*\).*/\1/p' | head -1)
+sq_skipped=$(echo "$sq_err" | sed -n 's/.* minor_tasks_skipped=\([0-9]*\).*/\1/p' | head -1)
+if [ -z "$sq_walked" ] || [ -z "$sq_skipped" ] || [ "$sq_walked" -lt 10000 ]; then
+    echo "FAIL idle queued tasks skipped (no slang-gc-stat line)"
+    fail=1
+elif [ $((sq_skipped * 2)) -lt "$sq_walked" ]; then
+    echo "FAIL idle queued tasks skipped: $sq_skipped of $sq_walked, budget half"
+    fail=1
+else
+    echo "PASS idle queued tasks skipped ($sq_skipped of $sq_walked)"
 fi
 
 # ---- joined spawns run in place ---------------------------------------------
