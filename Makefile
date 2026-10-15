@@ -1,5 +1,5 @@
 CC     = cc
-VERSION = 0.2.2
+VERSION = 0.2.3
 PREFIX ?= /usr/local
 DESTDIR ?=
 RUNTIME_DIR = $(abspath runtime)

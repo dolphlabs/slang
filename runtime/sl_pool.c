@@ -302,6 +302,17 @@ static sl_task *sl_runq_pop_blocking(sl_runq *q) {
            already is. What it finds ready is queued, and the loop pops
            it -- this worker runs it, with no wakeup in between. */
         if (sl_rt_netpoll_hook) {
+            /* A task waiting in some worker's runnext slot first, as the
+               sleep below does: it counts as queued, so the poll would
+               not wait for it, and nothing else may ever take it -- this
+               loop polled without blocking, found the stripes empty and
+               went round again, for good. */
+            t = sl_runnext_steal();
+            if (t) {
+                pthread_mutex_unlock(&q->mu);
+                sl_rt_preempt_enable();
+                return t;
+            }
             pthread_mutex_unlock(&q->mu);
             int polled = sl_rt_netpoll_hook();
             pthread_mutex_lock(&q->mu);
