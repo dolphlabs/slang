@@ -6,7 +6,7 @@
 //
 // Normal mode checks the bytes on the wire for each shape. ALLOC_BUDGET_N
 // is the allocation-budget mode tests/run_tests.sh drives: N writes of
-// a JSON response with one extra header.
+// a JSON response with a request id and three security headers.
 
 import "http";
 import "proc";
@@ -36,7 +36,13 @@ fn run_budget(c: link, s: link, n: int) {
     let done: chan[int] = make_chan(1);
     spawn drain(s, done);
     let sa = arena_new(16384);
-    let resp = with_id("req_0123456789abcdef0123456789abcdef");
+    // zokor's default answer: a request id and its security headers,
+    // two of which start with c and so look like content-type until
+    // their colon says otherwise.
+    let resp = http.with_headers(with_id("req_0123456789abcdef0123456789abcdef"),
+                                 ["content-security-policy: default-src 'none'",
+                                  "cache-control: no-store",
+                                  "x-content-type-options: nosniff"]);
     let k = 0;
     while k < n {
         let wr = http.write(&mut c, resp, &mut sa, until_never());
@@ -69,7 +75,13 @@ fn run_shapes(c: link, s: link) {
         http.with_header(http.text_response(302, "Found", "text/plain", ""),
                          "location", "/next"),
         http.with_headers(http.text_response(200, "OK", "text/plain", "y"),
-                          ["Content-Type: text/html", "CONNECTION:   close"])
+                          ["Content-Type: text/html", "CONNECTION:   close"]),
+        // c/l names that are not the four, at and off their lengths:
+        // written as they are.
+        http.with_headers(http.text_response(200, "OK", "text/plain", "z"),
+                          ["Content-Security-Policy: default-src 'none'",
+                           "Contents: x", "Location-Hint: y", "LOCATION: /z",
+                           "content-LENGTH: 1"])
     ];
     let sa = arena_new(16384);
     let ra = arena_new(8192);

@@ -875,13 +875,16 @@ done
 #                        number, a string per key); 47 now, the values the
 #                        decode returns: 20 items and their skus, the Quote,
 #                        its region, the list and its growth, and the result.
-#   http_write_extra_budget  http.write of a JSON response with one extra
-#                        header (a request id). Was 52: the general emit
-#                        rebuilt and lowercased every header name per line
-#                        in each of its two passes; then 2: the line's
-#                        bytes, once per pass; 0 now: a line that cannot
-#                        be content-length, connection, content-type or
-#                        location (none of c/l first) is written uncopied.
+#   http_write_extra_budget  http.write of a JSON response with a request
+#                        id and three security headers. With the id alone
+#                        it was 52: the general emit rebuilt and lowercased
+#                        every header name per line in each of its two
+#                        passes; then 2: the line's bytes, once per pass.
+#                        A line that cannot be content-length, connection,
+#                        content-type or location is written uncopied:
+#                        first by its first letter (0 for the id), now
+#                        also by where its colon is (0, not 4, with
+#                        content-security-policy and cache-control).
 #   builder_bytes_lazy   builder.new_bytes, one long write, take. Was 8 (a
 #                        512-byte chunk built as a str then copied to
 #                        bytes before any write, and take always joining);

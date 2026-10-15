@@ -3091,9 +3091,19 @@ fn emit_into(w: wire, status: i32, status_text: str, content_type: str,
 // Whether `line` could name content-length, connection, content-type or
 // location: they all start with c or l, in any case. A prefix compare,
 // so ruling a line out allocates nothing.
+// Whether `line` could be one of the four names emit filters: they
+// start with c or l, and find_field reads a name as everything before
+// the first colon, so the colon is where "location" (8), "connection"
+// (10), "content-type" (12) or "content-length" (14) would end it. That
+// lets content-security-policy, cache-control or a cookie line through
+// without the bytes copy the exact match needs.
 fn maybe_special_line(line: str) -> bool {
-    return strings.has_prefix(line, "c") || strings.has_prefix(line, "C") ||
-           strings.has_prefix(line, "l") || strings.has_prefix(line, "L");
+    if !(strings.has_prefix(line, "c") || strings.has_prefix(line, "C") ||
+         strings.has_prefix(line, "l") || strings.has_prefix(line, "L")) {
+        return false;
+    }
+    let colon = strings.find(line, ":");
+    return colon == 8 || colon == 10 || colon == 12 || colon == 14;
 }
 
 fn emit(r: Response, w: wire, add_date: bool, send_body: bool) -> int {
