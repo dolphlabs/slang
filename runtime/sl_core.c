@@ -149,6 +149,10 @@ typedef struct sl_task {
     struct sl_safepoint *safepoint_top;
     int grows_seen;
     struct sl_task *next;    /* primitive wait-list link, runtime_pool.c */
+    struct sl_task *wq_prev; /* the reactor's waiter list is doubly linked
+                                (runtime_net.c), so a ready task leaves it
+                                in O(1); `next` is its forward link */
+    int on_wq;               /* on a reactor waiter list now */
     struct sl_task *runq_link; /* striped run-queue link -- never aliases
                                  next: a task is queued XOR parked. */
     void *entry_arg;

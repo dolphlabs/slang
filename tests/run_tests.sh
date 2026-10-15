@@ -970,6 +970,34 @@ else
     echo "PASS idle queued tasks skipped ($sq_skipped of $sq_walked)"
 fi
 
+# ---- reactor work budget ---------------------------------------------------
+# reactor_work_budget: 200 connections ping-pong 100 messages each with a
+# deadline on every receive. Each wait used to be two epoll_ctl calls (ADD,
+# failing with EEXIST, then MOD), and the reactor passed over all of its
+# waiters before and after every batch of events. Budgets: at most 1.2
+# registrations per wait, and passes over the waiters on at most a tenth
+# of the reactor's iterations (none are due here).
+echo "--- reactor work budget (SLANG_REACTOR_STAT) ---"
+rwb_line=$(SLANG_WORKERS=2 SLANG_REACTOR_STAT=1 ./slangc tests/reactor_work_budget/main.sl \
+           --run 2>&1 >/dev/null | grep -o 'parks=.*loops=[0-9]*')
+rwb_parks=$(echo "$rwb_line" | sed -n 's/^parks=\([0-9]*\).*/\1/p')
+rwb_regs=$(echo "$rwb_line" | sed -n 's/.*registrations=\([0-9]*\).*/\1/p')
+rwb_scans=$(echo "$rwb_line" | sed -n 's/.*scans=\([0-9]*\).*/\1/p')
+rwb_loops=$(echo "$rwb_line" | sed -n 's/.*loops=\([0-9]*\)$/\1/p')
+if [ -z "$rwb_parks" ] || [ -z "$rwb_regs" ] || [ -z "$rwb_scans" ] || [ -z "$rwb_loops" ] ||
+   [ "$rwb_parks" -lt 10000 ]; then
+    echo "FAIL reactor work budget (no slang-reactor-stat line: $rwb_line)"
+    fail=1
+elif [ $((rwb_regs * 10)) -gt $((rwb_parks * 12)) ]; then
+    echo "FAIL reactor work budget: $rwb_regs registrations for $rwb_parks waits, budget 1.2 each"
+    fail=1
+elif [ $((rwb_scans * 10)) -gt "$rwb_loops" ]; then
+    echo "FAIL reactor work budget: $rwb_scans waiter passes in $rwb_loops reactor loops, budget a tenth"
+    fail=1
+else
+    echo "PASS reactor work budget ($rwb_regs registrations for $rwb_parks waits, $rwb_scans passes in $rwb_loops loops)"
+fi
+
 # ---- joined spawns run in place ---------------------------------------------
 # spawn_join_local: spawn directly followed by join_wait, from 4 tasks on
 # 8 workers, children that allocate, panic and run long. Those spawns used
