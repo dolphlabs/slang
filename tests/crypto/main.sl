@@ -38,6 +38,41 @@ guard let b = r else {
 if len(b) != 32 {
     die("rand length");
 }
+// Two draws differ, and a large one is filled to its end, not just its
+// first chunk (getrandom may return short).
+let r2 = crypto.rand(32);
+guard let b2 = r2 else {
+    die("rand again");
+}
+if b == b2 {
+    die("rand repeated itself");
+}
+let big = crypto.rand(1024 * 1024);
+guard let bb = big else {
+    die("rand 1MB");
+}
+if len(bb) != 1024 * 1024 {
+    die("rand 1MB length");
+}
+let tail_zero = 0;
+let k = len(bb) - 4096;
+while k < len(bb) {
+    if bb[k] == 0 {
+        tail_zero = tail_zero + 1;
+    }
+    k = k + 1;
+}
+// 4096 random bytes hold ~16 zeros; all of them zero means unfilled.
+if tail_zero > 200 {
+    die("rand 1MB tail looks unfilled");
+}
+let empty = crypto.rand(0);
+guard let nb = empty else {
+    die("rand 0");
+}
+if len(nb) != 0 {
+    die("rand 0 length");
+}
 println("rand ok");
 
 // RFC 1321 appendix A.5
