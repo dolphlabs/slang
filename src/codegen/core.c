@@ -145,7 +145,7 @@ static const char *const BUILTIN_NAMES[] = {
     "fault_timeout", "fault_reset", "fault_closed", "fault_io",
     "fault_refused", "fault_kind", "fault_code", "fault_op", "peer_v4",
     "peer_port", "trip_new", "link_listen", "link_dial", "__enum_from_int",
-    "__enum_from_str",
+    "__enum_from_str", "__pg_rows_as",
 };
 #define N_BUILTINS ((int)(sizeof(BUILTIN_NAMES) / sizeof(BUILTIN_NAMES[0])))
 

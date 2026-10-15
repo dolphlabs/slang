@@ -1,0 +1,1 @@
+empty value struct JSON ok

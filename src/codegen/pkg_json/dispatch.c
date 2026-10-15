@@ -59,7 +59,7 @@ static const char *json_scalar_fast_name(const char *t) {
  * which reads the input straight into T and returns false, with no error
  * built, on anything it does not accept; the call site then decodes again
  * through the tree decoder for the error. */
-static const char *json_fast_fn(CG *cg, const char *t) {
+const char *json_fast_dec_fn(CG *cg, const char *t) {
     const char *scalar = json_scalar_fast_name(t);
     if (scalar)
         return scalar;
@@ -126,7 +126,7 @@ static const char *json_field_sel(StructDef *sd) {
  * struct needs braces. */
 static const char *json_zero_init(CG *cg, const char *t) {
     StructDef *sd = struct_find_canon(cg, t);
-    return sd && !sd->is_gc ? "{0}" : "0";
+    return sd && !sd->is_gc ? "{}" : "0";
 }
 
 /* The walk behind json_level_bytes: a depth-first search over the struct
@@ -207,7 +207,7 @@ static void json_type_walk(CG *cg, const char *t, JsonWalk *w) {
  * measured: 640 + 32 per field. Anything a decoder calls at the bottom
  * (sl_jd_skip, string and number readers, snprintf for an error) is
  * covered by sl_rt_stack_reserve's own probe and guard margins. */
-static int json_level_bytes(CG *cg, const char *t) {
+int json_decode_stack_bytes(CG *cg, const char *t) {
     JsonWalk w = {0};
     json_type_walk(cg, t, &w);
     free(w.name);
@@ -540,7 +540,7 @@ static void emit_json_fast_body(CG *cg, JsonInst *it) {
     const char *t = it->slang_type;
     const char *ct = ctype_of(cg, t);
     emit_line(cg, "static bool %s(sl_jparser *p, %s *out) {",
-              json_fast_fn(cg, t), ct);
+              json_fast_dec_fn(cg, t), ct);
     cg->indent++;
     if (is_json_time(t)) {
         emit_line(cg, "return sl_jd_time(p, &out->sec, &out->nsec);");
@@ -568,7 +568,7 @@ static void emit_json_fast_body(CG *cg, JsonInst *it) {
         emit_line(cg, "} else {");
         cg->indent++;
         emit_line(cg, "%s v;", ict);
-        emit_line(cg, "if (!%s(p, &v)) return false;", json_fast_fn(cg, inner));
+        emit_line(cg, "if (!%s(p, &v)) return false;", json_fast_dec_fn(cg, inner));
         emit_line(cg, "o = (%s *)sl_gc_alloc(sizeof(%s), %s);", oname, oname,
                   otrace);
         emit_line(cg, "o->has = true;");
@@ -608,7 +608,7 @@ static void emit_json_fast_body(CG *cg, JsonInst *it) {
             emit_line(cg, "if (!k || !sl_jd_eat(p, ':')) return false;");
         }
         emit_line(cg, "%s tmp;", ect);
-        emit_line(cg, "if (!%s(p, &tmp)) return false;", json_fast_fn(cg, et));
+        emit_line(cg, "if (!%s(p, &tmp)) return false;", json_fast_dec_fn(cg, et));
         if (arr)
             emit_line(cg, "sl_arr_push(c, &tmp, sizeof(%s));", ect);
         else
@@ -696,7 +696,7 @@ static void emit_json_fast_body(CG *cg, JsonInst *it) {
                 emit_line(cg, "} else {");
                 cg->indent++;
                 emit_line(cg, "if (!%s(p, &f%d)) return false;",
-                          json_fast_fn(cg, sd->ftypes[i]), i);
+                          json_fast_dec_fn(cg, sd->ftypes[i]), i);
                 emit_line(cg, "seen%d = true;", i);
                 cg->indent--;
                 emit_line(cg, "}");
@@ -869,7 +869,7 @@ void emit_json_codecs(CG *cg) {
             emit_line(cg, "static bool %s(sl_json_val *v, %s *out, char **err);",
                       it->dec_name, ct);
             emit_line(cg, "static bool %s(sl_jparser *p, %s *out);",
-                      json_fast_fn(cg, it->slang_type), ct);
+                      json_fast_dec_fn(cg, it->slang_type), ct);
         }
         if (it->enc_name)
             emit_line(cg, "static void %s(%s v, sl_json_sb *out);",
@@ -986,7 +986,7 @@ char *json_call_gen(CG *cg, const char *fname, Expr *e) {
          * input's depth first, here at the call site where growth is
          * safe. Every other type decodes in constant stack and pays
          * nothing (json_level_bytes). */
-        int level_bytes = json_level_bytes(cg, tv);
+        int level_bytes = json_decode_stack_bytes(cg, tv);
         char *reserve = level_bytes
             ? xasprintf("sl_json_stack_for(_sl_js, _sl_jn, %d); ", level_bytes)
             : "";
@@ -1002,7 +1002,7 @@ char *json_call_gen(CG *cg, const char *fname, Expr *e) {
             "if (_sl_jok) { _sl_jr->ok = true; _sl_jr->v = _sl_jout; } "
             "else { _sl_jr->ok = false; _sl_jr->e = _sl_jerr; } _sl_jr; })",
             data, len, reserve, fct, json_zero_init(cg, tv),
-            json_fast_fn(cg, tv), decfn, resname, resname, resname, restrace);
+            json_fast_dec_fn(cg, tv), decfn, resname, resname, resname, restrace);
         /* Tier 10: json.decode allocates (the result[T,E] wrapper,
          * plus whatever the monomorphized decoder itself
          * allocates) -- a real safepoint, same as any other call
