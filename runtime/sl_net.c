@@ -118,7 +118,7 @@ static void sl_reactor_shard_count(unsigned shard, int wake) {
  * registrations, passes over every waiter, and reactor loop iterations
  * (tests/run_tests.sh, reactor work budget). */
 static _Atomic unsigned long long sl_reactor_stat_regs, sl_reactor_stat_scans,
-    sl_reactor_stat_loops;
+    sl_reactor_stat_loops, sl_reactor_stat_worker_polls;
 
 static void sl_reactor_stat_dump(void) {
     if (!sl_reactor_stat_enabled())
@@ -131,10 +131,11 @@ static void sl_reactor_stat_dump(void) {
                                       memory_order_relaxed);
     }
     fprintf(stderr, "slang-reactor-stat parks=%llu wakes=%llu registrations=%llu "
-            "scans=%llu loops=%llu\n", parks, wakes,
+            "scans=%llu loops=%llu worker_polls=%llu\n", parks, wakes,
             (unsigned long long)sl_reactor_stat_regs,
             (unsigned long long)sl_reactor_stat_scans,
-            (unsigned long long)sl_reactor_stat_loops);
+            (unsigned long long)sl_reactor_stat_loops,
+            (unsigned long long)sl_reactor_stat_worker_polls);
 }
 
 __attribute__((destructor))
@@ -224,6 +225,24 @@ static void sl_reactor_wq_unlink(sl_reactor_wq *q, sl_task *t) {
  * half of all deadline waits under keep-alive load, each a write(2) and
  * an extra reactor wakeup that itself scanned again. */
 static _Atomic long long sl_reactor_wake_at = LLONG_MAX;
+
+#if defined(SL_REACTOR_EPOLL)
+/* An idle worker polls the reactor's set itself instead of sleeping
+ * (sl_net_worker_poll), the way Go's scheduler polls its netpoller: what
+ * it finds ready it runs next, with no reactor-thread wakeup and no
+ * handoff in between. One poller at a time (sl_poller_active). It waits
+ * on its own outer set holding the reactor's set and a break eventfd, so
+ * work queued while it sleeps (sl_net_poll_break) wakes it and only it.
+ * The reactor thread steps aside while a worker polls and takes the set
+ * back, within SL_REACTOR_TICK_NS, once none does. */
+#define SL_REACTOR_TICK_NS 2000000L
+static int sl_poll_outer_fd = -1;
+static int sl_poll_break_efd = -1;
+static char sl_poll_break_token, sl_poll_inner_token;
+static _Atomic int sl_poller_active = 0;
+static _Atomic int sl_poller_sleeping = 0;
+static _Atomic int sl_poll_break_sent = 0;
+#endif
 static _Atomic unsigned long long sl_reactor_reg_gen = 0;
 
 #define SL_REACTOR_READ  0
@@ -452,6 +471,176 @@ static int sl_reactor_wait(int fd, int rw, int abort_on_shutdown) {
     return sl_reactor_wait_until(fd, rw, abort_on_shutdown, 0);
 }
 
+/* The tasks `events` (n of them, from this reactor's kqueue or epoll
+ * set) make ready, onto `ready`: shared by the reactor thread and a
+ * worker polling in its place (sl_net_worker_poll). */
+#if defined(SL_REACTOR_KQUEUE)
+static void sl_reactor_take_events(struct kevent *events, int n, sl_task **ready_out) {
+#else
+static void sl_reactor_take_events(struct epoll_event *events, int n, sl_task **ready_out) {
+#endif
+    sl_task *ready = *ready_out;
+    for (int i = 0; i < n; i++) {
+        /* A timer nudge carries no task and means nothing beyond
+           "go round again" -- the sl_reactor_expire_waiters() call
+           at the bottom of this iteration is the whole point of
+           it. Skipping it before `t` is read matters: udata /
+           data.ptr is not a task pointer on these events. */
+#if defined(SL_REACTOR_KQUEUE)
+        if (events[i].filter == EVFILT_USER &&
+            events[i].ident == SL_REACTOR_TIMER_IDENT)
+            continue;
+        int is_shutdown = events[i].filter == EVFILT_USER;
+        void *tag = is_shutdown ? NULL : events[i].udata;
+#else
+        if (events[i].data.ptr == &sl_reactor_timer_token) {
+            uint64_t tx;
+            sl_net_drain(sl_reactor_timer_efd, &tx, sizeof(tx));
+            continue;
+        }
+        int is_shutdown = events[i].data.ptr == &sl_reactor_shutdown_token;
+        void *tag = is_shutdown ? NULL : events[i].data.ptr;
+        if (is_shutdown) {
+            uint64_t x;
+            sl_net_drain(sl_reactor_efd, &x, sizeof(x));
+        }
+#endif
+        if (is_shutdown) {
+            sl_reactor_take_all(&ready);
+            continue;
+        }
+        /* only resume if the removal actually found t on the
+           list -- it may already be gone if a shutdown drain
+           (above, same batch) already resumed it, e.g. the
+           shutdown EVFILT_USER event and this fd's own readiness
+           event landing in the same kevent() batch. Resuming
+           unconditionally here would double-push t onto
+           sl_global_runq -- found and fixed during this slice's
+           own design review. */
+        sl_task *t = (sl_task *)((uintptr_t)tag & ~SL_REACTOR_WQ_MASK);
+        sl_reactor_wq *q = &sl_reactor_wqs[(uintptr_t)tag & SL_REACTOR_WQ_MASK];
+        pthread_mutex_lock(&q->mu);
+        int found = t->on_wq;
+        if (found)
+            sl_reactor_wq_unlink(q, t);
+        pthread_mutex_unlock(&q->mu);
+        if (found) {
+            t->next = ready;
+            ready = t;
+        }
+    }
+    *ready_out = ready;
+}
+
+/* Waiters are rescanned -- for expired deadlines and the next soonest --
+ * only once wake_at, a lower bound on every waiter's deadline, has
+ * passed. A waiter that leaves cannot make the bound wrong, only early;
+ * one that joins with a sooner deadline lowers it itself
+ * (sl_reactor_wait_until). Count, scan, publish, count again: see
+ * sl_reactor_wake_at for why a waiter cannot be missed. */
+static void sl_reactor_expire_due(long long now) {
+    if (now < atomic_load_explicit(&sl_reactor_wake_at, memory_order_seq_cst))
+        return;
+    sl_task *expired = NULL;
+    unsigned long long gen;
+    long long soonest;
+    do {
+        gen = atomic_load_explicit(&sl_reactor_reg_gen, memory_order_seq_cst);
+        now = sl_now_ns();
+        soonest = sl_reactor_expire_waiters(&expired, now);
+        if (soonest < 0 || soonest > SL_REACTOR_MAX_SLEEP_NS)
+            soonest = SL_REACTOR_MAX_SLEEP_NS;
+        atomic_store_explicit(&sl_reactor_wake_at, now + soonest,
+                              memory_order_seq_cst);
+    } while (atomic_load_explicit(&sl_reactor_reg_gen,
+                                  memory_order_seq_cst) != gen);
+    sl_reactor_resume_all(expired);
+}
+
+#if defined(SL_REACTOR_EPOLL)
+/* Queued work for a worker sleeping in sl_net_worker_poll: wake it, once
+ * per sleep. Called after every run-queue push (sl_rt_netpoll_break_hook);
+ * the fence pairs with the poller's between announcing its sleep and
+ * looking at the queues one last time, so one of the two sees the other. */
+static void sl_net_poll_break(void) {
+    atomic_thread_fence(memory_order_seq_cst);
+    if (!atomic_load_explicit(&sl_poller_sleeping, memory_order_relaxed))
+        return;
+    if (atomic_exchange_explicit(&sl_poll_break_sent, 1, memory_order_acq_rel))
+        return;
+    uint64_t one = 1;
+    sl_net_nudge(sl_poll_break_efd, &one, sizeof(one));
+}
+
+/* An idle worker's turn at the reactor (sl_rt_netpoll_hook, from
+ * sl_runq_pop_blocking with the run queue unlocked): 0 if another worker
+ * already polls, else 1 once it has waited -- until a socket is ready, a
+ * deadline is due, work is queued or a second has passed -- and resumed
+ * whatever it found. Resumed tasks go to the run queues as the reactor
+ * thread's would, and this worker pops one next.
+ *
+ * Blocked for the collector throughout, as a worker asleep on the run
+ * queue is: it holds no task, and a resume takes sl_gc_mu, so it
+ * serializes with a collection exactly as the reactor thread (which the
+ * collector never waits for) always has. */
+static int sl_net_worker_poll(void) {
+    int idle = 0;
+    if (!atomic_compare_exchange_strong_explicit(&sl_poller_active, &idle, 1,
+                                                 memory_order_acq_rel,
+                                                 memory_order_relaxed))
+        return 0;
+    atomic_store_explicit(&sl_rt_gc_blocked, 1, memory_order_release);
+    /* Resume as the reactor thread does, onto the shared queues: this
+       worker's runnext slot is for the task it is running, and it is
+       running none. */
+    int *slot = sl_rt_tls_runnext_idx();
+    int own_slot = *slot;
+    *slot = -1;
+    long long now = sl_now_ns();
+    sl_reactor_expire_due(now);
+    now = sl_now_ns();
+    long long wait = atomic_load_explicit(&sl_reactor_wake_at,
+                                          memory_order_seq_cst) - now;
+    if (wait < 0)
+        wait = 0;
+    if (wait > SL_REACTOR_MAX_SLEEP_NS)
+        wait = SL_REACTOR_MAX_SLEEP_NS;
+    atomic_store_explicit(&sl_poller_sleeping, 1, memory_order_seq_cst);
+    atomic_thread_fence(memory_order_seq_cst);
+    if (atomic_load_explicit(&sl_global_runq_count, memory_order_relaxed) == 0) {
+        struct epoll_event outer[2];
+        epoll_wait(sl_poll_outer_fd, outer, 2,
+                   (int)((wait + 999999LL) / 1000000LL));
+    }
+    atomic_store_explicit(&sl_poller_sleeping, 0, memory_order_seq_cst);
+    if (atomic_exchange_explicit(&sl_poll_break_sent, 0, memory_order_acq_rel)) {
+        uint64_t x;
+        sl_net_drain(sl_poll_break_efd, &x, sizeof(x));
+    }
+    struct epoll_event events[64];
+    int n = epoll_wait(sl_reactor_fd, events, 64, 0);
+    sl_task *ready = NULL;
+    if (n > 0)
+        sl_reactor_take_events(events, n, &ready);
+    if (sl_reactor_stat_enabled())
+        atomic_fetch_add_explicit(&sl_reactor_stat_worker_polls, 1,
+                                  memory_order_relaxed);
+    sl_reactor_resume_all(ready);
+    sl_reactor_expire_due(sl_now_ns());
+    *slot = own_slot;
+    atomic_store_explicit(&sl_poller_active, 0, memory_order_release);
+    atomic_store_explicit(&sl_rt_gc_blocked, 0, memory_order_release);
+    /* A collection may have started while this thread counted as
+       blocked, and gone on without it. A worker woken on the run queue
+       only ever is by a push, which a collection holds off; this one
+       wakes on its own timeout or the network. So it waits out any
+       collection here, before it can run a task: the run loop checks in
+       before it pops, not after. */
+    sl_rt_gc_checkin();
+    return 1;
+}
+#endif
+
 static void *sl_reactor_thread(void *arg) {
     (void)arg;
 #if defined(SL_REACTOR_KQUEUE)
@@ -465,30 +654,19 @@ static void *sl_reactor_thread(void *arg) {
         if (sl_reactor_stat_enabled())
             atomic_fetch_add_explicit(&sl_reactor_stat_loops, 1,
                                       memory_order_relaxed);
-        /* Waiters are rescanned -- for expired deadlines and the next
-           soonest -- only once wake_at, a lower bound on every waiter's
-           deadline, has passed. A waiter that leaves cannot make the
-           bound wrong, only early; one that joins with a sooner deadline
-           lowers it itself (sl_reactor_wait_until). Rescanning every
-           waiter on every wakeup was two passes over all of them per
-           batch of events. Count, scan, publish, count again: see
-           sl_reactor_wake_at for why a waiter cannot be missed. */
-        if (now >= atomic_load_explicit(&sl_reactor_wake_at,
-                                        memory_order_seq_cst)) {
-            sl_task *expired = NULL;
-            unsigned long long gen;
-            do {
-                gen = atomic_load_explicit(&sl_reactor_reg_gen, memory_order_seq_cst);
-                now = sl_now_ns();
-                soonest = sl_reactor_expire_waiters(&expired, now);
-                if (soonest < 0 || soonest > SL_REACTOR_MAX_SLEEP_NS)
-                    soonest = SL_REACTOR_MAX_SLEEP_NS;
-                atomic_store_explicit(&sl_reactor_wake_at, now + soonest,
-                                      memory_order_seq_cst);
-            } while (atomic_load_explicit(&sl_reactor_reg_gen,
-                                          memory_order_seq_cst) != gen);
-            sl_reactor_resume_all(expired);
+        sl_reactor_expire_due(now);
+#if defined(SL_REACTOR_EPOLL)
+        /* A worker is polling in this thread's place (sl_net_worker_poll):
+           stay out of its way, and look again in a moment. Deadlines
+           come due on its watch, and when every worker is busy and none
+           polls, this thread takes the set back within one tick. */
+        if (atomic_load_explicit(&sl_poller_active, memory_order_acquire)) {
+            struct timespec tick = {0, SL_REACTOR_TICK_NS};
+            nanosleep(&tick, NULL);
+            continue;
         }
+#endif
+        now = sl_now_ns();
         soonest = atomic_load_explicit(&sl_reactor_wake_at,
                                        memory_order_seq_cst) - now;
         if (soonest < 0)
@@ -512,55 +690,7 @@ static void *sl_reactor_thread(void *arg) {
            resumed after: a resume takes sl_gc_mu and a run-queue lock
            and may wake a worker, which no waiter should queue behind. */
         sl_task *ready = NULL;
-        for (int i = 0; i < n; i++) {
-            /* A timer nudge carries no task and means nothing beyond
-               "go round again" -- the sl_reactor_expire_waiters() call
-               at the bottom of this iteration is the whole point of
-               it. Skipping it before `t` is read matters: udata /
-               data.ptr is not a task pointer on these events. */
-#if defined(SL_REACTOR_KQUEUE)
-            if (events[i].filter == EVFILT_USER &&
-                events[i].ident == SL_REACTOR_TIMER_IDENT)
-                continue;
-            int is_shutdown = events[i].filter == EVFILT_USER;
-            void *tag = is_shutdown ? NULL : events[i].udata;
-#else
-            if (events[i].data.ptr == &sl_reactor_timer_token) {
-                uint64_t tx;
-                sl_net_drain(sl_reactor_timer_efd, &tx, sizeof(tx));
-                continue;
-            }
-            int is_shutdown = events[i].data.ptr == &sl_reactor_shutdown_token;
-            void *tag = is_shutdown ? NULL : events[i].data.ptr;
-            if (is_shutdown) {
-                uint64_t x;
-                sl_net_drain(sl_reactor_efd, &x, sizeof(x));
-            }
-#endif
-            if (is_shutdown) {
-                sl_reactor_take_all(&ready);
-                continue;
-            }
-            /* only resume if the removal actually found t on the
-               list -- it may already be gone if a shutdown drain
-               (above, same batch) already resumed it, e.g. the
-               shutdown EVFILT_USER event and this fd's own readiness
-               event landing in the same kevent() batch. Resuming
-               unconditionally here would double-push t onto
-               sl_global_runq -- found and fixed during this slice's
-               own design review. */
-            sl_task *t = (sl_task *)((uintptr_t)tag & ~SL_REACTOR_WQ_MASK);
-            sl_reactor_wq *q = &sl_reactor_wqs[(uintptr_t)tag & SL_REACTOR_WQ_MASK];
-            pthread_mutex_lock(&q->mu);
-            int found = t->on_wq;
-            if (found)
-                sl_reactor_wq_unlink(q, t);
-            pthread_mutex_unlock(&q->mu);
-            if (found) {
-                t->next = ready;
-                ready = t;
-            }
-        }
+        sl_reactor_take_events(events, n, &ready);
         sl_reactor_resume_all(ready);
     }
     return NULL; /* unreachable -- runs until process exit */
@@ -574,6 +704,10 @@ static void sl_net_shutdown_nudge(void) {
 #else
     uint64_t one = 1;
     sl_net_nudge(sl_reactor_efd, &one, sizeof(one));
+    /* A worker polling in the reactor's place wakes for it too, even if
+       the reactor thread takes the shutdown event first. */
+    if (sl_poll_break_efd >= 0)
+        sl_net_nudge(sl_poll_break_efd, &one, sizeof(one));
 #endif
 }
 
@@ -1129,6 +1263,21 @@ static void sl_reactor_start(void) {
     if (epoll_ctl(sl_reactor_fd, EPOLL_CTL_ADD, sl_reactor_timer_efd, &ev) != 0) {
         fprintf(stderr, "slang: failed to arm timer eventfd\n");
         exit(1);
+    }
+    sl_poll_outer_fd = epoll_create1(EPOLL_CLOEXEC);
+    sl_poll_break_efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+    if (sl_poll_outer_fd >= 0 && sl_poll_break_efd >= 0) {
+        int armed = 1;
+        ev.events = EPOLLIN;
+        ev.data.ptr = &sl_poll_inner_token;
+        armed &= epoll_ctl(sl_poll_outer_fd, EPOLL_CTL_ADD, sl_reactor_fd, &ev) == 0;
+        ev.events = EPOLLIN;
+        ev.data.ptr = &sl_poll_break_token;
+        armed &= epoll_ctl(sl_poll_outer_fd, EPOLL_CTL_ADD, sl_poll_break_efd, &ev) == 0;
+        if (armed && !getenv("SLANG_NO_WORKER_POLL")) {
+            sl_rt_netpoll_break_hook = sl_net_poll_break;
+            sl_rt_netpoll_hook = sl_net_worker_poll;
+        }
     }
 #endif
     sl_rt_shutdown_hook = sl_net_shutdown_nudge;

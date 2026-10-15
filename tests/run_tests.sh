@@ -997,6 +997,28 @@ elif [ $((rwb_scans * 10)) -gt "$rwb_loops" ]; then
 else
     echo "PASS reactor work budget ($rwb_regs registrations for $rwb_parks waits, $rwb_scans passes in $rwb_loops loops)"
 fi
+# The same run on 4 workers: idle workers poll the reactor's set
+# themselves (sl_net_worker_poll), so the reactor thread is rarely the one
+# waking. Measured 619 reactor loops and 964 worker polls for 40297 waits;
+# without worker polling the reactor looped once per 2-3 waits. Budget:
+# at most one reactor loop per 4 waits, and worker polls happen at all.
+# Linux only: kqueue keeps the reactor thread.
+if [ "$(uname -s)" = Linux ]; then
+    rwp_line=$(SLANG_WORKERS=4 SLANG_REACTOR_STAT=1 ./slangc tests/reactor_work_budget/main.sl \
+               --run 2>&1 >/dev/null | grep -o 'parks=.*worker_polls=[0-9]*')
+    rwp_parks=$(echo "$rwp_line" | sed -n 's/^parks=\([0-9]*\).*/\1/p')
+    rwp_loops=$(echo "$rwp_line" | sed -n 's/.*loops=\([0-9]*\).*/\1/p')
+    rwp_polls=$(echo "$rwp_line" | sed -n 's/.*worker_polls=\([0-9]*\)$/\1/p')
+    if [ -z "$rwp_parks" ] || [ -z "$rwp_loops" ] || [ -z "$rwp_polls" ]; then
+        echo "FAIL worker polling (no slang-reactor-stat line: $rwp_line)"
+        fail=1
+    elif [ "$rwp_polls" -eq 0 ] || [ $((rwp_loops * 4)) -gt "$rwp_parks" ]; then
+        echo "FAIL worker polling: $rwp_loops reactor loops and $rwp_polls worker polls for $rwp_parks waits"
+        fail=1
+    else
+        echo "PASS worker polling ($rwp_loops reactor loops, $rwp_polls worker polls for $rwp_parks waits)"
+    fi
+fi
 
 # ---- joined spawns run in place ---------------------------------------------
 # spawn_join_local: spawn directly followed by join_wait, from 4 tasks on
