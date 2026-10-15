@@ -14,6 +14,7 @@
 #include <stddef.h> /* offsetof, for the arm64 preemption frame asserts */
 #include <ucontext.h>
 #include <unistd.h>
+#include <sys/socket.h> /* shutdown(), for a split link (sl_link_free) */
 #include <time.h>
 
 /* ---- slang runtime ---- */
@@ -1523,9 +1524,25 @@ typedef struct sl_trip {
     _Atomic int down;
 } sl_trip;
 
+/* `tls` is NULL for plain TCP. Once `tls_accept` has run it is the
+ * connection's TLS session (sl_tls.c), and every send and recv on the
+ * link goes through it; the plain path pays one NULL test.
+ *
+ * `role` is SL_LINK_WHOLE until `split()`: then the link it was called on
+ * is the connection's reader (SL_LINK_READER) and the link split()
+ * returned its writer (SL_LINK_WRITER), on a dup of the fd. Each half owns
+ * its own fd number, so neither can ever write to a number the other
+ * closed and the kernel reused; the reader's free shuts the connection
+ * down for both. */
+#define SL_LINK_WHOLE  0
+#define SL_LINK_READER 1
+#define SL_LINK_WRITER 2
+
 typedef struct sl_link {
     int fd;
     int live;
+    void *tls;
+    int role;
 } sl_link;
 
 static long long sl_now_ns(void) {
@@ -1672,12 +1689,28 @@ static sl_link sl_link_from_fd(int fd) {
     sl_link l;
     l.fd = fd;
     l.live = fd >= 0;
+    l.tls = NULL;
+    l.role = SL_LINK_WHOLE;
     return l;
 }
+/* Set by sl_tls.c, which is spliced in only for programs that use TLS:
+ * a link can only carry a session once that code has run, so a plain
+ * program never calls through it and never links OpenSSL. It releases
+ * the link's share of the session and closes the link's fd. */
+static void (*sl_link_tls_free_fn)(sl_link *l);
 static void sl_link_free(sl_link *l) {
     if (!l || !l->live)
         return;
-    close(l->fd);
+    if (l->tls) {
+        sl_link_tls_free_fn(l);
+    } else {
+        /* A writer may still hold a dup of this fd: closing ours alone
+           would leave the connection open, so the reader ends it. */
+        if (l->role == SL_LINK_READER)
+            shutdown(l->fd, SHUT_RDWR);
+        close(l->fd);
+    }
+    l->tls = NULL;
     l->live = 0;
     l->fd = -1;
 }

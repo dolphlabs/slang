@@ -1647,11 +1647,38 @@ static sl_res_int_fault sl_link_err_int(sl_fault f) {
     return (sl_res_int_fault){ .ok = false, .e = f };
 }
 
+/* A link's TLS session, when it has one: sl_tls.c sets these the first
+ * time a link starts TLS, so they are never NULL where `l->tls` is set. */
+static sl_res_int_fault (*sl_link_tls_send_fn)(sl_link *l,
+                                               const unsigned char *ptr,
+                                               long long len, sl_until u);
+static sl_res_int_fault (*sl_link_tls_recv_fn)(sl_link *l, sl_wire w,
+                                               sl_until u);
+/* Gives `w` (a fresh writer half) its share of `l`'s session. */
+static void (*sl_link_tls_share_fn)(sl_link *l, sl_link *w);
+
+/* After split(), the link it was called on only reads and the one it
+ * returned only writes: two tasks sending on one connection could
+ * interleave partial writes, and two reading would split its bytes
+ * between them. */
+static sl_fault sl_link_wrong_half(int writing) {
+    return sl_fault_make(SL_FAULT_IO,
+                         writing ? "send: this link was split; send through "
+                                   "the writer split() returned"
+                                 : "recv: this link is the writer split() "
+                                   "returned; read from the link it was "
+                                   "split from");
+}
+
 static sl_res_int_fault sl_link_send_ptr(sl_link *l, const unsigned char *ptr,
                                          long long len, sl_until u) {
     long long off = 0;
     if (!l || !l->live)
         return sl_link_err_int(sl_fault_op(SL_FAULT_CLOSED, 0, "send"));
+    if (l->role == SL_LINK_READER)
+        return sl_link_err_int(sl_link_wrong_half(1));
+    if (l->tls)
+        return sl_link_tls_send_fn(l, ptr, len, u);
     while (off < len) {
         if (u && sl_until_hit(u))
             return sl_link_err_int(sl_fault_op(SL_FAULT_TIMEOUT, 0, "send"));
@@ -1772,8 +1799,12 @@ static sl_res_int_fault sl_link_send_static(sl_link *l, sl_bytes b, sl_until u) 
 static sl_res_int_fault sl_link_recv(sl_link *l, sl_wire w, sl_until u) {
     if (!l || !l->live)
         return sl_link_err_int(sl_fault_op(SL_FAULT_CLOSED, 0, "recv"));
+    if (l->role == SL_LINK_WRITER)
+        return sl_link_err_int(sl_link_wrong_half(0));
     if (w.len <= 0)
         return sl_link_ok_int(0);
+    if (l->tls)
+        return sl_link_tls_recv_fn(l, w, u);
     for (;;) {
         if (u && sl_until_hit(u))
             return sl_link_err_int(sl_fault_op(SL_FAULT_TIMEOUT, 0, "recv"));
@@ -1788,6 +1819,31 @@ static sl_res_int_fault sl_link_recv(sl_link *l, sl_wire w, sl_until u) {
         if (wr < 0)
             return sl_link_err_int(sl_fault_op(SL_FAULT_CLOSED, 0, "recv"));
     }
+}
+
+/* `c.split()`: a second link on the same connection, for writing from
+ * another task while this one reads -- a WebSocket server pushing to a
+ * client it is also reading from. The new link is a dup of the fd, so the
+ * two halves wait on the reactor independently (one registration each);
+ * see sl_link for why each owns its own fd number. Over TLS both halves
+ * share the session, serialized by its lock (sl_tls.c). */
+static sl_res_link_fault sl_link_split(sl_link *l) {
+    if (!l || !l->live)
+        return sl_link_err_link(sl_fault_op(SL_FAULT_CLOSED, 0, "split"));
+    if (l->role != SL_LINK_WHOLE)
+        return sl_link_err_link(sl_fault_make(SL_FAULT_IO,
+            "split: this link is already split"));
+    int d = fcntl(l->fd, F_DUPFD_CLOEXEC, 0);
+    if (d < 0)
+        return sl_link_err_link(sl_link_fault_op("split", errno));
+    /* O_NONBLOCK belongs to the open file description, which the dup
+       shares, so the writer is non-blocking already. */
+    sl_link w = sl_link_from_fd(d);
+    w.role = SL_LINK_WRITER;
+    if (l->tls)
+        sl_link_tls_share_fn(l, &w);
+    l->role = SL_LINK_READER;
+    return sl_link_ok_link(w);
 }
 
 static long long sl_link_port(sl_link *l) {
