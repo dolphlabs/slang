@@ -1,2 +1,2 @@
-950
+70
 received 8, wrong 0
