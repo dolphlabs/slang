@@ -1333,6 +1333,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
 
     emit_json_runtime(cg);
     emit_json_codecs(cg);
+    emit_pg_rows_codecs(cg);
 
     emit_inspect_runtime(cg);
     emit_inspect_codecs(cg);

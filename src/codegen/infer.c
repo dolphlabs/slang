@@ -161,6 +161,8 @@ const char *infer_call(CG *cg, Expr *e) {
     const char *name = e->as.call.name;
     int n = e->as.call.nargs;
 
+    if (!strcmp(name, "__pg_rows_as")) return pg_rows_infer(cg, e);
+
     if (!strcmp(name, "print") || !strcmp(name, "println")) {
         if (n != 1)
             cg_error(e->line, "%s() takes exactly one argument", name);

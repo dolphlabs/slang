@@ -358,6 +358,12 @@ typedef struct {
     int cap;
 } JsonTable;
 
+/* Compiler-backed pg.rows_as: one row decoder and cell codec per type. */
+typedef struct { char *type; char *rows_type; char *name; } PgRowsInst;
+typedef struct { PgRowsInst *items; int count, cap; } PgRowsTable;
+typedef struct { char *type; char *name; } PgCellInst;
+typedef struct { PgCellInst *items; int count, cap; } PgCellTable;
+
 /* One inspect(x) printer per distinct composite slang type reached
  * from an inspect call site. Scalar leaf types go through fixed
  * runtime helpers instead (see inspect_fn in inspect.c) so they
@@ -420,6 +426,8 @@ struct CG {
     FnTable fns;
     SpawnTable spawns;
     JsonTable json;
+    PgRowsTable pg_rows;
+    PgCellTable pg_cells;
     InspectTable inspect;
     const char *expect; /* expected type while inferring none/ok/err */
     const char *cur_ret;  /* slang return type of enclosing function */
@@ -896,6 +904,12 @@ void emit_json_runtime(CG *cg);
  * emission-order tracking). Must run after emit_struct_and_value_res_types and
  * emit_opt_res_types, since codec signatures reference both. */
 void emit_json_codecs(CG *cg);
+
+const char *pg_rows_infer(CG *cg, Expr *e);
+char *pg_rows_gen(CG *cg, Expr *e);
+void emit_pg_rows_codecs(CG *cg);
+int json_decode_stack_bytes(CG *cg, const char *t);
+const char *json_fast_dec_fn(CG *cg, const char *t);
 
 /* Type-checks a 'json.decode'/'json.encode' call (fname is the part
  * after the dot) and returns its slang return type, exactly like

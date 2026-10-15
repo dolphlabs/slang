@@ -421,6 +421,8 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
     *handled = 1;
     move_consume(cg, e);
 
+    if (!strcmp(name, "__pg_rows_as")) return pg_rows_gen(cg, e);
+
     if (!strcmp(name, "len")) {
         const char *t = infer_type(cg, e->as.call.args[0]);
         char *a = gen_expr(cg, e->as.call.args[0]);
