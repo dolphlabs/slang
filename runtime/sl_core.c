@@ -99,6 +99,11 @@ static _Atomic int sl_rt_shutdown_flag = 0;
  * case, hence this indirection instead of a direct call. */
 static void (*sl_rt_shutdown_hook)(void) = NULL;
 static void (*sl_rt_io_kick_hook)(void) = NULL;
+/* sl_net.c's worker polling (sl_net_worker_poll), when the program uses
+ * the network and the platform has epoll: an idle worker's turn at the
+ * reactor, and the wakeup for one asleep in it when work is queued. */
+static int (*sl_rt_netpoll_hook)(void) = NULL;
+static void (*sl_rt_netpoll_break_hook)(void) = NULL;
 
 /* Tier 10: a lexically-scoped chain of GC root lists, one per
  * currently in-flight call-site safepoint on this thread (the
@@ -149,6 +154,10 @@ typedef struct sl_task {
     struct sl_safepoint *safepoint_top;
     int grows_seen;
     struct sl_task *next;    /* primitive wait-list link, runtime_pool.c */
+    struct sl_task *wq_prev; /* the reactor's waiter list is doubly linked
+                                (runtime_net.c), so a ready task leaves it
+                                in O(1); `next` is its forward link */
+    int on_wq;               /* on a reactor waiter list now */
     struct sl_task *runq_link; /* striped run-queue link -- never aliases
                                  next: a task is queued XOR parked. */
     void *entry_arg;
