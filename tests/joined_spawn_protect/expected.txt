@@ -1,0 +1,2 @@
+main: ok 2000, failed 1000, deep failed true, deep 20000, nested -10, parked 42
+task: ok 2000, failed 1000, deep failed true, deep 20000, nested -10, parked 42
