@@ -99,6 +99,11 @@ static _Atomic int sl_rt_shutdown_flag = 0;
  * case, hence this indirection instead of a direct call. */
 static void (*sl_rt_shutdown_hook)(void) = NULL;
 static void (*sl_rt_io_kick_hook)(void) = NULL;
+/* sl_net.c's worker polling (sl_net_worker_poll), when the program uses
+ * the network and the platform has epoll: an idle worker's turn at the
+ * reactor, and the wakeup for one asleep in it when work is queued. */
+static int (*sl_rt_netpoll_hook)(void) = NULL;
+static void (*sl_rt_netpoll_break_hook)(void) = NULL;
 
 /* Tier 10: a lexically-scoped chain of GC root lists, one per
  * currently in-flight call-site safepoint on this thread (the

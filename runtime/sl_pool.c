@@ -37,6 +37,8 @@ static void sl_runq_push_raw(sl_runq *q, sl_task *t) {
     atomic_fetch_add_explicit(&sl_global_runq_count, 1, memory_order_relaxed);
     pthread_cond_signal(&q->not_empty);
     pthread_mutex_unlock(&q->mu);
+    if (sl_rt_netpoll_break_hook)
+        sl_rt_netpoll_break_hook();
 }
 
 /* Bracketed push, for the two callers that are genuinely running a
@@ -106,6 +108,8 @@ static void sl_runq_stripe_push(sl_task *t) {
     pthread_mutex_lock(&sl_global_runq.mu);
     pthread_cond_broadcast(&sl_global_runq.not_empty);
     pthread_mutex_unlock(&sl_global_runq.mu);
+    if (sl_rt_netpoll_break_hook)
+        sl_rt_netpoll_break_hook();
 }
 
 /* Where this worker's next scan of the stripes starts. It moves one
@@ -225,6 +229,8 @@ static void sl_runq_ready_to(sl_task *t, int wake) {
         pthread_cond_broadcast(&sl_global_runq.not_empty);
         pthread_mutex_unlock(&sl_global_runq.mu);
     }
+    if (wake && sl_rt_netpoll_break_hook)
+        sl_rt_netpoll_break_hook();
 }
 
 static void sl_runq_ready(sl_task *t) { sl_runq_ready_to(t, 1); }
@@ -290,6 +296,17 @@ static sl_task *sl_runq_pop_blocking(sl_runq *q) {
             pthread_mutex_unlock(&q->mu);
             sl_rt_preempt_enable();
             return NULL;
+        }
+        /* Nothing to run: poll the network in the reactor thread's place
+           before sleeping (sl_net_worker_poll), unless another worker
+           already is. What it finds ready is queued, and the loop pops
+           it -- this worker runs it, with no wakeup in between. */
+        if (sl_rt_netpoll_hook) {
+            pthread_mutex_unlock(&q->mu);
+            int polled = sl_rt_netpoll_hook();
+            pthread_mutex_lock(&q->mu);
+            if (polled)
+                continue;
         }
         /* An idle worker is the pool's own steady state -- it must
          * tell the collector it's safe to scan around while parked
