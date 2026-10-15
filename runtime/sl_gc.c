@@ -3025,6 +3025,25 @@ static void sl_gc_root_unit_add(sl_task *t, int conservative) {
  * verifier's ground-truth mark never skip. One minor is not enough: a
  * task one minor idle can still hold an object that survived only that
  * one, still young (fix-gc.md 1.6, revised). */
+/* Whether a minor may leave out a task that is not running: it stopped
+ * running (parked, yielded or was preempted, all stamping
+ * gc_minor_stamp) at least two completed minors ago, so both of them
+ * scanned it, and a task that has not run since has not changed its
+ * roots. A task that has never run is never idle: its entry args are
+ * still young and nothing else roots them. Nor is one stopped by an
+ * async preemption, below. */
+static int sl_gc_task_idle(const sl_task *t, unsigned long done) {
+    /* An async-preempted task stopped mid-expression, with registers --
+       possibly derived pointers, into the middle of an object -- saved
+       on its stack. Those are scanned conservatively each minor and
+       never count as old roots: it is always scanned
+       (tests/gc_preempt_derived). */
+    if (t->async_preempted)
+        return 0;
+    return t->gc_minor_stamp != SL_GC_STAMP_NEVER &&
+           done - t->gc_minor_stamp >= 2;
+}
+
 static void sl_gc_root_units_build(sl_gc_thread **snap, int nsnap,
                                    int skip_idle) {
     unsigned long done = atomic_load_explicit(&sl_gc_minors_done,
@@ -3092,6 +3111,10 @@ static void sl_gc_root_units_build(sl_gc_thread **snap, int nsnap,
     pthread_mutex_lock(&sl_global_runq.mu);
     for (sl_task *sl_gc_qt = sl_global_runq.head; sl_gc_qt;
          sl_gc_qt = sl_gc_qt->next) {
+        if (skip_idle && sl_gc_task_idle(sl_gc_qt, done)) {
+            sl_gc_stat_tasks_skipped++;
+            continue;
+        }
         sl_gc_root_unit_add(sl_gc_qt, 1);
         /* Tier 11 eighth slice: a task with async_preempted set was
          * suspended by a real, arbitrary-instruction-boundary signal,
@@ -3139,9 +3162,17 @@ static void sl_gc_root_units_build(sl_gc_thread **snap, int nsnap,
     pthread_mutex_unlock(&sl_global_runq.mu);
     for (unsigned s = 0; s < (unsigned)SL_RUNQ_STRIPES; s++) {
         pthread_mutex_lock(&sl_runq_stripes[s].mu);
+        /* Queued tasks are mostly resumed ones waiting their turn: under
+           load, nearly every connection of a busy server is here rather
+           than parked, and is as idle as a parked task for roots. */
         for (sl_task *sl_gc_qt = sl_runq_stripes[s].head; sl_gc_qt;
-             sl_gc_qt = sl_gc_qt->runq_link)
+             sl_gc_qt = sl_gc_qt->runq_link) {
+            if (skip_idle && sl_gc_task_idle(sl_gc_qt, done)) {
+                sl_gc_stat_tasks_skipped++;
+                continue;
+            }
             sl_gc_root_unit_add(sl_gc_qt, 1);
+        }
         pthread_mutex_unlock(&sl_runq_stripes[s].mu);
     }
     /* runnext slots hold runnable tasks too, rooted exactly like a
@@ -3149,8 +3180,10 @@ static void sl_gc_root_units_build(sl_gc_thread **snap, int nsnap,
     for (int i = 0; i < SL_RUNNEXT_SLOTS; i++) {
         sl_task *sl_gc_qt = atomic_load_explicit(&sl_runnext[i],
                                                  memory_order_acquire);
-        if (sl_gc_qt)
+        if (sl_gc_qt && !(skip_idle && sl_gc_task_idle(sl_gc_qt, done)))
             sl_gc_root_unit_add(sl_gc_qt, 1);
+        else if (sl_gc_qt)
+            sl_gc_stat_tasks_skipped++;
     }
     /* Tier 11 fourth slice: a PARKED task (chan_send/recv, this slice)
      * is reachable from neither a registered thread's task_slot (the
@@ -3167,7 +3200,7 @@ static void sl_gc_root_units_build(sl_gc_thread **snap, int nsnap,
      * by the same lock, so no extra locking needed to walk it. */
     for (sl_task *sl_gc_pt = sl_parked_tasks; sl_gc_pt;
          sl_gc_pt = sl_gc_pt->parked_next) {
-        if (skip_idle && done - sl_gc_pt->gc_minor_stamp >= 2) {
+        if (skip_idle && sl_gc_task_idle(sl_gc_pt, done)) {
             sl_gc_stat_tasks_skipped++;
             continue;
         }

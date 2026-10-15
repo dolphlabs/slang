@@ -1454,6 +1454,7 @@ static void sl_task_stack_init(sl_task *t, void (*entry)(void *), void *arg) {
         t->stack_base = (void *)((char *)raw + sl_stack_page());
     }
     t->recover = NULL; /* a cached task's last protected call ended */
+    t->gc_minor_stamp = SL_GC_STAMP_NEVER; /* not idle until it has run */
     sl_ctx_make(t, entry, arg);
     /* Tier 11 eighth slice (async preemption): primed to 1, not 0 --
      * a task's virgin, never-yet-dispatched first stint has a real,
