@@ -664,6 +664,32 @@ const char *infer_call(CG *cg, Expr *e) {
                     res_cname(cg, "int", "fault");
                     return "result[int,fault]";
                 }
+                if (!strcmp(right, "split")) {
+                    if (n != 0)
+                        cg_error(e->line, "link.split() takes no arguments");
+                    res_cname(cg, "link", "fault");
+                    return "result[link,fault]";
+                }
+                if (!strcmp(right, "tls_accept")) {
+                    if (n != 2)
+                        cg_error(e->line,
+                                 "link.tls_accept() takes exactly two arguments "
+                                 "(a context from net.tls_server_ctx, and an until)");
+                    const char *ct = infer_type(cg, e->as.call.args[0]);
+                    const char *ut = infer_type(cg, e->as.call.args[1]);
+                    if (strcmp(ct, "rawptr"))
+                        cg_error(e->line,
+                                 "link.tls_accept() expects a TLS context from "
+                                 "net.tls_server_ctx (got %s)",
+                                 ct);
+                    if (!is_until(ut))
+                        cg_error(e->line,
+                                 "link.tls_accept() expects an until (got %s)",
+                                 ut);
+                    cg->want_tls = 1;
+                    res_cname(cg, "int", "fault");
+                    return "result[int,fault]";
+                }
                 if (!strcmp(right, "peer")) {
                     if (n != 0)
                         cg_error(e->line, "link.peer() takes no arguments");
