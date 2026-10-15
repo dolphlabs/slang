@@ -1223,6 +1223,18 @@ static int sl_dns_lookup(const char *host, const char *portstr,
  * the timer thread: it never drives a task and never touches a
  * GC-scanned field, only sl_task.next and sl_task_resume itself
  * (already proven safe from an unregistered caller). */
+#if defined(SL_REACTOR_EPOLL)
+/* Every eventfd the reactor's set holds is nonblocking. A worker polling
+ * in the reactor's place (sl_net_worker_poll) and the reactor thread can
+ * both be handed the same level-triggered event; the second to drain it
+ * found the counter already empty, and a blocking one stopped that thread
+ * in read() for good -- the reactor thread, in net_dial_until, about one
+ * run in 80 on one CPU (tests/run_tests.sh, reactor drains). */
+static int sl_reactor_eventfd(void) {
+    return eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+}
+#endif
+
 static void sl_reactor_start(void) {
 #if defined(SL_REACTOR_KQUEUE)
     sl_reactor_fd = kqueue();
@@ -1241,7 +1253,7 @@ static void sl_reactor_start(void) {
         fprintf(stderr, "slang: failed to create epoll\n");
         exit(1);
     }
-    sl_reactor_efd = eventfd(0, EFD_CLOEXEC);
+    sl_reactor_efd = sl_reactor_eventfd();
     if (sl_reactor_efd < 0) {
         fprintf(stderr, "slang: failed to create eventfd\n");
         exit(1);
@@ -1253,7 +1265,7 @@ static void sl_reactor_start(void) {
         fprintf(stderr, "slang: failed to arm shutdown eventfd\n");
         exit(1);
     }
-    sl_reactor_timer_efd = eventfd(0, EFD_CLOEXEC);
+    sl_reactor_timer_efd = sl_reactor_eventfd();
     if (sl_reactor_timer_efd < 0) {
         fprintf(stderr, "slang: failed to create timer eventfd\n");
         exit(1);
@@ -1265,7 +1277,7 @@ static void sl_reactor_start(void) {
         exit(1);
     }
     sl_poll_outer_fd = epoll_create1(EPOLL_CLOEXEC);
-    sl_poll_break_efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+    sl_poll_break_efd = sl_reactor_eventfd();
     if (sl_poll_outer_fd >= 0 && sl_poll_break_efd >= 0) {
         int armed = 1;
         ev.events = EPOLLIN;

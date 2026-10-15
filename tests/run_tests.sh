@@ -1020,6 +1020,36 @@ if [ "$(uname -s)" = Linux ]; then
     fi
 fi
 
+# ---- reactor drains ---------------------------------------------------------
+# net_dial_until, 60 times on one CPU. A worker polling in the reactor's
+# place and the reactor thread can both be handed one level-triggered
+# eventfd event; with the eventfds blocking, the second to drain it
+# blocked in read() for good and the run hung (about one run in 80, so
+# this catches it in about half of suite runs). Linux only: worker
+# polling is.
+if [ "$(uname -s)" = Linux ] && command -v taskset >/dev/null 2>&1; then
+    echo "--- reactor drains (net_dial_until x60, one CPU) ---"
+    rd_bin=/tmp/sl_reactor_drains
+    if ./slangc tests/net_dial_until/main.sl -o "$rd_bin" >/dev/null 2>&1; then
+        rd_bad=0
+        for _ in $(seq 60); do
+            if ! timeout 20 taskset -c 0 "$rd_bin" >/dev/null 2>&1; then
+                rd_bad=$((rd_bad + 1))
+            fi
+        done
+        if [ "$rd_bad" -ne 0 ]; then
+            echo "FAIL reactor drains: $rd_bad of 60 runs hung or failed"
+            fail=1
+        else
+            echo "PASS reactor drains (60 runs)"
+        fi
+    else
+        echo "FAIL reactor drains (compile)"
+        fail=1
+    fi
+    rm -f "$rd_bin"
+fi
+
 # ---- joined spawns run in place ---------------------------------------------
 # spawn_join_local: spawn directly followed by join_wait, from 4 tasks on
 # 8 workers, children that allocate, panic and run long. Those spawns used
