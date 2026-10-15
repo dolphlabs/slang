@@ -1,0 +1,10 @@
+named rows and missing optional ok
+binary int64 and optional text ok
+timestamps bytea enums nested JSON and exact numeric ok
+JSON null optional ok
+maps and optional row wrappers ok
+named type range missing storage and empty-result checks ok
+recursive JSON column reserves stack ok
+concurrent decoding retains owned fields ok
+empty structs and invalid metadata ok
+binary scalars null failures special values and duplicate names ok

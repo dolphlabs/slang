@@ -34,6 +34,7 @@ CODEGEN_SRCS = src/codegen/core.c src/codegen/infer.c src/codegen/expr.c \
 PKG_SRCS = src/codegen/pkg_time/sigs.c \
           src/codegen/pkg_net/sigs.c \
           src/codegen/pkg_json/dispatch.c \
+          src/codegen/pkg_pg/dispatch.c \
           src/codegen/pkg_proc/sigs.c \
           src/codegen/pkg_fs/sigs.c \
           src/codegen/pkg_log/sigs.c \
@@ -64,7 +65,7 @@ RT_SRCS = runtime/sl_core.c runtime/sl_gc.c runtime/sl_containers.c \
          runtime/sl_dns.c runtime/sl_net.c runtime/sl_tls.c runtime/sl_json.c \
          runtime/sl_proc.c runtime/sl_fs.c runtime/sl_log.c \
          runtime/sl_crypto.c runtime/sl_sql.c runtime/sl_regex.c runtime/sl_os.c runtime/sl_io.c runtime/sl_strings.c \
-         runtime/sl_encoding.c runtime/sl_compress.c
+         runtime/sl_encoding.c runtime/sl_compress.c runtime/sl_pg_rows.c
 
 slangc: $(SRCS) $(HDRS) $(RT_SRCS)
 	$(CC) $(CFLAGS) -o slangc $(SRCS)

@@ -757,7 +757,7 @@ done
 # collector treating every task's recent allocations as roots.
 echo "--- GC stress (SLANG_GC_THRESHOLD_KB=16) ---"
 gc_bad=0
-for name in gc_ctor_payload gc_map_put postgres http_client_pool http2_flood encoding_f64 crypto \
+for name in gc_ctor_payload gc_map_put pg_rows_as postgres http_client_pool http2_flood encoding_f64 crypto \
             spawn_isolation gc_stress maps json json_int_exact flags method_recv \
             method_recv_gc indirect_callee generics_structs generics_json generics_infer \
             generics_pkg gc_nested_literal generics_methods \
@@ -790,7 +790,7 @@ done
 echo "--- nursery stress (SLANG_GC_NURSERY_KB=16) ---"
 nur_bad=0
 for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put encoding_f64 crypto \
-            gc_nested_literal gc_stress gc_stat spawn_isolation maps json \
+            gc_nested_literal gc_stress gc_stat spawn_isolation maps pg_rows_as json \
             json_int_exact flags method_recv method_recv_gc indirect_callee \
             http_read_wire bytes_empty_literal gc_minor_barriers net_dns_records map_delete if_let \
             literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions json_parity json_utf8 json_decode_budget \
@@ -823,11 +823,11 @@ vm_bad=0
 for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc_map_put encoding_f64 crypto if_let \
             literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions \
             gc_nested_literal gc_nursery_barrier gc_nursery_promotion net_dns_records \
-            spawn_isolation select maps json json_parity json_utf8 json_decode_budget \
+            spawn_isolation select maps pg_rows_as json json_parity json_utf8 json_decode_budget \
             bytes json_deep_nesting redis http_read_wire http_client_pool http2_flood \
             gc_promotion_budget gc_chan_promotion_budget \
             value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks \
-            spawn_join_local spawn_call_args link_tls link_split fn_value_shadows_function; do
+            spawn_join_local spawn_call_args link_tls link_split fn_value_shadows_function select_send_escapes; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_verify_minor_${name}.out"
     err="/tmp/sl_verify_minor_${name}.err"

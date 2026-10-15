@@ -2027,6 +2027,32 @@ code reading it — bugs to see, not conditions to handle — and inventing a
 `0` or `""` would hide them. A nullable column is checked with `is_null`
 first. Like sqlx's `get`, not Go's `Scan`.
 
+`pg.rows_as[T](rows) -> result[[T], str]` binds columns by exact field
+name and decodes directly into value or `gc` structs, without rendering
+rows as JSON. Annotate the result, for example:
+
+```slang
+struct User { id: int, email: str, nickname: opt[str] }
+let converted: result[[User], str] = pg.rows_as(rows);
+```
+
+Extra columns are ignored. Missing optional fields and SQL NULL become
+`none`; missing required fields and incompatible cells return an error
+naming the row and field. Binary integers and booleans retain their types,
+numeric values retain integer precision, and JSON/JSONB columns decode into
+nested types. `bytea` reads into `bytes` (or a base64 `str`); timestamps
+read into `timez.Time` or RFC 3339 strings, with a zone-free timestamp read
+as UTC. Infinity and BC timestamps remain strings and cannot fit a `Time`.
+String-keyed maps and optional row wrappers are also supported. Duplicate
+names use the first column for structs and the last for maps, as JSON
+decoding does. Scalar row targets are rejected; declare a row struct.
+
+The hermetic `bench/pg_rows_as/main.sl` compares this with the previous
+Zokor JSON adapter on the same 1,000-row fixture. Intel macOS, ABBA x4:
+3.792 ms versus 0.263 ms median per conversion; 23,040 versus 3,671
+allocations and 1,864,778 versus 255,780 allocated bytes per conversion.
+These measure mapping alone, excluding database and request latency.
+
 ##### Pool
 
 `pg.new_pool(url, max_open)` parses the url and connects nothing until

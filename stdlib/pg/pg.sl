@@ -4,6 +4,7 @@ import "strings";
 import "crypto";
 import "encoding";
 import "timez";
+import "json";
 
 // PostgreSQL client, speaking the frontend/backend protocol (version
 // 3.0) over `net`.
@@ -203,6 +204,13 @@ pub gc struct Rows {
     // the last row has been read.
     stream: int,
     done: bool,
+}
+
+// Every row as a struct or map, bound by exact column name. Missing optional
+// fields and SQL NULL become none; incompatible cells return a named error.
+// Compiler-backed: no intermediate JSON text, and binary scalars stay typed.
+pub fn rows_as[T](rows: Rows) -> result[[T], str] {
+    return __pg_rows_as(rows);
 }
 
 // ---- wire encoding ---------------------------------------------------

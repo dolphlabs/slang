@@ -1,5 +1,21 @@
 # todo
 
+- [x] **Typed Postgres rows without JSON text** (`feat/pg-rows-as`).
+  `pg.rows_as[T]` binds exact column names once, decodes text/binary
+  scalar cells directly, and reuses typed JSON codecs for JSON columns.
+  NULL/missing optional fields, nested JSON, numeric precision, timestamps,
+  bytea, maps and duplicate-name semantics are covered by `pg_rows_as`.
+  Invalid public Rows metadata returns errors with row/field context.
+  The shared JSON zero initializer also handles nested empty structs;
+  `json_empty_structs` fails to compile on the old build and passes now.
+  Hermetic 1,000-row mapping ABBA x4, Intel macOS, legacy/direct ns:
+  legacy `[3869005,3861330,3762965,3821490,7191280,3566485,3575955,3598795]`;
+  direct `[274530,254830,260460,298985,265540,271835,251355,247420]`.
+  Medians 3,792,227.5 / 263,000 ns. Subtracting a no-op fixture run from
+  200 conversions: 23,040 / 3,671 allocations and 1,864,778 / 255,780
+  allocated bytes per conversion. Reproduce with `bench/pg_rows_as`;
+  this is mapping cost, not server throughput or database latency.
+
 The active plan is first; the investigations log follows it
 ([Investigations log](#investigations-log)). Work the plan top to bottom,
 one branch and one PR to `dev` per numbered item, never stacked. Tick items

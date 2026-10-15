@@ -305,8 +305,17 @@ static void walk_stmt(CG *cg, Esc *esc, Stmt *s) {
         for (i = 0; i < s->as.select_stmt.ncases; i++) {
             SelectCase *sc = &s->as.select_stmt.cases[i];
             scan_expr_any(cg, esc, sc->ch);
-            if (sc->val)
-                scan_expr_any(cg, esc, sc->val);
+            if (!sc->val)
+                continue;
+            /* A send arm hands its value to whichever task receives it,
+             * exactly as chan_send does: a struct built on this frame
+             * would reach the receiver as a pointer into a dead stack
+             * (zokor's WebSocket close crashed the writer on macOS). */
+            for (int k = esc->ncand - 1; k >= 0; k--) {
+                if (esc->cands[k].let && ptr_result(sc->val, esc->cands[k].name))
+                    mark_escape(esc, esc->cands[k].name);
+            }
+            scan_expr_any(cg, esc, sc->val);
         }
         for (i = 0; i < s->as.select_stmt.ncases; i++) {
             SelectCase *sc = &s->as.select_stmt.cases[i];

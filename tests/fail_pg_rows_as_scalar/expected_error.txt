@@ -1,0 +1,1 @@
+pg.rows_as() needs a row struct or map[str]V
