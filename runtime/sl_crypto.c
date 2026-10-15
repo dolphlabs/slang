@@ -6,6 +6,11 @@
 #include <openssl/kdf.h>
 #include <openssl/params.h>
 #include <openssl/crypto.h>
+#include <errno.h>
+#include <stdlib.h>
+#if defined(__linux__)
+#include <sys/random.h>
+#endif
 
 /* OpenSSL loads providers lazily, and on this platform that reaches
  * DSO_load -> dlopen -> dyld, which needs far more stack than a green
@@ -55,52 +60,50 @@ static sl_bytes *sl_crypto_hmac_sha256(sl_bytes *key, sl_bytes *message) {
     return sl_bytes_new(hash, SHA256_DIGEST_LENGTH);
 }
 
+/* The kernel's CSPRNG, straight into `p`: getrandom(2) on Linux,
+ * arc4random_buf(3) on macOS and the BSDs. 0 on success. */
+static int sl_crypto_os_random(unsigned char *p, size_t n) {
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+    /* arc4random_buf takes libSystem's own lock: a task preempted
+     * inside it and resumed on another OS thread would release that
+     * lock from the wrong thread, the way a preempted free corrupts the
+     * allocator. */
+    sl_rt_preempt_disable();
+    arc4random_buf(p, n);
+    sl_rt_preempt_enable();
+    return 0;
+#else
+    /* getrandom returns at most 32 MiB per call and can be interrupted;
+     * flags 0 blocks only until the pool is first seeded, at boot. */
+    while (n > 0) {
+        ssize_t got = getrandom(p, n, 0);
+        if (got < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        p += got;
+        n -= (size_t)got;
+    }
+    return 0;
+#endif
+}
+
+/* From the OS, not OpenSSL's RAND_bytes. OpenSSL 3's RAND_bytes had to
+ * run under one process-wide mutex -- its lazily built DRBG deadlocked
+ * when two threads reached the construction together (the case
+ * tests/crypto_rand_concurrent keeps) -- and that mutex plus OpenSSL's
+ * own per-call work made crypto.rand(16) about a sixth of a zokor
+ * server's CPU, since every request draws an id from it. The kernel's
+ * generator is the one RAND_bytes seeds from anyway, needs no lock, and
+ * fills the result's buffer directly, so there is no malloc either. */
 static sl_res_bytes_str *sl_crypto_rand(long long n) {
-    SL_CRYPTO_STACK();
     if (n < 0 || n > 1024 * 1024)
         return sl_crypto_err_bytes("invalid size: must be between 0 and 1MB");
     if (n == 0)
         return sl_crypto_ok_bytes(sl_bytes_new(NULL, 0));
-
-    sl_rt_preempt_disable();
-    unsigned char *tmp = (unsigned char *)malloc((size_t)n);
-    sl_rt_preempt_enable();
-    if (!tmp)
-        return sl_crypto_err_bytes("out of memory");
-    /* Serialized across every task, and not only because OpenSSL's own
-     * locks would otherwise be entered from one OS thread and left from
-     * another -- preempt_disable already covers that. RAND_bytes lazily
-     * builds its DRBG on first use (EVP_RAND_fetch -> ossl_namemap_*),
-     * and two threads reaching that construction at once deadlock
-     * inside libcrypto's rwlock, not in anything slang can see: every
-     * worker ends up parked in CRYPTO_THREAD_write_lock and the process
-     * stops. Two tasks calling crypto.rand in a loop reproduced it
-     * every time. One mutex makes the first call finish before the
-     * second starts; after that the fetch is cached and the lock is
-     * uncontended in practice. */
-    static pthread_mutex_t sl_rand_mu = PTHREAD_MUTEX_INITIALIZER;
-    sl_rt_preempt_disable();
-    pthread_mutex_lock(&sl_rand_mu);
-    int rc = RAND_bytes(tmp, (int)n);
-    pthread_mutex_unlock(&sl_rand_mu);
-    sl_rt_preempt_enable();
-    /* Both frees are bracketed for the same reason the malloc above is:
-     * free touches libSystem's own zone locks, and a task preempted
-     * mid-free and resumed on a different OS thread abandons that
-     * thread's lock hold. It corrupts the allocator rather than this
-     * call, so it surfaces later and somewhere else -- as a wild
-     * failure in whatever allocates next. Two concurrent tasks calling
-     * crypto.rand in a loop was enough to hit it. */
-    if (rc != 1) {
-        sl_rt_preempt_disable();
-        free(tmp);
-        sl_rt_preempt_enable();
-        return sl_crypto_err_bytes("RAND_bytes failed");
-    }
-    sl_bytes *out = sl_bytes_new(tmp, n);
-    sl_rt_preempt_disable();
-    free(tmp);
-    sl_rt_preempt_enable();
+    sl_bytes *out = sl_bytes_alloc_uninit(n);
+    if (sl_crypto_os_random(out->ptr, (size_t)n) != 0)
+        return sl_crypto_err_bytes("the OS random source failed");
     return sl_crypto_ok_bytes(out);
 }
 
