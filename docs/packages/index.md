@@ -848,6 +848,31 @@ Argon2id support; on older OpenSSL builds they return an error while the
 other `crypto` functions remain available. Use the package's bounded PHC
 parser rather than parsing stored hashes in application code.
 
+A derivation is tens of milliseconds of work that cannot be preempted. In
+a program that links the reactor (anything importing `net` or `io`, so
+every server), it runs on a small pool of dedicated kdf threads while the
+calling task parks, the way a DNS lookup does: a burst of logins neither
+pins the pool's workers nor holds up a collection. `SLANG_KDF_THREADS`
+sets the pool size (default: one per worker). Each in-flight derivation
+holds its `memory_kib`, so bound how many you start, as you would any
+other expensive request. Without the reactor it derives on the calling
+worker.
+
+`rsa_verify_sha256(n, e, msg, sig) -> result[bool, str]` checks an
+RSASSA-PKCS1-v1_5 SHA-256 signature (JWS `RS256`) against a public key
+given as its raw big-endian modulus and exponent, which is what a JWKS
+entry's base64url `n` and `e` decode to. `ok(false)` is a signature that
+does not verify, including one of the wrong length; `err` is a key out of
+bounds (a 2048- to 8192-bit modulus, a 1- to 8-byte exponent) or one
+OpenSSL rejects.
+
+```slang
+import "crypto";
+
+let r = crypto.rsa_verify_sha256(n, e, to_bytes(header_dot_payload), sig);
+let valid = r ?? false;
+```
+
 #### `sql`
 
 A SQLite driver (linked automatically, only when a program imports
@@ -2321,7 +2346,7 @@ any signal-handling program.
 - [builder](packages/builder.md) -- source package, 20 public items
 - [byteutil](packages/byteutil.md) -- source package, 6 public items
 - [compress](packages/compress.md) -- compiler-provided, 7 public items
-- [crypto](packages/crypto.md) -- compiler-provided, 8 public items
+- [crypto](packages/crypto.md) -- compiler-provided, 9 public items
 - [encoding](packages/encoding.md) -- compiler-provided, 14 public items
 - [flags](packages/flags.md) -- source package, 23 public items
 - [fs](packages/fs.md) -- compiler-provided, 9 public items

@@ -938,6 +938,10 @@ void emit_native_runtime(CG *cg) {
         emit_runtime_file(cg, "sl_fs.c");
     if (want_log)
         emit_runtime_file(cg, "sl_log.c");
+    /* With the reactor present, argon2id parks the task and derives on a
+       kdf thread (sl_crypto.c); without it, it derives inline. */
+    if (want_crypto && want_net)
+        emit_line(cg, "#define SL_HAVE_REACTOR 1");
     if (want_crypto)
         emit_runtime_file(cg, "sl_crypto.c");
     if (want_sql)

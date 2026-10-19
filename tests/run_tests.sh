@@ -970,6 +970,18 @@ else
     echo "PASS idle queued tasks skipped ($sq_skipped of $sq_walked)"
 fi
 
+# ---- argon2id kdf offload --------------------------------------------------
+# On two workers the hashes go to kdf threads, so a ticker task keeps its
+# pace while 64 of them are in flight. Derived inline it got ~5 turns.
+echo "--- argon2id kdf offload (SLANG_WORKERS=2) ---"
+if ko_out=$(SLANG_WORKERS=2 ./slangc tests/crypto_offload/main.sl --run 2>&1) &&
+   [ "$ko_out" = "kdf offload ok" ]; then
+    echo "PASS argon2id kdf offload"
+else
+    echo "FAIL argon2id kdf offload: $ko_out"
+    fail=1
+fi
+
 # ---- reactor work budget ---------------------------------------------------
 # reactor_work_budget: 200 connections ping-pong 100 messages each with a
 # deadline on every receive. Each wait used to be two epoll_ctl calls (ADD,
