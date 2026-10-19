@@ -158,6 +158,8 @@ typedef struct sl_task {
                                 (runtime_net.c), so a ready task leaves it
                                 in O(1); `next` is its forward link */
     int on_wq;               /* on a reactor waiter list now */
+    int wait_fd;             /* the (fd, direction) of its reactor wait, */
+    int wait_rw;             /* so leaving by deadline frees its slot */
     struct sl_task *runq_link; /* striped run-queue link -- never aliases
                                  next: a task is queued XOR parked. */
     void *entry_arg;
