@@ -184,3 +184,72 @@ fn test_argon2id() {
 }
 
 test_argon2id();
+
+fn hex(s: str) -> bytes {
+    let r = encoding.hex_decode(s);
+    guard let b = r else {
+        die("hex fixture");
+        return b"";
+    }
+    return b;
+}
+
+fn rsa_ok(n: bytes, e: bytes, msg: bytes, sig: bytes) -> bool {
+    let r = crypto.rsa_verify_sha256(n, e, msg, sig);
+    guard let v = r else let message = err_of(r) {
+        die("rsa_verify_sha256: " + message);
+        return false;
+    }
+    return v;
+}
+
+// A 2048-bit key and an RS256 signature made by `openssl dgst -sha256
+// -sign`, given as a JWKS entry gives them: raw modulus and exponent.
+fn test_rsa_verify_sha256() {
+    let n = hex(
+        "9f57994687d5e494304ffe5ab578dc6b8b3242ef270455b8db52aac470bff7af" +
+        "296ac6d7a2651ac3377371b1858f214a29e86bb069a8902cd1c2e76cf5efb2ba" +
+        "ea1d57700cec39526cc56fed992ddcfb07e2d6a0338fdd2bd0ca082f56ab12dd" +
+        "2d1789779bda62a855c6574a2663544b7d4644eccfbc94de8280684abb8c4a28" +
+        "55d6387be0ae1c9691cf2f42ee76c3dd5d0d2fd7a597b44d899ac5a62a4d9149" +
+        "d805279b4807b34e0e92b89434899848be9df6d5e36b8bc32524386c8b722639" +
+        "f594a603bd5b98b0d17cfdd3676826e5276c92c385702c245ea96f7e37ce4264" +
+        "fb833e6e1e39023dfe8e6776e9c8ea6abb2c1f4392e8bcd973e10f4af7c5774d"    );
+    let e = hex("010001");
+    let msg = to_bytes("eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzbGFuZyJ9");
+    let sig = hex(
+        "4f7418437bf60ca3869e342876c87b3a6dfe8be970f3b85d5d5295ccde6d5da8" +
+        "61d4950a551b882d2f3d3823bd1f9176d7556fb5839228ca50a938126956db4b" +
+        "7965f1eabf0cd60a2bc723decb616c42b8ae4b29024300b558295ad8008aee49" +
+        "8b5419f04841a5a61b4d63b580eaf34278f02c4a2d411627b5ce8ffa25c3c395" +
+        "1f275ebb702dd59dbb8dbcdfcb9725440b48f29c635be9464f96ef1b0068db42" +
+        "dbb07603a8ace906cca8526fba676db9b64eeb3010b1d0ff5fbfc8eb78aed837" +
+        "61f026bb08b45be0c2dd516b25aa24eb79b2e8712741a5a785772e7c0c3175c6" +
+        "028029356e76a4945ca02d697e8420889cdb0a462c6e3ad18b1c0ad28c82de24"    );
+    if !rsa_ok(n, e, msg, sig) { die("rsa valid signature rejected"); }
+    if rsa_ok(n, e, to_bytes("eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJvdGhlciJ9"), sig) {
+        die("rsa accepted a different message");
+    }
+    let bent = hex(encoding.hex_encode(sig));
+    bent[10] = (bent[10] + 1) % 256;
+    if rsa_ok(n, e, msg, bent) { die("rsa accepted a changed signature"); }
+    if rsa_ok(n, hex("03"), msg, sig) { die("rsa accepted the wrong exponent"); }
+    if rsa_ok(n, e, msg, sig[0..100]) { die("rsa accepted a short signature"); }
+    // A leading zero byte, as some encoders emit, is the same modulus.
+    let padded = hex("00" + encoding.hex_encode(n));
+    if !rsa_ok(padded, e, msg, sig) { die("rsa rejected a zero-padded modulus"); }
+
+    let small = crypto.rsa_verify_sha256(n[0..128], e, msg, sig);
+    if let _v = small {
+        die("rsa accepted a 1024-bit key");
+    } else let message = err_of(small) {
+        if message != "RSA modulus must be 2048 to 8192 bits" { die("rsa bound: " + message); }
+    }
+    let no_e = crypto.rsa_verify_sha256(n, b"", msg, sig);
+    if let _v = no_e {
+        die("rsa accepted an empty exponent");
+    }
+    println("rsa ok");
+}
+
+test_rsa_verify_sha256();
