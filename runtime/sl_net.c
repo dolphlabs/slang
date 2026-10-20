@@ -156,11 +156,18 @@ static char sl_reactor_timer_token;
  * epoll_ctl and the park's context switch: at 64 connections about two
  * of five threads sat blocked on it, and two workers outran four.
  *
- * The list a waiter is on travels with its registration, in the low
- * bits of the task pointer handed to epoll/kqueue (task structs are
- * 16-byte aligned), so the reactor never dereferences a task to find
- * its list: a registration can outlive its task, and the reactor only
- * ever compares that pointer against the list's own entries. */
+ * A registration names its (fd, direction) and a generation, never a
+ * task: a wait that ends by its deadline or by shutdown leaves its
+ * one-shot registration armed, and the event it later delivers must
+ * not reach whatever that task is doing by then -- waiting on another
+ * fd in another list, or finished and freed. Each (fd, direction) has a
+ * slot holding the task waiting on it now and the generation of that
+ * wait; an event wakes the slot's task only if its generation still
+ * matches, and the reactor never dereferences a task it found any other
+ * way than through a slot or a list. Trusting the task pointer in the
+ * event used to unlink a moved-on task from the wrong list and link it
+ * into its own twice, a cycle the reactor then walked forever holding
+ * that list's lock (tests/reactor_stale_event). */
 #define SL_REACTOR_WQS 16
 #define SL_REACTOR_WQ_MASK ((uintptr_t)(SL_REACTOR_WQS - 1))
 typedef struct sl_reactor_wq {
@@ -170,6 +177,63 @@ typedef struct sl_reactor_wq {
 static sl_reactor_wq sl_reactor_wqs[SL_REACTOR_WQS] = {
     [0 ... SL_REACTOR_WQS - 1] = { .mu = PTHREAD_MUTEX_INITIALIZER },
 };
+
+/* The waiter slots, under the lock of the list their fd hashes to. Two
+ * per fd (read, write), in chunks allocated on first use and never
+ * freed, so a slot pointer stays valid without a lock on the table. */
+typedef struct sl_reactor_slot {
+    sl_task *task;
+    uint32_t gen;
+} sl_reactor_slot;
+#define SL_REACTOR_SLOT_CHUNK 4096
+#define SL_REACTOR_SLOT_CHUNKS 16384
+static sl_reactor_slot *_Atomic sl_reactor_slot_chunks[SL_REACTOR_SLOT_CHUNKS];
+static pthread_mutex_t sl_reactor_slot_grow_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* An epoll event's data carries the fd, direction and generation, with
+ * the top bit set to tell it from the shutdown and timer tokens (user
+ * space pointers never have it). kqueue has the fd and filter already
+ * and keeps the generation in udata. */
+#define SL_REACTOR_TAG_FD (1ULL << 63)
+#define SL_REACTOR_GEN_MASK 0x3fffffffu
+
+/* The slot for (fd, rw), or NULL when fd is out of range or, without
+ * `create`, its chunk does not exist yet. */
+static sl_reactor_slot *sl_reactor_slot_at(int fd, int rw, int create) {
+    if (fd < 0)
+        return NULL;
+    unsigned long idx = (unsigned long)fd * 2 + (unsigned long)rw;
+    unsigned long c = idx / SL_REACTOR_SLOT_CHUNK;
+    if (c >= SL_REACTOR_SLOT_CHUNKS)
+        return NULL;
+    sl_reactor_slot *chunk =
+        atomic_load_explicit(&sl_reactor_slot_chunks[c], memory_order_acquire);
+    if (!chunk) {
+        if (!create)
+            return NULL;
+        pthread_mutex_lock(&sl_reactor_slot_grow_mu);
+        chunk = atomic_load_explicit(&sl_reactor_slot_chunks[c], memory_order_relaxed);
+        if (!chunk) {
+            chunk = (sl_reactor_slot *)calloc(SL_REACTOR_SLOT_CHUNK, sizeof(*chunk));
+            if (chunk)
+                atomic_store_explicit(&sl_reactor_slot_chunks[c], chunk,
+                                      memory_order_release);
+        }
+        pthread_mutex_unlock(&sl_reactor_slot_grow_mu);
+        if (!chunk)
+            return NULL;
+    }
+    return &chunk[idx % SL_REACTOR_SLOT_CHUNK];
+}
+
+/* A waiter leaving its list for any reason but its own event (deadline,
+ * shutdown) gives up its slot, so the event its registration may still
+ * deliver finds nobody. Under the list's lock. */
+static void sl_reactor_slot_release(sl_task *t) {
+    sl_reactor_slot *s = sl_reactor_slot_at(t->wait_fd, t->wait_rw, 0);
+    if (s && s->task == t)
+        s->task = NULL;
+}
 static inline unsigned sl_reactor_wq_for(int fd) {
     unsigned u = (unsigned)(fd >= 0 ? fd : 0);
     u ^= u >> 16;
@@ -321,6 +385,7 @@ static long long sl_reactor_expire_waiters(sl_task **ready, long long now) {
             sl_task *nx = t->next;
             if (t->io_deadline_ns && t->io_deadline_ns <= now) {
                 sl_reactor_wq_unlink(q, t);
+                sl_reactor_slot_release(t);
                 t->next = *ready;
                 *ready = t;
             } else if (t->io_deadline_ns) {
@@ -343,6 +408,7 @@ static void sl_reactor_take_all(sl_task **ready) {
         sl_task *w;
         while ((w = q->waiting)) {
             sl_reactor_wq_unlink(q, w);
+            sl_reactor_slot_release(w);
             w->next = *ready;
             *ready = w;
         }
@@ -382,13 +448,16 @@ static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
         return -1;
     }
     sl_task *sl_reactor_self = sl_rt_cur();
-    if ((uintptr_t)sl_reactor_self & SL_REACTOR_WQ_MASK) {
-        fprintf(stderr, "slang: internal error: task %p is not 16-byte "
-                        "aligned; the reactor tags its low bits\n",
-                (void *)sl_reactor_self);
-        abort();
+    sl_reactor_slot *slot = sl_reactor_slot_at(fd, rw, 1);
+    if (!slot) {
+        pthread_mutex_unlock(&wq->mu);
+        sl_rt_preempt_enable();
+        return -1;
     }
-    void *tag = (void *)((uintptr_t)sl_reactor_self | wqi);
+    uint32_t gen = ++slot->gen;
+    slot->task = sl_reactor_self;
+    sl_reactor_self->wait_fd = fd;
+    sl_reactor_self->wait_rw = rw;
     sl_reactor_self->io_deadline_ns = deadline;
     sl_reactor_self->wq_prev = NULL;
     sl_reactor_self->next = wq->waiting;
@@ -400,7 +469,7 @@ static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
 #if defined(SL_REACTOR_KQUEUE)
     struct kevent kev;
     EV_SET(&kev, fd, rw == SL_REACTOR_READ ? EVFILT_READ : EVFILT_WRITE,
-           EV_ADD | EV_ONESHOT, 0, 0, tag);
+           EV_ADD | EV_ONESHOT, 0, 0, (void *)(uintptr_t)gen);
     kevent(sl_reactor_fd, &kev, 1, NULL, 0, NULL);
     if (sl_reactor_stat_enabled())
         atomic_fetch_add_explicit(&sl_reactor_stat_regs, 1,
@@ -408,7 +477,9 @@ static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
 #else
     struct epoll_event ev;
     ev.events = (rw == SL_REACTOR_READ ? EPOLLIN : EPOLLOUT) | EPOLLONESHOT;
-    ev.data.ptr = tag;
+    ev.data.u64 = SL_REACTOR_TAG_FD |
+                  ((uint64_t)(gen & SL_REACTOR_GEN_MASK) << 33) |
+                  ((uint64_t)(rw & 1) << 32) | (uint64_t)(uint32_t)fd;
     /* MOD first: after its first wait a connection's fd is registered
        (EPOLLONESHOT disarms it, it does not remove it), so this is one
        call per wait where ADD-then-MOD was two. */
@@ -491,7 +562,10 @@ static void sl_reactor_take_events(struct epoll_event *events, int n, sl_task **
             events[i].ident == SL_REACTOR_TIMER_IDENT)
             continue;
         int is_shutdown = events[i].filter == EVFILT_USER;
-        void *tag = is_shutdown ? NULL : events[i].udata;
+        int ev_fd = (int)events[i].ident;
+        int ev_rw = events[i].filter == EVFILT_WRITE ? SL_REACTOR_WRITE : SL_REACTOR_READ;
+        uint32_t ev_gen = (uint32_t)(uintptr_t)events[i].udata;
+        uint32_t gen_mask = 0xffffffffu;
 #else
         if (events[i].data.ptr == &sl_reactor_timer_token) {
             uint64_t tx;
@@ -499,7 +573,13 @@ static void sl_reactor_take_events(struct epoll_event *events, int n, sl_task **
             continue;
         }
         int is_shutdown = events[i].data.ptr == &sl_reactor_shutdown_token;
-        void *tag = is_shutdown ? NULL : events[i].data.ptr;
+        uint64_t ev_tag = events[i].data.u64;
+        if (!is_shutdown && !(ev_tag & SL_REACTOR_TAG_FD))
+            continue;
+        int ev_fd = (int)(uint32_t)ev_tag;
+        int ev_rw = (int)((ev_tag >> 32) & 1);
+        uint32_t ev_gen = (uint32_t)(ev_tag >> 33) & SL_REACTOR_GEN_MASK;
+        uint32_t gen_mask = SL_REACTOR_GEN_MASK;
         if (is_shutdown) {
             uint64_t x;
             sl_net_drain(sl_reactor_efd, &x, sizeof(x));
@@ -509,22 +589,24 @@ static void sl_reactor_take_events(struct epoll_event *events, int n, sl_task **
             sl_reactor_take_all(&ready);
             continue;
         }
-        /* only resume if the removal actually found t on the
-           list -- it may already be gone if a shutdown drain
-           (above, same batch) already resumed it, e.g. the
-           shutdown EVFILT_USER event and this fd's own readiness
-           event landing in the same kevent() batch. Resuming
-           unconditionally here would double-push t onto
-           sl_global_runq -- found and fixed during this slice's
-           own design review. */
-        sl_task *t = (sl_task *)((uintptr_t)tag & ~SL_REACTOR_WQ_MASK);
-        sl_reactor_wq *q = &sl_reactor_wqs[(uintptr_t)tag & SL_REACTOR_WQ_MASK];
+        /* The slot decides: an event from an older wait on this
+           (fd, direction) -- its waiter already left by deadline or
+           shutdown, possibly earlier in this same batch -- finds the
+           generation moved on or the slot empty, and wakes nobody. */
+        sl_reactor_wq *q = &sl_reactor_wqs[sl_reactor_wq_for(ev_fd)];
+        sl_task *t = NULL;
         pthread_mutex_lock(&q->mu);
-        int found = t->on_wq;
-        if (found)
-            sl_reactor_wq_unlink(q, t);
+        sl_reactor_slot *slot = sl_reactor_slot_at(ev_fd, ev_rw, 0);
+        if (slot && slot->task && (slot->gen & gen_mask) == ev_gen) {
+            t = slot->task;
+            slot->task = NULL;
+            if (t->on_wq)
+                sl_reactor_wq_unlink(q, t);
+            else
+                t = NULL;
+        }
         pthread_mutex_unlock(&q->mu);
-        if (found) {
+        if (t) {
             t->next = ready;
             ready = t;
         }
