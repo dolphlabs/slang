@@ -456,6 +456,7 @@ struct CG {
      * so no explicit per-function reset is needed, same as
      * ambient_count. */
     int open_backedge_brackets;
+    int last_backedge_id; /* the _sl_bpN id emit_backedge_enter last opened */
     /* break/continue: cur_loop_has_bp tracks the INNERMOST enclosing
      * loop's own bracket only (not the cumulative open_backedge_
      * brackets count above, which return still uses unchanged) --

@@ -84,6 +84,7 @@ static int emit_backedge_enter(CG *cg, void *backedge_live_set,
     }
     sb_append(&roots, "};");
     emit_line(cg, "%s", roots.data);
+    cg->last_backedge_id = id;
     emit_line(cg, "sl_safepoint _sl_bp%d;", id);
     emit_line(cg, "sl_rt_safepoint_enter(&_sl_bp%d, _sl_bp%d_roots, %d);", id,
               id, n);
@@ -94,6 +95,42 @@ static int emit_backedge_enter(CG *cg, void *backedge_live_set,
      * own closing exit() call (matching every "if (has_bp)" site). */
     cg->open_backedge_brackets++;
     return 1;
+}
+
+/* A bracket hoisted around a loop snapshots its roots' VALUES once, but
+ * the body reassigns them: `for line in lines { body = body + line; }`
+ * leaves the bracket holding the first `body`. Any check-in that relies
+ * on that bracket alone -- the loop's own sampled yield, or a collection
+ * run by another worker while this task is yielded -- then sweeps the
+ * live string (a segfault or a silently truncated result). So the loop
+ * copies the current values into the hoisted array, in the order the
+ * bracket built it, right before each of its own check-ins: the sampled
+ * yield, one iteration in SL_PREEMPT_SAMPLE_MASK + 1. Check-ins inside
+ * the body open their own brackets of current values and need nothing. */
+static void emit_roots_refresh(CG *cg, void *backedge_live_set,
+                               const char *extra_root, const char *array) {
+    int nnames = live_set_nnamed(backedge_live_set);
+    int n = extra_root ? 1 : 0;
+    for (int i = 0; i < nnames; i++)
+        n += count_named_gc_roots(cg, live_set_named(backedge_live_set, i));
+    if (n == 0)
+        return;
+    int id = cg->tmp_id++;
+    StrBuf roots;
+    sb_init(&roots);
+    sb_append(&roots, xasprintf("{ void *_sl_rf%d[] = { ", id));
+    int wrote = 0;
+    for (int i = 0; i < nnames; i++)
+        append_named_gc_roots(cg, &roots, live_set_named(backedge_live_set, i),
+                              &wrote);
+    if (extra_root) {
+        if (wrote++)
+            sb_append(&roots, ", ");
+        sb_append(&roots, xasprintf("(void *)%s", extra_root));
+    }
+    sb_append(&roots, xasprintf("}; memcpy(%s, _sl_rf%d, sizeof(_sl_rf%d)); }",
+                                array, id, id));
+    emit_line(cg, "%s", roots.data);
 }
 
 /* Tier 12 (leaf-loop poll): hoisted bracket + per-iteration cheap poll.
@@ -192,9 +229,14 @@ static void emit_leaf_poll(CG *cg, void *backedge_live_set, int bid,
               eid, eid, n);
     emit_line(cg, "sl_rt_safepoint_exit();");
     cg->indent--;
-    emit_line(cg, "} else if ((++_sl_lp_ec%d & SL_PREEMPT_SAMPLE_MASK) == 0) {",
+    emit_line(cg, "} else if (__builtin_expect((++_sl_lp_ec%d & "
+                  "SL_PREEMPT_SAMPLE_MASK) == 0, 0)) {",
               eid);
     cg->indent++;
+    /* poll_yield checks in, and may yield the task, against the hoisted
+       bracket alone: bring its values up to date first. */
+    emit_roots_refresh(cg, backedge_live_set, NULL,
+                       xasprintf("_sl_lb%d_roots", bid));
     emit_line(cg, "sl_rt_poll_yield(_sl_lb_task%d);", bid);
     cg->indent--;
     emit_line(cg, "}");
@@ -1135,8 +1177,10 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "{");
             cg->indent++;
             emit_line(cg, "sl_arr *_sl_it%d = %s;", id, iter);
+            char *iter_root = xasprintf("_sl_it%d", id);
             int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0,
-                                            xasprintf("_sl_it%d", id));
+                                            iter_root);
+            int bp_id = cg->last_backedge_id;
             int eid = 0;
             if (has_bp) {
                 eid = cg->tmp_id++;
@@ -1147,11 +1191,18 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
-            if (has_bp)
+            if (has_bp) {
                 emit_line(cg,
-                          "if ((++_sl_ec%d & SL_PREEMPT_SAMPLE_MASK) == 0) "
-                          "sl_rt_maybe_yield();",
+                          "if (__builtin_expect((++_sl_ec%d & "
+                          "SL_PREEMPT_SAMPLE_MASK) == 0, 0)) {",
                           eid);
+                cg->indent++;
+                emit_roots_refresh(cg, s->backedge_live_set, iter_root,
+                                   xasprintf("_sl_bp%d_roots", bp_id));
+                emit_line(cg, "sl_rt_maybe_yield();");
+                cg->indent--;
+                emit_line(cg, "}");
+            }
             emit_line(cg, "%s %s = (*(%s *)(void *)sl_arr_at(_sl_it%d, "
                           "_sl_i%d, sizeof(%s)));",
                       ec, vname, ec, id, id, ec);
@@ -1180,8 +1231,10 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "{");
             cg->indent++;
             emit_line(cg, "sl_bytes *_sl_bt%d = %s;", id, iter);
+            char *iter_root = xasprintf("_sl_bt%d", id);
             int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0,
-                                            xasprintf("_sl_bt%d", id));
+                                            iter_root);
+            int bp_id = cg->last_backedge_id;
             int eid = 0;
             if (has_bp) {
                 eid = cg->tmp_id++;
@@ -1192,11 +1245,18 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
-            if (has_bp)
+            if (has_bp) {
                 emit_line(cg,
-                          "if ((++_sl_ec%d & SL_PREEMPT_SAMPLE_MASK) == 0) "
-                          "sl_rt_maybe_yield();",
+                          "if (__builtin_expect((++_sl_ec%d & "
+                          "SL_PREEMPT_SAMPLE_MASK) == 0, 0)) {",
                           eid);
+                cg->indent++;
+                emit_roots_refresh(cg, s->backedge_live_set, iter_root,
+                                   xasprintf("_sl_bp%d_roots", bp_id));
+                emit_line(cg, "sl_rt_maybe_yield();");
+                cg->indent--;
+                emit_line(cg, "}");
+            }
             emit_line(cg, "long long %s = (long long)_sl_bt%d->ptr[_sl_i%d];",
                       vname, id, id);
             cg->loop_depth++;
@@ -1235,8 +1295,10 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "{");
             cg->indent++;
             emit_line(cg, "sl_map *_sl_m%d = %s;", id, iter);
+            char *iter_root = xasprintf("_sl_m%d", id);
             int has_bp = emit_backedge_enter(cg, s->backedge_live_set, 0, 0,
-                                            xasprintf("_sl_m%d", id));
+                                            iter_root);
+            int bp_id = cg->last_backedge_id;
             int eid = 0;
             if (has_bp) {
                 eid = cg->tmp_id++;
@@ -1247,11 +1309,18 @@ void gen_stmt(CG *cg, Stmt *s) {
                       "_sl_i%d++) {",
                       id, id, id, id);
             cg->indent++;
-            if (has_bp)
+            if (has_bp) {
                 emit_line(cg,
-                          "if ((++_sl_ec%d & SL_PREEMPT_SAMPLE_MASK) == 0) "
-                          "sl_rt_maybe_yield();",
+                          "if (__builtin_expect((++_sl_ec%d & "
+                          "SL_PREEMPT_SAMPLE_MASK) == 0, 0)) {",
                           eid);
+                cg->indent++;
+                emit_roots_refresh(cg, s->backedge_live_set, iter_root,
+                                   xasprintf("_sl_bp%d_roots", bp_id));
+                emit_line(cg, "sl_rt_maybe_yield();");
+                cg->indent--;
+                emit_line(cg, "}");
+            }
             emit_line(cg, "long long _sl_slot%d = _sl_m%d->order[_sl_i%d];",
                       id, id, id);
             emit_line(cg,
