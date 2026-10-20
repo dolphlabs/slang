@@ -52,6 +52,10 @@ trust store). `Response` carries `status`, `status_text`, `headers`,
 `body` and `url` — the last being the URL that actually answered, which
 after a redirect is not the one you asked for.
 
+The deadline covers the whole request, connecting included: a host that
+never answers the SYN fails at the deadline, over plain TCP and TLS
+alike.
+
 Separate from `http` rather than folded into it because `http` imports
 only `byteutil`, while a client necessarily imports `net` — and for a
 TLS request that drags `-lssl`/`-lcrypto` onto the link line of every

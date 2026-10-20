@@ -221,7 +221,7 @@ fn tr_close(t: Transport) {
 
 fn connect(u: Url, ca_path: str, deadline: until) -> result[Transport, str] {
     if u.scheme == "http" {
-        let dr = net.dial(u.host, u.port);
+        let dr = net.dial_until(u.host, u.port, deadline);
         guard let fd = dr else let e = err_of(dr) {
             return err("dial " + u.host + ": " + e);
         }
@@ -235,7 +235,7 @@ fn connect(u: Url, ca_path: str, deadline: until) -> result[Transport, str] {
     guard let ctx = cr else let e = err_of(cr) {
         return err("tls context: " + e);
     }
-    let tr = net.tls_dial(u.host, u.port, ctx);
+    let tr = net.tls_dial_until(u.host, u.port, ctx, deadline);
     guard let ssl = tr else let e = err_of(tr) {
         return err("tls dial " + u.host + ": " + e);
     }
