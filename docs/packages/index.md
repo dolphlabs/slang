@@ -330,6 +330,11 @@ anything a man in the middle queued behind it would otherwise be trusted
 as if it had arrived encrypted (libpq's CVE-2021-23222).
 `tls_upgrade_until(fd, host, ctx, deadline)` bounds the handshake; a
 server that stops answering part way through gives `"timeout"`.
+`tls_dial_until(host, port, ctx, deadline)` is `tls_dial` with one
+deadline over the lookup, the connect and the handshake: an unreachable
+host gives `"timeout"` at the deadline instead of after the OS connect
+timeout, which is over a minute on macOS. Like `dial`, both try every
+address the name resolves to.
 
 **TLS on a `link`**: `c.tls_accept(ctx, deadline)` runs the server
 handshake on a link you already accepted, and from then on the link's
@@ -1904,6 +1909,10 @@ trust store). `Response` carries `status`, `status_text`, `headers`,
 `body` and `url` — the last being the URL that actually answered, which
 after a redirect is not the one you asked for.
 
+The deadline covers the whole request, connecting included: a host that
+never answers the SYN fails at the deadline, over plain TCP and TLS
+alike.
+
 Separate from `http` rather than folded into it because `http` imports
 only `byteutil`, while a client necessarily imports `net` — and for a
 TLS request that drags `-lssl`/`-lcrypto` onto the link line of every
@@ -2356,7 +2365,7 @@ any signal-handling program.
 - [io](packages/io.md) -- compiler-provided, 12 public items
 - [json](packages/json.md) -- compiler-provided, 0 public items
 - [log](packages/log.md) -- compiler-provided, 4 public items
-- [net](packages/net.md) -- compiler-provided, 33 public items
+- [net](packages/net.md) -- compiler-provided, 34 public items
 - [os](packages/os.md) -- compiler-provided, 14 public items
 - [pg](packages/pg.md) -- source package, 56 public items
 - [proc](packages/proc.md) -- compiler-provided, 6 public items
