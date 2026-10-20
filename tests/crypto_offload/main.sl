@@ -2,7 +2,10 @@
 // while the calling task parks, so a burst of hashes neither pins the
 // pool's workers nor holds up a collection. On two workers, 64 hashes
 // used to leave a ticker task a handful of turns between them; now it
-// keeps its pace throughout. run_tests.sh runs this with SLANG_WORKERS=2.
+// keeps its pace throughout. Pace, not a count: a fast machine finishes
+// the hashes in a few hundred milliseconds, so the ticker is held to at
+// least one turn per 10 ms of the run (inline it managed one per 40-300 ms).
+// run_tests.sh runs this with SLANG_WORKERS=2.
 import "crypto";
 import "encoding";
 import "net";
@@ -67,17 +70,19 @@ guard let _p = probe else let e = err_of(probe) {
     exit(1);
 }
 let r = Run { lock: make_mutex(), done: 0, ticks: 0, bad: 0 };
+let t0 = time.mono();
 let t = spawn ticker(r);
 for i in 0..hashes() {
     spawn hash_one(r);
 }
 let _w = join_wait(t);
+let elapsed_ms = ((time.mono() - t0) as int) / 1000000;
 if r.bad > 0 {
     println("FAIL " + to_str(r.bad) + " hashes wrong");
     exit(1);
 }
-if r.ticks < 100 {
-    println("FAIL ticker starved: " + to_str(r.ticks) + " ticks during " + to_str(hashes()) + " hashes");
+if r.ticks * 10 < elapsed_ms {
+    println("FAIL ticker starved: " + to_str(r.ticks) + " ticks in " + to_str(elapsed_ms) + " ms of " + to_str(hashes()) + " hashes");
     exit(1);
 }
 println("kdf offload ok");

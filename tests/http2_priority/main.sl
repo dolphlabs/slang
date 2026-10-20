@@ -21,30 +21,43 @@ fn lim() -> http2.Limits {
     };
 }
 
+// The writer drains what is already queued after its channel closes, so
+// the fd is closed only once it has finished. Closing first let a queued
+// SETTINGS frame land on the next case's connection, which by then had
+// the same fd number: "bad connection preface" on the next probe.
+fn run_writer(fd: i32, wch: chan[http2.WMsg], write_ns: int, done: chan[int]) {
+    http2.writer_task(http2.transport_fd(fd), wch, write_ns);
+    chan_send(done, 1);
+}
+
+fn finish(fd: i32, wch: chan[http2.WMsg], done: chan[int]) {
+    chan_close(wch);
+    let _d = chan_recv(done);
+    net.close(fd);
+}
+
 fn serve(fd: i32, out: chan[str]) {
     let cn = http2.conn_new();
     let rd = http2.reader_new();
     let wch: chan[http2.WMsg] = make_chan(8);
+    let done: chan[int] = make_chan(1);
     let l = lim();
-    spawn http2.writer_task(http2.transport_fd(fd), wch, l.write);
+    spawn run_writer(fd, wch, l.write, done);
 
     let pr = http2.accept_preface(rd, http2.transport_fd(fd), wch,
                                   until_of(time.mono() + l.handshake));
     guard let _p = pr else let e = err_of(pr) {
-        chan_close(wch);
-        net.close(fd);
+        finish(fd, wch, done);
         chan_send(out, "preface:" + e);
         return;
     }
     let rr = http2.read_request(cn, rd, http2.transport_fd(fd), wch, l);
     guard let req = rr else let e = err_of(rr) {
-        chan_close(wch);
-        net.close(fd);
+        finish(fd, wch, done);
         chan_send(out, e);
         return;
     }
-    chan_close(wch);
-    net.close(fd);
+    finish(fd, wch, done);
     chan_send(out, "served " + req.path);
 }
 

@@ -256,45 +256,30 @@ static sl_res_rawptr_str *sl_tls_client_on_fd(int fd, const char *host,
     return sl_net_ok_rawptr(ssl);
 }
 
-static sl_res_rawptr_str *sl_net_tls_dial(const char *host, int port,
-                                          void *ctxv) {
+/* tls_dial and tls_dial_until: connect as net.dial does, trying every
+ * resolved address in turn, then handshake and verify. The deadline, when
+ * set, covers the lookup, the connect and the handshake together; an
+ * unreachable host used to hold tls_dial for the OS connect timeout. */
+static sl_res_rawptr_str *sl_net_tls_dial_u(const char *host, int port,
+                                            void *ctxv, sl_until u) {
     sl_rt_need_fat_stack();
-    char portstr[16];
-    sl_rt_preempt_disable();
-    snprintf(portstr, sizeof(portstr), "%d", port);
-    sl_rt_preempt_enable();
-    struct addrinfo *res = NULL;
-    int rc = sl_dns_lookup(host, portstr, &res);
-    if (rc != 0 || !res) return sl_net_err_rawptr(gai_strerror(rc));
-    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) {
-        freeaddrinfo(res);
-        return sl_net_err_rawptr(strerror(errno));
-    }
-    sl_net_set_nonblocking(fd);
-    int cres = connect(fd, res->ai_addr, res->ai_addrlen);
-    freeaddrinfo(res);
-    if (cres != 0 && errno != EINPROGRESS) {
-        int e = errno;
-        close(fd);
-        return sl_net_err_rawptr(strerror(e));
-    }
-    if (cres != 0) {
-        if (sl_reactor_wait(fd, SL_REACTOR_WRITE, 1) < 0) {
-            close(fd);
-            return sl_net_err_rawptr("interrupted");
-        }
-        int so_err = 0;
-        socklen_t slen = sizeof(so_err);
-        getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_err, &slen);
-        if (so_err != 0) {
-            close(fd);
-            return sl_net_err_rawptr(strerror(so_err));
-        }
-    }
-    sl_res_rawptr_str *r = sl_tls_client_on_fd(fd, host, ctxv, 0);
+    sl_res_i32_str *dr = sl_net_dial_u(host, port, u);
+    if (!dr->ok)
+        return sl_net_err_rawptr(dr->e);
+    int fd = (int)dr->v;
+    sl_res_rawptr_str *r = sl_tls_client_on_fd(fd, host, ctxv, u);
     if (!r->ok) close(fd);
     return r;
+}
+
+static sl_res_rawptr_str *sl_net_tls_dial(const char *host, int port,
+                                          void *ctxv) {
+    return sl_net_tls_dial_u(host, port, ctxv, 0);
+}
+
+static sl_res_rawptr_str *sl_net_tls_dial_until(const char *host, int port,
+                                                void *ctxv, sl_until u) {
+    return sl_net_tls_dial_u(host, port, ctxv, u);
 }
 
 /* STARTTLS: a TLS client handshake on a socket that is already connected

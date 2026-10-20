@@ -43,6 +43,9 @@ const NatSig NET_SIGS[] = {
     {"net", "tls_accept", 2, {NA_INT, NA_RAWPTR}, "result[rawptr,str]", 1},
     {"net", "tls_dial", 3, {NA_STR, NA_INT, NA_RAWPTR}, "result[rawptr,str]",
      1},
+    /* tls_dial with one deadline over lookup, connect and handshake */
+    {"net", "tls_dial_until", 4, {NA_STR, NA_INT, NA_RAWPTR, NA_UNTIL},
+     "result[rawptr,str]", 1},
     /* STARTTLS on an fd from net.dial; see sl_net_tls_upgrade */
     {"net", "tls_upgrade", 3, {NA_INT, NA_STR, NA_RAWPTR},
      "result[rawptr,str]", 1},

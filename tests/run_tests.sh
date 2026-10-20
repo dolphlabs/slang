@@ -974,11 +974,12 @@ fi
 # On two workers the hashes go to kdf threads, so a ticker task keeps its
 # pace while 64 of them are in flight. Derived inline it got ~5 turns.
 echo "--- argon2id kdf offload (SLANG_WORKERS=2) ---"
-if ko_out=$(SLANG_WORKERS=2 ./slangc tests/crypto_offload/main.sl --run 2>&1) &&
+# stdout only: GCC's LTO prints notes on stderr while compiling.
+if ko_out=$(SLANG_WORKERS=2 ./slangc tests/crypto_offload/main.sl --run 2>/tmp/sl_kdf_offload.err) &&
    [ "$ko_out" = "kdf offload ok" ]; then
     echo "PASS argon2id kdf offload"
 else
-    echo "FAIL argon2id kdf offload: $ko_out"
+    echo "FAIL argon2id kdf offload: $ko_out $(tail -3 /tmp/sl_kdf_offload.err)"
     fail=1
 fi
 

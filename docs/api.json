@@ -2899,6 +2899,18 @@
           "sig": "net.tls_dial(str, int, rawptr) -> result[rawptr,str]"
         },
         {
+          "name": "tls_dial_until",
+          "params": [
+            "str",
+            "int",
+            "rawptr",
+            "until"
+          ],
+          "ret": "result[rawptr,str]",
+          "tls": true,
+          "sig": "net.tls_dial_until(str, int, rawptr, until) -> result[rawptr,str]"
+        },
+        {
           "name": "tls_upgrade",
           "params": [
             "int",

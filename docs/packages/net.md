@@ -200,6 +200,11 @@ anything a man in the middle queued behind it would otherwise be trusted
 as if it had arrived encrypted (libpq's CVE-2021-23222).
 `tls_upgrade_until(fd, host, ctx, deadline)` bounds the handshake; a
 server that stops answering part way through gives `"timeout"`.
+`tls_dial_until(host, port, ctx, deadline)` is `tls_dial` with one
+deadline over the lookup, the connect and the handshake: an unreachable
+host gives `"timeout"` at the deadline instead of after the OS connect
+timeout, which is over a minute on macOS. Like `dial`, both try every
+address the name resolves to.
 
 **TLS on a `link`**: `c.tls_accept(ctx, deadline)` runs the server
 handshake on a link you already accepted, and from then on the link's
@@ -301,6 +306,8 @@ the session, one OpenSSL call at a time. A link splits once.
 ### `net.tls_accept(int, rawptr) -> result[rawptr,str]`
 
 ### `net.tls_dial(str, int, rawptr) -> result[rawptr,str]`
+
+### `net.tls_dial_until(str, int, rawptr, until) -> result[rawptr,str]`
 
 ### `net.tls_upgrade(int, str, rawptr) -> result[rawptr,str]`
 
