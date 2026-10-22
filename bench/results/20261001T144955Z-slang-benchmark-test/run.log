@@ -1,0 +1,229 @@
+14:49:55 run 20261001T144955Z-slang-benchmark-test -> /root/slang/bench/results/20261001T144955Z-slang-benchmark-test
+14:49:55 cpus: server=0-3 (4) loadgen=4-5 (2) db=6-7
+14:49:55 building: slang go rust java node
+14:50:21 built: slang go rust java node
+14:50:21 seeding database: users=1000000 orders=20000000 (this takes a while at full scale)
+Time: 1993.277 ms (00:01.993)
+Time: 40400.732 ms (00:40.401)
+  setval  
+----------
+ 20000000
+(1 row)
+
+Time: 0.608 ms
+Time: 11920.761 ms (00:11.921)
+Time: 163.691 ms
+Time: 172.365 ms
+psql:bench/suite/db/seed.sql:33: NOTICE:  relation "bench_meta" already exists, skipping
+Time: 0.309 ms
+Time: 0.378 ms
+14:51:16 generating /root/slang/bench/.data/batch_100000000_5000000.csv
+14:51:33 conformance api/slang
+14:51:38 correctness batch/slang
+14:51:39 conformance api/go
+14:51:42 correctness batch/go
+14:51:42 conformance api/rust
+14:51:45 correctness batch/rust
+14:51:45 conformance api/java
+14:51:49 correctness batch/java
+14:51:49 conformance api/node
+14:51:52 correctness batch/node
+14:51:54 light http go round 1 c=50
+14:52:09 light http go round 1 c=200
+14:52:26 light http rust round 1 c=50
+14:52:41 light http rust round 1 c=200
+14:52:58 light http java round 1 c=50
+14:53:13 light http java round 1 c=200
+14:53:30 light http node round 1 c=50
+14:53:45 light http node round 1 c=200
+14:54:01 light http slang round 1 c=50
+14:54:16 light http slang round 1 c=200
+14:54:33 light http rust round 2 c=50
+14:54:48 light http rust round 2 c=200
+14:55:05 light http java round 2 c=50
+14:55:20 light http java round 2 c=200
+14:55:37 light http node round 2 c=50
+14:55:52 light http node round 2 c=200
+14:56:08 light http slang round 2 c=50
+14:56:23 light http slang round 2 c=200
+14:56:40 light http go round 2 c=50
+14:56:55 light http go round 2 c=200
+14:57:11 light http java round 3 c=50
+14:57:26 light http java round 3 c=200
+14:57:43 light http node round 3 c=50
+14:57:58 light http node round 3 c=200
+14:58:15 light http slang round 3 c=50
+14:58:30 light http slang round 3 c=200
+14:58:47 light http go round 3 c=50
+14:59:02 light http go round 3 c=200
+14:59:18 light http rust round 3 c=50
+14:59:33 light http rust round 3 c=200
+14:59:50 light compute go round 1
+14:59:52 light compute rust round 1
+14:59:53 light compute java round 1
+14:59:55 light compute node round 1
+14:59:57 light compute slang round 1
+14:59:59 light compute rust round 2
+15:00:01 light compute java round 2
+15:00:03 light compute node round 2
+15:00:05 light compute slang round 2
+15:00:07 light compute go round 2
+15:00:09 light compute java round 3
+15:00:11 light compute node round 3
+15:00:13 light compute slang round 3
+15:00:15 light compute go round 3
+15:00:17 light compute rust round 3
+15:00:19 heavy api go round 1 warm-up 10s
+15:00:30 heavy api go round 1 mix c=64
+15:00:50 heavy api go round 1 mix c=512
+15:01:11 heavy api go round 1 point c=64
+15:01:31 heavy api go round 1 point c=512
+15:01:52 heavy api go round 1 quote c=64
+15:02:12 heavy api go round 1 quote c=512
+15:02:32 heavy api go round 1 mix fixed rate 2000/s
+15:02:52 heavy api go round 1 mix fixed rate 10000/s
+15:03:15 heavy api rust round 1 warm-up 10s
+15:03:25 heavy api rust round 1 mix c=64
+15:03:46 heavy api rust round 1 mix c=512
+15:04:06 heavy api rust round 1 point c=64
+15:04:27 heavy api rust round 1 point c=512
+15:04:47 heavy api rust round 1 quote c=64
+15:05:08 heavy api rust round 1 quote c=512
+15:05:29 heavy api rust round 1 mix fixed rate 2000/s
+15:05:49 heavy api rust round 1 mix fixed rate 10000/s
+15:06:12 heavy api java round 1 warm-up 10s
+15:06:22 heavy api java round 1 mix c=64
+15:06:43 heavy api java round 1 mix c=512
+15:07:03 heavy api java round 1 point c=64
+15:07:24 heavy api java round 1 point c=512
+15:07:44 heavy api java round 1 quote c=64
+15:08:05 heavy api java round 1 quote c=512
+15:08:25 heavy api java round 1 mix fixed rate 2000/s
+15:08:45 heavy api java round 1 mix fixed rate 10000/s
+15:09:09 heavy api node round 1 warm-up 10s
+15:09:19 heavy api node round 1 mix c=64
+15:09:39 heavy api node round 1 mix c=512
+15:10:00 heavy api node round 1 point c=64
+15:10:21 heavy api node round 1 point c=512
+15:10:42 heavy api node round 1 quote c=64
+15:11:02 heavy api node round 1 quote c=512
+15:11:22 heavy api node round 1 mix fixed rate 2000/s
+15:11:43 heavy api node round 1 mix fixed rate 10000/s
+15:12:05 heavy api slang round 1 warm-up 10s
+15:12:15 heavy api slang round 1 mix c=64
+15:12:36 heavy api slang round 1 mix c=512
+15:12:56 heavy api slang round 1 point c=64
+15:13:16 heavy api slang round 1 point c=512
+15:13:37 heavy api slang round 1 quote c=64
+15:13:57 heavy api slang round 1 quote c=512
+15:14:18 heavy api slang round 1 mix fixed rate 2000/s
+15:14:38 heavy api slang round 1 mix fixed rate 10000/s
+15:15:00 heavy api rust round 2 warm-up 10s
+15:15:10 heavy api rust round 2 mix c=64
+15:15:31 heavy api rust round 2 mix c=512
+15:15:51 heavy api rust round 2 point c=64
+15:16:12 heavy api rust round 2 point c=512
+15:16:32 heavy api rust round 2 quote c=64
+15:16:53 heavy api rust round 2 quote c=512
+15:17:13 heavy api rust round 2 mix fixed rate 2000/s
+15:17:34 heavy api rust round 2 mix fixed rate 10000/s
+15:17:57 heavy api java round 2 warm-up 10s
+15:18:07 heavy api java round 2 mix c=64
+15:18:28 heavy api java round 2 mix c=512
+15:18:48 heavy api java round 2 point c=64
+15:19:09 heavy api java round 2 point c=512
+15:19:29 heavy api java round 2 quote c=64
+15:19:50 heavy api java round 2 quote c=512
+15:20:11 heavy api java round 2 mix fixed rate 2000/s
+15:20:31 heavy api java round 2 mix fixed rate 10000/s
+15:20:54 heavy api node round 2 warm-up 10s
+15:21:05 heavy api node round 2 mix c=64
+15:21:25 heavy api node round 2 mix c=512
+15:21:45 heavy api node round 2 point c=64
+15:22:06 heavy api node round 2 point c=512
+15:22:26 heavy api node round 2 quote c=64
+15:22:47 heavy api node round 2 quote c=512
+15:23:08 heavy api node round 2 mix fixed rate 2000/s
+15:23:28 heavy api node round 2 mix fixed rate 10000/s
+15:23:51 heavy api slang round 2 warm-up 10s
+15:24:01 heavy api slang round 2 mix c=64
+15:24:21 heavy api slang round 2 mix c=512
+15:24:42 heavy api slang round 2 point c=64
+15:25:02 heavy api slang round 2 point c=512
+15:25:22 heavy api slang round 2 quote c=64
+15:25:43 heavy api slang round 2 quote c=512
+15:26:03 heavy api slang round 2 mix fixed rate 2000/s
+15:26:23 heavy api slang round 2 mix fixed rate 10000/s
+15:26:45 heavy api go round 2 warm-up 10s
+15:26:55 heavy api go round 2 mix c=64
+15:27:16 heavy api go round 2 mix c=512
+15:27:36 heavy api go round 2 point c=64
+15:27:57 heavy api go round 2 point c=512
+15:28:18 heavy api go round 2 quote c=64
+15:28:38 heavy api go round 2 quote c=512
+15:28:58 heavy api go round 2 mix fixed rate 2000/s
+15:29:19 heavy api go round 2 mix fixed rate 10000/s
+15:29:42 heavy api java round 3 warm-up 10s
+15:29:52 heavy api java round 3 mix c=64
+15:30:12 heavy api java round 3 mix c=512
+15:30:33 heavy api java round 3 point c=64
+15:30:53 heavy api java round 3 point c=512
+15:31:14 heavy api java round 3 quote c=64
+15:31:34 heavy api java round 3 quote c=512
+15:31:55 heavy api java round 3 mix fixed rate 2000/s
+15:32:15 heavy api java round 3 mix fixed rate 10000/s
+15:32:39 heavy api node round 3 warm-up 10s
+15:32:49 heavy api node round 3 mix c=64
+15:33:10 heavy api node round 3 mix c=512
+15:33:30 heavy api node round 3 point c=64
+15:33:50 heavy api node round 3 point c=512
+15:34:11 heavy api node round 3 quote c=64
+15:34:31 heavy api node round 3 quote c=512
+15:34:52 heavy api node round 3 mix fixed rate 2000/s
+15:35:12 heavy api node round 3 mix fixed rate 10000/s
+15:35:34 heavy api slang round 3 warm-up 10s
+15:35:44 heavy api slang round 3 mix c=64
+15:36:05 heavy api slang round 3 mix c=512
+15:36:25 heavy api slang round 3 point c=64
+15:36:46 heavy api slang round 3 point c=512
+15:37:06 heavy api slang round 3 quote c=64
+15:37:26 heavy api slang round 3 quote c=512
+15:37:47 heavy api slang round 3 mix fixed rate 2000/s
+15:38:07 heavy api slang round 3 mix fixed rate 10000/s
+15:38:29 heavy api go round 3 warm-up 10s
+15:38:39 heavy api go round 3 mix c=64
+15:39:00 heavy api go round 3 mix c=512
+15:39:20 heavy api go round 3 point c=64
+15:39:41 heavy api go round 3 point c=512
+15:40:02 heavy api go round 3 quote c=64
+15:40:22 heavy api go round 3 quote c=512
+15:40:42 heavy api go round 3 mix fixed rate 2000/s
+15:41:02 heavy api go round 3 mix fixed rate 10000/s
+15:41:25 heavy api rust round 3 warm-up 10s
+15:41:35 heavy api rust round 3 mix c=64
+15:41:56 heavy api rust round 3 mix c=512
+15:42:16 heavy api rust round 3 point c=64
+15:42:37 heavy api rust round 3 point c=512
+15:42:58 heavy api rust round 3 quote c=64
+15:43:18 heavy api rust round 3 quote c=512
+15:43:39 heavy api rust round 3 mix fixed rate 2000/s
+15:43:59 heavy api rust round 3 mix fixed rate 10000/s
+15:44:20 warming the page cache with /root/slang/bench/.data/batch_100000000_5000000.csv
+15:44:21 heavy batch go round 1
+15:44:33 heavy batch rust round 1
+15:44:40 heavy batch java round 1
+15:44:48 heavy batch node round 1
+15:45:27 heavy batch slang round 1
+15:45:55 heavy batch rust round 2
+15:46:02 heavy batch java round 2
+15:46:10 heavy batch node round 2
+15:46:48 heavy batch slang round 2
+15:47:16 heavy batch go round 2
+15:47:28 heavy batch java round 3
+15:47:37 heavy batch node round 3
+15:48:15 heavy batch slang round 3
+15:48:44 heavy batch go round 3
+15:48:56 heavy batch rust round 3
+15:49:04 measurements done; writing results.json and summary.md
+wrote /root/slang/bench/results/20261001T144955Z-slang-benchmark-test/results.json and summary.md (180 measurements)
+15:49:04 done: /root/slang/bench/results/20261001T144955Z-slang-benchmark-test

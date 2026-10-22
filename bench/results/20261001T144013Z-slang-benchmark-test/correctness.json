@@ -1,0 +1,46 @@
+{
+  "api": {
+    "slang": {
+      "status": "pass",
+      "detail": ""
+    },
+    "go": {
+      "status": "pass",
+      "detail": ""
+    },
+    "rust": {
+      "status": "pass",
+      "detail": ""
+    },
+    "java": {
+      "status": "pass",
+      "detail": ""
+    },
+    "node": {
+      "status": "pass",
+      "detail": ""
+    }
+  },
+  "batch": {
+    "slang": {
+      "status": "pass",
+      "detail": ""
+    },
+    "go": {
+      "status": "pass",
+      "detail": ""
+    },
+    "rust": {
+      "status": "pass",
+      "detail": ""
+    },
+    "java": {
+      "status": "pass",
+      "detail": ""
+    },
+    "node": {
+      "status": "pass",
+      "detail": ""
+    }
+  }
+}
