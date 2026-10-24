@@ -316,8 +316,27 @@ honors blob filtering. See
   returned integer error codes (`result[T, int]`), 2.4x faster; the
   graphql runtime's parser and validators still return `result[T, str]`
   per token and field. Packages can dodge it with integer codes, at the
-  cost of an idiom the language otherwise recommends. Not a decision:
-  the deferral stands until the owner revisits it.
+  cost of an idiom the language otherwise recommends.
+- [x] **Value `result` (2026-10-24, perf/value-result; the owner reversed
+  the deferral).** Every result is a C struct `{ ok, v, e }` held by
+  value. Its pointers are rooted (append_gc_root_expr, sequence_one's
+  ambient_push_value_roots), traced (struct and opt tracers, spawn
+  argument structs, emit_value_marks) and barriered like a value
+  struct's; constructors zero the unused side. ok()/err() allocate
+  nothing and are no safepoint, so a function returning them can be a
+  leaf. Natives still return boxed results, copied out at the call;
+  to_int, enum from_int/from_str, join_wait, json.decode and pg.rows_as
+  build values directly. Fixed on the way, for value structs as much as
+  results: `??`, spawn arguments, spawn trampolines and select rooted or
+  traced only single-pointer values, and a value struct nested in another
+  was pushed as one pointer. Measured, ABBA x4 medians vs dev 35ac7ad
+  (Intel Mac): graphql prepared 38.0 -> 33.0 us (486 -> 396 allocations),
+  grpc's original result[T, str] codec decode 10.3 -> 5.9 us (212 -> 67),
+  encode 10.1 -> 7.85 us (125 -> 49); 1M fallible calls 1,000,005 -> 2
+  allocations (tests/result_no_alloc). tests/value_results covers every
+  place a result can live under the GC stress lists.
+- [ ] Value `opt`: next, the same way (some() of a GC payload still
+  allocates).
 - [x] **Brackets reuse the function's task (2026-10-24,
   perf/cache-current-task).** Every emitted bracket read the current task
   through `sl_rt_cur()` twice, at enter and exit: on Darwin a call into
