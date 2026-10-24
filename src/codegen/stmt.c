@@ -225,9 +225,12 @@ static void emit_leaf_poll(CG *cg, void *backedge_live_set, int bid,
     emit_line(cg, "if (sl_gc_poll_needed()) {");
     cg->indent++;
     emit_line(cg, "sl_safepoint _sl_lp%d;", eid);
-    emit_line(cg, "sl_rt_safepoint_enter_s(SL_SELF(), &_sl_lp%d, _sl_lp%d_roots, %d);",
-              eid, eid, n);
-    emit_line(cg, "sl_rt_safepoint_exit_s(SL_SELF());");
+    /* The hoisted bracket's task, not SL_SELF(): its lazy store would
+       make _sl_self loop-variant, and keeping it live cost a tight copy
+       loop 27% (1.91 -> 2.43 ms per MB). */
+    emit_line(cg, "sl_rt_safepoint_enter_s(_sl_lb_task%d, &_sl_lp%d, _sl_lp%d_roots, %d);",
+              bid, eid, eid, n);
+    emit_line(cg, "sl_rt_safepoint_exit_s(_sl_lb_task%d);", bid);
     cg->indent--;
     emit_line(cg, "} else if (__builtin_expect((++_sl_lp_ec%d & "
                   "SL_PREEMPT_SAMPLE_MASK) == 0, 0)) {",
