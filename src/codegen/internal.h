@@ -470,6 +470,13 @@ struct CG {
      * exactly like cg->expect/cg->cur_ret already are. */
     int loop_depth;
     int cur_loop_has_bp;
+    /* The loop whose leaf eligibility stmt.c is deciding, so a `+` can
+     * tell numeric operands from a concat without infer_type: the body
+     * names every binding that could shadow an outer variable, and a
+     * range loop's own variable (not yet declared then) is an int. Both
+     * NULL outside that check. */
+    Block *leaf_body;
+    const char *leaf_range_var;
     /* break/continue targets: the nesting of loops (kind 0) and
      * switches (kind 1) currently open in codegen. ST_BREAK targets
      * the innermost entry -- a loop entry emits the existing C

@@ -1254,18 +1254,23 @@ static inline void sl_rt_poll_yield(sl_task *t) {
  * read from here on. wrap_safepoint (core.c) never writes back
  * through &_sl_spN/_sl_spN_roots after this call either, confirmed
  * directly before wiring this in. */
-static inline void sl_rt_safepoint_enter(sl_safepoint *sp, void **roots,
-                                         int nroots) {
-    sl_task *t = sl_rt_cur(); /* see sl_rt_safepoint_exit just below --
-        same reason, same hazard, and reading once here also removes the
-        second TLS round-trip this function used to make. */
+static inline void sl_rt_safepoint_enter_s(sl_task *t, sl_safepoint *sp,
+                                           void **roots, int nroots) {
     sp->roots = roots;
     sp->nroots = nroots;
     sp->prev = t->safepoint_top;
     t->safepoint_top = sp;
-    sl_rt_maybe_yield_t(t); /* reuse the task we just resolved -- see
+    sl_rt_maybe_yield_t(t); /* reuse the task the caller resolved -- see
         sl_rt_maybe_yield_t's own comment for why this halves the
         dyld TLS round-trips a bracketed safepoint makes. */
+}
+
+static inline void sl_rt_safepoint_enter(sl_safepoint *sp, void **roots,
+                                         int nroots) {
+    /* see sl_rt_safepoint_exit just below -- same reason, same hazard,
+       and reading once here also removes the second TLS round-trip this
+       function used to make. */
+    sl_rt_safepoint_enter_s(sl_rt_cur(), sp, roots, nroots);
 }
 
 /* One sl_rt_cur() read, then the whole pop through that one pointer.
@@ -1283,10 +1288,26 @@ static inline void sl_rt_safepoint_enter(sl_safepoint *sp, void **roots,
  * sl_gc_collect walking a queued task's chain through a dangling
  * sl_safepoint*. Reading once fixes both -- t is a plain sl_task*,
  * which stays correct across a migration. */
-static inline void sl_rt_safepoint_exit(void) {
-    sl_task *t = sl_rt_cur();
+static inline void sl_rt_safepoint_exit_s(sl_task *t) {
     t->safepoint_top = t->safepoint_top->prev;
 }
+
+static inline void sl_rt_safepoint_exit(void) {
+    sl_rt_safepoint_exit_s(sl_rt_cur());
+}
+
+/* The current task of a generated slang function, read through
+ * sl_rt_cur() at most once per call and kept in the function's own
+ * `_sl_self` (codegen declares it NULL at entry). Every bracket used to
+ * read it again, twice -- enter and exit -- and on Darwin each read is a
+ * call into dyld: about a quarter of a small GraphQL request's time on
+ * an Intel Mac, a fifth to a third of a protobuf codec's. A function
+ * runs start to finish on one task, whatever worker resumes it, and the
+ * sl_task is malloc'd apart from the stack it may grow, so the pointer
+ * read once stays right for the whole call (the same reason the two
+ * functions above read it once). Lazy, so a function whose path takes
+ * no bracket -- a fast path, an early return -- pays no read at all. */
+#define SL_SELF() (_sl_self ? _sl_self : (_sl_self = sl_rt_cur()))
 
 /* Tier 11 third slice: a panicking spawned task no longer ends its
  * OS thread (pthread_exit) -- under the worker pool, that thread is

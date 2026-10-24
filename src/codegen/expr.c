@@ -612,9 +612,9 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *inner = xasprintf(
             "({ %s _sl_cv%d; %s *_sl_co%d = (%s *)sl_gc_alloc(sizeof(*_sl_co%d), %s); "
             "void *_sl_rcv%d_roots[] = { (void *)_sl_co%d }; "
-            "sl_safepoint _sl_rcv%d; sl_rt_safepoint_enter(&_sl_rcv%d, _sl_rcv%d_roots, 1); "
+            "sl_safepoint _sl_rcv%d; sl_rt_safepoint_enter_s(SL_SELF(), &_sl_rcv%d, _sl_rcv%d_roots, 1); "
             "int _sl_rcvok%d = sl_chan_recv(%s, &_sl_cv%d); "
-            "sl_rt_safepoint_exit(); "
+            "sl_rt_safepoint_exit_s(SL_SELF()); "
             "if (_sl_rcvok%d) { _sl_co%d->has = true; "
             "_sl_co%d->v = _sl_cv%d; } else { _sl_co%d->has = false; } "
             "_sl_co%d; })",
@@ -655,13 +655,13 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *inner = xasprintf(
             "({ %s _sl_jv%d; %s _sl_jr%d = (%s)sl_gc_alloc(sizeof(*_sl_jr%d), %s); "
             "void *_sl_jwr%d_roots[] = { (void *)_sl_jr%d, NULL }; "
-            "sl_safepoint _sl_jwr%d; sl_rt_safepoint_enter(&_sl_jwr%d, _sl_jwr%d_roots, 2); "
+            "sl_safepoint _sl_jwr%d; sl_rt_safepoint_enter_s(SL_SELF(), &_sl_jwr%d, _sl_jwr%d_roots, 2); "
             "sl_join *_sl_jh%d = %s; "
             "_sl_jwr%d_roots[1] = (void *)_sl_jh%d; "
             "int _sl_jok%d = sl_join_wait(_sl_jh%d, &_sl_jv%d); "
             "if (_sl_jok%d) { _sl_jr%d->ok = true; _sl_jr%d->v = _sl_jv%d; } "
             "else { _sl_jr%d->ok = false; _sl_jr%d->e = sl_join_err(_sl_jh%d); } "
-            "sl_rt_safepoint_exit(); "
+            "sl_rt_safepoint_exit_s(SL_SELF()); "
             "_sl_jr%d; })",
             ec, id, rct, id, rct, id, trace,
             id, id,

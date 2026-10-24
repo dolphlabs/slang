@@ -761,7 +761,7 @@ for name in gc_ctor_payload gc_map_put pg_rows_as postgres http_client_pool http
             spawn_isolation gc_stress maps json json_int_exact flags method_recv \
             method_recv_gc indirect_callee generics_structs generics_json generics_infer \
             generics_pkg gc_nested_literal generics_methods \
-            generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry loop_leaf_poll own_roots switch escape_roots \
+            generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry loop_leaf_poll loop_leaf_plus safepoint_task_once own_roots switch escape_roots \
             http_read_wire bytes_empty_literal gc_minor_barriers net_dns_records map_delete if_let \
             literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions json_parity json_utf8 json_decode_budget \
             bytes json_deep_nesting gc_container_frontier gc_promotion_budget gc_chan_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks; do
@@ -793,7 +793,7 @@ for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put e
             gc_nested_literal gc_stress gc_stat spawn_isolation maps pg_rows_as json \
             json_int_exact flags method_recv method_recv_gc indirect_callee \
             http_read_wire bytes_empty_literal gc_minor_barriers net_dns_records map_delete if_let \
-            literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions json_parity json_utf8 json_decode_budget \
+            literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions loop_leaf_plus safepoint_task_once json_parity json_utf8 json_decode_budget \
             bytes json_deep_nesting gc_container_frontier gc_promotion_budget gc_chan_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks; do
     out="/tmp/sl_nursery_${name}.out"
     if ! SLANG_GC_NURSERY_KB=16 ./slangc "tests/$name/main.sl" --run \
@@ -821,7 +821,7 @@ done
 echo "--- minor collections verified (SLANG_GC_VERIFY_MINOR, 16KB nursery) ---"
 vm_bad=0
 for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc_map_put encoding_f64 crypto if_let \
-            literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions \
+            literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions loop_leaf_plus safepoint_task_once \
             gc_nested_literal gc_nursery_barrier gc_nursery_promotion net_dns_records \
             spawn_isolation select maps pg_rows_as json json_parity json_utf8 json_decode_budget \
             bytes json_deep_nesting redis http_read_wire http_client_pool http2_flood \
@@ -1109,8 +1109,8 @@ rm -f "$sjm_c" "$sjm_c.gen.c"
 # bracket, an allocating native next to them keeps its own.
 lnc_c="/tmp/sl_leaf_native_calls"
 if ./slangc tests/leaf_native_calls/main.sl --keep-c -o "$lnc_c" >/dev/null 2>&1; then
-    lnc_leaf=$(grep -oE 'sl_rt_safepoint_enter\([^)]*\); [^;]*sl_strings_(has_prefix|has_suffix|contains|count|find|rfind|find_field)\(' "$lnc_c.gen.c" | wc -l | tr -d ' ')
-    lnc_alloc=$(grep -oE 'sl_rt_safepoint_enter\([^)]*\); [^;]*sl_strings_to_upper\(' "$lnc_c.gen.c" | wc -l | tr -d ' ')
+    lnc_leaf=$(grep -oE 'sl_rt_safepoint_enter_s\(SL_SELF\(\), [^)]*\); [^;]*sl_strings_(has_prefix|has_suffix|contains|count|find|rfind|find_field)\(' "$lnc_c.gen.c" | wc -l | tr -d ' ')
+    lnc_alloc=$(grep -oE 'sl_rt_safepoint_enter_s\(SL_SELF\(\), [^)]*\); [^;]*sl_strings_to_upper\(' "$lnc_c.gen.c" | wc -l | tr -d ' ')
     if [ "$lnc_leaf" = 0 ] && [ "$lnc_alloc" = 1 ]; then
         echo "PASS leaf native calls unbracketed (allocating one kept)"
     else
@@ -1128,10 +1128,10 @@ rm -f "$lnc_c" "$lnc_c.gen.c"
 # that concatenate, loop, call slang, allocate, guard or index keep theirs.
 lf_c="/tmp/sl_leaf_functions"
 if ./slangc tests/leaf_functions/main.sl --keep-c -o "$lf_c" >/dev/null 2>&1; then
-    lf_leaf=$(grep -oE 'sl_rt_safepoint_enter\([^)]*\); [^;]*sl_leaf_functions_put_str\(' "$lf_c.gen.c" | wc -l | tr -d ' ')
+    lf_leaf=$(grep -oE 'sl_rt_safepoint_enter_s\(SL_SELF\(\), [^)]*\); [^;]*sl_leaf_functions_put_str\(' "$lf_c.gen.c" | wc -l | tr -d ' ')
     lf_other=0
     for fn in concat loops calls_user allocs guards indexes; do
-        n=$(grep -oE "sl_rt_safepoint_enter\\([^)]*\\); [^;]*sl_leaf_functions_${fn}\\(" "$lf_c.gen.c" | wc -l | tr -d ' ')
+        n=$(grep -oE "sl_rt_safepoint_enter_s\\(SL_SELF\\(\\), [^)]*\\); [^;]*sl_leaf_functions_${fn}\\(" "$lf_c.gen.c" | wc -l | tr -d ' ')
         lf_other=$((lf_other + n))
     done
     if [ "$lf_leaf" = 0 ] && [ "$lf_other" = 6 ]; then
@@ -1145,6 +1145,51 @@ else
     fail=1
 fi
 rm -f "$lf_c" "$lf_c.gen.c"
+
+# A numeric `+` (i = i + 1, at + i, total + t[i]) no longer costs a loop
+# its cheap path: it takes the leaf poll, or the scalar sampled yield when
+# it carries no pointer, never a full per-iteration _sl_bp bracket. A str
+# concat, a name rebound inside the loop, or an index of a str list on
+# either side of `+` keeps that bracket.
+llp_c="/tmp/sl_loop_leaf_plus"
+if ./slangc tests/loop_leaf_plus/main.sl --keep-c -o "$llp_c" >/dev/null 2>&1; then
+    llp_bad=""
+    for fn in copy_at sum_compound range_sum varint_len float_acc concat_loop shadowed index_plus; do
+        n=$(awk "/^static .*sl_loop_leaf_plus_${fn}\\(.*\\{\$/,/^}/" "$llp_c.gen.c" | grep -c 'sl_safepoint _sl_bp[0-9]*;')
+        case "$fn" in
+            concat_loop|shadowed|index_plus) want=1 ;;
+            *) want=0 ;;
+        esac
+        [ "$n" = "$want" ] || llp_bad="$llp_bad $fn(brackets=$n)"
+    done
+    if [ -z "$llp_bad" ]; then
+        echo "PASS numeric + keeps loops off the per-iteration bracket (5 cheap, 3 bracketed)"
+    else
+        echo "FAIL numeric + loops:$llp_bad (want 0 for the first five, 1 for the rest)"
+        fail=1
+    fi
+else
+    echo "FAIL numeric + loops (compile)"
+    fail=1
+fi
+rm -f "$llp_c" "$llp_c.gen.c"
+# Every bracket codegen emits takes the function's task from SL_SELF(),
+# which reads the TLS slot at most once per call; none reads it itself.
+sto_c="/tmp/sl_safepoint_task_once"
+if ./slangc tests/safepoint_task_once/main.sl --keep-c -o "$sto_c" >/dev/null 2>&1; then
+    sto_own=$(grep -oE 'sl_rt_safepoint_(enter\(&_sl_|exit\(\))' "$sto_c.gen.c" | wc -l | tr -d ' ')
+    sto_self=$(grep -oE 'sl_rt_safepoint_enter_s\(SL_SELF\(\), &_sl_' "$sto_c.gen.c" | wc -l | tr -d ' ')
+    if [ "$sto_own" = 0 ] && [ "$sto_self" -gt 0 ]; then
+        echo "PASS brackets reuse the function's task ($sto_self brackets)"
+    else
+        echo "FAIL brackets reuse the function's task: $sto_own read their own, $sto_self use SL_SELF"
+        fail=1
+    fi
+else
+    echo "FAIL brackets reuse the function's task (compile)"
+    fail=1
+fi
+rm -f "$sto_c" "$sto_c.gen.c"
 
 # ---- worker count from a cgroup CPU quota (Linux) ---------------------------
 # The pool takes one worker per CPU the affinity mask allows, lowered to

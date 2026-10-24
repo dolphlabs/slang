@@ -1929,7 +1929,7 @@ char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
     }
     sb_append(&sp, "}; ");
     sb_append(&sp, xasprintf("sl_safepoint _sl_sp%d; "
-                             "sl_rt_safepoint_enter(&_sl_sp%d, _sl_sp%d_roots, %d); ",
+                             "sl_rt_safepoint_enter_s(SL_SELF(), &_sl_sp%d, _sl_sp%d_roots, %d); ",
                              sp_id, sp_id, sp_id, nroots));
 
     StrBuf block;
@@ -1940,12 +1940,12 @@ char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
     sb_append(&block, sp.data);
     if (result_ctype) {
         sb_append(&block,
-                  xasprintf("%s _sl_spres%d = %s; sl_rt_safepoint_exit(); "
+                  xasprintf("%s _sl_spres%d = %s; sl_rt_safepoint_exit_s(SL_SELF()); "
                             "_sl_spres%d; })",
                             result_ctype, sp_id, inner, sp_id));
     } else {
         sb_append(&block,
-                  xasprintf("%s; sl_rt_safepoint_exit(); })", inner));
+                  xasprintf("%s; sl_rt_safepoint_exit_s(SL_SELF()); })", inner));
     }
     return block.data;
 }
