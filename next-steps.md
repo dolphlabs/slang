@@ -446,6 +446,22 @@ loops neither poll nor get preempted); full GC verifier matrix
 (`SLANG_GC_VERIFY_MINOR=1 SLANG_GC_NURSERY_KB=16`, incl. forced async
 preemption, `missed=0`); linux-arm64 CI dispatch.
 
+- [x] **Numeric `+` no longer disqualifies a loop (2026-10-24,
+  perf/leaf-loop-numeric-plus).** As landed in #283, `expr_is_leaf` refused
+  every `+` (it might be a concat, and infer_type cannot run at the loop
+  head), so `i = i + 1` -- in nearly every scan loop -- kept the full
+  per-iteration bracket. `tests/loop_leaf_poll` itself took no poll: its
+  loops add. Now a `+` stays leaf when `expr_is_numeric` proves both sides
+  numbers from declared types alone: literals, arithmetic, `as` a numeric
+  type, `len`, a range loop's variable, `bytes[i]` and `[T][i]` with a
+  numeric `T`, and variables nothing in the loop rebinds (a rebinding could
+  shadow the outer variable with a str; `tests/loop_leaf_plus` checks that
+  case fails without the guard). Measured, ABBA x4, macOS Intel: a 1 MB
+  byte-copy loop 10.27 -> 1.90 ms (medians; ranges disjoint); the grpc
+  codec and graphql prepared path within noise (-2%, +1%), being call-
+  rather than loop-bound. Full `make test` 465/0, verifier and preemption
+  sections clean. Not yet dispatched on linux-arm64 CI.
+
 ## 7f. Cheaper young-object allocation (design note, approved 2026-10-01)
 
 **Problem.** Every object is its own `malloc` with an `sl_gc_obj` header,
