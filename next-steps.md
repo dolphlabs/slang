@@ -326,10 +326,14 @@ honors blob filtering. See
   `SL_SELF()`, which resolves it on first use and keeps it: a function runs
   on one task whichever worker resumes it, and the `sl_task` is malloc'd
   apart from the stack that may grow. Functions whose path takes no
-  bracket pay nothing. Measured, ABBA x4 medians, Intel Mac, ranges
-  disjoint: graphql prepared request 52.3 -> 38.7 us, grpc decode 5.25 ->
-  4.14 us, encode 6.55 -> 4.54 us. Linux reads TLS far more cheaply, so
-  expect less there: measure before quoting a Linux number.
+  bracket pay nothing. Measured against dev at f0aadb7, ABBA x4 medians,
+  Intel Mac: graphql prepared request 53.2 -> 39.7 us, grpc encode 6.63 ->
+  4.68 us, decode 5.26 -> 4.01 us; a 1 MB byte-copy leaf loop unchanged
+  (1.90 / 1.88 ms). A first cut also routed the leaf poll through
+  SL_SELF(), whose lazy store kept `_sl_self` live in the loop and cost
+  that copy loop 27%; the poll uses the hoisted bracket's task instead.
+  Linux reads TLS far more cheaply, so expect less there: measure before
+  quoting a Linux number.
   `tests/safepoint_task_once` (GC stress lists) checks no emitted bracket
   reads the task itself; it fails on the old compiler with 28 such reads.
 
