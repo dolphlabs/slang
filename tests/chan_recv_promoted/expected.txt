@@ -1,0 +1,2 @@
+chan_recv ok: true
+join_wait ok: true
