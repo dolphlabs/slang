@@ -307,6 +307,36 @@ honors blob filtering. See
   measurement showing the count, not the cost per allocation, still
   matters.
 
+  Evidence for revisiting (2026-10-24): the workloads measured above
+  parse in C (json) or make few fallible calls per request. Codecs
+  written in slang are the opposite. 1M calls returning
+  `result[int, str]` made 1,000,005 allocations; `result[int, int]` made
+  none. The grpc package's protobuf decoder made 212 allocations per
+  21-field message with `result[T, str]` primitives and 33 once they
+  returned integer error codes (`result[T, int]`), 2.4x faster; the
+  graphql runtime's parser and validators still return `result[T, str]`
+  per token and field. Packages can dodge it with integer codes, at the
+  cost of an idiom the language otherwise recommends. Not a decision:
+  the deferral stands until the owner revisits it.
+- [x] **Brackets reuse the function's task (2026-10-24,
+  perf/cache-current-task).** Every emitted bracket read the current task
+  through `sl_rt_cur()` twice, at enter and exit: on Darwin a call into
+  dyld each, about a quarter of a small GraphQL request's time. Generated
+  functions now declare `_sl_self = NULL` and every bracket takes
+  `SL_SELF()`, which resolves it on first use and keeps it: a function runs
+  on one task whichever worker resumes it, and the `sl_task` is malloc'd
+  apart from the stack that may grow. Functions whose path takes no
+  bracket pay nothing. Measured against dev at f0aadb7, ABBA x4 medians,
+  Intel Mac: graphql prepared request 53.2 -> 39.7 us, grpc encode 6.63 ->
+  4.68 us, decode 5.26 -> 4.01 us; a 1 MB byte-copy leaf loop unchanged
+  (1.90 / 1.88 ms). A first cut also routed the leaf poll through
+  SL_SELF(), whose lazy store kept `_sl_self` live in the loop and cost
+  that copy loop 27%; the poll uses the hoisted bracket's task instead.
+  Linux reads TLS far more cheaply, so expect less there: measure before
+  quoting a Linux number.
+  `tests/safepoint_task_once` (GC stress lists) checks no emitted bracket
+  reads the task itself; it fails on the old compiler with 28 such reads.
+
 ## 6. x86_64 trampoline calls C with a possibly misaligned stack
 
 - [x] **Done (2026-09-29).** The async-preemption trampoline (both x86_64

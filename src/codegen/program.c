@@ -1266,6 +1266,8 @@ void gen_function(CG *cg, Package *p, FuncDecl *f) {
                   rett, sym, params.data);
     else
         emit_line(cg, "static %s %s(%s) {", rett, sym, params.data);
+    /* The call's task, resolved by its first bracket (SL_SELF, sl_core.c). */
+    emit_line(cg, "    sl_task *_sl_self = NULL; (void)_sl_self;");
     for (int j = 0; j < f->nparams; j++)
         emit_drop_flag(cg, f->params[j]);
     gen_block(cg, f->body);
@@ -1402,6 +1404,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
                         "sl_main_task_entry__body(void *_sl_unused_arg) {"
                       : "static void sl_main_task_entry(void *_sl_unused_arg) {");
     emit_line(cg, "    (void)_sl_unused_arg;");
+    emit_line(cg, "    sl_task *_sl_self = NULL; (void)_sl_self;");
     gen_main_body_checked(cg, pkgs[main_index].prog->main_body);
     emit_scope_drops(cg, 0);
     emit_line(cg, "    exit(0); /* main()'s own sl_ctx_switch never returns */");
