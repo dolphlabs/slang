@@ -1655,11 +1655,10 @@ void gen_stmt(CG *cg, Stmt *s) {
             sb_append(&roots, nroots ? ", " : "");
             sb_append(&roots, xasprintf("(void *)_sl_selh%d_%d", id, i));
             nroots++;
-            if (type_is_gc_ptr(cg, elems[i])) {
-                sb_append(&roots,
-                          xasprintf(", (void *)_sl_selv%d_%d", id, i));
-                nroots++;
-            }
+            /* a value received by value (struct, result) roots each
+               pointer inside it */
+            append_gc_roots_of(cg, &roots, xasprintf("_sl_selv%d_%d", id, i),
+                               elems[i], &nroots);
         }
         emit_line(cg, "void *_sl_selr%d[] = { %s };", id, roots.data);
         emit_line(cg, "sl_safepoint _sl_selsp%d;", id);
@@ -1836,8 +1835,8 @@ void gen_stmt(CG *cg, Stmt *s) {
             char *a = gen_expr(cg, call->as.call.args[i]);
             a = maybe_cast(cg, sig->param_slang[i], at, a);
             emit_line(cg, "_sl_sa%d.a%d = %s;", id, i, a);
-            if (type_is_gc_ptr(cg, sig->param_slang[i]))
-                ambient_root_push(cg, xasprintf("_sl_sa%d.a%d", id, i));
+            ambient_push_value_roots(cg, xasprintf("_sl_sa%d.a%d", id, i),
+                                     sig->param_slang[i]);
             /* the temp a later argument's safepoint roots this one by:
              * see the EX_SPAWN arguments in expr.c */
             if (type_has_gc_roots(cg, sig->param_slang[i]))
