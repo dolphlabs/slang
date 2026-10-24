@@ -1,0 +1,11 @@
+single stream ok
+20 concurrent calls routed
+200000-octet response ok
+trailers ok
+timeout isolated
+limits and validation ok
+close ok
+malformed responses refused
+decoder table kept its size
+failed writer drains
+http2 client ok

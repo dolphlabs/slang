@@ -67,25 +67,29 @@ pub let W_BODY = 1;      // a response: HEADERS now, DATA as window allows
 pub let W_GRANT = 2;     // peer's WINDOW_UPDATE: `n` octets to `stream`
 pub let W_INITIAL = 3;   // peer's SETTINGS_INITIAL_WINDOW_SIZE is now `n`
 pub let W_MAXFRAME = 4;  // peer's SETTINGS_MAX_FRAME_SIZE is now `n`
+pub let W_CLOSE = 5;     // send `head` (a GOAWAY), then close the transport
 
 pub gc struct WMsg {
     kind: int,
     stream: int,
     n: int,
     head: bytes,   // W_BODY: the HEADERS frame; W_RAW: the whole thing
-    body: bytes,   // W_BODY: the response body, unframed
+    body: bytes,   // W_BODY: the message body, unframed
+    // W_BODY: a trailers HEADERS frame carrying END_STREAM, sent once the
+    // body is out (b"" for none: the last DATA frame ends the stream).
+    tail: bytes,
 }
 
 pub fn raw_msg(b: bytes) -> WMsg {
-    return WMsg { kind: W_RAW, stream: 0, n: 0, head: b, body: b"" };
+    return WMsg { kind: W_RAW, stream: 0, n: 0, head: b, body: b"", tail: b"" };
 }
 
 pub fn grant_msg(stream: int, n: int) -> WMsg {
-    return WMsg { kind: W_GRANT, stream: stream, n: n, head: b"", body: b"" };
+    return WMsg { kind: W_GRANT, stream: stream, n: n, head: b"", body: b"", tail: b"" };
 }
 
 fn setting_msg(kind: int, n: int) -> WMsg {
-    return WMsg { kind: kind, stream: 0, n: n, head: b"", body: b"" };
+    return WMsg { kind: kind, stream: 0, n: n, head: b"", body: b"", tail: b"" };
 }
 
 // Build a response. The body is handed over UNFRAMED: the writer owns
@@ -125,8 +129,54 @@ pub fn response_msg(stream: int, status: str, extra: [Header],
         stream: stream,
         n: 0,
         head: header_bytes(T_HEADERS, hflags, stream, len(blk)) + blk,
-        body: out
+        body: out,
+        tail: b""
     };
+}
+
+// A response that ends in trailers, as gRPC's do (its status travels in
+// them). The body goes out as DATA without END_STREAM and the trailers
+// follow as a final HEADERS frame that carries it. No content-length:
+// with trailers the message is delimited by END_STREAM, and gRPC peers
+// do not expect one. Trailers may not carry pseudo-headers (RFC 9113
+// §8.1), and each block must fit one frame at the smallest maximum a
+// peer may advertise, since this layer does not split header blocks.
+pub fn response_trailers_msg(stream: int, status: str, extra: [Header],
+                             body: bytes, trailers: [Header])
+                             -> result[WMsg, str] {
+    if len(trailers) == 0 {
+        return err("response trailers: at least one trailer is required");
+    }
+    for h in trailers {
+        if strings.has_prefix(h.name, ":") {
+            return err("response trailers: pseudo-header " + h.name + " is not allowed in trailers");
+        }
+    }
+    let hs: [Header] = [Header { name: ":status", value: status }];
+    let has_date = false;
+    for h in extra {
+        if h.name == "date" {
+            has_date = true;
+        }
+    }
+    if !has_date {
+        hs = hs + [Header { name: "date", value: time.http_date() }];
+    }
+    hs = hs + extra;
+    let blk = encode_block(hs);
+    let tblk = encode_block(trailers);
+    if len(blk) > DEFAULT_MAX_FRAME || len(tblk) > DEFAULT_MAX_FRAME {
+        return err("response trailers: header block exceeds 16384 octets");
+    }
+    return ok(WMsg {
+        kind: W_BODY,
+        stream: stream,
+        n: 0,
+        head: header_bytes(T_HEADERS, FLAG_END_HEADERS, stream, len(blk)) + blk,
+        body: body,
+        tail: header_bytes(T_HEADERS, FLAG_END_HEADERS | FLAG_END_STREAM,
+                           stream, len(tblk)) + tblk
+    });
 }
 
 // ---- deadlines -------------------------------------------------------
@@ -211,6 +261,10 @@ pub gc struct Conn {
     // touched only by the single reader task, so they need no lock.
     opened: int,
     resets: int,
+    // Client side (client.sl): the highest stream id this end opened,
+    // and the peer's SETTINGS_MAX_CONCURRENT_STREAMS (-1 until sent).
+    local_stream: int,
+    peer_max_streams: int,
 }
 
 pub gc struct Req {
@@ -231,7 +285,9 @@ pub fn conn_new() -> Conn {
         last_stream: 0,
         gone: false,
         opened: 0,
-        resets: 0
+        resets: 0,
+        local_stream: 0,
+        peer_max_streams: -1
     };
 }
 
@@ -476,8 +532,14 @@ fn apply_settings(cn: Conn, wch: chan[WMsg], payload: bytes)
             cn.peer_max_frame = v;
             chan_send(wch, setting_msg(W_MAXFRAME, v));
         }
-        if id == S_HEADER_TABLE_SIZE {
-            table_resize(cn.dec.table, v);
+        // S_HEADER_TABLE_SIZE bounds the PEER's decoder table, so it
+        // limits what our encoder may index (RFC 7541 §4.2). Our encoder
+        // never indexes, so there is nothing to apply. Our own decoder's
+        // limit is the size WE advertise, which is the default; resizing
+        // it to the peer's value -- as this once did -- made a peer that
+        // advertised a small table break decoding of its own headers.
+        if id == S_MAX_CONCURRENT_STREAMS {
+            cn.peer_max_streams = v;
         }
         if id == S_INITIAL_WINDOW_SIZE {
             // §6.5.2: above 2^31-1 is a FLOW_CONTROL_ERROR
@@ -826,6 +888,7 @@ gc struct Out {
     off: int,
     window: int,
     done: bool,
+    tail: bytes,   // trailers frame ending the stream, or b""
 }
 
 fn wsend(t: Transport, b: bytes, write_ns: int) -> bool {
@@ -869,8 +932,11 @@ fn flush_out(t: Transport, q: [Out], conn_window: int, max_frame: int,
                 // exempt from flow control (§6.9.1), so it goes out even
                 // at a zero window -- otherwise such a response could
                 // never be closed.
-                if !wsend(t, header_bytes(T_DATA, FLAG_END_STREAM,
-                                           o.stream, 0), write_ns) {
+                let closing = o.tail;
+                if len(closing) == 0 {
+                    closing = header_bytes(T_DATA, FLAG_END_STREAM, o.stream, 0);
+                }
+                if !wsend(t, closing, write_ns) {
                     return err("peer gone");
                 }
                 o.done = true;
@@ -885,7 +951,7 @@ fn flush_out(t: Transport, q: [Out], conn_window: int, max_frame: int,
             }
             let last = (o.off + n) >= len(o.body);
             let dflags = 0;
-            if last {
+            if last && len(o.tail) == 0 {
                 dflags = FLAG_END_STREAM;
             }
             if !wsend(t, header_bytes(T_DATA, dflags, o.stream, n)
@@ -896,6 +962,11 @@ fn flush_out(t: Transport, q: [Out], conn_window: int, max_frame: int,
             o.window = o.window - n;
             cw = cw - n;
             if last {
+                // Trailers are a HEADERS frame: not flow controlled, so
+                // they follow the last DATA octet whatever the windows.
+                if len(o.tail) > 0 && !wsend(t, o.tail, write_ns) {
+                    return err("peer gone");
+                }
                 o.done = true;
                 break;
             }
@@ -936,6 +1007,19 @@ fn flush_out(t: Transport, q: [Out], conn_window: int, max_frame: int,
 // A blocked stream parks its BODY here, not its task: the handler hands
 // the response over and moves on, so a peer with a tiny window costs a
 // queue entry rather than a live task.
+// Once the writer cannot write, it still has to take every message it
+// is sent: a producer blocked on a full channel nobody reads would wait
+// forever, and with it a server's gate_drain or a client's caller. So a
+// writer that has given up discards messages until the channel closes.
+fn writer_drain(wch: chan[WMsg]) {
+    while true {
+        let m = chan_recv(wch);
+        guard let _dropped = m else {
+            return;
+        }
+    }
+}
+
 pub fn writer_task(t: Transport, wch: chan[WMsg], write_ns: int) {
     let conn_window = DEFAULT_WINDOW;
     let initial = DEFAULT_WINDOW;   // peer's SETTINGS_INITIAL_WINDOW_SIZE
@@ -952,8 +1036,16 @@ pub fn writer_task(t: Transport, wch: chan[WMsg], write_ns: int) {
             return;              // channel closed: connection is done
         }
 
+        if msg.kind == W_CLOSE {
+            wsend(t, msg.head, write_ns);
+            tr_close(t);
+            writer_drain(wch);
+            return;
+        }
+
         if msg.kind == W_RAW {
             if !wsend(t, msg.head, write_ns) {
+                writer_drain(wch);
                 return;
             }
         }
@@ -975,11 +1067,9 @@ pub fn writer_task(t: Transport, wch: chan[WMsg], write_ns: int) {
         if msg.kind == W_GRANT {
             if msg.stream == 0 {
                 if conn_window > window_max() - msg.n {
-                    if !wsend(t, goaway(0, E_FLOW_CONTROL_ERROR,
-                                         "connection window overflow"),
-                              write_ns) {
-                        return;
-                    }
+                    wsend(t, goaway(0, E_FLOW_CONTROL_ERROR,
+                                    "connection window overflow"), write_ns);
+                    writer_drain(wch);
                     return;
                 }
                 conn_window = conn_window + msg.n;
@@ -989,11 +1079,9 @@ pub fn writer_task(t: Transport, wch: chan[WMsg], write_ns: int) {
                 while k < len(q) {
                     if q[k].stream == msg.stream {
                         if q[k].window > window_max() - msg.n {
-                            if !wsend(t, goaway(0, E_FLOW_CONTROL_ERROR,
-                                                 "stream window overflow"),
-                                      write_ns) {
-                                return;
-                            }
+                            wsend(t, goaway(0, E_FLOW_CONTROL_ERROR,
+                                            "stream window overflow"), write_ns);
+                            writer_drain(wch);
                             return;
                         }
                         q[k].window = q[k].window + msg.n;
@@ -1015,7 +1103,14 @@ pub fn writer_task(t: Transport, wch: chan[WMsg], write_ns: int) {
         }
         if msg.kind == W_BODY {
             if !wsend(t, msg.head, write_ns) {
+                writer_drain(wch);
                 return;
+            }
+            if len(msg.body) == 0 && len(msg.tail) > 0 {
+                if !wsend(t, msg.tail, write_ns) {
+                    writer_drain(wch);
+                    return;
+                }
             }
             if len(msg.body) > 0 {
                 let w = initial;
@@ -1024,13 +1119,14 @@ pub fn writer_task(t: Transport, wch: chan[WMsg], write_ns: int) {
                     del(early, msg.stream);
                 }
                 push(q, Out { stream: msg.stream, body: msg.body,
-                              off: 0, window: w, done: false });
+                              off: 0, window: w, done: false, tail: msg.tail });
             }
         }
 
         let fr = flush_out(t, q, conn_window, max_frame, write_ns);
         guard let cw = fr else {
-            return;              // peer gone, or too slow to read
+            writer_drain(wch);   // peer gone, or too slow to read
+            return;
         }
         conn_window = cw;
     }
