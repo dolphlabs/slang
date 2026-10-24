@@ -21,7 +21,7 @@
  * loop body happens to go through gen_call's own bracket (a tight
  * loop with no calls at all, or a call to a builtin/native function,
  * neither of which get one -- see todo.md's Tier 10 notes). Returns
- * 1 (bracket opened; caller must emit "sl_rt_safepoint_exit();"
+ * 1 (bracket opened; caller must emit "sl_rt_safepoint_exit_s(SL_SELF());"
  * after the body) or 0 (empty set, nothing emitted but for the direct
  * yield-check call below, nothing to close) -- matching every other
  * bracket built so far, skipped entirely when there's nothing to
@@ -86,7 +86,7 @@ static int emit_backedge_enter(CG *cg, void *backedge_live_set,
     emit_line(cg, "%s", roots.data);
     cg->last_backedge_id = id;
     emit_line(cg, "sl_safepoint _sl_bp%d;", id);
-    emit_line(cg, "sl_rt_safepoint_enter(&_sl_bp%d, _sl_bp%d_roots, %d);", id,
+    emit_line(cg, "sl_rt_safepoint_enter_s(SL_SELF(), &_sl_bp%d, _sl_bp%d_roots, %d);", id,
               id, n);
     /* Tracks how many of these are currently open so ST_RETURN can
      * unwind exactly that many sl_rt_safepoint_exit() calls before an
@@ -166,15 +166,15 @@ static int emit_leaf_bracket(CG *cg, void *backedge_live_set) {
     sb_append(&roots, "};");
     emit_line(cg, "%s", roots.data);
     emit_line(cg, "sl_safepoint _sl_lb%d;", id);
-    emit_line(cg, "sl_rt_safepoint_enter(&_sl_lb%d, _sl_lb%d_roots, %d);", id,
+    emit_line(cg, "sl_rt_safepoint_enter_s(SL_SELF(), &_sl_lb%d, _sl_lb%d_roots, %d);", id,
               id, n);
-    /* Resolve the task once for the per-iteration sampled yield
-     * (sl_rt_poll_yield takes it as a parameter): one TLS read for the
-     * whole loop instead of one per sample. sl_task* is
-     * migration-stable (only the TLS slot address is thread-affine),
-     * so holding it across iterations is sound — same reasoning as
+    /* The task for the per-iteration sampled yield (sl_rt_poll_yield
+     * takes it as a parameter): the function's own _sl_self, which the
+     * enter above has just resolved, so no TLS read at all. sl_task* is
+     * migration-stable (only the TLS slot address is thread-affine), so
+     * holding it across iterations is sound -- same reasoning as
      * sl_rt_maybe_yield_t's own parameter. */
-    emit_line(cg, "sl_task *_sl_lb_task%d = sl_rt_cur();", id);
+    emit_line(cg, "sl_task *_sl_lb_task%d = SL_SELF();", id);
     cg->open_backedge_brackets++;
     return id;
 }
@@ -225,9 +225,9 @@ static void emit_leaf_poll(CG *cg, void *backedge_live_set, int bid,
     emit_line(cg, "if (sl_gc_poll_needed()) {");
     cg->indent++;
     emit_line(cg, "sl_safepoint _sl_lp%d;", eid);
-    emit_line(cg, "sl_rt_safepoint_enter(&_sl_lp%d, _sl_lp%d_roots, %d);",
+    emit_line(cg, "sl_rt_safepoint_enter_s(SL_SELF(), &_sl_lp%d, _sl_lp%d_roots, %d);",
               eid, eid, n);
-    emit_line(cg, "sl_rt_safepoint_exit();");
+    emit_line(cg, "sl_rt_safepoint_exit_s(SL_SELF());");
     cg->indent--;
     emit_line(cg, "} else if (__builtin_expect((++_sl_lp_ec%d & "
                   "SL_PREEMPT_SAMPLE_MASK) == 0, 0)) {",
@@ -975,9 +975,9 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg,
                       "({ %ssl_map *_sl_mpm = %s; %s _sl_k = %s; %s _sl_v = %s; "
                       "void *_sl_mp_roots[] = { %s }; sl_safepoint _sl_mp_sp; "
-                      "sl_rt_safepoint_enter(&_sl_mp_sp, _sl_mp_roots, %d); "
+                      "sl_rt_safepoint_enter_s(SL_SELF(), &_sl_mp_sp, _sl_mp_roots, %d); "
                       "sl_map_put(_sl_mpm, &_sl_k, &_sl_v); "
-                      "sl_rt_safepoint_exit(); });",
+                      "sl_rt_safepoint_exit_s(SL_SELF()); });",
                       prelude.data, b, ctype_of(cg, k), ix, ctype_of(cg, v),
                       val, roots.data, nroots);
             break;
@@ -1137,12 +1137,12 @@ void gen_stmt(CG *cg, Stmt *s) {
              * is exactly why break/continue disqualify. */
             cg->indent--;
             emit_line(cg, "}");
-            emit_line(cg, "sl_rt_safepoint_exit();");
+            emit_line(cg, "sl_rt_safepoint_exit_s(SL_SELF());");
             cg->open_backedge_brackets--;
         } else {
             if (has_bp) {
                 cg->open_backedge_brackets--;
-                emit_line(cg, "sl_rt_safepoint_exit();");
+                emit_line(cg, "sl_rt_safepoint_exit_s(SL_SELF());");
             }
             cg->indent--;
             emit_line(cg, "}");
@@ -1230,12 +1230,12 @@ void gen_stmt(CG *cg, Stmt *s) {
              * exit+decrement. */
             cg->indent--;
             emit_line(cg, "}");
-            emit_line(cg, "sl_rt_safepoint_exit();");
+            emit_line(cg, "sl_rt_safepoint_exit_s(SL_SELF());");
             cg->open_backedge_brackets--;
         } else {
             if (has_bp) {
                 cg->open_backedge_brackets--;
-                emit_line(cg, "sl_rt_safepoint_exit();");
+                emit_line(cg, "sl_rt_safepoint_exit_s(SL_SELF());");
             }
             cg->indent--;
             emit_line(cg, "}");
@@ -1300,7 +1300,7 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "}");
             if (has_bp) {
                 cg->open_backedge_brackets--;
-                emit_line(cg, "sl_rt_safepoint_exit();");
+                emit_line(cg, "sl_rt_safepoint_exit_s(SL_SELF());");
             }
             cg->indent--;
             emit_line(cg, "}");
@@ -1353,7 +1353,7 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "}");
             if (has_bp) {
                 cg->open_backedge_brackets--;
-                emit_line(cg, "sl_rt_safepoint_exit();");
+                emit_line(cg, "sl_rt_safepoint_exit_s(SL_SELF());");
             }
             cg->indent--;
             emit_line(cg, "}");
@@ -1425,7 +1425,7 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "}");
             if (has_bp) {
                 cg->open_backedge_brackets--;
-                emit_line(cg, "sl_rt_safepoint_exit();");
+                emit_line(cg, "sl_rt_safepoint_exit_s(SL_SELF());");
             }
             cg->indent--;
             emit_line(cg, "}");
@@ -1468,7 +1468,7 @@ void gen_stmt(CG *cg, Stmt *s) {
             if (cg->cur_ret)
                 cg_error(s->line, "missing return value");
             for (int i = 0; i < cg->open_backedge_brackets; i++)
-                emit_line(cg, "sl_rt_safepoint_exit();");
+                emit_line(cg, "sl_rt_safepoint_exit_s(SL_SELF());");
             emit_scope_drops(cg, 0);
             emit_line(cg, "return;");
         } else {
@@ -1491,7 +1491,7 @@ void gen_stmt(CG *cg, Stmt *s) {
             emit_line(cg, "%s _sl_rv = %s;", ctype_of(cg, cg->cur_ret),
                       val);
             for (int i = 0; i < cg->open_backedge_brackets; i++)
-                emit_line(cg, "sl_rt_safepoint_exit();");
+                emit_line(cg, "sl_rt_safepoint_exit_s(SL_SELF());");
             emit_scope_drops(cg, 0);
             emit_line(cg, "return _sl_rv;");
         }
@@ -1522,7 +1522,7 @@ void gen_stmt(CG *cg, Stmt *s) {
          * so leaving it open across a jump out of the loop dangles it
          * the moment this C block's stack space is reused. */
         if (cg->cur_loop_has_bp)
-            emit_line(cg, "sl_rt_safepoint_exit();");
+            emit_line(cg, "sl_rt_safepoint_exit_s(SL_SELF());");
         emit_scope_drops(cg, cg->var_scope_sp ? cg->var_scopes[cg->var_scope_sp - 1] : 0);
         emit_line(cg, "break;");
         break;
@@ -1540,7 +1540,7 @@ void gen_stmt(CG *cg, Stmt *s) {
          * the loop body) -- one extra, permanently unpopped level per
          * skipped iteration. */
         if (cg->cur_loop_has_bp)
-            emit_line(cg, "sl_rt_safepoint_exit();");
+            emit_line(cg, "sl_rt_safepoint_exit_s(SL_SELF());");
         emit_scope_drops(cg, cg->var_scope_sp ? cg->var_scopes[cg->var_scope_sp - 1] : 0);
         emit_line(cg, "continue;");
         break;
@@ -1661,7 +1661,7 @@ void gen_stmt(CG *cg, Stmt *s) {
         emit_line(cg, "void *_sl_selr%d[] = { %s };", id, roots.data);
         emit_line(cg, "sl_safepoint _sl_selsp%d;", id);
         emit_line(cg,
-                  "sl_rt_safepoint_enter(&_sl_selsp%d, _sl_selr%d, %d);",
+                  "sl_rt_safepoint_enter_s(SL_SELF(), &_sl_selsp%d, _sl_selr%d, %d);",
                   id, id, nroots);
         emit_line(cg,
                   "int _sl_seli%d = sl_select_run(_sl_selc%d, "
@@ -1682,7 +1682,7 @@ void gen_stmt(CG *cg, Stmt *s) {
                           ? xasprintf("sl_gc_trace_%s", oc)
                           : "NULL");
         }
-        emit_line(cg, "sl_rt_safepoint_exit();");
+        emit_line(cg, "sl_rt_safepoint_exit_s(SL_SELF());");
 
         for (i = 0; i < n; i++) {
             SelectCase *sc = &s->as.select_stmt.cases[i];
