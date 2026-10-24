@@ -242,6 +242,55 @@ needed to tell a normal client from a flood.
 `tests/http2_flood` drives both shapes, resetting and not, and fails if
 either exceeds the cap.
 
+##### Client
+
+The same pieces, from the other end: a `Transport`, one `writer_task`,
+one reader. `client_start` performs the handshake and returns a `Client`
+whose own reader task routes each response to the task that asked for
+it, so `client_call` is safe from any number of tasks on one connection:
+
+```slang
+let started = http2.client_start(http2.transport_tls(ssl), http2.default_limits());
+guard let c = started else let e = err_of(started) { return; }
+let none_h: [http2.Header] = [];
+let r = http2.client_call(c, "GET", "https", "api.example", "/v1/users", none_h,
+                          b"", 2000000000, 1048576);   // timeout ns, max body
+guard let resp = r else let e = err_of(r) { return; }
+println(resp.status + " " + to_str(len(resp.body)));
+http2.client_close(c);
+```
+
+`client_call` allocates stream ids (odd, increasing, in wire order),
+waits for a slot under the peer's `SETTINGS_MAX_CONCURRENT_STREAMS`
+(capped by `Limits.max_concurrent`), and times each call out on its own:
+an expired call is reset with `RST_STREAM(CANCEL)` and answers
+`"timeout"`, and the late response's header block is still decoded so
+HPACK state stays in step for the rest of the connection. A `Response`
+carries `status`, `headers`, `body` and `trailers`. Calls are never
+retried; a stream refused by `GOAWAY` says so, since only those are safe
+to repeat elsewhere.
+
+For one stream at a time without the reader task: `client_preface`, then
+`client_request_msg` sent to the writer and `client_read_response` for
+that stream. Requests are validated rather than cleaned up: header names
+must be lowercase tokens, values may not contain CR or LF, and
+connection-specific fields (`connection`, `host`, `transfer-encoding`,
+`upgrade`, `te` other than `trailers`) are refused. Responses that RFC
+9113 calls malformed are refused too: no `:status`, a pseudo-header in
+trailers, a `content-length` the body does not match, `PUSH_PROMISE`
+(the client disables push).
+
+On the server side, `response_trailers_msg` builds a response that ends
+in trailers (gRPC's status travels in them): the body goes out as DATA
+without `END_STREAM`, then the trailers as a final HEADERS frame.
+
+The client's peer SETTINGS handling also fixed one server bug:
+`SETTINGS_HEADER_TABLE_SIZE` bounds the *peer's* decoder (RFC 7541
+§4.2), and resizing our own decoder table to it made a peer that
+advertised a small table unable to use the dynamic table it was entitled
+to. And a writer that can no longer write now keeps taking messages until
+its channel closes, so a producer is never left blocked behind it.
+
 ##### Known gaps
 
 `PRIORITY` is validated but not acted on: it is deprecated in RFC 9113
@@ -252,6 +301,40 @@ TLS path yet — the machinery is there and tested against slang's own
 client, but a real browser is different evidence.
 
 ## API
+
+### `gc struct Response`
+
+### `fn client_settings() -> bytes`
+
+Ours: push off, no server-initiated streams, the same frame and header list limits the server side advertises.
+
+### `fn client_preface(cn: Conn, r: Reader, t: Transport, wch: chan[WMsg], lim: Limits) -> result[bool, str]`
+
+Send our preface and SETTINGS, then wait for the server's. RFC 9113 §3.4: the server's preface is a SETTINGS frame, and it must be the first frame it sends -- anything else is not an HTTP/2 server.
+
+### `fn client_request_msg(cn: Conn, stream: int, method: str, scheme: str, authority: str, path: str, headers: [Header], body: bytes) -> result[WMsg, str]`
+
+One request as a writer message: its HEADERS (END_STREAM when there is no body) and its body, which the writer frames under the peer's flow control windows. Stream ids are odd and must increase on a connection (RFC 9113 §5.1.1); this checks and records that.
+
+### `fn client_read_response(cn: Conn, r: Reader, t: Transport, wch: chan[WMsg], stream: int, timeout_ns: int, max_body: int) -> result[Response, str]`
+
+Read frames until `stream`'s response is complete. For a connection carrying one stream at a time; use client_start/client_call for more. `timeout_ns` bounds the whole response, and `max_body` its DATA.
+
+### `gc struct Client`
+
+### `fn client_start(t: Transport, lim: Limits) -> result[Client, str]`
+
+Handshake on `t` and start the connection's writer and reader tasks. The caller still owns `t`: client_close releases the connection's tasks, then closes it.
+
+### `fn client_max_streams(c: Client) -> int`
+
+### `fn client_call(c: Client, method: str, scheme: str, authority: str, path: str, headers: [Header], body: bytes, timeout_ns: int, max_body: int) -> result[Response, str]`
+
+One request/response exchange on `c`, safe to call from many tasks at once. Waits for a free stream slot first. `timeout_ns` bounds the exchange from the moment its HEADERS are queued; `max_body` bounds the response DATA. Never retried: a transport error can arrive after the server acted, and only the caller knows whether that is safe to repeat.
+
+### `fn client_close(c: Client)`
+
+Stop taking calls, send GOAWAY and close the transport; calls in flight fail with "closed by the client". The writer sends the GOAWAY and then closes (W_CLOSE), so the frame is out before the socket goes. If the connection had already failed, the writer is gone and this closes the transport itself. Safe to call more than once.
 
 ### `let W_RAW = 0; // pre-built frames, not flow controlled`
 
@@ -265,6 +348,8 @@ client, but a real browser is different evidence.
 
 ### `let W_MAXFRAME = 4; // peer's SETTINGS_MAX_FRAME_SIZE is now `n``
 
+### `let W_CLOSE = 5; // send `head` (a GOAWAY), then close the transport`
+
 ### `gc struct WMsg`
 
 ### `fn raw_msg(b: bytes) -> WMsg`
@@ -274,6 +359,10 @@ client, but a real browser is different evidence.
 ### `fn response_msg(stream: int, status: str, extra: [Header], body: bytes) -> WMsg`
 
 Build a response. The body is handed over UNFRAMED: the writer owns the peer's window and its max frame size, so it -- not the handler -- decides how the body is cut into DATA frames and when each may go.  Like HTTP/1.1's writer: a date unless the handler set one (RFC 9110 6.6.1), and for 1xx, 204 and 304 -- which have no content -- neither content-length nor body.
+
+### `fn response_trailers_msg(stream: int, status: str, extra: [Header], body: bytes, trailers: [Header]) -> result[WMsg, str]`
+
+A response that ends in trailers, as gRPC's do (its status travels in them). The body goes out as DATA without END_STREAM and the trailers follow as a final HEADERS frame that carries it. No content-length: with trailers the message is delimited by END_STREAM, and gRPC peers do not expect one. Trailers may not carry pseudo-headers (RFC 9113 §8.1), and each block must fit one frame at the smallest maximum a peer may advertise, since this layer does not split header blocks.
 
 ### `gc struct Limits`
 
@@ -356,8 +445,6 @@ Verify the 24-byte client connection preface and send ours.
 Read frames until one complete request has arrived.  Two clocks, switched at the first HEADERS. Before it the connection is idle and gets the generous `idle` budget, refreshed by each control frame that arrives -- a client PINGing a kept-alive connection is behaving correctly and must not be disconnected. After it the strict `request` budget applies to the request as a WHOLE and is never refreshed, so no amount of dribbled DATA or CONTINUATION can extend it.
 
 ### `fn writer_task(t: Transport, wch: chan[WMsg], write_ns: int)`
-
-Owns the write side, and with it the peer's send windows.  Flow control has to live here rather than in the handlers. The window is a property of the CONNECTION, shared by every concurrent stream, so no handler can decide on its own whether it may send -- and the WINDOW_UPDATE that grants credit arrives on the read side, in a different task entirely. Routing both into this one task is what lets the accounting be correct without a lock at all. slang does have a mutex now, but reaching for one here would be the worse design: it would serialise the writers without making the window arithmetic any less shared.  A blocked stream parks its BODY here, not its task: the handler hands the response over and moves on, so a peer with a tiny window costs a queue entry rather than a live task.
 
 ### `fn respond(cn: Conn, wch: chan[WMsg], stream: int, status: str, extra: [Header], body: bytes)`
 
