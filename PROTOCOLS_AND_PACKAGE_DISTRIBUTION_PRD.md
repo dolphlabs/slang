@@ -14,6 +14,7 @@ The goal is to provide production-quality gRPC and GraphQL for Slang and Zokor w
 
 - `stdlib/http2/` is a Slang-source HTTP/2 server stack with frame parsing, HPACK, TLS transport, concurrency, flow control, deadlines, and request-body limits.
 - Its public API is server-oriented: it exposes `read_request`, `writer_task`, and `response_msg`; it has no client connection API or trailer-response API today.
+  Update (2026-10-24, feat/http2-client): both gaps are closed in `http2` itself, with no gRPC policy in them — `client_start`/`client_call` (multiplexed, safe across tasks), `client_preface`/`client_request_msg`/`client_read_response` (one stream at a time), and `response_trailers_msg`. Tested by `tests/h2_client`.
 - `stdlib/http`, `net`, `time`, and JSON support provide reusable lower-level building blocks. Slang has no reflection or closures; generated code and named function values fit its model.
 - Zokor's `src/` package is an HTTP/1 server/router with generic app state and named function handlers. Its repository already keeps `examples/` and `docs/` outside the imported package and asks protocol parsers to be sans-I/O and caller-limited.
 - `slangc get` shallow-clones each pinned repository into a content-addressed cache. The lock hash currently covers every regular file in the checkout. `dir <subdir>` changes what compiles, but does not reduce transferred or cached files.

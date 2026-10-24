@@ -2733,6 +2733,55 @@ needed to tell a normal client from a flood.
 `tests/http2_flood` drives both shapes, resetting and not, and fails if
 either exceeds the cap.
 
+##### Client
+
+The same pieces, from the other end: a `Transport`, one `writer_task`,
+one reader. `client_start` performs the handshake and returns a `Client`
+whose own reader task routes each response to the task that asked for
+it, so `client_call` is safe from any number of tasks on one connection:
+
+```slang
+let started = http2.client_start(http2.transport_tls(ssl), http2.default_limits());
+guard let c = started else let e = err_of(started) { return; }
+let none_h: [http2.Header] = [];
+let r = http2.client_call(c, "GET", "https", "api.example", "/v1/users", none_h,
+                          b"", 2000000000, 1048576);   // timeout ns, max body
+guard let resp = r else let e = err_of(r) { return; }
+println(resp.status + " " + to_str(len(resp.body)));
+http2.client_close(c);
+```
+
+`client_call` allocates stream ids (odd, increasing, in wire order),
+waits for a slot under the peer's `SETTINGS_MAX_CONCURRENT_STREAMS`
+(capped by `Limits.max_concurrent`), and times each call out on its own:
+an expired call is reset with `RST_STREAM(CANCEL)` and answers
+`"timeout"`, and the late response's header block is still decoded so
+HPACK state stays in step for the rest of the connection. A `Response`
+carries `status`, `headers`, `body` and `trailers`. Calls are never
+retried; a stream refused by `GOAWAY` says so, since only those are safe
+to repeat elsewhere.
+
+For one stream at a time without the reader task: `client_preface`, then
+`client_request_msg` sent to the writer and `client_read_response` for
+that stream. Requests are validated rather than cleaned up: header names
+must be lowercase tokens, values may not contain CR or LF, and
+connection-specific fields (`connection`, `host`, `transfer-encoding`,
+`upgrade`, `te` other than `trailers`) are refused. Responses that RFC
+9113 calls malformed are refused too: no `:status`, a pseudo-header in
+trailers, a `content-length` the body does not match, `PUSH_PROMISE`
+(the client disables push).
+
+On the server side, `response_trailers_msg` builds a response that ends
+in trailers (gRPC's status travels in them): the body goes out as DATA
+without `END_STREAM`, then the trailers as a final HEADERS frame.
+
+The client's peer SETTINGS handling also fixed one server bug:
+`SETTINGS_HEADER_TABLE_SIZE` bounds the *peer's* decoder (RFC 7541
+§4.2), and resizing our own decoder table to it made a peer that
+advertised a small table unable to use the dynamic table it was entitled
+to. And a writer that can no longer write now keeps taking messages until
+its channel closes, so a producer is never left blocked behind it.
+
 ##### Known gaps
 
 `PRIORITY` is validated but not acted on: it is deprecated in RFC 9113

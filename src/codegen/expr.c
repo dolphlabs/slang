@@ -607,21 +607,33 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
          * forcing a real, concurrent collection through spawn+chan
          * (tests/spawn_isolation at a lowered threshold) -- the same
          * root cause as sl_net_recv/sl_net_tls_recv (runtime_net.c/
-         * runtime_tls.c), fixed the same way there. */
+         * runtime_tls.c), fixed the same way there.
+         *
+         * The wait is also long enough for minors to PROMOTE _sl_co%d:
+         * it survives every one it sits through. The received value is
+         * young, so storing it into the now-old box is an old->young
+         * edge that needs the write barrier, or the next minor frees the
+         * value while the box still holds it (found by the minor
+         * verifier on tests/chan_recv_promoted). */
         int rid = cg->tmp_id++;
+        const char *rbarrier =
+            type_has_gc_roots(cg, elem)
+                ? xasprintf("sl_rt_preempt_disable(); sl_gc_remember((void *)_sl_co%d); "
+                            "sl_rt_preempt_enable(); ", id)
+                : "";
         char *inner = xasprintf(
             "({ %s _sl_cv%d; %s *_sl_co%d = (%s *)sl_gc_alloc(sizeof(*_sl_co%d), %s); "
             "void *_sl_rcv%d_roots[] = { (void *)_sl_co%d }; "
             "sl_safepoint _sl_rcv%d; sl_rt_safepoint_enter_s(SL_SELF(), &_sl_rcv%d, _sl_rcv%d_roots, 1); "
             "int _sl_rcvok%d = sl_chan_recv(%s, &_sl_cv%d); "
-            "sl_rt_safepoint_exit_s(SL_SELF()); "
             "if (_sl_rcvok%d) { _sl_co%d->has = true; "
-            "_sl_co%d->v = _sl_cv%d; } else { _sl_co%d->has = false; } "
+            "_sl_co%d->v = _sl_cv%d; %s} else { _sl_co%d->has = false; } "
+            "sl_rt_safepoint_exit_s(SL_SELF()); "
             "_sl_co%d; })",
             ec, id, oc, id, oc, id, otrace,
             rid, id, rid, rid, rid,
             rid, ch, id,
-            rid, id, id, id, id, id);
+            rid, id, id, id, rbarrier, id, id);
         return wrap_safepoint(cg, e, xasprintf("%s *", oc), NULL, inner);
     }
     if (!strcmp(name, "join_wait")) {
@@ -651,7 +663,16 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
          * Its slot starts NULL and is filled once the spawn has run; the
          * collector reads roots when it scans, not when the bracket opens,
          * and sl_gc_mark ignores NULL. The error is read inside the bracket
-         * because sl_join_err can allocate. */
+         * because sl_join_err can allocate.
+         *
+         * As with chan_recv, the result box can be promoted while this
+         * task waits, so the stores made after the wait take the write
+         * barrier when the result holds GC pointers. */
+        const char *jbarrier =
+            strcmp(trace, "NULL")
+                ? xasprintf("sl_rt_preempt_disable(); sl_gc_remember((void *)_sl_jr%d); "
+                            "sl_rt_preempt_enable(); ", id)
+                : "";
         char *inner = xasprintf(
             "({ %s _sl_jv%d; %s _sl_jr%d = (%s)sl_gc_alloc(sizeof(*_sl_jr%d), %s); "
             "void *_sl_jwr%d_roots[] = { (void *)_sl_jr%d, NULL }; "
@@ -661,6 +682,7 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
             "int _sl_jok%d = sl_join_wait(_sl_jh%d, &_sl_jv%d); "
             "if (_sl_jok%d) { _sl_jr%d->ok = true; _sl_jr%d->v = _sl_jv%d; } "
             "else { _sl_jr%d->ok = false; _sl_jr%d->e = sl_join_err(_sl_jh%d); } "
+            "%s"
             "sl_rt_safepoint_exit_s(SL_SELF()); "
             "_sl_jr%d; })",
             ec, id, rct, id, rct, id, trace,
@@ -671,6 +693,7 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
             id, id, id,
             id, id, id, id,
             id, id, id,
+            jbarrier,
             id);
         return wrap_safepoint(cg, e, rct, NULL, inner);
     }
