@@ -1,5 +1,19 @@
 # todo
 
+- [x] **chan_recv lost a received value to a minor (memory safety,
+  2026-10-24, feat/http2-client).** `chan_recv` allocates its `opt` box
+  before parking and fills it after. A wait long enough for two minors
+  promotes the box, and the received (young) value stored into it then was
+  an unbarriered old->young edge: when the box was the value's only holder
+  at the next safepoint, that minor freed the value. Found by the minor
+  verifier on tests/h2_client (a caller waits on its reply channel while
+  other tasks allocate); reproduced by tests/chan_recv_promoted, 48-60
+  missed per run before, 0 after. The fill now takes `sl_gc_remember`.
+  `join_wait` has the same allocate-then-park shape and got the same
+  barrier, but no test made it miss. `select` allocates its box after the
+  park, so it is not affected; it does root its received value from a
+  snapshot taken before the receive, which deserves a separate look.
+
 - [x] **Typed Postgres rows without JSON text** (`feat/pg-rows-as`).
   `pg.rows_as[T]` binds exact column names once, decodes text/binary
   scalar cells directly, and reuses typed JSON codecs for JSON columns.
