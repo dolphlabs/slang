@@ -763,6 +763,10 @@ against it, and land only if the result clears both gates.
 - [ ] **6.1 Profile on Linux** (`perf`). §7e's leaf-loop polls had
   already landed (#283) before the measured commit, so the 28.3 s (Go
   11.9, Rust 7.1, slang CPU 110.8 s vs Go 39.4) already includes them.
+  Correction (2026-10-24): it includes them only for loops without a `+`,
+  which was very few -- any `+` disqualified a loop until
+  perf/leaf-loop-numeric-plus (next-steps.md §7e). Re-measure batch on that
+  before profiling: its parse loops are the case the fix targets.
 - [ ] **6.2 Precise tracing of the `[int]` tables** (1.8) and §7d's
   whole-map retrace when an existing map key is updated.
 - [ ] **6.3 What the profile names next:** parsing, hashing, the merge.
