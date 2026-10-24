@@ -284,6 +284,76 @@ static int expr_is_leaf(CG *cg, Expr *e);
 static int block_is_leaf(CG *cg, Block *b);
 static int stmt_is_leaf(CG *cg, Stmt *s);
 
+/* Defined below with stmt_binds: is `name` bound anywhere in b? A name the
+ * loop rebinds may shadow the outer variable var_find sees from the loop
+ * head, with another type, so its outer type proves nothing. */
+static int block_binds(Block *b, const char *name);
+
+/* Is e certainly a number, judged without infer_type (see the `+` case
+ * of expr_is_leaf for why)? Arithmetic other than `+` only type-checks
+ * on numbers, so its result is one; a `+` is one when both sides are; a
+ * variable is one when its declared type is and nothing in the loop can
+ * rebind it. Anything else -- an index, a field, a call but len -- is
+ * unknown, and unknown is not a number. */
+static int expr_is_numeric(CG *cg, Expr *e) {
+    if (!e)
+        return 0;
+    switch (e->kind) {
+    case EX_INT:
+    case EX_FLOAT:
+        return 1;
+    case EX_IDENT: {
+        const char *name = e->as.ident.name;
+        if (block_binds(cg->leaf_body, name))
+            return 0;
+        if (cg->leaf_range_var && !strcmp(cg->leaf_range_var, name))
+            return 1;
+        VarSym *v = var_find(cg, name);
+        return v && v->slang && is_num(v->slang);
+    }
+    case EX_UNARY:
+        return !strcmp(e->as.unary.op, "-") || !strcmp(e->as.unary.op, "~");
+    case EX_CAST:
+        return is_num(e->as.cast.ty);
+    case EX_INDEX: {
+        /* bytes[i], or [T][i] with a numeric T, through a variable the
+         * loop never rebinds. */
+        Expr *base = e->as.index.base;
+        if (base->kind != EX_IDENT ||
+            block_binds(cg->leaf_body, base->as.ident.name))
+            return 0;
+        VarSym *v = var_find(cg, base->as.ident.name);
+        if (!v || !v->slang)
+            return 0;
+        if (!strcmp(v->slang, "bytes"))
+            return 1;
+        if (v->slang[0] != '[')
+            return 0;
+        char *elem = arr_elem(v->slang);
+        int numeric = is_num(elem);
+        free(elem);
+        return numeric;
+    }
+    case EX_BINARY: {
+        static const char *const arith[] = {"-", "*", "/", "%", "&", "|",
+                                            "^", "<<", ">>"};
+        const char *op = e->as.binary.op;
+        if (!strcmp(op, "+"))
+            return expr_is_numeric(cg, e->as.binary.lhs) &&
+                   expr_is_numeric(cg, e->as.binary.rhs);
+        for (size_t i = 0; i < sizeof arith / sizeof arith[0]; i++)
+            if (!strcmp(op, arith[i]))
+                return 1;
+        return 0;
+    }
+    case EX_CALL:
+        return e->as.call.name && !strcmp(e->as.call.name, "len") &&
+               e->as.call.nargs == 1 && !e->as.call.callee;
+    default:
+        return 0;
+    }
+}
+
 static int expr_is_leaf(CG *cg, Expr *e) {
     if (!e)
         return 1;
@@ -307,13 +377,17 @@ static int expr_is_leaf(CG *cg, Expr *e) {
          * (e.g. `let id = old[i]` in batch's user_grow): inferring
          * the operand type would resolve those names against the
          * wrong scope and fail the compile ("undefined variable").
-         * Instead match only on the operator: every non-+ binary op
-         * is pure (comparison, arithmetic, logic); + is assumed to
-         * allocate (string/bytes/list concat) and disqualifies.
-         * Numeric + pays the price of a missed optimization — rare
-         * in scan loops, and soundness beats coverage. */
+         * Instead match on the operator: every non-+ binary op is
+         * pure (comparison, arithmetic, logic). A + is a concat
+         * (allocates) unless expr_is_numeric proves both sides are
+         * numbers from declared types alone -- `i = i + 1` is in
+         * nearly every scan loop, so refusing all + left the leaf
+         * path almost unused. */
         if (!strcmp(op, "+"))
-            return 0;
+            return expr_is_numeric(cg, e->as.binary.lhs) &&
+                   expr_is_numeric(cg, e->as.binary.rhs) &&
+                   expr_is_leaf(cg, e->as.binary.lhs) &&
+                   expr_is_leaf(cg, e->as.binary.rhs);
         return expr_is_leaf(cg, e->as.binary.lhs) &&
                expr_is_leaf(cg, e->as.binary.rhs);
     }
@@ -1002,8 +1076,10 @@ void gen_stmt(CG *cg, Stmt *s) {
          * task variable are plain declarations before the loop.
          * has_bp tracks the hoisted bracket for break/continue/return
          * unwinding exactly like the per-iteration one did. */
+        cg->leaf_body = s->as.while_stmt.body;
         int leaf = !scalar && expr_is_leaf(cg, s->as.while_stmt.cond) &&
                    block_is_leaf(cg, s->as.while_stmt.body);
+        cg->leaf_body = NULL;
         int bid = 0, le_eid = 0;
         if (leaf) {
             le_eid = cg->tmp_id++;
@@ -1101,9 +1177,15 @@ void gen_stmt(CG *cg, Stmt *s) {
          * leaf (rules out calls in bounds; rare and not worth the
          * audit). The per-iteration condition reads sl_end_N (an
          * int, needs no root) plus the induction var (an int). */
+        /* Bounds are evaluated before the loop variable exists, so
+         * only the body sees it as the range's int. */
         int leaf = !scalar && expr_is_leaf(cg, s->as.for_stmt.start) &&
-                   expr_is_leaf(cg, s->as.for_stmt.end) &&
-                   block_is_leaf(cg, s->as.for_stmt.body);
+                   expr_is_leaf(cg, s->as.for_stmt.end);
+        cg->leaf_body = s->as.for_stmt.body;
+        cg->leaf_range_var = s->as.for_stmt.name;
+        leaf = leaf && block_is_leaf(cg, s->as.for_stmt.body);
+        cg->leaf_body = NULL;
+        cg->leaf_range_var = NULL;
         int eid = 0, bid = 0, le_eid = 0;
         if (scalar) {
             eid = cg->tmp_id++;
