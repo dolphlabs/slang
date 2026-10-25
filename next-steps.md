@@ -335,8 +335,18 @@ honors blob filtering. See
   encode 10.1 -> 7.85 us (125 -> 49); 1M fallible calls 1,000,005 -> 2
   allocations (tests/result_no_alloc). tests/value_results covers every
   place a result can live under the GC stress lists.
-- [ ] Value `opt`: next, the same way (some() of a GC payload still
-  allocates).
+- [x] **Value `opt` (2026-10-25, perf/value-opt).** `{ has, v }` by value:
+  some()/none allocate nothing and are no safepoint (liveness no longer
+  treats `none` as one); chan_recv and select build the opt after the
+  wait, so #455's barrier on chan_recv's box is gone with the box; json,
+  pg and natives (copied out) follow. opt bodies are emitted in dependency
+  order with structs and results. A plain struct holding opt[Self] is now
+  a compile error with the fix (tests/fail_opt_self_value); a gc struct
+  still can. 1M opt lookups 1,000,002 -> 2 allocations
+  (tests/opt_no_alloc); lookup micro-benchmark 49.6 -> 12.1 ns (ABBA x4
+  vs dev daf31ff); grpc decode 3.79 -> 3.63 us and graphql 396 -> 375
+  allocations per request, times within noise. tests/value_opts covers
+  every place an opt can live under the GC stress lists.
 - [x] **Brackets reuse the function's task (2026-10-24,
   perf/cache-current-task).** Every emitted bracket read the current task
   through `sl_rt_cur()` twice, at enter and exit: on Darwin a call into
