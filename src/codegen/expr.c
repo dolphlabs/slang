@@ -615,26 +615,23 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
          * edge that needs the write barrier, or the next minor frees the
          * value while the box still holds it (found by the minor
          * verifier on tests/chan_recv_promoted). */
+        /* The opt is a value built after the receive: no box to keep
+         * rooted across the wait, none to be promoted during it, no
+         * barrier. The received value sits in the channel (traced) until
+         * sl_chan_recv copies it out, and the bracket below spans that. */
+        (void)otrace;
         int rid = cg->tmp_id++;
-        const char *rbarrier =
-            type_has_gc_roots(cg, elem)
-                ? xasprintf("sl_rt_preempt_disable(); sl_gc_remember((void *)_sl_co%d); "
-                            "sl_rt_preempt_enable(); ", id)
-                : "";
         char *inner = xasprintf(
-            "({ %s _sl_cv%d; %s *_sl_co%d = (%s *)sl_gc_alloc(sizeof(*_sl_co%d), %s); "
-            "void *_sl_rcv%d_roots[] = { (void *)_sl_co%d }; "
-            "sl_safepoint _sl_rcv%d; sl_rt_safepoint_enter_s(SL_SELF(), &_sl_rcv%d, _sl_rcv%d_roots, 1); "
+            "({ %s _sl_cv%d; "
+            "sl_safepoint _sl_rcv%d; sl_rt_safepoint_enter_s(SL_SELF(), &_sl_rcv%d, NULL, 0); "
             "int _sl_rcvok%d = sl_chan_recv(%s, &_sl_cv%d); "
-            "if (_sl_rcvok%d) { _sl_co%d->has = true; "
-            "_sl_co%d->v = _sl_cv%d; %s} else { _sl_co%d->has = false; } "
             "sl_rt_safepoint_exit_s(SL_SELF()); "
-            "_sl_co%d; })",
-            ec, id, oc, id, oc, id, otrace,
-            rid, id, rid, rid, rid,
+            "_sl_rcvok%d ? (%s){ .has = true, .v = _sl_cv%d } : (%s){ .has = false }; })",
+            ec, id,
+            rid, rid,
             rid, ch, id,
-            rid, id, id, id, rbarrier, id, id);
-        return wrap_safepoint(cg, e, xasprintf("%s *", oc), NULL, inner);
+            rid, oc, id, oc);
+        return wrap_safepoint(cg, e, oc, NULL, inner);
     }
     if (!strcmp(name, "join_wait")) {
         if (e->as.call.nargs == 1 && e->as.call.args[0]->kind == EX_SPAWN)
@@ -1006,14 +1003,10 @@ char *gen_ctor(CG *cg, Expr *e) {
      * in stmt.c. Newborn-into-newborn stores never create old->young
      * edges by construction. */
     if (!strcmp(name, "some")) {
-        const char *oc = opt_cname(cg, target);
-        const char *trace = type_has_gc_roots(cg, target)
-                                 ? xasprintf("sl_gc_trace_%s", oc)
-                                 : "NULL";
-        inner = xasprintf(
-            "({ %s _sl_cv = %s; %s _sl_c = (%s)sl_gc_alloc(sizeof(*_sl_c), %s); "
-            "_sl_c->has = true; _sl_c->v = _sl_cv; _sl_c; })",
-            vc, v, cn, cn, trace);
+        /* An opt is a value: some() allocates nothing and is no
+         * safepoint, like ok()/err() below. */
+        (void)vc;
+        return xasprintf("((%s){ .has = true, .v = %s })", cn, v);
     } else {
         /* A result is a value (see type_is_gc_ptr): building one
          * allocates nothing. Designated initializers zero the side not
@@ -1849,23 +1842,10 @@ char *gen_expr(CG *cg, Expr *e) {
         if (!strcmp(e->as.ident.name, "none")) {
             if (!cg->expect || !is_opt(cg->expect))
                 cg_error(e->line, "cannot infer the type of 'none'");
-            const char *cn = ctype_of(cg, cg->expect);
-            const char *inner_t = opt_inner(cg->expect);
-            const char *oc = opt_cname(cg, inner_t);
-            const char *trace = type_has_gc_roots(cg, inner_t)
-                                     ? xasprintf("sl_gc_trace_%s", oc)
-                                     : "NULL";
-            char *inner = xasprintf(
-                "({ %s _sl_n = (%s)sl_gc_alloc(sizeof(*_sl_n), %s); "
-                "_sl_n->has = false; _sl_n; })",
-                cn, cn, trace);
-            /* Tier 10: 'none' allocates a fresh opt wrapper via
-             * GC_malloc every occurrence -- liveness.c treats this as
-             * its own safepoint kind (the one deliberate EX_IDENT
-             * exception, see live_expr's EX_IDENT case), so it gets
-             * the same bracket treatment as any other allocating
-             * call (see wrap_safepoint). No arguments to sequence. */
-            return wrap_safepoint(cg, e, cn, NULL, inner);
+            /* An opt is a value ({ has, v }): `none` allocates nothing
+             * and is no safepoint. */
+            return xasprintf("((%s){ .has = false })",
+                             ctype_of(cg, cg->expect));
         }
         if (!strcmp(e->as.ident.name, "nullptr"))
             return xstrdup("((void *)0)");
@@ -2038,7 +2018,7 @@ char *gen_expr(CG *cg, Expr *e) {
                 cg->ambient_count = ambient_mark;
                 return xasprintf(
                     "({ %s %s = %s; "
-                    "(%s->has ? %s->v : (%s)(%s)); })",
+                    "(%s.has ? %s.v : (%s)(%s)); })",
                     oc, qname, a, qname, qname, ic, b);
             }
             char *tv, *tev;

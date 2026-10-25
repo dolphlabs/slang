@@ -435,6 +435,19 @@ static ResInst *res_find(CG *cg, const char *t) {
 static void emit_res_value_body(CG *cg, ResInst *r, unsigned char *sstate,
                                 int line);
 
+static OptInst *opt_find(CG *cg, const char *t) {
+    if (!is_opt(t))
+        return NULL;
+    char *inner = opt_inner(t);
+    for (int i = 0; i < cg->opts.count; i++)
+        if (!strcmp(cg->opts.items[i].inner, inner))
+            return &cg->opts.items[i];
+    return NULL;
+}
+
+static void emit_opt_value_body(CG *cg, OptInst *o, unsigned char *sstate,
+                                int line);
+
 static void emit_struct_body(CG *cg, StructDef *sd, unsigned char *state) {
     int self = -1;
     for (int i = 0; i < cg->structs.count; i++) {
@@ -451,9 +464,9 @@ static void emit_struct_body(CG *cg, StructDef *sd, unsigned char *state) {
          * all by value -- infinitely large by construction. */
         cg_error(sd->line,
                  "cannot lay out struct '%s': it contains itself by value "
-                 "through a result payload, which would need an infinitely "
-                 "large value; hold one side in an opt[...], or make it a "
-                 "gc struct",
+                 "through an opt or result payload, which would need an "
+                 "infinitely large value; make it (or the type that holds "
+                 "it back) a gc struct",
                  sd->canonical);
     state[self] = 1; /* in progress */
     for (int j = 0; j < sd->nfields; j++) {
@@ -482,6 +495,9 @@ static void emit_struct_body(CG *cg, StructDef *sd, unsigned char *state) {
             ResInst *ri = res_find(cg, sd->ftypes[j]);
             if (ri && res_inst_is_value(cg, ri))
                 emit_res_value_body(cg, ri, state, sd->line);
+            OptInst *oi = opt_find(cg, sd->ftypes[j]);
+            if (oi)
+                emit_opt_value_body(cg, oi, state, sd->line);
         }
     }
     char *m = mangle_struct(sd->canonical);
@@ -516,6 +532,8 @@ void emit_struct_and_value_res_types(CG *cg) {
      * run would see the dry run's marks and emit nothing. */
     for (int i = 0; i < cg->res.count; i++)
         cg->res.items[i].body_state = 0;
+    for (int i = 0; i < cg->opts.count; i++)
+        cg->opts.items[i].body_state = 0;
     unsigned char *sstate = NULL;
     if (cg->structs.count) {
         sstate = (unsigned char *)xmalloc((size_t)cg->structs.count);
@@ -528,6 +546,9 @@ void emit_struct_and_value_res_types(CG *cg) {
         if (res_inst_is_value(cg, r) && r->body_state != 2)
             emit_res_value_body(cg, r, sstate, 0);
     }
+    for (int i = 0; i < cg->opts.count; i++)
+        if (cg->opts.items[i].body_state != 2)
+            emit_opt_value_body(cg, &cg->opts.items[i], sstate, 0);
     free(sstate);
 }
 
@@ -580,6 +601,10 @@ static void emit_value_marks(CG *cg, const char *path, const char *t) {
         result_te(t, &tv, &te);
         emit_value_marks(cg, xasprintf("%s.v", path), tv);
         emit_value_marks(cg, xasprintf("%s.e", path), te);
+        return;
+    }
+    if (is_opt(t)) {
+        emit_value_marks(cg, xasprintf("%s.v", path), opt_inner(t));
         return;
     }
     StructDef *sub = struct_find_canon(cg, t);
@@ -657,6 +682,34 @@ static void emit_res_value_dep(CG *cg, const char *t, unsigned char *sstate,
     ResInst *inner = res_find(cg, t);
     if (inner && res_inst_is_value(cg, inner))
         emit_res_value_body(cg, inner, sstate, line);
+    OptInst *oi = opt_find(cg, t);
+    if (oi)
+        emit_opt_value_body(cg, oi, sstate, line);
+}
+
+/* An opt is held by value ({ has, v }), so its payload's body comes
+ * first, like a result's. A cycle back to it is a type that holds itself
+ * by value. */
+static void emit_opt_value_body(CG *cg, OptInst *o, unsigned char *sstate,
+                                int line) {
+    if (o->body_state == 2)
+        return;
+    if (o->body_state == 1)
+        cg_error(line,
+                 "cannot lay out opt[%s]: it contains itself by value, which "
+                 "would need an infinitely large value; make the type that "
+                 "holds it back a gc struct",
+                 o->inner);
+    o->body_state = 1;
+    emit_res_value_dep(cg, o->inner, sstate, line);
+    emit_line(cg, "struct %s {", o->cname);
+    cg->indent++;
+    emit_line(cg, "bool has;");
+    emit_line(cg, "%s v;", ctype_of(cg, o->inner));
+    cg->indent--;
+    emit_line(cg, "};");
+    emit_line(cg, "");
+    o->body_state = 2;
 }
 
 static void emit_res_value_body(CG *cg, ResInst *r, unsigned char *sstate,
@@ -753,16 +806,8 @@ void emit_opt_res_forward_decls(CG *cg) {
 }
 
 void emit_opt_res_types(CG *cg) {
-    for (int i = 0; i < cg->opts.count; i++) {
-        OptInst *o = &cg->opts.items[i];
-        emit_line(cg, "struct %s {", o->cname);
-        cg->indent++;
-        emit_line(cg, "bool has;");
-        emit_line(cg, "%s v;", ctype_of(cg, o->inner));
-        cg->indent--;
-        emit_line(cg, "};");
-        emit_line(cg, "");
-    }
+    /* opt bodies: emitted with the structs and results, in dependency
+     * order (emit_struct_and_value_res_types) */
     for (int i = 0; i < cg->res.count; i++) {
         ResInst *r = &cg->res.items[i];
         if (res_inst_is_value(cg, r))
@@ -784,7 +829,7 @@ void emit_opt_res_types(CG *cg) {
  * that needs one always gets one: a value struct holding a str used to
  * get NULL, and the str was freed under the opt or result holding it. */
 static void emit_payload_marks(CG *cg, const char *field, const char *t) {
-    if (type_is_gc_ptr(cg, t) || is_result(t)) {
+    if (type_is_gc_ptr(cg, t) || is_result(t) || is_opt(t)) {
         emit_value_marks(cg, field, t);
         return;
     }

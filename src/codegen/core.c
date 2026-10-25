@@ -810,9 +810,9 @@ int type_is_gc_ptr(CG *cg, const char *t) {
      * err() of a result[T, str] -- one per fallible call -- allocated.
      * Its pointers are rooted and traced through it instead, as a value
      * struct's fields are (type_has_gc_roots, gc_value_parts). */
-    if (is_result(t))
-        return 0;
-    if (is_arr(t) || is_map(t) || is_opt(t) ||
+    if (is_result(t) || is_opt(t))
+        return 0;   /* an opt is held by value too: { has, v } */
+    if (is_arr(t) || is_map(t) ||
         is_chan(t) || is_join(t) || is_mutex(t) || is_str(t) || is_bytes(t))
         return 1;
     StructDef *sd = struct_find_canon(cg, t);
@@ -853,6 +853,8 @@ int type_has_gc_roots(CG *cg, const char *t) {
         result_te(t, &tv, &te);
         return type_has_gc_roots(cg, tv) || type_has_gc_roots(cg, te);
     }
+    if (is_opt(t))
+        return type_has_gc_roots(cg, opt_inner(t));
     char *inner = NULL;
     /* An `own` box is malloc'd, but what it HOLDS may be live heap
      * (a str, a list in an `own Rec`): without this, an own-typed
@@ -939,6 +941,12 @@ static void append_gc_root_expr(CG *cg, StrBuf *sb, const char *c_expr,
         append_gc_root_expr(cg, sb, xasprintf("%s.e", c_expr), te, wrote);
         return;
     }
+    if (is_opt(slang_t)) {
+        /* none() zero-fills v, and the collector ignores NULL */
+        append_gc_root_expr(cg, sb, xasprintf("%s.v", c_expr),
+                            opt_inner(slang_t), wrote);
+        return;
+    }
     StructDef *sd = struct_find_canon(cg, slang_t);
     if (!sd || sd->is_gc)
         return;
@@ -969,6 +977,8 @@ int count_gc_root_exprs(CG *cg, const char *slang_t) {
         result_te(slang_t, &tv, &te);
         return count_gc_root_exprs(cg, tv) + count_gc_root_exprs(cg, te);
     }
+    if (is_opt(slang_t))
+        return count_gc_root_exprs(cg, opt_inner(slang_t));
     StructDef *sd = struct_find_canon(cg, slang_t);
     if (!sd || sd->is_gc)
         return 0;
@@ -1311,6 +1321,7 @@ const char *opt_cname(CG *cg, const char *inner) {
     OptInst *o = &cg->opts.items[cg->opts.count++];
     o->inner = xstrdup(inner);
     o->cname = xasprintf("sl_opt_%s", sanitize_pkg(inner));
+    o->body_state = 0;
     return o->cname;
 }
 
@@ -1673,6 +1684,10 @@ void ambient_push_value_roots(CG *cg, const char *expr, const char *t) {
         result_te(t, &tv, &te);
         ambient_push_value_roots(cg, xasprintf("%s.v", expr), tv);
         ambient_push_value_roots(cg, xasprintf("%s.e", expr), te);
+        return;
+    }
+    if (is_opt(t)) {
+        ambient_push_value_roots(cg, xasprintf("%s.v", expr), opt_inner(t));
         return;
     }
     StructDef *sd = struct_find_canon(cg, t);
@@ -2249,7 +2264,7 @@ const char *ctype_of(CG *cg, const char *t) {
     if (is_fn(t))
         return fn_cname(cg, t);
     if (is_opt(t))
-        return xasprintf("%s *", opt_cname(cg, opt_inner(t)));
+        return opt_cname(cg, opt_inner(t));
     if (is_result(t)) {
         char *tv, *tev;
         result_te(t, &tv, &tev);

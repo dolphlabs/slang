@@ -1669,21 +1669,8 @@ void gen_stmt(CG *cg, Stmt *s) {
                   "int _sl_seli%d = sl_select_run(_sl_selc%d, "
                   "_sl_seln%d, %d, %d);",
                   id, id, id, n, s->as.select_stmt.def ? 1 : 0);
-        for (i = 0; i < n; i++) {
-            SelectCase *sc = &s->as.select_stmt.cases[i];
-            const char *oc;
-            if (!sc->bind)
-                continue;
-            oc = opt_cname(cg, elems[i]);
-            emit_line(cg, "%s *_sl_selo%d_%d = NULL;", oc, id, i);
-            emit_line(cg,
-                      "if (_sl_seli%d == %d) _sl_selo%d_%d = (%s *)"
-                      "sl_gc_alloc(sizeof(*_sl_selo%d_%d), %s);",
-                      id, i, id, i, oc, id, i,
-                      type_has_gc_roots(cg, elems[i])
-                          ? xasprintf("sl_gc_trace_%s", oc)
-                          : "NULL");
-        }
+        /* The bound opt is a value, built in the arm from the received
+         * slot: nothing to allocate inside this bracket. */
         emit_line(cg, "sl_rt_safepoint_exit_s(SL_SELF());");
 
         for (i = 0; i < n; i++) {
@@ -1696,17 +1683,14 @@ void gen_stmt(CG *cg, Stmt *s) {
                 int from = cg->vars.count;
                 if (sc->bind) {
                     char *ot = xasprintf("opt[%s]", elems[i]);
-                    emit_line(cg,
-                              "_sl_selo%d_%d->has = !_sl_selc%d[%d].closed;",
-                              id, i, id, i);
-                    emit_line(cg,
-                              "if (_sl_selo%d_%d->has) _sl_selo%d_%d->v = "
-                              "_sl_selv%d_%d;",
-                              id, i, id, i, id, i);
+                    /* an opt is a value: built here, nothing allocated */
                     var_redecl_check(cg, sc->bind, sc->line);
                     var_push(cg, sc->bind, ot);
-                    emit_line(cg, "%s %s = _sl_selo%d_%d;", ctype_of(cg, ot),
-                              sanitize_ident(sc->bind), id, i);
+                    emit_line(cg,
+                              "%s %s = _sl_selc%d[%d].closed ? (%s){ .has = false } "
+                              ": (%s){ .has = true, .v = _sl_selv%d_%d };",
+                              ctype_of(cg, ot), sanitize_ident(sc->bind), id, i,
+                              ctype_of(cg, ot), ctype_of(cg, ot), id, i);
                 }
                 gen_block(cg, sc->body);
                 emit_scope_drops(cg, from);
