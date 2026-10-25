@@ -11,6 +11,14 @@ recommends an order. Measured on the Intel laptop (i5-8279U, macOS 15),
 **Decided (2026-10-01):** A is done (`sl_bytes_alloc`, below); B is
 deferred; the redis client's buffer copy was fixed first (#276).
 
+**Revisited (2026-10-24): B is done for `result`** (perf/value-result).
+The measurements below were of code that parses in C; code written in
+slang makes one fallible call per field, and there a boxed result was
+most of the cost (grpc's original protobuf decoder: 212 allocations per
+message, 67 by value, 10.3 -> 5.9 us). Native functions still return
+boxed results; codegen copies the struct out at the call (native_gen),
+so the ~220 runtime sites stay as they are. `opt` follows separately.
+
 ## How much it costs
 
 Method: a scratch copy of the runtime counted every allocation by tracer

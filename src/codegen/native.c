@@ -241,6 +241,15 @@ char *native_gen(CG *cg, const char *pkg, const char *fname,
     sb_append(&sb, ")");
     const char *rt = infer_type(cg, e);
     const char *rc = (!rt || !strcmp(rt, "void")) ? NULL : ctype_of(cg, rt);
+    /* Natives build their results on the heap (the runtime predates
+     * by-value results and returns `sl_res_* *`); slang holds a result by
+     * value, so the call's struct is copied out here. The box is garbage
+     * from this point, and nothing else holds it. */
+    if (rt && is_result(rt)) {
+        char *boxed = xasprintf("(*%s)", sb.data);
+        sb_init(&sb);
+        sb_append(&sb, boxed);
+    }
     /* Tier 10: wrap_safepoint must see every sequenced argument's
      * ambient registration -- a native function (net/time/proc) has no
      * safepoint bracket of its own to protect them once "passed" the

@@ -998,11 +998,11 @@ char *json_call_gen(CG *cg, const char *fname, Expr *e) {
             "if (!_sl_jok) { sl_json_val *_sl_jv = sl_json_parse(_sl_js, "
             "_sl_jn, &_sl_jerr); if (_sl_jv) _sl_jok = %s(_sl_jv, &_sl_jout, "
             "&_sl_jerr); } "
-            "%s *_sl_jr = (%s *)sl_gc_alloc(sizeof(%s), %s); "
-            "if (_sl_jok) { _sl_jr->ok = true; _sl_jr->v = _sl_jout; } "
-            "else { _sl_jr->ok = false; _sl_jr->e = _sl_jerr; } _sl_jr; })",
+            "_sl_jok ? (%s){ .ok = true, .v = _sl_jout } "
+            ": (%s){ .ok = false, .e = _sl_jerr }; })",
             data, len, reserve, fct, json_zero_init(cg, tv),
-            json_fast_dec_fn(cg, tv), decfn, resname, resname, resname, restrace);
+            json_fast_dec_fn(cg, tv), decfn, resname, resname);
+        (void)restrace;
         /* Tier 10: json.decode allocates (the result[T,E] wrapper,
          * plus whatever the monomorphized decoder itself
          * allocates) -- a real safepoint, same as any other call
@@ -1010,7 +1010,7 @@ char *json_call_gen(CG *cg, const char *fname, Expr *e) {
          * sibling to protect against (the sequence_one binding above
          * is about protecting THIS argument's own value across the
          * call, not about ordering against a second argument). */
-        char *result = wrap_safepoint(cg, e, xasprintf("%s *", resname),
+        char *result = wrap_safepoint(cg, e, resname,
                                       prelude.data, inner);
         /* Pop the ambient root sequence_one may have pushed: it must
          * not leak into whatever safepoint-wrapped code gets emitted

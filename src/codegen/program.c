@@ -552,6 +552,8 @@ void emit_struct_and_value_res_types(CG *cg) {
  * struct, whose allocation sites always name theirs, a value struct
  * only needs one when some conversion actually boxes it, and an
  * unreferenced static would trip the warning sweep. */
+static void emit_value_marks(CG *cg, const char *path, const char *t);
+
 static void emit_struct_tracer_fields(CG *cg, StructDef *sd,
                                       const char *prefix) {
     for (int j = 0; j < sd->nfields; j++) {
@@ -561,14 +563,28 @@ static void emit_struct_tracer_fields(CG *cg, StructDef *sd,
             path = xasprintf("%s.%s", prefix, sanitize_ident(sd->fields[j]));
         else
             path = xstrdup(sanitize_ident(sd->fields[j]));
-        if (type_is_gc_ptr(cg, ft)) {
-            emit_line(cg, "mark((void *)o->%s);", path);
-            continue;
-        }
-        StructDef *sub = struct_find_canon(cg, ft);
-        if (sub && !sub->is_gc && struct_has_gc_fields(cg, sub))
-            emit_struct_tracer_fields(cg, sub, path);
+        emit_value_marks(cg, path, ft);
     }
+}
+
+/* Mark what a field `o-><path>` of type `t` holds: the pointer itself,
+ * or, for a value struct or a result held by value, each GC pointer
+ * inside it. */
+static void emit_value_marks(CG *cg, const char *path, const char *t) {
+    if (type_is_gc_ptr(cg, t)) {
+        emit_line(cg, "mark((void *)o->%s);", path);
+        return;
+    }
+    if (is_result(t)) {
+        char *tv, *te;
+        result_te(t, &tv, &te);
+        emit_value_marks(cg, xasprintf("%s.v", path), tv);
+        emit_value_marks(cg, xasprintf("%s.e", path), te);
+        return;
+    }
+    StructDef *sub = struct_find_canon(cg, t);
+    if (sub && !sub->is_gc && struct_has_gc_fields(cg, sub))
+        emit_struct_tracer_fields(cg, sub, path);
 }
 
 void emit_struct_tracers(CG *cg) {
@@ -607,7 +623,9 @@ void emit_struct_tracers(CG *cg) {
  * can hold each other by value) and emit_opt_res_types (everything
  * else only holds pointers). Must run before either. */
 static int res_inst_is_value(CG *cg, ResInst *r) {
-    return !type_has_gc_roots(cg, r->tv) && !type_has_gc_roots(cg, r->te);
+    (void)cg;
+    (void)r;
+    return 1;   /* every result is held by value; see type_is_gc_ptr */
 }
 
 static void emit_res_struct_body(CG *cg, ResInst *r) {
@@ -766,8 +784,8 @@ void emit_opt_res_types(CG *cg) {
  * that needs one always gets one: a value struct holding a str used to
  * get NULL, and the str was freed under the opt or result holding it. */
 static void emit_payload_marks(CG *cg, const char *field, const char *t) {
-    if (type_is_gc_ptr(cg, t)) {
-        emit_line(cg, "mark((void *)o->%s);", field);
+    if (type_is_gc_ptr(cg, t) || is_result(t)) {
+        emit_value_marks(cg, field, t);
         return;
     }
     StructDef *sd = struct_find_canon(cg, t);
@@ -1016,9 +1034,11 @@ void emit_spawn_trampolines(CG *cg) {
         /* `fn` is deliberately NOT marked: a function value names code,
          * not the heap. Marking it would hand the collector an address
          * it never allocated. */
+        /* Value structs and results are traced through, field by field,
+         * as a struct tracer does: a by-value argument holding a str used
+         * to go unmarked while the task waited to run. */
         for (int j = 0; j < sig->nparams; j++)
-            if (type_is_gc_ptr(cg, sig->param_slang[j]))
-                emit_line(cg, "mark((void *)o->a%d);", j);
+            emit_value_marks(cg, xasprintf("a%d", j), sig->param_slang[j]);
         cg->indent--;
         emit_line(cg, "}");
         emit_line(cg, "");
@@ -1782,6 +1802,12 @@ static const char *leaf_expr(CG *cg, LeafEnv *env, Expr *e) {
         if (!strcmp(name, "len") || !strcmp(name, "wire_put") ||
             !strcmp(name, "wire_put_bytes"))
             return "int";
+        /* A result is a value: ok()/err() of a leaf argument allocate and
+         * park nothing. Typed "result" only to say "not void"; it never
+         * equals a declared type, so a binding of one is not a leaf. */
+        if ((!strcmp(name, "ok") || !strcmp(name, "err")) &&
+            e->as.call.nargs == 1 && !e->as.call.callee)
+            return "result";
         char *left, *right;
         if (split_dotted(name, &left, &right)) {
             const char *pkg = import_try(cg, left);

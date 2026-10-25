@@ -805,17 +805,13 @@ int type_is_gc_ptr(CG *cg, const char *t) {
         return 0;
     if (is_fn(t))
         return 0; /* names code, never the heap -- nothing to trace */
-    /* A result is a heap object -- found, traced and rooted like one --
-     * when either side holds a GC pointer anywhere, a value struct's
-     * fields included; only a result of plain values is held by value.
-     * Asking whether each side IS a pointer made result[Rec, fault] (Rec
-     * a value struct with a str) a by-value C struct no liveness pass
-     * rooted, so a collection freed the str while the result held it. */
-    if (is_result(t)) {
-        char *tv, *te;
-        result_te(t, &tv, &te);
-        return type_has_gc_roots(cg, tv) || type_has_gc_roots(cg, te);
-    }
+    /* A result is always held by value: a C struct { ok, v, e }. It was
+     * a heap object whenever a side held a GC pointer, so every ok()/
+     * err() of a result[T, str] -- one per fallible call -- allocated.
+     * Its pointers are rooted and traced through it instead, as a value
+     * struct's fields are (type_has_gc_roots, gc_value_parts). */
+    if (is_result(t))
+        return 0;
     if (is_arr(t) || is_map(t) || is_opt(t) ||
         is_chan(t) || is_join(t) || is_mutex(t) || is_str(t) || is_bytes(t))
         return 1;
@@ -852,6 +848,11 @@ StructDef *struct_of_type(CG *cg, const char *t) {
 int type_has_gc_roots(CG *cg, const char *t) {
     if (type_is_gc_ptr(cg, t))
         return 1;
+    if (is_result(t)) {
+        char *tv, *te;
+        result_te(t, &tv, &te);
+        return type_has_gc_roots(cg, tv) || type_has_gc_roots(cg, te);
+    }
     char *inner = NULL;
     /* An `own` box is malloc'd, but what it HOLDS may be live heap
      * (a str, a list in an `own Rec`): without this, an own-typed
@@ -929,6 +930,15 @@ static void append_gc_root_expr(CG *cg, StrBuf *sb, const char *c_expr,
         sb_append(sb, xasprintf("(void *)%s", c_expr));
         return;
     }
+    if (is_result(slang_t)) {
+        /* Both sides: every constructor zero-fills the one it does not
+         * set, and the collector ignores NULL. */
+        char *tv, *te;
+        result_te(slang_t, &tv, &te);
+        append_gc_root_expr(cg, sb, xasprintf("%s.v", c_expr), tv, wrote);
+        append_gc_root_expr(cg, sb, xasprintf("%s.e", c_expr), te, wrote);
+        return;
+    }
     StructDef *sd = struct_find_canon(cg, slang_t);
     if (!sd || sd->is_gc)
         return;
@@ -954,6 +964,11 @@ void append_gc_roots_of(CG *cg, StrBuf *sb, const char *c_expr,
 int count_gc_root_exprs(CG *cg, const char *slang_t) {
     if (type_is_gc_ptr(cg, slang_t))
         return 1;
+    if (is_result(slang_t)) {
+        char *tv, *te;
+        result_te(slang_t, &tv, &te);
+        return count_gc_root_exprs(cg, tv) + count_gc_root_exprs(cg, te);
+    }
     StructDef *sd = struct_find_canon(cg, slang_t);
     if (!sd || sd->is_gc)
         return 0;
@@ -1639,21 +1654,36 @@ char *sequence_one(CG *cg, int seq_id, int idx, const char *ctype,
     sb_append(prelude, xasprintf("%s %s = %s; ", ctype, name, text));
     if (expr_node && type_has_gc_roots(cg, slang_type)) {
         expr_tmp_register(cg, expr_node, name, slang_type);
-        if (type_is_gc_ptr(cg, slang_type))
-            ambient_root_push(cg, name);
-        else {
-            StructDef *sd = struct_find_canon(cg, slang_type);
-            if (sd && !sd->is_gc) {
-                for (int j = 0; j < sd->nfields; j++) {
-                    if (!type_has_gc_roots(cg, sd->ftypes[j]))
-                        continue;
-                    ambient_root_push(cg, xasprintf("%s.%s", name,
-                                                    sanitize_ident(sd->fields[j])));
-                }
-            }
-        }
+        ambient_push_value_roots(cg, name, slang_type);
     }
     return name;
+}
+
+/* Keep every GC pointer a C value holds rooted while it sits in a temp:
+ * the value itself when it is one, else each pointer inside it -- a value
+ * struct's fields and a result's two sides, recursively. A value struct
+ * nested in another used to be pushed as if it were a single pointer. */
+void ambient_push_value_roots(CG *cg, const char *expr, const char *t) {
+    if (type_is_gc_ptr(cg, t)) {
+        ambient_root_push(cg, expr);
+        return;
+    }
+    if (is_result(t)) {
+        char *tv, *te;
+        result_te(t, &tv, &te);
+        ambient_push_value_roots(cg, xasprintf("%s.v", expr), tv);
+        ambient_push_value_roots(cg, xasprintf("%s.e", expr), te);
+        return;
+    }
+    StructDef *sd = struct_find_canon(cg, t);
+    if (!sd || sd->is_gc)
+        return;
+    for (int j = 0; j < sd->nfields; j++)
+        if (type_has_gc_roots(cg, sd->ftypes[j]))
+            ambient_push_value_roots(cg,
+                                     xasprintf("%s.%s", expr,
+                                               sanitize_ident(sd->fields[j])),
+                                     sd->ftypes[j]);
 }
 
 void ambient_root_push(CG *cg, const char *name) {
