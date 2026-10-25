@@ -728,6 +728,7 @@ VarSym *var_find(CG *cg, const char *name);
 void expr_tmp_register(CG *cg, Expr *e, const char *name, const char *type);
 const char *expr_tmp_find(CG *cg, Expr *e);
 void ambient_root_push(CG *cg, const char *name);
+void ambient_push_value_roots(CG *cg, const char *expr, const char *t);
 char *sequence_one(CG *cg, int seq_id, int idx, const char *ctype,
                    const char *slang_type, char *text, Expr *expr_node,
                    StrBuf *prelude);

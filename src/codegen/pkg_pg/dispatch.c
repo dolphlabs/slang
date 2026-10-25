@@ -96,7 +96,7 @@ char *pg_rows_gen(CG *cg, Expr *e) {
         "size_t _sl_pgs = sl_pgr_stack_bytes(&_sl_pgv, %d); "
         "sl_rt_stack_reserve(_sl_pgs > (%s) ? _sl_pgs : (%s)); %s(%s); })",
         arg, arg, arg, arg, arg, arg, arg, depth_bytes, frame, frame, it->name, arg);
-    char *out = wrap_safepoint(cg, e, xasprintf("%s *", res), pre.data, inner);
+    char *out = wrap_safepoint(cg, e, res, pre.data, inner);
     cg->ambient_count = mark;
     return out;
 }
@@ -183,9 +183,8 @@ static void emit_rows(CG *cg, PgRowsInst *it) {
     StructDef *sd = struct_find_canon(cg, base);
     const char *list = xasprintf("[%s]", t);
     const char *res = res_cname(cg, list, "str");
-    const char *trace = xasprintf("sl_gc_trace_%s", res);
     const char *ct = ctype_of(cg, t);
-    emit_line(cg, "static %s *%s(%s input) {", res, it->name, ctype_of(cg, it->rows_type));
+    emit_line(cg, "static %s %s(%s input) {", res, it->name, ctype_of(cg, it->rows_type));
     cg->indent++;
     emit_line(cg, "sl_pgr_view view = { input->columns, input->types, input->chunks, input->locs, input->lens, input->count, input->binary_results };");
     emit_line(cg, "char *err = NULL; long long row = -1; sl_arr *out = NULL;");
@@ -251,8 +250,10 @@ static void emit_rows(CG *cg, PgRowsInst *it) {
     emit_line(cg, "err = sl_json_wrap_err(context, err);");
     cg->indent--; emit_line(cg, "}");
     cg->indent--; emit_line(cg, "done:;");
-    emit_line(cg, "%s *answer = (%s *)sl_gc_alloc(sizeof(%s), %s);", res, res, res, trace);
-    emit_line(cg, "answer->ok = err == NULL; if (err) answer->e = err; else answer->v = out; return answer;");
+    /* The result is a value: nothing is allocated after `out` and `err`
+     * are made, so neither needs rooting on the way out. */
+    emit_line(cg, "if (err) return (%s){ .ok = false, .e = err };", res);
+    emit_line(cg, "return (%s){ .ok = true, .v = out };", res);
     cg->indent--; emit_line(cg, "}"); emit_line(cg, "");
 }
 

@@ -646,10 +646,7 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         const char *rt = xasprintf("result[%s,str]", elem);
         const char *rc = res_cname(cg, elem, "str");
         const char *rct = ctype_of(cg, rt);
-        const char *trace =
-            (type_has_gc_roots(cg, elem) || type_has_gc_roots(cg, "str"))
-                ? xasprintf("sl_gc_trace_%s", rc)
-                : "NULL";
+        (void)rc;
         int id = cg->tmp_id++;
         /* The handle is evaluated ONCE, into _sl_jh. It used to be spliced
          * into both sl_join_wait(...) and sl_join_err(...), so for
@@ -665,35 +662,26 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
          * and sl_gc_mark ignores NULL. The error is read inside the bracket
          * because sl_join_err can allocate.
          *
-         * As with chan_recv, the result box can be promoted while this
-         * task waits, so the stores made after the wait take the write
-         * barrier when the result holds GC pointers. */
-        const char *jbarrier =
-            strcmp(trace, "NULL")
-                ? xasprintf("sl_rt_preempt_disable(); sl_gc_remember((void *)_sl_jr%d); "
-                            "sl_rt_preempt_enable(); ", id)
-                : "";
+         * The result is a value built after the wait, so there is no box
+         * to be promoted while this task waits, and no barrier to need. */
         char *inner = xasprintf(
-            "({ %s _sl_jv%d; %s _sl_jr%d = (%s)sl_gc_alloc(sizeof(*_sl_jr%d), %s); "
-            "void *_sl_jwr%d_roots[] = { (void *)_sl_jr%d, NULL }; "
-            "sl_safepoint _sl_jwr%d; sl_rt_safepoint_enter_s(SL_SELF(), &_sl_jwr%d, _sl_jwr%d_roots, 2); "
+            "({ %s _sl_jv%d; "
+            "void *_sl_jwr%d_roots[] = { NULL }; "
+            "sl_safepoint _sl_jwr%d; sl_rt_safepoint_enter_s(SL_SELF(), &_sl_jwr%d, _sl_jwr%d_roots, 1); "
             "sl_join *_sl_jh%d = %s; "
-            "_sl_jwr%d_roots[1] = (void *)_sl_jh%d; "
+            "_sl_jwr%d_roots[0] = (void *)_sl_jh%d; "
             "int _sl_jok%d = sl_join_wait(_sl_jh%d, &_sl_jv%d); "
-            "if (_sl_jok%d) { _sl_jr%d->ok = true; _sl_jr%d->v = _sl_jv%d; } "
-            "else { _sl_jr%d->ok = false; _sl_jr%d->e = sl_join_err(_sl_jh%d); } "
-            "%s"
+            "%s _sl_jr%d = _sl_jok%d ? (%s){ .ok = true, .v = _sl_jv%d } "
+            ": (%s){ .ok = false, .e = sl_join_err(_sl_jh%d) }; "
             "sl_rt_safepoint_exit_s(SL_SELF()); "
             "_sl_jr%d; })",
-            ec, id, rct, id, rct, id, trace,
-            id, id,
+            ec, id,
+            id,
             id, id, id,
             id, h,
             id, id,
             id, id, id,
-            id, id, id, id,
-            id, id, id,
-            jbarrier,
+            rct, id, id, rct, id, rct, id,
             id);
         return wrap_safepoint(cg, e, rct, NULL, inner);
     }
@@ -710,30 +698,22 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         const char *rct = ctype_of(cg, rt);
         char *a = gen_expr(cg, e->as.call.args[0]);
         int id = cg->tmp_id++;
-        /* One allocation, and it is the last thing that happens. The
-         * error strings sl_str_parse_* hand back are string LITERALS,
-         * so they are assigned straight into ->e with no sl_strdup:
-         * that keeps a second allocation from running while the result
-         * struct is sitting in a C local with nothing rooting it, and
-         * sl_gc_mark already ignores addresses it never allocated.
+        /* No allocation: the result is a value, and the error strings
+         * sl_str_parse_* hand back are string LITERALS, assigned straight
+         * into .e (sl_gc_mark ignores addresses it never allocated).
          *
          * The message does not echo the offending input. The caller has
-         * it, and building that string here would put the allocation
+         * it, and building that string here would put an allocation
          * back. */
+        (void)rc;
         char *inner = xasprintf(
             "({ %s _sl_pv%d = 0; const char *_sl_pe%d = \"\"; "
             "int _sl_pok%d = sl_str_parse_%s(%s, &_sl_pv%d, &_sl_pe%d); "
-            "%s _sl_pr%d = (%s)sl_gc_alloc(sizeof(*_sl_pr%d), "
-            "sl_gc_trace_%s); "
-            "if (_sl_pok%d) { _sl_pr%d->ok = true; _sl_pr%d->v = _sl_pv%d; } "
-            "else { _sl_pr%d->ok = false; _sl_pr%d->e = _sl_pe%d; } "
-            "_sl_pr%d; })",
+            "_sl_pok%d ? (%s){ .ok = true, .v = _sl_pv%d } "
+            ": (%s){ .ok = false, .e = _sl_pe%d }; })",
             isint ? "long long" : "double", id, id,
             id, isint ? "int" : "f64", a, id, id,
-            rct, id, rct, id, rc,
-            id, id, id, id,
-            id, id, id,
-            id);
+            id, rct, id, rct, id);
         return wrap_safepoint(cg, e, rct, NULL, inner);
     }
     if (!strcmp(name, "__enum_from_int") || !strcmp(name, "__enum_from_str")) {
@@ -753,25 +733,17 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         char *m = mangle_enum(et);
         EnumDef *ed = enum_find_canon(cg, et);
         int id = cg->tmp_id++;
+        (void)rc;
         char *inner = xasprintf(
             "({ int32_t _sl_eidx%d = -1; "
             "int _sl_eok%d = sl_enum_from_%s(%s, %s_%s, %d, &_sl_eidx%d); "
-            "%s _sl_er%d = (%s)sl_gc_alloc(sizeof(*_sl_er%d), "
-            "sl_gc_trace_%s); "
-            "if (_sl_eok%d) { _sl_er%d->ok = true; "
-            "_sl_er%d->v = (int32_t)%s_values[_sl_eidx%d]; } "
-            "else { _sl_er%d->ok = false; "
-            "_sl_er%d->e = \"not a valid %s variant\"; } "
-            "_sl_er%d; })",
+            "_sl_eok%d ? (%s){ .ok = true, .v = (int32_t)%s_values[_sl_eidx%d] } "
+            ": (%s){ .ok = false, .e = \"not a valid %s variant\" }; })",
             id,
             id, isint ? "int" : "str", a, m, isint ? "values" : "names",
             ed->nvariants, id,
-            rct, id, rct, id, rc,
-            id, id,
-            id, m, id,
-            id,
-            id, ed->name,
-            id);
+            id, rct, m, id,
+            rct, ed->name);
         return wrap_safepoint(cg, e, rct, NULL, inner);
     }
     if (!strcmp(name, "make_mutex")) {
@@ -1043,28 +1015,14 @@ char *gen_ctor(CG *cg, Expr *e) {
             "_sl_c->has = true; _sl_c->v = _sl_cv; _sl_c; })",
             vc, v, cn, cn, trace);
     } else {
-        char *tv, *tev;
-        result_te(ty, &tv, &tev);
-        const char *rc = res_cname(cg, tv, tev);
-        const char *trace =
-            (type_has_gc_roots(cg, tv) || type_has_gc_roots(cg, tev))
-                ? xasprintf("sl_gc_trace_%s", rc)
-                : "NULL";
-        if (!type_is_gc_ptr(cg, ty)) {
-            if (!strcmp(name, "ok"))
-                inner = xasprintf("((%s){ .ok = true, .v = %s })", cn, v);
-            else
-                inner = xasprintf("((%s){ .ok = false, .e = %s })", cn, v);
-        } else if (!strcmp(name, "ok"))
-            inner = xasprintf(
-                "({ %s _sl_cv = %s; %s _sl_c = (%s)sl_gc_alloc(sizeof(*_sl_c), %s); "
-                "_sl_c->ok = true; _sl_c->v = _sl_cv; _sl_c; })",
-                vc, v, cn, cn, trace);
-        else
-            inner = xasprintf(
-                "({ %s _sl_cv = %s; %s _sl_c = (%s)sl_gc_alloc(sizeof(*_sl_c), %s); "
-                "_sl_c->ok = false; _sl_c->e = _sl_cv; _sl_c; })",
-                vc, v, cn, cn, trace);
+        /* A result is a value (see type_is_gc_ptr): building one
+         * allocates nothing. Designated initializers zero the side not
+         * set, which rooting and tracing rely on. */
+        /* Nor can it park, so it is no safepoint either: the bracket
+         * every ok()/err() used to take is gone with the allocation. */
+        if (!strcmp(name, "ok"))
+            return xasprintf("((%s){ .ok = true, .v = %s })", cn, v);
+        return xasprintf("((%s){ .ok = false, .e = %s })", cn, v);
     }
     /* Tier 10: some()/ok()/err() allocate directly (GC_malloc), so
      * this is a real safepoint too -- liveness.c doesn't special-case
@@ -2064,9 +2022,9 @@ char *gen_expr(CG *cg, Expr *e) {
              * dangle for whatever generates next. */
             int ambient_mark = cg->ambient_count;
             char *qname = xasprintf("_sl_q%d", id);
-            if (type_is_gc_ptr(cg, lt)) {
+            if (type_has_gc_roots(cg, lt)) {
                 expr_tmp_register(cg, e->as.binary.lhs, qname, lt);
-                ambient_root_push(cg, qname);
+                ambient_push_value_roots(cg, qname, lt);
             }
             if (is_opt(lt)) {
                 char *inner = opt_inner(lt);
@@ -2217,8 +2175,8 @@ char *gen_expr(CG *cg, Expr *e) {
             char *a = gen_expr(cg, call->as.call.args[i]);
             a = maybe_cast(cg, sig->param_slang[i], at, a);
             sb_append(&prelude, xasprintf("_sl_sa%d.a%d = %s; ", id, i, a));
-            if (type_is_gc_ptr(cg, sig->param_slang[i]))
-                ambient_root_push(cg, xasprintf("_sl_sa%d.a%d", id, i));
+            ambient_push_value_roots(cg, xasprintf("_sl_sa%d.a%d", id, i),
+                                     sig->param_slang[i]);
             /* A later argument with a call has this one live across it
              * (liveness pends the argument expression); its value is in
              * the spawn-args field, so that is the temp to root. Without
