@@ -17,7 +17,13 @@ slang makes one fallible call per field, and there a boxed result was
 most of the cost (grpc's original protobuf decoder: 212 allocations per
 message, 67 by value, 10.3 -> 5.9 us). Native functions still return
 boxed results; codegen copies the struct out at the call (native_gen),
-so the ~220 runtime sites stay as they are. `opt` follows separately.
+so the ~220 runtime sites stay as they are.
+
+**And for `opt` (2026-10-25, perf/value-opt):** `{ has, v }` by value,
+built the same way; `none`/`some()` allocate nothing and are no
+safepoint, and chan_recv/select build theirs after the wait. One
+language-visible change: a plain struct holding itself through an opt is
+now refused (infinitely large); a gc struct can, as before.
 
 ## How much it costs
 

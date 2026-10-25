@@ -58,23 +58,12 @@ static size_t sl_io_scanned = 0;
 /* ---- result construction ---- */
 
 static sl_res_opt_str__str *sl_io_res_line(char *s, bool present) {
-    /* s (GC memory) is live across the opt allocation, and the opt
-     * across the result's: root each so a collection in the next
-     * allocation cannot take it. */
-    sl_opt_str *o;
-    {
-        void *roots[] = { (void *)s };
-        sl_safepoint sp;
-        sl_rt_safepoint_enter(&sp, roots, 1);
-        o = (sl_opt_str *)sl_gc_alloc(sizeof(sl_opt_str),
-                                      sl_gc_trace_sl_opt_str);
-        sl_rt_safepoint_exit();
-    }
-    o->has = present;
-    o->v = present ? s : NULL;
+    /* s (GC memory) is live across the result's allocation, so it is
+     * rooted for it. The opt is held by value inside the result, so this
+     * is the only allocation. */
     sl_res_opt_str__str *r;
     {
-        void *roots[] = { (void *)o };
+        void *roots[] = { (void *)s };
         sl_safepoint sp;
         sl_rt_safepoint_enter(&sp, roots, 1);
         r = (sl_res_opt_str__str *)sl_gc_alloc(
@@ -82,7 +71,8 @@ static sl_res_opt_str__str *sl_io_res_line(char *s, bool present) {
         sl_rt_safepoint_exit();
     }
     r->ok = true;
-    r->v = o;
+    r->v.has = present;
+    r->v.v = present ? s : NULL;
     return r;
 }
 

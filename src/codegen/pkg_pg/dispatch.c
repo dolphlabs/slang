@@ -102,6 +102,8 @@ char *pg_rows_gen(CG *cg, Expr *e) {
 }
 
 static const char *zero(CG *cg, const char *t) {
+    if (is_opt(t) || is_result(t))
+        return "{0}";   /* held by value */
     StructDef *sd = struct_find_canon(cg, t);
     return sd && !sd->is_gc ? "{}" : "0";
 }
@@ -119,11 +121,10 @@ static void emit_cell(CG *cg, PgCellInst *it) {
     if (is_opt(t)) {
         const char *inner = opt_inner(t);
         const char *oname = opt_cname(cg, inner);
-        const char *trace = type_has_gc_roots(cg, inner) ? xasprintf("sl_gc_trace_%s", oname) : "NULL";
         emit_line(cg, "%s value = %s;", ctype_of(cg, inner), zero(cg, inner));
         emit_line(cg, "if (cell->kind != SL_PGR_NULL && !%s(cell, &value, err)) return false;", pg_cell_fn(cg, inner, 0));
-        emit_line(cg, "%s *o = (%s *)sl_gc_alloc(sizeof(%s), %s);", oname, oname, oname, trace);
-        emit_line(cg, "o->has = cell->kind != SL_PGR_NULL; o->v = value; *out = o; return true;");
+        /* an opt is a value: NULL is none, nothing allocated */
+        emit_line(cg, "*out = (%s){ .has = cell->kind != SL_PGR_NULL, .v = value }; return true;", oname);
     } else {
         if (is_int(t)) {
             const char *lo = "INT64_MIN", *hi = "INT64_MAX";
@@ -171,9 +172,7 @@ static void wrap_row(CG *cg, const char *t, const char *base, const char *value,
     emit_line(cg, "%s %s = %s;", ctype_of(cg, inner), tmp, zero(cg, inner));
     wrap_row(cg, inner, base, value, tmp, depth + 1);
     const char *name = opt_cname(cg, inner);
-    const char *trace = type_has_gc_roots(cg, inner) ? xasprintf("sl_gc_trace_%s", name) : "NULL";
-    emit_line(cg, "%s = (%s *)sl_gc_alloc(sizeof(%s), %s);", dest, name, name, trace);
-    emit_line(cg, "%s->has = true; %s->v = %s;", dest, dest, tmp);
+    emit_line(cg, "%s = (%s){ .has = true, .v = %s };", dest, name, tmp);
 }
 
 static void emit_rows(CG *cg, PgRowsInst *it) {

@@ -757,7 +757,7 @@ done
 # collector treating every task's recent allocations as roots.
 echo "--- GC stress (SLANG_GC_THRESHOLD_KB=16) ---"
 gc_bad=0
-for name in gc_ctor_payload gc_map_put pg_rows_as postgres http_client_pool http2_flood h2_client chan_recv_promoted value_results encoding_f64 crypto \
+for name in gc_ctor_payload gc_map_put pg_rows_as postgres http_client_pool http2_flood h2_client chan_recv_promoted value_results value_opts encoding_f64 crypto \
             spawn_isolation gc_stress maps json json_int_exact flags method_recv \
             method_recv_gc indirect_callee generics_structs generics_json generics_infer \
             generics_pkg gc_nested_literal generics_methods \
@@ -789,7 +789,7 @@ done
 # allocation.
 echo "--- nursery stress (SLANG_GC_NURSERY_KB=16) ---"
 nur_bad=0
-for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put value_results encoding_f64 crypto \
+for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put value_results value_opts encoding_f64 crypto \
             gc_nested_literal gc_stress gc_stat spawn_isolation maps pg_rows_as json \
             json_int_exact flags method_recv method_recv_gc indirect_callee \
             http_read_wire bytes_empty_literal gc_minor_barriers net_dns_records map_delete if_let \
@@ -824,7 +824,7 @@ for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc
             literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions loop_leaf_plus safepoint_task_once \
             gc_nested_literal gc_nursery_barrier gc_nursery_promotion net_dns_records \
             spawn_isolation select maps pg_rows_as json json_parity json_utf8 json_decode_budget \
-            bytes json_deep_nesting redis http_read_wire http_client_pool http2_flood h2_client chan_recv_promoted value_results \
+            bytes json_deep_nesting redis http_read_wire http_client_pool http2_flood h2_client chan_recv_promoted value_results value_opts \
             gc_promotion_budget gc_chan_promotion_budget \
             value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks gc_skip_queued \
             spawn_join_local spawn_call_args link_tls link_split fn_value_shadows_function select_send_escapes; do
@@ -1207,6 +1207,22 @@ else
     fail=1
 fi
 rm -f "$rna_c"
+
+# An opt is a value too: a million some()/none lookups allocate nothing.
+ona_c="/tmp/sl_opt_no_alloc"
+if ./slangc tests/opt_no_alloc/main.sl -o "$ona_c" >/dev/null 2>&1; then
+    ona_allocs=$(SLANG_GC_STAT=1 "$ona_c" 2>&1 >/dev/null | grep -oE 'allocs=[0-9]+' | head -1 | cut -d= -f2)
+    if [ -n "$ona_allocs" ] && [ "$ona_allocs" -lt 100 ]; then
+        echo "PASS opts allocate nothing ($ona_allocs allocations for 1M lookups)"
+    else
+        echo "FAIL opts allocate: ${ona_allocs:-?} allocations for 1M lookups (want < 100)"
+        fail=1
+    fi
+else
+    echo "FAIL opts allocate nothing (compile)"
+    fail=1
+fi
+rm -f "$ona_c"
 
 # ---- worker count from a cgroup CPU quota (Linux) ---------------------------
 # The pool takes one worker per CPU the affinity mask allows, lowered to

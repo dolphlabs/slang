@@ -4,6 +4,12 @@
 
 ## Known limitations
 
+- A plain `struct` cannot hold itself through an `opt` (or a `result`):
+  both are held by value, so the type would be infinitely large, and the
+  compiler says so. Make it a `gc struct`, which is a pointer -- that is
+  how a linked list is written (`gc struct Node { v: int, next:
+  opt[Node] }`).
+
 - Block scoping: a `let` inside `if`/`else`/`while`/`for` is not
   visible afterwards. Loop bindings (`for i in ...`) are scoped to
   the loop. Redeclaring a name in the same scope is an error;

@@ -324,7 +324,7 @@ guard let user = find(id) else {
 | struct     | `sl_st_*`   | value record (copied)          |
 | `gc struct` | `sl_st_* *` | GC'd heap record (shared)     |
 | `enum`     | `int32_t`   | closed set of named constants (see below) |
-| `opt[T]`   | `sl_opt_* *` | optional value: `some(v)` / `none` |
+| `opt[T]`   | `sl_opt_*`  | optional value: `some(v)` / `none`, held by value (no allocation) |
 | `result[T,E]` | `sl_res_*`  | fallible value: `ok(v)` / `err(e)`, held by value (no allocation) |
 | `duration` | `int64_t`   | nanosecond count (see `time`)  |
 | `rawptr`   | `void *`    | opaque foreign pointer (C interop) |
@@ -3930,6 +3930,12 @@ Makefile       build/test/clean
 ```
 
 ## Known limitations
+
+- A plain `struct` cannot hold itself through an `opt` (or a `result`):
+  both are held by value, so the type would be infinitely large, and the
+  compiler says so. Make it a `gc struct`, which is a pointer -- that is
+  how a linked list is written (`gc struct Node { v: int, next:
+  opt[Node] }`).
 
 - Block scoping: a `let` inside `if`/`else`/`while`/`for` is not
   visible afterwards. Loop bindings (`for i in ...`) are scoped to
