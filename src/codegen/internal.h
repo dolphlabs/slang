@@ -272,6 +272,9 @@ typedef struct {
 typedef struct {
     char *inner; /* canonical slang type T of opt[T] */
     char *cname; /* C typedef name, e.g. sl_opt_str */
+    /* 0 = not emitted, 1 = in progress, 2 = emitted (opts are held by
+     * value, so bodies go in dependency order like results') */
+    int body_state;
 } OptInst;
 
 typedef struct {

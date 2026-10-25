@@ -168,7 +168,7 @@ guard let user = find(id) else {
 | struct     | `sl_st_*`   | value record (copied)          |
 | `gc struct` | `sl_st_* *` | GC'd heap record (shared)     |
 | `enum`     | `int32_t`   | closed set of named constants (see below) |
-| `opt[T]`   | `sl_opt_* *` | optional value: `some(v)` / `none` |
+| `opt[T]`   | `sl_opt_*`  | optional value: `some(v)` / `none`, held by value (no allocation) |
 | `result[T,E]` | `sl_res_*`  | fallible value: `ok(v)` / `err(e)`, held by value (no allocation) |
 | `duration` | `int64_t`   | nanosecond count (see `time`)  |
 | `rawptr`   | `void *`    | opaque foreign pointer (C interop) |
@@ -941,7 +941,7 @@ guard let user = find(id) else {
 | struct     | `sl_st_*`   | value record (copied)          |
 | `gc struct` | `sl_st_* *` | GC'd heap record (shared)     |
 | `enum`     | `int32_t`   | closed set of named constants (see below) |
-| `opt[T]`   | `sl_opt_* *` | optional value: `some(v)` / `none` |
+| `opt[T]`   | `sl_opt_*`  | optional value: `some(v)` / `none`, held by value (no allocation) |
 | `result[T,E]` | `sl_res_*`  | fallible value: `ok(v)` / `err(e)`, held by value (no allocation) |
 | `duration` | `int64_t`   | nanosecond count (see `time`)  |
 | `rawptr`   | `void *`    | opaque foreign pointer (C interop) |

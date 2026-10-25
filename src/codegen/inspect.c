@@ -198,9 +198,9 @@ static void emit_inspect_body(CG *cg, InspectInst *it) {
         }
     } else if (is_opt(t)) {
         char *inner = opt_inner(t);
-        emit_line(cg, "if (!v->has) { sl_inspect_sb_append(out, \"none\"); return; }");
+        emit_line(cg, "if (!v.has) { sl_inspect_sb_append(out, \"none\"); return; }");
         emit_line(cg, "sl_inspect_sb_append(out, \"some(\");");
-        char *s = inspect_append_stmt(cg, inner, "v->v", "out", "depth + 1");
+        char *s = inspect_append_stmt(cg, inner, "v.v", "out", "depth + 1");
         emit_line(cg, "%s", s);
         free(s);
         emit_line(cg, "sl_inspect_sb_append(out, \")\");");

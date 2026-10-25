@@ -385,7 +385,7 @@ static int may_safepoint(Expr *e) {
     case EX_BOOL:
         return 0;
     case EX_IDENT:
-        return !strcmp(e->as.ident.name, "none");
+        return 0;   /* none is a value literal now; nothing allocates */
     case EX_UNARY:
         return may_safepoint(e->as.unary.operand);
     case EX_CAST:
@@ -537,15 +537,8 @@ static LiveSet *live_expr(CG *cg, Expr *e, LiveSet *live_out) {
     case EX_IDENT: {
         if (!strcmp(e->as.ident.name, "nullptr"))
             return live_out; /* ((void *)0) -- never allocates */
-        if (!strcmp(e->as.ident.name, "none")) {
-            /* unlike nullptr, 'none' allocates a fresh sl_opt_* via
-             * GC_malloc every occurrence (expr.c's EX_IDENT case) --
-             * a real safepoint despite being an EX_IDENT, not one of
-             * the 4 kinds ast.h's live_set comment names; recorded
-             * here as the one deliberate exception. */
-            e->live_set = ls_clone(live_out);
-            return live_out;
-        }
+        if (!strcmp(e->as.ident.name, "none"))
+            return live_out; /* a value literal, like nullptr: no safepoint */
         LiveVar *v = resolve_local_use(cg, e->as.ident.name);
         if (!v) return live_out;
         LiveSet *r = ls_clone(live_out);

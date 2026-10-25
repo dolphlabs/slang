@@ -123,8 +123,10 @@ static const char *json_field_sel(StructDef *sd) {
 }
 
 /* A zero initializer for a decode target held in a C local: a value
- * struct needs braces. */
+ * struct, an opt and a result (both held by value) need braces. */
 static const char *json_zero_init(CG *cg, const char *t) {
+    if (is_opt(t) || is_result(t))
+        return "{0}";
     StructDef *sd = struct_find_canon(cg, t);
     return sd && !sd->is_gc ? "{}" : "0";
 }
@@ -358,17 +360,17 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
         const char *otrace = type_has_gc_roots(cg, inner)
                                   ? xasprintf("sl_gc_trace_%s", oname)
                                   : "NULL";
-        emit_line(cg, "%s *o = (%s *)sl_gc_alloc(sizeof(%s), %s);", oname,
-                  oname, oname, otrace);
+        /* An opt is a value: null decodes to none, anything else to
+         * some(inner), with nothing allocated for the opt itself. */
+        (void)otrace;
         emit_line(cg, "if (v->kind == SL_JV_NULL) {");
         cg->indent++;
-        emit_line(cg, "o->has = false;");
-        emit_line(cg, "*out = o;");
+        emit_line(cg, "*out = (%s){ .has = false };", oname);
         emit_line(cg, "return true;");
         cg->indent--;
         emit_line(cg, "}");
-        emit_line(cg, "if (!%s(v, &o->v, err)) return false;", innerfn);
-        emit_line(cg, "o->has = true;");
+        emit_line(cg, "%s o = { .has = true };", oname);
+        emit_line(cg, "if (!%s(v, &o.v, err)) return false;", innerfn);
         emit_line(cg, "*out = o;");
         emit_line(cg, "return true;");
     } else if (is_arr(t)) {
@@ -493,10 +495,8 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
                 const char *otrace = type_has_gc_roots(cg, inner_t)
                                           ? xasprintf("sl_gc_trace_%s", oname)
                                           : "NULL";
-                emit_line(cg,
-                          "%s *o%d = (%s *)sl_gc_alloc(sizeof(%s), %s); o%d->has "
-                          "= false; tmp->%s = o%d;",
-                          oname, i, oname, oname, otrace, i, fname, i);
+                (void)otrace;
+                emit_line(cg, "tmp->%s = (%s){ .has = false };", fname, oname);
             } else {
                 emit_line(cg,
                           "*err = sl_json_errf(\"missing required field "
@@ -557,25 +557,17 @@ static void emit_json_fast_body(CG *cg, JsonInst *it) {
         const char *otrace = type_has_gc_roots(cg, inner)
                                   ? xasprintf("sl_gc_trace_%s", oname)
                                   : "NULL";
-        emit_line(cg, "%s *o;", oname);
+        (void)otrace;
         emit_line(cg, "if (sl_jd_peek(p) == 'n') {");
         cg->indent++;
         emit_line(cg, "if (!sl_jd_null(p)) return false;");
-        emit_line(cg, "o = (%s *)sl_gc_alloc(sizeof(%s), %s);", oname, oname,
-                  otrace);
-        emit_line(cg, "o->has = false;");
-        cg->indent--;
-        emit_line(cg, "} else {");
-        cg->indent++;
-        emit_line(cg, "%s v;", ict);
-        emit_line(cg, "if (!%s(p, &v)) return false;", json_fast_dec_fn(cg, inner));
-        emit_line(cg, "o = (%s *)sl_gc_alloc(sizeof(%s), %s);", oname, oname,
-                  otrace);
-        emit_line(cg, "o->has = true;");
-        emit_line(cg, "o->v = v;");
+        emit_line(cg, "*out = (%s){ .has = false };", oname);
+        emit_line(cg, "return true;");
         cg->indent--;
         emit_line(cg, "}");
-        emit_line(cg, "*out = o;");
+        emit_line(cg, "%s v;", ict);
+        emit_line(cg, "if (!%s(p, &v)) return false;", json_fast_dec_fn(cg, inner));
+        emit_line(cg, "*out = (%s){ .has = true, .v = v };", oname);
         emit_line(cg, "return true;");
     } else if (is_arr(t) || is_map(t)) {
         int arr = is_arr(t);
@@ -737,8 +729,8 @@ static void emit_json_fast_body(CG *cg, JsonInst *it) {
                 const char *otrace = type_has_gc_roots(cg, inner_t)
                                           ? xasprintf("sl_gc_trace_%s", oname)
                                           : "NULL";
-                emit_line(cg, "if (!seen%d) f%d = (%s *)sl_gc_alloc(sizeof(%s), %s);",
-                          i, i, oname, oname, otrace);
+                (void)otrace;
+                emit_line(cg, "if (!seen%d) f%d = (%s){ .has = false };", i, i, oname);
             } else {
                 emit_line(cg, "if (!seen%d) return false;", i);
             }
@@ -781,8 +773,8 @@ static void emit_json_enc_body(CG *cg, JsonInst *it) {
     if (is_opt(t)) {
         char *inner = opt_inner(t);
         const char *innerfn = json_enc_fn(cg, inner, 0);
-        char *arg = json_enc_arg(inner, "v->v");
-        emit_line(cg, "if (!v->has) { sl_json_enc_null(out); return; }");
+        char *arg = json_enc_arg(inner, "v.v");
+        emit_line(cg, "if (!v.has) { sl_json_enc_null(out); return; }");
         emit_line(cg, "%s(%s, out);", innerfn, arg);
     } else if (is_arr(t)) {
         char *elem = arr_elem(t);
