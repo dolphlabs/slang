@@ -2402,7 +2402,11 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
   `runnext` slot instead and runs there next, while the caches are warm
   (a request handed to a child task and back, a channel's two ends); a
   chain of such hand-offs shares one time slice, and an idle worker
-  steals a slot rather than sleep. A spawn whose task's very next step
+  steals a slot rather than sleep. A worker that runs out of work spins
+  for up to 20 µs first, watching the stripes and (on Linux) the
+  network without blocking, and up to half the workers spin at once; a
+  queued task wakes at most one sleeping worker, and none while one
+  spins. A spawn whose task's very next step
   is `join_wait` on it (`let h = spawn f(); let r = join_wait(h);`, or
   `join_wait(spawn f())`) wakes no idle worker at all: the spawner parks
   at once and its own worker runs the child, then the spawner again.
@@ -2415,7 +2419,8 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
   0; `tests/run_tests.sh` checks it), and `deadline_waits` and
   `reactor_nudges`: IO waits that carried a deadline, and those that had
   to wake the reactor to recompute its sleep, and `runnext_wakes`, the
-  sleeping workers woken for a task put in a runnext slot. The reactor never sleeps
+  sleeping workers woken for a task put in a runnext slot, and
+  `idle_wakes`, every time a sleeping worker woke. The reactor never sleeps
   more than a second, so only a deadline closer than that nudges it.
   `f` may be a plain top-level function, an `extern fn`, or a
   **function value** (`spawn w(1, out);`, `spawn job.run(x);`) — not a
