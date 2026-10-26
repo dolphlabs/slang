@@ -255,6 +255,40 @@ honors blob filtering. See
   root sources (like the stripes) and must not reintroduce starvation:
   measure with `bench/latgen` and `tests/sched_fairness`, not wrk alone.
 
+## 4c. Servers leave cores idle under request/response load
+
+- [ ] **Measured 2026-10-26** (zokor's `bench/vs-go/run.sh` in the local
+  Linux container, 8 vCPUs, servers on 0-3 and latgen on 4-7, 4 rounds,
+  10 s; slang `dev` 5800a5a, zokor `main` 7a9a8d1, Go 1.24.1, Fiber
+  2.52.15). Plain slang and zokor keep only 50-70% of their four workers
+  busy; Fiber keeps 75-97%, and latgen sits at 0.4-0.55 of its cores, so
+  the client is not the limit. Medians, `GET /`:
+
+  | conns | server | rps | p50 ms | p99 ms | CPU us/req | util |
+  |---|---|---|---|---|---|---|
+  | 50 | plain slang | 61.3k | 0.76 | 2.15 | 32.7 | 0.50 |
+  | 50 | Go net/http | 85.4k | 0.44 | 3.38 | 37.4 | 0.80 |
+  | 50 | Fiber | 157.2k | 0.25 | 1.10 | 18.8 | 0.75 |
+  | 256 | plain slang | 97.5k | 2.50 | 5.32 | 25.5 | 0.61 |
+  | 256 | Go net/http | 94.1k | 1.91 | 11.59 | 37.5 | 0.88 |
+  | 256 | Fiber | 208.0k | 1.00 | 4.43 | 18.4 | 0.96 |
+
+  At 50 connections a request costs ~33 us of server CPU but takes
+  ~750 us end to end, and neither side is busy for the rest: the time is
+  spent waiting between the socket becoming readable and the response
+  being written. That is not the tail (#4) or hand-off locality (#4b),
+  both fixed; the tail here is good. 4 cores / 25-33 us is a ceiling of
+  ~120-160k rps, not a forecast, but it says per-request cost is not
+  what holds throughput down.
+
+  **First step, before any change:** name the stage. Per request,
+  histogram fd-ready (reactor or worker poll) -> task dispatched ->
+  response written, with worker sleep/wake counts (`SLANG_SCHED_STAT`),
+  a `SLANG_WORKERS=1/2/4` sweep, and `perf sched` in the container.
+  Candidates: readiness delivered late (reactor thread vs worker
+  polling), a sleeping worker slow to wake, run-queue wait, the write
+  path, and accept distribution.
+
 ## 5. Per-request allocation in stdlib `http`
 
 - [x] **Done (2026-09-29).** A static `GET /` through a plain stdlib `http`
