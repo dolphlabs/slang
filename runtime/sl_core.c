@@ -101,8 +101,9 @@ static void (*sl_rt_shutdown_hook)(void) = NULL;
 static void (*sl_rt_io_kick_hook)(void) = NULL;
 /* sl_net.c's worker polling (sl_net_worker_poll), when the program uses
  * the network and the platform has epoll: an idle worker's turn at the
- * reactor, and the wakeup for one asleep in it when work is queued. */
-static int (*sl_rt_netpoll_hook)(void) = NULL;
+ * reactor -- blocking, or just a look (block = 0) -- and the wakeup for
+ * one asleep in it when work is queued. */
+static int (*sl_rt_netpoll_hook)(int block) = NULL;
 static void (*sl_rt_netpoll_break_hook)(void) = NULL;
 
 /* Tier 10: a lexically-scoped chain of GC root lists, one per
@@ -426,6 +427,9 @@ static _Atomic unsigned long long sl_sched_stat_submit = 0;
  * (sl_runq_ready_to): a joined spawn or a join's completion should cause
  * none, since its own worker runs the task next. */
 static _Atomic unsigned long long sl_sched_stat_runnext_wakes = 0;
+/* Times a worker asleep on the run queue's doorbell woke up
+ * (sl_runq_pop_blocking). One task queued should wake at most one. */
+static _Atomic unsigned long long sl_sched_stat_idle_wakes = 0;
 /* Reactor waits that carried a deadline, and those that had to nudge the
  * reactor to recompute its sleep (sl_net.c, sl_reactor_wake_at). */
 static _Atomic unsigned long long sl_sched_stat_deadline_waits = 0;
@@ -466,9 +470,11 @@ static void sl_sched_stat_dump(void) {
         &sl_sched_stat_reactor_nudges, memory_order_relaxed);
     unsigned long long rn_wakes = atomic_load_explicit(
         &sl_sched_stat_runnext_wakes, memory_order_relaxed);
-    fprintf(stderr, "slang-sched-stat workers=%ld submits=%llu resumes=%llu dispatches=%llu preempt_yields=%llu async_preempts=%llu misaligned_preempts=%llu deadline_waits=%llu reactor_nudges=%llu runnext_wakes=%llu\n",
+    unsigned long long idle_wakes = atomic_load_explicit(
+        &sl_sched_stat_idle_wakes, memory_order_relaxed);
+    fprintf(stderr, "slang-sched-stat workers=%ld submits=%llu resumes=%llu dispatches=%llu preempt_yields=%llu async_preempts=%llu misaligned_preempts=%llu deadline_waits=%llu reactor_nudges=%llu runnext_wakes=%llu idle_wakes=%llu\n",
             sl_pool_nworkers, submit, resume, dispatch, pyield, async,
-            misaligned, dwaits, nudges, rn_wakes);
+            misaligned, dwaits, nudges, rn_wakes, idle_wakes);
 }
 
 __attribute__((destructor))
