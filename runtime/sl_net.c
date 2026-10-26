@@ -658,14 +658,18 @@ static void sl_net_poll_break(void) {
  * sl_runq_pop_blocking with the run queue unlocked): 0 if another worker
  * already polls, else 1 once it has waited -- until a socket is ready, a
  * deadline is due, work is queued or a second has passed -- and resumed
- * whatever it found. Resumed tasks go to the run queues as the reactor
- * thread's would, and this worker pops one next.
+ * whatever it found. With block = 0 it does not wait: a spinning worker
+ * (sl_runq_spin) looks at the set between scans of the run queues, as
+ * Go's findrunnable does with netpoll(0), so a request that becomes
+ * readable while every worker is busy or spinning is seen at once rather
+ * than when some worker next goes idle. Resumed tasks go to the run queues
+ * as the reactor thread's would, and this worker pops one next.
  *
  * Blocked for the collector throughout, as a worker asleep on the run
  * queue is: it holds no task, and a resume takes sl_gc_mu, so it
  * serializes with a collection exactly as the reactor thread (which the
  * collector never waits for) always has. */
-static int sl_net_worker_poll(void) {
+static int sl_net_worker_poll(int block) {
     int idle = 0;
     if (!atomic_compare_exchange_strong_explicit(&sl_poller_active, &idle, 1,
                                                  memory_order_acq_rel,
@@ -687,17 +691,19 @@ static int sl_net_worker_poll(void) {
         wait = 0;
     if (wait > SL_REACTOR_MAX_SLEEP_NS)
         wait = SL_REACTOR_MAX_SLEEP_NS;
-    atomic_store_explicit(&sl_poller_sleeping, 1, memory_order_seq_cst);
-    atomic_thread_fence(memory_order_seq_cst);
-    if (atomic_load_explicit(&sl_global_runq_count, memory_order_relaxed) == 0) {
-        struct epoll_event outer[2];
-        epoll_wait(sl_poll_outer_fd, outer, 2,
-                   (int)((wait + 999999LL) / 1000000LL));
-    }
-    atomic_store_explicit(&sl_poller_sleeping, 0, memory_order_seq_cst);
-    if (atomic_exchange_explicit(&sl_poll_break_sent, 0, memory_order_acq_rel)) {
-        uint64_t x;
-        sl_net_drain(sl_poll_break_efd, &x, sizeof(x));
+    if (block) {
+        atomic_store_explicit(&sl_poller_sleeping, 1, memory_order_seq_cst);
+        atomic_thread_fence(memory_order_seq_cst);
+        if (atomic_load_explicit(&sl_global_runq_count, memory_order_relaxed) == 0) {
+            struct epoll_event outer[2];
+            epoll_wait(sl_poll_outer_fd, outer, 2,
+                       (int)((wait + 999999LL) / 1000000LL));
+        }
+        atomic_store_explicit(&sl_poller_sleeping, 0, memory_order_seq_cst);
+        if (atomic_exchange_explicit(&sl_poll_break_sent, 0, memory_order_acq_rel)) {
+            uint64_t x;
+            sl_net_drain(sl_poll_break_efd, &x, sizeof(x));
+        }
     }
     struct epoll_event events[64];
     int n = epoll_wait(sl_reactor_fd, events, 64, 0);
