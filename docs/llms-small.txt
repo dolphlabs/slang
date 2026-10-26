@@ -328,6 +328,8 @@ println("ok");
   `if let v = x { .. } else { .. }` when both paths continue.
 - `let v = chan_recv(c);` is `opt[T]`: unwrap with `guard let` or `??`.
 - Mixing `i32` and `int`: widening is implicit; narrowing needs `as`.
+- A plain `struct` holding itself through `opt` or `result` is rejected
+  (both are held by value): make it a `gc struct Node { next: opt[Node] }`.
 
 ## Package index
 
