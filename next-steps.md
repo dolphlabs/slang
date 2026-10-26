@@ -255,6 +255,58 @@ honors blob filtering. See
   root sources (like the stripes) and must not reintroduce starvation:
   measure with `bench/latgen` and `tests/sched_fairness`, not wrk alone.
 
+## 4c. Servers leave cores idle under request/response load
+
+- [x] **Fixed (2026-10-27): idle workers spin, and poll the network
+  while they do.** Measured 2026-10-26 with zokor's
+  `bench/vs-go/run.sh` in the local Linux container (8 vCPUs, servers on
+  0-3, latgen on 4-7, 4 rounds, 10 s): plain slang and zokor kept only
+  50-70% of four workers busy while Fiber kept 75-97%, with the client not
+  saturated. Four workers served fewer requests than one (49-70k against
+  59-75k at c=50), at twice the CPU per request.
+
+  The stage, named before any change: perf put 39% of server CPU in
+  `try_to_wake_up`, from futex waits and wakes. A worker that ran out of
+  work slept, a network poll resumed ~20 connections at once, and every
+  push broadcast to every sleeper; futex calls per request went 0.12 ->
+  0.32 -> 0.66 from 1 to 2 to 4 workers. What fixed it, each step
+  measured on its own (`todo.md` has the steps that did not help):
+  - an idle worker spins up to 20 us (`sl_runq_spin`), on at most half
+    the workers, polling the network without blocking every 2 us as Go's
+    findrunnable does with netpoll(0). Spinning alone: about +20%;
+    polling while spinning: a further +58% (61k -> 96k at c=50);
+  - a push wakes one sleeper, and none while a worker spins; a worker
+    that takes a task while more wait wakes the next (`sl_runq_wake_one`,
+    `sl_runq_took`);
+  - one preemption-slot mutex per worker instead of one for all (~+9%:
+    every worker took the shared one after every switch).
+
+  Final, same harness and session, `dev` -> this change (medians, rps):
+
+  | route | conns | plain slang | zokor | Go net/http | Fiber |
+  |---|---|---|---|---|---|
+  | `GET /` | 50 | 63.9k -> 91.0k | 58.8k -> 97.2k | 83.5k | 158.6k |
+  | `GET /` | 256 | 91.1k -> 113.5k | 79.3k -> 125.1k | 75.7k | 174.9k |
+  | `/users/:id` | 50 | 64.0k -> 91.1k | 57.4k -> 79.7k | 77.3k | 116.5k |
+  | `/users/:id` | 256 | 87.8k -> 119.9k | 66.5k -> 81.5k | 74.3k | 148.8k |
+  | `POST /echo` | 50 | 68.5k -> 104.4k | 54.8k -> 78.0k | 70.1k | 139.1k |
+
+  p50 fell 35-45% at c=50 (0.72 -> 0.45 ms on plain `GET /`); p99 is
+  within 10% of `dev` or better (plain `GET /` 2.07 -> 2.25 ms at c=50,
+  5.94 -> 6.28 ms at c=256); CPU per request fell 3-25%; RSS +0-3 MiB. `POST /echo` at
+  256 is too noisy here to call (both builds swing 2x between rounds).
+  Possibly worse: plain `GET /` p99.9 at c=256 (7.6-45.6 ms against
+  9.5-18.3 ms; zokor's improved in the same cell); not confirmed.
+  Test: `tests/run_tests.sh` budgets idle wakes on `reactor_work_budget`
+  (one per 25 waits; 2917-3304 before, 954-1279 after) and runs
+  `tests/sched_idle_wakes` on 8 workers and under the minor verifier.
+
+  **Left:** four workers still serve less than one on a 4-CPU box
+  (~100k against ~130k). Both remaining shared costs are per wait:
+  `sl_gc_mu` taken by every park and every resume (~13% of futex calls
+  at 4 workers), and the EPOLLONESHOT re-arm, one `epoll_ctl` per wait
+  (Go registers once, edge-triggered). Fiber is still 1.3-1.7x ahead.
+
 ## 5. Per-request allocation in stdlib `http`
 
 - [x] **Done (2026-09-29).** A static `GET /` through a plain stdlib `http`
