@@ -827,7 +827,8 @@ for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc
             bytes json_deep_nesting redis http_read_wire http_client_pool http2_flood h2_client chan_recv_promoted value_results value_opts \
             gc_promotion_budget gc_chan_promotion_budget \
             value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks gc_skip_queued \
-            spawn_join_local spawn_call_args link_tls link_split fn_value_shadows_function select_send_escapes; do
+            spawn_join_local spawn_call_args link_tls link_split fn_value_shadows_function select_send_escapes \
+            sched_idle_wakes; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_verify_minor_${name}.out"
     err="/tmp/sl_verify_minor_${name}.err"
@@ -1031,6 +1032,44 @@ if [ "$(uname -s)" = Linux ]; then
     else
         echo "PASS worker polling ($rwp_loops reactor loops, $rwp_polls worker polls for $rwp_parks waits)"
     fi
+fi
+# And again for the workers' sleeps: a worker that runs out of work spins
+# for a moment, watching the run queues and the network without blocking
+# (sl_runq_spin), and a push wakes no one while a worker spins. Before, it
+# went straight to the network poll or to sleep, and every push woke every
+# sleeper, so workers slept and were woken again almost per request.
+# Measured 1115-1279 idle wakes for ~40300 waits on 4 and 8 CPUs, ~210 on
+# 2; before, 3017-3304 and ~2180. Budget: at most one idle wake per 25
+# waits. Linux only: the spin's network check is epoll's.
+if [ "$(uname -s)" = Linux ]; then
+    iw_line=$(SLANG_WORKERS=4 SLANG_SCHED_STAT=1 SLANG_REACTOR_STAT=1 \
+              ./slangc tests/reactor_work_budget/main.sl --run 2>&1 >/dev/null |
+              tr '\n' ' ')
+    iw_wakes=$(echo "$iw_line" | sed -n 's/.* idle_wakes=\([0-9]*\).*/\1/p')
+    iw_parks=$(echo "$iw_line" | sed -n 's/.*slang-reactor-stat parks=\([0-9]*\).*/\1/p')
+    if [ -z "$iw_wakes" ] || [ -z "$iw_parks" ]; then
+        echo "FAIL idle wakes (no slang-sched-stat or slang-reactor-stat line: $iw_line)"
+        fail=1
+    elif [ $((iw_wakes * 25)) -gt "$iw_parks" ]; then
+        echo "FAIL idle wakes: $iw_wakes sleeping workers woken for $iw_parks waits"
+        fail=1
+    else
+        echo "PASS idle wakes ($iw_wakes sleeping workers woken for $iw_parks waits)"
+    fi
+fi
+# The spin, the one-at-a-time wakeups and the cascade between them must
+# never strand a task: tests/sched_idle_wakes on 8 workers, most of them
+# idle, through bursts of spawns, channel hand-offs and socket round trips.
+iw8_out=/tmp/sl_sched_idle_wakes8.out
+if ! SLANG_WORKERS=8 ./slangc tests/sched_idle_wakes/main.sl --run \
+        >"$iw8_out" 2>/dev/null </dev/null; then
+    echo "FAIL idle wakes on 8 workers (exit $?)"
+    fail=1
+elif ! diff -q tests/sched_idle_wakes/expected.txt "$iw8_out" >/dev/null; then
+    echo "FAIL idle wakes on 8 workers (output mismatch)"
+    fail=1
+else
+    echo "PASS idle wakes on 8 workers"
 fi
 
 # ---- reactor drains ---------------------------------------------------------

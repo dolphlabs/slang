@@ -90,12 +90,13 @@ static void sl_runq_push_raw(sl_runq *q, sl_task *t) {
  * and sl_preempt_handler's stack-range veto already rejects any signal
  * whose sp isn't inside the current task's own buffer. It was pure
  * hazard. */
-/* Striped push: hashed by task address, broadcast on the global
-    doorbell so a worker sleeping on the global condvar wakes and
-    steals. Takes no preempt bracket itself -- callers hold it
-    (submit/resume) or run on the native stack already vetoed
-    (after_switch preempted branch). Queued linkage is runq_link only;
-    t->next is never touched here. */
+static void sl_runq_wake_one(void);
+
+/* Striped push: hashed by task address, then one sleeping worker woken
+    to take it (sl_runq_wake_one). Takes no preempt bracket itself --
+    callers hold it (submit/resume) or run on the native stack already
+    vetoed (after_switch preempted branch). Queued linkage is runq_link
+    only; t->next is never touched here. */
 static void sl_runq_stripe_push(sl_task *t) {
     sl_runq_stripe *q = &sl_runq_stripes[sl_runq_stripe_for(t)];
     pthread_mutex_lock(&q->mu);
@@ -105,9 +106,7 @@ static void sl_runq_stripe_push(sl_task *t) {
     atomic_fetch_add_explicit(&sl_global_runq_count, 1, memory_order_relaxed);
     pthread_cond_signal(&q->not_empty);
     pthread_mutex_unlock(&q->mu);
-    pthread_mutex_lock(&sl_global_runq.mu);
-    pthread_cond_broadcast(&sl_global_runq.not_empty);
-    pthread_mutex_unlock(&sl_global_runq.mu);
+    sl_runq_wake_one();
     if (sl_rt_netpoll_break_hook)
         sl_rt_netpoll_break_hook();
 }
@@ -188,14 +187,42 @@ static sl_task *sl_runq_stripe_pop_locked(void) {
     return NULL;
 }
 
-/* Workers asleep on the doorbell. A runnext put wakes one only when
-    someone is asleep -- the steady state under load is nobody, and every
-    push broadcasting is what the stripes already pay for. Sequentially
-    consistent on both sides so a put and a worker going to sleep cannot
-    miss each other: the sleeper increments this and THEN scans the slots;
-    the putter fills its slot and THEN reads this. Whichever runs second
-    sees the other. */
+/* Workers asleep on the doorbell. A runnext put or a stripe push wakes
+    one only when someone is asleep -- the steady state under load is
+    nobody. Sequentially consistent on both sides so a put and a worker
+    going to sleep cannot miss each other: the sleeper increments this and
+    THEN scans the stripes and the slots; the putter queues its task and
+    THEN reads this. Whichever runs second sees the other. */
 static _Atomic int sl_runq_sleepers = 0;
+
+/* Workers spinning on the stripes before they sleep (sl_runq_spin): a
+    push wakes nobody while one spins, since the spinner takes it. */
+static _Atomic int sl_runq_spinners = 0;
+
+/* One task queued: one sleeping worker woken, and none when nobody
+    sleeps or a worker is spinning (sl_runq_spin), since the spinner takes
+    it. Every stripe push used to take the doorbell mutex and broadcast,
+    sleepers or not: a network poll resumes ~20 connections at once, so
+    each poll woke every sleeper ~20 times over, to race for the tasks and
+    mostly sleep again.
+
+    The fence pairs with the sleeper's announce-then-rescan in
+    sl_runq_pop_blocking: the task is on its stripe before this reads
+    the count, and the sleeper is counted before it scans the stripes,
+    so one of the two sees the other. A sleeper counted but not yet in
+    cond_wait holds the doorbell mutex, so the signal below waits for
+    it. A spinner is the same: it stops counting itself before its
+    last scan of the stripes. */
+static void sl_runq_wake_one(void) {
+    atomic_thread_fence(memory_order_seq_cst);
+    if (atomic_load_explicit(&sl_runq_spinners, memory_order_seq_cst) > 0)
+        return;
+    if (atomic_load_explicit(&sl_runq_sleepers, memory_order_seq_cst) == 0)
+        return;
+    pthread_mutex_lock(&sl_global_runq.mu);
+    pthread_cond_signal(&sl_global_runq.not_empty);
+    pthread_mutex_unlock(&sl_global_runq.mu);
+}
 
 /* Makes t runnable, preferring this thread's runnext slot (see
     sl_runnext's comment, sl_core.c). The caller holds a preempt bracket:
@@ -226,7 +253,7 @@ static void sl_runq_ready_to(sl_task *t, int wake) {
             atomic_fetch_add_explicit(&sl_sched_stat_runnext_wakes, 1,
                                       memory_order_relaxed);
         pthread_mutex_lock(&sl_global_runq.mu);
-        pthread_cond_broadcast(&sl_global_runq.not_empty);
+        pthread_cond_signal(&sl_global_runq.not_empty);
         pthread_mutex_unlock(&sl_global_runq.mu);
     }
     if (wake && sl_rt_netpoll_break_hook)
@@ -277,6 +304,73 @@ static void sl_runq_push(sl_runq *q, sl_task *t) {
     sl_rt_preempt_enable();
 }
 
+/* How long an idle worker looks for work -- on the stripes, and on the
+    network without blocking -- before it blocks in a poll or sleeps.
+    Under request/response load the next request usually arrives within
+    microseconds. Without the spin, a worker that ran out of work slept
+    and was woken again almost at once: at 4 workers the futex waits and
+    wakes were ~40% of a plain server's CPU, its workers sat ~50% idle,
+    and 4 workers served fewer requests than 1. Go's scheduler spins the
+    same way, on at most half its workers, and polls the network
+    (netpoll(0)) as it does. 20 us measured as well as 50 us and better
+    than 5 us or 100 us; letting every worker spin cost CPU for nothing. */
+#define SL_RUNQ_SPIN_NS 20000LL
+#define SL_RUNQ_SPIN_POLL_NS 2000LL
+
+/* A task off the stripes, or NULL once SL_RUNQ_SPIN_NS has passed or
+    enough workers already spin. Called from sl_runq_pop_blocking with the
+    doorbell mutex released. Checks in before every pop, as the run loop
+    does, so a collection never misses a task between the stripe it left
+    and this thread's task slot. Watches the stripes, not
+    sl_global_runq_count alone: that count includes busy workers' runnext
+    slots, which their owners take. */
+static sl_task *sl_runq_spin(void) {
+    int cap = (int)(sl_pool_nworkers / 2);
+    if (cap < 1)
+        cap = 1;
+    if (atomic_fetch_add_explicit(&sl_runq_spinners, 1,
+                                  memory_order_seq_cst) >= cap) {
+        atomic_fetch_sub_explicit(&sl_runq_spinners, 1, memory_order_seq_cst);
+        return NULL;
+    }
+    long long now = sl_rt_monotonic_ns();
+    long long until = now + SL_RUNQ_SPIN_NS;
+    long long next_poll = now;
+    sl_task *t = NULL;
+    do {
+        sl_rt_gc_checkin();
+        if (atomic_load_explicit(&sl_global_runq_count, memory_order_relaxed) > 0 &&
+            (t = sl_runq_stripe_try_pop()))
+            break;
+        /* The network too, without waiting (sl_net_worker_poll): what it
+           finds is queued, and the next scan takes it. A worker blocked
+           in a poll already sees everything, so this one finds the
+           poller busy and goes on spinning. Spaced out so a spell is
+           not one syscall after another. */
+        if (sl_rt_netpoll_hook && now >= next_poll) {
+            sl_rt_netpoll_hook(0);
+            next_poll = sl_rt_monotonic_ns() + SL_RUNQ_SPIN_POLL_NS;
+            continue;
+        }
+        sl_gc_cpu_relax();
+    } while ((now = sl_rt_monotonic_ns()) < until);
+    /* Not counted from here on, so a push from now wakes a sleeper; the
+       caller scans the stripes once more for one that did not. */
+    atomic_fetch_sub_explicit(&sl_runq_spinners, 1, memory_order_seq_cst);
+    atomic_thread_fence(memory_order_seq_cst);
+    return t;
+}
+
+/* A worker that just took a task while more wait hands the next one on:
+    pushes skip waking anyone while a worker spins, so a burst (a network
+    poll resumes ~20 connections at once) would otherwise be left to the
+    one spinner that took the first. Each worker woken this way does the
+    same, so the wakeups cascade only as far as there is work. */
+static void sl_runq_took(void) {
+    if (atomic_load_explicit(&sl_global_runq_count, memory_order_relaxed) > 0)
+        sl_runq_wake_one();
+}
+
 static sl_task *sl_runq_pop_blocking(sl_runq *q) {
     /* Tier 11 eighth slice: bracketed entry-to-return, including the
      * cond_wait -- harmless while genuinely idle (sl_rt_current_task is
@@ -285,10 +379,12 @@ static sl_task *sl_runq_pop_blocking(sl_runq *q) {
      * bottom either way. */
     sl_rt_preempt_disable();
     pthread_mutex_lock(&q->mu);
+    int spun = 0;
     for (;;) {
         sl_task *t = sl_runq_stripe_pop_locked();
         if (t) {
             pthread_mutex_unlock(&q->mu);
+            sl_runq_took();
             sl_rt_preempt_enable();
             return t;
         }
@@ -296,6 +392,18 @@ static sl_task *sl_runq_pop_blocking(sl_runq *q) {
             pthread_mutex_unlock(&q->mu);
             sl_rt_preempt_enable();
             return NULL;
+        }
+        if (!spun) {
+            spun = 1;
+            pthread_mutex_unlock(&q->mu);
+            t = sl_runq_spin();
+            if (t) {
+                sl_runq_took();
+                sl_rt_preempt_enable();
+                return t;
+            }
+            pthread_mutex_lock(&q->mu);
+            continue;
         }
         /* Nothing to run: poll the network in the reactor thread's place
            before sleeping (sl_net_worker_poll), unless another worker
@@ -314,7 +422,7 @@ static sl_task *sl_runq_pop_blocking(sl_runq *q) {
                 return t;
             }
             pthread_mutex_unlock(&q->mu);
-            int polled = sl_rt_netpoll_hook();
+            int polled = sl_rt_netpoll_hook(1);
             pthread_mutex_lock(&q->mu);
             if (polled)
                 continue;
@@ -325,14 +433,17 @@ static sl_task *sl_runq_pop_blocking(sl_runq *q) {
          * runtime_core.c), or a collection landing while the pool is
          * idle hangs forever (sl_gc_collect's quiescence wait requires
          * every registered thread to be either blocked or acked). */
-        /* Announce the sleep, THEN look at the runnext slots one last
-         * time -- the order sl_runq_ready's check relies on (see
-         * sl_runq_sleepers). A slot filled before the announcement is
-         * found here; one filled after it sees the announcement and
-         * broadcasts, which waits for q->mu until this thread is inside
-         * cond_wait. */
+        /* Announce the sleep, THEN look at the stripes and the runnext
+         * slots one last time -- the order sl_runq_wake_one and
+         * sl_runq_ready rely on (see sl_runq_sleepers). A task queued
+         * before the announcement is found here; one queued after it sees
+         * the announcement and signals, which waits for q->mu until this
+         * thread is inside cond_wait. */
         atomic_fetch_add_explicit(&sl_runq_sleepers, 1, memory_order_seq_cst);
-        t = sl_runnext_steal();
+        atomic_thread_fence(memory_order_seq_cst);
+        t = sl_runq_stripe_pop_locked();
+        if (!t)
+            t = sl_runnext_steal();
         if (t) {
             atomic_fetch_sub_explicit(&sl_runq_sleepers, 1,
                                       memory_order_seq_cst);
@@ -344,6 +455,9 @@ static sl_task *sl_runq_pop_blocking(sl_runq *q) {
         pthread_cond_wait(&q->not_empty, &q->mu);
         atomic_store_explicit(&sl_rt_gc_blocked, 0, memory_order_release);
         atomic_fetch_sub_explicit(&sl_runq_sleepers, 1, memory_order_seq_cst);
+        if (sl_sched_stat_enabled())
+            atomic_fetch_add_explicit(&sl_sched_stat_idle_wakes, 1,
+                                      memory_order_relaxed);
         /* Waking here (something was pushed, or shutdown) does NOT mean
          * it's safe to act on q->head yet. This thread's OWN quiescence
          * requirement was satisfied while it sat blocked=1, but a
@@ -695,6 +809,7 @@ static pthread_t sl_pool_workers[SL_POOL_MAX_WORKERS];
 typedef struct sl_pool_slot {
     _Atomic(pthread_t) tid;
     _Atomic(sl_task *) cur;
+    pthread_mutex_t mu; /* see sl_pool_slots' mutex comment below */
 } sl_pool_slot;
 static sl_pool_slot sl_pool_slots[SL_POOL_MAX_WORKERS];
 
@@ -726,7 +841,21 @@ static sl_pool_slot sl_pool_slots[SL_POOL_MAX_WORKERS];
  * few field accesses, no syscalls except pthread_kill, called AFTER
  * this lock is released -- see the ticker's own comment), so
  * contention is not expected to matter at this pool's scale. */
-static pthread_mutex_t sl_pool_slots_mu = PTHREAD_MUTEX_INITIALIZER;
+/* One mutex per slot (sl_pool_slot.mu), initialized by sl_pool_start
+ * before any worker or the ticker runs. It was one mutex for the whole
+ * table, which every worker took after every switch back from a task:
+ * under request/response load that is a lock and unlock per request per
+ * worker, all on one cache line, and its futex wakes were ~7% of server
+ * CPU at 4 workers. The ticker only ever looks at one slot at a time, so
+ * a worker now contends with the ticker alone, and only on its own slot.
+ *
+ * One slot's mutex is enough because a task leaves worker i -- freed,
+ * queued again after a preemption, or made resumable by unlocking its
+ * park_mu -- only inside sl_worker_after_switch, which worker i runs
+ * holding slot i's mutex, after clearing slot i's .cur. So while the
+ * ticker holds slot i's mutex and reads a non-NULL .cur, that task cannot
+ * be running, finishing or freed anywhere else. Main's thread (slot -1)
+ * is never in the table and never was under the old lock either. */
 
 /* slot_idx: this thread's index into sl_pool_slots, or -1 -- the
  * latter for main's own original OS thread, which also reaches this
@@ -800,7 +929,7 @@ static void sl_worker_run_loop(long slot_idx) {
         sl_ctx_switch(&sl_rt_native_rsp, t->rsp);
         /* resumes here once t either finishes or parks */
         /* Tier 11 eighth slice: .cur cleared BEFORE sl_worker_after_switch,
-         * not after, AND both now held under sl_pool_slots_mu (its own
+         * not after, AND both now held under the slot's own mutex (its
          * comment above has the full story) -- sl_worker_after_switch's
          * own 'normal completion' branch calls sl_task_release(t), and the
          * ticker thread dereferences whatever .cur names before ever
@@ -814,10 +943,10 @@ static void sl_worker_run_loop(long slot_idx) {
          * and sl_rt_current_task, so nothing about holding the lock
          * slightly longer than strictly required changes what it does. */
         if (slot_idx >= 0) {
-            pthread_mutex_lock(&sl_pool_slots_mu);
+            pthread_mutex_lock(&sl_pool_slots[slot_idx].mu);
             atomic_store_explicit(&sl_pool_slots[slot_idx].cur, NULL, memory_order_release);
             sl_worker_after_switch(t);
-            pthread_mutex_unlock(&sl_pool_slots_mu);
+            pthread_mutex_unlock(&sl_pool_slots[slot_idx].mu);
         } else {
             sl_worker_after_switch(t);
         }
@@ -1282,27 +1411,28 @@ static void *sl_preempt_ticker_thread(void *arg) {
         for (int i = 0; i < SL_POOL_MAX_WORKERS; i++) {
             /* Tier 11 eighth slice: held across the read of .cur AND
              * every dereference of the sl_task it names -- see
-             * sl_pool_slots_mu's own comment above for the use-after-free
+             * the slot mutex comment above for the use-after-free
              * this closes (a completing task's own sl_task_release, racing this
              * exact read-then-dereference sequence, not just a plain
              * non-NULL check). Released before pthread_kill: that's a
              * syscall, and by this point every field this loop needed
              * has already been safely read (tid included) -- nothing
              * left to protect. */
-            pthread_mutex_lock(&sl_pool_slots_mu);
+            pthread_mutex_t *slot_mu = &sl_pool_slots[i].mu;
+            pthread_mutex_lock(slot_mu);
             sl_task *t = atomic_load_explicit(&sl_pool_slots[i].cur, memory_order_acquire);
-            if (!t) { pthread_mutex_unlock(&sl_pool_slots_mu); continue; }
+            if (!t) { pthread_mutex_unlock(slot_mu); continue; }
             if (now - t->run_start_ns < SL_PREEMPT_QUANTUM_NS) {
-                pthread_mutex_unlock(&sl_pool_slots_mu);
+                pthread_mutex_unlock(slot_mu);
                 continue;
             }
             if (atomic_load_explicit(&t->async_preempt_pending, memory_order_relaxed)) {
-                pthread_mutex_unlock(&sl_pool_slots_mu);
+                pthread_mutex_unlock(slot_mu);
                 continue;
             }
             atomic_store_explicit(&t->async_preempt_pending, 1, memory_order_relaxed);
             pthread_t tid = atomic_load_explicit(&sl_pool_slots[i].tid, memory_order_acquire);
-            pthread_mutex_unlock(&sl_pool_slots_mu);
+            pthread_mutex_unlock(slot_mu);
             pthread_kill(tid, SIGUSR1);
         }
     }
@@ -1632,6 +1762,10 @@ static void sl_pool_start(void) {
     }
     if (n < 1) n = 1;
     if (n > SL_POOL_MAX_WORKERS) n = SL_POOL_MAX_WORKERS;
+
+    /* The ticker locks every slot's mutex, used or not. */
+    for (int i = 0; i < SL_POOL_MAX_WORKERS; i++)
+        pthread_mutex_init(&sl_pool_slots[i].mu, NULL);
 
     /* Before any worker starts: thieves scan slots [0, n) and main's. */
     sl_pool_nworkers = n;

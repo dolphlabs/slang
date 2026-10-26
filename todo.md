@@ -4213,3 +4213,69 @@ Batch throughput was 26.1/26.8/26.7 vs 31.1/31.0/31.0 ops/s. Peak process
 RSS was 23,308 vs 61,876 KiB. p99 is in the package README and is single-host
 microbenchmark evidence, not cloud or server latency. Compare the implementations
 again on the deployment host before making service-level claims.
+
+## Fixed: four workers served fewer requests than one (2026-10-27)
+
+next-steps.md #4c. In the local Linux container (8 vCPUs, server pinned to
+0-3, latgen to 4-7), plain slang at c=50 served 59-75k rps on one worker
+and 49-70k on four, at 13-17 against 30-39 us of CPU per request; four
+workers sat ~50% idle. On the same 4 CPUs, per request:
+
+| workers | rps | futex | context switches | sched_yield |
+|---|---|---|---|---|
+| 1 | 128k | 0.12 | 0.06 | 0.011 |
+| 2 | 111k | 0.32 | 0.10 | 0.042 |
+| 4 | 60k | 0.66 | 0.23 | 0.112 |
+
+perf: 39% of server CPU in `try_to_wake_up`; 14% from the broadcast in
+`sl_runq_stripe_push`, most of the rest from contended unlocks. Futex
+callchains (`perf record -e syscalls:sys_enter_futex --call-graph=fp`)
+named the locks: the doorbell `sl_global_runq.mu` (~30% of futex calls),
+`sl_gc_mu` in park and resume (~13%), and the shared preemption-slot
+mutex taken after every switch. The `sched_yield`s are the collector
+waiting for workers to stop (`sl_gc_stw_sync`); minor pauses were
+1.9-2.9% of wall time, so the collector was not the cause. Counters: one
+park per request, ~21 connections resumed per worker poll.
+
+Each step measured alone, ABBA, 4 workers, c=50 (rps medians):
+- broadcast -> signal one sleeper: no change (65.7k vs 65.6k). The
+  sleepers were still woken about once per request.
+- one slot mutex per worker: +7% then, +9% in the final ablation (the
+  final code with a shared mutex again: 94k against 104k).
+- spin 20 us on the stripes before sleeping, half the workers at most,
+  pushes skip the wake while one spins: +20% (43k -> 53k, noisy hour).
+- doorbell mutex only for the sleep itself, not held through the stripe
+  scan: no change (76.5k vs 75.8k), and no change in the final ablation
+  (108k without it against 104k with it). Dropped: it changed the
+  collector-sensitive pop for nothing.
+- poll the network without blocking while spinning (every 2 us,
+  `sl_net_worker_poll(0)`): +58% (61k -> 96k), p50 0.75 -> 0.45 ms. This
+  was the stage that mattered: while workers were busy or spinning nobody
+  polled, so a readable request waited for some worker to go idle and
+  block in a poll, then arrived in a batch.
+
+Spin length 5/20/50/100 us gave 83-90k / 100-109k / 102-109k / 97-99k;
+spinning on all four workers instead of two cost 3-6 us of CPU per request
+for nothing. Kept 20 us and half.
+
+A budget test was harder than expected: `tests/sched_idle_wakes`' bursts of
+7 spawns cause *more* idle wakes with the fix (13-14k against 6-7k for
+21000 tasks: workers spin, then sleep, then are woken one at a time), and
+its ping-pongs the same (~1 per message either way). The budget is on
+`reactor_work_budget` instead, the server shape: 2917-3304 idle wakes for
+~40300 waits before, 954-1279 after (2 CPUs: ~2180 against ~210).
+
+Not fixed, and why four workers still trail one on 4 CPUs (~100k against
+~130k): `sl_gc_mu` is taken by every park and every resume to keep the
+parked-task registry, and every wait re-arms EPOLLONESHOT with one
+`epoll_ctl`. Both are per request and shared. Sharding the registry needs
+the collector's walk and the resume's "always in one root source" rule
+redone per shard; edge-triggered registration needs the slot generation
+scheme redone. Each is its own change.
+
+Also seen, not this change: gcc 13.3's LTO pass warns
+`-Wstringop-overflow` in `sl_gc_claim` (inlined through
+`sl_gc_verify_minor_marks`, "destination object is likely at address
+zero") when building any program in the container, on `dev` too. The
+warning sweep in `tests/run_tests.sh` passes, so it does not cover the
+LTO pass's warnings.

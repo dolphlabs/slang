@@ -257,37 +257,55 @@ honors blob filtering. See
 
 ## 4c. Servers leave cores idle under request/response load
 
-- [ ] **Measured 2026-10-26** (zokor's `bench/vs-go/run.sh` in the local
-  Linux container, 8 vCPUs, servers on 0-3 and latgen on 4-7, 4 rounds,
-  10 s; slang `dev` 5800a5a, zokor `main` 7a9a8d1, Go 1.24.1, Fiber
-  2.52.15). Plain slang and zokor keep only 50-70% of their four workers
-  busy; Fiber keeps 75-97%, and latgen sits at 0.4-0.55 of its cores, so
-  the client is not the limit. Medians, `GET /`:
+- [x] **Fixed (2026-10-27): idle workers spin, and poll the network
+  while they do.** Measured 2026-10-26 with zokor's
+  `bench/vs-go/run.sh` in the local Linux container (8 vCPUs, servers on
+  0-3, latgen on 4-7, 4 rounds, 10 s): plain slang and zokor kept only
+  50-70% of four workers busy while Fiber kept 75-97%, with the client not
+  saturated. Four workers served fewer requests than one (49-70k against
+  59-75k at c=50), at twice the CPU per request.
 
-  | conns | server | rps | p50 ms | p99 ms | CPU us/req | util |
-  |---|---|---|---|---|---|---|
-  | 50 | plain slang | 61.3k | 0.76 | 2.15 | 32.7 | 0.50 |
-  | 50 | Go net/http | 85.4k | 0.44 | 3.38 | 37.4 | 0.80 |
-  | 50 | Fiber | 157.2k | 0.25 | 1.10 | 18.8 | 0.75 |
-  | 256 | plain slang | 97.5k | 2.50 | 5.32 | 25.5 | 0.61 |
-  | 256 | Go net/http | 94.1k | 1.91 | 11.59 | 37.5 | 0.88 |
-  | 256 | Fiber | 208.0k | 1.00 | 4.43 | 18.4 | 0.96 |
+  The stage, named before any change: perf put 39% of server CPU in
+  `try_to_wake_up`, from futex waits and wakes. A worker that ran out of
+  work slept, a network poll resumed ~20 connections at once, and every
+  push broadcast to every sleeper; futex calls per request went 0.12 ->
+  0.32 -> 0.66 from 1 to 2 to 4 workers. What fixed it, each step
+  measured on its own (`todo.md` has the steps that did not help):
+  - an idle worker spins up to 20 us (`sl_runq_spin`), on at most half
+    the workers, polling the network without blocking every 2 us as Go's
+    findrunnable does with netpoll(0). Spinning alone: about +20%;
+    polling while spinning: a further +58% (61k -> 96k at c=50);
+  - a push wakes one sleeper, and none while a worker spins; a worker
+    that takes a task while more wait wakes the next (`sl_runq_wake_one`,
+    `sl_runq_took`);
+  - one preemption-slot mutex per worker instead of one for all (~+9%:
+    every worker took the shared one after every switch).
 
-  At 50 connections a request costs ~33 us of server CPU but takes
-  ~750 us end to end, and neither side is busy for the rest: the time is
-  spent waiting between the socket becoming readable and the response
-  being written. That is not the tail (#4) or hand-off locality (#4b),
-  both fixed; the tail here is good. 4 cores / 25-33 us is a ceiling of
-  ~120-160k rps, not a forecast, but it says per-request cost is not
-  what holds throughput down.
+  Final, same harness and session, `dev` -> this change (medians, rps):
 
-  **First step, before any change:** name the stage. Per request,
-  histogram fd-ready (reactor or worker poll) -> task dispatched ->
-  response written, with worker sleep/wake counts (`SLANG_SCHED_STAT`),
-  a `SLANG_WORKERS=1/2/4` sweep, and `perf sched` in the container.
-  Candidates: readiness delivered late (reactor thread vs worker
-  polling), a sleeping worker slow to wake, run-queue wait, the write
-  path, and accept distribution.
+  | route | conns | plain slang | zokor | Go net/http | Fiber |
+  |---|---|---|---|---|---|
+  | `GET /` | 50 | 63.9k -> 91.0k | 58.8k -> 97.2k | 83.5k | 158.6k |
+  | `GET /` | 256 | 91.1k -> 113.5k | 79.3k -> 125.1k | 75.7k | 174.9k |
+  | `/users/:id` | 50 | 64.0k -> 91.1k | 57.4k -> 79.7k | 77.3k | 116.5k |
+  | `/users/:id` | 256 | 87.8k -> 119.9k | 66.5k -> 81.5k | 74.3k | 148.8k |
+  | `POST /echo` | 50 | 68.5k -> 104.4k | 54.8k -> 78.0k | 70.1k | 139.1k |
+
+  p50 fell 35-45% at c=50 (0.72 -> 0.45 ms on plain `GET /`); p99 is
+  within 10% of `dev` or better (plain `GET /` 2.07 -> 2.25 ms at c=50,
+  5.94 -> 6.28 ms at c=256); CPU per request fell 3-25%; RSS +0-3 MiB. `POST /echo` at
+  256 is too noisy here to call (both builds swing 2x between rounds).
+  Possibly worse: plain `GET /` p99.9 at c=256 (7.6-45.6 ms against
+  9.5-18.3 ms; zokor's improved in the same cell); not confirmed.
+  Test: `tests/run_tests.sh` budgets idle wakes on `reactor_work_budget`
+  (one per 25 waits; 2917-3304 before, 954-1279 after) and runs
+  `tests/sched_idle_wakes` on 8 workers and under the minor verifier.
+
+  **Left:** four workers still serve less than one on a 4-CPU box
+  (~100k against ~130k). Both remaining shared costs are per wait:
+  `sl_gc_mu` taken by every park and every resume (~13% of futex calls
+  at 4 workers), and the EPOLLONESHOT re-arm, one `epoll_ctl` per wait
+  (Go registers once, edge-triggered). Fiber is still 1.3-1.7x ahead.
 
 ## 5. Per-request allocation in stdlib `http`
 
