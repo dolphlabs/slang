@@ -266,7 +266,7 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 `slang.project` to omit non-runtime directories from consumers' package caches;
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg redis regex
-strings encoding compress builder byteutil flags http http2 httpc`.
+strings encoding compress builder byteutil flags sort http http2 httpc`.
 The standalone `argon` package provides bounded Argon2id password hashing
 with standard PHC strings; its native crypto calls require OpenSSL 3.2+.
 

@@ -266,7 +266,7 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 `slang.project` to omit non-runtime directories from consumers' package caches;
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg redis regex
-strings encoding compress builder byteutil flags http http2 httpc`.
+strings encoding compress builder byteutil flags sort http http2 httpc`.
 The standalone `argon` package provides bounded Argon2id password hashing
 with standard PHC strings; its native crypto calls require OpenSSL 3.2+.
 
@@ -354,6 +354,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - proc: shutdown_requested, active_tasks, wait_idle, getenv, args, cwd
 - redis: encode, decode, decode_at, slot, parse_url, connect_config, connect, do, close, usable, ping, echo (+132 more)
 - regex: compile, free, groups, is_match, is_match_bytes, find, find_at, find_bytes, find_bytes_at
+- sort: ints, floats, strings, by, by_stable, search_ints, search_floats, search_strings, search_by
 - sql: open, close, exec, last_insert_id, prepare, finalize, reset, bind_int, bind_float, bind_text, bind_blob, bind_null (+8 more)
 - strings: find, rfind, contains, has_prefix, has_suffix, count, trim, trim_start, trim_end, to_upper, to_lower, slice (+12 more)
 - time: mono, wall, sleep, http_date, put_http_date
