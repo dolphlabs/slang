@@ -1063,20 +1063,25 @@ fi
 # worker and the network poller, queued on one lock. Measured 72-96
 # contended acquisitions for ~40300 waits on 4 and 8 CPUs, 58-65 on 2;
 # with the one lock, 1413-1764 and 243-264. Budget: at most one per 250
-# waits.
-pl_line=$(SLANG_WORKERS=4 SLANG_SCHED_STAT=1 SLANG_REACTOR_STAT=1 \
-          ./slangc tests/reactor_work_budget/main.sl --run 2>&1 >/dev/null |
-          tr '\n' ' ')
-pl_waits=$(echo "$pl_line" | sed -n 's/.* park_lock_waits=\([0-9]*\).*/\1/p')
-pl_parks=$(echo "$pl_line" | sed -n 's/.*slang-reactor-stat parks=\([0-9]*\).*/\1/p')
-if [ -z "$pl_waits" ] || [ -z "$pl_parks" ]; then
-    echo "FAIL park lock waits (no slang-sched-stat or slang-reactor-stat line: $pl_line)"
-    fail=1
-elif [ $((pl_waits * 250)) -gt "$pl_parks" ]; then
-    echo "FAIL park lock waits: $pl_waits contended registry locks for $pl_parks waits"
-    fail=1
-else
-    echo "PASS park lock waits ($pl_waits contended registry locks for $pl_parks waits)"
+# waits. Linux only, like the two budgets above: on macOS the kqueue
+# reactor thread does the resumes, and the counts there differ (Intel:
+# 2666-2992 -> 127-155; CI's arm64: 740 sharded), with no arm64 Mac here
+# to set a budget from.
+if [ "$(uname -s)" = Linux ]; then
+    pl_line=$(SLANG_WORKERS=4 SLANG_SCHED_STAT=1 SLANG_REACTOR_STAT=1 \
+              ./slangc tests/reactor_work_budget/main.sl --run 2>&1 >/dev/null |
+              tr '\n' ' ')
+    pl_waits=$(echo "$pl_line" | sed -n 's/.* park_lock_waits=\([0-9]*\).*/\1/p')
+    pl_parks=$(echo "$pl_line" | sed -n 's/.*slang-reactor-stat parks=\([0-9]*\).*/\1/p')
+    if [ -z "$pl_waits" ] || [ -z "$pl_parks" ]; then
+        echo "FAIL park lock waits (no slang-sched-stat or slang-reactor-stat line: $pl_line)"
+        fail=1
+    elif [ $((pl_waits * 250)) -gt "$pl_parks" ]; then
+        echo "FAIL park lock waits: $pl_waits contended registry locks for $pl_parks waits"
+        fail=1
+    else
+        echo "PASS park lock waits ($pl_waits contended registry locks for $pl_parks waits)"
+    fi
 fi
 # The spin, the one-at-a-time wakeups and the cascade between them must
 # never strand a task: tests/sched_idle_wakes on 8 workers, most of them

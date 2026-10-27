@@ -4306,3 +4306,10 @@ c=256 (paired +7%, ahead in 5 of 6 rounds), p99 at c=256 7.68 -> 6.18 ms.
 The host was loaded (load average ~9.7; in an earlier 3-round run one round
 fell to 40-45k for both of its samples, with the client slowed too), so the
 medians are wide; the paired ratios are the claim.
+
+The park_lock_waits budget in run_tests.sh is Linux only. CI's macOS arm64
+leg failed it at 740 for 40301 waits against a budget of 161: on macOS the
+kqueue reactor thread does the resumes, not polling workers, so the counts
+are higher. Sharding still cuts them there -- on this Intel Mac, dev with
+the same counter on sl_gc_mu gave 2666-2992 and the shards 127-155 -- but
+there is no arm64 Mac here to set a budget from.
