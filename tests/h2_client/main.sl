@@ -137,12 +137,21 @@ fn header_of(hs: [http2.Header], name: str) -> str {
 }
 
 // ---- 1. one stream at a time ---------------------------------------------
+// The writer signals when it has stopped, so the fd is closed only after:
+// closing it under a writer still draining could send that writer's bytes
+// to whichever connection reuses the fd number next.
+fn single_writer(t: http2.Transport, wch: chan[http2.WMsg], done: chan[bool]) {
+    http2.writer_task(t, wch, lim().write);
+    chan_send(done, true);
+}
+
 fn phase_single(port: int) {
     let t = dial(port);
     let cn = http2.conn_new();
     let rd = http2.reader_new();
     let wch: chan[http2.WMsg] = make_chan(16);
-    spawn http2.writer_task(t, wch, lim().write);
+    let wdone: chan[bool] = make_chan(1);
+    spawn single_writer(t, wch, wdone);
     let pr = http2.client_preface(cn, rd, t, wch, lim());
     guard let _p = pr else let e = err_of(pr) { fail("preface: " + e); return; }
     let none_h: [http2.Header] = [];
@@ -162,6 +171,7 @@ fn phase_single(port: int) {
                                         "/echo", none_h, b"");
     if let _e = even { fail("even stream id accepted"); }
     chan_close(wch);
+    chan_recv(wdone);
     http2.tr_close(t);
     println("single stream ok");
 }
