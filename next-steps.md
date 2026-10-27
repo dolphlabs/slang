@@ -311,7 +311,14 @@ honors blob filtering. See
     and futex calls per request from 0.469 to 0.408; plain slang, paired
     by round, +7% rps at c=256 (5 of 6 rounds), +1% at c=50 (noise).
   - [ ] the EPOLLONESHOT re-arm, one `epoll_ctl` per wait (Go registers
-    once, edge-triggered).
+    once, edge-triggered). **Deferred (2026-10-27):** measured at
+    6.5-6.8% of a 4-worker plain server's CPU (perf, user and kernel,
+    c=50), so at most ~7% per request, less in rps while workers are not
+    CPU-bound. Removing it needs persistent edge-triggered registration,
+    a ready flag per fd and direction, and every close dropping the
+    fd's registration so a reused number is registered again -- the
+    area of the open fd-reuse hang in todo.md. Make the reactor safe
+    against fd reuse first; revisit this after.
   Fiber is still 1.3-1.7x ahead.
 
 ## 5. Per-request allocation in stdlib `http`
