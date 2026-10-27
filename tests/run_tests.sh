@@ -1720,6 +1720,25 @@ if ./slangc tests/net_deadline_many/main.sl --emit-c >/dev/null 2>&1; then
     fi
 fi
 rm -f main.gen.c
+# And the build as a user runs it: slangc's own -O3 -flto=auto compile and
+# link, whose compiler output slangc passes on. The link-time optimizer
+# warns where neither check above looks: gcc 13's LTO pass flagged
+# sl_gc_claim through an inlined null path, and its lto-wrapper warned
+# about its job count, on every program it built. The smallest program and
+# one that uses the reactor and the resolver.
+lw_dir=$(mktemp -d)
+printf 'println(1);\n' >"$lw_dir/main.sl"
+for src in "$lw_dir/main.sl" tests/net_deadline_many/main.sl; do
+    diag=$(./slangc "$src" -o "$lw_dir/bin" 2>&1 | grep 'warning:')
+    if [ -n "$diag" ]; then
+        w=$(printf '%s\n' "$diag" | wc -l | tr -d ' ')
+        echo "FAIL slangc build of $src ($w warning(s) from the C compiler)"
+        printf '%s\n' "$diag" | head -3
+        warned=$((warned + w))
+        fail=1
+    fi
+done
+rm -rf "$lw_dir"
 if [ "$warned" -eq 0 ]; then
     echo "PASS generated C is warning-free"
 fi
