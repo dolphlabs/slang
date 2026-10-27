@@ -450,7 +450,12 @@ pub gc struct Client {
     lim: Limits,
     lock: mutex,
     send_lock: mutex,
-    transport_closed: bool,
+    // Set by client_close: the reader stops at its next tick.
+    stopping: bool,
+    // The writer task signals its end here, and the reader closes this
+    // when it has finished with the connection (see client_shut_down).
+    writer_done: chan[bool],
+    reader_done: chan[bool],
     calls: map[int]Call,
     slots: chan[bool],
     max_streams: int,
@@ -463,9 +468,19 @@ fn client_tick_ns() -> int {
     return 100000000;
 }
 
+// The connection's writer, signalling when it has stopped writing: the
+// transport may be closed only after that, or bytes it still had queued
+// could go out on a new connection that reused the fd number.
+fn client_writer(t: Transport, wch: chan[WMsg], write_ns: int, done: chan[bool]) {
+    writer_task(t, wch, write_ns);
+    chan_send(done, true);
+}
+
 // Handshake on `t` and start the connection's writer and reader tasks.
-// The caller still owns `t`: client_close releases the connection's
-// tasks, then closes it.
+// From here the Client owns `t`: its reader closes it, once, after both
+// tasks have stopped (client_close waits for that). If the handshake
+// fails, the writer has stopped before this returns and the caller still
+// owns `t`.
 pub fn client_start(t: Transport, lim: Limits) -> result[Client, str] {
     if lim.max_concurrent < 1 || lim.handshake <= 0 || lim.write <= 0 {
         return err("http2 client: max_concurrent, handshake and write limits must be positive");
@@ -473,10 +488,12 @@ pub fn client_start(t: Transport, lim: Limits) -> result[Client, str] {
     let cn = conn_new();
     let r = reader_new();
     let wch: chan[WMsg] = make_chan(64);
-    spawn writer_task(t, wch, lim.write);
+    let writer_done: chan[bool] = make_chan(1);
+    spawn client_writer(t, wch, lim.write, writer_done);
     let pr = client_preface(cn, r, t, wch, lim);
     guard let _p = pr else let e = err_of(pr) {
         chan_close(wch);
+        chan_recv(writer_done);
         return err(e);
     }
     // The peer's limit as of its preface, capped by ours. A later SETTINGS
@@ -488,11 +505,15 @@ pub fn client_start(t: Transport, lim: Limits) -> result[Client, str] {
     }
     if n < 1 {
         chan_close(wch);
+        chan_recv(writer_done);
         return err("http2 client: the server allows no concurrent streams");
     }
+    let reader_done: chan[bool] = make_chan(1);
     let c = Client {
         cn: cn, r: r, t: t, wch: wch, lim: lim, lock: make_mutex(),
-        send_lock: make_mutex(), transport_closed: false, calls: {}, slots: gate(n), max_streams: n, closed: false, failure: ""
+        send_lock: make_mutex(), stopping: false, writer_done: writer_done,
+        reader_done: reader_done, calls: {}, slots: gate(n), max_streams: n,
+        closed: false, failure: ""
     };
     spawn client_reader(c);
     return ok(c);
@@ -551,31 +572,32 @@ pub fn client_call(c: Client, method: str, scheme: str, authority: str,
     return answer;
 }
 
-// Stop taking calls, send GOAWAY and close the transport; calls in flight
-// fail with "closed by the client". The writer sends the GOAWAY and then
-// closes (W_CLOSE), so the frame is out before the socket goes. If the
-// connection had already failed, the writer is gone and this closes the
-// transport itself. Safe to call more than once.
+// Stop taking calls, send GOAWAY and close the connection; calls in flight
+// fail with "closed by the client". Returns once the connection is fully
+// closed -- its reader and writer stopped and the transport closed -- so the
+// fd number is free for reuse only then. Closing the fd while the reader was
+// still parked on it let a new connection reuse the number under a waiter
+// that was not its own, and that connection's reads stopped waking. Safe to
+// call more than once, and after the connection failed on its own.
 pub fn client_close(c: Client) {
     mutex_lock(c.send_lock);
     mutex_lock(c.lock);
     let was_open = !c.closed;
-    let close_here = c.closed && !c.transport_closed;
     c.closed = true;
-    c.transport_closed = true;
+    c.stopping = true;
     if was_open {
         c.failure = "closed by the client";
     }
     mutex_unlock(c.lock);
     if was_open {
-        chan_send(c.wch, WMsg { kind: W_CLOSE, stream: 0, n: 0,
-                                head: goaway(0, E_NO_ERROR, ""),
-                                body: b"", tail: b"" });
+        // An ordinary frame: the writer sends it before the reader closes
+        // the channel, and the reader closes the transport only after the
+        // writer has stopped.
+        chan_send(c.wch, raw_msg(goaway(0, E_NO_ERROR, "")));
     }
     mutex_unlock(c.send_lock);
-    if close_here {
-        tr_close(c.t);
-    }
+    // The reader sees `stopping` at its next tick (client_tick_ns).
+    chan_recv(c.reader_done);
 }
 
 // Remove and answer one call. The lock is taken here, never held across
@@ -614,10 +636,21 @@ fn client_fail_all(c: Client, why: str) {
         client_finish(c, s, err("http2 call: " + why));
     }
     // Under send_lock: a client_close that saw the client open may be
-    // about to queue its W_CLOSE, and a send on a closed channel panics.
+    // about to queue its GOAWAY, and a send on a closed channel panics.
     mutex_lock(c.send_lock);
     chan_close(c.wch);
     mutex_unlock(c.send_lock);
+}
+
+// The reader's only way out: fail what is pending, let the writer finish
+// (closing its channel ends it after whatever was queued, a GOAWAY
+// included), and only then close the transport -- one task, after both
+// have stopped -- and tell client_close.
+fn client_shut_down(c: Client, why: str) {
+    client_fail_all(c, why);
+    chan_recv(c.writer_done);
+    tr_close(c.t);
+    chan_close(c.reader_done);
 }
 
 // Calls past their deadline: cancel the stream and answer with a timeout.
@@ -647,6 +680,13 @@ fn client_pending_of(c: Client, stream: int) -> opt[Pending] {
     return out;
 }
 
+fn client_is_stopping(c: Client) -> bool {
+    mutex_lock(c.lock);
+    let stop = c.stopping;
+    mutex_unlock(c.lock);
+    return stop;
+}
+
 fn client_reader(c: Client) {
     // A header block for a stream nobody is waiting for any more (it
     // timed out) is still decoded, or HPACK state would drift and every
@@ -657,19 +697,23 @@ fn client_reader(c: Client) {
     while true {
         let fr = read_frame(c.r, c.t, DEFAULT_MAX_FRAME,
                             until_of(time.mono() + client_tick_ns()));
+        if client_is_stopping(c) {
+            client_shut_down(c, "closed by the client");
+            return;
+        }
         guard let f = fr else let e = err_of(fr) {
             if is_timeout(e) {
                 client_expire(c);
                 continue;
             }
-            client_fail_all(c, e);
+            client_shut_down(c, e);
             return;
         }
         client_expire(c);
         let cr = client_control(c.cn, c.wch, f);
         guard let consumed = cr else let e = err_of(cr) {
             chan_send(c.wch, raw_msg(goaway(0, E_PROTOCOL_ERROR, e)));
-            client_fail_all(c, e);
+            client_shut_down(c, e);
             return;
         }
         if consumed {
@@ -678,7 +722,7 @@ fn client_reader(c: Client) {
         if f.ftype == T_GOAWAY {
             let gl = goaway_last(f);
             guard let last = gl else let e = err_of(gl) {
-                client_fail_all(c, e);
+                client_shut_down(c, e);
                 return;
             }
             mutex_lock(c.lock);
@@ -698,7 +742,7 @@ fn client_reader(c: Client) {
         }
         if f.ftype == T_RST_STREAM {
             if f.stream == 0 || len(f.payload) != 4 {
-                client_fail_all(c, "malformed RST_STREAM");
+                client_shut_down(c, "malformed RST_STREAM");
                 return;
             }
             client_finish(c, f.stream, err("http2 call: stream reset by peer, code " +
@@ -706,15 +750,15 @@ fn client_reader(c: Client) {
             continue;
         }
         if f.stream == 0 || (f.stream & 1) == 0 || f.stream > c.cn.local_stream {
-            client_fail_all(c, "frame on a stream this client never opened");
+            client_shut_down(c, "frame on a stream this client never opened");
             return;
         }
         if f.ftype == T_CONTINUATION && f.stream != open_block {
-            client_fail_all(c, "CONTINUATION for a stream whose block is not open");
+            client_shut_down(c, "CONTINUATION for a stream whose block is not open");
             return;
         }
         if open_block != 0 && f.stream != open_block {
-            client_fail_all(c, "frame interleaved inside a header block");
+            client_shut_down(c, "frame interleaved inside a header block");
             return;
         }
         let target = orphan;
@@ -750,7 +794,7 @@ fn client_reader(c: Client) {
             // An orphan's 1xx or bad block is no one's problem but HPACK's,
             // and a decode failure there is a connection error.
             if strings.has_prefix(e, "hpack") {
-                client_fail_all(c, e);
+                client_shut_down(c, e);
                 return;
             }
             continue;

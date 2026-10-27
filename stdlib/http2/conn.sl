@@ -67,7 +67,6 @@ pub let W_BODY = 1;      // a response: HEADERS now, DATA as window allows
 pub let W_GRANT = 2;     // peer's WINDOW_UPDATE: `n` octets to `stream`
 pub let W_INITIAL = 3;   // peer's SETTINGS_INITIAL_WINDOW_SIZE is now `n`
 pub let W_MAXFRAME = 4;  // peer's SETTINGS_MAX_FRAME_SIZE is now `n`
-pub let W_CLOSE = 5;     // send `head` (a GOAWAY), then close the transport
 
 pub gc struct WMsg {
     kind: int,
@@ -1034,13 +1033,6 @@ pub fn writer_task(t: Transport, wch: chan[WMsg], write_ns: int) {
         let m = chan_recv(wch);
         guard let msg = m else {
             return;              // channel closed: connection is done
-        }
-
-        if msg.kind == W_CLOSE {
-            wsend(t, msg.head, write_ns);
-            tr_close(t);
-            writer_drain(wch);
-            return;
         }
 
         if msg.kind == W_RAW {
