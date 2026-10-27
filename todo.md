@@ -4312,3 +4312,37 @@ output on, so every Linux build printed them. The sweep compiled with
 `-c -O2`, never the LTO link. `sl_gc_mark_header_word` now rejects a null
 word (the inlined path gcc saw), slangc builds with `-flto=auto`, and the
 sweep also runs two real `slangc -o` builds and fails on any warning.
+
+## Fixed: every park and resume took sl_gc_mu (2026-10-27)
+
+next-steps.md #4c. The parked-task registry was one list guarded by
+sl_gc_mu, so each request took that global lock twice (the park after the
+response, the resume when the next request arrived), from every worker and
+the network poller; futex callchains put it at ~13% of a 4-worker server's
+futex calls. A park or resume needs exclusion only from the collector, which
+must not see a task leave the registry between its walk of the run queues
+and its walk of the registry. So the registry is now 64 shards (sl_parked,
+hashed by task address like the run-queue stripes), a park or resume takes
+its task's shard alone and keeps it across the run-queue push as it kept
+sl_gc_mu, and both collectors take every shard right after sl_gc_mu and
+release them just before it. Lock order: sl_gc_mu, shards in index order,
+run-queue locks; sl_time.c takes its sl_time_mu before a resume, and the
+collector never takes that.
+
+Measured in the local Linux container, 4 workers: contended registry-lock
+acquisitions on reactor_work_budget (SLANG_SCHED_STAT park_lock_waits,
+counted the same way on dev's sl_gc_mu for the comparison) 1413-1764 ->
+72-96 per ~40300 waits, 243-264 -> 58-65 on 2 CPUs; futex calls per request
+0.469 -> 0.408. Plain slang, 6 alternating rounds per setting: median rps
+83.0k -> 82.4k at c=50 (paired by round +1%: noise), 110.7k -> 131.4k at
+c=256 (paired +7%, ahead in 5 of 6 rounds), p99 at c=256 7.68 -> 6.18 ms.
+The host was loaded (load average ~9.7; in an earlier 3-round run one round
+fell to 40-45k for both of its samples, with the client slowed too), so the
+medians are wide; the paired ratios are the claim.
+
+The park_lock_waits budget in run_tests.sh is Linux only. CI's macOS arm64
+leg failed it at 740 for 40301 waits against a budget of 161: on macOS the
+kqueue reactor thread does the resumes, not polling workers, so the counts
+are higher. Sharding still cuts them there -- on this Intel Mac, dev with
+the same counter on sl_gc_mu gave 2666-2992 and the shards 127-155 -- but
+there is no arm64 Mac here to set a budget from.
