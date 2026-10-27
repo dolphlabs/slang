@@ -2420,7 +2420,9 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
   `reactor_nudges`: IO waits that carried a deadline, and those that had
   to wake the reactor to recompute its sleep, and `runnext_wakes`, the
   sleeping workers woken for a task put in a runnext slot, and
-  `idle_wakes`, every time a sleeping worker woke. The reactor never sleeps
+  `idle_wakes`, every time a sleeping worker woke, and
+  `park_lock_waits`, the parks and resumes that waited for the parked
+  registry's lock. The reactor never sleeps
   more than a second, so only a deadline closer than that nudges it.
   `f` may be a plain top-level function, an `extern fn`, or a
   **function value** (`spawn w(1, out);`, `spawn job.run(x);`) — not a
@@ -2796,7 +2798,7 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` / `import "io";` / `import "encoding";` like any other package.
 
-`http`, `httpc`, `http2`, `pg`, `flags` and `byteutil` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil` and `sort` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
 then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
 compiler's `SLANG_STDLIB_DIR`).
@@ -4961,6 +4963,40 @@ targets. A hand-written inflate would be a memory-safety surface with no
 upside, since every bug in one is a buffer overrun driven by
 attacker-controlled input.
 
+#### `sort`
+
+Sorting lists in place with Go's `sort` engine shape, plus binary
+search over what is already sorted. `ints`, `floats` and `strings`
+sort by native comparison; `by` sorts any list of anything by a key
+function returning `int`, `float` or `str`; `by_stable` keeps equal
+keys in their original order; the `search` functions binary-search a
+sorted list and answer `opt[int]`.
+
+```slang
+import "sort";
+
+let xs = [5, 3, 9, 1, 3];
+sort.ints(xs);                       // in place, ascending
+let i = sort.search_ints(xs, 3) ?? -1;
+
+let users = load_users();
+sort.by(users, user_age);            // key fn -> int, float or str
+sort.by_stable(users, user_name);    // equal keys keep original order
+
+let names: [str] = [];
+for u in users { push(names, u.name); }
+sort.strings(names);
+
+let fs = [3.5, 1.0, 0.0 / 0.0, 0.5];
+sort.floats(fs);                     // NaN values sort first (Go's rule)
+```
+
+The unstable sorts allocate nothing; each runs an entry pass that
+answers already-sorted and fully-reversed lists in one scan, and the
+quicksort settles each duplicate group in one partition pass, so
+four-valued million-element lists sort in tens of milliseconds.
+`by_stable` merges with one scratch list of about n/2 elements.
+
 #### `byteutil`
 
 Search, trim, and split on the `bytes` type — no new syntax. The
@@ -5195,7 +5231,7 @@ any signal-handling program.
 - [flags](packages/flags.md) -- source package, 23 public items
 - [fs](packages/fs.md) -- compiler-provided, 9 public items
 - [http](packages/http.md) -- source package, 58 public items
-- [http2](packages/http2.md) -- source package, 134 public items
+- [http2](packages/http2.md) -- source package, 133 public items
 - [httpc](packages/httpc.md) -- source package, 35 public items
 - [io](packages/io.md) -- compiler-provided, 12 public items
 - [json](packages/json.md) -- compiler-provided, 0 public items
@@ -5206,6 +5242,7 @@ any signal-handling program.
 - [proc](packages/proc.md) -- compiler-provided, 6 public items
 - [redis](packages/redis.md) -- source package, 161 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
+- [sort](packages/sort.md) -- source package, 9 public items
 - [sql](packages/sql.md) -- compiler-provided, 20 public items
 - [strings](packages/strings.md) -- compiler-provided, 24 public items
 - [time](packages/time.md) -- compiler-provided, 5 public items
@@ -6961,7 +6998,7 @@ Read frames until `stream`'s response is complete. For a connection carrying one
 
 ### `fn client_start(t: Transport, lim: Limits) -> result[Client, str]`
 
-Handshake on `t` and start the connection's writer and reader tasks. The caller still owns `t`: client_close releases the connection's tasks, then closes it.
+Handshake on `t` and start the connection's writer and reader tasks. From here the Client owns `t`: its reader closes it, once, after both tasks have stopped (client_close waits for that). If the handshake fails, the writer has stopped before this returns and the caller still owns `t`.
 
 ### `fn client_max_streams(c: Client) -> int`
 
@@ -6971,7 +7008,7 @@ One request/response exchange on `c`, safe to call from many tasks at once. Wait
 
 ### `fn client_close(c: Client)`
 
-Stop taking calls, send GOAWAY and close the transport; calls in flight fail with "closed by the client". The writer sends the GOAWAY and then closes (W_CLOSE), so the frame is out before the socket goes. If the connection had already failed, the writer is gone and this closes the transport itself. Safe to call more than once.
+Stop taking calls, send GOAWAY and close the connection; calls in flight fail with "closed by the client". Returns once the connection is fully closed -- its reader and writer stopped and the transport closed -- so the fd number is free for reuse only then. Closing the fd while the reader was still parked on it let a new connection reuse the number under a waiter that was not its own, and that connection's reads stopped waking. Safe to call more than once, and after the connection failed on its own.
 
 ### `let W_RAW = 0; // pre-built frames, not flow controlled`
 
@@ -6984,8 +7021,6 @@ Stop taking calls, send GOAWAY and close the transport; calls in flight fail wit
 ### `let W_INITIAL = 3; // peer's SETTINGS_INITIAL_WINDOW_SIZE is now `n``
 
 ### `let W_MAXFRAME = 4; // peer's SETTINGS_MAX_FRAME_SIZE is now `n``
-
-### `let W_CLOSE = 5; // send `head` (a GOAWAY), then close the transport`
 
 ### `gc struct WMsg`
 
@@ -9664,6 +9699,88 @@ peak at **3.9MB RSS** — about 17x lighter than the same shape holding
 ### `regex.find_bytes(rawptr, bytes) -> [int]`
 
 ### `regex.find_bytes_at(rawptr, bytes, int) -> [int]`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# sort
+
+# sort
+
+> Package sort.
+
+Sorting lists in place with Go's `sort` engine shape, plus binary
+search over what is already sorted. `ints`, `floats` and `strings`
+sort by native comparison; `by` sorts any list of anything by a key
+function returning `int`, `float` or `str`; `by_stable` keeps equal
+keys in their original order; the `search` functions binary-search a
+sorted list and answer `opt[int]`.
+
+```slang
+import "sort";
+
+let xs = [5, 3, 9, 1, 3];
+sort.ints(xs);                       // in place, ascending
+let i = sort.search_ints(xs, 3) ?? -1;
+
+let users = load_users();
+sort.by(users, user_age);            // key fn -> int, float or str
+sort.by_stable(users, user_name);    // equal keys keep original order
+
+let names: [str] = [];
+for u in users { push(names, u.name); }
+sort.strings(names);
+
+let fs = [3.5, 1.0, 0.0 / 0.0, 0.5];
+sort.floats(fs);                     // NaN values sort first (Go's rule)
+```
+
+The unstable sorts allocate nothing; each runs an entry pass that
+answers already-sorted and fully-reversed lists in one scan, and the
+quicksort settles each duplicate group in one partition pass, so
+four-valued million-element lists sort in tens of milliseconds.
+`by_stable` merges with one scratch list of about n/2 elements.
+
+## API
+
+### `fn ints(xs: [int]) -> [int]`
+
+Sorts xs in place, ascending. Unstable. Answers an already-sorted or strictly descending list in one scan, and duplicate-heavy data in no more passes than its distinct values take to settle, so the whole call is allocation-free either way.
+
+### `fn floats(xs: [float]) -> [float]`
+
+Same engine over floats, with a total order despite the type's own: NaN values sort before every number and equal to each other (Go's `sort.Float64s` rule), which is what makes the partition finite.
+
+### `fn strings(xs: [str]) -> [str]`
+
+Same engine over strings, bytewise: `""` sorts first, and the order is exactly what `<` gives — bytes, not locale, not Unicode points.
+
+### `fn by[T, K](xs: [T], key: fn(T) -> K) -> [T]`
+
+Sorts xs in place by key, ascending. Unstable: when two keys are equal, which was first is whatever the comparisons fell into. A call is free to permute equal keys differently on a re-run, so anything whose output must not change between runs uses `by_stable`.
+
+### `fn by_stable[T, K](xs: [T], key: fn(T) -> K) -> [T]`
+
+Sorts xs in place by key, ascending, and equal keys keep their original order: an adaptive merge sort. Natural runs are kept (a strictly descending run is reversed, which keeps order for equal keys, since a strictly descending run has none), windows of 32 are insertion-sorted, and runs merge bottom-up taking the left on equal keys. Nearly-sorted data therefore costs about one comparison per element, not n log n.
+
+### `fn search_ints(xs: [int], v: int) -> opt[int]`
+
+The first index of v in xs, sorted ascending, or none. On a list which is not sorted the result is defined but useless; it never reads past the list.
+
+### `fn search_floats(xs: [float], v: float) -> opt[int]`
+
+Same contract over floats: that includes searching for NaN, which finds the first NaN and sorts first under sort.floats. The index found for a searched NaN is where the first NaN of the list sits.
+
+### `fn search_strings(xs: [str], v: str) -> opt[int]`
+
+Same contract over strings: the first index of an exactly equal string, bytewise as `sort.strings` orders them.
+
+### `fn search_by[T, K](xs: [T], key: fn(T) -> K, v: K) -> opt[int]`
+
+Lower bound over a list already sorted by key: the first index whose key is not before v. Equality is `!(a < b) && !(b < a)`, which is `==` for int and str keys; for a float key it reads equal NaNs -- both raw comparisons false -- as a hit, the same reading `by` gives them.
 
 ---
 

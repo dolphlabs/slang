@@ -185,7 +185,7 @@ static char *sl_time_http_date(void) {
  * genuinely new: a sorted-by-deadline wait list plus one dedicated
  * background thread that actively notices deadlines passing and
  * calls sl_task_resume on their behalf. Package-local (not core
- * scheduler infrastructure like sl_global_runq/sl_parked_tasks),
+ * scheduler infrastructure like sl_global_runq/sl_parked),
  * since only time.sleep needs it. See the Tier 11 plan for the full
  * design and the review findings -- notably: this machine's pthread
  * has no pthread_condattr_setclock, so pthread_cond_timedwait's
@@ -217,7 +217,7 @@ static void sl_time_insert(sl_task *t, long long deadline_ns) {
  * Deliberately NOT registered with the GC thread registry: it never
  * drives a task (no sl_ctx_switch calls of its own) and never
  * touches a GC-scanned field, only the plain, non-GC-managed
- * `next`/`sleep_deadline_ns` fields on an already-sl_parked_tasks-
+ * `next`/`sleep_deadline_ns` fields on an already-sl_parked-
  * rooted task, and sl_task_resume itself (which needs no caller
  * registration -- already proven safe from an unregistered caller
  * context in exactly this shape by sl_chan_send/recv's own

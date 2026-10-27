@@ -1,5 +1,35 @@
 # todo
 
+- [ ] **The reactor loses a parked read's deadline when its fd number is
+  reused (flagged 2026-10-25, not fixed).** Closing an fd while a task is
+  parked on it, then opening a socket that gets the same number and
+  parking a second read on that, leaves the second read unwoken -- its
+  deadline included: gdb showed every worker idle and nothing runnable.
+  The http2 client did exactly this (below) and is fixed at the caller, but
+  any code that closes an fd another task is reading can still wedge a
+  later connection. `net.close` on an fd with waiters should wake them
+  with an error, or the reactor should key waiters by more than the fd
+  number. Needs its own repro in C before a fix.
+
+- [x] **tests/h2_client hung about once in sixty runs on linux
+  (2026-10-25, fix/http2-client-close-ownership).** `http2.client_close`
+  queued a GOAWAY with W_CLOSE, and the writer closed the transport while
+  the client's reader task was still parked on it. The next phase's dial
+  reused the fd number and its 3s read deadline never fired (the reactor
+  issue above), which timed out both linux CI jobs on #459. The reader is
+  now the one closer: it waits for the writer to stop, closes the
+  transport, and only then lets `client_close` return. W_CLOSE is gone.
+  tests/h2_client_close checks the fd is closed when `client_close`
+  returns and that the next connection's deadline still fires; it fails
+  at round 0 on the old code. Linux docker (2026-10-27, rebased on #463),
+  under the minor verifier with a 16KB nursery, 4 loops in parallel:
+  h2_client 400 runs, no hang, no failure, 0 missed; h2_client_close 800
+  runs, no hang, 0 missed, and one failure whose output was lost (the
+  loop kept only the last run's). 960 more runs of h2_client_close (480
+  verified, 480 plain, 16 loops in parallel, every failing run's output
+  kept) did not fail again: 1 in 1760. Its cause is unknown; the test's
+  3 s watchdog under that much parallel load is one candidate.
+
 - [x] **chan_recv lost a received value to a minor (memory safety,
   2026-10-24, feat/http2-client).** `chan_recv` allocates its `opt` box
   before parking and fills it after. A wait long enough for two minors
@@ -4273,9 +4303,46 @@ the collector's walk and the resume's "always in one root source" rule
 redone per shard; edge-triggered registration needs the slot generation
 scheme redone. Each is its own change.
 
-Also seen, not this change: gcc 13.3's LTO pass warns
-`-Wstringop-overflow` in `sl_gc_claim` (inlined through
+Also seen, fixed separately (fix/build-warnings): gcc 13.3's LTO pass
+warned `-Wstringop-overflow` in `sl_gc_claim` (inlined through
 `sl_gc_verify_minor_marks`, "destination object is likely at address
-zero") when building any program in the container, on `dev` too. The
-warning sweep in `tests/run_tests.sh` passes, so it does not cover the
-LTO pass's warnings.
+zero") on every program it built, and its lto-wrapper warned "using serial
+compilation of N LTRANS jobs" on larger ones; slangc passes the compiler's
+output on, so every Linux build printed them. The sweep compiled with
+`-c -O2`, never the LTO link. `sl_gc_mark_header_word` now rejects a null
+word (the inlined path gcc saw), slangc builds with `-flto=auto`, and the
+sweep also runs two real `slangc -o` builds and fails on any warning.
+
+## Fixed: every park and resume took sl_gc_mu (2026-10-27)
+
+next-steps.md #4c. The parked-task registry was one list guarded by
+sl_gc_mu, so each request took that global lock twice (the park after the
+response, the resume when the next request arrived), from every worker and
+the network poller; futex callchains put it at ~13% of a 4-worker server's
+futex calls. A park or resume needs exclusion only from the collector, which
+must not see a task leave the registry between its walk of the run queues
+and its walk of the registry. So the registry is now 64 shards (sl_parked,
+hashed by task address like the run-queue stripes), a park or resume takes
+its task's shard alone and keeps it across the run-queue push as it kept
+sl_gc_mu, and both collectors take every shard right after sl_gc_mu and
+release them just before it. Lock order: sl_gc_mu, shards in index order,
+run-queue locks; sl_time.c takes its sl_time_mu before a resume, and the
+collector never takes that.
+
+Measured in the local Linux container, 4 workers: contended registry-lock
+acquisitions on reactor_work_budget (SLANG_SCHED_STAT park_lock_waits,
+counted the same way on dev's sl_gc_mu for the comparison) 1413-1764 ->
+72-96 per ~40300 waits, 243-264 -> 58-65 on 2 CPUs; futex calls per request
+0.469 -> 0.408. Plain slang, 6 alternating rounds per setting: median rps
+83.0k -> 82.4k at c=50 (paired by round +1%: noise), 110.7k -> 131.4k at
+c=256 (paired +7%, ahead in 5 of 6 rounds), p99 at c=256 7.68 -> 6.18 ms.
+The host was loaded (load average ~9.7; in an earlier 3-round run one round
+fell to 40-45k for both of its samples, with the client slowed too), so the
+medians are wide; the paired ratios are the claim.
+
+The park_lock_waits budget in run_tests.sh is Linux only. CI's macOS arm64
+leg failed it at 740 for 40301 waits against a budget of 161: on macOS the
+kqueue reactor thread does the resumes, not polling workers, so the counts
+are higher. Sharding still cuts them there -- on this Intel Mac, dev with
+the same counter on sl_gc_mu gave 2666-2992 and the shards 127-155 -- but
+there is no arm64 Mac here to set a budget from.

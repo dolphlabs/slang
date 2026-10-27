@@ -187,6 +187,7 @@ PACKAGE_SECTIONS = {
     "byteutil": ["`byteutil`"],
     "builder": ["`builder`"],
     "flags": ["`flags`"],
+    "sort": ["`sort`"],
     "http": ["`http`"],
     "httpc": ["`httpc`"],
     "pg": ["`pg`"],

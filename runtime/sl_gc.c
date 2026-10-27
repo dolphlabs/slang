@@ -1011,8 +1011,9 @@ static void sl_gc_for_pending_tasks(void (*fn)(sl_task *),
             n++;
         }
     }
-    for (sl_task *t = sl_parked_tasks; t; t = t->parked_next, n++)
-        fn(t);
+    for (int i = 0; i < SL_PARKED_SHARDS; i++)
+        for (sl_task *t = sl_parked[i].head; t; t = t->parked_next, n++)
+            fn(t);
     sl_gc_walk_count += n;
 }
 
@@ -2690,6 +2691,12 @@ static void sl_gc_mark_inline_bytes(void *w, void (*mark)(void *)) {
  * Exactly the header address; interior words still do not count. */
 SL_GC_NO_ASAN
 static void sl_gc_mark_header_word(void *w, void (*mark)(void *)) {
+    /* A null word is no header. Said explicitly for gcc too: inlined
+       through mark(p) -> sl_gc_claim, the path w == 0 made the claimed
+       header the null pointer, and gcc 13's LTO pass warned
+       -Wstringop-overflow ("likely at address zero") on every program
+       it built, although sl_gc_known(sizeof(sl_gc_obj)) is never true. */
+    if (!w) return;
     if ((uintptr_t)w > UINTPTR_MAX - sizeof(sl_gc_obj)) return;
     void *p = (char *)w + sizeof(sl_gc_obj);
     if (sl_gc_known(p))
@@ -3091,7 +3098,7 @@ static void sl_gc_root_units_build(sl_gc_thread **snap, int nsnap,
      * stays busy -- an unbounded stretch under a saturated pool. For
      * that whole stretch it is in NONE of the other root sources: no
      * OS thread's task_slot points at it (it isn't running), and
-     * sl_task_resume already unlinked it from sl_parked_tasks (whose
+     * sl_task_resume already unlinked it from sl_parked (whose
      * own walk further below is the only other place a non-empty chain
      * gets scanned). Marking only entry_arg here therefore left every
      * local a resumed task still legitimately held -- its received
@@ -3105,7 +3112,7 @@ static void sl_gc_root_units_build(sl_gc_thread **snap, int nsnap,
      * too costs nothing for the not-yet-started case the run queue was
      * originally the only source for -- that chain is NULL, so the
      * loop body never runs -- and is the exact same walk the
-     * sl_parked_tasks registry below already does, for the exact same
+     * sl_parked registry below already does, for the exact same
      * reason: a task suspended mid-execution carries live roots that
      * only its own chain names. */
     pthread_mutex_lock(&sl_global_runq.mu);
@@ -3190,21 +3197,23 @@ static void sl_gc_root_units_build(sl_gc_thread **snap, int nsnap,
      * worker that parked it reassigns that back to its own idle
      * sentinel before fetching the next task) nor the run queue walk
      * just above (it's on some primitive's own wait list instead,
-     * e.g. a channel's send/recv_waiters) -- sl_parked_tasks
+     * e.g. a channel's send/recv_waiters) -- sl_parked
      * (runtime_core.c) is the dedicated registry every parking
      * primitive must register into for exactly this reason. Unlike a
      * queued task, a parked task's safepoint chain is NOT empty (it
      * parked mid-execution, not before starting), so both entry_arg
      * and the chain need marking here, same as the per-thread walk
-     * above. Already holding sl_gc_mu -- sl_parked_tasks is guarded
-     * by the same lock, so no extra locking needed to walk it. */
-    for (sl_task *sl_gc_pt = sl_parked_tasks; sl_gc_pt;
-         sl_gc_pt = sl_gc_pt->parked_next) {
-        if (skip_idle && sl_gc_task_idle(sl_gc_pt, done)) {
-            sl_gc_stat_tasks_skipped++;
-            continue;
+     * above. The collection already holds every shard of the registry
+     * (sl_parked_lock_all), so no extra locking is needed to walk it. */
+    for (int i = 0; i < SL_PARKED_SHARDS; i++) {
+        for (sl_task *sl_gc_pt = sl_parked[i].head; sl_gc_pt;
+             sl_gc_pt = sl_gc_pt->parked_next) {
+            if (skip_idle && sl_gc_task_idle(sl_gc_pt, done)) {
+                sl_gc_stat_tasks_skipped++;
+                continue;
+            }
+            sl_gc_root_unit_add(sl_gc_pt, 0);
         }
-        sl_gc_root_unit_add(sl_gc_pt, 0);
     }
 }
 
@@ -3621,6 +3630,7 @@ static void sl_gc_collect_minor_real(void) {
     sl_gc_ph_mark(&pc, SL_GC_PH_TTSP);
 
     pthread_mutex_lock(&sl_gc_mu);
+    sl_parked_lock_all(); /* no park or resume until the world restarts */
     unsigned long long walked0 = sl_gc_walk_count;
     sl_gc_harvest_rem_all(snap, nsnap);
     size_t rem_n = sl_gc_rem_harvest_n;
@@ -3706,6 +3716,7 @@ static void sl_gc_collect_minor_real(void) {
     } else {
         atomic_store_explicit(&sl_gc_collecting, 0, memory_order_release);
     }
+    sl_parked_unlock_all();
     pthread_mutex_unlock(&sl_gc_mu);
     /* Chain directly into the pending major while still on the
      * collector path rather than returning to mutators first: the
@@ -3759,6 +3770,7 @@ static void sl_gc_collect(void) {
     sl_gc_ph_mark(&pc, SL_GC_PH_TTSP);
 
     pthread_mutex_lock(&sl_gc_mu);
+    sl_parked_lock_all(); /* no park or resume until the world restarts */
     unsigned long long walked0 = sl_gc_walk_count;
     sl_gc_harvest_rem_all(snap, nsnap);
     for (size_t i = 0; i < sl_gc_rem_harvest_n; i++)
@@ -3838,6 +3850,7 @@ static void sl_gc_collect(void) {
     atomic_store_explicit(&sl_gc_collect_minor_pending, 0, memory_order_release);
     sl_gc_stw_release();
     atomic_store_explicit(&sl_gc_collecting, 0, memory_order_release);
+    sl_parked_unlock_all();
     pthread_mutex_unlock(&sl_gc_mu);
     sl_gc_trim_heap();
 }

@@ -186,7 +186,7 @@ typedef struct sl_task {
                                 unlock, once, immediately after the
                                 switch is safely complete -- NULL if
                                 not currently parked. */
-    struct sl_task *parked_next; /* sl_parked_tasks linkage -- kept
+    struct sl_task *parked_next; /* sl_parked linkage -- kept
                                 separate from `next` above, since a
                                 parked task is on BOTH a primitive-
                                 specific wait list (via `next`, e.g.
@@ -199,7 +199,7 @@ typedef struct sl_task {
                                 every park takes, once per resume over
                                 every parked task -- at 512 connections
                                 that walk halved point's throughput. */
-    int on_parked;              /* on sl_parked_tasks now */
+    int on_parked;              /* on sl_parked now */
     long long sleep_deadline_ns; /* Tier 11 fifth slice: monotonic-ns
                                 absolute wake time -- meaningful only
                                 while this task is linked into
@@ -430,6 +430,9 @@ static _Atomic unsigned long long sl_sched_stat_runnext_wakes = 0;
 /* Times a worker asleep on the run queue's doorbell woke up
  * (sl_runq_pop_blocking). One task queued should wake at most one. */
 static _Atomic unsigned long long sl_sched_stat_idle_wakes = 0;
+/* Parks and resumes that found the parked registry's lock held and had
+ * to wait for it (sl_parked_shard_lock). */
+static _Atomic unsigned long long sl_sched_stat_park_lock_waits = 0;
 /* Reactor waits that carried a deadline, and those that had to nudge the
  * reactor to recompute its sleep (sl_net.c, sl_reactor_wake_at). */
 static _Atomic unsigned long long sl_sched_stat_deadline_waits = 0;
@@ -472,9 +475,11 @@ static void sl_sched_stat_dump(void) {
         &sl_sched_stat_runnext_wakes, memory_order_relaxed);
     unsigned long long idle_wakes = atomic_load_explicit(
         &sl_sched_stat_idle_wakes, memory_order_relaxed);
-    fprintf(stderr, "slang-sched-stat workers=%ld submits=%llu resumes=%llu dispatches=%llu preempt_yields=%llu async_preempts=%llu misaligned_preempts=%llu deadline_waits=%llu reactor_nudges=%llu runnext_wakes=%llu idle_wakes=%llu\n",
+    unsigned long long park_waits = atomic_load_explicit(
+        &sl_sched_stat_park_lock_waits, memory_order_relaxed);
+    fprintf(stderr, "slang-sched-stat workers=%ld submits=%llu resumes=%llu dispatches=%llu preempt_yields=%llu async_preempts=%llu misaligned_preempts=%llu deadline_waits=%llu reactor_nudges=%llu runnext_wakes=%llu idle_wakes=%llu park_lock_waits=%llu\n",
             sl_pool_nworkers, submit, resume, dispatch, pyield, async,
-            misaligned, dwaits, nudges, rn_wakes, idle_wakes);
+            misaligned, dwaits, nudges, rn_wakes, idle_wakes, park_waits);
 }
 
 __attribute__((destructor))
@@ -496,7 +501,7 @@ static void sl_sched_stat_atexit(void) { sl_sched_stat_dump(); }
  * appropriate; nothing else is synchronized through this variable. */
 static _Atomic int sl_global_runq_count = 0;
 
-/* Tier 11 fourth slice: the global parked-task GC registry. A parked
+/* Tier 11 fourth slice: the parked-task GC registry. A parked
  * task (chan_send/recv, this slice; net/time, later) is reachable
  * from neither a registered thread's task_slot (the worker that
  * parked it reassigns that back to its own idle sentinel) nor the
@@ -506,8 +511,45 @@ static _Atomic int sl_global_runq_count = 0;
  * of the park/resume machinery lives, for the same ordering reason
  * as sl_global_runq itself just above: sl_gc_collect needs the
  * complete picture at its own definition site, well before
- * RUNTIME_POOL is emitted. Guarded by sl_gc_mu. */
-static sl_task *sl_parked_tasks = NULL;
+ * RUNTIME_POOL is emitted.
+ *
+ * Sharded by task address, each shard guarded by its own mutex. It was
+ * one list guarded by sl_gc_mu, which every park and every resume took:
+ * under request/response load that is two acquisitions of one global
+ * lock per request, from every worker and the network poller, and they
+ * were ~13% of a 4-worker server's futex calls. A park or a resume needs
+ * exclusion only from the collector, never from another park or resume,
+ * so each takes its task's shard alone, and a collection takes every
+ * shard (sl_parked_lock_all) for as long as it holds sl_gc_mu. Lock
+ * order: sl_gc_mu, then shards in index order, then the run queues. */
+#define SL_PARKED_SHARDS 64
+typedef struct sl_parked_shard {
+    pthread_mutex_t mu;
+    sl_task *head;
+} __attribute__((aligned(64))) sl_parked_shard;
+static sl_parked_shard sl_parked[SL_PARKED_SHARDS] = {
+    [0 ... SL_PARKED_SHARDS - 1] = { .mu = PTHREAD_MUTEX_INITIALIZER },
+};
+
+static inline sl_parked_shard *sl_parked_for(const sl_task *t) {
+    uintptr_t h = (uintptr_t)t;
+    h ^= h >> 16;
+    h *= (uintptr_t)0x9e3779b1u;
+    h ^= h >> 13;
+    return &sl_parked[h % (uintptr_t)SL_PARKED_SHARDS];
+}
+
+/* The collector's side: after sl_gc_mu, before the root walks, held
+ * until the collection releases the world. */
+static void sl_parked_lock_all(void) {
+    for (int i = 0; i < SL_PARKED_SHARDS; i++)
+        pthread_mutex_lock(&sl_parked[i].mu);
+}
+
+static void sl_parked_unlock_all(void) {
+    for (int i = SL_PARKED_SHARDS - 1; i >= 0; i--)
+        pthread_mutex_unlock(&sl_parked[i].mu);
+}
 
 /* sl_rt_current_task->safepoint_top is now the one live chain (it
  * replaces what used to be a bare _Thread_local sl_safepoint*

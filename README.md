@@ -1034,7 +1034,7 @@ Concurrency below.
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` / `import "io";` / `import "encoding";` like any other package.
 
-`http`, `httpc`, `http2`, `pg`, `flags` and `byteutil` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil` and `sort` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
 then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
 compiler's `SLANG_STDLIB_DIR`).
@@ -3199,6 +3199,40 @@ targets. A hand-written inflate would be a memory-safety surface with no
 upside, since every bug in one is a buffer overrun driven by
 attacker-controlled input.
 
+#### `sort`
+
+Sorting lists in place with Go's `sort` engine shape, plus binary
+search over what is already sorted. `ints`, `floats` and `strings`
+sort by native comparison; `by` sorts any list of anything by a key
+function returning `int`, `float` or `str`; `by_stable` keeps equal
+keys in their original order; the `search` functions binary-search a
+sorted list and answer `opt[int]`.
+
+```slang
+import "sort";
+
+let xs = [5, 3, 9, 1, 3];
+sort.ints(xs);                       // in place, ascending
+let i = sort.search_ints(xs, 3) ?? -1;
+
+let users = load_users();
+sort.by(users, user_age);            // key fn -> int, float or str
+sort.by_stable(users, user_name);    // equal keys keep original order
+
+let names: [str] = [];
+for u in users { push(names, u.name); }
+sort.strings(names);
+
+let fs = [3.5, 1.0, 0.0 / 0.0, 0.5];
+sort.floats(fs);                     // NaN values sort first (Go's rule)
+```
+
+The unstable sorts allocate nothing; each runs an entry pass that
+answers already-sorted and fully-reversed lists in one scan, and the
+quicksort settles each duplicate group in one partition pass, so
+four-valued million-element lists sort in tens of milliseconds.
+`by_stable` merges with one scratch list of about n/2 elements.
+
 #### `byteutil`
 
 Search, trim, and split on the `bytes` type — no new syntax. The
@@ -3491,7 +3525,9 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
   `reactor_nudges`: IO waits that carried a deadline, and those that had
   to wake the reactor to recompute its sleep, and `runnext_wakes`, the
   sleeping workers woken for a task put in a runnext slot, and
-  `idle_wakes`, every time a sleeping worker woke. The reactor never sleeps
+  `idle_wakes`, every time a sleeping worker woke, and
+  `park_lock_waits`, the parks and resumes that waited for the parked
+  registry's lock. The reactor never sleeps
   more than a second, so only a deadline closer than that nudges it.
   `f` may be a plain top-level function, an `extern fn`, or a
   **function value** (`spawn w(1, out);`, `spawn job.run(x);`) — not a
