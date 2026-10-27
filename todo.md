@@ -4279,3 +4279,30 @@ Also seen, not this change: gcc 13.3's LTO pass warns
 zero") when building any program in the container, on `dev` too. The
 warning sweep in `tests/run_tests.sh` passes, so it does not cover the
 LTO pass's warnings.
+
+## Fixed: every park and resume took sl_gc_mu (2026-10-27)
+
+next-steps.md #4c. The parked-task registry was one list guarded by
+sl_gc_mu, so each request took that global lock twice (the park after the
+response, the resume when the next request arrived), from every worker and
+the network poller; futex callchains put it at ~13% of a 4-worker server's
+futex calls. A park or resume needs exclusion only from the collector, which
+must not see a task leave the registry between its walk of the run queues
+and its walk of the registry. So the registry is now 64 shards (sl_parked,
+hashed by task address like the run-queue stripes), a park or resume takes
+its task's shard alone and keeps it across the run-queue push as it kept
+sl_gc_mu, and both collectors take every shard right after sl_gc_mu and
+release them just before it. Lock order: sl_gc_mu, shards in index order,
+run-queue locks; sl_time.c takes its sl_time_mu before a resume, and the
+collector never takes that.
+
+Measured in the local Linux container, 4 workers: contended registry-lock
+acquisitions on reactor_work_budget (SLANG_SCHED_STAT park_lock_waits,
+counted the same way on dev's sl_gc_mu for the comparison) 1413-1764 ->
+72-96 per ~40300 waits, 243-264 -> 58-65 on 2 CPUs; futex calls per request
+0.469 -> 0.408. Plain slang, 6 alternating rounds per setting: median rps
+83.0k -> 82.4k at c=50 (paired by round +1%: noise), 110.7k -> 131.4k at
+c=256 (paired +7%, ahead in 5 of 6 rounds), p99 at c=256 7.68 -> 6.18 ms.
+The host was loaded (load average ~9.7; in an earlier 3-round run one round
+fell to 40-45k for both of its samples, with the client slowed too), so the
+medians are wide; the paired ratios are the claim.

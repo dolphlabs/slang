@@ -302,10 +302,17 @@ honors blob filtering. See
   `tests/sched_idle_wakes` on 8 workers and under the minor verifier.
 
   **Left:** four workers still serve less than one on a 4-CPU box
-  (~100k against ~130k). Both remaining shared costs are per wait:
-  `sl_gc_mu` taken by every park and every resume (~13% of futex calls
-  at 4 workers), and the EPOLLONESHOT re-arm, one `epoll_ctl` per wait
-  (Go registers once, edge-triggered). Fiber is still 1.3-1.7x ahead.
+  (~100k against ~130k). Two shared costs were per wait:
+  - [x] `sl_gc_mu`, taken by every park and every resume (~13% of futex
+    calls at 4 workers). The parked registry is now 64 shards, each
+    with its own lock, and only a collection takes them all
+    (perf/parked-shards). Contended acquisitions on
+    `reactor_work_budget` fell from 1413-1764 to 72-96 per ~40300 waits
+    and futex calls per request from 0.469 to 0.408; plain slang, paired
+    by round, +7% rps at c=256 (5 of 6 rounds), +1% at c=50 (noise).
+  - [ ] the EPOLLONESHOT re-arm, one `epoll_ctl` per wait (Go registers
+    once, edge-triggered).
+  Fiber is still 1.3-1.7x ahead.
 
 ## 5. Per-request allocation in stdlib `http`
 
