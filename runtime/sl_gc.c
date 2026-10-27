@@ -2691,6 +2691,12 @@ static void sl_gc_mark_inline_bytes(void *w, void (*mark)(void *)) {
  * Exactly the header address; interior words still do not count. */
 SL_GC_NO_ASAN
 static void sl_gc_mark_header_word(void *w, void (*mark)(void *)) {
+    /* A null word is no header. Said explicitly for gcc too: inlined
+       through mark(p) -> sl_gc_claim, the path w == 0 made the claimed
+       header the null pointer, and gcc 13's LTO pass warned
+       -Wstringop-overflow ("likely at address zero") on every program
+       it built, although sl_gc_known(sizeof(sl_gc_obj)) is never true. */
+    if (!w) return;
     if ((uintptr_t)w > UINTPTR_MAX - sizeof(sl_gc_obj)) return;
     void *p = (char *)w + sizeof(sl_gc_obj);
     if (sl_gc_known(p))

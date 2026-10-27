@@ -5197,7 +5197,7 @@ any signal-handling program.
 - [flags](packages/flags.md) -- source package, 23 public items
 - [fs](packages/fs.md) -- compiler-provided, 9 public items
 - [http](packages/http.md) -- source package, 58 public items
-- [http2](packages/http2.md) -- source package, 134 public items
+- [http2](packages/http2.md) -- source package, 133 public items
 - [httpc](packages/httpc.md) -- source package, 35 public items
 - [io](packages/io.md) -- compiler-provided, 12 public items
 - [json](packages/json.md) -- compiler-provided, 0 public items
@@ -6963,7 +6963,7 @@ Read frames until `stream`'s response is complete. For a connection carrying one
 
 ### `fn client_start(t: Transport, lim: Limits) -> result[Client, str]`
 
-Handshake on `t` and start the connection's writer and reader tasks. The caller still owns `t`: client_close releases the connection's tasks, then closes it.
+Handshake on `t` and start the connection's writer and reader tasks. From here the Client owns `t`: its reader closes it, once, after both tasks have stopped (client_close waits for that). If the handshake fails, the writer has stopped before this returns and the caller still owns `t`.
 
 ### `fn client_max_streams(c: Client) -> int`
 
@@ -6973,7 +6973,7 @@ One request/response exchange on `c`, safe to call from many tasks at once. Wait
 
 ### `fn client_close(c: Client)`
 
-Stop taking calls, send GOAWAY and close the transport; calls in flight fail with "closed by the client". The writer sends the GOAWAY and then closes (W_CLOSE), so the frame is out before the socket goes. If the connection had already failed, the writer is gone and this closes the transport itself. Safe to call more than once.
+Stop taking calls, send GOAWAY and close the connection; calls in flight fail with "closed by the client". Returns once the connection is fully closed -- its reader and writer stopped and the transport closed -- so the fd number is free for reuse only then. Closing the fd while the reader was still parked on it let a new connection reuse the number under a waiter that was not its own, and that connection's reads stopped waking. Safe to call more than once, and after the connection failed on its own.
 
 ### `let W_RAW = 0; // pre-built frames, not flow controlled`
 
@@ -6986,8 +6986,6 @@ Stop taking calls, send GOAWAY and close the transport; calls in flight fail wit
 ### `let W_INITIAL = 3; // peer's SETTINGS_INITIAL_WINDOW_SIZE is now `n``
 
 ### `let W_MAXFRAME = 4; // peer's SETTINGS_MAX_FRAME_SIZE is now `n``
-
-### `let W_CLOSE = 5; // send `head` (a GOAWAY), then close the transport`
 
 ### `gc struct WMsg`
 

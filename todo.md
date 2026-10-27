@@ -1,5 +1,35 @@
 # todo
 
+- [ ] **The reactor loses a parked read's deadline when its fd number is
+  reused (flagged 2026-10-25, not fixed).** Closing an fd while a task is
+  parked on it, then opening a socket that gets the same number and
+  parking a second read on that, leaves the second read unwoken -- its
+  deadline included: gdb showed every worker idle and nothing runnable.
+  The http2 client did exactly this (below) and is fixed at the caller, but
+  any code that closes an fd another task is reading can still wedge a
+  later connection. `net.close` on an fd with waiters should wake them
+  with an error, or the reactor should key waiters by more than the fd
+  number. Needs its own repro in C before a fix.
+
+- [x] **tests/h2_client hung about once in sixty runs on linux
+  (2026-10-25, fix/http2-client-close-ownership).** `http2.client_close`
+  queued a GOAWAY with W_CLOSE, and the writer closed the transport while
+  the client's reader task was still parked on it. The next phase's dial
+  reused the fd number and its 3s read deadline never fired (the reactor
+  issue above), which timed out both linux CI jobs on #459. The reader is
+  now the one closer: it waits for the writer to stop, closes the
+  transport, and only then lets `client_close` return. W_CLOSE is gone.
+  tests/h2_client_close checks the fd is closed when `client_close`
+  returns and that the next connection's deadline still fires; it fails
+  at round 0 on the old code. Linux docker (2026-10-27, rebased on #463),
+  under the minor verifier with a 16KB nursery, 4 loops in parallel:
+  h2_client 400 runs, no hang, no failure, 0 missed; h2_client_close 800
+  runs, no hang, 0 missed, and one failure whose output was lost (the
+  loop kept only the last run's). 960 more runs of h2_client_close (480
+  verified, 480 plain, 16 loops in parallel, every failing run's output
+  kept) did not fail again: 1 in 1760. Its cause is unknown; the test's
+  3 s watchdog under that much parallel load is one candidate.
+
 - [x] **chan_recv lost a received value to a minor (memory safety,
   2026-10-24, feat/http2-client).** `chan_recv` allocates its `opt` box
   before parking and fills it after. A wait long enough for two minors
@@ -4273,12 +4303,15 @@ the collector's walk and the resume's "always in one root source" rule
 redone per shard; edge-triggered registration needs the slot generation
 scheme redone. Each is its own change.
 
-Also seen, not this change: gcc 13.3's LTO pass warns
-`-Wstringop-overflow` in `sl_gc_claim` (inlined through
+Also seen, fixed separately (fix/build-warnings): gcc 13.3's LTO pass
+warned `-Wstringop-overflow` in `sl_gc_claim` (inlined through
 `sl_gc_verify_minor_marks`, "destination object is likely at address
-zero") when building any program in the container, on `dev` too. The
-warning sweep in `tests/run_tests.sh` passes, so it does not cover the
-LTO pass's warnings.
+zero") on every program it built, and its lto-wrapper warned "using serial
+compilation of N LTRANS jobs" on larger ones; slangc passes the compiler's
+output on, so every Linux build printed them. The sweep compiled with
+`-c -O2`, never the LTO link. `sl_gc_mark_header_word` now rejects a null
+word (the inlined path gcc saw), slangc builds with `-flto=auto`, and the
+sweep also runs two real `slangc -o` builds and fails on any warning.
 
 ## Fixed: every park and resume took sl_gc_mu (2026-10-27)
 

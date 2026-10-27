@@ -870,8 +870,13 @@ static int build(const char *input, const char *outname, int emit_c,
        Reads go through SL_RT_TLS_CUR.
        -fwrapv: slang's signed arithmetic wraps two's-complement, and C's
        is undefined on overflow -- without it the optimiser deleted
-       overflow checks written in slang (`a + b < a` is "impossible"). */
-    sb_append(&cmd, "cc -O3 -flto -fwrapv ");
+       overflow checks written in slang (`a + b < a` is "impossible").
+       -flto=auto, not -flto: given no job count, gcc's lto-wrapper
+       printed "warning: using serial compilation of N LTRANS jobs" on
+       every build big enough to partition, and slangc shows the
+       compiler's output. auto lets gcc pick the count; clang takes it as
+       full LTO, as it does -flto. */
+    sb_append(&cmd, "cc -O3 -flto=auto -fwrapv ");
     sb_append(&cmd, xasprintf("-Wframe-larger-than=%d ", frame_limit()));
     sb_append(&cmd, gen_path);
     sb_append(&cmd, " -o ");
