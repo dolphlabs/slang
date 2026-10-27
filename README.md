@@ -3491,7 +3491,9 @@ chan_recv(results) ?? -1;  // none after close+drain -> -1
   `reactor_nudges`: IO waits that carried a deadline, and those that had
   to wake the reactor to recompute its sleep, and `runnext_wakes`, the
   sleeping workers woken for a task put in a runnext slot, and
-  `idle_wakes`, every time a sleeping worker woke. The reactor never sleeps
+  `idle_wakes`, every time a sleeping worker woke, and
+  `park_lock_waits`, the parks and resumes that waited for the parked
+  registry's lock. The reactor never sleeps
   more than a second, so only a deadline closer than that nudges it.
   `f` may be a plain top-level function, an `extern fn`, or a
   **function value** (`spawn w(1, out);`, `spawn job.run(x);`) — not a

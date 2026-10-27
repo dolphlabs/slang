@@ -361,7 +361,7 @@ static void sl_chan_close(sl_chan *c) {
  * not a live reference, so it stays correct even if that task has
  * since exited (which is itself the bug of dropping a held lock). The
  * struct needs no GC tracer: it holds no GC pointers, and parked
- * waiters are already roots via sl_parked_tasks. */
+ * waiters are already roots via sl_parked. */
 
 typedef struct {
     pthread_mutex_t mu;   /* guards the fields below, never user code */

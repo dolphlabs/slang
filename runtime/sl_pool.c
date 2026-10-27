@@ -584,23 +584,35 @@ static void sl_task_submit_copy_joined(void (*entry)(void *),
  * POSIX's per-thread mutex-ownership rule despite the task having
  * logically moved from application code to scheduler code in
  * between. */
+/* A park's or resume's shard of the parked registry, counting the times
+ * someone else held it (SLANG_SCHED_STAT park_lock_waits). */
+static void sl_parked_shard_lock(sl_parked_shard *ps) {
+    if (pthread_mutex_trylock(&ps->mu) == 0)
+        return;
+    if (sl_sched_stat_enabled())
+        atomic_fetch_add_explicit(&sl_sched_stat_park_lock_waits, 1,
+                                  memory_order_relaxed);
+    pthread_mutex_lock(&ps->mu);
+}
+
 __attribute__((noinline))
 static void sl_task_park(pthread_mutex_t *held_mu) {
     /* Tier 11 eighth slice: bracketed entry through the switch's own
-     * resume point, not just the sl_gc_mu-held stretch -- protects the
+     * resume point, not just the registry-shard-held stretch -- protects the
      * whole park-registration-then-switch-out transition, the same
      * shape sl_task_yield_now/the async trampoline itself use for the
      * identical class of mid-transition hazard. */
     sl_rt_preempt_disable();
     sl_task *t = SL_RT_TLS_CUR(); /* not bare: SL_RT_TLS_ADDR_FN */
-    pthread_mutex_lock(&sl_gc_mu);
+    sl_parked_shard *ps = sl_parked_for(t);
+    sl_parked_shard_lock(ps);
     t->parked_prev = NULL;
-    t->parked_next = sl_parked_tasks;
-    if (sl_parked_tasks)
-        sl_parked_tasks->parked_prev = t;
-    sl_parked_tasks = t;
+    t->parked_next = ps->head;
+    if (ps->head)
+        ps->head->parked_prev = t;
+    ps->head = t;
     t->on_parked = 1;
-    pthread_mutex_unlock(&sl_gc_mu);
+    pthread_mutex_unlock(&ps->mu);
     t->park_mu = held_mu;
     t->parked = 1;
     sl_ctx_switch(&t->rsp, SL_RT_TLS_NATIVE_RSP());
@@ -614,10 +626,11 @@ static void sl_task_park(pthread_mutex_t *held_mu) {
  * primitive-specific wait list t was just removed from -- t->next is
  * free to reuse the moment this is called.
  *
- * sl_gc_mu stays locked across BOTH the sl_parked_tasks removal and
- * the sl_runq_push call below -- unlocking in between (the original,
+ * t's registry shard stays locked across BOTH the removal and the
+ * run-queue push below (it was sl_gc_mu, before the registry was
+ * sharded; see sl_parked) -- unlocking in between (the original,
  * buggy shape) leaves a real window where t is registered in NONE of
- * the collector's three root sources (not on sl_parked_tasks anymore,
+ * the collector's three root sources (not in the parked registry anymore,
  * not yet on sl_global_runq, and not any registered thread's
  * task_slot either, since t isn't running on any OS thread right
  * now). A collection landing in that exact window walks all three
@@ -631,13 +644,13 @@ static void sl_task_park(pthread_mutex_t *held_mu) {
  * back as changed-in-place moments after receipt, sometimes read as a
  * heap pointer, sometimes zeroed -- exactly the signature of another
  * allocation's malloc() call reusing memory this task still legitimately
- * held live. Extending sl_gc_mu's hold across sl_runq_push closes the
- * window entirely: t is always in at least one of the three sources.
- * Safe against deadlock because the established lock order in this
- * runtime is always sl_gc_mu-then-runq-mu (see sl_gc_collect's own
- * comment, runtime_gc.c) -- sl_runq_push only ever takes q->mu, never
- * sl_gc_mu, so acquiring it while already holding sl_gc_mu here
- * matches the same order, not a new or reversed one.
+ * held live. Holding the shard across the push closes the window
+ * entirely: t is always in at least one of the three sources, and a
+ * collection, which holds every shard while it walks them, cannot run
+ * in between. Safe against deadlock because the established lock order
+ * in this runtime is sl_gc_mu, then the shards, then the run queues'
+ * locks: the push only ever takes run-queue locks, never a shard or
+ * sl_gc_mu.
  *
  * Only half the story on its own, though: closing this window makes t
  * visible to the run-queue walk, and that walk had to start scanning a
@@ -653,12 +666,13 @@ static void sl_task_resume_to(sl_task *t, int wake) {
      * this function's own lock manipulation is. sl_runq_push below
      * takes its own nested bracket too (harmless, composes). */
     sl_rt_preempt_disable();
-    pthread_mutex_lock(&sl_gc_mu);
+    sl_parked_shard *ps = sl_parked_for(t);
+    sl_parked_shard_lock(ps);
     if (t->on_parked) {
         if (t->parked_prev)
             t->parked_prev->parked_next = t->parked_next;
         else
-            sl_parked_tasks = t->parked_next;
+            ps->head = t->parked_next;
         if (t->parked_next)
             t->parked_next->parked_prev = t->parked_prev;
         t->parked_next = NULL;
@@ -666,7 +680,7 @@ static void sl_task_resume_to(sl_task *t, int wake) {
         t->on_parked = 0;
     }
     sl_runq_ready_to(t, wake);
-    pthread_mutex_unlock(&sl_gc_mu);
+    pthread_mutex_unlock(&ps->mu);
     sl_rt_preempt_enable();
     if (sl_sched_stat_enabled())
         atomic_fetch_add_explicit(&sl_sched_stat_resume, 1,
