@@ -4303,9 +4303,12 @@ the collector's walk and the resume's "always in one root source" rule
 redone per shard; edge-triggered registration needs the slot generation
 scheme redone. Each is its own change.
 
-Also seen, not this change: gcc 13.3's LTO pass warns
-`-Wstringop-overflow` in `sl_gc_claim` (inlined through
+Also seen, fixed separately (fix/build-warnings): gcc 13.3's LTO pass
+warned `-Wstringop-overflow` in `sl_gc_claim` (inlined through
 `sl_gc_verify_minor_marks`, "destination object is likely at address
-zero") when building any program in the container, on `dev` too. The
-warning sweep in `tests/run_tests.sh` passes, so it does not cover the
-LTO pass's warnings.
+zero") on every program it built, and its lto-wrapper warned "using serial
+compilation of N LTRANS jobs" on larger ones; slangc passes the compiler's
+output on, so every Linux build printed them. The sweep compiled with
+`-c -O2`, never the LTO link. `sl_gc_mark_header_word` now rejects a null
+word (the inlined path gcc saw), slangc builds with `-flto=auto`, and the
+sweep also runs two real `slangc -o` builds and fails on any warning.
