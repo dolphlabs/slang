@@ -5154,6 +5154,84 @@
         }
       ]
     },
+    "sort": {
+      "name": "sort",
+      "kind": "source",
+      "items": [
+        {
+          "name": "ints",
+          "decl": "fn",
+          "sig": "fn ints(xs: [int]) -> [int]",
+          "doc": "Sorts xs in place, ascending. Unstable. Answers an already-sorted or strictly descending list in one scan, and duplicate-heavy data in no more passes than its distinct values take to settle, so the whole call is allocation-free either way.",
+          "file": "stdlib/sort/sort.sl",
+          "line": 41
+        },
+        {
+          "name": "floats",
+          "decl": "fn",
+          "sig": "fn floats(xs: [float]) -> [float]",
+          "doc": "Same engine over floats, with a total order despite the type's own: NaN values sort before every number and equal to each other (Go's `sort.Float64s` rule), which is what makes the partition finite.",
+          "file": "stdlib/sort/sort.sl",
+          "line": 56
+        },
+        {
+          "name": "strings",
+          "decl": "fn",
+          "sig": "fn strings(xs: [str]) -> [str]",
+          "doc": "Same engine over strings, bytewise: `\"\"` sorts first, and the order is exactly what `<` gives \u2014 bytes, not locale, not Unicode points.",
+          "file": "stdlib/sort/sort.sl",
+          "line": 70
+        },
+        {
+          "name": "by",
+          "decl": "fn",
+          "sig": "fn by[T, K](xs: [T], key: fn(T) -> K) -> [T]",
+          "doc": "Sorts xs in place by key, ascending. Unstable: when two keys are equal, which was first is whatever the comparisons fell into. A call is free to permute equal keys differently on a re-run, so anything whose output must not change between runs uses `by_stable`.",
+          "file": "stdlib/sort/sort.sl",
+          "line": 86
+        },
+        {
+          "name": "by_stable",
+          "decl": "fn",
+          "sig": "fn by_stable[T, K](xs: [T], key: fn(T) -> K) -> [T]",
+          "doc": "Sorts xs in place by key, ascending, and equal keys keep their original order: an adaptive merge sort. Natural runs are kept (a strictly descending run is reversed, which keeps order for equal keys, since a strictly descending run has none), windows of 32 are insertion-sorted, and runs merge bottom-up taking the left on equal keys. Nearly-sorted data therefore costs about one comparison per element, not n log n.",
+          "file": "stdlib/sort/sort.sl",
+          "line": 107
+        },
+        {
+          "name": "search_ints",
+          "decl": "fn",
+          "sig": "fn search_ints(xs: [int], v: int) -> opt[int]",
+          "doc": "The first index of v in xs, sorted ascending, or none. On a list which is not sorted the result is defined but useless; it never reads past the list.",
+          "file": "stdlib/sort/sort.sl",
+          "line": 148
+        },
+        {
+          "name": "search_floats",
+          "decl": "fn",
+          "sig": "fn search_floats(xs: [float], v: float) -> opt[int]",
+          "doc": "Same contract over floats: that includes searching for NaN, which finds the first NaN and sorts first under sort.floats. The index found for a searched NaN is where the first NaN of the list sits.",
+          "file": "stdlib/sort/sort.sl",
+          "line": 168
+        },
+        {
+          "name": "search_strings",
+          "decl": "fn",
+          "sig": "fn search_strings(xs: [str], v: str) -> opt[int]",
+          "doc": "Same contract over strings: the first index of an exactly equal string, bytewise as `sort.strings` orders them.",
+          "file": "stdlib/sort/sort.sl",
+          "line": 191
+        },
+        {
+          "name": "search_by",
+          "decl": "fn",
+          "sig": "fn search_by[T, K](xs: [T], key: fn(T) -> K, v: K) -> opt[int]",
+          "doc": "Lower bound over a list already sorted by key: the first index whose key is not before v. Equality is `!(a < b) && !(b < a)`, which is `==` for int and str keys; for a float key it reads equal NaNs -- both raw comparisons false -- as a hit, the same reading `by` gives them.",
+          "file": "stdlib/sort/sort.sl",
+          "line": 212
+        }
+      ]
+    },
     "sql": {
       "name": "sql",
       "kind": "native",

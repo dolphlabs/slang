@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sort — slang</title>
+<meta name="description" content="Package sort.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="sort">
+<meta property="og:description" content="Package sort.">
+<meta property="og:type" content="website">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/sort.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <button id="navtoggle" class="navtoggle" type="button"
+          aria-label="Toggle navigation" aria-expanded="false"
+          aria-controls="mainnav">
+    <span></span><span></span><span></span>
+  </button>
+  <nav class="mainnav" id="mainnav"><a href="../index.html">Home</a><a href="../guide/index.html">Guide</a><a href="../guide/data.html">Data types</a><a href="../guide/errors.html">Errors</a><a href="../guide/functions.html">Functions</a><a href="../concurrency/index.html">Concurrency</a><a href="../testing/index.html">Testing</a><a href="../bench/index.html">Benchmarks</a><a href="../packages/index.html">Packages</a><a href="../interop/index.html">C interop</a><a href="../internals/index.html">Internals</a><a href="../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="navscrim" class="navscrim" hidden></div>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>sort</h1>
+      <p class="tagline">Package sort.</p>
+      <p class="agentline">
+        <a href="../packages/sort.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>Sorting lists in place with Go&#x27;s <code>sort</code> engine shape, plus binary search over what is already sorted. <code>ints</code>, <code>floats</code> and <code>strings</code> sort by native comparison; <code>by</code> sorts any list of anything by a key function returning <code>int</code>, <code>float</code> or <code>str</code>; <code>by_stable</code> keeps equal keys in their original order; the <code>search</code> functions binary-search a sorted list and answer <code>opt[int]</code>.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;sort&quot;</span>;
+
+<span class="k">let</span> xs = [<span class="n">5</span>, <span class="n">3</span>, <span class="n">9</span>, <span class="n">1</span>, <span class="n">3</span>];
+sort.<span class="f">ints</span>(xs);                       <span class="c">// in place, ascending</span>
+<span class="k">let</span> i = sort.<span class="f">search_ints</span>(xs, <span class="n">3</span>) ?? -<span class="n">1</span>;
+
+<span class="k">let</span> users = <span class="f">load_users</span>();
+sort.<span class="f">by</span>(users, user_age);            <span class="c">// key fn -&gt; int, float or str</span>
+sort.<span class="f">by_stable</span>(users, user_name);    <span class="c">// equal keys keep original order</span>
+
+<span class="k">let</span> names: [<span class="t">str</span>] = [];
+<span class="k">for</span> u <span class="k">in</span> users { <span class="b">push</span>(names, u.name); }
+sort.<span class="f">strings</span>(names);
+
+<span class="k">let</span> fs = [<span class="n">3.5</span>, <span class="n">1.0</span>, <span class="n">0.0</span> / <span class="n">0.0</span>, <span class="n">0.5</span>];
+sort.<span class="f">floats</span>(fs);                     <span class="c">// NaN values sort first (Go&#x27;s rule)</span></code></pre></div>
+<p>The unstable sorts allocate nothing; each runs an entry pass that answers already-sorted and fully-reversed lists in one scan, and the quicksort settles each duplicate group in one partition pass, so four-valued million-element lists sort in tens of milliseconds. <code>by_stable</code> merges with one scratch list of about n/2 elements.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="ints"><div class="api-sig"><code><span class="k">fn</span> <span class="f">ints</span>(xs: [<span class="t">int</span>]) -&gt; [<span class="t">int</span>]</code> <span class="src">stdlib/sort/sort.sl:41</span><a class="anchor" href="#ints">#</a></div><p class="api-doc">Sorts xs in place, ascending. Unstable. Answers an already-sorted or strictly descending list in one scan, and duplicate-heavy data in no more passes than its distinct values take to settle, so the whole call is allocation-free either way.</p></div><div class="api-item" id="floats"><div class="api-sig"><code><span class="k">fn</span> <span class="f">floats</span>(xs: [<span class="t">float</span>]) -&gt; [<span class="t">float</span>]</code> <span class="src">stdlib/sort/sort.sl:56</span><a class="anchor" href="#floats">#</a></div><p class="api-doc">Same engine over floats, with a total order despite the type&#x27;s own: NaN values sort before every number and equal to each other (Go&#x27;s <code>sort.Float64s</code> rule), which is what makes the partition finite.</p></div><div class="api-item" id="strings"><div class="api-sig"><code><span class="k">fn</span> <span class="f">strings</span>(xs: [<span class="t">str</span>]) -&gt; [<span class="t">str</span>]</code> <span class="src">stdlib/sort/sort.sl:70</span><a class="anchor" href="#strings">#</a></div><p class="api-doc">Same engine over strings, bytewise: <code>&quot;&quot;</code> sorts first, and the order is exactly what <code>&lt;</code> gives — bytes, not locale, not Unicode points.</p></div><div class="api-item" id="by"><div class="api-sig"><code><span class="k">fn</span> by[T, K](xs: [T], key: <span class="k">fn</span>(T) -&gt; K) -&gt; [T]</code> <span class="src">stdlib/sort/sort.sl:86</span><a class="anchor" href="#by">#</a></div><p class="api-doc">Sorts xs in place by key, ascending. Unstable: when two keys are equal, which was first is whatever the comparisons fell into. A call is free to permute equal keys differently on a re-run, so anything whose output must not change between runs uses <code>by_stable</code>.</p></div><div class="api-item" id="by-stable"><div class="api-sig"><code><span class="k">fn</span> by_stable[T, K](xs: [T], key: <span class="k">fn</span>(T) -&gt; K) -&gt; [T]</code> <span class="src">stdlib/sort/sort.sl:107</span><a class="anchor" href="#by-stable">#</a></div><p class="api-doc">Sorts xs in place by key, ascending, and equal keys keep their original order: an adaptive merge sort. Natural runs are kept (a strictly descending run is reversed, which keeps order for equal keys, since a strictly descending run has none), windows of 32 are insertion-sorted, and runs merge bottom-up taking the left on equal keys. Nearly-sorted data therefore costs about one comparison per element, not n log n.</p></div><div class="api-item" id="search-ints"><div class="api-sig"><code><span class="k">fn</span> <span class="f">search_ints</span>(xs: [<span class="t">int</span>], v: <span class="t">int</span>) -&gt; <span class="t">opt</span>[<span class="t">int</span>]</code> <span class="src">stdlib/sort/sort.sl:148</span><a class="anchor" href="#search-ints">#</a></div><p class="api-doc">The first index of v in xs, sorted ascending, or none. On a list which is not sorted the result is defined but useless; it never reads past the list.</p></div><div class="api-item" id="search-floats"><div class="api-sig"><code><span class="k">fn</span> <span class="f">search_floats</span>(xs: [<span class="t">float</span>], v: <span class="t">float</span>) -&gt; <span class="t">opt</span>[<span class="t">int</span>]</code> <span class="src">stdlib/sort/sort.sl:168</span><a class="anchor" href="#search-floats">#</a></div><p class="api-doc">Same contract over floats: that includes searching for NaN, which finds the first NaN and sorts first under sort.floats. The index found for a searched NaN is where the first NaN of the list sits.</p></div><div class="api-item" id="search-strings"><div class="api-sig"><code><span class="k">fn</span> <span class="f">search_strings</span>(xs: [<span class="t">str</span>], v: <span class="t">str</span>) -&gt; <span class="t">opt</span>[<span class="t">int</span>]</code> <span class="src">stdlib/sort/sort.sl:191</span><a class="anchor" href="#search-strings">#</a></div><p class="api-doc">Same contract over strings: the first index of an exactly equal string, bytewise as <code>sort.strings</code> orders them.</p></div><div class="api-item" id="search-by"><div class="api-sig"><code><span class="k">fn</span> search_by[T, K](xs: [T], key: <span class="k">fn</span>(T) -&gt; K, v: K) -&gt; <span class="t">opt</span>[<span class="t">int</span>]</code> <span class="src">stdlib/sort/sort.sl:212</span><a class="anchor" href="#search-by">#</a></div><p class="api-doc">Lower bound over a list already sorted by key: the first index whose key is not before v. Equality is <code>!(a &lt; b) &amp;&amp; !(b &lt; a)</code>, which is <code>==</code> for int and str keys; for a float key it reads equal NaNs -- both raw comparisons false -- as a hit, the same reading <code>by</code> gives them.</p></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>
