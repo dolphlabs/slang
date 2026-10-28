@@ -76,11 +76,19 @@ what `proc` has no answer for rather than duplicating it.
 
 ### `os.mtime(str) -> result[int,str]`
 
+### `os.mtime_ns(str) -> result[int,str]`
+
 ### `os.read_dir(str) -> result[[str],str]`
 
 ### `os.remove(str) -> result[bool,str]`
 
 ### `os.rename(str, str) -> result[bool,str]`
+
+### `os.watch(str, [str]) -> result[int,str]`
+
+### `os.watch_next(int, until) -> result[[str],str]`
+
+### `os.watch_close(int) -> result[bool,str]`
 
 ---
 

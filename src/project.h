@@ -37,6 +37,7 @@ char *project_tree_hash(const char *dir);
 const char *project_excluded_import(const char *from_dir, const char *ipath,
                                     const char **pkg_name);
 void project_get(SlProject *p);
+char *project_cache_subdir(const char *sub);
 int project_is_dir(const char *path);
 
 #endif

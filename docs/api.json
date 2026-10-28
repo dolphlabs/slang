@@ -3232,6 +3232,15 @@
           "sig": "os.mtime(str) -> result[int,str]"
         },
         {
+          "name": "mtime_ns",
+          "params": [
+            "str"
+          ],
+          "ret": "result[int,str]",
+          "tls": false,
+          "sig": "os.mtime_ns(str) -> result[int,str]"
+        },
+        {
           "name": "read_dir",
           "params": [
             "str"
@@ -3258,6 +3267,35 @@
           "ret": "result[bool,str]",
           "tls": false,
           "sig": "os.rename(str, str) -> result[bool,str]"
+        },
+        {
+          "name": "watch",
+          "params": [
+            "str",
+            "[str]"
+          ],
+          "ret": "result[int,str]",
+          "tls": false,
+          "sig": "os.watch(str, [str]) -> result[int,str]"
+        },
+        {
+          "name": "watch_next",
+          "params": [
+            "int",
+            "until"
+          ],
+          "ret": "result[[str],str]",
+          "tls": false,
+          "sig": "os.watch_next(int, until) -> result[[str],str]"
+        },
+        {
+          "name": "watch_close",
+          "params": [
+            "int"
+          ],
+          "ret": "result[bool,str]",
+          "tls": false,
+          "sig": "os.watch_close(int) -> result[bool,str]"
         }
       ]
     },
@@ -3762,6 +3800,38 @@
           "ret": "result[str,str]",
           "tls": false,
           "sig": "proc.cwd() -> result[str,str]"
+        },
+        {
+          "name": "spawn",
+          "params": [
+            "[str]",
+            "[str]",
+            "str",
+            "int"
+          ],
+          "ret": "result[int,str]",
+          "tls": false,
+          "sig": "proc.spawn([str], [str], str, int) -> result[int,str]"
+        },
+        {
+          "name": "kill",
+          "params": [
+            "int",
+            "int"
+          ],
+          "ret": "result[bool,str]",
+          "tls": false,
+          "sig": "proc.kill(int, int) -> result[bool,str]"
+        },
+        {
+          "name": "wait",
+          "params": [
+            "int",
+            "until"
+          ],
+          "ret": "result[int,str]",
+          "tls": false,
+          "sig": "proc.wait(int, until) -> result[int,str]"
         }
       ]
     },

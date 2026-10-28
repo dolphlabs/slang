@@ -1632,6 +1632,58 @@ for name in fn_values spawn_isolation gc_stress maps json flags method_recv \
 done
 [ "$fg_bad" -eq 0 ] && echo "PASS frame guards"
 
+# The guards a build ends with are kept for its next build (frame_cache_path,
+# src/main.c), so a rebuild compiles the C once. It used to compile once to
+# rediscover the guards and again to apply them, and a guard that grew its
+# own frame by a few bytes cost a third: say, a 21k-line service, compiled
+# three times (225 s). A `cc` first on PATH counts the compiles; the cache
+# lives in a fresh SLANG_CACHE. A cache file that is not ours is ignored:
+# the build still succeeds and its program still prints the same thing.
+echo "--- frame guards remembered between builds ---"
+fc_dir=$(mktemp -d)
+mkdir -p "$fc_dir/bin"
+fc_real=$(command -v cc)
+cat >"$fc_dir/bin/cc" <<'FCEOF'
+#!/bin/sh
+echo compile >>"$FC_LOG"
+exec "$FC_REAL" "$@"
+FCEOF
+chmod +x "$fc_dir/bin/cc"
+fc_bad=0
+for fc_step in cold warm corrupt; do
+    if [ "$fc_step" = corrupt ]; then
+        for f in "$fc_dir"/cache/frames/*; do
+            [ -f "$f" ] || continue
+            printf 'slang-frames 1\n99999999 bad name!\nnot a line\n-5 x\n' >"$f"
+        done
+    fi
+    : >"$fc_dir/$fc_step.log"
+    if ! SLANG_CACHE="$fc_dir/cache" SLANG_FRAME_LIMIT=64 FC_REAL="$fc_real" \
+            FC_LOG="$fc_dir/$fc_step.log" PATH="$fc_dir/bin:$PATH" \
+            ./slangc tests/big_frame/main.sl -o "$fc_dir/$fc_step" \
+            >/dev/null 2>&1; then
+        echo "FAIL frame guard cache: $fc_step build failed"
+        fc_bad=1
+        continue
+    fi
+    if ! "$fc_dir/$fc_step" </dev/null | diff -q tests/big_frame/expected.txt - >/dev/null; then
+        echo "FAIL frame guard cache: $fc_step build's program printed something else"
+        fc_bad=1
+    fi
+done
+fc_cold=$(wc -l <"$fc_dir/cold.log" | tr -d ' ')
+fc_warm=$(wc -l <"$fc_dir/warm.log" | tr -d ' ')
+if [ "$fc_bad" -eq 0 ] && [ "$fc_warm" -ne 1 ]; then
+    echo "FAIL frame guard cache: the rebuild compiled $fc_warm times (first build: $fc_cold)"
+    fc_bad=1
+fi
+if [ "$fc_bad" -eq 0 ]; then
+    echo "PASS frame guard cache (first build $fc_cold compiles, rebuild $fc_warm)"
+else
+    fail=1
+fi
+rm -rf "$fc_dir"
+
 # ---- llms-small.txt ------------------------------------------------------
 # www/llms-small.md is the one hand-written digest on the docs site: the
 # language on one page for a model's context window (www/build.py says why

@@ -2449,9 +2449,9 @@ any signal-handling program.
 - [json](packages/json.md) -- compiler-provided, 0 public items
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [net](packages/net.md) -- compiler-provided, 34 public items
-- [os](packages/os.md) -- compiler-provided, 14 public items
+- [os](packages/os.md) -- compiler-provided, 18 public items
 - [pg](packages/pg.md) -- source package, 56 public items
-- [proc](packages/proc.md) -- compiler-provided, 6 public items
+- [proc](packages/proc.md) -- compiler-provided, 9 public items
 - [redis](packages/redis.md) -- source package, 161 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [sort](packages/sort.md) -- source package, 9 public items
