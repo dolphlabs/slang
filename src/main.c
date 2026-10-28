@@ -32,7 +32,7 @@
 #include <unistd.h>
 
 #ifndef SLANG_VERSION
-#define SLANG_VERSION "0.2.3"
+#define SLANG_VERSION "0.2.4"
 #endif
 
 int cmd_doc(int argc, char **argv); /* doc.c */
@@ -829,8 +829,10 @@ static int build(const char *input, const char *outname, int emit_c,
     int want_crypto = 0;
     int want_sql = 0;
     int want_compress = 0;
+    int want_fswatch = 0;
     codegen_program(pkgs.items, pkgs.count, main_index, &out, &want_tls,
-                    &want_dns, &want_crypto, &want_sql, &want_compress);
+                    &want_dns, &want_crypto, &want_sql, &want_compress,
+                    &want_fswatch);
 
     /* ---- output ---- */
     char *stem = derive_stem(input);
@@ -897,6 +899,10 @@ static int build(const char *input, const char *outname, int emit_c,
     if (want_compress)
         sb_append(&cmd, " -lz"); /* the 'compress' native package; zlib
                                     ships with every supported platform */
+#if defined(__APPLE__)
+    if (want_fswatch)
+        sb_append(&cmd, " -framework CoreServices");
+#endif
     for (int i = 0; i < nlinks; i++) {
         sb_append(&cmd, " -l");
         sb_append(&cmd, link_libs[i]);
@@ -946,9 +952,9 @@ static int build(const char *input, const char *outname, int emit_c,
         codegen_set_frame_guards(guard_syms, guard_frames, nguard);
         StrBuf out2;
         sb_init(&out2);
-        int t2 = 0, d2 = 0, c2 = 0, s2 = 0, z2 = 0;
+        int t2 = 0, d2 = 0, c2 = 0, s2 = 0, z2 = 0, w2 = 0;
         codegen_program(pkgs2.items, pkgs2.count, main2, &out2, &t2, &d2,
-                        &c2, &s2, &z2);
+                        &c2, &s2, &z2, &w2);
         write_file(gen_path, out2.data, out2.len);
     }
     if (status == 0) {

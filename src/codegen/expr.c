@@ -20,6 +20,12 @@ char *gen_ident_name(CG *cg, const char *name, int line) {
                 if (fs && fs->is_pub && !fs->method_of)
                     return fs->is_extern ? xasprintf("sl_x_%s", fs->name)
                                          : mangle_func(fs->pkg, fs->name);
+                if (!strcmp(pkg, "proc")) {
+                    if (!strcmp(right, "SPAWN_GROUP"))
+                        return xasprintf("%lldLL", 1LL);
+                    if (!strcmp(right, "SPAWN_NULL_STDIN"))
+                        return xasprintf("%lldLL", 2LL);
+                }
             }
             if (!g || !g->is_pub)
                 cg_error(line,
@@ -223,6 +229,7 @@ static int expr_is_int_lit(Expr *e) {
  * literal operand to the result's C type makes the arithmetic happen at
  * the width slang says it has. */
 static char *lit_at_width(CG *cg, Expr *operand, const char *t, char *code) {
+    (void)cg;
     if (!expr_is_int_lit(operand) || !is_int(t))
         return code;
     return xasprintf("((%s)%s)", map_type(t), code);

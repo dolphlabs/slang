@@ -34,6 +34,10 @@ const char *infer_ident_name(CG *cg, const char *name, int line) {
                                  right, pkg);
                     return fn_type_of_sig(cg, fs);
                 }
+                if (!strcmp(pkg, "proc")) {
+                    if (!strcmp(right, "SPAWN_GROUP") || !strcmp(right, "SPAWN_NULL_STDIN"))
+                        return "int";
+                }
                 cg_error(line, "package '%s' has no variable '%s'", pkg,
                          right);
             }

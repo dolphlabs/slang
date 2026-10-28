@@ -35,11 +35,16 @@ const NatSig OS_SIGS[] = {
     {"os", "is_file", 1, {NA_STR}, "bool", 0},
     {"os", "size", 1, {NA_STR}, "result[int,str]", 0},
     {"os", "mtime", 1, {NA_STR}, "result[int,str]", 0},
+    {"os", "mtime_ns", 1, {NA_STR}, "result[int,str]", 0},
 
     /* directories and the namespace */
     {"os", "read_dir", 1, {NA_STR}, "result[[str],str]", 0},
     {"os", "remove", 1, {NA_STR}, "result[bool,str]", 0},
     {"os", "rename", 2, {NA_STR, NA_STR}, "result[bool,str]", 0},
+    {"os", "watch", 2, {NA_STR, NA_ARR_STR}, "result[int,str]", 0},
+    {"os", "watch_next", 2, {NA_INT, NA_UNTIL}, "result[[str],str]", 0},
+    {"os", "watch_close", 1, {NA_INT}, "result[bool,str]", 0},
 };
 
 const int OS_SIGS_LEN = sizeof(OS_SIGS) / sizeof(OS_SIGS[0]);
+
