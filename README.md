@@ -3935,10 +3935,16 @@ main.sl ──loader──> packages ──lexer/parser──> ASTs ──codege
    real frame of every function (`-Wframe-larger-than`, read from clang's and
    gcc's own reports). A slang function reported over the limit is
    regenerated behind a thin wrapper that grows the stack *before* the
-   function is entered, and the program is compiled a second time. Nothing
-   else pays for it: no program in this repository, `tyto` included, has a
-   function that needs one, and `--emit-c` output has none. The limit is 1536
-   bytes; `SLANG_FRAME_LIMIT` overrides it (the tests set a tiny one to put a
+   function is entered, and the program is compiled a second time. The
+   guards a build ends with are kept in the cache
+   (`~/.cache/slang/frames/`, or `$SLANG_CACHE/frames/`, one small file per
+   program) and applied up front the next time the same program is built,
+   so a rebuild compiles once; every compile still checks the frames, and
+   one that has outgrown its guard is regenerated as before. A guard is
+   sized in whole 4KB pages, as the stack grows, so a frame that changes by
+   a few bytes costs no compile. Programs with no large frame pay nothing,
+   and `--emit-c` output has no guards. The limit is 1536 bytes;
+   `SLANG_FRAME_LIMIT` overrides it (the tests set a tiny one to put a
    guard on nearly every function).
 
 Inspect what slang generates:

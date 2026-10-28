@@ -802,6 +802,132 @@ static int is_slang_symbol(const char *name, char *base, size_t cap) {
     return 0;
 }
 
+/* A guard reserves its frame rounded up to this (sl_rt_frame_probe's page,
+ * runtime/sl_core.c), so a frame is recorded rounded up the same way: growth
+ * that stays inside the page changes nothing the guard does, and must not
+ * cost a compile. It used to: guarding a function grew its frame by a few
+ * bytes (1848 -> 1864), that counted as a change, and the whole program was
+ * compiled a third time for nothing -- two thirds of a large program's build
+ * (say: 3 compiles, 225 s; 79 s with no guards at all). */
+#define FRAME_GUARD_ROUND 4096
+#define FRAME_CACHE_MAX_BYTES (1 << 24)
+#define FRAME_CACHE_MAX_ENTRIES 65536
+#define FRAME_CACHE_HEADER "slang-frames 1"
+
+static int frame_round(int bytes) {
+    return ((bytes + FRAME_GUARD_ROUND - 1) / FRAME_GUARD_ROUND) *
+           FRAME_GUARD_ROUND;
+}
+
+/* ---- the frame guard cache ----
+ *
+ * The guards a build ended with, kept for the next build of the same program
+ * (~/.cache/slang/frames/, keyed by the entry file's real path and the frame
+ * limit) and applied before its first compile. A rebuild after an edit then
+ * compiles once, where it compiled once to rediscover the same guards and
+ * again to apply them. Nothing depends on the cache being right: every
+ * compile still reports every frame over the limit, and one bigger than its
+ * recorded guard is regenerated and compiled again, as before. A guard on a
+ * function that has shrunk only reserves stack, and the next save drops it.
+ * Builds that write C only (--emit-c) neither read nor write it. */
+typedef struct {
+    char **syms;
+    int *frames;
+    int n;
+} FrameSet;
+
+static void frame_set_put(FrameSet *fs, const char *sym, int frame) {
+    for (int i = 0; i < fs->n; i++)
+        if (!strcmp(fs->syms[i], sym)) {
+            if (frame > fs->frames[i])
+                fs->frames[i] = frame;
+            return;
+        }
+    fs->syms = (char **)xrealloc(fs->syms, sizeof(char *) * (size_t)(fs->n + 1));
+    fs->frames = (int *)xrealloc(fs->frames, sizeof(int) * (size_t)(fs->n + 1));
+    fs->syms[fs->n] = xstrdup(sym);
+    fs->frames[fs->n] = frame;
+    fs->n++;
+}
+
+/* A C identifier no longer than parse_frame_diags keeps: anything else in
+ * the file is not ours, and is ignored rather than trusted. */
+static int frame_sym_ok(const char *s) {
+    size_t n = strlen(s);
+    if (n == 0 || n > 255)
+        return 0;
+    for (size_t i = 0; i < n; i++)
+        if (!isalnum((unsigned char)s[i]) && s[i] != '_')
+            return 0;
+    return 1;
+}
+
+/* NULL when there is no cache to use: no HOME or SLANG_CACHE, or an entry
+ * whose real path cannot be had. */
+static char *frame_cache_path(const char *input) {
+    char real[PATH_MAX];
+    if (!realpath(input, real))
+        return NULL;
+    char *dir = project_cache_subdir("frames");
+    if (!dir)
+        return NULL;
+    char *key = xasprintf("%s\n%d", real, frame_limit());
+    unsigned long long h = 1469598103934665603ULL; /* FNV-1a */
+    for (const char *p = key; *p; p++) {
+        h ^= (unsigned char)*p;
+        h *= 1099511628211ULL;
+    }
+    free(key);
+    return xasprintf("%s/%016llx", dir, h);
+}
+
+static void frame_cache_load(const char *path, FrameSet *fs) {
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return;
+    char line[512];
+    if (!fgets(line, sizeof(line), f) ||
+        strcmp(line, FRAME_CACHE_HEADER "\n")) {
+        fclose(f);
+        return;
+    }
+    while (fs->n < FRAME_CACHE_MAX_ENTRIES && fgets(line, sizeof(line), f)) {
+        int bytes = 0;
+        char sym[256];
+        if (sscanf(line, "%d %255s", &bytes, sym) != 2)
+            continue;
+        if (bytes <= 0 || bytes > FRAME_CACHE_MAX_BYTES || !frame_sym_ok(sym))
+            continue;
+        frame_set_put(fs, sym, frame_round(bytes));
+    }
+    fclose(f);
+}
+
+/* The slang functions the last compile reported over the limit: what the
+ * next build should start out guarding. Written whole to a temporary file
+ * and renamed over the old one, so a concurrent build of the same program
+ * reads one whole file or the other. Failure costs only a compile. */
+static void frame_cache_save(const char *path, const char *cc_out) {
+    FrameDiag *diags = NULL;
+    int nd = parse_frame_diags(cc_out, &diags);
+    FrameSet fs = {0};
+    for (int i = 0; i < nd; i++) {
+        char base[256];
+        if (is_slang_symbol(diags[i].name, base, sizeof(base)) &&
+            frame_sym_ok(base))
+            frame_set_put(&fs, base, frame_round(diags[i].bytes));
+    }
+    char *tmp = xasprintf("%s.%ld.tmp", path, (long)getpid());
+    FILE *f = fopen(tmp, "w");
+    if (!f)
+        return;
+    int bad = fputs(FRAME_CACHE_HEADER "\n", f) < 0;
+    for (int i = 0; i < fs.n && !bad; i++)
+        bad = fprintf(f, "%d %s\n", fs.frames[i], fs.syms[i]) < 0;
+    if (fclose(f) != 0 || bad || rename(tmp, path) != 0)
+        remove(tmp);
+}
+
 static int build(const char *input, const char *outname, int emit_c,
                  int keep_c, int run, int want_liveness_dump,
                  int want_mir_dump) {
@@ -821,6 +947,15 @@ static int build(const char *input, const char *outname, int emit_c,
         dump_liveness(pkgs.items, pkgs.count, main_index, stdout);
         return 0;
     }
+
+    /* Last build's guards, before the first codegen: see frame_cache_path. */
+    char *frame_cache = emit_c ? NULL : frame_cache_path(input);
+    FrameSet cached = {0};
+    if (frame_cache)
+        frame_cache_load(frame_cache, &cached);
+    if (cached.n)
+        codegen_set_frame_guards((const char *const *)cached.syms,
+                                 cached.frames, cached.n);
 
     StrBuf out;
     sb_init(&out);
@@ -911,9 +1046,9 @@ static int build(const char *input, const char *outname, int emit_c,
      * frame, regenerate it behind an entry guard and compile again. */
     int status = 0;
     char *cc_out = NULL;
-    const char **guard_syms = NULL;
-    int *guard_frames = NULL;
-    int nguard = 0;
+    const char **guard_syms = (const char **)cached.syms;
+    int *guard_frames = cached.frames;
+    int nguard = cached.n;
     for (int round = 0;; round++) {
         status = run_capture(cmd.data, &cc_out);
         if (status != 0)
@@ -935,11 +1070,11 @@ static int build(const char *input, const char *outname, int emit_c,
                 guard_frames = (int *)xrealloc(
                     guard_frames, sizeof(int) * (size_t)(nguard + 1));
                 guard_syms[nguard] = xstrdup(base);
-                guard_frames[nguard] = diags[i].bytes;
+                guard_frames[nguard] = frame_round(diags[i].bytes);
                 nguard++;
                 changed = 1;
             } else if (diags[i].bytes > guard_frames[at]) {
-                guard_frames[at] = diags[i].bytes;
+                guard_frames[at] = frame_round(diags[i].bytes);
                 changed = 1;
             }
         }
@@ -957,6 +1092,8 @@ static int build(const char *input, const char *outname, int emit_c,
                         &c2, &s2, &z2, &w2);
         write_file(gen_path, out2.data, out2.len);
     }
+    if (status == 0 && frame_cache)
+        frame_cache_save(frame_cache, cc_out);
     if (status == 0) {
         /* Every compiler message except the frame report, unchanged. */
         char *rest = strip_frame_diags(cc_out);
