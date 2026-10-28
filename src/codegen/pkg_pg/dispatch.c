@@ -110,7 +110,9 @@ static const char *zero(CG *cg, const char *t) {
 
 static void emit_cell(CG *cg, PgCellInst *it) {
     const char *t = it->type;
-    emit_line(cg, "static bool %s(sl_pgr_cell *cell, %s *out, char **err) {", it->name, ctype_of(cg, t));
+    emit_guardable_open(cg, "bool", it->name,
+                        xasprintf("sl_pgr_cell *cell, %s *out, char **err", ctype_of(cg, t)),
+                        "cell, out, err");
     cg->indent++;
     emit_line(cg, "if (cell->kind == SL_PGR_JSON) {"); cg->indent++;
     emit_line(cg, "sl_jparser p = { cell->data, cell->len, 0, 0, NULL };");
@@ -161,7 +163,7 @@ static void emit_cell(CG *cg, PgCellInst *it) {
         emit_line(cg, "if (!value) return false;");
         emit_line(cg, "return %s(value, out, err);", json_dec_fn(cg, t, 0));
     }
-    cg->indent--; emit_line(cg, "}"); emit_line(cg, "");
+    cg->indent--; emit_guardable_close(cg);
 }
 
 static void wrap_row(CG *cg, const char *t, const char *base, const char *value,
@@ -183,7 +185,8 @@ static void emit_rows(CG *cg, PgRowsInst *it) {
     const char *list = xasprintf("[%s]", t);
     const char *res = res_cname(cg, list, "str");
     const char *ct = ctype_of(cg, t);
-    emit_line(cg, "static %s %s(%s input) {", res, it->name, ctype_of(cg, it->rows_type));
+    emit_guardable_open(cg, res, it->name,
+                        xasprintf("%s input", ctype_of(cg, it->rows_type)), "input");
     cg->indent++;
     emit_line(cg, "sl_pgr_view view = { input->columns, input->types, input->chunks, input->locs, input->lens, input->count, input->binary_results };");
     emit_line(cg, "char *err = NULL; long long row = -1; sl_arr *out = NULL;");
@@ -253,7 +256,7 @@ static void emit_rows(CG *cg, PgRowsInst *it) {
      * are made, so neither needs rooting on the way out. */
     emit_line(cg, "if (err) return (%s){ .ok = false, .e = err };", res);
     emit_line(cg, "return (%s){ .ok = true, .v = out };", res);
-    cg->indent--; emit_line(cg, "}"); emit_line(cg, "");
+    cg->indent--; emit_guardable_close(cg);
 }
 
 void emit_pg_rows_codecs(CG *cg) {

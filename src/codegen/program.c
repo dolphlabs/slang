@@ -1293,6 +1293,49 @@ const char *const *codegen_function_symbols(int *n) {
     return emitted_syms;
 }
 
+/* A generated function that can take a frame guard, like a slang function:
+ * the codecs (json, pg rows, inspect) emit theirs through these. Their
+ * frames grow with the type: a json decoder for a 200-field struct needed
+ * more than the 2 KB a safepoint leaves free, at -O3, and the task died with
+ * SIGBUS in its guard page; at -O0 a 120-field one is 15 KB. They are C, not
+ * slang, so nothing guarded them. Called by the generated code, never by a
+ * slang caller's frame-guard wrapper, and not nested: one is open at a time.
+ * `params` is the C parameter list, `args` the same names as call arguments
+ * (both "void"/"" for none), `ret` the C return type. */
+static const char *gw_ret, *gw_name, *gw_params, *gw_args;
+static int gw_guard;
+
+void emit_guardable_open(CG *cg, const char *ret, const char *name,
+                         const char *params, const char *args) {
+    note_emitted_symbol(name);
+    gw_guard = frame_guard_of(name);
+    gw_ret = ret;
+    gw_name = name;
+    gw_params = params;
+    gw_args = args;
+    if (gw_guard)
+        emit_line(cg, "static __attribute__((noinline)) %s %s__body(%s) {", ret,
+                  name, params);
+    else
+        emit_line(cg, "static %s %s(%s) {", ret, name, params);
+}
+
+/* The closing brace (at the caller's indent, already back to the function's
+ * level) and, for a guarded function, its wrapper. */
+void emit_guardable_close(CG *cg) {
+    emit_line(cg, "}");
+    emit_line(cg, "");
+    if (!gw_guard)
+        return;
+    emit_line(cg, "static %s %s(%s) {", gw_ret, gw_name, gw_params);
+    emit_line(cg, "    sl_rt_stack_reserve(%d);", gw_guard);
+    emit_line(cg, "    %s%s__body(%s);", strcmp(gw_ret, "void") ? "return " : "",
+              gw_name, gw_args);
+    emit_line(cg, "}");
+    emit_line(cg, "");
+    gw_guard = 0;
+}
+
 void gen_function(CG *cg, Package *p, FuncDecl *f) {
     FuncSig *sig = sig_of_decl(cg, f);
 

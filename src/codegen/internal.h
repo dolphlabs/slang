@@ -862,6 +862,9 @@ void compute_leaf_fns(CG *cg, Package *pkgs, int npkgs);
 int user_leaf_call(CG *cg, Expr *e);
 void gen_block(CG *cg, Block *b);
 void emit_runtime_file(CG *cg, const char *name);
+void emit_guardable_open(CG *cg, const char *ret, const char *name,
+                         const char *params, const char *args);
+void emit_guardable_close(CG *cg);
 void emit_prelude(CG *cg);
 void sig_register_raw(CG *cg, Package *p, FuncDecl *f,
                              const char *method_of);

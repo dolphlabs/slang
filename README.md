@@ -3935,7 +3935,11 @@ main.sl ──loader──> packages ──lexer/parser──> ASTs ──codege
    real frame of every function (`-Wframe-larger-than`, read from clang's and
    gcc's own reports). A slang function reported over the limit is
    regenerated behind a thin wrapper that grows the stack *before* the
-   function is entered, and the program is compiled a second time. The
+   function is entered, and the program is compiled a second time. So is
+   the C slangc generates for `json.decode`/`json.encode`, `pg.rows_as` and
+   `inspect`, whose frames grow with the type: a decoder for a 200-field
+   struct needs more stack than a safepoint leaves free, and without a
+   guard the task ran into its guard page. The
    guards a build ends with are kept in the cache
    (`~/.cache/slang/frames/`, or `$SLANG_CACHE/frames/`, one small file per
    program) and applied up front the next time the same program is built,
