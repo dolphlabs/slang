@@ -205,6 +205,7 @@ static sl_res_int_str *sl_proc_spawn(sl_arr *argv_arr, sl_arr *env_arr, const ch
     argv[argc] = NULL;
 
     char **envp = NULL;
+    int free_envp = 0;
     if (env_arr && env_arr->len > 0) {
         int envc = (int)env_arr->len;
         const char **env_items = (const char **)env_arr->data;
@@ -218,14 +219,10 @@ static sl_res_int_str *sl_proc_spawn(sl_arr *argv_arr, sl_arr *env_arr, const ch
             envp[i] = (char *)env_items[i];
         }
         envp[envc] = NULL;
+        free_envp = 1;
     } else {
-        envp = (char **)malloc(sizeof(char *));
-        if (!envp) {
-            free(argv);
-            sl_rt_preempt_enable();
-            return sl_proc_err_int("proc.spawn: out of memory");
-        }
-        envp[0] = NULL;
+        extern char **environ;
+        envp = environ;
     }
 
     posix_spawnattr_t attr;
@@ -269,7 +266,7 @@ static sl_res_int_str *sl_proc_spawn(sl_arr *argv_arr, sl_arr *env_arr, const ch
     posix_spawn_file_actions_destroy(&actions);
     posix_spawnattr_destroy(&attr);
     free(argv);
-    free(envp);
+    if (free_envp) free(envp);
 
     if (err != 0) {
         sl_rt_preempt_enable();
