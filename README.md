@@ -136,6 +136,7 @@ Useful flags:
 | `--emit-c`  | Only write the generated C file (no compilation)    |
 | `--keep-c`  | Keep the generated C file after compiling           |
 | `--run`     | Compile, then run it; exit with the program's own status |
+| `--dev`     | Fast unoptimized build for edit-and-rerun (also `SLANG_DEV=1`) |
 | `--json`    | Compile errors as JSON lines on stderr (see below)  |
 | `get`       | Fetch `slang.project` pins and write `slang.lock`   |
 
@@ -3935,11 +3936,31 @@ main.sl ──loader──> packages ──lexer/parser──> ASTs ──codege
    real frame of every function (`-Wframe-larger-than`, read from clang's and
    gcc's own reports). A slang function reported over the limit is
    regenerated behind a thin wrapper that grows the stack *before* the
-   function is entered, and the program is compiled a second time. Nothing
-   else pays for it: no program in this repository, `tyto` included, has a
-   function that needs one, and `--emit-c` output has none. The limit is 1536
-   bytes; `SLANG_FRAME_LIMIT` overrides it (the tests set a tiny one to put a
+   function is entered, and the program is compiled a second time. So is
+   the C slangc generates for `json.decode`/`json.encode`, `pg.rows_as` and
+   `inspect`, whose frames grow with the type: a decoder for a 200-field
+   struct needs more stack than a safepoint leaves free, and without a
+   guard the task ran into its guard page. The
+   guards a build ends with are kept in the cache
+   (`~/.cache/slang/frames/`, or `$SLANG_CACHE/frames/`, one small file per
+   program) and applied up front the next time the same program is built,
+   so a rebuild compiles once; every compile still checks the frames, and
+   one that has outgrown its guard is regenerated as before. A guard is
+   sized in whole 4KB pages, as the stack grows, so a frame that changes by
+   a few bytes costs no compile. Programs with no large frame pay nothing,
+   and `--emit-c` output has no guards. The limit is 1536 bytes;
+   `SLANG_FRAME_LIMIT` overrides it (the tests set a tiny one to put a
    guard on nearly every function).
+
+**Development builds.** `--dev` (or `SLANG_DEV=1` in the environment)
+compiles the generated C at `-O0` without LTO, which is most of a build's
+time: a 21k-line service rebuilds in about 16 s instead of 73 s. The program
+runs slower (about 1.6x the CPU per request on that service), so it is for
+the edit-and-rerun loop -- `zokor watch` builds this way -- and never for
+what you deploy. Unoptimized frames are several times bigger, so a dev build
+also starts tasks on a 32KB stack with a 16KB safepoint margin, guards
+frames over 8KB, and is cached apart from the release build of the same
+program.
 
 Inspect what slang generates:
 

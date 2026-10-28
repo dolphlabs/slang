@@ -4346,3 +4346,188 @@ kqueue reactor thread does the resumes, not polling workers, so the counts
 are higher. Sharding still cuts them there -- on this Intel Mac, dev with
 the same counter on sl_gc_mu gave 2666-2992 and the shards 127-155 -- but
 there is no arm64 Mac here to set a budget from.
+
+## Fixed: a large program compiled three times per build (2026-10-28)
+
+`say` (a zokor service, ~21k lines of slang plus zokor, pg, redis, json and
+http) took 256 s to build with `slangc 0.2.4` on this laptop (8 cores): 8 s
+in slangc (parse, check, emit 13.5 MB of C) and the rest in `cc`. One
+compile and link of that C at `-O3 -flto=auto` is ~70 s; `slangc` ran three.
+The frame-guard loop (src/main.c) compiled once, found five functions over
+the 1536-byte limit, regenerated them behind guards and compiled again; the
+guard grew two of those frames by 16 bytes (1848 -> 1864, 4216 -> 4232),
+which counted as a change, so it compiled a third time. With the frame
+check off the same build was 79 s.
+
+Now a guard is recorded in whole 4 KB pages, the unit
+`sl_rt_stack_reserve` reserves in, so growth inside the page costs no
+compile, and the guards a build ends with are kept in
+`~/.cache/slang/frames/` and applied before the next build's first compile.
+Frozen `say`, ccwrap counting compiles: 3 compiles / 225 s before; 2 / 155 s
+for the first build; 1 / 73 s for every rebuild after. Correctness does not
+depend on the cache: every compile still reports frames over the limit,
+and one bigger than its recorded guard is regenerated as before.
+run_tests.sh checks the rebuild compiles once (`dev`: twice) and that a
+corrupt cache file is ignored.
+
+What is left, by size:
+- One `-O3` compile of 13.5 MB of C is still ~60-70 s, on one core. clang
+  `-ftime-report` at `-O1` (56 s) shows no pathological pass: InstCombine
+  26%, the inliner 14%, SimplifyCFG 8%, spread over the whole file. `-O0`
+  compiles it in 5 s, `-O1`/`-O2`/`-O3` in 55-57 s. So the time is volume.
+  - Parallel and incremental compiles: emit one C file per package (plus a
+    header), compile them on every core, and reuse the objects of packages
+    that did not change (zokor, pg, redis, http never change while `say` is
+    edited). The runtime is one translation unit by design (AGENTS.md), so
+    this needs its statics and thread-locals reworked: the largest change.
+  - A development build at `-O0` (5 s): needs a check that runtime C frames
+    at `-O0` fit the 8 KB task stacks, since only slang functions get
+    guards.
+  - Less C: `say` instantiates 688 generic types and functions (slangc
+    warns past 64), each emitted as its own copy.
+- `-flto=auto` on a single translation unit adds ~14 s (75 s against 61 s
+  without) and has no other unit to optimize across. Dropping it needs a
+  run-time measurement first.
+
+Also seen, not fixed: with OpenSSL 4 every program using TLS prints
+"1 warning generated." (`SSL_set1_host` is deprecated in 4.0), passed on
+from `cc`. The warning sweep's programs do not use TLS, so it misses it.
+
+## Fixed: a wide struct's json decoder overflowed the task stack (2026-10-28)
+
+Found while measuring development builds (`-O0`). `json.decode` into a
+struct with 200 or more fields died with SIGBUS ("a task overflowed its
+stack") in an ordinary release build, slangc 0.2.4, on macOS: 200, 300 and
+500 fields all crashed; 120 fields passed only because its decoder's frame,
+1528 bytes at -O3, fit inside the 2 KB a safepoint leaves free. At -O0 that
+same decoder is 15.4 KB. The codecs slangc generates -- json fast and tree
+decoders, json encoders, pg row and cell decoders, inspect printers -- are C,
+not slang functions, so the frame guards that protect a large slang function
+never covered them, and their frames grow with the type. In a server the
+stack depth at a given handler is about fixed, so a route decoding such a
+struct would crash every time or never, taking the process with it.
+
+They now go through `emit_guardable_open`/`emit_guardable_close`
+(src/codegen/program.c): a codec the compiler reports over the limit is
+emitted as a noinline `__body` behind a wrapper that reserves its frame,
+exactly as a slang function is, and its guard is cached between builds the
+same way. Growth from inside a codec is as safe as from a slang function:
+sl_task_stack_grow switches to the grower context first, so every
+callee-saved register is on the stack, and translates every word there that
+points into the old stack. tests/json_wide (decode, encode and inspect of a
+200-field struct from depths 0..399) dies with SIGBUS on dev and passes now;
+it is in the minor-verify, GC stress and SLANG_FRAME_LIMIT=64 lists. A
+scratch build that guarded every codec unconditionally passed json_wide,
+pg_rows_as (98 wrapped codecs), json, json_parity, json_utf8,
+json_deep_nesting, json_value_structs, generics_json and inspect, so every
+wrapper shape compiles and runs.
+
+Also fixed alongside: on Linux, gcc reports a function it cloned under the
+clone's name (`NAME.constprop`, `.isra.0`, `.part.0`, `.lto_priv.0`), and the
+frame-guard loop matched names exactly, so a large function gcc happened to
+clone was never guarded -- slang functions too, not only codecs.
+tests/json_wide's decoder came back as `sl_jdf_json_wide_Wide.constprop`
+(3088 bytes) and still overflowed on Linux with codec guards in place;
+`is_slang_symbol` now drops everything from the first '.'.
+
+## Fixed: stale padding in result and opt values was scanned as pointers (2026-10-28)
+
+`SLANG_GC_VERIFY_MINOR=1 SLANG_GC_NURSERY_KB=16` on tests/value_results,
+macOS x86_64: "minor missed a live young leaf ... held by an old channel
+(..., not remembered)" in 1-6 of 40-80 runs. Bisected: 0 of 80 at 35ac7ad,
+6 of 80 at 5893daf (perf(codegen): hold every result by value), and present
+on every dev commit since. Instrumented, the "missed" leaf is a churn()
+string the program never stored in the channel: it sits in word 0 of a
+queued `result[Node, str]`, whose C struct is `{ bool ok; Node *v; str e; }`.
+The 7 padding bytes after `ok` are never initialized -- `(T){ .ok = false,
+.e = ... }` leaves them unspecified -- so they carry stale stack bytes into
+the channel slot, and the containers' word-by-word scan of a value struct
+(sl_gc_mark_slot) offers them to mark(). A word that happens to equal a live
+object's address marks it.
+
+Not a memory-safety bug: sl_gc_known accepts a word only if its page bitmap
+(or this collection's set) says the slot is allocated now, so a stale word
+can keep an unrelated live object alive one more cycle but can never revive
+a freed one. What it does cost: spurious retention, and a GC verifier that
+fails value_results about 1 run in 20 -- noise that would hide a real
+barrier bug. User value structs with padding (`struct { b: bool, s: str }`)
+have had the same property since value structs went into containers. Fix
+options: give a GC-bearing result/opt/value struct no implicit padding
+(explicit, zero-initialized pad members, which a designated initializer
+zeroes), or have containers trace a value struct by its pointer words only
+(a per-type mask instead of a word scan).
+
+Fixed the first way. A result, opt or struct value with GC roots is now
+emitted with its padding spelled out as `unsigned char _sl_padN[...]`
+members, sized from a `__sl_shape` struct with the natural layout and
+checked against it with `_Static_assert`, so the layout and ABI are
+unchanged; a designated initializer zeroes named members, and a struct
+literal of such a type is memset first. Values without GC roots are emitted
+as before (their padding is never scanned). The suite's new "value bodies
+have no unwritten padding" check compiles value_results,
+value_struct_containers and value_opts with `-Wpadded` and fails on any
+padded `sl_res_`/`sl_opt_`/`sl_st_` body: dev had 7, 2 and 7. The
+value_results verifier misses 0 of 80 runs (6 of 80 before).
+
+## Fixed: no function was frame-guarded on Xcode 15 (2026-10-28)
+
+PR #473's macOS CI job (Apple clang 15, Xcode 15.4) died in tests/json_wide
+with SIGBUS, where every local run on clang 17 passed. The frame cache the
+build left was empty: under `-flto=auto` the frame report comes from code
+generation inside the linker, and Xcode 15's linker (ld-prime, ld-1053)
+drops it. Measured on that runner with the same C: full LTO reported 0
+frames over 1536 bytes, and `-flto=thin`, `-Wl,-ld_classic` and `-fno-lto`
+each reported 1. So on Xcode 15 no function had ever been guarded -- slang
+functions included -- and big_frame and the SLANG_FRAME_LIMIT=64 runs passed
+anyway, because they check output, not that a guard was applied. The
+backtrace: the 200-field decoder (2488 bytes on clang 17, unguarded on 15)
+calling sl_gc_alloc_gen -> malloc on the stack's last page.
+
+slangc now builds with `-flto=thin` on Apple (`-flto=auto` elsewhere).
+`-ld_classic` is deprecated, and the program is a single translation unit,
+so thin and full LTO optimize the same module: json_wide's decoder is 2488
+bytes either way on clang 17, and the compile takes the same 19 s. The
+frame guard cache test now also fails when its first build compiled only
+once -- the compiler reported no frames -- which is how this went unseen.
+
+## Added: development builds, `--dev` / `SLANG_DEV=1` (2026-10-28)
+
+Nearly all of a build is the C compiler at `-O3 -flto`: say (21k lines,
+13.5 MB of C) took 73 s to rebuild with its frame guards cached, long enough
+that `zokor watch` was still compiling one save when the next landed. A dev
+build compiles the same C at `-O0` without LTO: 16 s for say (30 s cold),
+for about 1.6x the CPU per request at run time. Splitting the C into several
+files to use more cores was measured first and is slower until the runtime
+stops being duplicated into every file (465 CPU-seconds for the naive
+split), so it waits for a declarations-only header.
+
+-O0 frames are several times bigger (say: 464 functions over 1 KB against
+22 at -O3, the largest 36 KB), and tasks grow their stacks only at
+safepoints, so `-DSL_DEV_BUILD` gives tasks a 32KB first stack and a 16KB
+safepoint margin, raises the frame-guard limit to 8KB, and scales the json
+decoder's per-level stack estimate by 4. The frame cache keys dev and
+release builds apart. A 120-field json decoder is 15.4 KB at -O0; it was
+unguarded until the codec frame guards (#473), which is why this waited for
+them. The suite passes with `SLANG_DEV=1` on macOS and Linux, and the
+"development builds" check runs big_frame, json_wide, crypto, sql and others
+with `--dev`.
+
+Found on the way: -O0 reports frames at compile time, and clang's "1 warning
+generated." counted the report slangc strips, so every dev build of a
+guarded program printed that line and nothing else. strip_frame_diags now
+corrects the count and drops the line when it reaches 0. Xcode 15's clang
+also prints a frame report's source and caret lines without the `NN |`
+prefix clang 17 and gcc use, which the strip matched on, so on CI those
+lines got through; everything after a frame report up to the next
+diagnostic, context line or summary is now dropped.
+
+## Open: joined_spawn_protect printed "deep -1" once on CI (2026-10-29)
+
+One CI run of PR #475 (linux-x86_64, run 40780454520) printed `deep -1`
+for both the main task and the spawned one: `deep(20000, false)` -- a
+20,000-frame recursion with no planned panic -- came back from join_wait as
+a failure. The same commit's rerun passed, and so did 180 local runs on the
+same gcc 13.3 / x86_64 (empty frame cache; 8, 4 and 2 CPUs). stderr is not
+kept by the suite's main list, so the panic's message is lost. Next time:
+keep stderr for that test, and look at what can fail in stack growth that
+deep (an allocation failure in sl_task_stack_grow would look like this).

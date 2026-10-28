@@ -398,6 +398,8 @@ void emit_struct_fwd_decls(CG *cg) {
  * after every declared struct, but a struct declared BEFORE the use can
  * hold it by value. */
 static void emit_struct_body(CG *cg, StructDef *sd, unsigned char *state);
+static void emit_value_body(CG *cg, const char *cname, int has_roots, int n,
+                            const char *const *ctypes, const char *const *names);
 
 /* A result instantiation both of whose payloads are non-GC holds v/e
  * by value (see ctype_of), so its body needs their types complete;
@@ -501,14 +503,19 @@ static void emit_struct_body(CG *cg, StructDef *sd, unsigned char *state) {
         }
     }
     char *m = mangle_struct(sd->canonical);
-    emit_line(cg, "struct %s {", m);
-    cg->indent++;
-    for (int j = 0; j < sd->nfields; j++)
-        emit_line(cg, "%s %s;", ctype_of(cg, sd->ftypes[j]),
-                  sanitize_ident(sd->fields[j]));
-    cg->indent--;
-    emit_line(cg, "};");
-    emit_line(cg, "");
+    /* A gc struct is traced field by field (its generated tracer), never
+     * scanned as words, so only a value struct needs its padding named. */
+    int roots = 0;
+    const char **ctypes = (const char **)xmalloc(sizeof(char *) * (size_t)(sd->nfields ? sd->nfields : 1));
+    const char **names = (const char **)xmalloc(sizeof(char *) * (size_t)(sd->nfields ? sd->nfields : 1));
+    for (int j = 0; j < sd->nfields; j++) {
+        ctypes[j] = ctype_of(cg, sd->ftypes[j]);
+        names[j] = sanitize_ident(sd->fields[j]);
+        if (type_has_gc_roots(cg, sd->ftypes[j]))
+            roots = 1;
+    }
+    emit_value_body(cg, m, roots && !sd->is_gc && sd->nfields > 0, sd->nfields,
+                    ctypes, names);
     state[self] = 2;
 }
 
@@ -653,15 +660,71 @@ static int res_inst_is_value(CG *cg, ResInst *r) {
     return 1;   /* every result is held by value; see type_is_gc_ptr */
 }
 
-static void emit_res_struct_body(CG *cg, ResInst *r) {
-    emit_line(cg, "struct %s {", r->cname);
+/* A by-value body whose bytes are all named members.
+ *
+ * A value struct, result or opt that holds GC pointers is scanned word by
+ * word wherever a container keeps it (sl_gc_mark_slot), and each word that
+ * equals a live object's address marks it. Implicit padding is never
+ * written: `(T){ .ok = false, .e = ... }` leaves the 7 bytes after a
+ * result's `bool ok` holding whatever the stack held, and copies carry them
+ * into list, map and channel slots. Stale pointers there kept unrelated
+ * objects alive, and made the minor verifier report "missed" objects held
+ * by old containers (tests/value_results, about 1 run in 20 since results
+ * were held by value).
+ *
+ * So the C compiler measures the natural layout on a shadow struct, and the
+ * body fills every gap with a named array sized from it: the same layout,
+ * no padding, and a designated initializer (or `= {0}`) zeroes the arrays
+ * like any other unnamed member. A gap of zero is a zero-length array (gcc
+ * and clang extension). Bodies without GC pointers are never scanned, and
+ * stay as they were. */
+static void emit_value_body(CG *cg, const char *cname, int has_roots, int n,
+                            const char *const *ctypes, const char *const *names) {
+    if (!has_roots) {
+        emit_line(cg, "struct %s {", cname);
+        cg->indent++;
+        for (int i = 0; i < n; i++)
+            emit_line(cg, "%s %s;", ctypes[i], names[i]);
+        cg->indent--;
+        emit_line(cg, "};");
+        emit_line(cg, "");
+        return;
+    }
+    emit_line(cg, "struct %s__sl_shape {", cname);
     cg->indent++;
-    emit_line(cg, "bool ok;");
-    emit_line(cg, "%s v;", ctype_of(cg, r->tv));
-    emit_line(cg, "%s e;", ctype_of(cg, r->te));
+    for (int i = 0; i < n; i++)
+        emit_line(cg, "%s %s;", ctypes[i], names[i]);
     cg->indent--;
     emit_line(cg, "};");
+    emit_line(cg, "struct %s {", cname);
+    cg->indent++;
+    for (int i = 0; i < n; i++) {
+        emit_line(cg, "%s %s;", ctypes[i], names[i]);
+        if (i + 1 < n)
+            emit_line(cg,
+                      "unsigned char _sl_pad%d[offsetof(struct %s__sl_shape, %s) - "
+                      "offsetof(struct %s__sl_shape, %s) - sizeof(%s)];",
+                      i, cname, names[i + 1], cname, names[i], ctypes[i]);
+        else
+            emit_line(cg,
+                      "unsigned char _sl_pad%d[sizeof(struct %s__sl_shape) - "
+                      "offsetof(struct %s__sl_shape, %s) - sizeof(%s)];",
+                      i, cname, cname, names[i], ctypes[i]);
+    }
+    cg->indent--;
+    emit_line(cg, "};");
+    emit_line(cg, "_Static_assert(sizeof(struct %s) == sizeof(struct %s__sl_shape), "
+                  "\"%s: explicit padding changed the layout\");",
+              cname, cname, cname);
     emit_line(cg, "");
+}
+
+static void emit_res_struct_body(CG *cg, ResInst *r) {
+    const char *ctypes[3] = {"bool", ctype_of(cg, r->tv), ctype_of(cg, r->te)};
+    const char *names[3] = {"ok", "v", "e"};
+    emit_value_body(cg, r->cname,
+                    type_has_gc_roots(cg, r->tv) || type_has_gc_roots(cg, r->te),
+                    3, ctypes, names);
 }
 
 /* One payload of a value-type result body: pull in whatever its
@@ -702,13 +765,10 @@ static void emit_opt_value_body(CG *cg, OptInst *o, unsigned char *sstate,
                  o->inner);
     o->body_state = 1;
     emit_res_value_dep(cg, o->inner, sstate, line);
-    emit_line(cg, "struct %s {", o->cname);
-    cg->indent++;
-    emit_line(cg, "bool has;");
-    emit_line(cg, "%s v;", ctype_of(cg, o->inner));
-    cg->indent--;
-    emit_line(cg, "};");
-    emit_line(cg, "");
+    const char *ctypes[2] = {"bool", ctype_of(cg, o->inner)};
+    const char *names[2] = {"has", "v"};
+    emit_value_body(cg, o->cname, type_has_gc_roots(cg, o->inner), 2, ctypes,
+                    names);
     o->body_state = 2;
 }
 
@@ -1291,6 +1351,49 @@ static void note_emitted_symbol(const char *sym) {
 const char *const *codegen_function_symbols(int *n) {
     *n = emitted_n;
     return emitted_syms;
+}
+
+/* A generated function that can take a frame guard, like a slang function:
+ * the codecs (json, pg rows, inspect) emit theirs through these. Their
+ * frames grow with the type: a json decoder for a 200-field struct needed
+ * more than the 2 KB a safepoint leaves free, at -O3, and the task died with
+ * SIGBUS in its guard page; at -O0 a 120-field one is 15 KB. They are C, not
+ * slang, so nothing guarded them. Called by the generated code, never by a
+ * slang caller's frame-guard wrapper, and not nested: one is open at a time.
+ * `params` is the C parameter list, `args` the same names as call arguments
+ * (both "void"/"" for none), `ret` the C return type. */
+static const char *gw_ret, *gw_name, *gw_params, *gw_args;
+static int gw_guard;
+
+void emit_guardable_open(CG *cg, const char *ret, const char *name,
+                         const char *params, const char *args) {
+    note_emitted_symbol(name);
+    gw_guard = frame_guard_of(name);
+    gw_ret = ret;
+    gw_name = name;
+    gw_params = params;
+    gw_args = args;
+    if (gw_guard)
+        emit_line(cg, "static __attribute__((noinline)) %s %s__body(%s) {", ret,
+                  name, params);
+    else
+        emit_line(cg, "static %s %s(%s) {", ret, name, params);
+}
+
+/* The closing brace (at the caller's indent, already back to the function's
+ * level) and, for a guarded function, its wrapper. */
+void emit_guardable_close(CG *cg) {
+    emit_line(cg, "}");
+    emit_line(cg, "");
+    if (!gw_guard)
+        return;
+    emit_line(cg, "static %s %s(%s) {", gw_ret, gw_name, gw_params);
+    emit_line(cg, "    sl_rt_stack_reserve(%d);", gw_guard);
+    emit_line(cg, "    %s%s__body(%s);", strcmp(gw_ret, "void") ? "return " : "",
+              gw_name, gw_args);
+    emit_line(cg, "}");
+    emit_line(cg, "");
+    gw_guard = 0;
 }
 
 void gen_function(CG *cg, Package *p, FuncDecl *f) {

@@ -764,7 +764,8 @@ for name in gc_ctor_payload gc_map_put pg_rows_as postgres http_client_pool http
             generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry loop_leaf_poll loop_leaf_plus safepoint_task_once own_roots switch escape_roots \
             http_read_wire bytes_empty_literal gc_minor_barriers net_dns_records map_delete if_let \
             literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions json_parity json_utf8 json_decode_budget \
-            bytes json_deep_nesting gc_container_frontier gc_promotion_budget gc_chan_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks sort_test; do
+            bytes json_deep_nesting gc_container_frontier gc_promotion_budget gc_chan_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks sort_test \
+            json_wide; do
     out="/tmp/sl_gcstress_${name}.out"
     if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -828,7 +829,7 @@ for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc
             gc_promotion_budget gc_chan_promotion_budget \
             value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks gc_skip_queued \
             spawn_join_local spawn_call_args link_tls link_split fn_value_shadows_function select_send_escapes \
-            sched_idle_wakes; do
+            sched_idle_wakes json_wide; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_verify_minor_${name}.out"
     err="/tmp/sl_verify_minor_${name}.err"
@@ -1544,6 +1545,55 @@ else
 fi
 rm -rf "$pfdir"
 
+# ---- value bodies have no unwritten padding ----------------------------------
+# A value struct, result or opt holding GC pointers is scanned word by word
+# in a container slot, so a byte nothing writes is read as a pointer. The
+# 7 bytes after a result's `bool ok` were never written and carried stale
+# stack bytes into channel slots: the minor verifier reported a "missed"
+# object held by an old channel in tests/value_results about 1 run in 20.
+# Every gap is now a named array (emit_value_body). -Wpadded names any
+# padding the C compiler still inserts; none may fall in a slang value body
+# (the __sl_shape structs only measure the layout). gcc's warning does not
+# name the struct, so each is traced back to its body by line.
+echo "--- value bodies have no unwritten padding (generated C, -Wpadded) ---"
+vp_bad=0
+vpdir=$(mktemp -d)
+for name in value_results value_struct_containers value_opts; do
+    [ -f "tests/$name/main.sl" ] || continue
+    rm -rf "$vpdir/src" && mkdir -p "$vpdir/src"
+    cp tests/$name/*.sl "$vpdir/src/"
+    if ! (cd "$vpdir/src" && "$OLDPWD/slangc" main.sl --emit-c >/dev/null 2>&1); then
+        echo "FAIL value padding $name (did not generate C)"
+        vp_bad=1; fail=1
+        continue
+    fi
+    cc -c -O2 -fwrapv -Wpadded -o /dev/null "$vpdir/src/main.gen.c" \
+        >"$vpdir/warn.txt" 2>&1
+    padded=$(python3 -I - "$vpdir/src/main.gen.c" "$vpdir/warn.txt" <<'VPEOF'
+import re, sys
+src = open(sys.argv[1], errors="replace").read().split("\n")
+hits = set()
+for line in open(sys.argv[2], errors="replace"):
+    m = re.search(r"main\.gen\.c:(\d+):\d+: warning: padding struct", line)
+    if not m:
+        continue
+    i = int(m.group(1)) - 1
+    while i >= 0 and not re.match(r"struct (\w+) \{", src[i]):
+        i -= 1
+    name = re.match(r"struct (\w+) \{", src[i]).group(1) if i >= 0 else "?"
+    if re.match(r"sl_(res|opt|st)_", name) and not name.endswith("__sl_shape"):
+        hits.add(name)
+print(" ".join(sorted(hits)))
+VPEOF
+)
+    if [ -n "$padded" ]; then
+        echo "FAIL value padding $name: implicit padding in $padded"
+        vp_bad=1; fail=1
+    fi
+done
+rm -rf "$vpdir"
+[ "$vp_bad" -eq 0 ] && echo "PASS value bodies have no unwritten padding"
+
 # ---- young pages hold a whole cycle -----------------------------------------
 # A small object that finds no room on its worker's pages falls back to
 # a libc malloc, freed one by one at the sweep. The page cap was sized
@@ -1612,13 +1662,15 @@ rm -f "$pa_bin"
 # almost never need one, so the guard would go untested; a 64-byte limit puts
 # one on nearly every function and on the main entry, on any compiler, and
 # the output must not change. tests/big_frame is the one program that needs
-# it for real: without the guard it dies with SIGBUS on clang.
+# it for real: without the guard it dies with SIGBUS on clang. Generated
+# codecs (json, pg rows, inspect) take guards too: tests/json_wide's
+# 200-field decoder died with SIGBUS without one.
 echo "--- frame guards (SLANG_FRAME_LIMIT=64) ---"
 fg_bad=0
 for name in fn_values spawn_isolation gc_stress maps json flags method_recv \
             method_recv_own method_pub indirect_callee enum move own structs \
             mutex select big_frame generics_structs generics_pkg \
-            generics_methods; do
+            generics_methods json_wide pg_rows_as; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_fg_${name}.out"
     if ! SLANG_FRAME_LIMIT=64 ./slangc "tests/$name/main.sl" --run \
@@ -1631,6 +1683,108 @@ for name in fn_values spawn_isolation gc_stress maps json flags method_recv \
     fi
 done
 [ "$fg_bad" -eq 0 ] && echo "PASS frame guards"
+
+# The guards a build ends with are kept for its next build (frame_cache_path,
+# src/main.c), so a rebuild compiles the C once. It used to compile once to
+# rediscover the guards and again to apply them, and a guard that grew its
+# own frame by a few bytes cost a third: say, a 21k-line service, compiled
+# three times (225 s). A `cc` first on PATH counts the compiles; the cache
+# lives in a fresh SLANG_CACHE. A cache file that is not ours is ignored:
+# the build still succeeds and its program still prints the same thing.
+echo "--- frame guards remembered between builds ---"
+fc_dir=$(mktemp -d)
+mkdir -p "$fc_dir/bin"
+fc_real=$(command -v cc)
+cat >"$fc_dir/bin/cc" <<'FCEOF'
+#!/bin/sh
+echo compile >>"$FC_LOG"
+exec "$FC_REAL" "$@"
+FCEOF
+chmod +x "$fc_dir/bin/cc"
+fc_bad=0
+for fc_step in cold warm corrupt; do
+    if [ "$fc_step" = corrupt ]; then
+        for f in "$fc_dir"/cache/frames/*; do
+            [ -f "$f" ] || continue
+            printf 'slang-frames 1\n99999999 bad name!\nnot a line\n-5 x\n' >"$f"
+        done
+    fi
+    : >"$fc_dir/$fc_step.log"
+    if ! SLANG_CACHE="$fc_dir/cache" SLANG_FRAME_LIMIT=64 FC_REAL="$fc_real" \
+            FC_LOG="$fc_dir/$fc_step.log" PATH="$fc_dir/bin:$PATH" \
+            ./slangc tests/big_frame/main.sl -o "$fc_dir/$fc_step" \
+            >/dev/null 2>&1; then
+        echo "FAIL frame guard cache: $fc_step build failed"
+        fc_bad=1
+        continue
+    fi
+    if ! "$fc_dir/$fc_step" </dev/null | diff -q tests/big_frame/expected.txt - >/dev/null; then
+        echo "FAIL frame guard cache: $fc_step build's program printed something else"
+        fc_bad=1
+    fi
+done
+fc_cold=$(wc -l <"$fc_dir/cold.log" | tr -d ' ')
+fc_warm=$(wc -l <"$fc_dir/warm.log" | tr -d ' ')
+# A first build that compiled once found nothing to guard: the compiler's
+# frame report never reached slangc, and no function anywhere is guarded.
+# Xcode 15's linker dropped it under full LTO, and every test still passed.
+if [ "$fc_bad" -eq 0 ] && [ "$fc_cold" -lt 2 ]; then
+    echo "FAIL frame guard cache: the first build compiled once; the C compiler reported no frames"
+    fc_bad=1
+fi
+if [ "$fc_bad" -eq 0 ] && [ "$fc_warm" -ne 1 ]; then
+    echo "FAIL frame guard cache: the rebuild compiled $fc_warm times (first build: $fc_cold)"
+    fc_bad=1
+fi
+if [ "$fc_bad" -eq 0 ]; then
+    echo "PASS frame guard cache (first build $fc_cold compiles, rebuild $fc_warm)"
+else
+    fail=1
+fi
+rm -rf "$fc_dir"
+
+# A development build (slangc --dev, or SLANG_DEV=1) compiles the C at -O0,
+# about ten times faster: what zokor watch uses. -O0 frames are several
+# times bigger, so a dev build also starts tasks on bigger stacks with a
+# bigger safepoint margin (SL_DEV_BUILD) and guards frames from 8 KB. These
+# are the programs that push stacks and native code hardest: a 5.7 KB
+# frame, 512 levels of recursive JSON, OpenSSL through dlopen, SQLite's
+# recursive parser, and the scheduler and collector under load. They must
+# print the same thing built either way. (The whole suite also passes with
+# SLANG_DEV=1 set: macOS 483 PASS lines, Linux 496, 2026-10-28.)
+echo "--- development builds (--dev) ---"
+dv_bad=0
+for name in big_frame json_wide json_deep_nesting crypto sql spawn_isolation \
+            gc_stress select; do
+    [ -f "tests/$name/main.sl" ] || continue
+    out="/tmp/sl_dev_${name}.out"
+    if ! ./slangc "tests/$name/main.sl" --dev --run >"$out" 2>/dev/null \
+            </dev/null; then
+        echo "FAIL dev build $name (exit $?)"
+        dv_bad=1; fail=1
+    elif ! diff -q "tests/$name/expected.txt" "$out" >/dev/null; then
+        echo "FAIL dev build $name (output mismatch)"
+        dv_bad=1; fail=1
+    fi
+done
+# -O0 reports frames at compile time, and clang's "N warnings generated."
+# counted them: every dev build of a guarded program printed "1 warning
+# generated." The frame reports are slangc's own business, so a build whose
+# only warnings were frames must print nothing.
+for name in big_frame json_wide; do
+    err="/tmp/sl_dev_${name}.err"
+    if ! ./slangc "tests/$name/main.sl" --dev -o "/tmp/sl_dev_${name}.bin" \
+            >/dev/null 2>"$err"; then
+        echo "FAIL dev build $name (compile)"
+        dv_bad=1; fail=1
+    elif [ -s "$err" ]; then
+        echo "FAIL dev build $name printed compiler output:"
+        cat "$err"
+        dv_bad=1; fail=1
+    fi
+    rm -f "/tmp/sl_dev_${name}.bin" "$err"
+done
+[ "$dv_bad" -eq 0 ] && echo "PASS development builds"
 
 # ---- llms-small.txt ------------------------------------------------------
 # www/llms-small.md is the one hand-written digest on the docs site: the

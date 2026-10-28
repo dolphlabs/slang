@@ -8,6 +8,7 @@
  *   slangc <file.sl> --emit-c     only write the generated C file
  *   slangc <file.sl> --keep-c     keep the generated C file after compiling
  *   slangc <file.sl> --run        compile and immediately run the result
+ *   slangc <file.sl> --dev        a fast, unoptimized development build
  *   slangc new <name>|.           scaffold a new project
  *   slangc get [file.sl|dir]      resolve dependencies, write slang.lock
  *   slangc --version              print the version
@@ -32,14 +33,15 @@
 #include <unistd.h>
 
 #ifndef SLANG_VERSION
-#define SLANG_VERSION "0.2.4"
+#define SLANG_VERSION "0.2.5"
 #endif
 
 int cmd_doc(int argc, char **argv); /* doc.c */
 
 static void print_usage(void) {
     fputs("usage: slangc <file.sl> [-o <name>] [--emit-c] [--keep-c] [--run] "
-          "[--json] [--dump-liveness] [--dump-mir]\n"
+          "[--dev] [--json] [--dump-liveness] [--dump-mir]\n"
+          "       --dev: unoptimized, for edit-and-rerun (zokor watch); also SLANG_DEV=1\n"
           "       --json: compile errors as JSON lines on stderr, one per error\n"
           "       slangc new <name>|.        scaffold a project here or in <name>\n"
           "       slangc get [file.sl|dir]   resolve deps, write slang.lock\n"
@@ -634,10 +636,30 @@ static int cmd_test(int argc, char **argv) {
 #define FRAME_LIMIT_DEFAULT 1536
 #define FRAME_ROUNDS_MAX 3
 
+/* ---- development builds (--dev, SLANG_DEV=1) ----
+ *
+ * The C compiled at -O0, without LTO: a 21k-line service (say) compiles its
+ * 13.5 MB of C in 5 s instead of ~70 s, which is the difference between an
+ * edit-and-rerun loop and a coffee break. The program is slower, so this is
+ * for development only (zokor watch), never what is deployed.
+ *
+ * Unoptimized C has much bigger stack frames (say: 464 functions over 1 KB
+ * at -O0, 22 at -O3; the largest 36 KB), and tasks start on small stacks
+ * that grow only at safepoints. So a dev build is also compiled with
+ * SL_DEV_BUILD, which gives tasks a bigger first stack and safepoint margin
+ * (runtime/sl_core.c), and its frame-guard limit rises to half that margin:
+ * a function the guard does not cover, slang or the runtime's own, still
+ * fits the margin with room to call others. */
+#define DEV_FRAME_LIMIT_DEFAULT 8192
+
+static int dev_build = 0;
+
 static int frame_limit(void) {
     const char *e = getenv("SLANG_FRAME_LIMIT");
     int v = e ? atoi(e) : 0;
-    return v > 0 ? v : FRAME_LIMIT_DEFAULT;
+    if (v > 0)
+        return v;
+    return dev_build ? DEV_FRAME_LIMIT_DEFAULT : FRAME_LIMIT_DEFAULT;
 }
 
 /* Run `cmd` through the shell with stderr folded into stdout; return its exit
@@ -736,13 +758,21 @@ static int parse_frame_diags(const char *text, FrameDiag **out) {
 }
 
 /* The compiler's own output with the frame diagnostics removed: every other
- * warning still reaches the user exactly as before. */
+ * warning still reaches the user exactly as before.
+ *
+ * clang ends a compile that warned with "N warning(s) generated.", and that
+ * count includes the frame reports. Under LTO they come from the linker,
+ * which prints no such line, but a development build (-O0, no LTO) reports
+ * frames at compile time, and every dev build of a program with a guarded
+ * function printed "1 warning generated." and nothing else. The count is
+ * reduced by the reports removed, and the line goes when none are left. */
 static char *strip_frame_diags(const char *text) {
     StrBuf keep;
     sb_init(&keep);
     const char *p = text;
     char *held = NULL; /* an "In function" line waiting to learn what follows */
     int in_diag = 0;   /* inside a frame diagnostic's source/caret lines */
+    int dropped = 0;   /* frame reports since the last summary line */
     while (*p) {
         const char *eol = strchr(p, '\n');
         size_t len = eol ? (size_t)(eol - p) : strlen(p);
@@ -753,11 +783,35 @@ static char *strip_frame_diags(const char *text) {
         int is_frame = strstr(line, "stack frame size (") ||
                        strstr(line, "the frame size of ");
         int is_ctx = strstr(line, "In function '") != NULL;
-        int is_snippet = in_diag && (strchr(line, '|') != NULL);
+        int is_top = strstr(line, ": At top level:") != NULL;
+        /* What follows a frame report up to the next diagnostic is its
+         * source and caret lines: "  9 | ..." on clang 17 and gcc, but the
+         * bare source line on clang 15, which matching on '|' let through
+         * (Xcode 15 dev builds printed the function's signature and a
+         * caret). */
+        int is_diag = strstr(line, ": warning: ") || strstr(line, ": error: ") ||
+                      strstr(line, ": note: ") || !strncmp(line, "warning: ", 9) ||
+                      !strncmp(line, "error: ", 7) ||
+                      strstr(line, "In file included from ");
+        int total = 0;
+        char tail[32] = "";
+        int is_summary = sscanf(line, "%d warning%31[^\n]", &total, tail) == 2 &&
+                         (!strcmp(tail, " generated.") ||
+                          !strcmp(tail, "s generated."));
+        int is_snippet = in_diag && !is_frame && !is_diag && !is_ctx &&
+                         !is_top && !is_summary;
         if (is_frame) {
             free(held);
             held = NULL;
             in_diag = 1;
+            dropped++;
+        } else if (is_summary && dropped > 0) {
+            int left = total - dropped;
+            dropped = 0;
+            in_diag = 0;
+            if (left > 0)
+                sb_append(&keep, xasprintf("%d warning%s generated.\n", left,
+                                           left == 1 ? "" : "s"));
         } else if (is_snippet) {
             /* source or caret line of a frame diagnostic: dropped */
         } else if (is_ctx) {
@@ -786,11 +840,22 @@ static char *strip_frame_diags(const char *text) {
     return keep.data ? keep.data : xstrdup("");
 }
 
-/* True if `name` is the C name of a slang function this build emitted; a
- * guarded function's body is reported as NAME__body. `*base` gets the
- * function's own name. */
+/* True if `name` is the C name of a function this build emitted that can take
+ * a guard: a slang function or a generated codec (codegen_function_symbols).
+ * A guarded function's body is reported as NAME__body. `*base` gets the
+ * function's own name.
+ *
+ * gcc reports a function it cloned under the clone's name -- NAME.constprop,
+ * NAME.isra.0, NAME.part.0, NAME.lto_priv.0 -- and a clone's frame is the
+ * function's. Matched only on the exact name, those were never guarded on
+ * Linux: tests/json_wide's 3 KB decoder came back as
+ * 'sl_jdf_json_wide_Wide.constprop' and overflowed its task stack. A C
+ * identifier has no '.', so everything from the first one is the suffix. */
 static int is_slang_symbol(const char *name, char *base, size_t cap) {
     snprintf(base, cap, "%s", name);
+    char *dot = strchr(base, '.');
+    if (dot)
+        *dot = '\0';
     size_t l = strlen(base);
     if (l > 6 && !strcmp(base + l - 6, "__body"))
         base[l - 6] = '\0';
@@ -800,6 +865,134 @@ static int is_slang_symbol(const char *name, char *base, size_t cap) {
         if (!strcmp(syms[i], base))
             return 1;
     return 0;
+}
+
+/* A guard reserves its frame rounded up to this (sl_rt_frame_probe's page,
+ * runtime/sl_core.c), so a frame is recorded rounded up the same way: growth
+ * that stays inside the page changes nothing the guard does, and must not
+ * cost a compile. It used to: guarding a function grew its frame by a few
+ * bytes (1848 -> 1864), that counted as a change, and the whole program was
+ * compiled a third time for nothing -- two thirds of a large program's build
+ * (say: 3 compiles, 225 s; 79 s with no guards at all). */
+#define FRAME_GUARD_ROUND 4096
+#define FRAME_CACHE_MAX_BYTES (1 << 24)
+#define FRAME_CACHE_MAX_ENTRIES 65536
+#define FRAME_CACHE_HEADER "slang-frames 1"
+
+static int frame_round(int bytes) {
+    return ((bytes + FRAME_GUARD_ROUND - 1) / FRAME_GUARD_ROUND) *
+           FRAME_GUARD_ROUND;
+}
+
+/* ---- the frame guard cache ----
+ *
+ * The guards a build ended with, kept for the next build of the same program
+ * (~/.cache/slang/frames/, keyed by the entry file's real path and the frame
+ * limit) and applied before its first compile. A rebuild after an edit then
+ * compiles once, where it compiled once to rediscover the same guards and
+ * again to apply them. Nothing depends on the cache being right: every
+ * compile still reports every frame over the limit, and one bigger than its
+ * recorded guard is regenerated and compiled again, as before. A guard on a
+ * function that has shrunk only reserves stack, and the next save drops it.
+ * Builds that write C only (--emit-c) neither read nor write it. */
+typedef struct {
+    char **syms;
+    int *frames;
+    int n;
+} FrameSet;
+
+static void frame_set_put(FrameSet *fs, const char *sym, int frame) {
+    for (int i = 0; i < fs->n; i++)
+        if (!strcmp(fs->syms[i], sym)) {
+            if (frame > fs->frames[i])
+                fs->frames[i] = frame;
+            return;
+        }
+    fs->syms = (char **)xrealloc(fs->syms, sizeof(char *) * (size_t)(fs->n + 1));
+    fs->frames = (int *)xrealloc(fs->frames, sizeof(int) * (size_t)(fs->n + 1));
+    fs->syms[fs->n] = xstrdup(sym);
+    fs->frames[fs->n] = frame;
+    fs->n++;
+}
+
+/* A C identifier no longer than parse_frame_diags keeps: anything else in
+ * the file is not ours, and is ignored rather than trusted. */
+static int frame_sym_ok(const char *s) {
+    size_t n = strlen(s);
+    if (n == 0 || n > 255)
+        return 0;
+    for (size_t i = 0; i < n; i++)
+        if (!isalnum((unsigned char)s[i]) && s[i] != '_')
+            return 0;
+    return 1;
+}
+
+/* NULL when there is no cache to use: no HOME or SLANG_CACHE, or an entry
+ * whose real path cannot be had. */
+static char *frame_cache_path(const char *input) {
+    char real[PATH_MAX];
+    if (!realpath(input, real))
+        return NULL;
+    char *dir = project_cache_subdir("frames");
+    if (!dir)
+        return NULL;
+    /* A dev build's frames are -O0's: a separate set of guards. */
+    char *key = xasprintf("%s\n%d\n%s", real, frame_limit(),
+                          dev_build ? "dev" : "release");
+    unsigned long long h = 1469598103934665603ULL; /* FNV-1a */
+    for (const char *p = key; *p; p++) {
+        h ^= (unsigned char)*p;
+        h *= 1099511628211ULL;
+    }
+    free(key);
+    return xasprintf("%s/%016llx", dir, h);
+}
+
+static void frame_cache_load(const char *path, FrameSet *fs) {
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return;
+    char line[512];
+    if (!fgets(line, sizeof(line), f) ||
+        strcmp(line, FRAME_CACHE_HEADER "\n")) {
+        fclose(f);
+        return;
+    }
+    while (fs->n < FRAME_CACHE_MAX_ENTRIES && fgets(line, sizeof(line), f)) {
+        int bytes = 0;
+        char sym[256];
+        if (sscanf(line, "%d %255s", &bytes, sym) != 2)
+            continue;
+        if (bytes <= 0 || bytes > FRAME_CACHE_MAX_BYTES || !frame_sym_ok(sym))
+            continue;
+        frame_set_put(fs, sym, frame_round(bytes));
+    }
+    fclose(f);
+}
+
+/* The slang functions the last compile reported over the limit: what the
+ * next build should start out guarding. Written whole to a temporary file
+ * and renamed over the old one, so a concurrent build of the same program
+ * reads one whole file or the other. Failure costs only a compile. */
+static void frame_cache_save(const char *path, const char *cc_out) {
+    FrameDiag *diags = NULL;
+    int nd = parse_frame_diags(cc_out, &diags);
+    FrameSet fs = {0};
+    for (int i = 0; i < nd; i++) {
+        char base[256];
+        if (is_slang_symbol(diags[i].name, base, sizeof(base)) &&
+            frame_sym_ok(base))
+            frame_set_put(&fs, base, frame_round(diags[i].bytes));
+    }
+    char *tmp = xasprintf("%s.%ld.tmp", path, (long)getpid());
+    FILE *f = fopen(tmp, "w");
+    if (!f)
+        return;
+    int bad = fputs(FRAME_CACHE_HEADER "\n", f) < 0;
+    for (int i = 0; i < fs.n && !bad; i++)
+        bad = fprintf(f, "%d %s\n", fs.frames[i], fs.syms[i]) < 0;
+    if (fclose(f) != 0 || bad || rename(tmp, path) != 0)
+        remove(tmp);
 }
 
 static int build(const char *input, const char *outname, int emit_c,
@@ -821,6 +1014,15 @@ static int build(const char *input, const char *outname, int emit_c,
         dump_liveness(pkgs.items, pkgs.count, main_index, stdout);
         return 0;
     }
+
+    /* Last build's guards, before the first codegen: see frame_cache_path. */
+    char *frame_cache = emit_c ? NULL : frame_cache_path(input);
+    FrameSet cached = {0};
+    if (frame_cache)
+        frame_cache_load(frame_cache, &cached);
+    if (cached.n)
+        codegen_set_frame_guards((const char *const *)cached.syms,
+                                 cached.frames, cached.n);
 
     StrBuf out;
     sb_init(&out);
@@ -877,8 +1079,21 @@ static int build(const char *input, const char *outname, int emit_c,
        printed "warning: using serial compilation of N LTRANS jobs" on
        every build big enough to partition, and slangc shows the
        compiler's output. auto lets gcc pick the count; clang takes it as
-       full LTO, as it does -flto. */
-    sb_append(&cmd, "cc -O3 -flto=auto -fwrapv ");
+       full LTO, as it does -flto.
+       -flto=thin on Apple: Xcode 15's linker (ld-prime, ld-1053) drops
+       the diagnostics full LTO's code generation raises inside it, the
+       frame report among them, so no function was ever guarded there:
+       on its CI runner a 200-field json decoder ran off the task stack.
+       Thin LTO's report reaches slangc on every Xcode we have tried, and
+       the generated program is one translation unit, so thin and full
+       LTO optimize the same single module (the same frames, the same
+       build time on clang 17). */
+#if defined(__APPLE__)
+    const char *release_cc = "cc -O3 -flto=thin -fwrapv ";
+#else
+    const char *release_cc = "cc -O3 -flto=auto -fwrapv ";
+#endif
+    sb_append(&cmd, dev_build ? "cc -O0 -fwrapv -DSL_DEV_BUILD=1 " : release_cc);
     sb_append(&cmd, xasprintf("-Wframe-larger-than=%d ", frame_limit()));
     sb_append(&cmd, gen_path);
     sb_append(&cmd, " -o ");
@@ -911,9 +1126,9 @@ static int build(const char *input, const char *outname, int emit_c,
      * frame, regenerate it behind an entry guard and compile again. */
     int status = 0;
     char *cc_out = NULL;
-    const char **guard_syms = NULL;
-    int *guard_frames = NULL;
-    int nguard = 0;
+    const char **guard_syms = (const char **)cached.syms;
+    int *guard_frames = cached.frames;
+    int nguard = cached.n;
     for (int round = 0;; round++) {
         status = run_capture(cmd.data, &cc_out);
         if (status != 0)
@@ -935,11 +1150,11 @@ static int build(const char *input, const char *outname, int emit_c,
                 guard_frames = (int *)xrealloc(
                     guard_frames, sizeof(int) * (size_t)(nguard + 1));
                 guard_syms[nguard] = xstrdup(base);
-                guard_frames[nguard] = diags[i].bytes;
+                guard_frames[nguard] = frame_round(diags[i].bytes);
                 nguard++;
                 changed = 1;
             } else if (diags[i].bytes > guard_frames[at]) {
-                guard_frames[at] = diags[i].bytes;
+                guard_frames[at] = frame_round(diags[i].bytes);
                 changed = 1;
             }
         }
@@ -957,6 +1172,8 @@ static int build(const char *input, const char *outname, int emit_c,
                         &c2, &s2, &z2, &w2);
         write_file(gen_path, out2.data, out2.len);
     }
+    if (status == 0 && frame_cache)
+        frame_cache_save(frame_cache, cc_out);
     if (status == 0) {
         /* Every compiler message except the frame report, unchanged. */
         char *rest = strip_frame_diags(cc_out);
@@ -1026,6 +1243,12 @@ int main(int argc, char **argv) {
     int emit_c = 0, keep_c = 0, run = 0, want_liveness_dump = 0,
         want_mir_dump = 0;
 
+    /* SLANG_DEV=1 makes every build a development build, `slangc test`'s
+       included: what zokor watch and a whole test suite in dev mode use. */
+    const char *dev_env = getenv("SLANG_DEV");
+    if (dev_env && dev_env[0] && strcmp(dev_env, "0"))
+        dev_build = 1;
+
     if (argc >= 2 && !strcmp(argv[1], "get")) {
         sl_compiler_argv0 = argv[0];
         return cmd_get(argc >= 3 ? argv[2] : NULL);
@@ -1062,6 +1285,8 @@ int main(int argc, char **argv) {
             keep_c = 1;
         } else if (!strcmp(argv[i], "--run")) {
             run = 1;
+        } else if (!strcmp(argv[i], "--dev")) {
+            dev_build = 1;
         } else if (!strcmp(argv[i], "--json")) {
             diag_json = 1;
         } else if (!strcmp(argv[i], "--dump-liveness")) {

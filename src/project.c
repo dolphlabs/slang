@@ -445,6 +445,34 @@ const char *project_excluded_import(const char *from_dir, const char *ipath,
     return ex;
 }
 
+/* The cache's `sub` directory, created if needed, or NULL when there is no
+ * cache to use (HOME and SLANG_CACHE unset) or it cannot be created. For
+ * caches a build can do without, unlike cache_root, which is an error. */
+char *project_cache_subdir(const char *sub) {
+    const char *env = getenv("SLANG_CACHE");
+    char *dir;
+    if (env && env[0]) {
+        dir = xasprintf("%s/%s", env, sub);
+    } else {
+        const char *home = getenv("HOME");
+        if (!home || !home[0])
+            return NULL;
+        dir = xasprintf("%s/.cache/slang/%s", home, sub);
+    }
+    char *buf = xstrdup(dir);
+    for (char *p = buf + 1; *p; p++) {
+        if (*p != '/')
+            continue;
+        *p = '\0';
+        if (mkdir(buf, 0755) != 0 && errno != EEXIST)
+            return NULL;
+        *p = '/';
+    }
+    if (mkdir(buf, 0755) != 0 && errno != EEXIST)
+        return NULL;
+    return dir;
+}
+
 static void mkdir_p(const char *path) {
     char *buf = xstrdup(path);
     for (char *p = buf + 1; *p; p++) {

@@ -23,9 +23,10 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
                      int *out_want_sql, int *out_want_compress,
                      int *out_want_fswatch);
 
-/* Frame guards. A slang function whose C frame turns out to be large is
- * emitted as a noinline body behind a thin wrapper that reserves stack
- * before the body's frame is allocated (see sl_rt_stack_reserve). The driver
+/* Frame guards. A slang function, or a generated codec (json, pg rows,
+ * inspect), whose C frame turns out to be large is emitted as a noinline
+ * body behind a thin wrapper that reserves stack before the body's frame is
+ * allocated (see sl_rt_stack_reserve). The driver
  * measures frames with the C compiler, so it cannot know them until a first
  * compile: it sets the guards, regenerates, and compiles again.
  *
@@ -34,9 +35,9 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
 void codegen_set_frame_guards(const char *const *symbols, const int *frames,
                               int n);
 
-/* The C names of every function the last codegen_program emitted -- the set
- * the driver may guard, and the way it tells a slang function's frame
- * diagnostic from a runtime function's. */
+/* The C names of every function the last codegen_program emitted that can
+ * take a guard -- slang functions and generated codecs -- and the way the
+ * driver tells their frame diagnostics from a runtime function's. */
 const char *const *codegen_function_symbols(int *n);
 
 #endif /* SLANG_CODEGEN_H */
