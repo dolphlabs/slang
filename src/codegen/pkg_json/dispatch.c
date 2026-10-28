@@ -342,14 +342,14 @@ const char *json_enc_fn(CG *cg, const char *t, int line) {
 static void emit_json_dec_body(CG *cg, JsonInst *it) {
     const char *t = it->slang_type;
     const char *ct = ctype_of(cg, t);
-    emit_line(cg, "static bool %s(sl_json_val *v, %s *out, char **err) {",
-              it->dec_name, ct);
+    emit_guardable_open(cg, "bool", it->dec_name,
+                        xasprintf("sl_json_val *v, %s *out, char **err", ct),
+                        "v, out, err");
     cg->indent++;
     if (is_json_time(t)) {
         emit_line(cg, "return sl_json_dec_time(v, &out->sec, &out->nsec, err);");
         cg->indent--;
-        emit_line(cg, "}");
-        emit_line(cg, "");
+        emit_guardable_close(cg);
         return;
     }
 
@@ -527,8 +527,7 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
     }
 
     cg->indent--;
-    emit_line(cg, "}");
-    emit_line(cg, "");
+    emit_guardable_close(cg);
 }
 
 /* The direct decoder for a composite type. Values are decoded before the
@@ -539,14 +538,13 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
 static void emit_json_fast_body(CG *cg, JsonInst *it) {
     const char *t = it->slang_type;
     const char *ct = ctype_of(cg, t);
-    emit_line(cg, "static bool %s(sl_jparser *p, %s *out) {",
-              json_fast_dec_fn(cg, t), ct);
+    emit_guardable_open(cg, "bool", json_fast_dec_fn(cg, t),
+                        xasprintf("sl_jparser *p, %s *out", ct), "p, out");
     cg->indent++;
     if (is_json_time(t)) {
         emit_line(cg, "return sl_jd_time(p, &out->sec, &out->nsec);");
         cg->indent--;
-        emit_line(cg, "}");
-        emit_line(cg, "");
+        emit_guardable_close(cg);
         return;
     }
 
@@ -752,21 +750,19 @@ static void emit_json_fast_body(CG *cg, JsonInst *it) {
     }
 
     cg->indent--;
-    emit_line(cg, "}");
-    emit_line(cg, "");
+    emit_guardable_close(cg);
 }
 
 static void emit_json_enc_body(CG *cg, JsonInst *it) {
     const char *t = it->slang_type;
     const char *ct = ctype_of(cg, t);
-    emit_line(cg, "static void %s(%s v, sl_json_sb *out) {", it->enc_name,
-              ct);
+    emit_guardable_open(cg, "void", it->enc_name,
+                        xasprintf("%s v, sl_json_sb *out", ct), "v, out");
     cg->indent++;
     if (is_json_time(t)) {
         emit_line(cg, "sl_json_enc_time(v.sec, v.nsec, out);");
         cg->indent--;
-        emit_line(cg, "}");
-        emit_line(cg, "");
+        emit_guardable_close(cg);
         return;
     }
 
@@ -841,8 +837,7 @@ static void emit_json_enc_body(CG *cg, JsonInst *it) {
     }
 
     cg->indent--;
-    emit_line(cg, "}");
-    emit_line(cg, "");
+    emit_guardable_close(cg);
 }
 
 void emit_json_runtime(CG *cg) {

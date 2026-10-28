@@ -764,7 +764,8 @@ for name in gc_ctor_payload gc_map_put pg_rows_as postgres http_client_pool http
             generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry loop_leaf_poll loop_leaf_plus safepoint_task_once own_roots switch escape_roots \
             http_read_wire bytes_empty_literal gc_minor_barriers net_dns_records map_delete if_let \
             literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions json_parity json_utf8 json_decode_budget \
-            bytes json_deep_nesting gc_container_frontier gc_promotion_budget gc_chan_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks sort_test; do
+            bytes json_deep_nesting gc_container_frontier gc_promotion_budget gc_chan_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks sort_test \
+            json_wide; do
     out="/tmp/sl_gcstress_${name}.out"
     if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -828,7 +829,7 @@ for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc
             gc_promotion_budget gc_chan_promotion_budget \
             value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks gc_skip_queued \
             spawn_join_local spawn_call_args link_tls link_split fn_value_shadows_function select_send_escapes \
-            sched_idle_wakes; do
+            sched_idle_wakes json_wide; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_verify_minor_${name}.out"
     err="/tmp/sl_verify_minor_${name}.err"
@@ -1612,13 +1613,15 @@ rm -f "$pa_bin"
 # almost never need one, so the guard would go untested; a 64-byte limit puts
 # one on nearly every function and on the main entry, on any compiler, and
 # the output must not change. tests/big_frame is the one program that needs
-# it for real: without the guard it dies with SIGBUS on clang.
+# it for real: without the guard it dies with SIGBUS on clang. Generated
+# codecs (json, pg rows, inspect) take guards too: tests/json_wide's
+# 200-field decoder died with SIGBUS without one.
 echo "--- frame guards (SLANG_FRAME_LIMIT=64) ---"
 fg_bad=0
 for name in fn_values spawn_isolation gc_stress maps json flags method_recv \
             method_recv_own method_pub indirect_callee enum move own structs \
             mutex select big_frame generics_structs generics_pkg \
-            generics_methods; do
+            generics_methods json_wide pg_rows_as; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_fg_${name}.out"
     if ! SLANG_FRAME_LIMIT=64 ./slangc "tests/$name/main.sl" --run \
@@ -1673,6 +1676,13 @@ for fc_step in cold warm corrupt; do
 done
 fc_cold=$(wc -l <"$fc_dir/cold.log" | tr -d ' ')
 fc_warm=$(wc -l <"$fc_dir/warm.log" | tr -d ' ')
+# A first build that compiled once found nothing to guard: the compiler's
+# frame report never reached slangc, and no function anywhere is guarded.
+# Xcode 15's linker dropped it under full LTO, and every test still passed.
+if [ "$fc_bad" -eq 0 ] && [ "$fc_cold" -lt 2 ]; then
+    echo "FAIL frame guard cache: the first build compiled once; the C compiler reported no frames"
+    fc_bad=1
+fi
 if [ "$fc_bad" -eq 0 ] && [ "$fc_warm" -ne 1 ]; then
     echo "FAIL frame guard cache: the rebuild compiled $fc_warm times (first build: $fc_cold)"
     fc_bad=1

@@ -176,8 +176,9 @@ char *inspect_append_stmt(CG *cg, const char *t, const char *val,
 static void emit_inspect_body(CG *cg, InspectInst *it) {
     const char *t = it->slang_type;
     const char *ct = ctype_of(cg, t);
-    emit_line(cg, "static void %s(%s v, sl_inspect_sb *out, int depth) {",
-              it->fn_name, ct);
+    emit_guardable_open(cg, "void", it->fn_name,
+                        xasprintf("%s v, sl_inspect_sb *out, int depth", ct),
+                        "v, out, depth");
     cg->indent++;
 
     char *wrapped = NULL;
@@ -317,8 +318,7 @@ static void emit_inspect_body(CG *cg, InspectInst *it) {
     }
 
     cg->indent--;
-    emit_line(cg, "}");
-    emit_line(cg, "");
+    emit_guardable_close(cg);
 }
 
 void emit_inspect_runtime(CG *cg) {

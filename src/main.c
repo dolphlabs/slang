@@ -786,11 +786,22 @@ static char *strip_frame_diags(const char *text) {
     return keep.data ? keep.data : xstrdup("");
 }
 
-/* True if `name` is the C name of a slang function this build emitted; a
- * guarded function's body is reported as NAME__body. `*base` gets the
- * function's own name. */
+/* True if `name` is the C name of a function this build emitted that can take
+ * a guard: a slang function or a generated codec (codegen_function_symbols).
+ * A guarded function's body is reported as NAME__body. `*base` gets the
+ * function's own name.
+ *
+ * gcc reports a function it cloned under the clone's name -- NAME.constprop,
+ * NAME.isra.0, NAME.part.0, NAME.lto_priv.0 -- and a clone's frame is the
+ * function's. Matched only on the exact name, those were never guarded on
+ * Linux: tests/json_wide's 3 KB decoder came back as
+ * 'sl_jdf_json_wide_Wide.constprop' and overflowed its task stack. A C
+ * identifier has no '.', so everything from the first one is the suffix. */
 static int is_slang_symbol(const char *name, char *base, size_t cap) {
     snprintf(base, cap, "%s", name);
+    char *dot = strchr(base, '.');
+    if (dot)
+        *dot = '\0';
     size_t l = strlen(base);
     if (l > 6 && !strcmp(base + l - 6, "__body"))
         base[l - 6] = '\0';
@@ -1012,8 +1023,20 @@ static int build(const char *input, const char *outname, int emit_c,
        printed "warning: using serial compilation of N LTRANS jobs" on
        every build big enough to partition, and slangc shows the
        compiler's output. auto lets gcc pick the count; clang takes it as
-       full LTO, as it does -flto. */
+       full LTO, as it does -flto.
+       -flto=thin on Apple: Xcode 15's linker (ld-prime, ld-1053) drops
+       the diagnostics full LTO's code generation raises inside it, the
+       frame report among them, so no function was ever guarded there:
+       on its CI runner a 200-field json decoder ran off the task stack.
+       Thin LTO's report reaches slangc on every Xcode we have tried, and
+       the generated program is one translation unit, so thin and full
+       LTO optimize the same single module (the same frames, the same
+       build time on clang 17). */
+#if defined(__APPLE__)
+    sb_append(&cmd, "cc -O3 -flto=thin -fwrapv ");
+#else
     sb_append(&cmd, "cc -O3 -flto=auto -fwrapv ");
+#endif
     sb_append(&cmd, xasprintf("-Wframe-larger-than=%d ", frame_limit()));
     sb_append(&cmd, gen_path);
     sb_append(&cmd, " -o ");
