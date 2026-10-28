@@ -4346,3 +4346,49 @@ kqueue reactor thread does the resumes, not polling workers, so the counts
 are higher. Sharding still cuts them there -- on this Intel Mac, dev with
 the same counter on sl_gc_mu gave 2666-2992 and the shards 127-155 -- but
 there is no arm64 Mac here to set a budget from.
+
+## Fixed: a large program compiled three times per build (2026-10-28)
+
+`say` (a zokor service, ~21k lines of slang plus zokor, pg, redis, json and
+http) took 256 s to build with `slangc 0.2.4` on this laptop (8 cores): 8 s
+in slangc (parse, check, emit 13.5 MB of C) and the rest in `cc`. One
+compile and link of that C at `-O3 -flto=auto` is ~70 s; `slangc` ran three.
+The frame-guard loop (src/main.c) compiled once, found five functions over
+the 1536-byte limit, regenerated them behind guards and compiled again; the
+guard grew two of those frames by 16 bytes (1848 -> 1864, 4216 -> 4232),
+which counted as a change, so it compiled a third time. With the frame
+check off the same build was 79 s.
+
+Now a guard is recorded in whole 4 KB pages, the unit
+`sl_rt_stack_reserve` reserves in, so growth inside the page costs no
+compile, and the guards a build ends with are kept in
+`~/.cache/slang/frames/` and applied before the next build's first compile.
+Frozen `say`, ccwrap counting compiles: 3 compiles / 225 s before; 2 / 155 s
+for the first build; 1 / 73 s for every rebuild after. Correctness does not
+depend on the cache: every compile still reports frames over the limit,
+and one bigger than its recorded guard is regenerated as before.
+run_tests.sh checks the rebuild compiles once (`dev`: twice) and that a
+corrupt cache file is ignored.
+
+What is left, by size:
+- One `-O3` compile of 13.5 MB of C is still ~60-70 s, on one core. clang
+  `-ftime-report` at `-O1` (56 s) shows no pathological pass: InstCombine
+  26%, the inliner 14%, SimplifyCFG 8%, spread over the whole file. `-O0`
+  compiles it in 5 s, `-O1`/`-O2`/`-O3` in 55-57 s. So the time is volume.
+  - Parallel and incremental compiles: emit one C file per package (plus a
+    header), compile them on every core, and reuse the objects of packages
+    that did not change (zokor, pg, redis, http never change while `say` is
+    edited). The runtime is one translation unit by design (AGENTS.md), so
+    this needs its statics and thread-locals reworked: the largest change.
+  - A development build at `-O0` (5 s): needs a check that runtime C frames
+    at `-O0` fit the 8 KB task stacks, since only slang functions get
+    guards.
+  - Less C: `say` instantiates 688 generic types and functions (slangc
+    warns past 64), each emitted as its own copy.
+- `-flto=auto` on a single translation unit adds ~14 s (75 s against 61 s
+  without) and has no other unit to optimize across. Dropping it needs a
+  run-time measurement first.
+
+Also seen, not fixed: with OpenSSL 4 every program using TLS prints
+"1 warning generated." (`SSL_set1_host` is deprecated in 4.0), passed on
+from `cc`. The warning sweep's programs do not use TLS, so it misses it.
