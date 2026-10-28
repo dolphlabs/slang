@@ -1023,8 +1023,20 @@ static int build(const char *input, const char *outname, int emit_c,
        printed "warning: using serial compilation of N LTRANS jobs" on
        every build big enough to partition, and slangc shows the
        compiler's output. auto lets gcc pick the count; clang takes it as
-       full LTO, as it does -flto. */
+       full LTO, as it does -flto.
+       -flto=thin on Apple: Xcode 15's linker (ld-prime, ld-1053) drops
+       the diagnostics full LTO's code generation raises inside it, the
+       frame report among them, so no function was ever guarded there:
+       on its CI runner a 200-field json decoder ran off the task stack.
+       Thin LTO's report reaches slangc on every Xcode we have tried, and
+       the generated program is one translation unit, so thin and full
+       LTO optimize the same single module (the same frames, the same
+       build time on clang 17). */
+#if defined(__APPLE__)
+    sb_append(&cmd, "cc -O3 -flto=thin -fwrapv ");
+#else
     sb_append(&cmd, "cc -O3 -flto=auto -fwrapv ");
+#endif
     sb_append(&cmd, xasprintf("-Wframe-larger-than=%d ", frame_limit()));
     sb_append(&cmd, gen_path);
     sb_append(&cmd, " -o ");

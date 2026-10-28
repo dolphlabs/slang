@@ -1676,6 +1676,13 @@ for fc_step in cold warm corrupt; do
 done
 fc_cold=$(wc -l <"$fc_dir/cold.log" | tr -d ' ')
 fc_warm=$(wc -l <"$fc_dir/warm.log" | tr -d ' ')
+# A first build that compiled once found nothing to guard: the compiler's
+# frame report never reached slangc, and no function anywhere is guarded.
+# Xcode 15's linker dropped it under full LTO, and every test still passed.
+if [ "$fc_bad" -eq 0 ] && [ "$fc_cold" -lt 2 ]; then
+    echo "FAIL frame guard cache: the first build compiled once; the C compiler reported no frames"
+    fc_bad=1
+fi
 if [ "$fc_bad" -eq 0 ] && [ "$fc_warm" -ne 1 ]; then
     echo "FAIL frame guard cache: the rebuild compiled $fc_warm times (first build: $fc_cold)"
     fc_bad=1
