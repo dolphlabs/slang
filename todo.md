@@ -4515,4 +4515,8 @@ with `--dev`.
 Found on the way: -O0 reports frames at compile time, and clang's "1 warning
 generated." counted the report slangc strips, so every dev build of a
 guarded program printed that line and nothing else. strip_frame_diags now
-corrects the count and drops the line when it reaches 0.
+corrects the count and drops the line when it reaches 0. Xcode 15's clang
+also prints a frame report's source and caret lines without the `NN |`
+prefix clang 17 and gcc use, which the strip matched on, so on CI those
+lines got through; everything after a frame report up to the next
+diagnostic, context line or summary is now dropped.

@@ -783,12 +783,23 @@ static char *strip_frame_diags(const char *text) {
         int is_frame = strstr(line, "stack frame size (") ||
                        strstr(line, "the frame size of ");
         int is_ctx = strstr(line, "In function '") != NULL;
-        int is_snippet = in_diag && (strchr(line, '|') != NULL);
+        int is_top = strstr(line, ": At top level:") != NULL;
+        /* What follows a frame report up to the next diagnostic is its
+         * source and caret lines: "  9 | ..." on clang 17 and gcc, but the
+         * bare source line on clang 15, which matching on '|' let through
+         * (Xcode 15 dev builds printed the function's signature and a
+         * caret). */
+        int is_diag = strstr(line, ": warning: ") || strstr(line, ": error: ") ||
+                      strstr(line, ": note: ") || !strncmp(line, "warning: ", 9) ||
+                      !strncmp(line, "error: ", 7) ||
+                      strstr(line, "In file included from ");
         int total = 0;
         char tail[32] = "";
         int is_summary = sscanf(line, "%d warning%31[^\n]", &total, tail) == 2 &&
                          (!strcmp(tail, " generated.") ||
                           !strcmp(tail, "s generated."));
+        int is_snippet = in_diag && !is_frame && !is_diag && !is_ctx &&
+                         !is_top && !is_summary;
         if (is_frame) {
             free(held);
             held = NULL;
