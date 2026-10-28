@@ -4430,7 +4430,7 @@ tests/json_wide's decoder came back as `sl_jdf_json_wide_Wide.constprop`
 (3088 bytes) and still overflowed on Linux with codec guards in place;
 `is_slang_symbol` now drops everything from the first '.'.
 
-## Open: stale padding in result and opt values is scanned as pointers (2026-10-28)
+## Fixed: stale padding in result and opt values was scanned as pointers (2026-10-28)
 
 `SLANG_GC_VERIFY_MINOR=1 SLANG_GC_NURSERY_KB=16` on tests/value_results,
 macOS x86_64: "minor missed a live young leaf ... held by an old channel
@@ -4456,6 +4456,18 @@ options: give a GC-bearing result/opt/value struct no implicit padding
 (explicit, zero-initialized pad members, which a designated initializer
 zeroes), or have containers trace a value struct by its pointer words only
 (a per-type mask instead of a word scan).
+
+Fixed the first way. A result, opt or struct value with GC roots is now
+emitted with its padding spelled out as `unsigned char _sl_padN[...]`
+members, sized from a `__sl_shape` struct with the natural layout and
+checked against it with `_Static_assert`, so the layout and ABI are
+unchanged; a designated initializer zeroes named members, and a struct
+literal of such a type is memset first. Values without GC roots are emitted
+as before (their padding is never scanned). The suite's new "value bodies
+have no unwritten padding" check compiles value_results,
+value_struct_containers and value_opts with `-Wpadded` and fails on any
+padded `sl_res_`/`sl_opt_`/`sl_st_` body: dev had 7, 2 and 7. The
+value_results verifier misses 0 of 80 runs (6 of 80 before).
 
 ## Fixed: no function was frame-guarded on Xcode 15 (2026-10-28)
 
