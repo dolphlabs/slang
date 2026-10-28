@@ -490,20 +490,24 @@ static void sl_os_inotify_add_tree(sl_watcher *w, const char *dir_path) {
     struct dirent *ent;
     while ((ent = readdir(d)) != NULL) {
         if (ent->d_name[0] == '.') continue;
-        char sub[PATH_MAX];
-        snprintf(sub, sizeof(sub), "%s/%s", dir_path, ent->d_name);
-        struct stat st;
-        if (stat(sub, &st) == 0 && S_ISDIR(st.st_mode)) {
-            sl_os_inotify_add_tree(w, sub);
+        char *sub = NULL;
+        if (asprintf(&sub, "%s/%s", dir_path, ent->d_name) >= 0 && sub) {
+            struct stat st;
+            if (stat(sub, &st) == 0 && S_ISDIR(st.st_mode)) {
+                sl_os_inotify_add_tree(w, sub);
+            }
+            free(sub);
         }
     }
     closedir(d);
 }
 
 static void sl_os_inotify_drain(sl_watcher *w) {
-    char buf[4096] __attribute__ ((aligned(__alignof__(struct inotify_event))));
+    size_t buf_sz = 4096;
+    char *buf = (char *)malloc(buf_sz);
+    if (!buf) return;
     ssize_t len;
-    while ((len = read(w->inotify_fd, buf, sizeof(buf))) > 0) {
+    while ((len = read(w->inotify_fd, buf, buf_sz)) > 0) {
         for (char *ptr = buf; ptr < buf + len; ) {
             struct inotify_event *event = (struct inotify_event *)ptr;
             const char *dir = NULL;
@@ -516,48 +520,52 @@ static void sl_os_inotify_drain(sl_watcher *w) {
             }
             pthread_mutex_unlock(&w->mu);
             if (dir) {
-                char full[PATH_MAX];
+                char *full = NULL;
                 if (event->len > 0) {
-                    snprintf(full, sizeof(full), "%s/%s", dir, event->name);
+                    if (asprintf(&full, "%s/%s", dir, event->name) < 0) full = NULL;
                 } else {
-                    snprintf(full, sizeof(full), "%s", dir);
+                    full = strdup(dir);
                 }
-                if ((event->mask & IN_ISDIR) && (event->mask & IN_CREATE)) {
-                    sl_os_inotify_add_tree(w, full);
-                }
-                const char *rel = full;
-                if (w->root_len > 0 && strncmp(full, w->root, w->root_len) == 0) {
-                    rel = full + w->root_len;
-                    while (*rel == '/') rel++;
-                }
-                if (*rel && !sl_os_is_excluded(rel, w->excludes, w->nexcludes)) {
-                    pthread_mutex_lock(&w->mu);
-                    bool dup = false;
-                    for (int j = 0; j < w->pending_count; j++) {
-                        if (strcmp(w->pending_paths[j], rel) == 0) {
-                            dup = true;
-                            break;
-                        }
+                if (full) {
+                    if ((event->mask & IN_ISDIR) && (event->mask & IN_CREATE)) {
+                        sl_os_inotify_add_tree(w, full);
                     }
-                    if (!dup) {
-                        if (w->pending_count >= w->pending_cap) {
-                            int ncap = w->pending_cap == 0 ? 32 : w->pending_cap * 2;
-                            char **np = (char **)realloc(w->pending_paths, (size_t)ncap * sizeof(char *));
-                            if (np) {
-                                w->pending_paths = np;
-                                w->pending_cap = ncap;
+                    const char *rel = full;
+                    if (w->root_len > 0 && strncmp(full, w->root, w->root_len) == 0) {
+                        rel = full + w->root_len;
+                        while (*rel == '/') rel++;
+                    }
+                    if (*rel && !sl_os_is_excluded(rel, w->excludes, w->nexcludes)) {
+                        pthread_mutex_lock(&w->mu);
+                        bool dup = false;
+                        for (int j = 0; j < w->pending_count; j++) {
+                            if (strcmp(w->pending_paths[j], rel) == 0) {
+                                dup = true;
+                                break;
                             }
                         }
-                        if (w->pending_count < w->pending_cap) {
-                            w->pending_paths[w->pending_count++] = strdup(rel);
+                        if (!dup) {
+                            if (w->pending_count >= w->pending_cap) {
+                                int ncap = w->pending_cap == 0 ? 32 : w->pending_cap * 2;
+                                char **np = (char **)realloc(w->pending_paths, (size_t)ncap * sizeof(char *));
+                                if (np) {
+                                    w->pending_paths = np;
+                                    w->pending_cap = ncap;
+                                }
+                            }
+                            if (w->pending_count < w->pending_cap) {
+                                w->pending_paths[w->pending_count++] = strdup(rel);
+                            }
                         }
+                        pthread_mutex_unlock(&w->mu);
                     }
-                    pthread_mutex_unlock(&w->mu);
+                    free(full);
                 }
             }
             ptr += sizeof(struct inotify_event) + event->len;
         }
     }
+    free(buf);
 }
 #endif
 
@@ -570,10 +578,13 @@ typedef struct {
 static void *sl_fsevent_init_fn(void *arg) {
     sl_fsevent_init_arg *a = (sl_fsevent_init_arg *)arg;
     sl_watcher *w = a->w;
-    char resolved[PATH_MAX];
-    if (realpath(w->root, resolved)) {
-        free(w->root);
-        w->root = strdup(resolved);
+    char *resolved = (char *)malloc(PATH_MAX);
+    if (resolved) {
+        if (realpath(w->root, resolved)) {
+            free(w->root);
+            w->root = strdup(resolved);
+        }
+        free(resolved);
     }
     w->root_len = strlen(w->root);
     CFStringRef mypath = CFStringCreateWithCString(NULL, w->root, kCFStringEncodingUTF8);
