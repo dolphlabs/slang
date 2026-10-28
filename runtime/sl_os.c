@@ -640,8 +640,6 @@ static sl_res_int_str *sl_os_watch(const char *path, sl_arr *excludes) {
     w->pipe_rd = pfd[0];
     w->pipe_wr = pfd[1];
     pthread_mutex_init(&w->mu, NULL);
-    w->pipe_wr = pfd[1];
-    pthread_mutex_init(&w->mu, NULL);
 
     if (excludes && excludes->len > 0) {
         w->nexcludes = excludes->len;
@@ -676,7 +674,7 @@ static sl_res_int_str *sl_os_watch(const char *path, sl_arr *excludes) {
         return sl_os_err_int("failed to initialize inotify");
     }
     w->pipe_rd = w->inotify_fd;
-    sl_os_inotify_add_tree(w, actual_root);
+    sl_os_inotify_add_tree(w, w->root);
 #endif
 
     pthread_mutex_lock(&sl_os_watch_mu);
