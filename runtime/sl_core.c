@@ -1023,7 +1023,17 @@ static void sl_cpu_detect(void) {
 #endif
 }
 
+/* A development build (slangc --dev) is compiled at -O0, whose frames are
+ * several times bigger (a 21k-line service: 464 functions over 1 KB at -O0,
+ * 22 at -O3). It gives every task a bigger first stack and safepoint margin
+ * instead, and slangc raises its frame-guard limit to half this margin: a
+ * frame the guard does not cover still fits. Memory per task is no concern
+ * in a build that is never deployed. */
+#ifdef SL_DEV_BUILD
+#define SL_TASK_INITIAL_STACK_SIZE 32768
+#else
 #define SL_TASK_INITIAL_STACK_SIZE 8192
+#endif
 #define SL_TASK_FAT_STACK_SIZE 16384
 /* dyld -- reached through dlopen when OpenSSL loads a provider -- needs
  * far more stack than OpenSSL's own frames do. Measured, not guessed:
@@ -1034,7 +1044,11 @@ static void sl_cpu_detect(void) {
  *
  * Only tasks that actually call into OpenSSL pay it, and only once. */
 #define SL_TASK_DYLD_STACK_SIZE 65536
+#ifdef SL_DEV_BUILD
+#define SL_TASK_GUARD_MARGIN 16384
+#else
 #define SL_TASK_GUARD_MARGIN 2048
+#endif
 /* SQLite (sl_sql.c) recurses on query structure, deeper than OpenSSL.
  * On the ungrown 8KB default it hit the very failure the fat stack
  * exists to prevent -- a native chain running off the end of the
