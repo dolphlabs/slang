@@ -4456,3 +4456,24 @@ options: give a GC-bearing result/opt/value struct no implicit padding
 (explicit, zero-initialized pad members, which a designated initializer
 zeroes), or have containers trace a value struct by its pointer words only
 (a per-type mask instead of a word scan).
+
+## Fixed: no function was frame-guarded on Xcode 15 (2026-10-28)
+
+PR #473's macOS CI job (Apple clang 15, Xcode 15.4) died in tests/json_wide
+with SIGBUS, where every local run on clang 17 passed. The frame cache the
+build left was empty: under `-flto=auto` the frame report comes from code
+generation inside the linker, and Xcode 15's linker (ld-prime, ld-1053)
+drops it. Measured on that runner with the same C: full LTO reported 0
+frames over 1536 bytes, and `-flto=thin`, `-Wl,-ld_classic` and `-fno-lto`
+each reported 1. So on Xcode 15 no function had ever been guarded -- slang
+functions included -- and big_frame and the SLANG_FRAME_LIMIT=64 runs passed
+anyway, because they check output, not that a guard was applied. The
+backtrace: the 200-field decoder (2488 bytes on clang 17, unguarded on 15)
+calling sl_gc_alloc_gen -> malloc on the stack's last page.
+
+slangc now builds with `-flto=thin` on Apple (`-flto=auto` elsewhere).
+`-ld_classic` is deprecated, and the program is a single translation unit,
+so thin and full LTO optimize the same module: json_wide's decoder is 2488
+bytes either way on clang 17, and the compile takes the same 19 s. The
+frame guard cache test now also fails when its first build compiled only
+once -- the compiler reported no frames -- which is how this went unseen.
