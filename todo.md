@@ -4392,3 +4392,52 @@ What is left, by size:
 Also seen, not fixed: with OpenSSL 4 every program using TLS prints
 "1 warning generated." (`SSL_set1_host` is deprecated in 4.0), passed on
 from `cc`. The warning sweep's programs do not use TLS, so it misses it.
+
+## Fixed: a wide struct's json decoder overflowed the task stack (2026-10-28)
+
+Found while measuring development builds (`-O0`). `json.decode` into a
+struct with 200 or more fields died with SIGBUS ("a task overflowed its
+stack") in an ordinary release build, slangc 0.2.4, on macOS: 200, 300 and
+500 fields all crashed; 120 fields passed only because its decoder's frame,
+1528 bytes at -O3, fit inside the 2 KB a safepoint leaves free. At -O0 that
+same decoder is 15.4 KB. The codecs slangc generates -- json fast and tree
+decoders, json encoders, pg row and cell decoders, inspect printers -- are C,
+not slang functions, so the frame guards that protect a large slang function
+never covered them, and their frames grow with the type. In a server the
+stack depth at a given handler is about fixed, so a route decoding such a
+struct would crash every time or never, taking the process with it.
+
+They now go through `emit_guardable_open`/`emit_guardable_close`
+(src/codegen/program.c): a codec the compiler reports over the limit is
+emitted as a noinline `__body` behind a wrapper that reserves its frame,
+exactly as a slang function is, and its guard is cached between builds the
+same way. Growth from inside a codec is as safe as from a slang function:
+sl_task_stack_grow switches to the grower context first, so every
+callee-saved register is on the stack, and translates every word there that
+points into the old stack. tests/json_wide (decode, encode and inspect of a
+200-field struct from depths 0..399) dies with SIGBUS on dev and passes now;
+it is in the minor-verify, GC stress and SLANG_FRAME_LIMIT=64 lists. A
+scratch build that guarded every codec unconditionally passed json_wide,
+pg_rows_as (98 wrapped codecs), json, json_parity, json_utf8,
+json_deep_nesting, json_value_structs, generics_json and inspect, so every
+wrapper shape compiles and runs.
+
+Also fixed alongside: on Linux, gcc reports a function it cloned under the
+clone's name (`NAME.constprop`, `.isra.0`, `.part.0`, `.lto_priv.0`), and the
+frame-guard loop matched names exactly, so a large function gcc happened to
+clone was never guarded -- slang functions too, not only codecs.
+tests/json_wide's decoder came back as `sl_jdf_json_wide_Wide.constprop`
+(3088 bytes) and still overflowed on Linux with codec guards in place;
+`is_slang_symbol` now drops everything from the first '.'.
+
+## Open: a minor misses a value held by an old channel (2026-10-28)
+
+`SLANG_GC_VERIFY_MINOR=1 SLANG_GC_NURSERY_KB=16` on tests/value_results, macOS
+x86_64, slangc at fe25a53: missed in 4 of 40 runs, each time "minor missed a
+live young leaf (3-5 bytes) held by an old channel (136 bytes, ..., not
+remembered)". A store of a young pointer into an old channel's slot went
+without a barrier, so a minor can free a value still queued in the channel.
+Found during make test for fix/codec-frame-guards, whose generated C for
+value_results is byte-identical to dev's: not caused by it. Not fixed yet;
+the next task. 2f0cad7 (receiving clears the slot, only queued values are
+traced) changed this code last and is the first place to look.
