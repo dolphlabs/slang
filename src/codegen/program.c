@@ -889,7 +889,7 @@ void emit_opt_res_tracers(CG *cg) {
  * anything that waits on an fd needs that runtime spliced in and started:
  * net, `link`, and `io` (which waits for stdin the same way). */
 static int needs_reactor(CG *cg) {
-    return want_pkg(cg, "net") || want_pkg(cg, "io") || cg->want_link;
+    return want_pkg(cg, "net") || want_pkg(cg, "io") || want_pkg(cg, "proc") || cg->want_fswatch || cg->want_link;
 }
 
 void force_native_result_types(CG *cg) {
@@ -910,6 +910,8 @@ void force_native_result_types(CG *cg) {
     if (want_pkg(cg, "proc")) {
         opt_cname(cg, "str");
         res_cname(cg, "str", "str");
+        res_cname(cg, "int", "str");
+        res_cname(cg, "bool", "str");
     }
     if (want_pkg(cg, "fs")) {
         res_cname(cg, "i32", "str");
@@ -1011,6 +1013,8 @@ void emit_native_runtime(CG *cg) {
         emit_runtime_file(cg, "sl_sql.c");
     if (want_regex)
         emit_runtime_file(cg, "sl_regex.c");
+    if (want_os && cg->want_fswatch)
+        emit_line(cg, "#define SLANG_OS_WATCH 1");
     if (want_os)
         emit_runtime_file(cg, "sl_os.c");
     if (want_io)
@@ -1623,7 +1627,8 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
 void codegen_program(Package *pkgs, int npkgs, int main_index,
                      StrBuf *out, int *out_want_tls, int *out_want_dns,
                      int *out_want_crypto,
-                     int *out_want_sql, int *out_want_compress) {
+                     int *out_want_sql, int *out_want_compress,
+                     int *out_want_fswatch) {
     CG cg;
     memset(&cg, 0, sizeof(CG));
     cg.out = out;
@@ -1712,6 +1717,8 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
     *out_want_crypto = want_pkg(&cg, "crypto");
     *out_want_sql = want_pkg(&cg, "sql");
     *out_want_compress = want_pkg(&cg, "compress");
+    if (out_want_fswatch)
+        *out_want_fswatch = cg.want_fswatch;
 
     /* Generics hardening: every used instance is a separate copy in
      * the binary, so a program that instantiates without bound (a

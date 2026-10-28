@@ -11,6 +11,10 @@ const NatSig PROC_SIGS[] = {
     {"proc", "getenv", 1, {NA_STR}, "opt[str]", 0},
     {"proc", "args", 0, {0}, "[str]", 0},
     {"proc", "cwd", 0, {0}, "result[str,str]", 0},
+    {"proc", "spawn", 4, {NA_ARR_STR, NA_ARR_STR, NA_STR, NA_INT}, "result[int,str]", 0},
+    {"proc", "kill", 2, {NA_INT, NA_INT}, "result[bool,str]", 0},
+    {"proc", "wait", 2, {NA_INT, NA_UNTIL}, "result[int,str]", 0},
 };
 
 const int PROC_SIGS_LEN = sizeof(PROC_SIGS) / sizeof(PROC_SIGS[0]);
+

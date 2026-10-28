@@ -349,9 +349,9 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - json: see /packages/json.md
 - log: debug, info, warn, error
 - net: listen, port, accept, dial, dial_until, lookup_srv_until, lookup_txt_until, dial_unix, listen_unix, send, recv, recv_until (+22 more)
-- os: setenv, unsetenv, environ, pid, hostname, tmpdir, exists, is_dir, is_file, size, mtime, read_dir (+2 more)
+- os: setenv, unsetenv, environ, pid, hostname, tmpdir, exists, is_dir, is_file, size, mtime, mtime_ns, read_dir, remove, rename, watch, watch_next, watch_close
 - pg: rows_as, parse_url, sqlstate, scram_client_final, connect, connect_config, close, usable, in_transaction, server_param, arg_text, arg_int (+37 more)
-- proc: shutdown_requested, active_tasks, wait_idle, getenv, args, cwd
+- proc: shutdown_requested, active_tasks, wait_idle, getenv, args, cwd, spawn, kill, wait, SPAWN_GROUP, SPAWN_NULL_STDIN
 - redis: encode, decode, decode_at, slot, parse_url, connect_config, connect, do, close, usable, ping, echo (+132 more)
 - regex: compile, free, groups, is_match, is_match_bytes, find, find_at, find_bytes, find_bytes_at
 - sort: ints, floats, strings, by, by_stable, search_ints, search_floats, search_strings, search_by

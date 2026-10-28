@@ -20,7 +20,8 @@
 void codegen_program(Package *pkgs, int npkgs, int main_index,
                      StrBuf *out, int *out_want_tls, int *out_want_dns,
                      int *out_want_crypto,
-                     int *out_want_sql, int *out_want_compress);
+                     int *out_want_sql, int *out_want_compress,
+                     int *out_want_fswatch);
 
 /* Frame guards. A slang function whose C frame turns out to be large is
  * emitted as a noinline body behind a thin wrapper that reserves stack
