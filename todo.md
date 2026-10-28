@@ -4520,3 +4520,14 @@ also prints a frame report's source and caret lines without the `NN |`
 prefix clang 17 and gcc use, which the strip matched on, so on CI those
 lines got through; everything after a frame report up to the next
 diagnostic, context line or summary is now dropped.
+
+## Open: joined_spawn_protect printed "deep -1" once on CI (2026-10-29)
+
+One CI run of PR #475 (linux-x86_64, run 40780454520) printed `deep -1`
+for both the main task and the spawned one: `deep(20000, false)` -- a
+20,000-frame recursion with no planned panic -- came back from join_wait as
+a failure. The same commit's rerun passed, and so did 180 local runs on the
+same gcc 13.3 / x86_64 (empty frame cache; 8, 4 and 2 CPUs). stderr is not
+kept by the suite's main list, so the panic's message is lost. Next time:
+keep stderr for that test, and look at what can fail in stack growth that
+deep (an allocation failure in sl_task_stack_grow would look like this).
