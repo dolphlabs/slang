@@ -514,6 +514,7 @@ struct CG {
     int want_json; /* set once a json.decode/json.encode is type-checked */
     int want_inspect; /* set once inspect() is type-checked */
     int want_link; /* set once link_* / link methods are type-checked */
+    int want_fswatch; /* set once os.watch is type-checked */
     int stack_box;
     MirTable mirs;
 };

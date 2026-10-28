@@ -1,0 +1,6 @@
+proc_spawn_ok
+exit code 0 ok
+exit code 42 ok
+wait timeout ok
+kill signal ok
+proc_spawn tests passed
