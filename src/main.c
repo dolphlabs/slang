@@ -32,7 +32,7 @@
 #include <unistd.h>
 
 #ifndef SLANG_VERSION
-#define SLANG_VERSION "0.2.3"
+#define SLANG_VERSION "0.2.4"
 #endif
 
 int cmd_doc(int argc, char **argv); /* doc.c */
