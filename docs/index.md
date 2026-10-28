@@ -112,6 +112,7 @@ Useful flags:
 | `--emit-c`  | Only write the generated C file (no compilation)    |
 | `--keep-c`  | Keep the generated C file after compiling           |
 | `--run`     | Compile, then run it; exit with the program's own status |
+| `--dev`     | Fast unoptimized build for edit-and-rerun (also `SLANG_DEV=1`) |
 | `--json`    | Compile errors as JSON lines on stderr (see below)  |
 | `get`       | Fetch `slang.project` pins and write `slang.lock`   |
 

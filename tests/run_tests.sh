@@ -1743,6 +1743,49 @@ else
 fi
 rm -rf "$fc_dir"
 
+# A development build (slangc --dev, or SLANG_DEV=1) compiles the C at -O0,
+# about ten times faster: what zokor watch uses. -O0 frames are several
+# times bigger, so a dev build also starts tasks on bigger stacks with a
+# bigger safepoint margin (SL_DEV_BUILD) and guards frames from 8 KB. These
+# are the programs that push stacks and native code hardest: a 5.7 KB
+# frame, 512 levels of recursive JSON, OpenSSL through dlopen, SQLite's
+# recursive parser, and the scheduler and collector under load. They must
+# print the same thing built either way. (The whole suite also passes with
+# SLANG_DEV=1 set: macOS 483 PASS lines, Linux 496, 2026-10-28.)
+echo "--- development builds (--dev) ---"
+dv_bad=0
+for name in big_frame json_wide json_deep_nesting crypto sql spawn_isolation \
+            gc_stress select; do
+    [ -f "tests/$name/main.sl" ] || continue
+    out="/tmp/sl_dev_${name}.out"
+    if ! ./slangc "tests/$name/main.sl" --dev --run >"$out" 2>/dev/null \
+            </dev/null; then
+        echo "FAIL dev build $name (exit $?)"
+        dv_bad=1; fail=1
+    elif ! diff -q "tests/$name/expected.txt" "$out" >/dev/null; then
+        echo "FAIL dev build $name (output mismatch)"
+        dv_bad=1; fail=1
+    fi
+done
+# -O0 reports frames at compile time, and clang's "N warnings generated."
+# counted them: every dev build of a guarded program printed "1 warning
+# generated." The frame reports are slangc's own business, so a build whose
+# only warnings were frames must print nothing.
+for name in big_frame json_wide; do
+    err="/tmp/sl_dev_${name}.err"
+    if ! ./slangc "tests/$name/main.sl" --dev -o "/tmp/sl_dev_${name}.bin" \
+            >/dev/null 2>"$err"; then
+        echo "FAIL dev build $name (compile)"
+        dv_bad=1; fail=1
+    elif [ -s "$err" ]; then
+        echo "FAIL dev build $name printed compiler output:"
+        cat "$err"
+        dv_bad=1; fail=1
+    fi
+    rm -f "/tmp/sl_dev_${name}.bin" "$err"
+done
+[ "$dv_bad" -eq 0 ] && echo "PASS development builds"
+
 # ---- llms-small.txt ------------------------------------------------------
 # www/llms-small.md is the one hand-written digest on the docs site: the
 # language on one page for a model's context window (www/build.py says why

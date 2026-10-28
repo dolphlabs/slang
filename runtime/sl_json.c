@@ -1268,7 +1268,16 @@ static long long sl_json_depth(const char *s, long long n) {
  * matter is not even scanned. Called from generated code at the
  * json.decode call site, where moving the stack is safe (see
  * sl_rt_stack_reserve). */
+/* per_level is sized for optimized decoders; a development build's -O0
+ * frames are several times bigger (SL_DEV_BUILD, sl_core.c). */
+#ifdef SL_DEV_BUILD
+#define SL_JSON_LEVEL_SCALE 4
+#else
+#define SL_JSON_LEVEL_SCALE 1
+#endif
+
 static void sl_json_stack_for(const char *s, long long n, size_t per_level) {
+    per_level *= SL_JSON_LEVEL_SCALE;
     sl_task *t = sl_rt_cur();
     if (!t || !t->stack_base) return;
     char probe;
