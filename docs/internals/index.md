@@ -60,6 +60,16 @@ main.sl ──loader──> packages ──lexer/parser──> ASTs ──codege
    `SLANG_FRAME_LIMIT` overrides it (the tests set a tiny one to put a
    guard on nearly every function).
 
+**Development builds.** `--dev` (or `SLANG_DEV=1` in the environment)
+compiles the generated C at `-O0` without LTO, which is most of a build's
+time: a 21k-line service rebuilds in about 16 s instead of 73 s. The program
+runs slower (about 1.6x the CPU per request on that service), so it is for
+the edit-and-rerun loop -- `zokor watch` builds this way -- and never for
+what you deploy. Unoptimized frames are several times bigger, so a dev build
+also starts tasks on a 32KB stack with a 16KB safepoint margin, guards
+frames over 8KB, and is cached apart from the release build of the same
+program.
+
 Inspect what slang generates:
 
 ```sh
