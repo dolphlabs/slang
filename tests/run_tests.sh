@@ -1545,6 +1545,55 @@ else
 fi
 rm -rf "$pfdir"
 
+# ---- value bodies have no unwritten padding ----------------------------------
+# A value struct, result or opt holding GC pointers is scanned word by word
+# in a container slot, so a byte nothing writes is read as a pointer. The
+# 7 bytes after a result's `bool ok` were never written and carried stale
+# stack bytes into channel slots: the minor verifier reported a "missed"
+# object held by an old channel in tests/value_results about 1 run in 20.
+# Every gap is now a named array (emit_value_body). -Wpadded names any
+# padding the C compiler still inserts; none may fall in a slang value body
+# (the __sl_shape structs only measure the layout). gcc's warning does not
+# name the struct, so each is traced back to its body by line.
+echo "--- value bodies have no unwritten padding (generated C, -Wpadded) ---"
+vp_bad=0
+vpdir=$(mktemp -d)
+for name in value_results value_struct_containers value_opts; do
+    [ -f "tests/$name/main.sl" ] || continue
+    rm -rf "$vpdir/src" && mkdir -p "$vpdir/src"
+    cp tests/$name/*.sl "$vpdir/src/"
+    if ! (cd "$vpdir/src" && "$OLDPWD/slangc" main.sl --emit-c >/dev/null 2>&1); then
+        echo "FAIL value padding $name (did not generate C)"
+        vp_bad=1; fail=1
+        continue
+    fi
+    cc -c -O2 -fwrapv -Wpadded -o /dev/null "$vpdir/src/main.gen.c" \
+        >"$vpdir/warn.txt" 2>&1
+    padded=$(python3 -I - "$vpdir/src/main.gen.c" "$vpdir/warn.txt" <<'VPEOF'
+import re, sys
+src = open(sys.argv[1], errors="replace").read().split("\n")
+hits = set()
+for line in open(sys.argv[2], errors="replace"):
+    m = re.search(r"main\.gen\.c:(\d+):\d+: warning: padding struct", line)
+    if not m:
+        continue
+    i = int(m.group(1)) - 1
+    while i >= 0 and not re.match(r"struct (\w+) \{", src[i]):
+        i -= 1
+    name = re.match(r"struct (\w+) \{", src[i]).group(1) if i >= 0 else "?"
+    if re.match(r"sl_(res|opt|st)_", name) and not name.endswith("__sl_shape"):
+        hits.add(name)
+print(" ".join(sorted(hits)))
+VPEOF
+)
+    if [ -n "$padded" ]; then
+        echo "FAIL value padding $name: implicit padding in $padded"
+        vp_bad=1; fail=1
+    fi
+done
+rm -rf "$vpdir"
+[ "$vp_bad" -eq 0 ] && echo "PASS value bodies have no unwritten padding"
+
 # ---- young pages hold a whole cycle -----------------------------------------
 # A small object that finds no room on its worker's pages falls back to
 # a libc malloc, freed one by one at the sweep. The page cap was sized

@@ -1633,7 +1633,17 @@ char *gen_structlit(CG *cg, Expr *e) {
                   xasprintf("%s *_sl_s = (%s *)sl_gc_alloc(sizeof(%s), %s); ",
                             sc, sc, sc, trace));
     } else {
-        sb_append(&sb, xasprintf("%s _sl_s; ", sc));
+        /* A value struct holding GC pointers has named padding
+         * (emit_value_body, program.c) that the stores below never write:
+         * zeroed here, or it carries stale stack bytes that a container's
+         * word scan reads as pointers. */
+        int roots = 0;
+        for (int i = 0; i < sd->nfields; i++)
+            if (type_has_gc_roots(cg, sd->ftypes[i]))
+                roots = 1;
+        sb_append(&sb, roots && !sd->is_gc
+                           ? xasprintf("%s _sl_s; memset(&_sl_s, 0, sizeof _sl_s); ", sc)
+                           : xasprintf("%s _sl_s; ", sc));
     }
     if (stores.data)
         sb_append(&sb, stores.data);
