@@ -4489,3 +4489,30 @@ so thin and full LTO optimize the same module: json_wide's decoder is 2488
 bytes either way on clang 17, and the compile takes the same 19 s. The
 frame guard cache test now also fails when its first build compiled only
 once -- the compiler reported no frames -- which is how this went unseen.
+
+## Added: development builds, `--dev` / `SLANG_DEV=1` (2026-10-28)
+
+Nearly all of a build is the C compiler at `-O3 -flto`: say (21k lines,
+13.5 MB of C) took 73 s to rebuild with its frame guards cached, long enough
+that `zokor watch` was still compiling one save when the next landed. A dev
+build compiles the same C at `-O0` without LTO: 16 s for say (30 s cold),
+for about 1.6x the CPU per request at run time. Splitting the C into several
+files to use more cores was measured first and is slower until the runtime
+stops being duplicated into every file (465 CPU-seconds for the naive
+split), so it waits for a declarations-only header.
+
+-O0 frames are several times bigger (say: 464 functions over 1 KB against
+22 at -O3, the largest 36 KB), and tasks grow their stacks only at
+safepoints, so `-DSL_DEV_BUILD` gives tasks a 32KB first stack and a 16KB
+safepoint margin, raises the frame-guard limit to 8KB, and scales the json
+decoder's per-level stack estimate by 4. The frame cache keys dev and
+release builds apart. A 120-field json decoder is 15.4 KB at -O0; it was
+unguarded until the codec frame guards (#473), which is why this waited for
+them. The suite passes with `SLANG_DEV=1` on macOS and Linux, and the
+"development builds" check runs big_frame, json_wide, crypto, sql and others
+with `--dev`.
+
+Found on the way: -O0 reports frames at compile time, and clang's "1 warning
+generated." counted the report slangc strips, so every dev build of a
+guarded program printed that line and nothing else. strip_frame_diags now
+corrects the count and drops the line when it reaches 0.
