@@ -4430,14 +4430,29 @@ tests/json_wide's decoder came back as `sl_jdf_json_wide_Wide.constprop`
 (3088 bytes) and still overflowed on Linux with codec guards in place;
 `is_slang_symbol` now drops everything from the first '.'.
 
-## Open: a minor misses a value held by an old channel (2026-10-28)
+## Open: stale padding in result and opt values is scanned as pointers (2026-10-28)
 
-`SLANG_GC_VERIFY_MINOR=1 SLANG_GC_NURSERY_KB=16` on tests/value_results, macOS
-x86_64, slangc at fe25a53: missed in 4 of 40 runs, each time "minor missed a
-live young leaf (3-5 bytes) held by an old channel (136 bytes, ..., not
-remembered)". A store of a young pointer into an old channel's slot went
-without a barrier, so a minor can free a value still queued in the channel.
-Found during make test for fix/codec-frame-guards, whose generated C for
-value_results is byte-identical to dev's: not caused by it. Not fixed yet;
-the next task. 2f0cad7 (receiving clears the slot, only queued values are
-traced) changed this code last and is the first place to look.
+`SLANG_GC_VERIFY_MINOR=1 SLANG_GC_NURSERY_KB=16` on tests/value_results,
+macOS x86_64: "minor missed a live young leaf ... held by an old channel
+(..., not remembered)" in 1-6 of 40-80 runs. Bisected: 0 of 80 at 35ac7ad,
+6 of 80 at 5893daf (perf(codegen): hold every result by value), and present
+on every dev commit since. Instrumented, the "missed" leaf is a churn()
+string the program never stored in the channel: it sits in word 0 of a
+queued `result[Node, str]`, whose C struct is `{ bool ok; Node *v; str e; }`.
+The 7 padding bytes after `ok` are never initialized -- `(T){ .ok = false,
+.e = ... }` leaves them unspecified -- so they carry stale stack bytes into
+the channel slot, and the containers' word-by-word scan of a value struct
+(sl_gc_mark_slot) offers them to mark(). A word that happens to equal a live
+object's address marks it.
+
+Not a memory-safety bug: sl_gc_known accepts a word only if its page bitmap
+(or this collection's set) says the slot is allocated now, so a stale word
+can keep an unrelated live object alive one more cycle but can never revive
+a freed one. What it does cost: spurious retention, and a GC verifier that
+fails value_results about 1 run in 20 -- noise that would hide a real
+barrier bug. User value structs with padding (`struct { b: bool, s: str }`)
+have had the same property since value structs went into containers. Fix
+options: give a GC-bearing result/opt/value struct no implicit padding
+(explicit, zero-initialized pad members, which a designated initializer
+zeroes), or have containers trace a value struct by its pointer words only
+(a per-type mask instead of a word scan).
