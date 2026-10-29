@@ -1720,10 +1720,29 @@ static void sl_json_enc_u64(unsigned long long v, sl_json_sb *out) {
     out->len += w - dst;
 }
 
+/* JSON has no NaN or infinity: "nan" and "inf" were written as they came
+ * and made the whole document unparseable. They are written as null, as
+ * JavaScript's JSON.stringify does. */
 static void sl_json_enc_f64(double v, sl_json_sb *out) {
+    if (v != v || v - v != 0) {
+        sl_json_sb_append_n(out, "null", 4);
+        return;
+    }
     sl_rt_preempt_disable();
     char buf[64];
-    snprintf(buf, sizeof(buf), "%g", v);
+    sl_fmt_f64(buf, sizeof(buf), v);
+    sl_rt_preempt_enable();
+    sl_json_sb_append(out, buf);
+}
+
+static void sl_json_enc_f32(float v, sl_json_sb *out) {
+    if (v != v || v - v != 0) {
+        sl_json_sb_append_n(out, "null", 4);
+        return;
+    }
+    sl_rt_preempt_disable();
+    char buf[64];
+    sl_fmt_f32(buf, sizeof(buf), v);
     sl_rt_preempt_enable();
     sl_json_sb_append(out, buf);
 }

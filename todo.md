@@ -4531,3 +4531,32 @@ same gcc 13.3 / x86_64 (empty frame cache; 8, 4 and 2 CPUs). stderr is not
 kept by the suite's main list, so the panic's message is lost. Next time:
 keep stderr for that test, and look at what can fail in stack growth that
 deep (an allocation failure in sl_task_stack_grow would look like this).
+
+## Added: the math package; floats print exactly (2026-10-29)
+
+Phases 0 and 1 of math-plan.md (kept beside missing-libraries.md in the
+main checkout). Found on the way, and fixed first: every float that became
+text went through "%g", six significant digits -- println, to_str, inspect
+and, worst, json.encode, which sent 0.30000000000000004 as 0.3 and NaN as
+`nan`, an unparseable document. All four now write the shortest text that
+reads back as the same number (sl_fmt_f64/sl_fmt_f32, sl_containers.c), and
+json writes NaN and the infinities as null. No expected output in the suite
+changed: the tests print floats short enough for %g to have been exact.
+
+`math` is native, not slang over `extern fn`: an extern call reaches libm
+through an asm label the C compiler does not treat as the builtin, so
+sqrt was a real call, and a call with a live GC value in scope paid a
+safepoint bracket. Here every function except format* is a leaf. One type
+parameter per call (NA_NUM, NA_NUM_INT, NA_NUM_FLT; pkg_math/dispatch.c)
+covers all ten numeric types: T is the promotion of the non-literal
+arguments, a literal takes T and must fit it, and "@" in a return is T.
+runtime/sl_math.c instantiates each function per type with macros; every
+integer edge C leaves undefined (MIN / -1, MIN % -1, a shift past the
+width) has a defined answer, an opt-returning function writes through an
+out pointer so nothing allocates, and a domain error panics at the
+caller's line as `/` does. Programs link -lm unconditionally.
+
+Seen, not fixed: `/` by zero (and every sl_rt_error_at user without an
+index) ends its message with "(index 0, length 0)"; math's panics use
+sl_rt_fail and do not. Exponent literals (`1e21`) do not parse.
+Next: math/numtheory and math/stats (plan phase 2).

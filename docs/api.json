@@ -2786,6 +2786,1251 @@
         }
       ]
     },
+    "math": {
+      "name": "math",
+      "kind": "native",
+      "items": [
+        {
+          "name": "abs",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.abs(T) -> T"
+        },
+        {
+          "name": "min",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.min(T, T) -> T"
+        },
+        {
+          "name": "max",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.max(T, T) -> T"
+        },
+        {
+          "name": "clamp",
+          "params": [
+            "T",
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.clamp(T, T, T) -> T"
+        },
+        {
+          "name": "sign",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.sign(T) -> T"
+        },
+        {
+          "name": "is_nan",
+          "params": [
+            "T"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "math.is_nan(T) -> bool"
+        },
+        {
+          "name": "is_inf",
+          "params": [
+            "T"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "math.is_inf(T) -> bool"
+        },
+        {
+          "name": "is_finite",
+          "params": [
+            "T"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "math.is_finite(T) -> bool"
+        },
+        {
+          "name": "is_normal",
+          "params": [
+            "T"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "math.is_normal(T) -> bool"
+        },
+        {
+          "name": "signbit",
+          "params": [
+            "T"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "math.signbit(T) -> bool"
+        },
+        {
+          "name": "copysign",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.copysign(T, T) -> T"
+        },
+        {
+          "name": "nextafter",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.nextafter(T, T) -> T"
+        },
+        {
+          "name": "nextup",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.nextup(T) -> T"
+        },
+        {
+          "name": "nextdown",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.nextdown(T) -> T"
+        },
+        {
+          "name": "ulp",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.ulp(T) -> T"
+        },
+        {
+          "name": "frexp_mantissa",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.frexp_mantissa(T) -> T"
+        },
+        {
+          "name": "frexp_exponent",
+          "params": [
+            "T"
+          ],
+          "ret": "int",
+          "tls": false,
+          "sig": "math.frexp_exponent(T) -> int"
+        },
+        {
+          "name": "ldexp",
+          "params": [
+            "T",
+            "int"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.ldexp(T, int) -> T"
+        },
+        {
+          "name": "ilogb",
+          "params": [
+            "T"
+          ],
+          "ret": "int",
+          "tls": false,
+          "sig": "math.ilogb(T) -> int"
+        },
+        {
+          "name": "float_bits",
+          "params": [
+            "float"
+          ],
+          "ret": "u64",
+          "tls": false,
+          "sig": "math.float_bits(float) -> u64"
+        },
+        {
+          "name": "float_from_bits",
+          "params": [
+            "int"
+          ],
+          "ret": "float",
+          "tls": false,
+          "sig": "math.float_from_bits(int) -> float"
+        },
+        {
+          "name": "f32_bits",
+          "params": [
+            "float"
+          ],
+          "ret": "u32",
+          "tls": false,
+          "sig": "math.f32_bits(float) -> u32"
+        },
+        {
+          "name": "f32_from_bits",
+          "params": [
+            "int"
+          ],
+          "ret": "f32",
+          "tls": false,
+          "sig": "math.f32_from_bits(int) -> f32"
+        },
+        {
+          "name": "total_cmp",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "int",
+          "tls": false,
+          "sig": "math.total_cmp(T, T) -> int"
+        },
+        {
+          "name": "approx_eq",
+          "params": [
+            "T",
+            "T",
+            "T",
+            "T"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "math.approx_eq(T, T, T, T) -> bool"
+        },
+        {
+          "name": "floor",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.floor(T) -> T"
+        },
+        {
+          "name": "ceil",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.ceil(T) -> T"
+        },
+        {
+          "name": "trunc",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.trunc(T) -> T"
+        },
+        {
+          "name": "round",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.round(T) -> T"
+        },
+        {
+          "name": "round_even",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.round_even(T) -> T"
+        },
+        {
+          "name": "round_to",
+          "params": [
+            "T",
+            "int"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.round_to(T, int) -> T"
+        },
+        {
+          "name": "round_to_multiple",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.round_to_multiple(T, T) -> T"
+        },
+        {
+          "name": "fract",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.fract(T) -> T"
+        },
+        {
+          "name": "floor_int",
+          "params": [
+            "float"
+          ],
+          "ret": "opt[int]",
+          "tls": false,
+          "sig": "math.floor_int(float) -> opt[int]"
+        },
+        {
+          "name": "ceil_int",
+          "params": [
+            "float"
+          ],
+          "ret": "opt[int]",
+          "tls": false,
+          "sig": "math.ceil_int(float) -> opt[int]"
+        },
+        {
+          "name": "round_int",
+          "params": [
+            "float"
+          ],
+          "ret": "opt[int]",
+          "tls": false,
+          "sig": "math.round_int(float) -> opt[int]"
+        },
+        {
+          "name": "trunc_int",
+          "params": [
+            "float"
+          ],
+          "ret": "opt[int]",
+          "tls": false,
+          "sig": "math.trunc_int(float) -> opt[int]"
+        },
+        {
+          "name": "sqrt",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.sqrt(T) -> T"
+        },
+        {
+          "name": "cbrt",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.cbrt(T) -> T"
+        },
+        {
+          "name": "hypot",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.hypot(T, T) -> T"
+        },
+        {
+          "name": "pow",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.pow(T, T) -> T"
+        },
+        {
+          "name": "powi",
+          "params": [
+            "T",
+            "int"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.powi(T, int) -> T"
+        },
+        {
+          "name": "fma",
+          "params": [
+            "T",
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.fma(T, T, T) -> T"
+        },
+        {
+          "name": "fmod",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.fmod(T, T) -> T"
+        },
+        {
+          "name": "remainder",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.remainder(T, T) -> T"
+        },
+        {
+          "name": "mod_euclid",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.mod_euclid(T, T) -> T"
+        },
+        {
+          "name": "exp",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.exp(T) -> T"
+        },
+        {
+          "name": "exp2",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.exp2(T) -> T"
+        },
+        {
+          "name": "expm1",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.expm1(T) -> T"
+        },
+        {
+          "name": "log",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.log(T) -> T"
+        },
+        {
+          "name": "log2",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.log2(T) -> T"
+        },
+        {
+          "name": "log10",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.log10(T) -> T"
+        },
+        {
+          "name": "log1p",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.log1p(T) -> T"
+        },
+        {
+          "name": "log_base",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.log_base(T, T) -> T"
+        },
+        {
+          "name": "sin",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.sin(T) -> T"
+        },
+        {
+          "name": "cos",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.cos(T) -> T"
+        },
+        {
+          "name": "tan",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.tan(T) -> T"
+        },
+        {
+          "name": "asin",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.asin(T) -> T"
+        },
+        {
+          "name": "acos",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.acos(T) -> T"
+        },
+        {
+          "name": "atan",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.atan(T) -> T"
+        },
+        {
+          "name": "atan2",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.atan2(T, T) -> T"
+        },
+        {
+          "name": "sinh",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.sinh(T) -> T"
+        },
+        {
+          "name": "cosh",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.cosh(T) -> T"
+        },
+        {
+          "name": "tanh",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.tanh(T) -> T"
+        },
+        {
+          "name": "asinh",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.asinh(T) -> T"
+        },
+        {
+          "name": "acosh",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.acosh(T) -> T"
+        },
+        {
+          "name": "atanh",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.atanh(T) -> T"
+        },
+        {
+          "name": "to_radians",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.to_radians(T) -> T"
+        },
+        {
+          "name": "to_degrees",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.to_degrees(T) -> T"
+        },
+        {
+          "name": "wrap_angle",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.wrap_angle(T) -> T"
+        },
+        {
+          "name": "sin_pi",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.sin_pi(T) -> T"
+        },
+        {
+          "name": "cos_pi",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.cos_pi(T) -> T"
+        },
+        {
+          "name": "gamma",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.gamma(T) -> T"
+        },
+        {
+          "name": "lgamma",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.lgamma(T) -> T"
+        },
+        {
+          "name": "erf",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.erf(T) -> T"
+        },
+        {
+          "name": "erfc",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.erfc(T) -> T"
+        },
+        {
+          "name": "erf_inv",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.erf_inv(T) -> T"
+        },
+        {
+          "name": "beta",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.beta(T, T) -> T"
+        },
+        {
+          "name": "factorial",
+          "params": [
+            "int"
+          ],
+          "ret": "float",
+          "tls": false,
+          "sig": "math.factorial(int) -> float"
+        },
+        {
+          "name": "binomial",
+          "params": [
+            "int",
+            "int"
+          ],
+          "ret": "float",
+          "tls": false,
+          "sig": "math.binomial(int, int) -> float"
+        },
+        {
+          "name": "lerp",
+          "params": [
+            "T",
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.lerp(T, T, T) -> T"
+        },
+        {
+          "name": "inverse_lerp",
+          "params": [
+            "T",
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.inverse_lerp(T, T, T) -> T"
+        },
+        {
+          "name": "remap",
+          "params": [
+            "T",
+            "T",
+            "T",
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.remap(T, T, T, T, T) -> T"
+        },
+        {
+          "name": "smoothstep",
+          "params": [
+            "T",
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.smoothstep(T, T, T) -> T"
+        },
+        {
+          "name": "smootherstep",
+          "params": [
+            "T",
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.smootherstep(T, T, T) -> T"
+        },
+        {
+          "name": "checked_add",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "opt[T]",
+          "tls": false,
+          "sig": "math.checked_add(T, T) -> opt[T]"
+        },
+        {
+          "name": "checked_sub",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "opt[T]",
+          "tls": false,
+          "sig": "math.checked_sub(T, T) -> opt[T]"
+        },
+        {
+          "name": "checked_mul",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "opt[T]",
+          "tls": false,
+          "sig": "math.checked_mul(T, T) -> opt[T]"
+        },
+        {
+          "name": "checked_div",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "opt[T]",
+          "tls": false,
+          "sig": "math.checked_div(T, T) -> opt[T]"
+        },
+        {
+          "name": "checked_rem",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "opt[T]",
+          "tls": false,
+          "sig": "math.checked_rem(T, T) -> opt[T]"
+        },
+        {
+          "name": "checked_neg",
+          "params": [
+            "T"
+          ],
+          "ret": "opt[T]",
+          "tls": false,
+          "sig": "math.checked_neg(T) -> opt[T]"
+        },
+        {
+          "name": "checked_abs",
+          "params": [
+            "T"
+          ],
+          "ret": "opt[T]",
+          "tls": false,
+          "sig": "math.checked_abs(T) -> opt[T]"
+        },
+        {
+          "name": "checked_pow",
+          "params": [
+            "T",
+            "int"
+          ],
+          "ret": "opt[T]",
+          "tls": false,
+          "sig": "math.checked_pow(T, int) -> opt[T]"
+        },
+        {
+          "name": "checked_shl",
+          "params": [
+            "T",
+            "int"
+          ],
+          "ret": "opt[T]",
+          "tls": false,
+          "sig": "math.checked_shl(T, int) -> opt[T]"
+        },
+        {
+          "name": "saturating_add",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.saturating_add(T, T) -> T"
+        },
+        {
+          "name": "saturating_sub",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.saturating_sub(T, T) -> T"
+        },
+        {
+          "name": "saturating_mul",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.saturating_mul(T, T) -> T"
+        },
+        {
+          "name": "wrapping_add",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.wrapping_add(T, T) -> T"
+        },
+        {
+          "name": "wrapping_sub",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.wrapping_sub(T, T) -> T"
+        },
+        {
+          "name": "wrapping_mul",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.wrapping_mul(T, T) -> T"
+        },
+        {
+          "name": "wrapping_neg",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.wrapping_neg(T) -> T"
+        },
+        {
+          "name": "wrapping_pow",
+          "params": [
+            "T",
+            "int"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.wrapping_pow(T, int) -> T"
+        },
+        {
+          "name": "div_floor",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.div_floor(T, T) -> T"
+        },
+        {
+          "name": "div_ceil",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.div_ceil(T, T) -> T"
+        },
+        {
+          "name": "div_euclid",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.div_euclid(T, T) -> T"
+        },
+        {
+          "name": "rem_euclid",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.rem_euclid(T, T) -> T"
+        },
+        {
+          "name": "abs_diff",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "u64",
+          "tls": false,
+          "sig": "math.abs_diff(T, T) -> u64"
+        },
+        {
+          "name": "midpoint",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.midpoint(T, T) -> T"
+        },
+        {
+          "name": "isqrt",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.isqrt(T) -> T"
+        },
+        {
+          "name": "ilog2",
+          "params": [
+            "T"
+          ],
+          "ret": "opt[int]",
+          "tls": false,
+          "sig": "math.ilog2(T) -> opt[int]"
+        },
+        {
+          "name": "ilog10",
+          "params": [
+            "T"
+          ],
+          "ret": "opt[int]",
+          "tls": false,
+          "sig": "math.ilog10(T) -> opt[int]"
+        },
+        {
+          "name": "is_pow2",
+          "params": [
+            "T"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "math.is_pow2(T) -> bool"
+        },
+        {
+          "name": "next_pow2",
+          "params": [
+            "T"
+          ],
+          "ret": "opt[T]",
+          "tls": false,
+          "sig": "math.next_pow2(T) -> opt[T]"
+        },
+        {
+          "name": "align_up",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "opt[T]",
+          "tls": false,
+          "sig": "math.align_up(T, T) -> opt[T]"
+        },
+        {
+          "name": "align_down",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.align_down(T, T) -> T"
+        },
+        {
+          "name": "gcd",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.gcd(T, T) -> T"
+        },
+        {
+          "name": "lcm",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "opt[T]",
+          "tls": false,
+          "sig": "math.lcm(T, T) -> opt[T]"
+        },
+        {
+          "name": "mul_div",
+          "params": [
+            "T",
+            "T",
+            "T"
+          ],
+          "ret": "opt[T]",
+          "tls": false,
+          "sig": "math.mul_div(T, T, T) -> opt[T]"
+        },
+        {
+          "name": "mul_hi",
+          "params": [
+            "T",
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.mul_hi(T, T) -> T"
+        },
+        {
+          "name": "popcount",
+          "params": [
+            "T"
+          ],
+          "ret": "int",
+          "tls": false,
+          "sig": "math.popcount(T) -> int"
+        },
+        {
+          "name": "leading_zeros",
+          "params": [
+            "T"
+          ],
+          "ret": "int",
+          "tls": false,
+          "sig": "math.leading_zeros(T) -> int"
+        },
+        {
+          "name": "trailing_zeros",
+          "params": [
+            "T"
+          ],
+          "ret": "int",
+          "tls": false,
+          "sig": "math.trailing_zeros(T) -> int"
+        },
+        {
+          "name": "bit_len",
+          "params": [
+            "T"
+          ],
+          "ret": "int",
+          "tls": false,
+          "sig": "math.bit_len(T) -> int"
+        },
+        {
+          "name": "rotate_left",
+          "params": [
+            "T",
+            "int"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.rotate_left(T, int) -> T"
+        },
+        {
+          "name": "rotate_right",
+          "params": [
+            "T",
+            "int"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.rotate_right(T, int) -> T"
+        },
+        {
+          "name": "swap_bytes",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.swap_bytes(T) -> T"
+        },
+        {
+          "name": "reverse_bits",
+          "params": [
+            "T"
+          ],
+          "ret": "T",
+          "tls": false,
+          "sig": "math.reverse_bits(T) -> T"
+        },
+        {
+          "name": "format",
+          "params": [
+            "float",
+            "int"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "math.format(float, int) -> str"
+        },
+        {
+          "name": "format_fixed",
+          "params": [
+            "float",
+            "int"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "math.format_fixed(float, int) -> str"
+        },
+        {
+          "name": "format_sci",
+          "params": [
+            "float",
+            "int"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "math.format_sci(float, int) -> str"
+        }
+      ]
+    },
     "net": {
       "name": "net",
       "kind": "native",

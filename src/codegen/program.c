@@ -1043,9 +1043,11 @@ void emit_native_runtime(CG *cg) {
     int want_strings = want_pkg(cg, "strings");
     int want_encoding = want_pkg(cg, "encoding");
     int want_compress = want_pkg(cg, "compress");
+    int want_math = want_pkg(cg, "math");
     if (!want_time && !want_net && !want_proc && !want_fs && !want_log &&
         !want_crypto && !want_sql && !want_regex && !want_os &&
-        !want_io && !want_strings && !want_encoding && !want_compress)
+        !want_io && !want_strings && !want_encoding && !want_compress &&
+        !want_math)
         return;
     if (want_time)
         emit_runtime_file(cg, "sl_time.c");
@@ -1085,6 +1087,8 @@ void emit_native_runtime(CG *cg) {
         emit_runtime_file(cg, "sl_encoding.c");
     if (want_compress)
         emit_runtime_file(cg, "sl_compress.c");
+    if (want_math)
+        emit_runtime_file(cg, "sl_math.c");
 }
 
 /* Emit the args-struct + task entry function for every distinct
@@ -1910,8 +1914,21 @@ static const char *leaf_expr(CG *cg, LeafEnv *env, Expr *e) {
         return "bool";
     case EX_STRING:
         return "str";
-    case EX_IDENT:
-        return leaf_env_get(env, e->as.ident.name);
+    case EX_IDENT: {
+        const char *t = leaf_env_get(env, e->as.ident.name);
+        if (t)
+            return t;
+        char *left, *right; /* math.pi: a constant, folded by the C compiler */
+        if (split_dotted(e->as.ident.name, &left, &right)) {
+            const char *pkg = import_try(cg, left);
+            if (pkg && !strcmp(pkg, "math") && is_native_pkg(cg, pkg)) {
+                const MathConst *mc = math_const_find(right);
+                if (mc)
+                    return mc->slang;
+            }
+        }
+        return NULL;
+    }
     case EX_UNARY: {
         const char *t = leaf_expr(cg, env, e->as.unary.operand);
         return leaf_scalar(t) ? t : NULL;
@@ -1951,9 +1968,14 @@ static const char *leaf_expr(CG *cg, LeafEnv *env, Expr *e) {
     }
     case EX_CALL: {
         const char *name = e->as.call.name;
-        for (int i = 0; i < e->as.call.nargs; i++)
-            if (!leaf_expr(cg, env, e->as.call.args[i]))
+        const char *argt[8] = {0};
+        for (int i = 0; i < e->as.call.nargs; i++) {
+            const char *at = leaf_expr(cg, env, e->as.call.args[i]);
+            if (!at)
                 return NULL;
+            if (i < 8)
+                argt[i] = at;
+        }
         if (!strcmp(name, "len") || !strcmp(name, "wire_put") ||
             !strcmp(name, "wire_put_bytes"))
             return "int";
@@ -1967,6 +1989,16 @@ static const char *leaf_expr(CG *cg, LeafEnv *env, Expr *e) {
         if (split_dotted(name, &left, &right)) {
             const char *pkg = import_try(cg, left);
             if (pkg && is_native_pkg(cg, pkg) && native_is_leaf(pkg, right)) {
+                /* math's return type depends on its arguments' (T) */
+                const NatSig *ms = !strcmp(pkg, "math")
+                                       ? native_find_sig(pkg, right) : NULL;
+                if (ms) {
+                    if (e->as.call.nargs != ms->nargs)
+                        return NULL;
+                    const char *t = math_type_of_args(
+                        ms, e->as.call.args, argt, e->line);
+                    return t ? math_ret_type(ms, t) : ms->ret;
+                }
                 const NatSig *sigs[256];
                 int n = native_sigs_of(pkg, sigs, 256);
                 for (int i = 0; i < n; i++)

@@ -320,6 +320,10 @@ static const char *argkind_name(NatArgKind k) {
     case NA_ARR_BYTES: return "[bytes]";
     case NA_WIRE: return "wire";
     case NA_UNTIL: return "until";
+    /* math's type parameter: T, an integer T, a float T */
+    case NA_NUM:
+    case NA_NUM_INT:
+    case NA_NUM_FLT: return "T";
     }
     return "?";
 }
@@ -341,7 +345,8 @@ static void scan_native_package(const char *pkg, DocList *out) {
         sb_putc(&b, ')');
         if (sigs[i]->ret) {
             sb_append(&b, " -> ");
-            sb_append(&b, sigs[i]->ret);
+            for (const char *r = sigs[i]->ret; *r; r++) /* math: '@' is T */
+                sb_putc(&b, *r == '@' ? 'T' : *r);
         }
         DocItem it;
         memset(&it, 0, sizeof(it));
