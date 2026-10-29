@@ -62,7 +62,8 @@ HDRS = src/common.h src/lexer.h src/ast.h src/parser.h src/codegen.h \
       src/codegen/pkg_encoding/pkg_encoding.h \
       src/codegen/pkg_compress/pkg_compress.h \
       src/codegen/pkg_math/pkg_math.h
-RT_SRCS = runtime/sl_core.c runtime/sl_gc.c runtime/sl_containers.c \
+RT_SRCS = runtime/sl_core.c runtime/sl_gc.c runtime/sl_ryu_tables.c \
+         runtime/sl_ryu.c runtime/sl_containers.c \
          runtime/sl_sched.c runtime/sl_pool.c runtime/sl_time.c \
          runtime/sl_dns.c runtime/sl_net.c runtime/sl_tls.c runtime/sl_json.c \
          runtime/sl_proc.c runtime/sl_fs.c runtime/sl_log.c \
