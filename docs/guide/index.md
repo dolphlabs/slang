@@ -104,7 +104,12 @@ fn fib(n: int) -> int {
 
 Both accept any single value of type `int`, any fixed-width integer,
 `float`, `f32`, `str`, `bool`, or `bytes` (bytes are written raw, with
-no escaping).
+no escaping). A float prints as the shortest text that reads back as the
+same number: `0.1 + 0.2` is `0.30000000000000004`, `1.0` is `1`,
+`500002000000.0` is `500002000000`, `1e21` and up use an exponent, and
+an `f32` is as short as an `f32` needs (`0.1`). `to_str`, `inspect` and
+`json.encode` write floats the same way; `json.encode` writes NaN and
+the infinities as `null`, since JSON has neither.
 
 - `len(x)` — length of a `str`, `bytes`, `[T]`, or map
 - `push(xs, v)` / `pop(xs)` — append to / remove the last element of a list
@@ -877,7 +882,12 @@ Concurrency below.
 
 Both accept any single value of type `int`, any fixed-width integer,
 `float`, `f32`, `str`, `bool`, or `bytes` (bytes are written raw, with
-no escaping).
+no escaping). A float prints as the shortest text that reads back as the
+same number: `0.1 + 0.2` is `0.30000000000000004`, `1.0` is `1`,
+`500002000000.0` is `500002000000`, `1e21` and up use an exponent, and
+an `f32` is as short as an `f32` needs (`0.1`). `to_str`, `inspect` and
+`json.encode` write floats the same way; `json.encode` writes NaN and
+the infinities as `null`, since JSON has neither.
 
 - `len(x)` — length of a `str`, `bytes`, `[T]`, or map
 - `push(xs, v)` / `pop(xs)` — append to / remove the last element of a list
