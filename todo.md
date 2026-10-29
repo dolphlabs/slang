@@ -4560,3 +4560,17 @@ Seen, not fixed: `/` by zero (and every sl_rt_error_at user without an
 index) ends its message with "(index 0, length 0)"; math's panics use
 sl_rt_fail and do not. Exponent literals (`1e21`) do not parse.
 Next: math/numtheory and math/stats (plan phase 2).
+
+## Changed: the generic instance warning measures cost (2026-10-29)
+
+slangc warned "program instantiates N generic types/functions (threshold
+64)" on every zokor service: say has 931 instances, almost all a short
+rows_as / query_all / transaction per row or result type, and nothing in
+the warning said which or whether they mattered. It now measures the C
+each instance body emits in the real run, per template, and warns only
+when instances are over 25% (SLANG_INSTANCE_WARN, a percentage now) of the
+program's own C, the runtime excluded, and over 512 KB -- naming the five
+largest templates with their copy counts and size. say: 887 function
+copies, 2.4 MB of 12.7 MB (18%), no warning; the largest is
+zokor.transaction, 43 copies at about 7.5 KB each, the one worth making a
+thin generic shell over a non-generic core if it ever matters.
