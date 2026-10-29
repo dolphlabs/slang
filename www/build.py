@@ -184,6 +184,7 @@ PACKAGE_SECTIONS = {
     "strings": ["`strings`"],
     "encoding": ["`encoding`"],
     "compress": ["`compress`"],
+    "math": ["`math`"],
     "byteutil": ["`byteutil`"],
     "builder": ["`builder`"],
     "flags": ["`flags`"],
