@@ -95,6 +95,8 @@ char *conv_to_str(CG *cg, const char *t, char *expr) {
         return xasprintf("sl_str_from_int((long long)(%s))", expr);
     if (is_int(t))
         return xasprintf("sl_str_from_uint((unsigned long long)(%s))", expr);
+    if (!strcmp(t, "f32"))
+        return xasprintf("sl_str_from_f32((float)(%s))", expr);
     if (is_flt(t))
         return xasprintf("sl_str_from_float((double)(%s))", expr);
     if (!strcmp(t, "bool"))
@@ -2298,9 +2300,10 @@ void gen_print(CG *cg, Expr *call, int newline) {
     } else if (is_int(t)) {
         emit_line(cg, "printf(\"%%llu%s\", (unsigned long long)(%s));",
                   newline ? "\\n" : "", v);
+    } else if (!strcmp(t, "f32")) {
+        emit_line(cg, "sl_print_f32((float)(%s), %d);", v, newline);
     } else if (is_flt(t)) {
-        emit_line(cg, "printf(\"%%g%s\", (double)(%s));",
-                  newline ? "\\n" : "", v);
+        emit_line(cg, "sl_print_f64((double)(%s), %d);", v, newline);
     } else if (!strcmp(t, "bool")) {
         if (newline)
             emit_line(cg, "puts((%s) ? \"true\" : \"false\");", v);

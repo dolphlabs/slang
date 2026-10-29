@@ -1546,12 +1546,86 @@ static char *sl_str_from_uint(unsigned long long v) {
     return sl_strdup(buf);
 }
 
+/* The shortest text that reads back as exactly `v`, in %g's style ("1" for
+ * 1.0, "1e+21", "inf", "nan"). Every float to_str, println, inspect and
+ * json.encode goes through this or sl_fmt_f32. They used "%g" -- six
+ * significant digits -- so 500002000000.0 printed as 5.00002e+11, 0.1+0.2
+ * as 0.3, and a float sent through json.encode came back a different
+ * number.
+ *
+ * At most three tries, almost always one. If v has a representation of 15
+ * or fewer significant digits, %.15g is it (with %g's trailing zeros
+ * dropped): rounding v to 15 digits cannot step past that number, because
+ * v lies within half a double ULP of it (2^-53 relative) and a 15th-digit
+ * half unit is at least 5e-16 relative. Past 15, %.16g and then %.17g are
+ * the nearest 16- and 17-digit decimals, and if any decimal of that
+ * length reads back as v the nearest one does; 17 always does. buf needs
+ * 32 bytes. Called inside a preempt-disabled section: snprintf's locale
+ * and FILE machinery is not safe to be preempted out of mid-call. */
+static void sl_fmt_f64(char *buf, size_t cap, double v) {
+    if (v != v || v - v != 0) { /* NaN, +-inf: no digits to choose */
+        snprintf(buf, cap, "%g", v);
+        return;
+    }
+    for (int prec = 15; prec <= 17; prec++) {
+        snprintf(buf, cap, "%.*g", prec, v);
+        if (strtod(buf, NULL) == v)
+            return;
+    }
+}
+
+/* The same for an f32: read back as an f32 (strtof), so 0.1 as an f32 is
+ * "0.1" and not the 17 digits of its value widened to a double. Six
+ * significant digits always identify an f32's decimal when one of six or
+ * fewer exists, by the same argument with 2^-24 and 5e-7; nine always
+ * read back. */
+static void sl_fmt_f32(char *buf, size_t cap, float v) {
+    if (v != v || v - v != 0) {
+        snprintf(buf, cap, "%g", (double)v);
+        return;
+    }
+    for (int prec = 6; prec <= 9; prec++) {
+        snprintf(buf, cap, "%.*g", prec, (double)v);
+        if (strtof(buf, NULL) == v)
+            return;
+    }
+}
+
 static char *sl_str_from_float(double v) {
     sl_rt_preempt_disable();
     char buf[64];
-    snprintf(buf, sizeof(buf), "%g", v);
+    sl_fmt_f64(buf, sizeof(buf), v);
     sl_rt_preempt_enable();
     return sl_strdup(buf);
+}
+
+static char *sl_str_from_f32(float v) {
+    sl_rt_preempt_disable();
+    char buf[64];
+    sl_fmt_f32(buf, sizeof(buf), v);
+    sl_rt_preempt_enable();
+    return sl_strdup(buf);
+}
+
+/* println / print of a float: formatted on the stack, no allocation. */
+static void sl_print_f64(double v, int newline) {
+    sl_rt_preempt_disable();
+    char buf[64];
+    sl_fmt_f64(buf, sizeof(buf), v);
+    fputs(buf, stdout);
+    if (newline)
+        fputc('\n', stdout);
+    sl_rt_preempt_enable();
+}
+
+static void sl_print_f32(float v, int newline) {
+    sl_rt_preempt_disable();
+    char buf[64];
+    sl_fmt_f32(buf, sizeof(buf), v);
+    fputs(buf, stdout);
+    if (newline)
+        fputc('\n', stdout);
+    sl_rt_preempt_enable();
 }
 
 static char *sl_str_from_bool(bool v) {
