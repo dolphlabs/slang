@@ -3,6 +3,8 @@ static int sl_runtime_test_main(void);
 #define main sl_runtime_unused_main
 #include "sl_core.c"
 #include "sl_gc.c"
+#include "sl_ryu_tables.c"
+#include "sl_ryu.c"
 #include "sl_containers.c"
 #include "sl_sched.c"
 #include "sl_pool.c"
