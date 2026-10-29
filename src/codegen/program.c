@@ -1524,6 +1524,60 @@ static void gen_main_body_checked(CG *cg, Block *body) {
     }
 }
 
+
+/* One instance body's C, credited to its template: the instance's note
+ * ("zokor.rows_as[pkg.Row]", "zokor.Router[app.S].websocket") with each
+ * bracketed argument list replaced by "[..]" and a trailing one dropped,
+ * so every instance of one template lands on one row. */
+static void note_inst_cost(CG *cg, const char *note, size_t bytes) {
+    StrBuf t;
+    sb_init(&t);
+    const char *p = note ? note : "?";
+    while (*p) {
+        if (*p != '[') {
+            sb_append_n(&t, p++, 1);
+            continue;
+        }
+        int depth = 0;
+        do {
+            depth += *p == '[';
+            depth -= *p == ']';
+            p++;
+        } while (*p && depth > 0);
+        if (*p)
+            sb_append(&t, "[..]");
+    }
+    cg->inst_c_bytes += bytes;
+    for (int i = 0; i < cg->ninst_costs; i++) {
+        if (!strcmp(cg->inst_costs[i].tmpl, t.data)) {
+            cg->inst_costs[i].count++;
+            cg->inst_costs[i].bytes += bytes;
+            return;
+        }
+    }
+    if (cg->ninst_costs == cg->inst_costs_cap) {
+        cg->inst_costs_cap = cg->inst_costs_cap ? cg->inst_costs_cap * 2 : 16;
+        cg->inst_costs = xrealloc(cg->inst_costs, sizeof(*cg->inst_costs) *
+                                                      (size_t)cg->inst_costs_cap);
+    }
+    cg->inst_costs[cg->ninst_costs].tmpl = t.data;
+    cg->inst_costs[cg->ninst_costs].count = 1;
+    cg->inst_costs[cg->ninst_costs].bytes = bytes;
+    cg->ninst_costs++;
+}
+
+/* "512 bytes", "37 KB", "2405 KB": bytes until KB says something */
+static char *inst_size(size_t bytes) {
+    return bytes < 10 * 1024 ? xasprintf("%zu bytes", bytes)
+                             : xasprintf("%zu KB", bytes / 1024);
+}
+
+static int inst_cost_cmp(const void *a, const void *b) {
+    size_t x = ((const struct InstCost *)a)->bytes;
+    size_t y = ((const struct InstCost *)b)->bytes;
+    return (x < y) - (x > y);
+}
+
 void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
                               int main_index) {
     emit_prelude(cg);
@@ -1548,6 +1602,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     emit_inspect_runtime(cg);
     emit_inspect_codecs(cg);
 
+    cg->prog_c_start = cg->out->len;
     emit_globals(cg, pkgs, npkgs, main_index);
 
     gen_prototypes(cg, pkgs, npkgs);
@@ -1557,8 +1612,13 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
     {
         FuncCursor fc;
         func_cursor_init(&fc);
-        while (func_cursor_next(cg, pkgs, npkgs, &fc, 0))
+        while (func_cursor_next(cg, pkgs, npkgs, &fc, 0)) {
+            size_t before = cg->out->len;
             gen_function_checked(cg, fc.pkg, fc.fn);
+            if (fc.tenv && cg->insts_frozen && fc.i_inst > 0)
+                note_inst_cost(cg, cg->finsts.items[fc.i_inst - 1]->note,
+                               cg->out->len - before);
+        }
     }
 
     /* top-level statements of the main package become sl_main_task_entry,
@@ -1827,33 +1887,47 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
     if (out_want_fswatch)
         *out_want_fswatch = cg.want_fswatch;
 
-    /* Generics hardening: every used instance is a separate copy in
-     * the binary, so a program that instantiates without bound (a
-     * framework used at dozens of types) bloats silently. Warn past
-     * a threshold instead. SLANG_INSTANCE_WARN overrides it (tests
-     * set a tiny one); a warning, not an error, since big is
-     * sometimes exactly what was asked for. Counted after the dry
-     * run reached its fixpoint, so late instances are included. */
+    /* Generics hardening: every instance is its own copy in the binary, so
+     * a program that instantiates a big template at many types bloats
+     * silently. Warn when the copies are a real share of the program --
+     * over SLANG_INSTANCE_WARN percent (default 25) of its own C, the
+     * runtime excluded, and over 512 KB of it -- and name the templates
+     * that cost the most. It used to warn on a count, more than 64
+     * instances, which every zokor service passes with no bloat at all:
+     * say has 931, almost all a 10-line rows_as or query_all per row type,
+     * 7% of its C. A warning, not an error, since big is sometimes exactly
+     * what was asked for. */
     {
-        int ninst = 0;
-        for (int i = 0; i < cg.structs.count; i++)
-            if (cg.structs.items[i]->inst)
-                ninst++;
-        ninst += cg.finsts.count;
-        int threshold = 64;
+        size_t prog = out->len > cg.prog_c_start ? out->len - cg.prog_c_start : 0;
+        long pct = 25;
         const char *env = getenv("SLANG_INSTANCE_WARN");
         if (env && env[0]) {
             char *end = NULL;
             long v = strtol(env, &end, 10);
-            if (end != env && v > 0 && v < 1000000)
-                threshold = (int)v;
+            if (end != env && v >= 0 && v <= 100)
+                pct = v;
         }
-        if (ninst > threshold)
+        /* a test sets the percentage to 0 to see the report on a small
+           program; the size floor applies only to the default */
+        size_t floor = env && env[0] ? 0 : (size_t)512 * 1024;
+        if (prog > 0 && cg.inst_c_bytes > floor &&
+            cg.inst_c_bytes * 100 > (size_t)pct * prog) {
+            qsort(cg.inst_costs, (size_t)cg.ninst_costs,
+                  sizeof(*cg.inst_costs), inst_cost_cmp);
+            int ninst = 0;
+            for (int i = 0; i < cg.ninst_costs; i++)
+                ninst += cg.inst_costs[i].count;
             fprintf(stderr,
-                    "slang: warning: program instantiates %d generic "
-                    "types/functions (threshold %d); each emits its own "
-                    "copy in the binary\n",
-                    ninst, threshold);
+                    "slang: warning: generic instances are %d%% of this "
+                    "program's C (%d copies, %s of %s); the largest:\n",
+                    (int)(cg.inst_c_bytes * 100 / prog), ninst,
+                    inst_size(cg.inst_c_bytes), inst_size(prog));
+            for (int i = 0; i < cg.ninst_costs && i < 5; i++)
+                fprintf(stderr, "  %s: %d %s, %s\n", cg.inst_costs[i].tmpl,
+                        cg.inst_costs[i].count,
+                        cg.inst_costs[i].count == 1 ? "copy" : "copies",
+                        inst_size(cg.inst_costs[i].bytes));
+        }
     }
 }
 

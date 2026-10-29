@@ -4561,13 +4561,16 @@ index) ends its message with "(index 0, length 0)"; math's panics use
 sl_rt_fail and do not. Exponent literals (`1e21`) do not parse.
 Next: math/numtheory and math/stats (plan phase 2).
 
-## Fixed: float literals with an exponent; `_` in a float (2026-10-29)
+## Changed: the generic instance warning measures cost (2026-10-29)
 
-`1e9`, `6.02e23` and `1.5E-7` did not parse ("expected ';' but found
-identifier"), so math code wrote tolerances as 0.000000001. They are floats
-now (an exponent alone makes one, as in Go and Rust), with a compile error
-for a literal that would be inf, or 0 when its digits are not. Found on the
-way: the float path read its value from the source text with strtod, which
-stops at the first '_', so `1_000.5` -- accepted by the lexer -- was 1.0.
-The digits are copied without separators first, as integers already were.
-tests/float_exponent and tests/fail_float_literal_range.
+slangc warned "program instantiates N generic types/functions (threshold
+64)" on every zokor service: say has 931 instances, almost all a short
+rows_as / query_all / transaction per row or result type, and nothing in
+the warning said which or whether they mattered. It now measures the C
+each instance body emits in the real run, per template, and warns only
+when instances are over 25% (SLANG_INSTANCE_WARN, a percentage now) of the
+program's own C, the runtime excluded, and over 512 KB -- naming the five
+largest templates with their copy counts and size. say: 887 function
+copies, 2.4 MB of 12.7 MB (18%), no warning; the largest is
+zokor.transaction, 43 copies at about 7.5 KB each, the one worth making a
+thin generic shell over a non-generic core if it ever matters.

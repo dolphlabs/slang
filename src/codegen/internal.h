@@ -421,6 +421,16 @@ struct CG {
     int insts_frozen;   /* set once the passes after the dry run have run:
                            a new instance from here on would never be
                            walked by them (see codegen_program) */
+    /* What generic instances cost, measured in the real run: the C their
+     * bodies emitted, per template, against the program's own C (the
+     * runtime excluded). For the instance warning in codegen_program. */
+    size_t prog_c_start, inst_c_bytes;
+    struct InstCost {
+        char *tmpl;  /* "zokor.rows_as", "zokor.Router[..].websocket" */
+        int count;
+        size_t bytes;
+    } *inst_costs;
+    int ninst_costs, inst_costs_cap;
     TypeEnv *tenv;      /* parameters in scope, or NULL */
     int inst_depth;     /* generic instances currently being built */
     EnumTable enums;
