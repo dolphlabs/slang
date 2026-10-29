@@ -1665,6 +1665,28 @@ rm -f "$pa_bin"
 # it for real: without the guard it dies with SIGBUS on clang. Generated
 # codecs (json, pg rows, inspect) take guards too: tests/json_wide's
 # 200-field decoder died with SIGBUS without one.
+# The generic instance warning measures what the copies cost -- their C
+# against the program's own -- and names the templates behind it. With the
+# threshold at 0 it reports on any program; at the default a small one with
+# a few generics says nothing (it used to warn past 64 instances, a count
+# every zokor service passes with no bloat).
+echo "--- generic instance warning ---"
+gw_out=$(SLANG_INSTANCE_WARN=0 ./slangc tests/generics_func/main.sl -o /tmp/sl_gw 2>&1 >/dev/null)
+gw_quiet=$(./slangc tests/generics_func/main.sl -o /tmp/sl_gw 2>&1 >/dev/null)
+if ! printf '%s\n' "$gw_out" | grep -q "generic instances are .* of this program's C" ||
+   ! printf '%s\n' "$gw_out" | grep -q "  generics_func.first: 3 copies, "; then
+    echo "FAIL generic instance warning: report missing its share or templates:"
+    printf '%s\n' "$gw_out"
+    fail=1
+elif [ -n "$gw_quiet" ]; then
+    echo "FAIL generic instance warning: a small program warned at the default:"
+    printf '%s\n' "$gw_quiet"
+    fail=1
+else
+    echo "PASS generic instance warning"
+fi
+rm -f /tmp/sl_gw
+
 echo "--- frame guards (SLANG_FRAME_LIMIT=64) ---"
 fg_bad=0
 for name in fn_values spawn_isolation gc_stress maps json flags method_recv \

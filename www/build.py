@@ -185,6 +185,8 @@ PACKAGE_SECTIONS = {
     "encoding": ["`encoding`"],
     "compress": ["`compress`"],
     "math": ["`math`"],
+    "math/stats": ["`math/stats`"],
+    "math/numtheory": ["`math/numtheory`"],
     "byteutil": ["`byteutil`"],
     "builder": ["`builder`"],
     "flags": ["`flags`"],
@@ -279,7 +281,9 @@ def extract_source_packages():
     if not stdlib.is_dir():
         return pkgs
     for sl in sorted(stdlib.rglob("*.sl")):
-        pkg = sl.relative_to(stdlib).parts[0]
+        # the import path: "sort", or "math/stats" for a nested package
+        # (whose first component may be a native package of its own)
+        pkg = "/".join(sl.relative_to(stdlib).parent.parts)
         lines = sl.read_text(encoding="utf-8").splitlines()
         impl = None
         for i, line in enumerate(lines):

@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>math/numtheory — slang</title>
+<meta name="description" content="Package math/numtheory.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="math/numtheory">
+<meta property="og:description" content="Package math/numtheory.">
+<meta property="og:type" content="website">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../../packages/math/numtheory.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../../index.html">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <button id="navtoggle" class="navtoggle" type="button"
+          aria-label="Toggle navigation" aria-expanded="false"
+          aria-controls="mainnav">
+    <span></span><span></span><span></span>
+  </button>
+  <nav class="mainnav" id="mainnav"><a href="../../index.html">Home</a><a href="../../guide/index.html">Guide</a><a href="../../guide/data.html">Data types</a><a href="../../guide/errors.html">Errors</a><a href="../../guide/functions.html">Functions</a><a href="../../concurrency/index.html">Concurrency</a><a href="../../testing/index.html">Testing</a><a href="../../bench/index.html">Benchmarks</a><a href="../../packages/index.html">Packages</a><a href="../../interop/index.html">C interop</a><a href="../../internals/index.html">Internals</a><a href="../../limitations/index.html">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="navscrim" class="navscrim" hidden></div>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>math/numtheory</h1>
+      <p class="tagline">Package math/numtheory.</p>
+      <p class="agentline">
+        <a href="../../packages/math/numtheory.md">Markdown version</a> ·
+        <a href="../../llms.txt">llms.txt</a> ·
+        <a href="../../api.json">api.json</a>
+      </p>
+    </header>
+<p>Modular arithmetic, primes and factorization on <code>int</code>, over <code>math.mul_mod</code> so a modulus near 2^62 is as safe as a small one.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;math/numtheory&quot;</span>;
+
+numtheory.<span class="f">mod_pow</span>(<span class="n">2</span>, <span class="n">100</span>, <span class="n">1000000007</span>);       <span class="c">// 976371285</span>
+numtheory.<span class="f">mod_inv</span>(<span class="n">3</span>, <span class="n">7</span>) ?? <span class="n">0</span>;                <span class="c">// 5</span>
+numtheory.<span class="f">is_prime</span>(<span class="n">9223372036854775783</span>);     <span class="c">// true: exact for every int</span>
+numtheory.<span class="f">factorize</span>(<span class="n">360</span>);                    <span class="c">// [{p: 2, k: 3}, {p: 3, k: 2}, {p: 5, k: 1}]</span>
+numtheory.<span class="f">primes_below</span>(<span class="n">30</span>);                  <span class="c">// [2, 3, 5, 7, 11, 13, 17, 19, 23, 29]</span>
+numtheory.<span class="f">crt</span>([<span class="n">2</span>, <span class="n">3</span>, <span class="n">2</span>], [<span class="n">3</span>, <span class="n">5</span>, <span class="n">7</span>]) ?? -<span class="n">1</span>;   <span class="c">// 23</span></code></pre></div>
+<p><code>mod_pow</code>, <code>mod_mul</code>, <code>mod_inv</code>, <code>ext_gcd</code> (a <code>Bezout { g, x, y }</code>), <code>is_prime</code> (deterministic Miller-Rabin with the seven bases proven for 64 bits), <code>next_prime</code>, <code>prev_prime</code>, <code>primes_below</code> (a sieve over the odd numbers), <code>factorize</code> (trial division, then Pollard&#x27;s rho with Brent&#x27;s cycle detection), <code>divisors</code>, <code>totient</code>, <code>crt</code> (moduli need not be coprime), <code>binomial_mod</code> (Lucas, for a prime modulus) and <code>fibonacci</code> (exact through F(92)). A modulus must be positive: a function given one &lt;= 0 returns <code>none</code>, 0 or <code>false</code> rather than panicking, and no result is negative.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="mod-pow"><div class="api-sig"><code><span class="k">fn</span> <span class="f">mod_pow</span>(b: <span class="t">int</span>, e: <span class="t">int</span>, m: <span class="t">int</span>) -&gt; <span class="t">int</span></code> <span class="src">stdlib/math/numtheory/numtheory.sl:20</span><a class="anchor" href="#mod-pow">#</a></div><p class="api-doc">b^e mod m, by squaring: O(log e). 0 when m &lt;= 0 or e &lt; 0 (a negative power needs mod_inv first); 1 mod m for e = 0.</p></div><div class="api-item" id="mod-mul"><div class="api-sig"><code><span class="k">fn</span> <span class="f">mod_mul</span>(a: <span class="t">int</span>, b: <span class="t">int</span>, m: <span class="t">int</span>) -&gt; <span class="t">int</span></code> <span class="src">stdlib/math/numtheory/numtheory.sl:41</span><a class="anchor" href="#mod-mul">#</a></div><p class="api-doc">(a * b) mod m, in [0, m), without overflow; 0 when m &lt;= 0.</p></div><div class="api-item" id="bezout"><div class="api-sig"><code><span class="k">struct</span> Bezout</code> <span class="src">stdlib/math/numtheory/numtheory.sl:48</span><a class="anchor" href="#bezout">#</a></div></div><div class="api-item" id="ext-gcd"><div class="api-sig"><code><span class="k">fn</span> <span class="f">ext_gcd</span>(a: <span class="t">int</span>, b: <span class="t">int</span>) -&gt; Bezout</code> <span class="src">stdlib/math/numtheory/numtheory.sl:56</span><a class="anchor" href="#ext-gcd">#</a></div><p class="api-doc">The extended Euclidean algorithm: g = gcd(a, b) and x, y with a <em> x + b </em> y = g.</p></div><div class="api-item" id="mod-inv"><div class="api-sig"><code><span class="k">fn</span> <span class="f">mod_inv</span>(a: <span class="t">int</span>, m: <span class="t">int</span>) -&gt; <span class="t">opt</span>[<span class="t">int</span>]</code> <span class="src">stdlib/math/numtheory/numtheory.sl:83</span><a class="anchor" href="#mod-inv">#</a></div><p class="api-doc">The x in [0, m) with a * x = 1 (mod m); none when a and m share a factor (no inverse exists) or m &lt;= 0.</p></div><div class="api-item" id="is-prime"><div class="api-sig"><code><span class="k">fn</span> <span class="f">is_prime</span>(n: <span class="t">int</span>) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/math/numtheory/numtheory.sl:97</span><a class="anchor" href="#is-prime">#</a></div><p class="api-doc">Whether n is prime: exact for every int (deterministic Miller-Rabin with the seven bases Jim Sinclair found to cover all of 64 bits), after trial division by the small primes. false for n &lt; 2.</p></div><div class="api-item" id="next-prime"><div class="api-sig"><code><span class="k">fn</span> <span class="f">next_prime</span>(n: <span class="t">int</span>) -&gt; <span class="t">opt</span>[<span class="t">int</span>]</code> <span class="src">stdlib/math/numtheory/numtheory.sl:126</span><a class="anchor" href="#next-prime">#</a></div><p class="api-doc">The smallest prime &gt;= n (2 for n &lt;= 2); none past the largest int prime.</p></div><div class="api-item" id="prev-prime"><div class="api-sig"><code><span class="k">fn</span> <span class="f">prev_prime</span>(n: <span class="t">int</span>) -&gt; <span class="t">opt</span>[<span class="t">int</span>]</code> <span class="src">stdlib/math/numtheory/numtheory.sl:147</span><a class="anchor" href="#prev-prime">#</a></div><p class="api-doc">The largest prime &lt;= n; none for n &lt; 2.</p></div><div class="api-item" id="primes-below"><div class="api-sig"><code><span class="k">fn</span> <span class="f">primes_below</span>(n: <span class="t">int</span>) -&gt; [<span class="t">int</span>]</code> <span class="src">stdlib/math/numtheory/numtheory.sl:169</span><a class="anchor" href="#primes-below">#</a></div><p class="api-doc">Every prime below n, ascending: the sieve of Eratosthenes over the odd numbers, n / 2 bytes of memory. Empty for n &lt;= 2.</p></div><div class="api-item" id="factor"><div class="api-sig"><code><span class="k">struct</span> Factor</code> <span class="src">stdlib/math/numtheory/numtheory.sl:201</span><a class="anchor" href="#factor">#</a></div></div><div class="api-item" id="factorize"><div class="api-sig"><code><span class="k">fn</span> <span class="f">factorize</span>(n: <span class="t">int</span>) -&gt; [Factor]</code> <span class="src">stdlib/math/numtheory/numtheory.sl:211</span><a class="anchor" href="#factorize">#</a></div><p class="api-doc">The prime factorization of |n|, ascending by prime: 360 is [{2, 3}, {3, 2}, {5, 1}]. Empty for 0, 1 and -1. Trial division by the small primes, then Pollard&#x27;s rho (Brent&#x27;s variant) on what is left, with is_prime deciding each part: fast for any int whose second-largest prime factor is below about 10^12.</p></div><div class="api-item" id="divisors"><div class="api-sig"><code><span class="k">fn</span> <span class="f">divisors</span>(n: <span class="t">int</span>) -&gt; [<span class="t">int</span>]</code> <span class="src">stdlib/math/numtheory/numtheory.sl:249</span><a class="anchor" href="#divisors">#</a></div><p class="api-doc">Every positive divisor of |n|, ascending; empty for 0.</p></div><div class="api-item" id="totient"><div class="api-sig"><code><span class="k">fn</span> <span class="f">totient</span>(n: <span class="t">int</span>) -&gt; <span class="t">int</span></code> <span class="src">stdlib/math/numtheory/numtheory.sl:270</span><a class="anchor" href="#totient">#</a></div><p class="api-doc">Euler&#x27;s totient: how many integers in [1, n] share no factor with n. 0 for n &lt;= 0.</p></div><div class="api-item" id="crt"><div class="api-sig"><code><span class="k">fn</span> <span class="f">crt</span>(residues: [<span class="t">int</span>], moduli: [<span class="t">int</span>]) -&gt; <span class="t">opt</span>[<span class="t">int</span>]</code> <span class="src">stdlib/math/numtheory/numtheory.sl:285</span><a class="anchor" href="#crt">#</a></div><p class="api-doc">The Chinese remainder theorem: the x in [0, lcm(moduli)) with x = residues[i] (mod moduli[i]) for every i. The moduli need not be coprime; none when the congruences contradict each other, a modulus is &lt;= 0, the lists differ in length, or the lcm overflows an int.</p></div><div class="api-item" id="binomial-mod"><div class="api-sig"><code><span class="k">fn</span> <span class="f">binomial_mod</span>(n: <span class="t">int</span>, k: <span class="t">int</span>, p: <span class="t">int</span>) -&gt; <span class="t">int</span></code> <span class="src">stdlib/math/numtheory/numtheory.sl:317</span><a class="anchor" href="#binomial-mod">#</a></div><p class="api-doc">n choose k modulo a prime p (Lucas&#x27;s theorem), for n and k too large to compute the coefficient itself; 0 for k outside [0, n]. p must be prime (it is not checked: a composite p gives a wrong answer, not an error).</p></div><div class="api-item" id="fibonacci"><div class="api-sig"><code><span class="k">fn</span> <span class="f">fibonacci</span>(n: <span class="t">int</span>) -&gt; <span class="t">opt</span>[<span class="t">int</span>]</code> <span class="src">stdlib/math/numtheory/numtheory.sl:339</span><a class="anchor" href="#fibonacci">#</a></div><p class="api-doc">The n-th Fibonacci number (F(0) = 0, F(1) = 1) by fast doubling; none for n &lt; 0 or past F(92), the last that fits an int.</p></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../../app.js" defer></script>
+</body>
+</html>

@@ -7,7 +7,7 @@
 ```slang
 // variables with inferred types
 let x = 10;              // int  (64-bit)
-let pi = 3.14;           // float (double)
+let pi = 3.14;           // float (double); 1e9 and 6.02e23 are floats too
 let name = "World";      // str
 let ok = true;           // bool
 
@@ -257,6 +257,13 @@ if flags & 0x01 != 0 { /* END_STREAM */ }
 Integer literals come in decimal, hex (`0xff`, `0xFF`) and binary
 (`0b1010`), and `_` may be used anywhere as a digit separator:
 `1_000_000`, `0xff_ff`, `0b1010_1010`.
+
+Float literals have a fraction, an exponent, or both: `3.14`, `1e9`,
+`6.02e23`, `1.5E-7`, `2e+3`. An exponent alone makes a float, as in Go
+and Rust, so `1e9` is `1000000000.0`, not an `int`. Separators work in
+floats too (`1_000.5`). A literal too large for a float (`1e400`) is a
+compile error, and so is a nonzero one too small to be anything but 0
+(`1e-400`); subnormals such as `4.9e-324` are kept.
 
 A literal too large for `i64` **is a `u64`**, not an overflowing `int`:
 `let mask = 18446744073709551615;` gives a `u64` holding that exact
@@ -1036,6 +1043,13 @@ Integer literals come in decimal, hex (`0xff`, `0xFF`) and binary
 (`0b1010`), and `_` may be used anywhere as a digit separator:
 `1_000_000`, `0xff_ff`, `0b1010_1010`.
 
+Float literals have a fraction, an exponent, or both: `3.14`, `1e9`,
+`6.02e23`, `1.5E-7`, `2e+3`. An exponent alone makes a float, as in Go
+and Rust, so `1e9` is `1000000000.0`, not an `int`. Separators work in
+floats too (`1_000.5`). A literal too large for a float (`1e400`) is a
+compile error, and so is a nonzero one too small to be anything but 0
+(`1e-400`); subnormals such as `4.9e-324` are kept.
+
 A literal too large for `i64` **is a `u64`**, not an overflowing `int`:
 `let mask = 18446744073709551615;` gives a `u64` holding that exact
 value, and `let x: int = 18446744073709551615;` is a compile error
@@ -1629,6 +1643,13 @@ if flags & 0x01 != 0 { /* END_STREAM */ }
 Integer literals come in decimal, hex (`0xff`, `0xFF`) and binary
 (`0b1010`), and `_` may be used anywhere as a digit separator:
 `1_000_000`, `0xff_ff`, `0b1010_1010`.
+
+Float literals have a fraction, an exponent, or both: `3.14`, `1e9`,
+`6.02e23`, `1.5E-7`, `2e+3`. An exponent alone makes a float, as in Go
+and Rust, so `1e9` is `1000000000.0`, not an `int`. Separators work in
+floats too (`1_000.5`). A literal too large for a float (`1e400`) is a
+compile error, and so is a nonzero one too small to be anything but 0
+(`1e-400`); subnormals such as `4.9e-324` are kept.
 
 A literal too large for `i64` **is a `u64`**, not an overflowing `int`:
 `let mask = 18446744073709551615;` gives a `u64` holding that exact

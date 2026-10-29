@@ -598,6 +598,15 @@ SL_MATH_FLT(f64, double, , uint64_t, 64)
         *out = (T)q;                                                          \
         return true;                                                          \
     }                                                                         \
+    static inline bool sl_math_mul_mod_##S(T a, T b, T m, T *out) {           \
+        if (m == 0)                                                           \
+            return false;                                                     \
+        W r = ((W)a * (W)b) % (W)m;                                           \
+        if (r != 0 && ((r < 0) != ((W)m < 0)))                                \
+            r += (W)m;                                                        \
+        *out = (T)r;                                                          \
+        return true;                                                          \
+    }                                                                         \
     static inline T sl_math_mul_hi_##S(T a, T b) {                            \
         return (T)(((W)a * (W)b) >> BITS);                                    \
     }                                                                         \

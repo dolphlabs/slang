@@ -270,7 +270,9 @@ strings encoding compress math builder byteutil flags sort http http2 httpc`.
 `math` takes any numeric type and returns that type (`math.abs(x)` of an `i32`
 is an `i32`): `math.sqrt`, `math.pi`, `math.round_to(x, 2)`, and for money
 `math.checked_add(a, b)` / `math.checked_mul(a, b)`, an `opt` that is `none` on
-overflow.
+overflow. `math/stats` (mean, median, stddev, quantile, correlation,
+regression, streaming `running()`/`digest()`, distributions) and
+`math/numtheory` (mod_pow, is_prime, factorize) are written over it.
 The standalone `argon` package provides bounded Argon2id password hashing
 with standard PHC strings; its native crypto calls require OpenSSL 3.2+.
 
