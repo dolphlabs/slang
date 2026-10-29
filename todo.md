@@ -4585,3 +4585,11 @@ segmented-free odd-only sieve, Pollard-Brent rho (a product of two 10-digit
 primes splits in milliseconds), CRT for non-coprime moduli, Lucas
 binomial_mod, fast-doubling Fibonacci. Each checked against Python.
 Next: math/complex and fixed-size math/linalg (plan phase 3).
+
+## Changed: math.popcount uses POPCNT on x86-64 (2026-10-29)
+
+x86-64's baseline lacks POPCNT, so __builtin_popcountll compiled to a
+shift-and-mask sequence: 1.7 ns a call against Go's 1.1 (Go checks the CPU
+at run time). sl_math_popcount64 now does too -- __builtin_cpu_supports,
+then the instruction as inline asm, which stays inlinable -- and runs at
+0.9-1.1 ns. arm64 and -mpopcnt builds are unchanged.
