@@ -201,11 +201,11 @@ impl Poisson {
         if k < 0 {
             return 0.0;
         }
-        let terms: [float] = [];
+        let p = 0.0;
         for i in 0..k + 1 {
-            push(terms, self.pmf(i));
+            p += self.pmf(i);
         }
-        return math.min(sum(terms), 1.0);
+        return math.min(p, 1.0);
     }
 }
 
@@ -265,10 +265,10 @@ impl Binomial {
         if k >= self.n {
             return 1.0;
         }
-        let terms: [float] = [];
+        let p = 0.0;
         for i in 0..k + 1 {
-            push(terms, self.pmf(i));
+            p += self.pmf(i);
         }
-        return math.min(sum(terms), 1.0);
+        return math.min(p, 1.0);
     }
 }
