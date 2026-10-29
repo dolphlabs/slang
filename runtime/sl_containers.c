@@ -997,6 +997,10 @@ static void sl_arr_push(sl_arr *a, void *val, size_t esz) {
     sl_arr_reserve(a, a->len + 1);
     memcpy(a->data + (size_t)a->len * esz, val, esz);
     a->len++;
+    /* A pointer-free element can reference nothing young, and the tracer
+     * never reads those slots (sl_gc_trace_arr): no barrier. */
+    if (a->elem_is_ptr == SL_ELEM_NOPTR)
+        return;
     /* Element store into a potentially-old container: only this
      * position is new (gc_clean). sl_gc_remember_obj no-ops for young
      * containers; the remembered flag dedups repeats. */
