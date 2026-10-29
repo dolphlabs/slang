@@ -388,26 +388,40 @@ static sl_res_int_str *sl_proc_wait(long long pid_val, sl_until deadline) {
         return sl_proc_err_int("timeout");
     }
 
+    /* Parked on the child's exit pipe until it is readable -- but a wake is
+     * not an exit: sl_reactor_kick wakes every parked task at shutdown
+     * (SIGINT, SIGTERM) so that loops polling proc.shutdown_requested()
+     * run, whatever their descriptors say. proc.wait used to take that
+     * wake, find the child still running, and return "proc.wait: wait
+     * failed"; zokor's watcher read the error as the server crashing,
+     * forgot it, and left it running in its own process group when it
+     * exited. So wait again until the child has exited or the deadline
+     * passes. */
     if (c->exit_fd >= 0) {
-        sl_rt_preempt_enable();
-        int wr = sl_reactor_wait_until(c->exit_fd, SL_REACTOR_READ, 0, deadline);
-        sl_rt_preempt_disable();
-
-        if (wr == -2) {
+        for (;;) {
             sl_rt_preempt_enable();
-            return sl_proc_err_int("timeout");
-        }
+            int wr = sl_reactor_wait_until(c->exit_fd, SL_REACTOR_READ, 0, deadline);
+            sl_rt_preempt_disable();
 
-        r = waitpid(pid, &status, WNOHANG);
-        if (r == pid) {
-            c->reaped = 1;
-            c->status = WIFEXITED(status) ? WEXITSTATUS(status) : (WIFSIGNALED(status) ? 128 + WTERMSIG(status) : status);
-            if (c->exit_fd >= 0) {
-                close(c->exit_fd);
-                c->exit_fd = -1;
+            if (wr == -2 || (deadline && sl_until_hit(deadline))) {
+                sl_rt_preempt_enable();
+                return sl_proc_err_int("timeout");
             }
-            sl_rt_preempt_enable();
-            return sl_proc_ok_int(c->status);
+
+            r = waitpid(pid, &status, WNOHANG);
+            if (r == 0)
+                continue; /* still running: woken, not exited */
+            if (r == pid) {
+                c->reaped = 1;
+                c->status = WIFEXITED(status) ? WEXITSTATUS(status) : (WIFSIGNALED(status) ? 128 + WTERMSIG(status) : status);
+                if (c->exit_fd >= 0) {
+                    close(c->exit_fd);
+                    c->exit_fd = -1;
+                }
+                sl_rt_preempt_enable();
+                return sl_proc_ok_int(c->status);
+            }
+            break; /* waitpid failed: reported below */
         }
     } else {
         sl_rt_preempt_enable();

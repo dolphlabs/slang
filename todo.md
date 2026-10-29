@@ -4593,3 +4593,16 @@ shift-and-mask sequence: 1.7 ns a call against Go's 1.1 (Go checks the CPU
 at run time). sl_math_popcount64 now does too -- __builtin_cpu_supports,
 then the instruction as inline asm, which stays inlinable -- and runs at
 0.9-1.1 ns. arm64 and -mpopcnt builds are unchanged.
+
+## Fixed: proc.wait failed when a shutdown signal woke it (2026-10-29)
+
+sl_reactor_kick wakes every parked task at SIGINT/SIGTERM so loops polling
+proc.shutdown_requested() run. proc.wait, parked on a child's exit pipe,
+woke too, found the child running and returned "proc.wait: wait failed".
+zokor watch read that as its server crashing (exit code 1), forgot the
+server, and on exit left it running in its own process group: Ctrl-C did
+not stop it, and it went on writing to the terminal. 31 such orphans were
+found on one machine (zokor_cli's watch tests leaked them too). proc.wait
+now waits again until the child exits or the deadline passes;
+tests/proc_wait_shutdown fails on the old runtime. The watcher's own half
+is fixed in zokor_cli.
