@@ -468,6 +468,27 @@ char *gen_builtin_call(CG *cg, Expr *e, int *handled) {
         v = sequence_one(cg, seq_id, 1, ctype_of(cg, elem), elem, v,
                          e->as.call.args[1], &prelude);
         const char *ec = ctype_of(cg, elem);
+        /* An element with no GC reference in it ([int], [float], a
+         * pointer-free struct) needs no write barrier, and while the list
+         * has room nothing can allocate: the store is the whole push, with
+         * no safepoint and no call. Only growing takes the bracketed path.
+         * Every push used to take it -- a bracket, a call, a preemption
+         * bracket and a barrier: 30-200 ns, where Go's append is ~2 ns. */
+        if (elem_trace_flag(cg, elem) == 2) {
+            char *slow = wrap_safepoint(
+                cg, e, NULL, NULL,
+                xasprintf("sl_arr_push(_sl_a, &_sl_v, sizeof(%s))", ec));
+            char *fast = xasprintf(
+                "({ %s _sl_v = %s; sl_arr *_sl_a = %s; "
+                "if (__builtin_expect(_sl_a->len < _sl_a->cap, 1)) "
+                "((%s *)(void *)_sl_a->data)[_sl_a->len++] = _sl_v; "
+                "else %s; _sl_a; })",
+                ec, v, xs, ec, slow);
+            cg->ambient_count = ambient_mark;
+            if (prelude.data && prelude.data[0])
+                return xasprintf("({ %s%s; })", prelude.data, fast);
+            return fast;
+        }
         char *inner = xasprintf(
             "({ %s _sl_v = %s; sl_arr *_sl_a = %s; sl_arr_push(_sl_a, "
             "&_sl_v, sizeof(%s)); _sl_a; })",

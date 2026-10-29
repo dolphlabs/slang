@@ -4586,6 +4586,27 @@ primes splits in milliseconds), CRT for non-coprime moduli, Lucas
 binomial_mod, fast-doubling Fibonacci. Each checked against Python.
 Next: math/complex and fixed-size math/linalg (plan phase 3).
 
+## Changed: math.popcount uses POPCNT on x86-64 (2026-10-29)
+
+x86-64's baseline lacks POPCNT, so __builtin_popcountll compiled to a
+shift-and-mask sequence: 1.7 ns a call against Go's 1.1 (Go checks the CPU
+at run time). sl_math_popcount64 now does too -- __builtin_cpu_supports,
+then the instruction as inline asm, which stays inlinable -- and runs at
+0.9-1.1 ns. arm64 and -mpopcnt builds are unchanged.
+
+## Fixed: proc.wait failed when a shutdown signal woke it (2026-10-29)
+
+sl_reactor_kick wakes every parked task at SIGINT/SIGTERM so loops polling
+proc.shutdown_requested() run. proc.wait, parked on a child's exit pipe,
+woke too, found the child running and returned "proc.wait: wait failed".
+zokor watch read that as its server crashing (exit code 1), forgot the
+server, and on exit left it running in its own process group: Ctrl-C did
+not stop it, and it went on writing to the terminal. 31 such orphans were
+found on one machine (zokor_cli's watch tests leaked them too). proc.wait
+now waits again until the child exits or the deadline passes;
+tests/proc_wait_shutdown fails on the old runtime. The watcher's own half
+is fixed in zokor_cli.
+
 ## Changed: a call to a leaf no longer puts a loop on per-iteration brackets (2026-10-29)
 
 A `while` loop takes its safepoint once around the loop (a cheap poll per
@@ -4597,6 +4618,7 @@ per iteration: stats.sum's first version ran at half speed, and sort's
 partition loop (lt_f per comparison) the same. They count as leaves now.
 sort's typed quicksorts also swap inline (swap_at indexes, so it is not a
 leaf), and lt_f drops two redundant comparisons: sort.floats on 1M random
-floats 400-610 ms -> 264-308 ms. Go's sort.Float64s is about 85 ms; most of
-the rest is the bounds check on every element read (sl_arr_get checks the
-length and the element size), which wants bounds-check elimination.
+floats 400-610 ms -> 264-308 ms. Go's sort.Float64s is about 85 ms. Of
+the rest, bounds checks cost 5-10%; the per-iteration poll (a counter and a
+branch, so GC can stop the loop) costs 20-35%, and dropping it needs GC to
+stop threads by signal instead of waiting for them to poll.

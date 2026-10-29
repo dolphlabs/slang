@@ -346,6 +346,30 @@ SL_MATH_ANY_FLT(f64, double, )
 SL_MATH_FLT(f32, float, f, uint32_t, 32)
 SL_MATH_FLT(f64, double, , uint64_t, 64)
 
+/* The population count of a 64-bit word. x86-64's baseline has no
+ * POPCNT instruction, so without -mpopcnt the compiler's builtin is a
+ * dozen shift-and-mask instructions: 1.7 ns a call against Go's 1.1, which
+ * checks the CPU at run time and uses the instruction. So does this:
+ * __builtin_cpu_supports reads a feature word the compiler runtime fills
+ * in before main, and the instruction goes in as inline asm, which needs
+ * no target attribute and so stays inlinable. Every x86-64 CPU since 2008
+ * takes that branch. arm64 (and any build with -mpopcnt) has the
+ * instruction and gets the builtin directly. */
+#if defined(__x86_64__) && !defined(__POPCNT__)
+static inline long long sl_math_popcount64(uint64_t v) {
+    if (__builtin_expect(__builtin_cpu_supports("popcnt"), 1)) {
+        uint64_t r;
+        __asm__("popcntq %1, %0" : "=r"(r) : "r"(v));
+        return (long long)r;
+    }
+    return __builtin_popcountll(v);
+}
+#else
+static inline long long sl_math_popcount64(uint64_t v) {
+    return __builtin_popcountll(v);
+}
+#endif
+
 /* ---- integers ----
  * S suffix, T type, U its unsigned type, W a type twice as wide (for
  * mul_div and mul_hi; __int128 for the 64-bit ones), BITS, SIGNED,
@@ -619,7 +643,7 @@ SL_MATH_FLT(f64, double, , uint64_t, 64)
         return v ? __builtin_ctzll((unsigned long long)v) : BITS;             \
     }                                                                         \
     static inline long long sl_math_popcount_##S(T x) {                       \
-        return __builtin_popcountll((unsigned long long)(U)x);                \
+        return sl_math_popcount64((uint64_t)(U)x);                            \
     }                                                                         \
     static inline long long sl_math_bit_len_##S(T x) {                        \
         return BITS - sl_math_leading_zeros_##S(x);                           \

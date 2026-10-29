@@ -39,6 +39,8 @@ hb
 tests/runtime/test_gc
 tests/runtime/test_preempt
 tests/runtime/test_fatal
+tests/runtime/test_http_date
+tests/runtime/test_dns_records
 
 # bench/suite: build output, generated datasets and language toolchain
 # artifacts. bench/results/<run id>/ IS committed (that's the deliverable).

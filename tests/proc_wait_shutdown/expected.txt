@@ -1,0 +1,3 @@
+child exit code 7
+shutdown requested true
+waited for the exit true

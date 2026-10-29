@@ -33,26 +33,45 @@
 import "math";
 import "sort";
 
-// The sum of xs, compensated (Neumaier): the rounding error of each
-// addition is carried and added back at the end. 0 for an empty list; an
-// infinity or NaN in xs gives the plain sum's inf or NaN.
+// The sum of xs, compensated: the exact rounding error of each addition
+// (Knuth's TwoSum) is carried and added back at the end. 0 for an empty
+// list; an infinity or NaN in xs gives the plain sum's inf or NaN.
+//
+// Two independent running sums take alternate elements, so consecutive
+// additions do not wait on each other: one chain held a sum to the
+// latency of a float add per element, about half the speed of a plain
+// loop. Every list function here sums the same way, in place -- they used
+// to collect the terms in a list first and sum that, which for variance
+// on a million values made the pushes 90% of the time.
+//
+// A `for x in xs` loop, not a `while` over indices: the for loop takes
+// its safepoint once around the loop and reads elements unchecked, where a
+// while loop brackets every iteration and bounds-checks every index --
+// twice the time per element.
 pub fn sum[T](xs: [T]) -> float {
-    let s = 0.0;
-    let c = 0.0;
+    let s0 = 0.0;
+    let c0 = 0.0;
+    let s1 = 0.0;
+    let c1 = 0.0;
+    let odd = false;
     for x in xs {
         let v = x as float;
-        let t = s + v;
-        if math.abs(s) >= math.abs(v) {
-            c += (s - t) + v;
+        if odd {
+            let t1 = s1 + v;
+            c1 += two_sum_err(s1, v, t1);
+            s1 = t1;
         } else {
-            c += (v - t) + s;
+            let t0 = s0 + v;
+            c0 += two_sum_err(s0, v, t0);
+            s0 = t0;
         }
-        s = t;
+        odd = !odd;
     }
+    let s = s0 + s1;
     if !math.is_finite(s) {
         return s;
     }
-    return s + c;
+    return s + (c0 + c1 + two_sum_err(s0, s1, s));
 }
 
 // The product of xs; 1 for an empty list.
@@ -78,15 +97,19 @@ pub fn weighted_mean[T, W](xs: [T], ws: [W]) -> float {
     if len(xs) != len(ws) || len(xs) == 0 {
         return math.nan;
     }
-    let num: [float] = [];
+    let s = 0.0;
+    let c = 0.0;
     for i in 0..len(xs) {
-        push(num, (xs[i] as float) * (ws[i] as float));
+        let v = (xs[i] as float) * (ws[i] as float);
+        let t = s + v;
+        c += two_sum_err(s, v, t);
+        s = t;
     }
     let wsum = sum(ws);
     if wsum == 0.0 {
         return math.nan;
     }
-    return sum(num) / wsum;
+    return (s + c) / wsum;
 }
 
 // The geometric mean, exp(mean(log x)): for growth rates and ratios. 0 if
@@ -95,7 +118,8 @@ pub fn geometric_mean[T](xs: [T]) -> float {
     if len(xs) == 0 {
         return math.nan;
     }
-    let logs: [float] = [];
+    let s = 0.0;
+    let c = 0.0;
     for x in xs {
         let v = x as float;
         if v < 0.0 {
@@ -104,9 +128,12 @@ pub fn geometric_mean[T](xs: [T]) -> float {
         if v == 0.0 {
             return 0.0;
         }
-        push(logs, math.log(v));
+        let l = math.log(v);
+        let t = s + l;
+        c += two_sum_err(s, l, t);
+        s = t;
     }
-    return math.exp(mean(logs));
+    return math.exp((s + c) / (len(xs) as float));
 }
 
 // The harmonic mean, n / sum(1/x): for averaging rates. 0 if any value is
@@ -115,7 +142,8 @@ pub fn harmonic_mean[T](xs: [T]) -> float {
     if len(xs) == 0 {
         return math.nan;
     }
-    let inv: [float] = [];
+    let s = 0.0;
+    let c = 0.0;
     for x in xs {
         let v = x as float;
         if v < 0.0 {
@@ -124,9 +152,12 @@ pub fn harmonic_mean[T](xs: [T]) -> float {
         if v == 0.0 {
             return 0.0;
         }
-        push(inv, 1.0 / v);
+        let r = 1.0 / v;
+        let t = s + r;
+        c += two_sum_err(s, r, t);
+        s = t;
     }
-    return (len(xs) as float) / sum(inv);
+    return (len(xs) as float) / (s + c);
 }
 
 // The smallest element; none for an empty list. NaN never compares
@@ -351,11 +382,15 @@ pub fn covariance[T, U](xs: [T], ys: [U]) -> float {
     }
     let mx = mean(xs);
     let my = mean(ys);
-    let terms: [float] = [];
+    let s = 0.0;
+    let c = 0.0;
     for i in 0..n {
-        push(terms, ((xs[i] as float) - mx) * ((ys[i] as float) - my));
+        let v = ((xs[i] as float) - mx) * ((ys[i] as float) - my);
+        let t = s + v;
+        c += two_sum_err(s, v, t);
+        s = t;
     }
-    return sum(terms) / ((n - 1) as float);
+    return (s + c) / ((n - 1) as float);
 }
 
 // Pearson's correlation coefficient r, in [-1, 1]; NaN when the lengths
@@ -430,22 +465,34 @@ pub fn linear_regression[T, U](xs: [T], ys: [U]) -> Fit {
     }
     let mx = mean(xs);
     let my = mean(ys);
-    let sxy: [float] = [];
-    let sxx: [float] = [];
-    let syy: [float] = [];
+    let sxy = 0.0;
+    let cxy = 0.0;
+    let sxx = 0.0;
+    let cxx = 0.0;
+    let syy = 0.0;
+    let cyy = 0.0;
     for i in 0..n {
         let dx = (xs[i] as float) - mx;
         let dy = (ys[i] as float) - my;
-        push(sxy, dx * dy);
-        push(sxx, dx * dx);
-        push(syy, dy * dy);
+        let pxy = dx * dy;
+        let txy = sxy + pxy;
+        cxy += two_sum_err(sxy, pxy, txy);
+        sxy = txy;
+        let pxx = dx * dx;
+        let txx = sxx + pxx;
+        cxx += two_sum_err(sxx, pxx, txx);
+        sxx = txx;
+        let pyy = dy * dy;
+        let tyy = syy + pyy;
+        cyy += two_sum_err(syy, pyy, tyy);
+        syy = tyy;
     }
-    let vxx = sum(sxx);
+    let vxx = sxx + cxx;
     if vxx == 0.0 {
         return none_fit;
     }
-    let vxy = sum(sxy);
-    let vyy = sum(syy);
+    let vxy = sxy + cxy;
+    let vyy = syy + cyy;
     let slope = vxy / vxx;
     let r2 = 1.0;
     if vyy != 0.0 {
@@ -505,15 +552,27 @@ pub fn histogram[T](xs: [T], bins: int) -> Histogram {
 
 // ---- helpers ----
 
+// The rounding error of t = a + b, exactly (Knuth's TwoSum): a + b ==
+// t + two_sum_err(a, b, t) in real numbers, whatever a's and b's
+// magnitudes, with no branch.
+fn two_sum_err(a: float, b: float, t: float) -> float {
+    let bb = t - a;
+    return (a - (t - bb)) + (b - bb);
+}
+
 // sum((x - mean)^2), compensated
 fn sum_sq_dev[T](xs: [T]) -> float {
     let m = mean(xs);
-    let sq: [float] = [];
+    let s = 0.0;
+    let c = 0.0;
     for x in xs {
         let d = (x as float) - m;
-        push(sq, d * d);
+        let v = d * d;
+        let t = s + v;
+        c += two_sum_err(s, v, t);
+        s = t;
     }
-    return sum(sq);
+    return s + c;
 }
 
 // the k-th central moment, mean((x - mean)^k); NaN for an empty list
@@ -522,11 +581,15 @@ fn central_moment[T](xs: [T], k: int) -> float {
         return math.nan;
     }
     let m = mean(xs);
-    let terms: [float] = [];
+    let s = 0.0;
+    let c = 0.0;
     for x in xs {
-        push(terms, math.powi((x as float) - m, k));
+        let v = math.powi((x as float) - m, k);
+        let t = s + v;
+        c += two_sum_err(s, v, t);
+        s = t;
     }
-    return sum(terms) / (len(xs) as float);
+    return (s + c) / (len(xs) as float);
 }
 
 // A sorted copy of xs, for any element type that `<` orders: heapsort,
