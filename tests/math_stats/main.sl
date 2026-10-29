@@ -1,7 +1,9 @@
 // math/stats against values checked by hand and against Python's statistics
 // module: the descriptive functions on int and float lists, Running merged
 // across two halves of a stream, Ewma, a t-digest's quantiles on 100,000
-// values within tolerance, and the distributions at known points.
+// values within tolerance, and the distributions at known points. Values
+// computed through libm (erfc, exp, lgamma, pow) are printed to 12
+// significant digits: glibc and Apple's libm differ in the last ulp.
 import "math/stats";
 import "math";
 let xs = [12.5, 9.0, 14.25, 11.0];
@@ -23,8 +25,8 @@ println(fit.at(10.0));
 println(inspect(stats.histogram(is, 4)));
 println(stats.sum([0.1, 0.2, 0.3]));
 println(stats.mad(is));
-println(stats.skewness(is));
-println(stats.kurtosis(is));
+println(math.format(stats.skewness(is), 12));
+println(math.format(stats.kurtosis(is), 12));
 println(inspect(stats.quartiles(is)));
 let r = stats.running();
 r.add(2.0).add(4.0).add(4.0).add(4.0).add(5.0).add(5.0).add(7.0).add(9.0);
@@ -70,17 +72,17 @@ println(d.count());
 println(d.max());
 // distributions
 let n = stats.normal(100.0, 15.0);
-println(n.cdf(130.0));
-println(n.quantile(0.95));
-println(n.pdf(100.0));
-println(stats.normal(0.0, 1.0).cdf(-10.0));
-println(stats.normal(0.0, 1.0).quantile(0.975));
-println(stats.exponential(2.0).cdf(1.0));
-println(stats.exponential(2.0).quantile(0.5));
-println(stats.poisson(3.0).pmf(5));
-println(stats.poisson(3.0).cdf(2));
+println(math.format(n.cdf(130.0), 12));
+println(math.format(n.quantile(0.95), 12));
+println(math.format(n.pdf(100.0), 12));
+println(math.format(stats.normal(0.0, 1.0).cdf(-10.0), 12));
+println(math.format(stats.normal(0.0, 1.0).quantile(0.975), 12));
+println(math.format(stats.exponential(2.0).cdf(1.0), 12));
+println(math.format(stats.exponential(2.0).quantile(0.5), 12));
+println(math.format(stats.poisson(3.0).pmf(5), 12));
+println(math.format(stats.poisson(3.0).cdf(2), 12));
 println(stats.binomial(10, 0.5).pmf(5));
 println(stats.binomial(10, 0.5).cdf(5));
 println(stats.uniform(0.0, 10.0).quantile(0.25));
-println(stats.log_normal(0.0, 1.0).cdf(1.0));
+println(math.format(stats.log_normal(0.0, 1.0).cdf(1.0), 12));
 println(math.is_nan(stats.normal(0.0, 0.0).cdf(1.0)));
