@@ -433,6 +433,24 @@ static int expr_is_leaf(CG *cg, Expr *e) {
             !strcmp(e->as.call.name, "len") && e->as.call.nargs == 1 &&
             !e->as.call.callee)
             return expr_is_leaf(cg, e->as.call.args[0]);
+        /* A call to a leaf -- a slang function compute_leaf_fns proved
+         * cannot collect (no loop, allocation, park, index or slang call),
+         * or a leaf native (math.sqrt, strings.find) -- is already emitted
+         * with no bracket, so it is as much a leaf as the arithmetic
+         * around it. Refusing it put every loop that called one on the
+         * per-iteration bracket: sort's partition loop (lt_f per
+         * comparison) and any loop of math, about 2x per element.
+         * The name is looked up from the loop head, where a local
+         * function value bound inside the body is not yet in scope; such
+         * a call is generated as a function-value call with its own
+         * bracket anyway, a safepoint inside the hoisted one. */
+        if (e->kind == EX_CALL &&
+            (user_leaf_call(cg, e) || native_leaf_call(cg, e))) {
+            for (int i = 0; i < e->as.call.nargs; i++)
+                if (!expr_is_leaf(cg, e->as.call.args[i]))
+                    return 0;
+            return 1;
+        }
         return 0;
     }
     case EX_LIST:
@@ -511,7 +529,8 @@ static int stmt_is_leaf(CG *cg, Stmt *s) {
         return 0;
     case ST_EXPR: {
         Expr *e = s->as.expr_stmt.expr;
-        if (e->kind == EX_CALL)
+        if (e->kind == EX_CALL && !user_leaf_call(cg, e) &&
+            !native_leaf_call(cg, e))
             return 0;
         return expr_is_leaf(cg, e);
     }

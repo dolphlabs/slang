@@ -4585,3 +4585,18 @@ segmented-free odd-only sieve, Pollard-Brent rho (a product of two 10-digit
 primes splits in milliseconds), CRT for non-coprime moduli, Lucas
 binomial_mod, fast-doubling Fibonacci. Each checked against Python.
 Next: math/complex and fixed-size math/linalg (plan phase 3).
+
+## Changed: a call to a leaf no longer puts a loop on per-iteration brackets (2026-10-29)
+
+A `while` loop takes its safepoint once around the loop (a cheap poll per
+iteration) only if its body is a leaf, and expr_is_leaf called every call
+non-leaf except len -- including calls to leaf slang functions
+(compute_leaf_fns) and leaf natives (math.sqrt), which are emitted without
+a bracket of their own. So any loop calling one paid an enter/exit pair
+per iteration: stats.sum's first version ran at half speed, and sort's
+partition loop (lt_f per comparison) the same. They count as leaves now.
+sort's typed quicksorts also swap inline (swap_at indexes, so it is not a
+leaf), and lt_f drops two redundant comparisons: sort.floats on 1M random
+floats 400-610 ms -> 264-308 ms. Go's sort.Float64s is about 85 ms; most of
+the rest is the bounds check on every element read (sl_arr_get checks the
+length and the element size), which wants bounds-check elimination.
