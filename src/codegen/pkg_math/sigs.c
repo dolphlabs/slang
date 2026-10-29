@@ -179,6 +179,11 @@ const NatSig MATH_SIGS[] = {
     {"math", "mul_div", 3, {NA_NUM_INT, NA_NUM_INT, NA_NUM_INT}, "opt[@]", 0},
     /* the high half of the full product a * b */
     {"math", "mul_hi", 2, {NA_NUM_INT, NA_NUM_INT}, "@", 0},
+    /* (a * b) mod m, the product held at twice the width, so modular
+       arithmetic near the type's limit cannot overflow (math/numtheory's
+       mod_pow, Miller-Rabin). The result has m's sign, as rem_euclid's
+       does for a positive m; none when m is 0. */
+    {"math", "mul_mod", 3, {NA_NUM_INT, NA_NUM_INT, NA_NUM_INT}, "opt[@]", 0},
 
     /* --- bits, on the argument's own width --- */
     {"math", "popcount", 1, {NA_NUM_INT}, "int", 0},

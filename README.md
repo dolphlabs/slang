@@ -1047,7 +1047,7 @@ Concurrency below.
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` / `import "io";` / `import "encoding";` like any other package.
 
-`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil` and `sort` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats` and `math/numtheory` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
 then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
 compiler's `SLANG_STDLIB_DIR`).
@@ -3296,6 +3296,88 @@ zero divisor, `MIN / -1`. `div_floor`, `div_ceil`, `div_euclid` and
 argument, and `align_up`/`align_down` on an alignment that is not a
 power of two. Programs link libm (`-lm`) whether or not they import
 `math`; on macOS that is libSystem.
+
+`math.mul_mod(a, b, m)` is `(a * b) mod m` with the product held at
+twice the width, so modular arithmetic near the type's limit cannot
+overflow; `math/numtheory` is built on it.
+
+#### `math/stats`
+
+Statistics over lists of any numeric type, and streaming accumulators
+for numbers that never all exist at once. Written in slang over `math`.
+
+```slang
+import "math/stats";
+
+let xs = [12.5, 9.0, 14.25, 11.0];
+stats.mean(xs);                      // 11.6875
+stats.median(xs);                    // 11.75
+stats.stddev(xs);                    // sample (n - 1); pstddev is population
+stats.quantile(xs, 0.9);             // R type 7 / NumPy's default
+stats.correlation(xs, ys);           // Pearson's r; spearman for ranks
+let fit = stats.linear_regression(xs, ys);   // fit.slope, fit.intercept, fit.r2, fit.at(x)
+let h = stats.histogram(xs, 10);     // h.edges, h.counts
+
+// Streaming, O(1) per value, mergeable across tasks:
+let lat = stats.running();           // count, mean, variance, min, max
+lat.add(elapsed_ms);
+let p = stats.digest();              // quantiles of a stream (t-digest)
+p.add(elapsed_ms);
+p.quantile(0.99);
+
+stats.normal(100.0, 15.0).cdf(130.0);        // 0.9772498680518208
+stats.normal(0.0, 1.0).quantile(0.975);      // 1.9599639845400538
+stats.poisson(3.0).pmf(5);
+```
+
+- **Center and spread:** `sum` (compensated), `product`, `mean`,
+  `weighted_mean`, `geometric_mean`, `harmonic_mean`, `median`, `mode`,
+  `min`, `max`, `spread`, `variance`/`pvariance`, `stddev`/`pstddev`,
+  `mad`, `zscores`, `skewness`, `kurtosis` (excess).
+- **Order:** `quantile`, `percentile`, `quartiles`, `iqr`, `ranks`;
+  `sorted_floats` and `quantile_sorted` to sort once and ask many times.
+- **Two lists:** `covariance`, `correlation`, `spearman`,
+  `linear_regression`.
+- **Streaming:** `running()` (Welford), `ewma(alpha)` and
+  `ewma_half_life(n)`, `digest()` (a merging t-digest: p99 and p999 stay
+  accurate in about 100 centroids). Each has `add`, and `running` and
+  `digest` `merge`.
+- **Distributions:** `normal`, `log_normal`, `uniform`, `exponential`
+  (`pdf`, `cdf`, `quantile`), `poisson` and `binomial` (`pmf`, `cdf`).
+
+A result with no value for its input -- the mean of no numbers, the
+variance of one, a correlation with a constant list -- is NaN, which
+propagates and tests true with `math.is_nan`; functions that return one
+of the elements (`min`, `max`, `mode`) return an `opt` of the element
+type. Sums are compensated (Neumaier) and variances are two-pass around
+the mean, so neither drifts on long or offset data: `stats.sum([0.1,
+0.2, 0.3])` is `0.6`.
+
+#### `math/numtheory`
+
+Modular arithmetic, primes and factorization on `int`, over
+`math.mul_mod` so a modulus near 2^62 is as safe as a small one.
+
+```slang
+import "math/numtheory";
+
+numtheory.mod_pow(2, 100, 1000000007);       // 976371285
+numtheory.mod_inv(3, 7) ?? 0;                // 5
+numtheory.is_prime(9223372036854775783);     // true: exact for every int
+numtheory.factorize(360);                    // [{p: 2, k: 3}, {p: 3, k: 2}, {p: 5, k: 1}]
+numtheory.primes_below(30);                  // [2, 3, 5, 7, 11, 13, 17, 19, 23, 29]
+numtheory.crt([2, 3, 2], [3, 5, 7]) ?? -1;   // 23
+```
+
+`mod_pow`, `mod_mul`, `mod_inv`, `ext_gcd` (a `Bezout { g, x, y }`),
+`is_prime` (deterministic Miller-Rabin with the seven bases proven for
+64 bits), `next_prime`, `prev_prime`, `primes_below` (a sieve over the
+odd numbers), `factorize` (trial division, then Pollard's rho with
+Brent's cycle detection), `divisors`, `totient`, `crt` (moduli need not
+be coprime), `binomial_mod` (Lucas, for a prime modulus) and
+`fibonacci` (exact through F(92)). A modulus must be positive: a
+function given one <= 0 returns `none`, 0 or `false` rather than
+panicking, and no result is negative.
 
 #### `sort`
 

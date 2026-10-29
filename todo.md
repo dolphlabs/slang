@@ -4561,16 +4561,27 @@ index) ends its message with "(index 0, length 0)"; math's panics use
 sl_rt_fail and do not. Exponent literals (`1e21`) do not parse.
 Next: math/numtheory and math/stats (plan phase 2).
 
-## Changed: the generic instance warning measures cost (2026-10-29)
+## Added: math/stats and math/numtheory (2026-10-29)
 
-slangc warned "program instantiates N generic types/functions (threshold
-64)" on every zokor service: say has 931 instances, almost all a short
-rows_as / query_all / transaction per row or result type, and nothing in
-the warning said which or whether they mattered. It now measures the C
-each instance body emits in the real run, per template, and warns only
-when instances are over 25% (SLANG_INSTANCE_WARN, a percentage now) of the
-program's own C, the runtime excluded, and over 512 KB -- naming the five
-largest templates with their copy counts and size. say: 887 function
-copies, 2.4 MB of 12.7 MB (18%), no warning; the largest is
-zokor.transaction, 43 copies at about 7.5 KB each, the one worth making a
-thin generic shell over a non-generic core if it ever matters.
+Phase 2 of math-plan.md: the first nested stdlib packages (import
+"math/stats" while "math" itself stays native; the docs generator now names
+a stdlib package by its whole directory path, not its first component, or
+the two would have shared a page). Both are slang over `math`, plus one new
+native: math.mul_mod, (a * b) mod m at twice the width, which Miller-Rabin
+and mod_pow need near 2^63.
+
+stats: compensated sums and two-pass moments; quantiles R type 7;
+Spearman via tie-averaged ranks; least squares with r2; histograms;
+Running (Welford, merged by Chan's formula), Ewma, and a merging t-digest
+(k1 scale, compression 100): p50/p99/p999 on 100,000 values within 1%,
+0.1% and 0.02% of rank in under 200 centroids. Distributions: normal (cdf
+through erfc, quantile through erf_inv), log-normal, uniform, exponential,
+Poisson and binomial, exact where the coefficient is (binomial(10, 0.5) at
+5 is 0.24609375 exactly; log space only past that). Empty input gives NaN,
+not a panic; element-returning functions give an opt.
+
+numtheory: deterministic Miller-Rabin (Sinclair's seven bases),
+segmented-free odd-only sieve, Pollard-Brent rho (a product of two 10-digit
+primes splits in milliseconds), CRT for non-coprime moduli, Lucas
+binomial_mod, fast-doubling Fibonacci. Each checked against Python.
+Next: math/complex and fixed-size math/linalg (plan phase 3).

@@ -84,6 +84,10 @@ argument, and `align_up`/`align_down` on an alignment that is not a
 power of two. Programs link libm (`-lm`) whether or not they import
 `math`; on macOS that is libSystem.
 
+`math.mul_mod(a, b, m)` is `(a * b) mod m` with the product held at
+twice the width, so modular arithmetic near the type's limit cannot
+overflow; `math/numtheory` is built on it.
+
 ## API
 
 ### `math.abs(T) -> T`
@@ -323,6 +327,8 @@ power of two. Programs link libm (`-lm`) whether or not they import
 ### `math.mul_div(T, T, T) -> opt[T]`
 
 ### `math.mul_hi(T, T) -> T`
+
+### `math.mul_mod(T, T, T) -> opt[T]`
 
 ### `math.popcount(T) -> int`
 
