@@ -32,11 +32,12 @@ strings.join_bytes(parts, b",");        // the same for [bytes]: sized once, cop
 strings.from_float(0.1 + 0.2);          // "0.30000000000000004"
 ```
 
-`to_str` prints a float with six significant digits, which suits output
-and loses information: `to_str(123456789.125)` is `"1.23457e+08"`.
 `from_float` returns the shortest text that `to_float` reads back as
-exactly the same number — use it whenever a float is stored or sent.
-NaN and the infinities come out as `NaN`, `Infinity` and `-Infinity`.
+exactly the same number, as `to_str`, `println`, `inspect` and
+`json.encode` now do too (they used six significant digits, so
+`to_str(123456789.125)` was `"1.23457e+08"`). The difference is the
+names: `from_float` writes NaN and the infinities as `NaN`, `Infinity`
+and `-Infinity`, where `to_str` writes `nan`, `inf` and `-inf`.
 
 This is a compiler-provided native package, and it has to be: `str`
 supports `len`, `+` and `==` and nothing else — it cannot be indexed or

@@ -76,7 +76,15 @@ static void sl_inspect_u64(sl_inspect_sb *out, unsigned long long v) {
 static void sl_inspect_f64(sl_inspect_sb *out, double v) {
     sl_rt_preempt_disable();
     char buf[64];
-    snprintf(buf, sizeof(buf), "%g", v);
+    sl_fmt_f64(buf, sizeof(buf), v);
+    sl_rt_preempt_enable();
+    sl_inspect_sb_append(out, buf);
+}
+
+static void sl_inspect_f32(sl_inspect_sb *out, float v) {
+    sl_rt_preempt_disable();
+    char buf[64];
+    sl_fmt_f32(buf, sizeof(buf), v);
     sl_rt_preempt_enable();
     sl_inspect_sb_append(out, buf);
 }

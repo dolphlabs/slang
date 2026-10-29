@@ -51,6 +51,8 @@ static const char *inspect_scalar_name(const char *t) {
         return "sl_inspect_wire";
     if (is_int(t))
         return is_signed_int(t) ? "sl_inspect_i64" : "sl_inspect_u64";
+    if (!strcmp(t, "f32"))
+        return "sl_inspect_f32";
     if (is_flt(t))
         return "sl_inspect_f64";
     return NULL;

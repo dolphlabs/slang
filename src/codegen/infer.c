@@ -38,6 +38,11 @@ const char *infer_ident_name(CG *cg, const char *name, int line) {
                     if (!strcmp(right, "SPAWN_GROUP") || !strcmp(right, "SPAWN_NULL_STDIN"))
                         return "int";
                 }
+                if (!strcmp(pkg, "math") && is_native_pkg(cg, pkg)) {
+                    const MathConst *mc = math_const_find(right);
+                    if (mc)
+                        return mc->slang;
+                }
                 cg_error(line, "package '%s' has no variable '%s'", pkg,
                          right);
             }

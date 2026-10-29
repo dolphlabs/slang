@@ -1,0 +1,88 @@
+abs i32 7
+clamp u8 100
+min mixed -7
+sqrt int 1.4142135623730951
+sqrt f32 1.4142135
+sign -1 0 1
+pi 3.141592653589793
+e 2.718281828459045
+max_i8 127 -128
+max_u64 18446744073709551615
+min_int -9223372036854775808
+epsilon 2.220446049250313e-16
+nan true false
+inf true false
+signbit -0 true false
+min -0 true false
+min nan true
+clamp nan true
+abs -0 false
+copysign -3
+nextup 1 2.220446049250313e-16
+ulp 1 2.220446049250313e-16
+ulp max 1.99584030953472e+292
+frexp 0.5 4
+ldexp 8
+total_cmp -1 1 0
+approx_eq true false
+float_bits 4607182418800017408 1
+f32_bits 1065353216
+round 3 -3
+round_even 2 4 -2
+floor ceil trunc -2 -1 -1
+round_to 3.14 1200
+round_to_multiple 15
+fract -0.25
+floor_int -2 none none
+trunc_int big none
+pow 1024 0.25 243
+cbrt hypot 3 5
+fmod -1 2 -1
+log 1 3 3 4
+exp 1 1024 0
+trig 0 1 0.7853981633974483
+sin_pi 0 1 0 -1
+degrees 180 3.141592653589793
+wrap_angle 3.141592653589793 3.141592653589793 0.5
+gamma 24 0
+erf 0 1
+erf_inv true true true
+beta true
+factorial 3628800 1.1240007277776077e+21 true
+binomial 2598960 0 1.1826458156486142e+17
+lerp 12.5 3
+inverse_lerp 0.5
+remap 150
+smoothstep 0.5 1 0.103515625
+checked_add u8 255 none
+checked_sub i8 none -127
+checked_mul none 9223372030926249001
+checked_div none none -3
+checked_rem none -1
+checked_neg none none
+checked_abs none
+checked_pow 4611686018427387904 none -1 none
+checked_shl 250 none 4611686018427387904 none none
+saturating 255 -128 -9223372036854775808
+wrapping 4 -128 -420491770248316829
+div_floor -4 -4 -9223372036854775808
+div_ceil 4 -3 3
+euclid -3 2 3 2 0
+abs_diff 18446744073709551615 250
+midpoint 9223372036854775806 -2 252
+isqrt 9 10 3037000499 4294967295
+ilog 0 10 none 2 none
+pow2 true false none 1024 1
+align 16 8 -8 none
+gcd lcm 6 6 0 12 none
+mul_div 6917529027641081855 none none
+mul_hi 18446744073709551614 -1 244
+popcount 6 64 1
+zeros 31 0 64 1
+bit_len 8 0 64
+rotate 245 125 125 2
+swap_bytes 16777216 250
+reverse_bits 2147483648 95
+format 3.14 1.2e+06
+format_fixed 3.1416 2 1000000000000000000000.0
+format_sci 1.23e+03 0e+00

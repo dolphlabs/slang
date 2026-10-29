@@ -72,6 +72,7 @@ static const char *json_scalar_enc_name(const char *t) {
     if (is_str(t)) return "sl_json_enc_str";
     if (is_bytes(t)) return "sl_json_enc_bytes";
     if (is_int(t)) return is_signed_int(t) ? "sl_json_enc_i64" : "sl_json_enc_u64";
+    if (!strcmp(t, "f32")) return "sl_json_enc_f32";
     if (is_flt(t)) return "sl_json_enc_f64";
     return NULL;
 }

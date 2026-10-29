@@ -266,7 +266,11 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 `slang.project` to omit non-runtime directories from consumers' package caches;
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg redis regex
-strings encoding compress builder byteutil flags sort http http2 httpc`.
+strings encoding compress math builder byteutil flags sort http http2 httpc`.
+`math` takes any numeric type and returns that type (`math.abs(x)` of an `i32`
+is an `i32`): `math.sqrt`, `math.pi`, `math.round_to(x, 2)`, and for money
+`math.checked_add(a, b)` / `math.checked_mul(a, b)`, an `opt` that is `none` on
+overflow.
 The standalone `argon` package provides bounded Argon2id password hashing
 with standard PHC strings; its native crypto calls require OpenSSL 3.2+.
 
@@ -348,6 +352,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - io: read_line, read_all, eprint, eprintln, flush, is_tty, term_width, term_height, read_secret, raw_on, raw_off, read_key
 - json: see /packages/json.md
 - log: debug, info, warn, error
+- math: abs, min, max, clamp, sign, is_nan, is_inf, is_finite, is_normal, signbit, copysign, nextafter (+118 more)
 - net: listen, port, accept, dial, dial_until, lookup_srv_until, lookup_txt_until, dial_unix, listen_unix, send, recv, recv_until (+22 more)
 - os: setenv, unsetenv, environ, pid, hostname, tmpdir, exists, is_dir, is_file, size, mtime, mtime_ns (+6 more)
 - pg: rows_as, parse_url, sqlstate, scram_client_final, connect, connect_config, close, usable, in_transaction, server_param, arg_text, arg_int (+37 more)

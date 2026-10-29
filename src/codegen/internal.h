@@ -551,6 +551,12 @@ typedef enum {
                      allocation. Lets a native read directly out of the
                      caller's buffer (http head scan, wire-range str copy)
                      instead of via an intermediate GC bytes. */
+    NA_NUM,       /* math: any numeric type, T. Every NA_NUM* argument of
+                     one call shares T, and a return of "@" is T
+                     (pkg_math/dispatch.c). */
+    NA_NUM_INT,   /* math: T, which must be an integer type */
+    NA_NUM_FLT,   /* math: T, a float type (an integer argument makes T
+                     `float`) */
     NA_UNTIL,     /* an `until` deadline: marshaled as sl_until (int64_t).
                      Deliberately NOT int-compatible -- a deadline is an
                      absolute monotonic instant, and silently accepting a
@@ -612,6 +618,23 @@ extern const int ENCODING_SIGS_LEN;
 
 extern const NatSig COMPRESS_SIGS[]; /* src/codegen/pkg_compress/ */
 extern const int COMPRESS_SIGS_LEN;
+
+extern const NatSig MATH_SIGS[]; /* src/codegen/pkg_math/ */
+extern const int MATH_SIGS_LEN;
+
+/* A math constant (math.pi): its slang type and the C it compiles to. */
+typedef struct {
+    const char *name, *slang, *c;
+} MathConst;
+extern const MathConst MATH_CONSTS[];
+extern const int MATH_CONSTS_LEN;
+const char *math_type_of_args(const NatSig *ns, Expr **args,
+                              const char *const *argt, int line);
+const char *math_ret_type(const NatSig *ns, const char *t);
+const char *math_suffix(const char *t);
+int math_takes_at(const char *name);
+const MathConst *math_const_find(const char *name);
+const NatSig *native_find_sig(const char *pkg, const char *fname);
 
 /* ------------------------------------------------------------------ */
 /* Functions (declarations generated from every former 'static' def)   */

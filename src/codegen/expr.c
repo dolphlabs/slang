@@ -26,6 +26,11 @@ char *gen_ident_name(CG *cg, const char *name, int line) {
                     if (!strcmp(right, "SPAWN_NULL_STDIN"))
                         return xasprintf("%lldLL", 2LL);
                 }
+                if (!strcmp(pkg, "math") && is_native_pkg(cg, pkg)) {
+                    const MathConst *mc = math_const_find(right);
+                    if (mc)
+                        return xstrdup(mc->c);
+                }
             }
             if (!g || !g->is_pub)
                 cg_error(line,
@@ -95,6 +100,8 @@ char *conv_to_str(CG *cg, const char *t, char *expr) {
         return xasprintf("sl_str_from_int((long long)(%s))", expr);
     if (is_int(t))
         return xasprintf("sl_str_from_uint((unsigned long long)(%s))", expr);
+    if (!strcmp(t, "f32"))
+        return xasprintf("sl_str_from_f32((float)(%s))", expr);
     if (is_flt(t))
         return xasprintf("sl_str_from_float((double)(%s))", expr);
     if (!strcmp(t, "bool"))
@@ -2298,9 +2305,10 @@ void gen_print(CG *cg, Expr *call, int newline) {
     } else if (is_int(t)) {
         emit_line(cg, "printf(\"%%llu%s\", (unsigned long long)(%s));",
                   newline ? "\\n" : "", v);
+    } else if (!strcmp(t, "f32")) {
+        emit_line(cg, "sl_print_f32((float)(%s), %d);", v, newline);
     } else if (is_flt(t)) {
-        emit_line(cg, "printf(\"%%g%s\", (double)(%s));",
-                  newline ? "\\n" : "", v);
+        emit_line(cg, "sl_print_f64((double)(%s), %d);", v, newline);
     } else if (!strcmp(t, "bool")) {
         if (newline)
             emit_line(cg, "puts((%s) ? \"true\" : \"false\");", v);

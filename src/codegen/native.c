@@ -25,6 +25,10 @@ static const NatSig *find_sig(const NatSig *sigs, int len, const char *pkg,
  * A task async-preempted inside one is scanned conservatively, like any
  * other C code in the program's text. */
 int native_is_leaf(const char *pkg, const char *name) {
+    /* All of math reads its arguments and computes (runtime/sl_math.c),
+     * except the format* family, which builds a str. */
+    if (!strcmp(pkg, "math"))
+        return strncmp(name, "format", 6) != 0;
     /* Each one only reads its arguments: checked in runtime/sl_strings.c,
      * where none allocates or calls out. Add a native here only after
      * reading its C the same way. */
@@ -52,7 +56,7 @@ int native_sigs_of(const char *pkg, const NatSig **out, int max) {
         {SQL_SIGS, SQL_SIGS_LEN},         {REGEX_SIGS, REGEX_SIGS_LEN},
         {OS_SIGS, OS_SIGS_LEN},           {STRINGS_SIGS, STRINGS_SIGS_LEN},
         {ENCODING_SIGS, ENCODING_SIGS_LEN}, {COMPRESS_SIGS, COMPRESS_SIGS_LEN},
-        {IO_SIGS, IO_SIGS_LEN},
+        {IO_SIGS, IO_SIGS_LEN},           {MATH_SIGS, MATH_SIGS_LEN},
     };
     int n = 0;
     for (size_t t = 0; t < sizeof(tabs) / sizeof(tabs[0]); t++)
@@ -98,7 +102,13 @@ static const NatSig *find_any_sig(const char *pkg, const char *fname) {
         ns = find_sig(COMPRESS_SIGS, COMPRESS_SIGS_LEN, pkg, fname);
     if (!ns)
         ns = find_sig(IO_SIGS, IO_SIGS_LEN, pkg, fname);
+    if (!ns)
+        ns = find_sig(MATH_SIGS, MATH_SIGS_LEN, pkg, fname);
     return ns;
+}
+
+const NatSig *native_find_sig(const char *pkg, const char *fname) {
+    return find_any_sig(pkg, fname);
 }
 
 static NatArgKind nat_argkind(const char *pkg, const char *fname, int i) {
@@ -132,11 +142,22 @@ const char *native_check(CG *cg, const char *pkg, const char *fname,
     if (!strcmp(pkg, "os") && (!strcmp(fname, "watch") || !strcmp(fname, "watch_next") || !strcmp(fname, "watch_close")))
         cg->want_fswatch = 1;
 
+    const char *argt[8] = {0};
     for (int i = 0; i < n; i++) {
         const char *at = infer_type(cg, e->as.call.args[i]);
+        argt[i] = at;
         int ok;
         const char *want;
         switch (ns->argkinds[i]) {
+        case NA_NUM:
+        case NA_NUM_FLT:
+            ok = is_num(at);
+            want = "a number";
+            break;
+        case NA_NUM_INT:
+            ok = is_int(at);
+            want = "an integer";
+            break;
         case NA_STR:    ok = is_str(at);    want = "a str";    break;
         case NA_STR_FAULT:
             ok = is_str(at) || is_fault(at);
@@ -173,7 +194,8 @@ const char *native_check(CG *cg, const char *pkg, const char *fname,
             cg_error(e->line, "%s.%s argument %d must be %s (got %s)", pkg,
                      fname, i + 1, want, at);
     }
-    return ns->ret;
+    const char *t = math_type_of_args(ns, e->as.call.args, argt, e->line);
+    return t ? math_ret_type(ns, t) : ns->ret;
 }
 
 /* Tier 10: arguments would otherwise be embedded directly as sibling
@@ -196,9 +218,23 @@ char *native_gen(CG *cg, const char *pkg, const char *fname,
                         Expr *e) {
     StrBuf sb;
     sb_init(&sb);
-    sb_append(&sb, xasprintf("sl_%s_%s(", sanitize_pkg(pkg),
-                             sanitize_ident(fname)));
     int nargs = e->as.call.nargs;
+    /* math's T (pkg_math/dispatch.c): the C function is instantiated per
+     * type, sl_math_abs_i32, and each NA_NUM argument is cast to T. */
+    const NatSig *ns = find_any_sig(pkg, fname);
+    const char *mt = NULL;
+    if (ns && !strcmp(pkg, "math")) {
+        const char *argt[8] = {0};
+        for (int i = 0; i < nargs && i < 8; i++)
+            argt[i] = infer_type(cg, e->as.call.args[i]);
+        mt = math_type_of_args(ns, e->as.call.args, argt, e->line);
+    }
+    if (mt)
+        sb_append(&sb, xasprintf("sl_math_%s_%s(", sanitize_ident(fname),
+                                 math_suffix(mt)));
+    else
+        sb_append(&sb, xasprintf("sl_%s_%s(", sanitize_pkg(pkg),
+                                 sanitize_ident(fname)));
     StrBuf prelude;
     sb_init(&prelude);
     int seq_id = nargs > 1 ? cg->tmp_id++ : -1;
@@ -210,7 +246,10 @@ char *native_gen(CG *cg, const char *pkg, const char *fname,
         NatArgKind ak = nat_argkind(pkg, fname, i);
         char *a = gen_expr(cg, e->as.call.args[i]);
         const char *cast_t = at;
-        if (ak == NA_STR_FAULT && is_fault(at)) {
+        if (mt && (ak == NA_NUM || ak == NA_NUM_INT || ak == NA_NUM_FLT)) {
+            cast_t = mt;
+            a = maybe_cast(cg, cast_t, at, a);
+        } else if (ak == NA_STR_FAULT && is_fault(at)) {
             a = conv_to_str(cg, at, a);
             cast_t = "str";
         } else if (ak == NA_F64) {
@@ -240,9 +279,32 @@ char *native_gen(CG *cg, const char *pkg, const char *fname,
                          e->as.call.args[i], &prelude);
         sb_append(&sb, a);
     }
-    sb_append(&sb, ")");
     const char *rt = infer_type(cg, e);
     const char *rc = (!rt || !strcmp(rt, "void")) ? NULL : ctype_of(cg, rt);
+    if (!strcmp(pkg, "math")) {
+        if (math_takes_at(fname))
+            sb_append(&sb, xasprintf("%s%s", nargs ? ", " : "",
+                                     panic_at(cg, e->line)));
+        /* math's opts are by value, with nothing allocated: the C
+         * function takes an out pointer and says whether it wrote one. */
+        if (rt && is_opt(rt)) {
+            const char *inner = opt_inner(rt);
+            int id = cg->tmp_id++;
+            sb_append(&sb, xasprintf("%s&_sl_mv%d)", nargs ? ", " : "", id));
+            char *call = sb.data;
+            sb_init(&sb);
+            sb_append(&sb, xasprintf(
+                "({ %s _sl_mv%d; bool _sl_mh%d = %s; %s _sl_mo%d = { 0 }; "
+                "_sl_mo%d.has = _sl_mh%d; if (_sl_mh%d) _sl_mo%d.v = _sl_mv%d; "
+                "_sl_mo%d; })",
+                ctype_of(cg, inner), id, id, call, rc, id, id, id, id, id, id,
+                id));
+            char *result = wrap_safepoint(cg, e, rc, prelude.data, sb.data);
+            cg->ambient_count = ambient_mark;
+            return result;
+        }
+    }
+    sb_append(&sb, ")");
     /* Natives build their results and opts on the heap (the runtime
      * predates by-value ones and returns `sl_res_* *` / `sl_opt_* *`);
      * slang holds both by value, so the call's struct is copied out here. The box is garbage

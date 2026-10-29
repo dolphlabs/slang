@@ -266,7 +266,11 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 `slang.project` to omit non-runtime directories from consumers' package caches;
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg redis regex
-strings encoding compress builder byteutil flags sort http http2 httpc`.
+strings encoding compress math builder byteutil flags sort http http2 httpc`.
+`math` takes any numeric type and returns that type (`math.abs(x)` of an `i32`
+is an `i32`): `math.sqrt`, `math.pi`, `math.round_to(x, 2)`, and for money
+`math.checked_add(a, b)` / `math.checked_mul(a, b)`, an `opt` that is `none` on
+overflow.
 The standalone `argon` package provides bounded Argon2id password hashing
 with standard PHC strings; its native crypto calls require OpenSSL 3.2+.
 
