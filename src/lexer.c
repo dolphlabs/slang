@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include <ctype.h>
+#include <math.h>
 
 void lexer_init(Lexer *lx, const char *src) {
     memset(lx, 0, sizeof(*lx));
@@ -204,12 +205,59 @@ Token lexer_next(Lexer *lx) {
         }
         while (isdigit((unsigned char)src[lx->pos]) || src[lx->pos] == '_')
             lx->pos++;
-        if (src[lx->pos] == '.' && isdigit((unsigned char)src[lx->pos + 1])) {
-            lx->pos++; /* consume '.' */
-            while (isdigit((unsigned char)src[lx->pos]))
-                lx->pos++;
+        /* A float: digits, then a fraction (.5), an exponent (e9, E-7,
+         * e+3), or both. An exponent alone makes a float, as in Go, Rust
+         * and Python: 1e9 is 1000000000.0. Separators may appear in any
+         * digit run. The value is parsed from the digits with separators
+         * removed: strtod used to read the source text and stopped at the
+         * first '_', so 1_000.5 was 1.0. */
+        int has_frac = src[lx->pos] == '.' && isdigit((unsigned char)src[lx->pos + 1]);
+        size_t p = lx->pos + (has_frac ? 1 : 0);
+        if (has_frac)
+            while (isdigit((unsigned char)src[p]) || src[p] == '_')
+                p++;
+        size_t q = p;
+        int has_exp = 0;
+        if (src[q] == 'e' || src[q] == 'E') {
+            q++;
+            if (src[q] == '+' || src[q] == '-')
+                q++;
+            has_exp = isdigit((unsigned char)src[q]) != 0;
+        }
+        if (has_exp)
+            while (isdigit((unsigned char)src[q]) || src[q] == '_')
+                q++;
+        else
+            q = p;
+        if (has_frac || has_exp) {
+            lx->pos = q;
+            char text[400];
+            size_t nt = 0;
+            int nonzero = 0, in_exp = 0;
+            for (size_t i = start; i < lx->pos; i++) {
+                if (src[i] == '_')
+                    continue;
+                if (src[i] == 'e' || src[i] == 'E')
+                    in_exp = 1;
+                if (!in_exp && src[i] >= '1' && src[i] <= '9')
+                    nonzero = 1;
+                if (nt + 1 >= sizeof(text))
+                    lex_error(line, "float literal is too long");
+                text[nt++] = src[i];
+            }
+            text[nt] = '\0';
+            double v = strtod(text, NULL);
+            if (isinf(v))
+                lex_error(line, xasprintf("float literal %s is too large for "
+                                          "a float (the largest is about "
+                                          "1.8e308)", text));
+            if (v == 0 && nonzero)
+                lex_error(line, xasprintf("float literal %s is too small for "
+                                          "a float: it would be 0 (the "
+                                          "smallest is about 4.9e-324)",
+                                          text));
             Token t = make_token(T_FLOAT, line);
-            t.float_val = strtod(src + start, NULL);
+            t.float_val = v;
             return t;
         }
         /* strtoULL, not strtoll: strtoll SATURATES at LLONG_MAX on

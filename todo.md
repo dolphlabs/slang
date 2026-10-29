@@ -4560,3 +4560,14 @@ Seen, not fixed: `/` by zero (and every sl_rt_error_at user without an
 index) ends its message with "(index 0, length 0)"; math's panics use
 sl_rt_fail and do not. Exponent literals (`1e21`) do not parse.
 Next: math/numtheory and math/stats (plan phase 2).
+
+## Fixed: float literals with an exponent; `_` in a float (2026-10-29)
+
+`1e9`, `6.02e23` and `1.5E-7` did not parse ("expected ';' but found
+identifier"), so math code wrote tolerances as 0.000000001. They are floats
+now (an exponent alone makes one, as in Go and Rust), with a compile error
+for a literal that would be inf, or 0 when its digits are not. Found on the
+way: the float path read its value from the source text with strtod, which
+stops at the first '_', so `1_000.5` -- accepted by the lexer -- was 1.0.
+The digits are copied without separators first, as integers already were.
+tests/float_exponent and tests/fail_float_literal_range.
