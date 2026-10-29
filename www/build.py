@@ -211,6 +211,9 @@ ARGKIND = {
     "NA_ARR_STR": "[str]",
     "NA_ARR_BYTES": "[bytes]",
     "NA_WIRE": "wire",
+    "NA_NUM": "T",
+    "NA_NUM_INT": "T",
+    "NA_NUM_FLT": "T",
     "0": "",
 }
 
@@ -242,7 +245,7 @@ def extract_native_packages():
             pkg, name, nargs, kinds, ret, is_tls = m.groups()
             kinds = [k.strip() for k in kinds.split(",") if k.strip()]
             params = [ARGKIND.get(k, k) for k in kinds][:int(nargs)]
-            ret = None if ret == "NULL" else ret.strip('"')
+            ret = None if ret == "NULL" else ret.strip('"').replace("@", "T")
             pkgs.setdefault(pkg, {"name": pkg, "kind": "native",
                                   "items": []})
             pkgs[pkg]["items"].append({

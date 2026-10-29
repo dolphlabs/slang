@@ -26,6 +26,11 @@ char *gen_ident_name(CG *cg, const char *name, int line) {
                     if (!strcmp(right, "SPAWN_NULL_STDIN"))
                         return xasprintf("%lldLL", 2LL);
                 }
+                if (!strcmp(pkg, "math") && is_native_pkg(cg, pkg)) {
+                    const MathConst *mc = math_const_find(right);
+                    if (mc)
+                        return xstrdup(mc->c);
+                }
             }
             if (!g || !g->is_pub)
                 cg_error(line,

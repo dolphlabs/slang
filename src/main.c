@@ -1102,6 +1102,11 @@ static int build(const char *input, const char *outname, int emit_c,
                                       and now so does the collector itself
                                       (thread registry, mutex, condvar-free
                                       spin/yield) */
+    /* libm, for the 'math' package: glibc keeps most of <math.h> out of
+     * libc. Always, rather than only when math is imported: libm is on
+     * every system, a linker that drops unused libraries (Ubuntu's
+     * default --as-needed) drops it, and on macOS it is libSystem. */
+    sb_append(&cmd, " -lm");
     if (want_tls || want_crypto) {
         sb_append(&cmd, " ");
         sb_append(&cmd, tlsflags);
