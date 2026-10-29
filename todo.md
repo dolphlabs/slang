@@ -4585,3 +4585,23 @@ segmented-free odd-only sieve, Pollard-Brent rho (a product of two 10-digit
 primes splits in milliseconds), CRT for non-coprime moduli, Lucas
 binomial_mod, fast-doubling Fibonacci. Each checked against Python.
 Next: math/complex and fixed-size math/linalg (plan phase 3).
+
+## Changed: float digits from Ryu (2026-10-29)
+
+The exact float printing of #477 found its digits by search: snprintf at
+15, 16 and 17 significant digits, each read back with strtod. Correct, and
+917 ns per to_str(float), 7x strconv.FormatFloat's 124 ns; println,
+inspect and json.encode paid the same. runtime/sl_ryu.c is Ryu (Adams,
+PLDI 2018), the reference d2s with the mantissa width and bias as
+parameters so f32 shares it; its power-of-5 tables are generated from
+exact integers (runtime/gen_ryu.py, checked by the suite). to_str(float)
+is now 117 ns, the digit generation alone 74 ns.
+
+Validated against the search it replaced on 65M values (random bit
+patterns of both widths, every power of two and of ten and their
+neighbours, the first 2M subnormal patterns, integers and decimal steps):
+0 outputs that fail to read back, 0 longer. 2.09M differ by being shorter
+-- subnormals, whose spacing is too coarse for "%.15g, trimmed" to be the
+shortest form, and 49 powers of two, where the rounding interval is
+asymmetric and a 16-digit neighbour reads back where the nearest does not.
+The old search was not shortest there; Ryu is.

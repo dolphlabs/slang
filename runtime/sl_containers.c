@@ -1553,15 +1553,12 @@ static char *sl_str_from_uint(unsigned long long v) {
  * as 0.3, and a float sent through json.encode came back a different
  * number.
  *
- * At most three tries, almost always one. If v has a representation of 15
- * or fewer significant digits, %.15g is it (with %g's trailing zeros
- * dropped): rounding v to 15 digits cannot step past that number, because
- * v lies within half a double ULP of it (2^-53 relative) and a 15th-digit
- * half unit is at least 5e-16 relative. Past 15, %.16g and then %.17g are
- * the nearest 16- and 17-digit decimals, and if any decimal of that
- * length reads back as v the nearest one does; 17 always does. buf needs
- * 32 bytes. Called inside a preempt-disabled section: snprintf's locale
- * and FILE machinery is not safe to be preempted out of mid-call. */
+ * The digits come from Ryu (runtime/sl_ryu.c), about 75 ns a float. This
+ * used to search for them: snprintf at 15, 16 and 17 digits, each read
+ * back with strtod, about a microsecond. The output is the same text,
+ * except where the search was not shortest -- subnormals and some powers
+ * of two, where Ryu's is shorter and still reads back exactly. */
+
 /* NaN and the infinities, spelled out rather than left to printf: x86-64
  * makes 0.0 / 0.0 a NaN with its sign bit set, which glibc prints as
  * "-nan" and macOS as "nan". A NaN's sign means nothing, so it is "nan"
@@ -1579,26 +1576,15 @@ static int sl_fmt_special(char *buf, size_t cap, double v) {
 static void sl_fmt_f64(char *buf, size_t cap, double v) {
     if (sl_fmt_special(buf, cap, v)) /* no digits to choose */
         return;
-    for (int prec = 15; prec <= 17; prec++) {
-        snprintf(buf, cap, "%.*g", prec, v);
-        if (strtod(buf, NULL) == v)
-            return;
-    }
+    sl_ryu_f64(buf, cap, v);
 }
 
-/* The same for an f32: read back as an f32 (strtof), so 0.1 as an f32 is
- * "0.1" and not the 17 digits of its value widened to a double. Six
- * significant digits always identify an f32's decimal when one of six or
- * fewer exists, by the same argument with 2^-24 and 5e-7; nine always
- * read back. */
+/* The same for an f32: its own neighbours decide its digits, so 0.1 as an
+ * f32 is "0.1" and not the 17 digits of its value widened to a double. */
 static void sl_fmt_f32(char *buf, size_t cap, float v) {
     if (sl_fmt_special(buf, cap, (double)v))
         return;
-    for (int prec = 6; prec <= 9; prec++) {
-        snprintf(buf, cap, "%.*g", prec, (double)v);
-        if (strtof(buf, NULL) == v)
-            return;
-    }
+    sl_ryu_f32(buf, cap, v);
 }
 
 static char *sl_str_from_float(double v) {
