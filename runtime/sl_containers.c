@@ -1562,11 +1562,23 @@ static char *sl_str_from_uint(unsigned long long v) {
  * length reads back as v the nearest one does; 17 always does. buf needs
  * 32 bytes. Called inside a preempt-disabled section: snprintf's locale
  * and FILE machinery is not safe to be preempted out of mid-call. */
+/* NaN and the infinities, spelled out rather than left to printf: x86-64
+ * makes 0.0 / 0.0 a NaN with its sign bit set, which glibc prints as
+ * "-nan" and macOS as "nan". A NaN's sign means nothing, so it is "nan"
+ * everywhere. */
+static int sl_fmt_special(char *buf, size_t cap, double v) {
+    if (v != v)
+        snprintf(buf, cap, "nan");
+    else if (v - v != 0)
+        snprintf(buf, cap, v < 0 ? "-inf" : "inf");
+    else
+        return 0;
+    return 1;
+}
+
 static void sl_fmt_f64(char *buf, size_t cap, double v) {
-    if (v != v || v - v != 0) { /* NaN, +-inf: no digits to choose */
-        snprintf(buf, cap, "%g", v);
+    if (sl_fmt_special(buf, cap, v)) /* no digits to choose */
         return;
-    }
     for (int prec = 15; prec <= 17; prec++) {
         snprintf(buf, cap, "%.*g", prec, v);
         if (strtod(buf, NULL) == v)
@@ -1580,10 +1592,8 @@ static void sl_fmt_f64(char *buf, size_t cap, double v) {
  * fewer exists, by the same argument with 2^-24 and 5e-7; nine always
  * read back. */
 static void sl_fmt_f32(char *buf, size_t cap, float v) {
-    if (v != v || v - v != 0) {
-        snprintf(buf, cap, "%g", (double)v);
+    if (sl_fmt_special(buf, cap, (double)v))
         return;
-    }
     for (int prec = 6; prec <= 9; prec++) {
         snprintf(buf, cap, "%.*g", prec, (double)v);
         if (strtof(buf, NULL) == v)
