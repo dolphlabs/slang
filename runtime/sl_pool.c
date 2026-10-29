@@ -1371,9 +1371,12 @@ static void sl_preempt_handler(int sig, siginfo_t *si, void *uctx_raw) {
     }
     if (atomic_load_explicit(&t->preempt_disable_depth, memory_order_acquire) != 0)
         return;
-    if (sl_rt_monotonic_ns() - t->run_start_ns < SL_PREEMPT_QUANTUM_NS)
+    if (!atomic_load_explicit(&sl_gc_stop_requested, memory_order_acquire) &&
+        sl_rt_monotonic_ns() - t->run_start_ns < SL_PREEMPT_QUANTUM_NS)
         return; /* re-validate fresh -- don't trust the ticker's
-            possibly-stale snapshot */
+            possibly-stale snapshot. A collection waiting on this thread
+            (sl_gc_stw_sync's stop signal) preempts at any point in the
+            quantum: the loop it interrupts may never poll. */
     /* Close the re-entrancy window starting HERE, not at
        sl_task_yield_now's own entry -- too late, leaves the handler-
        return-through-trampoline-prologue stretch unguarded. Decremented
@@ -1467,7 +1470,10 @@ static void sl_preempt_install_handlers(void) {
        that does the real work still runs later, as ordinary code, after
        a genuine sigreturn, on the task's own stack. */
     sa.sa_sigaction = sl_preempt_handler;
-    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    /* SA_RESTART: a collection signals any thread slow to ack, which may
+       be inside a syscall it is not marked blocked for (a write, an
+       mmap); restart it rather than fail it with EINTR. */
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESTART;
     sigemptyset(&sa.sa_mask);
 #if defined(__aarch64__)
     /* Each arm64 handler masks the other: the resume handler's release

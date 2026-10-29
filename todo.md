@@ -4622,3 +4622,25 @@ floats 400-610 ms -> 264-308 ms. Go's sort.Float64s is about 85 ms. Of
 the rest, bounds checks cost 5-10%; the per-iteration poll (a counter and a
 branch, so GC can stop the loop) costs 20-35%, and dropping it needs GC to
 stop threads by signal instead of waiting for them to poll.
+
+## Changed: GC stops threads by signal; quiet leaf loops drop their poll (2026-10-29)
+
+A stop-the-world collection used to wait for every thread to reach a
+check, so every loop checked: a leaf loop paid a counter, a branch and a
+fresh roots array per iteration, 20-35% of sort's partition loop. Now
+sl_gc_stw_sync sends SIGUSR1 to any thread that has not acked within
+20 us (again every 1 ms), and sl_preempt_handler, which already moved a
+task off its thread for the ticker, skips its quantum check while a stop
+is raised. The task is scanned conservatively, like any async-preempted
+task, so the GC adds no new kind of stop. A while or range loop whose
+condition and body are leaves and allocate nothing (no slice, no bytes
+literal: nothing in it can request a collection) emits its poll under
+#if !SL_ASYNC_STOP, so it is gone on Darwin and Linux, x86-64 and
+arm64, and kept elsewhere. SIGUSR1 now has SA_RESTART: a slow-to-ack
+thread may be in a syscall it is not marked blocked for.
+sort.floats on 1M floats: 164-188 ms -> 136-159 ms (Go: 92-103 ms).
+tests/gc_signal_stop: an allocator must finish its collections while a
+quiet loop spins; without the signal the order flips.
+Not changed: for-in loops still sample a yield every 1024 iterations, and
+main's own thread is not a ticker slot, so a quiet loop on main yields to
+queued work only through stealing.
