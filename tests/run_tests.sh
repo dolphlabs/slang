@@ -1808,6 +1808,17 @@ for name in big_frame json_wide; do
 done
 [ "$dv_bad" -eq 0 ] && echo "PASS development builds"
 
+# ---- generated runtime tables --------------------------------------------
+# runtime/sl_ryu_tables.c is generated (runtime/gen_ryu.py, from exact
+# integers); an edit by hand, or a generator change not rerun, fails here.
+echo "--- generated runtime tables ---"
+if python3 runtime/gen_ryu.py --check; then
+    echo "PASS ryu tables match runtime/gen_ryu.py"
+else
+    echo "FAIL ryu tables: rerun python3 runtime/gen_ryu.py"
+    fail=1
+fi
+
 # ---- llms-small.txt ------------------------------------------------------
 # www/llms-small.md is the one hand-written digest on the docs site: the
 # language on one page for a model's context window (www/build.py says why

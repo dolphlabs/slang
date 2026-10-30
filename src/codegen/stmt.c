@@ -133,6 +133,24 @@ static void emit_roots_refresh(CG *cg, void *backedge_live_set,
     emit_line(cg, "%s", roots.data);
 }
 
+/* A loop whose condition and body are leaves that allocate nothing
+ * ("quiet") needs no per-iteration poll where the runtime stops threads by
+ * signal (SL_ASYNC_STOP, sl_core.c): nothing in it can request a
+ * collection, a collection another thread requests preempts it
+ * (sl_gc_stw_sync), and so does the ticker when others are waiting to
+ * run. The poll was a counter and a branch per iteration, 20-35% of a
+ * sort's partition loop. Its code stays, under #if, for platforms where
+ * the handler cannot redirect a task. These bracket that code. */
+static void emit_poll_if(CG *cg, int quiet) {
+    if (quiet)
+        emit_line(cg, "#if !SL_ASYNC_STOP");
+}
+
+static void emit_poll_endif(CG *cg, int quiet) {
+    if (quiet)
+        emit_line(cg, "#endif");
+}
+
 /* Tier 12 (leaf-loop poll): hoisted bracket + per-iteration cheap poll.
  * Emits the roots array + sl_safepoint + enter ONCE plus the task
  * variable (one TLS read for the whole loop), then returns the bracket
@@ -201,13 +219,14 @@ static int emit_leaf_bracket(CG *cg, void *backedge_live_set) {
  * if there are no roots (scalar loops keep their sampled maybe_yield
  * instead). */
 static void emit_leaf_poll(CG *cg, void *backedge_live_set, int bid,
-                           int eid) {
+                           int eid, int quiet) {
     int nnames = live_set_nnamed(backedge_live_set);
     int n = 0;
     for (int i = 0; i < nnames; i++)
         n += count_named_gc_roots(cg, live_set_named(backedge_live_set, i));
     if (n == 0)
         return;
+    emit_poll_if(cg, quiet);
     /* NOTE: flat inside the loop body — no wrapping brace. An earlier
      * draft opened a { here and closed it in the loop-end code; the
      * extra close landed after the loop and closed the FUNCTION early
@@ -243,6 +262,7 @@ static void emit_leaf_poll(CG *cg, void *backedge_live_set, int bid,
     emit_line(cg, "sl_rt_poll_yield(_sl_lb_task%d);", bid);
     cg->indent--;
     emit_line(cg, "}");
+    emit_poll_endif(cg, quiet);
 }
 
 static void gen_scoped_block(CG *cg, Block *b) {
@@ -361,10 +381,14 @@ static int expr_is_leaf(CG *cg, Expr *e) {
     if (!e)
         return 1;
     switch (e->kind) {
+    case EX_BYTES:
+        /* A non-empty literal is a fresh sl_bytes_new per evaluation. */
+        if (e->as.bytes_lit.len > 0)
+            cg->leaf_allocs = 1;
+        return 1;
     case EX_INT:
     case EX_FLOAT:
     case EX_STRING:
-    case EX_BYTES:
     case EX_BOOL:
     case EX_IDENT:
         return 1;
@@ -416,6 +440,7 @@ static int expr_is_leaf(CG *cg, Expr *e) {
                expr_is_leaf(cg, e->as.index.index);
     }
     case EX_SLICE:
+        cg->leaf_allocs = 1; /* a slice is a copy (sl_arr_slice) */
         return expr_is_leaf(cg, e->as.slice.base) &&
                expr_is_leaf(cg, e->as.slice.start) &&
                expr_is_leaf(cg, e->as.slice.end);
@@ -433,6 +458,24 @@ static int expr_is_leaf(CG *cg, Expr *e) {
             !strcmp(e->as.call.name, "len") && e->as.call.nargs == 1 &&
             !e->as.call.callee)
             return expr_is_leaf(cg, e->as.call.args[0]);
+        /* A call to a leaf -- a slang function compute_leaf_fns proved
+         * cannot collect (no loop, allocation, park, index or slang call),
+         * or a leaf native (math.sqrt, strings.find) -- is already emitted
+         * with no bracket, so it is as much a leaf as the arithmetic
+         * around it. Refusing it put every loop that called one on the
+         * per-iteration bracket: sort's partition loop (lt_f per
+         * comparison) and any loop of math, about 2x per element.
+         * The name is looked up from the loop head, where a local
+         * function value bound inside the body is not yet in scope; such
+         * a call is generated as a function-value call with its own
+         * bracket anyway, a safepoint inside the hoisted one. */
+        if (e->kind == EX_CALL &&
+            (user_leaf_call(cg, e) || native_leaf_call(cg, e))) {
+            for (int i = 0; i < e->as.call.nargs; i++)
+                if (!expr_is_leaf(cg, e->as.call.args[i]))
+                    return 0;
+            return 1;
+        }
         return 0;
     }
     case EX_LIST:
@@ -511,7 +554,8 @@ static int stmt_is_leaf(CG *cg, Stmt *s) {
         return 0;
     case ST_EXPR: {
         Expr *e = s->as.expr_stmt.expr;
-        if (e->kind == EX_CALL)
+        if (e->kind == EX_CALL && !user_leaf_call(cg, e) &&
+            !native_leaf_call(cg, e))
             return 0;
         return expr_is_leaf(cg, e);
     }
@@ -1067,10 +1111,18 @@ void gen_stmt(CG *cg, Stmt *s) {
         char *cond = gen_expr(cg, s->as.while_stmt.cond);
         int scalar = live_set_nnamed(s->backedge_live_set) == 0;
         int poll = !(scalar && cg->loop_depth > 0);
+        cg->leaf_body = s->as.while_stmt.body;
+        cg->leaf_allocs = 0;
+        int body_leaf = expr_is_leaf(cg, s->as.while_stmt.cond) &&
+                        block_is_leaf(cg, s->as.while_stmt.body);
+        cg->leaf_body = NULL;
+        int quiet = body_leaf && !cg->leaf_allocs;
         int eid = 0;
         if (scalar && poll) {
             eid = cg->tmp_id++;
+            emit_poll_if(cg, quiet);
             emit_line(cg, "unsigned long _sl_ec%d = 0;", eid);
+            emit_poll_endif(cg, quiet);
         }
         /* Tier 12: leaf body with live roots — hoisted bracket plus a
          * per-iteration poll instead of a full safepoint. The hoisted
@@ -1079,14 +1131,13 @@ void gen_stmt(CG *cg, Stmt *s) {
          * task variable are plain declarations before the loop.
          * has_bp tracks the hoisted bracket for break/continue/return
          * unwinding exactly like the per-iteration one did. */
-        cg->leaf_body = s->as.while_stmt.body;
-        int leaf = !scalar && expr_is_leaf(cg, s->as.while_stmt.cond) &&
-                   block_is_leaf(cg, s->as.while_stmt.body);
-        cg->leaf_body = NULL;
+        int leaf = !scalar && body_leaf;
         int bid = 0, le_eid = 0;
         if (leaf) {
             le_eid = cg->tmp_id++;
+            emit_poll_if(cg, quiet);
             emit_line(cg, "unsigned long _sl_lp_ec%d = 0;", le_eid);
+            emit_poll_endif(cg, quiet);
             bid = emit_leaf_bracket(cg, s->backedge_live_set);
         }
         emit_line(cg, "while (%s) {", strip_outer_parens(cond));
@@ -1098,11 +1149,14 @@ void gen_stmt(CG *cg, Stmt *s) {
              * hoisted bracket. Do NOT count anything extra — the
              * hoisted bracket is the one open_backedge_brackets tracks,
              * and has_bp = 1 keeps the loop-end close correct. */
-            emit_leaf_poll(cg, s->backedge_live_set, bid, le_eid);
+            emit_leaf_poll(cg, s->backedge_live_set, bid, le_eid, quiet);
             has_bp = 1;
         } else {
+            /* A scalar loop's only code here is its sampled yield. */
+            emit_poll_if(cg, scalar && quiet);
             has_bp = emit_backedge_enter(cg, s->backedge_live_set, poll,
                                          eid, NULL);
+            emit_poll_endif(cg, scalar && quiet);
         }
         cg->loop_depth++;
         break_push(cg, 0, NULL);
@@ -1182,20 +1236,28 @@ void gen_stmt(CG *cg, Stmt *s) {
          * int, needs no root) plus the induction var (an int). */
         /* Bounds are evaluated before the loop variable exists, so
          * only the body sees it as the range's int. */
-        int leaf = !scalar && expr_is_leaf(cg, s->as.for_stmt.start) &&
-                   expr_is_leaf(cg, s->as.for_stmt.end);
+        int body_leaf = expr_is_leaf(cg, s->as.for_stmt.start) &&
+                        expr_is_leaf(cg, s->as.for_stmt.end);
+        cg->leaf_allocs = 0;
         cg->leaf_body = s->as.for_stmt.body;
         cg->leaf_range_var = s->as.for_stmt.name;
-        leaf = leaf && block_is_leaf(cg, s->as.for_stmt.body);
+        body_leaf = body_leaf && block_is_leaf(cg, s->as.for_stmt.body);
         cg->leaf_body = NULL;
         cg->leaf_range_var = NULL;
+        /* The bounds run once, before the loop: only the body counts. */
+        int quiet = body_leaf && !cg->leaf_allocs;
+        int leaf = !scalar && body_leaf;
         int eid = 0, bid = 0, le_eid = 0;
         if (scalar) {
             eid = cg->tmp_id++;
+            emit_poll_if(cg, quiet);
             emit_line(cg, "unsigned long _sl_ec%d = 0;", eid);
+            emit_poll_endif(cg, quiet);
         } else if (leaf) {
             le_eid = cg->tmp_id++;
+            emit_poll_if(cg, quiet);
             emit_line(cg, "unsigned long _sl_lp_ec%d = 0;", le_eid);
+            emit_poll_endif(cg, quiet);
             bid = emit_leaf_bracket(cg, s->backedge_live_set);
         }
         emit_line(cg, "for (long long %s = %s; %s %s %s; %s++) {", vname,
@@ -1205,11 +1267,13 @@ void gen_stmt(CG *cg, Stmt *s) {
         if (leaf) {
             /* Same as ST_WHILE: poll scope balances itself; only the
              * hoisted bracket counts for unwinding. */
-            emit_leaf_poll(cg, s->backedge_live_set, bid, le_eid);
+            emit_leaf_poll(cg, s->backedge_live_set, bid, le_eid, quiet);
             has_bp = 1;
         } else {
+            emit_poll_if(cg, scalar && quiet);
             has_bp = emit_backedge_enter(cg, s->backedge_live_set, 1, eid,
                                          NULL);
+            emit_poll_endif(cg, scalar && quiet);
         }
         cg->loop_depth++;
         break_push(cg, 0, NULL);

@@ -44,6 +44,8 @@ void emit_runtime_file(CG *cg, const char *name) {
 void emit_prelude(CG *cg) {
     emit_runtime_file(cg, "sl_core.c");
     emit_runtime_file(cg, "sl_gc.c");
+    emit_runtime_file(cg, "sl_ryu_tables.c"); /* float digits, for sl_containers.c */
+    emit_runtime_file(cg, "sl_ryu.c");
     emit_runtime_file(cg, "sl_containers.c");
     emit_runtime_file(cg, "sl_sched.c");
     emit_runtime_file(cg, "sl_pool.c");

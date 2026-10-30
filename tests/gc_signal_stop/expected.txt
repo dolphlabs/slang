@@ -1,0 +1,2 @@
+allocator done 2400
+spinner sum 19200000000

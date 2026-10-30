@@ -490,6 +490,10 @@ struct CG {
      * NULL outside that check. */
     Block *leaf_body;
     const char *leaf_range_var;
+    /* Set by expr_is_leaf when a leaf it accepted allocates (a slice, a
+     * bytes literal). Such a loop keeps its per-iteration poll: without
+     * it nothing would run the collections its allocations request. */
+    int leaf_allocs;
     /* break/continue targets: the nesting of loops (kind 0) and
      * switches (kind 1) currently open in codegen. ST_BREAK targets
      * the innermost entry -- a loop entry emits the existing C

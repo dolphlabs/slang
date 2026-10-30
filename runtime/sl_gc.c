@@ -407,6 +407,7 @@ typedef struct sl_gc_thread {
         thread -- published at registration like task_slot, so the
         sweep-end page prune can reach a stopped thread's page list
         (same pattern). */
+    pthread_t tid; /* for sl_gc_stw_sync's stop signal */
 } sl_gc_thread;
 static sl_gc_thread *sl_gc_threads = NULL;
 
@@ -506,6 +507,7 @@ static void sl_gc_register_thread(void) {
     sl_rt_gc_reg.task_slot = &sl_rt_current_task;
     sl_rt_gc_reg.blocked_ptr = &sl_rt_gc_blocked;
     sl_rt_gc_reg.acked_cycle_ptr = &sl_rt_gc_acked_cycle;
+    sl_rt_gc_reg.tid = pthread_self();
     sl_gc_pages_publish();
     pthread_mutex_lock(&sl_gc_mu);
     sl_rt_gc_reg.next = sl_gc_threads;
@@ -2913,6 +2915,8 @@ static void sl_gc_stw_release(void) {
  * safepoint/quiescence protocol is not generation-aware and needs no
  * per-kind variant. Caller must hold NO locks; returns with a
  * caller-owned snapshot that must be free()d. */
+#define SL_GC_STOP_SIGNAL_NS 20000LL   /* 20 us */
+#define SL_GC_STOP_RESEND_NS 1000000LL /* 1 ms */
 static void sl_gc_stw_sync(sl_gc_thread ***out_snap, int *out_nsnap) {
     /* Under sl_gc_stw_mu: a thread still asleep from the previous pause
      * (a minor chaining into a major keeps the stop raised) must wake to
@@ -2938,8 +2942,29 @@ static void sl_gc_stw_sync(sl_gc_thread ***out_snap, int *out_nsnap) {
     }
     pthread_mutex_unlock(&sl_gc_mu);
 
+#if SL_ASYNC_STOP
+    /* A thread that has not acked within SL_GC_STOP_SIGNAL_NS is sent the
+     * preemption signal, and again every SL_GC_STOP_RESEND_NS while it
+     * still has not: a leaf loop that cannot allocate has no poll
+     * (codegen's emit_leaf_poll), so this is how it stops. The handler
+     * moves its task to the run queue as the ticker's preemption does --
+     * scanned conservatively, as every async-preempted task is -- and its
+     * worker acks before running anything else. A refusal (preemption
+     * disabled, pc outside the program) is retried by the resend. Safe to
+     * signal any thread in the snapshot: one leaving the registry finds
+     * the stop raised under sl_gc_mu and waits it out, so its tid stays
+     * live until sl_gc_stw_release. */
+    long long t0 = sl_rt_monotonic_ns();
+    long long next_signal = t0 + SL_GC_STOP_SIGNAL_NS;
+#endif
     for (;;) {
         int all_ready = 1;
+#if SL_ASYNC_STOP
+        long long now = sl_rt_monotonic_ns();
+        int send = now >= next_signal;
+        if (send)
+            next_signal = now + SL_GC_STOP_RESEND_NS;
+#endif
         for (int i = 0; i < nsnap; i++) {
             sl_gc_thread *t = snap[i];
             if (t == &sl_rt_gc_reg) continue;
@@ -2949,6 +2974,12 @@ static void sl_gc_stw_sync(sl_gc_thread ***out_snap, int *out_nsnap) {
                                       memory_order_acquire) == cyc)
                 continue;
             all_ready = 0;
+#if SL_ASYNC_STOP
+            if (send) {
+                pthread_kill(t->tid, SIGUSR1);
+                continue;
+            }
+#endif
             break;
         }
         if (all_ready) break;

@@ -244,15 +244,20 @@ pub fn search_by[T, K](xs: [T], key: fn(T) -> K, v: K) -> opt[int] {
 //     NaN < real -> true
 //     NaN < NaN  -> false (equal)
 //
-// The first clause is the "NaN before any real" half; the second is
-// raw `<`, which only ever speaks when both sides are real. The int
-// and str paths compare raw: those types have no NaN.
+// The second clause is the "NaN before any real" half; the first is
+// raw `<`, which is already false when either side is NaN, so it needs
+// no guard of its own (it had one: two more comparisons on every one the
+// sort makes). The int and str paths compare raw: those types have no
+// NaN.
 fn lt_f(a: float, b: float) -> bool {
-    return (a != a && b == b) || (a == a && b == b && a < b);
+    return a < b || (a != a && b == b);
 }
 
 // One static helper for every path: monomorphized per element type and
-// small enough for the C compiler to inline into its call sites.
+// small enough for the C compiler to inline into its call sites. The
+// typed quicksorts' partition loops swap inline instead: a call to it is
+// a call to a non-leaf (it indexes), which kept those loops on a safepoint
+// bracket per iteration.
 fn swap_at[T](xs: [T], a: int, b: int) {
     let t = xs[a];
     xs[a] = xs[b];
@@ -539,12 +544,16 @@ fn qs_ints(xs: [int], lo: int, hi: int) {
         let k = lo;
         while k <= gt {
             if xs[k] < p {
-                swap_at(xs, k, lt);
+                let sw = xs[k];
+                xs[k] = xs[lt];
+                xs[lt] = sw;
                 lt += 1;
                 k += 1;
             } else {
                 if p < xs[k] {
-                    swap_at(xs, k, gt);
+                    let sw = xs[k];
+                    xs[k] = xs[gt];
+                    xs[gt] = sw;
                     gt -= 1;
                 } else {
                     k += 1;
@@ -591,12 +600,16 @@ fn qs_floats(xs: [float], lo: int, hi: int) {
         let k = lo;
         while k <= gt {
             if lt_f(xs[k], p) {
-                swap_at(xs, k, lt);
+                let sw = xs[k];
+                xs[k] = xs[lt];
+                xs[lt] = sw;
                 lt += 1;
                 k += 1;
             } else {
                 if lt_f(p, xs[k]) {
-                    swap_at(xs, k, gt);
+                    let sw = xs[k];
+                    xs[k] = xs[gt];
+                    xs[gt] = sw;
                     gt -= 1;
                 } else {
                     k += 1;
@@ -642,12 +655,16 @@ fn qs_strs(xs: [str], lo: int, hi: int) {
         let k = lo;
         while k <= gt {
             if xs[k] < p {
-                swap_at(xs, k, lt);
+                let sw = xs[k];
+                xs[k] = xs[lt];
+                xs[lt] = sw;
                 lt += 1;
                 k += 1;
             } else {
                 if p < xs[k] {
-                    swap_at(xs, k, gt);
+                    let sw = xs[k];
+                    xs[k] = xs[gt];
+                    xs[gt] = sw;
                     gt -= 1;
                 } else {
                     k += 1;

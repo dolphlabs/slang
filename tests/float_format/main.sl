@@ -4,6 +4,7 @@
 // 5.00002e+11 and a float sent through json.encode came back changed. An
 // f32 is as short as an f32 needs; json writes NaN and inf as null.
 import "json";
+import "math";
 struct P { a: float, b: f32 }
 println(500002000000.0);
 println(0.1 + 0.2);
@@ -26,3 +27,10 @@ println(json.encode(P { a: 0.30000000000000004, b: 16777216.0 }));
 let x = 0.1 + 0.2;
 let back = to_float(to_str(x)) ?? 0.0;
 println(back == x);
+// Shortest where a search through %.15g..%.17g was not: a power of two
+// (an asymmetric rounding interval) and subnormals. Python's repr agrees.
+println(math.float_from_bits(27021597764222976));   // 2^-1017
+println(math.float_from_bits(10489504892952));      // a subnormal
+println(math.float_from_bits(1));                    // the smallest subnormal
+let f2: f32 = 16777217.0;                            // not an f32: rounds to 2^24
+println(f2);
