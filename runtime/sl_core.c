@@ -1113,6 +1113,19 @@ static void sl_cpu_detect(void) {
 static void (*sl_rt_tick_hook)(void) = NULL;
 #define SL_PREEMPT_SAMPLE_MASK 1023UL
 
+/* 1 where sl_preempt_handler (sl_pool.c) can redirect a running task:
+ * there a collection that a thread has not acked stops it by signal
+ * (sl_gc_stw_sync), the way the ticker preempts, so a leaf loop that
+ * cannot allocate needs no per-iteration poll (codegen's
+ * emit_leaf_poll). Elsewhere the handler does nothing and those loops
+ * keep polling. Keep in step with the handler's own #if chain. */
+#if (defined(__APPLE__) || defined(__linux__)) && \
+    (defined(__x86_64__) || defined(__aarch64__))
+#define SL_ASYNC_STOP 1
+#else
+#define SL_ASYNC_STOP 0
+#endif
+
 static long long sl_preempt_quantum_ns(void) {
     static long long cached = -1;
     if (cached < 0) {

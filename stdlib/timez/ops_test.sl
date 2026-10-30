@@ -1,4 +1,5 @@
 import "strings";
+import "time";
 
 fn o_t(s: str) -> Time {
     let r = parse_rfc3339(s);
@@ -32,12 +33,10 @@ fn test_fixed_clock_moves_only_when_told() {
 
 fn test_stopwatch_measures_monotonic_time() {
     let sw = start_stopwatch();
-    let x = 0;
-    let i = 0;
-    while i < 100000 {
-        x = x + i;
-        i = i + 1;
-    }
+    // A sleep, not a busy loop: a loop whose result goes unused has no
+    // poll to keep it now, so the C compiler deletes it, and two
+    // back-to-back clock reads can be equal (0 elapsed on arm64).
+    time.sleep(1000000);
     let e = sw.elapsed();
     assert(e > 0 && e < 5 * SECOND, to_str(e));
     assert(strings.has_suffix(sw.elapsed_text(), "s"));

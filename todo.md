@@ -4606,3 +4606,41 @@ found on one machine (zokor_cli's watch tests leaked them too). proc.wait
 now waits again until the child exits or the deadline passes;
 tests/proc_wait_shutdown fails on the old runtime. The watcher's own half
 is fixed in zokor_cli.
+
+## Changed: a call to a leaf no longer puts a loop on per-iteration brackets (2026-10-29)
+
+A `while` loop takes its safepoint once around the loop (a cheap poll per
+iteration) only if its body is a leaf, and expr_is_leaf called every call
+non-leaf except len -- including calls to leaf slang functions
+(compute_leaf_fns) and leaf natives (math.sqrt), which are emitted without
+a bracket of their own. So any loop calling one paid an enter/exit pair
+per iteration: stats.sum's first version ran at half speed, and sort's
+partition loop (lt_f per comparison) the same. They count as leaves now.
+sort's typed quicksorts also swap inline (swap_at indexes, so it is not a
+leaf), and lt_f drops two redundant comparisons: sort.floats on 1M random
+floats 400-610 ms -> 264-308 ms. Go's sort.Float64s is about 85 ms. Of
+the rest, bounds checks cost 5-10%; the per-iteration poll (a counter and a
+branch, so GC can stop the loop) costs 20-35%, and dropping it needs GC to
+stop threads by signal instead of waiting for them to poll.
+
+## Changed: GC stops threads by signal; quiet leaf loops drop their poll (2026-10-29)
+
+A stop-the-world collection used to wait for every thread to reach a
+check, so every loop checked: a leaf loop paid a counter, a branch and a
+fresh roots array per iteration, 20-35% of sort's partition loop. Now
+sl_gc_stw_sync sends SIGUSR1 to any thread that has not acked within
+20 us (again every 1 ms), and sl_preempt_handler, which already moved a
+task off its thread for the ticker, skips its quantum check while a stop
+is raised. The task is scanned conservatively, like any async-preempted
+task, so the GC adds no new kind of stop. A while or range loop whose
+condition and body are leaves and allocate nothing (no slice, no bytes
+literal: nothing in it can request a collection) emits its poll under
+#if !SL_ASYNC_STOP, so it is gone on Darwin and Linux, x86-64 and
+arm64, and kept elsewhere. SIGUSR1 now has SA_RESTART: a slow-to-ack
+thread may be in a syscall it is not marked blocked for.
+sort.floats on 1M floats: 164-188 ms -> 136-159 ms (Go: 92-103 ms).
+tests/gc_signal_stop: an allocator must finish its collections while a
+quiet loop spins; without the signal the order flips.
+Not changed: for-in loops still sample a yield every 1024 iterations, and
+main's own thread is not a ticker slot, so a quiet loop on main yields to
+queued work only through stealing.
