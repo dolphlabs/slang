@@ -1419,6 +1419,12 @@ static void *sl_preempt_ticker_thread(void *arg) {
         nanosleep(&interval, NULL);
         if (sl_rt_tick_hook)
             sl_rt_tick_hook();
+        /* The nursery threshold's idle decay runs here, on the ticker's
+         * own thread: a dedicated native thread that never drives a
+         * task and touches only the collector's atomics (no locks, no
+         * _Thread_local state -- the reasoning sl_rt_tick_hook's users
+         * are held to). */
+        sl_gc_nursery_idle_decay();
         if (atomic_load_explicit(&sl_global_runq_count, memory_order_relaxed) == 0)
             continue;
         long long now = sl_rt_monotonic_ns();

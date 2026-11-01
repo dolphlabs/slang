@@ -503,9 +503,85 @@ static int sl_gc_test_nursery_adapt(void) {
     return bad;
 }
 
+/* The idle decay (sl_gc_nursery_idle_decay, runtime/sl_gc.c): the ticker
+ * halves an adopted trigger past its window, floors at
+ * max(SL_GC_NURSERY_BASE, 2x the last minor's live young), stays put at
+ * the floor, inside the window, before the first minor, and in a fixed
+ * nursery. History is restored by hand, since unlike sl_gc_nursery_adapt
+ * the decay also looks at sl_gc_last_minor_live. */
+static int sl_gc_test_idle_decay(void) {
+    size_t base = SL_GC_NURSERY_BASE;
+    struct {
+        const char *name;
+        size_t current;
+        long long last_end_gap_ns; /* now - sl_gc_minor_last_end_ns */
+        size_t last_live;
+        int fixed;
+        size_t want;
+    } cases[] = {
+        {"halve past window", 8 * base, 100000000, base / 2, 0, 4 * base},
+        {"rounds up to floor", 3 * base, 100000000, base / 2, 0, 2 * base},
+        {"at floor stays", 2 * base, 100000000, base / 2, 0, 2 * base},
+        {"below floor stays", base / 2, 100000000, base, 0, base / 2},
+        {"survivors floor", 8 * base, 100000000, 4 * base, 0, 8 * base},
+        {"in window stays", 8 * base, 1000, base / 2, 0, 8 * base},
+        {"no minor yet stays", 8 * base, 0, base / 2, 0, 8 * base},
+        {"fixed stays", 8 * base, 100000000, base / 2, 1, 8 * base},
+    };
+    size_t saved_threshold = atomic_load_explicit(
+        &sl_gc_nursery_threshold, memory_order_relaxed);
+    int saved_fixed = sl_gc_nursery_fixed;
+    long long saved_previous_end = sl_gc_minor_last_end_ns;
+    size_t saved_last_live = atomic_load_explicit(
+        &sl_gc_last_minor_live, memory_order_relaxed);
+    size_t saved_max = sl_gc_nursery_max;
+    int bad = 0;
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        atomic_store_explicit(&sl_gc_nursery_threshold, cases[i].current,
+                              memory_order_relaxed);
+        sl_gc_nursery_max = cases[i].current;
+        sl_gc_nursery_fixed = cases[i].fixed;
+        long long now = sl_rt_monotonic_ns();
+        if (cases[i].last_end_gap_ns == 0) {
+            /* "no minor yet": the decay's `!end` branch */
+            atomic_store_explicit(&sl_gc_minor_last_end_ns, 0,
+                                  memory_order_relaxed);
+        } else {
+            atomic_store_explicit(&sl_gc_minor_last_end_ns,
+                                  now - cases[i].last_end_gap_ns,
+                                  memory_order_relaxed);
+        }
+        /* the cached env default (50ms) is well under the 100ms gaps,
+         * which every want-slot relies on */
+        atomic_store_explicit(&sl_gc_last_minor_live, cases[i].last_live,
+                              memory_order_relaxed);
+        sl_gc_nursery_idle_decay();
+        size_t got = atomic_load_explicit(&sl_gc_nursery_threshold,
+                                          memory_order_relaxed);
+        /* "survivors floor": live=4*base, floor=8*base=cur, stays */
+        if (got != cases[i].want) {
+            fprintf(stderr, "nursery idle decay %s: got %zu bytes, expected %zu\n",
+                    cases[i].name, got, cases[i].want);
+            bad = 1;
+        }
+    }
+
+    atomic_store_explicit(&sl_gc_nursery_threshold, saved_threshold,
+                          memory_order_relaxed);
+    sl_gc_nursery_fixed = saved_fixed;
+    sl_gc_minor_last_end_ns = saved_previous_end;
+    atomic_store_explicit(&sl_gc_last_minor_live, saved_last_live,
+                          memory_order_relaxed);
+    sl_gc_nursery_max = saved_max;
+    return bad;
+}
+
 int main(void) {
     if (sl_gc_test_nursery_adapt()) return 1;
     puts("PASS nursery adaptation policy");
+    if (sl_gc_test_idle_decay()) return 1;
+    puts("PASS nursery idle decay policy");
     if (sl_runtime_test_main()) return 1;
     if (sl_gc_test_inline_bytes()) return 1;
     if (sl_gc_test_pointer_free()) { fprintf(stderr, "pointer_free test FAILED\n"); return 1; }

@@ -1,4 +1,5 @@
 #include <sched.h>
+#include <sys/mman.h>
 #if defined(__GLIBC__)
 #include <malloc.h>
 #endif
@@ -87,11 +88,22 @@ static _Atomic size_t sl_gc_bytes_since_minor = 0;
  * whose minors are cheap -- most of them -- keeps the small nursery and
  * its footprint (the compute benchmark: 2.7% of time in minors, 7 MB
  * RSS at 512 KB against 12 MB at 4 MB for no speed). Read by every
- * allocating thread, written by the collector: atomic, relaxed. */
+ * allocating thread, written by the collector: atomic, relaxed.
+ * The ratchet's idle half: an allocation-free stretch halves the
+ * trigger toward max(1 MB, 2x the last minor's survivors)
+ * (sl_gc_nursery_idle_decay, ticker-called), so a burst-shaped
+ * program's high water does not outlive its burst; the next burst's
+ * minors re-grow it on demand. SLANG_GC_IDLE_DECAY_MS (default 50, 0
+ * off) sets the window; fixed-nursery tests are exempt. */
 #define SL_GC_NURSERY_BASE (512 * 1024)
 static _Atomic size_t sl_gc_nursery_threshold = SL_GC_NURSERY_BASE;
 static size_t sl_gc_nursery_max = SL_GC_NURSERY_BASE;
-static long long sl_gc_minor_last_end_ns = 0;
+static _Atomic long long sl_gc_minor_last_end_ns = 0;
+/* The last minor's live-young total, the decay floor's input (written
+ * under the same collector path as minor_last_end, read by the ticker).
+ * Zero until the first minor, so a never-collected program decays
+ * toward the 1MB floor and nothing smaller. */
+static _Atomic size_t sl_gc_last_minor_live = 0;
 static int sl_gc_nursery_fixed = 0;
 static _Atomic int sl_gc_collect_minor_pending = 0;
 /* SLANG_GC_THRESHOLD_KB: collect every that-many KB allocated, and never
@@ -110,6 +122,14 @@ static _Atomic unsigned long long sl_gc_stat_allocated_cycle = 0;
 static _Atomic unsigned long long sl_gc_stat_collects = 0;
 static _Atomic unsigned long long sl_gc_stat_minor_collects = 0;
 static _Atomic unsigned long long sl_gc_stat_allocs = 0;
+/* Large-object spans (SL_GC_BIG_MIN and up): births that mapped, births
+ * that fell back to malloc, and sweep munmaps. Idle decays of the
+ * nursery threshold (sl_gc_nursery_idle_decay). Stats-only, so the
+ * counters live under sl_gc_stat_enabled() guards. */
+static _Atomic unsigned long long sl_gc_stat_span_allocs = 0;
+static _Atomic unsigned long long sl_gc_stat_span_fallback = 0;
+static _Atomic unsigned long long sl_gc_stat_span_frees = 0;
+static _Atomic unsigned long long sl_gc_stat_decays = 0;
 static _Atomic unsigned long long sl_gc_stat_alloc_bytes = 0;
 static _Atomic unsigned long long sl_gc_stat_pause_ns_total = 0;
 static _Atomic unsigned long long sl_gc_stat_pause_ns_max = 0;
@@ -249,10 +269,14 @@ static void sl_gc_stat_dump(void) {
     unsigned long long swept = atomic_load_explicit(&sl_gc_stat_swept, memory_order_relaxed);
     unsigned long long surv = atomic_load_explicit(&sl_gc_stat_survived, memory_order_relaxed);
     unsigned long long cyc = atomic_load_explicit(&sl_gc_stat_allocated_cycle, memory_order_relaxed);
-    fprintf(stderr, "slang-gc-stat collects=%llu minor_collects=%llu allocs=%llu alloc_bytes=%llu pause_ns_total=%llu pause_ns_max=%llu marked=%llu swept=%llu survived=%llu cycle_allocs=%llu threshold=%zu minor_pause_ns_max=%llu minor_swept=%llu promoted=%llu nursery_threshold=%zu minor_pause_ns_total=%llu\n",
+    fprintf(stderr, "slang-gc-stat collects=%llu minor_collects=%llu allocs=%llu alloc_bytes=%llu pause_ns_total=%llu pause_ns_max=%llu marked=%llu swept=%llu survived=%llu cycle_allocs=%llu threshold=%zu minor_pause_ns_max=%llu minor_swept=%llu promoted=%llu nursery_threshold=%zu minor_pause_ns_total=%llu spans=%llu span_fallbacks=%llu span_frees=%llu decays=%llu\n",
             collects, minor_collects, allocs, bytes, total, max, marked, swept, surv, cyc, sl_gc_threshold, minor_max, minor_swept, promoted,
             atomic_load_explicit(&sl_gc_nursery_threshold, memory_order_relaxed),
-            minor_total);
+            minor_total,
+            atomic_load_explicit(&sl_gc_stat_span_allocs, memory_order_relaxed),
+            atomic_load_explicit(&sl_gc_stat_span_fallback, memory_order_relaxed),
+            atomic_load_explicit(&sl_gc_stat_span_frees, memory_order_relaxed),
+            atomic_load_explicit(&sl_gc_stat_decays, memory_order_relaxed));
     fprintf(stderr, "slang-gc-stat pause_buckets_ns=[");
     long long bound = 100000;
     for (int b = 0; b < SL_GC_STAT_BUCKETS; b++) {
@@ -1096,11 +1120,70 @@ static sl_gc_obj *sl_gc_class_pop(size_t total) {
     return h;
 }
 
+/* ---- large objects on their own mapping ----
+ *
+ * Every object bigger than a 16KB page's budget was malloc'd and, at
+ * its sweep death, freed. On Linux, glibc marks the size of a freed
+ * mmap'd block as its new mmap threshold (up to a 32MB cap), so a
+ * benchmark/server that once burst an 8MB list pays for every later
+ * 8MB-class block out of a retained brk arena; on macOS the zones hold
+ * freed pages the same way. The freed high water is the RSS story of
+ * any bursty workload -- scene-to-scene sorting, one big request body
+ * between idle intervals -- and neither libc gives it back (glibc's
+ * trim is 128KB of arena tail at most).
+ *
+ * So allocations of SL_GC_BIG_MIN total bytes and up take their own
+ * anonymous mapping, mmap'd in sl_gc_alloc_impl, munmap'd at the sweep.
+ * One syscall pair per burst-sized object, demand-faulted like Go's
+ * span allocator: the heap's resident size follows LIVE high water,
+ * not every burst it has ever seen. The header's cap word -- garbage
+ * for every unpaged object until now, validated only for page residents
+ * -- tags the mapping, so the release site needs no table and no
+ * extra header byte: tagged munmaps, untagged frees. munmap runs at
+ * sweep time, stopped-the-world: no task can hold a pointer under
+ * conservatively-scan rules that sl_gc_set's membership did not
+ * already reject, and no other thread can be mid-visit.
+ *
+ * 4096 alignment gives the payload its 8-alignment for free; the map
+ * length is recovered at release from the header's own size, so no
+ * bytes of bookkeeping ride with the object. */
+
+#define SL_GC_BIG_MIN (256 * 1024)
+#define SL_GC_BIG_TAG 0xFFFFFFFFu
+
+static sl_gc_obj *sl_gc_span_alloc(size_t total) {
+    size_t map_len = (total + 4095) & ~(size_t)4095;
+    void *base = mmap(NULL, map_len, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (base == MAP_FAILED) {
+        if (sl_gc_stat_enabled())
+            atomic_fetch_add_explicit(&sl_gc_stat_span_fallback, 1,
+                                      memory_order_relaxed);
+        return NULL;
+    }
+    if (sl_gc_stat_enabled())
+        atomic_fetch_add_explicit(&sl_gc_stat_span_allocs, 1,
+                                  memory_order_relaxed);
+    return (sl_gc_obj *)base;
+}
+
+static void sl_gc_big_release(sl_gc_obj *h) {
+    if (h->cap == SL_GC_BIG_TAG) {
+        size_t total = sizeof(sl_gc_obj) + h->size;
+        munmap((void *)h, (total + 4095) & ~(size_t)4095);
+        if (sl_gc_stat_enabled())
+            atomic_fetch_add_explicit(&sl_gc_stat_span_frees, 1,
+                                      memory_order_relaxed);
+        return;
+    }
+    free(h);
+}
+
 static void sl_gc_class_push(sl_gc_obj *h) {
     size_t total = h->size + sizeof(sl_gc_obj);
     int c = sl_gc_class_for(total);
     if (c < 0) {
-        free(h);
+        sl_gc_big_release(h);
         return;
     }
     /* Scrub GC state before freelisting: a recycled header must be
@@ -1119,6 +1202,7 @@ static void sl_gc_class_push(sl_gc_obj *h) {
     pthread_mutex_lock(&sl_gc_class_mu);
     if (sl_gc_class_fl_n[c] < SL_GC_CLASS_MAX) {
         h->next = sl_gc_class_fl[c];
+        h->cap = 0;
         sl_gc_class_fl[c] = h;
         sl_gc_class_fl_n[c]++;
         pthread_mutex_unlock(&sl_gc_class_mu);
@@ -1128,7 +1212,7 @@ static void sl_gc_class_push(sl_gc_obj *h) {
     if (sl_gc_class_stat_enabled())
         atomic_fetch_add_explicit(&sl_gc_class_stat_over, 1,
                                   memory_order_relaxed);
-    free(h);
+    sl_gc_big_release(h);
 }
 
 /* ---- Phase 1 (§7f): per-worker young pages ----
@@ -2355,9 +2439,27 @@ static inline void *sl_gc_alloc_impl(size_t n,
         h = sl_gc_class_pop(total);
     }
     if (!h) {
-        h = (sl_gc_obj *)malloc(total);
-        if (!h) { fprintf(stderr, "slang: out of memory\n"); exit(1); }
-        h->paged = 0;
+        if (total >= SL_GC_BIG_MIN) {
+            /* Large objects take their own anonymous mapping (see
+               sl_gc_big_release for why): one syscall pair per
+               burst-sized object, the whole mapping released at the
+               sweep death. mmap's pages arrive zero, the allocation's
+               documented guarantee, so the memset below stays the
+               only clear needed on either path. Failure falls back to
+               malloc, released through the same site with an untagged
+               cap. */
+            h = sl_gc_span_alloc(total);
+            if (h) {
+                h->paged = 0;
+                h->cap = SL_GC_BIG_TAG;
+            }
+        }
+        if (!h) {
+            h = (sl_gc_obj *)malloc(total);
+            if (!h) { fprintf(stderr, "slang: out of memory\n"); exit(1); }
+            h->paged = 0;
+            h->cap = 0;
+        }
     }
     if (zero)
         memset(h + 1, 0, n);
@@ -3586,6 +3688,70 @@ static void sl_gc_nursery_set_max(long workers) {
     sl_gc_nursery_max = mx;
 }
 
+/* Decay the nursery toward its floor during allocation-free intervals.
+ * sl_gc_nursery_adapt only ever resizes when a MINOR lands, so its
+ * high-water trigger survives an idle stretch untouched: a burst-sized
+ * nursery (the sort benchmark's scene, a server's request wave) whose
+ * next burst is minutes later keeps the big trigger and, with it, the
+ * worker pages a 16MB cycle filled. The preemption ticker calls this
+ * every few ms: when the decay window has passed without a minor --
+ * allocation-free by the nursery's own bookkeeping, since a minor is
+ * what a burst pays for -- halve toward the floor. Burst-adaptive
+ * growth (sl_gc_nursery_adapt) restores the trigger on demand, so a
+ * busy workload pays nothing but the check: two atomic loads and a
+ * clock read on its own thread.
+ *
+ * The check runs on the ticker, a dedicated native thread: no GC locks
+ * and no _Thread_local state exist on this path, only the atomics the
+ * collector already writes. Races with sl_gc_nursery_adapt's own store
+ * are benign (both compute from the current value; last writer wins and
+ * the other mechanism refits on the next minor). */
+static long long sl_gc_idle_decay_ns(void) {
+    static long long cached = -2;
+    if (cached == -2) {
+        const char *e = getenv("SLANG_GC_IDLE_DECAY_MS");
+        long long ms = e ? atoll(e) : 50;
+        if (ms < 0)
+            ms = 0;
+        cached = ms * 1000000LL;
+    }
+    return cached;
+}
+
+static void sl_gc_nursery_idle_decay(void) {
+    long long every = sl_gc_idle_decay_ns();
+    if (!every || sl_gc_nursery_fixed)
+        return;
+    long long now = sl_rt_monotonic_ns();
+    long long end = atomic_load_explicit(&sl_gc_minor_last_end_ns,
+                                         memory_order_relaxed);
+    /* No minor yet, or one landed more recently than the window: the
+     * nursery is doing its job, leave it. */
+    if (!end || now - end < every)
+        return;
+    size_t cur = atomic_load_explicit(&sl_gc_nursery_threshold,
+                                      memory_order_relaxed);
+    /* The floor: what the heap needs while only the last minor's
+     * survivors are live (its live total, doubled, and never under
+     * 1MB -- the base a real program's steady state wants). The decay
+     * steps stop at it, and sl_gc_nursery_adapt grows the trigger
+     * back past it on the next burst. */
+    size_t floor = 2 * atomic_load_explicit(&sl_gc_last_minor_live,
+                                            memory_order_relaxed);
+    if (floor < 1024 * 1024)
+        floor = 1024 * 1024;
+    if (cur <= floor)
+        return;
+    size_t next = cur / 2;
+    if (next < floor)
+        next = floor;
+    atomic_store_explicit(&sl_gc_nursery_threshold, next,
+                          memory_order_relaxed);
+    if (sl_gc_stat_enabled())
+        atomic_fetch_add_explicit(&sl_gc_stat_decays, 1,
+                                  memory_order_relaxed);
+}
+
 /* After each minor (collector, under sl_gc_mu): resize the nursery from
  * this minor's pause against the time since the previous minor ended,
  * and from how much of the nursery it found live. Growing pays only when
@@ -3600,8 +3766,12 @@ static void sl_gc_nursery_adapt(long long start_ns, long long end_ns,
                                 size_t live_young) {
     if (sl_gc_nursery_fixed)
         return;
-    long long prev = sl_gc_minor_last_end_ns;
-    sl_gc_minor_last_end_ns = end_ns;
+    long long prev = atomic_load_explicit(&sl_gc_minor_last_end_ns,
+                                          memory_order_relaxed);
+    atomic_store_explicit(&sl_gc_minor_last_end_ns, end_ns,
+                          memory_order_relaxed);
+    atomic_store_explicit(&sl_gc_last_minor_live, live_young,
+                          memory_order_relaxed);
     if (!prev)
         return;
     long long pause = end_ns - start_ns;

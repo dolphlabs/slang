@@ -252,6 +252,52 @@ What the holes it found teach, as rules:
 - **Nothing live may stay young across a discarded remembered set.** A
   major empties the set, so it promotes everything it keeps.
 
+### Burst memory comes home (large-object spans and the idle decay, 2026-10)
+
+Both mechanisms answer the same question: RSS that follows the heap's
+LIVE high water, not the biggest burst it ever served.
+
+- **Large objects own their mapping.** Everything over a page's budget
+  (1KB total) used to be `malloc`'d and `free`'d at the sweep, and both
+  libc's kept the pages: glibc treats a freed mmap'd block as its new
+  dynamic mmap threshold (burst an 8MB list once, every later
+  megabyte-class block comes out of a retained arena), and macOS's
+  zones hold freed pages. Now a total of `SL_GC_BIG_MIN` (256KB) and
+  up takes its own anonymous `mmap` and releases the whole mapping
+  (`munmap`) at the sweep death — the same shape as Go's span
+  allocator, one syscall pair per burst-sized object, demand-faulted.
+  The release goes through `sl_gc_class_push` (the one funnel a dead
+  unpaged object saw); the header's `cap` word — garbage for every
+  unpaged object before this, validated only for page residents — tags
+  the mapping, so no table and no extra header byte: tagged munmaps,
+  untagged frees, and `h->cap = 0` scrubbed at every malloc birth.
+  Counters in the `SLANG_GC_STAT` line: `spans=`, `span_fallbacks=`,
+  `span_frees=`.
+  `munmap` runs at sweep time, stopped-the-world: no task can hold a
+  flag `sl_gc_set`'s membership had not already rejected, so the
+  conservative-scan story is unchanged. `fini` runs before the release
+  like it did before `free`.
+- **The nursery trigger decays when the program idles.**
+  `sl_gc_nursery_adapt` resizes only when a minor lands, so a burst's
+  16MB trigger survived the idle stretch that followed it, keeping the
+  young-page high water a 16MB cycle filled (the sort benchmark:
+  `nursery_threshold=16777216` at exit). The preemption ticker calls
+  `sl_gc_nursery_idle_decay` every tick: past
+  `SLANG_GC_IDLE_DECAY_MS` (default 50, 0 off) without a minor, the
+  trigger halves toward `max(1MB, 2x the last minor's live young)`,
+  once per tick, and `sl_gc_nursery_adapt` grows it back on the next
+  burst. The ticker is a dedicated native thread touching only
+  atomics (no locks, no task TLS); racing `sl_gc_nursery_adapt`'s own
+  store is benign (both compute from the current value, the other
+  mechanism refits at the next minor). `decays=` counts the steps;
+  the trigger's last-end timestamp and last-minor live total are the
+  `_Atomic`s `sl_gc_minor_last_end_ns` / `sl_gc_last_minor_live`.
+  Fixed-nursery tests (`SLANG_GC_NURSERY_KB`, `THRESHOLD_KB`) are
+  exempt via `sl_gc_nursery_fixed`.
+  Same workload, before/after: RSS 74-80 MB against Go's 47 went to
+  41.5 MB (under Go), minor-pause max 43 ms to 14.6, major max 12.8 ms
+  to 4.4, minors 80 to 89, promotion identical.
+
 ### Write barrier
 
 **This is the risky, invasive part — the only part touching codegen,

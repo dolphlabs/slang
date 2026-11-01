@@ -764,7 +764,7 @@ for name in gc_ctor_payload gc_map_put pg_rows_as postgres http_client_pool http
             generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry loop_leaf_poll loop_leaf_plus safepoint_task_once own_roots switch escape_roots \
             http_read_wire bytes_empty_literal gc_minor_barriers net_dns_records map_delete if_let \
             literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions json_parity json_utf8 json_decode_budget \
-            bytes json_deep_nesting gc_container_frontier gc_promotion_budget gc_chan_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks; do
+            bytes json_deep_nesting gc_container_frontier gc_promotion_budget gc_chan_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks gc_idle_decay; do
     out="/tmp/sl_gcstress_${name}.out"
     if ! SLANG_GC_THRESHOLD_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -794,7 +794,7 @@ for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put v
             json_int_exact flags method_recv method_recv_gc indirect_callee \
             http_read_wire bytes_empty_literal gc_minor_barriers net_dns_records map_delete if_let \
             literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions loop_leaf_plus safepoint_task_once json_parity json_utf8 json_decode_budget \
-            bytes json_deep_nesting gc_container_frontier gc_promotion_budget gc_chan_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks; do
+            bytes json_deep_nesting gc_container_frontier gc_promotion_budget gc_chan_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks gc_idle_decay; do
     out="/tmp/sl_nursery_${name}.out"
     if ! SLANG_GC_NURSERY_KB=16 ./slangc "tests/$name/main.sl" --run \
             >"$out" 2>/dev/null; then
@@ -826,7 +826,7 @@ for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc
             spawn_isolation select maps pg_rows_as json json_parity json_utf8 json_decode_budget \
             bytes json_deep_nesting redis http_read_wire http_client_pool http2_flood h2_client h2_client_close chan_recv_promoted value_results value_opts \
             gc_promotion_budget gc_chan_promotion_budget \
-            value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks gc_skip_queued \
+            value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks gc_skip_queued gc_idle_decay \
             spawn_join_local spawn_call_args link_tls link_split fn_value_shadows_function select_send_escapes \
             sched_idle_wakes; do
     [ -f "tests/$name/main.sl" ] || continue
@@ -1402,6 +1402,39 @@ for spec in gc_promotion_budget:bounded gc_nursery_small:small; do
     fi
 done
 [ "$nur_ad_bad" -eq 0 ] && echo "PASS nursery adaptation"
+
+# ---- big-object spans + idle decay --------------------------------------------
+# gc_idle_decay churns 1MB-class lists and strings: every one is mmap'd
+# (spans=) and its sweep death munmaps it (span_frees=), so a heap's
+# resident size follows live high water, not the biggest burst it ever
+# served (runtime/sl_gc.c, the SL_GC_BIG_MIN path). The program then
+# sleeps 150ms: the idle decay walks the adapted nursery trigger back
+# (decays=; 0 steps is legitimate when the workload never lifted the
+# trigger past the max(1MB, 2x survivors) floor, which the runtime test
+# covers directly). What must hold either way: the trigger at exit is
+# nowhere near the 16MB high water a grown trigger used to keep after
+# an idle stretch, and no mapped span fell back to malloc.
+echo "--- big spans + idle decay (SLANG_GC_STAT) ---"
+ir_stats=$(SLANG_GC_STAT=1 ./slangc tests/gc_idle_decay/main.sl --run 2>&1 >/dev/null |
+           sed -n 's/^slang-gc-stat collects=.* nursery_threshold=\([0-9]*\) minor_pause_ns_total=[0-9]* spans=\([0-9]*\) span_fallbacks=[0-9]* span_frees=\([0-9]*\) decays=[0-9]*$/\1 \2 \3/p')
+if [ -z "$ir_stats" ]; then
+    echo "FAIL big spans + idle decay (bad slang-gc-stat line: $(SLANG_GC_STAT=1 ./slangc tests/gc_idle_decay/main.sl --run 2>&1 >/dev/null | grep slang-gc-stat | head -1 | cut -c1-120))"
+    fail=1
+else
+    ir_bad=0
+    ir_size=$(echo "$ir_stats" | awk '{print $1}')
+    ir_spans=$(echo "$ir_stats" | awk '{print $2}')
+    ir_frees=$(echo "$ir_stats" | awk '{print $3}')
+    if [ "$ir_spans" -lt 1 ] || [ "$ir_frees" -lt 1 ]; then
+        echo "FAIL big spans + idle decay: spans=$ir_spans span_frees=$ir_frees (big objects did not map and unmap)"
+        ir_bad=1
+    fi
+    if [ "$ir_size" -gt 8388608 ]; then
+        echo "FAIL big spans + idle decay: nursery_threshold=$ir_size above 8 MB at exit (trigger kept its burst high water)"
+        ir_bad=1
+    fi
+    [ "$ir_bad" -eq 0 ] && echo "PASS big spans + idle decay"
+fi
 
 # ---- majors paced by promotion -----------------------------------------------
 # A major comes after the live-paced threshold of PROMOTED bytes, or every
