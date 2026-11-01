@@ -5534,6 +5534,14 @@ What this means in practice:
   for tests, since a rooting bug only shows when a collection lands at
   the one safepoint where an object is unrooted. `SLANG_GC_NURSERY_KB=n`
   does the same for minors.
+- Objects of 256 KB total and up take their own `mmap` and give it back
+  whole at the sweep death, so a heap's resident size follows live high
+  water instead of the highest burst it ever served (`spans=` /
+  `span_frees=` in the stat line). The nursery's adapted threshold —
+  grown to 16 MB under load — decays toward `max(1 MB, 2× the last
+  minor's survivors)` while a program goes allocation-free for
+  `SLANG_GC_IDLE_DECAY_MS` (default 50; 0 disables), and regrows on the
+  next burst (`decays=` counts the steps).
 - `SLANG_GC_VERIFY_MINOR=1` checks every minor against a full mark and
   reports any live young object it missed, with the kind of old
   container holding it -- a store with no write barrier. It prints
