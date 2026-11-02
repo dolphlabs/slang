@@ -288,6 +288,7 @@ static const char *instantiate(CG *cg, StructTmpl *tm, char **args, int n,
                      key, cg->structs.items[i]->canonical, mangled);
     }
     cg->structs.items[cg->structs.count++] = sd;
+    cg_lookup_reset(cg);
 
     TypeEnv env;
     env.n = n;
@@ -479,6 +480,7 @@ FuncSig *method_instantiate(CG *cg, StructDef *sd, const char *name,
             cg->sigs.items, cg->sigs.cap * sizeof(FuncSig *));
     }
     cg->sigs.items[cg->sigs.count++] = sig;
+    cg_lookup_reset(cg);
     fi->fn->sig_idx = cg->sigs.count;
     fi->sig = sig;
 
@@ -821,6 +823,7 @@ FuncSig *generic_call_sig(CG *cg, const char *pkg, const char *name, Expr *e) {
             cg->sigs.items, cg->sigs.cap * sizeof(FuncSig *));
     }
     cg->sigs.items[cg->sigs.count++] = sig;
+    cg_lookup_reset(cg);
     fi->fn->sig_idx = cg->sigs.count;
     fi->sig = sig;
 

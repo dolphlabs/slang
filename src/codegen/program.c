@@ -99,6 +99,7 @@ void sig_register_raw(CG *cg, Package *p, FuncDecl *f,
     FuncSig *stored = (FuncSig *)xmalloc(sizeof(FuncSig));
     *stored = sig;
     cg->sigs.items[cg->sigs.count++] = stored;
+    cg_lookup_reset(cg);
     f->sig_idx = cg->sigs.count;
 }
 
@@ -170,6 +171,7 @@ void collect_decls(CG *cg, Package *pkgs, int npkgs) {
             sd->nlts = s->as.struct_decl.nlts;
             sd->line = s->line;
             sd->file = s->file;
+            cg_lookup_reset(cg);
         }
     }
 

@@ -8,6 +8,103 @@
 #include <setjmp.h>
 #include <string.h>
 
+/* ------------------------------------------------------------------ */
+/* Lookup caches                                                       */
+/* ------------------------------------------------------------------ */
+
+/* The decl tables are plain arrays whose lookups are strcmp scans:
+ * struct_find_canon, sig_find_in, method_find and the type predicates
+ * below. On say's frontend about half of every sampled second sat in
+ * those scans or in the strcmps underneath them -- each predicate call
+ * re-walked the type tree field by field, each field asking for its
+ * struct all over again. These caches (declared per CG in internal.h)
+ * hold one hash row per distinct key; row values are real pointers, or
+ * one of the two result encodings below. Rows answer only what their key
+ * implies structurally: nothing here outlives a table append, the reset
+ * hook see below. */
+
+void cg_lookup_reset(CG *cg) {
+    /* Rows go away entirely: a cached negative answer ("no such struct",
+     * "not copyable") is exactly what an append can invalidate, and the
+     * append will be followed by asks whose answers depend on it. */
+    CGCache *caches[] = {&cg->struct_map, &cg->sig_map, &cg->method_map,
+                         &cg->drop_map,  &cg->copy_map};
+    for (int i = 0; i < 5; i++) {
+        CGCache *c = caches[i];
+        if (c->rows) {
+            for (int j = 0; j < c->cap; j++)
+                free(c->rows[j].key);
+            free(c->rows);
+        }
+        c->rows = NULL;
+        c->cap = c->count = 0;
+    }
+}
+
+/* type_needs_drop / type_is_copy results, parked as 1 = no, 2 = yes
+ * (cast through uintptr_t): a struct pointer can never be 1 or 2, so the
+ * same row types serve every user of a cache unambiguously. */
+#define SV_NO ((void *)(uintptr_t)1)
+#define SV_YES ((void *)(uintptr_t)2)
+
+/* FNV-1a: the same mix fnv64 uses to name instance C symbols, spelled
+ * for a size_t over the key's bytes. Standard, and cheap to parallelize
+ * with nothing: it is already called once per table look at most. */
+static unsigned long long fnv_strkey(const char *s) {
+    unsigned long long h = 1469598103934665603ULL;
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++)
+        h = (h ^ *p) * 1099511628211ULL;
+    return h;
+}
+
+static void sv_grow(CGCache *c) {
+    CGCacheEnt *old = c->rows;
+    int oldcap = c->cap, newcap = oldcap ? oldcap * 2 : 64;
+    c->rows = (CGCacheEnt *)xmalloc(newcap * sizeof(CGCacheEnt));
+    c->cap = newcap;
+    for (int i = 0; i < newcap; i++)
+        c->rows[i].key = NULL;
+    for (int i = 0; i < oldcap; i++) {
+        if (!old[i].key)
+            continue;
+        int slot = (int)(fnv_strkey(old[i].key) & (newcap - 1));
+        while (c->rows[slot].key)
+            slot = (slot + 1) & (newcap - 1);
+        c->rows[slot] = old[i];
+    }
+    if (old)
+        free(old);
+}
+
+static void sv_put(CGCache *c, const char *key, void *val) {
+    if (c->count * 2 >= c->cap)
+        sv_grow(c);
+    int slot = (int)(fnv_strkey(key) & (c->cap - 1));
+    while (c->rows[slot].key && strcmp(c->rows[slot].key, key))
+        slot = (slot + 1) & (c->cap - 1);
+    if (!c->rows[slot].key) {
+        c->rows[slot].key = xstrdup(key);
+        c->count++;
+    }
+    c->rows[slot].val = val;
+}
+
+/* NULL from here means "no cached row" -- or a cached miss, once the
+ * caller installs SV_NO. A cached miss survives only until the next
+ * cg_lookup_reset, which every caller trusts to have happened at every
+ * append that could turn the miss into a hit. */
+static void *sv_get(CGCache *c, const char *key) {
+    if (c->cap == 0)
+        return NULL;
+    unsigned long long h = fnv_strkey(key);
+    for (int slot = (int)(h & (c->cap - 1));; slot = (slot + 1) & (c->cap - 1)) {
+        if (!c->rows[slot].key)
+            return NULL;
+        if (!strcmp(c->rows[slot].key, key))
+            return c->rows[slot].val;
+    }
+}
+
 
 /* ------------------------------------------------------------------ */
 /* Diagnostics                                                         */
@@ -680,7 +777,18 @@ TypeWrap type_wrap(const char *t, char **inner) {
     return TW_NONE;
 }
 
+static int type_is_copy_uncached(CG *cg, const char *t);
+
 int type_is_copy(CG *cg, const char *t) {
+    void *hit = sv_get(&cg->copy_map, t);
+    if (hit)
+        return hit == SV_YES;
+    int r = type_is_copy_uncached(cg, t);
+    sv_put(&cg->copy_map, t, r ? SV_YES : SV_NO);
+    return r;
+}
+
+static int type_is_copy_uncached(CG *cg, const char *t) {
     char *inner;
     TypeWrap w = type_wrap(t, &inner);
     if (w == TW_OWN || w == TW_REFMUT)
@@ -704,7 +812,18 @@ int type_is_copy(CG *cg, const char *t) {
     return 1;
 }
 
+static int type_needs_drop_uncached(CG *cg, const char *t);
+
 int type_needs_drop(CG *cg, const char *t) {
+    void *hit = sv_get(&cg->drop_map, t);
+    if (hit)
+        return hit == SV_YES;
+    int r = type_needs_drop_uncached(cg, t);
+    sv_put(&cg->drop_map, t, r ? SV_YES : SV_NO);
+    return r;
+}
+
+static int type_needs_drop_uncached(CG *cg, const char *t) {
     char *inner;
     TypeWrap w = type_wrap(t, &inner);
     if (w == TW_OWN)
@@ -1998,22 +2117,45 @@ char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
 /* A package-level function (or extern) by name. Never a method: those
  * live in their struct's namespace -- see method_find. */
 FuncSig *sig_find_in(CG *cg, const char *pkg, const char *name) {
-    for (int i = 0; i < cg->sigs.count; i++) {
-        /* An instance of a generic function is excluded: it shares its
-         * (pkg, name) with every OTHER instance of the same function, so
-         * a bare name search cannot tell them apart -- only the call
-         * site's argument types can, which is what generic_call_sig
-         * unifies against. A caller that reaches here for a call that
-         * might be generic must fall back to generic_call_sig itself
-         * when this returns NULL. */
+    /* pkg+name in one key: the packages and names are too varied to
+     * reserve a stack buffer they always fit, so the common size rides
+     * on one and only a long pair allocates. */
+    char kbuf[192];
+    size_t np = strlen(pkg), nn = strlen(name);
+    char *key;
+    if (np + nn + 2 <= sizeof kbuf) {
+        memcpy(kbuf, pkg, np);
+        kbuf[np] = '\x01';
+        memcpy(kbuf + np + 1, name, nn);
+        kbuf[np + nn + 1] = '\0';
+        key = kbuf;
+    } else {
+        key = xasprintf("%s\x01%s", pkg, name);
+    }
+    void *hit = sv_get(&cg->sig_map, key);
+    if (hit)
+        return hit == SV_NO ? NULL : (FuncSig *)hit;
+    /* An instance of a generic function is excluded: it shares its
+     * (pkg, name) with every OTHER instance of the same function, so
+     * a bare name search cannot tell them apart -- only the call
+     * site's argument types can, which is what generic_call_sig
+     * unifies against. A caller that reaches here for a call that
+     * might be generic must fall back to generic_call_sig itself
+     * when this returns NULL. Instance rows never enter the cache:
+     * their key would disagree with every ordinary row under it. */
+    FuncSig *found = NULL;
+    for (int i = 0; i < cg->sigs.count && !found; i++) {
         if (cg->sigs.items[i]->inst_key)
             continue;
         if (!cg->sigs.items[i]->method_of &&
             !strcmp(cg->sigs.items[i]->pkg, pkg) &&
             !strcmp(cg->sigs.items[i]->name, name))
-            return cg->sigs.items[i];
+            found = cg->sigs.items[i];
     }
-    return NULL;
+    sv_put(&cg->sig_map, key, found ? (void *)found : SV_NO);
+    if (key != kbuf)
+        free(key);
+    return found;
 }
 
 void glob_push(CG *cg, const char *name, const char *pkg,
@@ -2200,11 +2342,16 @@ char *path_base(const char *path) {
 }
 
 StructDef *struct_find_canon(CG *cg, const char *canon) {
-    for (int i = 0; i < cg->structs.count; i++) {
+    void *hit = sv_get(&cg->struct_map, canon);
+    if (hit)
+        return hit == SV_NO ? NULL : (StructDef *)hit;
+    StructDef *found = NULL;
+    for (int i = 0; i < cg->structs.count && !found; i++) {
         if (!strcmp(cg->structs.items[i]->canonical, canon))
-            return cg->structs.items[i];
+            found = cg->structs.items[i];
     }
-    return NULL;
+    sv_put(&cg->struct_map, canon, found ? (void *)found : SV_NO);
+    return found;
 }
 
 StructDef *struct_find_in_pkg(CG *cg, const char *pkg,
@@ -2490,12 +2637,43 @@ int is_builtin_name(const char *name) {
  * where it is being asked for: an instance's method is made on demand, and
  * an error inside its body reports that line as the request site. */
 FuncSig *method_find(CG *cg, StructDef *sd, const char *name, int line) {
-    for (int i = 0; i < cg->sigs.count; i++) {
+    /* Hits go through the cache; misses never do -- a miss may trigger
+     * the instance creation below, which appends to the sig table, and
+     * the reset that append carries must be what turns the next ask
+     * into a hit the normal way. */
+    char kbuf[256];
+    size_t np = strlen(sd->pkg), no = strlen(sd->canonical),
+           nn = strlen(name);
+    char *key;
+    if (np + no + nn + 3 <= sizeof kbuf) {
+        memcpy(kbuf, sd->pkg, np);
+        kbuf[np] = '\x01';
+        memcpy(kbuf + np + 1, sd->canonical, no);
+        kbuf[np + no + 1] = '\x01';
+        memcpy(kbuf + np + no + 2, name, nn);
+        kbuf[np + no + nn + 2] = '\0';
+        key = kbuf;
+    } else {
+        key = xasprintf("%s\x01%s\x01%s", sd->pkg, sd->canonical, name);
+    }
+    void *hit = sv_get(&cg->method_map, key);
+    if (hit)
+        return (FuncSig *)hit;
+    FuncSig *found = NULL;
+    for (int i = 0; i < cg->sigs.count && !found; i++) {
         FuncSig *s = cg->sigs.items[i];
         if (!strcmp(s->pkg, sd->pkg) && !strcmp(s->name, name) &&
             s->method_of && !strcmp(s->method_of, sd->canonical))
-            return s;
+            found = s;
     }
+    if (found) {
+        sv_put(&cg->method_map, key, found);
+        if (key != kbuf)
+            free(key);
+        return found;
+    }
+    if (key != kbuf)
+        free(key);
     /* An instance of a generic struct has no methods until one is asked
      * for. Every caller goes through here, so this is the only place that
      * has to know. */
