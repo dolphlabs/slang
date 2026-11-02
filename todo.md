@@ -4347,6 +4347,30 @@ are higher. Sharding still cuts them there -- on this Intel Mac, dev with
 the same counter on sl_gc_mu gave 2666-2992 and the shards 127-155 -- but
 there is no arm64 Mac here to set a budget from.
 
+## Fixed: the codegen's decl-table lookups scanned on every ask (2026-11-01)
+
+`say`'s `--dev` builds took ~19 s, and the split said why: ~1 s cc at
+`-O0`, but 11 s in slangc. Sampling slangc over one emit put ~45% of the
+samples in string scans or the strcmps under them: `struct_find_canon`
+compared the request against every struct's canonical name per call,
+`sig_find_in` and `method_find` did the same over every FuncSig, and
+`type_needs_drop`/`type_is_copy` walked each struct's fields through those
+scans again per ask -- for a program whose Cgen inlines 688 generic
+instances. struct_find_canon had only the strcmp over items; caches keyed
+by exact key text now serve all of them (five per-CG caches in
+src/codegen/core.c, invalidated wholesale by cg_lookup_reset at every
+site that appends a StructDef or FuncSig -- instances register only when
+first asked for, so a cached "no" must not outlive an append; the first
+cut marked dirty and lost stale rows, which re-instantiated one instance
+twice and collided on its C name -- caught building say's ledger).
+
+Same host, same session, paired rounds, `--emit-c` on say: old medians
+9.5-13.1 s (10.4 median) against 4.8-5.6 s (5.2); full `--dev` builds
+15.2-17.5 s (15.6 median) against 10.8-11.8 s (10.9). Generated C is
+byte-identical for say and zokor. After the caches, the remaining strcmp
+share is `import_try`'s per-identifier import scan (~12% of samples) --
+next lead, not yet taken.
+
 ## Fixed: a large program compiled three times per build (2026-10-28)
 
 `say` (a zokor service, ~21k lines of slang plus zokor, pg, redis, json and

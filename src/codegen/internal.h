@@ -214,6 +214,24 @@ typedef struct {
     int cap;
 } FuncInstTable;
 
+/* One row of a CGCache. `key` is a private copy of the lookup key (the
+ * caller's strings are often stack or per-call allocations); `val` is
+ * either a real table pointer or a negative row (see core.c). */
+typedef struct {
+    char *key;
+    void *val;
+} CGCacheEnt;
+
+/* Open addressing, linear probing, never shrunk and freed only by
+ * cg_lookup_reset (every append to a decl table clears the caches; they
+ * grow again row by row as their keys are asked for). cap==0 means
+ * untouched. */
+typedef struct {
+    CGCacheEnt *rows;
+    int cap;
+    int count;
+} CGCache;
+
 /* A generic function declaration: `fn first[T](xs: [T]) -> T { ... }`.
  * Not callable itself -- calling its name triggers unification against
  * the call's arguments (and, for a parameter only the return type
@@ -418,6 +436,19 @@ struct CG {
     TmplTable tmpls;
     FuncTmplTable ftmpls;
     FuncInstTable finsts;
+    /* Hot-path lookup caches over the tables above (src/codegen/core.c).
+     * The scans were the frontend's cost on big programs (about half the
+     * samples on say's run sat in these scans or in the strcmps under
+     * them). One row per distinct key; everything invalidates at once --
+     * see cg_lookup_reset, called from every site that appends a
+     * StructDef or FuncSig, because instances register only when first
+     * asked for: a miss today can hit tomorrow, so a cached "no" may not
+     * outlive an append that could turn it into a hit. */
+    CGCache struct_map;   /* canonical -> StructDef *  (struct_find_canon) */
+    CGCache sig_map;      /* pkg/name    -> FuncSig *  (sig_find_in)      */
+    CGCache method_map;   /* pkg/of/name -> FuncSig *  (method_find hits) */
+    CGCache drop_map;     /* type spelling -> type_needs_drop result */
+    CGCache copy_map;     /* type spelling -> type_is_copy result    */
     int insts_frozen;   /* set once the passes after the dry run have run:
                            a new instance from here on would never be
                            walked by them (see codegen_program) */
@@ -777,6 +808,7 @@ int safepoint_elidable(CG *cg, Expr *e);
 char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
                      const char *prelude, char *inner);
 FuncSig *sig_find_in(CG *cg, const char *pkg, const char *name);
+void cg_lookup_reset(CG *cg);
 void glob_push(CG *cg, const char *name, const char *pkg,
                       const char *slang, int is_pub);
 GlobSym *glob_find(CG *cg, const char *pkg, const char *name);
