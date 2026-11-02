@@ -625,9 +625,9 @@ static int cmd_test(int argc, char **argv) {
  * direction or the other.
  *
  * So the first compile asks: -Wframe-larger-than=N makes both compilers
- * report the true frame of every function above N bytes (clang at link time
- * under -flto, gcc at compile time with an "In function" line). A slang
- * function on that list is regenerated behind an entry guard
+ * report the true frame of every function above N bytes (at compile time
+ * on both, the release build carries no -flto; see the cc invocation
+ * below). A slang function on that list is regenerated behind an entry guard
  * (sl_rt_stack_reserve) and the program is compiled again. Programs with no
  * such function -- almost all of them -- take the one compile they always
  * did, and pay nothing at run time. SLANG_FRAME_LIMIT overrides N (the tests
@@ -1068,31 +1068,26 @@ static int build(const char *input, const char *outname, int emit_c,
 
     StrBuf cmd;
     sb_init(&cmd);
-    /* -O3 -flto on the generated C. Green-thread TLS still forbids
+    /* -O3 on the generated C, with no -flto. Green-thread TLS still forbids
        caching sl_rt_current_task (or any _Thread_local) across a park
        or preemption: the address is OS-thread affine, the task is not.
        Reads go through SL_RT_TLS_CUR.
        -fwrapv: slang's signed arithmetic wraps two's-complement, and C's
        is undefined on overflow -- without it the optimiser deleted
        overflow checks written in slang (`a + b < a` is "impossible").
-       -flto=auto, not -flto: given no job count, gcc's lto-wrapper
-       printed "warning: using serial compilation of N LTRANS jobs" on
-       every build big enough to partition, and slangc shows the
-       compiler's output. auto lets gcc pick the count; clang takes it as
-       full LTO, as it does -flto.
-       -flto=thin on Apple: Xcode 15's linker (ld-prime, ld-1053) drops
-       the diagnostics full LTO's code generation raises inside it, the
-       frame report among them, so no function was ever guarded there:
-       on its CI runner a 200-field json decoder ran off the task stack.
-       Thin LTO's report reaches slangc on every Xcode we have tried, and
-       the generated program is one translation unit, so thin and full
-       LTO optimize the same single module (the same frames, the same
-       build time on clang 17). */
-#if defined(__APPLE__)
-    const char *release_cc = "cc -O3 -flto=thin -fwrapv ";
-#else
-    const char *release_cc = "cc -O3 -flto=auto -fwrapv ";
-#endif
+       No -flto: the generated program is one translation unit, and the
+       runtime probe (json struct decode, map churn, repeated stdlib
+       sort) put the -O3 and -O3 -flto=auto builds' medians inside each
+       other's noise, so LTO buys nothing here. It costs real build time:
+       paired rounds on zokor's CLI (72k lines of generated C) -- cc
+       stage medians 10.0 s -> 8.8 s, full slangc build 12.0 -> 10.3 s,
+       oldest/newest rounds agreeing -- and on
+       gcc -flto additionally means the lto-wrapper may serialise
+       ("using serial compilation of N LTRANS jobs"). Leaving LTO out
+       also moves the frame reports back to the plain cc pass (Xcode
+       15's linker, ld-prime, drops the diagnostics raised inside full
+       LTO code generation, the frame report among them). */
+    const char *release_cc = "cc -O3 -fwrapv ";
     sb_append(&cmd, dev_build ? "cc -O0 -fwrapv -DSL_DEV_BUILD=1 " : release_cc);
     sb_append(&cmd, xasprintf("-Wframe-larger-than=%d ", frame_limit()));
     sb_append(&cmd, gen_path);
