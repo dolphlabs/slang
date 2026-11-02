@@ -4409,9 +4409,16 @@ What is left, by size:
     guards.
   - Less C: `say` instantiates 688 generic types and functions (slangc
     warns past 64), each emitted as its own copy.
-- `-flto=auto` on a single translation unit adds ~14 s (75 s against 61 s
-  without) and has no other unit to optimize across. Dropping it needs a
-  run-time measurement first.
+- [x] `-flto=auto` on a single translation unit: dropped (2026-11-01,
+  perf/build-no-lto) after the run-time measurement this line asked for.
+  Probe program compiled both ways, six ABBA rounds: json struct decode,
+  map churn and repeated stdlib sort land inside each other's noise (json
+  7 vs 8 ms median, map ~560 vs ~560, sort ~1000 vs ~957 -- under each
+  build's own spread), and the generated program is one unit, so there
+  was no other translation unit to optimize across. On zokor's CLI (72k
+  lines of generated C), paired rounds in one session: cc stage 10.0 s
+  medians -> 8.8 s, full build 12.0 -> 10.3 s. The flags note
+  (src/main.c) carries the numbers.
 
 Also seen, not fixed: with OpenSSL 4 every program using TLS prints
 "1 warning generated." (`SSL_set1_host` is deprecated in 4.0), passed on
