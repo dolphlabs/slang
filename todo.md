@@ -1,15 +1,48 @@
 # todo
 
-- [ ] **The reactor loses a parked read's deadline when its fd number is
-  reused (flagged 2026-10-25, not fixed).** Closing an fd while a task is
-  parked on it, then opening a socket that gets the same number and
-  parking a second read on that, leaves the second read unwoken -- its
-  deadline included: gdb showed every worker idle and nothing runnable.
-  The http2 client did exactly this (below) and is fixed at the caller, but
-  any code that closes an fd another task is reading can still wedge a
-  later connection. `net.close` on an fd with waiters should wake them
-  with an error, or the reactor should key waiters by more than the fd
-  number. Needs its own repro in C before a fix.
+- [x] **`net.close` left a task parked on the fd asleep forever
+  (2026-11-06, fix/reactor-fd-reuse).** Closing an fd drops its registration
+  with no event, so its waiter stayed on the list, and a later wait on the
+  reused number overwrote its slot. `net.close` now takes the fd's waiters
+  before `close(2)` and resumes them after it, with a new result,
+  `SL_REACTOR_CLOSED`, surfacing as the error "closed": -1 would not do,
+  because send ignores it to outlive a shutdown nudge, and a woken waiter
+  must not retry a number another connection may own. tests/reactor_close_wakes
+  fails on dev ("a parked task was not woken by close") on kqueue and epoll.
+  A stale ticking reader also took a reused number's data in 2 of 40 rounds
+  on dev and 0 of 40 with the fix. Today's h2_client and h2_client_close, 500
+  runs each on linux under the minor verifier with a 16KB nursery: no hang,
+  no failure.
+  **This is not the whole of what the 2026-10-25 entry claimed:**
+  - The second read's lost deadline did not reproduce, on either reactor,
+    with the first waiter holding no deadline or a long one. Deadlines are
+    scanned from the lists, not the slots, and the reactor sleeps at most 1 s.
+  - The original h2_client hang reproduced at 80c9878, the commit before
+    #467 (1 hang in about 70 runs, 4 loops in parallel, linux docker): all
+    workers idle and a worker in `epoll_wait` with timeout=1000 about 20 s
+    in, so one snapshot with no deadline due within a second, and the reactor
+    not stuck. It is **not explained**. This fix on that tree did not end it
+    (2 hangs in about 32 runs), and a read on a closed-and-reused number
+    does not account for those two, since the close wakes that reader. #467
+    remains what ended it; the old http2 client is gone, so this was not
+    chased further.
+  **Left:** a task that has seen EAGAIN but not parked when the close lands
+  waits on a number that is free or reused. Closing an fd another task is
+  using stays a race; ending it takes a reference count per fd, as Go's
+  fdMutex, or a handle that is not the number (`sl_link` is one). `sl_link`
+  and TLS closes do not wake waiters: a link is not shared between tasks.
+
+- [ ] **epoll: a write wait on an fd cancels a read wait on it (found
+  2026-11-06, not fixed).** One registration per fd: `EPOLL_CTL_MOD` with
+  `EPOLLOUT` replaces the `EPOLLIN` of a read parked on the same fd. With a
+  reader parked and a writer blocked on a full socket, a byte from the peer
+  did not wake the reader, which ended on its 1500 ms deadline (1148 ms
+  after the byte); with no deadline it would hang. kqueue, one knote per
+  filter, woke it at once. `sl_link.split()` avoids this with a dup per
+  half; raw `net.*` fds do not, and `http2.transport_fd` is one, though the
+  http2 path was not tested. The registration needs both directions' interest
+  from both slots. Touches the same code as the deferred edge-triggered
+  re-arm (next-steps.md §4).
 
 - [x] **tests/h2_client hung about once in sixty runs on linux
   (2026-10-25, fix/http2-client-close-ownership).** `http2.client_close`

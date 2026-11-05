@@ -311,6 +311,11 @@ static _Atomic unsigned long long sl_reactor_reg_gen = 0;
 
 #define SL_REACTOR_READ  0
 #define SL_REACTOR_WRITE 1
+/* sl_reactor_wait_until's answer when the fd was closed under the wait.
+ * Distinct from -1, which send ignores to outlive a shutdown nudge: a
+ * waiter told this must not touch the fd again, because its number may
+ * already belong to another connection. */
+#define SL_REACTOR_CLOSED (-4)
 #define SL_REACTOR_SHUTDOWN_IDENT 0xDEADBEEF
 #define SL_REACTOR_TIMER_IDENT    0xDEADBEEE
 
@@ -433,6 +438,31 @@ static void sl_reactor_kick(void) {
     sl_rt_preempt_enable();
 }
 
+/* The waiters on fd, off their list and onto *ready, marked closed. Taken
+ * before close(2) and resumed after it: once the number is free another
+ * connection can own it, and its slot must not be mistaken for this fd's.
+ * The kernel drops the registration on close with no event, so nothing
+ * else would ever wake them, and a later wait on the reused number would
+ * overwrite their slot. */
+static void sl_reactor_take_closed(int fd, sl_task **ready) {
+    sl_reactor_wq *q = &sl_reactor_wqs[sl_reactor_wq_for(fd)];
+    pthread_mutex_lock(&q->mu);
+    for (int rw = SL_REACTOR_READ; rw <= SL_REACTOR_WRITE; rw++) {
+        sl_reactor_slot *s = sl_reactor_slot_at(fd, rw, 0);
+        if (!s || !s->task)
+            continue;
+        sl_task *t = s->task;
+        s->task = NULL;
+        if (!t->on_wq)
+            continue;
+        sl_reactor_wq_unlink(q, t);
+        t->wait_closed = 1;
+        t->next = *ready;
+        *ready = t;
+    }
+    pthread_mutex_unlock(&q->mu);
+}
+
 static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
                                  sl_until deadline) {
     if (deadline && sl_until_hit(deadline))
@@ -458,6 +488,7 @@ static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
     slot->task = sl_reactor_self;
     sl_reactor_self->wait_fd = fd;
     sl_reactor_self->wait_rw = rw;
+    sl_reactor_self->wait_closed = 0;
     sl_reactor_self->io_deadline_ns = deadline;
     sl_reactor_self->wq_prev = NULL;
     sl_reactor_self->next = wq->waiting;
@@ -528,9 +559,12 @@ static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
     }
     sl_task_park(&wq->mu);
     sl_reactor_self->io_deadline_ns = 0;
+    int sl_reactor_wait_closed = sl_reactor_self->wait_closed;
     int sl_reactor_wait_shutdown =
         atomic_load_explicit(&sl_rt_shutdown_flag, memory_order_acquire);
     sl_rt_preempt_enable();
+    if (sl_reactor_wait_closed)
+        return SL_REACTOR_CLOSED;
     if (sl_reactor_wait_shutdown)
         return -1;
     if (deadline && sl_until_hit(deadline))
@@ -1611,7 +1645,10 @@ static sl_res_i32_str *sl_net_accept(int lfd) {
             return sl_net_err_i32(strerror(errno));
         if (sl_net_user_nonblock_contains((void *)(intptr_t)lfd))
             return sl_net_err_i32("would block");
-        if (sl_reactor_wait(lfd, SL_REACTOR_READ, 1) < 0)
+        int w = sl_reactor_wait(lfd, SL_REACTOR_READ, 1);
+        if (w == SL_REACTOR_CLOSED)
+            return sl_net_err_i32("closed");
+        if (w < 0)
             return sl_net_err_i32("interrupted");
     }
 }
@@ -1751,10 +1788,13 @@ static sl_res_i32_str *sl_net_send_u(int fd, sl_bytes *data, sl_until u) {
            shutdown nudge so an in-flight write can finish
            (tests/proc_shutdown's own requirement) -- see
            sl_reactor_wait's own comment for why 1 here would busy-spin
-           at 100% CPU. Only -2 (deadline) ends the loop; -1 is the
-           shutdown nudge and is ignored exactly as before. */
-        if (sl_reactor_wait_until(fd, SL_REACTOR_WRITE, 0, u) == -2)
+           at 100% CPU. Only a deadline or a close ends the loop; -1 is
+           the shutdown nudge and is ignored exactly as before. */
+        int w = sl_reactor_wait_until(fd, SL_REACTOR_WRITE, 0, u);
+        if (w == -2)
             return sl_net_err_i32("timeout");
+        if (w == SL_REACTOR_CLOSED)
+            return sl_net_err_i32("closed");
     }
     return sl_net_ok_i32((int32_t)data->len);
 }
@@ -1881,7 +1921,9 @@ static sl_res_bytes_str *sl_net_recv_u(int fd, int max, sl_until u) {
         int wr = sl_reactor_wait_until(fd, SL_REACTOR_READ, 1, u);
         if (wr < 0) {
             sl_recv_buf_put(scratch);
-            return sl_net_err_bytes(wr == -2 ? "timeout" : "interrupted");
+            return sl_net_err_bytes(wr == -2 ? "timeout"
+                                    : wr == SL_REACTOR_CLOSED ? "closed"
+                                                              : "interrupted");
         }
     }
 }
@@ -1904,18 +1946,20 @@ static bool sl_net_idle_alive(int fd) {
     return n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK);
 }
 
+/* A task parked on fd is woken with "closed". One that has seen EAGAIN but
+ * not yet parked is not: it would wait on a number that is free or reused,
+ * so closing an fd another task is using stays a race for the caller to
+ * avoid. Fixing that takes a reference count per fd, as Go's fdMutex. */
 static void sl_net_close(int fd) {
     sl_net_user_nonblock_remove((void *)(intptr_t)fd); /* avoid a
         stale entry misapplying to a later, unrelated fd that
-        happens to reuse the same number. NOTE (known, accepted
-        limitation): if another task is genuinely parked waiting on
-        this fd via the reactor right now, closing it here silently
-        removes its kqueue registration with no event ever delivered
-        -- that task hangs forever, permanently leaking its GC roots
-        and, if it was spawned, wedging any active_tasks()-based
-        shutdown drain. Not exercised by any current test; not new
-        to this slice. */
+        happens to reuse the same number. */
+    sl_rt_preempt_disable();
+    sl_task *ready = NULL;
+    sl_reactor_take_closed(fd, &ready);
     close(fd);
+    sl_reactor_resume_all(ready);
+    sl_rt_preempt_enable();
 }
 
 static sl_res_bool_str *sl_net_nonblock(int fd) {
