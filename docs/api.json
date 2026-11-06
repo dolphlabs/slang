@@ -4408,9 +4408,9 @@
           "name": "sum",
           "decl": "fn",
           "sig": "fn sum[T](xs: [T]) -> float",
-          "doc": "The sum of xs, compensated (Neumaier): the rounding error of each addition is carried and added back at the end. 0 for an empty list; an infinity or NaN in xs gives the plain sum's inf or NaN.",
+          "doc": "The sum of xs, compensated: the exact rounding error of each addition (Knuth's TwoSum) is carried and added back at the end. 0 for an empty list; an infinity or NaN in xs gives the plain sum's inf or NaN.  Two independent running sums take alternate elements, so consecutive additions do not wait on each other: one chain held a sum to the latency of a float add per element, about half the speed of a plain loop. Every list function here sums the same way, in place -- they used to collect the terms in a list first and sum that, which for variance on a million values made the pushes 90% of the time.  A `for x in xs` loop, not a `while` over indices: the for loop takes its safepoint once around the loop and reads elements unchecked, where a while loop brackets every iteration and bounds-checks every index -- twice the time per element.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 39
+          "line": 51
         },
         {
           "name": "product",
@@ -4418,7 +4418,7 @@
           "sig": "fn product[T](xs: [T]) -> float",
           "doc": "The product of xs; 1 for an empty list.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 59
+          "line": 78
         },
         {
           "name": "mean",
@@ -4426,7 +4426,7 @@
           "sig": "fn mean[T](xs: [T]) -> float",
           "doc": "The arithmetic mean; NaN for an empty list.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 68
+          "line": 87
         },
         {
           "name": "weighted_mean",
@@ -4434,7 +4434,7 @@
           "sig": "fn weighted_mean[T, W](xs: [T], ws: [W]) -> float",
           "doc": "The mean with weights ws (one per value); NaN when the lengths differ, the list is empty, or the weights sum to 0.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 77
+          "line": 96
         },
         {
           "name": "geometric_mean",
@@ -4442,7 +4442,7 @@
           "sig": "fn geometric_mean[T](xs: [T]) -> float",
           "doc": "The geometric mean, exp(mean(log x)): for growth rates and ratios. 0 if any value is 0; NaN for an empty list or a negative value.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 94
+          "line": 117
         },
         {
           "name": "harmonic_mean",
@@ -4450,7 +4450,7 @@
           "sig": "fn harmonic_mean[T](xs: [T]) -> float",
           "doc": "The harmonic mean, n / sum(1/x): for averaging rates. 0 if any value is 0; NaN for an empty list or a negative value.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 114
+          "line": 141
         },
         {
           "name": "min",
@@ -4458,7 +4458,7 @@
           "sig": "fn min[T](xs: [T]) -> opt[T]",
           "doc": "The smallest element; none for an empty list. NaN never compares smaller, so a float list's NaNs are passed over.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 134
+          "line": 165
         },
         {
           "name": "max",
@@ -4466,7 +4466,7 @@
           "sig": "fn max[T](xs: [T]) -> opt[T]",
           "doc": "The largest element; none for an empty list. NaNs are passed over.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 148
+          "line": 179
         },
         {
           "name": "spread",
@@ -4474,7 +4474,7 @@
           "sig": "fn spread[T](xs: [T]) -> float",
           "doc": "max - min, as a float; NaN for an empty list.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 162
+          "line": 193
         },
         {
           "name": "sorted_floats",
@@ -4482,7 +4482,7 @@
           "sig": "fn sorted_floats[T](xs: [T]) -> [float]",
           "doc": "xs as floats, sorted ascending (NaN first, as sort.floats orders it): what median and quantile work on. Compute it once and use the _sorted variants when asking for several quantiles of one list.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 183
+          "line": 214
         },
         {
           "name": "median",
@@ -4490,7 +4490,7 @@
           "sig": "fn median[T](xs: [T]) -> float",
           "doc": "The middle value, or the mean of the two middle values; NaN for an empty list. Copies and sorts: O(n log n).",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 194
+          "line": 225
         },
         {
           "name": "quantile",
@@ -4498,7 +4498,7 @@
           "sig": "fn quantile[T](xs: [T], q: float) -> float",
           "doc": "The q-quantile (q in [0, 1]) by linear interpolation between the two nearest ranks -- type 7 in Hyndman and Fan, the default of R, NumPy and Excel's PERCENTILE.INC. NaN for an empty list or q outside [0, 1].",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 201
+          "line": 232
         },
         {
           "name": "quantile_sorted",
@@ -4506,7 +4506,7 @@
           "sig": "fn quantile_sorted(s: [float], q: float) -> float",
           "doc": "quantile on a list already sorted ascending (sorted_floats), without copying it.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 207
+          "line": 238
         },
         {
           "name": "percentile",
@@ -4514,7 +4514,7 @@
           "sig": "fn percentile[T](xs: [T], p: float) -> float",
           "doc": "quantile with p in percent: percentile(xs, 95) is quantile(xs, 0.95).",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 222
+          "line": 253
         },
         {
           "name": "Quartiles",
@@ -4522,7 +4522,7 @@
           "sig": "struct Quartiles",
           "doc": "",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 226
+          "line": 257
         },
         {
           "name": "quartiles",
@@ -4530,7 +4530,7 @@
           "sig": "fn quartiles[T](xs: [T]) -> Quartiles",
           "doc": "The three quartiles, by quantile's method.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 233
+          "line": 264
         },
         {
           "name": "iqr",
@@ -4538,7 +4538,7 @@
           "sig": "fn iqr[T](xs: [T]) -> float",
           "doc": "The interquartile range, q3 - q1.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 243
+          "line": 274
         },
         {
           "name": "mode",
@@ -4546,7 +4546,7 @@
           "sig": "fn mode[T](xs: [T]) -> opt[T]",
           "doc": "The most frequent value, the smallest of them on a tie; none for an empty list. Floats compare exactly, so 0.1 + 0.2 and 0.3 are different values.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 251
+          "line": 282
         },
         {
           "name": "variance",
@@ -4554,7 +4554,7 @@
           "sig": "fn variance[T](xs: [T]) -> float",
           "doc": "The sample variance (divided by n - 1): the variance of the population the values were drawn from, estimated without bias. NaN for fewer than two values. pvariance is the variance of exactly these values.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 279
+          "line": 310
         },
         {
           "name": "pvariance",
@@ -4562,7 +4562,7 @@
           "sig": "fn pvariance[T](xs: [T]) -> float",
           "doc": "The population variance (divided by n); NaN for an empty list.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 288
+          "line": 319
         },
         {
           "name": "stddev",
@@ -4570,7 +4570,7 @@
           "sig": "fn stddev[T](xs: [T]) -> float",
           "doc": "The sample standard deviation, sqrt(variance).",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 297
+          "line": 328
         },
         {
           "name": "pstddev",
@@ -4578,7 +4578,7 @@
           "sig": "fn pstddev[T](xs: [T]) -> float",
           "doc": "The population standard deviation, sqrt(pvariance).",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 302
+          "line": 333
         },
         {
           "name": "mad",
@@ -4586,7 +4586,7 @@
           "sig": "fn mad[T](xs: [T]) -> float",
           "doc": "The median absolute deviation, median(|x - median(xs)|): a spread that one wild value cannot move, unlike stddev. Unscaled; multiply by 1.4826 to estimate a normal distribution's stddev.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 309
+          "line": 340
         },
         {
           "name": "zscores",
@@ -4594,7 +4594,7 @@
           "sig": "fn zscores[T](xs: [T]) -> [float]",
           "doc": "Each value's distance from the mean in population standard deviations (SciPy's zscore). All NaN when every value is the same.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 320
+          "line": 351
         },
         {
           "name": "skewness",
@@ -4602,7 +4602,7 @@
           "sig": "fn skewness[T](xs: [T]) -> float",
           "doc": "The skewness, the population third standardized moment (Fisher-Pearson g1): 0 for a symmetric distribution, positive with a long right tail. NaN for an empty list or when every value is the same.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 333
+          "line": 364
         },
         {
           "name": "kurtosis",
@@ -4610,7 +4610,7 @@
           "sig": "fn kurtosis[T](xs: [T]) -> float",
           "doc": "The excess kurtosis, m4 / m2^2 - 3: 0 for a normal distribution, positive for heavier tails. NaN for an empty list or constant values.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 340
+          "line": 371
         },
         {
           "name": "covariance",
@@ -4618,7 +4618,7 @@
           "sig": "fn covariance[T, U](xs: [T], ys: [U]) -> float",
           "doc": "The sample covariance of xs and ys (divided by n - 1); NaN when the lengths differ or there are fewer than two pairs.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 347
+          "line": 378
         },
         {
           "name": "correlation",
@@ -4626,7 +4626,7 @@
           "sig": "fn correlation[T, U](xs: [T], ys: [U]) -> float",
           "doc": "Pearson's correlation coefficient r, in [-1, 1]; NaN when the lengths differ, there are fewer than two pairs, or either list is constant.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 363
+          "line": 398
         },
         {
           "name": "spearman",
@@ -4634,7 +4634,7 @@
           "sig": "fn spearman[T, U](xs: [T], ys: [U]) -> float",
           "doc": "Spearman's rank correlation: Pearson's r of the values' ranks, so any monotonic relationship scores 1, not just a straight line. Tied values share the mean of their ranks.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 375
+          "line": 410
         },
         {
           "name": "ranks",
@@ -4642,7 +4642,7 @@
           "sig": "fn ranks[T](xs: [T]) -> [float]",
           "doc": "Each value's rank, 1 for the smallest; tied values share the mean of the ranks they span ([10, 20, 20, 30] ranks as [1, 2.5, 2.5, 4]).",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 384
+          "line": 419
         },
         {
           "name": "Fit",
@@ -4650,7 +4650,7 @@
           "sig": "struct Fit",
           "doc": "",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 409
+          "line": 444
         },
         {
           "name": "Fit.at",
@@ -4658,7 +4658,7 @@
           "sig": "fn at(self: Fit, x: float) -> float",
           "doc": "The fitted line at x.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 417
+          "line": 452
         },
         {
           "name": "linear_regression",
@@ -4666,7 +4666,7 @@
           "sig": "fn linear_regression[T, U](xs: [T], ys: [U]) -> Fit",
           "doc": "The least-squares line y = intercept + slope * x through the points. Every field is NaN when the lengths differ, there are fewer than two points, or every x is the same.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 425
+          "line": 460
         },
         {
           "name": "Histogram",
@@ -4674,7 +4674,7 @@
           "sig": "struct Histogram",
           "doc": "",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 457
+          "line": 504
         },
         {
           "name": "histogram",
@@ -4682,7 +4682,7 @@
           "sig": "fn histogram[T](xs: [T], bins: int) -> Histogram",
           "doc": "Counts xs into `bins` equal-width bins over [min, max]; the last bin also holds max itself. NaNs are not counted. bins below 1 is taken as 1, and a list of one repeated value gets one bin of width 1 around it.",
           "file": "stdlib/math/stats/stats.sl",
-          "line": 465
+          "line": 512
         },
         {
           "name": "Running",

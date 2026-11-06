@@ -1,0 +1,7 @@
+parked read: closed
+parked write: ended
+parked accept: closed
+before reuse: closed
+number reused: true
+deadline on reused number: timeout
+event on reused number: true

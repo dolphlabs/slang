@@ -138,7 +138,7 @@ P(X <= k).
 
 ### `fn sum[T](xs: [T]) -> float`
 
-The sum of xs, compensated (Neumaier): the rounding error of each addition is carried and added back at the end. 0 for an empty list; an infinity or NaN in xs gives the plain sum's inf or NaN.
+The sum of xs, compensated: the exact rounding error of each addition (Knuth's TwoSum) is carried and added back at the end. 0 for an empty list; an infinity or NaN in xs gives the plain sum's inf or NaN.  Two independent running sums take alternate elements, so consecutive additions do not wait on each other: one chain held a sum to the latency of a float add per element, about half the speed of a plain loop. Every list function here sums the same way, in place -- they used to collect the terms in a list first and sum that, which for variance on a million values made the pushes 90% of the time.  A `for x in xs` loop, not a `while` over indices: the for loop takes its safepoint once around the loop and reads elements unchecked, where a while loop brackets every iteration and bounds-checks every index -- twice the time per element.
 
 ### `fn product[T](xs: [T]) -> float`
 

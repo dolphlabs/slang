@@ -101,7 +101,8 @@ static int sl_tls_park_until(SSL *ssl, int ssl_err, int abort_on_shutdown,
     else
         return -2;
     int w = sl_reactor_wait_until(fd, rw, abort_on_shutdown, u);
-    return w == -2 ? -3 : w;
+    /* -3 is this layer's timeout, so a closed fd reads as interrupted. */
+    return w == -2 ? -3 : w == SL_REACTOR_CLOSED ? -1 : w;
 }
 
 static int sl_tls_park(SSL *ssl, int ssl_err, int abort_on_shutdown) {
