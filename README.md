@@ -1222,9 +1222,11 @@ guard let data = rr else let e = err_of(rr) {
 }
 ```
 
-`"timeout"` is a reserved error string: it means the deadline passed,
-and it is the only error text these calls invent rather than take from
-the OS. Every other error is `strerror`/OpenSSL text as before.
+`"timeout"` is a reserved error string: it means the deadline passed.
+`"closed"` is the other: another task called `net.close` on this fd
+while this call was parked on it. Those are the only error texts these
+calls invent rather than take from the OS. Every other error is
+`strerror`/OpenSSL text as before.
 
 One asymmetry worth knowing: a `send_until` that times out **has
 already written some bytes**, and `result[i32, str]` has no room to

@@ -190,12 +190,22 @@ typedef struct sl_reactor_slot {
 static sl_reactor_slot *_Atomic sl_reactor_slot_chunks[SL_REACTOR_SLOT_CHUNKS];
 static pthread_mutex_t sl_reactor_slot_grow_mu = PTHREAD_MUTEX_INITIALIZER;
 
-/* An epoll event's data carries the fd, direction and generation, with
- * the top bit set to tell it from the shutdown and timer tokens (user
- * space pointers never have it). kqueue has the fd and filter already
- * and keeps the generation in udata. */
+/* An epoll event's data carries the fd and the generation of both
+ * directions, with the top bit set to tell it from the shutdown and timer
+ * tokens (user space pointers never have it): epoll has one registration
+ * per fd, which a read and a write parked on it share. kqueue has one
+ * knote per filter, the fd and filter in the event, and the generation in
+ * udata. The narrower epoll generation only has to outlast the moment
+ * between an event's harvest and its handling; a false match is a spurious
+ * wakeup. */
 #define SL_REACTOR_TAG_FD (1ULL << 63)
-#define SL_REACTOR_GEN_MASK 0x3fffffffu
+#if defined(SL_REACTOR_KQUEUE)
+#define SL_REACTOR_GEN_MASK 0xffffffffu
+#else
+#define SL_REACTOR_GEN_MASK 0x7fffu
+#define SL_REACTOR_READ_GEN_SHIFT 33
+#define SL_REACTOR_WRITE_GEN_SHIFT 48
+#endif
 
 /* The slot for (fd, rw), or NULL when fd is out of range or, without
  * `create`, its chunk does not exist yet. */
@@ -311,6 +321,11 @@ static _Atomic unsigned long long sl_reactor_reg_gen = 0;
 
 #define SL_REACTOR_READ  0
 #define SL_REACTOR_WRITE 1
+/* sl_reactor_wait_until's answer when the fd was closed under the wait.
+ * Distinct from -1, which send ignores to outlive a shutdown nudge: a
+ * waiter told this must not touch the fd again, because its number may
+ * already belong to another connection. */
+#define SL_REACTOR_CLOSED (-4)
 #define SL_REACTOR_SHUTDOWN_IDENT 0xDEADBEEF
 #define SL_REACTOR_TIMER_IDENT    0xDEADBEEE
 
@@ -433,6 +448,71 @@ static void sl_reactor_kick(void) {
     sl_rt_preempt_enable();
 }
 
+/* The waiters on fd, off their list and onto *ready, marked closed. Taken
+ * before close(2) and resumed after it: once the number is free another
+ * connection can own it, and its slot must not be mistaken for this fd's.
+ * The kernel drops the registration on close with no event, so nothing
+ * else would ever wake them, and a later wait on the reused number would
+ * overwrite their slot. */
+static void sl_reactor_take_closed(int fd, sl_task **ready) {
+    sl_reactor_wq *q = &sl_reactor_wqs[sl_reactor_wq_for(fd)];
+    pthread_mutex_lock(&q->mu);
+    for (int rw = SL_REACTOR_READ; rw <= SL_REACTOR_WRITE; rw++) {
+        sl_reactor_slot *s = sl_reactor_slot_at(fd, rw, 0);
+        if (!s || !s->task)
+            continue;
+        sl_task *t = s->task;
+        s->task = NULL;
+        if (!t->on_wq)
+            continue;
+        sl_reactor_wq_unlink(q, t);
+        t->wait_closed = 1;
+        t->next = *ready;
+        *ready = t;
+    }
+    pthread_mutex_unlock(&q->mu);
+}
+
+#if !defined(SL_REACTOR_KQUEUE)
+/* Arms fd's one registration for every direction with a waiter now, under
+ * the fd's list lock. It always names both: a MOD replaces the whole
+ * registration, so one direction's wait used to cancel the other's, and
+ * being one-shot, an event for one direction disarms the other. A fd with
+ * no waiter left stays disarmed. */
+static void sl_reactor_arm(int fd) {
+    sl_reactor_slot *rd = sl_reactor_slot_at(fd, SL_REACTOR_READ, 0);
+    sl_reactor_slot *wr = sl_reactor_slot_at(fd, SL_REACTOR_WRITE, 0);
+    struct epoll_event ev;
+    ev.events = 0;
+    ev.data.u64 = SL_REACTOR_TAG_FD | (uint64_t)(uint32_t)fd;
+    if (rd && rd->task) {
+        ev.events |= EPOLLIN;
+        ev.data.u64 |= (uint64_t)(rd->gen & SL_REACTOR_GEN_MASK)
+                       << SL_REACTOR_READ_GEN_SHIFT;
+    }
+    if (wr && wr->task) {
+        ev.events |= EPOLLOUT;
+        ev.data.u64 |= (uint64_t)(wr->gen & SL_REACTOR_GEN_MASK)
+                       << SL_REACTOR_WRITE_GEN_SHIFT;
+    }
+    if (!ev.events)
+        return;
+    ev.events |= EPOLLONESHOT;
+    /* MOD first: after its first wait a connection's fd is registered
+       (EPOLLONESHOT disarms it, it does not remove it), so this is one
+       call per wait where ADD-then-MOD was two. */
+    int sl_reactor_regs = 1;
+    if (epoll_ctl(sl_reactor_fd, EPOLL_CTL_MOD, fd, &ev) != 0 &&
+        errno == ENOENT) {
+        epoll_ctl(sl_reactor_fd, EPOLL_CTL_ADD, fd, &ev);
+        sl_reactor_regs = 2;
+    }
+    if (sl_reactor_stat_enabled())
+        atomic_fetch_add_explicit(&sl_reactor_stat_regs, sl_reactor_regs,
+                                  memory_order_relaxed);
+}
+#endif
+
 static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
                                  sl_until deadline) {
     if (deadline && sl_until_hit(deadline))
@@ -454,10 +534,15 @@ static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
         sl_rt_preempt_enable();
         return -1;
     }
+#if defined(SL_REACTOR_KQUEUE)
     uint32_t gen = ++slot->gen;
+#else
+    ++slot->gen;
+#endif
     slot->task = sl_reactor_self;
     sl_reactor_self->wait_fd = fd;
     sl_reactor_self->wait_rw = rw;
+    sl_reactor_self->wait_closed = 0;
     sl_reactor_self->io_deadline_ns = deadline;
     sl_reactor_self->wq_prev = NULL;
     sl_reactor_self->next = wq->waiting;
@@ -475,23 +560,7 @@ static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
         atomic_fetch_add_explicit(&sl_reactor_stat_regs, 1,
                                   memory_order_relaxed);
 #else
-    struct epoll_event ev;
-    ev.events = (rw == SL_REACTOR_READ ? EPOLLIN : EPOLLOUT) | EPOLLONESHOT;
-    ev.data.u64 = SL_REACTOR_TAG_FD |
-                  ((uint64_t)(gen & SL_REACTOR_GEN_MASK) << 33) |
-                  ((uint64_t)(rw & 1) << 32) | (uint64_t)(uint32_t)fd;
-    /* MOD first: after its first wait a connection's fd is registered
-       (EPOLLONESHOT disarms it, it does not remove it), so this is one
-       call per wait where ADD-then-MOD was two. */
-    int sl_reactor_regs = 1;
-    if (epoll_ctl(sl_reactor_fd, EPOLL_CTL_MOD, fd, &ev) != 0 &&
-        errno == ENOENT) {
-        epoll_ctl(sl_reactor_fd, EPOLL_CTL_ADD, fd, &ev);
-        sl_reactor_regs = 2;
-    }
-    if (sl_reactor_stat_enabled())
-        atomic_fetch_add_explicit(&sl_reactor_stat_regs, sl_reactor_regs,
-                                  memory_order_relaxed);
+    sl_reactor_arm(fd);
 #endif
     /* After EV_ADD, before parking, and after this waiter is on its
        list (see sl_reactor_wake_at for the ordering): the reactor must
@@ -528,9 +597,12 @@ static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
     }
     sl_task_park(&wq->mu);
     sl_reactor_self->io_deadline_ns = 0;
+    int sl_reactor_wait_closed = sl_reactor_self->wait_closed;
     int sl_reactor_wait_shutdown =
         atomic_load_explicit(&sl_rt_shutdown_flag, memory_order_acquire);
     sl_rt_preempt_enable();
+    if (sl_reactor_wait_closed)
+        return SL_REACTOR_CLOSED;
     if (sl_reactor_wait_shutdown)
         return -1;
     if (deadline && sl_until_hit(deadline))
@@ -540,6 +612,24 @@ static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
 
 static int sl_reactor_wait(int fd, int rw, int abort_on_shutdown) {
     return sl_reactor_wait_until(fd, rw, abort_on_shutdown, 0);
+}
+
+/* The slot decides: an event from an older wait on this (fd, direction) --
+ * its waiter already left by deadline or shutdown, possibly earlier in
+ * this same batch -- finds the generation moved on or the slot empty, and
+ * wakes nobody. Under the list's lock. */
+static void sl_reactor_take_slot(sl_reactor_wq *q, int fd, int rw,
+                                 uint32_t ev_gen, sl_task **ready) {
+    sl_reactor_slot *slot = sl_reactor_slot_at(fd, rw, 0);
+    if (!slot || !slot->task || (slot->gen & SL_REACTOR_GEN_MASK) != ev_gen)
+        return;
+    sl_task *t = slot->task;
+    slot->task = NULL;
+    if (!t->on_wq)
+        return;
+    sl_reactor_wq_unlink(q, t);
+    t->next = *ready;
+    *ready = t;
 }
 
 /* The tasks `events` (n of them, from this reactor's kqueue or epoll
@@ -565,7 +655,6 @@ static void sl_reactor_take_events(struct epoll_event *events, int n, sl_task **
         int ev_fd = (int)events[i].ident;
         int ev_rw = events[i].filter == EVFILT_WRITE ? SL_REACTOR_WRITE : SL_REACTOR_READ;
         uint32_t ev_gen = (uint32_t)(uintptr_t)events[i].udata;
-        uint32_t gen_mask = 0xffffffffu;
 #else
         if (events[i].data.ptr == &sl_reactor_timer_token) {
             uint64_t tx;
@@ -577,9 +666,6 @@ static void sl_reactor_take_events(struct epoll_event *events, int n, sl_task **
         if (!is_shutdown && !(ev_tag & SL_REACTOR_TAG_FD))
             continue;
         int ev_fd = (int)(uint32_t)ev_tag;
-        int ev_rw = (int)((ev_tag >> 32) & 1);
-        uint32_t ev_gen = (uint32_t)(ev_tag >> 33) & SL_REACTOR_GEN_MASK;
-        uint32_t gen_mask = SL_REACTOR_GEN_MASK;
         if (is_shutdown) {
             uint64_t x;
             sl_net_drain(sl_reactor_efd, &x, sizeof(x));
@@ -589,27 +675,30 @@ static void sl_reactor_take_events(struct epoll_event *events, int n, sl_task **
             sl_reactor_take_all(&ready);
             continue;
         }
-        /* The slot decides: an event from an older wait on this
-           (fd, direction) -- its waiter already left by deadline or
-           shutdown, possibly earlier in this same batch -- finds the
-           generation moved on or the slot empty, and wakes nobody. */
         sl_reactor_wq *q = &sl_reactor_wqs[sl_reactor_wq_for(ev_fd)];
-        sl_task *t = NULL;
         pthread_mutex_lock(&q->mu);
-        sl_reactor_slot *slot = sl_reactor_slot_at(ev_fd, ev_rw, 0);
-        if (slot && slot->task && (slot->gen & gen_mask) == ev_gen) {
-            t = slot->task;
-            slot->task = NULL;
-            if (t->on_wq)
-                sl_reactor_wq_unlink(q, t);
-            else
-                t = NULL;
-        }
+#if defined(SL_REACTOR_KQUEUE)
+        sl_reactor_take_slot(q, ev_fd, ev_rw, ev_gen, &ready);
+#else
+        /* HUP and ERR are reported whatever was asked for, and end both
+           directions. */
+        uint32_t ev_mask = events[i].events;
+        if (ev_mask & (EPOLLIN | EPOLLHUP | EPOLLERR))
+            sl_reactor_take_slot(q, ev_fd, SL_REACTOR_READ,
+                                 (uint32_t)(ev_tag >> SL_REACTOR_READ_GEN_SHIFT) &
+                                     SL_REACTOR_GEN_MASK,
+                                 &ready);
+        if (ev_mask & (EPOLLOUT | EPOLLHUP | EPOLLERR))
+            sl_reactor_take_slot(q, ev_fd, SL_REACTOR_WRITE,
+                                 (uint32_t)(ev_tag >> SL_REACTOR_WRITE_GEN_SHIFT) &
+                                     SL_REACTOR_GEN_MASK,
+                                 &ready);
+        /* This event disarmed the whole registration, even if it woke
+           nobody: whoever is still parked needs it back. No syscall when
+           nobody is, which is every fd used in one direction at a time. */
+        sl_reactor_arm(ev_fd);
+#endif
         pthread_mutex_unlock(&q->mu);
-        if (t) {
-            t->next = ready;
-            ready = t;
-        }
     }
     *ready_out = ready;
 }
@@ -1611,7 +1700,10 @@ static sl_res_i32_str *sl_net_accept(int lfd) {
             return sl_net_err_i32(strerror(errno));
         if (sl_net_user_nonblock_contains((void *)(intptr_t)lfd))
             return sl_net_err_i32("would block");
-        if (sl_reactor_wait(lfd, SL_REACTOR_READ, 1) < 0)
+        int w = sl_reactor_wait(lfd, SL_REACTOR_READ, 1);
+        if (w == SL_REACTOR_CLOSED)
+            return sl_net_err_i32("closed");
+        if (w < 0)
             return sl_net_err_i32("interrupted");
     }
 }
@@ -1751,10 +1843,13 @@ static sl_res_i32_str *sl_net_send_u(int fd, sl_bytes *data, sl_until u) {
            shutdown nudge so an in-flight write can finish
            (tests/proc_shutdown's own requirement) -- see
            sl_reactor_wait's own comment for why 1 here would busy-spin
-           at 100% CPU. Only -2 (deadline) ends the loop; -1 is the
-           shutdown nudge and is ignored exactly as before. */
-        if (sl_reactor_wait_until(fd, SL_REACTOR_WRITE, 0, u) == -2)
+           at 100% CPU. Only a deadline or a close ends the loop; -1 is
+           the shutdown nudge and is ignored exactly as before. */
+        int w = sl_reactor_wait_until(fd, SL_REACTOR_WRITE, 0, u);
+        if (w == -2)
             return sl_net_err_i32("timeout");
+        if (w == SL_REACTOR_CLOSED)
+            return sl_net_err_i32("closed");
     }
     return sl_net_ok_i32((int32_t)data->len);
 }
@@ -1881,7 +1976,9 @@ static sl_res_bytes_str *sl_net_recv_u(int fd, int max, sl_until u) {
         int wr = sl_reactor_wait_until(fd, SL_REACTOR_READ, 1, u);
         if (wr < 0) {
             sl_recv_buf_put(scratch);
-            return sl_net_err_bytes(wr == -2 ? "timeout" : "interrupted");
+            return sl_net_err_bytes(wr == -2 ? "timeout"
+                                    : wr == SL_REACTOR_CLOSED ? "closed"
+                                                              : "interrupted");
         }
     }
 }
@@ -1904,18 +2001,20 @@ static bool sl_net_idle_alive(int fd) {
     return n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK);
 }
 
+/* A task parked on fd is woken with "closed". One that has seen EAGAIN but
+ * not yet parked is not: it would wait on a number that is free or reused,
+ * so closing an fd another task is using stays a race for the caller to
+ * avoid. Fixing that takes a reference count per fd, as Go's fdMutex. */
 static void sl_net_close(int fd) {
     sl_net_user_nonblock_remove((void *)(intptr_t)fd); /* avoid a
         stale entry misapplying to a later, unrelated fd that
-        happens to reuse the same number. NOTE (known, accepted
-        limitation): if another task is genuinely parked waiting on
-        this fd via the reactor right now, closing it here silently
-        removes its kqueue registration with no event ever delivered
-        -- that task hangs forever, permanently leaking its GC roots
-        and, if it was spawned, wedging any active_tasks()-based
-        shutdown drain. Not exercised by any current test; not new
-        to this slice. */
+        happens to reuse the same number. */
+    sl_rt_preempt_disable();
+    sl_task *ready = NULL;
+    sl_reactor_take_closed(fd, &ready);
     close(fd);
+    sl_reactor_resume_all(ready);
+    sl_rt_preempt_enable();
 }
 
 static sl_res_bool_str *sl_net_nonblock(int fd) {
