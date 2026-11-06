@@ -1,5 +1,28 @@
 # todo
 
+- [x] **epoll: a write wait on an fd cancelled a read wait on it (found
+  2026-11-06, fix/epoll-duplex).** epoll has one registration per fd, so
+  `EPOLL_CTL_MOD` with `EPOLLOUT` replaced the `EPOLLIN` of a read parked on
+  the same fd, and the other way round. The first waiter was never woken:
+  with no deadline a hang, with one a wake at the deadline (1148 ms after the
+  byte, measured). kqueue, one knote per filter, never had this.
+  `sl_link.split()` avoids it with a dup per half; raw `net.*` fds did not.
+  The registration is now built from both slots, its data carries both
+  generations (15 bits each, down from 30, since a false match is only a
+  spurious wakeup and the window is one event's handling), an event can wake
+  both directions, and whoever is still parked after an event is re-armed.
+  That last part is not optional: one-shot disarms the whole registration,
+  even for an event that wakes nobody. tests/reactor_duplex hangs on old
+  dev at 1 and 4 workers before its first check, and with the re-arm removed
+  it hangs after the reader wakes, on the writer. Single-direction traffic
+  is unchanged:
+  registrations per park are identical (96 over parks, about 1.28M, on both),
+  and a 4-worker ping-pong over 32 pairs took a median 5750 ms old and 5646
+  ms new over 12 runs each in ABBA order, spread 5465-6244, so no measurable
+  change. `http2.transport_fd` is a raw fd, so this may have been reachable
+  there, but the http2 path was not tested.
+  The re-arm in next-steps.md §4, if it is ever removed, removes this too.
+
 - [ ] **The reactor loses a parked read's deadline when its fd number is
   reused (flagged 2026-10-25, not fixed).** Closing an fd while a task is
   parked on it, then opening a socket that gets the same number and

@@ -729,12 +729,14 @@ done
 # registration count (sl_reactor_wake_at) must never let it sleep past.
 # spawn_join_local: joined spawns that wake no worker, preempted between
 # the spawn and the join, must still run (sl_task_submit_copy_joined).
+# reactor_duplex: a read and a write parked on one fd, each re-armed by
+# whichever thread handles the other's event.
 echo "--- preemption guards (forced 1 ms preemption, 16KB nursery) ---"
 pg_bad=0
 for name in gc_preempt_derived gc_preempt_derived gc_preempt_derived \
             net_reactor_shards net_reactor_shards net_reactor_shards \
             reactor_nudges reactor_nudges spawn_join_local spawn_join_local \
-            net_dns_records; do
+            reactor_duplex net_dns_records; do
     out="/tmp/sl_preempt_${name}.out"
     if ! SLANG_WORKERS=4 SLANG_GC_NURSERY_KB=16 SLANG_PREEMPT_QUANTUM_MS=1 \
             SLANG_PREEMPT_TICK_MS=1 ./slangc "tests/$name/main.sl" --run \
