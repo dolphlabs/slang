@@ -19,7 +19,7 @@ if [ ! -f cert.pem ] || [ ! -f key.pem ]; then
     echo "generating a self-signed cert for the TLS listener (one-time)..." >&2
     openssl req -x509 -newkey rsa:2048 -nodes \
         -keyout key.pem -out cert.pem -days 3650 \
-        -subj "/CN=localhost" >/dev/null 2>&1
+        -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost" >/dev/null 2>&1
 fi
 
 SLANGC="${SLANGC:-../slangc}"
