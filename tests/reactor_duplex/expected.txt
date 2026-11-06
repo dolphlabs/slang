@@ -1,0 +1,8 @@
+read first, read woken: data
+read first, write woken: sent
+write first, write woken: sent
+write first, read woken: data
+abandoned read: timeout
+abandoned read, write woken: sent
+peer closed, read woken: ended
+peer closed, write woken: ended

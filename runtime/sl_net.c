@@ -190,12 +190,22 @@ typedef struct sl_reactor_slot {
 static sl_reactor_slot *_Atomic sl_reactor_slot_chunks[SL_REACTOR_SLOT_CHUNKS];
 static pthread_mutex_t sl_reactor_slot_grow_mu = PTHREAD_MUTEX_INITIALIZER;
 
-/* An epoll event's data carries the fd, direction and generation, with
- * the top bit set to tell it from the shutdown and timer tokens (user
- * space pointers never have it). kqueue has the fd and filter already
- * and keeps the generation in udata. */
+/* An epoll event's data carries the fd and the generation of both
+ * directions, with the top bit set to tell it from the shutdown and timer
+ * tokens (user space pointers never have it): epoll has one registration
+ * per fd, which a read and a write parked on it share. kqueue has one
+ * knote per filter, the fd and filter in the event, and the generation in
+ * udata. The narrower epoll generation only has to outlast the moment
+ * between an event's harvest and its handling; a false match is a spurious
+ * wakeup. */
 #define SL_REACTOR_TAG_FD (1ULL << 63)
-#define SL_REACTOR_GEN_MASK 0x3fffffffu
+#if defined(SL_REACTOR_KQUEUE)
+#define SL_REACTOR_GEN_MASK 0xffffffffu
+#else
+#define SL_REACTOR_GEN_MASK 0x7fffu
+#define SL_REACTOR_READ_GEN_SHIFT 33
+#define SL_REACTOR_WRITE_GEN_SHIFT 48
+#endif
 
 /* The slot for (fd, rw), or NULL when fd is out of range or, without
  * `create`, its chunk does not exist yet. */
@@ -463,6 +473,46 @@ static void sl_reactor_take_closed(int fd, sl_task **ready) {
     pthread_mutex_unlock(&q->mu);
 }
 
+#if !defined(SL_REACTOR_KQUEUE)
+/* Arms fd's one registration for every direction with a waiter now, under
+ * the fd's list lock. It always names both: a MOD replaces the whole
+ * registration, so one direction's wait used to cancel the other's, and
+ * being one-shot, an event for one direction disarms the other. A fd with
+ * no waiter left stays disarmed. */
+static void sl_reactor_arm(int fd) {
+    sl_reactor_slot *rd = sl_reactor_slot_at(fd, SL_REACTOR_READ, 0);
+    sl_reactor_slot *wr = sl_reactor_slot_at(fd, SL_REACTOR_WRITE, 0);
+    struct epoll_event ev;
+    ev.events = 0;
+    ev.data.u64 = SL_REACTOR_TAG_FD | (uint64_t)(uint32_t)fd;
+    if (rd && rd->task) {
+        ev.events |= EPOLLIN;
+        ev.data.u64 |= (uint64_t)(rd->gen & SL_REACTOR_GEN_MASK)
+                       << SL_REACTOR_READ_GEN_SHIFT;
+    }
+    if (wr && wr->task) {
+        ev.events |= EPOLLOUT;
+        ev.data.u64 |= (uint64_t)(wr->gen & SL_REACTOR_GEN_MASK)
+                       << SL_REACTOR_WRITE_GEN_SHIFT;
+    }
+    if (!ev.events)
+        return;
+    ev.events |= EPOLLONESHOT;
+    /* MOD first: after its first wait a connection's fd is registered
+       (EPOLLONESHOT disarms it, it does not remove it), so this is one
+       call per wait where ADD-then-MOD was two. */
+    int sl_reactor_regs = 1;
+    if (epoll_ctl(sl_reactor_fd, EPOLL_CTL_MOD, fd, &ev) != 0 &&
+        errno == ENOENT) {
+        epoll_ctl(sl_reactor_fd, EPOLL_CTL_ADD, fd, &ev);
+        sl_reactor_regs = 2;
+    }
+    if (sl_reactor_stat_enabled())
+        atomic_fetch_add_explicit(&sl_reactor_stat_regs, sl_reactor_regs,
+                                  memory_order_relaxed);
+}
+#endif
+
 static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
                                  sl_until deadline) {
     if (deadline && sl_until_hit(deadline))
@@ -484,7 +534,11 @@ static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
         sl_rt_preempt_enable();
         return -1;
     }
+#if defined(SL_REACTOR_KQUEUE)
     uint32_t gen = ++slot->gen;
+#else
+    ++slot->gen;
+#endif
     slot->task = sl_reactor_self;
     sl_reactor_self->wait_fd = fd;
     sl_reactor_self->wait_rw = rw;
@@ -506,23 +560,7 @@ static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
         atomic_fetch_add_explicit(&sl_reactor_stat_regs, 1,
                                   memory_order_relaxed);
 #else
-    struct epoll_event ev;
-    ev.events = (rw == SL_REACTOR_READ ? EPOLLIN : EPOLLOUT) | EPOLLONESHOT;
-    ev.data.u64 = SL_REACTOR_TAG_FD |
-                  ((uint64_t)(gen & SL_REACTOR_GEN_MASK) << 33) |
-                  ((uint64_t)(rw & 1) << 32) | (uint64_t)(uint32_t)fd;
-    /* MOD first: after its first wait a connection's fd is registered
-       (EPOLLONESHOT disarms it, it does not remove it), so this is one
-       call per wait where ADD-then-MOD was two. */
-    int sl_reactor_regs = 1;
-    if (epoll_ctl(sl_reactor_fd, EPOLL_CTL_MOD, fd, &ev) != 0 &&
-        errno == ENOENT) {
-        epoll_ctl(sl_reactor_fd, EPOLL_CTL_ADD, fd, &ev);
-        sl_reactor_regs = 2;
-    }
-    if (sl_reactor_stat_enabled())
-        atomic_fetch_add_explicit(&sl_reactor_stat_regs, sl_reactor_regs,
-                                  memory_order_relaxed);
+    sl_reactor_arm(fd);
 #endif
     /* After EV_ADD, before parking, and after this waiter is on its
        list (see sl_reactor_wake_at for the ordering): the reactor must
@@ -576,6 +614,24 @@ static int sl_reactor_wait(int fd, int rw, int abort_on_shutdown) {
     return sl_reactor_wait_until(fd, rw, abort_on_shutdown, 0);
 }
 
+/* The slot decides: an event from an older wait on this (fd, direction) --
+ * its waiter already left by deadline or shutdown, possibly earlier in
+ * this same batch -- finds the generation moved on or the slot empty, and
+ * wakes nobody. Under the list's lock. */
+static void sl_reactor_take_slot(sl_reactor_wq *q, int fd, int rw,
+                                 uint32_t ev_gen, sl_task **ready) {
+    sl_reactor_slot *slot = sl_reactor_slot_at(fd, rw, 0);
+    if (!slot || !slot->task || (slot->gen & SL_REACTOR_GEN_MASK) != ev_gen)
+        return;
+    sl_task *t = slot->task;
+    slot->task = NULL;
+    if (!t->on_wq)
+        return;
+    sl_reactor_wq_unlink(q, t);
+    t->next = *ready;
+    *ready = t;
+}
+
 /* The tasks `events` (n of them, from this reactor's kqueue or epoll
  * set) make ready, onto `ready`: shared by the reactor thread and a
  * worker polling in its place (sl_net_worker_poll). */
@@ -599,7 +655,6 @@ static void sl_reactor_take_events(struct epoll_event *events, int n, sl_task **
         int ev_fd = (int)events[i].ident;
         int ev_rw = events[i].filter == EVFILT_WRITE ? SL_REACTOR_WRITE : SL_REACTOR_READ;
         uint32_t ev_gen = (uint32_t)(uintptr_t)events[i].udata;
-        uint32_t gen_mask = 0xffffffffu;
 #else
         if (events[i].data.ptr == &sl_reactor_timer_token) {
             uint64_t tx;
@@ -611,9 +666,6 @@ static void sl_reactor_take_events(struct epoll_event *events, int n, sl_task **
         if (!is_shutdown && !(ev_tag & SL_REACTOR_TAG_FD))
             continue;
         int ev_fd = (int)(uint32_t)ev_tag;
-        int ev_rw = (int)((ev_tag >> 32) & 1);
-        uint32_t ev_gen = (uint32_t)(ev_tag >> 33) & SL_REACTOR_GEN_MASK;
-        uint32_t gen_mask = SL_REACTOR_GEN_MASK;
         if (is_shutdown) {
             uint64_t x;
             sl_net_drain(sl_reactor_efd, &x, sizeof(x));
@@ -623,27 +675,30 @@ static void sl_reactor_take_events(struct epoll_event *events, int n, sl_task **
             sl_reactor_take_all(&ready);
             continue;
         }
-        /* The slot decides: an event from an older wait on this
-           (fd, direction) -- its waiter already left by deadline or
-           shutdown, possibly earlier in this same batch -- finds the
-           generation moved on or the slot empty, and wakes nobody. */
         sl_reactor_wq *q = &sl_reactor_wqs[sl_reactor_wq_for(ev_fd)];
-        sl_task *t = NULL;
         pthread_mutex_lock(&q->mu);
-        sl_reactor_slot *slot = sl_reactor_slot_at(ev_fd, ev_rw, 0);
-        if (slot && slot->task && (slot->gen & gen_mask) == ev_gen) {
-            t = slot->task;
-            slot->task = NULL;
-            if (t->on_wq)
-                sl_reactor_wq_unlink(q, t);
-            else
-                t = NULL;
-        }
+#if defined(SL_REACTOR_KQUEUE)
+        sl_reactor_take_slot(q, ev_fd, ev_rw, ev_gen, &ready);
+#else
+        /* HUP and ERR are reported whatever was asked for, and end both
+           directions. */
+        uint32_t ev_mask = events[i].events;
+        if (ev_mask & (EPOLLIN | EPOLLHUP | EPOLLERR))
+            sl_reactor_take_slot(q, ev_fd, SL_REACTOR_READ,
+                                 (uint32_t)(ev_tag >> SL_REACTOR_READ_GEN_SHIFT) &
+                                     SL_REACTOR_GEN_MASK,
+                                 &ready);
+        if (ev_mask & (EPOLLOUT | EPOLLHUP | EPOLLERR))
+            sl_reactor_take_slot(q, ev_fd, SL_REACTOR_WRITE,
+                                 (uint32_t)(ev_tag >> SL_REACTOR_WRITE_GEN_SHIFT) &
+                                     SL_REACTOR_GEN_MASK,
+                                 &ready);
+        /* This event disarmed the whole registration, even if it woke
+           nobody: whoever is still parked needs it back. No syscall when
+           nobody is, which is every fd used in one direction at a time. */
+        sl_reactor_arm(ev_fd);
+#endif
         pthread_mutex_unlock(&q->mu);
-        if (t) {
-            t->next = ready;
-            ready = t;
-        }
     }
     *ready_out = ready;
 }
