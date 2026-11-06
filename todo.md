@@ -1,5 +1,11 @@
 # todo
 
+- [x] **CI's macOS arm64 jobs died on the retired macos-14 image (found
+  2026-11-06, fix/ci-macos-runner).** GitHub retired it on 2026-11-02, so
+  every `macos-14` job was cancelled within a second of starting, in ci.yml
+  and in release.yml, whose arm64 archive would have failed the next release.
+  Both now use `macos-15`.
+
 - [x] **epoll: a write wait on an fd cancelled a read wait on it (found
   2026-11-06, fix/epoll-duplex).** epoll has one registration per fd, so
   `EPOLL_CTL_MOD` with `EPOLLOUT` replaced the `EPOLLIN` of a read parked on
