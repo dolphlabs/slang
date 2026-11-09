@@ -266,13 +266,18 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 `slang.project` to omit non-runtime directories from consumers' package caches;
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg redis regex
-strings encoding compress math builder byteutil flags sort http http2 httpc`.
+strings encoding compress math rand builder byteutil flags sort http http2
+httpc`.
 `math` takes any numeric type and returns that type (`math.abs(x)` of an `i32`
 is an `i32`): `math.sqrt`, `math.pi`, `math.round_to(x, 2)`, and for money
 `math.checked_add(a, b)` / `math.checked_mul(a, b)`, an `opt` that is `none` on
 overflow. `math/stats` (mean, median, stddev, quantile, correlation,
 regression, streaming `running()`/`digest()`, distributions) and
 `math/numtheory` (mod_pow, is_prime, factorize) are written over it.
+`rand` is seeded and non-cryptographic, for tests that replay:
+`let r = rand.new(42); rand.below(r, 10); rand.between(r, 1, 6);
+rand.shuffle(r, xs); rand.backoff(r, attempt, base, cap)`. Secrets use
+`crypto.rand`.
 The standalone `argon` package provides bounded Argon2id password hashing
 with standard PHC strings; its native crypto calls require OpenSSL 3.2+.
 
@@ -361,6 +366,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - os: setenv, unsetenv, environ, pid, hostname, tmpdir, exists, is_dir, is_file, size, mtime, mtime_ns (+6 more)
 - pg: rows_as, parse_url, sqlstate, scram_client_final, connect, connect_config, close, usable, in_transaction, server_param, arg_text, arg_int (+37 more)
 - proc: shutdown_requested, active_tasks, wait_idle, getenv, args, cwd, spawn, kill, wait
+- rand: new, from_os, fork, next_u64, below, between, unit, chance, shuffle, pick, backoff, jitter
 - redis: encode, decode, decode_at, slot, parse_url, connect_config, connect, do, close, usable, ping, echo (+132 more)
 - regex: compile, free, groups, is_match, is_match_bytes, find, find_at, find_bytes, find_bytes_at
 - sort: ints, floats, strings, by, by_stable, search_ints, search_floats, search_strings, search_by
