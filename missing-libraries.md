@@ -30,15 +30,15 @@ any package.
   - [ ] `math/complex`
   - [ ] `math/linalg` (fixed-size)
   - [ ] `math/big`
-- [ ] **`rand`** (stdlib): a fast, non-cryptographic random number generator
+- [x] **`rand`** (stdlib): a fast, non-cryptographic random number generator
   with an explicit seed, so tests stay deterministic: ints in a range,
   floats, shuffle, pick, and jitter for retry backoff. `crypto.rand` stays
-  the source for secrets.
-- [ ] **`uuid`** (stdlib): v4 (random) and v7 (time-ordered, good as a
+  the source for secrets. PR #506.
+- [x] **`uuid`** (stdlib): v4 (random) and v7 (time-ordered, good as a
   database key), parse, validate, format. Evidence: `say` builds UUIDs by
   hand in five places (`platform/app/app.sl`, `markets/service/service.sl`,
   `exchange/domain/types.sl`, `ledger/domain/money.sl`, a test helper), and
-  the main one always forces the variant digit to `a`.
+  the main one always forces the variant digit to `a`. PR #505.
 - [ ] **Unicode / UTF-8** (stdlib, `strings` or its own package): iterate a
   string by character, validate UTF-8, count characters (not bytes),
   case-fold. Needed for username rules and text length limits.
