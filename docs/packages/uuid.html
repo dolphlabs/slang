@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>uuid — slang</title>
+<meta name="description" content="Package uuid.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="uuid">
+<meta property="og:description" content="Package uuid.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://slang.dolphlabs.com/packages/uuid">
+<meta property="og:image" content="https://slang.dolphlabs.com/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The slang rabbit mark beside the slang wordmark">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://slang.dolphlabs.com/packages/uuid">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/uuid.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <button id="navtoggle" class="navtoggle" type="button"
+          aria-label="Toggle navigation" aria-expanded="false"
+          aria-controls="mainnav">
+    <span></span><span></span><span></span>
+  </button>
+  <nav class="mainnav" id="mainnav"><a href="../">Home</a><a href="../guide/">Guide</a><a href="../guide/data">Data types</a><a href="../guide/errors">Errors</a><a href="../guide/functions">Functions</a><a href="../concurrency/">Concurrency</a><a href="../testing/">Testing</a><a href="../bench/">Benchmarks</a><a href="../packages/">Packages</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="../limitations/">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="navscrim" class="navscrim" hidden></div>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>uuid</h1>
+      <p class="tagline">Package uuid.</p>
+      <p class="agentline">
+        <a href="../packages/uuid.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>UUIDs per RFC 9562: make version 4 (random) and version 7 (time-ordered), check, parse and convert. An id is a plain <code>str</code> in canonical form (36 characters, lowercase hex, hyphens at 8, 13, 18 and 23), the form JSON, logs and Postgres&#x27;s <code>uuid</code> text already use, so it crosses those boundaries unconverted and has exactly one spelling to compare or key a map by.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;uuid&quot;</span>;
+
+<span class="k">let</span> r = uuid.<span class="f">v7</span>();
+<span class="k">guard</span> <span class="k">let</span> id = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
+    <span class="f">panic</span>(e);                          <span class="c">// only if the OS has no randomness</span>
+}
+uuid.<span class="f">is_valid</span>(id);                     <span class="c">// true: canonical form only</span>
+uuid.<span class="f">version</span>(id) ?? <span class="n">0</span>;                 <span class="c">// 7</span>
+uuid.<span class="f">time_ms</span>(id) ?? <span class="n">0</span>;                 <span class="c">// unix ms it was made</span>
+
+<span class="k">let</span> p = uuid.<span class="f">parse</span>(<span class="s">&quot;{0190F4E2-7C1A-7B3E-9F21-6C0D5A4E8B17}&quot;</span>);
+<span class="c">// ok(&quot;0190f4e2-7c1a-7b3e-9f21-6c0d5a4e8b17&quot;); also urn:uuid: and 32 hex</span>
+<span class="k">let</span> bad = uuid.<span class="f">parse</span>(<span class="s">&quot;0190f4e2-7c1a&quot;</span>);
+<span class="c">// err(&quot;uuid: want 36 characters (8-4-4-4-12 hex digits), got 13&quot;)</span></code></pre></div>
+<p>Use <code>v7</code> for anything stored, primary keys above all: its first 48 bits are the creation time in milliseconds, so ids sort by time and new rows append to an index instead of landing on random pages. Within one millisecond the order is random, because <code>v7</code> keeps no state and any task may call it without a lock. <code>v4</code> is 122 random bits and reveals nothing, not even when it was made. Both draw from <code>crypto.rand</code>, and return an error rather than an id from a weaker source. <code>v7_at(unix_ms)</code> stamps a given time (tests, ids that carry an event&#x27;s time); <code>to_binary</code> and <code>from_binary</code> convert to and from the 16-byte form; <code>uuid.NIL</code> and <code>uuid.MAX</code> are the RFC&#x27;s two special values. <code>is_valid</code> accepts any version and variant, so ids from Postgres&#x27;s <code>gen_random_uuid()</code> or other services pass.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="nil"><div class="api-sig"><code><span class="k">let</span> NIL = <span class="s">&quot;00000000-0000-0000-0000-000000000000&quot;</span>;</code> <span class="src">stdlib/uuid/uuid.sl:36</span><a class="anchor" href="#nil">#</a></div><p class="api-doc">The nil and max UUIDs (RFC 9562 sections 5.9 and 5.10).</p></div><div class="api-item" id="max"><div class="api-sig"><code><span class="k">let</span> MAX = <span class="s">&quot;ffffffff-ffff-ffff-ffff-ffffffffffff&quot;</span>;</code> <span class="src">stdlib/uuid/uuid.sl:37</span><a class="anchor" href="#max">#</a></div></div><div class="api-item" id="v4"><div class="api-sig"><code><span class="k">fn</span> <span class="f">v4</span>() -&gt; <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>]</code> <span class="src">stdlib/uuid/uuid.sl:44</span><a class="anchor" href="#v4">#</a></div><p class="api-doc">A random UUID, version 4: 122 random bits.</p></div><div class="api-item" id="v7"><div class="api-sig"><code><span class="k">fn</span> <span class="f">v7</span>() -&gt; <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>]</code> <span class="src">stdlib/uuid/uuid.sl:56</span><a class="anchor" href="#v7">#</a></div><p class="api-doc">A time-ordered UUID, version 7, stamped with the current wall-clock time: 48 bits of unix milliseconds, then 74 random bits.</p></div><div class="api-item" id="v7-at"><div class="api-sig"><code><span class="k">fn</span> <span class="f">v7_at</span>(unix_ms: <span class="t">int</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>]</code> <span class="src">stdlib/uuid/uuid.sl:63</span><a class="anchor" href="#v7-at">#</a></div><p class="api-doc">A version 7 UUID stamped with <code>unix_ms</code> instead of the clock: for tests, and for ids that must carry an event&#x27;s own time. Errors if <code>unix_ms</code> is negative or does not fit in 48 bits.</p></div><div class="api-item" id="is-valid"><div class="api-sig"><code><span class="k">fn</span> <span class="f">is_valid</span>(s: <span class="t">str</span>) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/uuid/uuid.sl:87</span><a class="anchor" href="#is-valid">#</a></div><p class="api-doc">Is <code>s</code> a UUID in canonical form: 36 characters, lowercase hex digits, hyphens at 8, 13, 18 and 23? Any version and variant passes, so ids made elsewhere (Postgres&#x27;s gen_random_uuid, another service) are accepted. Upper case, braces and urn:uuid: are not: run those through <code>parse</code>.</p></div><div class="api-item" id="parse"><div class="api-sig"><code><span class="k">fn</span> <span class="f">parse</span>(s: <span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>]</code> <span class="src">stdlib/uuid/uuid.sl:109</span><a class="anchor" href="#parse">#</a></div><p class="api-doc">The canonical form of a UUID written any common way: canonical, upper or mixed case, in braces ({...}), as a urn:uuid: URN, or as 32 hex digits without hyphens. The error names the position and what was expected there.</p></div><div class="api-item" id="version"><div class="api-sig"><code><span class="k">fn</span> <span class="f">version</span>(s: <span class="t">str</span>) -&gt; <span class="t">opt</span>[<span class="t">int</span>]</code> <span class="src">stdlib/uuid/uuid.sl:119</span><a class="anchor" href="#version">#</a></div><p class="api-doc">The version number of a canonical UUID (4 for v4, 7 for v7, 0 for NIL), or none if <code>s</code> is not canonical.</p></div><div class="api-item" id="time-ms"><div class="api-sig"><code><span class="k">fn</span> <span class="f">time_ms</span>(s: <span class="t">str</span>) -&gt; <span class="t">opt</span>[<span class="t">int</span>]</code> <span class="src">stdlib/uuid/uuid.sl:129</span><a class="anchor" href="#time-ms">#</a></div><p class="api-doc">When a v7 UUID was made, in unix milliseconds. none if <code>s</code> is not a canonical version 7 UUID with the RFC 9562 variant: other versions keep no time, or keep it in another layout.</p></div><div class="api-item" id="to-binary"><div class="api-sig"><code><span class="k">fn</span> <span class="f">to_binary</span>(s: <span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>, <span class="t">str</span>]</code> <span class="src">stdlib/uuid/uuid.sl:151</span><a class="anchor" href="#to-binary">#</a></div><p class="api-doc">The 16 bytes of a UUID, most significant first: the binary form databases store (Postgres <code>uuid</code> on the wire, a BINARY(16) column). Accepts every spelling <code>parse</code> does.</p></div><div class="api-item" id="from-binary"><div class="api-sig"><code><span class="k">fn</span> <span class="f">from_binary</span>(b: <span class="t">bytes</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>]</code> <span class="src">stdlib/uuid/uuid.sl:156</span><a class="anchor" href="#from-binary">#</a></div><p class="api-doc">The canonical form of 16 bytes, the reverse of <code>to_binary</code>.</p></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

@@ -1,5 +1,36 @@
 # todo
 
+- [ ] **`str` literals have no Unicode escape (found 2026-11-09,
+  feat/unicode-package; not fixed).** The lexer accepts `\xHH` only in
+  `b"..."` literals and has no `\u{...}` for `str`, so a string holding a
+  combining mark (U+0301) or a look-alike (U+2126 OHM SIGN, which editors
+  silently normalise to U+03A9) has to be written as
+  `to_str(b"e\xCC\x81")`. tests/unicode does that. A `\u{HEX}` escape
+  in `str` literals (Swift, Rust and JavaScript spell it that way) is a
+  language change, so it needs a decision first.
+
+- [ ] **`unicode.equal_fold` on non-ASCII text costs about 190 ns (found
+  2026-11-09, feat/unicode-package; not fixed).** For a pair like
+  `"Straße"`/`"STRASSE"` it builds the full D145 key for both sides (NFD,
+  fold, NFD) in scratch buffers, against Go's `strings.EqualFold` at about
+  65 ns, which uses simple folding and so answers that pair wrongly. The
+  ASCII path is single-pass and level with Go (about 13 ns). A streaming
+  comparison that folds and decomposes one character at a time, stopping
+  at the first difference, would avoid building whole keys. It matters
+  only if case-insensitive non-ASCII comparison shows up on a hot path.
+
+- [ ] **`SSL_set1_host` is deprecated in OpenSSL 4.0 (found 2026-11-09,
+  feat/uuid-package; not fixed).** `runtime/sl_tls.c:247` calls it to set
+  the hostname a client checks the server's certificate against. Against
+  Homebrew's openssl@4 4.0.3, building `examples/router` prints a
+  `-Wdeprecated-declarations` warning from `main.gen.c`; `make test` still
+  passes because the generated-C sweep does not cover that example. Once a
+  release removes the function, TLS client builds break. `SSL_add1_host`
+  is deprecated in 4.0 too; the 4.0 header's replacements are
+  `SSL_set1_dnsname` and `SSL_set1_ipaddr` (a hostname that is an IP
+  literal needs the second). Neither exists before 4.0, so the switch needs
+  an `OPENSSL_VERSION_NUMBER` check while 3.x is supported.
+
 - [x] **CI's macOS arm64 jobs died on the retired macos-14 image (found
   2026-11-06, fix/ci-macos-runner).** GitHub retired it on 2026-11-02, so
   every `macos-14` job was cancelled within a second of starting, in ci.yml

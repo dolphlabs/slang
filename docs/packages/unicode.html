@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>unicode — slang</title>
+<meta name="description" content="Package unicode.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="unicode">
+<meta property="og:description" content="Package unicode.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://slang.dolphlabs.com/packages/unicode">
+<meta property="og:image" content="https://slang.dolphlabs.com/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The slang rabbit mark beside the slang wordmark">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://slang.dolphlabs.com/packages/unicode">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/unicode.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <button id="navtoggle" class="navtoggle" type="button"
+          aria-label="Toggle navigation" aria-expanded="false"
+          aria-controls="mainnav">
+    <span></span><span></span><span></span>
+  </button>
+  <nav class="mainnav" id="mainnav"><a href="../">Home</a><a href="../guide/">Guide</a><a href="../guide/data">Data types</a><a href="../guide/errors">Errors</a><a href="../guide/functions">Functions</a><a href="../concurrency/">Concurrency</a><a href="../testing/">Testing</a><a href="../bench/">Benchmarks</a><a href="../packages/">Packages</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="../limitations/">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="navscrim" class="navscrim" hidden></div>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>unicode</h1>
+      <p class="tagline">Package unicode.</p>
+      <p class="agentline">
+        <a href="../packages/unicode.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>Text as people write it: UTF-8 validation, characters rather than bytes, case-insensitive comparison and canonical normalisation, from the Unicode 18.0 tables. Use it for usernames, display names, length limits and search; <code>strings</code> stays the tool for protocol text.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;unicode&quot;</span>;
+
+unicode.<span class="f">valid</span>(s);                       <span class="c">// strict UTF-8: no overlongs or surrogates</span>
+unicode.<span class="f">valid_bytes</span>(body);              <span class="c">// the same check on bytes, before to_str</span>
+unicode.<span class="f">count</span>(<span class="s">&quot;café 😀&quot;</span>);               <span class="c">// 6 characters (len is 10 bytes)</span>
+unicode.<span class="f">truncate</span>(bio, <span class="n">160</span>);             <span class="c">// first 160 characters, none split</span>
+unicode.<span class="f">runes</span>(<span class="s">&quot;aé&quot;</span>);                    <span class="c">// [97, 233]: code points</span>
+unicode.<span class="f">encode</span>(<span class="n">0x1F600</span>) ?? <span class="s">&quot;&quot;</span>;          <span class="c">// &quot;😀&quot;; none for a surrogate or U+0000</span>
+
+unicode.<span class="f">fold</span>(<span class="s">&quot;Straße&quot;</span>);                 <span class="c">// &quot;strasse&quot;: full case folding</span>
+unicode.<span class="f">equal_fold</span>(<span class="s">&quot;STRASSE&quot;</span>, <span class="s">&quot;straße&quot;</span>); <span class="c">// true</span>
+unicode.<span class="f">nfc</span>(name);                      <span class="c">// composed form: store and compare this</span>
+unicode.<span class="f">nfd</span>(name);                      <span class="c">// decomposed form</span>
+unicode.<span class="f">is_nfc</span>(name);                   <span class="c">// true when nfc(name) == name</span></code></pre></div>
+<p>The same text can arrive as different bytes: <code>é</code> is one code point (U+00E9) from most keyboards and two (<code>e</code> + U+0301) from some, so two strings that both display as <code>café</code> can compare unequal. Normalise with <code>nfc</code> at the boundary, before storing or comparing. For a case-insensitive key, such as a username that must be unique however it is capitalised, store <code>unicode.nfc(unicode.fold(unicode.nfd(name)))</code>, or compare with <code>equal_fold</code>, which implements the Standard&#x27;s canonical caseless match (D145) and so treats <code>&quot;STRASSE&quot;</code>, <code>&quot;straße&quot;</code> and a decomposed spelling as equal.</p>
+<p><strong>Invalid UTF-8 is repaired, not guessed at.</strong> The checks report it (<code>valid</code> is false, <code>is_nfc</code> is false); every transform (<code>fold</code>, <code>nfc</code>, <code>nfd</code>, <code>truncate</code>, <code>runes</code>) replaces each malformed sequence with U+FFFD, as the Standard recommends, so its output is always valid UTF-8. Code that must reject bad input rather than repair it calls <code>valid</code> first.</p>
+<p><strong>Cost.</strong> Native, reading each <code>str</code> in place. <code>valid</code>, <code>valid_bytes</code>, <code>count</code>, <code>is_nfc</code> and <code>equal_fold</code> allocate nothing on the GC heap, and <code>fold</code>, <code>nfc</code>, <code>nfd</code> and <code>truncate</code> return their input itself, with no allocation, when it is already in the requested form, which covers ASCII and nearly all real text. Long runs of combining marks are reordered in linear time, so hostile input cannot make normalisation quadratic. The tables add about 125 KB to a program that imports the package, and nothing to one that does not.</p>
+<p>Out of scope: compatibility normalisation (NFKC/NFKD, which maps <code>ﬁ</code> to <code>fi</code> and full-width letters to ASCII), grapheme clusters (a flag emoji or an accented letter can be more than one code point, and <code>truncate</code> counts code points), and locale-specific casing (Turkish dotted and dotless i).</p>
+<p>The tables come from the Unicode data files under the Unicode License v3. Its notice is compiled into every program that imports <code>unicode</code>, so the binary carries it wherever it goes; see <code>THIRD_PARTY.md</code> and <code>LICENSES/Unicode-3.0.txt</code>.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="valid"><div class="api-sig"><code>unicode.<span class="f">valid</span>(<span class="t">str</span>) -&gt; <span class="t">bool</span></code><a class="anchor" href="#valid">#</a></div></div><div class="api-item" id="valid-bytes"><div class="api-sig"><code>unicode.<span class="f">valid_bytes</span>(<span class="t">bytes</span>) -&gt; <span class="t">bool</span></code><a class="anchor" href="#valid-bytes">#</a></div></div><div class="api-item" id="count"><div class="api-sig"><code>unicode.<span class="f">count</span>(<span class="t">str</span>) -&gt; <span class="t">int</span></code><a class="anchor" href="#count">#</a></div></div><div class="api-item" id="runes"><div class="api-sig"><code>unicode.<span class="f">runes</span>(<span class="t">str</span>) -&gt; [<span class="t">int</span>]</code><a class="anchor" href="#runes">#</a></div></div><div class="api-item" id="encode"><div class="api-sig"><code>unicode.<span class="f">encode</span>(<span class="t">int</span>) -&gt; <span class="t">opt</span>[<span class="t">str</span>]</code><a class="anchor" href="#encode">#</a></div></div><div class="api-item" id="truncate"><div class="api-sig"><code>unicode.<span class="f">truncate</span>(<span class="t">str</span>, <span class="t">int</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#truncate">#</a></div></div><div class="api-item" id="fold"><div class="api-sig"><code>unicode.<span class="f">fold</span>(<span class="t">str</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#fold">#</a></div></div><div class="api-item" id="equal-fold"><div class="api-sig"><code>unicode.<span class="f">equal_fold</span>(<span class="t">str</span>, <span class="t">str</span>) -&gt; <span class="t">bool</span></code><a class="anchor" href="#equal-fold">#</a></div></div><div class="api-item" id="nfc"><div class="api-sig"><code>unicode.<span class="f">nfc</span>(<span class="t">str</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#nfc">#</a></div></div><div class="api-item" id="nfd"><div class="api-sig"><code>unicode.<span class="f">nfd</span>(<span class="t">str</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#nfd">#</a></div></div><div class="api-item" id="is-nfc"><div class="api-sig"><code>unicode.<span class="f">is_nfc</span>(<span class="t">str</span>) -&gt; <span class="t">bool</span></code><a class="anchor" href="#is-nfc">#</a></div></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

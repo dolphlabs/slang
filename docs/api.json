@@ -5959,6 +5959,116 @@
         }
       ]
     },
+    "rand": {
+      "name": "rand",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Rng",
+          "decl": "struct",
+          "sig": "gc struct Rng",
+          "doc": "A random number generator. Make one with `new` or `from_os`.",
+          "file": "stdlib/rand/rand.sl",
+          "line": 33
+        },
+        {
+          "name": "new",
+          "decl": "fn",
+          "sig": "fn new(seed: int) -> Rng",
+          "doc": "A generator whose sequence is fixed by `seed`. Every int is a good seed, 0 and -1 included: splitmix64 spreads it over all 256 bits of state.",
+          "file": "stdlib/rand/rand.sl",
+          "line": 42
+        },
+        {
+          "name": "from_os",
+          "decl": "fn",
+          "sig": "fn from_os() -> result[Rng, str]",
+          "doc": "A generator seeded from the operating system's CSPRNG, for when runs should differ (load generators, sampling in production). Its outputs are still predictable from earlier ones: this is not a source of secrets.",
+          "file": "stdlib/rand/rand.sl",
+          "line": 57
+        },
+        {
+          "name": "fork",
+          "decl": "fn",
+          "sig": "fn fork(r: Rng) -> Rng",
+          "doc": "A new generator seeded from `r`, for handing to a spawned task. Seeded parents give seeded children, so a whole run still replays from one seed. `r` advances by one step.",
+          "file": "stdlib/rand/rand.sl",
+          "line": 76
+        },
+        {
+          "name": "next_u64",
+          "decl": "fn",
+          "sig": "fn next_u64(r: Rng) -> u64",
+          "doc": "The next 64 random bits.",
+          "file": "stdlib/rand/rand.sl",
+          "line": 81
+        },
+        {
+          "name": "below",
+          "decl": "fn",
+          "sig": "fn below(r: Rng, n: int) -> int",
+          "doc": "An int in [0, n), each value equally likely. Panics if n is not positive: there is no int to return, as with an index out of range.",
+          "file": "stdlib/rand/rand.sl",
+          "line": 95
+        },
+        {
+          "name": "between",
+          "decl": "fn",
+          "sig": "fn between(r: Rng, lo: int, hi: int) -> int",
+          "doc": "An int in [lo, hi], both ends included, each value equally likely. Panics if lo > hi. The full range, between(r, MIN, MAX), works.",
+          "file": "stdlib/rand/rand.sl",
+          "line": 104
+        },
+        {
+          "name": "unit",
+          "decl": "fn",
+          "sig": "fn unit(r: Rng) -> float",
+          "doc": "A float in the unit interval [0, 1): one of 2^53 evenly spaced values, so every float it returns is exact and 1.0 never appears.",
+          "file": "stdlib/rand/rand.sl",
+          "line": 119
+        },
+        {
+          "name": "chance",
+          "decl": "fn",
+          "sig": "fn chance(r: Rng, p: float) -> bool",
+          "doc": "True with probability `p`. p at or below 0 (or NaN) is never, p at or above 1 is always.",
+          "file": "stdlib/rand/rand.sl",
+          "line": 125
+        },
+        {
+          "name": "shuffle",
+          "decl": "fn",
+          "sig": "fn shuffle[T](r: Rng, xs: [T])",
+          "doc": "Reorders `xs` in place, every order equally likely (Fisher-Yates).",
+          "file": "stdlib/rand/rand.sl",
+          "line": 136
+        },
+        {
+          "name": "pick",
+          "decl": "fn",
+          "sig": "fn pick[T](r: Rng, xs: [T]) -> opt[T]",
+          "doc": "One element of `xs`, each equally likely; none if `xs` is empty.",
+          "file": "stdlib/rand/rand.sl",
+          "line": 148
+        },
+        {
+          "name": "backoff",
+          "decl": "fn",
+          "sig": "fn backoff(r: Rng, attempt: int, base: int, cap: int) -> int",
+          "doc": "How long to wait before retry number `attempt` (0 for the first retry): a uniform draw from [0, min(cap, base * 2^attempt)], the \"full jitter\" strategy. Spreading over the whole interval, not just its top, is what stops a crowd of clients that failed together from retrying together. Units are whatever `base` and `cap` use, nanoseconds for a duration. A negative attempt counts as 0; a base or cap at or below 0 gives 0.",
+          "file": "stdlib/rand/rand.sl",
+          "line": 161
+        },
+        {
+          "name": "jitter",
+          "decl": "fn",
+          "sig": "fn jitter(r: Rng, d: int, frac: float) -> int",
+          "doc": "`d` scaled by a uniform factor in [1 - frac, 1 + frac]: jitter(r, d, 0.1) lands within 10% of d. frac is clamped to [0, 1] (NaN counts as 0), so the result is never negative. A d at or below 0 gives 0.",
+          "file": "stdlib/rand/rand.sl",
+          "line": 185
+        }
+      ]
+    },
     "redis": {
       "name": "redis",
       "kind": "source",
@@ -9075,6 +9185,207 @@
           "doc": "Local midnight: the first instant of this date in the zone (01:00 where midnight is skipped).",
           "file": "stdlib/timez/zone.sl",
           "line": 770
+        }
+      ]
+    },
+    "unicode": {
+      "name": "unicode",
+      "kind": "native",
+      "items": [
+        {
+          "name": "valid",
+          "params": [
+            "str"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "unicode.valid(str) -> bool"
+        },
+        {
+          "name": "valid_bytes",
+          "params": [
+            "bytes"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "unicode.valid_bytes(bytes) -> bool"
+        },
+        {
+          "name": "count",
+          "params": [
+            "str"
+          ],
+          "ret": "int",
+          "tls": false,
+          "sig": "unicode.count(str) -> int"
+        },
+        {
+          "name": "runes",
+          "params": [
+            "str"
+          ],
+          "ret": "[int]",
+          "tls": false,
+          "sig": "unicode.runes(str) -> [int]"
+        },
+        {
+          "name": "encode",
+          "params": [
+            "int"
+          ],
+          "ret": "opt[str]",
+          "tls": false,
+          "sig": "unicode.encode(int) -> opt[str]"
+        },
+        {
+          "name": "truncate",
+          "params": [
+            "str",
+            "int"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "unicode.truncate(str, int) -> str"
+        },
+        {
+          "name": "fold",
+          "params": [
+            "str"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "unicode.fold(str) -> str"
+        },
+        {
+          "name": "equal_fold",
+          "params": [
+            "str",
+            "str"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "unicode.equal_fold(str, str) -> bool"
+        },
+        {
+          "name": "nfc",
+          "params": [
+            "str"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "unicode.nfc(str) -> str"
+        },
+        {
+          "name": "nfd",
+          "params": [
+            "str"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "unicode.nfd(str) -> str"
+        },
+        {
+          "name": "is_nfc",
+          "params": [
+            "str"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "unicode.is_nfc(str) -> bool"
+        }
+      ]
+    },
+    "uuid": {
+      "name": "uuid",
+      "kind": "source",
+      "items": [
+        {
+          "name": "NIL",
+          "decl": "let",
+          "sig": "let NIL = \"00000000-0000-0000-0000-000000000000\";",
+          "doc": "The nil and max UUIDs (RFC 9562 sections 5.9 and 5.10).",
+          "file": "stdlib/uuid/uuid.sl",
+          "line": 36
+        },
+        {
+          "name": "MAX",
+          "decl": "let",
+          "sig": "let MAX = \"ffffffff-ffff-ffff-ffff-ffffffffffff\";",
+          "doc": "",
+          "file": "stdlib/uuid/uuid.sl",
+          "line": 37
+        },
+        {
+          "name": "v4",
+          "decl": "fn",
+          "sig": "fn v4() -> result[str, str]",
+          "doc": "A random UUID, version 4: 122 random bits.",
+          "file": "stdlib/uuid/uuid.sl",
+          "line": 44
+        },
+        {
+          "name": "v7",
+          "decl": "fn",
+          "sig": "fn v7() -> result[str, str]",
+          "doc": "A time-ordered UUID, version 7, stamped with the current wall-clock time: 48 bits of unix milliseconds, then 74 random bits.",
+          "file": "stdlib/uuid/uuid.sl",
+          "line": 56
+        },
+        {
+          "name": "v7_at",
+          "decl": "fn",
+          "sig": "fn v7_at(unix_ms: int) -> result[str, str]",
+          "doc": "A version 7 UUID stamped with `unix_ms` instead of the clock: for tests, and for ids that must carry an event's own time. Errors if `unix_ms` is negative or does not fit in 48 bits.",
+          "file": "stdlib/uuid/uuid.sl",
+          "line": 63
+        },
+        {
+          "name": "is_valid",
+          "decl": "fn",
+          "sig": "fn is_valid(s: str) -> bool",
+          "doc": "Is `s` a UUID in canonical form: 36 characters, lowercase hex digits, hyphens at 8, 13, 18 and 23? Any version and variant passes, so ids made elsewhere (Postgres's gen_random_uuid, another service) are accepted. Upper case, braces and urn:uuid: are not: run those through `parse`.",
+          "file": "stdlib/uuid/uuid.sl",
+          "line": 87
+        },
+        {
+          "name": "parse",
+          "decl": "fn",
+          "sig": "fn parse(s: str) -> result[str, str]",
+          "doc": "The canonical form of a UUID written any common way: canonical, upper or mixed case, in braces ({...}), as a urn:uuid: URN, or as 32 hex digits without hyphens. The error names the position and what was expected there.",
+          "file": "stdlib/uuid/uuid.sl",
+          "line": 109
+        },
+        {
+          "name": "version",
+          "decl": "fn",
+          "sig": "fn version(s: str) -> opt[int]",
+          "doc": "The version number of a canonical UUID (4 for v4, 7 for v7, 0 for NIL), or none if `s` is not canonical.",
+          "file": "stdlib/uuid/uuid.sl",
+          "line": 119
+        },
+        {
+          "name": "time_ms",
+          "decl": "fn",
+          "sig": "fn time_ms(s: str) -> opt[int]",
+          "doc": "When a v7 UUID was made, in unix milliseconds. none if `s` is not a canonical version 7 UUID with the RFC 9562 variant: other versions keep no time, or keep it in another layout.",
+          "file": "stdlib/uuid/uuid.sl",
+          "line": 129
+        },
+        {
+          "name": "to_binary",
+          "decl": "fn",
+          "sig": "fn to_binary(s: str) -> result[bytes, str]",
+          "doc": "The 16 bytes of a UUID, most significant first: the binary form databases store (Postgres `uuid` on the wire, a BINARY(16) column). Accepts every spelling `parse` does.",
+          "file": "stdlib/uuid/uuid.sl",
+          "line": 151
+        },
+        {
+          "name": "from_binary",
+          "decl": "fn",
+          "sig": "fn from_binary(b: bytes) -> result[str, str]",
+          "doc": "The canonical form of 16 bytes, the reverse of `to_binary`.",
+          "file": "stdlib/uuid/uuid.sl",
+          "line": 156
         }
       ]
     }

@@ -2853,9 +2853,10 @@ sliced — so none of it could be written in slang without converting to
 Three behaviours worth knowing:
 
 - **Indices are byte offsets and the case operations are ASCII-only.**
-  `str` is UTF-8 bytes; doing better means shipping a Unicode table and
-  a normalisation policy, which is a different project. Treat these as
-  byte operations, because that is what they are.
+  `str` is UTF-8 bytes, and these are byte operations, which is what
+  protocol text (header names, methods, config keys) wants. For text
+  people type, use `unicode`: characters, case folding and
+  normalisation.
 - **`slice` clamps rather than panics.** Slicing is how you narrow a
   string you just searched, and a `find` that returned -1 on the line
   above should not turn the next line into a crash. A negative index
@@ -2864,6 +2865,66 @@ Three behaviours worth knowing:
   empty elements, so the result always has `count(s, sep) + 1` elements
   and `join(split(s, sep), sep) == s` for any non-empty separator. An
   empty separator splits into single bytes.
+
+#### `unicode`
+
+Text as people write it: UTF-8 validation, characters rather than bytes,
+case-insensitive comparison and canonical normalisation, from the Unicode
+18.0 tables. Use it for usernames, display names, length limits and search;
+`strings` stays the tool for protocol text.
+
+```slang
+import "unicode";
+
+unicode.valid(s);                       // strict UTF-8: no overlongs or surrogates
+unicode.valid_bytes(body);              // the same check on bytes, before to_str
+unicode.count("café 😀");               // 6 characters (len is 10 bytes)
+unicode.truncate(bio, 160);             // first 160 characters, none split
+unicode.runes("aé");                    // [97, 233]: code points
+unicode.encode(0x1F600) ?? "";          // "😀"; none for a surrogate or U+0000
+
+unicode.fold("Straße");                 // "strasse": full case folding
+unicode.equal_fold("STRASSE", "straße"); // true
+unicode.nfc(name);                      // composed form: store and compare this
+unicode.nfd(name);                      // decomposed form
+unicode.is_nfc(name);                   // true when nfc(name) == name
+```
+
+The same text can arrive as different bytes: `é` is one code point
+(U+00E9) from most keyboards and two (`e` + U+0301) from some, so two
+strings that both display as `café` can compare unequal. Normalise with `nfc` at the boundary,
+before storing or comparing. For a case-insensitive key, such as a
+username that must be unique however it is capitalised, store
+`unicode.nfc(unicode.fold(unicode.nfd(name)))`, or compare with
+`equal_fold`, which implements the Standard's canonical caseless match
+(D145) and so treats `"STRASSE"`, `"straße"` and a decomposed spelling as
+equal.
+
+**Invalid UTF-8 is repaired, not guessed at.** The checks report it
+(`valid` is false, `is_nfc` is false); every transform (`fold`, `nfc`,
+`nfd`, `truncate`, `runes`) replaces each malformed sequence with U+FFFD,
+as the Standard recommends, so its output is always valid UTF-8. Code that
+must reject bad input rather than repair it calls `valid` first.
+
+**Cost.** Native, reading each `str` in place. `valid`, `valid_bytes`,
+`count`, `is_nfc` and `equal_fold` allocate nothing on the GC heap, and
+`fold`, `nfc`, `nfd` and `truncate` return their input itself, with no
+allocation, when it is already in the requested form, which covers ASCII
+and nearly all real text. Long runs of combining marks are reordered in
+linear time, so hostile input cannot make normalisation quadratic. The
+tables add about 125 KB to a program that imports the package, and
+nothing to one that does not.
+
+Out of scope: compatibility normalisation (NFKC/NFKD, which maps `ﬁ` to
+`fi` and full-width letters to ASCII), grapheme clusters (a flag emoji
+or an accented letter can be more than one code point, and `truncate`
+counts code points), and locale-specific casing (Turkish dotted and
+dotless i).
+
+The tables come from the Unicode data files under the Unicode License v3.
+Its notice is compiled into every program that imports `unicode`, so the
+binary carries it wherever it goes; see `THIRD_PARTY.md` and
+`LICENSES/Unicode-3.0.txt`.
 
 #### `encoding`
 
@@ -3381,6 +3442,41 @@ be coprime), `binomial_mod` (Lucas, for a prime modulus) and
 function given one <= 0 returns `none`, 0 or `false` rather than
 panicking, and no result is negative.
 
+#### `rand`
+
+Seeded, non-cryptographic random numbers for tests, simulations, sampling
+and retry jitter. One seed fixes the whole sequence on every platform, so
+a test that draws random inputs fails the same way on CI and on a laptop.
+
+```slang
+import "rand";
+
+let r = rand.new(42);                  // same seed, same sequence
+rand.below(r, 10);                     // int in [0, 10)
+rand.between(r, 1, 6);                 // int in [1, 6], ends included
+rand.unit(r);                          // float in [0, 1)
+rand.chance(r, 0.25);                  // true about one time in four
+rand.shuffle(r, xs);                   // reorders xs in place
+rand.pick(r, xs) ?? fallback;          // none when xs is empty
+
+// retry number `attempt` (0 first): uniform in [0, min(cap, base * 2^attempt)]
+time.sleep(rand.backoff(r, attempt, 100000000, 30000000000));
+rand.jitter(r, 60000000000, 0.1);      // 60s, give or take 10%
+```
+
+The generator is `xoshiro256**`, seeded through `splitmix64`. The tests pin
+its exact outputs against the authors' C code, so a seed means the same
+sequence in every slang release. Draws are unbiased: `below` and `between`
+redraw rather than take a plain modulo, and `between` covers the full
+`int` range. `below(r, 0)` and `between(r, 5, 1)` panic, like an index out
+of range, since there is no value to return. `backoff` uses full jitter,
+which spreads clients that failed together across the whole interval, and
+saturates at `cap` rather than overflowing. An `Rng` is not locked: give
+each spawned task its own with `rand.fork(r)`, which stays reproducible
+from the parent's seed. `rand.from_os()` seeds from the OS when runs
+should differ. Neither is for secrets: tokens, keys and salts come from
+`crypto.rand`, because this generator's outputs reveal its state.
+
 #### `sort`
 
 Sorting lists in place with Go's `sort` engine shape, plus binary
@@ -3414,6 +3510,45 @@ answers already-sorted and fully-reversed lists in one scan, and the
 quicksort settles each duplicate group in one partition pass, so
 four-valued million-element lists sort in tens of milliseconds.
 `by_stable` merges with one scratch list of about n/2 elements.
+
+#### `uuid`
+
+UUIDs per RFC 9562: make version 4 (random) and version 7 (time-ordered),
+check, parse and convert. An id is a plain `str` in canonical form (36
+characters, lowercase hex, hyphens at 8, 13, 18 and 23), the form JSON,
+logs and Postgres's `uuid` text already use, so it crosses those
+boundaries unconverted and has exactly one spelling to compare or key a
+map by.
+
+```slang
+import "uuid";
+
+let r = uuid.v7();
+guard let id = r else let e = err_of(r) {
+    panic(e);                          // only if the OS has no randomness
+}
+uuid.is_valid(id);                     // true: canonical form only
+uuid.version(id) ?? 0;                 // 7
+uuid.time_ms(id) ?? 0;                 // unix ms it was made
+
+let p = uuid.parse("{0190F4E2-7C1A-7B3E-9F21-6C0D5A4E8B17}");
+// ok("0190f4e2-7c1a-7b3e-9f21-6c0d5a4e8b17"); also urn:uuid: and 32 hex
+let bad = uuid.parse("0190f4e2-7c1a");
+// err("uuid: want 36 characters (8-4-4-4-12 hex digits), got 13")
+```
+
+Use `v7` for anything stored, primary keys above all: its first 48 bits
+are the creation time in milliseconds, so ids sort by time and new rows
+append to an index instead of landing on random pages. Within one
+millisecond the order is random, because `v7` keeps no state and any task
+may call it without a lock. `v4` is 122 random bits and reveals nothing,
+not even when it was made. Both draw from `crypto.rand`, and return an
+error rather than an id from a weaker source. `v7_at(unix_ms)` stamps a
+given time (tests, ids that carry an event's time); `to_binary` and
+`from_binary` convert to and from the 16-byte form; `uuid.NIL` and
+`uuid.MAX` are the RFC's two special values. `is_valid` accepts any
+version and variant, so ids from Postgres's `gen_random_uuid()` or other
+services pass.
 
 #### `byteutil`
 
