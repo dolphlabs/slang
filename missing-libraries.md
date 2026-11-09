@@ -39,9 +39,11 @@ any package.
   hand in five places (`platform/app/app.sl`, `markets/service/service.sl`,
   `exchange/domain/types.sl`, `ledger/domain/money.sl`, a test helper), and
   the main one always forces the variant digit to `a`. PR #505.
-- [ ] **Unicode / UTF-8** (stdlib, `strings` or its own package): iterate a
+- [x] **Unicode / UTF-8** (stdlib, `strings` or its own package): iterate a
   string by character, validate UTF-8, count characters (not bytes),
-  case-fold. Needed for username rules and text length limits.
+  case-fold. Needed for username rules and text length limits. Built as
+  the native `unicode` package, with NFC/NFD normalisation as well.
+  Compatibility normalisation (NFKC) and grapheme clusters are not in it.
 
 ## 2. Money and identity
 

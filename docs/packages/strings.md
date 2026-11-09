@@ -47,9 +47,10 @@ sliced — so none of it could be written in slang without converting to
 Three behaviours worth knowing:
 
 - **Indices are byte offsets and the case operations are ASCII-only.**
-  `str` is UTF-8 bytes; doing better means shipping a Unicode table and
-  a normalisation policy, which is a different project. Treat these as
-  byte operations, because that is what they are.
+  `str` is UTF-8 bytes, and these are byte operations, which is what
+  protocol text (header names, methods, config keys) wants. For text
+  people type, use `unicode`: characters, case folding and
+  normalisation.
 - **`slice` clamps rather than panics.** Slicing is how you narrow a
   string you just searched, and a `find` that returned -1 on the line
   above should not turn the next line into a crash. A negative index

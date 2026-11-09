@@ -189,6 +189,7 @@ PACKAGE_SECTIONS = {
     "regex": ["`regex`"],
     "http2": ["`http2`"],
     "strings": ["`strings`"],
+    "unicode": ["`unicode`"],
     "encoding": ["`encoding`"],
     "compress": ["`compress`"],
     "math": ["`math`"],

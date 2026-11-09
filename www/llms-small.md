@@ -266,8 +266,13 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 `slang.project` to omit non-runtime directories from consumers' package caches;
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg redis regex
-strings encoding compress math rand builder byteutil flags sort uuid http http2
-httpc`.
+strings unicode encoding compress math rand builder byteutil flags sort uuid
+http http2 httpc`.
+`strings` is byte-based (protocol text); `unicode` is for text people type:
+`unicode.valid(s)`, `unicode.count(s)` (characters), `unicode.truncate(s, n)`,
+`unicode.nfc(s)` before storing or comparing, `unicode.equal_fold(a, b)` for
+case-insensitive matches (`"STRASSE"` equals `"straße"`). Transforms repair
+invalid UTF-8 to U+FFFD.
 `uuid.v7()` (time-ordered, for keys) and `uuid.v4()` return `result[str, str]`;
 an id is a canonical lowercase `str`, `uuid.parse` canonicalizes any spelling.
 `math` takes any numeric type and returns that type (`math.abs(x)` of an `i32`

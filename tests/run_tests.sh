@@ -619,6 +619,28 @@ tc_tmp_after=$(ls -d "${TMPDIR:-/tmp}"/slangtest_* 2>/dev/null | wc -l)
 [ "$tc_tmp_after" -eq "$tc_tmp_before" ] || tc_fail "runner temp directories left behind"
 [ "$tc_bad" -eq 0 ] && echo "PASS slangc test"
 
+# The Unicode License v3 asks that its notice travel with every copy of
+# the data. A program that imports unicode carries the tables, so it must
+# carry the notice too (runtime/sl_unicode_tables.c, sl_uc_license), and a
+# program that does not import it must carry neither.
+echo "--- unicode licence notice ---"
+ul_bad=0
+ul_bin="${TMPDIR:-/tmp}/sl_unicode_licence_$$"
+if ./slangc tests/unicode/main.sl -o "$ul_bin" >/dev/null 2>&1; then
+    if ! LC_ALL=C grep -aq "Copyright © 1991-2026 Unicode, Inc." "$ul_bin" ||
+       ! LC_ALL=C grep -aq "authorization of the copyright holder." "$ul_bin"; then
+        echo "FAIL unicode program lacks the Unicode licence notice"; ul_bad=1; fail=1
+    fi
+else
+    echo "FAIL unicode licence: tests/unicode did not compile"; ul_bad=1; fail=1
+fi
+if ./slangc tests/strings/main.sl -o "$ul_bin" >/dev/null 2>&1 &&
+   LC_ALL=C grep -aq "UNICODE LICENSE V3" "$ul_bin"; then
+    echo "FAIL a program without unicode carries the Unicode notice"; ul_bad=1; fail=1
+fi
+rm -f "$ul_bin"
+[ "$ul_bad" -eq 0 ] && echo "PASS unicode licence notice"
+
 # Stdlib packages that carry their own unit tests.
 for pkg in stdlib/pg stdlib/timez stdlib/uuid stdlib/rand; do
     if out=$(./slangc test "$pkg" 2>&1); then
@@ -826,7 +848,7 @@ vm_bad=0
 for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc_map_put encoding_f64 crypto if_let \
             literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions loop_leaf_plus safepoint_task_once \
             gc_nested_literal gc_nursery_barrier gc_nursery_promotion net_dns_records \
-            spawn_isolation select maps pg_rows_as json json_parity json_utf8 json_decode_budget \
+            spawn_isolation select maps pg_rows_as json json_parity json_utf8 unicode json_decode_budget \
             bytes json_deep_nesting redis http_read_wire http_client_pool http2_flood h2_client h2_client_close chan_recv_promoted value_results value_opts \
             gc_promotion_budget gc_chan_promotion_budget \
             value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks gc_skip_queued \

@@ -1015,6 +1015,11 @@ void force_native_result_types(CG *cg) {
         /* every entry point is result[bytes, str] */
         res_cname(cg, "bytes", "str");
     }
+    if (want_pkg(cg, "unicode")) {
+        /* encode: a code point with no str (a surrogate, U+0000, out of
+           range) is absent, not an error */
+        opt_cname(cg, "str");
+    }
     if (want_pkg(cg, "io")) {
         opt_cname(cg, "str");
         opt_cname(cg, "int");
@@ -1048,10 +1053,11 @@ void emit_native_runtime(CG *cg) {
     int want_encoding = want_pkg(cg, "encoding");
     int want_compress = want_pkg(cg, "compress");
     int want_math = want_pkg(cg, "math");
+    int want_unicode = want_pkg(cg, "unicode");
     if (!want_time && !want_net && !want_proc && !want_fs && !want_log &&
         !want_crypto && !want_sql && !want_regex && !want_os &&
         !want_io && !want_strings && !want_encoding && !want_compress &&
-        !want_math)
+        !want_math && !want_unicode)
         return;
     if (want_time)
         emit_runtime_file(cg, "sl_time.c");
@@ -1093,6 +1099,12 @@ void emit_native_runtime(CG *cg) {
         emit_runtime_file(cg, "sl_compress.c");
     if (want_math)
         emit_runtime_file(cg, "sl_math.c");
+    /* The tables before the code that reads them: one translation unit,
+       declare before use. */
+    if (want_unicode) {
+        emit_runtime_file(cg, "sl_unicode_tables.c");
+        emit_runtime_file(cg, "sl_unicode.c");
+    }
 }
 
 /* Emit the args-struct + task entry function for every distinct
