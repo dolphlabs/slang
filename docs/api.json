@@ -9188,6 +9188,113 @@
         }
       ]
     },
+    "unicode": {
+      "name": "unicode",
+      "kind": "native",
+      "items": [
+        {
+          "name": "valid",
+          "params": [
+            "str"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "unicode.valid(str) -> bool"
+        },
+        {
+          "name": "valid_bytes",
+          "params": [
+            "bytes"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "unicode.valid_bytes(bytes) -> bool"
+        },
+        {
+          "name": "count",
+          "params": [
+            "str"
+          ],
+          "ret": "int",
+          "tls": false,
+          "sig": "unicode.count(str) -> int"
+        },
+        {
+          "name": "runes",
+          "params": [
+            "str"
+          ],
+          "ret": "[int]",
+          "tls": false,
+          "sig": "unicode.runes(str) -> [int]"
+        },
+        {
+          "name": "encode",
+          "params": [
+            "int"
+          ],
+          "ret": "opt[str]",
+          "tls": false,
+          "sig": "unicode.encode(int) -> opt[str]"
+        },
+        {
+          "name": "truncate",
+          "params": [
+            "str",
+            "int"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "unicode.truncate(str, int) -> str"
+        },
+        {
+          "name": "fold",
+          "params": [
+            "str"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "unicode.fold(str) -> str"
+        },
+        {
+          "name": "equal_fold",
+          "params": [
+            "str",
+            "str"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "unicode.equal_fold(str, str) -> bool"
+        },
+        {
+          "name": "nfc",
+          "params": [
+            "str"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "unicode.nfc(str) -> str"
+        },
+        {
+          "name": "nfd",
+          "params": [
+            "str"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "unicode.nfd(str) -> str"
+        },
+        {
+          "name": "is_nfc",
+          "params": [
+            "str"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "unicode.is_nfc(str) -> bool"
+        }
+      ]
+    },
     "uuid": {
       "name": "uuid",
       "kind": "source",
