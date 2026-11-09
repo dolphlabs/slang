@@ -947,6 +947,9 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 @media (max-width: 1240px) { .pkg-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (max-width: 900px) { .pkg-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 640px) { .pkg-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .pkg-grid a { padding: 14px 16px; } }
+/* 30 cards fill every row at 6, 3 and 2 columns; at 4 the last row has two,
+   so the last card takes the rest of it. */
+@media (min-width: 901px) and (max-width: 1240px) { .pkg-grid > li:last-child { grid-column: span 3; } }
 
 /* ---- install ------------------------------------------------------------- */
 
