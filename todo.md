@@ -1,5 +1,17 @@
 # todo
 
+- [ ] **`SSL_set1_host` is deprecated in OpenSSL 4.0 (found 2026-11-09,
+  feat/uuid-package; not fixed).** `runtime/sl_tls.c:247` calls it to set
+  the hostname a client checks the server's certificate against. Against
+  Homebrew's openssl@4 4.0.3, building `examples/router` prints a
+  `-Wdeprecated-declarations` warning from `main.gen.c`; `make test` still
+  passes because the generated-C sweep does not cover that example. Once a
+  release removes the function, TLS client builds break. `SSL_add1_host`
+  is deprecated in 4.0 too; the 4.0 header's replacements are
+  `SSL_set1_dnsname` and `SSL_set1_ipaddr` (a hostname that is an IP
+  literal needs the second). Neither exists before 4.0, so the switch needs
+  an `OPENSSL_VERSION_NUMBER` check while 3.x is supported.
+
 - [x] **CI's macOS arm64 jobs died on the retired macos-14 image (found
   2026-11-06, fix/ci-macos-runner).** GitHub retired it on 2026-11-02, so
   every `macos-14` job was cancelled within a second of starting, in ci.yml
