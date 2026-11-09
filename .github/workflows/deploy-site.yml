@@ -37,6 +37,16 @@ jobs:
             echo "::error::CLOUDFLARE_PAGES_DEPLOY_HOOK is not set; the site was not rebuilt. See the setup note at the top of this workflow."
             exit 1
           fi
+          # A hook is a full https URL on api.cloudflare.com. Anything else
+          # (just the hook's ID, its name) reaches curl as a bare hostname
+          # and fails as "Could not resolve host", which says nothing useful.
+          case "$HOOK" in
+            https://api.cloudflare.com/client/v4/pages/webhooks/deploy_hooks/*) ;;
+            *)
+              echo "::error::CLOUDFLARE_PAGES_DEPLOY_HOOK is not a deploy hook URL. Set it to the full URL Cloudflare shows for the hook, starting https://api.cloudflare.com/client/v4/pages/webhooks/deploy_hooks/"
+              exit 1
+              ;;
+          esac
           # The hook URL is a credential: never echo it. --fail turns a
           # rejected hook (deleted, wrong project) into a failed job.
           curl --fail --silent --show-error --retry 3 --retry-all-errors \
