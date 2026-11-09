@@ -1,0 +1,45 @@
+{
+  "linkset": [
+    {
+      "anchor": "https://slang.dolphlabs.com/.well-known/api-catalog",
+      "item": [
+        { "href": "https://slang.dolphlabs.com/packages/", "title": "slang standard library" },
+        { "href": "https://zokor.dolphlabs.com/", "title": "zokor backend framework" }
+      ]
+    },
+    {
+      "anchor": "https://slang.dolphlabs.com/packages/",
+      "service-desc": [
+        {
+          "href": "https://slang.dolphlabs.com/api.json",
+          "type": "application/json",
+          "title": "Every slang package and function: signatures and doc comments"
+        }
+      ],
+      "service-doc": [
+        { "href": "https://slang.dolphlabs.com/packages/", "type": "text/html", "title": "Package reference" },
+        { "href": "https://slang.dolphlabs.com/llms-small.txt", "type": "text/plain", "title": "The language and its packages on one page, about 3k tokens" }
+      ],
+      "describedby": [
+        { "href": "https://slang.dolphlabs.com/llms.txt", "type": "text/plain", "title": "Index of the site for agents" }
+      ]
+    },
+    {
+      "anchor": "https://zokor.dolphlabs.com/",
+      "service-desc": [
+        {
+          "href": "https://zokor.dolphlabs.com/api.json",
+          "type": "application/json",
+          "title": "Every zokor module and public item: signatures and doc comments"
+        }
+      ],
+      "service-doc": [
+        { "href": "https://zokor.dolphlabs.com/", "type": "text/html", "title": "zokor documentation" },
+        { "href": "https://zokor.dolphlabs.com/llms-small.txt", "type": "text/plain", "title": "zokor on one page, for agents" }
+      ],
+      "describedby": [
+        { "href": "https://zokor.dolphlabs.com/llms.txt", "type": "text/plain", "title": "Index of the zokor site for agents" }
+      ]
+    }
+  ]
+}
