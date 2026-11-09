@@ -1,0 +1,44 @@
+# The website (slang.dolphlabs.com) is built from the `website` branch,
+# and its assemble step pulls docs/ from main at build time. Cloudflare
+# Pages only rebuilds when `website` changes, so without this a docs
+# change merged here sits on main until something else redeploys.
+#
+# Setup, once: Cloudflare dashboard -> Workers & Pages -> the site's
+# project -> Settings -> Builds -> Deploy hooks -> add a hook on branch
+# `website`, then store its URL as the repository secret
+# CLOUDFLARE_PAGES_DEPLOY_HOOK.
+name: deploy-site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Two docs merges in quick succession need one rebuild, from the later one.
+concurrency:
+  group: deploy-site
+  cancel-in-progress: true
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Trigger the Cloudflare Pages build
+        env:
+          HOOK: ${{ secrets.CLOUDFLARE_PAGES_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "::error::CLOUDFLARE_PAGES_DEPLOY_HOOK is not set; the site was not rebuilt. See the setup note at the top of this workflow."
+            exit 1
+          fi
+          # The hook URL is a credential: never echo it. --fail turns a
+          # rejected hook (deleted, wrong project) into a failed job.
+          curl --fail --silent --show-error --retry 3 --retry-all-errors \
+            -X POST "$HOOK" -o /dev/null
+          echo "Rebuild requested for the website branch."
