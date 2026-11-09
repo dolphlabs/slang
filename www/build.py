@@ -592,7 +592,7 @@ def nav_html(pages, current, depth):
     return "".join(out)
 
 
-def page_html(tpl, *, title, tagline, body, depth, nav, mdpath,
+def page_html(tpl, *, title, tagline, body, depth, nav, mdpath, canonical,
               extra_head="", hero=""):
     return (tpl
             .replace("{{TITLE}}", html.escape(title))
@@ -602,6 +602,8 @@ def page_html(tpl, *, title, tagline, body, depth, nav, mdpath,
             .replace("{{ROOT}}", rel(depth))
             .replace("{{MD}}", mdpath)
             .replace("{{HERO}}", hero)
+            .replace("{{CANONICAL}}", html.escape(canonical))
+            .replace("{{SITE_URL}}", html.escape(SITE_URL))
             .replace("{{EXTRA_HEAD}}", extra_head))
 
 
@@ -609,6 +611,39 @@ def canonical_url(path):
     clean = re.sub(r"(^|/)index\.html$", r"\1", path)
     clean = re.sub(r"\.html$", "", clean)
     return "%s/%s" % (SITE_URL, clean)
+
+
+def clean_path(path):
+    """guide/index.html -> guide/, guide/data.html -> guide/data,
+    index.html -> "" : the form the host serves without a redirect."""
+    if path == "index" or path.endswith("/index"):
+        return path[:-len("index")]
+    return path
+
+
+# A relative link to a page this build writes. An absolute URL never
+# matches: the colon after its scheme is outside the character class.
+PAGE_HREF = re.compile(
+    r'href="((?:\./|(?:\.\./)+)?)([A-Za-z0-9_/-]+)\.html(#[^"]*)?"')
+
+
+def clean_links(markup):
+    """Pages are generated with .html links, which also work when the
+    files are opened from disk, and served with clean ones: the host 301s
+    every .html address, so each click would otherwise cost a redirect.
+    The single-file build keeps the .html form and maps it to its views."""
+    def sub(m):
+        target = m.group(1) + clean_path(m.group(2))
+        return 'href="%s%s"' % (target or "./", m.group(3) or "")
+    return PAGE_HREF.sub(sub, markup)
+
+
+def sitemap_xml(pages):
+    urls = "".join("  <url><loc>%s</loc></url>\n"
+                   % html.escape(canonical_url(p["path"])) for p in pages)
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            '%s</urlset>\n' % urls)
 
 
 def md_twin(title, tagline, sections_md):
@@ -719,14 +754,13 @@ def build(out_dir):
         body = "\n".join(body_parts)
         target = out / p["path"]
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(page_html(
+        target.write_text(clean_links(page_html(
             tpl, title=p["title"], tagline=p["tagline"], body=body,
             depth=depth, nav=nav_html(navpages, p["path"], depth),
             mdpath=rel(depth) + mdrel,
+            canonical=canonical_url(p["path"]),
             hero=HERO if p["kind"] == "home" else "",
-            extra_head='<link rel="canonical" href="%s">'
-                       % html.escape(canonical_url(p["path"])),
-        ), encoding="utf-8")
+        )), encoding="utf-8")
 
         twin = md_twin(p["title"], p["tagline"], md_parts)
         (out / mdrel).write_text(twin, encoding="utf-8")
@@ -734,7 +768,8 @@ def build(out_dir):
         single_pages.append({"path": p["path"], "title": p["title"],
                              "tagline": p["tagline"], "body": body,
                              "nav": p.get("nav"), "kind": p["kind"]})
-        search.append({"title": p["title"], "url": p["path"],
+        search.append({"title": p["title"],
+                       "url": clean_path(re.sub(r"\.html$", "", p["path"])),
                        "tagline": p["tagline"],
                        "text": re.sub(r"\s+", " ",
                                       re.sub(r"<[^>]+>", " ", body))[:4000]})
@@ -817,7 +852,12 @@ def build(out_dir):
   Referrer-Policy: strict-origin-when-cross-origin
 """, encoding="utf-8")
     (out / "robots.txt").write_text(
-        "User-agent: *\nAllow: /\n", encoding="utf-8")
+        "User-agent: *\nAllow: /\n\nSitemap: %s/sitemap.xml\n" % SITE_URL,
+        encoding="utf-8")
+    # No <lastmod>: the build has no honest per-page date, and a date that
+    # changes on every build teaches crawlers to ignore it.
+    (out / "sitemap.xml").write_text(sitemap_xml(single_pages),
+                                     encoding="utf-8")
 
     write_single_file(out, tpl, single_pages)
 
@@ -871,8 +911,8 @@ def write_single_file(out, tpl, pages):
 
     views = []
     for p in pages:
-        body = re.sub(r'href="((?:\.\./)*)([a-z0-9/]+)\.html"',
-                      lambda m: 'href="#%s"' % slug_of(m.group(1) + ".html"),
+        body = re.sub(r'href="((?:\./|(?:\.\./)+)?)([a-z0-9/]+)\.html"',
+                      lambda m: 'href="#%s"' % slug_of(m.group(2) + ".html"),
                       p["body"])
         views.append(
             '<section class="view" id="%s" hidden>'
@@ -897,6 +937,8 @@ def write_single_file(out, tpl, pages):
            .replace('href="{{ROOT}}index.html"', 'href="#home"')
            .replace("{{ROOT}}", "")
            .replace("{{MD}}", "llms-full.txt")
+           .replace("{{CANONICAL}}", html.escape(canonical_url("offline.html")))
+           .replace("{{SITE_URL}}", html.escape(SITE_URL))
            .replace("{{EXTRA_HEAD}}", "")
            .replace("{{HERO}}", HERO)
            .replace("{{BODY}}", "".join(views)))
