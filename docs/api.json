@@ -9077,6 +9077,100 @@
           "line": 770
         }
       ]
+    },
+    "uuid": {
+      "name": "uuid",
+      "kind": "source",
+      "items": [
+        {
+          "name": "NIL",
+          "decl": "let",
+          "sig": "let NIL = \"00000000-0000-0000-0000-000000000000\";",
+          "doc": "The nil and max UUIDs (RFC 9562 sections 5.9 and 5.10).",
+          "file": "stdlib/uuid/uuid.sl",
+          "line": 36
+        },
+        {
+          "name": "MAX",
+          "decl": "let",
+          "sig": "let MAX = \"ffffffff-ffff-ffff-ffff-ffffffffffff\";",
+          "doc": "",
+          "file": "stdlib/uuid/uuid.sl",
+          "line": 37
+        },
+        {
+          "name": "v4",
+          "decl": "fn",
+          "sig": "fn v4() -> result[str, str]",
+          "doc": "A random UUID, version 4: 122 random bits.",
+          "file": "stdlib/uuid/uuid.sl",
+          "line": 44
+        },
+        {
+          "name": "v7",
+          "decl": "fn",
+          "sig": "fn v7() -> result[str, str]",
+          "doc": "A time-ordered UUID, version 7, stamped with the current wall-clock time: 48 bits of unix milliseconds, then 74 random bits.",
+          "file": "stdlib/uuid/uuid.sl",
+          "line": 56
+        },
+        {
+          "name": "v7_at",
+          "decl": "fn",
+          "sig": "fn v7_at(unix_ms: int) -> result[str, str]",
+          "doc": "A version 7 UUID stamped with `unix_ms` instead of the clock: for tests, and for ids that must carry an event's own time. Errors if `unix_ms` is negative or does not fit in 48 bits.",
+          "file": "stdlib/uuid/uuid.sl",
+          "line": 63
+        },
+        {
+          "name": "is_valid",
+          "decl": "fn",
+          "sig": "fn is_valid(s: str) -> bool",
+          "doc": "Is `s` a UUID in canonical form: 36 characters, lowercase hex digits, hyphens at 8, 13, 18 and 23? Any version and variant passes, so ids made elsewhere (Postgres's gen_random_uuid, another service) are accepted. Upper case, braces and urn:uuid: are not: run those through `parse`.",
+          "file": "stdlib/uuid/uuid.sl",
+          "line": 87
+        },
+        {
+          "name": "parse",
+          "decl": "fn",
+          "sig": "fn parse(s: str) -> result[str, str]",
+          "doc": "The canonical form of a UUID written any common way: canonical, upper or mixed case, in braces ({...}), as a urn:uuid: URN, or as 32 hex digits without hyphens. The error names the position and what was expected there.",
+          "file": "stdlib/uuid/uuid.sl",
+          "line": 109
+        },
+        {
+          "name": "version",
+          "decl": "fn",
+          "sig": "fn version(s: str) -> opt[int]",
+          "doc": "The version number of a canonical UUID (4 for v4, 7 for v7, 0 for NIL), or none if `s` is not canonical.",
+          "file": "stdlib/uuid/uuid.sl",
+          "line": 119
+        },
+        {
+          "name": "time_ms",
+          "decl": "fn",
+          "sig": "fn time_ms(s: str) -> opt[int]",
+          "doc": "When a v7 UUID was made, in unix milliseconds. none if `s` is not a canonical version 7 UUID with the RFC 9562 variant: other versions keep no time, or keep it in another layout.",
+          "file": "stdlib/uuid/uuid.sl",
+          "line": 129
+        },
+        {
+          "name": "to_binary",
+          "decl": "fn",
+          "sig": "fn to_binary(s: str) -> result[bytes, str]",
+          "doc": "The 16 bytes of a UUID, most significant first: the binary form databases store (Postgres `uuid` on the wire, a BINARY(16) column). Accepts every spelling `parse` does.",
+          "file": "stdlib/uuid/uuid.sl",
+          "line": 151
+        },
+        {
+          "name": "from_binary",
+          "decl": "fn",
+          "sig": "fn from_binary(b: bytes) -> result[str, str]",
+          "doc": "The canonical form of 16 bytes, the reverse of `to_binary`.",
+          "file": "stdlib/uuid/uuid.sl",
+          "line": 156
+        }
+      ]
     }
   }
 }

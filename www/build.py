@@ -198,6 +198,7 @@ PACKAGE_SECTIONS = {
     "builder": ["`builder`"],
     "flags": ["`flags`"],
     "sort": ["`sort`"],
+    "uuid": ["`uuid`"],
     "http": ["`http`"],
     "httpc": ["`httpc`"],
     "pg": ["`pg`"],
