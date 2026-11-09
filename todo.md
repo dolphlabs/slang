@@ -1,5 +1,24 @@
 # todo
 
+- [ ] **`str` literals have no Unicode escape (found 2026-11-09,
+  feat/unicode-package; not fixed).** The lexer accepts `\xHH` only in
+  `b"..."` literals and has no `\u{...}` for `str`, so a string holding a
+  combining mark (U+0301) or a look-alike (U+2126 OHM SIGN, which editors
+  silently normalise to U+03A9) has to be written as
+  `to_str(b"e\xCC\x81")`. tests/unicode does that. A `\u{HEX}` escape
+  in `str` literals (Swift, Rust and JavaScript spell it that way) is a
+  language change, so it needs a decision first.
+
+- [ ] **`unicode.equal_fold` on non-ASCII text costs about 190 ns (found
+  2026-11-09, feat/unicode-package; not fixed).** For a pair like
+  `"Straße"`/`"STRASSE"` it builds the full D145 key for both sides (NFD,
+  fold, NFD) in scratch buffers, against Go's `strings.EqualFold` at about
+  65 ns, which uses simple folding and so answers that pair wrongly. The
+  ASCII path is single-pass and level with Go (about 13 ns). A streaming
+  comparison that folds and decomposes one character at a time, stopping
+  at the first difference, would avoid building whole keys. It matters
+  only if case-insensitive non-ASCII comparison shows up on a hot path.
+
 - [ ] **`SSL_set1_host` is deprecated in OpenSSL 4.0 (found 2026-11-09,
   feat/uuid-package; not fixed).** `runtime/sl_tls.c:247` calls it to set
   the hostname a client checks the server's certificate against. Against
