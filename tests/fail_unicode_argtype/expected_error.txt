@@ -1,0 +1,1 @@
+unicode.valid argument 1 must be a str (got bytes)

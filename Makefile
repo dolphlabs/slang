@@ -43,7 +43,8 @@ PKG_SRCS = src/codegen/pkg_time/sigs.c \
           src/codegen/pkg_regex/sigs.c src/codegen/pkg_os/sigs.c src/codegen/pkg_io/sigs.c src/codegen/pkg_strings/sigs.c \
           src/codegen/pkg_encoding/sigs.c \
           src/codegen/pkg_compress/sigs.c \
-          src/codegen/pkg_math/sigs.c src/codegen/pkg_math/dispatch.c
+          src/codegen/pkg_math/sigs.c src/codegen/pkg_math/dispatch.c \
+          src/codegen/pkg_unicode/sigs.c
 
 SRCS = src/main.c src/loader.c src/lexer.c src/parser.c src/rtpath.c \
       src/project.c src/doc.c src/diag.c \
@@ -61,7 +62,8 @@ HDRS = src/common.h src/lexer.h src/ast.h src/parser.h src/codegen.h \
       src/codegen/pkg_regex/pkg_regex.h src/codegen/pkg_os/pkg_os.h src/codegen/pkg_io/pkg_io.h src/codegen/pkg_strings/pkg_strings.h \
       src/codegen/pkg_encoding/pkg_encoding.h \
       src/codegen/pkg_compress/pkg_compress.h \
-      src/codegen/pkg_math/pkg_math.h
+      src/codegen/pkg_math/pkg_math.h \
+      src/codegen/pkg_unicode/pkg_unicode.h
 RT_SRCS = runtime/sl_core.c runtime/sl_gc.c runtime/sl_ryu_tables.c \
          runtime/sl_ryu.c runtime/sl_containers.c \
          runtime/sl_sched.c runtime/sl_pool.c runtime/sl_time.c \
@@ -69,7 +71,7 @@ RT_SRCS = runtime/sl_core.c runtime/sl_gc.c runtime/sl_ryu_tables.c \
          runtime/sl_proc.c runtime/sl_fs.c runtime/sl_log.c \
          runtime/sl_crypto.c runtime/sl_sql.c runtime/sl_regex.c runtime/sl_os.c runtime/sl_io.c runtime/sl_strings.c \
          runtime/sl_encoding.c runtime/sl_compress.c runtime/sl_pg_rows.c \
-         runtime/sl_math.c
+         runtime/sl_math.c runtime/sl_unicode_tables.c runtime/sl_unicode.c
 
 slangc: $(SRCS) $(HDRS) $(RT_SRCS)
 	$(CC) $(CFLAGS) -o slangc $(SRCS)
@@ -90,18 +92,23 @@ tests/runtime/test_http_date: tests/runtime/test_http_date.c $(RT_SRCS)
 	$(CC) -std=c11 -O2 -Wall -Wno-unused-function -I runtime \
 		tests/runtime/test_http_date.c -lpthread -o tests/runtime/test_http_date
 
+tests/runtime/test_unicode: tests/runtime/test_unicode.c $(RT_SRCS)
+	$(CC) -std=c11 -O2 -Wall -Wno-unused-function -I runtime \
+		tests/runtime/test_unicode.c -lpthread -o tests/runtime/test_unicode
+
 tests/runtime/test_dns_records: tests/runtime/test_dns_records.c runtime/sl_dns.c
 	$(CC) -std=c11 -O2 -Wall -Wno-unused-function \
 		tests/runtime/test_dns_records.c -lresolv -o tests/runtime/test_dns_records
 
 .PHONY: test clean docs docs-serve install uninstall dist slangc-dist
 
-test: slangc tests/runtime/test_gc tests/runtime/test_preempt tests/runtime/test_fatal tests/runtime/test_http_date tests/runtime/test_dns_records
+test: slangc tests/runtime/test_gc tests/runtime/test_preempt tests/runtime/test_fatal tests/runtime/test_http_date tests/runtime/test_dns_records tests/runtime/test_unicode
 	./tests/runtime/test_gc
 	./tests/runtime/test_preempt
 	./tests/runtime/test_fatal
 	./tests/runtime/test_http_date
 	./tests/runtime/test_dns_records
+	./tests/runtime/test_unicode
 	./slangc examples/hello/main.sl --run
 	./slangc examples/fib/main.sl --run
 	./slangc examples/pkgdemo/main.sl --run
@@ -111,7 +118,8 @@ test: slangc tests/runtime/test_gc tests/runtime/test_preempt tests/runtime/test
 clean:
 	rm -f slangc hello main fib bytes ints lists fail_narrow fail_index \
 		tests/runtime/test_gc tests/runtime/test_preempt tests/runtime/test_fatal \
-		tests/runtime/test_http_date tests/runtime/test_dns_records
+		tests/runtime/test_http_date tests/runtime/test_dns_records \
+		tests/runtime/test_unicode
 
 # Documentation site. Generated from this repository -- README.md
 # sections, the compiler's own signature tables, and the `pub`

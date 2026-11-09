@@ -38,6 +38,13 @@ int native_is_leaf(const char *pkg, const char *name) {
         "strings.find_field",
         /* reads the clock and the date cache's atomics; never allocates */
         "time.put_http_date",
+        /* runtime/sl_unicode.c: valid, valid_bytes and count read the
+           str or bytes in place and allocate nothing. is_nfc and
+           equal_fold allocate only scratch from malloc (preempt-
+           bracketed, freed before return), never GC memory, so nothing
+           in them can collect either. */
+        "unicode.valid", "unicode.valid_bytes", "unicode.count",
+        "unicode.is_nfc", "unicode.equal_fold",
     };
     size_t pl = strlen(pkg);
     for (size_t i = 0; i < sizeof(leaves) / sizeof(leaves[0]); i++) {
@@ -57,6 +64,7 @@ int native_sigs_of(const char *pkg, const NatSig **out, int max) {
         {OS_SIGS, OS_SIGS_LEN},           {STRINGS_SIGS, STRINGS_SIGS_LEN},
         {ENCODING_SIGS, ENCODING_SIGS_LEN}, {COMPRESS_SIGS, COMPRESS_SIGS_LEN},
         {IO_SIGS, IO_SIGS_LEN},           {MATH_SIGS, MATH_SIGS_LEN},
+        {UNICODE_SIGS, UNICODE_SIGS_LEN},
     };
     int n = 0;
     for (size_t t = 0; t < sizeof(tabs) / sizeof(tabs[0]); t++)
@@ -104,6 +112,8 @@ static const NatSig *find_any_sig(const char *pkg, const char *fname) {
         ns = find_sig(IO_SIGS, IO_SIGS_LEN, pkg, fname);
     if (!ns)
         ns = find_sig(MATH_SIGS, MATH_SIGS_LEN, pkg, fname);
+    if (!ns)
+        ns = find_sig(UNICODE_SIGS, UNICODE_SIGS_LEN, pkg, fname);
     return ns;
 }
 

@@ -667,6 +667,9 @@ extern const int COMPRESS_SIGS_LEN;
 extern const NatSig MATH_SIGS[]; /* src/codegen/pkg_math/ */
 extern const int MATH_SIGS_LEN;
 
+extern const NatSig UNICODE_SIGS[]; /* src/codegen/pkg_unicode/ */
+extern const int UNICODE_SIGS_LEN;
+
 /* A math constant (math.pi): its slang type and the C it compiles to. */
 typedef struct {
     const char *name, *slang, *c;
