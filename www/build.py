@@ -50,6 +50,13 @@ ORG_ENTITY = "Dolph Tech Limited"
 ORG_URL = "https://dolphlabs.com"
 WWW = ROOT / "www"
 
+# Where the site is served. Canonical links must be absolute, and the
+# host serves clean URLs (it 301s /x/index.html -> /x/ and /x.html -> /x),
+# so every page declares the clean form or search engines file the
+# .html spelling under "Page with redirect".
+SITE_URL = os.environ.get("SLANG_SITE_URL",
+                          "https://slang.dolphlabs.com").rstrip("/")
+
 # --------------------------------------------------------------------
 # Site map: which README sections become which page.
 #
@@ -598,6 +605,12 @@ def page_html(tpl, *, title, tagline, body, depth, nav, mdpath,
             .replace("{{EXTRA_HEAD}}", extra_head))
 
 
+def canonical_url(path):
+    clean = re.sub(r"(^|/)index\.html$", r"\1", path)
+    clean = re.sub(r"\.html$", "", clean)
+    return "%s/%s" % (SITE_URL, clean)
+
+
 def md_twin(title, tagline, sections_md):
     head = "# %s\n\n> %s\n\n" % (title, tagline)
     body = "\n\n".join(p.strip() for p in sections_md if p.strip())
@@ -711,6 +724,8 @@ def build(out_dir):
             depth=depth, nav=nav_html(navpages, p["path"], depth),
             mdpath=rel(depth) + mdrel,
             hero=HERO if p["kind"] == "home" else "",
+            extra_head='<link rel="canonical" href="%s">'
+                       % html.escape(canonical_url(p["path"])),
         ), encoding="utf-8")
 
         twin = md_twin(p["title"], p["tagline"], md_parts)
@@ -776,17 +791,26 @@ def build(out_dir):
     # api.json or llms.txt at all. Without it the agent-facing half of
     # this site is only reachable by things that ignore the browser's
     # same-origin rules.
+    #
+    # X-Robots-Tag keeps the agent surfaces out of search results without
+    # blocking them: robots.txt would stop crawlers fetching them at all,
+    # noindex only stops them being listed. Each .md twin duplicates an
+    # HTML page, so indexing it only splits that page's ranking, and Google
+    # otherwise reports them as "Crawled - currently not indexed".
     (out / "_headers").write_text("""/*.md
   Content-Type: text/plain; charset=utf-8
   Access-Control-Allow-Origin: *
+  X-Robots-Tag: noindex
 
 /*.txt
   Content-Type: text/plain; charset=utf-8
   Access-Control-Allow-Origin: *
+  X-Robots-Tag: noindex
 
 /*.json
   Content-Type: application/json; charset=utf-8
   Access-Control-Allow-Origin: *
+  X-Robots-Tag: noindex
 
 /*
   X-Content-Type-Options: nosniff
