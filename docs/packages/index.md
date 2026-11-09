@@ -1882,8 +1882,12 @@ Out of scope: compatibility normalisation (NFKC/NFKD, which maps `ﬁ` to
 `fi` and full-width letters to ASCII), grapheme clusters (a flag emoji
 or an accented letter can be more than one code point, and `truncate`
 counts code points), and locale-specific casing (Turkish dotted and
-dotless i). The tables come from the Unicode data files under the Unicode
-License v3; see `THIRD_PARTY.md`.
+dotless i).
+
+The tables come from the Unicode data files under the Unicode License v3.
+Its notice is compiled into every program that imports `unicode`, so the
+binary carries it wherever it goes; see `THIRD_PARTY.md` and
+`LICENSES/Unicode-3.0.txt`.
 
 #### `encoding`
 
