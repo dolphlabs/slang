@@ -1101,3 +1101,65 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
   .status i { animation: none; }
   .runner.is-js .runner-out .out-line { transition: none; }
 }
+
+/* ---- not found ---------------------------------------------------------- */
+
+/* The CTA's lime field, full height: the rabbit came up the wrong burrow. */
+.nf {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100svh;
+  padding: 120px var(--gutter) 80px;
+  background: radial-gradient(60% 70% at 50% 100%, #1b2408 0%, rgba(27, 36, 8, 0) 70%);
+}
+.nf-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  width: 100%;
+  max-width: 720px;
+  text-align: center;
+}
+.nf-mark {
+  width: clamp(80px, 8vw, 104px);
+  height: auto;
+  filter: drop-shadow(0 0 40px rgba(214, 245, 49, .25));
+  animation: nf-hop 2.4s cubic-bezier(.3, 0, .2, 1) infinite;
+}
+/* One hop, then a look around. */
+@keyframes nf-hop {
+  0%, 46%, 100% { transform: translateY(0) rotate(0); }
+  18% { transform: translateY(-18px) rotate(-6deg); }
+  34% { transform: translateY(0) rotate(0); }
+  62% { transform: rotate(4deg); }
+  78% { transform: rotate(-4deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .nf-mark { animation: none; }
+}
+.nf h1 {
+  font-size: clamp(44px, 6.4vw, 80px);
+  line-height: 1;
+  letter-spacing: -.045em;
+  text-wrap: balance;
+}
+.nf-lede {
+  max-width: 520px;
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.6;
+  color: var(--muted);
+  text-wrap: pretty;
+}
+.nf-term {
+  width: 100%;
+  margin-top: 14px;
+  text-align: left;
+  box-shadow: 0 40px 120px rgba(0, 0, 0, .55);
+}
+.nf-term pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.nf-fix { color: var(--lime); border-bottom: 1px solid rgba(214, 245, 49, .4); }
+.nf-fix:hover { color: var(--lime); border-color: var(--lime); }
+.nf-ctas { margin-top: 10px; }

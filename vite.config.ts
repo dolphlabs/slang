@@ -164,5 +164,13 @@ export default defineConfig({
     // warning so a real regression in the main bundle still stands out.
     chunkSizeWarningLimit: 700,
     assetsInlineLimit: 0,
+    // 404.html is a page of its own: the host serves it, with status 404,
+    // for any path that matches no file.
+    rollupOptions: {
+      input: {
+        main: resolve(ROOT, 'index.html'),
+        notFound: resolve(ROOT, '404.html'),
+      },
+    },
   },
 });
