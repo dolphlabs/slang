@@ -3450,6 +3450,45 @@ quicksort settles each duplicate group in one partition pass, so
 four-valued million-element lists sort in tens of milliseconds.
 `by_stable` merges with one scratch list of about n/2 elements.
 
+#### `uuid`
+
+UUIDs per RFC 9562: make version 4 (random) and version 7 (time-ordered),
+check, parse and convert. An id is a plain `str` in canonical form (36
+characters, lowercase hex, hyphens at 8, 13, 18 and 23), the form JSON,
+logs and Postgres's `uuid` text already use, so it crosses those
+boundaries unconverted and has exactly one spelling to compare or key a
+map by.
+
+```slang
+import "uuid";
+
+let r = uuid.v7();
+guard let id = r else let e = err_of(r) {
+    panic(e);                          // only if the OS has no randomness
+}
+uuid.is_valid(id);                     // true: canonical form only
+uuid.version(id) ?? 0;                 // 7
+uuid.time_ms(id) ?? 0;                 // unix ms it was made
+
+let p = uuid.parse("{0190F4E2-7C1A-7B3E-9F21-6C0D5A4E8B17}");
+// ok("0190f4e2-7c1a-7b3e-9f21-6c0d5a4e8b17"); also urn:uuid: and 32 hex
+let bad = uuid.parse("0190f4e2-7c1a");
+// err("uuid: want 36 characters (8-4-4-4-12 hex digits), got 13")
+```
+
+Use `v7` for anything stored, primary keys above all: its first 48 bits
+are the creation time in milliseconds, so ids sort by time and new rows
+append to an index instead of landing on random pages. Within one
+millisecond the order is random, because `v7` keeps no state and any task
+may call it without a lock. `v4` is 122 random bits and reveals nothing,
+not even when it was made. Both draw from `crypto.rand`, and return an
+error rather than an id from a weaker source. `v7_at(unix_ms)` stamps a
+given time (tests, ids that carry an event's time); `to_binary` and
+`from_binary` convert to and from the 16-byte form; `uuid.NIL` and
+`uuid.MAX` are the RFC's two special values. `is_valid` accepts any
+version and variant, so ids from Postgres's `gen_random_uuid()` or other
+services pass.
+
 #### `byteutil`
 
 Search, trim, and split on the `bytes` type — no new syntax. The
