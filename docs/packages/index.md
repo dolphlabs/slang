@@ -2344,6 +2344,41 @@ be coprime), `binomial_mod` (Lucas, for a prime modulus) and
 function given one <= 0 returns `none`, 0 or `false` rather than
 panicking, and no result is negative.
 
+#### `rand`
+
+Seeded, non-cryptographic random numbers for tests, simulations, sampling
+and retry jitter. One seed fixes the whole sequence on every platform, so
+a test that draws random inputs fails the same way on CI and on a laptop.
+
+```slang
+import "rand";
+
+let r = rand.new(42);                  // same seed, same sequence
+rand.below(r, 10);                     // int in [0, 10)
+rand.between(r, 1, 6);                 // int in [1, 6], ends included
+rand.unit(r);                          // float in [0, 1)
+rand.chance(r, 0.25);                  // true about one time in four
+rand.shuffle(r, xs);                   // reorders xs in place
+rand.pick(r, xs) ?? fallback;          // none when xs is empty
+
+// retry number `attempt` (0 first): uniform in [0, min(cap, base * 2^attempt)]
+time.sleep(rand.backoff(r, attempt, 100000000, 30000000000));
+rand.jitter(r, 60000000000, 0.1);      // 60s, give or take 10%
+```
+
+The generator is `xoshiro256**`, seeded through `splitmix64`. The tests pin
+its exact outputs against the authors' C code, so a seed means the same
+sequence in every slang release. Draws are unbiased: `below` and `between`
+redraw rather than take a plain modulo, and `between` covers the full
+`int` range. `below(r, 0)` and `between(r, 5, 1)` panic, like an index out
+of range, since there is no value to return. `backoff` uses full jitter,
+which spreads clients that failed together across the whole interval, and
+saturates at `cap` rather than overflowing. An `Rng` is not locked: give
+each spawned task its own with `rand.fork(r)`, which stays reproducible
+from the parent's seed. `rand.from_os()` seeds from the OS when runs
+should differ. Neither is for secrets: tokens, keys and salts come from
+`crypto.rand`, because this generator's outputs reveal its state.
+
 #### `sort`
 
 Sorting lists in place with Go's `sort` engine shape, plus binary
@@ -2663,6 +2698,7 @@ any signal-handling program.
 - [os](packages/os.md) -- compiler-provided, 18 public items
 - [pg](packages/pg.md) -- source package, 56 public items
 - [proc](packages/proc.md) -- compiler-provided, 9 public items
+- [rand](packages/rand.md) -- source package, 13 public items
 - [redis](packages/redis.md) -- source package, 161 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [sort](packages/sort.md) -- source package, 9 public items

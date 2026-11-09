@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rand — slang</title>
+<meta name="description" content="Package rand.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="rand">
+<meta property="og:description" content="Package rand.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://slang.dolphlabs.com/packages/rand">
+<meta property="og:image" content="https://slang.dolphlabs.com/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The slang rabbit mark beside the slang wordmark">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://slang.dolphlabs.com/packages/rand">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/rand.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <button id="navtoggle" class="navtoggle" type="button"
+          aria-label="Toggle navigation" aria-expanded="false"
+          aria-controls="mainnav">
+    <span></span><span></span><span></span>
+  </button>
+  <nav class="mainnav" id="mainnav"><a href="../">Home</a><a href="../guide/">Guide</a><a href="../guide/data">Data types</a><a href="../guide/errors">Errors</a><a href="../guide/functions">Functions</a><a href="../concurrency/">Concurrency</a><a href="../testing/">Testing</a><a href="../bench/">Benchmarks</a><a href="../packages/">Packages</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="../limitations/">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="navscrim" class="navscrim" hidden></div>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>rand</h1>
+      <p class="tagline">Package rand.</p>
+      <p class="agentline">
+        <a href="../packages/rand.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>Seeded, non-cryptographic random numbers for tests, simulations, sampling and retry jitter. One seed fixes the whole sequence on every platform, so a test that draws random inputs fails the same way on CI and on a laptop.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;rand&quot;</span>;
+
+<span class="k">let</span> r = rand.<span class="f">new</span>(<span class="n">42</span>);                  <span class="c">// same seed, same sequence</span>
+rand.<span class="f">below</span>(r, <span class="n">10</span>);                     <span class="c">// int in [0, 10)</span>
+rand.<span class="f">between</span>(r, <span class="n">1</span>, <span class="n">6</span>);                 <span class="c">// int in [1, 6], ends included</span>
+rand.<span class="f">unit</span>(r);                          <span class="c">// float in [0, 1)</span>
+rand.<span class="f">chance</span>(r, <span class="n">0.25</span>);                  <span class="c">// true about one time in four</span>
+rand.<span class="f">shuffle</span>(r, xs);                   <span class="c">// reorders xs in place</span>
+rand.<span class="f">pick</span>(r, xs) ?? fallback;          <span class="c">// none when xs is empty</span>
+
+<span class="c">// retry number `attempt` (0 first): uniform in [0, min(cap, base * 2^attempt)]</span>
+time.<span class="f">sleep</span>(rand.<span class="f">backoff</span>(r, attempt, <span class="n">100000000</span>, <span class="n">30000000000</span>));
+rand.<span class="f">jitter</span>(r, <span class="n">60000000000</span>, <span class="n">0.1</span>);      <span class="c">// 60s, give or take 10%</span></code></pre></div>
+<p>The generator is <code>xoshiro256**</code>, seeded through <code>splitmix64</code>. The tests pin its exact outputs against the authors&#x27; C code, so a seed means the same sequence in every slang release. Draws are unbiased: <code>below</code> and <code>between</code> redraw rather than take a plain modulo, and <code>between</code> covers the full <code>int</code> range. <code>below(r, 0)</code> and <code>between(r, 5, 1)</code> panic, like an index out of range, since there is no value to return. <code>backoff</code> uses full jitter, which spreads clients that failed together across the whole interval, and saturates at <code>cap</code> rather than overflowing. An <code>Rng</code> is not locked: give each spawned task its own with <code>rand.fork(r)</code>, which stays reproducible from the parent&#x27;s seed. <code>rand.from_os()</code> seeds from the OS when runs should differ. Neither is for secrets: tokens, keys and salts come from <code>crypto.rand</code>, because this generator&#x27;s outputs reveal its state.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="rng"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Rng</code> <span class="src">stdlib/rand/rand.sl:33</span><a class="anchor" href="#rng">#</a></div><p class="api-doc">A random number generator. Make one with <code>new</code> or <code>from_os</code>.</p></div><div class="api-item" id="new"><div class="api-sig"><code><span class="k">fn</span> <span class="f">new</span>(seed: <span class="t">int</span>) -&gt; Rng</code> <span class="src">stdlib/rand/rand.sl:42</span><a class="anchor" href="#new">#</a></div><p class="api-doc">A generator whose sequence is fixed by <code>seed</code>. Every int is a good seed, 0 and -1 included: splitmix64 spreads it over all 256 bits of state.</p></div><div class="api-item" id="from-os"><div class="api-sig"><code><span class="k">fn</span> <span class="f">from_os</span>() -&gt; <span class="t">result</span>[Rng, <span class="t">str</span>]</code> <span class="src">stdlib/rand/rand.sl:57</span><a class="anchor" href="#from-os">#</a></div><p class="api-doc">A generator seeded from the operating system&#x27;s CSPRNG, for when runs should differ (load generators, sampling in production). Its outputs are still predictable from earlier ones: this is not a source of secrets.</p></div><div class="api-item" id="fork"><div class="api-sig"><code><span class="k">fn</span> <span class="f">fork</span>(r: Rng) -&gt; Rng</code> <span class="src">stdlib/rand/rand.sl:76</span><a class="anchor" href="#fork">#</a></div><p class="api-doc">A new generator seeded from <code>r</code>, for handing to a spawned task. Seeded parents give seeded children, so a whole run still replays from one seed. <code>r</code> advances by one step.</p></div><div class="api-item" id="next-u64"><div class="api-sig"><code><span class="k">fn</span> <span class="f">next_u64</span>(r: Rng) -&gt; <span class="t">u64</span></code> <span class="src">stdlib/rand/rand.sl:81</span><a class="anchor" href="#next-u64">#</a></div><p class="api-doc">The next 64 random bits.</p></div><div class="api-item" id="below"><div class="api-sig"><code><span class="k">fn</span> <span class="f">below</span>(r: Rng, n: <span class="t">int</span>) -&gt; <span class="t">int</span></code> <span class="src">stdlib/rand/rand.sl:95</span><a class="anchor" href="#below">#</a></div><p class="api-doc">An int in [0, n), each value equally likely. Panics if n is not positive: there is no int to return, as with an index out of range.</p></div><div class="api-item" id="between"><div class="api-sig"><code><span class="k">fn</span> <span class="f">between</span>(r: Rng, lo: <span class="t">int</span>, hi: <span class="t">int</span>) -&gt; <span class="t">int</span></code> <span class="src">stdlib/rand/rand.sl:104</span><a class="anchor" href="#between">#</a></div><p class="api-doc">An int in [lo, hi], both ends included, each value equally likely. Panics if lo &gt; hi. The full range, between(r, MIN, MAX), works.</p></div><div class="api-item" id="unit"><div class="api-sig"><code><span class="k">fn</span> <span class="f">unit</span>(r: Rng) -&gt; <span class="t">float</span></code> <span class="src">stdlib/rand/rand.sl:119</span><a class="anchor" href="#unit">#</a></div><p class="api-doc">A float in the unit interval [0, 1): one of 2^53 evenly spaced values, so every float it returns is exact and 1.0 never appears.</p></div><div class="api-item" id="chance"><div class="api-sig"><code><span class="k">fn</span> <span class="f">chance</span>(r: Rng, p: <span class="t">float</span>) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/rand/rand.sl:125</span><a class="anchor" href="#chance">#</a></div><p class="api-doc">True with probability <code>p</code>. p at or below 0 (or NaN) is never, p at or above 1 is always.</p></div><div class="api-item" id="shuffle"><div class="api-sig"><code><span class="k">fn</span> shuffle[T](r: Rng, xs: [T])</code> <span class="src">stdlib/rand/rand.sl:136</span><a class="anchor" href="#shuffle">#</a></div><p class="api-doc">Reorders <code>xs</code> in place, every order equally likely (Fisher-Yates).</p></div><div class="api-item" id="pick"><div class="api-sig"><code><span class="k">fn</span> pick[T](r: Rng, xs: [T]) -&gt; <span class="t">opt</span>[T]</code> <span class="src">stdlib/rand/rand.sl:148</span><a class="anchor" href="#pick">#</a></div><p class="api-doc">One element of <code>xs</code>, each equally likely; none if <code>xs</code> is empty.</p></div><div class="api-item" id="backoff"><div class="api-sig"><code><span class="k">fn</span> <span class="f">backoff</span>(r: Rng, attempt: <span class="t">int</span>, base: <span class="t">int</span>, cap: <span class="t">int</span>) -&gt; <span class="t">int</span></code> <span class="src">stdlib/rand/rand.sl:161</span><a class="anchor" href="#backoff">#</a></div><p class="api-doc">How long to wait before retry number <code>attempt</code> (0 for the first retry): a uniform draw from [0, min(cap, base * 2^attempt)], the &quot;full jitter&quot; strategy. Spreading over the whole interval, not just its top, is what stops a crowd of clients that failed together from retrying together. Units are whatever <code>base</code> and <code>cap</code> use, nanoseconds for a duration. A negative attempt counts as 0; a base or cap at or below 0 gives 0.</p></div><div class="api-item" id="jitter"><div class="api-sig"><code><span class="k">fn</span> <span class="f">jitter</span>(r: Rng, d: <span class="t">int</span>, frac: <span class="t">float</span>) -&gt; <span class="t">int</span></code> <span class="src">stdlib/rand/rand.sl:185</span><a class="anchor" href="#jitter">#</a></div><p class="api-doc"><code>d</code> scaled by a uniform factor in [1 - frac, 1 + frac]: jitter(r, d, 0.1) lands within 10% of d. frac is clamped to [0, 1] (NaN counts as 0), so the result is never negative. A d at or below 0 gives 0.</p></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>
