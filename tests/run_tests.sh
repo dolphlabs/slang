@@ -619,6 +619,28 @@ tc_tmp_after=$(ls -d "${TMPDIR:-/tmp}"/slangtest_* 2>/dev/null | wc -l)
 [ "$tc_tmp_after" -eq "$tc_tmp_before" ] || tc_fail "runner temp directories left behind"
 [ "$tc_bad" -eq 0 ] && echo "PASS slangc test"
 
+# The Unicode License v3 asks that its notice travel with every copy of
+# the data. A program that imports unicode carries the tables, so it must
+# carry the notice too (runtime/sl_unicode_tables.c, sl_uc_license), and a
+# program that does not import it must carry neither.
+echo "--- unicode licence notice ---"
+ul_bad=0
+ul_bin="${TMPDIR:-/tmp}/sl_unicode_licence_$$"
+if ./slangc tests/unicode/main.sl -o "$ul_bin" >/dev/null 2>&1; then
+    if ! LC_ALL=C grep -aq "Copyright © 1991-2026 Unicode, Inc." "$ul_bin" ||
+       ! LC_ALL=C grep -aq "authorization of the copyright holder." "$ul_bin"; then
+        echo "FAIL unicode program lacks the Unicode licence notice"; ul_bad=1; fail=1
+    fi
+else
+    echo "FAIL unicode licence: tests/unicode did not compile"; ul_bad=1; fail=1
+fi
+if ./slangc tests/strings/main.sl -o "$ul_bin" >/dev/null 2>&1 &&
+   LC_ALL=C grep -aq "UNICODE LICENSE V3" "$ul_bin"; then
+    echo "FAIL a program without unicode carries the Unicode notice"; ul_bad=1; fail=1
+fi
+rm -f "$ul_bin"
+[ "$ul_bad" -eq 0 ] && echo "PASS unicode licence notice"
+
 # Stdlib packages that carry their own unit tests.
 for pkg in stdlib/pg stdlib/timez stdlib/uuid stdlib/rand; do
     if out=$(./slangc test "$pkg" 2>&1); then

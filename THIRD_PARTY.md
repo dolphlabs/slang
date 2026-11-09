@@ -39,8 +39,9 @@ files, kept unmodified in `tests/runtime/unicode/` (`NormalizationTest.txt`,
 
 All of it is used under the Unicode License v3, which allows use, copying,
 modification and distribution provided this notice appears with the copies
-or in their documentation. The generated file carries it in its header, and
-it is reproduced here:
+or in their documentation. The generated file carries it in its header and
+as data (below), the test files carry Unicode's own headers, and it is
+reproduced here:
 
 ```
 UNICODE LICENSE V3
@@ -84,9 +85,16 @@ dealings in these Data Files or Software without prior written
 authorization of the copyright holder.
 ```
 
-**If you distribute a program that imports `unicode`, it contains data
-derived from Unicode's files**, and the notice above applies to it: keep it in
-the program's documentation or alongside the binary.
+**A program that imports `unicode` carries the notice itself.** The tables
+come with the notice compiled in as data (`sl_uc_license` in
+`runtime/sl_unicode_tables.c`), so every binary that contains Unicode-derived
+data also contains the full notice; `make test` checks that it is there, and
+that a program without `unicode` carries neither. If you ship such a program,
+listing the notice in its own documentation as well does no harm.
+
+The licence text is also at [LICENSES/Unicode-3.0.txt](LICENSES/Unicode-3.0.txt)
+(SPDX identifier `Unicode-3.0`, which the generated file declares), and the
+release tarball includes that directory.
 
 ## Things this repository refers to but does not ship
 
