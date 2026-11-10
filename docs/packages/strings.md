@@ -30,7 +30,17 @@ strings.join(parts, ",");               // the inverse of split
 strings.join_bytes(parts, b",");        // the same for [bytes]: sized once, copied once
 
 strings.from_float(0.1 + 0.2);          // "0.30000000000000004"
+
+strings.escape_html("<a href='x'>");    // "&lt;a href=&#39;x&#39;&gt;"
+strings.escape_js("it's </script>");    // "it\u0027s \u003c/script\u003e"
 ```
+
+`escape_html` writes `& < > " '` as character references, which is safe
+in text and in a quoted attribute of either quote. `escape_js` makes the
+inside of a JavaScript string literal of any quote (`'`, `"` or a
+backquote), safe inside `<script>` and inside an attribute. Both return
+the input itself, with no allocation, when nothing needs escaping.
+`template` escapes every value through them.
 
 `from_float` returns the shortest text that `to_float` reads back as
 exactly the same number, as `to_str`, `println`, `inspect` and
@@ -109,6 +119,10 @@ Three behaviours worth knowing:
 ### `strings.find_field(bytes, str) -> int`
 
 ### `strings.from_float(float) -> str`
+
+### `strings.escape_html(str) -> str`
+
+### `strings.escape_js(str) -> str`
 
 ---
 

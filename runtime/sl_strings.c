@@ -423,3 +423,120 @@ static char *sl_strings_from_float(double x) {
     return sl_strdup(buf);
 }
 
+
+/* ---- escaping for HTML and JavaScript --------------------------------
+ *
+ * Both scan once with a 256-entry class table and, when nothing needs
+ * escaping (the common case for names, ids and prose), return the input
+ * itself: a str is immutable, so handing back the same pointer is a
+ * copy in every way that matters and costs no allocation. Otherwise the
+ * output is sized exactly by a first pass and written in a second, one
+ * allocation. stdlib/template escapes every action through these. */
+
+/* 0: as is; else the index of the replacement in sl_html_rep. */
+static const unsigned char sl_html_class[256] = {
+    ['&'] = 1, ['<'] = 2, ['>'] = 3, ['"'] = 4, ['\''] = 5,
+};
+static const char *const sl_html_rep[] = {"", "&amp;", "&lt;", "&gt;", "&#34;", "&#39;"};
+static const unsigned char sl_html_len[] = {0, 5, 4, 4, 5, 5};
+
+/* & < > " ' as character references -- the five that can end text, a
+ * tag or a quoted attribute value of either quote. Numeric forms for the
+ * quotes, which every HTML version and XML read alike. */
+static char *sl_strings_escape_html(const char *s) {
+    if (!s) return sl_strings_dupn("", 0);
+    const unsigned char *p = (const unsigned char *)s;
+    size_t n = 0, extra = 0;
+    for (; p[n]; n++) {
+        unsigned char k = sl_html_class[p[n]];
+        if (k) extra += (size_t)sl_html_len[k] - 1;
+    }
+    if (!extra) return (char *)s;
+    char *out = (char *)sl_gc_alloc_leaf_uninit(n + extra + 1, NULL);
+    char *w = out;
+    size_t run = 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char k = sl_html_class[p[i]];
+        if (!k) continue;
+        if (i > run) {
+            memcpy(w, s + run, i - run);
+            w += i - run;
+        }
+        memcpy(w, sl_html_rep[k], sl_html_len[k]);
+        w += sl_html_len[k];
+        run = i + 1;
+    }
+    if (n > run) {
+        memcpy(w, s + run, n - run);
+        w += n - run;
+    }
+    /* the two passes must agree, or the write above overran */
+    if ((size_t)(w - out) != n + extra)
+        sl_rt_error("internal: escape_html sized its output wrongly", (long long)(w - out),
+                    (long long)(n + extra));
+    *w = 0;
+    return out;
+}
+
+/* Bytes that escape_js rewrites: 1 a short escape (\\ \n \r \t \b \f),
+ * 2 a \u00XX escape. */
+static unsigned char sl_js_class(unsigned char c) {
+    if (c < 0x20) return (c == '\n' || c == '\r' || c == '\t' || c == '\b' || c == '\f') ? 1 : 2;
+    switch (c) {
+    case '\\': return 1;
+    case '"': case '\'': case '`': case '$': case '<': case '>': case '&': return 2;
+    default: return 0;
+    }
+}
+
+/* The text as the inside of a JavaScript string literal, safe whatever
+ * the quotes around it (' " or `), inside <script> and inside an HTML
+ * attribute: quotes, backquote and $ (a template literal's ${), < > &
+ * (so it cannot close the script or start a character reference), the
+ * controls, and U+2028/U+2029 (line terminators in older JavaScript)
+ * become escapes; everything else is copied as is. */
+static char *sl_strings_escape_js(const char *s) {
+    if (!s) return sl_strings_dupn("", 0);
+    const unsigned char *p = (const unsigned char *)s;
+    size_t n = 0, outn = 0;
+    for (; p[n]; n++) {
+        unsigned char k = sl_js_class(p[n]);
+        if (k == 1) outn += 2;
+        else if (k == 2) outn += 6;
+        else if (p[n] == 0xE2 && p[n + 1] == 0x80 && (p[n + 2] == 0xA8 || p[n + 2] == 0xA9)) {
+            /* the 3-byte sequence becomes 6 bytes: count 6 here and skip
+               its last two bytes */
+            outn += 6;
+            n += 2;
+        } else outn += 1;
+    }
+    if (outn == n) return (char *)s;
+    static const char hex[] = "0123456789abcdef";
+    char *out = (char *)sl_gc_alloc_leaf_uninit(outn + 1, NULL);
+    char *w = out;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = p[i];
+        unsigned char k = sl_js_class(c);
+        if (k == 1) {
+            *w++ = '\\';
+            *w++ = c == '\n' ? 'n' : c == '\r' ? 'r' : c == '\t' ? 't' : c == '\b' ? 'b' : c == '\f' ? 'f' : '\\';
+        } else if (k == 2) {
+            memcpy(w, "\\u00", 4);
+            w[4] = hex[c >> 4];
+            w[5] = hex[c & 15];
+            w += 6;
+        } else if (c == 0xE2 && p[i + 1] == 0x80 && (p[i + 2] == 0xA8 || p[i + 2] == 0xA9)) {
+            memcpy(w, p[i + 2] == 0xA8 ? "\\u2028" : "\\u2029", 6);
+            w += 6;
+            i += 2;
+        } else {
+            *w++ = (char)c;
+        }
+    }
+    /* the two passes must agree, or the writes above overran */
+    if ((size_t)(w - out) != outn)
+        sl_rt_error("internal: escape_js sized its output wrongly", (long long)(w - out),
+                    (long long)outn);
+    *w = 0;
+    return out;
+}
