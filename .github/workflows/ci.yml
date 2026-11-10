@@ -292,3 +292,39 @@ jobs:
           NATS_TLS_URL: tls://localhost:54226
           NATS_TLS_CA: /tmp/natstls/ca.crt
         run: ./slangc tests/live/nats/main.sl --run
+
+  # The s3 client against an S3-compatible server that checks every SigV4
+  # signature (Zenko CloudServer). make test covers signing against AWS's
+  # published examples everywhere.
+  s3:
+    name: s3 (linux-x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev libsqlite3-dev zlib1g-dev
+
+      - name: Build slangc
+        run: make slangc
+
+      - name: Start an S3 server
+        run: |
+          docker run -d --name s3 -p 58000:8000 -e REMOTE_MANAGEMENT_DISABLE=1 \
+            -e SCALITY_ACCESS_KEY_ID=slangtest -e SCALITY_SECRET_ACCESS_KEY=slangtestsecret \
+            zenko/cloudserver:latest
+          ok=0
+          for i in $(seq 120); do
+            if curl -s -o /dev/null http://127.0.0.1:58000/; then ok=1; break; fi
+            sleep 1
+          done
+          [ $ok -eq 1 ] || { docker logs s3 | tail -30; exit 1; }
+
+      - name: Live test
+        env:
+          S3_ENDPOINT: http://127.0.0.1:58000
+        run: ./slangc tests/live/s3/main.sl --run

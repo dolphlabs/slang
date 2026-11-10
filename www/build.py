@@ -207,6 +207,7 @@ PACKAGE_SECTIONS = {
     "pg": ["`pg`"],
     "redis": ["`redis`"],
     "nats": ["`nats`"],
+    "s3": ["`s3`"],
     "template": ["`template`"],
 }
 
