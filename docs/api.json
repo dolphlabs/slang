@@ -723,6 +723,156 @@
         }
       ]
     },
+    "csv": {
+      "name": "csv",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Options",
+          "decl": "struct",
+          "sig": "gc struct Options",
+          "doc": "",
+          "file": "stdlib/csv/csv.sl",
+          "line": 36
+        },
+        {
+          "name": "options",
+          "decl": "fn",
+          "sig": "fn options() -> Options",
+          "doc": "Comma-separated, double-quoted, strict quotes, empty lines skipped, every record as wide as the first; a field up to 1 MiB, a record up to 16 MiB and 4096 fields.",
+          "file": "stdlib/csv/csv.sl",
+          "line": 60
+        },
+        {
+          "name": "Reader",
+          "decl": "struct",
+          "sig": "gc struct Reader",
+          "doc": "",
+          "file": "stdlib/csv/csv.sl",
+          "line": 65
+        },
+        {
+          "name": "parse",
+          "decl": "fn",
+          "sig": "fn parse(text: str) -> result[[[str]], str]",
+          "doc": "The whole input with the default options.",
+          "file": "stdlib/csv/csv.sl",
+          "line": 84
+        },
+        {
+          "name": "parse_with",
+          "decl": "fn",
+          "sig": "fn parse_with(text: str, o: Options) -> result[[[str]], str]",
+          "doc": "",
+          "file": "stdlib/csv/csv.sl",
+          "line": 88
+        },
+        {
+          "name": "parse_bytes",
+          "decl": "fn",
+          "sig": "fn parse_bytes(data: bytes, o: Options) -> result[[[str]], str]",
+          "doc": "",
+          "file": "stdlib/csv/csv.sl",
+          "line": 92
+        },
+        {
+          "name": "new_reader",
+          "decl": "fn",
+          "sig": "fn new_reader(o: Options) -> Reader",
+          "doc": "A reader to feed: records come out of next as they become whole.",
+          "file": "stdlib/csv/csv.sl",
+          "line": 130
+        },
+        {
+          "name": "feed",
+          "decl": "fn",
+          "sig": "fn feed(r: Reader, chunk: bytes)",
+          "doc": "More input. Nothing is copied until a record needs it.",
+          "file": "stdlib/csv/csv.sl",
+          "line": 138
+        },
+        {
+          "name": "end",
+          "decl": "fn",
+          "sig": "fn end(r: Reader)",
+          "doc": "The input is over: next returns what remains, the last record without its line ending included.",
+          "file": "stdlib/csv/csv.sl",
+          "line": 147
+        },
+        {
+          "name": "finished",
+          "decl": "fn",
+          "sig": "fn finished(r: Reader) -> bool",
+          "doc": "Every record has been returned and the input has ended.",
+          "file": "stdlib/csv/csv.sl",
+          "line": 152
+        },
+        {
+          "name": "line",
+          "decl": "fn",
+          "sig": "fn line(r: Reader) -> int",
+          "doc": "The line the next record starts on (for messages of the caller's own).",
+          "file": "stdlib/csv/csv.sl",
+          "line": 157
+        },
+        {
+          "name": "next",
+          "decl": "fn",
+          "sig": "fn next(r: Reader) -> result[opt[[str]], str]",
+          "doc": "The next whole record; none when it needs more input (feed, or end) or when the input is finished.",
+          "file": "stdlib/csv/csv.sl",
+          "line": 205
+        },
+        {
+          "name": "to_maps",
+          "decl": "fn",
+          "sig": "fn to_maps(rows: [[str]]) -> result[[map[str]str], str]",
+          "doc": "The first row as the header, each later row as a map from it. A duplicate or empty header name is an error, as is a row of another width.",
+          "file": "stdlib/csv/csv.sl",
+          "line": 319
+        },
+        {
+          "name": "WriteOptions",
+          "decl": "struct",
+          "sig": "gc struct WriteOptions",
+          "doc": "",
+          "file": "stdlib/csv/csv.sl",
+          "line": 352
+        },
+        {
+          "name": "write_options",
+          "decl": "fn",
+          "sig": "fn write_options() -> WriteOptions",
+          "doc": "",
+          "file": "stdlib/csv/csv.sl",
+          "line": 366
+        },
+        {
+          "name": "format",
+          "decl": "fn",
+          "sig": "fn format(rows: [[str]]) -> str",
+          "doc": "Every row as CSV, with the default write options.",
+          "file": "stdlib/csv/csv.sl",
+          "line": 371
+        },
+        {
+          "name": "format_with",
+          "decl": "fn",
+          "sig": "fn format_with(rows: [[str]], o: WriteOptions) -> str",
+          "doc": "",
+          "file": "stdlib/csv/csv.sl",
+          "line": 375
+        },
+        {
+          "name": "write_row",
+          "decl": "fn",
+          "sig": "fn write_row(out: builder.Str, row: [str], o: WriteOptions)",
+          "doc": "Appends one record to out: for output built a row at a time.",
+          "file": "stdlib/csv/csv.sl",
+          "line": 384
+        }
+      ]
+    },
     "decimal": {
       "name": "decimal",
       "kind": "source",
@@ -1229,6 +1379,19 @@
           "ret": "result[bytes,str]",
           "tls": false,
           "sig": "encoding.crockford_decode(str) -> result[bytes,str]"
+        },
+        {
+          "name": "csv_record",
+          "params": [
+            "bytes",
+            "int",
+            "int",
+            "int",
+            "int"
+          ],
+          "ret": "[int]",
+          "tls": false,
+          "sig": "encoding.csv_record(bytes, int, int, int, int) -> [int]"
         }
       ]
     },

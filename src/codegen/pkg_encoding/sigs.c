@@ -103,6 +103,11 @@ const NatSig ENCODING_SIGS[] = {
        case, and skips hyphens ("7ZQ-4M1-X0"). */
     {"encoding", "crockford_encode", 1, {NA_BYTES}, "str", 0},
     {"encoding", "crockford_decode", 1, {NA_STR}, "result[bytes,str]", 0},
+    /* One CSV record's field spans, scanned in C for stdlib/csv; the
+       result layout is described at sl_encoding_csv_record
+       (runtime/sl_encoding.c). Arguments: data, from, separator byte,
+       quote byte, and flags: 1 lazy quotes, 2 data is all there is. */
+    {"encoding", "csv_record", 5, {NA_BYTES, NA_I64, NA_INT, NA_INT, NA_INT}, "[int]", 0},
 };
 
 const int ENCODING_SIGS_LEN =

@@ -269,6 +269,7 @@ Standard packages: `time net json proc fs os io log crypto sql pg redis regex
 strings unicode encoding compress math decimal rand builder byteutil flags sort
 uuid http http2 httpc template`.
 uuid http http2 httpc websocket`.
+uuid http http2 httpc csv`.
 `decimal` is exact money: `let r = decimal.parse("19.99")` (result), then
 `decimal.add/sub/mul(a, b)` (opt: none past 38 digits), `decimal.div(a, b,
 scale, decimal.Rounding.HalfEven)`, `decimal.format(d)`, `decimal.split(d, n)`.
@@ -301,6 +302,9 @@ deadline)` (result of opt Message; `m.kind` is `websocket.Kind.Text/Binary/Close
 `websocket.close(ws, 1000, "", deadline)`. Pings are answered automatically.
 `encoding.base32_encode/decode` (RFC 4648; decode takes either case, padded or
 not), `base32hex_*`, and `crockford_encode/decode` for codes people type.
+`csv.parse(text)` (result of `[[str]]`), `csv.to_maps(rows)` by header,
+streaming with `csv.new_reader(o)`, `csv.feed(rd, chunk)`, `csv.next(rd)` (none:
+feed more), `csv.end(rd)`; `csv.format(rows)` writes CRLF, quoted as needed.
 `crypto`: `seal(key, data, aad)`/`open` (AES-256-GCM, random nonce;
 result), `hkdf_sha256(ikm, salt, info, n)`, `constant_time_eq(a, b)`,
 `ed25519_sign/verify`, `ecdsa_p256_sign_sha256/verify_sha256` (raw r||s),

@@ -642,7 +642,7 @@ rm -f "$ul_bin"
 [ "$ul_bad" -eq 0 ] && echo "PASS unicode licence notice"
 
 # Stdlib packages that carry their own unit tests.
-for pkg in stdlib/pg stdlib/timez stdlib/uuid stdlib/rand stdlib/decimal stdlib/nats stdlib/s3 stdlib/template stdlib/websocket; do
+for pkg in stdlib/pg stdlib/timez stdlib/uuid stdlib/rand stdlib/decimal stdlib/nats stdlib/s3 stdlib/template stdlib/websocket stdlib/csv; do
     if out=$(./slangc test "$pkg" 2>&1); then
         echo "PASS slangc test $pkg"
     else
