@@ -1175,6 +1175,60 @@
           "ret": "bytes",
           "tls": false,
           "sig": "encoding.xor_mask(bytes, bytes, bytes) -> bytes"
+        },
+        {
+          "name": "base32_encode",
+          "params": [
+            "bytes"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "encoding.base32_encode(bytes) -> str"
+        },
+        {
+          "name": "base32_decode",
+          "params": [
+            "str"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "encoding.base32_decode(str) -> result[bytes,str]"
+        },
+        {
+          "name": "base32hex_encode",
+          "params": [
+            "bytes"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "encoding.base32hex_encode(bytes) -> str"
+        },
+        {
+          "name": "base32hex_decode",
+          "params": [
+            "str"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "encoding.base32hex_decode(str) -> result[bytes,str]"
+        },
+        {
+          "name": "crockford_encode",
+          "params": [
+            "bytes"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "encoding.crockford_encode(bytes) -> str"
+        },
+        {
+          "name": "crockford_decode",
+          "params": [
+            "str"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "encoding.crockford_decode(str) -> result[bytes,str]"
         }
       ]
     },

@@ -111,8 +111,9 @@ Common backend needs with no package today.
 
 - [ ] **CSV** (stdlib): RFC 4180 read and write, streaming, quoted fields,
   row and field size limits.
-- [ ] **base32** (stdlib, in `encoding`): RFC 4648, for TOTP secrets and
-  readable codes.
+- [x] **base32** (stdlib, in `encoding`): RFC 4648, for TOTP secrets and
+  readable codes. Built as `encoding.base32_*`, `base32hex_*` and
+  `crockford_*`, checked against Python's base64 module.
 - [ ] **gRPC streaming** (package `slangpackages/grpc`): server, client and
   bidirectional streams; the package is unary only.
 

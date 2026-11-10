@@ -90,6 +90,19 @@ const NatSig ENCODING_SIGS[] = {
        payload masked with a 4-byte key (RFC 6455 section 5.3), and the
        payload is copied once. An empty key copies data as is. */
     {"encoding", "xor_mask", 3, {NA_BYTES, NA_BYTES, NA_BYTES}, "bytes", 0},
+    /* base32, RFC 4648: the standard alphabet (TOTP secrets) and
+       base32hex, which sorts like the bytes it encodes. Encoders pad;
+       decoders take either case, padded or not, and refuse a tail that
+       holds no whole byte or leaves non-zero bits -- a mistyped secret. */
+    {"encoding", "base32_encode", 1, {NA_BYTES}, "str", 0},
+    {"encoding", "base32_decode", 1, {NA_STR}, "result[bytes,str]", 0},
+    {"encoding", "base32hex_encode", 1, {NA_BYTES}, "str", 0},
+    {"encoding", "base32hex_decode", 1, {NA_STR}, "result[bytes,str]", 0},
+    /* Crockford's base32, for codes people read aloud and type: no I L
+       O U, unpadded; the decoder reads I and L as 1, O as 0, either
+       case, and skips hyphens ("7ZQ-4M1-X0"). */
+    {"encoding", "crockford_encode", 1, {NA_BYTES}, "str", 0},
+    {"encoding", "crockford_decode", 1, {NA_STR}, "result[bytes,str]", 0},
 };
 
 const int ENCODING_SIGS_LEN =
