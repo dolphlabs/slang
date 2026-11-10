@@ -10,4 +10,7 @@ corrupt input rejected
 truncated input rejected
 max_out one byte short is refused
 expansion past max_out refused
+true
+true
+truncated input
 done
