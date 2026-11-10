@@ -1998,6 +1998,28 @@ static int leaf_scalar(const char *t) {
     return t && (is_int(t) || is_flt(t) || !strcmp(t, "bool"));
 }
 
+/* The value struct a type names, or NULL: as written ("pkg.Pt", or a
+ * borrow of one), or a bare name in the package being analysed ("Pt",
+ * the way a signature holds it). Never an error: this is an analysis,
+ * and a type it cannot place only makes a function not a leaf. */
+static StructDef *leaf_struct(CG *cg, const char *t) {
+    if (!t)
+        return NULL;
+    if (!strncmp(t, "&mut ", 5))
+        t += 5;
+    else if (t[0] == '&')
+        t += 1;
+    StructDef *sd = struct_find_canon(cg, t);
+    if (!sd && !strchr(t, '.') && !strchr(t, '[') && cg->cur_pkg) {
+        char *q = xasprintf("%s.%s", cg->cur_pkg, t);
+        sd = struct_find_canon(cg, q);
+        free(q);
+    }
+    if (!sd || sd->is_gc)
+        return NULL;
+    return sd;
+}
+
 /* The type of a folded field path ("p.x", "w.inner.n") rooted at a local
  * of value-struct type, or at a `&`/`&mut` borrow of one; NULL for
  * anything else (a package name, a gc struct, an unknown field). Reading
@@ -2017,14 +2039,10 @@ static const char *leaf_path_type(CG *cg, LeafEnv *env, const char *full) {
     const char *cur = leaf_env_get(env, base);
     if (!cur)
         return NULL;
-    if (!strncmp(cur, "&mut ", 5))
-        cur += 5;
-    else if (cur[0] == '&')
-        cur += 1;
     const char *rest = dot + 1;
     while (cur && *rest) {
-        StructDef *sd = struct_find_canon(cg, cur);
-        if (!sd || sd->is_gc)
+        StructDef *sd = leaf_struct(cg, cur);
+        if (!sd)
             return NULL;
         const char *nd = strchr(rest, '.');
         size_t fl = nd ? (size_t)(nd - rest) : strlen(rest);
@@ -2106,11 +2124,10 @@ static const char *leaf_expr(CG *cg, LeafEnv *env, Expr *e) {
         /* A value struct of scalars is a C compound literal: nothing to
            allocate. A gc struct allocates; a str, list or nested struct
            field is left to the general path. */
-        const char *tn = e->as.structlit.inst
-                             ? e->as.structlit.inst
-                             : canon_type(cg, e->as.structlit.tyname, e->line);
-        StructDef *sd = tn ? struct_find_canon(cg, tn) : NULL;
-        if (!sd || sd->is_gc || e->as.structlit.nfields != sd->nfields)
+        StructDef *sd = leaf_struct(cg, e->as.structlit.inst
+                                            ? e->as.structlit.inst
+                                            : e->as.structlit.tyname);
+        if (!sd || e->as.structlit.nfields != sd->nfields)
             return NULL;
         for (int i = 0; i < e->as.structlit.nfields; i++) {
             const char *ft = NULL;
@@ -2129,7 +2146,7 @@ static const char *leaf_expr(CG *cg, LeafEnv *env, Expr *e) {
         const char *bt = leaf_expr(cg, env, e->as.field.base);
         if (!bt)
             return NULL;
-        StructDef *sd = struct_find_canon(cg, bt);
+        StructDef *sd = leaf_struct(cg, bt);
         if (!sd)
             return NULL;
         for (int i = 0; i < sd->nfields; i++)
@@ -2266,12 +2283,8 @@ void compute_leaf_fns(CG *cg, Package *pkgs, int npkgs) {
             LeafEnv env;
             env.n = 0;
             int ok = 1;
-            /* Canonical, so a struct parameter's fields resolve: the
-               signature holds the type as written ("Pt"), the struct
-               table the canonical name ("pkg.Pt"). */
             for (int k = 0; k < sig->nparams && ok; k++)
-                ok = leaf_env_put(&env, f->params[k],
-                                  canon_type(cg, sig->param_slang[k], f->line));
+                ok = leaf_env_put(&env, f->params[k], sig->param_slang[k]);
             if (ok && leaf_block(cg, &env, f->body))
                 sig->leaf = 1;
         }
