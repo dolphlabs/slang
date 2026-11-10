@@ -51,6 +51,7 @@ static void sl_gc_trace_sl_opt_str(void *p, void (*mark)(void *)) {
 
 static int sl_uc_failures;
 static unsigned long sl_uc_norm_cases, sl_uc_norm_others, sl_uc_fold_cases;
+static unsigned long sl_uc_match_pairs;
 
 static void fail(const char *what, unsigned long line) {
     if (sl_uc_failures++ < 20)
@@ -137,6 +138,31 @@ static void check_forms(const sl_uc_buf *src, const sl_uc_buf *want_c,
     free(d);
 }
 
+/* equal_fold streams keys a segment at a time; it must agree with the
+ * definition, the whole keys compared (sl_uc_caseless_key). */
+static void check_match(const char *a, const char *b, unsigned long line) {
+    sl_uc_buf ka, kb;
+    sl_uc_buf_init(&ka);
+    sl_uc_buf_init(&kb);
+    sl_uc_caseless_key(&ka, (const unsigned char *)a, strlen(a));
+    sl_uc_caseless_key(&kb, (const unsigned char *)b, strlen(b));
+    bool want = buf_eq(&ka, &kb);
+    sl_uc_buf_free(&ka);
+    sl_uc_buf_free(&kb);
+    if (sl_unicode_equal_fold(a, b) != want) fail("equal_fold disagrees with D145", line);
+    if (sl_unicode_equal_fold(b, a) != want) fail("equal_fold is not symmetric", line);
+    sl_uc_match_pairs++;
+}
+
+/* ASCII prefix + s, so the match starts past a shared prefix. */
+static char *prefixed(const char *pre, const char *s) {
+    size_t a = strlen(pre), b = strlen(s);
+    char *out = (char *)malloc(a + b + 1);
+    memcpy(out, pre, a);
+    memcpy(out + a, s, b + 1);
+    return out;
+}
+
 static int test_normalization(void) {
     FILE *f = open_data("NormalizationTest.txt", "NormalizationTest");
     if (!f) return 1;
@@ -166,6 +192,26 @@ static int test_normalization(void) {
            c3 == NFD(c1) == NFD(c2) == NFD(c3); c5 == NFD(c4) == NFD(c5) */
         for (int i = 0; i < 3; i++) check_forms(&col[i], &col[1], &col[2], ln);
         for (int i = 3; i < 5; i++) check_forms(&col[i], &col[3], &col[4], ln);
+        /* Every pair of columns, bare and behind a shared ASCII prefix
+           (which the match skips, then must restart before), and each
+           column against the previous line's first: all must agree with
+           the whole-key comparison. */
+        {
+            char *u[5];
+            for (int i = 0; i < 5; i++) u[i] = utf8_of(&col[i]);
+            for (int i = 0; i < 5; i++)
+                for (int j = i; j < 5; j++) {
+                    check_match(u[i], u[j], ln);
+                    char *pa = prefixed("Ab", u[i]), *pb = prefixed("aB", u[j]);
+                    check_match(pa, pb, ln);
+                    free(pa);
+                    free(pb);
+                }
+            static char prev[1024];
+            if (prev[0]) check_match(prev, u[0], ln);
+            snprintf(prev, sizeof prev, "%s", u[0]);
+            for (int i = 0; i < 5; i++) free(u[i]);
+        }
         cases++;
     next:;
     }
@@ -221,6 +267,8 @@ static int test_case_folding(void) {
         if (!buf_eq(&got, &want)) fail("fold mapping", ln);
         char *s = utf8_of(&one), *w = utf8_of(&want);
         if (strcmp(sl_unicode_fold(s), w)) fail("fold (str)", ln);
+        if (!sl_unicode_equal_fold(s, w)) fail("equal_fold of a char and its folding", ln);
+        check_match(s, w, ln);
         free(s);
         free(w);
         mapped[cp] = 1;
@@ -341,19 +389,73 @@ static int test_long_runs(void) {
     return 0;
 }
 
+/* Every code point against its own caseless key, followed by marks in
+ * both orders, and against its neighbour: the one-character fast path
+ * (precomputed rec->key), the segment path and Hangul all against the
+ * definition. */
+static int test_match_all(void) {
+    sl_uc_buf one, key;
+    sl_uc_buf_init(&one);
+    sl_uc_buf_init(&key);
+    char prev[8] = "a";
+    for (uint32_t cp = 1; cp < 0x110000; cp++) {
+        if (cp >= 0xD800 && cp <= 0xDFFF) continue;
+        one.len = 0;
+        sl_uc_buf_push(&one, cp);
+        char *s = utf8_of(&one);
+        key.len = 0;
+        sl_uc_caseless_key(&key, (const unsigned char *)s, strlen(s));
+        bool has_nul = false;
+        for (size_t i = 0; i < key.len; i++) has_nul |= key.p[i] == 0;
+        if (!has_nul) {
+            char *k = utf8_of(&key);
+            if (!sl_unicode_equal_fold(s, k)) fail("a char differs from its own key", cp);
+            free(k);
+        }
+        /* + U+0345 U+0301 against + U+0301 U+0345: canonically equal */
+        char m1[32], m2[32];
+        snprintf(m1, sizeof m1, "%s\xCD\x85\xCC\x81", s);
+        snprintf(m2, sizeof m2, "%s\xCC\x81\xCD\x85", s);
+        check_match(m1, m2, cp);
+        check_match(prev, s, cp);
+        snprintf(prev, sizeof prev, "%s", s);
+        free(s);
+    }
+    sl_uc_buf_free(&one);
+    sl_uc_buf_free(&key);
+    /* A long run of marks: the segment path's buffers grow past inline. */
+    size_t k = 5000;
+    char *a = (char *)malloc(1 + 4 * k + 1), *b = (char *)malloc(1 + 4 * k + 1);
+    char *wa = a, *wb = b;
+    *wa++ = 'E';
+    *wb++ = 'e';
+    for (size_t i = 0; i < k; i++) {
+        memcpy(wa, "\xCC\x81\xCC\xA3", 4); wa += 4;   /* acute, dot below */
+        memcpy(wb, "\xCC\xA3\xCC\x81", 4); wb += 4;   /* swapped */
+    }
+    *wa = *wb = 0;
+    if (!sl_unicode_equal_fold(a, b)) fail("long mark runs in two orders", 0);
+    b[strlen(b) - 1] = 0x82;  /* last mark now U+0302: different text */
+    if (sl_unicode_equal_fold(a, b)) fail("long mark runs that differ", 0);
+    free(a);
+    free(b);
+    return 0;
+}
+
 static int sl_runtime_test_main(void) {
     int bad = test_utf8();
     bad |= test_long_runs();
     bad |= test_normalization();
     bad |= test_case_folding();
+    bad |= test_match_all();
     if (bad || sl_uc_failures) {
         fprintf(stderr, "test_unicode: %d failure(s)\n", sl_uc_failures);
         return 1;
     }
     printf("PASS unicode conformance (Unicode %s): %lu normalization cases, "
-           "%lu other code points, %lu case foldings\n",
+           "%lu other code points, %lu case foldings, %lu equal_fold pairs\n",
            SL_UC_VERSION, sl_uc_norm_cases, sl_uc_norm_others,
-           sl_uc_fold_cases);
+           sl_uc_fold_cases, sl_uc_match_pairs);
     return 0;
 }
 
