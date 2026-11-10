@@ -280,6 +280,10 @@ case-insensitive matches (`"STRASSE"` equals `"straße"`). Transforms repair
 invalid UTF-8 to U+FFFD.
 `uuid.v7()` (time-ordered, for keys) and `uuid.v4()` return `result[str, str]`;
 an id is a canonical lowercase `str`, `uuid.parse` canonicalizes any spelling.
+`nats`: `let nc = nats.connect(url, deadline)`, `nats.publish(nc, subj, data)`,
+`nats.subscribe(nc, subj)` then `nats.next_msg(sub, deadline)` (result of opt),
+`nats.request(nc, subj, data, deadline)`, `nats.drain(nc, deadline)`;
+reconnects and resubscribes by itself.
 `crypto`: `seal(key, data, aad)`/`open` (AES-256-GCM, random nonce;
 result), `hkdf_sha256(ikm, salt, info, n)`, `constant_time_eq(a, b)`,
 `ed25519_sign/verify`, `ecdsa_p256_sign_sha256/verify_sha256` (raw r||s),
