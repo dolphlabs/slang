@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nats — slang</title>
+<meta name="description" content="Package nats.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="nats">
+<meta property="og:description" content="Package nats.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://slang.dolphlabs.com/packages/nats">
+<meta property="og:image" content="https://slang.dolphlabs.com/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The slang rabbit mark beside the slang wordmark">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://slang.dolphlabs.com/packages/nats">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/nats.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <button id="navtoggle" class="navtoggle" type="button"
+          aria-label="Toggle navigation" aria-expanded="false"
+          aria-controls="mainnav">
+    <span></span><span></span><span></span>
+  </button>
+  <nav class="mainnav" id="mainnav"><a href="../">Home</a><a href="../guide/">Guide</a><a href="../guide/data">Data types</a><a href="../guide/errors">Errors</a><a href="../guide/functions">Functions</a><a href="../concurrency/">Concurrency</a><a href="../testing/">Testing</a><a href="../bench/">Benchmarks</a><a href="../packages/">Packages</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="../limitations/">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="navscrim" class="navscrim" hidden></div>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>nats</h1>
+      <p class="tagline">Package nats.</p>
+      <p class="agentline">
+        <a href="../packages/nats.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>A client for <a href="https://nats.io">NATS</a>: publish, subscribe (plain and queue groups), headers, request/reply, flush and drain, keepalive, and automatic reconnection with resubscription. It covers core NATS, not JetStream.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;nats&quot;</span>;
+
+<span class="k">let</span> r = nats.<span class="f">connect</span>(<span class="s">&quot;nats://127.0.0.1:4222&quot;</span>, deadline);
+<span class="k">guard</span> <span class="k">let</span> nc = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }
+
+<span class="k">let</span> sr = nats.<span class="f">subscribe</span>(nc, <span class="s">&quot;orders.*&quot;</span>);                  <span class="c">// or queue_subscribe(nc, subj, &quot;workers&quot;)</span>
+<span class="k">guard</span> <span class="k">let</span> sub = sr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(sr) { <span class="f">panic</span>(e); }
+nats.<span class="f">publish</span>(nc, <span class="s">&quot;orders.new&quot;</span>, b<span class="s">&quot;{\&quot;id\&quot;:1}&quot;</span>);
+<span class="k">let</span> m = nats.<span class="f">next_msg</span>(sub, deadline);                     <span class="c">// result[opt[Msg], str]: none at the deadline</span>
+
+<span class="k">let</span> h: <span class="t">map</span>[<span class="t">str</span>][<span class="t">str</span>] = {};
+h[<span class="s">&quot;Trace-Id&quot;</span>] = [<span class="s">&quot;abc&quot;</span>];
+nats.<span class="f">publish_headers</span>(nc, <span class="s">&quot;audit&quot;</span>, h, body);
+
+<span class="k">let</span> reply = nats.<span class="f">request</span>(nc, <span class="s">&quot;pricing.quote&quot;</span>, b<span class="s">&quot;BTC&quot;</span>, deadline);   <span class="c">// result[Msg, str]</span>
+nats.<span class="f">respond</span>(nc, request_msg, b<span class="s">&quot;42&quot;</span>);
+nats.<span class="f">drain</span>(nc, deadline);                                 <span class="c">// unsubscribe, let in-flight arrive, close</span></code></pre></div>
+<p>URLs are <code>nats://host:port</code> or <code>tls://host:port</code>, optionally with <code>user:pass@</code> or <code>token@</code>. <code>options(url)</code> gives an <code>Options</code> to adjust before <code>connect_with</code>:</p>
+<ul><li><strong>Servers and identity:</strong> <code>servers</code> (tried in turn), <code>name</code>.</li><li><strong>Authentication:</strong> <code>user</code>/<code>pass</code>, <code>token</code>, <code>nkey_seed</code>, or a user JWT and seed via <code>with_creds(o, creds_file_text)</code>. NKeys sign the server&#x27;s nonce with Ed25519.</li><li><strong>TLS:</strong> <code>tls</code>, <code>ca_path</code>, and <code>tls_first</code> for servers with <code>handshake_first</code>. By default <code>INFO</code> arrives in clear and the client upgrades before sending <code>CONNECT</code>, so credentials travel only over TLS.</li><li><strong>Delivery and keepalive:</strong> <code>pending</code> (see below), <code>ping_interval</code>, <code>max_pings_out</code>.</li><li><strong>Reconnection:</strong> <code>reconnect</code>, <code>max_reconnects</code>, <code>reconnect_wait</code>, <code>reconnect_buffer</code>.</li></ul>
+<p><strong>One connection, one reader.</strong> A reader task parses what the server sends and hands each message to its subscription&#x27;s channel, so <code>next_msg</code> parks rather than polls. A subscriber that falls more than <code>pending</code> (default 1,024) messages behind loses the newest ones and counts them in <code>sub.dropped</code>, rather than stalling every other subscription. This is the NATS &quot;slow consumer&quot; rule.</p>
+<p><strong>Deadlines.</strong> Each connection has one timer task that is parked while nothing waits on a deadline; deadlines resolve to within 10 ms.</p>
+<p><strong>Writes coalesce.</strong> Publishes append to one buffer, and a flusher task writes it out after a short wait (20 µs, or 200 µs while a publisher is streaming). A publisher that fills 32 KB first writes it itself.</p>
+<p><strong>Reconnection.</strong> When the connection breaks, or the server stops answering pings, the reader redials the servers in turn with jittered backoff, sends <code>CONNECT</code> and every live <code>SUB</code> again, then replays what was published in the meantime, up to <code>reconnect_buffer</code> (8 MiB). Delivery is at most once, as in core NATS: a message written into a connection just as it broke is lost. <code>reconnects(nc)</code>, <code>is_connected(nc)</code> and <code>last_error(nc)</code> report the state.</p>
+<p><code>request</code> uses one shared inbox subscription for every request on the connection. If no subscriber is listening, the server&#x27;s &quot;no responders&quot; status makes it fail at once rather than at its deadline. A <code>-ERR &#x27;Permissions Violation&#x27;</code> leaves the connection up; any other <code>-ERR</code> or a malformed frame drops and redials it. Subjects are validated (no whitespace, no empty tokens, no wildcards in a publish), and header names and values are refused if they would inject protocol lines.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="options"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Options</code> <span class="src">stdlib/nats/nats.sl:36</span><a class="anchor" href="#options">#</a></div></div><div class="api-item" id="options"><div class="api-sig"><code><span class="k">fn</span> <span class="f">options</span>(url: <span class="t">str</span>) -&gt; Options</code> <span class="src">stdlib/nats/nats.sl:60</span><a class="anchor" href="#options">#</a></div><p class="api-doc">Defaults for one server URL: nats://host:port, tls://host:port (TLS from the first byte) or nats://user:pass@host:port / nats://token@host.</p></div><div class="api-item" id="with-creds"><div class="api-sig"><code><span class="k">fn</span> <span class="f">with_creds</span>(o: Options, creds_text: <span class="t">str</span>) -&gt; <span class="t">result</span>[Options, <span class="t">str</span>]</code> <span class="src">stdlib/nats/nats.sl:83</span><a class="anchor" href="#with-creds">#</a></div><p class="api-doc">Options with the user JWT and nkey seed of a .creds file.</p></div><div class="api-item" id="msg"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Msg</code> <span class="src">stdlib/nats/nats.sl:102</span><a class="anchor" href="#msg">#</a></div></div><div class="api-item" id="sub"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Sub</code> <span class="src">stdlib/nats/nats.sl:111</span><a class="anchor" href="#sub">#</a></div></div><div class="api-item" id="conn"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Conn</code> <span class="src">stdlib/nats/nats.sl:138</span><a class="anchor" href="#conn">#</a></div></div><div class="api-item" id="connect"><div class="api-sig"><code><span class="k">fn</span> <span class="f">connect</span>(url: <span class="t">str</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Conn, <span class="t">str</span>]</code> <span class="src">stdlib/nats/nats.sl:179</span><a class="anchor" href="#connect">#</a></div><p class="api-doc">Connect to url (see options).</p></div><div class="api-item" id="connect-with"><div class="api-sig"><code><span class="k">fn</span> <span class="f">connect_with</span>(o: Options, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Conn, <span class="t">str</span>]</code> <span class="src">stdlib/nats/nats.sl:183</span><a class="anchor" href="#connect-with">#</a></div></div><div class="api-item" id="publish"><div class="api-sig"><code><span class="k">fn</span> <span class="f">publish</span>(nc: Conn, subject: <span class="t">str</span>, data: <span class="t">bytes</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>, <span class="t">str</span>]</code> <span class="src">stdlib/nats/nats.sl:1061</span><a class="anchor" href="#publish">#</a></div></div><div class="api-item" id="publish-reply"><div class="api-sig"><code><span class="k">fn</span> <span class="f">publish_reply</span>(nc: Conn, subject: <span class="t">str</span>, reply: <span class="t">str</span>, data: <span class="t">bytes</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>, <span class="t">str</span>]</code> <span class="src">stdlib/nats/nats.sl:1065</span><a class="anchor" href="#publish-reply">#</a></div></div><div class="api-item" id="publish-headers"><div class="api-sig"><code><span class="k">fn</span> <span class="f">publish_headers</span>(nc: Conn, subject: <span class="t">str</span>, headers: <span class="t">map</span>[<span class="t">str</span>][<span class="t">str</span>], data: <span class="t">bytes</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>, <span class="t">str</span>]</code> <span class="src">stdlib/nats/nats.sl:1070</span><a class="anchor" href="#publish-headers">#</a></div><p class="api-doc">Publish with headers (each key may carry several values).</p></div><div class="api-item" id="publish-full"><div class="api-sig"><code><span class="k">fn</span> <span class="f">publish_full</span>(nc: Conn, subject: <span class="t">str</span>, reply: <span class="t">str</span>, headers: <span class="t">map</span>[<span class="t">str</span>][<span class="t">str</span>], data: <span class="t">bytes</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>, <span class="t">str</span>]</code> <span class="src">stdlib/nats/nats.sl:1075</span><a class="anchor" href="#publish-full">#</a></div></div><div class="api-item" id="subscribe"><div class="api-sig"><code><span class="k">fn</span> <span class="f">subscribe</span>(nc: Conn, subject: <span class="t">str</span>) -&gt; <span class="t">result</span>[Sub, <span class="t">str</span>]</code> <span class="src">stdlib/nats/nats.sl:1187</span><a class="anchor" href="#subscribe">#</a></div></div><div class="api-item" id="queue-subscribe"><div class="api-sig"><code><span class="k">fn</span> <span class="f">queue_subscribe</span>(nc: Conn, subject: <span class="t">str</span>, queue: <span class="t">str</span>) -&gt; <span class="t">result</span>[Sub, <span class="t">str</span>]</code> <span class="src">stdlib/nats/nats.sl:1192</span><a class="anchor" href="#queue-subscribe">#</a></div><p class="api-doc">Members of one queue group share the messages: each goes to one of them.</p></div><div class="api-item" id="next-msg"><div class="api-sig"><code><span class="k">fn</span> <span class="f">next_msg</span>(sub: Sub, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">opt</span>[Msg], <span class="t">str</span>]</code> <span class="src">stdlib/nats/nats.sl:1223</span><a class="anchor" href="#next-msg">#</a></div><p class="api-doc">The next message, waiting until deadline: none when the deadline passes or the subscription has ended (unsubscribed, max reached, connection closed).</p></div><div class="api-item" id="unsubscribe"><div class="api-sig"><code><span class="k">fn</span> <span class="f">unsubscribe</span>(sub: Sub) -&gt; <span class="t">result</span>[<span class="t">bool</span>, <span class="t">str</span>]</code> <span class="src">stdlib/nats/nats.sl:1246</span><a class="anchor" href="#unsubscribe">#</a></div></div><div class="api-item" id="auto-unsubscribe"><div class="api-sig"><code><span class="k">fn</span> <span class="f">auto_unsubscribe</span>(sub: Sub, max: <span class="t">int</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>, <span class="t">str</span>]</code> <span class="src">stdlib/nats/nats.sl:1257</span><a class="anchor" href="#auto-unsubscribe">#</a></div><p class="api-doc">End the subscription by itself after max more messages.</p></div><div class="api-item" id="request"><div class="api-sig"><code><span class="k">fn</span> <span class="f">request</span>(nc: Conn, subject: <span class="t">str</span>, data: <span class="t">bytes</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Msg, <span class="t">str</span>]</code> <span class="src">stdlib/nats/nats.sl:1270</span><a class="anchor" href="#request">#</a></div><p class="api-doc">Publish data to subject with a fresh reply subject and wait for the first reply. &quot;no responders&quot; (status 503, when nothing listens) is an error at once instead of a timeout.</p></div><div class="api-item" id="request-headers"><div class="api-sig"><code><span class="k">fn</span> <span class="f">request_headers</span>(nc: Conn, subject: <span class="t">str</span>, headers: <span class="t">map</span>[<span class="t">str</span>][<span class="t">str</span>], data: <span class="t">bytes</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Msg, <span class="t">str</span>]</code> <span class="src">stdlib/nats/nats.sl:1274</span><a class="anchor" href="#request-headers">#</a></div></div><div class="api-item" id="respond"><div class="api-sig"><code><span class="k">fn</span> <span class="f">respond</span>(nc: Conn, req: Msg, data: <span class="t">bytes</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>, <span class="t">str</span>]</code> <span class="src">stdlib/nats/nats.sl:1320</span><a class="anchor" href="#respond">#</a></div><p class="api-doc">Reply to a request message.</p></div><div class="api-item" id="flush"><div class="api-sig"><code><span class="k">fn</span> <span class="f">flush</span>(nc: Conn, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>, <span class="t">str</span>]</code> <span class="src">stdlib/nats/nats.sl:1331</span><a class="anchor" href="#flush">#</a></div><p class="api-doc">Wait until the server has processed everything sent so far (a PING round trip).</p></div><div class="api-item" id="drain"><div class="api-sig"><code><span class="k">fn</span> <span class="f">drain</span>(nc: Conn, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>, <span class="t">str</span>]</code> <span class="src">stdlib/nats/nats.sl:1354</span><a class="anchor" href="#drain">#</a></div><p class="api-doc">Unsubscribe everything, let what is in flight arrive, then close.</p></div><div class="api-item" id="close"><div class="api-sig"><code><span class="k">fn</span> <span class="f">close</span>(nc: Conn)</code> <span class="src">stdlib/nats/nats.sl:1377</span><a class="anchor" href="#close">#</a></div></div><div class="api-item" id="last-error"><div class="api-sig"><code><span class="k">fn</span> <span class="f">last_error</span>(nc: Conn) -&gt; <span class="t">str</span></code> <span class="src">stdlib/nats/nats.sl:1422</span><a class="anchor" href="#last-error">#</a></div><p class="api-doc">Why the connection is closed or last broke (&quot;&quot; while healthy).</p></div><div class="api-item" id="is-connected"><div class="api-sig"><code><span class="k">fn</span> <span class="f">is_connected</span>(nc: Conn) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/nats/nats.sl:1426</span><a class="anchor" href="#is-connected">#</a></div></div><div class="api-item" id="reconnects"><div class="api-sig"><code><span class="k">fn</span> <span class="f">reconnects</span>(nc: Conn) -&gt; <span class="t">int</span></code> <span class="src">stdlib/nats/nats.sl:1430</span><a class="anchor" href="#reconnects">#</a></div></div><div class="api-item" id="nkey-seed-raw"><div class="api-sig"><code><span class="k">fn</span> <span class="f">nkey_seed_raw</span>(seed: <span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>, <span class="t">str</span>]</code> <span class="src">stdlib/nats/nkeys.sl:114</span><a class="anchor" href="#nkey-seed-raw">#</a></div><p class="api-doc">The 32-byte Ed25519 seed inside a user seed (&quot;SU...&quot;).</p></div><div class="api-item" id="nkey-public"><div class="api-sig"><code><span class="k">fn</span> <span class="f">nkey_public</span>(seed: <span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>]</code> <span class="src">stdlib/nats/nkeys.sl:135</span><a class="anchor" href="#nkey-public">#</a></div><p class="api-doc">The public key (&quot;U...&quot;) for a user seed.</p></div><div class="api-item" id="nkey-encode-seed"><div class="api-sig"><code><span class="k">fn</span> <span class="f">nkey_encode_seed</span>(raw: <span class="t">bytes</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>]</code> <span class="src">stdlib/nats/nkeys.sl:146</span><a class="anchor" href="#nkey-encode-seed">#</a></div><p class="api-doc">A user seed (&quot;SU...&quot;) for a 32-byte Ed25519 seed: for tests and tools.</p></div><div class="api-item" id="nkey-sign-nonce"><div class="api-sig"><code><span class="k">fn</span> <span class="f">nkey_sign_nonce</span>(seed: <span class="t">str</span>, nonce: <span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>]</code> <span class="src">stdlib/nats/nkeys.sl:157</span><a class="anchor" href="#nkey-sign-nonce">#</a></div><p class="api-doc">The base64url signature of a server nonce, for CONNECT&#x27;s &quot;sig&quot;.</p></div><div class="api-item" id="parse-creds"><div class="api-sig"><code><span class="k">fn</span> <span class="f">parse_creds</span>(text: <span class="t">str</span>) -&gt; <span class="t">result</span>[[<span class="t">str</span>], <span class="t">str</span>]</code> <span class="src">stdlib/nats/nkeys.sl:166</span><a class="anchor" href="#parse-creds">#</a></div><p class="api-doc">The user JWT and the seed from a .creds file (two armoured blocks).</p></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>
