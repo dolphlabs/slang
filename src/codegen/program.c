@@ -1963,7 +1963,14 @@ void codegen_program(Package *pkgs, int npkgs, int main_index,
  * a str concat, a call to another slang function (no recursion, so no
  * stack growth the missing safepoints would have checked) -- makes the
  * function not a leaf. A leaf's own frame is small, inside the margin
- * every safepoint guarantees, like a leaf native's. */
+ * every safepoint guarantees, like a leaf native's.
+ *
+ * Values that are plain C values are leaf-safe to build: `none`,
+ * `some(x)` (an opt is { has, v }, held by value), and a literal of a
+ * value struct (not a gc struct) whose fields are all scalars. That is
+ * what a small arithmetic helper returns -- decimal's five-limb add is
+ * one such literal wrapped in some() -- and each call to one was a
+ * bracket costing more than the arithmetic. */
 
 typedef struct {
     const char *names[64];
@@ -1991,6 +1998,46 @@ static int leaf_scalar(const char *t) {
     return t && (is_int(t) || is_flt(t) || !strcmp(t, "bool"));
 }
 
+/* The type of a folded field path ("p.x", "w.inner.n") rooted at a local
+ * of value-struct type, or at a `&`/`&mut` borrow of one; NULL for
+ * anything else (a package name, a gc struct, an unknown field). Reading
+ * such a field, or storing a scalar into one, touches no GC pointer: a
+ * scalar store needs no write barrier, whatever memory the borrow
+ * points into. */
+static const char *leaf_path_type(CG *cg, LeafEnv *env, const char *full) {
+    const char *dot = strchr(full, '.');
+    if (!dot)
+        return NULL;
+    char base[128];
+    size_t bl = (size_t)(dot - full);
+    if (bl >= sizeof base)
+        return NULL;
+    memcpy(base, full, bl);
+    base[bl] = 0;
+    const char *cur = leaf_env_get(env, base);
+    if (!cur)
+        return NULL;
+    if (!strncmp(cur, "&mut ", 5))
+        cur += 5;
+    else if (cur[0] == '&')
+        cur += 1;
+    const char *rest = dot + 1;
+    while (cur && *rest) {
+        StructDef *sd = struct_find_canon(cg, cur);
+        if (!sd || sd->is_gc)
+            return NULL;
+        const char *nd = strchr(rest, '.');
+        size_t fl = nd ? (size_t)(nd - rest) : strlen(rest);
+        const char *ft = NULL;
+        for (int i = 0; i < sd->nfields; i++)
+            if (strlen(sd->fields[i]) == fl && !strncmp(sd->fields[i], rest, fl))
+                ft = sd->ftypes[i];
+        cur = ft;
+        rest = nd ? nd + 1 : rest + fl;
+    }
+    return cur;
+}
+
 /* The type of `e` when it is leaf-safe, else NULL. */
 static const char *leaf_expr(CG *cg, LeafEnv *env, Expr *e) {
     if (!e)
@@ -2008,6 +2055,17 @@ static const char *leaf_expr(CG *cg, LeafEnv *env, Expr *e) {
         const char *t = leaf_env_get(env, e->as.ident.name);
         if (t)
             return t;
+        /* `none` is a value; typed "opt" only to say "not void", like
+           ok()/err() below */
+        if (!strcmp(e->as.ident.name, "none"))
+            return "opt";
+        /* A field path the parser folded into one dotted name ("p.x",
+           "a.b.c"), from a local, a value struct or a borrow of one. */
+        if (strchr(e->as.ident.name, '.')) {
+            const char *ft = leaf_path_type(cg, env, e->as.ident.name);
+            if (ft)
+                return ft;
+        }
         char *left, *right; /* math.pi: a constant, folded by the C compiler */
         if (split_dotted(e->as.ident.name, &left, &right)) {
             const char *pkg = import_try(cg, left);
@@ -2044,6 +2102,29 @@ static const char *leaf_expr(CG *cg, LeafEnv *env, Expr *e) {
             return a;
         return NULL;
     }
+    case EX_STRUCTLIT: {
+        /* A value struct of scalars is a C compound literal: nothing to
+           allocate. A gc struct allocates; a str, list or nested struct
+           field is left to the general path. */
+        const char *tn = e->as.structlit.inst
+                             ? e->as.structlit.inst
+                             : canon_type(cg, e->as.structlit.tyname, e->line);
+        StructDef *sd = tn ? struct_find_canon(cg, tn) : NULL;
+        if (!sd || sd->is_gc || e->as.structlit.nfields != sd->nfields)
+            return NULL;
+        for (int i = 0; i < e->as.structlit.nfields; i++) {
+            const char *ft = NULL;
+            for (int k = 0; k < sd->nfields; k++)
+                if (!strcmp(sd->fields[k], e->as.structlit.fields[i]))
+                    ft = sd->ftypes[k];
+            if (!leaf_scalar(ft))
+                return NULL;
+            const char *vt = leaf_expr(cg, env, e->as.structlit.vals[i]);
+            if (!vt || strcmp(vt, ft))
+                return NULL;
+        }
+        return sd->canonical;
+    }
     case EX_FIELD: {
         const char *bt = leaf_expr(cg, env, e->as.field.base);
         if (!bt)
@@ -2075,6 +2156,8 @@ static const char *leaf_expr(CG *cg, LeafEnv *env, Expr *e) {
         if ((!strcmp(name, "ok") || !strcmp(name, "err")) &&
             e->as.call.nargs == 1 && !e->as.call.callee)
             return "result";
+        if (!strcmp(name, "some") && e->as.call.nargs == 1 && !e->as.call.callee)
+            return "opt";
         char *left, *right;
         if (split_dotted(name, &left, &right)) {
             const char *pkg = import_try(cg, left);
@@ -2122,6 +2205,12 @@ static int leaf_stmt(CG *cg, LeafEnv *env, Stmt *s) {
         Expr *tg = s->as.assign.target;
         if (tg->kind != EX_IDENT)
             return 0;
+        if (strchr(tg->as.ident.name, '.')) {
+            /* a scalar field of a local value struct or through a borrow */
+            const char *ft = leaf_path_type(cg, env, tg->as.ident.name);
+            const char *vt = leaf_expr(cg, env, s->as.assign.value);
+            return leaf_scalar(ft) && vt && !strcmp(ft, vt);
+        }
         const char *tt = leaf_env_get(env, tg->as.ident.name);
         const char *vt = leaf_expr(cg, env, s->as.assign.value);
         return tt && vt && !strcmp(tt, vt);
@@ -2177,8 +2266,12 @@ void compute_leaf_fns(CG *cg, Package *pkgs, int npkgs) {
             LeafEnv env;
             env.n = 0;
             int ok = 1;
+            /* Canonical, so a struct parameter's fields resolve: the
+               signature holds the type as written ("Pt"), the struct
+               table the canonical name ("pkg.Pt"). */
             for (int k = 0; k < sig->nparams && ok; k++)
-                ok = leaf_env_put(&env, f->params[k], sig->param_slang[k]);
+                ok = leaf_env_put(&env, f->params[k],
+                                  canon_type(cg, sig->param_slang[k], f->line));
             if (ok && leaf_block(cg, &env, f->body))
                 sig->leaf = 1;
         }

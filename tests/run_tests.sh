@@ -1214,20 +1214,26 @@ fi
 rm -f "$lnc_c" "$lnc_c.gen.c"
 
 # A leaf slang function (compute_leaf_fns: no allocation, park, loop, or
-# call but to builtins and leaf natives) gets unbracketed calls; functions
-# that concatenate, loop, call slang, allocate, guard or index keep theirs.
+# call but to builtins and leaf natives) gets unbracketed calls, building
+# an opt or a value struct of scalars included; functions that
+# concatenate, loop, call slang, allocate, guard, index, build a gc struct
+# or a struct with a str field keep theirs.
 lf_c="/tmp/sl_leaf_functions"
 if ./slangc tests/leaf_functions/main.sl --keep-c -o "$lf_c" >/dev/null 2>&1; then
-    lf_leaf=$(grep -oE 'sl_rt_safepoint_enter_s\(SL_SELF\(\), [^)]*\); [^;]*sl_leaf_functions_put_str\(' "$lf_c.gen.c" | wc -l | tr -d ' ')
+    lf_leaf=0
+    for fn in put_str wraps point moved; do
+        n=$(grep -oE "sl_rt_safepoint_enter_s\\(SL_SELF\\(\\), [^)]*\\); [^;]*sl_leaf_functions_${fn}\\(" "$lf_c.gen.c" | wc -l | tr -d ' ')
+        lf_leaf=$((lf_leaf + n))
+    done
     lf_other=0
-    for fn in concat loops calls_user allocs guards indexes; do
+    for fn in concat loops calls_user allocs guards indexes boxed named; do
         n=$(grep -oE "sl_rt_safepoint_enter_s\\(SL_SELF\\(\\), [^)]*\\); [^;]*sl_leaf_functions_${fn}\\(" "$lf_c.gen.c" | wc -l | tr -d ' ')
         lf_other=$((lf_other + n))
     done
-    if [ "$lf_leaf" = 0 ] && [ "$lf_other" = 6 ]; then
-        echo "PASS leaf functions unbracketed (6 non-leaf calls kept)"
+    if [ "$lf_leaf" = 0 ] && [ "$lf_other" = 8 ]; then
+        echo "PASS leaf functions unbracketed (8 non-leaf calls kept)"
     else
-        echo "FAIL leaf functions: $lf_leaf put_str calls bracketed, $lf_other non-leaf (want 0 and 6)"
+        echo "FAIL leaf functions: $lf_leaf leaf calls bracketed, $lf_other non-leaf (want 0 and 8)"
         fail=1
     fi
 else
