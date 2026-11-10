@@ -24,6 +24,13 @@ static int is_json_time(const char *t) {
     return !strcmp(t, "timez.Time");
 }
 
+/* decimal.Decimal is read and written as an exact decimal string (and
+ * read from a number by its text), by runtime helpers over its limbs:
+ * see runtime/sl_json.c, "json: decimal.Decimal". */
+static int is_json_decimal(const char *t) {
+    return !strcmp(t, "decimal.Decimal");
+}
+
 static const char *json_scalar_dec_name(const char *t) {
     if (!strcmp(t, "bool")) return "sl_json_dec_bool";
     if (is_str(t)) return "sl_json_dec_str";
@@ -239,6 +246,7 @@ static long long json_enc_hint_w(CG *cg, const char *t, int depth) {
     }
     if (is_arr(t) || is_map(t)) return 2;
     if (is_enum(cg, t)) return 16;
+    if (is_json_decimal(t)) return 42; /* 38 digits, sign, point, quotes */
     if (depth > 8) return 2;
     StructDef *sd = struct_find_canon(cg, t);
     if (!sd) return 0;
@@ -282,7 +290,7 @@ const char *json_dec_fn(CG *cg, const char *t, int line) {
                      "must be str (got map[%s]...)",
                      k, v, k);
         json_dec_fn(cg, v, line);
-    } else if (is_enum(cg, t) || is_json_time(t)) {
+    } else if (is_enum(cg, t) || is_json_time(t) || is_json_decimal(t)) {
         /* leaf scalar: no element/field types to recurse into */
     } else {
         StructDef *sd = struct_find_canon(cg, t);
@@ -321,7 +329,7 @@ const char *json_enc_fn(CG *cg, const char *t, int line) {
                      "be str (got map[%s]...)",
                      k, v, k);
         json_enc_fn(cg, v, line);
-    } else if (is_enum(cg, t) || is_json_time(t)) {
+    } else if (is_enum(cg, t) || is_json_time(t) || is_json_decimal(t)) {
         /* leaf scalar: no element/field types to recurse into */
     } else {
         StructDef *sd = struct_find_canon(cg, t);
@@ -349,6 +357,17 @@ static void emit_json_dec_body(CG *cg, JsonInst *it) {
     cg->indent++;
     if (is_json_time(t)) {
         emit_line(cg, "return sl_json_dec_time(v, &out->sec, &out->nsec, err);");
+        cg->indent--;
+        emit_guardable_close(cg);
+        return;
+    }
+    if (is_json_decimal(t)) {
+        emit_line(cg, "sl_jdec d;");
+        emit_line(cg, "if (!sl_json_dec_decimal(v, &d, err)) return false;");
+        emit_line(cg, "out->l0 = d.l[0]; out->l1 = d.l[1]; out->l2 = d.l[2];");
+        emit_line(cg, "out->l3 = d.l[3]; out->l4 = d.l[4];");
+        emit_line(cg, "out->scale = d.scale; out->neg = d.neg;");
+        emit_line(cg, "return true;");
         cg->indent--;
         emit_guardable_close(cg);
         return;
@@ -544,6 +563,17 @@ static void emit_json_fast_body(CG *cg, JsonInst *it) {
     cg->indent++;
     if (is_json_time(t)) {
         emit_line(cg, "return sl_jd_time(p, &out->sec, &out->nsec);");
+        cg->indent--;
+        emit_guardable_close(cg);
+        return;
+    }
+    if (is_json_decimal(t)) {
+        emit_line(cg, "sl_jdec d;");
+        emit_line(cg, "if (!sl_jd_decimal(p, &d)) return false;");
+        emit_line(cg, "out->l0 = d.l[0]; out->l1 = d.l[1]; out->l2 = d.l[2];");
+        emit_line(cg, "out->l3 = d.l[3]; out->l4 = d.l[4];");
+        emit_line(cg, "out->scale = d.scale; out->neg = d.neg;");
+        emit_line(cg, "return true;");
         cg->indent--;
         emit_guardable_close(cg);
         return;
@@ -762,6 +792,13 @@ static void emit_json_enc_body(CG *cg, JsonInst *it) {
     cg->indent++;
     if (is_json_time(t)) {
         emit_line(cg, "sl_json_enc_time(v.sec, v.nsec, out);");
+        cg->indent--;
+        emit_guardable_close(cg);
+        return;
+    }
+    if (is_json_decimal(t)) {
+        emit_line(cg, "sl_json_enc_decimal(v.l0, v.l1, v.l2, v.l3, v.l4, "
+                      "v.scale, v.neg, out);");
         cg->indent--;
         emit_guardable_close(cg);
         return;

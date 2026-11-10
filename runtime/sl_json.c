@@ -729,6 +729,161 @@ static bool sl_json_dec_time(sl_json_val *v, long long *sec, long long *nsec, ch
     return true;
 }
 
+/* ---- json: decimal.Decimal as an exact string ----
+ *
+ * A decimal.Decimal field is written as a JSON string holding
+ * decimal.format()'s text ("19.90": every digit of its scale, exact, and
+ * safe for JavaScript, whose numbers lose digits past 2^53). It is read
+ * from a string or a number, by decimal.parse()'s rules: an optional
+ * sign, digits, an optional fraction, an optional exponent; at most 38
+ * significant digits; zeros past that or past scale 38 dropped only when
+ * exact. A number is read from its text, never through a double. In C,
+ * like timez.Time above, so a decoder never calls into slang mid-build.
+ * The struct is five base-10^9 limbs (l0 least significant), a scale and
+ * a sign; tests/json_decimal checks this parser against decimal.parse. */
+
+typedef struct {
+    long long l[5];
+    long long scale;
+    bool neg;
+} sl_jdec;
+
+enum {
+    SL_JDEC_OK = 0,
+    SL_JDEC_SYNTAX,      /* not a number */
+    SL_JDEC_SIG,         /* more than 38 significant digits */
+    SL_JDEC_DIGITS,      /* needs more than 38 digits */
+    SL_JDEC_SCALE,       /* more than 38 digits after the point */
+};
+
+/* One digit of a number being read: leading zeros are not significant,
+ * a nonzero digit past the 38th significant one fails, a zero past it is
+ * counted (total) but not kept (sig). */
+static int sl_jdec_take(char c, bool *seen, char *sig, size_t *nsig,
+                        size_t *total) {
+    if (c != '0') *seen = true;
+    if (!*seen) return SL_JDEC_OK;
+    if (*total < 38) sig[(*nsig)++] = c;
+    else if (c != '0') return SL_JDEC_SIG;
+    (*total)++;
+    return SL_JDEC_OK;
+}
+
+static int sl_jdec_parse(const char *s, size_t n, sl_jdec *d) {
+    size_t i = 0;
+    memset(d, 0, sizeof *d);
+    if (n == 0) return SL_JDEC_SYNTAX;
+    bool neg = false;
+    if (s[0] == '-' || s[0] == '+') {
+        neg = s[0] == '-';
+        i++;
+    }
+    char sig[40];
+    size_t nsig = 0, total = 0;
+    bool seen = false;
+    long long frac = 0, exp = 0;
+    int idigits = 0;
+    while (i < n && s[i] >= '0' && s[i] <= '9') {
+        int why = sl_jdec_take(s[i++], &seen, sig, &nsig, &total);
+        if (why) return why;
+        idigits++;
+    }
+    if (idigits == 0) return SL_JDEC_SYNTAX;
+    if (i < n && s[i] == '.') {
+        i++;
+        int fdigits = 0;
+        while (i < n && s[i] >= '0' && s[i] <= '9') {
+            int why = sl_jdec_take(s[i++], &seen, sig, &nsig, &total);
+            if (why) return why;
+            fdigits++;
+            frac++;
+        }
+        if (fdigits == 0) return SL_JDEC_SYNTAX;
+    }
+    if (i < n && (s[i] == 'e' || s[i] == 'E')) {
+        i++;
+        bool eneg = false;
+        if (i < n && (s[i] == '-' || s[i] == '+')) {
+            eneg = s[i] == '-';
+            i++;
+        }
+        int edigits = 0;
+        while (i < n && s[i] >= '0' && s[i] <= '9') {
+            if (exp < 100000) exp = exp * 10 + (s[i] - '0');
+            edigits++;
+            i++;
+        }
+        if (edigits == 0) return SL_JDEC_SYNTAX;
+        if (eneg) exp = -exp;
+    }
+    if (i != n) return SL_JDEC_SYNTAX;
+    /* zeros past the 38th significant digit were counted, not kept */
+    long long scale = frac - exp - (long long)(total - nsig);
+    bool zero = nsig == 0;
+    if (scale < 0) {
+        if (!zero) {
+            if ((long long)nsig - scale > 38) return SL_JDEC_DIGITS;
+            while (scale < 0) {
+                sig[nsig++] = '0';
+                scale++;
+            }
+        }
+        scale = 0;
+    }
+    if (scale > 38) {
+        long long excess = scale - 38;
+        if (!zero) {
+            if (excess > (long long)nsig) return SL_JDEC_SCALE;
+            for (long long k = 0; k < excess; k++)
+                if (sig[nsig - 1 - (size_t)k] != '0') return SL_JDEC_SCALE;
+            nsig -= (size_t)excess;
+        }
+        scale = 38;
+    }
+    /* digits to limbs, least significant first */
+    for (size_t k = 0; k < nsig; k++) {
+        size_t place = nsig - 1 - k;
+        long long p = 1;
+        for (size_t z = 0; z < place % 9; z++) p *= 10;
+        d->l[place / 9] += (long long)(sig[k] - '0') * p;
+    }
+    d->scale = scale;
+    d->neg = neg && !(d->l[0] == 0 && d->l[1] == 0 && d->l[2] == 0 &&
+                      d->l[3] == 0 && d->l[4] == 0);
+    return SL_JDEC_OK;
+}
+
+static char *sl_jdec_error(int why, const char *s, size_t n) {
+    const char *what =
+        why == SL_JDEC_SIG ? "has more than 38 significant digits" :
+        why == SL_JDEC_DIGITS ? "needs more than 38 digits" :
+        why == SL_JDEC_SCALE ? "has more than 38 digits after the point" :
+        "is not a decimal number";
+    int shown = n > 40 ? 40 : (int)n;
+    return sl_json_errf("decimal \"%.*s%s\" %s", shown, s, n > 40 ? "..." : "",
+                        what);
+}
+
+static bool sl_json_dec_decimal(sl_json_val *v, sl_jdec *out, char **err) {
+    const char *text;
+    if (v->kind == SL_JV_STR) {
+        text = v->as.str;
+    } else if (v->kind == SL_JV_NUM) {
+        text = v->as.num.text;
+    } else {
+        *err = sl_json_errf("expected a decimal (a string or number such as "
+                            "\"19.99\"), got %s", sl_json_kind_name(v));
+        return false;
+    }
+    size_t n = strlen(text);
+    int why = sl_jdec_parse(text, n, out);
+    if (why) {
+        *err = sl_jdec_error(why, text, n);
+        return false;
+    }
+    return true;
+}
+
 static const char sl_b64_alpha[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -1338,6 +1493,33 @@ static bool sl_jd_time(sl_jparser *p, long long *sec, long long *nsec) {
     return false;
 }
 
+/* decimal.Decimal on the fast path: a string without escapes, or a
+ * number, parsed in place. Anything else falls back (false, position
+ * restored) to the tree decoder, which says why. */
+static bool sl_jd_decimal(sl_jparser *p, sl_jdec *out) {
+    long long save = p->pos;
+    sl_jskip_ws(p);
+    if (sl_jpeek(p) == '"') {
+        p->pos++;
+        long long start = p->pos, i = start;
+        while (i < p->len && p->s[i] != '"' && p->s[i] != '\\')
+            i++;
+        if (i < p->len && p->s[i] == '"' &&
+            sl_jdec_parse(p->s + start, (size_t)(i - start), out) == 0) {
+            p->pos = i + 1;
+            return true;
+        }
+        p->pos = save;
+        return false;
+    }
+    long long start;
+    if (sl_jd_number(p, &start) &&
+        sl_jdec_parse(p->s + start, (size_t)(p->pos - start), out) == 0)
+        return true;
+    p->pos = save;
+    return false;
+}
+
 /* One pass over a plain integer token: an optional '-', then "0" or up
  * to 18 digits without a leading zero, not followed by '.', 'e' or 'E'.
  * That is every integer field of an ordinary body (ids, counts, cents),
@@ -1583,6 +1765,40 @@ static void sl_json_enc_str(const char *s, sl_json_sb *out) {
         return;
     }
     sl_json_enc_str_esc(s, n, i, out);
+}
+
+/* decimal.format()'s text, quoted: every digit of the scale, "0." before
+ * a value under 1, a '-' only on a nonzero negative. */
+static void sl_json_enc_decimal(long long l0, long long l1, long long l2,
+                                long long l3, long long l4, long long scale,
+                                bool neg, sl_json_sb *out) {
+    long long limbs[5] = {l0, l1, l2, l3, l4};
+    char digits[48];
+    int nd = 0;
+    int top = 4;
+    while (top > 0 && limbs[top] == 0) top--;
+    /* least significant first; the top limb without leading zeros */
+    for (int k = 0; k <= top; k++) {
+        long long v = limbs[k];
+        for (int z = 0; z < 9; z++) {
+            if (k == top && v == 0 && z > 0) break;
+            digits[nd++] = (char)('0' + v % 10);
+            v /= 10;
+        }
+    }
+    if (scale < 0) scale = 0;
+    if (scale > 38) scale = 38;
+    while (nd <= scale) digits[nd++] = '0';
+    char buf[64];
+    int n = 0;
+    buf[n++] = '"';
+    if (neg) buf[n++] = '-';
+    for (int k = nd - 1; k >= 0; k--) {
+        buf[n++] = digits[k];
+        if (k == scale && k > 0) buf[n++] = '.';
+    }
+    buf[n++] = '"';
+    sl_json_sb_append_n(out, buf, n);
 }
 
 /* timez's rfc3339_nano(): "YYYY-MM-DDTHH:MM:SS[.fraction]Z", the year
