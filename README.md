@@ -3358,8 +3358,12 @@ proxy support, no public-suffix list.
 #### `websocket`
 
 A WebSocket client (RFC 6455) over `ws://` and `wss://`, with
-permessage-deflate (RFC 7692) when asked for. It passes the Autobahn
-TestSuite's client cases (`tests/live/websocket`).
+permessage-deflate (RFC 7692) when asked for. In the Autobahn
+TestSuite's client run (`tests/live/websocket`, 517 cases), 440 cases
+are OK, 3 INFORMATIONAL and 2 NON-STRICT, with no failures. The NON-STRICT
+two are invalid UTF-8 inside one frame, caught when the frame is whole
+rather than byte by byte. The 72 UNIMPLEMENTED are window-size variants
+of permessage-deflate this client does not offer.
 
 ```slang
 import "websocket";
@@ -3405,10 +3409,14 @@ connection whose ping goes a whole interval unanswered is closed;
 `recv` then reports why. Pongs arrive through `recv`, so a connection
 nobody reads cannot keep itself alive.
 
-**Compression** is negotiated without context takeover in either
-direction. Each message is compressed on its own, and no 32 KiB window
-per direction stays alive between messages. A message is sent compressed
-only when that makes it smaller.
+**Compression** is offered without context takeover in either direction.
+The server must accept `server_no_context_takeover`, so each message it
+sends inflates on its own. Each message this client sends is compressed
+on its own too, as a sync-flushed stream with no final block
+(`compress.deflate_raw_flush`), which a server keeping one decompressor
+for the whole connection reads correctly. No 32 KiB window per direction
+stays alive between messages. A message is sent compressed only when
+that makes it smaller.
 
 **Text with U+0000.** A `str` ends at its first zero byte, so
 `websocket.text(m)` stops there. `m.data` holds every byte, and
@@ -3445,6 +3453,7 @@ guard let plain = ur else let e = err_of(ur) {
 | `compress.deflate` | `(b: bytes) -> result[bytes, str]` |
 | `compress.inflate` | `(b: bytes, max_out: int) -> result[bytes, str]` |
 | `compress.deflate_raw` | `(b: bytes) -> result[bytes, str]` |
+| `compress.deflate_raw_flush` | `(b: bytes) -> result[bytes, str]` (ends in a sync flush, no final block: RFC 7692) |
 | `compress.inflate_raw` | `(b: bytes, max_out: int) -> result[bytes, str]` |
 
 **Decompression takes a mandatory output limit.** `max_out` is a

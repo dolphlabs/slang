@@ -656,7 +656,8 @@ fn test_should_inflate_and_deflate_with_permessage_deflate() {
     assert(frag.kind == Kind.Binary && frag.data == big, "compressed and fragmented");
     assert(text(next(c)) == "plain", "an uncompressed message on the same connection");
     // sending: compressed when it helps, RSV1 set
-    send_binary(c, big, soon());
+    let sr = send_binary(c, big, soon());
+    guard let _s = sr else let e = err_of(sr) { panic("send: " + e); }
     let f = frame_from(frames);
     assert(f.rsv == 4 && len(f.payload) < len(big), "compressed on the wire");
     let back = compress.inflate_raw(cat([f.payload, deflate_tail()]), 1000000) ?? b"";

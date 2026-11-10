@@ -1,5 +1,9 @@
 """Fails unless every Autobahn case the slang agent ran was graded OK,
-NON-STRICT or INFORMATIONAL (and its close OK or INFORMATIONAL).
+NON-STRICT, INFORMATIONAL or UNIMPLEMENTED (and its close OK or
+INFORMATIONAL). UNIMPLEMENTED is the suite's grade for a negotiation the
+client does not take part in: in 13.3-13.6 the server answers with
+client_max_window_bits, which this client does not offer and so refuses,
+as RFC 7692 requires.
 
     python3 tests/live/websocket/check.py /tmp/autobahn/clients/index.json
 """
@@ -7,7 +11,7 @@ import collections
 import json
 import sys
 
-GOOD = {"OK", "NON-STRICT", "INFORMATIONAL"}
+GOOD = {"OK", "NON-STRICT", "INFORMATIONAL", "UNIMPLEMENTED"}
 GOOD_CLOSE = {"OK", "INFORMATIONAL"}
 
 with open(sys.argv[1]) as f:

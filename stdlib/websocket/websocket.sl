@@ -625,10 +625,19 @@ fn send_data(c: Conn, op: int, payload: bytes, deadline: until) -> result[bool, 
     let cr = check_open(c);
     guard let _c = cr else let e = err_of(cr) { return err(e); }
     if c.deflate && len(payload) >= 64 {
-        // compressed only when that is smaller: short or random payloads
-        // grow under deflate
-        let zr = compress.deflate_raw(payload);
+        // RFC 7692 section 7.2.1: deflate ending in a sync flush, with its
+        // trailing 00 00 ff ff removed. Never a final block: a server that
+        // keeps one decompressor for all our messages (it may, unless it
+        // answered client_no_context_takeover) would read the stream as
+        // ended and inflate every later message to nothing. Each message
+        // is compressed on its own, so none refers back into another.
+        // Sent compressed only when that is smaller.
+        let zr = compress.deflate_raw_flush(payload);
         guard let z = zr else let e = err_of(zr) { return err("websocket: deflate: " + e); }
+        let n = len(z);
+        if n >= 4 && z[n - 4] == 0 && z[n - 3] == 0 && z[n - 2] == 255 && z[n - 1] == 255 {
+            z = z[0..n - 4];
+        }
         if len(z) < len(payload) {
             return write_frame(c, op, true, z, deadline);
         }
