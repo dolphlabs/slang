@@ -267,7 +267,7 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg redis regex
 strings unicode encoding compress math decimal rand builder byteutil flags sort
-uuid http http2 httpc`.
+uuid http http2 httpc template`.
 `decimal` is exact money: `let r = decimal.parse("19.99")` (result), then
 `decimal.add/sub/mul(a, b)` (opt: none past 38 digits), `decimal.div(a, b,
 scale, decimal.Rounding.HalfEven)`, `decimal.format(d)`, `decimal.split(d, n)`.
@@ -288,6 +288,11 @@ reconnects and resubscribes by itself.
 `s3.from_env(proc.getenv)`), `s3.put_object(c, bucket, key, data, ctype, dl)`,
 `s3.get_object`, `s3.list_objects(c, bucket, prefix, "/", next, 1000, dl)`,
 `s3.put_large` (multipart), `s3.presign_get(c, bucket, key, seconds)`.
+`template`: `let r = template.parse(name, src)` (Go syntax: `{{ .f }}`, `if`,
+`range $i, $x := .xs`, `with`, `define`, pipelines), then
+`template.render(t, data)` (result; data is any `json.encode` value). HTML
+is escaped by context at parse time (text, attributes, URLs, scripts,
+styles); `parse_text` for email. A missing field is an error.
 `crypto`: `seal(key, data, aad)`/`open` (AES-256-GCM, random nonce;
 result), `hkdf_sha256(ikm, salt, info, n)`, `constant_time_eq(a, b)`,
 `ed25519_sign/verify`, `ecdsa_p256_sign_sha256/verify_sha256` (raw r||s),

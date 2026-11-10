@@ -94,9 +94,12 @@ Common backend needs with no package today.
   S3, R2, MinIO. zokor handles uploads but has nowhere durable to put them.
   Built as `stdlib/s3` (beside `redis`), with range gets and bucket
   create/delete; tested against AWS's SigV4 examples and a live server.
-- [ ] **Templating with auto-escaping** (stdlib): HTML templates that escape
+- [x] **Templating with auto-escaping** (stdlib): HTML templates that escape
   by context, plus plain-text templates. Evidence: `say` has an email
   `templates/` folder and no safe engine to render it with.
+  Built as `stdlib/template` (Go syntax and escaping model), with
+  `strings.escape_html`/`escape_js` and `encoding.json_tape` added as the
+  natives it renders through.
 - [ ] **WebSocket client** (stdlib, beside `httpc`): dial, TLS, ping/pong,
   close handshake, size limits. zokor has the server side only.
 - [ ] **MySQL / MariaDB driver** (stdlib or package): only Postgres, SQLite
