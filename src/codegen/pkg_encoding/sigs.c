@@ -78,6 +78,12 @@ const NatSig ENCODING_SIGS[] = {
        the host's byte order never leaks into a wire format. */
     {"encoding", "float64_to_le", 1, {NA_F64}, "bytes", 0},
     {"encoding", "float64_from_le", 1, {NA_BYTES}, "result[float,str]", 0},
+
+    /* head, then data XORed with key repeated over it, in one
+       allocation: a WebSocket client frame is its header plus the
+       payload masked with a 4-byte key (RFC 6455 section 5.3), and the
+       payload is copied once. An empty key copies data as is. */
+    {"encoding", "xor_mask", 3, {NA_BYTES, NA_BYTES, NA_BYTES}, "bytes", 0},
 };
 
 const int ENCODING_SIGS_LEN =
