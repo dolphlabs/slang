@@ -266,8 +266,13 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 `slang.project` to omit non-runtime directories from consumers' package caches;
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg redis regex
-strings unicode encoding compress math rand builder byteutil flags sort uuid
-http http2 httpc`.
+strings unicode encoding compress math decimal rand builder byteutil flags sort
+uuid http http2 httpc`.
+`decimal` is exact money: `let r = decimal.parse("19.99")` (result), then
+`decimal.add/sub/mul(a, b)` (opt: none past 38 digits), `decimal.div(a, b,
+scale, decimal.Rounding.HalfEven)`, `decimal.format(d)`, `decimal.split(d, n)`.
+Compare with `decimal.eq`/`cmp` (structs have no `==`). JSON writes a Decimal
+field as an exact string; `pg.arg_decimal`/`pg.get_decimal` for numeric.
 `strings` is byte-based (protocol text); `unicode` is for text people type:
 `unicode.valid(s)`, `unicode.count(s)` (characters), `unicode.truncate(s, n)`,
 `unicode.nfc(s)` before storing or comparing, `unicode.equal_fold(a, b)` for

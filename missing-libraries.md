@@ -49,11 +49,12 @@ any package.
 
 What `say` (the exchange) needs and currently hand-rolls.
 
-- [ ] **`decimal`** (stdlib): fixed-point decimal arithmetic for money: parse
+- [x] **`decimal`** (stdlib): fixed-point decimal arithmetic for money: parse
   and format, add, subtract, multiply and divide with an explicit scale and
   rounding mode, compare, overflow as an error rather than a wrap. JSON and
   Postgres `numeric` round-trips. Evidence: `say` writes its own decimal
-  encoding (`exchange/domain/bytes.sl`).
+  encoding (`exchange/domain/bytes.sl`). 38 digits, seven rounding modes,
+  split/allocate, JSON (exact string) and `pg.arg_decimal`/`get_decimal`.
 - [x] **`crypto` additions** (stdlib). It has SHA-256/HMAC-SHA256, SHA-1,
   MD5, PBKDF2, Argon2id and RSA verify (SHA-256) only. Missing:
   - [x] authenticated encryption: AES-256-GCM and ChaCha20-Poly1305, for

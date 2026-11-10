@@ -1,5 +1,6 @@
 import "pg";
 import "timez";
+import "decimal";
 import "proc";
 import "time";
 import "strings";
@@ -143,6 +144,60 @@ fn values() {
     ex(c, "DROP TABLE slang_vals");
     pg.close(c);
     println("ok values");
+}
+
+// ---- numeric through decimal.Decimal ----------------------------------
+
+fn dec(s: str) -> decimal.Decimal {
+    let r = decimal.parse(s);
+    guard let v = r else let e = err_of(r) { die("parse " + s + ": " + e); return decimal.zero(); }
+    return v;
+}
+
+fn decimals() {
+    let c = conn();
+    ex(c, "DROP TABLE IF EXISTS slang_dec; CREATE TABLE slang_dec " +
+          "(id int4, wide numeric(38, 18), plain numeric, cents numeric(12, 2), n int8)");
+    let vals = ["12345678901234567890.123456789012345678",
+                "-0.000000000000000001", "0.000000000000000000",
+                "99999999999999999999.999999999999999999"];
+    let i = 0;
+    for v in vals {
+        q(c, "INSERT INTO slang_dec VALUES ($1, $2, $3, $4, $5)",
+          [pg.arg_int(i), pg.arg_decimal(dec(v)),
+           pg.arg_decimal(dec("99999999999999999999999999999999999999")),
+           pg.arg_decimal(dec("19.9")), pg.arg_int(-9223372036854775807 - 1)]);
+        i += 1;
+    }
+    let rows = q(c, "SELECT wide, plain, cents, n, sum(cents) OVER () FROM slang_dec ORDER BY id", []);
+    for r in 0..len(vals) {
+        let w = pg.get_decimal(rows, r, 0);
+        guard let got = w else let e = err_of(w) { die("get_decimal: " + e); return; }
+        if decimal.format(got) != vals[r] {
+            die("numeric(38, 18) round trip: " + decimal.format(got) + " for " + vals[r]);
+        }
+    }
+    let plain = pg.get_decimal(rows, 0, 1) ?? decimal.zero();
+    let cents = pg.get_decimal(rows, 0, 2) ?? decimal.zero();
+    let n = pg.get_decimal(rows, 0, 3) ?? decimal.zero();
+    let total = pg.get_decimal(rows, 0, 4) ?? decimal.zero();
+    // Postgres's scale comes through: numeric(12, 2) of 19.9 is 19.90.
+    if decimal.format(plain) != "99999999999999999999999999999999999999" ||
+       decimal.format(cents) != "19.90" || decimal.format(n) != "-9223372036854775808" ||
+       decimal.format(total) != "79.60" {
+        die("numeric scales: " + decimal.format(cents) + " " + decimal.format(total));
+    }
+    // NaN, infinities and the wrong column type are errors, not zeros.
+    let special = q(c, "SELECT 'NaN'::numeric, 'Infinity'::numeric, 'x'::text", []);
+    for col in 0..3 {
+        let r = pg.get_decimal(special, 0, col);
+        if let v = r {
+            die("column " + to_str(col) + " read as " + decimal.format(v));
+        }
+    }
+    ex(c, "DROP TABLE slang_dec");
+    pg.close(c);
+    println("ok decimals");
 }
 
 // ---- errors and transactions ------------------------------------------
@@ -830,6 +885,7 @@ fn timestamps() {
 }
 
 values();
+decimals();
 timestamps();
 errors();
 cancel();

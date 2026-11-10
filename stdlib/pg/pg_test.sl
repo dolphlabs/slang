@@ -3,6 +3,7 @@
 // one).
 
 import "timez";
+import "decimal";
 
 fn cfg_of(url: str) -> Config {
     let r = parse_url(url);
@@ -186,6 +187,14 @@ fn test_timestamp_text_becomes_rfc3339() {
     let r = timez.parse_rfc3339(ts_text("2026-10-13 11:30:15.5+02", true));
     guard let t = r else let e = err_of(r) { panic(e); }
     assert(t.rfc3339_nano() == "2026-10-13T09:30:15.5Z");
+}
+
+fn test_arg_decimal_is_its_exact_text() {
+    let r = decimal.parse("-0.000000000000000001");
+    guard let d = r else let e = err_of(r) { panic(e); }
+    let a = arg_decimal(d);
+    assert(!a.is_null && !a.binary, "a text parameter");
+    assert(to_str(a.data) == "-0.000000000000000001", to_str(a.data));
 }
 
 fn test_arg_time_is_rfc3339_utc() {

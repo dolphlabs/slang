@@ -197,6 +197,7 @@ PACKAGE_SECTIONS = {
     "math/numtheory": ["`math/numtheory`"],
     "byteutil": ["`byteutil`"],
     "rand": ["`rand`"],
+    "decimal": ["`decimal`"],
     "builder": ["`builder`"],
     "flags": ["`flags`"],
     "sort": ["`sort`"],
