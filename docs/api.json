@@ -400,6 +400,317 @@
           "ret": "result[bool,str]",
           "tls": false,
           "sig": "crypto.rsa_verify_sha256(bytes, bytes, bytes, bytes) -> result[bool,str]"
+        },
+        {
+          "name": "sha384",
+          "params": [
+            "bytes"
+          ],
+          "ret": "bytes",
+          "tls": false,
+          "sig": "crypto.sha384(bytes) -> bytes"
+        },
+        {
+          "name": "sha512",
+          "params": [
+            "bytes"
+          ],
+          "ret": "bytes",
+          "tls": false,
+          "sig": "crypto.sha512(bytes) -> bytes"
+        },
+        {
+          "name": "hmac_sha384",
+          "params": [
+            "bytes",
+            "bytes"
+          ],
+          "ret": "bytes",
+          "tls": false,
+          "sig": "crypto.hmac_sha384(bytes, bytes) -> bytes"
+        },
+        {
+          "name": "hmac_sha512",
+          "params": [
+            "bytes",
+            "bytes"
+          ],
+          "ret": "bytes",
+          "tls": false,
+          "sig": "crypto.hmac_sha512(bytes, bytes) -> bytes"
+        },
+        {
+          "name": "hkdf_sha256",
+          "params": [
+            "bytes",
+            "bytes",
+            "bytes",
+            "int"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.hkdf_sha256(bytes, bytes, bytes, int) -> result[bytes,str]"
+        },
+        {
+          "name": "hkdf_sha512",
+          "params": [
+            "bytes",
+            "bytes",
+            "bytes",
+            "int"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.hkdf_sha512(bytes, bytes, bytes, int) -> result[bytes,str]"
+        },
+        {
+          "name": "constant_time_eq",
+          "params": [
+            "bytes",
+            "bytes"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "crypto.constant_time_eq(bytes, bytes) -> bool"
+        },
+        {
+          "name": "aes256gcm_seal",
+          "params": [
+            "bytes",
+            "bytes",
+            "bytes",
+            "bytes"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.aes256gcm_seal(bytes, bytes, bytes, bytes) -> result[bytes,str]"
+        },
+        {
+          "name": "aes256gcm_open",
+          "params": [
+            "bytes",
+            "bytes",
+            "bytes",
+            "bytes"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.aes256gcm_open(bytes, bytes, bytes, bytes) -> result[bytes,str]"
+        },
+        {
+          "name": "chacha20poly1305_seal",
+          "params": [
+            "bytes",
+            "bytes",
+            "bytes",
+            "bytes"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.chacha20poly1305_seal(bytes, bytes, bytes, bytes) -> result[bytes,str]"
+        },
+        {
+          "name": "chacha20poly1305_open",
+          "params": [
+            "bytes",
+            "bytes",
+            "bytes",
+            "bytes"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.chacha20poly1305_open(bytes, bytes, bytes, bytes) -> result[bytes,str]"
+        },
+        {
+          "name": "seal",
+          "params": [
+            "bytes",
+            "bytes",
+            "bytes"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.seal(bytes, bytes, bytes) -> result[bytes,str]"
+        },
+        {
+          "name": "open",
+          "params": [
+            "bytes",
+            "bytes",
+            "bytes"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.open(bytes, bytes, bytes) -> result[bytes,str]"
+        },
+        {
+          "name": "ed25519_generate",
+          "params": [],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.ed25519_generate() -> result[bytes,str]"
+        },
+        {
+          "name": "ed25519_public_key",
+          "params": [
+            "bytes"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.ed25519_public_key(bytes) -> result[bytes,str]"
+        },
+        {
+          "name": "ed25519_sign",
+          "params": [
+            "bytes",
+            "bytes"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.ed25519_sign(bytes, bytes) -> result[bytes,str]"
+        },
+        {
+          "name": "ed25519_verify",
+          "params": [
+            "bytes",
+            "bytes",
+            "bytes"
+          ],
+          "ret": "result[bool,str]",
+          "tls": false,
+          "sig": "crypto.ed25519_verify(bytes, bytes, bytes) -> result[bool,str]"
+        },
+        {
+          "name": "ed25519_private_from_pem",
+          "params": [
+            "str"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.ed25519_private_from_pem(str) -> result[bytes,str]"
+        },
+        {
+          "name": "ed25519_public_from_pem",
+          "params": [
+            "str"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.ed25519_public_from_pem(str) -> result[bytes,str]"
+        },
+        {
+          "name": "ecdsa_p256_generate",
+          "params": [],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.ecdsa_p256_generate() -> result[bytes,str]"
+        },
+        {
+          "name": "ecdsa_p256_public_key",
+          "params": [
+            "bytes"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.ecdsa_p256_public_key(bytes) -> result[bytes,str]"
+        },
+        {
+          "name": "ecdsa_p256_sign_sha256",
+          "params": [
+            "bytes",
+            "bytes"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.ecdsa_p256_sign_sha256(bytes, bytes) -> result[bytes,str]"
+        },
+        {
+          "name": "ecdsa_p256_verify_sha256",
+          "params": [
+            "bytes",
+            "bytes",
+            "bytes"
+          ],
+          "ret": "result[bool,str]",
+          "tls": false,
+          "sig": "crypto.ecdsa_p256_verify_sha256(bytes, bytes, bytes) -> result[bool,str]"
+        },
+        {
+          "name": "ecdsa_p256_private_from_pem",
+          "params": [
+            "str"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.ecdsa_p256_private_from_pem(str) -> result[bytes,str]"
+        },
+        {
+          "name": "ecdsa_p256_public_from_pem",
+          "params": [
+            "str"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.ecdsa_p256_public_from_pem(str) -> result[bytes,str]"
+        },
+        {
+          "name": "rsa_generate",
+          "params": [
+            "int"
+          ],
+          "ret": "result[str,str]",
+          "tls": false,
+          "sig": "crypto.rsa_generate(int) -> result[str,str]"
+        },
+        {
+          "name": "rsa_public_n",
+          "params": [
+            "str"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.rsa_public_n(str) -> result[bytes,str]"
+        },
+        {
+          "name": "rsa_public_e",
+          "params": [
+            "str"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.rsa_public_e(str) -> result[bytes,str]"
+        },
+        {
+          "name": "rsa_sign_sha256",
+          "params": [
+            "str",
+            "bytes"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.rsa_sign_sha256(str, bytes) -> result[bytes,str]"
+        },
+        {
+          "name": "rsa_sign_pss_sha256",
+          "params": [
+            "str",
+            "bytes"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.rsa_sign_pss_sha256(str, bytes) -> result[bytes,str]"
+        },
+        {
+          "name": "rsa_verify_pss_sha256",
+          "params": [
+            "bytes",
+            "bytes",
+            "bytes",
+            "bytes"
+          ],
+          "ret": "result[bool,str]",
+          "tls": false,
+          "sig": "crypto.rsa_verify_pss_sha256(bytes, bytes, bytes, bytes) -> result[bool,str]"
         }
       ]
     },
