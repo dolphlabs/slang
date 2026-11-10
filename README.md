@@ -2543,6 +2543,56 @@ malformed frame drops and redials it. Subjects are validated (no
 whitespace, no empty tokens, no wildcards in a publish), and header names
 and values are refused if they would inject protocol lines.
 
+#### `s3`
+
+S3-compatible object storage, signed with AWS Signature Version 4: AWS S3,
+Cloudflare R2, MinIO and the rest.
+
+```slang
+import "s3";
+import "proc";
+
+let r = s3.new_client("https://s3.eu-west-1.amazonaws.com", "eu-west-1", access_key, secret_key);
+// or s3.from_env(proc.getenv): AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+// AWS_SESSION_TOKEN, AWS_REGION, S3_ENDPOINT
+guard let c = r else let e = err_of(r) { panic(e); }
+
+s3.put_object(c, "uploads", "avatars/42.png", png, "image/png", deadline);   // ok(etag)
+s3.get_object(c, "uploads", "avatars/42.png", deadline);                     // ok(bytes)
+s3.get_range(c, "uploads", "logs/today", 0, 1023, deadline);                 // first KiB
+s3.head_object(c, "uploads", "avatars/42.png", deadline);                    // ok(some(Object)) or ok(none)
+s3.delete_object(c, "uploads", "avatars/42.png", deadline);
+s3.list_objects(c, "uploads", "avatars/", "/", "", 1000, deadline);          // ok(Page); page.next continues
+s3.put_large(c, "backups", "db.dump", dump, "", 16 * 1048576, deadline);     // multipart
+s3.presign_get(c, "uploads", "avatars/42.png", 900);                         // ok(url) for 15 minutes
+s3.presign_put(c, "uploads", "incoming/x.bin", 300);
+```
+
+The payload is hashed into the signature (`x-amz-content-sha256`), so a
+body altered in transit is refused by the server. Signing keys are cached
+for the day they belong to. Errors carry S3's own code and message
+(`s3: NoSuchKey: The specified key does not exist.`).
+
+**Addressing and listing.** Addressing is path-style by default
+(`endpoint/bucket/key`), which MinIO, R2 and most compatible stores want.
+Set `c.path_style = false` for virtual-host style (`bucket.endpoint/key`).
+`list_objects` returns up to 1000 keys a page in key order. Pass `page.next`
+to get the next page; with a delimiter, deeper keys fold into
+`page.prefixes`.
+
+**Multipart.** `create_multipart`, `upload_part`, `complete_multipart` and
+`abort_multipart` are the raw steps (every part but the last at least
+5 MiB). `put_large` drives them, uploading in one request when the data
+fits in a part, and aborting if a part fails so no orphaned parts are left
+to be billed.
+
+**Presigned URLs** last 1 second to 7 days. `presign_at` signs at a given
+time, for tests and for URLs several servers must agree on.
+
+**Limits.** Objects are read and written whole, in memory (or as one byte
+range). Redirects are not followed, since a redirect would change the host
+the signature covers.
+
 #### `regex`
 
 Regular expressions on `str` or `bytes`, matched by slang's own

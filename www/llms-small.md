@@ -284,6 +284,10 @@ an id is a canonical lowercase `str`, `uuid.parse` canonicalizes any spelling.
 `nats.subscribe(nc, subj)` then `nats.next_msg(sub, deadline)` (result of opt),
 `nats.request(nc, subj, data, deadline)`, `nats.drain(nc, deadline)`;
 reconnects and resubscribes by itself.
+`s3`: `let c = s3.new_client(endpoint, region, key, secret)` (or
+`s3.from_env(proc.getenv)`), `s3.put_object(c, bucket, key, data, ctype, dl)`,
+`s3.get_object`, `s3.list_objects(c, bucket, prefix, "/", next, 1000, dl)`,
+`s3.put_large` (multipart), `s3.presign_get(c, bucket, key, seconds)`.
 `crypto`: `seal(key, data, aad)`/`open` (AES-256-GCM, random nonce;
 result), `hkdf_sha256(ikm, salt, info, n)`, `constant_time_eq(a, b)`,
 `ed25519_sign/verify`, `ecdsa_p256_sign_sha256/verify_sha256` (raw r||s),
