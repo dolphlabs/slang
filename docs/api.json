@@ -1148,6 +1148,15 @@
           "sig": "encoding.float64_from_le(bytes) -> result[float,str]"
         },
         {
+          "name": "json_tape",
+          "params": [
+            "str"
+          ],
+          "ret": "result[[int],str]",
+          "tls": false,
+          "sig": "encoding.json_tape(str) -> result[[int],str]"
+        },
+        {
           "name": "base32_encode",
           "params": [
             "bytes"
@@ -8395,6 +8404,196 @@
         }
       ]
     },
+    "s3": {
+      "name": "s3",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Client",
+          "decl": "struct",
+          "sig": "gc struct Client",
+          "doc": "",
+          "file": "stdlib/s3/s3.sl",
+          "line": 27
+        },
+        {
+          "name": "Object",
+          "decl": "struct",
+          "sig": "gc struct Object",
+          "doc": "",
+          "file": "stdlib/s3/s3.sl",
+          "line": 46
+        },
+        {
+          "name": "Page",
+          "decl": "struct",
+          "sig": "gc struct Page",
+          "doc": "",
+          "file": "stdlib/s3/s3.sl",
+          "line": 54
+        },
+        {
+          "name": "new_client",
+          "decl": "fn",
+          "sig": "fn new_client(endpoint: str, region: str, access_key: str, secret_key: str) -> result[Client, str]",
+          "doc": "A client for endpoint (\"https://s3.us-east-1.amazonaws.com\", \"https://<account>.r2.cloudflarestorage.com\", \"http://127.0.0.1:9000\").",
+          "file": "stdlib/s3/s3.sl",
+          "line": 65
+        },
+        {
+          "name": "from_env",
+          "decl": "fn",
+          "sig": "fn from_env(getenv: fn(str) -> opt[str]) -> result[Client, str]",
+          "doc": "A client from AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN (optional), AWS_REGION (or AWS_DEFAULT_REGION) and S3_ENDPOINT (default: the region's AWS endpoint).",
+          "file": "stdlib/s3/s3.sl",
+          "line": 107
+        },
+        {
+          "name": "put_object",
+          "decl": "fn",
+          "sig": "fn put_object(c: Client, bucket: str, key: str, data: bytes, content_type: str, deadline: until) -> result[str, str]",
+          "doc": "Store data at bucket/key; the object's ETag.",
+          "file": "stdlib/s3/s3.sl",
+          "line": 123
+        },
+        {
+          "name": "get_object",
+          "decl": "fn",
+          "sig": "fn get_object(c: Client, bucket: str, key: str, deadline: until) -> result[bytes, str]",
+          "doc": "",
+          "file": "stdlib/s3/s3.sl",
+          "line": 134
+        },
+        {
+          "name": "get_range",
+          "decl": "fn",
+          "sig": "fn get_range(c: Client, bucket: str, key: str, first: int, last: int, deadline: until) -> result[bytes, str]",
+          "doc": "Bytes first..last of the object, both included (an HTTP Range).",
+          "file": "stdlib/s3/s3.sl",
+          "line": 141
+        },
+        {
+          "name": "head_object",
+          "decl": "fn",
+          "sig": "fn head_object(c: Client, bucket: str, key: str, deadline: until) -> result[opt[Object], str]",
+          "doc": "Size, ETag, type and modification time, without the body. none when the object does not exist.",
+          "file": "stdlib/s3/s3.sl",
+          "line": 155
+        },
+        {
+          "name": "delete_object",
+          "decl": "fn",
+          "sig": "fn delete_object(c: Client, bucket: str, key: str, deadline: until) -> result[bool, str]",
+          "doc": "Delete bucket/key. S3 answers success for a key that was not there.",
+          "file": "stdlib/s3/s3.sl",
+          "line": 175
+        },
+        {
+          "name": "list_objects",
+          "decl": "fn",
+          "sig": "fn list_objects(c: Client, bucket: str, prefix: str, delimiter: str, next: str, max_keys: int, deadline: until) -> result[Page, str]",
+          "doc": "One page (up to max_keys, at most 1000) of the keys under prefix, in key order, from where `next` (a Page's next, or \"\" to start) says. With delimiter \"/\", keys below the next \"/\" fold into page.prefixes.",
+          "file": "stdlib/s3/s3.sl",
+          "line": 184
+        },
+        {
+          "name": "create_multipart",
+          "decl": "fn",
+          "sig": "fn create_multipart(c: Client, bucket: str, key: str, content_type: str, deadline: until) -> result[str, str]",
+          "doc": "Start a multipart upload; its upload id.",
+          "file": "stdlib/s3/s3.sl",
+          "line": 225
+        },
+        {
+          "name": "upload_part",
+          "decl": "fn",
+          "sig": "fn upload_part(c: Client, bucket: str, key: str, upload_id: str, n: int, data: bytes, deadline: until) -> result[str, str]",
+          "doc": "Upload part number n (1 to 10000) of an upload; its ETag, for complete_multipart. Every part but the last must be at least 5 MiB.",
+          "file": "stdlib/s3/s3.sl",
+          "line": 244
+        },
+        {
+          "name": "complete_multipart",
+          "decl": "fn",
+          "sig": "fn complete_multipart(c: Client, bucket: str, key: str, upload_id: str, etags: [str], deadline: until) -> result[str, str]",
+          "doc": "Finish an upload from its parts' ETags, in part order; the object's ETag.",
+          "file": "stdlib/s3/s3.sl",
+          "line": 262
+        },
+        {
+          "name": "abort_multipart",
+          "decl": "fn",
+          "sig": "fn abort_multipart(c: Client, bucket: str, key: str, upload_id: str, deadline: until) -> result[bool, str]",
+          "doc": "",
+          "file": "stdlib/s3/s3.sl",
+          "line": 287
+        },
+        {
+          "name": "put_large",
+          "decl": "fn",
+          "sig": "fn put_large(c: Client, bucket: str, key: str, data: bytes, content_type: str, part_size: int, deadline: until) -> result[str, str]",
+          "doc": "Upload data in parts of part_size bytes (at least 5 MiB), aborting the upload if any part fails, so no orphaned parts are left to be billed.",
+          "file": "stdlib/s3/s3.sl",
+          "line": 298
+        },
+        {
+          "name": "create_bucket",
+          "decl": "fn",
+          "sig": "fn create_bucket(c: Client, bucket: str, deadline: until) -> result[bool, str]",
+          "doc": "",
+          "file": "stdlib/s3/s3.sl",
+          "line": 335
+        },
+        {
+          "name": "delete_bucket",
+          "decl": "fn",
+          "sig": "fn delete_bucket(c: Client, bucket: str, deadline: until) -> result[bool, str]",
+          "doc": "",
+          "file": "stdlib/s3/s3.sl",
+          "line": 348
+        },
+        {
+          "name": "presign_get",
+          "decl": "fn",
+          "sig": "fn presign_get(c: Client, bucket: str, key: str, expires_seconds: int) -> result[str, str]",
+          "doc": "A URL anyone can GET (or PUT, below) for expires_seconds (1 second to 7 days), signed now: for downloads and browser uploads that never see your keys.",
+          "file": "stdlib/s3/s3.sl",
+          "line": 359
+        },
+        {
+          "name": "presign_put",
+          "decl": "fn",
+          "sig": "fn presign_put(c: Client, bucket: str, key: str, expires_seconds: int) -> result[str, str]",
+          "doc": "",
+          "file": "stdlib/s3/s3.sl",
+          "line": 363
+        },
+        {
+          "name": "presign_at",
+          "decl": "fn",
+          "sig": "fn presign_at(c: Client, method: str, bucket: str, key: str, expires_seconds: int, amzdate: str) -> result[str, str]",
+          "doc": "presign at a given time (\"20130524T000000Z\"), for tests and for URLs that must agree across servers.",
+          "file": "stdlib/s3/s3.sl",
+          "line": 369
+        },
+        {
+          "name": "sign_request",
+          "decl": "fn",
+          "sig": "fn sign_request(c: Client, method: str, host: str, path: str, query: map[str]str, headers: map[str]str, payload_hash: str, amzdate: str) -> str",
+          "doc": "The Authorization header for a request (SigV4, signed headers are host, x-amz-content-sha256, x-amz-date, any x-amz-security-token and the caller's headers). headers holds lowercase names.",
+          "file": "stdlib/s3/s3.sl",
+          "line": 421
+        },
+        {
+          "name": "uri_encode",
+          "decl": "fn",
+          "sig": "fn uri_encode(s: str, keep_slash: bool) -> str",
+          "doc": "RFC 3986 percent-encoding as SigV4 wants it: everything but A-Z a-z 0-9 - _ . ~ (and / in paths, when keep_slash).",
+          "file": "stdlib/s3/s3.sl",
+          "line": 471
+        }
+      ]
+    },
     "sort": {
       "name": "sort",
       "kind": "source",
@@ -8918,6 +9117,86 @@
           "ret": "str",
           "tls": false,
           "sig": "strings.from_float(float) -> str"
+        },
+        {
+          "name": "escape_html",
+          "params": [
+            "str"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "strings.escape_html(str) -> str"
+        },
+        {
+          "name": "escape_js",
+          "params": [
+            "str"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "strings.escape_js(str) -> str"
+        }
+      ]
+    },
+    "template": {
+      "name": "template",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Template",
+          "decl": "struct",
+          "sig": "gc struct Template",
+          "doc": "A set of named templates, parsed and ready to render: make one with parse or parse_text, grow it with add. Its fields are internal. Safe to render from many tasks at once.",
+          "file": "stdlib/template/template.sl",
+          "line": 36
+        },
+        {
+          "name": "parse",
+          "decl": "fn",
+          "sig": "fn parse(name: str, src: str) -> result[Template, str]",
+          "doc": "An HTML template, escaped by context. src may hold {{ define }} blocks.",
+          "file": "stdlib/template/template.sl",
+          "line": 49
+        },
+        {
+          "name": "parse_text",
+          "decl": "fn",
+          "sig": "fn parse_text(name: str, src: str) -> result[Template, str]",
+          "doc": "A plain-text template (email bodies, CLI output): nothing is escaped.",
+          "file": "stdlib/template/template.sl",
+          "line": 54
+        },
+        {
+          "name": "add",
+          "decl": "fn",
+          "sig": "fn add(t: Template, name: str, src: str) -> result[bool, str]",
+          "doc": "Add another named template, such as a partial or a layout, which any template in the set can call with {{ template \"name\" }} (passing dot, or the value written after the name); its {{ define }} blocks are added too.",
+          "file": "stdlib/template/template.sl",
+          "line": 68
+        },
+        {
+          "name": "render",
+          "decl": "fn",
+          "sig": "fn render[T](t: Template, data: T) -> result[str, str]",
+          "doc": "Render the template parse was given, with data as its dot.",
+          "file": "stdlib/template/template.sl",
+          "line": 92
+        },
+        {
+          "name": "render_named",
+          "decl": "fn",
+          "sig": "fn render_named[T](t: Template, name: str, data: T) -> result[str, str]",
+          "doc": "Render one of the templates (a define or one added with add).",
+          "file": "stdlib/template/template.sl",
+          "line": 97
+        },
+        {
+          "name": "escape_html",
+          "decl": "fn",
+          "sig": "fn escape_html(s: str) -> str",
+          "doc": "HTML-escape text, for building markup by hand.",
+          "file": "stdlib/template/template.sl",
+          "line": 110
         }
       ]
     },
