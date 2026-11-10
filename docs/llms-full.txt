@@ -3639,9 +3639,11 @@ log.warn(fault_timeout());
 
 #### `crypto`
 
-SHA-256, HMAC-SHA256, PBKDF2, MD5 and a CSPRNG over OpenSSL. Hashes and
-HMAC are infallible on valid inputs and return `bytes` directly; `rand`
-and `pbkdf2_sha256` can fail and return `result[bytes, str]`.
+Hashes, MACs, key derivation, authenticated encryption and signatures
+over OpenSSL: SHA-256/384/512 and their HMACs, HKDF, PBKDF2, Argon2id,
+AES-256-GCM and ChaCha20-Poly1305, Ed25519, ECDSA P-256, RSA, and a
+CSPRNG. Hashes and HMACs are infallible on valid inputs and return
+`bytes` directly; anything that can fail returns a `result`.
 
 ```slang
 import "crypto";
@@ -3702,6 +3704,63 @@ import "crypto";
 let r = crypto.rsa_verify_sha256(n, e, to_bytes(header_dot_payload), sig);
 let valid = r ?? false;
 ```
+
+**Hashes, MACs, key derivation.** `sha384`/`sha512` and
+`hmac_sha384`/`hmac_sha512` (JWS HS384/HS512) sit beside the SHA-256 ones.
+`hkdf_sha256(ikm, salt, info, length)` and `hkdf_sha512` are RFC 5869 HKDF:
+use them to derive several keys from one secret, never a bare hash. The
+length is 1 to 255 hash lengths. `constant_time_eq(a, b)` compares in
+time that depends only on the length: use it for MACs, tokens and anything
+else an attacker could probe a byte at a time.
+
+```slang
+let enc = crypto.hkdf_sha256(master, salt, b"cookie-encryption", 32);
+let mac_ok = crypto.constant_time_eq(crypto.hmac_sha256(k, body), sent_mac);
+```
+
+**Authenticated encryption.** `seal(key, plaintext, aad)` encrypts with
+AES-256-GCM under a fresh random nonce and returns nonce, ciphertext and
+tag in one `bytes`. `open(key, box, aad)` checks and decrypts it. The aad
+(associated data, which may be empty) is authenticated but not encrypted:
+bind a cookie to its name, a record to its id. Because the caller never
+chooses a nonce, it cannot reuse one, the mistake that breaks GCM
+outright. A key should seal fewer than 2^32 messages this way, so rotate
+it, for example via HKDF with a date in `info`. When a protocol fixes the
+nonce, `aes256gcm_seal`/`aes256gcm_open` and
+`chacha20poly1305_seal`/`chacha20poly1305_open` take (key, nonce, data,
+aad) with a 32-byte key and a 12-byte nonce, and carry ciphertext then a
+16-byte tag. Every opener returns an error, never partial plaintext, when
+anything was altered.
+
+```slang
+let box = crypto.seal(key, to_bytes(session_json), b"session");
+let back = crypto.open(key, box ?? b"", b"session");   // err if tampered
+```
+
+**Signatures.** Keys use the raw forms JWK and JWS use. Ed25519 has a
+32-byte private seed, a 32-byte public key and a 64-byte signature.
+ECDSA P-256 with SHA-256 (JWS ES256) has a 32-byte private scalar, a
+65-byte uncompressed public point (`0x04 || x || y`) and a 64-byte
+`r || s` signature. RSA keys are PEM text.
+
+| | Ed25519 | ECDSA P-256 | RSA (SHA-256) |
+|---|---|---|---|
+| new key | `ed25519_generate()` | `ecdsa_p256_generate()` | `rsa_generate(bits)` (PEM) |
+| public key | `ed25519_public_key(priv)` | `ecdsa_p256_public_key(priv)` | `rsa_public_n(pem)`, `rsa_public_e(pem)` |
+| sign | `ed25519_sign(priv, msg)` | `ecdsa_p256_sign_sha256(priv, msg)` | `rsa_sign_sha256(pem, msg)` (RS256), `rsa_sign_pss_sha256` (PS256) |
+| verify | `ed25519_verify(pub, msg, sig)` | `ecdsa_p256_verify_sha256(pub, msg, sig)` | `rsa_verify_sha256(n, e, msg, sig)`, `rsa_verify_pss_sha256` |
+| from PEM | `ed25519_private_from_pem`, `ed25519_public_from_pem` | `ecdsa_p256_private_from_pem`, `ecdsa_p256_public_from_pem` | (sign takes PEM) |
+
+Verifiers return `ok(false)` for a signature that does not verify
+(including one of the wrong length) and `err` for a malformed key, such
+as a P-256 point that is not on the curve. ECDSA signatures are
+deterministic (RFC 6979) on OpenSSL 3.2 and newer, so a weak random
+number generator cannot leak the key; older 3.x uses random nonces. PSS
+fixes the salt at the digest length, as PS256 requires. RSA key
+generation takes tens of milliseconds at 2048 bits and seconds at 4096,
+without yielding, so do it at startup or in a tool. Prepared keys are
+cached (up to 16), so signing or verifying repeatedly with the same keys,
+as a server does with its JWT key or a JWKS, skips rebuilding them.
 
 #### `sql`
 
@@ -5624,7 +5683,7 @@ any signal-handling program.
 - [builder](packages/builder.md) -- source package, 20 public items
 - [byteutil](packages/byteutil.md) -- source package, 6 public items
 - [compress](packages/compress.md) -- compiler-provided, 7 public items
-- [crypto](packages/crypto.md) -- compiler-provided, 9 public items
+- [crypto](packages/crypto.md) -- compiler-provided, 40 public items
 - [decimal](packages/decimal.md) -- source package, 37 public items
 - [encoding](packages/encoding.md) -- compiler-provided, 14 public items
 - [flags](packages/flags.md) -- source package, 23 public items
@@ -6339,9 +6398,11 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 
 > Package crypto.
 
-SHA-256, HMAC-SHA256, PBKDF2, MD5 and a CSPRNG over OpenSSL. Hashes and
-HMAC are infallible on valid inputs and return `bytes` directly; `rand`
-and `pbkdf2_sha256` can fail and return `result[bytes, str]`.
+Hashes, MACs, key derivation, authenticated encryption and signatures
+over OpenSSL: SHA-256/384/512 and their HMACs, HKDF, PBKDF2, Argon2id,
+AES-256-GCM and ChaCha20-Poly1305, Ed25519, ECDSA P-256, RSA, and a
+CSPRNG. Hashes and HMACs are infallible on valid inputs and return
+`bytes` directly; anything that can fail returns a `result`.
 
 ```slang
 import "crypto";
@@ -6403,6 +6464,63 @@ let r = crypto.rsa_verify_sha256(n, e, to_bytes(header_dot_payload), sig);
 let valid = r ?? false;
 ```
 
+**Hashes, MACs, key derivation.** `sha384`/`sha512` and
+`hmac_sha384`/`hmac_sha512` (JWS HS384/HS512) sit beside the SHA-256 ones.
+`hkdf_sha256(ikm, salt, info, length)` and `hkdf_sha512` are RFC 5869 HKDF:
+use them to derive several keys from one secret, never a bare hash. The
+length is 1 to 255 hash lengths. `constant_time_eq(a, b)` compares in
+time that depends only on the length: use it for MACs, tokens and anything
+else an attacker could probe a byte at a time.
+
+```slang
+let enc = crypto.hkdf_sha256(master, salt, b"cookie-encryption", 32);
+let mac_ok = crypto.constant_time_eq(crypto.hmac_sha256(k, body), sent_mac);
+```
+
+**Authenticated encryption.** `seal(key, plaintext, aad)` encrypts with
+AES-256-GCM under a fresh random nonce and returns nonce, ciphertext and
+tag in one `bytes`. `open(key, box, aad)` checks and decrypts it. The aad
+(associated data, which may be empty) is authenticated but not encrypted:
+bind a cookie to its name, a record to its id. Because the caller never
+chooses a nonce, it cannot reuse one, the mistake that breaks GCM
+outright. A key should seal fewer than 2^32 messages this way, so rotate
+it, for example via HKDF with a date in `info`. When a protocol fixes the
+nonce, `aes256gcm_seal`/`aes256gcm_open` and
+`chacha20poly1305_seal`/`chacha20poly1305_open` take (key, nonce, data,
+aad) with a 32-byte key and a 12-byte nonce, and carry ciphertext then a
+16-byte tag. Every opener returns an error, never partial plaintext, when
+anything was altered.
+
+```slang
+let box = crypto.seal(key, to_bytes(session_json), b"session");
+let back = crypto.open(key, box ?? b"", b"session");   // err if tampered
+```
+
+**Signatures.** Keys use the raw forms JWK and JWS use. Ed25519 has a
+32-byte private seed, a 32-byte public key and a 64-byte signature.
+ECDSA P-256 with SHA-256 (JWS ES256) has a 32-byte private scalar, a
+65-byte uncompressed public point (`0x04 || x || y`) and a 64-byte
+`r || s` signature. RSA keys are PEM text.
+
+| | Ed25519 | ECDSA P-256 | RSA (SHA-256) |
+|---|---|---|---|
+| new key | `ed25519_generate()` | `ecdsa_p256_generate()` | `rsa_generate(bits)` (PEM) |
+| public key | `ed25519_public_key(priv)` | `ecdsa_p256_public_key(priv)` | `rsa_public_n(pem)`, `rsa_public_e(pem)` |
+| sign | `ed25519_sign(priv, msg)` | `ecdsa_p256_sign_sha256(priv, msg)` | `rsa_sign_sha256(pem, msg)` (RS256), `rsa_sign_pss_sha256` (PS256) |
+| verify | `ed25519_verify(pub, msg, sig)` | `ecdsa_p256_verify_sha256(pub, msg, sig)` | `rsa_verify_sha256(n, e, msg, sig)`, `rsa_verify_pss_sha256` |
+| from PEM | `ed25519_private_from_pem`, `ed25519_public_from_pem` | `ecdsa_p256_private_from_pem`, `ecdsa_p256_public_from_pem` | (sign takes PEM) |
+
+Verifiers return `ok(false)` for a signature that does not verify
+(including one of the wrong length) and `err` for a malformed key, such
+as a P-256 point that is not on the curve. ECDSA signatures are
+deterministic (RFC 6979) on OpenSSL 3.2 and newer, so a weak random
+number generator cannot leak the key; older 3.x uses random nonces. PSS
+fixes the salt at the digest length, as PS256 requires. RSA key
+generation takes tens of milliseconds at 2048 bits and seconds at 4096,
+without yielding, so do it at startup or in a tool. Prepared keys are
+cached (up to 16), so signing or verifying repeatedly with the same keys,
+as a server does with its JWT key or a JWKS, skips rebuilding them.
+
 ## API
 
 ### `crypto.sha256(bytes) -> bytes`
@@ -6422,6 +6540,68 @@ let valid = r ?? false;
 ### `crypto.argon2id_verify(bytes, bytes, bytes, int, int, int) -> result[bool,str]`
 
 ### `crypto.rsa_verify_sha256(bytes, bytes, bytes, bytes) -> result[bool,str]`
+
+### `crypto.sha384(bytes) -> bytes`
+
+### `crypto.sha512(bytes) -> bytes`
+
+### `crypto.hmac_sha384(bytes, bytes) -> bytes`
+
+### `crypto.hmac_sha512(bytes, bytes) -> bytes`
+
+### `crypto.hkdf_sha256(bytes, bytes, bytes, int) -> result[bytes,str]`
+
+### `crypto.hkdf_sha512(bytes, bytes, bytes, int) -> result[bytes,str]`
+
+### `crypto.constant_time_eq(bytes, bytes) -> bool`
+
+### `crypto.aes256gcm_seal(bytes, bytes, bytes, bytes) -> result[bytes,str]`
+
+### `crypto.aes256gcm_open(bytes, bytes, bytes, bytes) -> result[bytes,str]`
+
+### `crypto.chacha20poly1305_seal(bytes, bytes, bytes, bytes) -> result[bytes,str]`
+
+### `crypto.chacha20poly1305_open(bytes, bytes, bytes, bytes) -> result[bytes,str]`
+
+### `crypto.seal(bytes, bytes, bytes) -> result[bytes,str]`
+
+### `crypto.open(bytes, bytes, bytes) -> result[bytes,str]`
+
+### `crypto.ed25519_generate() -> result[bytes,str]`
+
+### `crypto.ed25519_public_key(bytes) -> result[bytes,str]`
+
+### `crypto.ed25519_sign(bytes, bytes) -> result[bytes,str]`
+
+### `crypto.ed25519_verify(bytes, bytes, bytes) -> result[bool,str]`
+
+### `crypto.ed25519_private_from_pem(str) -> result[bytes,str]`
+
+### `crypto.ed25519_public_from_pem(str) -> result[bytes,str]`
+
+### `crypto.ecdsa_p256_generate() -> result[bytes,str]`
+
+### `crypto.ecdsa_p256_public_key(bytes) -> result[bytes,str]`
+
+### `crypto.ecdsa_p256_sign_sha256(bytes, bytes) -> result[bytes,str]`
+
+### `crypto.ecdsa_p256_verify_sha256(bytes, bytes, bytes) -> result[bool,str]`
+
+### `crypto.ecdsa_p256_private_from_pem(str) -> result[bytes,str]`
+
+### `crypto.ecdsa_p256_public_from_pem(str) -> result[bytes,str]`
+
+### `crypto.rsa_generate(int) -> result[str,str]`
+
+### `crypto.rsa_public_n(str) -> result[bytes,str]`
+
+### `crypto.rsa_public_e(str) -> result[bytes,str]`
+
+### `crypto.rsa_sign_sha256(str, bytes) -> result[bytes,str]`
+
+### `crypto.rsa_sign_pss_sha256(str, bytes) -> result[bytes,str]`
+
+### `crypto.rsa_verify_pss_sha256(bytes, bytes, bytes, bytes) -> result[bool,str]`
 
 ---
 

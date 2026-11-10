@@ -280,6 +280,10 @@ case-insensitive matches (`"STRASSE"` equals `"straße"`). Transforms repair
 invalid UTF-8 to U+FFFD.
 `uuid.v7()` (time-ordered, for keys) and `uuid.v4()` return `result[str, str]`;
 an id is a canonical lowercase `str`, `uuid.parse` canonicalizes any spelling.
+`crypto`: `seal(key, data, aad)`/`open` (AES-256-GCM, random nonce;
+result), `hkdf_sha256(ikm, salt, info, n)`, `constant_time_eq(a, b)`,
+`ed25519_sign/verify`, `ecdsa_p256_sign_sha256/verify_sha256` (raw r||s),
+`rsa_sign_sha256(pem, msg)`; verifiers return `result[bool, str]`.
 `math` takes any numeric type and returns that type (`math.abs(x)` of an `i32`
 is an `i32`): `math.sqrt`, `math.pi`, `math.round_to(x, 2)`, and for money
 `math.checked_add(a, b)` / `math.checked_mul(a, b)`, an `opt` that is `none` on
