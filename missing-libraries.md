@@ -66,24 +66,29 @@ What `say` (the exchange) needs and currently hand-rolls.
   - [x] SHA-512 and HMAC-SHA512
   - [x] HKDF
   - [x] constant-time comparison as a public function
-- [ ] **`jwt` algorithms and JWKS** (package `slangpackages/jwt`). It
+- [x] **`jwt` algorithms and JWKS** (package `slangpackages/jwt`). It
   supports HS256 only. Missing:
-  - [ ] RS256 (verify and sign)
-  - [ ] ES256 (needs ECDSA above)
-  - [ ] EdDSA (needs Ed25519 above)
-  - [ ] a JWKS client: fetch, cache by `kid`, refresh on an unknown `kid`,
+  - [x] RS256 (verify and sign)
+  - [x] ES256 (needs ECDSA above)
+  - [x] EdDSA (needs Ed25519 above)
+  - [x] a JWKS client: fetch, cache by `kid`, refresh on an unknown `kid`,
     rate-limited (evidence: `say/src/accounts/service/google.sl` hand-writes
     all of this for Google sign-in)
-  - [ ] OIDC ID-token verification helper (issuer, audience, expiry, nonce)
+  - [x] OIDC ID-token verification helper (issuer, audience, expiry, nonce)
+  Done in dolphlabs/jwt#3 (v0.2.0, needs slang with #513): also PS256,
+  HS384/512, JWK publishing.
 
 ## 3. Integrations
 
 Common backend needs with no package today.
 
-- [ ] **Message broker client** (package). None exists; only Redis streams.
+- [x] **Message broker client** (package). None exists; only Redis streams.
   Pick one to start: NATS (simplest protocol), Kafka, or RabbitMQ (AMQP
   0-9-1). AGENTS.md's architecture rules lean on events and queues for
-  decoupling.
+  decoupling. Built as `stdlib/nats` (core NATS: pub/sub, queue groups,
+  headers, request/reply, reconnection, NKey/creds/TLS), in the standard
+  library beside `redis` rather than a separate repo. JetStream is not in
+  it.
 - [ ] **S3-compatible object storage** (package): put, get, delete, list,
   multipart upload, presigned URLs, with AWS SigV4 signing. Works against
   S3, R2, MinIO. zokor handles uploads but has nowhere durable to put them.
