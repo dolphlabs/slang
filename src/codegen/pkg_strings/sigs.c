@@ -98,6 +98,17 @@ const NatSig STRINGS_SIGS[] = {
        to_str uses %g, six significant digits, which is right for
        printing and wrong for anything that must round-trip. */
     {"strings", "from_float", 1, {NA_F64}, "str", 0},
+
+    /* escaping, for text built by hand and for stdlib/template, which
+       escapes every action through these. Each returns its input
+       unchanged -- no allocation -- when nothing needs escaping.
+       escape_html: & < > " ' as character references, safe in text and
+       in a quoted attribute value of either quote. escape_js: the inside
+       of a JavaScript string literal of any quote, safe inside <script>
+       and inside an attribute (quotes, ` $ < > &, controls and
+       U+2028/U+2029 become escapes). */
+    {"strings", "escape_html", 1, {NA_STR}, "str", 0},
+    {"strings", "escape_js", 1, {NA_STR}, "str", 0},
 };
 
 const int STRINGS_SIGS_LEN = sizeof(STRINGS_SIGS) / sizeof(STRINGS_SIGS[0]);

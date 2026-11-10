@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>s3 — slang</title>
+<meta name="description" content="Package s3.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="s3">
+<meta property="og:description" content="Package s3.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://slang.dolphlabs.com/packages/s3">
+<meta property="og:image" content="https://slang.dolphlabs.com/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The slang rabbit mark beside the slang wordmark">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://slang.dolphlabs.com/packages/s3">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/s3.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <button id="navtoggle" class="navtoggle" type="button"
+          aria-label="Toggle navigation" aria-expanded="false"
+          aria-controls="mainnav">
+    <span></span><span></span><span></span>
+  </button>
+  <nav class="mainnav" id="mainnav"><a href="../">Home</a><a href="../guide/">Guide</a><a href="../guide/data">Data types</a><a href="../guide/errors">Errors</a><a href="../guide/functions">Functions</a><a href="../concurrency/">Concurrency</a><a href="../testing/">Testing</a><a href="../bench/">Benchmarks</a><a href="../packages/">Packages</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="../limitations/">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="navscrim" class="navscrim" hidden></div>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>s3</h1>
+      <p class="tagline">Package s3.</p>
+      <p class="agentline">
+        <a href="../packages/s3.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>S3-compatible object storage, signed with AWS Signature Version 4: AWS S3, Cloudflare R2, MinIO and the rest.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;s3&quot;</span>;
+<span class="k">import</span> <span class="s">&quot;proc&quot;</span>;
+
+<span class="k">let</span> r = s3.<span class="f">new_client</span>(<span class="s">&quot;https://s3.eu-west-1.amazonaws.com&quot;</span>, <span class="s">&quot;eu-west-1&quot;</span>, access_key, secret_key);
+<span class="c">// or s3.from_env(proc.getenv): AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,</span>
+<span class="c">// AWS_SESSION_TOKEN, AWS_REGION, S3_ENDPOINT</span>
+<span class="k">guard</span> <span class="k">let</span> c = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }
+
+s3.<span class="f">put_object</span>(c, <span class="s">&quot;uploads&quot;</span>, <span class="s">&quot;avatars/42.png&quot;</span>, png, <span class="s">&quot;image/png&quot;</span>, deadline);   <span class="c">// ok(etag)</span>
+s3.<span class="f">get_object</span>(c, <span class="s">&quot;uploads&quot;</span>, <span class="s">&quot;avatars/42.png&quot;</span>, deadline);                     <span class="c">// ok(bytes)</span>
+s3.<span class="f">get_range</span>(c, <span class="s">&quot;uploads&quot;</span>, <span class="s">&quot;logs/today&quot;</span>, <span class="n">0</span>, <span class="n">1023</span>, deadline);                 <span class="c">// first KiB</span>
+s3.<span class="f">head_object</span>(c, <span class="s">&quot;uploads&quot;</span>, <span class="s">&quot;avatars/42.png&quot;</span>, deadline);                    <span class="c">// ok(some(Object)) or ok(none)</span>
+s3.<span class="f">delete_object</span>(c, <span class="s">&quot;uploads&quot;</span>, <span class="s">&quot;avatars/42.png&quot;</span>, deadline);
+s3.<span class="f">list_objects</span>(c, <span class="s">&quot;uploads&quot;</span>, <span class="s">&quot;avatars/&quot;</span>, <span class="s">&quot;/&quot;</span>, <span class="s">&quot;&quot;</span>, <span class="n">1000</span>, deadline);          <span class="c">// ok(Page); page.next continues</span>
+s3.<span class="f">put_large</span>(c, <span class="s">&quot;backups&quot;</span>, <span class="s">&quot;db.dump&quot;</span>, dump, <span class="s">&quot;&quot;</span>, <span class="n">16</span> * <span class="n">1048576</span>, deadline);     <span class="c">// multipart</span>
+s3.<span class="f">presign_get</span>(c, <span class="s">&quot;uploads&quot;</span>, <span class="s">&quot;avatars/42.png&quot;</span>, <span class="n">900</span>);                         <span class="c">// ok(url) for 15 minutes</span>
+s3.<span class="f">presign_put</span>(c, <span class="s">&quot;uploads&quot;</span>, <span class="s">&quot;incoming/x.bin&quot;</span>, <span class="n">300</span>);</code></pre></div>
+<p>The payload is hashed into the signature (<code>x-amz-content-sha256</code>), so a body altered in transit is refused by the server. Signing keys are cached for the day they belong to. Errors carry S3&#x27;s own code and message (<code>s3: NoSuchKey: The specified key does not exist.</code>).</p>
+<p><strong>Addressing and listing.</strong> Addressing is path-style by default (<code>endpoint/bucket/key</code>), which MinIO, R2 and most compatible stores want. Set <code>c.path_style = false</code> for virtual-host style (<code>bucket.endpoint/key</code>). <code>list_objects</code> returns up to 1000 keys a page in key order. Pass <code>page.next</code> to get the next page; with a delimiter, deeper keys fold into <code>page.prefixes</code>.</p>
+<p><strong>Multipart.</strong> <code>create_multipart</code>, <code>upload_part</code>, <code>complete_multipart</code> and <code>abort_multipart</code> are the raw steps (every part but the last at least 5 MiB). <code>put_large</code> drives them, uploading in one request when the data fits in a part, and aborting if a part fails so no orphaned parts are left to be billed.</p>
+<p><strong>Presigned URLs</strong> last 1 second to 7 days. <code>presign_at</code> signs at a given time, for tests and for URLs several servers must agree on.</p>
+<p><strong>Limits.</strong> Objects are read and written whole, in memory (or as one byte range). Redirects are not followed, since a redirect would change the host the signature covers.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="client"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Client</code> <span class="src">stdlib/s3/s3.sl:27</span><a class="anchor" href="#client">#</a></div></div><div class="api-item" id="object"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Object</code> <span class="src">stdlib/s3/s3.sl:46</span><a class="anchor" href="#object">#</a></div></div><div class="api-item" id="page"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Page</code> <span class="src">stdlib/s3/s3.sl:54</span><a class="anchor" href="#page">#</a></div></div><div class="api-item" id="new-client"><div class="api-sig"><code><span class="k">fn</span> <span class="f">new_client</span>(endpoint: <span class="t">str</span>, region: <span class="t">str</span>, access_key: <span class="t">str</span>, secret_key: <span class="t">str</span>) -&gt; <span class="t">result</span>[Client, <span class="t">str</span>]</code> <span class="src">stdlib/s3/s3.sl:65</span><a class="anchor" href="#new-client">#</a></div><p class="api-doc">A client for endpoint (&quot;https://s3.us-east-1.amazonaws.com&quot;, &quot;https://&lt;account&gt;.r2.cloudflarestorage.com&quot;, &quot;http://127.0.0.1:9000&quot;).</p></div><div class="api-item" id="from-env"><div class="api-sig"><code><span class="k">fn</span> <span class="f">from_env</span>(getenv: <span class="k">fn</span>(<span class="t">str</span>) -&gt; <span class="t">opt</span>[<span class="t">str</span>]) -&gt; <span class="t">result</span>[Client, <span class="t">str</span>]</code> <span class="src">stdlib/s3/s3.sl:107</span><a class="anchor" href="#from-env">#</a></div><p class="api-doc">A client from AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN (optional), AWS_REGION (or AWS_DEFAULT_REGION) and S3_ENDPOINT (default: the region&#x27;s AWS endpoint).</p></div><div class="api-item" id="put-object"><div class="api-sig"><code><span class="k">fn</span> <span class="f">put_object</span>(c: Client, bucket: <span class="t">str</span>, key: <span class="t">str</span>, data: <span class="t">bytes</span>, content_type: <span class="t">str</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>]</code> <span class="src">stdlib/s3/s3.sl:123</span><a class="anchor" href="#put-object">#</a></div><p class="api-doc">Store data at bucket/key; the object&#x27;s ETag.</p></div><div class="api-item" id="get-object"><div class="api-sig"><code><span class="k">fn</span> <span class="f">get_object</span>(c: Client, bucket: <span class="t">str</span>, key: <span class="t">str</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>, <span class="t">str</span>]</code> <span class="src">stdlib/s3/s3.sl:134</span><a class="anchor" href="#get-object">#</a></div></div><div class="api-item" id="get-range"><div class="api-sig"><code><span class="k">fn</span> <span class="f">get_range</span>(c: Client, bucket: <span class="t">str</span>, key: <span class="t">str</span>, first: <span class="t">int</span>, last: <span class="t">int</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>, <span class="t">str</span>]</code> <span class="src">stdlib/s3/s3.sl:141</span><a class="anchor" href="#get-range">#</a></div><p class="api-doc">Bytes first..last of the object, both included (an HTTP Range).</p></div><div class="api-item" id="head-object"><div class="api-sig"><code><span class="k">fn</span> <span class="f">head_object</span>(c: Client, bucket: <span class="t">str</span>, key: <span class="t">str</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">opt</span>[Object], <span class="t">str</span>]</code> <span class="src">stdlib/s3/s3.sl:155</span><a class="anchor" href="#head-object">#</a></div><p class="api-doc">Size, ETag, type and modification time, without the body. none when the object does not exist.</p></div><div class="api-item" id="delete-object"><div class="api-sig"><code><span class="k">fn</span> <span class="f">delete_object</span>(c: Client, bucket: <span class="t">str</span>, key: <span class="t">str</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>, <span class="t">str</span>]</code> <span class="src">stdlib/s3/s3.sl:175</span><a class="anchor" href="#delete-object">#</a></div><p class="api-doc">Delete bucket/key. S3 answers success for a key that was not there.</p></div><div class="api-item" id="list-objects"><div class="api-sig"><code><span class="k">fn</span> <span class="f">list_objects</span>(c: Client, bucket: <span class="t">str</span>, prefix: <span class="t">str</span>, delimiter: <span class="t">str</span>, next: <span class="t">str</span>, max_keys: <span class="t">int</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Page, <span class="t">str</span>]</code> <span class="src">stdlib/s3/s3.sl:184</span><a class="anchor" href="#list-objects">#</a></div><p class="api-doc">One page (up to max_keys, at most 1000) of the keys under prefix, in key order, from where <code>next</code> (a Page&#x27;s next, or &quot;&quot; to start) says. With delimiter &quot;/&quot;, keys below the next &quot;/&quot; fold into page.prefixes.</p></div><div class="api-item" id="create-multipart"><div class="api-sig"><code><span class="k">fn</span> <span class="f">create_multipart</span>(c: Client, bucket: <span class="t">str</span>, key: <span class="t">str</span>, content_type: <span class="t">str</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>]</code> <span class="src">stdlib/s3/s3.sl:225</span><a class="anchor" href="#create-multipart">#</a></div><p class="api-doc">Start a multipart upload; its upload id.</p></div><div class="api-item" id="upload-part"><div class="api-sig"><code><span class="k">fn</span> <span class="f">upload_part</span>(c: Client, bucket: <span class="t">str</span>, key: <span class="t">str</span>, upload_id: <span class="t">str</span>, n: <span class="t">int</span>, data: <span class="t">bytes</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>]</code> <span class="src">stdlib/s3/s3.sl:244</span><a class="anchor" href="#upload-part">#</a></div><p class="api-doc">Upload part number n (1 to 10000) of an upload; its ETag, for complete_multipart. Every part but the last must be at least 5 MiB.</p></div><div class="api-item" id="complete-multipart"><div class="api-sig"><code><span class="k">fn</span> <span class="f">complete_multipart</span>(c: Client, bucket: <span class="t">str</span>, key: <span class="t">str</span>, upload_id: <span class="t">str</span>, etags: [<span class="t">str</span>], deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>]</code> <span class="src">stdlib/s3/s3.sl:262</span><a class="anchor" href="#complete-multipart">#</a></div><p class="api-doc">Finish an upload from its parts&#x27; ETags, in part order; the object&#x27;s ETag.</p></div><div class="api-item" id="abort-multipart"><div class="api-sig"><code><span class="k">fn</span> <span class="f">abort_multipart</span>(c: Client, bucket: <span class="t">str</span>, key: <span class="t">str</span>, upload_id: <span class="t">str</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>, <span class="t">str</span>]</code> <span class="src">stdlib/s3/s3.sl:287</span><a class="anchor" href="#abort-multipart">#</a></div></div><div class="api-item" id="put-large"><div class="api-sig"><code><span class="k">fn</span> <span class="f">put_large</span>(c: Client, bucket: <span class="t">str</span>, key: <span class="t">str</span>, data: <span class="t">bytes</span>, content_type: <span class="t">str</span>, part_size: <span class="t">int</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>]</code> <span class="src">stdlib/s3/s3.sl:298</span><a class="anchor" href="#put-large">#</a></div><p class="api-doc">Upload data in parts of part_size bytes (at least 5 MiB), aborting the upload if any part fails, so no orphaned parts are left to be billed.</p></div><div class="api-item" id="create-bucket"><div class="api-sig"><code><span class="k">fn</span> <span class="f">create_bucket</span>(c: Client, bucket: <span class="t">str</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>, <span class="t">str</span>]</code> <span class="src">stdlib/s3/s3.sl:335</span><a class="anchor" href="#create-bucket">#</a></div></div><div class="api-item" id="delete-bucket"><div class="api-sig"><code><span class="k">fn</span> <span class="f">delete_bucket</span>(c: Client, bucket: <span class="t">str</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>, <span class="t">str</span>]</code> <span class="src">stdlib/s3/s3.sl:348</span><a class="anchor" href="#delete-bucket">#</a></div></div><div class="api-item" id="presign-get"><div class="api-sig"><code><span class="k">fn</span> <span class="f">presign_get</span>(c: Client, bucket: <span class="t">str</span>, key: <span class="t">str</span>, expires_seconds: <span class="t">int</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>]</code> <span class="src">stdlib/s3/s3.sl:359</span><a class="anchor" href="#presign-get">#</a></div><p class="api-doc">A URL anyone can GET (or PUT, below) for expires_seconds (1 second to 7 days), signed now: for downloads and browser uploads that never see your keys.</p></div><div class="api-item" id="presign-put"><div class="api-sig"><code><span class="k">fn</span> <span class="f">presign_put</span>(c: Client, bucket: <span class="t">str</span>, key: <span class="t">str</span>, expires_seconds: <span class="t">int</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>]</code> <span class="src">stdlib/s3/s3.sl:363</span><a class="anchor" href="#presign-put">#</a></div></div><div class="api-item" id="presign-at"><div class="api-sig"><code><span class="k">fn</span> <span class="f">presign_at</span>(c: Client, method: <span class="t">str</span>, bucket: <span class="t">str</span>, key: <span class="t">str</span>, expires_seconds: <span class="t">int</span>, amzdate: <span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>]</code> <span class="src">stdlib/s3/s3.sl:369</span><a class="anchor" href="#presign-at">#</a></div><p class="api-doc">presign at a given time (&quot;20130524T000000Z&quot;), for tests and for URLs that must agree across servers.</p></div><div class="api-item" id="sign-request"><div class="api-sig"><code><span class="k">fn</span> <span class="f">sign_request</span>(c: Client, method: <span class="t">str</span>, host: <span class="t">str</span>, path: <span class="t">str</span>, query: <span class="t">map</span>[<span class="t">str</span>]<span class="t">str</span>, headers: <span class="t">map</span>[<span class="t">str</span>]<span class="t">str</span>, payload_hash: <span class="t">str</span>, amzdate: <span class="t">str</span>) -&gt; <span class="t">str</span></code> <span class="src">stdlib/s3/s3.sl:421</span><a class="anchor" href="#sign-request">#</a></div><p class="api-doc">The Authorization header for a request (SigV4, signed headers are host, x-amz-content-sha256, x-amz-date, any x-amz-security-token and the caller&#x27;s headers). headers holds lowercase names.</p></div><div class="api-item" id="uri-encode"><div class="api-sig"><code><span class="k">fn</span> <span class="f">uri_encode</span>(s: <span class="t">str</span>, keep_slash: <span class="t">bool</span>) -&gt; <span class="t">str</span></code> <span class="src">stdlib/s3/s3.sl:471</span><a class="anchor" href="#uri-encode">#</a></div><p class="api-doc">RFC 3986 percent-encoding as SigV4 wants it: everything but A-Z a-z 0-9 - _ . ~ (and / in paths, when keep_slash).</p></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

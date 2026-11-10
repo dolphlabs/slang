@@ -2626,6 +2626,56 @@ malformed frame drops and redials it. Subjects are validated (no
 whitespace, no empty tokens, no wildcards in a publish), and header names
 and values are refused if they would inject protocol lines.
 
+#### `s3`
+
+S3-compatible object storage, signed with AWS Signature Version 4: AWS S3,
+Cloudflare R2, MinIO and the rest.
+
+```slang
+import "s3";
+import "proc";
+
+let r = s3.new_client("https://s3.eu-west-1.amazonaws.com", "eu-west-1", access_key, secret_key);
+// or s3.from_env(proc.getenv): AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+// AWS_SESSION_TOKEN, AWS_REGION, S3_ENDPOINT
+guard let c = r else let e = err_of(r) { panic(e); }
+
+s3.put_object(c, "uploads", "avatars/42.png", png, "image/png", deadline);   // ok(etag)
+s3.get_object(c, "uploads", "avatars/42.png", deadline);                     // ok(bytes)
+s3.get_range(c, "uploads", "logs/today", 0, 1023, deadline);                 // first KiB
+s3.head_object(c, "uploads", "avatars/42.png", deadline);                    // ok(some(Object)) or ok(none)
+s3.delete_object(c, "uploads", "avatars/42.png", deadline);
+s3.list_objects(c, "uploads", "avatars/", "/", "", 1000, deadline);          // ok(Page); page.next continues
+s3.put_large(c, "backups", "db.dump", dump, "", 16 * 1048576, deadline);     // multipart
+s3.presign_get(c, "uploads", "avatars/42.png", 900);                         // ok(url) for 15 minutes
+s3.presign_put(c, "uploads", "incoming/x.bin", 300);
+```
+
+The payload is hashed into the signature (`x-amz-content-sha256`), so a
+body altered in transit is refused by the server. Signing keys are cached
+for the day they belong to. Errors carry S3's own code and message
+(`s3: NoSuchKey: The specified key does not exist.`).
+
+**Addressing and listing.** Addressing is path-style by default
+(`endpoint/bucket/key`), which MinIO, R2 and most compatible stores want.
+Set `c.path_style = false` for virtual-host style (`bucket.endpoint/key`).
+`list_objects` returns up to 1000 keys a page in key order. Pass `page.next`
+to get the next page; with a delimiter, deeper keys fold into
+`page.prefixes`.
+
+**Multipart.** `create_multipart`, `upload_part`, `complete_multipart` and
+`abort_multipart` are the raw steps (every part but the last at least
+5 MiB). `put_large` drives them, uploading in one request when the data
+fits in a part, and aborting if a part fails so no orphaned parts are left
+to be billed.
+
+**Presigned URLs** last 1 second to 7 days. `presign_at` signs at a given
+time, for tests and for URLs several servers must agree on.
+
+**Limits.** Objects are read and written whole, in memory (or as one byte
+range). Redirects are not followed, since a redirect would change the host
+the signature covers.
+
 #### `regex`
 
 Regular expressions on `str` or `bytes`, matched by slang's own
@@ -3053,7 +3103,17 @@ strings.join(parts, ",");               // the inverse of split
 strings.join_bytes(parts, b",");        // the same for [bytes]: sized once, copied once
 
 strings.from_float(0.1 + 0.2);          // "0.30000000000000004"
+
+strings.escape_html("<a href='x'>");    // "&lt;a href=&#39;x&#39;&gt;"
+strings.escape_js("it's </script>");    // "it\u0027s \u003c/script\u003e"
 ```
+
+`escape_html` writes `& < > " '` as character references, which is safe
+in text and in a quoted attribute of either quote. `escape_js` makes the
+inside of a JavaScript string literal of any quote (`'`, `"` or a
+backquote), safe inside `<script>` and inside an attribute. Both return
+the input itself, with no allocation, when nothing needs escaping.
+`template` escapes every value through them.
 
 `from_float` returns the shortest text that `to_float` reads back as
 exactly the same number, as `to_str`, `println`, `inspect` and
@@ -3159,6 +3219,7 @@ encoding.base64url_encode(sig);               // a JWT segment: -_ alphabet, no 
 encoding.url_encode("a b&c");                 // "a%20b%26c"
 encoding.form_encode("a b&c");                // "a+b%26c"
 encoding.float64_to_le(1.5);                   // exact IEEE-754 bytes, low byte first
+encoding.json_tape("{\"a\":[1,2]}");        // ok([5,5,1,0,11, 7,2,0,2,3, 4,5,2,5,10, ...]): see below
 
 let q = "/search?q=hello+world&page=2";
 guard let term = encoding.query_get(q, "q") else { return; }   // "hello world"
@@ -3181,6 +3242,7 @@ encoding.query_keys(q);                                        // ["q", "page"]
 | `encoding.query_keys` | `(url: str) -> [str]` |
 | `encoding.float64_to_le` | `(value: float) -> bytes` |
 | `encoding.float64_from_le` | `(bytes: bytes) -> result[float, str]` |
+| `encoding.json_tape` | `(text: str) -> result[[int], str]` |
 
 Like `regex`, `strings` and `os` — and unlike `crypto` and `sql` — this
 is pure computation, so importing it adds no link flag.
@@ -3219,6 +3281,16 @@ Five things worth knowing:
   a query may legally repeat a key and a map would have to drop one,
   the same reason `os.environ` is a list. `query_get` takes the first
   value; a bare `?debug` is present with an empty value, not absent.
+
+- **`json_tape` is where things are, not a copy of them.** It validates
+  a JSON document (RFC 8259, nesting up to 512) in one C pass and returns
+  five ints per value, in document order: kind (0 null, 1 bool, 2 number,
+  3 string, 4 list, 5 object, 7 key; plus 8 for a string or key holding
+  an escape), the entry after the value's subtree, its child count, and
+  its byte span (a string's inside, between the quotes). A reader walks
+  it, skips a subtree in one step, and materialises only the strings it
+  reads (`strings.from_bytes` over the span). `template` reads its data
+  this way; use `json.decode` when the shape is known.
 
 Percent-escapes are emitted uppercase (RFC 3986 §2.1) and hex digests
 lowercase (what `sha256sum`, git and every API that returns one use).
@@ -4048,6 +4120,78 @@ There's a narrow startup race inherent to this: a signal that arrives in
 the brief window before `main()` blocks the signals gets the OS's default
 disposition (immediate termination) instead of graceful handling, same as
 any signal-handling program.
+
+#### `template`
+
+HTML templates that escape each value for where it lands, and plain-text
+templates for email bodies and other text. The syntax is Go's
+(`{{ .field }}`, `if`, `range`, `with`, `define`, pipelines), and so is the
+safety model: escaping is decided by the HTML around each action when the
+template is parsed, not by the caller remembering to escape.
+
+```slang
+import "template";
+
+gc struct Item { name: str, url: str, price: int }
+gc struct Page { title: str, items: [Item], user: str }
+
+let r = template.parse("page",
+    "<h1>{{ .title }}</h1>" +
+    "<ul>{{ range $i, $it := .items }}" +
+    "<li><a href=\"{{ $it.url }}\" title=\"{{ $it.name }}\">{{ add $i 1 }}. {{ $it.name }}</a></li>" +
+    "{{ else }}<li>nothing yet</li>{{ end }}</ul>" +
+    "<script>const user = {{ .user }};</script>");
+guard let t = r else let e = err_of(r) { panic(e); }      // syntax and context errors, with line numbers
+let html = template.render(t, page);                       // result[str, str]
+
+template.add(t, "layout", "<html><body>{{ template \"page\" . }}</body></html>");
+template.render_named(t, "layout", page);
+
+let mail = template.parse_text("welcome", "Hi {{ .name }},\n{{ range .items }}- {{ .name }}\n{{ end }}");
+```
+
+Each action is escaped for its context:
+
+| Where | What the value becomes |
+|---|---|
+| text, quoted attribute | `& < > " '` as character references |
+| URL attribute (`href`, `src`, `action`, …), at the start | only `http`, `https`, `mailto`, `tel` or a relative URL; anything else, `javascript:` above all, becomes `about:invalid#blocked` |
+| later in a URL | percent-encoded (`/search?q={{ .q }}`) |
+| `<script>`, `on*` attributes | a JavaScript literal (JSON), `<` `>` `&` `'` as `\u` escapes |
+| inside a JS string | escaped as string content, whatever the quotes |
+| `<style>`, `style` attributes | letters, digits and `# % . , -` only, else `ZgotmplZ` |
+
+Refused when the template is parsed: an action in a tag or attribute
+name, in an unquoted attribute value, in an HTML or JavaScript comment,
+and branches of an `if` or `range` that leave the HTML in different
+states (`{{ if .x }}<a href="{{ end }}`). `{{ .html | raw }}` writes
+trusted HTML unescaped in text, and escapes it anywhere else.
+
+**Data** is any value `json.encode` takes: a struct's fields are `.name`,
+a list ranges, a map's keys are fields (ranged in sorted key order).
+A missing field is an error, not an empty string, so a typo does not
+render as silence; use `if`, `with` or `default` for data that may be
+absent.
+
+**Language.** `{{ if }}`/`{{ else if }}`/`{{ else }}`, `{{ with }}`,
+`{{ range }}` (with `$i, $x :=` and `{{ else }}` for empty), `{{ $x := … }}`
+and `{{ $x = … }}` with block scope, `$` for the root, pipelines
+(`{{ .name | upper }}`), parentheses (`{{ len (index .items 0).tags }}`),
+`{{/* comments */}}` and `{{-`/`-}}` to trim whitespace, `{{ define }}`
+and `{{ template "name" . }}` (nested up to 64 deep). Functions: `eq ne
+lt le gt ge`, `and or not` (short-circuit, as Go's), `len index default
+join upper lower trim add sub`, `print printf` (`%s %v %d %f %.2f %q %x
+%t`), `json urlquery raw`. An unknown function or variable is a parse
+error.
+
+**Cost.** Parsing and escape analysis happen once; a `Template` is safe
+to render from many tasks at once. Rendering encodes the data with
+`json.encode` and indexes it with `encoding.json_tape` (one C pass, no
+allocation per value), resolves variables to slots at parse time, and
+escapes with `strings.escape_html`/`escape_js`, which return their input
+unchanged when nothing needs escaping. A 100-row table page (15 KB, six
+actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
+`html/template` on the same page, run alternately on one machine.
 
 ## Concurrency
 
