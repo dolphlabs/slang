@@ -52,6 +52,7 @@ encoding.query_keys(q);                                        // ["q", "page"]
 | `encoding.base32hex_decode` | `(s: str) -> result[bytes, str]` |
 | `encoding.crockford_encode` | `(b: bytes) -> str` |
 | `encoding.crockford_decode` | `(s: str) -> result[bytes, str]` |
+| `encoding.csv_record` | `(data: bytes, from: int, sep: int, quote: int, flags: int) -> [int]` |
 
 Like `regex`, `strings` and `os` — and unlike `crypto` and `sql` — this
 is pure computation, so importing it adds no link flag.
@@ -162,6 +163,8 @@ Both decoders accept either case.
 ### `encoding.crockford_encode(bytes) -> str`
 
 ### `encoding.crockford_decode(str) -> result[bytes,str]`
+
+### `encoding.csv_record(bytes, int, int, int, int) -> [int]`
 
 ---
 

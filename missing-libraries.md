@@ -109,7 +109,7 @@ Common backend needs with no package today.
 
 ## 4. Smaller formats and protocols
 
-- [ ] **CSV** (stdlib): RFC 4180 read and write, streaming, quoted fields,
+- [x] **CSV** (stdlib): RFC 4180 read and write, streaming, quoted fields,
   row and field size limits.
 - [x] **base32** (stdlib, in `encoding`): RFC 4648, for TOTP secrets and
   readable codes. Built as `encoding.base32_*`, `base32hex_*` and

@@ -974,3 +974,138 @@ static char *sl_encoding_crockford_encode(sl_bytes *b) { return sl_enc_b32(b, SL
 static sl_res_bytes_str *sl_encoding_crockford_decode(const char *s) {
     return sl_enc_b32_decode(s, SL_ENC_B32_CROCKFORD, 1, "crockford_decode");
 }
+/* ---- CSV records ------------------------------------------------------
+ *
+ * One CSV record (RFC 4180) from data[from..], as field spans, for
+ * stdlib/csv: the scan is per byte, so it is done here and the package
+ * keeps only buffering, limits and the API. Returns
+ *
+ *     [status, next, nfields, lines, start1, end1, esc1, start2, end2, esc2, ...]
+ *
+ *   status 0  a record: next is the offset after its line ending
+ *          1  the record does not end within data and !final: read more
+ *          2  malformed: next is the offset of the offending byte, and
+ *             nfields is the reason (1 a quote in an unquoted field,
+ *             2 a character after a closing quote, 3 an unclosed quote,
+ *             4 out of memory)
+ *          3  no record: from is at the end of data
+ *   lines is how many line endings the record takes up (more than one
+ *   when a quoted field holds a newline), for error positions;
+ *   a quoted field's span is inside its quotes; esc is 1 when it holds
+ *   doubled quotes to collapse.
+ *
+ * flags: 1 lazy, 2 final (data is all there is). sep and quote are
+ * compared as ints, so 256 means "none" (a comment line is scanned as
+ * one field up to its line end).
+ * Line endings are CRLF or LF; a CR not before LF is data. lazy accepts
+ * a quote inside an unquoted field and text after a closing quote, as
+ * data, the way Go's LazyQuotes does. */
+static sl_arr *sl_encoding_csv_record(sl_bytes *data, long long from, long long sep,
+                                      long long quote, long long flags) {
+    bool lazy = (flags & 1) != 0, final = (flags & 2) != 0;
+    long long n = data ? data->len : 0;
+    const unsigned char *b = data ? data->ptr : (const unsigned char *)"";
+    /* spans gather in a C buffer -- on the stack for up to 64 fields --
+       and the list is allocated once, at its exact size, at the end:
+       growing it a push at a time cost more than the scan itself */
+    long long stackbuf[4 + 3 * 64];
+    long long *v = stackbuf;
+    long long cap = 4 + 3 * 64, used = 4;
+    long long status = 0, next = from, nf = 0;
+    if (from < 0 || from >= n) {
+        status = 3;
+        goto done;
+    }
+    long long i = from;
+    for (;;) {
+        /* one field starts at i */
+        long long fs, fe, esc = 0;
+        if (i < n && b[i] == quote) {
+            fs = i + 1;
+            long long j = fs;
+            for (;;) {
+                const unsigned char *q = j < n ? memchr(b + j, (int)quote, (size_t)(n - j)) : NULL;
+                if (!q) {
+                    if (!final) { status = 1; goto done; }
+                    status = 2; next = fs - 1; nf = 3; goto done;
+                }
+                j = q - b;
+                if (j + 1 < n && b[j + 1] == quote) { esc = 1; j += 2; continue; }
+                if (j + 1 >= n && !final) { status = 1; goto done; }
+                break;
+            }
+            fe = j;
+            i = j + 1;
+            /* after the closing quote: a separator, a line end, or the end */
+            if (i < n && b[i] == '\r' && i + 1 >= n && !final) { status = 1; goto done; }
+            if (i < n && b[i] != sep && b[i] != '\n' &&
+                !(b[i] == '\r' && i + 1 < n && b[i + 1] == '\n') &&
+                !(b[i] == '\r' && i + 1 >= n)) {
+                if (!lazy) { status = 2; next = i; nf = 2; goto done; }
+                /* lazy: the rest of the field up to the separator is data,
+                   so the span runs from the opening quote's content on */
+                while (i < n && b[i] != sep && b[i] != '\n') i++;
+                if (i < n && b[i] == '\n' && i > fs && b[i - 1] == '\r') fe = i - 1; else fe = i;
+                esc = 1;
+            }
+        } else {
+            fs = i;
+            while (i < n && b[i] != sep && b[i] != '\n') {
+                if (b[i] == quote && !lazy) { status = 2; next = i; nf = 1; goto done; }
+                i++;
+            }
+            fe = i;
+            if (i < n && b[i] == '\n' && fe > fs && b[fe - 1] == '\r') fe--;
+            if (i >= n && fe > fs && b[fe - 1] == '\r') {
+                /* a CR at the very end: a line ending if nothing follows */
+                if (!final) { status = 1; goto done; }
+                fe--;
+            }
+        }
+        if (used + 3 > cap) {
+            long long ncap = cap * 2;
+            sl_rt_preempt_disable();
+            long long *nv = (long long *)malloc((size_t)ncap * sizeof(long long));
+            if (nv) {
+                memcpy(nv, v, (size_t)used * sizeof(long long));
+                if (v != stackbuf) free(v);
+            }
+            sl_rt_preempt_enable();
+            if (!nv) { status = 2; next = fs; nf = 4; goto done; }
+            v = nv;
+            cap = ncap;
+        }
+        v[used++] = fs;
+        v[used++] = fe;
+        v[used++] = esc;
+        nf++;
+        if (i < n && b[i] == sep) { i++; continue; }
+        if (i < n && b[i] == '\r' && i + 1 < n && b[i + 1] == '\n') { next = i + 2; break; }
+        if (i < n && b[i] == '\n') { next = i + 1; break; }
+        if (i < n && b[i] == '\r') { next = i + 1; break; }
+        /* the end of data with no line ending */
+        if (!final) { status = 1; goto done; }
+        next = n;
+        break;
+    }
+done:;
+    long long lines = 0;
+    if (status == 0) {
+        const unsigned char *p = b + from, *e = b + next;
+        while (p < e && (p = memchr(p, '\n', (size_t)(e - p))) != NULL) { lines++; p++; }
+        if (lines == 0) lines = 1;
+    }
+    v[0] = status;
+    v[1] = next;
+    v[2] = nf;
+    v[3] = lines;
+    if (status != 0) used = 4;
+    sl_arr *out = sl_arr_from(v, used, sizeof(long long), 0);
+    if (v != stackbuf) {
+        sl_rt_preempt_disable();
+        free(v);
+        sl_rt_preempt_enable();
+    }
+    return out;
+}
+
