@@ -71,6 +71,7 @@ cells by row and column index; `pg.col(rows, "name")` finds an index.
 | `pg.get_bool(rows, r, c)` | `bool` |
 | `pg.get_bytes(rows, r, c)` | `bytea` |
 | `pg.get_time(rows, r, c)` | `timestamptz` as a `timez.Time` (`result`: err for infinity or a BC date); a `timestamp` without a zone is read as UTC |
+| `pg.get_decimal(rows, r, c)` | `numeric` and the integer types as an exact `decimal.Decimal`, at Postgres's scale (`result`: err for NaN, infinity or more than 38 digits) |
 | `pg.is_null(rows, r, c)` | whether the cell is NULL |
 
 The getters **panic** on NULL, on a column of a type they do not read,
@@ -403,6 +404,10 @@ Sent in binary, so any byte values -- NULs included -- arrive intact. For a byte
 
 An instant for a timestamptz parameter, as RFC 3339 in UTC. Postgres keeps microseconds: a finer fraction is rounded by the server.
 
+### `fn arg_decimal(d: decimal.Decimal) -> Arg`
+
+A decimal for a numeric parameter, as its exact text: no float on the way, so 0.1 arrives as 0.1.
+
 ### `fn query(c: Conn, sql: str, args: [Arg], deadline: until) -> result[Rows, str]`
 
 Runs one query with parameters ($1, $2, ...) through the extended protocol: the values travel separately from the SQL text, so they can never be parsed as SQL. Returns every row, buffered; for a result too big to hold at once, use stream().
@@ -482,6 +487,10 @@ int2, int4, int8 and oid. A timestamptz or timestamp cell as RFC 3339 text: Post
 ### `fn get_time(rows: Rows, r: int, c: int) -> result[timez.Time, str]`
 
 The instant in a timestamptz (or timestamp, read as UTC) cell. err for another column type, infinity, a BC date, or a seconds-level offset.
+
+### `fn get_decimal(rows: Rows, r: int, c: int) -> result[decimal.Decimal, str]`
+
+The exact value of a numeric or integer cell (int2, int4, int8, numeric), at the scale Postgres reports: numeric(12, 2) gives "19.90", not 19.9. err for another column type, NaN or an infinity, or a value past decimal's 38 digits.
 
 ### `fn get_int(rows: Rows, r: int, c: int) -> int`
 

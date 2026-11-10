@@ -3298,7 +3298,10 @@ error), every scalar, `bytes` (RFC 4648 base64 strings on the
 wire), and `timez.Time` (an RFC 3339 string: written as `rfc3339_nano()`
 writes it, read with `parse_rfc3339()`'s rules, offsets applied; about
 115 ns to encode and 130 ns to decode, in C, so a struct without one
-compiles to exactly the codecs it did before). `rawptr`, `chan[T]`, and
+compiles to exactly the codecs it did before), and `decimal.Decimal`
+(written as a string of its exact text, `"19.90"`; read from a string or
+a number by `decimal.parse`'s rules, from the number's text and never
+through a float, also in C). `rawptr`, `chan[T]`, and
 `result[T,E]` can't appear anywhere in a decode/encode target type. A
 missing JSON key defaults an `opt[T]` field to `none`; for any other
 field type it's a decode error. Unknown JSON keys are ignored. Every
@@ -3845,6 +3848,7 @@ cells by row and column index; `pg.col(rows, "name")` finds an index.
 | `pg.get_bool(rows, r, c)` | `bool` |
 | `pg.get_bytes(rows, r, c)` | `bytea` |
 | `pg.get_time(rows, r, c)` | `timestamptz` as a `timez.Time` (`result`: err for infinity or a BC date); a `timestamp` without a zone is read as UTC |
+| `pg.get_decimal(rows, r, c)` | `numeric` and the integer types as an exact `decimal.Decimal`, at Postgres's scale (`result`: err for NaN, infinity or more than 38 digits) |
 | `pg.is_null(rows, r, c)` | whether the cell is NULL |
 
 The getters **panic** on NULL, on a column of a type they do not read,
@@ -5225,6 +5229,64 @@ be coprime), `binomial_mod` (Lucas, for a prime modulus) and
 function given one <= 0 returns `none`, 0 or `false` rather than
 panicking, and no result is negative.
 
+#### `decimal`
+
+Exact decimal arithmetic for money: up to 38 significant digits (SQL's
+`DECIMAL(38)`), an explicit scale, seven rounding modes, and overflow as
+`none` or an error, never a wrap.
+
+```slang
+import "decimal";
+
+let r = decimal.parse("19.99");                // result[Decimal, str]
+guard let price = r else let e = err_of(r) { panic(e); }
+let total = decimal.mul(price, decimal.from_int(3)) ?? decimal.zero();   // 59.97
+let rate = decimal.parse("0.075") ?? decimal.zero();
+let vat = decimal.mul_round(total, rate, 2, decimal.Rounding.HalfEven)
+          ?? decimal.zero();                    // 4.50
+decimal.format(vat);                            // "4.50"
+decimal.div(total, decimal.from_int(7), 2, decimal.Rounding.HalfEven);  // ok(8.57)
+decimal.split(total, 2);                        // [29.99, 29.98]: no cent lost
+decimal.allocate(total, [1, 2]);                // ok([19.99, 39.98])
+decimal.to_units(total, 2, decimal.Rounding.HalfEven) ?? 0;   // 5997
+decimal.eq(decimal.parse("1.5") ?? total, decimal.parse("1.50") ?? total);  // true
+```
+
+A `Decimal` is a coefficient and a scale (digits after the point, 0 to
+38), kept as Postgres's `numeric` keeps it: `"1.50"` stays 1.50, `add`
+keeps the larger scale, `mul` adds the two. It is a value (five base-10^9
+limbs), so arithmetic allocates nothing; only `format`, `split` and
+`allocate` build something on the heap.
+
+- **Exact unless you ask.** `add`, `sub` and `mul` are exact and return
+  `none` when the result needs more than 38 digits (or `mul`, a scale past
+  38: use `mul_round`). `mul_round`, `div` and `round` round to the scale
+  you give, by the `Rounding` you give: `HalfEven` (banker's, the usual
+  choice for money), `HalfUp`, `HalfDown`, `Down` and `Up` (toward and
+  away from zero), `Floor`, `Ceiling`. `div` is an error for a zero
+  divisor.
+- **Parsing is strict**, like `to_int`: an optional sign, digits, an
+  optional fraction and exponent (`"1.5e3"`). No spaces, separators,
+  leading or trailing point, NaN or infinity. `parse_bytes(b, lo, hi)`
+  reads a number inside a buffer without making a str. `from_float`
+  goes through the float's shortest text, so `0.1` is 0.1, not
+  0.1000000000000000055511151231257827.
+- **Comparing:** `cmp`, `eq`, `lt`, `le`, `gt`, `ge`, `min`, `max` compare
+  values, so 1.5 equals 1.50. Structs have no `==`. Use `normalize` (strip
+  trailing zeros) before a Decimal becomes a map key.
+- **Splitting money:** `split(d, n)` and `allocate(d, weights)` divide an
+  amount at its own scale so the parts add up to it exactly. The
+  leftover smallest units go to the parts with the largest remainders,
+  earlier ones first.
+- **JSON and Postgres.** A `decimal.Decimal` field is written by
+  `json.encode` as a string holding its exact text (`"19.90"`), which is
+  safe for JavaScript clients, whose numbers lose digits past 2^53.
+  `json.decode` reads one from a string or a number, exactly, without a
+  float in between. `pg.arg_decimal(d)` binds one for a `numeric`
+  parameter, and `pg.get_decimal(rows, r, c)` reads a `numeric` or
+  integer column at the scale Postgres reports. NaN and infinity are
+  errors.
+
 #### `rand`
 
 Seeded, non-cryptographic random numbers for tests, simulations, sampling
@@ -5563,6 +5625,7 @@ any signal-handling program.
 - [byteutil](packages/byteutil.md) -- source package, 6 public items
 - [compress](packages/compress.md) -- compiler-provided, 7 public items
 - [crypto](packages/crypto.md) -- compiler-provided, 9 public items
+- [decimal](packages/decimal.md) -- source package, 37 public items
 - [encoding](packages/encoding.md) -- compiler-provided, 14 public items
 - [flags](packages/flags.md) -- source package, 23 public items
 - [fs](packages/fs.md) -- compiler-provided, 9 public items
@@ -5577,7 +5640,7 @@ any signal-handling program.
 - [math/stats](packages/math/stats.md) -- source package, 91 public items
 - [net](packages/net.md) -- compiler-provided, 34 public items
 - [os](packages/os.md) -- compiler-provided, 18 public items
-- [pg](packages/pg.md) -- source package, 56 public items
+- [pg](packages/pg.md) -- source package, 58 public items
 - [proc](packages/proc.md) -- compiler-provided, 9 public items
 - [rand](packages/rand.md) -- source package, 13 public items
 - [redis](packages/redis.md) -- source package, 161 public items
@@ -6359,6 +6422,202 @@ let valid = r ?? false;
 ### `crypto.argon2id_verify(bytes, bytes, bytes, int, int, int) -> result[bool,str]`
 
 ### `crypto.rsa_verify_sha256(bytes, bytes, bytes, bytes) -> result[bool,str]`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# decimal
+
+# decimal
+
+> Package decimal.
+
+Exact decimal arithmetic for money: up to 38 significant digits (SQL's
+`DECIMAL(38)`), an explicit scale, seven rounding modes, and overflow as
+`none` or an error, never a wrap.
+
+```slang
+import "decimal";
+
+let r = decimal.parse("19.99");                // result[Decimal, str]
+guard let price = r else let e = err_of(r) { panic(e); }
+let total = decimal.mul(price, decimal.from_int(3)) ?? decimal.zero();   // 59.97
+let rate = decimal.parse("0.075") ?? decimal.zero();
+let vat = decimal.mul_round(total, rate, 2, decimal.Rounding.HalfEven)
+          ?? decimal.zero();                    // 4.50
+decimal.format(vat);                            // "4.50"
+decimal.div(total, decimal.from_int(7), 2, decimal.Rounding.HalfEven);  // ok(8.57)
+decimal.split(total, 2);                        // [29.99, 29.98]: no cent lost
+decimal.allocate(total, [1, 2]);                // ok([19.99, 39.98])
+decimal.to_units(total, 2, decimal.Rounding.HalfEven) ?? 0;   // 5997
+decimal.eq(decimal.parse("1.5") ?? total, decimal.parse("1.50") ?? total);  // true
+```
+
+A `Decimal` is a coefficient and a scale (digits after the point, 0 to
+38), kept as Postgres's `numeric` keeps it: `"1.50"` stays 1.50, `add`
+keeps the larger scale, `mul` adds the two. It is a value (five base-10^9
+limbs), so arithmetic allocates nothing; only `format`, `split` and
+`allocate` build something on the heap.
+
+- **Exact unless you ask.** `add`, `sub` and `mul` are exact and return
+  `none` when the result needs more than 38 digits (or `mul`, a scale past
+  38: use `mul_round`). `mul_round`, `div` and `round` round to the scale
+  you give, by the `Rounding` you give: `HalfEven` (banker's, the usual
+  choice for money), `HalfUp`, `HalfDown`, `Down` and `Up` (toward and
+  away from zero), `Floor`, `Ceiling`. `div` is an error for a zero
+  divisor.
+- **Parsing is strict**, like `to_int`: an optional sign, digits, an
+  optional fraction and exponent (`"1.5e3"`). No spaces, separators,
+  leading or trailing point, NaN or infinity. `parse_bytes(b, lo, hi)`
+  reads a number inside a buffer without making a str. `from_float`
+  goes through the float's shortest text, so `0.1` is 0.1, not
+  0.1000000000000000055511151231257827.
+- **Comparing:** `cmp`, `eq`, `lt`, `le`, `gt`, `ge`, `min`, `max` compare
+  values, so 1.5 equals 1.50. Structs have no `==`. Use `normalize` (strip
+  trailing zeros) before a Decimal becomes a map key.
+- **Splitting money:** `split(d, n)` and `allocate(d, weights)` divide an
+  amount at its own scale so the parts add up to it exactly. The
+  leftover smallest units go to the parts with the largest remainders,
+  earlier ones first.
+- **JSON and Postgres.** A `decimal.Decimal` field is written by
+  `json.encode` as a string holding its exact text (`"19.90"`), which is
+  safe for JavaScript clients, whose numbers lose digits past 2^53.
+  `json.decode` reads one from a string or a number, exactly, without a
+  float in between. `pg.arg_decimal(d)` binds one for a `numeric`
+  parameter, and `pg.get_decimal(rows, r, c)` reads a `numeric` or
+  integer column at the scale Postgres reports. NaN and infinity are
+  errors.
+
+## API
+
+### `let MAX_DIGITS = 38;`
+
+The most significant digits a Decimal holds, and the largest scale.
+
+### `let MAX_SCALE = 38;`
+
+### `struct Decimal`
+
+A decimal number. Its fields are the representation, not an API: make one with parse, from_int, from_units or from_float.
+
+### `fn zero() -> Decimal`
+
+0, at scale 0.
+
+### `fn from_int(n: int) -> Decimal`
+
+n, at scale 0. Every int fits.
+
+### `fn from_units(units: int, scale: int) -> opt[Decimal]`
+
+units * 10^-scale: from_units(1999, 2) is 19.99. none if scale is outside 0 to 38.
+
+### `fn parse(s: str) -> result[Decimal, str]`
+
+The decimal written in s: an optional sign, digits, an optional fraction after a point, and an optional exponent ("1.5e3", "2E-4"). Strict, like to_int: no spaces, no thousands separators, no leading or trailing point, no NaN or infinity. The scale is the number of fraction digits less the exponent ("1.50" has scale 2, "1.5e3" scale 0); trailing zeros past scale 38 are dropped when they are exact.
+
+### `fn parse_bytes(b: bytes, lo: int, hi: int) -> result[Decimal, str]`
+
+parse over b[lo..hi], with no str made: for a number inside a request body or a wire buffer.
+
+### `fn from_float(f: float, scale: int, mode: Rounding) -> opt[Decimal]`
+
+The decimal nearest to f, rounded to `scale` digits by `mode`; none for NaN, an infinity, a scale outside 0 to 38, or a value past 38 digits. f is read through its shortest round-trip text, so 0.1 gives exactly 0.1, not the binary fraction nearest it.
+
+### `fn scale_of(d: Decimal) -> int`
+
+The digits after the point.
+
+### `fn precision(d: Decimal) -> int`
+
+How many significant digits the coefficient has (0 has 1).
+
+### `fn is_zero(d: Decimal) -> bool`
+
+### `fn is_neg(d: Decimal) -> bool`
+
+### `fn sign(d: Decimal) -> int`
+
+-1, 0 or 1.
+
+### `fn format(d: Decimal) -> str`
+
+Plain notation, every digit of the scale kept: "-19.90", "0.005", "42".
+
+### `fn to_units(d: Decimal, scale: int, mode: Rounding) -> opt[int]`
+
+d in units of 10^-scale, rounded by mode: to_units(19.999, 2, HalfUp) is 2000. none if scale is outside 0 to 38 or the units do not fit an int.
+
+### `fn int_of(d: Decimal, mode: Rounding) -> opt[int]`
+
+d rounded to a whole number by mode, as an int; none past an int.
+
+### `fn float_of(d: Decimal) -> float`
+
+The float nearest to d. Floats cannot hold most decimals exactly: use this for display or statistics, never to compute money.
+
+### `fn cmp(a: Decimal, b: Decimal) -> int`
+
+-1, 0 or 1 as a is less than, equal to or greater than b, by value: cmp(1.5, 1.50) is 0.
+
+### `fn eq(a: Decimal, b: Decimal) -> bool`
+
+a and b are the same number, whatever their scales.
+
+### `fn lt(a: Decimal, b: Decimal) -> bool`
+
+### `fn le(a: Decimal, b: Decimal) -> bool`
+
+### `fn gt(a: Decimal, b: Decimal) -> bool`
+
+### `fn ge(a: Decimal, b: Decimal) -> bool`
+
+### `fn min(a: Decimal, b: Decimal) -> Decimal`
+
+### `fn max(a: Decimal, b: Decimal) -> Decimal`
+
+### `fn neg(d: Decimal) -> Decimal`
+
+### `fn abs(d: Decimal) -> Decimal`
+
+### `fn add(a: Decimal, b: Decimal) -> opt[Decimal]`
+
+a + b, exactly, at the larger of the two scales; none past 38 digits.
+
+### `fn sub(a: Decimal, b: Decimal) -> opt[Decimal]`
+
+a - b, exactly, at the larger of the two scales; none past 38 digits.
+
+### `fn mul(a: Decimal, b: Decimal) -> opt[Decimal]`
+
+a * b, exactly, at the sum of the scales; none if the product needs more than 38 digits or a scale past 38 (use mul_round for those).
+
+### `fn mul_round(a: Decimal, b: Decimal, scale: int, mode: Rounding) -> opt[Decimal]`
+
+a * b rounded to `scale` digits by mode; none if scale is outside 0 to 38 or the rounded product needs more than 38 digits.
+
+### `fn div(a: Decimal, b: Decimal, scale: int, mode: Rounding) -> result[Decimal, str]`
+
+a / b rounded to `scale` digits by mode. An error for division by zero, a scale outside 0 to 38, or a quotient past 38 digits.
+
+### `fn round(d: Decimal, scale: int, mode: Rounding) -> opt[Decimal]`
+
+d with exactly `scale` digits after the point: rounded by mode when that is fewer than it has, padded with zeros when more. none if scale is outside 0 to 38 or the result needs more than 38 digits.
+
+### `fn normalize(d: Decimal) -> Decimal`
+
+d with trailing fraction zeros removed: 1.500 becomes 1.5, 2.00 becomes 2. Use it before a Decimal becomes a map key.
+
+### `fn split(d: Decimal, n: int) -> [Decimal]`
+
+d in n parts at d's scale that add up to d exactly, as equal as they can be: the first ones take the leftover smallest units. split(100.00, 3) is [33.34, 33.33, 33.33]. Empty when n is not positive.
+
+### `fn allocate(d: Decimal, weights: [int]) -> result[[Decimal], str]`
+
+d divided in proportion to weights, at d's scale, adding up to d exactly: each part is rounded down and the leftover smallest units go to the parts with the largest remainders (earlier ones first on a tie). allocate(10.00, [1, 2]) is [3.33, 6.67]. An error for an empty list, a negative weight or weights summing to zero.
 
 ---
 
@@ -8250,7 +8509,10 @@ error), every scalar, `bytes` (RFC 4648 base64 strings on the
 wire), and `timez.Time` (an RFC 3339 string: written as `rfc3339_nano()`
 writes it, read with `parse_rfc3339()`'s rules, offsets applied; about
 115 ns to encode and 130 ns to decode, in C, so a struct without one
-compiles to exactly the codecs it did before). `rawptr`, `chan[T]`, and
+compiles to exactly the codecs it did before), and `decimal.Decimal`
+(written as a string of its exact text, `"19.90"`; read from a string or
+a number by `decimal.parse`'s rules, from the number's text and never
+through a float, also in C). `rawptr`, `chan[T]`, and
 `result[T,E]` can't appear anywhere in a decode/encode target type. A
 missing JSON key defaults an `opt[T]` field to `none`; for any other
 field type it's a decode error. Unknown JSON keys are ignored. Every
@@ -9683,6 +9945,7 @@ cells by row and column index; `pg.col(rows, "name")` finds an index.
 | `pg.get_bool(rows, r, c)` | `bool` |
 | `pg.get_bytes(rows, r, c)` | `bytea` |
 | `pg.get_time(rows, r, c)` | `timestamptz` as a `timez.Time` (`result`: err for infinity or a BC date); a `timestamp` without a zone is read as UTC |
+| `pg.get_decimal(rows, r, c)` | `numeric` and the integer types as an exact `decimal.Decimal`, at Postgres's scale (`result`: err for NaN, infinity or more than 38 digits) |
 | `pg.is_null(rows, r, c)` | whether the cell is NULL |
 
 The getters **panic** on NULL, on a column of a type they do not read,
@@ -10015,6 +10278,10 @@ Sent in binary, so any byte values -- NULs included -- arrive intact. For a byte
 
 An instant for a timestamptz parameter, as RFC 3339 in UTC. Postgres keeps microseconds: a finer fraction is rounded by the server.
 
+### `fn arg_decimal(d: decimal.Decimal) -> Arg`
+
+A decimal for a numeric parameter, as its exact text: no float on the way, so 0.1 arrives as 0.1.
+
 ### `fn query(c: Conn, sql: str, args: [Arg], deadline: until) -> result[Rows, str]`
 
 Runs one query with parameters ($1, $2, ...) through the extended protocol: the values travel separately from the SQL text, so they can never be parsed as SQL. Returns every row, buffered; for a result too big to hold at once, use stream().
@@ -10094,6 +10361,10 @@ int2, int4, int8 and oid. A timestamptz or timestamp cell as RFC 3339 text: Post
 ### `fn get_time(rows: Rows, r: int, c: int) -> result[timez.Time, str]`
 
 The instant in a timestamptz (or timestamp, read as UTC) cell. err for another column type, infinity, a BC date, or a seconds-level offset.
+
+### `fn get_decimal(rows: Rows, r: int, c: int) -> result[decimal.Decimal, str]`
+
+The exact value of a numeric or integer cell (int2, int4, int8, numeric), at the scale Postgres reports: numeric(12, 2) gives "19.90", not 19.9. err for another column type, NaN or an infinity, or a value past decimal's 38 digits.
 
 ### `fn get_int(rows: Rows, r: int, c: int) -> int`
 
