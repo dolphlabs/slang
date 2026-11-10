@@ -284,6 +284,10 @@ an id is a canonical lowercase `str`, `uuid.parse` canonicalizes any spelling.
 `nats.subscribe(nc, subj)` then `nats.next_msg(sub, deadline)` (result of opt),
 `nats.request(nc, subj, data, deadline)`, `nats.drain(nc, deadline)`;
 reconnects and resubscribes by itself.
+`s3`: `let c = s3.new_client(endpoint, region, key, secret)` (or
+`s3.from_env(proc.getenv)`), `s3.put_object(c, bucket, key, data, ctype, dl)`,
+`s3.get_object`, `s3.list_objects(c, bucket, prefix, "/", next, 1000, dl)`,
+`s3.put_large` (multipart), `s3.presign_get(c, bucket, key, seconds)`.
 `crypto`: `seal(key, data, aad)`/`open` (AES-256-GCM, random nonce;
 result), `hkdf_sha256(ikm, salt, info, n)`, `constant_time_eq(a, b)`,
 `ed25519_sign/verify`, `ecdsa_p256_sign_sha256/verify_sha256` (raw r||s),
@@ -391,6 +395,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - rand: new, from_os, fork, next_u64, below, between, unit, chance, shuffle, pick, backoff, jitter
 - redis: encode, decode, decode_at, slot, parse_url, connect_config, connect, do, close, usable, ping, echo (+132 more)
 - regex: compile, free, groups, is_match, is_match_bytes, find, find_at, find_bytes, find_bytes_at
+- s3: new_client, from_env, put_object, get_object, get_range, head_object, delete_object, list_objects, create_multipart, upload_part, complete_multipart, abort_multipart (+8 more)
 - sort: ints, floats, strings, by, by_stable, search_ints, search_floats, search_strings, search_by
 - sql: open, close, exec, last_insert_id, prepare, finalize, reset, bind_int, bind_float, bind_text, bind_blob, bind_null (+8 more)
 - strings: find, rfind, contains, has_prefix, has_suffix, count, trim, trim_start, trim_end, to_upper, to_lower, slice (+12 more)
