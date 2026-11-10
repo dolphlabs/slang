@@ -284,6 +284,8 @@ an id is a canonical lowercase `str`, `uuid.parse` canonicalizes any spelling.
 `nats.subscribe(nc, subj)` then `nats.next_msg(sub, deadline)` (result of opt),
 `nats.request(nc, subj, data, deadline)`, `nats.drain(nc, deadline)`;
 reconnects and resubscribes by itself.
+`encoding.base32_encode/decode` (RFC 4648; decode takes either case, padded or
+not), `base32hex_*`, and `crockford_encode/decode` for codes people type.
 `crypto`: `seal(key, data, aad)`/`open` (AES-256-GCM, random nonce;
 result), `hkdf_sha256(ikm, salt, info, n)`, `constant_time_eq(a, b)`,
 `ed25519_sign/verify`, `ecdsa_p256_sign_sha256/verify_sha256` (raw r||s),
