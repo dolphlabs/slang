@@ -38,6 +38,7 @@ encoding.query_keys(q);                                        // ["q", "page"]
 | `encoding.query_keys` | `(url: str) -> [str]` |
 | `encoding.float64_to_le` | `(value: float) -> bytes` |
 | `encoding.float64_from_le` | `(bytes: bytes) -> result[float, str]` |
+| `encoding.csv_record` | `(data: bytes, from: int, sep: int, quote: int, flags: int) -> [int]` |
 
 Like `regex`, `strings` and `os` — and unlike `crypto` and `sql` — this
 is pure computation, so importing it adds no link flag.
@@ -110,6 +111,8 @@ Both decoders accept either case.
 ### `encoding.float64_to_le(float) -> bytes`
 
 ### `encoding.float64_from_le(bytes) -> result[float,str]`
+
+### `encoding.csv_record(bytes, int, int, int, int) -> [int]`
 
 ---
 

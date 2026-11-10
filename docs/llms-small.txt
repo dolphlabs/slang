@@ -267,7 +267,7 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg redis regex
 strings unicode encoding compress math decimal rand builder byteutil flags sort
-uuid http http2 httpc`.
+uuid http http2 httpc csv`.
 `decimal` is exact money: `let r = decimal.parse("19.99")` (result), then
 `decimal.add/sub/mul(a, b)` (opt: none past 38 digits), `decimal.div(a, b,
 scale, decimal.Rounding.HalfEven)`, `decimal.format(d)`, `decimal.split(d, n)`.
@@ -284,6 +284,9 @@ an id is a canonical lowercase `str`, `uuid.parse` canonicalizes any spelling.
 `nats.subscribe(nc, subj)` then `nats.next_msg(sub, deadline)` (result of opt),
 `nats.request(nc, subj, data, deadline)`, `nats.drain(nc, deadline)`;
 reconnects and resubscribes by itself.
+`csv.parse(text)` (result of `[[str]]`), `csv.to_maps(rows)` by header,
+streaming with `csv.new_reader(o)`, `csv.feed(rd, chunk)`, `csv.next(rd)` (none:
+feed more), `csv.end(rd)`; `csv.format(rows)` writes CRLF, quoted as needed.
 `crypto`: `seal(key, data, aad)`/`open` (AES-256-GCM, random nonce;
 result), `hkdf_sha256(ikm, salt, info, n)`, `constant_time_eq(a, b)`,
 `ed25519_sign/verify`, `ecdsa_p256_sign_sha256/verify_sha256` (raw r||s),
@@ -370,8 +373,9 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - byteutil: find, find_wire, has_prefix, has_suffix, trim, split
 - compress: gzip, gzip_level, deflate, deflate_raw, gunzip, inflate, inflate_raw
 - crypto: sha256, hmac_sha256, rand, sha1, md5, pbkdf2_sha256, argon2id_raw, argon2id_verify, rsa_verify_sha256, sha384, sha512, hmac_sha384 (+28 more)
+- csv: options, parse, parse_with, parse_bytes, new_reader, feed, end, finished, line, next, to_maps, write_options (+3 more)
 - decimal: zero, from_int, from_units, parse, parse_bytes, from_float, scale_of, precision, is_zero, is_neg, sign, format (+22 more)
-- encoding: hex_encode, hex_decode, base64_encode, base64_decode, base64url_encode, base64url_decode, url_encode, url_decode, form_encode, form_decode, query_get, query_keys (+2 more)
+- encoding: hex_encode, hex_decode, base64_encode, base64_decode, base64url_encode, base64url_decode, url_encode, url_decode, form_encode, form_decode, query_get, query_keys (+3 more)
 - flags: new, Set.add_str, Set.add_int, Set.add_float, Set.add_bool, Set.add_list, Set.require, Set.set_takes, Set.stop_at_first_arg, Set.parse, Set.parse_or_exit, Set.usage (+8 more)
 - fs: open, create, read, pread, write, close, mkdir, realpath, fstat
 - http: header, header_or, headers, request, parse_frame, method_is, method_is_at, path_is, path_is_at, path_param, path_param_at, frame_method (+40 more)

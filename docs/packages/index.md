@@ -2061,6 +2061,7 @@ encoding.query_keys(q);                                        // ["q", "page"]
 | `encoding.query_keys` | `(url: str) -> [str]` |
 | `encoding.float64_to_le` | `(value: float) -> bytes` |
 | `encoding.float64_from_le` | `(bytes: bytes) -> result[float, str]` |
+| `encoding.csv_record` | `(data: bytes, from: int, sep: int, quote: int, flags: int) -> [int]` |
 
 Like `regex`, `strings` and `os` — and unlike `crypto` and `sql` — this
 is pure computation, so importing it adds no link flag.
@@ -2705,6 +2706,67 @@ given time (tests, ids that carry an event's time); `to_binary` and
 version and variant, so ids from Postgres's `gen_random_uuid()` or other
 services pass.
 
+#### `csv`
+
+CSV (RFC 4180): read a whole document or stream a large one, and write.
+
+```slang
+import "csv";
+
+let r = csv.parse("name,qty\n\"Smith, J\",3\n");   // result[[[str]], str]
+guard let rows = r else let e = err_of(r) { panic(e); }
+csv.to_maps(rows);                                     // the header row as keys: [map[str]str]
+
+let o = csv.options();
+o.sep = 9;                                             // TSV
+o.comment = 35;                                        // skip lines starting with #
+csv.parse_with(text, o);
+
+// streaming: feed what you read, take the records that are whole
+let rd = csv.new_reader(csv.options());
+csv.feed(rd, chunk);                                   // as often as needed
+let nr = csv.next(rd);                                 // result[opt[[str]], str]; none: feed more
+csv.end(rd);                                           // then next() returns what remains
+
+csv.format(rows);                                      // CRLF, quoted only where needed
+let w = csv.write_options();
+w.spreadsheet_safe = true;                             // '=1+1 stays text in a spreadsheet
+csv.format_with(rows, w);
+```
+
+Quoted fields may hold separators, doubled quotes and line breaks.
+Line endings are CRLF or LF, and empty lines are skipped. Errors name
+the line: `csv: line 12: text after a closing quote`.
+
+**Strictness.** A quote inside an unquoted field, or text after a closing
+quote, is refused unless `lazy_quotes` is set, which reads them as data,
+as Go's `LazyQuotes` does. By default every record must be as wide as
+the first; set `fields_per_record` to a fixed width, or -1 to allow any.
+
+**Limits.** The input decides how big things get, so `max_field` (1 MiB),
+`max_record` (16 MiB) and `max_fields` (4096) bound it. A record still
+incomplete past `max_record` is refused without buffering more.
+
+**Streaming** keeps one record's worth of input. Fed chunks are joined
+only when a record needs them, and a record far larger than one chunk is
+rescanned O(log n) times, not once per chunk. There are no callbacks:
+slang has no closures, so the caller does the reading and the reader
+only parses.
+
+**Writing.** A field is quoted when it holds the separator, the quote or
+a line break, or begins with a space or tab. A record of one empty field
+is written as `""`, so it does not read back as an empty line.
+`spreadsheet_safe` prefixes fields beginning with `=`, `+`, `-`, `@`,
+tab or CR with `'`. That keeps a spreadsheet from running them as
+formulas (CSV injection), but it changes the data, so use it only for
+files meant for spreadsheets.
+
+**Cost.** The byte scan is native (`encoding.csv_record`); the package
+assembles fields. On an 8 MB, 120,000-row file, streaming took about
+105 ms against about 33 ms for Go's `encoding/csv` record loop; the rest
+is one string per field. `parse` holds every field at once, which is
+slower again on large inputs (about 650 ms here), so stream big files.
+
 #### `byteutil`
 
 Search, trim, and split on the `bytes` type — no new syntax. The
@@ -2935,8 +2997,9 @@ any signal-handling program.
 - [byteutil](packages/byteutil.md) -- source package, 6 public items
 - [compress](packages/compress.md) -- compiler-provided, 7 public items
 - [crypto](packages/crypto.md) -- compiler-provided, 40 public items
+- [csv](packages/csv.md) -- source package, 18 public items
 - [decimal](packages/decimal.md) -- source package, 37 public items
-- [encoding](packages/encoding.md) -- compiler-provided, 14 public items
+- [encoding](packages/encoding.md) -- compiler-provided, 15 public items
 - [flags](packages/flags.md) -- source package, 23 public items
 - [fs](packages/fs.md) -- compiler-provided, 9 public items
 - [http](packages/http.md) -- source package, 58 public items
