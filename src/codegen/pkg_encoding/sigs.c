@@ -78,6 +78,20 @@ const NatSig ENCODING_SIGS[] = {
        the host's byte order never leaks into a wire format. */
     {"encoding", "float64_to_le", 1, {NA_F64}, "bytes", 0},
     {"encoding", "float64_from_le", 1, {NA_BYTES}, "result[float,str]", 0},
+
+    /* base32, RFC 4648: the standard alphabet (TOTP secrets) and
+       base32hex, which sorts like the bytes it encodes. Encoders pad;
+       decoders take either case, padded or not, and refuse a tail that
+       holds no whole byte or leaves non-zero bits -- a mistyped secret. */
+    {"encoding", "base32_encode", 1, {NA_BYTES}, "str", 0},
+    {"encoding", "base32_decode", 1, {NA_STR}, "result[bytes,str]", 0},
+    {"encoding", "base32hex_encode", 1, {NA_BYTES}, "str", 0},
+    {"encoding", "base32hex_decode", 1, {NA_STR}, "result[bytes,str]", 0},
+    /* Crockford's base32, for codes people read aloud and type: no I L
+       O U, unpadded; the decoder reads I and L as 1, O as 0, either
+       case, and skips hyphens ("7ZQ-4M1-X0"). */
+    {"encoding", "crockford_encode", 1, {NA_BYTES}, "str", 0},
+    {"encoding", "crockford_decode", 1, {NA_STR}, "result[bytes,str]", 0},
 };
 
 const int ENCODING_SIGS_LEN =
