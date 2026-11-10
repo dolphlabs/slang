@@ -56,6 +56,15 @@
   `Straße`/`STRASSE` wrongly; what is left here is a decode and a lookup
   per character.
 
+- [ ] **A program in a directory named like a package it imports breaks
+  generics (found 2026-11-10, writing tests/live/mysql).** The main
+  package in `tests/live/mysql/` importing `mysql` is renamed `mysql_2`,
+  and `let xs: result[[Thing], str] = mysql.rows_as(rows)` then fails
+  with "package 'mysql_2' has no type 'Thing'": the generic's type
+  argument is resolved in the renamed package. Worked around by naming
+  the directory `tests/live/mysqldb`. Reproduce: any generic stdlib call
+  whose type argument is a struct of main, from a directory named after
+  that stdlib package.
 - [ ] **`SSL_set1_host` is deprecated in OpenSSL 4.0 (found 2026-11-09,
   feat/uuid-package; not fixed).** `runtime/sl_tls.c:247` calls it to set
   the hostname a client checks the server's certificate against. Against

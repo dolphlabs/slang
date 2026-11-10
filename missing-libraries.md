@@ -97,8 +97,10 @@ Common backend needs with no package today.
   `templates/` folder and no safe engine to render it with.
 - [ ] **WebSocket client** (stdlib, beside `httpc`): dial, TLS, ping/pong,
   close handshake, size limits. zokor has the server side only.
-- [ ] **MySQL / MariaDB driver** (stdlib or package): only Postgres, SQLite
-  and Mongo exist.
+- [x] **MySQL / MariaDB driver** (stdlib or package): only Postgres, SQLite
+  and Mongo exist. Built as `stdlib/mysql` with pg's API (prepared
+  statements, rows_as, stream, pool) and every common auth plugin; tested
+  live against MySQL 8.4 and MariaDB 11.
 
 ## 4. Smaller formats and protocols
 

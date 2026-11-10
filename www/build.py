@@ -205,6 +205,7 @@ PACKAGE_SECTIONS = {
     "http": ["`http`"],
     "httpc": ["`httpc`"],
     "pg": ["`pg`"],
+    "mysql": ["`mysql`"],
     "redis": ["`redis`"],
     "nats": ["`nats`"],
 }
