@@ -227,6 +227,72 @@ jobs:
           PG_URL: postgres://slang:secret@127.0.0.1:55432/slang
         run: tests/live/pg_alloc_budget/run.sh
 
+  # The nats client against real nats-server instances: plain, with each
+  # kind of authentication, and over TLS with a verified certificate.
+  # `make test` covers the protocol and reconnection everywhere against
+  # a scripted server (tests/nats_reconnect).
+  nats:
+    name: nats (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            runner: ubuntu-24.04
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev libsqlite3-dev zlib1g-dev
+
+      - name: Build slangc
+        run: make slangc
+
+      - name: Start nats-server
+        run: |
+          mkdir -p /tmp/natstls && cd /tmp/natstls
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key \
+            -out ca.crt -days 2 -subj "/CN=slang CI CA"
+          openssl req -newkey rsa:2048 -nodes -keyout server.key \
+            -out server.csr -subj "/CN=localhost"
+          printf 'subjectAltName=DNS:localhost\n' > ext.cnf
+          openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key \
+            -CAcreateserial -out server.crt -days 2 -extfile ext.cnf
+          chmod 644 server.key
+          cd "$GITHUB_WORKSPACE"
+          docker run -d --name n-plain -p 54222:4222 nats:2.10-alpine
+          docker run -d --name n-up -p 54223:4222 nats:2.10-alpine --user alice --pass s3cret
+          docker run -d --name n-tok -p 54224:4222 nats:2.10-alpine --auth tok123
+          docker run -d --name n-nk -p 54225:4222 \
+            -v "$GITHUB_WORKSPACE/tests/live/nats/nkey.conf:/nkey.conf:ro" nats:2.10-alpine -c /nkey.conf
+          docker run -d --name n-tls -p 54226:4222 -v /tmp/natstls:/certs:ro nats:2.10-alpine \
+            --tls --tlscert /certs/server.crt --tlskey /certs/server.key
+          for port in 54222 54223 54224 54225 54226; do
+            ok=0
+            for i in $(seq 60); do
+              if (exec 3<>/dev/tcp/127.0.0.1/$port) 2>/dev/null; then ok=1; break; fi
+              sleep 1
+            done
+            [ $ok -eq 1 ] || { echo "port $port never opened"; docker ps -a; exit 1; }
+          done
+
+      - name: Live test
+        env:
+          NATS_URL: nats://127.0.0.1:54222
+          NATS_USERPASS_URL: nats://alice:s3cret@127.0.0.1:54223
+          NATS_TOKEN_URL: nats://tok123@127.0.0.1:54224
+          NATS_NKEY_URL: nats://127.0.0.1:54225
+          NATS_TLS_URL: tls://localhost:54226
+          NATS_TLS_CA: /tmp/natstls/ca.crt
+        run: ./slangc tests/live/nats/main.sl --run
+
   # The s3 client against an S3-compatible server that checks every SigV4
   # signature (Zenko CloudServer). make test covers signing against AWS's
   # published examples everywhere.

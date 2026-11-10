@@ -280,6 +280,10 @@ case-insensitive matches (`"STRASSE"` equals `"straße"`). Transforms repair
 invalid UTF-8 to U+FFFD.
 `uuid.v7()` (time-ordered, for keys) and `uuid.v4()` return `result[str, str]`;
 an id is a canonical lowercase `str`, `uuid.parse` canonicalizes any spelling.
+`nats`: `let nc = nats.connect(url, deadline)`, `nats.publish(nc, subj, data)`,
+`nats.subscribe(nc, subj)` then `nats.next_msg(sub, deadline)` (result of opt),
+`nats.request(nc, subj, data, deadline)`, `nats.drain(nc, deadline)`;
+reconnects and resubscribes by itself.
 `s3`: `let c = s3.new_client(endpoint, region, key, secret)` (or
 `s3.from_env(proc.getenv)`), `s3.put_object(c, bucket, key, data, ctype, dl)`,
 `s3.get_object`, `s3.list_objects(c, bucket, prefix, "/", next, 1000, dl)`,
@@ -383,6 +387,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - math: abs, min, max, clamp, sign, is_nan, is_inf, is_finite, is_normal, signbit, copysign, nextafter (+119 more)
 - math/numtheory: mod_pow, mod_mul, ext_gcd, mod_inv, is_prime, next_prime, prev_prime, primes_below, factorize, divisors, totient, crt (+2 more)
 - math/stats: normal, Normal.pdf, Normal.cdf, Normal.quantile, log_normal, LogNormal.pdf, LogNormal.cdf, LogNormal.quantile, uniform, Uniform.pdf, Uniform.cdf, Uniform.quantile (+67 more)
+- nats: options, with_creds, connect, connect_with, publish, publish_reply, publish_headers, publish_full, subscribe, queue_subscribe, next_msg, unsubscribe (+15 more)
 - net: listen, port, accept, dial, dial_until, lookup_srv_until, lookup_txt_until, dial_unix, listen_unix, send, recv, recv_until (+22 more)
 - os: setenv, unsetenv, environ, pid, hostname, tmpdir, exists, is_dir, is_file, size, mtime, mtime_ns (+6 more)
 - pg: rows_as, parse_url, sqlstate, scram_client_final, connect, connect_config, close, usable, in_transaction, server_param, arg_text, arg_int (+39 more)

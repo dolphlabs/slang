@@ -642,7 +642,7 @@ rm -f "$ul_bin"
 [ "$ul_bad" -eq 0 ] && echo "PASS unicode licence notice"
 
 # Stdlib packages that carry their own unit tests.
-for pkg in stdlib/pg stdlib/timez stdlib/uuid stdlib/rand stdlib/decimal stdlib/s3; do
+for pkg in stdlib/pg stdlib/timez stdlib/uuid stdlib/rand stdlib/decimal stdlib/nats stdlib/s3; do
     if out=$(./slangc test "$pkg" 2>&1); then
         echo "PASS slangc test $pkg"
     else
@@ -848,7 +848,7 @@ vm_bad=0
 for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc_map_put encoding_f64 crypto if_let \
             literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions loop_leaf_plus safepoint_task_once \
             gc_nested_literal gc_nursery_barrier gc_nursery_promotion net_dns_records \
-            spawn_isolation select maps pg_rows_as json json_parity json_utf8 unicode json_decimal crypto_more json_decode_budget \
+            spawn_isolation select maps pg_rows_as json json_parity json_utf8 unicode json_decimal crypto_more nats_reconnect json_decode_budget \
             bytes json_deep_nesting redis http_read_wire http_client_pool http2_flood h2_client h2_client_close chan_recv_promoted value_results value_opts \
             gc_promotion_budget gc_chan_promotion_budget \
             value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks gc_skip_queued \
