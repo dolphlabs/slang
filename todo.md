@@ -1,5 +1,15 @@
 # todo
 
+- [ ] **`tests/proc_shutdown` failed once on CI macos-arm64 (found
+  2026-11-10, perf/unicode-equal-fold; not investigated).** Run
+  42726628356, first attempt: the program printed `shutdown requested, loop
+  exited`, `1`, `drained`, then `FAIL client recv` and exited 1. The rerun
+  of the same commit passed, and so did linux-x86_64 and linux-arm64. The
+  branch changed only the `unicode` runtime, which this test does not
+  import, so its generated C was the same as on `dev`. Earlier entries
+  record this test as flaky under TSan; this was a plain run. If it
+  recurs, look at the client's read racing the server's drain.
+
 - [ ] **`str` literals have no Unicode escape (found 2026-11-09,
   feat/unicode-package; not fixed).** The lexer accepts `\xHH` only in
   `b"..."` literals and has no `\u{...}` for `str`, so a string holding a
