@@ -79,6 +79,12 @@ const NatSig ENCODING_SIGS[] = {
     {"encoding", "float64_to_le", 1, {NA_F64}, "bytes", 0},
     {"encoding", "float64_from_le", 1, {NA_BYTES}, "result[float,str]", 0},
 
+    /* A JSON document's structural tape: five ints per value -- kind,
+       the entry after its subtree, its child count, and its byte span
+       -- so a reader can walk, skip and look up without materialising
+       every string. The layout is spelled out at sl_encoding_json_tape
+       (runtime/sl_encoding.c); stdlib/template reads its data this way. */
+    {"encoding", "json_tape", 1, {NA_STR}, "result[[int],str]", 0},
     /* One CSV record's field spans, scanned in C for stdlib/csv; the
        result layout is described at sl_encoding_csv_record
        (runtime/sl_encoding.c). Arguments: data, from, separator byte,

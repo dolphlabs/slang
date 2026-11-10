@@ -539,6 +539,260 @@ static sl_arr *sl_encoding_query_keys(const char *url) {
     return out;
 }
 
+/* ---- a JSON document's structural tape --------------------------------
+ *
+ * One pass over the text, in C, producing a flat list of ints, five per
+ * value (and per object key), in document order:
+ *
+ *     kind, end, count, from, to
+ *
+ *   kind   0 null, 1 bool, 2 number, 3 string, 4 list, 5 object, 7 key;
+ *          a string or key that holds a backslash escape has 8 added
+ *   end    the entry after this value's subtree (entry = index / 5)
+ *   count  a list's items or an object's fields; 0 for the rest
+ *   from   byte span in the text: a string's or key's inside (between
+ *   to     the quotes, escapes not decoded), the whole value otherwise
+ *
+ * An object's entries are key, value, key, value... What a reader wants
+ * from a document it will walk -- stdlib/template looks fields up and
+ * ranges over lists -- is where things are, not a copy of every string:
+ * a caller materialises only what it reads (strings.from_bytes over the
+ * span), and skips a subtree in one step via `end`. The text is
+ * validated as JSON (RFC 8259) on the way, so a span is always well
+ * formed; nesting is limited to 512 levels with an explicit stack, so no
+ * input can exhaust the C stack: the chain of open containers lives in
+ * the tape (see below), so the C frame is a few words whatever the depth. */
+
+#define SL_JT_STRIDE 5
+#define SL_JT_MAX_DEPTH 512
+
+typedef struct {
+    long long *v;
+    size_t n, cap;
+} sl_jt_buf;
+
+static int sl_jt_grow(sl_jt_buf *t, size_t need) {
+    if (t->n + need <= t->cap) return 1;
+    size_t cap = t->cap ? t->cap * 2 : 320;
+    while (cap < t->n + need) cap *= 2;
+    sl_rt_preempt_disable();
+    long long *nv = (long long *)realloc(t->v, cap * sizeof(long long));
+    sl_rt_preempt_enable();
+    if (!nv) return 0;
+    t->v = nv;
+    t->cap = cap;
+    return 1;
+}
+
+/* Appends an entry, returning its entry index, or -1 out of memory. */
+static long long sl_jt_add(sl_jt_buf *t, long long kind, long long from, long long to) {
+    if (!sl_jt_grow(t, SL_JT_STRIDE)) return -1;
+    long long e = (long long)(t->n / SL_JT_STRIDE);
+    long long *w = t->v + t->n;
+    w[0] = kind;
+    w[1] = e + 1;
+    w[2] = 0;
+    w[3] = from;
+    w[4] = to;
+    t->n += SL_JT_STRIDE;
+    return e;
+}
+
+static int sl_jt_ws(unsigned char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+/* The string starting at s[i] (a quote). Sets *close to the closing
+ * quote's index and *esc when it holds an escape; returns NULL or what
+ * is wrong. */
+static const char *sl_jt_string(const unsigned char *s, size_t n, size_t i,
+                                size_t *close, int *esc) {
+    *esc = 0;
+    for (i++; i < n; i++) {
+        unsigned char c = s[i];
+        if (c == '"') {
+            *close = i;
+            return NULL;
+        }
+        if (c < 0x20) { *close = i; return "a control character in a string"; }
+        if (c == '\\') {
+            *esc = 1;
+            if (i + 1 >= n) break;
+            unsigned char e = s[++i];
+            if (e == 'u') {
+                if (i + 4 >= n) { *close = i; return "a short \\u escape"; }
+                for (int k = 1; k <= 4; k++)
+                    if (sl_enc_hex_digit(s[i + k]) < 0) { *close = i; return "a bad \\u escape"; }
+                i += 4;
+            } else if (!(e == '"' || e == '\\' || e == '/' || e == 'b' || e == 'f' ||
+                         e == 'n' || e == 'r' || e == 't')) {
+                *close = i;
+                return "an unknown escape";
+            }
+        }
+    }
+    *close = n;
+    return "an unterminated string";
+}
+
+/* RFC 8259's number grammar; returns the index after it, or 0. */
+static size_t sl_jt_number(const unsigned char *s, size_t n, size_t i) {
+    if (i < n && s[i] == '-') i++;
+    if (i >= n) return 0;
+    if (s[i] == '0') i++;
+    else if (s[i] >= '1' && s[i] <= '9') while (i < n && s[i] >= '0' && s[i] <= '9') i++;
+    else return 0;
+    if (i < n && s[i] == '.') {
+        i++;
+        if (i >= n || s[i] < '0' || s[i] > '9') return 0;
+        while (i < n && s[i] >= '0' && s[i] <= '9') i++;
+    }
+    if (i < n && (s[i] == 'e' || s[i] == 'E')) {
+        i++;
+        if (i < n && (s[i] == '+' || s[i] == '-')) i++;
+        if (i >= n || s[i] < '0' || s[i] > '9') return 0;
+        while (i < n && s[i] >= '0' && s[i] <= '9') i++;
+    }
+    return i;
+}
+
+static sl_res__int__str *sl_jt_err(const char *what, size_t at) {
+    char m[160];
+    snprintf(m, sizeof m, "json_tape: %s at byte %zu", what, at);
+    sl_res__int__str *r = (sl_res__int__str *)sl_gc_alloc(
+        sizeof(sl_res__int__str), sl_gc_trace_sl_res__int__str);
+    r->ok = false;
+    r->e = sl_strdup(m);
+    return r;
+}
+
+static sl_res__int__str *sl_encoding_json_tape(const char *text) {
+    const unsigned char *s = (const unsigned char *)(text ? text : "");
+    size_t n = strlen((const char *)s);
+    sl_jt_buf t = {0};
+    /* The open containers form a chain through the tape itself: while a
+       container is open its `to` slot holds its parent's entry (-1 at
+       the root), and closing it writes the real end of its span. No
+       stack array -- this runs on a task's small stack. */
+    long long top = -1;
+    int depth = 0;
+    const char *bad = NULL;
+    size_t i = 0;
+    /* in an object: a key comes next (after '{' or ',') */
+    int want_key = 0;
+    for (;;) {
+        while (i < n && sl_jt_ws(s[i])) i++;
+        if (i >= n) { bad = "unexpected end of data"; goto fail; }
+        if (top >= 0) {
+            t.v[top * SL_JT_STRIDE + 2]++;
+            if (t.v[top * SL_JT_STRIDE] == 5) {
+                if (!want_key || s[i] != '"') { bad = "expected a key"; goto fail; }
+                size_t close;
+                int esc;
+                bad = sl_jt_string(s, n, i, &close, &esc);
+                if (bad) { i = close; goto fail; }
+                if (sl_jt_add(&t, esc ? 15 : 7, (long long)i + 1, (long long)close) < 0) {
+                    bad = "out of memory"; goto fail;
+                }
+                i = close + 1;
+                while (i < n && sl_jt_ws(s[i])) i++;
+                if (i >= n || s[i] != ':') { bad = "expected ':'"; goto fail; }
+                i++;
+                while (i < n && sl_jt_ws(s[i])) i++;
+                if (i >= n) { bad = "unexpected end of data"; goto fail; }
+            }
+        }
+        want_key = 0;
+        unsigned char c = s[i];
+        if (c == '{' || c == '[') {
+            if (depth >= SL_JT_MAX_DEPTH) { bad = "nesting deeper than 512"; goto fail; }
+            long long e = sl_jt_add(&t, c == '{' ? 5 : 4, (long long)i, (long long)i);
+            if (e < 0) { bad = "out of memory"; goto fail; }
+            i++;
+            while (i < n && sl_jt_ws(s[i])) i++;
+            unsigned char closer = c == '{' ? '}' : ']';
+            if (i < n && s[i] == closer) {
+                i++;
+                t.v[e * SL_JT_STRIDE + 4] = (long long)i;
+            } else {
+                t.v[e * SL_JT_STRIDE + 4] = top;
+                top = e;
+                depth++;
+                want_key = c == '{';
+                continue;
+            }
+        } else if (c == '"') {
+            size_t close;
+            int esc;
+            bad = sl_jt_string(s, n, i, &close, &esc);
+            if (bad) { i = close; goto fail; }
+            if (sl_jt_add(&t, esc ? 11 : 3, (long long)i + 1, (long long)close) < 0) {
+                bad = "out of memory"; goto fail;
+            }
+            i = close + 1;
+        } else if (c == 't' && i + 4 <= n && !memcmp(s + i, "true", 4)) {
+            if (sl_jt_add(&t, 1, (long long)i, (long long)i + 4) < 0) { bad = "out of memory"; goto fail; }
+            i += 4;
+        } else if (c == 'f' && i + 5 <= n && !memcmp(s + i, "false", 5)) {
+            if (sl_jt_add(&t, 1, (long long)i, (long long)i + 5) < 0) { bad = "out of memory"; goto fail; }
+            i += 5;
+        } else if (c == 'n' && i + 4 <= n && !memcmp(s + i, "null", 4)) {
+            if (sl_jt_add(&t, 0, (long long)i, (long long)i + 4) < 0) { bad = "out of memory"; goto fail; }
+            i += 4;
+        } else {
+            size_t end = sl_jt_number(s, n, i);
+            if (!end) { bad = "unexpected character"; goto fail; }
+            if (sl_jt_add(&t, 2, (long long)i, (long long)end) < 0) { bad = "out of memory"; goto fail; }
+            i = end;
+        }
+        /* after a value: ',' for the next one, or close containers */
+        for (;;) {
+            while (i < n && sl_jt_ws(s[i])) i++;
+            if (top < 0) {
+                if (i != n) { bad = "trailing data after the value"; goto fail; }
+                goto done;
+            }
+            if (i >= n) { bad = "unexpected end of data"; goto fail; }
+            int is_obj = t.v[top * SL_JT_STRIDE] == 5;
+            if (s[i] == ',') {
+                i++;
+                want_key = is_obj;
+                break;
+            }
+            if (s[i] != (is_obj ? '}' : ']')) { bad = "expected ',' or a closing bracket"; goto fail; }
+            i++;
+            depth--;
+            long long parent = t.v[top * SL_JT_STRIDE + 4];
+            t.v[top * SL_JT_STRIDE + 1] = (long long)(t.n / SL_JT_STRIDE);
+            t.v[top * SL_JT_STRIDE + 4] = (long long)i;
+            top = parent;
+        }
+    }
+done: {
+        sl_arr *out = sl_arr_new(sizeof(long long), 0);
+        void *roots[1];
+        sl_safepoint sp;
+        roots[0] = (void *)out;
+        sl_rt_safepoint_enter(&sp, roots, 1);
+        sl_arr_reserve(out, (long long)t.n);
+        if (t.n) memcpy(out->data, t.v, t.n * sizeof(long long));
+        out->len = (long long)t.n;
+        sl_rt_preempt_disable();
+        free(t.v);
+        sl_rt_preempt_enable();
+        sl_res__int__str *r = (sl_res__int__str *)sl_gc_alloc(
+            sizeof(sl_res__int__str), sl_gc_trace_sl_res__int__str);
+        r->ok = true;
+        r->v = out;
+        sl_rt_safepoint_exit();
+        return r;
+    }
+fail:
+    sl_rt_preempt_disable();
+    free(t.v);
+    sl_rt_preempt_enable();
+    return sl_jt_err(bad, i);
+}
 /* ---- CSV records ------------------------------------------------------
  *
  * One CSV record (RFC 4180) from data[from..], as field spans, for

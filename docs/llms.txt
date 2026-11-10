@@ -44,9 +44,11 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [rand](packages/rand.md): Package rand.
 - [redis](packages/redis.md): Package redis.
 - [regex](packages/regex.md): Package regex.
+- [s3](packages/s3.md): Package s3.
 - [sort](packages/sort.md): Package sort.
 - [sql](packages/sql.md): Package sql.
 - [strings](packages/strings.md): Package strings.
+- [template](packages/template.md): Package template.
 - [time](packages/time.md): Package time.
 - [timez](packages/timez.md): Package timez.
 - [unicode](packages/unicode.md): Package unicode.
