@@ -70,8 +70,12 @@ static const char *sl_z_why(z_streamp zs, int rc) {
 /* windowBits selects the container: 15 is zlib (RFC 1950), 15|16 adds a
  * gzip wrapper (RFC 1952), and -15 means raw DEFLATE with no header at
  * all (RFC 1951). See pkg_compress/sigs.c on why all three are exposed. */
+/* flush is Z_FINISH (a complete stream, ending in a final block) or
+   Z_SYNC_FLUSH (everything out, byte aligned, and the stream left open:
+   it ends in the empty stored block 00 00 ff ff, no final block, so
+   more blocks may follow -- what RFC 7692 messages are). */
 static sl_res_bytes_str *sl_z_compress(sl_bytes *in, int level,
-                                       int window_bits) {
+                                       int window_bits, int flush) {
     SL_COMPRESS_STACK();
     if (level < 0 || level > 9)
         return sl_z_err("compression level must be between 0 and 9");
@@ -91,7 +95,9 @@ static sl_res_bytes_str *sl_z_compress(sl_bytes *in, int level,
     /* deflateBound is zlib's own worst case, so one allocation and one
        pass suffice -- no growth loop, and no chance of a short write. */
     sl_rt_preempt_disable();
-    unsigned long bound = deflateBound(&zs, (unsigned long)inlen);
+    /* a sync flush ends with an empty stored block that deflateBound,
+       which assumes Z_FINISH, does not count */
+    unsigned long bound = deflateBound(&zs, (unsigned long)inlen) + 16;
     sl_rt_preempt_enable();
 
     unsigned char *out = (unsigned char *)sl_gc_alloc(
@@ -103,9 +109,10 @@ static sl_res_bytes_str *sl_z_compress(sl_bytes *in, int level,
     zs.avail_out = (uInt)bound;
 
     sl_rt_preempt_disable();
-    rc = deflate(&zs, Z_FINISH);
+    rc = deflate(&zs, flush);
     unsigned long produced = zs.total_out;
-    const char *why = (rc != Z_STREAM_END) ? sl_z_why(&zs, rc) : NULL;
+    int done = flush == Z_FINISH ? rc == Z_STREAM_END : (rc == Z_OK && zs.avail_in == 0);
+    const char *why = !done ? sl_z_why(&zs, rc) : NULL;
     deflateEnd(&zs);
     sl_rt_preempt_enable();
 
@@ -268,20 +275,20 @@ static sl_res_bytes_str *sl_z_decompress(sl_bytes *in, long long max_out,
    as -1. Naming it means gzip() and gzip_level(b, 6) are visibly the
    same call, instead of differing by a sentinel. */
 static sl_res_bytes_str *sl_compress_gzip(sl_bytes *in) {
-    return sl_z_compress(in, 6, 15 | 16);
+    return sl_z_compress(in, 6, 15 | 16, Z_FINISH);
 }
 
 static sl_res_bytes_str *sl_compress_gzip_level(sl_bytes *in,
                                                 long long level) {
-    return sl_z_compress(in, (int)level, 15 | 16);
+    return sl_z_compress(in, (int)level, 15 | 16, Z_FINISH);
 }
 
 static sl_res_bytes_str *sl_compress_deflate(sl_bytes *in) {
-    return sl_z_compress(in, 6, 15);
+    return sl_z_compress(in, 6, 15, Z_FINISH);
 }
 
 static sl_res_bytes_str *sl_compress_deflate_raw(sl_bytes *in) {
-    return sl_z_compress(in, 6, -15);
+    return sl_z_compress(in, 6, -15, Z_FINISH);
 }
 
 static sl_res_bytes_str *sl_compress_gunzip(sl_bytes *in, long long max_out) {
@@ -295,4 +302,12 @@ static sl_res_bytes_str *sl_compress_inflate(sl_bytes *in, long long max_out) {
 static sl_res_bytes_str *sl_compress_inflate_raw(sl_bytes *in,
                                                  long long max_out) {
     return sl_z_decompress(in, max_out, -15, "inflate_raw");
+}
+
+/* Raw deflate that ends in a sync flush instead of a final block: the
+   stream stays open, so a decompressor that keeps its state across
+   messages reads on into the next. RFC 7692 (WebSocket permessage-
+   deflate) sends exactly this, minus the trailing 00 00 ff ff. */
+static sl_res_bytes_str *sl_compress_deflate_raw_flush(sl_bytes *in) {
+    return sl_z_compress(in, 6, -15, Z_SYNC_FLUSH);
 }

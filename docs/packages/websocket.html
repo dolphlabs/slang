@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>websocket — slang</title>
+<meta name="description" content="Package websocket.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="websocket">
+<meta property="og:description" content="Package websocket.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://slang.dolphlabs.com/packages/websocket">
+<meta property="og:image" content="https://slang.dolphlabs.com/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The slang rabbit mark beside the slang wordmark">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://slang.dolphlabs.com/packages/websocket">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/websocket.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <button id="navtoggle" class="navtoggle" type="button"
+          aria-label="Toggle navigation" aria-expanded="false"
+          aria-controls="mainnav">
+    <span></span><span></span><span></span>
+  </button>
+  <nav class="mainnav" id="mainnav"><a href="../">Home</a><a href="../guide/">Guide</a><a href="../guide/data">Data types</a><a href="../guide/errors">Errors</a><a href="../guide/functions">Functions</a><a href="../concurrency/">Concurrency</a><a href="../testing/">Testing</a><a href="../bench/">Benchmarks</a><a href="../packages/">Packages</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="../limitations/">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="navscrim" class="navscrim" hidden></div>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>websocket</h1>
+      <p class="tagline">Package websocket.</p>
+      <p class="agentline">
+        <a href="../packages/websocket.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>A WebSocket client (RFC 6455) over <code>ws://</code> and <code>wss://</code>, with permessage-deflate (RFC 7692) when asked for. In the Autobahn TestSuite&#x27;s client run (<code>tests/live/websocket</code>, 517 cases), 440 cases are OK, 3 INFORMATIONAL and 2 NON-STRICT, with no failures. The NON-STRICT two are invalid UTF-8 inside one frame, caught when the frame is whole rather than byte by byte. The 72 UNIMPLEMENTED are window-size variants of permessage-deflate this client does not offer.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;websocket&quot;</span>;
+
+<span class="k">let</span> o = websocket.<span class="f">options</span>();
+o.protocols = [<span class="s">&quot;v2.chat&quot;</span>];                       <span class="c">// offered; Conn.protocol is the server&#x27;s pick</span>
+o.headers = [<span class="s">&quot;Authorization: Bearer &quot;</span> + token];
+o.ping_every = <span class="n">20000000000</span>;                      <span class="c">// keepalive: a ping every 20 s</span>
+o.compress = <span class="k">true</span>;                               <span class="c">// permessage-deflate</span>
+<span class="k">let</span> r = websocket.<span class="f">dial_with</span>(<span class="s">&quot;wss://example.com/live&quot;</span>, o, deadline);
+<span class="k">guard</span> <span class="k">let</span> ws = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }
+
+websocket.<span class="f">send_text</span>(ws, <span class="s">&quot;{\&quot;subscribe\&quot;:\&quot;prices\&quot;}&quot;</span>, deadline);
+websocket.<span class="f">send_binary</span>(ws, frame, deadline);
+<span class="k">let</span> mr = websocket.<span class="f">recv</span>(ws, deadline);           <span class="c">// result[opt[Message], str]; none: the deadline passed</span>
+<span class="k">guard</span> <span class="k">let</span> got = mr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(mr) { <span class="f">panic</span>(e); }
+<span class="k">guard</span> <span class="k">let</span> m = got <span class="k">else</span> { <span class="k">return</span>; }
+<span class="k">if</span> m.kind == websocket.Kind.Text { <span class="f">handle</span>(websocket.<span class="f">text</span>(m)); }
+websocket.<span class="f">close</span>(ws, <span class="n">1000</span>, <span class="s">&quot;bye&quot;</span>, deadline);      <span class="c">// the close handshake</span></code></pre></div>
+<p><code>recv</code> returns <code>Text</code>, <code>Binary</code> or <code>Close</code> messages, reassembled from their fragments. It answers pings and consumes pongs as they arrive, and answers the server&#x27;s close before returning it. A deadline that passes loses nothing: the next <code>recv</code> carries on, even partway through a frame. One task reads at a time; any number may send, and a send is one whole frame written under a lock, so frames from different tasks never interleave.</p>
+<p><strong>What it refuses.</strong> Masked or reserved-bit frames, unknown opcodes, fragmented or oversized control frames, lengths not in their shortest form, continuations with nothing to continue, text that is not UTF-8 (checked per fragment as it arrives), close codes a peer may not send, and messages over <code>max_message</code> (32 MiB by default, counted after inflation, so a compression bomb is cut off). Each fails the connection with the matching close code (1002, 1007, 1009). In the handshake: a wrong <code>Sec-WebSocket-Accept</code>, a subprotocol or extension that was not offered, and redirects. A redirect would send the handshake, and any credentials in it, somewhere the caller did not name.</p>
+<p><strong>Keepalive.</strong> With <code>ping_every</code> set, a ping goes out each interval and a connection whose ping goes a whole interval unanswered is closed; <code>recv</code> then reports why. Pongs arrive through <code>recv</code>, so a connection nobody reads cannot keep itself alive.</p>
+<p><strong>Compression</strong> is offered without context takeover in either direction. The server must accept <code>server_no_context_takeover</code>, so each message it sends inflates on its own. Each message this client sends is compressed on its own too, as a sync-flushed stream with no final block (<code>compress.deflate_raw_flush</code>), which a server keeping one decompressor for the whole connection reads correctly. No 32 KiB window per direction stays alive between messages. A message is sent compressed only when that makes it smaller.</p>
+<p><strong>Text with U+0000.</strong> A <code>str</code> ends at its first zero byte, so <code>websocket.text(m)</code> stops there. <code>m.data</code> holds every byte, and <code>send_text_bytes</code> sends one.</p>
+<p>Frames are masked with keys drawn from a 4 KiB pool of <code>crypto.rand</code> bytes, refilled as it empties. A frame is built in one allocation by <code>encoding.xor_mask</code>. Large frames are read in chunks and joined once.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="message"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Message</code> <span class="src">stdlib/websocket/websocket.sl:61</span><a class="anchor" href="#message">#</a></div></div><div class="api-item" id="options"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Options</code> <span class="src">stdlib/websocket/websocket.sl:70</span><a class="anchor" href="#options">#</a></div></div><div class="api-item" id="options"><div class="api-sig"><code><span class="k">fn</span> <span class="f">options</span>() -&gt; Options</code> <span class="src">stdlib/websocket/websocket.sl:91</span><a class="anchor" href="#options">#</a></div><p class="api-doc">The defaults: no extra headers or subprotocols, 32 MiB messages, no compression, no keepalive pings.</p></div><div class="api-item" id="conn"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Conn</code> <span class="src">stdlib/websocket/websocket.sl:96</span><a class="anchor" href="#conn">#</a></div></div><div class="api-item" id="dial"><div class="api-sig"><code><span class="k">fn</span> <span class="f">dial</span>(url: <span class="t">str</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Conn, <span class="t">str</span>]</code> <span class="src">stdlib/websocket/websocket.sl:131</span><a class="anchor" href="#dial">#</a></div><p class="api-doc">Connect to url (ws:// or wss://) with the default options.</p></div><div class="api-item" id="dial-with"><div class="api-sig"><code><span class="k">fn</span> <span class="f">dial_with</span>(url: <span class="t">str</span>, o: Options, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Conn, <span class="t">str</span>]</code> <span class="src">stdlib/websocket/websocket.sl:136</span><a class="anchor" href="#dial-with">#</a></div><p class="api-doc">Connect, send the opening handshake, and check the server&#x27;s answer.</p></div><div class="api-item" id="send-text"><div class="api-sig"><code><span class="k">fn</span> <span class="f">send_text</span>(c: Conn, text: <span class="t">str</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>, <span class="t">str</span>]</code> <span class="src">stdlib/websocket/websocket.sl:649</span><a class="anchor" href="#send-text">#</a></div><p class="api-doc">Send a text message.</p></div><div class="api-item" id="send-text-bytes"><div class="api-sig"><code><span class="k">fn</span> <span class="f">send_text_bytes</span>(c: Conn, data: <span class="t">bytes</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>, <span class="t">str</span>]</code> <span class="src">stdlib/websocket/websocket.sl:656</span><a class="anchor" href="#send-text-bytes">#</a></div><p class="api-doc">Send a text message given as bytes, checked to be UTF-8 first: for text holding U+0000, which a str cannot (it ends at the first zero byte), and for text already in a byte buffer.</p></div><div class="api-item" id="send-binary"><div class="api-sig"><code><span class="k">fn</span> <span class="f">send_binary</span>(c: Conn, data: <span class="t">bytes</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>, <span class="t">str</span>]</code> <span class="src">stdlib/websocket/websocket.sl:664</span><a class="anchor" href="#send-binary">#</a></div><p class="api-doc">Send a binary message.</p></div><div class="api-item" id="ping"><div class="api-sig"><code><span class="k">fn</span> <span class="f">ping</span>(c: Conn, payload: <span class="t">bytes</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>, <span class="t">str</span>]</code> <span class="src">stdlib/websocket/websocket.sl:670</span><a class="anchor" href="#ping">#</a></div><p class="api-doc">Send a ping (payload up to 125 bytes); the server&#x27;s pong is consumed by recv. options().ping_every sends them on a schedule instead.</p></div><div class="api-item" id="recv"><div class="api-sig"><code><span class="k">fn</span> <span class="f">recv</span>(c: Conn, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">opt</span>[Message], <span class="t">str</span>]</code> <span class="src">stdlib/websocket/websocket.sl:692</span><a class="anchor" href="#recv">#</a></div><p class="api-doc">The next message, or none when the deadline passes first (nothing is lost: a later call carries on). Pings are answered and pongs consumed on the way. A Close message means the server ended the connection; the handshake is answered and the next call is an error.</p></div><div class="api-item" id="text"><div class="api-sig"><code><span class="k">fn</span> <span class="f">text</span>(m: Message) -&gt; <span class="t">str</span></code> <span class="src">stdlib/websocket/websocket.sl:714</span><a class="anchor" href="#text">#</a></div><p class="api-doc">The text of a text message. A str ends at its first zero byte, so text holding U+0000 is cut there: m.data has every byte.</p></div><div class="api-item" id="close"><div class="api-sig"><code><span class="k">fn</span> <span class="f">close</span>(c: Conn, code: <span class="t">int</span>, reason: <span class="t">str</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>, <span class="t">str</span>]</code> <span class="src">stdlib/websocket/websocket.sl:1103</span><a class="anchor" href="#close">#</a></div><p class="api-doc">The close handshake: send a close frame with code (1000 normal, or 3000-4999 for applications) and a reason of at most 123 bytes, then wait for the server&#x27;s close (until deadline) and close the socket. If another task is in recv, that task sees the server&#x27;s answer as a Close message and this call returns once the frame is sent.</p></div><div class="api-item" id="close-now"><div class="api-sig"><code><span class="k">fn</span> <span class="f">close_now</span>(c: Conn)</code> <span class="src">stdlib/websocket/websocket.sl:1168</span><a class="anchor" href="#close-now">#</a></div><p class="api-doc">Close the socket now, with no close handshake: for a connection that is already broken or must stop at once.</p></div><div class="api-item" id="is-open"><div class="api-sig"><code><span class="k">fn</span> <span class="f">is_open</span>(c: Conn) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/websocket/websocket.sl:1173</span><a class="anchor" href="#is-open">#</a></div><p class="api-doc">Whether the connection is open (not closing or closed).</p></div><div class="api-item" id="reason"><div class="api-sig"><code><span class="k">fn</span> <span class="f">reason</span>(c: Conn) -&gt; <span class="t">str</span></code> <span class="src">stdlib/websocket/websocket.sl:1181</span><a class="anchor" href="#reason">#</a></div><p class="api-doc">Why the connection ended, or &quot;&quot; while it is open.</p></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

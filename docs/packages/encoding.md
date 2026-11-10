@@ -17,6 +17,7 @@ encoding.url_encode("a b&c");                 // "a%20b%26c"
 encoding.form_encode("a b&c");                // "a+b%26c"
 encoding.float64_to_le(1.5);                   // exact IEEE-754 bytes, low byte first
 encoding.json_tape("{\"a\":[1,2]}");        // ok([5,5,1,0,11, 7,2,0,2,3, 4,5,2,5,10, ...]): see below
+encoding.xor_mask(head, payload, key);         // head ++ (payload XOR key, repeated): a WebSocket frame
 
 let q = "/search?q=hello+world&page=2";
 guard let term = encoding.query_get(q, "q") else { return; }   // "hello world"
@@ -40,6 +41,7 @@ encoding.query_keys(q);                                        // ["q", "page"]
 | `encoding.float64_to_le` | `(value: float) -> bytes` |
 | `encoding.float64_from_le` | `(bytes: bytes) -> result[float, str]` |
 | `encoding.json_tape` | `(text: str) -> result[[int], str]` |
+| `encoding.xor_mask` | `(head: bytes, data: bytes, key: bytes) -> bytes` |
 
 Like `regex`, `strings` and `os` — and unlike `crypto` and `sql` — this
 is pure computation, so importing it adds no link flag.
@@ -124,6 +126,8 @@ Both decoders accept either case.
 ### `encoding.float64_from_le(bytes) -> result[float,str]`
 
 ### `encoding.json_tape(str) -> result[[int],str]`
+
+### `encoding.xor_mask(bytes, bytes, bytes) -> bytes`
 
 ---
 
