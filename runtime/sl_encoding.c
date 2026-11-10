@@ -835,3 +835,142 @@ static sl_bytes *sl_encoding_xor_mask(sl_bytes *head, sl_bytes *data, sl_bytes *
     for (; i < dn; i++) w[i] = d[i] ^ k[i % kn];
     return out;
 }
+/* ---- base32 -----------------------------------------------------------
+ *
+ * RFC 4648 base32 (section 6) and base32hex (section 7), and Crockford's
+ * base32 for codes people read and type. One encoder and one decoder,
+ * parameterised by the alphabet, as base64 is.
+ *
+ * Decoding is lenient where people are and strict where corruption is:
+ * either case and with or without padding (TOTP secrets arrive in every
+ * combination), but a tail of 1, 3 or 6 characters (no whole byte) or
+ * one whose leftover bits are not zero is an error -- that is a
+ * mistyped or truncated secret, and decoding it anyway would yield a
+ * different key that fails much later and much less clearly. */
+
+static const char SL_ENC_B32_STD[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+static const char SL_ENC_B32_HEX[] = "0123456789ABCDEFGHIJKLMNOPQRSTUV";
+static const char SL_ENC_B32_CROCKFORD[] = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+static char *sl_enc_b32(sl_bytes *b, const char *alpha, int pad) {
+    long long n = b ? b->len : 0;
+    long long full = n / 5, rem = n % 5;
+    /* a tail of 1..4 bytes is 2, 4, 5 or 7 characters, padded to 8 */
+    static const int tail_chars[5] = {0, 2, 4, 5, 7};
+    long long outn = full * 8 + (rem ? (pad ? 8 : tail_chars[rem]) : 0);
+    char *out = (char *)sl_gc_alloc_leaf_uninit((size_t)outn + 1, NULL);
+    char *w = out;
+    long long i = 0;
+    for (; i + 5 <= n; i += 5) {
+        uint64_t v = ((uint64_t)b->ptr[i] << 32) | ((uint64_t)b->ptr[i + 1] << 24) |
+                     ((uint64_t)b->ptr[i + 2] << 16) | ((uint64_t)b->ptr[i + 3] << 8) |
+                     (uint64_t)b->ptr[i + 4];
+        for (int k = 7; k >= 0; k--) *w++ = alpha[(v >> (5 * k)) & 31];
+    }
+    if (rem) {
+        uint64_t v = 0;
+        for (long long k = 0; k < rem; k++) v |= (uint64_t)b->ptr[i + k] << (32 - 8 * k);
+        for (int k = 0; k < tail_chars[rem]; k++) *w++ = alpha[(v >> (35 - 5 * k)) & 31];
+        if (pad)
+            for (int k = tail_chars[rem]; k < 8; k++) *w++ = '=';
+    }
+    *w = 0;
+    return out;
+}
+
+/* The digit for c, or -1; -2 for a character to skip (Crockford's
+   hyphens). Case-insensitive throughout. */
+static int sl_enc_b32_digit(int c, const char *alpha, int crockford) {
+    if (c >= 'a' && c <= 'z') c -= 32;
+    if (crockford) {
+        if (c == '-') return -2;
+        if (c == 'O') c = '0';
+        else if (c == 'I' || c == 'L') c = '1';
+    }
+    const char *p = memchr(alpha, c, 32);
+    return (p && c) ? (int)(p - alpha) : -1;
+}
+
+static sl_res_bytes_str *sl_enc_b32_decode(const char *s, const char *alpha, int crockford,
+                                           const char *who) {
+    if (!s) return sl_enc_ok_bytes(sl_bytes_new(NULL, 0));
+    size_t n = strlen(s);
+    size_t end = n;
+    if (!crockford) {
+        while (end && s[end - 1] == '=') end--;
+        /* padding, when present, completes the last quantum exactly */
+        if (end < n && n % 8) {
+            char m[96], full[160];
+            snprintf(m, sizeof(m), "%s: padded input is not a multiple of 8 characters", who);
+            return sl_enc_err_bytes(sl_enc_msg(full, sizeof(full), m, (long long)n));
+        }
+    }
+    /* the digits, skipping hyphens; at most end of them */
+    unsigned char *d = NULL;
+    sl_rt_preempt_disable();
+    d = (unsigned char *)malloc(end ? end : 1);
+    sl_rt_preempt_enable();
+    if (!d) return sl_enc_err_bytes("base32 decode: out of memory");
+    size_t nd = 0;
+    for (size_t i = 0; i < end; i++) {
+        int v = sl_enc_b32_digit((unsigned char)s[i], alpha, crockford);
+        if (v == -2) continue;
+        if (v < 0) {
+            sl_rt_preempt_disable();
+            free(d);
+            sl_rt_preempt_enable();
+            char m[96], full[160];
+            snprintf(m, sizeof(m), "%s: byte not in the alphabet", who);
+            return sl_enc_err_bytes(sl_enc_msg(full, sizeof(full), m, (long long)i));
+        }
+        d[nd++] = (unsigned char)v;
+    }
+    size_t tail = nd % 8;
+    /* 2, 4, 5 or 7 characters end a quantum; 1, 3 and 6 cannot */
+    static const int tail_bytes[8] = {0, -1, 1, -1, 2, 3, -1, 4};
+    const char *bad = NULL;
+    if (tail_bytes[tail] < 0) bad = "a trailing group of characters that holds no whole byte";
+    long long outn = (long long)(nd / 8) * 5 + (tail_bytes[tail] > 0 ? tail_bytes[tail] : 0);
+    sl_bytes *out = NULL;
+    if (!bad) {
+        out = sl_enc_bytes_raw(outn);
+        unsigned char *w = out->ptr;
+        size_t i = 0;
+        for (; i + 8 <= nd; i += 8) {
+            uint64_t v = 0;
+            for (int k = 0; k < 8; k++) v = (v << 5) | d[i + k];
+            for (int k = 4; k >= 0; k--) *w++ = (unsigned char)(v >> (8 * k));
+        }
+        if (tail) {
+            uint64_t v = 0;
+            for (size_t k = 0; k < tail; k++) v = (v << 5) | d[i + k];
+            int bits = (int)tail * 5, nb = tail_bytes[tail];
+            int spare = bits - nb * 8;
+            if (v & ((1u << spare) - 1)) bad = "trailing bits that are not zero (a mistyped or truncated value)";
+            v >>= spare;
+            for (int k = nb - 1; k >= 0; k--) *w++ = (unsigned char)(v >> (8 * k));
+        }
+    }
+    sl_rt_preempt_disable();
+    free(d);
+    sl_rt_preempt_enable();
+    if (bad) {
+        char m[160];
+        snprintf(m, sizeof(m), "%s: %s", who, bad);
+        return sl_enc_err_bytes(m);
+    }
+    return sl_enc_ok_bytes(out);
+}
+
+static char *sl_encoding_base32_encode(sl_bytes *b) { return sl_enc_b32(b, SL_ENC_B32_STD, 1); }
+static sl_res_bytes_str *sl_encoding_base32_decode(const char *s) {
+    return sl_enc_b32_decode(s, SL_ENC_B32_STD, 0, "base32_decode");
+}
+static char *sl_encoding_base32hex_encode(sl_bytes *b) { return sl_enc_b32(b, SL_ENC_B32_HEX, 1); }
+static sl_res_bytes_str *sl_encoding_base32hex_decode(const char *s) {
+    return sl_enc_b32_decode(s, SL_ENC_B32_HEX, 0, "base32hex_decode");
+}
+static char *sl_encoding_crockford_encode(sl_bytes *b) { return sl_enc_b32(b, SL_ENC_B32_CROCKFORD, 0); }
+static sl_res_bytes_str *sl_encoding_crockford_decode(const char *s) {
+    return sl_enc_b32_decode(s, SL_ENC_B32_CROCKFORD, 1, "crockford_decode");
+}

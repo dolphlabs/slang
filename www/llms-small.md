@@ -299,6 +299,8 @@ for `options()`: protocols, headers, `ping_every`, `compress`),
 `websocket.send_text/send_binary(ws, x, deadline)`, `websocket.recv(ws,
 deadline)` (result of opt Message; `m.kind` is `websocket.Kind.Text/Binary/Close`),
 `websocket.close(ws, 1000, "", deadline)`. Pings are answered automatically.
+`encoding.base32_encode/decode` (RFC 4648; decode takes either case, padded or
+not), `base32hex_*`, and `crockford_encode/decode` for codes people type.
 `crypto`: `seal(key, data, aad)`/`open` (AES-256-GCM, random nonce;
 result), `hkdf_sha256(ikm, salt, info, n)`, `constant_time_eq(a, b)`,
 `ed25519_sign/verify`, `ecdsa_p256_sign_sha256/verify_sha256` (raw r||s),
