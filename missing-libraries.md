@@ -100,19 +100,20 @@ Common backend needs with no package today.
   Built as `stdlib/template` (Go syntax and escaping model), with
   `strings.escape_html`/`escape_js` and `encoding.json_tape` added as the
   natives it renders through.
-- [ ] **WebSocket client** (stdlib, beside `httpc`): dial, TLS, ping/pong,
+- [x] **WebSocket client** (stdlib, beside `httpc`): dial, TLS, ping/pong,
   close handshake, size limits. zokor has the server side only.
+  Built as `stdlib/websocket`, with permessage-deflate, keepalive and
+  `encoding.xor_mask` for masking; passes the Autobahn client suite.
 - [x] **MySQL / MariaDB driver** (stdlib or package): only Postgres, SQLite
-  and Mongo exist. Built as `stdlib/mysql` with pg's API (prepared
-  statements, rows_as, stream, pool) and every common auth plugin; tested
-  live against MySQL 8.4 and MariaDB 11.
+  and Mongo exist.
 
 ## 4. Smaller formats and protocols
 
-- [ ] **CSV** (stdlib): RFC 4180 read and write, streaming, quoted fields,
+- [x] **CSV** (stdlib): RFC 4180 read and write, streaming, quoted fields,
   row and field size limits.
-- [ ] **base32** (stdlib, in `encoding`): RFC 4648, for TOTP secrets and
-  readable codes.
+- [x] **base32** (stdlib, in `encoding`): RFC 4648, for TOTP secrets and
+  readable codes. Built as `encoding.base32_*`, `base32hex_*` and
+  `crockford_*`, checked against Python's base64 module.
 - [ ] **gRPC streaming** (package `slangpackages/grpc`): server, client and
   bidirectional streams; the package is unary only.
 

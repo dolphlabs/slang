@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>csv — slang</title>
+<meta name="description" content="Package csv.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="csv">
+<meta property="og:description" content="Package csv.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://slang.dolphlabs.com/packages/csv">
+<meta property="og:image" content="https://slang.dolphlabs.com/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The slang rabbit mark beside the slang wordmark">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://slang.dolphlabs.com/packages/csv">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/csv.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <button id="navtoggle" class="navtoggle" type="button"
+          aria-label="Toggle navigation" aria-expanded="false"
+          aria-controls="mainnav">
+    <span></span><span></span><span></span>
+  </button>
+  <nav class="mainnav" id="mainnav"><a href="../">Home</a><a href="../guide/">Guide</a><a href="../guide/data">Data types</a><a href="../guide/errors">Errors</a><a href="../guide/functions">Functions</a><a href="../concurrency/">Concurrency</a><a href="../testing/">Testing</a><a href="../bench/">Benchmarks</a><a href="../packages/">Packages</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="../limitations/">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="navscrim" class="navscrim" hidden></div>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>csv</h1>
+      <p class="tagline">Package csv.</p>
+      <p class="agentline">
+        <a href="../packages/csv.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>CSV (RFC 4180): read a whole document or stream a large one, and write.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;csv&quot;</span>;
+
+<span class="k">let</span> r = csv.<span class="f">parse</span>(<span class="s">&quot;name,qty\n\&quot;Smith, J\&quot;,3\n&quot;</span>);   <span class="c">// result[[[str]], str]</span>
+<span class="k">guard</span> <span class="k">let</span> rows = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }
+csv.<span class="f">to_maps</span>(rows);                                     <span class="c">// the header row as keys: [map[str]str]</span>
+
+<span class="k">let</span> o = csv.<span class="f">options</span>();
+o.sep = <span class="n">9</span>;                                             <span class="c">// TSV</span>
+o.comment = <span class="n">35</span>;                                        <span class="c">// skip lines starting with #</span>
+csv.<span class="f">parse_with</span>(text, o);
+
+<span class="c">// streaming: feed what you read, take the records that are whole</span>
+<span class="k">let</span> rd = csv.<span class="f">new_reader</span>(csv.<span class="f">options</span>());
+csv.<span class="f">feed</span>(rd, chunk);                                   <span class="c">// as often as needed</span>
+<span class="k">let</span> nr = csv.<span class="f">next</span>(rd);                                 <span class="c">// result[opt[[str]], str]; none: feed more</span>
+csv.<span class="f">end</span>(rd);                                           <span class="c">// then next() returns what remains</span>
+
+csv.<span class="f">format</span>(rows);                                      <span class="c">// CRLF, quoted only where needed</span>
+<span class="k">let</span> w = csv.<span class="f">write_options</span>();
+w.spreadsheet_safe = <span class="k">true</span>;                             <span class="c">// &#x27;=1+1 stays text in a spreadsheet</span>
+csv.<span class="f">format_with</span>(rows, w);</code></pre></div>
+<p>Quoted fields may hold separators, doubled quotes and line breaks. Line endings are CRLF or LF, and empty lines are skipped. Errors name the line: <code>csv: line 12: text after a closing quote</code>.</p>
+<p><strong>Strictness.</strong> A quote inside an unquoted field, or text after a closing quote, is refused unless <code>lazy_quotes</code> is set, which reads them as data, as Go&#x27;s <code>LazyQuotes</code> does. By default every record must be as wide as the first; set <code>fields_per_record</code> to a fixed width, or -1 to allow any.</p>
+<p><strong>Limits.</strong> The input decides how big things get, so <code>max_field</code> (1 MiB), <code>max_record</code> (16 MiB) and <code>max_fields</code> (4096) bound it. A record still incomplete past <code>max_record</code> is refused without buffering more.</p>
+<p><strong>Streaming</strong> keeps one record&#x27;s worth of input. Fed chunks are joined only when a record needs them, and a record far larger than one chunk is rescanned O(log n) times, not once per chunk. There are no callbacks: slang has no closures, so the caller does the reading and the reader only parses.</p>
+<p><strong>Writing.</strong> A field is quoted when it holds the separator, the quote or a line break, or begins with a space or tab. A record of one empty field is written as <code>&quot;&quot;</code>, so it does not read back as an empty line. <code>spreadsheet_safe</code> prefixes fields beginning with <code>=</code>, <code>+</code>, <code>-</code>, <code>@</code>, tab or CR with <code>&#x27;</code>. That keeps a spreadsheet from running them as formulas (CSV injection), but it changes the data, so use it only for files meant for spreadsheets.</p>
+<p><strong>Cost.</strong> The byte scan is native (<code>encoding.csv_record</code>); the package assembles fields. On an 8 MB, 120,000-row file, streaming took about 105 ms against about 33 ms for Go&#x27;s <code>encoding/csv</code> record loop; the rest is one string per field. <code>parse</code> holds every field at once, which is slower again on large inputs (about 650 ms here), so stream big files.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="options"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Options</code> <span class="src">stdlib/csv/csv.sl:36</span><a class="anchor" href="#options">#</a></div></div><div class="api-item" id="options"><div class="api-sig"><code><span class="k">fn</span> <span class="f">options</span>() -&gt; Options</code> <span class="src">stdlib/csv/csv.sl:60</span><a class="anchor" href="#options">#</a></div><p class="api-doc">Comma-separated, double-quoted, strict quotes, empty lines skipped, every record as wide as the first; a field up to 1 MiB, a record up to 16 MiB and 4096 fields.</p></div><div class="api-item" id="reader"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Reader</code> <span class="src">stdlib/csv/csv.sl:65</span><a class="anchor" href="#reader">#</a></div></div><div class="api-item" id="parse"><div class="api-sig"><code><span class="k">fn</span> <span class="f">parse</span>(text: <span class="t">str</span>) -&gt; <span class="t">result</span>[[[<span class="t">str</span>]], <span class="t">str</span>]</code> <span class="src">stdlib/csv/csv.sl:84</span><a class="anchor" href="#parse">#</a></div><p class="api-doc">The whole input with the default options.</p></div><div class="api-item" id="parse-with"><div class="api-sig"><code><span class="k">fn</span> <span class="f">parse_with</span>(text: <span class="t">str</span>, o: Options) -&gt; <span class="t">result</span>[[[<span class="t">str</span>]], <span class="t">str</span>]</code> <span class="src">stdlib/csv/csv.sl:88</span><a class="anchor" href="#parse-with">#</a></div></div><div class="api-item" id="parse-bytes"><div class="api-sig"><code><span class="k">fn</span> <span class="f">parse_bytes</span>(data: <span class="t">bytes</span>, o: Options) -&gt; <span class="t">result</span>[[[<span class="t">str</span>]], <span class="t">str</span>]</code> <span class="src">stdlib/csv/csv.sl:92</span><a class="anchor" href="#parse-bytes">#</a></div></div><div class="api-item" id="new-reader"><div class="api-sig"><code><span class="k">fn</span> <span class="f">new_reader</span>(o: Options) -&gt; Reader</code> <span class="src">stdlib/csv/csv.sl:130</span><a class="anchor" href="#new-reader">#</a></div><p class="api-doc">A reader to feed: records come out of next as they become whole.</p></div><div class="api-item" id="feed"><div class="api-sig"><code><span class="k">fn</span> <span class="f">feed</span>(r: Reader, chunk: <span class="t">bytes</span>)</code> <span class="src">stdlib/csv/csv.sl:138</span><a class="anchor" href="#feed">#</a></div><p class="api-doc">More input. Nothing is copied until a record needs it.</p></div><div class="api-item" id="end"><div class="api-sig"><code><span class="k">fn</span> <span class="f">end</span>(r: Reader)</code> <span class="src">stdlib/csv/csv.sl:147</span><a class="anchor" href="#end">#</a></div><p class="api-doc">The input is over: next returns what remains, the last record without its line ending included.</p></div><div class="api-item" id="finished"><div class="api-sig"><code><span class="k">fn</span> <span class="f">finished</span>(r: Reader) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/csv/csv.sl:152</span><a class="anchor" href="#finished">#</a></div><p class="api-doc">Every record has been returned and the input has ended.</p></div><div class="api-item" id="line"><div class="api-sig"><code><span class="k">fn</span> <span class="f">line</span>(r: Reader) -&gt; <span class="t">int</span></code> <span class="src">stdlib/csv/csv.sl:157</span><a class="anchor" href="#line">#</a></div><p class="api-doc">The line the next record starts on (for messages of the caller&#x27;s own).</p></div><div class="api-item" id="next"><div class="api-sig"><code><span class="k">fn</span> <span class="f">next</span>(r: Reader) -&gt; <span class="t">result</span>[<span class="t">opt</span>[[<span class="t">str</span>]], <span class="t">str</span>]</code> <span class="src">stdlib/csv/csv.sl:205</span><a class="anchor" href="#next">#</a></div><p class="api-doc">The next whole record; none when it needs more input (feed, or end) or when the input is finished.</p></div><div class="api-item" id="to-maps"><div class="api-sig"><code><span class="k">fn</span> <span class="f">to_maps</span>(rows: [[<span class="t">str</span>]]) -&gt; <span class="t">result</span>[[<span class="t">map</span>[<span class="t">str</span>]<span class="t">str</span>], <span class="t">str</span>]</code> <span class="src">stdlib/csv/csv.sl:319</span><a class="anchor" href="#to-maps">#</a></div><p class="api-doc">The first row as the header, each later row as a map from it. A duplicate or empty header name is an error, as is a row of another width.</p></div><div class="api-item" id="writeoptions"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> WriteOptions</code> <span class="src">stdlib/csv/csv.sl:352</span><a class="anchor" href="#writeoptions">#</a></div></div><div class="api-item" id="write-options"><div class="api-sig"><code><span class="k">fn</span> <span class="f">write_options</span>() -&gt; WriteOptions</code> <span class="src">stdlib/csv/csv.sl:366</span><a class="anchor" href="#write-options">#</a></div></div><div class="api-item" id="format"><div class="api-sig"><code><span class="k">fn</span> <span class="f">format</span>(rows: [[<span class="t">str</span>]]) -&gt; <span class="t">str</span></code> <span class="src">stdlib/csv/csv.sl:371</span><a class="anchor" href="#format">#</a></div><p class="api-doc">Every row as CSV, with the default write options.</p></div><div class="api-item" id="format-with"><div class="api-sig"><code><span class="k">fn</span> <span class="f">format_with</span>(rows: [[<span class="t">str</span>]], o: WriteOptions) -&gt; <span class="t">str</span></code> <span class="src">stdlib/csv/csv.sl:375</span><a class="anchor" href="#format-with">#</a></div></div><div class="api-item" id="write-row"><div class="api-sig"><code><span class="k">fn</span> <span class="f">write_row</span>(out: builder.Str, row: [<span class="t">str</span>], o: WriteOptions)</code> <span class="src">stdlib/csv/csv.sl:384</span><a class="anchor" href="#write-row">#</a></div><p class="api-doc">Appends one record to out: for output built a row at a time.</p></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

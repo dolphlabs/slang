@@ -22,6 +22,7 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [byteutil](packages/byteutil.md): Package byteutil.
 - [compress](packages/compress.md): Package compress.
 - [crypto](packages/crypto.md): Package crypto.
+- [csv](packages/csv.md): Package csv.
 - [decimal](packages/decimal.md): Package decimal.
 - [encoding](packages/encoding.md): Package encoding.
 - [flags](packages/flags.md): Package flags.
@@ -53,3 +54,4 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [timez](packages/timez.md): Package timez.
 - [unicode](packages/unicode.md): Package unicode.
 - [uuid](packages/uuid.md): Package uuid.
+- [websocket](packages/websocket.md): Package websocket.

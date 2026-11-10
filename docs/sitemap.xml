@@ -16,6 +16,7 @@
   <url><loc>https://slang.dolphlabs.com/packages/byteutil</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/compress</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/crypto</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/csv</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/decimal</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/encoding</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/flags</loc></url>
@@ -47,4 +48,5 @@
   <url><loc>https://slang.dolphlabs.com/packages/timez</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/unicode</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/uuid</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/websocket</loc></url>
 </urlset>

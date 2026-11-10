@@ -793,3 +793,319 @@ fail:
     sl_rt_preempt_enable();
     return sl_jt_err(bad, i);
 }
+
+/* ---- XOR with a repeating key -----------------------------------------
+ *
+ * head, then data XORed with key repeated over it, in one allocation: a
+ * WebSocket client frame (RFC 6455 §5.3) is its header followed by the
+ * payload masked with a 4-byte key, and building it this way copies the
+ * payload once. The XOR runs eight bytes at a time over a key widened to
+ * a word; the result is the same as the byte-at-a-time definition for
+ * any key length, since the word is the key repeated from offset 0 and
+ * each word starts at a multiple of 8 into data. That holds for keys
+ * whose length divides 8 (1, 2, 4, 8); other lengths take the byte
+ * loop. An empty key copies data unchanged. */
+static sl_bytes *sl_encoding_xor_mask(sl_bytes *head, sl_bytes *data, sl_bytes *key) {
+    long long hn = head ? head->len : 0;
+    long long dn = data ? data->len : 0;
+    long long kn = key ? key->len : 0;
+    sl_bytes *out = sl_enc_bytes_raw(hn + dn);
+    unsigned char *w = out->ptr;
+    if (hn) memcpy(w, head->ptr, (size_t)hn);
+    w += hn;
+    const unsigned char *d = dn ? data->ptr : NULL;
+    if (kn == 0) {
+        if (dn) memcpy(w, d, (size_t)dn);
+        return out;
+    }
+    const unsigned char *k = key->ptr;
+    long long i = 0;
+    if (8 % kn == 0) {
+        unsigned char kw[8];
+        for (int j = 0; j < 8; j++) kw[j] = k[j % kn];
+        unsigned long long m;
+        memcpy(&m, kw, 8);
+        for (; i + 8 <= dn; i += 8) {
+            unsigned long long x;
+            memcpy(&x, d + i, 8);
+            x ^= m;
+            memcpy(w + i, &x, 8);
+        }
+    }
+    for (; i < dn; i++) w[i] = d[i] ^ k[i % kn];
+    return out;
+}
+/* ---- base32 -----------------------------------------------------------
+ *
+ * RFC 4648 base32 (section 6) and base32hex (section 7), and Crockford's
+ * base32 for codes people read and type. One encoder and one decoder,
+ * parameterised by the alphabet, as base64 is.
+ *
+ * Decoding is lenient where people are and strict where corruption is:
+ * either case and with or without padding (TOTP secrets arrive in every
+ * combination), but a tail of 1, 3 or 6 characters (no whole byte) or
+ * one whose leftover bits are not zero is an error -- that is a
+ * mistyped or truncated secret, and decoding it anyway would yield a
+ * different key that fails much later and much less clearly. */
+
+static const char SL_ENC_B32_STD[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+static const char SL_ENC_B32_HEX[] = "0123456789ABCDEFGHIJKLMNOPQRSTUV";
+static const char SL_ENC_B32_CROCKFORD[] = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+static char *sl_enc_b32(sl_bytes *b, const char *alpha, int pad) {
+    long long n = b ? b->len : 0;
+    long long full = n / 5, rem = n % 5;
+    /* a tail of 1..4 bytes is 2, 4, 5 or 7 characters, padded to 8 */
+    static const int tail_chars[5] = {0, 2, 4, 5, 7};
+    long long outn = full * 8 + (rem ? (pad ? 8 : tail_chars[rem]) : 0);
+    char *out = (char *)sl_gc_alloc_leaf_uninit((size_t)outn + 1, NULL);
+    char *w = out;
+    long long i = 0;
+    for (; i + 5 <= n; i += 5) {
+        uint64_t v = ((uint64_t)b->ptr[i] << 32) | ((uint64_t)b->ptr[i + 1] << 24) |
+                     ((uint64_t)b->ptr[i + 2] << 16) | ((uint64_t)b->ptr[i + 3] << 8) |
+                     (uint64_t)b->ptr[i + 4];
+        for (int k = 7; k >= 0; k--) *w++ = alpha[(v >> (5 * k)) & 31];
+    }
+    if (rem) {
+        uint64_t v = 0;
+        for (long long k = 0; k < rem; k++) v |= (uint64_t)b->ptr[i + k] << (32 - 8 * k);
+        for (int k = 0; k < tail_chars[rem]; k++) *w++ = alpha[(v >> (35 - 5 * k)) & 31];
+        if (pad)
+            for (int k = tail_chars[rem]; k < 8; k++) *w++ = '=';
+    }
+    *w = 0;
+    return out;
+}
+
+/* The digit for c, or -1; -2 for a character to skip (Crockford's
+   hyphens). Case-insensitive throughout. */
+static int sl_enc_b32_digit(int c, const char *alpha, int crockford) {
+    if (c >= 'a' && c <= 'z') c -= 32;
+    if (crockford) {
+        if (c == '-') return -2;
+        if (c == 'O') c = '0';
+        else if (c == 'I' || c == 'L') c = '1';
+    }
+    const char *p = memchr(alpha, c, 32);
+    return (p && c) ? (int)(p - alpha) : -1;
+}
+
+static sl_res_bytes_str *sl_enc_b32_decode(const char *s, const char *alpha, int crockford,
+                                           const char *who) {
+    if (!s) return sl_enc_ok_bytes(sl_bytes_new(NULL, 0));
+    size_t n = strlen(s);
+    size_t end = n;
+    if (!crockford) {
+        while (end && s[end - 1] == '=') end--;
+        /* padding, when present, completes the last quantum exactly */
+        if (end < n && n % 8) {
+            char m[96], full[160];
+            snprintf(m, sizeof(m), "%s: padded input is not a multiple of 8 characters", who);
+            return sl_enc_err_bytes(sl_enc_msg(full, sizeof(full), m, (long long)n));
+        }
+    }
+    /* the digits, skipping hyphens; at most end of them */
+    unsigned char *d = NULL;
+    sl_rt_preempt_disable();
+    d = (unsigned char *)malloc(end ? end : 1);
+    sl_rt_preempt_enable();
+    if (!d) return sl_enc_err_bytes("base32 decode: out of memory");
+    size_t nd = 0;
+    for (size_t i = 0; i < end; i++) {
+        int v = sl_enc_b32_digit((unsigned char)s[i], alpha, crockford);
+        if (v == -2) continue;
+        if (v < 0) {
+            sl_rt_preempt_disable();
+            free(d);
+            sl_rt_preempt_enable();
+            char m[96], full[160];
+            snprintf(m, sizeof(m), "%s: byte not in the alphabet", who);
+            return sl_enc_err_bytes(sl_enc_msg(full, sizeof(full), m, (long long)i));
+        }
+        d[nd++] = (unsigned char)v;
+    }
+    size_t tail = nd % 8;
+    /* 2, 4, 5 or 7 characters end a quantum; 1, 3 and 6 cannot */
+    static const int tail_bytes[8] = {0, -1, 1, -1, 2, 3, -1, 4};
+    const char *bad = NULL;
+    if (tail_bytes[tail] < 0) bad = "a trailing group of characters that holds no whole byte";
+    long long outn = (long long)(nd / 8) * 5 + (tail_bytes[tail] > 0 ? tail_bytes[tail] : 0);
+    sl_bytes *out = NULL;
+    if (!bad) {
+        out = sl_enc_bytes_raw(outn);
+        unsigned char *w = out->ptr;
+        size_t i = 0;
+        for (; i + 8 <= nd; i += 8) {
+            uint64_t v = 0;
+            for (int k = 0; k < 8; k++) v = (v << 5) | d[i + k];
+            for (int k = 4; k >= 0; k--) *w++ = (unsigned char)(v >> (8 * k));
+        }
+        if (tail) {
+            uint64_t v = 0;
+            for (size_t k = 0; k < tail; k++) v = (v << 5) | d[i + k];
+            int bits = (int)tail * 5, nb = tail_bytes[tail];
+            int spare = bits - nb * 8;
+            if (v & ((1u << spare) - 1)) bad = "trailing bits that are not zero (a mistyped or truncated value)";
+            v >>= spare;
+            for (int k = nb - 1; k >= 0; k--) *w++ = (unsigned char)(v >> (8 * k));
+        }
+    }
+    sl_rt_preempt_disable();
+    free(d);
+    sl_rt_preempt_enable();
+    if (bad) {
+        char m[160];
+        snprintf(m, sizeof(m), "%s: %s", who, bad);
+        return sl_enc_err_bytes(m);
+    }
+    return sl_enc_ok_bytes(out);
+}
+
+static char *sl_encoding_base32_encode(sl_bytes *b) { return sl_enc_b32(b, SL_ENC_B32_STD, 1); }
+static sl_res_bytes_str *sl_encoding_base32_decode(const char *s) {
+    return sl_enc_b32_decode(s, SL_ENC_B32_STD, 0, "base32_decode");
+}
+static char *sl_encoding_base32hex_encode(sl_bytes *b) { return sl_enc_b32(b, SL_ENC_B32_HEX, 1); }
+static sl_res_bytes_str *sl_encoding_base32hex_decode(const char *s) {
+    return sl_enc_b32_decode(s, SL_ENC_B32_HEX, 0, "base32hex_decode");
+}
+static char *sl_encoding_crockford_encode(sl_bytes *b) { return sl_enc_b32(b, SL_ENC_B32_CROCKFORD, 0); }
+static sl_res_bytes_str *sl_encoding_crockford_decode(const char *s) {
+    return sl_enc_b32_decode(s, SL_ENC_B32_CROCKFORD, 1, "crockford_decode");
+}
+/* ---- CSV records ------------------------------------------------------
+ *
+ * One CSV record (RFC 4180) from data[from..], as field spans, for
+ * stdlib/csv: the scan is per byte, so it is done here and the package
+ * keeps only buffering, limits and the API. Returns
+ *
+ *     [status, next, nfields, lines, start1, end1, esc1, start2, end2, esc2, ...]
+ *
+ *   status 0  a record: next is the offset after its line ending
+ *          1  the record does not end within data and !final: read more
+ *          2  malformed: next is the offset of the offending byte, and
+ *             nfields is the reason (1 a quote in an unquoted field,
+ *             2 a character after a closing quote, 3 an unclosed quote,
+ *             4 out of memory)
+ *          3  no record: from is at the end of data
+ *   lines is how many line endings the record takes up (more than one
+ *   when a quoted field holds a newline), for error positions;
+ *   a quoted field's span is inside its quotes; esc is 1 when it holds
+ *   doubled quotes to collapse.
+ *
+ * flags: 1 lazy, 2 final (data is all there is). sep and quote are
+ * compared as ints, so 256 means "none" (a comment line is scanned as
+ * one field up to its line end).
+ * Line endings are CRLF or LF; a CR not before LF is data. lazy accepts
+ * a quote inside an unquoted field and text after a closing quote, as
+ * data, the way Go's LazyQuotes does. */
+static sl_arr *sl_encoding_csv_record(sl_bytes *data, long long from, long long sep,
+                                      long long quote, long long flags) {
+    bool lazy = (flags & 1) != 0, final = (flags & 2) != 0;
+    long long n = data ? data->len : 0;
+    const unsigned char *b = data ? data->ptr : (const unsigned char *)"";
+    /* spans gather in a C buffer -- on the stack for up to 64 fields --
+       and the list is allocated once, at its exact size, at the end:
+       growing it a push at a time cost more than the scan itself */
+    long long stackbuf[4 + 3 * 64];
+    long long *v = stackbuf;
+    long long cap = 4 + 3 * 64, used = 4;
+    long long status = 0, next = from, nf = 0;
+    if (from < 0 || from >= n) {
+        status = 3;
+        goto done;
+    }
+    long long i = from;
+    for (;;) {
+        /* one field starts at i */
+        long long fs, fe, esc = 0;
+        if (i < n && b[i] == quote) {
+            fs = i + 1;
+            long long j = fs;
+            for (;;) {
+                const unsigned char *q = j < n ? memchr(b + j, (int)quote, (size_t)(n - j)) : NULL;
+                if (!q) {
+                    if (!final) { status = 1; goto done; }
+                    status = 2; next = fs - 1; nf = 3; goto done;
+                }
+                j = q - b;
+                if (j + 1 < n && b[j + 1] == quote) { esc = 1; j += 2; continue; }
+                if (j + 1 >= n && !final) { status = 1; goto done; }
+                break;
+            }
+            fe = j;
+            i = j + 1;
+            /* after the closing quote: a separator, a line end, or the end */
+            if (i < n && b[i] == '\r' && i + 1 >= n && !final) { status = 1; goto done; }
+            if (i < n && b[i] != sep && b[i] != '\n' &&
+                !(b[i] == '\r' && i + 1 < n && b[i + 1] == '\n') &&
+                !(b[i] == '\r' && i + 1 >= n)) {
+                if (!lazy) { status = 2; next = i; nf = 2; goto done; }
+                /* lazy: the rest of the field up to the separator is data,
+                   so the span runs from the opening quote's content on */
+                while (i < n && b[i] != sep && b[i] != '\n') i++;
+                if (i < n && b[i] == '\n' && i > fs && b[i - 1] == '\r') fe = i - 1; else fe = i;
+                esc = 1;
+            }
+        } else {
+            fs = i;
+            while (i < n && b[i] != sep && b[i] != '\n') {
+                if (b[i] == quote && !lazy) { status = 2; next = i; nf = 1; goto done; }
+                i++;
+            }
+            fe = i;
+            if (i < n && b[i] == '\n' && fe > fs && b[fe - 1] == '\r') fe--;
+            if (i >= n && fe > fs && b[fe - 1] == '\r') {
+                /* a CR at the very end: a line ending if nothing follows */
+                if (!final) { status = 1; goto done; }
+                fe--;
+            }
+        }
+        if (used + 3 > cap) {
+            long long ncap = cap * 2;
+            sl_rt_preempt_disable();
+            long long *nv = (long long *)malloc((size_t)ncap * sizeof(long long));
+            if (nv) {
+                memcpy(nv, v, (size_t)used * sizeof(long long));
+                if (v != stackbuf) free(v);
+            }
+            sl_rt_preempt_enable();
+            if (!nv) { status = 2; next = fs; nf = 4; goto done; }
+            v = nv;
+            cap = ncap;
+        }
+        v[used++] = fs;
+        v[used++] = fe;
+        v[used++] = esc;
+        nf++;
+        if (i < n && b[i] == sep) { i++; continue; }
+        if (i < n && b[i] == '\r' && i + 1 < n && b[i + 1] == '\n') { next = i + 2; break; }
+        if (i < n && b[i] == '\n') { next = i + 1; break; }
+        if (i < n && b[i] == '\r') { next = i + 1; break; }
+        /* the end of data with no line ending */
+        if (!final) { status = 1; goto done; }
+        next = n;
+        break;
+    }
+done:;
+    long long lines = 0;
+    if (status == 0) {
+        const unsigned char *p = b + from, *e = b + next;
+        while (p < e && (p = memchr(p, '\n', (size_t)(e - p))) != NULL) { lines++; p++; }
+        if (lines == 0) lines = 1;
+    }
+    v[0] = status;
+    v[1] = next;
+    v[2] = nf;
+    v[3] = lines;
+    if (status != 0) used = 4;
+    sl_arr *out = sl_arr_from(v, used, sizeof(long long), 0);
+    if (v != stackbuf) {
+        sl_rt_preempt_disable();
+        free(v);
+        sl_rt_preempt_enable();
+    }
+    return out;
+}
+

@@ -2168,7 +2168,7 @@ binary carries it wherever it goes; see `THIRD_PARTY.md` and
 
 #### `encoding`
 
-Hex, base64, base64url, percent-encoding and query strings — the ways
+Hex, base64, base64url, base32, percent-encoding and query strings — the ways
 arbitrary bytes travel through a channel that only carries text. The
 package also converts binary64 floats to and from little-endian bytes for
 binary protocols such as BSON.
@@ -2183,6 +2183,11 @@ encoding.url_encode("a b&c");                 // "a%20b%26c"
 encoding.form_encode("a b&c");                // "a+b%26c"
 encoding.float64_to_le(1.5);                   // exact IEEE-754 bytes, low byte first
 encoding.json_tape("{\"a\":[1,2]}");        // ok([5,5,1,0,11, 7,2,0,2,3, 4,5,2,5,10, ...]): see below
+encoding.xor_mask(head, payload, key);         // head ++ (payload XOR key, repeated): a WebSocket frame
+encoding.base32_encode(secret);               // "JBSWY3DPEHPK3PXP" -- a TOTP secret
+encoding.base32_decode("jbswy3dpehpk3pxp");   // either case, padded or not
+encoding.crockford_encode(id_bytes);          // "7ZQ4M1X0" -- a code people read aloud
+encoding.crockford_decode("7zq-4ml-xo");      // hyphens skipped, l read as 1, o as 0
 
 let q = "/search?q=hello+world&page=2";
 guard let term = encoding.query_get(q, "q") else { return; }   // "hello world"
@@ -2206,6 +2211,14 @@ encoding.query_keys(q);                                        // ["q", "page"]
 | `encoding.float64_to_le` | `(value: float) -> bytes` |
 | `encoding.float64_from_le` | `(bytes: bytes) -> result[float, str]` |
 | `encoding.json_tape` | `(text: str) -> result[[int], str]` |
+| `encoding.xor_mask` | `(head: bytes, data: bytes, key: bytes) -> bytes` |
+| `encoding.base32_encode` | `(b: bytes) -> str` |
+| `encoding.base32_decode` | `(s: str) -> result[bytes, str]` |
+| `encoding.base32hex_encode` | `(b: bytes) -> str` |
+| `encoding.base32hex_decode` | `(s: str) -> result[bytes, str]` |
+| `encoding.crockford_encode` | `(b: bytes) -> str` |
+| `encoding.crockford_decode` | `(s: str) -> result[bytes, str]` |
+| `encoding.csv_record` | `(data: bytes, from: int, sep: int, quote: int, flags: int) -> [int]` |
 
 Like `regex`, `strings` and `os` — and unlike `crypto` and `sql` — this
 is pure computation, so importing it adds no link flag.
@@ -2254,6 +2267,18 @@ Five things worth knowing:
   it, skips a subtree in one step, and materialises only the strings it
   reads (`strings.from_bytes` over the span). `template` reads its data
   this way; use `json.decode` when the shape is known.
+- **base32 decodes leniently and strictly at once.** `base32_decode`
+  takes either case, with or without `=` padding, because TOTP secrets
+  arrive in every combination. It refuses a tail of 1, 3 or 6
+  characters, which holds no whole byte, and a tail whose leftover bits
+  are not zero. That input is a mistyped or truncated secret, and
+  decoding it anyway would yield a different key that fails later and
+  less clearly. Python's decoder accepts `MZ======`; this one does not.
+  `base32hex` (RFC 4648 §7) sorts in the same order as the bytes it
+  encodes. Crockford's alphabet leaves out I, L, O and U so a code read
+  aloud cannot be misheard; its decoder reads I and L as 1 and O as 0,
+  and skips hyphens. Strip spaces from a secret shown in groups before
+  decoding it.
 
 Percent-escapes are emitted uppercase (RFC 3986 §2.1) and hex digests
 lowercase (what `sha256sum`, git and every API that returns one use).
@@ -2471,6 +2496,77 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
+#### `websocket`
+
+A WebSocket client (RFC 6455) over `ws://` and `wss://`, with
+permessage-deflate (RFC 7692) when asked for. In the Autobahn
+TestSuite's client run (`tests/live/websocket`, 517 cases), 440 cases
+are OK, 3 INFORMATIONAL and 2 NON-STRICT, with no failures. The NON-STRICT
+two are invalid UTF-8 inside one frame, caught when the frame is whole
+rather than byte by byte. The 72 UNIMPLEMENTED are window-size variants
+of permessage-deflate this client does not offer.
+
+```slang
+import "websocket";
+
+let o = websocket.options();
+o.protocols = ["v2.chat"];                       // offered; Conn.protocol is the server's pick
+o.headers = ["Authorization: Bearer " + token];
+o.ping_every = 20000000000;                      // keepalive: a ping every 20 s
+o.compress = true;                               // permessage-deflate
+let r = websocket.dial_with("wss://example.com/live", o, deadline);
+guard let ws = r else let e = err_of(r) { panic(e); }
+
+websocket.send_text(ws, "{\"subscribe\":\"prices\"}", deadline);
+websocket.send_binary(ws, frame, deadline);
+let mr = websocket.recv(ws, deadline);           // result[opt[Message], str]; none: the deadline passed
+guard let got = mr else let e = err_of(mr) { panic(e); }
+guard let m = got else { return; }
+if m.kind == websocket.Kind.Text { handle(websocket.text(m)); }
+websocket.close(ws, 1000, "bye", deadline);      // the close handshake
+```
+
+`recv` returns `Text`, `Binary` or `Close` messages, reassembled from
+their fragments. It answers pings and consumes pongs as they arrive, and
+answers the server's close before returning it. A deadline that passes
+loses nothing: the next `recv` carries on, even partway through a frame.
+One task reads at a time; any number may send, and a send is one whole
+frame written under a lock, so frames from different tasks never
+interleave.
+
+**What it refuses.** Masked or reserved-bit frames, unknown opcodes,
+fragmented or oversized control frames, lengths not in their shortest
+form, continuations with nothing to continue, text that is not UTF-8
+(checked per fragment as it arrives), close codes a peer may not send,
+and messages over `max_message` (32 MiB by default, counted after
+inflation, so a compression bomb is cut off). Each fails the connection
+with the matching close code (1002, 1007, 1009). In the handshake: a
+wrong `Sec-WebSocket-Accept`, a subprotocol or extension that was not
+offered, and redirects. A redirect would send the handshake, and any
+credentials in it, somewhere the caller did not name.
+
+**Keepalive.** With `ping_every` set, a ping goes out each interval and a
+connection whose ping goes a whole interval unanswered is closed;
+`recv` then reports why. Pongs arrive through `recv`, so a connection
+nobody reads cannot keep itself alive.
+
+**Compression** is offered without context takeover in either direction.
+The server must accept `server_no_context_takeover`, so each message it
+sends inflates on its own. Each message this client sends is compressed
+on its own too, as a sync-flushed stream with no final block
+(`compress.deflate_raw_flush`), which a server keeping one decompressor
+for the whole connection reads correctly. No 32 KiB window per direction
+stays alive between messages. A message is sent compressed only when
+that makes it smaller.
+
+**Text with U+0000.** A `str` ends at its first zero byte, so
+`websocket.text(m)` stops there. `m.data` holds every byte, and
+`send_text_bytes` sends one.
+
+Frames are masked with keys drawn from a 4 KiB pool of `crypto.rand`
+bytes, refilled as it empties. A frame is built in one allocation by
+`encoding.xor_mask`. Large frames are read in chunks and joined once.
+
 #### `compress`
 
 gzip, zlib and raw DEFLATE, over zlib (`-lz`, added only when a program
@@ -2498,6 +2594,7 @@ guard let plain = ur else let e = err_of(ur) {
 | `compress.deflate` | `(b: bytes) -> result[bytes, str]` |
 | `compress.inflate` | `(b: bytes, max_out: int) -> result[bytes, str]` |
 | `compress.deflate_raw` | `(b: bytes) -> result[bytes, str]` |
+| `compress.deflate_raw_flush` | `(b: bytes) -> result[bytes, str]` (ends in a sync flush, no final block: RFC 7692) |
 | `compress.inflate_raw` | `(b: bytes, max_out: int) -> result[bytes, str]` |
 
 **Decompression takes a mandatory output limit.** `max_out` is a
@@ -2860,6 +2957,67 @@ given time (tests, ids that carry an event's time); `to_binary` and
 version and variant, so ids from Postgres's `gen_random_uuid()` or other
 services pass.
 
+#### `csv`
+
+CSV (RFC 4180): read a whole document or stream a large one, and write.
+
+```slang
+import "csv";
+
+let r = csv.parse("name,qty\n\"Smith, J\",3\n");   // result[[[str]], str]
+guard let rows = r else let e = err_of(r) { panic(e); }
+csv.to_maps(rows);                                     // the header row as keys: [map[str]str]
+
+let o = csv.options();
+o.sep = 9;                                             // TSV
+o.comment = 35;                                        // skip lines starting with #
+csv.parse_with(text, o);
+
+// streaming: feed what you read, take the records that are whole
+let rd = csv.new_reader(csv.options());
+csv.feed(rd, chunk);                                   // as often as needed
+let nr = csv.next(rd);                                 // result[opt[[str]], str]; none: feed more
+csv.end(rd);                                           // then next() returns what remains
+
+csv.format(rows);                                      // CRLF, quoted only where needed
+let w = csv.write_options();
+w.spreadsheet_safe = true;                             // '=1+1 stays text in a spreadsheet
+csv.format_with(rows, w);
+```
+
+Quoted fields may hold separators, doubled quotes and line breaks.
+Line endings are CRLF or LF, and empty lines are skipped. Errors name
+the line: `csv: line 12: text after a closing quote`.
+
+**Strictness.** A quote inside an unquoted field, or text after a closing
+quote, is refused unless `lazy_quotes` is set, which reads them as data,
+as Go's `LazyQuotes` does. By default every record must be as wide as
+the first; set `fields_per_record` to a fixed width, or -1 to allow any.
+
+**Limits.** The input decides how big things get, so `max_field` (1 MiB),
+`max_record` (16 MiB) and `max_fields` (4096) bound it. A record still
+incomplete past `max_record` is refused without buffering more.
+
+**Streaming** keeps one record's worth of input. Fed chunks are joined
+only when a record needs them, and a record far larger than one chunk is
+rescanned O(log n) times, not once per chunk. There are no callbacks:
+slang has no closures, so the caller does the reading and the reader
+only parses.
+
+**Writing.** A field is quoted when it holds the separator, the quote or
+a line break, or begins with a space or tab. A record of one empty field
+is written as `""`, so it does not read back as an empty line.
+`spreadsheet_safe` prefixes fields beginning with `=`, `+`, `-`, `@`,
+tab or CR with `'`. That keeps a spreadsheet from running them as
+formulas (CSV injection), but it changes the data, so use it only for
+files meant for spreadsheets.
+
+**Cost.** The byte scan is native (`encoding.csv_record`); the package
+assembles fields. On an 8 MB, 120,000-row file, streaming took about
+105 ms against about 33 ms for Go's `encoding/csv` record loop; the rest
+is one string per field. `parse` holds every field at once, which is
+slower again on large inputs (about 650 ms here), so stream big files.
+
 #### `byteutil`
 
 Search, trim, and split on the `bytes` type — no new syntax. The
@@ -3160,10 +3318,11 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 
 - [builder](packages/builder.md) -- source package, 20 public items
 - [byteutil](packages/byteutil.md) -- source package, 6 public items
-- [compress](packages/compress.md) -- compiler-provided, 7 public items
+- [compress](packages/compress.md) -- compiler-provided, 8 public items
 - [crypto](packages/crypto.md) -- compiler-provided, 44 public items
+- [csv](packages/csv.md) -- source package, 18 public items
 - [decimal](packages/decimal.md) -- source package, 37 public items
-- [encoding](packages/encoding.md) -- compiler-provided, 15 public items
+- [encoding](packages/encoding.md) -- compiler-provided, 23 public items
 - [flags](packages/flags.md) -- source package, 23 public items
 - [fs](packages/fs.md) -- compiler-provided, 9 public items
 - [http](packages/http.md) -- source package, 58 public items
@@ -3193,6 +3352,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [timez](packages/timez.md) -- source package, 144 public items
 - [unicode](packages/unicode.md) -- compiler-provided, 11 public items
 - [uuid](packages/uuid.md) -- source package, 11 public items
+- [websocket](packages/websocket.md) -- source package, 16 public items
 
 ---
 
