@@ -1,5 +1,15 @@
 # todo
 
+- [ ] **`tests/proc_shutdown` failed once on CI macos-arm64 (found
+  2026-11-10, perf/unicode-equal-fold; not investigated).** Run
+  42726628356, first attempt: the program printed `shutdown requested, loop
+  exited`, `1`, `drained`, then `FAIL client recv` and exited 1. The rerun
+  of the same commit passed, and so did linux-x86_64 and linux-arm64. The
+  branch changed only the `unicode` runtime, which this test does not
+  import, so its generated C was the same as on `dev`. Earlier entries
+  record this test as flaky under TSan; this was a plain run. If it
+  recurs, look at the client's read racing the server's drain.
+
 - [ ] **`str` literals have no Unicode escape (found 2026-11-09,
   feat/unicode-package; not fixed).** The lexer accepts `\xHH` only in
   `b"..."` literals and has no `\u{...}` for `str`, so a string holding a
@@ -9,15 +19,20 @@
   in `str` literals (Swift, Rust and JavaScript spell it that way) is a
   language change, so it needs a decision first.
 
-- [ ] **`unicode.equal_fold` on non-ASCII text costs about 190 ns (found
-  2026-11-09, feat/unicode-package; not fixed).** For a pair like
-  `"Straße"`/`"STRASSE"` it builds the full D145 key for both sides (NFD,
-  fold, NFD) in scratch buffers, against Go's `strings.EqualFold` at about
-  65 ns, which uses simple folding and so answers that pair wrongly. The
-  ASCII path is single-pass and level with Go (about 13 ns). A streaming
-  comparison that folds and decomposes one character at a time, stopping
-  at the first difference, would avoid building whole keys. It matters
-  only if case-insensitive non-ASCII comparison shows up on a hot path.
+- [x] **`unicode.equal_fold` on non-ASCII text cost about 190 ns (found
+  2026-11-09, feat/unicode-package; fixed 2026-11-10,
+  perf/unicode-equal-fold).** It built the whole D145 key of both strings
+  (NFD, fold, NFD) before comparing. It now streams keys a segment at a
+  time (a starter and its marks: canonical reordering never crosses a
+  segment start, which the generator checks), reads a one-character
+  segment's precomputed key straight from the table, and stops at the
+  first difference. Measured ABBA in one session, min of 7: `Straße` 130
+  and 142 ns before, 90 and 91 after; `ΣΊΣΥΦΟΣ` 519/495 to 295/265;
+  `naïve café` 351/364 to 238/238. The ASCII path is unchanged (about
+  11 ns). Still about 1.9x Go's `strings.EqualFold` on these pairs, which
+  does one table lookup per rune and simple folding, so it answers
+  `Straße`/`STRASSE` wrongly; what is left here is a decode and a lookup
+  per character.
 
 - [ ] **`SSL_set1_host` is deprecated in OpenSSL 4.0 (found 2026-11-09,
   feat/uuid-package; not fixed).** `runtime/sl_tls.c:247` calls it to set

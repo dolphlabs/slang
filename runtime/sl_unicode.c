@@ -614,20 +614,164 @@ static bool sl_unicode_is_nfc(const char *s) {
     return same;
 }
 
-/* The canonical caseless match of Unicode 3.13, D145:
-   NFD(fold(NFD(x))) for each side, compared. */
-static void sl_uc_caseless_key(sl_uc_buf *out, const unsigned char *p,
-                               size_t n) {
+/* The canonical caseless key of Unicode 3.13, D145, NFD(fold(NFD(x))),
+   of in[0..n), appended to out. */
+static void sl_uc_caseless_cps(sl_uc_buf *out, const uint32_t *in, size_t n) {
     sl_uc_buf a, b;
     sl_uc_buf_init(&a);
     sl_uc_buf_init(&b);
-    sl_uc_decode_all(&a, p, n);
-    sl_uc_decompose(&b, a.p, a.len);
-    a.len = 0;
-    sl_uc_fold(&a, b.p, b.len);
-    sl_uc_decompose(out, a.p, a.len);
+    sl_uc_decompose(&a, in, n);
+    sl_uc_fold(&b, a.p, a.len);
+    sl_uc_decompose(out, b.p, b.len);
     sl_uc_buf_free(&a);
     sl_uc_buf_free(&b);
+}
+
+/* The whole key of a UTF-8 string at once: the definition, kept as the
+   reference the conformance test checks the streaming match against. */
+static void sl_uc_caseless_key(sl_uc_buf *out, const unsigned char *p,
+                               size_t n) {
+    sl_uc_buf in;
+    sl_uc_buf_init(&in);
+    sl_uc_decode_all(&in, p, n);
+    sl_uc_caseless_cps(out, in.p, in.len);
+    sl_uc_buf_free(&in);
+}
+
+/* A caseless key produced a segment at a time. A segment is a character
+ * whose decomposition starts with a starter, plus every following
+ * character whose decomposition starts with a non-starter
+ * (SL_UC_CONTINUES). Canonical reordering never moves anything across a
+ * segment start, and the generator checks that a starter's key starts
+ * with a starter, so a string's key is its segments' keys in order.
+ *
+ * A segment of one character -- nearly every one in real text -- costs
+ * one decode and one table lookup: its key is precomputed (rec->key) and
+ * read in place from SL_UC_DATA, not copied. Only a segment with marks
+ * runs the definition, over a buffer. */
+typedef struct {
+    const unsigned char *p;
+    size_t n, i;            /* input, and the next byte to decode */
+    uint32_t next;          /* decoded lookahead: starts the next segment */
+    const sl_uc_rec *nrec;  /* its record, or NULL below U+0300 (ASCII
+                               and Latin-1 have no class to look up) */
+    bool has_next;
+    const uint32_t *k;      /* the current segment's key ... */
+    size_t klen, at;        /* ... its length, and the next to hand out */
+    uint32_t one;           /* storage for a key of one code point */
+    sl_uc_buf seg;          /* storage for a computed key */
+} sl_uc_key_iter;
+
+static inline uint32_t sl_uc_iter_decode(sl_uc_key_iter *it) {
+    const unsigned char *p = it->p + it->i;
+    if (p[0] < 0x80) { it->i++; return p[0]; }
+    int32_t cp;
+    it->i += sl_uc_decode(p, it->n - it->i, &cp);
+    return cp < 0 ? SL_UC_REPLACEMENT : (uint32_t)cp;
+}
+
+static inline bool sl_uc_continues(uint32_t c) {
+    return c >= 0x300 && (sl_uc_rec_of(c)->flags & SL_UC_CONTINUES);
+}
+
+/* Decode the lookahead and look its record up once, for both questions
+   asked of it: does it continue this segment, and what is its key. */
+static inline void sl_uc_iter_advance(sl_uc_key_iter *it) {
+    it->has_next = it->i < it->n;
+    if (!it->has_next) return;
+    it->next = sl_uc_iter_decode(it);
+    it->nrec = it->next >= 0x300 ? sl_uc_rec_of(it->next) : NULL;
+}
+
+static inline bool sl_uc_iter_next_continues(const sl_uc_key_iter *it) {
+    return it->has_next && it->nrec && (it->nrec->flags & SL_UC_CONTINUES);
+}
+
+/* Key of a segment of marks: `first`, then every continuing character
+   still in the input. The definition, applied to the segment. */
+static void sl_uc_iter_long_segment(sl_uc_key_iter *it, uint32_t first) {
+    sl_uc_buf raw;
+    sl_uc_buf_init(&raw);
+    sl_uc_buf_push(&raw, first);
+    while (sl_uc_iter_next_continues(it)) {
+        sl_uc_buf_push(&raw, it->next);
+        sl_uc_iter_advance(it);
+    }
+    it->seg.len = 0;
+    sl_uc_caseless_cps(&it->seg, raw.p, raw.len);
+    sl_uc_buf_free(&raw);
+    it->k = it->seg.p;
+    it->klen = it->seg.len;
+}
+
+/* Point k at the next segment's key; false at the end of the input. */
+static bool sl_uc_iter_fill(sl_uc_key_iter *it) {
+    if (!it->has_next) return false;
+    uint32_t c = it->next;
+    const sl_uc_rec *rec = it->nrec;
+    sl_uc_iter_advance(it);
+    it->at = 0;
+    if (sl_uc_iter_next_continues(it)) {
+        sl_uc_iter_long_segment(it, c);
+        return true;
+    }
+    if (c < 0x80) {
+        it->one = c >= 'A' && c <= 'Z' ? c + 32 : c;
+    } else if (c - SL_UC_SBASE < SL_UC_SCOUNT) {
+        it->seg.len = 0;
+        sl_uc_decompose(&it->seg, &c, 1);  /* Hangul: jamo, no case */
+        it->k = it->seg.p;
+        it->klen = it->seg.len;
+        return true;
+    } else {
+        uint16_t key = (rec ? rec : sl_uc_rec_of(c))->key;
+        if (key) {
+            it->k = &SL_UC_DATA[key + 1];
+            it->klen = SL_UC_DATA[key];
+            return true;
+        }
+        it->one = c;
+    }
+    it->k = &it->one;
+    it->klen = 1;
+    return true;
+}
+
+/* The canonical caseless match of what is left of two strings, compared
+   key against key as the keys are produced, so a difference stops the
+   work where it is found. Out of line: equal_fold's ASCII loop answers
+   nearly every call without it, and should not pay for its frame. */
+static __attribute__((noinline)) bool
+sl_uc_equal_fold_stream(const unsigned char *p, const unsigned char *q) {
+    sl_uc_key_iter x, y;
+    x.p = p; x.n = strlen((const char *)p); x.i = 0;
+    y.p = q; y.n = strlen((const char *)q); y.i = 0;
+    x.klen = x.at = y.klen = y.at = 0;
+    x.k = y.k = NULL;
+    sl_uc_buf_init(&x.seg);
+    sl_uc_buf_init(&y.seg);
+    sl_uc_iter_advance(&x);
+    sl_uc_iter_advance(&y);
+    bool eq;
+    for (;;) {
+        if (x.at == x.klen && !sl_uc_iter_fill(&x)) {
+            eq = y.at == y.klen && !sl_uc_iter_fill(&y);
+            break;
+        }
+        if (y.at == y.klen && !sl_uc_iter_fill(&y)) { eq = false; break; }
+        /* compare as much of the two current keys as both have: usually
+           one code point each, too short to be worth a memcmp call */
+        size_t m = x.klen - x.at, r = y.klen - y.at;
+        if (r < m) m = r;
+        size_t j = 0;
+        while (j < m && x.k[x.at + j] == y.k[y.at + j]) j++;
+        if (j < m) { eq = false; break; }
+        x.at += m;
+        y.at += m;
+    }
+    sl_uc_buf_free(&x.seg);
+    sl_uc_buf_free(&y.seg);
+    return eq;
 }
 
 static bool sl_unicode_equal_fold(const char *x, const char *y) {
@@ -655,21 +799,10 @@ static bool sl_unicode_equal_fold(const char *x, const char *y) {
         if ((a | 0x20) != (b | 0x20) || (unsigned)((a | 0x20) - 'a') > 25)
             return false;
     }
-    /* The full match on what is left. The bytes before i are ASCII
-       starters that already match, and neither NFD nor folding moves
-       anything across a starter, so both keys begin with the same
-       prefix and it can be dropped. */
-    p += i;
-    q += i;
-    size_t n = strlen((const char *)p), m = strlen((const char *)q);
-    sl_uc_buf kx, ky;
-    sl_uc_buf_init(&kx);
-    sl_uc_buf_init(&ky);
-    sl_uc_caseless_key(&kx, p, n);
-    sl_uc_caseless_key(&ky, q, m);
-    bool eq = kx.len == ky.len &&
-              memcmp(kx.p, ky.p, kx.len * sizeof(uint32_t)) == 0;
-    sl_uc_buf_free(&kx);
-    sl_uc_buf_free(&ky);
-    return eq;
+    /* The bytes before i are ASCII that already match, and they can be
+       dropped: an ASCII letter neither composes nor moves under NFD, so
+       even when marks at i continue its segment, that segment's key is
+       the letter's key followed by the marks' key, and the marks are
+       still in the input. */
+    return sl_uc_equal_fold_stream(p + i, q + i);
 }

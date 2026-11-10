@@ -23,7 +23,7 @@ Layout: a two-stage lookup. STAGE1[cp >> 7] names a 128-entry block,
 STAGE2[block * 128 + (cp & 127)] names a record, RECS[record] holds the
 properties. Identical blocks are stored once, which is what keeps 1.1M
 code points in roughly a hundred kilobytes: most blocks are all-default.
-Decompositions and foldings live in one uint32 array, DATA, as a length
+Decompositions, foldings and caseless keys live in one uint32 array, DATA, as a length
 followed by the code points; offset 0 is the empty entry.
 """
 
@@ -173,14 +173,61 @@ def main():
             recs.append(r)
         return rec_index[r]
 
-    rec((0, 0, 0, 0))  # record 0: the default for every unlisted code point
-    QC_NO, QC_MAYBE = 1, 2
+    # The caseless key of one character, NFD(fold(NFD(c))) (Unicode D145),
+    # and whether a character continues the segment before it: its full
+    # decomposition starts with a non-starter. Canonical reordering never
+    # crosses the start of a segment, which is what lets equal_fold build
+    # keys a segment at a time; a one-character segment's key is
+    # precomputed here.
+    SBASE, SCOUNT = 0xAC00, 11172
+
+    def dec1(c):
+        if SBASE <= c < SBASE + SCOUNT:
+            s_ = c - SBASE
+            out = [0x1100 + s_ // 588, 0x1161 + (s_ % 588) // 28]
+            if s_ % 28:
+                out.append(0x11A7 + s_ % 28)
+            return out
+        return full_decomp.get(c, [c])
+
+    def nfd(xs):
+        out = []
+        for c in xs:
+            out.extend(dec1(c))
+        i = 0
+        while i < len(out):
+            if not ccc.get(out[i], 0):
+                i += 1
+                continue
+            j = i
+            while j < len(out) and ccc.get(out[j], 0):
+                j += 1
+            out[i:j] = sorted(out[i:j], key=lambda x: ccc.get(x, 0))
+            i = j
+        return out
+
+    def fold_seq(xs):
+        out = []
+        for c in xs:
+            out.extend(fold.get(c, [c]))
+        return out
+
+    rec((0, 0, 0, 0, 0))  # record 0: the default for every unlisted code point
+    QC_NO, QC_MAYBE, CONTINUES = 1, 2, 4
     per_cp = [0] * MAX_CP
+    max_key = 1
     for cp in set(ccc) | set(full_decomp) | set(nfc_qc) | set(fold):
         q = nfc_qc.get(cp)
         flags = QC_NO if q == "N" else QC_MAYBE if q == "M" else 0
+        if ccc.get(dec1(cp)[0], 0):
+            flags |= CONTINUES
+        key = nfd(fold_seq(nfd([cp])))
+        if not flags & CONTINUES and ccc.get(key[0], 0):
+            sys.exit("U+%04X starts a segment but its key does not" % cp)
+        max_key = max(max_key, len(key))
         r = (ccc.get(cp, 0), flags,
-             seq(full_decomp.get(cp, [])), seq(fold.get(cp, [])))
+             seq(full_decomp.get(cp, [])), seq(fold.get(cp, [])),
+             seq(key) if key != [cp] else 0)
         per_cp[cp] = rec(r)
 
     if len(recs) > 0xFFFF or len(data) > 0xFFFF:
@@ -227,16 +274,21 @@ def main():
 #define SL_UC_SHIFT {SHIFT}
 #define SL_UC_QC_NO {QC_NO}
 #define SL_UC_QC_MAYBE {QC_MAYBE}
+/* The character's decomposition starts with a non-starter, so it joins
+   the segment before it (equal_fold). */
+#define SL_UC_CONTINUES {CONTINUES}
 /* The longest full canonical decomposition and case folding, in code
    points. */
 #define SL_UC_MAX_DECOMP {max_decomp}
 #define SL_UC_MAX_FOLD {max_fold}
+#define SL_UC_MAX_KEY {max_key}
 
 typedef struct {{
     uint8_t ccc;
     uint8_t flags;
     uint16_t decomp;
     uint16_t fold;
+    uint16_t key;   /* NFD(fold(NFD(c))) when it is not c itself */
 }} sl_uc_rec;
 """)
     # The notice as data in the program itself: the licence asks that it
@@ -253,7 +305,7 @@ typedef struct {{
     print()
     print(f"static const sl_uc_rec SL_UC_RECS[{len(recs)}] = {{")
     for r in recs:
-        print("    {%d, %d, %d, %d}," % r)
+        print("    {%d, %d, %d, %d, %d}," % r)
     print("};")
     print()
     emit_array("uint16_t", "SL_UC_STAGE1", stage1, 16)
