@@ -1,0 +1,66 @@
+ok sha384 abc
+ok sha512 abc
+ok sha512 empty
+ok hmac_sha384 rfc4231 #1
+ok hmac_sha512 rfc4231 #1
+ok hkdf_sha256 rfc5869 A.1
+ok hkdf_sha256 rfc5869 A.3 (no salt or info)
+ok hkdf_sha512
+hkdf: length must be 1 to 8160 bytes, got 0
+hkdf: length must be 1 to 8160 bytes, got 8161
+ok hkdf at the limit
+ok constant_time_eq
+ok chacha20poly1305 rfc8439 2.8.2
+ok chacha20poly1305 opens
+decryption failed: the message or its associated data was altered, or the key or nonce is wrong
+decryption failed: the message or its associated data was altered, or the key or nonce is wrong
+chacha20poly1305: key must be 32 bytes, got 31
+chacha20poly1305: nonce must be 12 bytes, got 8
+ok aes256gcm nist test case 16
+ok aes256gcm opens
+ok aes256gcm empty message
+ok aes256gcm empty opens
+decryption failed: the message or its associated data was altered, or the key or nonce is wrong
+ok seal adds nonce and tag
+ok seal picks a fresh nonce
+ok open
+decryption failed: the message or its associated data was altered, or the key or nonce is wrong
+decryption failed: the message or its associated data was altered, or the key or nonce is wrong
+decryption failed: the message or its associated data was altered, or the key or nonce is wrong
+ok ed25519 rfc8032 #1 public
+ok ed25519 rfc8032 #1 sign
+ok ed25519 rfc8032 #2 sign
+ok ed25519 verifies
+ok ed25519 rejects another message
+ok ed25519 rejects a short signature
+ed25519: public key must be 32 bytes
+ok ed25519 generated key round trip
+ok ed25519 private from openssl pem
+ok ed25519 public from openssl pem
+ok ed25519 public from a private pem
+ed25519: not an Ed25519 key in PEM form
+ok p256 rfc6979 public key
+ok p256 rfc6979 signature (or a random-nonce one)
+ok p256 verifies
+ok p256 verifies the rfc signature
+ok p256 rejects another message
+ecdsa: invalid P-256 public key (not on the curve)
+ecdsa: invalid P-256 private key
+ok p256 generated key round trip
+ok p256 private from openssl pem
+ok p256 public from openssl pem
+ok p256 public of the pem's private
+ecdsa: not a P-256 private key in PEM form
+ok rsa modulus matches openssl
+ok rsa exponent 65537
+ok rsa pkcs1 signature equals openssl's
+ok rsa pkcs1 verifies
+ok rsa pss from openssl verifies
+ok rsa pss round trip
+ok rsa pss is not pkcs1
+ok rsa pkcs1 is not pss
+ok rsa pss with another salt length does not verify (PS256 fixes it)
+ok rsa pss rejects another message
+ok rsa generated key signs
+rsa: key size must be a multiple of 8 from 2048 to 8192 bits
+rsa: not an RSA private key in PEM form
