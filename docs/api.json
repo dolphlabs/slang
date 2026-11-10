@@ -5523,6 +5523,260 @@
         }
       ]
     },
+    "nats": {
+      "name": "nats",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Options",
+          "decl": "struct",
+          "sig": "gc struct Options",
+          "doc": "",
+          "file": "stdlib/nats/nats.sl",
+          "line": 36
+        },
+        {
+          "name": "options",
+          "decl": "fn",
+          "sig": "fn options(url: str) -> Options",
+          "doc": "Defaults for one server URL: nats://host:port, tls://host:port (TLS from the first byte) or nats://user:pass@host:port / nats://token@host.",
+          "file": "stdlib/nats/nats.sl",
+          "line": 60
+        },
+        {
+          "name": "with_creds",
+          "decl": "fn",
+          "sig": "fn with_creds(o: Options, creds_text: str) -> result[Options, str]",
+          "doc": "Options with the user JWT and nkey seed of a .creds file.",
+          "file": "stdlib/nats/nats.sl",
+          "line": 83
+        },
+        {
+          "name": "Msg",
+          "decl": "struct",
+          "sig": "gc struct Msg",
+          "doc": "",
+          "file": "stdlib/nats/nats.sl",
+          "line": 102
+        },
+        {
+          "name": "Sub",
+          "decl": "struct",
+          "sig": "gc struct Sub",
+          "doc": "",
+          "file": "stdlib/nats/nats.sl",
+          "line": 111
+        },
+        {
+          "name": "Conn",
+          "decl": "struct",
+          "sig": "gc struct Conn",
+          "doc": "",
+          "file": "stdlib/nats/nats.sl",
+          "line": 138
+        },
+        {
+          "name": "connect",
+          "decl": "fn",
+          "sig": "fn connect(url: str, deadline: until) -> result[Conn, str]",
+          "doc": "Connect to url (see options).",
+          "file": "stdlib/nats/nats.sl",
+          "line": 179
+        },
+        {
+          "name": "connect_with",
+          "decl": "fn",
+          "sig": "fn connect_with(o: Options, deadline: until) -> result[Conn, str]",
+          "doc": "",
+          "file": "stdlib/nats/nats.sl",
+          "line": 183
+        },
+        {
+          "name": "publish",
+          "decl": "fn",
+          "sig": "fn publish(nc: Conn, subject: str, data: bytes) -> result[bool, str]",
+          "doc": "",
+          "file": "stdlib/nats/nats.sl",
+          "line": 1061
+        },
+        {
+          "name": "publish_reply",
+          "decl": "fn",
+          "sig": "fn publish_reply(nc: Conn, subject: str, reply: str, data: bytes) -> result[bool, str]",
+          "doc": "",
+          "file": "stdlib/nats/nats.sl",
+          "line": 1065
+        },
+        {
+          "name": "publish_headers",
+          "decl": "fn",
+          "sig": "fn publish_headers(nc: Conn, subject: str, headers: map[str][str], data: bytes) -> result[bool, str]",
+          "doc": "Publish with headers (each key may carry several values).",
+          "file": "stdlib/nats/nats.sl",
+          "line": 1070
+        },
+        {
+          "name": "publish_full",
+          "decl": "fn",
+          "sig": "fn publish_full(nc: Conn, subject: str, reply: str, headers: map[str][str], data: bytes) -> result[bool, str]",
+          "doc": "",
+          "file": "stdlib/nats/nats.sl",
+          "line": 1075
+        },
+        {
+          "name": "subscribe",
+          "decl": "fn",
+          "sig": "fn subscribe(nc: Conn, subject: str) -> result[Sub, str]",
+          "doc": "",
+          "file": "stdlib/nats/nats.sl",
+          "line": 1187
+        },
+        {
+          "name": "queue_subscribe",
+          "decl": "fn",
+          "sig": "fn queue_subscribe(nc: Conn, subject: str, queue: str) -> result[Sub, str]",
+          "doc": "Members of one queue group share the messages: each goes to one of them.",
+          "file": "stdlib/nats/nats.sl",
+          "line": 1192
+        },
+        {
+          "name": "next_msg",
+          "decl": "fn",
+          "sig": "fn next_msg(sub: Sub, deadline: until) -> result[opt[Msg], str]",
+          "doc": "The next message, waiting until deadline: none when the deadline passes or the subscription has ended (unsubscribed, max reached, connection closed).",
+          "file": "stdlib/nats/nats.sl",
+          "line": 1223
+        },
+        {
+          "name": "unsubscribe",
+          "decl": "fn",
+          "sig": "fn unsubscribe(sub: Sub) -> result[bool, str]",
+          "doc": "",
+          "file": "stdlib/nats/nats.sl",
+          "line": 1246
+        },
+        {
+          "name": "auto_unsubscribe",
+          "decl": "fn",
+          "sig": "fn auto_unsubscribe(sub: Sub, max: int) -> result[bool, str]",
+          "doc": "End the subscription by itself after max more messages.",
+          "file": "stdlib/nats/nats.sl",
+          "line": 1257
+        },
+        {
+          "name": "request",
+          "decl": "fn",
+          "sig": "fn request(nc: Conn, subject: str, data: bytes, deadline: until) -> result[Msg, str]",
+          "doc": "Publish data to subject with a fresh reply subject and wait for the first reply. \"no responders\" (status 503, when nothing listens) is an error at once instead of a timeout.",
+          "file": "stdlib/nats/nats.sl",
+          "line": 1270
+        },
+        {
+          "name": "request_headers",
+          "decl": "fn",
+          "sig": "fn request_headers(nc: Conn, subject: str, headers: map[str][str], data: bytes, deadline: until) -> result[Msg, str]",
+          "doc": "",
+          "file": "stdlib/nats/nats.sl",
+          "line": 1274
+        },
+        {
+          "name": "respond",
+          "decl": "fn",
+          "sig": "fn respond(nc: Conn, req: Msg, data: bytes) -> result[bool, str]",
+          "doc": "Reply to a request message.",
+          "file": "stdlib/nats/nats.sl",
+          "line": 1320
+        },
+        {
+          "name": "flush",
+          "decl": "fn",
+          "sig": "fn flush(nc: Conn, deadline: until) -> result[bool, str]",
+          "doc": "Wait until the server has processed everything sent so far (a PING round trip).",
+          "file": "stdlib/nats/nats.sl",
+          "line": 1331
+        },
+        {
+          "name": "drain",
+          "decl": "fn",
+          "sig": "fn drain(nc: Conn, deadline: until) -> result[bool, str]",
+          "doc": "Unsubscribe everything, let what is in flight arrive, then close.",
+          "file": "stdlib/nats/nats.sl",
+          "line": 1354
+        },
+        {
+          "name": "close",
+          "decl": "fn",
+          "sig": "fn close(nc: Conn)",
+          "doc": "",
+          "file": "stdlib/nats/nats.sl",
+          "line": 1377
+        },
+        {
+          "name": "last_error",
+          "decl": "fn",
+          "sig": "fn last_error(nc: Conn) -> str",
+          "doc": "Why the connection is closed or last broke (\"\" while healthy).",
+          "file": "stdlib/nats/nats.sl",
+          "line": 1422
+        },
+        {
+          "name": "is_connected",
+          "decl": "fn",
+          "sig": "fn is_connected(nc: Conn) -> bool",
+          "doc": "",
+          "file": "stdlib/nats/nats.sl",
+          "line": 1426
+        },
+        {
+          "name": "reconnects",
+          "decl": "fn",
+          "sig": "fn reconnects(nc: Conn) -> int",
+          "doc": "",
+          "file": "stdlib/nats/nats.sl",
+          "line": 1430
+        },
+        {
+          "name": "nkey_seed_raw",
+          "decl": "fn",
+          "sig": "fn nkey_seed_raw(seed: str) -> result[bytes, str]",
+          "doc": "The 32-byte Ed25519 seed inside a user seed (\"SU...\").",
+          "file": "stdlib/nats/nkeys.sl",
+          "line": 114
+        },
+        {
+          "name": "nkey_public",
+          "decl": "fn",
+          "sig": "fn nkey_public(seed: str) -> result[str, str]",
+          "doc": "The public key (\"U...\") for a user seed.",
+          "file": "stdlib/nats/nkeys.sl",
+          "line": 135
+        },
+        {
+          "name": "nkey_encode_seed",
+          "decl": "fn",
+          "sig": "fn nkey_encode_seed(raw: bytes) -> result[str, str]",
+          "doc": "A user seed (\"SU...\") for a 32-byte Ed25519 seed: for tests and tools.",
+          "file": "stdlib/nats/nkeys.sl",
+          "line": 146
+        },
+        {
+          "name": "nkey_sign_nonce",
+          "decl": "fn",
+          "sig": "fn nkey_sign_nonce(seed: str, nonce: str) -> result[str, str]",
+          "doc": "The base64url signature of a server nonce, for CONNECT's \"sig\".",
+          "file": "stdlib/nats/nkeys.sl",
+          "line": 157
+        },
+        {
+          "name": "parse_creds",
+          "decl": "fn",
+          "sig": "fn parse_creds(text: str) -> result[[str], str]",
+          "doc": "The user JWT and the seed from a .creds file (two armoured blocks).",
+          "file": "stdlib/nats/nkeys.sl",
+          "line": 166
+        }
+      ]
+    },
     "net": {
       "name": "net",
       "kind": "native",
