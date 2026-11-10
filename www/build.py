@@ -198,6 +198,7 @@ PACKAGE_SECTIONS = {
     "byteutil": ["`byteutil`"],
     "rand": ["`rand`"],
     "decimal": ["`decimal`"],
+    "csv": ["`csv`"],
     "builder": ["`builder`"],
     "flags": ["`flags`"],
     "sort": ["`sort`"],

@@ -102,8 +102,9 @@ Common backend needs with no package today.
 
 ## 4. Smaller formats and protocols
 
-- [ ] **CSV** (stdlib): RFC 4180 read and write, streaming, quoted fields,
-  row and field size limits.
+- [x] **CSV** (stdlib): RFC 4180 read and write, streaming, quoted fields,
+  row and field size limits. Built as `stdlib/csv` over a native record
+  scanner (`encoding.csv_record`); checked against Python's csv module.
 - [ ] **base32** (stdlib, in `encoding`): RFC 4648, for TOTP secrets and
   readable codes.
 - [ ] **gRPC streaming** (package `slangpackages/grpc`): server, client and
