@@ -56,6 +56,9 @@ const NatSig COMPRESS_SIGS[] = {
     /* Raw compression exists so inflate_raw has an inverse to be tested
        against, and because permessage-deflate (RFC 7692) needs it. */
     {"compress", "deflate_raw", 1, {NA_BYTES}, "result[bytes,str]", 0},
+    /* raw deflate ending in a sync flush (00 00 ff ff) rather than a
+       final block, so the stream can go on: RFC 7692's message format */
+    {"compress", "deflate_raw_flush", 1, {NA_BYTES}, "result[bytes,str]", 0},
 
     /* max_out is the second argument everywhere, and it is not
        optional. See the header. */

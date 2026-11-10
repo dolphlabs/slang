@@ -205,6 +205,7 @@ PACKAGE_SECTIONS = {
     "uuid": ["`uuid`"],
     "http": ["`http`"],
     "httpc": ["`httpc`"],
+    "websocket": ["`websocket`"],
     "pg": ["`pg`"],
     "redis": ["`redis`"],
     "nats": ["`nats`"],

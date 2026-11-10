@@ -2,7 +2,7 @@
 
 > Package encoding.
 
-Hex, base64, base64url, percent-encoding and query strings — the ways
+Hex, base64, base64url, base32, percent-encoding and query strings — the ways
 arbitrary bytes travel through a channel that only carries text. The
 package also converts binary64 floats to and from little-endian bytes for
 binary protocols such as BSON.
@@ -17,6 +17,11 @@ encoding.url_encode("a b&c");                 // "a%20b%26c"
 encoding.form_encode("a b&c");                // "a+b%26c"
 encoding.float64_to_le(1.5);                   // exact IEEE-754 bytes, low byte first
 encoding.json_tape("{\"a\":[1,2]}");        // ok([5,5,1,0,11, 7,2,0,2,3, 4,5,2,5,10, ...]): see below
+encoding.xor_mask(head, payload, key);         // head ++ (payload XOR key, repeated): a WebSocket frame
+encoding.base32_encode(secret);               // "JBSWY3DPEHPK3PXP" -- a TOTP secret
+encoding.base32_decode("jbswy3dpehpk3pxp");   // either case, padded or not
+encoding.crockford_encode(id_bytes);          // "7ZQ4M1X0" -- a code people read aloud
+encoding.crockford_decode("7zq-4ml-xo");      // hyphens skipped, l read as 1, o as 0
 
 let q = "/search?q=hello+world&page=2";
 guard let term = encoding.query_get(q, "q") else { return; }   // "hello world"
@@ -40,6 +45,13 @@ encoding.query_keys(q);                                        // ["q", "page"]
 | `encoding.float64_to_le` | `(value: float) -> bytes` |
 | `encoding.float64_from_le` | `(bytes: bytes) -> result[float, str]` |
 | `encoding.json_tape` | `(text: str) -> result[[int], str]` |
+| `encoding.xor_mask` | `(head: bytes, data: bytes, key: bytes) -> bytes` |
+| `encoding.base32_encode` | `(b: bytes) -> str` |
+| `encoding.base32_decode` | `(s: str) -> result[bytes, str]` |
+| `encoding.base32hex_encode` | `(b: bytes) -> str` |
+| `encoding.base32hex_decode` | `(s: str) -> result[bytes, str]` |
+| `encoding.crockford_encode` | `(b: bytes) -> str` |
+| `encoding.crockford_decode` | `(s: str) -> result[bytes, str]` |
 | `encoding.csv_record` | `(data: bytes, from: int, sep: int, quote: int, flags: int) -> [int]` |
 
 Like `regex`, `strings` and `os` — and unlike `crypto` and `sql` — this
@@ -89,6 +101,18 @@ Five things worth knowing:
   it, skips a subtree in one step, and materialises only the strings it
   reads (`strings.from_bytes` over the span). `template` reads its data
   this way; use `json.decode` when the shape is known.
+- **base32 decodes leniently and strictly at once.** `base32_decode`
+  takes either case, with or without `=` padding, because TOTP secrets
+  arrive in every combination. It refuses a tail of 1, 3 or 6
+  characters, which holds no whole byte, and a tail whose leftover bits
+  are not zero. That input is a mistyped or truncated secret, and
+  decoding it anyway would yield a different key that fails later and
+  less clearly. Python's decoder accepts `MZ======`; this one does not.
+  `base32hex` (RFC 4648 §7) sorts in the same order as the bytes it
+  encodes. Crockford's alphabet leaves out I, L, O and U so a code read
+  aloud cannot be misheard; its decoder reads I and L as 1 and O as 0,
+  and skips hyphens. Strip spaces from a secret shown in groups before
+  decoding it.
 
 Percent-escapes are emitted uppercase (RFC 3986 §2.1) and hex digests
 lowercase (what `sha256sum`, git and every API that returns one use).
@@ -125,6 +149,20 @@ Both decoders accept either case.
 ### `encoding.float64_from_le(bytes) -> result[float,str]`
 
 ### `encoding.json_tape(str) -> result[[int],str]`
+
+### `encoding.xor_mask(bytes, bytes, bytes) -> bytes`
+
+### `encoding.base32_encode(bytes) -> str`
+
+### `encoding.base32_decode(str) -> result[bytes,str]`
+
+### `encoding.base32hex_encode(bytes) -> str`
+
+### `encoding.base32hex_decode(str) -> result[bytes,str]`
+
+### `encoding.crockford_encode(bytes) -> str`
+
+### `encoding.crockford_decode(str) -> result[bytes,str]`
 
 ### `encoding.csv_record(bytes, int, int, int, int) -> [int]`
 

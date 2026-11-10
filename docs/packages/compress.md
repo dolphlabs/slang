@@ -27,6 +27,7 @@ guard let plain = ur else let e = err_of(ur) {
 | `compress.deflate` | `(b: bytes) -> result[bytes, str]` |
 | `compress.inflate` | `(b: bytes, max_out: int) -> result[bytes, str]` |
 | `compress.deflate_raw` | `(b: bytes) -> result[bytes, str]` |
+| `compress.deflate_raw_flush` | `(b: bytes) -> result[bytes, str]` (ends in a sync flush, no final block: RFC 7692) |
 | `compress.inflate_raw` | `(b: bytes, max_out: int) -> result[bytes, str]` |
 
 **Decompression takes a mandatory output limit.** `max_out` is a
@@ -66,6 +67,8 @@ attacker-controlled input.
 ### `compress.deflate(bytes) -> result[bytes,str]`
 
 ### `compress.deflate_raw(bytes) -> result[bytes,str]`
+
+### `compress.deflate_raw_flush(bytes) -> result[bytes,str]`
 
 ### `compress.gunzip(bytes, int) -> result[bytes,str]`
 

@@ -53,3 +53,4 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [timez](packages/timez.md): Package timez.
 - [unicode](packages/unicode.md): Package unicode.
 - [uuid](packages/uuid.md): Package uuid.
+- [websocket](packages/websocket.md): Package websocket.

@@ -268,6 +268,15 @@
           "sig": "compress.deflate_raw(bytes) -> result[bytes,str]"
         },
         {
+          "name": "deflate_raw_flush",
+          "params": [
+            "bytes"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "compress.deflate_raw_flush(bytes) -> result[bytes,str]"
+        },
+        {
           "name": "gunzip",
           "params": [
             "bytes",
@@ -1305,6 +1314,71 @@
           "ret": "result[[int],str]",
           "tls": false,
           "sig": "encoding.json_tape(str) -> result[[int],str]"
+        },
+        {
+          "name": "xor_mask",
+          "params": [
+            "bytes",
+            "bytes",
+            "bytes"
+          ],
+          "ret": "bytes",
+          "tls": false,
+          "sig": "encoding.xor_mask(bytes, bytes, bytes) -> bytes"
+        },
+        {
+          "name": "base32_encode",
+          "params": [
+            "bytes"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "encoding.base32_encode(bytes) -> str"
+        },
+        {
+          "name": "base32_decode",
+          "params": [
+            "str"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "encoding.base32_decode(str) -> result[bytes,str]"
+        },
+        {
+          "name": "base32hex_encode",
+          "params": [
+            "bytes"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "encoding.base32hex_encode(bytes) -> str"
+        },
+        {
+          "name": "base32hex_decode",
+          "params": [
+            "str"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "encoding.base32hex_decode(str) -> result[bytes,str]"
+        },
+        {
+          "name": "crockford_encode",
+          "params": [
+            "bytes"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "encoding.crockford_encode(bytes) -> str"
+        },
+        {
+          "name": "crockford_decode",
+          "params": [
+            "str"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "encoding.crockford_decode(str) -> result[bytes,str]"
         },
         {
           "name": "csv_record",
@@ -10711,6 +10785,140 @@
           "doc": "The canonical form of 16 bytes, the reverse of `to_binary`.",
           "file": "stdlib/uuid/uuid.sl",
           "line": 156
+        }
+      ]
+    },
+    "websocket": {
+      "name": "websocket",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Message",
+          "decl": "struct",
+          "sig": "gc struct Message",
+          "doc": "",
+          "file": "stdlib/websocket/websocket.sl",
+          "line": 61
+        },
+        {
+          "name": "Options",
+          "decl": "struct",
+          "sig": "gc struct Options",
+          "doc": "",
+          "file": "stdlib/websocket/websocket.sl",
+          "line": 70
+        },
+        {
+          "name": "options",
+          "decl": "fn",
+          "sig": "fn options() -> Options",
+          "doc": "The defaults: no extra headers or subprotocols, 32 MiB messages, no compression, no keepalive pings.",
+          "file": "stdlib/websocket/websocket.sl",
+          "line": 91
+        },
+        {
+          "name": "Conn",
+          "decl": "struct",
+          "sig": "gc struct Conn",
+          "doc": "",
+          "file": "stdlib/websocket/websocket.sl",
+          "line": 96
+        },
+        {
+          "name": "dial",
+          "decl": "fn",
+          "sig": "fn dial(url: str, deadline: until) -> result[Conn, str]",
+          "doc": "Connect to url (ws:// or wss://) with the default options.",
+          "file": "stdlib/websocket/websocket.sl",
+          "line": 131
+        },
+        {
+          "name": "dial_with",
+          "decl": "fn",
+          "sig": "fn dial_with(url: str, o: Options, deadline: until) -> result[Conn, str]",
+          "doc": "Connect, send the opening handshake, and check the server's answer.",
+          "file": "stdlib/websocket/websocket.sl",
+          "line": 136
+        },
+        {
+          "name": "send_text",
+          "decl": "fn",
+          "sig": "fn send_text(c: Conn, text: str, deadline: until) -> result[bool, str]",
+          "doc": "Send a text message.",
+          "file": "stdlib/websocket/websocket.sl",
+          "line": 649
+        },
+        {
+          "name": "send_text_bytes",
+          "decl": "fn",
+          "sig": "fn send_text_bytes(c: Conn, data: bytes, deadline: until) -> result[bool, str]",
+          "doc": "Send a text message given as bytes, checked to be UTF-8 first: for text holding U+0000, which a str cannot (it ends at the first zero byte), and for text already in a byte buffer.",
+          "file": "stdlib/websocket/websocket.sl",
+          "line": 656
+        },
+        {
+          "name": "send_binary",
+          "decl": "fn",
+          "sig": "fn send_binary(c: Conn, data: bytes, deadline: until) -> result[bool, str]",
+          "doc": "Send a binary message.",
+          "file": "stdlib/websocket/websocket.sl",
+          "line": 664
+        },
+        {
+          "name": "ping",
+          "decl": "fn",
+          "sig": "fn ping(c: Conn, payload: bytes, deadline: until) -> result[bool, str]",
+          "doc": "Send a ping (payload up to 125 bytes); the server's pong is consumed by recv. options().ping_every sends them on a schedule instead.",
+          "file": "stdlib/websocket/websocket.sl",
+          "line": 670
+        },
+        {
+          "name": "recv",
+          "decl": "fn",
+          "sig": "fn recv(c: Conn, deadline: until) -> result[opt[Message], str]",
+          "doc": "The next message, or none when the deadline passes first (nothing is lost: a later call carries on). Pings are answered and pongs consumed on the way. A Close message means the server ended the connection; the handshake is answered and the next call is an error.",
+          "file": "stdlib/websocket/websocket.sl",
+          "line": 692
+        },
+        {
+          "name": "text",
+          "decl": "fn",
+          "sig": "fn text(m: Message) -> str",
+          "doc": "The text of a text message. A str ends at its first zero byte, so text holding U+0000 is cut there: m.data has every byte.",
+          "file": "stdlib/websocket/websocket.sl",
+          "line": 714
+        },
+        {
+          "name": "close",
+          "decl": "fn",
+          "sig": "fn close(c: Conn, code: int, reason: str, deadline: until) -> result[bool, str]",
+          "doc": "The close handshake: send a close frame with code (1000 normal, or 3000-4999 for applications) and a reason of at most 123 bytes, then wait for the server's close (until deadline) and close the socket. If another task is in recv, that task sees the server's answer as a Close message and this call returns once the frame is sent.",
+          "file": "stdlib/websocket/websocket.sl",
+          "line": 1103
+        },
+        {
+          "name": "close_now",
+          "decl": "fn",
+          "sig": "fn close_now(c: Conn)",
+          "doc": "Close the socket now, with no close handshake: for a connection that is already broken or must stop at once.",
+          "file": "stdlib/websocket/websocket.sl",
+          "line": 1168
+        },
+        {
+          "name": "is_open",
+          "decl": "fn",
+          "sig": "fn is_open(c: Conn) -> bool",
+          "doc": "Whether the connection is open (not closing or closed).",
+          "file": "stdlib/websocket/websocket.sl",
+          "line": 1173
+        },
+        {
+          "name": "reason",
+          "decl": "fn",
+          "sig": "fn reason(c: Conn) -> str",
+          "doc": "Why the connection ended, or \"\" while it is open.",
+          "file": "stdlib/websocket/websocket.sl",
+          "line": 1181
         }
       ]
     }

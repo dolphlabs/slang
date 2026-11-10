@@ -85,6 +85,24 @@ const NatSig ENCODING_SIGS[] = {
        every string. The layout is spelled out at sl_encoding_json_tape
        (runtime/sl_encoding.c); stdlib/template reads its data this way. */
     {"encoding", "json_tape", 1, {NA_STR}, "result[[int],str]", 0},
+    /* head, then data XORed with key repeated over it, in one
+       allocation: a WebSocket client frame is its header plus the
+       payload masked with a 4-byte key (RFC 6455 section 5.3), and the
+       payload is copied once. An empty key copies data as is. */
+    {"encoding", "xor_mask", 3, {NA_BYTES, NA_BYTES, NA_BYTES}, "bytes", 0},
+    /* base32, RFC 4648: the standard alphabet (TOTP secrets) and
+       base32hex, which sorts like the bytes it encodes. Encoders pad;
+       decoders take either case, padded or not, and refuse a tail that
+       holds no whole byte or leaves non-zero bits -- a mistyped secret. */
+    {"encoding", "base32_encode", 1, {NA_BYTES}, "str", 0},
+    {"encoding", "base32_decode", 1, {NA_STR}, "result[bytes,str]", 0},
+    {"encoding", "base32hex_encode", 1, {NA_BYTES}, "str", 0},
+    {"encoding", "base32hex_decode", 1, {NA_STR}, "result[bytes,str]", 0},
+    /* Crockford's base32, for codes people read aloud and type: no I L
+       O U, unpadded; the decoder reads I and L as 1, O as 0, either
+       case, and skips hyphens ("7ZQ-4M1-X0"). */
+    {"encoding", "crockford_encode", 1, {NA_BYTES}, "str", 0},
+    {"encoding", "crockford_decode", 1, {NA_STR}, "result[bytes,str]", 0},
     /* One CSV record's field spans, scanned in C for stdlib/csv; the
        result layout is described at sl_encoding_csv_record
        (runtime/sl_encoding.c). Arguments: data, from, separator byte,

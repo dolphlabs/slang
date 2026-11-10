@@ -268,6 +268,7 @@ a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg redis regex
 strings unicode encoding compress math decimal rand builder byteutil flags sort
 uuid http http2 httpc template`.
+uuid http http2 httpc websocket`.
 uuid http http2 httpc csv`.
 `decimal` is exact money: `let r = decimal.parse("19.99")` (result), then
 `decimal.add/sub/mul(a, b)` (opt: none past 38 digits), `decimal.div(a, b,
@@ -294,6 +295,13 @@ reconnects and resubscribes by itself.
 `template.render(t, data)` (result; data is any `json.encode` value). HTML
 is escaped by context at parse time (text, attributes, URLs, scripts,
 styles); `parse_text` for email. A missing field is an error.
+`websocket`: `let ws = websocket.dial(url, deadline)` (ws:// or wss://; `dial_with`
+for `options()`: protocols, headers, `ping_every`, `compress`),
+`websocket.send_text/send_binary(ws, x, deadline)`, `websocket.recv(ws,
+deadline)` (result of opt Message; `m.kind` is `websocket.Kind.Text/Binary/Close`),
+`websocket.close(ws, 1000, "", deadline)`. Pings are answered automatically.
+`encoding.base32_encode/decode` (RFC 4648; decode takes either case, padded or
+not), `base32hex_*`, and `crockford_encode/decode` for codes people type.
 `csv.parse(text)` (result of `[[str]]`), `csv.to_maps(rows)` by header,
 streaming with `csv.new_reader(o)`, `csv.feed(rd, chunk)`, `csv.next(rd)` (none:
 feed more), `csv.end(rd)`; `csv.format(rows)` writes CRLF, quoted as needed.

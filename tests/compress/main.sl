@@ -146,4 +146,20 @@ if let _b = bomb { } else let e = err_of(bomb) {
     println("expansion past max_out refused");
 }
 
+
+// deflate_raw_flush: a stream left open, ending in the sync flush's empty
+// stored block; with an empty final block appended it inflates whole
+fn check_flush() {
+    let msg = to_bytes(strings.repeat("flush me ", 200));
+    let fr = compress.deflate_raw_flush(msg);
+    guard let z = fr else let e = err_of(fr) { panic(e); }
+    let n = len(z);
+    println(z[n - 4] == 0 && z[n - 3] == 0 && z[n - 2] == 255 && z[n - 1] == 255);
+    let closed = compress.inflate_raw(z + b"\x01\x00\x00\xff\xff", 100000) ?? b"";
+    println(closed == msg);
+    // without a final block the stream is unfinished, and inflate_raw says so
+    println(err_of(compress.inflate_raw(z, 100000)));
+}
+check_flush();
+
 println("done");
