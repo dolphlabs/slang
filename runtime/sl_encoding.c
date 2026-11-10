@@ -794,6 +794,47 @@ fail:
     return sl_jt_err(bad, i);
 }
 
+/* ---- XOR with a repeating key -----------------------------------------
+ *
+ * head, then data XORed with key repeated over it, in one allocation: a
+ * WebSocket client frame (RFC 6455 §5.3) is its header followed by the
+ * payload masked with a 4-byte key, and building it this way copies the
+ * payload once. The XOR runs eight bytes at a time over a key widened to
+ * a word; the result is the same as the byte-at-a-time definition for
+ * any key length, since the word is the key repeated from offset 0 and
+ * each word starts at a multiple of 8 into data. That holds for keys
+ * whose length divides 8 (1, 2, 4, 8); other lengths take the byte
+ * loop. An empty key copies data unchanged. */
+static sl_bytes *sl_encoding_xor_mask(sl_bytes *head, sl_bytes *data, sl_bytes *key) {
+    long long hn = head ? head->len : 0;
+    long long dn = data ? data->len : 0;
+    long long kn = key ? key->len : 0;
+    sl_bytes *out = sl_enc_bytes_raw(hn + dn);
+    unsigned char *w = out->ptr;
+    if (hn) memcpy(w, head->ptr, (size_t)hn);
+    w += hn;
+    const unsigned char *d = dn ? data->ptr : NULL;
+    if (kn == 0) {
+        if (dn) memcpy(w, d, (size_t)dn);
+        return out;
+    }
+    const unsigned char *k = key->ptr;
+    long long i = 0;
+    if (8 % kn == 0) {
+        unsigned char kw[8];
+        for (int j = 0; j < 8; j++) kw[j] = k[j % kn];
+        unsigned long long m;
+        memcpy(&m, kw, 8);
+        for (; i + 8 <= dn; i += 8) {
+            unsigned long long x;
+            memcpy(&x, d + i, 8);
+            x ^= m;
+            memcpy(w + i, &x, 8);
+        }
+    }
+    for (; i < dn; i++) w[i] = d[i] ^ k[i % kn];
+    return out;
+}
 /* ---- base32 -----------------------------------------------------------
  *
  * RFC 4648 base32 (section 6) and base32hex (section 7), and Crockford's

@@ -100,8 +100,10 @@ Common backend needs with no package today.
   Built as `stdlib/template` (Go syntax and escaping model), with
   `strings.escape_html`/`escape_js` and `encoding.json_tape` added as the
   natives it renders through.
-- [ ] **WebSocket client** (stdlib, beside `httpc`): dial, TLS, ping/pong,
+- [x] **WebSocket client** (stdlib, beside `httpc`): dial, TLS, ping/pong,
   close handshake, size limits. zokor has the server side only.
+  Built as `stdlib/websocket`, with permessage-deflate, keepalive and
+  `encoding.xor_mask` for masking; passes the Autobahn client suite.
 - [ ] **MySQL / MariaDB driver** (stdlib or package): only Postgres, SQLite
   and Mongo exist.
 

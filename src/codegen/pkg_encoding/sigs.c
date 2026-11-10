@@ -85,6 +85,11 @@ const NatSig ENCODING_SIGS[] = {
        every string. The layout is spelled out at sl_encoding_json_tape
        (runtime/sl_encoding.c); stdlib/template reads its data this way. */
     {"encoding", "json_tape", 1, {NA_STR}, "result[[int],str]", 0},
+    /* head, then data XORed with key repeated over it, in one
+       allocation: a WebSocket client frame is its header plus the
+       payload masked with a 4-byte key (RFC 6455 section 5.3), and the
+       payload is copied once. An empty key copies data as is. */
+    {"encoding", "xor_mask", 3, {NA_BYTES, NA_BYTES, NA_BYTES}, "bytes", 0},
     /* base32, RFC 4648: the standard alphabet (TOTP secrets) and
        base32hex, which sorts like the bytes it encodes. Encoders pad;
        decoders take either case, padded or not, and refuse a tail that
