@@ -54,17 +54,17 @@ What `say` (the exchange) needs and currently hand-rolls.
   rounding mode, compare, overflow as an error rather than a wrap. JSON and
   Postgres `numeric` round-trips. Evidence: `say` writes its own decimal
   encoding (`exchange/domain/bytes.sl`).
-- [ ] **`crypto` additions** (stdlib). It has SHA-256/HMAC-SHA256, SHA-1,
+- [x] **`crypto` additions** (stdlib). It has SHA-256/HMAC-SHA256, SHA-1,
   MD5, PBKDF2, Argon2id and RSA verify (SHA-256) only. Missing:
-  - [ ] authenticated encryption: AES-256-GCM and ChaCha20-Poly1305, for
+  - [x] authenticated encryption: AES-256-GCM and ChaCha20-Poly1305, for
     data at rest and encrypted cookies (zokor's cookies are signed, not
     encrypted)
-  - [ ] Ed25519 sign and verify
-  - [ ] ECDSA P-256 sign and verify
-  - [ ] RSA sign (PKCS#1 v1.5 and PSS, SHA-256)
-  - [ ] SHA-512 and HMAC-SHA512
-  - [ ] HKDF
-  - [ ] constant-time comparison as a public function
+  - [x] Ed25519 sign and verify
+  - [x] ECDSA P-256 sign and verify
+  - [x] RSA sign (PKCS#1 v1.5 and PSS, SHA-256)
+  - [x] SHA-512 and HMAC-SHA512
+  - [x] HKDF
+  - [x] constant-time comparison as a public function
 - [ ] **`jwt` algorithms and JWKS** (package `slangpackages/jwt`). It
   supports HS256 only. Missing:
   - [ ] RS256 (verify and sign)
