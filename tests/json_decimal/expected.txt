@@ -1,0 +1,10 @@
+true
+true
+{"amount":"-0.050"}
+{"sku":"a1","price":"19.90","discount":null,"tiers":["1","0.00000000000000000000000000000000000001","99999999999999999999999999999999999999"]}
+true
+1.25 0.10
+field 'amount': expected a decimal (a string or number such as "19.99"), got a boolean
+field 'amount': decimal "12.3.4" is not a decimal number
+field 'amount': decimal "1e39" needs more than 38 digits
+1.50

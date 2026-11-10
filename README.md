@@ -1515,7 +1515,10 @@ error), every scalar, `bytes` (RFC 4648 base64 strings on the
 wire), and `timez.Time` (an RFC 3339 string: written as `rfc3339_nano()`
 writes it, read with `parse_rfc3339()`'s rules, offsets applied; about
 115 ns to encode and 130 ns to decode, in C, so a struct without one
-compiles to exactly the codecs it did before). `rawptr`, `chan[T]`, and
+compiles to exactly the codecs it did before), and `decimal.Decimal`
+(written as a string of its exact text, `"19.90"`; read from a string or
+a number by `decimal.parse`'s rules, from the number's text and never
+through a float, also in C). `rawptr`, `chan[T]`, and
 `result[T,E]` can't appear anywhere in a decode/encode target type. A
 missing JSON key defaults an `opt[T]` field to `none`; for any other
 field type it's a decode error. Unknown JSON keys are ignored. Every
@@ -2062,6 +2065,7 @@ cells by row and column index; `pg.col(rows, "name")` finds an index.
 | `pg.get_bool(rows, r, c)` | `bool` |
 | `pg.get_bytes(rows, r, c)` | `bytea` |
 | `pg.get_time(rows, r, c)` | `timestamptz` as a `timez.Time` (`result`: err for infinity or a BC date); a `timestamp` without a zone is read as UTC |
+| `pg.get_decimal(rows, r, c)` | `numeric` and the integer types as an exact `decimal.Decimal`, at Postgres's scale (`result`: err for NaN, infinity or more than 38 digits) |
 | `pg.is_null(rows, r, c)` | whether the cell is NULL |
 
 The getters **panic** on NULL, on a column of a type they do not read,
@@ -3441,6 +3445,64 @@ be coprime), `binomial_mod` (Lucas, for a prime modulus) and
 `fibonacci` (exact through F(92)). A modulus must be positive: a
 function given one <= 0 returns `none`, 0 or `false` rather than
 panicking, and no result is negative.
+
+#### `decimal`
+
+Exact decimal arithmetic for money: up to 38 significant digits (SQL's
+`DECIMAL(38)`), an explicit scale, seven rounding modes, and overflow as
+`none` or an error, never a wrap.
+
+```slang
+import "decimal";
+
+let r = decimal.parse("19.99");                // result[Decimal, str]
+guard let price = r else let e = err_of(r) { panic(e); }
+let total = decimal.mul(price, decimal.from_int(3)) ?? decimal.zero();   // 59.97
+let rate = decimal.parse("0.075") ?? decimal.zero();
+let vat = decimal.mul_round(total, rate, 2, decimal.Rounding.HalfEven)
+          ?? decimal.zero();                    // 4.50
+decimal.format(vat);                            // "4.50"
+decimal.div(total, decimal.from_int(7), 2, decimal.Rounding.HalfEven);  // ok(8.57)
+decimal.split(total, 2);                        // [29.99, 29.98]: no cent lost
+decimal.allocate(total, [1, 2]);                // ok([19.99, 39.98])
+decimal.to_units(total, 2, decimal.Rounding.HalfEven) ?? 0;   // 5997
+decimal.eq(decimal.parse("1.5") ?? total, decimal.parse("1.50") ?? total);  // true
+```
+
+A `Decimal` is a coefficient and a scale (digits after the point, 0 to
+38), kept as Postgres's `numeric` keeps it: `"1.50"` stays 1.50, `add`
+keeps the larger scale, `mul` adds the two. It is a value (five base-10^9
+limbs), so arithmetic allocates nothing; only `format`, `split` and
+`allocate` build something on the heap.
+
+- **Exact unless you ask.** `add`, `sub` and `mul` are exact and return
+  `none` when the result needs more than 38 digits (or `mul`, a scale past
+  38: use `mul_round`). `mul_round`, `div` and `round` round to the scale
+  you give, by the `Rounding` you give: `HalfEven` (banker's, the usual
+  choice for money), `HalfUp`, `HalfDown`, `Down` and `Up` (toward and
+  away from zero), `Floor`, `Ceiling`. `div` is an error for a zero
+  divisor.
+- **Parsing is strict**, like `to_int`: an optional sign, digits, an
+  optional fraction and exponent (`"1.5e3"`). No spaces, separators,
+  leading or trailing point, NaN or infinity. `parse_bytes(b, lo, hi)`
+  reads a number inside a buffer without making a str. `from_float`
+  goes through the float's shortest text, so `0.1` is 0.1, not
+  0.1000000000000000055511151231257827.
+- **Comparing:** `cmp`, `eq`, `lt`, `le`, `gt`, `ge`, `min`, `max` compare
+  values, so 1.5 equals 1.50. Structs have no `==`. Use `normalize` (strip
+  trailing zeros) before a Decimal becomes a map key.
+- **Splitting money:** `split(d, n)` and `allocate(d, weights)` divide an
+  amount at its own scale so the parts add up to it exactly. The
+  leftover smallest units go to the parts with the largest remainders,
+  earlier ones first.
+- **JSON and Postgres.** A `decimal.Decimal` field is written by
+  `json.encode` as a string holding its exact text (`"19.90"`), which is
+  safe for JavaScript clients, whose numbers lose digits past 2^53.
+  `json.decode` reads one from a string or a number, exactly, without a
+  float in between. `pg.arg_decimal(d)` binds one for a `numeric`
+  parameter, and `pg.get_decimal(rows, r, c)` reads a `numeric` or
+  integer column at the scale Postgres reports. NaN and infinity are
+  errors.
 
 #### `rand`
 

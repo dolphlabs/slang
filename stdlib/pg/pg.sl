@@ -5,6 +5,7 @@ import "crypto";
 import "encoding";
 import "timez";
 import "json";
+import "decimal";
 
 // PostgreSQL client, speaking the frontend/backend protocol (version
 // 3.0) over `net`.
@@ -1217,6 +1218,13 @@ pub fn arg_null() -> Arg {
 // keeps microseconds: a finer fraction is rounded by the server.
 pub fn arg_time(t: timez.Time) -> Arg {
     return Arg { is_null: false, binary: false, data: to_bytes(t.rfc3339_nano()) };
+}
+
+
+// A decimal for a numeric parameter, as its exact text: no float on the
+// way, so 0.1 arrives as 0.1.
+pub fn arg_decimal(d: decimal.Decimal) -> Arg {
+    return Arg { is_null: false, binary: false, data: to_bytes(decimal.format(d)) };
 }
 
 
@@ -2655,6 +2663,23 @@ pub fn get_time(rows: Rows, r: int, c: int) -> result[timez.Time, str] {
                    "(infinity, BC and seconds-level offsets are not supported)");
     }
     return timez.parse_rfc3339(iso);
+}
+
+// The exact value of a numeric or integer cell (int2, int4, int8,
+// numeric), at the scale Postgres reports: numeric(12, 2) gives "19.90",
+// not 19.9. err for another column type, NaN or an infinity, or a value
+// past decimal's 38 digits.
+pub fn get_decimal(rows: Rows, r: int, c: int) -> result[decimal.Decimal, str] {
+    let oid = rows.types[c];
+    if oid != 1700 && oid != 20 && oid != 21 && oid != 23 {
+        return err("column " + rows.columns[c] + " is not numeric (type " + to_str(oid) + ")");
+    }
+    let text = get_text(rows, r, c);
+    let d = decimal.parse(text);
+    if let v = d {
+        return ok(v);
+    }
+    return err("column " + rows.columns[c] + ": " + err_of(d));
 }
 
 pub fn get_int(rows: Rows, r: int, c: int) -> int {
