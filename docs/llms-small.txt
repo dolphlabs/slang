@@ -267,7 +267,8 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg redis regex
 strings unicode encoding compress math decimal rand builder byteutil flags sort
-uuid http http2 httpc`.
+uuid http http2 httpc template`.
+uuid http http2 httpc websocket`.
 `decimal` is exact money: `let r = decimal.parse("19.99")` (result), then
 `decimal.add/sub/mul(a, b)` (opt: none past 38 digits), `decimal.div(a, b,
 scale, decimal.Rounding.HalfEven)`, `decimal.format(d)`, `decimal.split(d, n)`.
@@ -284,6 +285,20 @@ an id is a canonical lowercase `str`, `uuid.parse` canonicalizes any spelling.
 `nats.subscribe(nc, subj)` then `nats.next_msg(sub, deadline)` (result of opt),
 `nats.request(nc, subj, data, deadline)`, `nats.drain(nc, deadline)`;
 reconnects and resubscribes by itself.
+`s3`: `let c = s3.new_client(endpoint, region, key, secret)` (or
+`s3.from_env(proc.getenv)`), `s3.put_object(c, bucket, key, data, ctype, dl)`,
+`s3.get_object`, `s3.list_objects(c, bucket, prefix, "/", next, 1000, dl)`,
+`s3.put_large` (multipart), `s3.presign_get(c, bucket, key, seconds)`.
+`template`: `let r = template.parse(name, src)` (Go syntax: `{{ .f }}`, `if`,
+`range $i, $x := .xs`, `with`, `define`, pipelines), then
+`template.render(t, data)` (result; data is any `json.encode` value). HTML
+is escaped by context at parse time (text, attributes, URLs, scripts,
+styles); `parse_text` for email. A missing field is an error.
+`websocket`: `let ws = websocket.dial(url, deadline)` (ws:// or wss://; `dial_with`
+for `options()`: protocols, headers, `ping_every`, `compress`),
+`websocket.send_text/send_binary(ws, x, deadline)`, `websocket.recv(ws,
+deadline)` (result of opt Message; `m.kind` is `websocket.Kind.Text/Binary/Close`),
+`websocket.close(ws, 1000, "", deadline)`. Pings are answered automatically.
 `crypto`: `seal(key, data, aad)`/`open` (AES-256-GCM, random nonce;
 result), `hkdf_sha256(ikm, salt, info, n)`, `constant_time_eq(a, b)`,
 `ed25519_sign/verify`, `ecdsa_p256_sign_sha256/verify_sha256` (raw r||s),
@@ -368,10 +383,10 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 
 - builder: new_str, Str.write, Str.write_int, Str.write_line, Str.size, Str.is_empty, Str.finish, Str.take, Str.reset, new_bytes, Bytes.write_byte, Bytes.write (+6 more)
 - byteutil: find, find_wire, has_prefix, has_suffix, trim, split
-- compress: gzip, gzip_level, deflate, deflate_raw, gunzip, inflate, inflate_raw
+- compress: gzip, gzip_level, deflate, deflate_raw, deflate_raw_flush, gunzip, inflate, inflate_raw
 - crypto: sha256, hmac_sha256, rand, sha1, md5, pbkdf2_sha256, argon2id_raw, argon2id_verify, rsa_verify_sha256, sha384, sha512, hmac_sha384 (+28 more)
 - decimal: zero, from_int, from_units, parse, parse_bytes, from_float, scale_of, precision, is_zero, is_neg, sign, format (+22 more)
-- encoding: hex_encode, hex_decode, base64_encode, base64_decode, base64url_encode, base64url_decode, url_encode, url_decode, form_encode, form_decode, query_get, query_keys (+2 more)
+- encoding: hex_encode, hex_decode, base64_encode, base64_decode, base64url_encode, base64url_decode, url_encode, url_decode, form_encode, form_decode, query_get, query_keys (+4 more)
 - flags: new, Set.add_str, Set.add_int, Set.add_float, Set.add_bool, Set.add_list, Set.require, Set.set_takes, Set.stop_at_first_arg, Set.parse, Set.parse_or_exit, Set.usage (+8 more)
 - fs: open, create, read, pread, write, close, mkdir, realpath, fstat
 - http: header, header_or, headers, request, parse_frame, method_is, method_is_at, path_is, path_is_at, path_param, path_param_at, frame_method (+40 more)
@@ -391,10 +406,13 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - rand: new, from_os, fork, next_u64, below, between, unit, chance, shuffle, pick, backoff, jitter
 - redis: encode, decode, decode_at, slot, parse_url, connect_config, connect, do, close, usable, ping, echo (+132 more)
 - regex: compile, free, groups, is_match, is_match_bytes, find, find_at, find_bytes, find_bytes_at
+- s3: new_client, from_env, put_object, get_object, get_range, head_object, delete_object, list_objects, create_multipart, upload_part, complete_multipart, abort_multipart (+8 more)
 - sort: ints, floats, strings, by, by_stable, search_ints, search_floats, search_strings, search_by
 - sql: open, close, exec, last_insert_id, prepare, finalize, reset, bind_int, bind_float, bind_text, bind_blob, bind_null (+8 more)
-- strings: find, rfind, contains, has_prefix, has_suffix, count, trim, trim_start, trim_end, to_upper, to_lower, slice (+12 more)
+- strings: find, rfind, contains, has_prefix, has_suffix, count, trim, trim_start, trim_end, to_upper, to_lower, slice (+14 more)
+- template: parse, parse_text, add, render, render_named, escape_html
 - time: mono, wall, sleep, http_date, put_http_date
 - timez: Time.rfc3339, Time.rfc3339_milli, Time.rfc3339_nano, Time.rfc3339_at, Time.http_date, Time.rfc2822, Time.format, parse_date, parse_rfc3339, parse_http_date, parse_rfc2822, relative (+116 more)
 - unicode: valid, valid_bytes, count, runes, encode, truncate, fold, equal_fold, nfc, nfd, is_nfc
 - uuid: v4, v7, v7_at, is_valid, parse, version, time_ms, to_binary, from_binary
+- websocket: options, dial, dial_with, send_text, send_text_bytes, send_binary, ping, recv, text, close, close_now, is_open (+1 more)

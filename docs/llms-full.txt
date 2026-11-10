@@ -4326,6 +4326,56 @@ malformed frame drops and redials it. Subjects are validated (no
 whitespace, no empty tokens, no wildcards in a publish), and header names
 and values are refused if they would inject protocol lines.
 
+#### `s3`
+
+S3-compatible object storage, signed with AWS Signature Version 4: AWS S3,
+Cloudflare R2, MinIO and the rest.
+
+```slang
+import "s3";
+import "proc";
+
+let r = s3.new_client("https://s3.eu-west-1.amazonaws.com", "eu-west-1", access_key, secret_key);
+// or s3.from_env(proc.getenv): AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+// AWS_SESSION_TOKEN, AWS_REGION, S3_ENDPOINT
+guard let c = r else let e = err_of(r) { panic(e); }
+
+s3.put_object(c, "uploads", "avatars/42.png", png, "image/png", deadline);   // ok(etag)
+s3.get_object(c, "uploads", "avatars/42.png", deadline);                     // ok(bytes)
+s3.get_range(c, "uploads", "logs/today", 0, 1023, deadline);                 // first KiB
+s3.head_object(c, "uploads", "avatars/42.png", deadline);                    // ok(some(Object)) or ok(none)
+s3.delete_object(c, "uploads", "avatars/42.png", deadline);
+s3.list_objects(c, "uploads", "avatars/", "/", "", 1000, deadline);          // ok(Page); page.next continues
+s3.put_large(c, "backups", "db.dump", dump, "", 16 * 1048576, deadline);     // multipart
+s3.presign_get(c, "uploads", "avatars/42.png", 900);                         // ok(url) for 15 minutes
+s3.presign_put(c, "uploads", "incoming/x.bin", 300);
+```
+
+The payload is hashed into the signature (`x-amz-content-sha256`), so a
+body altered in transit is refused by the server. Signing keys are cached
+for the day they belong to. Errors carry S3's own code and message
+(`s3: NoSuchKey: The specified key does not exist.`).
+
+**Addressing and listing.** Addressing is path-style by default
+(`endpoint/bucket/key`), which MinIO, R2 and most compatible stores want.
+Set `c.path_style = false` for virtual-host style (`bucket.endpoint/key`).
+`list_objects` returns up to 1000 keys a page in key order. Pass `page.next`
+to get the next page; with a delimiter, deeper keys fold into
+`page.prefixes`.
+
+**Multipart.** `create_multipart`, `upload_part`, `complete_multipart` and
+`abort_multipart` are the raw steps (every part but the last at least
+5 MiB). `put_large` drives them, uploading in one request when the data
+fits in a part, and aborting if a part fails so no orphaned parts are left
+to be billed.
+
+**Presigned URLs** last 1 second to 7 days. `presign_at` signs at a given
+time, for tests and for URLs several servers must agree on.
+
+**Limits.** Objects are read and written whole, in memory (or as one byte
+range). Redirects are not followed, since a redirect would change the host
+the signature covers.
+
 #### `regex`
 
 Regular expressions on `str` or `bytes`, matched by slang's own
@@ -4753,7 +4803,17 @@ strings.join(parts, ",");               // the inverse of split
 strings.join_bytes(parts, b",");        // the same for [bytes]: sized once, copied once
 
 strings.from_float(0.1 + 0.2);          // "0.30000000000000004"
+
+strings.escape_html("<a href='x'>");    // "&lt;a href=&#39;x&#39;&gt;"
+strings.escape_js("it's </script>");    // "it\u0027s \u003c/script\u003e"
 ```
+
+`escape_html` writes `& < > " '` as character references, which is safe
+in text and in a quoted attribute of either quote. `escape_js` makes the
+inside of a JavaScript string literal of any quote (`'`, `"` or a
+backquote), safe inside `<script>` and inside an attribute. Both return
+the input itself, with no allocation, when nothing needs escaping.
+`template` escapes every value through them.
 
 `from_float` returns the shortest text that `to_float` reads back as
 exactly the same number, as `to_str`, `println`, `inspect` and
@@ -4859,6 +4919,8 @@ encoding.base64url_encode(sig);               // a JWT segment: -_ alphabet, no 
 encoding.url_encode("a b&c");                 // "a%20b%26c"
 encoding.form_encode("a b&c");                // "a+b%26c"
 encoding.float64_to_le(1.5);                   // exact IEEE-754 bytes, low byte first
+encoding.json_tape("{\"a\":[1,2]}");        // ok([5,5,1,0,11, 7,2,0,2,3, 4,5,2,5,10, ...]): see below
+encoding.xor_mask(head, payload, key);         // head ++ (payload XOR key, repeated): a WebSocket frame
 
 let q = "/search?q=hello+world&page=2";
 guard let term = encoding.query_get(q, "q") else { return; }   // "hello world"
@@ -4881,6 +4943,8 @@ encoding.query_keys(q);                                        // ["q", "page"]
 | `encoding.query_keys` | `(url: str) -> [str]` |
 | `encoding.float64_to_le` | `(value: float) -> bytes` |
 | `encoding.float64_from_le` | `(bytes: bytes) -> result[float, str]` |
+| `encoding.json_tape` | `(text: str) -> result[[int], str]` |
+| `encoding.xor_mask` | `(head: bytes, data: bytes, key: bytes) -> bytes` |
 
 Like `regex`, `strings` and `os` — and unlike `crypto` and `sql` — this
 is pure computation, so importing it adds no link flag.
@@ -4919,6 +4983,16 @@ Five things worth knowing:
   a query may legally repeat a key and a map would have to drop one,
   the same reason `os.environ` is a list. `query_get` takes the first
   value; a bare `?debug` is present with an empty value, not absent.
+
+- **`json_tape` is where things are, not a copy of them.** It validates
+  a JSON document (RFC 8259, nesting up to 512) in one C pass and returns
+  five ints per value, in document order: kind (0 null, 1 bool, 2 number,
+  3 string, 4 list, 5 object, 7 key; plus 8 for a string or key holding
+  an escape), the entry after the value's subtree, its child count, and
+  its byte span (a string's inside, between the quotes). A reader walks
+  it, skips a subtree in one step, and materialises only the strings it
+  reads (`strings.from_bytes` over the span). `template` reads its data
+  this way; use `json.decode` when the shape is known.
 
 Percent-escapes are emitted uppercase (RFC 3986 §2.1) and hex digests
 lowercase (what `sha256sum`, git and every API that returns one use).
@@ -5136,6 +5210,77 @@ that case.
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
 
+#### `websocket`
+
+A WebSocket client (RFC 6455) over `ws://` and `wss://`, with
+permessage-deflate (RFC 7692) when asked for. In the Autobahn
+TestSuite's client run (`tests/live/websocket`, 517 cases), 440 cases
+are OK, 3 INFORMATIONAL and 2 NON-STRICT, with no failures. The NON-STRICT
+two are invalid UTF-8 inside one frame, caught when the frame is whole
+rather than byte by byte. The 72 UNIMPLEMENTED are window-size variants
+of permessage-deflate this client does not offer.
+
+```slang
+import "websocket";
+
+let o = websocket.options();
+o.protocols = ["v2.chat"];                       // offered; Conn.protocol is the server's pick
+o.headers = ["Authorization: Bearer " + token];
+o.ping_every = 20000000000;                      // keepalive: a ping every 20 s
+o.compress = true;                               // permessage-deflate
+let r = websocket.dial_with("wss://example.com/live", o, deadline);
+guard let ws = r else let e = err_of(r) { panic(e); }
+
+websocket.send_text(ws, "{\"subscribe\":\"prices\"}", deadline);
+websocket.send_binary(ws, frame, deadline);
+let mr = websocket.recv(ws, deadline);           // result[opt[Message], str]; none: the deadline passed
+guard let got = mr else let e = err_of(mr) { panic(e); }
+guard let m = got else { return; }
+if m.kind == websocket.Kind.Text { handle(websocket.text(m)); }
+websocket.close(ws, 1000, "bye", deadline);      // the close handshake
+```
+
+`recv` returns `Text`, `Binary` or `Close` messages, reassembled from
+their fragments. It answers pings and consumes pongs as they arrive, and
+answers the server's close before returning it. A deadline that passes
+loses nothing: the next `recv` carries on, even partway through a frame.
+One task reads at a time; any number may send, and a send is one whole
+frame written under a lock, so frames from different tasks never
+interleave.
+
+**What it refuses.** Masked or reserved-bit frames, unknown opcodes,
+fragmented or oversized control frames, lengths not in their shortest
+form, continuations with nothing to continue, text that is not UTF-8
+(checked per fragment as it arrives), close codes a peer may not send,
+and messages over `max_message` (32 MiB by default, counted after
+inflation, so a compression bomb is cut off). Each fails the connection
+with the matching close code (1002, 1007, 1009). In the handshake: a
+wrong `Sec-WebSocket-Accept`, a subprotocol or extension that was not
+offered, and redirects. A redirect would send the handshake, and any
+credentials in it, somewhere the caller did not name.
+
+**Keepalive.** With `ping_every` set, a ping goes out each interval and a
+connection whose ping goes a whole interval unanswered is closed;
+`recv` then reports why. Pongs arrive through `recv`, so a connection
+nobody reads cannot keep itself alive.
+
+**Compression** is offered without context takeover in either direction.
+The server must accept `server_no_context_takeover`, so each message it
+sends inflates on its own. Each message this client sends is compressed
+on its own too, as a sync-flushed stream with no final block
+(`compress.deflate_raw_flush`), which a server keeping one decompressor
+for the whole connection reads correctly. No 32 KiB window per direction
+stays alive between messages. A message is sent compressed only when
+that makes it smaller.
+
+**Text with U+0000.** A `str` ends at its first zero byte, so
+`websocket.text(m)` stops there. `m.data` holds every byte, and
+`send_text_bytes` sends one.
+
+Frames are masked with keys drawn from a 4 KiB pool of `crypto.rand`
+bytes, refilled as it empties. A frame is built in one allocation by
+`encoding.xor_mask`. Large frames are read in chunks and joined once.
+
 #### `compress`
 
 gzip, zlib and raw DEFLATE, over zlib (`-lz`, added only when a program
@@ -5163,6 +5308,7 @@ guard let plain = ur else let e = err_of(ur) {
 | `compress.deflate` | `(b: bytes) -> result[bytes, str]` |
 | `compress.inflate` | `(b: bytes, max_out: int) -> result[bytes, str]` |
 | `compress.deflate_raw` | `(b: bytes) -> result[bytes, str]` |
+| `compress.deflate_raw_flush` | `(b: bytes) -> result[bytes, str]` (ends in a sync flush, no final block: RFC 7692) |
 | `compress.inflate_raw` | `(b: bytes, max_out: int) -> result[bytes, str]` |
 
 **Decompression takes a mandatory output limit.** `max_out` is a
@@ -5749,14 +5895,86 @@ the brief window before `main()` blocks the signals gets the OS's default
 disposition (immediate termination) instead of graceful handling, same as
 any signal-handling program.
 
+#### `template`
+
+HTML templates that escape each value for where it lands, and plain-text
+templates for email bodies and other text. The syntax is Go's
+(`{{ .field }}`, `if`, `range`, `with`, `define`, pipelines), and so is the
+safety model: escaping is decided by the HTML around each action when the
+template is parsed, not by the caller remembering to escape.
+
+```slang
+import "template";
+
+gc struct Item { name: str, url: str, price: int }
+gc struct Page { title: str, items: [Item], user: str }
+
+let r = template.parse("page",
+    "<h1>{{ .title }}</h1>" +
+    "<ul>{{ range $i, $it := .items }}" +
+    "<li><a href=\"{{ $it.url }}\" title=\"{{ $it.name }}\">{{ add $i 1 }}. {{ $it.name }}</a></li>" +
+    "{{ else }}<li>nothing yet</li>{{ end }}</ul>" +
+    "<script>const user = {{ .user }};</script>");
+guard let t = r else let e = err_of(r) { panic(e); }      // syntax and context errors, with line numbers
+let html = template.render(t, page);                       // result[str, str]
+
+template.add(t, "layout", "<html><body>{{ template \"page\" . }}</body></html>");
+template.render_named(t, "layout", page);
+
+let mail = template.parse_text("welcome", "Hi {{ .name }},\n{{ range .items }}- {{ .name }}\n{{ end }}");
+```
+
+Each action is escaped for its context:
+
+| Where | What the value becomes |
+|---|---|
+| text, quoted attribute | `& < > " '` as character references |
+| URL attribute (`href`, `src`, `action`, …), at the start | only `http`, `https`, `mailto`, `tel` or a relative URL; anything else, `javascript:` above all, becomes `about:invalid#blocked` |
+| later in a URL | percent-encoded (`/search?q={{ .q }}`) |
+| `<script>`, `on*` attributes | a JavaScript literal (JSON), `<` `>` `&` `'` as `\u` escapes |
+| inside a JS string | escaped as string content, whatever the quotes |
+| `<style>`, `style` attributes | letters, digits and `# % . , -` only, else `ZgotmplZ` |
+
+Refused when the template is parsed: an action in a tag or attribute
+name, in an unquoted attribute value, in an HTML or JavaScript comment,
+and branches of an `if` or `range` that leave the HTML in different
+states (`{{ if .x }}<a href="{{ end }}`). `{{ .html | raw }}` writes
+trusted HTML unescaped in text, and escapes it anywhere else.
+
+**Data** is any value `json.encode` takes: a struct's fields are `.name`,
+a list ranges, a map's keys are fields (ranged in sorted key order).
+A missing field is an error, not an empty string, so a typo does not
+render as silence; use `if`, `with` or `default` for data that may be
+absent.
+
+**Language.** `{{ if }}`/`{{ else if }}`/`{{ else }}`, `{{ with }}`,
+`{{ range }}` (with `$i, $x :=` and `{{ else }}` for empty), `{{ $x := … }}`
+and `{{ $x = … }}` with block scope, `$` for the root, pipelines
+(`{{ .name | upper }}`), parentheses (`{{ len (index .items 0).tags }}`),
+`{{/* comments */}}` and `{{-`/`-}}` to trim whitespace, `{{ define }}`
+and `{{ template "name" . }}` (nested up to 64 deep). Functions: `eq ne
+lt le gt ge`, `and or not` (short-circuit, as Go's), `len index default
+join upper lower trim add sub`, `print printf` (`%s %v %d %f %.2f %q %x
+%t`), `json urlquery raw`. An unknown function or variable is a parse
+error.
+
+**Cost.** Parsing and escape analysis happen once; a `Template` is safe
+to render from many tasks at once. Rendering encodes the data with
+`json.encode` and indexes it with `encoding.json_tape` (one C pass, no
+allocation per value), resolves variables to slots at parse time, and
+escapes with `strings.escape_html`/`escape_js`, which return their input
+unchanged when nothing needs escaping. A 100-row table page (15 KB, six
+actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
+`html/template` on the same page, run alternately on one machine.
+
 ## All packages
 
 - [builder](packages/builder.md) -- source package, 20 public items
 - [byteutil](packages/byteutil.md) -- source package, 6 public items
-- [compress](packages/compress.md) -- compiler-provided, 7 public items
+- [compress](packages/compress.md) -- compiler-provided, 8 public items
 - [crypto](packages/crypto.md) -- compiler-provided, 40 public items
 - [decimal](packages/decimal.md) -- source package, 37 public items
-- [encoding](packages/encoding.md) -- compiler-provided, 14 public items
+- [encoding](packages/encoding.md) -- compiler-provided, 16 public items
 - [flags](packages/flags.md) -- source package, 23 public items
 - [fs](packages/fs.md) -- compiler-provided, 9 public items
 - [http](packages/http.md) -- source package, 58 public items
@@ -5776,13 +5994,16 @@ any signal-handling program.
 - [rand](packages/rand.md) -- source package, 13 public items
 - [redis](packages/redis.md) -- source package, 161 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
+- [s3](packages/s3.md) -- source package, 23 public items
 - [sort](packages/sort.md) -- source package, 9 public items
 - [sql](packages/sql.md) -- compiler-provided, 20 public items
-- [strings](packages/strings.md) -- compiler-provided, 24 public items
+- [strings](packages/strings.md) -- compiler-provided, 26 public items
+- [template](packages/template.md) -- source package, 7 public items
 - [time](packages/time.md) -- compiler-provided, 5 public items
 - [timez](packages/timez.md) -- source package, 144 public items
 - [unicode](packages/unicode.md) -- compiler-provided, 11 public items
 - [uuid](packages/uuid.md) -- source package, 11 public items
+- [websocket](packages/websocket.md) -- source package, 16 public items
 
 ---
 
@@ -6412,6 +6633,7 @@ guard let plain = ur else let e = err_of(ur) {
 | `compress.deflate` | `(b: bytes) -> result[bytes, str]` |
 | `compress.inflate` | `(b: bytes, max_out: int) -> result[bytes, str]` |
 | `compress.deflate_raw` | `(b: bytes) -> result[bytes, str]` |
+| `compress.deflate_raw_flush` | `(b: bytes) -> result[bytes, str]` (ends in a sync flush, no final block: RFC 7692) |
 | `compress.inflate_raw` | `(b: bytes, max_out: int) -> result[bytes, str]` |
 
 **Decompression takes a mandatory output limit.** `max_out` is a
@@ -6451,6 +6673,8 @@ attacker-controlled input.
 ### `compress.deflate(bytes) -> result[bytes,str]`
 
 ### `compress.deflate_raw(bytes) -> result[bytes,str]`
+
+### `compress.deflate_raw_flush(bytes) -> result[bytes,str]`
 
 ### `compress.gunzip(bytes, int) -> result[bytes,str]`
 
@@ -6897,6 +7121,8 @@ encoding.base64url_encode(sig);               // a JWT segment: -_ alphabet, no 
 encoding.url_encode("a b&c");                 // "a%20b%26c"
 encoding.form_encode("a b&c");                // "a+b%26c"
 encoding.float64_to_le(1.5);                   // exact IEEE-754 bytes, low byte first
+encoding.json_tape("{\"a\":[1,2]}");        // ok([5,5,1,0,11, 7,2,0,2,3, 4,5,2,5,10, ...]): see below
+encoding.xor_mask(head, payload, key);         // head ++ (payload XOR key, repeated): a WebSocket frame
 
 let q = "/search?q=hello+world&page=2";
 guard let term = encoding.query_get(q, "q") else { return; }   // "hello world"
@@ -6919,6 +7145,8 @@ encoding.query_keys(q);                                        // ["q", "page"]
 | `encoding.query_keys` | `(url: str) -> [str]` |
 | `encoding.float64_to_le` | `(value: float) -> bytes` |
 | `encoding.float64_from_le` | `(bytes: bytes) -> result[float, str]` |
+| `encoding.json_tape` | `(text: str) -> result[[int], str]` |
+| `encoding.xor_mask` | `(head: bytes, data: bytes, key: bytes) -> bytes` |
 
 Like `regex`, `strings` and `os` — and unlike `crypto` and `sql` — this
 is pure computation, so importing it adds no link flag.
@@ -6958,6 +7186,16 @@ Five things worth knowing:
   the same reason `os.environ` is a list. `query_get` takes the first
   value; a bare `?debug` is present with an empty value, not absent.
 
+- **`json_tape` is where things are, not a copy of them.** It validates
+  a JSON document (RFC 8259, nesting up to 512) in one C pass and returns
+  five ints per value, in document order: kind (0 null, 1 bool, 2 number,
+  3 string, 4 list, 5 object, 7 key; plus 8 for a string or key holding
+  an escape), the entry after the value's subtree, its child count, and
+  its byte span (a string's inside, between the quotes). A reader walks
+  it, skips a subtree in one step, and materialises only the strings it
+  reads (`strings.from_bytes` over the span). `template` reads its data
+  this way; use `json.decode` when the shape is known.
+
 Percent-escapes are emitted uppercase (RFC 3986 §2.1) and hex digests
 lowercase (what `sha256sum`, git and every API that returns one use).
 Both decoders accept either case.
@@ -6991,6 +7229,10 @@ Both decoders accept either case.
 ### `encoding.float64_to_le(float) -> bytes`
 
 ### `encoding.float64_from_le(bytes) -> result[float,str]`
+
+### `encoding.json_tape(str) -> result[[int],str]`
+
+### `encoding.xor_mask(bytes, bytes, bytes) -> bytes`
 
 ---
 
@@ -11729,6 +11971,144 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 
 
 
+# s3
+
+# s3
+
+> Package s3.
+
+S3-compatible object storage, signed with AWS Signature Version 4: AWS S3,
+Cloudflare R2, MinIO and the rest.
+
+```slang
+import "s3";
+import "proc";
+
+let r = s3.new_client("https://s3.eu-west-1.amazonaws.com", "eu-west-1", access_key, secret_key);
+// or s3.from_env(proc.getenv): AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+// AWS_SESSION_TOKEN, AWS_REGION, S3_ENDPOINT
+guard let c = r else let e = err_of(r) { panic(e); }
+
+s3.put_object(c, "uploads", "avatars/42.png", png, "image/png", deadline);   // ok(etag)
+s3.get_object(c, "uploads", "avatars/42.png", deadline);                     // ok(bytes)
+s3.get_range(c, "uploads", "logs/today", 0, 1023, deadline);                 // first KiB
+s3.head_object(c, "uploads", "avatars/42.png", deadline);                    // ok(some(Object)) or ok(none)
+s3.delete_object(c, "uploads", "avatars/42.png", deadline);
+s3.list_objects(c, "uploads", "avatars/", "/", "", 1000, deadline);          // ok(Page); page.next continues
+s3.put_large(c, "backups", "db.dump", dump, "", 16 * 1048576, deadline);     // multipart
+s3.presign_get(c, "uploads", "avatars/42.png", 900);                         // ok(url) for 15 minutes
+s3.presign_put(c, "uploads", "incoming/x.bin", 300);
+```
+
+The payload is hashed into the signature (`x-amz-content-sha256`), so a
+body altered in transit is refused by the server. Signing keys are cached
+for the day they belong to. Errors carry S3's own code and message
+(`s3: NoSuchKey: The specified key does not exist.`).
+
+**Addressing and listing.** Addressing is path-style by default
+(`endpoint/bucket/key`), which MinIO, R2 and most compatible stores want.
+Set `c.path_style = false` for virtual-host style (`bucket.endpoint/key`).
+`list_objects` returns up to 1000 keys a page in key order. Pass `page.next`
+to get the next page; with a delimiter, deeper keys fold into
+`page.prefixes`.
+
+**Multipart.** `create_multipart`, `upload_part`, `complete_multipart` and
+`abort_multipart` are the raw steps (every part but the last at least
+5 MiB). `put_large` drives them, uploading in one request when the data
+fits in a part, and aborting if a part fails so no orphaned parts are left
+to be billed.
+
+**Presigned URLs** last 1 second to 7 days. `presign_at` signs at a given
+time, for tests and for URLs several servers must agree on.
+
+**Limits.** Objects are read and written whole, in memory (or as one byte
+range). Redirects are not followed, since a redirect would change the host
+the signature covers.
+
+## API
+
+### `gc struct Client`
+
+### `gc struct Object`
+
+### `gc struct Page`
+
+### `fn new_client(endpoint: str, region: str, access_key: str, secret_key: str) -> result[Client, str]`
+
+A client for endpoint ("https://s3.us-east-1.amazonaws.com", "https://<account>.r2.cloudflarestorage.com", "http://127.0.0.1:9000").
+
+### `fn from_env(getenv: fn(str) -> opt[str]) -> result[Client, str]`
+
+A client from AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN (optional), AWS_REGION (or AWS_DEFAULT_REGION) and S3_ENDPOINT (default: the region's AWS endpoint).
+
+### `fn put_object(c: Client, bucket: str, key: str, data: bytes, content_type: str, deadline: until) -> result[str, str]`
+
+Store data at bucket/key; the object's ETag.
+
+### `fn get_object(c: Client, bucket: str, key: str, deadline: until) -> result[bytes, str]`
+
+### `fn get_range(c: Client, bucket: str, key: str, first: int, last: int, deadline: until) -> result[bytes, str]`
+
+Bytes first..last of the object, both included (an HTTP Range).
+
+### `fn head_object(c: Client, bucket: str, key: str, deadline: until) -> result[opt[Object], str]`
+
+Size, ETag, type and modification time, without the body. none when the object does not exist.
+
+### `fn delete_object(c: Client, bucket: str, key: str, deadline: until) -> result[bool, str]`
+
+Delete bucket/key. S3 answers success for a key that was not there.
+
+### `fn list_objects(c: Client, bucket: str, prefix: str, delimiter: str, next: str, max_keys: int, deadline: until) -> result[Page, str]`
+
+One page (up to max_keys, at most 1000) of the keys under prefix, in key order, from where `next` (a Page's next, or "" to start) says. With delimiter "/", keys below the next "/" fold into page.prefixes.
+
+### `fn create_multipart(c: Client, bucket: str, key: str, content_type: str, deadline: until) -> result[str, str]`
+
+Start a multipart upload; its upload id.
+
+### `fn upload_part(c: Client, bucket: str, key: str, upload_id: str, n: int, data: bytes, deadline: until) -> result[str, str]`
+
+Upload part number n (1 to 10000) of an upload; its ETag, for complete_multipart. Every part but the last must be at least 5 MiB.
+
+### `fn complete_multipart(c: Client, bucket: str, key: str, upload_id: str, etags: [str], deadline: until) -> result[str, str]`
+
+Finish an upload from its parts' ETags, in part order; the object's ETag.
+
+### `fn abort_multipart(c: Client, bucket: str, key: str, upload_id: str, deadline: until) -> result[bool, str]`
+
+### `fn put_large(c: Client, bucket: str, key: str, data: bytes, content_type: str, part_size: int, deadline: until) -> result[str, str]`
+
+Upload data in parts of part_size bytes (at least 5 MiB), aborting the upload if any part fails, so no orphaned parts are left to be billed.
+
+### `fn create_bucket(c: Client, bucket: str, deadline: until) -> result[bool, str]`
+
+### `fn delete_bucket(c: Client, bucket: str, deadline: until) -> result[bool, str]`
+
+### `fn presign_get(c: Client, bucket: str, key: str, expires_seconds: int) -> result[str, str]`
+
+A URL anyone can GET (or PUT, below) for expires_seconds (1 second to 7 days), signed now: for downloads and browser uploads that never see your keys.
+
+### `fn presign_put(c: Client, bucket: str, key: str, expires_seconds: int) -> result[str, str]`
+
+### `fn presign_at(c: Client, method: str, bucket: str, key: str, expires_seconds: int, amzdate: str) -> result[str, str]`
+
+presign at a given time ("20130524T000000Z"), for tests and for URLs that must agree across servers.
+
+### `fn sign_request(c: Client, method: str, host: str, path: str, query: map[str]str, headers: map[str]str, payload_hash: str, amzdate: str) -> str`
+
+The Authorization header for a request (SigV4, signed headers are host, x-amz-content-sha256, x-amz-date, any x-amz-security-token and the caller's headers). headers holds lowercase names.
+
+### `fn uri_encode(s: str, keep_slash: bool) -> str`
+
+RFC 3986 percent-encoding as SigV4 wants it: everything but A-Z a-z 0-9 - _ . ~ (and / in paths, when keep_slash).
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
 # sort
 
 # sort
@@ -11971,7 +12351,17 @@ strings.join(parts, ",");               // the inverse of split
 strings.join_bytes(parts, b",");        // the same for [bytes]: sized once, copied once
 
 strings.from_float(0.1 + 0.2);          // "0.30000000000000004"
+
+strings.escape_html("<a href='x'>");    // "&lt;a href=&#39;x&#39;&gt;"
+strings.escape_js("it's </script>");    // "it\u0027s \u003c/script\u003e"
 ```
+
+`escape_html` writes `& < > " '` as character references, which is safe
+in text and in a quoted attribute of either quote. `escape_js` makes the
+inside of a JavaScript string literal of any quote (`'`, `"` or a
+backquote), safe inside `<script>` and inside an attribute. Both return
+the input itself, with no allocation, when nothing needs escaping.
+`template` escapes every value through them.
 
 `from_float` returns the shortest text that `to_float` reads back as
 exactly the same number, as `to_str`, `println`, `inspect` and
@@ -12050,6 +12440,122 @@ Three behaviours worth knowing:
 ### `strings.find_field(bytes, str) -> int`
 
 ### `strings.from_float(float) -> str`
+
+### `strings.escape_html(str) -> str`
+
+### `strings.escape_js(str) -> str`
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# template
+
+# template
+
+> Package template.
+
+HTML templates that escape each value for where it lands, and plain-text
+templates for email bodies and other text. The syntax is Go's
+(`{{ .field }}`, `if`, `range`, `with`, `define`, pipelines), and so is the
+safety model: escaping is decided by the HTML around each action when the
+template is parsed, not by the caller remembering to escape.
+
+```slang
+import "template";
+
+gc struct Item { name: str, url: str, price: int }
+gc struct Page { title: str, items: [Item], user: str }
+
+let r = template.parse("page",
+    "<h1>{{ .title }}</h1>" +
+    "<ul>{{ range $i, $it := .items }}" +
+    "<li><a href=\"{{ $it.url }}\" title=\"{{ $it.name }}\">{{ add $i 1 }}. {{ $it.name }}</a></li>" +
+    "{{ else }}<li>nothing yet</li>{{ end }}</ul>" +
+    "<script>const user = {{ .user }};</script>");
+guard let t = r else let e = err_of(r) { panic(e); }      // syntax and context errors, with line numbers
+let html = template.render(t, page);                       // result[str, str]
+
+template.add(t, "layout", "<html><body>{{ template \"page\" . }}</body></html>");
+template.render_named(t, "layout", page);
+
+let mail = template.parse_text("welcome", "Hi {{ .name }},\n{{ range .items }}- {{ .name }}\n{{ end }}");
+```
+
+Each action is escaped for its context:
+
+| Where | What the value becomes |
+|---|---|
+| text, quoted attribute | `& < > " '` as character references |
+| URL attribute (`href`, `src`, `action`, …), at the start | only `http`, `https`, `mailto`, `tel` or a relative URL; anything else, `javascript:` above all, becomes `about:invalid#blocked` |
+| later in a URL | percent-encoded (`/search?q={{ .q }}`) |
+| `<script>`, `on*` attributes | a JavaScript literal (JSON), `<` `>` `&` `'` as `\u` escapes |
+| inside a JS string | escaped as string content, whatever the quotes |
+| `<style>`, `style` attributes | letters, digits and `# % . , -` only, else `ZgotmplZ` |
+
+Refused when the template is parsed: an action in a tag or attribute
+name, in an unquoted attribute value, in an HTML or JavaScript comment,
+and branches of an `if` or `range` that leave the HTML in different
+states (`{{ if .x }}<a href="{{ end }}`). `{{ .html | raw }}` writes
+trusted HTML unescaped in text, and escapes it anywhere else.
+
+**Data** is any value `json.encode` takes: a struct's fields are `.name`,
+a list ranges, a map's keys are fields (ranged in sorted key order).
+A missing field is an error, not an empty string, so a typo does not
+render as silence; use `if`, `with` or `default` for data that may be
+absent.
+
+**Language.** `{{ if }}`/`{{ else if }}`/`{{ else }}`, `{{ with }}`,
+`{{ range }}` (with `$i, $x :=` and `{{ else }}` for empty), `{{ $x := … }}`
+and `{{ $x = … }}` with block scope, `$` for the root, pipelines
+(`{{ .name | upper }}`), parentheses (`{{ len (index .items 0).tags }}`),
+`{{/* comments */}}` and `{{-`/`-}}` to trim whitespace, `{{ define }}`
+and `{{ template "name" . }}` (nested up to 64 deep). Functions: `eq ne
+lt le gt ge`, `and or not` (short-circuit, as Go's), `len index default
+join upper lower trim add sub`, `print printf` (`%s %v %d %f %.2f %q %x
+%t`), `json urlquery raw`. An unknown function or variable is a parse
+error.
+
+**Cost.** Parsing and escape analysis happen once; a `Template` is safe
+to render from many tasks at once. Rendering encodes the data with
+`json.encode` and indexes it with `encoding.json_tape` (one C pass, no
+allocation per value), resolves variables to slots at parse time, and
+escapes with `strings.escape_html`/`escape_js`, which return their input
+unchanged when nothing needs escaping. A 100-row table page (15 KB, six
+actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
+`html/template` on the same page, run alternately on one machine.
+
+## API
+
+### `gc struct Template`
+
+A set of named templates, parsed and ready to render: make one with parse or parse_text, grow it with add. Its fields are internal. Safe to render from many tasks at once.
+
+### `fn parse(name: str, src: str) -> result[Template, str]`
+
+An HTML template, escaped by context. src may hold {{ define }} blocks.
+
+### `fn parse_text(name: str, src: str) -> result[Template, str]`
+
+A plain-text template (email bodies, CLI output): nothing is escaped.
+
+### `fn add(t: Template, name: str, src: str) -> result[bool, str]`
+
+Add another named template, such as a partial or a layout, which any template in the set can call with {{ template "name" }} (passing dot, or the value written after the name); its {{ define }} blocks are added too.
+
+### `fn render[T](t: Template, data: T) -> result[str, str]`
+
+Render the template parse was given, with data as its dot.
+
+### `fn render_named[T](t: Template, name: str, data: T) -> result[str, str]`
+
+Render one of the templates (a define or one added with add).
+
+### `fn escape_html(s: str) -> str`
+
+HTML-escape text, for building markup by hand.
 
 ---
 
@@ -12816,6 +13322,147 @@ The 16 bytes of a UUID, most significant first: the binary form databases store 
 ### `fn from_binary(b: bytes) -> result[str, str]`
 
 The canonical form of 16 bytes, the reverse of `to_binary`.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# websocket
+
+# websocket
+
+> Package websocket.
+
+A WebSocket client (RFC 6455) over `ws://` and `wss://`, with
+permessage-deflate (RFC 7692) when asked for. In the Autobahn
+TestSuite's client run (`tests/live/websocket`, 517 cases), 440 cases
+are OK, 3 INFORMATIONAL and 2 NON-STRICT, with no failures. The NON-STRICT
+two are invalid UTF-8 inside one frame, caught when the frame is whole
+rather than byte by byte. The 72 UNIMPLEMENTED are window-size variants
+of permessage-deflate this client does not offer.
+
+```slang
+import "websocket";
+
+let o = websocket.options();
+o.protocols = ["v2.chat"];                       // offered; Conn.protocol is the server's pick
+o.headers = ["Authorization: Bearer " + token];
+o.ping_every = 20000000000;                      // keepalive: a ping every 20 s
+o.compress = true;                               // permessage-deflate
+let r = websocket.dial_with("wss://example.com/live", o, deadline);
+guard let ws = r else let e = err_of(r) { panic(e); }
+
+websocket.send_text(ws, "{\"subscribe\":\"prices\"}", deadline);
+websocket.send_binary(ws, frame, deadline);
+let mr = websocket.recv(ws, deadline);           // result[opt[Message], str]; none: the deadline passed
+guard let got = mr else let e = err_of(mr) { panic(e); }
+guard let m = got else { return; }
+if m.kind == websocket.Kind.Text { handle(websocket.text(m)); }
+websocket.close(ws, 1000, "bye", deadline);      // the close handshake
+```
+
+`recv` returns `Text`, `Binary` or `Close` messages, reassembled from
+their fragments. It answers pings and consumes pongs as they arrive, and
+answers the server's close before returning it. A deadline that passes
+loses nothing: the next `recv` carries on, even partway through a frame.
+One task reads at a time; any number may send, and a send is one whole
+frame written under a lock, so frames from different tasks never
+interleave.
+
+**What it refuses.** Masked or reserved-bit frames, unknown opcodes,
+fragmented or oversized control frames, lengths not in their shortest
+form, continuations with nothing to continue, text that is not UTF-8
+(checked per fragment as it arrives), close codes a peer may not send,
+and messages over `max_message` (32 MiB by default, counted after
+inflation, so a compression bomb is cut off). Each fails the connection
+with the matching close code (1002, 1007, 1009). In the handshake: a
+wrong `Sec-WebSocket-Accept`, a subprotocol or extension that was not
+offered, and redirects. A redirect would send the handshake, and any
+credentials in it, somewhere the caller did not name.
+
+**Keepalive.** With `ping_every` set, a ping goes out each interval and a
+connection whose ping goes a whole interval unanswered is closed;
+`recv` then reports why. Pongs arrive through `recv`, so a connection
+nobody reads cannot keep itself alive.
+
+**Compression** is offered without context takeover in either direction.
+The server must accept `server_no_context_takeover`, so each message it
+sends inflates on its own. Each message this client sends is compressed
+on its own too, as a sync-flushed stream with no final block
+(`compress.deflate_raw_flush`), which a server keeping one decompressor
+for the whole connection reads correctly. No 32 KiB window per direction
+stays alive between messages. A message is sent compressed only when
+that makes it smaller.
+
+**Text with U+0000.** A `str` ends at its first zero byte, so
+`websocket.text(m)` stops there. `m.data` holds every byte, and
+`send_text_bytes` sends one.
+
+Frames are masked with keys drawn from a 4 KiB pool of `crypto.rand`
+bytes, refilled as it empties. A frame is built in one allocation by
+`encoding.xor_mask`. Large frames are read in chunks and joined once.
+
+## API
+
+### `gc struct Message`
+
+### `gc struct Options`
+
+### `fn options() -> Options`
+
+The defaults: no extra headers or subprotocols, 32 MiB messages, no compression, no keepalive pings.
+
+### `gc struct Conn`
+
+### `fn dial(url: str, deadline: until) -> result[Conn, str]`
+
+Connect to url (ws:// or wss://) with the default options.
+
+### `fn dial_with(url: str, o: Options, deadline: until) -> result[Conn, str]`
+
+Connect, send the opening handshake, and check the server's answer.
+
+### `fn send_text(c: Conn, text: str, deadline: until) -> result[bool, str]`
+
+Send a text message.
+
+### `fn send_text_bytes(c: Conn, data: bytes, deadline: until) -> result[bool, str]`
+
+Send a text message given as bytes, checked to be UTF-8 first: for text holding U+0000, which a str cannot (it ends at the first zero byte), and for text already in a byte buffer.
+
+### `fn send_binary(c: Conn, data: bytes, deadline: until) -> result[bool, str]`
+
+Send a binary message.
+
+### `fn ping(c: Conn, payload: bytes, deadline: until) -> result[bool, str]`
+
+Send a ping (payload up to 125 bytes); the server's pong is consumed by recv. options().ping_every sends them on a schedule instead.
+
+### `fn recv(c: Conn, deadline: until) -> result[opt[Message], str]`
+
+The next message, or none when the deadline passes first (nothing is lost: a later call carries on). Pings are answered and pongs consumed on the way. A Close message means the server ended the connection; the handshake is answered and the next call is an error.
+
+### `fn text(m: Message) -> str`
+
+The text of a text message. A str ends at its first zero byte, so text holding U+0000 is cut there: m.data has every byte.
+
+### `fn close(c: Conn, code: int, reason: str, deadline: until) -> result[bool, str]`
+
+The close handshake: send a close frame with code (1000 normal, or 3000-4999 for applications) and a reason of at most 123 bytes, then wait for the server's close (until deadline) and close the socket. If another task is in recv, that task sees the server's answer as a Close message and this call returns once the frame is sent.
+
+### `fn close_now(c: Conn)`
+
+Close the socket now, with no close handshake: for a connection that is already broken or must stop at once.
+
+### `fn is_open(c: Conn) -> bool`
+
+Whether the connection is open (not closing or closed).
+
+### `fn reason(c: Conn) -> str`
+
+Why the connection ended, or "" while it is open.
 
 ---
 

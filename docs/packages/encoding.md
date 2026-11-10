@@ -16,6 +16,8 @@ encoding.base64url_encode(sig);               // a JWT segment: -_ alphabet, no 
 encoding.url_encode("a b&c");                 // "a%20b%26c"
 encoding.form_encode("a b&c");                // "a+b%26c"
 encoding.float64_to_le(1.5);                   // exact IEEE-754 bytes, low byte first
+encoding.json_tape("{\"a\":[1,2]}");        // ok([5,5,1,0,11, 7,2,0,2,3, 4,5,2,5,10, ...]): see below
+encoding.xor_mask(head, payload, key);         // head ++ (payload XOR key, repeated): a WebSocket frame
 
 let q = "/search?q=hello+world&page=2";
 guard let term = encoding.query_get(q, "q") else { return; }   // "hello world"
@@ -38,6 +40,8 @@ encoding.query_keys(q);                                        // ["q", "page"]
 | `encoding.query_keys` | `(url: str) -> [str]` |
 | `encoding.float64_to_le` | `(value: float) -> bytes` |
 | `encoding.float64_from_le` | `(bytes: bytes) -> result[float, str]` |
+| `encoding.json_tape` | `(text: str) -> result[[int], str]` |
+| `encoding.xor_mask` | `(head: bytes, data: bytes, key: bytes) -> bytes` |
 
 Like `regex`, `strings` and `os` — and unlike `crypto` and `sql` — this
 is pure computation, so importing it adds no link flag.
@@ -77,6 +81,16 @@ Five things worth knowing:
   the same reason `os.environ` is a list. `query_get` takes the first
   value; a bare `?debug` is present with an empty value, not absent.
 
+- **`json_tape` is where things are, not a copy of them.** It validates
+  a JSON document (RFC 8259, nesting up to 512) in one C pass and returns
+  five ints per value, in document order: kind (0 null, 1 bool, 2 number,
+  3 string, 4 list, 5 object, 7 key; plus 8 for a string or key holding
+  an escape), the entry after the value's subtree, its child count, and
+  its byte span (a string's inside, between the quotes). A reader walks
+  it, skips a subtree in one step, and materialises only the strings it
+  reads (`strings.from_bytes` over the span). `template` reads its data
+  this way; use `json.decode` when the shape is known.
+
 Percent-escapes are emitted uppercase (RFC 3986 §2.1) and hex digests
 lowercase (what `sha256sum`, git and every API that returns one use).
 Both decoders accept either case.
@@ -110,6 +124,10 @@ Both decoders accept either case.
 ### `encoding.float64_to_le(float) -> bytes`
 
 ### `encoding.float64_from_le(bytes) -> result[float,str]`
+
+### `encoding.json_tape(str) -> result[[int],str]`
+
+### `encoding.xor_mask(bytes, bytes, bytes) -> bytes`
 
 ---
 

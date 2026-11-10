@@ -89,12 +89,17 @@ Common backend needs with no package today.
   headers, request/reply, reconnection, NKey/creds/TLS), in the standard
   library beside `redis` rather than a separate repo. JetStream is not in
   it.
-- [ ] **S3-compatible object storage** (package): put, get, delete, list,
+- [x] **S3-compatible object storage** (package): put, get, delete, list,
   multipart upload, presigned URLs, with AWS SigV4 signing. Works against
   S3, R2, MinIO. zokor handles uploads but has nowhere durable to put them.
-- [ ] **Templating with auto-escaping** (stdlib): HTML templates that escape
+  Built as `stdlib/s3` (beside `redis`), with range gets and bucket
+  create/delete; tested against AWS's SigV4 examples and a live server.
+- [x] **Templating with auto-escaping** (stdlib): HTML templates that escape
   by context, plus plain-text templates. Evidence: `say` has an email
   `templates/` folder and no safe engine to render it with.
+  Built as `stdlib/template` (Go syntax and escaping model), with
+  `strings.escape_html`/`escape_js` and `encoding.json_tape` added as the
+  natives it renders through.
 - [x] **WebSocket client** (stdlib, beside `httpc`): dial, TLS, ping/pong,
   close handshake, size limits. zokor has the server side only.
   Built as `stdlib/websocket`, with permessage-deflate, keepalive and
