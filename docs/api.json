@@ -701,6 +701,46 @@
           "sig": "crypto.rsa_sign_pss_sha256(str, bytes) -> result[bytes,str]"
         },
         {
+          "name": "rsa_encrypt_oaep_sha1",
+          "params": [
+            "str",
+            "bytes"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.rsa_encrypt_oaep_sha1(str, bytes) -> result[bytes,str]"
+        },
+        {
+          "name": "rsa_decrypt_oaep_sha1",
+          "params": [
+            "str",
+            "bytes"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.rsa_decrypt_oaep_sha1(str, bytes) -> result[bytes,str]"
+        },
+        {
+          "name": "rsa_encrypt_oaep_sha256",
+          "params": [
+            "str",
+            "bytes"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.rsa_encrypt_oaep_sha256(str, bytes) -> result[bytes,str]"
+        },
+        {
+          "name": "rsa_decrypt_oaep_sha256",
+          "params": [
+            "str",
+            "bytes"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.rsa_decrypt_oaep_sha256(str, bytes) -> result[bytes,str]"
+        },
+        {
           "name": "rsa_verify_pss_sha256",
           "params": [
             "bytes",
@@ -5520,6 +5560,404 @@
           "doc": "The estimated fraction of observations at or below x, in [0, 1]; NaN when empty.",
           "file": "stdlib/math/stats/streaming.sl",
           "line": 300
+        }
+      ]
+    },
+    "mysql": {
+      "name": "mysql",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Config",
+          "decl": "struct",
+          "sig": "gc struct Config",
+          "doc": "",
+          "file": "stdlib/mysql/mysql.sl",
+          "line": 68
+        },
+        {
+          "name": "parse_url",
+          "decl": "fn",
+          "sig": "fn parse_url(url: str) -> result[Config, str]",
+          "doc": "mysql://user:password@host:port/database?sslmode=require  Parameters: sslmode (disable, require; verify-full is require), sslrootcert (a CA bundle), server_public_key (a PEM file), allow_public_key_retrieval (true), time_zone (e.g. +00:00), statement_cache (0 to 65536). Any other parameter is an error: a misspelt sslmode silently dropped would connect in the clear.  TLS is required by default, except to a loopback host or over a Unix socket (host=/path/to/mysqld.sock, or the path percent-encoded as the host), where it is off.",
+          "file": "stdlib/mysql/mysql.sl",
+          "line": 106
+        },
+        {
+          "name": "Conn",
+          "decl": "struct",
+          "sig": "gc struct Conn",
+          "doc": "",
+          "file": "stdlib/mysql/mysql.sl",
+          "line": 266
+        },
+        {
+          "name": "connect",
+          "decl": "fn",
+          "sig": "fn connect(url: str, deadline: until) -> result[Conn, str]",
+          "doc": "",
+          "file": "stdlib/mysql/mysql.sl",
+          "line": 301
+        },
+        {
+          "name": "connect_config",
+          "decl": "fn",
+          "sig": "fn connect_config(cfg: Config, deadline: until) -> result[Conn, str]",
+          "doc": "The deadline covers the whole connection: the lookup, the TCP connect, TLS, authentication and any time_zone setting.",
+          "file": "stdlib/mysql/mysql.sl",
+          "line": 309
+        },
+        {
+          "name": "close",
+          "decl": "fn",
+          "sig": "fn close(c: Conn)",
+          "doc": "Ends the session politely (COM_QUIT) and closes the socket.",
+          "file": "stdlib/mysql/mysql.sl",
+          "line": 348
+        },
+        {
+          "name": "usable",
+          "decl": "fn",
+          "sig": "fn usable(c: Conn) -> bool",
+          "doc": "Is the connection still usable? False once closed or broken.",
+          "file": "stdlib/mysql/mysql.sl",
+          "line": 360
+        },
+        {
+          "name": "in_transaction",
+          "decl": "fn",
+          "sig": "fn in_transaction(c: Conn) -> bool",
+          "doc": "Inside a transaction (as the server last reported)?",
+          "file": "stdlib/mysql/mysql.sl",
+          "line": 365
+        },
+        {
+          "name": "server_version",
+          "decl": "fn",
+          "sig": "fn server_version(c: Conn) -> str",
+          "doc": "The server's version string (\"8.4.3\", \"11.4.4-MariaDB-...\").",
+          "file": "stdlib/mysql/mysql.sl",
+          "line": 370
+        },
+        {
+          "name": "connection_id",
+          "decl": "fn",
+          "sig": "fn connection_id(c: Conn) -> int",
+          "doc": "The server's id for this connection (what KILL takes).",
+          "file": "stdlib/mysql/mysql.sl",
+          "line": 375
+        },
+        {
+          "name": "last_insert_id",
+          "decl": "fn",
+          "sig": "fn last_insert_id(c: Conn) -> int",
+          "doc": "The AUTO_INCREMENT value the last statement generated, and the rows it changed, as the server reported them.",
+          "file": "stdlib/mysql/mysql.sl",
+          "line": 381
+        },
+        {
+          "name": "affected_rows",
+          "decl": "fn",
+          "sig": "fn affected_rows(c: Conn) -> int",
+          "doc": "",
+          "file": "stdlib/mysql/mysql.sl",
+          "line": 385
+        },
+        {
+          "name": "ping",
+          "decl": "fn",
+          "sig": "fn ping(c: Conn, deadline: until) -> result[bool, str]",
+          "doc": "Asks the server whether it is there (COM_PING).",
+          "file": "stdlib/mysql/mysql.sl",
+          "line": 390
+        },
+        {
+          "name": "sqlstate",
+          "decl": "fn",
+          "sig": "fn sqlstate(e: str) -> str",
+          "doc": "The SQLSTATE of an error from this package (\"23000\"), or \"\" when the error did not come from the server.",
+          "file": "stdlib/mysql/mysql.sl",
+          "line": 782
+        },
+        {
+          "name": "error_code",
+          "decl": "fn",
+          "sig": "fn error_code(e: str) -> int",
+          "doc": "The server's error number (1062 for a duplicate key), or 0.",
+          "file": "stdlib/mysql/mysql.sl",
+          "line": 791
+        },
+        {
+          "name": "native_password_scramble",
+          "decl": "fn",
+          "sig": "fn native_password_scramble(password: str, nonce: bytes) -> bytes",
+          "doc": "mysql_native_password: SHA1(pw) XOR SHA1(nonce + SHA1(SHA1(pw))).",
+          "file": "stdlib/mysql/mysql.sl",
+          "line": 933
+        },
+        {
+          "name": "sha2_password_scramble",
+          "decl": "fn",
+          "sig": "fn sha2_password_scramble(password: str, nonce: bytes) -> bytes",
+          "doc": "caching_sha2_password: SHA256(pw) XOR SHA256(SHA256(SHA256(pw)) + nonce).",
+          "file": "stdlib/mysql/mysql.sl",
+          "line": 943
+        },
+        {
+          "name": "Pool",
+          "decl": "struct",
+          "sig": "gc struct Pool",
+          "doc": "A bounded set of connections to one database, shared by any number of tasks.",
+          "file": "stdlib/mysql/pool.sl",
+          "line": 31
+        },
+        {
+          "name": "new_pool",
+          "decl": "fn",
+          "sig": "fn new_pool(url: str, max_open: int) -> result[Pool, str]",
+          "doc": "Parses the url; connects nothing until the first acquire.",
+          "file": "stdlib/mysql/pool.sl",
+          "line": 65
+        },
+        {
+          "name": "acquire",
+          "decl": "fn",
+          "sig": "fn acquire(p: Pool, deadline: until) -> result[Conn, str]",
+          "doc": "A connection for the caller's exclusive use, until release(). Prefer pool_query / pool_exec, which cannot forget to release; acquire is for a transaction, which needs several statements on one connection.",
+          "file": "stdlib/mysql/pool.sl",
+          "line": 188
+        },
+        {
+          "name": "release",
+          "decl": "fn",
+          "sig": "fn release(p: Pool, c: Conn)",
+          "doc": "Returns a connection to the pool: to the oldest waiting task if there is one, else to the idle list. One that is broken, closed, or still inside a transaction is closed instead, and its slot passed on: handing an open transaction to the next caller would run its statements inside someone else's uncommitted work.",
+          "file": "stdlib/mysql/pool.sl",
+          "line": 264
+        },
+        {
+          "name": "pool_query",
+          "decl": "fn",
+          "sig": "fn pool_query(p: Pool, sql: str, args: [Arg], deadline: until) -> result[Rows, str]",
+          "doc": "",
+          "file": "stdlib/mysql/pool.sl",
+          "line": 292
+        },
+        {
+          "name": "pool_exec",
+          "decl": "fn",
+          "sig": "fn pool_exec(p: Pool, sql: str, deadline: until) -> result[int, str]",
+          "doc": "",
+          "file": "stdlib/mysql/pool.sl",
+          "line": 303
+        },
+        {
+          "name": "pool_close",
+          "decl": "fn",
+          "sig": "fn pool_close(p: Pool)",
+          "doc": "Closes every idle connection and fails every waiting acquire. Connections in use are closed as they are released; acquire fails from now on.",
+          "file": "stdlib/mysql/pool.sl",
+          "line": 316
+        },
+        {
+          "name": "Arg",
+          "decl": "struct",
+          "sig": "gc struct Arg",
+          "doc": "A query parameter: a MySQL type and its binary-protocol bytes.",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 45
+        },
+        {
+          "name": "arg_text",
+          "decl": "fn",
+          "sig": "fn arg_text(s: str) -> Arg",
+          "doc": "",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 51
+        },
+        {
+          "name": "arg_int",
+          "decl": "fn",
+          "sig": "fn arg_int(n: int) -> Arg",
+          "doc": "",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 55
+        },
+        {
+          "name": "arg_float",
+          "decl": "fn",
+          "sig": "fn arg_float(x: float) -> Arg",
+          "doc": "Sent as an 8-byte double: exactly the value, no decimal text between.",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 60
+        },
+        {
+          "name": "arg_bool",
+          "decl": "fn",
+          "sig": "fn arg_bool(b: bool) -> Arg",
+          "doc": "",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 64
+        },
+        {
+          "name": "arg_bytes",
+          "decl": "fn",
+          "sig": "fn arg_bytes(b: bytes) -> Arg",
+          "doc": "Any bytes, NULs included, for a BLOB or BINARY column.",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 73
+        },
+        {
+          "name": "arg_null",
+          "decl": "fn",
+          "sig": "fn arg_null() -> Arg",
+          "doc": "",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 77
+        },
+        {
+          "name": "arg_time",
+          "decl": "fn",
+          "sig": "fn arg_time(t: timez.Time) -> Arg",
+          "doc": "An instant, as UTC \"YYYY-MM-DD HH:MM:SS.ffffff\": DATETIME has no time zone, so the convention (UTC) is the program's to keep -- see the time_zone url parameter for TIMESTAMP columns.",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 84
+        },
+        {
+          "name": "arg_decimal",
+          "decl": "fn",
+          "sig": "fn arg_decimal(d: decimal.Decimal) -> Arg",
+          "doc": "A decimal for a DECIMAL column, as its exact text.",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 102
+        },
+        {
+          "name": "Rows",
+          "decl": "struct",
+          "sig": "gc struct Rows",
+          "doc": "A buffered result. Cells live in a few chunks -- the connection's own receive buffers, plus one for values the binary protocol sends as numbers -- rather than one object per cell, so a large result costs the collector a handful of objects. types are Postgres-style codes (see mysql_code), which is what lets rows_as share pg's compiled decoder.",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 113
+        },
+        {
+          "name": "rows_as",
+          "decl": "fn",
+          "sig": "fn rows_as[T](rows: Rows) -> result[[T], str]",
+          "doc": "Every row as a struct or map, bound by exact column name: SQL NULL becomes none, an incompatible cell a named error. Compiler-backed (pg's decoder), with no JSON in between.",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 138
+        },
+        {
+          "name": "query",
+          "decl": "fn",
+          "sig": "fn query(c: Conn, sql: str, args: [Arg], deadline: until) -> result[Rows, str]",
+          "doc": "Runs one statement with ? parameters as a prepared statement. A SELECT returns its rows; anything else an empty result whose affected and last_insert_id say what it did.",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 675
+        },
+        {
+          "name": "exec",
+          "decl": "fn",
+          "sig": "fn exec(c: Conn, sql: str, deadline: until) -> result[int, str]",
+          "doc": "Runs SQL as text, any number of statements separated by semicolons (a migration, a schema). Returns the rows the statements changed, all together; the rows of any SELECT among them are read and dropped.",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 816
+        },
+        {
+          "name": "stream",
+          "decl": "fn",
+          "sig": "fn stream(c: Conn, sql: str, args: [Arg], deadline: until) -> result[Rows, str]",
+          "doc": "Starts a query whose rows are read one at a time with next_row, for results too large to hold. The connection is busy until the last row has been read or stream_close is called.",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 852
+        },
+        {
+          "name": "next_row",
+          "decl": "fn",
+          "sig": "fn next_row(c: Conn, rows: Rows, deadline: until) -> result[bool, str]",
+          "doc": "Reads the next row of a stream into rows (at index 0): true, or false at the end (the connection is free again).",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 877
+        },
+        {
+          "name": "stream_close",
+          "decl": "fn",
+          "sig": "fn stream_close(c: Conn, rows: Rows, deadline: until) -> result[bool, str]",
+          "doc": "Ends a stream early: the remaining rows are read and dropped (MySQL has no way to stop a result part way).",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 918
+        },
+        {
+          "name": "col",
+          "decl": "fn",
+          "sig": "fn col(rows: Rows, name: str) -> int",
+          "doc": "The index of the column called name; panics if there is none (the query and the code reading it disagree).",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 930
+        },
+        {
+          "name": "is_null",
+          "decl": "fn",
+          "sig": "fn is_null(rows: Rows, r: int, c: int) -> bool",
+          "doc": "",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 950
+        },
+        {
+          "name": "get_text",
+          "decl": "fn",
+          "sig": "fn get_text(rows: Rows, r: int, c: int) -> str",
+          "doc": "Any column as text (a binary column's bytes as they are).",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 966
+        },
+        {
+          "name": "get_int",
+          "decl": "fn",
+          "sig": "fn get_int(rows: Rows, r: int, c: int) -> int",
+          "doc": "The integer types, YEAR, BIT up to 64 bits, and a DECIMAL that is a whole number.",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 979
+        },
+        {
+          "name": "get_float",
+          "decl": "fn",
+          "sig": "fn get_float(rows: Rows, r: int, c: int) -> float",
+          "doc": "",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 997
+        },
+        {
+          "name": "get_bool",
+          "decl": "fn",
+          "sig": "fn get_bool(rows: Rows, r: int, c: int) -> bool",
+          "doc": "BOOL / tinyint(1), and any integer: true when not 0.",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 1007
+        },
+        {
+          "name": "get_bytes",
+          "decl": "fn",
+          "sig": "fn get_bytes(rows: Rows, r: int, c: int) -> bytes",
+          "doc": "",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 1011
+        },
+        {
+          "name": "get_time",
+          "decl": "fn",
+          "sig": "fn get_time(rows: Rows, r: int, c: int) -> result[timez.Time, str]",
+          "doc": "A DATETIME, TIMESTAMP or DATE cell as an instant, read as UTC.",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 1016
+        },
+        {
+          "name": "get_decimal",
+          "decl": "fn",
+          "sig": "fn get_decimal(rows: Rows, r: int, c: int) -> result[decimal.Decimal, str]",
+          "doc": "The exact value of a DECIMAL or integer cell, at the column's scale.",
+          "file": "stdlib/mysql/rows.sl",
+          "line": 1035
         }
       ]
     },

@@ -930,6 +930,8 @@ ECDSA P-256 with SHA-256 (JWS ES256) has a 32-byte private scalar, a
 | sign | `ed25519_sign(priv, msg)` | `ecdsa_p256_sign_sha256(priv, msg)` | `rsa_sign_sha256(pem, msg)` (RS256), `rsa_sign_pss_sha256` (PS256) |
 | verify | `ed25519_verify(pub, msg, sig)` | `ecdsa_p256_verify_sha256(pub, msg, sig)` | `rsa_verify_sha256(n, e, msg, sig)`, `rsa_verify_pss_sha256` |
 | from PEM | `ed25519_private_from_pem`, `ed25519_public_from_pem` | `ecdsa_p256_private_from_pem`, `ecdsa_p256_public_from_pem` | (sign takes PEM) |
+| encrypt | | | `rsa_encrypt_oaep_sha256(pem, data)`, `rsa_encrypt_oaep_sha1` |
+| decrypt | | | `rsa_decrypt_oaep_sha256(pem, data)`, `rsa_decrypt_oaep_sha1` |
 
 Verifiers return `ok(false)` for a signature that does not verify
 (including one of the wrong length) and `err` for a malformed key, such
@@ -941,6 +943,10 @@ generation takes tens of milliseconds at 2048 bits and seconds at 4096,
 without yielding, so do it at startup or in a tool. Prepared keys are
 cached (up to 16), so signing or verifying repeatedly with the same keys,
 as a server does with its JWT key or a JWKS, skips rebuilding them.
+RSA-OAEP encrypts to a public key and decrypts with the private one, the
+same hash for the label and MGF1. Use SHA-256 for anything new; SHA-1 is
+there for MySQL's password exchange, and OAEP does not depend on the
+hash's collision resistance the way a signature does.
 
 #### `sql`
 
@@ -1343,6 +1349,83 @@ noticed and empty the cache. `exec` and `stream` are not prepared.
 Kerberos/GSSAPI, SCRAM channel
 binding (`SCRAM-SHA-256-PLUS`), multiple hosts in one url, and SASLprep
 normalisation of non-ASCII passwords (an ASCII password is unaffected).
+
+#### `mysql`
+
+A MySQL and MariaDB client over TCP, TLS or a Unix socket, with prepared
+statements, streamed results and a pool. The API matches `pg`'s, so code
+moves between the two with little change.
+
+```slang
+import "mysql";
+
+let cr = mysql.connect("mysql://app:secret@db.internal:3306/shop", deadline);
+guard let c = cr else let e = err_of(cr) { panic(e); }
+
+let r = mysql.query(c, "SELECT id, name, price FROM items WHERE price < ?",
+                    [mysql.arg_decimal(limit)], deadline);       // result[Rows, str]
+guard let rows = r else let e = err_of(r) { panic(e); }
+let items: result[[Item], str] = mysql.rows_as(rows);           // by column name
+mysql.get_text(rows, 0, mysql.col(rows, "name"));
+
+let ir = mysql.query(c, "INSERT INTO items (name) VALUES (?)", [mysql.arg_text("pen")], deadline);
+guard let ins = ir else let e = err_of(ir) { panic(e); }
+ins.last_insert_id;                                              // the AUTO_INCREMENT value
+
+mysql.exec(c, "BEGIN; UPDATE stock SET n = n - 1 WHERE id = 7; COMMIT", deadline);   // several statements
+
+let pr = mysql.new_pool(url, 16);                                // shared by any number of tasks
+guard let p = pr else let e = err_of(pr) { panic(e); }
+mysql.pool_query(p, "SELECT 1", [], deadline);
+```
+
+**query and exec.** `query` runs one statement with `?` parameters, as a
+server-side prepared statement cached per connection (256 by default,
+`statement_cache=N`), so parameter values never pass through the SQL
+text. It returns the rows, or for an INSERT or UPDATE an empty result
+whose `affected` and `last_insert_id` say what it did. `exec` sends text
+and runs any number of statements: migrations, schema, `BEGIN … COMMIT`.
+
+**Results** read like `pg`'s: `col`, `is_null`, `get_text`, `get_int`,
+`get_float`, `get_bool` (tinyint(1)), `get_bytes` (BLOB and BINARY,
+NULs intact), `get_time` (DATETIME, TIMESTAMP and DATE, read as UTC),
+`get_decimal` (exact), and `rows_as[T]`, which binds by column name
+through the same compiled decoder as `pg.rows_as`. Values past 2^63 in a
+BIGINT UNSIGNED arrive exactly as text. `stream` with `next_row` reads a
+large result one row at a time. A result held whole is bounded at
+256 MiB.
+
+**Connecting.** `sslmode=require` (the default except for loopback
+hosts and Unix sockets) means TLS with the certificate and host name
+verified; `sslrootcert=` names a CA bundle. `prefer` is refused, because
+falling back to cleartext is what an attacker in the middle arranges.
+Supported authentication:
+
+- `mysql_native_password` (MariaDB's default)
+- `caching_sha2_password` (MySQL 8's default)
+- `sha256_password`
+- `mysql_clear_password` (over TLS only)
+- switching between them when the server asks
+
+When `caching_sha2_password` needs the password itself, it goes over
+TLS or a Unix socket. Without either, it is encrypted with RSA-OAEP to
+`server_public_key=/path/key.pem`. Fetching the key from the server is
+only done with `allow_public_key_retrieval=true`, since on an
+unencrypted connection anyone in the middle can send their own key.
+`time_zone=+00:00` sets the session time zone after connecting.
+
+**Failures.** Errors read `mysql: ERROR 1062 (23000): Duplicate entry
+…`; `mysql.error_code(e)` and `mysql.sqlstate(e)` take them apart. A
+server error leaves the connection usable. A timeout or I/O error breaks
+it, and after a timeout the statement is killed from a second connection
+(`KILL QUERY`), so it does not run on. The server is never sent a local
+file (`LOAD DATA LOCAL` is not offered).
+
+**Cost.** Cells live in the connection's receive buffers, a handful of
+objects per result, and binary-protocol numbers and dates are written
+into one more. Against a MySQL 8.4 container, 100,000 rows of three
+columns buffer in about 130 ms. A point query takes about 0.35 ms, which
+is Docker's network round trip: a bare `mysql.ping` costs the same.
 
 #### `redis`
 
@@ -2934,7 +3017,7 @@ any signal-handling program.
 - [builder](packages/builder.md) -- source package, 20 public items
 - [byteutil](packages/byteutil.md) -- source package, 6 public items
 - [compress](packages/compress.md) -- compiler-provided, 7 public items
-- [crypto](packages/crypto.md) -- compiler-provided, 40 public items
+- [crypto](packages/crypto.md) -- compiler-provided, 44 public items
 - [decimal](packages/decimal.md) -- source package, 37 public items
 - [encoding](packages/encoding.md) -- compiler-provided, 14 public items
 - [flags](packages/flags.md) -- source package, 23 public items
@@ -2948,6 +3031,7 @@ any signal-handling program.
 - [math](packages/math.md) -- compiler-provided, 131 public items
 - [math/numtheory](packages/math/numtheory.md) -- source package, 16 public items
 - [math/stats](packages/math/stats.md) -- source package, 91 public items
+- [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
 - [net](packages/net.md) -- compiler-provided, 34 public items
 - [os](packages/os.md) -- compiler-provided, 18 public items
