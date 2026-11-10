@@ -1010,6 +1010,8 @@ void force_native_result_types(CG *cg) {
         res_cname(cg, "bytes", "str");
         res_cname(cg, "str", "str");
         res_cname(cg, "float", "str");
+        /* json_tape */
+        res_cname(cg, "[int]", "str");
         opt_cname(cg, "str");
     }
     if (want_pkg(cg, "compress")) {
