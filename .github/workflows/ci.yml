@@ -292,3 +292,41 @@ jobs:
           NATS_TLS_URL: tls://localhost:54226
           NATS_TLS_CA: /tmp/natstls/ca.crt
         run: ./slangc tests/live/nats/main.sl --run
+
+  # The websocket client against the Autobahn TestSuite's fuzzing server:
+  # every client case (framing, fragmentation, UTF-8, close handling,
+  # limits, permessage-deflate), graded by the suite. make test covers the
+  # same behaviour against a scripted server everywhere.
+  websocket:
+    name: websocket (linux-x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev libsqlite3-dev zlib1g-dev
+
+      - name: Build slangc
+        run: make slangc
+
+      - name: Start the Autobahn fuzzing server
+        run: |
+          mkdir -p /tmp/autobahn
+          docker run -d --name fuzzingserver -p 9001:9001 \
+            -v "$GITHUB_WORKSPACE/tests/live/websocket:/config:ro" -v /tmp/autobahn:/reports \
+            crossbario/autobahn-testsuite wstest -m fuzzingserver -s /config/fuzzingserver.json
+          ok=0
+          for i in $(seq 60); do
+            if (exec 3<>/dev/tcp/127.0.0.1/9001) 2>/dev/null; then ok=1; break; fi
+            sleep 1
+          done
+          [ $ok -eq 1 ] || { docker logs fuzzingserver | tail -30; exit 1; }
+
+      - name: Live test
+        run: |
+          ./slangc tests/live/websocket/main.sl --run
+          python3 tests/live/websocket/check.py /tmp/autobahn/clients/index.json
