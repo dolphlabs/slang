@@ -1,5 +1,27 @@
 # todo
 
+- [ ] **`&xs[i]` on a list of value structs fails in the C compiler (found
+  2026-11-10, feat/decimal-package; not fixed).** Borrowing an element
+  emits `&(({ ... sl_arr_get(...) }))`, the address of a statement
+  expression, and cc stops with "cannot take the address of an rvalue":
+  raw C output, which a slang error must never be. Four lines reproduce it:
+  `struct P { x: int }`, `fn get(p: &P) -> int { return p.x; }`,
+  `let ps: [P] = [P { x: 1 }]`, `println(get(&ps[0]));`. The element
+  should be borrowed through a pointer into the list's storage (or the
+  borrow rejected with a slang error saying to bind it first). decimal's
+  allocate binds the element to a local instead.
+
+- [ ] **A call from user code into a non-leaf function costs a ~25 ns
+  bracket (measured 2026-11-10, feat/decimal-package; not changed).** In a
+  loop holding lists live, `decimal.add` of two same-scale values takes
+  ~37 ns, of which ~25 ns is the call site's safepoint bracket; the five-
+  limb arithmetic inside is leaf code. compute_leaf_fns rejects any call
+  to another slang function, because a leaf runs without the stack checks
+  a safepoint makes. Allowing calls to leaves that themselves call
+  nothing (depth one, so the extra stack is one small frame, and no
+  recursion) would make helpers like `add` leaves too. It changes the
+  leaf rule's stack argument, so it needs a decision first.
+
 - [ ] **`tests/proc_shutdown` failed once on CI macos-arm64 (found
   2026-11-10, perf/unicode-equal-fold; not investigated).** Run
   42726628356, first attempt: the program printed `shutdown requested, loop

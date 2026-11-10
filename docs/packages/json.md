@@ -46,7 +46,10 @@ error), every scalar, `bytes` (RFC 4648 base64 strings on the
 wire), and `timez.Time` (an RFC 3339 string: written as `rfc3339_nano()`
 writes it, read with `parse_rfc3339()`'s rules, offsets applied; about
 115 ns to encode and 130 ns to decode, in C, so a struct without one
-compiles to exactly the codecs it did before). `rawptr`, `chan[T]`, and
+compiles to exactly the codecs it did before), and `decimal.Decimal`
+(written as a string of its exact text, `"19.90"`; read from a string or
+a number by `decimal.parse`'s rules, from the number's text and never
+through a float, also in C). `rawptr`, `chan[T]`, and
 `result[T,E]` can't appear anywhere in a decode/encode target type. A
 missing JSON key defaults an `opt[T]` field to `none`; for any other
 field type it's a decode error. Unknown JSON keys are ignored. Every
