@@ -95,8 +95,10 @@ Common backend needs with no package today.
 - [ ] **Templating with auto-escaping** (stdlib): HTML templates that escape
   by context, plus plain-text templates. Evidence: `say` has an email
   `templates/` folder and no safe engine to render it with.
-- [ ] **WebSocket client** (stdlib, beside `httpc`): dial, TLS, ping/pong,
+- [x] **WebSocket client** (stdlib, beside `httpc`): dial, TLS, ping/pong,
   close handshake, size limits. zokor has the server side only.
+  Built as `stdlib/websocket`, with permessage-deflate, keepalive and
+  `encoding.xor_mask` for masking; passes the Autobahn client suite.
 - [ ] **MySQL / MariaDB driver** (stdlib or package): only Postgres, SQLite
   and Mongo exist.
 

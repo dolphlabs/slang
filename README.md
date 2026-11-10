@@ -3076,6 +3076,7 @@ encoding.base64url_encode(sig);               // a JWT segment: -_ alphabet, no 
 encoding.url_encode("a b&c");                 // "a%20b%26c"
 encoding.form_encode("a b&c");                // "a+b%26c"
 encoding.float64_to_le(1.5);                   // exact IEEE-754 bytes, low byte first
+encoding.xor_mask(head, payload, key);         // head ++ (payload XOR key, repeated): a WebSocket frame
 
 let q = "/search?q=hello+world&page=2";
 guard let term = encoding.query_get(q, "q") else { return; }   // "hello world"
@@ -3098,6 +3099,7 @@ encoding.query_keys(q);                                        // ["q", "page"]
 | `encoding.query_keys` | `(url: str) -> [str]` |
 | `encoding.float64_to_le` | `(value: float) -> bytes` |
 | `encoding.float64_from_le` | `(bytes: bytes) -> result[float, str]` |
+| `encoding.xor_mask` | `(head: bytes, data: bytes, key: bytes) -> bytes` |
 
 Like `regex`, `strings` and `os` — and unlike `crypto` and `sql` — this
 is pure computation, so importing it adds no link flag.
@@ -3352,6 +3354,69 @@ that case.
 
 **Not done, deliberately:** no HTTP/2 client, no multipart bodies, no
 proxy support, no public-suffix list.
+
+#### `websocket`
+
+A WebSocket client (RFC 6455) over `ws://` and `wss://`, with
+permessage-deflate (RFC 7692) when asked for. It passes the Autobahn
+TestSuite's client cases (`tests/live/websocket`).
+
+```slang
+import "websocket";
+
+let o = websocket.options();
+o.protocols = ["v2.chat"];                       // offered; Conn.protocol is the server's pick
+o.headers = ["Authorization: Bearer " + token];
+o.ping_every = 20000000000;                      // keepalive: a ping every 20 s
+o.compress = true;                               // permessage-deflate
+let r = websocket.dial_with("wss://example.com/live", o, deadline);
+guard let ws = r else let e = err_of(r) { panic(e); }
+
+websocket.send_text(ws, "{\"subscribe\":\"prices\"}", deadline);
+websocket.send_binary(ws, frame, deadline);
+let mr = websocket.recv(ws, deadline);           // result[opt[Message], str]; none: the deadline passed
+guard let got = mr else let e = err_of(mr) { panic(e); }
+guard let m = got else { return; }
+if m.kind == websocket.Kind.Text { handle(websocket.text(m)); }
+websocket.close(ws, 1000, "bye", deadline);      // the close handshake
+```
+
+`recv` returns `Text`, `Binary` or `Close` messages, reassembled from
+their fragments. It answers pings and consumes pongs as they arrive, and
+answers the server's close before returning it. A deadline that passes
+loses nothing: the next `recv` carries on, even partway through a frame.
+One task reads at a time; any number may send, and a send is one whole
+frame written under a lock, so frames from different tasks never
+interleave.
+
+**What it refuses.** Masked or reserved-bit frames, unknown opcodes,
+fragmented or oversized control frames, lengths not in their shortest
+form, continuations with nothing to continue, text that is not UTF-8
+(checked per fragment as it arrives), close codes a peer may not send,
+and messages over `max_message` (32 MiB by default, counted after
+inflation, so a compression bomb is cut off). Each fails the connection
+with the matching close code (1002, 1007, 1009). In the handshake: a
+wrong `Sec-WebSocket-Accept`, a subprotocol or extension that was not
+offered, and redirects. A redirect would send the handshake, and any
+credentials in it, somewhere the caller did not name.
+
+**Keepalive.** With `ping_every` set, a ping goes out each interval and a
+connection whose ping goes a whole interval unanswered is closed;
+`recv` then reports why. Pongs arrive through `recv`, so a connection
+nobody reads cannot keep itself alive.
+
+**Compression** is negotiated without context takeover in either
+direction. Each message is compressed on its own, and no 32 KiB window
+per direction stays alive between messages. A message is sent compressed
+only when that makes it smaller.
+
+**Text with U+0000.** A `str` ends at its first zero byte, so
+`websocket.text(m)` stops there. `m.data` holds every byte, and
+`send_text_bytes` sends one.
+
+Frames are masked with keys drawn from a 4 KiB pool of `crypto.rand`
+bytes, refilled as it empties. A frame is built in one allocation by
+`encoding.xor_mask`. Large frames are read in chunks and joined once.
 
 #### `compress`
 
