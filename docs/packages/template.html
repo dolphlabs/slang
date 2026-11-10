@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>template — slang</title>
+<meta name="description" content="Package template.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="template">
+<meta property="og:description" content="Package template.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://slang.dolphlabs.com/packages/template">
+<meta property="og:image" content="https://slang.dolphlabs.com/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The slang rabbit mark beside the slang wordmark">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://slang.dolphlabs.com/packages/template">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/template.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <button id="navtoggle" class="navtoggle" type="button"
+          aria-label="Toggle navigation" aria-expanded="false"
+          aria-controls="mainnav">
+    <span></span><span></span><span></span>
+  </button>
+  <nav class="mainnav" id="mainnav"><a href="../">Home</a><a href="../guide/">Guide</a><a href="../guide/data">Data types</a><a href="../guide/errors">Errors</a><a href="../guide/functions">Functions</a><a href="../concurrency/">Concurrency</a><a href="../testing/">Testing</a><a href="../bench/">Benchmarks</a><a href="../packages/">Packages</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="../limitations/">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="navscrim" class="navscrim" hidden></div>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>template</h1>
+      <p class="tagline">Package template.</p>
+      <p class="agentline">
+        <a href="../packages/template.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>HTML templates that escape each value for where it lands, and plain-text templates for email bodies and other text. The syntax is Go&#x27;s (<code>{{ .field }}</code>, <code>if</code>, <code>range</code>, <code>with</code>, <code>define</code>, pipelines), and so is the safety model: escaping is decided by the HTML around each action when the template is parsed, not by the caller remembering to escape.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;template&quot;</span>;
+
+<span class="k">gc</span> <span class="k">struct</span> Item { name: <span class="t">str</span>, url: <span class="t">str</span>, price: <span class="t">int</span> }
+<span class="k">gc</span> <span class="k">struct</span> Page { title: <span class="t">str</span>, items: [Item], user: <span class="t">str</span> }
+
+<span class="k">let</span> r = template.<span class="f">parse</span>(<span class="s">&quot;page&quot;</span>,
+    <span class="s">&quot;&lt;h1&gt;{{ .title }}&lt;/h1&gt;&quot;</span> +
+    <span class="s">&quot;&lt;ul&gt;{{ range $i, $it := .items }}&quot;</span> +
+    <span class="s">&quot;&lt;li&gt;&lt;a href=\&quot;{{ $it.url }}\&quot; title=\&quot;{{ $it.name }}\&quot;&gt;{{ add $i 1 }}. {{ $it.name }}&lt;/a&gt;&lt;/li&gt;&quot;</span> +
+    <span class="s">&quot;{{ else }}&lt;li&gt;nothing yet&lt;/li&gt;{{ end }}&lt;/ul&gt;&quot;</span> +
+    <span class="s">&quot;&lt;script&gt;const user = {{ .user }};&lt;/script&gt;&quot;</span>);
+<span class="k">guard</span> <span class="k">let</span> t = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }      <span class="c">// syntax and context errors, with line numbers</span>
+<span class="k">let</span> html = template.<span class="f">render</span>(t, page);                       <span class="c">// result[str, str]</span>
+
+template.<span class="f">add</span>(t, <span class="s">&quot;layout&quot;</span>, <span class="s">&quot;&lt;html&gt;&lt;body&gt;{{ template \&quot;page\&quot; . }}&lt;/body&gt;&lt;/html&gt;&quot;</span>);
+template.<span class="f">render_named</span>(t, <span class="s">&quot;layout&quot;</span>, page);
+
+<span class="k">let</span> mail = template.<span class="f">parse_text</span>(<span class="s">&quot;welcome&quot;</span>, <span class="s">&quot;Hi {{ .name }},\n{{ range .items }}- {{ .name }}\n{{ end }}&quot;</span>);</code></pre></div>
+<p>Each action is escaped for its context:</p>
+<div class="tablewrap"><table><thead><tr><th>Where</th><th>What the value becomes</th></tr></thead><tbody><tr><td>text, quoted attribute</td><td><code>&amp; &lt; &gt; &quot; &#x27;</code> as character references</td></tr><tr><td>URL attribute (<code>href</code>, <code>src</code>, <code>action</code>, …), at the start</td><td>only <code>http</code>, <code>https</code>, <code>mailto</code>, <code>tel</code> or a relative URL; anything else, <code>javascript:</code> above all, becomes <code>about:invalid#blocked</code></td></tr><tr><td>later in a URL</td><td>percent-encoded (<code>/search?q={{ .q }}</code>)</td></tr><tr><td><code>&lt;script&gt;</code>, <code>on*</code> attributes</td><td>a JavaScript literal (JSON), <code>&lt;</code> <code>&gt;</code> <code>&amp;</code> <code>&#x27;</code> as <code>\u</code> escapes</td></tr><tr><td>inside a JS string</td><td>escaped as string content, whatever the quotes</td></tr><tr><td><code>&lt;style&gt;</code>, <code>style</code> attributes</td><td>letters, digits and <code># % . , -</code> only, else <code>ZgotmplZ</code></td></tr></tbody></table></div>
+<p>Refused when the template is parsed: an action in a tag or attribute name, in an unquoted attribute value, in an HTML or JavaScript comment, and branches of an <code>if</code> or <code>range</code> that leave the HTML in different states (<code>{{ if .x }}&lt;a href=&quot;{{ end }}</code>). <code>{{ .html | raw }}</code> writes trusted HTML unescaped in text, and escapes it anywhere else.</p>
+<p><strong>Data</strong> is any value <code>json.encode</code> takes: a struct&#x27;s fields are <code>.name</code>, a list ranges, a map&#x27;s keys are fields (ranged in sorted key order). A missing field is an error, not an empty string, so a typo does not render as silence; use <code>if</code>, <code>with</code> or <code>default</code> for data that may be absent.</p>
+<p><strong>Language.</strong> <code>{{ if }}</code>/<code>{{ else if }}</code>/<code>{{ else }}</code>, <code>{{ with }}</code>, <code>{{ range }}</code> (with <code>$i, $x :=</code> and <code>{{ else }}</code> for empty), <code>{{ $x := … }}</code> and <code>{{ $x = … }}</code> with block scope, <code>$</code> for the root, pipelines (<code>{{ .name | upper }}</code>), parentheses (<code>{{ len (index .items 0).tags }}</code>), <code>{{/* comments */}}</code> and <code>{{-</code>/<code>-}}</code> to trim whitespace, <code>{{ define }}</code> and <code>{{ template &quot;name&quot; . }}</code> (nested up to 64 deep). Functions: <code>eq ne lt le gt ge</code>, <code>and or not</code> (short-circuit, as Go&#x27;s), <code>len index default join upper lower trim add sub</code>, <code>print printf</code> (<code>%s %v %d %f %.2f %q %x %t</code>), <code>json urlquery raw</code>. An unknown function or variable is a parse error.</p>
+<p><strong>Cost.</strong> Parsing and escape analysis happen once; a <code>Template</code> is safe to render from many tasks at once. Rendering encodes the data with <code>json.encode</code> and indexes it with <code>encoding.json_tape</code> (one C pass, no allocation per value), resolves variables to slots at parse time, and escapes with <code>strings.escape_html</code>/<code>escape_js</code>, which return their input unchanged when nothing needs escaping. A 100-row table page (15 KB, six actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go&#x27;s <code>html/template</code> on the same page, run alternately on one machine.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="template"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Template</code> <span class="src">stdlib/template/template.sl:36</span><a class="anchor" href="#template">#</a></div><p class="api-doc">A set of named templates, parsed and ready to render: make one with parse or parse_text, grow it with add. Its fields are internal. Safe to render from many tasks at once.</p></div><div class="api-item" id="parse"><div class="api-sig"><code><span class="k">fn</span> <span class="f">parse</span>(name: <span class="t">str</span>, src: <span class="t">str</span>) -&gt; <span class="t">result</span>[Template, <span class="t">str</span>]</code> <span class="src">stdlib/template/template.sl:49</span><a class="anchor" href="#parse">#</a></div><p class="api-doc">An HTML template, escaped by context. src may hold {{ define }} blocks.</p></div><div class="api-item" id="parse-text"><div class="api-sig"><code><span class="k">fn</span> <span class="f">parse_text</span>(name: <span class="t">str</span>, src: <span class="t">str</span>) -&gt; <span class="t">result</span>[Template, <span class="t">str</span>]</code> <span class="src">stdlib/template/template.sl:54</span><a class="anchor" href="#parse-text">#</a></div><p class="api-doc">A plain-text template (email bodies, CLI output): nothing is escaped.</p></div><div class="api-item" id="add"><div class="api-sig"><code><span class="k">fn</span> <span class="f">add</span>(t: Template, name: <span class="t">str</span>, src: <span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>, <span class="t">str</span>]</code> <span class="src">stdlib/template/template.sl:68</span><a class="anchor" href="#add">#</a></div><p class="api-doc">Add another named template, such as a partial or a layout, which any template in the set can call with {{ template &quot;name&quot; }} (passing dot, or the value written after the name); its {{ define }} blocks are added too.</p></div><div class="api-item" id="render"><div class="api-sig"><code><span class="k">fn</span> render[T](t: Template, data: T) -&gt; <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>]</code> <span class="src">stdlib/template/template.sl:92</span><a class="anchor" href="#render">#</a></div><p class="api-doc">Render the template parse was given, with data as its dot.</p></div><div class="api-item" id="render-named"><div class="api-sig"><code><span class="k">fn</span> render_named[T](t: Template, name: <span class="t">str</span>, data: T) -&gt; <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>]</code> <span class="src">stdlib/template/template.sl:97</span><a class="anchor" href="#render-named">#</a></div><p class="api-doc">Render one of the templates (a define or one added with add).</p></div><div class="api-item" id="escape-html"><div class="api-sig"><code><span class="k">fn</span> <span class="f">escape_html</span>(s: <span class="t">str</span>) -&gt; <span class="t">str</span></code> <span class="src">stdlib/template/template.sl:110</span><a class="anchor" href="#escape-html">#</a></div><p class="api-doc">HTML-escape text, for building markup by hand.</p></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

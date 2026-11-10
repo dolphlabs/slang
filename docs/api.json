@@ -1146,6 +1146,15 @@
           "ret": "result[float,str]",
           "tls": false,
           "sig": "encoding.float64_from_le(bytes) -> result[float,str]"
+        },
+        {
+          "name": "json_tape",
+          "params": [
+            "str"
+          ],
+          "ret": "result[[int],str]",
+          "tls": false,
+          "sig": "encoding.json_tape(str) -> result[[int],str]"
         }
       ]
     },
@@ -8864,6 +8873,86 @@
           "ret": "str",
           "tls": false,
           "sig": "strings.from_float(float) -> str"
+        },
+        {
+          "name": "escape_html",
+          "params": [
+            "str"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "strings.escape_html(str) -> str"
+        },
+        {
+          "name": "escape_js",
+          "params": [
+            "str"
+          ],
+          "ret": "str",
+          "tls": false,
+          "sig": "strings.escape_js(str) -> str"
+        }
+      ]
+    },
+    "template": {
+      "name": "template",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Template",
+          "decl": "struct",
+          "sig": "gc struct Template",
+          "doc": "A set of named templates, parsed and ready to render: make one with parse or parse_text, grow it with add. Its fields are internal. Safe to render from many tasks at once.",
+          "file": "stdlib/template/template.sl",
+          "line": 36
+        },
+        {
+          "name": "parse",
+          "decl": "fn",
+          "sig": "fn parse(name: str, src: str) -> result[Template, str]",
+          "doc": "An HTML template, escaped by context. src may hold {{ define }} blocks.",
+          "file": "stdlib/template/template.sl",
+          "line": 49
+        },
+        {
+          "name": "parse_text",
+          "decl": "fn",
+          "sig": "fn parse_text(name: str, src: str) -> result[Template, str]",
+          "doc": "A plain-text template (email bodies, CLI output): nothing is escaped.",
+          "file": "stdlib/template/template.sl",
+          "line": 54
+        },
+        {
+          "name": "add",
+          "decl": "fn",
+          "sig": "fn add(t: Template, name: str, src: str) -> result[bool, str]",
+          "doc": "Add another named template, such as a partial or a layout, which any template in the set can call with {{ template \"name\" }} (passing dot, or the value written after the name); its {{ define }} blocks are added too.",
+          "file": "stdlib/template/template.sl",
+          "line": 68
+        },
+        {
+          "name": "render",
+          "decl": "fn",
+          "sig": "fn render[T](t: Template, data: T) -> result[str, str]",
+          "doc": "Render the template parse was given, with data as its dot.",
+          "file": "stdlib/template/template.sl",
+          "line": 92
+        },
+        {
+          "name": "render_named",
+          "decl": "fn",
+          "sig": "fn render_named[T](t: Template, name: str, data: T) -> result[str, str]",
+          "doc": "Render one of the templates (a define or one added with add).",
+          "file": "stdlib/template/template.sl",
+          "line": 97
+        },
+        {
+          "name": "escape_html",
+          "decl": "fn",
+          "sig": "fn escape_html(s: str) -> str",
+          "doc": "HTML-escape text, for building markup by hand.",
+          "file": "stdlib/template/template.sl",
+          "line": 110
         }
       ]
     },
