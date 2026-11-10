@@ -265,7 +265,7 @@ and a `[T]` of a plain `struct` decodes into one buffer, not an object per item.
 Package authors can add repeatable `exclude <dir>` lines to their own
 `slang.project` to omit non-runtime directories from consumers' package caches;
 a package must not import a directory it excludes.
-Standard packages: `time net json proc fs os io log crypto sql pg redis regex
+Standard packages: `time net json proc fs os io log crypto sql pg mysql redis regex
 strings unicode encoding compress math decimal rand builder byteutil flags sort
 uuid http http2 httpc template`.
 uuid http http2 httpc websocket`.
@@ -305,6 +305,9 @@ not), `base32hex_*`, and `crockford_encode/decode` for codes people type.
 `csv.parse(text)` (result of `[[str]]`), `csv.to_maps(rows)` by header,
 streaming with `csv.new_reader(o)`, `csv.feed(rd, chunk)`, `csv.next(rd)` (none:
 feed more), `csv.end(rd)`; `csv.format(rows)` writes CRLF, quoted as needed.
+`mysql` mirrors `pg`: `mysql.connect(url, dl)`, `mysql.query(c, sql, [mysql.arg_int(1)], dl)`
+(`?` parameters, prepared and cached; one statement), `mysql.exec(c, sql, dl)` (text,
+several statements), `mysql.rows_as(rows)`, `rows.last_insert_id`, `mysql.new_pool(url, n)`.
 `crypto`: `seal(key, data, aad)`/`open` (AES-256-GCM, random nonce;
 result), `hkdf_sha256(ikm, salt, info, n)`, `constant_time_eq(a, b)`,
 `ed25519_sign/verify`, `ecdsa_p256_sign_sha256/verify_sha256` (raw r||s),

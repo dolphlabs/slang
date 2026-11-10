@@ -1,1 +1,1 @@
-__pg_rows_as is private to the standard pg package; call pg.rows_as(rows)
+__pg_rows_as is private to the standard pg and mysql packages

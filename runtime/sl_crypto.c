@@ -1678,3 +1678,82 @@ static sl_res_bytes_str *sl_crypto_rsa_sign_sha256(const char *pem, sl_bytes *ms
 static sl_res_bytes_str *sl_crypto_rsa_sign_pss_sha256(const char *pem, sl_bytes *msg) {
     return sl_crypto_rsa_sign(pem, msg, 1);
 }
+
+/* ---- RSA-OAEP ----
+ *
+ * Encryption to an RSA public key, and decryption with the private one,
+ * with OAEP padding over SHA-1 or SHA-256 (the hash used for both the
+ * label and MGF1). SHA-1 OAEP is what MySQL's caching_sha2_password and
+ * sha256_password expect for the password they encrypt to the server's
+ * key; SHA-256 is the choice for anything new. OAEP's own security does
+ * not rest on the hash's collision resistance, so SHA-1 here is not the
+ * weakness it is in a signature. */
+static sl_res_bytes_str *sl_crypto_rsa_oaep(const char *pem, sl_bytes *data, int decrypt,
+                                            const char *md) {
+    const char *fail = NULL;
+    unsigned char *out = NULL;
+    size_t olen = 0;
+    static const unsigned char empty = 0;
+    sl_rt_preempt_disable();
+    EVP_PKEY *k = sl_crypto_pem_key(pem, decrypt);
+    EVP_PKEY_CTX *ctx = NULL;
+    if (!k || !EVP_PKEY_is_a(k, "RSA")) {
+        fail = decrypt ? "rsa: not an RSA private key in PEM form" : "rsa: not an RSA public key in PEM form";
+        goto done;
+    }
+    if (EVP_PKEY_get_bits(k) < 1024 || EVP_PKEY_get_bits(k) > 16384) {
+        fail = "rsa: key must be 1024 to 16384 bits";
+        goto done;
+    }
+    ctx = EVP_PKEY_CTX_new(k, NULL);
+    if (!ctx || (decrypt ? EVP_PKEY_decrypt_init(ctx) : EVP_PKEY_encrypt_init(ctx)) != 1 ||
+        EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_OAEP_PADDING) != 1 ||
+        EVP_PKEY_CTX_set_rsa_oaep_md_name(ctx, md, NULL) != 1 ||
+        EVP_PKEY_CTX_set_rsa_mgf1_md_name(ctx, md, NULL) != 1) {
+        fail = "rsa: could not set up OAEP";
+        goto done;
+    }
+    const unsigned char *in = data && data->len ? data->ptr : &empty;
+    size_t inlen = data ? (size_t)data->len : 0;
+    int rc = decrypt ? EVP_PKEY_decrypt(ctx, NULL, &olen, in, inlen)
+                     : EVP_PKEY_encrypt(ctx, NULL, &olen, in, inlen);
+    if (rc != 1 || !(out = OPENSSL_malloc(olen ? olen : 1))) {
+        fail = decrypt ? "rsa: decryption failed" : "rsa: the message is too long for the key";
+        goto done;
+    }
+    rc = decrypt ? EVP_PKEY_decrypt(ctx, out, &olen, in, inlen)
+                 : EVP_PKEY_encrypt(ctx, out, &olen, in, inlen);
+    if (rc != 1)
+        fail = decrypt ? "rsa: decryption failed" : "rsa: the message is too long for the key";
+done:
+    EVP_PKEY_CTX_free(ctx);
+    EVP_PKEY_free(k);
+    ERR_clear_error();
+    sl_rt_preempt_enable();
+    if (fail) {
+        if (out) {
+            sl_rt_preempt_disable();
+            OPENSSL_free(out);
+            sl_rt_preempt_enable();
+        }
+        return sl_crypto_err_bytes(fail);
+    }
+    sl_bytes *b = sl_bytes_new(out, (long long)olen);
+    sl_rt_preempt_disable();
+    OPENSSL_free(out);
+    sl_rt_preempt_enable();
+    return sl_crypto_ok_bytes(b);
+}
+
+static sl_res_bytes_str *sl_crypto_rsa_encrypt_oaep_sha1(const char *pem, sl_bytes *data) {
+    return sl_crypto_rsa_oaep(pem, data, 0, "SHA1");
+}
+static sl_res_bytes_str *sl_crypto_rsa_decrypt_oaep_sha1(const char *pem, sl_bytes *data) {
+    return sl_crypto_rsa_oaep(pem, data, 1, "SHA1");
+}
+static sl_res_bytes_str *sl_crypto_rsa_encrypt_oaep_sha256(const char *pem, sl_bytes *data) {
+    return sl_crypto_rsa_oaep(pem, data, 0, "SHA256");
+}
+static sl_res_bytes_str *sl_crypto_rsa_decrypt_oaep_sha256(const char *pem, sl_bytes *data) {
+    return sl_crypto_rsa_oaep(pem, data, 1, "SHA256");
+}

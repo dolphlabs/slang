@@ -366,3 +366,63 @@ jobs:
         run: |
           ./slangc tests/live/websocket/main.sl --run
           python3 tests/live/websocket/check.py /tmp/autobahn/clients/index.json
+
+  # The mysql client against MySQL 8.4 (over verified TLS, and each
+  # authentication plugin without it) and MariaDB 11. make test covers
+  # the protocol's pure parts everywhere.
+  mysql:
+    name: mysql (linux-x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev libsqlite3-dev zlib1g-dev
+
+      - name: Build slangc
+        run: make slangc
+
+      - name: Start MySQL and MariaDB
+        run: |
+          mkdir -p /tmp/mytls && cd /tmp/mytls
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key \
+            -out ca.crt -days 2 -subj "/CN=slang CI CA"
+          openssl req -newkey rsa:2048 -nodes -keyout server.key \
+            -out server.csr -subj "/CN=localhost"
+          printf 'subjectAltName=DNS:localhost\n' > ext.cnf
+          openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key \
+            -CAcreateserial -out server.crt -days 2 -extfile ext.cnf
+          chmod 644 server.key
+          cd "$GITHUB_WORKSPACE"
+          docker run -d --name my84 -p 53306:3306 -e MYSQL_ROOT_PASSWORD=rootpw \
+            -e MYSQL_DATABASE=slangtest -v /tmp/mytls:/certs:ro mysql:8.4 \
+            --mysql-native-password=ON --ssl-ca=/certs/ca.crt \
+            --ssl-cert=/certs/server.crt --ssl-key=/certs/server.key
+          docker run -d --name mdb11 -p 53307:3306 -e MARIADB_ROOT_PASSWORD=rootpw \
+            -e MARIADB_DATABASE=slangtest mariadb:11
+          ok=0
+          for i in $(seq 120); do
+            if docker exec my84 mysqladmin ping -uroot -prootpw --silent >/dev/null 2>&1 &&
+               docker exec mdb11 mariadb-admin ping -uroot -prootpw --silent >/dev/null 2>&1; then
+              ok=1; break
+            fi
+            sleep 2
+          done
+          [ $ok -eq 1 ] || { docker logs my84 | tail -30; docker logs mdb11 | tail -30; exit 1; }
+          sleep 5
+          docker exec -i my84 mysql -uroot -prootpw slangtest < tests/live/mysqldb/setup-mysql.sql
+          docker exec -i mdb11 mariadb -uroot -prootpw slangtest < tests/live/mysqldb/setup-mariadb.sql
+
+      - name: Live test
+        env:
+          MYSQL_URL: mysql://sha2:sha2-pw@localhost:53306/slangtest?sslmode=require&sslrootcert=/tmp/mytls/ca.crt
+          MYSQL_NATIVE_URL: mysql://native:native-pw@127.0.0.1:53306/slangtest
+          # without TLS: works once the TLS suite above has cached the password
+          MYSQL_SHA2_URL: mysql://sha2:sha2-pw@127.0.0.1:53306/slangtest
+          MYSQL_SHA256_URL: mysql://sha256:sha256-pw@127.0.0.1:53306/slangtest?allow_public_key_retrieval=true
+          MARIADB_URL: mysql://native:native-pw@127.0.0.1:53307/slangtest
+        run: ./slangc tests/live/mysqldb/main.sl --run

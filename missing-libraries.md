@@ -104,7 +104,7 @@ Common backend needs with no package today.
   close handshake, size limits. zokor has the server side only.
   Built as `stdlib/websocket`, with permessage-deflate, keepalive and
   `encoding.xor_mask` for masking; passes the Autobahn client suite.
-- [ ] **MySQL / MariaDB driver** (stdlib or package): only Postgres, SQLite
+- [x] **MySQL / MariaDB driver** (stdlib or package): only Postgres, SQLite
   and Mongo exist.
 
 ## 4. Smaller formats and protocols

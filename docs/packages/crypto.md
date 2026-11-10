@@ -113,6 +113,8 @@ ECDSA P-256 with SHA-256 (JWS ES256) has a 32-byte private scalar, a
 | sign | `ed25519_sign(priv, msg)` | `ecdsa_p256_sign_sha256(priv, msg)` | `rsa_sign_sha256(pem, msg)` (RS256), `rsa_sign_pss_sha256` (PS256) |
 | verify | `ed25519_verify(pub, msg, sig)` | `ecdsa_p256_verify_sha256(pub, msg, sig)` | `rsa_verify_sha256(n, e, msg, sig)`, `rsa_verify_pss_sha256` |
 | from PEM | `ed25519_private_from_pem`, `ed25519_public_from_pem` | `ecdsa_p256_private_from_pem`, `ecdsa_p256_public_from_pem` | (sign takes PEM) |
+| encrypt | | | `rsa_encrypt_oaep_sha256(pem, data)`, `rsa_encrypt_oaep_sha1` |
+| decrypt | | | `rsa_decrypt_oaep_sha256(pem, data)`, `rsa_decrypt_oaep_sha1` |
 
 Verifiers return `ok(false)` for a signature that does not verify
 (including one of the wrong length) and `err` for a malformed key, such
@@ -124,6 +126,10 @@ generation takes tens of milliseconds at 2048 bits and seconds at 4096,
 without yielding, so do it at startup or in a tool. Prepared keys are
 cached (up to 16), so signing or verifying repeatedly with the same keys,
 as a server does with its JWT key or a JWKS, skips rebuilding them.
+RSA-OAEP encrypts to a public key and decrypts with the private one, the
+same hash for the label and MGF1. Use SHA-256 for anything new; SHA-1 is
+there for MySQL's password exchange, and OAEP does not depend on the
+hash's collision resistance the way a signature does.
 
 ## API
 
@@ -204,6 +210,14 @@ as a server does with its JWT key or a JWKS, skips rebuilding them.
 ### `crypto.rsa_sign_sha256(str, bytes) -> result[bytes,str]`
 
 ### `crypto.rsa_sign_pss_sha256(str, bytes) -> result[bytes,str]`
+
+### `crypto.rsa_encrypt_oaep_sha1(str, bytes) -> result[bytes,str]`
+
+### `crypto.rsa_decrypt_oaep_sha1(str, bytes) -> result[bytes,str]`
+
+### `crypto.rsa_encrypt_oaep_sha256(str, bytes) -> result[bytes,str]`
+
+### `crypto.rsa_decrypt_oaep_sha256(str, bytes) -> result[bytes,str]`
 
 ### `crypto.rsa_verify_pss_sha256(bytes, bytes, bytes, bytes) -> result[bool,str]`
 
