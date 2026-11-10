@@ -78,6 +78,12 @@ const NatSig ENCODING_SIGS[] = {
        the host's byte order never leaks into a wire format. */
     {"encoding", "float64_to_le", 1, {NA_F64}, "bytes", 0},
     {"encoding", "float64_from_le", 1, {NA_BYTES}, "result[float,str]", 0},
+
+    /* One CSV record's field spans, scanned in C for stdlib/csv; the
+       result layout is described at sl_encoding_csv_record
+       (runtime/sl_encoding.c). Arguments: data, from, separator byte,
+       quote byte, and flags: 1 lazy quotes, 2 data is all there is. */
+    {"encoding", "csv_record", 5, {NA_BYTES, NA_I64, NA_INT, NA_INT, NA_INT}, "[int]", 0},
 };
 
 const int ENCODING_SIGS_LEN =
