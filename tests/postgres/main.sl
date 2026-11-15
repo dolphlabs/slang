@@ -870,6 +870,139 @@ fn scenario_pool() {
 }
 
 
+// ---- scenario: a dead idle connection does not stall the pool ----------
+
+// Answers queries. After "STALL" it answers, then 50 ms later sends a
+// byte nobody asked for (so the pool's probe rejects the connection) and
+// stops reading with the socket still open: a peer that has hung.
+fn srv_hung_conn(fd: i32) {
+    let p = Peer { fd: fd, buf: b"" };
+    startup(p);
+    send(p, hello());
+    while true {
+        let g = next(p);
+        if g.typ == -1 || g.typ == 88 {
+            break;
+        }
+        if g.typ == 81 {
+            send(p, msg(67, cstr("SELECT 0")) + ready(73));
+            if strings.contains(to_str(g.body), "STALL") {
+                time.sleep(50000000);
+                send(p, b"!");
+                time.sleep(5000000000);
+                break;
+            }
+        }
+    }
+    net.close(fd);
+}
+
+fn srv_hung(lfd: i32) {
+    while true {
+        let ar = net.accept(lfd);
+        guard let fd = ar else {
+            return;
+        }
+        spawn srv_hung_conn(fd);
+    }
+}
+
+// Writes into fd until the kernel will take no more, so the next send on
+// it waits out its deadline.
+fn fill_send_buffer(fd: i32) {
+    let chunk = to_bytes(strings.repeat("x", 65536));
+    while true {
+        let r = net.send_until(fd, chunk, until_of(time.mono() + 20000000));
+        guard let n = r else {
+            return;
+        }
+    }
+}
+
+// An idle connection that answers like the hung peer above, back in
+// the pool's idle list.
+fn hung_idle(p: pg.Pool) -> pg.Conn {
+    let ar = pg.acquire(p, soon());
+    guard let c = ar else let e = err_of(ar) {
+        die("acquire: " + e);
+        panic("unreachable");
+    }
+    pg.exec(c, "STALL", soon());
+    pg.release(p, c);
+    time.sleep(150000000);              // the stray byte has landed
+    fill_send_buffer(c.t.fd);
+    return c;
+}
+
+// Acquires past the hung connection: the probe rejects it and close()'s
+// Terminate waits out its one-second deadline.
+fn acquire_past(p: pg.Pool) -> int {
+    let ar = pg.acquire(p, soon());
+    guard let c = ar else let e = err_of(ar) {
+        die("acquire past a dead idle connection: " + e);
+        return 0;
+    }
+    pg.release(p, c);
+    return 1;
+}
+
+fn scenario_pool_dead_idle() {
+    let lfd = listener();
+    spawn srv_hung(lfd);
+
+    // The rest of the pool keeps working while one acquire closes a
+    // connection whose peer hung: the close used to run under the pool
+    // lock, and every release and acquire waited the full second.
+    let pr = pg.new_pool(url_for(lfd, "u"), 2);
+    guard let p = pr else let e = err_of(pr) {
+        die("new_pool: " + e);
+        return;
+    }
+    let br = pg.acquire(p, soon());
+    guard let b = br else let e = err_of(br) {
+        die("acquire: " + e);
+        return;
+    }
+    hung_idle(p);
+    let x = spawn acquire_past(p);
+    time.sleep(200000000);
+    let t0 = time.mono();
+    pg.release(p, b);
+    let took = (time.mono() - t0) as int;
+    if took > 300000000 {
+        die("release waited " + to_str(took / 1000000) +
+            " ms behind the close of a dead idle connection");
+    }
+    if (join_wait(x) ?? 0) != 1 || p.open != 1 || p.dials != 2 {
+        die("after a dead idle connection: open " + to_str(p.open) +
+            " dials " + to_str(p.dials));
+    }
+
+    // A task that queues while the dead connection is being closed gets
+    // the slot it frees, not a timeout.
+    let pr2 = pg.new_pool(url_for(lfd, "u"), 1);
+    guard let p2 = pr2 else let e = err_of(pr2) {
+        die("new_pool: " + e);
+        return;
+    }
+    hung_idle(p2);
+    let y = spawn acquire_past(p2);
+    time.sleep(200000000);
+    let wr = pg.acquire(p2, until_of(time.mono() + 3000000000));
+    guard let w = wr else let e = err_of(wr) {
+        die("acquire queued behind a dead connection's close: " + e);
+        return;
+    }
+    pg.release(p2, w);
+    if (join_wait(y) ?? 0) != 1 || p2.open != 1 {
+        die("queued acquire: open " + to_str(p2.open));
+    }
+    pg.pool_close(p);
+    pg.pool_close(p2);
+    println("ok pool dead idle");
+}
+
+
 // ---- scenario: COPY FROM STDIN ------------------------------------------
 
 fn copy_in_response() -> bytes {
@@ -1434,6 +1567,7 @@ scenario_timeout();
 scenario_tls_refused();
 scenario_getters();
 scenario_pool();
+scenario_pool_dead_idle();
 scenario_copy_in();
 scenario_copy_out();
 scenario_stream();
