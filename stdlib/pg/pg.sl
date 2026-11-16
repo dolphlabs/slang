@@ -2934,6 +2934,21 @@ fn reap(p: Pool) {
     }
 }
 
+// Whether an idle connection can be handed out. Probed before reuse: the
+// server closes idle sessions on timers of its own (idle_session_timeout,
+// a proxy's), and a query written onto a closed connection fails in a way
+// that cannot be told from the query itself failing. Called without
+// p.lock, on a connection the caller has taken off the idle list.
+fn reusable_idle(p: Pool, it: Idle) -> bool {
+    if time.mono() - it.since > p.idle_timeout || !usable(it.c) {
+        return false;
+    }
+    if it.c.t.ssl != nullptr {
+        return net.tls_idle_alive(it.c.t.ssl);
+    }
+    return net.idle_alive(it.c.t.fd);
+}
+
 // A connection for the caller's exclusive use, until release(). Prefer
 // pool_query / pool_exec, which cannot forget to release; acquire is for
 // a transaction, which needs several statements on one connection.
@@ -2943,26 +2958,36 @@ pub fn acquire(p: Pool, deadline: until) -> result[Conn, str] {
         mutex_unlock(p.lock);
         return err("pool is closed");
     }
-    let now = time.mono();
     while len(p.idle) > 0 {
+        // Taken off the idle list under the lock, probed after it: the
+        // probe is a syscall, and every acquire and release queues behind
+        // whoever holds p.lock. With it inside, 3 workers on 64 clients
+        // found the lock held on about a fifth of acquires and releases,
+        // and each of those parked: a 0.9 ms p90 acquire on a pool that
+        // never ran out of connections. The popped connection is ours
+        // alone, so nothing else can reach it while it is probed.
         let it = pop(p.idle);
-        // Probed before reuse: the server closes idle sessions on
-        // timers of its own (idle_session_timeout, a proxy's), and a
-        // query written onto a closed connection fails in a way that
-        // cannot be told from the query itself failing.
-        let alive = net.idle_alive(it.c.t.fd);
-        if it.c.t.ssl != nullptr {
-            alive = net.tls_idle_alive(it.c.t.ssl);
-        }
-        if now - it.since > p.idle_timeout || !alive || !usable(it.c) {
-            p.open = p.open - 1;
-            close(it.c);
-            continue;
-        }
+        // Counted now and taken back if the probe fails, so the hit path
+        // takes the lock once.
         p.reuses = p.reuses + 1;
-        it.c.in_pool = false;
         mutex_unlock(p.lock);
-        return ok(it.c);
+        if reusable_idle(p, it) {
+            it.c.in_pool = false;
+            return ok(it.c);
+        }
+        // Closed outside the lock too: close() sends Terminate and may
+        // wait up to a second for a peer that has stopped reading.
+        close(it.c);
+        mutex_lock(p.lock);
+        p.reuses = p.reuses - 1;
+        p.open = p.open - 1;
+        if p.closed {
+            mutex_unlock(p.lock);
+            return err("pool is closed");
+        }
+        // A task may have queued while this one probed (it saw no idle
+        // connection and no free slot): the slot just freed is its.
+        pass_slot(p);
     }
     if p.open < p.max_open {
         p.open = p.open + 1;
@@ -2981,8 +3006,8 @@ pub fn acquire(p: Pool, deadline: until) -> result[Conn, str] {
         spawn reap(p);
     }
     mutex_unlock(p.lock);
-    // Exactly one grant is sent; it was made under the lock before the
-    // send, so w is settled once this returns.
+    // Exactly one grant is sent; its outcome was set under the lock,
+    // before the send, so w is settled once this returns.
     chan_recv(w.wake);
     let got = w.got;
     let granted = w.c;
@@ -3016,6 +3041,7 @@ pub fn release(p: Pool, c: Conn) {
         panic("pg.release: connection released twice");
     }
     let reusable = usable(c) && c.status == 73 && c.mode == 0;
+    let now = time.mono();
     mutex_lock(p.lock);
     if p.closed || !reusable {
         p.open = p.open - 1;
@@ -3027,15 +3053,21 @@ pub fn release(p: Pool, c: Conn) {
         return;
     }
     if p.whead < len(p.waiters) {
+        // Settled under the lock, woken after it: once popped, the waiter
+        // is out of reach of the reaper and pool_close, and the wake (a
+        // run-queue push, perhaps a worker's futex) is the slowest step
+        // of a release that every other acquire and release would queue
+        // behind.
         let w = pop_waiter(p);
         w.c = some(c);
+        w.got = GOT_CONN;
         p.reuses = p.reuses + 1;
-        grant(w, GOT_CONN);
         mutex_unlock(p.lock);
+        chan_send(w.wake, 1);
         return;
     }
     c.in_pool = true;
-    push(p.idle, Idle { c: c, since: time.mono() });
+    push(p.idle, Idle { c: c, since: now });
     mutex_unlock(p.lock);
 }
 
