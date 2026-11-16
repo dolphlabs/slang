@@ -367,6 +367,18 @@ jobs:
           ./slangc tests/live/websocket/main.sl --run
           python3 tests/live/websocket/check.py /tmp/autobahn/clients/index.json
 
+      # The client only sees resets when the server dies; its own state and
+      # log are the only record of why.
+      - name: Fuzzing server diagnostics
+        if: failure()
+        run: |
+          docker inspect fuzzingserver --format \
+            'status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}}' || true
+          docker logs fuzzingserver 2>&1 | tail -80 || true
+          docker version --format 'docker server {{.Server.Version}}' || true
+          uname -r
+          free -m
+
   # The mysql client against MySQL 8.4 (over verified TLS, and each
   # authentication plugin without it) and MariaDB 11. make test covers
   # the protocol's pure parts everywhere.
