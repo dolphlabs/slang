@@ -1,5 +1,9 @@
-/* pg.rows_as is exposed by the slang pg package; its private intrinsic
- * binds row columns once and emits typed field assignments, like JSON codecs. */
+/* pg.rows_as and mysql.rows_as are exposed by those slang packages; their
+ * private intrinsic binds row columns once and emits typed field
+ * assignments, like JSON codecs. Both packages keep a Rows of the same
+ * shape (columns, Postgres-style type codes, cells in chunks); mysql maps
+ * its column types onto those codes, adding -16 (a bool written 0 or 1)
+ * and -17 (raw bytes) for what Postgres spells differently. */
 #include "../internal.h"
 #include "../../rtpath.h"
 
@@ -31,30 +35,35 @@ static PgRowsInst *pg_find(CG *cg, const char *t, const char *rows) {
 }
 
 const char *pg_rows_infer(CG *cg, Expr *e) {
-    if (e->as.call.nargs != 1) cg_error(e->line, "pg.rows_as() takes one Rows argument");
+    if (e->as.call.nargs != 1) cg_error(e->line, "rows_as() takes one Rows argument");
     const char *rows = infer_type(cg, e->as.call.args[0]);
     StructDef *rd = struct_find_canon(cg, rows);
-    char *pgpath = slang_stdlib_pkg("pg");
-    if (!rd || strcmp(rd->name, "Rows") || !rd->file || !pgpath ||
-        strncmp(rd->file, pgpath, strlen(pgpath)) || rd->file[strlen(pgpath)] != '/' ||
-        strcmp(cg->cur_pkg, rd->pkg))
-        cg_error(e->line, "__pg_rows_as is private to the standard pg package; call pg.rows_as(rows)");
+    int owned = 0;
+    static const char *const owners[] = {"pg", "mysql"};
+    for (int k = 0; k < 2 && rd && rd->file; k++) {
+        char *path = slang_stdlib_pkg(owners[k]);
+        if (path && !strncmp(rd->file, path, strlen(path)) && rd->file[strlen(path)] == '/')
+            owned = 1;
+    }
+    if (!rd || strcmp(rd->name, "Rows") || !owned || strcmp(cg->cur_pkg, rd->pkg))
+        cg_error(e->line, "__pg_rows_as is private to the standard pg and mysql packages; call pg.rows_as(rows) or mysql.rows_as(rows)");
+    const char *who = rd->pkg;
     if (!cg->expect || !is_result(cg->expect))
-        cg_error(e->line, "cannot infer pg.rows_as()'s target; annotate it, e.g. let users: result[[User], str] = pg.rows_as(rows)");
+        cg_error(e->line, "cannot infer %s.rows_as()'s target; annotate it, e.g. let users: result[[User], str] = %s.rows_as(rows)", who, who);
     char *list, *error;
     result_te(cg->expect, &list, &error);
     if (!is_arr(list) || !is_str(error))
-        cg_error(e->line, "pg.rows_as() returns result[[T], str]; use a list of row structs or maps");
+        cg_error(e->line, "%s.rows_as() returns result[[T], str]; use a list of row structs or maps", who);
     const char *t = arr_elem(list);
     const char *base = t;
     while (is_opt(base)) base = opt_inner(base);
     StructDef *sd = struct_find_canon(cg, base);
     if ((!sd || !strcmp(base, "timez.Time")) && !is_map(base))
-        cg_error(e->line, "pg.rows_as() needs a row struct or map[str]V, got %s; declare a struct for the selected columns", t);
+        cg_error(e->line, "%s.rows_as() needs a row struct or map[str]V, got %s; declare a struct for the selected columns", who, t);
     if (is_map(base)) {
         char *k, *v;
         map_kv(base, &k, &v);
-        if (!is_str(k)) cg_error(e->line, "pg.rows_as() map keys must be str; use map[str]%s", v);
+        if (!is_str(k)) cg_error(e->line, "%s.rows_as() map keys must be str; use map[str]%s", who, v);
         pg_cell_fn(cg, v, e->line);
     } else {
         for (int i = 0; i < sd->nfields; i++) pg_cell_fn(cg, sd->ftypes[i], e->line);

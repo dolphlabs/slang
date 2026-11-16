@@ -70,6 +70,13 @@ const NatSig CRYPTO_SIGS[] = {
     {"crypto", "rsa_public_e", 1, {NA_STR}, "result[bytes,str]", 0},
     {"crypto", "rsa_sign_sha256", 2, {NA_STR, NA_BYTES}, "result[bytes,str]", 0},
     {"crypto", "rsa_sign_pss_sha256", 2, {NA_STR, NA_BYTES}, "result[bytes,str]", 0},
+    /* RSA-OAEP: encrypt to a public key (SPKI PEM), decrypt with the
+       private key. SHA-1 is MySQL's (caching_sha2_password's full
+       authentication); SHA-256 for anything new. */
+    {"crypto", "rsa_encrypt_oaep_sha1", 2, {NA_STR, NA_BYTES}, "result[bytes,str]", 0},
+    {"crypto", "rsa_decrypt_oaep_sha1", 2, {NA_STR, NA_BYTES}, "result[bytes,str]", 0},
+    {"crypto", "rsa_encrypt_oaep_sha256", 2, {NA_STR, NA_BYTES}, "result[bytes,str]", 0},
+    {"crypto", "rsa_decrypt_oaep_sha256", 2, {NA_STR, NA_BYTES}, "result[bytes,str]", 0},
     {"crypto", "rsa_verify_pss_sha256", 4,
      {NA_BYTES, NA_BYTES, NA_BYTES, NA_BYTES}, "result[bool,str]", 0},
 };

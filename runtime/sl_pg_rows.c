@@ -70,6 +70,15 @@ static bool sl_pgr_read(sl_pgr_view *v, long long row, long long col,
         out->kind = SL_PGR_BOOL; out->boolean = v->binary ? data[0] == 1 : data[0] == 't'; return true;
     }
     if (oid == 17) { out->kind = SL_PGR_BYTES; return true; }
+    /* mysql's codes: -16 a bool written 0 or 1 (tinyint(1)), -17 raw
+       bytes (a binary column, not Postgres's hex text) */
+    if (oid == -16) {
+        if (n != 1 || (data[0] != '0' && data[0] != '1')) {
+            *err = sl_strdup("invalid boolean cell"); return false;
+        }
+        out->kind = SL_PGR_BOOL; out->boolean = data[0] == '1'; return true;
+    }
+    if (oid == -17) { out->kind = SL_PGR_BYTES; out->binary = true; return true; }
     if (memchr(data, 0, (size_t)n)) { *err = sl_strdup("NUL in text cell"); return false; }
     out->kind = SL_PGR_STR;
     if (oid == 20 || oid == 21 || oid == 23 || oid == 26 || oid == 700 || oid == 701 || oid == 1700) {

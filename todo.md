@@ -56,6 +56,15 @@
   `Straße`/`STRASSE` wrongly; what is left here is a decode and a lookup
   per character.
 
+- [ ] **A program in a directory named like a package it imports breaks
+  generics (found 2026-11-10, writing tests/live/mysql).** The main
+  package in `tests/live/mysql/` importing `mysql` is renamed `mysql_2`,
+  and `let xs: result[[Thing], str] = mysql.rows_as(rows)` then fails
+  with "package 'mysql_2' has no type 'Thing'": the generic's type
+  argument is resolved in the renamed package. Worked around by naming
+  the directory `tests/live/mysqldb`. Reproduce: any generic stdlib call
+  whose type argument is a struct of main, from a directory named after
+  that stdlib package.
 - [ ] **`SSL_set1_host` is deprecated in OpenSSL 4.0 (found 2026-11-09,
   feat/uuid-package; not fixed).** `runtime/sl_tls.c:247` calls it to set
   the hostname a client checks the server's certificate against. Against
@@ -436,6 +445,26 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
   `acquire`). Measured 2026-10-07 (the parked branch, cherry-picked
   onto dev): neutral at c64 and c512, point and mix; the pool's lock
   waits were the scheduling delay above, not the probe. Kept unmerged.
+  - [x] **Outside the lock** (2026-11-16, perf/pg-route-gap). Counted
+    on the bench api, Linux container on the Mac, server and Postgres
+    on 3 shared cores, latgen on a fourth, 20K-user seed, `point` c64:
+    with the probe under `p.lock`, 24-25% of acquires and 19-21% of
+    releases found the lock held and parked, though no acquire ever
+    waited for a connection; pool-acquire p90 897-1,190 us (Go's pgxpool
+    1.3 us). Probed, and a dead one closed, after the lock: 1.1% and
+    0.9-1.0%, p90 2.3-2.4 us. The probe still runs on every reuse.
+    Throughput did not move: ABBA x3 c64 medians 20,206 -> 19,580 req/s
+    (spreads 17.2-20.9k and 17.3-20.8k), c512 17,378 -> 19,858 with a
+    noisy window hitting both builds; the runs are CPU-bound, and a
+    parked acquire costs wall time, not CPU. Also fixed: a dead idle
+    connection was closed under the lock, and close's Terminate waits up
+    to 1 s for a peer that stopped reading, so one hung peer stalled every
+    acquire and release (tests/postgres `scenario_pool_dead_idle`: "release
+    waited 801 ms" on dev). The 1 s idle threshold (pgxpool's) is not
+    built: it skips the probe on hot connections, a safety trade-off
+    for the owner. Same harness, slang vs Go 1.24.1 on `point`: c64
+    ~88% of Go's req/s at 69 vs 59 us CPU per request, c512 level or
+    ahead at 28 vs 45 MB peak RSS. CPU per request is the gap left here.
 - [ ] **R4. Stopped workers help collect** *(fix-gc 1.4)*. Parallel sweep
   first. This is the main remaining cause of quote's idle cores.
   **Measured 2026-10-07, needs an owner decision before building.**
