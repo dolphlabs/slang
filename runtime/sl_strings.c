@@ -80,6 +80,35 @@ static long long sl_strings_count(const char *hay, const char *needle) {
     return n;
 }
 
+/* Eight bytes at a time, each folded in with a multiply and an
+ * xorshift, then a final avalanche (the murmur3 finaliser): a key that
+ * differs in any byte lands on a different shard with even odds. Not a
+ * cryptographic hash, and the word reads make it differ between little
+ * and big endian -- for use inside one process only. */
+static long long sl_strings_hash(const char *s) {
+    if (!s) return 0;
+    size_t n = strlen(s);
+    const unsigned char *p = (const unsigned char *)s;
+    uint64_t h = 0x9E3779B97F4A7C15ull ^ (uint64_t)n;
+    while (n >= 8) {
+        uint64_t w;
+        memcpy(&w, p, 8);
+        h = (h ^ w) * 0xff51afd7ed558ccdull;
+        h ^= h >> 32;
+        p += 8;
+        n -= 8;
+    }
+    uint64_t w = 0;
+    memcpy(&w, p, n);
+    h ^= w;
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdull;
+    h ^= h >> 33;
+    h *= 0xc4ceb9fe1a85ec53ull;
+    h ^= h >> 33;
+    return (long long)(h & 0x7fffffffffffffffull);
+}
+
 static int sl_strings_is_space(char c) {
     return c == ' ' || c == '\t' || c == '\r' || c == '\n';
 }

@@ -29,6 +29,10 @@ const NatSig STRINGS_SIGS[] = {
     {"strings", "has_prefix", 2, {NA_STR, NA_STR}, "bool", 0},
     {"strings", "has_suffix", 2, {NA_STR, NA_STR}, "bool", 0},
     {"strings", "count", 2, {NA_STR, NA_STR}, "int", 0},
+    /* a fast 64-bit hash, never negative, for sharding and hash
+       tables inside one process: not stable across platforms or
+       slang versions, so never store or send it. */
+    {"strings", "hash", 1, {NA_STR}, "int", 0},
 
     /* trimming. trim removes ASCII space, tab, CR and LF -- the set
        that shows up at the ends of header lines and config values. */
