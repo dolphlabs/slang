@@ -1,5 +1,20 @@
 # todo
 
+- [x] **YAML (2026-11-17, feat/yaml).** `stdlib/yaml`: `decode[T]`,
+  `decode_all[T]`, `to_json`, `to_json_all`, for configuration files:
+  YAML 1.2 core schema, block and flow collections, all scalar styles,
+  anchors, aliases and merge keys; explicit keys, custom tags and %TAG
+  refused. Checked against ruamel.yaml 0.18.6 on 732 streams
+  (tests/yaml_parity); the generator leaves out 69 that ruamel reads in
+  ways YAML 1.2 does not (PyYAML's scanner: tabs, ":" next to flow
+  indicators) or that have no JSON form, and pins the spec's answer for
+  seven more. The corpus found three bugs: anchors leaking across
+  documents, multi-line implicit keys, and a key's anchor setting its
+  mapping's indentation. Cost on a 1.1 MB document: first version 360-380
+  ms, 2.2x Go's yaml.v3; strings stored without their quotes, one-line
+  scalars and plain integers sliced from the source, 230 ms (1.42x).
+  Left: no YAML writer; explicit keys and %TAG unsupported by design.
+
 - [x] **TOML (2026-11-17, feat/toml).** `stdlib/toml`: `toml.decode[T]` and
   `toml.to_json`, all of TOML 1.0, decode through `json.decode`. Checked
   against Python 3.12's `tomllib` on 748 documents (tests/toml_parity: the
