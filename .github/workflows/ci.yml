@@ -351,8 +351,14 @@ jobs:
 
       - name: Start the Autobahn fuzzing server
         run: |
+          # PyPy sizes its nursery from the "cache size" line of
+          # /proc/cpuinfo, taken as the L2. The Xeon 6975P-C and 8573C
+          # runners report the L3 there (480 MB, 260 MB), and the server
+          # grew to 14 GB and was OOM-killed on every one of them; the AMD
+          # runners (512 KB-1 MB) peak at 3.6 GB. Pinning the nursery
+          # gives every runner the AMD behaviour.
           mkdir -p /tmp/autobahn
-          docker run -d --name fuzzingserver -p 9001:9001 \
+          docker run -d --name fuzzingserver -p 9001:9001 -e PYPY_GC_NURSERY=4M \
             -v "$GITHUB_WORKSPACE/tests/live/websocket:/config:ro" -v /tmp/autobahn:/reports \
             crossbario/autobahn-testsuite wstest -m fuzzingserver -s /config/fuzzingserver.json
           ok=0

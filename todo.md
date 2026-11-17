@@ -1,5 +1,18 @@
 # todo
 
+- [x] **The websocket CI job failed on most runners from 2026-11-16
+  (fixed 2026-11-17, ci/websocket-pypy-nursery).** Every case from 368
+  on failed with "Connection reset by peer": the Autobahn fuzzing server
+  had been OOM-killed (exit 137, OOMKilled) at 14-15 GB on a 16 GB
+  runner. Not the client and not the image: 24 diagnostic jobs split by
+  CPU alone. The Xeon 6975P-C and 8573C runners report the L3 as
+  /proc/cpuinfo's "cache size" (480 MB, 260 MB), PyPy sizes its nursery
+  from that line as if it were the L2, and the server failed on 13 of 13
+  of them; the AMD EPYC runners (512 KB-1 MB) passed 7 of 7 at a 3.6 GB
+  peak. THP (already `madvise`), `PYPY_GC_MAX=4GB` and
+  `PYPY_GC_MAJOR_COLLECT=1.3` changed nothing. `PYPY_GC_NURSERY=4M` on
+  the container: 6 of 6 passed, 3 of them on 6975P-C, peak 2.6-3.6 GB.
+
 - [x] **A safepoint record was published before its root count
   (2026-11-17, fix/gc-safepoint-publish-order).** The PG bench server
   (dev 156c970, Linux container, c64 `insert`) died with SIGSEGV twice in
