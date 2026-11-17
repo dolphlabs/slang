@@ -105,6 +105,11 @@ static void (*sl_rt_io_kick_hook)(void) = NULL;
  * one asleep in it when work is queued. */
 static int (*sl_rt_netpoll_hook)(int block) = NULL;
 static void (*sl_rt_netpoll_break_hook)(void) = NULL;
+/* CLOCK_MONOTONIC ns when a worker last finished a poll of the reactor's
+ * set (sl_net_worker_poll). Busy workers poll when it is SL_NETPOLL_BUSY_NS
+ * old (sl_worker_run_loop), and the reactor thread stays out of epoll_wait
+ * while it is fresh (sl_reactor_thread). */
+static _Atomic long long sl_rt_netpoll_last_ns = 0;
 
 /* Tier 10: a lexically-scoped chain of GC root lists, one per
  * currently in-flight call-site safepoint on this thread (the

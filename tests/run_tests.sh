@@ -1070,21 +1070,29 @@ fi
 # waking. Measured 619 reactor loops and 964 worker polls for 40297 waits;
 # without worker polling the reactor looped once per 2-3 waits. Budget:
 # at most one reactor loop per 4 waits, and worker polls happen at all.
-# Linux only: kqueue keeps the reactor thread.
+# Linux only: kqueue keeps the reactor thread. And the reactor thread
+# itself stays out of epoll_wait while workers poll (busy workers do,
+# between tasks, every 100 us): it harvested 3927-29504 events for
+# ~40280 waits when it sat in epoll_wait whenever no worker was mid-poll,
+# 10-29 since. Budget: one event per 200 waits.
 if [ "$(uname -s)" = Linux ]; then
     rwp_line=$(SLANG_WORKERS=4 SLANG_REACTOR_STAT=1 ./slangc tests/reactor_work_budget/main.sl \
                --run 2>&1 >/dev/null | grep -o 'parks=.*worker_polls=[0-9]*')
     rwp_parks=$(echo "$rwp_line" | sed -n 's/^parks=\([0-9]*\).*/\1/p')
     rwp_loops=$(echo "$rwp_line" | sed -n 's/.*loops=\([0-9]*\).*/\1/p')
     rwp_polls=$(echo "$rwp_line" | sed -n 's/.*worker_polls=\([0-9]*\)$/\1/p')
-    if [ -z "$rwp_parks" ] || [ -z "$rwp_loops" ] || [ -z "$rwp_polls" ]; then
+    rwp_events=$(echo "$rwp_line" | sed -n 's/.*thread_events=\([0-9]*\).*/\1/p')
+    if [ -z "$rwp_parks" ] || [ -z "$rwp_loops" ] || [ -z "$rwp_polls" ] || [ -z "$rwp_events" ]; then
         echo "FAIL worker polling (no slang-reactor-stat line: $rwp_line)"
         fail=1
     elif [ "$rwp_polls" -eq 0 ] || [ $((rwp_loops * 4)) -gt "$rwp_parks" ]; then
         echo "FAIL worker polling: $rwp_loops reactor loops and $rwp_polls worker polls for $rwp_parks waits"
         fail=1
+    elif [ $((rwp_events * 200)) -gt "$rwp_parks" ]; then
+        echo "FAIL worker polling: the reactor thread harvested $rwp_events events for $rwp_parks waits, budget one per 200"
+        fail=1
     else
-        echo "PASS worker polling ($rwp_loops reactor loops, $rwp_polls worker polls for $rwp_parks waits)"
+        echo "PASS worker polling ($rwp_loops reactor loops, $rwp_events events on the reactor thread, $rwp_polls worker polls for $rwp_parks waits)"
     fi
 fi
 # And again for the workers' sleeps: a worker that runs out of work spins
@@ -1116,8 +1124,12 @@ fi
 # It was one list under sl_gc_mu, so every park and resume, from every
 # worker and the network poller, queued on one lock. Measured 72-96
 # contended acquisitions for ~40300 waits on 4 and 8 CPUs, 58-65 on 2;
-# with the one lock, 1413-1764 and 243-264. Budget: at most one per 250
-# waits. Linux only, like the two budgets above: on macOS the kqueue
+# with the one lock, 1413-1764 and 243-264. Since busy workers poll the
+# network between tasks (sl_worker_run_loop) the resumes come from worker
+# threads instead of the reactor thread, and on 4 workers the count rose
+# from 34-43 to 191-227 (perf/netpoll-busy-workers, which measured CPU
+# and p99 lower with it). Budget: at most one per 100 waits, still a
+# third of what the one lock cost. Linux only, like the two budgets above: on macOS the kqueue
 # reactor thread does the resumes, and the counts there differ (Intel:
 # 2666-2992 -> 127-155; CI's arm64: 740 sharded), with no arm64 Mac here
 # to set a budget from.
@@ -1130,7 +1142,7 @@ if [ "$(uname -s)" = Linux ]; then
     if [ -z "$pl_waits" ] || [ -z "$pl_parks" ]; then
         echo "FAIL park lock waits (no slang-sched-stat or slang-reactor-stat line: $pl_line)"
         fail=1
-    elif [ $((pl_waits * 250)) -gt "$pl_parks" ]; then
+    elif [ $((pl_waits * 100)) -gt "$pl_parks" ]; then
         echo "FAIL park lock waits: $pl_waits contended registry locks for $pl_parks waits"
         fail=1
     else
