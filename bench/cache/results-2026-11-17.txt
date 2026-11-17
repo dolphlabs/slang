@@ -1,0 +1,36 @@
+slang      single    ns_per_op=871 hit_rate=210/1000          rss_mb=30.5
+go-lru     single    ns_per_op=237 hit_rate=210/1000          rss_mb=16.3
+ristretto  single    ns_per_op=331 hit_rate=31/1000           rss_mb=16.4
+slang      parallel  ns_per_op=866 hit_rate=224/1000          rss_mb=36.6
+go-lru     parallel  ns_per_op=490 hit_rate=224/1000          rss_mb=16.2
+ristretto  parallel  ns_per_op=190 hit_rate=34/1000           rss_mb=20.8
+slang      fill      entries=998222                           rss_mb=255.7
+go-lru     fill      entries=1000000                          rss_mb=197.2
+ristretto  fill      entries=17543                            rss_mb=127.2
+ristretto  single    ns_per_op=463 hit_rate=33/1000           rss_mb=14.6
+go-lru     single    ns_per_op=559 hit_rate=210/1000          rss_mb=16.3
+slang      single    ns_per_op=878 hit_rate=210/1000          rss_mb=31.1
+ristretto  parallel  ns_per_op=126 hit_rate=35/1000           rss_mb=18.7
+go-lru     parallel  ns_per_op=230 hit_rate=224/1000          rss_mb=17.8
+slang      parallel  ns_per_op=296 hit_rate=224/1000          rss_mb=36.5
+ristretto  fill      entries=17543                            rss_mb=129.2
+go-lru     fill      entries=1000000                          rss_mb=195.1
+slang      fill      entries=998222                           rss_mb=255.5
+slang      single    ns_per_op=508 hit_rate=210/1000          rss_mb=30.6
+go-lru     single    ns_per_op=174 hit_rate=210/1000          rss_mb=14.2
+ristretto  single    ns_per_op=205 hit_rate=30/1000           rss_mb=16.3
+slang      parallel  ns_per_op=313 hit_rate=223/1000          rss_mb=36.8
+go-lru     parallel  ns_per_op=201 hit_rate=223/1000          rss_mb=18.4
+ristretto  parallel  ns_per_op=120 hit_rate=33/1000           rss_mb=18.9
+slang      fill      entries=998222                           rss_mb=255.5
+go-lru     fill      entries=1000000                          rss_mb=199.2
+ristretto  fill      entries=17543                            rss_mb=129.2
+ristretto  single    ns_per_op=202 hit_rate=31/1000           rss_mb=16.5
+go-lru     single    ns_per_op=188 hit_rate=210/1000          rss_mb=16.1
+slang      single    ns_per_op=558 hit_rate=210/1000          rss_mb=30.8
+ristretto  parallel  ns_per_op=127 hit_rate=34/1000           rss_mb=18.9
+go-lru     parallel  ns_per_op=234 hit_rate=224/1000          rss_mb=17.4
+slang      parallel  ns_per_op=328 hit_rate=224/1000          rss_mb=36.7
+ristretto  fill      entries=17543                            rss_mb=127.2
+go-lru     fill      entries=1000000                          rss_mb=197.8
+slang      fill      entries=998222                           rss_mb=255.6
