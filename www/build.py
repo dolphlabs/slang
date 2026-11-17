@@ -199,6 +199,8 @@ PACKAGE_SECTIONS = {
     "rand": ["`rand`"],
     "decimal": ["`decimal`"],
     "csv": ["`csv`"],
+    "toml": ["`toml`"],
+    "yaml": ["`yaml`"],
     "builder": ["`builder`"],
     "flags": ["`flags`"],
     "sort": ["`sort`"],
