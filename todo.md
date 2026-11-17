@@ -507,6 +507,30 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
     request (a 16 MB nursery removed it with no CPU change, so not the
     cost), and context switches 0.72 vs Go's 0.30 a request -- the
     largest bucket, about 9 us of `schedule`, `epoll_wait` and `futex`.
+  - [x] **Connected sockets registered once, edge-triggered** (2026-11-17,
+    perf/reactor-persistent-epoll; next-steps.md §4). Linux only; kqueue
+    and every fd that is not a connected socket keep the one-shot re-arm.
+    Same harness, `summary` c64: `epoll_ctl` 1.78 -> 0.00 a request,
+    syscalls 9.6 -> 8.0 (Go 5.9), context switches 0.70 -> 0.65. ABBA x2,
+    medians of 4, CPU us/request dev -> branch: point 71.9 -> 63.0
+    (spreads 66-76 and 61-75), orders 116.9 -> 115.8, summary 64.2 ->
+    61.5 (kernel 42.6 -> 40.2), insert 66.5 -> 60.5 (kernel 42.9 ->
+    39.0). Against Go, ABBA x1: summary level (56-59 vs 55-58 us,
+    18.5-19.2k vs 19.1-20.3k req/s), insert still behind (64-68 vs 55-58
+    us, 15.6-16.3k vs 17.7-18.7k); p99 below Go on both (9.2-9.8 vs
+    11.1-12.3 ms, 12.8-12.9 vs 15.4-16.6) at 14-15 vs 28 MB RSS.
+    tests/reactor_persist_reuse closes through net.close, fs.close and a
+    link's drop and reuses the numbers; each of three builds with one of
+    those forgets removed hangs it. Left from R3: context switches (0.65
+    vs 0.30) and the collector's `sched_yield` (1.3-1.5 a request).
+- [ ] **A bench server segfaulted once under `insert` (2026-11-17).** dev
+  at 156c970, the bench api on the Linux container, c64, the 4th or 5th
+  insert run of an ABBA set (both were dev's): the server died mid-window
+  with SIGSEGV; its log was overwritten by the next run, so no crash
+  report. Not reproduced in 28 more dev runs and 20 on
+  perf/reactor-persistent-epoll (8 s c64 insert runs, each on a fresh
+  server, with core dumps on). Next: a long
+  loop that keeps each run's stderr, under `SLANG_GC_VERIFY_MINOR=1`.
 - [ ] **R4. Stopped workers help collect** *(fix-gc 1.4)*. Parallel sweep
   first. This is the main remaining cause of quote's idle cores.
   **Measured 2026-10-07, needs an owner decision before building.**

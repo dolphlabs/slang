@@ -1037,8 +1037,11 @@ fi
 # deadline on every receive. Each wait used to be two epoll_ctl calls (ADD,
 # failing with EEXIST, then MOD), and the reactor passed over all of its
 # waiters before and after every batch of events. Budgets: at most 1.2
-# registrations per wait, and passes over the waiters on at most a tenth
-# of the reactor's iterations (none are due here).
+# registrations per wait (kqueue's one-shot knotes), and passes over the
+# waiters on at most a tenth of the reactor's iterations (none are due
+# here). On Linux a connected socket is registered once, edge-triggered,
+# not re-armed per wait: 1400 registrations for 40266 waits, 40875 when
+# every wait re-armed. Budget there: one per 20 waits.
 echo "--- reactor work budget (SLANG_REACTOR_STAT) ---"
 rwb_line=$(SLANG_WORKERS=2 SLANG_REACTOR_STAT=1 ./slangc tests/reactor_work_budget/main.sl \
            --run 2>&1 >/dev/null | grep -o 'parks=.*loops=[0-9]*')
@@ -1052,6 +1055,9 @@ if [ -z "$rwb_parks" ] || [ -z "$rwb_regs" ] || [ -z "$rwb_scans" ] || [ -z "$rw
     fail=1
 elif [ $((rwb_regs * 10)) -gt $((rwb_parks * 12)) ]; then
     echo "FAIL reactor work budget: $rwb_regs registrations for $rwb_parks waits, budget 1.2 each"
+    fail=1
+elif [ "$(uname -s)" = Linux ] && [ $((rwb_regs * 20)) -gt "$rwb_parks" ]; then
+    echo "FAIL reactor work budget: $rwb_regs registrations for $rwb_parks waits, budget one per 20 (persistent epoll)"
     fail=1
 elif [ $((rwb_scans * 10)) -gt "$rwb_loops" ]; then
     echo "FAIL reactor work budget: $rwb_scans waiter passes in $rwb_loops reactor loops, budget a tenth"

@@ -1873,6 +1873,10 @@ static sl_link sl_link_from_fd(int fd) {
  * program never calls through it and never links OpenSSL. It releases
  * the link's share of the session and closes the link's fd. */
 static void (*sl_link_tls_free_fn)(sl_link *l);
+/* Set by the reactor (sl_net.c, spliced in only when something waits on an
+ * fd): called before close(2) of a fd it may hold a persistent
+ * registration for (sl_reactor_forget). NULL without a reactor. */
+static void (*sl_rt_fd_forget_hook)(int fd);
 static void sl_link_free(sl_link *l) {
     if (!l || !l->live)
         return;
@@ -1883,6 +1887,8 @@ static void sl_link_free(sl_link *l) {
            would leave the connection open, so the reader ends it. */
         if (l->role == SL_LINK_READER)
             shutdown(l->fd, SHUT_RDWR);
+        if (sl_rt_fd_forget_hook)
+            sl_rt_fd_forget_hook(l->fd);
         close(l->fd);
     }
     l->tls = NULL;
