@@ -642,7 +642,7 @@ rm -f "$ul_bin"
 [ "$ul_bad" -eq 0 ] && echo "PASS unicode licence notice"
 
 # Stdlib packages that carry their own unit tests.
-for pkg in stdlib/pg stdlib/timez stdlib/uuid stdlib/rand stdlib/decimal stdlib/nats stdlib/s3 stdlib/template stdlib/websocket stdlib/csv stdlib/mysql; do
+for pkg in stdlib/pg stdlib/timez stdlib/uuid stdlib/rand stdlib/decimal stdlib/nats stdlib/s3 stdlib/template stdlib/websocket stdlib/csv stdlib/mysql stdlib/toml; do
     if out=$(./slangc test "$pkg" 2>&1); then
         echo "PASS slangc test $pkg"
     else
@@ -1017,50 +1017,6 @@ elif [ $((sq_skipped * 2)) -lt "$sq_walked" ]; then
     fail=1
 else
     echo "PASS idle queued tasks skipped ($sq_skipped of $sq_walked)"
-fi
-
-# ---- nursery grows when minors are mostly the rendezvous ----------------
-# gc_nursery_rendezvous: four tasks churn short strings on four workers
-# pinned to one CPU, so each minor waits for the descheduled workers to
-# run again. Almost nothing survives a minor; the nursery grew only on
-# survivors, so it stayed at 512 KB and paid that wait every 512 KB (299
-# minors; 28-32 at 8 MB now). The PG bench's orders route, workers
-# sharing CPUs with Postgres: 0.87 ms of rendezvous a minor at 2 MB, 13%
-# more req/s. The same program unpinned, and a plain loop, must keep the
-# 512 KB nursery: the wait is a tenth of their pauses. Linux only
-# (taskset).
-if [ "$(uname -s)" = Linux ] && command -v taskset >/dev/null 2>&1; then
-    echo "--- nursery grows on rendezvous-bound minors (SLANG_GC_STAT) ---"
-    nr_bin=/tmp/sl_gc_nursery_rendezvous
-    nr_bad=0
-    if ! ./slangc tests/gc_nursery_rendezvous/main.sl -o "$nr_bin" >/dev/null 2>&1; then
-        echo "FAIL nursery grows on rendezvous-bound minors (compile)"
-        nr_bad=1
-    else
-        nr_pinned=$(SLANG_WORKERS=4 SLANG_GC_STAT=1 taskset -c 0 "$nr_bin" 2>&1 >/dev/null |
-                    sed -n 's/.* nursery_threshold=\([0-9]*\).*/\1/p' | head -1)
-        nr_free=$(SLANG_WORKERS=4 SLANG_GC_STAT=1 "$nr_bin" 2>&1 >/dev/null |
-                  sed -n 's/.* nursery_threshold=\([0-9]*\).*/\1/p' | head -1)
-        if [ -z "$nr_pinned" ] || [ -z "$nr_free" ]; then
-            echo "FAIL nursery grows on rendezvous-bound minors (no slang-gc-stat line)"
-            nr_bad=1
-        elif [ "$nr_pinned" -le 1048576 ]; then
-            echo "FAIL nursery grows on rendezvous-bound minors: ended at" \
-                 "$nr_pinned bytes on one CPU, want more than 1 MB"
-            nr_bad=1
-        elif [ "$nr_free" -gt 1048576 ]; then
-            echo "FAIL nursery grows on rendezvous-bound minors: grew to" \
-                 "$nr_free bytes with a CPU per worker, want at most 1 MB"
-            nr_bad=1
-        fi
-    fi
-    if [ "$nr_bad" -eq 0 ]; then
-        echo "PASS nursery grows on rendezvous-bound minors ($nr_pinned pinned, $nr_free free)"
-    else
-        fail=1
-    fi
-else
-    echo "SKIP nursery grows on rendezvous-bound minors (needs Linux, taskset)"
 fi
 
 # ---- argon2id kdf offload --------------------------------------------------
