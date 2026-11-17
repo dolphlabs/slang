@@ -2191,8 +2191,12 @@ pg.release(pool, c);
 At most `max_open` connections exist at once; a task that needs one while
 all are in use waits, up to its deadline. Waiters are served in arrival
 order: a release hands its connection straight to the oldest one, and
-`pool_close` fails every acquire still waiting. Idle connections are probed
-before reuse and closed after `pool.idle_timeout` (5 minutes). A
+`pool_close` fails every acquire still waiting. A connection idle for
+`pool.alive_check_after` (1 second) or longer is probed before reuse, and
+one idle for `pool.idle_timeout` (5 minutes) is closed instead; one
+released more recently is handed out as it is, so a server that ends a
+session within that second fails the one statement that gets it. Set
+`alive_check_after` to 0 to probe every reuse. A
 connection released while broken, closed or **still inside a
 transaction** is closed rather than handed on — the next caller would
 otherwise run its statements inside someone else's uncommitted work.
@@ -2349,8 +2353,9 @@ the connection usable**, unlike every other call: waiting is the point,
 and a message cut off by the deadline is kept and completed by the next
 wait. A server that ends the session while one waits (an administrator's
 `pg_terminate_backend`, a restart) is an error with its SQLSTATE. Listen
-on a connection of its own, not a pooled one: a pooled connection with a
-notification waiting fails the pool's idle probe and is closed.
+on a connection of its own, not a pooled one: a pooled connection idle
+long enough to be probed, with a notification waiting, fails the probe
+and is closed.
 
 ##### Limits
 

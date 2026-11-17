@@ -2788,6 +2788,9 @@ pub gc struct Pool {
     // Nanoseconds a connection may sit idle before it is closed instead
     // of reused. Default 5 minutes.
     idle_timeout: int,
+    // Nanoseconds a connection may sit idle and still be handed out
+    // without probing it first. Default 1 second; 0 probes every reuse.
+    alive_check_after: int,
     idle: [Idle],
     open: int,
     lock: mutex,
@@ -2826,7 +2829,7 @@ pub fn new_pool(url: str, max_open: int) -> result[Pool, str] {
     let waiters: [Waiter] = [];
     let spare: [Waiter] = [];
     return ok(Pool { cfg: cfg, max_open: max_open, idle_timeout: 300000000000,
-                     idle: idle, open: 0, lock: make_mutex(), closed: false,
+                     alive_check_after: 1000000000, idle: idle, open: 0, lock: make_mutex(), closed: false,
                      waiters: waiters, whead: 0, spare: spare, reaping: false,
                      dials: 0, reuses: 0 });
 }
@@ -2934,14 +2937,24 @@ fn reap(p: Pool) {
     }
 }
 
-// Whether an idle connection can be handed out. Probed before reuse: the
-// server closes idle sessions on timers of its own (idle_session_timeout,
-// a proxy's), and a query written onto a closed connection fails in a way
-// that cannot be told from the query itself failing. Called without
-// p.lock, on a connection the caller has taken off the idle list.
+// Whether an idle connection can be handed out. Probed before reuse once
+// it has sat idle p.alive_check_after or longer: the server closes idle
+// sessions on timers of its own (idle_session_timeout, a proxy's), and a
+// query written onto a closed connection fails in a way that cannot be
+// told from the query itself failing. One released moments ago is handed
+// out unprobed, as pgx does below its one second: under load nearly every
+// acquire is such a connection, and probing it was one syscall a query --
+// a fifth of the PG routes' recv calls, about 2.6 us of CPU a request
+// next to Go's ~55 (todo.md R3). A server that ends a session inside that
+// second fails the one query that gets it. Called without p.lock, on a
+// connection the caller has taken off the idle list.
 fn reusable_idle(p: Pool, it: Idle) -> bool {
-    if time.mono() - it.since > p.idle_timeout || !usable(it.c) {
+    let idle_for = time.mono() - it.since;
+    if idle_for > p.idle_timeout || !usable(it.c) {
         return false;
+    }
+    if idle_for < p.alive_check_after {
+        return true;
     }
     if it.c.t.ssl != nullptr {
         return net.tls_idle_alive(it.c.t.ssl);
