@@ -559,29 +559,16 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
     and no change on point. The collector's `sched_yield` (1.3-1.5 a
     request) is left: a 16 MB nursery removed nearly all of them with
     no CPU change.
-  - **The nursery grows when minors are mostly the rendezvous
-    (2026-11-17, perf/orders-route).** orders allocates 150 objects and
-    20.7 KB a request and keeps almost none, so the adaptive nursery
-    (which grew only on survivors) sat at 1-2 MB: ~113 minors a second,
-    each stopping the three workers for 1.1-1.4 ms, 0.87 ms of it the
-    rendezvous -- workers sharing their CPUs with Postgres, waiting to
-    be scheduled to ack. 14.8 us of stopped-world a request, 9.9 of it
-    rendezvous. A minor whose averaged pause is over half rendezvous
-    now grows the nursery at a sixteenth of the interval (to 2 MB a
-    worker, 6 MB here), holds it while the share stays over a quarter,
-    and any shrink needs 4 minors in a row. orders: 197-201 minors in
-    6 s against 681-779, 6.6-7.5 us stopped a request against
-    19.0-22.0. Rotating rounds, dev / this / Go, 5 s at c64 (8 rounds
-    orders, 6 the rest), medians of paired ratios: orders x1.13 rps on
-    dev (6 of 8) and x1.08 on Go, p99 0.69x Go; point x1.14 / x1.06;
-    summary x1.05 / x1.05; insert x1.04 / x0.96. RSS 13-15 -> 20-24
-    MB, Go 24-27. **Caveat:** this Mac was thermally throttled all day
-    (xcpm level 63-100, both servers ~40% below the numbers above), and
-    a throttled CPU deschedules more, which is the cost this removes;
-    the 16 MB nursery above, measured cool, changed CPU little. The
-    gain at full clock is likely smaller. Unpinned programs with a CPU
-    per worker are unchanged (512 KB; the rendezvous is a tenth of
-    their pauses). Test: tests/gc_nursery_rendezvous (Linux, taskset).
+  - **Tried and reverted (2026-11-17, #538):** growing the nursery when
+    a minor's pause is mostly the rendezvous. In Docker Desktop's VM on a
+    thermally throttled Mac the rendezvous was 0.87 ms a minor on the PG
+    bench (workers waiting on Postgres for a CPU), and the change gave
+    orders +13% req/s. On GitHub's Linux runners the same test program,
+    4 workers pinned to one CPU, waited 19 us a minor (x86-64) and 4 us
+    (arm64), 9-30% of the pause, mostly sweep: the long waits were the
+    VM's host descheduling whole vCPUs, which Linux itself does not do.
+    The rule never fired there and its test failed, so it was reverted.
+    Measure GC pauses on a dedicated Linux host, not Docker Desktop.
 - [ ] **R4. Stopped workers help collect** *(fix-gc 1.4)*. Parallel sweep
   first. This is the main remaining cause of quote's idle cores.
   **Measured 2026-10-07, needs an owner decision before building.**
