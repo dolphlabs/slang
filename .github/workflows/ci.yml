@@ -1,344 +1,43 @@
-# CI: Linux x86_64, Linux arm64, and macOS on Apple Silicon.
-#
-# slang is built primarily for servers, which mostly run Linux, and until
-# this workflow existed it had only ever been built and tested on Intel
-# macOS. The first Linux run found three bugs that had shipped: a committed
-# macOS binary a Linux checkout tried to execute, every program failing to
-# link under GCC -flto (C functions called only from assembly were
-# discarded), and a long long / int64_t mismatch in the JSON decoder.
-#
-# arm64 was worse: it did not build on any platform, Apple Silicon
-# included, because the preemption and stack-growth trampolines existed
-# only in x86_64 assembly. Both arm64 runners are native here -- local
-# Docker could only emulate them.
-#
-# Runs on merge to main, and on manual dispatch (which runs the workflow as
-# it exists on the chosen branch -- how a change to this file is tried
-# before it merges). Releases are release.yml's: a version tag is tested
-# again there, on the machine that builds its tarball. Nothing here may reach the internet: a test that needs
-# the network fails for reasons unrelated to the code, which is why the
-# https client checks are verified by hand instead.
-
+# Scratch branch: diagnoses the Autobahn fuzzing server's OOM on some
+# ubuntu-24.04 runner images. Never merged.
 name: CI
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  test:
-    name: test (${{ matrix.name }})
-    strategy:
-      fail-fast: false        # one platform failing must not hide the others
-      matrix:
-        include:
-          - name: linux-x86_64
-            runner: ubuntu-24.04
-          - name: linux-arm64
-            runner: ubuntu-24.04-arm
-          - name: macos-arm64
-            runner: macos-15
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-
-      # cc is GCC on Linux and clang on macOS, so the suite's generated-C
-      # warning sweep checks both compilers' warnings.
-      - name: Install build dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config libssl-dev libsqlite3-dev \
-            zlib1g-dev git python3
-
-      # No PKG_CONFIG_PATH: slangc locates Homebrew's keg-only OpenSSL
-      # itself (find_openssl, src/main.c), and the suite should run the way
-      # a user's machine would.
-      - name: Install build dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: brew install pkg-config openssl@3
-
-      - name: Toolchain
-        run: |
-          uname -sm
-          cc --version | head -1
-          pkg-config --modversion openssl
-
-      - name: Build slangc
-        run: make slangc
-
-      - name: Test suite
-        run: make test
-
-      # With pkg-config unable to see OpenSSL, slangc must still find it
-      # itself: Homebrew's prefix on macOS, the system headers on Linux.
-      # Before the fallback existed this failed with "openssl/sha.h file not
-      # found" -- the first error a new macOS user met with https.
-      - name: OpenSSL discovery without pkg-config
-        env:
-          PKG_CONFIG_LIBDIR: /nonexistent
-          PKG_CONFIG_PATH: ""
-        run: |
-          mkdir -p /tmp/ossl && cp tests/crypto/main.sl /tmp/ossl/main.sl
-          ./slangc /tmp/ossl/main.sl --run    # no pipe: the exit status must be slangc's
-
-      # The suite's own preemption probe loops with cooperative yields, so
-      # it never takes the async signal path at all. Deep recursion has no
-      # loop back-edges, and oversubscribing the cores makes the ticker
-      # fire: this is the check that the preemption trampoline and its
-      # resume path restore every register. Fails if no async preemption
-      # happened, since then it proved nothing.
-      - name: Async preemption
-        run: |
-          mkdir -p /tmp/async && cat > /tmp/async/main.sl <<'EOF'
-          fn fib(n: int) -> int {
-              if n < 2 {
-                  return n;
-              }
-              return fib(n - 1) + fib(n - 2);
-          }
-          fn work(n: int) -> int {
-              return fib(n);
-          }
-          let hs: [join[int]] = [];
-          let i = 0;
-          while i < 64 {
-              push(hs, spawn work(30));
-              i = i + 1;
-          }
-          let total = 0;
-          for h in hs {
-              let r = join_wait(h);
-              guard let v = r else { println("FAIL: a task panicked"); exit(1); }
-              total = total + v;
-          }
-          println(total);
-          EOF
-          ./slangc /tmp/async/main.sl -o /tmp/async/t
-          seen=0
-          for run in 1 2 3 4 5; do
-            out=$(SLANG_SCHED_STAT=1 SLANG_PREEMPT_QUANTUM_MS=1 \
-                  SLANG_PREEMPT_TICK_MS=1 /tmp/async/t 2>&1)
-            total=$(printf '%s\n' "$out" | grep -E '^[0-9]+$' || true)
-            n=$(printf '%s\n' "$out" | grep -o 'async_preempts=[0-9]*' | cut -d= -f2)
-            echo "run $run: total=$total async_preempts=$n"
-            if [ "$total" != "53250560" ]; then
-              echo "wrong result -- registers were not restored"; exit 1
-            fi
-            seen=$((seen + ${n:-0}))
-          done
-          if [ "$seen" -eq 0 ]; then
-            echo "no async preemption happened; this step proved nothing"; exit 1
-          fi
-
-      - name: Docs build
-        run: make docs
-
-  # The pg driver against a real Postgres, in cleartext and over TLS with
-  # a verified certificate. A separate job because it needs Docker, which
-  # the macOS runners lack; `make test` covers the driver everywhere
-  # against scripted fake servers. The image pull is setup, like
-  # apt-get -- the test itself talks only to localhost.
-  postgres:
-    name: postgres (${{ matrix.name }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: linux-x86_64
-            runner: ubuntu-24.04
-          - name: linux-arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config libssl-dev libsqlite3-dev zlib1g-dev
-
-      - name: Build slangc
-        run: make slangc
-
-      # One server as the Docker image ships it (SCRAM, no TLS), and one
-      # with TLS on, its certificate signed by a CA made here for
-      # localhost -- so the test can check verification against it.
-      - name: Start Postgres
-        run: |
-          mkdir -p /tmp/pgtls && cd /tmp/pgtls
-          openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key \
-            -out ca.crt -days 2 -subj "/CN=slang CI CA"
-          openssl req -newkey rsa:2048 -nodes -keyout server.key \
-            -out server.csr -subj "/CN=localhost"
-          printf 'subjectAltName=DNS:localhost\n' > ext.cnf
-          openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key \
-            -CAcreateserial -out server.crt -days 2 -extfile ext.cnf
-          chmod 644 server.key
-          # ONE line: inside bash -c a newline ends the command, and the
-          # cert options on a second line silently never reached postgres.
-          PGTLS_START='cp /certs/server.crt /certs/server.key /tmp/ && chown postgres /tmp/server.* && chmod 600 /tmp/server.key && exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/tmp/server.crt -c ssl_key_file=/tmp/server.key'
-          # Its Unix-domain socket is shared with the runner through a
-          # bind mount, for the socket check.
-          mkdir -p /tmp/pgsock && chmod 777 /tmp/pgsock
-          docker run -d --name pg -e POSTGRES_USER=slang \
-            -e POSTGRES_PASSWORD=secret -p 55432:5432 \
-            -v /tmp/pgsock:/var/run/postgresql postgres:16
-          docker run -d --name pgtls -e POSTGRES_USER=slang \
-            -e POSTGRES_PASSWORD=secret -p 55433:5432 \
-            -v /tmp/pgtls:/certs:ro --entrypoint bash postgres:16 -c \
-            "$PGTLS_START"
-          # Ready means accepting TCP on the MAPPED port, from the host:
-          # the image's init phase runs a server that listens only on a
-          # Unix socket, then restarts it.
-          for c in pg:55432 pgtls:55433; do
-            name=${c%%:*}; port=${c##*:}
-            ok=0
-            for i in $(seq 90); do
-              if docker exec $name pg_isready -U slang -h 127.0.0.1 >/dev/null 2>&1 &&
-                 (exec 3<>/dev/tcp/127.0.0.1/$port) 2>/dev/null; then
-                ok=1; break
-              fi
-              sleep 1
-            done
-            if [ $ok -ne 1 ]; then
-              echo "$name never became ready"; docker ps -a; docker logs $name; exit 1
-            fi
-          done
-          [ -S /tmp/pgsock/.s.PGSQL.5432 ] || { echo "no socket file"; ls -la /tmp/pgsock; exit 1; }
-
-      - name: Live test
-        env:
-          PG_URL: postgres://slang:secret@127.0.0.1:55432/slang
-          PG_TLS_URL: postgres://slang:secret@localhost:55433/slang?sslmode=require&sslrootcert=/tmp/pgtls/ca.crt
-          PG_SOCKET_URL: postgres://slang:secret@%2Ftmp%2Fpgsock/slang
-        run: ./slangc tests/live/postgres/main.sl --run
-
-      - name: Allocation budget (pg.pool_query)
-        env:
-          PG_URL: postgres://slang:secret@127.0.0.1:55432/slang
-        run: tests/live/pg_alloc_budget/run.sh
-
-  # The nats client against real nats-server instances: plain, with each
-  # kind of authentication, and over TLS with a verified certificate.
-  # `make test` covers the protocol and reconnection everywhere against
-  # a scripted server (tests/nats_reconnect).
-  nats:
-    name: nats (${{ matrix.name }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: linux-x86_64
-            runner: ubuntu-24.04
-          - name: linux-arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config libssl-dev libsqlite3-dev zlib1g-dev
-
-      - name: Build slangc
-        run: make slangc
-
-      - name: Start nats-server
-        run: |
-          mkdir -p /tmp/natstls && cd /tmp/natstls
-          openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key \
-            -out ca.crt -days 2 -subj "/CN=slang CI CA"
-          openssl req -newkey rsa:2048 -nodes -keyout server.key \
-            -out server.csr -subj "/CN=localhost"
-          printf 'subjectAltName=DNS:localhost\n' > ext.cnf
-          openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key \
-            -CAcreateserial -out server.crt -days 2 -extfile ext.cnf
-          chmod 644 server.key
-          cd "$GITHUB_WORKSPACE"
-          docker run -d --name n-plain -p 54222:4222 nats:2.10-alpine
-          docker run -d --name n-up -p 54223:4222 nats:2.10-alpine --user alice --pass s3cret
-          docker run -d --name n-tok -p 54224:4222 nats:2.10-alpine --auth tok123
-          docker run -d --name n-nk -p 54225:4222 \
-            -v "$GITHUB_WORKSPACE/tests/live/nats/nkey.conf:/nkey.conf:ro" nats:2.10-alpine -c /nkey.conf
-          docker run -d --name n-tls -p 54226:4222 -v /tmp/natstls:/certs:ro nats:2.10-alpine \
-            --tls --tlscert /certs/server.crt --tlskey /certs/server.key
-          for port in 54222 54223 54224 54225 54226; do
-            ok=0
-            for i in $(seq 60); do
-              if (exec 3<>/dev/tcp/127.0.0.1/$port) 2>/dev/null; then ok=1; break; fi
-              sleep 1
-            done
-            [ $ok -eq 1 ] || { echo "port $port never opened"; docker ps -a; exit 1; }
-          done
-
-      - name: Live test
-        env:
-          NATS_URL: nats://127.0.0.1:54222
-          NATS_USERPASS_URL: nats://alice:s3cret@127.0.0.1:54223
-          NATS_TOKEN_URL: nats://tok123@127.0.0.1:54224
-          NATS_NKEY_URL: nats://127.0.0.1:54225
-          NATS_TLS_URL: tls://localhost:54226
-          NATS_TLS_CA: /tmp/natstls/ca.crt
-        run: ./slangc tests/live/nats/main.sl --run
-
-  # The s3 client against an S3-compatible server that checks every SigV4
-  # signature (Zenko CloudServer). make test covers signing against AWS's
-  # published examples everywhere.
-  s3:
-    name: s3 (linux-x86_64)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config libssl-dev libsqlite3-dev zlib1g-dev
-
-      - name: Build slangc
-        run: make slangc
-
-      - name: Start an S3 server
-        run: |
-          docker run -d --name s3 -p 58000:8000 -e REMOTE_MANAGEMENT_DISABLE=1 \
-            -e SCALITY_ACCESS_KEY_ID=slangtest -e SCALITY_SECRET_ACCESS_KEY=slangtestsecret \
-            zenko/cloudserver:latest
-          ok=0
-          for i in $(seq 120); do
-            if curl -s -o /dev/null http://127.0.0.1:58000/; then ok=1; break; fi
-            sleep 1
-          done
-          [ $ok -eq 1 ] || { docker logs s3 | tail -30; exit 1; }
-
-      - name: Live test
-        env:
-          S3_ENDPOINT: http://127.0.0.1:58000
-        run: ./slangc tests/live/s3/main.sl --run
-
-  # The websocket client against the Autobahn TestSuite's fuzzing server:
-  # every client case (framing, fragmentation, UTF-8, close handling,
-  # limits, permessage-deflate), graded by the suite. make test covers the
-  # same behaviour against a scripted server everywhere.
   websocket:
-    name: websocket (linux-x86_64)
+    name: websocket ${{ matrix.thp }} ${{ matrix.n }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        n: [1, 2, 3, 4]
+        thp: [default, madvise]
     steps:
       - uses: actions/checkout@v4
+
+      - name: Machine
+        run: |
+          uname -r
+          nproc; free -m
+          grep -E "model name|cache size" /proc/cpuinfo | sort -u
+          for f in enabled defrag khugepaged/defrag; do
+            echo "thp $f: $(cat /sys/kernel/mm/transparent_hugepage/$f)"
+          done
+          cat /proc/sys/vm/overcommit_memory
+          docker version --format 'docker server {{.Server.Version}}'
+          docker info --format 'cgroup {{.CgroupVersion}} {{.CgroupDriver}}'
+
+      - name: THP to madvise
+        if: matrix.thp == 'madvise'
+        run: |
+          echo madvise | sudo tee /sys/kernel/mm/transparent_hugepage/enabled
+          echo madvise | sudo tee /sys/kernel/mm/transparent_hugepage/defrag
 
       - name: Install build dependencies
         run: |
@@ -361,80 +60,22 @@ jobs:
             sleep 1
           done
           [ $ok -eq 1 ] || { docker logs fuzzingserver | tail -30; exit 1; }
+          pid=$(docker inspect fuzzingserver -f '{{.State.Pid}}')
+          nohup sudo sh -c "while kill -0 $pid 2>/dev/null; do
+              echo \$(date +%T) \$(grep -E '^(Rss|AnonHugePages):' /proc/$pid/smaps_rollup | tr -s ' ' | tr '\n' ' ') \$(grep -E '^(Rss|VmHWM)' /proc/$pid/status | tr -s ' \t' ' ' | tr '\n' ' ')
+              sleep 3
+            done" > /tmp/mem.txt 2>&1 &
 
       - name: Live test
         run: |
           ./slangc tests/live/websocket/main.sl --run
           python3 tests/live/websocket/check.py /tmp/autobahn/clients/index.json
 
-      # The client only sees resets when the server dies; its own state and
-      # log are the only record of why.
-      - name: Fuzzing server diagnostics
-        if: failure()
+      - name: Fuzzing server memory
+        if: always()
         run: |
           docker inspect fuzzingserver --format \
-            'status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}}' || true
-          docker logs fuzzingserver 2>&1 | tail -80 || true
-          docker version --format 'docker server {{.Server.Version}}' || true
-          uname -r
-          free -m
-
-  # The mysql client against MySQL 8.4 (over verified TLS, and each
-  # authentication plugin without it) and MariaDB 11. make test covers
-  # the protocol's pure parts everywhere.
-  mysql:
-    name: mysql (linux-x86_64)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config libssl-dev libsqlite3-dev zlib1g-dev
-
-      - name: Build slangc
-        run: make slangc
-
-      - name: Start MySQL and MariaDB
-        run: |
-          mkdir -p /tmp/mytls && cd /tmp/mytls
-          openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key \
-            -out ca.crt -days 2 -subj "/CN=slang CI CA"
-          openssl req -newkey rsa:2048 -nodes -keyout server.key \
-            -out server.csr -subj "/CN=localhost"
-          printf 'subjectAltName=DNS:localhost\n' > ext.cnf
-          openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key \
-            -CAcreateserial -out server.crt -days 2 -extfile ext.cnf
-          chmod 644 server.key
-          cd "$GITHUB_WORKSPACE"
-          docker run -d --name my84 -p 53306:3306 -e MYSQL_ROOT_PASSWORD=rootpw \
-            -e MYSQL_DATABASE=slangtest -v /tmp/mytls:/certs:ro mysql:8.4 \
-            --mysql-native-password=ON --ssl-ca=/certs/ca.crt \
-            --ssl-cert=/certs/server.crt --ssl-key=/certs/server.key
-          docker run -d --name mdb11 -p 53307:3306 -e MARIADB_ROOT_PASSWORD=rootpw \
-            -e MARIADB_DATABASE=slangtest mariadb:11
-          ok=0
-          for i in $(seq 120); do
-            if docker exec my84 mysqladmin ping -uroot -prootpw --silent >/dev/null 2>&1 &&
-               docker exec mdb11 mariadb-admin ping -uroot -prootpw --silent >/dev/null 2>&1; then
-              ok=1; break
-            fi
-            sleep 2
-          done
-          [ $ok -eq 1 ] || { docker logs my84 | tail -30; docker logs mdb11 | tail -30; exit 1; }
-          sleep 5
-          docker exec -i my84 mysql -uroot -prootpw slangtest < tests/live/mysqldb/setup-mysql.sql
-          docker exec -i mdb11 mariadb -uroot -prootpw slangtest < tests/live/mysqldb/setup-mariadb.sql
-
-      - name: Live test
-        env:
-          MYSQL_URL: mysql://sha2:sha2-pw@localhost:53306/slangtest?sslmode=require&sslrootcert=/tmp/mytls/ca.crt
-          MYSQL_NATIVE_URL: mysql://native:native-pw@127.0.0.1:53306/slangtest
-          # without TLS: works once the TLS suite above has cached the password
-          MYSQL_SHA2_URL: mysql://sha2:sha2-pw@127.0.0.1:53306/slangtest
-          MYSQL_SHA256_URL: mysql://sha256:sha256-pw@127.0.0.1:53306/slangtest?allow_public_key_retrieval=true
-          MARIADB_URL: mysql://native:native-pw@127.0.0.1:53307/slangtest
-        run: ./slangc tests/live/mysqldb/main.sl --run
+            'status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}' || true
+          awk 'NR % 5 == 1' /tmp/mem.txt
+          tail -3 /tmp/mem.txt
+          sudo dmesg | grep -iE "oom|killed process" | tail -5 || true
