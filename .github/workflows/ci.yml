@@ -10,14 +10,14 @@ permissions:
 
 jobs:
   websocket:
-    name: websocket ${{ matrix.thp }} ${{ matrix.n }}
+    name: websocket ${{ matrix.gc }} ${{ matrix.n }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         n: [1, 2, 3, 4]
-        thp: [default, madvise]
+        gc: [default, max, major]
     steps:
       - uses: actions/checkout@v4
 
@@ -33,12 +33,6 @@ jobs:
           docker version --format 'docker server {{.Server.Version}}'
           docker info --format 'cgroup {{.CgroupVersion}} {{.CgroupDriver}}'
 
-      - name: THP to madvise
-        if: matrix.thp == 'madvise'
-        run: |
-          echo madvise | sudo tee /sys/kernel/mm/transparent_hugepage/enabled
-          echo madvise | sudo tee /sys/kernel/mm/transparent_hugepage/defrag
-
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -51,7 +45,12 @@ jobs:
       - name: Start the Autobahn fuzzing server
         run: |
           mkdir -p /tmp/autobahn
-          docker run -d --name fuzzingserver -p 9001:9001 \
+          case "${{ matrix.gc }}" in
+            max) gcenv="-e PYPY_GC_MAX=4GB" ;;
+            major) gcenv="-e PYPY_GC_MAJOR_COLLECT=1.3" ;;
+            *) gcenv="" ;;
+          esac
+          docker run -d --name fuzzingserver -p 9001:9001 $gcenv \
             -v "$GITHUB_WORKSPACE/tests/live/websocket:/config:ro" -v /tmp/autobahn:/reports \
             crossbario/autobahn-testsuite wstest -m fuzzingserver -s /config/fuzzingserver.json
           ok=0
