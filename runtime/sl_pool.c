@@ -882,6 +882,17 @@ static sl_pool_slot sl_pool_slots[SL_POOL_MAX_WORKERS];
  * occupant-table writes below entirely rather than indexing with a
  * meaningless value, the direct expression of that same scope
  * decision in code, not a workaround for it. */
+/* How stale the last network poll may get before a worker between two
+ * tasks looks at the reactor's set itself, without blocking. A worker
+ * that runs out of work already polls (sl_runq_spin), but one that never
+ * does -- a run queue that stays full -- would otherwise leave every
+ * readiness to the reactor thread, which then sat in epoll_wait and woke
+ * for each batch of events: on the PG bench (3 workers, c64) 4,800 wakes
+ * a second, 0.29 of the server's 0.66 context switches a request and 7.7
+ * of its ~61 us of CPU a request. Go has no such thread: an M that runs
+ * out of work polls, and sysmon does every 10 ms. */
+#define SL_NETPOLL_BUSY_NS 100000LL
+
 static void sl_worker_run_loop(long slot_idx) {
     /* When the running chain of runnext tasks began: a runnext task
      * inherits it as its own run_start_ns, so the chain as a whole gets
@@ -899,6 +910,16 @@ static void sl_worker_run_loop(long slot_idx) {
          * race this closes (Tier 11 plan). */
         sl_rt_gc_checkin();
         long long now = sl_rt_monotonic_ns();
+        if (sl_rt_netpoll_hook &&
+            now - atomic_load_explicit(&sl_rt_netpoll_last_ns,
+                                       memory_order_relaxed) >= SL_NETPOLL_BUSY_NS) {
+            /* What it finds goes onto the run queues, behind what is
+               there; it checks in again before it returns. */
+            sl_rt_preempt_disable();
+            sl_rt_netpoll_hook(0);
+            sl_rt_preempt_enable();
+            now = sl_rt_monotonic_ns();
+        }
         int inherited = 0;
         sl_task *t = sl_runnext_take(sl_rt_runnext_idx);
         if (t) {

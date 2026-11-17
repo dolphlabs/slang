@@ -118,7 +118,8 @@ static void sl_reactor_shard_count(unsigned shard, int wake) {
  * registrations, passes over every waiter, and reactor loop iterations
  * (tests/run_tests.sh, reactor work budget). */
 static _Atomic unsigned long long sl_reactor_stat_regs, sl_reactor_stat_scans,
-    sl_reactor_stat_loops, sl_reactor_stat_worker_polls;
+    sl_reactor_stat_loops, sl_reactor_stat_worker_polls,
+    sl_reactor_stat_thread_events;
 
 static void sl_reactor_stat_dump(void) {
     if (!sl_reactor_stat_enabled())
@@ -131,10 +132,12 @@ static void sl_reactor_stat_dump(void) {
                                       memory_order_relaxed);
     }
     fprintf(stderr, "slang-reactor-stat parks=%llu wakes=%llu registrations=%llu "
-            "scans=%llu loops=%llu worker_polls=%llu\n", parks, wakes,
+            "scans=%llu loops=%llu thread_events=%llu worker_polls=%llu\n",
+            parks, wakes,
             (unsigned long long)sl_reactor_stat_regs,
             (unsigned long long)sl_reactor_stat_scans,
             (unsigned long long)sl_reactor_stat_loops,
+            (unsigned long long)sl_reactor_stat_thread_events,
             (unsigned long long)sl_reactor_stat_worker_polls);
 }
 
@@ -803,7 +806,9 @@ static int sl_net_worker_poll(int block) {
         atomic_fetch_add_explicit(&sl_reactor_stat_worker_polls, 1,
                                   memory_order_relaxed);
     sl_reactor_resume_all(ready);
-    sl_reactor_expire_due(sl_now_ns());
+    now = sl_now_ns();
+    sl_reactor_expire_due(now);
+    atomic_store_explicit(&sl_rt_netpoll_last_ns, now, memory_order_relaxed);
     *slot = own_slot;
     atomic_store_explicit(&sl_poller_active, 0, memory_order_release);
     atomic_store_explicit(&sl_rt_gc_blocked, 0, memory_order_release);
@@ -833,11 +838,16 @@ static void *sl_reactor_thread(void *arg) {
                                       memory_order_relaxed);
         sl_reactor_expire_due(now);
 #if defined(SL_REACTOR_EPOLL)
-        /* A worker is polling in this thread's place (sl_net_worker_poll):
-           stay out of its way, and look again in a moment. Deadlines
-           come due on its watch, and when every worker is busy and none
-           polls, this thread takes the set back within one tick. */
-        if (atomic_load_explicit(&sl_poller_active, memory_order_acquire)) {
+        /* A worker is polling in this thread's place (sl_net_worker_poll),
+           or one did within the last tick -- workers between tasks poll
+           every SL_NETPOLL_BUSY_NS: stay out of their way, and look again
+           in a moment. Blocked in epoll_wait instead, this thread woke for
+           every batch of events the workers would have found anyway.
+           Deadlines come due on their watch, and when no worker has
+           polled for a tick this thread takes the set back. */
+        if (atomic_load_explicit(&sl_poller_active, memory_order_acquire) ||
+            now - atomic_load_explicit(&sl_rt_netpoll_last_ns,
+                                       memory_order_relaxed) < SL_REACTOR_TICK_NS) {
             struct timespec tick = {0, SL_REACTOR_TICK_NS};
             nanosleep(&tick, NULL);
             continue;
@@ -863,6 +873,10 @@ static void *sl_reactor_thread(void *arg) {
                            (int)((soonest + 999999LL) / 1000000LL));
 #endif
         if (n < 0) { if (errno == EINTR) continue; continue; }
+        if (n > 0 && sl_reactor_stat_enabled())
+            atomic_fetch_add_explicit(&sl_reactor_stat_thread_events,
+                                      (unsigned long long)n,
+                                      memory_order_relaxed);
         /* Tasks to resume, collected under their lists' locks and
            resumed after: a resume takes sl_gc_mu and a run-queue lock
            and may wake a worker, which no waiter should queue behind. */

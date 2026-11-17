@@ -485,6 +485,31 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
     request (a 16 MB nursery removed it with no CPU change, so not the
     cost), and context switches 0.72 vs Go's 0.30 a request -- the
     largest bucket, about 9 us of `schedule`, `epoll_wait` and `futex`.
+  - [x] **The reactor thread stays out of epoll_wait while workers poll**
+    (2026-11-17, perf/netpoll-busy-workers). Classifying the server's
+    context switches by kernel stack (`sched:sched_switch`, `summary` c64):
+    preemptions were level with Go's (0.28 vs 0.26 a request, the cores
+    are shared with Postgres), but slang slept in `epoll_wait` 0.285 times
+    a request to Go's 0.001, nearly all on one thread: the reactor thread,
+    4,800 wakes a second and 7.7 of the server's ~61 us of CPU a request.
+    It stepped aside only while a worker was mid-poll and otherwise sat in
+    epoll_wait, woken for every batch of events. Now a worker between two
+    tasks polls (non-blocking) once the last poll is 100 us old, and the
+    reactor thread sleeps in 2 ms ticks while any worker polled within
+    one, taking the set back only when none has. After: reactor thread
+    0.35 us a request, context switches 0.66 -> 0.39 (Go 0.33), epoll_wait
+    sleeps 0.001. ABBA x2 c64, medians of 4, dev -> branch: point 62.9 ->
+    56.6 us (22.1k -> 23.6k req/s, p99 8.2 -> 6.9 ms), summary 57.9 ->
+    55.3 (19.7k -> 20.4k, 9.1 -> 8.3), insert 59.5 -> 55.6 (18.5k ->
+    18.8k, 10.5 -> 10.0). Built on dev without the persistent-epoll
+    change (#533). RSS jumped to ~25 MB for both builds midway through the
+    set (13.4-14.2 before), the same for dev, so not this change: probably
+    the container's transparent hugepages; not chased. Cost found:
+    contended parked-registry locks on reactor_work_budget (4 workers)
+    rose 34-43 -> 191-227 for ~40300 waits, the resumes now coming from
+    worker threads; the mechanism was not traced. Its budget in
+    tests/run_tests.sh went from one per 250 waits to one per 100, still
+    a third of the single lock's 1413-1764.
 - [ ] **R4. Stopped workers help collect** *(fix-gc 1.4)*. Parallel sweep
   first. This is the main remaining cause of quote's idle cores.
   **Measured 2026-10-07, needs an owner decision before building.**

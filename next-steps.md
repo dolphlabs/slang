@@ -322,6 +322,11 @@ honors blob filtering. See
     (2026-11-17):** the fd-reuse fix landed (todo.md, 2026-11-06), and
     on the PG routes this is 1.8 `epoll_ctl` a request, part of a
     kernel-time gap to Go of 8-10 us a request (todo.md R3). Next.
+  - [x] the reactor thread's own wakeups: it sat in epoll_wait whenever no
+    worker was mid-poll and woke for every batch of events, 4,800 times a
+    second on the PG bench. Busy workers now poll between tasks every
+    100 us and the reactor thread defers to them (perf/netpoll-busy-workers;
+    numbers in todo.md R3).
   Fiber is still 1.3-1.7x ahead.
 
 ## 5. Per-request allocation in stdlib `http`
