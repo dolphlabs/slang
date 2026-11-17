@@ -465,6 +465,26 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
     for the owner. Same harness, slang vs Go 1.24.1 on `point`: c64
     ~88% of Go's req/s at 69 vs 59 us CPU per request, c512 level or
     ahead at 28 vs 45 MB peak RSS. CPU per request is the gap left here.
+  - [x] **Probe only connections idle 1 s or longer** (2026-11-17,
+    perf/pg-probe-recent; owner approved the trade-off). Same harness:
+    the CPU gap to Go is kernel time (user 22-25 vs 19-22 us a request,
+    kernel 42-47 vs 33-37 on summary and insert), and slang made 10.4
+    syscalls a request to Go's 5.9. One of those was the probe, a
+    `recv(MSG_PEEK)` that returns EAGAIN on every hot reuse. `Pool` gets
+    `alive_check_after` (default 1 s, pgxpool's; 0 probes every reuse).
+    recv calls 4.8 -> 3.76 a request on summary (Go 3.73). ABBA x2 c64,
+    medians of 4, CPU us/request dev -> branch: point 75.6 -> 62.2
+    (spreads 63-79 and 60-89), orders 108.7 -> 105.4, summary 61.6 ->
+    62.1, insert 60.7 -> 59.7; req/s within noise except point. A small
+    CPU win, inside the noise on summary and insert. The cost: a server
+    that ends a session within a second of its last use fails the one
+    statement that gets it (tests/postgres `scenario_pool_recent_reuse`
+    covers both sides of the threshold). Left: `epoll_ctl` re-arm 1.8 a
+    request (next-steps.md, deferred until the fd-reuse fix, which has
+    landed), `sched_yield` from the collector's rendezvous 1.0-1.4 a
+    request (a 16 MB nursery removed it with no CPU change, so not the
+    cost), and context switches 0.72 vs Go's 0.30 a request -- the
+    largest bucket, about 9 us of `schedule`, `epoll_wait` and `futex`.
 - [ ] **R4. Stopped workers help collect** *(fix-gc 1.4)*. Parallel sweep
   first. This is the main remaining cause of quote's idle cores.
   **Measured 2026-10-07, needs an owner decision before building.**
