@@ -441,12 +441,6 @@ static int sl_gc_test_mark_slots(void) {
  * across machines and must not decide whether this policy test passes. */
 static int sl_gc_test_nursery_adapt(void) {
     size_t base = SL_GC_NURSERY_BASE;
-    /* `synced` is when the rendezvous ended, `share` the averaged
-     * rendezvous share before the sample (1/1024ths), `votes` the shrink
-     * votes already cast. The plain cases have no rendezvous (synced ==
-     * start, share 0) and start one vote short, so a shrink lands in one
-     * call as it did before votes existed. */
-    int v = SL_GC_NURSERY_SHRINK_VOTES - 1;
     struct nursery_case {
         const char *name;
         size_t current;
@@ -454,59 +448,36 @@ static int sl_gc_test_nursery_adapt(void) {
         int fixed;
         long long previous_end;
         long long start;
-        long long synced;
         long long end;
         size_t live;
-        long long share;
-        int votes;
         size_t want;
-        int want_votes;
     } cases[] = {
-        {"growth", base, 4 * base, 0, 1000, 1150, 1150, 1200,
-         base / 4 + 1, 0, v, 2 * base, 0},
-        {"growth cap", 3 * base, 7 * base / 2, 0, 1000, 1150, 1150, 1200,
-         3 * base / 4 + 1, 0, v, 7 * base / 2, 0},
-        {"pause boundary", base, 4 * base, 0, 1000, 1140, 1140, 1160,
-         base / 4, 0, v, base, 0},
-        {"live boundary", base, 4 * base, 0, 1000, 1150, 1150, 1200,
-         base / 8, 0, v, base, 0},
-        {"hysteresis", 2 * base, 4 * base, 0, 1000, 1980, 1980, 2000,
-         base / 8, 0, v, 2 * base, 0},
-        {"shrink by pause", 4 * base, 4 * base, 0, 1000, 1990, 1990, 2000,
-         4 * base, 0, v, 2 * base, 0},
-        {"shrink by survival", 4 * base, 4 * base, 0, 1000, 1150, 1150, 1200,
-         base / 16, 0, v, 2 * base, 0},
-        {"base floor", base, 4 * base, 0, 1000, 1999, 1999, 2000,
-         0, 0, v, base, 0},
-        {"fixed nursery", 2 * base, 4 * base, 1, 1000, 1150, 1150, 1200,
-         base, 0, v, 2 * base, v},
-        {"first sample", base, 4 * base, 0, 0, 1000, 1000, 1200,
-         base, 0, v, base, v},
-        /* A shrink waits for its votes: the first of them changes nothing. */
-        {"shrink needs votes", 4 * base, 4 * base, 0, 1000, 1990, 1990, 2000,
-         4 * base, 0, 0, 4 * base, 1},
-        /* Pause a twelfth of the interval (under the eighth survivors
-         * need), mostly rendezvous, nothing live: grows. */
-        {"rendezvous growth", base, 4 * base, 0, 1000, 1920, 1990, 2000,
-         0, 1024, v, 2 * base, 0},
-        /* The same minor without the rendezvous stays put. */
-        {"no rendezvous no growth", base, 4 * base, 0, 1000, 1920, 1920, 2000,
-         0, 0, 0, base, 0},
-        /* A quarter-to-half rendezvous keeps a nursery that survival
-         * alone would shrink, and resets the votes. */
-        {"rendezvous hold", 4 * base, 4 * base, 0, 1000, 1950, 1970, 2000,
-         base / 16, 400, v, 4 * base, 0},
-        /* Below a quarter it shrinks as before. */
-        {"rendezvous released", 4 * base, 4 * base, 0, 1000, 1950, 1952, 2000,
-         base / 16, 100, v, 2 * base, 0},
+        {"growth", base, 4 * base, 0, 1000, 1150, 1200,
+         base / 4 + 1, 2 * base},
+        {"growth cap", 3 * base, 7 * base / 2, 0, 1000, 1150, 1200,
+         3 * base / 4 + 1, 7 * base / 2},
+        {"pause boundary", base, 4 * base, 0, 1000, 1140, 1160,
+         base / 4, base},
+        {"live boundary", base, 4 * base, 0, 1000, 1150, 1200,
+         base / 8, base},
+        {"hysteresis", 2 * base, 4 * base, 0, 1000, 1980, 2000,
+         base / 8, 2 * base},
+        {"shrink by pause", 4 * base, 4 * base, 0, 1000, 1990, 2000,
+         4 * base, 2 * base},
+        {"shrink by survival", 4 * base, 4 * base, 0, 1000, 1150, 1200,
+         base / 16, 2 * base},
+        {"base floor", base, 4 * base, 0, 1000, 1999, 2000,
+         0, base},
+        {"fixed nursery", 2 * base, 4 * base, 1, 1000, 1150, 1200,
+         base, 2 * base},
+        {"first sample", base, 4 * base, 0, 0, 1000, 1200,
+         base, base},
     };
     size_t saved_threshold = atomic_load_explicit(
         &sl_gc_nursery_threshold, memory_order_relaxed);
     size_t saved_maximum = sl_gc_nursery_max;
     int saved_fixed = sl_gc_nursery_fixed;
     long long saved_previous_end = sl_gc_minor_last_end_ns;
-    long long saved_share = sl_gc_rendezvous_share;
-    int saved_votes = sl_gc_nursery_shrink_votes;
     int bad = 0;
 
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
@@ -515,23 +486,13 @@ static int sl_gc_test_nursery_adapt(void) {
         sl_gc_nursery_max = cases[i].maximum;
         sl_gc_nursery_fixed = cases[i].fixed;
         sl_gc_minor_last_end_ns = cases[i].previous_end;
-        sl_gc_rendezvous_share = cases[i].share;
-        sl_gc_nursery_shrink_votes = cases[i].votes;
-        sl_gc_nursery_adapt(cases[i].start, cases[i].synced, cases[i].end,
-                            cases[i].live);
+        sl_gc_nursery_adapt(cases[i].start, cases[i].end, cases[i].live);
         size_t got = atomic_load_explicit(&sl_gc_nursery_threshold,
                                           memory_order_relaxed);
         if (got != cases[i].want) {
             fprintf(stderr,
                     "nursery adaptation %s: got %zu bytes, expected %zu\n",
                     cases[i].name, got, cases[i].want);
-            bad = 1;
-        }
-        if (sl_gc_nursery_shrink_votes != cases[i].want_votes) {
-            fprintf(stderr,
-                    "nursery adaptation %s: %d shrink votes, expected %d\n",
-                    cases[i].name, sl_gc_nursery_shrink_votes,
-                    cases[i].want_votes);
             bad = 1;
         }
     }
@@ -541,8 +502,6 @@ static int sl_gc_test_nursery_adapt(void) {
     sl_gc_nursery_max = saved_maximum;
     sl_gc_nursery_fixed = saved_fixed;
     sl_gc_minor_last_end_ns = saved_previous_end;
-    sl_gc_rendezvous_share = saved_share;
-    sl_gc_nursery_shrink_votes = saved_votes;
     return bad;
 }
 
