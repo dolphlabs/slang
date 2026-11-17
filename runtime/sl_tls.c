@@ -269,7 +269,10 @@ static sl_res_rawptr_str *sl_net_tls_dial_u(const char *host, int port,
         return sl_net_err_rawptr(dr->e);
     int fd = (int)dr->v;
     sl_res_rawptr_str *r = sl_tls_client_on_fd(fd, host, ctxv, u);
-    if (!r->ok) close(fd);
+    if (!r->ok) {
+        sl_reactor_forget(fd);
+        close(fd);
+    }
     return r;
 }
 
@@ -501,7 +504,10 @@ static void sl_net_tls_close(void *sslv) {
     int fd = SSL_get_fd(ssl);
     SSL_shutdown(ssl);
     SSL_free(ssl);
-    if (fd >= 0) close(fd);
+    if (fd >= 0) {
+        sl_reactor_forget(fd);
+        close(fd);
+    }
 }
 
 
@@ -780,12 +786,15 @@ static void sl_link_tls_free(sl_link *l) {
     }
     int last = --t->refs == 0;
     sl_link_tls_unlock(t);
-    if (l->fd != t->ssl_fd)
+    if (l->fd != t->ssl_fd) {
+        sl_reactor_forget(l->fd);
         close(l->fd);
+    }
     if (!last)
         return;
     sl_rt_preempt_disable();
     SSL_free(t->ssl);
+    sl_reactor_forget(t->ssl_fd);
     close(t->ssl_fd);
     pthread_mutex_destroy(&t->mu);
     free(t);

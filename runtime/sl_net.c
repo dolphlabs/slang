@@ -118,7 +118,8 @@ static void sl_reactor_shard_count(unsigned shard, int wake) {
  * registrations, passes over every waiter, and reactor loop iterations
  * (tests/run_tests.sh, reactor work budget). */
 static _Atomic unsigned long long sl_reactor_stat_regs, sl_reactor_stat_scans,
-    sl_reactor_stat_loops, sl_reactor_stat_worker_polls;
+    sl_reactor_stat_loops, sl_reactor_stat_worker_polls,
+    sl_reactor_stat_thread_events;
 
 static void sl_reactor_stat_dump(void) {
     if (!sl_reactor_stat_enabled())
@@ -131,10 +132,12 @@ static void sl_reactor_stat_dump(void) {
                                       memory_order_relaxed);
     }
     fprintf(stderr, "slang-reactor-stat parks=%llu wakes=%llu registrations=%llu "
-            "scans=%llu loops=%llu worker_polls=%llu\n", parks, wakes,
+            "scans=%llu loops=%llu thread_events=%llu worker_polls=%llu\n",
+            parks, wakes,
             (unsigned long long)sl_reactor_stat_regs,
             (unsigned long long)sl_reactor_stat_scans,
             (unsigned long long)sl_reactor_stat_loops,
+            (unsigned long long)sl_reactor_stat_thread_events,
             (unsigned long long)sl_reactor_stat_worker_polls);
 }
 
@@ -184,7 +187,38 @@ static sl_reactor_wq sl_reactor_wqs[SL_REACTOR_WQS] = {
 typedef struct sl_reactor_slot {
     sl_task *task;
     uint32_t gen;
+#if defined(SL_REACTOR_EPOLL)
+    /* A persistent fd's edge arrived with nobody waiting in this
+       direction: the next wait returns at once, for its caller to retry,
+       instead of parking for an edge that has already passed. */
+    uint8_t ready;
+    /* The READ slot only: SL_REACTOR_PERSIST_*, the fd's registration. */
+    uint8_t persist;
+#endif
 } sl_reactor_slot;
+
+#if defined(SL_REACTOR_EPOLL)
+/* A connected socket (accept, dial) is registered once, edge-triggered for
+ * both directions, the way Go's netpoller registers every fd, instead of
+ * one-shot and re-armed with an epoll_ctl on every wait: 1.8 of those a
+ * request on the PG routes (todo.md R3). An edge with no waiter sets the
+ * slot's `ready`, and an edge with one wakes it without a generation
+ * check, since any wake there is at worst spurious: every wait on such a
+ * fd is its caller's retry loop around a non-blocking call.
+ *
+ * Opt-in, because it needs every close of the fd to drop the registration
+ * first (sl_reactor_forget) -- else a reused number looks registered and
+ * its first wait parks for an edge that is never asked for. The runtime
+ * closes connected sockets in a handful of places that all do; pipes,
+ * eventfds, stdin, a listener and a socket still connecting are closed
+ * raw in many more, so they keep the one-shot registration. The forget is
+ * an EPOLL_CTL_DEL, not left to close(2): sockets are not close-on-exec,
+ * and while a spawned child holds the file open the registration outlives
+ * the parent's fd. */
+#define SL_REACTOR_PERSIST_NONE   0
+#define SL_REACTOR_PERSIST_MARKED 1  /* registered at its first wait */
+#define SL_REACTOR_PERSIST_ADDED  2
+#endif
 #define SL_REACTOR_SLOT_CHUNK 4096
 #define SL_REACTOR_SLOT_CHUNKS 16384
 static sl_reactor_slot *_Atomic sl_reactor_slot_chunks[SL_REACTOR_SLOT_CHUNKS];
@@ -205,6 +239,8 @@ static pthread_mutex_t sl_reactor_slot_grow_mu = PTHREAD_MUTEX_INITIALIZER;
 #define SL_REACTOR_GEN_MASK 0x7fffu
 #define SL_REACTOR_READ_GEN_SHIFT 33
 #define SL_REACTOR_WRITE_GEN_SHIFT 48
+/* A persistent registration's event: fd only, no generations. */
+#define SL_REACTOR_TAG_PERSIST (1ULL << 32)
 #endif
 
 /* The slot for (fd, rw), or NULL when fd is out of range or, without
@@ -511,7 +547,87 @@ static void sl_reactor_arm(int fd) {
         atomic_fetch_add_explicit(&sl_reactor_stat_regs, sl_reactor_regs,
                                   memory_order_relaxed);
 }
+
+/* A marked fd's one registration, at its first wait, under the fd's list
+ * lock. ADD reports readiness the fd already has, so an edge that came
+ * before it is not lost. EEXIST is a one-shot registration from before the
+ * mark (a dial's connect wait): MOD replaces it. Should both fail the fd
+ * goes back to one-shot, which works for anything epoll accepts. */
+static void sl_reactor_register_persistent(int fd, sl_reactor_slot *rs) {
+    struct epoll_event ev;
+    ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
+    ev.data.u64 = SL_REACTOR_TAG_FD | SL_REACTOR_TAG_PERSIST |
+                  (uint64_t)(uint32_t)fd;
+    int regs = 1;
+    int rc = epoll_ctl(sl_reactor_fd, EPOLL_CTL_ADD, fd, &ev);
+    if (rc != 0 && errno == EEXIST) {
+        rc = epoll_ctl(sl_reactor_fd, EPOLL_CTL_MOD, fd, &ev);
+        regs = 2;
+    }
+    if (sl_reactor_stat_enabled())
+        atomic_fetch_add_explicit(&sl_reactor_stat_regs, regs,
+                                  memory_order_relaxed);
+    if (rc == 0) {
+        rs->persist = SL_REACTOR_PERSIST_ADDED;
+        return;
+    }
+    rs->persist = SL_REACTOR_PERSIST_NONE;
+    sl_reactor_arm(fd);
+}
 #endif
+
+/* fd is a connected socket whose every close goes through
+ * sl_reactor_forget: register it persistently at its first wait. A no-op
+ * on kqueue, which keeps one-shot knotes. */
+static void sl_reactor_mark_persistent(int fd) {
+#if defined(SL_REACTOR_EPOLL)
+    if (fd < 0)
+        return;
+    sl_rt_preempt_disable();
+    sl_reactor_wq *q = &sl_reactor_wqs[sl_reactor_wq_for(fd)];
+    pthread_mutex_lock(&q->mu);
+    sl_reactor_slot *rd = sl_reactor_slot_at(fd, SL_REACTOR_READ, 1);
+    sl_reactor_slot *wr = sl_reactor_slot_at(fd, SL_REACTOR_WRITE, 1);
+    if (rd && wr) {
+        rd->persist = SL_REACTOR_PERSIST_MARKED;
+        rd->ready = 0;
+        wr->ready = 0;
+    }
+    pthread_mutex_unlock(&q->mu);
+    sl_rt_preempt_enable();
+#else
+    (void)fd;
+#endif
+}
+
+/* Before close(2) of any fd that may have been marked: drops its
+ * persistent registration and state, so the number's next owner starts
+ * clean. Under the list lock, so an event already harvested for the old
+ * registration finds the fd no longer ADDED and is ignored. Cheap for a
+ * fd never marked: one lock, no syscall. */
+static void sl_reactor_forget(int fd) {
+#if defined(SL_REACTOR_EPOLL)
+    if (fd < 0)
+        return;
+    sl_rt_preempt_disable();
+    sl_reactor_wq *q = &sl_reactor_wqs[sl_reactor_wq_for(fd)];
+    pthread_mutex_lock(&q->mu);
+    sl_reactor_slot *rd = sl_reactor_slot_at(fd, SL_REACTOR_READ, 0);
+    sl_reactor_slot *wr = sl_reactor_slot_at(fd, SL_REACTOR_WRITE, 0);
+    if (rd) {
+        if (rd->persist == SL_REACTOR_PERSIST_ADDED)
+            epoll_ctl(sl_reactor_fd, EPOLL_CTL_DEL, fd, NULL);
+        rd->persist = SL_REACTOR_PERSIST_NONE;
+        rd->ready = 0;
+    }
+    if (wr)
+        wr->ready = 0;
+    pthread_mutex_unlock(&q->mu);
+    sl_rt_preempt_enable();
+#else
+    (void)fd;
+#endif
+}
 
 static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
                                  sl_until deadline) {
@@ -537,6 +653,18 @@ static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
 #if defined(SL_REACTOR_KQUEUE)
     uint32_t gen = ++slot->gen;
 #else
+    sl_reactor_slot *rs = rw == SL_REACTOR_READ
+                              ? slot
+                              : sl_reactor_slot_at(fd, SL_REACTOR_READ, 1);
+    int persist = rs && rs->persist != SL_REACTOR_PERSIST_NONE;
+    if (persist && slot->ready) {
+        /* An edge came since the caller's last try: no park, no syscall;
+           the caller tries again. */
+        slot->ready = 0;
+        pthread_mutex_unlock(&wq->mu);
+        sl_rt_preempt_enable();
+        return 0;
+    }
     ++slot->gen;
 #endif
     slot->task = sl_reactor_self;
@@ -560,7 +688,10 @@ static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
         atomic_fetch_add_explicit(&sl_reactor_stat_regs, 1,
                                   memory_order_relaxed);
 #else
-    sl_reactor_arm(fd);
+    if (!persist)
+        sl_reactor_arm(fd);
+    else if (rs->persist == SL_REACTOR_PERSIST_MARKED)
+        sl_reactor_register_persistent(fd, rs);
 #endif
     /* After EV_ADD, before parking, and after this waiter is on its
        list (see sl_reactor_wake_at for the ordering): the reactor must
@@ -632,6 +763,28 @@ static void sl_reactor_take_slot(sl_reactor_wq *q, int fd, int rw,
     *ready = t;
 }
 
+#if defined(SL_REACTOR_EPOLL)
+/* A persistent fd's edge in direction rw: wakes its waiter, whoever that
+ * is now, or, with none, leaves `ready` for the next wait. Under the
+ * list's lock. */
+static void sl_reactor_take_edge(sl_reactor_wq *q, int fd, int rw,
+                                 sl_task **ready) {
+    sl_reactor_slot *slot = sl_reactor_slot_at(fd, rw, 0);
+    if (!slot)
+        return;
+    sl_task *t = slot->task;
+    if (!t || !t->on_wq) {
+        slot->task = NULL;
+        slot->ready = 1;
+        return;
+    }
+    slot->task = NULL;
+    sl_reactor_wq_unlink(q, t);
+    t->next = *ready;
+    *ready = t;
+}
+#endif
+
 /* The tasks `events` (n of them, from this reactor's kqueue or epoll
  * set) make ready, onto `ready`: shared by the reactor thread and a
  * worker polling in its place (sl_net_worker_poll). */
@@ -683,6 +836,20 @@ static void sl_reactor_take_events(struct epoll_event *events, int n, sl_task **
         /* HUP and ERR are reported whatever was asked for, and end both
            directions. */
         uint32_t ev_mask = events[i].events;
+        if (ev_tag & SL_REACTOR_TAG_PERSIST) {
+            /* Only while the fd is still registered: one closed (and
+               forgotten) after this batch was harvested may already be
+               another fd's number. */
+            sl_reactor_slot *rs = sl_reactor_slot_at(ev_fd, SL_REACTOR_READ, 0);
+            if (rs && rs->persist == SL_REACTOR_PERSIST_ADDED) {
+                if (ev_mask & (EPOLLIN | EPOLLHUP | EPOLLERR))
+                    sl_reactor_take_edge(q, ev_fd, SL_REACTOR_READ, &ready);
+                if (ev_mask & (EPOLLOUT | EPOLLHUP | EPOLLERR))
+                    sl_reactor_take_edge(q, ev_fd, SL_REACTOR_WRITE, &ready);
+            }
+            pthread_mutex_unlock(&q->mu);
+            continue;
+        }
         if (ev_mask & (EPOLLIN | EPOLLHUP | EPOLLERR))
             sl_reactor_take_slot(q, ev_fd, SL_REACTOR_READ,
                                  (uint32_t)(ev_tag >> SL_REACTOR_READ_GEN_SHIFT) &
@@ -803,7 +970,9 @@ static int sl_net_worker_poll(int block) {
         atomic_fetch_add_explicit(&sl_reactor_stat_worker_polls, 1,
                                   memory_order_relaxed);
     sl_reactor_resume_all(ready);
-    sl_reactor_expire_due(sl_now_ns());
+    now = sl_now_ns();
+    sl_reactor_expire_due(now);
+    atomic_store_explicit(&sl_rt_netpoll_last_ns, now, memory_order_relaxed);
     *slot = own_slot;
     atomic_store_explicit(&sl_poller_active, 0, memory_order_release);
     atomic_store_explicit(&sl_rt_gc_blocked, 0, memory_order_release);
@@ -833,11 +1002,16 @@ static void *sl_reactor_thread(void *arg) {
                                       memory_order_relaxed);
         sl_reactor_expire_due(now);
 #if defined(SL_REACTOR_EPOLL)
-        /* A worker is polling in this thread's place (sl_net_worker_poll):
-           stay out of its way, and look again in a moment. Deadlines
-           come due on its watch, and when every worker is busy and none
-           polls, this thread takes the set back within one tick. */
-        if (atomic_load_explicit(&sl_poller_active, memory_order_acquire)) {
+        /* A worker is polling in this thread's place (sl_net_worker_poll),
+           or one did within the last tick -- workers between tasks poll
+           every SL_NETPOLL_BUSY_NS: stay out of their way, and look again
+           in a moment. Blocked in epoll_wait instead, this thread woke for
+           every batch of events the workers would have found anyway.
+           Deadlines come due on their watch, and when no worker has
+           polled for a tick this thread takes the set back. */
+        if (atomic_load_explicit(&sl_poller_active, memory_order_acquire) ||
+            now - atomic_load_explicit(&sl_rt_netpoll_last_ns,
+                                       memory_order_relaxed) < SL_REACTOR_TICK_NS) {
             struct timespec tick = {0, SL_REACTOR_TICK_NS};
             nanosleep(&tick, NULL);
             continue;
@@ -863,6 +1037,10 @@ static void *sl_reactor_thread(void *arg) {
                            (int)((soonest + 999999LL) / 1000000LL));
 #endif
         if (n < 0) { if (errno == EINTR) continue; continue; }
+        if (n > 0 && sl_reactor_stat_enabled())
+            atomic_fetch_add_explicit(&sl_reactor_stat_thread_events,
+                                      (unsigned long long)n,
+                                      memory_order_relaxed);
         /* Tasks to resume, collected under their lists' locks and
            resumed after: a resume takes sl_gc_mu and a run-queue lock
            and may wake a worker, which no waiter should queue behind. */
@@ -1413,6 +1591,7 @@ static int sl_reactor_eventfd(void) {
 #endif
 
 static void sl_reactor_start(void) {
+    sl_rt_fd_forget_hook = sl_reactor_forget;
 #if defined(SL_REACTOR_KQUEUE)
     sl_reactor_fd = kqueue();
     if (sl_reactor_fd < 0) {
@@ -1694,6 +1873,7 @@ static sl_res_i32_str *sl_net_accept(int lfd) {
         int cfd = accept(lfd, NULL, NULL);
         if (cfd >= 0) {
             sl_net_set_nonblocking(cfd);
+            sl_reactor_mark_persistent(cfd);
             return sl_net_ok_i32((int32_t)cfd);
         }
         if (errno != EAGAIN && errno != EWOULDBLOCK)
@@ -1716,8 +1896,10 @@ static int sl_net_connect_addr(struct sockaddr *addr, socklen_t alen,
     int fd = socket(family, SOCK_STREAM, 0);
     if (fd < 0) { *err = errno; return -1; }
     sl_net_set_nonblocking(fd);
-    if (connect(fd, addr, alen) == 0)
+    if (connect(fd, addr, alen) == 0) {
+        sl_reactor_mark_persistent(fd);
         return fd;                  /* connected immediately -- localhost */
+    }
     /* EAGAIN: a Unix-domain listener whose backlog is full (Linux) */
     if (errno != EINPROGRESS && errno != EAGAIN) {
         *err = errno; close(fd); return -1;
@@ -1730,6 +1912,7 @@ static int sl_net_connect_addr(struct sockaddr *addr, socklen_t alen,
         standard non-blocking-connect idiom: disambiguate write-readiness
         via SO_ERROR rather than inspecting which filter fired */
     if (so_err != 0) { *err = so_err; close(fd); return -1; }
+    sl_reactor_mark_persistent(fd);
     return fd;
 }
 
@@ -2012,6 +2195,7 @@ static void sl_net_close(int fd) {
     sl_rt_preempt_disable();
     sl_task *ready = NULL;
     sl_reactor_take_closed(fd, &ready);
+    sl_reactor_forget(fd);
     close(fd);
     sl_reactor_resume_all(ready);
     sl_rt_preempt_enable();
@@ -2138,6 +2322,7 @@ static sl_res_link_fault sl_link_accept(sl_link *ln, sl_until u) {
         int cfd = accept(ln->fd, NULL, NULL);
         if (cfd >= 0) {
             sl_net_set_nonblocking(cfd);
+            sl_reactor_mark_persistent(cfd);
             return sl_link_ok_link(sl_link_from_fd(cfd));
         }
         if (errno != EAGAIN && errno != EWOULDBLOCK)
@@ -2168,8 +2353,10 @@ static sl_res_link_fault sl_link_dial(const char *host, long long port,
     sl_net_set_nonblocking(fd);
     int cres = connect(fd, res->ai_addr, res->ai_addrlen);
     freeaddrinfo(res);
-    if (cres == 0)
+    if (cres == 0) {
+        sl_reactor_mark_persistent(fd);
         return sl_link_ok_link(sl_link_from_fd(fd));
+    }
     if (errno != EINPROGRESS) {
         int e = errno;
         close(fd);
@@ -2191,6 +2378,7 @@ static sl_res_link_fault sl_link_dial(const char *host, long long port,
         close(fd);
         return sl_link_err_link(sl_link_fault_op("connect", so_err));
     }
+    sl_reactor_mark_persistent(fd);
     return sl_link_ok_link(sl_link_from_fd(fd));
 }
 
@@ -2253,6 +2441,7 @@ static sl_res_link_fault sl_link_split(sl_link *l) {
         return sl_link_err_link(sl_link_fault_op("split", errno));
     /* O_NONBLOCK belongs to the open file description, which the dup
        shares, so the writer is non-blocking already. */
+    sl_reactor_mark_persistent(d);
     sl_link w = sl_link_from_fd(d);
     w.role = SL_LINK_WRITER;
     if (l->tls)

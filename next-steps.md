@@ -310,7 +310,7 @@ honors blob filtering. See
     `reactor_work_budget` fell from 1413-1764 to 72-96 per ~40300 waits
     and futex calls per request from 0.469 to 0.408; plain slang, paired
     by round, +7% rps at c=256 (5 of 6 rounds), +1% at c=50 (noise).
-  - [ ] the EPOLLONESHOT re-arm, one `epoll_ctl` per wait (Go registers
+  - [x] the EPOLLONESHOT re-arm, one `epoll_ctl` per wait (Go registers
     once, edge-triggered). **Deferred (2026-10-27):** measured at
     6.5-6.8% of a 4-worker plain server's CPU (perf, user and kernel,
     c=50), so at most ~7% per request, less in rps while workers are not
@@ -322,6 +322,11 @@ honors blob filtering. See
     (2026-11-17):** the fd-reuse fix landed (todo.md, 2026-11-06), and
     on the PG routes this is 1.8 `epoll_ctl` a request, part of a
     kernel-time gap to Go of 8-10 us a request (todo.md R3). Next.
+  - [x] the reactor thread's own wakeups: it sat in epoll_wait whenever no
+    worker was mid-poll and woke for every batch of events, 4,800 times a
+    second on the PG bench. Busy workers now poll between tasks every
+    100 us and the reactor thread defers to them (perf/netpoll-busy-workers;
+    numbers in todo.md R3).
   Fiber is still 1.3-1.7x ahead.
 
 ## 5. Per-request allocation in stdlib `http`

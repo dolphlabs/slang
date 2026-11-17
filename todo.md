@@ -1,5 +1,27 @@
 # todo
 
+- [x] **A safepoint record was published before its root count
+  (2026-11-17, fix/gc-safepoint-publish-order).** The PG bench server
+  (dev 156c970, Linux container, c64 `insert`) died with SIGSEGV twice in
+  ~160 runs of 8-10 s, about once in 2M requests. The core: a worker
+  helping a minor (`sl_gc_ack_and_wait` -> `sl_gc_mark_task`) read a
+  task's roots off the end of its 64 KB stack, from the record at the top
+  of its chain, in `pg.to_ready`'s live frame: `prev` and `roots` right,
+  `nroots` an 8-byte pointer of stale stack. The task's `async_orig_pc`
+  was `pg_to_ready+0x1b1`, between gcc's store of `t->safepoint_top`
+  (+0x1ad) and of `sp->nroots` (+0x1b7): `sl_rt_safepoint_enter_s` used
+  plain stores, and with sl_task and sl_safepoint unable to alias, gcc
+  sank the count below the publish. An async preemption (the collector's
+  stop signal, or the ticker's) stops a task at any instruction, and the
+  collector walks a preempted task's chain. Fixed with
+  `atomic_signal_fence` before the publish and after the pop (no
+  instruction emitted; compiler ordering only). The window is two
+  instructions, so the test reads the compiled code:
+  tests/gc_safepoint_publish/check.py found 59 such records across
+  gc_safepoint_publish, postgres, http_client_pool and the bench api on
+  dev (pg, http, the main task) and 0 with the fix. x86-64 Linux only;
+  clang on macOS was not checked.
+
 - [ ] **`&xs[i]` on a list of value structs fails in the C compiler (found
   2026-11-10, feat/decimal-package; not fixed).** Borrowing an element
   emits `&(({ ... sl_arr_get(...) }))`, the address of a statement
@@ -485,6 +507,45 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
     request (a 16 MB nursery removed it with no CPU change, so not the
     cost), and context switches 0.72 vs Go's 0.30 a request -- the
     largest bucket, about 9 us of `schedule`, `epoll_wait` and `futex`.
+  - [x] **The reactor thread stays out of epoll_wait while workers poll**
+    (2026-11-17, perf/netpoll-busy-workers). Classifying the server's
+    context switches by kernel stack (`sched:sched_switch`, `summary` c64):
+    preemptions were level with Go's (0.28 vs 0.26 a request, the cores
+    are shared with Postgres), but slang slept in `epoll_wait` 0.285 times
+    a request to Go's 0.001, nearly all on one thread: the reactor thread,
+    4,800 wakes a second and 7.7 of the server's ~61 us of CPU a request.
+    It stepped aside only while a worker was mid-poll and otherwise sat in
+    epoll_wait, woken for every batch of events. Now a worker between two
+    tasks polls (non-blocking) once the last poll is 100 us old, and the
+    reactor thread sleeps in 2 ms ticks while any worker polled within
+    one, taking the set back only when none has. After: reactor thread
+    0.35 us a request, context switches 0.66 -> 0.39 (Go 0.33), epoll_wait
+    sleeps 0.001. ABBA x2 c64, medians of 4, dev -> branch: point 62.9 ->
+    56.6 us (22.1k -> 23.6k req/s, p99 8.2 -> 6.9 ms), summary 57.9 ->
+    55.3 (19.7k -> 20.4k, 9.1 -> 8.3), insert 59.5 -> 55.6 (18.5k ->
+    18.8k, 10.5 -> 10.0). Built on dev without the persistent-epoll
+    change (#533). RSS jumped to ~25 MB for both builds midway through the
+    set (13.4-14.2 before), the same for dev, so not this change: probably
+    the container's transparent hugepages; not chased. Cost found:
+    contended parked-registry locks on reactor_work_budget (4 workers)
+    rose 34-43 -> 191-227 for ~40300 waits, the resumes now coming from
+    worker threads; the mechanism was not traced. Its budget in
+    tests/run_tests.sh went from one per 250 waits to one per 100, still
+    a third of the single lock's 1413-1764.
+  - **Where the PG gap stands (2026-11-17)**, with #533, #534 and #535
+    merged locally, against Go 1.24 on the same harness (ABBA, c64,
+    medians of 4): point 23.1k vs 23.7k req/s (56.0 vs 55.1 us, p99 7.8
+    vs 9.2 ms), orders 13.6k vs 14.8k (95.6 vs 87.6, 11.7 vs 14.1),
+    summary 20.0k vs 21.0k (54.2 vs 52.3, 8.8 vs 11.2), insert 19.4k vs
+    20.0k (53.0 vs 50.8, 10.0 vs 15.1). orders is the largest gap left;
+    its user time is spread over allocation (~8% of samples), JSON
+    string encoding (~4%), row decoding and `sl_rt_maybe_yield_t` (3.5%,
+    ~300 brackets a request). Tried and dropped: forcing
+    `sl_rt_maybe_yield_t` inline (all 686 call sites gone, binary 18 KB
+    smaller) measured 103.4 vs 103.3 us on orders over 8 ABBA runs each,
+    and no change on point. The collector's `sched_yield` (1.3-1.5 a
+    request) is left: a 16 MB nursery removed nearly all of them with
+    no CPU change.
 - [ ] **R4. Stopped workers help collect** *(fix-gc 1.4)*. Parallel sweep
   first. This is the main remaining cause of quote's idle cores.
   **Measured 2026-10-07, needs an owner decision before building.**

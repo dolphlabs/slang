@@ -752,13 +752,14 @@ done
 # spawn_join_local: joined spawns that wake no worker, preempted between
 # the spawn and the join, must still run (sl_task_submit_copy_joined).
 # reactor_duplex: a read and a write parked on one fd, each re-armed by
-# whichever thread handles the other's event.
+# whichever thread handles the other's event. gc_safepoint_publish: loops
+# of calls with roots, preempted with their records half-pushed.
 echo "--- preemption guards (forced 1 ms preemption, 16KB nursery) ---"
 pg_bad=0
 for name in gc_preempt_derived gc_preempt_derived gc_preempt_derived \
             net_reactor_shards net_reactor_shards net_reactor_shards \
             reactor_nudges reactor_nudges spawn_join_local spawn_join_local \
-            reactor_duplex net_dns_records; do
+            reactor_duplex net_dns_records gc_safepoint_publish; do
     out="/tmp/sl_preempt_${name}.out"
     if ! SLANG_WORKERS=4 SLANG_GC_NURSERY_KB=16 SLANG_PREEMPT_QUANTUM_MS=1 \
             SLANG_PREEMPT_TICK_MS=1 ./slangc "tests/$name/main.sl" --run \
@@ -771,6 +772,28 @@ for name in gc_preempt_derived gc_preempt_derived gc_preempt_derived \
     fi
 done
 [ "$pg_bad" -eq 0 ] && echo "PASS preemption guards"
+
+# ---- safepoint record order ------------------------------------------
+# A call's safepoint record must be complete before the task's chain
+# points at it: an async preemption can stop a task between any two
+# instructions, and the collector walks the chain of every preempted
+# task. gcc sank the root-count store below the publish in 59 places
+# across these programs, and a bench server crashed in one of them once
+# in ~2M requests (SIGSEGV in sl_gc_mark_task). The window is two
+# instructions, too narrow to hit on demand, so this checks the compiled
+# code instead (tests/gc_safepoint_publish/check.py). x86-64 Linux with
+# GNU objdump only: the check reads gcc's AT&T disassembly.
+if [ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ] &&
+   command -v objdump >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+    echo "--- safepoint record order (x86-64 disassembly) ---"
+    if ! python3 tests/gc_safepoint_publish/check.py ./slangc \
+            tests/gc_safepoint_publish/main.sl tests/postgres/main.sl \
+            tests/http_client_pool/main.sl bench/suite/api/slang/main.sl; then
+        fail=1
+    fi
+else
+    echo "SKIP safepoint record order (needs x86-64 Linux, objdump, python3)"
+fi
 
 # ---- GC at a tiny threshold ------------------------------------------
 # A rooting bug -- a live object held only where no safepoint knows about
@@ -853,7 +876,7 @@ for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc
             gc_promotion_budget gc_chan_promotion_budget \
             value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks gc_skip_queued \
             spawn_join_local spawn_call_args link_tls link_split fn_value_shadows_function select_send_escapes \
-            sched_idle_wakes json_wide; do
+            sched_idle_wakes json_wide gc_safepoint_publish; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_verify_minor_${name}.out"
     err="/tmp/sl_verify_minor_${name}.err"
@@ -1014,8 +1037,11 @@ fi
 # deadline on every receive. Each wait used to be two epoll_ctl calls (ADD,
 # failing with EEXIST, then MOD), and the reactor passed over all of its
 # waiters before and after every batch of events. Budgets: at most 1.2
-# registrations per wait, and passes over the waiters on at most a tenth
-# of the reactor's iterations (none are due here).
+# registrations per wait (kqueue's one-shot knotes), and passes over the
+# waiters on at most a tenth of the reactor's iterations (none are due
+# here). On Linux a connected socket is registered once, edge-triggered,
+# not re-armed per wait: 1400 registrations for 40266 waits, 40875 when
+# every wait re-armed. Budget there: one per 20 waits.
 echo "--- reactor work budget (SLANG_REACTOR_STAT) ---"
 rwb_line=$(SLANG_WORKERS=2 SLANG_REACTOR_STAT=1 ./slangc tests/reactor_work_budget/main.sl \
            --run 2>&1 >/dev/null | grep -o 'parks=.*loops=[0-9]*')
@@ -1030,6 +1056,9 @@ if [ -z "$rwb_parks" ] || [ -z "$rwb_regs" ] || [ -z "$rwb_scans" ] || [ -z "$rw
 elif [ $((rwb_regs * 10)) -gt $((rwb_parks * 12)) ]; then
     echo "FAIL reactor work budget: $rwb_regs registrations for $rwb_parks waits, budget 1.2 each"
     fail=1
+elif [ "$(uname -s)" = Linux ] && [ $((rwb_regs * 20)) -gt "$rwb_parks" ]; then
+    echo "FAIL reactor work budget: $rwb_regs registrations for $rwb_parks waits, budget one per 20 (persistent epoll)"
+    fail=1
 elif [ $((rwb_scans * 10)) -gt "$rwb_loops" ]; then
     echo "FAIL reactor work budget: $rwb_scans waiter passes in $rwb_loops reactor loops, budget a tenth"
     fail=1
@@ -1041,21 +1070,29 @@ fi
 # waking. Measured 619 reactor loops and 964 worker polls for 40297 waits;
 # without worker polling the reactor looped once per 2-3 waits. Budget:
 # at most one reactor loop per 4 waits, and worker polls happen at all.
-# Linux only: kqueue keeps the reactor thread.
+# Linux only: kqueue keeps the reactor thread. And the reactor thread
+# itself stays out of epoll_wait while workers poll (busy workers do,
+# between tasks, every 100 us): it harvested 3927-29504 events for
+# ~40280 waits when it sat in epoll_wait whenever no worker was mid-poll,
+# 10-29 since. Budget: one event per 200 waits.
 if [ "$(uname -s)" = Linux ]; then
     rwp_line=$(SLANG_WORKERS=4 SLANG_REACTOR_STAT=1 ./slangc tests/reactor_work_budget/main.sl \
                --run 2>&1 >/dev/null | grep -o 'parks=.*worker_polls=[0-9]*')
     rwp_parks=$(echo "$rwp_line" | sed -n 's/^parks=\([0-9]*\).*/\1/p')
     rwp_loops=$(echo "$rwp_line" | sed -n 's/.*loops=\([0-9]*\).*/\1/p')
     rwp_polls=$(echo "$rwp_line" | sed -n 's/.*worker_polls=\([0-9]*\)$/\1/p')
-    if [ -z "$rwp_parks" ] || [ -z "$rwp_loops" ] || [ -z "$rwp_polls" ]; then
+    rwp_events=$(echo "$rwp_line" | sed -n 's/.*thread_events=\([0-9]*\).*/\1/p')
+    if [ -z "$rwp_parks" ] || [ -z "$rwp_loops" ] || [ -z "$rwp_polls" ] || [ -z "$rwp_events" ]; then
         echo "FAIL worker polling (no slang-reactor-stat line: $rwp_line)"
         fail=1
     elif [ "$rwp_polls" -eq 0 ] || [ $((rwp_loops * 4)) -gt "$rwp_parks" ]; then
         echo "FAIL worker polling: $rwp_loops reactor loops and $rwp_polls worker polls for $rwp_parks waits"
         fail=1
+    elif [ $((rwp_events * 200)) -gt "$rwp_parks" ]; then
+        echo "FAIL worker polling: the reactor thread harvested $rwp_events events for $rwp_parks waits, budget one per 200"
+        fail=1
     else
-        echo "PASS worker polling ($rwp_loops reactor loops, $rwp_polls worker polls for $rwp_parks waits)"
+        echo "PASS worker polling ($rwp_loops reactor loops, $rwp_events events on the reactor thread, $rwp_polls worker polls for $rwp_parks waits)"
     fi
 fi
 # And again for the workers' sleeps: a worker that runs out of work spins
@@ -1087,8 +1124,12 @@ fi
 # It was one list under sl_gc_mu, so every park and resume, from every
 # worker and the network poller, queued on one lock. Measured 72-96
 # contended acquisitions for ~40300 waits on 4 and 8 CPUs, 58-65 on 2;
-# with the one lock, 1413-1764 and 243-264. Budget: at most one per 250
-# waits. Linux only, like the two budgets above: on macOS the kqueue
+# with the one lock, 1413-1764 and 243-264. Since busy workers poll the
+# network between tasks (sl_worker_run_loop) the resumes come from worker
+# threads instead of the reactor thread, and on 4 workers the count rose
+# from 34-43 to 191-227 (perf/netpoll-busy-workers, which measured CPU
+# and p99 lower with it). Budget: at most one per 100 waits, still a
+# third of what the one lock cost. Linux only, like the two budgets above: on macOS the kqueue
 # reactor thread does the resumes, and the counts there differ (Intel:
 # 2666-2992 -> 127-155; CI's arm64: 740 sharded), with no arm64 Mac here
 # to set a budget from.
@@ -1101,7 +1142,7 @@ if [ "$(uname -s)" = Linux ]; then
     if [ -z "$pl_waits" ] || [ -z "$pl_parks" ]; then
         echo "FAIL park lock waits (no slang-sched-stat or slang-reactor-stat line: $pl_line)"
         fail=1
-    elif [ $((pl_waits * 250)) -gt "$pl_parks" ]; then
+    elif [ $((pl_waits * 100)) -gt "$pl_parks" ]; then
         echo "FAIL park lock waits: $pl_waits contended registry locks for $pl_parks waits"
         fail=1
     else

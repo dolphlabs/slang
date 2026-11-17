@@ -145,6 +145,10 @@ static sl_res_i32_str *sl_fs_write(int fd, sl_bytes *data) {
 static sl_res_bool_str *sl_fs_close(int fd) {
     if (fd < 0)
         return sl_fs_err_bool("invalid fd");
+    /* fs.close of a socket from net.accept/dial must drop its reactor
+       registration as net.close does, or the number's next owner hangs. */
+    if (sl_rt_fd_forget_hook)
+        sl_rt_fd_forget_hook(fd);
     if (close(fd) != 0)
         return sl_fs_err_bool(strerror(errno));
     return sl_fs_ok_bool(true);
