@@ -752,13 +752,14 @@ done
 # spawn_join_local: joined spawns that wake no worker, preempted between
 # the spawn and the join, must still run (sl_task_submit_copy_joined).
 # reactor_duplex: a read and a write parked on one fd, each re-armed by
-# whichever thread handles the other's event.
+# whichever thread handles the other's event. gc_safepoint_publish: loops
+# of calls with roots, preempted with their records half-pushed.
 echo "--- preemption guards (forced 1 ms preemption, 16KB nursery) ---"
 pg_bad=0
 for name in gc_preempt_derived gc_preempt_derived gc_preempt_derived \
             net_reactor_shards net_reactor_shards net_reactor_shards \
             reactor_nudges reactor_nudges spawn_join_local spawn_join_local \
-            reactor_duplex net_dns_records; do
+            reactor_duplex net_dns_records gc_safepoint_publish; do
     out="/tmp/sl_preempt_${name}.out"
     if ! SLANG_WORKERS=4 SLANG_GC_NURSERY_KB=16 SLANG_PREEMPT_QUANTUM_MS=1 \
             SLANG_PREEMPT_TICK_MS=1 ./slangc "tests/$name/main.sl" --run \
@@ -771,6 +772,28 @@ for name in gc_preempt_derived gc_preempt_derived gc_preempt_derived \
     fi
 done
 [ "$pg_bad" -eq 0 ] && echo "PASS preemption guards"
+
+# ---- safepoint record order ------------------------------------------
+# A call's safepoint record must be complete before the task's chain
+# points at it: an async preemption can stop a task between any two
+# instructions, and the collector walks the chain of every preempted
+# task. gcc sank the root-count store below the publish in 59 places
+# across these programs, and a bench server crashed in one of them once
+# in ~2M requests (SIGSEGV in sl_gc_mark_task). The window is two
+# instructions, too narrow to hit on demand, so this checks the compiled
+# code instead (tests/gc_safepoint_publish/check.py). x86-64 Linux with
+# GNU objdump only: the check reads gcc's AT&T disassembly.
+if [ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ] &&
+   command -v objdump >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+    echo "--- safepoint record order (x86-64 disassembly) ---"
+    if ! python3 tests/gc_safepoint_publish/check.py ./slangc \
+            tests/gc_safepoint_publish/main.sl tests/postgres/main.sl \
+            tests/http_client_pool/main.sl bench/suite/api/slang/main.sl; then
+        fail=1
+    fi
+else
+    echo "SKIP safepoint record order (needs x86-64 Linux, objdump, python3)"
+fi
 
 # ---- GC at a tiny threshold ------------------------------------------
 # A rooting bug -- a live object held only where no safepoint knows about
@@ -853,7 +876,7 @@ for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc
             gc_promotion_budget gc_chan_promotion_budget \
             value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks gc_skip_queued \
             spawn_join_local spawn_call_args link_tls link_split fn_value_shadows_function select_send_escapes \
-            sched_idle_wakes json_wide; do
+            sched_idle_wakes json_wide gc_safepoint_publish; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_verify_minor_${name}.out"
     err="/tmp/sl_verify_minor_${name}.err"
