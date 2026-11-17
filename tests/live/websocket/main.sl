@@ -6,7 +6,7 @@
 // then fails the run on any case graded below OK, NON-STRICT or
 // INFORMATIONAL.
 //
-//     docker run -d --name fuzzingserver -p 9001:9001 \
+//     docker run -d --name fuzzingserver -p 9001:9001 -e PYPY_GC_NURSERY=4M \
 //         -v "$PWD/tests/live/websocket:/config" -v /tmp/autobahn:/reports \
 //         crossbario/autobahn-testsuite wstest -m fuzzingserver -s /config/fuzzingserver.json
 //     ./slangc tests/live/websocket/main.sl --run

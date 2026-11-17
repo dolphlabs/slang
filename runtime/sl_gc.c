@@ -79,20 +79,28 @@ static unsigned long long sl_gc_stat_tasks_skipped = 0;
 static _Atomic size_t sl_gc_bytes_since_minor = 0;
 /* Adaptive (fix-gc.md 1.2a): starts at SL_GC_NURSERY_BASE and doubles,
  * up to sl_gc_nursery_max, while minors cost more than an eighth of the
- * time between them and find more than an eighth of it live; halves back
- * otherwise (sl_gc_nursery_adapt). A minor's cost follows what is live, not the
- * nursery's size: on the quote server each minor re-marked about four
- * requests' worth of young data once per request, so a 4 MB nursery
- * served 25% more req/s with a lower p99 and no more RSS. A program
- * whose minors are cheap -- most of them -- keeps the small nursery and
- * its footprint (the compute benchmark: 2.7% of time in minors, 7 MB
- * RSS at 512 KB against 12 MB at 4 MB for no speed). Read by every
- * allocating thread, written by the collector: atomic, relaxed. */
+ * time between them and find more than an eighth of it live -- or cost
+ * more than a sixteenth and are mostly the rendezvous; halves back after
+ * a few minors otherwise (sl_gc_nursery_adapt). A minor's cost follows
+ * what is live, not the nursery's size: on the quote server each minor
+ * re-marked about four requests' worth of young data once per request,
+ * so a 4 MB nursery served 25% more req/s with a lower p99 and no more
+ * RSS. A program whose minors are cheap -- most of them -- keeps the
+ * small nursery and its footprint (the compute benchmark: 2.7% of time
+ * in minors, 7 MB RSS at 512 KB against 12 MB at 4 MB for no speed).
+ * Read by every allocating thread, written by the collector: atomic,
+ * relaxed. */
 #define SL_GC_NURSERY_BASE (512 * 1024)
 static _Atomic size_t sl_gc_nursery_threshold = SL_GC_NURSERY_BASE;
 static size_t sl_gc_nursery_max = SL_GC_NURSERY_BASE;
 static long long sl_gc_minor_last_end_ns = 0;
 static int sl_gc_nursery_fixed = 0;
+/* The rendezvous' share of recent minor pauses, in 1/1024ths: collector
+ * only, under sl_gc_mu (sl_gc_nursery_adapt). */
+static long long sl_gc_rendezvous_share = 0;
+/* Consecutive minors that voted to shrink the nursery (collector only). */
+#define SL_GC_NURSERY_SHRINK_VOTES 4
+static int sl_gc_nursery_shrink_votes = 0;
 static _Atomic int sl_gc_collect_minor_pending = 0;
 /* SLANG_GC_THRESHOLD_KB: collect every that-many KB allocated, and never
  * grow the threshold. For tests: a rooting bug shows up only when a
@@ -3625,10 +3633,12 @@ static void sl_gc_nursery_set_max(long workers) {
  * cost is the fixed per-minor overhead, and a bigger nursery would buy
  * little for its footprint (a tight loop of short strings grew to 8 MB on
  * pause share alone). So it grows only if both are high, and shrinks if
- * either is low. The gaps between the thresholds keep it from flapping.
+ * either is low -- unless the pause is mostly the rendezvous, which a
+ * bigger nursery does divide (see below). The gaps between the
+ * thresholds, and the votes a shrink needs, keep it from flapping.
  * Untouched under SLANG_GC_NURSERY_KB. */
-static void sl_gc_nursery_adapt(long long start_ns, long long end_ns,
-                                size_t live_young) {
+static void sl_gc_nursery_adapt(long long start_ns, long long synced_ns,
+                                long long end_ns, size_t live_young) {
     if (sl_gc_nursery_fixed)
         return;
     long long prev = sl_gc_minor_last_end_ns;
@@ -3637,15 +3647,46 @@ static void sl_gc_nursery_adapt(long long start_ns, long long end_ns,
         return;
     long long pause = end_ns - start_ns;
     long long interval = end_ns - prev;
+    /* Most of the pause spent waiting for the other threads to stop: a
+     * fixed cost per minor, whatever is live, so a bigger nursery divides
+     * it. Threads with CPUs to themselves stop within a few percent of a
+     * pause, and nothing changes for them (a loop, or four churning tasks
+     * on four CPUs, stay at the base); busy workers that share their CPUs
+     * (a database on the same host) wait for each descheduled one to run
+     * again, most of a millisecond on the PG bench. One minor's wait is
+     * noise, so the share is averaged over the last few, in 1/1024ths. A
+     * bigger nursery shrinks the wait's share too (0.87 -> 0.45 ms a
+     * minor at 2 -> 6 MB on the PG bench), so it grows past a half and
+     * keeps its size down to a quarter, or it would flap between the last
+     * two sizes. */
+    long long share = pause > 0 ? (synced_ns - start_ns) * 1024 / pause : 0;
+    sl_gc_rendezvous_share += (share - sl_gc_rendezvous_share) / 4;
+    int rendezvous_bound = sl_gc_rendezvous_share > 512;
+    int rendezvous_held = sl_gc_rendezvous_share > 256;
     size_t cur = atomic_load_explicit(&sl_gc_nursery_threshold,
                                       memory_order_relaxed);
+    int grow = ((pause * 8 > interval && live_young * 8 > cur) ||
+                (pause * 16 > interval && rendezvous_bound)) &&
+               cur < sl_gc_nursery_max;
+    int shrink = (pause * 64 < interval ||
+                  (live_young * 32 < cur && !rendezvous_held)) &&
+                 cur > SL_GC_NURSERY_BASE;
     size_t next = cur;
-    if (pause * 8 > interval && live_young * 8 > cur &&
-        cur < sl_gc_nursery_max)
+    if (grow) {
         next = cur * 2 > sl_gc_nursery_max ? sl_gc_nursery_max : cur * 2;
-    else if ((pause * 64 < interval || live_young * 32 < cur) &&
-             cur > SL_GC_NURSERY_BASE)
-        next = cur / 2 < SL_GC_NURSERY_BASE ? SL_GC_NURSERY_BASE : cur / 2;
+        sl_gc_nursery_shrink_votes = 0;
+    } else if (shrink) {
+        /* Only on SL_GC_NURSERY_SHRINK_VOTES minors in a row: one stalled
+         * interval (a descheduled collector) or one fast rendezvous halved
+         * a 6 MB nursery every few dozen minors on the PG bench, and each
+         * halving cost two more minors to grow back. */
+        if (++sl_gc_nursery_shrink_votes >= SL_GC_NURSERY_SHRINK_VOTES) {
+            next = cur / 2 < SL_GC_NURSERY_BASE ? SL_GC_NURSERY_BASE : cur / 2;
+            sl_gc_nursery_shrink_votes = 0;
+        }
+    } else {
+        sl_gc_nursery_shrink_votes = 0;
+    }
     if (next != cur)
         atomic_store_explicit(&sl_gc_nursery_threshold, next,
                               memory_order_relaxed);
@@ -3658,6 +3699,7 @@ static void sl_gc_collect_minor_real(void) {
     int nsnap = 0;
     sl_gc_phase_clock pc = {.on = stat_on, .t0 = t0};
     sl_gc_stw_sync(&snap, &nsnap);
+    long long synced = sl_rt_monotonic_ns();
     sl_gc_ph_mark(&pc, SL_GC_PH_TTSP);
 
     pthread_mutex_lock(&sl_gc_mu);
@@ -3721,7 +3763,7 @@ static void sl_gc_collect_minor_real(void) {
                                    memory_order_release);
     }
     atomic_store_explicit(&sl_gc_bytes_since_minor, 0, memory_order_relaxed);
-    sl_gc_nursery_adapt(t0, sl_rt_monotonic_ns(), live_young);
+    sl_gc_nursery_adapt(t0, synced, sl_rt_monotonic_ns(), live_young);
     if (stat_on) {
         sl_gc_ph_mark(&pc, SL_GC_PH_TAIL);
         sl_gc_stat_phases(&pc, 0);
