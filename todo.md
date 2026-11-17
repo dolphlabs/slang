@@ -510,6 +510,20 @@ The reactor (R1) fits both signs; the collector's single-threaded sweep
     worker threads; the mechanism was not traced. Its budget in
     tests/run_tests.sh went from one per 250 waits to one per 100, still
     a third of the single lock's 1413-1764.
+  - **Where the PG gap stands (2026-11-17)**, with #533, #534 and #535
+    merged locally, against Go 1.24 on the same harness (ABBA, c64,
+    medians of 4): point 23.1k vs 23.7k req/s (56.0 vs 55.1 us, p99 7.8
+    vs 9.2 ms), orders 13.6k vs 14.8k (95.6 vs 87.6, 11.7 vs 14.1),
+    summary 20.0k vs 21.0k (54.2 vs 52.3, 8.8 vs 11.2), insert 19.4k vs
+    20.0k (53.0 vs 50.8, 10.0 vs 15.1). orders is the largest gap left;
+    its user time is spread over allocation (~8% of samples), JSON
+    string encoding (~4%), row decoding and `sl_rt_maybe_yield_t` (3.5%,
+    ~300 brackets a request). Tried and dropped: forcing
+    `sl_rt_maybe_yield_t` inline (all 686 call sites gone, binary 18 KB
+    smaller) measured 103.4 vs 103.3 us on orders over 8 ABBA runs each,
+    and no change on point. The collector's `sched_yield` (1.3-1.5 a
+    request) is left: a 16 MB nursery removed nearly all of them with
+    no CPU change.
 - [ ] **R4. Stopped workers help collect** *(fix-gc 1.4)*. Parallel sweep
   first. This is the main remaining cause of quote's idle cores.
   **Measured 2026-10-07, needs an owner decision before building.**
