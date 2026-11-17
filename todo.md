@@ -1,5 +1,19 @@
 # todo
 
+- [x] **TOML (2026-11-17, feat/toml).** `stdlib/toml`: `toml.decode[T]` and
+  `toml.to_json`, all of TOML 1.0, decode through `json.decode`. Checked
+  against Python 3.12's `tomllib` on 748 documents (tests/toml_parity: the
+  spec's examples, one invalid document per rule, 250 seeded random and
+  350 mutated); the only differences are integers past 64 bits, which the
+  spec makes errors and `tomllib` reads. The random corpus found a hang (a
+  lone `'` in a `'''` string). Cost on a 1.1 MB document: first version
+  660-800 ms, 4.5x Go's BurntSushi/toml, almost all collector time (three
+  containers allocated for every node); containers only on tables and
+  arrays, and strings and integers sliced straight from the source, 220
+  ms against Go's 180 (1.23x). Packing the per-node fields into one int
+  measured no better and was dropped. Left: subnormal floats are refused
+  (`to_float`); no TOML writer yet.
+
 - [x] **The websocket CI job failed on most runners from 2026-11-16
   (fixed 2026-11-17, ci/websocket-pypy-nursery).** Every case from 368
   on failed with "Connection reset by peer": the Autobahn fuzzing server
