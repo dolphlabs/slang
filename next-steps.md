@@ -318,7 +318,10 @@ honors blob filtering. See
     a ready flag per fd and direction, and every close dropping the
     fd's registration so a reused number is registered again -- the
     area of the open fd-reuse hang in todo.md. Make the reactor safe
-    against fd reuse first; revisit this after.
+    against fd reuse first; revisit this after. **Unblocked
+    (2026-11-17):** the fd-reuse fix landed (todo.md, 2026-11-06), and
+    on the PG routes this is 1.8 `epoll_ctl` a request, part of a
+    kernel-time gap to Go of 8-10 us a request (todo.md R3). Next.
   Fiber is still 1.3-1.7x ahead.
 
 ## 5. Per-request allocation in stdlib `http`

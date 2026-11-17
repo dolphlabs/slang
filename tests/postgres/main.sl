@@ -958,6 +958,8 @@ fn scenario_pool_dead_idle() {
         die("new_pool: " + e);
         return;
     }
+    // hung_idle leaves its connection idle ~150 ms: probe it at that age
+    p.alive_check_after = 100000000;
     let br = pg.acquire(p, soon());
     guard let b = br else let e = err_of(br) {
         die("acquire: " + e);
@@ -985,6 +987,7 @@ fn scenario_pool_dead_idle() {
         die("new_pool: " + e);
         return;
     }
+    p2.alive_check_after = 100000000;
     hung_idle(p2);
     let y = spawn acquire_past(p2);
     time.sleep(200000000);
@@ -1002,6 +1005,86 @@ fn scenario_pool_dead_idle() {
     println("ok pool dead idle");
 }
 
+// Answers each query, then 20 ms later -- after the client has read the
+// answer and released the connection -- sends a notice, so the next
+// acquire finds a byte waiting on an idle connection.
+fn srv_late_notice_conn(fd: i32) {
+    let p = Peer { fd: fd, buf: b"" };
+    startup(p);
+    send(p, hello());
+    while true {
+        let g = next(p);
+        if g.typ == -1 || g.typ == 88 {
+            break;
+        }
+        if g.typ == 81 {
+            send(p, msg(67, cstr("SELECT 0")) + ready(73));
+            time.sleep(20000000);
+            send(p, msg(78, b"S" + cstr("NOTICE") + b"M" + cstr("late") +
+                        b"\x00"));
+        }
+    }
+    net.close(fd);
+}
+
+fn srv_late_notice(lfd: i32) {
+    while true {
+        let ar = net.accept(lfd);
+        guard let fd = ar else {
+            return;
+        }
+        spawn srv_late_notice_conn(fd);
+    }
+}
+
+// Runs one statement on a pooled connection, then waits ms for the
+// server's late notice to land on it, idle.
+fn exec_then_idle(p: pg.Pool, ms: int) {
+    let ar = pg.acquire(p, soon());
+    guard let c = ar else let e = err_of(ar) {
+        die("acquire: " + e);
+        return;
+    }
+    let er = pg.exec(c, "SELECT 0", soon());
+    guard let _n = er else let e = err_of(er) {
+        die("exec: " + e);
+        return;
+    }
+    pg.release(p, c);
+    time.sleep(ms * 1000000);
+}
+
+fn scenario_pool_recent_reuse() {
+    let lfd = listener();
+    spawn srv_late_notice(lfd);
+    let pr = pg.new_pool(url_for(lfd, "u"), 1);
+    guard let p = pr else let e = err_of(pr) {
+        die("new_pool: " + e);
+        return;
+    }
+    p.alive_check_after = 300000000;
+
+    // Released moments ago: handed out again without the probe, which
+    // would have taken the waiting notice for a dead peer and redialled.
+    // The next statement reads past the notice.
+    exec_then_idle(p, 60);
+    exec_then_idle(p, 60);
+    if p.dials != 1 || p.reuses != 1 {
+        die("recent reuse: dials " + to_str(p.dials) + " reuses " +
+            to_str(p.reuses));
+    }
+
+    // Idle past alive_check_after: probed, and the notice waiting on it
+    // gets it closed and replaced.
+    exec_then_idle(p, 400);
+    exec_then_idle(p, 0);
+    if p.dials != 2 || p.reuses != 2 || p.open != 1 {
+        die("probed reuse: dials " + to_str(p.dials) + " reuses " +
+            to_str(p.reuses) + " open " + to_str(p.open));
+    }
+    pg.pool_close(p);
+    println("ok pool recent reuse");
+}
 
 // ---- scenario: COPY FROM STDIN ------------------------------------------
 
@@ -1568,6 +1651,7 @@ scenario_tls_refused();
 scenario_getters();
 scenario_pool();
 scenario_pool_dead_idle();
+scenario_pool_recent_reuse();
 scenario_copy_in();
 scenario_copy_out();
 scenario_stream();

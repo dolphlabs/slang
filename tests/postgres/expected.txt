@@ -8,6 +8,7 @@ ok tls refused
 ok getters
 ok pool
 ok pool dead idle
+ok pool recent reuse
 ok copy in
 ok copy out
 ok stream
