@@ -1,5 +1,27 @@
 # todo
 
+- [x] **A safepoint record was published before its root count
+  (2026-11-17, fix/gc-safepoint-publish-order).** The PG bench server
+  (dev 156c970, Linux container, c64 `insert`) died with SIGSEGV twice in
+  ~160 runs of 8-10 s, about once in 2M requests. The core: a worker
+  helping a minor (`sl_gc_ack_and_wait` -> `sl_gc_mark_task`) read a
+  task's roots off the end of its 64 KB stack, from the record at the top
+  of its chain, in `pg.to_ready`'s live frame: `prev` and `roots` right,
+  `nroots` an 8-byte pointer of stale stack. The task's `async_orig_pc`
+  was `pg_to_ready+0x1b1`, between gcc's store of `t->safepoint_top`
+  (+0x1ad) and of `sp->nroots` (+0x1b7): `sl_rt_safepoint_enter_s` used
+  plain stores, and with sl_task and sl_safepoint unable to alias, gcc
+  sank the count below the publish. An async preemption (the collector's
+  stop signal, or the ticker's) stops a task at any instruction, and the
+  collector walks a preempted task's chain. Fixed with
+  `atomic_signal_fence` before the publish and after the pop (no
+  instruction emitted; compiler ordering only). The window is two
+  instructions, so the test reads the compiled code:
+  tests/gc_safepoint_publish/check.py found 59 such records across
+  gc_safepoint_publish, postgres, http_client_pool and the bench api on
+  dev (pg, http, the main task) and 0 with the fix. x86-64 Linux only;
+  clang on macOS was not checked.
+
 - [ ] **`&xs[i]` on a list of value structs fails in the C compiler (found
   2026-11-10, feat/decimal-package; not fixed).** Borrowing an element
   emits `&(({ ... sl_arr_get(...) }))`, the address of a statement

@@ -1340,6 +1340,17 @@ static inline void sl_rt_safepoint_enter_s(sl_task *t, sl_safepoint *sp,
     sp->roots = roots;
     sp->nroots = nroots;
     sp->prev = t->safepoint_top;
+    /* The record, and the roots array the caller filled, complete before
+       the chain points at it. An async preemption stops this task between
+       any two instructions and the collector then walks its chain; with
+       plain stores gcc sank `sp->nroots = nroots` below the publish
+       (sl_task and sl_safepoint cannot alias), so a task preempted in
+       between showed a record whose count was stale stack, and the
+       collector read that many roots off the end of the stack
+       (tests/gc_safepoint_publish). A signal fence emits no instruction:
+       it only keeps the compiler's stores in program order, which is all
+       a signal on this same thread needs. */
+    atomic_signal_fence(memory_order_seq_cst);
     t->safepoint_top = sp;
     sl_rt_maybe_yield_t(t); /* reuse the task the caller resolved -- see
         sl_rt_maybe_yield_t's own comment for why this halves the
@@ -1371,6 +1382,11 @@ static inline void sl_rt_safepoint_enter(sl_safepoint *sp, void **roots,
  * which stays correct across a migration. */
 static inline void sl_rt_safepoint_exit_s(sl_task *t) {
     t->safepoint_top = t->safepoint_top->prev;
+    /* The mirror of enter's fence: the next bracket that reuses this
+       record's stack slot must not have its stores hoisted above the pop,
+       or a preempted task's chain would still name the record while it is
+       being refilled. */
+    atomic_signal_fence(memory_order_seq_cst);
 }
 
 static inline void sl_rt_safepoint_exit(void) {
@@ -1862,6 +1878,10 @@ static sl_link sl_link_from_fd(int fd) {
  * program never calls through it and never links OpenSSL. It releases
  * the link's share of the session and closes the link's fd. */
 static void (*sl_link_tls_free_fn)(sl_link *l);
+/* Set by the reactor (sl_net.c, spliced in only when something waits on an
+ * fd): called before close(2) of a fd it may hold a persistent
+ * registration for (sl_reactor_forget). NULL without a reactor. */
+static void (*sl_rt_fd_forget_hook)(int fd);
 static void sl_link_free(sl_link *l) {
     if (!l || !l->live)
         return;
@@ -1872,6 +1892,8 @@ static void sl_link_free(sl_link *l) {
            would leave the connection open, so the reader ends it. */
         if (l->role == SL_LINK_READER)
             shutdown(l->fd, SHUT_RDWR);
+        if (sl_rt_fd_forget_hook)
+            sl_rt_fd_forget_hook(l->fd);
         close(l->fd);
     }
     l->tls = NULL;

@@ -310,7 +310,7 @@ honors blob filtering. See
     `reactor_work_budget` fell from 1413-1764 to 72-96 per ~40300 waits
     and futex calls per request from 0.469 to 0.408; plain slang, paired
     by round, +7% rps at c=256 (5 of 6 rounds), +1% at c=50 (noise).
-  - [ ] the EPOLLONESHOT re-arm, one `epoll_ctl` per wait (Go registers
+  - [x] the EPOLLONESHOT re-arm, one `epoll_ctl` per wait (Go registers
     once, edge-triggered). **Deferred (2026-10-27):** measured at
     6.5-6.8% of a 4-worker plain server's CPU (perf, user and kernel,
     c=50), so at most ~7% per request, less in rps while workers are not
