@@ -1,5 +1,28 @@
 # todo
 
+- [x] **An in-process cache (2026-11-17, feat/cache).** `stdlib/cache`:
+  sharded LRU with optional TTL and byte bound, and `get_or_load`, which
+  runs a loader once per key and hands its error or panic to every
+  waiter. Plus `strings.hash` (native, 64-bit, in-process only). The
+  first version kept each shard's entries in a `map`, and `map`'s `del` is
+  linear in its size (it keeps insertion order), so every eviction walked
+  the shard: replaced with an open-addressing table per shard (backward
+  shift deletion), reusing the shard's hash. CLOCK eviction instead of
+  move-to-front measured the same (498-505 vs 529-566 ns/op) and evicts a
+  new entry first when everything else is hot, so plain LRU stays.
+  Against Go's golang-lru/v2 (Linux container, 4 CPUs, medians of 4): one
+  task 714 vs 212 ns/op, 8 tasks 320 vs 232, hit rates equal, 1M entries
+  256 vs 198 MB.
+
+- [ ] **`str` operations are a floor for every key-value structure (found
+  2026-11-17, feat/cache).** A plain `map[str]int` lookup costs 290-400
+  ns on 100,000 short keys in the cache benchmark, more than golang-lru's
+  whole get (about 200 ns): `str` is a NUL-terminated `const char *`, so
+  `len`, hashing and `==` walk the bytes (strlen, then strcmp), and
+  `map` hashes with byte-at-a-time FNV-1a. Storing the length with the
+  string, or hashing a word at a time (as `strings.hash` does), would
+  help every map and cache. Measure on a dedicated Linux host first.
+
 - [x] **YAML (2026-11-17, feat/yaml).** `stdlib/yaml`: `decode[T]`,
   `decode_all[T]`, `to_json`, `to_json_all`, for configuration files:
   YAML 1.2 core schema, block and flow collections, all scalar styles,
