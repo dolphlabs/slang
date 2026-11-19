@@ -326,7 +326,6 @@ kbd {
 .side-list a:hover { color: var(--ink); background: var(--surface); }
 .side-list a[aria-current="page"] {
   color: var(--ink); background: var(--soft);
-  box-shadow: inset 2px 0 0 var(--lime);
 }
 .side-pkgs summary {
   display: flex; align-items: center; justify-content: space-between;
@@ -573,7 +572,7 @@ td code { white-space: nowrap; }
   padding: 10px 12px; border-radius: 10px;
   color: var(--ink-2); text-decoration: none;
 }
-.palette-item[aria-selected="true"] { background: var(--soft); color: var(--ink); box-shadow: inset 2px 0 0 var(--lime); }
+.palette-item[aria-selected="true"] { background: var(--soft); color: var(--ink); }
 .palette-item .pi-title { display: block; font-size: 15px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .palette-item .pi-title.is-code { font: 400 14px/1.4 var(--mono); }
 .palette-item .pi-where { font: 400 12px/1 var(--mono); color: var(--faint); }
