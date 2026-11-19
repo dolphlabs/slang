@@ -14,6 +14,7 @@
   <url><loc>https://slang.dolphlabs.com/limitations/</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/builder</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/byteutil</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/cache</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/compress</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/crypto</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/csv</loc></url>
@@ -46,7 +47,9 @@
   <url><loc>https://slang.dolphlabs.com/packages/template</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/time</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/timez</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/toml</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/unicode</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/uuid</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/websocket</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/yaml</loc></url>
 </urlset>
