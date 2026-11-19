@@ -1468,6 +1468,18 @@ static void *sl_preempt_ticker_thread(void *arg) {
                 pthread_mutex_unlock(slot_mu);
                 continue;
             }
+            /* Inside a preempt bracket the handler only returns (it vetoes
+             * on preempt_disable_depth), so the signal cannot preempt --
+             * but it still interrupts whatever native call the bracket
+             * guards. On macOS a SIGUSR1 landing in a pthread_rwlock wait
+             * inside OpenSSL lost the wakeup: concurrent first RSA-OAEP
+             * calls hung in 4 of 200 runs with signals, none with them
+             * rare (tests/crypto_oaep_task). Skip the task this tick; the
+             * next tick finds it out of the bracket and preempts it then. */
+            if (atomic_load_explicit(&t->preempt_disable_depth, memory_order_acquire) != 0) {
+                pthread_mutex_unlock(slot_mu);
+                continue;
+            }
             atomic_store_explicit(&t->async_preempt_pending, 1, memory_order_relaxed);
             pthread_t tid = atomic_load_explicit(&sl_pool_slots[i].tid, memory_order_acquire);
             pthread_mutex_unlock(slot_mu);

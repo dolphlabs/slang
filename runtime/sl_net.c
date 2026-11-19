@@ -2255,6 +2255,8 @@ static sl_res_int_fault (*sl_link_tls_recv_fn)(sl_link *l, sl_wire w,
                                                sl_until u);
 /* Gives `w` (a fresh writer half) its share of `l`'s session. */
 static void (*sl_link_tls_share_fn)(sl_link *l, sl_link *w);
+/* The peer's certificate chain as concatenated DER (link.peer_certs). */
+static sl_bytes *(*sl_link_tls_peer_certs_fn)(sl_link *l);
 
 /* After split(), the link it was called on only reads and the one it
  * returned only writes: two tasks sending on one connection could
@@ -2448,6 +2450,15 @@ static sl_res_link_fault sl_link_split(sl_link *l) {
         sl_link_tls_share_fn(l, &w);
     l->role = SL_LINK_READER;
     return sl_link_ok_link(w);
+}
+
+/* The TLS peer's certificate chain, leaf first, as concatenated DER for
+ * x509.parse_der; empty on a link without TLS or a peer that sent none.
+ * A link only carries a session once sl_tls.c has set the hook. */
+static sl_bytes *sl_link_peer_certs(sl_link *l) {
+    if (!l || !l->live || !l->tls || !sl_link_tls_peer_certs_fn)
+        return sl_bytes_new(NULL, 0);
+    return sl_link_tls_peer_certs_fn(l);
 }
 
 static long long sl_link_port(sl_link *l) {

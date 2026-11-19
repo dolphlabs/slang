@@ -189,7 +189,10 @@ cert when the ClientHello SNI matches; unmatched names keep the
 default `tls_server_ctx` cert. `require_client` applies to SNI
 certs too, regardless of call order. TLS 1.3 can let `tls_dial`
 return before the server has rejected a missing client certificate;
-the first send or recv then fails.
+the first send or recv then fails. `tls_peer_certs(conn)` returns the
+peer's chain, leaf first, as concatenated DER (empty when it sent none):
+on a server under `require_client`, the verified client identity. Read
+it with `x509.parse_der`.
 
 **STARTTLS**: `tls_upgrade(fd, host, ctx)` runs a client handshake on a
 socket from `net.dial` that has already spoken cleartext — how Postgres,
@@ -230,7 +233,9 @@ It returns `result[int, fault]`: `timeout` when the deadline passes,
 `closed` when the client hangs up during the handshake (browsers'
 preconnects do), and `io` with OpenSSL's reason otherwise (`tls http
 request` is a plaintext client). Client certificates are checked as
-`tls_accept` checks them. The session is freed, with a close_notify, when
+`tls_accept` checks them, and `c.peer_certs()` returns the client's chain
+as concatenated DER for `x509.parse_der` (empty bytes before TLS, or when
+the client sent none). The session is freed, with a close_notify, when
 the link is; a second `tls_accept` on the same link is an error.
 
 **Reading and writing from two tasks**: a `link` is move-only, so one task
@@ -336,6 +341,8 @@ the session, one OpenSSL call at a time. A link splits once.
 ### `net.tls_ctx_alpn(rawptr, str) -> result[bool,str]`
 
 ### `net.tls_alpn(rawptr) -> str`
+
+### `net.tls_peer_certs(rawptr) -> bytes`
 
 ---
 

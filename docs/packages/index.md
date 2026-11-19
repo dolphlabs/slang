@@ -10,7 +10,7 @@
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` / `import "io";` / `import "encoding";` like any other package.
 
-`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats` and `math/numtheory` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory` and `x509` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
 then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
 compiler's `SLANG_STDLIB_DIR`).
@@ -319,7 +319,10 @@ cert when the ClientHello SNI matches; unmatched names keep the
 default `tls_server_ctx` cert. `require_client` applies to SNI
 certs too, regardless of call order. TLS 1.3 can let `tls_dial`
 return before the server has rejected a missing client certificate;
-the first send or recv then fails.
+the first send or recv then fails. `tls_peer_certs(conn)` returns the
+peer's chain, leaf first, as concatenated DER (empty when it sent none):
+on a server under `require_client`, the verified client identity. Read
+it with `x509.parse_der`.
 
 **STARTTLS**: `tls_upgrade(fd, host, ctx)` runs a client handshake on a
 socket from `net.dial` that has already spoken cleartext — how Postgres,
@@ -360,7 +363,9 @@ It returns `result[int, fault]`: `timeout` when the deadline passes,
 `closed` when the client hangs up during the handshake (browsers'
 preconnects do), and `io` with OpenSSL's reason otherwise (`tls http
 request` is a plaintext client). Client certificates are checked as
-`tls_accept` checks them. The session is freed, with a close_notify, when
+`tls_accept` checks them, and `c.peer_certs()` returns the client's chain
+as concatenated DER for `x509.parse_der` (empty bytes before TLS, or when
+the client sent none). The session is freed, with a close_notify, when
 the link is; a second `tls_accept` on the same link is an error.
 
 **Reading and writing from two tasks**: a `link` is move-only, so one task
@@ -930,6 +935,7 @@ ECDSA P-256 with SHA-256 (JWS ES256) has a 32-byte private scalar, a
 | sign | `ed25519_sign(priv, msg)` | `ecdsa_p256_sign_sha256(priv, msg)` | `rsa_sign_sha256(pem, msg)` (RS256), `rsa_sign_pss_sha256` (PS256) |
 | verify | `ed25519_verify(pub, msg, sig)` | `ecdsa_p256_verify_sha256(pub, msg, sig)` | `rsa_verify_sha256(n, e, msg, sig)`, `rsa_verify_pss_sha256` |
 | from PEM | `ed25519_private_from_pem`, `ed25519_public_from_pem` | `ecdsa_p256_private_from_pem`, `ecdsa_p256_public_from_pem` | (sign takes PEM) |
+| to PEM | `ed25519_private_to_pem(priv)` | `ecdsa_p256_private_to_pem(priv)` | (already PEM) |
 | encrypt | | | `rsa_encrypt_oaep_sha256(pem, data)`, `rsa_encrypt_oaep_sha1` |
 | decrypt | | | `rsa_decrypt_oaep_sha256(pem, data)`, `rsa_decrypt_oaep_sha1` |
 
@@ -946,7 +952,14 @@ as a server does with its JWT key or a JWKS, skips rebuilding them.
 RSA-OAEP encrypts to a public key and decrypts with the private one, the
 same hash for the label and MGF1. Use SHA-256 for anything new; SHA-1 is
 there for MySQL's password exchange, and OAEP does not depend on the
-hash's collision resistance the way a signature does.
+hash's collision resistance the way a signature does. The `*_to_pem`
+functions write a raw private key as PKCS#8 PEM, the form
+`net.tls_ctx_use_cert` and `x509` take.
+
+**X.509** lives in the `x509` package; the `crypto.x509_*` functions are
+the layer under it (`x509_der`, `x509_fields`, `x509_check_host`,
+`x509_verify`, `x509_csr`, `x509_self_signed`), compiled into a program
+only when it calls one.
 
 #### `sql`
 
@@ -3202,6 +3215,77 @@ the cache: a plain `map[str]int` lookup costs 290-400 ns on the same
 keys, as `str` is NUL-terminated (length, hashing and `==` walk it).
 `bench/cache/run.sh` reproduces this.
 
+#### `x509`
+
+X.509 certificates: read them, check them, and make requests for them.
+
+```slang
+import "x509";
+
+let r = x509.parse_pem(pem);              // result[[x509.Cert], str]: every CERTIFICATE block
+guard let certs = r else let e = err_of(r) { panic(e); }
+let c = certs[0];
+c.common_name; c.dns_names; c.ip_addrs;   // the subject and its subjectAltName entries
+c.not_after;                              // unix seconds
+x509.expires_in(c);                       // seconds left; negative once expired
+x509.matches_host(c, "www.example.com");  // RFC 6125, SANs only
+
+let v = x509.Verify { roots_pem: "", host: "api.example.com", at: 0, purpose: "server" };
+x509.verify(certs, v);                    // ok(true), or why not
+
+let key = crypto.ecdsa_p256_private_to_pem(crypto.ecdsa_p256_generate() ?? b"") ?? "";
+let names = x509.Request { common_name: "api.example.com",
+                           dns_names: ["api.example.com"], ip_addrs: [] };
+x509.csr(key, names);                     // result[str, str]: PKCS#10, PEM
+x509.self_signed(key, names, 90);         // result[str, str]: a certificate, PEM
+```
+
+**`Cert`** holds `der` (exactly the bytes parsed), `subject` and `issuer`
+(RFC 4514, most specific first), `common_name`, `serial` (lowercase
+hex), `not_before` and `not_after` (unix seconds), `dns_names`,
+`ip_addrs`, `emails` and `uris`, `is_ca` and `max_path_len` (-1 when
+unset), `key_usage` (`digital_signature`, `key_encipherment`,
+`cert_sign`, ...), `ext_key_usage` (`server_auth`, `client_auth`, ...;
+others as dotted OIDs), `key_type` (`rsa`, `ec-p256`, `ec-p384`,
+`ed25519`, ...) and `key_bits`, `public_key_pem` (SPKI, which crypto's
+`*_from_pem` functions take), `signature_alg` and `fingerprint` (SHA-256
+of `der`, lowercase hex). `parse_der` takes one certificate or several
+concatenated, as a TLS chain arrives.
+
+**Names.** `matches_host` and `verify`'s `host` follow RFC 6125: only
+subjectAltName entries count, never the subject CN (browsers and Go
+stopped trusting it); a wildcard is only the whole left-most label and
+stands for exactly one label; an IP literal matches IP entries, compared
+as addresses.
+
+**Verifying.** `chain[0]` is the leaf, the rest intermediates in any
+order. `roots_pem` is the trust anchors (`""` for the system's, loaded
+once and shared); `at` checks validity at a given time (`0` for now);
+`purpose` is `"server"`, `"client"` or `""`. A failure says why, in
+words that do not change with the OpenSSL version: `certificate has
+expired`, `certificate is not yet valid`, `hostname mismatch`, `IP
+address mismatch`, `certificate is not for this purpose`, `certificate
+signed by unknown authority`, `self-signed certificate not in the
+roots`, `certificate signature does not verify`, `issuer is not a CA`,
+`path length constraint exceeded`.
+
+**Client identity (mTLS).** With `net.tls_ctx_require_client` the
+handshake has verified the client's chain; read it with
+`x509.parse_der(c.peer_certs())` on a link, or
+`x509.parse_der(net.tls_peer_certs(ssl))` on a handle from
+`net.tls_accept`. `x509` does not import `net`, so a program that only
+reads certificates does not link TLS.
+
+**Making them.** `csr` builds the PKCS#10 request an ACME server or any
+CA takes: the names, the public key, signed by the private key (RSA, EC
+or Ed25519 in PEM). `self_signed` makes a leaf for development TLS and
+tests: CA:FALSE, server and client auth, a random 128-bit serial, valid
+from now for 1 to 36500 days; verify it by passing its own PEM as the
+roots. `Request` needs a common name or at least one DNS name or IP.
+
+All the ASN.1 is OpenSSL's; the package parses no DER itself. Errors
+start with `x509: `.
+
 #### `byteutil`
 
 Search, trim, and split on the `bytes` type — no new syntax. The
@@ -3504,7 +3588,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [byteutil](packages/byteutil.md) -- source package, 6 public items
 - [cache](packages/cache.md) -- source package, 14 public items
 - [compress](packages/compress.md) -- compiler-provided, 8 public items
-- [crypto](packages/crypto.md) -- compiler-provided, 44 public items
+- [crypto](packages/crypto.md) -- compiler-provided, 52 public items
 - [csv](packages/csv.md) -- source package, 18 public items
 - [decimal](packages/decimal.md) -- source package, 37 public items
 - [encoding](packages/encoding.md) -- compiler-provided, 23 public items
@@ -3521,7 +3605,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [math/stats](packages/math/stats.md) -- source package, 91 public items
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
-- [net](packages/net.md) -- compiler-provided, 34 public items
+- [net](packages/net.md) -- compiler-provided, 35 public items
 - [os](packages/os.md) -- compiler-provided, 18 public items
 - [pg](packages/pg.md) -- source package, 58 public items
 - [proc](packages/proc.md) -- compiler-provided, 9 public items
@@ -3539,6 +3623,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [unicode](packages/unicode.md) -- compiler-provided, 11 public items
 - [uuid](packages/uuid.md) -- source package, 11 public items
 - [websocket](packages/websocket.md) -- source package, 16 public items
+- [x509](packages/x509.md) -- source package, 11 public items
 - [yaml](packages/yaml.md) -- source package, 4 public items
 
 ---

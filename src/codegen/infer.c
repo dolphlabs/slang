@@ -711,6 +711,11 @@ const char *infer_call(CG *cg, Expr *e) {
                         cg_error(e->line, "link.port() takes no arguments");
                     return "int";
                 }
+                if (!strcmp(right, "peer_certs")) {
+                    if (n != 0)
+                        cg_error(e->line, "link.peer_certs() takes no arguments");
+                    return "bytes";
+                }
                 cg_error(e->line, "type 'link' has no method '%s'", right);
             }
             if (type_is_arena(recv_t)) {

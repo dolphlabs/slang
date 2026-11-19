@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>x509 — slang</title>
+<meta name="description" content="Package x509.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="x509">
+<meta property="og:description" content="Package x509.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://slang.dolphlabs.com/packages/x509">
+<meta property="og:image" content="https://slang.dolphlabs.com/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The slang rabbit mark beside the slang wordmark">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://slang.dolphlabs.com/packages/x509">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/x509.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <button id="navtoggle" class="navtoggle" type="button"
+          aria-label="Toggle navigation" aria-expanded="false"
+          aria-controls="mainnav">
+    <span></span><span></span><span></span>
+  </button>
+  <nav class="mainnav" id="mainnav"><a href="../">Home</a><a href="../guide/">Guide</a><a href="../guide/data">Data types</a><a href="../guide/errors">Errors</a><a href="../guide/functions">Functions</a><a href="../concurrency/">Concurrency</a><a href="../testing/">Testing</a><a href="../bench/">Benchmarks</a><a href="../packages/">Packages</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="../limitations/">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="navscrim" class="navscrim" hidden></div>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>x509</h1>
+      <p class="tagline">Package x509.</p>
+      <p class="agentline">
+        <a href="../packages/x509.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>X.509 certificates: read them, check them, and make requests for them.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;x509&quot;</span>;
+
+<span class="k">let</span> r = x509.<span class="f">parse_pem</span>(pem);              <span class="c">// result[[x509.Cert], str]: every CERTIFICATE block</span>
+<span class="k">guard</span> <span class="k">let</span> certs = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }
+<span class="k">let</span> c = certs[<span class="n">0</span>];
+c.common_name; c.dns_names; c.ip_addrs;   <span class="c">// the subject and its subjectAltName entries</span>
+c.not_after;                              <span class="c">// unix seconds</span>
+x509.<span class="f">expires_in</span>(c);                       <span class="c">// seconds left; negative once expired</span>
+x509.<span class="f">matches_host</span>(c, <span class="s">&quot;www.example.com&quot;</span>);  <span class="c">// RFC 6125, SANs only</span>
+
+<span class="k">let</span> v = x509.Verify { roots_pem: <span class="s">&quot;&quot;</span>, host: <span class="s">&quot;api.example.com&quot;</span>, at: <span class="n">0</span>, purpose: <span class="s">&quot;server&quot;</span> };
+x509.<span class="f">verify</span>(certs, v);                    <span class="c">// ok(true), or why not</span>
+
+<span class="k">let</span> key = crypto.<span class="f">ecdsa_p256_private_to_pem</span>(crypto.<span class="f">ecdsa_p256_generate</span>() ?? b<span class="s">&quot;&quot;</span>) ?? <span class="s">&quot;&quot;</span>;
+<span class="k">let</span> names = x509.Request { common_name: <span class="s">&quot;api.example.com&quot;</span>,
+                           dns_names: [<span class="s">&quot;api.example.com&quot;</span>], ip_addrs: [] };
+x509.<span class="f">csr</span>(key, names);                     <span class="c">// result[str, str]: PKCS#10, PEM</span>
+x509.<span class="f">self_signed</span>(key, names, <span class="n">90</span>);         <span class="c">// result[str, str]: a certificate, PEM</span></code></pre></div>
+<p><strong><code>Cert</code></strong> holds <code>der</code> (exactly the bytes parsed), <code>subject</code> and <code>issuer</code> (RFC 4514, most specific first), <code>common_name</code>, <code>serial</code> (lowercase hex), <code>not_before</code> and <code>not_after</code> (unix seconds), <code>dns_names</code>, <code>ip_addrs</code>, <code>emails</code> and <code>uris</code>, <code>is_ca</code> and <code>max_path_len</code> (-1 when unset), <code>key_usage</code> (<code>digital_signature</code>, <code>key_encipherment</code>, <code>cert_sign</code>, ...), <code>ext_key_usage</code> (<code>server_auth</code>, <code>client_auth</code>, ...; others as dotted OIDs), <code>key_type</code> (<code>rsa</code>, <code>ec-p256</code>, <code>ec-p384</code>, <code>ed25519</code>, ...) and <code>key_bits</code>, <code>public_key_pem</code> (SPKI, which crypto&#x27;s <code>*_from_pem</code> functions take), <code>signature_alg</code> and <code>fingerprint</code> (SHA-256 of <code>der</code>, lowercase hex). <code>parse_der</code> takes one certificate or several concatenated, as a TLS chain arrives.</p>
+<p><strong>Names.</strong> <code>matches_host</code> and <code>verify</code>&#x27;s <code>host</code> follow RFC 6125: only subjectAltName entries count, never the subject CN (browsers and Go stopped trusting it); a wildcard is only the whole left-most label and stands for exactly one label; an IP literal matches IP entries, compared as addresses.</p>
+<p><strong>Verifying.</strong> <code>chain[0]</code> is the leaf, the rest intermediates in any order. <code>roots_pem</code> is the trust anchors (<code>&quot;&quot;</code> for the system&#x27;s, loaded once and shared); <code>at</code> checks validity at a given time (<code>0</code> for now); <code>purpose</code> is <code>&quot;server&quot;</code>, <code>&quot;client&quot;</code> or <code>&quot;&quot;</code>. A failure says why, in words that do not change with the OpenSSL version: <code>certificate has expired</code>, <code>certificate is not yet valid</code>, <code>hostname mismatch</code>, <code>IP address mismatch</code>, <code>certificate is not for this purpose</code>, <code>certificate signed by unknown authority</code>, <code>self-signed certificate not in the roots</code>, <code>certificate signature does not verify</code>, <code>issuer is not a CA</code>, <code>path length constraint exceeded</code>.</p>
+<p><strong>Client identity (mTLS).</strong> With <code>net.tls_ctx_require_client</code> the handshake has verified the client&#x27;s chain; read it with <code>x509.parse_der(c.peer_certs())</code> on a link, or <code>x509.parse_der(net.tls_peer_certs(ssl))</code> on a handle from <code>net.tls_accept</code>. <code>x509</code> does not import <code>net</code>, so a program that only reads certificates does not link TLS.</p>
+<p><strong>Making them.</strong> <code>csr</code> builds the PKCS#10 request an ACME server or any CA takes: the names, the public key, signed by the private key (RSA, EC or Ed25519 in PEM). <code>self_signed</code> makes a leaf for development TLS and tests: CA:FALSE, server and client auth, a random 128-bit serial, valid from now for 1 to 36500 days; verify it by passing its own PEM as the roots. <code>Request</code> needs a common name or at least one DNS name or IP.</p>
+<p>All the ASN.1 is OpenSSL&#x27;s; the package parses no DER itself. Errors start with <code>x509: </code>.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="cert"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Cert</code> <span class="src">stdlib/x509/x509.sl:38</span><a class="anchor" href="#cert">#</a></div><p class="api-doc">One certificate, as parsed. <code>der</code> is exactly the bytes it came from, so a chain can be passed back to verify or stored without re-encoding.</p></div><div class="api-item" id="verify"><div class="api-sig"><code><span class="k">struct</span> Verify</code> <span class="src">stdlib/x509/x509.sl:62</span><a class="anchor" href="#verify">#</a></div><p class="api-doc">What verify checks besides the signatures and the chain to a root.</p></div><div class="api-item" id="request"><div class="api-sig"><code><span class="k">struct</span> Request</code> <span class="src">stdlib/x509/x509.sl:70</span><a class="anchor" href="#request">#</a></div><p class="api-doc">The names a CSR or self-signed certificate is for.</p></div><div class="api-item" id="parse-pem"><div class="api-sig"><code><span class="k">fn</span> <span class="f">parse_pem</span>(pem: <span class="t">str</span>) -&gt; <span class="t">result</span>[[Cert], <span class="t">str</span>]</code> <span class="src">stdlib/x509/x509.sl:82</span><a class="anchor" href="#parse-pem">#</a></div><p class="api-doc">Every CERTIFICATE block of a PEM text, in order. Other blocks and text between them are skipped; a block that does not decode is an error.</p></div><div class="api-item" id="parse-der"><div class="api-sig"><code><span class="k">fn</span> <span class="f">parse_der</span>(der: <span class="t">bytes</span>) -&gt; <span class="t">result</span>[[Cert], <span class="t">str</span>]</code> <span class="src">stdlib/x509/x509.sl:92</span><a class="anchor" href="#parse-der">#</a></div><p class="api-doc">One DER certificate, or several concatenated (as a TLS chain and net.tls_peer_certs give them).</p></div><div class="api-item" id="matches-host"><div class="api-sig"><code><span class="k">fn</span> <span class="f">matches_host</span>(c: Cert, host: <span class="t">str</span>) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/x509/x509.sl:165</span><a class="anchor" href="#matches-host">#</a></div><p class="api-doc">Does the certificate name <code>host</code>? RFC 6125: subjectAltName entries only, never the subject CN; a wildcard only as the whole left-most label, for exactly one label (&quot;*.example.com&quot; matches &quot;a.example.com&quot;, not &quot;example.com&quot; or &quot;a.b.example.com&quot;). An IP literal matches IP entries.</p></div><div class="api-item" id="valid-at"><div class="api-sig"><code><span class="k">fn</span> <span class="f">valid_at</span>(c: Cert, unix: <span class="t">int</span>) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/x509/x509.sl:170</span><a class="anchor" href="#valid-at">#</a></div><p class="api-doc">Is <code>unix</code> (seconds) inside the certificate&#x27;s validity period?</p></div><div class="api-item" id="expires-in"><div class="api-sig"><code><span class="k">fn</span> <span class="f">expires_in</span>(c: Cert) -&gt; <span class="t">int</span></code> <span class="src">stdlib/x509/x509.sl:175</span><a class="anchor" href="#expires-in">#</a></div><p class="api-doc">Seconds until the certificate expires; negative once it has.</p></div><div class="api-item" id="verify"><div class="api-sig"><code><span class="k">fn</span> <span class="f">verify</span>(chain: [Cert], v: Verify) -&gt; <span class="t">result</span>[<span class="t">bool</span>, <span class="t">str</span>]</code> <span class="src">stdlib/x509/x509.sl:189</span><a class="anchor" href="#verify">#</a></div><p class="api-doc">Checks <code>chain</code> (the leaf first, then any intermediates) up to one of the roots: every signature, validity at <code>v.at</code>, and the host and purpose when set. ok(true), or why not, in words that do not change with the OpenSSL version: &quot;x509: certificate has expired&quot;, &quot;x509: certificate is not yet valid&quot;, &quot;x509: hostname mismatch&quot;, &quot;x509: IP address mismatch&quot;, &quot;x509: certificate is not for this purpose&quot;, &quot;x509: certificate signed by unknown authority&quot;, &quot;x509: self-signed certificate not in the roots&quot;, &quot;x509: certificate signature does not verify&quot;, &quot;x509: issuer is not a CA&quot;, &quot;x509: path length constraint exceeded&quot;; rarer failures carry OpenSSL&#x27;s own reason.</p></div><div class="api-item" id="csr"><div class="api-sig"><code><span class="k">fn</span> <span class="f">csr</span>(key_pem: <span class="t">str</span>, r: Request) -&gt; <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>]</code> <span class="src">stdlib/x509/x509.sl:216</span><a class="anchor" href="#csr">#</a></div><p class="api-doc">A certificate signing request (PKCS#10, PEM) for <code>r</code>&#x27;s names, signed with <code>key_pem</code> (an RSA, EC or Ed25519 private key in PEM). It is what an ACME server, or any CA, is sent: it carries the names and the public key, and proves the sender holds the private key.</p></div><div class="api-item" id="self-signed"><div class="api-sig"><code><span class="k">fn</span> <span class="f">self_signed</span>(key_pem: <span class="t">str</span>, r: Request, days: <span class="t">int</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>]</code> <span class="src">stdlib/x509/x509.sl:224</span><a class="anchor" href="#self-signed">#</a></div><p class="api-doc">A certificate for <code>r</code>&#x27;s names, signed by its own key and valid from now for <code>days</code> (1 to 36500): for development TLS and tests. It is a leaf (not a CA) for server and client auth; to verify it, pass its own PEM as <code>roots_pem</code>.</p></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

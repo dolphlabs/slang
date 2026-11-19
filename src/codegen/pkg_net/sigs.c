@@ -68,6 +68,9 @@ const NatSig NET_SIGS[] = {
     /* ALPN: negotiate h2 vs http/1.1 in the handshake (RFC 7301) */
     {"net", "tls_ctx_alpn", 2, {NA_RAWPTR, NA_STR}, "result[bool,str]", 1},
     {"net", "tls_alpn", 1, {NA_RAWPTR}, "str", 1},
+    /* The peer's certificate chain, leaf first, as concatenated DER
+       (x509.parse_der reads it): the client's identity under mTLS */
+    {"net", "tls_peer_certs", 1, {NA_RAWPTR}, "bytes", 1},
 };
 
 const int NET_SIGS_LEN = sizeof(NET_SIGS) / sizeof(NET_SIGS[0]);

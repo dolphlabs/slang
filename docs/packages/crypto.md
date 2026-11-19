@@ -113,6 +113,7 @@ ECDSA P-256 with SHA-256 (JWS ES256) has a 32-byte private scalar, a
 | sign | `ed25519_sign(priv, msg)` | `ecdsa_p256_sign_sha256(priv, msg)` | `rsa_sign_sha256(pem, msg)` (RS256), `rsa_sign_pss_sha256` (PS256) |
 | verify | `ed25519_verify(pub, msg, sig)` | `ecdsa_p256_verify_sha256(pub, msg, sig)` | `rsa_verify_sha256(n, e, msg, sig)`, `rsa_verify_pss_sha256` |
 | from PEM | `ed25519_private_from_pem`, `ed25519_public_from_pem` | `ecdsa_p256_private_from_pem`, `ecdsa_p256_public_from_pem` | (sign takes PEM) |
+| to PEM | `ed25519_private_to_pem(priv)` | `ecdsa_p256_private_to_pem(priv)` | (already PEM) |
 | encrypt | | | `rsa_encrypt_oaep_sha256(pem, data)`, `rsa_encrypt_oaep_sha1` |
 | decrypt | | | `rsa_decrypt_oaep_sha256(pem, data)`, `rsa_decrypt_oaep_sha1` |
 
@@ -129,7 +130,14 @@ as a server does with its JWT key or a JWKS, skips rebuilding them.
 RSA-OAEP encrypts to a public key and decrypts with the private one, the
 same hash for the label and MGF1. Use SHA-256 for anything new; SHA-1 is
 there for MySQL's password exchange, and OAEP does not depend on the
-hash's collision resistance the way a signature does.
+hash's collision resistance the way a signature does. The `*_to_pem`
+functions write a raw private key as PKCS#8 PEM, the form
+`net.tls_ctx_use_cert` and `x509` take.
+
+**X.509** lives in the `x509` package; the `crypto.x509_*` functions are
+the layer under it (`x509_der`, `x509_fields`, `x509_check_host`,
+`x509_verify`, `x509_csr`, `x509_self_signed`), compiled into a program
+only when it calls one.
 
 ## API
 
@@ -189,6 +197,8 @@ hash's collision resistance the way a signature does.
 
 ### `crypto.ed25519_public_from_pem(str) -> result[bytes,str]`
 
+### `crypto.ed25519_private_to_pem(bytes) -> result[str,str]`
+
 ### `crypto.ecdsa_p256_generate() -> result[bytes,str]`
 
 ### `crypto.ecdsa_p256_public_key(bytes) -> result[bytes,str]`
@@ -200,6 +210,8 @@ hash's collision resistance the way a signature does.
 ### `crypto.ecdsa_p256_private_from_pem(str) -> result[bytes,str]`
 
 ### `crypto.ecdsa_p256_public_from_pem(str) -> result[bytes,str]`
+
+### `crypto.ecdsa_p256_private_to_pem(bytes) -> result[str,str]`
 
 ### `crypto.rsa_generate(int) -> result[str,str]`
 
@@ -220,6 +232,18 @@ hash's collision resistance the way a signature does.
 ### `crypto.rsa_decrypt_oaep_sha256(str, bytes) -> result[bytes,str]`
 
 ### `crypto.rsa_verify_pss_sha256(bytes, bytes, bytes, bytes) -> result[bool,str]`
+
+### `crypto.x509_der(str) -> result[bytes,str]`
+
+### `crypto.x509_fields(bytes) -> result[[str],str]`
+
+### `crypto.x509_check_host(bytes, str) -> bool`
+
+### `crypto.x509_verify(bytes, str, str, int, str) -> result[bool,str]`
+
+### `crypto.x509_csr(str, str, [str]) -> result[str,str]`
+
+### `crypto.x509_self_signed(str, str, [str], int) -> result[str,str]`
 
 ---
 

@@ -1,0 +1,111 @@
+// x509 against a fixed chain: every field of every certificate, host
+// matching, verification and each way it fails, and malformed input.
+
+// 2030-01-01T00:00:00Z: inside every certificate's validity but old's.
+fn at() -> int {
+    return 1893456000;
+}
+
+fn one(pem: str) -> x509.Cert {
+    let r = x509.parse_pem(pem);
+    guard let cs = r else let e = err_of(r) { panic("parse: " + e); }
+    if len(cs) != 1 { panic("expected one certificate, got " + to_str(len(cs))); }
+    return cs[0];
+}
+
+fn show(name: str, c: x509.Cert) {
+    println("== " + name);
+    println("subject " + c.subject);
+    println("cn " + c.common_name);
+    println("issuer " + c.issuer);
+    println("serial " + c.serial);
+    println("valid " + to_str(c.not_before) + " .. " + to_str(c.not_after));
+    println("dns [" + strings.join(c.dns_names, " ") + "]");
+    println("ip [" + strings.join(c.ip_addrs, " ") + "]");
+    println("email [" + strings.join(c.emails, " ") + "]");
+    println("uri [" + strings.join(c.uris, " ") + "]");
+    println("ca " + to_str(c.is_ca) + " pathlen " + to_str(c.max_path_len));
+    println("ku [" + strings.join(c.key_usage, " ") + "]");
+    println("eku [" + strings.join(c.ext_key_usage, " ") + "]");
+    println("key " + c.key_type + " " + to_str(c.key_bits));
+    println("spki " + to_str(strings.has_prefix(c.public_key_pem, "-----BEGIN PUBLIC KEY-----\n")));
+    println("sig " + c.signature_alg);
+    println("fingerprint " + c.fingerprint);
+    println("der " + to_str(len(c.der)));
+}
+
+fn check(what: str, r: result[bool, str]) {
+    guard let v = r else let e = err_of(r) {
+        println(what + ": " + e);
+        return;
+    }
+    println(what + ": ok " + to_str(v));
+}
+
+fn run() {
+    let root = one(pem_root());
+    let inter = one(pem_int());
+    let leaf = one(pem_leaf());
+    let old = one(pem_old());
+    let client = one(pem_client());
+    show("root", root);
+    show("intermediate", inter);
+    show("leaf", leaf);
+    show("old", old);
+    show("client", client);
+
+    // A bundle parses in order, and DER round-trips through parse_der.
+    let br = x509.parse_pem("comment line\n" + pem_leaf() + "\n" + pem_int() + pem_root());
+    guard let bundle = br else let e = err_of(br) { panic(e); }
+    println("bundle " + bundle[0].common_name + ", " + bundle[1].common_name + ", " + bundle[2].common_name);
+    let dr = x509.parse_der(leaf.der + inter.der);
+    guard let pair = dr else let e = err_of(dr) { panic(e); }
+    println("der pair " + to_str(len(pair)) + " " + to_str(pair[1].fingerprint == inter.fingerprint));
+
+    println("== hosts");
+    for h in ["api.example.com", "API.Example.COM", "www.example.com", "api.example.com.",
+              "example.com", "a.b.example.com", "api.example.org", "127.0.0.1", "::1",
+              "0:0:0:0:0:0:0:1", "127.0.0.2", "*.example.com", ""] {
+        println(h + " " + to_str(x509.matches_host(leaf, h)));
+    }
+    // The CN is never a name: old's CN is in its SAN too, client's is not.
+    println("client-7 " + to_str(x509.matches_host(client, "client-7")));
+
+    println("== validity");
+    println(to_str(x509.valid_at(leaf, at())) + " " + to_str(x509.valid_at(old, at())) + " " +
+            to_str(x509.valid_at(leaf, leaf.not_before - 1)));
+
+    println("== verify");
+    let chain = [leaf, inter];
+    check("server", x509.verify(chain, x509.Verify { roots_pem: pem_root(), host: "api.example.com", at: at(), purpose: "server" }));
+    check("wildcard", x509.verify(chain, x509.Verify { roots_pem: pem_root(), host: "x.example.com", at: at(), purpose: "server" }));
+    check("ip", x509.verify(chain, x509.Verify { roots_pem: pem_root(), host: "::1", at: at(), purpose: "" }));
+    check("no checks", x509.verify(chain, x509.Verify { roots_pem: pem_root(), host: "", at: at(), purpose: "" }));
+    check("wrong host", x509.verify(chain, x509.Verify { roots_pem: pem_root(), host: "evil.org", at: at(), purpose: "" }));
+    check("wrong purpose", x509.verify(chain, x509.Verify { roots_pem: pem_root(), host: "", at: at(), purpose: "client" }));
+    check("client", x509.verify([client, inter], x509.Verify { roots_pem: pem_root(), host: "", at: at(), purpose: "client" }));
+    check("expired", x509.verify([old, inter], x509.Verify { roots_pem: pem_root(), host: "", at: at(), purpose: "" }));
+    check("not yet", x509.verify(chain, x509.Verify { roots_pem: pem_root(), host: "", at: leaf.not_before - 1, purpose: "" }));
+    check("no intermediate", x509.verify([leaf], x509.Verify { roots_pem: pem_root(), host: "", at: at(), purpose: "" }));
+    check("other root", x509.verify(chain, x509.Verify { roots_pem: pem_other(), host: "", at: at(), purpose: "" }));
+    check("system roots", x509.verify(chain, x509.Verify { roots_pem: "", host: "", at: at(), purpose: "" }));
+    check("two roots", x509.verify(chain, x509.Verify { roots_pem: pem_other() + pem_root(), host: "", at: at(), purpose: "" }));
+    check("bad purpose", x509.verify(chain, x509.Verify { roots_pem: pem_root(), host: "", at: at(), purpose: "email" }));
+    check("bad roots", x509.verify(chain, x509.Verify { roots_pem: "not pem", host: "", at: at(), purpose: "" }));
+    check("empty", x509.verify([], x509.Verify { roots_pem: pem_root(), host: "", at: at(), purpose: "" }));
+    check("negative at", x509.verify(chain, x509.Verify { roots_pem: pem_root(), host: "", at: -5, purpose: "" }));
+
+    println("== malformed");
+    for p in ["", "no blocks here", "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"] {
+        let r = x509.parse_pem(p);
+        println(err_of(r));
+    }
+    let tr = x509.parse_der(leaf.der[0..100]);
+    println(err_of(tr));
+    let gr = x509.parse_der(leaf.der + b"\x00\x01");
+    println(err_of(gr));
+    let er = x509.parse_der(b"");
+    println(err_of(er));
+}
+
+run();

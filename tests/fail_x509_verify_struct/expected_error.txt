@@ -1,0 +1,1 @@
+argument 1 of 'x509.verify': cannot pass str where [x509.Cert] expected

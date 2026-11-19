@@ -469,6 +469,40 @@ if nested_run v2 ||
 else
     echo "PASS package exclusions (refuses import of excluded dir)"
 fi
+
+# The same import refused in the author's own tree, where src/json is still
+# there and would compile: the author must hear it before tagging, not
+# from the first consumer. Test files and code inside an excluded
+# directory never ship, so they may import what they like.
+nested="$NEWDIR/exclude_nested"
+printf 'import "src";\nprintln(src.hi());\n' >"$nested/demo.sl"
+author_ok=1
+if (cd "$nested" && "$OLDPWD/slangc" demo.sl --run >author.txt 2>&1) ||
+   ! grep -q "package 'nested' imports 'json', but slang.project has 'exclude src/json': packages that depend on this one never get that directory" \
+       "$nested/author.txt"; then
+    author_ok=0
+fi
+printf 'pub fn hi() -> str { return "own"; }\n' >"$nested/src/lib.sl"
+printf 'pub fn fixture() -> str { return "fx"; }\n' >"$nested/src/testdata/fix.sl"
+printf 'import "testdata";\nfn test_should_read_fixture() { assert(testdata.fixture() == "fx", "fixture"); }\n' \
+    >"$nested/src/lib_test.sl"
+if ! (cd "$nested" && "$OLDPWD/slangc" test src >author_test.txt 2>&1); then
+    author_ok=0
+fi
+printf 'import "../json";\nprintln(json.encode(1));\n' >"$nested/src/testdata/tool.sl"
+if ! (cd "$nested/src/testdata" && "$OLDPWD/slangc" tool.sl --run >author_tool.txt 2>&1) ||
+   ! grep -qx own-json "$nested/src/testdata/author_tool.txt"; then
+    author_ok=0
+fi
+if [ "$author_ok" -eq 1 ]; then
+    echo "PASS package exclusions (refused in the author's tree; tests and excluded code exempt)"
+else
+    echo "FAIL package exclusions (author's tree)"
+    for f in "$nested/author.txt" "$nested/author_test.txt" "$nested/src/testdata/author_tool.txt"; do
+        [ ! -f "$f" ] || sed 's/^/  /' "$f"
+    done
+    fail=1
+fi
 rm -rf "$NEWDIR"
 
 # ---- signals ------------------------------------------------------------
@@ -642,7 +676,7 @@ rm -f "$ul_bin"
 [ "$ul_bad" -eq 0 ] && echo "PASS unicode licence notice"
 
 # Stdlib packages that carry their own unit tests.
-for pkg in stdlib/pg stdlib/timez stdlib/uuid stdlib/rand stdlib/decimal stdlib/nats stdlib/s3 stdlib/template stdlib/websocket stdlib/csv stdlib/mysql stdlib/toml stdlib/yaml stdlib/cache; do
+for pkg in stdlib/pg stdlib/timez stdlib/uuid stdlib/rand stdlib/decimal stdlib/nats stdlib/s3 stdlib/template stdlib/websocket stdlib/csv stdlib/mysql stdlib/toml stdlib/yaml stdlib/cache stdlib/x509; do
     if out=$(./slangc test "$pkg" 2>&1); then
         echo "PASS slangc test $pkg"
     else

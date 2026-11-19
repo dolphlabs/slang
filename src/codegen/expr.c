@@ -1296,6 +1296,11 @@ char *gen_call(CG *cg, Expr *e) {
                     return wrap_safepoint(cg, e, ctype_of(cg, "int"), NULL,
                                           inner);
                 }
+                if (!strcmp(right, "peer_certs")) {
+                    char *inner = xasprintf("sl_link_peer_certs(%s)", self);
+                    return wrap_safepoint(cg, e, ctype_of(cg, "bytes"), NULL,
+                                          inner);
+                }
                 cg_error(e->line, "type 'link' has no method '%s'", right);
             }
             StructDef *sd = struct_of_type(cg, recv_t);

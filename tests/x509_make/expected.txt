@@ -1,0 +1,32 @@
+p256 pem true round trip true
+p256 csr true
+p256 CN=svc.internal ec-p256 ca=false days=30 serial=32 self=true
+p256 dns=svc.internal,*.svc.internal ip=10.0.0.7,fd00::7 ku=digital_signature eku=server_auth,client_auth
+p256 verify true
+p256 verify client ip true
+p256 fresh serial true
+ed25519 round trip true
+ed25519 csr true
+ed25519 CN=svc.internal ed25519 ca=false days=30 serial=32 self=true
+ed25519 dns=svc.internal,*.svc.internal ip=10.0.0.7,fd00::7 ku=digital_signature eku=server_auth,client_auth
+ed25519 verify true
+ed25519 verify client ip true
+ed25519 fresh serial true
+rsa csr true
+rsa CN=svc.internal rsa ca=false days=30 serial=32 self=true
+rsa dns=svc.internal,*.svc.internal ip=10.0.0.7,fd00::7 ku=digital_signature,key_encipherment eku=server_auth,client_auth
+rsa verify true
+rsa verify client ip true
+rsa fresh serial true
+== refused
+ecdsa: private key must be 32 bytes
+ed25519: private key must be 32 bytes
+ecdsa: not a valid P-256 private key
+x509: key must be an RSA, EC or Ed25519 private key in PEM form
+x509: days must be 1 to 36500
+x509: days must be 1 to 36500
+x509: a request needs a common name or at least one name
+x509: a certificate needs a common name or at least one name
+x509: not an IP address in ip_addrs
+x509: a name must be a non-empty DNS name or an IP address
+cn only true
