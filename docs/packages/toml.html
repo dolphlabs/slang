@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>toml — slang</title>
+<meta name="description" content="Package toml.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="toml">
+<meta property="og:description" content="Package toml.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://slang.dolphlabs.com/packages/toml">
+<meta property="og:image" content="https://slang.dolphlabs.com/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The slang rabbit mark beside the slang wordmark">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://slang.dolphlabs.com/packages/toml">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/toml.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <button id="navtoggle" class="navtoggle" type="button"
+          aria-label="Toggle navigation" aria-expanded="false"
+          aria-controls="mainnav">
+    <span></span><span></span><span></span>
+  </button>
+  <nav class="mainnav" id="mainnav"><a href="../">Home</a><a href="../guide/">Guide</a><a href="../guide/data">Data types</a><a href="../guide/errors">Errors</a><a href="../guide/functions">Functions</a><a href="../concurrency/">Concurrency</a><a href="../testing/">Testing</a><a href="../bench/">Benchmarks</a><a href="../packages/">Packages</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="../limitations/">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="navscrim" class="navscrim" hidden></div>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>toml</h1>
+      <p class="tagline">Package toml.</p>
+      <p class="agentline">
+        <a href="../packages/toml.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>TOML v1.0.0: decode a config file into your own types, or convert it to JSON.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;toml&quot;</span>;
+
+<span class="k">struct</span> Db { host: <span class="t">str</span>, port: <span class="t">int</span>, replicas: [<span class="t">str</span>], timeout_ms: <span class="t">opt</span>[<span class="t">int</span>] }
+<span class="k">struct</span> Config { name: <span class="t">str</span>, db: Db }
+
+<span class="k">let</span> r: <span class="t">result</span>[Config, <span class="t">str</span>] = toml.<span class="f">decode</span>(text);
+<span class="k">guard</span> <span class="k">let</span> cfg = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }   <span class="c">// &quot;toml: line 4: ...&quot;</span>
+
+toml.<span class="f">to_json</span>(text);                                      <span class="c">// result[str, str]</span></code></pre></div>
+<p><code>decode</code> is <code>to_json</code> then <code>json.decode</code>, so a document decodes into whatever JSON does: structs, <code>gc struct</code>s, lists, maps, <code>opt</code> (a missing key is <code>none</code>) and enums, and an offset date-time into a <code>timez.Time</code>. Tables keep their keys in document order.</p>
+<p><strong>Values in JSON.</strong> Strings, integers and booleans are the same JSON values. Floats are numbers, except <code>inf</code> and <code>nan</code>, which have no JSON form and become <code>null</code>, as <code>json.encode</code> writes them. An offset date-time is an RFC 3339 string with <code>T</code> and <code>Z</code> (<code>1979-05-27T07:32:00Z</code>, <code>...-07:00</code>); local date-times, dates and times are strings as written. A string may hold U+0000 (as <code>\u0000</code>), though a slang <code>str</code> cannot.</p>
+<p><strong>Strictness.</strong> All of TOML 1.0, and everything it forbids is an error naming the line: a key or table defined twice, a table extended after it was closed, an integer outside 64 bits, an invalid date, a control character in a string, a bare CR, invalid UTF-8. Nesting is limited to 256 levels. A subnormal float (below about 2.2e-308) is refused, as <code>to_float</code> refuses one. tests/toml_parity checks 748 documents against Python&#x27;s <code>tomllib</code>: the spec&#x27;s examples, one invalid document per rule, and seeded random and mutated ones.</p>
+<p><strong>Cost.</strong> One pass over the bytes builds a tree that holds each value&#x27;s JSON text, so nothing is decoded twice. A string with nothing to escape and a plain decimal integer are a single copy of their source. On a 1.1 MB document of 6,000 tables, <code>to_json</code> took about 220 ms against about 180 ms for Go&#x27;s BurntSushi/toml decoding into <code>map[string]any</code> and about 550 ms for Python&#x27;s <code>tomllib</code> (Linux container; ratios, the host was throttled). A config file of a few KB parses in microseconds.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="to-json"><div class="api-sig"><code><span class="k">fn</span> <span class="f">to_json</span>(text: <span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>]</code> <span class="src">stdlib/toml/toml.sl:85</span><a class="anchor" href="#to-json">#</a></div><p class="api-doc">The document as JSON.</p></div><div class="api-item" id="decode"><div class="api-sig"><code><span class="k">fn</span> decode[T](text: <span class="t">str</span>) -&gt; <span class="t">result</span>[T, <span class="t">str</span>]</code> <span class="src">stdlib/toml/toml.sl:101</span><a class="anchor" href="#decode">#</a></div><p class="api-doc">The document decoded into T, as json.decode would decode its JSON.</p></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>

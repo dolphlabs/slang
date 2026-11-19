@@ -226,6 +226,124 @@
         }
       ]
     },
+    "cache": {
+      "name": "cache",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Options",
+          "decl": "struct",
+          "sig": "gc struct Options",
+          "doc": "",
+          "file": "stdlib/cache/cache.sl",
+          "line": 45
+        },
+        {
+          "name": "options",
+          "decl": "fn",
+          "sig": "fn options() -> Options",
+          "doc": "",
+          "file": "stdlib/cache/cache.sl",
+          "line": 57
+        },
+        {
+          "name": "Stats",
+          "decl": "struct",
+          "sig": "gc struct Stats",
+          "doc": "",
+          "file": "stdlib/cache/cache.sl",
+          "line": 61
+        },
+        {
+          "name": "Cache",
+          "decl": "struct",
+          "sig": "gc struct Cache[V]",
+          "doc": "",
+          "file": "stdlib/cache/cache.sl",
+          "line": 108
+        },
+        {
+          "name": "new",
+          "decl": "fn",
+          "sig": "fn new[V](o: Options) -> result[Cache[V], str]",
+          "doc": "A cache with options o: an error if max_entries is below 1, max_bytes or ttl_ms negative, or shards over 4096.",
+          "file": "stdlib/cache/cache.sl",
+          "line": 119
+        },
+        {
+          "name": "get",
+          "decl": "fn",
+          "sig": "fn get[V](c: Cache[V], key: str) -> opt[V]",
+          "doc": "The value under key, if it is there and has not expired.",
+          "file": "stdlib/cache/cache.sl",
+          "line": 241
+        },
+        {
+          "name": "put",
+          "decl": "fn",
+          "sig": "fn put[V](c: Cache[V], key: str, value: V)",
+          "doc": "Puts value under key with the cache's time to live, replacing what was there.",
+          "file": "stdlib/cache/cache.sl",
+          "line": 276
+        },
+        {
+          "name": "put_ttl",
+          "decl": "fn",
+          "sig": "fn put_ttl[V](c: Cache[V], key: str, value: V, ttl_ms: int)",
+          "doc": "put with this entry's own time to live (0: forever).",
+          "file": "stdlib/cache/cache.sl",
+          "line": 281
+        },
+        {
+          "name": "put_sized",
+          "decl": "fn",
+          "sig": "fn put_sized[V](c: Cache[V], key: str, value: V, size: int)",
+          "doc": "put of a value that counts as size bytes towards max_bytes (its key's length is added).",
+          "file": "stdlib/cache/cache.sl",
+          "line": 287
+        },
+        {
+          "name": "remove",
+          "decl": "fn",
+          "sig": "fn remove[V](c: Cache[V], key: str) -> bool",
+          "doc": "Removes key; true if it was there.",
+          "file": "stdlib/cache/cache.sl",
+          "line": 336
+        },
+        {
+          "name": "clear",
+          "decl": "fn",
+          "sig": "fn clear[V](c: Cache[V])",
+          "doc": "Removes every entry (the statistics stay).",
+          "file": "stdlib/cache/cache.sl",
+          "line": 351
+        },
+        {
+          "name": "len_of",
+          "decl": "fn",
+          "sig": "fn len_of[V](c: Cache[V]) -> int",
+          "doc": "Entries held, expired ones not yet dropped included.",
+          "file": "stdlib/cache/cache.sl",
+          "line": 365
+        },
+        {
+          "name": "stats",
+          "decl": "fn",
+          "sig": "fn stats[V](c: Cache[V]) -> Stats",
+          "doc": "",
+          "file": "stdlib/cache/cache.sl",
+          "line": 375
+        },
+        {
+          "name": "get_or_load",
+          "decl": "fn",
+          "sig": "fn get_or_load[V, C](c: Cache[V], key: str, ctx: C, loader: fn(C, str) -> result[V, str]) -> result[V, str]",
+          "doc": "The value under key; on a miss, loader(ctx, key) is run once -- however many tasks ask for key meanwhile -- and its value cached with the cache's time to live. Its error, or its panic's message, is returned to every caller waiting on it, and nothing is cached.",
+          "file": "stdlib/cache/cache.sl",
+          "line": 396
+        }
+      ]
+    },
     "compress": {
       "name": "compress",
       "kind": "native",
@@ -7400,7 +7518,7 @@
           "sig": "fn new_pool(url: str, max_open: int) -> result[Pool, str]",
           "doc": "Parses the url; connects nothing until the first acquire.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2817
+          "line": 2820
         },
         {
           "name": "acquire",
@@ -7408,7 +7526,7 @@
           "sig": "fn acquire(p: Pool, deadline: until) -> result[Conn, str]",
           "doc": "A connection for the caller's exclusive use, until release(). Prefer pool_query / pool_exec, which cannot forget to release; acquire is for a transaction, which needs several statements on one connection.",
           "file": "stdlib/pg/pg.sl",
-          "line": 2940
+          "line": 2968
         },
         {
           "name": "release",
@@ -7416,7 +7534,7 @@
           "sig": "fn release(p: Pool, c: Conn)",
           "doc": "Returns a connection to the pool: to the oldest waiting task if there is one, else to the idle list. One that is broken, closed, or still inside a transaction is closed instead, and its slot passed on: handing an open transaction to the next caller would run its statements inside someone else's uncommitted work.",
           "file": "stdlib/pg/pg.sl",
-          "line": 3014
+          "line": 3052
         },
         {
           "name": "pool_query",
@@ -7424,7 +7542,7 @@
           "sig": "fn pool_query(p: Pool, sql: str, args: [Arg], deadline: until) -> result[Rows, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 3042
+          "line": 3087
         },
         {
           "name": "pool_exec",
@@ -7432,7 +7550,7 @@
           "sig": "fn pool_exec(p: Pool, sql: str, deadline: until) -> result[int, str]",
           "doc": "",
           "file": "stdlib/pg/pg.sl",
-          "line": 3053
+          "line": 3098
         },
         {
           "name": "pool_close",
@@ -7440,7 +7558,7 @@
           "sig": "fn pool_close(p: Pool)",
           "doc": "Closes every idle connection and fails every waiting acquire. Connections in use are closed as they are released; acquire fails from now on.",
           "file": "stdlib/pg/pg.sl",
-          "line": 3066
+          "line": 3111
         }
       ]
     },
@@ -9561,6 +9679,15 @@
           "sig": "strings.count(str, str) -> int"
         },
         {
+          "name": "hash",
+          "params": [
+            "str"
+          ],
+          "ret": "int",
+          "tls": false,
+          "sig": "strings.hash(str) -> int"
+        },
+        {
           "name": "trim",
           "params": [
             "str"
@@ -9675,6 +9802,19 @@
           "ret": "bytes",
           "tls": false,
           "sig": "strings.bytes_zero(int) -> bytes"
+        },
+        {
+          "name": "copy_into",
+          "params": [
+            "bytes",
+            "int",
+            "bytes",
+            "int",
+            "int"
+          ],
+          "ret": "int",
+          "tls": false,
+          "sig": "strings.copy_into(bytes, int, bytes, int, int) -> int"
         },
         {
           "name": "from_bytes",
@@ -11025,6 +11165,28 @@
         }
       ]
     },
+    "toml": {
+      "name": "toml",
+      "kind": "source",
+      "items": [
+        {
+          "name": "to_json",
+          "decl": "fn",
+          "sig": "fn to_json(text: str) -> result[str, str]",
+          "doc": "The document as JSON.",
+          "file": "stdlib/toml/toml.sl",
+          "line": 85
+        },
+        {
+          "name": "decode",
+          "decl": "fn",
+          "sig": "fn decode[T](text: str) -> result[T, str]",
+          "doc": "The document decoded into T, as json.decode would decode its JSON.",
+          "file": "stdlib/toml/toml.sl",
+          "line": 101
+        }
+      ]
+    },
     "unicode": {
       "name": "unicode",
       "kind": "native",
@@ -11357,6 +11519,44 @@
           "doc": "Why the connection ended, or \"\" while it is open.",
           "file": "stdlib/websocket/websocket.sl",
           "line": 1181
+        }
+      ]
+    },
+    "yaml": {
+      "name": "yaml",
+      "kind": "source",
+      "items": [
+        {
+          "name": "to_json",
+          "decl": "fn",
+          "sig": "fn to_json(text: str) -> result[str, str]",
+          "doc": "The stream's one document as JSON: null if it has none, an error if it has more than one.",
+          "file": "stdlib/yaml/yaml.sl",
+          "line": 108
+        },
+        {
+          "name": "to_json_all",
+          "decl": "fn",
+          "sig": "fn to_json_all(text: str) -> result[[str], str]",
+          "doc": "Every document in the stream, as JSON.",
+          "file": "stdlib/yaml/yaml.sl",
+          "line": 121
+        },
+        {
+          "name": "decode",
+          "decl": "fn",
+          "sig": "fn decode[T](text: str) -> result[T, str]",
+          "doc": "The one document decoded into T, as json.decode would decode its JSON.",
+          "file": "stdlib/yaml/yaml.sl",
+          "line": 150
+        },
+        {
+          "name": "decode_all",
+          "decl": "fn",
+          "sig": "fn decode_all[T](text: str) -> result[[T], str]",
+          "doc": "Every document decoded into T.",
+          "file": "stdlib/yaml/yaml.sl",
+          "line": 159
         }
       ]
     }
