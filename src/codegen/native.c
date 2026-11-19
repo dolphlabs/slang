@@ -36,6 +36,9 @@ int native_is_leaf(const char *pkg, const char *name) {
         "strings.find", "strings.rfind", "strings.contains",
         "strings.has_prefix", "strings.has_suffix", "strings.count",
         "strings.find_field",
+        /* writes into its first argument's payload, which holds no
+           pointers, and allocates nothing (sl_strings_copy_into) */
+        "strings.copy_into",
         /* reads the clock and the date cache's atomics; never allocates */
         "time.put_http_date",
         /* runtime/sl_unicode.c: valid, valid_bytes and count read the

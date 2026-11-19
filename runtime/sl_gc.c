@@ -655,7 +655,8 @@ static void sl_gc_unregister_thread(void) {
 /* The slow half: everything that actually needs the preempt bracket.
  * Split out so the common case below touches no thread-local state
  * at all. */
-static void sl_rt_gc_checkin_slow(void) {
+static void sl_rt_gc_checkin_slow_body(void *unused) {
+    (void)unused;
     /* Tier 11 eighth slice: bracketed entry-to-every-return, not just
      * around sl_gc_collect's own sl_gc_mu use -- the losing/spin path
      * (sched_yield) doesn't hold sl_gc_mu itself but is harmless to
@@ -693,6 +694,28 @@ static void sl_rt_gc_checkin_slow(void) {
         }
         sched_yield();
     }
+}
+
+/* The collector, its sweep helpers and the free() calls they make run on
+ * the worker's own stack, never on the task's: a safepoint promises only
+ * SL_TASK_GUARD_MARGIN below it, and the collector needs more (see
+ * sl_rt_native_stack_top for the measurement). Moving the stack changes
+ * nothing about roots: a task that checks in here is not async-
+ * preempted, so the collector never scans its stack conservatively, and
+ * everything it holds is already in its safepoint chain. The task does
+ * not park in here either -- it spins or sleeps on the OS thread -- so
+ * it stays on this thread, and on top's memory, until the call returns.
+ * The bracket around the call is what makes that true: no preemption
+ * can move the task between reading this thread's native rsp and using
+ * it. */
+static void sl_rt_gc_checkin_slow(void) {
+    sl_rt_preempt_disable();
+    void *top = sl_rt_native_stack_top();
+    if (top)
+        sl_rt_call_on_stack(sl_rt_gc_checkin_slow_body, NULL, top);
+    else
+        sl_rt_gc_checkin_slow_body(NULL);
+    sl_rt_preempt_enable();
 }
 
 /* Called at EVERY safepoint -- every loop back-edge and every
@@ -1519,7 +1542,7 @@ static sl_gc_page *sl_gc_page_new(sl_gc_worker_state *st) {
         if (!st->pagev)
             return NULL;
     }
-    void *mem = aligned_alloc(SL_GC_PAGE_ALIGN, SL_GC_PAGE_SIZE);
+    void *mem = sl_rt_sysalloc(SL_GC_PAGE_ALIGN, SL_GC_PAGE_SIZE);
     if (!mem)
         return NULL;
     sl_gc_page *pg = (sl_gc_page *)mem;
@@ -2357,7 +2380,7 @@ static inline void *sl_gc_alloc_impl(size_t n,
         h = sl_gc_class_pop(total);
     }
     if (!h) {
-        h = (sl_gc_obj *)malloc(total);
+        h = (sl_gc_obj *)sl_rt_sysalloc(0, total);
         if (!h) { fprintf(stderr, "slang: out of memory\n"); exit(1); }
         h->paged = 0;
     }
