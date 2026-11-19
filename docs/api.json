@@ -9244,7 +9244,7 @@
           "sig": "gc struct Client",
           "doc": "",
           "file": "stdlib/s3/s3.sl",
-          "line": 27
+          "line": 28
         },
         {
           "name": "Object",
@@ -9252,7 +9252,7 @@
           "sig": "gc struct Object",
           "doc": "",
           "file": "stdlib/s3/s3.sl",
-          "line": 46
+          "line": 47
         },
         {
           "name": "Page",
@@ -9260,7 +9260,7 @@
           "sig": "gc struct Page",
           "doc": "",
           "file": "stdlib/s3/s3.sl",
-          "line": 54
+          "line": 55
         },
         {
           "name": "new_client",
@@ -9268,7 +9268,7 @@
           "sig": "fn new_client(endpoint: str, region: str, access_key: str, secret_key: str) -> result[Client, str]",
           "doc": "A client for endpoint (\"https://s3.us-east-1.amazonaws.com\", \"https://<account>.r2.cloudflarestorage.com\", \"http://127.0.0.1:9000\").",
           "file": "stdlib/s3/s3.sl",
-          "line": 65
+          "line": 66
         },
         {
           "name": "from_env",
@@ -9276,7 +9276,7 @@
           "sig": "fn from_env(getenv: fn(str) -> opt[str]) -> result[Client, str]",
           "doc": "A client from AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN (optional), AWS_REGION (or AWS_DEFAULT_REGION) and S3_ENDPOINT (default: the region's AWS endpoint).",
           "file": "stdlib/s3/s3.sl",
-          "line": 107
+          "line": 108
         },
         {
           "name": "put_object",
@@ -9284,7 +9284,7 @@
           "sig": "fn put_object(c: Client, bucket: str, key: str, data: bytes, content_type: str, deadline: until) -> result[str, str]",
           "doc": "Store data at bucket/key; the object's ETag.",
           "file": "stdlib/s3/s3.sl",
-          "line": 123
+          "line": 124
         },
         {
           "name": "get_object",
@@ -9292,7 +9292,7 @@
           "sig": "fn get_object(c: Client, bucket: str, key: str, deadline: until) -> result[bytes, str]",
           "doc": "",
           "file": "stdlib/s3/s3.sl",
-          "line": 134
+          "line": 135
         },
         {
           "name": "get_range",
@@ -9300,7 +9300,7 @@
           "sig": "fn get_range(c: Client, bucket: str, key: str, first: int, last: int, deadline: until) -> result[bytes, str]",
           "doc": "Bytes first..last of the object, both included (an HTTP Range).",
           "file": "stdlib/s3/s3.sl",
-          "line": 141
+          "line": 142
         },
         {
           "name": "head_object",
@@ -9308,7 +9308,7 @@
           "sig": "fn head_object(c: Client, bucket: str, key: str, deadline: until) -> result[opt[Object], str]",
           "doc": "Size, ETag, type and modification time, without the body. none when the object does not exist.",
           "file": "stdlib/s3/s3.sl",
-          "line": 155
+          "line": 156
         },
         {
           "name": "delete_object",
@@ -9316,7 +9316,7 @@
           "sig": "fn delete_object(c: Client, bucket: str, key: str, deadline: until) -> result[bool, str]",
           "doc": "Delete bucket/key. S3 answers success for a key that was not there.",
           "file": "stdlib/s3/s3.sl",
-          "line": 175
+          "line": 176
         },
         {
           "name": "list_objects",
@@ -9324,7 +9324,7 @@
           "sig": "fn list_objects(c: Client, bucket: str, prefix: str, delimiter: str, next: str, max_keys: int, deadline: until) -> result[Page, str]",
           "doc": "One page (up to max_keys, at most 1000) of the keys under prefix, in key order, from where `next` (a Page's next, or \"\" to start) says. With delimiter \"/\", keys below the next \"/\" fold into page.prefixes.",
           "file": "stdlib/s3/s3.sl",
-          "line": 184
+          "line": 185
         },
         {
           "name": "create_multipart",
@@ -9332,7 +9332,7 @@
           "sig": "fn create_multipart(c: Client, bucket: str, key: str, content_type: str, deadline: until) -> result[str, str]",
           "doc": "Start a multipart upload; its upload id.",
           "file": "stdlib/s3/s3.sl",
-          "line": 225
+          "line": 226
         },
         {
           "name": "upload_part",
@@ -9340,7 +9340,7 @@
           "sig": "fn upload_part(c: Client, bucket: str, key: str, upload_id: str, n: int, data: bytes, deadline: until) -> result[str, str]",
           "doc": "Upload part number n (1 to 10000) of an upload; its ETag, for complete_multipart. Every part but the last must be at least 5 MiB.",
           "file": "stdlib/s3/s3.sl",
-          "line": 244
+          "line": 245
         },
         {
           "name": "complete_multipart",
@@ -9348,7 +9348,7 @@
           "sig": "fn complete_multipart(c: Client, bucket: str, key: str, upload_id: str, etags: [str], deadline: until) -> result[str, str]",
           "doc": "Finish an upload from its parts' ETags, in part order; the object's ETag.",
           "file": "stdlib/s3/s3.sl",
-          "line": 262
+          "line": 263
         },
         {
           "name": "abort_multipart",
@@ -9356,7 +9356,7 @@
           "sig": "fn abort_multipart(c: Client, bucket: str, key: str, upload_id: str, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/s3/s3.sl",
-          "line": 287
+          "line": 288
         },
         {
           "name": "put_large",
@@ -9364,7 +9364,7 @@
           "sig": "fn put_large(c: Client, bucket: str, key: str, data: bytes, content_type: str, part_size: int, deadline: until) -> result[str, str]",
           "doc": "Upload data in parts of part_size bytes (at least 5 MiB), aborting the upload if any part fails, so no orphaned parts are left to be billed.",
           "file": "stdlib/s3/s3.sl",
-          "line": 298
+          "line": 299
         },
         {
           "name": "create_bucket",
@@ -9372,7 +9372,7 @@
           "sig": "fn create_bucket(c: Client, bucket: str, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/s3/s3.sl",
-          "line": 335
+          "line": 336
         },
         {
           "name": "delete_bucket",
@@ -9380,7 +9380,7 @@
           "sig": "fn delete_bucket(c: Client, bucket: str, deadline: until) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/s3/s3.sl",
-          "line": 348
+          "line": 349
         },
         {
           "name": "presign_get",
@@ -9388,7 +9388,7 @@
           "sig": "fn presign_get(c: Client, bucket: str, key: str, expires_seconds: int) -> result[str, str]",
           "doc": "A URL anyone can GET (or PUT, below) for expires_seconds (1 second to 7 days), signed now: for downloads and browser uploads that never see your keys.",
           "file": "stdlib/s3/s3.sl",
-          "line": 359
+          "line": 360
         },
         {
           "name": "presign_put",
@@ -9396,7 +9396,7 @@
           "sig": "fn presign_put(c: Client, bucket: str, key: str, expires_seconds: int) -> result[str, str]",
           "doc": "",
           "file": "stdlib/s3/s3.sl",
-          "line": 363
+          "line": 364
         },
         {
           "name": "presign_at",
@@ -9404,7 +9404,7 @@
           "sig": "fn presign_at(c: Client, method: str, bucket: str, key: str, expires_seconds: int, amzdate: str) -> result[str, str]",
           "doc": "presign at a given time (\"20130524T000000Z\"), for tests and for URLs that must agree across servers.",
           "file": "stdlib/s3/s3.sl",
-          "line": 369
+          "line": 370
         },
         {
           "name": "sign_request",
@@ -9412,15 +9412,133 @@
           "sig": "fn sign_request(c: Client, method: str, host: str, path: str, query: map[str]str, headers: map[str]str, payload_hash: str, amzdate: str) -> str",
           "doc": "The Authorization header for a request (SigV4, signed headers are host, x-amz-content-sha256, x-amz-date, any x-amz-security-token and the caller's headers). headers holds lowercase names.",
           "file": "stdlib/s3/s3.sl",
-          "line": 421
+          "line": 407
+        },
+        {
+          "name": "uri_encode",
+          "decl": "fn",
+          "sig": "fn uri_encode(s: str, keep_slash: bool) -> str",
+          "doc": "RFC 3986 percent-encoding as SigV4 wants it (sigv4.uri_encode).",
+          "file": "stdlib/s3/s3.sl",
+          "line": 424
+        }
+      ]
+    },
+    "sigv4": {
+      "name": "sigv4",
+      "kind": "source",
+      "items": [
+        {
+          "name": "DayKey",
+          "decl": "struct",
+          "sig": "gc struct DayKey { date: str, key: bytes }",
+          "doc": "The signing key for one day, held as one object so a request never pairs one day's date with another day's key while the day turns.",
+          "file": "stdlib/sigv4/sigv4.sl",
+          "line": 27
+        },
+        {
+          "name": "Signer",
+          "decl": "struct",
+          "sig": "gc struct Signer",
+          "doc": "",
+          "file": "stdlib/sigv4/sigv4.sl",
+          "line": 29
+        },
+        {
+          "name": "new_signer",
+          "decl": "fn",
+          "sig": "fn new_signer(access_key: str, secret_key: str, region: str, service: str) -> Signer",
+          "doc": "",
+          "file": "stdlib/sigv4/sigv4.sl",
+          "line": 40
+        },
+        {
+          "name": "amz_date_now",
+          "decl": "fn",
+          "sig": "fn amz_date_now() -> str",
+          "doc": "\"20130524T000000Z\" for now, UTC.",
+          "file": "stdlib/sigv4/sigv4.sl",
+          "line": 46
+        },
+        {
+          "name": "payload_hash",
+          "decl": "fn",
+          "sig": "fn payload_hash(body: bytes) -> str",
+          "doc": "The hex SHA-256 SigV4 signs as the payload hash.",
+          "file": "stdlib/sigv4/sigv4.sl",
+          "line": 51
+        },
+        {
+          "name": "derive_key",
+          "decl": "fn",
+          "sig": "fn derive_key(secret_key: str, date: str, region: str, service: str) -> bytes",
+          "doc": "kSigning = HMAC(HMAC(HMAC(HMAC(\"AWS4\" + secret, date), region), service), \"aws4_request\"). `date` is YYYYMMDD.",
+          "file": "stdlib/sigv4/sigv4.sl",
+          "line": 57
+        },
+        {
+          "name": "signing_key",
+          "decl": "fn",
+          "sig": "fn signing_key(s: Signer, date: str) -> bytes",
+          "doc": "The signer's key for `date`, derived once a day.",
+          "file": "stdlib/sigv4/sigv4.sl",
+          "line": 65
+        },
+        {
+          "name": "scope",
+          "decl": "fn",
+          "sig": "fn scope(date: str, region: str, service: str) -> str",
+          "doc": "",
+          "file": "stdlib/sigv4/sigv4.sl",
+          "line": 75
         },
         {
           "name": "uri_encode",
           "decl": "fn",
           "sig": "fn uri_encode(s: str, keep_slash: bool) -> str",
           "doc": "RFC 3986 percent-encoding as SigV4 wants it: everything but A-Z a-z 0-9 - _ . ~ (and / in paths, when keep_slash).",
-          "file": "stdlib/s3/s3.sl",
-          "line": 471
+          "file": "stdlib/sigv4/sigv4.sl",
+          "line": 96
+        },
+        {
+          "name": "canonical_query",
+          "decl": "fn",
+          "sig": "fn canonical_query(q: map[str]str) -> str",
+          "doc": "Parameters encoded, then sorted by their encoded form: the order SigV4 signs and the order a request should send.",
+          "file": "stdlib/sigv4/sigv4.sl",
+          "line": 119
+        },
+        {
+          "name": "authorization",
+          "decl": "fn",
+          "sig": "fn authorization(access_key: str, key: bytes, region: str, service: str, method: str, path: str, query: map[str]str, headers: map[str]str, payload: str, amzdate: str) -> str",
+          "doc": "The Authorization header for a request whose signed headers are exactly `headers` (which must hold host and x-amz-date, and x-amz-security-token with temporary credentials). For callers that keep their own key cache, as s3 does; most callers want `sign`.",
+          "file": "stdlib/sigv4/sigv4.sl",
+          "line": 156
+        },
+        {
+          "name": "sign",
+          "decl": "fn",
+          "sig": "fn sign(s: Signer, method: str, host: str, path: str, query: map[str]str, headers: map[str]str, payload: str, amzdate: str) -> str",
+          "doc": "The Authorization header for a request to `host`: signs `headers` plus host, x-amz-date and, with temporary credentials, x-amz-security-token. The caller sends X-Amz-Date (and the token) with the same values.",
+          "file": "stdlib/sigv4/sigv4.sl",
+          "line": 170
+        },
+        {
+          "name": "presign_query",
+          "decl": "fn",
+          "sig": "fn presign_query(access_key: str, key: bytes, region: str, service: str, session_token: str, method: str, host: str, path: str, query: map[str]str, expires_seconds: int, payload: str, amzdate: str) -> str",
+          "doc": "The query string of a presigned URL (with X-Amz-Signature last), for a request that signs only the host header. `query` holds the request's own parameters; payload is usually \"UNSIGNED-PAYLOAD\". For callers with their own key cache; most callers want `presign`.",
+          "file": "stdlib/sigv4/sigv4.sl",
+          "line": 189
+        },
+        {
+          "name": "presign",
+          "decl": "fn",
+          "sig": "fn presign(s: Signer, method: str, host: str, path: str, query: map[str]str, expires_seconds: int, amzdate: str) -> str",
+          "doc": "",
+          "file": "stdlib/sigv4/sigv4.sl",
+          "line": 213
         }
       ]
     },

@@ -267,7 +267,7 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg mysql redis regex
 strings unicode encoding compress math decimal rand builder byteutil flags sort
-uuid http http2 httpc websocket template csv toml yaml cache nats s3 x509`.
+uuid http http2 httpc websocket template csv toml yaml cache nats s3 sigv4 x509`.
 `decimal` is exact money: `let r = decimal.parse("19.99")` (result), then
 `decimal.add/sub/mul(a, b)` (opt: none past 38 digits), `decimal.div(a, b,
 scale, decimal.Rounding.HalfEven)`, `decimal.format(d)`, `decimal.split(d, n)`.
@@ -292,6 +292,11 @@ reconnects and resubscribes by itself.
 `s3.from_env(proc.getenv)`), `s3.put_object(c, bucket, key, data, ctype, dl)`,
 `s3.get_object`, `s3.list_objects(c, bucket, prefix, "/", next, 1000, dl)`,
 `s3.put_large` (multipart), `s3.presign_get(c, bucket, key, seconds)`.
+Google Cloud Storage with HMAC keys: `s3.new_client("https://storage.googleapis.com",
+"auto", key, secret)`. `sigv4` signs requests to any AWS service:
+`let s = sigv4.new_signer(key, secret, region, "sqs")`, then
+`sigv4.sign(s, method, host, path, query, headers, sigv4.payload_hash(body),
+sigv4.amz_date_now())` gives the Authorization header.
 `template`: `let r = template.parse(name, src)` (Go syntax: `{{ .f }}`, `if`,
 `range $i, $x := .xs`, `with`, `define`, pipelines), then
 `template.render(t, data)` (result; data is any `json.encode` value). HTML

@@ -267,7 +267,7 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg mysql redis regex
 strings unicode encoding compress math decimal rand builder byteutil flags sort
-uuid http http2 httpc websocket template csv toml yaml cache nats s3 x509`.
+uuid http http2 httpc websocket template csv toml yaml cache nats s3 sigv4 x509`.
 `decimal` is exact money: `let r = decimal.parse("19.99")` (result), then
 `decimal.add/sub/mul(a, b)` (opt: none past 38 digits), `decimal.div(a, b,
 scale, decimal.Rounding.HalfEven)`, `decimal.format(d)`, `decimal.split(d, n)`.
@@ -292,6 +292,11 @@ reconnects and resubscribes by itself.
 `s3.from_env(proc.getenv)`), `s3.put_object(c, bucket, key, data, ctype, dl)`,
 `s3.get_object`, `s3.list_objects(c, bucket, prefix, "/", next, 1000, dl)`,
 `s3.put_large` (multipart), `s3.presign_get(c, bucket, key, seconds)`.
+Google Cloud Storage with HMAC keys: `s3.new_client("https://storage.googleapis.com",
+"auto", key, secret)`. `sigv4` signs requests to any AWS service:
+`let s = sigv4.new_signer(key, secret, region, "sqs")`, then
+`sigv4.sign(s, method, host, path, query, headers, sigv4.payload_hash(body),
+sigv4.amz_date_now())` gives the Authorization header.
 `template`: `let r = template.parse(name, src)` (Go syntax: `{{ .f }}`, `if`,
 `range $i, $x := .xs`, `with`, `define`, pipelines), then
 `template.render(t, data)` (result; data is any `json.encode` value). HTML
@@ -421,6 +426,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - redis: encode, decode, decode_at, slot, parse_url, connect_config, connect, do, close, usable, ping, echo (+132 more)
 - regex: compile, free, groups, is_match, is_match_bytes, find, find_at, find_bytes, find_bytes_at
 - s3: new_client, from_env, put_object, get_object, get_range, head_object, delete_object, list_objects, create_multipart, upload_part, complete_multipart, abort_multipart (+8 more)
+- sigv4: new_signer, amz_date_now, payload_hash, derive_key, signing_key, scope, uri_encode, canonical_query, authorization, sign, presign_query, presign
 - sort: ints, floats, strings, by, by_stable, search_ints, search_floats, search_strings, search_by
 - sql: open, close, exec, last_insert_id, prepare, finalize, reset, bind_int, bind_float, bind_text, bind_blob, bind_null (+8 more)
 - strings: find, rfind, contains, has_prefix, has_suffix, count, hash, trim, trim_start, trim_end, to_upper, to_lower (+16 more)
