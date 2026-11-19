@@ -609,6 +609,63 @@ static const char *sl_net_tls_alpn(void *sslv) {
 }
 
 
+/* The peer's certificate chain as concatenated DER, leaf first, in a
+ * malloc'd buffer (NULL and 0 when it sent none). On a server this is
+ * the client's identity in mTLS: with net.tls_ctx_require_client the
+ * handshake has already verified it; without, it is whatever the client
+ * chose to send. Callers hold the preempt bracket. */
+static unsigned char *sl_tls_peer_der(SSL *ssl, size_t *out_len) {
+    unsigned char *buf = NULL;
+    size_t len = 0, cap = 0;
+    STACK_OF(X509) *chain = SSL_get_peer_cert_chain(ssl);
+    /* A client's chain starts with the leaf; a server's leaves it out
+     * (OpenSSL's documented asymmetry), so the server adds it. */
+    X509 *leaf = SSL_is_server(ssl) ? SSL_get1_peer_certificate(ssl) : NULL;
+    int n = chain ? sk_X509_num(chain) : 0;
+    for (int i = -1; i < n; i++) {
+        X509 *x = i < 0 ? leaf : sk_X509_value(chain, i);
+        int dl = x ? i2d_X509(x, NULL) : 0;
+        if (dl <= 0)
+            continue;
+        if (len + (size_t)dl > cap) {
+            size_t nc = cap ? cap * 2 : 4096;
+            while (nc < len + (size_t)dl)
+                nc *= 2;
+            unsigned char *nb = (unsigned char *)realloc(buf, nc);
+            if (!nb)
+                break;
+            buf = nb;
+            cap = nc;
+        }
+        unsigned char *p = buf + len;
+        if (i2d_X509(x, &p) == dl)
+            len += (size_t)dl;
+    }
+    X509_free(leaf);
+    ERR_clear_error();
+    *out_len = len;
+    return buf;
+}
+
+static sl_bytes *sl_tls_peer_bytes(unsigned char *buf, size_t len) {
+    sl_bytes *b = sl_bytes_new(buf, (long long)len);
+    sl_rt_preempt_disable();
+    free(buf);
+    sl_rt_preempt_enable();
+    return b;
+}
+
+static sl_bytes *sl_net_tls_peer_certs(void *sslv) {
+    if (!sslv)
+        return sl_bytes_new(NULL, 0);
+    sl_rt_need_fat_stack();
+    size_t len = 0;
+    sl_rt_preempt_disable();
+    unsigned char *buf = sl_tls_peer_der((SSL *)sslv, &len);
+    sl_rt_preempt_enable();
+    return sl_tls_peer_bytes(buf, len);
+}
+
 /* ---- TLS on a `link` ------------------------------------------------
  *
  * `c.tls_accept(ctx, deadline)` runs the server handshake on a link the
@@ -773,6 +830,18 @@ static void sl_link_tls_share(sl_link *l, sl_link *w) {
  * effort since the socket is non-blocking, then, if a writer half shares
  * it, shutdown() so that writer's sends fail at once instead of queueing
  * behind a peer that will never read them. The last link out frees it. */
+/* link.peer_certs() on a link carrying TLS: the session is shared with
+ * a split writer, so its lock is held. */
+static sl_bytes *sl_link_tls_peer_certs(sl_link *l) {
+    sl_rt_need_fat_stack();
+    sl_link_tls *t = (sl_link_tls *)l->tls;
+    size_t len = 0;
+    sl_link_tls_lock(t);
+    unsigned char *buf = sl_tls_peer_der(t->ssl, &len);
+    sl_link_tls_unlock(t);
+    return sl_tls_peer_bytes(buf, len);
+}
+
 static void sl_link_tls_free(sl_link *l) {
     sl_rt_need_fat_stack();
     sl_link_tls *t = (sl_link_tls *)l->tls;
@@ -819,6 +888,7 @@ static sl_res_int_fault sl_link_tls_accept(sl_link *l, void *ctxv,
     sl_link_tls_recv_fn = sl_link_tls_recv;
     sl_link_tls_share_fn = sl_link_tls_share;
     sl_link_tls_free_fn = sl_link_tls_free;
+    sl_link_tls_peer_certs_fn = sl_link_tls_peer_certs;
     sl_rt_preempt_disable();
     ERR_clear_error();
     SSL *ssl = SSL_new((SSL_CTX *)ctxv);

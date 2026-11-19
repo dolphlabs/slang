@@ -987,6 +987,7 @@ void force_native_result_types(CG *cg) {
         res_cname(cg, "bytes", "str");
         res_cname(cg, "bool", "str");
         res_cname(cg, "str", "str");   /* rsa_generate's PEM */
+        res_cname(cg, "[str]", "str"); /* x509_fields */
     }
     if (want_pkg(cg, "sql")) {
         res_cname(cg, "rawptr", "str");
@@ -1084,6 +1085,8 @@ void emit_native_runtime(CG *cg) {
         emit_line(cg, "#define SL_HAVE_REACTOR 1");
     if (want_crypto)
         emit_runtime_file(cg, "sl_crypto.c");
+    if (want_crypto && cg->want_x509)
+        emit_runtime_file(cg, "sl_x509.c"); /* after sl_crypto.c: uses its helpers */
     if (want_sql)
         emit_runtime_file(cg, "sl_sql.c");
     if (want_regex)

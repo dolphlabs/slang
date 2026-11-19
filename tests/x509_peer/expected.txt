@@ -1,0 +1,8 @@
+== mTLS, raw handles
+client sees server: 1 cert, CN=localhost, issuer CN=localhost, localhost true
+server sees client: 1 cert, CN=localhost, issuer CN=localhost, localhost true
+== TLS without client certificates
+client sees server: 1 cert, CN=localhost, issuer CN=localhost, localhost true
+server sees client: no certificate
+== mTLS on a link
+before TLS 0 bytes; link sees client: 1 cert, CN=localhost, issuer CN=localhost, localhost true

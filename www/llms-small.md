@@ -267,9 +267,7 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg mysql redis regex
 strings unicode encoding compress math decimal rand builder byteutil flags sort
-uuid http http2 httpc template`.
-uuid http http2 httpc websocket`.
-uuid http http2 httpc csv`.
+uuid http http2 httpc websocket template csv toml yaml cache nats s3 x509`.
 `decimal` is exact money: `let r = decimal.parse("19.99")` (result), then
 `decimal.add/sub/mul(a, b)` (opt: none past 38 digits), `decimal.div(a, b,
 scale, decimal.Rounding.HalfEven)`, `decimal.format(d)`, `decimal.split(d, n)`.
@@ -282,6 +280,10 @@ case-insensitive matches (`"STRASSE"` equals `"straße"`). Transforms repair
 invalid UTF-8 to U+FFFD.
 `uuid.v7()` (time-ordered, for keys) and `uuid.v4()` return `result[str, str]`;
 an id is a canonical lowercase `str`, `uuid.parse` canonicalizes any spelling.
+`x509.parse_pem(pem)` / `parse_der(der)` give `[x509.Cert]` (names, SANs,
+`not_after` unix s, key, fingerprint); `x509.verify(chain, x509.Verify { roots_pem,
+host, at, purpose })`; `x509.csr(key_pem, req)`, `x509.self_signed(key_pem, req,
+days)`. mTLS identity: `x509.parse_der(c.peer_certs())` on a TLS link.
 `nats`: `let nc = nats.connect(url, deadline)`, `nats.publish(nc, subj, data)`,
 `nats.subscribe(nc, subj)` then `nats.next_msg(sub, deadline)` (result of opt),
 `nats.request(nc, subj, data, deadline)`, `nats.drain(nc, deadline)`;

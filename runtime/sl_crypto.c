@@ -1585,6 +1585,57 @@ static sl_res_str_str *sl_crypto_rsa_generate(long long bits) {
     return sl_crypto_ok_str(out);
 }
 
+/* A raw private key as PKCS#8 PEM ("PRIVATE KEY"), the form
+   net.tls_ctx_use_cert, x509 and *_from_pem take. ecdsa_p256_generate and
+   ed25519_generate return raw keys because the signing calls take them;
+   this is the way from one to the other. */
+static sl_res_str_str *sl_crypto_key_pem(EVP_PKEY *k, const char *what) {
+    char *pem = NULL;
+    long len = 0;
+    BIO *b = k ? BIO_new(BIO_s_mem()) : NULL;
+    if (b && PEM_write_bio_PrivateKey(b, k, NULL, NULL, 0, NULL, NULL) == 1) {
+        char *p = NULL;
+        len = BIO_get_mem_data(b, &p);
+        if (len > 0 && (pem = (char *)malloc((size_t)len + 1)) != NULL) {
+            memcpy(pem, p, (size_t)len);
+            pem[len] = '\0';
+        }
+        OPENSSL_cleanse(p, (size_t)len);
+    }
+    BIO_free(b);
+    EVP_PKEY_free(k);
+    ERR_clear_error();
+    sl_rt_preempt_enable();
+    if (!pem)
+        return sl_crypto_err_str(what);
+    char *out = (char *)sl_gc_alloc_leaf_uninit((size_t)len + 1, NULL);
+    memcpy(out, pem, (size_t)len + 1);
+    sl_rt_preempt_disable();
+    OPENSSL_cleanse(pem, (size_t)len);
+    free(pem);
+    sl_rt_preempt_enable();
+    return sl_crypto_ok_str(out);
+}
+
+static sl_res_str_str *sl_crypto_ecdsa_p256_private_to_pem(sl_bytes *d) {
+    SL_CRYPTO_STACK();
+    if (d->len != 32)
+        return sl_crypto_err_str("ecdsa: private key must be 32 bytes");
+    unsigned char pub[65];
+    sl_rt_preempt_disable();
+    EVP_PKEY *k = sl_crypto_p256_point(d->ptr, pub) == 0 ? sl_crypto_p256_key(d->ptr, pub) : NULL;
+    return sl_crypto_key_pem(k, "ecdsa: not a valid P-256 private key");
+}
+
+static sl_res_str_str *sl_crypto_ed25519_private_to_pem(sl_bytes *seed) {
+    SL_CRYPTO_STACK();
+    if (seed->len != 32)
+        return sl_crypto_err_str("ed25519: private key must be 32 bytes");
+    sl_rt_preempt_disable();
+    EVP_PKEY *k = sl_crypto_ed25519_private(seed);
+    return sl_crypto_key_pem(k, "ed25519: could not encode the key");
+}
+
 /* The modulus (which = 0) or public exponent (1) of an RSA key in PEM,
    big-endian: what a JWKS entry's n and e encode. */
 static sl_res_bytes_str *sl_crypto_rsa_public_part(const char *pem, int which) {

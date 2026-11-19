@@ -726,6 +726,15 @@
           "sig": "crypto.ed25519_public_from_pem(str) -> result[bytes,str]"
         },
         {
+          "name": "ed25519_private_to_pem",
+          "params": [
+            "bytes"
+          ],
+          "ret": "result[str,str]",
+          "tls": false,
+          "sig": "crypto.ed25519_private_to_pem(bytes) -> result[str,str]"
+        },
+        {
           "name": "ecdsa_p256_generate",
           "params": [],
           "ret": "result[bytes,str]",
@@ -779,6 +788,15 @@
           "ret": "result[bytes,str]",
           "tls": false,
           "sig": "crypto.ecdsa_p256_public_from_pem(str) -> result[bytes,str]"
+        },
+        {
+          "name": "ecdsa_p256_private_to_pem",
+          "params": [
+            "bytes"
+          ],
+          "ret": "result[str,str]",
+          "tls": false,
+          "sig": "crypto.ecdsa_p256_private_to_pem(bytes) -> result[str,str]"
         },
         {
           "name": "rsa_generate",
@@ -878,6 +896,70 @@
           "ret": "result[bool,str]",
           "tls": false,
           "sig": "crypto.rsa_verify_pss_sha256(bytes, bytes, bytes, bytes) -> result[bool,str]"
+        },
+        {
+          "name": "x509_der",
+          "params": [
+            "str"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.x509_der(str) -> result[bytes,str]"
+        },
+        {
+          "name": "x509_fields",
+          "params": [
+            "bytes"
+          ],
+          "ret": "result[[str],str]",
+          "tls": false,
+          "sig": "crypto.x509_fields(bytes) -> result[[str],str]"
+        },
+        {
+          "name": "x509_check_host",
+          "params": [
+            "bytes",
+            "str"
+          ],
+          "ret": "bool",
+          "tls": false,
+          "sig": "crypto.x509_check_host(bytes, str) -> bool"
+        },
+        {
+          "name": "x509_verify",
+          "params": [
+            "bytes",
+            "str",
+            "str",
+            "int",
+            "str"
+          ],
+          "ret": "result[bool,str]",
+          "tls": false,
+          "sig": "crypto.x509_verify(bytes, str, str, int, str) -> result[bool,str]"
+        },
+        {
+          "name": "x509_csr",
+          "params": [
+            "str",
+            "str",
+            "[str]"
+          ],
+          "ret": "result[str,str]",
+          "tls": false,
+          "sig": "crypto.x509_csr(str, str, [str]) -> result[str,str]"
+        },
+        {
+          "name": "x509_self_signed",
+          "params": [
+            "str",
+            "str",
+            "[str]",
+            "int"
+          ],
+          "ret": "result[str,str]",
+          "tls": false,
+          "sig": "crypto.x509_self_signed(str, str, [str], int) -> result[str,str]"
         }
       ]
     },
@@ -6925,6 +7007,15 @@
           "ret": "str",
           "tls": true,
           "sig": "net.tls_alpn(rawptr) -> str"
+        },
+        {
+          "name": "tls_peer_certs",
+          "params": [
+            "rawptr"
+          ],
+          "ret": "bytes",
+          "tls": true,
+          "sig": "net.tls_peer_certs(rawptr) -> bytes"
         }
       ]
     },
@@ -11519,6 +11610,100 @@
           "doc": "Why the connection ended, or \"\" while it is open.",
           "file": "stdlib/websocket/websocket.sl",
           "line": 1181
+        }
+      ]
+    },
+    "x509": {
+      "name": "x509",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Cert",
+          "decl": "struct",
+          "sig": "gc struct Cert",
+          "doc": "One certificate, as parsed. `der` is exactly the bytes it came from, so a chain can be passed back to verify or stored without re-encoding.",
+          "file": "stdlib/x509/x509.sl",
+          "line": 38
+        },
+        {
+          "name": "Verify",
+          "decl": "struct",
+          "sig": "struct Verify",
+          "doc": "What verify checks besides the signatures and the chain to a root.",
+          "file": "stdlib/x509/x509.sl",
+          "line": 62
+        },
+        {
+          "name": "Request",
+          "decl": "struct",
+          "sig": "struct Request",
+          "doc": "The names a CSR or self-signed certificate is for.",
+          "file": "stdlib/x509/x509.sl",
+          "line": 70
+        },
+        {
+          "name": "parse_pem",
+          "decl": "fn",
+          "sig": "fn parse_pem(pem: str) -> result[[Cert], str]",
+          "doc": "Every CERTIFICATE block of a PEM text, in order. Other blocks and text between them are skipped; a block that does not decode is an error.",
+          "file": "stdlib/x509/x509.sl",
+          "line": 82
+        },
+        {
+          "name": "parse_der",
+          "decl": "fn",
+          "sig": "fn parse_der(der: bytes) -> result[[Cert], str]",
+          "doc": "One DER certificate, or several concatenated (as a TLS chain and net.tls_peer_certs give them).",
+          "file": "stdlib/x509/x509.sl",
+          "line": 92
+        },
+        {
+          "name": "matches_host",
+          "decl": "fn",
+          "sig": "fn matches_host(c: Cert, host: str) -> bool",
+          "doc": "Does the certificate name `host`? RFC 6125: subjectAltName entries only, never the subject CN; a wildcard only as the whole left-most label, for exactly one label (\"*.example.com\" matches \"a.example.com\", not \"example.com\" or \"a.b.example.com\"). An IP literal matches IP entries.",
+          "file": "stdlib/x509/x509.sl",
+          "line": 165
+        },
+        {
+          "name": "valid_at",
+          "decl": "fn",
+          "sig": "fn valid_at(c: Cert, unix: int) -> bool",
+          "doc": "Is `unix` (seconds) inside the certificate's validity period?",
+          "file": "stdlib/x509/x509.sl",
+          "line": 170
+        },
+        {
+          "name": "expires_in",
+          "decl": "fn",
+          "sig": "fn expires_in(c: Cert) -> int",
+          "doc": "Seconds until the certificate expires; negative once it has.",
+          "file": "stdlib/x509/x509.sl",
+          "line": 175
+        },
+        {
+          "name": "verify",
+          "decl": "fn",
+          "sig": "fn verify(chain: [Cert], v: Verify) -> result[bool, str]",
+          "doc": "Checks `chain` (the leaf first, then any intermediates) up to one of the roots: every signature, validity at `v.at`, and the host and purpose when set. ok(true), or why not, in words that do not change with the OpenSSL version: \"x509: certificate has expired\", \"x509: certificate is not yet valid\", \"x509: hostname mismatch\", \"x509: IP address mismatch\", \"x509: certificate is not for this purpose\", \"x509: certificate signed by unknown authority\", \"x509: self-signed certificate not in the roots\", \"x509: certificate signature does not verify\", \"x509: issuer is not a CA\", \"x509: path length constraint exceeded\"; rarer failures carry OpenSSL's own reason.",
+          "file": "stdlib/x509/x509.sl",
+          "line": 189
+        },
+        {
+          "name": "csr",
+          "decl": "fn",
+          "sig": "fn csr(key_pem: str, r: Request) -> result[str, str]",
+          "doc": "A certificate signing request (PKCS#10, PEM) for `r`'s names, signed with `key_pem` (an RSA, EC or Ed25519 private key in PEM). It is what an ACME server, or any CA, is sent: it carries the names and the public key, and proves the sender holds the private key.",
+          "file": "stdlib/x509/x509.sl",
+          "line": 216
+        },
+        {
+          "name": "self_signed",
+          "decl": "fn",
+          "sig": "fn self_signed(key_pem: str, r: Request, days: int) -> result[str, str]",
+          "doc": "A certificate for `r`'s names, signed by its own key and valid from now for `days` (1 to 36500): for development TLS and tests. It is a leaf (not a CA) for server and client auth; to verify it, pass its own PEM as `roots_pem`.",
+          "file": "stdlib/x509/x509.sl",
+          "line": 224
         }
       ]
     },
