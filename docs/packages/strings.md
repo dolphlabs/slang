@@ -15,6 +15,7 @@ strings.contains("hello", "ell");
 strings.has_prefix("hello", "he");
 strings.has_suffix("hello", "lo");
 strings.count("a,b,c", ",");            // 2
+strings.hash("user:42");                // a 64-bit hash, never negative: in-process only
 
 strings.trim("  hi \r\n");              // "hi" (space/tab/CR/LF)
 strings.trim_start(s); strings.trim_end(s);
@@ -84,6 +85,8 @@ Three behaviours worth knowing:
 
 ### `strings.count(str, str) -> int`
 
+### `strings.hash(str) -> int`
+
 ### `strings.trim(str) -> str`
 
 ### `strings.trim_start(str) -> str`
@@ -107,6 +110,8 @@ Three behaviours worth knowing:
 ### `strings.join_bytes([bytes], bytes) -> bytes`
 
 ### `strings.bytes_zero(int) -> bytes`
+
+### `strings.copy_into(bytes, int, bytes, int, int) -> int`
 
 ### `strings.from_bytes(bytes, int, int) -> str`
 

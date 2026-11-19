@@ -392,6 +392,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 
 - builder: new_str, Str.write, Str.write_int, Str.write_line, Str.size, Str.is_empty, Str.finish, Str.take, Str.reset, new_bytes, Bytes.write_byte, Bytes.write (+6 more)
 - byteutil: find, find_wire, has_prefix, has_suffix, trim, split
+- cache: options, new, get, put, put_ttl, put_sized, remove, clear, len_of, stats, get_or_load
 - compress: gzip, gzip_level, deflate, deflate_raw, deflate_raw_flush, gunzip, inflate, inflate_raw
 - crypto: sha256, hmac_sha256, rand, sha1, md5, pbkdf2_sha256, argon2id_raw, argon2id_verify, rsa_verify_sha256, sha384, sha512, hmac_sha384 (+32 more)
 - csv: options, parse, parse_with, parse_bytes, new_reader, feed, end, finished, line, next, to_maps, write_options (+3 more)
@@ -420,10 +421,12 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - s3: new_client, from_env, put_object, get_object, get_range, head_object, delete_object, list_objects, create_multipart, upload_part, complete_multipart, abort_multipart (+8 more)
 - sort: ints, floats, strings, by, by_stable, search_ints, search_floats, search_strings, search_by
 - sql: open, close, exec, last_insert_id, prepare, finalize, reset, bind_int, bind_float, bind_text, bind_blob, bind_null (+8 more)
-- strings: find, rfind, contains, has_prefix, has_suffix, count, trim, trim_start, trim_end, to_upper, to_lower, slice (+14 more)
+- strings: find, rfind, contains, has_prefix, has_suffix, count, hash, trim, trim_start, trim_end, to_upper, to_lower (+16 more)
 - template: parse, parse_text, add, render, render_named, escape_html
 - time: mono, wall, sleep, http_date, put_http_date
 - timez: Time.rfc3339, Time.rfc3339_milli, Time.rfc3339_nano, Time.rfc3339_at, Time.http_date, Time.rfc2822, Time.format, parse_date, parse_rfc3339, parse_http_date, parse_rfc2822, relative (+116 more)
+- toml: to_json, decode
 - unicode: valid, valid_bytes, count, runes, encode, truncate, fold, equal_fold, nfc, nfd, is_nfc
 - uuid: v4, v7, v7_at, is_valid, parse, version, time_ms, to_binary, from_binary
 - websocket: options, dial, dial_with, send_text, send_text_bytes, send_binary, ping, recv, text, close, close_now, is_open (+1 more)
+- yaml: to_json, to_json_all, decode, decode_all

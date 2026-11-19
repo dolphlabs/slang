@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>yaml — slang</title>
+<meta name="description" content="Package yaml.">
+<meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<link rel="author" href="https://dolphlabs.com">
+<meta property="og:site_name" content="slang — by Dolphlabs">
+<meta property="og:title" content="yaml">
+<meta property="og:description" content="Package yaml.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://slang.dolphlabs.com/packages/yaml">
+<meta property="og:image" content="https://slang.dolphlabs.com/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The slang rabbit mark beside the slang wordmark">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://slang.dolphlabs.com/packages/yaml">
+<!-- Agents: every page here has a Markdown twin at the same path, and
+     the whole site is one document at /llms-full.txt -->
+<link rel="alternate" type="text/markdown" href="../packages/yaml.md" title="Markdown">
+<link rel="alternate" type="text/plain" href="../llms-full.txt"
+      title="Entire site as plain text">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="../">
+    <span class="mark" aria-hidden="true"></span> slang
+  </a>
+  <button id="navtoggle" class="navtoggle" type="button"
+          aria-label="Toggle navigation" aria-expanded="false"
+          aria-controls="mainnav">
+    <span></span><span></span><span></span>
+  </button>
+  <nav class="mainnav" id="mainnav"><a href="../">Home</a><a href="../guide/">Guide</a><a href="../guide/data">Data types</a><a href="../guide/errors">Errors</a><a href="../guide/functions">Functions</a><a href="../concurrency/">Concurrency</a><a href="../testing/">Testing</a><a href="../bench/">Benchmarks</a><a href="../packages/">Packages</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="../limitations/">Limitations</a></nav>
+  <div class="tools">
+    <input id="search" type="search" placeholder="Search docs…"
+           autocomplete="off" aria-label="Search documentation">
+    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="navscrim" class="navscrim" hidden></div>
+<div id="results" class="results" hidden></div>
+
+<main id="main">
+
+<div class="page">
+  <article class="content">
+    <header class="page-head">
+      <h1>yaml</h1>
+      <p class="tagline">Package yaml.</p>
+      <p class="agentline">
+        <a href="../packages/yaml.md">Markdown version</a> ·
+        <a href="../llms.txt">llms.txt</a> ·
+        <a href="../api.json">api.json</a>
+      </p>
+    </header>
+<p>YAML 1.2 for configuration files: decode into your own types, or convert to JSON.</p>
+<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;yaml&quot;</span>;
+
+<span class="k">struct</span> Db { host: <span class="t">str</span>, port: <span class="t">int</span>, replicas: [<span class="t">str</span>], timeout_ms: <span class="t">opt</span>[<span class="t">int</span>] }
+<span class="k">struct</span> Config { name: <span class="t">str</span>, db: Db }
+
+<span class="k">let</span> r: <span class="t">result</span>[Config, <span class="t">str</span>] = yaml.<span class="f">decode</span>(text);
+<span class="k">guard</span> <span class="k">let</span> cfg = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }   <span class="c">// &quot;yaml: line 4: ...&quot;</span>
+
+yaml.<span class="f">to_json</span>(text);              <span class="c">// result[str, str]: the stream&#x27;s one document</span>
+yaml.<span class="f">to_json_all</span>(text);          <span class="c">// result[[str], str]: every document (--- between them)</span>
+<span class="k">let</span> all: <span class="t">result</span>[[Config], <span class="t">str</span>] = yaml.<span class="f">decode_all</span>(text);</code></pre></div>
+<p><code>decode</code> is <code>to_json</code> then <code>json.decode</code>, so a document decodes into whatever JSON does: structs, <code>gc struct</code>s, lists, maps, <code>opt</code> (a missing key is <code>none</code>) and enums. Mappings keep their keys in document order. <code>to_json</code> and <code>decode</code> take a stream of exactly one document (none reads as <code>null</code>); <code>to_json_all</code> and <code>decode_all</code> take any number.</p>
+<p><strong>What is read.</strong> Block and flow mappings and sequences; plain, single- and double-quoted scalars; literal (<code>|</code>) and folded (<code>&gt;</code>) block scalars with chomping (<code>-</code>, <code>+</code>) and indentation indicators; comments; several documents (<code>---</code>, <code>...</code>); anchors (<code>&amp;a</code>) and aliases (<code>*a</code>); merge keys (<code>&lt;&lt;: *base</code>); and the core tags (<code>!!str</code>, <code>!!int</code>, <code>!!float</code>, <code>!!bool</code>, <code>!!null</code>, <code>!!map</code>, <code>!!seq</code>).</p>
+<p><strong>What is refused</strong>, as an error naming the line: other tags (<code>!custom</code>, <code>%TAG</code>), explicit keys (<code>? key</code>), a mapping or sequence used as a key, a recursive alias, a duplicate key, and tabs in indentation.</p>
+<p><strong>Plain scalars</strong> resolve by YAML 1.2&#x27;s core schema, so <code>yes</code>, <code>no</code>, <code>on</code> and <code>off</code> are strings, not booleans as in YAML 1.1. <code>null</code>, <code>~</code> and an empty value are null; <code>true</code>/<code>false</code> (and <code>True</code>, <code>TRUE</code>, ...) are booleans; <code>12</code>, <code>-3</code>, <code>0o17</code> and <code>0x1F</code> are integers, which must fit 64 bits; <code>1.5</code>, <code>.5</code>, <code>1e3</code>, <code>.inf</code> and <code>.nan</code> are floats, the last two <code>null</code> in JSON, as <code>json.encode</code> writes them. Anything else, dates included, is a string. A key&#x27;s JSON name is its text, so <code>1:</code> and <code>&quot;1&quot;:</code> are the same key.</p>
+<p><strong>Aliases</strong> share the node they name; writing the JSON expands them. Expanding to more than four times the document&#x27;s own nodes (at least a million) is an error, so a few lines of nested aliases (&quot;billion laughs&quot;) cannot blow up. Anchors belong to their document. Nesting is limited to 256 levels.</p>
+<p><strong>Checked</strong> against ruamel.yaml (YAML 1.2) on 732 streams in tests/yaml_parity: config files and edge cases, invalid streams for each rule, and seeded random and mutated ones. Where ruamel departs from YAML 1.2 (<code>1_000</code> and <code>0b101</code> as numbers, timestamps, tabs after <code>key:</code>), this package follows the spec.</p>
+<p><strong>Cost.</strong> One pass builds a tree of each value&#x27;s JSON text; a one-line plain scalar, a quoted string without escapes and a plain integer are a single copy of their source. On a 1.1 MB document of 5,000 entries, <code>to_json</code> took about 230 ms against about 160 ms for Go&#x27;s <code>gopkg.in/yaml.v3</code> decoding into <code>any</code> (Linux container; ratios, the host was throttled). A config file of a few KB parses in well under a millisecond.</p>
+<h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="to-json"><div class="api-sig"><code><span class="k">fn</span> <span class="f">to_json</span>(text: <span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>, <span class="t">str</span>]</code> <span class="src">stdlib/yaml/yaml.sl:108</span><a class="anchor" href="#to-json">#</a></div><p class="api-doc">The stream&#x27;s one document as JSON: null if it has none, an error if it has more than one.</p></div><div class="api-item" id="to-json-all"><div class="api-sig"><code><span class="k">fn</span> <span class="f">to_json_all</span>(text: <span class="t">str</span>) -&gt; <span class="t">result</span>[[<span class="t">str</span>], <span class="t">str</span>]</code> <span class="src">stdlib/yaml/yaml.sl:121</span><a class="anchor" href="#to-json-all">#</a></div><p class="api-doc">Every document in the stream, as JSON.</p></div><div class="api-item" id="decode"><div class="api-sig"><code><span class="k">fn</span> decode[T](text: <span class="t">str</span>) -&gt; <span class="t">result</span>[T, <span class="t">str</span>]</code> <span class="src">stdlib/yaml/yaml.sl:150</span><a class="anchor" href="#decode">#</a></div><p class="api-doc">The one document decoded into T, as json.decode would decode its JSON.</p></div><div class="api-item" id="decode-all"><div class="api-sig"><code><span class="k">fn</span> decode_all[T](text: <span class="t">str</span>) -&gt; <span class="t">result</span>[[T], <span class="t">str</span>]</code> <span class="src">stdlib/yaml/yaml.sl:159</span><a class="anchor" href="#decode-all">#</a></div><p class="api-doc">Every document decoded into T.</p></div></div>
+  </article>
+  <aside class="toc">
+    <p class="toc-title">On this page</p>
+    <nav id="toc"></nav>
+  </aside>
+</div>
+</main>
+
+<footer class="foot">
+  <div class="foot-main">
+    <p class="foot-by">
+      Built and maintained by
+      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
+    </p>
+    <p class="foot-entity">
+      Dolph Tech Limited &middot;
+      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
+    </p>
+  </div>
+  <p class="foot-note">Generated from the repository by
+     <code>www/build.py</code> — the guide comes from
+     <code>README.md</code>, the API from the compiler's own signature
+     tables and the <code>pub</code> declarations in
+     <code>stdlib/</code>. Nothing here is written twice.</p>
+</footer>
+
+<script src="../app.js" defer></script>
+</body>
+</html>
