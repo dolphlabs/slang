@@ -946,10 +946,25 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 @media (max-width: 1240px) { .pkg-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (max-width: 900px) { .pkg-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 640px) { .pkg-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .pkg-grid a { padding: 14px 16px; } }
-/* Batteries: 42 cards (41 packages and one extra) fill every row at 6, 3
-   and 2 columns; at 4 the last row has two, so the last card takes the rest of it. Ecosystem: 12 cards
-   fill every row at all four widths. */
-@media (min-width: 901px) and (max-width: 1240px) { #packages .pkg-grid > li:last-child { grid-column: span 3; } }
+/* The last card of each grid takes what its row leaves, so no row ends
+   short. Batteries: 43 cards (42 packages and one extra) leave 1 at 6
+   columns, 3 at 4, 1 at 3 and 1 at 2. Ecosystem: 15 cards leave 3 at 6,
+   3 at 4, none at 3 and 1 at 2. Update the spans when a list changes. */
+@media (min-width: 1241px) {
+  #packages .pkg-grid > li:last-child { grid-column: span 6; }
+  #ecosystem .pkg-grid > li:last-child { grid-column: span 4; }
+}
+@media (min-width: 901px) and (max-width: 1240px) {
+  #packages .pkg-grid > li:last-child,
+  #ecosystem .pkg-grid > li:last-child { grid-column: span 2; }
+}
+@media (min-width: 641px) and (max-width: 900px) {
+  #packages .pkg-grid > li:last-child { grid-column: span 3; }
+}
+@media (max-width: 640px) {
+  #packages .pkg-grid > li:last-child,
+  #ecosystem .pkg-grid > li:last-child { grid-column: span 2; }
+}
 
 /* ---- install ------------------------------------------------------------- */
 
