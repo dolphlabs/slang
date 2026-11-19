@@ -851,6 +851,49 @@ __asm__(
 #endif
 );
 
+/* sl_rt_call_on_stack(fn, arg, top): call fn(arg) with the stack pointer
+ * set to `top` (16-byte aligned, the high end of free memory), and come
+ * back on the caller's stack. The caller's frame pointer stays the link, so a
+ * backtrace from inside fn walks back onto the original stack.
+ *
+ * x86_64: rbp, which fn preserves, holds the caller's rsp across the
+ * call. `top` aligned and one push of the return address gives fn the
+ * rsp % 16 == 8 that System V requires at entry. arm64: x29 the same,
+ * with sp already 16-aligned at the blr as AAPCS64 requires. */
+__asm__(
+".text\n"
+#if defined(__APPLE__)
+".globl _sl_rt_call_on_stack\n"
+".p2align 4\n"
+"_sl_rt_call_on_stack:\n"
+#else
+".globl sl_rt_call_on_stack\n"
+".p2align 4\n"
+"sl_rt_call_on_stack:\n"
+#endif
+#if defined(__x86_64__)
+"    push %rbp\n"
+"    mov  %rsp, %rbp\n"
+"    mov  %rdx, %rsp\n"
+"    mov  %rdi, %rax\n"
+"    mov  %rsi, %rdi\n"
+"    call *%rax\n"
+"    mov  %rbp, %rsp\n"
+"    pop  %rbp\n"
+"    ret\n"
+#else
+"    stp  x29, x30, [sp, #-16]!\n"
+"    mov  x29, sp\n"
+"    mov  sp, x2\n"
+"    mov  x16, x0\n"
+"    mov  x0, x1\n"
+"    blr  x16\n"
+"    mov  sp, x29\n"
+"    ldp  x29, x30, [sp], #16\n"
+"    ret\n"
+#endif
+);
+
 void sl_ctx_switch(void **old_rsp_slot, void *new_rsp);
 void sl_ctx_trampoline(void);
 void sl_grower_trampoline(void); /* Tier 11 eighth slice -- see its own
@@ -1328,6 +1371,18 @@ static void sl_task_stack_grow(sl_task *t) {
      * unchanged) made concurrent_compute's crashes disappear entirely
      * across repeated runs; re-enabling it reproduced them again. */
     sl_rt_preempt_disable();
+    /* Only a frame on t's own stack can grow it: the relocation saves
+     * the current sp as t->rsp and copies the stack under it. Code
+     * running on the worker's stack (sl_rt_call_on_stack, from the GC
+     * slow path) is not on t's stack, and growing from there would
+     * resume t on the wrong stack with a scan across unrelated memory.
+     * Nothing it calls asks to grow today; this keeps it that way, and
+     * sl_rt_need_stack/sl_rt_stack_reserve make the same check before
+     * their grow loops so a refused grow cannot spin them. */
+    if (!sl_rt_on_task_stack(t)) {
+        sl_rt_preempt_enable();
+        return;
+    }
     void **grower_rsp = sl_rt_tls_grower_rsp();
     uintptr_t top = ((uintptr_t)sl_rt_tls_grower_stack() +
                      sizeof(sl_grower_stack)) & ~(uintptr_t)15;

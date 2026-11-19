@@ -66,6 +66,15 @@ const NatSig STRINGS_SIGS[] = {
        so a caller cannot request a negative allocation. */
     {"strings", "bytes_zero", 1, {NA_INT}, "bytes", 0},
 
+    /* copy_into(dst, at, src, from, to): src[from..to] over dst from at,
+       in place, returning at + (to - from). One memmove where a slang
+       loop pays two bounds checks and a GC poll per byte -- the inner
+       loop of every codec and buffer writer. Copies forward, so an
+       overlapping range earlier in the same buffer repeats (an LZ77
+       match). A range outside either buffer stops the program, as an
+       index outside it does. */
+    {"strings", "copy_into", 5, {NA_BYTES, NA_INT, NA_BYTES, NA_INT, NA_INT}, "int", 0},
+
     /* `to_str(b[lo..hi])` is two allocations and two copies: the slice,
        then the str made from it. A parser pulling a field out of a buffer
        does that for every field of every message -- http's header values,

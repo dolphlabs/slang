@@ -826,6 +826,32 @@ for name in gc_ctor_payload gc_map_put pg_rows_as postgres http_client_pool http
 done
 [ "$gc_bad" -eq 0 ] && echo "PASS gc stress"
 
+# ---- collector stack (large sweeps) ----------------------------------
+# gc_free_stack: collections far apart, so each sweep frees enough small
+# blocks at once to push libmalloc into its deep free path, starting from
+# safepoints at every depth. Before the collector ran on the worker's own
+# stack this died in the guard page in 8 of 10 runs on macOS x86_64; five
+# clean runs by chance would be about 1 in 1000.
+echo "--- collector stack (SLANG_GC_THRESHOLD_KB=131072) ---"
+cs_bad=0
+cs_bin="/tmp/sl_gc_free_stack.bin"
+if ! ./slangc tests/gc_free_stack/main.sl -o "$cs_bin" >/dev/null 2>&1; then
+    echo "FAIL collector stack (does not compile)"
+    cs_bad=1; fail=1
+else
+    for cs_i in 1 2 3 4 5; do
+        cs_out=$(SLANG_GC_THRESHOLD_KB=131072 "$cs_bin" 2>&1)
+        cs_rc=$?
+        if [ "$cs_rc" -ne 0 ] || [ "$cs_out" != "$(cat tests/gc_free_stack/expected.txt)" ]; then
+            echo "FAIL collector stack run $cs_i (exit $cs_rc)"
+            cs_bad=1; fail=1
+            break
+        fi
+    done
+fi
+rm -f "$cs_bin"
+[ "$cs_bad" -eq 0 ] && echo "PASS collector stack"
+
 # ---- nursery stress (tiny young generation) ---------------------------
 # Same discipline as the threshold loop above, applied to the nursery:
 # a rooting or barrier bug in the generational collector -- a live young
