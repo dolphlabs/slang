@@ -6,6 +6,8 @@
 <title>How it works — slang</title>
 <meta name="description" content="The compiler pipeline, the collector, the scheduler.">
 <meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<meta name="theme-color" content="#07080a" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f7f5ef" media="(prefers-color-scheme: light)">
 <link rel="author" href="https://dolphlabs.com">
 <meta property="og:site_name" content="slang — by Dolphlabs">
 <meta property="og:title" content="How it works">
@@ -23,63 +25,91 @@
 <link rel="alternate" type="text/markdown" href="../internals/index.md" title="Markdown">
 <link rel="alternate" type="text/plain" href="../llms-full.txt"
       title="Entire site as plain text">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="preload" href="../fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="../style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<script>
+/* Before first paint, so a saved light theme never flashes dark. */
+try { var t = localStorage.getItem("slang-theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
 
-<header class="topbar">
-  <a class="brand" href="../">
-    <span class="mark" aria-hidden="true"></span> slang
-  </a>
-  <button id="navtoggle" class="navtoggle" type="button"
-          aria-label="Toggle navigation" aria-expanded="false"
-          aria-controls="mainnav">
-    <span></span><span></span><span></span>
-  </button>
-  <nav class="mainnav" id="mainnav"><a href="../">Home</a><a href="../guide/">Guide</a><a href="../guide/data">Data types</a><a href="../guide/errors">Errors</a><a href="../guide/functions">Functions</a><a href="../concurrency/">Concurrency</a><a href="../testing/">Testing</a><a href="../bench/">Benchmarks</a><a href="../packages/">Packages</a><a href="../interop/">C interop</a><a class="active" href="../internals/">Internals</a><a href="../limitations/">Limitations</a></nav>
-  <div class="tools">
-    <input id="search" type="search" placeholder="Search docs…"
-           autocomplete="off" aria-label="Search documentation">
-    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+<header class="nav" data-nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="../" aria-label="slang home">
+      <img class="logo-on-dark" src="../brand/slang-logo-light.svg" alt="" width="77" height="32">
+      <img class="logo-on-light" src="../brand/slang-logo-dark.svg" alt="" width="77" height="32">
+    </a>
+    <nav class="nav-links" aria-label="Primary"><a href="../guide/">Guide</a><a href="../concurrency/">Concurrency</a><a href="../packages/">Packages</a><a href="../bench/">Benchmarks</a><a href="../interop/">C interop</a><a class="active" href="../internals/" aria-current="page">Internals</a></nav>
+    <div class="nav-actions">
+      <button class="search-btn" type="button" data-search aria-label="Search the docs" aria-keyshortcuts="Control+K Meta+K /">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <span class="search-label">Search</span>
+        <kbd class="search-kbd">/</kbd>
+      </button>
+      <button class="icon-btn" type="button" data-theme-toggle aria-label="Switch to light theme" title="Switch theme">
+        <svg class="i-sun" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <svg class="i-moon" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.6A8 8 0 1 1 9.4 4a6.4 6.4 0 0 0 10.6 10.6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      </button>
+      <a class="btn btn-ghost btn-sm nav-gh" href="https://github.com/dolphlabs/slang">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span>GitHub</span>
+      </a>
+      <a class="btn btn-light btn-sm nav-start" href="../#install">Get started</a>
+      <button class="nav-menu" type="button" aria-expanded="false" aria-controls="nav-sheet" aria-label="Menu" data-menu>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6h14M3 10h14M3 14h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </button>
+    </div>
   </div>
+  <nav class="nav-sheet" id="nav-sheet" aria-label="Menu" hidden><a href="../guide/">Guide</a><a href="../concurrency/">Concurrency</a><a href="../packages/">Packages</a><a href="../bench/">Benchmarks</a><a href="../interop/">C interop</a><a class="active" href="../internals/" aria-current="page">Internals</a><a href="https://github.com/dolphlabs/slang">GitHub</a></nav>
 </header>
-<div id="navscrim" class="navscrim" hidden></div>
-<div id="results" class="results" hidden></div>
 
-<main id="main">
+<div class="docbar">
+  <button class="docbar-btn" type="button" aria-expanded="false" aria-controls="sidebar" data-drawer>
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    <span>Docs</span>
+  </button>
+  <span class="docbar-here">How it works</span>
+</div>
 
-<div class="page">
-  <article class="content">
-    <header class="page-head">
-      <h1>How it works</h1>
-      <p class="tagline">The compiler pipeline, the collector, the scheduler.</p>
-      <p class="agentline">
-        <a href="../internals/index.md">Markdown version</a> ·
-        <a href="../llms.txt">llms.txt</a> ·
-        <a href="../api.json">api.json</a>
-      </p>
-    </header>
+<div class="docs">
+  <aside class="sidebar" id="sidebar" aria-label="Documentation">
+    <div class="sidebar-inner"><div class="side-group"><p class="side-title">Start</p><ul class="side-list"><li><a href="../">Overview</a></li><li><a href="../guide/">Guide</a></li><li><a href="../guide/data">Data types</a></li><li><a href="../guide/errors">Errors</a></li><li><a href="../guide/functions">Functions</a></li></ul></div><div class="side-group"><p class="side-title">Build</p><ul class="side-list"><li><a href="../concurrency/">Concurrency</a></li><li><a href="../testing/">Testing</a></li><li><a href="../packages/">Packages</a></li><li><a href="../interop/">C interop</a></li></ul></div><div class="side-group"><p class="side-title">Under the hood</p><ul class="side-list"><li><a href="../internals/" aria-current="page">Internals</a></li><li><a href="../bench/">Benchmarks</a></li><li><a href="../limitations/">Limitations</a></li></ul></div><details class="side-group side-pkgs"><summary>Packages<span class="side-count">41</span></summary><ul class="side-list"><li><a href="../packages/builder">builder</a></li><li><a href="../packages/byteutil">byteutil</a></li><li><a href="../packages/cache">cache</a></li><li><a href="../packages/compress">compress</a></li><li><a href="../packages/crypto">crypto</a></li><li><a href="../packages/csv">csv</a></li><li><a href="../packages/decimal">decimal</a></li><li><a href="../packages/encoding">encoding</a></li><li><a href="../packages/flags">flags</a></li><li><a href="../packages/fs">fs</a></li><li><a href="../packages/http">http</a></li><li><a href="../packages/http2">http2</a></li><li><a href="../packages/httpc">httpc</a></li><li><a href="../packages/io">io</a></li><li><a href="../packages/json">json</a></li><li><a href="../packages/log">log</a></li><li><a href="../packages/math">math</a></li><li><a href="../packages/math/numtheory">math/numtheory</a></li><li><a href="../packages/math/stats">math/stats</a></li><li><a href="../packages/mysql">mysql</a></li><li><a href="../packages/nats">nats</a></li><li><a href="../packages/net">net</a></li><li><a href="../packages/os">os</a></li><li><a href="../packages/pg">pg</a></li><li><a href="../packages/proc">proc</a></li><li><a href="../packages/rand">rand</a></li><li><a href="../packages/redis">redis</a></li><li><a href="../packages/regex">regex</a></li><li><a href="../packages/s3">s3</a></li><li><a href="../packages/sort">sort</a></li><li><a href="../packages/sql">sql</a></li><li><a href="../packages/strings">strings</a></li><li><a href="../packages/template">template</a></li><li><a href="../packages/time">time</a></li><li><a href="../packages/timez">timez</a></li><li><a href="../packages/toml">toml</a></li><li><a href="../packages/unicode">unicode</a></li><li><a href="../packages/uuid">uuid</a></li><li><a href="../packages/websocket">websocket</a></li><li><a href="../packages/x509">x509</a></li><li><a href="../packages/yaml">yaml</a></li></ul></details></div>
+  </aside>
+  <div class="drawer-scrim" data-scrim hidden></div>
+
+  <main id="main" class="doc-main">
+
+    <article class="content">
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="../">Docs</a><span class="sep" aria-hidden="true">/</span><span aria-current="page">Internals</span></nav>
+      <header class="page-head">
+        <h1>How it works</h1>
+        <p class="tagline">The compiler pipeline, the collector, the scheduler.</p>
+        <p class="agentline">
+          <a href="../internals/index.md">Markdown</a><span aria-hidden="true">·</span><a href="../llms.txt">llms.txt</a><span aria-hidden="true">·</span><a href="../api.json">api.json</a>
+        </p>
+      </header>
 <h2 id="how-it-works">How it works</h2>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>main.sl ──loader──&gt; packages ──lexer/parser──&gt; ASTs ──codegen──&gt; main.gen.c ──cc──&gt; ./main</code></pre></div>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code>main.sl ──loader──&gt; packages ──lexer/parser──&gt; ASTs ──codegen──&gt; main.gen.c ──cc──&gt; ./main</code></pre></div>
 <ol><li><strong>Loader</strong> (<code>src/loader.c</code>) — resolves imports (local directory, native package, stdlib, then <code>slang.project</code> pins), scans package directories for <code>.sl</code> files (in deterministic sorted order), merges them per package, and detects cycles via canonical paths.</li><li><strong>Lexer</strong> (<code>src/lexer.c</code>) — tokenizes source into identifiers, keywords, literals, and operators.</li><li><strong>Parser</strong> (<code>src/parser.c</code>) — recursive-descent parser producing an AST (<code>src/ast.h</code>).</li><li><strong>Code generator</strong> (<code>src/codegen/</code>) — walks the ASTs, performs type inference and semantic checks (including <code>pub</code> enforcement), and emits readable C. The runtime in <code>runtime/</code> (GC, scheduler, pool, containers, native packages) is real C, spliced into every generated file so the binary stays self-contained. Split by concern: <code>core.c</code>, <code>infer.c</code>, <code>expr.c</code>/<code>stmt.c</code>, <code>program.c</code>, <code>liveness.c</code> (GC safepoint roots), and <code>native.c</code> (<code>NatSig</code> dispatch). <code>internal.h</code> holds the shared <code>CG</code> struct.</li></ol>
 <p>Native-package <em>signatures</em> live under <code>src/codegen/pkg_&lt;name&gt;/</code>. Their C runtimes are <code>runtime/sl_&lt;name&gt;.c</code>. <code>json</code> uses <code>dispatch.c</code> because decode/encode are generic over the target type. Adding a fixed-signature package is a <code>pkg_&lt;name&gt;/</code> directory, a <code>runtime/sl_&lt;name&gt;.c</code> file, and one line in <code>loader.c</code>.</p>
 <ol><li><strong>Driver</strong> (<code>src/main.c</code>) — glues it together and shells out to <code>cc</code>. Because GCC/Clang compile the generated C, you get their full optimizer for free.</li></ol>
 <p><strong>Large stack frames.</strong> A task starts on an 8KB stack that grows only at a safepoint, which runs after the current function&#x27;s frame already exists. How big a frame is depends on the C compiler: clang gives every call site its own spill slot and inlines callees into their caller, so a function with a few hundred call sites can need more than the whole stack and used to die with <code>SIGBUS</code> before printing anything (gcc gave the same C a frame of a few hundred bytes). The driver therefore asks the compiler for the real frame of every function (<code>-Wframe-larger-than</code>, read from clang&#x27;s and gcc&#x27;s own reports). A slang function reported over the limit is regenerated behind a thin wrapper that grows the stack <em>before</em> the function is entered, and the program is compiled a second time. So is the C slangc generates for <code>json.decode</code>/<code>json.encode</code>, <code>pg.rows_as</code> and <code>inspect</code>, whose frames grow with the type: a decoder for a 200-field struct needs more stack than a safepoint leaves free, and without a guard the task ran into its guard page. The guards a build ends with are kept in the cache (<code>~/.cache/slang/frames/</code>, or <code>$SLANG_CACHE/frames/</code>, one small file per program) and applied up front the next time the same program is built, so a rebuild compiles once; every compile still checks the frames, and one that has outgrown its guard is regenerated as before. A guard is sized in whole 4KB pages, as the stack grows, so a frame that changes by a few bytes costs no compile. Programs with no large frame pay nothing, and <code>--emit-c</code> output has no guards. The limit is 1536 bytes; <code>SLANG_FRAME_LIMIT</code> overrides it (the tests set a tiny one to put a guard on nearly every function).</p>
 <p><strong>Development builds.</strong> <code>--dev</code> (or <code>SLANG_DEV=1</code> in the environment) compiles the generated C at <code>-O0</code> without LTO, which is most of a build&#x27;s time: a 21k-line service rebuilds in about 16 s instead of 73 s. The program runs slower (about 1.6x the CPU per request on that service), so it is for the edit-and-rerun loop -- <code>zokor watch</code> builds this way -- and never for what you deploy. Unoptimized frames are several times bigger, so a dev build also starts tasks on a 32KB stack with a 16KB safepoint margin, guards frames over 8KB, and is cached apart from the release build of the same program.</p>
 <p>Inspect what slang generates:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>./slangc examples/hello/main.sl --emit-c &amp;&amp; cat main.gen.c</code></pre></div>
+<div class="code"><div class="code-bar"><span class="code-lang">shell</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code>./slangc examples/hello/main.sl --emit-c &amp;&amp; cat main.gen.c</code></pre></div>
 <h2 id="memory-management">Memory management</h2>
 <p>Compiled programs embed a precise mark-sweep collector (<code>runtime/sl_gc.c</code>). Allocations go through <code>sl_gc_alloc</code>. <code>main()</code> registers the thread, starts the worker pool, and switches into the main task. There is no <code>libgc</code> dependency.</p>
 <p>What this means in practice:</p>
 <ul><li>No manual memory management in slang; no leaks from string churn.</li><li>Collection is tracing (mark-and-sweep), so reference cycles are collected — unlike refcounting.</li><li>Cost: stop-the-world pauses. The allocator still serializes on a mutex (batched); that is the current throughput ceiling.</li><li>Every pool worker is registered with the collector. A collection stops the world, walks safepoint roots, the run queue, parked tasks, and (for async-preempted tasks) a conservative stack scan.</li><li>Pacing follows the live heap, like Go&#x27;s default (<code>GOGC=100</code>): the next collection comes after allocating as much as survived the last one, and never before 8MB. The heap peaks near twice what is live, however much garbage a program makes — streaming three million database rows runs in under 20MB.</li><li>Generational and non-moving: new objects start in a nursery, and a minor collection runs after every 512KB of allocation. The nursery grows, up to 2MB per worker (16MB at most), while minors take a large share of the time and keep finding much of it live -- a busy server re-marking its in-flight requests -- and shrinks back when they do not, so a program whose garbage dies young keeps the small footprint. It marks from the roots and the remembered set (old objects a write barrier saw gain a pointer to a young one), sweeps only the nursery, and promotes what survives two minors: data that is merely in use when a minor lands, like a request half way through, stays young and dies young instead of being left for a major. Old objects are never traced by a minor, so its cost follows the nursery, not the heap: about 0.8ms per minor whether a program keeps 20k or a million long-lived objects. Majors sweep everything and promote what they keep.</li><li>Both kinds sweep in parallel: the threads stopped for a collection take a share of the heap&#x27;s pages each, instead of waiting while one thread sweeps them all. <code>SLANG_GC_STAT</code> counts the joins (<code>sweep_helps</code>).</li><li>A list or map whose elements hold no pointer -- numbers, <code>bool</code>, enums, and value structs made only of those -- is never traced at all: a table of a million ints costs a collection nothing to keep.</li><li>A list or map written since the last minor is traced from the first position written, not from the start, so filling a million-entry list or map costs each minor only what was added since the previous one. Updating an existing map key is the exception: its position is not recorded, so the next minor traces that whole map.</li><li><code>SLANG_GC_STAT=1</code> prints collection counts and pause times at exit (<code>minor_pause_ns_total</code> for the minors). <code>SLANG_GC_THRESHOLD_KB=n</code> collects every n KB instead, with no pacing: for tests, since a rooting bug only shows when a collection lands at the one safepoint where an object is unrooted. <code>SLANG_GC_NURSERY_KB=n</code> does the same for minors.</li><li><code>SLANG_GC_VERIFY_MINOR=1</code> checks every minor against a full mark and reports any live young object it missed, with the kind of old container holding it -- a store with no write barrier. It prints <code>missed=</code> at exit; the suite requires 0.</li></ul>
 <h2 id="project-layout">Project layout</h2>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>src/
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code>src/
   common.h       allocation helpers, growable string buffer, file I/O
   loader.h/.c    package discovery, merging, cycle detection
   lexer.h/.c     tokenizer
@@ -97,31 +127,43 @@ stdlib/        slang-source packages (`<span class="k">import</span> <span class
 examples/      one directory per example program
 tests/         language tests plus tests/runtime/ (no slangc)
 Makefile       build/test/clean</code></pre></div>
-  </article>
-  <aside class="toc">
+<nav class="pager" aria-label="Previous and next"><a class="prev" href="../interop/"><span class="dir">Previous</span><span class="name">C interop</span></a><a class="next" href="../bench/"><span class="dir">Next</span><span class="name">Benchmarks</span></a></nav>
+    </article>
+  </main>
+
+  <aside class="toc" aria-label="On this page">
     <p class="toc-title">On this page</p>
     <nav id="toc"></nav>
   </aside>
 </div>
-</main>
 
 <footer class="foot">
-  <div class="foot-main">
-    <p class="foot-by">
-      Built and maintained by
-      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
-    </p>
-    <p class="foot-entity">
-      Dolph Tech Limited &middot;
-      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
-    </p>
+  <div class="foot-inner">
+    <a class="foot-logo" href="../" aria-label="slang home">
+      <img class="logo-on-dark" src="../brand/slang-icon-light.svg" alt="" width="28" height="28">
+      <img class="logo-on-light" src="../brand/slang-icon-dark.svg" alt="" width="28" height="28">
+    </a>
+    <p class="foot-by">Built and maintained by
+      <a href="https://dolphlabs.com" rel="noopener">Dolphlabs</a> · Dolph Tech Limited</p>
+    <p class="foot-note">Generated from the repository by <code>www/build.py</code>:
+      the guide from <code>README.md</code>, the API from the compiler's own
+      signature tables and the <code>pub</code> declarations in
+      <code>stdlib/</code>. Nothing here is written twice.</p>
   </div>
-  <p class="foot-note">Generated from the repository by
-     <code>www/build.py</code> — the guide comes from
-     <code>README.md</code>, the API from the compiler's own signature
-     tables and the <code>pub</code> declarations in
-     <code>stdlib/</code>. Nothing here is written twice.</p>
 </footer>
+
+<div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="Search the docs" hidden>
+  <div class="palette-box">
+    <div class="palette-field">
+      <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <input id="palette-input" type="search" placeholder="Search pages, packages and functions" autocomplete="off" spellcheck="false"
+             role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list">
+      <kbd>esc</kbd>
+    </div>
+    <div class="palette-list" id="palette-list" role="listbox" aria-label="Results"></div>
+    <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
 
 <script src="../app.js" defer></script>
 </body>

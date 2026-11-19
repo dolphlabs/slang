@@ -6,6 +6,8 @@
 <title>httpc — slang</title>
 <meta name="description" content="Package httpc.">
 <meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<meta name="theme-color" content="#07080a" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f7f5ef" media="(prefers-color-scheme: light)">
 <link rel="author" href="https://dolphlabs.com">
 <meta property="og:site_name" content="slang — by Dolphlabs">
 <meta property="og:title" content="httpc">
@@ -23,50 +25,78 @@
 <link rel="alternate" type="text/markdown" href="../packages/httpc.md" title="Markdown">
 <link rel="alternate" type="text/plain" href="../llms-full.txt"
       title="Entire site as plain text">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="preload" href="../fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="../style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<script>
+/* Before first paint, so a saved light theme never flashes dark. */
+try { var t = localStorage.getItem("slang-theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
 
-<header class="topbar">
-  <a class="brand" href="../">
-    <span class="mark" aria-hidden="true"></span> slang
-  </a>
-  <button id="navtoggle" class="navtoggle" type="button"
-          aria-label="Toggle navigation" aria-expanded="false"
-          aria-controls="mainnav">
-    <span></span><span></span><span></span>
-  </button>
-  <nav class="mainnav" id="mainnav"><a href="../">Home</a><a href="../guide/">Guide</a><a href="../guide/data">Data types</a><a href="../guide/errors">Errors</a><a href="../guide/functions">Functions</a><a href="../concurrency/">Concurrency</a><a href="../testing/">Testing</a><a href="../bench/">Benchmarks</a><a href="../packages/">Packages</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="../limitations/">Limitations</a></nav>
-  <div class="tools">
-    <input id="search" type="search" placeholder="Search docs…"
-           autocomplete="off" aria-label="Search documentation">
-    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+<header class="nav" data-nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="../" aria-label="slang home">
+      <img class="logo-on-dark" src="../brand/slang-logo-light.svg" alt="" width="77" height="32">
+      <img class="logo-on-light" src="../brand/slang-logo-dark.svg" alt="" width="77" height="32">
+    </a>
+    <nav class="nav-links" aria-label="Primary"><a href="../guide/">Guide</a><a href="../concurrency/">Concurrency</a><a class="active" href="../packages/">Packages</a><a href="../bench/">Benchmarks</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a></nav>
+    <div class="nav-actions">
+      <button class="search-btn" type="button" data-search aria-label="Search the docs" aria-keyshortcuts="Control+K Meta+K /">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <span class="search-label">Search</span>
+        <kbd class="search-kbd">/</kbd>
+      </button>
+      <button class="icon-btn" type="button" data-theme-toggle aria-label="Switch to light theme" title="Switch theme">
+        <svg class="i-sun" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <svg class="i-moon" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.6A8 8 0 1 1 9.4 4a6.4 6.4 0 0 0 10.6 10.6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      </button>
+      <a class="btn btn-ghost btn-sm nav-gh" href="https://github.com/dolphlabs/slang">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span>GitHub</span>
+      </a>
+      <a class="btn btn-light btn-sm nav-start" href="../#install">Get started</a>
+      <button class="nav-menu" type="button" aria-expanded="false" aria-controls="nav-sheet" aria-label="Menu" data-menu>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6h14M3 10h14M3 14h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </button>
+    </div>
   </div>
+  <nav class="nav-sheet" id="nav-sheet" aria-label="Menu" hidden><a href="../guide/">Guide</a><a href="../concurrency/">Concurrency</a><a class="active" href="../packages/">Packages</a><a href="../bench/">Benchmarks</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="https://github.com/dolphlabs/slang">GitHub</a></nav>
 </header>
-<div id="navscrim" class="navscrim" hidden></div>
-<div id="results" class="results" hidden></div>
 
-<main id="main">
+<div class="docbar">
+  <button class="docbar-btn" type="button" aria-expanded="false" aria-controls="sidebar" data-drawer>
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    <span>Docs</span>
+  </button>
+  <span class="docbar-here">httpc</span>
+</div>
 
-<div class="page">
-  <article class="content">
-    <header class="page-head">
-      <h1>httpc</h1>
-      <p class="tagline">Package httpc.</p>
-      <p class="agentline">
-        <a href="../packages/httpc.md">Markdown version</a> ·
-        <a href="../llms.txt">llms.txt</a> ·
-        <a href="../api.json">api.json</a>
-      </p>
-    </header>
+<div class="docs">
+  <aside class="sidebar" id="sidebar" aria-label="Documentation">
+    <div class="sidebar-inner"><div class="side-group"><p class="side-title">Start</p><ul class="side-list"><li><a href="../">Overview</a></li><li><a href="../guide/">Guide</a></li><li><a href="../guide/data">Data types</a></li><li><a href="../guide/errors">Errors</a></li><li><a href="../guide/functions">Functions</a></li></ul></div><div class="side-group"><p class="side-title">Build</p><ul class="side-list"><li><a href="../concurrency/">Concurrency</a></li><li><a href="../testing/">Testing</a></li><li><a href="../packages/">Packages</a></li><li><a href="../interop/">C interop</a></li></ul></div><div class="side-group"><p class="side-title">Under the hood</p><ul class="side-list"><li><a href="../internals/">Internals</a></li><li><a href="../bench/">Benchmarks</a></li><li><a href="../limitations/">Limitations</a></li></ul></div><details class="side-group side-pkgs" open><summary>Packages<span class="side-count">41</span></summary><ul class="side-list"><li><a href="../packages/builder">builder</a></li><li><a href="../packages/byteutil">byteutil</a></li><li><a href="../packages/cache">cache</a></li><li><a href="../packages/compress">compress</a></li><li><a href="../packages/crypto">crypto</a></li><li><a href="../packages/csv">csv</a></li><li><a href="../packages/decimal">decimal</a></li><li><a href="../packages/encoding">encoding</a></li><li><a href="../packages/flags">flags</a></li><li><a href="../packages/fs">fs</a></li><li><a href="../packages/http">http</a></li><li><a href="../packages/http2">http2</a></li><li><a href="../packages/httpc" aria-current="page">httpc</a></li><li><a href="../packages/io">io</a></li><li><a href="../packages/json">json</a></li><li><a href="../packages/log">log</a></li><li><a href="../packages/math">math</a></li><li><a href="../packages/math/numtheory">math/numtheory</a></li><li><a href="../packages/math/stats">math/stats</a></li><li><a href="../packages/mysql">mysql</a></li><li><a href="../packages/nats">nats</a></li><li><a href="../packages/net">net</a></li><li><a href="../packages/os">os</a></li><li><a href="../packages/pg">pg</a></li><li><a href="../packages/proc">proc</a></li><li><a href="../packages/rand">rand</a></li><li><a href="../packages/redis">redis</a></li><li><a href="../packages/regex">regex</a></li><li><a href="../packages/s3">s3</a></li><li><a href="../packages/sort">sort</a></li><li><a href="../packages/sql">sql</a></li><li><a href="../packages/strings">strings</a></li><li><a href="../packages/template">template</a></li><li><a href="../packages/time">time</a></li><li><a href="../packages/timez">timez</a></li><li><a href="../packages/toml">toml</a></li><li><a href="../packages/unicode">unicode</a></li><li><a href="../packages/uuid">uuid</a></li><li><a href="../packages/websocket">websocket</a></li><li><a href="../packages/x509">x509</a></li><li><a href="../packages/yaml">yaml</a></li></ul></details></div>
+  </aside>
+  <div class="drawer-scrim" data-scrim hidden></div>
+
+  <main id="main" class="doc-main">
+
+    <article class="content">
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="../">Docs</a><span class="sep" aria-hidden="true">/</span><a href="../packages/">Packages</a><span class="sep" aria-hidden="true">/</span><span aria-current="page">httpc</span></nav>
+      <header class="page-head">
+        <h1>httpc</h1>
+        <p class="tagline">Package httpc.</p>
+        <p class="agentline">
+          <a href="../packages/httpc.md">Markdown</a><span aria-hidden="true">·</span><a href="../llms.txt">llms.txt</a><span aria-hidden="true">·</span><a href="../api.json">api.json</a>
+        </p>
+      </header>
 <p>An HTTP/1.1 <strong>client</strong> — the mirror of <code>http</code>, which serves. Speaks <code>http://</code> and <code>https://</code>, follows redirects, and decodes chunked responses.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;httpc&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;httpc&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;time&quot;</span>;
 
 <span class="k">let</span> dl = <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">5000000000</span>);   <span class="c">// 5s for the whole request</span>
@@ -91,7 +121,7 @@ req.body = <span class="b">to_bytes</span>(payload);
 <ul><li><strong>A 404 is a <code>Response</code>, not an <code>err</code>.</strong> The <code>result</code> is about whether the exchange happened — DNS, connect, TLS, framing. A server that answers &quot;no&quot; answered. Collapsing the two would make a 404 and a connection refusal indistinguishable at the call site, and they need different handling.</li><li><strong>Certificates are verified, and there is no flag to stop that.</strong> Verified against <code>expired</code>, <code>self-signed</code> and <code>wrong.host</code> on badssl.com: all three are refused, a valid one is accepted. For an internal service signed by a private CA, set <code>ca_path</code> to that bundle — the answer is a different trust anchor, never a disabled check.</li><li><strong>Credentials do not survive a cross-origin redirect.</strong> <code>Authorization</code>, <code>Cookie</code> and <code>Proxy-Authorization</code> are dropped when the scheme, host or port changes, because the server that sent the <code>Location</code> chose where it points, and that is exactly how a token gets exfiltrated. Same-origin redirects keep them.</li><li><strong>Redirect method rules follow browsers, not the RFC&#x27;s original wording.</strong> 303 always becomes GET; 301 and 302 after a POST also become GET and drop the body, which is what every browser and curl do and therefore what servers expect. 307 and 308 exist to preserve the method, so they do. A redirect loop stops at <code>max_redirects</code> and hands back the last 3xx rather than spinning.</li><li><strong>Everything a server can make you allocate has a ceiling</strong> — 64 KiB of headers, 32 MiB of body, and a bounded chunk-size line. A client talks to servers it does not control, so a buffer sized on their say-so is a denial of service arriving through an ordinary call.</li></ul>
 <h6 id="connection-pooling">Connection pooling<a class="anchor" href="#connection-pooling" aria-label="Link to this section">#</a></h6>
 <p><code>httpc.get</code> and friends are one-shot: a connection per request, closed afterwards, with <code>Connection: close</code> sent so the server does not hold it open. A <strong><code>Client</code></strong> keeps idle connections and reuses them — up to <code>max_idle_per_host</code> per origin (default 4), for <code>idle_timeout</code> nanoseconds (default 30s), and 64 across all origins.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> c = httpc.<span class="f">new_client</span>();          <span class="c">// share one across tasks</span>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> c = httpc.<span class="f">new_client</span>();          <span class="c">// share one across tasks</span>
 <span class="k">let</span> r = httpc.<span class="f">client_get</span>(c, <span class="s">&quot;https://api.example.com/v1/items&quot;</span>, dl);</code></pre></div>
 <p>The one-shot functions ARE a client — one that keeps nothing — so framing, redirects, decompression and every security rule are one code path, and cannot drift between the two.</p>
 <p>A <code>Client</code> is safe to share between tasks: the pool is behind a <code>mutex</code>. Its <code>dials</code> and <code>reuses</code> fields and <code>httpc.idle_count(c)</code> make its behaviour checkable rather than asserted.</p>
@@ -102,38 +132,50 @@ req.body = <span class="b">to_bytes</span>(payload);
 <ul><li>The decoded size is held to the same 32 MiB ceiling as a plain body. Without that the wire limit would mean nothing: 32 MiB of gzip holds tens of gigabytes.</li><li><code>deflate</code> is tried as zlib (what RFC 9110 says it means) and then as raw DEFLATE (what a real share of servers send under that name).</li><li>After decoding, <code>Content-Encoding</code> and <code>Content-Length</code> are removed: both describe the bytes that crossed the wire, not the body in hand.</li><li>An encoding the client did not ask for and cannot read is left alone, header included — visible, not silent.</li></ul>
 <h6 id="cookies">Cookies<a class="anchor" href="#cookies" aria-label="Link to this section">#</a></h6>
 <p>RFC 6265, with RFC 6265bis&#x27;s rules for <code>Secure</code> and the <code>__Secure-</code> / <code>__Host-</code> prefixes. <strong>Off by default</strong> — the opposite of a browser, on purpose:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> c = httpc.<span class="f">new_client</span>();
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> c = httpc.<span class="f">new_client</span>();
 httpc.<span class="f">enable_cookies</span>(c);             <span class="c">// this Client now acts as ONE identity</span></code></pre></div>
 <p>A browser&#x27;s jar belongs to one person. A server&#x27;s <code>Client</code> is usually shared, one per process, used on behalf of every user it serves, and a jar there would store user A&#x27;s session cookie and send it on user B&#x27;s request. Go&#x27;s <code>http.Client</code> makes the same call. Turn the jar on for a <code>Client</code> that represents one identity: a scraper, a test driver, an integration with a login-based API.</p>
 <ul><li><strong>Cookies are applied per redirect hop.</strong> A cookie set by a <code>302</code> reaches the page it points to, which is how nearly every login works; a redirect to another host carries that host&#x27;s cookies, not the first one&#x27;s.</li><li><strong>Refused:</strong> a <code>Secure</code> cookie from <code>http://</code> (a network attacker could otherwise overwrite an https session); a <code>Domain</code> the host does not belong to; a bare single-label <code>Domain</code> such as <code>com</code>; a <code>Domain</code> that is part of an IP address; <code>__Host-</code> without <code>Secure</code>, or with a <code>Domain</code>, or with a path other than <code>/</code>; a line with no <code>=</code>; anything over 4096 bytes. <code>Secure</code> cookies are only ever sent over https.</li><li><strong>Scoping:</strong> a cookie set without <code>Domain</code> goes back to <em>exactly</em> that host (<code>127.0.0.1</code> and <code>localhost</code> are different scopes); <code>Path=/p</code> matches <code>/p</code> and <code>/p/x</code> but not <code>/pathx</code>. Longer paths are sent first.</li><li><strong>Expiry:</strong> <code>Max-Age</code> wins over <code>Expires</code> whatever order they arrive in, and a past date or <code>Max-Age=0</code> deletes. Dates are parsed with RFC 6265&#x27;s lenient algorithm, since servers send RFC 1123, RFC 850 with two-digit years and asctime alike; <code>httpc.parse_cookie_date</code> exposes it.</li><li><strong>Limits:</strong> 50 cookies per domain and 3000 in total, evicting the oldest, so a server flooding the jar pushes out its own cookies first.</li><li><strong><code>Response.set_cookies</code></strong> holds each <code>Set-Cookie</code> line separately. Use it rather than <code>headers[&quot;set-cookie&quot;]</code>: repeated headers are joined with <code>&quot;, &quot;</code>, and an <code>Expires</code> date contains a comma, so two joined lines cannot be split apart again.</li></ul>
 <p><strong>No public-suffix list is applied</strong>, and the consequence is stated rather than left to be discovered: a response from <code>a.example.co.uk</code> may set a cookie for <code>Domain=co.uk</code>, and this jar will then send it to every <code>*.co.uk</code> host. Nothing in slang ships a suffix list, and an embedded copy goes stale. The bare-TLD rule stops <code>Domain=com</code>; it does not stop that case.</p>
 <p><strong>Not done, deliberately:</strong> no HTTP/2 client, no multipart bodies, no proxy support, no public-suffix list.</p>
 <h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="url"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Url</code> <span class="src">stdlib/httpc/httpc.sl:43</span><a class="anchor" href="#url">#</a></div></div><div class="api-item" id="request"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Request</code> <span class="src">stdlib/httpc/httpc.sl:50</span><a class="anchor" href="#request">#</a></div></div><div class="api-item" id="response"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Response</code> <span class="src">stdlib/httpc/httpc.sl:67</span><a class="anchor" href="#response">#</a></div></div><div class="api-item" id="parse-url"><div class="api-sig"><code><span class="k">fn</span> <span class="f">parse_url</span>(u: <span class="t">str</span>) -&gt; <span class="t">result</span>[Url, <span class="t">str</span>]</code> <span class="src">stdlib/httpc/httpc.sl:104</span><a class="anchor" href="#parse-url">#</a></div></div><div class="api-item" id="header"><div class="api-sig"><code><span class="k">fn</span> <span class="f">header</span>(r: Response, name: <span class="t">str</span>) -&gt; <span class="t">opt</span>[<span class="t">str</span>]</code> <span class="src">stdlib/httpc/httpc.sl:418</span><a class="anchor" href="#header">#</a></div></div><div class="api-item" id="client"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Client</code> <span class="src">stdlib/httpc/httpc.sl:786</span><a class="anchor" href="#client">#</a></div></div><div class="api-item" id="new-client"><div class="api-sig"><code><span class="k">fn</span> <span class="f">new_client</span>() -&gt; Client</code> <span class="src">stdlib/httpc/httpc.sl:806</span><a class="anchor" href="#new-client">#</a></div></div><div class="api-item" id="cookie"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Cookie</code> <span class="src">stdlib/httpc/httpc.sl:993</span><a class="anchor" href="#cookie">#</a></div></div><div class="api-item" id="enable-cookies"><div class="api-sig"><code><span class="k">fn</span> <span class="f">enable_cookies</span>(c: Client)</code> <span class="src">stdlib/httpc/httpc.sl:1012</span><a class="anchor" href="#enable-cookies">#</a></div></div><div class="api-item" id="clear-cookies"><div class="api-sig"><code><span class="k">fn</span> <span class="f">clear_cookies</span>(c: Client)</code> <span class="src">stdlib/httpc/httpc.sl:1018</span><a class="anchor" href="#clear-cookies">#</a></div></div><div class="api-item" id="parse-cookie-date"><div class="api-sig"><code><span class="k">fn</span> <span class="f">parse_cookie_date</span>(s: <span class="t">str</span>) -&gt; <span class="t">int</span></code> <span class="src">stdlib/httpc/httpc.sl:1224</span><a class="anchor" href="#parse-cookie-date">#</a></div><p class="api-doc">Unix nanoseconds, or -1 when the string is not a cookie date.</p></div><div class="api-item" id="set-cookie"><div class="api-sig"><code><span class="k">fn</span> <span class="f">set_cookie</span>(c: Client, url: <span class="t">str</span>, line: <span class="t">str</span>)</code> <span class="src">stdlib/httpc/httpc.sl:1512</span><a class="anchor" href="#set-cookie">#</a></div><p class="api-doc">Record a Set-Cookie line as if <code>url</code> had sent it, under exactly the rules a real response gets -- the same function does both. For a program restoring a session it saved, or seeding a jar for a test. Has no effect unless enable_cookies was called, the same as a response would not.</p></div><div class="api-item" id="cookies"><div class="api-sig"><code><span class="k">fn</span> <span class="f">cookies</span>(c: Client, url: <span class="t">str</span>) -&gt; [Cookie]</code> <span class="src">stdlib/httpc/httpc.sl:1587</span><a class="anchor" href="#cookies">#</a></div><p class="api-doc">What the jar would send to <code>url</code> right now. For inspection and tests; a request does this itself.</p></div><div class="api-item" id="new-request"><div class="api-sig"><code><span class="k">fn</span> <span class="f">new_request</span>(method: <span class="t">str</span>, url: <span class="t">str</span>) -&gt; Request</code> <span class="src">stdlib/httpc/httpc.sl:1612</span><a class="anchor" href="#new-request">#</a></div></div><div class="api-item" id="client-send"><div class="api-sig"><code><span class="k">fn</span> <span class="f">client_send</span>(c: Client, req: Request, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Response, <span class="t">str</span>]</code> <span class="src">stdlib/httpc/httpc.sl:1726</span><a class="anchor" href="#client-send">#</a></div></div><div class="api-item" id="client-get"><div class="api-sig"><code><span class="k">fn</span> <span class="f">client_get</span>(c: Client, url: <span class="t">str</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Response, <span class="t">str</span>]</code> <span class="src">stdlib/httpc/httpc.sl:1731</span><a class="anchor" href="#client-get">#</a></div></div><div class="api-item" id="client-head"><div class="api-sig"><code><span class="k">fn</span> <span class="f">client_head</span>(c: Client, url: <span class="t">str</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Response, <span class="t">str</span>]</code> <span class="src">stdlib/httpc/httpc.sl:1736</span><a class="anchor" href="#client-head">#</a></div></div><div class="api-item" id="client-post"><div class="api-sig"><code><span class="k">fn</span> <span class="f">client_post</span>(c: Client, url: <span class="t">str</span>, content_type: <span class="t">str</span>, body: <span class="t">bytes</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Response, <span class="t">str</span>]</code> <span class="src">stdlib/httpc/httpc.sl:1741</span><a class="anchor" href="#client-post">#</a></div></div><div class="api-item" id="idle-count"><div class="api-sig"><code><span class="k">fn</span> <span class="f">idle_count</span>(c: Client) -&gt; <span class="t">int</span></code> <span class="src">stdlib/httpc/httpc.sl:1753</span><a class="anchor" href="#idle-count">#</a></div><p class="api-doc">How many connections are idle in the pool right now. With dials and reuses, the third number that makes the pool&#x27;s behaviour checkable rather than asserted -- and the only one that shows a reuse DECISION before the server&#x27;s own close can mask it.</p></div><div class="api-item" id="close-idle"><div class="api-sig"><code><span class="k">fn</span> <span class="f">close_idle</span>(c: Client)</code> <span class="src">stdlib/httpc/httpc.sl:1763</span><a class="anchor" href="#close-idle">#</a></div><p class="api-doc">Close every idle connection now. A long-lived service does not need this -- idle_timeout reaps them -- but a program about to exit, or a test counting connections, does.</p></div><div class="api-item" id="send"><div class="api-sig"><code><span class="k">fn</span> <span class="f">send</span>(req: Request, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Response, <span class="t">str</span>]</code> <span class="src">stdlib/httpc/httpc.sl:1784</span><a class="anchor" href="#send">#</a></div></div><div class="api-item" id="get"><div class="api-sig"><code><span class="k">fn</span> <span class="f">get</span>(url: <span class="t">str</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Response, <span class="t">str</span>]</code> <span class="src">stdlib/httpc/httpc.sl:1788</span><a class="anchor" href="#get">#</a></div></div><div class="api-item" id="head"><div class="api-sig"><code><span class="k">fn</span> <span class="f">head</span>(url: <span class="t">str</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Response, <span class="t">str</span>]</code> <span class="src">stdlib/httpc/httpc.sl:1792</span><a class="anchor" href="#head">#</a></div></div><div class="api-item" id="post"><div class="api-sig"><code><span class="k">fn</span> <span class="f">post</span>(url: <span class="t">str</span>, content_type: <span class="t">str</span>, body: <span class="t">bytes</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Response, <span class="t">str</span>]</code> <span class="src">stdlib/httpc/httpc.sl:1796</span><a class="anchor" href="#post">#</a></div></div><div class="api-item" id="client-send"><div class="api-sig"><code><span class="k">fn</span> <span class="f">send</span>(self: Client, req: Request, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Response, <span class="t">str</span>]</code> <span class="src">stdlib/httpc/httpc.sl:1813</span><a class="anchor" href="#client-send">#</a></div></div><div class="api-item" id="client-get"><div class="api-sig"><code><span class="k">fn</span> <span class="f">get</span>(self: Client, url: <span class="t">str</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Response, <span class="t">str</span>]</code> <span class="src">stdlib/httpc/httpc.sl:1818</span><a class="anchor" href="#client-get">#</a></div></div><div class="api-item" id="client-head"><div class="api-sig"><code><span class="k">fn</span> <span class="f">head</span>(self: Client, url: <span class="t">str</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Response, <span class="t">str</span>]</code> <span class="src">stdlib/httpc/httpc.sl:1823</span><a class="anchor" href="#client-head">#</a></div></div><div class="api-item" id="client-post"><div class="api-sig"><code><span class="k">fn</span> <span class="f">post</span>(self: Client, url: <span class="t">str</span>, content_type: <span class="t">str</span>, body: <span class="t">bytes</span>, deadline: <span class="t">until</span>) -&gt; <span class="t">result</span>[Response, <span class="t">str</span>]</code> <span class="src">stdlib/httpc/httpc.sl:1828</span><a class="anchor" href="#client-post">#</a></div></div><div class="api-item" id="client-idle-count"><div class="api-sig"><code><span class="k">fn</span> <span class="f">idle_count</span>(self: Client) -&gt; <span class="t">int</span></code> <span class="src">stdlib/httpc/httpc.sl:1833</span><a class="anchor" href="#client-idle-count">#</a></div></div><div class="api-item" id="client-close-idle"><div class="api-sig"><code><span class="k">fn</span> <span class="f">close_idle</span>(self: Client)</code> <span class="src">stdlib/httpc/httpc.sl:1837</span><a class="anchor" href="#client-close-idle">#</a></div></div><div class="api-item" id="client-enable-cookies"><div class="api-sig"><code><span class="k">fn</span> <span class="f">enable_cookies</span>(self: Client)</code> <span class="src">stdlib/httpc/httpc.sl:1841</span><a class="anchor" href="#client-enable-cookies">#</a></div></div><div class="api-item" id="client-clear-cookies"><div class="api-sig"><code><span class="k">fn</span> <span class="f">clear_cookies</span>(self: Client)</code> <span class="src">stdlib/httpc/httpc.sl:1845</span><a class="anchor" href="#client-clear-cookies">#</a></div></div><div class="api-item" id="client-set-cookie"><div class="api-sig"><code><span class="k">fn</span> <span class="f">set_cookie</span>(self: Client, url: <span class="t">str</span>, line: <span class="t">str</span>)</code> <span class="src">stdlib/httpc/httpc.sl:1849</span><a class="anchor" href="#client-set-cookie">#</a></div></div><div class="api-item" id="client-cookies"><div class="api-sig"><code><span class="k">fn</span> <span class="f">cookies</span>(self: Client, url: <span class="t">str</span>) -&gt; [Cookie]</code> <span class="src">stdlib/httpc/httpc.sl:1853</span><a class="anchor" href="#client-cookies">#</a></div></div><div class="api-item" id="response-header"><div class="api-sig"><code><span class="k">fn</span> <span class="f">header</span>(self: Response, name: <span class="t">str</span>) -&gt; <span class="t">opt</span>[<span class="t">str</span>]</code> <span class="src">stdlib/httpc/httpc.sl:1859</span><a class="anchor" href="#response-header">#</a></div></div></div>
-  </article>
-  <aside class="toc">
+<nav class="pager" aria-label="Previous and next"><a class="prev" href="../packages/http2"><span class="dir">Previous</span><span class="name">http2</span></a><a class="next" href="../packages/io"><span class="dir">Next</span><span class="name">io</span></a></nav>
+    </article>
+  </main>
+
+  <aside class="toc" aria-label="On this page">
     <p class="toc-title">On this page</p>
     <nav id="toc"></nav>
   </aside>
 </div>
-</main>
 
 <footer class="foot">
-  <div class="foot-main">
-    <p class="foot-by">
-      Built and maintained by
-      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
-    </p>
-    <p class="foot-entity">
-      Dolph Tech Limited &middot;
-      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
-    </p>
+  <div class="foot-inner">
+    <a class="foot-logo" href="../" aria-label="slang home">
+      <img class="logo-on-dark" src="../brand/slang-icon-light.svg" alt="" width="28" height="28">
+      <img class="logo-on-light" src="../brand/slang-icon-dark.svg" alt="" width="28" height="28">
+    </a>
+    <p class="foot-by">Built and maintained by
+      <a href="https://dolphlabs.com" rel="noopener">Dolphlabs</a> · Dolph Tech Limited</p>
+    <p class="foot-note">Generated from the repository by <code>www/build.py</code>:
+      the guide from <code>README.md</code>, the API from the compiler's own
+      signature tables and the <code>pub</code> declarations in
+      <code>stdlib/</code>. Nothing here is written twice.</p>
   </div>
-  <p class="foot-note">Generated from the repository by
-     <code>www/build.py</code> — the guide comes from
-     <code>README.md</code>, the API from the compiler's own signature
-     tables and the <code>pub</code> declarations in
-     <code>stdlib/</code>. Nothing here is written twice.</p>
 </footer>
+
+<div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="Search the docs" hidden>
+  <div class="palette-box">
+    <div class="palette-field">
+      <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <input id="palette-input" type="search" placeholder="Search pages, packages and functions" autocomplete="off" spellcheck="false"
+             role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list">
+      <kbd>esc</kbd>
+    </div>
+    <div class="palette-list" id="palette-list" role="listbox" aria-label="Results"></div>
+    <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
 
 <script src="../app.js" defer></script>
 </body>

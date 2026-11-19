@@ -6,6 +6,8 @@
 <title>builder — slang</title>
 <meta name="description" content="Package builder.">
 <meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<meta name="theme-color" content="#07080a" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f7f5ef" media="(prefers-color-scheme: light)">
 <link rel="author" href="https://dolphlabs.com">
 <meta property="og:site_name" content="slang — by Dolphlabs">
 <meta property="og:title" content="builder">
@@ -23,50 +25,78 @@
 <link rel="alternate" type="text/markdown" href="../packages/builder.md" title="Markdown">
 <link rel="alternate" type="text/plain" href="../llms-full.txt"
       title="Entire site as plain text">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="preload" href="../fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="../style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<script>
+/* Before first paint, so a saved light theme never flashes dark. */
+try { var t = localStorage.getItem("slang-theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
 
-<header class="topbar">
-  <a class="brand" href="../">
-    <span class="mark" aria-hidden="true"></span> slang
-  </a>
-  <button id="navtoggle" class="navtoggle" type="button"
-          aria-label="Toggle navigation" aria-expanded="false"
-          aria-controls="mainnav">
-    <span></span><span></span><span></span>
-  </button>
-  <nav class="mainnav" id="mainnav"><a href="../">Home</a><a href="../guide/">Guide</a><a href="../guide/data">Data types</a><a href="../guide/errors">Errors</a><a href="../guide/functions">Functions</a><a href="../concurrency/">Concurrency</a><a href="../testing/">Testing</a><a href="../bench/">Benchmarks</a><a href="../packages/">Packages</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="../limitations/">Limitations</a></nav>
-  <div class="tools">
-    <input id="search" type="search" placeholder="Search docs…"
-           autocomplete="off" aria-label="Search documentation">
-    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+<header class="nav" data-nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="../" aria-label="slang home">
+      <img class="logo-on-dark" src="../brand/slang-logo-light.svg" alt="" width="77" height="32">
+      <img class="logo-on-light" src="../brand/slang-logo-dark.svg" alt="" width="77" height="32">
+    </a>
+    <nav class="nav-links" aria-label="Primary"><a href="../guide/">Guide</a><a href="../concurrency/">Concurrency</a><a class="active" href="../packages/">Packages</a><a href="../bench/">Benchmarks</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a></nav>
+    <div class="nav-actions">
+      <button class="search-btn" type="button" data-search aria-label="Search the docs" aria-keyshortcuts="Control+K Meta+K /">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <span class="search-label">Search</span>
+        <kbd class="search-kbd">/</kbd>
+      </button>
+      <button class="icon-btn" type="button" data-theme-toggle aria-label="Switch to light theme" title="Switch theme">
+        <svg class="i-sun" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <svg class="i-moon" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.6A8 8 0 1 1 9.4 4a6.4 6.4 0 0 0 10.6 10.6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      </button>
+      <a class="btn btn-ghost btn-sm nav-gh" href="https://github.com/dolphlabs/slang">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span>GitHub</span>
+      </a>
+      <a class="btn btn-light btn-sm nav-start" href="../#install">Get started</a>
+      <button class="nav-menu" type="button" aria-expanded="false" aria-controls="nav-sheet" aria-label="Menu" data-menu>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6h14M3 10h14M3 14h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </button>
+    </div>
   </div>
+  <nav class="nav-sheet" id="nav-sheet" aria-label="Menu" hidden><a href="../guide/">Guide</a><a href="../concurrency/">Concurrency</a><a class="active" href="../packages/">Packages</a><a href="../bench/">Benchmarks</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="https://github.com/dolphlabs/slang">GitHub</a></nav>
 </header>
-<div id="navscrim" class="navscrim" hidden></div>
-<div id="results" class="results" hidden></div>
 
-<main id="main">
+<div class="docbar">
+  <button class="docbar-btn" type="button" aria-expanded="false" aria-controls="sidebar" data-drawer>
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    <span>Docs</span>
+  </button>
+  <span class="docbar-here">builder</span>
+</div>
 
-<div class="page">
-  <article class="content">
-    <header class="page-head">
-      <h1>builder</h1>
-      <p class="tagline">Package builder.</p>
-      <p class="agentline">
-        <a href="../packages/builder.md">Markdown version</a> ·
-        <a href="../llms.txt">llms.txt</a> ·
-        <a href="../api.json">api.json</a>
-      </p>
-    </header>
+<div class="docs">
+  <aside class="sidebar" id="sidebar" aria-label="Documentation">
+    <div class="sidebar-inner"><div class="side-group"><p class="side-title">Start</p><ul class="side-list"><li><a href="../">Overview</a></li><li><a href="../guide/">Guide</a></li><li><a href="../guide/data">Data types</a></li><li><a href="../guide/errors">Errors</a></li><li><a href="../guide/functions">Functions</a></li></ul></div><div class="side-group"><p class="side-title">Build</p><ul class="side-list"><li><a href="../concurrency/">Concurrency</a></li><li><a href="../testing/">Testing</a></li><li><a href="../packages/">Packages</a></li><li><a href="../interop/">C interop</a></li></ul></div><div class="side-group"><p class="side-title">Under the hood</p><ul class="side-list"><li><a href="../internals/">Internals</a></li><li><a href="../bench/">Benchmarks</a></li><li><a href="../limitations/">Limitations</a></li></ul></div><details class="side-group side-pkgs" open><summary>Packages<span class="side-count">41</span></summary><ul class="side-list"><li><a href="../packages/builder" aria-current="page">builder</a></li><li><a href="../packages/byteutil">byteutil</a></li><li><a href="../packages/cache">cache</a></li><li><a href="../packages/compress">compress</a></li><li><a href="../packages/crypto">crypto</a></li><li><a href="../packages/csv">csv</a></li><li><a href="../packages/decimal">decimal</a></li><li><a href="../packages/encoding">encoding</a></li><li><a href="../packages/flags">flags</a></li><li><a href="../packages/fs">fs</a></li><li><a href="../packages/http">http</a></li><li><a href="../packages/http2">http2</a></li><li><a href="../packages/httpc">httpc</a></li><li><a href="../packages/io">io</a></li><li><a href="../packages/json">json</a></li><li><a href="../packages/log">log</a></li><li><a href="../packages/math">math</a></li><li><a href="../packages/math/numtheory">math/numtheory</a></li><li><a href="../packages/math/stats">math/stats</a></li><li><a href="../packages/mysql">mysql</a></li><li><a href="../packages/nats">nats</a></li><li><a href="../packages/net">net</a></li><li><a href="../packages/os">os</a></li><li><a href="../packages/pg">pg</a></li><li><a href="../packages/proc">proc</a></li><li><a href="../packages/rand">rand</a></li><li><a href="../packages/redis">redis</a></li><li><a href="../packages/regex">regex</a></li><li><a href="../packages/s3">s3</a></li><li><a href="../packages/sort">sort</a></li><li><a href="../packages/sql">sql</a></li><li><a href="../packages/strings">strings</a></li><li><a href="../packages/template">template</a></li><li><a href="../packages/time">time</a></li><li><a href="../packages/timez">timez</a></li><li><a href="../packages/toml">toml</a></li><li><a href="../packages/unicode">unicode</a></li><li><a href="../packages/uuid">uuid</a></li><li><a href="../packages/websocket">websocket</a></li><li><a href="../packages/x509">x509</a></li><li><a href="../packages/yaml">yaml</a></li></ul></details></div>
+  </aside>
+  <div class="drawer-scrim" data-scrim hidden></div>
+
+  <main id="main" class="doc-main">
+
+    <article class="content">
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="../">Docs</a><span class="sep" aria-hidden="true">/</span><a href="../packages/">Packages</a><span class="sep" aria-hidden="true">/</span><span aria-current="page">builder</span></nav>
+      <header class="page-head">
+        <h1>builder</h1>
+        <p class="tagline">Package builder.</p>
+        <p class="agentline">
+          <a href="../packages/builder.md">Markdown</a><span aria-hidden="true">·</span><a href="../llms.txt">llms.txt</a><span aria-hidden="true">·</span><a href="../api.json">api.json</a>
+        </p>
+      </header>
 <p>Assembling a result one piece at a time with <code>+</code> is <strong>quadratic</strong>: <code>a + b</code> allocates and copies both sides, so the cost is the sum of every intermediate length. Building 80 KB one byte at a time takes about two seconds, and a megabyte would take minutes. <code>builder</code> collects the pieces and copies each once, at the end.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;builder&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;builder&quot;</span>;
 
 <span class="k">let</span> b = builder.<span class="f">new_str</span>();
 b.<span class="f">write</span>(<span class="s">&quot;hello&quot;</span>).<span class="f">write</span>(<span class="s">&quot;, &quot;</span>).<span class="f">write</span>(name).<span class="f">write_int</span>(<span class="n">42</span>).<span class="f">write_line</span>(<span class="s">&quot;!&quot;</span>);
@@ -78,31 +108,43 @@ y.<span class="f">write_byte</span>(<span class="n">104</span>).<span class="f">
 <p><code>Str</code> is for text and <code>Bytes</code> for binary data. Both chain, report <code>size()</code> in bytes without assembling anything, and offer <code>finish()</code> (which can be called again after more writes), <code>take()</code> (finish and start over) and <code>reset()</code>. The chunk is made on the first short write, so a builder that only takes long pieces never pays for it, and <code>take()</code> hands back a lone piece without copying it. <code>Bytes.write_byte</code> fills a 512-byte chunk in place, so a million single-byte writes make about two thousand allocations rather than a million: 4 million of them take 136 ms. <code>Bytes</code> keeps a <strong>copy</strong> of what you write, because bytes are mutable and a later change of yours must not rewrite what was already written.</p>
 <p>For assembling a <code>[bytes]</code> you already hold, <code>strings.join_bytes(parts, sep)</code> is the counterpart of <code>strings.join</code>. <code>bench/builder/</code> prints the naive loop beside the builder.</p>
 <h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="str"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Str</code> <span class="src">stdlib/builder/builder.sl:33</span><a class="anchor" href="#str">#</a></div></div><div class="api-item" id="new-str"><div class="api-sig"><code><span class="k">fn</span> <span class="f">new_str</span>() -&gt; Str</code> <span class="src">stdlib/builder/builder.sl:38</span><a class="anchor" href="#new-str">#</a></div></div><div class="api-item" id="str-write"><div class="api-sig"><code><span class="k">fn</span> <span class="f">write</span>(self: Str, s: <span class="t">str</span>) -&gt; Str</code> <span class="src">stdlib/builder/builder.sl:46</span><a class="anchor" href="#str-write">#</a></div><p class="api-doc">Appends, and returns the builder so writes chain. A str is immutable, so the builder holds the caller&#x27;s value, not a copy.</p></div><div class="api-item" id="str-write-int"><div class="api-sig"><code><span class="k">fn</span> <span class="f">write_int</span>(self: Str, n: <span class="t">int</span>) -&gt; Str</code> <span class="src">stdlib/builder/builder.sl:54</span><a class="anchor" href="#str-write-int">#</a></div></div><div class="api-item" id="str-write-line"><div class="api-sig"><code><span class="k">fn</span> <span class="f">write_line</span>(self: Str, s: <span class="t">str</span>) -&gt; Str</code> <span class="src">stdlib/builder/builder.sl:58</span><a class="anchor" href="#str-write-line">#</a></div></div><div class="api-item" id="str-size"><div class="api-sig"><code><span class="k">fn</span> <span class="f">size</span>(self: Str) -&gt; <span class="t">int</span></code> <span class="src">stdlib/builder/builder.sl:63</span><a class="anchor" href="#str-size">#</a></div><p class="api-doc">The bytes written so far, without assembling anything.</p></div><div class="api-item" id="str-is-empty"><div class="api-sig"><code><span class="k">fn</span> <span class="f">is_empty</span>(self: Str) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/builder/builder.sl:67</span><a class="anchor" href="#str-is-empty">#</a></div></div><div class="api-item" id="str-finish"><div class="api-sig"><code><span class="k">fn</span> <span class="f">finish</span>(self: Str) -&gt; <span class="t">str</span></code> <span class="src">stdlib/builder/builder.sl:74</span><a class="anchor" href="#str-finish">#</a></div><p class="api-doc">The whole result, in one allocation. Can be called again after more writes; each call assembles what is there, so ask once when you are done rather than after every write.</p></div><div class="api-item" id="str-take"><div class="api-sig"><code><span class="k">fn</span> <span class="f">take</span>(self: Str) -&gt; <span class="t">str</span></code> <span class="src">stdlib/builder/builder.sl:79</span><a class="anchor" href="#str-take">#</a></div><p class="api-doc">finish() and start over.</p></div><div class="api-item" id="str-reset"><div class="api-sig"><code><span class="k">fn</span> <span class="f">reset</span>(self: Str) -&gt; <span class="t">int</span></code> <span class="src">stdlib/builder/builder.sl:85</span><a class="anchor" href="#str-reset">#</a></div></div><div class="api-item" id="bytes"><div class="api-sig"><code><span class="k">gc</span> <span class="k">struct</span> Bytes</code> <span class="src">stdlib/builder/builder.sl:111</span><a class="anchor" href="#bytes">#</a></div></div><div class="api-item" id="new-bytes"><div class="api-sig"><code><span class="k">fn</span> <span class="f">new_bytes</span>() -&gt; Bytes</code> <span class="src">stdlib/builder/builder.sl:122</span><a class="anchor" href="#new-bytes">#</a></div><p class="api-doc">The chunk starts as the shared empty b&quot;&quot; and is made on the first short write (has_chunk): a builder that only takes long pieces, or none, never pays for it. It used to be built eagerly as a 512-byte str and then copied to bytes -- 1 KB and two allocations before any write.</p></div><div class="api-item" id="bytes-write-byte"><div class="api-sig"><code><span class="k">fn</span> <span class="f">write_byte</span>(self: Bytes, b: <span class="t">int</span>) -&gt; Bytes</code> <span class="src">stdlib/builder/builder.sl:150</span><a class="anchor" href="#bytes-write-byte">#</a></div></div><div class="api-item" id="bytes-write"><div class="api-sig"><code><span class="k">fn</span> <span class="f">write</span>(self: Bytes, b: <span class="t">bytes</span>) -&gt; Bytes</code> <span class="src">stdlib/builder/builder.sl:164</span><a class="anchor" href="#bytes-write">#</a></div><p class="api-doc">Appends a copy. Bytes are mutable in slang, so keeping the caller&#x27;s own value would let a later change of theirs rewrite what was already written.</p></div><div class="api-item" id="bytes-write-str"><div class="api-sig"><code><span class="k">fn</span> <span class="f">write_str</span>(self: Bytes, s: <span class="t">str</span>) -&gt; Bytes</code> <span class="src">stdlib/builder/builder.sl:190</span><a class="anchor" href="#bytes-write-str">#</a></div><p class="api-doc">Text goes in as its UTF-8 bytes. <code>to_bytes</code> already makes a fresh value, so a long string is kept as-is rather than copied twice.</p></div><div class="api-item" id="bytes-size"><div class="api-sig"><code><span class="k">fn</span> <span class="f">size</span>(self: Bytes) -&gt; <span class="t">int</span></code> <span class="src">stdlib/builder/builder.sl:204</span><a class="anchor" href="#bytes-size">#</a></div></div><div class="api-item" id="bytes-is-empty"><div class="api-sig"><code><span class="k">fn</span> <span class="f">is_empty</span>(self: Bytes) -&gt; <span class="t">bool</span></code> <span class="src">stdlib/builder/builder.sl:208</span><a class="anchor" href="#bytes-is-empty">#</a></div></div><div class="api-item" id="bytes-finish"><div class="api-sig"><code><span class="k">fn</span> <span class="f">finish</span>(self: Bytes) -&gt; <span class="t">bytes</span></code> <span class="src">stdlib/builder/builder.sl:215</span><a class="anchor" href="#bytes-finish">#</a></div><p class="api-doc">The whole result, in one allocation. Leaves the builder as it was, so it can be written to and finished again; call it once when you are done rather than after every write.</p></div><div class="api-item" id="bytes-take"><div class="api-sig"><code><span class="k">fn</span> <span class="f">take</span>(self: Bytes) -&gt; <span class="t">bytes</span></code> <span class="src">stdlib/builder/builder.sl:222</span><a class="anchor" href="#bytes-take">#</a></div><p class="api-doc">finish, then reset. With a single piece that piece is the result: the reset drops the builder&#x27;s hold on it, so no copy is needed.</p></div><div class="api-item" id="bytes-reset"><div class="api-sig"><code><span class="k">fn</span> <span class="f">reset</span>(self: Bytes) -&gt; <span class="t">int</span></code> <span class="src">stdlib/builder/builder.sl:234</span><a class="anchor" href="#bytes-reset">#</a></div></div></div>
-  </article>
-  <aside class="toc">
+<nav class="pager" aria-label="Previous and next"><a class="prev" href="../limitations/"><span class="dir">Previous</span><span class="name">Limitations</span></a><a class="next" href="../packages/byteutil"><span class="dir">Next</span><span class="name">byteutil</span></a></nav>
+    </article>
+  </main>
+
+  <aside class="toc" aria-label="On this page">
     <p class="toc-title">On this page</p>
     <nav id="toc"></nav>
   </aside>
 </div>
-</main>
 
 <footer class="foot">
-  <div class="foot-main">
-    <p class="foot-by">
-      Built and maintained by
-      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
-    </p>
-    <p class="foot-entity">
-      Dolph Tech Limited &middot;
-      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
-    </p>
+  <div class="foot-inner">
+    <a class="foot-logo" href="../" aria-label="slang home">
+      <img class="logo-on-dark" src="../brand/slang-icon-light.svg" alt="" width="28" height="28">
+      <img class="logo-on-light" src="../brand/slang-icon-dark.svg" alt="" width="28" height="28">
+    </a>
+    <p class="foot-by">Built and maintained by
+      <a href="https://dolphlabs.com" rel="noopener">Dolphlabs</a> · Dolph Tech Limited</p>
+    <p class="foot-note">Generated from the repository by <code>www/build.py</code>:
+      the guide from <code>README.md</code>, the API from the compiler's own
+      signature tables and the <code>pub</code> declarations in
+      <code>stdlib/</code>. Nothing here is written twice.</p>
   </div>
-  <p class="foot-note">Generated from the repository by
-     <code>www/build.py</code> — the guide comes from
-     <code>README.md</code>, the API from the compiler's own signature
-     tables and the <code>pub</code> declarations in
-     <code>stdlib/</code>. Nothing here is written twice.</p>
 </footer>
+
+<div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="Search the docs" hidden>
+  <div class="palette-box">
+    <div class="palette-field">
+      <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <input id="palette-input" type="search" placeholder="Search pages, packages and functions" autocomplete="off" spellcheck="false"
+             role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list">
+      <kbd>esc</kbd>
+    </div>
+    <div class="palette-list" id="palette-list" role="listbox" aria-label="Results"></div>
+    <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
 
 <script src="../app.js" defer></script>
 </body>

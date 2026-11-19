@@ -1,208 +1,317 @@
-/* slang docs — progressive enhancement only.
+/* slang docs: progressive enhancement only.
  *
  * Every word of every page is in the HTML. This file adds the theme
- * toggle, client-side search, a table of contents, copy buttons, the
- * scroll reveal and the hero animation. With JavaScript disabled or
- * unavailable -- which is the normal case for a crawler or an agent
- * fetching the page -- nothing here is load-bearing. */
+ * toggle, the menus, copy buttons, the on-page contents and the search
+ * palette. With JavaScript off -- the normal case for a crawler or an
+ * agent fetching a page -- nothing here is load-bearing: the sidebar,
+ * header links and previous/next links all work as plain links. */
 
 (function () {
   "use strict";
 
   var root = document.documentElement;
+  var $ = function (s, el) { return (el || document).querySelector(s); };
+  var $$ = function (s, el) { return [].slice.call((el || document).querySelectorAll(s)); };
 
-  /* ---- theme ------------------------------------------------------ */
-  var saved = null;
-  try { saved = localStorage.getItem("slang-theme"); } catch (e) {}
-  if (saved === "dark" || saved === "light") root.dataset.theme = saved;
+  /* Where the site root is, from this page: the stylesheet is always
+   * linked as <root>style.css. */
+  var styleLink = $('link[rel=stylesheet][href$="style.css"]');
+  var rootPath = styleLink ? (styleLink.getAttribute("href") || "").replace(/style\.css$/, "") : "";
 
-  var themeBtn = document.getElementById("theme");
-  if (themeBtn) {
-    themeBtn.addEventListener("click", function () {
-      var dark = root.dataset.theme
-        ? root.dataset.theme === "dark"
-        : matchMedia("(prefers-color-scheme: dark)").matches;
-      var next = dark ? "light" : "dark";
+  /* ---- theme ---------------------------------------------------------- */
+  function isDark() {
+    var t = root.dataset.theme;
+    if (t === "dark") return true;
+    if (t === "light") return false;
+    return !matchMedia("(prefers-color-scheme: light)").matches;
+  }
+  function syncThemeLabel(btn) {
+    btn.setAttribute("aria-label", isDark() ? "Switch to light theme" : "Switch to dark theme");
+  }
+  $$("[data-theme-toggle]").forEach(function (btn) {
+    syncThemeLabel(btn);
+    btn.addEventListener("click", function () {
+      var next = isDark() ? "light" : "dark";
       root.dataset.theme = next;
       try { localStorage.setItem("slang-theme", next); } catch (e) {}
-    });
-  }
-
-  /* ---- mobile nav --------------------------------------------------
-   * Below 64rem (style.css) .mainnav starts collapsed; this just
-   * toggles the .open class and mirrors it into aria-expanded and the
-   * tap-outside scrim. Without JS the panel stays collapsed and the
-   * links are still there in the HTML, just not reachable through the
-   * toggle -- a real loss on a phone, but every page is also on its
-   * own line in the footer-less nav of the Markdown twin, so nothing
-   * is unreachable, only less convenient. */
-  var navToggle = document.getElementById("navtoggle");
-  var mainNav = document.getElementById("mainnav");
-  var navScrim = document.getElementById("navscrim");
-  if (navToggle && mainNav && navScrim) {
-    var closeNav = function () {
-      mainNav.classList.remove("open");
-      navToggle.setAttribute("aria-expanded", "false");
-      navScrim.hidden = true;
-    };
-    var openNav = function () {
-      mainNav.classList.add("open");
-      navToggle.setAttribute("aria-expanded", "true");
-      navScrim.hidden = false;
-    };
-    navToggle.addEventListener("click", function () {
-      if (mainNav.classList.contains("open")) closeNav(); else openNav();
-    });
-    navScrim.addEventListener("click", closeNav);
-    mainNav.addEventListener("click", function (e) {
-      if (e.target.tagName === "A") closeNav();
-    });
-    document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape" && mainNav.classList.contains("open")) {
-        closeNav(); navToggle.focus();
-      }
-    });
-  }
-
-  /* ---- copy buttons ----------------------------------------------- */
-  document.querySelectorAll(".code .copy").forEach(function (btn) {
-    btn.addEventListener("click", function () {
-      var code = btn.parentElement.querySelector("code");
-      if (!code) return;
-      var done = function () {
-        btn.textContent = "Copied";
-        btn.classList.add("ok");
-        setTimeout(function () {
-          btn.textContent = "Copy";
-          btn.classList.remove("ok");
-        }, 1400);
-      };
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(code.innerText).then(done, function () {});
-      }
+      syncThemeLabel(btn);
     });
   });
 
-  /* ---- table of contents ------------------------------------------ */
-  var tocBox = document.getElementById("toc");
-  var heads = [].slice.call(
-    document.querySelectorAll(".content h2[id], .content h3[id]"));
+  /* ---- header menu (below the width the links fit) ---------------------- */
+  var menuBtn = $("[data-menu]");
+  var sheet = $("#nav-sheet");
+  if (menuBtn && sheet) {
+    menuBtn.addEventListener("click", function () {
+      var open = sheet.hidden;
+      sheet.hidden = !open;
+      menuBtn.setAttribute("aria-expanded", String(open));
+    });
+  }
+
+  /* ---- docs drawer (phones and tablets) ---------------------------------- */
+  var drawerBtn = $("[data-drawer]");
+  var sidebar = $("#sidebar");
+  var scrim = $("[data-scrim]");
+  function closeDrawer() {
+    if (!sidebar) return;
+    sidebar.classList.remove("open");
+    if (scrim) scrim.hidden = true;
+    if (drawerBtn) drawerBtn.setAttribute("aria-expanded", "false");
+    document.body.style.overflow = "";
+  }
+  function openDrawer() {
+    sidebar.classList.add("open");
+    if (scrim) scrim.hidden = false;
+    drawerBtn.setAttribute("aria-expanded", "true");
+    document.body.style.overflow = "hidden";
+    var here = $('[aria-current="page"]', sidebar);
+    (here || $("a", sidebar)).focus({ preventScroll: true });
+    if (here) here.scrollIntoView({ block: "center" });
+  }
+  if (drawerBtn && sidebar) {
+    drawerBtn.addEventListener("click", function () {
+      if (sidebar.classList.contains("open")) closeDrawer(); else openDrawer();
+    });
+    if (scrim) scrim.addEventListener("click", closeDrawer);
+    sidebar.addEventListener("click", function (e) {
+      if (e.target.closest("a")) closeDrawer();
+    });
+  }
+
+  /* Keep the current page in view in a long sidebar (the package list). */
+  if (sidebar && matchMedia("(min-width: 1025px)").matches) {
+    var cur = $('[aria-current="page"]', sidebar);
+    if (cur) {
+      var r = cur.getBoundingClientRect();
+      if (r.bottom > window.innerHeight - 40) sidebar.scrollTop += r.top - window.innerHeight / 2;
+    }
+  }
+
+  /* ---- copy buttons ------------------------------------------------------- */
+  $$(".code .copy").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var code = btn.closest(".code").querySelector("pre code");
+      if (!code || !navigator.clipboard) return;
+      navigator.clipboard.writeText(code.innerText).then(function () {
+        btn.textContent = "Copied";
+        btn.classList.add("ok");
+        setTimeout(function () { btn.textContent = "Copy"; btn.classList.remove("ok"); }, 1400);
+      }, function () {});
+    });
+  });
+
+  /* ---- on this page --------------------------------------------------------- */
+  /* Headings, and on a package page every API item under its "API"
+   * heading: there the contents list is the index of the package's
+   * functions. */
+  var tocBox = $("#toc");
+  var heads = $$(".content h2[id], .content h3[id], .content .api-item[id]");
+  function tocLabel(h) {
+    if (h.classList.contains("api-item")) {
+      var m = (h.querySelector(".api-sig code") || h).textContent
+        .match(/(?:fn|struct|let|enum)\s+([A-Za-z_][A-Za-z0-9_.]*)/);
+      return m ? m[1] : h.id;
+    }
+    return h.textContent.replace(/#\s*$/, "").trim();
+  }
   if (tocBox && heads.length > 1) {
     heads.forEach(function (h) {
       var a = document.createElement("a");
       a.href = "#" + h.id;
-      a.textContent = h.textContent.replace(/#$/, "").trim();
-      if (h.tagName === "H3") a.className = "h3";
+      a.textContent = tocLabel(h);
+      if (h.tagName === "H3" || h.classList.contains("api-item")) a.className = "h3";
+      if (h.classList.contains("api-item")) a.classList.add("api");
       tocBox.appendChild(a);
     });
-    var links = [].slice.call(tocBox.querySelectorAll("a"));
+    var links = $$("a", tocBox);
     if ("IntersectionObserver" in window) {
-      var seen = new Map();
+      var visible = {};
       var io = new IntersectionObserver(function (entries) {
-        entries.forEach(function (e) { seen.set(e.target.id, e.isIntersecting); });
-        for (var i = 0; i < heads.length; i++) {
-          if (seen.get(heads[i].id)) {
-            links.forEach(function (l) { l.classList.remove("active"); });
-            var m = links.filter(function (l) {
-              return l.getAttribute("href") === "#" + heads[i].id;
-            })[0];
-            if (m) m.classList.add("active");
-            break;
-          }
-        }
-      }, { rootMargin: "-80px 0px -70% 0px" });
+        entries.forEach(function (e) { visible[e.target.id] = e.isIntersecting; });
+        var first = null;
+        for (var i = 0; i < heads.length; i++) if (visible[heads[i].id]) { first = heads[i].id; break; }
+        if (!first) return;
+        links.forEach(function (l) { l.classList.toggle("active", l.getAttribute("href") === "#" + first); });
+      }, { rootMargin: "-90px 0px -65% 0px" });
       heads.forEach(function (h) { io.observe(h); });
     }
   }
 
-  /* ---- search ------------------------------------------------------ */
-  var input = document.getElementById("search");
-  var results = document.getElementById("results");
+  /* ---- search palette -------------------------------------------------------- */
+  var palette = $("#palette");
+  var input = $("#palette-input");
+  var list = $("#palette-list");
   var index = null;
-  /* The page carries two stylesheets (Google Fonts first, the local
-   * one second), so an unqualified selector lands on the fonts URL
-   * and every fetch goes to googleapis.com instead of search.json --
-   * which is exactly how search silently broke. Match the local file
-   * by suffix instead. */
-  var styleLink = document.querySelector('link[rel=stylesheet][href$="style.css"]');
-  var rootPath = styleLink
-    ? (styleLink.getAttribute("href") || "").replace(/style\.css$/, "")
-    : "";
+  var items = [];
+  var sel = 0;
+  var lastFocus = null;
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+  function mark(text, words) {
+    var out = esc(text);
+    words.forEach(function (w) {
+      if (!w) return;
+      var re = new RegExp("(" + w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")", "ig");
+      out = out.replace(re, "<mark>$1</mark>");
+    });
+    return out;
+  }
 
   function load() {
     if (index) return Promise.resolve(index);
     return fetch(rootPath + "search.json")
       .then(function (r) { return r.json(); })
-      .then(function (j) { index = j; return j; })
+      .then(function (j) {
+        index = j.map(function (it) {
+          it._t = (it.title || "").toLowerCase();
+          it._n = (it.name || "").toLowerCase();
+          it._s = (it.sig || it.tagline || "").toLowerCase();
+          it._x = (it.text || "").toLowerCase();
+          return it;
+        });
+        return index;
+      })
       .catch(function () { index = []; return index; });
   }
 
-  function render(items, q) {
-    if (!items.length) {
-      results.innerHTML = '<p class="empty">No matches for “'
-        + q.replace(/[<>&]/g, "") + '”.</p>';
-    } else {
-      results.innerHTML = items.map(function (it) {
-        return '<a href="' + rootPath + it.url + '">'
-          + '<span class="r-t">' + it.title + "</span><br>"
-          + '<span class="r-s">' + it.tagline + "</span></a>";
-      }).join("");
+  /* Every word must match somewhere; a word scores by where it matched,
+   * strongest first: the exact name, its start, anywhere in the name,
+   * then the signature or tagline, then the body. */
+  function scoreOf(it, words) {
+    var total = 0;
+    for (var i = 0; i < words.length; i++) {
+      var w = words[i], s = 0;
+      if (it._t === w || it._n === w) s = 100;
+      else if (it._t.indexOf(w) === 0 || it._n.indexOf(w) === 0) s = 70;
+      else if (it._t.indexOf("." + w) > -1 || it._t.indexOf("_" + w) > -1) s = 55;
+      else if (it._t.indexOf(w) > -1) s = 45;
+      else if (it._s.indexOf(w) > -1) s = 20;
+      else if (it._x.indexOf(w) > -1) s = 8;
+      if (!s) return 0;
+      total += s;
     }
-    results.hidden = false;
+    if (it.kind === "page") total += 6;
+    return total - Math.min(it._t.length, 40) / 40;
   }
 
-  function search(q) {
-    var needle = q.toLowerCase().trim();
-    if (needle.length < 2) { results.hidden = true; return; }
-    load().then(function (idx) {
-      var scored = [];
-      idx.forEach(function (it) {
-        var t = it.title.toLowerCase();
-        var body = (it.text || "").toLowerCase();
-        var score = 0;
-        if (t === needle) score = 100;
-        else if (t.indexOf(needle) === 0) score = 60;
-        else if (t.indexOf(needle) > -1) score = 40;
-        else if ((it.tagline || "").toLowerCase().indexOf(needle) > -1) score = 20;
-        else if (body.indexOf(needle) > -1) score = 10;
-        if (score) scored.push({ it: it, score: score });
-      });
-      scored.sort(function (a, b) { return b.score - a.score; });
-      render(scored.slice(0, 12).map(function (s) { return s.it; }), q);
+  function render(q) {
+    var words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) {
+      items = index.filter(function (it) { return it.kind === "page"; }).slice(0, 12);
+      draw(items, [], "Pages");
+      return;
+    }
+    var scored = [];
+    index.forEach(function (it) {
+      var s = scoreOf(it, words);
+      if (s > 0) scored.push({ it: it, s: s });
     });
+    scored.sort(function (a, b) { return b.s - a.s; });
+    var pages = [], api = [], best = { page: 0, api: 0 };
+    scored.forEach(function (x) {
+      var k = x.it.kind === "page" ? "page" : "api";
+      if (!best[k]) best[k] = x.s;
+      if (k === "page") { if (pages.length < 6) pages.push(x.it); }
+      else if (api.length < 40) api.push(x.it);
+    });
+    /* The group with the better match goes first: "verify" should lead
+     * with x509.verify, not with the pages whose prose mentions it. */
+    items = best.api > best.page ? api.concat(pages) : pages.concat(api);
+    draw(items, words);
   }
 
-  if (input && results) {
-    input.addEventListener("input", function () { search(input.value); });
-    input.addEventListener("focus", function () {
-      if (input.value.trim().length > 1) search(input.value);
+  function draw(rows, words, onlyTitle) {
+    sel = 0;
+    if (!rows.length) {
+      list.innerHTML = '<p class="palette-empty">Nothing matches “' + esc(input.value.trim()) + '”.</p>';
+      return;
+    }
+    var html = [], group = null;
+    rows.forEach(function (it, i) {
+      var g = it.kind === "page" ? "Pages" : "API";
+      if (onlyTitle) g = onlyTitle;
+      if (g !== group) { html.push('<p class="palette-group">' + g + "</p>"); group = g; }
+      var isApi = it.kind === "api";
+      html.push(
+        '<a class="palette-item" role="option" id="pi-' + i + '" href="' + esc(rootPath + it.url) + '"' +
+        (i === 0 ? ' aria-selected="true"' : "") + ">" +
+        '<span class="pi-title' + (isApi ? " is-code" : "") + '">' + mark(it.title, words) + "</span>" +
+        '<span class="pi-sub' + (isApi ? " is-code" : "") + '">' + esc(isApi ? it.sig : it.tagline) + "</span></a>");
     });
-    document.addEventListener("click", function (e) {
-      if (!results.contains(e.target) && e.target !== input) results.hidden = true;
-    });
-    document.addEventListener("keydown", function (e) {
-      if (e.key === "/" && document.activeElement !== input) {
-        e.preventDefault(); input.focus();
-      } else if (e.key === "Escape") {
-        results.hidden = true; input.blur();
+    list.innerHTML = html.join("");
+    input.setAttribute("aria-activedescendant", "pi-0");
+  }
+
+  function move(d) {
+    var els = $$(".palette-item", list);
+    if (!els.length) return;
+    els[sel].removeAttribute("aria-selected");
+    sel = (sel + d + els.length) % els.length;
+    els[sel].setAttribute("aria-selected", "true");
+    els[sel].scrollIntoView({ block: "nearest" });
+    input.setAttribute("aria-activedescendant", els[sel].id);
+  }
+
+  function openPalette() {
+    if (!palette) return;
+    lastFocus = document.activeElement;
+    palette.hidden = false;
+    document.body.style.overflow = "hidden";
+    input.value = "";
+    input.focus();
+    load().then(function () { render(""); });
+  }
+  function closePalette() {
+    if (!palette || palette.hidden) return;
+    palette.hidden = true;
+    document.body.style.overflow = "";
+    if (lastFocus && lastFocus.focus) lastFocus.focus();
+  }
+
+  if (palette && input && list) {
+    $$("[data-search]").forEach(function (b) { b.addEventListener("click", openPalette); });
+    input.addEventListener("input", function () { load().then(function () { render(input.value); }); });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowDown") { e.preventDefault(); move(1); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); move(-1); }
+      else if (e.key === "Enter") {
+        var cur = $$(".palette-item", list)[sel];
+        if (cur) { e.preventDefault(); closePalette(); location.href = cur.href; }
       }
     });
-  }
-
-  /* ---- reveal on scroll -------------------------------------------- */
-  var reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  if (!reduce && "IntersectionObserver" in window) {
-    var targets = document.querySelectorAll(
-      ".features article, .pkg-card, .content h2, .code");
-    var ro = new IntersectionObserver(function (entries, obs) {
-      entries.forEach(function (e) {
-        if (e.isIntersecting) { e.target.classList.add("in"); obs.unobserve(e.target); }
-      });
-    }, { rootMargin: "0px 0px -8% 0px" });
-    targets.forEach(function (t) {
-      if (t.getBoundingClientRect().top < window.innerHeight) return;
-      t.classList.add("reveal");
-      ro.observe(t);
+    palette.addEventListener("click", function (e) {
+      if (e.target === palette) closePalette();
+      else if (e.target.closest(".palette-item")) closePalette();
+    });
+    list.addEventListener("mousemove", function (e) {
+      var it = e.target.closest(".palette-item");
+      if (!it) return;
+      var els = $$(".palette-item", list), i = els.indexOf(it);
+      if (i < 0 || i === sel) return;
+      els[sel].removeAttribute("aria-selected");
+      sel = i;
+      it.setAttribute("aria-selected", "true");
     });
   }
+
+  document.addEventListener("keydown", function (e) {
+    var typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName) ||
+                 document.activeElement.isContentEditable;
+    if ((e.key === "k" || e.key === "K") && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      if (palette && palette.hidden) openPalette(); else closePalette();
+    } else if (e.key === "/" && !typing && palette && palette.hidden) {
+      e.preventDefault();
+      openPalette();
+    } else if (e.key === "Escape") {
+      if (palette && !palette.hidden) closePalette();
+      else if (sidebar && sidebar.classList.contains("open")) { closeDrawer(); drawerBtn.focus(); }
+      else if (sheet && !sheet.hidden) { sheet.hidden = true; menuBtn.setAttribute("aria-expanded", "false"); }
+    }
+  });
 })();
