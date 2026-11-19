@@ -6,6 +6,8 @@
 <title>net — slang</title>
 <meta name="description" content="Package net.">
 <meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<meta name="theme-color" content="#07080a" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f7f5ef" media="(prefers-color-scheme: light)">
 <link rel="author" href="https://dolphlabs.com">
 <meta property="og:site_name" content="slang — by Dolphlabs">
 <meta property="og:title" content="net">
@@ -23,50 +25,78 @@
 <link rel="alternate" type="text/markdown" href="../packages/net.md" title="Markdown">
 <link rel="alternate" type="text/plain" href="../llms-full.txt"
       title="Entire site as plain text">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="preload" href="../fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="../style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<script>
+/* Before first paint, so a saved light theme never flashes dark. */
+try { var t = localStorage.getItem("slang-theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
 
-<header class="topbar">
-  <a class="brand" href="../">
-    <span class="mark" aria-hidden="true"></span> slang
-  </a>
-  <button id="navtoggle" class="navtoggle" type="button"
-          aria-label="Toggle navigation" aria-expanded="false"
-          aria-controls="mainnav">
-    <span></span><span></span><span></span>
-  </button>
-  <nav class="mainnav" id="mainnav"><a href="../">Home</a><a href="../guide/">Guide</a><a href="../guide/data">Data types</a><a href="../guide/errors">Errors</a><a href="../guide/functions">Functions</a><a href="../concurrency/">Concurrency</a><a href="../testing/">Testing</a><a href="../bench/">Benchmarks</a><a href="../packages/">Packages</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="../limitations/">Limitations</a></nav>
-  <div class="tools">
-    <input id="search" type="search" placeholder="Search docs…"
-           autocomplete="off" aria-label="Search documentation">
-    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+<header class="nav" data-nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="../" aria-label="slang home">
+      <img class="logo-on-dark" src="../brand/slang-logo-light.svg" alt="" width="77" height="32">
+      <img class="logo-on-light" src="../brand/slang-logo-dark.svg" alt="" width="77" height="32">
+    </a>
+    <nav class="nav-links" aria-label="Primary"><a href="../guide/">Guide</a><a href="../concurrency/">Concurrency</a><a class="active" href="../packages/">Packages</a><a href="../bench/">Benchmarks</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a></nav>
+    <div class="nav-actions">
+      <button class="search-btn" type="button" data-search aria-label="Search the docs" aria-keyshortcuts="Control+K Meta+K /">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <span class="search-label">Search</span>
+        <kbd class="search-kbd">/</kbd>
+      </button>
+      <button class="icon-btn" type="button" data-theme-toggle aria-label="Switch to light theme" title="Switch theme">
+        <svg class="i-sun" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <svg class="i-moon" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.6A8 8 0 1 1 9.4 4a6.4 6.4 0 0 0 10.6 10.6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      </button>
+      <a class="btn btn-ghost btn-sm nav-gh" href="https://github.com/dolphlabs/slang">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span>GitHub</span>
+      </a>
+      <a class="btn btn-light btn-sm nav-start" href="../#install">Get started</a>
+      <button class="nav-menu" type="button" aria-expanded="false" aria-controls="nav-sheet" aria-label="Menu" data-menu>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6h14M3 10h14M3 14h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </button>
+    </div>
   </div>
+  <nav class="nav-sheet" id="nav-sheet" aria-label="Menu" hidden><a href="../guide/">Guide</a><a href="../concurrency/">Concurrency</a><a class="active" href="../packages/">Packages</a><a href="../bench/">Benchmarks</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="https://github.com/dolphlabs/slang">GitHub</a></nav>
 </header>
-<div id="navscrim" class="navscrim" hidden></div>
-<div id="results" class="results" hidden></div>
 
-<main id="main">
+<div class="docbar">
+  <button class="docbar-btn" type="button" aria-expanded="false" aria-controls="sidebar" data-drawer>
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    <span>Docs</span>
+  </button>
+  <span class="docbar-here">net</span>
+</div>
 
-<div class="page">
-  <article class="content">
-    <header class="page-head">
-      <h1>net</h1>
-      <p class="tagline">Package net.</p>
-      <p class="agentline">
-        <a href="../packages/net.md">Markdown version</a> ·
-        <a href="../llms.txt">llms.txt</a> ·
-        <a href="../api.json">api.json</a>
-      </p>
-    </header>
+<div class="docs">
+  <aside class="sidebar" id="sidebar" aria-label="Documentation">
+    <div class="sidebar-inner"><div class="side-group"><p class="side-title">Start</p><ul class="side-list"><li><a href="../">Overview</a></li><li><a href="../guide/">Guide</a></li><li><a href="../guide/data">Data types</a></li><li><a href="../guide/errors">Errors</a></li><li><a href="../guide/functions">Functions</a></li></ul></div><div class="side-group"><p class="side-title">Build</p><ul class="side-list"><li><a href="../concurrency/">Concurrency</a></li><li><a href="../testing/">Testing</a></li><li><a href="../packages/">Packages</a></li><li><a href="../interop/">C interop</a></li></ul></div><div class="side-group"><p class="side-title">Under the hood</p><ul class="side-list"><li><a href="../internals/">Internals</a></li><li><a href="../bench/">Benchmarks</a></li><li><a href="../limitations/">Limitations</a></li></ul></div><details class="side-group side-pkgs" open><summary>Packages<span class="side-count">41</span></summary><ul class="side-list"><li><a href="../packages/builder">builder</a></li><li><a href="../packages/byteutil">byteutil</a></li><li><a href="../packages/cache">cache</a></li><li><a href="../packages/compress">compress</a></li><li><a href="../packages/crypto">crypto</a></li><li><a href="../packages/csv">csv</a></li><li><a href="../packages/decimal">decimal</a></li><li><a href="../packages/encoding">encoding</a></li><li><a href="../packages/flags">flags</a></li><li><a href="../packages/fs">fs</a></li><li><a href="../packages/http">http</a></li><li><a href="../packages/http2">http2</a></li><li><a href="../packages/httpc">httpc</a></li><li><a href="../packages/io">io</a></li><li><a href="../packages/json">json</a></li><li><a href="../packages/log">log</a></li><li><a href="../packages/math">math</a></li><li><a href="../packages/math/numtheory">math/numtheory</a></li><li><a href="../packages/math/stats">math/stats</a></li><li><a href="../packages/mysql">mysql</a></li><li><a href="../packages/nats">nats</a></li><li><a href="../packages/net" aria-current="page">net</a></li><li><a href="../packages/os">os</a></li><li><a href="../packages/pg">pg</a></li><li><a href="../packages/proc">proc</a></li><li><a href="../packages/rand">rand</a></li><li><a href="../packages/redis">redis</a></li><li><a href="../packages/regex">regex</a></li><li><a href="../packages/s3">s3</a></li><li><a href="../packages/sort">sort</a></li><li><a href="../packages/sql">sql</a></li><li><a href="../packages/strings">strings</a></li><li><a href="../packages/template">template</a></li><li><a href="../packages/time">time</a></li><li><a href="../packages/timez">timez</a></li><li><a href="../packages/toml">toml</a></li><li><a href="../packages/unicode">unicode</a></li><li><a href="../packages/uuid">uuid</a></li><li><a href="../packages/websocket">websocket</a></li><li><a href="../packages/x509">x509</a></li><li><a href="../packages/yaml">yaml</a></li></ul></details></div>
+  </aside>
+  <div class="drawer-scrim" data-scrim hidden></div>
+
+  <main id="main" class="doc-main">
+
+    <article class="content">
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="../">Docs</a><span class="sep" aria-hidden="true">/</span><a href="../packages/">Packages</a><span class="sep" aria-hidden="true">/</span><span aria-current="page">net</span></nav>
+      <header class="page-head">
+        <h1>net</h1>
+        <p class="tagline">Package net.</p>
+        <p class="agentline">
+          <a href="../packages/net.md">Markdown</a><span aria-hidden="true">·</span><a href="../llms.txt">llms.txt</a><span aria-hidden="true">·</span><a href="../api.json">api.json</a>
+        </p>
+      </header>
 <p>TCP listener/dialer built on <code>bytes</code> and fixed-width ints; every fallible call returns a <code>result[_, str]</code> unwrapped with <code>guard let</code>.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
 
 <span class="k">let</span> lr: <span class="t">result</span>[<span class="t">i32</span>, <span class="t">str</span>] = net.<span class="f">listen</span>(<span class="n">8080</span>);   <span class="c">// 0 = ephemeral port</span>
 <span class="k">guard</span> <span class="k">let</span> lfd = lr <span class="k">else</span> { <span class="b">exit</span>(<span class="n">1</span>); }
@@ -86,7 +116,7 @@ net.<span class="f">close</span>(cfd);</code></pre></div>
 <p><code>net.idle_alive(fd) -&gt; bool</code> and <code>net.tls_idle_alive(ssl) -&gt; bool</code> report whether an IDLE connection is still reusable: true only when the peer has neither closed nor sent anything. One non-blocking <code>MSG_PEEK</code>, nothing consumed; the TLS form is also false when OpenSSL holds decrypted-but-unread bytes. They exist for connection pools, and they are a primitive rather than a <code>recv_until</code> with an expired deadline because <code>recv_until</code> checks its deadline <em>before</em> touching the socket — it would report every dead connection as alive.</p>
 <h6 id="deadlines">Deadlines<a class="anchor" href="#deadlines" aria-label="Link to this section">#</a></h6>
 <p><code>net.recv</code> and <code>net.send</code> wait for as long as the peer takes, which on a public listener is indefinitely: a client that connects and then neither sends nor reads parks the serving task on the reactor forever, holding its stack and its GC roots. That is slowloris, and the defence is <code>recv_until</code> / <code>send_until</code>, which take an <code>until</code> — an absolute monotonic instant, not a duration:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;time&quot;</span>;
 
 <span class="k">let</span> deadline = <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">5000000000</span>);   <span class="c">// 5s from now</span>
@@ -102,7 +132,7 @@ net.<span class="f">close</span>(cfd);</code></pre></div>
 <p><code>net.dial_until(host, port, deadline)</code> bounds connecting: the DNS lookup and the TCP connect together. A lookup still running when the deadline passes is abandoned to the resolver thread (<code>getaddrinfo</code> cannot be interrupted), so the caller gets <code>&quot;timeout&quot;</code> on time. Every address the name resolves to is tried in turn — <code>net.dial</code> does the same, without a deadline.</p>
 <h6 id="dns-srv-and-txt-lookups">DNS SRV and TXT lookups<a class="anchor" href="#dns-srv-and-txt-lookups" aria-label="Link to this section">#</a></h6>
 <p>Atlas connection strings use DNS SRV and TXT records. <code>net.lookup_srv_until</code> and <code>net.lookup_txt_until</code> expose those records without blocking a slang worker; each lookup takes an absolute <code>until</code> deadline:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;time&quot;</span>;
 <span class="k">let</span> deadline = <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">5000000000</span>);
 <span class="k">let</span> seeds = net.<span class="f">lookup_srv_until</span>(<span class="s">&quot;_mongodb._tcp.cluster.example&quot;</span>, deadline);
@@ -117,7 +147,7 @@ net.<span class="f">close</span>(cfd);</code></pre></div>
 <p><code>net.dial_unix(path, deadline)</code> connects to a Unix-domain stream socket and <code>net.listen_unix(path)</code> listens on one (accept with <code>net.accept</code>). The fds work with every fd-based call — <code>send</code>/<code>recv</code> and their <code>_until</code> forms, <code>close</code>, <code>idle_alive</code>. <code>listen_unix</code> refuses a path that already exists rather than deleting it, since the file may belong to a server that is still running; remove a stale one with <code>os.remove</code> first. A path longer than the platform allows (104 bytes on macOS, 108 on Linux) is an error, not truncated.</p>
 <p>See <code>examples/httpd/</code> for a minimal HTTP server on <code>link</code> plus the <code>http</code> stdlib package.</p>
 <p><code>net.tls_*</code> adds a TLS listener/dialer on top of the plain <code>net</code> primitives above, built on OpenSSL (linked automatically, and only when a program actually calls one of these — a plain-TCP <code>net</code> program stays dependency-free). A <code>SSL_CTX</code>-equivalent config is created once (<code>tls_server_ctx</code> / <code>tls_client_ctx</code>) and reused across many connections; each connection is a separate <code>rawptr</code> handle.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
 
 <span class="c">// server: load a cert + key once, reuse the context for every connection</span>
 <span class="k">let</span> sctx_r: <span class="t">result</span>[<span class="t">rawptr</span>, <span class="t">str</span>] = net.<span class="f">tls_server_ctx</span>(<span class="s">&quot;cert.pem&quot;</span>, <span class="s">&quot;key.pem&quot;</span>);
@@ -139,13 +169,13 @@ net.<span class="f">tls_close</span>(sconn);
 net.<span class="f">tls_close</span>(cconn);</code></pre></div>
 <p>Client verification is strict by default: <code>tls_client_ctx</code> enables peer verification, and <code>tls_dial</code> checks the certificate against <em>both</em> the CA and the hostname you asked for (<code>SSL_set1_host</code> — the check that&#x27;s easy to forget and, if skipped, leaves you with &quot;TLS&quot; that validates a certificate chain without checking it belongs to the host you&#x27;re actually talking to). Sending/receiving is blocking, same as plain <code>net</code> — call these from a <code>spawn</code>ed task if you need a connection handled without stalling anything else.</p>
 <p><strong>ALPN</strong> (RFC 7301) negotiates the protocol during the handshake, which is how HTTP/2 over TLS is selected — there is no in-band upgrade. <code>tls_ctx_alpn(ctx, &quot;h2,http/1.1&quot;)</code> sets the list on a server context (in preference order, so the <em>server</em> decides) or the offer on a client one, and <code>tls_alpn(conn)</code> returns what was actually negotiated, or <code>&quot;&quot;</code> if the peer offered nothing that overlapped. The list is comma-separated, not the length-prefixed wire form; building that by hand is an easy way to produce a subtly broken handshake. A client offering no protocol we support completes the handshake without ALPN rather than failing, so it simply falls back to HTTP/1.1.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>net.<span class="f">tls_ctx_alpn</span>(sctx, <span class="s">&quot;h2,http/1.1&quot;</span>);
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code>net.<span class="f">tls_ctx_alpn</span>(sctx, <span class="s">&quot;h2,http/1.1&quot;</span>);
 <span class="k">let</span> conn = ...;                  <span class="c">// after tls_accept</span>
 <span class="k">if</span> net.<span class="f">tls_alpn</span>(conn) == <span class="s">&quot;h2&quot;</span> { <span class="f">serve_h2</span>(conn); } <span class="k">else</span> { <span class="f">serve_h1</span>(conn); }</code></pre></div>
 <p>Mutual TLS: <code>tls_ctx_require_client(sctx, client_ca)</code> on the server context demands a client certificate chained to that CA (<code>SSL_VERIFY_FAIL_IF_NO_PEER_CERT</code>). The client presents one with <code>tls_ctx_use_cert(cctx, cert, key)</code>. Extra server names on one listener: <code>tls_ctx_add_sni(sctx, host, cert, key)</code> swaps in that cert when the ClientHello SNI matches; unmatched names keep the default <code>tls_server_ctx</code> cert. <code>require_client</code> applies to SNI certs too, regardless of call order. TLS 1.3 can let <code>tls_dial</code> return before the server has rejected a missing client certificate; the first send or recv then fails. <code>tls_peer_certs(conn)</code> returns the peer&#x27;s chain, leaf first, as concatenated DER (empty when it sent none): on a server under <code>require_client</code>, the verified client identity. Read it with <code>x509.parse_der</code>.</p>
 <p><strong>STARTTLS</strong>: <code>tls_upgrade(fd, host, ctx)</code> runs a client handshake on a socket from <code>net.dial</code> that has already spoken cleartext — how Postgres, SMTP and IMAP switch to TLS. Verification is exactly <code>tls_dial</code>&#x27;s, hostname included, which is why the host is an argument: an fd does not remember what was dialled. On failure the fd is left open for the caller to close; on success it belongs to the returned handle and <code>tls_close</code> closes it. Read no further than the server&#x27;s go-ahead before upgrading: anything a man in the middle queued behind it would otherwise be trusted as if it had arrived encrypted (libpq&#x27;s CVE-2021-23222). <code>tls_upgrade_until(fd, host, ctx, deadline)</code> bounds the handshake; a server that stops answering part way through gives <code>&quot;timeout&quot;</code>. <code>tls_dial_until(host, port, ctx, deadline)</code> is <code>tls_dial</code> with one deadline over the lookup, the connect and the handshake: an unreachable host gives <code>&quot;timeout&quot;</code> at the deadline instead of after the OS connect timeout, which is over a minute on macOS. Like <code>dial</code>, both try every address the name resolves to.</p>
 <p><strong>TLS on a <code>link</code></strong>: <code>c.tls_accept(ctx, deadline)</code> runs the server handshake on a link you already accepted, and from then on the link&#x27;s <code>send</code>/<code>recv</code> go through the session. Everything written against a link -- <code>http.read_frame</code>, <code>http.write</code>, a whole server loop -- serves HTTPS without a second code path, and a plain link pays one pointer test per call. Run it in the connection&#x27;s own task, not the accept loop, so one slow handshake holds up nobody else:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">fn</span> <span class="f">serve</span>(c: <span class="k">link</span>, ctx: <span class="t">rawptr</span>) {
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">fn</span> <span class="f">serve</span>(c: <span class="k">link</span>, ctx: <span class="t">rawptr</span>) {
     <span class="k">let</span> hr = c.<span class="f">tls_accept</span>(ctx, <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">10000000000</span>));
     <span class="k">guard</span> <span class="k">let</span> _h = hr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(hr) {
         <span class="k">return</span>;                  <span class="c">// a scanner, a plaintext client, a timeout</span>
@@ -154,7 +184,7 @@ net.<span class="f">tls_close</span>(cconn);</code></pre></div>
 }</code></pre></div>
 <p>It returns <code>result[int, fault]</code>: <code>timeout</code> when the deadline passes, <code>closed</code> when the client hangs up during the handshake (browsers&#x27; preconnects do), and <code>io</code> with OpenSSL&#x27;s reason otherwise (<code>tls http request</code> is a plaintext client). Client certificates are checked as <code>tls_accept</code> checks them, and <code>c.peer_certs()</code> returns the client&#x27;s chain as concatenated DER for <code>x509.parse_der</code> (empty bytes before TLS, or when the client sent none). The session is freed, with a close_notify, when the link is; a second <code>tls_accept</code> on the same link is an error.</p>
 <p><strong>Reading and writing from two tasks</strong>: a <code>link</code> is move-only, so one task owns it -- and a task parked in <code>recv</code> cannot also send. <code>c.split()</code> returns a second link on the same connection for a writer task, which is what a server pushing to a client needs (a WebSocket broadcast, server-sent events):</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">fn</span> <span class="f">writer</span>(w: <span class="k">link</span>, out: <span class="t">chan</span>[<span class="t">bytes</span>]) {
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">fn</span> <span class="f">writer</span>(w: <span class="k">link</span>, out: <span class="t">chan</span>[<span class="t">bytes</span>]) {
     <span class="k">let</span> mut_w = w;
     <span class="k">while</span> <span class="k">true</span> {
         <span class="k">let</span> m = <span class="b">chan_recv</span>(out);
@@ -171,31 +201,43 @@ net.<span class="f">tls_close</span>(cconn);</code></pre></div>
 <span class="c">// this task keeps reading c; anyone holding `out` can write to the client</span></code></pre></div>
 <p>From then on <code>c</code> only reads and the returned link only writes: a send on the reader or a recv on the writer is an <code>io</code> fault saying which to use, since two senders could interleave partial writes. Ending the reader (its binding goes out of scope) shuts the connection down for both halves, so a writer blocked on a client that stopped reading fails at once; ending the writer leaves the reader working. Each half holds its own fd, so a half never writes to a number the kernel has reused. Over TLS, start TLS first (<code>tls_accept</code> on a split link is refused): both halves then share the session, one OpenSSL call at a time. A link splits once.</p>
 <h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="listen"><div class="api-sig"><code>net.<span class="f">listen</span>(<span class="t">int</span>) -&gt; <span class="t">result</span>[<span class="t">i32</span>,<span class="t">str</span>]</code><a class="anchor" href="#listen">#</a></div></div><div class="api-item" id="port"><div class="api-sig"><code>net.<span class="f">port</span>(<span class="t">int</span>) -&gt; <span class="t">result</span>[<span class="t">i32</span>,<span class="t">str</span>]</code><a class="anchor" href="#port">#</a></div></div><div class="api-item" id="accept"><div class="api-sig"><code>net.<span class="f">accept</span>(<span class="t">int</span>) -&gt; <span class="t">result</span>[<span class="t">i32</span>,<span class="t">str</span>]</code><a class="anchor" href="#accept">#</a></div></div><div class="api-item" id="dial"><div class="api-sig"><code>net.<span class="f">dial</span>(<span class="t">str</span>, <span class="t">int</span>) -&gt; <span class="t">result</span>[<span class="t">i32</span>,<span class="t">str</span>]</code><a class="anchor" href="#dial">#</a></div></div><div class="api-item" id="dial-until"><div class="api-sig"><code>net.<span class="f">dial_until</span>(<span class="t">str</span>, <span class="t">int</span>, <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">i32</span>,<span class="t">str</span>]</code><a class="anchor" href="#dial-until">#</a></div></div><div class="api-item" id="lookup-srv-until"><div class="api-sig"><code>net.<span class="f">lookup_srv_until</span>(<span class="t">str</span>, <span class="t">until</span>) -&gt; <span class="t">result</span>[[<span class="t">str</span>],<span class="t">str</span>]</code><a class="anchor" href="#lookup-srv-until">#</a></div></div><div class="api-item" id="lookup-txt-until"><div class="api-sig"><code>net.<span class="f">lookup_txt_until</span>(<span class="t">str</span>, <span class="t">until</span>) -&gt; <span class="t">result</span>[[<span class="t">str</span>],<span class="t">str</span>]</code><a class="anchor" href="#lookup-txt-until">#</a></div></div><div class="api-item" id="dial-unix"><div class="api-sig"><code>net.<span class="f">dial_unix</span>(<span class="t">str</span>, <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">i32</span>,<span class="t">str</span>]</code><a class="anchor" href="#dial-unix">#</a></div></div><div class="api-item" id="listen-unix"><div class="api-sig"><code>net.<span class="f">listen_unix</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">i32</span>,<span class="t">str</span>]</code><a class="anchor" href="#listen-unix">#</a></div></div><div class="api-item" id="send"><div class="api-sig"><code>net.<span class="f">send</span>(<span class="t">int</span>, <span class="t">bytes</span>) -&gt; <span class="t">result</span>[<span class="t">i32</span>,<span class="t">str</span>]</code><a class="anchor" href="#send">#</a></div></div><div class="api-item" id="recv"><div class="api-sig"><code>net.<span class="f">recv</span>(<span class="t">int</span>, <span class="t">int</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>,<span class="t">str</span>]</code><a class="anchor" href="#recv">#</a></div></div><div class="api-item" id="recv-until"><div class="api-sig"><code>net.<span class="f">recv_until</span>(<span class="t">int</span>, <span class="t">int</span>, <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>,<span class="t">str</span>]</code><a class="anchor" href="#recv-until">#</a></div></div><div class="api-item" id="send-until"><div class="api-sig"><code>net.<span class="f">send_until</span>(<span class="t">int</span>, <span class="t">bytes</span>, <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">i32</span>,<span class="t">str</span>]</code><a class="anchor" href="#send-until">#</a></div></div><div class="api-item" id="close"><div class="api-sig"><code>net.<span class="f">close</span>(<span class="t">int</span>)</code><a class="anchor" href="#close">#</a></div></div><div class="api-item" id="idle-alive"><div class="api-sig"><code>net.<span class="f">idle_alive</span>(<span class="t">int</span>) -&gt; <span class="t">bool</span></code><a class="anchor" href="#idle-alive">#</a></div></div><div class="api-item" id="nonblock"><div class="api-sig"><code>net.<span class="f">nonblock</span>(<span class="t">int</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>,<span class="t">str</span>]</code><a class="anchor" href="#nonblock">#</a></div></div><div class="api-item" id="tls-server-ctx"><div class="api-sig"><code>net.<span class="f">tls_server_ctx</span>(<span class="t">str</span>, <span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">rawptr</span>,<span class="t">str</span>]</code> <span class="tag">OpenSSL</span><a class="anchor" href="#tls-server-ctx">#</a></div></div><div class="api-item" id="tls-client-ctx"><div class="api-sig"><code>net.<span class="f">tls_client_ctx</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">rawptr</span>,<span class="t">str</span>]</code> <span class="tag">OpenSSL</span><a class="anchor" href="#tls-client-ctx">#</a></div></div><div class="api-item" id="tls-accept"><div class="api-sig"><code>net.<span class="f">tls_accept</span>(<span class="t">int</span>, <span class="t">rawptr</span>) -&gt; <span class="t">result</span>[<span class="t">rawptr</span>,<span class="t">str</span>]</code> <span class="tag">OpenSSL</span><a class="anchor" href="#tls-accept">#</a></div></div><div class="api-item" id="tls-dial"><div class="api-sig"><code>net.<span class="f">tls_dial</span>(<span class="t">str</span>, <span class="t">int</span>, <span class="t">rawptr</span>) -&gt; <span class="t">result</span>[<span class="t">rawptr</span>,<span class="t">str</span>]</code> <span class="tag">OpenSSL</span><a class="anchor" href="#tls-dial">#</a></div></div><div class="api-item" id="tls-dial-until"><div class="api-sig"><code>net.<span class="f">tls_dial_until</span>(<span class="t">str</span>, <span class="t">int</span>, <span class="t">rawptr</span>, <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">rawptr</span>,<span class="t">str</span>]</code> <span class="tag">OpenSSL</span><a class="anchor" href="#tls-dial-until">#</a></div></div><div class="api-item" id="tls-upgrade"><div class="api-sig"><code>net.<span class="f">tls_upgrade</span>(<span class="t">int</span>, <span class="t">str</span>, <span class="t">rawptr</span>) -&gt; <span class="t">result</span>[<span class="t">rawptr</span>,<span class="t">str</span>]</code> <span class="tag">OpenSSL</span><a class="anchor" href="#tls-upgrade">#</a></div></div><div class="api-item" id="tls-upgrade-until"><div class="api-sig"><code>net.<span class="f">tls_upgrade_until</span>(<span class="t">int</span>, <span class="t">str</span>, <span class="t">rawptr</span>, <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">rawptr</span>,<span class="t">str</span>]</code> <span class="tag">OpenSSL</span><a class="anchor" href="#tls-upgrade-until">#</a></div></div><div class="api-item" id="tls-send"><div class="api-sig"><code>net.<span class="f">tls_send</span>(<span class="t">rawptr</span>, <span class="t">bytes</span>) -&gt; <span class="t">result</span>[<span class="t">i32</span>,<span class="t">str</span>]</code> <span class="tag">OpenSSL</span><a class="anchor" href="#tls-send">#</a></div></div><div class="api-item" id="tls-recv"><div class="api-sig"><code>net.<span class="f">tls_recv</span>(<span class="t">rawptr</span>, <span class="t">int</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>,<span class="t">str</span>]</code> <span class="tag">OpenSSL</span><a class="anchor" href="#tls-recv">#</a></div></div><div class="api-item" id="tls-recv-until"><div class="api-sig"><code>net.<span class="f">tls_recv_until</span>(<span class="t">rawptr</span>, <span class="t">int</span>, <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>,<span class="t">str</span>]</code> <span class="tag">OpenSSL</span><a class="anchor" href="#tls-recv-until">#</a></div></div><div class="api-item" id="tls-send-until"><div class="api-sig"><code>net.<span class="f">tls_send_until</span>(<span class="t">rawptr</span>, <span class="t">bytes</span>, <span class="t">until</span>) -&gt; <span class="t">result</span>[<span class="t">i32</span>,<span class="t">str</span>]</code> <span class="tag">OpenSSL</span><a class="anchor" href="#tls-send-until">#</a></div></div><div class="api-item" id="tls-close"><div class="api-sig"><code>net.<span class="f">tls_close</span>(<span class="t">rawptr</span>)</code> <span class="tag">OpenSSL</span><a class="anchor" href="#tls-close">#</a></div></div><div class="api-item" id="tls-idle-alive"><div class="api-sig"><code>net.<span class="f">tls_idle_alive</span>(<span class="t">rawptr</span>) -&gt; <span class="t">bool</span></code> <span class="tag">OpenSSL</span><a class="anchor" href="#tls-idle-alive">#</a></div></div><div class="api-item" id="tls-ctx-require-client"><div class="api-sig"><code>net.<span class="f">tls_ctx_require_client</span>(<span class="t">rawptr</span>, <span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>,<span class="t">str</span>]</code> <span class="tag">OpenSSL</span><a class="anchor" href="#tls-ctx-require-client">#</a></div></div><div class="api-item" id="tls-ctx-use-cert"><div class="api-sig"><code>net.<span class="f">tls_ctx_use_cert</span>(<span class="t">rawptr</span>, <span class="t">str</span>, <span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>,<span class="t">str</span>]</code> <span class="tag">OpenSSL</span><a class="anchor" href="#tls-ctx-use-cert">#</a></div></div><div class="api-item" id="tls-ctx-add-sni"><div class="api-sig"><code>net.<span class="f">tls_ctx_add_sni</span>(<span class="t">rawptr</span>, <span class="t">str</span>, <span class="t">str</span>, <span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>,<span class="t">str</span>]</code> <span class="tag">OpenSSL</span><a class="anchor" href="#tls-ctx-add-sni">#</a></div></div><div class="api-item" id="tls-ctx-alpn"><div class="api-sig"><code>net.<span class="f">tls_ctx_alpn</span>(<span class="t">rawptr</span>, <span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bool</span>,<span class="t">str</span>]</code> <span class="tag">OpenSSL</span><a class="anchor" href="#tls-ctx-alpn">#</a></div></div><div class="api-item" id="tls-alpn"><div class="api-sig"><code>net.<span class="f">tls_alpn</span>(<span class="t">rawptr</span>) -&gt; <span class="t">str</span></code> <span class="tag">OpenSSL</span><a class="anchor" href="#tls-alpn">#</a></div></div><div class="api-item" id="tls-peer-certs"><div class="api-sig"><code>net.<span class="f">tls_peer_certs</span>(<span class="t">rawptr</span>) -&gt; <span class="t">bytes</span></code> <span class="tag">OpenSSL</span><a class="anchor" href="#tls-peer-certs">#</a></div></div></div>
-  </article>
-  <aside class="toc">
+<nav class="pager" aria-label="Previous and next"><a class="prev" href="../packages/nats"><span class="dir">Previous</span><span class="name">nats</span></a><a class="next" href="../packages/os"><span class="dir">Next</span><span class="name">os</span></a></nav>
+    </article>
+  </main>
+
+  <aside class="toc" aria-label="On this page">
     <p class="toc-title">On this page</p>
     <nav id="toc"></nav>
   </aside>
 </div>
-</main>
 
 <footer class="foot">
-  <div class="foot-main">
-    <p class="foot-by">
-      Built and maintained by
-      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
-    </p>
-    <p class="foot-entity">
-      Dolph Tech Limited &middot;
-      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
-    </p>
+  <div class="foot-inner">
+    <a class="foot-logo" href="../" aria-label="slang home">
+      <img class="logo-on-dark" src="../brand/slang-icon-light.svg" alt="" width="28" height="28">
+      <img class="logo-on-light" src="../brand/slang-icon-dark.svg" alt="" width="28" height="28">
+    </a>
+    <p class="foot-by">Built and maintained by
+      <a href="https://dolphlabs.com" rel="noopener">Dolphlabs</a> · Dolph Tech Limited</p>
+    <p class="foot-note">Generated from the repository by <code>www/build.py</code>:
+      the guide from <code>README.md</code>, the API from the compiler's own
+      signature tables and the <code>pub</code> declarations in
+      <code>stdlib/</code>. Nothing here is written twice.</p>
   </div>
-  <p class="foot-note">Generated from the repository by
-     <code>www/build.py</code> — the guide comes from
-     <code>README.md</code>, the API from the compiler's own signature
-     tables and the <code>pub</code> declarations in
-     <code>stdlib/</code>. Nothing here is written twice.</p>
 </footer>
+
+<div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="Search the docs" hidden>
+  <div class="palette-box">
+    <div class="palette-field">
+      <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <input id="palette-input" type="search" placeholder="Search pages, packages and functions" autocomplete="off" spellcheck="false"
+             role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list">
+      <kbd>esc</kbd>
+    </div>
+    <div class="palette-list" id="palette-list" role="listbox" aria-label="Results"></div>
+    <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
 
 <script src="../app.js" defer></script>
 </body>

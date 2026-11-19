@@ -4,8 +4,9 @@ slang itself is MIT-licensed (see [LICENSE](LICENSE)). This file says what it
 touches that is not, and what that means for you.
 
 **This repository contains no third-party source code.** There are no vendored
-libraries, and the release tarball bundles none. The one third-party
-material it carries is Unicode data, described below.
+libraries, and the release tarball bundles none. The third-party
+material it carries is Unicode data and the documentation site's fonts,
+both described below.
 
 ## System libraries a compiled program links
 
@@ -110,3 +111,15 @@ release tarball includes that directory.
   NuGet packages, pip requirements) in their manifests and lockfiles, which
   each language's package manager fetches when you run the suite, under those
   packages' own licences. None is vendored.
+
+## Documentation fonts
+
+The documentation site (`www/theme/fonts/`, copied into `docs/fonts/`) uses
+Geist and Geist Mono, by The Geist Project Authors
+(https://github.com/vercel/geist-font), as unmodified variable WOFF2 files
+for the Latin and Latin Extended ranges, taken from the `@fontsource-variable`
+packages the website uses. They are used under the SIL Open Font License 1.1;
+the licences are in [LICENSES/OFL-1.1-Geist.txt](LICENSES/OFL-1.1-Geist.txt)
+and [LICENSES/OFL-1.1-Geist-Mono.txt](LICENSES/OFL-1.1-Geist-Mono.txt). They
+are not part of the compiler, its runtime or the release tarball, and nothing
+a program compiled with slang contains depends on them.

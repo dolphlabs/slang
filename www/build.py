@@ -418,6 +418,13 @@ TOKEN = re.compile(r"""
 """, re.VERBOSE)
 
 
+# What a fence's info string shows as: blank means slang, which the
+# highlighter treats the same way.
+CODE_LABELS = {"": "slang", "sl": "slang", "sh": "shell", "bash": "shell",
+               "console": "shell", "text": "text", "c": "C", "go": "Go",
+               "json": "JSON", "toml": "TOML", "yaml": "YAML", "sql": "SQL"}
+
+
 def highlight(code, lang):
     """Build-time syntax highlighting. Done here rather than in the
     browser so that the markup is in the HTML a crawler or an agent
@@ -491,10 +498,13 @@ def md_to_html(lines, heading_shift=0):
                 i += 1
             i += 1
             code = "\n".join(body)
+            label = CODE_LABELS.get(lang, lang)
             out.append(
-                '<div class="code"><button class="copy" type="button" '
-                'aria-label="Copy code">Copy</button><pre><code>%s</code>'
-                '</pre></div>' % highlight(code, lang))
+                '<div class="code"><div class="code-bar">'
+                '<span class="code-lang">%s</span>'
+                '<button class="copy" type="button" aria-label="Copy code">'
+                'Copy</button></div><pre><code>%s</code></pre></div>'
+                % (html.escape(label), highlight(code, lang)))
             continue
 
         m = re.match(r"^(#{1,6})\s+(.*)$", line)
@@ -597,18 +607,124 @@ def rel(depth):
     return "../" * depth if depth else "./"
 
 
+# The homepage's header links, in its order: the docs and the homepage
+# share one header so moving between them is one site. Each link is lit
+# for every page in its section.
+HEADER_LINKS = [
+    ("Guide", "guide/index.html", ("guide/",)),
+    ("Concurrency", "concurrency/index.html", ("concurrency/",)),
+    ("Packages", "packages/index.html", ("packages/",)),
+    ("Benchmarks", "bench/index.html", ("bench/",)),
+    ("C interop", "interop/index.html", ("interop/",)),
+    ("Internals", "internals/index.html", ("internals/",)),
+]
+
+# The sidebar: every top-level page once, grouped for reading order, then
+# every package. Page paths not listed here are a build error, so a new
+# page cannot quietly go missing from the navigation.
+SIDEBAR_GROUPS = [
+    ("Start", ["index.html", "guide/index.html", "guide/data.html",
+               "guide/errors.html", "guide/functions.html"]),
+    ("Build", ["concurrency/index.html", "testing/index.html",
+               "packages/index.html", "interop/index.html"]),
+    ("Under the hood", ["internals/index.html", "bench/index.html",
+                        "limitations/index.html"]),
+]
+
+
 def nav_html(pages, current, depth):
     out = []
-    for p in pages:
-        cls = ' class="active"' if p["path"] == current else ""
-        out.append('<a%s href="%s%s">%s</a>'
-                   % (cls, rel(depth), p["path"], html.escape(p["nav"])))
+    for label, path, prefixes in HEADER_LINKS:
+        on = any(current.startswith(px) for px in prefixes)
+        out.append('<a%s href="%s%s"%s>%s</a>'
+                   % (' class="active"' if on else "", rel(depth), path,
+                      ' aria-current="page"' if current == path else "",
+                      html.escape(label)))
     return "".join(out)
 
 
+def reading_order(pages_by_path, pkg_names):
+    """Every page in the order the sidebar lists it: what previous and
+    next walk through."""
+    order = [path for _, paths in SIDEBAR_GROUPS for path in paths]
+    order += ["packages/%s.html" % n for n in pkg_names]
+    return [pages_by_path[p] for p in order if p in pages_by_path]
+
+
+def sidebar_html(pages_by_path, all_pkgs, current, depth):
+    out = []
+    for title, paths in SIDEBAR_GROUPS:
+        links = []
+        for path in paths:
+            pg = pages_by_path[path]
+            label = "Overview" if path == "index.html" else pg["nav"]
+            links.append('<li><a href="%s%s"%s>%s</a></li>'
+                         % (rel(depth), path,
+                            ' aria-current="page"' if path == current else "",
+                            html.escape(label)))
+        out.append('<div class="side-group"><p class="side-title">%s</p>'
+                   '<ul class="side-list">%s</ul></div>'
+                   % (html.escape(title), "".join(links)))
+    pkgs = []
+    for name in all_pkgs:
+        path = "packages/%s.html" % name
+        pkgs.append('<li><a href="%s%s"%s>%s</a></li>'
+                    % (rel(depth), path,
+                       ' aria-current="page"' if path == current else "",
+                       html.escape(name)))
+    # Open on package pages, where it is the navigation; closed elsewhere,
+    # where forty names would push everything else out of sight.
+    is_open = current.startswith("packages/")
+    out.append('<details class="side-group side-pkgs"%s><summary>Packages'
+               '<span class="side-count">%d</span></summary>'
+               '<ul class="side-list">%s</ul></details>'
+               % (" open" if is_open else "", len(all_pkgs), "".join(pkgs)))
+    return "".join(out)
+
+
+def crumbs_html(page, pages_by_path, depth):
+    parts = ['<a href="%sindex.html">Docs</a>' % rel(depth)]
+    section = None
+    if page["path"].startswith("guide/") and page["path"] != "guide/index.html":
+        section = "guide/index.html"
+    elif page["kind"] == "package":
+        section = "packages/index.html"
+    if section:
+        parts.append('<a href="%s%s">%s</a>'
+                     % (rel(depth), section,
+                        html.escape(pages_by_path[section]["nav"])))
+    if page["path"] != "index.html":
+        parts.append('<span aria-current="page">%s</span>'
+                     % html.escape(page["nav"]))
+    return '<span class="sep" aria-hidden="true">/</span>'.join(parts)
+
+
+def pager_html(order, page, depth):
+    paths = [p["path"] for p in order]
+    if page["path"] not in paths:
+        return ""
+    i = paths.index(page["path"])
+    cells = []
+    if i > 0:
+        prev = order[i - 1]
+        cells.append('<a class="prev" href="%s%s"><span class="dir">Previous'
+                     '</span><span class="name">%s</span></a>'
+                     % (rel(depth), prev["path"], html.escape(prev["nav"])))
+    if i + 1 < len(order):
+        nxt = order[i + 1]
+        cells.append('<a class="next" href="%s%s"><span class="dir">Next'
+                     '</span><span class="name">%s</span></a>'
+                     % (rel(depth), nxt["path"], html.escape(nxt["nav"])))
+    return '<nav class="pager" aria-label="Previous and next">%s</nav>' % "".join(cells)
+
+
 def page_html(tpl, *, title, tagline, body, depth, nav, mdpath, canonical,
-              extra_head="", hero=""):
+              extra_head="", hero="", sidebar="", crumbs="", pager=""):
     return (tpl
+            .replace("{{SIDEBAR}}", sidebar)
+            .replace("{{CRUMBS}}", crumbs)
+            .replace("{{PAGER}}", pager)
+            .replace("{{HOME}}", rel(depth))
             .replace("{{TITLE}}", html.escape(title))
             .replace("{{TAGLINE}}", html.escape(tagline))
             .replace("{{BODY}}", body)
@@ -697,6 +813,13 @@ def build(out_dir):
         })
 
     navpages = [p for p in PAGES]
+    pages_by_path = {p["path"]: p for p in pages}
+    listed = {path for _, paths in SIDEBAR_GROUPS for path in paths}
+    for p in PAGES:
+        if p["path"] not in listed:
+            DOC_ERRORS.append("page %r is in no SIDEBAR_GROUPS entry"
+                              % p["path"])
+    order = reading_order(pages_by_path, list(all_pkgs))
     search = []
     llms_parts = []
     single_pages = []
@@ -774,6 +897,9 @@ def build(out_dir):
             mdpath=rel(depth) + mdrel,
             canonical=canonical_url(p["path"]),
             hero=HERO if p["kind"] == "home" else "",
+            sidebar=sidebar_html(pages_by_path, all_pkgs, p["path"], depth),
+            crumbs=crumbs_html(p, pages_by_path, depth),
+            pager=pager_html(order, p, depth),
         )), encoding="utf-8")
 
         twin = md_twin(p["title"], p["tagline"], md_parts)
@@ -782,15 +908,28 @@ def build(out_dir):
         single_pages.append({"path": p["path"], "title": p["title"],
                              "tagline": p["tagline"], "body": body,
                              "nav": p.get("nav"), "kind": p["kind"]})
-        search.append({"title": p["title"],
+        search.append({"kind": "page", "title": p["title"],
                        "url": clean_path(re.sub(r"\.html$", "", p["path"])),
                        "tagline": p["tagline"],
                        "text": re.sub(r"\s+", " ",
                                       re.sub(r"<[^>]+>", " ", body))[:4000]})
         llms_parts.append("# %s\n\n%s\n" % (p["title"], twin))
 
+    # The palette finds functions as well as pages: every API item, with
+    # the anchor its package page gives it.
+    for name, pkg in all_pkgs.items():
+        for it in pkg["items"]:
+            anchor = re.sub(r"[^a-z0-9]+", "-", it["name"].lower()).strip("-")
+            search.append({"kind": "api",
+                           "title": "%s.%s" % (name, it["name"]),
+                           "name": it["name"],
+                           "url": "packages/%s#%s" % (name, anchor),
+                           "sig": it["sig"],
+                           "text": (it.get("doc") or "")[:300]})
+
     # ---- agent surfaces ----
-    (out / "search.json").write_text(json.dumps(search), encoding="utf-8")
+    (out / "search.json").write_text(
+        json.dumps(search, separators=(",", ":")), encoding="utf-8")
     (out / "api.json").write_text(
         json.dumps({
             "project": "slang",
@@ -824,8 +963,13 @@ def build(out_dir):
     (out / "llms-small.txt").write_text(llms_small(all_pkgs),
                                         encoding="utf-8")
 
-    for asset in ("style.css", "app.js"):
+    for asset in ("style.css", "app.js", "favicon.svg", "favicon.ico",
+                  "favicon-32.png", "apple-touch-icon.png"):
         shutil.copy(WWW / "theme" / asset, out / asset)
+    # The homepage's fonts and logo, so the docs are the same site on any
+    # host (the deployed site overlays its own copies of the same files).
+    for sub in ("fonts", "brand"):
+        shutil.copytree(WWW / "theme" / sub, out / sub)
     (out / ".nojekyll").write_text("", encoding="utf-8")
 
     # Cloudflare Pages reads _headers; GitHub Pages ignores the file, so
@@ -948,6 +1092,12 @@ def write_single_file(out, tpl, pages):
                     "The whole site, in one file. Built and maintained "
                     "by %s (%s)." % (ORG, ORG_ENTITY))
            .replace("{{NAV}}", nav)
+           .replace("{{SIDEBAR}}", '<div class="side-group"><ul class="side-list">%s</ul></div>'
+                    % "".join("<li>%s</li>" % a for a in re.findall(r"<a [^>]*>[^<]*</a>", nav)))
+           .replace("{{CRUMBS}}", "")
+           .replace("{{PAGER}}", "")
+           .replace('href="{{HOME}}#install"', 'href="#home"')
+           .replace('href="{{HOME}}"', 'href="#home"')
            .replace('href="{{ROOT}}index.html"', 'href="#home"')
            .replace("{{ROOT}}", "")
            .replace("{{MD}}", "llms-full.txt")
