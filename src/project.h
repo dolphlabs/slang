@@ -31,11 +31,13 @@ char *project_cache_dir(const SlPkgPin *pin);
  * pin's `dir` when it has one. */
 char *project_pkg_dir(const SlPkgPin *pin);
 char *project_tree_hash(const char *dir);
-/* When `import "ipath"` written in `from_dir`, inside a fetched package,
- * names a directory that package's own manifest excludes: that exclude,
- * with the package's name in *pkg_name. NULL otherwise. */
+/* When `import "ipath"` written in `from_dir` names a directory the
+ * nearest slang.project excludes: that exclude, with the package's name in
+ * *pkg_name and *fetched set when the package is a fetched copy in the
+ * cache (0: the author's own tree). NULL otherwise, and always NULL for
+ * code that is itself inside an excluded directory, which never ships. */
 const char *project_excluded_import(const char *from_dir, const char *ipath,
-                                    const char **pkg_name);
+                                    const char **pkg_name, int *fetched);
 void project_get(SlProject *p);
 char *project_cache_subdir(const char *sub);
 int project_is_dir(const char *path);
