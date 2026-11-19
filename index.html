@@ -89,9 +89,9 @@
   <div class="hero-shade" aria-hidden="true"></div>
 
   <div class="hero-inner">
-    <a class="pill" href="https://github.com/dolphlabs/slang/releases/tag/v0.2.5">
-      <span class="pill-tag">v0.2.5 rex</span>
-      <span class="pill-long">Faster dev builds and stack-safe codecs</span>
+    <a class="pill" href="https://github.com/dolphlabs/slang/releases/tag/v0.2.6">
+      <span class="pill-tag">v0.2.6 rex</span>
+      <span class="pill-long">MySQL, NATS, S3, TOML, YAML and 11 more packages</span>
       <span class="pill-short">What's new</span>
       <span aria-hidden="true">→</span>
     </a>
@@ -419,21 +419,33 @@ println(sqlite3_libversion());</code></pre>
         <p class="eyebrow">Standard library</p>
         <h2 id="pkg-title">Batteries inside the compiler.</h2>
       </div>
-      <p class="section-lede">27 packages ship with <code>slangc</code>. Native ones are linked only when a program imports them, so a plain TCP server stays free of OpenSSL, SQLite and zlib.</p>
+      <p class="section-lede">40 packages ship with <code>slangc</code>. Native ones are linked only when a program imports them, so a plain TCP server stays free of OpenSSL, SQLite and zlib.</p>
     </div>
     <ul class="pkg-grid">
       <li><a href="/packages/http"><b>http</b><span>HTTP/1.1 server parsing that refuses ambiguous requests</span></a></li>
       <li><a href="/packages/http2"><b>http2</b><span>Framing and HPACK, RFC 9113 and 7541, in slang</span></a></li>
       <li><a href="/packages/httpc"><b>httpc</b><span>A client: https, redirects, chunked bodies</span></a></li>
+      <li><a href="/packages/websocket"><b>websocket</b><span>An RFC 6455 client with permessage-deflate</span></a></li>
       <li><a href="/packages/net"><b>net</b><span>TCP, TLS with ALPN and SNI, deadlines on every call</span></a></li>
       <li><a href="/packages/pg"><b>pg</b><span>Postgres in slang: pools, COPY, LISTEN/NOTIFY</span></a></li>
+      <li><a href="/packages/mysql"><b>mysql</b><span>MySQL and MariaDB, in slang</span></a></li>
       <li><a href="/packages/redis"><b>redis</b><span>Pools, cluster, MULTI, pub/sub, streams</span></a></li>
       <li><a href="/packages/sql"><b>sql</b><span>SQLite, with SQLite's own error text</span></a></li>
+      <li><a href="/packages/nats"><b>nats</b><span>A NATS client: pub/sub, request-reply, queue groups</span></a></li>
+      <li><a href="/packages/s3"><b>s3</b><span>S3-compatible object storage, SigV4 signed</span></a></li>
+      <li><a href="/packages/cache"><b>cache</b><span>In-process LRU with TTLs and a byte bound</span></a></li>
       <li><a href="/packages/json"><b>json</b><span>Typed decode; errors name the field path</span></a></li>
+      <li><a href="/packages/toml"><b>toml</b><span>TOML 1.0, decoded into your own structs</span></a></li>
+      <li><a href="/packages/yaml"><b>yaml</b><span>YAML 1.2 for configuration files</span></a></li>
+      <li><a href="/packages/csv"><b>csv</b><span>An RFC 4180 reader and writer</span></a></li>
+      <li><a href="/packages/template"><b>template</b><span>HTML and text templates with contextual escaping</span></a></li>
       <li><a href="/packages/regex"><b>regex</b><span>Linear-time NFA. No backtracking, ever</span></a></li>
-      <li><a href="/packages/crypto"><b>crypto</b><span>SHA-256, HMAC, PBKDF2, argon2id, RSA verify, a CSPRNG</span></a></li>
-      <li><a href="/packages/encoding"><b>encoding</b><span>Hex, base64, percent-encoding, query strings</span></a></li>
+      <li><a href="/packages/crypto"><b>crypto</b><span>SHA-2, HMAC, HKDF, AEAD, Ed25519, ECDSA, RSA, a CSPRNG</span></a></li>
+      <li><a href="/packages/encoding"><b>encoding</b><span>Hex, base32, base64, percent-encoding, query strings</span></a></li>
       <li><a href="/packages/compress"><b>compress</b><span>gzip, zlib and raw DEFLATE</span></a></li>
+      <li><a href="/packages/uuid"><b>uuid</b><span>RFC 9562 v4 and v7</span></a></li>
+      <li><a href="/packages/rand"><b>rand</b><span>Seeded, reproducible, not for secrets</span></a></li>
+      <li><a href="/packages/decimal"><b>decimal</b><span>Exact decimals for money, with JSON and Postgres</span></a></li>
       <li><a href="/packages/proc"><b>proc</b><span>Spawn, wait on and kill children; graceful shutdown</span></a></li>
       <li><a href="/packages/os"><b>os</b><span>Environment, paths, directory listing, file watching</span></a></li>
       <li><a href="/packages/fs"><b>fs</b><span>POSIX file I/O</span></a></li>
@@ -445,13 +457,39 @@ println(sqlite3_libversion());</code></pre>
       <li><a href="/packages/math/stats"><b>math/stats</b><span>Summaries, quantiles, regression, distributions</span></a></li>
       <li><a href="/packages/math/numtheory"><b>math/numtheory</b><span>Modular arithmetic, primes, factorization</span></a></li>
       <li><a href="/packages/strings"><b>strings</b><span>Search, trim, case, split, join</span></a></li>
+      <li><a href="/packages/unicode"><b>unicode</b><span>UTF-8, case folding, NFC and NFD</span></a></li>
       <li><a href="/packages/byteutil"><b>byteutil</b><span>The same, for bytes</span></a></li>
       <li><a href="/packages/builder"><b>builder</b><span>Linear-time string building</span></a></li>
       <li><a href="/packages/sort"><b>sort</b><span>In-place sorting and binary search</span></a></li>
       <li><a href="/packages/flags"><b>flags</b><span>Command-line options</span></a></li>
-      <li class="pkg-extra"><a href="https://github.com/dolphlabs/zokor"><b>zokor</b><span>The backend framework, one <code>pkg</code> line away</span></a></li>
       <li class="pkg-extra"><a href="/interop/"><b>any C library</b><span><code>extern fn</code> and a linker flag</span></a></li>
       <li class="pkg-extra"><a href="#agents"><b>slangc doc</b><span>Any package's signatures, in your terminal</span></a></li>
+    </ul>
+  </div>
+</section>
+
+<section class="section" id="ecosystem" aria-labelledby="eco-title">
+  <div class="container">
+    <div class="section-head split">
+      <div>
+        <p class="eyebrow">Ecosystem</p>
+        <h2 id="eco-title">One <code>pkg</code> line away.</h2>
+      </div>
+      <p class="section-lede">Packages that live in their own repositories, written in slang over the standard library. Add one to <code>slang.project</code> with a <code>pkg</code> line and <code>slangc</code> fetches it at the tag you name.</p>
+    </div>
+    <ul class="pkg-grid">
+      <li><a href="https://github.com/dolphlabs/zokor"><b>zokor</b><span>The backend framework: routes, middleware, config, errors</span></a></li>
+      <li><a href="https://github.com/dolphlabs/zokor_cli"><b>zokor_cli</b><span><code>zokor new</code>, routes, migrations, <code>zokor watch</code></span></a></li>
+      <li><a href="https://github.com/dolphlabs/jwt"><b>jwt</b><span>HS, RS, PS, ES256 and EdDSA; JWKS and OpenID Connect</span></a></li>
+      <li><a href="https://github.com/dolphlabs/argon"><b>argon</b><span>Argon2id password hashes in PHC format</span></a></li>
+      <li><a href="https://github.com/dolphlabs/grpc"><b>grpc</b><span>Unary and streaming calls over http2, with <code>protoc-gen-slang</code></span></a></li>
+      <li><a href="https://github.com/dolphlabs/graphql"><b>graphql</b><span>Schema-first: <code>graphqlc</code> turns SDL into typed slang</span></a></li>
+      <li><a href="https://github.com/dolphlabs/mongo"><b>mongo</b><span>CRUD, aggregation, transactions, SCRAM and TLS</span></a></li>
+      <li><a href="https://github.com/dolphlabs/kafka"><b>kafka</b><span>Producers and consumer groups; snappy, lz4, zstd</span></a></li>
+      <li><a href="https://github.com/dolphlabs/amqp"><b>amqp</b><span>RabbitMQ: work queues, pub/sub, RPC, confirms</span></a></li>
+      <li><a href="https://github.com/Xlaez/sendbyte-slang-sdx"><b>sendbyte</b><span>SendByte email API; webhooks verified in zokor</span></a></li>
+      <li class="pkg-extra"><a href="/interop/#packages-go-odin-style"><b>any git repository</b><span>One <code>pkg</code> line and a tag; <code>slang.lock</code> holds the hash</span></a></li>
+      <li class="pkg-extra"><a href="https://github.com/dolphlabs/slang/tree/website"><b>yours</b><span>Published one? A pull request lists it here</span></a></li>
     </ul>
   </div>
 </section>
