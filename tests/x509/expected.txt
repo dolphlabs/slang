@@ -1,0 +1,134 @@
+== root
+subject CN=Test Root,O=slang tests
+cn Test Root
+issuer CN=Test Root,O=slang tests
+serial 01
+valid 1735689600 .. 2366841600
+dns []
+ip []
+email []
+uri []
+ca true pathlen 1
+ku [cert_sign crl_sign]
+eku []
+key ec-p256 256
+spki true
+sig ecdsa-with-SHA256
+fingerprint 99e2d5d2c0df25329e30095797239e753a584a6d13cbaa74952d45bd318bd869
+der 365
+== intermediate
+subject CN=Test Intermediate,O=slang tests
+cn Test Intermediate
+issuer CN=Test Root,O=slang tests
+serial 02
+valid 1735689600 .. 2366841600
+dns []
+ip []
+email []
+uri []
+ca true pathlen 0
+ku [cert_sign crl_sign]
+eku []
+key ec-p384 384
+spki true
+sig ecdsa-with-SHA256
+fingerprint 5909777da9011c7e1f3620154613143fd50ac5df05fcbaabdf3017fcd8f0c8d7
+der 434
+== leaf
+subject CN=api.example.com,O=Example\, Ltd.,C=NG
+cn api.example.com
+issuer CN=Test Intermediate,O=slang tests
+serial 1234abcd
+valid 1735689600 .. 2366841600
+dns [api.example.com *.example.com]
+ip [127.0.0.1 ::1]
+email [ops@example.com]
+uri [https://example.com/id]
+ca false pathlen -1
+ku [digital_signature key_encipherment]
+eku [server_auth]
+key rsa 2048
+spki true
+sig ecdsa-with-SHA256
+fingerprint ec64be3d3eff034f25221017b96e3370948ae4035330ebef072e571b3fff80dd
+der 789
+== old
+subject CN=old.example.com
+cn old.example.com
+issuer CN=Test Intermediate,O=slang tests
+serial 03
+valid 1577836800 .. 1609459200
+dns [old.example.com]
+ip []
+email []
+uri []
+ca false pathlen -1
+ku []
+eku [server_auth]
+key ec-p256 256
+spki true
+sig ecdsa-with-SHA256
+fingerprint 081d0c876ff7b07deb10a7dd2e6bc74440db0accf81ed1f4b3d998fea15a75de
+der 417
+== client
+subject CN=client-7
+cn client-7
+issuer CN=Test Intermediate,O=slang tests
+serial 04
+valid 1735689600 .. 2366841600
+dns []
+ip []
+email []
+uri [spiffe://example.com/client-7]
+ca false pathlen -1
+ku [digital_signature]
+eku [client_auth]
+key ed25519 256
+spki true
+sig ecdsa-with-SHA256
+fingerprint 6b975da04a76595f25205886b0b4cf6937e99fee374d5167baf6cbcc4ca54b34
+der 392
+bundle api.example.com, Test Intermediate, Test Root
+der pair 2 true
+== hosts
+api.example.com true
+API.Example.COM true
+www.example.com true
+api.example.com. true
+example.com false
+a.b.example.com false
+api.example.org false
+127.0.0.1 true
+::1 true
+0:0:0:0:0:0:0:1 true
+127.0.0.2 false
+*.example.com false
+ false
+client-7 false
+== validity
+true false false
+== verify
+server: ok true
+wildcard: ok true
+ip: ok true
+no checks: ok true
+wrong host: x509: hostname mismatch
+wrong purpose: x509: certificate is not for this purpose
+client: ok true
+expired: x509: certificate has expired
+not yet: x509: certificate is not yet valid
+no intermediate: x509: certificate signed by unknown authority
+other root: x509: certificate signed by unknown authority
+system roots: x509: certificate signed by unknown authority
+two roots: ok true
+bad purpose: x509: purpose must be "server", "client" or ""
+bad roots: x509: no usable CERTIFICATE block in the roots
+empty: x509: no certificate to verify
+negative at: x509: at must be unix seconds, or 0 for now
+== malformed
+x509: no CERTIFICATE block in the PEM
+x509: no CERTIFICATE block in the PEM
+x509: a CERTIFICATE block does not decode
+x509: not a DER certificate
+x509: not a DER certificate
+x509: no certificate in the DER

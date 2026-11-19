@@ -52,6 +52,7 @@ const NatSig CRYPTO_SIGS[] = {
      "result[bool,str]", 0},
     {"crypto", "ed25519_private_from_pem", 1, {NA_STR}, "result[bytes,str]", 0},
     {"crypto", "ed25519_public_from_pem", 1, {NA_STR}, "result[bytes,str]", 0},
+    {"crypto", "ed25519_private_to_pem", 1, {NA_BYTES}, "result[str,str]", 0},
 
     /* ECDSA P-256 with SHA-256 (JWS ES256): 32-byte private scalar,
        65-byte uncompressed public point, 64-byte r || s signature */
@@ -63,6 +64,7 @@ const NatSig CRYPTO_SIGS[] = {
      "result[bool,str]", 0},
     {"crypto", "ecdsa_p256_private_from_pem", 1, {NA_STR}, "result[bytes,str]", 0},
     {"crypto", "ecdsa_p256_public_from_pem", 1, {NA_STR}, "result[bytes,str]", 0},
+    {"crypto", "ecdsa_p256_private_to_pem", 1, {NA_BYTES}, "result[str,str]", 0},
 
     /* RSA with SHA-256: keys as PEM; PKCS#1 v1.5 (RS256) and PSS (PS256) */
     {"crypto", "rsa_generate", 1, {NA_I64}, "result[str,str]", 0},
@@ -79,6 +81,20 @@ const NatSig CRYPTO_SIGS[] = {
     {"crypto", "rsa_decrypt_oaep_sha256", 2, {NA_STR, NA_BYTES}, "result[bytes,str]", 0},
     {"crypto", "rsa_verify_pss_sha256", 4,
      {NA_BYTES, NA_BYTES, NA_BYTES, NA_BYTES}, "result[bool,str]", 0},
+
+    /* X.509, the layer under stdlib/x509 (runtime/sl_x509.c, compiled in
+       only when one of these is called). x509_fields returns a
+       certificate's fields in a fixed order; x509.parse_der reads them
+       into a Cert. SAN entries for x509_csr and x509_self_signed are
+       "DNS:name" or "IP:addr". */
+    {"crypto", "x509_der", 1, {NA_STR}, "result[bytes,str]", 0},
+    {"crypto", "x509_fields", 1, {NA_BYTES}, "result[[str],str]", 0},
+    {"crypto", "x509_check_host", 2, {NA_BYTES, NA_STR}, "bool", 0},
+    {"crypto", "x509_verify", 5, {NA_BYTES, NA_STR, NA_STR, NA_I64, NA_STR},
+     "result[bool,str]", 0},
+    {"crypto", "x509_csr", 3, {NA_STR, NA_STR, NA_ARR_STR}, "result[str,str]", 0},
+    {"crypto", "x509_self_signed", 4, {NA_STR, NA_STR, NA_ARR_STR, NA_I64},
+     "result[str,str]", 0},
 };
 
 const int CRYPTO_SIGS_LEN = sizeof(CRYPTO_SIGS) / sizeof(CRYPTO_SIGS[0]);

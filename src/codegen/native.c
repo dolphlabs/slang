@@ -146,6 +146,8 @@ const char *native_check(CG *cg, const char *pkg, const char *fname,
                  fname, ns->nargs, n);
     if (ns->is_tls)
         cg->want_tls = 1;
+    if (!strcmp(pkg, "crypto") && !strncmp(fname, "x509_", 5))
+        cg->want_x509 = 1;
     if (!strcmp(pkg, "net") &&
         (!strcmp(fname, "lookup_srv_until") ||
          !strcmp(fname, "lookup_txt_until")))

@@ -267,9 +267,7 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg mysql redis regex
 strings unicode encoding compress math decimal rand builder byteutil flags sort
-uuid http http2 httpc template`.
-uuid http http2 httpc websocket`.
-uuid http http2 httpc csv`.
+uuid http http2 httpc websocket template csv toml yaml cache nats s3 x509`.
 `decimal` is exact money: `let r = decimal.parse("19.99")` (result), then
 `decimal.add/sub/mul(a, b)` (opt: none past 38 digits), `decimal.div(a, b,
 scale, decimal.Rounding.HalfEven)`, `decimal.format(d)`, `decimal.split(d, n)`.
@@ -282,6 +280,10 @@ case-insensitive matches (`"STRASSE"` equals `"straße"`). Transforms repair
 invalid UTF-8 to U+FFFD.
 `uuid.v7()` (time-ordered, for keys) and `uuid.v4()` return `result[str, str]`;
 an id is a canonical lowercase `str`, `uuid.parse` canonicalizes any spelling.
+`x509.parse_pem(pem)` / `parse_der(der)` give `[x509.Cert]` (names, SANs,
+`not_after` unix s, key, fingerprint); `x509.verify(chain, x509.Verify { roots_pem,
+host, at, purpose })`; `x509.csr(key_pem, req)`, `x509.self_signed(key_pem, req,
+days)`. mTLS identity: `x509.parse_der(c.peer_certs())` on a TLS link.
 `nats`: `let nc = nats.connect(url, deadline)`, `nats.publish(nc, subj, data)`,
 `nats.subscribe(nc, subj)` then `nats.next_msg(sub, deadline)` (result of opt),
 `nats.request(nc, subj, data, deadline)`, `nats.drain(nc, deadline)`;
@@ -394,7 +396,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - byteutil: find, find_wire, has_prefix, has_suffix, trim, split
 - cache: options, new, get, put, put_ttl, put_sized, remove, clear, len_of, stats, get_or_load
 - compress: gzip, gzip_level, deflate, deflate_raw, deflate_raw_flush, gunzip, inflate, inflate_raw
-- crypto: sha256, hmac_sha256, rand, sha1, md5, pbkdf2_sha256, argon2id_raw, argon2id_verify, rsa_verify_sha256, sha384, sha512, hmac_sha384 (+32 more)
+- crypto: sha256, hmac_sha256, rand, sha1, md5, pbkdf2_sha256, argon2id_raw, argon2id_verify, rsa_verify_sha256, sha384, sha512, hmac_sha384 (+40 more)
 - csv: options, parse, parse_with, parse_bytes, new_reader, feed, end, finished, line, next, to_maps, write_options (+3 more)
 - decimal: zero, from_int, from_units, parse, parse_bytes, from_float, scale_of, precision, is_zero, is_neg, sign, format (+22 more)
 - encoding: hex_encode, hex_decode, base64_encode, base64_decode, base64url_encode, base64url_decode, url_encode, url_decode, form_encode, form_decode, query_get, query_keys (+11 more)
@@ -411,7 +413,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - math/stats: normal, Normal.pdf, Normal.cdf, Normal.quantile, log_normal, LogNormal.pdf, LogNormal.cdf, LogNormal.quantile, uniform, Uniform.pdf, Uniform.cdf, Uniform.quantile (+67 more)
 - mysql: parse_url, connect, connect_config, close, usable, in_transaction, server_version, connection_id, last_insert_id, affected_rows, ping, sqlstate (+32 more)
 - nats: options, with_creds, connect, connect_with, publish, publish_reply, publish_headers, publish_full, subscribe, queue_subscribe, next_msg, unsubscribe (+15 more)
-- net: listen, port, accept, dial, dial_until, lookup_srv_until, lookup_txt_until, dial_unix, listen_unix, send, recv, recv_until (+22 more)
+- net: listen, port, accept, dial, dial_until, lookup_srv_until, lookup_txt_until, dial_unix, listen_unix, send, recv, recv_until (+23 more)
 - os: setenv, unsetenv, environ, pid, hostname, tmpdir, exists, is_dir, is_file, size, mtime, mtime_ns (+6 more)
 - pg: rows_as, parse_url, sqlstate, scram_client_final, connect, connect_config, close, usable, in_transaction, server_param, arg_text, arg_int (+39 more)
 - proc: shutdown_requested, active_tasks, wait_idle, getenv, args, cwd, spawn, kill, wait
@@ -429,4 +431,5 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - unicode: valid, valid_bytes, count, runes, encode, truncate, fold, equal_fold, nfc, nfd, is_nfc
 - uuid: v4, v7, v7_at, is_valid, parse, version, time_ms, to_binary, from_binary
 - websocket: options, dial, dial_with, send_text, send_text_bytes, send_binary, ping, recv, text, close, close_now, is_open (+1 more)
+- x509: parse_pem, parse_der, matches_host, valid_at, expires_in, verify, csr, self_signed
 - yaml: to_json, to_json_all, decode, decode_all
