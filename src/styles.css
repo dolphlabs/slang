@@ -1166,3 +1166,71 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .nf-fix { color: var(--lime); border-bottom: 1px solid rgba(214, 245, 49, .4); }
 .nf-fix:hover { color: var(--lime); border-color: var(--lime); }
 .nf-ctas { margin-top: 10px; }
+
+/* ---- search: the docs' palette, on the homepage ----------------------------
+   Same markup, keys and index as the docs (www/theme in the slang repo), so
+   search behaves the same wherever it is opened. */
+
+.search-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 38px; padding: 0 8px 0 12px; min-width: 190px;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface); color: var(--faint);
+  font: inherit; font-size: 14px; cursor: pointer;
+  transition: border-color .2s, color .2s;
+}
+.search-btn:hover { border-color: var(--line-2); color: var(--ink-2); }
+.search-label { flex: 1; text-align: left; }
+.search-btn kbd, .palette kbd {
+  font: 500 11px/1 var(--mono);
+  padding: 3px 5px; min-width: 18px; text-align: center;
+  border: 1px solid var(--line-2); border-bottom-width: 2px; border-radius: 5px;
+  color: var(--muted); background: var(--bg-2);
+}
+@media (max-width: 1320px) {
+  .search-btn { min-width: 0; }
+  .search-label { display: none; }
+}
+@media (max-width: 520px) {
+  .search-btn { width: 38px; padding: 0; justify-content: center; }
+  .search-kbd { display: none; }
+}
+
+.palette {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 12vh 16px 16px;
+  background: rgba(0, 0, 0, .55);
+  -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+}
+.palette[hidden] { display: none; }
+.palette-box {
+  display: flex; flex-direction: column;
+  width: min(680px, 100%); max-height: 72vh; overflow: hidden;
+  border: 1px solid var(--line-2); border-radius: 18px;
+  background: var(--bg-2); box-shadow: 0 24px 80px rgba(0, 0, 0, .55);
+}
+.palette-field { display: flex; align-items: center; gap: 12px; padding: 0 16px; border-bottom: 1px solid var(--line); color: var(--faint); }
+.palette-field input {
+  flex: 1; height: 58px; min-width: 0;
+  border: 0; outline: 0; background: transparent; color: var(--ink);
+  font: 400 17px/1 var(--sans);
+}
+.palette-field input::-webkit-search-cancel-button { display: none; }
+.palette-list { overflow-y: auto; padding: 8px; overscroll-behavior: contain; }
+.palette-group { margin: 10px 10px 4px; font: 500 11.5px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+.palette-item { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border-radius: 10px; color: var(--ink-2); }
+.palette-item[aria-selected="true"] { background: rgba(214, 245, 49, .09); color: var(--ink); box-shadow: inset 2px 0 0 var(--lime); }
+.palette-item .pi-title { display: block; font-size: 15px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-item .pi-title.is-code { font: 400 14px/1.4 var(--mono); }
+.palette-item .pi-sub { font-size: 13px; line-height: 1.45; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-item .pi-sub.is-code { font: 400 12.5px/1.45 var(--mono); }
+.palette-item mark { background: none; color: var(--lime); font-weight: 600; }
+.palette-empty { padding: 28px 16px; text-align: center; color: var(--faint); font-size: 14px; }
+.palette-foot { display: flex; gap: 18px; padding: 10px 16px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--faint); }
+.palette-foot kbd { margin-right: 3px; }
+@media (max-width: 560px) {
+  .palette { padding: 0; }
+  .palette-box { width: 100%; max-height: 100%; height: 100%; border-radius: 0; border: 0; }
+  .palette-foot { display: none; }
+}

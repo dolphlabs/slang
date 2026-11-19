@@ -5,6 +5,7 @@
 import '@fontsource-variable/geist';
 import '@fontsource-variable/geist-mono';
 import './styles.css';
+import { initSearch } from './search';
 
 const root = document.documentElement;
 root.classList.add('js');
@@ -295,6 +296,7 @@ function initHero(): void {
 }
 
 initNav();
+initSearch();
 initReveal();
 initRunner();
 initCopy();
