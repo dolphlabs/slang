@@ -89,9 +89,9 @@
   <div class="hero-shade" aria-hidden="true"></div>
 
   <div class="hero-inner">
-    <a class="pill" href="https://github.com/dolphlabs/slang/releases/tag/v0.2.6">
-      <span class="pill-tag">v0.2.6 rex</span>
-      <span class="pill-long">MySQL, NATS, S3, TOML, YAML and 11 more packages</span>
+    <a class="pill" href="https://github.com/dolphlabs/slang/releases/tag/v0.2.7">
+      <span class="pill-tag">v0.2.7 rex</span>
+      <span class="pill-long">X.509 certificates and mTLS client identity</span>
       <span class="pill-short">What's new</span>
       <span aria-hidden="true">→</span>
     </a>
@@ -419,7 +419,7 @@ println(sqlite3_libversion());</code></pre>
         <p class="eyebrow">Standard library</p>
         <h2 id="pkg-title">Batteries inside the compiler.</h2>
       </div>
-      <p class="section-lede">40 packages ship with <code>slangc</code>. Native ones are linked only when a program imports them, so a plain TCP server stays free of OpenSSL, SQLite and zlib.</p>
+      <p class="section-lede">41 packages ship with <code>slangc</code>. Native ones are linked only when a program imports them, so a plain TCP server stays free of OpenSSL, SQLite and zlib.</p>
     </div>
     <ul class="pkg-grid">
       <li><a href="/packages/http"><b>http</b><span>HTTP/1.1 server parsing that refuses ambiguous requests</span></a></li>
@@ -441,6 +441,7 @@ println(sqlite3_libversion());</code></pre>
       <li><a href="/packages/template"><b>template</b><span>HTML and text templates with contextual escaping</span></a></li>
       <li><a href="/packages/regex"><b>regex</b><span>Linear-time NFA. No backtracking, ever</span></a></li>
       <li><a href="/packages/crypto"><b>crypto</b><span>SHA-2, HMAC, HKDF, AEAD, Ed25519, ECDSA, RSA, a CSPRNG</span></a></li>
+      <li><a href="/packages/x509"><b>x509</b><span>Parse and verify certificates, make CSRs</span></a></li>
       <li><a href="/packages/encoding"><b>encoding</b><span>Hex, base32, base64, percent-encoding, query strings</span></a></li>
       <li><a href="/packages/compress"><b>compress</b><span>gzip, zlib and raw DEFLATE</span></a></li>
       <li><a href="/packages/uuid"><b>uuid</b><span>RFC 9562 v4 and v7</span></a></li>
@@ -463,7 +464,6 @@ println(sqlite3_libversion());</code></pre>
       <li><a href="/packages/sort"><b>sort</b><span>In-place sorting and binary search</span></a></li>
       <li><a href="/packages/flags"><b>flags</b><span>Command-line options</span></a></li>
       <li class="pkg-extra"><a href="/interop/"><b>any C library</b><span><code>extern fn</code> and a linker flag</span></a></li>
-      <li class="pkg-extra"><a href="#agents"><b>slangc doc</b><span>Any package's signatures, in your terminal</span></a></li>
     </ul>
   </div>
 </section>
