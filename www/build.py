@@ -215,6 +215,7 @@ PACKAGE_SECTIONS = {
     "redis": ["`redis`"],
     "nats": ["`nats`"],
     "s3": ["`s3`"],
+    "sigv4": ["`sigv4`"],
     "template": ["`template`"],
 }
 

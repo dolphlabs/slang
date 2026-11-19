@@ -20,6 +20,7 @@
 import "crypto";
 import "encoding";
 import "httpc";
+import "sigv4";
 import "strings";
 import "time";
 import "timez";
@@ -373,43 +374,28 @@ pub fn presign_at(c: Client, method: str, bucket: str, key: str, expires_seconds
     }
     let br = check_bucket(bucket);
     guard let _b = br else let e = err_of(br) { return err(e); }
-    let date = strings.slice(amzdate, 0, 8);
-    let scope = date + "/" + c.region + "/s3/aws4_request";
     let host = target_host(c, bucket);
     let path = target_path(c, bucket, key);
     let q: map[str]str = {};
-    q["X-Amz-Algorithm"] = "AWS4-HMAC-SHA256";
-    q["X-Amz-Credential"] = c.access_key + "/" + scope;
-    q["X-Amz-Date"] = amzdate;
-    q["X-Amz-Expires"] = to_str(expires_seconds);
-    q["X-Amz-SignedHeaders"] = "host";
-    if c.session_token != "" {
-        q["X-Amz-Security-Token"] = c.session_token;
-    }
-    let cq = canonical_query(q);
-    let creq = method + "\n" + path + "\n" + cq + "\nhost:" + host + "\n\nhost\nUNSIGNED-PAYLOAD";
-    let sts = "AWS4-HMAC-SHA256\n" + amzdate + "\n" + scope + "\n" +
-              encoding.hex_encode(crypto.sha256(to_bytes(creq)));
-    let sig = encoding.hex_encode(crypto.hmac_sha256(signing_key(c, date), to_bytes(sts)));
-    return ok(c.scheme + "://" + host + path + "?" + cq + "&X-Amz-Signature=" + sig);
+    let qs = sigv4.presign_query(c.access_key, signing_key(c, strings.slice(amzdate, 0, 8)), c.region,
+                                 "s3", c.session_token, method, host, path, q, expires_seconds,
+                                 "UNSIGNED-PAYLOAD", amzdate);
+    return ok(c.scheme + "://" + host + path + "?" + qs);
 }
 
 // ---- signing -----------------------------------------------------------------------
 
 fn amz_now() -> str {
-    return timez.unix_nano(time.wall()).format("%Y%m%dT%H%M%SZ");
+    return sigv4.amz_date_now();
 }
 
-// kSigning = HMAC(HMAC(HMAC(HMAC("AWS4" + secret, date), region), "s3"),
-// "aws4_request"), kept for the day it is for.
+// The signing key, kept for the day it is for: one HMAC chain a day, not
+// four per request. Signing itself is the sigv4 package's.
 fn signing_key(c: Client, date: str) -> bytes {
     if c.key_date == date {
         return c.key;
     }
-    let k = crypto.hmac_sha256(to_bytes("AWS4" + c.secret_key), to_bytes(date));
-    k = crypto.hmac_sha256(k, to_bytes(c.region));
-    k = crypto.hmac_sha256(k, b"s3");
-    k = crypto.hmac_sha256(k, b"aws4_request");
+    let k = sigv4.derive_key(c.secret_key, date, c.region, "s3");
     c.key_date = date;
     c.key = k;
     return k;
@@ -420,11 +406,9 @@ fn signing_key(c: Client, date: str) -> bytes {
 // caller's headers). headers holds lowercase names.
 pub fn sign_request(c: Client, method: str, host: str, path: str, query: map[str]str,
                     headers: map[str]str, payload_hash: str, amzdate: str) -> str {
-    let date = strings.slice(amzdate, 0, 8);
-    let scope = date + "/" + c.region + "/s3/aws4_request";
     let all: map[str]str = {};
     for k, v in headers {
-        all[strings.to_lower(k)] = strings.trim(v);
+        all[strings.to_lower(k)] = v;
     }
     all["host"] = host;
     all["x-amz-content-sha256"] = payload_hash;
@@ -432,69 +416,17 @@ pub fn sign_request(c: Client, method: str, host: str, path: str, query: map[str
     if c.session_token != "" {
         all["x-amz-security-token"] = c.session_token;
     }
-    let names: [str] = [];
-    for k, _v in all {
-        push(names, k);
-    }
-    let sorted = sort_strs(names);
-    let ch = "";
-    for k in sorted {
-        ch = ch + k + ":" + all[k] + "\n";
-    }
-    let signed = strings.join(sorted, ";");
-    let creq = method + "\n" + path + "\n" + canonical_query(query) + "\n" + ch + "\n" +
-               signed + "\n" + payload_hash;
-    let sts = "AWS4-HMAC-SHA256\n" + amzdate + "\n" + scope + "\n" +
-              encoding.hex_encode(crypto.sha256(to_bytes(creq)));
-    let sig = encoding.hex_encode(crypto.hmac_sha256(signing_key(c, date), to_bytes(sts)));
-    return "AWS4-HMAC-SHA256 Credential=" + c.access_key + "/" + scope +
-           ", SignedHeaders=" + signed + ", Signature=" + sig;
+    return sigv4.authorization(c.access_key, signing_key(c, strings.slice(amzdate, 0, 8)), c.region,
+                               "s3", method, path, query, all, payload_hash, amzdate);
 }
 
-fn sort_strs(xs: [str]) -> [str] {
-    let out = xs;
-    // insertion sort: a request has a handful of headers
-    for i in 1..len(out) {
-        let v = out[i];
-        let j = i;
-        while j > 0 && out[j - 1] > v {
-            out[j] = out[j - 1];
-            j -= 1;
-        }
-        out[j] = v;
-    }
-    return out;
-}
-
-// RFC 3986 percent-encoding as SigV4 wants it: everything but A-Z a-z
-// 0-9 - _ . ~ (and / in paths, when keep_slash).
+// RFC 3986 percent-encoding as SigV4 wants it (sigv4.uri_encode).
 pub fn uri_encode(s: str, keep_slash: bool) -> str {
-    let b = to_bytes(s);
-    let hex = to_bytes("0123456789ABCDEF");
-    let out = strings.bytes_zero(len(b) * 3);
-    let o = 0;
-    for i in 0..len(b) {
-        let c = b[i];
-        if (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) ||
-           c == 45 || c == 95 || c == 46 || c == 126 || (keep_slash && c == 47) {
-            out[o] = c;
-            o += 1;
-        } else {
-            out[o] = 37;
-            out[o + 1] = hex[c >> 4];
-            out[o + 2] = hex[c & 15];
-            o += 3;
-        }
-    }
-    return strings.from_bytes(out, 0, o);
+    return sigv4.uri_encode(s, keep_slash);
 }
 
 fn canonical_query(q: map[str]str) -> str {
-    let pairs: [str] = [];
-    for k, v in q {
-        push(pairs, uri_encode(k, false) + "=" + uri_encode(v, false));
-    }
-    return strings.join(sort_strs(pairs), "&");
+    return sigv4.canonical_query(q);
 }
 
 // Bucket names: 3 to 63 lowercase letters, digits, dots and hyphens.

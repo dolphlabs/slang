@@ -1047,7 +1047,7 @@ Concurrency below.
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` / `import "io";` / `import "encoding";` like any other package.
 
-`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory` and `x509` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
 then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
 compiler's `SLANG_STDLIB_DIR`).
@@ -2689,6 +2689,41 @@ to be billed.
 
 **Presigned URLs** last 1 second to 7 days. `presign_at` signs at a given
 time, for tests and for URLs several servers must agree on.
+
+**Google Cloud Storage** speaks the same protocol through its XML API with
+HMAC keys (Cloud Storage settings, Interoperability): use
+`s3.new_client("https://storage.googleapis.com", "auto", access_id, secret)`.
+HMAC keys belong to a service account. For service-account JSON keys or
+the metadata server, use the separate `dolphlabs/gcs` package.
+
+#### `sigv4`
+
+AWS Signature Version 4 for any service. `s3` signs with it, and so do
+clients for SQS, SNS and the rest.
+
+```slang
+import "sigv4";
+
+let s = sigv4.new_signer(access_key, secret_key, "eu-west-1", "sqs");
+s.session_token = token;                    // temporary credentials, or leave ""
+let h: map[str]str = {};
+h["content-type"] = "application/x-amz-json-1.0";
+h["x-amz-target"] = "AmazonSQS.SendMessage";
+let amzdate = sigv4.amz_date_now();         // "20150830T123600Z"
+let auth = sigv4.sign(s, "POST", "sqs.eu-west-1.amazonaws.com", "/", {}, h,
+                      sigv4.payload_hash(body), amzdate);
+// send Authorization: auth, X-Amz-Date: amzdate, the headers in h, and
+// X-Amz-Security-Token when there is a token
+let url_query = sigv4.presign(s, "GET", host, "/", {}, 900, amzdate);
+```
+
+`sign` signs the given headers plus `host`, `x-amz-date` and any security
+token. The signing key is derived once a day per signer and replaced as a
+whole, so a request never pairs one day's date with another day's key.
+`derive_key`, `authorization` and `presign_query` are the same steps for a
+caller that keeps its own key, as `s3` does. `uri_encode` and
+`canonical_query` encode the way SigV4 signs. The tests use AWS's published
+test-suite vectors.
 
 **Limits.** Objects are read and written whole, in memory (or as one byte
 range). Redirects are not followed, since a redirect would change the host

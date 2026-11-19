@@ -152,6 +152,14 @@
   the directory `tests/live/mysqldb`. Reproduce: any generic stdlib call
   whose type argument is a struct of main, from a directory named after
   that stdlib package.
+- [ ] **`nats` closes a TLS connection's fd twice (found 2026-11-19, not
+  fixed).** `close_transport` in stdlib/nats/nats.sl calls `net.tls_close`,
+  which closes the socket, and then `net.close(nc.fd)` on the same number.
+  If another task opened a socket that reused that number in between, nats
+  closes that task's connection. `mysql`'s `close_transport` is correct
+  (`c.fd = -1` after `tls_close`), and nats should do the same. A test
+  should upgrade, close, then open a second connection and check that it
+  still works.
 - [ ] **`SSL_set1_host` is deprecated in OpenSSL 4.0 (found 2026-11-09,
   feat/uuid-package; not fixed).** `runtime/sl_tls.c:247` calls it to set
   the hostname a client checks the server's certificate against. Against
