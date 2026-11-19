@@ -863,6 +863,9 @@ void sl_ctx_switch(void **old_rsp_slot, void *new_rsp); /* runtime_sched.c,
     forward here for the same reason -- sl_rt_error below needs it at
     its own definition site; defined for real, in assembly, still in
     RUNTIME_SCHED. */
+void sl_rt_call_on_stack(void (*fn)(void), void *top); /* runtime_sched.c,
+    assembly; see sl_rt_native_stack_top for the one stack it is used
+    with. */
 static void sl_task_park(pthread_mutex_t *held_mu); /* runtime_pool.c,
     forward here -- sl_chan_send/recv (RUNTIME_CONTAINERS, emitted
     right after this file) call it directly, but it's defined for
@@ -1210,6 +1213,16 @@ static inline void sl_rt_stack_and_gc(sl_task *t) {
     sl_rt_gc_checkin();
 }
 
+/* Whether the caller is running on t's own stack, rather than on the
+ * worker's (sl_rt_call_on_stack) or the scheduler loop's. Growing t's
+ * stack is only meaningful, and only safe, from the former. */
+static inline int sl_rt_on_task_stack(const sl_task *t) {
+    char probe;
+    uintptr_t sp = (uintptr_t)&probe;
+    uintptr_t lo = (uintptr_t)t->stack_base;
+    return sp >= lo && sp < lo + t->stack_size;
+}
+
 /* Grow the current task's stack to at least `want` bytes before a
  * native chain that has no slang checkpoint of its own to trigger
  * growth from. Callers pass the size their library actually needs:
@@ -1217,10 +1230,47 @@ static inline void sl_rt_stack_and_gc(sl_task *t) {
  * SL_TASK_SQL_STACK_SIZE for SQLite (sl_sql.c). */
 static void sl_rt_need_stack(size_t want) {
     sl_task *t = SL_RT_TLS_CUR();
-    if (!t || !t->stack_base)
+    if (!t || !t->stack_base || !sl_rt_on_task_stack(t))
         return;
     while (t->stack_size < want)
         sl_task_stack_grow(t);
+}
+
+/* Room for the native work a safepoint can start, which a task's stack
+ * does not have. A safepoint promises SL_TASK_GUARD_MARGIN (2KB) below
+ * it, and a collection that begins there runs the whole collector,
+ * free() included, on what is left. On macOS x86_64 free() of a block
+ * in the small zone (roughly 1KB to 32KB) can need 4.4KB by itself:
+ * when a magazine passes its free-space limit, free_small moves a
+ * region to the depot and small_free_scan_madvise_free puts a
+ * 4KB-per-region array on the stack (1KB on arm64, with 16KB pages).
+ * Measured on macOS 15: 4440 bytes deep for one free, against 200-500
+ * for every other path. A program that dropped many decoded buffers at
+ * once died in the guard page, from a safepoint anywhere.
+ *
+ * Growing the task's stack first would fix the depth and cost every
+ * task that ever collects a doubled stack for the rest of its life.
+ * Instead the work runs where a worker has room to spare: its own OS
+ * thread stack (SL_RT_OS_STACK, or main's), idle below the
+ * sl_rt_native_rsp it switched away from while one of its tasks runs.
+ * Nothing else uses that memory then, it is already mapped, and the
+ * task's stack is left exactly as it was, so nothing on it moves.
+ *
+ * Returns that stack's top, or NULL when the caller should run where it
+ * is: not on a task, or already off the task's own stack (a nested
+ * call, or the scheduler loop itself). The caller holds a preempt
+ * bracket from before this call to after the switched-to work returns:
+ * a task that migrated between the two would carry one thread's native
+ * rsp onto another. The 256 bytes skipped are slack below the saved
+ * context block, not needed by the ABI. */
+static void *sl_rt_native_stack_top(void) {
+    sl_task *t = sl_rt_cur();
+    if (!t || !t->stack_base || !sl_rt_on_task_stack(t))
+        return NULL;
+    uintptr_t n = (uintptr_t)SL_RT_TLS_NATIVE_RSP();
+    if (!n)
+        return NULL;
+    return (void *)((n - 256) & ~(uintptr_t)15);
 }
 
 /* A slang function whose C frame is big is entered through a thin wrapper
@@ -1257,7 +1307,7 @@ static size_t sl_rt_frame_probe(size_t frame) {
 
 static void sl_rt_stack_reserve(size_t frame) {
     sl_task *t = SL_RT_TLS_CUR();
-    if (!t || !t->stack_base)
+    if (!t || !t->stack_base || !sl_rt_on_task_stack(t))
         return;
     size_t want = frame + sl_rt_frame_probe(frame) + SL_TASK_GUARD_MARGIN;
     for (;;) {
