@@ -1,0 +1,10 @@
+ok   returns the end
+ok   copies the range
+ok   leaves the rest
+ok   empty range
+ok   whole buffer
+ok   overlap, shift left
+ok   overlap, period 3
+ok   overlap, period 1
+ok   matches the byte loop, overlapping
+ok   matches the byte loop, separate

@@ -432,6 +432,58 @@ static sl_bytes *sl_strings_bytes_zero(long long n) {
     return r;
 }
 
+/* src[from..to] written over dst from offset at, returning at + (to -
+ * from): the offset just past it, which is where a writer puts its next
+ * byte. The loop it replaces, `dst[at + i] = src[from + i]`, pays a
+ * bounds check on each side and a GC poll for every byte; codecs and
+ * buffer writers spend most of their time there. This is one memmove.
+ *
+ * The result is the byte-by-byte forward copy, overlap included. When
+ * src is dst and the source starts earlier, inside the range being
+ * written (an LZ77 match: lz4, snappy, zstd), that copy repeats the
+ * first at - from bytes over and over, which memmove would not do. The
+ * repeat is built by doubling: after the first period every further
+ * memcpy copies from the part already written, at an offset that is a
+ * multiple of the period, and never overlaps itself.
+ *
+ * Ranges are checked, not clamped: a range outside either buffer is the
+ * same mistake as an index outside it, and stops the program the same
+ * way. A leaf (native_is_leaf): it allocates nothing and calls nothing
+ * that can, and the bytes it writes hold no pointers, so no barrier. */
+static long long sl_strings_copy_into(sl_bytes *dst, long long at,
+                                      sl_bytes *src, long long from,
+                                      long long to) {
+    long long sn = src ? src->len : 0;
+    long long dn = dst ? dst->len : 0;
+    if (from < 0 || from > sn)
+        sl_rt_error("copy_into: source start out of bounds", from, sn);
+    if (to < from || to > sn)
+        sl_rt_error("copy_into: source end out of bounds", to, sn);
+    long long k = to - from;
+    if (at < 0 || at > dn)
+        sl_rt_error("copy_into: destination start out of bounds", at, dn);
+    if (k > dn - at)
+        sl_rt_error("copy_into: destination end out of bounds", at + k, dn);
+    if (k == 0)
+        return at;
+    unsigned char *d = dst->ptr + at;
+    const unsigned char *s = src->ptr + from;
+    if (d > s && d < s + k) {
+        size_t period = (size_t)(d - s);
+        size_t n = (size_t)k;
+        memcpy(d, s, period);
+        size_t done = period;
+        while (done < n) {
+            size_t c = n - done < done ? n - done : done;
+            memcpy(d + done, d, c);
+            done += c;
+        }
+        return at + k;
+    }
+    memmove(d, s, (size_t)k);
+    return at + k;
+}
+
 /* Shortest round-trip: try 1..17 significant digits and keep the first
  * that strtod reads back as the same double. 17 always succeeds for an
  * IEEE double. NaN and the infinities use the spellings Postgres and
