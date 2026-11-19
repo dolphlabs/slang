@@ -6,6 +6,8 @@
 <title>C interop — slang</title>
 <meta name="description" content="Calling C, and the safety rules that come with it.">
 <meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<meta name="theme-color" content="#07080a" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f7f5ef" media="(prefers-color-scheme: light)">
 <link rel="author" href="https://dolphlabs.com">
 <meta property="og:site_name" content="slang — by Dolphlabs">
 <meta property="og:title" content="C interop">
@@ -23,51 +25,79 @@
 <link rel="alternate" type="text/markdown" href="../interop/index.md" title="Markdown">
 <link rel="alternate" type="text/plain" href="../llms-full.txt"
       title="Entire site as plain text">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="preload" href="../fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="../style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<script>
+/* Before first paint, so a saved light theme never flashes dark. */
+try { var t = localStorage.getItem("slang-theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
 
-<header class="topbar">
-  <a class="brand" href="../">
-    <span class="mark" aria-hidden="true"></span> slang
-  </a>
-  <button id="navtoggle" class="navtoggle" type="button"
-          aria-label="Toggle navigation" aria-expanded="false"
-          aria-controls="mainnav">
-    <span></span><span></span><span></span>
-  </button>
-  <nav class="mainnav" id="mainnav"><a href="../">Home</a><a href="../guide/">Guide</a><a href="../guide/data">Data types</a><a href="../guide/errors">Errors</a><a href="../guide/functions">Functions</a><a href="../concurrency/">Concurrency</a><a href="../testing/">Testing</a><a href="../bench/">Benchmarks</a><a href="../packages/">Packages</a><a class="active" href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="../limitations/">Limitations</a></nav>
-  <div class="tools">
-    <input id="search" type="search" placeholder="Search docs…"
-           autocomplete="off" aria-label="Search documentation">
-    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+<header class="nav" data-nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="../" aria-label="slang home">
+      <img class="logo-on-dark" src="../brand/slang-logo-light.svg" alt="" width="77" height="32">
+      <img class="logo-on-light" src="../brand/slang-logo-dark.svg" alt="" width="77" height="32">
+    </a>
+    <nav class="nav-links" aria-label="Primary"><a href="../guide/">Guide</a><a href="../concurrency/">Concurrency</a><a href="../packages/">Packages</a><a href="../bench/">Benchmarks</a><a class="active" href="../interop/" aria-current="page">C interop</a><a href="../internals/">Internals</a></nav>
+    <div class="nav-actions">
+      <button class="search-btn" type="button" data-search aria-label="Search the docs" aria-keyshortcuts="Control+K Meta+K /">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <span class="search-label">Search</span>
+        <kbd class="search-kbd">/</kbd>
+      </button>
+      <button class="icon-btn" type="button" data-theme-toggle aria-label="Switch to light theme" title="Switch theme">
+        <svg class="i-sun" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <svg class="i-moon" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.6A8 8 0 1 1 9.4 4a6.4 6.4 0 0 0 10.6 10.6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      </button>
+      <a class="btn btn-ghost btn-sm nav-gh" href="https://github.com/dolphlabs/slang">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span>GitHub</span>
+      </a>
+      <a class="btn btn-light btn-sm nav-start" href="../#install">Get started</a>
+      <button class="nav-menu" type="button" aria-expanded="false" aria-controls="nav-sheet" aria-label="Menu" data-menu>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6h14M3 10h14M3 14h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </button>
+    </div>
   </div>
+  <nav class="nav-sheet" id="nav-sheet" aria-label="Menu" hidden><a href="../guide/">Guide</a><a href="../concurrency/">Concurrency</a><a href="../packages/">Packages</a><a href="../bench/">Benchmarks</a><a class="active" href="../interop/" aria-current="page">C interop</a><a href="../internals/">Internals</a><a href="https://github.com/dolphlabs/slang">GitHub</a></nav>
 </header>
-<div id="navscrim" class="navscrim" hidden></div>
-<div id="results" class="results" hidden></div>
 
-<main id="main">
+<div class="docbar">
+  <button class="docbar-btn" type="button" aria-expanded="false" aria-controls="sidebar" data-drawer>
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    <span>Docs</span>
+  </button>
+  <span class="docbar-here">C interop</span>
+</div>
 
-<div class="page">
-  <article class="content">
-    <header class="page-head">
-      <h1>C interop</h1>
-      <p class="tagline">Calling C, and the safety rules that come with it.</p>
-      <p class="agentline">
-        <a href="../interop/index.md">Markdown version</a> ·
-        <a href="../llms.txt">llms.txt</a> ·
-        <a href="../api.json">api.json</a>
-      </p>
-    </header>
+<div class="docs">
+  <aside class="sidebar" id="sidebar" aria-label="Documentation">
+    <div class="sidebar-inner"><div class="side-group"><p class="side-title">Start</p><ul class="side-list"><li><a href="../">Overview</a></li><li><a href="../guide/">Guide</a></li><li><a href="../guide/data">Data types</a></li><li><a href="../guide/errors">Errors</a></li><li><a href="../guide/functions">Functions</a></li></ul></div><div class="side-group"><p class="side-title">Build</p><ul class="side-list"><li><a href="../concurrency/">Concurrency</a></li><li><a href="../testing/">Testing</a></li><li><a href="../packages/">Packages</a></li><li><a href="../interop/" aria-current="page">C interop</a></li></ul></div><div class="side-group"><p class="side-title">Under the hood</p><ul class="side-list"><li><a href="../internals/">Internals</a></li><li><a href="../bench/">Benchmarks</a></li><li><a href="../limitations/">Limitations</a></li></ul></div><details class="side-group side-pkgs"><summary>Packages<span class="side-count">41</span></summary><ul class="side-list"><li><a href="../packages/builder">builder</a></li><li><a href="../packages/byteutil">byteutil</a></li><li><a href="../packages/cache">cache</a></li><li><a href="../packages/compress">compress</a></li><li><a href="../packages/crypto">crypto</a></li><li><a href="../packages/csv">csv</a></li><li><a href="../packages/decimal">decimal</a></li><li><a href="../packages/encoding">encoding</a></li><li><a href="../packages/flags">flags</a></li><li><a href="../packages/fs">fs</a></li><li><a href="../packages/http">http</a></li><li><a href="../packages/http2">http2</a></li><li><a href="../packages/httpc">httpc</a></li><li><a href="../packages/io">io</a></li><li><a href="../packages/json">json</a></li><li><a href="../packages/log">log</a></li><li><a href="../packages/math">math</a></li><li><a href="../packages/math/numtheory">math/numtheory</a></li><li><a href="../packages/math/stats">math/stats</a></li><li><a href="../packages/mysql">mysql</a></li><li><a href="../packages/nats">nats</a></li><li><a href="../packages/net">net</a></li><li><a href="../packages/os">os</a></li><li><a href="../packages/pg">pg</a></li><li><a href="../packages/proc">proc</a></li><li><a href="../packages/rand">rand</a></li><li><a href="../packages/redis">redis</a></li><li><a href="../packages/regex">regex</a></li><li><a href="../packages/s3">s3</a></li><li><a href="../packages/sort">sort</a></li><li><a href="../packages/sql">sql</a></li><li><a href="../packages/strings">strings</a></li><li><a href="../packages/template">template</a></li><li><a href="../packages/time">time</a></li><li><a href="../packages/timez">timez</a></li><li><a href="../packages/toml">toml</a></li><li><a href="../packages/unicode">unicode</a></li><li><a href="../packages/uuid">uuid</a></li><li><a href="../packages/websocket">websocket</a></li><li><a href="../packages/x509">x509</a></li><li><a href="../packages/yaml">yaml</a></li></ul></details></div>
+  </aside>
+  <div class="drawer-scrim" data-scrim hidden></div>
+
+  <main id="main" class="doc-main">
+
+    <article class="content">
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="../">Docs</a><span class="sep" aria-hidden="true">/</span><span aria-current="page">C interop</span></nav>
+      <header class="page-head">
+        <h1>C interop</h1>
+        <p class="tagline">Calling C, and the safety rules that come with it.</p>
+        <p class="agentline">
+          <a href="../interop/index.md">Markdown</a><span aria-hidden="true">·</span><a href="../llms.txt">llms.txt</a><span aria-hidden="true">·</span><a href="../api.json">api.json</a>
+        </p>
+      </header>
 <h2 id="c-interop">C interop</h2>
 <p>slang already transpiles to C and shells out to <code>cc</code>, so calling into existing C libraries is a thin layer on top of that, not a new ecosystem: declare the C function&#x27;s signature, tell the linker which library to pull in, and call it like any other function.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">link</span> <span class="s">&quot;sqlite3&quot;</span>;   <span class="c">// -&gt; &#x27;-lsqlite3&#x27; on the final cc invocation</span>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">link</span> <span class="s">&quot;sqlite3&quot;</span>;   <span class="c">// -&gt; &#x27;-lsqlite3&#x27; on the final cc invocation</span>
 
 <span class="k">extern</span> <span class="k">fn</span> <span class="f">sqlite3_libversion</span>() -&gt; <span class="t">str</span>;
 <span class="b">println</span>(<span class="f">sqlite3_libversion</span>());</code></pre></div>
@@ -78,14 +108,14 @@
 <p>See <code>tests/ffi/</code> for a complete example: a small hand-written C fixture library (<code>lib.c</code>) built as a static archive, linked and called from a slang program exercising <code>extern fn</code>, <code>link</code>, <code>rawptr</code>, <code>bytes_ptr</code>, and <code>nullptr</code>.</p>
 <h2 id="packages-go-odin-style">Packages (Go/Odin style)</h2>
 <p>A <strong>package is a directory</strong>: every <code>.sl</code> file inside it is compiled together into one shared namespace, as if concatenated. Import paths resolve to a directory next to the importer, then a native package, then <code>stdlib/&lt;path&gt;</code>, then a pin in <code>slang.project</code>. Only the exact path names a native package (<code>&quot;json&quot;</code> is the built-in; <code>&quot;lib/json&quot;</code> is a directory), and a directory shadows a native package only if it holds <code>.sl</code> files, so a <code>json/</code> folder of fixtures does not.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;geometry&quot;</span>;   <span class="c">// binds the name &quot;geometry&quot; in this file&#x27;s scope</span>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;geometry&quot;</span>;   <span class="c">// binds the name &quot;geometry&quot; in this file&#x27;s scope</span>
 <span class="k">import</span> <span class="s">&quot;a/b/util&quot;</span>;   <span class="c">// nested paths bind as &quot;util&quot;</span>
 <span class="k">import</span> <span class="s">&quot;geometry&quot;</span> <span class="k">as</span> geo;   <span class="c">// optional alias; call as geo.area(...)</span>
 
 <span class="b">println</span>(geometry.<span class="f">area</span>(<span class="n">3.0</span>, <span class="n">4.0</span>));   <span class="c">// qualified access</span>
 <span class="b">println</span>(util.<span class="f">format</span>(x));</code></pre></div>
 <p><strong>Exports are explicit.</strong> Only declarations marked with <code>pub</code> are visible to importers; everything else is private to its package:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="c">// geometry/shapes.sl</span>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="c">// geometry/shapes.sl</span>
 <span class="k">pub</span> <span class="k">fn</span> <span class="f">area</span>(w: <span class="t">float</span>, h: <span class="t">float</span>) -&gt; <span class="t">float</span> { ... }   <span class="c">// exported</span>
 <span class="k">fn</span> <span class="f">scale</span>(v: <span class="t">float</span>) -&gt; <span class="t">float</span> { ... }                <span class="c">// private</span>
 
@@ -96,47 +126,59 @@
 <ul><li>Accessing a non-<code>pub</code> member from outside is a compile error.</li><li>Within a package, members are used unqualified: <code>area(1, 2)</code>.</li><li>In an imported package, top-level <code>let</code> becomes a package global; its initializer must be a constant literal.</li><li>The entry point is the file you pass to <code>slangc</code>; its directory is the main package, and its top-level statements run in order in <code>main()</code>. Other files of the main package share its namespace.</li><li>Duplicate names within a package, duplicate import bindings, and import cycles are all compile errors.</li><li>Symbols are mangled per package (<code>sl_&lt;pkg&gt;_&lt;name&gt;</code>), so different packages can safely use the same names.</li><li>A package&#x27;s name is its directory&#x27;s name made an identifier: any character other than a letter, digit or <code>_</code> becomes <code>_</code>, and a leading digit gets a <code>p_</code> prefix (<code>app.v2</code> → <code>app_v2</code>, <code>9lib</code> → <code>p_9lib</code>). The import <em>binding</em> is still the path&#x27;s last element, so a directory whose name is not an identifier needs an alias: <code>import &quot;lib.v2&quot; as lib;</code>.</li><li>Different directories are always different packages, even with the same name: <code>import &quot;a/util&quot;;</code> and <code>import &quot;b/util&quot; as butil;</code> are two packages, and two libraries can each have their own <code>util</code>. When names clash, diagnostics show the later one with a suffix (<code>util_2</code>); native packages and the entry package keep theirs.</li></ul>
 <p>See <code>examples/pkgdemo/</code> for a complete multi-package project.</p>
 <p>External packages are pinned in <code>slang.project</code> (walked up from the entry file). Imports stay short. <code>slang.lock</code> holds content hashes and is written by <code>slangc get</code>, never by hand. The file needs a <code>name</code> and a <code>version</code> line as well as its pins; <code>slangc new</code> writes both.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>name myserver
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code>name myserver
 version <span class="n">0.1.0</span>
 
 pkg foo git https:<span class="c">//github.com/dolphlabs/foo tag v0.1.0</span>
 pkg bar git https:<span class="c">//github.com/dolphlabs/bar tag v0.2.0 dir src</span></code></pre></div>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;foo&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;foo&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;bar&quot;</span>;</code></pre></div>
 <p><code>dir &lt;subdir&gt;</code> points a pin at the package <strong>inside</strong> the repository, for a library that also ships examples, docs and its own tests: only that directory is compiled into your program, and nothing else in the repository can affect your build. The subdirectory is a relative path within the clone — <code>..</code>, absolute paths and empty segments are refused — and the lock hashes the package&#x27;s complete included tree, not just the selected source directory.</p>
 <p>A package author can keep non-runtime directories out of every consumer&#x27;s cache by listing them in that package repository&#x27;s own <code>slang.project</code>:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>name foo
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code>name foo
 version <span class="n">1.2.0</span>
 exclude bench
 exclude examples
 exclude tests</code></pre></div>
 <p>Each <code>exclude</code> is one literal repository-relative directory; paths with <code>..</code>, absolute paths, empty segments, or glob syntax are rejected. Do not exclude the package directory selected by a consumer&#x27;s <code>dir</code>; <code>slangc get</code> refuses that pin. A directory inside it may be excluded (test fixtures, say) as long as the package never imports it: an import that lands in an excluded directory is a compile error naming the <code>exclude</code> line, because otherwise <code>import &quot;json&quot;</code> from a package whose own <code>json/</code> was excluded would quietly compile the standard <code>json</code> instead. The author sees that error first: the same check runs in the package&#x27;s own repository, where the directory is still present and the import would otherwise compile, so a broken exclude fails the author&#x27;s build rather than a consumer&#x27;s. Code that never ships is exempt there: <code>*_test.sl</code> files, and anything inside an excluded directory (a benchmark importing the package, a test program). <code>slangc get</code> uses a shallow partial clone and sparse checkout so a Git server that supports partial clones need not send excluded file contents. If it does not, slang still omits those directories and Git metadata from the local cache, but the first transfer may include them. The lock hash covers every retained file, so editing included source is detected before compilation. Projects without <code>exclude</code> keep the existing full-tree behavior.</p>
 <p><code>slangc get</code> clones each <code>pkg</code> line into <code>$SLANG_CACHE/pkg/&lt;name&gt;/&lt;hash&gt;</code> (<code>~/.cache/slang</code> if unset), links <code>$SLANG_CACHE/pkg/&lt;name&gt;/&lt;tag&gt;</code> to it (a <code>/</code> in the tag becomes <code>_</code>), and prints one line per package with that typeable path — <code>zokor v0.1.0: /home/you/.cache/slang/pkg/zokor/v0.1.0/src</code> — for reading a package&#x27;s source or docs. Builds never go through the link; they use the lock&#x27;s hash. If a fetched package has its own <code>slang.project</code>, those pins are fetched too and recorded only in <code>slang.lock</code>. Compile does not hit the network. A missing lock, missing cache, or hash mismatch is an error. Same short name at two git/tag pairs is an error.</p>
-  </article>
-  <aside class="toc">
+<nav class="pager" aria-label="Previous and next"><a class="prev" href="../packages/"><span class="dir">Previous</span><span class="name">Packages</span></a><a class="next" href="../internals/"><span class="dir">Next</span><span class="name">Internals</span></a></nav>
+    </article>
+  </main>
+
+  <aside class="toc" aria-label="On this page">
     <p class="toc-title">On this page</p>
     <nav id="toc"></nav>
   </aside>
 </div>
-</main>
 
 <footer class="foot">
-  <div class="foot-main">
-    <p class="foot-by">
-      Built and maintained by
-      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
-    </p>
-    <p class="foot-entity">
-      Dolph Tech Limited &middot;
-      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
-    </p>
+  <div class="foot-inner">
+    <a class="foot-logo" href="../" aria-label="slang home">
+      <img class="logo-on-dark" src="../brand/slang-icon-light.svg" alt="" width="28" height="28">
+      <img class="logo-on-light" src="../brand/slang-icon-dark.svg" alt="" width="28" height="28">
+    </a>
+    <p class="foot-by">Built and maintained by
+      <a href="https://dolphlabs.com" rel="noopener">Dolphlabs</a> · Dolph Tech Limited</p>
+    <p class="foot-note">Generated from the repository by <code>www/build.py</code>:
+      the guide from <code>README.md</code>, the API from the compiler's own
+      signature tables and the <code>pub</code> declarations in
+      <code>stdlib/</code>. Nothing here is written twice.</p>
   </div>
-  <p class="foot-note">Generated from the repository by
-     <code>www/build.py</code> — the guide comes from
-     <code>README.md</code>, the API from the compiler's own signature
-     tables and the <code>pub</code> declarations in
-     <code>stdlib/</code>. Nothing here is written twice.</p>
 </footer>
+
+<div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="Search the docs" hidden>
+  <div class="palette-box">
+    <div class="palette-field">
+      <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <input id="palette-input" type="search" placeholder="Search pages, packages and functions" autocomplete="off" spellcheck="false"
+             role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list">
+      <kbd>esc</kbd>
+    </div>
+    <div class="palette-list" id="palette-list" role="listbox" aria-label="Results"></div>
+    <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
 
 <script src="../app.js" defer></script>
 </body>

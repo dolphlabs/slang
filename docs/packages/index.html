@@ -6,6 +6,8 @@
 <title>Packages — slang</title>
 <meta name="description" content="The standard library, and how imports resolve.">
 <meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<meta name="theme-color" content="#07080a" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f7f5ef" media="(prefers-color-scheme: light)">
 <link rel="author" href="https://dolphlabs.com">
 <meta property="og:site_name" content="slang — by Dolphlabs">
 <meta property="og:title" content="Packages">
@@ -23,53 +25,81 @@
 <link rel="alternate" type="text/markdown" href="../packages/index.md" title="Markdown">
 <link rel="alternate" type="text/plain" href="../llms-full.txt"
       title="Entire site as plain text">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="preload" href="../fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="../style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<script>
+/* Before first paint, so a saved light theme never flashes dark. */
+try { var t = localStorage.getItem("slang-theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
 
-<header class="topbar">
-  <a class="brand" href="../">
-    <span class="mark" aria-hidden="true"></span> slang
-  </a>
-  <button id="navtoggle" class="navtoggle" type="button"
-          aria-label="Toggle navigation" aria-expanded="false"
-          aria-controls="mainnav">
-    <span></span><span></span><span></span>
-  </button>
-  <nav class="mainnav" id="mainnav"><a href="../">Home</a><a href="../guide/">Guide</a><a href="../guide/data">Data types</a><a href="../guide/errors">Errors</a><a href="../guide/functions">Functions</a><a href="../concurrency/">Concurrency</a><a href="../testing/">Testing</a><a href="../bench/">Benchmarks</a><a class="active" href="../packages/">Packages</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="../limitations/">Limitations</a></nav>
-  <div class="tools">
-    <input id="search" type="search" placeholder="Search docs…"
-           autocomplete="off" aria-label="Search documentation">
-    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+<header class="nav" data-nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="../" aria-label="slang home">
+      <img class="logo-on-dark" src="../brand/slang-logo-light.svg" alt="" width="77" height="32">
+      <img class="logo-on-light" src="../brand/slang-logo-dark.svg" alt="" width="77" height="32">
+    </a>
+    <nav class="nav-links" aria-label="Primary"><a href="../guide/">Guide</a><a href="../concurrency/">Concurrency</a><a class="active" href="../packages/" aria-current="page">Packages</a><a href="../bench/">Benchmarks</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a></nav>
+    <div class="nav-actions">
+      <button class="search-btn" type="button" data-search aria-label="Search the docs" aria-keyshortcuts="Control+K Meta+K /">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <span class="search-label">Search</span>
+        <kbd class="search-kbd">/</kbd>
+      </button>
+      <button class="icon-btn" type="button" data-theme-toggle aria-label="Switch to light theme" title="Switch theme">
+        <svg class="i-sun" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <svg class="i-moon" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.6A8 8 0 1 1 9.4 4a6.4 6.4 0 0 0 10.6 10.6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      </button>
+      <a class="btn btn-ghost btn-sm nav-gh" href="https://github.com/dolphlabs/slang">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span>GitHub</span>
+      </a>
+      <a class="btn btn-light btn-sm nav-start" href="../#install">Get started</a>
+      <button class="nav-menu" type="button" aria-expanded="false" aria-controls="nav-sheet" aria-label="Menu" data-menu>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6h14M3 10h14M3 14h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </button>
+    </div>
   </div>
+  <nav class="nav-sheet" id="nav-sheet" aria-label="Menu" hidden><a href="../guide/">Guide</a><a href="../concurrency/">Concurrency</a><a class="active" href="../packages/" aria-current="page">Packages</a><a href="../bench/">Benchmarks</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="https://github.com/dolphlabs/slang">GitHub</a></nav>
 </header>
-<div id="navscrim" class="navscrim" hidden></div>
-<div id="results" class="results" hidden></div>
 
-<main id="main">
+<div class="docbar">
+  <button class="docbar-btn" type="button" aria-expanded="false" aria-controls="sidebar" data-drawer>
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    <span>Docs</span>
+  </button>
+  <span class="docbar-here">Packages</span>
+</div>
 
-<div class="page">
-  <article class="content">
-    <header class="page-head">
-      <h1>Packages</h1>
-      <p class="tagline">The standard library, and how imports resolve.</p>
-      <p class="agentline">
-        <a href="../packages/index.md">Markdown version</a> ·
-        <a href="../llms.txt">llms.txt</a> ·
-        <a href="../api.json">api.json</a>
-      </p>
-    </header>
+<div class="docs">
+  <aside class="sidebar" id="sidebar" aria-label="Documentation">
+    <div class="sidebar-inner"><div class="side-group"><p class="side-title">Start</p><ul class="side-list"><li><a href="../">Overview</a></li><li><a href="../guide/">Guide</a></li><li><a href="../guide/data">Data types</a></li><li><a href="../guide/errors">Errors</a></li><li><a href="../guide/functions">Functions</a></li></ul></div><div class="side-group"><p class="side-title">Build</p><ul class="side-list"><li><a href="../concurrency/">Concurrency</a></li><li><a href="../testing/">Testing</a></li><li><a href="../packages/" aria-current="page">Packages</a></li><li><a href="../interop/">C interop</a></li></ul></div><div class="side-group"><p class="side-title">Under the hood</p><ul class="side-list"><li><a href="../internals/">Internals</a></li><li><a href="../bench/">Benchmarks</a></li><li><a href="../limitations/">Limitations</a></li></ul></div><details class="side-group side-pkgs" open><summary>Packages<span class="side-count">41</span></summary><ul class="side-list"><li><a href="../packages/builder">builder</a></li><li><a href="../packages/byteutil">byteutil</a></li><li><a href="../packages/cache">cache</a></li><li><a href="../packages/compress">compress</a></li><li><a href="../packages/crypto">crypto</a></li><li><a href="../packages/csv">csv</a></li><li><a href="../packages/decimal">decimal</a></li><li><a href="../packages/encoding">encoding</a></li><li><a href="../packages/flags">flags</a></li><li><a href="../packages/fs">fs</a></li><li><a href="../packages/http">http</a></li><li><a href="../packages/http2">http2</a></li><li><a href="../packages/httpc">httpc</a></li><li><a href="../packages/io">io</a></li><li><a href="../packages/json">json</a></li><li><a href="../packages/log">log</a></li><li><a href="../packages/math">math</a></li><li><a href="../packages/math/numtheory">math/numtheory</a></li><li><a href="../packages/math/stats">math/stats</a></li><li><a href="../packages/mysql">mysql</a></li><li><a href="../packages/nats">nats</a></li><li><a href="../packages/net">net</a></li><li><a href="../packages/os">os</a></li><li><a href="../packages/pg">pg</a></li><li><a href="../packages/proc">proc</a></li><li><a href="../packages/rand">rand</a></li><li><a href="../packages/redis">redis</a></li><li><a href="../packages/regex">regex</a></li><li><a href="../packages/s3">s3</a></li><li><a href="../packages/sort">sort</a></li><li><a href="../packages/sql">sql</a></li><li><a href="../packages/strings">strings</a></li><li><a href="../packages/template">template</a></li><li><a href="../packages/time">time</a></li><li><a href="../packages/timez">timez</a></li><li><a href="../packages/toml">toml</a></li><li><a href="../packages/unicode">unicode</a></li><li><a href="../packages/uuid">uuid</a></li><li><a href="../packages/websocket">websocket</a></li><li><a href="../packages/x509">x509</a></li><li><a href="../packages/yaml">yaml</a></li></ul></details></div>
+  </aside>
+  <div class="drawer-scrim" data-scrim hidden></div>
+
+  <main id="main" class="doc-main">
+
+    <article class="content">
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="../">Docs</a><span class="sep" aria-hidden="true">/</span><span aria-current="page">Packages</span></nav>
+      <header class="page-head">
+        <h1>Packages</h1>
+        <p class="tagline">The standard library, and how imports resolve.</p>
+        <p class="agentline">
+          <a href="../packages/index.md">Markdown</a><span aria-hidden="true">·</span><a href="../llms.txt">llms.txt</a><span aria-hidden="true">·</span><a href="../api.json">api.json</a>
+        </p>
+      </header>
 <h2 id="standard-packages">Standard packages</h2>
 <p><code>time</code>, <code>net</code>, <code>json</code>, <code>proc</code>, <code>fs</code>, <code>log</code>, <code>crypto</code>, <code>sql</code>, <code>regex</code>, <code>os</code>, <code>io</code>, <code>strings</code>, <code>encoding</code>, <code>compress</code> and <code>math</code> are compiler-provided native packages — no source files, just <code>import &quot;time&quot;;</code> / <code>import &quot;net&quot;;</code> / <code>import &quot;json&quot;;</code> / <code>import &quot;proc&quot;;</code> / <code>import &quot;fs&quot;;</code> / <code>import &quot;log&quot;;</code> / <code>import &quot;crypto&quot;;</code> / <code>import &quot;sql&quot;;</code> / <code>import &quot;regex&quot;;</code> / <code>import &quot;io&quot;;</code> / <code>import &quot;encoding&quot;;</code> like any other package.</p>
 <p><code>http</code>, <code>httpc</code>, <code>http2</code>, <code>pg</code>, <code>flags</code>, <code>builder</code>, <code>byteutil</code>, <code>sort</code>, <code>math/stats</code>, <code>math/numtheory</code> and <code>x509</code> are slang-source stdlib packages under <code>stdlib/</code>. <code>import &quot;http&quot;</code> / <code>import &quot;byteutil&quot;</code> resolve to a local directory first, then a native package, then <code>stdlib/&lt;path&gt;</code> (<code>SLANG_STDLIB</code> or the compiler&#x27;s <code>SLANG_STDLIB_DIR</code>).</p>
 <h4 id="time"><code>time</code><a class="anchor" href="#time" aria-label="Link to this section">#</a></h4>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;time&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;time&quot;</span>;
 
 <span class="k">let</span> t0 = time.<span class="f">mono</span>();     <span class="c">// monotonic clock; a `duration` (int64 ns)</span>
 time.<span class="f">sleep</span>(<span class="n">20000000</span>);     <span class="c">// sleep for a duration (ns)</span>
@@ -81,7 +111,7 @@ time.<span class="f">sleep</span>(<span class="n">20000000</span>);     <span cl
 <p><code>time.put_http_date(w, off)</code> writes the same 29 bytes into a <code>wire</code> and returns <code>off + 29</code> (with a zero-length wire it only counts): what <code>http</code> uses for <code>Date</code>. For dates other than now, use <code>timez</code>.</p>
 <h4 id="timez"><code>timez</code><a class="anchor" href="#timez" aria-label="Link to this section">#</a></h4>
 <p>Calendar time, written in slang on top of the native <code>time</code> clock: instants, dates, durations, text formats, time zones, test clocks and cron. Import <code>&quot;timez&quot;</code>.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;timez&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;timez&quot;</span>;
 
 <span class="k">let</span> t = timez.<span class="f">now</span>();                               <span class="c">// a Time: an instant, UTC</span>
 <span class="b">println</span>(t.<span class="f">rfc3339</span>());                              <span class="c">// 2026-10-13T09:30:15Z</span>
@@ -114,7 +144,7 @@ time.<span class="f">sleep</span>(<span class="n">20000000</span>);     <span cl
 <p><strong>In JSON and Postgres.</strong> A <code>timez.Time</code> field of a struct is written by <code>json.encode</code> as an RFC 3339 string and read back by <code>json.decode</code> (see <code>json</code>). <code>pg.arg_time(t)</code> binds one for a <code>timestamptz</code> parameter and <code>pg.get_time(rows, r, c)</code> reads one out; <code>pg.timestamp_rfc3339(cell, has_tz)</code> turns Postgres&#x27;s own timestamp text into RFC 3339.</p>
 <h4 id="net"><code>net</code><a class="anchor" href="#net" aria-label="Link to this section">#</a></h4>
 <p>TCP listener/dialer built on <code>bytes</code> and fixed-width ints; every fallible call returns a <code>result[_, str]</code> unwrapped with <code>guard let</code>.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
 
 <span class="k">let</span> lr: <span class="t">result</span>[<span class="t">i32</span>, <span class="t">str</span>] = net.<span class="f">listen</span>(<span class="n">8080</span>);   <span class="c">// 0 = ephemeral port</span>
 <span class="k">guard</span> <span class="k">let</span> lfd = lr <span class="k">else</span> { <span class="b">exit</span>(<span class="n">1</span>); }
@@ -134,7 +164,7 @@ net.<span class="f">close</span>(cfd);</code></pre></div>
 <p><code>net.idle_alive(fd) -&gt; bool</code> and <code>net.tls_idle_alive(ssl) -&gt; bool</code> report whether an IDLE connection is still reusable: true only when the peer has neither closed nor sent anything. One non-blocking <code>MSG_PEEK</code>, nothing consumed; the TLS form is also false when OpenSSL holds decrypted-but-unread bytes. They exist for connection pools, and they are a primitive rather than a <code>recv_until</code> with an expired deadline because <code>recv_until</code> checks its deadline <em>before</em> touching the socket — it would report every dead connection as alive.</p>
 <h5 id="deadlines">Deadlines<a class="anchor" href="#deadlines" aria-label="Link to this section">#</a></h5>
 <p><code>net.recv</code> and <code>net.send</code> wait for as long as the peer takes, which on a public listener is indefinitely: a client that connects and then neither sends nor reads parks the serving task on the reactor forever, holding its stack and its GC roots. That is slowloris, and the defence is <code>recv_until</code> / <code>send_until</code>, which take an <code>until</code> — an absolute monotonic instant, not a duration:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;time&quot;</span>;
 
 <span class="k">let</span> deadline = <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">5000000000</span>);   <span class="c">// 5s from now</span>
@@ -150,7 +180,7 @@ net.<span class="f">close</span>(cfd);</code></pre></div>
 <p><code>net.dial_until(host, port, deadline)</code> bounds connecting: the DNS lookup and the TCP connect together. A lookup still running when the deadline passes is abandoned to the resolver thread (<code>getaddrinfo</code> cannot be interrupted), so the caller gets <code>&quot;timeout&quot;</code> on time. Every address the name resolves to is tried in turn — <code>net.dial</code> does the same, without a deadline.</p>
 <h5 id="dns-srv-and-txt-lookups">DNS SRV and TXT lookups<a class="anchor" href="#dns-srv-and-txt-lookups" aria-label="Link to this section">#</a></h5>
 <p>Atlas connection strings use DNS SRV and TXT records. <code>net.lookup_srv_until</code> and <code>net.lookup_txt_until</code> expose those records without blocking a slang worker; each lookup takes an absolute <code>until</code> deadline:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;time&quot;</span>;
 <span class="k">let</span> deadline = <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">5000000000</span>);
 <span class="k">let</span> seeds = net.<span class="f">lookup_srv_until</span>(<span class="s">&quot;_mongodb._tcp.cluster.example&quot;</span>, deadline);
@@ -166,7 +196,7 @@ net.<span class="f">close</span>(cfd);</code></pre></div>
 <p>See <code>examples/httpd/</code> for a minimal HTTP server on <code>link</code> plus the <code>http</code> stdlib package.</p>
 <h4 id="tls">TLS<a class="anchor" href="#tls" aria-label="Link to this section">#</a></h4>
 <p><code>net.tls_*</code> adds a TLS listener/dialer on top of the plain <code>net</code> primitives above, built on OpenSSL (linked automatically, and only when a program actually calls one of these — a plain-TCP <code>net</code> program stays dependency-free). A <code>SSL_CTX</code>-equivalent config is created once (<code>tls_server_ctx</code> / <code>tls_client_ctx</code>) and reused across many connections; each connection is a separate <code>rawptr</code> handle.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
 
 <span class="c">// server: load a cert + key once, reuse the context for every connection</span>
 <span class="k">let</span> sctx_r: <span class="t">result</span>[<span class="t">rawptr</span>, <span class="t">str</span>] = net.<span class="f">tls_server_ctx</span>(<span class="s">&quot;cert.pem&quot;</span>, <span class="s">&quot;key.pem&quot;</span>);
@@ -188,13 +218,13 @@ net.<span class="f">tls_close</span>(sconn);
 net.<span class="f">tls_close</span>(cconn);</code></pre></div>
 <p>Client verification is strict by default: <code>tls_client_ctx</code> enables peer verification, and <code>tls_dial</code> checks the certificate against <em>both</em> the CA and the hostname you asked for (<code>SSL_set1_host</code> — the check that&#x27;s easy to forget and, if skipped, leaves you with &quot;TLS&quot; that validates a certificate chain without checking it belongs to the host you&#x27;re actually talking to). Sending/receiving is blocking, same as plain <code>net</code> — call these from a <code>spawn</code>ed task if you need a connection handled without stalling anything else.</p>
 <p><strong>ALPN</strong> (RFC 7301) negotiates the protocol during the handshake, which is how HTTP/2 over TLS is selected — there is no in-band upgrade. <code>tls_ctx_alpn(ctx, &quot;h2,http/1.1&quot;)</code> sets the list on a server context (in preference order, so the <em>server</em> decides) or the offer on a client one, and <code>tls_alpn(conn)</code> returns what was actually negotiated, or <code>&quot;&quot;</code> if the peer offered nothing that overlapped. The list is comma-separated, not the length-prefixed wire form; building that by hand is an easy way to produce a subtly broken handshake. A client offering no protocol we support completes the handshake without ALPN rather than failing, so it simply falls back to HTTP/1.1.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>net.<span class="f">tls_ctx_alpn</span>(sctx, <span class="s">&quot;h2,http/1.1&quot;</span>);
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code>net.<span class="f">tls_ctx_alpn</span>(sctx, <span class="s">&quot;h2,http/1.1&quot;</span>);
 <span class="k">let</span> conn = ...;                  <span class="c">// after tls_accept</span>
 <span class="k">if</span> net.<span class="f">tls_alpn</span>(conn) == <span class="s">&quot;h2&quot;</span> { <span class="f">serve_h2</span>(conn); } <span class="k">else</span> { <span class="f">serve_h1</span>(conn); }</code></pre></div>
 <p>Mutual TLS: <code>tls_ctx_require_client(sctx, client_ca)</code> on the server context demands a client certificate chained to that CA (<code>SSL_VERIFY_FAIL_IF_NO_PEER_CERT</code>). The client presents one with <code>tls_ctx_use_cert(cctx, cert, key)</code>. Extra server names on one listener: <code>tls_ctx_add_sni(sctx, host, cert, key)</code> swaps in that cert when the ClientHello SNI matches; unmatched names keep the default <code>tls_server_ctx</code> cert. <code>require_client</code> applies to SNI certs too, regardless of call order. TLS 1.3 can let <code>tls_dial</code> return before the server has rejected a missing client certificate; the first send or recv then fails. <code>tls_peer_certs(conn)</code> returns the peer&#x27;s chain, leaf first, as concatenated DER (empty when it sent none): on a server under <code>require_client</code>, the verified client identity. Read it with <code>x509.parse_der</code>.</p>
 <p><strong>STARTTLS</strong>: <code>tls_upgrade(fd, host, ctx)</code> runs a client handshake on a socket from <code>net.dial</code> that has already spoken cleartext — how Postgres, SMTP and IMAP switch to TLS. Verification is exactly <code>tls_dial</code>&#x27;s, hostname included, which is why the host is an argument: an fd does not remember what was dialled. On failure the fd is left open for the caller to close; on success it belongs to the returned handle and <code>tls_close</code> closes it. Read no further than the server&#x27;s go-ahead before upgrading: anything a man in the middle queued behind it would otherwise be trusted as if it had arrived encrypted (libpq&#x27;s CVE-2021-23222). <code>tls_upgrade_until(fd, host, ctx, deadline)</code> bounds the handshake; a server that stops answering part way through gives <code>&quot;timeout&quot;</code>. <code>tls_dial_until(host, port, ctx, deadline)</code> is <code>tls_dial</code> with one deadline over the lookup, the connect and the handshake: an unreachable host gives <code>&quot;timeout&quot;</code> at the deadline instead of after the OS connect timeout, which is over a minute on macOS. Like <code>dial</code>, both try every address the name resolves to.</p>
 <p><strong>TLS on a <code>link</code></strong>: <code>c.tls_accept(ctx, deadline)</code> runs the server handshake on a link you already accepted, and from then on the link&#x27;s <code>send</code>/<code>recv</code> go through the session. Everything written against a link -- <code>http.read_frame</code>, <code>http.write</code>, a whole server loop -- serves HTTPS without a second code path, and a plain link pays one pointer test per call. Run it in the connection&#x27;s own task, not the accept loop, so one slow handshake holds up nobody else:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">fn</span> <span class="f">serve</span>(c: <span class="k">link</span>, ctx: <span class="t">rawptr</span>) {
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">fn</span> <span class="f">serve</span>(c: <span class="k">link</span>, ctx: <span class="t">rawptr</span>) {
     <span class="k">let</span> hr = c.<span class="f">tls_accept</span>(ctx, <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">10000000000</span>));
     <span class="k">guard</span> <span class="k">let</span> _h = hr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(hr) {
         <span class="k">return</span>;                  <span class="c">// a scanner, a plaintext client, a timeout</span>
@@ -203,7 +233,7 @@ net.<span class="f">tls_close</span>(cconn);</code></pre></div>
 }</code></pre></div>
 <p>It returns <code>result[int, fault]</code>: <code>timeout</code> when the deadline passes, <code>closed</code> when the client hangs up during the handshake (browsers&#x27; preconnects do), and <code>io</code> with OpenSSL&#x27;s reason otherwise (<code>tls http request</code> is a plaintext client). Client certificates are checked as <code>tls_accept</code> checks them, and <code>c.peer_certs()</code> returns the client&#x27;s chain as concatenated DER for <code>x509.parse_der</code> (empty bytes before TLS, or when the client sent none). The session is freed, with a close_notify, when the link is; a second <code>tls_accept</code> on the same link is an error.</p>
 <p><strong>Reading and writing from two tasks</strong>: a <code>link</code> is move-only, so one task owns it -- and a task parked in <code>recv</code> cannot also send. <code>c.split()</code> returns a second link on the same connection for a writer task, which is what a server pushing to a client needs (a WebSocket broadcast, server-sent events):</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">fn</span> <span class="f">writer</span>(w: <span class="k">link</span>, out: <span class="t">chan</span>[<span class="t">bytes</span>]) {
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">fn</span> <span class="f">writer</span>(w: <span class="k">link</span>, out: <span class="t">chan</span>[<span class="t">bytes</span>]) {
     <span class="k">let</span> mut_w = w;
     <span class="k">while</span> <span class="k">true</span> {
         <span class="k">let</span> m = <span class="b">chan_recv</span>(out);
@@ -221,7 +251,7 @@ net.<span class="f">tls_close</span>(cconn);</code></pre></div>
 <p>From then on <code>c</code> only reads and the returned link only writes: a send on the reader or a recv on the writer is an <code>io</code> fault saying which to use, since two senders could interleave partial writes. Ending the reader (its binding goes out of scope) shuts the connection down for both halves, so a writer blocked on a client that stopped reading fails at once; ending the writer leaves the reader working. Each half holds its own fd, so a half never writes to a number the kernel has reused. Over TLS, start TLS first (<code>tls_accept</code> on a split link is refused): both halves then share the session, one OpenSSL call at a time. A link splits once.</p>
 <h4 id="builder"><code>builder</code><a class="anchor" href="#builder" aria-label="Link to this section">#</a></h4>
 <p>Assembling a result one piece at a time with <code>+</code> is <strong>quadratic</strong>: <code>a + b</code> allocates and copies both sides, so the cost is the sum of every intermediate length. Building 80 KB one byte at a time takes about two seconds, and a megabyte would take minutes. <code>builder</code> collects the pieces and copies each once, at the end.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;builder&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;builder&quot;</span>;
 
 <span class="k">let</span> b = builder.<span class="f">new_str</span>();
 b.<span class="f">write</span>(<span class="s">&quot;hello&quot;</span>).<span class="f">write</span>(<span class="s">&quot;, &quot;</span>).<span class="f">write</span>(name).<span class="f">write_int</span>(<span class="n">42</span>).<span class="f">write_line</span>(<span class="s">&quot;!&quot;</span>);
@@ -234,7 +264,7 @@ y.<span class="f">write_byte</span>(<span class="n">104</span>).<span class="f">
 <p>For assembling a <code>[bytes]</code> you already hold, <code>strings.join_bytes(parts, sep)</code> is the counterpart of <code>strings.join</code>. <code>bench/builder/</code> prints the naive loop beside the builder.</p>
 <h4 id="json"><code>json</code><a class="anchor" href="#json" aria-label="Link to this section">#</a></h4>
 <p><code>json.decode</code>/<code>json.encode</code> (de)serialize <code>str</code>/<code>bytes</code> against a concrete slang type — the target type for <code>decode</code> is inferred from the binding&#x27;s annotation, the same mechanism <code>ok()</code>/<code>err()</code> already use to infer <code>result[T,E]</code>. There is no dynamic &quot;JSON value&quot; type: every decode is checked field-by-field against the struct shape you asked for, and a mismatch is a <code>result</code> error, not a silent <code>null</code> or a runtime panic.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;json&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;json&quot;</span>;
 
 <span class="k">gc</span> <span class="k">struct</span> Address { city: <span class="t">str</span>, zip: <span class="t">str</span> }
 <span class="k">gc</span> <span class="k">struct</span> Person {
@@ -258,7 +288,7 @@ y.<span class="f">write_byte</span>(<span class="n">104</span>).<span class="f">
 <p>Graceful shutdown and environment variables. <code>proc.shutdown_requested()</code> turns true once the process receives <code>SIGTERM</code> or <code>SIGINT</code>; a blocked <code>net.accept()</code>/<code>net.recv()</code>/<code>net.dial()</code> is interrupted the instant the signal arrives (an <code>err</code> result, not a hang), so a listener loop notices without needing <code>select</code> or a timeout.</p>
 <p>Handling the signals is opt-in by use. A program that calls <code>proc.shutdown_requested()</code> anywhere — in its own code or in a package it imports — takes them over: the first <code>SIGTERM</code> or <code>SIGINT</code> only sets the flag, and a <strong>second</strong> one ends the process the way the signal would have, so a drain that never finishes cannot make it unkillable. A program that never asks keeps the default action: the signal ends it, whether or not it imports <code>proc</code> for anything else (<code>proc.getenv</code>, say).</p>
 <p><code>proc.active_tasks()</code> counts currently-running <code>spawn</code>ed tasks. <code>proc.wait_idle()</code> parks until that count is zero, so a shutting-down program can drain in-flight work without polling. Called from a spawned task, neither counts the caller (nor, for <code>wait_idle</code>, other tasks also waiting in it), so a task can drain the rest without waiting for itself; every test under <code>slangc test</code> is such a task.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;net&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;proc&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;time&quot;</span>;
 
@@ -279,7 +309,7 @@ proc.<span class="f">wait_idle</span>();</code></pre></div>
 <p><code>proc.getenv(name)</code> reads an environment variable, returning <code>opt[str]</code> (<code>none</code> if unset). <code>proc.args()</code> is the process argument list (<code>[str]</code>); <code>args[0]</code> is the executable path. To parse options out of it, see <a href="#flags"><code>flags</code></a>. <code>proc.cwd()</code> is the working directory as <code>result[str, str]</code>.</p>
 <h4 id="fs"><code>fs</code><a class="anchor" href="#fs" aria-label="Link to this section">#</a></h4>
 <p>POSIX file I/O on integer fds. <code>open</code> is read-only; <code>create</code> is write/trunc. <code>read</code>/<code>write</code>/<code>close</code> use the fd; <code>pread(fd, off, n)</code> reads at an offset. <code>mkdir</code> creates one directory. Every call returns <code>result[_, str]</code>, except <code>fstat(fd)</code>, which is <code>[kind, size, mtime_sec, mtime_nsec]</code> of an open file (kind 0 a regular file, 1 a directory, 2 anything else; <code>[]</code> for a closed fd). <code>realpath(path)</code> resolves <code>.</code>, <code>..</code> and every symlink to an absolute path: what a file server compares with its root, so a link cannot lead out of it. These calls block the worker — use them for config and small files, not the accept loop. To read standard input use <a href="#io"><code>io</code></a> instead: <code>fs.read(0, n)</code> works, but waits by blocking a whole worker thread, and a program waiting on a person at a keyboard would stall every other task with it.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;fs&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;fs&quot;</span>;
 
 <span class="k">let</span> cr = fs.<span class="f">create</span>(<span class="s">&quot;/tmp/note&quot;</span>);
 <span class="k">guard</span> <span class="k">let</span> fd = cr <span class="k">else</span> { <span class="b">exit</span>(<span class="n">1</span>); }
@@ -295,7 +325,7 @@ fs.<span class="f">close</span>(in_fd);</code></pre></div>
 <p>The operating system <em>around</em> a program: the environment, the process, and everything you can ask or do about a path without opening it. Pure libc, so importing <code>os</code> adds no link flag.</p>
 <p><strong>The <code>fs</code>/<code>os</code> boundary</strong>: <code>fs</code> owns open file <strong>handles</strong> and their contents; <code>os</code> owns paths you have not opened. <code>fs.mkdir</code> predates that split and stays where it is rather than breaking existing programs.</p>
 <div class="tablewrap"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><code>os.setenv(k, v)</code> / <code>os.unsetenv(k)</code></td><td><code>result[bool, str]</code></td></tr><tr><td><code>os.environ()</code></td><td><code>[str]</code> of <code>KEY=VALUE</code></td></tr><tr><td><code>os.pid()</code> / <code>os.tmpdir()</code></td><td><code>int</code> / <code>str</code></td></tr><tr><td><code>os.hostname()</code></td><td><code>result[str, str]</code></td></tr><tr><td><code>os.exists(p)</code> / <code>os.is_dir(p)</code> / <code>os.is_file(p)</code></td><td><code>bool</code></td></tr><tr><td><code>os.size(p)</code> / <code>os.mtime(p)</code></td><td><code>result[int, str]</code></td></tr><tr><td><code>os.read_dir(p)</code></td><td><code>result[[str], str]</code></td></tr><tr><td><code>os.remove(p)</code> / <code>os.rename(a, b)</code></td><td><code>result[bool, str]</code></td></tr></tbody></table></div>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;os&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;os&quot;</span>;
 
 <span class="c">// serve a static file, the shape this package exists for</span>
 <span class="k">if</span> !os.<span class="f">is_file</span>(path) {
@@ -312,7 +342,7 @@ fs.<span class="f">close</span>(in_fd);</code></pre></div>
 <h4 id="io"><code>io</code><a class="anchor" href="#io" aria-label="Link to this section">#</a></h4>
 <p>The process&#x27;s standard streams: what a command-line program needs that <code>print</code>/<code>println</code> and <code>proc.args()</code> don&#x27;t already give it. Pure libc, so importing <code>io</code> adds no link flag.</p>
 <div class="tablewrap"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><code>io.read_line()</code></td><td><code>result[opt[str], str]</code> — one line of stdin, without its newline</td></tr><tr><td><code>io.read_all()</code></td><td><code>result[bytes, str]</code> — everything until the end of input</td></tr><tr><td><code>io.eprint(s)</code> / <code>io.eprintln(s)</code></td><td><code>s</code> (a <code>str</code> or a <code>fault</code>) to stderr, nothing added</td></tr><tr><td><code>io.flush()</code></td><td>flush stdout</td></tr><tr><td><code>io.is_tty(fd)</code></td><td><code>bool</code> — whether <code>fd</code> (0, 1, 2) is a terminal</td></tr><tr><td><code>io.term_width()</code> / <code>io.term_height()</code></td><td><code>opt[int]</code> — columns / rows of the terminal; <code>none</code> without one</td></tr><tr><td><code>io.read_secret()</code></td><td><code>result[opt[str], str]</code> — like <code>read_line</code>, with echo off</td></tr><tr><td><code>io.raw_on()</code> / <code>io.raw_off()</code></td><td><code>result[bool, str]</code> — key-at-a-time input on / off</td></tr><tr><td><code>io.read_key()</code></td><td><code>result[opt[str], str]</code> — one key press, by name</td></tr></tbody></table></div>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;io&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;io&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;log&quot;</span>;
 
 <span class="b">print</span>(<span class="s">&quot;name? &quot;</span>);                         <span class="c">// no io.flush() needed: reading flushes it</span>
@@ -326,7 +356,7 @@ fs.<span class="f">close</span>(in_fd);</code></pre></div>
 }
 <span class="b">println</span>(<span class="s">&quot;hello, &quot;</span> + name);</code></pre></div>
 <p>A loop over every line is the same two guards inside <code>while true</code>:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> total = <span class="n">0</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> total = <span class="n">0</span>;
 <span class="k">while</span> <span class="k">true</span> {
     <span class="k">let</span> r = io.<span class="f">read_line</span>();
     <span class="k">guard</span> <span class="k">let</span> maybe = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { io.<span class="f">eprintln</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }
@@ -340,7 +370,7 @@ fs.<span class="f">close</span>(in_fd);</code></pre></div>
 <p><strong>Limits.</strong> Input is buffered in memory, so one line — or <code>read_all</code>&#x27;s whole input — is capped at 256 MiB; past that the call returns an <code>err</code> rather than allocating without bound. stdin is one shared stream: two tasks reading it at once are memory-safe but see interleaved chunks, so give it to one task.</p>
 <p><code>eprint</code>/<code>eprintln</code> write straight to stderr with no timestamp or level — for the messages a command prints to a person; <code>log</code> is for a service&#x27;s diagnostics.</p>
 <h5 id="the-terminal">The terminal<a class="anchor" href="#the-terminal" aria-label="Link to this section">#</a></h5>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;io&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;io&quot;</span>;
 
 <span class="c">// a password: nothing is echoed while it is typed</span>
 <span class="b">print</span>(<span class="s">&quot;password: &quot;</span>);
@@ -352,7 +382,7 @@ fs.<span class="f">close</span>(in_fd);</code></pre></div>
 <span class="k">let</span> width = io.<span class="f">term_width</span>() ?? <span class="n">80</span>;</code></pre></div>
 <p><code>read_secret</code> is <code>read_line</code> with the terminal&#x27;s echo off for the length of the read. The Enter is not echoed either, so it writes the newline for you. When stdin is not a terminal (a pipe, a file, a test) it is exactly <code>read_line</code>: nothing to turn off. <code>term_width</code> and <code>term_height</code> ask the terminal every time, so they follow a resized window — poll them, there is no resize event. They look at stdout, then stderr, then stdin, and are <code>none</code> when none of the three is a terminal.</p>
 <p><strong>Key by key.</strong> <code>raw_on</code> switches stdin from line-at-a-time to key-at-a-time: no line editing, no echo, and each key press is available as it happens. <code>read_key</code> names it:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> r = io.<span class="f">raw_on</span>();
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> r = io.<span class="f">raw_on</span>();
 <span class="k">guard</span> <span class="k">let</span> <span class="b">ok</span> = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { io.<span class="f">eprintln</span>(e); <span class="b">exit</span>(<span class="n">1</span>); }   <span class="c">// stdin is not a terminal</span>
 <span class="k">while</span> <span class="k">true</span> {
     <span class="k">let</span> k = io.<span class="f">read_key</span>();
@@ -371,7 +401,7 @@ io.<span class="f">raw_off</span>();</code></pre></div>
 <p><code>raw_on</code> fails with <code>&quot;stdin is not a terminal&quot;</code> when it is not one, so a program can fall back to line input when it is run from a script.</p>
 <h4 id="log"><code>log</code><a class="anchor" href="#log" aria-label="Link to this section">#</a></h4>
 <p>Stderr logging with a timestamp and level. Each function accepts a <code>str</code> or a <code>fault</code> (<code>to_str</code>/<code>+</code> already convert faults the same way), so <code>err_of</code> bindings and <code>fault</code> values log without manual conversion.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;log&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;log&quot;</span>;
 
 log.<span class="f">debug</span>(<span class="s">&quot;cache miss for key foo&quot;</span>);
 log.<span class="f">info</span>(<span class="s">&quot;listening on :8080&quot;</span>);
@@ -380,7 +410,7 @@ log.<span class="f">error</span>(<span class="s">&quot;could not load config: &q
 log.<span class="f">warn</span>(<span class="f">fault_timeout</span>());</code></pre></div>
 <h4 id="crypto"><code>crypto</code><a class="anchor" href="#crypto" aria-label="Link to this section">#</a></h4>
 <p>Hashes, MACs, key derivation, authenticated encryption and signatures over OpenSSL: SHA-256/384/512 and their HMACs, HKDF, PBKDF2, Argon2id, AES-256-GCM and ChaCha20-Poly1305, Ed25519, ECDSA P-256, RSA, and a CSPRNG. Hashes and HMACs are infallible on valid inputs and return <code>bytes</code> directly; anything that can fail returns a <code>result</code>.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;crypto&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;crypto&quot;</span>;
 
 <span class="k">let</span> h: <span class="t">bytes</span> = crypto.<span class="f">sha256</span>(b<span class="s">&quot;abc&quot;</span>);              <span class="c">// 32 bytes</span>
 <span class="k">let</span> m: <span class="t">bytes</span> = crypto.<span class="f">hmac_sha256</span>(key, msg);       <span class="c">// 32 bytes</span>
@@ -396,15 +426,15 @@ log.<span class="f">warn</span>(<span class="f">fault_timeout</span>());</code><
 <p>The low-level <code>argon2id_raw</code> and <code>argon2id_verify</code> primitives support the standalone <a href="https://github.com/dolphlabs/argon"><code>argon</code> package</a>, which emits standard PHC password hashes. They accept byte passwords and salts and validated cost parameters; verification returns <code>ok(false)</code> for a mismatch and compares tags in constant time. Calls require OpenSSL 3.2 or newer with Argon2id support; on older OpenSSL builds they return an error while the other <code>crypto</code> functions remain available. Use the package&#x27;s bounded PHC parser rather than parsing stored hashes in application code.</p>
 <p>A derivation is tens of milliseconds of work that cannot be preempted. In a program that links the reactor (anything importing <code>net</code> or <code>io</code>, so every server), it runs on a small pool of dedicated kdf threads while the calling task parks, the way a DNS lookup does: a burst of logins neither pins the pool&#x27;s workers nor holds up a collection. <code>SLANG_KDF_THREADS</code> sets the pool size (default: one per worker). Each in-flight derivation holds its <code>memory_kib</code>, so bound how many you start, as you would any other expensive request. Without the reactor it derives on the calling worker.</p>
 <p><code>rsa_verify_sha256(n, e, msg, sig) -&gt; result[bool, str]</code> checks an RSASSA-PKCS1-v1_5 SHA-256 signature (JWS <code>RS256</code>) against a public key given as its raw big-endian modulus and exponent, which is what a JWKS entry&#x27;s base64url <code>n</code> and <code>e</code> decode to. <code>ok(false)</code> is a signature that does not verify, including one of the wrong length; <code>err</code> is a key out of bounds (a 2048- to 8192-bit modulus, a 1- to 8-byte exponent) or one OpenSSL rejects.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;crypto&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;crypto&quot;</span>;
 
 <span class="k">let</span> r = crypto.<span class="f">rsa_verify_sha256</span>(n, e, <span class="b">to_bytes</span>(header_dot_payload), sig);
 <span class="k">let</span> valid = r ?? <span class="k">false</span>;</code></pre></div>
 <p><strong>Hashes, MACs, key derivation.</strong> <code>sha384</code>/<code>sha512</code> and <code>hmac_sha384</code>/<code>hmac_sha512</code> (JWS HS384/HS512) sit beside the SHA-256 ones. <code>hkdf_sha256(ikm, salt, info, length)</code> and <code>hkdf_sha512</code> are RFC 5869 HKDF: use them to derive several keys from one secret, never a bare hash. The length is 1 to 255 hash lengths. <code>constant_time_eq(a, b)</code> compares in time that depends only on the length: use it for MACs, tokens and anything else an attacker could probe a byte at a time.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> enc = crypto.<span class="f">hkdf_sha256</span>(master, salt, b<span class="s">&quot;cookie-encryption&quot;</span>, <span class="n">32</span>);
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> enc = crypto.<span class="f">hkdf_sha256</span>(master, salt, b<span class="s">&quot;cookie-encryption&quot;</span>, <span class="n">32</span>);
 <span class="k">let</span> mac_ok = crypto.<span class="f">constant_time_eq</span>(crypto.<span class="f">hmac_sha256</span>(k, body), sent_mac);</code></pre></div>
 <p><strong>Authenticated encryption.</strong> <code>seal(key, plaintext, aad)</code> encrypts with AES-256-GCM under a fresh random nonce and returns nonce, ciphertext and tag in one <code>bytes</code>. <code>open(key, box, aad)</code> checks and decrypts it. The aad (associated data, which may be empty) is authenticated but not encrypted: bind a cookie to its name, a record to its id. Because the caller never chooses a nonce, it cannot reuse one, the mistake that breaks GCM outright. A key should seal fewer than 2^32 messages this way, so rotate it, for example via HKDF with a date in <code>info</code>. When a protocol fixes the nonce, <code>aes256gcm_seal</code>/<code>aes256gcm_open</code> and <code>chacha20poly1305_seal</code>/<code>chacha20poly1305_open</code> take (key, nonce, data, aad) with a 32-byte key and a 12-byte nonce, and carry ciphertext then a 16-byte tag. Every opener returns an error, never partial plaintext, when anything was altered.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> box = crypto.<span class="f">seal</span>(key, <span class="b">to_bytes</span>(session_json), b<span class="s">&quot;session&quot;</span>);
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> box = crypto.<span class="f">seal</span>(key, <span class="b">to_bytes</span>(session_json), b<span class="s">&quot;session&quot;</span>);
 <span class="k">let</span> back = crypto.<span class="f">open</span>(key, box ?? b<span class="s">&quot;&quot;</span>, b<span class="s">&quot;session&quot;</span>);   <span class="c">// err if tampered</span></code></pre></div>
 <p><strong>Signatures.</strong> Keys use the raw forms JWK and JWS use. Ed25519 has a 32-byte private seed, a 32-byte public key and a 64-byte signature. ECDSA P-256 with SHA-256 (JWS ES256) has a 32-byte private scalar, a 65-byte uncompressed public point (<code>0x04 || x || y</code>) and a 64-byte <code>r || s</code> signature. RSA keys are PEM text.</p>
 <div class="tablewrap"><table><thead><tr><th></th><th>Ed25519</th><th>ECDSA P-256</th><th>RSA (SHA-256)</th></tr></thead><tbody><tr><td>new key</td><td><code>ed25519_generate()</code></td><td><code>ecdsa_p256_generate()</code></td><td><code>rsa_generate(bits)</code> (PEM)</td></tr><tr><td>public key</td><td><code>ed25519_public_key(priv)</code></td><td><code>ecdsa_p256_public_key(priv)</code></td><td><code>rsa_public_n(pem)</code>, <code>rsa_public_e(pem)</code></td></tr><tr><td>sign</td><td><code>ed25519_sign(priv, msg)</code></td><td><code>ecdsa_p256_sign_sha256(priv, msg)</code></td><td><code>rsa_sign_sha256(pem, msg)</code> (RS256), <code>rsa_sign_pss_sha256</code> (PS256)</td></tr><tr><td>verify</td><td><code>ed25519_verify(pub, msg, sig)</code></td><td><code>ecdsa_p256_verify_sha256(pub, msg, sig)</code></td><td><code>rsa_verify_sha256(n, e, msg, sig)</code>, <code>rsa_verify_pss_sha256</code></td></tr><tr><td>from PEM</td><td><code>ed25519_private_from_pem</code>, <code>ed25519_public_from_pem</code></td><td><code>ecdsa_p256_private_from_pem</code>, <code>ecdsa_p256_public_from_pem</code></td><td>(sign takes PEM)</td></tr><tr><td>to PEM</td><td><code>ed25519_private_to_pem(priv)</code></td><td><code>ecdsa_p256_private_to_pem(priv)</code></td><td>(already PEM)</td></tr><tr><td>encrypt</td><td></td><td></td><td><code>rsa_encrypt_oaep_sha256(pem, data)</code>, <code>rsa_encrypt_oaep_sha1</code></td></tr><tr><td>decrypt</td><td></td><td></td><td><code>rsa_decrypt_oaep_sha256(pem, data)</code>, <code>rsa_decrypt_oaep_sha1</code></td></tr></tbody></table></div>
@@ -413,7 +443,7 @@ log.<span class="f">warn</span>(<span class="f">fault_timeout</span>());</code><
 <h4 id="sql"><code>sql</code><a class="anchor" href="#sql" aria-label="Link to this section">#</a></h4>
 <p>A SQLite driver (linked automatically, only when a program imports <code>sql</code>). Connections and prepared statements are opaque <code>rawptr</code> handles, exactly like <code>net.tls_*</code>; free them with <code>sql.close</code> / <code>sql.finalize</code>. <strong>Every fallible call returns <code>result[_, str]</code> whose error is SQLite&#x27;s own message</strong> — <code>no such table: users</code>, <code>near &quot;SELCT&quot;: syntax error</code>, <code>UNIQUE constraint failed: users.id</code> — so a bad query stays as visible as a bad socket read (<code>guard let … else let e = err_of(r)</code>), never a silent <code>null</code>. The column getters are infallible (SQLite coerces types; an out-of-range index is a programming error, returning <code>0</code> / <code>&quot;&quot;</code>), so they return bare values.</p>
 <div class="tablewrap"><table><thead><tr><th>Function</th><th>Signature</th></tr></thead><tbody><tr><td><code>sql.open(path)</code></td><td><code>result[rawptr, str]</code> — <code>&quot;:memory:&quot;</code> for in-memory</td></tr><tr><td><code>sql.close(db)</code></td><td>—</td></tr><tr><td><code>sql.exec(db, sql)</code></td><td><code>result[int, str]</code> — runs statement(s), returns rows changed</td></tr><tr><td><code>sql.last_insert_id(db)</code></td><td><code>int</code></td></tr><tr><td><code>sql.prepare(db, sql)</code></td><td><code>result[rawptr, str]</code></td></tr><tr><td><code>sql.finalize(st)</code></td><td>—</td></tr><tr><td><code>sql.reset(st)</code></td><td><code>result[bool, str]</code> — clears bindings, re-run</td></tr><tr><td><code>sql.bind_int/bind_float/bind_text/bind_blob(st, idx, v)</code></td><td><code>result[bool, str]</code> — <code>idx</code> is 1-based</td></tr><tr><td><code>sql.bind_null(st, idx)</code></td><td><code>result[bool, str]</code></td></tr><tr><td><code>sql.step(st)</code></td><td><code>result[bool, str]</code> — <code>true</code> = row ready, <code>false</code> = done</td></tr><tr><td><code>sql.col_count(st)</code></td><td><code>int</code></td></tr><tr><td><code>sql.col_name(st, i)</code> / <code>col_text(st, i)</code></td><td><code>str</code> — <code>i</code> is 0-based</td></tr><tr><td><code>sql.col_int(st, i)</code></td><td><code>int</code></td></tr><tr><td><code>sql.col_float(st, i)</code></td><td><code>float</code></td></tr><tr><td><code>sql.col_blob(st, i)</code></td><td><code>bytes</code></td></tr><tr><td><code>sql.col_is_null(st, i)</code></td><td><code>bool</code></td></tr></tbody></table></div>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;sql&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;sql&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;log&quot;</span>;
 
 <span class="k">let</span> dr = sql.<span class="f">open</span>(<span class="s">&quot;app.db&quot;</span>);
@@ -441,7 +471,7 @@ sql.<span class="f">close</span>(db);</code></pre></div>
 <p>Query complexity is capped per connection so SQLite&#x27;s recursion stays inside the task stack: at most <strong>50 terms in a compound <code>SELECT</code></strong> (<code>UNION</code>/<code>INTERSECT</code>/<code>EXCEPT</code>) and an <strong>expression depth of 400</strong> (roughly, terms in one <code>AND</code>/<code>OR</code> chain). SQLite&#x27;s stock limits of 500 and 1000 allow a single legal query to want ~325KB of C stack, which would force a task stack far too fat to spawn per connection. Long <code>IN</code> lists, wide result sets, and recursive CTEs are <em>not</em> affected — they don&#x27;t recurse. Exceeding a cap is a normal error through <code>result[_, str]</code> (<code>too many terms in compound SELECT</code>), not a crash.</p>
 <h4 id="pg"><code>pg</code><a class="anchor" href="#pg" aria-label="Link to this section">#</a></h4>
 <p>A <strong>PostgreSQL</strong> client, written in slang over <code>net</code>. A query waiting on the server parks its task like any socket read, so unlike <code>sql</code> it does not block a worker thread: a server can hold many database connections on a handful of threads. Errors keep the server&#x27;s own text and SQLSTATE, through the same <code>result[_, str]</code> story as every other package.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;pg&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;pg&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;time&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;log&quot;</span>;
 
@@ -472,13 +502,13 @@ sql.<span class="f">close</span>(db);</code></pre></div>
 <div class="tablewrap"><table><thead><tr><th>Getter</th><th>Reads</th></tr></thead><tbody><tr><td><code>pg.get_text(rows, r, c)</code></td><td>any column, in Postgres&#x27;s text form (dates, <code>numeric</code>, <code>uuid</code>, <code>json</code>)</td></tr><tr><td><code>pg.get_int(rows, r, c)</code></td><td><code>int2</code>, <code>int4</code>, <code>int8</code>, <code>oid</code>, and a whole-number <code>numeric</code> (what <code>sum()</code> of an integer column returns)</td></tr><tr><td><code>pg.get_float(rows, r, c)</code></td><td><code>float4</code>, <code>float8</code>, <code>numeric</code>, the integer types</td></tr><tr><td><code>pg.get_bool(rows, r, c)</code></td><td><code>bool</code></td></tr><tr><td><code>pg.get_bytes(rows, r, c)</code></td><td><code>bytea</code></td></tr><tr><td><code>pg.get_time(rows, r, c)</code></td><td><code>timestamptz</code> as a <code>timez.Time</code> (<code>result</code>: err for infinity or a BC date); a <code>timestamp</code> without a zone is read as UTC</td></tr><tr><td><code>pg.get_decimal(rows, r, c)</code></td><td><code>numeric</code> and the integer types as an exact <code>decimal.Decimal</code>, at Postgres&#x27;s scale (<code>result</code>: err for NaN, infinity or more than 38 digits)</td></tr><tr><td><code>pg.is_null(rows, r, c)</code></td><td>whether the cell is NULL</td></tr></tbody></table></div>
 <p>The getters <strong>panic</strong> on NULL, on a column of a type they do not read, on an unknown column name and on an index out of range, with a message naming the column (<code>column &#x27;email&#x27; is NULL in row 3; check pg.is_null before pg.get_text</code>). Those are disagreements between the query and the code reading it — bugs to see, not conditions to handle — and inventing a <code>0</code> or <code>&quot;&quot;</code> would hide them. A nullable column is checked with <code>is_null</code> first. Like sqlx&#x27;s <code>get</code>, not Go&#x27;s <code>Scan</code>.</p>
 <p><code>pg.rows_as[T](rows) -&gt; result[[T], str]</code> binds columns by exact field name and decodes directly into value or <code>gc</code> structs, without rendering rows as JSON. Annotate the result, for example:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">struct</span> User { id: <span class="t">int</span>, email: <span class="t">str</span>, nickname: <span class="t">opt</span>[<span class="t">str</span>] }
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">struct</span> User { id: <span class="t">int</span>, email: <span class="t">str</span>, nickname: <span class="t">opt</span>[<span class="t">str</span>] }
 <span class="k">let</span> converted: <span class="t">result</span>[[User], <span class="t">str</span>] = pg.<span class="f">rows_as</span>(rows);</code></pre></div>
 <p>Extra columns are ignored. Missing optional fields and SQL NULL become <code>none</code>; missing required fields and incompatible cells return an error naming the row and field. Binary integers and booleans retain their types, numeric values retain integer precision, and JSON/JSONB columns decode into nested types. <code>bytea</code> reads into <code>bytes</code> (or a base64 <code>str</code>); timestamps read into <code>timez.Time</code> or RFC 3339 strings, with a zone-free timestamp read as UTC. Infinity and BC timestamps remain strings and cannot fit a <code>Time</code>. String-keyed maps and optional row wrappers are also supported. Duplicate names use the first column for structs and the last for maps, as JSON decoding does. Scalar row targets are rejected; declare a row struct.</p>
 <p>The hermetic <code>bench/pg_rows_as/main.sl</code> compares this with the previous Zokor JSON adapter on the same 1,000-row fixture. Intel macOS, ABBA x4: 3.792 ms versus 0.263 ms median per conversion; 23,040 versus 3,671 allocations and 1,864,778 versus 255,780 allocated bytes per conversion. These measure mapping alone, excluding database and request latency.</p>
 <h5 id="pool">Pool<a class="anchor" href="#pool" aria-label="Link to this section">#</a></h5>
 <p><code>pg.new_pool(url, max_open)</code> parses the url and connects nothing until first use. <code>pool_query</code> and <code>pool_exec</code> take a connection, run, and give it back, so they cannot leak one. A transaction needs several statements on one connection, so it uses <code>acquire</code> and <code>release</code>:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> cr = pg.<span class="f">acquire</span>(pool, dl);
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> cr = pg.<span class="f">acquire</span>(pool, dl);
 <span class="k">guard</span> <span class="k">let</span> c = cr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(cr) { <span class="k">return</span>; }
 pg.<span class="f">exec</span>(c, <span class="s">&quot;BEGIN&quot;</span>, dl);
 <span class="k">let</span> moved = pg.<span class="f">query</span>(c, <span class="s">&quot;UPDATE accounts SET balance = balance - $1 WHERE id = $2&quot;</span>,
@@ -498,7 +528,7 @@ pg.<span class="f">release</span>(pool, c);</code></pre></div>
 <p>Authentication: SCRAM-SHA-256 (the default since Postgres 14), md5 and cleartext password. SCRAM checks that the <strong>server</strong> knows the password too: a server that skips its proof, or sends a wrong one, is refused.</p>
 <h5 id="timeouts-and-errors">Timeouts and errors<a class="anchor" href="#timeouts-and-errors" aria-label="Link to this section">#</a></h5>
 <p>A server-side error — a syntax error, a constraint violation — leaves the connection usable. Anything that leaves the stream at an unknown point breaks it: an I/O error, a protocol violation, a deadline. After a <code>&quot;timeout&quot;</code> the server may still be running the query, so the driver asks it to stop with a cancel request on a separate connection, from its own task, and returns immediately. A broken connection only returns <code>connection is broken: &lt;why&gt;</code>.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> r = pg.<span class="f">query</span>(c, <span class="s">&quot;INSERT INTO users (email) VALUES ($1)&quot;</span>, [pg.<span class="f">arg_text</span>(email)], dl);
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> r = pg.<span class="f">query</span>(c, <span class="s">&quot;INSERT INTO users (email) VALUES ($1)&quot;</span>, [pg.<span class="f">arg_text</span>(email)], dl);
 <span class="k">guard</span> <span class="k">let</span> ok_ = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
     <span class="k">if</span> pg.<span class="f">sqlstate</span>(e) == <span class="s">&quot;23505&quot;</span> {     <span class="c">// unique_violation</span>
         <span class="k">return</span> <span class="f">respond</span>(<span class="n">409</span>, <span class="s">&quot;email already registered&quot;</span>);
@@ -508,7 +538,7 @@ pg.<span class="f">release</span>(pool, c);</code></pre></div>
 <p>A <code>Conn</code> is safe to share between tasks (calls take turns), but a pool is the better tool for that.</p>
 <h5 id="streaming">Streaming<a class="anchor" href="#streaming" aria-label="Link to this section">#</a></h5>
 <p><code>pg.stream</code> runs a query like <code>query</code> but hands the rows over one at a time, so memory holds one row however large the result, and the server is held back by TCP flow control rather than the client reading ahead:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> sr = pg.<span class="f">stream</span>(c, <span class="s">&quot;SELECT id, body FROM events ORDER BY id&quot;</span>, [], dl);
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> sr = pg.<span class="f">stream</span>(c, <span class="s">&quot;SELECT id, body FROM events ORDER BY id&quot;</span>, [], dl);
 <span class="k">guard</span> <span class="k">let</span> rows = sr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(sr) { <span class="k">return</span>; }
 <span class="k">while</span> <span class="k">true</span> {
     <span class="k">let</span> nr = pg.<span class="f">next_row</span>(c, rows, dl);
@@ -520,13 +550,13 @@ pg.<span class="f">release</span>(pool, c);</code></pre></div>
 <div class="tablewrap"><table><thead><tr><th>Function</th><th>Signature</th></tr></thead><tbody><tr><td><code>pg.stream(c, sql, args, deadline)</code></td><td><code>result[Rows, str]</code></td></tr><tr><td><code>pg.next_row(c, rows, deadline)</code></td><td><code>result[bool, str]</code> — <code>false</code> after the last row</td></tr><tr><td><code>pg.stream_close(c, rows, deadline)</code></td><td><code>result[bool, str]</code></td></tr></tbody></table></div>
 <h5 id="copy">COPY<a class="anchor" href="#copy" aria-label="Link to this section">#</a></h5>
 <p><code>COPY … FROM STDIN</code> bulk-loads data in COPY&#x27;s text or CSV format, far faster than one <code>INSERT</code> per row; <code>COPY … TO STDOUT</code> dumps it.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> n = pg.<span class="f">copy_from</span>(c, <span class="s">&quot;COPY users (id, email) FROM STDIN (FORMAT csv)&quot;</span>,
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> n = pg.<span class="f">copy_from</span>(c, <span class="s">&quot;COPY users (id, email) FROM STDIN (FORMAT csv)&quot;</span>,
                      <span class="b">to_bytes</span>(<span class="s">&quot;1,a@example.com\n2,b@example.com\n&quot;</span>), dl);
 <span class="k">let</span> dump = pg.<span class="f">copy_to</span>(c, <span class="s">&quot;COPY users TO STDOUT (FORMAT csv)&quot;</span>, dl);</code></pre></div>
 <div class="tablewrap"><table><thead><tr><th>Function</th><th>Signature</th></tr></thead><tbody><tr><td><code>pg.copy_from(c, sql, data, deadline)</code></td><td><code>result[int, str]</code> — rows loaded</td></tr><tr><td><code>pg.copy_in_start(c, sql, deadline)</code></td><td><code>result[bool, str]</code></td></tr><tr><td><code>pg.copy_in_send(c, data, deadline)</code></td><td><code>result[bool, str]</code> — any split, not only whole rows</td></tr><tr><td><code>pg.copy_in_end(c, deadline)</code></td><td><code>result[int, str]</code> — rows loaded</td></tr><tr><td><code>pg.copy_in_abort(c, reason, deadline)</code></td><td><code>result[bool, str]</code> — the server discards everything</td></tr><tr><td><code>pg.copy_to(c, sql, deadline)</code></td><td><code>result[bytes, str]</code> — buffered, up to the 256 MiB limit</td></tr><tr><td><code>pg.copy_out_start(c, sql, deadline)</code></td><td><code>result[bool, str]</code></td></tr><tr><td><code>pg.copy_out_next(c, deadline)</code></td><td><code>result[opt[bytes], str]</code> — a row&#x27;s worth, <code>none</code> at the end</td></tr></tbody></table></div>
 <p>The start/send/end and start/next forms stream, for data that should not be held in memory at once. A bad row fails the whole COPY — the error comes from <code>copy_in_end</code> (or <code>copy_from</code>) with its SQLSTATE, and nothing was loaded. A COPY of the wrong direction is refused with <code>not a COPY … FROM STDIN statement</code>, and a COPY through <code>query</code> or <code>exec</code> fails with a message pointing here, the connection intact either way. Only the text and CSV formats are meant: binary COPY data passes through untouched but this package does not build or parse it.</p>
 <h5 id="listen-notify">LISTEN / NOTIFY<a class="anchor" href="#listen-notify" aria-label="Link to this section">#</a></h5>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>pg.<span class="f">listen</span>(c, <span class="s">&quot;jobs&quot;</span>, dl);
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code>pg.<span class="f">listen</span>(c, <span class="s">&quot;jobs&quot;</span>, dl);
 <span class="k">while</span> <span class="k">true</span> {
     <span class="k">let</span> wr = pg.<span class="f">wait_notification</span>(c, <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">30000000000</span>));
     <span class="k">guard</span> <span class="k">let</span> got = wr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(wr) { log.<span class="f">error</span>(e); <span class="k">break</span>; }
@@ -543,7 +573,7 @@ pg.<span class="f">release</span>(pool, c);</code></pre></div>
 <p><strong>Not supported:</strong> binary floats, building or parsing binary COPY data, Kerberos/GSSAPI, SCRAM channel binding (<code>SCRAM-SHA-256-PLUS</code>), multiple hosts in one url, and SASLprep normalisation of non-ASCII passwords (an ASCII password is unaffected).</p>
 <h4 id="mysql"><code>mysql</code><a class="anchor" href="#mysql" aria-label="Link to this section">#</a></h4>
 <p>A MySQL and MariaDB client over TCP, TLS or a Unix socket, with prepared statements, streamed results and a pool. The API matches <code>pg</code>&#x27;s, so code moves between the two with little change.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;mysql&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;mysql&quot;</span>;
 
 <span class="k">let</span> cr = mysql.<span class="f">connect</span>(<span class="s">&quot;mysql://app:secret@db.internal:3306/shop&quot;</span>, deadline);
 <span class="k">guard</span> <span class="k">let</span> c = cr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(cr) { <span class="f">panic</span>(e); }
@@ -573,7 +603,7 @@ mysql.<span class="f">pool_query</span>(p, <span class="s">&quot;SELECT 1&quot;<
 <h4 id="redis"><code>redis</code><a class="anchor" href="#redis" aria-label="Link to this section">#</a></h4>
 <p>A <strong>Redis</strong> client, written in slang over <code>net</code> like <code>pg</code>: commands waiting on the server park the task on the reactor instead of blocking a worker thread. Errors keep the server&#x27;s own text through the same <code>result[_, str]</code> story as every other package.</p>
 <p>The protocol core is usable now; pooling, cluster routing and pub/sub are all here too. <code>connect</code> dials with a deadline, runs <code>AUTH</code> and <code>SELECT</code>, and hands back a <code>Conn</code> that any task may share -- one round trip at a time, serialized by an internal lock. <code>do</code> runs one command; a reply that violates the protocol breaks the connection for good, while a server-side command error only fails that call. Heavier use goes through <code>Pool</code> (shared connections with idle probing), <code>Cluster</code> (slot routing with MOVED/ASK handling and same-slot checks), explicit <code>MULTI</code> transactions on direct Conns, and pull-model pub/sub where the caller drives <code>sub_next</code> (a 4-line pump feeds a <code>chan</code> when push suits better).</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;redis&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;redis&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;time&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;log&quot;</span>;
 
@@ -611,7 +641,7 @@ redis.<span class="f">close</span>(c);</code></pre></div>
 <p><strong>Not supported yet:</strong> consumer groups, RESP3, replica reads.</p>
 <h4 id="nats"><code>nats</code><a class="anchor" href="#nats" aria-label="Link to this section">#</a></h4>
 <p>A client for <a href="https://nats.io">NATS</a>: publish, subscribe (plain and queue groups), headers, request/reply, flush and drain, keepalive, and automatic reconnection with resubscription. It covers core NATS, not JetStream.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;nats&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;nats&quot;</span>;
 
 <span class="k">let</span> r = nats.<span class="f">connect</span>(<span class="s">&quot;nats://127.0.0.1:4222&quot;</span>, deadline);
 <span class="k">guard</span> <span class="k">let</span> nc = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }
@@ -637,7 +667,7 @@ nats.<span class="f">drain</span>(nc, deadline);                                
 <p><code>request</code> uses one shared inbox subscription for every request on the connection. If no subscriber is listening, the server&#x27;s &quot;no responders&quot; status makes it fail at once rather than at its deadline. A <code>-ERR &#x27;Permissions Violation&#x27;</code> leaves the connection up; any other <code>-ERR</code> or a malformed frame drops and redials it. Subjects are validated (no whitespace, no empty tokens, no wildcards in a publish), and header names and values are refused if they would inject protocol lines.</p>
 <h4 id="s3"><code>s3</code><a class="anchor" href="#s3" aria-label="Link to this section">#</a></h4>
 <p>S3-compatible object storage, signed with AWS Signature Version 4: AWS S3, Cloudflare R2, MinIO and the rest.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;s3&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;s3&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;proc&quot;</span>;
 
 <span class="k">let</span> r = s3.<span class="f">new_client</span>(<span class="s">&quot;https://s3.eu-west-1.amazonaws.com&quot;</span>, <span class="s">&quot;eu-west-1&quot;</span>, access_key, secret_key);
@@ -664,7 +694,7 @@ s3.<span class="f">presign_put</span>(c, <span class="s">&quot;uploads&quot;</sp
 <p><strong>Matching is linear time, always.</strong> There is no backtracking, so the classic catastrophic pattern <code>(a+)+$</code> — which makes a backtracking engine take exponential time on a hostile input — runs in the same microseconds here as any other pattern. That is the point of choosing this engine for a server language: patterns and subjects both arrive from the network. The price is the RE2/Go one, and it is not negotiable: <strong>no backreferences and no lookaround</strong>. Both require backtracking; <code>(?=...)</code> and friends are a compile error, not a silent mis-parse.</p>
 <div class="tablewrap"><table><thead><tr><th>Function</th><th>Signature</th></tr></thead><tbody><tr><td><code>regex.compile(pat)</code></td><td><code>result[rawptr, str]</code></td></tr><tr><td><code>regex.free(re)</code></td><td>—</td></tr><tr><td><code>regex.groups(re)</code></td><td><code>int</code> — number of capture groups</td></tr><tr><td><code>regex.is_match(re, s)</code></td><td><code>bool</code> — <code>s</code> is a <code>str</code></td></tr><tr><td><code>regex.is_match_bytes(re, b)</code></td><td><code>bool</code> — <code>b</code> is <code>bytes</code></td></tr><tr><td><code>regex.find(re, s)</code> / <code>find_bytes(re, b)</code></td><td><code>[int]</code></td></tr><tr><td><code>regex.find_at(re, s, from)</code> / <code>find_bytes_at(re, b, from)</code></td><td><code>[int]</code></td></tr></tbody></table></div>
 <p><code>find</code> returns byte offsets as <code>[start, end, g1start, g1end, ...]</code>, or an <strong>empty list</strong> when there is no match — so the result is GC-owned and there is no match handle to leak. <code>find_at</code> starts at an offset, which is how you walk every match.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;regex&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;regex&quot;</span>;
 
 <span class="k">let</span> cr = regex.<span class="f">compile</span>(<span class="s">&quot;(\\d{4})-(\\d{2})-(\\d{2})&quot;</span>);
 <span class="k">guard</span> <span class="k">let</span> re = cr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(cr) {
@@ -688,7 +718,7 @@ regex.<span class="f">free</span>(re);</code></pre></div>
 <p>Because matching never grows the task stack, regex is cheap to use per connection: 600 concurrently-live tasks each matching and then parking peak at <strong>3.9MB RSS</strong> — about 17x lighter than the same shape holding <code>sql</code> connections (65.9MB), which does grow every task&#x27;s stack.</p>
 <h4 id="http2"><code>http2</code><a class="anchor" href="#http2" aria-label="Link to this section">#</a></h4>
 <p>HTTP/2 framing and HPACK header compression (RFC 9113, RFC 7541), written in slang — the frame codec is what the bitwise operators were added for.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;http2&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;http2&quot;</span>;
 
 <span class="k">let</span> f = http2.<span class="f">decode</span>(buf, <span class="n">0</span>, <span class="n">16384</span>);        <span class="c">// one frame, bounds-checked</span>
 <span class="k">guard</span> <span class="k">let</span> fr = f <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(f) { <span class="k">return</span>; }
@@ -708,9 +738,9 @@ regex.<span class="f">free</span>(re);</code></pre></div>
 <p>Measured: four 500ms requests multiplexed on one connection complete in <strong>0.53s</strong>; served one at a time they would take about 2.0s.</p>
 <p>The connection is addressed by a <strong><code>Transport</code></strong>, not a <code>link</code>. <code>link</code> is move-only, so <code>spawn writer_task(c)</code> consumes it and the reader can no longer use it — the two-task design is impossible with that type. A <code>Transport</code> is freely copyable, and one reader plus one writer in opposite directions on a socket is safe. <code>net.recv</code> also returns <code>bytes</code> directly, so no byte-at-a-time copy sits on the read path.</p>
 <p>A <code>Transport</code> is either a plain fd or a TLS handle, and everything above it is identical either way:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>http2.<span class="f">transport_fd</span>(fd)     <span class="c">// h2c: cleartext, prior knowledge</span>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code>http2.<span class="f">transport_fd</span>(fd)     <span class="c">// h2c: cleartext, prior knowledge</span>
 http2.<span class="f">transport_tls</span>(ssl)   <span class="c">// h2 over TLS, from net.tls_accept</span></code></pre></div>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">fn</span> <span class="f">handle</span>(stream: <span class="t">i32</span>, path: <span class="t">str</span>, wch: <span class="t">chan</span>[http2.WMsg]) {
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">fn</span> <span class="f">handle</span>(stream: <span class="t">i32</span>, path: <span class="t">str</span>, wch: <span class="t">chan</span>[http2.WMsg]) {
     <span class="k">let</span> hs: [http2.Header] = [];
     <span class="c">// The body goes over UNFRAMED: the writer owns the peer&#x27;s windows,</span>
     <span class="c">// so it decides how it is cut into DATA frames and when each may go.</span>
@@ -751,7 +781,7 @@ http2.<span class="f">transport_tls</span>(ssl)   <span class="c">// h2 over TLS
 <h5 id="tls-and-alpn">TLS and ALPN<a class="anchor" href="#tls-and-alpn" aria-label="Link to this section">#</a></h5>
 <p>Browsers speak HTTP/2 <strong>only</strong> over TLS, and only when ALPN negotiates it — there is no in-band upgrade in a browser. So h2c alone, however conformant, cannot serve one.</p>
 <p>The server advertises what it can speak, and then checks what was actually chosen:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>net.<span class="f">tls_ctx_alpn</span>(sctx, <span class="s">&quot;h2,http/1.1&quot;</span>);     <span class="c">// offer both, h2 preferred</span>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code>net.<span class="f">tls_ctx_alpn</span>(sctx, <span class="s">&quot;h2,http/1.1&quot;</span>);     <span class="c">// offer both, h2 preferred</span>
 <span class="c">// ... net.tls_accept(lfd, sctx) -&gt; ssl</span>
 <span class="k">if</span> !http2.<span class="f">alpn_is_h2</span>(net.<span class="f">tls_alpn</span>(ssl)) {
     <span class="c">// the peer picked http/1.1; serve it as HTTP/1.1 or hang up</span>
@@ -770,7 +800,7 @@ http2.<span class="f">transport_tls</span>(ssl)   <span class="c">// h2 over TLS
 <p><code>tests/http2_flood</code> drives both shapes, resetting and not, and fails if either exceeds the cap.</p>
 <h5 id="client">Client<a class="anchor" href="#client" aria-label="Link to this section">#</a></h5>
 <p>The same pieces, from the other end: a <code>Transport</code>, one <code>writer_task</code>, one reader. <code>client_start</code> performs the handshake and returns a <code>Client</code> whose own reader task routes each response to the task that asked for it, so <code>client_call</code> is safe from any number of tasks on one connection:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> started = http2.<span class="f">client_start</span>(http2.<span class="f">transport_tls</span>(ssl), http2.<span class="f">default_limits</span>());
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> started = http2.<span class="f">client_start</span>(http2.<span class="f">transport_tls</span>(ssl), http2.<span class="f">default_limits</span>());
 <span class="k">guard</span> <span class="k">let</span> c = started <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(started) { <span class="k">return</span>; }
 <span class="k">let</span> none_h: [http2.Header] = [];
 <span class="k">let</span> r = http2.<span class="f">client_call</span>(c, <span class="s">&quot;GET&quot;</span>, <span class="s">&quot;https&quot;</span>, <span class="s">&quot;api.example&quot;</span>, <span class="s">&quot;/v1/users&quot;</span>, none_h,
@@ -786,7 +816,7 @@ http2.<span class="f">client_close</span>(c);</code></pre></div>
 <p><code>PRIORITY</code> is validated but not acted on: it is deprecated in RFC 9113 §5.3.2, so ignoring the prioritisation is conformant, but a malformed frame is still rejected as the connection error it is (§6.3) rather than waved through to desync the stream. No browser has been run against the TLS path yet — the machinery is there and tested against slang&#x27;s own client, but a real browser is different evidence.</p>
 <h4 id="strings"><code>strings</code><a class="anchor" href="#strings" aria-label="Link to this section">#</a></h4>
 <p>Search, trim, case, split and join on <code>str</code>. The package cannot be named <code>str</code> because that token is the type — the same reason Go calls its own <code>strings</code>.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;strings&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;strings&quot;</span>;
 
 strings.<span class="f">find</span>(<span class="s">&quot;hello world&quot;</span>, <span class="s">&quot;world&quot;</span>);   <span class="c">// 6, or -1</span>
 strings.<span class="f">rfind</span>(<span class="s">&quot;a/b/c&quot;</span>, <span class="s">&quot;/&quot;</span>);            <span class="c">// 3</span>
@@ -820,7 +850,7 @@ strings.<span class="f">escape_js</span>(<span class="s">&quot;it&#x27;s &lt;/sc
 <ul><li><strong>Indices are byte offsets and the case operations are ASCII-only.</strong> <code>str</code> is UTF-8 bytes, and these are byte operations, which is what protocol text (header names, methods, config keys) wants. For text people type, use <code>unicode</code>: characters, case folding and normalisation.</li><li><strong><code>slice</code> clamps rather than panics.</strong> Slicing is how you narrow a string you just searched, and a <code>find</code> that returned -1 on the line above should not turn the next line into a crash. A negative index counts from the end.</li><li><strong><code>split</code> and <code>join</code> are exact inverses.</strong> Adjacent separators produce empty elements, so the result always has <code>count(s, sep) + 1</code> elements and <code>join(split(s, sep), sep) == s</code> for any non-empty separator. An empty separator splits into single bytes.</li></ul>
 <h4 id="unicode"><code>unicode</code><a class="anchor" href="#unicode" aria-label="Link to this section">#</a></h4>
 <p>Text as people write it: UTF-8 validation, characters rather than bytes, case-insensitive comparison and canonical normalisation, from the Unicode 18.0 tables. Use it for usernames, display names, length limits and search; <code>strings</code> stays the tool for protocol text.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;unicode&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;unicode&quot;</span>;
 
 unicode.<span class="f">valid</span>(s);                       <span class="c">// strict UTF-8: no overlongs or surrogates</span>
 unicode.<span class="f">valid_bytes</span>(body);              <span class="c">// the same check on bytes, before to_str</span>
@@ -841,7 +871,7 @@ unicode.<span class="f">is_nfc</span>(name);                   <span class="c">/
 <p>The tables come from the Unicode data files under the Unicode License v3. Its notice is compiled into every program that imports <code>unicode</code>, so the binary carries it wherever it goes; see <code>THIRD_PARTY.md</code> and <code>LICENSES/Unicode-3.0.txt</code>.</p>
 <h4 id="encoding"><code>encoding</code><a class="anchor" href="#encoding" aria-label="Link to this section">#</a></h4>
 <p>Hex, base64, base64url, base32, percent-encoding and query strings — the ways arbitrary bytes travel through a channel that only carries text. The package also converts binary64 floats to and from little-endian bytes for binary protocols such as BSON.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;encoding&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;encoding&quot;</span>;
 
 encoding.<span class="f">hex_encode</span>(crypto.<span class="f">sha256</span>(b<span class="s">&quot;abc&quot;</span>));   <span class="c">// &quot;ba7816bf8f01cfea...&quot;</span>
 encoding.<span class="f">base64_encode</span>(b<span class="s">&quot;aladdin:opensesame&quot;</span>);<span class="c">// HTTP Basic credentials</span>
@@ -866,7 +896,7 @@ encoding.<span class="f">query_keys</span>(q);                                  
 <p>Percent-escapes are emitted uppercase (RFC 3986 §2.1) and hex digests lowercase (what <code>sha256sum</code>, git and every API that returns one use). Both decoders accept either case.</p>
 <h4 id="httpc"><code>httpc</code><a class="anchor" href="#httpc" aria-label="Link to this section">#</a></h4>
 <p>An HTTP/1.1 <strong>client</strong> — the mirror of <code>http</code>, which serves. Speaks <code>http://</code> and <code>https://</code>, follows redirects, and decodes chunked responses.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;httpc&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;httpc&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;time&quot;</span>;
 
 <span class="k">let</span> dl = <span class="b">until_of</span>(time.<span class="f">mono</span>() + <span class="n">5000000000</span>);   <span class="c">// 5s for the whole request</span>
@@ -891,7 +921,7 @@ req.body = <span class="b">to_bytes</span>(payload);
 <ul><li><strong>A 404 is a <code>Response</code>, not an <code>err</code>.</strong> The <code>result</code> is about whether the exchange happened — DNS, connect, TLS, framing. A server that answers &quot;no&quot; answered. Collapsing the two would make a 404 and a connection refusal indistinguishable at the call site, and they need different handling.</li><li><strong>Certificates are verified, and there is no flag to stop that.</strong> Verified against <code>expired</code>, <code>self-signed</code> and <code>wrong.host</code> on badssl.com: all three are refused, a valid one is accepted. For an internal service signed by a private CA, set <code>ca_path</code> to that bundle — the answer is a different trust anchor, never a disabled check.</li><li><strong>Credentials do not survive a cross-origin redirect.</strong> <code>Authorization</code>, <code>Cookie</code> and <code>Proxy-Authorization</code> are dropped when the scheme, host or port changes, because the server that sent the <code>Location</code> chose where it points, and that is exactly how a token gets exfiltrated. Same-origin redirects keep them.</li><li><strong>Redirect method rules follow browsers, not the RFC&#x27;s original wording.</strong> 303 always becomes GET; 301 and 302 after a POST also become GET and drop the body, which is what every browser and curl do and therefore what servers expect. 307 and 308 exist to preserve the method, so they do. A redirect loop stops at <code>max_redirects</code> and hands back the last 3xx rather than spinning.</li><li><strong>Everything a server can make you allocate has a ceiling</strong> — 64 KiB of headers, 32 MiB of body, and a bounded chunk-size line. A client talks to servers it does not control, so a buffer sized on their say-so is a denial of service arriving through an ordinary call.</li></ul>
 <h5 id="connection-pooling">Connection pooling<a class="anchor" href="#connection-pooling" aria-label="Link to this section">#</a></h5>
 <p><code>httpc.get</code> and friends are one-shot: a connection per request, closed afterwards, with <code>Connection: close</code> sent so the server does not hold it open. A <strong><code>Client</code></strong> keeps idle connections and reuses them — up to <code>max_idle_per_host</code> per origin (default 4), for <code>idle_timeout</code> nanoseconds (default 30s), and 64 across all origins.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> c = httpc.<span class="f">new_client</span>();          <span class="c">// share one across tasks</span>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> c = httpc.<span class="f">new_client</span>();          <span class="c">// share one across tasks</span>
 <span class="k">let</span> r = httpc.<span class="f">client_get</span>(c, <span class="s">&quot;https://api.example.com/v1/items&quot;</span>, dl);</code></pre></div>
 <p>The one-shot functions ARE a client — one that keeps nothing — so framing, redirects, decompression and every security rule are one code path, and cannot drift between the two.</p>
 <p>A <code>Client</code> is safe to share between tasks: the pool is behind a <code>mutex</code>. Its <code>dials</code> and <code>reuses</code> fields and <code>httpc.idle_count(c)</code> make its behaviour checkable rather than asserted.</p>
@@ -902,7 +932,7 @@ req.body = <span class="b">to_bytes</span>(payload);
 <ul><li>The decoded size is held to the same 32 MiB ceiling as a plain body. Without that the wire limit would mean nothing: 32 MiB of gzip holds tens of gigabytes.</li><li><code>deflate</code> is tried as zlib (what RFC 9110 says it means) and then as raw DEFLATE (what a real share of servers send under that name).</li><li>After decoding, <code>Content-Encoding</code> and <code>Content-Length</code> are removed: both describe the bytes that crossed the wire, not the body in hand.</li><li>An encoding the client did not ask for and cannot read is left alone, header included — visible, not silent.</li></ul>
 <h5 id="cookies">Cookies<a class="anchor" href="#cookies" aria-label="Link to this section">#</a></h5>
 <p>RFC 6265, with RFC 6265bis&#x27;s rules for <code>Secure</code> and the <code>__Secure-</code> / <code>__Host-</code> prefixes. <strong>Off by default</strong> — the opposite of a browser, on purpose:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> c = httpc.<span class="f">new_client</span>();
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> c = httpc.<span class="f">new_client</span>();
 httpc.<span class="f">enable_cookies</span>(c);             <span class="c">// this Client now acts as ONE identity</span></code></pre></div>
 <p>A browser&#x27;s jar belongs to one person. A server&#x27;s <code>Client</code> is usually shared, one per process, used on behalf of every user it serves, and a jar there would store user A&#x27;s session cookie and send it on user B&#x27;s request. Go&#x27;s <code>http.Client</code> makes the same call. Turn the jar on for a <code>Client</code> that represents one identity: a scraper, a test driver, an integration with a login-based API.</p>
 <ul><li><strong>Cookies are applied per redirect hop.</strong> A cookie set by a <code>302</code> reaches the page it points to, which is how nearly every login works; a redirect to another host carries that host&#x27;s cookies, not the first one&#x27;s.</li><li><strong>Refused:</strong> a <code>Secure</code> cookie from <code>http://</code> (a network attacker could otherwise overwrite an https session); a <code>Domain</code> the host does not belong to; a bare single-label <code>Domain</code> such as <code>com</code>; a <code>Domain</code> that is part of an IP address; <code>__Host-</code> without <code>Secure</code>, or with a <code>Domain</code>, or with a path other than <code>/</code>; a line with no <code>=</code>; anything over 4096 bytes. <code>Secure</code> cookies are only ever sent over https.</li><li><strong>Scoping:</strong> a cookie set without <code>Domain</code> goes back to <em>exactly</em> that host (<code>127.0.0.1</code> and <code>localhost</code> are different scopes); <code>Path=/p</code> matches <code>/p</code> and <code>/p/x</code> but not <code>/pathx</code>. Longer paths are sent first.</li><li><strong>Expiry:</strong> <code>Max-Age</code> wins over <code>Expires</code> whatever order they arrive in, and a past date or <code>Max-Age=0</code> deletes. Dates are parsed with RFC 6265&#x27;s lenient algorithm, since servers send RFC 1123, RFC 850 with two-digit years and asctime alike; <code>httpc.parse_cookie_date</code> exposes it.</li><li><strong>Limits:</strong> 50 cookies per domain and 3000 in total, evicting the oldest, so a server flooding the jar pushes out its own cookies first.</li><li><strong><code>Response.set_cookies</code></strong> holds each <code>Set-Cookie</code> line separately. Use it rather than <code>headers[&quot;set-cookie&quot;]</code>: repeated headers are joined with <code>&quot;, &quot;</code>, and an <code>Expires</code> date contains a comma, so two joined lines cannot be split apart again.</li></ul>
@@ -910,7 +940,7 @@ httpc.<span class="f">enable_cookies</span>(c);             <span class="c">// t
 <p><strong>Not done, deliberately:</strong> no HTTP/2 client, no multipart bodies, no proxy support, no public-suffix list.</p>
 <h4 id="websocket"><code>websocket</code><a class="anchor" href="#websocket" aria-label="Link to this section">#</a></h4>
 <p>A WebSocket client (RFC 6455) over <code>ws://</code> and <code>wss://</code>, with permessage-deflate (RFC 7692) when asked for. In the Autobahn TestSuite&#x27;s client run (<code>tests/live/websocket</code>, 517 cases), 440 cases are OK, 3 INFORMATIONAL and 2 NON-STRICT, with no failures. The NON-STRICT two are invalid UTF-8 inside one frame, caught when the frame is whole rather than byte by byte. The 72 UNIMPLEMENTED are window-size variants of permessage-deflate this client does not offer.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;websocket&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;websocket&quot;</span>;
 
 <span class="k">let</span> o = websocket.<span class="f">options</span>();
 o.protocols = [<span class="s">&quot;v2.chat&quot;</span>];                       <span class="c">// offered; Conn.protocol is the server&#x27;s pick</span>
@@ -935,7 +965,7 @@ websocket.<span class="f">close</span>(ws, <span class="n">1000</span>, <span cl
 <p>Frames are masked with keys drawn from a 4 KiB pool of <code>crypto.rand</code> bytes, refilled as it empties. A frame is built in one allocation by <code>encoding.xor_mask</code>. Large frames are read in chunks and joined once.</p>
 <h4 id="compress"><code>compress</code><a class="anchor" href="#compress" aria-label="Link to this section">#</a></h4>
 <p>gzip, zlib and raw DEFLATE, over zlib (<code>-lz</code>, added only when a program imports <code>compress</code>).</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;compress&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;compress&quot;</span>;
 
 <span class="k">let</span> gr = compress.<span class="f">gzip</span>(body);
 <span class="k">guard</span> <span class="k">let</span> gz = gr <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(gr) { log.<span class="f">error</span>(e); <span class="k">return</span>; }
@@ -952,7 +982,7 @@ websocket.<span class="f">close</span>(ws, <span class="n">1000</span>, <span cl
 <p><strong>Backed by zlib rather than written here</strong>, unlike <code>regex</code>. That package was written in-house because a backtracking engine has a catastrophic input class and being immune to it by construction was the point. DEFLATE has no equivalent argument — what it has is thirty years of hostile input and a reference implementation on every platform slang targets. A hand-written inflate would be a memory-safety surface with no upside, since every bug in one is a buffer overrun driven by attacker-controlled input.</p>
 <h4 id="math"><code>math</code><a class="anchor" href="#math" aria-label="Link to this section">#</a></h4>
 <p>Constants, float functions, rounding, and checked integer arithmetic, compiled to C&#x27;s <code>&lt;math.h&gt;</code> and compiler builtins: <code>math.sqrt(x)</code> is the instruction, not a call, and no function here is a safepoint.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;math&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;math&quot;</span>;
 
 <span class="k">let</span> r = math.<span class="f">sqrt</span>(<span class="n">2.0</span>);                  <span class="c">// 1.4142135623730951</span>
 <span class="k">let</span> a = math.<span class="f">atan2</span>(<span class="n">1.0</span>, <span class="n">1.0</span>) * <span class="n">4.0</span>;      <span class="c">// math.pi</span>
@@ -980,7 +1010,7 @@ math.<span class="f">format_fixed</span>(math.pi, <span class="n">4</span>);    
 <p><code>math.mul_mod(a, b, m)</code> is <code>(a * b) mod m</code> with the product held at twice the width, so modular arithmetic near the type&#x27;s limit cannot overflow; <code>math/numtheory</code> is built on it.</p>
 <h4 id="math-stats"><code>math/stats</code><a class="anchor" href="#math-stats" aria-label="Link to this section">#</a></h4>
 <p>Statistics over lists of any numeric type, and streaming accumulators for numbers that never all exist at once. Written in slang over <code>math</code>.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;math/stats&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;math/stats&quot;</span>;
 
 <span class="k">let</span> xs = [<span class="n">12.5</span>, <span class="n">9.0</span>, <span class="n">14.25</span>, <span class="n">11.0</span>];
 stats.<span class="f">mean</span>(xs);                      <span class="c">// 11.6875</span>
@@ -1005,7 +1035,7 @@ stats.<span class="f">poisson</span>(<span class="n">3.0</span>).<span class="f"
 <p>A result with no value for its input -- the mean of no numbers, the variance of one, a correlation with a constant list -- is NaN, which propagates and tests true with <code>math.is_nan</code>; functions that return one of the elements (<code>min</code>, <code>max</code>, <code>mode</code>) return an <code>opt</code> of the element type. Sums are compensated (Neumaier) and variances are two-pass around the mean, so neither drifts on long or offset data: <code>stats.sum([0.1, 0.2, 0.3])</code> is <code>0.6</code>.</p>
 <h4 id="math-numtheory"><code>math/numtheory</code><a class="anchor" href="#math-numtheory" aria-label="Link to this section">#</a></h4>
 <p>Modular arithmetic, primes and factorization on <code>int</code>, over <code>math.mul_mod</code> so a modulus near 2^62 is as safe as a small one.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;math/numtheory&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;math/numtheory&quot;</span>;
 
 numtheory.<span class="f">mod_pow</span>(<span class="n">2</span>, <span class="n">100</span>, <span class="n">1000000007</span>);       <span class="c">// 976371285</span>
 numtheory.<span class="f">mod_inv</span>(<span class="n">3</span>, <span class="n">7</span>) ?? <span class="n">0</span>;                <span class="c">// 5</span>
@@ -1016,7 +1046,7 @@ numtheory.<span class="f">crt</span>([<span class="n">2</span>, <span class="n">
 <p><code>mod_pow</code>, <code>mod_mul</code>, <code>mod_inv</code>, <code>ext_gcd</code> (a <code>Bezout { g, x, y }</code>), <code>is_prime</code> (deterministic Miller-Rabin with the seven bases proven for 64 bits), <code>next_prime</code>, <code>prev_prime</code>, <code>primes_below</code> (a sieve over the odd numbers), <code>factorize</code> (trial division, then Pollard&#x27;s rho with Brent&#x27;s cycle detection), <code>divisors</code>, <code>totient</code>, <code>crt</code> (moduli need not be coprime), <code>binomial_mod</code> (Lucas, for a prime modulus) and <code>fibonacci</code> (exact through F(92)). A modulus must be positive: a function given one &lt;= 0 returns <code>none</code>, 0 or <code>false</code> rather than panicking, and no result is negative.</p>
 <h4 id="decimal"><code>decimal</code><a class="anchor" href="#decimal" aria-label="Link to this section">#</a></h4>
 <p>Exact decimal arithmetic for money: up to 38 significant digits (SQL&#x27;s <code>DECIMAL(38)</code>), an explicit scale, seven rounding modes, and overflow as <code>none</code> or an error, never a wrap.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;decimal&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;decimal&quot;</span>;
 
 <span class="k">let</span> r = decimal.<span class="f">parse</span>(<span class="s">&quot;19.99&quot;</span>);                <span class="c">// result[Decimal, str]</span>
 <span class="k">guard</span> <span class="k">let</span> price = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }
@@ -1034,7 +1064,7 @@ decimal.<span class="f">eq</span>(decimal.<span class="f">parse</span>(<span cla
 <ul><li><strong>Exact unless you ask.</strong> <code>add</code>, <code>sub</code> and <code>mul</code> are exact and return <code>none</code> when the result needs more than 38 digits (or <code>mul</code>, a scale past 38: use <code>mul_round</code>). <code>mul_round</code>, <code>div</code> and <code>round</code> round to the scale you give, by the <code>Rounding</code> you give: <code>HalfEven</code> (banker&#x27;s, the usual choice for money), <code>HalfUp</code>, <code>HalfDown</code>, <code>Down</code> and <code>Up</code> (toward and away from zero), <code>Floor</code>, <code>Ceiling</code>. <code>div</code> is an error for a zero divisor.</li><li><strong>Parsing is strict</strong>, like <code>to_int</code>: an optional sign, digits, an optional fraction and exponent (<code>&quot;1.5e3&quot;</code>). No spaces, separators, leading or trailing point, NaN or infinity. <code>parse_bytes(b, lo, hi)</code> reads a number inside a buffer without making a str. <code>from_float</code> goes through the float&#x27;s shortest text, so <code>0.1</code> is 0.1, not 0.1000000000000000055511151231257827.</li><li><strong>Comparing:</strong> <code>cmp</code>, <code>eq</code>, <code>lt</code>, <code>le</code>, <code>gt</code>, <code>ge</code>, <code>min</code>, <code>max</code> compare values, so 1.5 equals 1.50. Structs have no <code>==</code>. Use <code>normalize</code> (strip trailing zeros) before a Decimal becomes a map key.</li><li><strong>Splitting money:</strong> <code>split(d, n)</code> and <code>allocate(d, weights)</code> divide an amount at its own scale so the parts add up to it exactly. The leftover smallest units go to the parts with the largest remainders, earlier ones first.</li><li><strong>JSON and Postgres.</strong> A <code>decimal.Decimal</code> field is written by <code>json.encode</code> as a string holding its exact text (<code>&quot;19.90&quot;</code>), which is safe for JavaScript clients, whose numbers lose digits past 2^53. <code>json.decode</code> reads one from a string or a number, exactly, without a float in between. <code>pg.arg_decimal(d)</code> binds one for a <code>numeric</code> parameter, and <code>pg.get_decimal(rows, r, c)</code> reads a <code>numeric</code> or integer column at the scale Postgres reports. NaN and infinity are errors.</li></ul>
 <h4 id="rand"><code>rand</code><a class="anchor" href="#rand" aria-label="Link to this section">#</a></h4>
 <p>Seeded, non-cryptographic random numbers for tests, simulations, sampling and retry jitter. One seed fixes the whole sequence on every platform, so a test that draws random inputs fails the same way on CI and on a laptop.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;rand&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;rand&quot;</span>;
 
 <span class="k">let</span> r = rand.<span class="f">new</span>(<span class="n">42</span>);                  <span class="c">// same seed, same sequence</span>
 rand.<span class="f">below</span>(r, <span class="n">10</span>);                     <span class="c">// int in [0, 10)</span>
@@ -1050,7 +1080,7 @@ rand.<span class="f">jitter</span>(r, <span class="n">60000000000</span>, <span 
 <p>The generator is <code>xoshiro256**</code>, seeded through <code>splitmix64</code>. The tests pin its exact outputs against the authors&#x27; C code, so a seed means the same sequence in every slang release. Draws are unbiased: <code>below</code> and <code>between</code> redraw rather than take a plain modulo, and <code>between</code> covers the full <code>int</code> range. <code>below(r, 0)</code> and <code>between(r, 5, 1)</code> panic, like an index out of range, since there is no value to return. <code>backoff</code> uses full jitter, which spreads clients that failed together across the whole interval, and saturates at <code>cap</code> rather than overflowing. An <code>Rng</code> is not locked: give each spawned task its own with <code>rand.fork(r)</code>, which stays reproducible from the parent&#x27;s seed. <code>rand.from_os()</code> seeds from the OS when runs should differ. Neither is for secrets: tokens, keys and salts come from <code>crypto.rand</code>, because this generator&#x27;s outputs reveal its state.</p>
 <h4 id="sort"><code>sort</code><a class="anchor" href="#sort" aria-label="Link to this section">#</a></h4>
 <p>Sorting lists in place with Go&#x27;s <code>sort</code> engine shape, plus binary search over what is already sorted. <code>ints</code>, <code>floats</code> and <code>strings</code> sort by native comparison; <code>by</code> sorts any list of anything by a key function returning <code>int</code>, <code>float</code> or <code>str</code>; <code>by_stable</code> keeps equal keys in their original order; the <code>search</code> functions binary-search a sorted list and answer <code>opt[int]</code>.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;sort&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;sort&quot;</span>;
 
 <span class="k">let</span> xs = [<span class="n">5</span>, <span class="n">3</span>, <span class="n">9</span>, <span class="n">1</span>, <span class="n">3</span>];
 sort.<span class="f">ints</span>(xs);                       <span class="c">// in place, ascending</span>
@@ -1069,7 +1099,7 @@ sort.<span class="f">floats</span>(fs);                     <span class="c">// N
 <p>The unstable sorts allocate nothing; each runs an entry pass that answers already-sorted and fully-reversed lists in one scan, and the quicksort settles each duplicate group in one partition pass, so four-valued million-element lists sort in tens of milliseconds. <code>by_stable</code> merges with one scratch list of about n/2 elements.</p>
 <h4 id="uuid"><code>uuid</code><a class="anchor" href="#uuid" aria-label="Link to this section">#</a></h4>
 <p>UUIDs per RFC 9562: make version 4 (random) and version 7 (time-ordered), check, parse and convert. An id is a plain <code>str</code> in canonical form (36 characters, lowercase hex, hyphens at 8, 13, 18 and 23), the form JSON, logs and Postgres&#x27;s <code>uuid</code> text already use, so it crosses those boundaries unconverted and has exactly one spelling to compare or key a map by.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;uuid&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;uuid&quot;</span>;
 
 <span class="k">let</span> r = uuid.<span class="f">v7</span>();
 <span class="k">guard</span> <span class="k">let</span> id = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) {
@@ -1086,7 +1116,7 @@ uuid.<span class="f">time_ms</span>(id) ?? <span class="n">0</span>;            
 <p>Use <code>v7</code> for anything stored, primary keys above all: its first 48 bits are the creation time in milliseconds, so ids sort by time and new rows append to an index instead of landing on random pages. Within one millisecond the order is random, because <code>v7</code> keeps no state and any task may call it without a lock. <code>v4</code> is 122 random bits and reveals nothing, not even when it was made. Both draw from <code>crypto.rand</code>, and return an error rather than an id from a weaker source. <code>v7_at(unix_ms)</code> stamps a given time (tests, ids that carry an event&#x27;s time); <code>to_binary</code> and <code>from_binary</code> convert to and from the 16-byte form; <code>uuid.NIL</code> and <code>uuid.MAX</code> are the RFC&#x27;s two special values. <code>is_valid</code> accepts any version and variant, so ids from Postgres&#x27;s <code>gen_random_uuid()</code> or other services pass.</p>
 <h4 id="csv"><code>csv</code><a class="anchor" href="#csv" aria-label="Link to this section">#</a></h4>
 <p>CSV (RFC 4180): read a whole document or stream a large one, and write.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;csv&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;csv&quot;</span>;
 
 <span class="k">let</span> r = csv.<span class="f">parse</span>(<span class="s">&quot;name,qty\n\&quot;Smith, J\&quot;,3\n&quot;</span>);   <span class="c">// result[[[str]], str]</span>
 <span class="k">guard</span> <span class="k">let</span> rows = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }
@@ -1115,7 +1145,7 @@ csv.<span class="f">format_with</span>(rows, w);</code></pre></div>
 <p><strong>Cost.</strong> The byte scan is native (<code>encoding.csv_record</code>); the package assembles fields. On an 8 MB, 120,000-row file, streaming took about 105 ms against about 33 ms for Go&#x27;s <code>encoding/csv</code> record loop; the rest is one string per field. <code>parse</code> holds every field at once, which is slower again on large inputs (about 650 ms here), so stream big files.</p>
 <h4 id="toml"><code>toml</code><a class="anchor" href="#toml" aria-label="Link to this section">#</a></h4>
 <p>TOML v1.0.0: decode a config file into your own types, or convert it to JSON.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;toml&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;toml&quot;</span>;
 
 <span class="k">struct</span> Db { host: <span class="t">str</span>, port: <span class="t">int</span>, replicas: [<span class="t">str</span>], timeout_ms: <span class="t">opt</span>[<span class="t">int</span>] }
 <span class="k">struct</span> Config { name: <span class="t">str</span>, db: Db }
@@ -1130,7 +1160,7 @@ toml.<span class="f">to_json</span>(text);                                      
 <p><strong>Cost.</strong> One pass over the bytes builds a tree that holds each value&#x27;s JSON text, so nothing is decoded twice. A string with nothing to escape and a plain decimal integer are a single copy of their source. On a 1.1 MB document of 6,000 tables, <code>to_json</code> took about 220 ms against about 180 ms for Go&#x27;s BurntSushi/toml decoding into <code>map[string]any</code> and about 550 ms for Python&#x27;s <code>tomllib</code> (Linux container; ratios, the host was throttled). A config file of a few KB parses in microseconds.</p>
 <h4 id="yaml"><code>yaml</code><a class="anchor" href="#yaml" aria-label="Link to this section">#</a></h4>
 <p>YAML 1.2 for configuration files: decode into your own types, or convert to JSON.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;yaml&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;yaml&quot;</span>;
 
 <span class="k">struct</span> Db { host: <span class="t">str</span>, port: <span class="t">int</span>, replicas: [<span class="t">str</span>], timeout_ms: <span class="t">opt</span>[<span class="t">int</span>] }
 <span class="k">struct</span> Config { name: <span class="t">str</span>, db: Db }
@@ -1150,7 +1180,7 @@ yaml.<span class="f">to_json_all</span>(text);          <span class="c">// resul
 <p><strong>Cost.</strong> One pass builds a tree of each value&#x27;s JSON text; a one-line plain scalar, a quoted string without escapes and a plain integer are a single copy of their source. On a 1.1 MB document of 5,000 entries, <code>to_json</code> took about 230 ms against about 160 ms for Go&#x27;s <code>gopkg.in/yaml.v3</code> decoding into <code>any</code> (Linux container; ratios, the host was throttled). A config file of a few KB parses in well under a millisecond.</p>
 <h4 id="cache"><code>cache</code><a class="anchor" href="#cache" aria-label="Link to this section">#</a></h4>
 <p>An in-process cache: string keys, any value type, bounded by entry count (and optionally by bytes), least recently used out first, with an optional time to live, and a loader that runs once per key however many tasks ask at the same moment.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;cache&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;cache&quot;</span>;
 
 <span class="k">let</span> o = cache.<span class="f">options</span>();
 o.max_entries = <span class="n">50000</span>;
@@ -1176,7 +1206,7 @@ cache.<span class="f">stats</span>(users);                                      
 <p>slang&#x27;s hit rate matches golang-lru&#x27;s (both are LRU); ristretto admits few new keys under this skew. Most of slang&#x27;s single-task gap is below the cache: a plain <code>map[str]int</code> lookup costs 290-400 ns on the same keys, as <code>str</code> is NUL-terminated (length, hashing and <code>==</code> walk it). <code>bench/cache/run.sh</code> reproduces this.</p>
 <h4 id="x509"><code>x509</code><a class="anchor" href="#x509" aria-label="Link to this section">#</a></h4>
 <p>X.509 certificates: read them, check them, and make requests for them.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;x509&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;x509&quot;</span>;
 
 <span class="k">let</span> r = x509.<span class="f">parse_pem</span>(pem);              <span class="c">// result[[x509.Cert], str]: every CERTIFICATE block</span>
 <span class="k">guard</span> <span class="k">let</span> certs = r <span class="k">else</span> <span class="k">let</span> e = <span class="b">err_of</span>(r) { <span class="f">panic</span>(e); }
@@ -1202,7 +1232,7 @@ x509.<span class="f">self_signed</span>(key, names, <span class="n">90</span>); 
 <p>All the ASN.1 is OpenSSL&#x27;s; the package parses no DER itself. Errors start with <code>x509: </code>.</p>
 <h4 id="byteutil"><code>byteutil</code><a class="anchor" href="#byteutil" aria-label="Link to this section">#</a></h4>
 <p>Search, trim, and split on the <code>bytes</code> type — no new syntax. The package cannot be named <code>bytes</code> because that token is the type.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;byteutil&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;byteutil&quot;</span>;
 
 byteutil.<span class="f">find</span>(b<span class="s">&quot;hello&quot;</span>, <span class="n">0</span>, <span class="n">108</span>);     <span class="c">// 2, or -1</span>
 byteutil.<span class="f">has_prefix</span>(b<span class="s">&quot;hello&quot;</span>, b<span class="s">&quot;he&quot;</span>);
@@ -1211,7 +1241,7 @@ byteutil.<span class="f">trim</span>(b<span class="s">&quot;  hi\r\n&quot;</span
 byteutil.<span class="f">split</span>(b<span class="s">&quot;a,b&quot;</span>, <span class="n">44</span>);          <span class="c">// [b&quot;a&quot;, b&quot;b&quot;]</span></code></pre></div>
 <h4 id="flags"><code>flags</code><a class="anchor" href="#flags" aria-label="Link to this section">#</a></h4>
 <p>Command-line options, parsed out of <code>proc.args()</code>. A slang-source stdlib package. Declare the flags on a <code>Set</code>, parse, read the values back:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;flags&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;flags&quot;</span>;
 <span class="k">import</span> <span class="s">&quot;proc&quot;</span>;
 
 <span class="k">let</span> fs = flags.<span class="f">new</span>(<span class="s">&quot;greet&quot;</span>, <span class="s">&quot;print a greeting&quot;</span>);
@@ -1227,7 +1257,7 @@ fs.<span class="f">add_list</span>(<span class="s">&quot;tag&quot;</span>, <span
 <span class="k">let</span> i = <span class="n">0</span>;
 <span class="k">while</span> i &lt; p.<span class="f">get_int</span>(<span class="s">&quot;count&quot;</span>) { <span class="b">println</span>(greeting); i = i + <span class="n">1</span>; }
 <span class="k">for</span> file <span class="k">in</span> p.<span class="f">args</span>() { <span class="b">println</span>(<span class="s">&quot;file: &quot;</span> + file); }</code></pre></div>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code>$ greet -n bob -c <span class="n">2</span> -l a.txt b.txt
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code>$ greet -n bob -c <span class="n">2</span> -l a.txt b.txt
 hello bob!
 hello bob!
 file: a.txt
@@ -1248,7 +1278,7 @@ Options:
 <p>What a command line may contain:</p>
 <ul><li><strong>Long flags</strong>: <code>--name bob</code> or <code>--name=bob</code>. <strong>Short flags</strong>: <code>-n bob</code>, <code>-nbob</code> or <code>-n=bob</code>. Give <code>&quot;&quot;</code> for a flag with no short form.</li><li><strong>Bools</strong> take no value: <code>--loud</code> sets true, <code>--loud=false</code> or <code>--no-loud</code> sets false. Short bools combine, <code>-lv</code> is <code>-l -v</code>, and a value flag may end a cluster: <code>-lc5</code>.</li><li><strong>Positional arguments</strong> may be mixed with flags. <code>--</code> ends the flags, and a lone <code>-</code> is a positional argument (the usual &quot;read stdin&quot;). The last occurrence of a flag wins, except a list flag, which collects them.</li><li>A value flag takes the next token as its value even if it starts with <code>-</code>, so <code>--offset -5</code> works. A positional argument that looks like a flag needs a <code>--</code> before it.</li></ul>
 <p><code>parse</code> takes the list exactly as <code>proc.args()</code> returns it and skips element 0, the program name. The positionals come back without it, so a subcommand parses what its parent left with the same call:</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">let</span> global = flags.<span class="f">new</span>(<span class="s">&quot;tool&quot;</span>, <span class="s">&quot;&quot;</span>);
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> global = flags.<span class="f">new</span>(<span class="s">&quot;tool&quot;</span>, <span class="s">&quot;&quot;</span>);
 global.<span class="f">add_bool</span>(<span class="s">&quot;verbose&quot;</span>, <span class="s">&quot;v&quot;</span>, <span class="k">false</span>, <span class="s">&quot;chatty output&quot;</span>);
 global.<span class="f">stop_at_first_arg</span>();                  <span class="c">// &quot;push --force&quot; is not ours</span>
 <span class="k">let</span> g = global.<span class="f">parse_or_exit</span>(proc.<span class="f">args</span>());   <span class="c">// g.args() == [&quot;push&quot;, &quot;--force&quot;, &quot;origin&quot;]</span>
@@ -1267,7 +1297,7 @@ global.<span class="f">stop_at_first_arg</span>();                  <span class=
 <p><strong>After <code>read</code> returns an error, close the connection</strong> (the examples all <code>return</code>). The error means this server could not tell where the request ended, so it cannot tell where the next one begins either.</p>
 <p>The writing side holds the same line. A CR or LF inside a header field would end the line early, so what follows would become a header of its own or the start of the body: response splitting, when a handler copies request data into a header. <code>write</code> and <code>serialize</code> therefore write every field (a <code>with_header</code> value, a raw <code>with_headers</code> line, <code>location</code>, the content type, the status text) with CR and LF turned into spaces, the rule Go&#x27;s <code>net/http</code> applies. A clean field is written as it is, at no extra cost. <code>httpc</code> does the same for the method and the request headers it sends, and percent-encodes CR, LF, space and tab in the request target. <code>http2</code>&#x27;s header encoder does the same for HTTP/2 fields.</p>
 <p>Every response carries <code>Date</code> (RFC 9110 6.6.1): the current second, kept by the runtime for all threads and copied into the response with no clock read and no allocation; a handler&#x27;s own <code>Date</code> is the one sent. A 1xx, 204 or 304 response is written with no <code>Content-Length</code> and no body, whatever the <code>Response</code> holds (8.6 forbids the header on 1xx and 204, and on a 304 unless it equals the 200&#x27;s; body bytes there would be read as the start of the next response). <code>http2</code> follows the same rules. A prebuilt static rendering (<code>static_render</code>) ends its header block with <code>static_date_line()</code>, whose date <code>write_static</code> refreshes on every send; a rendering built elsewhere gets the same by ending its headers with that line.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;http&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;http&quot;</span>;
 
 <span class="k">fn</span> <span class="f">serve</span>(c: <span class="k">link</span>) {
     <span class="k">let</span> ra = <span class="b">arena_new</span>(<span class="n">16384</span>);
@@ -1289,7 +1319,7 @@ global.<span class="f">stop_at_first_arg</span>();                  <span class=
 <p>In a program that asks <code>proc.shutdown_requested()</code>, every thread starts with <code>SIGTERM</code>/<code>SIGINT</code> blocked, and one dedicated thread receives them with <code>sigwait</code> — so no signal lands on a worker thread mid-request, and whichever thread a blocked <code>accept()</code> is parked on, the runtime wakes it. There&#x27;s a narrow startup race inherent to this: a signal that arrives in the brief window before <code>main()</code> blocks the signals gets the OS&#x27;s default disposition (immediate termination) instead of graceful handling, same as any signal-handling program.</p>
 <h4 id="template"><code>template</code><a class="anchor" href="#template" aria-label="Link to this section">#</a></h4>
 <p>HTML templates that escape each value for where it lands, and plain-text templates for email bodies and other text. The syntax is Go&#x27;s (<code>{{ .field }}</code>, <code>if</code>, <code>range</code>, <code>with</code>, <code>define</code>, pipelines), and so is the safety model: escaping is decided by the HTML around each action when the template is parsed, not by the caller remembering to escape.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;template&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;template&quot;</span>;
 
 <span class="k">gc</span> <span class="k">struct</span> Item { name: <span class="t">str</span>, url: <span class="t">str</span>, price: <span class="t">int</span> }
 <span class="k">gc</span> <span class="k">struct</span> Page { title: <span class="t">str</span>, items: [Item], user: <span class="t">str</span> }
@@ -1314,31 +1344,43 @@ template.<span class="f">render_named</span>(t, <span class="s">&quot;layout&quo
 <p><strong>Language.</strong> <code>{{ if }}</code>/<code>{{ else if }}</code>/<code>{{ else }}</code>, <code>{{ with }}</code>, <code>{{ range }}</code> (with <code>$i, $x :=</code> and <code>{{ else }}</code> for empty), <code>{{ $x := … }}</code> and <code>{{ $x = … }}</code> with block scope, <code>$</code> for the root, pipelines (<code>{{ .name | upper }}</code>), parentheses (<code>{{ len (index .items 0).tags }}</code>), <code>{{/* comments */}}</code> and <code>{{-</code>/<code>-}}</code> to trim whitespace, <code>{{ define }}</code> and <code>{{ template &quot;name&quot; . }}</code> (nested up to 64 deep). Functions: <code>eq ne lt le gt ge</code>, <code>and or not</code> (short-circuit, as Go&#x27;s), <code>len index default join upper lower trim add sub</code>, <code>print printf</code> (<code>%s %v %d %f %.2f %q %x %t</code>), <code>json urlquery raw</code>. An unknown function or variable is a parse error.</p>
 <p><strong>Cost.</strong> Parsing and escape analysis happen once; a <code>Template</code> is safe to render from many tasks at once. Rendering encodes the data with <code>json.encode</code> and indexes it with <code>encoding.json_tape</code> (one C pass, no allocation per value), resolves variables to slots at parse time, and escapes with <code>strings.escape_html</code>/<code>escape_js</code>, which return their input unchanged when nothing needs escaping. A 100-row table page (15 KB, six actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go&#x27;s <code>html/template</code> on the same page, run alternately on one machine.</p>
 <h2 id="all-packages">All packages<a class="anchor" href="#all-packages">#</a></h2><div class="pkg-grid"><a class="pkg-card" href="../packages/builder"><h3>builder</h3><p class="pkg-kind">source package</p><p class="pkg-count">20 public items</p></a><a class="pkg-card" href="../packages/byteutil"><h3>byteutil</h3><p class="pkg-kind">source package</p><p class="pkg-count">6 public items</p></a><a class="pkg-card" href="../packages/cache"><h3>cache</h3><p class="pkg-kind">source package</p><p class="pkg-count">14 public items</p></a><a class="pkg-card" href="../packages/compress"><h3>compress</h3><p class="pkg-kind">compiler-provided</p><p class="pkg-count">8 public items</p></a><a class="pkg-card" href="../packages/crypto"><h3>crypto</h3><p class="pkg-kind">compiler-provided</p><p class="pkg-count">52 public items</p></a><a class="pkg-card" href="../packages/csv"><h3>csv</h3><p class="pkg-kind">source package</p><p class="pkg-count">18 public items</p></a><a class="pkg-card" href="../packages/decimal"><h3>decimal</h3><p class="pkg-kind">source package</p><p class="pkg-count">37 public items</p></a><a class="pkg-card" href="../packages/encoding"><h3>encoding</h3><p class="pkg-kind">compiler-provided</p><p class="pkg-count">23 public items</p></a><a class="pkg-card" href="../packages/flags"><h3>flags</h3><p class="pkg-kind">source package</p><p class="pkg-count">23 public items</p></a><a class="pkg-card" href="../packages/fs"><h3>fs</h3><p class="pkg-kind">compiler-provided</p><p class="pkg-count">9 public items</p></a><a class="pkg-card" href="../packages/http"><h3>http</h3><p class="pkg-kind">source package</p><p class="pkg-count">58 public items</p></a><a class="pkg-card" href="../packages/http2"><h3>http2</h3><p class="pkg-kind">source package</p><p class="pkg-count">133 public items</p></a><a class="pkg-card" href="../packages/httpc"><h3>httpc</h3><p class="pkg-kind">source package</p><p class="pkg-count">35 public items</p></a><a class="pkg-card" href="../packages/io"><h3>io</h3><p class="pkg-kind">compiler-provided</p><p class="pkg-count">12 public items</p></a><a class="pkg-card" href="../packages/json"><h3>json</h3><p class="pkg-kind">compiler-provided</p><p class="pkg-count">0 public items</p></a><a class="pkg-card" href="../packages/log"><h3>log</h3><p class="pkg-kind">compiler-provided</p><p class="pkg-count">4 public items</p></a><a class="pkg-card" href="../packages/math"><h3>math</h3><p class="pkg-kind">compiler-provided</p><p class="pkg-count">131 public items</p></a><a class="pkg-card" href="../packages/math/numtheory"><h3>math/numtheory</h3><p class="pkg-kind">source package</p><p class="pkg-count">16 public items</p></a><a class="pkg-card" href="../packages/math/stats"><h3>math/stats</h3><p class="pkg-kind">source package</p><p class="pkg-count">91 public items</p></a><a class="pkg-card" href="../packages/mysql"><h3>mysql</h3><p class="pkg-kind">source package</p><p class="pkg-count">49 public items</p></a><a class="pkg-card" href="../packages/nats"><h3>nats</h3><p class="pkg-kind">source package</p><p class="pkg-count">31 public items</p></a><a class="pkg-card" href="../packages/net"><h3>net</h3><p class="pkg-kind">compiler-provided</p><p class="pkg-count">35 public items</p></a><a class="pkg-card" href="../packages/os"><h3>os</h3><p class="pkg-kind">compiler-provided</p><p class="pkg-count">18 public items</p></a><a class="pkg-card" href="../packages/pg"><h3>pg</h3><p class="pkg-kind">source package</p><p class="pkg-count">58 public items</p></a><a class="pkg-card" href="../packages/proc"><h3>proc</h3><p class="pkg-kind">compiler-provided</p><p class="pkg-count">9 public items</p></a><a class="pkg-card" href="../packages/rand"><h3>rand</h3><p class="pkg-kind">source package</p><p class="pkg-count">13 public items</p></a><a class="pkg-card" href="../packages/redis"><h3>redis</h3><p class="pkg-kind">source package</p><p class="pkg-count">161 public items</p></a><a class="pkg-card" href="../packages/regex"><h3>regex</h3><p class="pkg-kind">compiler-provided</p><p class="pkg-count">9 public items</p></a><a class="pkg-card" href="../packages/s3"><h3>s3</h3><p class="pkg-kind">source package</p><p class="pkg-count">23 public items</p></a><a class="pkg-card" href="../packages/sort"><h3>sort</h3><p class="pkg-kind">source package</p><p class="pkg-count">9 public items</p></a><a class="pkg-card" href="../packages/sql"><h3>sql</h3><p class="pkg-kind">compiler-provided</p><p class="pkg-count">20 public items</p></a><a class="pkg-card" href="../packages/strings"><h3>strings</h3><p class="pkg-kind">compiler-provided</p><p class="pkg-count">28 public items</p></a><a class="pkg-card" href="../packages/template"><h3>template</h3><p class="pkg-kind">source package</p><p class="pkg-count">7 public items</p></a><a class="pkg-card" href="../packages/time"><h3>time</h3><p class="pkg-kind">compiler-provided</p><p class="pkg-count">5 public items</p></a><a class="pkg-card" href="../packages/timez"><h3>timez</h3><p class="pkg-kind">source package</p><p class="pkg-count">144 public items</p></a><a class="pkg-card" href="../packages/toml"><h3>toml</h3><p class="pkg-kind">source package</p><p class="pkg-count">2 public items</p></a><a class="pkg-card" href="../packages/unicode"><h3>unicode</h3><p class="pkg-kind">compiler-provided</p><p class="pkg-count">11 public items</p></a><a class="pkg-card" href="../packages/uuid"><h3>uuid</h3><p class="pkg-kind">source package</p><p class="pkg-count">11 public items</p></a><a class="pkg-card" href="../packages/websocket"><h3>websocket</h3><p class="pkg-kind">source package</p><p class="pkg-count">16 public items</p></a><a class="pkg-card" href="../packages/x509"><h3>x509</h3><p class="pkg-kind">source package</p><p class="pkg-count">11 public items</p></a><a class="pkg-card" href="../packages/yaml"><h3>yaml</h3><p class="pkg-kind">source package</p><p class="pkg-count">4 public items</p></a></div>
-  </article>
-  <aside class="toc">
+<nav class="pager" aria-label="Previous and next"><a class="prev" href="../testing/"><span class="dir">Previous</span><span class="name">Testing</span></a><a class="next" href="../interop/"><span class="dir">Next</span><span class="name">C interop</span></a></nav>
+    </article>
+  </main>
+
+  <aside class="toc" aria-label="On this page">
     <p class="toc-title">On this page</p>
     <nav id="toc"></nav>
   </aside>
 </div>
-</main>
 
 <footer class="foot">
-  <div class="foot-main">
-    <p class="foot-by">
-      Built and maintained by
-      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
-    </p>
-    <p class="foot-entity">
-      Dolph Tech Limited &middot;
-      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
-    </p>
+  <div class="foot-inner">
+    <a class="foot-logo" href="../" aria-label="slang home">
+      <img class="logo-on-dark" src="../brand/slang-icon-light.svg" alt="" width="28" height="28">
+      <img class="logo-on-light" src="../brand/slang-icon-dark.svg" alt="" width="28" height="28">
+    </a>
+    <p class="foot-by">Built and maintained by
+      <a href="https://dolphlabs.com" rel="noopener">Dolphlabs</a> · Dolph Tech Limited</p>
+    <p class="foot-note">Generated from the repository by <code>www/build.py</code>:
+      the guide from <code>README.md</code>, the API from the compiler's own
+      signature tables and the <code>pub</code> declarations in
+      <code>stdlib/</code>. Nothing here is written twice.</p>
   </div>
-  <p class="foot-note">Generated from the repository by
-     <code>www/build.py</code> — the guide comes from
-     <code>README.md</code>, the API from the compiler's own signature
-     tables and the <code>pub</code> declarations in
-     <code>stdlib/</code>. Nothing here is written twice.</p>
 </footer>
+
+<div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="Search the docs" hidden>
+  <div class="palette-box">
+    <div class="palette-field">
+      <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <input id="palette-input" type="search" placeholder="Search pages, packages and functions" autocomplete="off" spellcheck="false"
+             role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list">
+      <kbd>esc</kbd>
+    </div>
+    <div class="palette-list" id="palette-list" role="listbox" aria-label="Results"></div>
+    <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
 
 <script src="../app.js" defer></script>
 </body>

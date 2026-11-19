@@ -6,6 +6,8 @@
 <title>encoding — slang</title>
 <meta name="description" content="Package encoding.">
 <meta name="author" content="Dolphlabs (Dolph Tech Limited)">
+<meta name="theme-color" content="#07080a" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f7f5ef" media="(prefers-color-scheme: light)">
 <link rel="author" href="https://dolphlabs.com">
 <meta property="og:site_name" content="slang — by Dolphlabs">
 <meta property="og:title" content="encoding">
@@ -23,50 +25,78 @@
 <link rel="alternate" type="text/markdown" href="../packages/encoding.md" title="Markdown">
 <link rel="alternate" type="text/plain" href="../llms-full.txt"
       title="Entire site as plain text">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="preload" href="../fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="../style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>◆</text></svg>">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<script>
+/* Before first paint, so a saved light theme never flashes dark. */
+try { var t = localStorage.getItem("slang-theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
 
-<header class="topbar">
-  <a class="brand" href="../">
-    <span class="mark" aria-hidden="true"></span> slang
-  </a>
-  <button id="navtoggle" class="navtoggle" type="button"
-          aria-label="Toggle navigation" aria-expanded="false"
-          aria-controls="mainnav">
-    <span></span><span></span><span></span>
-  </button>
-  <nav class="mainnav" id="mainnav"><a href="../">Home</a><a href="../guide/">Guide</a><a href="../guide/data">Data types</a><a href="../guide/errors">Errors</a><a href="../guide/functions">Functions</a><a href="../concurrency/">Concurrency</a><a href="../testing/">Testing</a><a href="../bench/">Benchmarks</a><a href="../packages/">Packages</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="../limitations/">Limitations</a></nav>
-  <div class="tools">
-    <input id="search" type="search" placeholder="Search docs…"
-           autocomplete="off" aria-label="Search documentation">
-    <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+<header class="nav" data-nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="../" aria-label="slang home">
+      <img class="logo-on-dark" src="../brand/slang-logo-light.svg" alt="" width="77" height="32">
+      <img class="logo-on-light" src="../brand/slang-logo-dark.svg" alt="" width="77" height="32">
+    </a>
+    <nav class="nav-links" aria-label="Primary"><a href="../guide/">Guide</a><a href="../concurrency/">Concurrency</a><a class="active" href="../packages/">Packages</a><a href="../bench/">Benchmarks</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a></nav>
+    <div class="nav-actions">
+      <button class="search-btn" type="button" data-search aria-label="Search the docs" aria-keyshortcuts="Control+K Meta+K /">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <span class="search-label">Search</span>
+        <kbd class="search-kbd">/</kbd>
+      </button>
+      <button class="icon-btn" type="button" data-theme-toggle aria-label="Switch to light theme" title="Switch theme">
+        <svg class="i-sun" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <svg class="i-moon" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.6A8 8 0 1 1 9.4 4a6.4 6.4 0 0 0 10.6 10.6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      </button>
+      <a class="btn btn-ghost btn-sm nav-gh" href="https://github.com/dolphlabs/slang">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span>GitHub</span>
+      </a>
+      <a class="btn btn-light btn-sm nav-start" href="../#install">Get started</a>
+      <button class="nav-menu" type="button" aria-expanded="false" aria-controls="nav-sheet" aria-label="Menu" data-menu>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6h14M3 10h14M3 14h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </button>
+    </div>
   </div>
+  <nav class="nav-sheet" id="nav-sheet" aria-label="Menu" hidden><a href="../guide/">Guide</a><a href="../concurrency/">Concurrency</a><a class="active" href="../packages/">Packages</a><a href="../bench/">Benchmarks</a><a href="../interop/">C interop</a><a href="../internals/">Internals</a><a href="https://github.com/dolphlabs/slang">GitHub</a></nav>
 </header>
-<div id="navscrim" class="navscrim" hidden></div>
-<div id="results" class="results" hidden></div>
 
-<main id="main">
+<div class="docbar">
+  <button class="docbar-btn" type="button" aria-expanded="false" aria-controls="sidebar" data-drawer>
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    <span>Docs</span>
+  </button>
+  <span class="docbar-here">encoding</span>
+</div>
 
-<div class="page">
-  <article class="content">
-    <header class="page-head">
-      <h1>encoding</h1>
-      <p class="tagline">Package encoding.</p>
-      <p class="agentline">
-        <a href="../packages/encoding.md">Markdown version</a> ·
-        <a href="../llms.txt">llms.txt</a> ·
-        <a href="../api.json">api.json</a>
-      </p>
-    </header>
+<div class="docs">
+  <aside class="sidebar" id="sidebar" aria-label="Documentation">
+    <div class="sidebar-inner"><div class="side-group"><p class="side-title">Start</p><ul class="side-list"><li><a href="../">Overview</a></li><li><a href="../guide/">Guide</a></li><li><a href="../guide/data">Data types</a></li><li><a href="../guide/errors">Errors</a></li><li><a href="../guide/functions">Functions</a></li></ul></div><div class="side-group"><p class="side-title">Build</p><ul class="side-list"><li><a href="../concurrency/">Concurrency</a></li><li><a href="../testing/">Testing</a></li><li><a href="../packages/">Packages</a></li><li><a href="../interop/">C interop</a></li></ul></div><div class="side-group"><p class="side-title">Under the hood</p><ul class="side-list"><li><a href="../internals/">Internals</a></li><li><a href="../bench/">Benchmarks</a></li><li><a href="../limitations/">Limitations</a></li></ul></div><details class="side-group side-pkgs" open><summary>Packages<span class="side-count">41</span></summary><ul class="side-list"><li><a href="../packages/builder">builder</a></li><li><a href="../packages/byteutil">byteutil</a></li><li><a href="../packages/cache">cache</a></li><li><a href="../packages/compress">compress</a></li><li><a href="../packages/crypto">crypto</a></li><li><a href="../packages/csv">csv</a></li><li><a href="../packages/decimal">decimal</a></li><li><a href="../packages/encoding" aria-current="page">encoding</a></li><li><a href="../packages/flags">flags</a></li><li><a href="../packages/fs">fs</a></li><li><a href="../packages/http">http</a></li><li><a href="../packages/http2">http2</a></li><li><a href="../packages/httpc">httpc</a></li><li><a href="../packages/io">io</a></li><li><a href="../packages/json">json</a></li><li><a href="../packages/log">log</a></li><li><a href="../packages/math">math</a></li><li><a href="../packages/math/numtheory">math/numtheory</a></li><li><a href="../packages/math/stats">math/stats</a></li><li><a href="../packages/mysql">mysql</a></li><li><a href="../packages/nats">nats</a></li><li><a href="../packages/net">net</a></li><li><a href="../packages/os">os</a></li><li><a href="../packages/pg">pg</a></li><li><a href="../packages/proc">proc</a></li><li><a href="../packages/rand">rand</a></li><li><a href="../packages/redis">redis</a></li><li><a href="../packages/regex">regex</a></li><li><a href="../packages/s3">s3</a></li><li><a href="../packages/sort">sort</a></li><li><a href="../packages/sql">sql</a></li><li><a href="../packages/strings">strings</a></li><li><a href="../packages/template">template</a></li><li><a href="../packages/time">time</a></li><li><a href="../packages/timez">timez</a></li><li><a href="../packages/toml">toml</a></li><li><a href="../packages/unicode">unicode</a></li><li><a href="../packages/uuid">uuid</a></li><li><a href="../packages/websocket">websocket</a></li><li><a href="../packages/x509">x509</a></li><li><a href="../packages/yaml">yaml</a></li></ul></details></div>
+  </aside>
+  <div class="drawer-scrim" data-scrim hidden></div>
+
+  <main id="main" class="doc-main">
+
+    <article class="content">
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="../">Docs</a><span class="sep" aria-hidden="true">/</span><a href="../packages/">Packages</a><span class="sep" aria-hidden="true">/</span><span aria-current="page">encoding</span></nav>
+      <header class="page-head">
+        <h1>encoding</h1>
+        <p class="tagline">Package encoding.</p>
+        <p class="agentline">
+          <a href="../packages/encoding.md">Markdown</a><span aria-hidden="true">·</span><a href="../llms.txt">llms.txt</a><span aria-hidden="true">·</span><a href="../api.json">api.json</a>
+        </p>
+      </header>
 <p>Hex, base64, base64url, base32, percent-encoding and query strings — the ways arbitrary bytes travel through a channel that only carries text. The package also converts binary64 floats to and from little-endian bytes for binary protocols such as BSON.</p>
-<div class="code"><button class="copy" type="button" aria-label="Copy code">Copy</button><pre><code><span class="k">import</span> <span class="s">&quot;encoding&quot;</span>;
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">import</span> <span class="s">&quot;encoding&quot;</span>;
 
 encoding.<span class="f">hex_encode</span>(crypto.<span class="f">sha256</span>(b<span class="s">&quot;abc&quot;</span>));   <span class="c">// &quot;ba7816bf8f01cfea...&quot;</span>
 encoding.<span class="f">base64_encode</span>(b<span class="s">&quot;aladdin:opensesame&quot;</span>);<span class="c">// HTTP Basic credentials</span>
@@ -90,31 +120,43 @@ encoding.<span class="f">query_keys</span>(q);                                  
 <ul><li><strong>Encoders are infallible; decoders are not.</strong> Any byte string has a hex form, so <code>hex_encode</code> returns a bare <code>str</code>. Decoding takes input the program did not produce — a query string, a header, a token — so every decoder returns <code>result[_, str]</code>, and the message names the byte offset it gave up at. &quot;invalid base64&quot; about a 400-character token is not a diagnosis.</li><li><strong><code>url_*</code> and <code>form_*</code> differ only in <code>+</code>, and that is exactly why they have separate names.</strong> In <code>application/x-www-form-urlencoded</code> a space is <code>+</code>; in a URI it is <code>%20</code>. Decoding a form body with <code>url_decode</code> leaves literal <code>+</code> where every space belongs, and nothing reports it — the failure surfaces later as a lookup that does not match. One function with a flag would make that the default mistake.</li><li><strong><code>%00</code> is an error, not a truncation.</strong> <code>url_decode</code> and <code>form_decode</code> return <code>str</code>, which is NUL-terminated, so a decoded zero byte would silently cut the value short. They refuse it and say so. <code>hex_decode</code> and <code>base64_decode</code> return <code>bytes</code>, which carries an explicit length, so a zero byte there is ordinary data and round-trips exactly.</li><li><strong>Float bytes are exact and little-endian.</strong> <code>float64_to_le</code> and <code>float64_from_le</code> preserve the IEEE-754 binary64 bit pattern, including signed zero and NaN payload bits. <code>float64_from_le</code> accepts exactly eight bytes and returns an error for any other length.</li><li><strong><code>query_get</code> is <code>opt</code>, and <code>query_keys</code> is a list.</strong> A missing parameter is absent data, not bad data, so it is <code>opt[str]</code> — the README rule above. Keys come back as a list rather than a map because a query may legally repeat a key and a map would have to drop one, the same reason <code>os.environ</code> is a list. <code>query_get</code> takes the first value; a bare <code>?debug</code> is present with an empty value, not absent.</li><li><strong><code>json_tape</code> is where things are, not a copy of them.</strong> It validates a JSON document (RFC 8259, nesting up to 512) in one C pass and returns five ints per value, in document order: kind (0 null, 1 bool, 2 number, 3 string, 4 list, 5 object, 7 key; plus 8 for a string or key holding an escape), the entry after the value&#x27;s subtree, its child count, and its byte span (a string&#x27;s inside, between the quotes). A reader walks it, skips a subtree in one step, and materialises only the strings it reads (<code>strings.from_bytes</code> over the span). <code>template</code> reads its data this way; use <code>json.decode</code> when the shape is known.</li><li><strong>base32 decodes leniently and strictly at once.</strong> <code>base32_decode</code> takes either case, with or without <code>=</code> padding, because TOTP secrets arrive in every combination. It refuses a tail of 1, 3 or 6 characters, which holds no whole byte, and a tail whose leftover bits are not zero. That input is a mistyped or truncated secret, and decoding it anyway would yield a different key that fails later and less clearly. Python&#x27;s decoder accepts <code>MZ======</code>; this one does not. <code>base32hex</code> (RFC 4648 §7) sorts in the same order as the bytes it encodes. Crockford&#x27;s alphabet leaves out I, L, O and U so a code read aloud cannot be misheard; its decoder reads I and L as 1 and O as 0, and skips hyphens. Strip spaces from a secret shown in groups before decoding it.</li></ul>
 <p>Percent-escapes are emitted uppercase (RFC 3986 §2.1) and hex digests lowercase (what <code>sha256sum</code>, git and every API that returns one use). Both decoders accept either case.</p>
 <h2 id="api">API<a class="anchor" href="#api">#</a></h2><div class="api"><div class="api-item" id="hex-encode"><div class="api-sig"><code>encoding.<span class="f">hex_encode</span>(<span class="t">bytes</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#hex-encode">#</a></div></div><div class="api-item" id="hex-decode"><div class="api-sig"><code>encoding.<span class="f">hex_decode</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>,<span class="t">str</span>]</code><a class="anchor" href="#hex-decode">#</a></div></div><div class="api-item" id="base64-encode"><div class="api-sig"><code>encoding.<span class="f">base64_encode</span>(<span class="t">bytes</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#base64-encode">#</a></div></div><div class="api-item" id="base64-decode"><div class="api-sig"><code>encoding.<span class="f">base64_decode</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>,<span class="t">str</span>]</code><a class="anchor" href="#base64-decode">#</a></div></div><div class="api-item" id="base64url-encode"><div class="api-sig"><code>encoding.<span class="f">base64url_encode</span>(<span class="t">bytes</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#base64url-encode">#</a></div></div><div class="api-item" id="base64url-decode"><div class="api-sig"><code>encoding.<span class="f">base64url_decode</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>,<span class="t">str</span>]</code><a class="anchor" href="#base64url-decode">#</a></div></div><div class="api-item" id="url-encode"><div class="api-sig"><code>encoding.<span class="f">url_encode</span>(<span class="t">str</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#url-encode">#</a></div></div><div class="api-item" id="url-decode"><div class="api-sig"><code>encoding.<span class="f">url_decode</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>,<span class="t">str</span>]</code><a class="anchor" href="#url-decode">#</a></div></div><div class="api-item" id="form-encode"><div class="api-sig"><code>encoding.<span class="f">form_encode</span>(<span class="t">str</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#form-encode">#</a></div></div><div class="api-item" id="form-decode"><div class="api-sig"><code>encoding.<span class="f">form_decode</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">str</span>,<span class="t">str</span>]</code><a class="anchor" href="#form-decode">#</a></div></div><div class="api-item" id="query-get"><div class="api-sig"><code>encoding.<span class="f">query_get</span>(<span class="t">str</span>, <span class="t">str</span>) -&gt; <span class="t">opt</span>[<span class="t">str</span>]</code><a class="anchor" href="#query-get">#</a></div></div><div class="api-item" id="query-keys"><div class="api-sig"><code>encoding.<span class="f">query_keys</span>(<span class="t">str</span>) -&gt; [<span class="t">str</span>]</code><a class="anchor" href="#query-keys">#</a></div></div><div class="api-item" id="float64-to-le"><div class="api-sig"><code>encoding.<span class="f">float64_to_le</span>(<span class="t">float</span>) -&gt; <span class="t">bytes</span></code><a class="anchor" href="#float64-to-le">#</a></div></div><div class="api-item" id="float64-from-le"><div class="api-sig"><code>encoding.<span class="f">float64_from_le</span>(<span class="t">bytes</span>) -&gt; <span class="t">result</span>[<span class="t">float</span>,<span class="t">str</span>]</code><a class="anchor" href="#float64-from-le">#</a></div></div><div class="api-item" id="json-tape"><div class="api-sig"><code>encoding.<span class="f">json_tape</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[[<span class="t">int</span>],<span class="t">str</span>]</code><a class="anchor" href="#json-tape">#</a></div></div><div class="api-item" id="xor-mask"><div class="api-sig"><code>encoding.<span class="f">xor_mask</span>(<span class="t">bytes</span>, <span class="t">bytes</span>, <span class="t">bytes</span>) -&gt; <span class="t">bytes</span></code><a class="anchor" href="#xor-mask">#</a></div></div><div class="api-item" id="base32-encode"><div class="api-sig"><code>encoding.<span class="f">base32_encode</span>(<span class="t">bytes</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#base32-encode">#</a></div></div><div class="api-item" id="base32-decode"><div class="api-sig"><code>encoding.<span class="f">base32_decode</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>,<span class="t">str</span>]</code><a class="anchor" href="#base32-decode">#</a></div></div><div class="api-item" id="base32hex-encode"><div class="api-sig"><code>encoding.<span class="f">base32hex_encode</span>(<span class="t">bytes</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#base32hex-encode">#</a></div></div><div class="api-item" id="base32hex-decode"><div class="api-sig"><code>encoding.<span class="f">base32hex_decode</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>,<span class="t">str</span>]</code><a class="anchor" href="#base32hex-decode">#</a></div></div><div class="api-item" id="crockford-encode"><div class="api-sig"><code>encoding.<span class="f">crockford_encode</span>(<span class="t">bytes</span>) -&gt; <span class="t">str</span></code><a class="anchor" href="#crockford-encode">#</a></div></div><div class="api-item" id="crockford-decode"><div class="api-sig"><code>encoding.<span class="f">crockford_decode</span>(<span class="t">str</span>) -&gt; <span class="t">result</span>[<span class="t">bytes</span>,<span class="t">str</span>]</code><a class="anchor" href="#crockford-decode">#</a></div></div><div class="api-item" id="csv-record"><div class="api-sig"><code>encoding.<span class="f">csv_record</span>(<span class="t">bytes</span>, <span class="t">int</span>, <span class="t">int</span>, <span class="t">int</span>, <span class="t">int</span>) -&gt; [<span class="t">int</span>]</code><a class="anchor" href="#csv-record">#</a></div></div></div>
-  </article>
-  <aside class="toc">
+<nav class="pager" aria-label="Previous and next"><a class="prev" href="../packages/decimal"><span class="dir">Previous</span><span class="name">decimal</span></a><a class="next" href="../packages/flags"><span class="dir">Next</span><span class="name">flags</span></a></nav>
+    </article>
+  </main>
+
+  <aside class="toc" aria-label="On this page">
     <p class="toc-title">On this page</p>
     <nav id="toc"></nav>
   </aside>
 </div>
-</main>
 
 <footer class="foot">
-  <div class="foot-main">
-    <p class="foot-by">
-      Built and maintained by
-      <a class="org" href="https://dolphlabs.com" rel="noopener">Dolphlabs</a>
-    </p>
-    <p class="foot-entity">
-      Dolph Tech Limited &middot;
-      <a href="https://dolphlabs.com" rel="noopener">dolphlabs.com</a>
-    </p>
+  <div class="foot-inner">
+    <a class="foot-logo" href="../" aria-label="slang home">
+      <img class="logo-on-dark" src="../brand/slang-icon-light.svg" alt="" width="28" height="28">
+      <img class="logo-on-light" src="../brand/slang-icon-dark.svg" alt="" width="28" height="28">
+    </a>
+    <p class="foot-by">Built and maintained by
+      <a href="https://dolphlabs.com" rel="noopener">Dolphlabs</a> · Dolph Tech Limited</p>
+    <p class="foot-note">Generated from the repository by <code>www/build.py</code>:
+      the guide from <code>README.md</code>, the API from the compiler's own
+      signature tables and the <code>pub</code> declarations in
+      <code>stdlib/</code>. Nothing here is written twice.</p>
   </div>
-  <p class="foot-note">Generated from the repository by
-     <code>www/build.py</code> — the guide comes from
-     <code>README.md</code>, the API from the compiler's own signature
-     tables and the <code>pub</code> declarations in
-     <code>stdlib/</code>. Nothing here is written twice.</p>
 </footer>
+
+<div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="Search the docs" hidden>
+  <div class="palette-box">
+    <div class="palette-field">
+      <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.6 10.6 3.2 3.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <input id="palette-input" type="search" placeholder="Search pages, packages and functions" autocomplete="off" spellcheck="false"
+             role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list">
+      <kbd>esc</kbd>
+    </div>
+    <div class="palette-list" id="palette-list" role="listbox" aria-label="Results"></div>
+    <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
 
 <script src="../app.js" defer></script>
 </body>
