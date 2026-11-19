@@ -107,9 +107,9 @@
   <div class="hero-shade" aria-hidden="true"></div>
 
   <div class="hero-inner">
-    <a class="pill" href="https://github.com/dolphlabs/slang/releases/tag/v0.2.7">
-      <span class="pill-tag">v0.2.7 rex</span>
-      <span class="pill-long">X.509 certificates and mTLS client identity</span>
+    <a class="pill" href="https://github.com/dolphlabs/slang/releases/tag/v0.2.8">
+      <span class="pill-tag">v0.2.8 rex</span>
+      <span class="pill-long">AWS SigV4 signing, for SQS, SNS and GCS packages</span>
       <span class="pill-short">What's new</span>
       <span aria-hidden="true">→</span>
     </a>
@@ -451,6 +451,7 @@ println(sqlite3_libversion());</code></pre>
       <li><a href="/packages/sql"><b>sql</b><span>SQLite, with SQLite's own error text</span></a></li>
       <li><a href="/packages/nats"><b>nats</b><span>A NATS client: pub/sub, request-reply, queue groups</span></a></li>
       <li><a href="/packages/s3"><b>s3</b><span>S3-compatible object storage, SigV4 signed</span></a></li>
+      <li><a href="/packages/sigv4"><b>sigv4</b><span>AWS Signature Version 4 for any service</span></a></li>
       <li><a href="/packages/cache"><b>cache</b><span>In-process LRU with TTLs and a byte bound</span></a></li>
       <li><a href="/packages/json"><b>json</b><span>Typed decode; errors name the field path</span></a></li>
       <li><a href="/packages/toml"><b>toml</b><span>TOML 1.0, decoded into your own structs</span></a></li>
@@ -505,6 +506,9 @@ println(sqlite3_libversion());</code></pre>
       <li><a href="https://github.com/dolphlabs/mongo"><b>mongo</b><span>CRUD, aggregation, transactions, SCRAM and TLS</span></a></li>
       <li><a href="https://github.com/dolphlabs/kafka"><b>kafka</b><span>Producers and consumer groups; snappy, lz4, zstd</span></a></li>
       <li><a href="https://github.com/dolphlabs/amqp"><b>amqp</b><span>RabbitMQ: work queues, pub/sub, RPC, confirms</span></a></li>
+      <li><a href="https://github.com/dolphlabs/sqs"><b>sqs</b><span>Amazon SQS: batches, long polling, FIFO, MD5-checked</span></a></li>
+      <li><a href="https://github.com/dolphlabs/sns"><b>sns</b><span>Amazon SNS: publish, and verify the notifications it posts</span></a></li>
+      <li><a href="https://github.com/dolphlabs/gcs"><b>gcs</b><span>Google Cloud Storage: service accounts, signed URLs</span></a></li>
       <li><a href="https://github.com/Xlaez/sendbyte-slang-sdx"><b>sendbyte</b><span>SendByte email API; webhooks verified in zokor</span></a></li>
       <li class="pkg-extra"><a href="/interop/#packages-go-odin-style"><b>any git repository</b><span>One <code>pkg</code> line and a tag; <code>slang.lock</code> holds the hash</span></a></li>
       <li class="pkg-extra"><a href="https://github.com/dolphlabs/slang/tree/website"><b>yours</b><span>Published one? A pull request lists it here</span></a></li>
