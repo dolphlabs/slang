@@ -851,9 +851,9 @@ __asm__(
 #endif
 );
 
-/* sl_rt_call_on_stack(fn, top): call fn() with the stack pointer set to
- * `top` (16-byte aligned, the high end of free memory), and come back on
- * the caller's stack. The caller's frame pointer stays the link, so a
+/* sl_rt_call_on_stack(fn, arg, top): call fn(arg) with the stack pointer
+ * set to `top` (16-byte aligned, the high end of free memory), and come
+ * back on the caller's stack. The caller's frame pointer stays the link, so a
  * backtrace from inside fn walks back onto the original stack.
  *
  * x86_64: rbp, which fn preserves, holds the caller's rsp across the
@@ -874,16 +874,20 @@ __asm__(
 #if defined(__x86_64__)
 "    push %rbp\n"
 "    mov  %rsp, %rbp\n"
-"    mov  %rsi, %rsp\n"
-"    call *%rdi\n"
+"    mov  %rdx, %rsp\n"
+"    mov  %rdi, %rax\n"
+"    mov  %rsi, %rdi\n"
+"    call *%rax\n"
 "    mov  %rbp, %rsp\n"
 "    pop  %rbp\n"
 "    ret\n"
 #else
 "    stp  x29, x30, [sp, #-16]!\n"
 "    mov  x29, sp\n"
-"    mov  sp, x1\n"
-"    blr  x0\n"
+"    mov  sp, x2\n"
+"    mov  x16, x0\n"
+"    mov  x0, x1\n"
+"    blr  x16\n"
 "    mov  sp, x29\n"
 "    ldp  x29, x30, [sp], #16\n"
 "    ret\n"

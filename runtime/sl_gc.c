@@ -655,7 +655,8 @@ static void sl_gc_unregister_thread(void) {
 /* The slow half: everything that actually needs the preempt bracket.
  * Split out so the common case below touches no thread-local state
  * at all. */
-static void sl_rt_gc_checkin_slow_body(void) {
+static void sl_rt_gc_checkin_slow_body(void *unused) {
+    (void)unused;
     /* Tier 11 eighth slice: bracketed entry-to-every-return, not just
      * around sl_gc_collect's own sl_gc_mu use -- the losing/spin path
      * (sched_yield) doesn't hold sl_gc_mu itself but is harmless to
@@ -711,9 +712,9 @@ static void sl_rt_gc_checkin_slow(void) {
     sl_rt_preempt_disable();
     void *top = sl_rt_native_stack_top();
     if (top)
-        sl_rt_call_on_stack(sl_rt_gc_checkin_slow_body, top);
+        sl_rt_call_on_stack(sl_rt_gc_checkin_slow_body, NULL, top);
     else
-        sl_rt_gc_checkin_slow_body();
+        sl_rt_gc_checkin_slow_body(NULL);
     sl_rt_preempt_enable();
 }
 
@@ -1541,7 +1542,7 @@ static sl_gc_page *sl_gc_page_new(sl_gc_worker_state *st) {
         if (!st->pagev)
             return NULL;
     }
-    void *mem = aligned_alloc(SL_GC_PAGE_ALIGN, SL_GC_PAGE_SIZE);
+    void *mem = sl_rt_sysalloc(SL_GC_PAGE_ALIGN, SL_GC_PAGE_SIZE);
     if (!mem)
         return NULL;
     sl_gc_page *pg = (sl_gc_page *)mem;
@@ -2379,7 +2380,7 @@ static inline void *sl_gc_alloc_impl(size_t n,
         h = sl_gc_class_pop(total);
     }
     if (!h) {
-        h = (sl_gc_obj *)malloc(total);
+        h = (sl_gc_obj *)sl_rt_sysalloc(0, total);
         if (!h) { fprintf(stderr, "slang: out of memory\n"); exit(1); }
         h->paged = 0;
     }

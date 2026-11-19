@@ -863,7 +863,7 @@ void sl_ctx_switch(void **old_rsp_slot, void *new_rsp); /* runtime_sched.c,
     forward here for the same reason -- sl_rt_error below needs it at
     its own definition site; defined for real, in assembly, still in
     RUNTIME_SCHED. */
-void sl_rt_call_on_stack(void (*fn)(void), void *top); /* runtime_sched.c,
+void sl_rt_call_on_stack(void (*fn)(void *), void *arg, void *top); /* runtime_sched.c,
     assembly; see sl_rt_native_stack_top for the one stack it is used
     with. */
 static void sl_task_park(pthread_mutex_t *held_mu); /* runtime_pool.c,
@@ -1271,6 +1271,36 @@ static void *sl_rt_native_stack_top(void) {
     if (!n)
         return NULL;
     return (void *)((n - 256) & ~(uintptr_t)15);
+}
+
+/* malloc (align 0) or aligned_alloc for the collector's own memory --
+ * fresh pages, large objects -- run on the worker's stack when called
+ * from a task's. Allocating reaches the same deep path freeing does:
+ * small_memalign trims its slack through free_small, which can take
+ * small_free_scan_madvise_free's 4KB frame (sl_rt_native_stack_top).
+ * The kafka client's zstd decoder died there, in sl_gc_page_new, from
+ * a task that had 2KB left. One switch per 16KB page or per large
+ * block, small next to the call it wraps. The caller holds the preempt
+ * bracket (sl_gc_alloc_impl's), as sl_rt_native_stack_top requires;
+ * the request lives on the task's stack, which does not move. */
+typedef struct {
+    size_t align, size;
+    void *out;
+} sl_rt_sysalloc_req;
+
+static void sl_rt_sysalloc_run(void *p) {
+    sl_rt_sysalloc_req *r = (sl_rt_sysalloc_req *)p;
+    r->out = r->align ? aligned_alloc(r->align, r->size) : malloc(r->size);
+}
+
+static void *sl_rt_sysalloc(size_t align, size_t size) {
+    sl_rt_sysalloc_req r = {align, size, NULL};
+    void *top = sl_rt_native_stack_top();
+    if (top)
+        sl_rt_call_on_stack(sl_rt_sysalloc_run, &r, top);
+    else
+        sl_rt_sysalloc_run(&r);
+    return r.out;
 }
 
 /* A slang function whose C frame is big is entered through a thin wrapper
