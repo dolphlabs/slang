@@ -1067,6 +1067,10 @@ static sl_res_bytes_str *sl_crypto_open(sl_bytes *key, sl_bytes *box, sl_bytes *
 static EVP_PKEY *sl_crypto_pem_key(const char *pem, int want_private) {
     if (!pem)
         return NULL;
+    /* The first fetch fills OpenSSL's name map. Done concurrently from a
+     * key decode, every worker blocked on its write lock and none
+     * returned (tests/crypto_oaep_task); the one-time fetch does it once. */
+    pthread_once(&sl_crypto_fetch_once, sl_crypto_fetch_all);
     BIO *bio = BIO_new_mem_buf(pem, -1);
     if (!bio)
         return NULL;
@@ -1690,6 +1694,7 @@ static sl_res_bytes_str *sl_crypto_rsa_sign_pss_sha256(const char *pem, sl_bytes
  * weakness it is in a signature. */
 static sl_res_bytes_str *sl_crypto_rsa_oaep(const char *pem, sl_bytes *data, int decrypt,
                                             const char *md) {
+    SL_CRYPTO_STACK();
     const char *fail = NULL;
     unsigned char *out = NULL;
     size_t olen = 0;
