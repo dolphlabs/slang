@@ -298,20 +298,32 @@ static int dir_has_sl_files(const char *path) {
  * through to a native, stdlib or pinned package of the same name and
  * compile code the author did not write. Whether it held source cannot be
  * told from the cache, so the import is refused rather than guessed. */
-static void refuse_excluded_import(const char *from_dir, const char *ipath) {
+/* Also refused in the author's own tree, where the import still works:
+ * every package that depends on this one would fail to build. Test files
+ * are exempt there, since consumers never compile them. */
+static void refuse_excluded_import(const char *from_dir, const char *ipath,
+                                   int from_test) {
     const char *pkg = NULL;
-    const char *ex = project_excluded_import(from_dir, ipath, &pkg);
-    if (ex)
+    int fetched = 0;
+    const char *ex = project_excluded_import(from_dir, ipath, &pkg, &fetched);
+    if (!ex || (from_test && !fetched))
+        return;
+    if (fetched)
         load_error("package '%s' imports '%s', but its slang.project has "
                    "'exclude %s', so that directory is not fetched; the "
                    "package must drop that exclude or move what it imports "
                    "out of '%s'",
                    pkg, ipath, ex, ex);
+    load_error("package '%s' imports '%s', but slang.project has "
+               "'exclude %s': packages that depend on this one never get "
+               "that directory, so their builds would fail here; move what "
+               "it imports out of '%s', or drop the exclude",
+               pkg, ipath, ex, ex);
 }
 
 static int load_import(Loader *ld, const char *from_dir,
-                       const char *from_pkg, const char *ipath) {
-    refuse_excluded_import(from_dir, ipath);
+                       const char *from_pkg, const char *ipath, int from_test) {
+    refuse_excluded_import(from_dir, ipath, from_test);
     char target[PATH_MAX];
     snprintf(target, sizeof(target), "%s/%s", from_dir, ipath);
 
@@ -363,7 +375,7 @@ static int load_import(Loader *ld, const char *from_dir,
 char *loader_resolve_dir(const char *from_dir, const char *ipath,
                          int *native) {
     *native = 0;
-    refuse_excluded_import(from_dir, ipath);
+    refuse_excluded_import(from_dir, ipath, 0);
     char target[PATH_MAX], treal[PATH_MAX];
     snprintf(target, sizeof(target), "%s/%s", from_dir, ipath);
     int nat = is_native_name(ipath);
@@ -519,7 +531,8 @@ static int load_package_dir(Loader *ld, const char *real, const char *name) {
 
         /* imports are resolved relative to this package's directory */
         for (int k = 0; k < fprog->nimports; k++) {
-            int target = load_import(ld, real, p.name, fprog->import_paths[k]);
+            int target = load_import(ld, real, p.name, fprog->import_paths[k],
+                                     is_test_file(names[i]));
             record_import(&p, &nrec, fprog->import_paths[k], target);
         }
     }

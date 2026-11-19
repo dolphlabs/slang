@@ -390,19 +390,29 @@ static char *cache_pkg_real(void) {
     return realpath(dir, real) ? xstrdup(real) : NULL;
 }
 
-const char *project_excluded_import(const char *from_dir, const char *ipath,
-                                    const char **pkg_name) {
-    char *entry = project_find_root(from_dir);
-    char *pkgs = entry ? cache_pkg_real() : NULL;
+/* Is `entry` a fetched package's root, pkg/<name>/<hash>/ in the cache? */
+static int is_fetched_root(const char *entry) {
+    char *pkgs = cache_pkg_real();
     if (!pkgs)
-        return NULL;
-    /* Only a fetched package's own manifest, at pkg/<name>/<hash>/. */
+        return 0;
     size_t n = strlen(pkgs);
     if (strncmp(entry, pkgs, n) || entry[n] != '/')
-        return NULL;
+        return 0;
     const char *slash = strchr(entry + n + 1, '/');
-    if (!slash || slash == entry + n + 1 || !slash[1] ||
-        strchr(slash + 1, '/'))
+    return slash && slash != entry + n + 1 && slash[1] && !strchr(slash + 1, '/');
+}
+
+/* The same check runs in two places. In a fetched package the excluded
+ * directory is absent, so the import would fall through to a native,
+ * stdlib or pinned package of the same name. In the author's own tree the
+ * directory is still there and the import works -- which is exactly why
+ * it is checked there too: the author learns that consumers' builds will
+ * break before tagging, not after (the check Cargo makes by building a
+ * crate before `cargo publish`). */
+const char *project_excluded_import(const char *from_dir, const char *ipath,
+                                    const char **pkg_name, int *fetched) {
+    char *entry = project_find_root(from_dir);
+    if (!entry)
         return NULL;
     SlProject *m = read_package_manifest(entry);
     if (!m || m->nexcludes == 0)
@@ -414,6 +424,13 @@ const char *project_excluded_import(const char *from_dir, const char *ipath,
      * from it. */
     char from[PATH_MAX];
     if (!realpath(from_dir, from))
+        return NULL;
+    /* Code in an excluded directory (a benchmark, a test program) never
+     * reaches a consumer, so what it imports is its own business. */
+    const char *frel = from + strlen(entry);
+    while (*frel == '/')
+        frel++;
+    if (*frel && excluding(m, frel))
         return NULL;
     char *path = xasprintf("%s/%s", from + strlen(entry), ipath);
     char *rel = (char *)xmalloc(strlen(path) + 1);
@@ -442,6 +459,8 @@ const char *project_excluded_import(const char *from_dir, const char *ipath,
     const char *ex = excluding(m, rel);
     if (ex && pkg_name)
         *pkg_name = m->name ? m->name : entry;
+    if (ex && fetched)
+        *fetched = is_fetched_root(entry);
     return ex;
 }
 
