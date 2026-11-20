@@ -141,7 +141,7 @@ fn test_should_build_connect_json_without_secrets_leaking_into_other_fields() {
         kicked: false, last_flush: 0, kick: make_chan(1),
         slock: make_mutex(), subs: {}, next_sid: 1, pongs: [], pings_out: 0,
         inbox: "_INBOX.t", resp_sub: 0, resp: {}, next_token: 1, waiters: [],
-        tick: make_chan(1), rng: rand.new(1), reconnects: 0, reader_done: make_chan(1)
+        tick: make_chan(1), rng: rand.new(1), reconnects: 0, reader_done: make_chan(1), broken: false
     };
     let s = Server { host: "h", port: 1, tls: false, user: "u\"x", pass: "p", token: "" };
     let j = connect_json(nc, s, "") ?? "";
