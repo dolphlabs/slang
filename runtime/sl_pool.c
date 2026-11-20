@@ -825,7 +825,12 @@ typedef struct sl_pool_slot {
     _Atomic(sl_task *) cur;
     pthread_mutex_t mu; /* see sl_pool_slots' mutex comment below */
 } sl_pool_slot;
-static sl_pool_slot sl_pool_slots[SL_POOL_MAX_WORKERS];
+/* Plus one for main's own thread (SL_POOL_MAIN_SLOT): the ticker never
+ * looks at it (its loop stops at SL_POOL_MAX_WORKERS), but sl_gc_stw_sync
+ * reads it to hold back its stop signal while main's thread runs a task
+ * inside a preempt bracket. */
+#define SL_POOL_MAIN_SLOT SL_POOL_MAX_WORKERS
+static sl_pool_slot sl_pool_slots[SL_POOL_MAX_WORKERS + 1];
 
 /* Tier 11 eighth slice: a genuine use-after-free the atomic .cur field
  * alone cannot close, found only by tracing concurrent_compute's own
@@ -893,7 +898,24 @@ static sl_pool_slot sl_pool_slots[SL_POOL_MAX_WORKERS];
  * out of work polls, and sysmon does every 10 ms. */
 #define SL_NETPOLL_BUSY_NS 100000LL
 
+/* Record t as running on slot `slot` (release: visible to the ticker
+ * before any signal based on it could land), and after the switch back,
+ * clear it and finish t's switch under the slot's mutex (see the mutex
+ * comment above for the use-after-free that closes). */
+static inline void sl_pool_slot_occupy(long slot, sl_task *t) {
+    atomic_store_explicit(&sl_pool_slots[slot].cur, t, memory_order_release);
+}
+static inline void sl_pool_slot_vacate(long slot, sl_task *t) {
+    pthread_mutex_lock(&sl_pool_slots[slot].mu);
+    atomic_store_explicit(&sl_pool_slots[slot].cur, NULL, memory_order_release);
+    sl_worker_after_switch(t);
+    pthread_mutex_unlock(&sl_pool_slots[slot].mu);
+}
+
 static void sl_worker_run_loop(long slot_idx) {
+    /* Main's thread (-1) books its tasks in SL_POOL_MAIN_SLOT, which the
+     * ticker does not scan: its tasks stay cooperative-only, as before. */
+    long occ = slot_idx >= 0 ? slot_idx : SL_POOL_MAIN_SLOT;
     /* When the running chain of runnext tasks began: a runnext task
      * inherits it as its own run_start_ns, so the chain as a whole gets
      * one quantum (as Go's inheritTime does). */
@@ -959,8 +981,7 @@ static void sl_worker_run_loop(long slot_idx) {
          * this exact stint. release: must be visible to the ticker
          * thread (a different thread entirely) before any signal based
          * on seeing it could land. */
-        if (slot_idx >= 0)
-            atomic_store_explicit(&sl_pool_slots[slot_idx].cur, t, memory_order_release);
+        sl_pool_slot_occupy(occ, t);
         sl_ctx_switch(&sl_rt_native_rsp, t->rsp);
         /* resumes here once t either finishes or parks */
         /* Tier 11 eighth slice: .cur cleared BEFORE sl_worker_after_switch,
@@ -977,14 +998,7 @@ static void sl_worker_run_loop(long slot_idx) {
          * function never itself reads .cur, only t (its own parameter)
          * and sl_rt_current_task, so nothing about holding the lock
          * slightly longer than strictly required changes what it does. */
-        if (slot_idx >= 0) {
-            pthread_mutex_lock(&sl_pool_slots[slot_idx].mu);
-            atomic_store_explicit(&sl_pool_slots[slot_idx].cur, NULL, memory_order_release);
-            sl_worker_after_switch(t);
-            pthread_mutex_unlock(&sl_pool_slots[slot_idx].mu);
-        } else {
-            sl_worker_after_switch(t);
-        }
+        sl_pool_slot_vacate(occ, t);
     }
 }
 
@@ -1421,6 +1435,24 @@ static void sl_preempt_handler(int sig, siginfo_t *si, void *uctx_raw) {
 #endif
 }
 
+/* 1 if the task on pool slot `slot` is inside a preempt bracket, or the
+ * slot is busy finishing a switch (its worker is on its native stack and
+ * the handler would refuse): sl_gc_stw_sync holds its stop signal back
+ * either way and retries at the next resend. trylock, not lock: the
+ * worker holds the slot across sl_worker_after_switch, and the collector
+ * must never wait on a mutator's lock. Under the lock for the same
+ * use-after-free the ticker's comment below describes. */
+static int sl_pool_slot_in_bracket(int slot) {
+    pthread_mutex_t *slot_mu = &sl_pool_slots[slot].mu;
+    if (pthread_mutex_trylock(slot_mu) != 0)
+        return 1;
+    sl_task *t = atomic_load_explicit(&sl_pool_slots[slot].cur, memory_order_acquire);
+    int in = t && atomic_load_explicit(&t->preempt_disable_depth,
+                                       memory_order_acquire) != 0;
+    pthread_mutex_unlock(slot_mu);
+    return in;
+}
+
 /* Ticker thread: mirrors sl_time_thread/sl_reactor_thread/
  * sl_sig_thread's own dedicated-pthread shape. Every 2ms, for each
  * occupied slot whose run_start_ns looks past SL_PREEMPT_QUANTUM_NS
@@ -1816,9 +1848,11 @@ static void sl_pool_start(void) {
     if (n < 1) n = 1;
     if (n > SL_POOL_MAX_WORKERS) n = SL_POOL_MAX_WORKERS;
 
-    /* The ticker locks every slot's mutex, used or not. */
-    for (int i = 0; i < SL_POOL_MAX_WORKERS; i++)
+    /* The ticker locks every slot's mutex, used or not; main's too. */
+    for (int i = 0; i <= SL_POOL_MAIN_SLOT; i++)
         pthread_mutex_init(&sl_pool_slots[i].mu, NULL);
+    /* main registered with the GC before its runnext index existed */
+    sl_rt_gc_reg.pool_slot = SL_POOL_MAIN_SLOT;
 
     /* Before any worker starts: thieves scan slots [0, n) and main's. */
     sl_pool_nworkers = n;

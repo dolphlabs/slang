@@ -168,20 +168,26 @@
   `iolock` so it never frees a session under a write, and no longer
   closes the fd twice. The TLS context builders in runtime/sl_tls.c were
   also missing their preempt brackets. They now have them.
-- [ ] **The GC's stop-the-world still signals threads inside a preempt
-  bracket (found 2026-11-20, not fixed).** `sl_gc_stw_sync` (sl_gc.c)
-  resends SIGUSR1 to every thread that has not acked, every
-  `SL_GC_STOP_RESEND_NS`, whether or not its task is in a bracket. #557
-  stopped the ticker doing this because on macOS the signal can lose the
-  wakeup of a pthread_rwlock wait inside OpenSSL. `tests/nats_tls_close`
-  with 8 tasks under `SLANG_GC_VERIFY_MINOR=1 SLANG_GC_NURSERY_KB=16` hung
-  in 3 of 4 runs (1 of 2 after the context builders were bracketed). Every worker sat in `__psynch_rw_wrlock` under
-  `SSL_CTX_new_ex` (`ossl_method_construct`), and the collector thread
-  looped in `pthread_kill`. With 4 tasks, or without GC verify, it passes.
-  A fix must read the target thread's bracket depth without the
-  use-after-free the ticker's slot mutex guards against (perhaps a
-  per-thread counter published like `blocked_ptr`). Until then the test
-  is not in the GC-verify list.
+- [x] **The GC's stop-the-world signalled threads inside a preempt
+  bracket (found 2026-11-20, fix/gc-stw-bracket).** `sl_gc_stw_sync`
+  (sl_gc.c) resent SIGUSR1 every `SL_GC_STOP_RESEND_NS` to each thread
+  that had not acked, bracket or not. #557 stopped the ticker doing this
+  because on macOS the signal can lose the wakeup of a pthread_rwlock
+  wait inside OpenSSL. `tests/nats_tls_close` under
+  `SLANG_GC_VERIFY_MINOR=1 SLANG_GC_NURSERY_KB=16` hung in 6 of 6 runs
+  (a 16 KB nursery alone was enough): workers sat in
+  `__psynch_rw_wrlock` under `SSL_CTX_new_ex` while the collector looped
+  in `pthread_kill`. Now the collector reads the target's task through
+  its pool slot, under the slot's mutex (`sl_pool_slot_in_bracket`,
+  trylock so the collector never waits on a mutator), and skips the
+  signal while the task is bracketed; it acks at its first safepoint
+  after the bracket. Main's thread had no slot, so a task it ran was
+  still signalled (one more hang, sampled with main in `SSL_CTX_new_ex`);
+  it now books its tasks in `SL_POOL_MAIN_SLOT`, which the ticker does
+  not scan. 20 of 20 runs pass and the test is in the GC-verify list.
+  The same small race as the ticker's remains: the task can enter a
+  bracket between the check and the `pthread_kill`.
+
 - [ ] **`SSL_set1_host` is deprecated in OpenSSL 4.0 (found 2026-11-09,
   feat/uuid-package; not fixed).** `runtime/sl_tls.c:247` calls it to set
   the hostname a client checks the server's certificate against. Against

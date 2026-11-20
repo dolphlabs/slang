@@ -936,7 +936,7 @@ for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc
             gc_promotion_budget gc_chan_promotion_budget \
             value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks gc_skip_queued \
             spawn_join_local spawn_call_args link_tls link_split fn_value_shadows_function select_send_escapes \
-            sched_idle_wakes json_wide gc_safepoint_publish; do
+            sched_idle_wakes json_wide gc_safepoint_publish nats_tls_close; do
     [ -f "tests/$name/main.sl" ] || continue
     out="/tmp/sl_verify_minor_${name}.out"
     err="/tmp/sl_verify_minor_${name}.err"

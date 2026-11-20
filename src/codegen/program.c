@@ -1792,6 +1792,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
      * Without it, main's very first loop back-edge would compare
      * against 0 (the memset'd default) instead of a real timestamp. */
     emit_line(cg, "    sl_rt_main_task->run_start_ns = sl_rt_monotonic_ns();");
+    emit_line(cg, "    sl_pool_slot_occupy(SL_POOL_MAIN_SLOT, sl_rt_main_task);");
     emit_line(cg, "    sl_ctx_switch(&sl_rt_native_rsp, sl_rt_current_task->rsp);");
     /* Only reached if main's own task PARKED -- a normal finish calls
      * exit(0) directly from sl_main_task_entry and never switches back
@@ -1802,7 +1803,7 @@ void gen_whole_program(CG *cg, Package *pkgs, int npkgs,
      * only way the process ever legitimately exits is a direct exit()
      * call from somewhere, regardless of which thread is inside
      * sl_worker_run_loop at that moment. */
-    emit_line(cg, "    sl_worker_after_switch(sl_rt_main_task);");
+    emit_line(cg, "    sl_pool_slot_vacate(SL_POOL_MAIN_SLOT, sl_rt_main_task);");
     /* Tier 11 eighth slice: -1, not a real sl_pool_slots index -- this
      * is main's own original OS thread, not one of sl_pool_workers[],
      * and the async-preemption ticker's own scope note excludes it
