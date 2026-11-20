@@ -316,10 +316,20 @@
     remains what ended it; the old http2 client is gone, so this was not
     chased further.
   **Left:** a task that has seen EAGAIN but not parked when the close lands
-  waits on a number that is free or reused. Closing an fd another task is
-  using stays a race; ending it takes a reference count per fd, as Go's
-  fdMutex, or a handle that is not the number (`sl_link` is one). `sl_link`
-  and TLS closes do not wake waiters: a link is not shared between tasks.
+  waits on a number that is free or reused. *Fixed 2026-11-20
+  (fix/net-close-race):* each fd number's read slot counts its closes and
+  carries a closing flag from the waiters' take until close(2) returns;
+  accept, recv and send read it once before their first syscall and their
+  park compares it under the list lock, so such a task now gets "closed".
+  tests/net_close_race (12000 rounds over a Unix socket: 72 and 96 missed
+  closes on dev under load, and one run hung in `close(2)`, the main task's,
+  with every worker idle; 0 missed in 26 runs with the fix on macOS and 3 on
+  linux, no hang). An op whose syscall itself runs after the close still
+  hits a free number (EBADF) or a reused one: only a per-fd reference
+  count, as Go's fdMutex, or a handle that is not the number (`sl_link`)
+  ends that. `sl_link` and TLS closes do not wake waiters: a link is not
+  shared between tasks. The hang inside `close(2)` was seen only on dev,
+  in runs that also missed closes; its cause is not proven.
 
 
 - [x] **tests/h2_client hung about once in sixty runs on linux
@@ -1118,10 +1128,16 @@ Found building zokor's logger (2026-10-12), not fixed:
   tests/http_method_token): `parse_head` takes everything
   before the first space, with no RFC 9110 token check, so a method can
   carry `"`, `\` or an ESC byte into a handler or a log line.
-- [ ] **Generic functions cannot be named as values even when every type
-  parameter is known** (`r.get(path, live)` inside a generic method over
-  `S`), and there is no explicit instantiation syntax (`f[int]()` is a
-  parse error), so a library cannot register its own generic handler.
+- [x] **Generic functions cannot be named as values even when every type
+  parameter is known** (2026-11-20, feat/generic-fn-values). Where a
+  concrete fn type is expected (a typed parameter, an annotated `let`, a
+  `return`, a struct field), a generic function's type parameters are now
+  unified with that type's, and the value is that instance; handed to a
+  generic call, it waits for the other arguments to fix the parameter's
+  type (`twice("x", ident)`). `expect_push` now carries fn types for this.
+  Still no explicit instantiation syntax (`f[int]` would collide with
+  indexing), so a generic function cannot supply a type parameter itself.
+  tests/generic_fn_values, tests/fail_generic_fn_value_*.
 - [ ] **The move check is not path-sensitive**: in
   `if !ok { refuse(c); return ""; } spawn serve(c);` the second use of `c`
   is "use of moved value", though the branch that moved it returns. The

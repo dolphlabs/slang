@@ -134,7 +134,9 @@ struct Expr {
         struct { char *value; } str_lit;
         struct { unsigned char *data; long long len; } bytes_lit;
         struct { int value; } bool_lit;
-        struct { char *name; } ident;
+        /* gsig: a generic function named as a value, its instance for
+         * the fn type expected there (FuncSig *, set by inference). */
+        struct { char *name; void *gsig; } ident;
         struct { char *op; Expr *lhs; Expr *rhs; } binary;
         struct { char *op; Expr *operand; } unary;
         /* `name` names the callee for an ordinary call. `callee` is set
