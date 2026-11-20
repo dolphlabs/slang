@@ -1,5 +1,18 @@
 # todo
 
+- [ ] **GCC on linux-arm64 compiles a program using both
+  `crypto.bcrypt_verify` and `crypto.scrypt` about 200 s slower (found
+  2026-11-20, zokor #128; not fixed).** zokor's full test runner (24 MB of
+  C) took about 230 s to build and run on CI's linux-arm64 before #570 and
+  about 440 s with zokor #128, which calls both. Its 10-minute Tests step
+  then times out. The generated C grows by 26 KB (0.1%). linux-x86_64
+  (GCC), macOS (clang) and slang's own CI are unchanged. Bisected on CI:
+  bcrypt alone or scrypt alone is about 400 s, as before; both together
+  612 s and over. Marking eksblowfish, `sl_scrypt_raw`, `sl_kdf_run` and
+  `sl_kdf_derive` noinline changed nothing (branch exp/bcrypt-noinline),
+  so it is not inlining across the kdf dispatch. Next: reproduce in an
+  arm64 container (AGENTS.md section 7) with `-ftime-report`.
+
 - [x] **zip and tar (2026-11-20, feat/zip-tar).** `stdlib/zip` (stored and
   deflate, ZIP64 reading, UTF-8 names, overlap and CRC checks, entry and
   total limits) and `stdlib/tar` (ustar, pax, GNU long names and base-256
