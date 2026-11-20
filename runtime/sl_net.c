@@ -187,6 +187,14 @@ static sl_reactor_wq sl_reactor_wqs[SL_REACTOR_WQS] = {
 typedef struct sl_reactor_slot {
     sl_task *task;
     uint32_t gen;
+    /* The READ slot only: how many times net.close has closed this number
+       (low 15 bits), and SL_REACTOR_CLOSING while a close is under way. An
+       op reads it before its first syscall and its park compares it under
+       the list lock (sl_reactor_close_epoch), so a close that lands after
+       the op's EAGAIN but before its park is still seen. 16 bits fit the
+       slot's padding on both reactors; a false match needs 32768 closes of
+       one number inside one op. */
+    uint16_t closes;
 #if defined(SL_REACTOR_EPOLL)
     /* A persistent fd's edge arrived with nobody waiting in this
        direction: the next wait returns at once, for its caller to retry,
@@ -219,6 +227,11 @@ typedef struct sl_reactor_slot {
 #define SL_REACTOR_PERSIST_MARKED 1  /* registered at its first wait */
 #define SL_REACTOR_PERSIST_ADDED  2
 #endif
+/* Set from the waiters' take until close(2) has returned: the fd is still
+ * open then, so an op that starts in between reads the new count, gets
+ * EAGAIN and would park unseen without it. */
+#define SL_REACTOR_CLOSING 0x8000u
+#define SL_REACTOR_CLOSE_COUNT 0x7fffu
 #define SL_REACTOR_SLOT_CHUNK 4096
 #define SL_REACTOR_SLOT_CHUNKS 16384
 static sl_reactor_slot *_Atomic sl_reactor_slot_chunks[SL_REACTOR_SLOT_CHUNKS];
@@ -493,6 +506,12 @@ static void sl_reactor_kick(void) {
 static void sl_reactor_take_closed(int fd, sl_task **ready) {
     sl_reactor_wq *q = &sl_reactor_wqs[sl_reactor_wq_for(fd)];
     pthread_mutex_lock(&q->mu);
+    sl_reactor_slot *cs = sl_reactor_slot_at(fd, SL_REACTOR_READ, 1);
+    if (cs)
+        __atomic_store_n(&cs->closes,
+                         (uint16_t)(((cs->closes + 1u) & SL_REACTOR_CLOSE_COUNT) |
+                                    SL_REACTOR_CLOSING),
+                         __ATOMIC_RELEASE);
     for (int rw = SL_REACTOR_READ; rw <= SL_REACTOR_WRITE; rw++) {
         sl_reactor_slot *s = sl_reactor_slot_at(fd, rw, 0);
         if (!s || !s->task)
@@ -506,6 +525,25 @@ static void sl_reactor_take_closed(int fd, sl_task **ready) {
         t->next = *ready;
         *ready = t;
     }
+    pthread_mutex_unlock(&q->mu);
+}
+
+/* The number is free again (close(2) returned) or newly handed out (accept,
+ * dial): ops from here on are its next owner's. The count stays, so an op
+ * that began before the close still finds it moved on. Caller holds fd's
+ * list lock. */
+static void sl_reactor_clear_closing_locked(int fd) {
+    sl_reactor_slot *cs = sl_reactor_slot_at(fd, SL_REACTOR_READ, 0);
+    if (cs && (cs->closes & SL_REACTOR_CLOSING))
+        __atomic_store_n(&cs->closes,
+                         (uint16_t)(cs->closes & SL_REACTOR_CLOSE_COUNT),
+                         __ATOMIC_RELEASE);
+}
+
+static void sl_reactor_clear_closing(int fd) {
+    sl_reactor_wq *q = &sl_reactor_wqs[sl_reactor_wq_for(fd)];
+    pthread_mutex_lock(&q->mu);
+    sl_reactor_clear_closing_locked(fd);
     pthread_mutex_unlock(&q->mu);
 }
 
@@ -580,12 +618,13 @@ static void sl_reactor_register_persistent(int fd, sl_reactor_slot *rs) {
  * sl_reactor_forget: register it persistently at its first wait. A no-op
  * on kqueue, which keeps one-shot knotes. */
 static void sl_reactor_mark_persistent(int fd) {
-#if defined(SL_REACTOR_EPOLL)
     if (fd < 0)
         return;
+#if defined(SL_REACTOR_EPOLL)
     sl_rt_preempt_disable();
     sl_reactor_wq *q = &sl_reactor_wqs[sl_reactor_wq_for(fd)];
     pthread_mutex_lock(&q->mu);
+    sl_reactor_clear_closing_locked(fd);
     sl_reactor_slot *rd = sl_reactor_slot_at(fd, SL_REACTOR_READ, 1);
     sl_reactor_slot *wr = sl_reactor_slot_at(fd, SL_REACTOR_WRITE, 1);
     if (rd && wr) {
@@ -596,7 +635,11 @@ static void sl_reactor_mark_persistent(int fd) {
     pthread_mutex_unlock(&q->mu);
     sl_rt_preempt_enable();
 #else
-    (void)fd;
+    /* A connected socket's number may still carry a close of its previous
+       owner's that is finishing on another thread. */
+    sl_rt_preempt_disable();
+    sl_reactor_clear_closing(fd);
+    sl_rt_preempt_enable();
 #endif
 }
 
@@ -629,8 +672,24 @@ static void sl_reactor_forget(int fd) {
 #endif
 }
 
-static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
-                                 sl_until deadline) {
+/* fd's close count, for sl_reactor_wait_epoch: read once per op, before
+ * its first syscall. */
+static int sl_reactor_close_epoch(int fd) {
+    sl_reactor_slot *s = sl_reactor_slot_at(fd, SL_REACTOR_READ, 0);
+    return s ? (int)__atomic_load_n(&s->closes, __ATOMIC_ACQUIRE) : 0;
+}
+
+#define SL_REACTOR_NO_EPOCH (-1)
+
+static int sl_reactor_closed_since(int fd, int epoch) {
+    int now = sl_reactor_close_epoch(fd);
+    return now != epoch || (now & SL_REACTOR_CLOSING);
+}
+
+/* epoch is the op's sl_reactor_close_epoch, or SL_REACTOR_NO_EPOCH for a
+ * fd net.close never closes (pipes, eventfds, links). */
+static int sl_reactor_wait_epoch(int fd, int rw, int abort_on_shutdown,
+                                 sl_until deadline, int epoch) {
     if (deadline && sl_until_hit(deadline))
         return -2;
     sl_rt_preempt_disable();
@@ -642,6 +701,14 @@ static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
         pthread_mutex_unlock(&wq->mu);
         sl_rt_preempt_enable();
         return -1;
+    }
+    if (epoch != SL_REACTOR_NO_EPOCH && sl_reactor_closed_since(fd, epoch)) {
+        /* Closed since this op began, or closing now, by a task that found
+           nobody parked to wake: the number is free or another
+           connection's by the time this op could retry. */
+        pthread_mutex_unlock(&wq->mu);
+        sl_rt_preempt_enable();
+        return SL_REACTOR_CLOSED;
     }
     sl_task *sl_reactor_self = sl_rt_cur();
     sl_reactor_slot *slot = sl_reactor_slot_at(fd, rw, 1);
@@ -739,6 +806,12 @@ static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
     if (deadline && sl_until_hit(deadline))
         return -2;
     return 0;
+}
+
+static int sl_reactor_wait_until(int fd, int rw, int abort_on_shutdown,
+                                 sl_until deadline) {
+    return sl_reactor_wait_epoch(fd, rw, abort_on_shutdown, deadline,
+                                 SL_REACTOR_NO_EPOCH);
 }
 
 static int sl_reactor_wait(int fd, int rw, int abort_on_shutdown) {
@@ -1869,6 +1942,7 @@ static sl_res_i32_str *sl_net_port(int lfd) {
 }
 
 static sl_res_i32_str *sl_net_accept(int lfd) {
+    int epoch = sl_reactor_close_epoch(lfd);
     for (;;) {
         int cfd = accept(lfd, NULL, NULL);
         if (cfd >= 0) {
@@ -1880,7 +1954,7 @@ static sl_res_i32_str *sl_net_accept(int lfd) {
             return sl_net_err_i32(strerror(errno));
         if (sl_net_user_nonblock_contains((void *)(intptr_t)lfd))
             return sl_net_err_i32("would block");
-        int w = sl_reactor_wait(lfd, SL_REACTOR_READ, 1);
+        int w = sl_reactor_wait_epoch(lfd, SL_REACTOR_READ, 1, 0, epoch);
         if (w == SL_REACTOR_CLOSED)
             return sl_net_err_i32("closed");
         if (w < 0)
@@ -2014,6 +2088,7 @@ static sl_res_i32_str *sl_net_send_u(int fd, sl_bytes *data, sl_until u) {
     long long off = 0;
     if (u && sl_until_hit(u) && data->len > 0)
         return sl_net_err_i32("timeout");
+    int epoch = sl_reactor_close_epoch(fd);
     while (off < data->len) {
         ssize_t n = send(fd, data->ptr + off,
                          (size_t)(data->len - off), 0);
@@ -2028,7 +2103,7 @@ static sl_res_i32_str *sl_net_send_u(int fd, sl_bytes *data, sl_until u) {
            sl_reactor_wait's own comment for why 1 here would busy-spin
            at 100% CPU. Only a deadline or a close ends the loop; -1 is
            the shutdown nudge and is ignored exactly as before. */
-        int w = sl_reactor_wait_until(fd, SL_REACTOR_WRITE, 0, u);
+        int w = sl_reactor_wait_epoch(fd, SL_REACTOR_WRITE, 0, u, epoch);
         if (w == -2)
             return sl_net_err_i32("timeout");
         if (w == SL_REACTOR_CLOSED)
@@ -2141,6 +2216,7 @@ static sl_res_bytes_str *sl_net_recv_u(int fd, int max, sl_until u) {
     unsigned char *scratch = (unsigned char *)sl_recv_buf_get((size_t)max);
     /* Nothing GC-held lives across the wait below: the result is built
      * once the bytes are in (sl_net_recv_bytes says why). */
+    int epoch = sl_reactor_close_epoch(fd);
     for (;;) {
         ssize_t n = recv(fd, scratch, (size_t)max, 0);
         if (n >= 0) {
@@ -2156,7 +2232,7 @@ static sl_res_bytes_str *sl_net_recv_u(int fd, int max, sl_until u) {
             sl_recv_buf_put(scratch);
             return sl_net_err_bytes("would block");
         }
-        int wr = sl_reactor_wait_until(fd, SL_REACTOR_READ, 1, u);
+        int wr = sl_reactor_wait_epoch(fd, SL_REACTOR_READ, 1, u, epoch);
         if (wr < 0) {
             sl_recv_buf_put(scratch);
             return sl_net_err_bytes(wr == -2 ? "timeout"
@@ -2184,10 +2260,11 @@ static bool sl_net_idle_alive(int fd) {
     return n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK);
 }
 
-/* A task parked on fd is woken with "closed". One that has seen EAGAIN but
- * not yet parked is not: it would wait on a number that is free or reused,
- * so closing an fd another task is using stays a race for the caller to
- * avoid. Fixing that takes a reference count per fd, as Go's fdMutex. */
+/* A task parked on fd is woken with "closed", and so is one that has seen
+ * EAGAIN but not yet parked: its park finds the close count moved on. One
+ * whose syscall itself runs after the close still hits a free number
+ * (EBADF) or a reused one; only a handle that is not the number (sl_link)
+ * or a per-fd reference count, as Go's fdMutex, ends that. */
 static void sl_net_close(int fd) {
     sl_net_user_nonblock_remove((void *)(intptr_t)fd); /* avoid a
         stale entry misapplying to a later, unrelated fd that
@@ -2197,6 +2274,9 @@ static void sl_net_close(int fd) {
     sl_reactor_take_closed(fd, &ready);
     sl_reactor_forget(fd);
     close(fd);
+    /* An op on a fd that is not a connected socket (a listener), begun in
+       the moment between close(2) returning and this, reads "closed". */
+    sl_reactor_clear_closing(fd);
     sl_reactor_resume_all(ready);
     sl_rt_preempt_enable();
 }
