@@ -1088,9 +1088,14 @@ Found building zokor's logger (2026-10-12), not fixed:
 - [x] **`??` printed as `'^` in diagnostics** (fix/qq-token-name). The
   token name held the C trigraph for `^`; it is escaped now.
   tests/fail_qq_token_name.
-- [ ] **str literals take no `\x` or `\u` escape** ("unknown escape
-  sequence"); a terminal colour needs `to_str(b"\x1b[32m")`. JSON-style
-  `\u001b` and `\x1b` are what a model writes first.
+- [x] **str literals take no `\x` or `\u` escape** (2026-11-20,
+  feat/str-escapes). str and bytes literals now take `\xHH` (one raw byte),
+  `\uXXXX` (JSON's four digits) and `\u{H..H}` (one to six), the last two
+  written as UTF-8; surrogate halves and anything past U+10FFFF are compile
+  errors that name `\u{...}`. The C literal writer now emits control bytes
+  and invalid UTF-8 as three-digit octal: its `\xHH` swallowed a hex digit
+  that followed (a raw ESC then `1` compiled to one wrong byte). Tests:
+  tests/str_escapes, tests/fail_escape_*.
 - [ ] **A str cannot be read byte by byte without a copy**: `s[i]` is "cannot
   index a value of type str", so a scan of a str allocates `to_bytes(s)`.
   A read-only `byte_at(s, i)` (or indexing) would make escape checks free.

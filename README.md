@@ -186,6 +186,10 @@ println("Hello, " + name + "! " + x);
 // string interpolation with ${expr} (any expression allowed)
 println("pi doubled is ${pi * 2}");
 
+// escapes: \n \t \r \0 \" \\, \xHH (one raw byte), \uXXXX and \u{H..H}
+// (a code point, written as UTF-8); bytes literals take the same ones
+println("\x1b[32mgreen\x1b[0m caf\u00e9 \u{1F600}");
+
 // comparisons: == != < <= > >=   (bools: == and != only)   logic: && || !
 if x > y && ok {
     println("bigger");
@@ -471,7 +475,7 @@ because `n` happens to be an `int`.
 #### bytes
 
 ```slang
-let b = b"raw\x00bytes";   // binary-safe literal; \0 \xHH escapes
+let b = b"raw\x00bytes";   // binary-safe literal; same escapes as str
 println(len(b));           // byte count, not strlen
 println(b[0]);             // indexing yields an int (0..255)
 b[0] = 65;                 // mutable in place
