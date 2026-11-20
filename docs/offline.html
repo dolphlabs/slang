@@ -1165,7 +1165,16 @@ r.br.x = <span class="n">6</span>;
 
 <span class="k">spawn</span> <span class="f">handle</span>(conn, <span class="n">1</span>);           <span class="c">// spawns handle[Conn], not a template</span></code></pre></div>
 <p>A spawn has no annotated <code>let</code> to infer from, so a parameter only the return type mentions cannot be resolved there, and says so.</p>
-<p>Not yet supported: <code>extern fn</code> cannot be generic, and neither can it declare lifetime parameters. A generic function is not one function until its type is chosen, so it cannot be used as a bare value — write a plain function that calls it with a concrete type, and use that instead. <code>spawn</code> does not take a method, generic or not.</p>
+<p>A generic function is not one function until its types are chosen, so it can be named as a value only where a concrete <code>fn</code> type is expected — a typed parameter, an annotated <code>let</code>, a <code>return</code>, a struct field. Its type parameters are unified with that type&#x27;s, as a call unifies them with its arguments, and the value is that one instance:</p>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">fn</span> ident[T](x: T) -&gt; T { <span class="k">return</span> x; }
+<span class="k">fn</span> <span class="f">apply</span>(f: <span class="k">fn</span>(<span class="t">int</span>) -&gt; <span class="t">int</span>, v: <span class="t">int</span>) -&gt; <span class="t">int</span> { <span class="k">return</span> <span class="f">f</span>(v); }
+<span class="k">fn</span> twice[T](x: T, f: <span class="k">fn</span>(T) -&gt; T) -&gt; T { <span class="k">return</span> <span class="f">f</span>(<span class="f">f</span>(x)); }
+
+<span class="b">println</span>(<span class="f">apply</span>(ident, <span class="n">5</span>));             <span class="c">// ident[int]</span>
+<span class="k">let</span> g: <span class="k">fn</span>(<span class="t">str</span>) -&gt; <span class="t">str</span> = ident;        <span class="c">// ident[str]</span>
+<span class="b">println</span>(<span class="f">twice</span>(<span class="s">&quot;x&quot;</span>, ident));           <span class="c">// T = str from &quot;x&quot;, then ident[str]</span></code></pre></div>
+<p>Handed to another generic function, it waits for the other arguments to fix the parameter&#x27;s type; it cannot supply a type parameter itself (<code>map_it[A, B](x: A, f: fn(A) -&gt; B)</code> called with <code>ident</code> has nothing to give <code>B</code>). <code>let f = ident;</code>, with no type to take, is refused.</p>
+<p>Not yet supported: <code>extern fn</code> cannot be generic, and neither can it declare lifetime parameters. <code>spawn</code> does not take a method, generic or not.</p>
 <h4 id="enums">Enums<a class="anchor" href="#enums" aria-label="Link to this section">#</a></h4>
 <p>A closed, <code>i32</code>-backed set of named constants:</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code>enum Status {
@@ -1526,7 +1535,16 @@ r.br.x = <span class="n">6</span>;
 
 <span class="k">spawn</span> <span class="f">handle</span>(conn, <span class="n">1</span>);           <span class="c">// spawns handle[Conn], not a template</span></code></pre></div>
 <p>A spawn has no annotated <code>let</code> to infer from, so a parameter only the return type mentions cannot be resolved there, and says so.</p>
-<p>Not yet supported: <code>extern fn</code> cannot be generic, and neither can it declare lifetime parameters. A generic function is not one function until its type is chosen, so it cannot be used as a bare value — write a plain function that calls it with a concrete type, and use that instead. <code>spawn</code> does not take a method, generic or not.</p>
+<p>A generic function is not one function until its types are chosen, so it can be named as a value only where a concrete <code>fn</code> type is expected — a typed parameter, an annotated <code>let</code>, a <code>return</code>, a struct field. Its type parameters are unified with that type&#x27;s, as a call unifies them with its arguments, and the value is that one instance:</p>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">fn</span> ident[T](x: T) -&gt; T { <span class="k">return</span> x; }
+<span class="k">fn</span> <span class="f">apply</span>(f: <span class="k">fn</span>(<span class="t">int</span>) -&gt; <span class="t">int</span>, v: <span class="t">int</span>) -&gt; <span class="t">int</span> { <span class="k">return</span> <span class="f">f</span>(v); }
+<span class="k">fn</span> twice[T](x: T, f: <span class="k">fn</span>(T) -&gt; T) -&gt; T { <span class="k">return</span> <span class="f">f</span>(<span class="f">f</span>(x)); }
+
+<span class="b">println</span>(<span class="f">apply</span>(ident, <span class="n">5</span>));             <span class="c">// ident[int]</span>
+<span class="k">let</span> g: <span class="k">fn</span>(<span class="t">str</span>) -&gt; <span class="t">str</span> = ident;        <span class="c">// ident[str]</span>
+<span class="b">println</span>(<span class="f">twice</span>(<span class="s">&quot;x&quot;</span>, ident));           <span class="c">// T = str from &quot;x&quot;, then ident[str]</span></code></pre></div>
+<p>Handed to another generic function, it waits for the other arguments to fix the parameter&#x27;s type; it cannot supply a type parameter itself (<code>map_it[A, B](x: A, f: fn(A) -&gt; B)</code> called with <code>ident</code> has nothing to give <code>B</code>). <code>let f = ident;</code>, with no type to take, is refused.</p>
+<p>Not yet supported: <code>extern fn</code> cannot be generic, and neither can it declare lifetime parameters. <code>spawn</code> does not take a method, generic or not.</p>
 <h3 id="enums-2">Enums<a class="anchor" href="#enums-2" aria-label="Link to this section">#</a></h3>
 <p>A closed, <code>i32</code>-backed set of named constants:</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code>enum Status {
@@ -1834,7 +1852,16 @@ r.br.x = <span class="n">6</span>;
 
 <span class="k">spawn</span> <span class="f">handle</span>(conn, <span class="n">1</span>);           <span class="c">// spawns handle[Conn], not a template</span></code></pre></div>
 <p>A spawn has no annotated <code>let</code> to infer from, so a parameter only the return type mentions cannot be resolved there, and says so.</p>
-<p>Not yet supported: <code>extern fn</code> cannot be generic, and neither can it declare lifetime parameters. A generic function is not one function until its type is chosen, so it cannot be used as a bare value — write a plain function that calls it with a concrete type, and use that instead. <code>spawn</code> does not take a method, generic or not.</p></section><section class="view" id="guide-errors" hidden><header class="page-head"><h1>Errors</h1><p class="tagline">opt, result and fault -- and the rule for choosing.</p></header><h2 id="option-result">Option / Result</h2>
+<p>A generic function is not one function until its types are chosen, so it can be named as a value only where a concrete <code>fn</code> type is expected — a typed parameter, an annotated <code>let</code>, a <code>return</code>, a struct field. Its type parameters are unified with that type&#x27;s, as a call unifies them with its arguments, and the value is that one instance:</p>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">fn</span> ident[T](x: T) -&gt; T { <span class="k">return</span> x; }
+<span class="k">fn</span> <span class="f">apply</span>(f: <span class="k">fn</span>(<span class="t">int</span>) -&gt; <span class="t">int</span>, v: <span class="t">int</span>) -&gt; <span class="t">int</span> { <span class="k">return</span> <span class="f">f</span>(v); }
+<span class="k">fn</span> twice[T](x: T, f: <span class="k">fn</span>(T) -&gt; T) -&gt; T { <span class="k">return</span> <span class="f">f</span>(<span class="f">f</span>(x)); }
+
+<span class="b">println</span>(<span class="f">apply</span>(ident, <span class="n">5</span>));             <span class="c">// ident[int]</span>
+<span class="k">let</span> g: <span class="k">fn</span>(<span class="t">str</span>) -&gt; <span class="t">str</span> = ident;        <span class="c">// ident[str]</span>
+<span class="b">println</span>(<span class="f">twice</span>(<span class="s">&quot;x&quot;</span>, ident));           <span class="c">// T = str from &quot;x&quot;, then ident[str]</span></code></pre></div>
+<p>Handed to another generic function, it waits for the other arguments to fix the parameter&#x27;s type; it cannot supply a type parameter itself (<code>map_it[A, B](x: A, f: fn(A) -&gt; B)</code> called with <code>ident</code> has nothing to give <code>B</code>). <code>let f = ident;</code>, with no type to take, is refused.</p>
+<p>Not yet supported: <code>extern fn</code> cannot be generic, and neither can it declare lifetime parameters. <code>spawn</code> does not take a method, generic or not.</p></section><section class="view" id="guide-errors" hidden><header class="page-head"><h1>Errors</h1><p class="tagline">opt, result and fault -- and the rule for choosing.</p></header><h2 id="option-result">Option / Result</h2>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">fn</span> <span class="f">div10</span>(n: <span class="t">int</span>) -&gt; <span class="t">opt</span>[<span class="t">int</span>] {
     <span class="k">if</span> n % <span class="n">10</span> == <span class="n">0</span> { <span class="k">return</span> <span class="b">some</span>(n / <span class="n">10</span>); }
     <span class="k">return</span> <span class="b">none</span>;
