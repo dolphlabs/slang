@@ -571,7 +571,7 @@ typedef struct {
     ((((st)->s[0][(x) >> 24] + (st)->s[1][((x) >> 16) & 0xff]) ^ \
       (st)->s[2][((x) >> 8) & 0xff]) + (st)->s[3][(x) & 0xff])
 
-static void sl_bf_encrypt(const sl_bf_state *st, uint32_t *lp, uint32_t *rp) {
+__attribute__((noinline)) static void sl_bf_encrypt(const sl_bf_state *st, uint32_t *lp, uint32_t *rp) {
     uint32_t l = *lp, r = *rp;
     for (int i = 0; i < 16; i += 2) {
         l ^= st->p[i];
@@ -597,7 +597,7 @@ static uint32_t sl_bf_word(const unsigned char *data, size_t len, size_t *pos) {
 }
 
 /* ExpandKey(state, salt, key); salt NULL is the unsalted form. */
-static void sl_bf_expand(sl_bf_state *st, const unsigned char *salt,
+__attribute__((noinline)) static void sl_bf_expand(sl_bf_state *st, const unsigned char *salt,
                          const unsigned char *key, size_t key_len) {
     size_t kpos = 0, spos = 0;
     for (int i = 0; i < 18; i++)
@@ -642,7 +642,7 @@ static void sl_bf_expand(sl_bf_state *st, const unsigned char *salt,
  * preemption or a collection may stop it anywhere -- which matters,
  * because at cost 12 it runs for a quarter of a second. Only its malloc
  * and free are bracketed. */
-static int sl_bcrypt_raw(const unsigned char *password, size_t password_len,
+__attribute__((noinline)) static int sl_bcrypt_raw(const unsigned char *password, size_t password_len,
                          const unsigned char salt[16], uint32_t cost,
                          unsigned char out[24]) {
     unsigned char key[SL_BCRYPT_MAX_KEY];
