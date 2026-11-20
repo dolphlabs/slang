@@ -701,7 +701,7 @@ __attribute__((noinline)) static int sl_bcrypt_raw(const unsigned char *password
 #define SL_SCRYPT_MAX_LEN 64LL
 
 /* OpenSSL work: on a worker, the caller brackets it. Returns 1 or 0. */
-static int sl_scrypt_raw(const unsigned char *password, size_t password_len,
+__attribute__((noinline)) static int sl_scrypt_raw(const unsigned char *password, size_t password_len,
                          const unsigned char *salt, size_t salt_len,
                          uint64_t n, uint32_t r, uint32_t p,
                          unsigned char *out, size_t out_len) {
@@ -718,7 +718,7 @@ enum { SL_KDF_ARGON2ID, SL_KDF_SCRYPT, SL_KDF_BCRYPT };
 /* One slow derivation, by kind. The numeric inputs: Argon2id's
  * iterations, memory (KiB) and lanes; scrypt's N, r and p; bcrypt's cost
  * in `a` alone. */
-static int sl_kdf_run(int kind, const unsigned char *password,
+__attribute__((noinline)) static int sl_kdf_run(int kind, const unsigned char *password,
                       size_t password_len, const unsigned char *salt,
                       size_t salt_len, uint64_t a, uint32_t b, uint32_t c,
                       unsigned char *out, size_t out_len) {
@@ -906,7 +906,7 @@ static int sl_kdf_offload(int kind, const unsigned char *password,
 /* A slow derivation on a kdf thread when the reactor is linked in, else
  * here: OpenSSL's inside a preempt bracket, bcrypt (which locks nothing)
  * outside one so it can still be preempted. */
-static int sl_kdf_derive(int kind, const unsigned char *password,
+__attribute__((noinline)) static int sl_kdf_derive(int kind, const unsigned char *password,
                          size_t password_len, const unsigned char *salt,
                          size_t salt_len, uint64_t a, uint32_t b, uint32_t c,
                          unsigned char *out, size_t out_len) {
