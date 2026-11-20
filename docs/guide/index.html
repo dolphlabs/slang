@@ -120,6 +120,10 @@ p.count += <span class="n">1</span>;
 <span class="c">// string interpolation with ${expr} (any expression allowed)</span>
 <span class="b">println</span>(<span class="s">&quot;pi doubled is ${pi * 2}&quot;</span>);
 
+<span class="c">// escapes: \n \t \r \0 \&quot; \\, \xHH (one raw byte), \uXXXX and \u{H..H}</span>
+<span class="c">// (a code point, written as UTF-8); bytes literals take the same ones</span>
+<span class="b">println</span>(<span class="s">&quot;\x1b[32mgreen\x1b[0m caf\u00e9 \u{1F600}&quot;</span>);
+
 <span class="c">// comparisons: == != &lt; &lt;= &gt; &gt;=   (bools: == and != only)   logic: &amp;&amp; || !</span>
 <span class="k">if</span> x &gt; y &amp;&amp; <span class="b">ok</span> {
     <span class="b">println</span>(<span class="s">&quot;bigger&quot;</span>);
@@ -229,7 +233,7 @@ p.count += <span class="n">1</span>;
 <p><strong>Compound assignment</strong> exists for every one of these: <code>+= -= *= /= %=</code> and <code>&amp;= |= ^= &lt;&lt;= &gt;&gt;=</code>. <code>x op= v</code> means <code>x = x op v</code>, which evaluates the target twice, so a side-effecting <strong>index</strong> is hoisted into a temporary first and runs exactly once — <code>xs[pop(q)] += 1</code> pops once, not twice. Only the value being indexed has to be re-nameable: <code>f()[0] += 1</code> is a compile error, since naming <code>f()</code> twice would call it twice, and hoisting it would mutate a copy for a value-type struct. Write that one out.</p>
 <p><code>&gt;&gt;</code> follows the operand&#x27;s signedness: arithmetic (sign-preserving) on a signed type, logical (zero-filling) on an unsigned one, exactly as in C. <code>&amp;</code> <code>|</code> <code>^</code> promote to the wider operand; a shift keeps the width of the value being shifted, so <code>x &lt;&lt; n</code> never silently widens a narrow <code>x</code> because <code>n</code> happens to be an <code>int</code>.</p>
 <h4 id="bytes">bytes<a class="anchor" href="#bytes" aria-label="Link to this section">#</a></h4>
-<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> b = b<span class="s">&quot;raw\x00bytes&quot;</span>;   <span class="c">// binary-safe literal; \0 \xHH escapes</span>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> b = b<span class="s">&quot;raw\x00bytes&quot;</span>;   <span class="c">// binary-safe literal; same escapes as str</span>
 <span class="b">println</span>(<span class="b">len</span>(b));           <span class="c">// byte count, not strlen</span>
 <span class="b">println</span>(b[<span class="n">0</span>]);             <span class="c">// indexing yields an int (0..255)</span>
 b[<span class="n">0</span>] = <span class="n">65</span>;                 <span class="c">// mutable in place</span>
@@ -387,7 +391,16 @@ r.br.x = <span class="n">6</span>;
 
 <span class="k">spawn</span> <span class="f">handle</span>(conn, <span class="n">1</span>);           <span class="c">// spawns handle[Conn], not a template</span></code></pre></div>
 <p>A spawn has no annotated <code>let</code> to infer from, so a parameter only the return type mentions cannot be resolved there, and says so.</p>
-<p>Not yet supported: <code>extern fn</code> cannot be generic, and neither can it declare lifetime parameters. A generic function is not one function until its type is chosen, so it cannot be used as a bare value — write a plain function that calls it with a concrete type, and use that instead. <code>spawn</code> does not take a method, generic or not.</p>
+<p>A generic function is not one function until its types are chosen, so it can be named as a value only where a concrete <code>fn</code> type is expected — a typed parameter, an annotated <code>let</code>, a <code>return</code>, a struct field. Its type parameters are unified with that type&#x27;s, as a call unifies them with its arguments, and the value is that one instance:</p>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">fn</span> ident[T](x: T) -&gt; T { <span class="k">return</span> x; }
+<span class="k">fn</span> <span class="f">apply</span>(f: <span class="k">fn</span>(<span class="t">int</span>) -&gt; <span class="t">int</span>, v: <span class="t">int</span>) -&gt; <span class="t">int</span> { <span class="k">return</span> <span class="f">f</span>(v); }
+<span class="k">fn</span> twice[T](x: T, f: <span class="k">fn</span>(T) -&gt; T) -&gt; T { <span class="k">return</span> <span class="f">f</span>(<span class="f">f</span>(x)); }
+
+<span class="b">println</span>(<span class="f">apply</span>(ident, <span class="n">5</span>));             <span class="c">// ident[int]</span>
+<span class="k">let</span> g: <span class="k">fn</span>(<span class="t">str</span>) -&gt; <span class="t">str</span> = ident;        <span class="c">// ident[str]</span>
+<span class="b">println</span>(<span class="f">twice</span>(<span class="s">&quot;x&quot;</span>, ident));           <span class="c">// T = str from &quot;x&quot;, then ident[str]</span></code></pre></div>
+<p>Handed to another generic function, it waits for the other arguments to fix the parameter&#x27;s type; it cannot supply a type parameter itself (<code>map_it[A, B](x: A, f: fn(A) -&gt; B)</code> called with <code>ident</code> has nothing to give <code>B</code>). <code>let f = ident;</code>, with no type to take, is refused.</p>
+<p>Not yet supported: <code>extern fn</code> cannot be generic, and neither can it declare lifetime parameters. <code>spawn</code> does not take a method, generic or not.</p>
 <h4 id="enums">Enums<a class="anchor" href="#enums" aria-label="Link to this section">#</a></h4>
 <p>A closed, <code>i32</code>-backed set of named constants:</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code>enum Status {
@@ -590,7 +603,7 @@ counts[Status.Paid] = <span class="n">3</span>;</code></pre></div>
 <p><strong>Compound assignment</strong> exists for every one of these: <code>+= -= *= /= %=</code> and <code>&amp;= |= ^= &lt;&lt;= &gt;&gt;=</code>. <code>x op= v</code> means <code>x = x op v</code>, which evaluates the target twice, so a side-effecting <strong>index</strong> is hoisted into a temporary first and runs exactly once — <code>xs[pop(q)] += 1</code> pops once, not twice. Only the value being indexed has to be re-nameable: <code>f()[0] += 1</code> is a compile error, since naming <code>f()</code> twice would call it twice, and hoisting it would mutate a copy for a value-type struct. Write that one out.</p>
 <p><code>&gt;&gt;</code> follows the operand&#x27;s signedness: arithmetic (sign-preserving) on a signed type, logical (zero-filling) on an unsigned one, exactly as in C. <code>&amp;</code> <code>|</code> <code>^</code> promote to the wider operand; a shift keeps the width of the value being shifted, so <code>x &lt;&lt; n</code> never silently widens a narrow <code>x</code> because <code>n</code> happens to be an <code>int</code>.</p>
 <h3 id="bytes-2">bytes<a class="anchor" href="#bytes-2" aria-label="Link to this section">#</a></h3>
-<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> b = b<span class="s">&quot;raw\x00bytes&quot;</span>;   <span class="c">// binary-safe literal; \0 \xHH escapes</span>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> b = b<span class="s">&quot;raw\x00bytes&quot;</span>;   <span class="c">// binary-safe literal; same escapes as str</span>
 <span class="b">println</span>(<span class="b">len</span>(b));           <span class="c">// byte count, not strlen</span>
 <span class="b">println</span>(b[<span class="n">0</span>]);             <span class="c">// indexing yields an int (0..255)</span>
 b[<span class="n">0</span>] = <span class="n">65</span>;                 <span class="c">// mutable in place</span>
@@ -748,7 +761,16 @@ r.br.x = <span class="n">6</span>;
 
 <span class="k">spawn</span> <span class="f">handle</span>(conn, <span class="n">1</span>);           <span class="c">// spawns handle[Conn], not a template</span></code></pre></div>
 <p>A spawn has no annotated <code>let</code> to infer from, so a parameter only the return type mentions cannot be resolved there, and says so.</p>
-<p>Not yet supported: <code>extern fn</code> cannot be generic, and neither can it declare lifetime parameters. A generic function is not one function until its type is chosen, so it cannot be used as a bare value — write a plain function that calls it with a concrete type, and use that instead. <code>spawn</code> does not take a method, generic or not.</p>
+<p>A generic function is not one function until its types are chosen, so it can be named as a value only where a concrete <code>fn</code> type is expected — a typed parameter, an annotated <code>let</code>, a <code>return</code>, a struct field. Its type parameters are unified with that type&#x27;s, as a call unifies them with its arguments, and the value is that one instance:</p>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">fn</span> ident[T](x: T) -&gt; T { <span class="k">return</span> x; }
+<span class="k">fn</span> <span class="f">apply</span>(f: <span class="k">fn</span>(<span class="t">int</span>) -&gt; <span class="t">int</span>, v: <span class="t">int</span>) -&gt; <span class="t">int</span> { <span class="k">return</span> <span class="f">f</span>(v); }
+<span class="k">fn</span> twice[T](x: T, f: <span class="k">fn</span>(T) -&gt; T) -&gt; T { <span class="k">return</span> <span class="f">f</span>(<span class="f">f</span>(x)); }
+
+<span class="b">println</span>(<span class="f">apply</span>(ident, <span class="n">5</span>));             <span class="c">// ident[int]</span>
+<span class="k">let</span> g: <span class="k">fn</span>(<span class="t">str</span>) -&gt; <span class="t">str</span> = ident;        <span class="c">// ident[str]</span>
+<span class="b">println</span>(<span class="f">twice</span>(<span class="s">&quot;x&quot;</span>, ident));           <span class="c">// T = str from &quot;x&quot;, then ident[str]</span></code></pre></div>
+<p>Handed to another generic function, it waits for the other arguments to fix the parameter&#x27;s type; it cannot supply a type parameter itself (<code>map_it[A, B](x: A, f: fn(A) -&gt; B)</code> called with <code>ident</code> has nothing to give <code>B</code>). <code>let f = ident;</code>, with no type to take, is refused.</p>
+<p>Not yet supported: <code>extern fn</code> cannot be generic, and neither can it declare lifetime parameters. <code>spawn</code> does not take a method, generic or not.</p>
 <h3 id="enums-2">Enums<a class="anchor" href="#enums-2" aria-label="Link to this section">#</a></h3>
 <p>A closed, <code>i32</code>-backed set of named constants:</p>
 <div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code>enum Status {

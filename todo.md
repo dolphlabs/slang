@@ -1098,9 +1098,14 @@ Found building zokor's logger (2026-10-12), not fixed:
 - [x] **`??` printed as `'^` in diagnostics** (fix/qq-token-name). The
   token name held the C trigraph for `^`; it is escaped now.
   tests/fail_qq_token_name.
-- [ ] **str literals take no `\x` or `\u` escape** ("unknown escape
-  sequence"); a terminal colour needs `to_str(b"\x1b[32m")`. JSON-style
-  `\u001b` and `\x1b` are what a model writes first.
+- [x] **str literals take no `\x` or `\u` escape** (2026-11-20,
+  feat/str-escapes). str and bytes literals now take `\xHH` (one raw byte),
+  `\uXXXX` (JSON's four digits) and `\u{H..H}` (one to six), the last two
+  written as UTF-8; surrogate halves and anything past U+10FFFF are compile
+  errors that name `\u{...}`. The C literal writer now emits control bytes
+  and invalid UTF-8 as three-digit octal: its `\xHH` swallowed a hex digit
+  that followed (a raw ESC then `1` compiled to one wrong byte). Tests:
+  tests/str_escapes, tests/fail_escape_*.
 - [ ] **A str cannot be read byte by byte without a copy**: `s[i]` is "cannot
   index a value of type str", so a scan of a str allocates `to_bytes(s)`.
   A read-only `byte_at(s, i)` (or indexing) would make escape checks free.
@@ -1116,10 +1121,16 @@ Found building zokor's logger (2026-10-12), not fixed:
   tests/http_method_token): `parse_head` takes everything
   before the first space, with no RFC 9110 token check, so a method can
   carry `"`, `\` or an ESC byte into a handler or a log line.
-- [ ] **Generic functions cannot be named as values even when every type
-  parameter is known** (`r.get(path, live)` inside a generic method over
-  `S`), and there is no explicit instantiation syntax (`f[int]()` is a
-  parse error), so a library cannot register its own generic handler.
+- [x] **Generic functions cannot be named as values even when every type
+  parameter is known** (2026-11-20, feat/generic-fn-values). Where a
+  concrete fn type is expected (a typed parameter, an annotated `let`, a
+  `return`, a struct field), a generic function's type parameters are now
+  unified with that type's, and the value is that instance; handed to a
+  generic call, it waits for the other arguments to fix the parameter's
+  type (`twice("x", ident)`). `expect_push` now carries fn types for this.
+  Still no explicit instantiation syntax (`f[int]` would collide with
+  indexing), so a generic function cannot supply a type parameter itself.
+  tests/generic_fn_values, tests/fail_generic_fn_value_*.
 - [ ] **The move check is not path-sensitive**: in
   `if !ok { refuse(c); return ""; } spawn serve(c);` the second use of `c`
   is "use of moved value", though the branch that moved it returns. The
@@ -3791,16 +3802,16 @@ prerequisite, not a different plan).
       `tests/http_read_wire`, written for the allocation work
       (next-steps.md #5).
 
-- [ ] **A package-level `bytes` global cannot be used.** Found
-      2026-09-29, not fixed. `pub let G = b"ab";` in a package, then any
-      use of `G` (`G[0] = 65`, `to_str(G)`) from inside or outside it, is
-      a C compilation failure: the global is emitted as a static
-      `sl_bytes` value but used where an `sl_bytes *` is expected
-      (`src/codegen/program.c`, the `is_bytes` global case). Its data is
-      also a `static const` array cast to non-const, so once it compiles,
-      `G[0] = 65` would write to read-only memory -- the fix has to decide
-      whether such a global is mutable (copy the data out) or not (reject
-      the write).
+- [x] **A package-level `bytes` global cannot be used** (found 2026-09-29,
+      fixed 2026-11-20 in fix/bytes-global). `pub let G = b"ab";` and any
+      use of `G` was a C compilation failure: the global was a static
+      `sl_bytes` value where every use takes `sl_bytes *`, over a
+      `static const` array cast to non-const. It is now a constant pointer
+      to a static header over writable data, like `sl_bytes_empty`: not a
+      GC object, one value shared by every use, so `G[0] = 65` changes it
+      for every reader. The name itself cannot be reassigned, as for every
+      package global. tests/bytes_global (also clean under the minor
+      verifier).
 
 - [x] **`http.read`'s allocations are pinned.** 2026-09-29. The socket
       parser allocates per request only what the returned `Request` holds
@@ -3856,12 +3867,19 @@ prerequisite, not a different plan).
       `tests/map_delete`. Found while testing the GC's container frontier
       (next-steps.md #7b).
 
-- [ ] **`xs[i].field = v` on a list of value structs does not compile.**
-      Found 2026-09-30, not fixed. The generated C assigns to a member of a
-      statement expression ("expression is not assignable") instead of
-      either writing through the element or reporting a slang error. When
-      it is fixed, the store needs the list's barrier with the index
-      (`sl_arr_remember_at`), since it writes into the list's buffer.
+- [x] **`xs[i].field = v` on a list of value structs does not compile**
+      (found 2026-09-30, fixed 2026-11-20 in fix/list-elem-field-store).
+      The C assigned to a member of a statement expression. It now stores
+      through the element's address, also through value-struct fields
+      (`xs[i].a.f = v`); base, index and value are sequenced first and the
+      address is taken last, since the value may grow the list. A GC field
+      takes `sl_arr_remember_at`. tests/list_elem_field_store (clean under
+      the minor verifier), tests/fail_list_elem_field_oob.
+- [ ] **`m[k].f = v` on a map of value structs** is refused with a slang
+      error naming the workaround (read, change, `m[k] = v`) since
+      2026-11-20; it was a C compile error before. Storing in place needs
+      the map's barrier rules for a write into its value slot.
+      tests/fail_map_value_field_store.
 
 - [x] **Five stores left young objects held only by old ones, with no
       write barrier.** Fixed 2026-09-30, found by the minor-collection

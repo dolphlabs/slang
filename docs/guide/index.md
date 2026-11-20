@@ -29,6 +29,10 @@ println("Hello, " + name + "! " + x);
 // string interpolation with ${expr} (any expression allowed)
 println("pi doubled is ${pi * 2}");
 
+// escapes: \n \t \r \0 \" \\, \xHH (one raw byte), \uXXXX and \u{H..H}
+// (a code point, written as UTF-8); bytes literals take the same ones
+println("\x1b[32mgreen\x1b[0m caf\u00e9 \u{1F600}");
+
 // comparisons: == != < <= > >=   (bools: == and != only)   logic: && || !
 if x > y && ok {
     println("bigger");
@@ -314,7 +318,7 @@ because `n` happens to be an `int`.
 #### bytes
 
 ```slang
-let b = b"raw\x00bytes";   // binary-safe literal; \0 \xHH escapes
+let b = b"raw\x00bytes";   // binary-safe literal; same escapes as str
 println(len(b));           // byte count, not strlen
 println(b[0]);             // indexing yields an int (0..255)
 b[0] = 65;                 // mutable in place
@@ -623,11 +627,29 @@ spawn handle(conn, 1);           // spawns handle[Conn], not a template
 A spawn has no annotated `let` to infer from, so a parameter only the
 return type mentions cannot be resolved there, and says so.
 
+A generic function is not one function until its types are chosen, so it
+can be named as a value only where a concrete `fn` type is expected — a
+typed parameter, an annotated `let`, a `return`, a struct field. Its type
+parameters are unified with that type's, as a call unifies them with its
+arguments, and the value is that one instance:
+
+```slang
+fn ident[T](x: T) -> T { return x; }
+fn apply(f: fn(int) -> int, v: int) -> int { return f(v); }
+fn twice[T](x: T, f: fn(T) -> T) -> T { return f(f(x)); }
+
+println(apply(ident, 5));             // ident[int]
+let g: fn(str) -> str = ident;        // ident[str]
+println(twice("x", ident));           // T = str from "x", then ident[str]
+```
+
+Handed to another generic function, it waits for the other arguments to fix
+the parameter's type; it cannot supply a type parameter itself
+(`map_it[A, B](x: A, f: fn(A) -> B)` called with `ident` has nothing to
+give `B`). `let f = ident;`, with no type to take, is refused.
+
 Not yet supported: `extern fn` cannot be generic, and neither can it declare
-lifetime parameters. A generic function is not one function until its type
-is chosen, so it cannot be used as a bare value — write a plain function
-that calls it with a concrete type, and use that instead. `spawn` does not
-take a method, generic or not.
+lifetime parameters. `spawn` does not take a method, generic or not.
 
 #### Enums
 
@@ -1099,7 +1121,7 @@ because `n` happens to be an `int`.
 #### bytes
 
 ```slang
-let b = b"raw\x00bytes";   // binary-safe literal; \0 \xHH escapes
+let b = b"raw\x00bytes";   // binary-safe literal; same escapes as str
 println(len(b));           // byte count, not strlen
 println(b[0]);             // indexing yields an int (0..255)
 b[0] = 65;                 // mutable in place
@@ -1408,11 +1430,29 @@ spawn handle(conn, 1);           // spawns handle[Conn], not a template
 A spawn has no annotated `let` to infer from, so a parameter only the
 return type mentions cannot be resolved there, and says so.
 
+A generic function is not one function until its types are chosen, so it
+can be named as a value only where a concrete `fn` type is expected — a
+typed parameter, an annotated `let`, a `return`, a struct field. Its type
+parameters are unified with that type's, as a call unifies them with its
+arguments, and the value is that one instance:
+
+```slang
+fn ident[T](x: T) -> T { return x; }
+fn apply(f: fn(int) -> int, v: int) -> int { return f(v); }
+fn twice[T](x: T, f: fn(T) -> T) -> T { return f(f(x)); }
+
+println(apply(ident, 5));             // ident[int]
+let g: fn(str) -> str = ident;        // ident[str]
+println(twice("x", ident));           // T = str from "x", then ident[str]
+```
+
+Handed to another generic function, it waits for the other arguments to fix
+the parameter's type; it cannot supply a type parameter itself
+(`map_it[A, B](x: A, f: fn(A) -> B)` called with `ident` has nothing to
+give `B`). `let f = ident;`, with no type to take, is refused.
+
 Not yet supported: `extern fn` cannot be generic, and neither can it declare
-lifetime parameters. A generic function is not one function until its type
-is chosen, so it cannot be used as a bare value — write a plain function
-that calls it with a concrete type, and use that instead. `spawn` does not
-take a method, generic or not.
+lifetime parameters. `spawn` does not take a method, generic or not.
 
 #### Enums
 
