@@ -17,7 +17,10 @@
   its enclosing block.
 - Strings are immutable; concatenation allocates. The collector
   reclaims unreachable strings automatically.
-- Package globals require constant-literal initializers.
+- Package globals require constant-literal initializers, and cannot be
+  reassigned. A package-level `bytes` is one value shared by every use:
+  `G[0] = 65` (or a function handed `G` that writes to it) changes it
+  for everyone, as for any `bytes` held in two places.
 - Implicit returns only apply to the last statement of a function
   body; `if` and `{}` blocks are statements, not expressions yet.
 - No closures. Functions are values (`fn(int) -> int`), but they
