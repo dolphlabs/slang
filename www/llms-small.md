@@ -31,6 +31,7 @@ let half = n / 2;            // int / int is integer division
 let small = n as i32;        // narrowing needs `as`
 // time.mono() is a `duration` (ns), never an int: `d as int` for a count
 println("${name} has ${n} and ${half}");   // interpolation: any expression
+println("\x1b[1mbold\x1b[0m \u00e9 \u{1F600}");     // escapes: \xHH byte, \uXXXX / \u{..} code point
 println("also " + name + " " + n);         // + converts scalars to str
 
 fn add(a: int, b: int) -> int {
