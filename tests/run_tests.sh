@@ -1894,6 +1894,31 @@ if [ "$fc_bad" -eq 0 ]; then
 else
     fail=1
 fi
+# `slangc test` writes its runner to a new temporary directory each run, so
+# a cache keyed by the runner's path never hit: every run compiled twice
+# (zokor's full runner on linux-arm64 CI: two compiles of over 400 s). It is
+# keyed by the tested package and the --run filter instead.
+ft_bad=0
+for ft_step in cold warm; do
+    : >"$fc_dir/t$ft_step.log"
+    if ! SLANG_CACHE="$fc_dir/cache" SLANG_FRAME_LIMIT=64 FC_REAL="$fc_real" \
+            FC_LOG="$fc_dir/t$ft_step.log" PATH="$fc_dir/bin:$PATH" \
+            ./slangc test tests/testcmd/lib --run test_scaled >/dev/null 2>&1; then
+        echo "FAIL frame guard cache: slangc test, $ft_step run failed"
+        ft_bad=1
+    fi
+done
+ft_cold=$(wc -l <"$fc_dir/tcold.log" | tr -d ' ')
+ft_warm=$(wc -l <"$fc_dir/twarm.log" | tr -d ' ')
+if [ "$ft_bad" -eq 0 ] && [ "$ft_warm" -ne 1 ]; then
+    echo "FAIL frame guard cache: slangc test's second run compiled $ft_warm times (first: $ft_cold)"
+    ft_bad=1
+fi
+if [ "$ft_bad" -eq 0 ]; then
+    echo "PASS frame guard cache, slangc test (first run $ft_cold compiles, second $ft_warm)"
+else
+    fail=1
+fi
 rm -rf "$fc_dir"
 
 # A development build (slangc --dev, or SLANG_DEV=1) compiles the C at -O0,
