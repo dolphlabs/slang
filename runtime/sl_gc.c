@@ -408,7 +408,12 @@ typedef struct sl_gc_thread {
         sweep-end page prune can reach a stopped thread's page list
         (same pattern). */
     pthread_t tid; /* for sl_gc_stw_sync's stop signal */
+    int pool_slot; /* this thread's sl_pool_slots index (main's is set by
+        sl_pool_start), or -1 for threads outside the pool: lets
+        sl_gc_stw_sync hold back its
+        stop signal while the slot's task is in a preempt bracket. */
 } sl_gc_thread;
+static int sl_pool_slot_in_bracket(int slot); /* sl_pool.c */
 static sl_gc_thread *sl_gc_threads = NULL;
 
 /* Where a fresh object is recorded. Mutators never take sl_gc_mu: a
@@ -508,6 +513,11 @@ static void sl_gc_register_thread(void) {
     sl_rt_gc_reg.blocked_ptr = &sl_rt_gc_blocked;
     sl_rt_gc_reg.acked_cycle_ptr = &sl_rt_gc_acked_cycle;
     sl_rt_gc_reg.tid = pthread_self();
+    /* A pool worker sets its runnext index before registering; main's is
+       the extra last slot, which has no sl_pool_slots entry. */
+    sl_rt_gc_reg.pool_slot =
+        sl_rt_runnext_idx >= 0 && sl_rt_runnext_idx < SL_RUNNEXT_SLOTS - 1
+            ? sl_rt_runnext_idx : -1;
     sl_gc_pages_publish();
     pthread_mutex_lock(&sl_gc_mu);
     sl_rt_gc_reg.next = sl_gc_threads;
@@ -2999,6 +3009,16 @@ static void sl_gc_stw_sync(sl_gc_thread ***out_snap, int *out_nsnap) {
             all_ready = 0;
 #if SL_ASYNC_STOP
             if (send) {
+                /* Not into a preempt bracket: the handler would refuse
+                 * anyway, and the signal still interrupts the native call
+                 * the bracket guards. On macOS one landing in OpenSSL's
+                 * pthread_rwlock wait loses the wakeup, and every worker
+                 * hung in SSL_CTX_new_ex (tests/nats_tls_close under a
+                 * 16KB nursery) -- the ticker's #557 hazard. The thread
+                 * acks at its first safepoint after the bracket, or the
+                 * next resend stops it. */
+                if (t->pool_slot >= 0 && sl_pool_slot_in_bracket(t->pool_slot))
+                    continue;
                 pthread_kill(t->tid, SIGUSR1);
                 continue;
             }
