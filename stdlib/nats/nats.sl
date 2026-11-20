@@ -173,6 +173,9 @@ pub gc struct Conn {
     reconnects: int,
     // the reader task signals its exit here
     reader_done: chan[bool],
+    // Set by another task (a failed write, a stale ping) to have the
+    // reader drop the transport and reconnect: only the reader frees it.
+    broken: bool,
 }
 
 // Connect to url (see options).
@@ -205,7 +208,7 @@ pub fn connect_with(o: Options, deadline: until) -> result[Conn, str] {
         out: builder.new_bytes(), kicked: false, last_flush: 0, kick: make_chan(1), slock: make_mutex(), subs: {}, next_sid: 1,
         pongs: [], pings_out: 0, inbox: "", resp_sub: 0, resp: {},
         next_token: 1, waiters: [], tick: make_chan(1), rng: rng,
-        reconnects: 0, reader_done: make_chan(1)
+        reconnects: 0, reader_done: make_chan(1), broken: false
     };
     nc.inbox = "_INBOX." + new_nuid(rng);
     // Try each server once at first connect.
@@ -494,16 +497,30 @@ fn net_send(nc: Conn, b: bytes, deadline: until) -> result[i32, str] {
     return net.send_until(nc.fd, b, deadline);
 }
 
+// Frees the socket and its TLS session. Only the task that owns them
+// calls it: connect before the reader starts, and the reader after. It
+// waits for a write in progress (iolock) rather than free a session
+// under it. net.tls_close closes the socket too, so the fd is not closed
+// again: a second close could hit a socket another task just opened
+// with the same number.
 fn close_transport(nc: Conn) {
+    mutex_lock(nc.iolock);
     if nc.ssl != nullptr {
         net.tls_close(nc.ssl);
         nc.ssl = nullptr;
+        nc.fd = -1;
     }
     if nc.fd >= 0 {
         net.close(nc.fd);
         nc.fd = -1;
     }
+    mutex_unlock(nc.iolock);
 }
+
+// How long the reader waits for bytes before checking whether another
+// task asked it to stop. Closing a socket does not wake a task parked
+// on it, so the reader must look.
+let READ_POLL = 100000000;
 
 // Bytes read but not yet parsed: data[pos..].
 gc struct RBuf {
@@ -576,11 +593,13 @@ fn reader(nc: Conn) {
     let rb = RBuf { data: b"", pos: 0 };
     while true {
         if nc.state == STATE_CLOSED {
+            close_transport(nc);
             break;
         }
         let pr = parse_frames(nc, rb);
         guard let _p = pr else let e = err_of(pr) {
             if nc.state == STATE_CLOSED {
+                close_transport(nc);
                 break;
             }
             nc.why = e;
@@ -592,11 +611,21 @@ fn reader(nc: Conn) {
             rb = RBuf { data: b"", pos: 0 };
             continue;
         }
-        let mr = rbuf_more(nc, rb, until_never());
+        let mr = rbuf_more(nc, rb, until_of(time.mono() + READ_POLL));
         guard let _m = mr else let e = err_of(mr) {
             if nc.state == STATE_CLOSED || nc.state == STATE_DRAINING && len(nc.subs) == 0 {
+                close_transport(nc);
                 break;
             }
+            // Nothing arrived: nothing was read, so carry on unless
+            // another task found the connection broken.
+            if e == "nats: read: timeout" && !nc.broken {
+                continue;
+            }
+            if nc.broken {
+                e = nc.why;
+            }
+            nc.broken = false;
             nc.why = e;
             close_transport(nc);
             if !reconnect(nc) {
@@ -901,7 +930,10 @@ fn flush_out(nc: Conn) {
     mutex_lock(nc.iolock);
     mutex_lock(nc.wlock);
     nc.kicked = false;
-    if nc.state != STATE_CONNECTED && nc.state != STATE_DRAINING || nc.out.is_empty() {
+    // No transport: the reader is between connections, and reconnect
+    // sends what is queued.
+    if nc.state != STATE_CONNECTED && nc.state != STATE_DRAINING || nc.out.is_empty() ||
+        nc.fd < 0 && nc.ssl == nullptr {
         mutex_unlock(nc.wlock);
         mutex_unlock(nc.iolock);
         return;
@@ -914,9 +946,11 @@ fn flush_out(nc: Conn) {
     if let _ok = wr {
         return;
     }
-    // A failed write breaks the connection: the reader sees it and
-    // reconnects. Shutting the socket wakes the reader's recv.
-    close_transport(nc);
+    // A failed write breaks the connection: the reader, which owns the
+    // transport, drops it and reconnects within READ_POLL.
+    if nc.state != STATE_CLOSED {
+        nc.broken = true;
+    }
 }
 
 fn flusher(nc: Conn) {
@@ -961,7 +995,7 @@ fn pinger(nc: Conn) {
         }
         if nc.pings_out >= nc.opts.max_pings_out {
             nc.why = "nats: stale connection (no PONG)";
-            close_transport(nc);
+            nc.broken = true;
             continue;
         }
         nc.pings_out += 1;
@@ -1382,12 +1416,14 @@ pub fn close(nc: Conn) {
     shut_down(nc, "nats: connection closed");
 }
 
+// Marks the connection closed and wakes everyone waiting on it. The
+// reader frees the transport: from here if this is the reader, or
+// within READ_POLL otherwise.
 fn shut_down(nc: Conn, why: str) {
     nc.state = STATE_CLOSED;
     if nc.why == "" {
         nc.why = why;
     }
-    close_transport(nc);
     mutex_lock(nc.slock);
     let subs: [Sub] = [];
     for sid, sub in nc.subs {

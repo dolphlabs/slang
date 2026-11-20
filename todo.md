@@ -152,14 +152,36 @@
   the directory `tests/live/mysqldb`. Reproduce: any generic stdlib call
   whose type argument is a struct of main, from a directory named after
   that stdlib package.
-- [ ] **`nats` closes a TLS connection's fd twice (found 2026-11-19, not
-  fixed).** `close_transport` in stdlib/nats/nats.sl calls `net.tls_close`,
-  which closes the socket, and then `net.close(nc.fd)` on the same number.
-  If another task opened a socket that reused that number in between, nats
-  closes that task's connection. `mysql`'s `close_transport` is correct
-  (`c.fd = -1` after `tls_close`), and nats should do the same. A test
-  should upgrade, close, then open a second connection and check that it
-  still works.
+- [x] **`nats` freed a TLS session under its own reader (found and fixed
+  2026-11-20, fix/nats-tls-double-close).** `close`, a failed write and
+  a stale ping each called `close_transport` from their own task. That
+  freed the session while the reader task was parked in `tls_recv` on it,
+  and closing an fd does not wake a task parked on it (the reactor item
+  below). The next socket opened got the same fd number; when its data
+  arrived, the old reader woke and called `SSL_read` on the freed session
+  (SIGSEGV in `ssl3_read_bytes`, every run of `tests/nats_tls_close`, even
+  with one task). Without TLS the stale reader would read the new
+  connection's bytes instead. `close_transport` also closed the fd a
+  second time after `tls_close` had closed it. Now only the reader frees
+  the transport: it reads with a 100 ms deadline and checks `state` and a
+  `broken` flag that the other tasks set. `close_transport` holds
+  `iolock` so it never frees a session under a write, and no longer
+  closes the fd twice. The TLS context builders in runtime/sl_tls.c were
+  also missing their preempt brackets. They now have them.
+- [ ] **The GC's stop-the-world still signals threads inside a preempt
+  bracket (found 2026-11-20, not fixed).** `sl_gc_stw_sync` (sl_gc.c)
+  resends SIGUSR1 to every thread that has not acked, every
+  `SL_GC_STOP_RESEND_NS`, whether or not its task is in a bracket. #557
+  stopped the ticker doing this because on macOS the signal can lose the
+  wakeup of a pthread_rwlock wait inside OpenSSL. `tests/nats_tls_close`
+  with 8 tasks under `SLANG_GC_VERIFY_MINOR=1 SLANG_GC_NURSERY_KB=16` hung
+  in 3 of 4 runs (1 of 2 after the context builders were bracketed). Every worker sat in `__psynch_rw_wrlock` under
+  `SSL_CTX_new_ex` (`ossl_method_construct`), and the collector thread
+  looped in `pthread_kill`. With 4 tasks, or without GC verify, it passes.
+  A fix must read the target thread's bracket depth without the
+  use-after-free the ticker's slot mutex guards against (perhaps a
+  per-thread counter published like `blocked_ptr`). Until then the test
+  is not in the GC-verify list.
 - [ ] **`SSL_set1_host` is deprecated in OpenSSL 4.0 (found 2026-11-09,
   feat/uuid-package; not fixed).** `runtime/sl_tls.c:247` calls it to set
   the hostname a client checks the server's certificate against. Against
