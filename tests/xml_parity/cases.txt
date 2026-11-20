@@ -1,0 +1,136 @@
+<a/>
+----
+<a></a>
+----
+<?xml version="1.0"?><a b="1"/>
+----
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<root><x>1</x><y z='2'>t</y></root>
+----
+<a>x &amp; y &lt; z &gt; w &quot; &apos;</a>
+----
+<a>&#65;&#x42;&#x1F600;</a>
+----
+<a b="&#9;&#10;&#13;"/>
+----
+<a b="x
+y	z"/>
+----
+<a><![CDATA[<not> & tags]]></a>
+----
+<a>one<!-- c -->two<?pi data?>three</a>
+----
+<a xmlns="urn:a"><b/><c xmlns="urn:c"><d/></c></a>
+----
+<p:a xmlns:p="urn:p" p:x="1" y="2"><p:b/></p:a>
+----
+<a xmlns:p="urn:p"><p:b xmlns:p="urn:q"/></a>
+----
+<a xml:lang="en"/>
+----
+<a b='"' c="'"/>
+----
+<a>  spaced  text  </a>
+----
+<a><b>1</b>
+<b>2</b>
+</a>
+----
+<café naïve="ü">ü</café>
+----
+<a-b.c_d e-f="1"/>
+----
+<_a/>
+----
+<a/>
+<!-- after -->
+----
+<!-- before --><a/>
+----
+<?app before?><a/>
+----
+<a b="1" b="2"/>
+----
+<a><b></a></b>
+----
+<a>
+----
+</a>
+----
+<a/><b/>
+----
+text<a/>
+----
+<a/>text
+----
+<a>&unknown;</a>
+----
+<a>&#0;</a>
+----
+<a>&#xD800;</a>
+----
+<a>&#xFFFE;</a>
+----
+<a>& </a>
+----
+<a b="<"/>
+----
+<a b=1/>
+----
+<a b="1"c="2"/>
+----
+<a>]]></a>
+----
+<a><!-- x -- y --></a>
+----
+<p:a/>
+----
+<a xmlns:p=""/>
+----
+<a xmlns:p="urn:1" xmlns:q="urn:1" p:x="1" q:x="2"/>
+----
+<1a/>
+----
+<a><b/></a><?xml version="1.0"?>
+----
+<?xml version="1.0" encoding="ISO-8859-1"?><a/>
+----
+<!DOCTYPE a><a/>
+----
+<!DOCTYPE a [<!ENTITY e "x">]><a>&e;</a>
+----
+<a xmlns:xml="http://www.w3.org/XML/1998/namespace"/>
+----
+<a xmlns:xmlns="urn:x"/>
+----
+<a>
+<![CDATA[a]]>b<![CDATA[c]]>
+</a>
+----
+<a b="&amp;&lt;&#38;"/>
+----
+<a>&#x;</a>
+----
+<a></A>
+----
+<a><b/><c/><b/></a>
+----
+<x:y:z xmlns:x="urn:x"/>
+----
+<a :b="1"/>
+----
+<a/ >
+----
+<a / >
+----
+<a b = "1" />
+----
+<?xml version="1.0" ?>
+<a/>
+----
+<?xml version='1.0' encoding='utf-8'?><a/>
+----
+<?xml encoding="UTF-8"?><a/>
+----
+<a><?xml-stylesheet href="x"?></a>
+----

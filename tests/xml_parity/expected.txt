@@ -1,0 +1,120 @@
+case 1: ok
+E a
+case 2: ok
+E a
+case 3: ok
+E a b="1"
+case 4: ok
+E root
+  E x
+    T "1"
+  E y z="2"
+    T "t"
+case 5: ok
+E a
+  T "x & y < z > w \" '"
+case 6: ok
+E a
+  T "AB😀"
+case 7: ok
+E a b="\t\n\r"
+case 8: ok
+E a b="x y z"
+case 9: ok
+E a
+  T "<not> & tags"
+case 10: ok
+E a
+  T "onetwothree"
+case 11: ok
+E {urn:a}a
+  E {urn:a}b
+  E {urn:c}c
+    E {urn:c}d
+case 12: ok
+E {urn:p}a y="2" {urn:p}x="1"
+  E {urn:p}b
+case 13: ok
+E a
+  E {urn:q}b
+case 14: ok
+E a {http://www.w3.org/XML/1998/namespace}lang="en"
+case 15: ok
+E a b="\"" c="'"
+case 16: ok
+E a
+  T "  spaced  text  "
+case 17: ok
+E a
+  E b
+    T "1"
+  T "\n"
+  E b
+    T "2"
+  T "\n"
+case 18: ok
+E café naïve="ü"
+  T "ü"
+case 19: ok
+E a-b.c_d e-f="1"
+case 20: ok
+E _a
+case 21: ok
+E a
+case 22: ok
+E a
+case 23: ok
+E a
+case 24: refused
+case 25: refused
+case 26: refused
+case 27: refused
+case 28: refused
+case 29: refused
+case 30: refused
+case 31: refused
+case 32: refused
+case 33: refused
+case 34: refused
+case 35: refused
+case 36: refused
+case 37: refused
+case 38: refused
+case 39: refused
+case 40: refused
+case 41: refused
+case 42: refused
+case 43: refused
+case 44: refused
+case 45: refused
+case 46: refused
+case 47: refused
+case 48: refused
+case 49: ok
+E a
+case 50: refused
+case 51: ok
+E a
+  T "\nabc\n"
+case 52: ok
+E a b="&<&"
+case 53: refused
+case 54: refused
+case 55: ok
+E a
+  E b
+  E c
+  E b
+case 56: refused
+case 57: refused
+case 58: refused
+case 59: refused
+case 60: ok
+E a b="1"
+case 61: ok
+E a
+case 62: ok
+E a
+case 63: refused
+case 64: ok
+E a
