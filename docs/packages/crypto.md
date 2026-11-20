@@ -53,6 +53,25 @@ holds its `memory_kib`, so bound how many you start, as you would any
 other expensive request. Without the reactor it derives on the calling
 worker.
 
+`bcrypt_verify(password, hash) -> result[bool, str]` and
+`scrypt(password, salt, n, r, p, length) -> result[bytes, str]` are for
+password hashes carried over from other systems (Rails, Laravel and
+Django use bcrypt; Django also scrypt), until each user logs in again
+and can be re-hashed with Argon2id. Neither is for new hashes.
+
+```slang
+let ok_v = crypto.bcrypt_verify(b"hunter2", "$2y$12$...") ?? false;   // $2a$ $2b$ $2y$
+let key = crypto.scrypt(b"pw", b"salt", 16384, 8, 1, 64);              // RFC 7914
+```
+
+`bcrypt_verify` reads `$2a$`, `$2b$` and `$2y$` with costs 04 to 18 (a
+stored hash names its own cost, so it is capped) and only the first 72
+bytes of the password, as bcrypt does; `$2x$` and the original `$2$` are
+an `err`. scrypt takes N a power of two up to 2^20, r up to 32, p up to
+16, at most 256 MiB (128 * N * r bytes) and 1 to 64 bytes out. Both run
+on the kdf threads like Argon2id. bcrypt is eksblowfish written here
+(OpenSSL has none); scrypt is OpenSSL's.
+
 `rsa_verify_sha256(n, e, msg, sig) -> result[bool, str]` checks an
 RSASSA-PKCS1-v1_5 SHA-256 signature (JWS `RS256`) against a public key
 given as its raw big-endian modulus and exponent, which is what a JWKS
@@ -156,6 +175,10 @@ only when it calls one.
 ### `crypto.argon2id_raw(bytes, bytes, int, int, int, int) -> result[bytes,str]`
 
 ### `crypto.argon2id_verify(bytes, bytes, bytes, int, int, int) -> result[bool,str]`
+
+### `crypto.scrypt(bytes, bytes, int, int, int, int) -> result[bytes,str]`
+
+### `crypto.bcrypt_verify(bytes, str) -> result[bool,str]`
 
 ### `crypto.rsa_verify_sha256(bytes, bytes, bytes, bytes) -> result[bool,str]`
 

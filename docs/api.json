@@ -349,6 +349,25 @@
       "kind": "native",
       "items": [
         {
+          "name": "crc32",
+          "params": [
+            "bytes"
+          ],
+          "ret": "int",
+          "tls": false,
+          "sig": "compress.crc32(bytes) -> int"
+        },
+        {
+          "name": "crc32_update",
+          "params": [
+            "int",
+            "bytes"
+          ],
+          "ret": "int",
+          "tls": false,
+          "sig": "compress.crc32_update(int, bytes) -> int"
+        },
+        {
           "name": "gzip",
           "params": [
             "bytes"
@@ -515,6 +534,30 @@
           "ret": "result[bool,str]",
           "tls": false,
           "sig": "crypto.argon2id_verify(bytes, bytes, bytes, int, int, int) -> result[bool,str]"
+        },
+        {
+          "name": "scrypt",
+          "params": [
+            "bytes",
+            "bytes",
+            "int",
+            "int",
+            "int",
+            "int"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.scrypt(bytes, bytes, int, int, int, int) -> result[bytes,str]"
+        },
+        {
+          "name": "bcrypt_verify",
+          "params": [
+            "bytes",
+            "str"
+          ],
+          "ret": "result[bool,str]",
+          "tls": false,
+          "sig": "crypto.bcrypt_verify(bytes, str) -> result[bool,str]"
         },
         {
           "name": "rsa_verify_sha256",
@@ -6465,7 +6508,7 @@
           "sig": "fn connect(url: str, deadline: until) -> result[Conn, str]",
           "doc": "Connect to url (see options).",
           "file": "stdlib/nats/nats.sl",
-          "line": 179
+          "line": 182
         },
         {
           "name": "connect_with",
@@ -6473,7 +6516,7 @@
           "sig": "fn connect_with(o: Options, deadline: until) -> result[Conn, str]",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 183
+          "line": 186
         },
         {
           "name": "publish",
@@ -6481,7 +6524,7 @@
           "sig": "fn publish(nc: Conn, subject: str, data: bytes) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1061
+          "line": 1095
         },
         {
           "name": "publish_reply",
@@ -6489,7 +6532,7 @@
           "sig": "fn publish_reply(nc: Conn, subject: str, reply: str, data: bytes) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1065
+          "line": 1099
         },
         {
           "name": "publish_headers",
@@ -6497,7 +6540,7 @@
           "sig": "fn publish_headers(nc: Conn, subject: str, headers: map[str][str], data: bytes) -> result[bool, str]",
           "doc": "Publish with headers (each key may carry several values).",
           "file": "stdlib/nats/nats.sl",
-          "line": 1070
+          "line": 1104
         },
         {
           "name": "publish_full",
@@ -6505,7 +6548,7 @@
           "sig": "fn publish_full(nc: Conn, subject: str, reply: str, headers: map[str][str], data: bytes) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1075
+          "line": 1109
         },
         {
           "name": "subscribe",
@@ -6513,7 +6556,7 @@
           "sig": "fn subscribe(nc: Conn, subject: str) -> result[Sub, str]",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1187
+          "line": 1221
         },
         {
           "name": "queue_subscribe",
@@ -6521,7 +6564,7 @@
           "sig": "fn queue_subscribe(nc: Conn, subject: str, queue: str) -> result[Sub, str]",
           "doc": "Members of one queue group share the messages: each goes to one of them.",
           "file": "stdlib/nats/nats.sl",
-          "line": 1192
+          "line": 1226
         },
         {
           "name": "next_msg",
@@ -6529,7 +6572,7 @@
           "sig": "fn next_msg(sub: Sub, deadline: until) -> result[opt[Msg], str]",
           "doc": "The next message, waiting until deadline: none when the deadline passes or the subscription has ended (unsubscribed, max reached, connection closed).",
           "file": "stdlib/nats/nats.sl",
-          "line": 1223
+          "line": 1257
         },
         {
           "name": "unsubscribe",
@@ -6537,7 +6580,7 @@
           "sig": "fn unsubscribe(sub: Sub) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1246
+          "line": 1280
         },
         {
           "name": "auto_unsubscribe",
@@ -6545,7 +6588,7 @@
           "sig": "fn auto_unsubscribe(sub: Sub, max: int) -> result[bool, str]",
           "doc": "End the subscription by itself after max more messages.",
           "file": "stdlib/nats/nats.sl",
-          "line": 1257
+          "line": 1291
         },
         {
           "name": "request",
@@ -6553,7 +6596,7 @@
           "sig": "fn request(nc: Conn, subject: str, data: bytes, deadline: until) -> result[Msg, str]",
           "doc": "Publish data to subject with a fresh reply subject and wait for the first reply. \"no responders\" (status 503, when nothing listens) is an error at once instead of a timeout.",
           "file": "stdlib/nats/nats.sl",
-          "line": 1270
+          "line": 1304
         },
         {
           "name": "request_headers",
@@ -6561,7 +6604,7 @@
           "sig": "fn request_headers(nc: Conn, subject: str, headers: map[str][str], data: bytes, deadline: until) -> result[Msg, str]",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1274
+          "line": 1308
         },
         {
           "name": "respond",
@@ -6569,7 +6612,7 @@
           "sig": "fn respond(nc: Conn, req: Msg, data: bytes) -> result[bool, str]",
           "doc": "Reply to a request message.",
           "file": "stdlib/nats/nats.sl",
-          "line": 1320
+          "line": 1354
         },
         {
           "name": "flush",
@@ -6577,7 +6620,7 @@
           "sig": "fn flush(nc: Conn, deadline: until) -> result[bool, str]",
           "doc": "Wait until the server has processed everything sent so far (a PING round trip).",
           "file": "stdlib/nats/nats.sl",
-          "line": 1331
+          "line": 1365
         },
         {
           "name": "drain",
@@ -6585,7 +6628,7 @@
           "sig": "fn drain(nc: Conn, deadline: until) -> result[bool, str]",
           "doc": "Unsubscribe everything, let what is in flight arrive, then close.",
           "file": "stdlib/nats/nats.sl",
-          "line": 1354
+          "line": 1388
         },
         {
           "name": "close",
@@ -6593,7 +6636,7 @@
           "sig": "fn close(nc: Conn)",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1377
+          "line": 1411
         },
         {
           "name": "last_error",
@@ -6601,7 +6644,7 @@
           "sig": "fn last_error(nc: Conn) -> str",
           "doc": "Why the connection is closed or last broke (\"\" while healthy).",
           "file": "stdlib/nats/nats.sl",
-          "line": 1422
+          "line": 1458
         },
         {
           "name": "is_connected",
@@ -6609,7 +6652,7 @@
           "sig": "fn is_connected(nc: Conn) -> bool",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1426
+          "line": 1462
         },
         {
           "name": "reconnects",
@@ -6617,7 +6660,7 @@
           "sig": "fn reconnects(nc: Conn) -> int",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1430
+          "line": 1466
         },
         {
           "name": "nkey_seed_raw",
@@ -10108,6 +10151,108 @@
         }
       ]
     },
+    "tar": {
+      "name": "tar",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Entry",
+          "decl": "struct",
+          "sig": "gc struct Entry",
+          "doc": "",
+          "file": "stdlib/tar/tar.sl",
+          "line": 35
+        },
+        {
+          "name": "Limits",
+          "decl": "struct",
+          "sig": "struct Limits",
+          "doc": "",
+          "file": "stdlib/tar/tar.sl",
+          "line": 53
+        },
+        {
+          "name": "default_limits",
+          "decl": "fn",
+          "sig": "fn default_limits() -> Limits",
+          "doc": "",
+          "file": "stdlib/tar/tar.sl",
+          "line": 58
+        },
+        {
+          "name": "parse",
+          "decl": "fn",
+          "sig": "fn parse(data: bytes) -> result[[Entry], str]",
+          "doc": "",
+          "file": "stdlib/tar/tar.sl",
+          "line": 64
+        },
+        {
+          "name": "parse_with",
+          "decl": "fn",
+          "sig": "fn parse_with(data: bytes, lim: Limits) -> result[[Entry], str]",
+          "doc": "",
+          "file": "stdlib/tar/tar.sl",
+          "line": 70
+        },
+        {
+          "name": "safe_path",
+          "decl": "fn",
+          "sig": "fn safe_path(name: str) -> result[str, str]",
+          "doc": "A name made safe to join under an extraction directory: relative, with no \"..\", no drive letter or backslash, no NUL. A trailing \"/\" is kept. Check a symlink's target the same way before creating it.",
+          "file": "stdlib/tar/tar.sl",
+          "line": 358
+        },
+        {
+          "name": "Writer",
+          "decl": "struct",
+          "sig": "gc struct Writer",
+          "doc": "",
+          "file": "stdlib/tar/tar.sl",
+          "line": 398
+        },
+        {
+          "name": "new_writer",
+          "decl": "fn",
+          "sig": "fn new_writer() -> Writer",
+          "doc": "",
+          "file": "stdlib/tar/tar.sl",
+          "line": 404
+        },
+        {
+          "name": "Writer.add_file",
+          "decl": "fn",
+          "sig": "fn add_file(self: Writer, name: str, data: bytes, mode: int, modified: int) -> Writer",
+          "doc": "",
+          "file": "stdlib/tar/tar.sl",
+          "line": 437
+        },
+        {
+          "name": "Writer.add_dir",
+          "decl": "fn",
+          "sig": "fn add_dir(self: Writer, name: str, mode: int, modified: int) -> Writer",
+          "doc": "",
+          "file": "stdlib/tar/tar.sl",
+          "line": 441
+        },
+        {
+          "name": "Writer.add_symlink",
+          "decl": "fn",
+          "sig": "fn add_symlink(self: Writer, name: str, target: str, modified: int) -> Writer",
+          "doc": "",
+          "file": "stdlib/tar/tar.sl",
+          "line": 449
+        },
+        {
+          "name": "Writer.finish",
+          "decl": "fn",
+          "sig": "fn finish(self: Writer) -> result[bytes, str]",
+          "doc": "The archive, closed with two zero blocks, or the first problem an add ran into.",
+          "file": "stdlib/tar/tar.sl",
+          "line": 549
+        }
+      ]
+    },
     "template": {
       "name": "template",
       "kind": "source",
@@ -11825,6 +11970,212 @@
         }
       ]
     },
+    "xml": {
+      "name": "xml",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Attr",
+          "decl": "struct",
+          "sig": "gc struct Attr",
+          "doc": "",
+          "file": "stdlib/xml/xml.sl",
+          "line": 46
+        },
+        {
+          "name": "Node",
+          "decl": "struct",
+          "sig": "gc struct Node",
+          "doc": "",
+          "file": "stdlib/xml/xml.sl",
+          "line": 55
+        },
+        {
+          "name": "Limits",
+          "decl": "struct",
+          "sig": "struct Limits",
+          "doc": "",
+          "file": "stdlib/xml/xml.sl",
+          "line": 69
+        },
+        {
+          "name": "default_limits",
+          "decl": "fn",
+          "sig": "fn default_limits() -> Limits",
+          "doc": "",
+          "file": "stdlib/xml/xml.sl",
+          "line": 81
+        },
+        {
+          "name": "parse",
+          "decl": "fn",
+          "sig": "fn parse(text: str) -> result[Node, str]",
+          "doc": "The document's root element.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 143
+        },
+        {
+          "name": "parse_with",
+          "decl": "fn",
+          "sig": "fn parse_with(text: str, lim: Limits) -> result[Node, str]",
+          "doc": "",
+          "file": "stdlib/xml/xml.sl",
+          "line": 147
+        },
+        {
+          "name": "Node.attr",
+          "decl": "fn",
+          "sig": "fn attr(self: Node, name: str) -> opt[str]",
+          "doc": "An attribute's value by its name as written (\"id\", \"xml:lang\").",
+          "file": "stdlib/xml/xml.sl",
+          "line": 897
+        },
+        {
+          "name": "Node.attr_ns",
+          "decl": "fn",
+          "sig": "fn attr_ns(self: Node, ns: str, local: str) -> opt[str]",
+          "doc": "An attribute's value by namespace URI and local name.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 907
+        },
+        {
+          "name": "Node.elements",
+          "decl": "fn",
+          "sig": "fn elements(self: Node) -> [Node]",
+          "doc": "Child elements, in order, without text, comments or PIs.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 917
+        },
+        {
+          "name": "Node.child",
+          "decl": "fn",
+          "sig": "fn child(self: Node, local: str) -> opt[Node]",
+          "doc": "The first child element with this local name, in any namespace.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 928
+        },
+        {
+          "name": "Node.child_ns",
+          "decl": "fn",
+          "sig": "fn child_ns(self: Node, ns: str, local: str) -> opt[Node]",
+          "doc": "The first child element with this namespace and local name.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 938
+        },
+        {
+          "name": "Node.children_named",
+          "decl": "fn",
+          "sig": "fn children_named(self: Node, local: str) -> [Node]",
+          "doc": "Every child element with this local name.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 948
+        },
+        {
+          "name": "Node.text_content",
+          "decl": "fn",
+          "sig": "fn text_content(self: Node) -> str",
+          "doc": "The text of this node and everything under it, in document order.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 959
+        },
+        {
+          "name": "Node.child_text",
+          "decl": "fn",
+          "sig": "fn child_text(self: Node, local: str) -> str",
+          "doc": "The trimmed text of the first child element named `local`, or \"\".",
+          "file": "stdlib/xml/xml.sl",
+          "line": 972
+        },
+        {
+          "name": "Node.find",
+          "decl": "fn",
+          "sig": "fn find(self: Node, path: str) -> opt[Node]",
+          "doc": "The first element at a path of local names below this one: \"channel/item/title\". none when any step is missing.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 979
+        },
+        {
+          "name": "Node.find_all",
+          "decl": "fn",
+          "sig": "fn find_all(self: Node, path: str) -> [Node]",
+          "doc": "Every element at a path of local names below this one, in document order.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 989
+        },
+        {
+          "name": "element",
+          "decl": "fn",
+          "sig": "fn element(name: str) -> Node",
+          "doc": "A new element named `name` (prefix included, if any). Declare its namespaces as attributes: set_attr(\"xmlns\", uri), set_attr(\"xmlns:p\", uri).",
+          "file": "stdlib/xml/xml.sl",
+          "line": 1031
+        },
+        {
+          "name": "text_node",
+          "decl": "fn",
+          "sig": "fn text_node(s: str) -> Node",
+          "doc": "",
+          "file": "stdlib/xml/xml.sl",
+          "line": 1036
+        },
+        {
+          "name": "Node.set_attr",
+          "decl": "fn",
+          "sig": "fn set_attr(self: Node, name: str, value: str) -> Node",
+          "doc": "Sets an attribute, replacing one of the same name. Returns the node.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 1050
+        },
+        {
+          "name": "Node.add",
+          "decl": "fn",
+          "sig": "fn add(self: Node, child: Node) -> Node",
+          "doc": "Appends a child node. Returns this node, so calls chain.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 1062
+        },
+        {
+          "name": "Node.add_text",
+          "decl": "fn",
+          "sig": "fn add_text(self: Node, s: str) -> Node",
+          "doc": "",
+          "file": "stdlib/xml/xml.sl",
+          "line": 1067
+        },
+        {
+          "name": "escape_text",
+          "decl": "fn",
+          "sig": "fn escape_text(s: str) -> str",
+          "doc": "Text for element content: & < > escaped (> too, so \"]]>\" never appears).",
+          "file": "stdlib/xml/xml.sl",
+          "line": 1074
+        },
+        {
+          "name": "escape_attr",
+          "decl": "fn",
+          "sig": "fn escape_attr(s: str) -> str",
+          "doc": "Text for a double-quoted attribute value. Tab, LF and CR are written as references, or a reader would turn them into spaces.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 1107
+        },
+        {
+          "name": "write",
+          "decl": "fn",
+          "sig": "fn write(n: Node) -> result[str, str]",
+          "doc": "The element and everything under it, as compact XML. Names are written as given; text and attribute values are escaped. A comment containing \"--\" or a PI containing \"?>\" cannot be written and is an error, as is a name that is not an XML name or a control character in text.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 1135
+        },
+        {
+          "name": "write_document",
+          "decl": "fn",
+          "sig": "fn write_document(root: Node) -> result[str, str]",
+          "doc": "write, after an XML declaration.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 1143
+        }
+      ]
+    },
     "yaml": {
       "name": "yaml",
       "kind": "source",
@@ -11860,6 +12211,132 @@
           "doc": "Every document decoded into T.",
           "file": "stdlib/yaml/yaml.sl",
           "line": 159
+        }
+      ]
+    },
+    "zip": {
+      "name": "zip",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Entry",
+          "decl": "struct",
+          "sig": "gc struct Entry",
+          "doc": "",
+          "file": "stdlib/zip/zip.sl",
+          "line": 41
+        },
+        {
+          "name": "Archive",
+          "decl": "struct",
+          "sig": "gc struct Archive",
+          "doc": "",
+          "file": "stdlib/zip/zip.sl",
+          "line": 59
+        },
+        {
+          "name": "Limits",
+          "decl": "struct",
+          "sig": "struct Limits",
+          "doc": "",
+          "file": "stdlib/zip/zip.sl",
+          "line": 68
+        },
+        {
+          "name": "default_limits",
+          "decl": "fn",
+          "sig": "fn default_limits() -> Limits",
+          "doc": "",
+          "file": "stdlib/zip/zip.sl",
+          "line": 74
+        },
+        {
+          "name": "open",
+          "decl": "fn",
+          "sig": "fn open(data: bytes) -> result[Archive, str]",
+          "doc": "",
+          "file": "stdlib/zip/zip.sl",
+          "line": 102
+        },
+        {
+          "name": "open_with",
+          "decl": "fn",
+          "sig": "fn open_with(data: bytes, lim: Limits) -> result[Archive, str]",
+          "doc": "",
+          "file": "stdlib/zip/zip.sl",
+          "line": 106
+        },
+        {
+          "name": "read",
+          "decl": "fn",
+          "sig": "fn read(a: Archive, e: Entry) -> result[bytes, str]",
+          "doc": "The entry's contents, inflated and checked against its size and CRC-32.",
+          "file": "stdlib/zip/zip.sl",
+          "line": 337
+        },
+        {
+          "name": "find",
+          "decl": "fn",
+          "sig": "fn find(a: Archive, name: str) -> opt[Entry]",
+          "doc": "The entry named `name` exactly, if there is one.",
+          "file": "stdlib/zip/zip.sl",
+          "line": 378
+        },
+        {
+          "name": "safe_path",
+          "decl": "fn",
+          "sig": "fn safe_path(name: str) -> result[str, str]",
+          "doc": "A name made safe to join under an extraction directory: relative, with no \"..\", no drive letter or backslash, no NUL. A trailing \"/\" is kept. err names what is wrong; extracting such a name is how an archive writes outside the directory (\"zip slip\").",
+          "file": "stdlib/zip/zip.sl",
+          "line": 391
+        },
+        {
+          "name": "Writer",
+          "decl": "struct",
+          "sig": "gc struct Writer",
+          "doc": "",
+          "file": "stdlib/zip/zip.sl",
+          "line": 496
+        },
+        {
+          "name": "new_writer",
+          "decl": "fn",
+          "sig": "fn new_writer() -> Writer",
+          "doc": "",
+          "file": "stdlib/zip/zip.sl",
+          "line": 506
+        },
+        {
+          "name": "Writer.add",
+          "decl": "fn",
+          "sig": "fn add(self: Writer, name: str, data: bytes, modified: int) -> Writer",
+          "doc": "Adds a file, deflated (stored instead when deflating does not make it smaller). `modified` is Unix seconds.",
+          "file": "stdlib/zip/zip.sl",
+          "line": 525
+        },
+        {
+          "name": "Writer.add_stored",
+          "decl": "fn",
+          "sig": "fn add_stored(self: Writer, name: str, data: bytes, modified: int) -> Writer",
+          "doc": "Adds a file as is: for data that is already compressed.",
+          "file": "stdlib/zip/zip.sl",
+          "line": 530
+        },
+        {
+          "name": "Writer.add_dir",
+          "decl": "fn",
+          "sig": "fn add_dir(self: Writer, name: str, modified: int) -> Writer",
+          "doc": "Adds a directory; \"/\" is appended to the name when missing.",
+          "file": "stdlib/zip/zip.sl",
+          "line": 535
+        },
+        {
+          "name": "Writer.finish",
+          "decl": "fn",
+          "sig": "fn finish(self: Writer) -> result[bytes, str]",
+          "doc": "The whole archive, or the first problem an add ran into.",
+          "file": "stdlib/zip/zip.sl",
+          "line": 634
         }
       ]
     }

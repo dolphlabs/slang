@@ -1,5 +1,55 @@
 # todo
 
+- [ ] **GCC on linux-arm64 compiles a program using both
+  `crypto.bcrypt_verify` and `crypto.scrypt` about 200 s slower (found
+  2026-11-20, zokor #128; not fixed).** zokor's full test runner (24 MB of
+  C) took about 230 s to build and run on CI's linux-arm64 before #570 and
+  about 440 s with zokor #128, which calls both. Its 10-minute Tests step
+  then times out. The generated C grows by 26 KB (0.1%). linux-x86_64
+  (GCC), macOS (clang) and slang's own CI are unchanged. Bisected on CI:
+  bcrypt alone or scrypt alone is about 400 s, as before; both together
+  612 s and over. Marking eksblowfish, `sl_scrypt_raw`, `sl_kdf_run` and
+  `sl_kdf_derive` noinline changed nothing (branch exp/bcrypt-noinline),
+  so it is not inlining across the kdf dispatch. Next: reproduce in an
+  arm64 container (AGENTS.md section 7) with `-ftime-report`.
+
+- [x] **zip and tar (2026-11-20, feat/zip-tar).** `stdlib/zip` (stored and
+  deflate, ZIP64 reading, UTF-8 names, overlap and CRC checks, entry and
+  total limits) and `stdlib/tar` (ustar, pax, GNU long names and base-256
+  sizes, checksums), each with a writer and `safe_path`. Plus
+  `compress.crc32` / `crc32_update` (zlib). Interop in
+  tests/archive_interop. Not done: streaming (both read and write whole
+  archives in memory), zip encryption, bzip2/zstd/LZMA methods, CP437
+  names, writing ZIP64.
+
+- [x] **XML (2026-11-20, feat/xml).** `stdlib/xml`: XML 1.0 and namespaces
+  into a tree, with readers, a builder and a writer. DOCTYPE refused by
+  default (skip-only option, internal subsets never), only predefined
+  entities, UTF-8 only, limits on size, depth, attributes and nodes.
+  tests/xml_parity matches expat on 64 documents.
+
+- [ ] **`xml.parse` spends most of its time in the collector (found
+  2026-11-20, feat/xml).** A 3.5 MB feed of 20,000 items: 410-470 ms
+  against Go encoding/xml's 150 ms; SLANG_GC_STAT shows about 1.6 s of
+  minor and major pauses over 5 parses (minor_rem_entries 1.2M: children
+  pushed into lists that were already promoted). Removing per-tag
+  literal copies, the per-element text builder and close-tag name copies,
+  and caching recent names, took it from 981 ms. The next steps are
+  runtime-side (remembered-set cost of growing old lists) or a flatter
+  tree (nodes in parallel arrays, as toml does), which would change the
+  API.
+
+- [x] **bcrypt verification and scrypt (2026-11-20, feat/bcrypt-scrypt).**
+  `crypto.bcrypt_verify(password, hash)` ($2a$, $2b$, $2y$; cost 04-18;
+  the first 72 bytes) and `crypto.scrypt(password, salt, n, r, p, len)`,
+  for hashes migrated from Rails, Laravel and Django. bcrypt is
+  eksblowfish in runtime/sl_crypto.c, its Blowfish state generated from
+  pi's digits (OpenSSL has no bcrypt); scrypt is OpenSSL's EVP_PBE_scrypt
+  with N, r, p and memory capped. The kdf thread pool that ran Argon2id
+  now runs all three (`sl_kdf_run`, a kind per job). Checked against
+  htpasswd's $2y$ hashes and RFC 7914's vectors; cost 12 verifies in 243
+  ms here against htpasswd's 230-240 ms for the same work.
+
 - [x] **An in-process cache (2026-11-17, feat/cache).** `stdlib/cache`:
   sharded LRU with optional TTL and byte bound, and `get_or_load`, which
   runs a loader once per key and hands its error or panic to every
@@ -152,14 +202,42 @@
   the directory `tests/live/mysqldb`. Reproduce: any generic stdlib call
   whose type argument is a struct of main, from a directory named after
   that stdlib package.
-- [ ] **`nats` closes a TLS connection's fd twice (found 2026-11-19, not
-  fixed).** `close_transport` in stdlib/nats/nats.sl calls `net.tls_close`,
-  which closes the socket, and then `net.close(nc.fd)` on the same number.
-  If another task opened a socket that reused that number in between, nats
-  closes that task's connection. `mysql`'s `close_transport` is correct
-  (`c.fd = -1` after `tls_close`), and nats should do the same. A test
-  should upgrade, close, then open a second connection and check that it
-  still works.
+- [x] **`nats` freed a TLS session under its own reader (found and fixed
+  2026-11-20, fix/nats-tls-double-close).** `close`, a failed write and
+  a stale ping each called `close_transport` from their own task. That
+  freed the session while the reader task was parked in `tls_recv` on it,
+  and closing an fd does not wake a task parked on it (the reactor item
+  below). The next socket opened got the same fd number; when its data
+  arrived, the old reader woke and called `SSL_read` on the freed session
+  (SIGSEGV in `ssl3_read_bytes`, every run of `tests/nats_tls_close`, even
+  with one task). Without TLS the stale reader would read the new
+  connection's bytes instead. `close_transport` also closed the fd a
+  second time after `tls_close` had closed it. Now only the reader frees
+  the transport: it reads with a 100 ms deadline and checks `state` and a
+  `broken` flag that the other tasks set. `close_transport` holds
+  `iolock` so it never frees a session under a write, and no longer
+  closes the fd twice. The TLS context builders in runtime/sl_tls.c were
+  also missing their preempt brackets. They now have them.
+- [x] **The GC's stop-the-world signalled threads inside a preempt
+  bracket (found 2026-11-20, fix/gc-stw-bracket).** `sl_gc_stw_sync`
+  (sl_gc.c) resent SIGUSR1 every `SL_GC_STOP_RESEND_NS` to each thread
+  that had not acked, bracket or not. #557 stopped the ticker doing this
+  because on macOS the signal can lose the wakeup of a pthread_rwlock
+  wait inside OpenSSL. `tests/nats_tls_close` under
+  `SLANG_GC_VERIFY_MINOR=1 SLANG_GC_NURSERY_KB=16` hung in 6 of 6 runs
+  (a 16 KB nursery alone was enough): workers sat in
+  `__psynch_rw_wrlock` under `SSL_CTX_new_ex` while the collector looped
+  in `pthread_kill`. Now the collector reads the target's task through
+  its pool slot, under the slot's mutex (`sl_pool_slot_in_bracket`,
+  trylock so the collector never waits on a mutator), and skips the
+  signal while the task is bracketed; it acks at its first safepoint
+  after the bracket. Main's thread had no slot, so a task it ran was
+  still signalled (one more hang, sampled with main in `SSL_CTX_new_ex`);
+  it now books its tasks in `SL_POOL_MAIN_SLOT`, which the ticker does
+  not scan. 20 of 20 runs pass and the test is in the GC-verify list.
+  The same small race as the ticker's remains: the task can enter a
+  bracket between the check and the `pthread_kill`.
+
 - [ ] **`SSL_set1_host` is deprecated in OpenSSL 4.0 (found 2026-11-09,
   feat/uuid-package; not fixed).** `runtime/sl_tls.c:247` calls it to set
   the hostname a client checks the server's certificate against. Against

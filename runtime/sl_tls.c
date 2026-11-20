@@ -44,42 +44,73 @@ static char *sl_tls_last_error(void) {
 
 typedef struct { unsigned char *wire; unsigned int len; } sl_alpn_list;
 
+/* OpenSSL's reason for the last failure into buf, with no allocation:
+ * for use inside a preempt bracket, copied out with sl_strdup after it. */
+static void sl_tls_err_into(char *buf, size_t n) {
+    unsigned long e = ERR_get_error();
+    if (e == 0)
+        snprintf(buf, n, "unknown TLS error");
+    else
+        ERR_error_string_n(e, buf, n);
+}
+
+/* Building a context takes OpenSSL's provider and name-map locks (the
+ * first ones on a thread fetch every signature algorithm), so the work
+ * runs in a preempt bracket: a preempt signal landing in one of those
+ * lock waits on macOS loses the wakeup and hangs every worker (#557's
+ * class). Each returns NULL with why filled on failure. */
+static SSL_CTX *sl_tls_server_ctx_raw(const char *cert_path, const char *key_path,
+                                      char *why, size_t n) {
+    SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
+    if (!ctx) { sl_tls_err_into(why, n); return NULL; }
+    if (SSL_CTX_use_certificate_file(ctx, cert_path, SSL_FILETYPE_PEM) != 1 ||
+        SSL_CTX_use_PrivateKey_file(ctx, key_path, SSL_FILETYPE_PEM) != 1) {
+        sl_tls_err_into(why, n);
+        SSL_CTX_free(ctx);
+        return NULL;
+    }
+    if (SSL_CTX_check_private_key(ctx) != 1) {
+        snprintf(why, n, "certificate/key mismatch");
+        SSL_CTX_free(ctx);
+        return NULL;
+    }
+    return ctx;
+}
+
+static SSL_CTX *sl_tls_client_ctx_raw(const char *ca_path, char *why, size_t n) {
+    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+    if (!ctx) { sl_tls_err_into(why, n); return NULL; }
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+    if (ca_path[0] != '\0') {
+        if (SSL_CTX_load_verify_locations(ctx, ca_path, NULL) != 1) {
+            sl_tls_err_into(why, n);
+            SSL_CTX_free(ctx);
+            return NULL;
+        }
+    } else {
+        SSL_CTX_set_default_verify_paths(ctx);
+    }
+    return ctx;
+}
+
 static sl_res_rawptr_str *sl_net_tls_server_ctx(const char *cert_path,
                                                 const char *key_path) {
     sl_rt_need_fat_stack();
-    SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
-    if (!ctx) return sl_net_err_rawptr(sl_tls_last_error());
-    if (SSL_CTX_use_certificate_file(ctx, cert_path, SSL_FILETYPE_PEM) != 1) {
-        char *m = sl_tls_last_error();
-        SSL_CTX_free(ctx);
-        return sl_net_err_rawptr(m);
-    }
-    if (SSL_CTX_use_PrivateKey_file(ctx, key_path, SSL_FILETYPE_PEM) != 1) {
-        char *m = sl_tls_last_error();
-        SSL_CTX_free(ctx);
-        return sl_net_err_rawptr(m);
-    }
-    if (SSL_CTX_check_private_key(ctx) != 1) {
-        SSL_CTX_free(ctx);
-        return sl_net_err_rawptr("certificate/key mismatch");
-    }
+    char why[256];
+    sl_rt_preempt_disable();
+    SSL_CTX *ctx = sl_tls_server_ctx_raw(cert_path, key_path, why, sizeof(why));
+    sl_rt_preempt_enable();
+    if (!ctx) return sl_net_err_rawptr(sl_strdup(why));
     return sl_net_ok_rawptr(ctx);
 }
 
 static sl_res_rawptr_str *sl_net_tls_client_ctx(const char *ca_path) {
     sl_rt_need_fat_stack();
-    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
-    if (!ctx) return sl_net_err_rawptr(sl_tls_last_error());
-    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
-    if (ca_path[0] != '\0') {
-        if (SSL_CTX_load_verify_locations(ctx, ca_path, NULL) != 1) {
-            char *m = sl_tls_last_error();
-            SSL_CTX_free(ctx);
-            return sl_net_err_rawptr(m);
-        }
-    } else {
-        SSL_CTX_set_default_verify_paths(ctx);
-    }
+    char why[256];
+    sl_rt_preempt_disable();
+    SSL_CTX *ctx = sl_tls_client_ctx_raw(ca_path, why, sizeof(why));
+    sl_rt_preempt_enable();
+    if (!ctx) return sl_net_err_rawptr(sl_strdup(why));
     return sl_net_ok_rawptr(ctx);
 }
 
@@ -411,16 +442,22 @@ static sl_res_bool_str *sl_net_tls_ctx_require_client(void *ctxv,
     sl_rt_need_fat_stack();
     SSL_CTX *ctx = (SSL_CTX *)ctxv;
     if (!ctx) return sl_net_err_bool("nil tls context");
+    char why[256];
+    int ok = 1;
+    sl_rt_preempt_disable();
     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
                        NULL);
     SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_OFF);
-    if (SSL_CTX_load_verify_locations(ctx, ca_path, NULL) != 1)
-        return sl_net_err_bool(sl_tls_last_error());
-    if (sl_sni_ex >= 0) {
+    if (SSL_CTX_load_verify_locations(ctx, ca_path, NULL) != 1) {
+        sl_tls_err_into(why, sizeof(why));
+        ok = 0;
+    } else if (sl_sni_ex >= 0) {
         sl_sni_cert *list = (sl_sni_cert *)SSL_CTX_get_ex_data(ctx, sl_sni_ex);
         for (; list; list = list->next)
             sl_tls_copy_verify(list->ctx, ctx);
     }
+    sl_rt_preempt_enable();
+    if (!ok) return sl_net_err_bool(sl_strdup(why));
     return sl_net_ok_bool(true);
 }
 
@@ -429,12 +466,19 @@ static sl_res_bool_str *sl_net_tls_ctx_use_cert(void *ctxv, const char *cert,
     sl_rt_need_fat_stack();
     SSL_CTX *ctx = (SSL_CTX *)ctxv;
     if (!ctx) return sl_net_err_bool("nil tls context");
-    if (SSL_CTX_use_certificate_file(ctx, cert, SSL_FILETYPE_PEM) != 1)
-        return sl_net_err_bool(sl_tls_last_error());
-    if (SSL_CTX_use_PrivateKey_file(ctx, key, SSL_FILETYPE_PEM) != 1)
-        return sl_net_err_bool(sl_tls_last_error());
-    if (SSL_CTX_check_private_key(ctx) != 1)
-        return sl_net_err_bool("certificate/key mismatch");
+    char why[256];
+    int ok = 1;
+    sl_rt_preempt_disable();
+    if (SSL_CTX_use_certificate_file(ctx, cert, SSL_FILETYPE_PEM) != 1 ||
+        SSL_CTX_use_PrivateKey_file(ctx, key, SSL_FILETYPE_PEM) != 1) {
+        sl_tls_err_into(why, sizeof(why));
+        ok = 0;
+    } else if (SSL_CTX_check_private_key(ctx) != 1) {
+        snprintf(why, sizeof(why), "certificate/key mismatch");
+        ok = 0;
+    }
+    sl_rt_preempt_enable();
+    if (!ok) return sl_net_err_bool(sl_strdup(why));
     return sl_net_ok_bool(true);
 }
 

@@ -267,7 +267,13 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg mysql redis regex
 strings unicode encoding compress math decimal rand builder byteutil flags sort
-uuid http http2 httpc websocket template csv toml yaml cache nats s3 sigv4 x509`.
+uuid http http2 httpc websocket template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
+`xml.parse(text)` gives the root `xml.Node` (`name`, `local`, `ns`, `attrs`, `children`);
+`n.find("a/b")`, `n.find_all(path)`, `n.child_text("link")`, `n.attr("id")`; DOCTYPE refused.
+`xml.element("a").set_attr("k", "v").add_text("t")` and `xml.write(n)` build one.
+`zip.open(data)` lists `arc.entries` and `zip.read(arc, e)` inflates one (size and CRC
+checked); `tar.parse(data)` gives `[tar.Entry]` with `.data`; both have `new_writer()`
+and `safe_path(name)` (refuses `..`, absolute and drive paths: check before extracting).
 `decimal` is exact money: `let r = decimal.parse("19.99")` (result), then
 `decimal.add/sub/mul(a, b)` (opt: none past 38 digits), `decimal.div(a, b,
 scale, decimal.Rounding.HalfEven)`, `decimal.format(d)`, `decimal.split(d, n)`.
@@ -317,7 +323,8 @@ feed more), `csv.end(rd)`; `csv.format(rows)` writes CRLF, quoted as needed.
 several statements), `mysql.rows_as(rows)`, `rows.last_insert_id`, `mysql.new_pool(url, n)`.
 `crypto`: `seal(key, data, aad)`/`open` (AES-256-GCM, random nonce;
 result), `hkdf_sha256(ikm, salt, info, n)`, `constant_time_eq(a, b)`,
-`ed25519_sign/verify`, `ecdsa_p256_sign_sha256/verify_sha256` (raw r||s),
+`ed25519_sign/verify`, `ecdsa_p256_sign_sha256/verify_sha256` (raw r||s), `bcrypt_verify(pw, hash)` and
+`scrypt(pw, salt, n, r, p, len)` (migrated hashes only; new ones are Argon2id),
 `rsa_sign_sha256(pem, msg)`; verifiers return `result[bool, str]`.
 `math` takes any numeric type and returns that type (`math.abs(x)` of an `i32`
 is an `i32`): `math.sqrt`, `math.pi`, `math.round_to(x, 2)`, and for money

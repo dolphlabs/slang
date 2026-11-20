@@ -1912,6 +1912,25 @@ holds its `memory_kib`, so bound how many you start, as you would any
 other expensive request. Without the reactor it derives on the calling
 worker.
 
+`bcrypt_verify(password, hash) -> result[bool, str]` and
+`scrypt(password, salt, n, r, p, length) -> result[bytes, str]` are for
+password hashes carried over from other systems (Rails, Laravel and
+Django use bcrypt; Django also scrypt), until each user logs in again
+and can be re-hashed with Argon2id. Neither is for new hashes.
+
+```slang
+let ok_v = crypto.bcrypt_verify(b"hunter2", "$2y$12$...") ?? false;   // $2a$ $2b$ $2y$
+let key = crypto.scrypt(b"pw", b"salt", 16384, 8, 1, 64);              // RFC 7914
+```
+
+`bcrypt_verify` reads `$2a$`, `$2b$` and `$2y$` with costs 04 to 18 (a
+stored hash names its own cost, so it is capped) and only the first 72
+bytes of the password, as bcrypt does; `$2x$` and the original `$2$` are
+an `err`. scrypt takes N a power of two up to 2^20, r up to 32, p up to
+16, at most 256 MiB (128 * N * r bytes) and 1 to 64 bytes out. Both run
+on the kdf threads like Argon2id. bcrypt is eksblowfish written here
+(OpenSSL has none); scrypt is OpenSSL's.
+
 `rsa_verify_sha256(n, e, msg, sig) -> result[bool, str]` checks an
 RSASSA-PKCS1-v1_5 SHA-256 signature (JWS `RS256`) against a public key
 given as its raw big-endian modulus and exponent, which is what a JWKS
@@ -3687,6 +3706,8 @@ guard let plain = ur else let e = err_of(ur) {
 | `compress.deflate_raw` | `(b: bytes) -> result[bytes, str]` |
 | `compress.deflate_raw_flush` | `(b: bytes) -> result[bytes, str]` (ends in a sync flush, no final block: RFC 7692) |
 | `compress.inflate_raw` | `(b: bytes, max_out: int) -> result[bytes, str]` |
+| `compress.crc32` | `(b: bytes) -> int` (the zip, gzip and PNG CRC-32) |
+| `compress.crc32_update` | `(crc: int, b: bytes) -> int` (continue one over pieces) |
 
 **Decompression takes a mandatory output limit.** `max_out` is a
 required argument, not an optional one with a generous default. The
@@ -4219,6 +4240,59 @@ single copy of their source. On a 1.1 MB document of 5,000 entries,
 decoding into `any` (Linux container; ratios, the host was throttled). A
 config file of a few KB parses in well under a millisecond.
 
+#### `xml`
+
+XML 1.0 with namespaces, for the APIs that still speak it: SOAP, payment
+gateways, SAML, RSS and Atom, sitemaps. Parse into a tree, read it, write
+one back.
+
+```slang
+import "xml";
+
+let r = xml.parse(body);
+guard let doc = r else let e = err_of(r) { panic(e); }   // "xml: line 3 col 9: ..."
+let title = doc.find("channel/title") ?? doc;              // a path of local names
+for item in doc.find_all("channel/item") {
+    println(item.child_text("link"));
+}
+let env = xml.parse(soap) ?? doc;
+let body_el = env.child_ns("http://schemas.xmlsoap.org/soap/envelope/", "Body");
+
+let out = xml.element("note").set_attr("id", "7").add(xml.element("to").add_text("Ada & Bob"));
+xml.write(out);                          // ok("<note id=\"7\"><to>Ada &amp; Bob</to></note>")
+```
+
+A `Node` is an `Element`, `Text`, `Comment` or `Pi` (`n.kind`), with
+`name` as written, `local`, `ns` (the namespace URI), `attrs`, `children`
+and `text`. `attr(name)`, `attr_ns(ns, local)`, `child(local)`,
+`child_ns`, `children_named`, `elements()`, `text_content()` and
+`child_text(local)` read it. Adjacent text, CDATA and references are one
+`Text` node. Comments and PIs are dropped unless `Limits.keep_comments`.
+
+**What it refuses.** A DOCTYPE, by default: DTDs are how entity expansion
+("billion laughs") and external entities (XXE) get in.
+`Limits.skip_doctype` skips one without an internal subset (old RSS feeds
+carry one), and an internal subset is always refused. Entities other than
+the five predefined ones and character references are refused, and so is
+anything not well-formed: mismatched tags, duplicate attributes, an
+unbound prefix, `<` in an attribute, `]]>` in text, `--` in a comment, a
+control character, content after the root. Encodings other than UTF-8
+(and US-ASCII) are refused. Limits: 16 MiB, 256 levels, 1024 attributes
+on an element, a million nodes. Every error names the line and column.
+`tests/xml_parity` checks 64 documents against Python's expat: the same
+verdicts, and the same tree for the accepted ones (one deliberate
+difference: an `ISO-8859-1` declaration).
+
+**Writing** escapes text and attribute values. A name that is not an XML
+name, a comment holding `--`, or a control character is an `err`, never
+a broken document. Declare namespaces as attributes (`xmlns:p`).
+
+**Cost.** On a 3.5 MB RSS feed of 20,000 items, `parse` took 410-470 ms
+here, against about 150 ms for Go's `encoding/xml` into a generic tree and 89
+ms for Python's ElementTree (C expat). Most of the gap is the collector
+tracing a large tree as it grows. Parse documents of that size off the
+request path.
+
 #### `cache`
 
 An in-process cache: string keys, any value type, bounded by entry count
@@ -4357,6 +4431,63 @@ roots. `Request` needs a common name or at least one DNS name or IP.
 
 All the ASN.1 is OpenSSL's; the package parses no DER itself. Errors
 start with `x509: `.
+
+#### `zip` and `tar`
+
+Archives in memory: read every entry of a zip (stored or deflated, ZIP64,
+UTF-8 names) or a tar (ustar, pax, GNU long names; a `.tar.gz` is
+`compress.gunzip` first), and write either.
+
+```slang
+import "tar";
+import "zip";
+
+let r = zip.open(data);
+guard let arc = r else let e = err_of(r) { panic(e); }
+for e in arc.entries {
+    let pr = zip.safe_path(e.name);          // refuses ../, /abs, C:\ (zip slip)
+    guard let rel = pr else { continue; }
+    if !e.is_dir {
+        let body = zip.read(arc, e);         // inflated, size and CRC-32 checked
+    }
+}
+
+let w = zip.new_writer();
+w.add("report.csv", csv_bytes, now_unix);    // deflated, or stored if that is smaller
+w.add_stored("logo.png", png, now_unix);
+let out = w.finish();                        // result[bytes, str]
+
+let tr = tar.parse(tar_bytes);               // result[[tar.Entry], str]
+let tw = tar.new_writer();
+tw.add_file("bin/run.sh", script, 493, now_unix);    // mode 0755
+tw.add_symlink("current", "releases/42", now_unix);
+let tb = tw.finish();
+```
+
+**Reading is checked against the archive itself.** A zip is read from its
+central directory, as unzip does. Each entry's local header must be where
+the directory says, its data inside the archive, and no two entries may
+share bytes: overlapping entries are how a 40 KB zip claims petabytes.
+An entry inflates to at most the size the directory states, and must
+match it and its CRC-32. `zip.Limits` bounds one entry (256 MiB), all of
+them together (1 GiB) and their count. Every tar header's checksum is
+checked, and a size may be octal or GNU base-256. A pax header's `path`,
+`linkpath`, `size`, `mtime`, `uid` and `gid` override the ustar fields.
+Data past the end of the archive is an error, never a short entry.
+Encrypted zip entries and methods other than stored and deflate are
+listed but not read. Zip names must be UTF-8, so CP437 names are refused.
+
+**Names are never trusted.** Neither package touches the file system.
+`safe_path` gives back a relative, cleaned name, or an error for an
+absolute path, a `..` segment, a drive letter, a backslash or a NUL.
+Check a tar symlink's target the same way before creating it. Writers
+refuse such names, and the same name twice.
+
+**Times** are Unix seconds. A zip's MS-DOS timestamp has no zone and
+2-second steps; it is read as UTC, and the extended timestamp extra field
+wins when present. `tests/archive_interop` reads archives made by
+Python's `zipfile` and `tarfile`, Info-ZIP and bsdtar. What these writers
+write was checked with `unzip -t`, Python and bsdtar.
 
 #### `byteutil`
 

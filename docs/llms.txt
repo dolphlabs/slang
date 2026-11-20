@@ -51,6 +51,7 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [sort](packages/sort.md): Package sort.
 - [sql](packages/sql.md): Package sql.
 - [strings](packages/strings.md): Package strings.
+- [tar](packages/tar.md): Package tar.
 - [template](packages/template.md): Package template.
 - [time](packages/time.md): Package time.
 - [timez](packages/timez.md): Package timez.
@@ -59,4 +60,6 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [uuid](packages/uuid.md): Package uuid.
 - [websocket](packages/websocket.md): Package websocket.
 - [x509](packages/x509.md): Package x509.
+- [xml](packages/xml.md): Package xml.
 - [yaml](packages/yaml.md): Package yaml.
+- [zip](packages/zip.md): Package zip.
