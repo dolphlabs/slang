@@ -11,15 +11,19 @@ someone who only wants to use slang.
 ## What is here
 
 ```
-index.html              the page: every word of it, readable with JS off
-src/main.ts             progressive enhancement: nav, runner, copy, motion
+index.html              the page as a template: every word is a {{key}}
+locales/                one JSON file of strings per language, and the list
+src/main.ts             progressive enhancement: nav, runner, copy, language, motion
 src/hero/scene.ts       the 3D field of rabbits (three.js, loaded lazily)
 src/styles.css          the one stylesheet
 src/assets/models/      the rabbit, optimized (see "The model")
 programs/               the runner's programs and their recorded output
 vite/highlight.ts       slang highlighting, run at build time
-vite.config.ts          fills index.html's markers; adds the CSP
+vite/i18n.ts            renders one page per locale; validates the translations
+vite/i18n.test.ts       tests for the above (npm test)
+vite.config.ts          fills index.html's markers; adds the CSP and the locales
 scripts/assemble.sh     docs from the slang repo + this page -> site/
+scripts/locale-headers.mjs   _headers rules for /es/, /fr/, ... from the list
 scripts/check-programs.mjs   programs vs. the real compiler
 scripts/optimize-model.mjs   the model pipeline
 deploy/_headers         caching rules appended to the docs' own
@@ -30,7 +34,8 @@ deploy/_headers         caching rules appended to the docs' own
 ```sh
 npm ci
 npm run dev                  # the homepage alone, with reload
-npm run build                # -> dist/
+npm run build                # -> dist/ (/, /es/, /fr/, ...)
+npm test                     # the i18n code, and every locale against English
 npm run assemble             # -> site/: docs from GitHub main + this page
 npm run preview:site         # serve site/ locally
 SLANGC=../slang/slangc npm run check   # programs vs. the compiler
@@ -61,6 +66,77 @@ blob-filtered, depth-1 checkout). `SLANG_DOCS_REF=dev` takes another branch;
   `'wasm-unsafe-eval'` for the meshopt decoder and nothing inline but style
   attributes.
 
+## Languages
+
+The page is built once per language: `/` is English, and `/es/`, `/fr/`,
+`/de/`, `/pt-br/`, `/ja/` and `/zh-cn/` are complete static pages of their
+own. Nothing is translated in the browser, so a translated page is as
+readable with JavaScript off, or to an agent that fetches it, as the English
+one, and it costs no more to load. Each page has its own canonical URL and
+`hreflang` links to the others, with `/` as `x-default`.
+
+The documentation (`/guide/`, `/packages/`, ...) comes from the slang
+repository and is English only; translated pages say so in the footer and
+link to it as it is. The search box on a translated page has its wording
+translated (its placeholder, group headings and empty state), but its
+results come from the docs' English `search.json`. `404.html` is English too,
+since it cannot know which language the missing address was meant in.
+
+**Where the words are.** `index.html` holds markup and `{{tokens}}`;
+`locales/<code>.json` holds one HTML fragment per key. `locales/index.json`
+lists the languages (the default, `en`, first) and each one's name
+in its own language.
+
+| In `index.html` | Becomes |
+|---|---|
+| `{{key}}` | the string, as HTML |
+| `{{text:key}}` | the string as plain text, safe in an attribute |
+| `{{json:key}}` | the same, escaped for the JSON-LD block |
+| `{{n:1498}}` | a number in the language's separators: `1,498`, `1.498`, `1 498` |
+| `{{@lang}}`, `{{@path}}`, ... | per-page values (see `builtins` in `vite/i18n.ts`) |
+| `<!-- @translated -->...<!-- @/translated -->` | kept on translated pages only |
+
+Numbers are written as plain literals so the page cannot show a German
+reader "1,498 ms" for what the benchmark measured as 1498. Code, compiler
+output and the runner's programs are the same in every language and are
+marked `translate="no"`.
+
+**The build refuses an inconsistent translation.** Every locale must have
+exactly the keys of `en`, and each string must keep the markup, link targets,
+`<code>` text and `{placeholders}` of the English one. Words and word order
+are the translator's. A string in `en.json` that nothing reads also fails the
+build, so a deleted sentence cannot leave a stale key behind.
+
+**Adding a language**
+
+1. Add it to `locales/index.json` (`code` is a BCP 47 tag such as `it` or
+   `pt-BR`; its page is `/<code lowercased>/`).
+2. Copy `locales/en.json` to `locales/<code>.json` and translate the values.
+   `lang.suggest` and `lang.dismiss` are shown on the English page, in the
+   new language, when the visitor's browser asks for it.
+3. `npm run build`. The error names every key that is missing or broken.
+4. Have a native speaker read it. The shipped translations were written
+   without one and should be reviewed before they are announced.
+
+Things to check for a new language: the SVG diagram labels (`conc.sched_*`)
+must stay short, because SVG text does not wrap and the figure is a fixed
+480 units wide; and a right-to-left language needs the stylesheet's
+physical `left`/`right` properties converted to logical ones first, which
+this change did not do.
+
+**Choosing a language.** Every language link is a plain link, so the switcher
+works without JavaScript. `main.ts` adds two things: it closes the menu on an
+outside click or Escape, and on the English page only it offers the
+visitor's own language once, as a dismissible notice, when
+`navigator.languages` matches an available one (same language and script, so
+`zh-TW` is not offered Simplified Chinese). It never redirects. The choice is
+kept in `localStorage` under `slang.lang`; where storage is blocked the offer
+just repeats.
+
+**Fonts.** Geist covers Latin, Cyrillic and Vietnamese. Japanese and Chinese
+use the system's own CJK font rather than a web font of several megabytes,
+and the stylesheet resets the Latin letter-spacing and headline size for them.
+
 ## Claims need numbers
 
 Every number on the page comes from somewhere you can check:
@@ -84,7 +160,8 @@ replaces the "first run pending" card.
 ## The runner's programs
 
 Each program is `programs/<name>/<name>.sl` with `expected.txt` beside it,
-listed in `programs/programs.json` with its exit code and caption.
+listed in `programs/programs.json` with its exit code. Its caption is the
+`runner.note.<name>` string in each locale.
 `{name}` in `expected.txt` matches any number (for timings), and the value
 shown on the page comes from `"recorded"`. CI builds `slangc` from `main`
 and runs `npm run check` on every push; run it yourself before changing a
@@ -112,6 +189,9 @@ only, ~42 KB) for the field, which reuses the first file's material.
 | Build command | `npm ci && npm run assemble` |
 | Build output directory | `site` |
 | Environment | `NODE_VERSION=22` |
+
+`assemble` also appends `_headers` rules for each localized homepage
+(`scripts/locale-headers.mjs`), the same ones `deploy/_headers` gives `/`.
 
 The docs change on `main`, not here, so a push to `main` should rebuild
 the site too: create a deploy hook in the Pages project and call it from a
