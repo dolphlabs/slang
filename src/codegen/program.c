@@ -357,11 +357,21 @@ void emit_globals(CG *cg, Package *pkgs, int npkgs, int main_index) {
             if (is_bytes(t)) {
                 Expr *init = s->as.let.init;
                 char *m = mangle_glob(p->name, s->as.let.name);
-                emit_line(cg, "static const unsigned char %s_bdata[] = %s;",
+                /* Every use takes a bytes as `sl_bytes *`, so the global is
+                   a constant pointer to a static header, like
+                   sl_bytes_empty: not a GC object (marking skips it), and
+                   sound to share because nothing changes a bytes' length
+                   or pointer after it is built. The data is writable --
+                   `G[0] = 65`, or a function handed G that writes to it,
+                   changes the one package-wide value, as for any bytes
+                   held in two places; the global itself cannot be
+                   reassigned. */
+                emit_line(cg, "static unsigned char %s_bdata[] = %s;",
                           m, c_bytes_literal(init->as.bytes_lit.data,
                                              init->as.bytes_lit.len));
-                emit_line(cg, "static sl_bytes %s = { %lld, (unsigned char *)%s_bdata };",
+                emit_line(cg, "static sl_bytes %s_obj = { %lld, %s_bdata };",
                           m, init->as.bytes_lit.len, m);
+                emit_line(cg, "static sl_bytes *const %s = &%s_obj;", m, m);
             } else {
                 emit_line(cg, "static %s %s = %s;", map_type(t),
                           mangle_glob(p->name, s->as.let.name),
