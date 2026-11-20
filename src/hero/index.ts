@@ -25,8 +25,8 @@ export async function createHero(opts: HeroOptions): Promise<Hero> {
   const stage = createStage({ canvas: opts.canvas, reducedMotion: opts.reducedMotion, place: opts.place });
   if (opts.mode === 'ascii') {
     const hero = await createAsciiHero(stage, rabbit, opts.reducedMotion);
-    return { label: () => `${hero.cells().toLocaleString('en')} cells`, fps: stage.fps };
+    return { label: () => `${hero.cells().toLocaleString(document.documentElement.lang)} cells`, fps: stage.fps };
   }
   const hero = createPointsHero(stage, rabbit, opts.reducedMotion);
-  return { label: () => `${hero.count.toLocaleString('en')} points`, fps: stage.fps };
+  return { label: () => `${hero.count.toLocaleString(document.documentElement.lang)} points`, fps: stage.fps };
 }

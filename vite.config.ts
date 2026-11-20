@@ -2,21 +2,28 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { defineConfig, type Plugin } from 'vite';
 import { escapeHtml, highlightShell, highlightSlang, unescapeHtml } from './vite/highlight.ts';
+import { loadCatalog, localeForUrl, localize, plainText, unusedKeys, type Translate } from './vite/i18n.ts';
 
 const ROOT = import.meta.dirname;
 
 // Where the site is served. Only absolute URLs need it: canonical, Open
-// Graph and Twitter cards. Every link on the page is root-relative.
+// Graph and Twitter cards, hreflang. Every link on the page is root-relative.
 const SITE_URL = (process.env.SITE_URL ?? 'https://slang.dolphlabs.com').replace(/\/$/, '');
+
+// Read once; a locale that is missing a string or breaks a translation's
+// markup stops the build here, not in front of a reader.
+const CATALOG = loadCatalog(resolve(ROOT, 'locales'));
 
 interface Program {
   name: string;
   exit: number;
-  note: string;
   recorded?: Record<string, string>;
 }
 
-function runnerHtml(): string {
+// The runner's panels, for one locale. The program source and its output are
+// real compiler output and are the same in every language; the captions, the
+// tab list's label and the footer are the locale's.
+function runnerHtml(t: Translate): string {
   const { recorded_with: recordedWith, programs } = JSON.parse(
     readFileSync(resolve(ROOT, 'programs/programs.json'), 'utf8'),
   ) as { recorded_with: string; programs: Program[] };
@@ -50,18 +57,18 @@ function runnerHtml(): string {
   <div class="runner-term">
     <pre class="runner-out" aria-live="polite"><span class="sh-dir">~/${p.name}</span><span class="sh-p"> $ </span><span class="sh-cmd">slangc ${p.name}.sl --run</span>
 ${lines}<span class="out-line out-exit ${exitCls}">[exit ${p.exit}]</span></pre>
-    <p class="runner-note">${escapeHtml(p.note)}</p>
+    <p class="runner-note">${t(`runner.note.${p.name}`)}</p>
   </div>
 </div>`;
     })
     .join('\n');
 
   return `<div class="runner" data-runner>
-<div class="runner-bar"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><div class="runner-tabs" role="tablist" aria-label="Example programs">${tabs}</div></div>
+<div class="runner-bar"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><div class="runner-tabs" role="tablist" aria-label="${escapeHtml(plainText(t('runner.tablist')))}">${tabs}</div></div>
 <div class="runner-body">
 ${panels}
 </div>
-<div class="runner-foot"><span>Recorded with ${escapeHtml(recordedWith)}. CI compiles each one and checks its output against the real compiler.</span><button type="button" class="btn btn-lime btn-sm" data-run><svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1 11 6 2 11Z" fill="currentColor"/></svg>Run</button></div>
+<div class="runner-foot"><span>${t('runner.foot').replace('{tool}', () => escapeHtml(recordedWith))}</span><button type="button" class="btn btn-lime btn-sm" data-run><svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1 11 6 2 11Z" fill="currentColor"/></svg>${t('runner.run')}</button></div>
 </div>`;
 }
 
@@ -97,9 +104,10 @@ function schedHtml(): { parked: string; queue: string; workers: string } {
 // Replaces authoring markers in index.html with generated markup:
 //   <code data-lang="slang">…</code>  highlighted slang
 //   <code data-lang="shell">…</code>  a terminal transcript
-//   <!-- @runner -->                  the example-program runner
 //   the empty sched-* groups          the concurrency diagram
 //   %SITE_URL%                        the absolute site URL
+// Everything that depends on the language ({{tokens}}, <!-- @runner -->) is
+// left for slangI18n, which runs on the finished page.
 function slangPage(): Plugin {
   return {
     name: 'slang-page',
@@ -117,13 +125,71 @@ function slangPage(): Plugin {
             `<code>${highlightSlang(unescapeHtml(src.replace(/^\n/, '').replace(/\n\s*$/, '')))}</code>`)
           .replace(/<code data-lang="shell">([\s\S]*?)<\/code>/g, (_, src: string) =>
             `<code>${highlightShell(unescapeHtml(src.replace(/^\n/, '').replace(/\n\s*$/, '')))}</code>`)
-          .replace('<!-- @runner -->', runnerHtml)
           .replace('<g class="sched-parked" data-sched-parked></g>', () =>
             `<g class="sched-parked" data-sched-parked>${schedHtml().parked}</g>`)
           .replace('<g data-sched-queue></g>', () => `<g data-sched-queue>${schedHtml().queue}</g>`)
           .replace('<g class="sched-workers" data-sched-workers></g>', () =>
             `<g class="sched-workers" data-sched-workers>${schedHtml().workers}</g>`)
           .replaceAll('%SITE_URL%', SITE_URL);
+      },
+    },
+  };
+}
+
+// One page per locale. The build bundles index.html once (so every locale
+// shares the same hashed CSS and JS) and then renders that finished page for
+// each locale: / for the default, /es/ and friends for the rest. Nothing is
+// translated in the browser.
+function slangI18n(): Plugin {
+  let building = false;
+  const render = (html: string, url: string, used?: Set<string>) =>
+    localize(html, localeForUrl(CATALOG, url), CATALOG, { siteUrl: SITE_URL, runner: runnerHtml, used });
+
+  return {
+    name: 'slang-i18n',
+    configResolved(config) {
+      building = config.command === 'build';
+    },
+    configureServer(server) {
+      server.watcher.add(resolve(ROOT, 'locales'));
+      server.watcher.on('change', (file) => {
+        if (file.includes('/locales/')) server.ws.send({ type: 'full-reload' });
+      });
+    },
+    transformIndexHtml: {
+      order: 'post',
+      handler(html, ctx) {
+        // In a build the localized pages are made from the finished bundle
+        // (generateBundle). The dev server renders on request; the original
+        // URL says which locale, because /es/ is served from /index.html.
+        if (building) return html;
+        return render(html, ctx.originalUrl ?? ctx.path);
+      },
+    },
+    // After Vite's own HTML plugin has emitted index.html with its hashed
+    // asset links.
+    generateBundle: {
+      order: 'post',
+      handler(_options, bundle) {
+        const page = bundle['index.html'];
+        if (!page || page.type !== 'asset' || typeof page.source !== 'string') {
+          this.error('slang-i18n: the build produced no index.html to localize');
+        }
+        const template = page.source;
+
+        // The default locale also tells us which strings nothing reads, so a
+        // deleted sentence cannot leave a stale key behind.
+        const used = new Set<string>();
+        for (const locale of CATALOG.locales) {
+          const html = localize(template, locale, CATALOG, { siteUrl: SITE_URL, runner: runnerHtml, used });
+          if (locale.path === '/') {
+            page.source = html;
+          } else {
+            this.emitFile({ type: 'asset', fileName: `${locale.path.slice(1)}index.html`, source: html });
+          }
+        }
+        const unused = unusedKeys(CATALOG, template, used);
+        if (unused.length) this.error(`slang-i18n: strings nothing uses: ${unused.join(', ')}`);
       },
     },
   };
@@ -157,7 +223,7 @@ function csp(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [slangPage(), csp()],
+  plugins: [slangPage(), csp(), slangI18n()],
   build: {
     target: 'es2022',
     // The three.js chunk is loaded on demand by the hero; keep it out of the

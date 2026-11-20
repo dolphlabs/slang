@@ -9,6 +9,7 @@
     "model": "node scripts/optimize-model.mjs",
     "assemble": "sh scripts/assemble.sh",
     "check": "node scripts/check-programs.mjs",
+    "test": "node --experimental-strip-types --test \"vite/**/*.test.ts\"",
     "preview:site": "vite preview --outDir site"
   },
   "dependencies": {
