@@ -1111,10 +1111,16 @@ Found building zokor's logger (2026-10-12), not fixed:
   tests/http_method_token): `parse_head` takes everything
   before the first space, with no RFC 9110 token check, so a method can
   carry `"`, `\` or an ESC byte into a handler or a log line.
-- [ ] **Generic functions cannot be named as values even when every type
-  parameter is known** (`r.get(path, live)` inside a generic method over
-  `S`), and there is no explicit instantiation syntax (`f[int]()` is a
-  parse error), so a library cannot register its own generic handler.
+- [x] **Generic functions cannot be named as values even when every type
+  parameter is known** (2026-11-20, feat/generic-fn-values). Where a
+  concrete fn type is expected (a typed parameter, an annotated `let`, a
+  `return`, a struct field), a generic function's type parameters are now
+  unified with that type's, and the value is that instance; handed to a
+  generic call, it waits for the other arguments to fix the parameter's
+  type (`twice("x", ident)`). `expect_push` now carries fn types for this.
+  Still no explicit instantiation syntax (`f[int]` would collide with
+  indexing), so a generic function cannot supply a type parameter itself.
+  tests/generic_fn_values, tests/fail_generic_fn_value_*.
 - [ ] **The move check is not path-sensitive**: in
   `if !ok { refuse(c); return ""; } spawn serve(c);` the second use of `c`
   is "use of moved value", though the branch that moved it returns. The

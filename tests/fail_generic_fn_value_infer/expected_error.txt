@@ -1,0 +1,1 @@
+argument 2 is a generic function, which takes its types from the parameter

@@ -5,6 +5,53 @@
 
 #include <string.h>
 
+/* Whether ident `e` names a generic function (bare or as pkg.f), and
+ * which: a binding, a global or a plain function of the name wins, as in
+ * infer_ident_name. */
+int generic_fn_ref(CG *cg, Expr *e, const char **pkg_out,
+                   const char **name_out) {
+    const char *name = e->as.ident.name;
+    if (var_find(cg, name))
+        return 0;
+    const char *pkg = cg->cur_pkg, *fname = name;
+    char *left, *right;
+    if (split_dotted(name, &left, &right)) {
+        pkg = import_try(cg, left);
+        if (!pkg)
+            return 0;
+        fname = right;
+    }
+    if (glob_find(cg, pkg, fname) || sig_find_in(cg, pkg, fname))
+        return 0;
+    FuncTmpl *tm = func_tmpl_find_in_pkg(cg, pkg, fname);
+    if (!tm)
+        return 0;
+    if (strcmp(pkg, cg->cur_pkg) && !tm->decl->is_pub)
+        cg_error(e->line, "function '%s' is not exported from package '%s'",
+                 fname, pkg);
+    *pkg_out = pkg;
+    *name_out = fname;
+    return 1;
+}
+
+/* A generic function named as a value: its instance for `want` (the fn
+ * type expected there), recorded on the node so every later pass and
+ * codegen use the same one. NULL when `e` names anything else. */
+FuncSig *generic_fn_value_for(CG *cg, Expr *e, const char *want) {
+    if (e->as.ident.gsig)
+        return (FuncSig *)e->as.ident.gsig;
+    const char *pkg, *fname;
+    if (!generic_fn_ref(cg, e, &pkg, &fname))
+        return NULL;
+    FuncSig *sig = generic_value_sig(cg, pkg, fname, want, e->line);
+    e->as.ident.gsig = (void *)sig;
+    return sig;
+}
+
+FuncSig *generic_fn_value(CG *cg, Expr *e) {
+    return generic_fn_value_for(cg, e, cg->expect);
+}
+
 const char *infer_ident_name(CG *cg, const char *name, int line) {
     if (!strcmp(name, "none")) {
         if (!cg->expect || !is_opt(cg->expect))
@@ -84,10 +131,10 @@ const char *infer_ident_name(CG *cg, const char *name, int line) {
         }
         if (func_tmpl_find_in_pkg(cg, cg->cur_pkg, name))
             cg_error(line,
-                     "'%s' is a generic function; it cannot be used as a "
-                     "value or spawned (write a plain function that calls "
-                     "it with a concrete type, and use that instead)",
-                     name);
+                     "'%s' is a generic function; it can be used as a "
+                     "value only where a concrete fn type is expected (a "
+                     "typed parameter, or `let f: fn(int) -> int = %s;`)",
+                     name, name);
     }
     const char *tl = hint_top_level_let(cg, name);
     cg_error(line, "undefined variable '%s'%s", name,
@@ -1078,8 +1125,12 @@ const char *infer_type(CG *cg, Expr *e) {
     case EX_STRING: return "str";
     case EX_BYTES:  return "bytes";
     case EX_BOOL:   return "bool";
-    case EX_IDENT:
+    case EX_IDENT: {
+        FuncSig *gs = generic_fn_value(cg, e);
+        if (gs)
+            return fn_type_of_sig(cg, gs);
         return infer_ident_name(cg, e->as.ident.name, e->line);
+    }
     case EX_UNARY: {
         const char *t = infer_type(cg, e->as.unary.operand);
         const char *op = e->as.unary.op;

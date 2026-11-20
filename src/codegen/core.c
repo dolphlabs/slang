@@ -2285,9 +2285,16 @@ const char *expect_push(CG *cg, const char *t) {
      * return-only parameter is refused with a clear message instead of
      * risking that leak. A map is a container like an array: its
      * literal's keys and values read their types from it
-     * ({"a": none} against map[str]opt[int]). */
+     * ({"a": none} against map[str]opt[int]).
+     *
+     * A fn type is let through too: it is how a generic function named
+     * as a value learns its type arguments (generic_value_sig). Leaking
+     * it into a nested generic call can only bind a return-only type
+     * parameter to that fn type, whose result then fails the outer
+     * site's own assignability check -- an error, never a wrong binding
+     * that compiles. */
     if (t && (is_opt(t) || is_result(t) || is_chan(t) || is_join(t) ||
-              is_arr(t) || is_map(t)))
+              is_arr(t) || is_map(t) || is_fn(t)))
         cg->expect = t;
     return saved;
 }
