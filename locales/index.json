@@ -1,0 +1,12 @@
+{
+  "default": "en",
+  "locales": [
+    { "code": "en", "name": "English", "og": "en_US" },
+    { "code": "es", "name": "Español", "og": "es_ES" },
+    { "code": "fr", "name": "Français", "og": "fr_FR" },
+    { "code": "de", "name": "Deutsch", "og": "de_DE" },
+    { "code": "pt-BR", "name": "Português (Brasil)", "og": "pt_BR" },
+    { "code": "ja", "name": "日本語", "og": "ja_JP" },
+    { "code": "zh-CN", "name": "简体中文", "og": "zh_CN" }
+  ]
+}

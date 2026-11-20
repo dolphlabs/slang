@@ -59,6 +59,14 @@ export function initSearch(): void {
   let sel = 0;
   let lastFocus: Element | null = null;
 
+  // The words around the results are the page's, in its language; the
+  // results themselves come from the English docs index.
+  const ui = {
+    empty: palette.dataset.empty ?? 'Nothing matches “{query}”.',
+    unavailable: palette.dataset.unavailable ?? '',
+    pages: palette.dataset.pages ?? 'Pages',
+  };
+
   const load = (): Promise<Entry[]> => {
     if (index) return Promise.resolve(index);
     return fetch('/search.json')
@@ -82,14 +90,14 @@ export function initSearch(): void {
     sel = 0;
     if (!rows.length) {
       list.innerHTML = input.value.trim()
-        ? `<p class="palette-empty">Nothing matches “${esc(input.value.trim())}”.</p>`
-        : '<p class="palette-empty">Search is available once the docs are deployed with the site.</p>';
+        ? `<p class="palette-empty">${esc(ui.empty).replace('{query}', () => esc(input.value.trim()))}</p>`
+        : `<p class="palette-empty">${esc(ui.unavailable)}</p>`;
       return;
     }
     let group = '';
     list.innerHTML = rows
       .map((it, i) => {
-        const g = onlyGroup || (it.kind === 'page' ? 'Pages' : 'API');
+        const g = onlyGroup || (it.kind === 'page' ? ui.pages : 'API');
         const head = g !== group ? `<p class="palette-group">${g}</p>` : '';
         group = g;
         const api = it.kind === 'api';
@@ -105,7 +113,7 @@ export function initSearch(): void {
     if (!index) return;
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
     if (!words.length) {
-      draw(index.filter((it) => it.kind === 'page').slice(0, 12), [], 'Pages');
+      draw(index.filter((it) => it.kind === 'page').slice(0, 12), [], ui.pages);
       return;
     }
     const scored = index

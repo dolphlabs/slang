@@ -44,5 +44,7 @@ done
 
 cp -R "$ROOT/dist/." "$OUT/"
 cat "$ROOT/deploy/_headers" >>"$OUT/_headers"
+# The same rules for /es/, /fr/ and the other localized homepages.
+node "$ROOT/scripts/locale-headers.mjs" >>"$OUT/_headers"
 
 echo "assemble: site/ ready ($(find "$OUT" -type f | wc -l | tr -d ' ') files, docs from ${SLANG_DOCS_DIR:-$REF})"

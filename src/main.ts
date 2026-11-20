@@ -186,18 +186,121 @@ function initCopy(): void {
       const target = document.getElementById(btn.dataset.copy ?? '');
       if (!target) return;
       const label = btn.textContent;
+      // The words come from the page, in its language.
       try {
         await navigator.clipboard.writeText(commandsOf(target.textContent ?? ''));
-        btn.textContent = 'Copied';
+        btn.textContent = btn.dataset.copied ?? label;
       } catch (err) {
         // Clipboard access is refused on insecure origins and in some
         // embedded browsers; say so rather than pretend it worked.
         console.warn('copy failed', err);
-        btn.textContent = 'Select to copy';
+        btn.textContent = btn.dataset.failed ?? label;
       }
       window.setTimeout(() => { btn.textContent = label; }, 1600);
     });
   }
+}
+
+// ---- language ------------------------------------------------------------------
+
+// Every language link is a plain link to that language's own page, so the
+// switcher works without any of this. This closes the menu the way a menu
+// should close, remembers an explicit choice, and, on the default-language
+// page only, offers the visitor's own language once, as a notice they can
+// dismiss. It never redirects: a page that moves you is a page that breaks
+// the back button and hides the URL you shared.
+
+const LANG_KEY = 'slang.lang';
+
+function storedLang(): string | null {
+  try {
+    return localStorage.getItem(LANG_KEY);
+  } catch {
+    // Storage is blocked in some private modes; the offer just repeats.
+    return null;
+  }
+}
+
+function storeLang(code: string): void {
+  try {
+    localStorage.setItem(LANG_KEY, code);
+  } catch {
+    // Not remembering a choice is harmless.
+  }
+}
+
+// The offered locale that best fits a browser's language list: the same
+// language and script (zh-TW is Traditional and must not match zh-CN), so
+// pt-PT reaches pt-BR and zh-Hant does not reach zh-CN.
+function bestMatch(offered: string[], wanted: readonly string[]): string | null {
+  const key = (tag: string): string | null => {
+    try {
+      const l = new Intl.Locale(tag).maximize();
+      return `${l.language}-${l.script ?? ''}`;
+    } catch {
+      return null;
+    }
+  };
+  for (const want of wanted) {
+    const wk = key(want);
+    if (!wk) continue;
+    const hit = offered.find((code) => code.toLowerCase() === want.toLowerCase()) ??
+      offered.find((code) => key(code) === wk);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function initLang(): void {
+  const menu = $('[data-lang-menu]') as HTMLDetailsElement | null;
+  const links = $$('[data-lang-link]');
+  if (!menu || !links.length) return;
+
+  const close = () => { menu.open = false; };
+  document.addEventListener('click', (e) => {
+    if (menu.open && !menu.contains(e.target as Node)) close();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && menu.open) {
+      close();
+      menu.querySelector('summary')?.focus();
+    }
+  });
+
+  // Footer and menu-sheet links count as choices too.
+  for (const a of $$('a[hreflang][lang]')) {
+    a.addEventListener('click', () => storeLang(a.getAttribute('hreflang') ?? ''));
+  }
+
+  // Only the default-language page carries the other languages' wording.
+  const offers = new Map(links.filter((a) => a.dataset.suggest).map((a) => [a.getAttribute('hreflang') ?? '', a]));
+  if (!offers.size) return;
+  const saved = storedLang();
+  if (saved && !offers.has(saved)) return; // chose this language, or it is gone
+  const code = saved ?? bestMatch([...offers.keys()], navigator.languages ?? [navigator.language]);
+  const target = code ? offers.get(code) : undefined;
+  if (!target) return;
+
+  const toast = document.createElement('div');
+  toast.className = 'lang-toast';
+  toast.setAttribute('role', 'status');
+  const go = document.createElement('a');
+  go.href = target.getAttribute('href') ?? '/';
+  go.lang = code ?? '';
+  go.textContent = `${target.dataset.suggest ?? ''} →`;
+  go.addEventListener('click', () => storeLang(code ?? ''));
+  const x = document.createElement('button');
+  x.type = 'button';
+  x.textContent = '×';
+  x.setAttribute('aria-label', target.dataset.dismiss ?? '');
+  x.lang = code ?? '';
+  x.addEventListener('click', () => {
+    // Dismissing is choosing to stay here.
+    storeLang(document.documentElement.lang);
+    toast.remove();
+  });
+  toast.append(go, x);
+  document.body.append(toast);
 }
 
 // ---- scheduler diagram --------------------------------------------------------
@@ -300,5 +403,6 @@ initSearch();
 initReveal();
 initRunner();
 initCopy();
+initLang();
 initSched();
 initHero();

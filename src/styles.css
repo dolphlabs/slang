@@ -56,6 +56,8 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow-x: hidden;
+  /* A long word in a longer language wraps instead of widening the page. */
+  overflow-wrap: break-word;
 }
 
 img, svg, canvas { display: block; max-width: 100%; }
@@ -204,13 +206,72 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
   color: var(--ink);
 }
 
+/* The language menu is a <details>, so it opens and lists real links with
+   no script. main.ts only closes it on an outside click or Escape. */
+.lang { position: relative; }
+.lang summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+  cursor: pointer;
+  list-style: none;
+  transition: border-color .2s, background-color .2s;
+}
+.lang summary::-webkit-details-marker { display: none; }
+.lang summary:hover,
+.lang[open] summary { border-color: var(--line-2); background: var(--surface); }
+.lang-list {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 60;
+  min-width: 180px;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  border: 1px solid var(--line-2);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, .5);
+}
+.lang-list a {
+  display: block;
+  padding: 9px 12px;
+  border-radius: 9px;
+  font-size: 15px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.lang-list a:hover { background: var(--surface-2); color: var(--ink); }
+.lang-list a[aria-current] { color: var(--lime); }
+
+.sheet-langs { display: none; flex-wrap: wrap; gap: 8px; padding-top: 18px; }
+.nav-sheet .sheet-langs a {
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 15px;
+}
+.nav-sheet .sheet-langs a[aria-current] { border-color: var(--lime); color: var(--lime); }
+
 @media (max-width: 1080px) {
   .nav-links { display: none; }
   .nav-menu { display: inline-flex; }
 }
+/* No room for a fourth control beside the logo on a phone: the languages
+   move into the menu sheet. */
 @media (max-width: 520px) {
   .nav-gh span { display: none; }
   .nav-gh { width: 38px; padding: 0; }
+  .lang { display: none; }
+  .sheet-langs { display: flex; }
 }
 
 /* ---- hero --------------------------------------------------------------- */
@@ -277,6 +338,8 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 }
 .pill:hover { border-color: var(--line-2); color: var(--ink); }
 .pill-tag {
+  flex: none;
+  white-space: nowrap;
   padding: 3px 10px;
   border-radius: 999px;
   background: rgba(214, 245, 49, .12);
@@ -315,6 +378,8 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .token-race:hover { border-color: var(--lime); color: var(--ink); }
 .token-race b { font-weight: 500; color: var(--ink); }
 .token-race-tag {
+  flex: none;
+  white-space: nowrap;
   padding: 3px 10px;
   border-radius: 999px;
   background: var(--lime);
@@ -434,7 +499,9 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
   .stat { padding: 16px 20px; }
   .stat + .stat { border-left: 0; border-top: 1px solid var(--line); }
   .stat-num { font-size: 26px; }
-  .hero-ctas .btn-lg { width: 100%; }
+  /* A longer translation of the label may not fit one line at 360px: wrap
+     it and grow the button, rather than push the page wider. */
+  .hero-ctas .btn-lg { width: 100%; height: auto; min-height: 52px; padding-block: 10px; white-space: normal; text-align: center; line-height: 1.3; }
 }
 
 /* ---- sections ----------------------------------------------------------- */
@@ -1106,6 +1173,81 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
   transition: color .2s, border-color .2s;
 }
 .footer-base a:hover { color: var(--ink); border-color: var(--lime); }
+
+.footer-cols .footer-langs a[aria-current] { color: var(--lime); }
+.footer-note { margin-top: 14px; font-size: 13px; color: var(--faint); }
+.footer-note p { margin: 0; }
+
+/* ---- language notice ----------------------------------------------------- */
+
+.lang-toast {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: min(440px, calc(100vw - 32px));
+  padding: 6px 6px 6px 18px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  background: rgba(14, 16, 19, .94);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, .5);
+  font-size: 14px;
+  animation: toast-in .5s ease both;
+}
+.lang-toast a { padding: 8px 6px; color: var(--ink); }
+.lang-toast a:hover { color: var(--lime); }
+.lang-toast button {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.lang-toast button:hover { background: var(--surface-2); color: var(--ink); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(10px); } }
+@media (prefers-reduced-motion: reduce) { .lang-toast { animation: none; } }
+
+/* ---- other writing systems ---------------------------------------------- */
+
+/* Geist has no CJK glyphs; the page falls back to the system's own CJK UI
+   font rather than ship a multi-megabyte web font. The negative tracking and
+   wide caps spacing in the rules above are tuned for Latin and read as gaps
+   and collisions in Han and kana. */
+:root:lang(ja) {
+  --sans: 'Geist Variable', 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic UI', Meiryo, 'Noto Sans CJK JP', system-ui, sans-serif;
+}
+:root:lang(zh) {
+  --sans: 'Geist Variable', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Noto Sans CJK SC', system-ui, sans-serif;
+}
+:lang(ja) :is(h1, h2, h3, .eyebrow, .stat-num, .big-num, .card-kicker, .sched-label, .cta h2),
+:lang(zh) :is(h1, h2, h3, .eyebrow, .stat-num, .big-num, .card-kicker, .sched-label, .cta h2) {
+  letter-spacing: 0;
+}
+:lang(ja) .eyebrow, :lang(zh) .eyebrow { text-transform: none; }
+:lang(ja) body, :lang(zh) body { line-break: strict; }
+/* Han and kana are far denser than Latin, so the headline sizes above, set
+   for Latin, are too large: they break a phrase mid-word. auto-phrase breaks
+   Japanese at phrase boundaries where the browser supports it. */
+:root:lang(ja) body, :root:lang(zh) body { word-break: auto-phrase; }
+/* auto-phrase keeps a phrase whole, so a narrow grid cell needs permission to
+   break it anyway; "anywhere" (unlike break-word) also shrinks min-content. */
+:root:lang(ja) body, :root:lang(zh) body { overflow-wrap: anywhere; }
+:lang(ja) .hero h1, :lang(zh) .hero h1 { font-size: clamp(38px, 5.2vw, 72px); line-height: 1.15; }
+:lang(ja) .cta h2, :lang(zh) .cta h2 { font-size: clamp(40px, 5.6vw, 68px); line-height: 1.15; }
+
+/* German compounds are long; let the browser hyphenate them. */
+:root:lang(de) :is(p, dd, li, summary) { hyphens: auto; }
 
 /* ---- reveal on scroll ---------------------------------------------------- */
 

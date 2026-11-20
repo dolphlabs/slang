@@ -3,36 +3,30 @@
   "programs": [
     {
       "name": "hello",
-      "exit": 0,
-      "note": "Functions, ranges and string interpolation."
+      "exit": 0
     },
     {
       "name": "tasks",
       "exit": 0,
-      "note": "Ten thousand green tasks. Sleeping parks the task, so they all sleep at once.",
       "recorded": {
         "ms": "583"
       }
     },
     {
       "name": "errors",
-      "exit": 0,
-      "note": "A bad number is an error you have to look at, not a zero."
+      "exit": 0
     },
     {
       "name": "json",
-      "exit": 1,
-      "note": "Typed decoding. The error names the exact field path."
+      "exit": 1
     },
     {
       "name": "generics",
-      "exit": 0,
-      "note": "A method is checked for the types it is called with, and only those."
+      "exit": 0
     },
     {
       "name": "regex",
-      "exit": 0,
-      "note": "Linear-time matching. No pattern can make it backtrack."
+      "exit": 0
     }
   ]
 }

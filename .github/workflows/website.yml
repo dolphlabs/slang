@@ -48,6 +48,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Translations are consistent and the i18n code works
+        run: npm test
+
       - name: Example programs match the compiler
         run: SLANGC="$PWD/.slang/slangc" npm run check
 
