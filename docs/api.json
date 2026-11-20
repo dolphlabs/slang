@@ -349,6 +349,25 @@
       "kind": "native",
       "items": [
         {
+          "name": "crc32",
+          "params": [
+            "bytes"
+          ],
+          "ret": "int",
+          "tls": false,
+          "sig": "compress.crc32(bytes) -> int"
+        },
+        {
+          "name": "crc32_update",
+          "params": [
+            "int",
+            "bytes"
+          ],
+          "ret": "int",
+          "tls": false,
+          "sig": "compress.crc32_update(int, bytes) -> int"
+        },
+        {
           "name": "gzip",
           "params": [
             "bytes"
@@ -10132,6 +10151,108 @@
         }
       ]
     },
+    "tar": {
+      "name": "tar",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Entry",
+          "decl": "struct",
+          "sig": "gc struct Entry",
+          "doc": "",
+          "file": "stdlib/tar/tar.sl",
+          "line": 35
+        },
+        {
+          "name": "Limits",
+          "decl": "struct",
+          "sig": "struct Limits",
+          "doc": "",
+          "file": "stdlib/tar/tar.sl",
+          "line": 53
+        },
+        {
+          "name": "default_limits",
+          "decl": "fn",
+          "sig": "fn default_limits() -> Limits",
+          "doc": "",
+          "file": "stdlib/tar/tar.sl",
+          "line": 58
+        },
+        {
+          "name": "parse",
+          "decl": "fn",
+          "sig": "fn parse(data: bytes) -> result[[Entry], str]",
+          "doc": "",
+          "file": "stdlib/tar/tar.sl",
+          "line": 64
+        },
+        {
+          "name": "parse_with",
+          "decl": "fn",
+          "sig": "fn parse_with(data: bytes, lim: Limits) -> result[[Entry], str]",
+          "doc": "",
+          "file": "stdlib/tar/tar.sl",
+          "line": 70
+        },
+        {
+          "name": "safe_path",
+          "decl": "fn",
+          "sig": "fn safe_path(name: str) -> result[str, str]",
+          "doc": "A name made safe to join under an extraction directory: relative, with no \"..\", no drive letter or backslash, no NUL. A trailing \"/\" is kept. Check a symlink's target the same way before creating it.",
+          "file": "stdlib/tar/tar.sl",
+          "line": 358
+        },
+        {
+          "name": "Writer",
+          "decl": "struct",
+          "sig": "gc struct Writer",
+          "doc": "",
+          "file": "stdlib/tar/tar.sl",
+          "line": 398
+        },
+        {
+          "name": "new_writer",
+          "decl": "fn",
+          "sig": "fn new_writer() -> Writer",
+          "doc": "",
+          "file": "stdlib/tar/tar.sl",
+          "line": 404
+        },
+        {
+          "name": "Writer.add_file",
+          "decl": "fn",
+          "sig": "fn add_file(self: Writer, name: str, data: bytes, mode: int, modified: int) -> Writer",
+          "doc": "",
+          "file": "stdlib/tar/tar.sl",
+          "line": 437
+        },
+        {
+          "name": "Writer.add_dir",
+          "decl": "fn",
+          "sig": "fn add_dir(self: Writer, name: str, mode: int, modified: int) -> Writer",
+          "doc": "",
+          "file": "stdlib/tar/tar.sl",
+          "line": 441
+        },
+        {
+          "name": "Writer.add_symlink",
+          "decl": "fn",
+          "sig": "fn add_symlink(self: Writer, name: str, target: str, modified: int) -> Writer",
+          "doc": "",
+          "file": "stdlib/tar/tar.sl",
+          "line": 449
+        },
+        {
+          "name": "Writer.finish",
+          "decl": "fn",
+          "sig": "fn finish(self: Writer) -> result[bytes, str]",
+          "doc": "The archive, closed with two zero blocks, or the first problem an add ran into.",
+          "file": "stdlib/tar/tar.sl",
+          "line": 549
+        }
+      ]
+    },
     "template": {
       "name": "template",
       "kind": "source",
@@ -12090,6 +12211,132 @@
           "doc": "Every document decoded into T.",
           "file": "stdlib/yaml/yaml.sl",
           "line": 159
+        }
+      ]
+    },
+    "zip": {
+      "name": "zip",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Entry",
+          "decl": "struct",
+          "sig": "gc struct Entry",
+          "doc": "",
+          "file": "stdlib/zip/zip.sl",
+          "line": 41
+        },
+        {
+          "name": "Archive",
+          "decl": "struct",
+          "sig": "gc struct Archive",
+          "doc": "",
+          "file": "stdlib/zip/zip.sl",
+          "line": 59
+        },
+        {
+          "name": "Limits",
+          "decl": "struct",
+          "sig": "struct Limits",
+          "doc": "",
+          "file": "stdlib/zip/zip.sl",
+          "line": 68
+        },
+        {
+          "name": "default_limits",
+          "decl": "fn",
+          "sig": "fn default_limits() -> Limits",
+          "doc": "",
+          "file": "stdlib/zip/zip.sl",
+          "line": 74
+        },
+        {
+          "name": "open",
+          "decl": "fn",
+          "sig": "fn open(data: bytes) -> result[Archive, str]",
+          "doc": "",
+          "file": "stdlib/zip/zip.sl",
+          "line": 102
+        },
+        {
+          "name": "open_with",
+          "decl": "fn",
+          "sig": "fn open_with(data: bytes, lim: Limits) -> result[Archive, str]",
+          "doc": "",
+          "file": "stdlib/zip/zip.sl",
+          "line": 106
+        },
+        {
+          "name": "read",
+          "decl": "fn",
+          "sig": "fn read(a: Archive, e: Entry) -> result[bytes, str]",
+          "doc": "The entry's contents, inflated and checked against its size and CRC-32.",
+          "file": "stdlib/zip/zip.sl",
+          "line": 337
+        },
+        {
+          "name": "find",
+          "decl": "fn",
+          "sig": "fn find(a: Archive, name: str) -> opt[Entry]",
+          "doc": "The entry named `name` exactly, if there is one.",
+          "file": "stdlib/zip/zip.sl",
+          "line": 378
+        },
+        {
+          "name": "safe_path",
+          "decl": "fn",
+          "sig": "fn safe_path(name: str) -> result[str, str]",
+          "doc": "A name made safe to join under an extraction directory: relative, with no \"..\", no drive letter or backslash, no NUL. A trailing \"/\" is kept. err names what is wrong; extracting such a name is how an archive writes outside the directory (\"zip slip\").",
+          "file": "stdlib/zip/zip.sl",
+          "line": 391
+        },
+        {
+          "name": "Writer",
+          "decl": "struct",
+          "sig": "gc struct Writer",
+          "doc": "",
+          "file": "stdlib/zip/zip.sl",
+          "line": 496
+        },
+        {
+          "name": "new_writer",
+          "decl": "fn",
+          "sig": "fn new_writer() -> Writer",
+          "doc": "",
+          "file": "stdlib/zip/zip.sl",
+          "line": 506
+        },
+        {
+          "name": "Writer.add",
+          "decl": "fn",
+          "sig": "fn add(self: Writer, name: str, data: bytes, modified: int) -> Writer",
+          "doc": "Adds a file, deflated (stored instead when deflating does not make it smaller). `modified` is Unix seconds.",
+          "file": "stdlib/zip/zip.sl",
+          "line": 525
+        },
+        {
+          "name": "Writer.add_stored",
+          "decl": "fn",
+          "sig": "fn add_stored(self: Writer, name: str, data: bytes, modified: int) -> Writer",
+          "doc": "Adds a file as is: for data that is already compressed.",
+          "file": "stdlib/zip/zip.sl",
+          "line": 530
+        },
+        {
+          "name": "Writer.add_dir",
+          "decl": "fn",
+          "sig": "fn add_dir(self: Writer, name: str, modified: int) -> Writer",
+          "doc": "Adds a directory; \"/\" is appended to the name when missing.",
+          "file": "stdlib/zip/zip.sl",
+          "line": 535
+        },
+        {
+          "name": "Writer.finish",
+          "decl": "fn",
+          "sig": "fn finish(self: Writer) -> result[bytes, str]",
+          "doc": "The whole archive, or the first problem an add ran into.",
+          "file": "stdlib/zip/zip.sl",
+          "line": 634
         }
       ]
     }

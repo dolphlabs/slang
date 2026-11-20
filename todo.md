@@ -1,10 +1,20 @@
 # todo
 
+- [x] **zip and tar (2026-11-20, feat/zip-tar).** `stdlib/zip` (stored and
+  deflate, ZIP64 reading, UTF-8 names, overlap and CRC checks, entry and
+  total limits) and `stdlib/tar` (ustar, pax, GNU long names and base-256
+  sizes, checksums), each with a writer and `safe_path`. Plus
+  `compress.crc32` / `crc32_update` (zlib). Interop in
+  tests/archive_interop. Not done: streaming (both read and write whole
+  archives in memory), zip encryption, bzip2/zstd/LZMA methods, CP437
+  names, writing ZIP64.
+
 - [x] **XML (2026-11-20, feat/xml).** `stdlib/xml`: XML 1.0 and namespaces
   into a tree, with readers, a builder and a writer. DOCTYPE refused by
   default (skip-only option, internal subsets never), only predefined
   entities, UTF-8 only, limits on size, depth, attributes and nodes.
   tests/xml_parity matches expat on 64 documents.
+
 - [ ] **`xml.parse` spends most of its time in the collector (found
   2026-11-20, feat/xml).** A 3.5 MB feed of 20,000 items: 410-470 ms
   against Go encoding/xml's 150 ms; SLANG_GC_STAT shows about 1.6 s of
@@ -15,6 +25,7 @@
   runtime-side (remembered-set cost of growing old lists) or a flatter
   tree (nodes in parallel arrays, as toml does), which would change the
   API.
+
 - [x] **bcrypt verification and scrypt (2026-11-20, feat/bcrypt-scrypt).**
   `crypto.bcrypt_verify(password, hash)` ($2a$, $2b$, $2y$; cost 04-18;
   the first 72 bytes) and `crypto.scrypt(password, salt, n, r, p, len)`,

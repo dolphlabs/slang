@@ -29,6 +29,8 @@ guard let plain = ur else let e = err_of(ur) {
 | `compress.deflate_raw` | `(b: bytes) -> result[bytes, str]` |
 | `compress.deflate_raw_flush` | `(b: bytes) -> result[bytes, str]` (ends in a sync flush, no final block: RFC 7692) |
 | `compress.inflate_raw` | `(b: bytes, max_out: int) -> result[bytes, str]` |
+| `compress.crc32` | `(b: bytes) -> int` (the zip, gzip and PNG CRC-32) |
+| `compress.crc32_update` | `(crc: int, b: bytes) -> int` (continue one over pieces) |
 
 **Decompression takes a mandatory output limit.** `max_out` is a
 required argument, not an optional one with a generous default. The
@@ -59,6 +61,10 @@ upside, since every bug in one is a buffer overrun driven by
 attacker-controlled input.
 
 ## API
+
+### `compress.crc32(bytes) -> int`
+
+### `compress.crc32_update(int, bytes) -> int`
 
 ### `compress.gzip(bytes) -> result[bytes,str]`
 
