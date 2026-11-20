@@ -53,5 +53,6 @@
   <url><loc>https://slang.dolphlabs.com/packages/uuid</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/websocket</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/x509</loc></url>
+  <url><loc>https://slang.dolphlabs.com/packages/xml</loc></url>
   <url><loc>https://slang.dolphlabs.com/packages/yaml</loc></url>
 </urlset>

@@ -4238,6 +4238,59 @@ single copy of their source. On a 1.1 MB document of 5,000 entries,
 decoding into `any` (Linux container; ratios, the host was throttled). A
 config file of a few KB parses in well under a millisecond.
 
+#### `xml`
+
+XML 1.0 with namespaces, for the APIs that still speak it: SOAP, payment
+gateways, SAML, RSS and Atom, sitemaps. Parse into a tree, read it, write
+one back.
+
+```slang
+import "xml";
+
+let r = xml.parse(body);
+guard let doc = r else let e = err_of(r) { panic(e); }   // "xml: line 3 col 9: ..."
+let title = doc.find("channel/title") ?? doc;              // a path of local names
+for item in doc.find_all("channel/item") {
+    println(item.child_text("link"));
+}
+let env = xml.parse(soap) ?? doc;
+let body_el = env.child_ns("http://schemas.xmlsoap.org/soap/envelope/", "Body");
+
+let out = xml.element("note").set_attr("id", "7").add(xml.element("to").add_text("Ada & Bob"));
+xml.write(out);                          // ok("<note id=\"7\"><to>Ada &amp; Bob</to></note>")
+```
+
+A `Node` is an `Element`, `Text`, `Comment` or `Pi` (`n.kind`), with
+`name` as written, `local`, `ns` (the namespace URI), `attrs`, `children`
+and `text`. `attr(name)`, `attr_ns(ns, local)`, `child(local)`,
+`child_ns`, `children_named`, `elements()`, `text_content()` and
+`child_text(local)` read it. Adjacent text, CDATA and references are one
+`Text` node. Comments and PIs are dropped unless `Limits.keep_comments`.
+
+**What it refuses.** A DOCTYPE, by default: DTDs are how entity expansion
+("billion laughs") and external entities (XXE) get in.
+`Limits.skip_doctype` skips one without an internal subset (old RSS feeds
+carry one), and an internal subset is always refused. Entities other than
+the five predefined ones and character references are refused, and so is
+anything not well-formed: mismatched tags, duplicate attributes, an
+unbound prefix, `<` in an attribute, `]]>` in text, `--` in a comment, a
+control character, content after the root. Encodings other than UTF-8
+(and US-ASCII) are refused. Limits: 16 MiB, 256 levels, 1024 attributes
+on an element, a million nodes. Every error names the line and column.
+`tests/xml_parity` checks 64 documents against Python's expat: the same
+verdicts, and the same tree for the accepted ones (one deliberate
+difference: an `ISO-8859-1` declaration).
+
+**Writing** escapes text and attribute values. A name that is not an XML
+name, a comment holding `--`, or a control character is an `err`, never
+a broken document. Declare namespaces as attributes (`xmlns:p`).
+
+**Cost.** On a 3.5 MB RSS feed of 20,000 items, `parse` took 410-470 ms
+here, against about 150 ms for Go's `encoding/xml` into a generic tree and 89
+ms for Python's ElementTree (C expat). Most of the gap is the collector
+tracing a large tree as it grows. Parse documents of that size off the
+request path.
+
 #### `cache`
 
 An in-process cache: string keys, any value type, bounded by entry count

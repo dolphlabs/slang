@@ -11849,6 +11849,212 @@
         }
       ]
     },
+    "xml": {
+      "name": "xml",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Attr",
+          "decl": "struct",
+          "sig": "gc struct Attr",
+          "doc": "",
+          "file": "stdlib/xml/xml.sl",
+          "line": 46
+        },
+        {
+          "name": "Node",
+          "decl": "struct",
+          "sig": "gc struct Node",
+          "doc": "",
+          "file": "stdlib/xml/xml.sl",
+          "line": 55
+        },
+        {
+          "name": "Limits",
+          "decl": "struct",
+          "sig": "struct Limits",
+          "doc": "",
+          "file": "stdlib/xml/xml.sl",
+          "line": 69
+        },
+        {
+          "name": "default_limits",
+          "decl": "fn",
+          "sig": "fn default_limits() -> Limits",
+          "doc": "",
+          "file": "stdlib/xml/xml.sl",
+          "line": 81
+        },
+        {
+          "name": "parse",
+          "decl": "fn",
+          "sig": "fn parse(text: str) -> result[Node, str]",
+          "doc": "The document's root element.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 143
+        },
+        {
+          "name": "parse_with",
+          "decl": "fn",
+          "sig": "fn parse_with(text: str, lim: Limits) -> result[Node, str]",
+          "doc": "",
+          "file": "stdlib/xml/xml.sl",
+          "line": 147
+        },
+        {
+          "name": "Node.attr",
+          "decl": "fn",
+          "sig": "fn attr(self: Node, name: str) -> opt[str]",
+          "doc": "An attribute's value by its name as written (\"id\", \"xml:lang\").",
+          "file": "stdlib/xml/xml.sl",
+          "line": 897
+        },
+        {
+          "name": "Node.attr_ns",
+          "decl": "fn",
+          "sig": "fn attr_ns(self: Node, ns: str, local: str) -> opt[str]",
+          "doc": "An attribute's value by namespace URI and local name.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 907
+        },
+        {
+          "name": "Node.elements",
+          "decl": "fn",
+          "sig": "fn elements(self: Node) -> [Node]",
+          "doc": "Child elements, in order, without text, comments or PIs.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 917
+        },
+        {
+          "name": "Node.child",
+          "decl": "fn",
+          "sig": "fn child(self: Node, local: str) -> opt[Node]",
+          "doc": "The first child element with this local name, in any namespace.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 928
+        },
+        {
+          "name": "Node.child_ns",
+          "decl": "fn",
+          "sig": "fn child_ns(self: Node, ns: str, local: str) -> opt[Node]",
+          "doc": "The first child element with this namespace and local name.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 938
+        },
+        {
+          "name": "Node.children_named",
+          "decl": "fn",
+          "sig": "fn children_named(self: Node, local: str) -> [Node]",
+          "doc": "Every child element with this local name.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 948
+        },
+        {
+          "name": "Node.text_content",
+          "decl": "fn",
+          "sig": "fn text_content(self: Node) -> str",
+          "doc": "The text of this node and everything under it, in document order.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 959
+        },
+        {
+          "name": "Node.child_text",
+          "decl": "fn",
+          "sig": "fn child_text(self: Node, local: str) -> str",
+          "doc": "The trimmed text of the first child element named `local`, or \"\".",
+          "file": "stdlib/xml/xml.sl",
+          "line": 972
+        },
+        {
+          "name": "Node.find",
+          "decl": "fn",
+          "sig": "fn find(self: Node, path: str) -> opt[Node]",
+          "doc": "The first element at a path of local names below this one: \"channel/item/title\". none when any step is missing.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 979
+        },
+        {
+          "name": "Node.find_all",
+          "decl": "fn",
+          "sig": "fn find_all(self: Node, path: str) -> [Node]",
+          "doc": "Every element at a path of local names below this one, in document order.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 989
+        },
+        {
+          "name": "element",
+          "decl": "fn",
+          "sig": "fn element(name: str) -> Node",
+          "doc": "A new element named `name` (prefix included, if any). Declare its namespaces as attributes: set_attr(\"xmlns\", uri), set_attr(\"xmlns:p\", uri).",
+          "file": "stdlib/xml/xml.sl",
+          "line": 1031
+        },
+        {
+          "name": "text_node",
+          "decl": "fn",
+          "sig": "fn text_node(s: str) -> Node",
+          "doc": "",
+          "file": "stdlib/xml/xml.sl",
+          "line": 1036
+        },
+        {
+          "name": "Node.set_attr",
+          "decl": "fn",
+          "sig": "fn set_attr(self: Node, name: str, value: str) -> Node",
+          "doc": "Sets an attribute, replacing one of the same name. Returns the node.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 1050
+        },
+        {
+          "name": "Node.add",
+          "decl": "fn",
+          "sig": "fn add(self: Node, child: Node) -> Node",
+          "doc": "Appends a child node. Returns this node, so calls chain.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 1062
+        },
+        {
+          "name": "Node.add_text",
+          "decl": "fn",
+          "sig": "fn add_text(self: Node, s: str) -> Node",
+          "doc": "",
+          "file": "stdlib/xml/xml.sl",
+          "line": 1067
+        },
+        {
+          "name": "escape_text",
+          "decl": "fn",
+          "sig": "fn escape_text(s: str) -> str",
+          "doc": "Text for element content: & < > escaped (> too, so \"]]>\" never appears).",
+          "file": "stdlib/xml/xml.sl",
+          "line": 1074
+        },
+        {
+          "name": "escape_attr",
+          "decl": "fn",
+          "sig": "fn escape_attr(s: str) -> str",
+          "doc": "Text for a double-quoted attribute value. Tab, LF and CR are written as references, or a reader would turn them into spaces.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 1107
+        },
+        {
+          "name": "write",
+          "decl": "fn",
+          "sig": "fn write(n: Node) -> result[str, str]",
+          "doc": "The element and everything under it, as compact XML. Names are written as given; text and attribute values are escaped. A comment containing \"--\" or a PI containing \"?>\" cannot be written and is an error, as is a name that is not an XML name or a control character in text.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 1135
+        },
+        {
+          "name": "write_document",
+          "decl": "fn",
+          "sig": "fn write_document(root: Node) -> result[str, str]",
+          "doc": "write, after an XML declaration.",
+          "file": "stdlib/xml/xml.sl",
+          "line": 1143
+        }
+      ]
+    },
     "yaml": {
       "name": "yaml",
       "kind": "source",

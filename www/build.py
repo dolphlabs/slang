@@ -203,6 +203,7 @@ PACKAGE_SECTIONS = {
     "toml": ["`toml`"],
     "yaml": ["`yaml`"],
     "x509": ["`x509`"],
+    "xml": ["`xml`"],
     "builder": ["`builder`"],
     "flags": ["`flags`"],
     "sort": ["`sort`"],

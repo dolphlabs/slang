@@ -267,7 +267,10 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg mysql redis regex
 strings unicode encoding compress math decimal rand builder byteutil flags sort
-uuid http http2 httpc websocket template csv toml yaml cache nats s3 sigv4 x509`.
+uuid http http2 httpc websocket template csv toml yaml cache nats s3 sigv4 x509 xml`.
+`xml.parse(text)` gives the root `xml.Node` (`name`, `local`, `ns`, `attrs`, `children`);
+`n.find("a/b")`, `n.find_all(path)`, `n.child_text("link")`, `n.attr("id")`; DOCTYPE refused.
+`xml.element("a").set_attr("k", "v").add_text("t")` and `xml.write(n)` build one.
 `decimal` is exact money: `let r = decimal.parse("19.99")` (result), then
 `decimal.add/sub/mul(a, b)` (opt: none past 38 digits), `decimal.div(a, b,
 scale, decimal.Rounding.HalfEven)`, `decimal.format(d)`, `decimal.split(d, n)`.
@@ -439,4 +442,5 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - uuid: v4, v7, v7_at, is_valid, parse, version, time_ms, to_binary, from_binary
 - websocket: options, dial, dial_with, send_text, send_text_bytes, send_binary, ping, recv, text, close, close_now, is_open (+1 more)
 - x509: parse_pem, parse_der, matches_host, valid_at, expires_in, verify, csr, self_signed
+- xml: default_limits, parse, parse_with, Node.attr, Node.attr_ns, Node.elements, Node.child, Node.child_ns, Node.children_named, Node.text_content, Node.child_text, Node.find (+10 more)
 - yaml: to_json, to_json_all, decode, decode_all

@@ -1,5 +1,20 @@
 # todo
 
+- [x] **XML (2026-11-20, feat/xml).** `stdlib/xml`: XML 1.0 and namespaces
+  into a tree, with readers, a builder and a writer. DOCTYPE refused by
+  default (skip-only option, internal subsets never), only predefined
+  entities, UTF-8 only, limits on size, depth, attributes and nodes.
+  tests/xml_parity matches expat on 64 documents.
+- [ ] **`xml.parse` spends most of its time in the collector (found
+  2026-11-20, feat/xml).** A 3.5 MB feed of 20,000 items: 410-470 ms
+  against Go encoding/xml's 150 ms; SLANG_GC_STAT shows about 1.6 s of
+  minor and major pauses over 5 parses (minor_rem_entries 1.2M: children
+  pushed into lists that were already promoted). Removing per-tag
+  literal copies, the per-element text builder and close-tag name copies,
+  and caching recent names, took it from 981 ms. The next steps are
+  runtime-side (remembered-set cost of growing old lists) or a flatter
+  tree (nodes in parallel arrays, as toml does), which would change the
+  API.
 - [x] **bcrypt verification and scrypt (2026-11-20, feat/bcrypt-scrypt).**
   `crypto.bcrypt_verify(password, hash)` ($2a$, $2b$, $2y$; cost 04-18;
   the first 72 bytes) and `crypto.scrypt(password, salt, n, r, p, len)`,
