@@ -317,7 +317,8 @@ feed more), `csv.end(rd)`; `csv.format(rows)` writes CRLF, quoted as needed.
 several statements), `mysql.rows_as(rows)`, `rows.last_insert_id`, `mysql.new_pool(url, n)`.
 `crypto`: `seal(key, data, aad)`/`open` (AES-256-GCM, random nonce;
 result), `hkdf_sha256(ikm, salt, info, n)`, `constant_time_eq(a, b)`,
-`ed25519_sign/verify`, `ecdsa_p256_sign_sha256/verify_sha256` (raw r||s),
+`ed25519_sign/verify`, `ecdsa_p256_sign_sha256/verify_sha256` (raw r||s), `bcrypt_verify(pw, hash)` and
+`scrypt(pw, salt, n, r, p, len)` (migrated hashes only; new ones are Argon2id),
 `rsa_sign_sha256(pem, msg)`; verifiers return `result[bool, str]`.
 `math` takes any numeric type and returns that type (`math.abs(x)` of an `i32`
 is an `i32`): `math.sqrt`, `math.pi`, `math.round_to(x, 2)`, and for money

@@ -317,7 +317,8 @@ feed more), `csv.end(rd)`; `csv.format(rows)` writes CRLF, quoted as needed.
 several statements), `mysql.rows_as(rows)`, `rows.last_insert_id`, `mysql.new_pool(url, n)`.
 `crypto`: `seal(key, data, aad)`/`open` (AES-256-GCM, random nonce;
 result), `hkdf_sha256(ikm, salt, info, n)`, `constant_time_eq(a, b)`,
-`ed25519_sign/verify`, `ecdsa_p256_sign_sha256/verify_sha256` (raw r||s),
+`ed25519_sign/verify`, `ecdsa_p256_sign_sha256/verify_sha256` (raw r||s), `bcrypt_verify(pw, hash)` and
+`scrypt(pw, salt, n, r, p, len)` (migrated hashes only; new ones are Argon2id),
 `rsa_sign_sha256(pem, msg)`; verifiers return `result[bool, str]`.
 `math` takes any numeric type and returns that type (`math.abs(x)` of an `i32`
 is an `i32`): `math.sqrt`, `math.pi`, `math.round_to(x, 2)`, and for money
@@ -401,7 +402,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - byteutil: find, find_wire, has_prefix, has_suffix, trim, split
 - cache: options, new, get, put, put_ttl, put_sized, remove, clear, len_of, stats, get_or_load
 - compress: gzip, gzip_level, deflate, deflate_raw, deflate_raw_flush, gunzip, inflate, inflate_raw
-- crypto: sha256, hmac_sha256, rand, sha1, md5, pbkdf2_sha256, argon2id_raw, argon2id_verify, rsa_verify_sha256, sha384, sha512, hmac_sha384 (+40 more)
+- crypto: sha256, hmac_sha256, rand, sha1, md5, pbkdf2_sha256, argon2id_raw, argon2id_verify, scrypt, bcrypt_verify, rsa_verify_sha256, sha384 (+42 more)
 - csv: options, parse, parse_with, parse_bytes, new_reader, feed, end, finished, line, next, to_maps, write_options (+3 more)
 - decimal: zero, from_int, from_units, parse, parse_bytes, from_float, scale_of, precision, is_zero, is_neg, sign, format (+22 more)
 - encoding: hex_encode, hex_decode, base64_encode, base64_decode, base64url_encode, base64url_decode, url_encode, url_decode, form_encode, form_decode, query_get, query_keys (+11 more)

@@ -1,5 +1,16 @@
 # todo
 
+- [x] **bcrypt verification and scrypt (2026-11-20, feat/bcrypt-scrypt).**
+  `crypto.bcrypt_verify(password, hash)` ($2a$, $2b$, $2y$; cost 04-18;
+  the first 72 bytes) and `crypto.scrypt(password, salt, n, r, p, len)`,
+  for hashes migrated from Rails, Laravel and Django. bcrypt is
+  eksblowfish in runtime/sl_crypto.c, its Blowfish state generated from
+  pi's digits (OpenSSL has no bcrypt); scrypt is OpenSSL's EVP_PBE_scrypt
+  with N, r, p and memory capped. The kdf thread pool that ran Argon2id
+  now runs all three (`sl_kdf_run`, a kind per job). Checked against
+  htpasswd's $2y$ hashes and RFC 7914's vectors; cost 12 verifies in 243
+  ms here against htpasswd's 230-240 ms for the same work.
+
 - [x] **An in-process cache (2026-11-17, feat/cache).** `stdlib/cache`:
   sharded LRU with optional TTL and byte bound, and `get_or_load`, which
   runs a loader once per key and hands its error or panic to every
