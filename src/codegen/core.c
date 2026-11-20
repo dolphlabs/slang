@@ -350,28 +350,59 @@ const char *strip_outer_parens(const char *s) {
 }
 
 /* Render a slang string as a C string literal (with quotes). */
+/* Length of the valid UTF-8 sequence at p, or 0 if it is not one. */
+static int utf8_seq_len(const unsigned char *p) {
+    unsigned char c = p[0];
+    int n = c >= 0xF0 && c <= 0xF4 ? 4 : c >= 0xE0 ? 3 : c >= 0xC2 && c < 0xE0 ? 2 : 0;
+    if (n == 0 || c > 0xF4)
+        return 0;
+    for (int k = 1; k < n; k++)
+        if ((p[k] & 0xC0) != 0x80)
+            return 0;
+    if (n == 3 && ((c == 0xE0 && p[1] < 0xA0) || (c == 0xED && p[1] >= 0xA0)))
+        return 0;   /* overlong, or a surrogate */
+    if (n == 4 && ((c == 0xF0 && p[1] < 0x90) || (c == 0xF4 && p[1] >= 0x90)))
+        return 0;   /* overlong, or past U+10FFFF */
+    return n;
+}
+
+/* Control bytes and bytes that are not valid UTF-8 (a str's \xHH escape
+ * can make either) go out as three-digit octal escapes: a C hex escape
+ * would swallow a hex digit that follows it ("\x1b" then "1m"), and clang
+ * warns about invalid UTF-8 in a literal. Valid UTF-8 is copied as is. */
 char *c_string_literal(const char *s) {
     StrBuf sb;
     sb_init(&sb);
     sb_putc(&sb, '"');
-    for (; *s; s++) {
-        unsigned char c = (unsigned char)*s;
+    const unsigned char *p = (const unsigned char *)s;
+    while (*p) {
+        unsigned char c = *p;
         switch (c) {
-        case '"': sb_append_n(&sb, (const char[]){92, '"', 0}, 2); break;
-        case 92:  sb_append_n(&sb, (const char[]){92, 92, 0}, 2); break;
-        case 10:  sb_append_n(&sb, (const char[]){92, 'n', 0}, 2); break;
-        case 9:   sb_append_n(&sb, (const char[]){92, 't', 0}, 2); break;
-        case 13:  sb_append_n(&sb, (const char[]){92, 'r', 0}, 2); break;
+        case '"': sb_append_n(&sb, (const char[]){92, '"', 0}, 2); p++; continue;
+        case 92:  sb_append_n(&sb, (const char[]){92, 92, 0}, 2); p++; continue;
+        case 10:  sb_append_n(&sb, (const char[]){92, 'n', 0}, 2); p++; continue;
+        case 9:   sb_append_n(&sb, (const char[]){92, 't', 0}, 2); p++; continue;
+        case 13:  sb_append_n(&sb, (const char[]){92, 'r', 0}, 2); p++; continue;
         default:
-            if (c < 32 || c == 127) {
-                static const char hex[] = "0123456789abcdef";
-                sb_append_n(&sb,
-                            (const char[]){92, 'x', hex[c >> 4], hex[c & 15], 0},
-                            4);
-            } else {
-                sb_putc(&sb, (char)c);
-            }
+            break;
         }
+        if (c >= 32 && c < 127) {
+            sb_putc(&sb, (char)c);
+            p++;
+            continue;
+        }
+        int n = c >= 0x80 ? utf8_seq_len(p) : 0;
+        if (n > 0) {
+            sb_append_n(&sb, (const char *)p, (size_t)n);
+            p += n;
+            continue;
+        }
+        sb_append_n(&sb,
+                    (const char[]){92, (char)('0' + (c >> 6)),
+                                   (char)('0' + ((c >> 3) & 7)),
+                                   (char)('0' + (c & 7)), 0},
+                    4);
+        p++;
     }
     sb_putc(&sb, '"');
     return sb.data;

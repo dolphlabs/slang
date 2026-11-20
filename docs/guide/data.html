@@ -96,7 +96,7 @@ try { var t = localStorage.getItem("slang-theme");
         </p>
       </header>
 <h2 id="bytes">bytes</h2>
-<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> b = b<span class="s">&quot;raw\x00bytes&quot;</span>;   <span class="c">// binary-safe literal; \0 \xHH escapes</span>
+<div class="code"><div class="code-bar"><span class="code-lang">slang</span><button class="copy" type="button" aria-label="Copy code">Copy</button></div><pre><code><span class="k">let</span> b = b<span class="s">&quot;raw\x00bytes&quot;</span>;   <span class="c">// binary-safe literal; same escapes as str</span>
 <span class="b">println</span>(<span class="b">len</span>(b));           <span class="c">// byte count, not strlen</span>
 <span class="b">println</span>(b[<span class="n">0</span>]);             <span class="c">// indexing yields an int (0..255)</span>
 b[<span class="n">0</span>] = <span class="n">65</span>;                 <span class="c">// mutable in place</span>

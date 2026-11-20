@@ -5,7 +5,7 @@
 ## bytes
 
 ```slang
-let b = b"raw\x00bytes";   // binary-safe literal; \0 \xHH escapes
+let b = b"raw\x00bytes";   // binary-safe literal; same escapes as str
 println(len(b));           // byte count, not strlen
 println(b[0]);             // indexing yields an int (0..255)
 b[0] = 65;                 // mutable in place
