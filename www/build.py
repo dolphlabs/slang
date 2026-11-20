@@ -204,6 +204,8 @@ PACKAGE_SECTIONS = {
     "yaml": ["`yaml`"],
     "x509": ["`x509`"],
     "xml": ["`xml`"],
+    "zip": ["`zip` and `tar`"],
+    "tar": ["`zip` and `tar`"],
     "builder": ["`builder`"],
     "flags": ["`flags`"],
     "sort": ["`sort`"],

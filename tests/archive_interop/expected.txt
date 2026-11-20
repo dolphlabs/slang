@@ -1,0 +1,38 @@
+python.zip: 4 entries, comment made by python
+  docs/readme.txt size=560 method=8 mtime=1715953530 dir=false head=68656c6c6f20
+  raw.bin size=256 method=0 mtime=1715953530 dir=false head=000102030405
+  docs/ size=0 method=0 mtime=1715953530 dir=true
+  naïve/日本.txt size=9 method=8 mtime=1715953530 dir=false head=c3bc6ec3af63
+zip64.zip: 1 entries, comment 
+  big.txt size=1000 method=8 mtime=1577836800 dir=false head=7a7a7a7a7a7a
+infozip.zip: 3 entries, comment 
+  a.txt size=6 method=0 mtime=1715953530 dir=false head=616c7068610a
+  sub/ size=0 method=0 mtime=1715953530 dir=true
+  sub/b.txt size=30 method=8 mtime=1715953530 dir=false head=626574612062
+pax.tar: 5 entries
+  dir/ kind=Dir size=0 mode=493 mtime=1715953530 target= data=
+  dir/run.sh kind=File size=18 mode=493 mtime=1715953530 target= data=#!/bin/sh
+echo hi
+  deep/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/file.txt kind=File size=5 mode=420 mtime=1715953530 target= data=long!
+  link kind=Symlink size=0 mode=420 mtime=1715953530 target=dir/run.sh data=
+  ünï.txt kind=File size=2 mode=384 mtime=1715953530 target= data=ok
+gnu.tar: 5 entries
+  dir/ kind=Dir size=0 mode=493 mtime=1715953530 target= data=
+  dir/run.sh kind=File size=18 mode=493 mtime=1715953530 target= data=#!/bin/sh
+echo hi
+  deep/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/file.txt kind=File size=5 mode=420 mtime=1715953530 target= data=long!
+  link kind=Symlink size=0 mode=420 mtime=1715953530 target=dir/run.sh data=
+  ünï.txt kind=File size=2 mode=384 mtime=1715953530 target= data=ok
+bsdtar.tar: 3 entries
+  a.txt kind=File size=6 mode=420 mtime=1715949930 target= data=alpha
+  sub/ kind=Dir size=0 mode=493 mtime=1715949930 target= data=
+  sub/b.txt kind=File size=30 mode=420 mtime=1715949930 target= data=beta beta beta beta beta beta
+written.zip: 3 entries, comment 
+  a/readme.md size=600 method=8 mtime=1715953530 dir=false head=636f6d707265
+  a/raw.bin size=12 method=0 mtime=1715953530 dir=false head=73746f726564
+  a/empty/ size=0 method=0 mtime=1715953530 dir=true
+written.tar: 4 entries
+  app/ kind=Dir size=0 mode=493 mtime=1715953530 target= data=
+  app/nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn.txt kind=File size=9 mode=420 mtime=1715953530 target= data=long name
+  app/ünï.txt kind=File size=4 mode=384 mtime=1715953530 target= data=utf8
+  app/current kind=Symlink size=0 mode=511 mtime=1715953530 target=releases/42 data=

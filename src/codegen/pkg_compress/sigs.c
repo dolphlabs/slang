@@ -50,6 +50,10 @@ const NatSig COMPRESS_SIGS[] = {
        failure, an impossible level), never through its input -- any
        byte string compresses -- but it allocates, so it reports rather
        than aborts. */
+    /* CRC-32 (the zip, gzip and PNG one), from zlib: crc32(data), and
+       crc32_update(crc, more) to continue one over pieces. */
+    {"compress", "crc32", 1, {NA_BYTES}, "int", 0},
+    {"compress", "crc32_update", 2, {NA_I64, NA_BYTES}, "int", 0},
     {"compress", "gzip", 1, {NA_BYTES}, "result[bytes,str]", 0},
     {"compress", "gzip_level", 2, {NA_BYTES, NA_I64}, "result[bytes,str]", 0},
     {"compress", "deflate", 1, {NA_BYTES}, "result[bytes,str]", 0},

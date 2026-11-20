@@ -274,6 +274,26 @@ static sl_res_bytes_str *sl_z_decompress(sl_bytes *in, long long max_out,
 /* Level 6 rather than Z_DEFAULT_COMPRESSION, which is the same 6 spelled
    as -1. Naming it means gzip() and gzip_level(b, 6) are visibly the
    same call, instead of differing by a sentinel. */
+/* zlib's crc32 reads its table and the input and nothing else: no lock,
+   no allocation, so no preempt bracket. Fed in 1 GiB pieces because its
+   length is a uInt. */
+static long long sl_compress_crc32_update(long long crc, sl_bytes *in) {
+    uLong c = (uLong)(crc & 0xffffffffLL);
+    const unsigned char *p = in->ptr;
+    long long left = in->len;
+    while (left > 0) {
+        uInt n = left > (1LL << 30) ? (uInt)(1u << 30) : (uInt)left;
+        c = crc32(c, p, n);
+        p += n;
+        left -= n;
+    }
+    return (long long)(c & 0xffffffffUL);
+}
+
+static long long sl_compress_crc32(sl_bytes *in) {
+    return sl_compress_crc32_update(0, in);
+}
+
 static sl_res_bytes_str *sl_compress_gzip(sl_bytes *in) {
     return sl_z_compress(in, 6, 15 | 16, Z_FINISH);
 }
