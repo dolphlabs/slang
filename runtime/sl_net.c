@@ -1930,6 +1930,11 @@ static sl_res_i32_str *sl_net_listen_reuse(int port, int reuse_port) {
     int e = 0;
     int fd = sl_net_listen_fd(port, reuse_port, &e);
     if (fd < 0) return sl_net_err_i32(strerror(e));
+    /* The number may still carry the closing flag of a net.close finishing
+       on another thread; this accept's epoch must be read after it. */
+    sl_rt_preempt_disable();
+    sl_reactor_clear_closing(fd);
+    sl_rt_preempt_enable();
     return sl_net_ok_i32((int32_t)fd);
 }
 
@@ -2074,6 +2079,9 @@ static sl_res_i32_str *sl_net_listen_unix(const char *path) {
         return sl_net_err_i32(strerror(e));
     }
     sl_net_set_nonblocking(fd);
+    sl_rt_preempt_disable();
+    sl_reactor_clear_closing(fd);   /* as in sl_net_listen_reuse */
+    sl_rt_preempt_enable();
     return sl_net_ok_i32((int32_t)fd);
 }
 
@@ -2274,8 +2282,10 @@ static void sl_net_close(int fd) {
     sl_reactor_take_closed(fd, &ready);
     sl_reactor_forget(fd);
     close(fd);
-    /* An op on a fd that is not a connected socket (a listener), begun in
-       the moment between close(2) returning and this, reads "closed". */
+    /* Listeners and connected sockets clear the flag when they are made.
+       Any other fd net ops are used on (a pipe handed to net.recv), begun
+       on this number in the moment between close(2) returning and this,
+       reads "closed". */
     sl_reactor_clear_closing(fd);
     sl_reactor_resume_all(ready);
     sl_rt_preempt_enable();
