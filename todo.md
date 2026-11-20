@@ -3786,16 +3786,16 @@ prerequisite, not a different plan).
       `tests/http_read_wire`, written for the allocation work
       (next-steps.md #5).
 
-- [ ] **A package-level `bytes` global cannot be used.** Found
-      2026-09-29, not fixed. `pub let G = b"ab";` in a package, then any
-      use of `G` (`G[0] = 65`, `to_str(G)`) from inside or outside it, is
-      a C compilation failure: the global is emitted as a static
-      `sl_bytes` value but used where an `sl_bytes *` is expected
-      (`src/codegen/program.c`, the `is_bytes` global case). Its data is
-      also a `static const` array cast to non-const, so once it compiles,
-      `G[0] = 65` would write to read-only memory -- the fix has to decide
-      whether such a global is mutable (copy the data out) or not (reject
-      the write).
+- [x] **A package-level `bytes` global cannot be used** (found 2026-09-29,
+      fixed 2026-11-20 in fix/bytes-global). `pub let G = b"ab";` and any
+      use of `G` was a C compilation failure: the global was a static
+      `sl_bytes` value where every use takes `sl_bytes *`, over a
+      `static const` array cast to non-const. It is now a constant pointer
+      to a static header over writable data, like `sl_bytes_empty`: not a
+      GC object, one value shared by every use, so `G[0] = 65` changes it
+      for every reader. The name itself cannot be reassigned, as for every
+      package global. tests/bytes_global (also clean under the minor
+      verifier).
 
 - [x] **`http.read`'s allocations are pinned.** 2026-09-29. The socket
       parser allocates per request only what the returned `Request` holds
