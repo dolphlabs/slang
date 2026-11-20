@@ -1,0 +1,25 @@
+scrypt 1: 77d6576238657b203b19ca42c18a0497f16b4844e3074ae8dfdffa3fede21442fcd0069ded0948f8326a753a0fc81f17e8d3e0fb2e0d3628cf35e20c38d18906
+scrypt 2: fdbabe1c9d3472007856e7190d01e9fe7c6ad7cbc8237830e77376634b3731622eaf30d92e22a3886ff109279d9830dac727afb94a83ee6d8360cbdfa2cc0640
+scrypt 3: 7023bdcb3afd7348461c06cd81fd38ebfda8fbba904f8e3ea9b543f6545da1f2d5432955613f0fcf62d49705242a9af9e61e85dc0d651e40dfcf017b45575887
+scrypt N=1000: err: scrypt N must be a power of two from 2 to 1048576
+scrypt N=2^21: err: scrypt N must be a power of two from 2 to 1048576
+scrypt mem: err: scrypt N * r needs more than 256 MiB (128 * N * r bytes)
+scrypt len: err: scrypt key length must be between 1 and 64
+bcrypt $2y$05$EFXZWjvKZJj71LQO4tWhXev6RnDZVCLo8ufH.qKnIhYqmISZ53I..: match
+bcrypt $2y$05$tQrKsuMEjwqsd2WNVUSvp.DoMARg..x4ja3m81LFeRSf9Kfqz1Wxu: match
+bcrypt $2y$05$Es9xaoZ967YmdD5m2n7G5uuMDKZKFu/cDGmnhm/ApDd9xJNF5l8R6: match
+bcrypt $2y$05$0ok3.2.xZ2NvdFQoWatoM.uaDoPRSTq5HrgyjQ5ik5Z2nWXjCjqSy: match
+bcrypt $2y$05$RyZw/g/DOV8XaeWXUMPI4emjb96sJu1zZih90DedU4FffkS8VKqi.: match
+bcrypt $2y$04$wejJOts39TdRMkeM6FOvkeW4rsUI7U4vQNwXTMLUAl5CHZJImCbQy: match
+bcrypt 2b: match
+bcrypt 2a: match
+wrong password: no match
+empty vs one byte: no match
+72-byte prefix: match
+71-byte prefix: no match
+2x: err: bcrypt variant must be $2a$, $2b$ or $2y$
+cost 31: err: bcrypt cost must be between 04 and 18
+cost 03: err: bcrypt cost must be between 04 and 18
+alphabet: err: bcrypt salt or hash has a character outside ./A-Za-z0-9
+short: err: not a bcrypt hash: expected $2b$<cost>$ and 53 characters
+argon: err: not a bcrypt hash: expected $2b$<cost>$ and 53 characters
