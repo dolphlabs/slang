@@ -2669,6 +2669,8 @@ guard let plain = ur else let e = err_of(ur) {
 | `compress.deflate_raw` | `(b: bytes) -> result[bytes, str]` |
 | `compress.deflate_raw_flush` | `(b: bytes) -> result[bytes, str]` (ends in a sync flush, no final block: RFC 7692) |
 | `compress.inflate_raw` | `(b: bytes, max_out: int) -> result[bytes, str]` |
+| `compress.crc32` | `(b: bytes) -> int` (the zip, gzip and PNG CRC-32) |
+| `compress.crc32_update` | `(crc: int, b: bytes) -> int` (continue one over pieces) |
 
 **Decompression takes a mandatory output limit.** `max_out` is a
 required argument, not an optional one with a generous default. The
@@ -3393,6 +3395,63 @@ roots. `Request` needs a common name or at least one DNS name or IP.
 All the ASN.1 is OpenSSL's; the package parses no DER itself. Errors
 start with `x509: `.
 
+#### `zip` and `tar`
+
+Archives in memory: read every entry of a zip (stored or deflated, ZIP64,
+UTF-8 names) or a tar (ustar, pax, GNU long names; a `.tar.gz` is
+`compress.gunzip` first), and write either.
+
+```slang
+import "tar";
+import "zip";
+
+let r = zip.open(data);
+guard let arc = r else let e = err_of(r) { panic(e); }
+for e in arc.entries {
+    let pr = zip.safe_path(e.name);          // refuses ../, /abs, C:\ (zip slip)
+    guard let rel = pr else { continue; }
+    if !e.is_dir {
+        let body = zip.read(arc, e);         // inflated, size and CRC-32 checked
+    }
+}
+
+let w = zip.new_writer();
+w.add("report.csv", csv_bytes, now_unix);    // deflated, or stored if that is smaller
+w.add_stored("logo.png", png, now_unix);
+let out = w.finish();                        // result[bytes, str]
+
+let tr = tar.parse(tar_bytes);               // result[[tar.Entry], str]
+let tw = tar.new_writer();
+tw.add_file("bin/run.sh", script, 493, now_unix);    // mode 0755
+tw.add_symlink("current", "releases/42", now_unix);
+let tb = tw.finish();
+```
+
+**Reading is checked against the archive itself.** A zip is read from its
+central directory, as unzip does. Each entry's local header must be where
+the directory says, its data inside the archive, and no two entries may
+share bytes: overlapping entries are how a 40 KB zip claims petabytes.
+An entry inflates to at most the size the directory states, and must
+match it and its CRC-32. `zip.Limits` bounds one entry (256 MiB), all of
+them together (1 GiB) and their count. Every tar header's checksum is
+checked, and a size may be octal or GNU base-256. A pax header's `path`,
+`linkpath`, `size`, `mtime`, `uid` and `gid` override the ustar fields.
+Data past the end of the archive is an error, never a short entry.
+Encrypted zip entries and methods other than stored and deflate are
+listed but not read. Zip names must be UTF-8, so CP437 names are refused.
+
+**Names are never trusted.** Neither package touches the file system.
+`safe_path` gives back a relative, cleaned name, or an error for an
+absolute path, a `..` segment, a drive letter, a backslash or a NUL.
+Check a tar symlink's target the same way before creating it. Writers
+refuse such names, and the same name twice.
+
+**Times** are Unix seconds. A zip's MS-DOS timestamp has no zone and
+2-second steps; it is read as UTC, and the extended timestamp extra field
+wins when present. `tests/archive_interop` reads archives made by
+Python's `zipfile` and `tarfile`, Info-ZIP and bsdtar. What these writers
+write was checked with `unzip -t`, Python and bsdtar.
+
 #### `byteutil`
 
 Search, trim, and split on the `bytes` type — no new syntax. The
@@ -3694,7 +3753,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [builder](packages/builder.md) -- source package, 20 public items
 - [byteutil](packages/byteutil.md) -- source package, 6 public items
 - [cache](packages/cache.md) -- source package, 14 public items
-- [compress](packages/compress.md) -- compiler-provided, 8 public items
+- [compress](packages/compress.md) -- compiler-provided, 10 public items
 - [crypto](packages/crypto.md) -- compiler-provided, 54 public items
 - [csv](packages/csv.md) -- source package, 18 public items
 - [decimal](packages/decimal.md) -- source package, 37 public items
@@ -3724,6 +3783,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [sort](packages/sort.md) -- source package, 9 public items
 - [sql](packages/sql.md) -- compiler-provided, 20 public items
 - [strings](packages/strings.md) -- compiler-provided, 28 public items
+- [tar](packages/tar.md) -- source package, 12 public items
 - [template](packages/template.md) -- source package, 7 public items
 - [time](packages/time.md) -- compiler-provided, 5 public items
 - [timez](packages/timez.md) -- source package, 144 public items
@@ -3734,6 +3794,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [x509](packages/x509.md) -- source package, 11 public items
 - [xml](packages/xml.md) -- source package, 25 public items
 - [yaml](packages/yaml.md) -- source package, 4 public items
+- [zip](packages/zip.md) -- source package, 15 public items
 
 ---
 
