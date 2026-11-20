@@ -3846,12 +3846,19 @@ prerequisite, not a different plan).
       `tests/map_delete`. Found while testing the GC's container frontier
       (next-steps.md #7b).
 
-- [ ] **`xs[i].field = v` on a list of value structs does not compile.**
-      Found 2026-09-30, not fixed. The generated C assigns to a member of a
-      statement expression ("expression is not assignable") instead of
-      either writing through the element or reporting a slang error. When
-      it is fixed, the store needs the list's barrier with the index
-      (`sl_arr_remember_at`), since it writes into the list's buffer.
+- [x] **`xs[i].field = v` on a list of value structs does not compile**
+      (found 2026-09-30, fixed 2026-11-20 in fix/list-elem-field-store).
+      The C assigned to a member of a statement expression. It now stores
+      through the element's address, also through value-struct fields
+      (`xs[i].a.f = v`); base, index and value are sequenced first and the
+      address is taken last, since the value may grow the list. A GC field
+      takes `sl_arr_remember_at`. tests/list_elem_field_store (clean under
+      the minor verifier), tests/fail_list_elem_field_oob.
+- [ ] **`m[k].f = v` on a map of value structs** is refused with a slang
+      error naming the workaround (read, change, `m[k] = v`) since
+      2026-11-20; it was a C compile error before. Storing in place needs
+      the map's barrier rules for a write into its value slot.
+      tests/fail_map_value_field_store.
 
 - [x] **Five stores left young objects held only by old ones, with no
       write barrier.** Fixed 2026-09-30, found by the minor-collection
