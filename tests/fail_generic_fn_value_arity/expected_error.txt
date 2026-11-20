@@ -1,0 +1,1 @@
+'ident' takes 1 parameter(s), but fn(int,int)->int takes 2

@@ -1,1 +1,1 @@
-'first' is a generic function; it cannot be used as a value or spawned
+'first' is a generic function; it can be used as a value only where a concrete fn type is expected

@@ -700,6 +700,23 @@ static FuncInst *func_inst_find(CG *cg, const char *key) {
  * finds a template, never rejects one; arity, inference and visibility
  * are the caller's normal FuncSig checks once a concrete signature
  * comes back. */
+static FuncSig *func_instance(CG *cg, FuncTmpl *tm, const char *pkg,
+                              const char *name, char **cargs, int line);
+
+#define MAX_PARAMS_DEFERRED 16
+
+/* Whether type text `t` mentions type parameter `p` as a whole name. */
+static int type_mentions(const char *t, const char *p) {
+    size_t n = strlen(p);
+    for (const char *q = strstr(t, p); q; q = strstr(q + 1, p)) {
+        int before = q == t || !(isalnum((unsigned char)q[-1]) || q[-1] == '_');
+        int after = !(isalnum((unsigned char)q[n]) || q[n] == '_');
+        if (before && after)
+            return 1;
+    }
+    return 0;
+}
+
 FuncSig *generic_call_sig(CG *cg, const char *pkg, const char *name, Expr *e) {
     if (e->as.call.gsig)
         return (FuncSig *)e->as.call.gsig;
@@ -726,15 +743,56 @@ FuncSig *generic_call_sig(CG *cg, const char *pkg, const char *name, Expr *e) {
      * again with the real expected type and does the assignability
      * check; EX_STRUCTLIT's field loop follows the same two-pass shape
      * for exactly the same reason. */
+    /* An argument that names a generic function (`run_with(5, ident)`)
+     * has no type of its own until its parameter's type is known, so it
+     * waits until the other arguments have bound what they can. */
+    int deferred[MAX_PARAMS_DEFERRED];
+    int nd = 0;
     for (int i = 0; i < n; i++) {
+        Expr *a = e->as.call.args[i];
+        const char *gp, *gn;
+        if (a->kind == EX_IDENT && !a->as.ident.gsig &&
+            nd < MAX_PARAMS_DEFERRED && generic_fn_ref(cg, a, &gp, &gn)) {
+            deferred[nd++] = i;
+            continue;
+        }
         const char *saved = cg->expect;
         cg->expect = NULL;
-        const char *at = infer_type(cg, e->as.call.args[i]);
+        const char *at = infer_type(cg, a);
         cg->expect = saved;
         unify(&u, decl->param_types[i], at);
     }
     if (decl->ret_type && cg->expect)
         unify(&u, decl->ret_type, cg->expect);
+    for (int d = 0; d < nd; d++) {
+        int i = deferred[d];
+        for (int k = 0; k < decl->ntparams; k++) {
+            if (!u.bound[k] && type_mentions(decl->param_types[i],
+                                             decl->tparams[k]))
+                cg_error(e->line,
+                         "cannot infer type parameter '%s' of '%s': "
+                         "argument %d is a generic function, which takes "
+                         "its types from the parameter rather than giving "
+                         "them",
+                         decl->tparams[k], name, i + 1);
+        }
+        TypeEnv env;
+        memset(&env, 0, sizeof(env));
+        env.n = decl->ntparams;
+        for (int k = 0; k < decl->ntparams; k++) {
+            env.names[k] = decl->tparams[k];
+            env.types[k] = u.bound[k] ? u.bound[k] : decl->tparams[k];
+        }
+        TypeEnv *saved_env = cg->tenv;
+        const char *saved_pkg = cg->cur_pkg;
+        cg->tenv = &env;
+        cg->cur_pkg = tm->pkg;
+        const char *want = canon_type(cg, decl->param_types[i], e->line);
+        cg->tenv = saved_env;
+        cg->cur_pkg = saved_pkg;
+        FuncSig *vs = generic_fn_value_for(cg, e->as.call.args[i], want);
+        unify(&u, decl->param_types[i], fn_type_of_sig(cg, vs));
+    }
 
     for (int k = 0; k < decl->ntparams; k++) {
         if (!u.bound[k])
@@ -749,21 +807,30 @@ FuncSig *generic_call_sig(CG *cg, const char *pkg, const char *name, Expr *e) {
     char *cargs[MAX_TYPE_PARAMS];
     for (int k = 0; k < decl->ntparams; k++)
         cargs[k] = (char *)canon_type(cg, u.bound[k], e->line);
+    FuncSig *sig = func_instance(cg, tm, pkg, name, cargs, e->line);
+    e->as.call.gsig = (void *)sig;
+    return sig;
+}
 
+/* The instance of template `tm` for these (canonical) type arguments:
+ * the cached one, or a new one registered with its signature. Shared by
+ * a call (generic_call_sig) and a value (generic_value_sig), which must
+ * agree on one instance per key. */
+static FuncSig *func_instance(CG *cg, FuncTmpl *tm, const char *pkg,
+                              const char *name, char **cargs, int line) {
+    FuncDecl *decl = tm->decl;
     const char *key = func_instance_key(pkg, name, cargs, decl->ntparams);
     FuncInst *have = func_inst_find(cg, key);
-    if (have) {
-        e->as.call.gsig = (void *)have->sig;
+    if (have)
         return have->sig;
-    }
 
     if (cg->inst_depth >= INST_DEPTH_MAX)
-        cg_error(e->line,
+        cg_error(line,
                  "'%s' expands without end: instantiating it needs another "
                  "new instance, %d levels deep",
                  name, INST_DEPTH_MAX);
     if (cg->insts_frozen)
-        cg_error(e->line,
+        cg_error(line,
                  "internal: '%s' was first needed after the analysis "
                  "passes; please report this program",
                  key);
@@ -777,7 +844,7 @@ FuncSig *generic_call_sig(CG *cg, const char *pkg, const char *name, Expr *e) {
     resolve_enum_in_body_keep_file(cg, tm->pkg, fi->fn);
     fi->recv = NULL;
     fi->note = key;
-    fi->line = e->line;
+    fi->line = line;
     fi->env.n = decl->ntparams;
     for (int i = 0; i < decl->ntparams; i++) {
         fi->env.names[i] = decl->tparams[i];
@@ -804,7 +871,7 @@ FuncSig *generic_call_sig(CG *cg, const char *pkg, const char *name, Expr *e) {
     cg->tenv = &fi->env;
     cg->cur_pkg = tm->pkg;
     note_canon = key;
-    note_line = e->line;
+    note_line = line;
     cg->inst_depth++;
     for (int m = 0; m < fi->fn->nparams; m++)
         sig->param_slang[m] = canon_type(cg, fi->fn->param_types[m],
@@ -833,6 +900,58 @@ FuncSig *generic_call_sig(CG *cg, const char *pkg, const char *name, Expr *e) {
             cg->finsts.items, cg->finsts.cap * sizeof(FuncInst *));
     }
     cg->finsts.items[cg->finsts.count++] = fi;
-    e->as.call.gsig = (void *)sig;
     return sig;
+}
+
+/* A generic function named as a VALUE where a concrete fn type is
+ * expected -- `apply(ident, 5)` with `apply(f: fn(int) -> int, ...)`, or
+ * `let g: fn(int) -> int = ident;`: its type parameters are bound by
+ * unifying its parameter and return types with `want`'s, the same
+ * unify() a call uses on its arguments. There is still no `f[int]`
+ * syntax (brackets would collide with indexing), so `want` is the only
+ * source. Returns NULL when `pkg` has no such template; reports an
+ * error when there is one but `want` cannot instantiate it. */
+FuncSig *generic_value_sig(CG *cg, const char *pkg, const char *name,
+                           const char *want, int line) {
+    FuncTmpl *tm = func_tmpl_find_in_pkg(cg, pkg, name);
+    if (!tm)
+        return NULL;
+    FuncDecl *decl = tm->decl;
+    if (!want || !is_fn(want))
+        cg_error(line,
+                 "'%s' is a generic function; it can be used as a value "
+                 "only where a concrete fn type is expected (a typed "
+                 "parameter, or `let f: fn(int) -> int = %s;`)",
+                 name, name);
+    char **wparams = NULL;
+    char *wret = NULL;
+    int wn = fn_parts(want, &wparams, &wret);
+    if (wn != decl->nparams)
+        cg_error(line,
+                 "'%s' takes %d parameter(s), but %s takes %d",
+                 name, decl->nparams, want, wn);
+    if (!decl->ret_type != !wret)
+        cg_error(line, "'%s' %s a value, but %s %s", name,
+                 decl->ret_type ? "returns" : "does not return", want,
+                 wret ? "does" : "does not");
+    Unify u;
+    memset(&u, 0, sizeof(u));
+    u.tparams = (const char *const *)decl->tparams;
+    u.ntparams = decl->ntparams;
+    u.what = decl->name;
+    u.line = line;
+    for (int i = 0; i < wn; i++)
+        unify(&u, decl->param_types[i], wparams[i]);
+    if (decl->ret_type)
+        unify(&u, decl->ret_type, wret);
+    for (int k = 0; k < decl->ntparams; k++) {
+        if (!u.bound[k])
+            cg_error(line,
+                     "cannot infer type parameter '%s' of '%s' from %s",
+                     decl->tparams[k], name, want);
+    }
+    char *cargs[MAX_TYPE_PARAMS];
+    for (int k = 0; k < decl->ntparams; k++)
+        cargs[k] = (char *)canon_type(cg, u.bound[k], line);
+    return func_instance(cg, tm, pkg, name, cargs, line);
 }
