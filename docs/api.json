@@ -517,6 +517,30 @@
           "sig": "crypto.argon2id_verify(bytes, bytes, bytes, int, int, int) -> result[bool,str]"
         },
         {
+          "name": "scrypt",
+          "params": [
+            "bytes",
+            "bytes",
+            "int",
+            "int",
+            "int",
+            "int"
+          ],
+          "ret": "result[bytes,str]",
+          "tls": false,
+          "sig": "crypto.scrypt(bytes, bytes, int, int, int, int) -> result[bytes,str]"
+        },
+        {
+          "name": "bcrypt_verify",
+          "params": [
+            "bytes",
+            "str"
+          ],
+          "ret": "result[bool,str]",
+          "tls": false,
+          "sig": "crypto.bcrypt_verify(bytes, str) -> result[bool,str]"
+        },
+        {
           "name": "rsa_verify_sha256",
           "params": [
             "bytes",
@@ -6465,7 +6489,7 @@
           "sig": "fn connect(url: str, deadline: until) -> result[Conn, str]",
           "doc": "Connect to url (see options).",
           "file": "stdlib/nats/nats.sl",
-          "line": 179
+          "line": 182
         },
         {
           "name": "connect_with",
@@ -6473,7 +6497,7 @@
           "sig": "fn connect_with(o: Options, deadline: until) -> result[Conn, str]",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 183
+          "line": 186
         },
         {
           "name": "publish",
@@ -6481,7 +6505,7 @@
           "sig": "fn publish(nc: Conn, subject: str, data: bytes) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1061
+          "line": 1095
         },
         {
           "name": "publish_reply",
@@ -6489,7 +6513,7 @@
           "sig": "fn publish_reply(nc: Conn, subject: str, reply: str, data: bytes) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1065
+          "line": 1099
         },
         {
           "name": "publish_headers",
@@ -6497,7 +6521,7 @@
           "sig": "fn publish_headers(nc: Conn, subject: str, headers: map[str][str], data: bytes) -> result[bool, str]",
           "doc": "Publish with headers (each key may carry several values).",
           "file": "stdlib/nats/nats.sl",
-          "line": 1070
+          "line": 1104
         },
         {
           "name": "publish_full",
@@ -6505,7 +6529,7 @@
           "sig": "fn publish_full(nc: Conn, subject: str, reply: str, headers: map[str][str], data: bytes) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1075
+          "line": 1109
         },
         {
           "name": "subscribe",
@@ -6513,7 +6537,7 @@
           "sig": "fn subscribe(nc: Conn, subject: str) -> result[Sub, str]",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1187
+          "line": 1221
         },
         {
           "name": "queue_subscribe",
@@ -6521,7 +6545,7 @@
           "sig": "fn queue_subscribe(nc: Conn, subject: str, queue: str) -> result[Sub, str]",
           "doc": "Members of one queue group share the messages: each goes to one of them.",
           "file": "stdlib/nats/nats.sl",
-          "line": 1192
+          "line": 1226
         },
         {
           "name": "next_msg",
@@ -6529,7 +6553,7 @@
           "sig": "fn next_msg(sub: Sub, deadline: until) -> result[opt[Msg], str]",
           "doc": "The next message, waiting until deadline: none when the deadline passes or the subscription has ended (unsubscribed, max reached, connection closed).",
           "file": "stdlib/nats/nats.sl",
-          "line": 1223
+          "line": 1257
         },
         {
           "name": "unsubscribe",
@@ -6537,7 +6561,7 @@
           "sig": "fn unsubscribe(sub: Sub) -> result[bool, str]",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1246
+          "line": 1280
         },
         {
           "name": "auto_unsubscribe",
@@ -6545,7 +6569,7 @@
           "sig": "fn auto_unsubscribe(sub: Sub, max: int) -> result[bool, str]",
           "doc": "End the subscription by itself after max more messages.",
           "file": "stdlib/nats/nats.sl",
-          "line": 1257
+          "line": 1291
         },
         {
           "name": "request",
@@ -6553,7 +6577,7 @@
           "sig": "fn request(nc: Conn, subject: str, data: bytes, deadline: until) -> result[Msg, str]",
           "doc": "Publish data to subject with a fresh reply subject and wait for the first reply. \"no responders\" (status 503, when nothing listens) is an error at once instead of a timeout.",
           "file": "stdlib/nats/nats.sl",
-          "line": 1270
+          "line": 1304
         },
         {
           "name": "request_headers",
@@ -6561,7 +6585,7 @@
           "sig": "fn request_headers(nc: Conn, subject: str, headers: map[str][str], data: bytes, deadline: until) -> result[Msg, str]",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1274
+          "line": 1308
         },
         {
           "name": "respond",
@@ -6569,7 +6593,7 @@
           "sig": "fn respond(nc: Conn, req: Msg, data: bytes) -> result[bool, str]",
           "doc": "Reply to a request message.",
           "file": "stdlib/nats/nats.sl",
-          "line": 1320
+          "line": 1354
         },
         {
           "name": "flush",
@@ -6577,7 +6601,7 @@
           "sig": "fn flush(nc: Conn, deadline: until) -> result[bool, str]",
           "doc": "Wait until the server has processed everything sent so far (a PING round trip).",
           "file": "stdlib/nats/nats.sl",
-          "line": 1331
+          "line": 1365
         },
         {
           "name": "drain",
@@ -6585,7 +6609,7 @@
           "sig": "fn drain(nc: Conn, deadline: until) -> result[bool, str]",
           "doc": "Unsubscribe everything, let what is in flight arrive, then close.",
           "file": "stdlib/nats/nats.sl",
-          "line": 1354
+          "line": 1388
         },
         {
           "name": "close",
@@ -6593,7 +6617,7 @@
           "sig": "fn close(nc: Conn)",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1377
+          "line": 1411
         },
         {
           "name": "last_error",
@@ -6601,7 +6625,7 @@
           "sig": "fn last_error(nc: Conn) -> str",
           "doc": "Why the connection is closed or last broke (\"\" while healthy).",
           "file": "stdlib/nats/nats.sl",
-          "line": 1422
+          "line": 1458
         },
         {
           "name": "is_connected",
@@ -6609,7 +6633,7 @@
           "sig": "fn is_connected(nc: Conn) -> bool",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1426
+          "line": 1462
         },
         {
           "name": "reconnects",
@@ -6617,7 +6641,7 @@
           "sig": "fn reconnects(nc: Conn) -> int",
           "doc": "",
           "file": "stdlib/nats/nats.sl",
-          "line": 1430
+          "line": 1466
         },
         {
           "name": "nkey_seed_raw",
