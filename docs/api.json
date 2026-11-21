@@ -5547,6 +5547,254 @@
           "line": 258
         },
         {
+          "name": "TestResult",
+          "decl": "struct",
+          "sig": "struct TestResult",
+          "doc": "A test statistic, its two-sided p-value, and its degrees of freedom (NaN for a z-test).",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 19
+        },
+        {
+          "name": "Interval",
+          "decl": "struct",
+          "sig": "struct Interval",
+          "doc": "A confidence interval.",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 26
+        },
+        {
+          "name": "inc_beta",
+          "decl": "fn",
+          "sig": "fn inc_beta(a: float, b: float, x: float) -> float",
+          "doc": "The regularized incomplete beta function I_x(a, b) (the cdf of a beta distribution), by Lentz's continued fraction on whichever side converges fast (Numerical Recipes 6.4).",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 40
+        },
+        {
+          "name": "inc_gamma",
+          "decl": "fn",
+          "sig": "fn inc_gamma(a: float, x: float) -> float",
+          "doc": "The regularized lower incomplete gamma function P(a, x) (the cdf of a gamma distribution): its series below a + 1, its continued fraction above (Numerical Recipes 6.2).",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 99
+        },
+        {
+          "name": "StudentT",
+          "decl": "struct",
+          "sig": "struct StudentT",
+          "doc": "",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 148
+        },
+        {
+          "name": "student_t",
+          "decl": "fn",
+          "sig": "fn student_t(df: float) -> StudentT",
+          "doc": "Student's t distribution with df degrees of freedom (df > 0).",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 153
+        },
+        {
+          "name": "StudentT.pdf",
+          "decl": "fn",
+          "sig": "fn pdf(self: StudentT, x: float) -> float",
+          "doc": "",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 158
+        },
+        {
+          "name": "StudentT.cdf",
+          "decl": "fn",
+          "sig": "fn cdf(self: StudentT, x: float) -> float",
+          "doc": "",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 167
+        },
+        {
+          "name": "StudentT.quantile",
+          "decl": "fn",
+          "sig": "fn quantile(self: StudentT, p: float) -> float",
+          "doc": "The x with cdf(x) = p: Newton's method from the normal quantile, guarded by bisection, to full double precision.",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 185
+        },
+        {
+          "name": "ChiSquared",
+          "decl": "struct",
+          "sig": "struct ChiSquared",
+          "doc": "",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 225
+        },
+        {
+          "name": "chi_squared",
+          "decl": "fn",
+          "sig": "fn chi_squared(k: float) -> ChiSquared",
+          "doc": "The chi-square distribution with k degrees of freedom (k > 0).",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 230
+        },
+        {
+          "name": "ChiSquared.pdf",
+          "decl": "fn",
+          "sig": "fn pdf(self: ChiSquared, x: float) -> float",
+          "doc": "",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 235
+        },
+        {
+          "name": "ChiSquared.cdf",
+          "decl": "fn",
+          "sig": "fn cdf(self: ChiSquared, x: float) -> float",
+          "doc": "",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 251
+        },
+        {
+          "name": "ChiSquared.quantile",
+          "decl": "fn",
+          "sig": "fn quantile(self: ChiSquared, p: float) -> float",
+          "doc": "The x with cdf(x) = p: Newton's method from the Wilson-Hilferty approximation, guarded by bisection.",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 260
+        },
+        {
+          "name": "two_proportion_z",
+          "decl": "fn",
+          "sig": "fn two_proportion_z(successes_a: int, n_a: int, successes_b: int, n_b: int) -> TestResult",
+          "doc": "Whether two conversion rates differ: the pooled two-proportion z-test, for successes_a of n_a against successes_b of n_b. The statistic is positive when B's rate is higher.",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 312
+        },
+        {
+          "name": "welch_t",
+          "decl": "fn",
+          "sig": "fn welch_t[T, U](xs: [T], ys: [U]) -> TestResult",
+          "doc": "Whether two means differ, without assuming equal variances: Welch's t-test with Welch-Satterthwaite degrees of freedom. Positive when ys' mean is higher. NaN with fewer than two values on a side.",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 331
+        },
+        {
+          "name": "t_test",
+          "decl": "fn",
+          "sig": "fn t_test[T](xs: [T], mu: float) -> TestResult",
+          "doc": "Whether the mean of xs differs from mu: the one-sample t-test.",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 355
+        },
+        {
+          "name": "chi_square_test",
+          "decl": "fn",
+          "sig": "fn chi_square_test(table: [[int]]) -> TestResult",
+          "doc": "Whether counts in a table of rows (variants) by columns (outcomes) are independent: Pearson's chi-square test. Every row has the same number of columns; NaN for a table smaller than 2 x 2, ragged, negative, or with an empty row or column.",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 376
+        },
+        {
+          "name": "chi_square_fit",
+          "decl": "fn",
+          "sig": "fn chi_square_fit(observed: [int], expected: [float]) -> TestResult",
+          "doc": "Whether observed counts fit expected ones (same total, or scaled to it): the chi-square goodness-of-fit test, df = bins - 1.",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 424
+        },
+        {
+          "name": "wilson",
+          "decl": "fn",
+          "sig": "fn wilson(successes: int, n: int, confidence: float) -> Interval",
+          "doc": "The Wilson score interval for a proportion: successes of n at the given confidence (0.95). Unlike the textbook p +- z*se it stays inside [0, 1] and behaves at 0 or n successes.",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 453
+        },
+        {
+          "name": "mean_interval",
+          "decl": "fn",
+          "sig": "fn mean_interval[T](xs: [T], confidence: float) -> Interval",
+          "doc": "The t interval for the mean of xs at the given confidence.",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 468
+        },
+        {
+          "name": "sample_size_proportions",
+          "decl": "fn",
+          "sig": "fn sample_size_proportions(p1: float, p2: float, alpha: float, power: float) -> int",
+          "doc": "Users needed in EACH arm to detect a change in conversion from p1 to p2 with a two-sided test at significance alpha (0.05) and the given power (0.8): the normal-approximation formula. -1 for invalid input.",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 482
+        },
+        {
+          "name": "power_proportions",
+          "decl": "fn",
+          "sig": "fn power_proportions(p1: float, p2: float, n: int, alpha: float) -> float",
+          "doc": "The power of that test with n users per arm.",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 498
+        },
+        {
+          "name": "sample_size_means",
+          "decl": "fn",
+          "sig": "fn sample_size_means(delta: float, sd: float, alpha: float, power: float) -> int",
+          "doc": "Values needed in EACH arm to detect a difference `delta` between two means with common standard deviation sd, two-sided at alpha with the given power. -1 for invalid input.",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 516
+        },
+        {
+          "name": "Sprt",
+          "decl": "struct",
+          "sig": "gc struct Sprt",
+          "doc": "Wald's sequential probability ratio test for a conversion rate: is it p0 (the null) or p1 (the alternative)? Feed outcomes one at a time and stop as soon as it decides; on average it needs far fewer observations than a fixed-size test with the same error rates (alpha: deciding p1 when it is p0; beta: deciding p0 when it is p1). Peeking is part of the design, so stopping early does not inflate the error rate.",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 535
+        },
+        {
+          "name": "sprt",
+          "decl": "fn",
+          "sig": "fn sprt(p0: float, p1: float, alpha: float, beta: float) -> Sprt",
+          "doc": "A test of p0 against p1 (both in (0, 1), different) with error rates alpha and beta (in (0, 1)); invalid input decides nothing ever.",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 547
+        },
+        {
+          "name": "Sprt.add",
+          "decl": "fn",
+          "sig": "fn add(self: Sprt, success: bool) -> Decision",
+          "doc": "One observation. Once decided, further observations change nothing.",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 565
+        },
+        {
+          "name": "Sprt.add_n",
+          "decl": "fn",
+          "sig": "fn add_n(self: Sprt, successes: int, n: int) -> Decision",
+          "doc": "A batch: successes of n.",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 573
+        },
+        {
+          "name": "Sprt.decision",
+          "decl": "fn",
+          "sig": "fn decision(self: Sprt) -> Decision",
+          "doc": "",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 587
+        },
+        {
+          "name": "Sprt.count",
+          "decl": "fn",
+          "sig": "fn count(self: Sprt) -> int",
+          "doc": "Observations taken.",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 592
+        },
+        {
+          "name": "Sprt.log_ratio",
+          "decl": "fn",
+          "sig": "fn log_ratio(self: Sprt) -> float",
+          "doc": "The log-likelihood ratio so far: positive leans to p1.",
+          "file": "stdlib/math/stats/experiment.sl",
+          "line": 597
+        },
+        {
           "name": "sum",
           "decl": "fn",
           "sig": "fn sum[T](xs: [T]) -> float",
