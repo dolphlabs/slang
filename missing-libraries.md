@@ -147,9 +147,9 @@ and fixed-size `math/linalg` after that.
 - [x] **`math/vec`** (native): bulk operations on `[float]` and `[f32]`
   (dot, axpy, norms, cosine similarity, top-k, int8 quantisation), built
   for embedding search and recommendations. PR #584 (open).
-- [ ] **`math/geo`** (stdlib): haversine and Vincenty distance, bearing,
+- [x] **`math/geo`** (stdlib): haversine and Vincenty distance, bearing,
   destination point, bounding box for a radius query, geohash,
-  point-in-polygon.
+  point-in-polygon. PR #591 (open).
 - [ ] **Experiment statistics** (`math/stats`): two-proportion z-test,
   Welch's t-test, chi-square test, Wilson intervals, sample size and power,
   and a sequential probability ratio test, for A/B tests.
