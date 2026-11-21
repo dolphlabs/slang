@@ -333,6 +333,9 @@ is an `i32`): `math.sqrt`, `math.pi`, `math.round_to(x, 2)`, and for money
 overflow. `math/stats` (mean, median, stddev, quantile, correlation,
 regression, streaming `running()`/`digest()`, distributions) and
 `math/numtheory` (mod_pow, is_prime, factorize) are written over it.
+`math/interp`: `interp.linear(xs, ys)`, `step`, `monotone` (no overshoot),
+`spline` (each a result of `Curve`), then `c.at(x)`, `c.slope(x)`;
+`interp.grid(xs, ys, values).at(x, y)` is bilinear.
 `math/geo`: `geo.point(lat, lon)`, `geo.distance(a, b)` (metres),
 `bearing`, `destination(p, bearing, m)`, `bounding_box(p, m)` + `in_box`,
 `geohash(p, 7)`, `geohash_neighbors(h)`, `contains(polygon, p)`.
