@@ -5184,6 +5184,132 @@
         }
       ]
     },
+    "math/interp": {
+      "name": "math/interp",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Curve",
+          "decl": "struct",
+          "sig": "gc struct Curve",
+          "doc": "",
+          "file": "stdlib/math/interp/interp.sl",
+          "line": 33
+        },
+        {
+          "name": "empty",
+          "decl": "fn",
+          "sig": "fn empty() -> Curve",
+          "doc": "A curve with no points, for `??` defaults: every value is NaN.",
+          "file": "stdlib/math/interp/interp.sl",
+          "line": 43
+        },
+        {
+          "name": "linear",
+          "decl": "fn",
+          "sig": "fn linear(xs: [float], ys: [float]) -> result[Curve, str]",
+          "doc": "Straight lines between the points.",
+          "file": "stdlib/math/interp/interp.sl",
+          "line": 48
+        },
+        {
+          "name": "step",
+          "decl": "fn",
+          "sig": "fn step(xs: [float], ys: [float]) -> result[Curve, str]",
+          "doc": "A staircase: the value of the last point at or below x (the tier a quantity falls in). Before the first point: its value under Clamp, NaN under None.",
+          "file": "stdlib/math/interp/interp.sl",
+          "line": 55
+        },
+        {
+          "name": "monotone",
+          "decl": "fn",
+          "sig": "fn monotone(xs: [float], ys: [float]) -> result[Curve, str]",
+          "doc": "A monotone cubic (Fritsch and Carlson 1980, with Fritsch-Butland slopes): smooth, through every point, and never rising above or dipping below its neighbours, so a monotone table stays monotone. The safe choice for rates and prices.",
+          "file": "stdlib/math/interp/interp.sl",
+          "line": 63
+        },
+        {
+          "name": "spline",
+          "decl": "fn",
+          "sig": "fn spline(xs: [float], ys: [float]) -> result[Curve, str]",
+          "doc": "The natural cubic spline: the smoothest curve through the points (a continuous second derivative, zero at the ends). It can overshoot between points; use monotone when that matters.",
+          "file": "stdlib/math/interp/interp.sl",
+          "line": 70
+        },
+        {
+          "name": "Curve.at",
+          "decl": "fn",
+          "sig": "fn at(self: Curve, x: float) -> float",
+          "doc": "The value at x.",
+          "file": "stdlib/math/interp/interp.sl",
+          "line": 187
+        },
+        {
+          "name": "Curve.at_all",
+          "decl": "fn",
+          "sig": "fn at_all(self: Curve, xs: [float]) -> [float]",
+          "doc": "The values at each of xs, in one pass when xs ascend.",
+          "file": "stdlib/math/interp/interp.sl",
+          "line": 203
+        },
+        {
+          "name": "Curve.slope",
+          "decl": "fn",
+          "sig": "fn slope(self: Curve, x: float) -> float",
+          "doc": "The derivative at x (0 on a step curve, and outside the knots under Clamp).",
+          "file": "stdlib/math/interp/interp.sl",
+          "line": 213
+        },
+        {
+          "name": "Curve.set_extrapolate",
+          "decl": "fn",
+          "sig": "fn set_extrapolate(self: Curve, mode: Extrapolate) -> Curve",
+          "doc": "",
+          "file": "stdlib/math/interp/interp.sl",
+          "line": 260
+        },
+        {
+          "name": "Curve.copy",
+          "decl": "fn",
+          "sig": "fn copy(self: Curve) -> Curve",
+          "doc": "A curve over the same knots with its own lookup memory, for another task.",
+          "file": "stdlib/math/interp/interp.sl",
+          "line": 267
+        },
+        {
+          "name": "Curve.size",
+          "decl": "fn",
+          "sig": "fn size(self: Curve) -> int",
+          "doc": "",
+          "file": "stdlib/math/interp/interp.sl",
+          "line": 273
+        },
+        {
+          "name": "Grid",
+          "decl": "struct",
+          "sig": "gc struct Grid",
+          "doc": "A table of values over a rectangular grid, read by bilinear interpolation: prices by (weight, distance), rates by (term, amount).",
+          "file": "stdlib/math/interp/interp.sl",
+          "line": 384
+        },
+        {
+          "name": "grid",
+          "decl": "fn",
+          "sig": "fn grid(xs: [float], ys: [float], values: [float]) -> result[Grid, str]",
+          "doc": "A grid over ascending xs and ys with len(xs) * len(ys) values, row by row. Outside the grid the nearest edge value is used.",
+          "file": "stdlib/math/interp/interp.sl",
+          "line": 392
+        },
+        {
+          "name": "Grid.at",
+          "decl": "fn",
+          "sig": "fn at(self: Grid, x: float, y: float) -> float",
+          "doc": "",
+          "file": "stdlib/math/interp/interp.sl",
+          "line": 425
+        }
+      ]
+    },
     "math/numtheory": {
       "name": "math/numtheory",
       "kind": "source",
