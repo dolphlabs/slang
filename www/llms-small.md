@@ -333,13 +333,42 @@ is an `i32`): `math.sqrt`, `math.pi`, `math.round_to(x, 2)`, and for money
 overflow. `math/stats` (mean, median, stddev, quantile, correlation,
 regression, streaming `running()`/`digest()`, distributions) and
 `math/numtheory` (mod_pow, is_prime, factorize) are written over it.
+`math/big`: `big.parse(s, 10)` (result of `Int`), `big.from_int(n)`, methods
+`add/sub/mul/div/modulo/pow/mod_pow/gcd/cmp/format(base)` (div returns opt);
+`big.rat_parse("1/3")` for exact fractions.
+A/B tests: `stats.two_proportion_z(conv_a, n_a, conv_b, n_b).p_value`,
+`welch_t(xs, ys)`, `chi_square_test(table)`, `wilson(k, n, 0.95)`,
+`sample_size_proportions(p1, p2, 0.05, 0.8)`, `sprt(p0, p1, alpha, beta)`.
+`math/finance`: `finance.npv(rate, flows)`, `irr(flows)` (result), `xirr`,
+`pmt/pv/fv/nper(rate, n, ..)` with spreadsheet signs, `amortize(principal,
+annual_rate, periods, per_year)` (decimal `[Payment]` to the cent),
+`progressive`/`tiered` fees, `vwap`, `candles`.
+`math/interp`: `interp.linear(xs, ys)`, `step`, `monotone` (no overshoot),
+`spline` (each a result of `Curve`), then `c.at(x)`, `c.slope(x)`;
+`interp.grid(xs, ys, values).at(x, y)` is bilinear.
+`math/geo`: `geo.point(lat, lon)`, `geo.distance(a, b)` (metres),
+`bearing`, `destination(p, bearing, m)`, `bounding_box(p, m)` + `in_box`,
+`geohash(p, 7)`, `geohash_neighbors(h)`, `contains(polygon, p)`.
+`math/optimize`: `optimize.brent(f, lo, hi, tol)` (a root; result of
+`Root { x, fx, evals }`), `brent_min(f, a, b, tol)`, `integrate(f, a, b,
+abs_tol, rel_tol)` (infinite bounds allowed); `_with(f, ctx, ..)` forms pass
+data to `f(x, ctx)` since there are no closures.
+`math/shard` maps keys to nodes stably: `shard.jump_str(key, n)`,
+`shard.rendezvous(nodes).pick_str(key)` (opt index; `pick_n_str` for
+replicas), `shard.ring(160)` with `add(name, weight)`/`get_str(key)`,
+`shard.maglev(nodes, 65537).pick_str(key)`.
+`math/sketch` estimates in fixed memory, mergeable across tasks:
+`sketch.hyperloglog(14)` (`add_str`, `count`), `count_min(eps, delta)`,
+`top_k(k)`, `bloom(n, fpp)`, `cuckoo(n)` (with `remove_str`),
+`histogram(max, 7)` (`record`, `quantile(0.99)`, `buckets`), `reservoir(k, r)`.
 `math/vec` is native bulk math on `[float]`/`[f32]`: `vec.dot`, `cosine`,
 `distance`, `normalize` (in place), `vec.top_k_cosine(query, rows, dim, k)`
 over rows stored back to back, `to_f32`, `quantize` (int8) and `dot_q`.
 `rand` is seeded and non-cryptographic, for tests that replay:
 `let r = rand.new(42); rand.below(r, 10); rand.between(r, 1, 6);
-rand.shuffle(r, xs); rand.backoff(r, attempt, base, cap)`. Secrets use
-`crypto.rand`.
+rand.shuffle(r, xs); rand.backoff(r, attempt, base, cap)`, `rand.normal(r)`
+and `rand.exponential(r)`; every `math/stats` distribution has `.sample(r)`.
+Secrets use `crypto.rand`.
 The standalone `argon` package provides bounded Argon2id password hashing
 with standard PHC strings; its native crypto calls require OpenSSL 3.2+.
 
