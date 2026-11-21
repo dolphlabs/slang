@@ -333,6 +333,10 @@ is an `i32`): `math.sqrt`, `math.pi`, `math.round_to(x, 2)`, and for money
 overflow. `math/stats` (mean, median, stddev, quantile, correlation,
 regression, streaming `running()`/`digest()`, distributions) and
 `math/numtheory` (mod_pow, is_prime, factorize) are written over it.
+`math/shard` maps keys to nodes stably: `shard.jump_str(key, n)`,
+`shard.rendezvous(nodes).pick_str(key)` (opt index; `pick_n_str` for
+replicas), `shard.ring(160)` with `add(name, weight)`/`get_str(key)`,
+`shard.maglev(nodes, 65537).pick_str(key)`.
 `math/vec` is native bulk math on `[float]`/`[f32]`: `vec.dot`, `cosine`,
 `distance`, `normalize` (in place), `vec.top_k_cosine(query, rows, dim, k)`
 over rows stored back to back, `to_f32`, `quantize` (int8) and `dot_q`.
@@ -426,6 +430,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - log: debug, info, warn, error
 - math: abs, min, max, clamp, sign, is_nan, is_inf, is_finite, is_normal, signbit, copysign, nextafter (+119 more)
 - math/numtheory: mod_pow, mod_mul, ext_gcd, mod_inv, is_prime, next_prime, prev_prime, primes_below, factorize, divisors, totient, crt (+2 more)
+- math/shard: hash_str, hash_int, jump, jump_str, jump_int, rendezvous, rendezvous_weighted, Rendezvous.pick, Rendezvous.pick_n, Rendezvous.pick_str, Rendezvous.pick_int, Rendezvous.pick_n_str (+18 more)
 - math/stats: normal, Normal.pdf, Normal.cdf, Normal.quantile, log_normal, LogNormal.pdf, LogNormal.cdf, LogNormal.quantile, uniform, Uniform.pdf, Uniform.cdf, Uniform.quantile (+67 more)
 - math/vec: dot, sum, norm, distance, distance2, cosine, argmax, argmin, scale, axpy, add, sub (+11 more)
 - mysql: parse_url, connect, connect_config, close, usable, in_transaction, server_version, connection_id, last_insert_id, affected_rows, ping, sqlstate (+32 more)
