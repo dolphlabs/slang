@@ -333,6 +333,9 @@ is an `i32`): `math.sqrt`, `math.pi`, `math.round_to(x, 2)`, and for money
 overflow. `math/stats` (mean, median, stddev, quantile, correlation,
 regression, streaming `running()`/`digest()`, distributions) and
 `math/numtheory` (mod_pow, is_prime, factorize) are written over it.
+A/B tests: `stats.two_proportion_z(conv_a, n_a, conv_b, n_b).p_value`,
+`welch_t(xs, ys)`, `chi_square_test(table)`, `wilson(k, n, 0.95)`,
+`sample_size_proportions(p1, p2, 0.05, 0.8)`, `sprt(p0, p1, alpha, beta)`.
 `rand` is seeded and non-cryptographic, for tests that replay:
 `let r = rand.new(42); rand.below(r, 10); rand.between(r, 1, 6);
 rand.shuffle(r, xs); rand.backoff(r, attempt, base, cap)`. Secrets use
