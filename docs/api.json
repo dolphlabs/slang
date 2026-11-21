@@ -6530,6 +6530,239 @@
         }
       ]
     },
+    "math/vec": {
+      "name": "math/vec",
+      "kind": "native",
+      "items": [
+        {
+          "name": "dot",
+          "params": [
+            "[float]|[f32]",
+            "[float]|[f32]"
+          ],
+          "ret": "float",
+          "tls": false,
+          "sig": "math/vec.dot([float]|[f32], [float]|[f32]) -> float"
+        },
+        {
+          "name": "sum",
+          "params": [
+            "[float]|[f32]"
+          ],
+          "ret": "float",
+          "tls": false,
+          "sig": "math/vec.sum([float]|[f32]) -> float"
+        },
+        {
+          "name": "norm",
+          "params": [
+            "[float]|[f32]"
+          ],
+          "ret": "float",
+          "tls": false,
+          "sig": "math/vec.norm([float]|[f32]) -> float"
+        },
+        {
+          "name": "distance",
+          "params": [
+            "[float]|[f32]",
+            "[float]|[f32]"
+          ],
+          "ret": "float",
+          "tls": false,
+          "sig": "math/vec.distance([float]|[f32], [float]|[f32]) -> float"
+        },
+        {
+          "name": "distance2",
+          "params": [
+            "[float]|[f32]",
+            "[float]|[f32]"
+          ],
+          "ret": "float",
+          "tls": false,
+          "sig": "math/vec.distance2([float]|[f32], [float]|[f32]) -> float"
+        },
+        {
+          "name": "cosine",
+          "params": [
+            "[float]|[f32]",
+            "[float]|[f32]"
+          ],
+          "ret": "float",
+          "tls": false,
+          "sig": "math/vec.cosine([float]|[f32], [float]|[f32]) -> float"
+        },
+        {
+          "name": "argmax",
+          "params": [
+            "[float]|[f32]"
+          ],
+          "ret": "int",
+          "tls": false,
+          "sig": "math/vec.argmax([float]|[f32]) -> int"
+        },
+        {
+          "name": "argmin",
+          "params": [
+            "[float]|[f32]"
+          ],
+          "ret": "int",
+          "tls": false,
+          "sig": "math/vec.argmin([float]|[f32]) -> int"
+        },
+        {
+          "name": "scale",
+          "params": [
+            "[float]|[f32]",
+            "float"
+          ],
+          "ret": null,
+          "tls": false,
+          "sig": "math/vec.scale([float]|[f32], float)"
+        },
+        {
+          "name": "axpy",
+          "params": [
+            "float",
+            "[float]|[f32]",
+            "[float]|[f32]"
+          ],
+          "ret": null,
+          "tls": false,
+          "sig": "math/vec.axpy(float, [float]|[f32], [float]|[f32])"
+        },
+        {
+          "name": "add",
+          "params": [
+            "[float]|[f32]",
+            "[float]|[f32]"
+          ],
+          "ret": null,
+          "tls": false,
+          "sig": "math/vec.add([float]|[f32], [float]|[f32])"
+        },
+        {
+          "name": "sub",
+          "params": [
+            "[float]|[f32]",
+            "[float]|[f32]"
+          ],
+          "ret": null,
+          "tls": false,
+          "sig": "math/vec.sub([float]|[f32], [float]|[f32])"
+        },
+        {
+          "name": "mul",
+          "params": [
+            "[float]|[f32]",
+            "[float]|[f32]"
+          ],
+          "ret": null,
+          "tls": false,
+          "sig": "math/vec.mul([float]|[f32], [float]|[f32])"
+        },
+        {
+          "name": "normalize",
+          "params": [
+            "[float]|[f32]"
+          ],
+          "ret": "float",
+          "tls": false,
+          "sig": "math/vec.normalize([float]|[f32]) -> float"
+        },
+        {
+          "name": "top_k",
+          "params": [
+            "[float]|[f32]",
+            "int"
+          ],
+          "ret": "[int]",
+          "tls": false,
+          "sig": "math/vec.top_k([float]|[f32], int) -> [int]"
+        },
+        {
+          "name": "scores",
+          "params": [
+            "[float]|[f32]",
+            "[float]|[f32]",
+            "int"
+          ],
+          "ret": "[float]",
+          "tls": false,
+          "sig": "math/vec.scores([float]|[f32], [float]|[f32], int) -> [float]"
+        },
+        {
+          "name": "top_k_dot",
+          "params": [
+            "[float]|[f32]",
+            "[float]|[f32]",
+            "int",
+            "int"
+          ],
+          "ret": "[int]",
+          "tls": false,
+          "sig": "math/vec.top_k_dot([float]|[f32], [float]|[f32], int, int) -> [int]"
+        },
+        {
+          "name": "top_k_cosine",
+          "params": [
+            "[float]|[f32]",
+            "[float]|[f32]",
+            "int",
+            "int"
+          ],
+          "ret": "[int]",
+          "tls": false,
+          "sig": "math/vec.top_k_cosine([float]|[f32], [float]|[f32], int, int) -> [int]"
+        },
+        {
+          "name": "to_f32",
+          "params": [
+            "[float]|[f32]"
+          ],
+          "ret": "[f32]",
+          "tls": false,
+          "sig": "math/vec.to_f32([float]|[f32]) -> [f32]"
+        },
+        {
+          "name": "to_f64",
+          "params": [
+            "[float]|[f32]"
+          ],
+          "ret": "[float]",
+          "tls": false,
+          "sig": "math/vec.to_f64([float]|[f32]) -> [float]"
+        },
+        {
+          "name": "quantize",
+          "params": [
+            "[float]|[f32]"
+          ],
+          "ret": "bytes",
+          "tls": false,
+          "sig": "math/vec.quantize([float]|[f32]) -> bytes"
+        },
+        {
+          "name": "dequantize",
+          "params": [
+            "bytes"
+          ],
+          "ret": "[float]",
+          "tls": false,
+          "sig": "math/vec.dequantize(bytes) -> [float]"
+        },
+        {
+          "name": "dot_q",
+          "params": [
+            "bytes",
+            "bytes"
+          ],
+          "ret": "float",
+          "tls": false,
+          "sig": "math/vec.dot_q(bytes, bytes) -> float"
+        }
+      ]
+    },
     "mysql": {
       "name": "mysql",
       "kind": "source",

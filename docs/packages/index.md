@@ -5,12 +5,12 @@
 ## Standard packages
 
 `time`, `net`, `json`, `proc`, `fs`, `log`, `crypto`, `sql`, `regex`,
-`os`, `io`, `strings`, `encoding`, `compress` and `math` are compiler-provided native packages — no source files, just
+`os`, `io`, `strings`, `encoding`, `compress`, `math` and `math/vec` are compiler-provided native packages — no source files, just
 `import "time";` / `import "net";` / `import "json";` / `import "proc";`
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` / `import "io";` / `import "encoding";` like any other package.
 
-`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/big`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
 then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
 compiler's `SLANG_STDLIB_DIR`).
@@ -2866,51 +2866,54 @@ be coprime), `binomial_mod` (Lucas, for a prime modulus) and
 function given one <= 0 returns `none`, 0 or `false` rather than
 panicking, and no result is negative.
 
-#### `math/big`
+#### `math/vec`
 
-Arbitrary-precision integers and exact fractions: cryptography, ids and
-amounts past 64 bits, exact combinatorics, checking int arithmetic
-against the truth. Written in slang.
+Bulk arithmetic on `[float]` and `[f32]` vectors, for embedding search,
+recommendations and scoring. Native: each kernel runs eight to
+thirty-two accumulators over raw memory, with 256-bit fused
+multiply-adds on x86-64 CPUs that have AVX2 and FMA (chosen at run
+time), which a slang loop cannot do.
 
 ```slang
-import "math/big";
+import "math/vec";
 
-let a = big.parse("123456789012345678901234567890", 10) ?? big.zero();
-a.mul(big.from_int(987654321)).format(10);   // 121932631124828532112482853211126352690
-big.from_int(2).pow(127).sub(big.one());     // a Mersenne prime
-a.mod_pow(e, m) ?? big.zero();               // none for m <= 0
-a.mod_inv(m);                                // opt
-big.from_bytes_be(key_bytes);
+let a = [0.1, 0.7, 0.2];
+let b = [0.3, 0.5, 0.2];
+vec.dot(a, b);                       // 0.42
+vec.cosine(a, b);                    // in [-1, 1]
+vec.distance(a, b);                  // Euclidean
+vec.normalize(a);                    // in place; returns the old norm
 
-let r = big.rat_parse("0.125") ?? big.rat_zero();   // 1/8: exact, not a float
-r.add(big.rat_parse("1/3") ?? big.rat_zero()).format();   // 11/24
+// search: rows is n vectors of `dim` numbers, one after another
+let best = vec.top_k_cosine(query, rows, 384, 10);   // [int], best first
+
+let small = vec.to_f32(a);           // half the memory
+let q8 = vec.quantize(small);        // bytes: a quarter of an [f32]
+vec.dot_q(q8, vec.quantize(vec.to_f32(b)));
 ```
 
-- **`Int`:** `add`, `sub`, `mul`, `div`/`rem` (truncating, as `/` and
-  `%`), `div_floor`/`modulo` (flooring; `modulo` is never negative),
-  `pow`, `mod_pow`, `mod_inv`, `gcd`, `sqrt` (integer), `cmp`, `eq`,
-  `sign`; `shl`, `shr` (arithmetic), `and`, `or`, `xor`, `not` and
-  `bit` on the two's-complement form, as Go and Python define them;
-  `parse(s, base)` (2 to 36, `_` separators, `0x`/`0o`/`0b`),
-  `format(base)`, `int_of` (opt), `float_of`, `bytes_be`,
-  `from_bytes_be`.
-- **`Rat`:** always reduced with a positive denominator. `rat`,
-  `rat_parse` ("3/4", "-12.75", "2.5e-3", exact), `add`, `sub`, `mul`,
-  `div`, `cmp`, `floor`, `ceil`, `round` (half to even), `float_of`,
-  `format`, `format_decimal(places)`.
+- **Reductions:** `dot`, `sum`, `norm`, `distance`, `distance2`
+  (squared), `cosine` (NaN for a zero vector), `argmax`, `argmin`
+  (NaN skipped; -1 for an empty list).
+- **In place:** `scale(a, s)`, `axpy(alpha, x, y)` (`y += alpha * x`),
+  `add(y, x)`, `sub(y, x)`, `mul(y, x)` (elementwise), `normalize(a)`.
+- **Search:** `top_k(a, k)` (indexes of the k largest, best first, ties
+  to the lower index), `scores(query, rows, dim)` (every row's dot
+  product), `top_k_dot` and `top_k_cosine(query, rows, dim, k)`: a
+  k-entry heap, no copy of the scores, one pass over each row.
+- **Storage:** `to_f32`, `to_f64`, `quantize` (symmetric int8: a
+  4-byte scale, then a byte per element), `dequantize`, `dot_q` (an
+  exact integer sum, times both scales).
 
-An `Int` is immutable and can be shared between tasks. Limbs are 32
-bits, so every partial product fits a `u64`; multiplication is
-schoolbook below 256 limbs (8192 bits, where it measured as fast) and
-Karatsuba above, division is Knuth's algorithm D, and `mod_pow` with an
-odd modulus uses Montgomery multiplication with a 4-bit window, so no
-step divides. A 2048-bit product takes about 9 us and a 2048-bit
-modular power with a 1024-bit exponent about 26 ms; this is a portable
-library, not a constant-time one, so keep secret-key cryptography in
-`crypto`. `parse` refuses text over 100,000 characters and `pow` a
-result over 16 million bits, to bound the work an input can ask for.
-The tests check every operation against Python's integers on 300
-random pairs up to 5000 bits, and modular powers on 100 moduli.
+The vectors of one call must have the same element type (a compile
+error otherwise, naming `to_f32`/`to_f64`) and the same length (a
+panic naming the call otherwise). Nothing allocates except the
+functions that return a new list or bytes. On a 1536-float dot product
+`vec.dot` takes 112 ns for `[f32]` and 195 ns for `[float]`, against
+1600 ns for the same loop written in slang. Sums are taken in a
+different order from a left-to-right loop, and on x86-64 in a different
+order with and without AVX2, so results can differ in their last bits
+between machines.
 
 #### `decimal`
 
@@ -3813,9 +3816,9 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [json](packages/json.md) -- compiler-provided, 0 public items
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [math](packages/math.md) -- compiler-provided, 131 public items
-- [math/big](packages/math/big.md) -- source package, 59 public items
 - [math/numtheory](packages/math/numtheory.md) -- source package, 16 public items
 - [math/stats](packages/math/stats.md) -- source package, 91 public items
+- [math/vec](packages/math/vec.md) -- compiler-provided, 23 public items
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
 - [net](packages/net.md) -- compiler-provided, 35 public items
