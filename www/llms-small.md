@@ -333,6 +333,10 @@ is an `i32`): `math.sqrt`, `math.pi`, `math.round_to(x, 2)`, and for money
 overflow. `math/stats` (mean, median, stddev, quantile, correlation,
 regression, streaming `running()`/`digest()`, distributions) and
 `math/numtheory` (mod_pow, is_prime, factorize) are written over it.
+`math/sketch` estimates in fixed memory, mergeable across tasks:
+`sketch.hyperloglog(14)` (`add_str`, `count`), `count_min(eps, delta)`,
+`top_k(k)`, `bloom(n, fpp)`, `cuckoo(n)` (with `remove_str`),
+`histogram(max, 7)` (`record`, `quantile(0.99)`, `buckets`), `reservoir(k, r)`.
 `rand` is seeded and non-cryptographic, for tests that replay:
 `let r = rand.new(42); rand.below(r, 10); rand.between(r, 1, 6);
 rand.shuffle(r, xs); rand.backoff(r, attempt, base, cap)`. Secrets use

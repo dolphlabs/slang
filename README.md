@@ -1069,7 +1069,7 @@ Concurrency below.
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` / `import "io";` / `import "encoding";` like any other package.
 
-`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/sketch`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
 then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
 compiler's `SLANG_STDLIB_DIR`).
@@ -3924,6 +3924,79 @@ be coprime), `binomial_mod` (Lucas, for a prime modulus) and
 `fibonacci` (exact through F(92)). A modulus must be positive: a
 function given one <= 0 returns `none`, 0 or `false` rather than
 panicking, and no result is negative.
+
+#### `math/sketch`
+
+Fixed-memory, mergeable estimates for live servers: how many distinct
+users, how often each key, which keys are heaviest, have we seen this
+before, and latency percentiles, without keeping the items. Written in
+slang; every sketch of a kind merges with another built with the same
+parameters, so tasks and hosts each keep their own and combine.
+
+```slang
+import "math/sketch";
+
+let users = sketch.hyperloglog(14);          // 16 KB, 0.81% error
+users.add_str(user_id);
+users.count();
+
+let hits = sketch.count_min(0.001, 0.01);    // within 0.1% of the total, 99% of the time
+hits.add_str(ip, 1);
+hits.estimate_str(ip);
+
+let heavy = sketch.top_k(100);               // Space-Saving
+heavy.add(path);
+heavy.top();                                 // [Item { key, count, error }]
+
+let seen = sketch.bloom(1000000, 0.01);      // 1.2 MB
+seen.add_str(key);
+seen.contains_str(key);                      // false: certainly not added
+
+let live = sketch.cuckoo(100000);            // like a Bloom filter, with remove
+live.add_str(id); live.remove_str(id);
+
+let lat = sketch.histogram(60000000, 7);     // 1 us .. 60 s, 0.8% precision
+lat.record(elapsed_us);
+lat.quantile(0.99);
+lat.buckets(sketch.exponential_bounds(1000, 2.0, 12));   // Prometheus le= counts
+
+let keep: [Event] = [];                      // a uniform sample of 100
+let rs = sketch.reservoir(100, rand.new(7));
+if let slot = rs.offer() {
+    if slot == len(keep) { push(keep, e); } else { keep[slot] = e; }
+}
+```
+
+- **`HyperLogLog`** (Flajolet et al. with Ertl's 2017 estimator, no bias
+  tables): `add_str`/`add_int`/`add_bytes`/`add_hash`, `count`,
+  `estimate`, `merge`, `encode`/`decode_hyperloglog`. Precision 4 to 18;
+  the error is 1.04/sqrt(2^p).
+- **`CountMin`** (Cormode and Muthukrishnan): never under the true count,
+  at most epsilon * total over it with probability 1 - delta;
+  `set_conservative(true)` tightens skewed data. `count_min_sized(w, d)`,
+  `total`, `merge`, `clear`, `encode`/`decode_count_min`.
+- **`TopK`** (Space-Saving, Metwally et al.): every key above total/k is
+  kept; each count carries its maximum error. O(log k) per add; `merge`
+  follows Agarwal et al.
+- **`Bloom`**: the split-block layout Parquet and Impala use, one 32-byte
+  block per key, so an add or a lookup touches one cache line. `fill`,
+  `fpp` (the false-positive rate it has now), `merge`, `encode`.
+- **`Cuckoo`** (Fan et al.): 16-bit fingerprints in buckets of four,
+  0.012% false positives at 95% load, with `remove`. A fingerprint that
+  finds no room is kept aside, so a full filter refuses new keys rather
+  than losing an old one.
+- **`Histogram`**: HdrHistogram's log-linear buckets: exact below
+  2^precision, then 2^(precision-1) buckets per power of two. Exact
+  `count`, `sum`, `mean`, `min`, `max`; `quantile`, `rank_of`, `buckets`,
+  `merge`; `exponential_bounds` and `linear_bounds` for Prometheus.
+- **`Reservoir`** (Algorithm L, Li 1994): the sample is your own list of
+  any type; most items cost a counter increment and no random draw.
+
+Keys hash with `hash_str` (over `strings.hash`), `hash_int` or
+`hash_bytes`, or pass your own 64-bit hash to the `*_hash` methods. The
+hashes are fixed across releases on little-endian CPUs, so `encode`d
+sketches merge across hosts. None of the sketches locks: one per task,
+then `merge`.
 
 #### `decimal`
 
