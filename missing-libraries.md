@@ -127,10 +127,10 @@ and fixed-size `math/linalg` after that.
 - [x] **Sampling from distributions** (`math/stats`): `sample(rng)` on
   every distribution, taking a `rand.Rng`, so load generators and
   simulations replay from one seed. PR #587 (open).
-- [ ] **`math/sketch`** (stdlib): fixed-memory, mergeable estimates for
+- [x] **`math/sketch`** (stdlib): fixed-memory, mergeable estimates for
   live servers. HyperLogLog (distinct counts), Count-Min sketch, top-k
   heavy hitters, Bloom and cuckoo filters, an HDR-style latency histogram
-  with Prometheus buckets, and reservoir sampling.
+  with Prometheus buckets, and reservoir sampling. PR #588 (open).
 - [ ] **`math/shard`** (stdlib): map a key to a node stably. Jump
   consistent hash, rendezvous (highest random weight) hashing, and a
   consistent-hash ring with virtual nodes and weights.
