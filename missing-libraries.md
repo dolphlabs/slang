@@ -29,7 +29,7 @@ any package.
   Still to build, per `math-plan.md` phases 3 to 5:
   - [ ] `math/complex`
   - [ ] `math/linalg` (fixed-size)
-  - [ ] `math/big`
+  - [x] `math/big`: Int and Rat, Karatsuba, Montgomery `mod_pow`. PR #595 (open).
 - [x] **`rand`** (stdlib): a fast, non-cryptographic random number generator
   with an explicit seed, so tests stay deterministic: ints in a range,
   floats, shuffle, pick, and jitter for retry backoff. `crypto.rand` stays
