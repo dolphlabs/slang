@@ -1069,7 +1069,7 @@ Concurrency below.
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` / `import "io";` / `import "encoding";` like any other package.
 
-`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/big`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
 then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
 compiler's `SLANG_STDLIB_DIR`).
@@ -3924,6 +3924,52 @@ be coprime), `binomial_mod` (Lucas, for a prime modulus) and
 `fibonacci` (exact through F(92)). A modulus must be positive: a
 function given one <= 0 returns `none`, 0 or `false` rather than
 panicking, and no result is negative.
+
+#### `math/big`
+
+Arbitrary-precision integers and exact fractions: cryptography, ids and
+amounts past 64 bits, exact combinatorics, checking int arithmetic
+against the truth. Written in slang.
+
+```slang
+import "math/big";
+
+let a = big.parse("123456789012345678901234567890", 10) ?? big.zero();
+a.mul(big.from_int(987654321)).format(10);   // 121932631124828532112482853211126352690
+big.from_int(2).pow(127).sub(big.one());     // a Mersenne prime
+a.mod_pow(e, m) ?? big.zero();               // none for m <= 0
+a.mod_inv(m);                                // opt
+big.from_bytes_be(key_bytes);
+
+let r = big.rat_parse("0.125") ?? big.rat_zero();   // 1/8: exact, not a float
+r.add(big.rat_parse("1/3") ?? big.rat_zero()).format();   // 11/24
+```
+
+- **`Int`:** `add`, `sub`, `mul`, `div`/`rem` (truncating, as `/` and
+  `%`), `div_floor`/`modulo` (flooring; `modulo` is never negative),
+  `pow`, `mod_pow`, `mod_inv`, `gcd`, `sqrt` (integer), `cmp`, `eq`,
+  `sign`; `shl`, `shr` (arithmetic), `and`, `or`, `xor`, `not` and
+  `bit` on the two's-complement form, as Go and Python define them;
+  `parse(s, base)` (2 to 36, `_` separators, `0x`/`0o`/`0b`),
+  `format(base)`, `int_of` (opt), `float_of`, `bytes_be`,
+  `from_bytes_be`.
+- **`Rat`:** always reduced with a positive denominator. `rat`,
+  `rat_parse` ("3/4", "-12.75", "2.5e-3", exact), `add`, `sub`, `mul`,
+  `div`, `cmp`, `floor`, `ceil`, `round` (half to even), `float_of`,
+  `format`, `format_decimal(places)`.
+
+An `Int` is immutable and can be shared between tasks. Limbs are 32
+bits, so every partial product fits a `u64`; multiplication is
+schoolbook below 256 limbs (8192 bits, where it measured as fast) and
+Karatsuba above, division is Knuth's algorithm D, and `mod_pow` with an
+odd modulus uses Montgomery multiplication with a 4-bit window, so no
+step divides. A 2048-bit product takes about 9 us and a 2048-bit
+modular power with a 1024-bit exponent about 26 ms; this is a portable
+library, not a constant-time one, so keep secret-key cryptography in
+`crypto`. `parse` refuses text over 100,000 characters and `pow` a
+result over 16 million bits, to bound the work an input can ask for.
+The tests check every operation against Python's integers on 300
+random pairs up to 5000 bits, and modular powers on 100 moduli.
 
 #### `decimal`
 
