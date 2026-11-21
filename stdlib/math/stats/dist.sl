@@ -6,11 +6,13 @@
 //     n.cdf(130.0);          // 0.977...: P(X <= 130)
 //     n.quantile(0.95);      // 124.67...
 //     stats.poisson(3.0).pmf(5);
+//     stats.normal(100.0, 15.0).sample(r);   // r a rand.Rng (sample.sl)
 //
 // A parameter outside its range (a stddev <= 0, a probability outside
 // [0, 1]) makes every function of that distribution NaN.
 
 import "math";
+import "rand";
 
 pub struct Normal {
     mu: float,
@@ -46,6 +48,14 @@ impl Normal {
             return math.nan;
         }
         return self.mu + self.sigma * math.sqrt2 * math.erf_inv(2.0 * p - 1.0);
+    }
+
+    // A random draw (rand.normal, the ziggurat); NaN for a bad sigma.
+    pub fn sample(self: Normal, r: rand.Rng) -> float {
+        if !(self.sigma > 0.0) {
+            return math.nan;
+        }
+        return self.mu + self.sigma * rand.normal(r);
     }
 }
 
@@ -84,6 +94,13 @@ impl LogNormal {
     pub fn quantile(self: LogNormal, p: float) -> float {
         return math.exp(normal(self.mu, self.sigma).quantile(p));
     }
+
+    pub fn sample(self: LogNormal, r: rand.Rng) -> float {
+        if !(self.sigma > 0.0) {
+            return math.nan;
+        }
+        return math.exp(self.mu + self.sigma * rand.normal(r));
+    }
 }
 
 pub struct Uniform {
@@ -119,6 +136,14 @@ impl Uniform {
             return math.nan;
         }
         return math.lerp(self.lo, self.hi, p);
+    }
+
+    // A draw from [lo, hi); NaN unless hi > lo.
+    pub fn sample(self: Uniform, r: rand.Rng) -> float {
+        if !(self.hi > self.lo) {
+            return math.nan;
+        }
+        return self.lo + (self.hi - self.lo) * rand.unit(r);
     }
 }
 
@@ -158,6 +183,14 @@ impl Exponential {
             return math.nan;
         }
         return -math.log1p(-p) / self.rate;
+    }
+
+    // A draw (rand.exponential, the ziggurat, over the rate).
+    pub fn sample(self: Exponential, r: rand.Rng) -> float {
+        if !(self.rate > 0.0) {
+            return math.nan;
+        }
+        return rand.exponential(r) / self.rate;
     }
 }
 
@@ -206,6 +239,23 @@ impl Poisson {
             p += self.pmf(i);
         }
         return math.min(p, 1.0);
+    }
+
+    // A random count. Panics for a lambda that is negative, NaN, or so
+    // large (above 2^52) that its counts have no exact int, as
+    // rand.below does for a bad bound.
+    pub fn sample(self: Poisson, r: rand.Rng) -> int {
+        let lam = self.lambda;
+        if !(lam >= 0.0) || lam > 4503599627370496.0 {
+            panic("stats: Poisson.sample needs 0 <= lambda <= 2^52, got " + to_str(lam));
+        }
+        if lam == 0.0 {
+            return 0;
+        }
+        if lam < 10.0 {
+            return poisson_mult(r, lam);
+        }
+        return poisson_ptrs(r, lam);
     }
 }
 
@@ -271,4 +321,30 @@ impl Binomial {
         }
         return math.min(p, 1.0);
     }
+
+    // A random count of successes. Panics for n < 0 or p outside [0, 1].
+    pub fn sample(self: Binomial, r: rand.Rng) -> int {
+        if self.n < 0 || !(self.p >= 0.0 && self.p <= 1.0) {
+            panic("stats: Binomial.sample needs n >= 0 and p in [0, 1], got n " +
+                  to_str(self.n) + ", p " + to_str(self.p));
+        }
+        if self.n == 0 || self.p == 0.0 {
+            return 0;
+        }
+        if self.p == 1.0 {
+            return self.n;
+        }
+        // draw for the rarer outcome and mirror: both algorithms want p <= 1/2
+        if self.p > 0.5 {
+            return self.n - binomial_draw(r, self.n, 1.0 - self.p);
+        }
+        return binomial_draw(r, self.n, self.p);
+    }
+}
+
+fn binomial_draw(r: rand.Rng, n: int, p: float) -> int {
+    if (n as float) * p < 10.0 {
+        return binomial_inv(r, n, p);
+    }
+    return binomial_btrs(r, n, p);
 }
