@@ -1897,6 +1897,8 @@ char *gen_expr(CG *cg, Expr *e) {
             return xasprintf("((%s){ .has = false })",
                              ctype_of(cg, cg->expect));
         }
+        if (generic_fn_value(cg, e))
+            return mangle_sig((FuncSig *)e->as.ident.gsig);
         if (!strcmp(e->as.ident.name, "nullptr"))
             return xstrdup("((void *)0)");
         return gen_ident_name(cg, e->as.ident.name, e->line);

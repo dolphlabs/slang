@@ -357,11 +357,21 @@ void emit_globals(CG *cg, Package *pkgs, int npkgs, int main_index) {
             if (is_bytes(t)) {
                 Expr *init = s->as.let.init;
                 char *m = mangle_glob(p->name, s->as.let.name);
-                emit_line(cg, "static const unsigned char %s_bdata[] = %s;",
+                /* Every use takes a bytes as `sl_bytes *`, so the global is
+                   a constant pointer to a static header, like
+                   sl_bytes_empty: not a GC object (marking skips it), and
+                   sound to share because nothing changes a bytes' length
+                   or pointer after it is built. The data is writable --
+                   `G[0] = 65`, or a function handed G that writes to it,
+                   changes the one package-wide value, as for any bytes
+                   held in two places; the global itself cannot be
+                   reassigned. */
+                emit_line(cg, "static unsigned char %s_bdata[] = %s;",
                           m, c_bytes_literal(init->as.bytes_lit.data,
                                              init->as.bytes_lit.len));
-                emit_line(cg, "static sl_bytes %s = { %lld, (unsigned char *)%s_bdata };",
+                emit_line(cg, "static sl_bytes %s_obj = { %lld, %s_bdata };",
                           m, init->as.bytes_lit.len, m);
+                emit_line(cg, "static sl_bytes *const %s = &%s_obj;", m, m);
             } else {
                 emit_line(cg, "static %s %s = %s;", map_type(t),
                           mangle_glob(p->name, s->as.let.name),
@@ -1058,10 +1068,11 @@ void emit_native_runtime(CG *cg) {
     int want_compress = want_pkg(cg, "compress");
     int want_math = want_pkg(cg, "math");
     int want_unicode = want_pkg(cg, "unicode");
+    int want_vec = want_pkg(cg, "math/vec");
     if (!want_time && !want_net && !want_proc && !want_fs && !want_log &&
         !want_crypto && !want_sql && !want_regex && !want_os &&
         !want_io && !want_strings && !want_encoding && !want_compress &&
-        !want_math && !want_unicode)
+        !want_math && !want_unicode && !want_vec)
         return;
     if (want_time)
         emit_runtime_file(cg, "sl_time.c");
@@ -1105,6 +1116,8 @@ void emit_native_runtime(CG *cg) {
         emit_runtime_file(cg, "sl_compress.c");
     if (want_math)
         emit_runtime_file(cg, "sl_math.c");
+    if (want_vec)
+        emit_runtime_file(cg, "sl_vec.c");
     /* The tables before the code that reads them: one translation unit,
        declare before use. */
     if (want_unicode) {
@@ -1983,6 +1996,7 @@ typedef struct {
     const char *names[64];
     const char *types[64];
     int n;
+    Block *globals; /* the package's top level, for its scalar constants */
 } LeafEnv;
 
 static const char *leaf_env_get(LeafEnv *env, const char *name) {
@@ -2003,6 +2017,58 @@ static int leaf_env_put(LeafEnv *env, const char *name, const char *type) {
 
 static int leaf_scalar(const char *t) {
     return t && (is_int(t) || is_flt(t) || !strcmp(t, "bool"));
+}
+
+/* 1 for an int literal, 2 for a float literal, either possibly negated;
+ * else 0. An untyped literal takes the type of the operand beside it. */
+static int leaf_num_literal(Expr *e) {
+    if (e && e->kind == EX_UNARY && !strcmp(e->as.unary.op, "-"))
+        e = e->as.unary.operand;
+    if (!e)
+        return 0;
+    if (e->kind == EX_INT && !e->as.int_lit.enum_ty)
+        return 1;
+    if (e->kind == EX_FLOAT)
+        return 2;
+    return 0;
+}
+
+static const char *leaf_glob_type(LeafEnv *env, const char *name);
+
+/* leaf_num_literal, or the same for a package-level constant of literal
+ * form: `(x as u64) + SEED` adds a u64 the way `(x as u64) + 1` does. */
+static int leaf_lit_kind(LeafEnv *env, Expr *e) {
+    int k = leaf_num_literal(e);
+    if (k || !e || e->kind != EX_IDENT || strchr(e->as.ident.name, '.') ||
+        leaf_env_get(env, e->as.ident.name))
+        return k;
+    const char *gt = leaf_glob_type(env, e->as.ident.name);
+    if (!gt)
+        return 0;
+    return !strcmp(gt, "int") ? 1 : !strcmp(gt, "float") ? 2 : 0;
+}
+
+/* The type of a package-level scalar constant (`let N = 64;`), as
+ * emit_globals will declare it, or NULL. Reading one is a load from a C
+ * static: nothing to allocate. Only the literal forms literal_type
+ * accepts without error are recognised; anything else is not a leaf. */
+static const char *leaf_glob_type(LeafEnv *env, const char *name) {
+    if (!env->globals)
+        return NULL;
+    for (int i = 0; i < env->globals->count; i++) {
+        Stmt *s = env->globals->stmts[i];
+        if (s->kind != ST_LET || strcmp(s->as.let.name, name))
+            continue;
+        switch (leaf_num_literal(s->as.let.init)) {
+        case 1:
+            return "int";
+        case 2:
+            return "float";
+        default:
+            return s->as.let.init->kind == EX_BOOL ? "bool" : NULL;
+        }
+    }
+    return NULL;
 }
 
 /* The value struct a type names, or NULL: as written ("pkg.Pt", or a
@@ -2027,12 +2093,33 @@ static StructDef *leaf_struct(CG *cg, const char *t) {
     return sd;
 }
 
+/* Like leaf_struct, but a gc struct too. Reading a field of a gc object
+ * is a load through a pointer the caller already holds, and storing a
+ * scalar into one needs no write barrier (only GC pointers do): with no
+ * collection possible inside a leaf, the object cannot move or die under
+ * it. Pointer-typed fields are still never stored (leaf_stmt). */
+static StructDef *leaf_struct_any(CG *cg, const char *t) {
+    StructDef *sd = leaf_struct(cg, t);
+    if (sd || !t)
+        return sd;
+    if (!strncmp(t, "&mut ", 5))
+        t += 5;
+    else if (t[0] == '&')
+        t += 1;
+    sd = struct_find_canon(cg, t);
+    if (!sd && !strchr(t, '.') && !strchr(t, '[') && cg->cur_pkg) {
+        char *q = xasprintf("%s.%s", cg->cur_pkg, t);
+        sd = struct_find_canon(cg, q);
+        free(q);
+    }
+    return sd;
+}
+
 /* The type of a folded field path ("p.x", "w.inner.n") rooted at a local
- * of value-struct type, or at a `&`/`&mut` borrow of one; NULL for
- * anything else (a package name, a gc struct, an unknown field). Reading
- * such a field, or storing a scalar into one, touches no GC pointer: a
- * scalar store needs no write barrier, whatever memory the borrow
- * points into. */
+ * of struct type (value or gc), or at a `&`/`&mut` borrow of one; NULL
+ * for anything else (a package name, an unknown field). Reading such a
+ * field, or storing a scalar into one, touches no GC pointer: a scalar
+ * store needs no write barrier, whatever memory it lands in. */
 static const char *leaf_path_type(CG *cg, LeafEnv *env, const char *full) {
     const char *dot = strchr(full, '.');
     if (!dot)
@@ -2048,7 +2135,7 @@ static const char *leaf_path_type(CG *cg, LeafEnv *env, const char *full) {
         return NULL;
     const char *rest = dot + 1;
     while (cur && *rest) {
-        StructDef *sd = leaf_struct(cg, cur);
+        StructDef *sd = leaf_struct_any(cg, cur);
         if (!sd)
             return NULL;
         const char *nd = strchr(rest, '.');
@@ -2084,6 +2171,11 @@ static const char *leaf_expr(CG *cg, LeafEnv *env, Expr *e) {
            ok()/err() below */
         if (!strcmp(e->as.ident.name, "none"))
             return "opt";
+        if (!strchr(e->as.ident.name, '.')) {
+            const char *gt = leaf_glob_type(env, e->as.ident.name);
+            if (gt)
+                return gt;
+        }
         /* A field path the parser folded into one dotted name ("p.x",
            "a.b.c"), from a local, a value struct or a borrow of one. */
         if (strchr(e->as.ident.name, '.')) {
@@ -2112,6 +2204,20 @@ static const char *leaf_expr(CG *cg, LeafEnv *env, Expr *e) {
         const char *b = leaf_expr(cg, env, e->as.binary.rhs);
         if (!a || !b)
             return NULL;
+        /* `x * 5` with x a u64: the literal is a u64 too. Either side,
+           in arithmetic and comparisons alike. */
+        if (strcmp(a, b)) {
+            int la = leaf_lit_kind(env, e->as.binary.lhs);
+            int lb = leaf_lit_kind(env, e->as.binary.rhs);
+            if (lb == 1 && is_int(a))
+                b = a;
+            else if (la == 1 && is_int(b))
+                a = b;
+            else if (lb == 2 && is_flt(a))
+                b = a;
+            else if (la == 2 && is_flt(b))
+                a = b;
+        }
         if (!strcmp(op, "&&") || !strcmp(op, "||"))
             return (!strcmp(a, "bool") && !strcmp(b, "bool")) ? "bool" : NULL;
         if (!strcmp(op, "==") || !strcmp(op, "!=") || !strcmp(op, "<") ||
@@ -2121,9 +2227,14 @@ static const char *leaf_expr(CG *cg, LeafEnv *env, Expr *e) {
                 return "bool";
             return NULL;
         }
+        if (!strcmp(op, "??"))
+            return NULL;
+        /* a shift keeps its left operand's type, whatever int counts */
+        if ((!strcmp(op, "<<") || !strcmp(op, ">>")) && is_int(a) && is_int(b))
+            return a;
         /* arithmetic and bit operators: same scalar type only (a str `+`
            allocates; mixed widths are left to the general path) */
-        if (!strcmp(a, b) && (is_int(a) || is_flt(a)) && strcmp(op, "??"))
+        if (!strcmp(a, b) && (is_int(a) || is_flt(a)))
             return a;
         return NULL;
     }
@@ -2153,13 +2264,68 @@ static const char *leaf_expr(CG *cg, LeafEnv *env, Expr *e) {
         const char *bt = leaf_expr(cg, env, e->as.field.base);
         if (!bt)
             return NULL;
-        StructDef *sd = leaf_struct(cg, bt);
+        StructDef *sd = leaf_struct_any(cg, bt);
         if (!sd)
             return NULL;
         for (int i = 0; i < sd->nfields; i++)
             if (!strcmp(sd->fields[i], e->as.field.name))
                 return sd->ftypes[i];
         return NULL;
+    }
+    case EX_INDEX: {
+        /* A list of scalars or bytes, by an int: bounds-checked, and the
+           failed check never returns (sl_rt_error_at), so the path that
+           continues allocates nothing -- the rule stmt.c's leaf loops use.
+           A map index (its miss path), a str or a list of pointers is
+           left to the general path. */
+        const char *bt = leaf_expr(cg, env, e->as.index.base);
+        const char *it = leaf_expr(cg, env, e->as.index.index);
+        if (!bt || !it || !is_int(it))
+            return NULL;
+        if (is_bytes(bt))
+            return "int";
+        if (is_arr(bt)) {
+            char *el = arr_elem(bt);
+            if (leaf_scalar(el))
+                return el;
+            free(el);
+        }
+        return NULL;
+    }
+    case EX_CAST: {
+        /* between scalars, `as` is a C cast */
+        const char *t = leaf_expr(cg, env, e->as.cast.operand);
+        const char *to = e->as.cast.ty;
+        if (!leaf_scalar(t) || !leaf_scalar(to))
+            return NULL;
+        return to;
+    }
+    case EX_SWITCH: {
+        /* A switch over a scalar or str with constant labels is an
+           if-chain of comparisons (strcmp for a str): it allocates
+           nothing unless an arm does. A table of constants written as
+           one compiles to a static lookup table. */
+        const char *st = leaf_expr(cg, env, e->as.switch_expr.scrut);
+        if (!st || !(leaf_scalar(st) || is_str(st)))
+            return NULL;
+        const char *t0 = NULL;
+        for (int i = 0; i < e->as.switch_expr.ncases; i++) {
+            SwitchExprCase *c = &e->as.switch_expr.cases[i];
+            for (int k = 0; k < c->nvals; k++)
+                if (!leaf_expr(cg, env, c->vals[k]))
+                    return NULL;
+            const char *vt = leaf_expr(cg, env, c->value);
+            if (!vt || (t0 && strcmp(t0, vt)))
+                return NULL;
+            t0 = vt;
+        }
+        if (e->as.switch_expr.def) {
+            const char *vt = leaf_expr(cg, env, e->as.switch_expr.def);
+            if (!vt || (t0 && strcmp(t0, vt)))
+                return NULL;
+            t0 = vt;
+        }
+        return leaf_scalar(t0) ? t0 : NULL;
     }
     case EX_CALL: {
         const char *name = e->as.call.name;
@@ -2203,6 +2369,23 @@ static const char *leaf_expr(CG *cg, LeafEnv *env, Expr *e) {
                         return sigs[i]->ret;
             }
         }
+        /* A function already found to be a leaf in an earlier round of
+           compute_leaf_fns: calling it collects nothing either. A local
+           of function type by that name is a function value, not it. */
+        if (!e->as.call.callee && split_dotted(name, &left, &right) &&
+            !import_try(cg, left)) {
+            /* recv.m(..) on a local or parameter: its type's method */
+            FuncSig *fs = method_of_call_type(cg, leaf_env_get(env, left), right);
+            if (fs && fs->leaf)
+                return fs->ret_slang ? fs->ret_slang : "void";
+            return NULL;
+        }
+        if (!e->as.call.callee && !(strchr(name, '.') == NULL &&
+                                    leaf_env_get(env, name))) {
+            FuncSig *fs = user_fn_of_call(cg, e);
+            if (fs && fs->leaf)
+                return fs->ret_slang ? fs->ret_slang : "void";
+        }
         return NULL;
     }
     default:
@@ -2220,6 +2403,10 @@ static int leaf_stmt(CG *cg, LeafEnv *env, Stmt *s) {
             return 0;
         if (s->as.let.type_ann) {
             const char *ann = canon_type(cg, s->as.let.type_ann, s->line);
+            /* `let w: u64 = 0;`: the literal takes the annotation */
+            int lit = leaf_num_literal(s->as.let.init);
+            if ((lit == 1 && is_int(ann)) || (lit == 2 && is_flt(ann)))
+                t = ann;
             if (strcmp(ann, t))
                 return 0;
         }
@@ -2227,6 +2414,16 @@ static int leaf_stmt(CG *cg, LeafEnv *env, Stmt *s) {
     }
     case ST_ASSIGN: {
         Expr *tg = s->as.assign.target;
+        if (tg->kind == EX_INDEX) {
+            /* a scalar into a list of scalars or bytes: no barrier */
+            const char *et = leaf_expr(cg, env, tg);
+            const char *vt = leaf_expr(cg, env, s->as.assign.value);
+            if (!et || !vt || !leaf_scalar(et))
+                return 0;
+            int lit = leaf_lit_kind(env, s->as.assign.value);
+            return !strcmp(et, vt) || (lit == 1 && is_int(et)) ||
+                   (lit == 2 && is_flt(et));
+        }
         if (tg->kind != EX_IDENT)
             return 0;
         if (strchr(tg->as.ident.name, '.')) {
@@ -2237,7 +2434,11 @@ static int leaf_stmt(CG *cg, LeafEnv *env, Stmt *s) {
         }
         const char *tt = leaf_env_get(env, tg->as.ident.name);
         const char *vt = leaf_expr(cg, env, s->as.assign.value);
-        return tt && vt && !strcmp(tt, vt);
+        if (!tt || !vt)
+            return 0;
+        int lit = leaf_lit_kind(env, s->as.assign.value);
+        return !strcmp(tt, vt) || (lit == 1 && is_int(tt)) ||
+               (lit == 2 && is_flt(tt));
     }
     case ST_RETURN:
         return !s->as.ret.value || leaf_expr(cg, env, s->as.ret.value) != NULL;
@@ -2273,28 +2474,80 @@ static int leaf_block(CG *cg, LeafEnv *env, Block *b) {
     return 1;
 }
 
-void compute_leaf_fns(CG *cg, Package *pkgs, int npkgs) {
+/* One round: the functions that are leaves given the leaves already
+ * known, written to `found` (not yet marked, so no function in this
+ * round counts on another found in the same round). */
+/* Whether f, a plain function or a method of a non-generic struct, is a
+ * leaf given the leaves already known. */
+static int leaf_candidate(CG *cg, FuncDecl *f, Block *globals) {
+    if (f->ntparams || f->is_extern || !f->body || !f->sig_idx)
+        return 0;
+    FuncSig *sig = cg->sigs.items[f->sig_idx - 1];
+    if (sig->leaf)
+        return 0;
+    if (sig->method_of) {
+        StructDef *msd = struct_find_canon(cg, sig->method_of);
+        if (!msd || msd->inst)
+            return 0;
+    }
+    LeafEnv env;
+    env.n = 0;
+    env.globals = globals;
+    int ok = 1;
+    for (int k = 0; k < sig->nparams && ok; k++)
+        ok = leaf_env_put(&env, f->params[k], sig->param_slang[k]);
+    return ok && leaf_block(cg, &env, f->body);
+}
+
+/* One round: the functions and methods that are leaves given the leaves
+ * already known, written to `found` (not yet marked, so none in this
+ * round counts on another found in the same round). */
+static int leaf_round(CG *cg, Package *pkgs, int npkgs, FuncSig **found) {
+    int nfound = 0;
     const char *saved = cg->cur_pkg;
     for (int i = 0; i < npkgs; i++) {
         if (pkgs[i].native)
             continue;
         cg->cur_pkg = pkgs[i].name;
         Program *prog = pkgs[i].prog;
-        for (int j = 0; j < prog->nfuncs; j++) {
-            FuncDecl *f = prog->funcs[j];
-            if (f->ntparams || f->is_extern || !f->body || !f->sig_idx)
+        Block *top = prog->main_body;
+        for (int j = 0; j < prog->nfuncs; j++)
+            if (leaf_candidate(cg, prog->funcs[j], top))
+                found[nfound++] = cg->sigs.items[prog->funcs[j]->sig_idx - 1];
+        /* methods: impl blocks of non-generic structs (a generic one's
+           impl is registered with its template and has no sig here) */
+        for (int j = 0; j < top->count; j++) {
+            Stmt *st = top->stmts[j];
+            if (st->kind != ST_IMPL)
                 continue;
-            FuncSig *sig = cg->sigs.items[f->sig_idx - 1];
-            if (sig->method_of)
-                continue;
-            LeafEnv env;
-            env.n = 0;
-            int ok = 1;
-            for (int k = 0; k < sig->nparams && ok; k++)
-                ok = leaf_env_put(&env, f->params[k], sig->param_slang[k]);
-            if (ok && leaf_block(cg, &env, f->body))
-                sig->leaf = 1;
+            for (int q = 0; q < st->as.impl.nfuncs; q++) {
+                FuncDecl *f = st->as.impl.funcs[q];
+                if (leaf_candidate(cg, f, top))
+                    found[nfound++] = cg->sigs.items[f->sig_idx - 1];
+            }
         }
     }
     cg->cur_pkg = saved;
+    return nfound;
+}
+
+/* A leaf may call a leaf found in an earlier round, so a chain of calls
+ * between leaves is at most LEAF_ROUNDS deep. Each leaf frame is small
+ * (no loop, scalars and pointers only), so the whole chain stays inside
+ * the stack margin a safepoint guarantees, as one leaf did before.
+ * Recursion never qualifies: a function is not a leaf while its own
+ * round is being decided. */
+#define LEAF_ROUNDS 4
+
+void compute_leaf_fns(CG *cg, Package *pkgs, int npkgs) {
+    FuncSig **found = (FuncSig **)xmalloc(sizeof(FuncSig *) *
+                                          (size_t)(cg->sigs.count + 1));
+    for (int round = 0; round < LEAF_ROUNDS; round++) {
+        int n = leaf_round(cg, pkgs, npkgs, found);
+        for (int i = 0; i < n; i++)
+            found[i]->leaf = 1;
+        if (!n)
+            break;
+    }
+    free(found);
 }

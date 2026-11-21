@@ -351,6 +351,13 @@ static int test_utf8(void) {
     if (!sl_unicode_equal_fold("\xCE\xB1\xCD\x85\xCC\x81",
                                "\xCE\xB1\xCC\x81\xCD\x85"))
         fail("equal_fold of canonically equivalent strings", 0);
+    /* runes returns a list of numbers, marked pointer-free so the
+       collector never reads a code point as a pointer */
+    sl_arr *rs = sl_unicode_runes("caf\xC3\xA9");
+    if (rs->len != 4 || ((long long *)(void *)rs->data)[3] != 0xE9)
+        fail("runes", 0);
+    if (rs->elem_is_ptr != SL_ELEM_NOPTR)
+        fail("runes list is not pointer-free", 0);
     return 0;
 }
 

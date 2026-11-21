@@ -42,6 +42,84 @@ static int hexval(char c) {
     return -1;
 }
 
+/* The escapes that produce more than one fixed byte, shared by str and
+ * bytes literals: \xHH is one raw byte; \uXXXX (exactly four digits, as
+ * JSON and JavaScript write it) and \u{H..H} (one to six) are a code
+ * point, written as UTF-8. src[*i] is the letter after the backslash; on
+ * return *i is on the escape's last character. Writes at most 4 bytes to
+ * out and returns how many, or reports `what`'s error. */
+static int decode_wide_escape(const char *src, size_t *i, size_t end,
+                              unsigned char *out, int line, const char *what) {
+    size_t k = *i;
+    if (src[k] == 'x') {
+        int hi = k + 1 < end ? hexval(src[k + 1]) : -1;
+        int lo = k + 2 < end ? hexval(src[k + 2]) : -1;
+        if (hi < 0 || lo < 0)
+            lex_error(line, xasprintf("invalid \\xHH escape in %s: "
+                                      "two hex digits are required", what));
+        *i = k + 2;
+        out[0] = (unsigned char)(hi * 16 + lo);
+        return 1;
+    }
+    /* 'u' */
+    unsigned long cp = 0;
+    if (k + 1 < end && src[k + 1] == '{') {
+        size_t j = k + 2;
+        int n = 0;
+        while (j < end && src[j] != '}') {
+            int h = hexval(src[j]);
+            if (h < 0 || n == 6)
+                break;
+            cp = cp * 16 + (unsigned long)h;
+            n++;
+            j++;
+        }
+        if (n == 0 || j >= end || src[j] != '}')
+            lex_error(line, xasprintf("invalid \\u{...} escape in %s: one "
+                                      "to six hex digits, then '}'", what));
+        *i = j;
+    } else {
+        for (int d = 1; d <= 4; d++) {
+            int h = k + (size_t)d < end ? hexval(src[k + (size_t)d]) : -1;
+            if (h < 0)
+                lex_error(line, xasprintf("invalid \\uXXXX escape in %s: "
+                                          "four hex digits are required "
+                                          "(or \\u{...} for one to six)",
+                                          what));
+            cp = cp * 16 + (unsigned long)h;
+        }
+        *i = k + 4;
+    }
+    if (cp >= 0xD800 && cp <= 0xDFFF)
+        lex_error(line, xasprintf("\\u escape in %s names a UTF-16 "
+                                  "surrogate, which is not a character; "
+                                  "write the code point itself, as "
+                                  "\\u{1F600}", what));
+    if (cp > 0x10FFFF)
+        lex_error(line, xasprintf("\\u escape in %s is past U+10FFFF, the "
+                                  "last Unicode code point", what));
+    if (cp < 0x80) {
+        out[0] = (unsigned char)cp;
+        return 1;
+    }
+    if (cp < 0x800) {
+        out[0] = (unsigned char)(0xC0 | (cp >> 6));
+        out[1] = (unsigned char)(0x80 | (cp & 0x3F));
+        return 2;
+    }
+    if (cp < 0x10000) {
+        out[0] = (unsigned char)(0xE0 | (cp >> 12));
+        out[1] = (unsigned char)(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = (unsigned char)(0x80 | (cp & 0x3F));
+        return 3;
+    }
+    out[0] = (unsigned char)(0xF0 | (cp >> 18));
+    out[1] = (unsigned char)(0x80 | ((cp >> 12) & 0x3F));
+    out[2] = (unsigned char)(0x80 | ((cp >> 6) & 0x3F));
+    out[3] = (unsigned char)(0x80 | (cp & 0x3F));
+    return 4;
+}
+
 /* Zero the whole Token, then set what this call cares about.
  *
  * Field-by-field initialisation is how a field gets forgotten: this
@@ -118,8 +196,21 @@ static char *decode_string(const char *src, size_t start, size_t end, int line) 
             case '0': out[o++] = 0; break;
             case '"': out[o++] = '"'; break;
             case 92:  out[o++] = 92; break;
+            case 'x':
+            case 'u': {
+                /* At most 4 bytes from at least 4 source characters, so the
+                   buffer sized from the source still fits. */
+                unsigned char w[4];
+                int n = decode_wide_escape(src, &i, end, w, line,
+                                           "string literal");
+                for (int b = 0; b < n; b++)
+                    out[o++] = (char)w[b];
+                break;
+            }
             default:
-                lex_error(line, "unknown escape sequence in string literal");
+                lex_error(line, "unknown escape sequence in string literal "
+                                "(known: \\n \\t \\r \\0 \\\" \\\\ \\xHH "
+                                "\\uXXXX \\u{H..H} \\{expr})");
             }
             i++;
         } else {
@@ -309,16 +400,18 @@ Token lexer_next(Lexer *lx) {
                 case '0': buf_push(&buf, &cap, &len, 0); break;
                 case '"': buf_push(&buf, &cap, &len, '"'); break;
                 case 92:  buf_push(&buf, &cap, &len, 92); break;
-                case 'x': {
-                    int hi = hexval(src[lx->pos + 1]);
-                    int lo = hexval(src[lx->pos + 2]);
-                    if (hi < 0 || lo < 0)
-                        lex_error(line,
-                                  "invalid \\xHH escape in byte string "
-                                  "literal");
-                    buf_push(&buf, &cap, &len,
-                             (unsigned char)(hi * 16 + lo));
-                    lx->pos += 2;
+                case 'x':
+                case 'u': {
+                    unsigned char w[4];
+                    size_t at = lx->pos;
+                    /* the literal ends at its quote or a newline at the
+                       latest; decode_wide_escape stops at either, since
+                       neither is a hex digit or '}' */
+                    int n = decode_wide_escape(src, &at, (size_t)-1, w, line,
+                                               "byte string literal");
+                    for (int b = 0; b < n; b++)
+                        buf_push(&buf, &cap, &len, w[b]);
+                    lx->pos = at;
                     break;
                 }
                 default:

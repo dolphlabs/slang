@@ -369,9 +369,19 @@ static int expr_is_numeric(CG *cg, Expr *e) {
                 return 1;
         return 0;
     }
-    case EX_CALL:
-        return e->as.call.name && !strcmp(e->as.call.name, "len") &&
-               e->as.call.nargs == 1 && !e->as.call.callee;
+    case EX_CALL: {
+        if (e->as.call.name && !strcmp(e->as.call.name, "len") &&
+            e->as.call.nargs == 1 && !e->as.call.callee)
+            return 1;
+        /* A leaf slang function declared to return a number: `s += f(x)`
+         * sums numbers, it does not concatenate. The declared type is
+         * read from the signature, not inferred (scope reason above). */
+        if (user_leaf_call(cg, e)) {
+            FuncSig *fs = user_fn_of_call(cg, e);
+            return fs && fs->ret_slang && is_num(fs->ret_slang);
+        }
+        return 0;
+    }
     default:
         return 0;
     }
@@ -892,6 +902,66 @@ void gen_stmt(CG *cg, Stmt *s) {
                          "field '%s': cannot assign a value of type %s "
                          "where %s expected",
                          sd->fields[fi], vt, sd->ftypes[fi]);
+            /* xs[i].f = v, and xs[i].a.f = v through value-struct
+             * fields, on a list of value structs: the element is a copy
+             * read out of the list's buffer, not something C can assign
+             * to, so store through its address instead. Base, index and
+             * value are sequenced first, in that order; the address is
+             * taken only then, since the value may grow the list and move
+             * its buffer. The store is into the list's buffer, so it takes
+             * the list's barrier. */
+            if (!strcmp(struct_access(cg, bt), ".")) {
+                Expr *cur = tgt->as.field.base;
+                char *mid = xstrdup("");
+                while (cur->kind == EX_FIELD &&
+                       !strcmp(struct_access(cg, infer_type(cg, cur->as.field.base)), ".")) {
+                    mid = xasprintf(".%s%s", sanitize_ident(cur->as.field.name), mid);
+                    cur = cur->as.field.base;
+                }
+                const char *lt = cur->kind == EX_INDEX
+                                     ? infer_type(cg, cur->as.index.base)
+                                     : NULL;
+                if (lt && is_map(lt))
+                    cg_error(s->line,
+                             "cannot assign to a field of a map value "
+                             "(it is a copy); read it into a local, change "
+                             "the field, and store it back with m[k] = v");
+                if (lt && is_arr(lt)) {
+                    char *elem = arr_elem(lt);
+                    const char *ec = ctype_of(cg, elem);
+                    const char *ft = sd->ftypes[fi];
+                    StrBuf prelude;
+                    sb_init(&prelude);
+                    int lid = cg->tmp_id++;
+                    int ambient_mark = cg->ambient_count;
+                    char *lb = gen_expr(cg, cur->as.index.base);
+                    lb = sequence_one(cg, lid, 0, ctype_of(cg, lt), lt, lb,
+                                      cur->as.index.base, &prelude);
+                    char *li = gen_expr(cg, cur->as.index.index);
+                    li = sequence_one(cg, lid, 1, map_type("int"), "int", li,
+                                      cur->as.index.index, &prelude);
+                    const char *se7 = expect_push(cg, ft);
+                    char *val = maybe_cast(cg, ft, vt,
+                                           gen_expr(cg, s->as.assign.value));
+                    cg->expect = se7;
+                    val = sequence_one(cg, lid, 2, ctype_of(cg, ft), ft, val,
+                                       s->as.assign.value, &prelude);
+                    cg->ambient_count = ambient_mark;
+                    move_consume(cg, s->as.assign.value);
+                    char *at = panic_at(cg, s->line);
+                    emit_line(cg,
+                              "%s((%s *)(void *)sl_arr_get(%s, %s, sizeof(%s), "
+                              "%s))->%s%s%s = %s;",
+                              prelude.data, ec, lb, li, ec, at,
+                              mid[0] ? mid + 1 : sanitize_ident(sd->fields[fi]),
+                              mid[0] ? "." : "",
+                              mid[0] ? sanitize_ident(sd->fields[fi]) : "",
+                              val);
+                    if (type_has_gc_roots(cg, ft))
+                        emit_line(cg, "{ sl_rt_preempt_disable(); sl_arr_remember_at(%s, %s); sl_rt_preempt_enable(); }", lb, li);
+                    break;
+                }
+            }
             char *b = gen_expr(cg, tgt->as.field.base);
             const char *se6 = expect_push(cg, sd->ftypes[fi]);
             char *val = maybe_cast(cg, sd->ftypes[fi], vt,

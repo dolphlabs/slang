@@ -603,6 +603,9 @@ typedef enum {
     NA_NUM_INT,   /* math: T, which must be an integer type */
     NA_NUM_FLT,   /* math: T, a float type (an integer argument makes T
                      `float`) */
+    NA_VEC,       /* math/vec: a [float] or an [f32], marshaled as sl_arr *.
+                     Every NA_VEC argument of one call shares the element
+                     type, which picks the kernel (_f64 or _f32). */
     NA_UNTIL,     /* an `until` deadline: marshaled as sl_until (int64_t).
                      Deliberately NOT int-compatible -- a deadline is an
                      absolute monotonic instant, and silently accepting a
@@ -667,6 +670,9 @@ extern const int COMPRESS_SIGS_LEN;
 
 extern const NatSig MATH_SIGS[]; /* src/codegen/pkg_math/ */
 extern const int MATH_SIGS_LEN;
+
+extern const NatSig VEC_SIGS[]; /* src/codegen/pkg_vec/ */
+extern const int VEC_SIGS_LEN;
 
 extern const NatSig UNICODE_SIGS[]; /* src/codegen/pkg_unicode/ */
 extern const int UNICODE_SIGS_LEN;
@@ -842,6 +848,12 @@ FuncSig *method_instantiate(CG *cg, StructDef *sd, const char *name, int line);
 void func_tmpl_register(CG *cg, Package *pkg, FuncDecl *f);
 FuncTmpl *func_tmpl_find_in_pkg(CG *cg, const char *pkg, const char *name);
 FuncSig *generic_call_sig(CG *cg, const char *pkg, const char *name, Expr *e);
+FuncSig *generic_value_sig(CG *cg, const char *pkg, const char *name,
+                           const char *want, int line);
+FuncSig *generic_fn_value(CG *cg, Expr *e);
+FuncSig *generic_fn_value_for(CG *cg, Expr *e, const char *want);
+int generic_fn_ref(CG *cg, Expr *e, const char **pkg_out,
+                   const char **name_out);
 StructTmpl *tmpl_find_in_pkg(CG *cg, const char *pkg, const char *name);
 const char *generic_canon(CG *cg, const char *t, int line);
 void generic_needs_args(CG *cg, const char *pkg, const char *name, int line);
@@ -933,6 +945,10 @@ int block_leaves_scope(CG *cg, Block *b);
 void compute_noreturn(CG *cg, Package *pkgs, int npkgs);
 void compute_leaf_fns(CG *cg, Package *pkgs, int npkgs);
 int user_leaf_call(CG *cg, Expr *e);
+/* The declared plain function a call names, or NULL (a method, an extern,
+ * a native, a function value). */
+FuncSig *user_fn_of_call(CG *cg, Expr *e);
+FuncSig *method_of_call_type(CG *cg, const char *recv_t, const char *mname);
 void gen_block(CG *cg, Block *b);
 void emit_runtime_file(CG *cg, const char *name);
 void emit_guardable_open(CG *cg, const char *ret, const char *name,

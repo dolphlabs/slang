@@ -1,17 +1,35 @@
 # todo
 
-- [ ] **GCC on linux-arm64 compiles a program using both
-  `crypto.bcrypt_verify` and `crypto.scrypt` about 200 s slower (found
-  2026-11-20, zokor #128; not fixed).** zokor's full test runner (24 MB of
-  C) took about 230 s to build and run on CI's linux-arm64 before #570 and
-  about 440 s with zokor #128, which calls both. Its 10-minute Tests step
-  then times out. The generated C grows by 26 KB (0.1%). linux-x86_64
-  (GCC), macOS (clang) and slang's own CI are unchanged. Bisected on CI:
-  bcrypt alone or scrypt alone is about 400 s, as before; both together
-  612 s and over. Marking eksblowfish, `sl_scrypt_raw`, `sl_kdf_run` and
-  `sl_kdf_derive` noinline changed nothing (branch exp/bcrypt-noinline),
-  so it is not inlining across the kdf dispatch. Next: reproduce in an
-  arm64 container (AGENTS.md section 7) with `-ftime-report`.
+- [x] **`unicode.runes` built its `[int]` as a list of pointers (found
+  2026-11-21 while writing math/vec, fixed in fix/unicode-runes-noptr).**
+  It passed the code-point count where `sl_arr_new` takes the element
+  kind, so every list but a one-rune one (count + 1 == SL_ELEM_NOPTR) was
+  traced word by word as candidate pointers. Not a memory-safety bug: the
+  collector does not move objects and `mark` validates each word. But a
+  program holding a 2M-rune list paid 0.75 s of major-collection marking
+  (25-33 ms pauses) where it now pays 2.4 ms (under 0.2 ms each), and a
+  code point that happened to equal a heap address kept that object
+  alive. tests/runtime/test_unicode checks the flag.
+
+- [x] **zokor's tests time out on linux-arm64 CI (found 2026-11-20 with
+  zokor #128; cause found and fixed the same day, fix/test-frame-cache).**
+  Not bcrypt or scrypt, as first written here. slangc compiles a program
+  twice when a slang function's frame is over its limit (once to find it,
+  once with a guard), and keeps the guards for the next build in
+  ~/.cache/slang/frames, keyed by the program's path. `slangc test` writes
+  its runner to a new temporary directory every run, so that key never
+  matched: every run with a large frame compiled twice. zokor's full
+  runner takes over 400 s per compile on linux-arm64. In zokor #128,
+  `check_password` reached 1568 bytes on arm64 GCC with both KDFs called,
+  over the 1536 limit (x86_64 already had large frames and slack in its
+  timeout); #127's `id_token` (1760) does the same on its own. Measured in
+  an amd64 container with GCC 13.3 for aarch64 (the CI runner's version):
+  the runners before and after #128 compile in the same time (840 s and
+  834 s, under load), and each compiles twice. A test runner is now keyed
+  by the tested package and its --run filter, so a second `slangc test`
+  compiles once (frame guard cache section of tests/run_tests.sh). zokor's
+  CI keeps the cache between runs. Also seen: arm64 GCC's first scheduling
+  pass is 22% of that compile; x86_64 GCC does not run it.
 
 - [x] **zip and tar (2026-11-20, feat/zip-tar).** `stdlib/zip` (stored and
   deflate, ZIP64 reading, UTF-8 names, overlap and CRC checks, entry and
@@ -309,10 +327,20 @@
     remains what ended it; the old http2 client is gone, so this was not
     chased further.
   **Left:** a task that has seen EAGAIN but not parked when the close lands
-  waits on a number that is free or reused. Closing an fd another task is
-  using stays a race; ending it takes a reference count per fd, as Go's
-  fdMutex, or a handle that is not the number (`sl_link` is one). `sl_link`
-  and TLS closes do not wake waiters: a link is not shared between tasks.
+  waits on a number that is free or reused. *Fixed 2026-11-20
+  (fix/net-close-race):* each fd number's read slot counts its closes and
+  carries a closing flag from the waiters' take until close(2) returns;
+  accept, recv and send read it once before their first syscall and their
+  park compares it under the list lock, so such a task now gets "closed".
+  tests/net_close_race (12000 rounds over a Unix socket: 72 and 96 missed
+  closes on dev under load, and one run hung in `close(2)`, the main task's,
+  with every worker idle; 0 missed in 26 runs with the fix on macOS and 3 on
+  linux, no hang). An op whose syscall itself runs after the close still
+  hits a free number (EBADF) or a reused one: only a per-fd reference
+  count, as Go's fdMutex, or a handle that is not the number (`sl_link`)
+  ends that. `sl_link` and TLS closes do not wake waiters: a link is not
+  shared between tasks. The hang inside `close(2)` was seen only on dev,
+  in runs that also missed closes; its cause is not proven.
 
 
 - [x] **tests/h2_client hung about once in sixty runs on linux
@@ -1088,9 +1116,14 @@ Found building zokor's logger (2026-10-12), not fixed:
 - [x] **`??` printed as `'^` in diagnostics** (fix/qq-token-name). The
   token name held the C trigraph for `^`; it is escaped now.
   tests/fail_qq_token_name.
-- [ ] **str literals take no `\x` or `\u` escape** ("unknown escape
-  sequence"); a terminal colour needs `to_str(b"\x1b[32m")`. JSON-style
-  `\u001b` and `\x1b` are what a model writes first.
+- [x] **str literals take no `\x` or `\u` escape** (2026-11-20,
+  feat/str-escapes). str and bytes literals now take `\xHH` (one raw byte),
+  `\uXXXX` (JSON's four digits) and `\u{H..H}` (one to six), the last two
+  written as UTF-8; surrogate halves and anything past U+10FFFF are compile
+  errors that name `\u{...}`. The C literal writer now emits control bytes
+  and invalid UTF-8 as three-digit octal: its `\xHH` swallowed a hex digit
+  that followed (a raw ESC then `1` compiled to one wrong byte). Tests:
+  tests/str_escapes, tests/fail_escape_*.
 - [ ] **A str cannot be read byte by byte without a copy**: `s[i]` is "cannot
   index a value of type str", so a scan of a str allocates `to_bytes(s)`.
   A read-only `byte_at(s, i)` (or indexing) would make escape checks free.
@@ -1106,10 +1139,16 @@ Found building zokor's logger (2026-10-12), not fixed:
   tests/http_method_token): `parse_head` takes everything
   before the first space, with no RFC 9110 token check, so a method can
   carry `"`, `\` or an ESC byte into a handler or a log line.
-- [ ] **Generic functions cannot be named as values even when every type
-  parameter is known** (`r.get(path, live)` inside a generic method over
-  `S`), and there is no explicit instantiation syntax (`f[int]()` is a
-  parse error), so a library cannot register its own generic handler.
+- [x] **Generic functions cannot be named as values even when every type
+  parameter is known** (2026-11-20, feat/generic-fn-values). Where a
+  concrete fn type is expected (a typed parameter, an annotated `let`, a
+  `return`, a struct field), a generic function's type parameters are now
+  unified with that type's, and the value is that instance; handed to a
+  generic call, it waits for the other arguments to fix the parameter's
+  type (`twice("x", ident)`). `expect_push` now carries fn types for this.
+  Still no explicit instantiation syntax (`f[int]` would collide with
+  indexing), so a generic function cannot supply a type parameter itself.
+  tests/generic_fn_values, tests/fail_generic_fn_value_*.
 - [ ] **The move check is not path-sensitive**: in
   `if !ok { refuse(c); return ""; } spawn serve(c);` the second use of `c`
   is "use of moved value", though the branch that moved it returns. The
@@ -3781,16 +3820,16 @@ prerequisite, not a different plan).
       `tests/http_read_wire`, written for the allocation work
       (next-steps.md #5).
 
-- [ ] **A package-level `bytes` global cannot be used.** Found
-      2026-09-29, not fixed. `pub let G = b"ab";` in a package, then any
-      use of `G` (`G[0] = 65`, `to_str(G)`) from inside or outside it, is
-      a C compilation failure: the global is emitted as a static
-      `sl_bytes` value but used where an `sl_bytes *` is expected
-      (`src/codegen/program.c`, the `is_bytes` global case). Its data is
-      also a `static const` array cast to non-const, so once it compiles,
-      `G[0] = 65` would write to read-only memory -- the fix has to decide
-      whether such a global is mutable (copy the data out) or not (reject
-      the write).
+- [x] **A package-level `bytes` global cannot be used** (found 2026-09-29,
+      fixed 2026-11-20 in fix/bytes-global). `pub let G = b"ab";` and any
+      use of `G` was a C compilation failure: the global was a static
+      `sl_bytes` value where every use takes `sl_bytes *`, over a
+      `static const` array cast to non-const. It is now a constant pointer
+      to a static header over writable data, like `sl_bytes_empty`: not a
+      GC object, one value shared by every use, so `G[0] = 65` changes it
+      for every reader. The name itself cannot be reassigned, as for every
+      package global. tests/bytes_global (also clean under the minor
+      verifier).
 
 - [x] **`http.read`'s allocations are pinned.** 2026-09-29. The socket
       parser allocates per request only what the returned `Request` holds
@@ -3846,12 +3885,19 @@ prerequisite, not a different plan).
       `tests/map_delete`. Found while testing the GC's container frontier
       (next-steps.md #7b).
 
-- [ ] **`xs[i].field = v` on a list of value structs does not compile.**
-      Found 2026-09-30, not fixed. The generated C assigns to a member of a
-      statement expression ("expression is not assignable") instead of
-      either writing through the element or reporting a slang error. When
-      it is fixed, the store needs the list's barrier with the index
-      (`sl_arr_remember_at`), since it writes into the list's buffer.
+- [x] **`xs[i].field = v` on a list of value structs does not compile**
+      (found 2026-09-30, fixed 2026-11-20 in fix/list-elem-field-store).
+      The C assigned to a member of a statement expression. It now stores
+      through the element's address, also through value-struct fields
+      (`xs[i].a.f = v`); base, index and value are sequenced first and the
+      address is taken last, since the value may grow the list. A GC field
+      takes `sl_arr_remember_at`. tests/list_elem_field_store (clean under
+      the minor verifier), tests/fail_list_elem_field_oob.
+- [ ] **`m[k].f = v` on a map of value structs** is refused with a slang
+      error naming the workaround (read, change, `m[k] = v`) since
+      2026-11-20; it was a C compile error before. Storing in place needs
+      the map's barrier rules for a write into its value slot.
+      tests/fail_map_value_field_store.
 
 - [x] **Five stores left young objects held only by old ones, with no
       write barrier.** Fixed 2026-09-30, found by the minor-collection

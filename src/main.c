@@ -53,6 +53,11 @@ static void print_usage(void) {
 }
 
 static void write_file(const char *path, const char *data, size_t len);
+/* Set by `slangc test` (test_cmd): the frame cache key for its runner, in
+ * place of the runner's path, which is a new temporary directory every
+ * time. See frame_cache_path. */
+static char *frame_cache_test_key = NULL;
+
 static int build(const char *input, const char *outname, int emit_c,
                  int keep_c, int run, int want_liveness_dump,
                  int want_mir_dump);
@@ -594,6 +599,7 @@ static int cmd_test(int argc, char **argv) {
     write_file(runner_src, r.data, r.len);
 
     loader_set_test_target(treal);
+    frame_cache_test_key = xasprintf("%s\n%s", treal, filter ? filter : "");
     setenv("SLANG_TEST_RUNNER", "1", 1);
     int rc = build(runner_src, runner_bin, 0, keep, 1, 0, 0);
 
@@ -937,8 +943,18 @@ static char *frame_cache_path(const char *input) {
     if (!dir)
         return NULL;
     /* A dev build's frames are -O0's: a separate set of guards. */
-    char *key = xasprintf("%s\n%d\n%s", real, frame_limit(),
-                          dev_build ? "dev" : "release");
+    /* A test runner is written to a new temporary directory every run,
+     * so its own path never matched twice and every `slangc test` of a
+     * program with a large frame compiled it twice -- zokor's full runner,
+     * twice over 400 s each on linux-arm64. It is keyed by what it tests
+     * instead: the package directory and the --run filter, since a
+     * filtered runner is a different program whose save would otherwise
+     * replace the full runner's guards. */
+    char *key = frame_cache_test_key
+                    ? xasprintf("test\n%s\n%d\n%s", frame_cache_test_key,
+                                frame_limit(), dev_build ? "dev" : "release")
+                    : xasprintf("%s\n%d\n%s", real, frame_limit(),
+                                dev_build ? "dev" : "release");
     unsigned long long h = 1469598103934665603ULL; /* FNV-1a */
     for (const char *p = key; *p; p++) {
         h ^= (unsigned char)*p;
