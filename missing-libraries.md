@@ -140,10 +140,10 @@ and fixed-size `math/linalg` after that.
 - [x] **`math/interp`** (stdlib): lookup tables and curves. Piecewise
   linear, step, monotone cubic and natural cubic splines, for fee
   schedules, tiered rates and pricing curves. PR #592 (open).
-- [ ] **`math/finance`** (stdlib, over `decimal`): splitting an amount
+- [x] **`math/finance`** (stdlib, over `decimal`): splitting an amount
   without losing cents (largest remainder, pro rata), NPV, IRR, loan
   payments and amortisation, compound interest, VWAP/TWAP, OHLC candles,
-  basis points.
+  basis points. PR #593 (open).
 - [x] **`math/vec`** (native): bulk operations on `[float]` and `[f32]`
   (dot, axpy, norms, cosine similarity, top-k, int8 quantisation), built
   for embedding search and recommendations. PR #584 (open).
