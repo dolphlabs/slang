@@ -333,6 +333,9 @@ is an `i32`): `math.sqrt`, `math.pi`, `math.round_to(x, 2)`, and for money
 overflow. `math/stats` (mean, median, stddev, quantile, correlation,
 regression, streaming `running()`/`digest()`, distributions) and
 `math/numtheory` (mod_pow, is_prime, factorize) are written over it.
+`math/big`: `big.parse(s, 10)` (result of `Int`), `big.from_int(n)`, methods
+`add/sub/mul/div/modulo/pow/mod_pow/gcd/cmp/format(base)` (div returns opt);
+`big.rat_parse("1/3")` for exact fractions.
 A/B tests: `stats.two_proportion_z(conv_a, n_a, conv_b, n_b).p_value`,
 `welch_t(xs, ys)`, `chi_square_test(table)`, `wilson(k, n, 0.95)`,
 `sample_size_proportions(p1, p2, 0.05, 0.8)`, `sprt(p0, p1, alpha, beta)`.

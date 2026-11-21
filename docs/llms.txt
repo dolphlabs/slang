@@ -35,6 +35,7 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [json](packages/json.md): Package json.
 - [log](packages/log.md): Package log.
 - [math](packages/math.md): Package math.
+- [math/big](packages/math/big.md): Package math/big.
 - [math/finance](packages/math/finance.md): Package math/finance.
 - [math/geo](packages/math/geo.md): Package math/geo.
 - [math/interp](packages/math/interp.md): Package math/interp.
