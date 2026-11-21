@@ -146,7 +146,7 @@ and fixed-size `math/linalg` after that.
   basis points. PR #593 (open).
 - [x] **`math/vec`** (native): bulk operations on `[float]` and `[f32]`
   (dot, axpy, norms, cosine similarity, top-k, int8 quantisation), built
-  for embedding search and recommendations. PR #584 (open).
+  for embedding search and recommendations. PR #584.
 - [x] **`math/geo`** (stdlib): haversine and Vincenty distance, bearing,
   destination point, bounding box for a radius query, geohash,
   point-in-polygon. PR #591 (open).
