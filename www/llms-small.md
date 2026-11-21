@@ -333,6 +333,10 @@ is an `i32`): `math.sqrt`, `math.pi`, `math.round_to(x, 2)`, and for money
 overflow. `math/stats` (mean, median, stddev, quantile, correlation,
 regression, streaming `running()`/`digest()`, distributions) and
 `math/numtheory` (mod_pow, is_prime, factorize) are written over it.
+`math/optimize`: `optimize.brent(f, lo, hi, tol)` (a root; result of
+`Root { x, fx, evals }`), `brent_min(f, a, b, tol)`, `integrate(f, a, b,
+abs_tol, rel_tol)` (infinite bounds allowed); `_with(f, ctx, ..)` forms pass
+data to `f(x, ctx)` since there are no closures.
 `math/shard` maps keys to nodes stably: `shard.jump_str(key, n)`,
 `shard.rendezvous(nodes).pick_str(key)` (opt index; `pick_n_str` for
 replicas), `shard.ring(160)` with `add(name, weight)`/`get_str(key)`,

@@ -1,0 +1,26 @@
+true
+true
+true
+true
+true
+true
+optimize: f does not change sign on [lo, hi]
+optimize: f is NaN at the bracket
+optimize: the derivative is 0 at 0
+true
+optimize: no sign change found while widening the bracket
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+optimize: simpson needs finite bounds; use integrate
+optimize: f is NaN on the interval
