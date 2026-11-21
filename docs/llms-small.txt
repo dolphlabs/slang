@@ -333,6 +333,9 @@ is an `i32`): `math.sqrt`, `math.pi`, `math.round_to(x, 2)`, and for money
 overflow. `math/stats` (mean, median, stddev, quantile, correlation,
 regression, streaming `running()`/`digest()`, distributions) and
 `math/numtheory` (mod_pow, is_prime, factorize) are written over it.
+`math/geo`: `geo.point(lat, lon)`, `geo.distance(a, b)` (metres),
+`bearing`, `destination(p, bearing, m)`, `bounding_box(p, m)` + `in_box`,
+`geohash(p, 7)`, `geohash_neighbors(h)`, `contains(polygon, p)`.
 `math/optimize`: `optimize.brent(f, lo, hi, tol)` (a root; result of
 `Root { x, fx, evals }`), `brent_min(f, a, b, tol)`, `integrate(f, a, b,
 abs_tol, rel_tol)` (infinite bounds allowed); `_with(f, ctx, ..)` forms pass
@@ -438,6 +441,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - json: see /packages/json.md
 - log: debug, info, warn, error
 - math: abs, min, max, clamp, sign, is_nan, is_inf, is_finite, is_normal, signbit, copysign, nextafter (+119 more)
+- math/geo: point, distance, distance_exact, bearing, destination, midpoint, bounding_box, in_box, geohash, geohash_box, geohash_decode, geohash_neighbors (+3 more)
 - math/numtheory: mod_pow, mod_mul, ext_gcd, mod_inv, is_prime, next_prime, prev_prime, primes_below, factorize, divisors, totient, crt (+2 more)
 - math/optimize: no_root, no_min, no_integral, bracket, bracket_with, bisect, bisect_with, brent, brent_with, newton, newton_with, newton_safe (+9 more)
 - math/shard: hash_str, hash_int, jump, jump_str, jump_int, rendezvous, rendezvous_weighted, Rendezvous.pick, Rendezvous.pick_n, Rendezvous.pick_str, Rendezvous.pick_int, Rendezvous.pick_n_str (+18 more)

@@ -10,6 +10,7 @@
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` / `import "io";` / `import "encoding";` like any other package.
 
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/geo`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
 `http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/optimize`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
 `http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/shard`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
 `http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/sketch`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
@@ -2874,6 +2875,40 @@ be coprime), `binomial_mod` (Lucas, for a prime modulus) and
 function given one <= 0 returns `none`, 0 or `false` rather than
 panicking, and no result is negative.
 
+#### `math/geo`
+
+Points on the Earth: distances, bearings, "everything within 5 km",
+geohash keys for spatial indexes, and geofences.
+
+```slang
+import "math/geo";
+
+let berlin = geo.point(52.5200, 13.4050);          // lat, lon in degrees
+let paris = geo.point(48.8566, 2.3522);
+geo.distance(berlin, paris);                       // 877465 m (haversine)
+geo.distance_exact(berlin, paris) ?? 0.0;          // 879699 m (WGS-84)
+geo.bearing(berlin, paris);                        // 246.74 degrees
+geo.destination(berlin, 90.0, 1000.0);             // 1 km due east
+let box = geo.bounding_box(berlin, 5000.0);        // a WHERE clause's lat/lon ranges
+geo.geohash(berlin, 7);                            // "u33dc0c"
+geo.geohash_neighbors("u33dc0c");                  // the 8 cells around it
+geo.contains(fence, p);                            // point in polygon
+```
+
+- `distance` is the haversine great-circle distance on a sphere of the
+  mean Earth radius (within 0.5% of the ellipsoid); `distance_exact` is
+  Vincenty's inverse formula on WGS-84, to well under a millimetre
+  (`none` for nearly antipodal points, where it does not converge).
+- `bearing`, `destination`, `midpoint`, `distance_to_segment` (how far
+  a courier is from the route).
+- `bounding_box(center, meters)` and `in_box`: the smallest box holding
+  a radius, crossing the antimeridian (`min_lon > max_lon`) or spanning
+  every longitude near a pole. Filter an index with the box, then keep
+  the rows within `distance`.
+- `geohash(p, chars)`, `geohash_decode`, `geohash_box`,
+  `geohash_neighbors` (either case accepted).
+- `contains` (even-odd rule, for fences small next to a hemisphere) and
+  `area` in square metres.
 #### `math/optimize`
 
 Solving f(x) = 0, minimising f and integrating it, in one variable:
@@ -3980,6 +4015,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [json](packages/json.md) -- compiler-provided, 0 public items
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [math](packages/math.md) -- compiler-provided, 131 public items
+- [math/geo](packages/math/geo.md) -- source package, 18 public items
 - [math/numtheory](packages/math/numtheory.md) -- source package, 16 public items
 - [math/optimize](packages/math/optimize.md) -- source package, 25 public items
 - [math/shard](packages/math/shard.md) -- source package, 33 public items
