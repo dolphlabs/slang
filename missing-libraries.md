@@ -150,9 +150,9 @@ and fixed-size `math/linalg` after that.
 - [x] **`math/geo`** (stdlib): haversine and Vincenty distance, bearing,
   destination point, bounding box for a radius query, geohash,
   point-in-polygon. PR #591 (open).
-- [ ] **Experiment statistics** (`math/stats`): two-proportion z-test,
+- [x] **Experiment statistics** (`math/stats`): two-proportion z-test,
   Welch's t-test, chi-square test, Wilson intervals, sample size and power,
-  and a sequential probability ratio test, for A/B tests.
+  and a sequential probability ratio test, for A/B tests. PR #594 (open).
 
 ## Already covered
 
