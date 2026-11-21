@@ -5184,6 +5184,156 @@
         }
       ]
     },
+    "math/geo": {
+      "name": "math/geo",
+      "kind": "source",
+      "items": [
+        {
+          "name": "EARTH_RADIUS",
+          "decl": "let",
+          "sig": "let EARTH_RADIUS = 6371008.8;",
+          "doc": "The mean Earth radius (IUGG), metres.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 24
+        },
+        {
+          "name": "Point",
+          "decl": "struct",
+          "sig": "struct Point",
+          "doc": "",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 31
+        },
+        {
+          "name": "point",
+          "decl": "fn",
+          "sig": "fn point(lat: float, lon: float) -> Point",
+          "doc": "A point; latitude in [-90, 90], longitude wrapped into [-180, 180).",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 37
+        },
+        {
+          "name": "distance",
+          "decl": "fn",
+          "sig": "fn distance(a: Point, b: Point) -> float",
+          "doc": "The great-circle distance in metres (haversine): accurate for any pair of points, antipodes included, on the spherical Earth.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 50
+        },
+        {
+          "name": "distance_exact",
+          "decl": "fn",
+          "sig": "fn distance_exact(a: Point, b: Point) -> opt[float]",
+          "doc": "The distance in metres on the WGS-84 ellipsoid (Vincenty's inverse formula, 1975). none for nearly antipodal points, where the iteration does not converge; use distance() there.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 64
+        },
+        {
+          "name": "bearing",
+          "decl": "fn",
+          "sig": "fn bearing(a: Point, b: Point) -> float",
+          "doc": "The initial bearing from a toward b, degrees clockwise from north in [0, 360). Along a great circle the bearing changes as you go.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 106
+        },
+        {
+          "name": "destination",
+          "decl": "fn",
+          "sig": "fn destination(from: Point, bearing_deg: float, meters: float) -> Point",
+          "doc": "The point `meters` from `from` along the initial bearing (spherical).",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 116
+        },
+        {
+          "name": "midpoint",
+          "decl": "fn",
+          "sig": "fn midpoint(a: Point, b: Point) -> Point",
+          "doc": "The midpoint of the great-circle path between a and b.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 128
+        },
+        {
+          "name": "Box",
+          "decl": "struct",
+          "sig": "struct Box",
+          "doc": "A latitude/longitude rectangle. When it crosses the antimeridian, min_lon > max_lon: a longitude is inside when it is >= min_lon OR <= max_lon.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 143
+        },
+        {
+          "name": "bounding_box",
+          "decl": "fn",
+          "sig": "fn bounding_box(center: Point, meters: float) -> Box",
+          "doc": "The smallest box holding every point within `meters` of center (spherical; Chan's method). Query an index with the box, then keep the rows whose distance() is within the radius. A box around a pole spans every longitude.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 154
+        },
+        {
+          "name": "in_box",
+          "decl": "fn",
+          "sig": "fn in_box(b: Box, p: Point) -> bool",
+          "doc": "Whether p is inside the box (edges included), across the antimeridian too.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 176
+        },
+        {
+          "name": "geohash",
+          "decl": "fn",
+          "sig": "fn geohash(p: Point, chars: int) -> str",
+          "doc": "The geohash of p with `chars` characters (1 to 12; 7 is about 150 m, 9 about 5 m): nearby points share prefixes, so it indexes well as a string key.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 191
+        },
+        {
+          "name": "geohash_box",
+          "decl": "fn",
+          "sig": "fn geohash_box(hash: str) -> result[Box, str]",
+          "doc": "The cell a geohash names. An error for an empty hash, one longer than 12 or a character outside the geohash alphabet (either case).",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 238
+        },
+        {
+          "name": "geohash_decode",
+          "decl": "fn",
+          "sig": "fn geohash_decode(hash: str) -> result[Point, str]",
+          "doc": "The centre of a geohash's cell.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 271
+        },
+        {
+          "name": "geohash_neighbors",
+          "decl": "fn",
+          "sig": "fn geohash_neighbors(hash: str) -> result[[str], str]",
+          "doc": "The eight cells around a geohash, at its length: N, NE, E, SE, S, SW, W, NW. A radius search covers the cell and its neighbours. Cells beyond a pole are left out.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 282
+        },
+        {
+          "name": "contains",
+          "decl": "fn",
+          "sig": "fn contains(polygon: [Point], p: Point) -> bool",
+          "doc": "Whether p lies inside the polygon given by its vertices (in order, either direction, closed or not), by the even-odd rule in plain latitude/longitude: right for geofences that are small next to a hemisphere and do not cross the antimeridian or a pole.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 346
+        },
+        {
+          "name": "area",
+          "decl": "fn",
+          "sig": "fn area(polygon: [Point]) -> float",
+          "doc": "The area of a polygon in square metres on the spherical Earth (the spherical-excess formula of Chamberlain and Duquette), for polygons not crossing the antimeridian.",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 370
+        },
+        {
+          "name": "distance_to_segment",
+          "decl": "fn",
+          "sig": "fn distance_to_segment(p: Point, a: Point, b: Point) -> float",
+          "doc": "The shortest distance in metres from p to the great-circle segment a-b (spherical): the cross-track distance when the foot of the perpendicular falls between a and b, else the nearer endpoint. For \"is the courier within 50 m of the route\".",
+          "file": "stdlib/math/geo/geo.sl",
+          "line": 389
+        }
+      ]
+    },
     "math/numtheory": {
       "name": "math/numtheory",
       "kind": "source",
