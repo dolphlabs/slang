@@ -5,12 +5,12 @@
 ## Standard packages
 
 `time`, `net`, `json`, `proc`, `fs`, `log`, `crypto`, `sql`, `regex`,
-`os`, `io`, `strings`, `encoding`, `compress` and `math` are compiler-provided native packages — no source files, just
+`os`, `io`, `strings`, `encoding`, `compress`, `math` and `math/vec` are compiler-provided native packages — no source files, just
 `import "time";` / `import "net";` / `import "json";` / `import "proc";`
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` / `import "io";` / `import "encoding";` like any other package.
 
-`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/optimize`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
 then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
 compiler's `SLANG_STDLIB_DIR`).
@@ -2866,45 +2866,54 @@ be coprime), `binomial_mod` (Lucas, for a prime modulus) and
 function given one <= 0 returns `none`, 0 or `false` rather than
 panicking, and no result is negative.
 
-#### `math/optimize`
+#### `math/vec`
 
-Solving f(x) = 0, minimising f and integrating it, in one variable:
-implied rates, break-even points, the price that maximises revenue, the
-area under a curve. Written in slang; every routine stops at a tolerance
-or a fixed budget of evaluations and says which in its error, so none
-can loop forever whatever f returns (a NaN is an error, not an answer).
+Bulk arithmetic on `[float]` and `[f32]` vectors, for embedding search,
+recommendations and scoring. Native: each kernel runs eight to
+thirty-two accumulators over raw memory, with 256-bit fused
+multiply-adds on x86-64 CPUs that have AVX2 and FMA (chosen at run
+time), which a slang loop cannot do.
 
 ```slang
-import "math/optimize";
+import "math/vec";
 
-fn f(x: float) -> float { return x * x - 2.0; }
-let r = optimize.brent(f, 0.0, 2.0, 1e-12);          // result[Root, str]
-(r ?? optimize.no_root()).x;                         // 1.41421356...
+let a = [0.1, 0.7, 0.2];
+let b = [0.3, 0.5, 0.2];
+vec.dot(a, b);                       // 0.42
+vec.cosine(a, b);                    // in [-1, 1]
+vec.distance(a, b);                  // Euclidean
+vec.normalize(a);                    // in place; returns the old norm
 
-// slang has no closures: a function that needs data takes it second
-struct Loan { pv: float, pmt: float, n: int }
-fn gap(rate: float, l: Loan) -> float { ... }
-optimize.brent_with(gap, loan, 0.0001, 0.1, 1e-12);
+// search: rows is n vectors of `dim` numbers, one after another
+let best = vec.top_k_cosine(query, rows, 384, 10);   // [int], best first
 
-optimize.brent_min(f, 0.0, 10.0, 1e-9);              // result[Min, str]
-optimize.integrate(f, 0.0, math.inf, 1e-10, 1e-10);  // result[Integral, str]
+let small = vec.to_f32(a);           // half the memory
+let q8 = vec.quantize(small);        // bytes: a quarter of an [f32]
+vec.dot_q(q8, vec.quantize(vec.to_f32(b)));
 ```
 
-- **Roots:** `brent` (Brent's zeroin: superlinear, never slower than
-  bisection; the default), `bisect`, `newton` (needs the derivative;
-  fast near a simple root, can diverge from a poor start),
-  `newton_safe` (Newton kept inside a bracket, bisecting when a step
-  would leave it), `bracket` (widens a guess until f changes sign).
-- **Minima** of a unimodal f on [a, b]: `brent_min` (parabolic steps with
-  golden-section fallbacks, as scipy's `fminbound`), `golden`. x is good
-  to about sqrt(machine epsilon) relative, the limit for any minimiser.
-- **Integrals:** `integrate` (adaptive 7/15-point Gauss-Kronrod as
-  QUADPACK's QAG, with infinite bounds mapped onto finite ones) and
-  `simpson` (adaptive, finite bounds). Each returns the value, an error
-  estimate and the number of evaluations.
+- **Reductions:** `dot`, `sum`, `norm`, `distance`, `distance2`
+  (squared), `cosine` (NaN for a zero vector), `argmax`, `argmin`
+  (NaN skipped; -1 for an empty list).
+- **In place:** `scale(a, s)`, `axpy(alpha, x, y)` (`y += alpha * x`),
+  `add(y, x)`, `sub(y, x)`, `mul(y, x)` (elementwise), `normalize(a)`.
+- **Search:** `top_k(a, k)` (indexes of the k largest, best first, ties
+  to the lower index), `scores(query, rows, dim)` (every row's dot
+  product), `top_k_dot` and `top_k_cosine(query, rows, dim, k)`: a
+  k-entry heap, no copy of the scores, one pass over each row.
+- **Storage:** `to_f32`, `to_f64`, `quantize` (symmetric int8: a
+  4-byte scale, then a byte per element), `dequantize`, `dot_q` (an
+  exact integer sum, times both scales).
 
-Each routine has a `_with` form whose f takes a context value of any type
-as its second argument, for the data a closure would carry.
+The vectors of one call must have the same element type (a compile
+error otherwise, naming `to_f32`/`to_f64`) and the same length (a
+panic naming the call otherwise). Nothing allocates except the
+functions that return a new list or bytes. On a 1536-float dot product
+`vec.dot` takes 112 ns for `[f32]` and 195 ns for `[float]`, against
+1600 ns for the same loop written in slang. Sums are taken in a
+different order from a left-to-right loop, and on x86-64 in a different
+order with and without AVX2, so results can differ in their last bits
+between machines.
 
 #### `decimal`
 
@@ -3808,8 +3817,8 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [math](packages/math.md) -- compiler-provided, 131 public items
 - [math/numtheory](packages/math/numtheory.md) -- source package, 16 public items
-- [math/optimize](packages/math/optimize.md) -- source package, 25 public items
 - [math/stats](packages/math/stats.md) -- source package, 91 public items
+- [math/vec](packages/math/vec.md) -- compiler-provided, 23 public items
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
 - [net](packages/net.md) -- compiler-provided, 35 public items
