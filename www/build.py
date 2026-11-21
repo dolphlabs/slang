@@ -195,6 +195,7 @@ PACKAGE_SECTIONS = {
     "math": ["`math`"],
     "math/stats": ["`math/stats`"],
     "math/numtheory": ["`math/numtheory`"],
+    "math/interp": ["`math/interp`"],
     "byteutil": ["`byteutil`"],
     "rand": ["`rand`"],
     "decimal": ["`decimal`"],
