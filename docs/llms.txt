@@ -36,7 +36,8 @@ Start with /llms-small.txt: the whole language on one page, about 3k tokens, eno
 - [log](packages/log.md): Package log.
 - [math](packages/math.md): Package math.
 - [math/numtheory](packages/math/numtheory.md): Package math/numtheory.
-- [math/optimize](packages/math/optimize.md): Package math/optimize.
+- [math/shard](packages/math/shard.md): Package math/shard.
+- [math/sketch](packages/math/sketch.md): Package math/sketch.
 - [math/stats](packages/math/stats.md): Package math/stats.
 - [math/vec](packages/math/vec.md): Package math/vec.
 - [mysql](packages/mysql.md): Package mysql.
