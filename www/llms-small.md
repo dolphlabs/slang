@@ -333,6 +333,10 @@ is an `i32`): `math.sqrt`, `math.pi`, `math.round_to(x, 2)`, and for money
 overflow. `math/stats` (mean, median, stddev, quantile, correlation,
 regression, streaming `running()`/`digest()`, distributions) and
 `math/numtheory` (mod_pow, is_prime, factorize) are written over it.
+`math/shard` maps keys to nodes stably: `shard.jump_str(key, n)`,
+`shard.rendezvous(nodes).pick_str(key)` (opt index; `pick_n_str` for
+replicas), `shard.ring(160)` with `add(name, weight)`/`get_str(key)`,
+`shard.maglev(nodes, 65537).pick_str(key)`.
 `rand` is seeded and non-cryptographic, for tests that replay:
 `let r = rand.new(42); rand.below(r, 10); rand.between(r, 1, 6);
 rand.shuffle(r, xs); rand.backoff(r, attempt, base, cap)`. Secrets use
