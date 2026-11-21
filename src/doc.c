@@ -320,6 +320,7 @@ static const char *argkind_name(NatArgKind k) {
     case NA_ARR_BYTES: return "[bytes]";
     case NA_WIRE: return "wire";
     case NA_UNTIL: return "until";
+    case NA_VEC: return "[float]|[f32]";
     /* math's type parameter: T, an integer T, a float T */
     case NA_NUM:
     case NA_NUM_INT:

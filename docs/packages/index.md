@@ -5,12 +5,12 @@
 ## Standard packages
 
 `time`, `net`, `json`, `proc`, `fs`, `log`, `crypto`, `sql`, `regex`,
-`os`, `io`, `strings`, `encoding`, `compress` and `math` are compiler-provided native packages — no source files, just
+`os`, `io`, `strings`, `encoding`, `compress`, `math` and `math/vec` are compiler-provided native packages — no source files, just
 `import "time";` / `import "net";` / `import "json";` / `import "proc";`
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` / `import "io";` / `import "encoding";` like any other package.
 
-`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/geo`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
 then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
 compiler's `SLANG_STDLIB_DIR`).
@@ -2866,40 +2866,54 @@ be coprime), `binomial_mod` (Lucas, for a prime modulus) and
 function given one <= 0 returns `none`, 0 or `false` rather than
 panicking, and no result is negative.
 
-#### `math/geo`
+#### `math/vec`
 
-Points on the Earth: distances, bearings, "everything within 5 km",
-geohash keys for spatial indexes, and geofences.
+Bulk arithmetic on `[float]` and `[f32]` vectors, for embedding search,
+recommendations and scoring. Native: each kernel runs eight to
+thirty-two accumulators over raw memory, with 256-bit fused
+multiply-adds on x86-64 CPUs that have AVX2 and FMA (chosen at run
+time), which a slang loop cannot do.
 
 ```slang
-import "math/geo";
+import "math/vec";
 
-let berlin = geo.point(52.5200, 13.4050);          // lat, lon in degrees
-let paris = geo.point(48.8566, 2.3522);
-geo.distance(berlin, paris);                       // 877465 m (haversine)
-geo.distance_exact(berlin, paris) ?? 0.0;          // 879699 m (WGS-84)
-geo.bearing(berlin, paris);                        // 246.74 degrees
-geo.destination(berlin, 90.0, 1000.0);             // 1 km due east
-let box = geo.bounding_box(berlin, 5000.0);        // a WHERE clause's lat/lon ranges
-geo.geohash(berlin, 7);                            // "u33dc0c"
-geo.geohash_neighbors("u33dc0c");                  // the 8 cells around it
-geo.contains(fence, p);                            // point in polygon
+let a = [0.1, 0.7, 0.2];
+let b = [0.3, 0.5, 0.2];
+vec.dot(a, b);                       // 0.42
+vec.cosine(a, b);                    // in [-1, 1]
+vec.distance(a, b);                  // Euclidean
+vec.normalize(a);                    // in place; returns the old norm
+
+// search: rows is n vectors of `dim` numbers, one after another
+let best = vec.top_k_cosine(query, rows, 384, 10);   // [int], best first
+
+let small = vec.to_f32(a);           // half the memory
+let q8 = vec.quantize(small);        // bytes: a quarter of an [f32]
+vec.dot_q(q8, vec.quantize(vec.to_f32(b)));
 ```
 
-- `distance` is the haversine great-circle distance on a sphere of the
-  mean Earth radius (within 0.5% of the ellipsoid); `distance_exact` is
-  Vincenty's inverse formula on WGS-84, to well under a millimetre
-  (`none` for nearly antipodal points, where it does not converge).
-- `bearing`, `destination`, `midpoint`, `distance_to_segment` (how far
-  a courier is from the route).
-- `bounding_box(center, meters)` and `in_box`: the smallest box holding
-  a radius, crossing the antimeridian (`min_lon > max_lon`) or spanning
-  every longitude near a pole. Filter an index with the box, then keep
-  the rows within `distance`.
-- `geohash(p, chars)`, `geohash_decode`, `geohash_box`,
-  `geohash_neighbors` (either case accepted).
-- `contains` (even-odd rule, for fences small next to a hemisphere) and
-  `area` in square metres.
+- **Reductions:** `dot`, `sum`, `norm`, `distance`, `distance2`
+  (squared), `cosine` (NaN for a zero vector), `argmax`, `argmin`
+  (NaN skipped; -1 for an empty list).
+- **In place:** `scale(a, s)`, `axpy(alpha, x, y)` (`y += alpha * x`),
+  `add(y, x)`, `sub(y, x)`, `mul(y, x)` (elementwise), `normalize(a)`.
+- **Search:** `top_k(a, k)` (indexes of the k largest, best first, ties
+  to the lower index), `scores(query, rows, dim)` (every row's dot
+  product), `top_k_dot` and `top_k_cosine(query, rows, dim, k)`: a
+  k-entry heap, no copy of the scores, one pass over each row.
+- **Storage:** `to_f32`, `to_f64`, `quantize` (symmetric int8: a
+  4-byte scale, then a byte per element), `dequantize`, `dot_q` (an
+  exact integer sum, times both scales).
+
+The vectors of one call must have the same element type (a compile
+error otherwise, naming `to_f32`/`to_f64`) and the same length (a
+panic naming the call otherwise). Nothing allocates except the
+functions that return a new list or bytes. On a 1536-float dot product
+`vec.dot` takes 112 ns for `[f32]` and 195 ns for `[float]`, against
+1600 ns for the same loop written in slang. Sums are taken in a
+different order from a left-to-right loop, and on x86-64 in a different
+order with and without AVX2, so results can differ in their last bits
+between machines.
 
 #### `decimal`
 
@@ -3802,9 +3816,9 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [json](packages/json.md) -- compiler-provided, 0 public items
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [math](packages/math.md) -- compiler-provided, 131 public items
-- [math/geo](packages/math/geo.md) -- source package, 18 public items
 - [math/numtheory](packages/math/numtheory.md) -- source package, 16 public items
 - [math/stats](packages/math/stats.md) -- source package, 91 public items
+- [math/vec](packages/math/vec.md) -- compiler-provided, 23 public items
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
 - [net](packages/net.md) -- compiler-provided, 35 public items

@@ -1,5 +1,16 @@
 # todo
 
+- [x] **`unicode.runes` built its `[int]` as a list of pointers (found
+  2026-11-21 while writing math/vec, fixed in fix/unicode-runes-noptr).**
+  It passed the code-point count where `sl_arr_new` takes the element
+  kind, so every list but a one-rune one (count + 1 == SL_ELEM_NOPTR) was
+  traced word by word as candidate pointers. Not a memory-safety bug: the
+  collector does not move objects and `mark` validates each word. But a
+  program holding a 2M-rune list paid 0.75 s of major-collection marking
+  (25-33 ms pauses) where it now pays 2.4 ms (under 0.2 ms each), and a
+  code point that happened to equal a heap address kept that object
+  alive. tests/runtime/test_unicode checks the flag.
+
 - [x] **zokor's tests time out on linux-arm64 CI (found 2026-11-20 with
   zokor #128; cause found and fixed the same day, fix/test-frame-cache).**
   Not bcrypt or scrypt, as first written here. slangc compiles a program
