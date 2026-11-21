@@ -489,6 +489,10 @@ struct CG {
     FuncDecl *noret_fn;
     const char *cur_func;
     int in_function;
+    /* The function being generated is a leaf (compute_leaf_fns): its
+     * callers skip their safepoint brackets on the promise that it has no
+     * collection point, so wrap_safepoint emits none inside it. */
+    int in_leaf_fn;
     int collect_errors; /* dry run: an error in one function is reported and
                            the next is still checked (gen_function_checked) */
     int tmp_id;

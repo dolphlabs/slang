@@ -20,6 +20,8 @@ rand.pick(r, xs) ?? fallback;          // none when xs is empty
 // retry number `attempt` (0 first): uniform in [0, min(cap, base * 2^attempt)]
 time.sleep(rand.backoff(r, attempt, 100000000, 30000000000));
 rand.jitter(r, 60000000000, 0.1);      // 60s, give or take 10%
+rand.normal(r);                        // mean 0, stddev 1
+rand.exponential(r) / rate;            // waiting times
 ```
 
 The generator is `xoshiro256**`, seeded through `splitmix64`. The tests pin
@@ -31,9 +33,16 @@ of range, since there is no value to return. `backoff` uses full jitter,
 which spreads clients that failed together across the whole interval, and
 saturates at `cap` rather than overflowing. An `Rng` is not locked: give
 each spawned task its own with `rand.fork(r)`, which stays reproducible
-from the parent's seed. `rand.from_os()` seeds from the OS when runs
-should differ. Neither is for secrets: tokens, keys and salts come from
+from the parent's seed. `rand.from_os()` seeds from the OS
+(`/dev/urandom`) when runs should differ; importing `rand` links no
+OpenSSL. Neither is for secrets: tokens, keys and salts come from
 `crypto.rand`, because this generator's outputs reveal its state.
+
+`normal` and `exponential` use the ziggurat method (Marsaglia and Tsang,
+256 layers, the tables `rand_distr` uses): about 99% of draws are one
+64-bit step, a table lookup and a multiply, with no logarithm or
+trigonometry. Tails beyond the base layer use Marsaglia's exact tail
+method. `math/stats` distributions sample through these.
 
 ## API
 
@@ -47,7 +56,7 @@ A generator whose sequence is fixed by `seed`. Every int is a good seed, 0 and -
 
 ### `fn from_os() -> result[Rng, str]`
 
-A generator seeded from the operating system's CSPRNG, for when runs should differ (load generators, sampling in production). Its outputs are still predictable from earlier ones: this is not a source of secrets.
+A generator seeded from the operating system's CSPRNG, for when runs should differ (load generators, sampling in production). Its outputs are still predictable from earlier ones: this is not a source of secrets.  Read from /dev/urandom (the kernel generator crypto.rand also uses), so importing rand does not link OpenSSL: about 1.3 MB of RSS and 3 ms of start-up that a program using only seeded draws would otherwise pay.
 
 ### `fn fork(r: Rng) -> Rng`
 
@@ -88,6 +97,14 @@ How long to wait before retry number `attempt` (0 for the first retry): a unifor
 ### `fn jitter(r: Rng, d: int, frac: float) -> int`
 
 `d` scaled by a uniform factor in [1 - frac, 1 + frac]: jitter(r, d, 0.1) lands within 10% of d. frac is clamped to [0, 1] (NaN counts as 0), so the result is never negative. A d at or below 0 gives 0.
+
+### `fn normal(r: Rng) -> float`
+
+A standard normal value: mean 0, stddev 1. Scale it for any other: `mu + sigma * rand.normal(r)`. The ziggurat method (Marsaglia and Tsang, 256 layers): about 99% of draws cost one 64-bit step, a table lookup and a multiply, with no log, sqrt or trigonometry.
+
+### `fn exponential(r: Rng) -> float`
+
+An exponential value with rate 1 (mean 1). Divide by a rate for any other: `rand.exponential(r) / rate`. Ziggurat, as normal() is.
 
 ---
 
