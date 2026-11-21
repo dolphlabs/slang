@@ -5,7 +5,7 @@
 ## Standard packages
 
 `time`, `net`, `json`, `proc`, `fs`, `log`, `crypto`, `sql`, `regex`,
-`os`, `io`, `strings`, `encoding`, `compress` and `math` are compiler-provided native packages — no source files, just
+`os`, `io`, `strings`, `encoding`, `compress`, `math` and `math/vec` are compiler-provided native packages — no source files, just
 `import "time";` / `import "net";` / `import "json";` / `import "proc";`
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` / `import "io";` / `import "encoding";` like any other package.
@@ -2815,7 +2815,6 @@ p.quantile(0.99);
 stats.normal(100.0, 15.0).cdf(130.0);        // 0.9772498680518208
 stats.normal(0.0, 1.0).quantile(0.975);      // 1.9599639845400538
 stats.poisson(3.0).pmf(5);
-stats.poisson(3.0).sample(rand.new(42));     // an int, replayable
 ```
 
 - **Center and spread:** `sum` (compensated), `product`, `mean`,
@@ -2832,11 +2831,6 @@ stats.poisson(3.0).sample(rand.new(42));     // an int, replayable
   `digest` `merge`.
 - **Distributions:** `normal`, `log_normal`, `uniform`, `exponential`
   (`pdf`, `cdf`, `quantile`), `poisson` and `binomial` (`pmf`, `cdf`).
-  Each has `sample(r)` for a `rand.Rng`, so a simulation or load
-  generator replays from one seed: the ziggurat for the normal and the
-  exponential, Hörmann's PTRS and BTRS (what numpy and TensorFlow use)
-  for the Poisson and binomial once the mean reaches 10, multiplication
-  or inversion below. All exact, all O(1) on average.
 
 A result with no value for its input -- the mean of no numbers, the
 variance of one, a correlation with a constant list -- is NaN, which
@@ -2871,6 +2865,55 @@ be coprime), `binomial_mod` (Lucas, for a prime modulus) and
 `fibonacci` (exact through F(92)). A modulus must be positive: a
 function given one <= 0 returns `none`, 0 or `false` rather than
 panicking, and no result is negative.
+
+#### `math/vec`
+
+Bulk arithmetic on `[float]` and `[f32]` vectors, for embedding search,
+recommendations and scoring. Native: each kernel runs eight to
+thirty-two accumulators over raw memory, with 256-bit fused
+multiply-adds on x86-64 CPUs that have AVX2 and FMA (chosen at run
+time), which a slang loop cannot do.
+
+```slang
+import "math/vec";
+
+let a = [0.1, 0.7, 0.2];
+let b = [0.3, 0.5, 0.2];
+vec.dot(a, b);                       // 0.42
+vec.cosine(a, b);                    // in [-1, 1]
+vec.distance(a, b);                  // Euclidean
+vec.normalize(a);                    // in place; returns the old norm
+
+// search: rows is n vectors of `dim` numbers, one after another
+let best = vec.top_k_cosine(query, rows, 384, 10);   // [int], best first
+
+let small = vec.to_f32(a);           // half the memory
+let q8 = vec.quantize(small);        // bytes: a quarter of an [f32]
+vec.dot_q(q8, vec.quantize(vec.to_f32(b)));
+```
+
+- **Reductions:** `dot`, `sum`, `norm`, `distance`, `distance2`
+  (squared), `cosine` (NaN for a zero vector), `argmax`, `argmin`
+  (NaN skipped; -1 for an empty list).
+- **In place:** `scale(a, s)`, `axpy(alpha, x, y)` (`y += alpha * x`),
+  `add(y, x)`, `sub(y, x)`, `mul(y, x)` (elementwise), `normalize(a)`.
+- **Search:** `top_k(a, k)` (indexes of the k largest, best first, ties
+  to the lower index), `scores(query, rows, dim)` (every row's dot
+  product), `top_k_dot` and `top_k_cosine(query, rows, dim, k)`: a
+  k-entry heap, no copy of the scores, one pass over each row.
+- **Storage:** `to_f32`, `to_f64`, `quantize` (symmetric int8: a
+  4-byte scale, then a byte per element), `dequantize`, `dot_q` (an
+  exact integer sum, times both scales).
+
+The vectors of one call must have the same element type (a compile
+error otherwise, naming `to_f32`/`to_f64`) and the same length (a
+panic naming the call otherwise). Nothing allocates except the
+functions that return a new list or bytes. On a 1536-float dot product
+`vec.dot` takes 112 ns for `[f32]` and 195 ns for `[float]`, against
+1600 ns for the same loop written in slang. Sums are taken in a
+different order from a left-to-right loop, and on x86-64 in a different
+order with and without AVX2, so results can differ in their last bits
+between machines.
 
 #### `decimal`
 
@@ -2950,8 +2993,6 @@ rand.pick(r, xs) ?? fallback;          // none when xs is empty
 // retry number `attempt` (0 first): uniform in [0, min(cap, base * 2^attempt)]
 time.sleep(rand.backoff(r, attempt, 100000000, 30000000000));
 rand.jitter(r, 60000000000, 0.1);      // 60s, give or take 10%
-rand.normal(r);                        // mean 0, stddev 1
-rand.exponential(r) / rate;            // waiting times
 ```
 
 The generator is `xoshiro256**`, seeded through `splitmix64`. The tests pin
@@ -2963,16 +3004,9 @@ of range, since there is no value to return. `backoff` uses full jitter,
 which spreads clients that failed together across the whole interval, and
 saturates at `cap` rather than overflowing. An `Rng` is not locked: give
 each spawned task its own with `rand.fork(r)`, which stays reproducible
-from the parent's seed. `rand.from_os()` seeds from the OS
-(`/dev/urandom`) when runs should differ; importing `rand` links no
-OpenSSL. Neither is for secrets: tokens, keys and salts come from
+from the parent's seed. `rand.from_os()` seeds from the OS when runs
+should differ. Neither is for secrets: tokens, keys and salts come from
 `crypto.rand`, because this generator's outputs reveal its state.
-
-`normal` and `exponential` use the ziggurat method (Marsaglia and Tsang,
-256 layers, the tables `rand_distr` uses): about 99% of draws are one
-64-bit step, a table lookup and a multiply, with no logarithm or
-trigonometry. Tails beyond the base layer use Marsaglia's exact tail
-method. `math/stats` distributions sample through these.
 
 #### `sort`
 
@@ -3783,14 +3817,15 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [math](packages/math.md) -- compiler-provided, 131 public items
 - [math/numtheory](packages/math/numtheory.md) -- source package, 16 public items
-- [math/stats](packages/math/stats.md) -- source package, 97 public items
+- [math/stats](packages/math/stats.md) -- source package, 91 public items
+- [math/vec](packages/math/vec.md) -- compiler-provided, 23 public items
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
 - [net](packages/net.md) -- compiler-provided, 35 public items
 - [os](packages/os.md) -- compiler-provided, 18 public items
 - [pg](packages/pg.md) -- source package, 58 public items
 - [proc](packages/proc.md) -- compiler-provided, 9 public items
-- [rand](packages/rand.md) -- source package, 15 public items
+- [rand](packages/rand.md) -- source package, 13 public items
 - [redis](packages/redis.md) -- source package, 161 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [s3](packages/s3.md) -- source package, 23 public items

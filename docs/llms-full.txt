@@ -2883,7 +2883,7 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 ## Standard packages
 
 `time`, `net`, `json`, `proc`, `fs`, `log`, `crypto`, `sql`, `regex`,
-`os`, `io`, `strings`, `encoding`, `compress` and `math` are compiler-provided native packages — no source files, just
+`os`, `io`, `strings`, `encoding`, `compress`, `math` and `math/vec` are compiler-provided native packages — no source files, just
 `import "time";` / `import "net";` / `import "json";` / `import "proc";`
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` / `import "io";` / `import "encoding";` like any other package.
@@ -5693,7 +5693,6 @@ p.quantile(0.99);
 stats.normal(100.0, 15.0).cdf(130.0);        // 0.9772498680518208
 stats.normal(0.0, 1.0).quantile(0.975);      // 1.9599639845400538
 stats.poisson(3.0).pmf(5);
-stats.poisson(3.0).sample(rand.new(42));     // an int, replayable
 ```
 
 - **Center and spread:** `sum` (compensated), `product`, `mean`,
@@ -5710,11 +5709,6 @@ stats.poisson(3.0).sample(rand.new(42));     // an int, replayable
   `digest` `merge`.
 - **Distributions:** `normal`, `log_normal`, `uniform`, `exponential`
   (`pdf`, `cdf`, `quantile`), `poisson` and `binomial` (`pmf`, `cdf`).
-  Each has `sample(r)` for a `rand.Rng`, so a simulation or load
-  generator replays from one seed: the ziggurat for the normal and the
-  exponential, Hörmann's PTRS and BTRS (what numpy and TensorFlow use)
-  for the Poisson and binomial once the mean reaches 10, multiplication
-  or inversion below. All exact, all O(1) on average.
 
 A result with no value for its input -- the mean of no numbers, the
 variance of one, a correlation with a constant list -- is NaN, which
@@ -5749,6 +5743,55 @@ be coprime), `binomial_mod` (Lucas, for a prime modulus) and
 `fibonacci` (exact through F(92)). A modulus must be positive: a
 function given one <= 0 returns `none`, 0 or `false` rather than
 panicking, and no result is negative.
+
+#### `math/vec`
+
+Bulk arithmetic on `[float]` and `[f32]` vectors, for embedding search,
+recommendations and scoring. Native: each kernel runs eight to
+thirty-two accumulators over raw memory, with 256-bit fused
+multiply-adds on x86-64 CPUs that have AVX2 and FMA (chosen at run
+time), which a slang loop cannot do.
+
+```slang
+import "math/vec";
+
+let a = [0.1, 0.7, 0.2];
+let b = [0.3, 0.5, 0.2];
+vec.dot(a, b);                       // 0.42
+vec.cosine(a, b);                    // in [-1, 1]
+vec.distance(a, b);                  // Euclidean
+vec.normalize(a);                    // in place; returns the old norm
+
+// search: rows is n vectors of `dim` numbers, one after another
+let best = vec.top_k_cosine(query, rows, 384, 10);   // [int], best first
+
+let small = vec.to_f32(a);           // half the memory
+let q8 = vec.quantize(small);        // bytes: a quarter of an [f32]
+vec.dot_q(q8, vec.quantize(vec.to_f32(b)));
+```
+
+- **Reductions:** `dot`, `sum`, `norm`, `distance`, `distance2`
+  (squared), `cosine` (NaN for a zero vector), `argmax`, `argmin`
+  (NaN skipped; -1 for an empty list).
+- **In place:** `scale(a, s)`, `axpy(alpha, x, y)` (`y += alpha * x`),
+  `add(y, x)`, `sub(y, x)`, `mul(y, x)` (elementwise), `normalize(a)`.
+- **Search:** `top_k(a, k)` (indexes of the k largest, best first, ties
+  to the lower index), `scores(query, rows, dim)` (every row's dot
+  product), `top_k_dot` and `top_k_cosine(query, rows, dim, k)`: a
+  k-entry heap, no copy of the scores, one pass over each row.
+- **Storage:** `to_f32`, `to_f64`, `quantize` (symmetric int8: a
+  4-byte scale, then a byte per element), `dequantize`, `dot_q` (an
+  exact integer sum, times both scales).
+
+The vectors of one call must have the same element type (a compile
+error otherwise, naming `to_f32`/`to_f64`) and the same length (a
+panic naming the call otherwise). Nothing allocates except the
+functions that return a new list or bytes. On a 1536-float dot product
+`vec.dot` takes 112 ns for `[f32]` and 195 ns for `[float]`, against
+1600 ns for the same loop written in slang. Sums are taken in a
+different order from a left-to-right loop, and on x86-64 in a different
+order with and without AVX2, so results can differ in their last bits
+between machines.
 
 #### `decimal`
 
@@ -5828,8 +5871,6 @@ rand.pick(r, xs) ?? fallback;          // none when xs is empty
 // retry number `attempt` (0 first): uniform in [0, min(cap, base * 2^attempt)]
 time.sleep(rand.backoff(r, attempt, 100000000, 30000000000));
 rand.jitter(r, 60000000000, 0.1);      // 60s, give or take 10%
-rand.normal(r);                        // mean 0, stddev 1
-rand.exponential(r) / rate;            // waiting times
 ```
 
 The generator is `xoshiro256**`, seeded through `splitmix64`. The tests pin
@@ -5841,16 +5882,9 @@ of range, since there is no value to return. `backoff` uses full jitter,
 which spreads clients that failed together across the whole interval, and
 saturates at `cap` rather than overflowing. An `Rng` is not locked: give
 each spawned task its own with `rand.fork(r)`, which stays reproducible
-from the parent's seed. `rand.from_os()` seeds from the OS
-(`/dev/urandom`) when runs should differ; importing `rand` links no
-OpenSSL. Neither is for secrets: tokens, keys and salts come from
+from the parent's seed. `rand.from_os()` seeds from the OS when runs
+should differ. Neither is for secrets: tokens, keys and salts come from
 `crypto.rand`, because this generator's outputs reveal its state.
-
-`normal` and `exponential` use the ziggurat method (Marsaglia and Tsang,
-256 layers, the tables `rand_distr` uses): about 99% of draws are one
-64-bit step, a table lookup and a multiply, with no logarithm or
-trigonometry. Tails beyond the base layer use Marsaglia's exact tail
-method. `math/stats` distributions sample through these.
 
 #### `sort`
 
@@ -6661,14 +6695,15 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [math](packages/math.md) -- compiler-provided, 131 public items
 - [math/numtheory](packages/math/numtheory.md) -- source package, 16 public items
-- [math/stats](packages/math/stats.md) -- source package, 97 public items
+- [math/stats](packages/math/stats.md) -- source package, 91 public items
+- [math/vec](packages/math/vec.md) -- compiler-provided, 23 public items
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
 - [net](packages/net.md) -- compiler-provided, 35 public items
 - [os](packages/os.md) -- compiler-provided, 18 public items
 - [pg](packages/pg.md) -- source package, 58 public items
 - [proc](packages/proc.md) -- compiler-provided, 9 public items
-- [rand](packages/rand.md) -- source package, 15 public items
+- [rand](packages/rand.md) -- source package, 13 public items
 - [redis](packages/redis.md) -- source package, 161 public items
 - [regex](packages/regex.md) -- compiler-provided, 9 public items
 - [s3](packages/s3.md) -- source package, 23 public items
@@ -10617,7 +10652,6 @@ p.quantile(0.99);
 stats.normal(100.0, 15.0).cdf(130.0);        // 0.9772498680518208
 stats.normal(0.0, 1.0).quantile(0.975);      // 1.9599639845400538
 stats.poisson(3.0).pmf(5);
-stats.poisson(3.0).sample(rand.new(42));     // an int, replayable
 ```
 
 - **Center and spread:** `sum` (compensated), `product`, `mean`,
@@ -10634,11 +10668,6 @@ stats.poisson(3.0).sample(rand.new(42));     // an int, replayable
   `digest` `merge`.
 - **Distributions:** `normal`, `log_normal`, `uniform`, `exponential`
   (`pdf`, `cdf`, `quantile`), `poisson` and `binomial` (`pmf`, `cdf`).
-  Each has `sample(r)` for a `rand.Rng`, so a simulation or load
-  generator replays from one seed: the ziggurat for the normal and the
-  exponential, Hörmann's PTRS and BTRS (what numpy and TensorFlow use)
-  for the Poisson and binomial once the mean reaches 10, multiplication
-  or inversion below. All exact, all O(1) on average.
 
 A result with no value for its input -- the mean of no numbers, the
 variance of one, a correlation with a constant list -- is NaN, which
@@ -10666,10 +10695,6 @@ Through erfc, which keeps precision far into the lower tail where 1 + erf would 
 
 The x with cdf(x) = p; -inf at 0, inf at 1, NaN outside [0, 1].
 
-### `fn sample(self: Normal, r: rand.Rng) -> float`
-
-A random draw (rand.normal, the ziggurat); NaN for a bad sigma.
-
 ### `struct LogNormal`
 
 ### `fn log_normal(mu: float, sigma: float) -> LogNormal`
@@ -10682,8 +10707,6 @@ The distribution of exp(X) for X normal(mu, sigma): response times and sizes, wh
 
 ### `fn quantile(self: LogNormal, p: float) -> float`
 
-### `fn sample(self: LogNormal, r: rand.Rng) -> float`
-
 ### `struct Uniform`
 
 ### `fn uniform(lo: float, hi: float) -> Uniform`
@@ -10695,10 +10718,6 @@ The continuous uniform distribution on [lo, hi].
 ### `fn cdf(self: Uniform, x: float) -> float`
 
 ### `fn quantile(self: Uniform, p: float) -> float`
-
-### `fn sample(self: Uniform, r: rand.Rng) -> float`
-
-A draw from [lo, hi); NaN unless hi > lo.
 
 ### `struct Exponential`
 
@@ -10714,10 +10733,6 @@ The waiting time between events arriving at `rate` per unit time.
 
 ### `fn quantile(self: Exponential, p: float) -> float`
 
-### `fn sample(self: Exponential, r: rand.Rng) -> float`
-
-A draw (rand.exponential, the ziggurat, over the rate).
-
 ### `struct Poisson`
 
 ### `fn poisson(lambda: float) -> Poisson`
@@ -10732,10 +10747,6 @@ P(X = k): directly while k! is exact (k <= 20) and lambda^k cannot overflow, oth
 
 P(X <= k).
 
-### `fn sample(self: Poisson, r: rand.Rng) -> int`
-
-A random count. Panics for a lambda that is negative, NaN, or so large (above 2^52) that its counts have no exact int, as rand.below does for a bad bound.
-
 ### `struct Binomial`
 
 ### `fn binomial(n: int, p: float) -> Binomial`
@@ -10749,10 +10760,6 @@ P(X = k): directly while the binomial coefficient is exact (n up to 1000, as mat
 ### `fn cdf(self: Binomial, k: int) -> float`
 
 P(X <= k).
-
-### `fn sample(self: Binomial, r: rand.Rng) -> int`
-
-A random count of successes. Panics for n < 0 or p outside [0, 1].
 
 ### `fn sum[T](xs: [T]) -> float`
 
@@ -10991,6 +10998,113 @@ The estimated q-quantile, q in [0, 1]: min at 0, max at 1, linear between centro
 ### `fn cdf(self: Digest, x: float) -> float`
 
 The estimated fraction of observations at or below x, in [0, 1]; NaN when empty.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# math/vec
+
+# math/vec
+
+> Package math/vec.
+
+Bulk arithmetic on `[float]` and `[f32]` vectors, for embedding search,
+recommendations and scoring. Native: each kernel runs eight to
+thirty-two accumulators over raw memory, with 256-bit fused
+multiply-adds on x86-64 CPUs that have AVX2 and FMA (chosen at run
+time), which a slang loop cannot do.
+
+```slang
+import "math/vec";
+
+let a = [0.1, 0.7, 0.2];
+let b = [0.3, 0.5, 0.2];
+vec.dot(a, b);                       // 0.42
+vec.cosine(a, b);                    // in [-1, 1]
+vec.distance(a, b);                  // Euclidean
+vec.normalize(a);                    // in place; returns the old norm
+
+// search: rows is n vectors of `dim` numbers, one after another
+let best = vec.top_k_cosine(query, rows, 384, 10);   // [int], best first
+
+let small = vec.to_f32(a);           // half the memory
+let q8 = vec.quantize(small);        // bytes: a quarter of an [f32]
+vec.dot_q(q8, vec.quantize(vec.to_f32(b)));
+```
+
+- **Reductions:** `dot`, `sum`, `norm`, `distance`, `distance2`
+  (squared), `cosine` (NaN for a zero vector), `argmax`, `argmin`
+  (NaN skipped; -1 for an empty list).
+- **In place:** `scale(a, s)`, `axpy(alpha, x, y)` (`y += alpha * x`),
+  `add(y, x)`, `sub(y, x)`, `mul(y, x)` (elementwise), `normalize(a)`.
+- **Search:** `top_k(a, k)` (indexes of the k largest, best first, ties
+  to the lower index), `scores(query, rows, dim)` (every row's dot
+  product), `top_k_dot` and `top_k_cosine(query, rows, dim, k)`: a
+  k-entry heap, no copy of the scores, one pass over each row.
+- **Storage:** `to_f32`, `to_f64`, `quantize` (symmetric int8: a
+  4-byte scale, then a byte per element), `dequantize`, `dot_q` (an
+  exact integer sum, times both scales).
+
+The vectors of one call must have the same element type (a compile
+error otherwise, naming `to_f32`/`to_f64`) and the same length (a
+panic naming the call otherwise). Nothing allocates except the
+functions that return a new list or bytes. On a 1536-float dot product
+`vec.dot` takes 112 ns for `[f32]` and 195 ns for `[float]`, against
+1600 ns for the same loop written in slang. Sums are taken in a
+different order from a left-to-right loop, and on x86-64 in a different
+order with and without AVX2, so results can differ in their last bits
+between machines.
+
+## API
+
+### `math/vec.dot([float]|[f32], [float]|[f32]) -> float`
+
+### `math/vec.sum([float]|[f32]) -> float`
+
+### `math/vec.norm([float]|[f32]) -> float`
+
+### `math/vec.distance([float]|[f32], [float]|[f32]) -> float`
+
+### `math/vec.distance2([float]|[f32], [float]|[f32]) -> float`
+
+### `math/vec.cosine([float]|[f32], [float]|[f32]) -> float`
+
+### `math/vec.argmax([float]|[f32]) -> int`
+
+### `math/vec.argmin([float]|[f32]) -> int`
+
+### `math/vec.scale([float]|[f32], float)`
+
+### `math/vec.axpy(float, [float]|[f32], [float]|[f32])`
+
+### `math/vec.add([float]|[f32], [float]|[f32])`
+
+### `math/vec.sub([float]|[f32], [float]|[f32])`
+
+### `math/vec.mul([float]|[f32], [float]|[f32])`
+
+### `math/vec.normalize([float]|[f32]) -> float`
+
+### `math/vec.top_k([float]|[f32], int) -> [int]`
+
+### `math/vec.scores([float]|[f32], [float]|[f32], int) -> [float]`
+
+### `math/vec.top_k_dot([float]|[f32], [float]|[f32], int, int) -> [int]`
+
+### `math/vec.top_k_cosine([float]|[f32], [float]|[f32], int, int) -> [int]`
+
+### `math/vec.to_f32([float]|[f32]) -> [f32]`
+
+### `math/vec.to_f64([float]|[f32]) -> [float]`
+
+### `math/vec.quantize([float]|[f32]) -> bytes`
+
+### `math/vec.dequantize(bytes) -> [float]`
+
+### `math/vec.dot_q(bytes, bytes) -> float`
 
 ---
 
@@ -12538,8 +12652,6 @@ rand.pick(r, xs) ?? fallback;          // none when xs is empty
 // retry number `attempt` (0 first): uniform in [0, min(cap, base * 2^attempt)]
 time.sleep(rand.backoff(r, attempt, 100000000, 30000000000));
 rand.jitter(r, 60000000000, 0.1);      // 60s, give or take 10%
-rand.normal(r);                        // mean 0, stddev 1
-rand.exponential(r) / rate;            // waiting times
 ```
 
 The generator is `xoshiro256**`, seeded through `splitmix64`. The tests pin
@@ -12551,16 +12663,9 @@ of range, since there is no value to return. `backoff` uses full jitter,
 which spreads clients that failed together across the whole interval, and
 saturates at `cap` rather than overflowing. An `Rng` is not locked: give
 each spawned task its own with `rand.fork(r)`, which stays reproducible
-from the parent's seed. `rand.from_os()` seeds from the OS
-(`/dev/urandom`) when runs should differ; importing `rand` links no
-OpenSSL. Neither is for secrets: tokens, keys and salts come from
+from the parent's seed. `rand.from_os()` seeds from the OS when runs
+should differ. Neither is for secrets: tokens, keys and salts come from
 `crypto.rand`, because this generator's outputs reveal its state.
-
-`normal` and `exponential` use the ziggurat method (Marsaglia and Tsang,
-256 layers, the tables `rand_distr` uses): about 99% of draws are one
-64-bit step, a table lookup and a multiply, with no logarithm or
-trigonometry. Tails beyond the base layer use Marsaglia's exact tail
-method. `math/stats` distributions sample through these.
 
 ## API
 
@@ -12574,7 +12679,7 @@ A generator whose sequence is fixed by `seed`. Every int is a good seed, 0 and -
 
 ### `fn from_os() -> result[Rng, str]`
 
-A generator seeded from the operating system's CSPRNG, for when runs should differ (load generators, sampling in production). Its outputs are still predictable from earlier ones: this is not a source of secrets.  Read from /dev/urandom (the kernel generator crypto.rand also uses), so importing rand does not link OpenSSL: about 1.3 MB of RSS and 3 ms of start-up that a program using only seeded draws would otherwise pay.
+A generator seeded from the operating system's CSPRNG, for when runs should differ (load generators, sampling in production). Its outputs are still predictable from earlier ones: this is not a source of secrets.
 
 ### `fn fork(r: Rng) -> Rng`
 
@@ -12615,14 +12720,6 @@ How long to wait before retry number `attempt` (0 for the first retry): a unifor
 ### `fn jitter(r: Rng, d: int, frac: float) -> int`
 
 `d` scaled by a uniform factor in [1 - frac, 1 + frac]: jitter(r, d, 0.1) lands within 10% of d. frac is clamped to [0, 1] (NaN counts as 0), so the result is never negative. A d at or below 0 gives 0.
-
-### `fn normal(r: Rng) -> float`
-
-A standard normal value: mean 0, stddev 1. Scale it for any other: `mu + sigma * rand.normal(r)`. The ziggurat method (Marsaglia and Tsang, 256 layers): about 99% of draws cost one 64-bit step, a table lookup and a multiply, with no log, sqrt or trigonometry.
-
-### `fn exponential(r: Rng) -> float`
-
-An exponential value with rate 1 (mean 1). Divide by a rate for any other: `rand.exponential(r) / rate`. Ziggurat, as normal() is.
 
 ---
 

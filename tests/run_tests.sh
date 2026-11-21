@@ -844,7 +844,7 @@ for name in gc_ctor_payload gc_map_put pg_rows_as postgres http_client_pool http
             generics_pkg gc_nested_literal generics_methods \
             generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry loop_leaf_poll loop_leaf_plus safepoint_task_once own_roots switch escape_roots \
             http_read_wire bytes_empty_literal gc_minor_barriers net_dns_records map_delete if_let \
-            literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions json_parity json_utf8 json_decode_budget \
+            literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions math_vec json_parity json_utf8 json_decode_budget \
             bytes json_deep_nesting gc_container_frontier gc_promotion_budget gc_chan_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks sort_test \
             json_wide; do
     out="/tmp/sl_gcstress_${name}.out"
@@ -929,7 +929,7 @@ done
 echo "--- minor collections verified (SLANG_GC_VERIFY_MINOR, 16KB nursery) ---"
 vm_bad=0
 for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc_map_put encoding_f64 crypto if_let \
-            literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions loop_leaf_plus safepoint_task_once \
+            literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions leaf_functions_wide loop_leaf_plus safepoint_task_once \
             gc_nested_literal gc_nursery_barrier gc_nursery_promotion net_dns_records \
             spawn_isolation select maps pg_rows_as json json_parity json_utf8 unicode json_decimal crypto_more nats_reconnect json_decode_budget \
             bytes json_deep_nesting redis http_read_wire http_client_pool http2_flood h2_client h2_client_close chan_recv_promoted value_results value_opts \
@@ -1300,7 +1300,7 @@ rm -f "$sjm_c" "$sjm_c.gen.c"
 # bracket, an allocating native next to them keeps its own.
 lnc_c="/tmp/sl_leaf_native_calls"
 if ./slangc tests/leaf_native_calls/main.sl --keep-c -o "$lnc_c" >/dev/null 2>&1; then
-    lnc_leaf=$(grep -oE 'sl_rt_safepoint_enter_s\(SL_SELF\(\), [^)]*\); [^;]*sl_strings_(has_prefix|has_suffix|contains|count|find|rfind|find_field)\(' "$lnc_c.gen.c" | wc -l | tr -d ' ')
+    lnc_leaf=$(grep -oE 'sl_rt_safepoint_enter_s\(SL_SELF\(\), [^)]*\); [^;]*sl_strings_(has_prefix|has_suffix|contains|count|find|rfind|find_field|hash)\(' "$lnc_c.gen.c" | wc -l | tr -d ' ')
     lnc_alloc=$(grep -oE 'sl_rt_safepoint_enter_s\(SL_SELF\(\), [^)]*\); [^;]*sl_strings_to_upper\(' "$lnc_c.gen.c" | wc -l | tr -d ' ')
     if [ "$lnc_leaf" = 0 ] && [ "$lnc_alloc" = 1 ]; then
         echo "PASS leaf native calls unbracketed (allocating one kept)"
@@ -1322,19 +1322,19 @@ rm -f "$lnc_c" "$lnc_c.gen.c"
 lf_c="/tmp/sl_leaf_functions"
 if ./slangc tests/leaf_functions/main.sl --keep-c -o "$lf_c" >/dev/null 2>&1; then
     lf_leaf=0
-    for fn in put_str wraps point moved; do
+    for fn in put_str wraps point moved calls_user; do
         n=$(grep -oE "sl_rt_safepoint_enter_s\\(SL_SELF\\(\\), [^)]*\\); [^;]*sl_leaf_functions_${fn}\\(" "$lf_c.gen.c" | wc -l | tr -d ' ')
         lf_leaf=$((lf_leaf + n))
     done
     lf_other=0
-    for fn in concat loops calls_user allocs guards indexes boxed named; do
+    for fn in concat loops allocs guards indexes boxed named; do
         n=$(grep -oE "sl_rt_safepoint_enter_s\\(SL_SELF\\(\\), [^)]*\\); [^;]*sl_leaf_functions_${fn}\\(" "$lf_c.gen.c" | wc -l | tr -d ' ')
         lf_other=$((lf_other + n))
     done
-    if [ "$lf_leaf" = 0 ] && [ "$lf_other" = 8 ]; then
-        echo "PASS leaf functions unbracketed (8 non-leaf calls kept)"
+    if [ "$lf_leaf" = 0 ] && [ "$lf_other" = 7 ]; then
+        echo "PASS leaf functions unbracketed (7 non-leaf calls kept)"
     else
-        echo "FAIL leaf functions: $lf_leaf leaf calls bracketed, $lf_other non-leaf (want 0 and 8)"
+        echo "FAIL leaf functions: $lf_leaf leaf calls bracketed, $lf_other non-leaf (want 0 and 7)"
         fail=1
     fi
 else
@@ -1342,6 +1342,39 @@ else
     fail=1
 fi
 rm -f "$lf_c" "$lf_c.gen.c"
+
+# The wider leaf rules (tests/leaf_functions_wide/lw): shifts by an int
+# count, literals beside fixed-width ints, scalar casts, switch tables,
+# scalar fields of a gc struct, package constants beside fixed-width
+# ints, methods, reads and scalar writes of lists, and calls between
+# leaves up to four deep are unbracketed; recursion, a fifth level, a
+# pointer stored into a gc struct or a list, a map index and a loop keep
+# their brackets. A loop summing leaf calls with += has no per-iteration
+# bracket.
+lw_c="/tmp/sl_leaf_functions_wide"
+if ./slangc tests/leaf_functions_wide/main.sl --keep-c -o "$lw_c" >/dev/null 2>&1; then
+    lw_leaf=0
+    for fn in rotl mixed half table step d4 State__m_bump peek poke keyed; do
+        n=$(grep -oE "sl_rt_safepoint_enter_s\\(SL_SELF\\(\\), [^)]*\\); [^;]*sl_lw_${fn}\\(" "$lw_c.gen.c" | wc -l | tr -d ' ')
+        lw_leaf=$((lw_leaf + n))
+    done
+    lw_other=0
+    for fn in d5 fact attach spins lookup put_ptr; do
+        n=$(grep -oE "sl_rt_safepoint_enter_s\\(SL_SELF\\(\\), [^)]*\\); [^;]*sl_lw_${fn}\\(" "$lw_c.gen.c" | wc -l | tr -d ' ')
+        lw_other=$((lw_other + n))
+    done
+    lw_bp=$(awk '/^static uint64_t sl_lw_sum_steps\(/,/^}/' "$lw_c.gen.c" | grep -c "_sl_bp")
+    if [ "$lw_leaf" = 0 ] && [ "$lw_other" = 6 ] && [ "$lw_bp" = 0 ]; then
+        echo "PASS wider leaf rules (6 non-leaf calls kept, leaf loop unbracketed)"
+    else
+        echo "FAIL wider leaf rules: $lw_leaf leaf calls bracketed, $lw_other non-leaf, $lw_bp loop brackets (want 0, 6, 0)"
+        fail=1
+    fi
+else
+    echo "FAIL wider leaf rules (compile)"
+    fail=1
+fi
+rm -f "$lw_c" "$lw_c.gen.c"
 
 # A numeric `+` (i = i + 1, at + i, total + t[i]) no longer costs a loop
 # its cheap path: it takes the leaf poll, or the scalar sampled yield when
