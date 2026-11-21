@@ -603,6 +603,9 @@ typedef enum {
     NA_NUM_INT,   /* math: T, which must be an integer type */
     NA_NUM_FLT,   /* math: T, a float type (an integer argument makes T
                      `float`) */
+    NA_VEC,       /* math/vec: a [float] or an [f32], marshaled as sl_arr *.
+                     Every NA_VEC argument of one call shares the element
+                     type, which picks the kernel (_f64 or _f32). */
     NA_UNTIL,     /* an `until` deadline: marshaled as sl_until (int64_t).
                      Deliberately NOT int-compatible -- a deadline is an
                      absolute monotonic instant, and silently accepting a
@@ -667,6 +670,9 @@ extern const int COMPRESS_SIGS_LEN;
 
 extern const NatSig MATH_SIGS[]; /* src/codegen/pkg_math/ */
 extern const int MATH_SIGS_LEN;
+
+extern const NatSig VEC_SIGS[]; /* src/codegen/pkg_vec/ */
+extern const int VEC_SIGS_LEN;
 
 extern const NatSig UNICODE_SIGS[]; /* src/codegen/pkg_unicode/ */
 extern const int UNICODE_SIGS_LEN;
