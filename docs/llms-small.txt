@@ -333,6 +333,9 @@ is an `i32`): `math.sqrt`, `math.pi`, `math.round_to(x, 2)`, and for money
 overflow. `math/stats` (mean, median, stddev, quantile, correlation,
 regression, streaming `running()`/`digest()`, distributions) and
 `math/numtheory` (mod_pow, is_prime, factorize) are written over it.
+`math/geo`: `geo.point(lat, lon)`, `geo.distance(a, b)` (metres),
+`bearing`, `destination(p, bearing, m)`, `bounding_box(p, m)` + `in_box`,
+`geohash(p, 7)`, `geohash_neighbors(h)`, `contains(polygon, p)`.
 `math/vec` is native bulk math on `[float]`/`[f32]`: `vec.dot`, `cosine`,
 `distance`, `normalize` (in place), `vec.top_k_cosine(query, rows, dim, k)`
 over rows stored back to back, `to_f32`, `quantize` (int8) and `dot_q`.
@@ -425,6 +428,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - json: see /packages/json.md
 - log: debug, info, warn, error
 - math: abs, min, max, clamp, sign, is_nan, is_inf, is_finite, is_normal, signbit, copysign, nextafter (+119 more)
+- math/geo: point, distance, distance_exact, bearing, destination, midpoint, bounding_box, in_box, geohash, geohash_box, geohash_decode, geohash_neighbors (+3 more)
 - math/numtheory: mod_pow, mod_mul, ext_gcd, mod_inv, is_prime, next_prime, prev_prime, primes_below, factorize, divisors, totient, crt (+2 more)
 - math/stats: normal, Normal.pdf, Normal.cdf, Normal.quantile, log_normal, LogNormal.pdf, LogNormal.cdf, LogNormal.quantile, uniform, Uniform.pdf, Uniform.cdf, Uniform.quantile (+67 more)
 - math/vec: dot, sum, norm, distance, distance2, cosine, argmax, argmin, scale, axpy, add, sub (+11 more)
