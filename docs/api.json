@@ -5318,6 +5318,212 @@
         }
       ]
     },
+    "math/optimize": {
+      "name": "math/optimize",
+      "kind": "source",
+      "items": [
+        {
+          "name": "Root",
+          "decl": "struct",
+          "sig": "struct Root",
+          "doc": "A root: f(x) is (near) zero. fx is f at x; evals counts calls to f.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 26
+        },
+        {
+          "name": "Min",
+          "decl": "struct",
+          "sig": "struct Min",
+          "doc": "A minimum of f on an interval: f(x) = fx.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 33
+        },
+        {
+          "name": "Integral",
+          "decl": "struct",
+          "sig": "struct Integral",
+          "doc": "An integral, with an estimate of its absolute error.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 40
+        },
+        {
+          "name": "Bracket",
+          "decl": "struct",
+          "sig": "struct Bracket",
+          "doc": "A bracket [lo, hi] with f(lo) and f(hi) of opposite signs (or one 0).",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 47
+        },
+        {
+          "name": "no_root",
+          "decl": "fn",
+          "sig": "fn no_root() -> Root",
+          "doc": "NaNs, for `??` defaults: (r ?? optimize.no_root()).x is NaN on error.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 53
+        },
+        {
+          "name": "no_min",
+          "decl": "fn",
+          "sig": "fn no_min() -> Min",
+          "doc": "",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 57
+        },
+        {
+          "name": "no_integral",
+          "decl": "fn",
+          "sig": "fn no_integral() -> Integral",
+          "doc": "",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 61
+        },
+        {
+          "name": "bracket",
+          "decl": "fn",
+          "sig": "fn bracket(f: fn(float) -> float, lo: float, hi: float) -> result[Bracket, str]",
+          "doc": "Widens [lo, hi] geometrically (by 1.6 each side, up to 50 times) until f changes sign across it.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 80
+        },
+        {
+          "name": "bracket_with",
+          "decl": "fn",
+          "sig": "fn bracket_with[C](f: fn(float, C) -> float, ctx: C, lo: float, hi: float) -> result[Bracket, str]",
+          "doc": "",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 84
+        },
+        {
+          "name": "bisect",
+          "decl": "fn",
+          "sig": "fn bisect(f: fn(float) -> float, lo: float, hi: float, tol: float) -> result[Root, str]",
+          "doc": "Bisection: halves [lo, hi] until it is within tol. Slow (one bit per step) but certain; prefer brent.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 115
+        },
+        {
+          "name": "bisect_with",
+          "decl": "fn",
+          "sig": "fn bisect_with[C](f: fn(float, C) -> float, ctx: C, lo: float, hi: float, tol: float) -> result[Root, str]",
+          "doc": "",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 119
+        },
+        {
+          "name": "brent",
+          "decl": "fn",
+          "sig": "fn brent(f: fn(float) -> float, lo: float, hi: float, tol: float) -> result[Root, str]",
+          "doc": "Brent's method (Brent 1973, the zeroin of netlib): inverse quadratic interpolation and secant steps, falling back to bisection whenever they would not shrink the bracket fast enough. Superlinear on smooth f, never slower than bisection. The default root finder.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 162
+        },
+        {
+          "name": "brent_with",
+          "decl": "fn",
+          "sig": "fn brent_with[C](f: fn(float, C) -> float, ctx: C, lo: float, hi: float, tol: float) -> result[Root, str]",
+          "doc": "",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 166
+        },
+        {
+          "name": "newton",
+          "decl": "fn",
+          "sig": "fn newton(f: fn(float) -> float, df: fn(float) -> float, x0: float, tol: float) -> result[Root, str]",
+          "doc": "Newton's method from x0 with derivative df: quadratic convergence near a simple root, but it can diverge from a poor start. Use newton_safe when a bracket is known.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 258
+        },
+        {
+          "name": "newton_with",
+          "decl": "fn",
+          "sig": "fn newton_with[C, D](f: fn(float, C) -> float, df: fn(float, D) -> float, ctx: C, x0: float, tol: float, dctx: D) -> result[Root, str]",
+          "doc": "newton with data: f and df each take ctx. (The derivative's own data is passed as dctx, so f and df can differ in what they need.)",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 264
+        },
+        {
+          "name": "newton_safe",
+          "decl": "fn",
+          "sig": "fn newton_safe(f: fn(float) -> float, df: fn(float) -> float, lo: float, hi: float, tol: float) -> result[Root, str]",
+          "doc": "Safeguarded Newton (rtsafe): Newton steps that stay inside a bracket [lo, hi] where f changes sign, with bisection whenever a step would leave it or shrink it too slowly. Fast and certain.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 296
+        },
+        {
+          "name": "newton_safe_with",
+          "decl": "fn",
+          "sig": "fn newton_safe_with[C, D](f: fn(float, C) -> float, df: fn(float, D) -> float, ctx: C, lo: float, hi: float, tol: float, dctx: D) -> result[Root, str]",
+          "doc": "",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 300
+        },
+        {
+          "name": "golden",
+          "decl": "fn",
+          "sig": "fn golden(f: fn(float) -> float, a: float, b: float, tol: float) -> result[Min, str]",
+          "doc": "Golden-section search for the minimum of a unimodal f on [a, b]: the interval shrinks by 0.618 per evaluation. Needs no derivative and no smoothness; prefer brent_min for smooth f.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 367
+        },
+        {
+          "name": "golden_with",
+          "decl": "fn",
+          "sig": "fn golden_with[C](f: fn(float, C) -> float, ctx: C, a: float, b: float, tol: float) -> result[Min, str]",
+          "doc": "",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 371
+        },
+        {
+          "name": "brent_min",
+          "decl": "fn",
+          "sig": "fn brent_min(f: fn(float) -> float, a: float, b: float, tol: float) -> result[Min, str]",
+          "doc": "Brent's minimisation (Brent 1973, localmin; scipy's fminbound): parabolic interpolation through the best three points, golden-section steps when a parabola is not trustworthy. On [a, b], for unimodal f.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 412
+        },
+        {
+          "name": "brent_min_with",
+          "decl": "fn",
+          "sig": "fn brent_min_with[C](f: fn(float, C) -> float, ctx: C, a0: float, b0: float, tol: float) -> result[Min, str]",
+          "doc": "",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 416
+        },
+        {
+          "name": "simpson",
+          "decl": "fn",
+          "sig": "fn simpson(f: fn(float) -> float, a: float, b: float, tol: float) -> result[Integral, str]",
+          "doc": "Adaptive Simpson's rule: splits wherever the two halves disagree with the whole by more than tol (absolute), with Richardson's correction. For smooth f on a finite interval.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 512
+        },
+        {
+          "name": "simpson_with",
+          "decl": "fn",
+          "sig": "fn simpson_with[C](f: fn(float, C) -> float, ctx: C, a: float, b: float, tol: float) -> result[Integral, str]",
+          "doc": "",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 516
+        },
+        {
+          "name": "integrate",
+          "decl": "fn",
+          "sig": "fn integrate(f: fn(float) -> float, a: float, b: float, abs_tol: float, rel_tol: float) -> result[Integral, str]",
+          "doc": "Adaptive Gauss-Kronrod (7-point Gauss, 15-point Kronrod, as QUADPACK's QAG): the interval with the largest error estimate is halved until the total error is within max(abs_tol, rel_tol * |integral|). Infinite bounds are mapped onto a finite interval (x = t / (1 - t^2) and its one-sided forms). The general-purpose integrator.",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 593
+        },
+        {
+          "name": "integrate_with",
+          "decl": "fn",
+          "sig": "fn integrate_with[C](f: fn(float, C) -> float, ctx: C, a: float, b: float, abs_tol: float, rel_tol: float) -> result[Integral, str]",
+          "doc": "",
+          "file": "stdlib/math/optimize/optimize.sl",
+          "line": 597
+        }
+      ]
+    },
     "math/stats": {
       "name": "math/stats",
       "kind": "source",

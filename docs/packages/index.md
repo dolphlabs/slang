@@ -10,7 +10,7 @@
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` / `import "io";` / `import "encoding";` like any other package.
 
-`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/optimize`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
 then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
 compiler's `SLANG_STDLIB_DIR`).
@@ -2866,6 +2866,46 @@ be coprime), `binomial_mod` (Lucas, for a prime modulus) and
 function given one <= 0 returns `none`, 0 or `false` rather than
 panicking, and no result is negative.
 
+#### `math/optimize`
+
+Solving f(x) = 0, minimising f and integrating it, in one variable:
+implied rates, break-even points, the price that maximises revenue, the
+area under a curve. Written in slang; every routine stops at a tolerance
+or a fixed budget of evaluations and says which in its error, so none
+can loop forever whatever f returns (a NaN is an error, not an answer).
+
+```slang
+import "math/optimize";
+
+fn f(x: float) -> float { return x * x - 2.0; }
+let r = optimize.brent(f, 0.0, 2.0, 1e-12);          // result[Root, str]
+(r ?? optimize.no_root()).x;                         // 1.41421356...
+
+// slang has no closures: a function that needs data takes it second
+struct Loan { pv: float, pmt: float, n: int }
+fn gap(rate: float, l: Loan) -> float { ... }
+optimize.brent_with(gap, loan, 0.0001, 0.1, 1e-12);
+
+optimize.brent_min(f, 0.0, 10.0, 1e-9);              // result[Min, str]
+optimize.integrate(f, 0.0, math.inf, 1e-10, 1e-10);  // result[Integral, str]
+```
+
+- **Roots:** `brent` (Brent's zeroin: superlinear, never slower than
+  bisection; the default), `bisect`, `newton` (needs the derivative;
+  fast near a simple root, can diverge from a poor start),
+  `newton_safe` (Newton kept inside a bracket, bisecting when a step
+  would leave it), `bracket` (widens a guess until f changes sign).
+- **Minima** of a unimodal f on [a, b]: `brent_min` (parabolic steps with
+  golden-section fallbacks, as scipy's `fminbound`), `golden`. x is good
+  to about sqrt(machine epsilon) relative, the limit for any minimiser.
+- **Integrals:** `integrate` (adaptive 7/15-point Gauss-Kronrod as
+  QUADPACK's QAG, with infinite bounds mapped onto finite ones) and
+  `simpson` (adaptive, finite bounds). Each returns the value, an error
+  estimate and the number of evaluations.
+
+Each routine has a `_with` form whose f takes a context value of any type
+as its second argument, for the data a closure would carry.
+
 #### `decimal`
 
 Exact decimal arithmetic for money: up to 38 significant digits (SQL's
@@ -3768,6 +3808,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [math](packages/math.md) -- compiler-provided, 131 public items
 - [math/numtheory](packages/math/numtheory.md) -- source package, 16 public items
+- [math/optimize](packages/math/optimize.md) -- source package, 25 public items
 - [math/stats](packages/math/stats.md) -- source package, 91 public items
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
