@@ -29,7 +29,7 @@ any package.
   Still to build, per `math-plan.md` phases 3 to 5:
   - [ ] `math/complex`
   - [ ] `math/linalg` (fixed-size)
-  - [ ] `math/big`
+  - [x] `math/big`: Int and Rat, Karatsuba, Montgomery `mod_pow`. PR #595 (open).
 - [x] **`rand`** (stdlib): a fast, non-cryptographic random number generator
   with an explicit seed, so tests stay deterministic: ints in a range,
   floats, shuffle, pick, and jitter for retry backoff. `crypto.rand` stays
@@ -124,35 +124,35 @@ search, experiments) over the graphics-leaning parts of `math-plan.md`.
 Added 2026-11-21. `math/big` (section 1) comes after these; `math/complex`
 and fixed-size `math/linalg` after that.
 
-- [ ] **Sampling from distributions** (`math/stats`): `sample(rng)` on
+- [x] **Sampling from distributions** (`math/stats`): `sample(rng)` on
   every distribution, taking a `rand.Rng`, so load generators and
-  simulations replay from one seed.
-- [ ] **`math/sketch`** (stdlib): fixed-memory, mergeable estimates for
+  simulations replay from one seed. PR #587 (open).
+- [x] **`math/sketch`** (stdlib): fixed-memory, mergeable estimates for
   live servers. HyperLogLog (distinct counts), Count-Min sketch, top-k
   heavy hitters, Bloom and cuckoo filters, an HDR-style latency histogram
-  with Prometheus buckets, and reservoir sampling.
-- [ ] **`math/shard`** (stdlib): map a key to a node stably. Jump
+  with Prometheus buckets, and reservoir sampling. PR #588 (open).
+- [x] **`math/shard`** (stdlib): map a key to a node stably. Jump
   consistent hash, rendezvous (highest random weight) hashing, and a
-  consistent-hash ring with virtual nodes and weights.
-- [ ] **`math/optimize`** (stdlib): root finding (bisection, Brent,
+  consistent-hash ring with virtual nodes and weights. PR #589 (open).
+- [x] **`math/optimize`** (stdlib): root finding (bisection, Brent,
   safeguarded Newton), 1-D minimisation (golden section, Brent) and
-  numerical integration (adaptive Simpson, Gauss-Kronrod).
-- [ ] **`math/interp`** (stdlib): lookup tables and curves. Piecewise
+  numerical integration (adaptive Simpson, Gauss-Kronrod). PR #590 (open).
+- [x] **`math/interp`** (stdlib): lookup tables and curves. Piecewise
   linear, step, monotone cubic and natural cubic splines, for fee
-  schedules, tiered rates and pricing curves.
-- [ ] **`math/finance`** (stdlib, over `decimal`): splitting an amount
+  schedules, tiered rates and pricing curves. PR #592 (open).
+- [x] **`math/finance`** (stdlib, over `decimal`): splitting an amount
   without losing cents (largest remainder, pro rata), NPV, IRR, loan
   payments and amortisation, compound interest, VWAP/TWAP, OHLC candles,
-  basis points.
+  basis points. PR #593 (open).
 - [x] **`math/vec`** (native): bulk operations on `[float]` and `[f32]`
   (dot, axpy, norms, cosine similarity, top-k, int8 quantisation), built
   for embedding search and recommendations. PR #584 (open).
-- [ ] **`math/geo`** (stdlib): haversine and Vincenty distance, bearing,
+- [x] **`math/geo`** (stdlib): haversine and Vincenty distance, bearing,
   destination point, bounding box for a radius query, geohash,
-  point-in-polygon.
-- [ ] **Experiment statistics** (`math/stats`): two-proportion z-test,
+  point-in-polygon. PR #591 (open).
+- [x] **Experiment statistics** (`math/stats`): two-proportion z-test,
   Welch's t-test, chi-square test, Wilson intervals, sample size and power,
-  and a sequential probability ratio test, for A/B tests.
+  and a sequential probability ratio test, for A/B tests. PR #594 (open).
 
 ## Already covered
 
