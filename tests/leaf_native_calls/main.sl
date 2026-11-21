@@ -1,4 +1,4 @@
-// strings.find/rfind/contains/has_prefix/has_suffix/count/find_field only
+// strings.find/rfind/contains/has_prefix/has_suffix/count/find_field/hash only
 // read their arguments, so a call to one is no collection point and gets
 // no safepoint bracket (run_tests.sh counts the brackets in the generated
 // C). Values live across those calls must survive collections that happen
@@ -13,7 +13,8 @@ fn classify(line: str) -> int {
     if strings.has_suffix(line, ";") && strings.contains(line, "=") {
         return 2;
     }
-    return strings.count(line, "a") + strings.find(line, "b") + strings.rfind(line, "c");
+    return strings.count(line, "a") + strings.find(line, "b") + strings.rfind(line, "c") +
+           (strings.hash(line) & 1);
 }
 
 let block = to_bytes("Content-Length: 3\r\nX: y");

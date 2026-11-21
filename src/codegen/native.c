@@ -36,6 +36,9 @@ int native_is_leaf(const char *pkg, const char *name) {
         "strings.find", "strings.rfind", "strings.contains",
         "strings.has_prefix", "strings.has_suffix", "strings.count",
         "strings.find_field",
+        /* strlen and word reads of its argument, then arithmetic
+           (sl_strings_hash) */
+        "strings.hash",
         /* writes into its first argument's payload, which holds no
            pointers, and allocates nothing (sl_strings_copy_into) */
         "strings.copy_into",

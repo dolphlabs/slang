@@ -1,5 +1,21 @@
 # todo
 
+- [x] **Leaf analysis covers methods, list indexing, shifts and calls
+  between leaves (2026-11-21, perf/leaf-fns).** A call to a slang
+  function with a live GC value paid a full safepoint bracket unless the
+  callee was a "leaf", and almost nothing qualified: `x << k` with an int
+  count, `x * 5` on a u64, a scalar `as`, a switch of constants, a scalar
+  field of a gc struct, a package constant, a list index, a method, or a
+  call to another leaf each disqualified the function. rand.next_u64 was
+  not a leaf (rotl shifts a u64 by an int), so `rand.unit` cost 30 ns of
+  which 1.2 is the arithmetic. All of these are leaves now (calls between
+  leaves at most 4 deep), and a loop summing a numeric leaf call with
+  `+=` takes the leaf poll. tests/leaf_functions_wide counts the brackets.
+  Still not leaves: anything with a loop (so `rand.normal`, whose rare
+  slow path is a rejection loop, costs its callers one bracket a call),
+  generic functions and methods of generic structs, a method called on a
+  field path or an expression rather than a local, and map indexing.
+
 - [x] **zokor's tests time out on linux-arm64 CI (found 2026-11-20 with
   zokor #128; cause found and fixed the same day, fix/test-frame-cache).**
   Not bcrypt or scrypt, as first written here. slangc compiles a program
