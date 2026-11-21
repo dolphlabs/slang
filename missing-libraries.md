@@ -124,9 +124,9 @@ search, experiments) over the graphics-leaning parts of `math-plan.md`.
 Added 2026-11-21. `math/big` (section 1) comes after these; `math/complex`
 and fixed-size `math/linalg` after that.
 
-- [ ] **Sampling from distributions** (`math/stats`): `sample(rng)` on
+- [x] **Sampling from distributions** (`math/stats`): `sample(rng)` on
   every distribution, taking a `rand.Rng`, so load generators and
-  simulations replay from one seed.
+  simulations replay from one seed. PR #587 (open).
 - [ ] **`math/sketch`** (stdlib): fixed-memory, mergeable estimates for
   live servers. HyperLogLog (distinct counts), Count-Min sketch, top-k
   heavy hitters, Bloom and cuckoo filters, an HDR-style latency histogram
