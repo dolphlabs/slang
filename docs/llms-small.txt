@@ -333,6 +333,9 @@ is an `i32`): `math.sqrt`, `math.pi`, `math.round_to(x, 2)`, and for money
 overflow. `math/stats` (mean, median, stddev, quantile, correlation,
 regression, streaming `running()`/`digest()`, distributions) and
 `math/numtheory` (mod_pow, is_prime, factorize) are written over it.
+A/B tests: `stats.two_proportion_z(conv_a, n_a, conv_b, n_b).p_value`,
+`welch_t(xs, ys)`, `chi_square_test(table)`, `wilson(k, n, 0.95)`,
+`sample_size_proportions(p1, p2, 0.05, 0.8)`, `sprt(p0, p1, alpha, beta)`.
 `math/finance`: `finance.npv(rate, flows)`, `irr(flows)` (result), `xirr`,
 `pmt/pv/fv/nper(rate, n, ..)` with spreadsheet signs, `amortize(principal,
 annual_rate, periods, per_year)` (decimal `[Payment]` to the cent),
@@ -455,7 +458,7 @@ Each package's functions, first 12 at most. Signatures: `/packages/<name>.md`.
 - math/optimize: no_root, no_min, no_integral, bracket, bracket_with, bisect, bisect_with, brent, brent_with, newton, newton_with, newton_safe (+9 more)
 - math/shard: hash_str, hash_int, jump, jump_str, jump_int, rendezvous, rendezvous_weighted, Rendezvous.pick, Rendezvous.pick_n, Rendezvous.pick_str, Rendezvous.pick_int, Rendezvous.pick_n_str (+18 more)
 - math/sketch: bloom, bloom_blocks, decode_bloom, Bloom.add_hash, Bloom.contains_hash, Bloom.add_str, Bloom.add_int, Bloom.add_bytes, Bloom.contains_str, Bloom.contains_int, Bloom.contains_bytes, Bloom.merge (+85 more)
-- math/stats: normal, Normal.pdf, Normal.cdf, Normal.quantile, Normal.sample, log_normal, LogNormal.pdf, LogNormal.cdf, LogNormal.quantile, LogNormal.sample, uniform, Uniform.pdf (+73 more)
+- math/stats: normal, Normal.pdf, Normal.cdf, Normal.quantile, Normal.sample, log_normal, LogNormal.pdf, LogNormal.cdf, LogNormal.quantile, LogNormal.sample, uniform, Uniform.pdf (+99 more)
 - math/vec: dot, sum, norm, distance, distance2, cosine, argmax, argmin, scale, axpy, add, sub (+11 more)
 - mysql: parse_url, connect, connect_config, close, usable, in_transaction, server_version, connection_id, last_insert_id, affected_rows, ping, sqlstate (+32 more)
 - nats: options, with_creds, connect, connect_with, publish, publish_reply, publish_headers, publish_full, subscribe, queue_subscribe, next_msg, unsubscribe (+15 more)
