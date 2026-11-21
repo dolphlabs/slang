@@ -945,6 +945,10 @@ int block_leaves_scope(CG *cg, Block *b);
 void compute_noreturn(CG *cg, Package *pkgs, int npkgs);
 void compute_leaf_fns(CG *cg, Package *pkgs, int npkgs);
 int user_leaf_call(CG *cg, Expr *e);
+/* The declared plain function a call names, or NULL (a method, an extern,
+ * a native, a function value). */
+FuncSig *user_fn_of_call(CG *cg, Expr *e);
+FuncSig *method_of_call_type(CG *cg, const char *recv_t, const char *mname);
 void gen_block(CG *cg, Block *b);
 void emit_runtime_file(CG *cg, const char *name);
 void emit_guardable_open(CG *cg, const char *ret, const char *name,
