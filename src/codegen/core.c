@@ -2099,7 +2099,14 @@ int safepoint_elidable(CG *cg, Expr *e) {
 char *wrap_safepoint(CG *cg, Expr *e, const char *result_ctype,
                      const char *prelude, char *inner) {
     int has_prelude = prelude && prelude[0] != '\0';
-    if (safepoint_elidable(cg, e)) {
+    /* Inside a leaf function no bracket at all: its callers hold their
+     * live values unrooted across the call (user_leaf_call), so a
+     * collection here could free them. compute_leaf_fns admits only
+     * calls that neither allocate-and-collect nor park, and allocation
+     * never collects by itself, so the bracket was protecting nothing
+     * this body can trigger -- e.g. len() among a native's arguments,
+     * which ambient roots alone used to keep bracketed. */
+    if (cg->in_leaf_fn || safepoint_elidable(cg, e)) {
         if (!has_prelude)
             return inner;
         return xasprintf("({ %s%s; })", prelude, inner);

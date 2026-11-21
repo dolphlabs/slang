@@ -1,9 +1,15 @@
 # The math library: plan
 
-**Status (2026-11-09):** phases 0 to 2 have landed: `math` (#477, #485),
-`math/stats` and `math/numtheory` (#481, #483). Phases 3 to 5
-(`math/complex`, `math/linalg`, `math/big`) are not started. The text
-below is the plan as written, before any of it was built.
+**Status (2026-11-21):** phases 0 to 2 have landed: `math` (#477, #485),
+`math/stats` and `math/numtheory` (#481, #483). Phase 4, `math/big`
+(`Int` and `Rat`), is built in feat/math-big, with phase 5's Montgomery
+`mod_pow`; measured, Karatsuba only pays above 256 limbs, not the 40
+guessed below. Phase 5's `t_test`, `chi_square_test` and the Student t
+and chi-square distributions are in feat/stats-experiments. Phase 3
+(`math/complex`, fixed-size `math/linalg`) and the rest of phase 5 are not
+started: `missing-libraries.md` section 5 (sketches, sharding, finance,
+vectors, geo) went first, as more useful to backends. The text below is
+the plan as written, before any of it was built.
 
 When this plan was written, slang had no math. There is no `sqrt`, `floor` or `abs`, and no
 checked integer arithmetic, so programs hand-roll it: `say` writes its own
