@@ -10,7 +10,7 @@
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` / `import "io";` / `import "encoding";` like any other package.
 
-`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/interp`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
 then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
 compiler's `SLANG_STDLIB_DIR`).
@@ -2866,6 +2866,42 @@ be coprime), `binomial_mod` (Lucas, for a prime modulus) and
 function given one <= 0 returns `none`, 0 or `false` rather than
 panicking, and no result is negative.
 
+#### `math/interp`
+
+Values between known points: fee schedules, tiered rates, pricing and
+yield curves, calibration tables.
+
+```slang
+import "math/interp";
+
+let fees = interp.linear([0.0, 1000.0, 10000.0], [2.5, 1.8, 0.9]) ?? interp.empty();
+fees.at(4200.0);                     // 1.48
+let tier = interp.step([0.0, 100.0, 500.0], [10.0, 8.0, 5.0]) ?? interp.empty();
+tier.at(250.0);                      // 8: the tier 250 falls in
+let curve = interp.monotone(days, rates) ?? interp.empty();   // smooth, no overshoot
+curve.at(45.0);
+curve.slope(45.0);
+curve.set_extrapolate(interp.Extrapolate.Linear);
+
+let gr = interp.grid([1.0, 5.0], [0.0, 100.0, 500.0], prices);  // 2 x 3 values
+if let g = gr { g.at(2.5, 140.0); }                           // bilinear
+```
+
+- `linear`, `step`, `monotone` (Fritsch-Carlson cubic with
+  Fritsch-Butland slopes: smooth, through every point, and never
+  overshooting, so monotone data stays monotone) and `spline` (the
+  natural cubic spline: the smoothest curve, which can overshoot).
+- `at`, `at_all`, `slope`; outside the knots `Extrapolate.Clamp` (the
+  default), `Linear` or `None` (NaN).
+- `grid(xs, ys, values)`: bilinear interpolation over a rectangular
+  table, clamped at its edges.
+
+Constructors check their input (equal lengths, at least one point,
+strictly increasing finite xs) and return a `result`. A lookup is a
+binary search, but a curve remembers its last segment, so ascending
+queries cost O(1) each; that memory makes a curve unsafe to share
+between tasks querying at once, so give each its own `copy()` (the knots
+are shared, not copied).
 #### `math/vec`
 
 Bulk arithmetic on `[float]` and `[f32]` vectors, for embedding search,
@@ -3816,6 +3852,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [json](packages/json.md) -- compiler-provided, 0 public items
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [math](packages/math.md) -- compiler-provided, 131 public items
+- [math/interp](packages/math/interp.md) -- source package, 15 public items
 - [math/numtheory](packages/math/numtheory.md) -- source package, 16 public items
 - [math/stats](packages/math/stats.md) -- source package, 91 public items
 - [math/vec](packages/math/vec.md) -- compiler-provided, 23 public items
