@@ -1,0 +1,48 @@
+17.629426
+0.0889633947
+true
+finance: the cash flows never change sign, so there is no IRR
+-0.36904266
+0.373362534
+true
+-1342.054058
+-100
+-87.969098
+33685.567728
+-59777.145851
+59.673866
+-66.666667
+-75.623186
+0.0535426674
+0.0525003199
+1647.009498
+1648.721271
+0.14869835
+360
+1342.05
+1041.67
+300.38
+true
+250000.00
+233141.28
+0.00
+1345.33
+333.33 333.34 0.00
+finance: periods must be between 1 and 100000
+["40.00", "40.00", "20.00"]
+30.86
+25
+25.00
+21.00
+150.00
+90.00
+30.00
+finance: progressive needs one more rate than bounds
+11
+true
+11.0000
+15
+3
+{start: 0, open: 10, high: 12, low: 9, close: 9, volume: 6, trades: 3}
+{start: 180, open: 8, high: 8, low: 8, close: 8, volume: 6, trades: 1}
+0.25
