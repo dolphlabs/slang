@@ -844,7 +844,7 @@ for name in gc_ctor_payload gc_map_put pg_rows_as postgres http_client_pool http
             generics_pkg gc_nested_literal generics_methods \
             generics_methods_pkg generics_methods_passes generics_late_instance generics_enum builder audit_roots loop_carry loop_leaf_poll loop_leaf_plus safepoint_task_once own_roots switch escape_roots \
             http_read_wire bytes_empty_literal gc_minor_barriers net_dns_records map_delete if_let \
-            literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions math_vec json_parity json_utf8 json_decode_budget \
+            literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions leaf_fn_native_args math_vec json_parity json_utf8 json_decode_budget \
             bytes json_deep_nesting gc_container_frontier gc_promotion_budget gc_chan_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_preempt_derived gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks sort_test \
             json_wide; do
     out="/tmp/sl_gcstress_${name}.out"
@@ -901,7 +901,7 @@ for name in gc_nursery_barrier gc_nursery_promotion gc_ctor_payload gc_map_put v
             gc_nested_literal gc_stress gc_stat spawn_isolation maps pg_rows_as json \
             json_int_exact flags method_recv method_recv_gc indirect_callee \
             http_read_wire bytes_empty_literal gc_minor_barriers net_dns_records map_delete if_let \
-            literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions loop_leaf_plus safepoint_task_once json_parity json_utf8 json_decode_budget \
+            literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions leaf_fn_native_args loop_leaf_plus safepoint_task_once json_parity json_utf8 json_decode_budget \
             bytes json_deep_nesting gc_container_frontier gc_promotion_budget gc_chan_promotion_budget value_struct_containers json_value_structs gc_stw_sleep gc_pointer_free gc_payload_trace gc_many_tasks gc_idle_tasks sort_test; do
     out="/tmp/sl_nursery_${name}.out"
     if ! SLANG_GC_NURSERY_KB=16 ./slangc "tests/$name/main.sl" --run \
@@ -929,7 +929,7 @@ done
 echo "--- minor collections verified (SLANG_GC_VERIFY_MINOR, 16KB nursery) ---"
 vm_bad=0
 for name in gc_minor_barriers gc_container_frontier gc_stress gc_ctor_payload gc_map_put encoding_f64 crypto if_let \
-            literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions leaf_functions_wide loop_leaf_plus safepoint_task_once \
+            literal_expect pending_sibling_type big_list_literal leaf_native_calls method_receiver_root leaf_functions leaf_functions_wide leaf_fn_native_args loop_leaf_plus safepoint_task_once \
             gc_nested_literal gc_nursery_barrier gc_nursery_promotion net_dns_records \
             spawn_isolation select maps pg_rows_as json json_parity json_utf8 unicode json_decimal crypto_more nats_reconnect json_decode_budget \
             bytes json_deep_nesting redis http_read_wire http_client_pool http2_flood h2_client h2_client_close chan_recv_promoted value_results value_opts \
@@ -1298,6 +1298,24 @@ rm -f "$sjm_c" "$sjm_c.gen.c"
 # A leaf native (strings.has_prefix and the other pure readers, see
 # native_is_leaf) is no collection point: its calls get no safepoint
 # bracket, an allocating native next to them keeps its own.
+# A leaf function's body has no safepoint: its callers skip their brackets
+# on that promise. top_bits calls len() among math.bit_len's arguments,
+# which ambient roots used to keep bracketed.
+lfn_c="/tmp/sl_leaf_fn_native_args"
+if ./slangc tests/leaf_fn_native_args/main.sl --keep-c -o "$lfn_c" >/dev/null 2>&1; then
+    lfn_sp=$(awk '/^static long long sl_leaf_fn_native_args_top_bits\(sl_arr \* a\) \{$/ {p=1} p && /sl_rt_safepoint_enter_s/ {n++} p && /^}$/ {p=0} END {print n+0}' "$lfn_c.gen.c")
+    lfn_call=$(grep -c 'sl_rt_safepoint_enter_s([^;]*; [^;]*= sl_leaf_fn_native_args_top_bits(' "$lfn_c.gen.c")
+    if [ "$lfn_sp" = 0 ] && [ "$lfn_call" = 0 ]; then
+        echo "PASS leaf function body and its calls unbracketed"
+    else
+        echo "FAIL leaf fn native args: $lfn_sp safepoints in top_bits, $lfn_call bracketed calls (want 0 and 0)"
+        fail=1
+    fi
+else
+    echo "FAIL leaf fn native args (compile)"
+    fail=1
+fi
+
 lnc_c="/tmp/sl_leaf_native_calls"
 if ./slangc tests/leaf_native_calls/main.sl --keep-c -o "$lnc_c" >/dev/null 2>&1; then
     lnc_leaf=$(grep -oE 'sl_rt_safepoint_enter_s\(SL_SELF\(\), [^)]*\); [^;]*sl_strings_(has_prefix|has_suffix|contains|count|find|rfind|find_field|hash)\(' "$lnc_c.gen.c" | wc -l | tr -d ' ')
