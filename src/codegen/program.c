@@ -1068,10 +1068,11 @@ void emit_native_runtime(CG *cg) {
     int want_compress = want_pkg(cg, "compress");
     int want_math = want_pkg(cg, "math");
     int want_unicode = want_pkg(cg, "unicode");
+    int want_vec = want_pkg(cg, "math/vec");
     if (!want_time && !want_net && !want_proc && !want_fs && !want_log &&
         !want_crypto && !want_sql && !want_regex && !want_os &&
         !want_io && !want_strings && !want_encoding && !want_compress &&
-        !want_math && !want_unicode)
+        !want_math && !want_unicode && !want_vec)
         return;
     if (want_time)
         emit_runtime_file(cg, "sl_time.c");
@@ -1115,6 +1116,8 @@ void emit_native_runtime(CG *cg) {
         emit_runtime_file(cg, "sl_compress.c");
     if (want_math)
         emit_runtime_file(cg, "sl_math.c");
+    if (want_vec)
+        emit_runtime_file(cg, "sl_vec.c");
     /* The tables before the code that reads them: one translation unit,
        declare before use. */
     if (want_unicode) {

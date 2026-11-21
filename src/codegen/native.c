@@ -29,6 +29,20 @@ int native_is_leaf(const char *pkg, const char *name) {
      * except the format* family, which builds a str. */
     if (!strcmp(pkg, "math"))
         return strncmp(name, "format", 6) != 0;
+    /* runtime/sl_vec.c: the reductions and the in-place kernels read and
+       write numbers inside lists they are given and allocate nothing; a
+       length mismatch fails the task (sl_rt_fail never returns) */
+    if (!strcmp(pkg, "math/vec")) {
+        static const char *const vl[] = {
+            "dot", "sum", "norm", "distance", "distance2", "cosine",
+            "argmax", "argmin", "scale", "axpy", "add", "sub", "mul",
+            "normalize", "dot_q",
+        };
+        for (size_t i = 0; i < sizeof(vl) / sizeof(vl[0]); i++)
+            if (!strcmp(name, vl[i]))
+                return 1;
+        return 0;
+    }
     /* Each one only reads its arguments: checked in runtime/sl_strings.c,
      * where none allocates or calls out. Add a native here only after
      * reading its C the same way. */
@@ -67,7 +81,7 @@ int native_sigs_of(const char *pkg, const NatSig **out, int max) {
         {OS_SIGS, OS_SIGS_LEN},           {STRINGS_SIGS, STRINGS_SIGS_LEN},
         {ENCODING_SIGS, ENCODING_SIGS_LEN}, {COMPRESS_SIGS, COMPRESS_SIGS_LEN},
         {IO_SIGS, IO_SIGS_LEN},           {MATH_SIGS, MATH_SIGS_LEN},
-        {UNICODE_SIGS, UNICODE_SIGS_LEN},
+        {UNICODE_SIGS, UNICODE_SIGS_LEN}, {VEC_SIGS, VEC_SIGS_LEN},
     };
     int n = 0;
     for (size_t t = 0; t < sizeof(tabs) / sizeof(tabs[0]); t++)
@@ -117,6 +131,8 @@ static const NatSig *find_any_sig(const char *pkg, const char *fname) {
         ns = find_sig(MATH_SIGS, MATH_SIGS_LEN, pkg, fname);
     if (!ns)
         ns = find_sig(UNICODE_SIGS, UNICODE_SIGS_LEN, pkg, fname);
+    if (!ns)
+        ns = find_sig(VEC_SIGS, VEC_SIGS_LEN, pkg, fname);
     return ns;
 }
 
@@ -129,6 +145,68 @@ static NatArgKind nat_argkind(const char *pkg, const char *fname, int i) {
     if (!ns || i < 0 || i >= ns->nargs)
         return NA_INT;
     return ns->argkinds[i];
+}
+
+/* math/vec: whether a list type is one the kernels take. */
+static int vec_elem_ok(const char *list_t) {
+    char *el = arr_elem(list_t);
+    int ok = !strcmp(el, "float") || !strcmp(el, "f32");
+    free(el);
+    return ok;
+}
+
+/* The kernel suffix for a math/vec call: "f64" or "f32" from its first
+ * vector argument, or NULL for a function with one C body (dequantize,
+ * dot_q, the conversions). */
+static const char *vec_suffix(const NatSig *ns, const char **argt, int n) {
+    if (!strcmp(ns->name, "to_f32") || !strcmp(ns->name, "to_f64"))
+        return NULL;
+    for (int i = 0; i < n && i < ns->nargs; i++) {
+        if (ns->argkinds[i] != NA_VEC || !argt[i])
+            continue;
+        char *el = arr_elem(argt[i]);
+        const char *s = !strcmp(el, "f32") ? "f32" : "f64";
+        free(el);
+        return s;
+    }
+    return NULL;
+}
+
+/* Every vector argument of one call shares its element type, and the
+ * conversions take the type they convert from. */
+static void vec_check_elems(const NatSig *ns, const char **argt, int n,
+                            int line) {
+    const char *first = NULL;
+    for (int i = 0; i < n && i < ns->nargs; i++) {
+        if (ns->argkinds[i] != NA_VEC)
+            continue;
+        if (!first) {
+            first = argt[i];
+        } else if (strcmp(first, argt[i])) {
+            cg_error(line,
+                     "vec.%s: both vectors must have the same element type "
+                     "(got %s and %s); convert one with vec.to_f32 or "
+                     "vec.to_f64",
+                     ns->name, first, argt[i]);
+        }
+    }
+    if (!strcmp(ns->name, "to_f32") && first && strcmp(first, "[float]"))
+        cg_error(line, "vec.to_f32 takes a [float] (got %s)", first);
+    if (!strcmp(ns->name, "to_f64") && first && strcmp(first, "[f32]"))
+        cg_error(line, "vec.to_f64 takes an [f32] (got %s)", first);
+}
+
+/* math/vec functions that are given the call's location, to name it when
+ * two lengths disagree. */
+static int vec_takes_at(const char *name) {
+    static const char *const at[] = {
+        "dot", "distance", "distance2", "cosine", "axpy", "add", "sub",
+        "mul", "scores", "top_k_dot", "top_k_cosine", "dequantize", "dot_q",
+    };
+    for (size_t i = 0; i < sizeof(at) / sizeof(at[0]); i++)
+        if (!strcmp(name, at[i]))
+            return 1;
+    return 0;
 }
 
 /* Validate a call into a native package and return its slang return
@@ -196,6 +274,10 @@ const char *native_check(CG *cg, const char *pkg, const char *fname,
             ok = is_arr(at) && is_bytes(arr_elem(at));
             want = "a [bytes]";
             break;
+        case NA_VEC:
+            ok = is_arr(at) && vec_elem_ok(at);
+            want = "a [float] or [f32]";
+            break;
         case NA_UNTIL:
             ok = is_until(at);
             want = "an until (try until_of(time.mono() + ns))";
@@ -209,6 +291,8 @@ const char *native_check(CG *cg, const char *pkg, const char *fname,
             cg_error(e->line, "%s.%s argument %d must be %s (got %s)", pkg,
                      fname, i + 1, want, at);
     }
+    if (!strcmp(pkg, "math/vec"))
+        vec_check_elems(ns, argt, n, e->line);
     const char *t = math_type_of_args(ns, e->as.call.args, argt, e->line);
     return t ? math_ret_type(ns, t) : ns->ret;
 }
@@ -244,9 +328,19 @@ char *native_gen(CG *cg, const char *pkg, const char *fname,
             argt[i] = infer_type(cg, e->as.call.args[i]);
         mt = math_type_of_args(ns, e->as.call.args, argt, e->line);
     }
+    const char *vs = NULL;
+    if (ns && !strcmp(pkg, "math/vec")) {
+        const char *argt[8] = {0};
+        for (int i = 0; i < nargs && i < 8; i++)
+            argt[i] = infer_type(cg, e->as.call.args[i]);
+        vs = vec_suffix(ns, argt, nargs);
+    }
     if (mt)
         sb_append(&sb, xasprintf("sl_math_%s_%s(", sanitize_ident(fname),
                                  math_suffix(mt)));
+    else if (vs)
+        sb_append(&sb, xasprintf("sl_math_vec_%s_%s(", sanitize_ident(fname),
+                                 vs));
     else
         sb_append(&sb, xasprintf("sl_%s_%s(", sanitize_pkg(pkg),
                                  sanitize_ident(fname)));
@@ -278,6 +372,8 @@ char *native_gen(CG *cg, const char *pkg, const char *fname,
                                  to the i32 default below */
         } else if (ak == NA_ARR_BYTES) {
             cast_t = "[bytes]"; /* already sl_arr *, like [str] above */
+        } else if (ak == NA_VEC) {
+            cast_t = at; /* already sl_arr *, a [float] or an [f32] */
         } else if (ak == NA_WIRE) {
             cast_t = "wire"; /* already sl_wire; must not fall through
                                 to the i32 default below */
@@ -296,6 +392,9 @@ char *native_gen(CG *cg, const char *pkg, const char *fname,
     }
     const char *rt = infer_type(cg, e);
     const char *rc = (!rt || !strcmp(rt, "void")) ? NULL : ctype_of(cg, rt);
+    if (!strcmp(pkg, "math/vec") && vec_takes_at(fname))
+        sb_append(&sb, xasprintf("%s%s", nargs ? ", " : "",
+                                 panic_at(cg, e->line)));
     if (!strcmp(pkg, "math")) {
         if (math_takes_at(fname))
             sb_append(&sb, xasprintf("%s%s", nargs ? ", " : "",

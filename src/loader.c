@@ -20,6 +20,7 @@
 #include "codegen/pkg_compress/pkg_compress.h"
 #include "codegen/pkg_unicode/pkg_unicode.h"
 #include "codegen/pkg_math/pkg_math.h"
+#include "codegen/pkg_vec/pkg_vec.h"
 #include "rtpath.h"
 #include "project.h"
 
@@ -227,7 +228,7 @@ static const char *NATIVE_PKGS[] = {PKG_TIME_NAME, PKG_NET_NAME,
                                     PKG_STRINGS_NAME,
                                     PKG_ENCODING_NAME,
                                     PKG_COMPRESS_NAME, PKG_MATH_NAME,
-                                    PKG_UNICODE_NAME, NULL};
+                                    PKG_UNICODE_NAME, PKG_VEC_NAME, NULL};
 
 /* Does the import path name a built-in native package? Only the exact
  * name does: "lib/json" is a directory that happens to end in "json",
