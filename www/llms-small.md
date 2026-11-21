@@ -267,7 +267,7 @@ Package authors can add repeatable `exclude <dir>` lines to their own
 `slang.project` to omit non-runtime directories from consumers' package caches;
 a package must not import a directory it excludes.
 Standard packages: `time net json proc fs os io log crypto sql pg mysql redis regex
-strings unicode encoding compress math decimal rand builder byteutil flags sort
+strings unicode encoding compress math math/vec decimal rand builder byteutil flags sort
 uuid http http2 httpc websocket template csv toml yaml cache nats s3 sigv4 x509 xml zip tar`.
 `xml.parse(text)` gives the root `xml.Node` (`name`, `local`, `ns`, `attrs`, `children`);
 `n.find("a/b")`, `n.find_all(path)`, `n.child_text("link")`, `n.attr("id")`; DOCTYPE refused.
@@ -337,6 +337,9 @@ regression, streaming `running()`/`digest()`, distributions) and
 `pmt/pv/fv/nper(rate, n, ..)` with spreadsheet signs, `amortize(principal,
 annual_rate, periods, per_year)` (decimal `[Payment]` to the cent),
 `progressive`/`tiered` fees, `vwap`, `candles`.
+`math/vec` is native bulk math on `[float]`/`[f32]`: `vec.dot`, `cosine`,
+`distance`, `normalize` (in place), `vec.top_k_cosine(query, rows, dim, k)`
+over rows stored back to back, `to_f32`, `quantize` (int8) and `dot_q`.
 `rand` is seeded and non-cryptographic, for tests that replay:
 `let r = rand.new(42); rand.below(r, 10); rand.between(r, 1, 6);
 rand.shuffle(r, xs); rand.backoff(r, attempt, base, cap)`. Secrets use

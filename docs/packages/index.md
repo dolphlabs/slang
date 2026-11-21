@@ -5,12 +5,12 @@
 ## Standard packages
 
 `time`, `net`, `json`, `proc`, `fs`, `log`, `crypto`, `sql`, `regex`,
-`os`, `io`, `strings`, `encoding`, `compress` and `math` are compiler-provided native packages — no source files, just
+`os`, `io`, `strings`, `encoding`, `compress`, `math` and `math/vec` are compiler-provided native packages — no source files, just
 `import "time";` / `import "net";` / `import "json";` / `import "proc";`
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` / `import "io";` / `import "encoding";` like any other package.
 
-`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/finance`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
 then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
 compiler's `SLANG_STDLIB_DIR`).
@@ -2866,47 +2866,54 @@ be coprime), `binomial_mod` (Lucas, for a prime modulus) and
 function given one <= 0 returns `none`, 0 or `false` rather than
 panicking, and no result is negative.
 
-#### `math/finance`
+#### `math/vec`
 
-Time value of money, loans, fees and market data. Analysis takes
-floats; anything booked (a schedule, a fee, a split) takes and returns
-`decimal.Decimal` and adds up to the cent.
+Bulk arithmetic on `[float]` and `[f32]` vectors, for embedding search,
+recommendations and scoring. Native: each kernel runs eight to
+thirty-two accumulators over raw memory, with 256-bit fused
+multiply-adds on x86-64 CPUs that have AVX2 and FMA (chosen at run
+time), which a slang loop cannot do.
 
 ```slang
-import "math/finance";
-import "decimal";
+import "math/vec";
 
-finance.npv(0.08, [-1000.0, 300.0, 400.0, 500.0]);    // 17.629...
-finance.irr([-1000.0, 300.0, 400.0, 500.0]);          // ok(0.08896...)
-finance.xirr(flows, days);                            // dated flows, actual/365
-finance.pmt(0.05 / 12.0, 360, 250000.0, 0.0, false);  // -1342.05
+let a = [0.1, 0.7, 0.2];
+let b = [0.3, 0.5, 0.2];
+vec.dot(a, b);                       // 0.42
+vec.cosine(a, b);                    // in [-1, 1]
+vec.distance(a, b);                  // Euclidean
+vec.normalize(a);                    // in place; returns the old norm
 
-let p = decimal.parse("250000.00") ?? decimal.zero();
-let rate = decimal.parse("0.05") ?? decimal.zero();
-let rows = finance.amortize(p, rate, 360, 12);        // [Payment], to the cent
-finance.progressive(amount, bounds, rates, 2, decimal.Rounding.HalfEven);
-finance.prorate(total, [share_a, share_b]);           // largest remainder
+// search: rows is n vectors of `dim` numbers, one after another
+let best = vec.top_k_cosine(query, rows, 384, 10);   // [int], best first
+
+let small = vec.to_f32(a);           // half the memory
+let q8 = vec.quantize(small);        // bytes: a quarter of an [f32]
+vec.dot_q(q8, vec.quantize(vec.to_f32(b)));
 ```
 
-- **Value:** `npv`, `irr` (safeguarded Newton on the exact derivative
-  inside a scanned bracket), `xnpv`, `xirr`, and the spreadsheet set
-  `pmt`, `fv`, `pv`, `nper`, `ipmt`, `ppmt` with their sign convention
-  (money paid out is negative) and `at_start` for annuities due;
-  `effective_rate`, `nominal_rate`, `compound` (n <= 0: continuous),
-  `cagr`.
-- **Booked money:** `amortize` (interest rounded half-even each period,
-  the level payment rounded to the cent, the last payment absorbing the
-  difference so the balance ends at exactly zero; every line adds up),
-  `prorate` (by decimal weights, through `decimal.allocate`),
-  `apply_bps`, `progressive` (marginal brackets, as income tax),
-  `tiered` (the whole amount at its tier's rate).
-- **Market data:** `vwap`, `vwap_decimal`, `twap`, `candles` and
-  `candle_builder` (OHLCV bars from a trade feed, aligned to the
-  interval), `max_drawdown`, `bps_change`.
+- **Reductions:** `dot`, `sum`, `norm`, `distance`, `distance2`
+  (squared), `cosine` (NaN for a zero vector), `argmax`, `argmin`
+  (NaN skipped; -1 for an empty list).
+- **In place:** `scale(a, s)`, `axpy(alpha, x, y)` (`y += alpha * x`),
+  `add(y, x)`, `sub(y, x)`, `mul(y, x)` (elementwise), `normalize(a)`.
+- **Search:** `top_k(a, k)` (indexes of the k largest, best first, ties
+  to the lower index), `scores(query, rows, dim)` (every row's dot
+  product), `top_k_dot` and `top_k_cosine(query, rows, dim, k)`: a
+  k-entry heap, no copy of the scores, one pass over each row.
+- **Storage:** `to_f32`, `to_f64`, `quantize` (symmetric int8: a
+  4-byte scale, then a byte per element), `dequantize`, `dot_q` (an
+  exact integer sum, times both scales).
 
-`irr` and `xirr` are an error, not a guess, when the flows never change
-sign or no rate in (-99%, 100000%) balances them; with several sign
-changes they return the lowest rate.
+The vectors of one call must have the same element type (a compile
+error otherwise, naming `to_f32`/`to_f64`) and the same length (a
+panic naming the call otherwise). Nothing allocates except the
+functions that return a new list or bytes. On a 1536-float dot product
+`vec.dot` takes 112 ns for `[f32]` and 195 ns for `[float]`, against
+1600 ns for the same loop written in slang. Sums are taken in a
+different order from a left-to-right loop, and on x86-64 in a different
+order with and without AVX2, so results can differ in their last bits
+between machines.
 
 #### `decimal`
 
@@ -3809,9 +3816,9 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [json](packages/json.md) -- compiler-provided, 0 public items
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [math](packages/math.md) -- compiler-provided, 131 public items
-- [math/finance](packages/math/finance.md) -- source package, 31 public items
 - [math/numtheory](packages/math/numtheory.md) -- source package, 16 public items
 - [math/stats](packages/math/stats.md) -- source package, 91 public items
+- [math/vec](packages/math/vec.md) -- compiler-provided, 23 public items
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
 - [net](packages/net.md) -- compiler-provided, 35 public items
