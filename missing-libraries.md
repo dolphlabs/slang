@@ -131,9 +131,9 @@ and fixed-size `math/linalg` after that.
   live servers. HyperLogLog (distinct counts), Count-Min sketch, top-k
   heavy hitters, Bloom and cuckoo filters, an HDR-style latency histogram
   with Prometheus buckets, and reservoir sampling. PR #588 (open).
-- [ ] **`math/shard`** (stdlib): map a key to a node stably. Jump
+- [x] **`math/shard`** (stdlib): map a key to a node stably. Jump
   consistent hash, rendezvous (highest random weight) hashing, and a
-  consistent-hash ring with virtual nodes and weights.
+  consistent-hash ring with virtual nodes and weights. PR #589 (open).
 - [ ] **`math/optimize`** (stdlib): root finding (bisection, Brent,
   safeguarded Newton), 1-D minimisation (golden section, Brent) and
   numerical integration (adaptive Simpson, Gauss-Kronrod).
