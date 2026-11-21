@@ -137,9 +137,9 @@ and fixed-size `math/linalg` after that.
 - [x] **`math/optimize`** (stdlib): root finding (bisection, Brent,
   safeguarded Newton), 1-D minimisation (golden section, Brent) and
   numerical integration (adaptive Simpson, Gauss-Kronrod). PR #590 (open).
-- [ ] **`math/interp`** (stdlib): lookup tables and curves. Piecewise
+- [x] **`math/interp`** (stdlib): lookup tables and curves. Piecewise
   linear, step, monotone cubic and natural cubic splines, for fee
-  schedules, tiered rates and pricing curves.
+  schedules, tiered rates and pricing curves. PR #592 (open).
 - [ ] **`math/finance`** (stdlib, over `decimal`): splitting an amount
   without losing cents (largest remainder, pro rata), NPV, IRR, loan
   payments and amortisation, compound interest, VWAP/TWAP, OHLC candles,
