@@ -2843,6 +2843,32 @@ stats.poisson(3.0).sample(rand.new(42));     // an int, replayable
   for the Poisson and binomial once the mean reaches 10, multiplication
   or inversion below. All exact, all O(1) on average.
 
+For experiments, `math/stats` has the tests and planning numbers an A/B
+test needs, and the distributions they rest on:
+
+```slang
+let t = stats.two_proportion_z(120, 2400, 156, 2380);   // TestResult
+t.p_value < 0.05;                                       // B beats A at 5%
+stats.wilson(156, 2380, 0.95);                          // Interval { lo, hi }
+stats.sample_size_proportions(0.05, 0.06, 0.05, 0.8);   // 8158 per arm
+let s = stats.sprt(0.05, 0.06, 0.05, 0.2);
+s.add(converted);                    // Decision.Continue until it can stop
+```
+
+- **Tests** (two-sided p-values): `two_proportion_z`, `welch_t` (unequal
+  variances), `t_test` (one sample), `chi_square_test` (an r x c table of
+  counts), `chi_square_fit`.
+- **Intervals and planning:** `wilson` (stays in [0, 1], sane at 0 or n
+  successes), `mean_interval`, `sample_size_proportions`,
+  `power_proportions`, `sample_size_means`.
+- **Sequential:** `sprt(p0, p1, alpha, beta)`, Wald's test: `add` or
+  `add_n` outcomes and stop at `Decision.AcceptNull` or
+  `AcceptAlternative`. Peeking is part of its design, so stopping early
+  does not inflate the error rates.
+- **Distributions:** `student_t(df)` and `chi_squared(k)` (`pdf`, `cdf`,
+  `quantile` to full precision), and the regularized incomplete beta and
+  gamma functions under them, `inc_beta` and `inc_gamma`.
+
 A result with no value for its input -- the mean of no numbers, the
 variance of one, a correlation with a constant list -- is NaN, which
 propagates and tests true with `math.is_nan`; functions that return one
@@ -4101,7 +4127,7 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [math/optimize](packages/math/optimize.md) -- source package, 25 public items
 - [math/shard](packages/math/shard.md) -- source package, 33 public items
 - [math/sketch](packages/math/sketch.md) -- source package, 105 public items
-- [math/stats](packages/math/stats.md) -- source package, 97 public items
+- [math/stats](packages/math/stats.md) -- source package, 128 public items
 - [math/vec](packages/math/vec.md) -- compiler-provided, 23 public items
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
