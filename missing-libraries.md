@@ -134,9 +134,9 @@ and fixed-size `math/linalg` after that.
 - [x] **`math/shard`** (stdlib): map a key to a node stably. Jump
   consistent hash, rendezvous (highest random weight) hashing, and a
   consistent-hash ring with virtual nodes and weights. PR #589 (open).
-- [ ] **`math/optimize`** (stdlib): root finding (bisection, Brent,
+- [x] **`math/optimize`** (stdlib): root finding (bisection, Brent,
   safeguarded Newton), 1-D minimisation (golden section, Brent) and
-  numerical integration (adaptive Simpson, Gauss-Kronrod).
+  numerical integration (adaptive Simpson, Gauss-Kronrod). PR #590 (open).
 - [ ] **`math/interp`** (stdlib): lookup tables and curves. Piecewise
   linear, step, monotone cubic and natural cubic splines, for fee
   schedules, tiered rates and pricing curves.
