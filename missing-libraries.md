@@ -144,9 +144,9 @@ and fixed-size `math/linalg` after that.
   without losing cents (largest remainder, pro rata), NPV, IRR, loan
   payments and amortisation, compound interest, VWAP/TWAP, OHLC candles,
   basis points.
-- [ ] **`math/vec`** (stdlib): bulk operations on `[float]` and `[f32]`
+- [x] **`math/vec`** (native): bulk operations on `[float]` and `[f32]`
   (dot, axpy, norms, cosine similarity, top-k, int8 quantisation), built
-  for embedding search and recommendations.
+  for embedding search and recommendations. PR #584 (open).
 - [ ] **`math/geo`** (stdlib): haversine and Vincenty distance, bearing,
   destination point, bounding box for a radius query, geohash,
   point-in-polygon.
