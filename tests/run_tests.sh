@@ -2046,6 +2046,29 @@ rm -rf "$ls_dir"
 # one compile (not only the program's first), a "did you mean" where one is
 # likely, and with --json one object per error that carries the same facts.
 # tests/fail_diagnostics has errors in two files; its whole stderr is pinned.
+# rand seeds from_os from /dev/urandom rather than through crypto, so a
+# program that imports rand -- or math/stats, which samples with it --
+# does not link OpenSSL (about 1.3 MB of RSS and 3 ms of start-up).
+echo "--- rand links no OpenSSL ---"
+rn_bin="/tmp/sl_rand_no_openssl"
+if ./slangc tests/math_sample/main.sl -o "$rn_bin" >/dev/null 2>&1; then
+    if command -v otool >/dev/null 2>&1; then
+        rn_libs=$(otool -L "$rn_bin" 2>/dev/null)
+    else
+        rn_libs=$(ldd "$rn_bin" 2>/dev/null)
+    fi
+    if printf '%s\n' "$rn_libs" | grep -qE 'libssl|libcrypto'; then
+        echo "FAIL rand links OpenSSL"
+        fail=1
+    else
+        echo "PASS rand links no OpenSSL"
+    fi
+else
+    echo "FAIL rand links no OpenSSL (compile)"
+    fail=1
+fi
+rm -f "$rn_bin" "$rn_bin.gen.c"
+
 echo "--- compiler diagnostics ---"
 dg_bad=0
 dg=tests/fail_diagnostics

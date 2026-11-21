@@ -383,3 +383,70 @@ fn test_should_handle_jitter_edge_inputs() {
 // Seed 42's shuffle of 0..9, from the same C reference code running
 // Fisher-Yates with the same rejection step.
 let SHUFFLE_42 = "7389564102";
+
+fn test_should_draw_normal_with_mean_zero_and_unit_variance() {
+    let r = new(17);
+    let n = 200000;
+    let s = 0.0;
+    let s2 = 0.0;
+    for i in 0..n {
+        let x = normal(r);
+        s += x;
+        s2 += x * x;
+    }
+    let mean = s / (n as float);
+    let var = s2 / (n as float) - mean * mean;
+    assert(mean > -0.01 && mean < 0.01, "normal mean " + to_str(mean));
+    assert(var > 0.985 && var < 1.015, "normal variance " + to_str(var));
+}
+
+fn test_should_reach_both_normal_tails() {
+    // beyond the base layer's edge (3.654) the tail sampler takes over;
+    // about 1 in 3900 draws lands there
+    let r = new(5);
+    let lo = 0;
+    let hi = 0;
+    for i in 0..200000 {
+        let x = normal(r);
+        if x < -3.7 { lo += 1; }
+        if x > 3.7 { hi += 1; }
+    }
+    assert(lo > 10 && hi > 10, "tails " + to_str(lo) + " " + to_str(hi));
+}
+
+fn test_should_draw_exponential_with_unit_mean() {
+    let r = new(23);
+    let n = 200000;
+    let s = 0.0;
+    let past8 = 0;
+    for i in 0..n {
+        let x = exponential(r);
+        assert(x >= 0.0, "negative exponential draw");
+        s += x;
+        if x > 8.0 { past8 += 1; }
+    }
+    let mean = s / (n as float);
+    assert(mean > 0.99 && mean < 1.01, "exponential mean " + to_str(mean));
+    // P(X > 8) = e^-8: about 67 of 200000, past the base layer at 7.697
+    assert(past8 > 30 && past8 < 110, "exponential tail " + to_str(past8));
+}
+
+fn test_should_replay_normal_and_exponential_from_a_seed() {
+    let a = new(99);
+    let b = new(99);
+    for i in 0..1000 {
+        assert(normal(a) == normal(b), "normal replay");
+        assert(exponential(a) == exponential(b), "exponential replay");
+    }
+}
+
+fn test_should_pin_the_first_normal_draws() {
+    // table lookups and multiplies, libm only in the rare wedge test:
+    // the same digits on every platform
+    let r = new(1);
+    let want = [0.42950292484415614, 0.029151296815977275, 0.3869667033227528, -0.2767176327523615, 0.6406802280665065, -1.6867861094101184];
+    for w in want {
+        let x = normal(r);
+        assert(x - w < 1e-12 && w - x < 1e-12, "normal draw " + to_str(x) + " want " + to_str(w));
+    }
+}
