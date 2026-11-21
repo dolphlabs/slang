@@ -333,6 +333,10 @@ is an `i32`): `math.sqrt`, `math.pi`, `math.round_to(x, 2)`, and for money
 overflow. `math/stats` (mean, median, stddev, quantile, correlation,
 regression, streaming `running()`/`digest()`, distributions) and
 `math/numtheory` (mod_pow, is_prime, factorize) are written over it.
+`math/sketch` estimates in fixed memory, mergeable across tasks:
+`sketch.hyperloglog(14)` (`add_str`, `count`), `count_min(eps, delta)`,
+`top_k(k)`, `bloom(n, fpp)`, `cuckoo(n)` (with `remove_str`),
+`histogram(max, 7)` (`record`, `quantile(0.99)`, `buckets`), `reservoir(k, r)`.
 `math/vec` is native bulk math on `[float]`/`[f32]`: `vec.dot`, `cosine`,
 `distance`, `normalize` (in place), `vec.top_k_cosine(query, rows, dim, k)`
 over rows stored back to back, `to_f32`, `quantize` (int8) and `dot_q`.
