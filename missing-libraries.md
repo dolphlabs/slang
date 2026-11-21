@@ -117,6 +117,43 @@ Common backend needs with no package today.
 - [ ] **gRPC streaming** (package `slangpackages/grpc`): server, client and
   bidirectional streams; the package is unary only.
 
+## 5. Math for servers
+
+Follow-ups to `math`, chosen for backend use (metrics, sharding, money,
+search, experiments) over the graphics-leaning parts of `math-plan.md`.
+Added 2026-11-21. `math/big` (section 1) comes after these; `math/complex`
+and fixed-size `math/linalg` after that.
+
+- [ ] **Sampling from distributions** (`math/stats`): `sample(rng)` on
+  every distribution, taking a `rand.Rng`, so load generators and
+  simulations replay from one seed.
+- [ ] **`math/sketch`** (stdlib): fixed-memory, mergeable estimates for
+  live servers. HyperLogLog (distinct counts), Count-Min sketch, top-k
+  heavy hitters, Bloom and cuckoo filters, an HDR-style latency histogram
+  with Prometheus buckets, and reservoir sampling.
+- [ ] **`math/shard`** (stdlib): map a key to a node stably. Jump
+  consistent hash, rendezvous (highest random weight) hashing, and a
+  consistent-hash ring with virtual nodes and weights.
+- [ ] **`math/optimize`** (stdlib): root finding (bisection, Brent,
+  safeguarded Newton), 1-D minimisation (golden section, Brent) and
+  numerical integration (adaptive Simpson, Gauss-Kronrod).
+- [ ] **`math/interp`** (stdlib): lookup tables and curves. Piecewise
+  linear, step, monotone cubic and natural cubic splines, for fee
+  schedules, tiered rates and pricing curves.
+- [ ] **`math/finance`** (stdlib, over `decimal`): splitting an amount
+  without losing cents (largest remainder, pro rata), NPV, IRR, loan
+  payments and amortisation, compound interest, VWAP/TWAP, OHLC candles,
+  basis points.
+- [ ] **`math/vec`** (stdlib): bulk operations on `[float]` and `[f32]`
+  (dot, axpy, norms, cosine similarity, top-k, int8 quantisation), built
+  for embedding search and recommendations.
+- [ ] **`math/geo`** (stdlib): haversine and Vincenty distance, bearing,
+  destination point, bounding box for a radius query, geohash,
+  point-in-polygon.
+- [ ] **Experiment statistics** (`math/stats`): two-proportion z-test,
+  Welch's t-test, chi-square test, Wilson intervals, sample size and power,
+  and a sequential probability ratio test, for A/B tests.
+
 ## Already covered
 
 For reference, so these are not re-proposed: HTTP/1.1 server and client,
