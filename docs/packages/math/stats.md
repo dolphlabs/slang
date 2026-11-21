@@ -27,6 +27,7 @@ p.quantile(0.99);
 stats.normal(100.0, 15.0).cdf(130.0);        // 0.9772498680518208
 stats.normal(0.0, 1.0).quantile(0.975);      // 1.9599639845400538
 stats.poisson(3.0).pmf(5);
+stats.poisson(3.0).sample(rand.new(42));     // an int, replayable
 ```
 
 - **Center and spread:** `sum` (compensated), `product`, `mean`,
@@ -43,6 +44,11 @@ stats.poisson(3.0).pmf(5);
   `digest` `merge`.
 - **Distributions:** `normal`, `log_normal`, `uniform`, `exponential`
   (`pdf`, `cdf`, `quantile`), `poisson` and `binomial` (`pmf`, `cdf`).
+  Each has `sample(r)` for a `rand.Rng`, so a simulation or load
+  generator replays from one seed: the ziggurat for the normal and the
+  exponential, Hörmann's PTRS and BTRS (what numpy and TensorFlow use)
+  for the Poisson and binomial once the mean reaches 10, multiplication
+  or inversion below. All exact, all O(1) on average.
 
 A result with no value for its input -- the mean of no numbers, the
 variance of one, a correlation with a constant list -- is NaN, which
@@ -70,6 +76,10 @@ Through erfc, which keeps precision far into the lower tail where 1 + erf would 
 
 The x with cdf(x) = p; -inf at 0, inf at 1, NaN outside [0, 1].
 
+### `fn sample(self: Normal, r: rand.Rng) -> float`
+
+A random draw (rand.normal, the ziggurat); NaN for a bad sigma.
+
 ### `struct LogNormal`
 
 ### `fn log_normal(mu: float, sigma: float) -> LogNormal`
@@ -82,6 +92,8 @@ The distribution of exp(X) for X normal(mu, sigma): response times and sizes, wh
 
 ### `fn quantile(self: LogNormal, p: float) -> float`
 
+### `fn sample(self: LogNormal, r: rand.Rng) -> float`
+
 ### `struct Uniform`
 
 ### `fn uniform(lo: float, hi: float) -> Uniform`
@@ -93,6 +105,10 @@ The continuous uniform distribution on [lo, hi].
 ### `fn cdf(self: Uniform, x: float) -> float`
 
 ### `fn quantile(self: Uniform, p: float) -> float`
+
+### `fn sample(self: Uniform, r: rand.Rng) -> float`
+
+A draw from [lo, hi); NaN unless hi > lo.
 
 ### `struct Exponential`
 
@@ -108,6 +124,10 @@ The waiting time between events arriving at `rate` per unit time.
 
 ### `fn quantile(self: Exponential, p: float) -> float`
 
+### `fn sample(self: Exponential, r: rand.Rng) -> float`
+
+A draw (rand.exponential, the ziggurat, over the rate).
+
 ### `struct Poisson`
 
 ### `fn poisson(lambda: float) -> Poisson`
@@ -122,6 +142,10 @@ P(X = k): directly while k! is exact (k <= 20) and lambda^k cannot overflow, oth
 
 P(X <= k).
 
+### `fn sample(self: Poisson, r: rand.Rng) -> int`
+
+A random count. Panics for a lambda that is negative, NaN, or so large (above 2^52) that its counts have no exact int, as rand.below does for a bad bound.
+
 ### `struct Binomial`
 
 ### `fn binomial(n: int, p: float) -> Binomial`
@@ -135,6 +159,10 @@ P(X = k): directly while the binomial coefficient is exact (n up to 1000, as mat
 ### `fn cdf(self: Binomial, k: int) -> float`
 
 P(X <= k).
+
+### `fn sample(self: Binomial, r: rand.Rng) -> int`
+
+A random count of successes. Panics for n < 0 or p outside [0, 1].
 
 ### `fn sum[T](xs: [T]) -> float`
 

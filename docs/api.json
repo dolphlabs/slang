@@ -6174,7 +6174,7 @@
           "sig": "struct Normal",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 15
+          "line": 17
         },
         {
           "name": "normal",
@@ -6182,7 +6182,7 @@
           "sig": "fn normal(mu: float, sigma: float) -> Normal",
           "doc": "The normal (Gaussian) distribution with mean mu and stddev sigma.",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 21
+          "line": 23
         },
         {
           "name": "Normal.pdf",
@@ -6190,7 +6190,7 @@
           "sig": "fn pdf(self: Normal, x: float) -> float",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 26
+          "line": 28
         },
         {
           "name": "Normal.cdf",
@@ -6198,7 +6198,7 @@
           "sig": "fn cdf(self: Normal, x: float) -> float",
           "doc": "Through erfc, which keeps precision far into the lower tail where 1 + erf would round to 0.",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 36
+          "line": 38
         },
         {
           "name": "Normal.quantile",
@@ -6206,7 +6206,15 @@
           "sig": "fn quantile(self: Normal, p: float) -> float",
           "doc": "The x with cdf(x) = p; -inf at 0, inf at 1, NaN outside [0, 1].",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 44
+          "line": 46
+        },
+        {
+          "name": "Normal.sample",
+          "decl": "fn",
+          "sig": "fn sample(self: Normal, r: rand.Rng) -> float",
+          "doc": "A random draw (rand.normal, the ziggurat); NaN for a bad sigma.",
+          "file": "stdlib/math/stats/dist.sl",
+          "line": 54
         },
         {
           "name": "LogNormal",
@@ -6214,7 +6222,7 @@
           "sig": "struct LogNormal",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 52
+          "line": 62
         },
         {
           "name": "log_normal",
@@ -6222,7 +6230,7 @@
           "sig": "fn log_normal(mu: float, sigma: float) -> LogNormal",
           "doc": "The distribution of exp(X) for X normal(mu, sigma): response times and sizes, which are positive and skewed right.",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 59
+          "line": 69
         },
         {
           "name": "LogNormal.pdf",
@@ -6230,7 +6238,7 @@
           "sig": "fn pdf(self: LogNormal, x: float) -> float",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 64
+          "line": 74
         },
         {
           "name": "LogNormal.cdf",
@@ -6238,7 +6246,7 @@
           "sig": "fn cdf(self: LogNormal, x: float) -> float",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 74
+          "line": 84
         },
         {
           "name": "LogNormal.quantile",
@@ -6246,7 +6254,15 @@
           "sig": "fn quantile(self: LogNormal, p: float) -> float",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 84
+          "line": 94
+        },
+        {
+          "name": "LogNormal.sample",
+          "decl": "fn",
+          "sig": "fn sample(self: LogNormal, r: rand.Rng) -> float",
+          "doc": "",
+          "file": "stdlib/math/stats/dist.sl",
+          "line": 98
         },
         {
           "name": "Uniform",
@@ -6254,7 +6270,7 @@
           "sig": "struct Uniform",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 89
+          "line": 106
         },
         {
           "name": "uniform",
@@ -6262,7 +6278,7 @@
           "sig": "fn uniform(lo: float, hi: float) -> Uniform",
           "doc": "The continuous uniform distribution on [lo, hi].",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 95
+          "line": 112
         },
         {
           "name": "Uniform.pdf",
@@ -6270,7 +6286,7 @@
           "sig": "fn pdf(self: Uniform, x: float) -> float",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 100
+          "line": 117
         },
         {
           "name": "Uniform.cdf",
@@ -6278,7 +6294,7 @@
           "sig": "fn cdf(self: Uniform, x: float) -> float",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 110
+          "line": 127
         },
         {
           "name": "Uniform.quantile",
@@ -6286,7 +6302,15 @@
           "sig": "fn quantile(self: Uniform, p: float) -> float",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 117
+          "line": 134
+        },
+        {
+          "name": "Uniform.sample",
+          "decl": "fn",
+          "sig": "fn sample(self: Uniform, r: rand.Rng) -> float",
+          "doc": "A draw from [lo, hi); NaN unless hi > lo.",
+          "file": "stdlib/math/stats/dist.sl",
+          "line": 142
         },
         {
           "name": "Exponential",
@@ -6294,7 +6318,7 @@
           "sig": "struct Exponential",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 125
+          "line": 150
         },
         {
           "name": "exponential",
@@ -6302,7 +6326,7 @@
           "sig": "fn exponential(rate: float) -> Exponential",
           "doc": "The waiting time between events arriving at `rate` per unit time.",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 130
+          "line": 155
         },
         {
           "name": "Exponential.pdf",
@@ -6310,7 +6334,7 @@
           "sig": "fn pdf(self: Exponential, x: float) -> float",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 135
+          "line": 160
         },
         {
           "name": "Exponential.cdf",
@@ -6318,7 +6342,7 @@
           "sig": "fn cdf(self: Exponential, x: float) -> float",
           "doc": "1 - exp(-rate x), through expm1 so a tiny x keeps its precision.",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 146
+          "line": 171
         },
         {
           "name": "Exponential.quantile",
@@ -6326,7 +6350,15 @@
           "sig": "fn quantile(self: Exponential, p: float) -> float",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 156
+          "line": 181
+        },
+        {
+          "name": "Exponential.sample",
+          "decl": "fn",
+          "sig": "fn sample(self: Exponential, r: rand.Rng) -> float",
+          "doc": "A draw (rand.exponential, the ziggurat, over the rate).",
+          "file": "stdlib/math/stats/dist.sl",
+          "line": 189
         },
         {
           "name": "Poisson",
@@ -6334,7 +6366,7 @@
           "sig": "struct Poisson",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 164
+          "line": 197
         },
         {
           "name": "poisson",
@@ -6342,7 +6374,7 @@
           "sig": "fn poisson(lambda: float) -> Poisson",
           "doc": "The number of events in an interval where `lambda` are expected.",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 169
+          "line": 202
         },
         {
           "name": "Poisson.pmf",
@@ -6350,7 +6382,7 @@
           "sig": "fn pmf(self: Poisson, k: int) -> float",
           "doc": "P(X = k): directly while k! is exact (k <= 20) and lambda^k cannot overflow, otherwise in log space, where lgamma costs a few ulps.",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 176
+          "line": 209
         },
         {
           "name": "Poisson.cdf",
@@ -6358,7 +6390,15 @@
           "sig": "fn cdf(self: Poisson, k: int) -> float",
           "doc": "P(X <= k).",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 197
+          "line": 230
+        },
+        {
+          "name": "Poisson.sample",
+          "decl": "fn",
+          "sig": "fn sample(self: Poisson, r: rand.Rng) -> int",
+          "doc": "A random count. Panics for a lambda that is negative, NaN, or so large (above 2^52) that its counts have no exact int, as rand.below does for a bad bound.",
+          "file": "stdlib/math/stats/dist.sl",
+          "line": 247
         },
         {
           "name": "Binomial",
@@ -6366,7 +6406,7 @@
           "sig": "struct Binomial",
           "doc": "",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 212
+          "line": 262
         },
         {
           "name": "binomial",
@@ -6374,7 +6414,7 @@
           "sig": "fn binomial(n: int, p: float) -> Binomial",
           "doc": "The number of successes in n independent trials, each succeeding with probability p.",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 219
+          "line": 269
         },
         {
           "name": "Binomial.pmf",
@@ -6382,7 +6422,7 @@
           "sig": "fn pmf(self: Binomial, k: int) -> float",
           "doc": "P(X = k): directly while the binomial coefficient is exact (n up to 1000, as math.binomial computes it), otherwise in log space.",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 226
+          "line": 276
         },
         {
           "name": "Binomial.cdf",
@@ -6390,7 +6430,15 @@
           "sig": "fn cdf(self: Binomial, k: int) -> float",
           "doc": "P(X <= k).",
           "file": "stdlib/math/stats/dist.sl",
-          "line": 258
+          "line": 308
+        },
+        {
+          "name": "Binomial.sample",
+          "decl": "fn",
+          "sig": "fn sample(self: Binomial, r: rand.Rng) -> int",
+          "doc": "A random count of successes. Panics for n < 0 or p outside [0, 1].",
+          "file": "stdlib/math/stats/dist.sl",
+          "line": 326
         },
         {
           "name": "sum",
@@ -8867,7 +8915,7 @@
           "sig": "gc struct Rng",
           "doc": "A random number generator. Make one with `new` or `from_os`.",
           "file": "stdlib/rand/rand.sl",
-          "line": 33
+          "line": 36
         },
         {
           "name": "new",
@@ -8875,15 +8923,15 @@
           "sig": "fn new(seed: int) -> Rng",
           "doc": "A generator whose sequence is fixed by `seed`. Every int is a good seed, 0 and -1 included: splitmix64 spreads it over all 256 bits of state.",
           "file": "stdlib/rand/rand.sl",
-          "line": 42
+          "line": 45
         },
         {
           "name": "from_os",
           "decl": "fn",
           "sig": "fn from_os() -> result[Rng, str]",
-          "doc": "A generator seeded from the operating system's CSPRNG, for when runs should differ (load generators, sampling in production). Its outputs are still predictable from earlier ones: this is not a source of secrets.",
+          "doc": "A generator seeded from the operating system's CSPRNG, for when runs should differ (load generators, sampling in production). Its outputs are still predictable from earlier ones: this is not a source of secrets.  Read from /dev/urandom (the kernel generator crypto.rand also uses), so importing rand does not link OpenSSL: about 1.3 MB of RSS and 3 ms of start-up that a program using only seeded draws would otherwise pay.",
           "file": "stdlib/rand/rand.sl",
-          "line": 57
+          "line": 64
         },
         {
           "name": "fork",
@@ -8891,7 +8939,7 @@
           "sig": "fn fork(r: Rng) -> Rng",
           "doc": "A new generator seeded from `r`, for handing to a spawned task. Seeded parents give seeded children, so a whole run still replays from one seed. `r` advances by one step.",
           "file": "stdlib/rand/rand.sl",
-          "line": 76
+          "line": 108
         },
         {
           "name": "next_u64",
@@ -8899,7 +8947,7 @@
           "sig": "fn next_u64(r: Rng) -> u64",
           "doc": "The next 64 random bits.",
           "file": "stdlib/rand/rand.sl",
-          "line": 81
+          "line": 113
         },
         {
           "name": "below",
@@ -8907,7 +8955,7 @@
           "sig": "fn below(r: Rng, n: int) -> int",
           "doc": "An int in [0, n), each value equally likely. Panics if n is not positive: there is no int to return, as with an index out of range.",
           "file": "stdlib/rand/rand.sl",
-          "line": 95
+          "line": 127
         },
         {
           "name": "between",
@@ -8915,7 +8963,7 @@
           "sig": "fn between(r: Rng, lo: int, hi: int) -> int",
           "doc": "An int in [lo, hi], both ends included, each value equally likely. Panics if lo > hi. The full range, between(r, MIN, MAX), works.",
           "file": "stdlib/rand/rand.sl",
-          "line": 104
+          "line": 136
         },
         {
           "name": "unit",
@@ -8923,7 +8971,7 @@
           "sig": "fn unit(r: Rng) -> float",
           "doc": "A float in the unit interval [0, 1): one of 2^53 evenly spaced values, so every float it returns is exact and 1.0 never appears.",
           "file": "stdlib/rand/rand.sl",
-          "line": 119
+          "line": 151
         },
         {
           "name": "chance",
@@ -8931,7 +8979,7 @@
           "sig": "fn chance(r: Rng, p: float) -> bool",
           "doc": "True with probability `p`. p at or below 0 (or NaN) is never, p at or above 1 is always.",
           "file": "stdlib/rand/rand.sl",
-          "line": 125
+          "line": 157
         },
         {
           "name": "shuffle",
@@ -8939,7 +8987,7 @@
           "sig": "fn shuffle[T](r: Rng, xs: [T])",
           "doc": "Reorders `xs` in place, every order equally likely (Fisher-Yates).",
           "file": "stdlib/rand/rand.sl",
-          "line": 136
+          "line": 168
         },
         {
           "name": "pick",
@@ -8947,7 +8995,7 @@
           "sig": "fn pick[T](r: Rng, xs: [T]) -> opt[T]",
           "doc": "One element of `xs`, each equally likely; none if `xs` is empty.",
           "file": "stdlib/rand/rand.sl",
-          "line": 148
+          "line": 180
         },
         {
           "name": "backoff",
@@ -8955,7 +9003,7 @@
           "sig": "fn backoff(r: Rng, attempt: int, base: int, cap: int) -> int",
           "doc": "How long to wait before retry number `attempt` (0 for the first retry): a uniform draw from [0, min(cap, base * 2^attempt)], the \"full jitter\" strategy. Spreading over the whole interval, not just its top, is what stops a crowd of clients that failed together from retrying together. Units are whatever `base` and `cap` use, nanoseconds for a duration. A negative attempt counts as 0; a base or cap at or below 0 gives 0.",
           "file": "stdlib/rand/rand.sl",
-          "line": 161
+          "line": 193
         },
         {
           "name": "jitter",
@@ -8963,7 +9011,23 @@
           "sig": "fn jitter(r: Rng, d: int, frac: float) -> int",
           "doc": "`d` scaled by a uniform factor in [1 - frac, 1 + frac]: jitter(r, d, 0.1) lands within 10% of d. frac is clamped to [0, 1] (NaN counts as 0), so the result is never negative. A d at or below 0 gives 0.",
           "file": "stdlib/rand/rand.sl",
-          "line": 185
+          "line": 217
+        },
+        {
+          "name": "normal",
+          "decl": "fn",
+          "sig": "fn normal(r: Rng) -> float",
+          "doc": "A standard normal value: mean 0, stddev 1. Scale it for any other: `mu + sigma * rand.normal(r)`. The ziggurat method (Marsaglia and Tsang, 256 layers): about 99% of draws cost one 64-bit step, a table lookup and a multiply, with no log, sqrt or trigonometry.",
+          "file": "stdlib/rand/rand.sl",
+          "line": 241
+        },
+        {
+          "name": "exponential",
+          "decl": "fn",
+          "sig": "fn exponential(r: Rng) -> float",
+          "doc": "An exponential value with rate 1 (mean 1). Divide by a rate for any other: `rand.exponential(r) / rate`. Ziggurat, as normal() is.",
+          "file": "stdlib/rand/rand.sl",
+          "line": 252
         }
       ]
     },

@@ -1,5 +1,19 @@
 # todo
 
+- [x] **A leaf function could hold a safepoint (found 2026-11-21 when
+  math/big's tests crashed after merging dev; fixed in
+  fix/leaf-body-no-safepoint).** Callers skip their bracket around a call
+  to a leaf function and hold their live values unrooted across it. #583
+  made more functions leaves, among them math/big's `mag_bit_len`, whose
+  `math.bit_len(a[len(a) - 1])` still bracketed `len()`: a native call's
+  arguments register ambient roots, and `safepoint_elidable` kept any
+  bracket while ambient roots were open. A collection there freed the
+  caller's lists ("internal: element size mismatch" in mod_pow, vector 334
+  of tests/math_big). wrap_safepoint now emits nothing inside a leaf
+  function, and gen_function fails the compile if a leaf body contains a
+  safepoint or poll from any emitter. tests/leaf_fn_native_args checks
+  the body in the generated C and runs in the GC stress lists.
+
 - [x] **`unicode.runes` built its `[int]` as a list of pointers (found
   2026-11-21 while writing math/vec, fixed in fix/unicode-runes-noptr).**
   It passed the code-point count where `sl_arr_new` takes the element
