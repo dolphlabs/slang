@@ -5318,6 +5318,276 @@
         }
       ]
     },
+    "math/shard": {
+      "name": "math/shard",
+      "kind": "source",
+      "items": [
+        {
+          "name": "hash_str",
+          "decl": "fn",
+          "sig": "fn hash_str(s: str) -> u64",
+          "doc": "A 64-bit hash of a str: strings.hash widened and remixed.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 50
+        },
+        {
+          "name": "hash_int",
+          "decl": "fn",
+          "sig": "fn hash_int(x: int) -> u64",
+          "doc": "A 64-bit hash of an int.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 55
+        },
+        {
+          "name": "jump",
+          "decl": "fn",
+          "sig": "fn jump(key: u64, buckets: int) -> int",
+          "doc": "The bucket in [0, buckets) for a 64-bit key (Lamping and Veach 2014): each bucket gets 1/buckets of the keys, and going from n to n+1 buckets moves only the 1/(n+1) that the new bucket takes. O(log n), no memory. buckets below 1 count as 1.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 65
+        },
+        {
+          "name": "jump_str",
+          "decl": "fn",
+          "sig": "fn jump_str(s: str, buckets: int) -> int",
+          "doc": "jump() of a str key.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 79
+        },
+        {
+          "name": "jump_int",
+          "decl": "fn",
+          "sig": "fn jump_int(x: int, buckets: int) -> int",
+          "doc": "jump() of an int key.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 84
+        },
+        {
+          "name": "Rendezvous",
+          "decl": "struct",
+          "sig": "gc struct Rendezvous",
+          "doc": "Rendezvous hashing (Thaler and Ravishankar 1996): each node scores the key, and the highest score wins. A node leaving moves only its own keys, spread evenly over the rest. Weighted scores follow Schindelhauer and Schomaker: -weight / ln(u) for u the node's hash of the key in (0, 1), which gives each node keys in proportion to its weight.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 95
+        },
+        {
+          "name": "rendezvous",
+          "decl": "fn",
+          "sig": "fn rendezvous(nodes: [str]) -> Rendezvous",
+          "doc": "Nodes of equal weight. Their order does not matter to the mapping; pick() returns an index into this list.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 104
+        },
+        {
+          "name": "rendezvous_weighted",
+          "decl": "fn",
+          "sig": "fn rendezvous_weighted(nodes: [str], weights: [float]) -> Rendezvous",
+          "doc": "Nodes with weights (a weight at or below 0, or NaN, means the node gets nothing). A missing weight counts as 1.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 114
+        },
+        {
+          "name": "Rendezvous.pick",
+          "decl": "fn",
+          "sig": "fn pick(self: Rendezvous, key: u64) -> opt[int]",
+          "doc": "The index of the node for this key hash; none when there are no nodes (or every weight is 0).",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 140
+        },
+        {
+          "name": "Rendezvous.pick_n",
+          "decl": "fn",
+          "sig": "fn pick_n(self: Rendezvous, key: u64, n: int) -> [int]",
+          "doc": "The indexes of the n highest-scoring nodes, best first: the primary and then its replicas, each a different node. Fewer when there are fewer nodes.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 168
+        },
+        {
+          "name": "Rendezvous.pick_str",
+          "decl": "fn",
+          "sig": "fn pick_str(self: Rendezvous, key: str) -> opt[int]",
+          "doc": "",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 203
+        },
+        {
+          "name": "Rendezvous.pick_int",
+          "decl": "fn",
+          "sig": "fn pick_int(self: Rendezvous, key: int) -> opt[int]",
+          "doc": "",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 207
+        },
+        {
+          "name": "Rendezvous.pick_n_str",
+          "decl": "fn",
+          "sig": "fn pick_n_str(self: Rendezvous, key: str, n: int) -> [int]",
+          "doc": "",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 211
+        },
+        {
+          "name": "Rendezvous.node",
+          "decl": "fn",
+          "sig": "fn node(self: Rendezvous, i: int) -> str",
+          "doc": "The name of node i (as given).",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 216
+        },
+        {
+          "name": "Rendezvous.size",
+          "decl": "fn",
+          "sig": "fn size(self: Rendezvous) -> int",
+          "doc": "",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 220
+        },
+        {
+          "name": "Ring",
+          "decl": "struct",
+          "sig": "gc struct Ring",
+          "doc": "A consistent-hash ring (Karger et al. 1997) with virtual nodes: each node puts `points * weight` markers on a 64-bit circle, and a key belongs to the first marker clockwise from its hash. Adding or removing a node moves only the keys next to its markers.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 237
+        },
+        {
+          "name": "ring",
+          "decl": "fn",
+          "sig": "fn ring(points_per_weight: int) -> Ring",
+          "doc": "An empty ring putting `points_per_weight` markers per unit of weight (100 to 200 keeps the share of each node within a few percent).",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 248
+        },
+        {
+          "name": "Ring.add",
+          "decl": "fn",
+          "sig": "fn add(self: Ring, name: str, weight: int) -> bool",
+          "doc": "Adds a node (or changes its weight, 1 to 1000). False for an empty name.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 258
+        },
+        {
+          "name": "Ring.remove",
+          "decl": "fn",
+          "sig": "fn remove(self: Ring, name: str) -> bool",
+          "doc": "Removes a node; its keys move to the next markers. False when it was not on the ring.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 286
+        },
+        {
+          "name": "Ring.get",
+          "decl": "fn",
+          "sig": "fn get(self: Ring, key: u64) -> opt[str]",
+          "doc": "The node for this key hash; none on an empty ring.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 297
+        },
+        {
+          "name": "Ring.get_n",
+          "decl": "fn",
+          "sig": "fn get_n(self: Ring, key: u64, n: int) -> [str]",
+          "doc": "Up to n distinct nodes for this key hash, clockwise from it: a primary and its replicas.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 307
+        },
+        {
+          "name": "Ring.get_str",
+          "decl": "fn",
+          "sig": "fn get_str(self: Ring, key: str) -> opt[str]",
+          "doc": "",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 334
+        },
+        {
+          "name": "Ring.get_int",
+          "decl": "fn",
+          "sig": "fn get_int(self: Ring, key: int) -> opt[str]",
+          "doc": "",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 338
+        },
+        {
+          "name": "Ring.get_n_str",
+          "decl": "fn",
+          "sig": "fn get_n_str(self: Ring, key: str, n: int) -> [str]",
+          "doc": "",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 342
+        },
+        {
+          "name": "Ring.nodes",
+          "decl": "fn",
+          "sig": "fn nodes(self: Ring) -> [str]",
+          "doc": "Live nodes.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 347
+        },
+        {
+          "name": "Ring.points",
+          "decl": "fn",
+          "sig": "fn points(self: Ring) -> int",
+          "doc": "Markers on the ring.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 358
+        },
+        {
+          "name": "Maglev",
+          "decl": "struct",
+          "sig": "gc struct Maglev",
+          "doc": "Maglev hashing (Eisenbud et al. 2016, Google's load balancer): a lookup table of `size` entries, a prime well above the node count (65537 is usual; 2039 for small sets), filled so each node owns an equal share. A lookup is one hash and one table read. Rebuild with a new node list; keys of nodes that stay mostly stay put.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 467
+        },
+        {
+          "name": "maglev",
+          "decl": "fn",
+          "sig": "fn maglev(nodes: [str], size: int) -> Maglev",
+          "doc": "A table over `nodes` of `size` entries (raised to the next prime, at least 7 and at least the node count). Duplicate names share nothing: each entry is one slot. An empty list gives an empty table.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 475
+        },
+        {
+          "name": "Maglev.pick",
+          "decl": "fn",
+          "sig": "fn pick(self: Maglev, key: u64) -> opt[int]",
+          "doc": "The index of the node for this key hash; none for an empty table.",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 520
+        },
+        {
+          "name": "Maglev.pick_str",
+          "decl": "fn",
+          "sig": "fn pick_str(self: Maglev, key: str) -> opt[int]",
+          "doc": "",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 528
+        },
+        {
+          "name": "Maglev.pick_int",
+          "decl": "fn",
+          "sig": "fn pick_int(self: Maglev, key: int) -> opt[int]",
+          "doc": "",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 532
+        },
+        {
+          "name": "Maglev.node",
+          "decl": "fn",
+          "sig": "fn node(self: Maglev, i: int) -> str",
+          "doc": "",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 536
+        },
+        {
+          "name": "Maglev.size",
+          "decl": "fn",
+          "sig": "fn size(self: Maglev) -> int",
+          "doc": "",
+          "file": "stdlib/math/shard/shard.sl",
+          "line": 540
+        }
+      ]
+    },
     "math/sketch": {
       "name": "math/sketch",
       "kind": "source",

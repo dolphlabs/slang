@@ -1069,6 +1069,7 @@ Concurrency below.
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` / `import "io";` / `import "encoding";` like any other package.
 
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/shard`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
 `http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/sketch`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
 then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
@@ -3931,6 +3932,42 @@ be coprime), `binomial_mod` (Lucas, for a prime modulus) and
 function given one <= 0 returns `none`, 0 or `false` rather than
 panicking, and no result is negative.
 
+#### `math/shard`
+
+Map a key to one of n nodes so each node gets an even share and a change
+in the node set moves as few keys as possible: sharding databases and
+caches, partitioning queues, sticky load balancing.
+
+```slang
+import "math/shard";
+
+shard.jump_str(user_id, 16);                 // bucket in [0, 16)
+
+let r = shard.rendezvous(["db-a", "db-b", "db-c"]);
+r.node(r.pick_str(user_id) ?? 0);            // the node's name
+r.pick_n_str(user_id, 2);                    // primary and a replica
+
+let ring = shard.ring(160);                  // 160 points per unit of weight
+ring.add("cache-1", 1);
+ring.add("cache-2", 2);                      // twice the keys
+ring.get_str(key) ?? "";
+
+let m = shard.maglev(["lb-1", "lb-2", "lb-3"], 65537);
+m.pick_str(flow_id);                         // O(1): one table read
+```
+
+| Scheme | Lookup | Memory | Remove any node | Weights | Use for |
+|---|---|---|---|---|---|
+| `jump` (Lamping and Veach) | O(log n) | none | only the last | no | a growing count of shards |
+| `rendezvous` (HRW) | O(nodes) | names | yes, only its keys move | yes | up to a few hundred nodes, replicas |
+| `ring` (Karger) | O(log points) | 16 B per point | yes | yes | many nodes |
+| `maglev` (Google) | O(1) | 4 B per entry | rebuild; little extra movement | no | load balancers |
+
+Every scheme hashes with a fixed function (`shard.hash_str`,
+`hash_int`), so every process and host maps a key to the same node.
+Rendezvous weights follow Schindelhauer and Schomaker (`-w / ln(u)`), so
+a node gets keys in proportion to its weight; a ring's markers depend
+only on the node's name, so they are the same after every rebuild.
 #### `math/sketch`
 
 Fixed-memory, mergeable estimates for live servers: how many distinct
