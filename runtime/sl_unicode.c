@@ -486,8 +486,10 @@ static long long sl_unicode_count(const char *s) {
 /* The code points of s, invalid subparts as U+FFFD (65533). */
 static sl_arr *sl_unicode_runes(const char *s) {
     size_t n = s ? strlen(s) : 0;
-    sl_arr *out = sl_arr_new(sizeof(long long),
-                             (long long)(sl_unicode_count(s) + 1));
+    /* numbers only: pointer-free, so the collector never scans the
+       elements; sized once from the count */
+    sl_arr *out = sl_arr_new(sizeof(long long), SL_ELEM_NOPTR);
+    sl_arr_reserve(out, sl_unicode_count(s) + 1);
     const unsigned char *p = (const unsigned char *)s;
     size_t i = 0;
     while (i < n) {

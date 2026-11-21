@@ -196,6 +196,7 @@ PACKAGE_SECTIONS = {
     "math/stats": ["`math/stats`"],
     "math/numtheory": ["`math/numtheory`"],
     "math/shard": ["`math/shard`"],
+    "math/vec": ["`math/vec`"],
     "byteutil": ["`byteutil`"],
     "rand": ["`rand`"],
     "decimal": ["`decimal`"],
@@ -243,6 +244,7 @@ ARGKIND = {
     "NA_NUM": "T",
     "NA_NUM_INT": "T",
     "NA_NUM_FLT": "T",
+    "NA_VEC": "[float]|[f32]",
     "0": "",
 }
 
@@ -256,7 +258,19 @@ def native_package_names():
     m = re.search(r"NATIVE_PKGS\[\]\s*=\s*\{(.*?)\};", text, re.S)
     if not m:
         return []
-    return [n.lower() for n in re.findall(r"PKG_([A-Z0-9_]+)_NAME", m.group(1))]
+    names = []
+    for macro in re.findall(r"(PKG_[A-Z0-9_]+_NAME)", m.group(1)):
+        # the import path from the package's own header ("math/vec"),
+        # falling back to the macro's stem
+        value = None
+        for h in (ROOT / "src" / "codegen").glob("pkg_*/pkg_*.h"):
+            hm = re.search(r"#define\s+%s\s+\"([^\"]+)\"" % macro,
+                           h.read_text(encoding="utf-8"))
+            if hm:
+                value = hm.group(1)
+                break
+        names.append(value or macro[len("PKG_"):-len("_NAME")].lower())
+    return names
 
 
 def extract_native_packages():
@@ -268,7 +282,7 @@ def extract_native_packages():
         text = sigs.read_text(encoding="utf-8")
         # {"pkg", "name", nargs, {KINDS}, "ret", is_tls}
         row = re.compile(
-            r'\{\s*"([a-z0-9_]+)"\s*,\s*"([a-z0-9_]+)"\s*,\s*(\d+)\s*,'
+            r'\{\s*"([a-z0-9_/]+)"\s*,\s*"([a-z0-9_]+)"\s*,\s*(\d+)\s*,'
             r'\s*\{([^}]*)\}\s*,\s*(NULL|"[^"]*")\s*,\s*(\d+)\s*\}')
         for m in row.finditer(text):
             pkg, name, nargs, kinds, ret, is_tls = m.groups()

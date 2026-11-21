@@ -2883,12 +2883,12 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 ## Standard packages
 
 `time`, `net`, `json`, `proc`, `fs`, `log`, `crypto`, `sql`, `regex`,
-`os`, `io`, `strings`, `encoding`, `compress` and `math` are compiler-provided native packages — no source files, just
+`os`, `io`, `strings`, `encoding`, `compress`, `math` and `math/vec` are compiler-provided native packages — no source files, just
 `import "time";` / `import "net";` / `import "json";` / `import "proc";`
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` / `import "io";` / `import "encoding";` like any other package.
 
-`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/shard`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
 then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
 compiler's `SLANG_STDLIB_DIR`).
@@ -5744,42 +5744,54 @@ be coprime), `binomial_mod` (Lucas, for a prime modulus) and
 function given one <= 0 returns `none`, 0 or `false` rather than
 panicking, and no result is negative.
 
-#### `math/shard`
+#### `math/vec`
 
-Map a key to one of n nodes so each node gets an even share and a change
-in the node set moves as few keys as possible: sharding databases and
-caches, partitioning queues, sticky load balancing.
+Bulk arithmetic on `[float]` and `[f32]` vectors, for embedding search,
+recommendations and scoring. Native: each kernel runs eight to
+thirty-two accumulators over raw memory, with 256-bit fused
+multiply-adds on x86-64 CPUs that have AVX2 and FMA (chosen at run
+time), which a slang loop cannot do.
 
 ```slang
-import "math/shard";
+import "math/vec";
 
-shard.jump_str(user_id, 16);                 // bucket in [0, 16)
+let a = [0.1, 0.7, 0.2];
+let b = [0.3, 0.5, 0.2];
+vec.dot(a, b);                       // 0.42
+vec.cosine(a, b);                    // in [-1, 1]
+vec.distance(a, b);                  // Euclidean
+vec.normalize(a);                    // in place; returns the old norm
 
-let r = shard.rendezvous(["db-a", "db-b", "db-c"]);
-r.node(r.pick_str(user_id) ?? 0);            // the node's name
-r.pick_n_str(user_id, 2);                    // primary and a replica
+// search: rows is n vectors of `dim` numbers, one after another
+let best = vec.top_k_cosine(query, rows, 384, 10);   // [int], best first
 
-let ring = shard.ring(160);                  // 160 points per unit of weight
-ring.add("cache-1", 1);
-ring.add("cache-2", 2);                      // twice the keys
-ring.get_str(key) ?? "";
-
-let m = shard.maglev(["lb-1", "lb-2", "lb-3"], 65537);
-m.pick_str(flow_id);                         // O(1): one table read
+let small = vec.to_f32(a);           // half the memory
+let q8 = vec.quantize(small);        // bytes: a quarter of an [f32]
+vec.dot_q(q8, vec.quantize(vec.to_f32(b)));
 ```
 
-| Scheme | Lookup | Memory | Remove any node | Weights | Use for |
-|---|---|---|---|---|---|
-| `jump` (Lamping and Veach) | O(log n) | none | only the last | no | a growing count of shards |
-| `rendezvous` (HRW) | O(nodes) | names | yes, only its keys move | yes | up to a few hundred nodes, replicas |
-| `ring` (Karger) | O(log points) | 16 B per point | yes | yes | many nodes |
-| `maglev` (Google) | O(1) | 4 B per entry | rebuild; little extra movement | no | load balancers |
+- **Reductions:** `dot`, `sum`, `norm`, `distance`, `distance2`
+  (squared), `cosine` (NaN for a zero vector), `argmax`, `argmin`
+  (NaN skipped; -1 for an empty list).
+- **In place:** `scale(a, s)`, `axpy(alpha, x, y)` (`y += alpha * x`),
+  `add(y, x)`, `sub(y, x)`, `mul(y, x)` (elementwise), `normalize(a)`.
+- **Search:** `top_k(a, k)` (indexes of the k largest, best first, ties
+  to the lower index), `scores(query, rows, dim)` (every row's dot
+  product), `top_k_dot` and `top_k_cosine(query, rows, dim, k)`: a
+  k-entry heap, no copy of the scores, one pass over each row.
+- **Storage:** `to_f32`, `to_f64`, `quantize` (symmetric int8: a
+  4-byte scale, then a byte per element), `dequantize`, `dot_q` (an
+  exact integer sum, times both scales).
 
-Every scheme hashes with a fixed function (`shard.hash_str`,
-`hash_int`), so every process and host maps a key to the same node.
-Rendezvous weights follow Schindelhauer and Schomaker (`-w / ln(u)`), so
-a node gets keys in proportion to its weight; a ring's markers depend
-only on the node's name, so they are the same after every rebuild.
+The vectors of one call must have the same element type (a compile
+error otherwise, naming `to_f32`/`to_f64`) and the same length (a
+panic naming the call otherwise). Nothing allocates except the
+functions that return a new list or bytes. On a 1536-float dot product
+`vec.dot` takes 112 ns for `[f32]` and 195 ns for `[float]`, against
+1600 ns for the same loop written in slang. Sums are taken in a
+different order from a left-to-right loop, and on x86-64 in a different
+order with and without AVX2, so results can differ in their last bits
+between machines.
 
 #### `decimal`
 
@@ -6683,8 +6695,8 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [math](packages/math.md) -- compiler-provided, 131 public items
 - [math/numtheory](packages/math/numtheory.md) -- source package, 16 public items
-- [math/shard](packages/math/shard.md) -- source package, 33 public items
 - [math/stats](packages/math/stats.md) -- source package, 91 public items
+- [math/vec](packages/math/vec.md) -- compiler-provided, 23 public items
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
 - [net](packages/net.md) -- compiler-provided, 35 public items
@@ -10609,165 +10621,6 @@ slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://
 
 
 
-# math/shard
-
-# math/shard
-
-> Package math/shard.
-
-Map a key to one of n nodes so each node gets an even share and a change
-in the node set moves as few keys as possible: sharding databases and
-caches, partitioning queues, sticky load balancing.
-
-```slang
-import "math/shard";
-
-shard.jump_str(user_id, 16);                 // bucket in [0, 16)
-
-let r = shard.rendezvous(["db-a", "db-b", "db-c"]);
-r.node(r.pick_str(user_id) ?? 0);            // the node's name
-r.pick_n_str(user_id, 2);                    // primary and a replica
-
-let ring = shard.ring(160);                  // 160 points per unit of weight
-ring.add("cache-1", 1);
-ring.add("cache-2", 2);                      // twice the keys
-ring.get_str(key) ?? "";
-
-let m = shard.maglev(["lb-1", "lb-2", "lb-3"], 65537);
-m.pick_str(flow_id);                         // O(1): one table read
-```
-
-| Scheme | Lookup | Memory | Remove any node | Weights | Use for |
-|---|---|---|---|---|---|
-| `jump` (Lamping and Veach) | O(log n) | none | only the last | no | a growing count of shards |
-| `rendezvous` (HRW) | O(nodes) | names | yes, only its keys move | yes | up to a few hundred nodes, replicas |
-| `ring` (Karger) | O(log points) | 16 B per point | yes | yes | many nodes |
-| `maglev` (Google) | O(1) | 4 B per entry | rebuild; little extra movement | no | load balancers |
-
-Every scheme hashes with a fixed function (`shard.hash_str`,
-`hash_int`), so every process and host maps a key to the same node.
-Rendezvous weights follow Schindelhauer and Schomaker (`-w / ln(u)`), so
-a node gets keys in proportion to its weight; a ring's markers depend
-only on the node's name, so they are the same after every rebuild.
-
-## API
-
-### `fn hash_str(s: str) -> u64`
-
-A 64-bit hash of a str: strings.hash widened and remixed.
-
-### `fn hash_int(x: int) -> u64`
-
-A 64-bit hash of an int.
-
-### `fn jump(key: u64, buckets: int) -> int`
-
-The bucket in [0, buckets) for a 64-bit key (Lamping and Veach 2014): each bucket gets 1/buckets of the keys, and going from n to n+1 buckets moves only the 1/(n+1) that the new bucket takes. O(log n), no memory. buckets below 1 count as 1.
-
-### `fn jump_str(s: str, buckets: int) -> int`
-
-jump() of a str key.
-
-### `fn jump_int(x: int, buckets: int) -> int`
-
-jump() of an int key.
-
-### `gc struct Rendezvous`
-
-Rendezvous hashing (Thaler and Ravishankar 1996): each node scores the key, and the highest score wins. A node leaving moves only its own keys, spread evenly over the rest. Weighted scores follow Schindelhauer and Schomaker: -weight / ln(u) for u the node's hash of the key in (0, 1), which gives each node keys in proportion to its weight.
-
-### `fn rendezvous(nodes: [str]) -> Rendezvous`
-
-Nodes of equal weight. Their order does not matter to the mapping; pick() returns an index into this list.
-
-### `fn rendezvous_weighted(nodes: [str], weights: [float]) -> Rendezvous`
-
-Nodes with weights (a weight at or below 0, or NaN, means the node gets nothing). A missing weight counts as 1.
-
-### `fn pick(self: Rendezvous, key: u64) -> opt[int]`
-
-The index of the node for this key hash; none when there are no nodes (or every weight is 0).
-
-### `fn pick_n(self: Rendezvous, key: u64, n: int) -> [int]`
-
-The indexes of the n highest-scoring nodes, best first: the primary and then its replicas, each a different node. Fewer when there are fewer nodes.
-
-### `fn pick_str(self: Rendezvous, key: str) -> opt[int]`
-
-### `fn pick_int(self: Rendezvous, key: int) -> opt[int]`
-
-### `fn pick_n_str(self: Rendezvous, key: str, n: int) -> [int]`
-
-### `fn node(self: Rendezvous, i: int) -> str`
-
-The name of node i (as given).
-
-### `fn size(self: Rendezvous) -> int`
-
-### `gc struct Ring`
-
-A consistent-hash ring (Karger et al. 1997) with virtual nodes: each node puts `points * weight` markers on a 64-bit circle, and a key belongs to the first marker clockwise from its hash. Adding or removing a node moves only the keys next to its markers.
-
-### `fn ring(points_per_weight: int) -> Ring`
-
-An empty ring putting `points_per_weight` markers per unit of weight (100 to 200 keeps the share of each node within a few percent).
-
-### `fn add(self: Ring, name: str, weight: int) -> bool`
-
-Adds a node (or changes its weight, 1 to 1000). False for an empty name.
-
-### `fn remove(self: Ring, name: str) -> bool`
-
-Removes a node; its keys move to the next markers. False when it was not on the ring.
-
-### `fn get(self: Ring, key: u64) -> opt[str]`
-
-The node for this key hash; none on an empty ring.
-
-### `fn get_n(self: Ring, key: u64, n: int) -> [str]`
-
-Up to n distinct nodes for this key hash, clockwise from it: a primary and its replicas.
-
-### `fn get_str(self: Ring, key: str) -> opt[str]`
-
-### `fn get_int(self: Ring, key: int) -> opt[str]`
-
-### `fn get_n_str(self: Ring, key: str, n: int) -> [str]`
-
-### `fn nodes(self: Ring) -> [str]`
-
-Live nodes.
-
-### `fn points(self: Ring) -> int`
-
-Markers on the ring.
-
-### `gc struct Maglev`
-
-Maglev hashing (Eisenbud et al. 2016, Google's load balancer): a lookup table of `size` entries, a prime well above the node count (65537 is usual; 2039 for small sets), filled so each node owns an equal share. A lookup is one hash and one table read. Rebuild with a new node list; keys of nodes that stay mostly stay put.
-
-### `fn maglev(nodes: [str], size: int) -> Maglev`
-
-A table over `nodes` of `size` entries (raised to the next prime, at least 7 and at least the node count). Duplicate names share nothing: each entry is one slot. An empty list gives an empty table.
-
-### `fn pick(self: Maglev, key: u64) -> opt[int]`
-
-The index of the node for this key hash; none for an empty table.
-
-### `fn pick_str(self: Maglev, key: str) -> opt[int]`
-
-### `fn pick_int(self: Maglev, key: int) -> opt[int]`
-
-### `fn node(self: Maglev, i: int) -> str`
-
-### `fn size(self: Maglev) -> int`
-
----
-
-slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
-
-
-
 # math/stats
 
 # math/stats
@@ -11145,6 +10998,113 @@ The estimated q-quantile, q in [0, 1]: min at 0, max at 1, linear between centro
 ### `fn cdf(self: Digest, x: float) -> float`
 
 The estimated fraction of observations at or below x, in [0, 1]; NaN when empty.
+
+---
+
+slang is built and maintained by **Dolphlabs** (Dolph Tech Limited) — https://dolphlabs.com
+
+
+
+# math/vec
+
+# math/vec
+
+> Package math/vec.
+
+Bulk arithmetic on `[float]` and `[f32]` vectors, for embedding search,
+recommendations and scoring. Native: each kernel runs eight to
+thirty-two accumulators over raw memory, with 256-bit fused
+multiply-adds on x86-64 CPUs that have AVX2 and FMA (chosen at run
+time), which a slang loop cannot do.
+
+```slang
+import "math/vec";
+
+let a = [0.1, 0.7, 0.2];
+let b = [0.3, 0.5, 0.2];
+vec.dot(a, b);                       // 0.42
+vec.cosine(a, b);                    // in [-1, 1]
+vec.distance(a, b);                  // Euclidean
+vec.normalize(a);                    // in place; returns the old norm
+
+// search: rows is n vectors of `dim` numbers, one after another
+let best = vec.top_k_cosine(query, rows, 384, 10);   // [int], best first
+
+let small = vec.to_f32(a);           // half the memory
+let q8 = vec.quantize(small);        // bytes: a quarter of an [f32]
+vec.dot_q(q8, vec.quantize(vec.to_f32(b)));
+```
+
+- **Reductions:** `dot`, `sum`, `norm`, `distance`, `distance2`
+  (squared), `cosine` (NaN for a zero vector), `argmax`, `argmin`
+  (NaN skipped; -1 for an empty list).
+- **In place:** `scale(a, s)`, `axpy(alpha, x, y)` (`y += alpha * x`),
+  `add(y, x)`, `sub(y, x)`, `mul(y, x)` (elementwise), `normalize(a)`.
+- **Search:** `top_k(a, k)` (indexes of the k largest, best first, ties
+  to the lower index), `scores(query, rows, dim)` (every row's dot
+  product), `top_k_dot` and `top_k_cosine(query, rows, dim, k)`: a
+  k-entry heap, no copy of the scores, one pass over each row.
+- **Storage:** `to_f32`, `to_f64`, `quantize` (symmetric int8: a
+  4-byte scale, then a byte per element), `dequantize`, `dot_q` (an
+  exact integer sum, times both scales).
+
+The vectors of one call must have the same element type (a compile
+error otherwise, naming `to_f32`/`to_f64`) and the same length (a
+panic naming the call otherwise). Nothing allocates except the
+functions that return a new list or bytes. On a 1536-float dot product
+`vec.dot` takes 112 ns for `[f32]` and 195 ns for `[float]`, against
+1600 ns for the same loop written in slang. Sums are taken in a
+different order from a left-to-right loop, and on x86-64 in a different
+order with and without AVX2, so results can differ in their last bits
+between machines.
+
+## API
+
+### `math/vec.dot([float]|[f32], [float]|[f32]) -> float`
+
+### `math/vec.sum([float]|[f32]) -> float`
+
+### `math/vec.norm([float]|[f32]) -> float`
+
+### `math/vec.distance([float]|[f32], [float]|[f32]) -> float`
+
+### `math/vec.distance2([float]|[f32], [float]|[f32]) -> float`
+
+### `math/vec.cosine([float]|[f32], [float]|[f32]) -> float`
+
+### `math/vec.argmax([float]|[f32]) -> int`
+
+### `math/vec.argmin([float]|[f32]) -> int`
+
+### `math/vec.scale([float]|[f32], float)`
+
+### `math/vec.axpy(float, [float]|[f32], [float]|[f32])`
+
+### `math/vec.add([float]|[f32], [float]|[f32])`
+
+### `math/vec.sub([float]|[f32], [float]|[f32])`
+
+### `math/vec.mul([float]|[f32], [float]|[f32])`
+
+### `math/vec.normalize([float]|[f32]) -> float`
+
+### `math/vec.top_k([float]|[f32], int) -> [int]`
+
+### `math/vec.scores([float]|[f32], [float]|[f32], int) -> [float]`
+
+### `math/vec.top_k_dot([float]|[f32], [float]|[f32], int, int) -> [int]`
+
+### `math/vec.top_k_cosine([float]|[f32], [float]|[f32], int, int) -> [int]`
+
+### `math/vec.to_f32([float]|[f32]) -> [f32]`
+
+### `math/vec.to_f64([float]|[f32]) -> [float]`
+
+### `math/vec.quantize([float]|[f32]) -> bytes`
+
+### `math/vec.dequantize(bytes) -> [float]`
+
+### `math/vec.dot_q(bytes, bytes) -> float`
 
 ---
 
