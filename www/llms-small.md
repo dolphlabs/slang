@@ -337,13 +337,18 @@ regression, streaming `running()`/`digest()`, distributions) and
 `shard.rendezvous(nodes).pick_str(key)` (opt index; `pick_n_str` for
 replicas), `shard.ring(160)` with `add(name, weight)`/`get_str(key)`,
 `shard.maglev(nodes, 65537).pick_str(key)`.
+`math/sketch` estimates in fixed memory, mergeable across tasks:
+`sketch.hyperloglog(14)` (`add_str`, `count`), `count_min(eps, delta)`,
+`top_k(k)`, `bloom(n, fpp)`, `cuckoo(n)` (with `remove_str`),
+`histogram(max, 7)` (`record`, `quantile(0.99)`, `buckets`), `reservoir(k, r)`.
 `math/vec` is native bulk math on `[float]`/`[f32]`: `vec.dot`, `cosine`,
 `distance`, `normalize` (in place), `vec.top_k_cosine(query, rows, dim, k)`
 over rows stored back to back, `to_f32`, `quantize` (int8) and `dot_q`.
 `rand` is seeded and non-cryptographic, for tests that replay:
 `let r = rand.new(42); rand.below(r, 10); rand.between(r, 1, 6);
-rand.shuffle(r, xs); rand.backoff(r, attempt, base, cap)`. Secrets use
-`crypto.rand`.
+rand.shuffle(r, xs); rand.backoff(r, attempt, base, cap)`, `rand.normal(r)`
+and `rand.exponential(r)`; every `math/stats` distribution has `.sample(r)`.
+Secrets use `crypto.rand`.
 The standalone `argon` package provides bounded Argon2id password hashing
 with standard PHC strings; its native crypto calls require OpenSSL 3.2+.
 
