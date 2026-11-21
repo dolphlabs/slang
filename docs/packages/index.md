@@ -5,12 +5,12 @@
 ## Standard packages
 
 `time`, `net`, `json`, `proc`, `fs`, `log`, `crypto`, `sql`, `regex`,
-`os`, `io`, `strings`, `encoding`, `compress` and `math` are compiler-provided native packages — no source files, just
+`os`, `io`, `strings`, `encoding`, `compress`, `math` and `math/vec` are compiler-provided native packages — no source files, just
 `import "time";` / `import "net";` / `import "json";` / `import "proc";`
 / `import "fs";` / `import "log";` / `import "crypto";` / `import "sql";`
 / `import "regex";` / `import "io";` / `import "encoding";` like any other package.
 
-`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `math/sketch`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
+`http`, `httpc`, `http2`, `pg`, `flags`, `builder`, `byteutil`, `sort`, `math/stats`, `math/numtheory`, `s3`, `sigv4` and `x509` are slang-source stdlib packages under `stdlib/`.
 `import "http"` / `import "byteutil"` resolve to a local directory first,
 then a native package, then `stdlib/<path>` (`SLANG_STDLIB` or the
 compiler's `SLANG_STDLIB_DIR`).
@@ -2866,78 +2866,54 @@ be coprime), `binomial_mod` (Lucas, for a prime modulus) and
 function given one <= 0 returns `none`, 0 or `false` rather than
 panicking, and no result is negative.
 
-#### `math/sketch`
+#### `math/vec`
 
-Fixed-memory, mergeable estimates for live servers: how many distinct
-users, how often each key, which keys are heaviest, have we seen this
-before, and latency percentiles, without keeping the items. Written in
-slang; every sketch of a kind merges with another built with the same
-parameters, so tasks and hosts each keep their own and combine.
+Bulk arithmetic on `[float]` and `[f32]` vectors, for embedding search,
+recommendations and scoring. Native: each kernel runs eight to
+thirty-two accumulators over raw memory, with 256-bit fused
+multiply-adds on x86-64 CPUs that have AVX2 and FMA (chosen at run
+time), which a slang loop cannot do.
 
 ```slang
-import "math/sketch";
+import "math/vec";
 
-let users = sketch.hyperloglog(14);          // 16 KB, 0.81% error
-users.add_str(user_id);
-users.count();
+let a = [0.1, 0.7, 0.2];
+let b = [0.3, 0.5, 0.2];
+vec.dot(a, b);                       // 0.42
+vec.cosine(a, b);                    // in [-1, 1]
+vec.distance(a, b);                  // Euclidean
+vec.normalize(a);                    // in place; returns the old norm
 
-let hits = sketch.count_min(0.001, 0.01);    // within 0.1% of the total, 99% of the time
-hits.add_str(ip, 1);
-hits.estimate_str(ip);
+// search: rows is n vectors of `dim` numbers, one after another
+let best = vec.top_k_cosine(query, rows, 384, 10);   // [int], best first
 
-let heavy = sketch.top_k(100);               // Space-Saving
-heavy.add(path);
-heavy.top();                                 // [Item { key, count, error }]
-
-let seen = sketch.bloom(1000000, 0.01);      // 1.2 MB
-seen.add_str(key);
-seen.contains_str(key);                      // false: certainly not added
-
-let live = sketch.cuckoo(100000);            // like a Bloom filter, with remove
-live.add_str(id); live.remove_str(id);
-
-let lat = sketch.histogram(60000000, 7);     // 1 us .. 60 s, 0.8% precision
-lat.record(elapsed_us);
-lat.quantile(0.99);
-lat.buckets(sketch.exponential_bounds(1000, 2.0, 12));   // Prometheus le= counts
-
-let keep: [Event] = [];                      // a uniform sample of 100
-let rs = sketch.reservoir(100, rand.new(7));
-if let slot = rs.offer() {
-    if slot == len(keep) { push(keep, e); } else { keep[slot] = e; }
-}
+let small = vec.to_f32(a);           // half the memory
+let q8 = vec.quantize(small);        // bytes: a quarter of an [f32]
+vec.dot_q(q8, vec.quantize(vec.to_f32(b)));
 ```
 
-- **`HyperLogLog`** (Flajolet et al. with Ertl's 2017 estimator, no bias
-  tables): `add_str`/`add_int`/`add_bytes`/`add_hash`, `count`,
-  `estimate`, `merge`, `encode`/`decode_hyperloglog`. Precision 4 to 18;
-  the error is 1.04/sqrt(2^p).
-- **`CountMin`** (Cormode and Muthukrishnan): never under the true count,
-  at most epsilon * total over it with probability 1 - delta;
-  `set_conservative(true)` tightens skewed data. `count_min_sized(w, d)`,
-  `total`, `merge`, `clear`, `encode`/`decode_count_min`.
-- **`TopK`** (Space-Saving, Metwally et al.): every key above total/k is
-  kept; each count carries its maximum error. O(log k) per add; `merge`
-  follows Agarwal et al.
-- **`Bloom`**: the split-block layout Parquet and Impala use, one 32-byte
-  block per key, so an add or a lookup touches one cache line. `fill`,
-  `fpp` (the false-positive rate it has now), `merge`, `encode`.
-- **`Cuckoo`** (Fan et al.): 16-bit fingerprints in buckets of four,
-  0.012% false positives at 95% load, with `remove`. A fingerprint that
-  finds no room is kept aside, so a full filter refuses new keys rather
-  than losing an old one.
-- **`Histogram`**: HdrHistogram's log-linear buckets: exact below
-  2^precision, then 2^(precision-1) buckets per power of two. Exact
-  `count`, `sum`, `mean`, `min`, `max`; `quantile`, `rank_of`, `buckets`,
-  `merge`; `exponential_bounds` and `linear_bounds` for Prometheus.
-- **`Reservoir`** (Algorithm L, Li 1994): the sample is your own list of
-  any type; most items cost a counter increment and no random draw.
+- **Reductions:** `dot`, `sum`, `norm`, `distance`, `distance2`
+  (squared), `cosine` (NaN for a zero vector), `argmax`, `argmin`
+  (NaN skipped; -1 for an empty list).
+- **In place:** `scale(a, s)`, `axpy(alpha, x, y)` (`y += alpha * x`),
+  `add(y, x)`, `sub(y, x)`, `mul(y, x)` (elementwise), `normalize(a)`.
+- **Search:** `top_k(a, k)` (indexes of the k largest, best first, ties
+  to the lower index), `scores(query, rows, dim)` (every row's dot
+  product), `top_k_dot` and `top_k_cosine(query, rows, dim, k)`: a
+  k-entry heap, no copy of the scores, one pass over each row.
+- **Storage:** `to_f32`, `to_f64`, `quantize` (symmetric int8: a
+  4-byte scale, then a byte per element), `dequantize`, `dot_q` (an
+  exact integer sum, times both scales).
 
-Keys hash with `hash_str` (over `strings.hash`), `hash_int` or
-`hash_bytes`, or pass your own 64-bit hash to the `*_hash` methods. The
-hashes are fixed across releases on little-endian CPUs, so `encode`d
-sketches merge across hosts. None of the sketches locks: one per task,
-then `merge`.
+The vectors of one call must have the same element type (a compile
+error otherwise, naming `to_f32`/`to_f64`) and the same length (a
+panic naming the call otherwise). Nothing allocates except the
+functions that return a new list or bytes. On a 1536-float dot product
+`vec.dot` takes 112 ns for `[f32]` and 195 ns for `[float]`, against
+1600 ns for the same loop written in slang. Sums are taken in a
+different order from a left-to-right loop, and on x86-64 in a different
+order with and without AVX2, so results can differ in their last bits
+between machines.
 
 #### `decimal`
 
@@ -3841,8 +3817,8 @@ actions a row) rendered in 0.6–0.8 ms, against 1.0–1.2 ms for Go's
 - [log](packages/log.md) -- compiler-provided, 4 public items
 - [math](packages/math.md) -- compiler-provided, 131 public items
 - [math/numtheory](packages/math/numtheory.md) -- source package, 16 public items
-- [math/sketch](packages/math/sketch.md) -- source package, 105 public items
 - [math/stats](packages/math/stats.md) -- source package, 91 public items
+- [math/vec](packages/math/vec.md) -- compiler-provided, 23 public items
 - [mysql](packages/mysql.md) -- source package, 49 public items
 - [nats](packages/nats.md) -- source package, 31 public items
 - [net](packages/net.md) -- compiler-provided, 35 public items

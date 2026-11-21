@@ -1861,12 +1861,39 @@ void ambient_root_push(CG *cg, const char *name) {
 }
 /* The FuncSig a plain or package-qualified call names, when it is a
  * slang function (not a method, native or extern), else NULL. */
-static FuncSig *user_fn_of_call(CG *cg, Expr *e) {
+/* The declared method `recv.m(..)` calls for a receiver of type
+ * recv_t: a method of a struct (value or gc), never one of a generic
+ * instance (instantiated lazily, after leaf analysis) and never a
+ * fn-typed field of the same name, which wins over a method in codegen. */
+FuncSig *method_of_call_type(CG *cg, const char *recv_t, const char *mname) {
+    if (!recv_t)
+        return NULL;
+    if (!strncmp(recv_t, "&mut ", 5))
+        recv_t += 5;
+    else if (recv_t[0] == '&')
+        recv_t += 1;
+    StructDef *sd = struct_of_type(cg, recv_t);
+    if (!sd || sd->inst)
+        return NULL;
+    for (int i = 0; i < sd->nfields; i++)
+        if (!strcmp(sd->fields[i], mname) && is_fn(sd->ftypes[i]))
+            return NULL;
+    FuncSig *fs = method_find(cg, sd, mname, 0);
+    return (fs && !fs->is_extern) ? fs : NULL;
+}
+
+FuncSig *user_fn_of_call(CG *cg, Expr *e) {
     const char *name = e->as.call.name;
     char *left, *right;
     if (split_dotted(name, &left, &right)) {
         const char *pkg = import_try(cg, left);
-        if (!pkg || is_native_pkg(cg, pkg))
+        if (!pkg) {
+            /* recv.m(..) on a local: the method its declared type has */
+            VarSym *v = var_find(cg, left);
+            return v && v->slang ? method_of_call_type(cg, v->slang, right)
+                                 : NULL;
+        }
+        if (is_native_pkg(cg, pkg))
             return NULL;
         FuncSig *fs = sig_find_in(cg, pkg, right);
         return (fs && fs->is_pub && !fs->method_of && !fs->is_extern) ? fs : NULL;

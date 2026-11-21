@@ -369,9 +369,19 @@ static int expr_is_numeric(CG *cg, Expr *e) {
                 return 1;
         return 0;
     }
-    case EX_CALL:
-        return e->as.call.name && !strcmp(e->as.call.name, "len") &&
-               e->as.call.nargs == 1 && !e->as.call.callee;
+    case EX_CALL: {
+        if (e->as.call.name && !strcmp(e->as.call.name, "len") &&
+            e->as.call.nargs == 1 && !e->as.call.callee)
+            return 1;
+        /* A leaf slang function declared to return a number: `s += f(x)`
+         * sums numbers, it does not concatenate. The declared type is
+         * read from the signature, not inferred (scope reason above). */
+        if (user_leaf_call(cg, e)) {
+            FuncSig *fs = user_fn_of_call(cg, e);
+            return fs && fs->ret_slang && is_num(fs->ret_slang);
+        }
+        return 0;
+    }
     default:
         return 0;
     }
